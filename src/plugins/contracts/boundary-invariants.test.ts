@@ -46,6 +46,26 @@ const BUNDLED_TYPED_HOOK_REGISTRATION_GUARDS = {
   (typeof BUNDLED_TYPED_HOOK_REGISTRATION_FILES)[number],
   readonly string[]
 >;
+const BUNDLED_LIVE_CONFIG_HOOK_GUARDS = {
+  "extensions/active-memory/index.ts": ["resolveLivePluginConfigObject(", '"active-memory"'],
+  "extensions/diffs/src/plugin.ts": [
+    "resolveLivePluginConfigObject(",
+    '"diffs"',
+    "api.runtime.config?.loadConfig?.() ?? api.config",
+  ],
+  "extensions/memory-core/src/dreaming.ts": [
+    'params.reason === "runtime"',
+    "resolveMemoryCorePluginConfig(startupCfg)",
+    "api.runtime.config?.loadConfig?.() ?? api.config",
+  ],
+  "extensions/memory-lancedb/index.ts": ["resolveLivePluginConfigObject(", '"memory-lancedb"'],
+  "extensions/skill-workshop/index.ts": ["resolveLivePluginConfigObject(", '"skill-workshop"'],
+  "extensions/thread-ownership/index.ts": [
+    "resolveLivePluginConfigObject(",
+    '"thread-ownership"',
+    "api.runtime.config?.loadConfig?.() ?? api.config",
+  ],
+} as const satisfies Record<string, readonly string[]>;
 
 type FileFilter = {
   excludeTests?: boolean;
@@ -65,6 +85,9 @@ function listTsFiles(rootRelativePath: string, filter: FileFilter = {}): string[
     for (const entry of readdirSync(directory, { withFileTypes: true })) {
       const fullPath = resolve(directory, entry.name);
       if (entry.isDirectory()) {
+        if (entry.name === "node_modules" || entry.name === "dist" || entry.name === ".git") {
+          continue;
+        }
         walk(fullPath);
         continue;
       }
@@ -212,5 +235,17 @@ describe("plugin contract boundary invariants", () => {
     const files = listTsFiles("extensions", { excludeTests: true });
     const offenders = files.filter((file) => /\bregisterHook\(/u.test(readRepoSource(file)));
     expect(offenders).toEqual([]);
+  });
+
+  it("keeps long-lived bundled hook handlers on live runtime config lookups", () => {
+    const missingGuards = Object.entries(BUNDLED_LIVE_CONFIG_HOOK_GUARDS).flatMap(
+      ([file, requiredSnippets]) => {
+        const source = readRepoSource(file);
+        return requiredSnippets
+          .filter((snippet) => !source.includes(snippet))
+          .map((snippet) => `${file}: ${snippet}`);
+      },
+    );
+    expect(missingGuards).toEqual([]);
   });
 });

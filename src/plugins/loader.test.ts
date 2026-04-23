@@ -1051,6 +1051,193 @@ module.exports = {
     expect(registry.plugins.find((entry) => entry.id === "discord")?.status).toBe("disabled");
   });
 
+  it("does not repair disabled selected setup-only channel runtime deps", () => {
+    const bundledDir = makeTempDir();
+    const plugin = writePlugin({
+      id: "feishu",
+      dir: path.join(bundledDir, "feishu"),
+      filename: "index.cjs",
+      body: `module.exports = { id: "feishu", register() {} };`,
+    });
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+    fs.writeFileSync(
+      path.join(plugin.dir, "package.json"),
+      JSON.stringify(
+        {
+          name: "@openclaw/feishu",
+          version: "1.0.0",
+          dependencies: {
+            "feishu-runtime": "1.0.0",
+          },
+          openclaw: {
+            extensions: ["./index.cjs"],
+            setupEntry: "./setup-entry.cjs",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(plugin.dir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "feishu",
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+          channels: ["feishu"],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(plugin.dir, "setup-entry.cjs"),
+      `
+module.exports = {
+  plugin: {
+    id: "feishu",
+    meta: {
+      id: "feishu",
+      label: "Feishu",
+      selectionLabel: "Feishu",
+      docsPath: "/channels/feishu",
+      blurb: "setup only",
+    },
+    capabilities: { chatTypes: ["direct"] },
+    config: {
+      listAccountIds: () => [],
+      resolveAccount: () => ({ accountId: "default" }),
+    },
+  },
+};
+`,
+      "utf-8",
+    );
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          enabled: true,
+          entries: {
+            feishu: { enabled: false },
+          },
+        },
+      },
+      includeSetupOnlyChannelPlugins: true,
+      onlyPluginIds: ["feishu"],
+      bundledRuntimeDepsInstaller: () => {
+        throw new Error("disabled setup-only deps should not install");
+      },
+    });
+
+    expect(registry.channelSetups[0]?.plugin.meta.label).toBe("Feishu");
+    expect(registry.plugins.find((entry) => entry.id === "feishu")?.status).toBe("disabled");
+  });
+
+  it("repairs enabled selected setup-only channel runtime deps before loading setup entry", () => {
+    const bundledDir = makeTempDir();
+    const plugin = writePlugin({
+      id: "feishu",
+      dir: path.join(bundledDir, "feishu"),
+      filename: "index.cjs",
+      body: `module.exports = { id: "feishu", register() {} };`,
+    });
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+    fs.writeFileSync(
+      path.join(plugin.dir, "package.json"),
+      JSON.stringify(
+        {
+          name: "@openclaw/feishu",
+          version: "1.0.0",
+          dependencies: {
+            "feishu-runtime": "1.0.0",
+          },
+          openclaw: {
+            extensions: ["./index.cjs"],
+            setupEntry: "./setup-entry.cjs",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(plugin.dir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "feishu",
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+          channels: ["feishu"],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(plugin.dir, "setup-entry.cjs"),
+      `
+const runtime = require("feishu-runtime");
+module.exports = {
+  plugin: {
+    id: "feishu",
+    meta: {
+      id: "feishu",
+      label: runtime.label,
+      selectionLabel: runtime.label,
+      docsPath: "/channels/feishu",
+      blurb: "setup only",
+    },
+    capabilities: { chatTypes: ["direct"] },
+    config: {
+      listAccountIds: () => [],
+      resolveAccount: () => ({ accountId: "default" }),
+    },
+  },
+};
+`,
+      "utf-8",
+    );
+    const installedSpecs: string[] = [];
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          enabled: true,
+          entries: {
+            feishu: { enabled: true },
+          },
+        },
+      },
+      includeSetupOnlyChannelPlugins: true,
+      onlyPluginIds: ["feishu"],
+      bundledRuntimeDepsInstaller: ({ installRoot, missingSpecs }) => {
+        installedSpecs.push(...missingSpecs);
+        const depRoot = path.join(installRoot, "node_modules", "feishu-runtime");
+        fs.mkdirSync(depRoot, { recursive: true });
+        fs.writeFileSync(
+          path.join(depRoot, "package.json"),
+          JSON.stringify({ name: "feishu-runtime", version: "1.0.0", main: "index.cjs" }),
+          "utf-8",
+        );
+        fs.writeFileSync(
+          path.join(depRoot, "index.cjs"),
+          "module.exports = { label: 'Feishu Runtime Ready' };\n",
+          "utf-8",
+        );
+      },
+    });
+
+    expect(installedSpecs).toEqual(["feishu-runtime@1.0.0"]);
+    expect(registry.channelSetups[0]?.plugin.meta.label).toBe("Feishu Runtime Ready");
+    expect(registry.plugins.find((entry) => entry.id === "feishu")?.status).toBe("loaded");
+  });
+
   it("repairs default-enabled bundled plugin runtime deps", () => {
     const bundledDir = makeTempDir();
     const plugin = writePlugin({

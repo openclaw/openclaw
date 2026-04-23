@@ -51,6 +51,15 @@ describe("scripts/test-projects changed-target routing", () => {
     });
   });
 
+  it("does not route live tests through the normal changed-test lane", () => {
+    expect(
+      resolveChangedTestTargetPlan(["src/gateway/gateway-codex-harness.live.test.ts"]),
+    ).toEqual({
+      mode: "targets",
+      targets: [],
+    });
+  });
+
   it("routes changed extension vitest configs to their own shard", () => {
     expect(
       buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
@@ -83,6 +92,19 @@ describe("scripts/test-projects changed-target routing", () => {
         config: "test/vitest/vitest.contracts-plugin.config.ts",
         forwardedArgs: [],
         includePatterns: ["src/plugins/contracts/loader.contract.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("routes misc extensions to the misc extension shard", () => {
+    const plans = buildVitestRunPlans(["extensions/thread-ownership"], process.cwd());
+
+    expect(plans).toEqual([
+      {
+        config: "test/vitest/vitest.extension-misc.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["extensions/thread-ownership/**/*.test.ts"],
         watchMode: false,
       },
     ]);
@@ -157,6 +179,21 @@ describe("scripts/test-projects changed-target routing", () => {
         config: "test/vitest/vitest.extension-providers.config.ts",
         forwardedArgs: [],
         includePatterns: ["extensions/lmstudio/src/**/*.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("routes QA extension changes to the QA extension lane", () => {
+    const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
+      "extensions/qa-lab/src/scenario-catalog.test.ts",
+    ]);
+
+    expect(plans).toEqual([
+      {
+        config: "test/vitest/vitest.extension-qa.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["extensions/qa-lab/src/scenario-catalog.test.ts"],
         watchMode: false,
       },
     ]);

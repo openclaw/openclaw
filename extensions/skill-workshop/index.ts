@@ -1,3 +1,4 @@
+import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/config-runtime";
 import { definePluginEntry, resolveDefaultAgentId } from "./api.js";
 import { resolveConfig } from "./src/config.js";
 import { buildWorkshopGuidance } from "./src/prompt.js";
@@ -12,21 +13,48 @@ export default definePluginEntry({
   description:
     "Captures repeatable workflows as workspace skills, with pending review and safe writes.",
   register(api) {
-    const config = resolveConfig(api.pluginConfig);
-    if (!config.enabled) {
+    const startupConfig = resolveConfig(api.pluginConfig);
+    if (!startupConfig.enabled) {
       return;
     }
+    const resolveCurrentConfig = () => {
+      const runtimePluginConfig = resolveLivePluginConfigObject(
+        api.runtime.config?.loadConfig,
+        "skill-workshop",
+        api.pluginConfig as Record<string, unknown>,
+      );
+      return resolveConfig(runtimePluginConfig);
+    };
 
-    api.registerTool((ctx) => createSkillWorkshopTool({ api, config, ctx }), {
-      name: "skill_workshop",
+    api.registerTool(
+      (ctx) => {
+        const config = resolveCurrentConfig();
+        if (!config.enabled) {
+          return null;
+        }
+        return createSkillWorkshopTool({ api, config, ctx });
+      },
+      {
+        name: "skill_workshop",
+      },
+    );
+
+    api.on("before_prompt_build", async () => {
+      const config = resolveCurrentConfig();
+      if (!config.enabled) {
+        return undefined;
+      }
+      return {
+        prependSystemContext: buildWorkshopGuidance(config),
+      };
     });
 
-    api.on("before_prompt_build", async () => ({
-      prependSystemContext: buildWorkshopGuidance(config),
-    }));
-
-    if (config.autoCapture) {
+    if (startupConfig.autoCapture && startupConfig.reviewMode !== "off") {
       api.on("agent_end", async (event, ctx) => {
+        const config = resolveCurrentConfig();
+        if (!config.enabled || !config.autoCapture || config.reviewMode === "off") {
+          return;
+        }
         if (!event.success) {
           return;
         }

@@ -6,12 +6,12 @@
   "dependencies": {
     "@matrix-org/matrix-sdk-crypto-nodejs": "^0.4.0",
     "@matrix-org/matrix-sdk-crypto-wasm": "18.1.0",
-    "@sinclair/typebox": "0.34.49",
     "fake-indexeddb": "^6.2.5",
     "jiti": "^2.6.1",
     "markdown-it": "14.1.1",
     "matrix-js-sdk": "41.3.0",
-    "music-metadata": "^11.12.3"
+    "music-metadata": "^11.12.3",
+    "typebox": "1.1.28"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",

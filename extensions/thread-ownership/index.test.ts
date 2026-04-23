@@ -5,11 +5,17 @@ import register from "./index.js";
 describe("thread-ownership plugin", () => {
   const hooks: Record<string, Function> = {};
   const fetchMock = vi.fn() as unknown as typeof globalThis.fetch;
+  let configFile: Record<string, unknown> = {};
   const api = {
     pluginConfig: {},
     config: {
       agents: {
         list: [{ id: "test-agent", default: true, identity: { name: "TestBot" } }],
+      },
+    },
+    runtime: {
+      config: {
+        loadConfig: () => configFile,
       },
     },
     id: "thread-ownership",
@@ -26,6 +32,9 @@ describe("thread-ownership plugin", () => {
       delete hooks[key];
     }
     api.pluginConfig = {};
+    configFile = {
+      agents: api.config.agents,
+    };
 
     process.env.SLACK_FORWARDER_URL = "http://localhost:8750";
     process.env.SLACK_BOT_USER_ID = "U999";
@@ -132,7 +141,7 @@ describe("thread-ownership plugin", () => {
         {
           content: "hello",
           replyToId: "1234.5678",
-          to: "channel:C123",
+          to: "channel:c123",
         },
         { channelId: "slack", conversationId: "" },
       );
@@ -148,7 +157,7 @@ describe("thread-ownership plugin", () => {
     });
 
     it("canonicalizes configured ab-test channel allowlists before matching", async () => {
-      api.pluginConfig = { abTestChannels: ["channel:C123"] };
+      api.pluginConfig = { abTestChannels: ["channel:c123"] };
       register.register(api as unknown as OpenClawPluginApi);
       vi.mocked(globalThis.fetch).mockResolvedValue(
         new Response(JSON.stringify({ owner: "test-agent" }), { status: 200 }),
@@ -158,9 +167,64 @@ describe("thread-ownership plugin", () => {
         {
           content: "hello",
           replyToId: "1234.5678",
-          to: "channel:C123",
+          to: "channel:c123",
         },
         { channelId: "slack", conversationId: "" },
+      );
+
+      expect(result).toBeUndefined();
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        "http://localhost:8750/api/v1/ownership/C123/1234.5678",
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({ agent_id: "test-agent" }),
+        }),
+      );
+    });
+
+    it("uses live runtime allowlists when deciding whether to claim ownership", async () => {
+      api.pluginConfig = { abTestChannels: ["C123"] };
+      configFile = {
+        ...configFile,
+        plugins: {
+          entries: {
+            "thread-ownership": {
+              config: {
+                abTestChannels: ["C999"],
+              },
+            },
+          },
+        },
+      };
+      register.register(api as unknown as OpenClawPluginApi);
+
+      const result = await hooks.message_sending(
+        {
+          content: "hello",
+          replyToId: "1234.5678",
+          to: "C123",
+        },
+        { channelId: "slack", conversationId: "C123" },
+      );
+
+      expect(result).toBeUndefined();
+      expect(globalThis.fetch).not.toHaveBeenCalled();
+    });
+
+    it("does not fall back to startup allowlists when live plugin config is removed", async () => {
+      api.pluginConfig = { abTestChannels: ["C999"] };
+      register.register(api as unknown as OpenClawPluginApi);
+      vi.mocked(globalThis.fetch).mockResolvedValue(
+        new Response(JSON.stringify({ owner: "test-agent" }), { status: 200 }),
+      );
+
+      const result = await hooks.message_sending(
+        {
+          content: "hello",
+          replyToId: "1234.5678",
+          to: "C123",
+        },
+        { channelId: "slack", conversationId: "C123" },
       );
 
       expect(result).toBeUndefined();
@@ -227,7 +291,7 @@ describe("thread-ownership plugin", () => {
         {
           content: "Hey @TestBot help me",
           threadId: "9999.0002",
-          metadata: { channelId: "channel:C456" },
+          metadata: { channelId: "channel:c456" },
         },
         { channelId: "slack", conversationId: "C456" },
       );
@@ -250,7 +314,7 @@ describe("thread-ownership plugin", () => {
         {
           content: "Hey @TestBot help me",
           threadId: "9999.0003",
-          metadata: { channelId: "channel:C456" },
+          metadata: { channelId: "channel:c456" },
         },
         { channelId: "slack", conversationId: "" },
       );
@@ -259,7 +323,7 @@ describe("thread-ownership plugin", () => {
         {
           content: "Sure!",
           replyToId: "9999.0003",
-          to: "C456",
+          to: "c456",
         },
         { channelId: "slack", conversationId: "C456" },
       );
@@ -305,6 +369,120 @@ describe("thread-ownership plugin", () => {
 
       expect(result).toBeUndefined();
       expect(globalThis.fetch).not.toHaveBeenCalled();
+    });
+
+    it("tracks agent-name mentions case-insensitively", async () => {
+      await hooks.message_received(
+        {
+          content: "hey @testbot help",
+          threadId: "8888.0002",
+          metadata: { channelId: "C789" },
+        },
+        { channelId: "slack", conversationId: "C789" },
+      );
+
+      const result = await hooks.message_sending(
+        { content: "On it!", replyToId: "8888.0002", metadata: { channelId: "C789" }, to: "C789" },
+        { channelId: "slack", conversationId: "C789" },
+      );
+
+      expect(result).toBeUndefined();
+      expect(globalThis.fetch).not.toHaveBeenCalled();
+    });
+
+    it("uses the live runtime agent identity for ownership claims", async () => {
+      configFile = {
+        ...configFile,
+        agents: {
+          list: [{ id: "live-agent", default: true, identity: { name: "LiveBot" } }],
+        },
+      };
+      vi.mocked(globalThis.fetch).mockResolvedValue(
+        new Response(JSON.stringify({ owner: "live-agent" }), { status: 200 }),
+      );
+
+      await hooks.message_sending(
+        { content: "On it!", replyToId: "8888.0005", metadata: { channelId: "C789" }, to: "C789" },
+        { channelId: "slack", conversationId: "C789" },
+      );
+
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        "http://localhost:8750/api/v1/ownership/C789/8888.0005",
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({ agent_id: "live-agent" }),
+        }),
+      );
+    });
+
+    it("uses the live runtime agent name for mention tracking", async () => {
+      configFile = {
+        ...configFile,
+        agents: {
+          list: [{ id: "live-agent", default: true, identity: { name: "LiveBot" } }],
+        },
+      };
+
+      await hooks.message_received(
+        {
+          content: "hey @LiveBot help",
+          threadId: "8888.0006",
+          metadata: { channelId: "C789" },
+        },
+        { channelId: "slack", conversationId: "C789" },
+      );
+
+      const result = await hooks.message_sending(
+        { content: "On it!", replyToId: "8888.0006", metadata: { channelId: "C789" }, to: "C789" },
+        { channelId: "slack", conversationId: "C789" },
+      );
+
+      expect(result).toBeUndefined();
+      expect(globalThis.fetch).not.toHaveBeenCalled();
+    });
+
+    it("does not treat superset handles as agent-name mentions", async () => {
+      await hooks.message_received(
+        {
+          content: "hey @testbot2 help",
+          threadId: "8888.0003",
+          metadata: { channelId: "C789" },
+        },
+        { channelId: "slack", conversationId: "C789" },
+      );
+
+      vi.mocked(globalThis.fetch).mockResolvedValue(
+        new Response(JSON.stringify({ owner: "test-agent" }), { status: 200 }),
+      );
+
+      await hooks.message_sending(
+        { content: "On it!", replyToId: "8888.0003", metadata: { channelId: "C789" }, to: "C789" },
+        { channelId: "slack", conversationId: "C789" },
+      );
+
+      expect(globalThis.fetch).toHaveBeenCalled();
+    });
+
+    it("does not treat email-like text as an agent-name mention", async () => {
+      await hooks.message_received(
+        {
+          content: "send mail to foo@testbot.com",
+          threadId: "8888.0004",
+          metadata: { channelId: "C789" },
+        },
+        { channelId: "slack", conversationId: "C789" },
+      );
+
+      vi.mocked(globalThis.fetch).mockResolvedValue(
+        new Response(JSON.stringify({ owner: "test-agent" }), { status: 200 }),
+      );
+
+      await hooks.message_sending(
+        { content: "On it!", replyToId: "8888.0004", metadata: { channelId: "C789" }, to: "C789" },
+        { channelId: "slack", conversationId: "C789" },
+      );
+
+      expect(globalThis.fetch).toHaveBeenCalled();
     });
   });
 });

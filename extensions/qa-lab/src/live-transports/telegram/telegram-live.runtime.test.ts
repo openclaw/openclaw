@@ -402,6 +402,7 @@ describe("telegram live qa runtime", () => {
     expect(
       __testing.buildObservedMessagesArtifact({
         includeContent: false,
+        redactMetadata: false,
         observedMessages: [
           {
             updateId: 1,
@@ -435,6 +436,83 @@ describe("telegram live qa runtime", () => {
     ]);
   });
 
+  it("keeps observed message content in public mode when capture is requested", () => {
+    const redacted = __testing.buildObservedMessagesArtifact({
+      includeContent: true,
+      redactMetadata: true,
+      observedMessages: [
+        {
+          updateId: 1,
+          messageId: 9,
+          chatId: -100123,
+          senderId: 42,
+          senderIsBot: true,
+          senderUsername: "driver_bot",
+          text: "secret text",
+          caption: "secret caption",
+          replyToMessageId: 8,
+          timestamp: 1_700_000_000_000,
+          inlineButtons: ["Approve"],
+          mediaKinds: ["photo"],
+        },
+      ],
+    });
+
+    expect(redacted).toEqual([
+      {
+        senderIsBot: true,
+        inlineButtonCount: 1,
+        mediaKinds: ["photo"],
+        text: "secret text",
+        caption: "secret caption",
+      },
+    ]);
+    expect(redacted[0]).not.toHaveProperty("timestamp");
+    expect(redacted[0]).not.toHaveProperty("inlineButtons");
+    expect(redacted[0]).not.toHaveProperty("senderId");
+    expect(redacted[0]).not.toHaveProperty("senderUsername");
+  });
+
+  it("keeps raw timestamp and inline button text when metadata redaction is disabled", () => {
+    expect(
+      __testing.buildObservedMessagesArtifact({
+        includeContent: true,
+        redactMetadata: false,
+        observedMessages: [
+          {
+            updateId: 1,
+            messageId: 9,
+            chatId: -100123,
+            senderId: 42,
+            senderIsBot: true,
+            senderUsername: "driver_bot",
+            text: "secret text",
+            caption: "secret caption",
+            replyToMessageId: 8,
+            timestamp: 1_700_000_000_000,
+            inlineButtons: ["Approve"],
+            mediaKinds: ["photo"],
+          },
+        ],
+      }),
+    ).toEqual([
+      {
+        updateId: 1,
+        messageId: 9,
+        chatId: -100123,
+        senderId: 42,
+        senderIsBot: true,
+        timestamp: 1_700_000_000_000,
+        inlineButtons: ["Approve"],
+        senderUsername: "driver_bot",
+        replyToMessageId: 8,
+        text: "secret text",
+        caption: "secret caption",
+        mediaKinds: ["photo"],
+      },
+    ]);
+  });
+
   it("formats phase-specific canary diagnostics with context", () => {
     const error = new Error(
       "SUT bot did not send any group reply after the canary command within 30s.",
@@ -462,6 +540,39 @@ describe("telegram live qa runtime", () => {
     expect(message).toContain(
       "Confirm the SUT bot is present in the target private group and can receive /help@BotUsername commands there.",
     );
+  });
+
+  it("redacts canary context details in public metadata mode", () => {
+    const error = new Error("timed out");
+    error.name = "TelegramQaCanaryError";
+    Object.assign(error, {
+      phase: "sut_reply_timeout",
+      context: {
+        driverMessageId: 55,
+      },
+    });
+
+    const message = __testing.canaryFailureMessage({
+      error,
+      groupId: "-100123",
+      driverBotId: 42,
+      driverUsername: "driver_bot",
+      redactMetadata: true,
+      sutBotId: 88,
+      sutUsername: "sut_bot",
+    });
+
+    expect(message).toContain("- groupId: <redacted>");
+    expect(message).toContain("- driverBotId: <redacted>");
+    expect(message).toContain("- driverUsername: <redacted>");
+    expect(message).toContain("- sutBotId: <redacted>");
+    expect(message).toContain("- sutUsername: <redacted>");
+    expect(message).toContain("- driverMessageId: <redacted>");
+    expect(message).toContain("timed out");
+    expect(message).not.toContain("-100123");
+    expect(message).not.toContain("driver_bot");
+    expect(message).not.toContain("sut_bot");
+    expect(message).not.toContain("55");
   });
 
   it("treats null canary context as a non-canary error", () => {

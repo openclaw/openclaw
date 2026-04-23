@@ -576,7 +576,7 @@ async function updatePluginsAfterCoreUpdate(params: {
   }
 
   const syncResult = await syncPluginsForUpdateChannel({
-    config: params.configSnapshot.config,
+    config: params.configSnapshot.sourceConfig,
     channel: params.channel,
     workspaceDir: params.root,
     logger: pluginLogger,
@@ -1055,6 +1055,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   let downgradeRisk = false;
   let fallbackToLatest = false;
   let packageInstallSpec: string | null = null;
+  let packageAlreadyCurrent = false;
 
   if (updateInstallKind !== "git") {
     currentVersion = switchToPackage ? null : await readPackageVersion(root);
@@ -1069,6 +1070,13 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     }
     const cmp =
       currentVersion && targetVersion ? compareSemverStrings(currentVersion, targetVersion) : null;
+    packageAlreadyCurrent =
+      updateInstallKind === "package" &&
+      !switchToPackage &&
+      currentVersion != null &&
+      targetVersion != null &&
+      currentVersion === targetVersion &&
+      (requestedChannel === null || requestedChannel === storedChannel);
     downgradeRisk =
       canResolveRegistryVersionForPackageTarget(tag) &&
       !fallbackToLatest &&
@@ -1103,16 +1111,20 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
       actions.push(`Switch install mode from git to package manager (${mode})`);
     } else if (updateInstallKind === "git") {
       actions.push(`Run git update flow on channel ${channel} (fetch/rebase/build/doctor)`);
+    } else if (packageAlreadyCurrent) {
+      actions.push(`Skip package update; current version already matches ${targetVersion}`);
     } else {
       actions.push(`Run global package manager update with spec ${packageInstallSpec ?? tag}`);
     }
-    actions.push("Run plugin update sync after core update");
-    actions.push("Refresh shell completion cache (if needed)");
-    actions.push(
-      shouldRestart
-        ? "Restart gateway service and run doctor checks"
-        : "Skip restart (because --no-restart is set)",
-    );
+    if (!packageAlreadyCurrent) {
+      actions.push("Run plugin update sync after core update");
+      actions.push("Refresh shell completion cache (if needed)");
+      actions.push(
+        shouldRestart
+          ? "Restart gateway service and run doctor checks"
+          : "Skip restart (because --no-restart is set)",
+      );
+    }
 
     const notes: string[] = [];
     if (opts.tag && updateInstallKind === "git") {
@@ -1181,6 +1193,25 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     defaultRuntime.log(
       theme.muted("Note: --tag applies to npm installs only; git updates ignore it."),
     );
+  }
+
+  if (packageAlreadyCurrent) {
+    const mode = isPackageManagerUpdateMode(updateStatus.packageManager)
+      ? updateStatus.packageManager
+      : "unknown";
+    const result: UpdateRunResult = {
+      status: "skipped",
+      mode,
+      root,
+      reason: "already-current",
+      before: { version: currentVersion },
+      after: { version: currentVersion },
+      steps: [],
+      durationMs: 0,
+    };
+    printResult(result, opts);
+    defaultRuntime.exit(0);
+    return;
   }
 
   if (updateInstallKind === "package") {
@@ -1293,9 +1324,9 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
       }
     } else {
       const next = {
-        ...configSnapshot.config,
+        ...configSnapshot.sourceConfig,
         update: {
-          ...configSnapshot.config.update,
+          ...configSnapshot.sourceConfig.update,
           channel: requestedChannel,
         },
       };

@@ -19,6 +19,74 @@ import {
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js";
 
 describe("openai transport stream", () => {
+  it("moves Azure OpenAI completions api-version headers into default query params", () => {
+    const config = __testing.buildOpenAICompletionsClientConfig(
+      {
+        id: "gpt-4o-mini",
+        name: "GPT-4o Mini",
+        api: "openai-completions",
+        provider: "azure-custom",
+        baseUrl: "https://example.openai.azure.com/openai/deployments/gpt-4o-mini?existing=1",
+        headers: {
+          "api-key": "azure-key",
+          "api-version": "2024-10-21",
+          "X-Tenant": "acme",
+        },
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128000,
+        maxTokens: 4096,
+      } satisfies Model<"openai-completions">,
+      { systemPrompt: "", messages: [] } as never,
+    );
+
+    expect(config).toEqual({
+      baseURL: "https://example.openai.azure.com/openai/deployments/gpt-4o-mini",
+      defaultHeaders: {
+        "api-key": "azure-key",
+        "X-Tenant": "acme",
+      },
+      defaultQuery: {
+        existing: "1",
+        "api-version": "2024-10-21",
+      },
+    });
+  });
+
+  it("preserves configured base URL query params without moving non-Azure headers", () => {
+    const config = __testing.buildOpenAICompletionsClientConfig(
+      {
+        id: "proxy-model",
+        name: "Proxy Model",
+        api: "openai-completions",
+        provider: "custom-proxy",
+        baseUrl: "https://proxy.example.com/v1?tenant=acme",
+        headers: {
+          "api-version": "proxy-header",
+          "X-Tenant": "acme",
+        },
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128000,
+        maxTokens: 4096,
+      } satisfies Model<"openai-completions">,
+      { systemPrompt: "", messages: [] } as never,
+    );
+
+    expect(config).toEqual({
+      baseURL: "https://proxy.example.com/v1",
+      defaultHeaders: {
+        "api-version": "proxy-header",
+        "X-Tenant": "acme",
+      },
+      defaultQuery: {
+        tenant: "acme",
+      },
+    });
+  });
+
   it("reports the supported transport-aware APIs", () => {
     expect(isTransportAwareApiSupported("openai-responses")).toBe(true);
     expect(isTransportAwareApiSupported("openai-codex-responses")).toBe(true);
@@ -1285,13 +1353,13 @@ describe("openai transport stream", () => {
     expect(params.stream_options).toMatchObject({ include_usage: true });
   });
 
-  it("always includes stream_options.include_usage for non-standard backends like llama-cpp", () => {
+  it("always includes stream_options.include_usage for known local backends like llama-cpp", () => {
     const params = buildOpenAICompletionsParams(
       {
         id: "llama-3",
         name: "Llama 3",
         api: "openai-completions",
-        provider: "custom-cpa",
+        provider: "llama-cpp",
         baseUrl: "http://localhost:8080/v1",
         reasoning: false,
         input: ["text"],
