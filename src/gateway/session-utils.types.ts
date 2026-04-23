@@ -42,6 +42,9 @@ export type GatewaySessionRow = {
   subagentControlScope?: SessionEntry["subagentControlScope"];
   kind: "direct" | "group" | "global" | "unknown";
   label?: string;
+  /** Workbench / vault id (e.g. Maibot work project gateway id). */
+  projectId?: string;
+  projectName?: string;
   displayName?: string;
   derivedTitle?: string;
   lastMessagePreview?: string;

@@ -416,6 +416,21 @@ describe("runPreparedReply media-only handling", () => {
     );
   });
 
+  it("merges ctx.GatewayExtraSystemPrompt into followupRun.run.extraSystemPrompt", async () => {
+    const base = baseParams();
+    await runPreparedReply(
+      baseParams({
+        ctx: {
+          ...base.ctx,
+          GatewayExtraSystemPrompt: "TRUSTED_GATEWAY_EXTRA_MARK",
+        },
+      }),
+    );
+
+    const extraPromptCall = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    expect(extraPromptCall?.followupRun.run.extraSystemPrompt).toContain("TRUSTED_GATEWAY_EXTRA_MARK");
+  });
+
   it.each(["direct", "dm"] as const)(
     "propagates empty-assistant silence for %s runs with explicit direct silent replies",
     async (chatType) => {
