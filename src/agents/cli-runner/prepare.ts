@@ -107,7 +107,13 @@ export async function prepareCliRunContext(
     authCredential = authStore.profiles[effectiveAuthProfileId];
   }
   const extraSystemPrompt = params.extraSystemPrompt?.trim() ?? "";
-  const extraSystemPromptHash = hashCliSessionText(extraSystemPrompt);
+  // Use the static portion (excluding per-message inbound metadata) for session reuse hashing.
+  // Per-message metadata (timestamps, message IDs) changes every turn and must not trigger session resets.
+  const extraSystemPromptHash =
+    params.extraSystemPromptStatic !== undefined
+      ? hashCliSessionText(params.extraSystemPromptStatic.trim() || undefined)
+      : hashCliSessionText(extraSystemPrompt);
+
   const modelId = (params.model ?? "default").trim() || "default";
   const normalizedModel = normalizeCliModel(modelId, backendResolved.config);
   const modelDisplay = `${params.provider}/${modelId}`;

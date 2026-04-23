@@ -583,9 +583,9 @@ async function main() {
   const options = parseArgs(process.argv.slice(2));
   ensureDir(options.outputDir);
   if (!options.skipBuild) {
-    runCheckedCommand("pnpm", ["build:ci-artifacts"]);
+    runCheckedCommand("node", ["scripts/build-all.mjs", "gatewayWatch"]);
     // The watch harness must start from a completed dist/runtime baseline.
-    // Refresh the build stamp after the CI artifact build finishes so run-node
+    // Refresh the build stamp after the gateway build finishes so run-node
     // does not spuriously rebuild inside the bounded watch window.
     writeBuildStamp({ cwd: process.cwd() });
   }

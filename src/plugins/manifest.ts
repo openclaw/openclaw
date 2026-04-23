@@ -959,6 +959,21 @@ export type PluginPackageChannel = {
     specifier?: string;
     exportName?: string;
   };
+  doctorCapabilities?: PluginPackageChannelDoctorCapabilities;
+  cliAddOptions?: readonly PluginPackageChannelCliOption[];
+};
+
+export type PluginPackageChannelDoctorCapabilities = {
+  dmAllowFromMode?: "topOnly" | "topOrNested" | "nestedOnly";
+  groupModel?: "sender" | "route" | "hybrid";
+  groupAllowFromFallbackToAllowFrom?: boolean;
+  warnOnEmptyGroupSenderAllowlist?: boolean;
+};
+
+export type PluginPackageChannelCliOption = {
+  flags: string;
+  description: string;
+  defaultValue?: boolean | string;
 };
 
 export type PluginPackageInstall = {

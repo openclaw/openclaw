@@ -65,22 +65,25 @@ function createAutoReplyReplySplitShards() {
     }
   }
 
-  const shardCounts = {
-    "auto-reply-reply-agent-runner": 1,
-    "auto-reply-reply-commands": 2,
-    "auto-reply-reply-dispatch": 1,
-    "auto-reply-reply-state-routing": 1,
+  const mergedGroups = {
+    "auto-reply-reply-agent-dispatch": [
+      ...groups["auto-reply-reply-agent-runner"],
+      ...groups["auto-reply-reply-dispatch"],
+    ],
+    "auto-reply-reply-commands-state-routing": [
+      ...groups["auto-reply-reply-commands"],
+      ...groups["auto-reply-reply-state-routing"],
+    ],
   };
 
-  return Object.entries(groups).flatMap(([groupName, includePatterns]) => {
-    const shardCount = shardCounts[groupName] ?? 1;
-    return Array.from({ length: shardCount }, (_, index) => ({
-      shardName: `${groupName}-${String.fromCharCode(97 + index)}`,
+  return Object.entries(mergedGroups)
+    .map(([groupName, includePatterns]) => ({
       configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
-      includePatterns: includePatterns.filter((_, fileIndex) => fileIndex % shardCount === index),
+      includePatterns,
       requiresDist: false,
-    })).filter((shard) => shard.includePatterns.length > 0);
-  });
+      shardName: groupName,
+    }))
+    .filter((shard) => shard.includePatterns.length > 0);
 }
 
 const SPLIT_NODE_SHARDS = new Map([
@@ -92,10 +95,10 @@ const SPLIT_NODE_SHARDS = new Map([
         configs: [
           "test/vitest/vitest.infra.config.ts",
           "test/vitest/vitest.hooks.config.ts",
-          "test/vitest/vitest.runtime-config.config.ts",
           "test/vitest/vitest.secrets.config.ts",
           "test/vitest/vitest.logging.config.ts",
           "test/vitest/vitest.process.config.ts",
+          "test/vitest/vitest.runtime-config.config.ts",
         ],
         requiresDist: false,
       },
@@ -127,13 +130,11 @@ const SPLIT_NODE_SHARDS = new Map([
     "auto-reply",
     [
       {
-        shardName: "auto-reply-core",
-        configs: ["test/vitest/vitest.auto-reply-core.config.ts"],
-        requiresDist: false,
-      },
-      {
-        shardName: "auto-reply-top-level",
-        configs: ["test/vitest/vitest.auto-reply-top-level.config.ts"],
+        shardName: "auto-reply-core-top-level",
+        configs: [
+          "test/vitest/vitest.auto-reply-core.config.ts",
+          "test/vitest/vitest.auto-reply-top-level.config.ts",
+        ],
         requiresDist: false,
       },
       ...createAutoReplyReplySplitShards(),
@@ -144,13 +145,7 @@ const SPLIT_NODE_SHARDS = new Map([
     [
       {
         shardName: "agentic-control-plane",
-        configs: [
-          "test/vitest/vitest.gateway-core.config.ts",
-          "test/vitest/vitest.gateway-client.config.ts",
-          "test/vitest/vitest.gateway-methods.config.ts",
-          "test/vitest/vitest.gateway-server.config.ts",
-          "test/vitest/vitest.daemon.config.ts",
-        ],
+        configs: ["test/vitest/vitest.gateway-server.config.ts"],
         requiresDist: false,
       },
       {
@@ -159,17 +154,23 @@ const SPLIT_NODE_SHARDS = new Map([
           "test/vitest/vitest.cli.config.ts",
           "test/vitest/vitest.commands-light.config.ts",
           "test/vitest/vitest.commands.config.ts",
+          "test/vitest/vitest.daemon.config.ts",
         ],
         requiresDist: false,
       },
       {
         shardName: "agentic-agents",
-        configs: ["test/vitest/vitest.agents.config.ts"],
+        configs: [
+          "test/vitest/vitest.agents.config.ts",
+          "test/vitest/vitest.gateway-client.config.ts",
+        ],
         requiresDist: false,
       },
       {
         shardName: "agentic-plugin-sdk",
         configs: [
+          "test/vitest/vitest.gateway-core.config.ts",
+          "test/vitest/vitest.gateway-methods.config.ts",
           "test/vitest/vitest.plugin-sdk-light.config.ts",
           "test/vitest/vitest.plugin-sdk.config.ts",
         ],
@@ -178,7 +179,7 @@ const SPLIT_NODE_SHARDS = new Map([
       {
         shardName: "agentic-plugins",
         configs: ["test/vitest/vitest.plugins.config.ts"],
-        requiresDist: true,
+        requiresDist: false,
       },
     ],
   ],

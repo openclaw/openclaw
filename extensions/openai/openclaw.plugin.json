@@ -95,7 +95,7 @@
         "type": "string",
         "enum": ["friendly", "on", "off"],
         "default": "friendly",
-        "description": "Controls the OpenAI-specific friendly interaction-style overlay for GPT-5 OpenAI and OpenAI Codex runs. `friendly` and `on` enable the style overlay; `off` disables only that style layer."
+        "description": "Legacy compatibility fallback for the shared GPT-5 friendly interaction-style overlay. Prefer agents.defaults.promptOverlays.gpt5.personality. `friendly` and `on` enable the style overlay; `off` disables only that style layer."
       }
     }
   }

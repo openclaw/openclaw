@@ -34,6 +34,11 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
+          "mode": {
+            "type": "string",
+            "enum": ["yolo", "guardian"],
+            "default": "yolo"
+          },
           "transport": {
             "type": "string",
             "enum": ["stdio", "websocket"],
@@ -78,7 +83,7 @@
             "enum": ["user", "guardian_subagent"],
             "default": "user"
           },
-          "serviceTier": { "type": "string" }
+          "serviceTier": { "type": ["string", "null"], "enum": ["fast", "flex", null] }
         }
       }
     }
@@ -100,6 +105,11 @@
     "appServer": {
       "label": "App Server",
       "help": "Runtime controls for connecting to Codex app-server.",
+      "advanced": true
+    },
+    "appServer.mode": {
+      "label": "Execution Mode",
+      "help": "Use yolo for unchained local execution or guardian for Codex guardian-reviewed approvals.",
       "advanced": true
     },
     "appServer.transport": {
@@ -155,7 +165,7 @@
     },
     "appServer.serviceTier": {
       "label": "Service Tier",
-      "help": "Optional Codex service tier passed when starting or resuming threads.",
+      "help": "Optional Codex app-server service tier. Use fast, flex, or null.",
       "advanced": true
     }
   }
