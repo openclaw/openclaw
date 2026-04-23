@@ -423,13 +423,6 @@ describe("fetchWithTimeoutGuarded", () => {
       release: async () => {},
     });
 
-  it("disables pinDns automatically for FormData transcription requests", async () => {
-    fetchWithSsrFGuardMock.mockResolvedValue({
-      response: new Response(null, { status: 200 }),
-      finalUrl: "https://example.com",
-      release: async () => {},
-    });
-
     const body = new FormData();
     body.append("model", "gpt-4o-mini-transcribe");
 
