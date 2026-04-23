@@ -319,7 +319,7 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
 
   const getCurrentLocalDayKey = () => {
     const now = new Date();
-    return `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}`;
+    return `${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}`;
   };
 
   const getFileLogger = () => {
