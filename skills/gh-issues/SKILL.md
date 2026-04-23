@@ -276,11 +276,15 @@ Run these checks sequentially via exec:
    fi
    ```
 
-   Parse the claims file. For each entry, check if the claim timestamp is older than 2 hours. If so, remove it (expired — the sub-agent likely finished or failed silently). Write back the cleaned file:
+   Parse the claims file. For each entry, check if the claim timestamp is older than `STALE_LOCK_MINUTES`. If so, remove it (expired — the sub-agent likely finished or failed silently). Write back the cleaned file.
+
+   `STALE_LOCK_MINUTES` is the single source of truth for the claim expiry window. Keep it tied to the sub-agent `runTimeoutSeconds` in Phase 5 (currently 3600s / 60min) plus a small grace window for shutdown/reporting — default 90 minutes. If you change one, change the other.
 
    ```
+   STALE_LOCK_MINUTES=90
    CLAIMS=$(cat "$CLAIMS_FILE")
-   CUTOFF=$(date -u -d '2 hours ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v-2H +%Y-%m-%dT%H:%M:%SZ)
+   CUTOFF=$(date -u -d "${STALE_LOCK_MINUTES} minutes ago" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+     || date -u -v-${STALE_LOCK_MINUTES}M +%Y-%m-%dT%H:%M:%SZ)
    CLAIMS=$(echo "$CLAIMS" | jq --arg cutoff "$CUTOFF" 'to_entries | map(select(.value > $cutoff)) | from_entries')
    echo "$CLAIMS" > "$CLAIMS_FILE"
    ```
