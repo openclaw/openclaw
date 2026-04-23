@@ -1,4 +1,14 @@
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
+import {
+  buildCanonicalSentMessageHookContext,
+  createInternalHookEvent,
+  fireAndForgetHook,
+  getGlobalHookRunner,
+  toInternalMessageSentContext,
+  toPluginMessageContext,
+  toPluginMessageSentEvent,
+  triggerInternalHook,
+} from "openclaw/plugin-sdk/hook-runtime";
 import { chunkMarkdownTextWithMode, type ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-chunking";
 import {
@@ -19,6 +29,11 @@ import { elide } from "./util.js";
 export async function deliverWebReply(params: {
   replyResult: ReplyPayload;
   msg: WebInboundMsg;
+  sessionKeyForInternalHooks?: string;
+  accountId?: string;
+  conversationId?: string;
+  isGroup?: boolean;
+  groupId?: string;
   mediaLocalRoots?: readonly string[];
   maxMediaBytes: number;
   textLimit: number;
@@ -31,174 +46,256 @@ export async function deliverWebReply(params: {
   skipLog?: boolean;
   tableMode?: MarkdownTableMode;
 }) {
-  const { replyResult, msg, maxMediaBytes, textLimit, replyLogger, connectionId, skipLog } = params;
+  let { replyResult } = params;
+  const { msg, maxMediaBytes, textLimit, replyLogger, connectionId, skipLog } = params;
   const replyStarted = Date.now();
   if (isReasoningReplyPayload(replyResult)) {
     whatsappOutboundLog.debug(`Suppressed reasoning payload to ${msg.from}`);
     return;
   }
-  const tableMode = params.tableMode ?? "code";
-  const chunkMode = params.chunkMode ?? "length";
-  const convertedText = markdownToWhatsApp(
-    convertMarkdownTables(replyResult.text || "", tableMode),
-  );
-  const textChunks = chunkMarkdownTextWithMode(convertedText, textLimit, chunkMode);
-  const mediaList = resolveOutboundMediaUrls(replyResult);
 
-  const sendWithRetry = async (fn: () => Promise<unknown>, label: string, maxAttempts = 3) => {
-    let lastErr: unknown;
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      try {
-        return await fn();
-      } catch (err) {
-        lastErr = err;
-        const errText = formatError(err);
-        const isLast = attempt === maxAttempts;
-        const shouldRetry = /closed|reset|timed\s*out|disconnect/i.test(errText);
-        if (!shouldRetry || isLast) {
-          throw err;
-        }
-        const backoffMs = 500 * attempt;
-        logVerbose(
-          `Retrying ${label} to ${msg.from} after failure (${attempt}/${maxAttempts - 1}) in ${backoffMs}ms: ${errText}`,
-        );
-        await sleep(backoffMs);
-      }
-    }
-    throw lastErr;
-  };
+  const hookRunner = getGlobalHookRunner();
+  const hasMessageSendingHooks = hookRunner?.hasHooks("message_sending") ?? false;
+  const hasMessageSentHooks = hookRunner?.hasHooks("message_sent") ?? false;
 
-  // Text-only replies
-  if (mediaList.length === 0 && textChunks.length) {
-    const totalChunks = textChunks.length;
-    for (const [index, chunk] of textChunks.entries()) {
-      const chunkStarted = Date.now();
-      await sendWithRetry(() => msg.reply(chunk), "text");
-      if (!skipLog) {
-        const durationMs = Date.now() - chunkStarted;
-        whatsappOutboundLog.debug(
-          `Sent chunk ${index + 1}/${totalChunks} to ${msg.from} (${durationMs.toFixed(0)}ms)`,
-        );
-      }
-    }
-    replyLogger.info(
+  const rawContent = replyResult.text || "";
+  const mediaListForHooks = resolveOutboundMediaUrls(replyResult);
+  if (hasMessageSendingHooks) {
+    const hookResult = await hookRunner?.runMessageSending(
       {
-        correlationId: msg.id ?? newConnectionId(),
-        connectionId: connectionId ?? null,
         to: msg.from,
-        from: msg.to,
-        text: elide(replyResult.text, 240),
-        mediaUrl: null,
-        mediaSizeBytes: null,
-        mediaKind: null,
-        durationMs: Date.now() - replyStarted,
+        content: rawContent,
+        metadata: {
+          channel: "whatsapp",
+          mediaUrls: mediaListForHooks,
+        },
       },
-      "auto-reply sent (text)",
+      {
+        channelId: "whatsapp",
+        accountId: params.accountId,
+        conversationId: params.conversationId ?? msg.from,
+      },
     );
-    return;
+    if (hookResult?.cancel) {
+      return;
+    }
+    if (typeof hookResult?.content === "string" && hookResult.content !== rawContent) {
+      replyResult = { ...replyResult, text: hookResult.content };
+    }
   }
 
-  const remainingText = [...textChunks];
+  const contentForSentHook = replyResult.text || "";
 
-  // Media (with optional caption on first item)
-  const leadingCaption = remainingText.shift() || "";
-  await sendMediaWithLeadingCaption({
-    mediaUrls: mediaList,
-    caption: leadingCaption,
-    send: async ({ mediaUrl, caption }) => {
-      const media = await loadWebMedia(mediaUrl, {
-        maxBytes: maxMediaBytes,
-        localRoots: params.mediaLocalRoots,
-      });
-      if (shouldLogVerbose()) {
-        logVerbose(
-          `Web auto-reply media size: ${(media.buffer.length / (1024 * 1024)).toFixed(2)}MB`,
-        );
-        logVerbose(`Web auto-reply media source: ${mediaUrl} (kind ${media.kind})`);
-      }
-      if (media.kind === "image") {
-        await sendWithRetry(
-          () =>
-            msg.sendMedia({
-              image: media.buffer,
-              caption,
-              mimetype: media.contentType,
-            }),
-          "media:image",
-        );
-      } else if (media.kind === "audio") {
-        await sendWithRetry(
-          () =>
-            msg.sendMedia({
-              audio: media.buffer,
-              ptt: true,
-              mimetype: media.contentType,
-              caption,
-            }),
-          "media:audio",
-        );
-      } else if (media.kind === "video") {
-        await sendWithRetry(
-          () =>
-            msg.sendMedia({
-              video: media.buffer,
-              caption,
-              mimetype: media.contentType,
-            }),
-          "media:video",
-        );
-      } else {
-        const fileName = media.fileName ?? mediaUrl.split("/").pop() ?? "file";
-        const mimetype = media.contentType ?? "application/octet-stream";
-        await sendWithRetry(
-          () =>
-            msg.sendMedia({
-              document: media.buffer,
-              fileName,
-              caption,
-              mimetype,
-            }),
-          "media:document",
-        );
-      }
-      whatsappOutboundLog.info(
-        `Sent media reply to ${msg.from} (${(media.buffer.length / (1024 * 1024)).toFixed(2)}MB)`,
+  const emitMessageSentHooks = (success: boolean, error?: string) => {
+    if (!hasMessageSentHooks && !params.sessionKeyForInternalHooks) {
+      return;
+    }
+    const canonical = buildCanonicalSentMessageHookContext({
+      to: msg.from,
+      content: contentForSentHook,
+      success,
+      error,
+      channelId: "whatsapp",
+      accountId: params.accountId,
+      conversationId: params.conversationId ?? msg.from,
+      isGroup: params.isGroup,
+      groupId: params.groupId,
+    });
+    if (hasMessageSentHooks) {
+      fireAndForgetHook(
+        Promise.resolve(
+          hookRunner!.runMessageSent(
+            toPluginMessageSentEvent(canonical),
+            toPluginMessageContext(canonical),
+          ),
+        ),
+        "whatsapp/web-auto-reply: message_sent plugin hook failed",
       );
+    }
+    if (params.sessionKeyForInternalHooks) {
+      fireAndForgetHook(
+        triggerInternalHook(
+          createInternalHookEvent(
+            "message",
+            "sent",
+            params.sessionKeyForInternalHooks,
+            toInternalMessageSentContext(canonical),
+          ),
+        ),
+        "whatsapp/web-auto-reply: message:sent internal hook failed",
+      );
+    }
+  };
+
+  try {
+    const tableMode = params.tableMode ?? "code";
+    const chunkMode = params.chunkMode ?? "length";
+    const convertedText = markdownToWhatsApp(
+      convertMarkdownTables(replyResult.text || "", tableMode),
+    );
+    const textChunks = chunkMarkdownTextWithMode(convertedText, textLimit, chunkMode);
+    const mediaList = resolveOutboundMediaUrls(replyResult);
+
+    const sendWithRetry = async (fn: () => Promise<unknown>, label: string, maxAttempts = 3) => {
+      let lastErr: unknown;
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+          return await fn();
+        } catch (err) {
+          lastErr = err;
+          const errText = formatError(err);
+          const isLast = attempt === maxAttempts;
+          const shouldRetry = /closed|reset|timed\s*out|disconnect/i.test(errText);
+          if (!shouldRetry || isLast) {
+            throw err;
+          }
+          const backoffMs = 500 * attempt;
+          logVerbose(
+            `Retrying ${label} to ${msg.from} after failure (${attempt}/${maxAttempts - 1}) in ${backoffMs}ms: ${errText}`,
+          );
+          await sleep(backoffMs);
+        }
+      }
+      throw lastErr;
+    };
+
+    // Text-only replies
+    if (mediaList.length === 0 && textChunks.length) {
+      const totalChunks = textChunks.length;
+      for (const [index, chunk] of textChunks.entries()) {
+        const chunkStarted = Date.now();
+        await sendWithRetry(() => msg.reply(chunk), "text");
+        if (!skipLog) {
+          const durationMs = Date.now() - chunkStarted;
+          whatsappOutboundLog.debug(
+            `Sent chunk ${index + 1}/${totalChunks} to ${msg.from} (${durationMs.toFixed(0)}ms)`,
+          );
+        }
+      }
       replyLogger.info(
         {
           correlationId: msg.id ?? newConnectionId(),
           connectionId: connectionId ?? null,
           to: msg.from,
           from: msg.to,
-          text: caption ?? null,
-          mediaUrl,
-          mediaSizeBytes: media.buffer.length,
-          mediaKind: media.kind,
+          text: elide(replyResult.text, 240),
+          mediaUrl: null,
+          mediaSizeBytes: null,
+          mediaKind: null,
           durationMs: Date.now() - replyStarted,
         },
-        "auto-reply sent (media)",
+        "auto-reply sent (text)",
       );
-    },
-    onError: async ({ error, mediaUrl, caption, isFirst }) => {
-      whatsappOutboundLog.error(`Failed sending web media to ${msg.from}: ${formatError(error)}`);
-      replyLogger.warn({ err: error, mediaUrl }, "failed to send web media reply");
-      if (!isFirst) {
-        return;
-      }
-      const warning =
-        error instanceof Error ? `⚠️ Media failed: ${error.message}` : "⚠️ Media failed.";
-      const fallbackTextParts = [remainingText.shift() ?? caption ?? "", warning].filter(Boolean);
-      const fallbackText = fallbackTextParts.join("\n");
-      if (!fallbackText) {
-        return;
-      }
-      whatsappOutboundLog.warn(`Media skipped; sent text-only to ${msg.from}`);
-      await msg.reply(fallbackText);
-    },
-  });
+      emitMessageSentHooks(true);
+      return;
+    }
 
-  // Remaining text chunks after media
-  for (const chunk of remainingText) {
-    await msg.reply(chunk);
+    const remainingText = [...textChunks];
+
+    // Media (with optional caption on first item)
+    const leadingCaption = remainingText.shift() || "";
+    await sendMediaWithLeadingCaption({
+      mediaUrls: mediaList,
+      caption: leadingCaption,
+      send: async ({ mediaUrl, caption }) => {
+        const media = await loadWebMedia(mediaUrl, {
+          maxBytes: maxMediaBytes,
+          localRoots: params.mediaLocalRoots,
+        });
+        if (shouldLogVerbose()) {
+          logVerbose(
+            `Web auto-reply media size: ${(media.buffer.length / (1024 * 1024)).toFixed(2)}MB`,
+          );
+          logVerbose(`Web auto-reply media source: ${mediaUrl} (kind ${media.kind})`);
+        }
+        if (media.kind === "image") {
+          await sendWithRetry(
+            () =>
+              msg.sendMedia({
+                image: media.buffer,
+                caption,
+                mimetype: media.contentType,
+              }),
+            "media:image",
+          );
+        } else if (media.kind === "audio") {
+          await sendWithRetry(
+            () =>
+              msg.sendMedia({
+                audio: media.buffer,
+                ptt: true,
+                mimetype: media.contentType,
+                caption,
+              }),
+            "media:audio",
+          );
+        } else if (media.kind === "video") {
+          await sendWithRetry(
+            () =>
+              msg.sendMedia({
+                video: media.buffer,
+                caption,
+                mimetype: media.contentType,
+              }),
+            "media:video",
+          );
+        } else {
+          const fileName = media.fileName ?? mediaUrl.split("/").pop() ?? "file";
+          const mimetype = media.contentType ?? "application/octet-stream";
+          await sendWithRetry(
+            () =>
+              msg.sendMedia({
+                document: media.buffer,
+                fileName,
+                caption,
+                mimetype,
+              }),
+            "media:document",
+          );
+        }
+        whatsappOutboundLog.info(
+          `Sent media reply to ${msg.from} (${(media.buffer.length / (1024 * 1024)).toFixed(2)}MB)`,
+        );
+        replyLogger.info(
+          {
+            correlationId: msg.id ?? newConnectionId(),
+            connectionId: connectionId ?? null,
+            to: msg.from,
+            from: msg.to,
+            text: caption ?? null,
+            mediaUrl,
+            mediaSizeBytes: media.buffer.length,
+            mediaKind: media.kind,
+            durationMs: Date.now() - replyStarted,
+          },
+          "auto-reply sent (media)",
+        );
+      },
+      onError: async ({ error, mediaUrl, caption, isFirst }) => {
+        whatsappOutboundLog.error(`Failed sending web media to ${msg.from}: ${formatError(error)}`);
+        replyLogger.warn({ err: error, mediaUrl }, "failed to send web media reply");
+        if (!isFirst) {
+          return;
+        }
+        const warning =
+          error instanceof Error ? `⚠️ Media failed: ${error.message}` : "⚠️ Media failed.";
+        const fallbackTextParts = [remainingText.shift() ?? caption ?? "", warning].filter(Boolean);
+        const fallbackText = fallbackTextParts.join("\n");
+        if (!fallbackText) {
+          return;
+        }
+        whatsappOutboundLog.warn(`Media skipped; sent text-only to ${msg.from}`);
+        await msg.reply(fallbackText);
+      },
+    });
+
+    // Remaining text chunks after media
+    for (const chunk of remainingText) {
+      await msg.reply(chunk);
+    }
+    emitMessageSentHooks(true);
+  } catch (error) {
+    emitMessageSentHooks(false, formatError(error));
+    throw error;
   }
 }

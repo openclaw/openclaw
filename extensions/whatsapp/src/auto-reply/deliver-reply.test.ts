@@ -1,8 +1,56 @@
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { sleep } from "openclaw/plugin-sdk/text-runtime";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadWebMedia } from "../media.js";
 import type { WebInboundMsg } from "./types.js";
+
+const hookMocks = vi.hoisted(() => {
+  const runMessageSending = vi.fn<
+    (...args: unknown[]) => Promise<
+      | undefined
+      | {
+          cancel?: boolean;
+          content?: string;
+        }
+    >
+  >(async () => undefined);
+  const runMessageSent = vi.fn<(...args: unknown[]) => Promise<undefined>>(async () => undefined);
+  const hasHooks = vi.fn((name: string) => name === "message_sending" || name === "message_sent");
+  return {
+    runner: {
+      runMessageSending,
+      runMessageSent,
+      hasHooks,
+    },
+    runMessageSending,
+    runMessageSent,
+    hasHooks,
+    triggerInternalHook: vi.fn(async () => {}),
+    createInternalHookEvent: vi.fn(
+      (type: string, action: string, sessionKey: string, context: unknown) => ({
+        type,
+        action,
+        sessionKey,
+        context,
+      }),
+    ),
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/hook-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/hook-runtime")>(
+    "openclaw/plugin-sdk/hook-runtime",
+  );
+  return {
+    ...actual,
+    getGlobalHookRunner: () => hookMocks.runner,
+    fireAndForgetHook: vi.fn((promise: Promise<unknown>) => {
+      void promise;
+    }),
+    triggerInternalHook: hookMocks.triggerInternalHook,
+    createInternalHookEvent: hookMocks.createInternalHookEvent,
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/runtime-env")>(
@@ -91,6 +139,103 @@ async function expectReplySuppressed(replyResult: { text: string; isReasoning?: 
 describe("deliverWebReply", () => {
   beforeAll(async () => {
     ({ deliverWebReply } = await import("./deliver-reply.js"));
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    hookMocks.hasHooks.mockImplementation(
+      (name: string) => name === "message_sending" || name === "message_sent",
+    );
+    hookMocks.runMessageSending.mockResolvedValue(undefined);
+    hookMocks.runMessageSent.mockResolvedValue(undefined);
+  });
+
+  it("runs message_sending and allows content modification", async () => {
+    const msg = makeMsg();
+    hookMocks.runMessageSending.mockResolvedValueOnce({ content: "modified" });
+
+    await deliverWebReply({
+      replyResult: { text: "original" },
+      msg,
+      sessionKeyForInternalHooks: "session-1",
+      accountId: "default",
+      conversationId: msg.from,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 200,
+      replyLogger,
+      skipLog: true,
+    });
+
+    expect(hookMocks.runMessageSending).toHaveBeenCalledTimes(1);
+    expect(msg.reply).toHaveBeenCalledWith("modified");
+  });
+
+  it("honors message_sending cancel=true", async () => {
+    const msg = makeMsg();
+    hookMocks.runMessageSending.mockResolvedValueOnce({ cancel: true });
+
+    await deliverWebReply({
+      replyResult: { text: "should not send" },
+      msg,
+      sessionKeyForInternalHooks: "session-1",
+      accountId: "default",
+      conversationId: msg.from,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 200,
+      replyLogger,
+      skipLog: true,
+    });
+
+    expect(msg.reply).not.toHaveBeenCalled();
+    expect(hookMocks.runMessageSent).not.toHaveBeenCalled();
+  });
+
+  it("emits plugin and internal message:sent hooks on success", async () => {
+    const msg = makeMsg();
+
+    await deliverWebReply({
+      replyResult: { text: "hook success" },
+      msg,
+      sessionKeyForInternalHooks: "session-1",
+      accountId: "default",
+      conversationId: msg.from,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 200,
+      replyLogger,
+      skipLog: true,
+    });
+
+    expect(hookMocks.runMessageSent).toHaveBeenCalledTimes(1);
+    expect(hookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
+  });
+
+  it("emits message:sent hooks with success=false when delivery throws", async () => {
+    const msg = makeMsg();
+    (msg.reply as unknown as { mockRejectedValueOnce: (v: unknown) => void }).mockRejectedValueOnce(
+      new Error("send failed"),
+    );
+
+    await expect(
+      deliverWebReply({
+        replyResult: { text: "hook failure" },
+        msg,
+        sessionKeyForInternalHooks: "session-1",
+        accountId: "default",
+        conversationId: msg.from,
+        maxMediaBytes: 1024 * 1024,
+        textLimit: 200,
+        replyLogger,
+        skipLog: true,
+      }),
+    ).rejects.toThrow("send failed");
+
+    expect(hookMocks.runMessageSent).toHaveBeenCalledTimes(1);
+    const sentEvent = hookMocks.runMessageSent.mock.calls.at(0)?.[0] as
+      | {
+          success?: boolean;
+        }
+      | undefined;
+    expect(sentEvent?.success).toBe(false);
   });
 
   it("suppresses payloads flagged as reasoning", async () => {
