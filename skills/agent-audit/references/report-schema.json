@@ -58,6 +58,15 @@
       "note": "string"
     }
   ],
+  "contamination_paths": [
+    {
+      "origin_layer": "string",
+      "affected_layer": "string",
+      "artifact": "string",
+      "failure_mode": "string",
+      "note": "string"
+    }
+  ],
   "ordered_fix_plan": [
     {
       "order": 1,
