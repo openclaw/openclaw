@@ -1580,6 +1580,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Includes the default agent's ## Heartbeats system prompt section when true. Turn this off to keep heartbeat runtime behavior while omitting the heartbeat prompt instructions from the agent system prompt.",
   "agents.list.*.heartbeat.includeSystemPromptSection":
     "Per-agent override for whether the default agent's ## Heartbeats system prompt section is injected. Use false to keep heartbeat runtime behavior but omit the heartbeat prompt instructions from that agent's system prompt.",
+  "agents.defaults.heartbeat.allowSkills":
+    "Restricts heartbeat runs to this skill allowlist. Leave unset to keep the agent's normal skill behavior; set [] to disable all skills during heartbeat turns.",
+  "agents.list.*.heartbeat.allowSkills":
+    "Per-agent override for the heartbeat skill allowlist. Leave unset to keep the agent's normal skill behavior; set [] to disable all skills during heartbeat turns for that agent.",
   "agents.defaults.heartbeat.directPolicy":
     'Controls whether heartbeat delivery may target direct/DM chats: "allow" (default) permits DM delivery and "block" suppresses direct-target sends.',
   "agents.list.*.heartbeat.directPolicy":

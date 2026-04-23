@@ -1375,6 +1375,7 @@ Periodic heartbeat runs.
         every: "30m", // 0m disables
         model: "openai/gpt-5.4-mini",
         includeReasoning: false,
+        allowSkills: ["healthcheck", "web-access"], // optional: restrict heartbeat runs to these skills; unset keeps normal agent behavior
         includeSystemPromptSection: true, // default: true; false omits the Heartbeat section from the system prompt
         lightContext: false, // default: false; true keeps only HEARTBEAT.md from workspace bootstrap files
         isolatedSession: false, // default: false; true runs each heartbeat in a fresh session (no conversation history)
@@ -1394,6 +1395,7 @@ Periodic heartbeat runs.
 
 - `every`: duration string (ms/s/m/h). Default: `30m` (API-key auth) or `1h` (OAuth auth). Set to `0m` to disable.
 - `includeSystemPromptSection`: when false, omits the Heartbeat section from the system prompt and skips `HEARTBEAT.md` injection into bootstrap context. Default: `true`.
+- `allowSkills`: optional heartbeat-specific skill allowlist. Leave unset to keep the agent's normal skill behavior; set `[]` to disable all skills during heartbeat runs.
 - `suppressToolErrorWarnings`: when true, suppresses tool error warning payloads during heartbeat runs.
 - `timeoutSeconds`: maximum time in seconds allowed for a heartbeat agent turn before it is aborted. Leave unset to use `agents.defaults.timeoutSeconds`.
 - `directPolicy`: direct/DM delivery policy. `allow` (default) permits direct-target delivery. `block` suppresses direct-target delivery and emits `reason=dm-blocked`.

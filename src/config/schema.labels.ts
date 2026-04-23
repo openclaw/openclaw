@@ -577,6 +577,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.embeddedPi": "Embedded Pi",
   "agents.defaults.embeddedPi.projectSettingsPolicy": "Embedded Pi Project Settings Policy",
   "agents.defaults.embeddedPi.executionContract": "Embedded Pi Execution Contract",
+  "agents.defaults.heartbeat.allowSkills": "Heartbeat Allow Skills",
+  "agents.list.*.heartbeat.allowSkills": "Heartbeat Allow Skills",
   "agents.defaults.heartbeat.includeSystemPromptSection": "Heartbeat Include System Prompt Section",
   "agents.list.*.heartbeat.includeSystemPromptSection": "Heartbeat Include System Prompt Section",
   "agents.list[].embeddedPi": "Agent Embedded Pi",

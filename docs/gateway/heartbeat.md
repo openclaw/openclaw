@@ -100,6 +100,7 @@ and logged; a message that is only `HEARTBEAT_OK` is dropped.
         every: "30m", // default: 30m (0m disables)
         model: "anthropic/claude-opus-4-6",
         includeReasoning: false, // default: false (deliver separate Reasoning: message when available)
+        allowSkills: ["healthcheck", "web-access"], // optional: restrict heartbeat runs to these skills; unset keeps normal agent behavior
         lightContext: false, // default: false; true keeps only HEARTBEAT.md from workspace bootstrap files
         isolatedSession: false, // default: false; true runs each heartbeat in a fresh session (no conversation history)
         target: "last", // default: none | options: last | none | <channel id> (core or plugin, e.g. "bluebubbles")
@@ -223,6 +224,7 @@ Use `accountId` to target a specific account on multi-account channels like Tele
 - `every`: heartbeat interval (duration string; default unit = minutes).
 - `model`: optional model override for heartbeat runs (`provider/model`).
 - `includeReasoning`: when enabled, also deliver the separate `Reasoning:` message when available (same shape as `/reasoning on`).
+- `allowSkills`: optional heartbeat-specific skill allowlist. Leave unset to keep the agent's normal skill behavior; set `[]` to disable all skills during heartbeat runs.
 - `lightContext`: when true, heartbeat runs use lightweight bootstrap context and keep only `HEARTBEAT.md` from workspace bootstrap files.
 - `isolatedSession`: when true, each heartbeat runs in a fresh session with no prior conversation history. Uses the same isolation pattern as cron `sessionTarget: "isolated"`. Dramatically reduces per-heartbeat token cost. Combine with `lightContext: true` for maximum savings. Delivery routing still uses the main session context.
 - `session`: optional session key for heartbeat runs.
