@@ -9,6 +9,7 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../
 describe("bundled taskflow skill frontmatter", () => {
   it("keeps the taskflow skills parseable from their shipped files", async () => {
     const skillPaths = [
+      "skills/agent-audit/SKILL.md",
       "skills/taskflow/SKILL.md",
       "skills/taskflow-inbox-triage/SKILL.md",
     ] as const;
