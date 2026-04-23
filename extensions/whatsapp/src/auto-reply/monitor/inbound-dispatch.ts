@@ -5,9 +5,9 @@ import {
   createChannelReplyPipeline,
   dispatchReplyWithBufferedBlockDispatcher,
   finalizeInboundContext,
-  getAgentScopedMediaLocalRoots,
   jidToE164,
   logVerbose,
+  resolveAgentScopedOutboundMediaAccess,
   resolveChunkMode,
   resolveIdentityNamePrefix,
   resolveInboundLastRouteSessionKey,
@@ -232,6 +232,7 @@ export async function dispatchWhatsAppBufferedReply(params: {
     replyResult: ReplyPayload;
     msg: WebInboundMsg;
     mediaLocalRoots: readonly string[];
+    mediaReadFile?: (filePath: string) => Promise<Buffer>;
     maxMediaBytes: number;
     textLimit: number;
     chunkMode?: ReturnType<typeof resolveChunkMode>;
@@ -267,7 +268,10 @@ export async function dispatchWhatsAppBufferedReply(params: {
     channel: "whatsapp",
     accountId: params.route.accountId,
   });
-  const mediaLocalRoots = getAgentScopedMediaLocalRoots(params.cfg, params.route.agentId);
+  const mediaAccess = resolveAgentScopedOutboundMediaAccess({
+    cfg: params.cfg,
+    agentId: params.route.agentId,
+  });
   const disableBlockStreaming = resolveWhatsAppDisableBlockStreaming(params.cfg);
   let didSendReply = false;
   let didLogHeartbeatStrip = false;
@@ -291,7 +295,8 @@ export async function dispatchWhatsAppBufferedReply(params: {
         await params.deliverReply({
           replyResult: payload,
           msg: params.msg,
-          mediaLocalRoots,
+          mediaLocalRoots: mediaAccess.localRoots ?? [],
+          mediaReadFile: mediaAccess.readFile,
           maxMediaBytes: params.maxMediaBytes,
           textLimit,
           chunkMode,

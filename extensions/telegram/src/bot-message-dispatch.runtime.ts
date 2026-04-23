@@ -4,7 +4,10 @@ export {
   resolveSessionStoreEntry,
   resolveStorePath,
 } from "openclaw/plugin-sdk/config-runtime";
-export { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
+export {
+  getAgentScopedMediaLocalRoots,
+  resolveAgentScopedOutboundMediaAccess,
+} from "openclaw/plugin-sdk/media-runtime";
 export { resolveChunkMode } from "openclaw/plugin-sdk/reply-runtime";
 export {
   generateTelegramTopicLabel as generateTopicLabel,

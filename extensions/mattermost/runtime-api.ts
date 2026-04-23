@@ -83,6 +83,7 @@ export {
 } from "openclaw/plugin-sdk/setup";
 export {
   getAgentScopedMediaLocalRoots,
+  resolveAgentScopedOutboundMediaAccess,
   resolveChannelMediaMaxBytes,
 } from "openclaw/plugin-sdk/media-runtime";
 export { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";

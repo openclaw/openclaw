@@ -17602,19 +17602,30 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     path: {
                       type: "string",
                       minLength: 1,
+                      title: "Root path",
+                      description: "Absolute filesystem path for this root.",
                     },
                     kind: {
                       type: "string",
                       enum: ["dir", "file"],
+                      title: "Root kind",
+                      description:
+                        "Root type: 'dir' allows recursive access to everything under the path, 'file' allows access to the exact file only.",
                     },
                     access: {
                       type: "string",
                       enum: ["ro", "rw"],
+                      title: "Access mode",
+                      description:
+                        "Access mode: 'ro' (read-only, rejects write/edit) or 'rw' (read-write).",
                     },
                   },
                   required: ["path", "kind", "access"],
                   additionalProperties: false,
                 },
+                title: "FS roots",
+                description:
+                  "Explicit filesystem roots with per-root access modes. When set, only paths within these roots are accessible to FS tools (read/write/edit/apply_patch). Each root specifies a path, kind (dir or file), and access mode (ro or rw). Takes precedence over workspaceOnly.",
               },
             },
             additionalProperties: false,

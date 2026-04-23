@@ -55,9 +55,9 @@ import {
   createReplyPrefixOptions,
   createTypingCallbacks,
   formatAllowlistMatchMeta,
-  getAgentScopedMediaLocalRoots,
   logInboundDrop,
   logTypingFailure,
+  resolveAgentScopedOutboundMediaAccess,
   type BlockReplyContext,
   type PluginRuntime,
   type ReplyPayload,
@@ -1408,7 +1408,10 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         channel: "matrix",
         accountId: _route.accountId,
       });
-      const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, _route.agentId);
+      const mediaAccess = resolveAgentScopedOutboundMediaAccess({
+        cfg,
+        agentId: _route.agentId,
+      });
       let finalReplyDeliveryFailed = false;
       let nonFinalReplyDeliveryFailed = false;
       let retryableReplyDeliveryFailed = false;
@@ -1560,7 +1563,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                   replyToMode,
                   threadId: threadTarget,
                   accountId: _route.accountId,
-                  mediaLocalRoots,
+                  mediaLocalRoots: mediaAccess.localRoots,
+                  mediaReadFile: mediaAccess.readFile,
                   tableMode,
                 });
                 return;
@@ -1623,7 +1627,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                     replyToMode,
                     threadId: threadTarget,
                     accountId: _route.accountId,
-                    mediaLocalRoots,
+                    mediaLocalRoots: mediaAccess.localRoots,
+                    mediaReadFile: mediaAccess.readFile,
                     tableMode,
                   });
                 }
@@ -1673,7 +1678,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                   replyToMode,
                   threadId: threadTarget,
                   accountId: _route.accountId,
-                  mediaLocalRoots,
+                  mediaLocalRoots: mediaAccess.localRoots,
+                  mediaReadFile: mediaAccess.readFile,
                   tableMode,
                 });
                 draftConsumed = true;
@@ -1694,7 +1700,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                   replyToMode,
                   threadId: threadTarget,
                   accountId: _route.accountId,
-                  mediaLocalRoots,
+                  mediaLocalRoots: mediaAccess.localRoots,
+                  mediaReadFile: mediaAccess.readFile,
                   tableMode,
                 });
                 if (draftRedacted || deliveredFallback) {
@@ -1725,7 +1732,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                 replyToMode,
                 threadId: threadTarget,
                 accountId: _route.accountId,
-                mediaLocalRoots,
+                mediaLocalRoots: mediaAccess.localRoots,
+                mediaReadFile: mediaAccess.readFile,
                 tableMode,
               });
             }

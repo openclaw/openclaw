@@ -41,8 +41,8 @@ import {
 } from "./bot-message-dispatch.agent.runtime.js";
 import {
   generateTopicLabel,
-  getAgentScopedMediaLocalRoots,
   loadSessionStore,
+  resolveAgentScopedOutboundMediaAccess,
   resolveAutoTopicLabelConfig,
   resolveChunkMode,
   resolveMarkdownTableMode,
@@ -358,7 +358,10 @@ export const dispatchTelegramMessage = async ({
   const draftMinInitialChars = DRAFT_MIN_INITIAL_CHARS;
   // DM draft previews still duplicate briefly at materialize time.
   const useMessagePreviewTransportForDm = threadSpec?.scope === "dm" && canStreamAnswerDraft;
-  const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);
+  const mediaAccess = resolveAgentScopedOutboundMediaAccess({
+    cfg,
+    agentId: route.agentId,
+  });
   const archivedAnswerPreviews: ArchivedPreview[] = [];
   const archivedReasoningPreviewIds: number[] = [];
   const createDraftLane = (laneName: LaneName, enabled: boolean): DraftLaneState => {
@@ -590,7 +593,8 @@ export const dispatchTelegramMessage = async ({
     token: opts.token,
     runtime,
     bot,
-    mediaLocalRoots,
+    mediaLocalRoots: mediaAccess.localRoots,
+    mediaReadFile: mediaAccess.readFile,
     replyToMode,
     textLimit,
     thread: threadSpec,

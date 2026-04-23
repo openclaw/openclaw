@@ -25,7 +25,7 @@ import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context
 import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
-import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
+import { resolveAgentScopedOutboundMediaAccess } from "openclaw/plugin-sdk/media-runtime";
 import { resolveChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-dispatch-runtime";
@@ -195,7 +195,10 @@ export async function processDiscordMessage(
     accountId,
   });
   const removeAckAfterReply = cfg.messages?.removeAckAfterReply ?? false;
-  const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);
+  const mediaAccess = resolveAgentScopedOutboundMediaAccess({
+    cfg,
+    agentId: route.agentId,
+  });
   const shouldAckReaction = () =>
     Boolean(
       ackReaction &&
@@ -836,7 +839,8 @@ export async function processDiscordMessage(
                 chunkMode,
                 sessionKey: ctxPayload.SessionKey,
                 threadBindings,
-                mediaLocalRoots,
+                mediaLocalRoots: mediaAccess.localRoots,
+                mediaReadFile: mediaAccess.readFile,
               });
               replyReference.markSent();
               observer?.onFinalReplyDelivered?.();
@@ -881,7 +885,8 @@ export async function processDiscordMessage(
           chunkMode,
           sessionKey: ctxPayload.SessionKey,
           threadBindings,
-          mediaLocalRoots,
+          mediaLocalRoots: mediaAccess.localRoots,
+          mediaReadFile: mediaAccess.readFile,
         });
         replyReference.markSent();
         if (isFinal) {

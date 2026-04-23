@@ -95,6 +95,7 @@ async function sendDiscordMediaOnly(params: {
   mediaUrl: string;
   accountId?: string;
   mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
   replyTo?: string;
   retryConfig: ResolvedRetryConfig;
 }): Promise<void> {
@@ -107,6 +108,7 @@ async function sendDiscordMediaOnly(params: {
         mediaUrl: params.mediaUrl,
         accountId: params.accountId,
         mediaLocalRoots: params.mediaLocalRoots,
+        mediaReadFile: params.mediaReadFile,
         replyTo: params.replyTo,
       }),
     params.retryConfig,
@@ -121,6 +123,7 @@ async function sendDiscordMediaBatch(params: {
   mediaUrls: string[];
   accountId?: string;
   mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
   replyTo: () => string | undefined;
   retryConfig: ResolvedRetryConfig;
 }): Promise<void> {
@@ -136,6 +139,7 @@ async function sendDiscordMediaBatch(params: {
         mediaUrl,
         accountId: params.accountId,
         mediaLocalRoots: params.mediaLocalRoots,
+        mediaReadFile: params.mediaReadFile,
         replyTo: params.replyTo(),
         retryConfig: params.retryConfig,
       });
@@ -369,6 +373,7 @@ export async function deliverDiscordReply(params: {
   sessionKey?: string;
   threadBindings?: DiscordThreadBindingLookup;
   mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
 }) {
   const replyTo = normalizeOptionalString(params.replyToId);
   const replyToMode = params.replyToMode ?? "all";
@@ -444,6 +449,7 @@ export async function deliverDiscordReply(params: {
         mediaUrls,
         accountId: params.accountId,
         mediaLocalRoots: params.mediaLocalRoots,
+        mediaReadFile: params.mediaReadFile,
         replyTo: resolvePayloadReplyTo,
         retryConfig,
       });
@@ -467,6 +473,8 @@ export async function deliverDiscordReply(params: {
         token: params.token,
         rest: params.rest,
         accountId: params.accountId,
+        mediaLocalRoots: params.mediaLocalRoots,
+        mediaReadFile: params.mediaReadFile,
         replyTo,
       });
       deliveredAny = true;
@@ -501,6 +509,7 @@ export async function deliverDiscordReply(params: {
               mediaUrl,
               accountId: params.accountId,
               mediaLocalRoots: params.mediaLocalRoots,
+              mediaReadFile: params.mediaReadFile,
               replyTo,
             }),
           retryConfig,

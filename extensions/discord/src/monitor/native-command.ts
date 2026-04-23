@@ -21,7 +21,7 @@ import { resolveDirectStatusReplyForSession } from "openclaw/plugin-sdk/command-
 import type { OpenClawConfig, loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import { buildPairingReply } from "openclaw/plugin-sdk/conversation-runtime";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
-import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
+import { resolveAgentScopedOutboundMediaAccess } from "openclaw/plugin-sdk/media-runtime";
 import {
   buildCommandTextFromArgs,
   findCommandByNativeName,
@@ -1117,7 +1117,10 @@ async function dispatchDiscordCommandInteraction(params: {
     targetSessionKey: effectiveRoute.sessionKey,
     boundSessionKey,
   });
-  const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, effectiveRoute.agentId);
+  const mediaAccess = resolveAgentScopedOutboundMediaAccess({
+    cfg,
+    agentId: effectiveRoute.agentId,
+  });
   if (!suppressReplies && commandName === "status") {
     const statusReply = await resolveDirectStatusReplyForSessionImpl({
       cfg,
@@ -1134,7 +1137,8 @@ async function dispatchDiscordCommandInteraction(params: {
       await deliverDiscordInteractionReply({
         interaction,
         payload: statusReply,
-        mediaLocalRoots,
+        mediaLocalRoots: mediaAccess.localRoots,
+        mediaReadFile: mediaAccess.readFile,
         textLimit: resolveTextChunkLimit(cfg, "discord", accountId, {
           fallbackLimit: 2000,
         }),
@@ -1200,7 +1204,8 @@ async function dispatchDiscordCommandInteraction(params: {
           await deliverDiscordInteractionReply({
             interaction,
             payload,
-            mediaLocalRoots,
+            mediaLocalRoots: mediaAccess.localRoots,
+            mediaReadFile: mediaAccess.readFile,
             textLimit: resolveTextChunkLimit(cfg, "discord", accountId, {
               fallbackLimit: 2000,
             }),
@@ -1285,6 +1290,7 @@ async function deliverDiscordInteractionReply(params: {
   interaction: CommandInteraction | ButtonInteraction | StringSelectMenuInteraction;
   payload: ReplyPayload;
   mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
   textLimit: number;
   maxLinesPerMessage?: number;
   preferFollowUp: boolean;
@@ -1348,6 +1354,7 @@ async function deliverDiscordInteractionReply(params: {
       reply.mediaUrls.map(async (url) => {
         const loaded = await loadWebMedia(url, {
           localRoots: params.mediaLocalRoots,
+          readFile: params.mediaReadFile,
         });
         return {
           name: loaded.fileName ?? "upload",

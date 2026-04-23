@@ -870,7 +870,7 @@ describe("runMessageAction media behavior", () => {
       await withSandbox(async (sandboxDir) => {
         const result = await runDrySend({
           cfg: {
-            ...slackConfig,
+            ...workspaceConfig,
             tools: {
               fs: {
                 roots: [{ path: "/packs/shared", kind: "dir", access: "ro" }],
@@ -878,8 +878,8 @@ describe("runMessageAction media behavior", () => {
             },
           },
           actionParams: {
-            channel: "slack",
-            target: "#C12345678",
+            channel: "workspace",
+            target: "12345678",
             media: "./data/file.txt",
             message: "",
           },

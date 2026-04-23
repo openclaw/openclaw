@@ -212,13 +212,8 @@ describe("deliverMattermostReplyPayload", () => {
         accountId: "default",
         mediaUrl: "/packs/shared/manual.pdf",
         replyToId: "root-post",
-        mediaLocalRoots: [
-          {
-            path: path.resolve("/packs/shared/manual.pdf"),
-            kind: "file",
-            access: "ro",
-          },
-        ],
+        mediaLocalRoots: [path.resolve("/packs/shared/manual.pdf")],
+        mediaReadFile: expect.any(Function),
       }),
     );
   });

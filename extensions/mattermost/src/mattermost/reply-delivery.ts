@@ -4,7 +4,7 @@ import {
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
 import {
-  getAgentScopedMediaLocalRoots,
+  resolveAgentScopedOutboundMediaAccess,
   type OpenClawConfig,
   type PluginRuntime,
   type ReplyPayload,
@@ -20,6 +20,7 @@ type SendMattermostMessage = (
     accountId?: string;
     mediaUrl?: string;
     mediaLocalRoots?: readonly string[];
+    mediaReadFile?: (filePath: string) => Promise<Buffer>;
     replyToId?: string;
   },
 ) => Promise<unknown>;
@@ -45,7 +46,10 @@ export async function deliverMattermostReplyPayload(params: {
       params.tableMode,
     ),
   });
-  const mediaLocalRoots = getAgentScopedMediaLocalRoots(params.cfg, params.agentId);
+  const mediaAccess = resolveAgentScopedOutboundMediaAccess({
+    cfg: params.cfg,
+    agentId: params.agentId,
+  });
   const chunkMode = params.core.channel.text.resolveChunkMode(
     params.cfg,
     "mattermost",
@@ -68,7 +72,8 @@ export async function deliverMattermostReplyPayload(params: {
         cfg: params.cfg,
         accountId: params.accountId,
         mediaUrl,
-        mediaLocalRoots,
+        mediaLocalRoots: mediaAccess.localRoots,
+        mediaReadFile: mediaAccess.readFile,
         replyToId: params.replyToId,
       });
     },

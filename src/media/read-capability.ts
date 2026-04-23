@@ -11,10 +11,7 @@ import { resolveWorkspaceRoot } from "../agents/workspace-dir.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { FsRoot } from "../config/types.tools.js";
 import { readLocalFileSafely, readPathWithinRoot, SafeOpenError } from "../infra/fs-safe.js";
-<<<<<<< HEAD
 import { normalizeOptionalString } from "../shared/string-coerce.js";
-=======
->>>>>>> 774baf38a1 (fix(media): skip Windows drive paths on non-Windows; preserve in-root read errors)
 import type { OutboundMediaAccess, OutboundMediaReadFile } from "./load-options.js";
 import {
   getAgentScopedMediaLocalRoots,

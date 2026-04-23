@@ -25,7 +25,7 @@ import {
 } from "openclaw/plugin-sdk/channel-inbound";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
-import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
+import { resolveAgentScopedOutboundMediaAccess } from "openclaw/plugin-sdk/media-runtime";
 import { createNonExitingRuntime, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 import { logDebug, logError } from "openclaw/plugin-sdk/text-runtime";
@@ -533,7 +533,10 @@ async function dispatchDiscordComponentEvent(params: {
     token,
     accountId,
   }).rest;
-  const mediaLocalRoots = getAgentScopedMediaLocalRoots(ctx.cfg, agentId);
+  const mediaAccess = resolveAgentScopedOutboundMediaAccess({
+    cfg: ctx.cfg,
+    agentId,
+  });
   const replyToMode =
     ctx.discordConfig?.replyToMode ?? ctx.cfg.channels?.discord?.replyToMode ?? "off";
   const replyReference = createReplyReferencePlanner({
@@ -568,7 +571,8 @@ async function dispatchDiscordComponentEvent(params: {
           }),
           tableMode,
           chunkMode: resolveChunkMode(ctx.cfg, "discord", accountId),
-          mediaLocalRoots,
+          mediaLocalRoots: mediaAccess.localRoots,
+          mediaReadFile: mediaAccess.readFile,
         });
         replyReference.markSent();
       },

@@ -121,14 +121,13 @@ import { resolveSystemPromptOverride } from "../../system-prompt-override.js";
 import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
+import { resolveToolFsConfig } from "../../tool-fs-policy.js";
 import { UNKNOWN_TOOL_THRESHOLD } from "../../tool-loop-detection.js";
 import {
   resolveTranscriptPolicy,
   shouldAllowProviderOwnedThinkingReplay,
 } from "../../transcript-policy.js";
-import { sanitizeToolCallIdsForCloudCodeAssist } from "../../tool-call-id.js";
-import { resolveToolFsConfig } from "../../tool-fs-policy.js";
-import { normalizeUsage, type NormalizedUsage, type UsageLike } from "../../usage.js";
+import { normalizeUsage, type NormalizedUsage } from "../../usage.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
 import { isRunnerAbortError } from "../abort.js";
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "../cache-ttl.js";
@@ -579,7 +578,7 @@ export async function runEmbeddedAttempt(
             currentMessageId: params.currentMessageId,
             replyToMode: params.replyToMode,
             hasRepliedRef: params.hasRepliedRef,
-            modelHasVision: params.model.input?.includes("image") ?? false,
+            modelHasVision,
             requireExplicitMessageTarget:
               params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
             disableMessageTool: params.disableMessageTool,
@@ -677,22 +676,6 @@ export async function runEmbeddedAttempt(
       );
     }
 
-    const { defaultAgentId } = resolveSessionAgentIds({
-      sessionKey: params.sessionKey,
-      config: params.config,
-      agentId: params.agentId,
-    });
-    const effectiveFsWorkspaceOnly = resolveAttemptFsWorkspaceOnly({
-      config: params.config,
-      sessionAgentId,
-    });
-    // Track sessions_yield tool invocation (callback pattern, like clientToolCallDetected)
-    let yieldDetected = false;
-    let yieldMessage: string | null = null;
-    // Late-binding reference so onYield can abort the session (declared after tool creation)
-    let abortSessionForYield: (() => void) | null = null;
-    let queueYieldInterruptForSession: (() => void) | null = null;
-    let yieldAbortSettled: Promise<void> | null = null;
     const tools = normalizeProviderToolSchemas({
       tools: toolsEnabled ? toolsRaw : [],
       provider: params.provider,

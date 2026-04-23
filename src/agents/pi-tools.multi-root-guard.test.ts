@@ -17,7 +17,12 @@ afterEach(() => {
 function makeRoots(
   ...entries: Array<{ path: string; kind: "dir" | "file"; access: "ro" | "rw" }>
 ): FsRootResolved[] {
-  return entries.map((e) => ({ ...e, resolvedPath: path.resolve(e.path) }));
+  return entries.map((entry) => ({
+    path: entry.path,
+    kind: entry.kind,
+    access: entry.access,
+    resolvedPath: path.resolve(entry.path),
+  }));
 }
 
 describe("validatePathAgainstRoots", () => {

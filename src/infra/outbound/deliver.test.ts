@@ -653,6 +653,30 @@ describe("deliverOutboundPayloads", () => {
   it("ignores configured fs roots for sandboxed outbound media delivery", async () => {
     const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
     const sandboxStateDir = path.join("/tmp", "openclaw-sandbox-deliver-media-roots");
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "whatsapp",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "whatsapp",
+            outbound: {
+              deliveryMode: "direct",
+              sendText: async ({ to, text }) => ({
+                channel: "whatsapp",
+                messageId: `${to}:${text}`,
+              }),
+              sendMedia: async ({ to, text, mediaUrl, mediaLocalRoots, mediaReadFile }) =>
+                await sendWhatsApp(to, text, {
+                  mediaUrl,
+                  mediaLocalRoots,
+                  mediaReadFile,
+                }),
+            },
+          }),
+        },
+      ]),
+    );
 
     vi.stubEnv("OPENCLAW_STATE_DIR", sandboxStateDir);
 
@@ -697,6 +721,30 @@ describe("deliverOutboundPayloads", () => {
 
   it("includes OpenClaw tmp root in imessage mediaLocalRoots", async () => {
     const sendIMessage = vi.fn().mockResolvedValue({ messageId: "i1", chatId: "chat-1" });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "imessage",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "imessage",
+            outbound: {
+              deliveryMode: "direct",
+              sendText: async ({ to, text }) => ({
+                channel: "imessage",
+                messageId: `${to}:${text}`,
+              }),
+              sendMedia: async ({ to, text, mediaUrl, mediaLocalRoots, mediaReadFile }) =>
+                await sendIMessage(to, text, {
+                  mediaUrl,
+                  mediaLocalRoots,
+                  mediaReadFile,
+                }),
+            },
+          }),
+        },
+      ]),
+    );
 
     await deliverOutboundPayloads({
       cfg: {},

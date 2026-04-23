@@ -23,6 +23,7 @@ vi.mock("@mariozechner/pi-ai/oauth", async () => {
   };
 });
 
+import { createOpenClawCodingTools } from "./pi-tools.js";
 import {
   createHostWorkspaceEditTool,
   createHostWorkspaceWriteTool,

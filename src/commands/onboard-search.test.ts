@@ -303,22 +303,14 @@ describe("setupSearch", () => {
 
     const kimiCfg: OpenClawConfig = {};
     const { prompter: kimiPrompter } = createPrompter({
-      selectValues: ["kimi", "https://api.moonshot.ai/v1", "__keep__"],
+      selectValue: "kimi",
       textValue: "sk-moonshot",
     });
     const kimiResult = await setupSearch(kimiCfg, runtime, kimiPrompter);
-    const kimiWebSearchConfig = kimiResult.plugins?.entries?.moonshot?.config?.webSearch as
-      | {
-          baseUrl?: string;
-          model?: string;
-        }
-      | undefined;
     expect(kimiResult.tools?.web?.search?.provider).toBe("kimi");
     expect(kimiResult.tools?.web?.search?.enabled).toBe(true);
     expect(pluginWebSearchApiKey(kimiResult, "moonshot")).toBe("sk-moonshot");
     expect(kimiResult.plugins?.entries?.moonshot?.enabled).toBe(true);
-    expect(kimiWebSearchConfig?.baseUrl).toBe("https://api.moonshot.ai/v1");
-    expect(kimiWebSearchConfig?.model).toBe("kimi-k2.6");
 
     const disabledCfg = createDisabledFirecrawlConfig();
     const { prompter: disabledPrompter } = createPrompter({

@@ -1,7 +1,4 @@
-import {
-  resolveSendableOutboundReplyParts,
-  sendMediaWithLeadingCaption,
-} from "openclaw/plugin-sdk/reply-payload";
+import { sendMediaWithLeadingCaption } from "openclaw/plugin-sdk/reply-payload";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import {
   chunkByParagraph,

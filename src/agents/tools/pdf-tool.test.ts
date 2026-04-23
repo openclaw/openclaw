@@ -183,7 +183,7 @@ describe("createPdfTool", () => {
   });
 
   it("allows non-workspace pdf paths when tools.fs.roots includes the file", async () => {
-    await withTempAgentDir(async (agentDir) => {
+    await withTempPdfAgentDir(async (agentDir) => {
       const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pdf-ws-"));
       const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pdf-root-"));
       try {

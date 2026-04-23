@@ -3,6 +3,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { createApplyPatchTool } from "./apply-patch.js";
+import { createOpenClawCodingTools } from "./pi-tools.js";
 import {
   createSandboxedEditTool,
   createSandboxedReadTool,
