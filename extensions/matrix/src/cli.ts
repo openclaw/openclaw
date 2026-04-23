@@ -544,6 +544,8 @@ type MatrixCliVerificationStatus = {
 
 type MatrixCliVerificationCommandOptions = {
   account?: string;
+  userId?: string;
+  roomId?: string;
   verbose?: boolean;
   json?: boolean;
 };
@@ -557,6 +559,7 @@ type MatrixCliSelfVerificationCommandOptions = {
 type MatrixCliVerificationSummary = {
   id: string;
   transactionId?: string;
+  roomId?: string;
   otherUserId: string;
   otherDeviceId?: string;
   isSelfVerification: boolean;
@@ -789,6 +792,9 @@ function printMatrixVerificationSummary(summary: MatrixCliVerificationSummary): 
   if (summary.transactionId) {
     console.log(`Transaction id: ${sanitizeMatrixCliText(summary.transactionId)}`);
   }
+  if (summary.roomId) {
+    console.log(`Room id: ${sanitizeMatrixCliText(summary.roomId)}`);
+  }
   console.log(`Other user: ${sanitizeMatrixCliText(summary.otherUserId)}`);
   console.log(`Other device: ${sanitizeMatrixCliText(summary.otherDeviceId ?? "unknown")}`);
   console.log(`Self-verification: ${summary.isSelfVerification ? "yes" : "no"}`);
@@ -837,11 +843,87 @@ function printMatrixVerificationSas(sas: MatrixCliVerificationSas): void {
   }
 }
 
-function printMatrixVerificationSasGuidance(requestId: string, accountId?: string): void {
+function matrixCliVerificationDmLookupOptions(options: MatrixCliVerificationCommandOptions): {
+  verificationDmRoomId?: string;
+  verificationDmUserId?: string;
+} {
+  const lookup: {
+    verificationDmRoomId?: string;
+    verificationDmUserId?: string;
+  } = {};
+  if (options.roomId !== undefined) {
+    lookup.verificationDmRoomId = options.roomId;
+  }
+  if (options.userId !== undefined) {
+    lookup.verificationDmUserId = options.userId;
+  }
+  return lookup;
+}
+
+function formatMatrixVerificationDmFollowupParts(params: {
+  roomId?: string;
+  userId?: string;
+}): string[] {
+  if (!params.roomId || !params.userId) {
+    return [];
+  }
+  return [
+    "--user-id",
+    sanitizeMatrixCliText(params.userId),
+    "--room-id",
+    sanitizeMatrixCliText(params.roomId),
+  ];
+}
+
+function formatMatrixVerificationSummaryDmFollowupParts(
+  summary: MatrixCliVerificationSummary,
+): string[] {
+  return formatMatrixVerificationDmFollowupParts({
+    roomId: summary.roomId,
+    userId: summary.otherUserId,
+  });
+}
+
+function formatMatrixVerificationOptionsDmFollowupParts(
+  options: MatrixCliVerificationCommandOptions,
+): string[] {
+  return formatMatrixVerificationDmFollowupParts({
+    roomId: options.roomId,
+    userId: options.userId,
+  });
+}
+
+function formatMatrixVerificationPreferredDmFollowupParts(
+  summary: MatrixCliVerificationSummary,
+  options: MatrixCliVerificationCommandOptions,
+): string[] {
+  const summaryParts = formatMatrixVerificationSummaryDmFollowupParts(summary);
+  return summaryParts.length
+    ? summaryParts
+    : formatMatrixVerificationOptionsDmFollowupParts(options);
+}
+
+function formatMatrixVerificationFollowupCommand(params: {
+  action: string;
+  requestId: string;
+  accountId?: string;
+  dmParts?: string[];
+}): string {
+  return formatMatrixCliCommandParts(
+    ["verify", params.action, params.requestId, ...(params.dmParts ?? [])],
+    params.accountId,
+  );
+}
+
+function printMatrixVerificationSasGuidance(
+  requestId: string,
+  accountId?: string,
+  dmParts: string[] = [],
+): void {
   printGuidance([
     `Compare the emoji or decimals with the other Matrix client.`,
-    `If they match, run ${formatMatrixCliCommandParts(["verify", "confirm-sas", requestId], accountId)}.`,
-    `If they do not match, run ${formatMatrixCliCommandParts(["verify", "mismatch-sas", requestId], accountId)}.`,
+    `If they match, run ${formatMatrixVerificationFollowupCommand({ action: "confirm-sas", requestId, accountId, dmParts })}.`,
+    `If they do not match, run ${formatMatrixVerificationFollowupCommand({ action: "mismatch-sas", requestId, accountId, dmParts })}.`,
   ]);
 }
 
@@ -863,12 +945,17 @@ async function promptMatrixVerificationSasMatch(): Promise<boolean> {
   }
 }
 
-function printMatrixVerificationRequestGuidance(requestId: string, accountId?: string): void {
+function printMatrixVerificationRequestGuidance(
+  summary: MatrixCliVerificationSummary,
+  accountId?: string,
+): void {
+  const requestId = formatMatrixVerificationCommandId(summary);
+  const dmParts = formatMatrixVerificationSummaryDmFollowupParts(summary);
   printGuidance([
     `Accept the verification request in another Matrix client for this account.`,
-    `Then run ${formatMatrixCliCommandParts(["verify", "start", requestId], accountId)} to start SAS verification.`,
-    `Run ${formatMatrixCliCommandParts(["verify", "sas", requestId], accountId)} to display the SAS emoji or decimals.`,
-    `When the SAS matches, run ${formatMatrixCliCommandParts(["verify", "confirm-sas", requestId], accountId)}.`,
+    `Then run ${formatMatrixVerificationFollowupCommand({ action: "start", requestId, accountId, dmParts })} to start SAS verification.`,
+    `Run ${formatMatrixVerificationFollowupCommand({ action: "sas", requestId, accountId, dmParts })} to display the SAS emoji or decimals.`,
+    `When the SAS matches, run ${formatMatrixVerificationFollowupCommand({ action: "confirm-sas", requestId, accountId, dmParts })}.`,
   ]);
 }
 
@@ -1357,10 +1444,7 @@ export function registerMatrixCli(params: { program: Command }): void {
           onText: (summary) => {
             printAccountLabel(accountId);
             printMatrixVerificationSummary(summary);
-            printMatrixVerificationRequestGuidance(
-              formatMatrixVerificationCommandId(summary),
-              accountId,
-            );
+            printMatrixVerificationRequestGuidance(summary, accountId);
           },
           errorPrefix: "Verification request failed",
         });
@@ -1371,15 +1455,24 @@ export function registerMatrixCli(params: { program: Command }): void {
     .command("accept <id>")
     .description("Accept an inbound Matrix verification request")
     .option("--account <id>", "Account ID (for multi-account setups)")
+    .option("--user-id <id>", "Matrix user ID for DM verification follow-up")
+    .option("--room-id <id>", "Matrix direct-message room ID for verification follow-up")
     .option("--verbose", "Show detailed diagnostics")
     .option("--json", "Output as JSON")
     .action(async (id: string, options: MatrixCliVerificationCommandOptions) => {
       await runMatrixCliVerificationSummaryCommand({
         options,
-        run: async (accountId, cfg) => await acceptMatrixVerification(id, { accountId, cfg }),
+        run: async (accountId, cfg) =>
+          await acceptMatrixVerification(id, {
+            accountId,
+            cfg,
+            ...matrixCliVerificationDmLookupOptions(options),
+          }),
         afterText: (summary, accountId) => {
+          const requestId = formatMatrixVerificationCommandId(summary);
+          const dmParts = formatMatrixVerificationPreferredDmFollowupParts(summary, options);
           printGuidance([
-            `Run ${formatMatrixCliCommandParts(["verify", "start", formatMatrixVerificationCommandId(summary)], accountId)} to start SAS verification.`,
+            `Run ${formatMatrixVerificationFollowupCommand({ action: "start", requestId, accountId, dmParts })} to start SAS verification.`,
           ]);
         },
         errorPrefix: "Verification accept failed",
@@ -1390,15 +1483,26 @@ export function registerMatrixCli(params: { program: Command }): void {
     .command("start <id>")
     .description("Start SAS verification for a Matrix verification request")
     .option("--account <id>", "Account ID (for multi-account setups)")
+    .option("--user-id <id>", "Matrix user ID for DM verification follow-up")
+    .option("--room-id <id>", "Matrix direct-message room ID for verification follow-up")
     .option("--verbose", "Show detailed diagnostics")
     .option("--json", "Output as JSON")
     .action(async (id: string, options: MatrixCliVerificationCommandOptions) => {
       await runMatrixCliVerificationSummaryCommand({
         options,
         run: async (accountId, cfg) =>
-          await startMatrixVerification(id, { accountId, cfg, method: "sas" }),
+          await startMatrixVerification(id, {
+            accountId,
+            cfg,
+            method: "sas",
+            ...matrixCliVerificationDmLookupOptions(options),
+          }),
         afterText: (summary, accountId) =>
-          printMatrixVerificationSasGuidance(formatMatrixVerificationCommandId(summary), accountId),
+          printMatrixVerificationSasGuidance(
+            formatMatrixVerificationCommandId(summary),
+            accountId,
+            formatMatrixVerificationPreferredDmFollowupParts(summary, options),
+          ),
         errorPrefix: "Verification start failed",
       });
     });
@@ -1407,6 +1511,8 @@ export function registerMatrixCli(params: { program: Command }): void {
     .command("sas <id>")
     .description("Show SAS emoji or decimals for a Matrix verification request")
     .option("--account <id>", "Account ID (for multi-account setups)")
+    .option("--user-id <id>", "Matrix user ID for DM verification follow-up")
+    .option("--room-id <id>", "Matrix direct-message room ID for verification follow-up")
     .option("--verbose", "Show detailed diagnostics")
     .option("--json", "Output as JSON")
     .action(async (id: string, options: MatrixCliVerificationCommandOptions) => {
@@ -1414,12 +1520,22 @@ export function registerMatrixCli(params: { program: Command }): void {
       await runMatrixCliCommand({
         verbose: options.verbose === true,
         json: options.json === true,
-        run: async () => await getMatrixVerificationSas(id, { accountId, cfg }),
+        run: async () =>
+          await getMatrixVerificationSas(id, {
+            accountId,
+            cfg,
+            ...matrixCliVerificationDmLookupOptions(options),
+          }),
         onText: (sas) => {
+          const requestId = formatMatrixCliText(id);
           printAccountLabel(accountId);
-          console.log(`Verification id: ${formatMatrixCliText(id)}`);
+          console.log(`Verification id: ${requestId}`);
           printMatrixVerificationSas(sas);
-          printMatrixVerificationSasGuidance(id, accountId);
+          printMatrixVerificationSasGuidance(
+            requestId,
+            accountId,
+            formatMatrixVerificationOptionsDmFollowupParts(options),
+          );
         },
         errorPrefix: "Verification SAS lookup failed",
       });
@@ -1429,12 +1545,19 @@ export function registerMatrixCli(params: { program: Command }): void {
     .command("confirm-sas <id>")
     .description("Confirm matching SAS emoji or decimals for a Matrix verification request")
     .option("--account <id>", "Account ID (for multi-account setups)")
+    .option("--user-id <id>", "Matrix user ID for DM verification follow-up")
+    .option("--room-id <id>", "Matrix direct-message room ID for verification follow-up")
     .option("--verbose", "Show detailed diagnostics")
     .option("--json", "Output as JSON")
     .action(async (id: string, options: MatrixCliVerificationCommandOptions) => {
       await runMatrixCliVerificationSummaryCommand({
         options,
-        run: async (accountId, cfg) => await confirmMatrixVerificationSas(id, { accountId, cfg }),
+        run: async (accountId, cfg) =>
+          await confirmMatrixVerificationSas(id, {
+            accountId,
+            cfg,
+            ...matrixCliVerificationDmLookupOptions(options),
+          }),
         errorPrefix: "Verification SAS confirm failed",
       });
     });
@@ -1443,12 +1566,19 @@ export function registerMatrixCli(params: { program: Command }): void {
     .command("mismatch-sas <id>")
     .description("Reject a Matrix SAS verification when the emoji or decimals do not match")
     .option("--account <id>", "Account ID (for multi-account setups)")
+    .option("--user-id <id>", "Matrix user ID for DM verification follow-up")
+    .option("--room-id <id>", "Matrix direct-message room ID for verification follow-up")
     .option("--verbose", "Show detailed diagnostics")
     .option("--json", "Output as JSON")
     .action(async (id: string, options: MatrixCliVerificationCommandOptions) => {
       await runMatrixCliVerificationSummaryCommand({
         options,
-        run: async (accountId, cfg) => await mismatchMatrixVerificationSas(id, { accountId, cfg }),
+        run: async (accountId, cfg) =>
+          await mismatchMatrixVerificationSas(id, {
+            accountId,
+            cfg,
+            ...matrixCliVerificationDmLookupOptions(options),
+          }),
         errorPrefix: "Verification SAS mismatch failed",
       });
     });
@@ -1457,6 +1587,8 @@ export function registerMatrixCli(params: { program: Command }): void {
     .command("cancel <id>")
     .description("Cancel a Matrix verification request")
     .option("--account <id>", "Account ID (for multi-account setups)")
+    .option("--user-id <id>", "Matrix user ID for DM verification follow-up")
+    .option("--room-id <id>", "Matrix direct-message room ID for verification follow-up")
     .option("--reason <text>", "Cancellation reason")
     .option("--code <code>", "Matrix cancellation code")
     .option("--verbose", "Show detailed diagnostics")
@@ -1477,6 +1609,7 @@ export function registerMatrixCli(params: { program: Command }): void {
               cfg,
               reason: options.reason,
               code: options.code,
+              ...matrixCliVerificationDmLookupOptions(options),
             }),
           errorPrefix: "Verification cancel failed",
         });

@@ -36,6 +36,7 @@ let getMatrixEncryptionStatus: typeof import("./verification.js").getMatrixEncry
 let getMatrixRoomKeyBackupStatus: typeof import("./verification.js").getMatrixRoomKeyBackupStatus;
 let getMatrixVerificationStatus: typeof import("./verification.js").getMatrixVerificationStatus;
 let runMatrixSelfVerification: typeof import("./verification.js").runMatrixSelfVerification;
+let startMatrixVerification: typeof import("./verification.js").startMatrixVerification;
 
 describe("matrix verification actions", () => {
   beforeAll(async () => {
@@ -45,6 +46,7 @@ describe("matrix verification actions", () => {
       getMatrixVerificationStatus,
       listMatrixVerifications,
       runMatrixSelfVerification,
+      startMatrixVerification,
     } = await import("./verification.js"));
   });
 
@@ -250,6 +252,63 @@ describe("matrix verification actions", () => {
     expect(withStartedActionClientMock).not.toHaveBeenCalled();
   });
 
+  it("rehydrates DM verification requests before follow-up actions", async () => {
+    const tracked = {
+      completed: false,
+      hasSas: false,
+      id: "verification-1",
+      phaseName: "requested",
+      transactionId: "txn-dm",
+    };
+    const started = {
+      ...tracked,
+      chosenMethod: "m.sas.v1",
+      phaseName: "started",
+    };
+    const crypto = {
+      ensureVerificationDmTracked: vi.fn(async () => tracked),
+      startVerification: vi.fn(async () => started),
+    };
+    withStartedActionClientMock.mockImplementation(async (_opts, run) => {
+      return await run({ crypto });
+    });
+
+    await expect(
+      startMatrixVerification("txn-dm", {
+        verificationDmRoomId: "!dm:example.org",
+        verificationDmUserId: "@alice:example.org",
+      }),
+    ).resolves.toMatchObject({
+      id: "verification-1",
+      phaseName: "started",
+    });
+
+    expect(crypto.ensureVerificationDmTracked).toHaveBeenCalledWith({
+      roomId: "!dm:example.org",
+      userId: "@alice:example.org",
+    });
+    expect(crypto.startVerification).toHaveBeenCalledWith("txn-dm", "sas");
+  });
+
+  it("requires complete DM lookup details for verification follow-up actions", async () => {
+    const crypto = {
+      ensureVerificationDmTracked: vi.fn(),
+      startVerification: vi.fn(),
+    };
+    withStartedActionClientMock.mockImplementation(async (_opts, run) => {
+      return await run({ crypto });
+    });
+
+    await expect(
+      startMatrixVerification("txn-dm", {
+        verificationDmRoomId: "!dm:example.org",
+      }),
+    ).rejects.toThrow("--user-id and --room-id must be provided together");
+
+    expect(crypto.ensureVerificationDmTracked).not.toHaveBeenCalled();
+    expect(crypto.startVerification).not.toHaveBeenCalled();
+  });
+
   it("keeps self-verification in one started Matrix client session", async () => {
     const requested = {
       completed: false,
@@ -418,6 +477,47 @@ describe("matrix verification actions", () => {
     });
 
     expect(crypto.startVerification).not.toHaveBeenCalled();
+  });
+
+  it("fails immediately when an already-started self-verification uses a non-SAS method", async () => {
+    const requested = {
+      completed: false,
+      hasSas: false,
+      id: "verification-1",
+      phaseName: "requested",
+      transactionId: "tx-self",
+    };
+    const started = {
+      ...requested,
+      chosenMethod: "m.reciprocate.v1",
+      phaseName: "started",
+    };
+    const cancelled = {
+      ...started,
+      phaseName: "cancelled",
+    };
+    const crypto = {
+      cancelVerification: vi.fn(async () => cancelled),
+      listVerifications: vi.fn(async () => [started]),
+      requestVerification: vi.fn(async () => requested),
+      startVerification: vi.fn(),
+    };
+    withStartedActionClientMock.mockImplementation(async (_opts, run) => {
+      return await run({ crypto });
+    });
+
+    await expect(
+      runMatrixSelfVerification({ confirmSas: vi.fn(async () => true), timeoutMs: 500 }),
+    ).rejects.toThrow(
+      "Matrix self-verification started without SAS while waiting to show SAS emoji or decimals (method: m.reciprocate.v1)",
+    );
+
+    expect(crypto.listVerifications).toHaveBeenCalledTimes(1);
+    expect(crypto.startVerification).not.toHaveBeenCalled();
+    expect(crypto.cancelVerification).toHaveBeenCalledWith("verification-1", {
+      code: "m.user",
+      reason: "OpenClaw self-verification did not complete",
+    });
   });
 
   it("finalizes completed non-SAS self-verification without waiting for SAS", async () => {

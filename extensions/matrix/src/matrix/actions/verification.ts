@@ -12,6 +12,10 @@ const DEFAULT_MATRIX_SELF_VERIFICATION_TIMEOUT_MS = 180_000;
 
 type MatrixCryptoActionFacade = NonNullable<import("../sdk.js").MatrixClient["crypto"]>;
 type MatrixActionClient = import("../sdk.js").MatrixClient;
+type MatrixVerificationDmLookupOpts = {
+  verificationDmRoomId?: string;
+  verificationDmUserId?: string;
+};
 
 export type MatrixSelfVerificationResult = MatrixVerificationSummary & {
   deviceOwnerVerified: boolean;
@@ -42,6 +46,26 @@ function resolveVerificationId(input: string): string {
   return normalized;
 }
 
+async function ensureMatrixVerificationDmTracked(
+  crypto: MatrixCryptoActionFacade,
+  opts: MatrixVerificationDmLookupOpts,
+): Promise<void> {
+  const roomId = normalizeOptionalString(opts.verificationDmRoomId);
+  const userId = normalizeOptionalString(opts.verificationDmUserId);
+  if (Boolean(roomId) !== Boolean(userId)) {
+    throw new Error("--user-id and --room-id must be provided together for Matrix DM verification");
+  }
+  if (!roomId || !userId) {
+    return;
+  }
+  const tracked = await crypto.ensureVerificationDmTracked({ roomId, userId });
+  if (!tracked) {
+    throw new Error(
+      `Matrix DM verification request not found for room ${roomId} and user ${userId}`,
+    );
+  }
+}
+
 function isSameMatrixVerification(
   left: MatrixVerificationSummary,
   right: MatrixVerificationSummary,
@@ -69,12 +93,38 @@ function isMatrixVerificationCancelled(summary: MatrixVerificationSummary): bool
   return summary.phaseName === "cancelled";
 }
 
+function isMatrixSasMethod(method: string | null | undefined): boolean {
+  return method === "m.sas.v1" || method === "sas";
+}
+
+function getMatrixVerificationSasWaitFailure(
+  summary: MatrixVerificationSummary,
+  label: string,
+): string | null {
+  if (summary.hasSas || summary.phaseName === "cancelled") {
+    return null;
+  }
+  const method = summary.chosenMethod ? ` (method: ${summary.chosenMethod})` : "";
+  if (summary.completed) {
+    return `Matrix self-verification completed without SAS while waiting to ${label}${method}`;
+  }
+  if (
+    summary.phaseName === "started" &&
+    summary.chosenMethod &&
+    !isMatrixSasMethod(summary.chosenMethod)
+  ) {
+    return `Matrix self-verification started without SAS while waiting to ${label}${method}`;
+  }
+  return null;
+}
+
 async function waitForMatrixVerificationSummary(params: {
   crypto: MatrixCryptoActionFacade;
   label: string;
   request: MatrixVerificationSummary;
   timeoutMs: number;
   predicate: (summary: MatrixVerificationSummary) => boolean;
+  reject?: (summary: MatrixVerificationSummary) => string | null;
 }): Promise<MatrixVerificationSummary> {
   const startedAt = Date.now();
   let last: MatrixVerificationSummary | undefined;
@@ -92,6 +142,10 @@ async function waitForMatrixVerificationSummary(params: {
             found.error ? `: ${found.error}` : ` while waiting to ${params.label}`
           }`,
         );
+      }
+      const rejection = params.reject?.(found);
+      if (rejection) {
+        throw new Error(rejection);
       }
     }
     await sleep(Math.min(250, Math.max(25, params.timeoutMs - (Date.now() - startedAt))));
@@ -246,12 +300,21 @@ export async function runMatrixSelfVerification(
         : ready;
       let sasSummary = started;
       if (!sasSummary.hasSas) {
+        const sasFailure = getMatrixVerificationSasWaitFailure(
+          sasSummary,
+          "show SAS emoji or decimals",
+        );
+        if (sasFailure) {
+          throw new Error(sasFailure);
+        }
         sasSummary = await waitForMatrixVerificationSummary({
           crypto,
           label: "show SAS emoji or decimals",
           request: started,
           timeoutMs,
           predicate: (summary) => summary.hasSas,
+          reject: (summary) =>
+            getMatrixVerificationSasWaitFailure(summary, "show SAS emoji or decimals"),
         });
       }
       if (!sasSummary.sas) {
@@ -289,20 +352,23 @@ export async function runMatrixSelfVerification(
 
 export async function acceptMatrixVerification(
   requestId: string,
-  opts: MatrixActionClientOpts = {},
+  opts: MatrixActionClientOpts & MatrixVerificationDmLookupOpts = {},
 ) {
   return await withStartedActionClient(opts, async (client) => {
     const crypto = requireCrypto(client, opts);
+    await ensureMatrixVerificationDmTracked(crypto, opts);
     return await crypto.acceptVerification(resolveVerificationId(requestId));
   });
 }
 
 export async function cancelMatrixVerification(
   requestId: string,
-  opts: MatrixActionClientOpts & { reason?: string; code?: string } = {},
+  opts: MatrixActionClientOpts &
+    MatrixVerificationDmLookupOpts & { reason?: string; code?: string } = {},
 ) {
   return await withStartedActionClient(opts, async (client) => {
     const crypto = requireCrypto(client, opts);
+    await ensureMatrixVerificationDmTracked(crypto, opts);
     return await crypto.cancelVerification(resolveVerificationId(requestId), {
       reason: normalizeOptionalString(opts.reason),
       code: normalizeOptionalString(opts.code),
@@ -312,20 +378,22 @@ export async function cancelMatrixVerification(
 
 export async function startMatrixVerification(
   requestId: string,
-  opts: MatrixActionClientOpts & { method?: "sas" } = {},
+  opts: MatrixActionClientOpts & MatrixVerificationDmLookupOpts & { method?: "sas" } = {},
 ) {
   return await withStartedActionClient(opts, async (client) => {
     const crypto = requireCrypto(client, opts);
+    await ensureMatrixVerificationDmTracked(crypto, opts);
     return await crypto.startVerification(resolveVerificationId(requestId), opts.method ?? "sas");
   });
 }
 
 export async function generateMatrixVerificationQr(
   requestId: string,
-  opts: MatrixActionClientOpts = {},
+  opts: MatrixActionClientOpts & MatrixVerificationDmLookupOpts = {},
 ) {
   return await withStartedActionClient(opts, async (client) => {
     const crypto = requireCrypto(client, opts);
+    await ensureMatrixVerificationDmTracked(crypto, opts);
     return await crypto.generateVerificationQr(resolveVerificationId(requestId));
   });
 }
@@ -333,10 +401,11 @@ export async function generateMatrixVerificationQr(
 export async function scanMatrixVerificationQr(
   requestId: string,
   qrDataBase64: string,
-  opts: MatrixActionClientOpts = {},
+  opts: MatrixActionClientOpts & MatrixVerificationDmLookupOpts = {},
 ) {
   return await withStartedActionClient(opts, async (client) => {
     const crypto = requireCrypto(client, opts);
+    await ensureMatrixVerificationDmTracked(crypto, opts);
     const payload = qrDataBase64.trim();
     if (!payload) {
       throw new Error("Matrix QR data is required");
@@ -347,40 +416,44 @@ export async function scanMatrixVerificationQr(
 
 export async function getMatrixVerificationSas(
   requestId: string,
-  opts: MatrixActionClientOpts = {},
+  opts: MatrixActionClientOpts & MatrixVerificationDmLookupOpts = {},
 ) {
   return await withStartedActionClient(opts, async (client) => {
     const crypto = requireCrypto(client, opts);
+    await ensureMatrixVerificationDmTracked(crypto, opts);
     return await crypto.getVerificationSas(resolveVerificationId(requestId));
   });
 }
 
 export async function confirmMatrixVerificationSas(
   requestId: string,
-  opts: MatrixActionClientOpts = {},
+  opts: MatrixActionClientOpts & MatrixVerificationDmLookupOpts = {},
 ) {
   return await withStartedActionClient(opts, async (client) => {
     const crypto = requireCrypto(client, opts);
+    await ensureMatrixVerificationDmTracked(crypto, opts);
     return await crypto.confirmVerificationSas(resolveVerificationId(requestId));
   });
 }
 
 export async function mismatchMatrixVerificationSas(
   requestId: string,
-  opts: MatrixActionClientOpts = {},
+  opts: MatrixActionClientOpts & MatrixVerificationDmLookupOpts = {},
 ) {
   return await withStartedActionClient(opts, async (client) => {
     const crypto = requireCrypto(client, opts);
+    await ensureMatrixVerificationDmTracked(crypto, opts);
     return await crypto.mismatchVerificationSas(resolveVerificationId(requestId));
   });
 }
 
 export async function confirmMatrixVerificationReciprocateQr(
   requestId: string,
-  opts: MatrixActionClientOpts = {},
+  opts: MatrixActionClientOpts & MatrixVerificationDmLookupOpts = {},
 ) {
   return await withStartedActionClient(opts, async (client) => {
     const crypto = requireCrypto(client, opts);
+    await ensureMatrixVerificationDmTracked(crypto, opts);
     return await crypto.confirmVerificationReciprocateQr(resolveVerificationId(requestId));
   });
 }

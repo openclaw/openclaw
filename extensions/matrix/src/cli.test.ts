@@ -388,6 +388,53 @@ describe("matrix CLI verification commands", () => {
     );
   });
 
+  it("prints DM lookup details in Matrix verification follow-up commands", async () => {
+    requestMatrixVerificationMock.mockResolvedValue(
+      mockMatrixVerificationSummary({
+        id: "dm-verify-1",
+        transactionId: "txn-dm",
+        roomId: "!room-'$(x):example.org",
+        otherUserId: "@alice:example.org",
+        isSelfVerification: false,
+        hasSas: false,
+        sas: undefined,
+      }),
+    );
+    const program = buildProgram();
+
+    await program.parseAsync(
+      [
+        "matrix",
+        "verify",
+        "request",
+        "--user-id",
+        "@alice:example.org",
+        "--room-id",
+        "!room-'$(x):example.org",
+      ],
+      { from: "user" },
+    );
+
+    expect(requestMatrixVerificationMock).toHaveBeenCalledWith({
+      accountId: "default",
+      cfg: {},
+      ownUser: undefined,
+      userId: "@alice:example.org",
+      deviceId: undefined,
+      roomId: "!room-'$(x):example.org",
+    });
+    expect(consoleLogMock).toHaveBeenCalledWith("Room id: !room-'$(x):example.org");
+    expect(consoleLogMock).toHaveBeenCalledWith(
+      "- Then run openclaw matrix verify start txn-dm --user-id @alice:example.org --room-id '!room-'\\''$(x):example.org' to start SAS verification.",
+    );
+    expect(consoleLogMock).toHaveBeenCalledWith(
+      "- Run openclaw matrix verify sas txn-dm --user-id @alice:example.org --room-id '!room-'\\''$(x):example.org' to display the SAS emoji or decimals.",
+    );
+    expect(consoleLogMock).toHaveBeenCalledWith(
+      "- When the SAS matches, run openclaw matrix verify confirm-sas txn-dm --user-id @alice:example.org --room-id '!room-'\\''$(x):example.org'.",
+    );
+  });
+
   it("rejects ambiguous Matrix verification request targets", async () => {
     const program = buildProgram();
 
@@ -526,6 +573,45 @@ describe("matrix CLI verification commands", () => {
     );
     expect(consoleLogMock).toHaveBeenCalledWith(
       "- If they do not match, run openclaw matrix verify mismatch-sas self-1.",
+    );
+  });
+
+  it("passes DM lookup details through Matrix verification follow-up commands", async () => {
+    startMatrixVerificationMock.mockResolvedValue(
+      mockMatrixVerificationSummary({
+        id: "dm-verify-1",
+        transactionId: "txn-dm",
+        roomId: "!dm:example.org",
+        otherUserId: "@alice:example.org",
+      }),
+    );
+    const program = buildProgram();
+
+    await program.parseAsync(
+      [
+        "matrix",
+        "verify",
+        "start",
+        "txn-dm",
+        "--user-id",
+        "@alice:example.org",
+        "--room-id",
+        "!dm:example.org",
+        "--account",
+        "ops",
+      ],
+      { from: "user" },
+    );
+
+    expect(startMatrixVerificationMock).toHaveBeenCalledWith("txn-dm", {
+      accountId: "ops",
+      cfg: {},
+      method: "sas",
+      verificationDmUserId: "@alice:example.org",
+      verificationDmRoomId: "!dm:example.org",
+    });
+    expect(consoleLogMock).toHaveBeenCalledWith(
+      "- If they match, run openclaw matrix verify confirm-sas txn-dm --user-id @alice:example.org --room-id '!dm:example.org' --account ops.",
     );
   });
 
