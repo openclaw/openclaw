@@ -519,22 +519,40 @@ export async function runExecProcess(opts: {
   onUpdate?: (partialResult: AgentToolResult<ExecToolDetails>) => void;
 }): Promise<ExecProcessHandle> {
   const tracer = trace.getTracer("openclaw");
-  return tracer.startActiveSpan("openclaw.exec", {}, context.active(), async (span) => {
+  const span = tracer.startSpan("openclaw.exec", {
+    attributes: {
+      "openclaw.exec.command": opts.command,
+      "openclaw.exec.workdir": opts.workdir,
+      "openclaw.exec.target": opts.sandbox ? "sandbox" : "host",
+    },
+  }, context.active());
+
+  return context.with(trace.setSpan(context.active(), span), async () => {
     try {
-      span.setAttributes({
-        "openclaw.exec.command": opts.command,
-        "openclaw.exec.workdir": opts.workdir,
-        "openclaw.exec.target": opts.sandbox ? "sandbox" : "host",
-      });
       const result = await runExecProcessInternal(opts);
-      span.setStatus({ code: SpanStatusCode.OK });
+
+      result.promise
+        .then((outcome) => {
+          if (outcome.status === "failed") {
+            span.setStatus({ code: SpanStatusCode.ERROR, message: outcome.reason });
+          } else {
+            span.setStatus({ code: SpanStatusCode.OK });
+          }
+        })
+        .catch((err) => {
+          span.recordException(err as Error);
+          span.setStatus({ code: SpanStatusCode.ERROR });
+        })
+        .finally(() => {
+          span.end();
+        });
+
       return result;
     } catch (err) {
       span.recordException(err as Error);
       span.setStatus({ code: SpanStatusCode.ERROR });
-      throw err;
-    } finally {
       span.end();
+      throw err;
     }
   });
 }
