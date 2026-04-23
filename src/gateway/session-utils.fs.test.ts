@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { clearSessionStoreCaches } from "../config/sessions/store-cache.js";
 import { withTempHomeConfig } from "../config/test-helpers.js";
+import { createRepro68765CompactionChainFromProduction } from "./fixtures/repro-68765-compaction-chain-from-production.js";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
 import {
   archiveSessionTranscripts,
@@ -48,6 +49,21 @@ function buildBasicSessionTranscript(
     { message: { role: "user", content: userText } },
     { message: { role: "assistant", content: assistantText } },
   ];
+}
+
+function extractMessageText(message: { content?: unknown }): string {
+  if (typeof message.content === "string") {
+    return message.content;
+  }
+  if (
+    Array.isArray(message.content) &&
+    message.content[0] &&
+    typeof message.content[0] === "object"
+  ) {
+    const first = message.content[0] as { text?: unknown };
+    return typeof first.text === "string" ? first.text : "";
+  }
+  return "";
 }
 
 describe("readFirstUserMessageFromTranscript", () => {
@@ -698,6 +714,42 @@ describe("readSessionMessages", () => {
     readSpy.mockRestore();
     vi.unstubAllEnvs();
     clearSessionStoreCaches();
+  });
+
+  test("reads a production-derived main-session checkpoint chain across predecessor transcripts", () => {
+    const fixture = createRepro68765CompactionChainFromProduction(tmpDir);
+    for (const transcript of fixture.transcripts) {
+      fs.mkdirSync(path.dirname(transcript.filePath), { recursive: true });
+      fs.writeFileSync(
+        transcript.filePath,
+        transcript.entries.map((entry) => JSON.stringify(entry)).join("\n"),
+        "utf-8",
+      );
+    }
+    fs.writeFileSync(storePath, JSON.stringify(fixture.store), "utf-8");
+
+    const truncated = readSessionMessages(
+      fixture.sessionId,
+      path.join(tmpDir, "wrong-sessions.json"),
+      fixture.liveSessionFile,
+    ) as Array<{ content?: unknown; __openclaw?: { id?: string; seq?: number } }>;
+    expect(truncated.map((message) => extractMessageText(message))).toEqual(
+      fixture.expectedLiveSegmentTexts,
+    );
+    expect(truncated.map((message) => message.__openclaw?.id)).toEqual(
+      fixture.expectedLiveSegmentMessageIds,
+    );
+    expect(truncated.map((message) => message.__openclaw?.seq)).toEqual([1, 2]);
+
+    const out = readSessionMessages(
+      fixture.sessionId,
+      storePath,
+      fixture.liveSessionFile,
+    ) as Array<{ content?: unknown; __openclaw?: { id?: string; seq?: number } }>;
+
+    expect(out.map((message) => extractMessageText(message))).toEqual(fixture.expectedTexts);
+    expect(out.map((message) => message.__openclaw?.id)).toEqual(fixture.expectedMessageIds);
+    expect(out.map((message) => message.__openclaw?.seq)).toEqual([1, 2, 3, 4, 5, 6]);
   });
 });
 
