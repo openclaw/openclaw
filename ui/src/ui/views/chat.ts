@@ -966,6 +966,7 @@ function renderPinnedSection(
     <div class="agent-chat__pinned">
       <button
         class="agent-chat__pinned-toggle"
+        aria-expanded=${vs.pinnedExpanded}
         @click=${() => {
           vs.pinnedExpanded = !vs.pinnedExpanded;
           requestUpdate();
@@ -1613,6 +1614,7 @@ export function renderChat(props: ChatProps) {
                       }
                     }}
                     title=${vs.sttRecording ? "Stop recording" : "Voice input"}
+                    aria-label=${vs.sttRecording ? "Stop recording" : "Voice input"}
                     ?disabled=${!props.connected}
                   >
                     ${vs.sttRecording ? icons.micOff : icons.mic}
