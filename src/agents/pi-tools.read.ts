@@ -653,6 +653,23 @@ export function createSandboxedEditTool(params: SandboxToolParams) {
   return wrapToolParamValidation(withRecovery, REQUIRED_PARAM_GROUPS.edit);
 }
 
+export function createHostWorkspaceReadTool(
+  root: string,
+  options?: {
+    workspaceOnly?: boolean;
+    modelContextWindowTokens?: number;
+    imageSanitization?: ImageSanitizationLimits;
+  },
+): AnyAgentTool {
+  const base = createReadTool(root, {
+    operations: createHostReadOperations(root, options),
+  }) as unknown as AnyAgentTool;
+  return createOpenClawReadTool(base, {
+    modelContextWindowTokens: options?.modelContextWindowTokens,
+    imageSanitization: options?.imageSanitization,
+  });
+}
+
 export function createHostWorkspaceWriteTool(root: string, options?: { workspaceOnly?: boolean }) {
   const base = createWriteTool(root, {
     operations: createHostWriteOperations(root, options),
@@ -752,6 +769,68 @@ async function writeHostFile(absolutePath: string, content: string) {
   const resolved = path.resolve(expandTildeToOsHome(absolutePath));
   await fs.mkdir(path.dirname(resolved), { recursive: true });
   await fs.writeFile(resolved, content, "utf-8");
+}
+
+function createHostReadOperations(root: string, options?: { workspaceOnly?: boolean }) {
+  const workspaceOnly = options?.workspaceOnly ?? false;
+
+  if (!workspaceOnly) {
+    // When workspaceOnly is false, allow reads anywhere on the host
+    return {
+      readFile: async (absolutePath: string) => {
+        const resolved = path.resolve(expandTildeToOsHome(absolutePath));
+        return await fs.readFile(resolved);
+      },
+      access: async (absolutePath: string) => {
+        const resolved = path.resolve(expandTildeToOsHome(absolutePath));
+        await fs.access(resolved);
+      },
+      detectImageMimeType: undefined,
+    } as const;
+  }
+
+  // When workspaceOnly is true, enforce workspace boundary
+  return {
+    readFile: async (absolutePath: string) => {
+      const relative = toRelativeWorkspacePath(root, absolutePath);
+      const safeRead = await readFileWithinRoot({
+        rootDir: root,
+        relativePath: relative,
+      });
+      return safeRead.buffer;
+    },
+    access: async (absolutePath: string) => {
+      let relative: string;
+      try {
+        relative = toRelativeWorkspacePath(root, absolutePath);
+      } catch {
+        // Path escapes workspace root.  Don't throw here – the upstream
+        // library replaces any `access` error with a misleading "File not
+        // found" message.  By returning silently the subsequent `readFile`
+        // call will throw the same "Path escapes workspace root" error
+        // through a code-path that propagates the original message.
+        return;
+      }
+      try {
+        const opened = await openFileWithinRoot({
+          rootDir: root,
+          relativePath: relative,
+        });
+        await opened.handle.close().catch(() => {});
+      } catch (error) {
+        if (error instanceof SafeOpenError && error.code === "not-found") {
+          throw createFsAccessError("ENOENT", absolutePath);
+        }
+        if (error instanceof SafeOpenError && error.code === "outside-workspace") {
+          // Don't throw here – see the comment above about the upstream
+          // library swallowing access errors as "File not found".
+          return;
+        }
+        throw error;
+      }
+    },
+    detectImageMimeType: undefined,
+  } as const;
 }
 
 function createHostWriteOperations(root: string, options?: { workspaceOnly?: boolean }) {

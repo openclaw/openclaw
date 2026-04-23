@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { createReadTool } from "@mariozechner/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@mariozechner/pi-ai", async () => {
@@ -25,8 +24,8 @@ vi.mock("@mariozechner/pi-ai/oauth", async () => {
 
 import {
   createHostWorkspaceEditTool,
+  createHostWorkspaceReadTool,
   createHostWorkspaceWriteTool,
-  createOpenClawReadTool,
   wrapToolMemoryFlushAppendOnlyWrite,
   wrapToolWorkspaceRootGuard,
 } from "./pi-tools.read.js";
@@ -46,7 +45,7 @@ describe("FS tools with workspaceOnly=false", () => {
     });
 
   const toolsFor = (workspaceOnly: boolean | undefined): AnyAgentTool[] => {
-    const read = createOpenClawReadTool(createReadTool(workspaceDir) as unknown as AnyAgentTool);
+    const read = createHostWorkspaceReadTool(workspaceDir, { workspaceOnly });
     const write = createHostWorkspaceWriteTool(workspaceDir, { workspaceOnly });
     const edit = createHostWorkspaceEditTool(workspaceDir, { workspaceOnly });
     const tools = [read, write, edit];
@@ -209,7 +208,7 @@ describe("FS tools with workspaceOnly=false", () => {
     await fs.writeFile(allowedAbsolutePath, "seed");
 
     const tools = [
-      createOpenClawReadTool(createReadTool(workspaceDir) as unknown as AnyAgentTool),
+      createHostWorkspaceReadTool(workspaceDir),
       wrapToolMemoryFlushAppendOnlyWrite(createHostWorkspaceWriteTool(workspaceDir), {
         root: workspaceDir,
         relativePath: allowedRelativePath,
