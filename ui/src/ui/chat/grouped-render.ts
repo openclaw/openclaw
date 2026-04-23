@@ -402,10 +402,10 @@ function extractGroupMeta(group: MessageGroup, contextWindow: number | null): Gr
     return null;
   }
 
-  const contextTokens = input + output + cacheRead + cacheWrite;
+  const promptTokens = input + cacheRead + cacheWrite;
   const contextPercent =
-    contextWindow && contextTokens > 0
-      ? Math.min(Math.round((contextTokens / contextWindow) * 100), 100)
+    contextWindow && promptTokens > 0
+      ? Math.min(Math.round((promptTokens / contextWindow) * 100), 100)
       : null;
 
   return { input, output, cacheRead, cacheWrite, cost, model, contextPercent };

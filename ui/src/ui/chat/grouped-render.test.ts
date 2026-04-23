@@ -266,6 +266,28 @@ describe("grouped chat rendering", () => {
     expect(container.textContent).toContain("W307");
   });
 
+  it("excludes output tokens when rendering assistant context usage", () => {
+    const container = document.createElement("div");
+
+    renderAssistantMessage(
+      container,
+      {
+        role: "assistant",
+        content: "Long response",
+        usage: {
+          input: 1_000,
+          output: 9_000,
+          cacheRead: 0,
+          cacheWrite: 0,
+        },
+        timestamp: 1000,
+      },
+      { contextWindow: 10_000 },
+    );
+
+    expect(container.querySelector(".msg-meta__ctx")?.textContent).toBe("10% ctx");
+  });
+
   it("renders the configured local user name in user message footers", () => {
     const container = document.createElement("div");
 
