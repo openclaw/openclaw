@@ -181,21 +181,6 @@ describe("handleControlUiHttpRequest", () => {
     };
   }
 
-  async function runTrustedProxyAssistantMediaRequest(params: {
-    filePath: string;
-    meta?: boolean;
-    headers?: IncomingMessage["headers"];
-  }) {
-    return await runAssistantMediaRequest({
-      url: `/__openclaw__/assistant-media?${params.meta ? "meta=1&" : ""}source=${encodeURIComponent(params.filePath)}`,
-      method: "GET",
-      auth: createTrustedProxyAuth(),
-      trustedProxies: ["10.0.0.1"],
-      remoteAddress: "10.0.0.1",
-      headers: createTrustedProxyHeaders(params.headers),
-    });
-  }
-
   async function runTrustedProxyAvatarRequest(params: {
     agentId?: string;
     meta?: boolean;
@@ -557,17 +542,38 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
-  it("serves bootstrap config requests without requiring an auth token", async () => {
+  it("serves bootstrap config requests without auth only for trusted local loopback requests", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
         const { res, handled, end } = await runBootstrapConfigRequest({
           rootPath: tmp,
           auth: { mode: "token", token: "test-token", allowTailscale: false },
+          headers: {
+            host: "127.0.0.1:18789",
+            origin: "http://127.0.0.1:18789",
+          },
         });
         expect(handled).toBe(true);
         expect(res.statusCode).toBe(200);
         const parsed = parseBootstrapPayload(end);
         expect(parsed.assistantAgentId).toBe("main");
+      },
+    });
+  });
+
+  it("rejects bootstrap config requests without auth for non-loopback requests", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const { res, handled, end } = await runBootstrapConfigRequest({
+          rootPath: tmp,
+          auth: { mode: "token", token: "test-token", allowTailscale: false },
+          headers: {
+            host: "gateway.example.com",
+          },
+        });
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(401);
+        expect(String(end.mock.calls[0]?.[0] ?? "")).toContain("Unauthorized");
       },
     });
   });
@@ -613,14 +619,18 @@ describe("handleControlUiHttpRequest", () => {
   it("does not include the gateway token in bootstrap config for non-loopback requests", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
-        const { end, handled } = await runControlUiRequest({
+        const { end, handled, res } = await runControlUiRequest({
           url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
           method: "GET",
           rootPath: tmp,
           auth: { mode: "token", token: "loopback-token", allowTailscale: false },
+          headers: {
+            authorization: "Bearer loopback-token",
+          },
           remoteAddress: "203.0.113.10",
         });
         expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
         const parsed = parseBootstrapPayload(end);
         expect(parsed.gatewayToken).toBeUndefined();
       },
@@ -630,16 +640,18 @@ describe("handleControlUiHttpRequest", () => {
   it("does not include the gateway token when the host header is not loopback", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
-        const { end, handled } = await runControlUiRequest({
+        const { end, handled, res } = await runControlUiRequest({
           url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
           method: "GET",
           rootPath: tmp,
           auth: { mode: "token", token: "loopback-token", allowTailscale: false },
           headers: {
+            authorization: "Bearer loopback-token",
             host: "attacker.example:18789",
           },
         });
         expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
         const parsed = parseBootstrapPayload(end);
         expect(parsed.gatewayToken).toBeUndefined();
       },
@@ -649,17 +661,19 @@ describe("handleControlUiHttpRequest", () => {
   it("does not include the gateway token when the origin is not loopback", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
-        const { end, handled } = await runControlUiRequest({
+        const { end, handled, res } = await runControlUiRequest({
           url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
           method: "GET",
           rootPath: tmp,
           auth: { mode: "token", token: "loopback-token", allowTailscale: false },
           headers: {
+            authorization: "Bearer loopback-token",
             host: "127.0.0.1:18789",
             origin: "https://attacker.example",
           },
         });
         expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
         const parsed = parseBootstrapPayload(end);
         expect(parsed.gatewayToken).toBeUndefined();
       },

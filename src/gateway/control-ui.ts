@@ -62,7 +62,6 @@ export type ControlUiRequestOptions = {
   agentId?: string;
   auth?: ResolvedGatewayAuth;
   root?: ControlUiRootState;
-  auth?: ResolvedGatewayAuth;
   trustedProxies?: string[];
   allowRealIpFallback?: boolean;
   rateLimiter?: AuthRateLimiter;
@@ -686,16 +685,29 @@ export async function handleControlUiHttpRequest(
     ? `${basePath}${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`
     : CONTROL_UI_BOOTSTRAP_CONFIG_PATH;
   if (pathname === bootstrapConfigPath) {
+    const allowUnauthenticatedLoopbackBootstrap =
+      isLocalDirectRequest(req, opts?.trustedProxies, opts?.allowRealIpFallback) &&
+      hasTrustedLoopbackBootstrapOrigin(req);
+    if (
+      !allowUnauthenticatedLoopbackBootstrap &&
+      !(await authorizeControlUiReadRequest(req, res, {
+        auth: opts?.auth,
+        trustedProxies: opts?.trustedProxies,
+        allowRealIpFallback: opts?.allowRealIpFallback,
+        rateLimiter: opts?.rateLimiter,
+      }))
+    ) {
+      return true;
+    }
     const config = opts?.config;
     const identity = config
       ? resolveAssistantIdentity({ cfg: config, agentId: opts?.agentId })
       : DEFAULT_ASSISTANT_IDENTITY;
     const gatewayToken =
+      allowUnauthenticatedLoopbackBootstrap &&
       opts?.auth?.mode === "token" &&
       typeof opts.auth.token === "string" &&
-      opts.auth.token.trim().length > 0 &&
-      isLocalDirectRequest(req) &&
-      hasTrustedLoopbackBootstrapOrigin(req)
+      opts.auth.token.trim().length > 0
         ? opts.auth.token.trim()
         : undefined;
     const avatarValue = resolveAssistantAvatarUrl({

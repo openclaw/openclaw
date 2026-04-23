@@ -163,6 +163,7 @@ describe("resolveAssistantAttachmentAuthToken", () => {
       resolveAssistantAttachmentAuthToken({
         hello: { auth: { deviceToken: "device-token" } } as AppViewState["hello"],
         settings: { token: "session-token" } as AppViewState["settings"],
+        bootstrapGatewayToken: null,
         password: "shared-password",
       }),
     ).toBe("device-token");
@@ -171,6 +172,7 @@ describe("resolveAssistantAttachmentAuthToken", () => {
   it("prefers an explicit stored token over the loopback bootstrap token", () => {
     expect(
       resolveAssistantAttachmentAuthToken({
+        hello: null,
         settings: {
           token: "fresh-token",
           gatewayUrl: "ws://127.0.0.1:18789",
@@ -184,6 +186,7 @@ describe("resolveAssistantAttachmentAuthToken", () => {
   it("falls back to the shared password when token is blank", () => {
     expect(
       resolveAssistantAttachmentAuthToken({
+        hello: null,
         settings: {
           token: "   ",
           gatewayUrl: "ws://127.0.0.1:18789",
@@ -197,6 +200,7 @@ describe("resolveAssistantAttachmentAuthToken", () => {
   it("falls back to the bootstrap gateway token before password", () => {
     expect(
       resolveAssistantAttachmentAuthToken({
+        hello: null,
         settings: {
           token: "   ",
           gatewayUrl: "ws://127.0.0.1:18789",
@@ -210,6 +214,7 @@ describe("resolveAssistantAttachmentAuthToken", () => {
   it("falls back to the stored token when bootstrap auth does not apply to this page/gateway pair", () => {
     expect(
       resolveAssistantAttachmentAuthToken({
+        hello: null,
         settings: {
           token: "session-token",
           gatewayUrl: "wss://gateway.example/openclaw",
@@ -223,6 +228,7 @@ describe("resolveAssistantAttachmentAuthToken", () => {
   it("returns null when neither auth secret is available", () => {
     expect(
       resolveAssistantAttachmentAuthToken({
+        hello: null,
         settings: { token: "", gatewayUrl: "ws://127.0.0.1:18789" } as AppViewState["settings"],
         bootstrapGatewayToken: null,
         password: "   ",

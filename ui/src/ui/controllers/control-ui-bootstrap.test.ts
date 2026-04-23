@@ -115,6 +115,7 @@ describe("loadControlUiBootstrapConfig", () => {
       assistantName: "Assistant",
       assistantAvatar: null,
       assistantAgentId: null,
+      bootstrapGatewayToken: null,
       localMediaPreviewRoots: [],
       embedSandboxMode: "scripts" as const,
       allowExternalEmbedUrls: false,
