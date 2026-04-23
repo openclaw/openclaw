@@ -84,6 +84,7 @@ describe("loadModelCatalog", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     __setModelCatalogImportForTest();
     resetModelCatalogCacheForTest();
     vi.restoreAllMocks();
@@ -111,6 +112,136 @@ describe("loadModelCatalog", () => {
       setLoggerOverride(null);
       resetLogger();
     }
+  });
+
+  it("briefly caches empty catalog results to avoid repeated slow discovery", async () => {
+    let registryReads = 0;
+    __setModelCatalogImportForTest(
+      async () =>
+        ({
+          discoverAuthStorage: () => ({}),
+          AuthStorage: function AuthStorage() {},
+          ModelRegistry: class {
+            getAll() {
+              registryReads += 1;
+              return [];
+            }
+          },
+        }) as unknown as PiSdkModule,
+    );
+
+    const cfg = {} as OpenClawConfig;
+    await expect(loadModelCatalog({ config: cfg })).resolves.toEqual([]);
+    await expect(loadModelCatalog({ config: cfg })).resolves.toEqual([]);
+
+    expect(registryReads).toBe(1);
+  });
+
+  it("bypasses cached empty catalog results when useCache is false", async () => {
+    let registryReads = 0;
+    let models: unknown[] = [];
+    __setModelCatalogImportForTest(
+      async () =>
+        ({
+          discoverAuthStorage: () => ({}),
+          AuthStorage: function AuthStorage() {},
+          ModelRegistry: class {
+            getAll() {
+              registryReads += 1;
+              return models;
+            }
+          },
+        }) as unknown as PiSdkModule,
+    );
+
+    const cfg = {} as OpenClawConfig;
+    await expect(loadModelCatalog({ config: cfg })).resolves.toEqual([]);
+
+    models = [{ id: "gpt-4.1", name: "GPT-4.1", provider: "openai" }];
+    await expect(loadModelCatalog({ config: cfg, useCache: false })).resolves.toEqual([
+      { id: "gpt-4.1", name: "GPT-4.1", provider: "openai" },
+    ]);
+    expect(registryReads).toBe(2);
+  });
+
+  it("ignores empty retry state from stale concurrent catalog loads", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-04-14T00:00:00.000Z"));
+    let registryReads = 0;
+    let importCalls = 0;
+    let releaseFirstImport!: () => void;
+    const firstImportReady = new Promise<void>((resolve) => {
+      releaseFirstImport = resolve;
+    });
+
+    __setModelCatalogImportForTest(async () => {
+      importCalls += 1;
+      const currentCall = importCalls;
+      if (currentCall === 1) {
+        await firstImportReady;
+      }
+      const models =
+        currentCall === 1 ? [] : [{ id: "gpt-4.1", name: "GPT-4.1", provider: "openai" }];
+      return {
+        discoverAuthStorage: () => ({}),
+        AuthStorage: function AuthStorage() {},
+        ModelRegistry: class {
+          getAll() {
+            registryReads += 1;
+            return models;
+          }
+        },
+      } as unknown as PiSdkModule;
+    });
+
+    const cfg = {} as OpenClawConfig;
+    const staleEmptyLoad = loadModelCatalog({ config: cfg });
+    await expect(loadModelCatalog({ config: cfg, useCache: false })).resolves.toEqual([
+      { id: "gpt-4.1", name: "GPT-4.1", provider: "openai" },
+    ]);
+
+    releaseFirstImport();
+    await expect(staleEmptyLoad).resolves.toEqual([]);
+
+    vi.setSystemTime(new Date("2026-04-14T00:01:01.000Z"));
+
+    await expect(loadModelCatalog({ config: cfg })).resolves.toEqual([
+      { id: "gpt-4.1", name: "GPT-4.1", provider: "openai" },
+    ]);
+    expect(registryReads).toBe(2);
+  });
+
+  it("retries an empty catalog after the negative cache window", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-04-14T00:00:00.000Z"));
+    let registryReads = 0;
+    __setModelCatalogImportForTest(
+      async () =>
+        ({
+          discoverAuthStorage: () => ({}),
+          AuthStorage: function AuthStorage() {},
+          ModelRegistry: class {
+            getAll() {
+              registryReads += 1;
+              return registryReads === 1
+                ? []
+                : [{ id: "gpt-4.1", name: "GPT-4.1", provider: "openai" }];
+            }
+          },
+        }) as unknown as PiSdkModule,
+    );
+
+    const cfg = {} as OpenClawConfig;
+    await expect(loadModelCatalog({ config: cfg })).resolves.toEqual([]);
+    await expect(loadModelCatalog({ config: cfg })).resolves.toEqual([]);
+    expect(registryReads).toBe(1);
+
+    vi.setSystemTime(new Date("2026-04-14T00:01:01.000Z"));
+
+    await expect(loadModelCatalog({ config: cfg })).resolves.toEqual([
+      { id: "gpt-4.1", name: "GPT-4.1", provider: "openai" },
+    ]);
+    expect(registryReads).toBe(2);
   });
 
   it("returns partial results on discovery errors", async () => {

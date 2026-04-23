@@ -13,6 +13,7 @@ import { ensureOpenClawModelsJson } from "./models-config.js";
 import { normalizeProviderId } from "./provider-id.js";
 
 const log = createSubsystemLogger("model-catalog");
+const EMPTY_MODEL_CATALOG_RETRY_MS = 60_000;
 
 export type { ModelCatalogEntry, ModelInputType } from "./model-catalog.types.js";
 
@@ -37,6 +38,8 @@ type PiRegistryClassLike = {
 };
 
 let modelCatalogPromise: Promise<ModelCatalogEntry[]> | null = null;
+let modelCatalogLoadToken: symbol | null = null;
+let emptyModelCatalogRetryAtMs = 0;
 let hasLoggedModelCatalogError = false;
 const defaultImportPiSdk = () => import("./pi-model-discovery-runtime.js");
 let importPiSdk = defaultImportPiSdk;
@@ -53,6 +56,8 @@ function loadModelSuppression() {
 
 export function resetModelCatalogCache() {
   modelCatalogPromise = null;
+  modelCatalogLoadToken = null;
+  emptyModelCatalogRetryAtMs = 0;
   hasLoggedModelCatalogError = false;
   importPiSdk = defaultImportPiSdk;
 }
@@ -84,11 +89,21 @@ export async function loadModelCatalog(params?: {
 }): Promise<ModelCatalogEntry[]> {
   if (params?.useCache === false) {
     modelCatalogPromise = null;
+    modelCatalogLoadToken = null;
+    emptyModelCatalogRetryAtMs = 0;
   }
   if (modelCatalogPromise) {
-    return modelCatalogPromise;
+    if (emptyModelCatalogRetryAtMs > 0 && Date.now() >= emptyModelCatalogRetryAtMs) {
+      modelCatalogPromise = null;
+      modelCatalogLoadToken = null;
+      emptyModelCatalogRetryAtMs = 0;
+    } else {
+      return modelCatalogPromise;
+    }
   }
 
+  const loadToken = Symbol("model-catalog-load");
+  modelCatalogLoadToken = loadToken;
   modelCatalogPromise = (async () => {
     const models: ModelCatalogEntry[] = [];
     const timingEnabled = shouldLogModelCatalogTiming();
@@ -180,9 +195,15 @@ export async function loadModelCatalog(params?: {
       }
       logStage("plugin-models-merged", `entries=${models.length}`);
 
-      if (models.length === 0) {
-        // If we found nothing, don't cache this result so we can try again.
-        modelCatalogPromise = null;
+      if (modelCatalogLoadToken !== loadToken) {
+        logStage("stale-load-complete", `entries=${models.length}`);
+      } else if (models.length === 0) {
+        // Empty catalogs can come from slow transient discovery failures. Cache the
+        // empty result briefly so every inbound message does not repeat the slow path.
+        emptyModelCatalogRetryAtMs = Date.now() + EMPTY_MODEL_CATALOG_RETRY_MS;
+        logStage("empty-catalog-cached", `retryAfterMs=${EMPTY_MODEL_CATALOG_RETRY_MS}`);
+      } else {
+        emptyModelCatalogRetryAtMs = 0;
       }
 
       const sorted = sortModels(models);
@@ -194,7 +215,11 @@ export async function loadModelCatalog(params?: {
         log.warn(`Failed to load model catalog: ${String(error)}`);
       }
       // Don't poison the cache on transient dependency/filesystem issues.
-      modelCatalogPromise = null;
+      if (modelCatalogLoadToken === loadToken) {
+        modelCatalogPromise = null;
+        modelCatalogLoadToken = null;
+        emptyModelCatalogRetryAtMs = 0;
+      }
       if (models.length > 0) {
         return sortModels(models);
       }
