@@ -37,7 +37,7 @@ import {
   canonicalizeMainSessionAlias,
   resolveAgentMainSessionKey,
 } from "../config/sessions/main-session.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
+import { resolveSessionFilePath, resolveStorePath } from "../config/sessions/paths.js";
 import { loadSessionStore } from "../config/sessions/store-load.js";
 import {
   archiveRemovedSessionTranscripts,
@@ -474,6 +474,45 @@ async function restoreHeartbeatUpdatedAt(params: {
     }
     nextStore[sessionKey] = { ...nextEntry, updatedAt: resolvedUpdatedAt };
   });
+}
+
+async function captureHeartbeatTranscriptState(params: {
+  storePath: string;
+  sessionKey: string;
+  agentId?: string;
+}) {
+  try {
+    const store = loadSessionStore(params.storePath);
+    const entry = store[params.sessionKey];
+    if (!entry?.sessionId) {
+      return {};
+    }
+    const transcriptPath = resolveSessionFilePath(entry.sessionId, entry, {
+      agentId: params.agentId,
+      sessionsDir: path.dirname(params.storePath),
+    });
+    const stat = await fs.stat(transcriptPath);
+    return { transcriptPath, preReplySize: stat.size };
+  } catch {
+    return {};
+  }
+}
+
+async function pruneHeartbeatTranscript(params: {
+  transcriptPath?: string;
+  preReplySize?: number;
+}) {
+  if (!params.transcriptPath || typeof params.preReplySize !== "number" || params.preReplySize < 0) {
+    return;
+  }
+  try {
+    const stat = await fs.stat(params.transcriptPath);
+    if (stat.size > params.preReplySize) {
+      await fs.truncate(params.transcriptPath, params.preReplySize);
+    }
+  } catch {
+    // Best-effort cleanup only.
+  }
 }
 
 function stripLeadingHeartbeatResponsePrefix(
@@ -1076,6 +1115,11 @@ export async function runHeartbeatOnce(opts: {
     };
     const getReplyFromConfig =
       opts.deps?.getReplyFromConfig ?? (await loadHeartbeatRunnerRuntime()).getReplyFromConfig;
+    const transcriptState = await captureHeartbeatTranscriptState({
+      storePath,
+      sessionKey: runSessionKey,
+      agentId,
+    });
     const replyResult = await getReplyFromConfig(ctx, replyOpts, cfg);
     const replyPayload = resolveHeartbeatReplyPayload(replyResult);
     const includeReasoning = heartbeat?.includeReasoning === true;
@@ -1188,6 +1232,11 @@ export async function runHeartbeatOnce(opts: {
       : normalized.text;
 
     if (delivery.channel === "none" || !delivery.to) {
+      if (hasExecCompletion && !canRelayToUser) {
+        // Internal-only exec wakes should not leave transcript-visible assistant
+        // turns behind, or Control UI chat.history will surface them later.
+        await pruneHeartbeatTranscript(transcriptState);
+      }
       emitHeartbeatEvent({
         status: "skipped",
         reason: delivery.reason ?? "no-target",

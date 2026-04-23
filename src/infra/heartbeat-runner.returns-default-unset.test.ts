@@ -9,6 +9,7 @@ import {
   resolveAgentIdFromSessionKey,
   resolveAgentMainSessionKey,
   resolveMainSessionKey,
+  resolveSessionFilePath,
   resolveStorePath,
 } from "../config/sessions.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
@@ -1649,6 +1650,75 @@ describe("runHeartbeatOnce", () => {
       expect(calledCtx.ForceSenderIsOwnerFalse).toBe(true);
       expect(calledCtx.Body).toContain("Handle the result internally");
       expect(calledCtx.Body).not.toContain("Please relay the command output to the user");
+    } finally {
+      replySpy.mockReset();
+    }
+  });
+
+  it("prunes internal-only exec heartbeat transcript turns when delivery target is none", async () => {
+    const tmpDir = await createCaseDir("hb-exec-target-none-prune");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          workspace: tmpDir,
+          heartbeat: { every: "5m", target: "none" },
+        },
+      },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      session: { store: storePath },
+    };
+    const sessionKey = resolveMainSessionKey(cfg);
+    const sessionEntry = {
+      sessionId: "sid",
+      updatedAt: Date.now(),
+      lastChannel: "whatsapp",
+      lastTo: "120363401234567890@g.us",
+    };
+    await fs.writeFile(storePath, JSON.stringify({ [sessionKey]: sessionEntry }));
+
+    const transcriptPath = resolveSessionFilePath(
+      sessionEntry.sessionId,
+      sessionEntry as { sessionFile?: string },
+      {
+        sessionsDir: path.dirname(storePath),
+      },
+    );
+    await fs.mkdir(path.dirname(transcriptPath), { recursive: true });
+    const originalTranscript =
+      `${JSON.stringify({ type: "session", id: "sid", timestamp: new Date(0).toISOString(), cwd: tmpDir })}\n` +
+      `${JSON.stringify({ type: "message", id: "m1", parentId: null, timestamp: new Date(0).toISOString(), message: { role: "user", content: [{ type: "text", text: "hello" }], timestamp: 0 } })}\n`;
+    await fs.writeFile(transcriptPath, originalTranscript, "utf-8");
+
+    enqueueSystemEvent("exec finished: backup completed", {
+      sessionKey,
+      contextKey: "exec:backup",
+    });
+
+    const replySpy = vi.fn();
+    replySpy.mockImplementation(async () => {
+      await fs.appendFile(
+        transcriptPath,
+        `${JSON.stringify({ type: "message", id: "m2", parentId: "m1", timestamp: new Date(1).toISOString(), message: { role: "assistant", content: [{ type: "text", text: "Handled internally" }], timestamp: 1 } })}\n`,
+        "utf-8",
+      );
+      return { text: "Handled internally" };
+    });
+    const sendWhatsApp = vi
+      .fn<
+        (to: string, text: string, opts?: unknown) => Promise<{ messageId: string; toJid: string }>
+      >()
+      .mockResolvedValue({ messageId: "m1", toJid: "jid" });
+
+    try {
+      const res = await runHeartbeatOnce({
+        cfg,
+        reason: "exec-event",
+        deps: createHeartbeatDeps(sendWhatsApp, { getReplyFromConfig: replySpy }),
+      });
+      expect(res.status).toBe("ran");
+      expect(sendWhatsApp).not.toHaveBeenCalled();
+      await expect(fs.readFile(transcriptPath, "utf-8")).resolves.toBe(originalTranscript);
     } finally {
       replySpy.mockReset();
     }
