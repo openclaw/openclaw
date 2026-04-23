@@ -84,6 +84,10 @@ Use this skill for release and publish-time workflow. Keep ordinary development 
 ## Build changelog-backed release notes
 
 - Changelog entries should be user-facing, not internal release-process notes.
+- GitHub release and prerelease bodies must use the full matching
+  `CHANGELOG.md` version section, not highlights or an excerpt. When creating
+  or editing a release, extract from `## YYYY.M.D` through the line before the
+  next level-2 heading and use that complete block as the release notes.
 - When cutting a mac release with a beta GitHub prerelease:
   - tag `vYYYY.M.D-beta.N` from the release commit
   - create a prerelease titled `openclaw YYYY.M.D-beta.N`
