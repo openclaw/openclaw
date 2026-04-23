@@ -237,6 +237,17 @@ const TOOLING_TEST_TARGETS = new Map([
 ]);
 const SOURCE_TEST_TARGETS = new Map([
   ["src/agents/live-model-turn-probes.ts", ["src/agents/live-model-turn-probes.test.ts"]],
+  [
+    "src/auto-reply/reply/dispatch-from-config.ts",
+    ["src/auto-reply/reply/dispatch-from-config.test.ts"],
+  ],
+  [
+    "src/auto-reply/reply/effective-reply-route.ts",
+    [
+      "src/auto-reply/reply/effective-reply-route.test.ts",
+      "src/auto-reply/reply/dispatch-from-config.test.ts",
+    ],
+  ],
 ]);
 const GENERATED_CHANGED_TEST_TARGETS = new Set([
   "src/canvas-host/a2ui/.bundle.hash",

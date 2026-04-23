@@ -34,6 +34,7 @@ jobs:
           submodules: false
 
       - name: Ensure preflight base commit
+        if: github.event_name != 'workflow_dispatch'
         uses: ./.github/actions/ensure-base-commit
         with:
           base-sha: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
@@ -45,7 +46,7 @@ jobs:
 
       - name: Detect changed smoke scope
         id: changed_scope
-        if: steps.docs_scope.outputs.docs_only != 'true'
+        if: github.event_name != 'workflow_dispatch' && steps.docs_scope.outputs.docs_only != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -62,12 +63,16 @@ jobs:
         id: manifest
         env:
           OPENCLAW_CI_DOCS_ONLY: ${{ steps.docs_scope.outputs.docs_only }}
+          OPENCLAW_CI_FORCE_INSTALL_SMOKE: ${{ github.event_name == 'workflow_dispatch' && 'true' || 'false' }}
           OPENCLAW_CI_RUN_CHANGED_SMOKE: ${{ steps.changed_scope.outputs.run_changed_smoke || 'false' }}
         run: |
           docs_only="${OPENCLAW_CI_DOCS_ONLY:-false}"
+          force_install_smoke="${OPENCLAW_CI_FORCE_INSTALL_SMOKE:-false}"
           run_changed_smoke="${OPENCLAW_CI_RUN_CHANGED_SMOKE:-false}"
           run_install_smoke=false
-          if [ "$docs_only" != "true" ] && [ "$run_changed_smoke" = "true" ]; then
+          if [ "$force_install_smoke" = "true" ]; then
+            run_install_smoke=true
+          elif [ "$docs_only" != "true" ] && [ "$run_changed_smoke" = "true" ]; then
             run_install_smoke=true
           fi
           {

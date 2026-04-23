@@ -118,5 +118,7 @@ describe("bun global install smoke", () => {
     expect(workflow).toContain(
       "OPENCLAW_BUN_GLOBAL_SMOKE_DIST_IMAGE: openclaw-dockerfile-smoke:local",
     );
+    expect(workflow).toContain("OPENCLAW_CI_FORCE_INSTALL_SMOKE");
+    expect(workflow).toContain('if [ "$force_install_smoke" = "true" ]; then');
   });
 });
