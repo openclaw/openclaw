@@ -1344,7 +1344,12 @@ jobs:
       - name: Run changed extension tests
         env:
           OPENCLAW_CHANGED_EXTENSION: ${{ matrix.extension }}
-        run: pnpm test:extension "$OPENCLAW_CHANGED_EXTENSION"
+        run: |
+          set -euo pipefail
+          if [ "$OPENCLAW_CHANGED_EXTENSION" = "telegram" ]; then
+            export OPENCLAW_VITEST_MAX_WORKERS=1
+          fi
+          pnpm test:extension "$OPENCLAW_CHANGED_EXTENSION"
 
   # Types, lint, and format check shards.
   check-shard:
