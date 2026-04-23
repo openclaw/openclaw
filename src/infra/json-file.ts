@@ -64,21 +64,26 @@ export function saveJsonFile(pathname: string, data: unknown) {
   // a plain fs.writeFileSync can be observed mid-flight and ship a
   // zero-byte or truncated copy to durable storage.
   const tmp = `${target}.tmp.${process.pid}.${Date.now()}`;
-  const fd = fs.openSync(tmp, "w", 0o600);
   try {
-    // fs.writeFileSync on an fd loops internally until every byte has
-    // landed, so a short write under file-size / quota / low-disk
-    // conditions surfaces as an actual ENOSPC instead of silently
-    // truncating the payload. fsync then makes it durable before the
-    // rename swaps the entry.
-    fs.writeFileSync(fd, `${JSON.stringify(data, null, 2)}\n`, "utf8");
-    fs.fsyncSync(fd);
-  } finally {
-    fs.closeSync(fd);
-  }
-  try {
+    const fd = fs.openSync(tmp, "w", 0o600);
+    try {
+      // fs.writeFileSync on an fd loops internally until every byte has
+      // landed, so a short write under file-size / quota / low-disk
+      // conditions surfaces as an actual ENOSPC instead of silently
+      // truncating the payload. fsync then makes it durable before the
+      // rename swaps the entry.
+      fs.writeFileSync(fd, `${JSON.stringify(data, null, 2)}\n`, "utf8");
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
     fs.renameSync(tmp, target);
   } catch (err) {
+    // Any failure between openSync and renameSync (ENOSPC on write, EIO on
+    // fsync, stringify throwing on a cyclic object, cross-device rename, …)
+    // must drop the partial temp file so external mirrors do not ship it as
+    // real state and the workspace is not left with accumulating `.tmp.*`
+    // siblings on repeated failures.
     try {
       fs.unlinkSync(tmp);
     } catch {

@@ -121,6 +121,21 @@ describe("json-file helpers", () => {
     },
   );
 
+  it("removes the temp file when serialization fails", async () => {
+    await withTempDir({ prefix: "openclaw-json-file-" }, async (root) => {
+      const pathname = path.join(root, "state.json");
+      // Cyclic object — JSON.stringify throws mid-save after the temp file
+      // has been created; the cleanup path must drop it.
+      const cyclic: Record<string, unknown> = {};
+      cyclic.self = cyclic;
+
+      expect(() => saveJsonFile(pathname, cyclic)).toThrow();
+
+      const leftovers = fs.readdirSync(root);
+      expect(leftovers).toEqual([]);
+    });
+  });
+
   it.skipIf(process.platform === "win32")(
     "detects symlink cycles",
     async () => {
