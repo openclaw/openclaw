@@ -36,9 +36,22 @@ export async function doctorCommand(runtime?: RuntimeEnv, options: DoctorOptions
   const { maybeRepairUiProtocolFreshness } = await import("../commands/doctor-ui.js");
   const { noteSourceInstallIssues } = await import("../commands/doctor-install.js");
   const { noteStartupOptimizationHints } = await import("../commands/doctor-platform-notes.js");
+  const { maybeRepairBundledPluginRuntimeDeps } =
+    await import("../commands/doctor-bundled-plugin-runtime-deps.js");
   await maybeRepairUiProtocolFreshness(effectiveRuntime, prompter);
   noteSourceInstallIssues(root);
   noteStartupOptimizationHints();
+
+  // Preflight: install missing bundled plugin runtime deps BEFORE loading config.
+  // Config loading may trigger plugin source code (e.g. feishu client) which requires
+  // these deps to be present. Without this preflight, `openclaw doctor --fix` enters
+  // a chicken-and-egg loop where config loading fails before the repair can run.
+  // See: https://github.com/openclaw/openclaw/issues/70521
+  await maybeRepairBundledPluginRuntimeDeps({
+    runtime: effectiveRuntime,
+    prompter,
+    packageRoot: root,
+  });
 
   const { loadAndMaybeMigrateDoctorConfig } = await import("../commands/doctor-config-flow.js");
   const configResult = await loadAndMaybeMigrateDoctorConfig({
