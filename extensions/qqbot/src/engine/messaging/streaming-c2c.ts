@@ -1168,15 +1168,9 @@ async function sendMediaQueue(queue: SendQueueItem[], ctx: StreamingMediaContext
 // ============ 流式模式判断 ============
 
 /**
- * 判断是否应该对当前消息使用流式模式
- *
- * 条件：
- * 1. 账户配置 streaming 未显式设为 false（默认启用）
- * 2. 目标类型为 c2c（私聊）—— 流式 API 仅支持 C2C
- */
-/**
- * Whether to use the official QQ C2C `stream_messages` API for this message.
- * Requires explicit `channels.qqbot.accounts.*.streaming.c2cStreamApi: true`.
+ * 是否对私聊走 QQ 官方 C2C `stream_messages` 流式 API。
+ * - `streaming: true` 等效于 `mode: "partial"` 且 `c2cStreamApi: true`。
+ * - 仍支持对象里显式设 `c2cStreamApi: true` 以兼容旧配置；仅 C2C 场景生效。
  */
 export function shouldUseOfficialC2cStream(
   account: GatewayAccount,
@@ -1186,6 +1180,9 @@ export function shouldUseOfficialC2cStream(
     return false;
   }
   const s = account.config?.streaming;
+  if (s === true) {
+    return true;
+  }
   if (s && typeof s === "object" && s.c2cStreamApi === true) {
     return true;
   }

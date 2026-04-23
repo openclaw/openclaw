@@ -5,13 +5,12 @@
  * Eliminates global `register*` singletons in `slash-commands-impl.ts`.
  */
 
+import type { PluginRuntime } from "openclaw/plugin-sdk/core";
+
 /** Runtime getter shape for the `/bot-approve` command. */
 export interface ApproveRuntimeGetter {
   (): {
-    config: {
-      loadConfig: () => Record<string, unknown>;
-      writeConfigFile: (cfg: unknown) => Promise<void>;
-    };
+    config: Pick<PluginRuntime["config"], "loadConfig" | "writeConfigFile">;
   };
 }
 

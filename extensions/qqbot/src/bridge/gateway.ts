@@ -13,7 +13,7 @@ import {
   startGateway as coreStartGateway,
   type CoreGatewayContext,
 } from "../engine/gateway/gateway.js";
-import type { GatewayAccount, GatewayPluginRuntime } from "../engine/gateway/types.js";
+import type { GatewayPluginRuntime } from "../engine/gateway/types.js";
 import { initSender, registerAccount } from "../engine/messaging/sender.js";
 import type { EngineLogger } from "../engine/types.js";
 import * as _audioModule from "../engine/utils/audio.js";
@@ -22,6 +22,7 @@ import { debugLog, debugError } from "../engine/utils/log.js";
 import type { ResolvedQQBotAccount } from "../types.js";
 import { ensurePlatformAdapter } from "./bootstrap.js";
 import { setBridgeLogger } from "./logger.js";
+import { toGatewayAccount } from "./narrowing.js";
 import { resolveQQBotPluginVersion } from "./plugin-version.js";
 import { getQQBotRuntime, getQQBotRuntimeForEngine } from "./runtime.js";
 import { createSdkHistoryAdapter, createSdkMentionGateAdapter } from "./sdk-adapter.js";
@@ -91,12 +92,7 @@ function createEngineAdapters(_runtime: GatewayPluginRuntime): EngineAdapters {
       pluginVersion: _pluginVersion,
       approveRuntimeGetter: () => {
         const rt = getQQBotRuntime();
-        return {
-          config: rt.config as {
-            loadConfig: () => Record<string, unknown>;
-            writeConfigFile: (cfg: unknown) => Promise<void>;
-          },
-        };
+        return { config: rt.config };
       },
     },
   };
@@ -137,7 +133,7 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
   }
 
   const coreCtx: CoreGatewayContext = {
-    account: ctx.account as unknown as GatewayAccount,
+    account: toGatewayAccount(ctx.account),
     abortSignal: ctx.abortSignal,
     cfg: ctx.cfg,
     onReady: ctx.onReady,
@@ -158,18 +154,21 @@ function createAccountLogger(
   accountId: string,
 ): EngineLogger {
   const prefix = `[${accountId}]`;
+  const withMeta = (msg: string, meta?: Record<string, unknown>) =>
+    meta && Object.keys(meta).length > 0 ? `${msg} ${JSON.stringify(meta)}` : msg;
+
   if (!raw) {
     return {
-      info: (msg) => debugLog(`${prefix} ${msg}`),
-      error: (msg) => debugError(`${prefix} ${msg}`),
-      warn: (msg) => debugError(`${prefix} ${msg}`),
-      debug: (msg) => debugLog(`${prefix} ${msg}`),
+      info: (msg, meta) => debugLog(`${prefix} ${withMeta(msg, meta)}`),
+      error: (msg, meta) => debugError(`${prefix} ${withMeta(msg, meta)}`),
+      warn: (msg, meta) => debugError(`${prefix} ${withMeta(msg, meta)}`),
+      debug: (msg, meta) => debugLog(`${prefix} ${withMeta(msg, meta)}`),
     };
   }
   return {
-    info: (msg) => raw.info(`${prefix} ${msg}`),
-    error: (msg) => raw.error(`${prefix} ${msg}`),
-    warn: (msg) => raw.error(`${prefix} ${msg}`),
-    debug: (msg) => raw.debug?.(`${prefix} ${msg}`),
+    info: (msg, meta) => raw.info(`${prefix} ${withMeta(msg, meta)}`),
+    error: (msg, meta) => raw.error(`${prefix} ${withMeta(msg, meta)}`),
+    warn: (msg, meta) => raw.error(`${prefix} ${withMeta(msg, meta)}`),
+    debug: (msg, meta) => raw.debug?.(`${prefix} ${withMeta(msg, meta)}`),
   };
 }

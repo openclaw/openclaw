@@ -132,9 +132,9 @@ export function isMergedTurn(msg: QueuedMessage): msg is QueuedMessage & {
 export interface MessageQueueContext {
   accountId: string;
   log?: {
-    info: (msg: string) => void;
-    error: (msg: string) => void;
-    debug?: (msg: string) => void;
+    info: (msg: string, meta?: Record<string, unknown>) => void;
+    error: (msg: string, meta?: Record<string, unknown>) => void;
+    debug?: (msg: string, meta?: Record<string, unknown>) => void;
   };
   /** Abort-state probe supplied by the caller. */
   isAborted: () => boolean;
@@ -416,9 +416,19 @@ export function createMessageQueue(ctx: MessageQueueContext): MessageQueue {
       const dropped = evictOne(queue, isGroup);
       totalEnqueued = Math.max(0, totalEnqueued - 1);
       if (isGroup && dropped?.senderIsBot) {
-        log?.info(`Queue full for ${peerId}, dropping bot message ${dropped.messageId}`);
+        log?.info(`Queue full for ${peerId}, dropping bot message ${dropped.messageId}`, {
+          accountId: ctx.accountId,
+          peerId,
+          droppedMessageId: dropped.messageId,
+          reason: "queue_full_evict_bot",
+        });
       } else {
-        log?.error(`Queue full for ${peerId}, dropping oldest message ${dropped?.messageId}`);
+        log?.error(`Queue full for ${peerId}, dropping oldest message ${dropped?.messageId}`, {
+          accountId: ctx.accountId,
+          peerId,
+          droppedMessageId: dropped?.messageId,
+          reason: "queue_full_evict_oldest",
+        });
       }
     }
 
@@ -426,6 +436,7 @@ export function createMessageQueue(ctx: MessageQueueContext): MessageQueue {
     if (totalEnqueued > globalQueueSize) {
       log?.error(
         `Global queue limit reached (${totalEnqueued}), message from ${peerId} may be delayed`,
+        { accountId: ctx.accountId, peerId, totalEnqueued, globalQueueSize },
       );
     }
 

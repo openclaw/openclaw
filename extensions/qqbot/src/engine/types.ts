@@ -44,10 +44,10 @@ export class ApiError extends Error {
  * some callers (e.g. the framework-injected `ctx.log`) may not provide them.
  */
 export interface EngineLogger {
-  info: (msg: string) => void;
-  error: (msg: string) => void;
-  warn?: (msg: string) => void;
-  debug?: (msg: string) => void;
+  info: (msg: string, meta?: Record<string, unknown>) => void;
+  error: (msg: string, meta?: Record<string, unknown>) => void;
+  warn?: (msg: string, meta?: Record<string, unknown>) => void;
+  debug?: (msg: string, meta?: Record<string, unknown>) => void;
 }
 
 // ============ Chat Scope ============
@@ -308,7 +308,7 @@ export interface GatewayAccount {
       | boolean
       | {
           mode?: string;
-          /** When true, use QQ C2C `stream_messages` API for DMs (requires model partial streaming). */
+          /** When true, use QQ C2C `stream_messages` for DMs. Boolean `true` is equivalent. */
           c2cStreamApi?: boolean;
         };
     audioFormatPolicy?: {

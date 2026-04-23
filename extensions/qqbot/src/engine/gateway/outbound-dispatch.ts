@@ -415,6 +415,9 @@ export async function dispatchOutbound(
         ? true
         : (() => {
             const s = account.config?.streaming;
+            if (s === false) {
+              return true;
+            }
             return typeof s === "object" && s !== null && s.mode === "off";
           })(),
       ...(streamingController

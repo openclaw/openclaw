@@ -123,7 +123,13 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
 
   // ---- 7. Message handler ----
   const handleMessage = async (event: QueuedMessage): Promise<void> => {
-    log?.info(`Processing message from ${event.senderId}: ${event.content}`);
+    log?.info(`Processing message from ${event.senderId}: ${event.content}`, {
+      accountId: account.accountId,
+      messageId: event.messageId,
+      senderId: event.senderId,
+      type: event.type,
+      groupOpenid: event.groupOpenid,
+    });
 
     runtime.channel.activity.record({
       channel: "qqbot",
@@ -146,7 +152,11 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
     });
 
     if (inbound.blocked) {
-      log?.info(`Dropped inbound qqbot message: ${inbound.blockReason ?? "blocked by allowFrom"}`);
+      log?.info(`Dropped inbound qqbot message: ${inbound.blockReason ?? "blocked by allowFrom"}`, {
+        accountId: account.accountId,
+        messageId: event.messageId,
+        blockReason: inbound.blockReason,
+      });
       inbound.typing.keepAlive?.stop();
       return;
     }
@@ -157,6 +167,12 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
     if (inbound.skipped) {
       log?.info(
         `Skipped group inbound: reason=${inbound.skipReason ?? "unknown"} group=${event.groupOpenid ?? ""}`,
+        {
+          accountId: account.accountId,
+          messageId: event.messageId,
+          skipReason: inbound.skipReason,
+          groupOpenid: event.groupOpenid,
+        },
       );
       inbound.typing.keepAlive?.stop();
       return;
