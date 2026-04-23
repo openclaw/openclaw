@@ -588,6 +588,45 @@ describe("BlueBubblesConfigSchema", () => {
     );
   });
 
+  it("allows inherited top-level credentials when account serverUrl is configured", () => {
+    const parsed = BlueBubblesConfigSchema.safeParse({
+      password: "secret", // pragma: allowlist secret
+      webhookSecret: "webhook-secret",
+      accounts: {
+        work: {
+          serverUrl: "http://localhost:1234",
+        },
+      },
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  it("rejects inherited credentials when the effective secrets match", () => {
+    const parsed = BlueBubblesConfigSchema.safeParse({
+      password: "shared-secret", // pragma: allowlist secret
+      webhookSecret: "shared-secret", // pragma: allowlist secret
+      accounts: {
+        work: {
+          serverUrl: "http://localhost:1234",
+        },
+      },
+    });
+    expect(parsed.success).toBe(false);
+    if (parsed.success) {
+      return;
+    }
+    const issue = parsed.error.issues.find(
+      (entry) =>
+        entry.path.length === 3 &&
+        entry.path[0] === "accounts" &&
+        entry.path[1] === "work" &&
+        entry.path[2] === "webhookSecret",
+    );
+    expect(issue?.message).toBe(
+      "webhookSecret must differ from the effective BlueBubbles password",
+    );
+  });
+
   it("defaults enrichGroupParticipantsFromContacts to true", () => {
     const parsed = BlueBubblesConfigSchema.safeParse({
       serverUrl: "http://localhost:1234",

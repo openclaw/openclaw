@@ -1,7 +1,6 @@
 import {
   AllowFromListSchema,
   buildChannelConfigSchema,
-  buildCatchallMultiAccountChannelSchema,
   DmPolicySchema,
   GroupPolicySchema,
   MarkdownConfigSchema,
@@ -72,72 +71,108 @@ const bluebubblesCatchupSchema = z
   .strict()
   .optional();
 
-const bluebubblesAccountSchema = z
-  .object({
-    name: z.string().optional(),
-    enabled: z.boolean().optional(),
-    markdown: MarkdownConfigSchema,
+const bluebubblesAccountSchemaBase = z.object({
+  name: z.string().optional(),
+  enabled: z.boolean().optional(),
+  markdown: MarkdownConfigSchema,
+  actions: bluebubblesActionSchema,
+  serverUrl: z.string().optional(),
+  password: buildSecretInputSchema().optional(),
+  webhookSecret: buildSecretInputSchema().optional(),
+  webhookPath: z.string().optional(),
+  dmPolicy: DmPolicySchema.optional(),
+  allowFrom: AllowFromListSchema,
+  groupAllowFrom: AllowFromListSchema,
+  groupPolicy: GroupPolicySchema.optional(),
+  enrichGroupParticipantsFromContacts: z.boolean().optional().default(true),
+  historyLimit: z.number().int().min(0).optional(),
+  dmHistoryLimit: z.number().int().min(0).optional(),
+  textChunkLimit: z.number().int().positive().optional(),
+  sendTimeoutMs: z.number().int().positive().optional(),
+  chunkMode: z.enum(["length", "newline"]).optional(),
+  mediaMaxMb: z.number().int().positive().optional(),
+  mediaLocalRoots: z.array(z.string()).optional(),
+  sendReadReceipts: z.boolean().optional(),
+  network: bluebubblesNetworkSchema,
+  catchup: bluebubblesCatchupSchema,
+  blockStreaming: z.boolean().optional(),
+  groups: z.object({}).catchall(bluebubblesGroupConfigSchema).optional(),
+  coalesceSameSenderDms: z.boolean().optional(),
+});
+
+function validateBlueBubblesWebhookCredentials(params: {
+  serverUrl?: string | undefined;
+  password: unknown;
+  webhookSecret: unknown;
+  ctx: z.RefinementCtx;
+  pathPrefix?: (string | number)[];
+}): void {
+  const serverUrl = params.serverUrl?.trim() ?? "";
+  if (!serverUrl) {
+    return;
+  }
+  const pathPrefix = params.pathPrefix ?? [];
+  const passwordConfigured = hasConfiguredSecretInput(params.password);
+  const webhookSecretConfigured = hasConfiguredSecretInput(params.webhookSecret);
+  if (!passwordConfigured) {
+    params.ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: [...pathPrefix, "password"],
+      message: "password is required when serverUrl is configured",
+    });
+  }
+  if (!webhookSecretConfigured) {
+    params.ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: [...pathPrefix, "webhookSecret"],
+      message: "webhookSecret is required when serverUrl is configured",
+    });
+  }
+  if (
+    passwordConfigured &&
+    webhookSecretConfigured &&
+    hasMatchingSecretInput(params.password, params.webhookSecret)
+  ) {
+    params.ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: [...pathPrefix, "webhookSecret"],
+      message:
+        pathPrefix.length === 0
+          ? "webhookSecret must differ from password"
+          : "webhookSecret must differ from the effective BlueBubbles password",
+    });
+  }
+}
+
+export const BlueBubblesConfigSchema = bluebubblesAccountSchemaBase
+  .extend({
+    accounts: z.object({}).catchall(bluebubblesAccountSchemaBase).optional(),
+    defaultAccount: z.string().optional(),
     actions: bluebubblesActionSchema,
-    serverUrl: z.string().optional(),
-    password: buildSecretInputSchema().optional(),
-    webhookSecret: buildSecretInputSchema().optional(),
-    webhookPath: z.string().optional(),
-    dmPolicy: DmPolicySchema.optional(),
-    allowFrom: AllowFromListSchema,
-    groupAllowFrom: AllowFromListSchema,
-    groupPolicy: GroupPolicySchema.optional(),
-    enrichGroupParticipantsFromContacts: z.boolean().optional().default(true),
-    historyLimit: z.number().int().min(0).optional(),
-    dmHistoryLimit: z.number().int().min(0).optional(),
-    textChunkLimit: z.number().int().positive().optional(),
-    sendTimeoutMs: z.number().int().positive().optional(),
-    chunkMode: z.enum(["length", "newline"]).optional(),
-    mediaMaxMb: z.number().int().positive().optional(),
-    mediaLocalRoots: z.array(z.string()).optional(),
-    sendReadReceipts: z.boolean().optional(),
-    network: bluebubblesNetworkSchema,
-    catchup: bluebubblesCatchupSchema,
-    blockStreaming: z.boolean().optional(),
-    groups: z.object({}).catchall(bluebubblesGroupConfigSchema).optional(),
-    coalesceSameSenderDms: z.boolean().optional(),
   })
   .superRefine((value, ctx) => {
-    const serverUrl = value.serverUrl?.trim() ?? "";
-    const passwordConfigured = hasConfiguredSecretInput(value.password);
-    const webhookSecretConfigured = hasConfiguredSecretInput(value.webhookSecret);
-    if (serverUrl && !passwordConfigured) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["password"],
-        message: "password is required when serverUrl is configured",
-      });
+    validateBlueBubblesWebhookCredentials({
+      serverUrl: value.serverUrl,
+      password: value.password,
+      webhookSecret: value.webhookSecret,
+      ctx,
+    });
+    if (!value.accounts) {
+      return;
     }
-    if (serverUrl && !webhookSecretConfigured) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["webhookSecret"],
-        message: "webhookSecret is required when serverUrl is configured",
-      });
-    }
-    if (
-      serverUrl &&
-      passwordConfigured &&
-      webhookSecretConfigured &&
-      hasMatchingSecretInput(value.password, value.webhookSecret)
-    ) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["webhookSecret"],
-        message: "webhookSecret must differ from password",
+    for (const [accountId, account] of Object.entries(value.accounts)) {
+      if (!account || account.enabled === false) {
+        continue;
+      }
+      validateBlueBubblesWebhookCredentials({
+        serverUrl: account.serverUrl,
+        password: account.password ?? value.password,
+        webhookSecret: account.webhookSecret ?? value.webhookSecret,
+        ctx,
+        pathPrefix: ["accounts", accountId],
       });
     }
   });
-
-export const BlueBubblesConfigSchema = buildCatchallMultiAccountChannelSchema(
-  bluebubblesAccountSchema,
-).safeExtend({
-  actions: bluebubblesActionSchema,
-});
 
 export const BlueBubblesChannelConfigSchema = buildChannelConfigSchema(BlueBubblesConfigSchema, {
   uiHints: bluebubblesChannelConfigUiHints,

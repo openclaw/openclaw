@@ -68,4 +68,48 @@ describe("root BlueBubbles webhook secret validation", () => {
       expect(issue?.message).toBe("webhookSecret must differ from password");
     }
   });
+
+  it("accepts inherited top-level webhook credentials for account-scoped serverUrl", () => {
+    const result = validateConfigObjectRaw({
+      channels: {
+        bluebubbles: {
+          password: "base-password",
+          webhookSecret: "base-webhook-secret",
+          accounts: {
+            work: {
+              serverUrl: "http://localhost:1234",
+            },
+          },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("rejects inherited webhook credentials when the effective secrets match", () => {
+    const result = validateConfigObjectRaw({
+      channels: {
+        bluebubbles: {
+          password: "shared-secret",
+          webhookSecret: "shared-secret",
+          accounts: {
+            work: {
+              serverUrl: "http://localhost:1234",
+            },
+          },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      const issue = result.issues.find(
+        (entry) => entry.path === "channels.bluebubbles.accounts.work.webhookSecret",
+      );
+      expect(issue?.message).toBe(
+        "webhookSecret must differ from the effective BlueBubbles password",
+      );
+    }
+  });
 });

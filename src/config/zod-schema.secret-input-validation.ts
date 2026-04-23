@@ -140,8 +140,9 @@ export function validateBlueBubblesWebhookSecretRequirements(
     if (!accountServerUrl) {
       return;
     }
-    const hasAccountWebhookSecret = hasConfiguredSecretInput(account.webhookSecret);
-    if (!hasAccountWebhookSecret) {
+    const effectivePassword = account.password ?? value.password;
+    const effectiveWebhookSecret = account.webhookSecret ?? value.webhookSecret;
+    if (!hasConfiguredSecretInput(effectiveWebhookSecret)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message:
@@ -150,14 +151,14 @@ export function validateBlueBubblesWebhookSecretRequirements(
       });
     }
     if (
-      hasConfiguredSecretInput(account.password) &&
-      hasAccountWebhookSecret &&
-      hasMatchingSecretInput(account.password, account.webhookSecret)
+      hasConfiguredSecretInput(effectivePassword) &&
+      hasConfiguredSecretInput(effectiveWebhookSecret) &&
+      hasMatchingSecretInput(effectivePassword, effectiveWebhookSecret)
     ) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message:
-          "channels.bluebubbles.accounts.*.webhookSecret must differ from channels.bluebubbles.accounts.*.password",
+          "channels.bluebubbles.accounts.*.webhookSecret must differ from the effective BlueBubbles password",
         path: ["accounts", accountId, "webhookSecret"],
       });
     }
