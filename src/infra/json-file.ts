@@ -14,7 +14,18 @@ export function loadJsonFile(pathname: string): unknown {
 }
 
 export function saveJsonFile(pathname: string, data: unknown) {
-  const dir = path.dirname(pathname);
+  // Resolve any symlink on the target path so operators who redirect state
+  // files to another volume (e.g. `auth-profiles.json -> /mnt/state/...`)
+  // keep pointing at the same underlying file after this save. Without
+  // this, the atomic rename below would replace the symlink entry itself
+  // with a regular file and the old target would be silently abandoned.
+  let target = pathname;
+  try {
+    target = fs.realpathSync(pathname);
+  } catch {
+    /* first write, path does not exist yet — fall through with pathname */
+  }
+  const dir = path.dirname(target);
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   }
@@ -23,7 +34,7 @@ export function saveJsonFile(pathname: string, data: unknown) {
   // MCTL platform s3-sync sidecar running `mc mirror` every few seconds);
   // a plain fs.writeFileSync can be observed mid-flight and ship a
   // zero-byte or truncated copy to durable storage.
-  const tmp = `${pathname}.tmp.${process.pid}.${Date.now()}`;
+  const tmp = `${target}.tmp.${process.pid}.${Date.now()}`;
   const fd = fs.openSync(tmp, "w", 0o600);
   try {
     fs.writeSync(fd, `${JSON.stringify(data, null, 2)}\n`, 0, "utf8");
@@ -32,7 +43,7 @@ export function saveJsonFile(pathname: string, data: unknown) {
     fs.closeSync(fd);
   }
   try {
-    fs.renameSync(tmp, pathname);
+    fs.renameSync(tmp, target);
   } catch (err) {
     try {
       fs.unlinkSync(tmp);
@@ -41,5 +52,5 @@ export function saveJsonFile(pathname: string, data: unknown) {
     }
     throw err;
   }
-  fs.chmodSync(pathname, 0o600);
+  fs.chmodSync(target, 0o600);
 }

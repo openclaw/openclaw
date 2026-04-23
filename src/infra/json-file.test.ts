@@ -72,4 +72,33 @@ describe("json-file helpers", () => {
       expect(loadJsonFile(pathname)).toEqual({ v: 2 });
     });
   });
+
+  // Operators redirect state files onto another volume via symlinks. The
+  // atomic temp+rename must preserve the symlink and update the underlying
+  // target instead of clobbering the link with a regular file.
+  it.skipIf(process.platform === "win32")(
+    "follows symlinks on save so the link is preserved, target is updated",
+    async () => {
+      await withTempDir({ prefix: "openclaw-json-file-" }, async (root) => {
+        const realDir = path.join(root, "real");
+        const linkDir = path.join(root, "link");
+        fs.mkdirSync(realDir);
+        const realTarget = path.join(realDir, "state.json");
+        fs.writeFileSync(realTarget, '{"seed":true}\n', "utf8");
+
+        const pathname = path.join(linkDir, "state.json");
+        fs.mkdirSync(linkDir);
+        fs.symlinkSync(realTarget, pathname);
+
+        saveJsonFile(pathname, { v: 2 });
+
+        // Link entry stays a symlink, target file carries the new content.
+        expect(fs.lstatSync(pathname).isSymbolicLink()).toBe(true);
+        expect(JSON.parse(fs.readFileSync(realTarget, "utf8"))).toEqual({ v: 2 });
+        // No .tmp.* leftovers under either dir.
+        expect(fs.readdirSync(realDir).filter((n) => n !== "state.json")).toEqual([]);
+        expect(fs.readdirSync(linkDir).filter((n) => n !== "state.json")).toEqual([]);
+      });
+    },
+  );
 });
