@@ -639,7 +639,11 @@ function extractChatHistoryBlockText(message: unknown): string | undefined {
 
 function sanitizeChatHistoryContentBlock(
   block: unknown,
-  opts?: { preserveExactToolPayload?: boolean; maxChars?: number },
+  opts?: {
+    preserveExactToolPayload?: boolean;
+    maxChars?: number;
+    inlineImageBudget?: { remainingBytes: number };
+  },
 ): { block: unknown; changed: boolean } {
   if (!block || typeof block !== "object") {
     return { block, changed: false };
@@ -706,8 +710,14 @@ function sanitizeChatHistoryContentBlock(
           ? entry.mimeType
           : "image/png",
     };
-    if (bytes <= CHAT_HISTORY_MAX_INLINE_IMAGE_DATA_BYTES) {
+    if (
+      bytes <= CHAT_HISTORY_MAX_INLINE_IMAGE_DATA_BYTES &&
+      (!opts?.inlineImageBudget || opts.inlineImageBudget.remainingBytes >= bytes)
+    ) {
       (entry.source as { data?: string }).data = data;
+      if (opts?.inlineImageBudget) {
+        opts.inlineImageBudget.remainingBytes -= bytes;
+      }
     } else {
       (entry.source as { omitted?: boolean; bytes?: number }).omitted = true;
       (entry.source as { omitted?: boolean; bytes?: number }).bytes = bytes;
@@ -892,8 +902,13 @@ function sanitizeChatHistoryMessage(
       changed ||= stripped.changed || res.truncated;
     }
   } else if (Array.isArray(entry.content)) {
+    const inlineImageBudget = { remainingBytes: CHAT_HISTORY_MAX_INLINE_IMAGE_DATA_BYTES };
     const updated = entry.content.map((block) =>
-      sanitizeChatHistoryContentBlock(block, { preserveExactToolPayload, maxChars }),
+      sanitizeChatHistoryContentBlock(block, {
+        preserveExactToolPayload,
+        maxChars,
+        inlineImageBudget,
+      }),
     );
     if (updated.some((item) => item.changed)) {
       entry.content = updated.map((item) => item.block);

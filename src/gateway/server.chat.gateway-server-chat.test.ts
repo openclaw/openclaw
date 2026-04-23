@@ -613,6 +613,55 @@ describe("gateway server chat", () => {
     expect(imageBlock?.source).not.toHaveProperty("data");
   });
 
+  test("chat.history enforces the inline image budget across the full message", async () => {
+    const historyMessages = await loadChatHistoryWithMessages([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "keep this text" },
+          { type: "image", data: "A".repeat(20_000), mimeType: "image/png" },
+          { type: "image", data: "B".repeat(20_000), mimeType: "image/png" },
+          { type: "image", data: "C".repeat(20_000), mimeType: "image/png" },
+        ],
+        timestamp: 1,
+      },
+    ]);
+
+    const firstMessage = historyMessages[0] as
+      | {
+          content?: Array<{
+            type?: string;
+            text?: string;
+            source?: {
+              type?: string;
+              media_type?: string;
+              omitted?: boolean;
+              bytes?: number;
+              data?: string;
+            };
+          }>;
+        }
+      | undefined;
+    expect(firstMessage?.content?.[0]?.text).toBe("keep this text");
+    expect(firstMessage?.content?.[1]?.source).toMatchObject({
+      type: "base64",
+      media_type: "image/png",
+      data: "A".repeat(20_000),
+    });
+    expect(firstMessage?.content?.[2]?.source).toMatchObject({
+      type: "base64",
+      media_type: "image/png",
+      data: "B".repeat(20_000),
+    });
+    expect(firstMessage?.content?.[3]?.source).toMatchObject({
+      type: "base64",
+      media_type: "image/png",
+      omitted: true,
+      bytes: 20_000,
+    });
+    expect(firstMessage?.content?.[3]?.source).not.toHaveProperty("data");
+  });
+
   test("chat.history hides commentary-only assistant entries", async () => {
     const historyMessages = await loadChatHistoryWithMessages([
       {
