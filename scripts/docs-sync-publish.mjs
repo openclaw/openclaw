@@ -9,6 +9,16 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "..");
 const SOURCE_DOCS_DIR = path.join(ROOT, "docs");
 const SOURCE_CONFIG_PATH = path.join(SOURCE_DOCS_DIR, "docs.json");
+const SYNC_SUPPORT_FILES = [
+  {
+    source: path.join(ROOT, "scripts", "check-docs-mdx.mjs"),
+    target: path.join(".openclaw-sync", "check-docs-mdx.mjs"),
+  },
+  {
+    source: path.join(ROOT, ".github", "codex", "prompts", "docs-mdx-repair.md"),
+    target: path.join(".openclaw-sync", "docs-mdx-repair.md"),
+  },
+];
 const GENERATED_LOCALES = [
   {
     language: "zh-Hans",
@@ -100,6 +110,14 @@ const GENERATED_LOCALES = [
     navFile: "pl-navigation.json",
     tmFile: "pl.tm.jsonl",
     navMode: "clone-en",
+  },
+  {
+    language: "th",
+    dir: "th",
+    navFile: "th-navigation.json",
+    tmFile: "th.tm.jsonl",
+    navMode: "clone-en",
+    navigation: false,
   },
 ];
 
@@ -221,10 +239,14 @@ function composeDocsConfig() {
   }
 
   const englishNav = languages.find((entry) => entry?.language === "en");
-  const generatedLanguageSet = new Set(GENERATED_LOCALES.map((entry) => entry.language));
+  const generatedLanguageSet = new Set(
+    GENERATED_LOCALES.filter((entry) => entry.navigation !== false).map((entry) => entry.language),
+  );
   const withoutGenerated = languages.filter((entry) => !generatedLanguageSet.has(entry?.language));
   const enIndex = withoutGenerated.findIndex((entry) => entry?.language === "en");
-  const generated = GENERATED_LOCALES.map((entry) => composeLocaleNav(entry, englishNav));
+  const generated = GENERATED_LOCALES.filter((entry) => entry.navigation !== false).map((entry) =>
+    composeLocaleNav(entry, englishNav),
+  );
   if (enIndex === -1) {
     withoutGenerated.push(...generated);
   } else {
@@ -288,6 +310,14 @@ function writeSyncMetadata(targetRoot, args) {
   writeJson(path.join(targetRoot, ".openclaw-sync", "source.json"), metadata);
 }
 
+function syncSupportFiles(targetRoot) {
+  for (const entry of SYNC_SUPPORT_FILES) {
+    const targetPath = path.join(targetRoot, entry.target);
+    ensureDir(path.dirname(targetPath));
+    fs.copyFileSync(entry.source, targetPath);
+  }
+}
+
 function main() {
   const args = parseArgs(process.argv.slice(2));
   const targetRoot = path.resolve(args.target);
@@ -297,6 +327,7 @@ function main() {
   }
 
   syncDocsTree(targetRoot);
+  syncSupportFiles(targetRoot);
   writeSyncMetadata(targetRoot, args);
 }
 

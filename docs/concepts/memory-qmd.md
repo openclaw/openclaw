@@ -52,8 +52,7 @@ legacy `--mask` collection flags and older MCP tool names when needed.
   configured `memory.qmd.paths`, then runs `qmd update` + `qmd embed` on boot
   and periodically (default every 5 minutes).
 - The default workspace collection tracks `MEMORY.md` plus the `memory/`
-  tree. Lowercase `memory.md` remains a bootstrap fallback, not a separate QMD
-  collection.
+  tree. Lowercase `memory.md` is not indexed as a root memory file.
 - Boot refresh runs in the background so chat startup is not blocked.
 - Searches use the configured `searchMode` (default: `search`; also supports
   `vsearch` and `query`). If a mode fails, OpenClaw retries with `qmd query`.

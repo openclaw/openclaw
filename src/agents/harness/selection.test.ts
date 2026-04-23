@@ -6,7 +6,11 @@ import type {
   EmbeddedRunAttemptResult,
 } from "../pi-embedded-runner/run/types.js";
 import { clearAgentHarnesses, registerAgentHarness } from "./registry.js";
-import { runAgentHarnessAttemptWithFallback, selectAgentHarness } from "./selection.js";
+import {
+  maybeCompactAgentHarnessSession,
+  runAgentHarnessAttemptWithFallback,
+  selectAgentHarness,
+} from "./selection.js";
 import type { AgentHarness } from "./types.js";
 
 const piRunAttempt = vi.fn(async () => createAttemptResult("pi"));
@@ -181,5 +185,51 @@ describe("selectAgentHarness", () => {
     expect(selectAgentHarness({ provider: "anthropic", modelId: "sonnet-4.6", config }).id).toBe(
       "pi",
     );
+  });
+
+  it("keeps an existing session pinned to PI even when config now forces a plugin harness", () => {
+    registerFailingCodexHarness();
+
+    expect(
+      selectAgentHarness({
+        provider: "codex",
+        modelId: "gpt-5.4",
+        agentHarnessId: "pi",
+        config: { agents: { defaults: { embeddedHarness: { runtime: "codex" } } } },
+      }).id,
+    ).toBe("pi");
+  });
+
+  it("keeps an existing session pinned to its plugin harness even when env now forces PI", () => {
+    process.env.OPENCLAW_AGENT_RUNTIME = "pi";
+    registerFailingCodexHarness();
+
+    expect(
+      selectAgentHarness({
+        provider: "openai",
+        modelId: "gpt-5.4",
+        agentHarnessId: "codex",
+      }).id,
+    ).toBe("codex");
+  });
+
+  it("does not compact a plugin-pinned session through PI when the plugin has no compactor", async () => {
+    registerFailingCodexHarness();
+
+    await expect(
+      maybeCompactAgentHarnessSession({
+        sessionId: "session-1",
+        sessionKey: "agent:main:main",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp/workspace",
+        provider: "openai",
+        model: "gpt-5.4",
+        agentHarnessId: "codex",
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      compacted: false,
+      reason: 'Agent harness "codex" does not support compaction.',
+    });
   });
 });

@@ -57,7 +57,7 @@ const GATEWAY_LIVE_SMOKE = isTruthyEnvValue(process.env.OPENCLAW_LIVE_GATEWAY_SM
 const THINKING_LEVEL = GATEWAY_LIVE_SMOKE ? "low" : "high";
 const ENABLE_EXTRA_TOOL_PROBES = !GATEWAY_LIVE_SMOKE;
 const ENABLE_EXTRA_IMAGE_PROBES = !GATEWAY_LIVE_SMOKE;
-const THINKING_TAG_RE = /<\s*\/?\s*(?:think(?:ing)?|thought|antthinking)\s*>/i;
+const THINKING_TAG_RE = /<\s*\/?\s*(?:(?:antml:)?(?:think(?:ing)?|thought)|antthinking)\s*>/i;
 const FINAL_TAG_RE = /<\s*\/?\s*final\s*>/i;
 const ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL = "ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL";
 const GATEWAY_LIVE_DEFAULT_TIMEOUT_MS = 20 * 60 * 1000;
@@ -331,6 +331,9 @@ function shouldStripAssistantScaffoldingForLiveModel(modelKey?: string): boolean
   }
   const [provider, ...rest] = modelKey.split("/");
   const modelId = rest.join("/");
+  if (provider === "anthropic") {
+    return true;
+  }
   if (provider === "minimax" || provider === "minimax-portal") {
     // MiniMax transcript persistence can mirror our <final> wrapper style even
     // though user-visible surfaces already strip it. Keep the live reader
@@ -431,6 +434,15 @@ describe("maybeStripAssistantScaffoldingForLiveModel", () => {
     expect(
       maybeStripAssistantScaffoldingForLiveModel("<final>Visible</final>", "openai/gpt-5.4"),
     ).toBe("<final>Visible</final>");
+  });
+
+  it("strips Anthropic antml transcript wrappers", () => {
+    expect(
+      maybeStripAssistantScaffoldingForLiveModel(
+        "<antml:thinking>hidden</thinking>Visible",
+        "anthropic/claude-opus-4-6",
+      ),
+    ).toBe("Visible");
   });
 
   it("strips scaffolding for MiniMax transcript wrappers", () => {

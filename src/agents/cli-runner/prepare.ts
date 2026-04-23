@@ -1,3 +1,4 @@
+import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { ensureMcpLoopbackServer } from "../../gateway/mcp-http.js";
 import {
   createMcpLoopbackServerConfig,
@@ -7,6 +8,7 @@ import type {
   CliBackendAuthEpochMode,
   CliBackendPreparedExecution,
 } from "../../plugins/cli-backend.types.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
 import { loadAuthProfileStoreForRuntime } from "../auth-profiles/store.js";
@@ -30,6 +32,9 @@ import {
   resolveBootstrapPromptTruncationWarningMode,
   resolveBootstrapTotalMaxChars,
 } from "../pi-embedded-helpers.js";
+import { resolvePromptBuildHookResult } from "../pi-embedded-runner/run/attempt.prompt-helpers.js";
+import { resolveAttemptPrependSystemContext } from "../pi-embedded-runner/run/attempt.prompt-helpers.js";
+import { composeSystemPromptWithHookContext } from "../pi-embedded-runner/run/attempt.thread-helpers.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { resolveSkillsPromptForRun } from "../skills.js";
 import { resolveSystemPromptOverride } from "../system-prompt-override.js";
@@ -50,6 +55,11 @@ const prepareDeps = {
     params: Parameters<typeof import("../docs-path.js").resolveOpenClawDocsPath>[0],
   ) => (await import("../docs-path.js")).resolveOpenClawDocsPath(params),
 };
+
+function loadCliPromptBuildMessages(sessionFile: string): unknown[] {
+  const entries = SessionManager.open(sessionFile).getEntries();
+  return entries.flatMap((entry) => (entry.type === "message" ? [entry.message as unknown] : []));
+}
 
 export function setCliRunnerPrepareTestDeps(overrides: Partial<typeof prepareDeps>): void {
   Object.assign(prepareDeps, overrides);
@@ -107,7 +117,13 @@ export async function prepareCliRunContext(
     authCredential = authStore.profiles[effectiveAuthProfileId];
   }
   const extraSystemPrompt = params.extraSystemPrompt?.trim() ?? "";
-  const extraSystemPromptHash = hashCliSessionText(extraSystemPrompt);
+  // Use the static portion (excluding per-message inbound metadata) for session reuse hashing.
+  // Per-message metadata (timestamps, message IDs) changes every turn and must not trigger session resets.
+  const extraSystemPromptHash =
+    params.extraSystemPromptStatic !== undefined
+      ? hashCliSessionText(params.extraSystemPromptStatic.trim() || undefined)
+      : hashCliSessionText(extraSystemPrompt);
+
   const modelId = (params.model ?? "default").trim() || "default";
   const normalizedModel = normalizeCliModel(modelId, backendResolved.config);
   const modelDisplay = `${params.provider}/${modelId}`;
@@ -175,7 +191,7 @@ export async function prepareCliRunContext(
           OPENCLAW_MCP_AGENT_ID: sessionAgentId ?? "",
           OPENCLAW_MCP_ACCOUNT_ID: params.agentAccountId ?? "",
           OPENCLAW_MCP_SESSION_KEY: params.sessionKey ?? "",
-          OPENCLAW_MCP_MESSAGE_CHANNEL: params.messageProvider ?? "",
+          OPENCLAW_MCP_MESSAGE_CHANNEL: params.messageChannel ?? params.messageProvider ?? "",
         }
       : undefined,
     warn: (message) => cliBackendLog.warn(message),
@@ -292,10 +308,50 @@ export async function prepareCliRunContext(
       agentId: sessionAgentId,
       systemPrompt: builtSystemPrompt,
     }) ?? builtSystemPrompt;
-  const systemPrompt = applyPluginTextReplacements(
-    transformedSystemPrompt,
-    backendResolved.textTransforms?.input,
-  );
+  let systemPrompt = transformedSystemPrompt;
+  let preparedPrompt = params.prompt;
+  const hookRunner = getGlobalHookRunner();
+  if (hookRunner?.hasHooks("before_prompt_build") || hookRunner?.hasHooks("before_agent_start")) {
+    try {
+      const hookResult = await resolvePromptBuildHookResult({
+        prompt: params.prompt,
+        messages: loadCliPromptBuildMessages(params.sessionFile),
+        hookCtx: {
+          runId: params.runId,
+          agentId: sessionAgentId,
+          sessionKey: params.sessionKey,
+          sessionId: params.sessionId,
+          workspaceDir,
+          modelProviderId: params.provider,
+          modelId,
+          messageProvider: params.messageProvider,
+          trigger: params.trigger,
+          channelId: params.messageChannel ?? params.messageProvider,
+        },
+        hookRunner,
+      });
+      if (hookResult.prependContext) {
+        preparedPrompt = `${hookResult.prependContext}\n\n${preparedPrompt}`;
+      }
+      const hookSystemPrompt = hookResult.systemPrompt?.trim();
+      if (hookSystemPrompt) {
+        systemPrompt = hookSystemPrompt;
+      }
+      systemPrompt =
+        composeSystemPromptWithHookContext({
+          baseSystemPrompt: systemPrompt,
+          prependSystemContext: resolveAttemptPrependSystemContext({
+            sessionKey: params.sessionKey,
+            trigger: params.trigger,
+            hookPrependSystemContext: hookResult.prependSystemContext,
+          }),
+          appendSystemContext: hookResult.appendSystemContext,
+        }) ?? systemPrompt;
+    } catch (error) {
+      cliBackendLog.warn(`cli prompt-build hook preparation failed: ${String(error)}`);
+    }
+  }
+  systemPrompt = applyPluginTextReplacements(systemPrompt, backendResolved.textTransforms?.input);
   const systemPromptReport = buildSystemPromptReport({
     source: "run",
     generatedAt: Date.now(),
@@ -320,7 +376,7 @@ export async function prepareCliRunContext(
   });
 
   return {
-    params,
+    params: preparedPrompt === params.prompt ? params : { ...params, prompt: preparedPrompt },
     effectiveAuthProfileId,
     started,
     workspaceDir,
