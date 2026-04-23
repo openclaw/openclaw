@@ -505,6 +505,83 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     );
   });
 
+  // Regression coverage for NemoClaw issue #2099 (and the closely related
+  // #2051 / #1193). Nemotron-3 Super 120B has been observed to end a turn
+  // with stopReason="stop" while emitting only a thinking block (sometimes
+  // unsigned — no `thinkingSignature`/`signature` field, which means the
+  // assessment helper does not classify the turn as reasoning-only) or
+  // nothing at all. Before the shared `isEmptyResponseAssistantTurn` guard
+  // was added, the runner silently returned no payloads for this shape and
+  // the TUI spinner hung indefinitely. The tests below pin the shared guard
+  // so a regression in that path visibly fails before it reaches end users.
+  //
+  // Note: the empty-response retry instruction is gated on strict-agentic
+  // provider/model pairs (gpt-5-family on openai/openai-codex), so the
+  // nvidia lane must NOT trigger a retry. It must still produce a terminal,
+  // user-visible error payload instead of returning empty.
+  it("surfaces an error when nemotron returns unsigned-thinking-only with stopReason=stop (regression for #2099)", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "nvidia",
+          model: "nvidia/nemotron-3-super-120b-a12b",
+          content: [
+            {
+              type: "thinking",
+              thinking:
+                "The user asked a simple question. I should answer but I'm unsure how to format it.",
+            },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      provider: "nvidia",
+      model: "nvidia/nemotron-3-super-120b-a12b",
+      runId: "run-nemotron-unsigned-thinking-only-2099",
+    });
+
+    // Retry guard is strict-agentic only, so this lane does not retry.
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    // But the run must still surface a visible terminal error — not silently
+    // resolve with empty payloads, which is what hangs the TUI spinner.
+    expect(result.payloads?.[0]?.isError).toBe(true);
+    expect(result.payloads?.[0]?.text).toContain("Please try again");
+  });
+
+  it("surfaces an error when nemotron returns fully empty content with stopReason=stop (regression for #2099)", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "nvidia",
+          model: "nvidia/nemotron-3-super-120b-a12b",
+          content: [],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      provider: "nvidia",
+      model: "nvidia/nemotron-3-super-120b-a12b",
+      runId: "run-nemotron-empty-content-2099",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(result.payloads?.[0]?.isError).toBe(true);
+    expect(result.payloads?.[0]?.text).toContain("Please try again");
+  });
+
   it("detects structured bullet-only plans with intent cues as planning-only GPT turns", () => {
     const retryInstruction = resolvePlanningOnlyRetryInstruction({
       provider: "openai",
