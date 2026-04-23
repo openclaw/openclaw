@@ -203,6 +203,7 @@ File provider (`--provider-source file`):
 - `--provider-path <path>` (required)
 - `--provider-mode <singleValue|json>`
 - `--provider-max-bytes <bytes>`
+- `--provider-allow-insecure-path`
 
 Exec provider (`--provider-source exec`):
 

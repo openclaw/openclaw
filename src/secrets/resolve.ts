@@ -10,7 +10,6 @@ import type {
   SecretRefSource,
 } from "../config/types.secrets.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { getLogger } from "../logging/logger.js";
 import { inspectPathPermissions, safeStat } from "../security/audit-fs.js";
 import { isPathInside } from "../security/scan-paths.js";
 import { resolveUserPath } from "../utils.js";
@@ -207,7 +206,6 @@ async function assertSecurePath(params: {
   allowInsecurePath?: boolean;
   allowReadableByOthers?: boolean;
   allowSymlinkPath?: boolean;
-  isExecPath?: boolean;
 }): Promise<string> {
   if (!isAbsolutePathname(params.targetPath)) {
     throw new Error(`${params.label} must be an absolute path.`);
@@ -255,15 +253,9 @@ async function assertSecurePath(params: {
   }
 
   if (process.platform === "win32" && perms.source === "unknown") {
-    if (params.isExecPath) {
-      throw new Error(
-        `${params.label} ACL verification unavailable on Windows for ${effectivePath}. Set allowInsecurePath=true for this provider to bypass this check when the path is trusted.`,
-      );
-    }
-    getLogger().warn(
-      `${params.label} ACL verification unavailable on Windows for ${effectivePath}, skipping permission check.`,
+    throw new Error(
+      `${params.label} ACL verification unavailable on Windows for ${effectivePath}. Set allowInsecurePath=true for this provider to bypass this check when the path is trusted.`,
     );
-    return effectivePath;
   }
 
   if (process.platform !== "win32" && typeof process.getuid === "function" && stat.uid != null) {
@@ -294,6 +286,7 @@ async function readFileProviderPayload(params: {
     const secureFilePath = await assertSecurePath({
       targetPath: filePath,
       label: `secrets.providers.${params.providerName}.path`,
+      allowInsecurePath: params.providerConfig.allowInsecurePath,
     });
     const timeoutMs = normalizePositiveInt(
       params.providerConfig.timeoutMs,
@@ -678,7 +671,6 @@ async function resolveExecRefs(params: {
       allowInsecurePath: params.providerConfig.allowInsecurePath,
       allowReadableByOthers: true,
       allowSymlinkPath: params.providerConfig.allowSymlinkCommand,
-      isExecPath: true,
     });
   } catch (err) {
     throwUnknownProviderResolutionError({

@@ -54,6 +54,7 @@ describe("secret ref resolver", () => {
     path: string;
     mode: "json" | "singleValue";
     timeoutMs?: number;
+    allowInsecurePath?: boolean;
   };
 
   function createExecProviderConfig(
@@ -498,32 +499,66 @@ describe("secret ref resolver", () => {
     expect(value).toBe("my-secret-value");
   });
 
-  it("warns instead of crashing on Windows when ACL source is unknown", async () => {
-    // Mock process.platform to simulate Windows
+  it("fails closed on Windows when file provider ACL source is unknown", async () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("win32" as unknown as NodeJS.Platform);
-    const { getLogger } = await import("../logging/logger.js");
-    const warnSpy = vi.spyOn(getLogger(), "warn");
 
     try {
       const dir = await createCaseDir("win-acl");
       const filePath = path.join(dir, "secrets.json");
       await writeSecureFile(filePath, '{"token":"abc123"}');
 
-      // This should NOT throw even on Windows with unknown ACL source
+      await expect(
+        resolveSecretRefString(
+          { source: "file", provider: "filemain", id: "/token" },
+          {
+            config: {
+              secrets: {
+                providers: {
+                  filemain: createFileProviderConfig(filePath),
+                },
+              },
+            },
+          },
+        ),
+      ).rejects.toThrow(/ACL verification unavailable on Windows/);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("allows trusted file provider opt-out when Windows ACL source is unknown", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32" as unknown as NodeJS.Platform);
+
+    try {
+      const dir = await createCaseDir("win-acl-opt-out");
+      const filePath = path.join(dir, "secrets.json");
+      await writeSecureFile(filePath, '{"token":"abc123"}');
+
       const value = await resolveSecretRefString(
         { source: "file", provider: "filemain", id: "/token" },
         {
           config: {
             secrets: {
               providers: {
-                filemain: createFileProviderConfig(filePath),
+                filemain: createFileProviderConfig(filePath, { allowInsecurePath: true }),
               },
             },
           },
         },
       );
       expect(value).toBe("abc123");
-      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("ACL verification unavailable"));
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("fails closed on Windows when exec provider ACL source is unknown", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32" as unknown as NodeJS.Platform);
+
+    try {
+      await expect(resolveExecSecret(execProtocolV1ScriptPath)).rejects.toThrow(
+        /ACL verification unavailable on Windows/,
+      );
     } finally {
       vi.restoreAllMocks();
     }
