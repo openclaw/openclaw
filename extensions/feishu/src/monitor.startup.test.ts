@@ -79,6 +79,10 @@ describe("Feishu monitor startup preflight", () => {
 
       expect(started).toEqual(["alpha"]);
       expect(maxInFlight).toBe(1);
+      expect(probeFeishuMock).toHaveBeenCalledWith(
+        expect.objectContaining({ accountId: "alpha" }),
+        expect.objectContaining({ forceFresh: true }),
+      );
     } finally {
       releaseProbes();
       abortController.abort();
@@ -150,6 +154,35 @@ describe("Feishu monitor startup preflight", () => {
       );
     } finally {
       releaseBetaProbe();
+      abortController.abort();
+      await monitorPromise;
+    }
+  });
+
+  it("logs when startup falls back to a recent cached bot identity", async () => {
+    probeFeishuMock.mockResolvedValue({
+      ok: true,
+      botOpenId: "ou_cached",
+      botName: "Cached Bot",
+      usedCachedIdentityFallback: true,
+      cachedIdentityFallbackError: "probe timed out after 10000ms",
+    });
+
+    const abortController = new AbortController();
+    const runtime = createNonExitingRuntimeEnv();
+    const monitorPromise = monitorFeishuProvider({
+      config: buildMultiAccountWebsocketConfig(["alpha"]),
+      runtime,
+      abortSignal: abortController.signal,
+    });
+
+    try {
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(runtime.error).toHaveBeenCalledWith(
+        expect.stringContaining("fresh bot info probe failed; using recent cached identity"),
+      );
+    } finally {
       abortController.abort();
       await monitorPromise;
     }

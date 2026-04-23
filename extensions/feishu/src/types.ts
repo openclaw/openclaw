@@ -80,6 +80,8 @@ export interface FeishuProbeResult extends BaseProbeResult {
   appId?: string;
   botName?: string;
   botOpenId?: string;
+  usedCachedIdentityFallback?: boolean;
+  cachedIdentityFallbackError?: string;
 }
 
 export type FeishuMediaInfo = {

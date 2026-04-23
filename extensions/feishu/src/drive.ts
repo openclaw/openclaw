@@ -2,6 +2,7 @@ import type * as Lark from "@larksuiteoapi/node-sdk";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { listEnabledFeishuAccounts } from "./accounts.js";
+import { recordFeishuCommentConversationDelivery } from "./comment-delivery-guard.js";
 import { cleanupAmbientCommentTypingReaction } from "./comment-reaction.js";
 import {
   encodeQuery,
@@ -111,6 +112,7 @@ type FeishuDriveToolContext = {
   deliveryContext?: {
     channel?: string;
     to?: string;
+    accountId?: string;
     threadId?: string | number;
   };
 };
@@ -122,7 +124,12 @@ function getDriveInternalClient(client: Lark.Client): FeishuDriveInternalClient 
 }
 
 function buildReplyElements(content: string) {
-  return [{ type: "text", text: content }];
+  return [{ type: "text", text: escapeFeishuCommentText(content) }];
+}
+
+function escapeFeishuCommentText(text: string): string {
+  // Feishu Drive comment write APIs reject raw angle brackets in text payloads.
+  return text.replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
 async function requestDriveApi<T>(params: {
@@ -268,6 +275,66 @@ function applyCommentFileTypeDefault<
   return {
     ...params,
     file_type: fileType,
+  };
+}
+
+function maybeRecordCurrentCommentConversationDelivery(params: {
+  context: FeishuDriveToolContext | undefined;
+  fileToken: string | undefined;
+  fileType: CommentFileType | "doc" | "docx" | undefined;
+  commentId?: string;
+  blockId?: string;
+}): void {
+  if (params.blockId?.trim()) {
+    return;
+  }
+  const deliveryContext = params.context?.deliveryContext;
+  if (deliveryContext?.channel && deliveryContext.channel !== "feishu") {
+    return;
+  }
+  const ambient = resolveAmbientCommentTarget(params.context);
+  const currentConversationTarget = deliveryContext?.to?.trim();
+  if (!ambient || !currentConversationTarget) {
+    return;
+  }
+  if (params.fileToken?.trim() !== ambient.fileToken || params.fileType !== ambient.fileType) {
+    return;
+  }
+  if (params.commentId && params.commentId.trim() !== ambient.commentId) {
+    return;
+  }
+  recordFeishuCommentConversationDelivery({
+    accountId: deliveryContext?.accountId,
+    to: currentConversationTarget,
+    threadId: deliveryContext?.threadId,
+  });
+}
+
+function resolveAmbientCommentFollowUpTargetForAddComment(params: {
+  context: FeishuDriveToolContext | undefined;
+  fileToken: string | undefined;
+  fileType: "doc" | "docx" | undefined;
+  blockId?: string;
+}): {
+  fileToken: string;
+  fileType: "doc" | "docx";
+  commentId: string;
+} | null {
+  const ambient = resolveAmbientCommentTarget(params.context);
+  // Preserve backwards compatibility for agents that still call add_comment
+  // during a local comment-thread follow-up. In that specific ambient context,
+  // add_comment behaves like "reply to the current comment" unless the caller
+  // explicitly anchors a new local comment via block_id.
+  if (!ambient || params.blockId?.trim()) {
+    return null;
+  }
+  if (params.fileToken?.trim() !== ambient.fileToken || params.fileType !== ambient.fileType) {
+    return null;
+  }
+  return {
+    fileToken: ambient.fileToken,
+    fileType: ambient.fileType,
+    commentId: ambient.commentId,
   };
 }
 
@@ -604,7 +671,7 @@ export async function replyComment(
             {
               type: "text_run",
               text_run: {
-                text: params.content,
+                text: escapeFeishuCommentText(params.content),
               },
             },
           ],
@@ -796,7 +863,35 @@ export function registerFeishuDriveTools(api: OpenClawPluginApi) {
               case "add_comment": {
                 const resolved = applyAddCommentDefaults(applyAddCommentAmbientDefaults(p, ctx));
                 try {
-                  return jsonToolResult(await addComment(client, resolved));
+                  const ambientFollowUpTarget = resolveAmbientCommentFollowUpTargetForAddComment({
+                    context: ctx,
+                    fileToken: resolved.file_token,
+                    fileType: resolved.file_type,
+                    blockId: resolved.block_id,
+                  });
+                  // Keep add_comment compatible with existing agent behavior in
+                  // local comment-thread flows. When the tool call already has
+                  // an ambient comment target on the same doc/docx file and no
+                  // block_id override, deliver it as a follow-up to that thread
+                  // instead of creating an unrelated top-level comment.
+                  const result = ambientFollowUpTarget
+                    ? await deliverCommentThreadText(client, {
+                        file_token: ambientFollowUpTarget.fileToken,
+                        file_type: ambientFollowUpTarget.fileType,
+                        comment_id: ambientFollowUpTarget.commentId,
+                        content: resolved.content,
+                      })
+                    : await addComment(client, resolved);
+                  // add_comment may create a new whole-document comment instead of replying to
+                  // the ambient comment id directly. Any visible delivery in the current ambient
+                  // comment flow should still suppress the later automatic final reply.
+                  maybeRecordCurrentCommentConversationDelivery({
+                    context: ctx,
+                    fileToken: resolved.file_token,
+                    fileType: resolved.file_type,
+                    blockId: resolved.block_id,
+                  });
+                  return jsonToolResult(result);
                 } finally {
                   void cleanupAmbientCommentTypingReaction({
                     client: getDriveInternalClient(client),
@@ -810,7 +905,14 @@ export function registerFeishuDriveTools(api: OpenClawPluginApi) {
                   "reply_comment",
                 );
                 try {
-                  return jsonToolResult(await deliverCommentThreadText(client, resolved));
+                  const result = await deliverCommentThreadText(client, resolved);
+                  maybeRecordCurrentCommentConversationDelivery({
+                    context: ctx,
+                    fileToken: resolved.file_token,
+                    fileType: resolved.file_type,
+                    commentId: resolved.comment_id,
+                  });
+                  return jsonToolResult(result);
                 } finally {
                   void cleanupAmbientCommentTypingReaction({
                     client: getDriveInternalClient(client),

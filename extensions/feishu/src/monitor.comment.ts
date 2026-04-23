@@ -1145,9 +1145,9 @@ function buildDriveCommentSurfacePrompt(params: {
     "Do not use another comment card or document-session output as the main reference.",
     "If you need comment thread context, use feishu_drive.list_comments or feishu_drive.list_comment_replies.",
     "If you modify the document, post a user-visible follow-up in the comment thread.",
-    "Use feishu_drive.reply_comment or feishu_drive.add_comment for that follow-up.",
+    "For local comment threads, use feishu_drive.reply_comment for that follow-up.",
     "Whole-document comments do not support direct replies.",
-    "For whole-document comments, use feishu_drive.add_comment.",
+    "Only for whole-document comments, use feishu_drive.add_comment.",
     'Only treat URLs listed under "Referenced documents from current user comment" as structured Feishu document references.',
     "URLs that appear only in comment text are plain links unless you verify them.",
     "If the user asks about a linked Feishu document or wiki page, treat that linked document as the read target.",
@@ -1238,6 +1238,7 @@ async function resolveDriveCommentEventCore(params: ResolveDriveCommentEventPara
   const fileType = normalizeCommentFileType(event.notice_meta?.file_type);
   const senderId = event.notice_meta?.from_user_id?.open_id?.trim();
   const senderUserId = normalizeString(event.notice_meta?.from_user_id?.user_id);
+  const recipientId = event.notice_meta?.to_user_id?.open_id?.trim();
   if (!eventId || !commentId || !noticeType || !fileToken || !fileType || !senderId) {
     logger?.(
       `feishu[${accountId}]: drive comment notice missing required fields event=${eventId ?? "unknown"} comment=${commentId ?? "unknown"}`,
@@ -1248,14 +1249,32 @@ async function resolveDriveCommentEventCore(params: ResolveDriveCommentEventPara
     logger?.(`feishu[${accountId}]: unsupported drive comment notice type ${noticeType}`);
     return null;
   }
-  if (!botOpenId) {
+  // Feishu Drive comment notices addressed to a bot include to_user_id.open_id.
+  // Keep this strict to avoid routing another bot's notice into the current account.
+  if (!recipientId) {
+    logger?.(
+      `feishu[${accountId}]: skipping drive comment notice because to_user_id.open_id is missing ` +
+        `event=${eventId} comment=${commentId}`,
+    );
+    return null;
+  }
+  const effectiveBotOpenId = normalizeString(botOpenId);
+
+  if (!effectiveBotOpenId) {
     logger?.(
       `feishu[${accountId}]: skipping drive comment notice because bot open_id is unavailable ` +
         `event=${eventId}`,
     );
     return null;
   }
-  if (senderId === botOpenId) {
+  if (recipientId !== effectiveBotOpenId) {
+    logger?.(
+      `feishu[${accountId}]: skipping drive comment notice not addressed to bot ` +
+        `event=${eventId} comment=${commentId} to=${recipientId} bot=${effectiveBotOpenId}`,
+    );
+    return null;
+  }
+  if (senderId === effectiveBotOpenId) {
     logger?.(
       `feishu[${accountId}]: ignoring self-authored drive comment notice event=${eventId} sender=${senderId}`,
     );
@@ -1270,7 +1289,7 @@ async function resolveDriveCommentEventCore(params: ResolveDriveCommentEventPara
     fileType,
     commentId,
     replyId,
-    botOpenIds: [botOpenId, event.notice_meta?.to_user_id?.open_id],
+    botOpenIds: [effectiveBotOpenId, event.notice_meta?.to_user_id?.open_id],
     timeoutMs: verificationTimeoutMs,
     logger,
     accountId,

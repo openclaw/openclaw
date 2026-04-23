@@ -252,6 +252,62 @@ describe("probeFeishu", () => {
     expect(requestFn).toHaveBeenCalledTimes(2);
   });
 
+  it("does not reuse a cached result when the same accountId changes credentials", async () => {
+    const requestFn = setupClient(BOT1_RESPONSE);
+
+    await probeFeishu({ accountId: "acct-1", appId: "cli_123", appSecret: "secret_a" }); // pragma: allowlist secret
+    expect(requestFn).toHaveBeenCalledTimes(1);
+
+    await probeFeishu({ accountId: "acct-1", appId: "cli_456", appSecret: "secret_b" }); // pragma: allowlist secret
+    expect(requestFn).toHaveBeenCalledTimes(2);
+  });
+
+  it("bypasses a warm cache when forceFresh is enabled", async () => {
+    const requestFn = setupClient(BOT1_RESPONSE);
+
+    await probeFeishu({ accountId: "acct-1", appId: "cli_123", appSecret: "secret" }); // pragma: allowlist secret
+    expect(requestFn).toHaveBeenCalledTimes(1);
+
+    await probeFeishu(
+      { accountId: "acct-1", appId: "cli_123", appSecret: "secret" }, // pragma: allowlist secret
+      { forceFresh: true },
+    );
+    expect(requestFn).toHaveBeenCalledTimes(2);
+  });
+
+  it("falls back to a recent cached success when forceFresh probe fails", async () => {
+    const requestFn = vi
+      .fn()
+      .mockResolvedValueOnce(BOT1_RESPONSE)
+      .mockRejectedValueOnce(new Error("network error"));
+    createFeishuClientMock.mockReturnValue({ request: requestFn });
+
+    const cached = await probeFeishu({
+      accountId: "acct-1",
+      appId: "cli_123",
+      appSecret: "secret",
+    }); // pragma: allowlist secret
+    const fallback = await probeFeishu(
+      { accountId: "acct-1", appId: "cli_123", appSecret: "secret" }, // pragma: allowlist secret
+      { forceFresh: true },
+    );
+    const reused = await probeFeishu({
+      accountId: "acct-1",
+      appId: "cli_123",
+      appSecret: "secret",
+    }); // pragma: allowlist secret
+
+    expect(cached).toMatchObject({ ok: true, botOpenId: "ou_1" });
+    expect(fallback).toMatchObject({
+      ok: true,
+      botOpenId: "ou_1",
+      usedCachedIdentityFallback: true,
+      cachedIdentityFallbackError: "network error",
+    });
+    expect(reused).toMatchObject({ ok: true, botOpenId: "ou_1" });
+    expect(requestFn).toHaveBeenCalledTimes(2);
+  });
+
   it("clearProbeCache forces fresh API call", async () => {
     const requestFn = setupSuccessClient();
 

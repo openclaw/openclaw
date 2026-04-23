@@ -367,6 +367,7 @@ describe("feishuOutbound comment-thread routing", () => {
       deliveryContext: {
         channel: "feishu",
         to: "comment:docx:doxcn123:7623358762119646411",
+        accountId: "main",
         threadId: "reply_ambient_1",
       },
     });

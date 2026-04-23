@@ -26,6 +26,7 @@ type FetchBotOpenIdOptions = {
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
   timeoutMs?: number;
+  forceFresh?: boolean;
 };
 
 export type FeishuMonitorBotIdentity = {
@@ -54,8 +55,17 @@ export async function fetchBotIdentityForMonitor(
   const result = await probeFeishu(account, {
     timeoutMs,
     abortSignal: options.abortSignal,
+    forceFresh: options.forceFresh,
   });
   if (result.ok) {
+    if (result.usedCachedIdentityFallback) {
+      const error = options.runtime?.error ?? console.error;
+      error(
+        `feishu[${account.accountId}]: fresh bot info probe failed; using recent cached identity` +
+          (result.botOpenId ? ` ${result.botOpenId}` : "") +
+          (result.cachedIdentityFallbackError ? ` (${result.cachedIdentityFallbackError})` : ""),
+      );
+    }
     return { botOpenId: result.botOpenId, botName: result.botName };
   }
 

@@ -867,6 +867,60 @@ describe("resolveDriveCommentEventTurn", () => {
 
     expect(turn).toBeNull();
   });
+
+  it("skips comment notices when to_user_id.open_id is missing", async () => {
+    const logger = vi.fn();
+
+    const turn = await resolveDriveCommentEventTurn({
+      cfg: buildMonitorConfig(),
+      accountId: "default",
+      event: makeDriveCommentEvent({
+        notice_meta: {
+          ...makeDriveCommentEvent().notice_meta,
+          to_user_id: undefined,
+        },
+      }),
+      botOpenId: "ou_bot",
+      logger,
+      createClient: () => {
+        throw new Error("createClient should not be called");
+      },
+    });
+
+    expect(turn).toBeNull();
+    expect(logger).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "skipping drive comment notice because to_user_id.open_id is missing",
+      ),
+    );
+  });
+
+  it("skips comment notices not addressed to the bot", async () => {
+    const logger = vi.fn();
+
+    const turn = await resolveDriveCommentEventTurn({
+      cfg: buildMonitorConfig(),
+      accountId: "default",
+      event: makeDriveCommentEvent({
+        notice_meta: {
+          ...makeDriveCommentEvent().notice_meta,
+          to_user_id: {
+            open_id: "ou_someone_else",
+          },
+        },
+      }),
+      botOpenId: "ou_bot",
+      logger,
+      createClient: () => {
+        throw new Error("createClient should not be called");
+      },
+    });
+
+    expect(turn).toBeNull();
+    expect(logger).toHaveBeenCalledWith(
+      expect.stringContaining("skipping drive comment notice not addressed to bot"),
+    );
+  });
 });
 
 describe("drive.notice.comment_add_v1 monitor handler", () => {

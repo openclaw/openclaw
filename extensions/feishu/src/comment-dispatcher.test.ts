@@ -1,4 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  recordFeishuCommentConversationDelivery,
+  resetFeishuCommentConversationDeliveriesForTest,
+} from "./comment-delivery-guard.js";
 
 const resolveFeishuRuntimeAccountMock = vi.hoisted(() => vi.fn());
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
@@ -64,6 +68,7 @@ describe("createFeishuCommentReplyDispatcher", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    resetFeishuCommentConversationDeliveriesForTest();
     resolveFeishuRuntimeAccountMock.mockReturnValue({
       accountId: "main",
       appId: "app_id",
@@ -165,5 +170,30 @@ describe("createFeishuCommentReplyDispatcher", () => {
     await options.onReplyStart?.();
 
     expect(start).toHaveBeenCalledTimes(1);
+  });
+
+  it("suppresses automatic final comment text after tool-driven delivery in the same comment flow", async () => {
+    recordFeishuCommentConversationDelivery({
+      accountId: "main",
+      to: "comment:docx:doc_token_1:comment_1",
+      threadId: "reply_1",
+    });
+
+    createFeishuCommentReplyDispatcher({
+      cfg: {} as never,
+      agentId: "main",
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      accountId: "main",
+      fileToken: "doc_token_1",
+      fileType: "docx",
+      commentId: "comment_1",
+      replyId: "reply_1",
+      isWholeComment: false,
+    });
+
+    const options = createReplyDispatcherWithTypingMock.mock.calls.at(-1)?.[0];
+    await options.deliver({ text: "should be suppressed" }, { kind: "final" });
+
+    expect(deliverCommentThreadTextMock).not.toHaveBeenCalled();
   });
 });

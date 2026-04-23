@@ -626,7 +626,7 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
   const botIdentity =
     botOpenIdSource.kind === "prefetched"
       ? { botOpenId: botOpenIdSource.botOpenId, botName: botOpenIdSource.botName }
-      : await fetchBotIdentityForMonitor(account, { runtime, abortSignal });
+      : await fetchBotIdentityForMonitor(account, { runtime, abortSignal, forceFresh: true });
   const { botOpenId } = applyBotIdentityState(accountId, botIdentity);
   log(`feishu[${accountId}]: bot open_id resolved: ${botOpenId ?? "unknown"}`);
 
