@@ -3,38 +3,43 @@ import type { OpenClawConfig } from "../config/config.js";
 import { applyProviderAuthConfigPatch } from "./provider-auth-choice-helpers.js";
 
 describe("applyProviderAuthConfigPatch", () => {
-  it("replaces patched default model maps instead of recursively merging them", () => {
-    const base = {
-      agents: {
-        defaults: {
-          model: {
-            primary: "anthropic/claude-sonnet-4-6",
-            fallbacks: ["anthropic/claude-opus-4-6", "openai/gpt-5.2"],
-          },
-          models: {
-            "anthropic/claude-sonnet-4-6": { alias: "Sonnet" },
-            "anthropic/claude-opus-4-6": { alias: "Opus" },
-            "openai/gpt-5.2": {},
-          },
+  const base = {
+    agents: {
+      defaults: {
+        model: { primary: "anthropic/claude-sonnet-4-6", fallbacks: ["openai/gpt-5.2"] },
+        models: {
+          "anthropic/claude-sonnet-4-6": { alias: "Sonnet" },
+          "anthropic/claude-opus-4-6": { alias: "Opus" },
+          "openai/gpt-5.2": {},
         },
       },
-    };
+    },
+  };
+
+  it("merges default model maps by default so other providers survive login", () => {
+    const patch = { agents: { defaults: { models: { "openai-codex/gpt-5.4": {} } } } };
+    const next = applyProviderAuthConfigPatch(base, patch);
+    expect(next.agents?.defaults?.models).toEqual({
+      ...base.agents.defaults.models,
+      "openai-codex/gpt-5.4": {},
+    });
+    expect(next.agents?.defaults?.model).toEqual(base.agents.defaults.model);
+  });
+
+  it("replaces the allowlist only when replaceDefaultModels is set", () => {
     const patch = {
       agents: {
         defaults: {
           models: {
             "claude-cli/claude-sonnet-4-6": { alias: "Sonnet" },
-            "claude-cli/claude-opus-4-6": { alias: "Opus" },
             "openai/gpt-5.2": {},
           },
         },
       },
     };
-
-    const next = applyProviderAuthConfigPatch(base, patch);
-
+    const next = applyProviderAuthConfigPatch(base, patch, { replaceDefaultModels: true });
     expect(next.agents?.defaults?.models).toEqual(patch.agents.defaults.models);
-    expect(next.agents?.defaults?.model).toEqual(base.agents?.defaults?.model);
+    expect(next.agents?.defaults?.model).toEqual(base.agents.defaults.model);
   });
 
   it("keeps normal recursive merges for unrelated provider auth patch fields", () => {

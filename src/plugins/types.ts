@@ -240,6 +240,12 @@ export type ProviderAuthResult = {
   configPatch?: Partial<OpenClawConfig>;
   defaultModel?: string;
   notes?: string[];
+  /**
+   * Opt in to replace `agents.defaults.models` wholesale with the patch map.
+   * Default behavior merges the map so other providers' entries survive.
+   * Set only from migrations that intentionally rename/remove model keys.
+   */
+  replaceDefaultModels?: boolean;
 };
 
 /** Interactive auth context passed to provider login/setup methods. */

@@ -63,9 +63,13 @@ export function mergeConfigPatch<T>(base: T, patch: unknown): T {
   return next as T;
 }
 
-export function applyProviderAuthConfigPatch(cfg: OpenClawConfig, patch: unknown): OpenClawConfig {
+export function applyProviderAuthConfigPatch(
+  cfg: OpenClawConfig,
+  patch: unknown,
+  options?: { replaceDefaultModels?: boolean },
+): OpenClawConfig {
   const merged = mergeConfigPatch(cfg, patch);
-  if (!isPlainRecord(patch)) {
+  if (!options?.replaceDefaultModels || !isPlainRecord(patch)) {
     return merged;
   }
 
@@ -81,7 +85,7 @@ export function applyProviderAuthConfigPatch(cfg: OpenClawConfig, patch: unknown
       ...merged.agents,
       defaults: {
         ...merged.agents?.defaults,
-        // Provider auth migrations can intentionally replace the exact allowlist.
+        // Opt-in replacement for migrations that rename/remove model keys.
         models: patchModels as NonNullable<
           NonNullable<OpenClawConfig["agents"]>["defaults"]
         >["models"],
