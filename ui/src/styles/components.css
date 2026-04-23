@@ -227,7 +227,7 @@
   border: 1px solid var(--border);
   background: var(--card);
   border-radius: var(--radius-lg);
-  padding: 18px;
+  padding: 7px;
   animation: rise 0.25s var(--ease-out) backwards;
   transition:
     border-color var(--duration-normal) var(--ease-out),
@@ -560,61 +560,14 @@
   opacity: 0.5;
 }
 
-/* ===========================================
-   Skill Toggle Switch
-   =========================================== */
-
-.skill-toggle-wrap {
-  display: inline-flex;
-  align-items: center;
-  cursor: pointer;
-}
-
-.skill-toggle {
-  appearance: none;
-  width: 36px;
-  height: 20px;
-  border-radius: var(--radius-full);
-  background: var(--border);
-  position: relative;
-  cursor: pointer;
-  border: none;
-  outline: none;
-  transition:
-    background var(--duration-fast) var(--ease-out),
-    box-shadow var(--duration-fast) var(--ease-out);
-  flex-shrink: 0;
-}
-
-.skill-toggle::after {
-  content: "";
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 16px;
-  height: 16px;
-  border-radius: var(--radius-full);
-  background: white;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
-  transition: transform var(--duration-fast) var(--ease-out);
-}
-
-.skill-toggle:checked {
-  background: var(--accent);
-}
-
-.skill-toggle:checked::after {
-  transform: translateX(16px);
-}
-
-.skill-toggle:focus-visible {
-  box-shadow: var(--focus-ring);
-}
-
-.skill-toggle:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
+/* =========================================== Skill Toggle Switch =========================================== */
+.skill-toggle-wrap { display: inline-flex; align-items: center; cursor: pointer; }
+.skill-toggle { appearance: none; width: 18px; height: 10px; border-radius: var(--radius-full); background: var(--border); position: relative; cursor: pointer; border: none; outline: none; transition: background var(--duration-fast) var(--ease-out), box-shadow var(--duration-fast) var(--ease-out); flex-shrink: 0; }
+.skill-toggle::after { content: ""; position: absolute; top: 1px; left: 1px; width: 8px; height: 8px; border-radius: var(--radius-full); background: white; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2); transition: transform var(--duration-fast) var(--ease-out); }
+.skill-toggle:checked { background: var(--accent); }
+.skill-toggle:checked::after { transform: translateX(8px); }
+.skill-toggle:focus-visible { box-shadow: var(--focus-ring); }
+.skill-toggle:disabled { opacity: 0.4; cursor: not-allowed; }
 
 /* ===========================================
    Buttons - Tactile with personality
@@ -718,16 +671,8 @@
   background: rgba(239, 68, 68, 0.15);
 }
 
-.btn--sm {
-  padding: 6px 10px;
-  font-size: 12px;
-}
-
-.btn--xs {
-  padding: 4px 6px;
-  font-size: 12px;
-  line-height: 1;
-}
+.btn--sm { padding: 3px 5px; font-size: 12px; }
+.btn--xs { padding: 2px 3px; font-size: 12px; line-height: 1; }
 
 .btn--icon {
   padding: 8px;
@@ -789,35 +734,10 @@
   font-weight: 500;
 }
 
-.field input,
-.field textarea,
-.field select {
-  border: 1px solid var(--input);
-  background: var(--card);
-  border-radius: var(--radius-md);
-  padding: 8px 12px;
-  outline: none;
-  box-shadow: inset 0 1px 0 var(--card-highlight);
-  transition:
-    border-color var(--duration-fast) ease,
-    box-shadow var(--duration-fast) ease;
-}
+.field input, .field textarea, .field select { border: 1px solid var(--input); background: var(--card); border-radius: var(--radius-md); padding: 4px 6px; outline: none; box-shadow: inset 0 1px 0 var(--card-highlight); transition: border-color var(--duration-fast) ease, box-shadow var(--duration-fast) ease; }
+.field input:focus, .field textarea:focus, .field select:focus { border-color: var(--ring); box-shadow: var(--focus-ring); }
+.field select { appearance: none; padding-right: 18px; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23a1a1aa' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 5px center; cursor: pointer; }
 
-.field input:focus,
-.field textarea:focus,
-.field select:focus {
-  border-color: var(--ring);
-  box-shadow: var(--focus-ring);
-}
-
-.field select {
-  appearance: none;
-  padding-right: 36px;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23a1a1aa' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right 10px center;
-  cursor: pointer;
-}
 
 .field textarea {
   font-family: var(--mono);
@@ -2594,8 +2514,8 @@ td.data-table-key-col {
 .chat-bubble {
   border: 1px solid transparent;
   background: var(--card);
-  border-radius: var(--radius-lg);
-  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  padding: 3px 4px;
   min-width: 0;
 }
 
@@ -2893,7 +2813,7 @@ td.data-table-key-col {
 
 .shell--chat .chat-compose {
   position: sticky;
-  bottom: 0;
+  bottom: 0px;
   z-index: 5;
   margin-top: 0;
   padding-top: 12px;
@@ -2902,7 +2822,7 @@ td.data-table-key-col {
 
 .shell--chat-focus .chat-compose {
   bottom: calc(var(--shell-pad) + 8px);
-  padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  padding-bottom: calc(0px + env(safe-area-inset-bottom, 0px));
   border-bottom-left-radius: var(--radius-lg);
   border-bottom-right-radius: var(--radius-lg);
 }
@@ -4709,7 +4629,7 @@ details[open] > .ov-expandable-toggle::after {
 }
 
 .chat-bubble:has(.chat-tool-msg-collapse:not([open])) {
-  padding: 2px !important;
+  padding: 0px !important;
   border: 2px solid var(--border) !important;
   background: var(--card) !important;
 }

@@ -5,9 +5,9 @@
 /* Chat Group Layout - default (assistant/other on left) */
 .chat-group {
   display: flex;
-  gap: 10px;
+  gap: 3px;
   align-items: flex-start;
-  margin-bottom: 14px;
+  margin-bottom: 3px;
   margin-left: 4px;
   margin-right: 16px;
 }
@@ -23,7 +23,7 @@
   flex-direction: column;
   gap: 2px;
   flex: 1 1 auto;
-  max-width: min(900px, 90%);
+  max-width: min(1024px, 100%);
   align-items: flex-start;
 }
 
@@ -337,12 +337,12 @@ img.chat-avatar {
   flex-direction: column;
   align-items: flex-start;
   gap: 4px;
-  max-width: 854px;
+  max-width: 1024px;
 }
 
 .chat-message-images .chat-message-image {
-  max-width: min(854px, 100%);
-  max-height: 480px;
+  max-width: min(1024px, 100%);
+  max-height: 540px;
   width: auto;
   height: auto;
   object-fit: contain;
@@ -364,7 +364,7 @@ img.chat-avatar {
   text-decoration: underline;
 }
 
-/* Portrait images - allow up to 480x640 */
+/* Portrait images */
 .chat-message-images .chat-message-image[data-orientation="portrait"],
 .chat-message-images .chat-message-image:only-child {
   max-width: 480px;
@@ -372,11 +372,11 @@ img.chat-avatar {
 }
 
 .chat-message-images .chat-message-image[data-orientation="landscape"] {
-  max-width: 854px;
-  max-height: 480px;
+  max-width: 1024px;
+  max-height: 576px;
 }
 
-/* Media wrapper for native video tags - FIXED */
+/* Media wrapper for native video tags */
 .chat-message-media {
   display: flex;
   flex-direction: column;
@@ -390,7 +390,7 @@ img.chat-avatar {
   flex-direction: column;
   align-items: center;
   width: auto;
-  max-width: 854px;
+  max-width: 1024px;
   margin: 8px 0;
 }
 
@@ -399,7 +399,7 @@ img.chat-avatar {
   width: auto;
   max-width: 100%;
   height: auto;
-  max-height: 480px;
+  max-height: 540px;
   border-radius: 6px;
   object-fit: contain;
 }
@@ -416,7 +416,7 @@ img.chat-avatar {
 .video-embed-container {
   position: relative;
   width: 100%;
-  max-width: 854px;
+  max-width: 1024px;
   margin: 12px 0;
   box-sizing: border-box;
 }
@@ -667,13 +667,13 @@ img.chat-avatar {
 
 .chat-bubble:has(video),
 .chat-bubble:has(.chat-message-video) {
-  max-width: min(854px, 100%) !important;
+  max-width: min(1024px, 100%) !important;
 }
 
 .chat-bubble:has(video) video,
 .chat-bubble:has(.chat-message-video) video {
   width: 100%;
   height: auto;
-  max-width: 854px;
+  max-width: 1024px;
   display: block;
 }

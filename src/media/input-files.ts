@@ -104,15 +104,22 @@ export const DEFAULT_INPUT_FILE_MIMES = [
   "text/markdown",
   "text/html",
   "text/csv",
+  "text/css",
+  "text/typescript",
+  "text/javascript",
+  "text/x-python",
   "application/json",
   "application/pdf",
+  "application/javascript",
+  "application/typescript",
+  "application/x-python",
 ];
-export const DEFAULT_INPUT_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
-export const DEFAULT_INPUT_FILE_MAX_BYTES = 5 * 1024 * 1024;
-export const DEFAULT_INPUT_FILE_MAX_CHARS = 60_000;
+export const DEFAULT_INPUT_IMAGE_MAX_BYTES = 50 * 1024 * 1024;
+export const DEFAULT_INPUT_FILE_MAX_BYTES = 50 * 1024 * 1024;
+export const DEFAULT_INPUT_FILE_MAX_CHARS = 200_000;
 export const DEFAULT_INPUT_MAX_REDIRECTS = 3;
 export const DEFAULT_INPUT_TIMEOUT_MS = 10_000;
-export const DEFAULT_INPUT_PDF_MAX_PAGES = 4;
+export const DEFAULT_INPUT_PDF_MAX_PAGES = 500;
 export const DEFAULT_INPUT_PDF_MAX_PIXELS = 4_000_000;
 export const DEFAULT_INPUT_PDF_MIN_TEXT_CHARS = 200;
 const NORMALIZED_INPUT_IMAGE_MIME = "image/jpeg";

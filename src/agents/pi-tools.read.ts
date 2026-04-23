@@ -232,7 +232,7 @@ async function readTextFileStreaming(
   });
 }
 
-// Helper function for bridge mode - reads file with byte limit to protect memory
+// Helper function for bridge mode - reads entire file but respects maxChars after
 async function readTextFileBridge(
   bridge: SandboxFsBridge,
   filePath: string,
@@ -242,10 +242,12 @@ async function readTextFileBridge(
   maxChars: number,
   signal?: AbortSignal,
 ): Promise<{ content: string; truncated: boolean; totalLines: number }> {
-  // FIXED: Read with byte limit to protect memory
-  const maxBytesForText = maxChars * 4; // UTF-8 can be up to 4 bytes per char
-  const buffer = await readFileBytesWithLimit(bridge, filePath, cwd, maxBytesForText, signal);
-  const text = buffer.toString("utf-8");
+  const buffer = await bridge.readFile({
+    filePath,
+    cwd,
+    signal,
+  });
+  const text = Buffer.isBuffer(buffer) ? buffer.toString("utf-8") : String(buffer);
   
   // Apply character limit after reading
   let truncatedText = text;
@@ -286,53 +288,6 @@ async function readFileBytesWithLimit(
   return buffer.slice(0, maxBytes);
 }
 
-// Helper function to read limited bytes from local file without failing on large files
-async function readLocalFileBytesWithLimit(
-  filePath: string,
-  maxBytes: number,
-  signal?: AbortSignal
-): Promise<Buffer> {
-  // FIXED: Use createReadStream to read only the first maxBytes instead of failing on large files
-  return new Promise((resolve, reject) => {
-    if (signal?.aborted) {
-      reject(new Error("Read operation aborted"));
-      return;
-    }
-    
-    const stream = createReadStream(filePath, { start: 0, end: maxBytes - 1 });
-    const chunks: Buffer[] = [];
-    let totalBytes = 0;
-    
-    const onAbort = () => {
-      stream.destroy();
-      reject(new Error("Read operation aborted"));
-    };
-    
-    signal?.addEventListener("abort", onAbort, { once: true });
-    
-    stream.on("data", (chunk: Buffer) => {
-      if (totalBytes + chunk.length > maxBytes) {
-        const remaining = maxBytes - totalBytes;
-        chunks.push(chunk.slice(0, remaining));
-        stream.destroy();
-        return;
-      }
-      chunks.push(chunk);
-      totalBytes += chunk.length;
-    });
-    
-    stream.on("end", () => {
-      signal?.removeEventListener("abort", onAbort);
-      resolve(Buffer.concat(chunks));
-    });
-    
-    stream.on("error", (error) => {
-      signal?.removeEventListener("abort", onAbort);
-      reject(error);
-    });
-  });
-}
-
 // Helper function to detect if a WebM file is audio-only using bridge-aware reads
 async function isWebmAudioOnly(filePath: string, bridge?: SandboxFsBridge, cwd?: string): Promise<boolean> {
   try {
@@ -342,8 +297,9 @@ async function isWebmAudioOnly(filePath: string, bridge?: SandboxFsBridge, cwd?:
       // Read only first 8KB for MIME detection
       buffer = await readFileBytesWithLimit(bridge, filePath, cwd, 8192);
     } else {
-      // FIXED: Use bounded header reads for host WebM audio detection
-      buffer = await readLocalFileBytesWithLimit(filePath, 8192);
+      // Use local filesystem with byte limit
+      const { buffer: localBuffer } = await readLocalFileSafely({ filePath, maxBytes: 8192 });
+      buffer = localBuffer;
     }
     
     const detectedMime = await detectMime({ buffer, filePath });
@@ -782,17 +738,9 @@ function mapContainerPathToWorkspaceRoot(params: {
       if (host && host !== "localhost") {
         return params.filePath;
       }
-      
-      // FIXED: Reject encoded separators before remapping
-      const rawPathname = parsed.pathname;
-      if (rawPathname.includes("%2F") || rawPathname.includes("%2f")) {
-        // Contains encoded slash - reject as potentially malicious
-        return params.filePath;
-      }
-      
       let normalizedPathname: string;
       try {
-        normalizedPathname = decodeURIComponent(rawPathname).replace(/\\/g, "/");
+        normalizedPathname = decodeURIComponent(parsed.pathname).replace(/\\/g, "/");
       } catch {
         return params.filePath;
       }
@@ -829,14 +777,6 @@ export function resolveToolPathAgainstWorkspaceRoot(params: {
 }): string {
   const mapped = mapContainerPathToWorkspaceRoot(params);
   const candidate = mapped.startsWith("@") ? mapped.slice(1) : mapped;
-  
-  // FIXED: Restore Windows-drive absolute path handling
-  // Check if this is a Windows absolute path (e.g., C:\ or D:\)
-  const isWindowsAbsolutePath = /^[a-zA-Z]:[\\/]/.test(candidate);
-  if (isWindowsAbsolutePath) {
-    return path.resolve(candidate);
-  }
-  
   return path.isAbsolute(candidate)
     ? path.resolve(candidate)
     : path.resolve(params.root, candidate || ".");
@@ -1045,6 +985,10 @@ export function transformToolResultForTransport(result: AgentToolResult): AgentT
     }
     
     if (block.type === 'audio') {
+      // Preserve audio blocks that contain base64 data
+      if (block.source && block.source.type === 'base64') {
+        return block;
+      }
       return {
         type: 'text' as const,
         text: block.filename ?? 'audio',
@@ -1061,9 +1005,9 @@ export function transformToolResultForTransport(result: AgentToolResult): AgentT
     return block;
   });
 
-  // Filter to only text and image blocks, then cast to the expected type
+  // Added 'audio' to the filter to allow base64 audio blocks to pass through
   const filteredContent = transformedContent.filter(
-    (block) => block.type === 'text' || block.type === 'image'
+    (block) => block.type === 'text' || block.type === 'image' || block.type === 'audio'
   );
   
   return {
@@ -1121,10 +1065,11 @@ async function detectMediaTypeFromBytes(
     let buffer: Buffer;
     
     if (useBridge && bridge) {
+      // FIXED: Use helper that reads only first maxBytesForSniffing bytes
       buffer = await readFileBytesWithLimit(bridge, filePath, cwd, maxBytesForSniffing, signal);
     } else {
-      // FIXED: Use bounded header reads that don't reject large files
-      buffer = await readLocalFileBytesWithLimit(filePath, maxBytesForSniffing, signal);
+      const { buffer: localBuffer } = await readLocalFileSafely({ filePath, maxBytes: maxBytesForSniffing });
+      buffer = localBuffer;
     }
     
     const detectedMime = await detectMime({ buffer, filePath });
@@ -1152,7 +1097,8 @@ function createMediaResultWithFallback(
   mimeType: string,
   filePath: string,
   fileSize: number,
-  details: Record<string, unknown>
+  details: Record<string, unknown>,
+  fileBuffer?: Buffer // Added optional buffer parameter
 ): AgentToolResult {
   const mediaContent: ContentBlock = {
     type: mediaType as "audio" | "video",
@@ -1160,6 +1106,15 @@ function createMediaResultWithFallback(
     filename: fileName,
     mimeType: mimeType,
   };
+
+  // Add base64 source if a buffer is provided (for small audio files)
+  if (fileBuffer) {
+    mediaContent.source = {
+      type: "base64",
+      media_type: mimeType,
+      data: fileBuffer.toString("base64"),
+    };
+  }
   
   const textFallback = `[${mediaType.toUpperCase()}] ${fileName}\nURL: ${mediaUrl}\nType: ${mimeType}\nSize: ${fileSize} bytes`;
   
@@ -1175,8 +1130,8 @@ export function createOpenClawReadTool(
   options?: OpenClawReadToolOptions,
 ): AnyAgentTool {
   const useBridge = !!options?.bridge;
-  // Define constant at function scope for lint compliance
-  const MAX_IMAGE_BYTES_BEFORE_SANITIZATION = 50 * 1024 * 1024; // 50MB pre-read cap
+  const MAX_IMAGE_BYTES_BEFORE_SANITIZATION = 50 * 1024 * 1024; 
+  const MAX_AUDIO_BASE64_BYTES = 100 * 1024 * 1024; // 100MB limit for base64 audio
 
   return {
     ...base,
@@ -1234,14 +1189,13 @@ export function createOpenClawReadTool(
           return result;
         }
 
-        // Detect media type from file bytes (limited to 8KB for MIME sniffing)
         const { mimeType, kind, extension: detectedExt } = await detectMediaTypeFromBytes(
           inputPath,
           useBridge,
           options?.bridge,
           rootDirResolved,
           signal,
-          8192, // Limit MIME sniffing to 8KB
+          8192,
         );
         
         const fileName = path.basename(inputPath);
@@ -1249,8 +1203,18 @@ export function createOpenClawReadTool(
 
         let result: AgentToolResult;
 
-        // Route based on detected kind, not just extension
         if (kind === "audio") {
+          let fileBuffer: Buffer | undefined;
+          // Read full file if it's within the 100MB limit
+          if (fileSize <= MAX_AUDIO_BASE64_BYTES) {
+            if (useBridge && options?.bridge) {
+              const buffer = await options.bridge.readFile({ filePath: inputPath, cwd: rootDirResolved, signal });
+              fileBuffer = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
+            } else {
+              fileBuffer = await fs.readFile(inputPath);
+            }
+          }
+
           result = createMediaResultWithFallback(
             toolCallId,
             "audio",
@@ -1260,14 +1224,23 @@ export function createOpenClawReadTool(
             inputPath,
             fileSize,
             { detectedVia: "mime-sniff" },
+            fileBuffer
           );
         } 
         else if (kind === "video") {
-          // Special handling for WebM audio-only detection
           if (detectedExt === WEBM_EXTENSION && mimeType === "video/webm") {
-            // Check if it's actually audio-only using bridge-aware detection
             const isAudioOnly = await isWebmAudioOnly(inputPath, options?.bridge, rootDirResolved);
             if (isAudioOnly) {
+              let fileBuffer: Buffer | undefined;
+              if (fileSize <= MAX_AUDIO_BASE64_BYTES) {
+                if (useBridge && options?.bridge) {
+                  const buffer = await options.bridge.readFile({ filePath: inputPath, cwd: rootDirResolved, signal });
+                  fileBuffer = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
+                } else {
+                  fileBuffer = await fs.readFile(inputPath);
+                }
+              }
+
               result = createMediaResultWithFallback(
                 toolCallId,
                 "audio",
@@ -1277,6 +1250,7 @@ export function createOpenClawReadTool(
                 inputPath,
                 fileSize,
                 { detectedVia: "mime-sniff", webmDetectedAs: "audio-only" },
+                fileBuffer
               );
             } else {
               result = createMediaResultWithFallback(
@@ -1310,7 +1284,6 @@ export function createOpenClawReadTool(
 
           let fileBuffer: Buffer;
           if (useBridge) {
-            // Read full file for images to allow proper sanitization
             const buffer = await options.bridge!.readFile({
               filePath: inputPath,
               cwd: rootDirResolved,
@@ -1318,9 +1291,7 @@ export function createOpenClawReadTool(
             });
             fileBuffer = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
           } else {
-            // FIXED: Cap host image reads before sanitization to prevent OOM
             if (fileSize > MAX_IMAGE_BYTES_BEFORE_SANITIZATION) {
-              // Image is too large to safely read into memory - return error
               const errorResult = {
                 toolCallId,
                 content: [
@@ -1343,18 +1314,15 @@ export function createOpenClawReadTool(
               return errorResult;
             }
             
-            // Safe to read the file since it's under the size limit
             fileBuffer = await fs.readFile(inputPath);
           }
 
           let finalMimeType = mimeType;
           
-          // Apply image sanitization if configured
           if (options?.imageSanitization) {
             const maxBytes = options.imageSanitization.maxBytes ?? 5 * 1024 * 1024;
             const maxDimensionPx = options.imageSanitization.maxDimensionPx ?? 1200;
             
-            // Check if sanitization is needed
             let needsSanitization = fileBuffer.length > maxBytes;
             
             if (!needsSanitization) {
@@ -1378,7 +1346,6 @@ export function createOpenClawReadTool(
               });
               
               if (!resizeResult.success) {
-                // Return error message instead of oversized/invalid image
                 const errorResult = {
                   toolCallId,
                   content: [
@@ -1423,7 +1390,6 @@ export function createOpenClawReadTool(
           } as AgentToolResult;
         } 
         else {
-          // Handle text files
           if (signal?.aborted) {
             throw new Error("Read operation aborted");
           }
