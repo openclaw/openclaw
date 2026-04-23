@@ -72,8 +72,7 @@ function removeManagedMarkdownBlock(params: {
   if (!existingPattern.test(params.original)) {
     return params.original;
   }
-  const stripped = params.original.replace(existingPattern, "").replace(/\n{3,}/g, "\n\n").trim();
-  return stripped.length > 0 ? withTrailingNewline(stripped) : "";
+  return params.original.replace(existingPattern, "");
 }
 
 export async function writeDailyDreamingPhaseBlock(params: {
