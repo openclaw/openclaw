@@ -83,7 +83,8 @@ export async function resolveDirectStatusReplyForSession(
   });
   let resolvedReasoningLevel = currentReasoningLevel;
   const hasAgentReasoningDefault =
-    agentEntry?.reasoningDefault !== undefined && agentEntry.reasoningDefault !== null;
+    (agentEntry?.reasoningDefault !== undefined && agentEntry.reasoningDefault !== null) ||
+    (agentCfg?.reasoningDefault !== undefined && agentCfg.reasoningDefault !== null);
   const reasoningExplicitlySet =
     (statusEntry?.reasoningLevel !== undefined && statusEntry.reasoningLevel !== null) ||
     hasAgentReasoningDefault;
