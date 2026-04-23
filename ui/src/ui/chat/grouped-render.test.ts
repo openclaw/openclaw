@@ -682,6 +682,63 @@ describe("grouped chat rendering", () => {
     expect(image?.getAttribute("src")).toBe("data:image/png;base64,cG5n");
   });
 
+  it("fetches managed chat images with auth and renders blob previews", async () => {
+    resetAssistantAttachmentAvailabilityCacheForTest();
+    const objectUrl = "blob:managed-image";
+    vi.stubGlobal(
+      "URL",
+      Object.assign(URL, {
+        createObjectURL: vi.fn(() => objectUrl),
+        revokeObjectURL: vi.fn(),
+      }),
+    );
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      const headers = init?.headers as Headers;
+      expect(headers.get("Authorization")).toBe("Bearer session-token");
+      expect(headers.get("x-openclaw-requester-session-key")).toBe("agent:main:main");
+      return {
+        ok: true,
+        blob: async () => new Blob(["png"], { type: "image/png" }),
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const container = document.createElement("div");
+    renderAssistantMessage(
+      container,
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "image",
+            url: "/api/chat/media/outgoing/agent%3Amain%3Amain/00000000-0000-4000-8000-000000000000/full",
+            alt: "Generated image 1",
+            width: 1,
+            height: 1,
+          },
+        ],
+        timestamp: Date.now(),
+      },
+      {
+        showToolCalls: false,
+        assistantAttachmentAuthToken: "session-token",
+      },
+    );
+
+    await vi.waitFor(() => {
+      const image = container.querySelector<HTMLImageElement>(".chat-message-image");
+      expect(image?.getAttribute("src")).toBe(objectUrl);
+      expect(image?.getAttribute("alt")).toBe("Generated image 1");
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/chat/media/outgoing/agent%3Amain%3Amain/00000000-0000-4000-8000-000000000000/full",
+      expect.objectContaining({
+        method: "GET",
+        credentials: "same-origin",
+      }),
+    );
+  });
+
   it("renders canvas-only [embed] shortcodes inside the assistant bubble", () => {
     const container = document.createElement("div");
     renderAssistantMessage(

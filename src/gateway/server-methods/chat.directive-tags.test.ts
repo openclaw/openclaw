@@ -2015,12 +2015,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(transcriptUpdate).toMatchObject({
       message: {
         role: "assistant",
-        content: [
-          { type: "text", text: "[[reply_to_current]]Image reply" },
-          { type: "input_image", image_url: "data:image/png;base64,cG5n" },
-        ],
+        content: [{ type: "text", text: "[[reply_to_current]]Image reply" }],
       },
     });
+    expect(JSON.stringify(transcriptUpdate)).not.toContain("data:image/png;base64,cG5n");
   });
 
   it("does not persist sensitive image media into transcript updates", async () => {
