@@ -283,6 +283,25 @@ describe("resolveThinkingDefaultForModel", () => {
     ).toBe("low");
   });
 
+  it("keeps catalog reasoning context when remapping implicit reasoning defaults", () => {
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockImplementation(
+      ({ provider, context }) =>
+        provider === "demo-contextual" && context.reasoning
+          ? { levels: [{ id: "off" }, { id: "low" }, { id: "medium" }] }
+          : provider === "demo-contextual"
+            ? { levels: [{ id: "off" }] }
+            : undefined,
+    );
+
+    expect(
+      resolveThinkingDefaultForModel({
+        provider: "demo-contextual",
+        model: "demo-model",
+        catalog: [{ provider: "demo-contextual", id: "demo-model", reasoning: true }],
+      }),
+    ).toBe("medium");
+  });
+
   it("defaults to off when no adaptive or reasoning hint is present", () => {
     expect(
       resolveThinkingDefaultForModel({

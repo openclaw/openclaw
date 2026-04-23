@@ -459,10 +459,23 @@ export async function createModelSelectionState(params: {
     }
     let catalogForThinking =
       modelCatalog && modelCatalog.length > 0 ? modelCatalog : allowedModelCatalog;
-    if ((!catalogForThinking || catalogForThinking.length === 0) && !modelCatalog) {
+    const selectedCatalogEntry = catalogForThinking?.find(
+      (entry) => entry.provider === provider && entry.id === model,
+    );
+    const shouldHydrateRuntimeCatalog =
+      !modelCatalog && (!selectedCatalogEntry || selectedCatalogEntry.reasoning === undefined);
+    if (shouldHydrateRuntimeCatalog) {
       modelCatalog = await (await loadModelCatalogRuntime()).loadModelCatalog({ config: cfg });
       logStage("catalog-loaded-for-thinking", `entries=${modelCatalog.length}`);
-      catalogForThinking = modelCatalog.length > 0 ? modelCatalog : allowedModelCatalog;
+      const runtimeSelectedEntry = modelCatalog.find(
+        (entry) => entry.provider === provider && entry.id === model,
+      );
+      catalogForThinking =
+        runtimeSelectedEntry || !catalogForThinking || catalogForThinking.length === 0
+          ? modelCatalog.length > 0
+            ? modelCatalog
+            : allowedModelCatalog
+          : allowedModelCatalog;
     }
     const resolved = resolveThinkingDefault({
       cfg,

@@ -565,10 +565,23 @@ export function createSessionStatusTool(opts?: {
         resolvedElevatedLevel: statusSessionEntry.elevatedLevel as ElevatedLevel | undefined,
         resolveDefaultThinkingLevel: async () => {
           const configuredCatalog = buildConfiguredModelCatalog({ cfg });
+          const configuredSelectedEntry = configuredCatalog.find(
+            (entry) => entry.provider === providerForCard && entry.id === defaultModelForCard,
+          );
+          const shouldHydrateRuntimeCatalog =
+            configuredCatalog.length === 0 ||
+            !configuredSelectedEntry ||
+            configuredSelectedEntry.reasoning === undefined;
+          const runtimeCatalog = shouldHydrateRuntimeCatalog
+            ? await loadModelCatalog({ config: cfg })
+            : undefined;
+          const runtimeSelectedEntry = runtimeCatalog?.find(
+            (entry) => entry.provider === providerForCard && entry.id === defaultModelForCard,
+          );
           const catalog =
-            configuredCatalog.length > 0
-              ? configuredCatalog
-              : await loadModelCatalog({ config: cfg });
+            runtimeSelectedEntry || configuredCatalog.length === 0
+              ? (runtimeCatalog ?? configuredCatalog)
+              : configuredCatalog;
           return resolveThinkingDefault({
             cfg,
             provider: providerForCard,
