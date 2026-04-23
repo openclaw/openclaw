@@ -156,3 +156,9 @@ extensions/qa-lab/web/dist/
 # Generated bundled plugin runtime dependency manifests
 extensions/**/.openclaw-runtime-deps.json
 extensions/**/.openclaw-runtime-deps-stamp.json
+<<<<<<< HEAD
+=======
+
+# Added by jdc4429
+global
+>>>>>>> 29732877c7 (Add files to .gitignore)
