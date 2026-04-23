@@ -122,7 +122,7 @@ describe("bundled plugin postinstall", () => {
     });
   });
 
-  it("does not install bundled plugin deps outside of source checkouts by default", async () => {
+  it("installs bundled plugin deps for packaged (non-source-checkout) installs", async () => {
     const extensionsDir = await createExtensionsDir();
     const packageRoot = path.dirname(path.dirname(extensionsDir));
     await writePluginPackage(extensionsDir, "acpx", {
@@ -141,7 +141,7 @@ describe("bundled plugin postinstall", () => {
       log: { log: vi.fn(), warn: vi.fn() },
     });
 
-    expect(spawnSync).not.toHaveBeenCalled();
+    expect(spawnSync).toHaveBeenCalled();
   });
 
   it("prunes source-checkout bundled plugin node_modules", async () => {

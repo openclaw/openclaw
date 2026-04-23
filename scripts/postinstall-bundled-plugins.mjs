@@ -32,7 +32,6 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_EXTENSIONS_DIR = join(__dirname, "..", "dist", "extensions");
 const DEFAULT_PACKAGE_ROOT = join(__dirname, "..");
 const DISABLE_POSTINSTALL_ENV = "OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL";
-const EAGER_BUNDLED_PLUGIN_DEPS_ENV = "OPENCLAW_EAGER_BUNDLED_PLUGIN_DEPS";
 const DIST_INVENTORY_PATH = "dist/postinstall-inventory.json";
 const LEGACY_UPDATE_COMPAT_SIDECARS = [
   {
@@ -465,10 +464,6 @@ export function createNestedNpmInstallEnv(env = process.env) {
   return nextEnv;
 }
 
-function shouldEagerInstallBundledPluginDeps(env = process.env) {
-  return env?.[EAGER_BUNDLED_PLUGIN_DEPS_ENV]?.trim() === "1";
-}
-
 export function applyBaileysEncryptedStreamFinishHotfix(params = {}) {
   const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
   const pathExists = params.existsSync ?? existsSync;
@@ -718,16 +713,10 @@ export function runBundledPluginPostinstall(params = {}) {
   ) {
     return;
   }
-  if (!shouldEagerInstallBundledPluginDeps(env)) {
-    applyBundledPluginRuntimeHotfixes({
-      packageRoot,
-      existsSync: pathExists,
-      readFileSync: params.readFileSync,
-      writeFileSync: params.writeFileSync,
-      log,
-    });
-    return;
-  }
+  // NOTE: The legacy OPENCLAW_EAGER_BUNDLED_PLUGIN_DEPS escape hatch is now a no-op.
+  // Packaged installs (npm pack + global install) always need plugin runtime deps
+  // installed at the package root because there is no workspace to resolve them from.
+  // Source checkouts are handled above and return early after pruning.
   const runtimeDeps =
     params.runtimeDeps ??
     discoverBundledPluginRuntimeDeps({ extensionsDir, existsSync: pathExists });
