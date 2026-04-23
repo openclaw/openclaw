@@ -1,3 +1,5 @@
+import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles.js";
+import { readVaultOAuthCredential } from "../agents/auth-profiles/vault-oauth-store.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import {
   type ReadConfigFileSnapshotWithPluginMetadataResult,
@@ -174,6 +176,11 @@ export function createRuntimeSecretsActivator(params: {
         const loadAuthStore = startupPreflight
           ? (await loadAuthProfiles()).loadAuthProfileStoreWithoutExternalProfiles
           : undefined;
+        // Warm the vault OAuth cache before building the secrets snapshot so
+        // that vault-backed credentials are available for the overlay when the
+        // first request arrives. Failures are non-fatal: the gateway will retry
+        // on the first auth overlay call (and log the miss).
+        await readVaultOAuthCredential().catch(() => undefined);
         const prepared = await prepareRuntimeSecretsSnapshot({
           config: pruneSkippedStartupSecretSurfaces(config),
           ...(loadAuthStore ? { loadAuthStore } : {}),

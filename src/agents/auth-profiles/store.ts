@@ -36,6 +36,7 @@ import {
 } from "./runtime-snapshots.js";
 import { savePersistedAuthProfileState } from "./state.js";
 import type { AuthProfileStore } from "./types.js";
+import { isVaultBackedOAuthProfile, writeVaultOAuthCredential } from "./vault-oauth-store.js";
 
 type LoadAuthProfileStoreOptions = {
   allowKeychainPrompt?: boolean;
@@ -243,6 +244,9 @@ function shouldKeepProfileInLocalStore(params: {
 }): boolean {
   if (params.credential.type !== "oauth") {
     return true;
+  }
+  if (isVaultBackedOAuthProfile(params.profileId, params.credential)) {
+    return false;
   }
   if (
     isInheritedMainOAuthCredential({
@@ -593,6 +597,19 @@ export function saveAuthProfileStore(
   const payload = buildPersistedAuthProfileSecretsStore(localStore);
   saveJsonFile(authPath, payload);
   savePersistedAuthProfileState(localStore, agentDir);
+
+  // Persist vault-backed OAuth credentials out-of-band after the local store
+  // has been written without plaintext token material.
+  for (const [profileId, credential] of Object.entries(store.profiles)) {
+    if (credential.type === "oauth" && isVaultBackedOAuthProfile(profileId, credential)) {
+      void writeVaultOAuthCredential(profileId, credential).catch((err: unknown) => {
+        log.warn("vault-oauth: failed to write credential to vault", {
+          profileId,
+          err: String(err),
+        });
+      });
+    }
+  }
   writeCachedAuthProfileStore({
     authPath,
     authMtimeMs: readAuthStoreMtimeMs(authPath),

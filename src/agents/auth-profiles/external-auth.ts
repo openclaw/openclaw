@@ -8,6 +8,7 @@ import {
   type RuntimeExternalOAuthProfile,
 } from "./oauth-shared.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
+import { resolveVaultOAuthExternalProfiles } from "./vault-oauth-store.js";
 
 type ExternalAuthProfileMap = Map<string, ProviderExternalAuthProfile>;
 type ResolveExternalAuthProfiles = typeof resolveExternalAuthProfilesWithPlugins;
@@ -63,6 +64,16 @@ function resolveExternalAuthProfileMap(params: {
   });
 
   const resolved: ExternalAuthProfileMap = new Map();
+
+  // Vault-backed profiles are injected first so CLI sync can override if needed.
+  for (const profile of resolveVaultOAuthExternalProfiles()) {
+    resolved.set(profile.profileId, {
+      profileId: profile.profileId,
+      credential: profile.credential,
+      persistence: "runtime-only",
+    });
+  }
+
   const cliProfiles =
     externalCliSync.resolveExternalCliAuthProfiles?.(params.store, {
       allowKeychainPrompt: params.externalCli?.allowKeychainPrompt,
