@@ -21,7 +21,7 @@ import { shouldSuppressManagedWebSearchTool } from "./codex-native-web-search.js
 import { resolveImageSanitizationLimits } from "./image-sanitization.js";
 import type { ModelAuthMode } from "./model-auth.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
-import { wrapToolWithAbortSignal } from "./pi-tools.abort.js";
+import { wrapToolWithAbortSignal, wrapToolWithTracing } from "./pi-tools.abort.js";
 import { wrapToolWithBeforeToolCallHook } from "./pi-tools.before-tool-call.js";
 import { applyDeferredFollowupToolDescriptions } from "./pi-tools.deferred-followup.js";
 import { filterToolsByMessageProvider } from "./pi-tools.message-provider-policy.js";
@@ -720,5 +720,5 @@ export function createOpenClawCodingTools(options?: {
   // NOTE: Keep canonical (lowercase) tool names here.
   // pi-ai's Anthropic OAuth transport remaps tool names to Claude Code-style names
   // on the wire and maps them back for tool dispatch.
-  return withDeferredFollowupDescriptions;
+  return withDeferredFollowupDescriptions.map((tool) => wrapToolWithTracing(tool));
 }

@@ -1,3 +1,4 @@
+import { trace, SpanStatusCode, context } from "@opentelemetry/api";
 import { buildDockerExecArgs } from "../bash-tools.shared.js";
 import type { SandboxBackendCommandParams } from "./backend-handle.types.js";
 import type {
@@ -93,22 +94,40 @@ export function runDockerSandboxShellCommand(
     containerName: string;
   } & SandboxBackendCommandParams,
 ) {
-  const dockerArgs = [
-    "exec",
-    "-i",
-    params.containerName,
-    "sh",
-    "-c",
-    params.script,
-    "openclaw-sandbox-fs",
-  ];
-  if (params.args?.length) {
-    dockerArgs.push(...params.args);
-  }
-  return execDockerRaw(dockerArgs, {
-    input: params.stdin,
-    allowFailure: params.allowFailure,
-    signal: params.signal,
+  const tracer = trace.getTracer("openclaw");
+  return tracer.startActiveSpan("openclaw.sandbox.exec", {}, context.active(), async (span) => {
+    try {
+      span.setAttributes({
+        "openclaw.sandbox.container": params.containerName,
+        "openclaw.sandbox.script": params.script,
+      });
+
+      const dockerArgs = [
+        "exec",
+        "-i",
+        params.containerName,
+        "sh",
+        "-c",
+        params.script,
+        "openclaw-sandbox-fs",
+      ];
+      if (params.args?.length) {
+        dockerArgs.push(...params.args);
+      }
+      const result = await execDockerRaw(dockerArgs, {
+        input: params.stdin,
+        allowFailure: params.allowFailure,
+        signal: params.signal,
+      });
+      span.setStatus({ code: SpanStatusCode.OK });
+      return result;
+    } catch (err) {
+      span.recordException(err as Error);
+      span.setStatus({ code: SpanStatusCode.ERROR });
+      throw err;
+    } finally {
+      span.end();
+    }
   });
 }
 

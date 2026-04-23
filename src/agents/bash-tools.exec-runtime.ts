@@ -1,3 +1,4 @@
+import { trace, SpanStatusCode, context } from "@opentelemetry/api";
 import path from "node:path";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import {
@@ -517,6 +518,46 @@ export async function runExecProcess(opts: {
   timeoutSec: number | null;
   onUpdate?: (partialResult: AgentToolResult<ExecToolDetails>) => void;
 }): Promise<ExecProcessHandle> {
+  const tracer = trace.getTracer("openclaw");
+  return tracer.startActiveSpan("openclaw.exec", {}, context.active(), async (span) => {
+    try {
+      span.setAttributes({
+        "openclaw.exec.command": opts.command,
+        "openclaw.exec.workdir": opts.workdir,
+        "openclaw.exec.target": opts.sandbox ? "sandbox" : "host",
+      });
+      const result = await runExecProcessInternal(opts);
+      span.setStatus({ code: SpanStatusCode.OK });
+      return result;
+    } catch (err) {
+      span.recordException(err as Error);
+      span.setStatus({ code: SpanStatusCode.ERROR });
+      throw err;
+    } finally {
+      span.end();
+    }
+  });
+}
+
+async function runExecProcessInternal(opts: {
+  command: string;
+  execCommand?: string;
+  workdir: string;
+  env: Record<string, string>;
+  sandbox?: BashSandboxConfig;
+  containerWorkdir?: string | null;
+  usePty: boolean;
+  warnings: string[];
+  maxOutput: number;
+  pendingMaxOutput: number;
+  notifyOnExit: boolean;
+  notifyOnExitEmptySuccess?: boolean;
+  scopeKey?: string;
+  sessionKey?: string;
+  notifyDeliveryContext?: DeliveryContext;
+  timeoutSec: number | null;
+  onUpdate?: (partialResult: AgentToolResult<ExecToolDetails>) => void;
+}) {
   const startedAt = Date.now();
   const sessionId = createSessionSlug();
   const execCommand = opts.execCommand ?? opts.command;

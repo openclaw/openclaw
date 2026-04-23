@@ -70,3 +70,36 @@ export function wrapToolWithAbortSignal(
   copyChannelAgentToolMeta(tool as never, wrappedTool as never);
   return wrappedTool;
 }
+
+export function wrapToolWithTracing(tool: AnyAgentTool): AnyAgentTool {
+  const execute = tool.execute;
+  if (!execute) {
+    return tool;
+  }
+  const wrappedTool: AnyAgentTool = {
+    ...tool,
+    execute: async (toolCallId, params, signal, onUpdate) => {
+      const tracer = trace.getTracer("openclaw");
+      return tracer.startActiveSpan(`openclaw.tool.${tool.name}`, {}, context.active(), async (span) => {
+        try {
+          span.setAttributes({
+            "openclaw.tool.name": tool.name,
+            "openclaw.tool.call_id": toolCallId,
+          });
+          const result = await execute(toolCallId, params, signal, onUpdate);
+          span.setStatus({ code: SpanStatusCode.OK });
+          return result;
+        } catch (err) {
+          span.recordException(err as Error);
+          span.setStatus({ code: SpanStatusCode.ERROR });
+          throw err;
+        } finally {
+          span.end();
+        }
+      });
+    },
+  };
+  copyPluginToolMeta(tool, wrappedTool);
+  copyChannelAgentToolMeta(tool as never, wrappedTool as never);
+  return wrappedTool;
+}

@@ -71,6 +71,10 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
   return {
     id: "diagnostics-otel",
     async start(ctx) {
+      if (process.env.OPENCLAW_OTEL_PRELOADED === "1") {
+        ctx.logger.info("diagnostics-otel: skipping OTel SDK start (preloaded)");
+        return;
+      }
       const cfg = ctx.config.diagnostics;
       const otel = cfg?.otel;
       if (!cfg?.enabled || !otel?.enabled) {
