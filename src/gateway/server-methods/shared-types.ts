@@ -64,6 +64,10 @@ export type GatewayRequestContext = {
   hasConnectedMobileNode: () => boolean;
   hasExecApprovalClients?: (excludeConnId?: string) => boolean;
   disconnectClientsForDevice?: (deviceId: string, opts?: { role?: string }) => void;
+  invalidateClientsForDevice?: (
+    deviceId: string,
+    opts?: { role?: string; reason?: string },
+  ) => void;
   disconnectClientsUsingSharedGatewayAuth?: () => void;
   enforceSharedGatewayAuthGenerationForConfigWrite?: (nextConfig: OpenClawConfig) => void;
   nodeRegistry: NodeRegistry;

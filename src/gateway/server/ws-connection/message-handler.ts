@@ -1535,6 +1535,15 @@ export function attachGatewayWsMessageHandler(params: {
       }
       const req = parsed;
       logWs("in", "req", { connId, id: req.id, method: req.method });
+      if (client.invalidated) {
+        const reason = client.invalidatedReason ?? "invalidated";
+        setCloseCause("client-invalidated", {
+          reason,
+          method: req.method,
+        });
+        close(4001, `client invalidated: ${reason}`);
+        return;
+      }
       if (client.usesSharedGatewayAuth) {
         const requiredSharedGatewaySessionGeneration =
           getRequiredSharedGatewaySessionGeneration?.();
