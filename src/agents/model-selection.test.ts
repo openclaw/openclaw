@@ -214,7 +214,7 @@ describe("model-selection", () => {
         name: "preserves nested model ids after the provider prefix",
         variants: ["nvidia/moonshotai/kimi-k2.5"],
         defaultProvider: "anthropic",
-        expected: { provider: "nvidia", model: "nvidia/moonshotai/kimi-k2.5" },
+        expected: { provider: "nvidia", model: "moonshotai/kimi-k2.5" },
       },
       {
         name: "normalizes anthropic shorthand aliases",
@@ -435,16 +435,16 @@ describe("model-selection", () => {
       });
     });
 
-    it("restores NVIDIA provider-prefixed ids from stripped persisted overrides", () => {
+    it("preserves NVIDIA provider-prefixed override ids without stripping the namespace", () => {
       expect(
         resolvePersistedSelectedModelRef({
           defaultProvider: "anthropic",
           overrideProvider: "nvidia",
-          overrideModel: "moonshotai/kimi-k2.5",
+          overrideModel: "nvidia/nemotron-3-super-120b-a12b",
         }),
       ).toEqual({
         provider: "nvidia",
-        model: "nvidia/moonshotai/kimi-k2.5",
+        model: "nvidia/nemotron-3-super-120b-a12b",
       });
     });
   });
@@ -697,7 +697,7 @@ describe("model-selection", () => {
       expect(result.allowedCatalog).toEqual([
         {
           provider: "nvidia",
-          id: "nvidia/moonshotai/kimi-k2.5",
+          id: "moonshotai/kimi-k2.5",
           name: "Kimi K2.5 (Configured)",
           alias: "Kimi K2.5 (NVIDIA)",
           contextWindow: 32_000,
@@ -933,9 +933,9 @@ describe("model-selection", () => {
       const cfg = {
         agents: {
           defaults: {
-            model: { primary: "nvidia/nemotron-3-super-120b-a12b" },
+            model: { primary: "nvidia/nvidia/nemotron-3-super-120b-a12b" },
             models: {
-              "nvidia/nemotron-3-super-120b-a12b": {},
+              "nvidia/nvidia/nemotron-3-super-120b-a12b": {},
             },
           },
         },
@@ -953,7 +953,7 @@ describe("model-selection", () => {
       });
     });
 
-    it("restores configured NVIDIA vendor ids under the NVIDIA namespace", () => {
+    it("keeps configured NVIDIA vendor ids under the selected NVIDIA provider", () => {
       const cfg = {
         agents: {
           defaults: {
@@ -970,7 +970,7 @@ describe("model-selection", () => {
 
       expect(result).toEqual({
         provider: "nvidia",
-        model: "nvidia/moonshotai/kimi-k2.5",
+        model: "moonshotai/kimi-k2.5",
       });
     });
 
@@ -979,7 +979,7 @@ describe("model-selection", () => {
         cfg: {
           agents: {
             defaults: {
-              model: { primary: "nvidia/nemotron-3-super-120b-a12b" },
+              model: { primary: "nvidia/nvidia/nemotron-3-super-120b-a12b" },
             },
           },
           models: {

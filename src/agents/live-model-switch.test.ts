@@ -283,6 +283,32 @@ describe("live model switch", () => {
     });
   });
 
+  it("does not strip NVIDIA-prefixed ids from persisted overrides", async () => {
+    state.loadSessionStoreMock.mockReturnValue({
+      main: {
+        providerOverride: "nvidia",
+        modelOverride: "nvidia/nemotron-3-super-120b-a12b",
+      },
+    });
+
+    const { resolveLiveSessionModelSelection } = await loadModule();
+
+    expect(
+      resolveLiveSessionModelSelection({
+        cfg: { session: { store: "/tmp/custom-store.json" } },
+        sessionKey: "main",
+        agentId: "reply",
+        defaultProvider: "anthropic",
+        defaultModel: "claude-opus-4-6",
+      }),
+    ).toEqual({
+      provider: "nvidia",
+      model: "nvidia/nemotron-3-super-120b-a12b",
+      authProfileId: undefined,
+      authProfileIdSource: undefined,
+    });
+  });
+
   it("strips duplicated provider prefixes from persisted overrides", async () => {
     state.loadSessionStoreMock.mockReturnValue({
       main: {

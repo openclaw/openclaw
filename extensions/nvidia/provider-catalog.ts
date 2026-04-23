@@ -10,14 +10,6 @@ const NVIDIA_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
-export function normalizeNvidiaModelId(modelId: string): string {
-  const trimmed = modelId.trim();
-  if (!trimmed || trimmed.startsWith("nvidia/")) {
-    return trimmed;
-  }
-  return `nvidia/${trimmed}`;
-}
-
 export function buildNvidiaProvider(): ModelProviderConfig {
   return {
     baseUrl: NVIDIA_BASE_URL,

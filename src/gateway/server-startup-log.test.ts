@@ -81,7 +81,7 @@ describe("gateway startup log", () => {
       cfg: {
         agents: {
           defaults: {
-            model: { primary: "nvidia/nemotron-3-super-120b-a12b" },
+            model: { primary: "nvidia/nvidia/nemotron-3-super-120b-a12b" },
           },
         },
       },

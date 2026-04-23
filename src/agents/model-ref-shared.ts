@@ -1,6 +1,5 @@
 import {
   normalizeGooglePreviewModelId,
-  normalizeNativeNvidiaModelId,
   normalizeNativeXaiModelId,
 } from "../plugin-sdk/provider-model-id-normalize.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
@@ -72,9 +71,6 @@ export function normalizeStaticProviderModelId(provider: string, model: string):
   }
   if (provider === "xai") {
     return normalizeNativeXaiModelId(model);
-  }
-  if (provider === "nvidia") {
-    return normalizeNativeNvidiaModelId(model);
   }
   if (provider === "vercel-ai-gateway" && !model.includes("/")) {
     const normalizedAnthropicModel = normalizeAnthropicModelId(model);
