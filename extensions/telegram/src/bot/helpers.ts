@@ -40,6 +40,7 @@ export {
 };
 
 const TELEGRAM_GENERAL_TOPIC_ID = 1;
+const telegramForumFlagByChatId = new Map<string, boolean>();
 
 function hadUnsafeTelegramText(raw: unknown, sanitized: string): boolean {
   return typeof raw === "string" && raw.trim().length > 0 && sanitized.trim().length === 0;
@@ -71,8 +72,15 @@ export async function resolveTelegramForumFlag(params: {
   if (!params.isGroup || params.chatType !== "supergroup" || !params.getChat) {
     return false;
   }
+  const cacheKey = String(params.chatId);
+  const cached = telegramForumFlagByChatId.get(cacheKey);
+  if (cached !== undefined) {
+    return cached;
+  }
   try {
-    return extractTelegramForumFlag(await params.getChat(params.chatId)) === true;
+    const resolved = extractTelegramForumFlag(await params.getChat(params.chatId)) === true;
+    telegramForumFlagByChatId.set(cacheKey, resolved);
+    return resolved;
   } catch {
     return false;
   }

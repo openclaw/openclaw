@@ -52,13 +52,26 @@ describe("resolveTelegramForumFlag", () => {
     const getChat = vi.fn(async () => ({ is_forum: true }));
     await expect(
       resolveTelegramForumFlag({
-        chatId: -100123,
+        chatId: -100789,
         chatType: "supergroup",
         isGroup: true,
         getChat,
       }),
     ).resolves.toBe(true);
-    expect(getChat).toHaveBeenCalledWith(-100123);
+    expect(getChat).toHaveBeenCalledWith(-100789);
+  });
+
+  it("reuses resolved forum metadata for later supergroup updates", async () => {
+    const getChat = vi.fn(async () => ({ is_forum: true }));
+    const params = {
+      chatId: -100456,
+      chatType: "supergroup" as const,
+      isGroup: true,
+      getChat,
+    };
+    await expect(resolveTelegramForumFlag(params)).resolves.toBe(true);
+    await expect(resolveTelegramForumFlag(params)).resolves.toBe(true);
+    expect(getChat).toHaveBeenCalledTimes(1);
   });
 
   it("returns false when forum lookup is unavailable", async () => {
@@ -67,7 +80,7 @@ describe("resolveTelegramForumFlag", () => {
     });
     await expect(
       resolveTelegramForumFlag({
-        chatId: -100123,
+        chatId: -100999,
         chatType: "supergroup",
         isGroup: true,
         getChat,
