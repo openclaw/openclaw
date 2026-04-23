@@ -482,7 +482,7 @@ async function captureHeartbeatTranscriptState(params: {
   agentId?: string;
 }) {
   try {
-    const store = loadSessionStore(params.storePath);
+    const store = loadSessionStore(params.storePath, { skipCache: true });
     const entry = store[params.sessionKey];
     if (!entry?.sessionId) {
       return {};
@@ -1232,7 +1232,7 @@ export async function runHeartbeatOnce(opts: {
       : normalized.text;
 
     if (delivery.channel === "none" || !delivery.to) {
-      if (hasExecCompletion && !canRelayToUser) {
+      if (hasExecCompletion) {
         // Internal-only exec wakes should not leave transcript-visible assistant
         // turns behind, or Control UI chat.history will surface them later.
         await pruneHeartbeatTranscript(transcriptState);
