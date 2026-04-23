@@ -1769,6 +1769,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                   onToolStart: async (payload) => {
                     await onDraftBoundary();
                     draftStream.update(buildMattermostToolStatusText(payload));
+                    hasStreamedMessage = true;
                   },
                 },
               }),
