@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { withServer } from "../../../test/helpers/http-test-server.js";
 import {
   createLifecycleMonitorSetup,
@@ -31,7 +31,7 @@ describe("Zalo pairing lifecycle", () => {
     });
   });
 
-  afterEach(async () => {
+  afterAll(async () => {
     await resetLifecycleTestState();
   });
 

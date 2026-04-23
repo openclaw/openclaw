@@ -520,6 +520,38 @@ describe("runSetupWizard", () => {
     }
   });
 
+  it("defers channel setup plugin loads during QuickStart until a channel is selected", async () => {
+    const prompter = buildWizardPrompter({});
+    const runtime = createRuntime();
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        authChoice: "skip",
+        installDaemon: false,
+        skipProviders: true,
+        skipChannels: false,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+      },
+      runtime,
+      prompter,
+    );
+
+    expect(setupChannels).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({
+        deferStatusUntilSelection: true,
+        quickstartDefaults: true,
+      }),
+    );
+  });
+
   it("prompts for a model during explicit interactive Ollama setup", async () => {
     promptDefaultModel.mockClear();
     resolveProviderPluginChoice.mockReturnValue({

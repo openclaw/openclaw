@@ -421,6 +421,9 @@ describe("scheduleRestartSentinelWake", () => {
         ctxPayload: expect.objectContaining({
           Body: "Reply with exactly: Yay! I did it!",
           BodyForAgent: "stamped:Reply with exactly: Yay! I did it!",
+          BodyForCommands: "",
+          CommandBody: "",
+          CommandAuthorized: false,
           SessionKey: "agent:main:main",
           Provider: "whatsapp",
           Surface: "whatsapp",

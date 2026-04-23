@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
 import {
   createImageLifecycleCore,
@@ -28,7 +28,7 @@ describe("Zalo polling image handling", () => {
     getZaloRuntimeMock.mockReturnValue(core);
   });
 
-  afterEach(async () => {
+  afterAll(async () => {
     await resetLifecycleTestState();
   });
 

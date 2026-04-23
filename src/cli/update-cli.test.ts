@@ -1307,6 +1307,65 @@ describe("update-cli", () => {
     expect(lastWrite?.nextConfig?.update?.channel).toBe("beta");
   });
 
+  it("uses source config, not runtime-materialized config, for post-update plugin sync", async () => {
+    const tempDir = createCaseDir("openclaw-update");
+    mockPackageInstallStatus(tempDir);
+    const sourceConfig = {
+      plugins: {
+        installs: {
+          "lossless-claw": {
+            source: "npm",
+            spec: "@martian-engineering/lossless-claw",
+            installPath: "/tmp/lossless-claw",
+          },
+        },
+      },
+    } as OpenClawConfig;
+    vi.mocked(readConfigFileSnapshot).mockResolvedValue({
+      ...baseSnapshot,
+      sourceConfig,
+      config: {
+        ...sourceConfig,
+        gateway: { auth: { mode: "token", token: "runtime" } },
+        plugins: {
+          ...sourceConfig.plugins,
+          entries: {
+            firecrawl: {
+              config: {
+                webFetch: { provider: "firecrawl" },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+    syncPluginsForUpdateChannel.mockResolvedValue({
+      changed: false,
+      config: sourceConfig,
+      summary: {
+        switchedToBundled: [],
+        switchedToNpm: [],
+        warnings: [],
+        errors: [],
+      },
+    });
+    updateNpmInstalledPlugins.mockResolvedValue({
+      changed: false,
+      config: sourceConfig,
+      outcomes: [],
+    });
+
+    await updateCommand({ channel: "beta", yes: true });
+
+    const syncConfig = vi.mocked(syncPluginsForUpdateChannel).mock.calls[0]?.[0]?.config as
+      | OpenClawConfig
+      | undefined;
+    expect(syncConfig?.plugins?.installs).toEqual(sourceConfig.plugins?.installs);
+    expect(syncConfig?.update?.channel).toBe("beta");
+    expect(syncConfig?.gateway?.auth).toBeUndefined();
+    expect(syncConfig?.plugins?.entries).toBeUndefined();
+  });
+
   it("skips plugin sync in the old process after switching from package to git", async () => {
     const tempDir = createCaseDir("openclaw-update");
     const completionCacheSpy = vi

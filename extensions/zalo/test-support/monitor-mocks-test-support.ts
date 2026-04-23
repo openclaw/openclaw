@@ -112,9 +112,6 @@ export async function resetLifecycleTestState() {
   for (const module of loadedMonitorModules) {
     module.__testing.clearHostedMediaRouteRefsForTest();
   }
-  (
-    await importMonitorModule({ cacheBust: "reset-monitor", mocked: false })
-  ).__testing.clearHostedMediaRouteRefsForTest();
   loadedMonitorModules.clear();
   setActivePluginRegistry(createEmptyPluginRegistry());
 }
