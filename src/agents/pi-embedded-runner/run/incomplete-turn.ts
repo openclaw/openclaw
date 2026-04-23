@@ -180,14 +180,15 @@ export function resolveIncompleteTurnPayloadText(params: {
   }
 
   // If the assistant already delivered user-visible content via a messaging
-  // tool during this turn, suppress the incomplete-turn warning unless a real
-  // provider error occurred (stopReason=error). The user has received the reply;
-  // a follow-up "couldn't generate a response" bubble is always a false positive
-  // in that case. Provider errors must still surface so the auth profile gets
-  // marked failed and enters cooldown (run.ts error-path handling).
+  // tool during this turn, suppress the incomplete-turn warning unless:
+  // - stopReason is "error" (real provider failure — must surface for auth profile
+  //   cooldown), or
+  // - stopReason is "toolUse" (turn interrupted mid-tool-chain — must surface the
+  //   side-effect warning even though a message was sent).
   if (
     params.attempt.didSendViaMessagingTool &&
-    params.attempt.lastAssistant?.stopReason !== "error"
+    params.attempt.lastAssistant?.stopReason !== "error" &&
+    params.attempt.lastAssistant?.stopReason !== "toolUse"
   ) {
     return null;
   }
