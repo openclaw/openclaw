@@ -15,11 +15,11 @@ OpenAI, Anthropic, Gemini, Mistral, Bedrock, Ollama, and more — with built-in
 secrets management, fallback/retry, traffic splitting, and budget tracking, all
 configured through the MLflow UI.
 
-| Property | Value                    |
-| -------- | ------------------------ |
-| Provider | `openai` (via `api_base`) |
-| Auth     | Managed by the gateway   |
-| API      | OpenAI-compatible        |
+| Property | Value                                          |
+| -------- | ---------------------------------------------- |
+| Provider | `openai` (via `models.providers.openai.baseUrl`) |
+| Auth     | Managed by the gateway                         |
+| API      | OpenAI-compatible                              |
 
 ## Getting started
 
@@ -38,17 +38,20 @@ configured through the MLflow UI.
     See the [MLflow AI Gateway documentation](https://mlflow.org/docs/latest/genai/governance/ai-gateway/endpoints/)
     for details on endpoint configuration.
   </Step>
-  <Step title="Point OpenClaw to the gateway">
-    ```bash
-    export OPENAI_API_BASE=http://localhost:5000/gateway/openai/v1
-    export OPENAI_API_KEY=unused  # provider keys are managed by the gateway
-    ```
-  </Step>
-  <Step title="Set a default model">
-    Use your gateway endpoint name as the model:
+  <Step title="Configure OpenClaw">
+    Point the OpenAI provider's base URL to the gateway and set your gateway
+    endpoint name as the default model:
 
     ```json5
     {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "http://localhost:5000/gateway/openai/v1",
+            apiKey: "",  // provider keys are managed by the gateway
+          },
+        },
+      },
       agents: {
         defaults: {
           model: { primary: "openai/my-chat-endpoint" },
@@ -56,24 +59,37 @@ configured through the MLflow UI.
       },
     }
     ```
+
+    Replace `my-chat-endpoint` with the endpoint name you created in the MLflow UI.
+
+    The gateway is **provider-agnostic** — the same config works whether your
+    endpoint routes to OpenAI, Anthropic, Gemini, Mistral, or any other supported
+    provider. For example, you can create separate endpoints for different models
+    and switch between them:
+
+    ```json5
+    {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "http://localhost:5000/gateway/openai/v1",
+            apiKey: "",
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          // Any of these work — the gateway routes to the right provider:
+          // model: { primary: "openai/gpt4o-endpoint" },       // → OpenAI
+          // model: { primary: "openai/claude-endpoint" },       // → Anthropic
+          // model: { primary: "openai/gemini-endpoint" },       // → Google
+          model: { primary: "openai/my-chat-endpoint" },
+        },
+      },
+    }
+    ```
   </Step>
 </Steps>
-
-### Config file example
-
-```json5
-{
-  env: {
-    OPENAI_API_BASE: "http://localhost:5000/gateway/openai/v1",
-    OPENAI_API_KEY: "unused",
-  },
-  agents: {
-    defaults: {
-      model: { primary: "openai/my-chat-endpoint" },
-    },
-  },
-}
-```
 
 ## Why use MLflow Gateway?
 
