@@ -478,6 +478,35 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
     }
   });
 
+  it("flags undeclared imports from mjs and cjs root dist files", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      writePackageFile(packageRoot, "package.json", {
+        version: "2026.4.22",
+        dependencies: {},
+      });
+      mkdirSync(join(packageRoot, "dist"), { recursive: true });
+      writeFileSync(
+        join(packageRoot, "dist", "esm-entry.mjs"),
+        'export { value } from "mjs-only";\n',
+        "utf8",
+      );
+      writeFileSync(
+        join(packageRoot, "dist", "cjs-entry.cjs"),
+        'const cjsOnly = require("cjs-only");\nmodule.exports = cjsOnly;\n',
+        "utf8",
+      );
+
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([
+        "installed package root is missing declared runtime dependency 'cjs-only' for dist importers: cjs-entry.cjs. Add it to package.json dependencies/optionalDependencies.",
+        "installed package root is missing declared runtime dependency 'mjs-only' for dist importers: esm-entry.mjs. Add it to package.json dependencies/optionalDependencies.",
+      ]);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
   it("ignores import-like text inside comments", () => {
     const packageRoot = makeInstalledPackageRoot();
 

@@ -54,6 +54,7 @@ const NODE_BUILTIN_MODULES = new Set(builtinModules.map((name) => name.replace(/
 const MAX_INSTALLED_ROOT_PACKAGE_JSON_BYTES = 1024 * 1024;
 const MAX_INSTALLED_ROOT_DIST_JS_BYTES = 2 * 1024 * 1024;
 const MAX_INSTALLED_ROOT_DIST_JS_FILES = 5000;
+const ROOT_DIST_JAVASCRIPT_MODULE_FILE_RE = /\.(?:c|m)?js$/u;
 const require = createRequire(import.meta.url);
 const acorn = require("acorn") as typeof import("acorn");
 
@@ -141,7 +142,7 @@ function listDistJavaScriptFiles(packageRoot: string): string[] {
         pending.push(entryPath);
         continue;
       }
-      if (entry.isFile() && entry.name.endsWith(".js")) {
+      if (entry.isFile() && ROOT_DIST_JAVASCRIPT_MODULE_FILE_RE.test(entry.name)) {
         files.push(entryPath);
       }
     }
@@ -187,7 +188,7 @@ function listInstalledRootDistJavaScriptFiles(packageRoot: string): string[] {
         pending.push(entryPath);
         continue;
       }
-      if (entry.isFile() && entry.name.endsWith(".js")) {
+      if (entry.isFile() && ROOT_DIST_JAVASCRIPT_MODULE_FILE_RE.test(entry.name)) {
         files.push(entryPath);
       }
     }
