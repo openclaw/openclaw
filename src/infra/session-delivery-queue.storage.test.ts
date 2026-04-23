@@ -72,10 +72,24 @@ describe("session-delivery queue storage", () => {
       );
       const tmpPath = path.join(resolveSessionDeliveryQueueDir(tempDir), "orphan-entry.tmp");
       fs.writeFileSync(tmpPath, "stale tmp");
+      const staleAt = new Date(Date.now() - 60_000);
+      fs.utimesSync(tmpPath, staleAt, staleAt);
 
       await loadPendingSessionDeliveries(tempDir);
 
       expect(fs.existsSync(tmpPath)).toBe(false);
+    });
+  });
+
+  it("keeps fresh temporary queue files while a write may still be in flight", async () => {
+    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+      const tmpPath = path.join(resolveSessionDeliveryQueueDir(tempDir), "active-entry.tmp");
+      fs.mkdirSync(path.dirname(tmpPath), { recursive: true });
+      fs.writeFileSync(tmpPath, "active tmp");
+
+      await loadPendingSessionDeliveries(tempDir);
+
+      expect(fs.existsSync(tmpPath)).toBe(true);
     });
   });
 });
