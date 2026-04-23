@@ -351,7 +351,7 @@ describe("bundled plugin metadata", () => {
     ).toBe(path.join(pluginRoot, "index.ts"));
   });
 
-  it("prefers dist/extensions over scanDir fallback when both contain built artifacts", () => {
+  it("prefers dist/extensions over scanDir fallback when built artifacts exist", () => {
     const pluginsDir = createGeneratedPluginTempRoot("openclaw-bundled-plugin-dist-priority-");
     const pluginRoot = path.join(pluginsDir, "alpha");
     const nestedDistPluginRoot = path.join(pluginsDir, "dist", "extensions", "alpha");
@@ -378,7 +378,7 @@ describe("bundled plugin metadata", () => {
     ).toBe(path.join(nestedDistPluginRoot, "index.js"));
   });
 
-  it("resolves bundled repo entry paths from dist before workspace source", () => {
+  it("resolves bundled repo entry paths from dist before workspace source (preferBuilt)", () => {
     const tempRoot = createGeneratedPluginTempRoot("openclaw-bundled-plugin-repo-entry-");
     const pluginRoot = path.join(tempRoot, "extensions", "alpha");
     const distPluginRoot = path.join(tempRoot, "dist", "extensions", "alpha");
