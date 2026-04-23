@@ -210,7 +210,6 @@ export function isCompactionFailureError(errorMessage?: string): boolean {
 const OBSERVED_OVERFLOW_TOKEN_PATTERNS = [
   /prompt is too long:\s*([\d,]+)(?:\s+tokens)?(?:\s*>\s*[\d,]+\s+maximum|\s*,\s*model maximum context length\s*:\s*[\d,]+)?/i,
   /requested\s+([\d,]+)\s+tokens/i,
-  /you requested\s+([\d,]+)\s+tokens/i,
   /requested\s*:\s*([\d,]+)/i,
   /resulted in\s+([\d,]+)\s+tokens/i,
   /request exceeded model token limit\s*:\s*[\d,]+\s*\(requested\s*:\s*([\d,]+)\)/i,
