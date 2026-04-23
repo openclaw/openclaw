@@ -566,11 +566,51 @@ describe("gateway server chat", () => {
     const imageBlock = firstMessage?.content?.[1];
     expect(imageBlock?.type).toBe("image");
     expect(imageBlock).not.toHaveProperty("data");
+    expect(imageBlock).not.toHaveProperty("mimeType");
     expect(imageBlock?.source).toEqual({
       type: "base64",
       media_type: "image/png",
       data: "abc123==",
     });
+  });
+
+  test("chat.history omits oversized inline image payloads without replacing the full turn", async () => {
+    const historyMessages = await loadChatHistoryWithMessages([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "keep this text" },
+          { type: "image", data: "A".repeat(70_000), mimeType: "image/png" },
+        ],
+        timestamp: 1,
+      },
+    ]);
+
+    const firstMessage = historyMessages[0] as
+      | {
+          content?: Array<{
+            type?: string;
+            source?: {
+              type?: string;
+              media_type?: string;
+              omitted?: boolean;
+              bytes?: number;
+              data?: string;
+            };
+          }>;
+        }
+      | undefined;
+    const textBlock = firstMessage?.content?.[0] as { text?: string } | undefined;
+    const imageBlock = firstMessage?.content?.[1];
+    expect(textBlock?.text).toBe("keep this text");
+    expect(imageBlock?.type).toBe("image");
+    expect(imageBlock?.source).toMatchObject({
+      type: "base64",
+      media_type: "image/png",
+      omitted: true,
+      bytes: 70_000,
+    });
+    expect(imageBlock?.source).not.toHaveProperty("data");
   });
 
   test("chat.history hides commentary-only assistant entries", async () => {

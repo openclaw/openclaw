@@ -142,6 +142,7 @@ async function buildWebchatAssistantMediaMessage(
 
 export const DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS = 8_000;
 export const CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES = 128 * 1024;
+const CHAT_HISTORY_MAX_INLINE_IMAGE_DATA_BYTES = 48 * 1024;
 const CHAT_HISTORY_OVERSIZED_PLACEHOLDER = "[chat.history omitted: message too large]";
 let chatHistoryPlaceholderEmitCount = 0;
 const CHANNEL_AGNOSTIC_SESSION_SCOPES = new Set([
@@ -696,6 +697,7 @@ function sanitizeChatHistoryContentBlock(
   const type = typeof entry.type === "string" ? entry.type : "";
   if (type === "image" && typeof entry.data === "string") {
     const data = entry.data;
+    const bytes = Buffer.byteLength(data, "utf8");
     delete entry.data;
     entry.source = {
       type: "base64",
@@ -703,8 +705,14 @@ function sanitizeChatHistoryContentBlock(
         typeof entry.mimeType === "string" && entry.mimeType.trim().length > 0
           ? entry.mimeType
           : "image/png",
-      data,
     };
+    if (bytes <= CHAT_HISTORY_MAX_INLINE_IMAGE_DATA_BYTES) {
+      (entry.source as { data?: string }).data = data;
+    } else {
+      (entry.source as { omitted?: boolean; bytes?: number }).omitted = true;
+      (entry.source as { omitted?: boolean; bytes?: number }).bytes = bytes;
+    }
+    delete entry.mimeType;
     changed = true;
   }
   if (type === "audio" && entry.source && typeof entry.source === "object") {
