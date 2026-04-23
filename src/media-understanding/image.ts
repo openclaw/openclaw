@@ -8,6 +8,7 @@ import {
 } from "../agents/model-auth.js";
 import { findNormalizedProviderValue, normalizeModelRef } from "../agents/model-selection.js";
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
+import { sanitizeModelHeaders } from "../agents/pi-embedded-runner/model.inline-provider.js";
 import { resolveModelWithRegistry } from "../agents/pi-embedded-runner/model.js";
 import { resolveProviderRequestCapabilities } from "../agents/provider-attribution.js";
 import {
@@ -146,10 +147,21 @@ async function resolveImageRuntime(params: {
         m.id === `${resolvedRef.provider}/${resolvedRef.model}`,
     );
     if (configuredModel?.input?.includes("image")) {
+      // Preserve per-model headers (e.g. routing/version headers for vllm)
+      // since resolveConfiguredFallbackModel missed this config entry due to
+      // exact-id matching on the unprefixed modelId. Model-level headers
+      // override provider-level headers already on the resolved model.
+      const configuredModelHeaders = sanitizeModelHeaders(configuredModel.headers, {
+        stripSecretRefMarkers: true,
+      });
+      const mergedHeaders = configuredModelHeaders
+        ? { ...(model.headers ?? {}), ...configuredModelHeaders }
+        : model.headers;
       model = {
         ...model,
         input: configuredModel.input,
         ...(configuredModel.api ? { api: configuredModel.api } : {}),
+        ...(mergedHeaders ? { headers: mergedHeaders } : {}),
       } as Model<Api>;
     }
   }
