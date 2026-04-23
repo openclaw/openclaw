@@ -320,7 +320,7 @@ describe("fetchWithTimeoutGuarded", () => {
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
       expect.objectContaining({
         url: "https://example.com",
-        timeoutMs: 60_000,
+        timeoutMs: 300_000,
       }),
     );
   });

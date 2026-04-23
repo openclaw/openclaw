@@ -19,7 +19,7 @@ export { normalizeBaseUrl } from "../agents/provider-request-config.js";
 
 const MAX_ERROR_CHARS = 300;
 const MAX_ERROR_RESPONSE_BYTES = 4096;
-const DEFAULT_GUARDED_HTTP_TIMEOUT_MS = 60_000;
+const DEFAULT_GUARDED_HTTP_TIMEOUT_MS = 300_000; // 5 minutes — covers Ollama cold-start (30–90s model load)
 const MAX_AUDIT_CONTEXT_CHARS = 80;
 
 export type ProviderOperationDeadline = {
