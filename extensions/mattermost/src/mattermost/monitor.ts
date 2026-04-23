@@ -1688,8 +1688,13 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           hasStreamedMessage = true;
         };
 
-        const onDraftBoundary = () => {
+        const onDraftBoundary = async () => {
           if (hasStreamedMessage) {
+            try {
+              await draftStream.flush();
+            } catch (err) {
+              logVerboseMessage(`mattermost draft flush failed: ${String(err)}`);
+            }
             draftStream.forceNewMessage();
             hasStreamedMessage = false;
           }
@@ -1762,7 +1767,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                     }
                   },
                   onToolStart: async (payload) => {
-                    onDraftBoundary();
+                    await onDraftBoundary();
                     draftStream.update(buildMattermostToolStatusText(payload));
                   },
                 },
