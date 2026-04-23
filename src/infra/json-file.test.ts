@@ -137,6 +137,26 @@ describe("json-file helpers", () => {
   });
 
   it.skipIf(process.platform === "win32")(
+    "fails loud when symlink target directory is missing (e.g. unmounted volume)",
+    async () => {
+      await withTempDir({ prefix: "openclaw-json-file-" }, async (root) => {
+        const linkDir = path.join(root, "link");
+        fs.mkdirSync(linkDir);
+        const pathname = path.join(linkDir, "state.json");
+        // Absolute target pointing into a directory tree that does not exist.
+        const missing = path.join(root, "missing-mount", "state.json");
+        fs.symlinkSync(missing, pathname);
+
+        expect(() => saveJsonFile(pathname, { v: 1 })).toThrow(
+          /symlink target directory does not exist/,
+        );
+        // And the bogus local tree must not be materialised.
+        expect(fs.existsSync(path.join(root, "missing-mount"))).toBe(false);
+      });
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
     "detects symlink cycles",
     async () => {
       await withTempDir({ prefix: "openclaw-json-file-" }, async (root) => {
