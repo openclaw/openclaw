@@ -480,4 +480,32 @@ describe("gateway config mutation guard coverage", () => {
       },
     );
   });
+
+  it("allows requireMention edits at Telegram topic depth via config.patch", () => {
+    expectAllowed(
+      {
+        channels: {
+          telegram: {
+            groups: {
+              "-1001234567890": {
+                requireMention: true,
+                topics: { "99": { requireMention: true } },
+              },
+            },
+          },
+        },
+      },
+      {
+        channels: {
+          telegram: {
+            groups: {
+              "-1001234567890": {
+                topics: { "99": { requireMention: false } },
+              },
+            },
+          },
+        },
+      },
+    );
+  });
 });
