@@ -1585,10 +1585,15 @@ describe("runHeartbeatOnce", () => {
       });
       expect(res.status).toBe("ran");
       expect(sendWhatsApp).toHaveBeenCalledTimes(0);
-      const calledCtx = replySpy.mock.calls[0]?.[0] as { Provider?: string; Body?: string };
+      const calledCtx = replySpy.mock.calls[0]?.[0] as {
+        Provider?: string;
+        Body?: string;
+        InputProvenance?: { kind?: string };
+      };
       expect(calledCtx.Provider).toBe("cron-event");
       expect(calledCtx.Body).toContain("Handle this reminder internally");
       expect(calledCtx.Body).not.toContain("Please relay this reminder to the user");
+      expect(calledCtx.InputProvenance?.kind).toBe("internal_system");
     } finally {
       replySpy.mockReset();
     }

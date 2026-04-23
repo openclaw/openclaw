@@ -59,6 +59,7 @@ import {
   toAgentStoreSessionKey,
 } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import type { InputProvenance } from "../sessions/input-provenance.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -981,6 +982,7 @@ export async function runHeartbeatOnce(opts: {
     Provider: hasExecCompletion ? "exec-event" : hasCronEvents ? "cron-event" : "heartbeat",
     SessionKey: runSessionKey,
     ForceSenderIsOwnerFalse: hasExecCompletion || hasUntrustedPendingEvents,
+    InputProvenance: { kind: "internal_system" } satisfies InputProvenance,
   };
   if (!visibility.showAlerts && !visibility.showOk && !visibility.useIndicator) {
     emitHeartbeatEvent({

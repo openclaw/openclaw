@@ -756,19 +756,15 @@ describe("loadChatHistory", () => {
   it("filters heartbeat acknowledgements and internal-only user messages", async () => {
     const request = vi.fn().mockResolvedValue({
       messages: [
-        { role: "assistant", content: [{ type: "text", text: "HEARTBEAT_OK" }] },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "HEARTBEAT_OK" }],
+          provenance: { kind: "internal_system" },
+        },
         {
           role: "user",
-          content: [
-            {
-              type: "text",
-              text: [
-                "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
-                "subagent completion payload",
-                "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
-              ].join("\n"),
-            },
-          ],
+          content: [{ type: "text", text: "subagent completion payload" }],
+          provenance: { kind: "internal_system" },
         },
         { role: "assistant", content: [{ type: "text", text: "visible answer" }] },
       ],

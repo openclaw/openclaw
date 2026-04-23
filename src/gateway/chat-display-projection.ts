@@ -353,6 +353,21 @@ function hasAssistantNonTextContent(message: unknown): boolean {
   );
 }
 
+function shouldDropSystemOriginUserMessage(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const entry = message as { role?: unknown; provenance?: unknown };
+  if (entry.role !== "user") {
+    return false;
+  }
+  const provenance = entry.provenance;
+  if (!provenance || typeof provenance !== "object") {
+    return false;
+  }
+  return (provenance as { kind?: unknown }).kind === "internal_system";
+}
+
 function shouldDropAssistantHistoryMessage(message: unknown): boolean {
   if (!message || typeof message !== "object") {
     return false;
@@ -381,7 +396,7 @@ export function sanitizeChatHistoryMessages(
   let changed = false;
   const next: unknown[] = [];
   for (const message of messages) {
-    if (shouldDropAssistantHistoryMessage(message)) {
+    if (shouldDropAssistantHistoryMessage(message) || shouldDropSystemOriginUserMessage(message)) {
       changed = true;
       continue;
     }

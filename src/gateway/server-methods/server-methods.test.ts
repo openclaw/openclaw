@@ -455,6 +455,49 @@ describe("sanitizeChatHistoryMessages", () => {
       },
     ]);
   });
+
+  it("drops user messages with provenance.kind === internal_system", () => {
+    const result = sanitizeChatHistoryMessages([
+      {
+        role: "user",
+        content: "⏰ reminder: check logs",
+        provenance: { kind: "internal_system" },
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Checked the logs." }],
+        timestamp: 2,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Checked the logs." }],
+        timestamp: 2,
+      },
+    ]);
+  });
+
+  it("keeps user messages without provenance or with non-system provenance", () => {
+    const messages = [
+      {
+        role: "user",
+        content: "hello from human",
+        timestamp: 1,
+      },
+      {
+        role: "user",
+        content: "hello from external user",
+        provenance: { kind: "external_user" },
+        timestamp: 2,
+      },
+    ];
+
+    const result = sanitizeChatHistoryMessages(messages);
+    expect(result).toBe(messages);
+  });
 });
 
 describe("projectRecentChatDisplayMessages", () => {
