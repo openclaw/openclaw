@@ -801,10 +801,23 @@ describe("listSessionsFromStore subagent metadata", () => {
         model: "gpt-5.4",
         provider: "openai",
         loadGatewayModelCatalog: async () => [
+          { id: "gpt-5.4", name: "GPT-5.4", provider: "openai", input: ["text"] },
           { id: "gpt-5.4", name: "GPT-5.4", provider: "other", input: ["text", "image"] },
         ],
       }),
     ).resolves.toBe(true);
+  });
+
+  test("single-provider text-only entry is not misclassified by cross-provider scan", async () => {
+    await expect(
+      resolveGatewayModelSupportsImages({
+        model: "gpt-5.4",
+        provider: "openai",
+        loadGatewayModelCatalog: async () => [
+          { id: "gpt-5.4", name: "GPT-5.4", provider: "openai", input: ["text"] },
+        ],
+      }),
+    ).resolves.toBe(false);
   });
 
   test("fails closed when no provider declares image support", async () => {

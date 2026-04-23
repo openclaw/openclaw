@@ -1163,8 +1163,11 @@ export async function resolveGatewayModelSupportsImages(params: {
       ) {
         return true;
       }
-      // Cross-provider fallback: in merge mode another provider's catalog
-      // entry for the same model may declare image capability.
+      // Cross-provider fallback: when the same model ID is served by multiple
+      // providers (merge mode), the requesting provider's entry may lack image
+      // capability while another provider's entry declares it.  Only activate
+      // when the catalog actually contains this model on more than one provider
+      // so single-provider setups are never misclassified.
       if (
         params.provider &&
         catalog.some(
@@ -1190,7 +1193,7 @@ export async function resolveGatewayModelSupportsImages(params: {
     ) {
       return true;
     }
-    // Cross-provider fallback for the no-entry path.
+    // Cross-provider fallback for the no-entry path (same merge-mode guard).
     if (
       params.provider &&
       catalog.some(
