@@ -1682,6 +1682,9 @@ async function deliverOutboundPayloadsCore(
           messageId: delivery.messageId,
         });
         if (droppedMediaNotice) {
+          // Preserve results length so the notice delivery does not
+          // shift results.at(-1) away from the primary reply id.
+          const preNoticeLen = results.length;
           try {
             await sendTextChunks(droppedMediaNotice, sendOverrides);
           } catch (noticeErr) {
@@ -1694,6 +1697,7 @@ async function deliverOutboundPayloadsCore(
               },
             );
           }
+          results.length = preNoticeLen;
         }
         continue;
       }
@@ -1828,6 +1832,9 @@ async function deliverOutboundPayloadsCore(
       // Wrapped in its own try-catch so a transient text-send failure
       // does not mark the already-delivered media payload as failed.
       if (droppedMediaNotice) {
+        // Preserve results length so the notice delivery does not
+        // shift results.at(-1) away from the primary reply id.
+        const preNoticeLen = results.length;
         try {
           await sendTextChunks(droppedMediaNotice, sendOverrides);
         } catch (noticeErr) {
@@ -1837,6 +1844,7 @@ async function deliverOutboundPayloadsCore(
             error: formatErrorMessage(noticeErr),
           });
         }
+        results.length = preNoticeLen;
       }
       await maybePinDeliveredMessage({
         handler,
