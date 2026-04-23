@@ -1,4 +1,5 @@
 import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   deliverTextOrMediaReply,
   resolveSendableOutboundReplyParts,
@@ -6,6 +7,7 @@ import {
 import type { ChunkMode } from "openclaw/plugin-sdk/reply-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { markdownToSlackMrkdwnChunks } from "../format.js";
 import { SLACK_TEXT_LIMIT } from "../limits.js";
 import { resolveSlackReplyBlocks } from "../reply-blocks.js";
@@ -33,15 +35,53 @@ export async function deliverReplies(params: {
   replyToMode: "off" | "first" | "all" | "batched";
   identity?: SlackSendIdentity;
 }) {
+  const hookRunner = getGlobalHookRunner();
+  const hasMessageSendingHooks = hookRunner?.hasHooks("message_sending") ?? false;
+
   for (const payload of params.replies) {
     // Keep reply tags opt-in: when replyToMode is off, explicit reply tags
     // must not force threading.
     const inlineReplyToId = params.replyToMode === "off" ? undefined : payload.replyToId;
     const threadTs = inlineReplyToId ?? params.replyThreadTs;
-    const reply = resolveSendableOutboundReplyParts(payload);
+    let reply = resolveSendableOutboundReplyParts(payload);
     const slackBlocks = readSlackReplyBlocks(payload);
     if (!reply.hasContent && !slackBlocks?.length) {
       continue;
+    }
+
+    // Run message_sending plugin hooks before delivery (content filtering, cancel).
+    let activePayload = payload;
+    if (hasMessageSendingHooks) {
+      try {
+        const hookResult = await hookRunner?.runMessageSending(
+          {
+            to: params.target,
+            content: reply.text ?? "",
+            replyToId: inlineReplyToId ?? undefined,
+            threadId: threadTs,
+            metadata: {
+              channel: "slack",
+              accountId: params.accountId,
+              mediaUrls: reply.hasMedia ? payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []) : [],
+            },
+          },
+          {
+            channelId: "slack",
+            accountId: params.accountId ?? undefined,
+            conversationId: params.target,
+          },
+        );
+        if (hookResult?.cancel) {
+          logVerbose("slack reply: message_sending hook cancelled delivery");
+          continue;
+        }
+        if (typeof hookResult?.content === "string" && hookResult.content !== (reply.text ?? "")) {
+          activePayload = { ...payload, text: hookResult.content };
+          reply = resolveSendableOutboundReplyParts(activePayload);
+        }
+      } catch {
+        // Don't block delivery on hook failure.
+      }
     }
 
     if (!reply.hasMedia && slackBlocks?.length) {
@@ -65,7 +105,7 @@ export async function deliverReplies(params: {
     }
 
     const delivered = await deliverTextOrMediaReply({
-      payload,
+      payload: activePayload,
       text: reply.text,
       chunkText: !reply.hasMedia
         ? (value) => {

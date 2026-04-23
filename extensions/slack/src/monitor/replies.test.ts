@@ -5,6 +5,14 @@ vi.mock("../send.js", () => ({
   sendMessageSlack: (...args: unknown[]) => sendMock(...args),
 }));
 
+const messageHookRunner = {
+  hasHooks: vi.fn(),
+  runMessageSending: vi.fn(),
+};
+vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
+  getGlobalHookRunner: () => messageHookRunner,
+}));
+
 let deliverReplies: typeof import("./replies.js").deliverReplies;
 let createSlackReplyDeliveryPlan: typeof import("./replies.js").createSlackReplyDeliveryPlan;
 let resolveSlackThreadTs: typeof import("./replies.js").resolveSlackThreadTs;
@@ -33,6 +41,10 @@ describe("deliverReplies identity passthrough", () => {
 
   beforeEach(() => {
     sendMock.mockReset();
+    messageHookRunner.hasHooks.mockReset();
+    messageHookRunner.runMessageSending.mockReset();
+    // Default: no hooks registered
+    messageHookRunner.hasHooks.mockReturnValue(false);
   });
   it("passes identity to sendMessageSlack for text replies", async () => {
     sendMock.mockResolvedValue(undefined);
@@ -256,5 +268,73 @@ describe("deliverSlackSlashReplies chunking", () => {
       text,
       response_type: "ephemeral",
     });
+  });
+});
+
+describe("deliverReplies message_sending hook", () => {
+  beforeEach(() => {
+    sendMock.mockReset();
+    sendMock.mockResolvedValue(undefined);
+    messageHookRunner.hasHooks.mockReset();
+    messageHookRunner.runMessageSending.mockReset();
+  });
+
+  it("fires message_sending hook before sending a text reply", async () => {
+    messageHookRunner.hasHooks.mockReturnValue(true);
+    messageHookRunner.runMessageSending.mockResolvedValue(undefined);
+
+    await deliverReplies(baseParams({ accountId: "default" }));
+
+    expect(messageHookRunner.runMessageSending).toHaveBeenCalledTimes(1);
+    expect(messageHookRunner.runMessageSending).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "C123",
+        content: "hello",
+      }),
+      expect.objectContaining({
+        channelId: "slack",
+        accountId: "default",
+        conversationId: "C123",
+      }),
+    );
+    expect(sendMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels delivery when hook returns cancel: true", async () => {
+    messageHookRunner.hasHooks.mockReturnValue(true);
+    messageHookRunner.runMessageSending.mockResolvedValue({ cancel: true });
+
+    await deliverReplies(baseParams());
+
+    expect(messageHookRunner.runMessageSending).toHaveBeenCalledTimes(1);
+    expect(sendMock).not.toHaveBeenCalled();
+  });
+
+  it("applies modified content from hook", async () => {
+    messageHookRunner.hasHooks.mockReturnValue(true);
+    messageHookRunner.runMessageSending.mockResolvedValue({ content: "modified" });
+
+    await deliverReplies(baseParams());
+
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(sendMock.mock.calls[0][1]).toBe("modified");
+  });
+
+  it("skips hook when no message_sending hooks are registered", async () => {
+    messageHookRunner.hasHooks.mockReturnValue(false);
+
+    await deliverReplies(baseParams());
+
+    expect(messageHookRunner.runMessageSending).not.toHaveBeenCalled();
+    expect(sendMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("delivers normally when hook throws", async () => {
+    messageHookRunner.hasHooks.mockReturnValue(true);
+    messageHookRunner.runMessageSending.mockRejectedValue(new Error("plugin crash"));
+
+    await deliverReplies(baseParams());
+
+    expect(sendMock).toHaveBeenCalledTimes(1);
   });
 });
