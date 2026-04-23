@@ -15,12 +15,14 @@ on:
     paths:
       - 'src/mctl-skills/**'
       - 'src/mctl-identity/**'
+      - 'Dockerfile'
       - '.github/workflows/mctl-ci.yml'
   pull_request:
     types: [opened, reopened, synchronize, ready_for_review]
     paths:
       - 'src/mctl-skills/**'
       - 'src/mctl-identity/**'
+      - 'Dockerfile'
       - '.github/workflows/mctl-ci.yml'
 
 concurrency:
@@ -63,11 +65,19 @@ jobs:
           set -euo pipefail
           allowed="AGENTS.md SOUL.md IDENTITY.md USER.md TOOLS.md CLAUDE.md"
           fail=0
-          # Enumerate via `find` so dotfiles (.env, .token, …) are also checked
-          # — a bare glob excludes them and would let hidden credential files
-          # slip past validation and get copied into every built image.
+          # Enumerate every entry under src/mctl-identity — files, symlinks,
+          # AND nested directories. Dotfiles must be included (a bare glob
+          # would skip .env / .token); nested subdirs must be rejected (the
+          # Dockerfile COPY is recursive, so a hidden folder with non-*.md
+          # credential files would slip past the secret scan and ship to
+          # every tenant image).
           while IFS= read -r -d '' f; do
             base=$(basename "$f")
+            if [ -d "$f" ]; then
+              echo "::error file=$f::nested directories are not allowed in src/mctl-identity/"
+              fail=1
+              continue
+            fi
             # Every filename — including symlinks — must be in the allowlist,
             # so e.g. `notes.md -> AGENTS.md` can't sneak in under a
             # target-only check.
@@ -89,7 +99,7 @@ jobs:
                   ;;
               esac
             fi
-          done < <(find src/mctl-identity -mindepth 1 -maxdepth 1 \( -type f -o -type l \) -print0)
+          done < <(find src/mctl-identity -mindepth 1 -maxdepth 1 -print0)
           # Each identity workspace must ship AGENTS.md + the CLAUDE.md symlink
           # (repo-level rule in the top-level AGENTS.md).
           [ -f src/mctl-identity/AGENTS.md ] || { echo "::error::src/mctl-identity/AGENTS.md missing"; fail=1; }
