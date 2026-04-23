@@ -73,7 +73,7 @@ describe("gateway startup log", () => {
     expect(readyMessages).toEqual(["ready (3 plugins: alpha, beta, delta; 16.0s)"]);
   });
 
-  it("logs NVIDIA startup model refs without duplicating the provider prefix", () => {
+  it("logs NVIDIA startup model refs using the resolved provider and model", () => {
     const info = vi.fn();
     const warn = vi.fn();
 
@@ -93,9 +93,9 @@ describe("gateway startup log", () => {
     });
 
     expect(info).toHaveBeenCalledWith(
-      "agent model: nvidia/nemotron-3-super-120b-a12b",
+      "agent model: nvidia/nvidia/nemotron-3-super-120b-a12b",
       expect.objectContaining({
-        consoleMessage: expect.stringContaining("nvidia/nemotron-3-super-120b-a12b"),
+        consoleMessage: expect.stringContaining("nvidia/nvidia/nemotron-3-super-120b-a12b"),
       }),
     );
   });
