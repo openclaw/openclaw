@@ -15,6 +15,9 @@ const state = vi.hoisted(() => ({
   runWithModelFallbackMock: vi.fn(),
   isCliProviderMock: vi.fn((_: unknown) => false),
   isInternalMessageChannelMock: vi.fn((_: unknown) => false),
+  isCompactionFailureErrorMock: vi.fn((_: string | undefined) => false),
+  isContextOverflowErrorMock: vi.fn((_: string | undefined) => false),
+  isLikelyContextOverflowErrorMock: vi.fn((_: string | undefined) => false),
 }));
 
 vi.mock("../../agents/pi-embedded.js", () => ({
@@ -49,10 +52,11 @@ vi.mock("../../agents/bootstrap-budget.js", () => ({
 
 vi.mock("../../agents/pi-embedded-helpers.js", () => ({
   BILLING_ERROR_USER_MESSAGE: "billing",
-  isCompactionFailureError: () => false,
-  isContextOverflowError: () => false,
+  isCompactionFailureError: (message?: string) => state.isCompactionFailureErrorMock(message),
+  isContextOverflowError: (message?: string) => state.isContextOverflowErrorMock(message),
   isBillingErrorMessage: () => false,
-  isLikelyContextOverflowError: () => false,
+  isLikelyContextOverflowError: (message?: string) =>
+    state.isLikelyContextOverflowErrorMock(message),
   isRateLimitErrorMessage: () => false,
   isTransientHttpError: () => false,
   sanitizeUserFacingText: (text?: string) => text ?? "",
@@ -243,6 +247,12 @@ describe("runAgentTurnWithFallback", () => {
     state.isCliProviderMock.mockReturnValue(false);
     state.isInternalMessageChannelMock.mockReset();
     state.isInternalMessageChannelMock.mockReturnValue(false);
+    state.isCompactionFailureErrorMock.mockReset();
+    state.isCompactionFailureErrorMock.mockReturnValue(false);
+    state.isContextOverflowErrorMock.mockReset();
+    state.isContextOverflowErrorMock.mockReturnValue(false);
+    state.isLikelyContextOverflowErrorMock.mockReset();
+    state.isLikelyContextOverflowErrorMock.mockReturnValue(false);
     state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => ({
       result: await params.run("anthropic", "claude"),
       provider: "anthropic",
@@ -1535,6 +1545,107 @@ describe("runAgentTurnWithFallback", () => {
         "⚠️ Missing API key for the selected provider on the gateway. Configure provider auth, then try again.",
       );
     }
+  });
+
+  it("preserves the active session when embedded overflow recovery fails", async () => {
+    state.isContextOverflowErrorMock.mockReturnValue(true);
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {
+        error: {
+          message: "400 The prompt is too long: 203557, model maximum context length: 196607",
+        },
+      },
+    });
+
+    const resetSessionAfterCompactionFailure = vi.fn(async () => false);
+    const { replyOperation, failMock } = createMockReplyOperation();
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun: createFollowupRun(),
+      sessionCtx: {
+        Provider: "webchat",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      replyOperation,
+      opts: {},
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure,
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "agent:main:main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(resetSessionAfterCompactionFailure).not.toHaveBeenCalled();
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toBe(
+        "⚠️ Auto-compaction could not recover this turn. I kept this conversation mapped to the current session. Please try again, use /compact, or use /new to start a fresh session.",
+      );
+    }
+    expect(failMock).toHaveBeenCalledWith(
+      "run_failed",
+      expect.objectContaining({
+        message: "400 The prompt is too long: 203557, model maximum context length: 196607",
+      }),
+    );
+  });
+
+  it("preserves the active session when compaction failure is thrown before reply", async () => {
+    state.isCompactionFailureErrorMock.mockReturnValue(true);
+    state.runEmbeddedPiAgentMock.mockRejectedValueOnce(
+      new Error("Auto-compaction failed: nothing to compact"),
+    );
+
+    const resetSessionAfterCompactionFailure = vi.fn(async () => false);
+    const { replyOperation, failMock } = createMockReplyOperation();
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun: createFollowupRun(),
+      sessionCtx: {
+        Provider: "webchat",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      replyOperation,
+      opts: {},
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure,
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "agent:main:main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(resetSessionAfterCompactionFailure).not.toHaveBeenCalled();
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toBe(
+        "⚠️ Auto-compaction could not recover this turn. I kept this conversation mapped to the current session. Please try again, use /compact, or use /new to start a fresh session.",
+      );
+    }
+    expect(failMock).toHaveBeenCalledWith(
+      "run_failed",
+      expect.objectContaining({ message: "Auto-compaction failed: nothing to compact" }),
+    );
   });
 
   it("falls back to a generic reauth command when the provider in the OAuth error is unsafe", async () => {

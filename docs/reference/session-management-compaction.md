@@ -234,6 +234,9 @@ In the embedded Pi agent, auto-compaction triggers in two cases:
 number of tokens`, `input token count exceeds the maximum number of input
 tokens`, `input is too long for the model`, `ollama error: context length
 exceeded`, and similar provider-shaped variants) → compact → retry.
+   If overflow recovery still fails, OpenClaw surfaces explicit guidance to the
+   user and preserves the current session mapping instead of silently rotating
+   the session key to a fresh session id.
 2. **Threshold maintenance**: after a successful turn, when:
 
 `contextTokens > contextWindow - reserveTokens`

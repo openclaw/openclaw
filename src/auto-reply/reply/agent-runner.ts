@@ -1179,12 +1179,7 @@ export async function runReplyAgent(params: {
           activeIsNewSession = true;
         },
       });
-    const resetSessionAfterCompactionFailure = async (reason: string): Promise<boolean> =>
-      resetSession({
-        failureLabel: "compaction failure",
-        buildLogMessage: (nextSessionId) =>
-          `Auto-compaction failed (${reason}). Restarting session ${sessionKey} -> ${nextSessionId} and retrying.`,
-      });
+    const resetSessionAfterCompactionFailure = async (_reason: string): Promise<boolean> => false;
     const resetSessionAfterRoleOrderingConflict = async (reason: string): Promise<boolean> =>
       resetSession({
         failureLabel: "role ordering conflict",
