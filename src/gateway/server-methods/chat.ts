@@ -146,7 +146,7 @@ async function buildWebchatAudioOnlyAssistantMessage(
 }
 
 export const DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS = 300_000;
-const CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES = 512 * 1024;
+const CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES = 104857600;
 const CHAT_HISTORY_OVERSIZED_PLACEHOLDER = "[chat.history omitted: message too large]";
 let chatHistoryPlaceholderEmitCount = 0;
 const CHANNEL_AGNOSTIC_SESSION_SCOPES = new Set([
