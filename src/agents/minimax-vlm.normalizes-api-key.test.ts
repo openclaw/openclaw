@@ -106,10 +106,22 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
 });
 
 describe("isMinimaxVlmModel", () => {
-  it("only matches the canonical MiniMax VLM model id", async () => {
-    expect(isMinimaxVlmModel("minimax", "MiniMax-VL-01")).toBe(true);
-    expect(isMinimaxVlmModel("minimax-portal", "MiniMax-VL-01")).toBe(true);
-    expect(isMinimaxVlmModel("minimax-portal", "custom-vision")).toBe(false);
-    expect(isMinimaxVlmModel("openai", "MiniMax-VL-01")).toBe(false);
+  it.each([
+    ["minimax", "MiniMax-VL-01"],
+    ["minimax-portal", "MiniMax-VL-01"],
+    ["minimax-portal", " MiniMax-VL-01 "],
+  ])("recognizes supported MiniMax VLM models for %s/%s", async (provider, modelId) => {
+    expect(isMinimaxVlmModel(provider, modelId)).toBe(true);
+  });
+
+  it.each([
+    ["minimax", "MiniMax-M2.5"],
+    ["minimax", "MiniMax-M2.7"],
+    ["minimax", "MiniMax-M2.7-highspeed"],
+    ["minimax", "MiniMax-Text-01"],
+    ["minimax-portal", "custom-vision"],
+    ["openai", "MiniMax-VL-01"],
+  ])("rejects unsupported models for %s/%s", async (provider, modelId) => {
+    expect(isMinimaxVlmModel(provider, modelId)).toBe(false);
   });
 });
