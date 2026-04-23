@@ -103,11 +103,11 @@ export function extractToolResultId(
 ): string | null {
   const toolCallId = (msg as { toolCallId?: unknown }).toolCallId;
   if (typeof toolCallId === "string" && toolCallId) {
-    return normalizeMangledToolCallId(toolCallId);
+    return toolCallId;
   }
   const toolUseId = (msg as { toolUseId?: unknown }).toolUseId;
   if (typeof toolUseId === "string" && toolUseId) {
-    return normalizeMangledToolCallId(toolUseId);
+    return toolUseId;
   }
   return null;
 }

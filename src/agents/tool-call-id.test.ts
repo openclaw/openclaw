@@ -188,7 +188,7 @@ describe("normalizeMangledToolCallId", () => {
 });
 
 describe("extractToolResultId", () => {
-  it("normalizes mangled tool result IDs before pairing", () => {
+  it("preserves raw mangled tool result IDs for pairing", () => {
     const message = castAgentMessages([
       {
         role: "toolResult",
@@ -198,7 +198,7 @@ describe("extractToolResultId", () => {
       },
     ])[0] as Extract<AgentMessage, { role: "toolResult" }>;
 
-    expect(extractToolResultId(message)).toBe("functions.exec:0");
+    expect(extractToolResultId(message)).toBe("functions exec:0");
   });
 });
 
