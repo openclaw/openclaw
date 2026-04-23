@@ -28,6 +28,9 @@ const serviceReadRuntime = vi.fn();
 const inspectPortUsage = vi.fn();
 const classifyPortListener = vi.fn();
 const formatPortDiagnostics = vi.fn();
+const waitForGatewayHealthyRestart = vi.fn();
+const terminateStaleGatewayPids = vi.fn();
+const renderRestartDiagnostics = vi.fn();
 const pathExists = vi.fn();
 const syncPluginsForUpdateChannel = vi.fn();
 const updateNpmInstalledPlugins = vi.fn();
@@ -159,6 +162,12 @@ vi.mock("../infra/ports.js", () => ({
   inspectPortUsage: (...args: unknown[]) => inspectPortUsage(...args),
   classifyPortListener: (...args: unknown[]) => classifyPortListener(...args),
   formatPortDiagnostics: (...args: unknown[]) => formatPortDiagnostics(...args),
+}));
+
+vi.mock("./daemon-cli/restart-health.js", () => ({
+  waitForGatewayHealthyRestart: (...args: unknown[]) => waitForGatewayHealthyRestart(...args),
+  terminateStaleGatewayPids: (...args: unknown[]) => terminateStaleGatewayPids(...args),
+  renderRestartDiagnostics: (...args: unknown[]) => renderRestartDiagnostics(...args),
 }));
 
 vi.mock("./update-cli/restart-helper.js", () => ({
@@ -433,6 +442,15 @@ describe("update-cli", () => {
     });
     classifyPortListener.mockReturnValue("gateway");
     formatPortDiagnostics.mockReturnValue(["Port 18789 is already in use."]);
+    waitForGatewayHealthyRestart.mockResolvedValue({
+      healthy: true,
+      staleGatewayPids: [],
+      verifiedStaleGatewayPids: [],
+      runtime: { status: "running", pid: 4242 },
+      portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
+    });
+    terminateStaleGatewayPids.mockResolvedValue([]);
+    renderRestartDiagnostics.mockReturnValue(["Port 18789 is already in use."]);
     pathExists.mockResolvedValue(false);
     syncPluginsForUpdateChannel.mockResolvedValue({
       changed: false,
@@ -1577,6 +1595,60 @@ describe("update-cli", () => {
       },
     },
   ] as const)("updateCommand service refresh behavior: $name", runUpdateCliScenario);
+
+  it("does not re-restart after update when only diagnostic stale pids are present", async () => {
+    vi.mocked(runGatewayUpdate).mockResolvedValue(makeOkUpdateResult());
+    serviceLoaded.mockResolvedValue(true);
+    waitForGatewayHealthyRestart.mockResolvedValue({
+      healthy: false,
+      staleGatewayPids: [10920],
+      verifiedStaleGatewayPids: [],
+      runtime: { status: "stopped" },
+      portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
+    });
+    vi.mocked(defaultRuntime.log).mockClear();
+
+    await updateCommand({});
+
+    expect(waitForGatewayHealthyRestart).toHaveBeenCalledTimes(1);
+    expect(terminateStaleGatewayPids).not.toHaveBeenCalled();
+    expect(runDaemonRestart).not.toHaveBeenCalled();
+    const logLines = vi.mocked(defaultRuntime.log).mock.calls.map((call) => String(call[0]));
+    expect(logLines.some((line) => line.includes("Found stale gateway process(es) after restart"))).toBe(
+      false,
+    );
+    expect(logLines).toContain("Gateway did not become healthy after restart.");
+  });
+
+  it("cleans verified stale pids after update and retries the daemon restart once", async () => {
+    vi.mocked(runGatewayUpdate).mockResolvedValue(makeOkUpdateResult());
+    serviceLoaded.mockResolvedValue(true);
+    waitForGatewayHealthyRestart
+      .mockResolvedValueOnce({
+        healthy: false,
+        staleGatewayPids: [10920],
+        verifiedStaleGatewayPids: [10920],
+        runtime: { status: "stopped" },
+        portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
+      })
+      .mockResolvedValueOnce({
+        healthy: true,
+        staleGatewayPids: [],
+        verifiedStaleGatewayPids: [],
+        runtime: { status: "running", pid: 4242 },
+        portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
+      });
+    terminateStaleGatewayPids.mockResolvedValue([10920]);
+    vi.mocked(defaultRuntime.log).mockClear();
+
+    await updateCommand({});
+
+    expect(waitForGatewayHealthyRestart).toHaveBeenCalledTimes(2);
+    expect(terminateStaleGatewayPids).toHaveBeenCalledWith([10920]);
+    expect(runDaemonRestart).toHaveBeenCalledTimes(1);
+    const logLines = vi.mocked(defaultRuntime.log).mock.calls.map((call) => String(call[0]));
+    expect(logLines).toContain("Daemon restart completed.");
+  });
 
   it.each([
     {

@@ -143,6 +143,7 @@ describe("inspectGatewayRestart", () => {
 
     expect(snapshot.healthy).toBe(true);
     expect(snapshot.staleGatewayPids).toEqual([]);
+    expect(snapshot.verifiedStaleGatewayPids).toEqual([]);
   });
 
   it("marks non-owned gateway listener pids as stale while runtime is running", async () => {
@@ -158,6 +159,7 @@ describe("inspectGatewayRestart", () => {
 
     expect(snapshot.healthy).toBe(false);
     expect(snapshot.staleGatewayPids).toEqual([9000]);
+    expect(snapshot.verifiedStaleGatewayPids).toEqual([9000]);
   });
 
   it("treats unknown listeners as stale on Windows when enabled", async () => {
@@ -167,6 +169,7 @@ describe("inspectGatewayRestart", () => {
     });
 
     expect(snapshot.staleGatewayPids).toEqual([10920]);
+    expect(snapshot.verifiedStaleGatewayPids).toEqual([]);
   });
 
   it("does not treat unknown listeners as stale when fallback is disabled", async () => {
@@ -176,6 +179,7 @@ describe("inspectGatewayRestart", () => {
     });
 
     expect(snapshot.staleGatewayPids).toEqual([]);
+    expect(snapshot.verifiedStaleGatewayPids).toEqual([]);
   });
 
   it("does not apply unknown-listener fallback while runtime is running", async () => {
@@ -185,6 +189,7 @@ describe("inspectGatewayRestart", () => {
     });
 
     expect(snapshot.staleGatewayPids).toEqual([]);
+    expect(snapshot.verifiedStaleGatewayPids).toEqual([]);
   });
 
   it("does not treat known non-gateway listeners as stale in fallback mode", async () => {
@@ -203,6 +208,7 @@ describe("inspectGatewayRestart", () => {
     });
 
     expect(snapshot.staleGatewayPids).toEqual([]);
+    expect(snapshot.verifiedStaleGatewayPids).toEqual([]);
   });
 
   it("uses a local gateway probe when ownership is ambiguous", async () => {
@@ -237,6 +243,7 @@ describe("inspectGatewayRestart", () => {
 
     expect(snapshot.healthy).toBe(true);
     expect(snapshot.staleGatewayPids).toEqual([]);
+    expect(snapshot.verifiedStaleGatewayPids).toEqual([]);
   });
 
   it("treats auth-closed probe as healthy gateway reachability", async () => {
@@ -268,9 +275,12 @@ describe("inspectGatewayRestart", () => {
 
     expect(snapshot.healthy).toBe(true);
     expect(probeGateway).not.toHaveBeenCalled();
+    expect(snapshot.staleGatewayPids).toEqual([]);
+    expect(snapshot.verifiedStaleGatewayPids).toEqual([]);
   });
 
   it("annotates stopped-free early exits with the actual elapsed time", async () => {
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
     const snapshot = await waitForStoppedFreeGatewayRestart();
 
     expect(snapshot).toMatchObject({
@@ -296,6 +306,35 @@ describe("inspectGatewayRestart", () => {
       elapsedMs: 92_500,
     });
     expect(sleep).toHaveBeenCalledTimes(185);
+  });
+
+  it("does not early-exit restart wait on Windows unknown-only stale listeners", async () => {
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    classifyPortListener.mockReturnValue("unknown");
+    const service = makeGatewayService({ status: "stopped" });
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "busy",
+      listeners: [{ pid: 10920, command: "unknown" }],
+      hints: [],
+    });
+    probeGateway.mockResolvedValue({
+      ok: false,
+      close: null,
+    });
+
+    const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
+    const snapshot = await waitForGatewayHealthyRestart({
+      service,
+      port: 18789,
+      attempts: 4,
+      delayMs: 10,
+      includeUnknownListenersAsStale: true,
+    });
+
+    expect(snapshot.waitOutcome).toBe("timeout");
+    expect(snapshot.staleGatewayPids).toEqual([10920]);
+    expect(snapshot.verifiedStaleGatewayPids).toEqual([]);
   });
 
   it("annotates timeout waits when the health loop exhausts all attempts", async () => {

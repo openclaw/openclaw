@@ -33,6 +33,7 @@ const inspectGatewayRestart = vi.fn<(opts?: unknown) => Promise<GatewayRestartSn
     portUsage: { port: 19001, status: "busy", listeners: [], hints: [] },
     healthy: true,
     staleGatewayPids: [],
+    verifiedStaleGatewayPids: [],
   }),
 );
 const serviceReadCommand = vi.fn<
@@ -553,6 +554,7 @@ describe("gatherDaemonStatus", () => {
       },
       healthy: false,
       staleGatewayPids: [9000],
+      verifiedStaleGatewayPids: [9000],
     });
 
     const status = await gatherDaemonStatus({

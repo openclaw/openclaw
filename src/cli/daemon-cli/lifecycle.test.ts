@@ -4,6 +4,7 @@ import { captureEnv } from "../../test-utils/env.js";
 type RestartHealthSnapshot = {
   healthy: boolean;
   staleGatewayPids: number[];
+  verifiedStaleGatewayPids: number[];
   runtime: { status?: string };
   portUsage: { port: number; status: string; listeners: []; hints: []; errors?: string[] };
   waitOutcome?: string;
@@ -190,6 +191,7 @@ describe("runDaemonRestart health checks", () => {
     waitForGatewayHealthyRestart.mockResolvedValue({
       healthy: true,
       staleGatewayPids: [],
+      verifiedStaleGatewayPids: [],
       runtime: { status: "running" },
       portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
     });
@@ -227,12 +229,14 @@ describe("runDaemonRestart health checks", () => {
     const unhealthy: RestartHealthSnapshot = {
       healthy: false,
       staleGatewayPids: [1993],
+      verifiedStaleGatewayPids: [1993],
       runtime: { status: "stopped" },
       portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
     };
     const healthy: RestartHealthSnapshot = {
       healthy: true,
       staleGatewayPids: [],
+      verifiedStaleGatewayPids: [],
       runtime: { status: "running" },
       portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
     };
@@ -251,6 +255,7 @@ describe("runDaemonRestart health checks", () => {
     const unhealthy: RestartHealthSnapshot = {
       healthy: false,
       staleGatewayPids: [1993],
+      verifiedStaleGatewayPids: [1993],
       runtime: { status: "stopped" },
       portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
     };
@@ -267,10 +272,12 @@ describe("runDaemonRestart health checks", () => {
   });
 
   it("fails restart when gateway remains unhealthy after the full timeout", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
     const { formatCliCommand } = await import("../command-format.js");
     const unhealthy: RestartHealthSnapshot = {
       healthy: false,
       staleGatewayPids: [],
+      verifiedStaleGatewayPids: [],
       runtime: { status: "stopped" },
       portUsage: { port: 18789, status: "free", listeners: [], hints: [] },
       waitOutcome: "timeout",
@@ -315,6 +322,7 @@ describe("runDaemonRestart health checks", () => {
     const unhealthy: RestartHealthSnapshot = {
       healthy: false,
       staleGatewayPids: [],
+      verifiedStaleGatewayPids: [],
       runtime: { status: "stopped" },
       portUsage: { port: 18789, status: "free", listeners: [], hints: [] },
       waitOutcome: "stopped-free",

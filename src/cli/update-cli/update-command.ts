@@ -784,15 +784,15 @@ async function maybeRestartService(params: {
           service,
           port: params.gatewayPort,
         });
-        if (!health.healthy && health.staleGatewayPids.length > 0) {
+        if (!health.healthy && health.verifiedStaleGatewayPids.length > 0) {
           if (!params.opts.json) {
             defaultRuntime.log(
               theme.warn(
-                `Found stale gateway process(es) after restart: ${health.staleGatewayPids.join(", ")}. Cleaning up...`,
+                `Found stale gateway process(es) after restart: ${health.verifiedStaleGatewayPids.join(", ")}. Cleaning up...`,
               ),
             );
           }
-          await terminateStaleGatewayPids(health.staleGatewayPids);
+          await terminateStaleGatewayPids(health.verifiedStaleGatewayPids);
           await runDaemonRestart();
           health = await waitForGatewayHealthyRestart({
             service,

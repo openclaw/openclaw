@@ -29,6 +29,8 @@ export type GatewayRestartSnapshot = {
   portUsage: PortUsage;
   healthy: boolean;
   staleGatewayPids: number[];
+  /** PIDs classified as gateway listeners that are stale; excludes Windows unknown-listener fallback. */
+  verifiedStaleGatewayPids: number[];
   waitOutcome?: GatewayRestartWaitOutcome;
   elapsedMs?: number;
 };
@@ -143,6 +145,7 @@ export async function inspectGatewayRestart(params: {
           portUsage,
           healthy: true,
           staleGatewayPids: [],
+          verifiedStaleGatewayPids: [],
         };
       }
     } catch {
@@ -183,9 +186,9 @@ export async function inspectGatewayRestart(params: {
       // best-effort probe
     }
   }
-  const staleGatewayPids = Array.from(
-    new Set([
-      ...gatewayListeners
+  const verifiedStaleGatewayPids = Array.from(
+    new Set(
+      gatewayListeners
         .filter((listener) => Number.isFinite(listener.pid))
         .filter((listener) => {
           if (!running) {
@@ -197,17 +200,19 @@ export async function inspectGatewayRestart(params: {
           return !listenerOwnedByRuntimePid({ listener, runtimePid });
         })
         .map((listener) => listener.pid as number),
-      ...fallbackListenerPids.filter(
-        (pid) => runtime.pid == null || pid !== runtime.pid || !running,
-      ),
-    ]),
+    ),
   );
+  const fallbackStalePids = fallbackListenerPids.filter(
+    (pid) => runtime.pid == null || pid !== runtime.pid || !running,
+  );
+  const staleGatewayPids = Array.from(new Set([...verifiedStaleGatewayPids, ...fallbackStalePids]));
 
   return {
     runtime,
     portUsage,
     healthy,
     staleGatewayPids,
+    verifiedStaleGatewayPids,
   };
 }
 
@@ -266,7 +271,7 @@ export async function waitForGatewayHealthyRestart(params: {
     if (snapshot.healthy) {
       return withWaitContext(snapshot, "healthy", attempt * delayMs);
     }
-    if (snapshot.staleGatewayPids.length > 0 && snapshot.runtime.status !== "running") {
+    if (snapshot.verifiedStaleGatewayPids.length > 0 && snapshot.runtime.status !== "running") {
       return withWaitContext(snapshot, "stale-pids", attempt * delayMs);
     }
     if (shouldEarlyExitStoppedFree(snapshot, attempt, minAttemptForEarlyExit)) {
