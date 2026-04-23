@@ -476,8 +476,8 @@ If you create a deployment called `gpt-image-2-prod` that serves `gpt-image-2`:
 /tool image_generate model=openai/gpt-image-2-prod prompt="A clean poster" size=1024x1024 count=1
 ```
 
-The same deployment-name rule applies to chat, Responses, and other image or
-video calls routed through the `openai` provider.
+The same deployment-name rule applies to chat, Responses, and image-generation
+calls routed through the `openai` provider.
 
 ### Regional availability
 
