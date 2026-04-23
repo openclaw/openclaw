@@ -1631,6 +1631,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         let hasStreamedMessage = false;
         let lastToolItemId: string | undefined;
         let lastToolItemName: string | undefined;
+        let lastToolItemTitle: string | undefined;
         const previewState: MattermostDraftPreviewState = {
           finalizedViaPreviewPost: false,
         };
@@ -1703,6 +1704,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           lastPartialText = "";
           lastToolItemId = undefined;
           lastToolItemName = undefined;
+          lastToolItemTitle = undefined;
         };
 
         const { dispatcher, replyOptions, markDispatchIdle, markRunComplete } =
@@ -1781,21 +1783,25 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                   onItemEvent: async (payload) => {
                     if (payload.kind !== "tool" && payload.kind !== "command") return;
                     if (payload.phase && payload.phase !== "start" && payload.phase !== "update") return;
-                    // Strip the kind prefix (tool: / command:) to get the underlying call id.
-                    // Runtime emits two layered events for one logical tool call (kind=tool
-                    // wrapper + kind=command inner) with the same name and same suffix.
                     const callId = payload.itemId?.replace(/^(?:tool|command):/, "");
                     const callChanged = callId && callId !== lastToolItemId;
                     if (callChanged) {
                       await onDraftBoundary();
                       lastToolItemId = callId;
+                      lastToolItemTitle = undefined;
                     }
                     if (payload.name) lastToolItemName = payload.name;
-                    // Prefer the inner (kind=command) event's richer title when available.
-                    // It usually arrives second; overwrite to surface the better description.
+                    // Same call may emit multiple item events (kind=tool wrapper +
+                    // kind=command inner + later phase=update). Some of them have an
+                    // empty title; remember the best non-empty title we've seen for
+                    // this call and prefer it. Inner kind=command titles are typically
+                    // richer ("command foo") so let them overwrite.
+                    if (payload.title && payload.title.trim()) {
+                      lastToolItemTitle = payload.title;
+                    }
                     draftStream.update(buildMattermostToolStatusText({
-                      name: payload.name,
-                      title: payload.title,
+                      name: payload.name ?? lastToolItemName,
+                      title: lastToolItemTitle,
                       phase: payload.phase,
                     }));
                     hasStreamedMessage = true;
