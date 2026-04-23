@@ -22,6 +22,8 @@ export type EmbeddedRunTrigger = "cron" | "heartbeat" | "manual" | "memory" | "o
 export type RunEmbeddedPiAgentParams = {
   sessionId: string;
   sessionKey?: string;
+  /** Session-like key for sandbox and tool-policy resolution. Defaults to sessionKey. */
+  sandboxSessionKey?: string;
   agentId?: string;
   messageChannel?: string;
   messageProvider?: string;
@@ -30,7 +32,7 @@ export type RunEmbeddedPiAgentParams = {
   trigger?: EmbeddedRunTrigger;
   /** Relative workspace path that memory-triggered writes are allowed to append to. */
   memoryFlushWritePath?: string;
-  /** Delivery target (e.g. telegram:group:123:topic:456) for topic/thread routing. */
+  /** Delivery target for topic/thread routing. */
   messageTo?: string;
   /** Thread/topic identifier for routing replies to the originating thread. */
   messageThreadId?: string | number;

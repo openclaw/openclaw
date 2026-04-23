@@ -104,7 +104,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
         if (attempt >= maxAttempts) {
           throw error;
         }
-        const delay = Math.min(30000, 1000 * Math.pow(2, attempt - 1));
+        const delay = Math.min(30000, 1000 * 2 ** (attempt - 1));
         runtime.log?.(`[tlon] Retrying authentication in ${delay}ms...`);
         await new Promise<void>((resolve, reject) => {
           const timer = setTimeout(resolve, delay);

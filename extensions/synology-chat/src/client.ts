@@ -119,7 +119,7 @@ export async function sendMessage(
     }
 
     if (attempt < maxRetries - 1) {
-      await sleep(baseDelay * Math.pow(2, attempt));
+      await sleep(baseDelay * 2 ** attempt);
     }
   }
 

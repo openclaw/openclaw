@@ -161,6 +161,43 @@ describe("promptAuthConfig", () => {
     );
   });
 
+  it("preserves existing model entries outside provider-scoped allowlist updates", async () => {
+    mocks.promptAuthChoiceGrouped.mockResolvedValue("token");
+    mocks.applyAuthChoice.mockResolvedValue({
+      config: {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.4": { alias: "GPT" },
+              "anthropic/claude-opus-4-6": { alias: "Opus" },
+            },
+          },
+        },
+      },
+    });
+    mocks.promptModelAllowlist.mockResolvedValue({
+      models: ["anthropic/claude-sonnet-4-6"],
+      scopeKeys: ["anthropic/claude-opus-4-6", "anthropic/claude-sonnet-4-6"],
+    });
+    mocks.resolveProviderPluginChoice.mockReturnValue({
+      provider: { id: "anthropic", label: "Anthropic", auth: [] },
+      method: { id: "setup-token", label: "setup-token", kind: "token" },
+      wizard: {
+        modelAllowlist: {
+          allowedKeys: ["anthropic/claude-opus-4-6", "anthropic/claude-sonnet-4-6"],
+          initialSelections: ["anthropic/claude-sonnet-4-6"],
+        },
+      },
+    });
+
+    const result = await promptAuthConfig({}, makeRuntime(), noopPrompter);
+
+    expect(result.agents?.defaults?.models).toEqual({
+      "openai/gpt-5.4": { alias: "GPT" },
+      "anthropic/claude-sonnet-4-6": {},
+    });
+  });
+
   it("scopes the allowlist picker to the selected provider when available", async () => {
     mocks.promptAuthChoiceGrouped.mockResolvedValue("openai-api-key");
     mocks.resolvePreferredProviderForAuthChoice.mockResolvedValue("openai");

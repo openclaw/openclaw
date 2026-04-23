@@ -416,8 +416,14 @@ function numericVersionParts(version: string): number[] {
     .map((part) => (Number.isFinite(part) ? part : 0));
 }
 
+const CODEX_APP_SERVER_APPROVAL_REQUEST_METHODS = new Set([
+  "item/commandExecution/requestApproval",
+  "item/fileChange/requestApproval",
+  "item/permissions/requestApproval",
+]);
+
 export function isCodexAppServerApprovalRequest(method: string): boolean {
-  return method.includes("requestApproval") || method.includes("Approval");
+  return CODEX_APP_SERVER_APPROVAL_REQUEST_METHODS.has(method);
 }
 
 function formatExitValue(value: unknown): string {

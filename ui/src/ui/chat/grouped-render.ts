@@ -14,6 +14,11 @@ import type {
   NormalizedMessage,
   ToolCard,
 } from "../types/chat-types.ts";
+import {
+  resolveLocalUserAvatarText,
+  resolveLocalUserAvatarUrl,
+  resolveLocalUserName,
+} from "../user-identity.ts";
 import { agentLogoUrl, isRenderableControlUiAvatarUrl } from "../views/agents-utils.ts";
 import { renderCopyAsMarkdownButton } from "./copy-as-markdown.ts";
 import {
@@ -184,10 +189,14 @@ function extractImages(message: unknown): ImageBlock[] {
   return images;
 }
 
-export function renderReadingIndicatorGroup(assistant?: AssistantIdentity, basePath?: string) {
+export function renderReadingIndicatorGroup(
+  assistant?: AssistantIdentity,
+  basePath?: string,
+  authToken?: string | null,
+) {
   return html`
     <div class="chat-group assistant">
-      ${renderAvatar("assistant", assistant, basePath)}
+      ${renderAvatar("assistant", assistant, undefined, basePath, authToken)}
       <div class="chat-group-messages">
         <div class="chat-bubble chat-reading-indicator" aria-hidden="true">
           <span class="chat-reading-indicator__dots">
@@ -205,6 +214,7 @@ export function renderStreamingGroup(
   onOpenSidebar?: (content: SidebarContent) => void,
   assistant?: AssistantIdentity,
   basePath?: string,
+  authToken?: string | null,
 ) {
   const timestamp = new Date(startedAt).toLocaleTimeString([], {
     hour: "numeric",
@@ -214,7 +224,7 @@ export function renderStreamingGroup(
 
   return html`
     <div class="chat-group assistant">
-      ${renderAvatar("assistant", assistant, basePath)}
+      ${renderAvatar("assistant", assistant, undefined, basePath, authToken)}
       <div class="chat-group-messages">
         ${renderGroupedMessage(
           {
@@ -249,6 +259,8 @@ export function renderMessageGroup(
     onRequestUpdate?: () => void;
     assistantName?: string;
     assistantAvatar?: string | null;
+    userName?: string | null;
+    userAvatar?: string | null;
     basePath?: string;
     localMediaPreviewRoots?: readonly string[];
     assistantAttachmentAuthToken?: string | null;
@@ -261,10 +273,14 @@ export function renderMessageGroup(
 ) {
   const normalizedRole = normalizeRoleForGrouping(group.role);
   const assistantName = opts.assistantName ?? "Assistant";
+  const resolvedUserName = resolveLocalUserName({
+    name: opts.userName ?? null,
+    avatar: opts.userAvatar ?? null,
+  });
   const userLabel = group.senderLabel?.trim();
   const who =
     normalizedRole === "user"
-      ? (userLabel ?? "You")
+      ? (userLabel ?? resolvedUserName)
       : normalizedRole === "assistant"
         ? assistantName
         : normalizedRole === "tool"
@@ -294,7 +310,12 @@ export function renderMessageGroup(
           name: assistantName,
           avatar: opts.assistantAvatar ?? null,
         },
+        {
+          name: opts.userName ?? null,
+          avatar: opts.userAvatar ?? null,
+        },
         opts.basePath,
+        opts.assistantAttachmentAuthToken,
       )}
       <div class="chat-group-messages">
         ${group.messages.map((item, index) =>
@@ -585,11 +606,16 @@ function renderTtsButton(group: MessageGroup) {
 function renderAvatar(
   role: string,
   assistant?: Pick<AssistantIdentity, "name" | "avatar">,
+  user?: { name?: string | null; avatar?: string | null },
   basePath?: string,
+  authToken?: string | null,
 ) {
   const normalized = normalizeRoleForGrouping(role);
   const assistantName = assistant?.name?.trim() || "Assistant";
   const assistantAvatar = assistant?.avatar?.trim() || "";
+  const userName = resolveLocalUserName(user);
+  const userAvatarUrl = resolveLocalUserAvatarUrl(user);
+  const userAvatarText = resolveLocalUserAvatarText(user);
   const initial =
     normalized === "user"
       ? html`
@@ -636,8 +662,25 @@ function renderAvatar(
           ? "tool"
           : "other";
 
+  if (normalized === "user" && userAvatarUrl) {
+    return html`<img class="chat-avatar ${className}" src="${userAvatarUrl}" alt="${userName}" />`;
+  }
+
+  if (normalized === "user" && userAvatarText) {
+    return html`<div class="chat-avatar ${className}" aria-label="${userName}">
+      ${userAvatarText}
+    </div>`;
+  }
+
   if (assistantAvatar && normalized === "assistant") {
     if (isAvatarUrl(assistantAvatar)) {
+      if (authToken?.trim() && assistantAvatar.startsWith("/")) {
+        return html`<img
+          class="chat-avatar ${className} chat-avatar--logo"
+          src="${agentLogoUrl(basePath ?? "")}"
+          alt="${assistantName}"
+        />`;
+      }
       return html`<img
         class="chat-avatar ${className}"
         src="${assistantAvatar}"

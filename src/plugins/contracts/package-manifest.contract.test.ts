@@ -18,13 +18,13 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
   {
     pluginId: "feishu",
     pluginLocalRuntimeDeps: ["@larksuiteoapi/node-sdk"],
-    mirroredRootRuntimeDeps: ["@sinclair/typebox", "qrcode-terminal"],
+    mirroredRootRuntimeDeps: ["typebox", "qrcode-terminal"],
     minHostVersionBaseline: "2026.3.22",
   },
   { pluginId: "google", pluginLocalRuntimeDeps: ["@google/genai"] },
   {
     pluginId: "googlechat",
-    pluginLocalRuntimeDeps: ["google-auth-library"],
+    pluginLocalRuntimeDeps: ["gaxios", "google-auth-library"],
     minHostVersionBaseline: "2026.3.22",
   },
   { pluginId: "irc", minHostVersionBaseline: "2026.3.22" },
@@ -44,7 +44,7 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
   {
     pluginId: "diffs",
     pluginLocalRuntimeDeps: ["@pierre/diffs", "@pierre/theme", "playwright-core"],
-    mirroredRootRuntimeDeps: ["@sinclair/typebox"],
+    mirroredRootRuntimeDeps: ["typebox"],
   },
   {
     pluginId: "matrix",
@@ -62,7 +62,7 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
   {
     pluginId: "memory-lancedb",
     pluginLocalRuntimeDeps: ["@lancedb/lancedb"],
-    mirroredRootRuntimeDeps: ["@sinclair/typebox", "openai"],
+    mirroredRootRuntimeDeps: ["typebox", "openai"],
     minHostVersionBaseline: "2026.3.22",
   },
   {
@@ -74,7 +74,7 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
       "jsonwebtoken",
       "jwks-rsa",
     ],
-    mirroredRootRuntimeDeps: ["@sinclair/typebox", "express"],
+    mirroredRootRuntimeDeps: ["typebox", "express"],
     minHostVersionBaseline: "2026.3.22",
   },
   { pluginId: "nextcloud-talk", minHostVersionBaseline: "2026.3.22" },
@@ -86,7 +86,7 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
   { pluginId: "openshell", pluginLocalRuntimeDeps: ["openshell"] },
   {
     pluginId: "qqbot",
-    pluginLocalRuntimeDeps: ["mpg123-decoder", "silk-wasm"],
+    pluginLocalRuntimeDeps: ["@tencent-connect/qqbot-connector", "mpg123-decoder", "silk-wasm"],
     mirroredRootRuntimeDeps: ["ws"],
   },
   {

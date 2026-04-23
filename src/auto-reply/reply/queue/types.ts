@@ -94,6 +94,7 @@ export type FollowupRun = {
     agentDir: string;
     sessionId: string;
     sessionKey?: string;
+    runtimePolicySessionKey?: string;
     messageProvider?: string;
     agentAccountId?: string;
     groupId?: string;
@@ -128,6 +129,7 @@ export type FollowupRun = {
     ownerNumbers?: string[];
     inputProvenance?: InputProvenance;
     extraSystemPrompt?: string;
+    extraSystemPromptStatic?: string;
     enforceFinalTag?: boolean;
     skipProviderRuntimeHints?: boolean;
     silentExpected?: boolean;

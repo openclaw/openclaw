@@ -1,7 +1,15 @@
 #!/usr/bin/env -S node --import tsx
 
 import { execFileSync, execSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -27,6 +35,7 @@ import {
   runInstalledWorkspaceBootstrapSmoke,
   WORKSPACE_TEMPLATE_PACK_PATHS,
 } from "./lib/workspace-bootstrap-smoke.mjs";
+import { discoverBundledPluginRuntimeDeps } from "./postinstall-bundled-plugins.mjs";
 import { listStaticExtensionAssetOutputs } from "./runtime-postbuild.mjs";
 import { sparkleBuildFloorsFromShortVersion, type SparkleBuildFloors } from "./sparkle-build.ts";
 
@@ -57,16 +66,11 @@ const requiredPathGroups = [
   "dist/build-info.json",
   "dist/channel-catalog.json",
   "dist/control-ui/index.html",
-  "dist/extensions/qa-channel/runtime-api.js",
-  "dist/extensions/qa-lab/runtime-api.js",
 ];
-const legacyUpdateCompatPackPaths = new Set([
-  "dist/extensions/qa-channel/runtime-api.js",
-  "dist/extensions/qa-lab/runtime-api.js",
-]);
 const forbiddenPrefixes = [
   "dist-runtime/",
   "dist/OpenClaw.app/",
+  "dist/extensions/qa-channel/",
   "dist/extensions/qa-lab/",
   "dist/plugin-sdk/extensions/qa-lab/",
   "dist/plugin-sdk/qa-lab.",
@@ -80,6 +84,7 @@ const forbiddenPrefixes = [
 ];
 const forbiddenPrivateQaContentMarkers = [
   "//#region extensions/qa-lab/",
+  "qa-channel/runtime-api.js",
   "qa-lab/cli.js",
   "qa-lab/runtime-api.js",
 ] as const;
@@ -210,7 +215,6 @@ export function createPackedBundledPluginPostinstallEnv(
   return {
     ...env,
     OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK: "1",
-    OPENCLAW_EAGER_BUNDLED_PLUGIN_DEPS: "1",
   };
 }
 
@@ -220,6 +224,158 @@ function runPackedBundledPluginPostinstall(packageRoot: string): void {
     stdio: "inherit",
     env: createPackedBundledPluginPostinstallEnv(),
   });
+}
+
+export function collectInstalledBundledPluginRuntimeDepErrors(packageRoot: string): string[] {
+  const extensionsDir = join(packageRoot, "dist", "extensions");
+  if (!existsSync(extensionsDir)) {
+    return [];
+  }
+  const runtimeDeps = discoverBundledPluginRuntimeDeps({ extensionsDir });
+  return runtimeDeps
+    .filter((dep) => !existsSync(join(packageRoot, dep.sentinelPath)))
+    .map((dep) => {
+      const owners = dep.pluginIds.length > 0 ? dep.pluginIds.join(", ") : "unknown";
+      return `bundled plugin runtime dependency '${dep.name}@${dep.version}' (owners: ${owners}) is missing at ${dep.sentinelPath}.`;
+    })
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
+function bundledRuntimeDependencySentinelPath(
+  packageRoot: string,
+  pluginId: string,
+  dependencyName: string,
+): string {
+  return join(
+    packageRoot,
+    "dist",
+    "extensions",
+    pluginId,
+    "node_modules",
+    ...dependencyName.split("/"),
+    "package.json",
+  );
+}
+
+function bundledRuntimeDependencySentinelCandidates(
+  packageRoot: string,
+  pluginId: string,
+  dependencyName: string,
+): string[] {
+  const dependencyParts = dependencyName.split("/");
+  return [
+    bundledRuntimeDependencySentinelPath(packageRoot, pluginId, dependencyName),
+    join(packageRoot, "dist", "extensions", "node_modules", ...dependencyParts, "package.json"),
+    join(packageRoot, "node_modules", ...dependencyParts, "package.json"),
+  ];
+}
+
+function assertBundledRuntimeDependencyAbsent(params: {
+  packageRoot: string;
+  pluginId: string;
+  dependencyName: string;
+}): void {
+  const sentinelPath = bundledRuntimeDependencySentinelCandidates(
+    params.packageRoot,
+    params.pluginId,
+    params.dependencyName,
+  ).find((candidate) => existsSync(candidate));
+  if (sentinelPath) {
+    throw new Error(
+      `release-check: ${params.pluginId} runtime dependency ${params.dependencyName} was installed before plugin activation (${sentinelPath}).`,
+    );
+  }
+}
+
+function assertBundledRuntimeDependencyPresent(params: {
+  packageRoot: string;
+  pluginId: string;
+  dependencyName: string;
+}): void {
+  const sentinelPath = bundledRuntimeDependencySentinelCandidates(
+    params.packageRoot,
+    params.pluginId,
+    params.dependencyName,
+  ).find((candidate) => existsSync(candidate));
+  if (sentinelPath) {
+    return;
+  }
+  throw new Error(
+    `release-check: ${params.pluginId} runtime dependency ${params.dependencyName} was not installed during plugin activation.`,
+  );
+}
+
+function writePackedBundledPluginActivationConfig(homeDir: string): void {
+  const configPath = join(homeDir, ".openclaw", "openclaw.json");
+  mkdirSync(join(homeDir, ".openclaw"), { recursive: true });
+  writeFileSync(
+    configPath,
+    `${JSON.stringify(
+      {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-4.1-mini" },
+          },
+        },
+        channels: {
+          feishu: {
+            enabled: true,
+          },
+        },
+        models: {
+          providers: {
+            openai: {
+              apiKey: "sk-openclaw-release-check",
+              baseUrl: "https://api.openai.com/v1",
+              models: [],
+            },
+          },
+        },
+        plugins: {
+          enabled: true,
+          entries: {
+            feishu: {
+              enabled: true,
+            },
+          },
+        },
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+}
+
+function runPackedBundledPluginActivationSmoke(packageRoot: string, tmpRoot: string): void {
+  const lazyDeps = [
+    { pluginId: "browser", dependencyName: "playwright-core" },
+    { pluginId: "feishu", dependencyName: "@larksuiteoapi/node-sdk" },
+  ] as const;
+
+  for (const dep of lazyDeps) {
+    assertBundledRuntimeDependencyAbsent({ packageRoot, ...dep });
+  }
+
+  const homeDir = join(tmpRoot, "activation-home");
+  mkdirSync(homeDir, { recursive: true });
+  writePackedBundledPluginActivationConfig(homeDir);
+  execFileSync(process.execPath, [join(packageRoot, "openclaw.mjs"), "plugins", "doctor"], {
+    cwd: packageRoot,
+    stdio: "inherit",
+    env: {
+      ...process.env,
+      HOME: homeDir,
+      OPENAI_API_KEY: "sk-openclaw-release-check",
+      OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK: "1",
+      OPENCLAW_NO_ONBOARD: "1",
+      OPENCLAW_SUPPRESS_NOTES: "1",
+    },
+  });
+
+  for (const dep of lazyDeps) {
+    assertBundledRuntimeDependencyPresent({ packageRoot, ...dep });
+  }
 }
 
 function runPackedBundledChannelEntrySmoke(): void {
@@ -235,6 +391,7 @@ function runPackedBundledChannelEntrySmoke(): void {
 
     const packageRoot = join(resolveGlobalRoot(prefixDir, tmpRoot), "openclaw");
     runPackedBundledPluginPostinstall(packageRoot);
+    runPackedBundledPluginActivationSmoke(packageRoot, tmpRoot);
     execFileSync(
       process.execPath,
       [
@@ -299,9 +456,7 @@ export function collectForbiddenPackPaths(paths: Iterable<string>): string[] {
   return [...paths]
     .filter(
       (path) =>
-        !legacyUpdateCompatPackPaths.has(path) &&
-        (forbiddenPrefixes.some((prefix) => path.startsWith(prefix)) ||
-          /node_modules\//.test(path)),
+        forbiddenPrefixes.some((prefix) => path.startsWith(prefix)) || /node_modules\//.test(path),
     )
     .toSorted((left, right) => left.localeCompare(right));
 }

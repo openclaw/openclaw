@@ -11,8 +11,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.event_name == 'pull_request' && format('{0}-{1}', github.workflow, github.event.pull_request.number) || format('{0}-{1}', github.workflow, github.run_id) }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.event_name == 'pull_request' && format('{0}-{1}', github.workflow, github.event.pull_request.number) || format('{0}-{1}', github.workflow, github.ref) }}
+  cancel-in-progress: true
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -20,7 +20,7 @@ env:
 jobs:
   preflight:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     outputs:
       docs_only: ${{ steps.manifest.outputs.docs_only }}
       run_install_smoke: ${{ steps.manifest.outputs.run_install_smoke }}
@@ -58,13 +58,6 @@ jobs:
 
           node scripts/ci-changed-scope.mjs --base "$BASE" --head HEAD
 
-      - name: Setup Node environment
-        if: steps.docs_scope.outputs.docs_only != 'true'
-        uses: ./.github/actions/setup-node-env
-        with:
-          install-bun: "false"
-          install-deps: "false"
-
       - name: Build install-smoke CI manifest
         id: manifest
         env:
@@ -85,7 +78,7 @@ jobs:
   install-smoke:
     needs: [preflight]
     if: needs.preflight.outputs.run_install_smoke == 'true'
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    runs-on: blacksmith-16vcpu-ubuntu-2404
     env:
       DOCKER_BUILD_SUMMARY: "false"
       DOCKER_BUILD_RECORD_UPLOAD: "false"
@@ -98,6 +91,11 @@ jobs:
 
       # Blacksmith's builder owns the Docker layer cache; keep smoke builds off
       # explicit gha cache directives so local tags still load cleanly.
+      - name: Run QR package install smoke
+        env:
+          OPENCLAW_QR_SMOKE_FORCE_INSTALL: "1"
+        run: bash scripts/e2e/qr-import-docker.sh
+
       - name: Build root Dockerfile smoke image
         uses: useblacksmith/build-push-action@cbd1f60d194a98cb3be5523b15134501eaf0fbf3 # v2
         with:
@@ -113,6 +111,12 @@ jobs:
       - name: Run root Dockerfile CLI smoke
         run: |
           docker run --rm --entrypoint sh openclaw-dockerfile-smoke:local -lc 'which openclaw && openclaw --version'
+
+      - name: Run Docker gateway network e2e
+        env:
+          OPENCLAW_GATEWAY_NETWORK_E2E_IMAGE: openclaw-dockerfile-smoke:local
+          OPENCLAW_GATEWAY_NETWORK_E2E_SKIP_BUILD: "1"
+        run: bash scripts/e2e/gateway-network-docker.sh
 
       # This smoke validates that the build-arg path preinstalls the matrix
       # runtime deps declared by the plugin and that matrix discovery stays
@@ -215,3 +219,29 @@ jobs:
           OPENCLAW_INSTALL_SMOKE_UPDATE_DIST_IMAGE: openclaw-dockerfile-smoke:local
           OPENCLAW_INSTALL_SMOKE_UPDATE_SKIP_LOCAL_BUILD: "1"
         run: bash scripts/test-install-sh-docker.sh
+
+  docker-e2e-fast:
+    needs: [preflight]
+    if: needs.preflight.outputs.run_install_smoke == 'true'
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 8
+    env:
+      DOCKER_BUILD_SUMMARY: "false"
+      DOCKER_BUILD_RECORD_UPLOAD: "false"
+    steps:
+      - name: Checkout CLI
+        uses: actions/checkout@v6
+
+      - name: Set up Blacksmith Docker Builder
+        uses: useblacksmith/setup-docker-builder@ac083cc84672d01c60d5e8561d0a939b697de542 # v1
+
+      - name: Setup Node environment for package smoke
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          install-deps: "true"
+
+      - name: Run fast bundled plugin Docker E2E
+        env:
+          OPENCLAW_BUNDLED_CHANNEL_DEPS_E2E_IMAGE: openclaw-bundled-channel-fast:local
+        run: timeout 120s pnpm test:docker:bundled-channel-deps:fast
