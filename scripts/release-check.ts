@@ -456,7 +456,10 @@ export function collectForbiddenPackPaths(paths: Iterable<string>): string[] {
   return [...paths]
     .filter(
       (path) =>
-        forbiddenPrefixes.some((prefix) => path.startsWith(prefix)) || /node_modules\//.test(path),
+        forbiddenPrefixes.some((prefix) => path.startsWith(prefix)) ||
+        /(^|\/)\.openclaw-runtime-deps-[^/]+(\/|$)/u.test(path) ||
+        path.endsWith("/.openclaw-runtime-deps-stamp.json") ||
+        path.includes("node_modules/"),
     )
     .toSorted((left, right) => left.localeCompare(right));
 }

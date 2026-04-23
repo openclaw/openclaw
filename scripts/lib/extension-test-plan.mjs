@@ -31,30 +31,35 @@ const repoRoot = path.resolve(import.meta.dirname, "..", "..");
 export const DEFAULT_EXTENSION_TEST_SHARD_COUNT = 6;
 const EXTENSION_TEST_COST_MULTIPLIERS = {
   // CI shard planning uses measured wall time rather than raw file count.
-  // Import-heavy channel suites vary widely: Slack/Mattermost are much more
-  // expensive per file than Matrix/Discord/MSTeams.
+  // These ratios come from Blacksmith extension batch timings; import-heavy
+  // suites vary widely, and file count alone leaves long tail shards.
+  "test/vitest/vitest.extension-acpx.config.ts": 0.75,
   "test/vitest/vitest.extension-bluebubbles.config.ts": 0.8,
-  "test/vitest/vitest.extension-browser.config.ts": 0.55,
-  "test/vitest/vitest.extension-discord.config.ts": 0.3,
-  "test/vitest/vitest.extension-feishu.config.ts": 0.6,
-  "test/vitest/vitest.extension-imessage.config.ts": 0.9,
-  "test/vitest/vitest.extension-matrix.config.ts": 0.25,
-  "test/vitest/vitest.extension-mattermost.config.ts": 1.05,
+  "test/vitest/vitest.extension-browser.config.ts": 0.5,
+  "test/vitest/vitest.extension-diffs.config.ts": 0.6,
+  "test/vitest/vitest.extension-discord.config.ts": 0.62,
+  "test/vitest/vitest.extension-feishu.config.ts": 0.18,
+  "test/vitest/vitest.extension-imessage.config.ts": 1.7,
+  "test/vitest/vitest.extension-irc.config.ts": 1.0,
+  "test/vitest/vitest.extension-line.config.ts": 1.1,
+  "test/vitest/vitest.extension-matrix.config.ts": 0.28,
+  "test/vitest/vitest.extension-mattermost.config.ts": 0.75,
   "test/vitest/vitest.extension-media.config.ts": 0.7,
-  "test/vitest/vitest.extension-memory.config.ts": 0.3,
+  "test/vitest/vitest.extension-memory.config.ts": 0.25,
   "test/vitest/vitest.extension-messaging.config.ts": 0.4,
   "test/vitest/vitest.extension-misc.config.ts": 0.7,
-  "test/vitest/vitest.extension-msteams.config.ts": 0.3,
+  "test/vitest/vitest.extension-msteams.config.ts": 0.5,
+  "test/vitest/vitest.extension-provider-openai.config.ts": 1.35,
   "test/vitest/vitest.extension-providers.config.ts": 0.5,
-  "test/vitest/vitest.extension-qa.config.ts": 0.4,
-  "test/vitest/vitest.extension-slack.config.ts": 0.7,
-  "test/vitest/vitest.extension-telegram.config.ts": 0.4,
-  "test/vitest/vitest.extension-voice-call.config.ts": 0.25,
-  "test/vitest/vitest.extension-whatsapp.config.ts": 0.6,
+  "test/vitest/vitest.extension-qa.config.ts": 0.65,
+  "test/vitest/vitest.extension-slack.config.ts": 0.45,
+  "test/vitest/vitest.extension-telegram.config.ts": 0.72,
+  "test/vitest/vitest.extension-voice-call.config.ts": 0.27,
+  "test/vitest/vitest.extension-whatsapp.config.ts": 0.8,
   "test/vitest/vitest.extension-zalo.config.ts": 0.7,
   // This shared config is comparatively cheap per file, so raw file count
   // overstates its real wall-clock cost during CI shard planning.
-  "test/vitest/vitest.extensions.config.ts": 0.45,
+  "test/vitest/vitest.extensions.config.ts": 1.1,
 };
 
 function normalizeRelative(inputPath) {

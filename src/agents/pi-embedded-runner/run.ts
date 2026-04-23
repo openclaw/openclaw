@@ -50,7 +50,10 @@ import {
 } from "../model-auth.js";
 import { normalizeProviderId } from "../model-selection.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
-import { retireSessionMcpRuntime } from "../pi-bundle-mcp-tools.js";
+import {
+  retireSessionMcpRuntime,
+  retireSessionMcpRuntimeForSessionKey,
+} from "../pi-bundle-mcp-tools.js";
 import {
   classifyFailoverReason,
   extractObservedOverflowTokenCount,
@@ -2131,15 +2134,23 @@ export async function runEmbeddedPiAgent(
         await contextEngine.dispose?.();
         stopRuntimeAuthRefreshTimer();
         if (params.cleanupBundleMcpOnRunEnd === true) {
-          await retireSessionMcpRuntime({
-            sessionId: params.sessionId,
+          const onError = (error: unknown, sessionId: string) => {
+            log.warn(
+              `bundle-mcp cleanup failed after run for ${sessionId}: ${formatErrorMessage(error)}`,
+            );
+          };
+          const retiredBySessionKey = await retireSessionMcpRuntimeForSessionKey({
+            sessionKey: params.sessionKey,
             reason: "embedded-run-end",
-            onError: (error, sessionId) => {
-              log.warn(
-                `bundle-mcp cleanup failed after run for ${sessionId}: ${formatErrorMessage(error)}`,
-              );
-            },
+            onError,
           });
+          if (!retiredBySessionKey) {
+            await retireSessionMcpRuntime({
+              sessionId: params.sessionId,
+              reason: "embedded-run-end",
+              onError,
+            });
+          }
         }
       }
     });

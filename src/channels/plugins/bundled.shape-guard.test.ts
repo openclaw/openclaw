@@ -549,7 +549,7 @@ describe("bundled channel entry shape guards", () => {
     }
   });
 
-  it("loads bundled setup entries from external staged runtime deps", async () => {
+  it("does not load bundled setup entries through external staged runtime deps during discovery", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bundled-setup-runtime-deps-"));
     const stageRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bundled-stage-"));
     const previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
@@ -620,8 +620,8 @@ describe("bundled channel entry shape guards", () => {
         "./bundled.js?scope=bundled-setup-runtime-deps",
       );
 
-      expect(bundled.getBundledChannelSetupPlugin("alpha")?.meta.label).toBe("staged-alpha");
-      expect(testGlobal.__bundledSetupRuntimeDepMarker).toBe("staged-alpha");
+      expect(bundled.getBundledChannelSetupPlugin("alpha")).toBeUndefined();
+      expect(testGlobal.__bundledSetupRuntimeDepMarker).toBeUndefined();
     } finally {
       restoreBundledPluginsDir(previousBundledPluginsDir);
       if (previousPluginStageDir === undefined) {

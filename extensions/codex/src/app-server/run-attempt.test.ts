@@ -533,6 +533,87 @@ describe("runCodexAppServerAttempt", () => {
     );
   });
 
+  it("routes MCP approval elicitations through the native bridge", async () => {
+    let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
+    let handleRequest:
+      | ((request: { id: string; method: string; params?: unknown }) => Promise<unknown>)
+      | undefined;
+    const bridgeSpy = vi
+      .spyOn(elicitationBridge, "handleCodexAppServerElicitationRequest")
+      .mockResolvedValue({
+        action: "accept",
+        content: null,
+        _meta: null,
+      });
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult();
+      }
+      if (method === "turn/start") {
+        return turnStartResult();
+      }
+      return {};
+    });
+    __testing.setCodexAppServerClientFactoryForTests(
+      async () =>
+        ({
+          request,
+          addNotificationHandler: (handler: typeof notify) => {
+            notify = handler;
+            return () => undefined;
+          },
+          addRequestHandler: (
+            handler: (request: {
+              id: string;
+              method: string;
+              params?: unknown;
+            }) => Promise<unknown>,
+          ) => {
+            handleRequest = handler;
+            return () => undefined;
+          },
+        }) as never,
+    );
+
+    const run = runCodexAppServerAttempt(
+      createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace")),
+    );
+    await vi.waitFor(() => expect(handleRequest).toBeTypeOf("function"), { interval: 1 });
+
+    const result = await handleRequest?.({
+      id: "request-elicitation-1",
+      method: "mcpServer/elicitation/request",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        serverName: "codex_apps__github",
+        mode: "form",
+      },
+    });
+
+    expect(result).toEqual({
+      action: "accept",
+      content: null,
+      _meta: null,
+    });
+    expect(bridgeSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        threadId: "thread-1",
+        turnId: "turn-1",
+      }),
+    );
+
+    await notify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        turn: { id: "turn-1", status: "completed" },
+      },
+    });
+    await run;
+  });
+
   it("does not leak unhandled rejections when shutdown closes before interrupt", async () => {
     const unhandledRejections: unknown[] = [];
     const onUnhandledRejection = (reason: unknown) => {
@@ -622,6 +703,35 @@ describe("runCodexAppServerAttempt", () => {
     });
   });
 
+  it("completes when turn/start returns a terminal turn without a follow-up notification", async () => {
+    const harness = createAppServerHarness(async (method) => {
+      if (method === "thread/start") {
+        return threadStartResult();
+      }
+      if (method === "turn/start") {
+        return {
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            items: [{ type: "agentMessage", id: "msg-1", text: "done from response" }],
+          },
+        };
+      }
+      return {};
+    });
+
+    const result = await runCodexAppServerAttempt(
+      createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace")),
+    );
+
+    expect(harness.requests.map((entry) => entry.method)).toContain("turn/start");
+    expect(result).toMatchObject({
+      assistantTexts: ["done from response"],
+      aborted: false,
+      timedOut: false,
+    });
+  });
+
   it("does not complete on unscoped turn/completed notifications", async () => {
     const harness = createStartedThreadHarness();
     const run = runCodexAppServerAttempt(
@@ -650,7 +760,6 @@ describe("runCodexAppServerAttempt", () => {
       method: "turn/completed",
       params: {
         threadId: "thread-1",
-        turnId: "turn-1",
         turn: {
           id: "turn-1",
           status: "completed",
@@ -707,7 +816,6 @@ describe("runCodexAppServerAttempt", () => {
       method: "turn/completed",
       params: {
         threadId: "thread-1",
-        turnId: "turn-1",
         turn: {
           id: "turn-1",
           status: "completed",

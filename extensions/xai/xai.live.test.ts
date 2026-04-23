@@ -8,6 +8,7 @@ import {
   registerProviderPlugin,
   requireRegisteredProvider,
 } from "../../test/helpers/plugins/provider-registration.js";
+import { runRealtimeSttLiveTest } from "../../test/helpers/stt-live-audio.js";
 import plugin from "./index.js";
 import { XAI_DEFAULT_STT_MODEL } from "./stt.js";
 
@@ -65,21 +66,6 @@ const registerXaiPlugin = () =>
     id: "xai",
     name: "xAI Provider",
   });
-
-async function waitForLiveExpectation(expectation: () => void, timeoutMs = 30_000) {
-  const started = Date.now();
-  let lastError: unknown;
-  while (Date.now() - started < timeoutMs) {
-    try {
-      expectation();
-      return;
-    } catch (error) {
-      lastError = error;
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-  }
-  throw lastError;
-}
 
 function normalizeTranscriptForMatch(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "");
@@ -216,10 +202,9 @@ describeLive("xai plugin live", () => {
     expect(telephony.outputFormat).toBe("pcm");
     expect(telephony.sampleRate).toBe(24_000);
 
-    const transcripts: string[] = [];
-    const partials: string[] = [];
-    const errors: Error[] = [];
-    const session = realtimeProvider.createSession({
+    const chunkSize = Math.max(1, Math.floor(telephony.sampleRate * 2 * 0.1));
+    const { transcripts, partials } = await runRealtimeSttLiveTest({
+      provider: realtimeProvider,
       providerConfig: {
         apiKey: XAI_API_KEY,
         baseUrl: "https://api.x.ai/v1",
@@ -229,26 +214,12 @@ describeLive("xai plugin live", () => {
         endpointingMs: 500,
         language: "en",
       },
-      onPartial: (partial) => partials.push(partial),
-      onTranscript: (transcript) => transcripts.push(transcript),
-      onError: (error) => errors.push(error),
+      audio: telephony.audioBuffer,
+      chunkSize,
+      delayMs: 20,
+      closeBeforeWait: true,
     });
 
-    await session.connect();
-    const audio = telephony.audioBuffer;
-    const chunkSize = Math.max(1, Math.floor(telephony.sampleRate * 2 * 0.1));
-    for (let offset = 0; offset < audio.byteLength; offset += chunkSize) {
-      session.sendAudio(audio.subarray(offset, offset + chunkSize));
-      await new Promise((resolve) => setTimeout(resolve, 20));
-    }
-    session.close();
-
-    await waitForLiveExpectation(() => {
-      if (errors[0]) {
-        throw errors[0];
-      }
-      expect(normalizeTranscriptForMatch(transcripts.join(" "))).toContain("openclaw");
-    }, 60_000);
     const normalized = transcripts.join(" ").toLowerCase();
     const compact = normalizeTranscriptForMatch(normalized);
     expect(compact).toContain("openclaw");

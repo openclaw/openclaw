@@ -48,7 +48,7 @@ BUILD_LOCK_DIR="${TMPDIR:-/tmp}/openclaw-parallels-build.lock"
 TIMEOUT_INSTALL_SITE_S=420
 TIMEOUT_INSTALL_TGZ_S=420
 TIMEOUT_INSTALL_REGISTRY_S=420
-TIMEOUT_UPDATE_DEV_S="${OPENCLAW_PARALLELS_MACOS_UPDATE_DEV_TIMEOUT_S:-600}"
+TIMEOUT_UPDATE_DEV_S="${OPENCLAW_PARALLELS_MACOS_UPDATE_DEV_TIMEOUT_S:-1200}"
 TIMEOUT_VERIFY_S=60
 TIMEOUT_ONBOARD_S=180
 TIMEOUT_GATEWAY_S=180
@@ -796,6 +796,31 @@ guest_current_user_tail_file() {
   guest_current_user_exec /usr/bin/tail -n "$lines" "$file_path"
 }
 
+guest_current_user_kill_process_tree() {
+  local pid="$1"
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 0
+  guest_current_user_sh "$(cat <<EOF
+kill_tree() {
+  local target="\$1" child
+  for child in \$(/usr/bin/pgrep -P "\$target" 2>/dev/null || true); do
+    kill_tree "\$child"
+  done
+  /bin/kill -TERM "\$target" 2>/dev/null || true
+}
+kill_tree $(shell_quote "$pid")
+/bin/sleep 2
+kill_tree_force() {
+  local target="\$1" child
+  for child in \$(/usr/bin/pgrep -P "\$target" 2>/dev/null || true); do
+    kill_tree_force "\$child"
+  done
+  /bin/kill -KILL "\$target" 2>/dev/null || true
+}
+kill_tree_force $(shell_quote "$pid")
+EOF
+)" >/dev/null 2>&1 || true
+}
+
 latest_guest_npm_debug_log_path() {
   local guest_home="$1"
   guest_current_user_sh "$(cat <<EOF
@@ -880,11 +905,12 @@ run_logged_guest_current_user_sh() {
   local timeout_s="$4"
   local runner_path="$5"
   local deadline rc done_rc runner_body write_runner_cmd
-  local guest_home guest_log_state_path latest_npm_log_path latest_npm_log_state_path npm_state_path
+  local guest_home guest_log_state_path latest_npm_log_path latest_npm_log_state_path npm_state_path runner_pid_path runner_pid
   rc=""
   done_rc=""
   latest_npm_log_path=""
-  guest_current_user_exec /bin/rm -f "$log_path" "$done_path" "$runner_path"
+  runner_pid_path="$done_path.pid"
+  guest_current_user_exec /bin/rm -f "$log_path" "$done_path" "$runner_path" "$runner_pid_path"
   runner_body="$(cat <<EOF
 status=0
 (
@@ -906,7 +932,7 @@ EOF
   write_runner_cmd+="$runner_body"$'\n'
   write_runner_cmd+="__OPENCLAW_RUNNER__"$'\n'
   write_runner_cmd+="/bin/chmod +x $(shell_quote "$runner_path")"$'\n'
-  write_runner_cmd+="(/bin/bash $(shell_quote "$runner_path") > $(shell_quote "$log_path") 2>&1 < /dev/null &) >/dev/null 2>&1"
+  write_runner_cmd+="(/bin/bash $(shell_quote "$runner_path") > $(shell_quote "$log_path") 2>&1 < /dev/null & printf '%s\n' \"\$!\" > $(shell_quote "$runner_pid_path")) >/dev/null 2>&1"
   guest_current_user_sh "$write_runner_cmd"
   guest_home="$(resolve_guest_current_user_home)"
   guest_log_state_path="$(mktemp "${TMPDIR:-/tmp}/openclaw-guest-log-state.XXXXXX")"
@@ -936,7 +962,7 @@ print(matches[-1])
 PY
     )" || rc=""
     if [[ "$rc" =~ ^-?[0-9]+$ ]]; then
-      guest_current_user_exec /bin/rm -f "$done_path" "$runner_path" >/dev/null 2>&1 || true
+      guest_current_user_exec /bin/rm -f "$done_path" "$runner_path" "$runner_pid_path" >/dev/null 2>&1 || true
       stream_guest_file_delta "$log_path" "$guest_log_state_path" ""
       if [[ -n "$latest_npm_log_path" ]]; then
         stream_guest_file_delta "$latest_npm_log_path" "$latest_npm_log_state_path" "npm-debug: "
@@ -957,7 +983,7 @@ PY
     done_rc="$(guest_current_user_exec /bin/cat "$done_path" 2>/dev/null | tr -d '\r\n' || true)"
     if [[ "$done_rc" =~ ^-?[0-9]+$ ]]; then
       rc="$done_rc"
-      guest_current_user_exec /bin/rm -f "$done_path" "$runner_path" >/dev/null 2>&1 || true
+      guest_current_user_exec /bin/rm -f "$done_path" "$runner_path" "$runner_pid_path" >/dev/null 2>&1 || true
       stream_guest_file_delta "$log_path" "$guest_log_state_path" ""
       if [[ -n "$latest_npm_log_path" ]]; then
         stream_guest_file_delta "$latest_npm_log_path" "$latest_npm_log_state_path" "npm-debug: "
@@ -968,7 +994,7 @@ PY
     fi
     rc="$(guest_runner_rc_from_log "$log_path" 2>/dev/null || true)"
     if [[ "$rc" =~ ^-?[0-9]+$ ]]; then
-      guest_current_user_exec /bin/rm -f "$done_path" "$runner_path" >/dev/null 2>&1 || true
+      guest_current_user_exec /bin/rm -f "$done_path" "$runner_path" "$runner_pid_path" >/dev/null 2>&1 || true
       stream_guest_file_delta "$log_path" "$guest_log_state_path" ""
       if [[ -n "$latest_npm_log_path" ]]; then
         stream_guest_file_delta "$latest_npm_log_path" "$latest_npm_log_state_path" "npm-debug: "
@@ -979,6 +1005,12 @@ PY
     fi
     sleep 2
   done
+  runner_pid="$(guest_current_user_exec /bin/cat "$runner_pid_path" 2>/dev/null | tr -d '\r\n' || true)"
+  if [[ "$runner_pid" =~ ^[0-9]+$ ]]; then
+    warn "terminating timed-out guest runner pid $runner_pid"
+    guest_current_user_kill_process_tree "$runner_pid"
+  fi
+  guest_current_user_exec /bin/rm -f "$done_path" "$runner_path" "$runner_pid_path" >/dev/null 2>&1 || true
   rm -f "$guest_log_state_path" "$latest_npm_log_state_path" "$npm_state_path"
   warn "guest script timed out after ${timeout_s}s"
   guest_current_user_tail_file "$log_path" 120 >&2 || true

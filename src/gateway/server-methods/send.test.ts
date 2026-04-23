@@ -1006,6 +1006,42 @@ describe("gateway send mirroring", () => {
     );
   });
 
+  it("forwards replyToId on gateway sends", async () => {
+    mocks.resolveOutboundTarget.mockReturnValue({ ok: true, to: "123" });
+    mocks.deliverOutboundPayloads.mockResolvedValue([{ messageId: "m-reply", channel: "slack" }]);
+    const outboundPlugin = { outbound: { sendPoll: mocks.sendPoll } };
+    mocks.getChannelPlugin.mockReturnValue(outboundPlugin);
+
+    const { respond } = await runSend({
+      to: "123",
+      message: "threaded completion",
+      channel: "slack",
+      replyToId: "wamid.42",
+      idempotencyKey: "idem-reply-to",
+    });
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "slack",
+        to: "123",
+        replyToId: "wamid.42",
+      }),
+    );
+    expect(mocks.resolveOutboundSessionRoute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "slack",
+        target: "123",
+        replyToId: "wamid.42",
+      }),
+    );
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ messageId: "m-reply" }),
+      undefined,
+      expect.objectContaining({ channel: "slack" }),
+    );
+  });
+
   it("dispatches message actions through the gateway for plugin-owned channels", async () => {
     const reactPlugin: ChannelPlugin = {
       id: "whatsapp",

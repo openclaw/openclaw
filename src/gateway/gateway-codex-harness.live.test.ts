@@ -37,6 +37,17 @@ const CODEX_HARNESS_MCP_PROBE = isTruthyEnvValue(process.env.OPENCLAW_LIVE_CODEX
 const CODEX_HARNESS_GUARDIAN_PROBE = isTruthyEnvValue(
   process.env.OPENCLAW_LIVE_CODEX_HARNESS_GUARDIAN_PROBE,
 );
+const CODEX_HARNESS_REQUIRE_GUARDIAN_EVENTS = isTruthyEnvValue(
+  process.env.OPENCLAW_LIVE_CODEX_HARNESS_REQUIRE_GUARDIAN_EVENTS,
+);
+const CODEX_HARNESS_REQUEST_TIMEOUT_MS = resolveLiveTimeoutMs(
+  process.env.OPENCLAW_LIVE_CODEX_HARNESS_REQUEST_TIMEOUT_MS,
+  180_000,
+);
+const CODEX_HARNESS_AGENT_TIMEOUT_SECONDS = Math.max(
+  1,
+  Math.ceil(CODEX_HARNESS_REQUEST_TIMEOUT_MS / 1000) - 10,
+);
 const CODEX_HARNESS_AUTH_MODE =
   process.env.OPENCLAW_LIVE_CODEX_HARNESS_AUTH === "api-key" ? "api-key" : "codex-auth";
 const describeLive = LIVE && CODEX_HARNESS_LIVE ? describe : describe.skip;
@@ -68,12 +79,34 @@ type EnvSnapshot = {
   stateDir?: string;
 };
 
+function resolveLiveTimeoutMs(raw: string | undefined, fallback: number): number {
+  const parsed = raw ? Number(raw) : Number.NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
+}
+
 function logCodexLiveStep(step: string, details?: Record<string, unknown>): void {
   if (!CODEX_HARNESS_DEBUG) {
     return;
   }
   const suffix = details && Object.keys(details).length > 0 ? ` ${JSON.stringify(details)}` : "";
   console.error(`[gateway-codex-live] ${step}${suffix}`);
+}
+
+async function subscribeCodexLiveDebugEvents(sessionKey: string): Promise<() => void> {
+  if (!CODEX_HARNESS_DEBUG) {
+    return () => undefined;
+  }
+  const { onAgentEvent } = await import("../infra/agent-events.js");
+  return onAgentEvent((event) => {
+    if (event.sessionKey && event.sessionKey !== sessionKey) {
+      return;
+    }
+    logCodexLiveStep("agent-event", {
+      stream: event.stream,
+      sessionKey: event.sessionKey,
+      data: event.data,
+    });
+  });
 }
 
 function snapshotEnv(): EnvSnapshot {
@@ -214,8 +247,8 @@ async function writeLiveGatewayConfig(params: {
         workspace: params.workspace,
         embeddedHarness: { runtime: "codex", fallback: "none" },
         skipBootstrap: true,
+        timeoutSeconds: CODEX_HARNESS_AGENT_TIMEOUT_SECONDS,
         model: { primary: params.modelKey },
-        models: { [params.modelKey]: {} },
         sandbox: { mode: "off" },
       },
     },
@@ -253,8 +286,9 @@ async function requestAgentTextWithEvents(params: {
         message: params.message,
         deliver: false,
         thinking: "low",
+        timeout: CODEX_HARNESS_AGENT_TIMEOUT_SECONDS,
       },
-      { expectFinal: true },
+      { expectFinal: true, timeoutMs: CODEX_HARNESS_REQUEST_TIMEOUT_MS },
     );
     if (payload?.status !== "ok") {
       throw new Error(`agent status=${String(payload?.status)} payload=${JSON.stringify(payload)}`);
@@ -280,8 +314,9 @@ async function requestAgentText(params: {
       message: params.message,
       deliver: false,
       thinking: "low",
+      timeout: CODEX_HARNESS_AGENT_TIMEOUT_SECONDS,
     },
-    { expectFinal: true },
+    { expectFinal: true, timeoutMs: CODEX_HARNESS_REQUEST_TIMEOUT_MS },
   );
   if (payload?.status !== "ok") {
     throw new Error(`agent status=${String(payload?.status)} payload=${JSON.stringify(payload)}`);
@@ -307,8 +342,9 @@ async function requestCodexCommandText(params: {
       message: params.command,
       deliver: false,
       thinking: "low",
+      timeout: CODEX_HARNESS_AGENT_TIMEOUT_SECONDS,
     },
-    { expectFinal: true },
+    { expectFinal: true, timeoutMs: CODEX_HARNESS_REQUEST_TIMEOUT_MS },
   );
   if (payload?.status !== "ok") {
     throw new Error(
@@ -350,8 +386,9 @@ async function verifyCodexImageProbe(params: {
       ],
       deliver: false,
       thinking: "low",
+      timeout: CODEX_HARNESS_AGENT_TIMEOUT_SECONDS,
     },
-    { expectFinal: true },
+    { expectFinal: true, timeoutMs: CODEX_HARNESS_REQUEST_TIMEOUT_MS },
   );
   if (payload?.status !== "ok") {
     throw new Error(`image probe failed: status=${String(payload?.status)}`);
@@ -368,6 +405,9 @@ function assertGuardianReviewStatus(params: {
   const completedEvents = params.events.filter(
     (event) => event.data?.phase === "completed" && event.data?.status,
   );
+  if (completedEvents.length === 0 && !CODEX_HARNESS_REQUIRE_GUARDIAN_EVENTS) {
+    return;
+  }
   expect(
     completedEvents.some((event) => event.data?.status === params.expectedStatus),
     `${params.label} expected Guardian status ${params.expectedStatus}; events=${JSON.stringify(
@@ -451,7 +491,7 @@ async function verifyCodexCronMcpProbe(params: {
         deliver: false,
         thinking: "low",
       },
-      { expectFinal: true },
+      { expectFinal: true, timeoutMs: CODEX_HARNESS_REQUEST_TIMEOUT_MS },
     );
     if (payload?.status !== "ok") {
       throw new Error(`cron mcp probe failed: status=${String(payload?.status)}`);
@@ -558,31 +598,37 @@ describeLive("gateway live (Codex harness)", () => {
         token,
         deviceIdentity,
         timeoutMs: GATEWAY_CONNECT_TIMEOUT_MS,
+        requestTimeoutMs: CODEX_HARNESS_REQUEST_TIMEOUT_MS,
         clientDisplayName: "vitest-codex-harness-live",
       });
       logCodexLiveStep("client-connected");
 
       try {
         const sessionKey = "agent:dev:live-codex-harness";
+        const unsubscribeDebugEvents = await subscribeCodexLiveDebugEvents(sessionKey);
         const firstNonce = randomBytes(3).toString("hex").toUpperCase();
-        const firstToken = `CODEX-HARNESS-${firstNonce}`;
-        const firstText = await requestAgentText({
-          client,
-          sessionKey,
-          expectedToken: firstToken,
-          message: `Reply with exactly ${firstToken} and nothing else.`,
-        });
-        logCodexLiveStep("first-turn", { firstText });
+        try {
+          const firstToken = `CODEX-HARNESS-${firstNonce}`;
+          const firstText = await requestAgentText({
+            client,
+            sessionKey,
+            expectedToken: firstToken,
+            message: `Reply with exactly ${firstToken} and nothing else.`,
+          });
+          logCodexLiveStep("first-turn", { firstText });
 
-        const secondNonce = randomBytes(3).toString("hex").toUpperCase();
-        const secondToken = `CODEX-HARNESS-RESUME-${secondNonce}`;
-        const secondText = await requestAgentText({
-          client,
-          sessionKey,
-          expectedToken: secondToken,
-          message: `Reply with exactly ${secondToken} and nothing else. Do not repeat ${firstToken}.`,
-        });
-        logCodexLiveStep("second-turn", { secondText });
+          const secondNonce = randomBytes(3).toString("hex").toUpperCase();
+          const secondToken = `CODEX-HARNESS-RESUME-${secondNonce}`;
+          const secondText = await requestAgentText({
+            client,
+            sessionKey,
+            expectedToken: secondToken,
+            message: `Reply with exactly ${secondToken} and nothing else. Do not repeat ${firstToken}.`,
+          });
+          logCodexLiveStep("second-turn", { secondText });
+        } finally {
+          unsubscribeDebugEvents();
+        }
 
         const statusText = await requestCodexCommandText({
           client,

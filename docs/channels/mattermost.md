@@ -267,6 +267,7 @@ Notes:
 - `progress` shows a status preview while generating and only posts the final answer at completion.
 - `off` disables preview streaming.
 - If the stream cannot be finalized in place (for example the post was deleted mid-stream), OpenClaw falls back to sending a fresh final post so the reply is never lost.
+- Reasoning-only payloads are suppressed from channel posts, including text that arrives as a `> Reasoning:` blockquote. Set `/reasoning on` to see thinking in other surfaces; the Mattermost final post keeps the answer only.
 - See [Streaming](/concepts/streaming#preview-streaming-modes) for the channel-mapping matrix.
 
 ## Reactions (message tool)
@@ -351,7 +352,7 @@ Config:
 
 External scripts and webhooks can post buttons directly via the Mattermost REST API
 instead of going through the agent's `message` tool. Use `buildButtonAttachments()` from
-the extension when possible; if posting raw JSON, follow these rules:
+the plugin when possible; if posting raw JSON, follow these rules:
 
 **Payload structure:**
 

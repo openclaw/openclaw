@@ -9,7 +9,9 @@ import type { ResolvedAcpxPluginConfig } from "./config.js";
 
 const CODEX_AGENT_ID = "codex";
 const DEFAULT_CODEX_AUTH_PROFILE_ID = "openai-codex:default";
-const CODEX_AUTH_ENV_CLEAR_KEYS = ["OPENAI_API_KEY"];
+// acpx selects ACP auth methods from the OpenClaw process env before the wrapper
+// launches. Keep those env vars visible to the child so its auth method matches.
+const CODEX_AUTH_ENV_CLEAR_KEYS: string[] = [];
 
 type PreparedAcpxCodexAuth = {
   codexHome: string;

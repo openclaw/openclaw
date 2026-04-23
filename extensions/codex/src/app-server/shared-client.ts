@@ -87,7 +87,7 @@ export async function createIsolatedCodexAppServerClient(options?: {
     return client;
   } catch (error) {
     client.close();
-    await initialize.catch(() => undefined);
+    void initialize.catch(() => undefined);
     throw error;
   }
 }

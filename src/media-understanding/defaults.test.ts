@@ -36,6 +36,7 @@ describe("resolveAutoMediaKeyProviders", () => {
       "xai",
       "deepgram",
       "google",
+      "elevenlabs",
       "mistral",
     ]);
   });

@@ -133,7 +133,7 @@ Looking for third-party plugins? See [Community Plugins](/plugins/community).
     enabled: true,
     allow: ["voice-call"],
     deny: ["untrusted-plugin"],
-    load: { paths: ["~/Projects/oss/voice-call-extension"] },
+    load: { paths: ["~/Projects/oss/voice-call-plugin"] },
     entries: {
       "voice-call": { enabled: true, config: { provider: "twilio" } },
     },
@@ -169,11 +169,11 @@ OpenClaw scans for plugins in this order (first match wins):
     `plugins.load.paths` — explicit file or directory paths.
   </Step>
 
-  <Step title="Workspace extensions">
+  <Step title="Workspace plugins">
     `\<workspace\>/.openclaw/<plugin-root>/*.ts` and `\<workspace\>/.openclaw/<plugin-root>/*/index.ts`.
   </Step>
 
-  <Step title="Global extensions">
+  <Step title="Global plugins">
     `~/.openclaw/<plugin-root>/*.ts` and `~/.openclaw/<plugin-root>/*/index.ts`.
   </Step>
 

@@ -107,7 +107,7 @@ High-level:
 6. Installs deps with the repo package manager. For pnpm checkouts, the updater bootstraps `pnpm` on demand (via `corepack` first, then a temporary `npm install pnpm@10` fallback) instead of running `npm run build` inside a pnpm workspace.
 7. Builds + builds the Control UI.
 8. Runs `openclaw doctor` as the final “safe update” check.
-9. Syncs plugins to the active channel (dev uses bundled extensions; stable/beta uses npm) and updates npm-installed plugins.
+9. Syncs plugins to the active channel (dev uses bundled plugins; stable/beta uses npm) and updates npm-installed plugins.
 
 If an exact pinned npm plugin update resolves to an artifact whose integrity
 differs from the stored install record, `openclaw update` aborts that plugin

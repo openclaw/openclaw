@@ -509,6 +509,11 @@ OpenClaw still builds the tool list and receives dynamic tool results from the
 harness. Text, images, video, music, TTS, approvals, and messaging-tool output
 continue through the normal OpenClaw delivery path.
 
+Codex MCP tool approval elicitations are routed through OpenClaw's plugin
+approval flow when Codex marks `_meta.codex_approval_kind` as
+`"mcp_tool_call"`; other elicitation and free-form input requests still fail
+closed.
+
 When the selected model uses the Codex harness, native thread compaction is
 delegated to Codex app-server. OpenClaw keeps a transcript mirror for channel
 history, search, `/new`, `/reset`, and future model or harness switching. The

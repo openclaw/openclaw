@@ -766,6 +766,14 @@ export async function runPreparedReply(
     },
   };
 
+  const replyThreadingOverride =
+    isBareSessionReset && sessionCtx.ReplyThreading?.implicitCurrentMessage !== "deny"
+      ? {
+          ...sessionCtx.ReplyThreading,
+          implicitCurrentMessage: "deny" as const,
+        }
+      : undefined;
+
   return runReplyAgent({
     commandBody: prefixedCommandBody,
     followupRun,
@@ -799,5 +807,6 @@ export async function runPreparedReply(
     shouldInjectGroupIntro,
     typingMode,
     resetTriggered: effectiveResetTriggered,
+    replyThreadingOverride,
   });
 }

@@ -27,7 +27,12 @@ const DOCKER_OPENAI_MODEL: ModelDefinitionConfig = {
   maxTokens: 128_000,
 };
 
-async function writeProbeServer(params: { serverPath: string; pidPath: string; exitPath: string }) {
+async function writeProbeServer(params: {
+  serverPath: string;
+  pidPath: string;
+  pidsPath: string;
+  exitPath: string;
+}) {
   const sdkMcpServerPath = require.resolve("@modelcontextprotocol/sdk/server/mcp.js");
   const sdkStdioServerPath = require.resolve("@modelcontextprotocol/sdk/server/stdio.js");
   await fs.writeFile(
@@ -41,6 +46,7 @@ import { StdioServerTransport } from ${JSON.stringify(sdkStdioServerPath)};
 process.title = "openclaw-cron-mcp-cleanup-probe";
 await fsp.mkdir(${JSON.stringify(path.dirname(params.pidPath))}, { recursive: true });
 await fsp.writeFile(${JSON.stringify(params.pidPath)}, String(process.pid), "utf8");
+await fsp.appendFile(${JSON.stringify(params.pidsPath)}, String(process.pid) + "\\n", "utf8");
 process.once("exit", () => {
   try {
     fs.writeFileSync(${JSON.stringify(params.exitPath)}, "exited", "utf8");
@@ -72,13 +78,15 @@ async function main() {
   const probeDir = path.join(stateDir, "cron-mcp-cleanup");
   const serverPath = path.join(probeDir, "probe-server.mjs");
   const pidPath = path.join(probeDir, "probe.pid");
+  const pidsPath = path.join(probeDir, "probe.pids");
   const exitPath = path.join(probeDir, "probe.exit");
 
   await fs.mkdir(probeDir, { recursive: true });
   await fs.mkdir(path.dirname(configPath), { recursive: true });
   await fs.rm(pidPath, { force: true });
+  await fs.rm(pidsPath, { force: true });
   await fs.rm(exitPath, { force: true });
-  await writeProbeServer({ serverPath, pidPath, exitPath });
+  await writeProbeServer({ serverPath, pidPath, pidsPath, exitPath });
 
   const seededConfig = applyProviderConfigWithDefaultModelPreset(
     {
@@ -90,6 +98,20 @@ async function main() {
       },
       cron: {
         enabled: false,
+      },
+      agents: {
+        defaults: {
+          subagents: {
+            runTimeoutSeconds: 8,
+          },
+        },
+      },
+      tools: {
+        subagents: {
+          tools: {
+            alsoAllow: ["bundle-mcp"],
+          },
+        },
       },
       mcp: {
         servers: {
@@ -126,6 +148,7 @@ async function main() {
       configPath,
       serverPath,
       pidPath,
+      pidsPath,
       exitPath,
     }) + "\n",
   );

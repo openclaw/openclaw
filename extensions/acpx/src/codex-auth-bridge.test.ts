@@ -82,7 +82,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
 
     const wrapper = await fs.readFile(wrapperPath, "utf8");
     expect(wrapper).toContain(`CODEX_HOME: ${JSON.stringify(path.dirname(isolatedAuthPath))}`);
-    expect(wrapper).toContain("delete env[key]");
+    expect(wrapper).toContain("for (const key of [])");
     expect(wrapper).not.toContain("test-api-key");
   });
 

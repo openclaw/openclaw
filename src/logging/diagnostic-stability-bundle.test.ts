@@ -45,6 +45,32 @@ describe("diagnostic stability bundles", () => {
     return JSON.parse(fs.readFileSync(file, "utf8")) as DiagnosticStabilityBundle;
   }
 
+  function createImportedBundle(): Record<string, unknown> {
+    return {
+      version: 1,
+      generatedAt: "2026-04-22T12:00:00.000Z",
+      reason: "gateway.restart_startup_failed",
+      process: {
+        pid: 123,
+        platform: "darwin",
+        arch: "arm64",
+        node: "24.14.1",
+        uptimeMs: 1000,
+      },
+      host: {
+        hostname: "<redacted-hostname>",
+      },
+      snapshot: {
+        generatedAt: "2026-04-22T12:00:00.000Z",
+        capacity: 1000,
+        count: 1,
+        dropped: 0,
+        events: [{ seq: 1, ts: 1, type: "webhook.received" }],
+        summary: { byType: { "webhook.received": 1 } },
+      },
+    };
+  }
+
   it("writes a payload-free bundle with safe failure metadata", () => {
     startDiagnosticStabilityRecorder();
     emitDiagnosticEvent({
@@ -207,6 +233,85 @@ describe("diagnostic stability bundles", () => {
     );
   });
 
+  it("sanitizes imported bundles before returning them", () => {
+    const file = path.join(tempDir, "imported.json");
+    const bundle = createImportedBundle();
+    Object.assign(bundle, {
+      reason: "private reason token=secret",
+      privateTopLevel: "top-level-secret",
+      error: {
+        name: "private error name",
+        code: "ERR_TEST",
+        message: "error-message-secret",
+      },
+    });
+    Object.assign(bundle.process as Record<string, unknown>, {
+      command: "process-command-secret",
+    });
+    Object.assign(bundle.host as Record<string, unknown>, {
+      hostname: "private-hostname",
+      fqdn: "host-extra-secret",
+    });
+    const snapshot = bundle.snapshot as Record<string, unknown>;
+    Object.assign(snapshot, {
+      privateSnapshot: "snapshot-secret",
+      events: [
+        {
+          seq: 1,
+          ts: 1,
+          type: "webhook.error",
+          channel: "telegram",
+          reason: "private event reason",
+          chatId: "chat-id-secret",
+          error: "event-error-secret",
+        },
+      ],
+      summary: {
+        byType: {
+          "webhook.error": 1,
+          "private summary type": 1,
+        },
+        privateSummary: "summary-secret",
+      },
+    });
+    fs.writeFileSync(file, `${JSON.stringify(bundle, null, 2)}\n`, "utf8");
+
+    const result = readDiagnosticStabilityBundleFileSync(file);
+
+    expect(result.status).toBe("found");
+    if (result.status !== "found") {
+      return;
+    }
+    expect(result.bundle.reason).toBe("unknown");
+    expect(result.bundle.host).toEqual({ hostname: "<redacted-hostname>" });
+    expect(result.bundle.error).toEqual({ code: "ERR_TEST" });
+    expect(result.bundle.snapshot.events[0]).toEqual({
+      seq: 1,
+      ts: 1,
+      type: "webhook.error",
+      channel: "telegram",
+    });
+    expect(result.bundle.snapshot.summary.byType).toEqual({ "webhook.error": 1 });
+    const sanitized = JSON.stringify(result.bundle);
+    for (const secret of [
+      "private reason",
+      "top-level-secret",
+      "private error name",
+      "error-message-secret",
+      "process-command-secret",
+      "private-hostname",
+      "host-extra-secret",
+      "snapshot-secret",
+      "private event reason",
+      "chat-id-secret",
+      "event-error-secret",
+      "private summary type",
+      "summary-secret",
+    ]) {
+      expect(sanitized).not.toContain(secret);
+    }
+  });
+
   it("rejects malformed bundle files", () => {
     const file = path.join(tempDir, "invalid.json");
     fs.writeFileSync(file, "{}\n", "utf8");
@@ -233,36 +338,15 @@ describe("diagnostic stability bundles", () => {
   });
 
   it("rejects malformed bundle snapshots before returning them", () => {
-    const baseBundle = {
-      version: 1,
-      generatedAt: "2026-04-22T12:00:00.000Z",
-      reason: "gateway.restart_startup_failed",
-      process: {
-        pid: 123,
-        platform: "darwin",
-        arch: "arm64",
-        node: "24.14.1",
-        uptimeMs: 1000,
-      },
-      host: {
-        hostname: "<redacted-hostname>",
-      },
-      snapshot: {
-        generatedAt: "2026-04-22T12:00:00.000Z",
-        capacity: 1000,
-        count: 1,
-        dropped: 0,
-        events: [{ seq: 1, ts: 1, type: "webhook.received" }],
-        summary: { byType: { "webhook.received": 1 } },
-      },
-    };
+    const baseBundle = createImportedBundle();
+    const baseSnapshot = baseBundle.snapshot as Record<string, unknown>;
     const cases = [
       {
         name: "malformed-event",
         bundle: {
           ...baseBundle,
           snapshot: {
-            ...baseBundle.snapshot,
+            ...baseSnapshot,
             events: [{ type: "webhook.received", ts: 1 }],
           },
         },
@@ -273,7 +357,7 @@ describe("diagnostic stability bundles", () => {
         bundle: {
           ...baseBundle,
           snapshot: {
-            ...baseBundle.snapshot,
+            ...baseSnapshot,
             events: [{ seq: 1, ts: 9e15, type: "webhook.received" }],
           },
         },
@@ -284,7 +368,7 @@ describe("diagnostic stability bundles", () => {
         bundle: {
           ...baseBundle,
           snapshot: {
-            ...baseBundle.snapshot,
+            ...baseSnapshot,
             summary: null,
           },
         },

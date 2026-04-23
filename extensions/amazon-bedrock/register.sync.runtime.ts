@@ -1,4 +1,5 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
+import { resolvePluginConfigObject } from "openclaw/plugin-sdk/config-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import {
   ANTHROPIC_BY_MODEL_REPLAY_HOOKS,
@@ -249,8 +250,17 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
     /ModelStreamErrorException.*(?:Input is too long|too many input tokens)/i,
   ] as const;
   const anthropicByModelReplayHooks = ANTHROPIC_BY_MODEL_REPLAY_HOOKS;
-  const pluginConfig = (api.pluginConfig ?? {}) as AmazonBedrockPluginConfig;
-  const guardrail = pluginConfig.guardrail;
+  const startupPluginConfig = (api.pluginConfig ?? {}) as AmazonBedrockPluginConfig;
+
+  function resolveCurrentPluginConfig(
+    config: { plugins?: { entries?: Record<string, unknown> } } | undefined,
+  ): AmazonBedrockPluginConfig | undefined {
+    const runtimePluginConfig = resolvePluginConfigObject(config, providerId);
+    return (
+      (runtimePluginConfig as AmazonBedrockPluginConfig | undefined) ??
+      (config ? undefined : startupPluginConfig)
+    );
+  }
 
   api.registerMemoryEmbeddingProvider(bedrockMemoryEmbeddingProviderAdapter);
 
@@ -265,11 +275,6 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
     }
     return createBedrockNoCacheWrapper(streamFn);
   };
-
-  const cacheWrapStreamFn =
-    guardrail?.guardrailIdentifier && guardrail?.guardrailVersion
-      ? createGuardrailWrapStreamFn(baseWrapStreamFn, guardrail)
-      : baseWrapStreamFn;
 
   /** Extract the AWS region from a bedrock-runtime baseUrl. */
   function extractRegionFromBaseUrl(baseUrl: string | undefined): string | undefined {
@@ -321,9 +326,10 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
     catalog: {
       order: "simple",
       run: async (ctx) => {
+        const currentPluginConfig = resolveCurrentPluginConfig(ctx.config);
         const implicit = await resolveImplicitBedrockProvider({
           config: ctx.config,
-          pluginConfig,
+          pluginConfig: currentPluginConfig,
           env: ctx.env,
         });
         if (!implicit) {
@@ -340,8 +346,12 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
     resolveConfigApiKey: ({ env }) => resolveBedrockConfigApiKey(env),
     ...anthropicByModelReplayHooks,
     wrapStreamFn: ({ modelId, config, model, streamFn }) => {
+      const currentGuardrail = resolveCurrentPluginConfig(config)?.guardrail;
       // Apply cache + guardrail wrapping.
-      const wrapped = cacheWrapStreamFn({ modelId, streamFn });
+      const wrapped =
+        currentGuardrail?.guardrailIdentifier && currentGuardrail?.guardrailVersion
+          ? createGuardrailWrapStreamFn(baseWrapStreamFn, currentGuardrail)({ modelId, streamFn })
+          : baseWrapStreamFn({ modelId, streamFn });
       const region = resolveBedrockRegion(config) ?? extractRegionFromBaseUrl(model?.baseUrl);
       const mayNeedCacheInjection =
         isBedrockAppInferenceProfile(modelId) && !piAiWouldInjectCachePoints(modelId);

@@ -8,7 +8,7 @@ title: "plugins"
 
 # `openclaw plugins`
 
-Manage Gateway plugins/extensions, hook packs, and compatible bundles.
+Manage Gateway plugins, hook packs, and compatible bundles.
 
 Related:
 
@@ -172,7 +172,7 @@ For local paths and archives, OpenClaw auto-detects:
   component layout)
 - Cursor-compatible bundles (`.cursor-plugin/plugin.json`)
 
-Compatible bundles install into the normal extensions root and participate in
+Compatible bundles install into the normal plugin root and participate in
 the same list/info/enable/disable flow. Today, bundle skills, Claude
 command-skills, Claude `settings.json` defaults, Claude `.lsp.json` /
 manifest-declared `lspServers` defaults, Cursor command-skills, and compatible

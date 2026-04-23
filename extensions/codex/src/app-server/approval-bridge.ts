@@ -1,7 +1,7 @@
 import {
   type AgentApprovalEventData,
   type EmbeddedRunAttemptParams,
-} from "openclaw/plugin-sdk/agent-harness";
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   mapExecDecisionToOutcome,
   requestPluginApproval,

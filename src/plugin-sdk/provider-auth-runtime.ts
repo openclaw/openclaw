@@ -8,6 +8,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { ensureAuthProfileStoreForLocalUpdate } from "../agents/auth-profiles/store.js";
 import type { OAuthCredential } from "../agents/auth-profiles/types.js";
+import { resolveApiKeyForProvider as resolveModelApiKeyForProvider } from "../agents/model-auth.js";
 import { writePrivateSecretFileAtomic } from "../infra/secret-file.js";
 
 export { resolveEnvApiKey } from "../agents/model-auth-env.js";
@@ -438,7 +439,11 @@ async function loadRuntimeModelAuthModule(): Promise<RuntimeModelAuthModule> {
 export async function resolveApiKeyForProvider(
   params: Parameters<ResolveApiKeyForProvider>[0],
 ): Promise<Awaited<ReturnType<ResolveApiKeyForProvider>>> {
-  const { resolveApiKeyForProvider } = await loadRuntimeModelAuthModule();
+  const runtimeAuth = await loadRuntimeModelAuthModule();
+  const resolveApiKeyForProvider =
+    typeof runtimeAuth.resolveApiKeyForProvider === "function"
+      ? runtimeAuth.resolveApiKeyForProvider
+      : resolveModelApiKeyForProvider;
   return resolveApiKeyForProvider(params);
 }
 

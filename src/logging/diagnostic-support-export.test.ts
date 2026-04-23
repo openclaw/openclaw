@@ -392,6 +392,97 @@ describe("diagnostic support export", () => {
     expect(sanitizedConfig.agents?.[0]?.instructions).toBe("<redacted>");
   });
 
+  it("sanitizes imported stability bundles before adding them to support exports", async () => {
+    const bundlePath = path.join(tempDir, "imported-stability.json");
+    const outputPath = path.join(tempDir, "support-imported-stability.zip");
+    const importedBundle = {
+      version: 1,
+      generatedAt: "2026-04-22T12:00:00.000Z",
+      reason: "private reason token=secret",
+      process: { pid: 123, platform: "darwin", arch: "arm64", node: "24.14.1", uptimeMs: 1000 },
+      host: { hostname: "private-hostname" },
+      error: { name: "private error name", code: "ERR_TEST" },
+      snapshot: {
+        generatedAt: "2026-04-22T12:00:00.000Z",
+        capacity: 1000,
+        count: 1,
+        dropped: 0,
+        events: [
+          {
+            seq: 1,
+            ts: 1,
+            type: "webhook.error",
+            channel: "telegram",
+            reason: "private event reason",
+            error: "event-error-secret",
+          },
+        ],
+        summary: {
+          byType: {
+            "webhook.error": 1,
+            "private summary type": 1,
+          },
+          privateSummary: "summary-secret",
+        },
+      },
+    };
+    fs.writeFileSync(bundlePath, `${JSON.stringify(importedBundle, null, 2)}\n`, "utf8");
+
+    await writeDiagnosticSupportExport({
+      env: {
+        ...process.env,
+        HOME: tempDir,
+        OPENCLAW_STATE_DIR: tempDir,
+      },
+      stateDir: tempDir,
+      outputPath,
+      stabilityBundle: bundlePath,
+      now: new Date("2026-04-22T12:00:01.000Z"),
+      readLogTail: async () => ({
+        file: path.join(tempDir, "logs", "openclaw.log"),
+        cursor: 0,
+        size: 0,
+        truncated: false,
+        reset: false,
+        lines: [],
+      }),
+    });
+
+    const entries = await readZipTextEntries(outputPath);
+    const stability = JSON.parse(entries["stability/latest.json"] ?? "{}") as {
+      reason?: string;
+      host?: { hostname?: string };
+      error?: { code?: string; name?: string };
+      snapshot?: {
+        events?: Array<Record<string, unknown>>;
+        summary?: { byType?: Record<string, number> };
+      };
+    };
+    expect(stability.reason).toBe("unknown");
+    expect(stability.host).toEqual({ hostname: "<redacted-hostname>" });
+    expect(stability.error).toEqual({ code: "ERR_TEST" });
+    expect(stability.snapshot?.events?.[0]).toEqual({
+      seq: 1,
+      ts: 1,
+      type: "webhook.error",
+      channel: "telegram",
+    });
+    expect(stability.snapshot?.summary?.byType).toEqual({ "webhook.error": 1 });
+
+    const combined = Object.values(entries).join("\n");
+    for (const secret of [
+      "private reason",
+      "private-hostname",
+      "private error name",
+      "private event reason",
+      "event-error-secret",
+      "private summary type",
+      "summary-secret",
+    ]) {
+      expect(combined).not.toContain(secret);
+    }
+  });
+
   it("redacts numeric private fields in support snapshots and config", () => {
     const redaction = {
       env: {
@@ -431,7 +522,7 @@ describe("diagnostic support export", () => {
     >;
 
     expect(Object.getPrototypeOf(snapshot)).toBe(null);
-    expect(snapshot.__proto__).toBeUndefined();
+    expect(Object.hasOwn(snapshot, "__proto__")).toBe(false);
     expect(snapshot.constructor).toBeUndefined();
     expect(snapshot.prototype).toBeUndefined();
     expect(snapshot.field0000).toBe(0);

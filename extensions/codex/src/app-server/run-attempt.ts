@@ -3,7 +3,6 @@ import { SessionManager } from "@mariozechner/pi-coding-agent";
 import {
   buildEmbeddedAttemptToolRunContext,
   clearActiveEmbeddedRun,
-  createOpenClawCodingTools,
   embeddedAgentLog,
   formatErrorMessage,
   isSubagentSessionKey,
@@ -22,7 +21,7 @@ import {
   supportsModelTools,
   type EmbeddedRunAttemptParams,
   type EmbeddedRunAttemptResult,
-} from "openclaw/plugin-sdk/agent-harness";
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
 import {
   createCodexAppServerClientFactoryTestHooks,
@@ -48,6 +47,12 @@ import {
   buildTurnStartParams,
   startOrResumeThread,
 } from "./thread-lifecycle.js";
+import {
+  createCodexTrajectoryRecorder,
+  normalizeCodexTrajectoryError,
+  recordCodexTrajectoryCompletion,
+  recordCodexTrajectoryContext,
+} from "./trajectory.js";
 import { mirrorCodexAppServerTranscript } from "./transcript-mirror.js";
 
 let clientFactory = defaultCodexAppServerClientFactory;
@@ -130,8 +135,16 @@ export async function runCodexAppServerAttempt(
     messages: historyMessages,
     ctx: hookContext,
   });
+  const trajectoryRecorder = createCodexTrajectoryRecorder({
+    attempt: params,
+    cwd: effectiveWorkspace,
+    developerInstructions: promptBuild.developerInstructions,
+    prompt: promptBuild.prompt,
+    tools: toolBridge.specs,
+  });
   let client: CodexAppServerClient;
   let thread: CodexAppServerThreadBinding;
+  let trajectoryEndRecorded = false;
   try {
     ({ client, thread } = await withCodexStartupTimeout({
       timeoutMs: params.timeoutMs,
@@ -155,6 +168,20 @@ export async function runCodexAppServerAttempt(
     params.abortSignal?.removeEventListener("abort", abortFromUpstream);
     throw error;
   }
+  trajectoryRecorder?.recordEvent("session.started", {
+    sessionFile: params.sessionFile,
+    threadId: thread.threadId,
+    authProfileId: startupAuthProfileId,
+    workspaceDir: effectiveWorkspace,
+    toolCount: toolBridge.specs.length,
+  });
+  recordCodexTrajectoryContext(trajectoryRecorder, {
+    attempt: params,
+    cwd: effectiveWorkspace,
+    developerInstructions: promptBuild.developerInstructions,
+    prompt: promptBuild.prompt,
+    tools: toolBridge.specs,
+  });
 
   let projector: CodexAppServerEventProjector | undefined;
   let turnId: string | undefined;
@@ -231,7 +258,23 @@ export async function runCodexAppServerAttempt(
     if (!call || call.threadId !== thread.threadId || call.turnId !== turnId) {
       return undefined;
     }
-    return toolBridge.handleToolCall(call) as Promise<JsonValue>;
+    trajectoryRecorder?.recordEvent("tool.call", {
+      threadId: call.threadId,
+      turnId: call.turnId,
+      toolCallId: call.callId,
+      name: call.tool,
+      arguments: call.arguments,
+    });
+    const response = await toolBridge.handleToolCall(call);
+    trajectoryRecorder?.recordEvent("tool.result", {
+      threadId: call.threadId,
+      turnId: call.turnId,
+      toolCallId: call.callId,
+      name: call.tool,
+      success: response.success,
+      contentItems: response.contentItems,
+    });
+    return response as JsonValue;
   });
 
   const llmInputEvent = {
@@ -269,6 +312,14 @@ export async function runCodexAppServerAttempt(
       { timeoutMs: params.timeoutMs, signal: runAbortController.signal },
     );
   } catch (error) {
+    trajectoryRecorder?.recordEvent("session.ended", {
+      status: "error",
+      threadId: thread.threadId,
+      timedOut,
+      aborted: runAbortController.signal.aborted,
+      promptError: normalizeCodexTrajectoryError(error),
+    });
+    trajectoryEndRecorded = true;
     runAgentHarnessLlmOutputHook({
       event: {
         runId: params.runId,
@@ -290,16 +341,33 @@ export async function runCodexAppServerAttempt(
     });
     notificationCleanup();
     requestCleanup();
+    await trajectoryRecorder?.flush();
     params.abortSignal?.removeEventListener("abort", abortFromUpstream);
     throw error;
   }
   turnId = turn.turn.id;
+  trajectoryRecorder?.recordEvent("prompt.submitted", {
+    threadId: thread.threadId,
+    turnId,
+    prompt: promptBuild.prompt,
+    imagesCount: params.images?.length ?? 0,
+  });
   projector = new CodexAppServerEventProjector(params, thread.threadId, turnId);
+  const activeTurnId = turnId;
+  const activeProjector = projector;
   for (const notification of pendingNotifications.splice(0)) {
     await enqueueNotification(notification);
   }
-  const activeTurnId = turnId;
-  const activeProjector = projector;
+  if (!completed && isTerminalTurnStatus(turn.turn.status)) {
+    await enqueueNotification({
+      method: "turn/completed",
+      params: {
+        threadId: thread.threadId,
+        turnId: activeTurnId,
+        turn: turn.turn as unknown as JsonObject,
+      },
+    });
+  }
 
   const handle = {
     kind: "embedded" as const,
@@ -344,6 +412,23 @@ export async function runCodexAppServerAttempt(
     const finalAborted = result.aborted || runAbortController.signal.aborted;
     const finalPromptError = timedOut ? "codex app-server attempt timed out" : result.promptError;
     const finalPromptErrorSource = timedOut ? "prompt" : result.promptErrorSource;
+    recordCodexTrajectoryCompletion(trajectoryRecorder, {
+      attempt: params,
+      result,
+      threadId: thread.threadId,
+      turnId: activeTurnId,
+      timedOut,
+      yieldDetected,
+    });
+    trajectoryRecorder?.recordEvent("session.ended", {
+      status: finalPromptError ? "error" : finalAborted || timedOut ? "interrupted" : "success",
+      threadId: thread.threadId,
+      turnId: activeTurnId,
+      timedOut,
+      yieldDetected,
+      promptError: normalizeCodexTrajectoryError(finalPromptError),
+    });
+    trajectoryEndRecorded = true;
     await mirrorTranscriptBestEffort({
       params,
       agentId: sessionAgentId,
@@ -381,6 +466,16 @@ export async function runCodexAppServerAttempt(
       promptErrorSource: finalPromptErrorSource,
     };
   } finally {
+    if (trajectoryRecorder && !trajectoryEndRecorded) {
+      trajectoryRecorder.recordEvent("session.ended", {
+        status: timedOut || runAbortController.signal.aborted ? "interrupted" : "cleanup",
+        threadId: thread.threadId,
+        turnId: activeTurnId,
+        timedOut,
+        aborted: runAbortController.signal.aborted,
+      });
+    }
+    await trajectoryRecorder?.flush();
     clearTimeout(timeout);
     notificationCleanup();
     requestCleanup();
@@ -422,6 +517,7 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
   }
   const modelHasVision = params.model.input?.includes("image") ?? false;
   const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
+  const { createOpenClawCodingTools } = await import("openclaw/plugin-sdk/agent-harness");
   const allTools = createOpenClawCodingTools({
     agentId: input.sessionAgentId,
     ...buildEmbeddedAttemptToolRunContext(params),
@@ -581,7 +677,20 @@ function isTurnNotification(
   if (!isJsonObject(value)) {
     return false;
   }
-  return readString(value, "threadId") === threadId && readString(value, "turnId") === turnId;
+  return readString(value, "threadId") === threadId && readNotificationTurnId(value) === turnId;
+}
+
+function isTerminalTurnStatus(status: string | undefined): boolean {
+  return status === "completed" || status === "interrupted" || status === "failed";
+}
+
+function readNotificationTurnId(record: JsonObject): string | undefined {
+  return readString(record, "turnId") ?? readNestedTurnId(record);
+}
+
+function readNestedTurnId(record: JsonObject): string | undefined {
+  const turn = record.turn;
+  return isJsonObject(turn) ? readString(turn, "id") : undefined;
 }
 
 function readString(record: JsonObject, key: string): string | undefined {

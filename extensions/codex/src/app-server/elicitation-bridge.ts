@@ -1,4 +1,7 @@
-import { embeddedAgentLog, type EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
+import {
+  embeddedAgentLog,
+  type EmbeddedRunAttemptParams,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   mapExecDecisionToOutcome,
   requestPluginApproval,
@@ -19,6 +22,14 @@ type BridgeableApprovalElicitation = {
   requestedSchema: JsonObject;
   meta: JsonObject;
 };
+
+const MCP_TOOL_APPROVAL_KIND = "mcp_tool_call";
+const MCP_TOOL_APPROVAL_KIND_KEY = "codex_approval_kind";
+const MCP_TOOL_APPROVAL_CONNECTOR_NAME_KEY = "connector_name";
+const MCP_TOOL_APPROVAL_TOOL_TITLE_KEY = "tool_title";
+const MCP_TOOL_APPROVAL_TOOL_DESCRIPTION_KEY = "tool_description";
+const MCP_TOOL_APPROVAL_TOOL_PARAMS_DISPLAY_KEY = "tool_params_display";
+const MAX_DISPLAY_PARAM_VALUE_LENGTH = 120;
 
 export async function handleCodexAppServerElicitationRequest(params: {
   requestParams: JsonValue | undefined;
@@ -71,7 +82,7 @@ function readBridgeableApprovalElicitation(
     !requestParams ||
     readString(requestParams, "mode") !== "form" ||
     !isJsonObject(requestParams._meta) ||
-    requestParams._meta.codex_approval_kind !== "mcp_tool_call" ||
+    requestParams._meta[MCP_TOOL_APPROVAL_KIND_KEY] !== MCP_TOOL_APPROVAL_KIND ||
     !isJsonObject(requestParams.requestedSchema)
   ) {
     return undefined;
@@ -80,14 +91,54 @@ function readBridgeableApprovalElicitation(
   const requestedSchema = requestParams.requestedSchema;
   if (
     readString(requestedSchema, "type") !== "object" ||
-    !isJsonObject(requestedSchema.properties) ||
-    Object.keys(requestedSchema.properties).length === 0
+    !isJsonObject(requestedSchema.properties)
   ) {
     return undefined;
   }
 
   const title = readString(requestParams, "message") ?? "Codex MCP tool approval";
-  const propertyLines = Object.entries(requestedSchema.properties)
+  return {
+    title,
+    description: buildApprovalDescription({
+      title,
+      meta: requestParams._meta,
+      requestedSchema,
+      serverName: readString(requestParams, "serverName"),
+    }),
+    requestedSchema,
+    meta: requestParams._meta,
+  };
+}
+
+function buildApprovalDescription(params: {
+  title: string;
+  meta: JsonObject;
+  requestedSchema: JsonObject;
+  serverName: string | undefined;
+}): string {
+  const summaryLines = [
+    readString(params.meta, MCP_TOOL_APPROVAL_CONNECTOR_NAME_KEY) &&
+      `App: ${readString(params.meta, MCP_TOOL_APPROVAL_CONNECTOR_NAME_KEY)}`,
+    readString(params.meta, MCP_TOOL_APPROVAL_TOOL_TITLE_KEY) &&
+      `Tool: ${readString(params.meta, MCP_TOOL_APPROVAL_TOOL_TITLE_KEY)}`,
+    params.serverName && `MCP server: ${params.serverName}`,
+    readString(params.meta, MCP_TOOL_APPROVAL_TOOL_DESCRIPTION_KEY),
+  ].filter((line): line is string => Boolean(line));
+  const paramLines = readDisplayParamLines(params.meta);
+  const propertyLines = readPropertyDescriptionLines(params.requestedSchema);
+  return [
+    params.title,
+    summaryLines.join("\n"),
+    paramLines.length > 0 ? ["Parameters:", ...paramLines].join("\n") : "",
+    propertyLines.length > 0 ? ["Fields:", ...propertyLines].join("\n") : "",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function readPropertyDescriptionLines(requestedSchema: JsonObject): string[] {
+  const properties = isJsonObject(requestedSchema.properties) ? requestedSchema.properties : {};
+  return Object.entries(properties)
     .map(([name, value]) => {
       const schema = isJsonObject(value) ? value : undefined;
       if (!schema) {
@@ -98,15 +149,33 @@ function readBridgeableApprovalElicitation(
       return description ? `- ${propTitle}: ${description}` : `- ${propTitle}`;
     })
     .filter((line): line is string => Boolean(line));
+}
 
-  return {
-    title,
-    description: [title, propertyLines.length > 0 ? ["Fields:", ...propertyLines].join("\n") : ""]
-      .filter(Boolean)
-      .join("\n\n"),
-    requestedSchema,
-    meta: requestParams._meta,
-  };
+function readDisplayParamLines(meta: JsonObject): string[] {
+  const displayParams = meta[MCP_TOOL_APPROVAL_TOOL_PARAMS_DISPLAY_KEY];
+  if (!Array.isArray(displayParams)) {
+    return [];
+  }
+  return displayParams
+    .map((entry) => {
+      const param = isJsonObject(entry) ? entry : undefined;
+      if (!param) {
+        return undefined;
+      }
+      const name = readString(param, "display_name") ?? readString(param, "name");
+      if (!name) {
+        return undefined;
+      }
+      return `- ${name}: ${formatDisplayParamValue(param.value)}`;
+    })
+    .filter((line): line is string => Boolean(line));
+}
+
+function formatDisplayParamValue(value: JsonValue | undefined): string {
+  const formatted = typeof value === "string" ? value : JSON.stringify(value ?? null);
+  return formatted.length <= MAX_DISPLAY_PARAM_VALUE_LENGTH
+    ? formatted
+    : `${formatted.slice(0, MAX_DISPLAY_PARAM_VALUE_LENGTH - 3)}...`;
 }
 
 async function requestPluginApprovalOutcome(params: {
@@ -152,14 +221,21 @@ function buildElicitationResponse(
 
   const content = buildAcceptedContent(requestedSchema, meta, outcome);
   if (!content) {
+    if (hasNoSchemaProperties(requestedSchema)) {
+      return {
+        action: "accept",
+        content: null,
+        _meta: buildAcceptedMeta(meta, outcome),
+      };
+    }
     embeddedAgentLog.warn("codex MCP approval elicitation approved without a mappable response", {
-      approvalKind: meta.codex_approval_kind,
+      approvalKind: meta[MCP_TOOL_APPROVAL_KIND_KEY],
       fields: Object.keys(requestedSchema.properties ?? {}),
       outcome,
     });
     return { action: "decline", content: null, _meta: null };
   }
-  return { action: "accept", content, _meta: null };
+  return { action: "accept", content, _meta: buildAcceptedMeta(meta, outcome) };
 }
 
 function buildAcceptedContent(
@@ -248,15 +324,14 @@ function readPersistFieldValue(
   if (options.length === 0) {
     return undefined;
   }
-  for (const preferred of persistHints) {
+  const preferred = choosePersistHint(persistHints);
+  if (preferred) {
     const match = options.find(
       (option) => option.value === preferred || option.label === preferred,
     );
-    if (match) {
-      return match.value;
-    }
+    return match?.value;
   }
-  return options.find((option) => option.value === "session" || option.label === "session")?.value;
+  return undefined;
 }
 
 function readDefaultValue(schema: JsonObject): JsonValue | undefined {
@@ -302,6 +377,29 @@ function readPersistHints(meta: JsonObject): string[] {
     return raw.filter((entry): entry is string => typeof entry === "string");
   }
   return ["session", "always"];
+}
+
+function buildAcceptedMeta(meta: JsonObject, outcome: AppServerApprovalOutcome): JsonObject | null {
+  if (outcome !== "approved-session") {
+    return null;
+  }
+  const persist = choosePersistHint(readPersistHints(meta));
+  return persist ? { persist } : null;
+}
+
+function choosePersistHint(persistHints: string[]): "always" | "session" | undefined {
+  if (persistHints.includes("always")) {
+    return "always";
+  }
+  if (persistHints.includes("session")) {
+    return "session";
+  }
+  return undefined;
+}
+
+function hasNoSchemaProperties(requestedSchema: JsonObject): boolean {
+  const properties = isJsonObject(requestedSchema.properties) ? requestedSchema.properties : {};
+  return Object.keys(properties).length === 0;
 }
 
 function readEnumOptions(schema: JsonObject): Array<{ value: string; label: string }> {

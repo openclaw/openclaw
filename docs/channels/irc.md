@@ -9,7 +9,7 @@ read_when:
 # IRC
 
 Use IRC when you want OpenClaw in classic channels (`#room`) and direct messages.
-IRC ships as an extension plugin, but it is configured in the main config under `channels.irc`.
+IRC ships as a bundled plugin, but it is configured in the main config under `channels.irc`.
 
 ## Quick start
 
