@@ -48,6 +48,7 @@ describe("buildSandboxCreateArgs", () => {
       network: "none",
       user: "1000:1000",
       capDrop: ["ALL"],
+      noNewPrivileges: true,
       env: { LANG: "C.UTF-8" },
       pidsLimit: 256,
       memory: "512m",
@@ -162,6 +163,20 @@ describe("buildSandboxCreateArgs", () => {
         `OPENCLAW_CLI=${OPENCLAW_CLI_ENV_VALUE}`,
       ]),
     );
+  });
+
+  it("omits no-new-privileges when sandbox config disables it", () => {
+    const args = buildSandboxCreateArgs({
+      name: "openclaw-sbx-no-nnp",
+      cfg: createSandboxConfig({
+        capDrop: ["ALL"],
+        noNewPrivileges: false,
+      }),
+      scopeKey: "main",
+      createdAtMs: 1700000000000,
+    });
+
+    expect(args).not.toEqual(expect.arrayContaining(["--security-opt", "no-new-privileges"]));
   });
 
   it("emits -v flags for safe custom binds", () => {

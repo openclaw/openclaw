@@ -38,6 +38,9 @@ export function collectEnabledInsecureOrDangerousFlags(cfg: OpenClawConfig): str
         enabledFlags.push(`${pathPrefix}.${key}=true`);
       }
     }
+    if (docker.noNewPrivileges === false) {
+      enabledFlags.push(`${pathPrefix}.noNewPrivileges=false`);
+    }
   };
 
   if (cfg.gateway?.controlUi?.allowInsecureAuth === true) {

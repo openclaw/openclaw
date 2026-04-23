@@ -589,6 +589,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.list.*.heartbeat.timeoutSeconds": "Heartbeat Timeout (Seconds)",
   "agents.defaults.sandbox.browser.network": "Sandbox Browser Network",
   "agents.defaults.sandbox.browser.cdpSourceRange": "Sandbox Browser CDP Source Port Range",
+  "agents.defaults.sandbox.docker.noNewPrivileges": "Sandbox Docker No New Privileges",
   "agents.defaults.sandbox.docker.dangerouslyAllowContainerNamespaceJoin":
     "Sandbox Docker Allow Container Namespace Join",
   commands: "Commands",
@@ -821,6 +822,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.list[].heartbeat.timeoutSeconds": "Agent Heartbeat Timeout (Seconds)",
   "agents.list[].sandbox.browser.network": "Agent Sandbox Browser Network",
   "agents.list[].sandbox.browser.cdpSourceRange": "Agent Sandbox Browser CDP Source Port Range",
+  "agents.list[].sandbox.docker.noNewPrivileges": "Agent Sandbox Docker No New Privileges",
   "agents.list[].sandbox.docker.dangerouslyAllowContainerNamespaceJoin":
     "Agent Sandbox Docker Allow Container Namespace Join",
   "discovery.mdns.mode": "mDNS Discovery Mode",
