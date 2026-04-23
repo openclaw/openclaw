@@ -76,23 +76,23 @@ export async function runGatewayLoop(params: {
     const hadLock = await releaseLockIfHeld();
     // Release the lock BEFORE spawning so the child can acquire it immediately.
     const respawn = restartGatewayProcessWithFreshPid();
-    if (respawn.mode === "spawned" || respawn.mode === "supervised") {
-      const modeLabel =
-        respawn.mode === "spawned"
-          ? `spawned pid ${respawn.pid ?? "unknown"}`
-          : "supervisor restart";
-      gatewayLog.info(`restart mode: full process restart (${modeLabel})`);
-      if (
-        respawn.mode === "supervised" &&
-        detectRespawnSupervisor(process.env, process.platform) === "launchd"
-      ) {
+    if (respawn.mode === "spawned") {
+      gatewayLog.info(`restart mode: full process restart (spawned pid ${respawn.pid ?? "unknown"})`);
+      exitProcess(0);
+      return;
+    }
+    if (respawn.mode === "supervised") {
+      gatewayLog.info("restart mode: full process restart (supervisor restart)");
+      if (detectRespawnSupervisor(process.env, process.platform) === "launchd") {
         // A short clean-exit pause keeps rapid SIGUSR1/config restarts from
         // tripping launchd crash-loop throttling before KeepAlive relaunches.
         await new Promise((resolve) => {
           setTimeout(resolve, LAUNCHD_SUPERVISED_RESTART_EXIT_DELAY_MS);
         });
       }
-      exitProcess(0);
+      // Exit non-zero so systemd Restart=on-failure restarts the service.
+      // KeepAlive on launchd ignores exit code and restarts regardless.
+      exitProcess(1);
       return;
     }
     if (respawn.mode === "failed") {

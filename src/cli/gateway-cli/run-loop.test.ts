@@ -400,8 +400,8 @@ describe("runGatewayLoop", () => {
         const startedAt = Date.now();
 
         sigusr1();
-        await expect(exited).resolves.toBe(0);
-        expect(runtime.exit).toHaveBeenCalledWith(0);
+        await expect(exited).resolves.toBe(1);
+        expect(runtime.exit).toHaveBeenCalledWith(1);
         expect(Date.now() - startedAt).toBeGreaterThanOrEqual(1400);
       });
     } finally {
