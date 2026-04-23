@@ -4,6 +4,7 @@ import { isRecord } from "../utils.js";
 import {
   appendConfigAuditRecord,
   appendConfigAuditRecordSync,
+  resolveConfigAuditProcessInfo,
   type ConfigObserveAuditRecord,
 } from "./io.audit.js";
 import { resolveStateDir } from "./paths.js";
@@ -138,11 +139,7 @@ function createConfigObserveAuditRecord(params: {
     event: "config.observe",
     phase: "read",
     configPath: params.configPath,
-    pid: process.pid,
-    ppid: process.ppid,
-    cwd: process.cwd(),
-    argv: process.argv.slice(0, 8),
-    execArgv: process.execArgv.slice(0, 8),
+    ...resolveConfigAuditProcessInfo(),
     exists: true,
     valid: params.valid,
     hash: params.current.hash,

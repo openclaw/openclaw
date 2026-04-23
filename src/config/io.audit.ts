@@ -1,5 +1,17 @@
 import path from "node:path";
+import { getDefaultRedactPatterns, redactSensitiveText } from "../logging/redact.js";
 import { resolveStateDir } from "./paths.js";
+
+// Extra patterns for argv redaction:
+// 1. Adds flag names not covered by the default CLI flag pattern
+//    (bot-token, gateway-token, app-token, access-token, custom-api-key)
+// 2. Adds `=` as a separator so `--flag=value` is covered alongside `--flag value`
+//
+// NOTE: This is a blacklist. When adding new secret-bearing CLI flags to OpenClaw,
+// check whether they need to be added here as well.
+export const AUDIT_ARGV_EXTRA_PATTERNS: string[] = [
+  String.raw`--(?:api[-_]?key|custom[-_]?api[-_]?key|hook[-_]?token|bot[-_]?token|gateway[-_]?token|app[-_]?token|access[-_]?token|token|secret|secret[-_]key|secret[-_]input|password|passwd)(?:=|\s+)(["']?)([^\s"'\\]+)\1`,
+];
 
 const CONFIG_AUDIT_LOG_FILENAME = "config-audit.jsonl";
 
@@ -159,7 +171,7 @@ function normalizeAuditLabel(value: string | undefined): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
-function resolveConfigAuditProcessInfo(
+export function resolveConfigAuditProcessInfo(
   processInfo?: ConfigAuditProcessInfo,
 ): ConfigAuditProcessInfo {
   if (processInfo) {
@@ -169,7 +181,12 @@ function resolveConfigAuditProcessInfo(
     pid: process.pid,
     ppid: process.ppid,
     cwd: process.cwd(),
-    argv: process.argv.slice(0, 8),
+    argv: [
+      redactSensitiveText(process.argv.slice(0, 8).join(" "), {
+        mode: "tools",
+        patterns: [...getDefaultRedactPatterns(), ...AUDIT_ARGV_EXTRA_PATTERNS],
+      }),
+    ],
     execArgv: process.execArgv.slice(0, 8),
   };
 }

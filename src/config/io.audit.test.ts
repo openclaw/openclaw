@@ -1,13 +1,16 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { getDefaultRedactPatterns, redactSensitiveText } from "../logging/redact.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import {
+  AUDIT_ARGV_EXTRA_PATTERNS,
   appendConfigAuditRecord,
   createConfigWriteAuditRecordBase,
   finalizeConfigWriteAuditRecord,
   formatConfigOverwriteLogMessage,
   resolveConfigAuditLogPath,
+  resolveConfigAuditProcessInfo,
 } from "./io.audit.js";
 
 function createAuditRecordBase(configPath: string) {
@@ -215,3 +218,72 @@ describe("config io audit helpers", () => {
     });
   });
 });
+
+describe("resolveConfigAuditProcessInfo argv redaction", () => {
+  it("returns processInfo as-is when provided (override path, no redaction)", () => {
+    const info = resolveConfigAuditProcessInfo({
+      pid: 1,
+      ppid: 2,
+      cwd: "/work",
+      argv: ["node", "openclaw", "--token", "abc123"],
+      execArgv: [],
+    });
+    expect(info.argv).toEqual(["node", "openclaw", "--token", "abc123"]);
+  });
+
+  it("handles empty argv without error", () => {
+    const info = resolveConfigAuditProcessInfo({
+      pid: 1,
+      ppid: 2,
+      cwd: "/work",
+      argv: [],
+      execArgv: [],
+    });
+    expect(info.argv).toEqual([]);
+  });
+});
+
+describe("AUDIT_ARGV_EXTRA_PATTERNS redaction", () => {
+  function redact(input: string): string {
+    return redactSensitiveText(input, {
+      mode: "tools",
+      patterns: [...getDefaultRedactPatterns(), ...AUDIT_ARGV_EXTRA_PATTERNS],
+    });
+  }
+
+  it("redacts --token value (space-separated)", () => {
+    expect(redact("openclaw --token abc123")).not.toContain("abc123");
+    expect(redact("openclaw --token abc123")).toContain("--token");
+  });
+
+  it("redacts --token=value (equals format)", () => {
+    expect(redact("openclaw --token=abc123")).not.toContain("abc123");
+    expect(redact("openclaw --token=abc123")).toContain("--token");
+  });
+
+  it("redacts --bot-token value", () => {
+    expect(redact("openclaw --bot-token xoxb-secret")).not.toContain("xoxb-secret");
+  });
+
+  it("redacts --gateway-token value", () => {
+    expect(redact("openclaw --gateway-token mytoken")).not.toContain("mytoken");
+  });
+
+  it("redacts --password=value (equals format)", () => {
+    expect(redact("openclaw --password=hunter2")).not.toContain("hunter2");
+    expect(redact("openclaw --password=hunter2")).toContain("--password");
+  });
+
+  it("redacts --app-token, --access-token, --custom-api-key values", () => {
+    expect(redact("openclaw --app-token appval")).not.toContain("appval");
+    expect(redact("openclaw --access-token accval")).not.toContain("accval");
+    expect(redact("openclaw --custom-api-key ck123")).not.toContain("ck123");
+  });
+
+  it("does not redact non-secret flag values", () => {
+    const result = redact("openclaw gateway start --mode local --port 3000");
+    expect(result).toContain("local");
+    expect(result).toContain("3000");
+  });
+});
+
