@@ -35,25 +35,34 @@ function shouldEagerlyStartAgentMemory(params: {
   return hasExplicitAgentMemorySearchConfig(params.cfg, params.agentId);
 }
 
+const QMD_STARTUP_INIT_LABEL = "qmd memory startup initialization";
+const BUILTIN_LOCAL_PREWARM_LABEL = "builtin local memory startup prewarm";
+
 export async function startGatewayMemoryBackend(params: {
   cfg: OpenClawConfig;
   log: { info?: (msg: string) => void; warn: (msg: string) => void };
 }): Promise<void> {
   const agentIds = listAgentIds(params.cfg);
-  const armedAgentIds: string[] = [];
-  const deferredAgentIds: string[] = [];
+  const qmdBootSyncedAgentIds: string[] = [];
+  const deferredQmdAgentIds: string[] = [];
+  const deferredBuiltinLocalAgentIds: string[] = [];
   for (const agentId of agentIds) {
-    if (!resolveMemorySearchConfig(params.cfg, agentId)) {
+    const memorySearchConfig = resolveMemorySearchConfig(params.cfg, agentId);
+    if (!memorySearchConfig) {
       continue;
     }
     const resolved = resolveMemoryBackendConfig({ cfg: params.cfg, agentId });
     if (!resolved) {
       continue;
     }
-    if (resolved.backend !== "qmd" || !resolved.qmd) {
-      continue;
-    }
-    if (!shouldRunQmdStartupBootSync(resolved.qmd)) {
+
+    const shouldBootSyncQmd =
+      resolved.backend === "qmd" && resolved.qmd
+        ? shouldRunQmdStartupBootSync(resolved.qmd)
+        : false;
+    const shouldPrewarmBuiltinLocal =
+      resolved.backend === "builtin" && memorySearchConfig.provider === "local";
+    if (!shouldBootSyncQmd && !shouldPrewarmBuiltinLocal) {
       continue;
     }
     if (
@@ -63,45 +72,87 @@ export async function startGatewayMemoryBackend(params: {
         agentCount: agentIds.length,
       })
     ) {
-      deferredAgentIds.push(agentId);
+      if (shouldBootSyncQmd) {
+        deferredQmdAgentIds.push(agentId);
+      } else {
+        deferredBuiltinLocalAgentIds.push(agentId);
+      }
+      continue;
+    }
+
+    if (shouldBootSyncQmd) {
+      const { manager, error } = await getActiveMemorySearchManager({
+        cfg: params.cfg,
+        agentId,
+        purpose: "cli",
+      });
+      if (!manager) {
+        params.log.warn(
+          `${QMD_STARTUP_INIT_LABEL} failed for agent "${agentId}": ${error ?? "unknown error"}`,
+        );
+        continue;
+      }
+      try {
+        await manager.sync?.({ reason: "boot", force: true });
+      } catch (err) {
+        params.log.warn(
+          `qmd memory startup boot sync failed for agent "${agentId}": ${String(err)}`,
+        );
+        continue;
+      } finally {
+        await manager.close?.().catch((err) => {
+          params.log.warn(
+            `qmd memory startup manager close failed for agent "${agentId}": ${String(err)}`,
+          );
+        });
+      }
+      qmdBootSyncedAgentIds.push(agentId);
       continue;
     }
 
     const { manager, error } = await getActiveMemorySearchManager({
       cfg: params.cfg,
       agentId,
-      purpose: "cli",
     });
     if (!manager) {
       params.log.warn(
-        `qmd memory startup initialization failed for agent "${agentId}": ${error ?? "unknown error"}`,
+        `${BUILTIN_LOCAL_PREWARM_LABEL} failed for agent "${agentId}": ${error ?? "unknown error"}`,
       );
       continue;
     }
+
     try {
-      await manager.sync?.({ reason: "boot", force: true });
-    } catch (err) {
-      params.log.warn(`qmd memory startup boot sync failed for agent "${agentId}": ${String(err)}`);
-      continue;
-    } finally {
-      await manager.close?.().catch((err) => {
+      const probe = await manager.probeEmbeddingAvailability();
+      if (!probe.ok) {
         params.log.warn(
-          `qmd memory startup manager close failed for agent "${agentId}": ${String(err)}`,
+          `${BUILTIN_LOCAL_PREWARM_LABEL} failed for agent "${agentId}": ${probe.error ?? "unknown error"}`,
         );
-      });
+        continue;
+      }
+      params.log.info?.(`${BUILTIN_LOCAL_PREWARM_LABEL} completed for agent "${agentId}"`);
+    } catch (err) {
+      params.log.warn(
+        `${BUILTIN_LOCAL_PREWARM_LABEL} failed for agent "${agentId}": ${String(err)}`,
+      );
     }
-    armedAgentIds.push(agentId);
   }
-  if (armedAgentIds.length > 0) {
+  if (qmdBootSyncedAgentIds.length > 0) {
     params.log.info?.(
-      `qmd memory startup boot sync completed for ${formatAgentCount(armedAgentIds.length)}: ${armedAgentIds
+      `qmd memory startup boot sync completed for ${formatAgentCount(qmdBootSyncedAgentIds.length)}: ${qmdBootSyncedAgentIds
         .map((agentId) => `"${agentId}"`)
         .join(", ")}`,
     );
   }
-  if (deferredAgentIds.length > 0) {
+  if (deferredQmdAgentIds.length > 0) {
     params.log.info?.(
-      `qmd memory startup initialization deferred for ${formatAgentCount(deferredAgentIds.length)}: ${deferredAgentIds
+      `qmd memory startup initialization deferred for ${formatAgentCount(deferredQmdAgentIds.length)}: ${deferredQmdAgentIds
+        .map((agentId) => `"${agentId}"`)
+        .join(", ")}`,
+    );
+  }
+  if (deferredBuiltinLocalAgentIds.length > 0) {
+    params.log.info?.(
+      `builtin local memory startup prewarm deferred for ${formatAgentCount(deferredBuiltinLocalAgentIds.length)}: ${deferredBuiltinLocalAgentIds
         .map((agentId) => `"${agentId}"`)
         .join(", ")}`,
     );
