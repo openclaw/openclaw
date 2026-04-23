@@ -1181,6 +1181,84 @@ describe("installPluginFromArchive", () => {
     },
   );
 
+  it.runIf(process.platform !== "win32")(
+    "allows package installs when node_modules/openclaw points at the host package root",
+    async () => {
+      const { pluginDir } = setupPluginInstallDirs();
+      vi.mocked(resolveOpenClawPackageRootSync).mockReturnValue(process.cwd());
+
+      fs.writeFileSync(
+        path.join(pluginDir, "package.json"),
+        JSON.stringify({
+          name: "openclaw-peer-plugin",
+          version: "1.0.0",
+          openclaw: { extensions: ["index.js"] },
+          peerDependencies: {
+            openclaw: ">=2026.4.20",
+          },
+        }),
+      );
+      fs.writeFileSync(path.join(pluginDir, "index.js"), "export {};\n");
+
+      const nodeModulesDir = path.join(pluginDir, "node_modules");
+      fs.mkdirSync(nodeModulesDir, { recursive: true });
+      fs.symlinkSync(process.cwd(), path.join(nodeModulesDir, "openclaw"), "junction");
+      const binDir = path.join(nodeModulesDir, ".bin");
+      fs.mkdirSync(binDir);
+      fs.symlinkSync("../openclaw/openclaw.mjs", path.join(binDir, "openclaw"), "file");
+
+      const scanResult = await installSecurityScan.scanPackageInstallSource({
+        extensions: ["index.js"],
+        logger: { warn: vi.fn() },
+        packageDir: pluginDir,
+        pluginId: "openclaw-peer-plugin",
+        packageName: "openclaw-peer-plugin",
+      });
+
+      expect(scanResult?.blocked).toBeUndefined();
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "fails package installs when node_modules/openclaw points outside the host package root",
+    async () => {
+      const { pluginDir, tmpDir } = setupPluginInstallDirs();
+      const trustedHostDir = path.join(tmpDir, "trusted-host");
+      fs.mkdirSync(trustedHostDir);
+      vi.mocked(resolveOpenClawPackageRootSync).mockReturnValue(trustedHostDir);
+
+      fs.writeFileSync(
+        path.join(pluginDir, "package.json"),
+        JSON.stringify({
+          name: "spoofed-openclaw-peer-plugin",
+          version: "1.0.0",
+          openclaw: { extensions: ["index.js"] },
+          peerDependencies: {
+            openclaw: ">=2026.4.20",
+          },
+        }),
+      );
+      fs.writeFileSync(path.join(pluginDir, "index.js"), "export {};\n");
+
+      const externalDir = path.join(tmpDir, "external-openclaw");
+      fs.mkdirSync(externalDir, { recursive: true });
+      fs.writeFileSync(path.join(externalDir, "package.json"), '{"name":"openclaw"}\n');
+      const nodeModulesDir = path.join(pluginDir, "node_modules");
+      fs.mkdirSync(nodeModulesDir, { recursive: true });
+      fs.symlinkSync(externalDir, path.join(nodeModulesDir, "openclaw"), "junction");
+
+      await expect(
+        installSecurityScan.scanPackageInstallSource({
+          extensions: ["index.js"],
+          logger: { warn: vi.fn() },
+          packageDir: pluginDir,
+          pluginId: "spoofed-openclaw-peer-plugin",
+          packageName: "spoofed-openclaw-peer-plugin",
+        }),
+      ).rejects.toThrow("node_modules/openclaw");
+    },
+  );
+
   it("does not block package installs for blocked-looking names outside node_modules", async () => {
     const { pluginDir, extensionsDir } = setupPluginInstallDirs();
 
@@ -1434,6 +1512,7 @@ describe("installPluginFromArchive", () => {
 
   it("does not flag the real qa-matrix plugin as dangerous install code", async () => {
     const pluginDir = path.resolve(process.cwd(), "extensions", "qa-matrix");
+    vi.mocked(resolveOpenClawPackageRootSync).mockReturnValue(process.cwd());
 
     const scanResult = await installSecurityScan.scanPackageInstallSource({
       extensions: ["./index.ts"],

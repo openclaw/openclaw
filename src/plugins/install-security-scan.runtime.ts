@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { extensionUsesSkippedScannerPath, isPathInside } from "../security/scan-paths.js";
 import { scanDirectoryWithSummary } from "../security/skill-scanner.js";
 import {
@@ -175,6 +176,28 @@ function pathContainsNodeModulesSegment(relativePath: string): boolean {
     .includes("node_modules");
 }
 
+function isDirectNodeModulesSymlink(relativePath: string): boolean {
+  const segments = relativePath.split(/[\\/]+/).map((segment) => segment.trim().toLowerCase());
+  return segments.length >= 2 && segments[0] === "node_modules";
+}
+
+async function isTrustedHostOpenClawPath(resolvedTargetPath: string): Promise<boolean> {
+  const hostRoot = resolveOpenClawPackageRootSync({
+    argv1: process.argv[1],
+    moduleUrl: import.meta.url,
+    cwd: process.cwd(),
+  });
+  if (!hostRoot) {
+    return false;
+  }
+
+  const hostRootRealPath = await fs.realpath(hostRoot).catch(() => path.resolve(hostRoot));
+  return (
+    path.resolve(hostRootRealPath) === path.resolve(resolvedTargetPath) ||
+    isPathInside(hostRootRealPath, resolvedTargetPath)
+  );
+}
+
 async function inspectNodeModulesSymlinkTarget(params: {
   rootRealPath: string;
   symlinkPath: string;
@@ -195,6 +218,16 @@ async function inspectNodeModulesSymlinkTarget(params: {
   }
 
   if (!isPathInside(params.rootRealPath, resolvedTargetPath)) {
+    // Workspace plugins can carry package-manager-created links back to the
+    // trusted host package (for example openclaw and .bin/openclaw). Do not
+    // scan the host as plugin payload, but keep vendored or spoofed escaping
+    // node_modules symlinks fail-closed.
+    if (
+      isDirectNodeModulesSymlink(params.symlinkRelativePath) &&
+      (await isTrustedHostOpenClawPath(resolvedTargetPath))
+    ) {
+      return {};
+    }
     throw new Error(
       `manifest dependency scan found node_modules symlink target outside install root at ${params.symlinkRelativePath}`,
     );
