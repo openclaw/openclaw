@@ -15,6 +15,7 @@ internal data class GatewayEndpointConfig(
   val port: Int,
   val tls: Boolean,
   val displayUrl: String,
+  val transportUrl: String,
 )
 
 internal data class GatewaySetupCode(
@@ -166,9 +167,21 @@ internal fun parseGatewayEndpoint(rawInput: String): GatewayEndpointConfig? {
     } else {
       "${if (tls) "https" else "http"}://$displayHost:$port"
     }
+  val transportUrl =
+    if (tls && port == 443) {
+      "wss://$displayHost"
+    } else {
+      "${if (tls) "wss" else "ws"}://$displayHost:$port"
+    }
 
   return GatewayEndpointParseResult(
-    config = GatewayEndpointConfig(host = host, port = port, tls = tls, displayUrl = displayUrl),
+    config = GatewayEndpointConfig(
+      host = host,
+      port = port,
+      tls = tls,
+      displayUrl = displayUrl,
+      transportUrl = transportUrl,
+    ),
   )
 }
 
@@ -250,7 +263,7 @@ internal fun composeGatewayManualUrl(hostInput: String, portInput: String, tls: 
     portTrimmed.toIntOrNull() ?: return null
   }
   if (port !in 1..65535) return null
-  val scheme = if (tls) "https" else "http"
+  val scheme = if (tls) "wss" else "ws"
   return "$scheme://$host:$port"
 }
 

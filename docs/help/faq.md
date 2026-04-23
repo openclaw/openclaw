@@ -2873,8 +2873,11 @@ Related: [/concepts/oauth](/concepts/oauth) (OAuth flows, token storage, multi-a
     Quick fixes:
 
     1. Use the WS URL: `ws://<host>:18789` (or `wss://...` if HTTPS).
-    2. Don't open the WS port in a normal browser tab.
-    3. If auth is on, include the token/password in the `connect` frame.
+    2. For Tailscale/public mobile pairing, do not use raw `ws://` tailnet/public URLs. Use Tailscale Serve/Funnel or another `wss://` route.
+    3. Don't open the WS port in a normal browser tab.
+    4. If auth is on, include the token/password in the `connect` frame.
+
+    If mobile onboarding reaches `pairing required`, the route is usually working and the next step is approving the pending device request. Repeatedly rotating pending requests points to client retry churn rather than a transport failure.
 
     If you're using the CLI or TUI, the URL should look like:
 
