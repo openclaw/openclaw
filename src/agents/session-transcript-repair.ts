@@ -57,6 +57,43 @@ function hasToolCallId(block: RawToolCallBlock): boolean {
   return hasNonEmptyStringField(block.id);
 }
 
+/**
+ * Strip OpenAI-compatible "functions." or "functions " prefixes from tool names.
+ */
+function normalizePrefixedToolName(name: string): string {
+  if (typeof name !== "string" || !name) {
+    return name;
+  }
+  const trimmed = name.trim();
+  if (trimmed.startsWith("functions.")) {
+    return trimmed.slice("functions.".length).trim() || trimmed;
+  }
+  if (trimmed.startsWith("functions ")) {
+    return trimmed.slice("functions ".length).trim() || trimmed;
+  }
+  return trimmed;
+}
+
+function normalizeToolCallName(name: unknown): string | undefined {
+  const rawName = readStringValue(name);
+  if (!rawName) {
+    return undefined;
+  }
+  const normalizedName = normalizePrefixedToolName(rawName);
+  return normalizedName || undefined;
+}
+
+function isAllowedNormalizedToolCallName(
+  name: unknown,
+  allowedToolNames: Set<string> | null,
+): boolean {
+  const normalizedName = normalizeToolCallName(name);
+  if (!normalizedName) {
+    return false;
+  }
+  return isAllowedToolCallName(normalizedName, allowedToolNames);
+}
+
 function redactSessionsSpawnAttachmentsArgs(value: unknown): unknown {
   if (!value || typeof value !== "object") {
     return value;
@@ -99,10 +136,8 @@ function redactSessionsSpawnAttachment(item: unknown): Record<string, unknown> {
 
 function sanitizeToolCallBlock(block: RawToolCallBlock): RawToolCallBlock {
   const rawName = readStringValue(block.name);
-  const trimmedName = rawName?.trim();
-  const hasTrimmedName = typeof trimmedName === "string" && trimmedName.length > 0;
-  const normalizedName = hasTrimmedName ? trimmedName : undefined;
-  const nameChanged = hasTrimmedName && rawName !== trimmedName;
+  const normalizedName = normalizeToolCallName(block.name);
+  const nameChanged = typeof normalizedName === "string" && rawName !== normalizedName;
 
   const isSessionsSpawn = normalizeLowercaseStringOrEmpty(normalizedName) === "sessions_spawn";
 
@@ -160,7 +195,7 @@ function isReplaySafeThinkingAssistantTurn(
       !hasToolCallInput(block) ||
       !toolCallId ||
       seenToolCallIds.has(toolCallId) ||
-      !isAllowedToolCallName(block.name, allowedToolNames)
+      !isAllowedNormalizedToolCallName(block.name, allowedToolNames)
     ) {
       return false;
     }
@@ -204,7 +239,7 @@ function normalizeToolResultName(
   fallbackName?: string,
 ): Extract<AgentMessage, { role: "toolResult" }> {
   const rawToolName = (message as { toolName?: unknown }).toolName;
-  const normalizedToolName = normalizeOptionalString(rawToolName);
+  const normalizedToolName = normalizeToolCallName(rawToolName);
   if (normalizedToolName) {
     if (rawToolName === normalizedToolName) {
       return message;
@@ -214,7 +249,7 @@ function normalizeToolResultName(
 
   const normalizedFallback = normalizeOptionalString(fallbackName);
   if (normalizedFallback) {
-    return { ...message, toolName: normalizedFallback };
+    return { ...message, toolName: normalizePrefixedToolName(normalizedFallback) };
   }
 
   if (typeof rawToolName === "string") {
@@ -321,7 +356,7 @@ export function repairToolCallInputs(
         isRawToolCallBlock(block) &&
         (!hasToolCallInput(block) ||
           !hasToolCallId(block) ||
-          !isAllowedToolCallName((block as RawToolCallBlock).name, allowedToolNames))
+          !isAllowedNormalizedToolCallName((block as RawToolCallBlock).name, allowedToolNames))
       ) {
         droppedToolCalls += 1;
         droppedInMessage += 1;
@@ -337,10 +372,7 @@ export function repairToolCallInputs(
         ) {
           // Only sanitize (redact) sessions_spawn blocks; all others are passed through
           // unchanged to preserve provider-specific shapes (e.g. toolUse.input for Anthropic).
-          const blockName =
-            typeof (block as { name?: unknown }).name === "string"
-              ? (block as { name: string }).name.trim()
-              : undefined;
+          const blockName = normalizeToolCallName((block as { name?: unknown }).name);
           if (normalizeLowercaseStringOrEmpty(blockName) === "sessions_spawn") {
             const sanitized = sanitizeToolCallBlock(block);
             if (sanitized !== block) {
@@ -351,9 +383,9 @@ export function repairToolCallInputs(
           } else {
             if (typeof (block as { name?: unknown }).name === "string") {
               const rawName = (block as { name: string }).name;
-              const trimmedName = rawName.trim();
-              if (rawName !== trimmedName && trimmedName) {
-                const renamed = { ...(block as object), name: trimmedName } as typeof block;
+              const normalizedName = normalizePrefixedToolName(rawName);
+              if (rawName !== normalizedName && normalizedName) {
+                const renamed = { ...(block as object), name: normalizedName } as typeof block;
                 nextContent.push(renamed);
                 changed = true;
                 messageChanged = true;

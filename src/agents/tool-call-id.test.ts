@@ -2,8 +2,10 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { describe, expect, it } from "vitest";
 import { castAgentMessages } from "./test-helpers/agent-message-fixtures.js";
 import {
+  extractToolResultId,
   isValidCloudCodeAssistToolId,
   sanitizeToolCallId,
+  normalizeMangledToolCallId,
   sanitizeToolCallIdsForCloudCodeAssist,
 } from "./tool-call-id.js";
 
@@ -178,6 +180,28 @@ function expectReplaySafeSignedTurnOwnership(params: {
   expect(firstToolCall.id).not.toBe(secondToolCall.id);
 }
 
+describe("normalizeMangledToolCallId", () => {
+  it("normalizes space-prefixed function IDs to dot-prefixed form", () => {
+    expect(normalizeMangledToolCallId("functions exec:0")).toBe("functions.exec:0");
+    expect(normalizeMangledToolCallId("functions.exec:0")).toBe("functions.exec:0");
+  });
+});
+
+describe("extractToolResultId", () => {
+  it("normalizes mangled tool result IDs before pairing", () => {
+    const message = castAgentMessages([
+      {
+        role: "toolResult",
+        toolCallId: "functions exec:0",
+        toolName: "exec",
+        content: [{ type: "text", text: "ok" }],
+      },
+    ])[0] as Extract<AgentMessage, { role: "toolResult" }>;
+
+    expect(extractToolResultId(message)).toBe("functions.exec:0");
+  });
+});
+
 describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
   describe("strict mode (default)", () => {
     it("is a no-op for already-valid non-colliding IDs", () => {
@@ -240,6 +264,29 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
       const out = sanitizeToolCallIdsForCloudCodeAssist(input);
       expect(out).not.toBe(input);
       expectCollisionIdsRemainDistinct(out, "strict");
+    });
+
+    it("pairs canonical and mangled function IDs to the same sanitized tool call ID", () => {
+      const input = castAgentMessages([
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "functions.exec:0", name: "exec", arguments: {} }],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "functions exec:0",
+          toolName: "exec",
+          content: [{ type: "text", text: "ok" }],
+        },
+      ]);
+
+      const out = sanitizeToolCallIdsForCloudCodeAssist(input);
+      expect(out).not.toBe(input);
+      const assistant = out[0] as Extract<AgentMessage, { role: "assistant" }>;
+      const result = out[1] as Extract<AgentMessage, { role: "toolResult" }>;
+      const callId = (assistant.content?.[0] as { id?: string })?.id;
+      expect(callId).toBe(result.toolCallId);
+      expect(isValidCloudCodeAssistToolId(callId as string)).toBe(true);
     });
 
     it("caps tool call IDs at 40 chars while preserving uniqueness", () => {
