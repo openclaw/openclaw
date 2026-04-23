@@ -133,8 +133,27 @@ export function getBootstrapChannelPlugin(id: ChannelId): ChannelPlugin | undefi
     runtimePlugin = getBundledChannelPlugin(resolvedId);
     setupPlugin = getBundledChannelSetupPlugin(resolvedId);
   } catch {
-    registry.missingIds.add(resolvedId);
-    return undefined;
+  if (registry.missingIds.has(resolvedId)) {
+  return undefined;
+ }
+
+ let runtimePlugin: ChannelPlugin | undefined;
+ let setupPlugin: ChannelPlugin | undefined;
+
+try {
+  runtimePlugin = getBundledChannelPlugin(resolvedId);
+  setupPlugin = getBundledChannelSetupPlugin(resolvedId);
+} catch {
+  registry.missingIds.add(resolvedId);
+  return undefined;
+}
+
+const merged =
+  runtimePlugin && setupPlugin
+    ? mergeBootstrapPlugin(runtimePlugin, setupPlugin)
+    : runtimePlugin ?? setupPlugin;
+
+return merged;
   }
   const merged =
     runtimePlugin && setupPlugin
