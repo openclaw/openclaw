@@ -17,18 +17,17 @@ export function parseReplyDirectives(
   raw: string,
   options: { currentMessageId?: string; silentToken?: string } = {},
 ): ReplyDirectiveParseResult {
-  const split = splitMediaFromOutput(raw);
-  let text = split.text ?? "";
-
-  const replyParsed = parseInlineDirectives(text, {
+  // Strip reply tags before media extraction so directives like
+  // `[[reply_to_current]] MEDIA:./file.png` still parse both pieces correctly.
+  const replyParsed = parseInlineDirectives(raw, {
     currentMessageId: options.currentMessageId,
     stripAudioTag: false,
     stripReplyTags: true,
   });
 
-  if (replyParsed.hasReplyTag) {
-    text = replyParsed.text;
-  }
+  const preStripped = replyParsed.hasReplyTag ? replyParsed.text : raw;
+  const split = splitMediaFromOutput(preStripped);
+  let text = split.text ?? "";
 
   const silentToken = options.silentToken ?? SILENT_REPLY_TOKEN;
   const isSilent = isSilentReplyPayloadText(text, silentToken);

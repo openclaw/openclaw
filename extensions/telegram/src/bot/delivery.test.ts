@@ -1,7 +1,6 @@
 import type { Bot } from "grammy";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-
 const { loadWebMedia } = vi.hoisted(() => ({
   loadWebMedia: vi.fn(),
 }));
@@ -292,6 +291,56 @@ describe("deliverReplies", () => {
     });
 
     expect(triggerInternalHook).not.toHaveBeenCalled();
+  });
+
+  it("rewrites exact NO_REPLY for direct Telegram sessions", async () => {
+    const runtime = createRuntime(false);
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 12, chat: { id: "123" } });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      sessionKeyForInternalHooks: "agent:test:telegram:direct:123",
+      replies: [{ text: "NO_REPLY" }],
+      runtime,
+      bot,
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage.mock.calls[0]?.[1]).toEqual(expect.any(String));
+    expect(sendMessage.mock.calls[0]?.[1]?.trim()).not.toBe("NO_REPLY");
+  });
+
+  it("uses the policy session key for exact NO_REPLY policy", async () => {
+    const runtime = createRuntime(false);
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 121, chat: { id: "123" } });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      sessionKeyForInternalHooks: "agent:test:telegram:slash:123",
+      policySessionKey: "agent:test:telegram:direct:123",
+      replies: [{ text: "NO_REPLY" }],
+      runtime,
+      bot,
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage.mock.calls[0]?.[1]).toEqual(expect.any(String));
+    expect(sendMessage.mock.calls[0]?.[1]?.trim()).not.toBe("NO_REPLY");
+  });
+
+  it("suppresses exact NO_REPLY for group Telegram sessions", async () => {
+    const runtime = createRuntime(false);
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 13, chat: { id: "123" } });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      sessionKeyForInternalHooks: "agent:test:telegram:group:123",
+      replies: [{ text: "NO_REPLY" }],
+      runtime,
+      bot,
+    });
+
+    expect(sendMessage).not.toHaveBeenCalled();
   });
 
   it("emits internal message:sent with success=false on delivery failure", async () => {
@@ -617,6 +666,57 @@ describe("deliverReplies", () => {
       }),
     ).resolves.toEqual({ delivered: false });
     expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("parses reply tags from telegram reply text before delivery", async () => {
+    const runtime = createRuntime(false);
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 23, chat: { id: "123" } });
+    const bot = createBot({ sendMessage });
+
+    await deliverReplies({
+      replies: [{ text: "[[reply_to:42]] hello" }],
+      chatId: "123",
+      token: "tok",
+      runtime,
+      bot,
+      replyToMode: "all",
+      textLimit: 4000,
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledWith(
+      "123",
+      expect.stringContaining("hello"),
+      expect.objectContaining({
+        reply_to_message_id: 42,
+      }),
+    );
+  });
+
+  it("honors [[reply_to_current]] even when replyToMode is off", async () => {
+    const runtime = createRuntime(false);
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 24, chat: { id: "123" } });
+    const bot = createBot({ sendMessage });
+
+    await deliverReplies({
+      replies: [{ text: "[[reply_to_current]] hello" }],
+      currentMessageId: "77",
+      chatId: "123",
+      token: "tok",
+      runtime,
+      bot,
+      replyToMode: "off",
+      textLimit: 4000,
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledWith(
+      "123",
+      expect.stringContaining("hello"),
+      expect.objectContaining({
+        reply_to_message_id: 77,
+      }),
+    );
   });
 
   it("uses reply_to_message_id when quote text is provided", async () => {
