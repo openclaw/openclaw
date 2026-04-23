@@ -72,7 +72,7 @@ async function maybeRepairBundledPluginRuntimeDepsForGatewayStartup(params: {
     ((installParams) =>
       installBundledRuntimeDeps({
         installRoot: installParams.installRoot,
-        missingSpecs: installParams.installSpecs,
+        missingSpecs: installParams.missingSpecs,
         env,
       }));
   install({ installRoot, missingSpecs, installSpecs });

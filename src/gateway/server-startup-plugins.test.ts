@@ -5,6 +5,23 @@ const callOrder: string[] = [];
 const installBundledRuntimeDeps = vi.fn(() => {
   callOrder.push("repair");
 });
+const scanBundledPluginRuntimeDeps = vi.fn(() => ({
+  deps: [
+    {
+      name: "@larksuiteoapi/node-sdk",
+      version: "1.41.0",
+      pluginIds: ["feishu"],
+    },
+  ],
+  missing: [
+    {
+      name: "@larksuiteoapi/node-sdk",
+      version: "1.41.0",
+      pluginIds: ["feishu"],
+    },
+  ],
+  conflicts: [],
+}));
 const runChannelPluginStartupMaintenance = vi.fn(async () => {
   callOrder.push("maintenance");
 });
@@ -45,23 +62,7 @@ vi.mock("../infra/openclaw-root.js", () => ({
 vi.mock("../plugins/bundled-runtime-deps.js", () => ({
   installBundledRuntimeDeps,
   resolveBundledRuntimeDependencyPackageInstallRoot: vi.fn(() => "/opt/openclaw"),
-  scanBundledPluginRuntimeDeps: vi.fn(() => ({
-    deps: [
-      {
-        name: "@larksuiteoapi/node-sdk",
-        version: "1.41.0",
-        pluginIds: ["feishu"],
-      },
-    ],
-    missing: [
-      {
-        name: "@larksuiteoapi/node-sdk",
-        version: "1.41.0",
-        pluginIds: ["feishu"],
-      },
-    ],
-    conflicts: [],
-  })),
+  scanBundledPluginRuntimeDeps,
 }));
 
 vi.mock("../plugins/channel-plugin-ids.js", () => ({
@@ -98,6 +99,24 @@ describe("gateway startup plugin bootstrap", () => {
   beforeEach(() => {
     callOrder.length = 0;
     installBundledRuntimeDeps.mockClear();
+    scanBundledPluginRuntimeDeps.mockReset();
+    scanBundledPluginRuntimeDeps.mockReturnValue({
+      deps: [
+        {
+          name: "@larksuiteoapi/node-sdk",
+          version: "1.41.0",
+          pluginIds: ["feishu"],
+        },
+      ],
+      missing: [
+        {
+          name: "@larksuiteoapi/node-sdk",
+          version: "1.41.0",
+          pluginIds: ["feishu"],
+        },
+      ],
+      conflicts: [],
+    });
     runChannelPluginStartupMaintenance.mockClear();
     runStartupSessionMigration.mockClear();
     loadGatewayStartupPlugins.mockClear();
@@ -134,6 +153,68 @@ describe("gateway startup plugin bootstrap", () => {
     expect(callOrder.indexOf("repair")).toBeLessThan(callOrder.indexOf("maintenance"));
     expect(callOrder.indexOf("repair")).toBeLessThan(callOrder.indexOf("migration"));
     expect(callOrder.indexOf("repair")).toBeLessThan(callOrder.indexOf("plugins"));
+    expect(installBundledRuntimeDeps).toHaveBeenCalledWith({
+      installRoot: "/opt/openclaw",
+      missingSpecs: ["@larksuiteoapi/node-sdk@1.41.0"],
+      env: process.env,
+    });
+  });
+
+  it("installs only the missing bundled runtime deps during gateway startup preflight", async () => {
+    scanBundledPluginRuntimeDeps.mockReturnValue({
+      deps: [
+        {
+          name: "@larksuiteoapi/node-sdk",
+          version: "1.41.0",
+          pluginIds: ["feishu"],
+        },
+        {
+          name: "@slack/web-api",
+          version: "7.11.0",
+          pluginIds: ["slack"],
+        },
+      ],
+      missing: [
+        {
+          name: "@larksuiteoapi/node-sdk",
+          version: "1.41.0",
+          pluginIds: ["feishu"],
+        },
+      ],
+      conflicts: [],
+    });
+    const { prepareGatewayPluginBootstrap } = await import("./server-startup-plugins.js");
+
+    await prepareGatewayPluginBootstrap({
+      cfgAtStart: {
+        channels: {
+          feishu: {
+            appId: "cli-app",
+          },
+          slack: {
+            botToken: "xoxb-test",
+          },
+        },
+      },
+      startupRuntimeConfig: {
+        channels: {
+          feishu: {
+            appId: "cli-app",
+          },
+          slack: {
+            botToken: "xoxb-test",
+          },
+        },
+      },
+      minimalTestGateway: false,
+      log: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+        debug: vi.fn(),
+      },
+    });
+
     expect(installBundledRuntimeDeps).toHaveBeenCalledWith({
       installRoot: "/opt/openclaw",
       missingSpecs: ["@larksuiteoapi/node-sdk@1.41.0"],
