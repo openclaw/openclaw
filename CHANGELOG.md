@@ -6,6 +6,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Skills: add a new bundled `agent-audit` skill for evidence-first audits of agent runtimes, wrapper regressions, tool-discipline failures, hidden repair layers, and memory contamination, including bundled playbooks, rubric guidance, report schema, and an example structured report.
+
 ### Fixes
 
 - Plugins/startup: restore bundled plugin `openclaw/plugin-sdk/*` resolution from packaged installs and external runtime-deps stage roots, so Telegram/Discord no longer crash-loop with `Cannot find package 'openclaw'` after missing dependency repair.
@@ -53,8 +55,6 @@ Docs: https://docs.openclaw.ai
 - Codex harness/hooks: fire `llm_input`, `llm_output`, and `agent_end` for native Codex app-server turns so lifecycle hooks stop drifting from Pi. Thanks @vincentkoc.
 - QA/Telegram: record per-scenario reply RTT in the live Telegram QA report and summary, starting with the canary response. (#70550) Thanks @obviyus.
 - Status: add an explicit `Runner:` field to `/status` so sessions now report whether they are running on embedded Pi, a CLI-backed provider, or an ACP harness agent/backend such as `codex (acp/acpx)` or `gemini (acp/acpx)`. (#70595)
-
-### Fixes
 
 - Thinking defaults/status: raise the implicit default thinking level for reasoning-capable models from legacy `off`/`low` fallback behavior to a safe provider-supported `medium` equivalent when no explicit config default is set, preserve configured-model reasoning metadata when runtime catalog loading is empty, and make `/status` report the same resolved default as runtime.
 - Gateway/model pricing: fetch OpenRouter and LiteLLM pricing asynchronously at startup and extend catalog fetch timeouts to 30 seconds, reducing noisy timeout warnings during slow upstream responses.

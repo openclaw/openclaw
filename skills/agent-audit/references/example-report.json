@@ -1,0 +1,85 @@
+{
+  "schema_version": "agent-audit.report.v1",
+  "executive_verdict": {
+    "overall_health": "high_risk",
+    "primary_failure_mode": "stale same-session evidence is being reused as if it were current truth",
+    "most_urgent_fix": "enforce code-level fresh probes for operational queries"
+  },
+  "scope": {
+    "target_name": "Example Agent Runtime",
+    "entrypoints": ["cli", "slack adapter"],
+    "channels": ["slack", "cli"],
+    "model_stack": ["gpt-5.2", "memory-layer", "tool-router"],
+    "time_window": "historical incident window on 2026-04-15",
+    "layers_to_audit": [
+      "system_prompt",
+      "session_history",
+      "long_term_memory",
+      "distillation",
+      "active_recall",
+      "tool_selection",
+      "tool_execution",
+      "tool_interpretation",
+      "answer_shaping",
+      "platform_rendering",
+      "fallback_loops",
+      "persistence"
+    ]
+  },
+  "evidence_pack": [
+    {
+      "kind": "log",
+      "source": "runtime.log",
+      "location": "turn where the agent answered before using a required tool",
+      "summary": "The first reply claimed a system state without any current-turn probe.",
+      "time_scope": "historical"
+    },
+    {
+      "kind": "code",
+      "source": "runtime/tool-routing.ts",
+      "location": "tool-gating path",
+      "summary": "Operational queries can complete without hard tool enforcement.",
+      "time_scope": "current"
+    }
+  ],
+  "findings": [
+    {
+      "severity": "critical",
+      "title": "Operational answers can bypass real inspection",
+      "symptom": "The agent gives confident system-state answers before tools run.",
+      "user_impact": "Users receive wrong operational facts with high confidence.",
+      "source_layer": "tool_selection",
+      "mechanism": "Tool usage is encouraged in prompt text but not always required by code.",
+      "root_cause": "Prompt-enforced discipline instead of code-enforced discipline.",
+      "evidence_refs": ["runtime.log:first_reply_without_tool", "tool-routing:gate"],
+      "confidence": 0.98,
+      "fix_type": "code",
+      "recommended_fix": "Introduce task classification plus mandatory probe execution before final answer generation."
+    }
+  ],
+  "conflict_map": [
+    {
+      "from_layer": "session_history",
+      "to_layer": "tool_interpretation",
+      "conflict_type": "stale_state",
+      "note": "Old evidence is accepted as if it were fresh."
+    }
+  ],
+  "contamination_paths": [
+    {
+      "origin_layer": "session_history",
+      "affected_layer": "tool_selection",
+      "artifact": "stale operational observation",
+      "failure_mode": "stale_state",
+      "note": "A previous observation survives long enough to bias current-turn tool routing."
+    }
+  ],
+  "ordered_fix_plan": [
+    {
+      "order": 1,
+      "goal": "Force fresh probes for system-state queries",
+      "why_now": "It removes the most damaging correctness failure immediately.",
+      "expected_effect": "Wrong operational answers drop sharply."
+    }
+  ]
+}

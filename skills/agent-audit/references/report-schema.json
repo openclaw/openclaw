@@ -1,0 +1,78 @@
+{
+  "schema_version": "agent-audit.report.v1",
+  "executive_verdict": {
+    "overall_health": "critical | high_risk | unstable | acceptable | strong",
+    "primary_failure_mode": "string",
+    "most_urgent_fix": "string"
+  },
+  "scope": {
+    "target_name": "string",
+    "entrypoints": ["string"],
+    "channels": ["string"],
+    "model_stack": ["string"],
+    "time_window": "string",
+    "layers_to_audit": [
+      "system_prompt",
+      "session_history",
+      "long_term_memory",
+      "distillation",
+      "active_recall",
+      "tool_selection",
+      "tool_execution",
+      "tool_interpretation",
+      "answer_shaping",
+      "platform_rendering",
+      "fallback_loops",
+      "persistence"
+    ]
+  },
+  "evidence_pack": [
+    {
+      "kind": "code | log | db | config | screenshot | test",
+      "source": "string",
+      "location": "string",
+      "summary": "string",
+      "time_scope": "historical | current | mixed"
+    }
+  ],
+  "findings": [
+    {
+      "severity": "critical | high | medium | low",
+      "title": "string",
+      "symptom": "string",
+      "user_impact": "string",
+      "source_layer": "string",
+      "mechanism": "string",
+      "root_cause": "string",
+      "evidence_refs": ["string"],
+      "confidence": 0.0,
+      "fix_type": "code | config | prompt_removal | architecture | data_cleanup",
+      "recommended_fix": "string"
+    }
+  ],
+  "conflict_map": [
+    {
+      "from_layer": "string",
+      "to_layer": "string",
+      "conflict_type": "duplication | contradiction | stale_state | hidden_mutation | freeform_overwrite",
+      "note": "string"
+    }
+  ],
+  "contamination_paths": [
+    {
+      "origin_layer": "string",
+      "affected_layer": "string",
+      "artifact": "string",
+      "failure_mode": "string",
+      "note": "string"
+    }
+  ],
+  "ordered_fix_plan": [
+    {
+      "order": 1,
+      "goal": "string",
+      "why_now": "string",
+      "expected_effect": "string"
+    }
+  ]
+}
