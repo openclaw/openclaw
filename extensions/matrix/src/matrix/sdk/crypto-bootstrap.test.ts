@@ -253,6 +253,49 @@ describe("MatrixCryptoBootstrapper", () => {
     );
   });
 
+  it("can mark the own Matrix identity verified before cross-signing the current device", async () => {
+    const verifyOwnIdentity = vi.fn(async () => undefined);
+    const freeOwnIdentity = vi.fn();
+    const setDeviceVerified = vi.fn(async () => {});
+    const crossSignDevice = vi.fn(async () => {});
+    const getDeviceVerificationStatus = vi
+      .fn()
+      .mockResolvedValueOnce({
+        isVerified: () => false,
+        localVerified: false,
+        crossSigningVerified: false,
+        signedByOwner: true,
+      })
+      .mockResolvedValueOnce({
+        isVerified: () => true,
+        localVerified: true,
+        crossSigningVerified: true,
+        signedByOwner: true,
+      });
+    const { bootstrapper, crypto } = createBootstrapperHarness({
+      crossSignDevice,
+      getDeviceVerificationStatus,
+      getOwnIdentity: vi.fn(async () => ({
+        free: freeOwnIdentity,
+        isVerified: () => false,
+        verify: verifyOwnIdentity,
+      })),
+      isCrossSigningReady: vi.fn(async () => true),
+      setDeviceVerified,
+      userHasCrossSigningKeys: vi.fn(async () => true),
+    });
+
+    await bootstrapper.bootstrap(crypto, {
+      allowAutomaticCrossSigningReset: false,
+      verifyOwnIdentity: true,
+    });
+
+    expect(verifyOwnIdentity).toHaveBeenCalledTimes(1);
+    expect(freeOwnIdentity).toHaveBeenCalledTimes(1);
+    expect(setDeviceVerified).toHaveBeenCalledWith("@bot:example.org", "DEVICE123", true);
+    expect(crossSignDevice).toHaveBeenCalledWith("DEVICE123");
+  });
+
   it("refreshes published cross-signing keys before importing private keys from secret storage", async () => {
     const bootstrapCrossSigning = vi.fn(async () => {});
     const userHasCrossSigningKeys = vi.fn(async () => true);

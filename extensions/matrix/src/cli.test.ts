@@ -4,10 +4,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerMatrixCli, resetMatrixCliStateForTests } from "./cli.js";
 
 const bootstrapMatrixVerificationMock = vi.fn();
+const acceptMatrixVerificationMock = vi.fn();
+const cancelMatrixVerificationMock = vi.fn();
+const confirmMatrixVerificationSasMock = vi.fn();
 const getMatrixRoomKeyBackupStatusMock = vi.fn();
+const getMatrixVerificationSasMock = vi.fn();
 const getMatrixVerificationStatusMock = vi.fn();
 const listMatrixOwnDevicesMock = vi.fn();
+const listMatrixVerificationsMock = vi.fn();
+const mismatchMatrixVerificationSasMock = vi.fn();
 const pruneMatrixStaleGatewayDevicesMock = vi.fn();
+const requestMatrixVerificationMock = vi.fn();
 const resolveMatrixAccountConfigMock = vi.fn();
 const resolveMatrixAccountMock = vi.fn();
 const resolveMatrixAuthContextMock = vi.fn();
@@ -17,19 +24,31 @@ const matrixRuntimeLoadConfigMock = vi.fn();
 const matrixRuntimeWriteConfigFileMock = vi.fn();
 const resetMatrixRoomKeyBackupMock = vi.fn();
 const restoreMatrixRoomKeyBackupMock = vi.fn();
+const runMatrixSelfVerificationMock = vi.fn();
 const setMatrixSdkConsoleLoggingMock = vi.fn();
 const setMatrixSdkLogModeMock = vi.fn();
+const startMatrixVerificationMock = vi.fn();
 const updateMatrixOwnProfileMock = vi.fn();
 const verifyMatrixRecoveryKeyMock = vi.fn();
 const consoleLogMock = vi.fn();
 const consoleErrorMock = vi.fn();
+const stdoutWriteMock = vi.fn();
 
 vi.mock("./matrix/actions/verification.js", () => ({
+  acceptMatrixVerification: (...args: unknown[]) => acceptMatrixVerificationMock(...args),
   bootstrapMatrixVerification: (...args: unknown[]) => bootstrapMatrixVerificationMock(...args),
+  cancelMatrixVerification: (...args: unknown[]) => cancelMatrixVerificationMock(...args),
+  confirmMatrixVerificationSas: (...args: unknown[]) => confirmMatrixVerificationSasMock(...args),
   getMatrixRoomKeyBackupStatus: (...args: unknown[]) => getMatrixRoomKeyBackupStatusMock(...args),
+  getMatrixVerificationSas: (...args: unknown[]) => getMatrixVerificationSasMock(...args),
   getMatrixVerificationStatus: (...args: unknown[]) => getMatrixVerificationStatusMock(...args),
+  listMatrixVerifications: (...args: unknown[]) => listMatrixVerificationsMock(...args),
+  mismatchMatrixVerificationSas: (...args: unknown[]) => mismatchMatrixVerificationSasMock(...args),
+  requestMatrixVerification: (...args: unknown[]) => requestMatrixVerificationMock(...args),
   resetMatrixRoomKeyBackup: (...args: unknown[]) => resetMatrixRoomKeyBackupMock(...args),
   restoreMatrixRoomKeyBackup: (...args: unknown[]) => restoreMatrixRoomKeyBackupMock(...args),
+  runMatrixSelfVerification: (...args: unknown[]) => runMatrixSelfVerificationMock(...args),
+  startMatrixVerification: (...args: unknown[]) => startMatrixVerificationMock(...args),
   verifyMatrixRecoveryKey: (...args: unknown[]) => verifyMatrixRecoveryKeyMock(...args),
 }));
 
@@ -110,6 +129,27 @@ function mockMatrixVerificationStatus(params: {
   });
 }
 
+function mockMatrixVerificationSummary(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "self-1",
+    transactionId: "txn-1",
+    otherUserId: "@bot:example.org",
+    otherDeviceId: "PHONE123",
+    isSelfVerification: true,
+    initiatedByMe: true,
+    phaseName: "started",
+    pending: true,
+    methods: ["m.sas.v1"],
+    chosenMethod: "m.sas.v1",
+    hasSas: true,
+    sas: {
+      decimal: [1234, 5678, 9012],
+    },
+    completed: false,
+    ...overrides,
+  };
+}
+
 describe("matrix CLI verification commands", () => {
   beforeEach(() => {
     resetMatrixCliStateForTests();
@@ -119,8 +159,13 @@ describe("matrix CLI verification commands", () => {
     vi.spyOn(console, "error").mockImplementation((...args: unknown[]) =>
       consoleErrorMock(...args),
     );
+    vi.spyOn(process.stdout, "write").mockImplementation(((chunk: string | Uint8Array) => {
+      stdoutWriteMock(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8"));
+      return true;
+    }) as typeof process.stdout.write);
     consoleLogMock.mockReset();
     consoleErrorMock.mockReset();
+    stdoutWriteMock.mockReset();
     matrixSetupValidateInputMock.mockReturnValue(null);
     matrixSetupApplyAccountConfigMock.mockImplementation(({ cfg }: { cfg: unknown }) => cfg);
     matrixRuntimeLoadConfigMock.mockReturnValue({});
@@ -198,6 +243,245 @@ describe("matrix CLI verification commands", () => {
     });
 
     expect(process.exitCode).toBe(1);
+  });
+
+  it("prints recovery-key and identity-trust diagnostics for device verification failures", async () => {
+    verifyMatrixRecoveryKeyMock.mockResolvedValue({
+      success: false,
+      error:
+        "Matrix recovery key was applied, but this device still lacks full Matrix identity trust.",
+      encryptionEnabled: true,
+      userId: "@bot:example.org",
+      deviceId: "DEVICE123",
+      backupVersion: "7",
+      backup: {
+        serverVersion: "7",
+        activeVersion: "7",
+        trusted: true,
+        matchesDecryptionKey: true,
+        decryptionKeyCached: true,
+        keyLoadAttempted: true,
+        keyLoadError: null,
+      },
+      verified: false,
+      localVerified: true,
+      crossSigningVerified: false,
+      signedByOwner: false,
+      recoveryKeyAccepted: true,
+      backupUsable: true,
+      deviceOwnerVerified: false,
+      recoveryKeyStored: true,
+      recoveryKeyCreatedAt: "2026-02-25T20:10:11.000Z",
+    });
+    const program = buildProgram();
+
+    await program.parseAsync(["matrix", "verify", "device", "valid-key"], {
+      from: "user",
+    });
+
+    expect(process.exitCode).toBe(1);
+    expect(consoleErrorMock).toHaveBeenCalledWith(
+      "Verification failed: Matrix recovery key was applied, but this device still lacks full Matrix identity trust.",
+    );
+    expect(consoleLogMock).toHaveBeenCalledWith("Recovery key accepted: yes");
+    expect(consoleLogMock).toHaveBeenCalledWith("Backup usable: yes");
+    expect(consoleLogMock).toHaveBeenCalledWith("Device verified by owner: no");
+    expect(consoleLogMock).toHaveBeenCalledWith("Backup: active and trusted on this device");
+    expect(consoleLogMock).toHaveBeenCalledWith(
+      "- Recovery key can unlock the room-key backup, but full Matrix identity trust is still incomplete. Run 'openclaw matrix verify self' and follow the prompts from another Matrix client.",
+    );
+    expect(consoleLogMock).toHaveBeenCalledWith(
+      "- If you intend to replace the current cross-signing identity, run 'openclaw matrix verify bootstrap --recovery-key <key> --force-reset-cross-signing'.",
+    );
+  });
+
+  it("runs interactive Matrix self-verification in one CLI flow", async () => {
+    runMatrixSelfVerificationMock.mockResolvedValue(
+      mockMatrixVerificationSummary({
+        completed: true,
+        deviceOwnerVerified: true,
+        ownerVerification: {
+          backup: {
+            activeVersion: "1",
+            decryptionKeyCached: true,
+            keyLoadAttempted: false,
+            keyLoadError: null,
+            matchesDecryptionKey: true,
+            serverVersion: "1",
+            trusted: true,
+          },
+          backupVersion: "1",
+          crossSigningVerified: true,
+          deviceId: "DEVICE123",
+          localVerified: true,
+          recoveryKeyCreatedAt: null,
+          recoveryKeyId: null,
+          recoveryKeyStored: true,
+          signedByOwner: true,
+          userId: "@bot:example.org",
+          verified: true,
+        },
+        pending: false,
+        phaseName: "done",
+      }),
+    );
+    const program = buildProgram();
+
+    await program.parseAsync(
+      ["matrix", "verify", "self", "--account", "ops", "--timeout-ms", "5000"],
+      {
+        from: "user",
+      },
+    );
+
+    expect(runMatrixSelfVerificationMock).toHaveBeenCalledWith({
+      accountId: "ops",
+      cfg: {},
+      timeoutMs: 5000,
+      onRequested: expect.any(Function),
+      onReady: expect.any(Function),
+      onSas: expect.any(Function),
+      confirmSas: expect.any(Function),
+    });
+    expect(consoleLogMock).toHaveBeenCalledWith("Self-verification complete.");
+    expect(consoleLogMock).toHaveBeenCalledWith("Device verified by owner: yes");
+    expect(consoleLogMock).toHaveBeenCalledWith("Cross-signing verified: yes");
+    expect(consoleLogMock).toHaveBeenCalledWith("Signed by owner: yes");
+    expect(consoleLogMock).toHaveBeenCalledWith("Backup: active and trusted on this device");
+  });
+
+  it("requests Matrix self-verification and prints the follow-up SAS commands", async () => {
+    requestMatrixVerificationMock.mockResolvedValue(
+      mockMatrixVerificationSummary({
+        id: "self-verify-1",
+        hasSas: false,
+        sas: undefined,
+      }),
+    );
+    const program = buildProgram();
+
+    await program.parseAsync(["matrix", "verify", "request", "--own-user", "--account", "ops"], {
+      from: "user",
+    });
+
+    expect(requestMatrixVerificationMock).toHaveBeenCalledWith({
+      accountId: "ops",
+      cfg: {},
+      ownUser: true,
+      userId: undefined,
+      deviceId: undefined,
+      roomId: undefined,
+    });
+    expect(consoleLogMock).toHaveBeenCalledWith("Verification id: self-verify-1");
+    expect(consoleLogMock).toHaveBeenCalledWith(
+      "- Accept the verification request in another Matrix client for this account.",
+    );
+    expect(consoleLogMock).toHaveBeenCalledWith(
+      "- Then run 'openclaw matrix verify start self-verify-1 --account ops' to start SAS verification.",
+    );
+    expect(consoleLogMock).toHaveBeenCalledWith(
+      "- Run 'openclaw matrix verify sas self-verify-1 --account ops' to display the SAS emoji or decimals.",
+    );
+    expect(consoleLogMock).toHaveBeenCalledWith(
+      "- When the SAS matches, run 'openclaw matrix verify confirm-sas self-verify-1 --account ops'.",
+    );
+  });
+
+  it("rejects ambiguous Matrix verification request targets", async () => {
+    const program = buildProgram();
+
+    await program.parseAsync(
+      ["matrix", "verify", "request", "--own-user", "--user-id", "@other:example.org"],
+      { from: "user" },
+    );
+
+    expect(process.exitCode).toBe(1);
+    expect(requestMatrixVerificationMock).not.toHaveBeenCalled();
+    expect(consoleErrorMock).toHaveBeenCalledWith(
+      "Verification request failed: --own-user cannot be combined with --user-id, --device-id, or --room-id",
+    );
+  });
+
+  it("lists Matrix verification requests", async () => {
+    listMatrixVerificationsMock.mockResolvedValue([
+      mockMatrixVerificationSummary({ id: "incoming-1", initiatedByMe: false }),
+    ]);
+    const program = buildProgram();
+
+    await program.parseAsync(["matrix", "verify", "list"], { from: "user" });
+
+    expect(listMatrixVerificationsMock).toHaveBeenCalledWith({ accountId: "default", cfg: {} });
+    expect(consoleLogMock).toHaveBeenCalledWith("Verification id: incoming-1");
+    expect(consoleLogMock).toHaveBeenCalledWith("Initiated by OpenClaw: no");
+  });
+
+  it("shows Matrix SAS diagnostics and confirm/mismatch guidance", async () => {
+    getMatrixVerificationSasMock.mockResolvedValue({
+      decimal: [1234, 5678, 9012],
+    });
+    const program = buildProgram();
+
+    await program.parseAsync(["matrix", "verify", "sas", "self-1"], { from: "user" });
+
+    expect(getMatrixVerificationSasMock).toHaveBeenCalledWith("self-1", {
+      accountId: "default",
+      cfg: {},
+    });
+    expect(consoleLogMock).toHaveBeenCalledWith("SAS decimals: 1234 5678 9012");
+    expect(consoleLogMock).toHaveBeenCalledWith(
+      "- If they match, run 'openclaw matrix verify confirm-sas self-1'.",
+    );
+    expect(consoleLogMock).toHaveBeenCalledWith(
+      "- If they do not match, run 'openclaw matrix verify mismatch-sas self-1'.",
+    );
+  });
+
+  it("confirms, rejects, accepts, starts, and cancels Matrix verification requests", async () => {
+    acceptMatrixVerificationMock.mockResolvedValue(mockMatrixVerificationSummary({ id: "in-1" }));
+    startMatrixVerificationMock.mockResolvedValue(mockMatrixVerificationSummary({ id: "in-1" }));
+    confirmMatrixVerificationSasMock.mockResolvedValue(
+      mockMatrixVerificationSummary({ id: "in-1", completed: true, pending: false }),
+    );
+    mismatchMatrixVerificationSasMock.mockResolvedValue(
+      mockMatrixVerificationSummary({ id: "in-1", phaseName: "cancelled", pending: false }),
+    );
+    cancelMatrixVerificationMock.mockResolvedValue(
+      mockMatrixVerificationSummary({ id: "in-1", phaseName: "cancelled", pending: false }),
+    );
+    const program = buildProgram();
+
+    await program.parseAsync(["matrix", "verify", "accept", "in-1"], { from: "user" });
+    await program.parseAsync(["matrix", "verify", "start", "in-1"], { from: "user" });
+    await program.parseAsync(["matrix", "verify", "confirm-sas", "in-1"], { from: "user" });
+    await program.parseAsync(["matrix", "verify", "mismatch-sas", "in-1"], { from: "user" });
+    await program.parseAsync(
+      ["matrix", "verify", "cancel", "in-1", "--reason", "changed my mind"],
+      { from: "user" },
+    );
+
+    expect(acceptMatrixVerificationMock).toHaveBeenCalledWith("in-1", {
+      accountId: "default",
+      cfg: {},
+    });
+    expect(startMatrixVerificationMock).toHaveBeenCalledWith("in-1", {
+      accountId: "default",
+      cfg: {},
+      method: "sas",
+    });
+    expect(confirmMatrixVerificationSasMock).toHaveBeenCalledWith("in-1", {
+      accountId: "default",
+      cfg: {},
+    });
+    expect(mismatchMatrixVerificationSasMock).toHaveBeenCalledWith("in-1", {
+      accountId: "default",
+      cfg: {},
+    });
+    expect(cancelMatrixVerificationMock).toHaveBeenCalledWith("in-1", {
+      accountId: "default",
+      cfg: {},
+      reason: "changed my mind",
+      code: undefined,
+    });
   });
 
   it("sets non-zero exit code for bootstrap failures in JSON mode", async () => {
@@ -360,7 +644,7 @@ describe("matrix CLI verification commands", () => {
 
     await program.parseAsync(["matrix", "devices", "list", "--account", "poe"], { from: "user" });
 
-    expect(listMatrixOwnDevicesMock).toHaveBeenCalledWith({ accountId: "poe" });
+    expect(listMatrixOwnDevicesMock).toHaveBeenCalledWith({ accountId: "poe", cfg: {} });
     expect(console.log).toHaveBeenCalledWith("Account: poe");
     expect(console.log).toHaveBeenCalledWith("- A7hWrQ70ea (current, OpenClaw Gateway)");
     expect(console.log).toHaveBeenCalledWith("  Last IP: 127.0.0.1");
@@ -630,7 +914,7 @@ describe("matrix CLI verification commands", () => {
 
     expect(matrixRuntimeWriteConfigFileMock).toHaveBeenCalled();
     expect(process.exitCode).toBeUndefined();
-    const jsonOutput = consoleLogMock.mock.calls.at(-1)?.[0];
+    const jsonOutput = stdoutWriteMock.mock.calls.at(-1)?.[0];
     expect(typeof jsonOutput).toBe("string");
     expect(JSON.parse(String(jsonOutput))).toEqual(
       expect.objectContaining({
@@ -765,7 +1049,7 @@ describe("matrix CLI verification commands", () => {
     });
 
     expect(process.exitCode).toBe(1);
-    expect(console.log).toHaveBeenCalledWith(
+    expect(stdoutWriteMock).toHaveBeenCalledWith(
       expect.stringContaining('"error": "Matrix requires --homeserver"'),
     );
   });

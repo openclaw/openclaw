@@ -101,6 +101,7 @@ export type MatrixVerificationRequestLike = {
 
 export type MatrixVerificationCryptoApi = {
   requestOwnUserVerification: () => Promise<MatrixVerificationRequestLike | null>;
+  getVerificationRequestsToDeviceInProgress?: (userId: string) => MatrixVerificationRequestLike[];
   findVerificationRequestDMInProgress?: (
     roomId: string,
     userId: string,

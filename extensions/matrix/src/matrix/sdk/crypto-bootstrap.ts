@@ -28,6 +28,7 @@ export type MatrixCryptoBootstrapOptions = {
   forceResetCrossSigning?: boolean;
   allowAutomaticCrossSigningReset?: boolean;
   allowSecretStorageRecreateWithoutRecoveryKey?: boolean;
+  verifyOwnIdentity?: boolean;
   strict?: boolean;
 };
 
@@ -83,7 +84,10 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
         strict,
       });
     }
-    const ownDeviceVerified = await this.ensureOwnDeviceTrust(crypto, strict);
+    const ownDeviceVerified = await this.ensureOwnDeviceTrust(crypto, {
+      strict,
+      verifyOwnIdentity: options.verifyOwnIdentity === true,
+    });
     return {
       crossSigningReady: crossSigning.ready,
       crossSigningPublished: crossSigning.published,
@@ -347,9 +351,30 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
     LogService.info("MatrixClientLite", "Verification request handler registered");
   }
 
+  private async verifyOwnIdentityTrust(crypto: MatrixCryptoBootstrapApi): Promise<void> {
+    if (typeof crypto.getOwnIdentity !== "function") {
+      return;
+    }
+    const identity = await crypto.getOwnIdentity();
+    if (!identity) {
+      return;
+    }
+    try {
+      if (identity.isVerified?.() === true) {
+        return;
+      }
+      await identity.verify?.();
+    } finally {
+      identity.free?.();
+    }
+  }
+
   private async ensureOwnDeviceTrust(
     crypto: MatrixCryptoBootstrapApi,
-    strict = false,
+    options: {
+      strict: boolean;
+      verifyOwnIdentity: boolean;
+    },
   ): Promise<boolean | null> {
     const deviceId = this.deps.getDeviceId()?.trim();
     if (!deviceId) {
@@ -365,6 +390,10 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
 
     if (alreadyVerified) {
       return true;
+    }
+
+    if (options.verifyOwnIdentity) {
+      await this.verifyOwnIdentityTrust(crypto);
     }
 
     if (typeof crypto.setDeviceVerified === "function") {
@@ -386,8 +415,10 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
         ? await crypto.getDeviceVerificationStatus(userId, deviceId).catch(() => null)
         : null;
     const verified = isMatrixDeviceOwnerVerified(refreshedStatus);
-    if (!verified && strict) {
-      throw new Error(`Matrix own device ${deviceId} is not verified by its owner after bootstrap`);
+    if (!verified && options.strict) {
+      throw new Error(
+        `Matrix own device ${deviceId} does not have full Matrix identity trust after bootstrap`,
+      );
     }
     return verified;
   }
