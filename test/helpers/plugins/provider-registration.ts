@@ -1,8 +1,10 @@
 import type {
   ImageGenerationProviderPlugin,
   MediaUnderstandingProviderPlugin,
+  MusicGenerationProviderPlugin,
   ProviderPlugin,
   SpeechProviderPlugin,
+  VideoGenerationProviderPlugin,
 } from "../../../src/plugins/types.js";
 import { createTestPluginApi } from "./plugin-api.js";
 
@@ -11,21 +13,25 @@ type RegisteredProviderCollections = {
   speechProviders: SpeechProviderPlugin[];
   mediaProviders: MediaUnderstandingProviderPlugin[];
   imageProviders: ImageGenerationProviderPlugin[];
+  musicProviders: MusicGenerationProviderPlugin[];
+  videoProviders: VideoGenerationProviderPlugin[];
 };
 
 type ProviderPluginModule = {
   register(api: ReturnType<typeof createTestPluginApi>): void;
 };
 
-export function registerProviderPlugin(params: {
+export async function registerProviderPlugin(params: {
   plugin: ProviderPluginModule;
   id: string;
   name: string;
-}): RegisteredProviderCollections {
+}): Promise<RegisteredProviderCollections> {
   const providers: ProviderPlugin[] = [];
   const speechProviders: SpeechProviderPlugin[] = [];
   const mediaProviders: MediaUnderstandingProviderPlugin[] = [];
   const imageProviders: ImageGenerationProviderPlugin[] = [];
+  const musicProviders: MusicGenerationProviderPlugin[] = [];
+  const videoProviders: VideoGenerationProviderPlugin[] = [];
 
   params.plugin.register(
     createTestPluginApi({
@@ -46,10 +52,23 @@ export function registerProviderPlugin(params: {
       registerImageGenerationProvider: (provider) => {
         imageProviders.push(provider);
       },
+      registerMusicGenerationProvider: (provider) => {
+        musicProviders.push(provider);
+      },
+      registerVideoGenerationProvider: (provider) => {
+        videoProviders.push(provider);
+      },
     }),
   );
 
-  return { providers, speechProviders, mediaProviders, imageProviders };
+  return {
+    providers,
+    speechProviders,
+    mediaProviders,
+    imageProviders,
+    musicProviders,
+    videoProviders,
+  };
 }
 
 export function requireRegisteredProvider<T extends { id: string }>(

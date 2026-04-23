@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { normalizeIrcAllowlist, resolveIrcAllowlistMatch } from "./normalize.js";
 import type { IrcAccountConfig, IrcChannelConfig } from "./types.js";
 import type { IrcInboundMessage } from "./types.js";
@@ -36,8 +37,10 @@ export function resolveIrcGroupMatch(params: {
     };
   }
 
-  const targetLower = params.target.toLowerCase();
-  const directKey = Object.keys(groups).find((key) => key.toLowerCase() === targetLower);
+  const targetLower = normalizeLowercaseStringOrEmpty(params.target);
+  const directKey = Object.keys(groups).find(
+    (key) => normalizeLowercaseStringOrEmpty(key) === targetLower,
+  );
   if (directKey) {
     const matched = groups[directKey];
     if (matched) {

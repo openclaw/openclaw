@@ -2,23 +2,27 @@ import { type Block, type KnownBlock, type WebClient } from "@slack/web-api";
 import { loadConfig, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
-import { resolveTextChunksWithFallback } from "openclaw/plugin-sdk/reply-payload";
 import {
   chunkMarkdownTextWithMode,
+  isSilentReplyText,
   resolveChunkMode,
   resolveTextChunkLimit,
-} from "openclaw/plugin-sdk/reply-runtime";
-import { isSilentReplyText } from "openclaw/plugin-sdk/reply-runtime";
+} from "openclaw/plugin-sdk/reply-chunking";
+import { resolveTextChunksWithFallback } from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import type { SlackTokenSource } from "./accounts.js";
 import { resolveSlackAccount } from "./accounts.js";
 import { buildSlackBlocksFallbackText } from "./blocks-fallback.js";
 import { validateSlackBlocksArray } from "./blocks-input.js";
-import { createSlackWebClient } from "./client.js";
+import { createSlackWriteClient } from "./client.js";
 import { markdownToSlackMrkdwnChunks } from "./format.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
+import { loadOutboundMediaFromUrl } from "./runtime-api.js";
 import { parseSlackTarget } from "./targets.js";
 import { resolveSlackBotToken } from "./token.js";
 const SLACK_UPLOAD_SSRF_POLICY = {
@@ -49,9 +53,14 @@ type SlackSendOpts = {
   token?: string;
   accountId?: string;
   mediaUrl?: string;
+  mediaAccess?: {
+    localRoots?: readonly string[];
+    readFile?: (filePath: string) => Promise<Buffer>;
+  };
   uploadFileName?: string;
   uploadTitle?: string;
   mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
   client?: WebClient;
   threadTs?: string;
   identity?: SlackSendIdentity;
@@ -73,18 +82,18 @@ function isSlackCustomizeScopeError(err: unknown): boolean {
       response_metadata?: { scopes?: string[]; acceptedScopes?: string[] };
     };
   };
-  const code = maybeData.data?.error?.toLowerCase();
+  const code = normalizeLowercaseStringOrEmpty(maybeData.data?.error);
   if (code !== "missing_scope") {
     return false;
   }
-  const needed = maybeData.data?.needed?.toLowerCase();
+  const needed = normalizeLowercaseStringOrEmpty(maybeData.data?.needed);
   if (needed?.includes("chat:write.customize")) {
     return true;
   }
   const scopes = [
     ...(maybeData.data?.response_metadata?.scopes ?? []),
     ...(maybeData.data?.response_metadata?.acceptedScopes ?? []),
-  ].map((scope) => scope.toLowerCase());
+  ].map((scope) => normalizeLowercaseStringOrEmpty(scope));
   return scopes.includes("chat:write.customize");
 }
 
@@ -102,24 +111,25 @@ async function postSlackMessageBestEffort(params: {
     thread_ts: params.threadTs,
     ...(params.blocks?.length ? { blocks: params.blocks } : {}),
   };
+  const postChatMessage = params.client.chat.postMessage.bind(params.client.chat);
   try {
     // Slack Web API types model icon_url and icon_emoji as mutually exclusive.
     // Build payloads in explicit branches so TS and runtime stay aligned.
     if (params.identity?.iconUrl) {
-      return await params.client.chat.postMessage({
+      return await postChatMessage({
         ...basePayload,
         ...(params.identity.username ? { username: params.identity.username } : {}),
         icon_url: params.identity.iconUrl,
       });
     }
     if (params.identity?.iconEmoji) {
-      return await params.client.chat.postMessage({
+      return await postChatMessage({
         ...basePayload,
         ...(params.identity.username ? { username: params.identity.username } : {}),
         icon_emoji: params.identity.iconEmoji,
       });
     }
-    return await params.client.chat.postMessage({
+    return await postChatMessage({
       ...basePayload,
       ...(params.identity?.username ? { username: params.identity.username } : {}),
     });
@@ -128,7 +138,7 @@ async function postSlackMessageBestEffort(params: {
       throw err;
     }
     logVerbose("slack send: missing chat:write.customize, retrying without custom identity");
-    return params.client.chat.postMessage(basePayload);
+    return postChatMessage(basePayload);
   }
 }
 
@@ -230,16 +240,23 @@ async function uploadSlackFile(params: {
   client: WebClient;
   channelId: string;
   mediaUrl: string;
+  mediaAccess?: {
+    localRoots?: readonly string[];
+    readFile?: (filePath: string) => Promise<Buffer>;
+  };
   uploadFileName?: string;
   uploadTitle?: string;
   mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
   caption?: string;
   threadTs?: string;
   maxBytes?: number;
 }): Promise<string> {
-  const { buffer, contentType, fileName } = await loadWebMedia(params.mediaUrl, {
+  const { buffer, contentType, fileName } = await loadOutboundMediaFromUrl(params.mediaUrl, {
     maxBytes: params.maxBytes,
-    localRoots: params.mediaLocalRoots,
+    mediaAccess: params.mediaAccess,
+    mediaLocalRoots: params.mediaLocalRoots,
+    mediaReadFile: params.mediaReadFile,
   });
   const uploadFileName = params.uploadFileName ?? fileName ?? "upload";
   const uploadTitle = params.uploadTitle ?? uploadFileName;
@@ -295,7 +312,7 @@ export async function sendMessageSlack(
   message: string,
   opts: SlackSendOpts = {},
 ): Promise<SlackSendResult> {
-  const trimmedMessage = message?.trim() ?? "";
+  const trimmedMessage = normalizeOptionalString(message) ?? "";
   if (isSilentReplyText(trimmedMessage) && !opts.mediaUrl && !opts.blocks) {
     logVerbose("slack send: suppressed NO_REPLY token before API call");
     return { messageId: "suppressed", channelId: "" };
@@ -305,9 +322,20 @@ export async function sendMessageSlack(
     throw new Error("Slack send requires text, blocks, or media");
   }
   const cfg = opts.cfg ?? loadConfig();
+  // Tolerate unresolved channel SecretRefs in the cfg snapshot here: the
+  // send path either receives an explicit `opts.token` (resolved at Slack
+  // monitor boot time and threaded through `ctx.botToken`) or surfaces the
+  // existing "Slack bot token missing" error via `resolveToken` below. The
+  // runtime snapshot can legitimately retain unresolved `channels.slack.*`
+  // SecretRefs (see the inspect/strict separation introduced in #66818) when
+  // the active account's secrets were not part of the agent-runtime base
+  // target set; failing the strict resolver here would block outbound
+  // replies even though `reactions.add` and inbound dispatch (which use the
+  // boot-resolved client/token directly) keep working. See #68237.
   const account = resolveSlackAccount({
     cfg,
     accountId: opts.accountId,
+    tolerateUnresolvedSecrets: true,
   });
   const token = resolveToken({
     explicit: opts.token,
@@ -315,7 +343,7 @@ export async function sendMessageSlack(
     fallbackToken: account.botToken,
     fallbackSource: account.botTokenSource,
   });
-  const client = opts.client ?? createSlackWebClient(token);
+  const client = opts.client ?? createSlackWriteClient(token);
   const recipient = parseRecipient(to);
   const { channelId } = await resolveChannelId(client, recipient, {
     accountId: account.accountId,
@@ -369,9 +397,11 @@ export async function sendMessageSlack(
       client,
       channelId,
       mediaUrl: opts.mediaUrl,
+      mediaAccess: opts.mediaAccess,
       uploadFileName: opts.uploadFileName,
       uploadTitle: opts.uploadTitle,
       mediaLocalRoots: opts.mediaLocalRoots,
+      mediaReadFile: opts.mediaReadFile,
       caption: firstChunk,
       threadTs: opts.threadTs,
       maxBytes: mediaMaxBytes,

@@ -4,11 +4,13 @@ import type {
   AssistantMessage,
   StopReason,
   TextContent,
+  ThinkingContent,
   ToolCall,
   Tool,
   Usage,
 } from "@mariozechner/pi-ai";
 import { createAssistantMessageEventStream, streamSimple } from "@mariozechner/pi-ai";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type {
   OpenClawConfig,
   ProviderRuntimeModel,
@@ -23,9 +25,16 @@ import {
   createMoonshotThinkingWrapper,
   resolveMoonshotThinkingType,
   streamWithPayloadPatch,
-} from "openclaw/plugin-sdk/provider-stream";
-import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime";
+} from "openclaw/plugin-sdk/provider-stream-shared";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { normalizeLowercaseStringOrEmpty, readStringValue } from "openclaw/plugin-sdk/text-runtime";
 import { OLLAMA_DEFAULT_BASE_URL } from "./defaults.js";
+import {
+  parseJsonObjectPreservingUnsafeIntegers,
+  parseJsonPreservingUnsafeIntegers,
+} from "./ollama-json.js";
+import { buildOllamaBaseUrlSsrFPolicy } from "./provider-models.js";
 
 const log = createSubsystemLogger("ollama-stream");
 
@@ -46,7 +55,7 @@ export function resolveOllamaBaseUrlForRun(params: {
   return OLLAMA_NATIVE_BASE_URL;
 }
 
-function resolveConfiguredOllamaProviderConfig(params: {
+export function resolveConfiguredOllamaProviderConfig(params: {
   config?: OpenClawConfig;
   providerId?: string;
 }) {
@@ -85,7 +94,7 @@ export function isOllamaCompatProvider(model: {
   }
   try {
     const parsed = new URL(model.baseUrl);
-    const hostname = parsed.hostname.toLowerCase();
+    const hostname = normalizeLowercaseStringOrEmpty(parsed.hostname);
     const isLocalhost =
       hostname === "localhost" ||
       hostname === "127.0.0.1" ||
@@ -138,17 +147,18 @@ export function wrapOllamaCompatNumCtx(baseFn: StreamFn | undefined, numCtx: num
         payloadRecord.options = {};
       }
       (payloadRecord.options as Record<string, unknown>).num_ctx = numCtx;
+      normalizeOllamaCompatMessageToolArgs(payloadRecord);
     });
 }
 
-function createOllamaThinkingOffWrapper(baseFn: StreamFn | undefined): StreamFn {
+function createOllamaThinkingWrapper(baseFn: StreamFn | undefined, think: boolean): StreamFn {
   const streamFn = baseFn ?? streamSimple;
   return (model, context, options) => {
     if (model.api !== "ollama") {
       return streamFn(model, context, options);
     }
     return streamWithPayloadPatch(streamFn, model, context, options, (payloadRecord) => {
-      payloadRecord.think = false;
+      payloadRecord.think = think;
     });
   };
 }
@@ -158,7 +168,7 @@ function resolveOllamaCompatNumCtx(model: ProviderRuntimeModel): number {
 }
 
 function isOllamaCloudKimiModelRef(modelId: string): boolean {
-  const normalizedModelId = modelId.trim().toLowerCase();
+  const normalizedModelId = normalizeLowercaseStringOrEmpty(modelId);
   return normalizedModelId.startsWith("kimi-k") && normalizedModelId.includes(":cloud");
 }
 
@@ -190,7 +200,11 @@ export function createConfiguredOllamaCompatStreamWrapper(
   }
 
   if (ctx.thinkingLevel === "off") {
-    streamFn = createOllamaThinkingOffWrapper(streamFn);
+    streamFn = createOllamaThinkingWrapper(streamFn, false);
+  } else if (ctx.thinkingLevel) {
+    // Any non-off ThinkLevel (minimal, low, medium, high, xhigh, adaptive, max)
+    // should enable Ollama's native thinking mode.
+    streamFn = createOllamaThinkingWrapper(streamFn, true);
   }
 
   if (normalizeProviderId(ctx.provider) === "ollama" && isOllamaCloudKimiModelRef(ctx.modelId)) {
@@ -208,6 +222,11 @@ export function createConfiguredOllamaCompatStreamWrapper(
 // Ollama compat wrapper now owns more than num_ctx injection.
 export const createConfiguredOllamaCompatNumCtxWrapper = createConfiguredOllamaCompatStreamWrapper;
 
+function normalizeOllamaWireModelId(modelId: string): string {
+  const trimmed = modelId.trim();
+  return trimmed.startsWith("ollama/") ? trimmed.slice("ollama/".length) : trimmed;
+}
+
 export function buildOllamaChatRequest(params: {
   modelId: string;
   messages: OllamaChatMessage[];
@@ -216,7 +235,7 @@ export function buildOllamaChatRequest(params: {
   stream?: boolean;
 }): OllamaChatRequest {
   return {
-    model: params.modelId,
+    model: normalizeOllamaWireModelId(params.modelId),
     messages: params.messages,
     stream: params.stream ?? true,
     ...(params.tools && params.tools.length > 0 ? { tools: params.tools } : {}),
@@ -321,130 +340,6 @@ interface OllamaToolCall {
   };
 }
 
-const MAX_SAFE_INTEGER_ABS_STR = String(Number.MAX_SAFE_INTEGER);
-
-function isAsciiDigit(ch: string | undefined): boolean {
-  return ch !== undefined && ch >= "0" && ch <= "9";
-}
-
-function parseJsonNumberToken(
-  input: string,
-  start: number,
-): { token: string; end: number; isInteger: boolean } | null {
-  let idx = start;
-  if (input[idx] === "-") {
-    idx += 1;
-  }
-  if (idx >= input.length) {
-    return null;
-  }
-
-  if (input[idx] === "0") {
-    idx += 1;
-  } else if (isAsciiDigit(input[idx]) && input[idx] !== "0") {
-    while (isAsciiDigit(input[idx])) {
-      idx += 1;
-    }
-  } else {
-    return null;
-  }
-
-  let isInteger = true;
-  if (input[idx] === ".") {
-    isInteger = false;
-    idx += 1;
-    if (!isAsciiDigit(input[idx])) {
-      return null;
-    }
-    while (isAsciiDigit(input[idx])) {
-      idx += 1;
-    }
-  }
-
-  if (input[idx] === "e" || input[idx] === "E") {
-    isInteger = false;
-    idx += 1;
-    if (input[idx] === "+" || input[idx] === "-") {
-      idx += 1;
-    }
-    if (!isAsciiDigit(input[idx])) {
-      return null;
-    }
-    while (isAsciiDigit(input[idx])) {
-      idx += 1;
-    }
-  }
-
-  return {
-    token: input.slice(start, idx),
-    end: idx,
-    isInteger,
-  };
-}
-
-function isUnsafeIntegerLiteral(token: string): boolean {
-  const digits = token[0] === "-" ? token.slice(1) : token;
-  if (digits.length < MAX_SAFE_INTEGER_ABS_STR.length) {
-    return false;
-  }
-  if (digits.length > MAX_SAFE_INTEGER_ABS_STR.length) {
-    return true;
-  }
-  return digits > MAX_SAFE_INTEGER_ABS_STR;
-}
-
-function quoteUnsafeIntegerLiterals(input: string): string {
-  let out = "";
-  let inString = false;
-  let escaped = false;
-  let idx = 0;
-
-  while (idx < input.length) {
-    const ch = input[idx] ?? "";
-    if (inString) {
-      out += ch;
-      if (escaped) {
-        escaped = false;
-      } else if (ch === "\\") {
-        escaped = true;
-      } else if (ch === '"') {
-        inString = false;
-      }
-      idx += 1;
-      continue;
-    }
-
-    if (ch === '"') {
-      inString = true;
-      out += ch;
-      idx += 1;
-      continue;
-    }
-
-    if (ch === "-" || isAsciiDigit(ch)) {
-      const parsed = parseJsonNumberToken(input, idx);
-      if (parsed) {
-        if (parsed.isInteger && isUnsafeIntegerLiteral(parsed.token)) {
-          out += `"${parsed.token}"`;
-        } else {
-          out += parsed.token;
-        }
-        idx = parsed.end;
-        continue;
-      }
-    }
-
-    out += ch;
-    idx += 1;
-  }
-
-  return out;
-}
-
-function parseJsonPreservingUnsafeIntegers(input: string): unknown {
-  return JSON.parse(quoteUnsafeIntegerLiterals(input)) as unknown;
-}
-
 interface OllamaChatResponse {
   model: string;
   created_at: string;
@@ -468,8 +363,8 @@ interface OllamaChatResponse {
 type InputContentPart =
   | { type: "text"; text: string }
   | { type: "image"; data: string }
-  | { type: "toolCall"; id: string; name: string; arguments: Record<string, unknown> }
-  | { type: "tool_use"; id: string; name: string; input: Record<string, unknown> };
+  | { type: "toolCall"; id: string; name: string; arguments: unknown }
+  | { type: "tool_use"; id: string; name: string; input: unknown };
 
 function extractTextContent(content: unknown): string {
   if (typeof content === "string") {
@@ -493,6 +388,50 @@ function extractOllamaImages(content: unknown): string[] {
     .map((part) => part.data);
 }
 
+function ensureArgsObject(value: unknown): Record<string, unknown> {
+  return parseJsonObjectPreservingUnsafeIntegers(value) ?? {};
+}
+
+function normalizeOllamaCompatMessageToolArgs(payloadRecord: Record<string, unknown>): void {
+  const messages = payloadRecord.messages;
+  if (!Array.isArray(messages)) {
+    return;
+  }
+
+  for (const message of messages) {
+    if (!message || typeof message !== "object" || Array.isArray(message)) {
+      continue;
+    }
+    const messageRecord = message as Record<string, unknown>;
+
+    const functionCall = messageRecord.function_call;
+    if (functionCall && typeof functionCall === "object" && !Array.isArray(functionCall)) {
+      const functionCallRecord = functionCall as Record<string, unknown>;
+      if (Object.hasOwn(functionCallRecord, "arguments")) {
+        functionCallRecord.arguments = ensureArgsObject(functionCallRecord.arguments);
+      }
+    }
+
+    const toolCalls = messageRecord.tool_calls;
+    if (!Array.isArray(toolCalls)) {
+      continue;
+    }
+    for (const toolCall of toolCalls) {
+      if (!toolCall || typeof toolCall !== "object" || Array.isArray(toolCall)) {
+        continue;
+      }
+      const functionSpec = (toolCall as Record<string, unknown>).function;
+      if (!functionSpec || typeof functionSpec !== "object" || Array.isArray(functionSpec)) {
+        continue;
+      }
+      const functionRecord = functionSpec as Record<string, unknown>;
+      if (Object.hasOwn(functionRecord, "arguments")) {
+        functionRecord.arguments = ensureArgsObject(functionRecord.arguments);
+      }
+    }
+  }
+}
+
 function extractToolCalls(content: unknown): OllamaToolCall[] {
   if (!Array.isArray(content)) {
     return [];
@@ -501,9 +440,9 @@ function extractToolCalls(content: unknown): OllamaToolCall[] {
   const result: OllamaToolCall[] = [];
   for (const part of parts) {
     if (part.type === "toolCall") {
-      result.push({ function: { name: part.name, arguments: part.arguments } });
+      result.push({ function: { name: part.name, arguments: ensureArgsObject(part.arguments) } });
     } else if (part.type === "tool_use") {
-      result.push({ function: { name: part.name, arguments: part.input } });
+      result.push({ function: { name: part.name, arguments: ensureArgsObject(part.input) } });
     }
   }
   return result;
@@ -584,7 +523,11 @@ export function buildAssistantMessage(
   response: OllamaChatResponse,
   modelInfo: StreamModelDescriptor,
 ): AssistantMessage {
-  const content: (TextContent | ToolCall)[] = [];
+  const content: (TextContent | ThinkingContent | ToolCall)[] = [];
+  const thinking = response.message.thinking ?? response.message.reasoning ?? "";
+  if (thinking) {
+    content.push({ type: "thinking", thinking });
+  }
   const text = response.message.content || "";
   if (text) {
     content.push({ type: "text", text });
@@ -670,6 +613,7 @@ export function createOllamaStreamFn(
   defaultHeaders?: Record<string, string>,
 ): StreamFn {
   const chatUrl = resolveOllamaChatUrl(baseUrl);
+  const ssrfPolicy = buildOllamaBaseUrlSsrFPolicy(chatUrl);
 
   return (model, context, options) => {
     const stream = createAssistantMessageEventStream();
@@ -710,111 +654,213 @@ export function createOllamaStreamFn(
           headers.Authorization = `Bearer ${options.apiKey}`;
         }
 
-        const response = await fetch(chatUrl, {
-          method: "POST",
-          headers,
-          body: JSON.stringify(body),
-          signal: options?.signal,
+        const { response, release } = await fetchWithSsrFGuard({
+          url: chatUrl,
+          init: {
+            method: "POST",
+            headers,
+            body: JSON.stringify(body),
+            signal: options?.signal,
+          },
+          policy: ssrfPolicy,
+          auditContext: "ollama-stream.chat",
         });
 
-        if (!response.ok) {
-          const errorText = await response.text().catch(() => "unknown error");
-          throw new Error(`${response.status} ${errorText}`);
-        }
-        if (!response.body) {
-          throw new Error("Ollama API returned empty response body");
-        }
-
-        const reader = response.body.getReader();
-        let accumulatedContent = "";
-        const accumulatedToolCalls: OllamaToolCall[] = [];
-        let finalResponse: OllamaChatResponse | undefined;
-        const modelInfo = { api: model.api, provider: model.provider, id: model.id };
-        let streamStarted = false;
-        let textBlockClosed = false;
-
-        const closeTextBlock = () => {
-          if (!streamStarted || textBlockClosed) {
-            return;
+        try {
+          if (!response.ok) {
+            const errorText = await response.text().catch(() => "unknown error");
+            throw new Error(`${response.status} ${errorText}`);
           }
-          textBlockClosed = true;
-          const partial = buildStreamAssistantMessage({
-            model: modelInfo,
-            content: [{ type: "text", text: accumulatedContent }],
-            stopReason: "stop",
-            usage: buildUsageWithNoCost({}),
-          });
-          stream.push({
-            type: "text_end",
-            contentIndex: 0,
-            content: accumulatedContent,
-            partial,
-          });
-        };
+          if (!response.body) {
+            throw new Error("Ollama API returned empty response body");
+          }
 
-        for await (const chunk of parseNdjsonStream(reader)) {
-          if (chunk.message?.content) {
-            const delta = chunk.message.content;
+          const reader = response.body.getReader();
+          let accumulatedContent = "";
+          let accumulatedThinking = "";
+          const accumulatedToolCalls: OllamaToolCall[] = [];
+          let finalResponse: OllamaChatResponse | undefined;
+          const modelInfo = { api: model.api, provider: model.provider, id: model.id };
+          let streamStarted = false;
+          let thinkingStarted = false;
+          let thinkingEnded = false;
+          let textBlockStarted = false;
+          let textBlockClosed = false;
+          const textContentIndex = () => (thinkingStarted ? 1 : 0);
 
-            if (!streamStarted) {
-              streamStarted = true;
-              // Emit start/text_start with an empty partial before accumulating
-              // the first delta, matching the Anthropic/OpenAI provider contract.
-              const emptyPartial = buildStreamAssistantMessage({
-                model: modelInfo,
-                content: [],
-                stopReason: "stop",
-                usage: buildUsageWithNoCost({}),
+          const buildCurrentContent = (): (TextContent | ThinkingContent | ToolCall)[] => {
+            const parts: (TextContent | ThinkingContent | ToolCall)[] = [];
+            if (accumulatedThinking) {
+              parts.push({
+                type: "thinking",
+                thinking: accumulatedThinking,
               });
-              stream.push({ type: "start", partial: emptyPartial });
-              stream.push({ type: "text_start", contentIndex: 0, partial: emptyPartial });
             }
+            if (accumulatedContent) {
+              parts.push({ type: "text", text: accumulatedContent });
+            }
+            return parts;
+          };
 
-            accumulatedContent += delta;
+          const closeThinkingBlock = () => {
+            if (!thinkingStarted || thinkingEnded) {
+              return;
+            }
+            thinkingEnded = true;
             const partial = buildStreamAssistantMessage({
               model: modelInfo,
-              content: [{ type: "text", text: accumulatedContent }],
+              content: buildCurrentContent(),
               stopReason: "stop",
               usage: buildUsageWithNoCost({}),
             });
-            stream.push({ type: "text_delta", contentIndex: 0, delta, partial });
+            stream.push({
+              type: "thinking_end",
+              contentIndex: 0,
+              content: accumulatedThinking,
+              partial,
+            });
+          };
+
+          const closeTextBlock = () => {
+            if (!textBlockStarted || textBlockClosed) {
+              return;
+            }
+            textBlockClosed = true;
+            const partial = buildStreamAssistantMessage({
+              model: modelInfo,
+              content: buildCurrentContent(),
+              stopReason: "stop",
+              usage: buildUsageWithNoCost({}),
+            });
+            stream.push({
+              type: "text_end",
+              contentIndex: textContentIndex(),
+              content: accumulatedContent,
+              partial,
+            });
+          };
+
+          for await (const chunk of parseNdjsonStream(reader)) {
+            const thinkingDelta = chunk.message?.thinking ?? chunk.message?.reasoning;
+            if (thinkingDelta) {
+              if (!streamStarted) {
+                streamStarted = true;
+                const emptyPartial = buildStreamAssistantMessage({
+                  model: modelInfo,
+                  content: [],
+                  stopReason: "stop",
+                  usage: buildUsageWithNoCost({}),
+                });
+                stream.push({ type: "start", partial: emptyPartial });
+              }
+              if (!thinkingStarted) {
+                thinkingStarted = true;
+                const partial = buildStreamAssistantMessage({
+                  model: modelInfo,
+                  content: buildCurrentContent(),
+                  stopReason: "stop",
+                  usage: buildUsageWithNoCost({}),
+                });
+                stream.push({ type: "thinking_start", contentIndex: 0, partial });
+              }
+              accumulatedThinking += thinkingDelta;
+              const partial = buildStreamAssistantMessage({
+                model: modelInfo,
+                content: buildCurrentContent(),
+                stopReason: "stop",
+                usage: buildUsageWithNoCost({}),
+              });
+              stream.push({
+                type: "thinking_delta",
+                contentIndex: 0,
+                delta: thinkingDelta,
+                partial,
+              });
+            }
+
+            if (chunk.message?.content) {
+              const delta = chunk.message.content;
+              if (thinkingStarted && !thinkingEnded) {
+                closeThinkingBlock();
+              }
+
+              if (!streamStarted) {
+                streamStarted = true;
+                const emptyPartial = buildStreamAssistantMessage({
+                  model: modelInfo,
+                  content: [],
+                  stopReason: "stop",
+                  usage: buildUsageWithNoCost({}),
+                });
+                stream.push({ type: "start", partial: emptyPartial });
+              }
+              if (!textBlockStarted) {
+                textBlockStarted = true;
+                const partial = buildStreamAssistantMessage({
+                  model: modelInfo,
+                  content: buildCurrentContent(),
+                  stopReason: "stop",
+                  usage: buildUsageWithNoCost({}),
+                });
+                stream.push({ type: "text_start", contentIndex: textContentIndex(), partial });
+              }
+
+              accumulatedContent += delta;
+              const partial = buildStreamAssistantMessage({
+                model: modelInfo,
+                content: buildCurrentContent(),
+                stopReason: "stop",
+                usage: buildUsageWithNoCost({}),
+              });
+              stream.push({
+                type: "text_delta",
+                contentIndex: textContentIndex(),
+                delta,
+                partial,
+              });
+            }
+            if (chunk.message?.tool_calls) {
+              closeThinkingBlock();
+              closeTextBlock();
+              accumulatedToolCalls.push(...chunk.message.tool_calls);
+            }
+            if (chunk.done) {
+              finalResponse = chunk;
+              break;
+            }
           }
-          if (chunk.message?.tool_calls) {
-            closeTextBlock();
-            accumulatedToolCalls.push(...chunk.message.tool_calls);
+
+          if (!finalResponse) {
+            throw new Error("Ollama API stream ended without a final response");
           }
-          if (chunk.done) {
-            finalResponse = chunk;
-            break;
+
+          finalResponse.message.content = accumulatedContent;
+          if (accumulatedThinking) {
+            finalResponse.message.thinking = accumulatedThinking;
           }
+          if (accumulatedToolCalls.length > 0) {
+            finalResponse.message.tool_calls = accumulatedToolCalls;
+          }
+
+          const assistantMessage = buildAssistantMessage(finalResponse, modelInfo);
+          closeThinkingBlock();
+          closeTextBlock();
+
+          stream.push({
+            type: "done",
+            reason: assistantMessage.stopReason === "toolUse" ? "toolUse" : "stop",
+            message: assistantMessage,
+          });
+        } finally {
+          await release();
         }
-
-        if (!finalResponse) {
-          throw new Error("Ollama API stream ended without a final response");
-        }
-
-        finalResponse.message.content = accumulatedContent;
-        if (accumulatedToolCalls.length > 0) {
-          finalResponse.message.tool_calls = accumulatedToolCalls;
-        }
-
-        const assistantMessage = buildAssistantMessage(finalResponse, modelInfo);
-
-        // Close the text block if we emitted any text_delta events.
-        closeTextBlock();
-
-        stream.push({
-          type: "done",
-          reason: assistantMessage.stopReason === "toolUse" ? "toolUse" : "stop",
-          message: assistantMessage,
-        });
       } catch (err) {
         stream.push({
           type: "error",
           reason: "error",
           error: buildStreamErrorAssistantMessage({
             model,
-            errorMessage: err instanceof Error ? err.message : String(err),
+            errorMessage: formatErrorMessage(err),
           }),
         });
       } finally {
@@ -833,7 +879,7 @@ export function createConfiguredOllamaStreamFn(params: {
 }): StreamFn {
   return createOllamaStreamFn(
     resolveOllamaBaseUrlForRun({
-      modelBaseUrl: typeof params.model.baseUrl === "string" ? params.model.baseUrl : undefined,
+      modelBaseUrl: readStringValue(params.model.baseUrl),
       providerBaseUrl: params.providerBaseUrl,
     }),
     resolveOllamaModelHeaders(params.model),

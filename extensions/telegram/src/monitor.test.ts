@@ -87,6 +87,7 @@ const { resolveTelegramTransportSpy } = vi.hoisted(() => ({
   resolveTelegramTransportSpy: vi.fn(() => ({
     fetch: globalThis.fetch,
     sourceFetch: globalThis.fetch,
+    close: vi.fn(async () => undefined),
   })),
 }));
 
@@ -261,11 +262,11 @@ async function monitorWithAutoAbort(opts: Omit<MonitorTelegramOpts, "abortSignal
   });
 }
 
-vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
+vi.mock("openclaw/plugin-sdk/config-runtime", async () => {
   return {
-    ...actual,
     loadConfig,
+    resolveAgentMaxConcurrent: (cfg: { agents?: { defaults?: { maxConcurrent?: number } } }) =>
+      cfg.agents?.defaults?.maxConcurrent ?? 1,
   };
 });
 
@@ -306,8 +307,10 @@ vi.mock("@grammyjs/runner", () => ({
   run: runSpy,
 }));
 
-vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
+vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/runtime-env")>(
+    "openclaw/plugin-sdk/runtime-env",
+  );
   return {
     ...actual,
     computeBackoff,
@@ -329,27 +332,10 @@ vi.mock("./update-offset-store.js", () => ({
   writeTelegramUpdateOffset: vi.fn(async () => undefined),
 }));
 
-vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
-  return {
-    ...actual,
-    getReplyFromConfig: async (ctx: { Body?: string }) => ({
-      text: `echo:${ctx.Body}`,
-    }),
-  };
-});
-
-vi.mock("../../../src/auto-reply/reply.js", () => ({
-  getReplyFromConfig: async (ctx: { Body?: string }) => ({
-    text: `echo:${ctx.Body}`,
-  }),
-}));
-
 describe("monitorTelegramProvider (grammY)", () => {
   let consoleErrorSpy: { mockRestore: () => void } | undefined;
 
   beforeAll(async () => {
-    vi.resetModules();
     ({ monitorTelegramProvider } = await import("./monitor.js"));
   });
 
@@ -373,6 +359,7 @@ describe("monitorTelegramProvider (grammY)", () => {
     resolveTelegramTransportSpy.mockReset().mockImplementation(() => ({
       fetch: globalThis.fetch,
       sourceFetch: globalThis.fetch,
+      close: vi.fn(async () => undefined),
     }));
     registerUnhandledRejectionHandlerMock.mockClear();
     resetUnhandledRejection();
@@ -580,10 +567,12 @@ describe("monitorTelegramProvider (grammY)", () => {
       const telegramTransport = {
         fetch: globalThis.fetch,
         sourceFetch: globalThis.fetch,
+        close: vi.fn(async () => undefined),
       };
       const rebuiltTransport = {
         fetch: globalThis.fetch,
         sourceFetch: globalThis.fetch,
+        close: vi.fn(async () => undefined),
       };
       resolveTelegramTransportSpy
         .mockReturnValueOnce(telegramTransport)
@@ -596,7 +585,7 @@ describe("monitorTelegramProvider (grammY)", () => {
       const monitor = monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
       await firstCycle.waitForRunStart();
 
-      vi.advanceTimersByTime(120_000);
+      vi.advanceTimersByTime(150_000);
       await secondCycle.waitForRunStart();
       await monitor;
 
@@ -615,10 +604,12 @@ describe("monitorTelegramProvider (grammY)", () => {
     const telegramTransport = {
       fetch: globalThis.fetch,
       sourceFetch: globalThis.fetch,
+      close: vi.fn(async () => undefined),
     };
     const rebuiltTransport = {
       fetch: globalThis.fetch,
       sourceFetch: globalThis.fetch,
+      close: vi.fn(async () => undefined),
     };
     resolveTelegramTransportSpy
       .mockReturnValueOnce(telegramTransport)
@@ -737,12 +728,37 @@ describe("monitorTelegramProvider (grammY)", () => {
     const monitor = monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
     await firstCycle.waitForRunStart();
 
-    // Advance time past the stall threshold (90s) + watchdog interval (30s)
-    vi.advanceTimersByTime(120_000);
+    // Advance time past the stall threshold (120s) + watchdog interval (30s)
+    vi.advanceTimersByTime(150_000);
     await secondCycle.waitForRunStart();
     await monitor;
 
     expect(stop.mock.calls.length).toBeGreaterThanOrEqual(1);
+    expectRecoverableRetryState(2);
+    vi.useRealTimers();
+  });
+
+  it("uses configured Telegram polling stall threshold", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const abort = new AbortController();
+    const firstCycle = mockRunOnceWithStalledPollingRunner();
+    const secondCycle = mockRunOnceAndAbort(abort);
+
+    const monitor = monitorTelegramProvider({
+      token: "tok",
+      abortSignal: abort.signal,
+      config: {
+        agents: { defaults: { maxConcurrent: 2 } },
+        channels: { telegram: { pollingStallThresholdMs: 30_000 } },
+      },
+    });
+    await firstCycle.waitForRunStart();
+
+    vi.advanceTimersByTime(60_000);
+    await secondCycle.waitForRunStart();
+    await monitor;
+
+    expect(firstCycle.stop.mock.calls.length).toBeGreaterThanOrEqual(1);
     expectRecoverableRetryState(2);
     vi.useRealTimers();
   });
@@ -752,7 +768,10 @@ describe("monitorTelegramProvider (grammY)", () => {
       persistedOffset: 549076203,
     });
 
-    expect(api.getUpdates).toHaveBeenCalledWith({ offset: 549076204, limit: 1, timeout: 0 });
+    expect(api.getUpdates).toHaveBeenCalledWith(
+      { offset: 549076204, limit: 1, timeout: 0 },
+      expect.any(AbortSignal),
+    );
     expect(order).toEqual(["deleteWebhook", "getUpdates", "run"]);
   });
 
@@ -775,6 +794,7 @@ describe("monitorTelegramProvider (grammY)", () => {
     const telegramTransport = {
       fetch: globalThis.fetch,
       sourceFetch: globalThis.fetch,
+      close: vi.fn(async () => undefined),
     };
     resolveTelegramTransportSpy.mockReturnValueOnce(telegramTransport);
 

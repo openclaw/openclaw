@@ -1,15 +1,19 @@
 import { vi } from "vitest";
 
 const noop = () => {};
-
-vi.mock("../gateway/call.js", () => ({
+const sharedMocks = vi.hoisted(() => ({
   callGateway: vi.fn(async () => ({
-    status: "ok",
+    status: "ok" as const,
     startedAt: 111,
     endedAt: 222,
   })),
+  onAgentEvent: vi.fn(() => noop),
+}));
+
+vi.mock("../gateway/call.js", () => ({
+  callGateway: sharedMocks.callGateway,
 }));
 
 vi.mock("../infra/agent-events.js", () => ({
-  onAgentEvent: vi.fn(() => noop),
+  onAgentEvent: sharedMocks.onAgentEvent,
 }));

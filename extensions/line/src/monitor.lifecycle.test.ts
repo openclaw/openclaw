@@ -1,17 +1,32 @@
+import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { WEBHOOK_IN_FLIGHT_DEFAULTS } from "openclaw/plugin-sdk/webhook-request-guards";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { createLineBotMock, registerPluginHttpRouteMock, unregisterHttpMock } = vi.hoisted(() => ({
+type LineNodeWebhookHandler = (req: IncomingMessage, res: ServerResponse) => Promise<void>;
+
+const {
+  createLineBotMock,
+  createLineNodeWebhookHandlerMock,
+  registerPluginHttpRouteMock,
+  unregisterHttpMock,
+} = vi.hoisted(() => ({
   createLineBotMock: vi.fn(() => ({
     account: { accountId: "default" },
     handleWebhook: vi.fn(),
   })),
+  createLineNodeWebhookHandlerMock: vi.fn<() => LineNodeWebhookHandler>(() =>
+    vi.fn<LineNodeWebhookHandler>(async () => {}),
+  ),
   registerPluginHttpRouteMock: vi.fn(),
   unregisterHttpMock: vi.fn(),
 }));
 
 let monitorLineProvider: typeof import("./monitor.js").monitorLineProvider;
+let getLineRuntimeState: typeof import("./monitor.js").getLineRuntimeState;
+let clearLineRuntimeStateForTests: typeof import("./monitor.js").clearLineRuntimeStateForTests;
+let innerLineWebhookHandlerMock: ReturnType<typeof vi.fn<LineNodeWebhookHandler>>;
 
 vi.mock("./bot.js", () => ({
   createLineBot: createLineBotMock,
@@ -22,8 +37,10 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", () => ({
   dispatchReplyWithBufferedBlockDispatcher: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
+vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/runtime-env")>(
+    "openclaw/plugin-sdk/runtime-env",
+  );
   return {
     ...actual,
     danger: (value: unknown) => String(value),
@@ -42,7 +59,7 @@ vi.mock("openclaw/plugin-sdk/webhook-ingress", () => ({
 }));
 
 vi.mock("./webhook-node.js", () => ({
-  createLineNodeWebhookHandler: vi.fn(() => vi.fn()),
+  createLineNodeWebhookHandler: createLineNodeWebhookHandlerMock,
 }));
 
 vi.mock("./auto-reply-delivery.js", () => ({
@@ -76,17 +93,37 @@ vi.mock("./template-messages.js", () => ({
 }));
 
 describe("monitorLineProvider lifecycle", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
+    ({ monitorLineProvider, getLineRuntimeState, clearLineRuntimeStateForTests } =
+      await import("./monitor.js"));
+  });
+
+  beforeEach(() => {
+    clearLineRuntimeStateForTests();
     createLineBotMock.mockReset();
     createLineBotMock.mockReturnValue({
       account: { accountId: "default" },
       handleWebhook: vi.fn(),
     });
+    innerLineWebhookHandlerMock = vi.fn<LineNodeWebhookHandler>(async () => {});
+    createLineNodeWebhookHandlerMock
+      .mockReset()
+      .mockImplementation(() => innerLineWebhookHandlerMock);
     unregisterHttpMock.mockReset();
     registerPluginHttpRouteMock.mockReset().mockReturnValue(unregisterHttpMock);
-    ({ monitorLineProvider } = await import("./monitor.js"));
   });
+
+  const createRouteResponse = () => {
+    const resObj = {
+      statusCode: 0,
+      headersSent: false,
+      setHeader: vi.fn(),
+      end: vi.fn(() => {
+        resObj.headersSent = true;
+      }),
+    };
+    return resObj as unknown as ServerResponse & { end: ReturnType<typeof vi.fn> };
+  };
 
   it("waits for abort before resolving", async () => {
     const abort = new AbortController();
@@ -143,25 +180,88 @@ describe("monitorLineProvider lifecycle", () => {
     expect(unregisterHttpMock).toHaveBeenCalledTimes(1);
   });
 
-  it("rejects startup when channel secret is missing", async () => {
-    await expect(
-      monitorLineProvider({
-        channelAccessToken: "token",
-        channelSecret: "   ",
-        config: {} as OpenClawConfig,
-        runtime: {} as RuntimeEnv,
+  it("records startup state under configured defaultAccount when accountId is omitted", async () => {
+    const monitor = await monitorLineProvider({
+      channelAccessToken: "token",
+      channelSecret: "secret", // pragma: allowlist secret
+      config: {
+        channels: {
+          line: {
+            defaultAccount: "work",
+            accounts: {
+              work: {
+                channelAccessToken: "work-token",
+                channelSecret: "work-secret",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      runtime: {} as RuntimeEnv,
+    });
+
+    expect(getLineRuntimeState("work")).toEqual(
+      expect.objectContaining({
+        running: true,
       }),
-    ).rejects.toThrow("LINE webhook mode requires a non-empty channel secret.");
+    );
+    expect(getLineRuntimeState("default")).toBeUndefined();
+
+    monitor.stop();
   });
 
-  it("rejects startup when channel access token is missing", async () => {
-    await expect(
-      monitorLineProvider({
-        channelAccessToken: "   ",
-        channelSecret: "secret",
-        config: {} as OpenClawConfig,
-        runtime: {} as RuntimeEnv,
-      }),
-    ).rejects.toThrow("LINE webhook mode requires a non-empty channel access token.");
+  it("rejects webhook requests above the shared in-flight limit before body handling", async () => {
+    const limit = WEBHOOK_IN_FLIGHT_DEFAULTS.maxInFlightPerKey;
+    const releaseRequests: Array<() => void> = [];
+    let reachLimit!: () => void;
+    const reachedLimit = new Promise<void>((resolve) => {
+      reachLimit = resolve;
+    });
+
+    innerLineWebhookHandlerMock.mockImplementation(
+      async (_req: IncomingMessage, res: ServerResponse) => {
+        if (releaseRequests.length === limit - 1) {
+          reachLimit();
+        }
+        await new Promise<void>((resolve) => {
+          releaseRequests.push(resolve);
+        });
+        res.statusCode = 200;
+        res.end();
+      },
+    );
+
+    const monitor = await monitorLineProvider({
+      channelAccessToken: "token",
+      channelSecret: "secret", // pragma: allowlist secret
+      config: {} as OpenClawConfig,
+      runtime: {} as RuntimeEnv,
+    });
+
+    const route = registerPluginHttpRouteMock.mock.calls[0]?.[0] as
+      | { handler: (req: IncomingMessage, res: ServerResponse) => Promise<void> }
+      | undefined;
+    expect(route).toBeDefined();
+    const createPostRequest = () =>
+      ({
+        method: "POST",
+        headers: {},
+      }) as IncomingMessage;
+
+    const firstRequests = Array.from({ length: limit }, () =>
+      route!.handler(createPostRequest(), createRouteResponse()),
+    );
+    await reachedLimit;
+
+    const overflowResponse = createRouteResponse();
+    await route!.handler(createPostRequest(), overflowResponse);
+
+    expect(innerLineWebhookHandlerMock).toHaveBeenCalledTimes(limit);
+    expect(overflowResponse.statusCode).toBe(429);
+    expect(overflowResponse.end).toHaveBeenCalledWith("Too Many Requests");
+
+    releaseRequests.splice(0).forEach((release) => release());
+    await Promise.all(firstRequests);
+    monitor.stop();
   });
 });

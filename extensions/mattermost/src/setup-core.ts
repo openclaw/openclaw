@@ -1,7 +1,5 @@
 import type { ChannelSetupAdapter } from "openclaw/plugin-sdk/channel-setup";
 import { createSetupInputPresenceValidator } from "openclaw/plugin-sdk/setup-runtime";
-import { resolveMattermostAccount, type ResolvedMattermostAccount } from "./mattermost/accounts.js";
-import { normalizeMattermostBaseUrl } from "./mattermost/client.js";
 import {
   applyAccountNameToChannelSection,
   applySetupAccountConfigPatch,
@@ -10,7 +8,12 @@ import {
   normalizeAccountId,
   type OpenClawConfig,
 } from "./runtime-api.js";
-import { hasConfiguredSecretInput } from "./secret-input.js";
+import {
+  resolveMattermostAccount,
+  type ResolvedMattermostAccount,
+} from "./setup.accounts.runtime.js";
+import { normalizeMattermostBaseUrl } from "./setup.client.runtime.js";
+import { hasConfiguredSecretInput } from "./setup.secret-input.runtime.js";
 
 const channel = "mattermost" as const;
 
@@ -49,7 +52,7 @@ export const mattermostSetupAdapter: ChannelSetupAdapter = {
         message: "Mattermost requires --bot-token and --http-url (or --use-env).",
       },
     ],
-    validate: ({ accountId, input }) => {
+    validate: ({ input }) => {
       const token = input.botToken ?? input.token;
       const baseUrl = normalizeMattermostBaseUrl(input.httpUrl);
       if (!input.useEnv && (!token || !baseUrl)) {

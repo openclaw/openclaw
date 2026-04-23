@@ -3,7 +3,8 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { RuntimeEnv } from "../runtime-api.js";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 
 const REQUIRED_MATRIX_PACKAGES = [
   "matrix-js-sdk",
@@ -137,7 +138,7 @@ function defaultResolveFn(id: string): string {
 }
 
 function isMissingMatrixCryptoRuntimeError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = formatErrorMessage(error);
   return (
     message.includes("@matrix-org/matrix-sdk-crypto-nodejs-") ||
     message.includes("matrix-sdk-crypto-nodejs") ||

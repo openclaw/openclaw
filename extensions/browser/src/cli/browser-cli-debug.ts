@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { runCommandWithRuntime } from "../core-api.js";
 import { callBrowserRequest, type BrowserParentOpts } from "./browser-cli-shared.js";
 import { danger, defaultRuntime, shortenHomePath } from "./core-api.js";
@@ -14,7 +15,7 @@ type DebugContext = {
 
 function runBrowserDebug(action: () => Promise<void>) {
   return runCommandWithRuntime(defaultRuntime, action, (err) => {
-    defaultRuntime.error(danger(String(err as unknown)));
+    defaultRuntime.error(danger(String(err)));
     defaultRuntime.exit(1);
   });
 }
@@ -59,8 +60,8 @@ function resolveDebugQuery(params: {
   filter?: unknown;
 }) {
   return {
-    targetId: typeof params.targetId === "string" ? params.targetId.trim() || undefined : undefined,
-    filter: typeof params.filter === "string" ? params.filter.trim() || undefined : undefined,
+    targetId: normalizeOptionalString(params.targetId),
+    filter: normalizeOptionalString(params.filter),
     clear: Boolean(params.clear),
     profile: params.profile,
   };
@@ -83,7 +84,7 @@ export function registerBrowserDebugCommands(
           query: resolveProfileQuery(profile),
           body: {
             ref: ref.trim(),
-            targetId: opts.targetId?.trim() || undefined,
+            targetId: normalizeOptionalString(opts.targetId),
           },
         });
         if (printJsonResult(parent, result)) {
@@ -189,7 +190,7 @@ export function registerBrowserDebugCommands(
           path: "/trace/start",
           query: resolveProfileQuery(profile),
           body: {
-            targetId: opts.targetId?.trim() || undefined,
+            targetId: normalizeOptionalString(opts.targetId),
             screenshots: Boolean(opts.screenshots),
             snapshots: Boolean(opts.snapshots),
             sources: Boolean(opts.sources),
@@ -217,8 +218,8 @@ export function registerBrowserDebugCommands(
           path: "/trace/stop",
           query: resolveProfileQuery(profile),
           body: {
-            targetId: opts.targetId?.trim() || undefined,
-            path: opts.out?.trim() || undefined,
+            targetId: normalizeOptionalString(opts.targetId),
+            path: normalizeOptionalString(opts.out),
           },
         });
         if (printJsonResult(parent, result)) {

@@ -1,6 +1,12 @@
 import { getRuntimeConfig } from "../config/config.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitDiagnosticEvent } from "../infra/diagnostic-events.js";
+import {
+  diagnosticLogger as diag,
+  getLastDiagnosticActivityAt,
+  markDiagnosticActivity as markActivity,
+  resetDiagnosticActivityForTest,
+} from "./diagnostic-runtime.js";
 import {
   diagnosticSessionStates,
   getDiagnosticSessionState,
@@ -10,9 +16,7 @@ import {
   type SessionRef,
   type SessionStateValue,
 } from "./diagnostic-session-state.js";
-import { createSubsystemLogger } from "./subsystem.js";
-
-const diag = createSubsystemLogger("diagnostic");
+export { diagnosticLogger, logLaneDequeue, logLaneEnqueue } from "./diagnostic-runtime.js";
 
 const webhookStats = {
   received: 0,
@@ -21,7 +25,6 @@ const webhookStats = {
   lastReceived: 0,
 };
 
-let lastActivityAt = 0;
 const DEFAULT_STUCK_SESSION_WARN_MS = 120_000;
 const MIN_STUCK_SESSION_WARN_MS = 1_000;
 const MAX_STUCK_SESSION_WARN_MS = 24 * 60 * 60 * 1000;
@@ -32,10 +35,6 @@ let commandPollBackoffRuntimePromise: Promise<
 function loadCommandPollBackoffRuntime() {
   commandPollBackoffRuntimePromise ??= import("../agents/command-poll-backoff.runtime.js");
   return commandPollBackoffRuntimePromise;
-}
-
-function markActivity() {
-  lastActivityAt = Date.now();
 }
 
 export function resolveStuckSessionWarnMs(config?: OpenClawConfig): number {
@@ -244,27 +243,6 @@ export function logSessionStuck(params: SessionRef & { state: SessionStateValue;
   markActivity();
 }
 
-export function logLaneEnqueue(lane: string, queueSize: number) {
-  diag.debug(`lane enqueue: lane=${lane} queueSize=${queueSize}`);
-  emitDiagnosticEvent({
-    type: "queue.lane.enqueue",
-    lane,
-    queueSize,
-  });
-  markActivity();
-}
-
-export function logLaneDequeue(lane: string, waitMs: number, queueSize: number) {
-  diag.debug(`lane dequeue: lane=${lane} waitMs=${waitMs} queueSize=${queueSize}`);
-  emitDiagnosticEvent({
-    type: "queue.lane.dequeue",
-    lane,
-    queueSize,
-    waitMs,
-  });
-  markActivity();
-}
-
 export function logRunAttempt(params: SessionRef & { runId: string; attempt: number }) {
   diag.debug(
     `run attempt: sessionId=${params.sessionId ?? "unknown"} sessionKey=${
@@ -286,7 +264,12 @@ export function logToolLoopAction(
     toolName: string;
     level: "warning" | "critical";
     action: "warn" | "block";
-    detector: "generic_repeat" | "known_poll_no_progress" | "global_circuit_breaker" | "ping_pong";
+    detector:
+      | "generic_repeat"
+      | "unknown_tool_repeat"
+      | "known_poll_no_progress"
+      | "global_circuit_breaker"
+      | "ping_pong";
     count: number;
     message: string;
     pairedToolName?: string;
@@ -360,7 +343,7 @@ export function startDiagnosticHeartbeat(
       0,
     );
     const hasActivity =
-      lastActivityAt > 0 ||
+      getLastDiagnosticActivityAt() > 0 ||
       webhookStats.received > 0 ||
       activeCount > 0 ||
       waitingCount > 0 ||
@@ -368,7 +351,7 @@ export function startDiagnosticHeartbeat(
     if (!hasActivity) {
       return;
     }
-    if (now - lastActivityAt > 120_000 && activeCount === 0 && waitingCount === 0) {
+    if (now - getLastDiagnosticActivityAt() > 120_000 && activeCount === 0 && waitingCount === 0) {
       return;
     }
 
@@ -425,12 +408,10 @@ export function getDiagnosticSessionStateCountForTest(): number {
 
 export function resetDiagnosticStateForTest(): void {
   resetDiagnosticSessionStateForTest();
+  resetDiagnosticActivityForTest();
   webhookStats.received = 0;
   webhookStats.processed = 0;
   webhookStats.errors = 0;
   webhookStats.lastReceived = 0;
-  lastActivityAt = 0;
   stopDiagnosticHeartbeat();
 }
-
-export { diag as diagnosticLogger };

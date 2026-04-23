@@ -48,8 +48,7 @@ function resolveProviderChoiceModelAllowlist(params: {
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
-    bundledProviderAllowlistCompat: true,
-    bundledProviderVitestCompat: true,
+    mode: "setup",
   });
   return resolveProviderPluginChoice({
     providers,

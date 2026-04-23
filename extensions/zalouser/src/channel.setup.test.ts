@@ -1,11 +1,11 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { withEnvAsync } from "openclaw/plugin-sdk/testing";
 import { describe, expect, it } from "vitest";
-import { withEnvAsync } from "../../../test/helpers/plugins/env.js";
 import { createPluginSetupWizardStatus } from "../../../test/helpers/plugins/setup-wizard.js";
 import "./zalo-js.test-mocks.js";
-import { zalouserSetupPlugin } from "./channel.setup.js";
+import { zalouserSetupPlugin } from "./setup-test-helpers.js";
 
 const zalouserSetupGetStatus = createPluginSetupWizardStatus(zalouserSetupPlugin);
 

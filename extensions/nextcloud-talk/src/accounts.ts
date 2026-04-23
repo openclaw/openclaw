@@ -1,16 +1,20 @@
-import { resolveMergedAccountConfig } from "openclaw/plugin-sdk/account-resolution";
-import { tryReadSecretFileSync } from "openclaw/plugin-sdk/core";
 import {
   createAccountListHelpers,
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
   resolveAccountWithDefaultFallback,
-} from "../runtime-api.js";
+  resolveMergedAccountConfig,
+} from "openclaw/plugin-sdk/account-core";
+import { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import { normalizeResolvedSecretInputString } from "./secret-input.js";
 import type { CoreConfig, NextcloudTalkAccountConfig } from "./types.js";
 
 function isTruthyEnvValue(value?: string): boolean {
-  const normalized = (value ?? "").trim().toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(value);
   return normalized === "true" || normalized === "1" || normalized === "yes" || normalized === "on";
 }
 
@@ -63,10 +67,11 @@ function resolveNextcloudTalkSecret(
   cfg: CoreConfig,
   opts: { accountId?: string },
 ): { secret: string; source: ResolvedNextcloudTalkAccount["secretSource"] } {
-  const merged = mergeNextcloudTalkAccountConfig(cfg, opts.accountId ?? DEFAULT_ACCOUNT_ID);
+  const resolvedAccountId = opts.accountId ?? resolveDefaultNextcloudTalkAccountId(cfg);
+  const merged = mergeNextcloudTalkAccountConfig(cfg, resolvedAccountId);
 
-  const envSecret = process.env.NEXTCLOUD_TALK_BOT_SECRET?.trim();
-  if (envSecret && (!opts.accountId || opts.accountId === DEFAULT_ACCOUNT_ID)) {
+  const envSecret = normalizeOptionalString(process.env.NEXTCLOUD_TALK_BOT_SECRET);
+  if (envSecret && resolvedAccountId === DEFAULT_ACCOUNT_ID) {
     return { secret: envSecret, source: "env" };
   }
 
@@ -83,7 +88,7 @@ function resolveNextcloudTalkSecret(
 
   const inlineSecret = normalizeResolvedSecretInputString({
     value: merged.botSecret,
-    path: `channels.nextcloud-talk.accounts.${opts.accountId ?? DEFAULT_ACCOUNT_ID}.botSecret`,
+    path: `channels.nextcloud-talk.accounts.${resolvedAccountId}.botSecret`,
   });
   if (inlineSecret) {
     return { secret: inlineSecret, source: "config" };
@@ -97,6 +102,7 @@ export function resolveNextcloudTalkAccount(params: {
   accountId?: string | null;
 }): ResolvedNextcloudTalkAccount {
   const baseEnabled = params.cfg.channels?.["nextcloud-talk"]?.enabled !== false;
+  const resolvedAccountId = params.accountId ?? resolveDefaultNextcloudTalkAccountId(params.cfg);
 
   const resolve = (accountId: string) => {
     const merged = mergeNextcloudTalkAccountConfig(params.cfg, accountId);
@@ -115,7 +121,7 @@ export function resolveNextcloudTalkAccount(params: {
     return {
       accountId,
       enabled,
-      name: merged.name?.trim() || undefined,
+      name: normalizeOptionalString(merged.name),
       baseUrl,
       secret: secretResolution.secret,
       secretSource: secretResolution.source,
@@ -124,7 +130,7 @@ export function resolveNextcloudTalkAccount(params: {
   };
 
   return resolveAccountWithDefaultFallback({
-    accountId: params.accountId,
+    accountId: resolvedAccountId,
     normalizeAccountId,
     resolvePrimary: resolve,
     hasCredential: (account) => account.secretSource !== "none",

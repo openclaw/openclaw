@@ -18,7 +18,7 @@ const { waitForTransportReadyMock, spawnSignalDaemonMock, streamMock } =
   getSignalToolResultTestMocks();
 
 const SIGNAL_BASE_URL = "http://127.0.0.1:8080";
-type MonitorSignalProviderOptions = Parameters<typeof monitorSignalProvider>[0];
+type MonitorSignalProviderOptions = NonNullable<Parameters<typeof monitorSignalProvider>[0]>;
 
 function createMonitorRuntime() {
   return {
@@ -46,7 +46,8 @@ function createAutoAbortController() {
 async function runMonitorWithMocks(opts: MonitorSignalProviderOptions) {
   return monitorSignalProvider({
     config: config as OpenClawConfig,
-    waitForTransportReady: waitForTransportReadyMock as any,
+    waitForTransportReady:
+      waitForTransportReadyMock as MonitorSignalProviderOptions["waitForTransportReady"],
     ...opts,
   });
 }

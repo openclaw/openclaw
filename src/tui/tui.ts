@@ -16,6 +16,7 @@ import {
   normalizeMainKey,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { getSlashCommands } from "./commands.js";
 import { ChatLog } from "./components/chat-log.js";
 import { CustomEditor } from "./components/custom-editor.js";
@@ -69,9 +70,9 @@ export function resolveTuiSessionKey(params: {
     return trimmed;
   }
   if (trimmed.startsWith("agent:")) {
-    return trimmed.toLowerCase();
+    return normalizeLowercaseStringOrEmpty(trimmed);
   }
-  return `agent:${params.currentAgentId}:${trimmed.toLowerCase()}`;
+  return `agent:${params.currentAgentId}:${normalizeLowercaseStringOrEmpty(trimmed)}`;
 }
 
 export function resolveInitialTuiAgentId(params: {
@@ -156,6 +157,24 @@ export function stopTuiSafely(stop: () => void): void {
       throw error;
     }
   }
+}
+
+type DrainableTui = {
+  stop: () => void;
+  terminal?: {
+    drainInput?: (maxMs?: number, idleMs?: number) => Promise<void>;
+  };
+};
+
+export async function drainAndStopTuiSafely(tui: DrainableTui): Promise<void> {
+  if (typeof tui.terminal?.drainInput === "function") {
+    try {
+      await tui.terminal.drainInput();
+    } catch {
+      // Best-effort only. A failed drain should not skip terminal shutdown.
+    }
+  }
+  stopTuiSafely(() => tui.stop());
 }
 
 type CtrlCAction = "clear" | "warn" | "exit";
@@ -734,8 +753,9 @@ export async function runTui(opts: TuiOptions) {
     }
     exitRequested = true;
     client.stop();
-    stopTuiSafely(() => tui.stop());
-    process.exit(0);
+    void drainAndStopTuiSafely(tui).then(() => {
+      process.exit(0);
+    });
   };
 
   const { handleCommand, sendMessage, openModelSelector, openAgentSelector, openSessionSelector } =

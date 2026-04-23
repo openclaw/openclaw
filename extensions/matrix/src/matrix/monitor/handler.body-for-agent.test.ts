@@ -8,6 +8,62 @@ import {
 import type { MatrixRawEvent } from "./types.js";
 
 describe("createMatrixRoomMessageHandler inbound body formatting", () => {
+  type MatrixHandlerHarness = ReturnType<typeof createMatrixHandlerTestHarness>;
+  type FinalizedReplyContext = {
+    ReplyToBody?: string;
+    ReplyToSender?: string;
+    ThreadStarterBody?: string;
+  };
+
+  function createQuotedReplyVisibilityHarness(contextVisibility: "allowlist" | "allowlist_quote") {
+    return createMatrixHandlerTestHarness({
+      client: {
+        getEvent: async () =>
+          createMatrixTextMessageEvent({
+            eventId: "$quoted",
+            sender: "@mallory:example.org",
+            body: "Quoted payload",
+          }),
+      },
+      isDirectMessage: false,
+      cfg: {
+        channels: {
+          matrix: {
+            contextVisibility,
+            groupAllowFrom: ["@alice:example.org"],
+          },
+        },
+      },
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["@alice:example.org"],
+      roomsConfig: { "*": {} },
+      replyToMode: "all",
+      getMemberDisplayName: async (_roomId, userId) =>
+        userId === "@alice:example.org" ? "Alice" : "Mallory",
+    });
+  }
+
+  async function sendQuotedReply(handler: MatrixHandlerHarness["handler"]) {
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$reply1",
+        sender: "@alice:example.org",
+        body: "@room follow up",
+        relatesTo: {
+          "m.in_reply_to": { event_id: "$quoted" },
+        },
+        mentions: { room: true },
+      }),
+    );
+  }
+
+  function latestFinalizedReplyContext(
+    finalizeInboundContext: MatrixHandlerHarness["finalizeInboundContext"],
+  ) {
+    return vi.mocked(finalizeInboundContext).mock.calls.at(-1)?.[0] as FinalizedReplyContext;
+  }
+
   beforeEach(() => {
     installMatrixMonitorTestRuntime({
       matchesMentionPatterns: () => false,
@@ -266,5 +322,77 @@ describe("createMatrixRoomMessageHandler inbound body formatting", () => {
     );
     expect(getEvent).toHaveBeenCalledTimes(1);
     expect(getMemberDisplayName).toHaveBeenCalledTimes(2);
+  });
+
+  it("drops thread and reply context fetched from non-allowlisted room senders", async () => {
+    const { handler, finalizeInboundContext } = createMatrixHandlerTestHarness({
+      client: {
+        getEvent: async () =>
+          createMatrixTextMessageEvent({
+            eventId: "$thread-root",
+            sender: "@mallory:example.org",
+            body: "Malicious root topic",
+          }),
+      },
+      isDirectMessage: false,
+      cfg: {
+        channels: {
+          matrix: {
+            contextVisibility: "allowlist",
+            groupAllowFrom: ["@alice:example.org"],
+          },
+        },
+      },
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["@alice:example.org"],
+      roomsConfig: { "*": {} },
+      getMemberDisplayName: async (_roomId, userId) =>
+        userId === "@alice:example.org" ? "Alice" : "Mallory",
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$reply1",
+        sender: "@alice:example.org",
+        body: "@room follow up",
+        relatesTo: {
+          rel_type: "m.thread",
+          event_id: "$thread-root",
+          "m.in_reply_to": { event_id: "$thread-root" },
+        },
+        mentions: { room: true },
+      }),
+    );
+
+    const finalized = vi.mocked(finalizeInboundContext).mock.calls.at(-1)?.[0] as {
+      ReplyToBody?: string;
+      ReplyToSender?: string;
+      ThreadStarterBody?: string;
+    };
+    expect(finalized.ThreadStarterBody).toBeUndefined();
+    expect(finalized.ReplyToBody).toBeUndefined();
+    expect(finalized.ReplyToSender).toBeUndefined();
+  });
+
+  it("drops quoted reply context fetched from non-allowlisted room senders", async () => {
+    const { handler, finalizeInboundContext } = createQuotedReplyVisibilityHarness("allowlist");
+
+    await sendQuotedReply(handler);
+
+    const finalized = latestFinalizedReplyContext(finalizeInboundContext);
+    expect(finalized.ReplyToBody).toBeUndefined();
+    expect(finalized.ReplyToSender).toBeUndefined();
+  });
+
+  it("keeps quoted reply context in allowlist_quote mode", async () => {
+    const { handler, finalizeInboundContext } =
+      createQuotedReplyVisibilityHarness("allowlist_quote");
+
+    await sendQuotedReply(handler);
+
+    const finalized = latestFinalizedReplyContext(finalizeInboundContext);
+    expect(finalized.ReplyToBody).toBe("Quoted payload");
+    expect(finalized.ReplyToSender).toBe("Mallory");
   });
 });

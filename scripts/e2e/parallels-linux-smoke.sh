@@ -22,6 +22,7 @@ KEEP_SERVER=0
 SNAPSHOT_ID=""
 SNAPSHOT_STATE=""
 SNAPSHOT_NAME=""
+PACKED_MAIN_COMMIT_SHORT=""
 
 MAIN_TGZ_DIR="$(mktemp -d)"
 MAIN_TGZ_PATH=""
@@ -31,10 +32,11 @@ BUILD_LOCK_DIR="${TMPDIR:-/tmp}/openclaw-parallels-build.lock"
 
 TIMEOUT_SNAPSHOT_S=180
 TIMEOUT_BOOTSTRAP_S=600
-TIMEOUT_INSTALL_S=1200
+TIMEOUT_INSTALL_S=420
 TIMEOUT_VERIFY_S=90
 TIMEOUT_ONBOARD_S=180
 TIMEOUT_AGENT_S=180
+TIMEOUT_GATEWAY_S=240
 
 FRESH_MAIN_STATUS="skip"
 FRESH_MAIN_VERSION="skip"
@@ -59,6 +61,10 @@ artifact_label() {
   printf 'current main tgz'
 }
 
+extract_package_build_commit_from_tgz() {
+  tar -xOf "$1" package/dist/build-info.json | python3 -c 'import json, sys; print(json.load(sys.stdin).get("commit", ""))'
+}
+
 warn() {
   printf 'warn: %s\n' "$*" >&2
 }
@@ -76,6 +82,11 @@ cleanup() {
 }
 
 trap cleanup EXIT
+
+shell_quote() {
+  local value="$1"
+  printf "'%s'" "$(printf '%s' "$value" | sed "s/'/'\"'\"'/g")"
+}
 
 usage() {
   cat <<'EOF'
@@ -217,6 +228,7 @@ resolve_vm_name() {
 import difflib
 import json
 import os
+import re
 import sys
 
 payload = json.loads(os.environ["PRL_VM_JSON"])
@@ -224,6 +236,18 @@ requested = os.environ["REQUESTED_VM_NAME"].strip()
 requested_lower = requested.lower()
 explicit = os.environ["VM_NAME_EXPLICIT"] == "1"
 names = [str(item.get("name", "")).strip() for item in payload if str(item.get("name", "")).strip()]
+
+def parse_ubuntu_version(name: str) -> tuple[int, ...] | None:
+    match = re.search(r"ubuntu\s+(\d+(?:\.\d+)*)", name, re.IGNORECASE)
+    if not match:
+        return None
+    return tuple(int(part) for part in match.group(1).split("."))
+
+def version_distance(version: tuple[int, ...], target: tuple[int, ...]) -> tuple[int, ...]:
+    width = max(len(version), len(target))
+    padded_version = version + (0,) * (width - len(version))
+    padded_target = target + (0,) * (width - len(target))
+    return tuple(abs(a - b) for a, b in zip(padded_version, padded_target))
 
 if requested in names:
     print(requested)
@@ -235,6 +259,27 @@ if explicit:
 ubuntu_names = [name for name in names if "ubuntu" in name.lower()]
 if not ubuntu_names:
     sys.exit(f"default vm not found and no Ubuntu fallback available: {requested}")
+
+requested_version = parse_ubuntu_version(requested) or (24,)
+ubuntu_with_versions = [
+    (name, parse_ubuntu_version(name)) for name in ubuntu_names
+]
+ubuntu_ge_24 = [
+    (name, version)
+    for name, version in ubuntu_with_versions
+    if version and version[0] >= 24
+]
+if ubuntu_ge_24:
+    best_name = min(
+        ubuntu_ge_24,
+        key=lambda item: (
+            version_distance(item[1], requested_version),
+            -len(item[1]),
+            item[0].lower(),
+        ),
+    )[0]
+    print(best_name)
+    raise SystemExit(0)
 
 best_name = max(
     ubuntu_names,
@@ -355,7 +400,13 @@ resolve_host_port() {
 }
 
 guest_exec() {
-  prlctl exec "$VM_NAME" "$@"
+  prlctl exec "$VM_NAME" /usr/bin/env HOME=/root "$@"
+}
+
+guest_bash_script() {
+  local encoded
+  encoded="$(base64 | tr -d '\n')"
+  guest_exec bash -lc "printf '%s' '$encoded' | base64 -d | bash"
 }
 
 wait_for_vm_status() {
@@ -422,6 +473,10 @@ else:
 PY
 }
 
+source_tree_dirty_for_build() {
+  [[ -n "$(git status --porcelain -- src ui packages extensions package.json pnpm-lock.yaml 'tsconfig*.json' 2>/dev/null)" ]]
+}
+
 acquire_build_lock() {
   local owner_pid=""
   while ! mkdir "$BUILD_LOCK_DIR" 2>/dev/null; do
@@ -449,7 +504,7 @@ ensure_current_build() {
   acquire_build_lock
   head="$(git rev-parse HEAD)"
   build_commit="$(current_build_commit)"
-  if [[ "$build_commit" == "$head" ]]; then
+  if [[ "$build_commit" == "$head" ]] && ! source_tree_dirty_for_build; then
     release_build_lock
     return
   fi
@@ -460,12 +515,17 @@ ensure_current_build() {
   [[ "$build_commit" == "$head" ]] || die "dist/build-info.json still does not match HEAD after build"
 }
 
+write_package_dist_inventory() {
+  node --import tsx --input-type=module --eval \
+    'import { writePackageDistInventory } from "./src/infra/package-dist-inventory.ts"; await writePackageDistInventory(process.cwd());'
+}
+
 extract_package_version_from_tgz() {
   tar -xOf "$1" package/package.json | python3 -c 'import json, sys; print(json.load(sys.stdin)["version"])'
 }
 
 pack_main_tgz() {
-  local short_head pkg
+  local short_head pkg packed_commit
   if [[ -n "$TARGET_PACKAGE_SPEC" ]]; then
     say "Pack target package tgz: $TARGET_PACKAGE_SPEC"
     pkg="$(
@@ -480,6 +540,7 @@ pack_main_tgz() {
   fi
   say "Pack current main tgz"
   ensure_current_build
+  write_package_dist_inventory
   short_head="$(git rev-parse --short HEAD)"
   pkg="$(
     npm pack --ignore-scripts --json --pack-destination "$MAIN_TGZ_DIR" \
@@ -487,6 +548,9 @@ pack_main_tgz() {
   )"
   MAIN_TGZ_PATH="$MAIN_TGZ_DIR/openclaw-main-$short_head.tgz"
   cp "$MAIN_TGZ_DIR/$pkg" "$MAIN_TGZ_PATH"
+  packed_commit="$(extract_package_build_commit_from_tgz "$MAIN_TGZ_PATH")"
+  [[ -n "$packed_commit" ]] || die "failed to read packed build commit from $MAIN_TGZ_PATH"
+  PACKED_MAIN_COMMIT_SHORT="${packed_commit:0:7}"
   say "Packed $MAIN_TGZ_PATH"
   tar -xOf "$MAIN_TGZ_PATH" package/dist/build-info.json
 }
@@ -496,7 +560,8 @@ verify_target_version() {
     verify_version_contains "$TARGET_EXPECT_VERSION"
     return
   fi
-  verify_version_contains "$(git rev-parse --short=7 HEAD)"
+  [[ -n "$PACKED_MAIN_COMMIT_SHORT" ]] || die "packed main commit not captured"
+  verify_version_contains "$PACKED_MAIN_COMMIT_SHORT"
 }
 
 start_server() {
@@ -573,6 +638,108 @@ run_ref_onboard() {
     --skip-health \
     --accept-risk \
     --json
+}
+
+inject_bad_plugin_fixture() {
+  guest_bash_script <<'EOF'
+set -euo pipefail
+plugin_dir=/root/.openclaw/test-bad-plugin
+mkdir -p "$plugin_dir"
+cat >"$plugin_dir/package.json" <<'JSON'
+{
+  "name": "@openclaw/test-bad-plugin",
+  "version": "1.0.0",
+  "openclaw": {
+    "extensions": ["./index.cjs"],
+    "setupEntry": "./setup-entry.cjs"
+  }
+}
+JSON
+cat >"$plugin_dir/openclaw.plugin.json" <<'JSON'
+{
+  "id": "test-bad-plugin",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "channels": ["test-bad-plugin"]
+}
+JSON
+cat >"$plugin_dir/index.cjs" <<'JS'
+module.exports = { id: "test-bad-plugin", register() {} };
+JS
+cat >"$plugin_dir/setup-entry.cjs" <<'JS'
+module.exports = {
+  kind: "bundled-channel-setup-entry",
+  loadSetupPlugin() {
+    throw new Error("boom: bad plugin smoke fixture");
+  },
+};
+JS
+python3 - <<'PY'
+import json
+from pathlib import Path
+
+config_path = Path("/root/.openclaw/openclaw.json")
+config = {}
+if config_path.exists():
+    config = json.loads(config_path.read_text())
+
+plugins = config.setdefault("plugins", {})
+load = plugins.setdefault("load", {})
+paths = load.setdefault("paths", [])
+plugin_dir = "/root/.openclaw/test-bad-plugin"
+if plugin_dir not in paths:
+    paths.append(plugin_dir)
+
+allow = plugins.get("allow")
+if isinstance(allow, list) and "test-bad-plugin" not in allow:
+    allow.append("test-bad-plugin")
+
+config_path.write_text(json.dumps(config, indent=2) + "\n")
+PY
+EOF
+}
+
+verify_bad_plugin_diagnostic() {
+  guest_bash_script <<'EOF'
+grep -F "failed to load setup entry" /tmp/openclaw-parallels-linux-gateway.log
+EOF
+}
+
+start_gateway_background() {
+  local cmd api_key_value_q
+  api_key_value_q="$(shell_quote "$API_KEY_VALUE")"
+  cmd="$(cat <<EOF
+pkill -f "openclaw gateway run" >/dev/null 2>&1 || true
+rm -f /tmp/openclaw-parallels-linux-gateway.log
+setsid sh -lc 'exec env OPENCLAW_HOME=/root OPENCLAW_STATE_DIR=/root/.openclaw OPENCLAW_CONFIG_PATH=/root/.openclaw/openclaw.json ${API_KEY_ENV}=${api_key_value_q} openclaw gateway run --bind loopback --port 18789 --force >/tmp/openclaw-parallels-linux-gateway.log 2>&1' >/dev/null 2>&1 < /dev/null &
+EOF
+)"
+  guest_exec bash -lc "$cmd"
+
+  # On the Ubuntu guest the backgrounded process can bind a few seconds after
+  # the launch command returns. Keep the race inside gateway-start instead of
+  # failing the next phase with a false-negative RPC probe.
+  local deadline
+  deadline=$((SECONDS + TIMEOUT_GATEWAY_S))
+  while (( SECONDS < deadline )); do
+    if show_gateway_status_compat >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 2
+  done
+
+  return 1
+}
+
+show_gateway_status_compat() {
+  if guest_exec openclaw gateway status --help | grep -Fq -- "--require-rpc"; then
+    guest_exec openclaw gateway status --deep --require-rpc
+    return
+  fi
+  guest_exec openclaw gateway status --deep
 }
 
 verify_local_turn() {
@@ -704,7 +871,11 @@ run_fresh_main_lane() {
   FRESH_MAIN_VERSION="$(extract_last_version "$(phase_log_path fresh.install-main)")"
   phase_run "fresh.verify-main-version" "$TIMEOUT_VERIFY_S" verify_target_version
   phase_run "fresh.onboard-ref" "$TIMEOUT_ONBOARD_S" run_ref_onboard
-  FRESH_GATEWAY_STATUS="skipped-no-detached-linux-gateway"
+  phase_run "fresh.inject-bad-plugin" "$TIMEOUT_VERIFY_S" inject_bad_plugin_fixture
+  phase_run "fresh.gateway-start" "$TIMEOUT_GATEWAY_S" start_gateway_background
+  phase_run "fresh.bad-plugin-diagnostic" "$TIMEOUT_VERIFY_S" verify_bad_plugin_diagnostic
+  phase_run "fresh.gateway-status" "$TIMEOUT_VERIFY_S" show_gateway_status_compat
+  FRESH_GATEWAY_STATUS="pass"
   phase_run "fresh.first-local-agent-turn" "$TIMEOUT_AGENT_S" verify_local_turn
   FRESH_AGENT_STATUS="pass"
 }
@@ -720,8 +891,12 @@ run_upgrade_lane() {
   phase_run "upgrade.install-main" "$TIMEOUT_INSTALL_S" install_main_tgz "$host_ip" "openclaw-main-upgrade.tgz"
   UPGRADE_MAIN_VERSION="$(extract_last_version "$(phase_log_path upgrade.install-main)")"
   phase_run "upgrade.verify-main-version" "$TIMEOUT_VERIFY_S" verify_target_version
+  phase_run "upgrade.inject-bad-plugin" "$TIMEOUT_VERIFY_S" inject_bad_plugin_fixture
   phase_run "upgrade.onboard-ref" "$TIMEOUT_ONBOARD_S" run_ref_onboard
-  UPGRADE_GATEWAY_STATUS="skipped-no-detached-linux-gateway"
+  phase_run "upgrade.gateway-start" "$TIMEOUT_GATEWAY_S" start_gateway_background
+  phase_run "upgrade.bad-plugin-diagnostic" "$TIMEOUT_VERIFY_S" verify_bad_plugin_diagnostic
+  phase_run "upgrade.gateway-status" "$TIMEOUT_VERIFY_S" show_gateway_status_compat
+  UPGRADE_GATEWAY_STATUS="pass"
   phase_run "upgrade.first-local-agent-turn" "$TIMEOUT_AGENT_S" verify_local_turn
   UPGRADE_AGENT_STATUS="pass"
 }
@@ -787,7 +962,7 @@ SUMMARY_JSON_PATH="$(
   SUMMARY_LATEST_VERSION="$LATEST_VERSION" \
   SUMMARY_INSTALL_VERSION="$INSTALL_VERSION" \
   SUMMARY_TARGET_PACKAGE_SPEC="$TARGET_PACKAGE_SPEC" \
-  SUMMARY_CURRENT_HEAD="$(git rev-parse --short HEAD)" \
+  SUMMARY_CURRENT_HEAD="${PACKED_MAIN_COMMIT_SHORT:-$(git rev-parse --short HEAD)}" \
   SUMMARY_RUN_DIR="$RUN_DIR" \
   SUMMARY_DAEMON_STATUS="$DAEMON_STATUS" \
   SUMMARY_FRESH_MAIN_STATUS="$FRESH_MAIN_STATUS" \

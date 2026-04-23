@@ -1,14 +1,18 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { withTempDir } from "../test-helpers/temp-dir.js";
 import { createAsyncLock, readJsonFile, writeJsonAtomic, writeTextAtomic } from "./json-files.js";
 
-async function withTempBase<T>(run: (base: string) => Promise<T>): Promise<T> {
-  const base = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-json-files-"));
-  return run(base);
-}
+const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  if (originalPlatformDescriptor) {
+    Object.defineProperty(process, "platform", originalPlatformDescriptor);
+  }
+});
 
 describe("json file helpers", () => {
   it.each([
@@ -36,13 +40,13 @@ describe("json file helpers", () => {
       expected: null,
     },
   ])("$name", async ({ setup, expected }) => {
-    await withTempBase(async (base) => {
+    await withTempDir({ prefix: "openclaw-json-files-" }, async (base) => {
       await expect(readJsonFile(await setup(base))).resolves.toEqual(expected);
     });
   });
 
   it("writes json atomically with pretty formatting and optional trailing newline", async () => {
-    await withTempBase(async (base) => {
+    await withTempDir({ prefix: "openclaw-json-files-" }, async (base) => {
       const filePath = path.join(base, "nested", "config.json");
 
       await writeJsonAtomic(
@@ -61,10 +65,28 @@ describe("json file helpers", () => {
     { input: "hello", expected: "hello\n" },
     { input: "hello\n", expected: "hello\n" },
   ])("writes text atomically for %j", async ({ input, expected }) => {
-    await withTempBase(async (base) => {
+    await withTempDir({ prefix: "openclaw-json-files-" }, async (base) => {
       const filePath = path.join(base, "nested", "note.txt");
       await writeTextAtomic(filePath, input, { appendTrailingNewline: true });
       await expect(fs.readFile(filePath, "utf8")).resolves.toBe(expected);
+    });
+  });
+
+  it("falls back to copy-on-replace for Windows rename EPERM", async () => {
+    await withTempDir({ prefix: "openclaw-json-files-" }, async (base) => {
+      const filePath = path.join(base, "state.json");
+      await fs.writeFile(filePath, "old", "utf8");
+
+      Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+      const renameError = Object.assign(new Error("EPERM"), { code: "EPERM" });
+      const renameSpy = vi.spyOn(fs, "rename").mockRejectedValueOnce(renameError);
+      const copySpy = vi.spyOn(fs, "copyFile");
+
+      await writeTextAtomic(filePath, "new");
+
+      expect(renameSpy).toHaveBeenCalledOnce();
+      expect(copySpy).toHaveBeenCalledOnce();
+      await expect(fs.readFile(filePath, "utf8")).resolves.toBe("new");
     });
   });
 

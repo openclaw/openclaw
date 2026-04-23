@@ -1,12 +1,12 @@
 import * as http from "http";
-import * as Lark from "@larksuiteoapi/node-sdk";
+import type * as Lark from "@larksuiteoapi/node-sdk";
 import {
   createFixedWindowRateLimiter,
   createWebhookAnomalyTracker,
   type RuntimeEnv,
   WEBHOOK_ANOMALY_COUNTER_DEFAULTS as WEBHOOK_ANOMALY_COUNTER_DEFAULTS_FROM_SDK,
   WEBHOOK_RATE_LIMIT_DEFAULTS as WEBHOOK_RATE_LIMIT_DEFAULTS_FROM_SDK,
-} from "../runtime-api.js";
+} from "./monitor-state-runtime-api.js";
 
 export const wsClients = new Map<string, Lark.WSClient>();
 export const httpServers = new Map<string, http.Server>();
@@ -105,7 +105,9 @@ const feishuWebhookAnomalyTracker = createWebhookAnomalyTracker({
 });
 
 function closeWsClient(client: Lark.WSClient | undefined): void {
-  if (!client) return;
+  if (!client) {
+    return;
+  }
   try {
     client.close();
   } catch {

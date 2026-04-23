@@ -1,3 +1,4 @@
+import { formatErrorMessage } from "../infra/errors.js";
 import { createDraftStreamLoop } from "./draft-stream-loop.js";
 
 export type FinalizableDraftStreamState = {
@@ -111,7 +112,7 @@ export async function clearFinalizableDraftMessage<T>(
     await params.deleteMessage(messageId);
     params.onDeleteSuccess?.(messageId);
   } catch (err) {
-    params.warn?.(`${params.warnPrefix}: ${err instanceof Error ? err.message : String(err)}`);
+    params.warn?.(`${params.warnPrefix}: ${formatErrorMessage(err)}`);
   }
 }
 

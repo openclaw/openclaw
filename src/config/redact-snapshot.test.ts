@@ -1,12 +1,12 @@
 import JSON5 from "json5";
 import { describe, expect, it } from "vitest";
+import { redactSnapshotTestHints as mainSchemaHints } from "../../test/helpers/config/redact-snapshot-test-hints.js";
 import { REDACTED_SENTINEL, redactConfigSnapshot } from "./redact-snapshot.js";
 import {
   makeSnapshot,
   restoreRedactedValues,
   type TestSnapshot,
 } from "./redact-snapshot.test-helpers.js";
-import { redactSnapshotTestHints as mainSchemaHints } from "./redact-snapshot.test-hints.js";
 import { buildConfigSchema, type ConfigUiHints } from "./schema.js";
 import type { ConfigFileSnapshot } from "./types.openclaw.js";
 
@@ -225,6 +225,161 @@ describe("redactConfigSnapshot", () => {
     );
   });
 
+  it("redacts media request auth and proxy transport secrets from config snapshots", () => {
+    const hints = buildConfigSchema().uiHints;
+    const raw = `{
+  tools: {
+    media: {
+      audio: {
+        request: {
+          auth: {
+            mode: "authorization-bearer",
+            token: "media-audio-secret-token",
+          },
+          proxy: {
+            mode: "explicit-proxy",
+            url: "http://alice:secret@proxy.example.internal:8080",
+          },
+        },
+      },
+    },
+  },
+}`;
+    const snapshot = makeSnapshot(
+      {
+        tools: {
+          media: {
+            audio: {
+              request: {
+                auth: {
+                  mode: "authorization-bearer",
+                  token: "media-audio-secret-token",
+                },
+                proxy: {
+                  mode: "explicit-proxy",
+                  url: "http://alice:secret@proxy.example.internal:8080",
+                },
+              },
+            },
+          },
+        },
+      },
+      raw,
+    );
+
+    const result = redactConfigSnapshot(snapshot, hints);
+    const cfg = result.config as typeof snapshot.config;
+    expect(cfg.tools.media.audio.request.auth.token).toBe(REDACTED_SENTINEL);
+    expect(cfg.tools.media.audio.request.proxy.url).toBe(REDACTED_SENTINEL);
+    expect(result.raw).toContain(REDACTED_SENTINEL);
+    expect(result.raw).not.toContain("media-audio-secret-token");
+    expect(result.raw).not.toContain("alice:secret@");
+
+    const restored = restoreRedactedValues(result.config, snapshot.config, hints);
+    expect(restored.tools.media.audio.request.auth.token).toBe("media-audio-secret-token");
+    expect(restored.tools.media.audio.request.proxy.url).toBe(
+      "http://alice:secret@proxy.example.internal:8080",
+    );
+  });
+
+  it("redacts model provider request auth secrets from config snapshots", () => {
+    const hints = buildConfigSchema().uiHints;
+    const raw = `{
+  models: {
+    providers: {
+      openai: {
+        baseUrl: "https://api.openai.com/v1",
+        models: [],
+        request: {
+          auth: {
+            mode: "authorization-bearer",
+            token: "provider-secret-token",
+          },
+        },
+      },
+    },
+  },
+}`;
+    const snapshot = makeSnapshot(
+      {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              models: [],
+              request: {
+                auth: {
+                  mode: "authorization-bearer",
+                  token: "provider-secret-token",
+                },
+              },
+            },
+          },
+        },
+      },
+      raw,
+    );
+
+    const result = redactConfigSnapshot(snapshot, hints);
+    const cfg = result.config as typeof snapshot.config;
+    expect(cfg.models.providers.openai.request.auth.token).toBe(REDACTED_SENTINEL);
+    expect(result.raw).toContain(REDACTED_SENTINEL);
+    expect(result.raw).not.toContain("provider-secret-token");
+
+    const restored = restoreRedactedValues(result.config, snapshot.config, hints);
+    expect(restored.models.providers.openai.request.auth.token).toBe("provider-secret-token");
+  });
+
+  it("redacts model provider request proxy URLs from config snapshots", () => {
+    const hints = buildConfigSchema().uiHints;
+    const raw = `{
+  models: {
+    providers: {
+      openai: {
+        baseUrl: "https://api.openai.com/v1",
+        models: [],
+        request: {
+          proxy: {
+            mode: "explicit-proxy",
+            url: "http://alice:secret@proxy.example.internal:8080",
+          },
+        },
+      },
+    },
+  },
+}`;
+    const snapshot = makeSnapshot(
+      {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              models: [],
+              request: {
+                proxy: {
+                  mode: "explicit-proxy",
+                  url: "http://alice:secret@proxy.example.internal:8080",
+                },
+              },
+            },
+          },
+        },
+      },
+      raw,
+    );
+
+    const result = redactConfigSnapshot(snapshot, hints);
+    const cfg = result.config as typeof snapshot.config;
+    expect(cfg.models.providers.openai.request.proxy.url).toBe(REDACTED_SENTINEL);
+    expect(result.raw).toContain(REDACTED_SENTINEL);
+    expect(result.raw).not.toContain("alice:secret@");
+
+    const restored = restoreRedactedValues(result.config, snapshot.config, hints);
+    expect(restored.models.providers.openai.request.proxy.url).toBe(
+      "http://alice:secret@proxy.example.internal:8080",
+    );
+  });
+
   it("does not redact maxTokens-style fields", () => {
     const snapshot = makeSnapshot({
       maxTokens: 16384,
@@ -390,6 +545,19 @@ describe("redactConfigSnapshot", () => {
     expect(restored).toEqual(snapshot.config);
   });
 
+  it("does not mangle raw when a sensitive field value is empty string", () => {
+    const config = {
+      gateway: { auth: { token: "" } },
+      other: "",
+    };
+    const raw = '{ "gateway": { "auth": { "token": "" } }, "other": "" }';
+    const snapshot = makeSnapshot(config, raw);
+    const result = redactConfigSnapshot(snapshot);
+    expect(result.config.gateway?.auth?.token).toBe(REDACTED_SENTINEL);
+    expect(result.raw).toBe(raw);
+    expect((result.raw ?? "").split(REDACTED_SENTINEL).length).toBe(1);
+  });
+
   it("redacts parsed and resolved objects", () => {
     const snapshot = makeSnapshot({
       channels: { discord: { token: "MTIzNDU2Nzg5MDEyMzQ1Njc4.GaBcDe.FgH" } },
@@ -397,9 +565,21 @@ describe("redactConfigSnapshot", () => {
     });
     const result = redactConfigSnapshot(snapshot);
     const parsed = result.parsed as Record<string, Record<string, Record<string, string>>>;
+    const sourceConfig = result.sourceConfig as Record<
+      string,
+      Record<string, Record<string, string>>
+    >;
     const resolved = result.resolved as Record<string, Record<string, Record<string, string>>>;
+    const runtimeConfig = result.runtimeConfig as Record<
+      string,
+      Record<string, Record<string, string>>
+    >;
     expect(parsed.channels.discord.token).toBe(REDACTED_SENTINEL);
+    expect(sourceConfig.gateway.auth.token).toBe(REDACTED_SENTINEL);
     expect(resolved.gateway.auth.token).toBe(REDACTED_SENTINEL);
+    expect(runtimeConfig.channels.discord.token).toBe(REDACTED_SENTINEL);
+    expect(result.sourceConfig).toBe(result.resolved);
+    expect(result.runtimeConfig).toBe(result.config);
   });
 
   it("handles null raw gracefully", () => {
@@ -442,7 +622,11 @@ describe("redactConfigSnapshot", () => {
     const result = redactConfigSnapshot(snapshot);
     expect(result.raw).toBeNull();
     expect(result.parsed).toBeNull();
+    expect(result.sourceConfig).toEqual({});
     expect(result.resolved).toEqual({});
+    expect(result.runtimeConfig).toEqual({});
+    expect(result.sourceConfig).toBe(result.resolved);
+    expect(result.runtimeConfig).toBe(result.config);
   });
 
   it("handles deeply nested tokens in accounts", () => {
@@ -841,6 +1025,30 @@ describe("redactConfigSnapshot", () => {
     expectGatewayAuthFieldValue(result, "password", REDACTED_SENTINEL);
   });
 
+  it("redacts privateKey paths even when absent from uiHints (defense in depth)", () => {
+    const hints: ConfigUiHints = {
+      "some.other.path": { sensitive: true },
+    };
+    const snapshot = makeSnapshot({
+      channels: {
+        nostr: {
+          privateKey: "nsec1vl029mgpspedva04g90vltkh6fvh240zqtv9k0t9af8935ke9laqsnlfe5",
+          relays: ["wss://relay.example.com"],
+        },
+      },
+    });
+
+    const result = redactConfigSnapshot(snapshot, hints);
+    const channels = result.config.channels as Record<string, Record<string, unknown>>;
+    expect(channels.nostr.privateKey).toBe(REDACTED_SENTINEL);
+    expect(channels.nostr.relays).toEqual(["wss://relay.example.com"]);
+
+    const restored = restoreRedactedValues(result.config, snapshot.config, hints);
+    expect(restored.channels.nostr.privateKey).toBe(
+      "nsec1vl029mgpspedva04g90vltkh6fvh240zqtv9k0t9af8935ke9laqsnlfe5",
+    );
+  });
+
   it("redacts and restores dynamic env catchall secrets when uiHints miss the path", () => {
     const hints: ConfigUiHints = {
       "some.other.path": { sensitive: true },
@@ -953,5 +1161,68 @@ describe("redactConfigSnapshot", () => {
     >;
     expect(channels.slack.accounts[0].botToken).toBe(REDACTED_SENTINEL);
     expect(channels.slack.accounts[1].botToken).toBe(REDACTED_SENTINEL);
+  });
+
+  it("redacts browser cdpUrl secrets while preserving bare endpoints", () => {
+    const hints = buildConfigSchema().uiHints;
+    const raw = `{
+  browser: {
+    cdpUrl: "https://user:pass@chrome.browserless.io?token=supersecret123",
+    profiles: {
+      remote: {
+        cdpUrl: "https://chrome.staging.example.com?token=staging-secret",
+      },
+      prod: {
+        cdpUrl: "https://alice:secret@chrome.prod.example.com",
+      },
+      local: {
+        cdpUrl: "ws://localhost:9222",
+      },
+    },
+  },
+}`;
+    const snapshot = makeSnapshot(
+      {
+        browser: {
+          cdpUrl: "https://user:pass@chrome.browserless.io?token=supersecret123",
+          profiles: {
+            remote: {
+              cdpUrl: "https://chrome.staging.example.com?token=staging-secret",
+            },
+            prod: {
+              cdpUrl: "https://alice:secret@chrome.prod.example.com",
+            },
+            local: {
+              cdpUrl: "ws://localhost:9222",
+            },
+          },
+        },
+      },
+      raw,
+    );
+
+    const result = redactConfigSnapshot(snapshot, hints);
+    const cfg = result.config as typeof snapshot.config;
+    expect(cfg.browser.cdpUrl).toBe(REDACTED_SENTINEL);
+    expect(cfg.browser.profiles.remote.cdpUrl).toBe(REDACTED_SENTINEL);
+    expect(cfg.browser.profiles.prod.cdpUrl).toBe(REDACTED_SENTINEL);
+    expect(cfg.browser.profiles.local.cdpUrl).toBe("ws://localhost:9222");
+    expect(result.raw).toContain(REDACTED_SENTINEL);
+    expect(result.raw).not.toContain("user:pass@");
+    expect(result.raw).not.toContain("supersecret123");
+    expect(result.raw).not.toContain("staging-secret");
+    expect(result.raw).not.toContain("alice:secret@");
+
+    const restored = restoreRedactedValues(result.config, snapshot.config, hints);
+    expect(restored.browser.cdpUrl).toBe(
+      "https://user:pass@chrome.browserless.io?token=supersecret123",
+    );
+    expect(restored.browser.profiles.remote.cdpUrl).toBe(
+      "https://chrome.staging.example.com?token=staging-secret",
+    );
+    expect(restored.browser.profiles.prod.cdpUrl).toBe(
+      "https://alice:secret@chrome.prod.example.com",
+    );
+    expect(restored.browser.profiles.local.cdpUrl).toBe("ws://localhost:9222");
   });
 });

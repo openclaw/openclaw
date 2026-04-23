@@ -8,8 +8,10 @@ import {
   unscopedPackageName,
 } from "../infra/install-safe-path.js";
 import { type NpmIntegrityDrift, type NpmSpecResolution } from "../infra/install-source-utils.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import type { InstallSecurityScanResult } from "./install-security-scan.js";
+import type { InstallSafetyOverrides } from "./install-security-scan.js";
 import {
   resolvePackageExtensionEntries,
   type PackageManifest as PluginPackageManifest,
@@ -230,7 +232,7 @@ function buildBlockedInstallResult(params: {
   };
 }
 
-type PackageInstallCommonParams = {
+type PackageInstallCommonParams = InstallSafetyOverrides & {
   extensionsDir?: string;
   timeoutMs?: number;
   logger?: PluginInstallLogger;
@@ -242,13 +244,19 @@ type PackageInstallCommonParams = {
 
 type FileInstallCommonParams = Pick<
   PackageInstallCommonParams,
-  "extensionsDir" | "logger" | "mode" | "dryRun" | "installPolicyRequest"
+  | "dangerouslyForceUnsafeInstall"
+  | "extensionsDir"
+  | "logger"
+  | "mode"
+  | "dryRun"
+  | "installPolicyRequest"
 >;
 
 function pickPackageInstallCommonParams(
   params: PackageInstallCommonParams,
 ): PackageInstallCommonParams {
   return {
+    dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
     extensionsDir: params.extensionsDir,
     timeoutMs: params.timeoutMs,
     logger: params.logger,
@@ -261,6 +269,7 @@ function pickPackageInstallCommonParams(
 
 function pickFileInstallCommonParams(params: FileInstallCommonParams): FileInstallCommonParams {
   return {
+    dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
     extensionsDir: params.extensionsDir,
     logger: params.logger,
     mode: params.mode,
@@ -269,12 +278,78 @@ function pickFileInstallCommonParams(params: FileInstallCommonParams): FileInsta
   };
 }
 
+type PreparedInstallTarget = {
+  targetPath: string;
+  effectiveMode: "install" | "update";
+};
+
+async function ensureInstallTargetAvailableForMode(params: {
+  runtime: Awaited<ReturnType<typeof loadPluginInstallRuntime>>;
+  targetPath: string;
+  mode: "install" | "update";
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  return await params.runtime.ensureInstallTargetAvailable({
+    mode: params.mode,
+    targetDir: params.targetPath,
+    alreadyExistsError: `plugin already exists: ${params.targetPath} (delete it first)`,
+  });
+}
+
+async function resolvePreparedDirectoryInstallTarget(params: {
+  runtime: Awaited<ReturnType<typeof loadPluginInstallRuntime>>;
+  pluginId: string;
+  extensionsDir?: string;
+  requestedMode: "install" | "update";
+  nameEncoder?: (pluginId: string) => string;
+}): Promise<{ ok: true; target: PreparedInstallTarget } | { ok: false; error: string }> {
+  const targetDirResult = await resolvePluginInstallTarget({
+    runtime: params.runtime,
+    pluginId: params.pluginId,
+    extensionsDir: params.extensionsDir,
+    nameEncoder: params.nameEncoder,
+  });
+  if (!targetDirResult.ok) {
+    return targetDirResult;
+  }
+  return {
+    ok: true,
+    target: {
+      targetPath: targetDirResult.targetDir,
+      effectiveMode: await resolveEffectiveInstallMode({
+        runtime: params.runtime,
+        requestedMode: params.requestedMode,
+        targetPath: targetDirResult.targetDir,
+      }),
+    },
+  };
+}
+
+async function runInstallSourceScan(params: {
+  subject: string;
+  scan: () => Promise<InstallSecurityScanResult | undefined>;
+}): Promise<Extract<InstallPluginResult, { ok: false }> | null> {
+  try {
+    const scanResult = await params.scan();
+    if (scanResult?.blocked) {
+      return buildBlockedInstallResult({ blocked: scanResult.blocked });
+    }
+    return null;
+  } catch (err) {
+    return {
+      ok: false,
+      error: `${params.subject} installation blocked: code safety scan failed (${String(err)}). Run "openclaw security audit --deep" for details.`,
+      code: PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_FAILED,
+    };
+  }
+}
+
 async function installPluginDirectoryIntoExtensions(params: {
   sourceDir: string;
   pluginId: string;
   manifestName?: string;
   version?: string;
   extensions: string[];
+  targetDir?: string;
   extensionsDir?: string;
   logger: PluginInstallLogger;
   timeoutMs: number;
@@ -284,27 +359,29 @@ async function installPluginDirectoryIntoExtensions(params: {
   hasDeps: boolean;
   depsLogMessage: string;
   afterCopy?: (installedDir: string) => Promise<void>;
+  afterInstall?: (
+    installedDir: string,
+  ) => Promise<Extract<InstallPluginResult, { ok: false }> | null>;
   nameEncoder?: (pluginId: string) => string;
 }): Promise<InstallPluginResult> {
   const runtime = await loadPluginInstallRuntime();
-  const extensionsDir = params.extensionsDir
-    ? resolveUserPath(params.extensionsDir)
-    : path.join(CONFIG_DIR, "extensions");
-  const targetDirResult = await runtime.resolveCanonicalInstallTarget({
-    baseDir: extensionsDir,
-    id: params.pluginId,
-    invalidNameMessage: "invalid plugin name: path traversal detected",
-    boundaryLabel: "extensions directory",
-    nameEncoder: params.nameEncoder,
-  });
-  if (!targetDirResult.ok) {
-    return { ok: false, error: targetDirResult.error };
+  let targetDir = params.targetDir;
+  if (!targetDir) {
+    const targetDirResult = await resolvePluginInstallTarget({
+      runtime,
+      pluginId: params.pluginId,
+      extensionsDir: params.extensionsDir,
+      nameEncoder: params.nameEncoder,
+    });
+    if (!targetDirResult.ok) {
+      return { ok: false, error: targetDirResult.error };
+    }
+    targetDir = targetDirResult.targetDir;
   }
-  const targetDir = targetDirResult.targetDir;
-  const availability = await runtime.ensureInstallTargetAvailable({
+  const availability = await ensureInstallTargetAvailableForMode({
+    runtime,
+    targetPath: targetDir,
     mode: params.mode,
-    targetDir,
-    alreadyExistsError: `plugin already exists: ${targetDir} (delete it first)`,
   });
   if (!availability.ok) {
     return availability;
@@ -330,9 +407,24 @@ async function installPluginDirectoryIntoExtensions(params: {
     hasDeps: params.hasDeps,
     depsLogMessage: params.depsLogMessage,
     afterCopy: params.afterCopy,
+    afterInstall: async (installedDir) => {
+      const postInstallResult = await params.afterInstall?.(installedDir);
+      if (!postInstallResult) {
+        return { ok: true as const };
+      }
+      return {
+        ok: false as const,
+        error: postInstallResult.error,
+        ...(postInstallResult.code ? { code: postInstallResult.code } : {}),
+      };
+    },
   });
   if (!installRes.ok) {
-    return installRes;
+    return {
+      ok: false,
+      error: installRes.error,
+      ...(installRes.code ? { code: installRes.code as PluginInstallErrorCode } : {}),
+    };
   }
 
   return buildDirectoryInstallResult({
@@ -362,6 +454,35 @@ export function resolvePluginInstallDir(pluginId: string, extensionsDir?: string
     throw new Error(targetDirResult.error);
   }
   return targetDirResult.path;
+}
+
+async function resolvePluginInstallTarget(params: {
+  runtime: Awaited<ReturnType<typeof loadPluginInstallRuntime>>;
+  pluginId: string;
+  extensionsDir?: string;
+  nameEncoder?: (pluginId: string) => string;
+}): Promise<{ ok: true; targetDir: string } | { ok: false; error: string }> {
+  const extensionsDir = params.extensionsDir
+    ? resolveUserPath(params.extensionsDir)
+    : path.join(CONFIG_DIR, "extensions");
+  return await params.runtime.resolveCanonicalInstallTarget({
+    baseDir: extensionsDir,
+    id: params.pluginId,
+    invalidNameMessage: "invalid plugin name: path traversal detected",
+    boundaryLabel: "extensions directory",
+    nameEncoder: params.nameEncoder,
+  });
+}
+
+async function resolveEffectiveInstallMode(params: {
+  runtime: Awaited<ReturnType<typeof loadPluginInstallRuntime>>;
+  requestedMode: "install" | "update";
+  targetPath: string;
+}): Promise<"install" | "update"> {
+  if (params.requestedMode !== "update") {
+    return "install";
+  }
+  return (await params.runtime.fileExists(params.targetPath)) ? "update" : "install";
 }
 
 async function installBundleFromSourceDir(
@@ -401,25 +522,32 @@ async function installBundleFromSourceDir(
     };
   }
 
-  try {
-    const scanResult = await runtime.scanBundleInstallSource({
-      sourceDir: params.sourceDir,
-      pluginId,
-      logger,
-      requestKind: params.installPolicyRequest?.kind,
-      requestedSpecifier: params.installPolicyRequest?.requestedSpecifier,
-      mode,
-      version: manifestRes.manifest.version,
-    });
-    if (scanResult?.blocked) {
-      return buildBlockedInstallResult({ blocked: scanResult.blocked });
-    }
-  } catch (err) {
-    return {
-      ok: false,
-      error: `Bundle "${pluginId}" installation blocked: code safety scan failed (${String(err)}). Run "openclaw security audit --deep" for details.`,
-      code: PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_FAILED,
-    };
+  const targetResult = await resolvePreparedDirectoryInstallTarget({
+    runtime,
+    pluginId,
+    extensionsDir: params.extensionsDir,
+    requestedMode: mode,
+  });
+  if (!targetResult.ok) {
+    return { ok: false, error: targetResult.error };
+  }
+
+  const scanResult = await runInstallSourceScan({
+    subject: `Bundle "${pluginId}"`,
+    scan: async () =>
+      await runtime.scanBundleInstallSource({
+        dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+        sourceDir: params.sourceDir,
+        pluginId,
+        logger,
+        requestKind: params.installPolicyRequest?.kind,
+        requestedSpecifier: params.installPolicyRequest?.requestedSpecifier,
+        mode: targetResult.target.effectiveMode,
+        version: manifestRes.manifest.version,
+      }),
+  });
+  if (scanResult) {
+    return scanResult;
   }
 
   return await installPluginDirectoryIntoExtensions({
@@ -428,10 +556,11 @@ async function installBundleFromSourceDir(
     manifestName: manifestRes.manifest.name,
     version: manifestRes.manifest.version,
     extensions: [],
+    targetDir: targetResult.target.targetPath,
     extensionsDir: params.extensionsDir,
     logger,
     timeoutMs,
-    mode,
+    mode: targetResult.target.effectiveMode,
     dryRun,
     copyErrorPrefix: "failed to copy plugin bundle",
     hasDeps: false,
@@ -514,7 +643,7 @@ async function installPluginFromPackageDir(
   }
   const extensions = extensionsResult.entries;
 
-  const pkgName = typeof manifest.name === "string" ? manifest.name.trim() : "";
+  const pkgName = normalizeOptionalString(manifest.name) ?? "";
   const npmPluginId = pkgName || "plugin";
 
   // Prefer the canonical `id` from openclaw.plugin.json over the npm package name.
@@ -579,28 +708,37 @@ async function installPluginFromPackageDir(
       code: PLUGIN_INSTALL_ERROR_CODE.INCOMPATIBLE_HOST_VERSION,
     };
   }
-  try {
-    const scanResult = await runtime.scanPackageInstallSource({
-      packageDir: params.packageDir,
-      pluginId,
-      logger,
-      extensions,
-      requestKind: params.installPolicyRequest?.kind,
-      requestedSpecifier: params.installPolicyRequest?.requestedSpecifier,
-      mode,
-      packageName: pkgName || undefined,
-      manifestId: manifestPluginId,
-      version: typeof manifest.version === "string" ? manifest.version : undefined,
-    });
-    if (scanResult?.blocked) {
-      return buildBlockedInstallResult({ blocked: scanResult.blocked });
-    }
-  } catch (err) {
-    return {
-      ok: false,
-      error: `Plugin "${pluginId}" installation blocked: code safety scan failed (${String(err)}). Run "openclaw security audit --deep" for details.`,
-      code: PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_FAILED,
-    };
+
+  const targetResult = await resolvePreparedDirectoryInstallTarget({
+    runtime,
+    pluginId,
+    extensionsDir: params.extensionsDir,
+    requestedMode: mode,
+    nameEncoder: encodePluginInstallDirName,
+  });
+  if (!targetResult.ok) {
+    return { ok: false, error: targetResult.error };
+  }
+
+  const scanResult = await runInstallSourceScan({
+    subject: `Plugin "${pluginId}"`,
+    scan: async () =>
+      await runtime.scanPackageInstallSource({
+        dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+        packageDir: params.packageDir,
+        pluginId,
+        logger,
+        extensions,
+        requestKind: params.installPolicyRequest?.kind,
+        requestedSpecifier: params.installPolicyRequest?.requestedSpecifier,
+        mode: targetResult.target.effectiveMode,
+        packageName: pkgName || undefined,
+        manifestId: manifestPluginId,
+        version: typeof manifest.version === "string" ? manifest.version : undefined,
+      }),
+  });
+  if (scanResult) {
+    return scanResult;
   }
 
   const deps = manifest.dependencies ?? {};
@@ -610,10 +748,11 @@ async function installPluginFromPackageDir(
     manifestName: pkgName || undefined,
     version: typeof manifest.version === "string" ? manifest.version : undefined,
     extensions,
+    targetDir: targetResult.target.targetPath,
     extensionsDir: params.extensionsDir,
     logger,
     timeoutMs,
-    mode,
+    mode: targetResult.target.effectiveMode,
     dryRun,
     copyErrorPrefix: "failed to copy plugin",
     hasDeps: Object.keys(deps).length > 0,
@@ -631,6 +770,16 @@ async function installPluginFromPackageDir(
         }
       }
     },
+    afterInstall: async (installedDir) =>
+      await runInstallSourceScan({
+        subject: `Plugin "${pluginId}"`,
+        scan: async () =>
+          await runtime.scanInstalledPackageDependencyTree({
+            logger,
+            packageDir: installedDir,
+            pluginId,
+          }),
+      }),
   });
 }
 
@@ -663,6 +812,7 @@ export async function installPluginFromArchive(
       await installPluginFromSourceDir({
         sourceDir,
         ...pickPackageInstallCommonParams({
+          dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
           extensionsDir: params.extensionsDir,
           timeoutMs,
           logger,
@@ -705,6 +855,7 @@ export async function installPluginFromDir(
 
 export async function installPluginFromFile(params: {
   filePath: string;
+  dangerouslyForceUnsafeInstall?: boolean;
   extensionsDir?: string;
   logger?: PluginInstallLogger;
   mode?: "install" | "update";
@@ -735,64 +886,71 @@ export async function installPluginFromFile(params: {
     return { ok: false, error: pluginIdError };
   }
   const targetFile = path.join(extensionsDir, `${safeFileName(pluginId)}${path.extname(filePath)}`);
+  const preparedTarget: PreparedInstallTarget = {
+    targetPath: targetFile,
+    effectiveMode: await resolveEffectiveInstallMode({
+      runtime,
+      requestedMode: mode,
+      targetPath: targetFile,
+    }),
+  };
 
-  const availability = await runtime.ensureInstallTargetAvailable({
-    mode,
-    targetDir: targetFile,
-    alreadyExistsError: `plugin already exists: ${targetFile} (delete it first)`,
+  const availability = await ensureInstallTargetAvailableForMode({
+    runtime,
+    targetPath: preparedTarget.targetPath,
+    mode: preparedTarget.effectiveMode,
   });
   if (!availability.ok) {
     return availability;
   }
 
   if (dryRun) {
-    return buildFileInstallResult(pluginId, targetFile);
+    return buildFileInstallResult(pluginId, preparedTarget.targetPath);
   }
 
-  try {
-    const scanResult = await runtime.scanFileInstallSource({
-      filePath,
-      logger,
-      mode,
-      pluginId,
-      requestedSpecifier: installPolicyRequest.requestedSpecifier,
-    });
-    if (scanResult?.blocked) {
-      return buildBlockedInstallResult({ blocked: scanResult.blocked });
-    }
-  } catch (err) {
-    return {
-      ok: false,
-      error: `Plugin file "${pluginId}" installation blocked: code safety scan failed (${String(err)}). Run "openclaw security audit --deep" for details.`,
-      code: PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_FAILED,
-    };
+  const scanResult = await runInstallSourceScan({
+    subject: `Plugin file "${pluginId}"`,
+    scan: async () =>
+      await runtime.scanFileInstallSource({
+        dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+        filePath,
+        logger,
+        mode: preparedTarget.effectiveMode,
+        pluginId,
+        requestedSpecifier: installPolicyRequest.requestedSpecifier,
+      }),
+  });
+  if (scanResult) {
+    return scanResult;
   }
 
-  logger.info?.(`Installing to ${targetFile}…`);
+  logger.info?.(`Installing to ${preparedTarget.targetPath}…`);
   try {
     await runtime.writeFileFromPathWithinRoot({
       rootDir: extensionsDir,
-      relativePath: path.basename(targetFile),
+      relativePath: path.basename(preparedTarget.targetPath),
       sourcePath: filePath,
     });
   } catch (err) {
     return { ok: false, error: String(err) };
   }
 
-  return buildFileInstallResult(pluginId, targetFile);
+  return buildFileInstallResult(pluginId, preparedTarget.targetPath);
 }
 
-export async function installPluginFromNpmSpec(params: {
-  spec: string;
-  extensionsDir?: string;
-  timeoutMs?: number;
-  logger?: PluginInstallLogger;
-  mode?: "install" | "update";
-  dryRun?: boolean;
-  expectedPluginId?: string;
-  expectedIntegrity?: string;
-  onIntegrityDrift?: (params: PluginNpmIntegrityDriftParams) => boolean | Promise<boolean>;
-}): Promise<InstallPluginResult> {
+export async function installPluginFromNpmSpec(
+  params: InstallSafetyOverrides & {
+    spec: string;
+    extensionsDir?: string;
+    timeoutMs?: number;
+    logger?: PluginInstallLogger;
+    mode?: "install" | "update";
+    dryRun?: boolean;
+    expectedPluginId?: string;
+    expectedIntegrity?: string;
+    onIntegrityDrift?: (params: PluginNpmIntegrityDriftParams) => boolean | Promise<boolean>;
+  },
+): Promise<InstallPluginResult> {
   const runtime = await loadPluginInstallRuntime();
   const { logger, timeoutMs, mode, dryRun } = runtime.resolveTimedInstallModeOptions(
     params,
@@ -825,6 +983,7 @@ export async function installPluginFromNpmSpec(params: {
     },
     installFromArchive: installPluginFromArchive,
     archiveInstallParams: {
+      dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
       extensionsDir: params.extensionsDir,
       timeoutMs,
       logger,

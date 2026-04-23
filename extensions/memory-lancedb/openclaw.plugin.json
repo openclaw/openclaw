@@ -38,11 +38,20 @@
       "label": "Auto-Recall",
       "help": "Automatically inject relevant memories into context"
     },
+    "dreaming": {
+      "label": "Dreaming",
+      "help": "Optional dreaming config consumed when this plugin owns the memory slot"
+    },
     "captureMaxChars": {
       "label": "Capture Max Chars",
       "help": "Maximum message length eligible for auto-capture",
       "advanced": true,
       "placeholder": "500"
+    },
+    "storageOptions": {
+      "label": "Storage Options",
+      "advanced": true,
+      "help": "Storage configuration options (access_key, secret_key, endpoint, etc.); supports ${ENV_VAR} values"
     }
   },
   "configSchema": {
@@ -77,10 +86,19 @@
       "autoRecall": {
         "type": "boolean"
       },
+      "dreaming": {
+        "type": "object"
+      },
       "captureMaxChars": {
         "type": "number",
         "minimum": 100,
         "maximum": 10000
+      },
+      "storageOptions": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "string"
+        }
       }
     },
     "required": ["embedding"]

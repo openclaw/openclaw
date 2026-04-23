@@ -78,13 +78,14 @@ prepare_init() {
   git checkout -B "pr-$pr-prep" "pr-$pr"
   git fetch origin main
 
-  cat > .local/prep-context.env <<EOF_ENV
-PR_NUMBER=$pr
-PR_HEAD=$head
-PR_HEAD_SHA_BEFORE=$pr_head_sha_before
-PREP_BRANCH=pr-$pr-prep
-PREP_STARTED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-EOF_ENV
+  # Security: shell-escape values to prevent command injection via malicious branch names.
+  printf '%s=%q\n' \
+    PR_NUMBER "$pr" \
+    PR_HEAD "$head" \
+    PR_HEAD_SHA_BEFORE "$pr_head_sha_before" \
+    PREP_BRANCH "pr-$pr-prep" \
+    PREP_STARTED_AT "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    > .local/prep-context.env
 
   if [ ! -f .local/prep.md ]; then
     cat > .local/prep.md <<EOF_PREP
@@ -173,18 +174,21 @@ prepare_push() {
 - Verified PR head contains origin/main.
 EOF_PREP
 
-  cat > .local/prep.env <<EOF_ENV
-PR_NUMBER=$PR_NUMBER
-PR_AUTHOR=$contrib
-PR_HEAD=$PR_HEAD
-PR_HEAD_SHA_BEFORE=$pushed_from_sha
-PREP_HEAD_SHA=$prep_head_sha
-COAUTHOR_EMAIL=$coauthor_email
-EOF_ENV
+  # Security: shell-escape values to prevent command injection via propagated PR_HEAD.
+  printf '%s=%q\n' \
+    PR_NUMBER "$PR_NUMBER" \
+    PR_AUTHOR "$contrib" \
+    PR_URL "${PR_URL:-}" \
+    PR_HEAD "$PR_HEAD" \
+    PR_HEAD_SHA_BEFORE "$pushed_from_sha" \
+    PREP_HEAD_SHA "$prep_head_sha" \
+    COAUTHOR_EMAIL "$coauthor_email" \
+    > .local/prep.env
 
   ls -la .local/prep.md .local/prep.env >/dev/null
 
   echo "prepare-push complete"
+  echo "pr_url=${PR_URL:-}"
   echo "prep_branch=$(git branch --show-current)"
   echo "prep_head_sha=$prep_head_sha"
   echo "pr_head_sha=$pr_head_sha_after"
@@ -245,18 +249,21 @@ prepare_sync_head() {
 - Prepare gates reran automatically when the sync rebase changed the prep head.
 EOF_PREP
 
-  cat > .local/prep.env <<EOF_ENV
-PR_NUMBER=$PR_NUMBER
-PR_AUTHOR=$contrib
-PR_HEAD=$PR_HEAD
-PR_HEAD_SHA_BEFORE=$pushed_from_sha
-PREP_HEAD_SHA=$prep_head_sha
-COAUTHOR_EMAIL=$coauthor_email
-EOF_ENV
+  # Security: shell-escape values to prevent command injection via propagated PR_HEAD.
+  printf '%s=%q\n' \
+    PR_NUMBER "$PR_NUMBER" \
+    PR_AUTHOR "$contrib" \
+    PR_URL "${PR_URL:-}" \
+    PR_HEAD "$PR_HEAD" \
+    PR_HEAD_SHA_BEFORE "$pushed_from_sha" \
+    PREP_HEAD_SHA "$prep_head_sha" \
+    COAUTHOR_EMAIL "$coauthor_email" \
+    > .local/prep.env
 
   ls -la .local/prep.md .local/prep.env >/dev/null
 
   echo "prepare-sync-head complete"
+  echo "pr_url=${PR_URL:-}"
   echo "prep_branch=$(git branch --show-current)"
   echo "prep_head_sha=$prep_head_sha"
   echo "pr_head_sha=$pr_head_sha_after"
@@ -269,4 +276,5 @@ prepare_run() {
   prepare_gates "$pr"
   prepare_push "$pr"
   echo "prepare-run complete for PR #$pr"
+  echo "pr_url=${PR_URL:-}"
 }

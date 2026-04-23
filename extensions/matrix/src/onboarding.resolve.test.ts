@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { WizardPrompter } from "../runtime-api.js";
 import { installMatrixTestRuntime } from "./test-runtime.js";
 import type { CoreConfig } from "./types.js";
 
@@ -10,12 +11,14 @@ vi.mock("./resolve-targets.js", () => ({
   resolveMatrixTargets: resolveMatrixTargetsMock,
 }));
 
-let runMatrixAddAccountAllowlistConfigure: typeof import("./onboarding.test-harness.js").runMatrixAddAccountAllowlistConfigure;
+let promptMatrixAllowFrom: typeof import("./onboarding.js").__testing.promptMatrixAllowFrom;
 
 describe("matrix onboarding account-scoped resolution", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ runMatrixAddAccountAllowlistConfigure } = await import("./onboarding.test-harness.js"));
+  beforeAll(async () => {
+    ({ promptMatrixAllowFrom } = (await import("./onboarding.js")).__testing);
+  });
+
+  beforeEach(() => {
     installMatrixTestRuntime();
     resolveMatrixTargetsMock.mockClear();
   });
@@ -25,7 +28,11 @@ describe("matrix onboarding account-scoped resolution", () => {
   });
 
   it("passes accountId into Matrix allowlist target resolution during onboarding", async () => {
-    const result = await runMatrixAddAccountAllowlistConfigure({
+    const prompter = {
+      note: vi.fn(async () => {}),
+      text: vi.fn(async () => "Alice"),
+    } as unknown as WizardPrompter;
+    const result = await promptMatrixAllowFrom({
       cfg: {
         channels: {
           matrix: {
@@ -34,15 +41,19 @@ describe("matrix onboarding account-scoped resolution", () => {
                 homeserver: "https://matrix.main.example.org",
                 accessToken: "main-token",
               },
+              ops: {
+                homeserver: "https://matrix.ops.example.org",
+                accessToken: "ops-token",
+              },
             },
           },
         },
       } as CoreConfig,
-      allowFromInput: "Alice",
-      roomsAllowlistInput: "",
+      prompter,
+      accountId: "ops",
     });
 
-    expect(result).not.toBe("skip");
+    expect(result.channels?.matrix?.accounts?.ops?.dm?.allowFrom).toEqual(["@alice:example.org"]);
     expect(resolveMatrixTargetsMock).toHaveBeenCalledWith({
       cfg: expect.any(Object),
       accountId: "ops",

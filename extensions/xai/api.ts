@@ -1,9 +1,13 @@
 import {
-  applyModelCompatPatch,
+  getModelProviderHint,
+  normalizeNativeXaiModelId,
   normalizeProviderId,
 } from "openclaw/plugin-sdk/provider-model-shared";
-import type { ModelCompatConfig } from "openclaw/plugin-sdk/provider-model-shared";
-import { XAI_UNSUPPORTED_SCHEMA_KEYWORDS } from "openclaw/plugin-sdk/provider-tools";
+import {
+  applyXaiModelCompat,
+  resolveXaiModelCompatPatch,
+} from "openclaw/plugin-sdk/provider-tools";
+import { readStringValue } from "openclaw/plugin-sdk/text-runtime";
 
 export { buildXaiProvider } from "./provider-catalog.js";
 export { applyXaiConfig, applyXaiProviderConfig } from "./onboard.js";
@@ -18,41 +22,34 @@ export {
   XAI_DEFAULT_MAX_TOKENS,
 } from "./model-definitions.js";
 export { isModernXaiModel, resolveXaiForwardCompatModel } from "./provider-models.js";
-export { normalizeXaiModelId } from "./model-id.js";
+export {
+  applyXaiModelCompat,
+  HTML_ENTITY_TOOL_CALL_ARGUMENTS_ENCODING,
+  XAI_TOOL_SCHEMA_PROFILE,
+  resolveXaiModelCompatPatch,
+} from "openclaw/plugin-sdk/provider-tools";
 
-export const XAI_TOOL_SCHEMA_PROFILE = "xai";
-export const HTML_ENTITY_TOOL_CALL_ARGUMENTS_ENCODING = "html-entities";
+const XAI_NATIVE_ENDPOINT_HOSTS = new Set(["api.x.ai", "api.grok.x.ai"]);
 
-export function resolveXaiModelCompatPatch(): ModelCompatConfig {
-  return {
-    toolSchemaProfile: XAI_TOOL_SCHEMA_PROFILE,
-    unsupportedToolSchemaKeywords: Array.from(XAI_UNSUPPORTED_SCHEMA_KEYWORDS),
-    nativeWebSearchTool: true,
-    toolCallArgumentsEncoding: HTML_ENTITY_TOOL_CALL_ARGUMENTS_ENCODING,
-  };
-}
-
-export function applyXaiModelCompat<T extends { compat?: unknown }>(model: T): T {
-  return applyModelCompatPatch(
-    model as T & { compat?: ModelCompatConfig },
-    resolveXaiModelCompatPatch(),
-  ) as T;
-}
-
-function isXaiBaseUrl(baseUrl: unknown): boolean {
-  if (typeof baseUrl !== "string" || !baseUrl.trim()) {
-    return false;
-  }
+function resolveHostname(value: string): string | undefined {
   try {
-    return new URL(baseUrl).hostname.toLowerCase() === "api.x.ai";
+    return new URL(value).hostname.toLowerCase();
   } catch {
-    return baseUrl.toLowerCase().includes("api.x.ai");
+    return undefined;
   }
 }
 
-function isXaiModelHint(modelId: string): boolean {
-  return modelId.trim().toLowerCase().startsWith("x-ai/");
+function isXaiNativeEndpoint(baseUrl: unknown): boolean {
+  return (
+    typeof baseUrl === "string" && XAI_NATIVE_ENDPOINT_HOSTS.has(resolveHostname(baseUrl) ?? "")
+  );
 }
+
+export function isXaiModelHint(modelId: string): boolean {
+  return getModelProviderHint(modelId) === "x-ai";
+}
+
+export { normalizeNativeXaiModelId as normalizeXaiModelId };
 
 function shouldUseXaiResponsesTransport(params: {
   provider: string;
@@ -62,7 +59,7 @@ function shouldUseXaiResponsesTransport(params: {
   if (params.api !== "openai-completions") {
     return false;
   }
-  if (isXaiBaseUrl(params.baseUrl)) {
+  if (isXaiNativeEndpoint(params.baseUrl)) {
     return true;
   }
   return normalizeProviderId(params.provider) === "xai" && !params.baseUrl;
@@ -75,7 +72,7 @@ export function shouldContributeXaiCompat(params: {
   if (params.model.api !== "openai-completions") {
     return false;
   }
-  return isXaiBaseUrl(params.model.baseUrl) || isXaiModelHint(params.modelId);
+  return isXaiNativeEndpoint(params.model.baseUrl) || isXaiModelHint(params.modelId);
 }
 
 export function resolveXaiTransport(params: {
@@ -88,6 +85,6 @@ export function resolveXaiTransport(params: {
   }
   return {
     api: "openai-responses",
-    baseUrl: typeof params.baseUrl === "string" ? params.baseUrl : undefined,
+    baseUrl: readStringValue(params.baseUrl),
   };
 }

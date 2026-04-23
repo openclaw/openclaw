@@ -1,13 +1,16 @@
-import { createActionGate } from "openclaw/plugin-sdk/agent-runtime";
+import { createActionGate } from "openclaw/plugin-sdk/channel-actions";
 import type { ChannelMessageActionName } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import type { ChannelToolSend } from "openclaw/plugin-sdk/tool-send";
-import { listEnabledSlackAccounts } from "./accounts.js";
+import { extractToolSend, type ChannelToolSend } from "openclaw/plugin-sdk/tool-send";
+import { listEnabledSlackAccounts, resolveSlackAccount } from "./accounts.js";
 
-export function listSlackMessageActions(cfg: OpenClawConfig): ChannelMessageActionName[] {
-  const accounts = listEnabledSlackAccounts(cfg).filter(
-    (account) => account.botTokenSource !== "none",
-  );
+export function listSlackMessageActions(
+  cfg: OpenClawConfig,
+  accountId?: string | null,
+): ChannelMessageActionName[] {
+  const accounts = (
+    accountId ? [resolveSlackAccount({ cfg, accountId })] : listEnabledSlackAccounts(cfg)
+  ).filter((account) => account.enabled && account.botTokenSource !== "none");
   if (accounts.length === 0) {
     return [];
   }
@@ -51,14 +54,5 @@ export function listSlackMessageActions(cfg: OpenClawConfig): ChannelMessageActi
 }
 
 export function extractSlackToolSend(args: Record<string, unknown>): ChannelToolSend | null {
-  const action = typeof args.action === "string" ? args.action.trim() : "";
-  if (action !== "sendMessage") {
-    return null;
-  }
-  const to = typeof args.to === "string" ? args.to : undefined;
-  if (!to) {
-    return null;
-  }
-  const accountId = typeof args.accountId === "string" ? args.accountId.trim() : undefined;
-  return { to, accountId };
+  return extractToolSend(args, "sendMessage");
 }

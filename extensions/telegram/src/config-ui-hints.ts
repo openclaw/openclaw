@@ -1,4 +1,4 @@
-import type { ChannelConfigUiHint } from "openclaw/plugin-sdk/core";
+import type { ChannelConfigUiHint } from "openclaw/plugin-sdk/channel-core";
 
 export const telegramChannelConfigUiHints = {
   "": {
@@ -33,6 +33,34 @@ export const telegramChannelConfigUiHints = {
     label: "Telegram Streaming Mode",
     help: 'Unified Telegram stream preview mode: "off" | "partial" | "block" | "progress" (default: "partial"). "progress" maps to "partial" on Telegram. Legacy boolean/streamMode keys are auto-mapped.',
   },
+  "streaming.mode": {
+    label: "Telegram Streaming Mode",
+    help: 'Canonical Telegram preview mode: "off" | "partial" | "block" | "progress" (default: "partial"). "progress" maps to "partial" on Telegram.',
+  },
+  "streaming.chunkMode": {
+    label: "Telegram Chunk Mode",
+    help: 'Chunking mode for outbound Telegram text delivery: "length" (default) or "newline".',
+  },
+  "streaming.block.enabled": {
+    label: "Telegram Block Streaming Enabled",
+    help: 'Enable chunked block-style Telegram preview delivery when channels.telegram.streaming.mode="block".',
+  },
+  "streaming.block.coalesce": {
+    label: "Telegram Block Streaming Coalesce",
+    help: "Merge streamed Telegram block replies before sending final delivery.",
+  },
+  "streaming.preview.chunk.minChars": {
+    label: "Telegram Draft Chunk Min Chars",
+    help: 'Minimum chars before emitting a Telegram block preview chunk when channels.telegram.streaming.mode="block".',
+  },
+  "streaming.preview.chunk.maxChars": {
+    label: "Telegram Draft Chunk Max Chars",
+    help: 'Target max size for a Telegram block preview chunk when channels.telegram.streaming.mode="block".',
+  },
+  "streaming.preview.chunk.breakPreference": {
+    label: "Telegram Draft Chunk Break Preference",
+    help: "Preferred breakpoints for Telegram draft chunks (paragraph | newline | sentence).",
+  },
   "retry.attempts": {
     label: "Telegram Retry Attempts",
     help: "Max retry attempts for outbound Telegram API calls (default: 3).",
@@ -53,9 +81,17 @@ export const telegramChannelConfigUiHints = {
     label: "Telegram autoSelectFamily",
     help: "Override Node autoSelectFamily for Telegram (true=enable, false=disable).",
   },
+  "network.dangerouslyAllowPrivateNetwork": {
+    label: "Telegram Dangerously Allow Private Network",
+    help: "Dangerous opt-in for trusted fake-IP or transparent-proxy environments where Telegram media downloads resolve api.telegram.org to private/internal/special-use addresses.",
+  },
   timeoutSeconds: {
     label: "Telegram API Timeout (seconds)",
     help: "Max seconds before Telegram API requests are aborted (default: 500 per grammY).",
+  },
+  pollingStallThresholdMs: {
+    label: "Telegram Polling Stall Threshold (ms)",
+    help: "Milliseconds without completed Telegram getUpdates liveness before the polling watchdog restarts the polling runner. Default: 120000.",
   },
   silentErrorReplies: {
     label: "Telegram Silent Error Replies",
@@ -64,6 +100,10 @@ export const telegramChannelConfigUiHints = {
   apiRoot: {
     label: "Telegram API Root URL",
     help: "Custom Telegram Bot API root URL. Use for self-hosted Bot API servers (https://github.com/tdlib/telegram-bot-api) or reverse proxies in regions where api.telegram.org is blocked.",
+  },
+  trustedLocalFileRoots: {
+    label: "Telegram Trusted Local File Roots",
+    help: "Trusted local filesystem roots for self-hosted Telegram Bot API absolute file_path values. Only absolute paths inside these roots are read directly; all other absolute paths are rejected.",
   },
   autoTopicLabel: {
     label: "Telegram Auto Topic Label",
@@ -83,11 +123,11 @@ export const telegramChannelConfigUiHints = {
   },
   execApprovals: {
     label: "Telegram Exec Approvals",
-    help: "Telegram-native exec approval routing and approver authorization. Enable this only when Telegram should act as an explicit exec-approval client for the selected bot account.",
+    help: "Telegram-native exec approval routing and approver authorization. When unset, OpenClaw auto-enables DM-first native approvals if approvers can be resolved for the selected bot account.",
   },
   "execApprovals.enabled": {
     label: "Telegram Exec Approvals Enabled",
-    help: "Enable Telegram exec approvals for this account. When false or unset, Telegram messages/buttons cannot approve exec requests.",
+    help: 'Controls Telegram native exec approvals for this account: unset or "auto" enables DM-first native approvals when approvers can be resolved, true forces native approvals on, and false disables them.',
   },
   "execApprovals.approvers": {
     label: "Telegram Exec Approval Approvers",

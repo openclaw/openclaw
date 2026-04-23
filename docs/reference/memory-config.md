@@ -17,45 +17,61 @@ conceptual overviews, see:
 - [Builtin Engine](/concepts/memory-builtin) -- default SQLite backend
 - [QMD Engine](/concepts/memory-qmd) -- local-first sidecar
 - [Memory Search](/concepts/memory-search) -- search pipeline and tuning
+- [Active Memory](/concepts/active-memory) -- enabling the memory sub-agent for interactive sessions
 
 All memory search settings live under `agents.defaults.memorySearch` in
 `openclaw.json` unless noted otherwise.
+
+If you are looking for the **active memory** feature toggle and sub-agent config,
+that lives under `plugins.entries.active-memory` instead of `memorySearch`.
+
+Active memory uses a two-gate model:
+
+1. the plugin must be enabled and target the current agent id
+2. the request must be an eligible interactive persistent chat session
+
+See [Active Memory](/concepts/active-memory) for the activation model,
+plugin-owned config, transcript persistence, and safe rollout pattern.
 
 ---
 
 ## Provider selection
 
-| Key        | Type      | Default          | Description                                                                      |
-| ---------- | --------- | ---------------- | -------------------------------------------------------------------------------- |
-| `provider` | `string`  | auto-detected    | Embedding adapter ID: `openai`, `gemini`, `voyage`, `mistral`, `ollama`, `local` |
-| `model`    | `string`  | provider default | Embedding model name                                                             |
-| `fallback` | `string`  | `"none"`         | Fallback adapter ID when the primary fails                                       |
-| `enabled`  | `boolean` | `true`           | Enable or disable memory search                                                  |
+| Key        | Type      | Default          | Description                                                                                                   |
+| ---------- | --------- | ---------------- | ------------------------------------------------------------------------------------------------------------- |
+| `provider` | `string`  | auto-detected    | Embedding adapter ID: `bedrock`, `gemini`, `github-copilot`, `local`, `mistral`, `ollama`, `openai`, `voyage` |
+| `model`    | `string`  | provider default | Embedding model name                                                                                          |
+| `fallback` | `string`  | `"none"`         | Fallback adapter ID when the primary fails                                                                    |
+| `enabled`  | `boolean` | `true`           | Enable or disable memory search                                                                               |
 
 ### Auto-detection order
 
 When `provider` is not set, OpenClaw selects the first available:
 
 1. `local` -- if `memorySearch.local.modelPath` is configured and the file exists.
-2. `openai` -- if an OpenAI key can be resolved.
-3. `gemini` -- if a Gemini key can be resolved.
-4. `voyage` -- if a Voyage key can be resolved.
-5. `mistral` -- if a Mistral key can be resolved.
+2. `github-copilot` -- if a GitHub Copilot token can be resolved (env var or auth profile).
+3. `openai` -- if an OpenAI key can be resolved.
+4. `gemini` -- if a Gemini key can be resolved.
+5. `voyage` -- if a Voyage key can be resolved.
+6. `mistral` -- if a Mistral key can be resolved.
+7. `bedrock` -- if the AWS SDK credential chain resolves (instance role, access keys, profile, SSO, web identity, or shared config).
 
 `ollama` is supported but not auto-detected (set it explicitly).
 
 ### API key resolution
 
-Remote embeddings require an API key. OpenClaw resolves from:
-auth profiles, `models.providers.*.apiKey`, or environment variables.
+Remote embeddings require an API key. Bedrock uses the AWS SDK default
+credential chain instead (instance roles, SSO, access keys).
 
-| Provider | Env var                        | Config key                        |
-| -------- | ------------------------------ | --------------------------------- |
-| OpenAI   | `OPENAI_API_KEY`               | `models.providers.openai.apiKey`  |
-| Gemini   | `GEMINI_API_KEY`               | `models.providers.google.apiKey`  |
-| Voyage   | `VOYAGE_API_KEY`               | `models.providers.voyage.apiKey`  |
-| Mistral  | `MISTRAL_API_KEY`              | `models.providers.mistral.apiKey` |
-| Ollama   | `OLLAMA_API_KEY` (placeholder) | --                                |
+| Provider       | Env var                                            | Config key                        |
+| -------------- | -------------------------------------------------- | --------------------------------- |
+| Bedrock        | AWS credential chain                               | No API key needed                 |
+| Gemini         | `GEMINI_API_KEY`                                   | `models.providers.google.apiKey`  |
+| GitHub Copilot | `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN` | Auth profile via device login     |
+| Mistral        | `MISTRAL_API_KEY`                                  | `models.providers.mistral.apiKey` |
+| Ollama         | `OLLAMA_API_KEY` (placeholder)                     | --                                |
+| OpenAI         | `OPENAI_API_KEY`                                   | `models.providers.openai.apiKey`  |
+| Voyage         | `VOYAGE_API_KEY`                                   | `models.providers.voyage.apiKey`  |
 
 Codex OAuth covers chat/completions only and does not satisfy embedding
 requests.
@@ -101,6 +117,84 @@ For custom OpenAI-compatible endpoints or overriding provider defaults:
 <Warning>
 Changing model or `outputDimensionality` triggers an automatic full reindex.
 </Warning>
+
+---
+
+## Bedrock embedding config
+
+Bedrock uses the AWS SDK default credential chain -- no API keys needed.
+If OpenClaw runs on EC2 with a Bedrock-enabled instance role, just set the
+provider and model:
+
+```json5
+{
+  agents: {
+    defaults: {
+      memorySearch: {
+        provider: "bedrock",
+        model: "amazon.titan-embed-text-v2:0",
+      },
+    },
+  },
+}
+```
+
+| Key                    | Type     | Default                        | Description                     |
+| ---------------------- | -------- | ------------------------------ | ------------------------------- |
+| `model`                | `string` | `amazon.titan-embed-text-v2:0` | Any Bedrock embedding model ID  |
+| `outputDimensionality` | `number` | model default                  | For Titan V2: 256, 512, or 1024 |
+
+### Supported models
+
+The following models are supported (with family detection and dimension
+defaults):
+
+| Model ID                                   | Provider   | Default Dims | Configurable Dims    |
+| ------------------------------------------ | ---------- | ------------ | -------------------- |
+| `amazon.titan-embed-text-v2:0`             | Amazon     | 1024         | 256, 512, 1024       |
+| `amazon.titan-embed-text-v1`               | Amazon     | 1536         | --                   |
+| `amazon.titan-embed-g1-text-02`            | Amazon     | 1536         | --                   |
+| `amazon.titan-embed-image-v1`              | Amazon     | 1024         | --                   |
+| `amazon.nova-2-multimodal-embeddings-v1:0` | Amazon     | 1024         | 256, 384, 1024, 3072 |
+| `cohere.embed-english-v3`                  | Cohere     | 1024         | --                   |
+| `cohere.embed-multilingual-v3`             | Cohere     | 1024         | --                   |
+| `cohere.embed-v4:0`                        | Cohere     | 1536         | 256-1536             |
+| `twelvelabs.marengo-embed-3-0-v1:0`        | TwelveLabs | 512          | --                   |
+| `twelvelabs.marengo-embed-2-7-v1:0`        | TwelveLabs | 1024         | --                   |
+
+Throughput-suffixed variants (e.g., `amazon.titan-embed-text-v1:2:8k`) inherit
+the base model's configuration.
+
+### Authentication
+
+Bedrock auth uses the standard AWS SDK credential resolution order:
+
+1. Environment variables (`AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY`)
+2. SSO token cache
+3. Web identity token credentials
+4. Shared credentials and config files
+5. ECS or EC2 metadata credentials
+
+Region is resolved from `AWS_REGION`, `AWS_DEFAULT_REGION`, the
+`amazon-bedrock` provider `baseUrl`, or defaults to `us-east-1`.
+
+### IAM permissions
+
+The IAM role or user needs:
+
+```json
+{
+  "Effect": "Allow",
+  "Action": "bedrock:InvokeModel",
+  "Resource": "*"
+}
+```
+
+For least-privilege, scope `InvokeModel` to the specific model:
+
+```
+arn:aws:bedrock:*::foundation-model/amazon.titan-embed-text-v2:0
+```
 
 ---
 
@@ -185,7 +279,18 @@ Evergreen files (`MEMORY.md`, non-dated files in `memory/`) are never decayed.
 ```
 
 Paths can be absolute or workspace-relative. Directories are scanned
-recursively for `.md` files. Symlinks are ignored.
+recursively for `.md` files. Symlink handling depends on the active backend:
+the builtin engine ignores symlinks, while QMD follows the underlying QMD
+scanner behavior.
+
+For agent-scoped cross-agent transcript search, use
+`agents.list[].memorySearch.qmd.extraCollections` instead of `memory.qmd.paths`.
+Those extra collections follow the same `{ path, name, pattern? }` shape, but
+they are merged per agent and can preserve explicit shared names when the path
+points outside the current workspace.
+If the same resolved path appears in both `memory.qmd.paths` and
+`memorySearch.qmd.extraCollections`, QMD keeps the first entry and skips the
+duplicate.
 
 ---
 
@@ -286,6 +391,15 @@ Set `memory.backend = "qmd"` to enable. All QMD settings live under
 | `sessions.retentionDays` | `number`  | --       | Transcript retention                         |
 | `sessions.exportDir`     | `string`  | --       | Export directory                             |
 
+OpenClaw prefers the current QMD collection and MCP query shapes, but keeps
+older QMD releases working by falling back to legacy `--mask` collection flags
+and older MCP tool names when needed.
+
+QMD model overrides stay on the QMD side, not OpenClaw config. If you need to
+override QMD's models globally, set environment variables such as
+`QMD_EMBED_MODEL`, `QMD_RERANK_MODEL`, and `QMD_GENERATE_MODEL` in the gateway
+runtime environment.
+
 ### Update schedule
 
 | Key                       | Type      | Default | Description                           |
@@ -296,6 +410,8 @@ Set `memory.backend = "qmd"` to enable. All QMD settings live under
 | `update.waitForBootSync`  | `boolean` | `false` | Block startup until refresh completes |
 | `update.embedInterval`    | `string`  | --      | Separate embed cadence                |
 | `update.commandTimeoutMs` | `number`  | --      | Timeout for QMD commands              |
+| `update.updateTimeoutMs`  | `number`  | --      | Timeout for QMD update operations     |
+| `update.embedTimeoutMs`   | `number`  | --      | Timeout for QMD embed operations      |
 
 ### Limits
 
@@ -323,6 +439,9 @@ Controls which sessions can receive QMD search results. Same schema as
   },
 }
 ```
+
+The shipped default allows direct and channel sessions, while still denying
+groups.
 
 Default is DM-only. `match.keyPrefix` matches the normalized session key;
 `match.rawKeyPrefix` matches the raw key including `agent:<id>:`.
@@ -357,3 +476,47 @@ Default is DM-only. `match.keyPrefix` matches the normalized session key;
   },
 }
 ```
+
+---
+
+## Dreaming
+
+Dreaming is configured under `plugins.entries.memory-core.config.dreaming`,
+not under `agents.defaults.memorySearch`.
+
+Dreaming runs as one scheduled sweep and uses internal light/deep/REM phases as
+an implementation detail.
+
+For conceptual behavior and slash commands, see [Dreaming](/concepts/dreaming).
+
+### User settings
+
+| Key         | Type      | Default     | Description                                       |
+| ----------- | --------- | ----------- | ------------------------------------------------- |
+| `enabled`   | `boolean` | `false`     | Enable or disable dreaming entirely               |
+| `frequency` | `string`  | `0 3 * * *` | Optional cron cadence for the full dreaming sweep |
+
+### Example
+
+```json5
+{
+  plugins: {
+    entries: {
+      "memory-core": {
+        config: {
+          dreaming: {
+            enabled: true,
+            frequency: "0 3 * * *",
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Notes:
+
+- Dreaming writes machine state to `memory/.dreams/`.
+- Dreaming writes human-readable narrative output to `DREAMS.md` (or existing `dreams.md`).
+- The light/deep/REM phase policy and thresholds are internal behavior, not user-facing config.

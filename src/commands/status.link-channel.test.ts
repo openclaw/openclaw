@@ -7,6 +7,10 @@ vi.mock("../channels/plugins/index.js", () => ({
   listChannelPlugins: () => pluginRegistry.list,
 }));
 
+vi.mock("../channels/read-only-account-inspect.js", () => ({
+  inspectReadOnlyChannelAccount: () => undefined,
+}));
+
 import { resolveLinkChannelContext } from "./status.link-channel.js";
 
 describe("resolveLinkChannelContext", () => {
@@ -14,8 +18,8 @@ describe("resolveLinkChannelContext", () => {
     const account = { configured: true, enabled: true };
     pluginRegistry.list = [
       {
-        id: "discord",
-        meta: { label: "Discord" },
+        id: "quietchat",
+        meta: { label: "QuietChat" },
         config: {
           listAccountIds: () => ["default"],
           inspectAccount: () => account,
@@ -38,8 +42,8 @@ describe("resolveLinkChannelContext", () => {
   it("degrades safely when account resolution throws", async () => {
     pluginRegistry.list = [
       {
-        id: "discord",
-        meta: { label: "Discord" },
+        id: "quietchat",
+        meta: { label: "QuietChat" },
         config: {
           listAccountIds: () => ["default"],
           resolveAccount: () => {

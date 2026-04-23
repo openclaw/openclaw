@@ -38,7 +38,10 @@ describe("completion-cli", () => {
 
     const probe = spawnSync("zsh", ["-fc", "exit 0"], { encoding: "utf8" });
     if (probe.error) {
-      if ("code" in probe.error && probe.error.code === "ENOENT") {
+      if (
+        "code" in probe.error &&
+        (probe.error.code === "ENOENT" || probe.error.code === "EACCES")
+      ) {
         return;
       }
       throw probe.error;

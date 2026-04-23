@@ -5,6 +5,9 @@
   "providerAuthEnvVars": {
     "volcengine": ["VOLCANO_ENGINE_API_KEY"]
   },
+  "providerAuthAliases": {
+    "volcengine-plan": "volcengine"
+  },
   "providerAuthChoices": [
     {
       "provider": "volcengine",

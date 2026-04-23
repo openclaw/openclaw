@@ -5,6 +5,25 @@ import { resolveUserPath } from "../utils.js";
 import { createCacheTrace } from "./cache-trace.js";
 
 describe("createCacheTrace", () => {
+  function createMemoryTraceForTest() {
+    const lines: string[] = [];
+    const trace = createCacheTrace({
+      cfg: {
+        diagnostics: {
+          cacheTrace: {
+            enabled: true,
+          },
+        },
+      },
+      env: {},
+      writer: {
+        filePath: "memory",
+        write: (line) => lines.push(line),
+      },
+    });
+    return { lines, trace };
+  }
+
   it("returns null when diagnostics cache tracing is disabled", () => {
     const trace = createCacheTrace({
       cfg: {} as OpenClawConfig,
@@ -69,6 +88,49 @@ describe("createCacheTrace", () => {
     expect(event.system).toBe("");
   });
 
+  it("records stream context from systemPrompt when wrapping stream functions", () => {
+    const lines: string[] = [];
+    const trace = createCacheTrace({
+      cfg: {
+        diagnostics: {
+          cacheTrace: {
+            enabled: true,
+            includeSystem: true,
+          },
+        },
+      },
+      env: {},
+      writer: {
+        filePath: "memory",
+        write: (line) => lines.push(line),
+      },
+    });
+
+    const wrapped = trace?.wrapStreamFn(((model: unknown, context: unknown, options: unknown) => ({
+      model,
+      context,
+      options,
+    })) as never);
+
+    void wrapped?.(
+      {
+        id: "gpt-5.4",
+        provider: "openai",
+        api: "openai-responses",
+      } as never,
+      {
+        systemPrompt: "system prompt text",
+        messages: [],
+      } as never,
+      {},
+    );
+
+    const event = JSON.parse(lines[0]?.trim() ?? "{}") as Record<string, unknown>;
+    expect(event.stage).toBe("stream:context");
+    expect(event.system).toBe("system prompt text");
+    expect(event.systemDigest).toBeTypeOf("string");
+  });
+
   it("respects env overrides for enablement", () => {
     const lines: string[] = [];
     const trace = createCacheTrace({
@@ -92,21 +154,7 @@ describe("createCacheTrace", () => {
   });
 
   it("sanitizes cache-trace payloads before writing", () => {
-    const lines: string[] = [];
-    const trace = createCacheTrace({
-      cfg: {
-        diagnostics: {
-          cacheTrace: {
-            enabled: true,
-          },
-        },
-      },
-      env: {},
-      writer: {
-        filePath: "memory",
-        write: (line) => lines.push(line),
-      },
-    });
+    const { lines, trace } = createMemoryTraceForTest();
 
     trace?.recordStage("stream:context", {
       system: {
@@ -198,21 +246,7 @@ describe("createCacheTrace", () => {
   });
 
   it("handles circular references in messages without stack overflow", () => {
-    const lines: string[] = [];
-    const trace = createCacheTrace({
-      cfg: {
-        diagnostics: {
-          cacheTrace: {
-            enabled: true,
-          },
-        },
-      },
-      env: {},
-      writer: {
-        filePath: "memory",
-        write: (line) => lines.push(line),
-      },
-    });
+    const { lines, trace } = createMemoryTraceForTest();
 
     const parent: Record<string, unknown> = { role: "user", content: "hello" };
     const child: Record<string, unknown> = { ref: parent };

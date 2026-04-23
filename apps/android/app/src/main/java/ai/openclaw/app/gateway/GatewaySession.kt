@@ -64,6 +64,7 @@ data class GatewayConnectErrorDetails(
   val code: String?,
   val canRetryWithDeviceToken: Boolean,
   val recommendedNextStep: String?,
+  val reason: String? = null,
 )
 
 private data class SelectedConnectAuth(
@@ -115,6 +116,8 @@ class GatewaySession(
     val message: String,
     val details: GatewayConnectErrorDetails? = null,
   )
+
+  data class RpcResult(val ok: Boolean, val payloadJson: String?, val error: ErrorShape?)
 
   private val json = Json { ignoreUnknownKeys = true }
   private val writeLock = Mutex()
@@ -196,6 +199,13 @@ class GatewaySession(
   }
 
   suspend fun request(method: String, paramsJson: String?, timeoutMs: Long = 15_000): String {
+    val res = requestDetailed(method = method, paramsJson = paramsJson, timeoutMs = timeoutMs)
+    if (res.ok) return res.payloadJson ?: ""
+    val err = res.error
+    throw IllegalStateException("${err?.code ?: "UNAVAILABLE"}: ${err?.message ?: "request failed"}")
+  }
+
+  suspend fun requestDetailed(method: String, paramsJson: String?, timeoutMs: Long = 15_000): RpcResult {
     val conn = currentConnection ?: throw IllegalStateException("not connected")
     val params =
       if (paramsJson.isNullOrBlank()) {
@@ -204,9 +214,7 @@ class GatewaySession(
         json.parseToJsonElement(paramsJson)
       }
     val res = conn.request(method, params, timeoutMs)
-    if (res.ok) return res.payloadJson ?: ""
-    val err = res.error
-    throw IllegalStateException("${err?.code ?: "UNAVAILABLE"}: ${err?.message ?: "request failed"}")
+    return RpcResult(ok = res.ok, payloadJson = res.payloadJson, error = res.error)
   }
 
   suspend fun refreshNodeCanvasCapability(timeoutMs: Long = 8_000): Boolean {
@@ -268,16 +276,10 @@ class GatewaySession(
     private var socket: WebSocket? = null
     private val loggerTag = "OpenClawGateway"
 
-    val remoteAddress: String =
-      if (endpoint.host.contains(":")) {
-        "[${endpoint.host}]:${endpoint.port}"
-      } else {
-        "${endpoint.host}:${endpoint.port}"
-      }
+    val remoteAddress: String = formatGatewayAuthority(endpoint.host, endpoint.port)
 
     suspend fun connect() {
-      val scheme = if (tls != null) "wss" else "ws"
-      val url = "$scheme://${endpoint.host}:${endpoint.port}"
+      val url = buildGatewayWebSocketUrl(endpoint.host, endpoint.port, tls != null)
       val request = Request.Builder().url(url).build()
       socket = client.newWebSocket(request, Listener())
       try {
@@ -424,11 +426,63 @@ class GatewaySession(
         }
         throw GatewayConnectFailure(error)
       }
-      handleConnectSuccess(res, identity.deviceId)
+      handleConnectSuccess(res, identity.deviceId, selectedAuth.authSource)
       connectDeferred.complete(Unit)
     }
 
-    private fun handleConnectSuccess(res: RpcResponse, deviceId: String) {
+    private fun shouldPersistBootstrapHandoffTokens(authSource: GatewayConnectAuthSource): Boolean {
+      if (authSource != GatewayConnectAuthSource.BOOTSTRAP_TOKEN) return false
+      if (isLoopbackGatewayHost(endpoint.host)) return true
+      return tls != null
+    }
+
+    private fun filteredBootstrapHandoffScopes(role: String, scopes: List<String>): List<String>? {
+      return when (role.trim()) {
+        "node" -> emptyList()
+        "operator" -> {
+          val allowedOperatorScopes =
+            setOf(
+              "operator.approvals",
+              "operator.read",
+              "operator.talk.secrets",
+              "operator.write",
+            )
+          scopes.filter { allowedOperatorScopes.contains(it) }.distinct().sorted()
+        }
+        else -> null
+      }
+    }
+
+    private fun persistBootstrapHandoffToken(
+      deviceId: String,
+      role: String,
+      token: String,
+      scopes: List<String>,
+    ) {
+      val filteredScopes = filteredBootstrapHandoffScopes(role, scopes) ?: return
+      deviceAuthStore.saveToken(deviceId, role, token, filteredScopes)
+    }
+
+    private fun persistIssuedDeviceToken(
+      authSource: GatewayConnectAuthSource,
+      deviceId: String,
+      role: String,
+      token: String,
+      scopes: List<String>,
+    ) {
+      if (authSource == GatewayConnectAuthSource.BOOTSTRAP_TOKEN) {
+        if (!shouldPersistBootstrapHandoffTokens(authSource)) return
+        persistBootstrapHandoffToken(deviceId, role, token, scopes)
+        return
+      }
+      deviceAuthStore.saveToken(deviceId, role, token, scopes)
+    }
+
+    private fun handleConnectSuccess(
+      res: RpcResponse,
+      deviceId: String,
+      authSource: GatewayConnectAuthSource,
+    ) {
       val payloadJson = res.payloadJson ?: throw IllegalStateException("connect failed: missing payload")
       val obj = json.parseToJsonElement(payloadJson).asObjectOrNull() ?: throw IllegalStateException("connect failed")
       pendingDeviceTokenRetry = false
@@ -438,8 +492,27 @@ class GatewaySession(
       val authObj = obj["auth"].asObjectOrNull()
       val deviceToken = authObj?.get("deviceToken").asStringOrNull()
       val authRole = authObj?.get("role").asStringOrNull() ?: options.role
+      val authScopes =
+        authObj?.get("scopes").asArrayOrNull()
+          ?.mapNotNull { it.asStringOrNull() }
+          ?: emptyList()
       if (!deviceToken.isNullOrBlank()) {
-        deviceAuthStore.saveToken(deviceId, authRole, deviceToken)
+        persistIssuedDeviceToken(authSource, deviceId, authRole, deviceToken, authScopes)
+      }
+      if (shouldPersistBootstrapHandoffTokens(authSource)) {
+        authObj?.get("deviceTokens").asArrayOrNull()
+          ?.mapNotNull { it.asObjectOrNull() }
+          ?.forEach { tokenEntry ->
+            val handoffToken = tokenEntry["deviceToken"].asStringOrNull()
+            val handoffRole = tokenEntry["role"].asStringOrNull()
+            val handoffScopes =
+              tokenEntry["scopes"].asArrayOrNull()
+                ?.mapNotNull { it.asStringOrNull() }
+                ?: emptyList()
+            if (!handoffToken.isNullOrBlank() && !handoffRole.isNullOrBlank()) {
+              persistBootstrapHandoffToken(deviceId, handoffRole, handoffToken, handoffScopes)
+            }
+          }
       }
       val rawCanvas = obj["canvasHostUrl"].asStringOrNull()
       canvasHostUrl = normalizeCanvasHostUrl(rawCanvas, endpoint, isTlsConnection = tls != null)
@@ -566,6 +639,7 @@ class GatewaySession(
                 code = it["code"].asStringOrNull(),
                 canRetryWithDeviceToken = it["canRetryWithDeviceToken"].asBooleanOrNull() == true,
                 recommendedNextStep = it["recommendedNextStep"].asStringOrNull(),
+                reason = it["reason"].asStringOrNull(),
               )
             }
           ErrorShape(code, msg, details)
@@ -752,7 +826,7 @@ class GatewaySession(
 
     // If raw URL is a non-loopback address and this connection uses TLS,
     // normalize scheme/port to the endpoint we actually connected to.
-    if (trimmed.isNotBlank() && host.isNotBlank() && !isLoopbackHost(host)) {
+    if (trimmed.isNotBlank() && host.isNotBlank() && !isLoopbackGatewayHost(host)) {
       val needsTlsRewrite =
         isTlsConnection &&
           (
@@ -781,7 +855,7 @@ class GatewaySession(
 
   private fun buildCanvasUrl(host: String, scheme: String, port: Int, suffix: String): String {
     val loweredScheme = scheme.lowercase()
-    val formattedHost = if (host.contains(":")) "[${host}]" else host
+    val formattedHost = formatGatewayAuthorityHost(host)
     val portSuffix = if ((loweredScheme == "https" && port == 443) || (loweredScheme == "http" && port == 80)) "" else ":$port"
     return "$loweredScheme://$formattedHost$portSuffix$suffix"
   }
@@ -792,15 +866,6 @@ class GatewaySession(
     val query = uri.rawQuery?.takeIf { it.isNotBlank() }?.let { "?$it" } ?: ""
     val fragment = uri.rawFragment?.takeIf { it.isNotBlank() }?.let { "#$it" } ?: ""
     return "$path$query$fragment"
-  }
-
-  private fun isLoopbackHost(raw: String?): Boolean {
-    val host = raw?.trim()?.lowercase().orEmpty()
-    if (host.isEmpty()) return false
-    if (host == "localhost") return true
-    if (host == "::1") return true
-    if (host == "0.0.0.0" || host == "::") return true
-    return host.startsWith("127.")
   }
 
   private fun selectConnectAuth(
@@ -891,14 +956,30 @@ class GatewaySession(
     endpoint: GatewayEndpoint,
     tls: GatewayTlsParams?,
   ): Boolean {
-    if (isLoopbackHost(endpoint.host)) {
+    if (isLoopbackGatewayHost(endpoint.host)) {
       return true
     }
     return tls?.expectedFingerprint?.trim()?.isNotEmpty() == true
   }
 }
 
+internal fun buildGatewayWebSocketUrl(host: String, port: Int, useTls: Boolean): String {
+  val scheme = if (useTls) "wss" else "ws"
+  return "$scheme://${formatGatewayAuthority(host, port)}"
+}
+
+internal fun formatGatewayAuthority(host: String, port: Int): String {
+  return "${formatGatewayAuthorityHost(host)}:$port"
+}
+
+private fun formatGatewayAuthorityHost(host: String): String {
+  val normalizedHost = host.trim().trim('[', ']')
+  return if (normalizedHost.contains(":")) "[${normalizedHost}]" else normalizedHost
+}
+
 private fun JsonElement?.asObjectOrNull(): JsonObject? = this as? JsonObject
+
+private fun JsonElement?.asArrayOrNull(): JsonArray? = this as? JsonArray
 
 private fun JsonElement?.asStringOrNull(): String? =
   when (this) {

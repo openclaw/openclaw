@@ -1,12 +1,12 @@
+import { normalizeStringEntries } from "../shared/string-normalization.js";
+
 export function mergeDmAllowFromSources(params: {
   allowFrom?: Array<string | number>;
   storeAllowFrom?: Array<string | number>;
   dmPolicy?: string;
 }): string[] {
   const storeEntries = params.dmPolicy === "allowlist" ? [] : (params.storeAllowFrom ?? []);
-  return [...(params.allowFrom ?? []), ...storeEntries]
-    .map((value) => String(value).trim())
-    .filter(Boolean);
+  return normalizeStringEntries([...(params.allowFrom ?? []), ...storeEntries]);
 }
 
 export function resolveGroupAllowFromSources(params: {
@@ -23,7 +23,7 @@ export function resolveGroupAllowFromSources(params: {
     : params.fallbackToAllowFrom === false
       ? []
       : (params.allowFrom ?? []);
-  return scoped.map((value) => String(value).trim()).filter(Boolean);
+  return normalizeStringEntries(scoped);
 }
 
 export function firstDefined<T>(...values: Array<T | undefined>) {

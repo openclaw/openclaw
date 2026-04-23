@@ -4,7 +4,6 @@ import {
   applyResolvedTheme,
   applySettings,
   applySettingsFromUrl,
-  attachThemeListener,
   setTabFromRoute,
   syncThemeWithSettings,
 } from "./app-settings.ts";
@@ -65,6 +64,23 @@ type SettingsHost = {
   debugPollInterval: number | null;
   pendingGatewayUrl?: string | null;
   pendingGatewayToken?: string | null;
+  dreamingStatusLoading: boolean;
+  dreamingStatusError: string | null;
+  dreamingStatus: null;
+  dreamingModeSaving: boolean;
+  dreamDiaryLoading: boolean;
+  dreamDiaryActionLoading: boolean;
+  dreamDiaryActionMessage: { kind: "success" | "error"; text: string } | null;
+  dreamDiaryActionArchivePath: string | null;
+  dreamDiaryError: string | null;
+  dreamDiaryPath: string | null;
+  dreamDiaryContent: string | null;
+  wikiImportInsightsLoading: boolean;
+  wikiImportInsightsError: string | null;
+  wikiImportInsights: null;
+  wikiMemoryPalaceLoading: boolean;
+  wikiMemoryPalaceError: string | null;
+  wikiMemoryPalace: null;
 };
 
 function setTestWindowUrl(urlString: string) {
@@ -145,6 +161,23 @@ const createHost = (tab: Tab): SettingsHost => ({
   debugPollInterval: null,
   pendingGatewayUrl: null,
   pendingGatewayToken: null,
+  dreamingStatusLoading: false,
+  dreamingStatusError: null,
+  dreamingStatus: null,
+  dreamingModeSaving: false,
+  dreamDiaryLoading: false,
+  dreamDiaryActionLoading: false,
+  dreamDiaryActionMessage: null,
+  dreamDiaryActionArchivePath: null,
+  dreamDiaryError: null,
+  dreamDiaryPath: null,
+  dreamDiaryContent: null,
+  wikiImportInsightsLoading: false,
+  wikiImportInsightsError: null,
+  wikiImportInsights: null,
+  wikiMemoryPalaceLoading: false,
+  wikiMemoryPalaceError: null,
+  wikiMemoryPalace: null,
 });
 
 describe("setTabFromRoute", () => {
@@ -225,10 +258,10 @@ describe("setTabFromRoute", () => {
     });
 
     const host = createHost("chat");
-    host.theme = "knot" as unknown as ThemeName & ThemeMode;
-    host.themeMode = "system";
+    host.settings.theme = "knot" as unknown as ThemeName & ThemeMode;
+    host.settings.themeMode = "system";
 
-    attachThemeListener(host);
+    syncThemeWithSettings(host);
     listeners[0]?.({ matches: true } as MediaQueryListEvent);
     expect(host.themeResolved).toBe("openknot");
 
@@ -266,7 +299,7 @@ describe("applySettingsFromUrl", () => {
   });
 
   it("hydrates query token params and strips them from the URL", () => {
-    setTestWindowUrl("https://control.example/ui/overview?token=abc123");
+    setTestWindowUrl("https://control.example/ui/overview?token=abc123&password=sekret");
     const host = createHost("overview");
     host.settings.gatewayUrl = "wss://control.example/openclaw";
 
@@ -274,21 +307,9 @@ describe("applySettingsFromUrl", () => {
 
     expect(host.settings.token).toBe("abc123");
     expect(window.location.search).toBe("");
-  });
-
-  it("keeps query token params pending when a gatewayUrl confirmation is required", () => {
-    setTestWindowUrl(
-      "https://control.example/ui/overview?gatewayUrl=wss://other-gateway.example/openclaw&token=abc123",
+    expect(JSON.parse(localStorage.getItem("openclaw.control.settings.v1") ?? "{}").token).toBe(
+      undefined,
     );
-    const host = createHost("overview");
-    host.settings.gatewayUrl = "wss://control.example/openclaw";
-
-    applySettingsFromUrl(host);
-
-    expect(host.settings.token).toBe("");
-    expect(host.pendingGatewayUrl).toBe("wss://other-gateway.example/openclaw");
-    expect(host.pendingGatewayToken).toBe("abc123");
-    expect(window.location.search).toBe("");
   });
 
   it("prefers fragment tokens over legacy query tokens when both are present", () => {
@@ -322,47 +343,76 @@ describe("applySettingsFromUrl", () => {
     expect(host.settings.lastActiveSessionKey).toBe("main");
   });
 
-  it("preserves an explicit session from the URL when token and session are both supplied", () => {
-    setTestWindowUrl(
-      "https://control.example/chat?session=agent%3Atest_new%3Amain#token=test-token",
-    );
-    const host = createHost("chat");
-    host.settings = {
-      ...host.settings,
-      gatewayUrl: "ws://localhost:18789",
-      token: "",
-      sessionKey: "agent:test_old:main",
-      lastActiveSessionKey: "agent:test_old:main",
-    };
-    host.sessionKey = "agent:test_old:main";
+  it("characterizes token, session, and gateway URL combinations", () => {
+    const scenarios = [
+      {
+        name: "same gateway applies token and session immediately",
+        url: "https://control.example/chat?session=agent%3Atest_new%3Amain#token=token-a",
+        settingsGatewayUrl: "ws://gateway-a.example:18789",
+        settingsToken: "",
+        expectedToken: "token-a",
+        expectedSession: "agent:test_new:main",
+        expectedPendingGatewayUrl: null,
+        expectedPendingGatewayToken: null,
+        expectedSearch: "?session=agent%3Atest_new%3Amain",
+      },
+      {
+        name: "different gateway defers token and keeps explicit session",
+        url: "https://control.example/chat?gatewayUrl=ws%3A%2F%2Fgateway-b.example%3A18789&session=agent%3Atest_new%3Amain#token=token-b",
+        settingsGatewayUrl: "ws://gateway-a.example:18789",
+        settingsToken: "",
+        expectedToken: "",
+        expectedSession: "agent:test_new:main",
+        expectedPendingGatewayUrl: "ws://gateway-b.example:18789",
+        expectedPendingGatewayToken: "token-b",
+        expectedSearch: "?session=agent%3Atest_new%3Amain",
+      },
+      {
+        name: "different gateway defers token without changing session",
+        url: "https://control.example/chat?gatewayUrl=ws%3A%2F%2Fgateway-b.example%3A18789#token=token-c",
+        settingsGatewayUrl: "ws://gateway-a.example:18789",
+        settingsToken: "",
+        expectedToken: "",
+        expectedSession: "agent:test_old:main",
+        expectedPendingGatewayUrl: "ws://gateway-b.example:18789",
+        expectedPendingGatewayToken: "token-c",
+        expectedSearch: "",
+      },
+      {
+        name: "different gateway without token clears pending token",
+        url: "https://control.example/chat?gatewayUrl=ws%3A%2F%2Fgateway-b.example%3A18789&session=agent%3Atest_new%3Amain",
+        settingsGatewayUrl: "ws://gateway-a.example:18789",
+        settingsToken: "existing-token",
+        expectedToken: "existing-token",
+        expectedSession: "agent:test_new:main",
+        expectedPendingGatewayUrl: "ws://gateway-b.example:18789",
+        expectedPendingGatewayToken: null,
+        expectedSearch: "?session=agent%3Atest_new%3Amain",
+      },
+    ] as const;
 
-    applySettingsFromUrl(host);
+    for (const scenario of scenarios) {
+      setTestWindowUrl(scenario.url);
+      const host = createHost("chat");
+      host.settings = {
+        ...host.settings,
+        gatewayUrl: scenario.settingsGatewayUrl,
+        token: scenario.settingsToken,
+        sessionKey: "agent:test_old:main",
+        lastActiveSessionKey: "agent:test_old:main",
+      };
+      host.sessionKey = "agent:test_old:main";
 
-    expect(host.sessionKey).toBe("agent:test_new:main");
-    expect(host.settings.sessionKey).toBe("agent:test_new:main");
-    expect(host.settings.lastActiveSessionKey).toBe("agent:test_new:main");
-  });
+      applySettingsFromUrl(host);
 
-  it("does not reset the current gateway session when a different gateway is pending confirmation", () => {
-    setTestWindowUrl(
-      "https://control.example/chat?gatewayUrl=ws%3A%2F%2Fgateway-b.example%3A18789#token=test-token",
-    );
-    const host = createHost("chat");
-    host.settings = {
-      ...host.settings,
-      gatewayUrl: "ws://gateway-a.example:18789",
-      token: "",
-      sessionKey: "agent:test_old:main",
-      lastActiveSessionKey: "agent:test_old:main",
-    };
-    host.sessionKey = "agent:test_old:main";
-
-    applySettingsFromUrl(host);
-
-    expect(host.sessionKey).toBe("agent:test_old:main");
-    expect(host.settings.sessionKey).toBe("agent:test_old:main");
-    expect(host.settings.lastActiveSessionKey).toBe("agent:test_old:main");
-    expect(host.pendingGatewayUrl).toBe("ws://gateway-b.example:18789");
-    expect(host.pendingGatewayToken).toBe("test-token");
+      expect(host.settings.token, scenario.name).toBe(scenario.expectedToken);
+      expect(host.sessionKey, scenario.name).toBe(scenario.expectedSession);
+      expect(host.settings.sessionKey, scenario.name).toBe(scenario.expectedSession);
+      expect(host.settings.lastActiveSessionKey, scenario.name).toBe(scenario.expectedSession);
+      expect(host.pendingGatewayUrl, scenario.name).toBe(scenario.expectedPendingGatewayUrl);
+      expect(host.pendingGatewayToken, scenario.name).toBe(scenario.expectedPendingGatewayToken);
+      expect(window.location.search, scenario.name).toBe(scenario.expectedSearch);
+      expect(window.location.hash, scenario.name).toBe("");
+    }
   });
 });

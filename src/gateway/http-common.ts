@@ -14,7 +14,7 @@ export function setDefaultSecurityHeaders(
 ) {
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("Referrer-Policy", "no-referrer");
-  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+  res.setHeader("Permissions-Policy", "camera=(), microphone=(self), geolocation=()");
   const strictTransportSecurity = opts?.strictTransportSecurity;
   if (typeof strictTransportSecurity === "string" && strictTransportSecurity.length > 0) {
     res.setHeader("Strict-Transport-Security", strictTransportSecurity);
@@ -105,4 +105,36 @@ export function setSseHeaders(res: ServerResponse) {
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
   res.flushHeaders?.();
+}
+
+export function watchClientDisconnect(
+  req: IncomingMessage,
+  res: ServerResponse,
+  abortController: AbortController,
+  onDisconnect?: () => void,
+) {
+  const sockets = Array.from(
+    new Set(
+      [req.socket, res.socket].filter(
+        (socket): socket is NonNullable<typeof socket> => socket !== null,
+      ),
+    ),
+  );
+  if (sockets.length === 0) {
+    return () => {};
+  }
+  const handleClose = () => {
+    onDisconnect?.();
+    if (!abortController.signal.aborted) {
+      abortController.abort();
+    }
+  };
+  for (const socket of sockets) {
+    socket.on("close", handleClose);
+  }
+  return () => {
+    for (const socket of sockets) {
+      socket.off("close", handleClose);
+    }
+  };
 }

@@ -1,11 +1,19 @@
+import { listPotentialConfiguredChannelIds } from "../../channels/config-presence.js";
+import { loadConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveCronDeliveryPreviews } from "../../cron/delivery-preview.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
 import {
   readCronRunLogEntriesPage,
   readCronRunLogEntriesPageAll,
   resolveCronRunLogPath,
 } from "../../cron/run-log.js";
-import type { CronJobCreate, CronJobPatch } from "../../cron/types.js";
+import { applyJobPatch } from "../../cron/service/jobs.js";
+import { isInvalidCronSessionTargetIdError } from "../../cron/session-target.js";
+import type { CronDelivery, CronJob, CronJobCreate, CronJobPatch } from "../../cron/types.js";
 import { validateScheduleTimestamp } from "../../cron/validate-timestamp.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import {
   ErrorCodes,
   errorShape,
@@ -20,6 +28,89 @@ import {
   validateWakeParams,
 } from "../protocol/index.js";
 import type { GatewayRequestHandlers } from "./types.js";
+
+function listConfiguredAnnounceChannelIds(cfg: OpenClawConfig): string[] {
+  return listPotentialConfiguredChannelIds(cfg, process.env, {
+    includePersistedAuthState: false,
+  }).filter((channelId) => cfg.channels?.[channelId]?.enabled !== false);
+}
+
+function assertConfiguredAnnounceChannel(params: {
+  cfg: OpenClawConfig;
+  channel?: string;
+  field: "delivery.channel" | "delivery.failureDestination.channel";
+}) {
+  if (params.channel === "last") {
+    return;
+  }
+
+  const configuredChannels = listConfiguredAnnounceChannelIds(params.cfg).toSorted();
+  const normalizedChannel = normalizeMessageChannel(params.channel);
+  if (!normalizedChannel) {
+    if (configuredChannels.length <= 1) {
+      return;
+    }
+    throw new Error(
+      `${params.field} is required when multiple channels are configured: ${configuredChannels.join(", ")}`,
+    );
+  }
+
+  if (configuredChannels.length === 0) {
+    return;
+  }
+
+  if (configuredChannels.includes(normalizedChannel)) {
+    return;
+  }
+
+  throw new Error(`${params.field} must be one of: ${configuredChannels.join(", ")}`);
+}
+
+function assertValidCronAnnounceDelivery(params: { cfg: OpenClawConfig; delivery?: CronDelivery }) {
+  if (params.delivery?.mode === "announce") {
+    assertConfiguredAnnounceChannel({
+      cfg: params.cfg,
+      channel: params.delivery.channel,
+      field: "delivery.channel",
+    });
+  }
+
+  const failureDestination = params.delivery?.failureDestination;
+  if (failureDestination && (failureDestination.mode ?? "announce") === "announce") {
+    assertConfiguredAnnounceChannel({
+      cfg: params.cfg,
+      channel: failureDestination.channel,
+      field: "delivery.failureDestination.channel",
+    });
+  }
+}
+
+function assertValidCronCreateDelivery(cfg: OpenClawConfig, jobCreate: CronJobCreate) {
+  assertValidCronAnnounceDelivery({
+    cfg,
+    delivery: jobCreate.delivery,
+  });
+}
+
+function assertValidCronUpdateDelivery(params: {
+  cfg: OpenClawConfig;
+  defaultAgentId?: string;
+  currentJob: CronJob | undefined;
+  patch: CronJobPatch;
+}) {
+  if (!params.currentJob || !("delivery" in params.patch)) {
+    return;
+  }
+
+  const nextJob = structuredClone(params.currentJob);
+  applyJobPatch(nextJob, params.patch, {
+    defaultAgentId: params.defaultAgentId,
+  });
+  assertValidCronAnnounceDelivery({
+    cfg: params.cfg,
+    delivery: nextJob.delivery,
+  });
+}
 
 export const cronHandlers: GatewayRequestHandlers = {
   wake: ({ params, respond, context }) => {
@@ -71,7 +162,12 @@ export const cronHandlers: GatewayRequestHandlers = {
       sortBy: p.sortBy,
       sortDir: p.sortDir,
     });
-    respond(true, page, undefined);
+    const deliveryPreviews = await resolveCronDeliveryPreviews({
+      cfg: loadConfig(),
+      defaultAgentId: context.cron.getDefaultAgentId(),
+      jobs: page.jobs,
+    });
+    respond(true, { ...page, deliveryPreviews }, undefined);
   },
   "cron.status": async ({ params, respond, context }) => {
     if (!validateCronStatusParams(params)) {
@@ -93,10 +189,23 @@ export const cronHandlers: GatewayRequestHandlers = {
       typeof (params as { sessionKey?: unknown } | null)?.sessionKey === "string"
         ? (params as { sessionKey: string }).sessionKey
         : undefined;
-    const normalized =
-      normalizeCronJobCreate(params, {
-        sessionContext: { sessionKey },
-      }) ?? params;
+    let normalized: unknown;
+    try {
+      normalized =
+        normalizeCronJobCreate(params, {
+          sessionContext: { sessionKey },
+        }) ?? params;
+    } catch (err) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid cron.add params: ${formatErrorMessage(err)}`,
+        ),
+      );
+      return;
+    }
     if (!validateCronAddParams(normalized)) {
       respond(
         false,
@@ -109,6 +218,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       return;
     }
     const jobCreate = normalized as unknown as CronJobCreate;
+    const cfg = loadConfig();
     const timestampValidation = validateScheduleTimestamp(jobCreate.schedule);
     if (!timestampValidation.ok) {
       respond(
@@ -118,12 +228,38 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    try {
+      assertValidCronCreateDelivery(cfg, jobCreate);
+    } catch (err) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid cron.add params: ${formatErrorMessage(err)}`,
+        ),
+      );
+      return;
+    }
     const job = await context.cron.add(jobCreate);
     context.logGateway.info("cron: job created", { jobId: job.id, schedule: jobCreate.schedule });
     respond(true, job, undefined);
   },
   "cron.update": async ({ params, respond, context }) => {
-    const normalizedPatch = normalizeCronJobPatch((params as { patch?: unknown } | null)?.patch);
+    let normalizedPatch: ReturnType<typeof normalizeCronJobPatch>;
+    try {
+      normalizedPatch = normalizeCronJobPatch((params as { patch?: unknown } | null)?.patch);
+    } catch (err) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid cron.update params: ${formatErrorMessage(err)}`,
+        ),
+      );
+      return;
+    }
     const candidate =
       normalizedPatch && typeof params === "object" && params !== null
         ? { ...params, patch: normalizedPatch }
@@ -154,6 +290,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       return;
     }
     const patch = p.patch as unknown as CronJobPatch;
+    const cfg = loadConfig();
     if (patch.schedule) {
       const timestampValidation = validateScheduleTimestamp(patch.schedule);
       if (!timestampValidation.ok) {
@@ -164,6 +301,24 @@ export const cronHandlers: GatewayRequestHandlers = {
         );
         return;
       }
+    }
+    try {
+      assertValidCronUpdateDelivery({
+        cfg,
+        defaultAgentId: context.cron.getDefaultAgentId(),
+        currentJob: context.cron.getJob(jobId),
+        patch,
+      });
+    } catch (err) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid cron.update params: ${formatErrorMessage(err)}`,
+        ),
+      );
+      return;
     }
     const job = await context.cron.update(jobId, patch);
     context.logGateway.info("cron: job updated", { jobId });
@@ -219,7 +374,16 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const result = await context.cron.enqueueRun(jobId, p.mode ?? "force");
+    let result: Awaited<ReturnType<typeof context.cron.enqueueRun>>;
+    try {
+      result = await context.cron.enqueueRun(jobId, p.mode ?? "force");
+    } catch (error) {
+      if (isInvalidCronSessionTargetIdError(error)) {
+        respond(true, { ok: true, ran: false, reason: "invalid-spec" }, undefined);
+        return;
+      }
+      throw error;
+    }
     respond(true, result, undefined);
   },
   "cron.runs": async ({ params, respond, context }) => {

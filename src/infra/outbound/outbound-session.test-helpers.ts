@@ -1,5 +1,5 @@
-import type { ChannelPlugin } from "../../channels/plugins/types.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   buildChannelOutboundSessionRoute,
   stripChannelTargetPrefix,
@@ -13,6 +13,10 @@ import {
   type RoutePeer,
 } from "../../plugin-sdk/routing.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../../shared/string-coerce.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
@@ -75,15 +79,14 @@ function buildThreadedChannelRoute(params: {
   };
 }
 
-function parseTelegramTargetForTest(raw: string): {
+function parseForumTargetForTest(raw: string): {
   chatId: string;
   messageThreadId?: number;
   chatType: "direct" | "group" | "unknown";
 } {
   const trimmed = raw
     .trim()
-    .replace(/^telegram:/i, "")
-    .replace(/^tg:/i, "")
+    .replace(/^forum:/i, "")
     .replace(/^group:/i, "");
   const prefixedTopic = /^([^:]+):topic:(\d+)$/i.exec(trimmed);
   if (prefixedTopic) {
@@ -100,7 +103,7 @@ function parseTelegramTargetForTest(raw: string): {
   };
 }
 
-function parseTelegramThreadIdForTest(threadId?: string | number | null): number | undefined {
+function parseForumThreadIdForTest(threadId?: string | number | null): number | undefined {
   const normalized = normalizeOutboundThreadId(threadId);
   if (!normalized) {
     return undefined;
@@ -112,26 +115,24 @@ function parseTelegramThreadIdForTest(threadId?: string | number | null): number
   return Number.parseInt(topicMatch[1], 10);
 }
 
-function buildTelegramGroupPeerIdForTest(chatId: string, messageThreadId?: number): string {
+function buildForumGroupPeerIdForTest(chatId: string, messageThreadId?: number): string {
   return messageThreadId ? `${chatId}:topic:${messageThreadId}` : chatId;
 }
 
-function resolveTelegramOutboundSessionRouteForTest(params: ChannelOutboundSessionRouteParams) {
-  const parsed = parseTelegramTargetForTest(params.target);
+function resolveForumOutboundSessionRouteForTest(params: ChannelOutboundSessionRouteParams) {
+  const parsed = parseForumTargetForTest(params.target);
   const chatId = parsed.chatId.trim();
   if (!chatId) {
     return null;
   }
-  const resolvedThreadId = parsed.messageThreadId ?? parseTelegramThreadIdForTest(params.threadId);
+  const resolvedThreadId = parsed.messageThreadId ?? parseForumThreadIdForTest(params.threadId);
   const isGroup =
     parsed.chatType === "group" ||
     (parsed.chatType === "unknown" &&
       params.resolvedTarget?.kind !== undefined &&
       params.resolvedTarget.kind !== "user");
   const peerId =
-    isGroup && resolvedThreadId
-      ? buildTelegramGroupPeerIdForTest(chatId, resolvedThreadId)
-      : chatId;
+    isGroup && resolvedThreadId ? buildForumGroupPeerIdForTest(chatId, resolvedThreadId) : chatId;
   const peer: RoutePeer = {
     kind: isGroup ? "group" : "direct",
     id: peerId,
@@ -140,67 +141,71 @@ function resolveTelegramOutboundSessionRouteForTest(params: ChannelOutboundSessi
     return buildChannelOutboundSessionRoute({
       cfg: params.cfg,
       agentId: params.agentId,
-      channel: "telegram",
+      channel: "forum",
       accountId: params.accountId,
       peer,
       chatType: "group",
-      from: `telegram:group:${peerId}`,
-      to: `telegram:${chatId}`,
+      from: `forum:group:${peerId}`,
+      to: `forum:${chatId}`,
       ...(resolvedThreadId !== undefined ? { threadId: resolvedThreadId } : {}),
     });
   }
   return buildThreadedChannelRoute({
     cfg: params.cfg,
     agentId: params.agentId,
-    channel: "telegram",
+    channel: "forum",
     accountId: params.accountId,
     peer,
     chatType: "direct",
     from:
       resolvedThreadId !== undefined
-        ? `telegram:${chatId}:topic:${resolvedThreadId}`
-        : `telegram:${chatId}`,
-    to: `telegram:${chatId}`,
+        ? `forum:${chatId}:topic:${resolvedThreadId}`
+        : `forum:${chatId}`,
+    to: `forum:${chatId}`,
     threadId: resolvedThreadId,
   });
 }
 
-function resolveSlackOutboundSessionRouteForTest(params: ChannelOutboundSessionRouteParams) {
+function resolveWorkspaceOutboundSessionRouteForTest(params: ChannelOutboundSessionRouteParams) {
   const trimmed = params.target.trim();
   if (!trimmed) {
     return null;
   }
-  const lower = trimmed.toLowerCase();
-  const rawId = stripTargetKindPrefix(stripChannelTargetPrefix(trimmed, "slack"));
+  const lower = normalizeLowercaseStringOrEmpty(trimmed);
+  const rawId = stripTargetKindPrefix(stripChannelTargetPrefix(trimmed, "workspace"));
   if (!rawId) {
     return null;
   }
-  const normalizedId = rawId.toLowerCase();
-  const isDm = lower.startsWith("user:") || lower.startsWith("slack:") || /^u/i.test(rawId);
+  const normalizedId = normalizeLowercaseStringOrEmpty(rawId);
+  const isDm = lower.startsWith("user:") || lower.startsWith("workspace:") || /^u/i.test(rawId);
+  const workspaceConfig = params.cfg.channels?.workspace as
+    | { dm?: { groupChannels?: unknown[] } }
+    | undefined;
   const isGroupChannel =
     /^g/i.test(rawId) &&
-    params.cfg.channels?.slack?.dm?.groupChannels?.some(
-      (candidate) => String(candidate).trim().toLowerCase() === normalizedId,
-    ) === true;
+    Array.isArray(workspaceConfig?.dm?.groupChannels) &&
+    workspaceConfig.dm.groupChannels.some(
+      (candidate: unknown) => normalizeLowercaseStringOrEmpty(String(candidate)) === normalizedId,
+    );
   const peerKind: RoutePeer["kind"] = isDm ? "direct" : isGroupChannel ? "group" : "channel";
   return buildThreadedChannelRoute({
     cfg: params.cfg,
     agentId: params.agentId,
-    channel: "slack",
+    channel: "workspace",
     accountId: params.accountId,
     peer: { kind: peerKind, id: normalizedId },
     chatType: peerKind === "direct" ? "direct" : peerKind === "group" ? "group" : "channel",
     from: isDm
-      ? `slack:${rawId}`
+      ? `workspace:${rawId}`
       : isGroupChannel
-        ? `slack:group:${rawId}`
-        : `slack:channel:${rawId}`,
+        ? `workspace:group:${rawId}`
+        : `workspace:channel:${rawId}`,
     to: isDm ? `user:${rawId}` : `channel:${rawId}`,
     threadId: params.replyToId ?? params.threadId ?? undefined,
   });
 }
 
-function resolveDiscordOutboundSessionRouteForTest(params: ChannelOutboundSessionRouteParams) {
+function resolveGuildChatOutboundSessionRouteForTest(params: ChannelOutboundSessionRouteParams) {
   const trimmed = params.target.trim();
   if (!trimmed) {
     return null;
@@ -211,16 +216,16 @@ function resolveDiscordOutboundSessionRouteForTest(params: ChannelOutboundSessio
     kind = "user";
   } else if (resolvedKind === "channel" || resolvedKind === "group") {
     kind = "channel";
-  } else if (/^user:/i.test(trimmed) || /^discord:/i.test(trimmed) || /^<@!?/.test(trimmed)) {
+  } else if (/^user:/i.test(trimmed) || /^guildchat:/i.test(trimmed) || /^<@!?/.test(trimmed)) {
     kind = "user";
   } else if (/^channel:/i.test(trimmed)) {
     kind = "channel";
   } else if (/^\d+$/u.test(trimmed)) {
-    throw new Error("Ambiguous Discord recipient");
+    throw new Error("Ambiguous Guild Chat recipient");
   } else {
     kind = "channel";
   }
-  const rawId = stripTargetKindPrefix(stripChannelTargetPrefix(trimmed, "discord"));
+  const rawId = stripTargetKindPrefix(stripChannelTargetPrefix(trimmed, "guildchat"));
   if (!rawId) {
     return null;
   }
@@ -231,42 +236,44 @@ function resolveDiscordOutboundSessionRouteForTest(params: ChannelOutboundSessio
   return buildThreadedChannelRoute({
     cfg: params.cfg,
     agentId: params.agentId,
-    channel: "discord",
+    channel: "guildchat",
     accountId: params.accountId,
     peer,
     chatType: kind === "user" ? "direct" : "channel",
-    from: kind === "user" ? `discord:${rawId}` : `discord:channel:${rawId}`,
+    from: kind === "user" ? `guildchat:${rawId}` : `guildchat:channel:${rawId}`,
     to: kind === "user" ? `user:${rawId}` : `channel:${rawId}`,
     threadId: params.threadId ?? undefined,
     useSuffix: false,
   });
 }
 
-function resolveMattermostOutboundSessionRouteForTest(params: ChannelOutboundSessionRouteParams) {
+function resolveBoardChatOutboundSessionRouteForTest(params: ChannelOutboundSessionRouteParams) {
   const trimmed = params.target.trim();
   if (!trimmed) {
     return null;
   }
   const isUser = params.resolvedTarget?.kind === "user" || /^user:/i.test(trimmed);
-  const rawId = stripTargetKindPrefix(stripChannelTargetPrefix(trimmed, "mattermost"));
+  const rawId = stripTargetKindPrefix(stripChannelTargetPrefix(trimmed, "boardchat"));
   if (!rawId) {
     return null;
   }
   return buildThreadedChannelRoute({
     cfg: params.cfg,
     agentId: params.agentId,
-    channel: "mattermost",
+    channel: "boardchat",
     accountId: params.accountId,
     peer: { kind: isUser ? "direct" : "channel", id: rawId },
     chatType: isUser ? "direct" : "channel",
-    from: isUser ? `mattermost:${rawId}` : `mattermost:channel:${rawId}`,
+    from: isUser ? `boardchat:${rawId}` : `boardchat:channel:${rawId}`,
     to: isUser ? `user:${rawId}` : `channel:${rawId}`,
     threadId: params.replyToId ?? params.threadId ?? undefined,
   });
 }
 
-function resolveWhatsAppOutboundSessionRouteForTest(params: ChannelOutboundSessionRouteParams) {
-  const normalized = stripChannelTargetPrefix(params.target, "whatsapp").trim().toLowerCase();
+function resolveMobileChatOutboundSessionRouteForTest(params: ChannelOutboundSessionRouteParams) {
+  const normalized = normalizeOptionalLowercaseString(
+    stripChannelTargetPrefix(params.target, "mobilechat"),
+  );
   if (!normalized) {
     return null;
   }
@@ -274,7 +281,7 @@ function resolveWhatsAppOutboundSessionRouteForTest(params: ChannelOutboundSessi
   return buildChannelOutboundSessionRoute({
     cfg: params.cfg,
     agentId: params.agentId,
-    channel: "whatsapp",
+    channel: "mobilechat",
     accountId: params.accountId,
     peer: { kind: isGroup ? "group" : "direct", id: normalized },
     chatType: isGroup ? "group" : "direct",
@@ -303,12 +310,12 @@ function resolveMatrixOutboundSessionRouteForTest(params: ChannelOutboundSession
   });
 }
 
-function resolveMSTeamsOutboundSessionRouteForTest(params: ChannelOutboundSessionRouteParams) {
-  const trimmed = stripChannelTargetPrefix(params.target, "msteams", "teams");
+function resolveMeetingChatOutboundSessionRouteForTest(params: ChannelOutboundSessionRouteParams) {
+  const trimmed = stripChannelTargetPrefix(params.target, "meetingchat", "meet");
   if (!trimmed) {
     return null;
   }
-  const lower = trimmed.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(trimmed);
   const rawId = stripTargetKindPrefix(trimmed);
   if (!rawId) {
     return null;
@@ -320,42 +327,45 @@ function resolveMSTeamsOutboundSessionRouteForTest(params: ChannelOutboundSessio
   return buildChannelOutboundSessionRoute({
     cfg: params.cfg,
     agentId: params.agentId,
-    channel: "msteams",
+    channel: "meetingchat",
     accountId: params.accountId,
     peer: { kind: peerKind, id: conversationId },
     chatType: peerKind,
     from: isUser
-      ? `msteams:${conversationId}`
+      ? `meetingchat:${conversationId}`
       : isChannel
-        ? `msteams:channel:${conversationId}`
-        : `msteams:group:${conversationId}`,
+        ? `meetingchat:channel:${conversationId}`
+        : `meetingchat:group:${conversationId}`,
     to: isUser ? `user:${conversationId}` : `conversation:${conversationId}`,
   });
 }
 
-function resolveFeishuOutboundSessionRouteForTest(params: ChannelOutboundSessionRouteParams) {
-  let trimmed = stripChannelTargetPrefix(params.target, "feishu", "lark");
+function resolveCollabChatOutboundSessionRouteForTest(params: ChannelOutboundSessionRouteParams) {
+  let trimmed = stripChannelTargetPrefix(params.target, "collabchat", "collab");
   if (!trimmed) {
     return null;
   }
-  const lower = trimmed.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(trimmed);
   let isGroup = false;
   if (lower.startsWith("group:") || lower.startsWith("chat:") || lower.startsWith("channel:")) {
     trimmed = trimmed.replace(/^(group|chat|channel):/i, "").trim();
     isGroup = true;
   } else if (lower.startsWith("user:") || lower.startsWith("dm:")) {
     trimmed = trimmed.replace(/^(user|dm):/i, "").trim();
-  } else if (!trimmed.toLowerCase().startsWith("ou_") && !trimmed.toLowerCase().startsWith("on_")) {
+  } else if (
+    !normalizeLowercaseStringOrEmpty(trimmed).startsWith("ou_") &&
+    !normalizeLowercaseStringOrEmpty(trimmed).startsWith("on_")
+  ) {
     isGroup = false;
   }
   return buildChannelOutboundSessionRoute({
     cfg: params.cfg,
     agentId: params.agentId,
-    channel: "feishu",
+    channel: "collabchat",
     accountId: params.accountId,
     peer: { kind: isGroup ? "group" : "direct", id: trimmed },
     chatType: isGroup ? "group" : "direct",
-    from: isGroup ? `feishu:group:${trimmed}` : `feishu:${trimmed}`,
+    from: isGroup ? `collabchat:group:${trimmed}` : `collabchat:${trimmed}`,
     to: trimmed,
   });
 }
@@ -381,8 +391,8 @@ function resolveNextcloudTalkOutboundSessionRouteForTest(
   });
 }
 
-function resolveBlueBubblesOutboundSessionRouteForTest(params: ChannelOutboundSessionRouteParams) {
-  const stripped = stripChannelTargetPrefix(params.target, "bluebubbles");
+function resolveLocalChatOutboundSessionRouteForTest(params: ChannelOutboundSessionRouteParams) {
+  const stripped = stripChannelTargetPrefix(params.target, "localchat");
   if (!stripped) {
     return null;
   }
@@ -391,17 +401,17 @@ function resolveBlueBubblesOutboundSessionRouteForTest(params: ChannelOutboundSe
   if (!rawId) {
     return null;
   }
-  const normalizedId = rawId.toLowerCase();
+  const normalizedId = normalizeLowercaseStringOrEmpty(rawId);
   const isGroup = match !== null;
   return buildChannelOutboundSessionRoute({
     cfg: params.cfg,
     agentId: params.agentId,
-    channel: "bluebubbles",
+    channel: "localchat",
     accountId: params.accountId,
     peer: { kind: isGroup ? "group" : "direct", id: normalizedId },
     chatType: isGroup ? "group" : "direct",
-    from: isGroup ? `group:${rawId}` : `bluebubbles:${rawId}`,
-    to: `bluebubbles:${stripped}`,
+    from: isGroup ? `group:${rawId}` : `localchat:${rawId}`,
+    to: `localchat:${stripped}`,
   });
 }
 
@@ -410,7 +420,7 @@ function resolveZaloOutboundSessionRouteForTest(params: ChannelOutboundSessionRo
   if (!trimmed) {
     return null;
   }
-  const isGroup = trimmed.toLowerCase().startsWith("group:");
+  const isGroup = normalizeLowercaseStringOrEmpty(trimmed).startsWith("group:");
   const peerId = stripTargetKindPrefix(trimmed);
   if (!peerId) {
     return null;
@@ -432,7 +442,7 @@ function resolveZalouserOutboundSessionRouteForTest(params: ChannelOutboundSessi
   if (!trimmed) {
     return null;
   }
-  const lower = trimmed.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(trimmed);
   const isGroup = lower.startsWith("group:") || lower.startsWith("g:");
   const peerId = trimmed.replace(/^(group|user|g|u|dm):/i, "").trim();
   if (!peerId) {
@@ -472,7 +482,7 @@ function resolveTlonOutboundSessionRouteForTest(params: ChannelOutboundSessionRo
   if (!trimmed) {
     return null;
   }
-  const lower = trimmed.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(trimmed);
   if (lower.startsWith("group:")) {
     const nest = `chat/${trimmed.slice("group:".length).trim()}`;
     return buildChannelOutboundSessionRoute({
@@ -501,9 +511,9 @@ function resolveTlonOutboundSessionRouteForTest(params: ChannelOutboundSessionRo
 export function setMinimalOutboundSessionPluginRegistryForTests(): void {
   const plugins: ChannelPlugin[] = [
     createSessionRouteTestPlugin({
-      id: "whatsapp",
-      label: "WhatsApp",
-      resolveOutboundSessionRoute: resolveWhatsAppOutboundSessionRouteForTest,
+      id: "mobilechat",
+      label: "Mobile Chat",
+      resolveOutboundSessionRoute: resolveMobileChatOutboundSessionRouteForTest,
     }),
     createSessionRouteTestPlugin({
       id: "matrix",
@@ -511,24 +521,24 @@ export function setMinimalOutboundSessionPluginRegistryForTests(): void {
       resolveOutboundSessionRoute: resolveMatrixOutboundSessionRouteForTest,
     }),
     createSessionRouteTestPlugin({
-      id: "msteams",
-      label: "Microsoft Teams",
-      resolveOutboundSessionRoute: resolveMSTeamsOutboundSessionRouteForTest,
+      id: "meetingchat",
+      label: "Meeting Chat",
+      resolveOutboundSessionRoute: resolveMeetingChatOutboundSessionRouteForTest,
     }),
     createSessionRouteTestPlugin({
-      id: "slack",
-      label: "Slack",
-      resolveOutboundSessionRoute: resolveSlackOutboundSessionRouteForTest,
+      id: "workspace",
+      label: "Workspace",
+      resolveOutboundSessionRoute: resolveWorkspaceOutboundSessionRouteForTest,
     }),
     createSessionRouteTestPlugin({
-      id: "telegram",
-      label: "Telegram",
-      resolveOutboundSessionRoute: resolveTelegramOutboundSessionRouteForTest,
+      id: "forum",
+      label: "Forum",
+      resolveOutboundSessionRoute: resolveForumOutboundSessionRouteForTest,
     }),
     createSessionRouteTestPlugin({
-      id: "discord",
-      label: "Discord",
-      resolveOutboundSessionRoute: resolveDiscordOutboundSessionRouteForTest,
+      id: "guildchat",
+      label: "Guild Chat",
+      resolveOutboundSessionRoute: resolveGuildChatOutboundSessionRouteForTest,
     }),
     createSessionRouteTestPlugin({
       id: "nextcloud-talk",
@@ -536,9 +546,9 @@ export function setMinimalOutboundSessionPluginRegistryForTests(): void {
       resolveOutboundSessionRoute: resolveNextcloudTalkOutboundSessionRouteForTest,
     }),
     createSessionRouteTestPlugin({
-      id: "bluebubbles",
-      label: "BlueBubbles",
-      resolveOutboundSessionRoute: resolveBlueBubblesOutboundSessionRouteForTest,
+      id: "localchat",
+      label: "Local Chat",
+      resolveOutboundSessionRoute: resolveLocalChatOutboundSessionRouteForTest,
     }),
     createSessionRouteTestPlugin({
       id: "zalo",
@@ -561,14 +571,14 @@ export function setMinimalOutboundSessionPluginRegistryForTests(): void {
       resolveOutboundSessionRoute: resolveTlonOutboundSessionRouteForTest,
     }),
     createSessionRouteTestPlugin({
-      id: "feishu",
-      label: "Feishu",
-      resolveOutboundSessionRoute: resolveFeishuOutboundSessionRouteForTest,
+      id: "collabchat",
+      label: "Collab Chat",
+      resolveOutboundSessionRoute: resolveCollabChatOutboundSessionRouteForTest,
     }),
     createSessionRouteTestPlugin({
-      id: "mattermost",
-      label: "Mattermost",
-      resolveOutboundSessionRoute: resolveMattermostOutboundSessionRouteForTest,
+      id: "boardchat",
+      label: "Board Chat",
+      resolveOutboundSessionRoute: resolveBoardChatOutboundSessionRouteForTest,
     }),
   ];
   setActivePluginRegistry(

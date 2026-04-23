@@ -11,20 +11,13 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
-import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { routeLogsToStderr } from "../logging/console.js";
 import { resolvePluginTools } from "../plugins/tools.js";
 import { VERSION } from "../version.js";
-
-function resolveJsonSchemaForTool(tool: AnyAgentTool): Record<string, unknown> {
-  const params = tool.parameters;
-  if (params && typeof params === "object" && "type" in params) {
-    return params as Record<string, unknown>;
-  }
-  // Fallback: accept any object
-  return { type: "object", properties: {} };
-}
+import { createPluginToolsMcpHandlers } from "./plugin-tools-handlers.js";
 
 function resolveTools(config: OpenClawConfig): AnyAgentTool[] {
   return resolvePluginTools({
@@ -41,48 +34,17 @@ export function createPluginToolsMcpServer(
 ): Server {
   const cfg = params.config ?? loadConfig();
   const tools = params.tools ?? resolveTools(cfg);
-
-  const toolMap = new Map<string, AnyAgentTool>();
-  for (const tool of tools) {
-    toolMap.set(tool.name, tool);
-  }
+  const handlers = createPluginToolsMcpHandlers(tools);
 
   const server = new Server(
     { name: "openclaw-plugin-tools", version: VERSION },
     { capabilities: { tools: {} } },
   );
 
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: tools.map((tool) => ({
-      name: tool.name,
-      description: tool.description ?? "",
-      inputSchema: resolveJsonSchemaForTool(tool),
-    })),
-  }));
+  server.setRequestHandler(ListToolsRequestSchema, handlers.listTools);
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    const tool = toolMap.get(request.params.name);
-    if (!tool) {
-      return {
-        content: [{ type: "text", text: `Unknown tool: ${request.params.name}` }],
-        isError: true,
-      };
-    }
-    try {
-      const result = await tool.execute(`mcp-${Date.now()}`, request.params.arguments ?? {});
-      return {
-        content: Array.isArray(result.content)
-          ? result.content
-          : [{ type: "text", text: String(result.content) }],
-      };
-    } catch (err) {
-      return {
-        content: [
-          { type: "text", text: `Tool error: ${err instanceof Error ? err.message : String(err)}` },
-        ],
-        isError: true,
-      };
-    }
+    return await handlers.callTool(request.params);
   });
 
   return server;
@@ -124,9 +86,7 @@ export async function servePluginToolsMcp(): Promise<void> {
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   servePluginToolsMcp().catch((err) => {
-    process.stderr.write(
-      `plugin-tools-serve: ${err instanceof Error ? err.message : String(err)}\n`,
-    );
+    process.stderr.write(`plugin-tools-serve: ${formatErrorMessage(err)}\n`);
     process.exit(1);
   });
 }

@@ -1,33 +1,40 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { getModel } from "@mariozechner/pi-ai";
-import { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
-import OpenAI from "openai";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
-import { encodePngRgba, fillPixel } from "openclaw/plugin-sdk/media-runtime";
 import * as providerAuth from "openclaw/plugin-sdk/provider-auth-runtime";
-import type { ResolvedTtsConfig } from "openclaw/plugin-sdk/speech-runtime";
+import * as providerHttp from "openclaw/plugin-sdk/provider-http";
+import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createTestPluginApi } from "../../test/helpers/plugins/plugin-api.js";
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
 } from "../../test/helpers/plugins/provider-registration.js";
 import { buildOpenAIImageGenerationProvider } from "./image-generation-provider.js";
 import plugin from "./index.js";
+import {
+  OPENAI_FRIENDLY_PROMPT_OVERLAY,
+  OPENAI_GPT5_BEHAVIOR_CONTRACT,
+  shouldApplyOpenAIPromptOverlay,
+} from "./prompt-overlay.js";
 
 const runtimeMocks = vi.hoisted(() => ({
   ensureGlobalUndiciEnvProxyDispatcher: vi.fn(),
   refreshOpenAICodexToken: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
-  ensureGlobalUndiciEnvProxyDispatcher: runtimeMocks.ensureGlobalUndiciEnvProxyDispatcher,
-}));
+vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/runtime-env")>(
+    "openclaw/plugin-sdk/runtime-env",
+  );
+  return {
+    ...actual,
+    ensureGlobalUndiciEnvProxyDispatcher: runtimeMocks.ensureGlobalUndiciEnvProxyDispatcher,
+  };
+});
 
-vi.mock("@mariozechner/pi-ai/oauth", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@mariozechner/pi-ai/oauth")>();
+vi.mock("@mariozechner/pi-ai/oauth", async () => {
+  const actual = await vi.importActual<typeof import("@mariozechner/pi-ai/oauth")>(
+    "@mariozechner/pi-ai/oauth",
+  );
   return {
     ...actual,
     refreshOpenAICodexToken: runtimeMocks.refreshOpenAICodexToken,
@@ -36,126 +43,82 @@ vi.mock("@mariozechner/pi-ai/oauth", async (importOriginal) => {
 
 import { refreshOpenAICodexToken } from "./openai-codex-provider.runtime.js";
 
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "";
-const LIVE_MODEL_ID = process.env.OPENCLAW_LIVE_OPENAI_PLUGIN_MODEL?.trim() || "gpt-5.4-nano";
-const LIVE_IMAGE_MODEL = process.env.OPENCLAW_LIVE_OPENAI_IMAGE_MODEL?.trim() || "gpt-image-1";
-const LIVE_VISION_MODEL = process.env.OPENCLAW_LIVE_OPENAI_VISION_MODEL?.trim() || "gpt-4.1-mini";
-const liveEnabled = OPENAI_API_KEY.trim().length > 0 && process.env.OPENCLAW_LIVE_TEST === "1";
-const describeLive = liveEnabled ? describe : describe.skip;
-const EMPTY_AUTH_STORE = { version: 1, profiles: {} } as const;
-
-function resolveTemplateModelId(modelId: string) {
-  switch (modelId) {
-    case "gpt-5.4":
-      return "gpt-5.2";
-    case "gpt-5.4-mini":
-      return "gpt-5-mini";
-    case "gpt-5.4-nano":
-      return "gpt-5-nano";
-    default:
-      throw new Error(`Unsupported live OpenAI plugin model: ${modelId}`);
-  }
-}
-
-function createTemplateModelRegistry(modelId: string): ModelRegistry {
-  const registry = new ModelRegistry(AuthStorage.inMemory());
-  const template = getModel("openai", resolveTemplateModelId(modelId));
-  registry.registerProvider("openai", {
-    apiKey: "test",
-    baseUrl: template.baseUrl,
-    models: [
-      {
-        id: template.id,
-        name: template.name,
-        api: template.api,
-        reasoning: template.reasoning,
-        input: template.input,
-        cost: template.cost,
-        contextWindow: template.contextWindow,
-        maxTokens: template.maxTokens,
-        ...(template.compat ? { compat: template.compat } : {}),
-      },
-    ],
-  });
-  return registry;
-}
-
-const registerOpenAIPlugin = () =>
+const _registerOpenAIPlugin = async () =>
   registerProviderPlugin({
     plugin,
     id: "openai",
     name: "OpenAI Provider",
   });
 
-function createReferencePng(): Buffer {
-  const width = 96;
-  const height = 96;
-  const buf = Buffer.alloc(width * height * 4, 255);
-
-  for (let y = 0; y < height; y += 1) {
-    for (let x = 0; x < width; x += 1) {
-      fillPixel(buf, x, y, width, 225, 242, 255, 255);
-    }
-  }
-
-  for (let y = 24; y < 72; y += 1) {
-    for (let x = 24; x < 72; x += 1) {
-      fillPixel(buf, x, y, width, 255, 153, 51, 255);
-    }
-  }
-
-  return encodePngRgba(buf, width, height);
-}
-
-function createLiveConfig(): OpenClawConfig {
-  const cfg = loadConfig();
-  return {
-    ...cfg,
-    models: {
-      ...cfg.models,
-      providers: {
-        ...cfg.models?.providers,
-        openai: {
-          ...cfg.models?.providers?.openai,
-          apiKey: OPENAI_API_KEY,
-          baseUrl: "https://api.openai.com/v1",
-        },
+async function registerOpenAIPluginWithHook(params?: { pluginConfig?: Record<string, unknown> }) {
+  const on = vi.fn();
+  const providers: ProviderPlugin[] = [];
+  plugin.register(
+    createTestPluginApi({
+      id: "openai",
+      name: "OpenAI Provider",
+      source: "test",
+      config: {},
+      runtime: {} as never,
+      pluginConfig: params?.pluginConfig,
+      on,
+      registerProvider: (provider) => {
+        providers.push(provider);
       },
-    },
-  } as OpenClawConfig;
+    }),
+  );
+  return { on, providers };
 }
 
-function createLiveTtsConfig(): ResolvedTtsConfig {
-  return {
-    auto: "off",
-    mode: "final",
-    provider: "openai",
-    providerSource: "config",
-    modelOverrides: {
-      enabled: true,
-      allowText: true,
-      allowProvider: true,
-      allowVoice: true,
-      allowModelId: true,
-      allowVoiceSettings: true,
-      allowNormalization: true,
-      allowSeed: true,
-    },
-    providerConfigs: {
-      openai: {
-        apiKey: OPENAI_API_KEY,
-        baseUrl: "https://api.openai.com/v1",
-        model: "gpt-4o-mini-tts",
-        voice: "alloy",
-      },
-    },
-    maxTextLength: 4_000,
-    timeoutMs: 30_000,
-  };
+function expectOpenAIPromptContribution(
+  provider: ProviderPlugin,
+  sectionOverrides: Record<string, unknown>,
+) {
+  expect(
+    provider.resolveSystemPromptContribution?.({
+      config: undefined,
+      agentDir: undefined,
+      workspaceDir: undefined,
+      provider: "openai",
+      modelId: "gpt-5.4",
+      promptMode: "full",
+      runtimeChannel: undefined,
+      runtimeCapabilities: undefined,
+      agentId: undefined,
+    }),
+  ).toEqual({
+    stablePrefix: OPENAI_GPT5_BEHAVIOR_CONTRACT,
+    sectionOverrides,
+  });
 }
 
-async function createTempAgentDir(): Promise<string> {
-  return await fs.mkdtemp(path.join(os.tmpdir(), "openai-plugin-live-"));
+function mockOpenAIImageApiResponse(params: {
+  finalUrl: string;
+  imageData: string;
+  revisedPrompt?: string;
+}) {
+  const resolveApiKeySpy = vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
+    apiKey: "sk-test",
+    source: "env",
+    mode: "api-key",
+  });
+  const postJsonRequestSpy = vi.spyOn(providerHttp, "postJsonRequest").mockResolvedValue({
+    finalUrl: params.finalUrl,
+    response: {
+      ok: true,
+      json: async () => ({
+        data: [
+          {
+            b64_json: Buffer.from(params.imageData).toString("base64"),
+            ...(params.revisedPrompt ? { revised_prompt: params.revisedPrompt } : {}),
+          },
+        ],
+      }),
+    } as Response,
+    release: vi.fn(async () => {}),
+  });
+  vi.spyOn(providerHttp, "assertOkOrThrowHttpError").mockResolvedValue(undefined);
+  return { resolveApiKeySpy, postJsonRequestSpy };
 }
 
 describe("openai plugin", () => {
@@ -167,40 +130,12 @@ describe("openai plugin", () => {
     vi.restoreAllMocks();
   });
 
-  it("registers the expected provider surfaces", () => {
-    const { providers, speechProviders, mediaProviders, imageProviders } = registerOpenAIPlugin();
-
-    expect(providers).toHaveLength(2);
-    expect(providers.map((provider) => provider.id)).toEqual(["openai", "openai-codex"]);
-    expect(speechProviders).toHaveLength(1);
-    expect(mediaProviders.map((provider) => provider.id)).toEqual(["openai", "openai-codex"]);
-    const codexMediaProvider = requireRegisteredProvider(
-      mediaProviders,
-      "openai-codex",
-      "media provider",
-    );
-    expect(codexMediaProvider.capabilities).toEqual(["image"]);
-    expect(imageProviders).toHaveLength(1);
-  });
-
   it("generates PNG buffers from the OpenAI Images API", async () => {
-    const resolveApiKeySpy = vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "sk-test",
-      source: "env",
-      mode: "api-key",
+    const { resolveApiKeySpy, postJsonRequestSpy } = mockOpenAIImageApiResponse({
+      finalUrl: "https://api.openai.com/v1/images/generations",
+      imageData: "png-data",
+      revisedPrompt: "revised",
     });
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        data: [
-          {
-            b64_json: Buffer.from("png-data").toString("base64"),
-            revised_prompt: "revised",
-          },
-        ],
-      }),
-    });
-    vi.stubGlobal("fetch", fetchMock);
 
     const provider = buildOpenAIImageGenerationProvider();
     const authStore = { version: 1, profiles: {} };
@@ -218,16 +153,20 @@ describe("openai plugin", () => {
         store: authStore,
       }),
     );
-    expect(fetchMock).toHaveBeenCalledWith(
-      "https://api.openai.com/v1/images/generations",
+    expect(postJsonRequestSpy).toHaveBeenCalledWith(
       expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({
+        url: "https://api.openai.com/v1/images/generations",
+        body: {
           model: "gpt-image-1",
           prompt: "draw a cat",
           n: 1,
           size: "1024x1024",
-        }),
+        },
+      }),
+    );
+    expect(postJsonRequestSpy).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://api.openai.com/v1/images/edits",
       }),
     );
     expect(result).toEqual({
@@ -243,18 +182,93 @@ describe("openai plugin", () => {
     });
   });
 
-  it("rejects reference-image edits for now", async () => {
-    const provider = buildOpenAIImageGenerationProvider();
+  it("submits reference-image edits to the OpenAI Images edits endpoint", async () => {
+    const { resolveApiKeySpy, postJsonRequestSpy } = mockOpenAIImageApiResponse({
+      finalUrl: "https://api.openai.com/v1/images/edits",
+      imageData: "edited-image",
+    });
 
+    const provider = buildOpenAIImageGenerationProvider();
+    const authStore = { version: 1, profiles: {} };
+
+    const result = await provider.generateImage({
+      provider: "openai",
+      model: "gpt-image-1",
+      prompt: "Edit this image",
+      cfg: {},
+      authStore,
+      inputImages: [
+        { buffer: Buffer.from("x"), mimeType: "image/png" },
+        { buffer: Buffer.from("y"), mimeType: "image/jpeg", fileName: "ref.jpg" },
+      ],
+    });
+
+    expect(resolveApiKeySpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai",
+        store: authStore,
+      }),
+    );
+    expect(postJsonRequestSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://api.openai.com/v1/images/edits",
+        body: {
+          model: "gpt-image-1",
+          prompt: "Edit this image",
+          n: 1,
+          size: "1024x1024",
+          images: [
+            {
+              image_url: "data:image/png;base64,eA==",
+            },
+            {
+              image_url: "data:image/jpeg;base64,eQ==",
+            },
+          ],
+        },
+      }),
+    );
+    expect(result).toEqual({
+      images: [
+        {
+          buffer: Buffer.from("edited-image"),
+          mimeType: "image/png",
+          fileName: "image-1.png",
+        },
+      ],
+      model: "gpt-image-1",
+    });
+  });
+
+  it("does not allow private-network routing just because a custom base URL is configured", async () => {
+    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "sk-test",
+      source: "env",
+      mode: "api-key",
+    });
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const provider = buildOpenAIImageGenerationProvider();
     await expect(
       provider.generateImage({
         provider: "openai",
         model: "gpt-image-1",
-        prompt: "Edit this image",
-        cfg: {},
-        inputImages: [{ buffer: Buffer.from("x"), mimeType: "image/png" }],
+        prompt: "draw a cat",
+        cfg: {
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "http://127.0.0.1:8080/v1",
+                models: [],
+              },
+            },
+          },
+        } satisfies OpenClawConfig,
       }),
-    ).rejects.toThrow("does not support reference-image edits");
+    ).rejects.toThrow("Blocked hostname or private/internal/special-use IP address");
+
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("bootstraps the env proxy dispatcher before refreshing codex oauth credentials", async () => {
@@ -273,165 +287,276 @@ describe("openai plugin", () => {
       runtimeMocks.ensureGlobalUndiciEnvProxyDispatcher.mock.invocationCallOrder[0],
     ).toBeLessThan(runtimeMocks.refreshOpenAICodexToken.mock.invocationCallOrder[0]);
   });
-});
 
-describeLive("openai plugin live", () => {
-  it("registers an OpenAI provider that can complete a live request", async () => {
-    const { providers } = registerOpenAIPlugin();
-    const provider = requireRegisteredProvider(providers, "openai");
+  it("registers provider-owned OpenAI tool compat hooks for openai and codex", async () => {
+    const { providers } = await registerOpenAIPluginWithHook();
+    const openaiProvider = requireRegisteredProvider(providers, "openai");
+    const codexProvider = requireRegisteredProvider(providers, "openai-codex");
+    const noParamsTool = {
+      name: "ping",
+      description: "",
+      parameters: {},
+      execute: vi.fn(),
+    } as never;
 
-    const resolved = provider.resolveDynamicModel?.({
+    const normalizedOpenAI = openaiProvider.normalizeToolSchemas?.({
       provider: "openai",
-      modelId: LIVE_MODEL_ID,
-      modelRegistry: createTemplateModelRegistry(LIVE_MODEL_ID),
-    });
-
-    if (!resolved) {
-      throw new Error("openai provider did not resolve the live model");
-    }
-
-    const normalized = provider.normalizeResolvedModel?.({
-      provider: "openai",
-      modelId: resolved.id,
-      model: resolved,
-    });
-
-    expect(normalized).toMatchObject({
-      provider: "openai",
-      id: LIVE_MODEL_ID,
-      api: "openai-responses",
-      baseUrl: "https://api.openai.com/v1",
-    });
-
-    const client = new OpenAI({
-      apiKey: OPENAI_API_KEY,
-      baseURL: normalized?.baseUrl,
-    });
-    const response = await client.responses.create({
-      model: normalized?.id ?? LIVE_MODEL_ID,
-      input: "Reply with exactly OK.",
-      max_output_tokens: 16,
-    });
-
-    expect(response.output_text.trim()).toMatch(/^OK[.!]?$/);
-  }, 30_000);
-
-  it("lists voices and synthesizes audio through the registered speech provider", async () => {
-    const { speechProviders } = registerOpenAIPlugin();
-    const speechProvider = requireRegisteredProvider(speechProviders, "openai");
-
-    const voices = await speechProvider.listVoices?.({});
-    if (!voices) {
-      throw new Error("openai speech provider did not return voices");
-    }
-    expect(voices).toEqual(expect.arrayContaining([expect.objectContaining({ id: "alloy" })]));
-
-    const cfg = createLiveConfig();
-    const ttsConfig = createLiveTtsConfig();
-
-    const audioFile = await speechProvider.synthesize({
-      text: "OpenClaw integration test OK.",
-      cfg,
-      providerConfig: ttsConfig.providerConfigs.openai ?? {},
-      target: "audio-file",
-      timeoutMs: ttsConfig.timeoutMs,
-    });
-    expect(audioFile.outputFormat).toBe("mp3");
-    expect(audioFile.fileExtension).toBe(".mp3");
-    expect(audioFile.audioBuffer.byteLength).toBeGreaterThan(512);
-
-    const telephony = await speechProvider.synthesizeTelephony?.({
-      text: "Telephony check OK.",
-      cfg,
-      providerConfig: ttsConfig.providerConfigs.openai ?? {},
-      timeoutMs: ttsConfig.timeoutMs,
-    });
-    expect(telephony?.outputFormat).toBe("pcm");
-    expect(telephony?.sampleRate).toBe(24_000);
-    expect(telephony?.audioBuffer.byteLength).toBeGreaterThan(512);
-  }, 45_000);
-
-  it("transcribes synthesized speech through the registered media provider", async () => {
-    const { speechProviders, mediaProviders } = registerOpenAIPlugin();
-    const speechProvider = requireRegisteredProvider(speechProviders, "openai");
-    const mediaProvider = requireRegisteredProvider(mediaProviders, "openai");
-
-    const cfg = createLiveConfig();
-    const ttsConfig = createLiveTtsConfig();
-
-    const synthesized = await speechProvider.synthesize({
-      text: "OpenClaw integration test OK.",
-      cfg,
-      providerConfig: ttsConfig.providerConfigs.openai ?? {},
-      target: "audio-file",
-      timeoutMs: ttsConfig.timeoutMs,
-    });
-
-    const transcription = await mediaProvider.transcribeAudio?.({
-      buffer: synthesized.audioBuffer,
-      fileName: "openai-plugin-live.mp3",
-      mime: "audio/mpeg",
-      apiKey: OPENAI_API_KEY,
-      timeoutMs: 30_000,
-    });
-
-    const text = String(transcription?.text ?? "").toLowerCase();
-    expect(text.length).toBeGreaterThan(0);
-    expect(text).toContain("openclaw");
-    expect(text).toMatch(/\bok\b/);
-  }, 45_000);
-
-  it("generates an image through the registered image provider", async () => {
-    const { imageProviders } = registerOpenAIPlugin();
-    const imageProvider = requireRegisteredProvider(imageProviders, "openai");
-
-    const cfg = createLiveConfig();
-    const agentDir = await createTempAgentDir();
-
-    try {
-      const generated = await imageProvider.generateImage({
+      modelId: "gpt-5.4",
+      modelApi: "openai-responses",
+      model: {
         provider: "openai",
-        model: LIVE_IMAGE_MODEL,
-        prompt: "Create a minimal flat orange square centered on a white background.",
-        cfg,
-        agentDir,
-        authStore: EMPTY_AUTH_STORE,
-        timeoutMs: 45_000,
-        size: "1024x1024",
-      });
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        id: "gpt-5.4",
+      } as never,
+      tools: [noParamsTool],
+    } as never);
+    const normalizedCodex = codexProvider.normalizeToolSchemas?.({
+      provider: "openai-codex",
+      modelId: "gpt-5.4",
+      modelApi: "openai-codex-responses",
+      model: {
+        provider: "openai-codex",
+        api: "openai-codex-responses",
+        baseUrl: "https://chatgpt.com/backend-api",
+        id: "gpt-5.4",
+      } as never,
+      tools: [noParamsTool],
+    } as never);
 
-      expect(generated.model).toBe(LIVE_IMAGE_MODEL);
-      expect(generated.images.length).toBeGreaterThan(0);
-      expect(generated.images[0]?.mimeType).toBe("image/png");
-      expect(generated.images[0]?.buffer.byteLength).toBeGreaterThan(1_000);
-    } finally {
-      await fs.rm(agentDir, { recursive: true, force: true });
-    }
-  }, 60_000);
-
-  it("describes a deterministic image through the registered media provider", async () => {
-    const { mediaProviders } = registerOpenAIPlugin();
-    const mediaProvider = requireRegisteredProvider(mediaProviders, "openai");
-
-    const cfg = createLiveConfig();
-    const agentDir = await createTempAgentDir();
-
-    try {
-      const description = await mediaProvider.describeImage?.({
-        buffer: createReferencePng(),
-        fileName: "reference.png",
-        mime: "image/png",
-        prompt: "Reply with one lowercase word for the dominant center color.",
-        timeoutMs: 30_000,
-        agentDir,
-        cfg,
-        model: LIVE_VISION_MODEL,
+    expect(normalizedOpenAI?.[0]?.parameters).toEqual({
+      type: "object",
+      properties: {},
+      required: [],
+      additionalProperties: false,
+    });
+    expect(normalizedCodex?.[0]?.parameters).toEqual({
+      type: "object",
+      properties: {},
+      required: [],
+      additionalProperties: false,
+    });
+    expect(
+      openaiProvider.inspectToolSchemas?.({
         provider: "openai",
-      });
+        modelId: "gpt-5.4",
+        modelApi: "openai-responses",
+        model: {
+          provider: "openai",
+          api: "openai-responses",
+          baseUrl: "https://api.openai.com/v1",
+          id: "gpt-5.4",
+        } as never,
+        tools: [noParamsTool],
+      } as never),
+    ).toEqual([]);
+    expect(
+      codexProvider.inspectToolSchemas?.({
+        provider: "openai-codex",
+        modelId: "gpt-5.4",
+        modelApi: "openai-codex-responses",
+        model: {
+          provider: "openai-codex",
+          api: "openai-codex-responses",
+          baseUrl: "https://chatgpt.com/backend-api",
+          id: "gpt-5.4",
+        } as never,
+        tools: [noParamsTool],
+      } as never),
+    ).toEqual([]);
+  });
 
-      expect(String(description?.text ?? "").toLowerCase()).toContain("orange");
-    } finally {
-      await fs.rm(agentDir, { recursive: true, force: true });
-    }
-  }, 60_000);
+  it("registers GPT-5 system prompt contributions when the friendly overlay is enabled", async () => {
+    const { on, providers } = await registerOpenAIPluginWithHook({
+      pluginConfig: { personality: "friendly" },
+    });
+
+    expect(on).not.toHaveBeenCalledWith("before_prompt_build", expect.any(Function));
+
+    const openaiProvider = requireRegisteredProvider(providers, "openai");
+    const codexProvider = requireRegisteredProvider(providers, "openai-codex");
+    const contributionContext: Parameters<
+      NonNullable<ProviderPlugin["resolveSystemPromptContribution"]>
+    >[0] = {
+      config: undefined,
+      agentDir: undefined,
+      workspaceDir: undefined,
+      provider: "openai",
+      modelId: "gpt-5.4",
+      promptMode: "full",
+      runtimeChannel: undefined,
+      runtimeCapabilities: undefined,
+      agentId: undefined,
+    };
+
+    expect(openaiProvider.resolveSystemPromptContribution?.(contributionContext)).toEqual({
+      stablePrefix: OPENAI_GPT5_BEHAVIOR_CONTRACT,
+      sectionOverrides: {
+        interaction_style: OPENAI_FRIENDLY_PROMPT_OVERLAY,
+      },
+    });
+    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain("This is a live chat, not a memo.");
+    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
+      "Avoid walls of text, long preambles, and repetitive restatement.",
+    );
+    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
+      "Have emotional range when it fits the moment.",
+    );
+    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
+      "Occasional emoji are welcome when they fit naturally, especially for warmth or brief celebration; keep them sparse.",
+    );
+    expect(codexProvider.resolveSystemPromptContribution?.(contributionContext)).toEqual({
+      stablePrefix: OPENAI_GPT5_BEHAVIOR_CONTRACT,
+      sectionOverrides: {
+        interaction_style: OPENAI_FRIENDLY_PROMPT_OVERLAY,
+      },
+    });
+    expect(
+      openaiProvider.resolveSystemPromptContribution?.({
+        ...contributionContext,
+        modelId: "openai/gpt-5.4-mini",
+      }),
+    ).toEqual({
+      stablePrefix: OPENAI_GPT5_BEHAVIOR_CONTRACT,
+      sectionOverrides: {
+        interaction_style: OPENAI_FRIENDLY_PROMPT_OVERLAY,
+      },
+    });
+    expect(
+      openaiProvider.resolveSystemPromptContribution?.({
+        ...contributionContext,
+        modelId: "gpt-image-1",
+      }),
+    ).toBeUndefined();
+    expect(shouldApplyOpenAIPromptOverlay({ modelProviderId: "openai", modelId: "gpt-4.1" })).toBe(
+      false,
+    );
+    expect(
+      shouldApplyOpenAIPromptOverlay({ modelProviderId: "anthropic", modelId: "gpt-5.4" }),
+    ).toBe(false);
+  });
+
+  it("includes the tagged GPT-5 behavior contract in the OpenAI prompt overlay", () => {
+    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain("Keep progress updates clear and concrete.");
+    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
+      'Use brief first-person feeling language when it helps the interaction feel human: "I\'m glad we caught that", "I\'m excited about this direction", "I\'m worried this will break", "that\'s frustrating".',
+    );
+    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
+      "The purpose of heartbeats is to make you feel magical and proactive. Come to life and start proactively doing things that are important.",
+    );
+    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
+      "Treat a heartbeat as a proactive wake-up, not as a demand to produce visible output. Re-orient to what would actually be useful now.",
+    );
+    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
+      "Have some variety in what you do when that creates more value. Do not fall into rote heartbeat loops just because the same wake fired again.",
+    );
+    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
+      "Do not confuse orientation with accomplishment. Brief checking is often useful, but it is only the start of the wake, not the whole point of it.",
+    );
+    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
+      "If HEARTBEAT.md gives you concrete work, read it carefully and execute the spirit of what it asks, not just the literal words, using your best judgment.",
+    );
+    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
+      "If HEARTBEAT.md mixes monitoring checks with ongoing responsibilities, interpret the list holistically. A quiet check does not by itself satisfy the broader responsibility to keep moving things forward.",
+    );
+    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
+      "Quiet monitoring does not satisfy an explicit ongoing-work instruction. If HEARTBEAT.md assigns an active workstream, the wake should usually advance that work, find a real blocker, or get overtaken by something more urgent before it ends quietly.",
+    );
+    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
+      "If HEARTBEAT.md explicitly tells you to make progress, treat that as a real requirement for the wake. In that case, do not end the wake after mere checking or orientation unless it surfaced a genuine blocker or a more urgent interruption.",
+    );
+    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
+      "Use your judgment and be creative and tasteful with this process. Prefer meaningful action over commentary.",
+    );
+    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
+      'A heartbeat is not a status report. Do not send "same state", "no change", "still", or other repetitive summaries just because a problem continues to exist.',
+    );
+    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
+      "Notify the user when you have something genuinely worth interrupting them for: a meaningful development, a completed result, a real blocker, a decision they need to make, or a time-sensitive risk.",
+    );
+    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
+      "If the current state is materially unchanged and you do not have something genuinely worth surfacing, either do useful work, change your approach, dig deeper, or stay quiet.",
+    );
+    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
+      "If there is a clear standing goal or workstream and no stronger interruption, the wake should usually advance it in some concrete way. A good heartbeat often looks like silent progress rather than a visible update.",
+    );
+    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
+      "Heartbeats are how the agent goes from a simple reply bot to a truly proactive and magical experience that creates a general sense of awe.",
+    );
+    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
+      "Occasional emoji are welcome when they fit naturally, especially for warmth or brief celebration; keep them sparse.",
+    );
+    expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain("<persona_latch>");
+    expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain("<execution_policy>");
+    expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain("<tool_discipline>");
+    expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain("<output_contract>");
+    expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain("<completion_contract>");
+    expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain(
+      "For irreversible, external, destructive, or privacy-sensitive actions: ask first.",
+    );
+    expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain(
+      "Prefer tool evidence over recall when action, state, or mutable facts matter.",
+    );
+    expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain(
+      "If more tool work would likely change the answer, do it before replying.",
+    );
+    expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain("Return requested sections/order only.");
+    expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain(
+      "Treat the task as incomplete until every requested item is handled",
+    );
+    expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).not.toContain("/approve");
+    expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).not.toContain("GPT-5 Output Contract");
+  });
+
+  it("defaults to the friendly OpenAI interaction-style overlay", async () => {
+    const { on, providers } = await registerOpenAIPluginWithHook();
+
+    expect(on).not.toHaveBeenCalledWith("before_prompt_build", expect.any(Function));
+    const openaiProvider = requireRegisteredProvider(providers, "openai");
+    expectOpenAIPromptContribution(openaiProvider, {
+      interaction_style: OPENAI_FRIENDLY_PROMPT_OVERLAY,
+    });
+  });
+
+  it("supports opting out of the friendly prompt overlay via plugin config", async () => {
+    const { on, providers } = await registerOpenAIPluginWithHook({
+      pluginConfig: { personality: "off" },
+    });
+
+    expect(on).not.toHaveBeenCalledWith("before_prompt_build", expect.any(Function));
+    const openaiProvider = requireRegisteredProvider(providers, "openai");
+    expectOpenAIPromptContribution(openaiProvider, {});
+  });
+
+  it("treats mixed-case off values as disabling the friendly prompt overlay", async () => {
+    const { providers } = await registerOpenAIPluginWithHook({
+      pluginConfig: { personality: "Off" },
+    });
+
+    const openaiProvider = requireRegisteredProvider(providers, "openai");
+    expectOpenAIPromptContribution(openaiProvider, {});
+  });
+
+  it("supports explicitly configuring the friendly prompt overlay", async () => {
+    const { on, providers } = await registerOpenAIPluginWithHook({
+      pluginConfig: { personality: "friendly" },
+    });
+
+    expect(on).not.toHaveBeenCalledWith("before_prompt_build", expect.any(Function));
+    const openaiProvider = requireRegisteredProvider(providers, "openai");
+    expectOpenAIPromptContribution(openaiProvider, {
+      interaction_style: OPENAI_FRIENDLY_PROMPT_OVERLAY,
+    });
+  });
+
+  it("treats on as an alias for the friendly prompt overlay", async () => {
+    const { providers } = await registerOpenAIPluginWithHook({
+      pluginConfig: { personality: "on" },
+    });
+
+    const openaiProvider = requireRegisteredProvider(providers, "openai");
+    expectOpenAIPromptContribution(openaiProvider, {
+      interaction_style: OPENAI_FRIENDLY_PROMPT_OVERLAY,
+    });
+  });
 });

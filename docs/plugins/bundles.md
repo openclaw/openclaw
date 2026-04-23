@@ -60,7 +60,7 @@ and use it immediately.
     openclaw gateway restart
     ```
 
-    Mapped features (skills, hooks, MCP tools) are available in the next session.
+    Mapped features (skills, hooks, MCP tools, LSP defaults) are available in the next session.
 
   </Step>
 </Steps>
@@ -78,6 +78,7 @@ is detected but not yet wired.
 | Commands      | `commands/` and `.cursor/commands/` treated as skill roots                                  | Claude, Cursor |
 | Hook packs    | OpenClaw-style `HOOK.md` + `handler.ts` layouts                                             | Codex          |
 | MCP tools     | Bundle MCP config merged into embedded Pi settings; supported stdio and HTTP servers loaded | All formats    |
+| LSP servers   | Claude `.lsp.json` and manifest-declared `lspServers` merged into embedded Pi LSP defaults  | Claude         |
 | Settings      | Claude `settings.json` imported as embedded Pi defaults                                     | Claude         |
 
 #### Skill content
@@ -105,6 +106,8 @@ loader. Cursor command markdown works through the same path.
   launching stdio servers or connecting to HTTP servers
 - project-local Pi settings still apply after bundle defaults, so workspace
   settings can override bundle MCP entries when needed
+- bundle MCP tool catalogs are sorted deterministically before registration, so
+  upstream `listTools()` order changes do not thrash prompt-cache tool blocks
 
 ##### Transports
 
@@ -165,6 +168,8 @@ OpenClaw registers bundle MCP tools with provider-safe names in the form
 - full tool names are capped at 64 characters
 - empty server names fall back to `mcp`
 - colliding sanitized names are disambiguated with numeric suffixes
+- final exposed tool order is deterministic by safe name to keep repeated Pi
+  turns cache-stable
 
 #### Embedded Pi settings
 
@@ -177,11 +182,19 @@ Sanitized keys:
 - `shellPath`
 - `shellCommandPrefix`
 
+#### Embedded Pi LSP
+
+- enabled Claude bundles can contribute LSP server config
+- OpenClaw loads `.lsp.json` plus any manifest-declared `lspServers` paths
+- bundle LSP config is merged into the effective embedded Pi LSP defaults
+- only supported stdio-backed LSP servers are runnable today; unsupported
+  transports still show up in `openclaw plugins inspect <id>`
+
 ### Detected but not executed
 
 These are recognized and shown in diagnostics, but OpenClaw does not run them:
 
-- Claude `agents`, `hooks.json` automation, `lspServers`, `outputStyles`
+- Claude `agents`, `hooks.json` automation, `outputStyles`
 - Cursor `.cursor/agents`, `.cursor/hooks.json`, `.cursor/rules`
 - Codex inline/app metadata beyond capability reporting
 
@@ -202,13 +215,14 @@ These are recognized and shown in diagnostics, but OpenClaw does not run them:
     Two detection modes:
 
     - **Manifest-based:** `.claude-plugin/plugin.json`
-    - **Manifestless:** default Claude layout (`skills/`, `commands/`, `agents/`, `hooks/`, `.mcp.json`, `settings.json`)
+    - **Manifestless:** default Claude layout (`skills/`, `commands/`, `agents/`, `hooks/`, `.mcp.json`, `.lsp.json`, `settings.json`)
 
     Claude-specific behavior:
 
     - `commands/` is treated as skill content
     - `settings.json` is imported into embedded Pi settings (shell override keys are sanitized)
     - `.mcp.json` exposes supported stdio tools to embedded Pi
+    - `.lsp.json` plus manifest-declared `lspServers` paths load into embedded Pi LSP defaults
     - `hooks/hooks.json` is detected but not executed
     - Custom component paths in the manifest are additive (they extend defaults, not replace them)
 

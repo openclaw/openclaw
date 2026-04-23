@@ -4,4 +4,7 @@ describePluginRegistrationContract({
   pluginId: "fal",
   providerIds: ["fal"],
   imageGenerationProviderIds: ["fal"],
+  videoGenerationProviderIds: ["fal"],
+  requireGenerateImage: true,
+  requireGenerateVideo: true,
 });

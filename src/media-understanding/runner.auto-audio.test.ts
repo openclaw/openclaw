@@ -1,16 +1,35 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import { describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { buildProviderRegistry, runCapability } from "./runner.js";
+import { runCapability } from "./runner.js";
 import { withAudioFixture } from "./runner.test-utils.js";
+import type { AudioTranscriptionRequest, MediaUnderstandingProvider } from "./types.js";
+
+vi.mock("../agents/model-auth.js", async () => {
+  const { createAvailableModelAuthMockModule } = await import("./runner.test-mocks.js");
+  return createAvailableModelAuthMockModule();
+});
+
+vi.mock("../plugins/capability-provider-runtime.js", async () => {
+  const { createEmptyCapabilityProviderMockModule } = await import("./runner.test-mocks.js");
+  return createEmptyCapabilityProviderMockModule();
+});
+
+function createProviderRegistry(
+  providers: Record<string, MediaUnderstandingProvider>,
+): Map<string, MediaUnderstandingProvider> {
+  // Keep these tests focused on auto-entry selection instead of paying the full
+  // plugin capability registry build for every stub provider setup.
+  return new Map(Object.entries(providers));
+}
 
 function createOpenAiAudioProvider(
-  transcribeAudio: (req: { model?: string }) => Promise<{ text: string; model: string }>,
+  transcribeAudio: (req: AudioTranscriptionRequest) => Promise<{ text: string; model: string }>,
 ) {
-  return buildProviderRegistry({
+  return createProviderRegistry({
     openai: {
       id: "openai",
       capabilities: ["audio"],
@@ -34,7 +53,7 @@ function createOpenAiAudioCfg(extra?: Partial<OpenClawConfig>): OpenClawConfig {
 }
 
 async function runAutoAudioCase(params: {
-  transcribeAudio: (req: { model?: string }) => Promise<{ text: string; model: string }>;
+  transcribeAudio: (req: AudioTranscriptionRequest) => Promise<{ text: string; model: string }>;
   cfgExtra?: Partial<OpenClawConfig>;
 }) {
   let runResult: Awaited<ReturnType<typeof runCapability>> | undefined;
@@ -66,7 +85,7 @@ describe("runCapability auto audio entries", () => {
       },
     });
     expect(result.outputs[0]?.text).toBe("ok");
-    expect(seenModel).toBe("gpt-4o-mini-transcribe");
+    expect(seenModel).toBe("gpt-4o-transcribe");
     expect(result.decision.outcome).toBe("success");
   });
 
@@ -112,6 +131,43 @@ describe("runCapability auto audio entries", () => {
     expect(seenModel).toBe("whisper-1");
   });
 
+  it("lets per-request transcription hints override configured model-entry hints", async () => {
+    let seenLanguage: string | undefined;
+    let seenPrompt: string | undefined;
+    const result = await runAutoAudioCase({
+      transcribeAudio: async (req) => {
+        seenLanguage = req.language;
+        seenPrompt = req.prompt;
+        return { text: "ok", model: req.model ?? "unknown" };
+      },
+      cfgExtra: {
+        tools: {
+          media: {
+            audio: {
+              enabled: true,
+              prompt: "configured prompt",
+              language: "fr",
+              _requestPromptOverride: "Focus on names",
+              _requestLanguageOverride: "en",
+              models: [
+                {
+                  provider: "openai",
+                  model: "whisper-1",
+                  prompt: "entry prompt",
+                  language: "de",
+                },
+              ],
+            },
+          },
+        },
+      } as Partial<OpenClawConfig>,
+    });
+
+    expect(result.outputs[0]?.text).toBe("ok");
+    expect(seenLanguage).toBe("en");
+    expect(seenPrompt).toBe("Focus on names");
+  });
+
   it("uses mistral when only mistral key is configured", async () => {
     const isolatedAgentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-audio-agent-"));
     let runResult: Awaited<ReturnType<typeof runCapability>> | undefined;
@@ -129,13 +185,13 @@ describe("runCapability auto audio entries", () => {
         },
         async () => {
           await withAudioFixture("openclaw-auto-audio-mistral", async ({ ctx, media, cache }) => {
-            const providerRegistry = buildProviderRegistry({
+            const providerRegistry = createProviderRegistry({
               openai: {
                 id: "openai",
                 capabilities: ["audio"],
                 transcribeAudio: async () => ({
                   text: "openai",
-                  model: "gpt-4o-mini-transcribe",
+                  model: "gpt-4o-transcribe",
                 }),
               },
               mistral: {

@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { createPatternFileHelper } from "./helpers/pattern-file.js";
+import { normalizeConfigPath, normalizeConfigPaths } from "./helpers/vitest-config-paths.js";
 import {
   createUnitVitestConfig,
+  createUnitVitestConfigWithOptions,
   loadExtraExcludePatternsFromEnv,
   loadIncludePatternsFromEnv,
-} from "../vitest.unit.config.ts";
-import { createPatternFileHelper } from "./helpers/pattern-file.js";
+} from "./vitest/vitest.unit.config.ts";
 
 const patternFiles = createPatternFileHelper("openclaw-vitest-unit-config-");
 
@@ -67,8 +69,74 @@ describe("loadExtraExcludePatternsFromEnv", () => {
 });
 
 describe("unit vitest config", () => {
-  it("defaults unit tests to non-isolated mode", () => {
+  it("defaults unit tests to the non-isolated runner", () => {
     const unitConfig = createUnitVitestConfig({});
     expect(unitConfig.test?.isolate).toBe(false);
+    expect(normalizeConfigPath(unitConfig.test?.runner)).toBe("test/non-isolated-runner.ts");
+  });
+
+  it("keeps acp and ui tests out of the generic unit lane", () => {
+    const unitConfig = createUnitVitestConfig({});
+    expect(unitConfig.test?.exclude).toEqual(expect.arrayContaining(["extensions/**", "test/**"]));
+  });
+
+  it("narrows the active include list to CLI file filters when present", () => {
+    const unitConfig = createUnitVitestConfigWithOptions(
+      {},
+      {
+        argv: ["node", "vitest", "run", "src/config/channel-configured.test.ts"],
+      },
+    );
+    expect(unitConfig.test?.include).toEqual(["src/config/channel-configured.test.ts"]);
+    expect(unitConfig.test?.passWithNoTests).toBe(true);
+  });
+
+  it("adds the OpenClaw runtime setup hooks on top of the base setup", () => {
+    const unitConfig = createUnitVitestConfig({});
+    expect(normalizeConfigPaths(unitConfig.test?.setupFiles)).toEqual([
+      "test/setup.ts",
+      "test/setup-openclaw-runtime.ts",
+    ]);
+  });
+
+  it("appends extra exclude patterns instead of replacing the base unit excludes", () => {
+    const unitConfig = createUnitVitestConfigWithOptions(
+      {},
+      {
+        extraExcludePatterns: ["src/security/**"],
+      },
+    );
+    expect(unitConfig.test?.exclude).toEqual(
+      expect.arrayContaining(["src/commands/**", "src/config/**", "src/security/**"]),
+    );
+  });
+
+  it("keeps bundled unit include files out of the resolved exclude list", () => {
+    const unitConfig = createUnitVitestConfigWithOptions(
+      {},
+      {
+        includePatterns: [
+          "src/infra/matrix-plugin-helper.test.ts",
+          "src/plugin-sdk/facade-runtime.test.ts",
+          "src/plugins/loader.test.ts",
+        ],
+      },
+    );
+
+    expect(unitConfig.test?.include).toEqual([
+      "src/infra/matrix-plugin-helper.test.ts",
+      "src/plugin-sdk/facade-runtime.test.ts",
+      "src/plugins/loader.test.ts",
+    ]);
+    expect(unitConfig.test?.exclude).not.toEqual(
+      expect.arrayContaining([
+        "src/infra/**",
+        "src/plugin-sdk/**",
+        "src/plugins/**",
+        "src/infra/matrix-plugin-helper.test.ts",
+        "src/plugin-sdk/facade-runtime.test.ts",
+        "src/plugins/loader.test.ts",
+      ]),
+    );
   });
 });

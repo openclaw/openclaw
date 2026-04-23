@@ -1,5 +1,7 @@
 import { html, nothing } from "lit";
 import { normalizeToolName } from "../../../../src/agents/tool-policy-shared.js";
+import { t } from "../../i18n/index.ts";
+import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import type {
   SkillStatusEntry,
   SkillStatusReport,
@@ -52,12 +54,16 @@ function renderEffectiveToolBadge(tool: {
   channelId?: string;
 }) {
   if (tool.source === "plugin") {
-    return tool.pluginId ? `Connected: ${tool.pluginId}` : "Connected";
+    return tool.pluginId
+      ? t("agentTools.connectedSource", { id: tool.pluginId })
+      : t("agentTools.connected");
   }
   if (tool.source === "channel") {
-    return tool.channelId ? `Channel: ${tool.channelId}` : "Channel";
+    return tool.channelId
+      ? t("agentTools.channelSource", { id: tool.channelId })
+      : t("agentTools.channel");
   }
-  return "Built-in";
+  return t("agentTools.builtIn");
 }
 
 export function renderAgentTools(params: {
@@ -188,7 +194,7 @@ export function renderAgentTools(params: {
             ?disabled=${params.configLoading}
             @click=${params.onConfigReload}
           >
-            Reload Config
+            ${t("common.reloadConfig")}
           </button>
           <button
             class="btn btn--sm primary"
@@ -411,10 +417,12 @@ export function renderAgentSkills(params: {
   const usingAllowlist = allowlist !== undefined;
   const reportReady = Boolean(params.report && params.activeAgentId === params.agentId);
   const rawSkills = reportReady ? (params.report?.skills ?? []) : [];
-  const filter = params.filter.trim().toLowerCase();
+  const filter = normalizeLowercaseStringOrEmpty(params.filter);
   const filtered = filter
     ? rawSkills.filter((skill) =>
-        [skill.name, skill.description, skill.source].join(" ").toLowerCase().includes(filter),
+        normalizeLowercaseStringOrEmpty(
+          [skill.name, skill.description, skill.source].join(" "),
+        ).includes(filter),
       )
     : rawSkills;
   const groups = groupSkills(filtered);
@@ -468,10 +476,10 @@ export function renderAgentSkills(params: {
             ?disabled=${params.configLoading}
             @click=${params.onConfigReload}
           >
-            Reload Config
+            ${t("common.reloadConfig")}
           </button>
           <button class="btn btn--sm" ?disabled=${params.loading} @click=${params.onRefresh}>
-            ${params.loading ? "Loading…" : "Refresh"}
+            ${params.loading ? t("common.loading") : t("common.refresh")}
           </button>
           <button
             class="btn btn--sm primary"

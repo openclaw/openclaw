@@ -1,4 +1,5 @@
 import { prefixSystemMessage } from "../infra/system-message.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 const DEFAULT_THREAD_BINDING_FAREWELL_TEXT =
   "Session ended. Messages here will no longer be routed.";
@@ -32,8 +33,8 @@ export function resolveThreadBindingThreadName(params: {
   agentId?: string;
   label?: string;
 }): string {
-  const label = params.label?.trim();
-  const base = label || params.agentId?.trim() || "agent";
+  const label = normalizeOptionalString(params.label);
+  const base = label || normalizeOptionalString(params.agentId) || "agent";
   const raw = `🤖 ${base}`.replace(/\s+/g, " ").trim();
   return raw.slice(0, 100);
 }
@@ -46,12 +47,12 @@ export function resolveThreadBindingIntroText(params: {
   sessionCwd?: string;
   sessionDetails?: string[];
 }): string {
-  const label = params.label?.trim();
-  const base = label || params.agentId?.trim() || "agent";
+  const label = normalizeOptionalString(params.label);
+  const base = label || normalizeOptionalString(params.agentId) || "agent";
   const normalized = base.replace(/\s+/g, " ").trim().slice(0, 100) || "agent";
   const idleTimeoutMs = normalizeThreadBindingDurationMs(params.idleTimeoutMs);
   const maxAgeMs = normalizeThreadBindingDurationMs(params.maxAgeMs);
-  const cwd = params.sessionCwd?.trim();
+  const cwd = normalizeOptionalString(params.sessionCwd);
   const details = (params.sessionDetails ?? [])
     .map((entry) => entry.trim())
     .filter((entry) => entry.length > 0);
@@ -86,7 +87,7 @@ export function resolveThreadBindingFarewellText(params: {
   idleTimeoutMs: number;
   maxAgeMs: number;
 }): string {
-  const custom = params.farewellText?.trim();
+  const custom = normalizeOptionalString(params.farewellText);
   if (custom) {
     return prefixSystemMessage(custom);
   }

@@ -14,10 +14,14 @@ const getApiKeyForModelMock = vi.fn();
 const requireApiKeyMock = vi.fn();
 const resolveSessionAuthProfileOverrideMock = vi.fn();
 const getActiveEmbeddedRunSnapshotMock = vi.fn();
+const resolveSessionAgentIdMock = vi.fn();
+const resolveAgentWorkspaceDirMock = vi.fn();
+const prepareProviderRuntimeAuthMock = vi.fn();
 const diagDebugMock = vi.fn();
 
-vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
-  const original = await importOriginal<typeof import("@mariozechner/pi-ai")>();
+vi.mock("@mariozechner/pi-ai", async () => {
+  const original =
+    await vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai");
   return {
     ...original,
     streamSimple: (...args: unknown[]) => streamSimpleMock(...args),
@@ -25,6 +29,7 @@ vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
 });
 
 vi.mock("@mariozechner/pi-coding-agent", () => ({
+  generateSummary: vi.fn(async () => "summary"),
   SessionManager: {
     open: () => ({
       getLeafEntry: getLeafEntryMock,
@@ -57,6 +62,15 @@ vi.mock("./pi-embedded-runner/runs.js", () => ({
   getActiveEmbeddedRunSnapshot: (...args: unknown[]) => getActiveEmbeddedRunSnapshotMock(...args),
 }));
 
+vi.mock("./agent-scope.js", () => ({
+  resolveSessionAgentId: (...args: unknown[]) => resolveSessionAgentIdMock(...args),
+  resolveAgentWorkspaceDir: (...args: unknown[]) => resolveAgentWorkspaceDirMock(...args),
+}));
+
+vi.mock("../plugins/provider-runtime.js", () => ({
+  prepareProviderRuntimeAuth: (...args: unknown[]) => prepareProviderRuntimeAuthMock(...args),
+}));
+
 vi.mock("./auth-profiles/session-override.js", () => ({
   resolveSessionAuthProfileOverride: (...args: unknown[]) =>
     resolveSessionAuthProfileOverrideMock(...args),
@@ -72,7 +86,7 @@ const { runBtwSideQuestion } = await import("./btw.js");
 type RunBtwSideQuestionParams = Parameters<typeof runBtwSideQuestion>[0];
 
 const DEFAULT_AGENT_DIR = "/tmp/agent";
-const DEFAULT_MODEL = "claude-sonnet-4-5";
+const DEFAULT_MODEL = "claude-sonnet-4-6";
 const DEFAULT_PROVIDER = "anthropic";
 const DEFAULT_REASONING_LEVEL = "off";
 const DEFAULT_SESSION_KEY = "agent:main:main";
@@ -80,6 +94,15 @@ const DEFAULT_STORE_PATH = "/tmp/sessions.json";
 const DEFAULT_QUESTION = "What changed?";
 const MATH_QUESTION = "What is 17 * 19?";
 const MATH_ANSWER = "323";
+
+const DEFAULT_USAGE = {
+  input: 1,
+  output: 2,
+  cacheRead: 0,
+  cacheWrite: 0,
+  totalTokens: 3,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+};
 
 function makeAsyncEvents(events: unknown[]) {
   return {
@@ -100,52 +123,29 @@ function createSessionEntry(overrides: Partial<SessionEntry> = {}): SessionEntry
   };
 }
 
-function createDoneEvent(text: string) {
+function createAssistantDoneEvent(content: unknown[]) {
   return {
     type: "done",
     reason: "stop",
     message: {
       role: "assistant",
-      content: [{ type: "text", text }],
+      content,
       provider: DEFAULT_PROVIDER,
       api: "anthropic-messages",
       model: DEFAULT_MODEL,
       stopReason: "stop",
-      usage: {
-        input: 1,
-        output: 2,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 3,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
+      usage: DEFAULT_USAGE,
       timestamp: Date.now(),
     },
   };
 }
 
+function createDoneEvent(text: string) {
+  return createAssistantDoneEvent([{ type: "text", text }]);
+}
+
 function createThinkingOnlyDoneEvent(thinking: string) {
-  return {
-    type: "done",
-    reason: "stop",
-    message: {
-      role: "assistant",
-      content: [{ type: "thinking", thinking }],
-      provider: DEFAULT_PROVIDER,
-      api: "anthropic-messages",
-      model: DEFAULT_MODEL,
-      stopReason: "stop",
-      usage: {
-        input: 1,
-        output: 2,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 3,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
-      timestamp: Date.now(),
-    },
-  };
+  return createAssistantDoneEvent([{ type: "thinking", thinking }]);
 }
 
 function mockDoneAnswer(text: string) {
@@ -178,6 +178,85 @@ function clearBuiltSessionMessages() {
   buildSessionContextMock.mockReturnValue({ messages: [] });
 }
 
+function createUserTranscriptMessage(content: unknown[] = [{ type: "text", text: "seed" }]) {
+  return {
+    role: "user",
+    content,
+    timestamp: 1,
+  };
+}
+
+function createAssistantTranscriptMessage(
+  content: unknown,
+  overrides: {
+    stopReason?: string;
+    output?: number;
+    timestamp?: number;
+  } = {},
+) {
+  return {
+    role: "assistant",
+    content,
+    provider: DEFAULT_PROVIDER,
+    api: "anthropic-messages",
+    model: DEFAULT_MODEL,
+    stopReason: overrides.stopReason ?? "stop",
+    usage: {
+      ...DEFAULT_USAGE,
+      output: overrides.output ?? DEFAULT_USAGE.output,
+      totalTokens: 1 + (overrides.output ?? DEFAULT_USAGE.output),
+    },
+    timestamp: overrides.timestamp ?? 2,
+  };
+}
+
+function mockActiveTranscript(messages: unknown[]) {
+  getActiveEmbeddedRunSnapshotMock.mockReturnValue({
+    transcriptLeafId: "assistant-1",
+    messages,
+  });
+}
+
+async function runMathSideQuestionAndCaptureContext() {
+  mockDoneAnswer(MATH_ANSWER);
+  await runMathSideQuestion();
+  const [, context] = streamSimpleMock.mock.calls[0] ?? [];
+  return context;
+}
+
+function expectNoAssistantMessages(context: unknown) {
+  expect(
+    (context as { messages?: Array<{ role?: string }> }).messages?.filter(
+      (message) => message.role === "assistant",
+    ),
+  ).toHaveLength(0);
+}
+
+function expectSanitizedAssistantContext(context: unknown, text: string) {
+  expect(context).toMatchObject({
+    messages: [
+      expect.objectContaining({ role: "user" }),
+      expect.objectContaining({
+        role: "assistant",
+        content: [{ type: "text", text }],
+      }),
+      expect.objectContaining({ role: "user" }),
+    ],
+  });
+}
+
+function expectSeedOnlyUserContext(context: unknown) {
+  expect(context).toMatchObject({
+    messages: [
+      expect.objectContaining({
+        role: "user",
+        content: [{ type: "text", text: "seed" }],
+      }),
+      expect.objectContaining({ role: "user" }),
+    ],
+  });
+}
+
 describe("runBtwSideQuestion", () => {
   beforeEach(() => {
     streamSimpleMock.mockReset();
@@ -193,6 +272,9 @@ describe("runBtwSideQuestion", () => {
     requireApiKeyMock.mockReset();
     resolveSessionAuthProfileOverrideMock.mockReset();
     getActiveEmbeddedRunSnapshotMock.mockReset();
+    resolveSessionAgentIdMock.mockReset();
+    resolveAgentWorkspaceDirMock.mockReset();
+    prepareProviderRuntimeAuthMock.mockReset();
     diagDebugMock.mockReset();
 
     buildSessionContextMock.mockReturnValue({
@@ -201,13 +283,16 @@ describe("runBtwSideQuestion", () => {
     getLeafEntryMock.mockReturnValue(null);
     resolveModelWithRegistryMock.mockReturnValue({
       provider: "anthropic",
-      id: "claude-sonnet-4-5",
+      id: "claude-sonnet-4-6",
       api: "anthropic-messages",
     });
     getApiKeyForModelMock.mockResolvedValue({ apiKey: "secret", mode: "api-key", source: "test" });
     requireApiKeyMock.mockReturnValue("secret");
     resolveSessionAuthProfileOverrideMock.mockResolvedValue("profile-1");
     getActiveEmbeddedRunSnapshotMock.mockReturnValue(undefined);
+    resolveSessionAgentIdMock.mockReturnValue("main");
+    resolveAgentWorkspaceDirMock.mockReturnValue("/tmp/workspace");
+    prepareProviderRuntimeAuthMock.mockResolvedValue(undefined);
   });
 
   it("streams blocks without persisting BTW data to disk", async () => {
@@ -221,7 +306,7 @@ describe("runBtwSideQuestion", () => {
             role: "assistant",
             content: [],
             provider: "anthropic",
-            model: "claude-sonnet-4-5",
+            model: "claude-sonnet-4-6",
           },
         },
         {
@@ -232,7 +317,7 @@ describe("runBtwSideQuestion", () => {
             role: "assistant",
             content: [],
             provider: "anthropic",
-            model: "claude-sonnet-4-5",
+            model: "claude-sonnet-4-6",
           },
         },
         {
@@ -243,7 +328,7 @@ describe("runBtwSideQuestion", () => {
             content: [{ type: "text", text: "Side answer." }],
             provider: "anthropic",
             api: "anthropic-messages",
-            model: "claude-sonnet-4-5",
+            model: "claude-sonnet-4-6",
             stopReason: "stop",
             usage: {
               input: 1,
@@ -294,6 +379,103 @@ describe("runBtwSideQuestion", () => {
     const result = await runSideQuestion();
 
     expect(result).toEqual({ text: "Final answer." });
+  });
+
+  it("applies provider runtime auth before streaming github-copilot BTW questions", async () => {
+    resolveModelWithRegistryMock.mockReturnValue({
+      provider: "github-copilot",
+      id: "gpt-5.4",
+      api: "openai-responses",
+      baseUrl: "https://api.individual.githubcopilot.com",
+    });
+    getApiKeyForModelMock.mockResolvedValue({
+      apiKey: "github-token",
+      mode: "token",
+      source: "profile",
+      profileId: "github-copilot:github",
+    });
+    requireApiKeyMock.mockReturnValue("github-token");
+    prepareProviderRuntimeAuthMock.mockResolvedValue({
+      apiKey: "copilot-runtime-token",
+      baseUrl: "https://api.enterprise.githubcopilot.com",
+    });
+    mockDoneAnswer("Copilot answer.");
+
+    const result = await runSideQuestion({
+      provider: "github-copilot",
+      model: "gpt-5.4",
+    });
+
+    expect(result).toEqual({ text: "Copilot answer." });
+    expect(prepareProviderRuntimeAuthMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "github-copilot",
+        workspaceDir: "/tmp/workspace",
+        context: expect.objectContaining({
+          provider: "github-copilot",
+          modelId: "gpt-5.4",
+          workspaceDir: "/tmp/workspace",
+          apiKey: "github-token",
+          authMode: "token",
+          profileId: "profile-1",
+        }),
+      }),
+    );
+    expect(streamSimpleMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "github-copilot",
+        id: "gpt-5.4",
+        baseUrl: "https://api.enterprise.githubcopilot.com",
+      }),
+      expect.anything(),
+      expect.objectContaining({ apiKey: "copilot-runtime-token" }),
+    );
+  });
+
+  it("strips injected empty tools arrays from BTW payloads before sending", async () => {
+    mockDoneAnswer("Final answer.");
+
+    await runSideQuestion();
+
+    const [, , options] = streamSimpleMock.mock.calls[0] ?? [];
+    const onPayload = (options as { onPayload?: (payload: unknown) => void })?.onPayload;
+    const payloadWithEmptyTools = { messages: [], tools: [] as unknown[] };
+
+    const result = onPayload?.(payloadWithEmptyTools);
+
+    expect(payloadWithEmptyTools).not.toHaveProperty("tools");
+    expect(result).toBeUndefined();
+  });
+
+  it("allows Bedrock /btw runs to proceed without a static api key in aws-sdk mode", async () => {
+    resolveModelWithRegistryMock.mockReturnValue({
+      provider: "amazon-bedrock",
+      id: "us.anthropic.claude-sonnet-4-5-v1:0",
+      api: "anthropic-messages",
+    });
+    getApiKeyForModelMock.mockResolvedValue({
+      apiKey: undefined,
+      mode: "aws-sdk",
+      source: "aws-sdk default chain",
+    });
+    streamSimpleMock.mockReturnValue(makeAsyncEvents([createDoneEvent("Bedrock answer.")]));
+
+    const result = await runBtwSideQuestion({
+      cfg: {} as never,
+      agentDir: DEFAULT_AGENT_DIR,
+      provider: "amazon-bedrock",
+      model: "us.anthropic.claude-sonnet-4-5-v1:0",
+      question: DEFAULT_QUESTION,
+      sessionEntry: createSessionEntry(),
+      resolvedReasoningLevel: DEFAULT_REASONING_LEVEL,
+      opts: {},
+      isNewSession: false,
+    });
+
+    expect(result).toEqual({ text: "Bedrock answer." });
+    expect(requireApiKeyMock).not.toHaveBeenCalled();
+    const [, , options] = streamSimpleMock.mock.calls.at(-1) ?? [];
+    expect((options as { apiKey?: string } | undefined)?.apiKey).toBeUndefined();
   });
 
   it("forces provider reasoning off even when the session think level is adaptive", async () => {
@@ -497,27 +679,20 @@ describe("runBtwSideQuestion", () => {
   });
 
   it("excludes tool results from BTW context to avoid replaying raw tool output", async () => {
-    getActiveEmbeddedRunSnapshotMock.mockReturnValue({
-      transcriptLeafId: "assistant-1",
-      messages: [
-        {
-          role: "user",
-          content: [{ type: "text", text: "seed" }],
-          timestamp: 1,
-        },
-        {
-          role: "toolResult",
-          content: [{ type: "text", text: "sensitive tool output" }],
-          details: { raw: "secret" },
-          timestamp: 2,
-        },
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "done" }],
-          timestamp: 3,
-        },
-      ],
-    });
+    mockActiveTranscript([
+      createUserTranscriptMessage(),
+      {
+        role: "toolResult",
+        content: [{ type: "text", text: "sensitive tool output" }],
+        details: { raw: "secret" },
+        timestamp: 2,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "done" }],
+        timestamp: 3,
+      },
+    ]);
     mockDoneAnswer(MATH_ANSWER);
 
     await runMathSideQuestion();
@@ -533,5 +708,144 @@ describe("runBtwSideQuestion", () => {
     expect((context as { messages?: Array<{ role?: string }> }).messages).not.toEqual(
       expect.arrayContaining([expect.objectContaining({ role: "toolResult" })]),
     );
+  });
+
+  it("strips assistant tool calls from BTW context so no-tool side questions stay tool-free", async () => {
+    mockActiveTranscript([
+      createUserTranscriptMessage(),
+      createAssistantTranscriptMessage(
+        [
+          { type: "text", text: "Let me check." },
+          { type: "toolCall", id: "call_1", name: "read", arguments: { path: "README.md" } },
+          { type: "toolUse", id: "call_legacy", name: "read", input: { path: "README.md" } },
+          { type: "tool_call", id: "call_snake", name: "read", arguments: { path: "README.md" } },
+        ],
+        { stopReason: "toolUse" },
+      ),
+    ]);
+    mockDoneAnswer(MATH_ANSWER);
+
+    await runMathSideQuestion();
+
+    const [, context] = streamSimpleMock.mock.calls[0] ?? [];
+    expectSanitizedAssistantContext(context, "Let me check.");
+    expect(
+      (context as { messages?: Array<{ role?: string; content?: Array<{ type?: string }> }> })
+        .messages,
+    ).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: "assistant",
+          content: expect.arrayContaining([
+            expect.objectContaining({ type: "toolCall" }),
+            expect.objectContaining({ type: "toolUse" }),
+            expect.objectContaining({ type: "tool_call" }),
+          ]),
+        }),
+      ]),
+    );
+  });
+
+  it("drops assistant messages that contain only tool calls", async () => {
+    mockActiveTranscript([
+      createUserTranscriptMessage(),
+      createAssistantTranscriptMessage(
+        [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
+        { stopReason: "toolUse", output: 0 },
+      ),
+    ]);
+
+    const context = await runMathSideQuestionAndCaptureContext();
+
+    expectNoAssistantMessages(context);
+  });
+
+  it("strips embedded user tool results from BTW context", async () => {
+    mockActiveTranscript([
+      createUserTranscriptMessage([
+        { type: "text", text: "seed" },
+        {
+          type: "toolResult",
+          toolUseId: "call_1",
+          content: [{ type: "text", text: "secret" }],
+        },
+        {
+          type: "tool_result",
+          toolUseId: "call_2",
+          content: [{ type: "text", text: "secret-2" }],
+        },
+      ]),
+    ]);
+
+    const context = await runMathSideQuestionAndCaptureContext();
+    expectSeedOnlyUserContext(context);
+  });
+
+  it("drops assistant thinking blocks from BTW context", async () => {
+    mockActiveTranscript([
+      createUserTranscriptMessage(),
+      createAssistantTranscriptMessage(
+        [
+          { type: "text", text: "Visible answer" },
+          { type: "thinking", thinking: "Hidden chain of thought" },
+        ],
+        { output: 1 },
+      ),
+    ]);
+
+    const context = await runMathSideQuestionAndCaptureContext();
+
+    expectSanitizedAssistantContext(context, "Visible answer");
+    expect(
+      (context as { messages?: Array<{ role?: string; content?: Array<{ type?: string }> }> })
+        .messages,
+    ).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: "assistant",
+          content: expect.arrayContaining([expect.objectContaining({ type: "thinking" })]),
+        }),
+      ]),
+    );
+  });
+
+  it("drops thinking-only assistant messages from BTW context", async () => {
+    mockActiveTranscript([
+      createUserTranscriptMessage(),
+      createAssistantTranscriptMessage(
+        [{ type: "thinking", thinking: "Hidden chain of thought" }],
+        { output: 1 },
+      ),
+    ]);
+
+    const context = await runMathSideQuestionAndCaptureContext();
+
+    expectNoAssistantMessages(context);
+  });
+
+  it("drops malformed user image blocks from BTW context", async () => {
+    mockActiveTranscript([
+      createUserTranscriptMessage([
+        { type: "text", text: "seed" },
+        { type: "image", mimeType: "image/png" },
+      ]),
+    ]);
+
+    const context = await runMathSideQuestionAndCaptureContext();
+    expectSeedOnlyUserContext(context);
+  });
+
+  it("normalizes malformed assistant content before stripping tool blocks", async () => {
+    mockActiveTranscript([
+      createUserTranscriptMessage(),
+      createAssistantTranscriptMessage(
+        { type: "toolCall", id: "call_1", name: "read", arguments: {} },
+        { stopReason: "toolUse", output: 0 },
+      ),
+    ]);
+
+    const context = await runMathSideQuestionAndCaptureContext();
+
+    expectNoAssistantMessages(context);
   });
 });

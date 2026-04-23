@@ -43,6 +43,7 @@ export async function sanitizeSessionMessagesImages(
   options?: {
     sanitizeMode?: "full" | "images-only";
     sanitizeToolCallIds?: boolean;
+    preserveNativeAnthropicToolUseIds?: boolean;
     /**
      * Mode for tool call ID sanitization:
      * - "strict" (alphanumeric only)
@@ -66,7 +67,9 @@ export async function sanitizeSessionMessagesImages(
   // We sanitize historical session messages because Anthropic can reject a request
   // if the transcript contains oversized base64 images (default max side 1200px).
   const sanitizedIds = shouldSanitizeToolCallIds
-    ? sanitizeToolCallIdsForCloudCodeAssist(messages, options.toolCallIdMode)
+    ? sanitizeToolCallIdsForCloudCodeAssist(messages, options.toolCallIdMode, {
+        preserveNativeAnthropicToolUseIds: options?.preserveNativeAnthropicToolUseIds,
+      })
     : messages;
   const out: AgentMessage[] = [];
   for (const msg of sanitizedIds) {
@@ -120,18 +123,18 @@ export async function sanitizeSessionMessagesImages(
       }
       const content = assistantMsg.content;
       if (Array.isArray(content)) {
+        const strippedContent = options?.preserveSignatures
+          ? content // Keep signatures for Antigravity Claude
+          : stripThoughtSignatures(content, options?.sanitizeThoughtSignatures); // Strip for Gemini
         if (!allowNonImageSanitization) {
           const nextContent = (await sanitizeContentBlocksImages(
-            content as unknown as ContentBlock[],
+            strippedContent as unknown as ContentBlock[],
             label,
             imageSanitization,
           )) as unknown as typeof assistantMsg.content;
           out.push({ ...assistantMsg, content: nextContent });
           continue;
         }
-        const strippedContent = options?.preserveSignatures
-          ? content // Keep signatures for Antigravity Claude
-          : stripThoughtSignatures(content, options?.sanitizeThoughtSignatures); // Strip for Gemini
 
         const filteredContent =
           options?.preserveSignatures &&

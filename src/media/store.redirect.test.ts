@@ -1,13 +1,15 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinnedLookup } from "../infra/net/ssrf.js";
+import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { captureEnv } from "../test-utils/env.js";
 import { saveMediaSource, setMediaStoreNetworkDepsForTest } from "./store.js";
 
-const HOME = path.join(os.tmpdir(), "openclaw-home-redirect");
+const homeRootTracker = createSuiteTempRootTracker({
+  prefix: "openclaw-home-redirect-",
+});
 const mockRequest = vi.fn();
 
 function createMockHttpExchange() {
@@ -59,13 +61,24 @@ function mockSuccessfulTextExchange(params: { text: string; contentType: string 
   };
 }
 
+function getRequestHeaders(callIndex: number): Headers {
+  const [, options] = mockRequest.mock.calls[callIndex] as [
+    URL,
+    { headers?: HeadersInit | Record<string, string> } | undefined,
+  ];
+  return new Headers(options?.headers);
+}
+
 async function expectRedirectSaveResult(params: {
   expectedText: string;
   expectedContentType: string;
   expectedExtension: string;
+  headers?: Record<string, string>;
+  assertRequests?: () => void;
 }) {
-  const saved = await saveMediaSource("https://example.com/start");
+  const saved = await saveMediaSource("https://example.com/start", params.headers);
   expect(mockRequest).toHaveBeenCalledTimes(2);
+  params.assertRequests?.();
   expect(saved.contentType).toBe(params.expectedContentType);
   expect(path.extname(saved.path)).toBe(params.expectedExtension);
   expect(await fs.readFile(saved.path, "utf8")).toBe(params.expectedText);
@@ -81,11 +94,13 @@ async function expectRedirectSaveFailure(expectedMessage: string) {
 
 describe("media store redirects", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
+  let home = "";
 
   beforeAll(async () => {
     envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
-    await fs.rm(HOME, { recursive: true, force: true });
-    process.env.OPENCLAW_STATE_DIR = HOME;
+    await homeRootTracker.setup();
+    home = await homeRootTracker.make("state");
+    process.env.OPENCLAW_STATE_DIR = home;
   });
 
   beforeEach(() => {
@@ -102,7 +117,8 @@ describe("media store redirects", () => {
   });
 
   afterAll(async () => {
-    await fs.rm(HOME, { recursive: true, force: true });
+    await homeRootTracker.cleanup();
+    home = "";
     envSnapshot.restore();
     setMediaStoreNetworkDepsForTest();
     vi.clearAllMocks();
@@ -131,6 +147,66 @@ describe("media store redirects", () => {
       expectedContentType: "text/plain",
       expectedExtension: ".txt",
     });
+  });
+
+  it("strips sensitive headers when a redirect crosses origins", async () => {
+    let call = 0;
+    mockRequest.mockImplementation((_url, _opts, cb) => {
+      call += 1;
+      if (call === 1) {
+        const exchange = mockRedirectExchange({ location: "https://cdn.example.com/final" });
+        exchange.send(cb);
+        return exchange.req;
+      }
+
+      const exchange = mockSuccessfulTextExchange({
+        text: "redirected",
+        contentType: "text/plain",
+      });
+      exchange.send(cb);
+      return exchange.req;
+    });
+
+    await saveMediaSource("https://example.com/start", {
+      Authorization: "Bearer secret",
+      Cookie: "session=abc",
+      "X-Api-Key": "custom-secret",
+      Accept: "text/plain",
+      "User-Agent": "OpenClaw-Test/1.0",
+    });
+
+    expect(mockRequest).toHaveBeenCalledTimes(2);
+    const secondHeaders = getRequestHeaders(1);
+    expect(secondHeaders.get("authorization")).toBeNull();
+    expect(secondHeaders.get("cookie")).toBeNull();
+    expect(secondHeaders.get("x-api-key")).toBeNull();
+    expect(secondHeaders.get("accept")).toBe("text/plain");
+    expect(secondHeaders.get("user-agent")).toBe("OpenClaw-Test/1.0");
+  });
+
+  it("keeps headers when a redirect stays on the same origin", async () => {
+    let call = 0;
+    mockRequest.mockImplementation((_url, _opts, cb) => {
+      call += 1;
+      if (call === 1) {
+        const exchange = mockRedirectExchange({ location: "/final" });
+        exchange.send(cb);
+        return exchange.req;
+      }
+
+      const exchange = mockSuccessfulTextExchange({
+        text: "redirected",
+        contentType: "text/plain",
+      });
+      exchange.send(cb);
+      return exchange.req;
+    });
+
+    await saveMediaSource("https://example.com/start", {
+      Authorization: "Bearer secret",
+    });
+
+    expect(getRequestHeaders(1).get("authorization")).toBe("Bearer secret");
   });
 
   it("fails when redirect response omits location header", async () => {

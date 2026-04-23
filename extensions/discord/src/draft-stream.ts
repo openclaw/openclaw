@@ -1,6 +1,7 @@
 import type { RequestClient } from "@buape/carbon";
 import { Routes } from "discord-api-types/v10";
 import { createFinalizableDraftLifecycle } from "openclaw/plugin-sdk/channel-lifecycle";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
 /** Discord messages cap at 2000 characters. */
 const DISCORD_STREAM_MAX_CHARS = 2000;
@@ -98,9 +99,7 @@ export function createDiscordDraftStream(params: {
       return true;
     } catch (err) {
       streamState.stopped = true;
-      params.warn?.(
-        `discord stream preview failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      params.warn?.(`discord stream preview failed: ${formatErrorMessage(err)}`);
       return false;
     }
   };

@@ -9,7 +9,7 @@ import {
   applyProviderConfigWithDefaultModels,
   applyProviderConfigWithModelCatalog,
   withAgentModelAliases,
-} from "../plugins/provider-onboarding-config.js";
+} from "../plugin-sdk/provider-onboard.js";
 
 function makeModel(id: string): ModelDefinitionConfig {
   return {

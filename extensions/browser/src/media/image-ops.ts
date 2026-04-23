@@ -3,4 +3,4 @@ export {
   buildImageResizeSideGrid,
   getImageMetadata,
   resizeToJpeg,
-} from "openclaw/plugin-sdk/browser-support";
+} from "openclaw/plugin-sdk/browser-setup-tools";

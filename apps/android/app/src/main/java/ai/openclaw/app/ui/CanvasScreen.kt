@@ -56,10 +56,10 @@ fun CanvasScreen(viewModel: MainViewModel, visible: Boolean, modifier: Modifier 
         settings.builtInZoomControls = false
         settings.displayZoomControls = false
         settings.setSupportZoom(false)
+        // targetSdk 33+ ignores Force Dark APIs, so only opt out through the supported
+        // algorithmic darkening flag when this WebView implementation exposes it.
         if (WebViewFeature.isFeatureSupported(WebViewFeature.ALGORITHMIC_DARKENING)) {
           WebSettingsCompat.setAlgorithmicDarkeningAllowed(settings, false)
-        } else {
-          disableForceDarkIfSupported(settings)
         }
         if (isDebuggable) {
           Log.d("OpenClawWebView", "userAgent: ${settings.userAgentString}")
@@ -157,13 +157,7 @@ fun CanvasScreen(viewModel: MainViewModel, visible: Boolean, modifier: Modifier 
   )
 }
 
-private fun disableForceDarkIfSupported(settings: WebSettings) {
-  if (!WebViewFeature.isFeatureSupported(WebViewFeature.FORCE_DARK)) return
-  @Suppress("DEPRECATION")
-  WebSettingsCompat.setForceDark(settings, WebSettingsCompat.FORCE_DARK_OFF)
-}
-
-private class CanvasA2UIActionBridge(
+internal class CanvasA2UIActionBridge(
   private val isTrustedPage: () -> Boolean,
   private val onMessage: (String) -> Unit,
 ) {

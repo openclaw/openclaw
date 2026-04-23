@@ -1,25 +1,23 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import {
+  cleanupTrackedTempDirs,
+  makeTrackedTempDir,
+  mkdirSafeDir,
+} from "./test-helpers/fs-fixtures.js";
 
 const tempRoots: string[] = [];
 
 function makeTempDir() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-loader-"));
-  tempRoots.push(dir);
-  return dir;
+  return makeTrackedTempDir("openclaw-plugin-loader", tempRoots);
 }
 
-function mkdirSafe(dir: string) {
-  fs.mkdirSync(dir, { recursive: true });
-}
+const mkdirSafe = mkdirSafeDir;
 
 afterEach(() => {
-  for (const dir of tempRoots.splice(0)) {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
+  cleanupTrackedTempDirs(tempRoots);
 });
 
 describe("plugin loader git path regression", () => {

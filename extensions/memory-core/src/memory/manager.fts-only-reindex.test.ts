@@ -28,12 +28,12 @@ describe("memory manager FTS-only reindex", () => {
   let closeAllMemorySearchManagers: MemoryIndexModule["closeAllMemorySearchManagers"];
 
   beforeAll(async () => {
+    vi.resetModules();
+    ({ getMemorySearchManager, closeAllMemorySearchManagers } = await import("./index.js"));
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-fts-only-"));
   });
 
   beforeEach(async () => {
-    vi.resetModules();
-    ({ getMemorySearchManager, closeAllMemorySearchManagers } = await import("./index.js"));
     workspaceDir = path.join(fixtureRoot, `case-${caseId++}`);
     await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
     await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "Alpha topic\n\nKeep this note.");
@@ -50,9 +50,11 @@ describe("memory manager FTS-only reindex", () => {
 
   afterAll(async () => {
     if (!fixtureRoot) {
+      vi.resetModules();
       return;
     }
     await fs.rm(fixtureRoot, { recursive: true, force: true });
+    vi.resetModules();
   });
 
   async function createManager(): Promise<MemoryIndexManager> {

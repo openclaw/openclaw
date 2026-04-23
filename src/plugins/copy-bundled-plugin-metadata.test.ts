@@ -318,6 +318,30 @@ describe("copyBundledPluginMetadata", () => {
     expect(fs.existsSync(staleDistDir)).toBe(false);
   });
 
+  it("removes non-packaged private QA plugin metadata unless private QA build is enabled", () => {
+    const repoRoot = makeRepoRoot("openclaw-private-qa-metadata-");
+    createPlugin(repoRoot, {
+      id: "qa-lab",
+      packageName: "@openclaw/qa-lab",
+      packageOpenClaw: { extensions: ["./index.ts"] },
+    });
+    const staleDistDir = path.join(repoRoot, "dist", "extensions", "qa-lab");
+    fs.mkdirSync(staleDistDir, { recursive: true });
+    fs.writeFileSync(path.join(staleDistDir, "runtime-api.js"), "export {};\n", "utf8");
+
+    copyBundledPluginMetadataWithEnv({ repoRoot, env: {} });
+
+    expect(fs.existsSync(staleDistDir)).toBe(false);
+
+    copyBundledPluginMetadataWithEnv({
+      repoRoot,
+      env: { OPENCLAW_BUILD_PRIVATE_QA: "1" } as NodeJS.ProcessEnv,
+    });
+
+    expect(fs.existsSync(path.join(staleDistDir, "openclaw.plugin.json"))).toBe(true);
+    expect(fs.existsSync(path.join(staleDistDir, "package.json"))).toBe(true);
+  });
+
   it.each([
     {
       name: "skips metadata for optional bundled clusters only when explicitly disabled",
@@ -349,5 +373,53 @@ describe("copyBundledPluginMetadata", () => {
     copyBundledPluginMetadataWithEnv({ repoRoot, env });
 
     expect(fs.existsSync(path.join(repoRoot, "dist", "extensions", pluginId))).toBe(expectedExists);
+  });
+
+  it("preserves manifest-less runtime support package outputs and copies package metadata", () => {
+    const repoRoot = makeRepoRoot("openclaw-bundled-runtime-support-");
+    const pluginDir = path.join(repoRoot, "extensions", "image-generation-core");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    writeJson(path.join(pluginDir, "package.json"), {
+      name: "@openclaw/image-generation-core",
+      version: "0.0.1",
+      private: true,
+      type: "module",
+    });
+    fs.writeFileSync(path.join(pluginDir, "runtime-api.ts"), "export {};\n", "utf8");
+    fs.mkdirSync(path.join(repoRoot, "dist", "extensions", "image-generation-core"), {
+      recursive: true,
+    });
+    fs.writeFileSync(
+      path.join(repoRoot, "dist", "extensions", "image-generation-core", "runtime-api.js"),
+      "export {};\n",
+      "utf8",
+    );
+
+    copyBundledPluginMetadata({ repoRoot });
+
+    expect(fs.existsSync(path.join(repoRoot, "dist", "extensions", "image-generation-core"))).toBe(
+      true,
+    );
+    expect(
+      fs.existsSync(
+        path.join(repoRoot, "dist", "extensions", "image-generation-core", "runtime-api.js"),
+      ),
+    ).toBe(true);
+    expect(
+      fs.existsSync(
+        path.join(repoRoot, "dist", "extensions", "image-generation-core", "openclaw.plugin.json"),
+      ),
+    ).toBe(false);
+    expect(
+      JSON.parse(
+        fs.readFileSync(
+          path.join(repoRoot, "dist", "extensions", "image-generation-core", "package.json"),
+          "utf8",
+        ),
+      ),
+    ).toMatchObject({
+      name: "@openclaw/image-generation-core",
+      type: "module",
+    });
   });
 });

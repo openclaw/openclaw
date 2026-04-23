@@ -1,6 +1,22 @@
 import { describe, expect, it, vi } from "vitest";
+import { setMatrixRuntime } from "../../runtime.js";
 import type { MatrixClient } from "../sdk.js";
-import { readMatrixMessages } from "./messages.js";
+import * as sendModule from "../send.js";
+import { editMatrixMessage, readMatrixMessages } from "./messages.js";
+
+function installMatrixActionTestRuntime(): void {
+  setMatrixRuntime({
+    config: {
+      loadConfig: () => ({}),
+    },
+    channel: {
+      text: {
+        resolveMarkdownTableMode: () => "code",
+        convertMarkdownTables: (text: string) => text,
+      },
+    },
+  } as unknown as import("../../runtime-api.js").PluginRuntime);
+}
 
 function createPollResponseEvent(): Record<string, unknown> {
   return {
@@ -49,7 +65,7 @@ function createMessagesClient(params: {
   }));
   const hydrateEvents = vi.fn(
     async (_roomId: string, _events: Array<Record<string, unknown>>) =>
-      (params.hydratedChunk ?? params.chunk) as any,
+      (params.hydratedChunk ?? params.chunk) as unknown,
   );
   const getEvent = vi.fn(async () => params.pollRoot ?? null);
   const getRelations = vi.fn(async () => ({
@@ -73,7 +89,95 @@ function createMessagesClient(params: {
   };
 }
 
+function createEditClient(originalContent: Record<string, unknown>) {
+  const sendMessage = vi.fn().mockResolvedValue("evt-edit");
+  const client = {
+    getEvent: vi.fn().mockResolvedValue({ content: originalContent }),
+    getJoinedRoomMembers: vi.fn().mockResolvedValue([]),
+    getUserId: vi.fn().mockResolvedValue("@bot:example.org"),
+    sendMessage,
+    prepareForOneOff: vi.fn(async () => undefined),
+    start: vi.fn(async () => undefined),
+    stop: vi.fn(() => undefined),
+    stopAndPersist: vi.fn(async () => undefined),
+  } as unknown as MatrixClient;
+
+  return { client, sendMessage };
+}
+
 describe("matrix message actions", () => {
+  it("forwards timeoutMs to the shared Matrix edit helper", async () => {
+    const editSpy = vi.spyOn(sendModule, "editMessageMatrix").mockResolvedValue("evt-edit");
+
+    try {
+      const result = await editMatrixMessage("!room:example.org", "$original", "hello", {
+        timeoutMs: 12_345,
+      });
+
+      expect(result).toEqual({ eventId: "evt-edit" });
+      expect(editSpy).toHaveBeenCalledWith("!room:example.org", "$original", "hello", {
+        cfg: undefined,
+        accountId: undefined,
+        client: undefined,
+        timeoutMs: 12_345,
+      });
+    } finally {
+      editSpy.mockRestore();
+    }
+  });
+
+  it("routes edits through the shared Matrix edit helper so mentions are preserved", async () => {
+    installMatrixActionTestRuntime();
+    const { client, sendMessage } = createEditClient({
+      body: "hello @alice:example.org",
+      "m.mentions": { user_ids: ["@alice:example.org"] },
+    });
+
+    const result = await editMatrixMessage(
+      "!room:example.org",
+      "$original",
+      "hello @alice:example.org and @bob:example.org",
+      { client },
+    );
+
+    expect(result).toEqual({ eventId: "evt-edit" });
+    expect(sendMessage).toHaveBeenCalledWith(
+      "!room:example.org",
+      expect.objectContaining({
+        "m.mentions": { user_ids: ["@bob:example.org"] },
+        "m.new_content": expect.objectContaining({
+          "m.mentions": { user_ids: ["@alice:example.org", "@bob:example.org"] },
+        }),
+      }),
+    );
+  });
+
+  it("does not re-notify legacy mentions when action edits target pre-m.mentions messages", async () => {
+    installMatrixActionTestRuntime();
+    const { client, sendMessage } = createEditClient({
+      body: "hello @alice:example.org",
+    });
+
+    const result = await editMatrixMessage(
+      "!room:example.org",
+      "$original",
+      "hello again @alice:example.org",
+      { client },
+    );
+
+    expect(result).toEqual({ eventId: "evt-edit" });
+    expect(sendMessage).toHaveBeenCalledWith(
+      "!room:example.org",
+      expect.objectContaining({
+        "m.mentions": {},
+        "m.new_content": expect.objectContaining({
+          body: "hello again @alice:example.org",
+          "m.mentions": { user_ids: ["@alice:example.org"] },
+        }),
+      }),
+    );
+  });
+
   it("includes poll snapshots when reading message history", async () => {
     const { client, doRequest, getEvent, getRelations } = createMessagesClient({
       chunk: [

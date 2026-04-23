@@ -273,7 +273,7 @@ describe("TwilioProvider", () => {
       }),
     ).resolves.toBeUndefined();
     expect(apiRequest).toHaveBeenCalledTimes(1);
-    const call = apiRequest.mock.calls[0]!;
+    const call = apiRequest.mock.calls[0];
     const endpoint = call[0];
     const params = call[1] as { Twiml?: string };
     expect(endpoint).toBe("/Calls/CA-nostream.json");

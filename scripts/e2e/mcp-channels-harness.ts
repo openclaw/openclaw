@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { mkdirSync, writeFileSync } from "node:fs";
 import process from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -6,7 +7,9 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { WebSocket } from "ws";
 import { z } from "zod";
 import { PROTOCOL_VERSION } from "../../src/gateway/protocol/index.ts";
+import { formatErrorMessage } from "../../src/infra/errors.ts";
 import { rawDataToString } from "../../src/infra/ws.ts";
+import { readStringValue } from "../../src/shared/string-coerce.ts";
 
 export const ClaudeChannelNotificationSchema = z.object({
   method: z.literal("notifications/claude/channel"),
@@ -38,6 +41,9 @@ export type McpClientHandle = {
   rawMessages: unknown[];
 };
 
+const GATEWAY_WS_TIMEOUT_MS = 30_000;
+const GATEWAY_CONNECT_RETRY_WINDOW_MS = 45_000;
+
 export function assert(condition: unknown, message: string): asserts condition {
   if (!condition) {
     throw new Error(message);
@@ -62,8 +68,7 @@ export function extractTextFromGatewayPayload(
   if (!first || typeof first !== "object") {
     return undefined;
   }
-  const text = (first as { text?: unknown }).text;
-  return typeof text === "string" ? text : undefined;
+  return readStringValue((first as { text?: unknown }).text);
 }
 
 export async function waitFor<T>(
@@ -86,9 +91,36 @@ export async function connectGateway(params: {
   url: string;
   token: string;
 }): Promise<GatewayRpcClient> {
+  const startedAt = Date.now();
+  let attempt = 0;
+  let lastError: Error | null = null;
+
+  while (Date.now() - startedAt < GATEWAY_CONNECT_RETRY_WINDOW_MS) {
+    attempt += 1;
+    try {
+      return await connectGatewayOnce(params);
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      if (!isRetryableGatewayConnectError(lastError)) {
+        throw lastError;
+      }
+      await delay(Math.min(500 * attempt, 2_000));
+    }
+  }
+
+  throw lastError ?? new Error("gateway ws open timeout");
+}
+
+async function connectGatewayOnce(params: {
+  url: string;
+  token: string;
+}): Promise<GatewayRpcClient> {
   const ws = new WebSocket(params.url);
   await new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error("gateway ws open timeout")), 10_000);
+    const timeout = setTimeout(
+      () => reject(new Error("gateway ws open timeout")),
+      GATEWAY_WS_TIMEOUT_MS,
+    );
     timeout.unref?.();
     ws.once("open", () => {
       clearTimeout(timeout);
@@ -196,7 +228,7 @@ export async function connectGateway(params: {
     const timeout = setTimeout(() => {
       pending.delete(connectId);
       reject(new Error("gateway connect timeout"));
-    }, 10_000);
+    }, GATEWAY_WS_TIMEOUT_MS);
     timeout.unref?.();
     pending.set(connectId, {
       resolve: () => {
@@ -215,7 +247,7 @@ export async function connectGateway(params: {
     const timeout = setTimeout(() => {
       pending.delete(id);
       reject(new Error("gateway sessions.subscribe timeout"));
-    }, 10_000);
+    }, GATEWAY_WS_TIMEOUT_MS);
     timeout.unref?.();
     pending.set(id, {
       resolve: () => {
@@ -284,10 +316,25 @@ export async function connectGateway(params: {
   };
 }
 
+function isRetryableGatewayConnectError(error: Error): boolean {
+  const message = error.message.toLowerCase();
+  return (
+    message.includes("gateway ws open timeout") ||
+    message.includes("gateway connect timeout") ||
+    message.includes("gateway closed") ||
+    message.includes("econnrefused") ||
+    message.includes("socket hang up")
+  );
+}
+
 export async function connectMcpClient(params: {
   gatewayUrl: string;
   gatewayToken: string;
 }): Promise<McpClientHandle> {
+  const tokenDir = "/tmp/openclaw-mcp-client";
+  const tokenFile = `${tokenDir}/gateway.token`;
+  mkdirSync(tokenDir, { recursive: true });
+  writeFileSync(tokenFile, `${params.gatewayToken}\n`, { encoding: "utf8", mode: 0o600 });
   const transport = new StdioClientTransport({
     command: "node",
     args: [
@@ -296,8 +343,8 @@ export async function connectMcpClient(params: {
       "serve",
       "--url",
       params.gatewayUrl,
-      "--token",
-      params.gatewayToken,
+      "--token-file",
+      tokenFile,
       "--claude-channel-mode",
       "on",
     ],
@@ -338,7 +385,7 @@ export async function maybeApprovePendingBridgePairing(
       pending?: Array<{ requestId?: string; role?: string }>;
     }>("device.pair.list", {});
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = formatErrorMessage(error);
     if (message.includes("missing scope: operator.pairing")) {
       return false;
     }

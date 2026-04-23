@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   getRecordedUpdateLastRoute,
   loadTelegramMessageContextRouteHarness,
@@ -18,7 +18,6 @@ describe("buildTelegramMessageContext named-account DM fallback", () => {
 
   afterEach(() => {
     clearRuntimeConfigSnapshot();
-    recordInboundSessionMock.mockClear();
   });
 
   beforeAll(async () => {

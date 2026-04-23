@@ -1,6 +1,7 @@
 import type { HistoryEntry, PluginRuntime } from "openclaw/plugin-sdk/bluebubbles";
 import { vi } from "vitest";
 import { createPluginRuntimeMock } from "../../../../test/helpers/plugins/plugin-runtime-mock.js";
+import { _resetBlueBubblesInboundDedupForTest } from "../inbound-dedupe.js";
 import {
   _resetBlueBubblesShortIdState,
   clearBlueBubblesWebhookSecurityStateForTest,
@@ -22,102 +23,82 @@ export const EMPTY_DISPATCH_RESULT = {
 } as const;
 
 type BlueBubblesMonitorTestRuntimeMocks = {
-  enqueueSystemEvent: unknown;
-  chunkMarkdownText: unknown;
-  chunkByNewline: unknown;
-  chunkMarkdownTextWithMode: unknown;
-  chunkTextWithMode: unknown;
-  resolveChunkMode: unknown;
-  hasControlCommand: unknown;
-  dispatchReplyWithBufferedBlockDispatcher: unknown;
-  formatAgentEnvelope: unknown;
-  formatInboundEnvelope: unknown;
-  resolveEnvelopeFormatOptions: unknown;
-  resolveAgentRoute: unknown;
-  buildPairingReply: unknown;
-  readAllowFromStore: unknown;
-  upsertPairingRequest: unknown;
-  saveMediaBuffer: unknown;
-  resolveStorePath: unknown;
-  readSessionUpdatedAt: unknown;
-  buildMentionRegexes: unknown;
-  matchesMentionPatterns: unknown;
-  matchesMentionWithExplicit: unknown;
-  resolveGroupPolicy: unknown;
-  resolveRequireMention: unknown;
-  resolveCommandAuthorizedFromAuthorizers: unknown;
+  enqueueSystemEvent: PluginRuntime["system"]["enqueueSystemEvent"];
+  chunkMarkdownText: PluginRuntime["channel"]["text"]["chunkMarkdownText"];
+  chunkByNewline: PluginRuntime["channel"]["text"]["chunkByNewline"];
+  chunkMarkdownTextWithMode: PluginRuntime["channel"]["text"]["chunkMarkdownTextWithMode"];
+  chunkTextWithMode: PluginRuntime["channel"]["text"]["chunkTextWithMode"];
+  resolveChunkMode: PluginRuntime["channel"]["text"]["resolveChunkMode"];
+  hasControlCommand: PluginRuntime["channel"]["text"]["hasControlCommand"];
+  dispatchReplyWithBufferedBlockDispatcher: PluginRuntime["channel"]["reply"]["dispatchReplyWithBufferedBlockDispatcher"];
+  formatAgentEnvelope: PluginRuntime["channel"]["reply"]["formatAgentEnvelope"];
+  formatInboundEnvelope: PluginRuntime["channel"]["reply"]["formatInboundEnvelope"];
+  resolveEnvelopeFormatOptions: PluginRuntime["channel"]["reply"]["resolveEnvelopeFormatOptions"];
+  resolveAgentRoute: PluginRuntime["channel"]["routing"]["resolveAgentRoute"];
+  buildPairingReply: PluginRuntime["channel"]["pairing"]["buildPairingReply"];
+  readAllowFromStore: PluginRuntime["channel"]["pairing"]["readAllowFromStore"];
+  upsertPairingRequest: PluginRuntime["channel"]["pairing"]["upsertPairingRequest"];
+  saveMediaBuffer: PluginRuntime["channel"]["media"]["saveMediaBuffer"];
+  resolveStorePath: PluginRuntime["channel"]["session"]["resolveStorePath"];
+  readSessionUpdatedAt: PluginRuntime["channel"]["session"]["readSessionUpdatedAt"];
+  buildMentionRegexes: PluginRuntime["channel"]["mentions"]["buildMentionRegexes"];
+  matchesMentionPatterns: PluginRuntime["channel"]["mentions"]["matchesMentionPatterns"];
+  matchesMentionWithExplicit: PluginRuntime["channel"]["mentions"]["matchesMentionWithExplicit"];
+  resolveGroupPolicy: PluginRuntime["channel"]["groups"]["resolveGroupPolicy"];
+  resolveRequireMention: PluginRuntime["channel"]["groups"]["resolveRequireMention"];
+  resolveCommandAuthorizedFromAuthorizers: PluginRuntime["channel"]["commands"]["resolveCommandAuthorizedFromAuthorizers"];
 };
 
 export function createBlueBubblesMonitorTestRuntime(
   mocks: BlueBubblesMonitorTestRuntimeMocks,
 ): PluginRuntime {
+  // Keep this helper small and explicit: BlueBubbles tests should only pay for the
+  // runtime slices monitor coverage actually consumes, while still tracking contract drift.
   return createPluginRuntimeMock({
     system: {
-      enqueueSystemEvent: mocks.enqueueSystemEvent as PluginRuntime["system"]["enqueueSystemEvent"],
+      enqueueSystemEvent: mocks.enqueueSystemEvent,
     },
     channel: {
       text: {
-        chunkMarkdownText:
-          mocks.chunkMarkdownText as PluginRuntime["channel"]["text"]["chunkMarkdownText"],
-        chunkByNewline: mocks.chunkByNewline as PluginRuntime["channel"]["text"]["chunkByNewline"],
-        chunkMarkdownTextWithMode:
-          mocks.chunkMarkdownTextWithMode as PluginRuntime["channel"]["text"]["chunkMarkdownTextWithMode"],
-        chunkTextWithMode:
-          mocks.chunkTextWithMode as PluginRuntime["channel"]["text"]["chunkTextWithMode"],
-        resolveChunkMode:
-          mocks.resolveChunkMode as PluginRuntime["channel"]["text"]["resolveChunkMode"],
-        hasControlCommand:
-          mocks.hasControlCommand as PluginRuntime["channel"]["text"]["hasControlCommand"],
+        chunkMarkdownText: mocks.chunkMarkdownText,
+        chunkByNewline: mocks.chunkByNewline,
+        chunkMarkdownTextWithMode: mocks.chunkMarkdownTextWithMode,
+        chunkTextWithMode: mocks.chunkTextWithMode,
+        resolveChunkMode: mocks.resolveChunkMode,
+        hasControlCommand: mocks.hasControlCommand,
       },
       reply: {
-        dispatchReplyWithBufferedBlockDispatcher:
-          mocks.dispatchReplyWithBufferedBlockDispatcher as PluginRuntime["channel"]["reply"]["dispatchReplyWithBufferedBlockDispatcher"],
-        formatAgentEnvelope:
-          mocks.formatAgentEnvelope as PluginRuntime["channel"]["reply"]["formatAgentEnvelope"],
-        formatInboundEnvelope:
-          mocks.formatInboundEnvelope as PluginRuntime["channel"]["reply"]["formatInboundEnvelope"],
-        resolveEnvelopeFormatOptions:
-          mocks.resolveEnvelopeFormatOptions as PluginRuntime["channel"]["reply"]["resolveEnvelopeFormatOptions"],
+        dispatchReplyWithBufferedBlockDispatcher: mocks.dispatchReplyWithBufferedBlockDispatcher,
+        formatAgentEnvelope: mocks.formatAgentEnvelope,
+        formatInboundEnvelope: mocks.formatInboundEnvelope,
+        resolveEnvelopeFormatOptions: mocks.resolveEnvelopeFormatOptions,
       },
       routing: {
-        resolveAgentRoute:
-          mocks.resolveAgentRoute as PluginRuntime["channel"]["routing"]["resolveAgentRoute"],
+        resolveAgentRoute: mocks.resolveAgentRoute,
       },
       pairing: {
-        buildPairingReply:
-          mocks.buildPairingReply as PluginRuntime["channel"]["pairing"]["buildPairingReply"],
-        readAllowFromStore:
-          mocks.readAllowFromStore as PluginRuntime["channel"]["pairing"]["readAllowFromStore"],
-        upsertPairingRequest:
-          mocks.upsertPairingRequest as PluginRuntime["channel"]["pairing"]["upsertPairingRequest"],
+        buildPairingReply: mocks.buildPairingReply,
+        readAllowFromStore: mocks.readAllowFromStore,
+        upsertPairingRequest: mocks.upsertPairingRequest,
       },
       media: {
-        saveMediaBuffer:
-          mocks.saveMediaBuffer as PluginRuntime["channel"]["media"]["saveMediaBuffer"],
+        saveMediaBuffer: mocks.saveMediaBuffer,
       },
       session: {
-        resolveStorePath:
-          mocks.resolveStorePath as PluginRuntime["channel"]["session"]["resolveStorePath"],
-        readSessionUpdatedAt:
-          mocks.readSessionUpdatedAt as PluginRuntime["channel"]["session"]["readSessionUpdatedAt"],
+        resolveStorePath: mocks.resolveStorePath,
+        readSessionUpdatedAt: mocks.readSessionUpdatedAt,
       },
       mentions: {
-        buildMentionRegexes:
-          mocks.buildMentionRegexes as PluginRuntime["channel"]["mentions"]["buildMentionRegexes"],
-        matchesMentionPatterns:
-          mocks.matchesMentionPatterns as PluginRuntime["channel"]["mentions"]["matchesMentionPatterns"],
-        matchesMentionWithExplicit:
-          mocks.matchesMentionWithExplicit as PluginRuntime["channel"]["mentions"]["matchesMentionWithExplicit"],
+        buildMentionRegexes: mocks.buildMentionRegexes,
+        matchesMentionPatterns: mocks.matchesMentionPatterns,
+        matchesMentionWithExplicit: mocks.matchesMentionWithExplicit,
       },
       groups: {
-        resolveGroupPolicy:
-          mocks.resolveGroupPolicy as PluginRuntime["channel"]["groups"]["resolveGroupPolicy"],
-        resolveRequireMention:
-          mocks.resolveRequireMention as PluginRuntime["channel"]["groups"]["resolveRequireMention"],
+        resolveGroupPolicy: mocks.resolveGroupPolicy,
+        resolveRequireMention: mocks.resolveRequireMention,
       },
       commands: {
-        resolveCommandAuthorizedFromAuthorizers:
-          mocks.resolveCommandAuthorizedFromAuthorizers as PluginRuntime["channel"]["commands"]["resolveCommandAuthorizedFromAuthorizers"],
+        resolveCommandAuthorizedFromAuthorizers: mocks.resolveCommandAuthorizedFromAuthorizers,
       },
     },
   });
@@ -138,6 +119,7 @@ export function resetBlueBubblesMonitorTestState(params: {
 }) {
   vi.clearAllMocks();
   _resetBlueBubblesShortIdState();
+  _resetBlueBubblesInboundDedupForTest();
   clearBlueBubblesWebhookSecurityStateForTest();
   params.extraReset?.();
   params.fetchHistoryMock.mockResolvedValue({ entries: [], resolved: true });

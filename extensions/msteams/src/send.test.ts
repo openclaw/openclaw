@@ -11,6 +11,7 @@ const mockState = vi.hoisted(() => ({
   runtimeConvertMarkdownTables: vi.fn((text: string) => text),
   requiresFileConsent: vi.fn(),
   prepareFileConsentActivity: vi.fn(),
+  prepareFileConsentActivityFs: vi.fn(),
   extractFilename: vi.fn(async () => "fallback.bin"),
   sendMSTeamsMessages: vi.fn(),
   uploadAndShareSharePoint: vi.fn(),
@@ -18,7 +19,7 @@ const mockState = vi.hoisted(() => ({
   buildTeamsFileInfoCard: vi.fn(),
 }));
 
-vi.mock("../runtime-api.js", () => ({
+vi.mock("openclaw/plugin-sdk/msteams", () => ({
   loadOutboundMediaFromUrl: mockState.loadOutboundMediaFromUrl,
 }));
 
@@ -26,9 +27,13 @@ vi.mock("openclaw/plugin-sdk/config-runtime", () => ({
   resolveMarkdownTableMode: mockState.resolveMarkdownTableMode,
 }));
 
-vi.mock("openclaw/plugin-sdk/text-runtime", () => ({
-  convertMarkdownTables: mockState.convertMarkdownTables,
-}));
+vi.mock("openclaw/plugin-sdk/text-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/text-runtime")>();
+  return {
+    ...actual,
+    convertMarkdownTables: mockState.convertMarkdownTables,
+  };
+});
 
 vi.mock("./send-context.js", () => ({
   resolveMSTeamsSendContext: mockState.resolveMSTeamsSendContext,
@@ -37,6 +42,7 @@ vi.mock("./send-context.js", () => ({
 vi.mock("./file-consent-helpers.js", () => ({
   requiresFileConsent: mockState.requiresFileConsent,
   prepareFileConsentActivity: mockState.prepareFileConsentActivity,
+  prepareFileConsentActivityFs: mockState.prepareFileConsentActivityFs,
 }));
 
 vi.mock("./media-helpers.js", () => ({
@@ -162,6 +168,7 @@ describe("sendMessageMSTeams", () => {
     mockState.runtimeConvertMarkdownTables.mockImplementation((text: string) => text);
     mockState.requiresFileConsent.mockReset();
     mockState.prepareFileConsentActivity.mockReset();
+    mockState.prepareFileConsentActivityFs.mockReset();
     mockState.extractFilename.mockReset();
     mockState.sendMSTeamsMessages.mockReset();
     mockState.uploadAndShareSharePoint.mockReset();

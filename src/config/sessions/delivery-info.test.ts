@@ -1,4 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
 import type { SessionEntry } from "./types.js";
 
 const storeState = vi.hoisted(() => ({
@@ -31,6 +33,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
+  setActivePluginRegistry(createSessionConversationTestRegistry());
   storeState.store = {};
 });
 
@@ -51,6 +54,15 @@ describe("extractDeliveryInfo", () => {
     ).toEqual({
       baseSessionKey: "agent:main:matrix:channel:!room:example.org",
       threadId: "$AbC123:example.org",
+    });
+    expect(
+      parseSessionThreadInfo(
+        "agent:main:feishu:group:oc_group_chat:topic:om_topic_root:sender:ou_topic_user",
+      ),
+    ).toEqual({
+      baseSessionKey:
+        "agent:main:feishu:group:oc_group_chat:topic:om_topic_root:sender:ou_topic_user",
+      threadId: undefined,
     });
     expect(parseSessionThreadInfo("agent:main:telegram:dm:user-1")).toEqual({
       baseSessionKey: "agent:main:telegram:dm:user-1",
@@ -111,6 +123,7 @@ describe("extractDeliveryInfo", () => {
       to: "group:98765",
       accountId: "main",
     });
+    storeState.store[baseKey].lastThreadId = "55";
 
     const result = extractDeliveryInfo(topicKey);
 
@@ -119,8 +132,87 @@ describe("extractDeliveryInfo", () => {
         channel: "telegram",
         to: "group:98765",
         accountId: "main",
+        threadId: "55",
       },
       threadId: "55",
+    });
+  });
+
+  it("falls back to session metadata thread ids when deliveryContext.threadId is missing", () => {
+    const sessionKey = "agent:main:telegram:group:98765";
+    storeState.store[sessionKey] = {
+      ...buildEntry({
+        channel: "telegram",
+        to: "group:98765",
+        accountId: "main",
+      }),
+      origin: { threadId: 77 },
+    };
+
+    const result = extractDeliveryInfo(sessionKey);
+
+    expect(result).toEqual({
+      deliveryContext: {
+        channel: "telegram",
+        to: "group:98765",
+        accountId: "main",
+        threadId: "77",
+      },
+      threadId: undefined,
+    });
+  });
+
+  it("derives delivery info from stored last route metadata when deliveryContext is missing", () => {
+    const sessionKey = "agent:main:matrix:channel:!lowercased:example.org";
+    storeState.store[sessionKey] = {
+      sessionId: "session-1",
+      updatedAt: Date.now(),
+      origin: {
+        provider: "matrix",
+      },
+      lastChannel: "matrix",
+      lastTo: "room:!MixedCase:example.org",
+    };
+
+    const result = extractDeliveryInfo(sessionKey);
+
+    expect(result).toEqual({
+      deliveryContext: {
+        channel: "matrix",
+        to: "room:!MixedCase:example.org",
+        accountId: undefined,
+      },
+      threadId: undefined,
+    });
+  });
+
+  it("falls back to the base session when a thread entry only has partial route metadata", () => {
+    const baseKey = "agent:main:matrix:channel:!MixedCase:example.org";
+    const threadKey = `${baseKey}:thread:$thread-event`;
+    storeState.store[threadKey] = {
+      sessionId: "thread-session",
+      updatedAt: Date.now(),
+      origin: {
+        provider: "matrix",
+        threadId: "$thread-event",
+      },
+    };
+    storeState.store[baseKey] = {
+      sessionId: "base-session",
+      updatedAt: Date.now(),
+      lastChannel: "matrix",
+      lastTo: "room:!MixedCase:example.org",
+    };
+
+    const result = extractDeliveryInfo(threadKey);
+
+    expect(result).toEqual({
+      deliveryContext: {
+        channel: "matrix",
+        to: "room:!MixedCase:example.org",
+        accountId: undefined,
+      },
+      threadId: "$thread-event",
     });
   });
 });

@@ -2,22 +2,35 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import type { OpenClawConfig } from "../config/config.js";
+import { CommanderError } from "commander";
 import { resolveStateDir } from "../config/paths.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeEnv } from "../infra/env.js";
 import { formatUncaughtError } from "../infra/errors.js";
 import { isMainModule } from "../infra/is-main.js";
+import { ensureGlobalUndiciEnvProxyDispatcher } from "../infra/net/undici-global-dispatcher.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { assertSupportedRuntime } from "../infra/runtime-guard.js";
 import { enableConsoleCapture } from "../logging.js";
-import { normalizePluginId } from "../plugins/config-state.js";
+import type { PluginManifestCommandAliasRegistry } from "../plugins/manifest-command-aliases.js";
+import { resolveManifestCommandAliasOwner } from "../plugins/manifest-command-aliases.runtime.js";
 import { hasMemoryRuntime } from "../plugins/memory-state.js";
+import { maybeWarnAboutDebugProxyCoverage } from "../proxy-capture/coverage.js";
 import {
-  getCommandPathWithRootOptions,
-  getPrimaryCommand,
-  hasHelpOrVersion,
-  isRootHelpInvocation,
-} from "./argv.js";
+  finalizeDebugProxyCapture,
+  initializeDebugProxyCapture,
+} from "../proxy-capture/runtime.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
+import { resolveCliArgvInvocation } from "./argv-invocation.js";
+import {
+  shouldRegisterPrimaryCommandOnly,
+  shouldSkipPluginCommandRegistration,
+} from "./command-registration-policy.js";
+import { shouldEnsureCliPathForCommandPath } from "./command-startup-policy.js";
 import { maybeRunCliInContainer, parseCliContainerArgs } from "./container-target.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./profile.js";
 import { tryRouteCli } from "./route.js";
@@ -46,65 +59,82 @@ export function rewriteUpdateFlagArgv(argv: string[]): string[] {
   return next;
 }
 
-export function shouldRegisterPrimarySubcommand(argv: string[]): boolean {
-  return !hasHelpOrVersion(argv);
-}
-
-export function shouldSkipPluginCommandRegistration(params: {
-  argv: string[];
-  primary: string | null;
-  hasBuiltinPrimary: boolean;
-}): boolean {
-  if (params.hasBuiltinPrimary) {
-    return true;
-  }
-  if (!params.primary) {
-    return hasHelpOrVersion(params.argv);
-  }
-  return false;
-}
-
 export function shouldEnsureCliPath(argv: string[]): boolean {
-  if (hasHelpOrVersion(argv)) {
+  const invocation = resolveCliArgvInvocation(argv);
+  if (invocation.hasHelpOrVersion) {
     return false;
   }
-  const [primary, secondary] = getCommandPathWithRootOptions(argv, 2);
-  if (!primary) {
-    return true;
-  }
-  if (primary === "status" || primary === "health" || primary === "sessions") {
-    return false;
-  }
-  if (primary === "config" && (secondary === "get" || secondary === "unset")) {
-    return false;
-  }
-  if (primary === "models" && (secondary === "list" || secondary === "status")) {
-    return false;
-  }
-  return true;
+  return shouldEnsureCliPathForCommandPath(invocation.commandPath);
 }
 
 export function shouldUseRootHelpFastPath(argv: string[]): boolean {
-  return isRootHelpInvocation(argv);
+  return resolveCliArgvInvocation(argv).isRootHelpInvocation;
 }
 
-export function resolveMissingBrowserCommandMessage(config?: OpenClawConfig): string | null {
+export function resolveMissingPluginCommandMessage(
+  pluginId: string,
+  config?: OpenClawConfig,
+  options?: { registry?: PluginManifestCommandAliasRegistry },
+): string | null {
+  const normalizedPluginId = normalizeLowercaseStringOrEmpty(pluginId);
+  if (!normalizedPluginId) {
+    return null;
+  }
   const allow =
     Array.isArray(config?.plugins?.allow) && config.plugins.allow.length > 0
       ? config.plugins.allow
           .filter((entry): entry is string => typeof entry === "string")
-          .map((entry) => normalizePluginId(entry))
+          .map((entry) => normalizeOptionalLowercaseString(entry))
+          .filter(Boolean)
       : [];
-  if (allow.length > 0 && !allow.includes("browser")) {
+  const commandAlias = resolveManifestCommandAliasOwner({
+    command: normalizedPluginId,
+    config,
+    registry: options?.registry,
+  });
+  const parentPluginId = commandAlias?.pluginId;
+  if (parentPluginId) {
+    if (allow.length > 0 && !allow.includes(parentPluginId)) {
+      return (
+        `"${normalizedPluginId}" is not a plugin; it is a command provided by the ` +
+        `"${parentPluginId}" plugin. Add "${parentPluginId}" to \`plugins.allow\` ` +
+        `instead of "${normalizedPluginId}".`
+      );
+    }
+    if (config?.plugins?.entries?.[parentPluginId]?.enabled === false) {
+      return (
+        `The \`openclaw ${normalizedPluginId}\` command is unavailable because ` +
+        `\`plugins.entries.${parentPluginId}.enabled=false\`. Re-enable that entry if you want ` +
+        "the bundled plugin command surface."
+      );
+    }
+    if (commandAlias.kind === "runtime-slash") {
+      const cliHint = commandAlias.cliCommand
+        ? `Use \`openclaw ${commandAlias.cliCommand}\` for related CLI operations, or `
+        : "Use ";
+      return (
+        `"${normalizedPluginId}" is a runtime slash command (/${normalizedPluginId}), not a CLI command. ` +
+        `It is provided by the "${parentPluginId}" plugin. ` +
+        `${cliHint}\`/${normalizedPluginId}\` in a chat session.`
+      );
+    }
+  }
+
+  if (allow.length > 0 && !allow.includes(normalizedPluginId)) {
+    if (parentPluginId && allow.includes(parentPluginId)) {
+      return null;
+    }
     return (
-      'The `openclaw browser` command is unavailable because `plugins.allow` excludes "browser". ' +
-      'Add "browser" to `plugins.allow` if you want the bundled browser CLI and tool.'
+      `The \`openclaw ${normalizedPluginId}\` command is unavailable because ` +
+      `\`plugins.allow\` excludes "${normalizedPluginId}". Add "${normalizedPluginId}" to ` +
+      `\`plugins.allow\` if you want that bundled plugin CLI surface.`
     );
   }
-  if (config?.plugins?.entries?.browser?.enabled === false) {
+  if (config?.plugins?.entries?.[normalizedPluginId]?.enabled === false) {
     return (
-      "The `openclaw browser` command is unavailable because `plugins.entries.browser.enabled=false`. " +
-      "Re-enable that entry if you want the bundled browser CLI and tool."
+      `The \`openclaw ${normalizedPluginId}\` command is unavailable because ` +
+      `\`plugins.entries.${normalizedPluginId}.enabled=false\`. Re-enable that entry if you want ` +
+      "the bundled plugin CLI surface."
     );
   }
   return null;
@@ -131,7 +161,7 @@ export async function runCli(argv: string[] = process.argv) {
     applyCliProfileEnv({ profile: parsedProfile.profile });
   }
   const containerTargetName =
-    parsedContainer.container ?? process.env.OPENCLAW_CONTAINER?.trim() ?? null;
+    parsedContainer.container ?? normalizeOptionalString(process.env.OPENCLAW_CONTAINER) ?? null;
   if (containerTargetName && parsedProfile.profile) {
     throw new Error("--container cannot be combined with --profile/--dev");
   }
@@ -150,6 +180,12 @@ export async function runCli(argv: string[] = process.argv) {
     loadCliDotEnv({ quiet: true });
   }
   normalizeEnv();
+  initializeDebugProxyCapture("cli");
+  process.once("exit", () => {
+    finalizeDebugProxyCapture();
+  });
+  ensureGlobalUndiciEnvProxyDispatcher();
+  maybeWarnAboutDebugProxyCoverage();
   if (shouldEnsureCliPath(normalizedArgv)) {
     ensureOpenClawCliOnPath();
   }
@@ -159,8 +195,11 @@ export async function runCli(argv: string[] = process.argv) {
 
   try {
     if (shouldUseRootHelpFastPath(normalizedArgv)) {
-      const { outputRootHelp } = await import("./program/root-help.js");
-      await outputRootHelp();
+      const { outputPrecomputedRootHelpText } = await import("./root-help-metadata.js");
+      if (!outputPrecomputedRootHelpText()) {
+        const { outputRootHelp } = await import("./program/root-help.js");
+        await outputRootHelp();
+      }
       return;
     }
 
@@ -171,9 +210,13 @@ export async function runCli(argv: string[] = process.argv) {
     // Capture all console output into structured logs while keeping stdout/stderr behavior.
     enableConsoleCapture();
 
-    const { buildProgram } = await import("./program.js");
+    const [{ buildProgram }, { installUnhandledRejectionHandler }, { restoreTerminalState }] =
+      await Promise.all([
+        import("./program.js"),
+        import("../infra/unhandled-rejections.js"),
+        import("../terminal/restore.js"),
+      ]);
     const program = buildProgram();
-    const { installUnhandledRejectionHandler } = await import("../infra/unhandled-rejections.js");
 
     // Global error handlers to prevent silent crashes from unhandled rejections/exceptions.
     // These log the error and exit gracefully instead of crashing without trace.
@@ -181,14 +224,16 @@ export async function runCli(argv: string[] = process.argv) {
 
     process.on("uncaughtException", (error) => {
       console.error("[openclaw] Uncaught exception:", formatUncaughtError(error));
+      restoreTerminalState("uncaught exception", { resumeStdinIfPaused: false });
       process.exit(1);
     });
 
     const parseArgv = rewriteUpdateFlagArgv(normalizedArgv);
+    const invocation = resolveCliArgvInvocation(parseArgv);
     // Register the primary command (builtin or subcli) so help and command parsing
     // are correct even with lazy command registration.
-    const primary = getPrimaryCommand(parseArgv);
-    if (primary) {
+    const { primary } = invocation;
+    if (primary && shouldRegisterPrimaryCommandOnly(parseArgv)) {
       const { getProgramContext } = await import("./program/program-context.js");
       const ctx = getProgramContext(program);
       if (ctx) {
@@ -208,28 +253,34 @@ export async function runCli(argv: string[] = process.argv) {
     });
     if (!shouldSkipPluginRegistration) {
       // Register plugin CLI commands before parsing
-      const { registerPluginCliCommands } = await import("../plugins/cli.js");
-      const { loadValidatedConfigForPluginRegistration } =
-        await import("./program/register.subclis.js");
-      const config = await loadValidatedConfigForPluginRegistration();
-      if (config) {
-        await registerPluginCliCommands(program, config, undefined, undefined, {
+      const { registerPluginCliCommandsFromValidatedConfig } = await import("../plugins/cli.js");
+      const config = await registerPluginCliCommandsFromValidatedConfig(
+        program,
+        undefined,
+        undefined,
+        {
           mode: "lazy",
           primary,
-        });
-        if (
-          primary === "browser" &&
-          !program.commands.some((command) => command.name() === "browser")
-        ) {
-          const browserCommandMessage = resolveMissingBrowserCommandMessage(config);
-          if (browserCommandMessage) {
-            throw new Error(browserCommandMessage);
+        },
+      );
+      if (config) {
+        if (primary && !program.commands.some((command) => command.name() === primary)) {
+          const missingPluginCommandMessage = resolveMissingPluginCommandMessage(primary, config);
+          if (missingPluginCommandMessage) {
+            throw new Error(missingPluginCommandMessage);
           }
         }
       }
     }
 
-    await program.parseAsync(parseArgv);
+    try {
+      await program.parseAsync(parseArgv);
+    } catch (error) {
+      if (!(error instanceof CommanderError)) {
+        throw error;
+      }
+      process.exitCode = error.exitCode;
+    }
   } finally {
     await closeCliMemoryManagers();
   }

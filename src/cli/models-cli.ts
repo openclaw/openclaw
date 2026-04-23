@@ -295,7 +295,7 @@ export function registerModelsCli(program: Command) {
 
   auth
     .command("add")
-    .description("Interactive auth helper (setup-token or paste token)")
+    .description("Interactive auth helper (provider auth or paste token)")
     .action(async () => {
       await runModelsCommand(async () => {
         await modelsAuthAddCommand({}, defaultRuntime);
@@ -324,7 +324,7 @@ export function registerModelsCli(program: Command) {
   auth
     .command("setup-token")
     .description("Run a provider CLI to create/sync a token (TTY required)")
-    .option("--provider <name>", "Provider id (default: anthropic)")
+    .option("--provider <name>", "Provider id")
     .option("--yes", "Skip confirmation", false)
     .action(async (opts) => {
       await runModelsCommand(async () => {
@@ -381,7 +381,7 @@ export function registerModelsCli(program: Command) {
 
   order
     .command("get")
-    .description("Show per-agent auth order override (from auth-profiles.json)")
+    .description("Show per-agent auth order override (from auth-state.json)")
     .requiredOption("--provider <name>", "Provider id (e.g. anthropic)")
     .option("--agent <id>", "Agent id (default: configured default agent)")
     .option("--json", "Output JSON", false)
@@ -402,7 +402,7 @@ export function registerModelsCli(program: Command) {
 
   order
     .command("set")
-    .description("Set per-agent auth order override (locks rotation to this list)")
+    .description("Set per-agent auth order override (writes auth-state.json)")
     .requiredOption("--provider <name>", "Provider id (e.g. anthropic)")
     .option("--agent <id>", "Agent id (default: configured default agent)")
     .argument("<profileIds...>", "Auth profile ids (e.g. anthropic:default)")

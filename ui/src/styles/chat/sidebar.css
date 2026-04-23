@@ -8,7 +8,7 @@
 }
 
 .chat-main {
-  min-width: 400px;
+  min-width: 312px;
   display: flex;
   flex-direction: column;
   overflow: hidden;

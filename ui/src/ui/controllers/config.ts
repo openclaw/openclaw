@@ -134,11 +134,19 @@ function serializeFormForSubmit(state: ConfigState): string {
   return serializeConfigForm(form);
 }
 
-export async function saveConfig(state: ConfigState) {
+type ConfigSubmitMethod = "config.set" | "config.apply";
+type ConfigSubmitBusyKey = "configSaving" | "configApplying";
+
+async function submitConfigChange(
+  state: ConfigState,
+  method: ConfigSubmitMethod,
+  busyKey: ConfigSubmitBusyKey,
+  extraParams: Record<string, unknown> = {},
+) {
   if (!state.client || !state.connected) {
     return;
   }
-  state.configSaving = true;
+  state[busyKey] = true;
   state.lastError = null;
   try {
     const raw = serializeFormForSubmit(state);
@@ -147,41 +155,24 @@ export async function saveConfig(state: ConfigState) {
       state.lastError = "Config hash missing; reload and retry.";
       return;
     }
-    await state.client.request("config.set", { raw, baseHash });
+    await state.client.request(method, { raw, baseHash, ...extraParams });
     state.configFormDirty = false;
     await loadConfig(state);
   } catch (err) {
     state.lastError = String(err);
   } finally {
-    state.configSaving = false;
+    state[busyKey] = false;
   }
 }
 
+export async function saveConfig(state: ConfigState) {
+  await submitConfigChange(state, "config.set", "configSaving");
+}
+
 export async function applyConfig(state: ConfigState) {
-  if (!state.client || !state.connected) {
-    return;
-  }
-  state.configApplying = true;
-  state.lastError = null;
-  try {
-    const raw = serializeFormForSubmit(state);
-    const baseHash = state.configSnapshot?.hash;
-    if (!baseHash) {
-      state.lastError = "Config hash missing; reload and retry.";
-      return;
-    }
-    await state.client.request("config.apply", {
-      raw,
-      baseHash,
-      sessionKey: state.applySessionKey,
-    });
-    state.configFormDirty = false;
-    await loadConfig(state);
-  } catch (err) {
-    state.lastError = String(err);
-  } finally {
-    state.configApplying = false;
-  }
+  await submitConfigChange(state, "config.apply", "configApplying", {
+    sessionKey: state.applySessionKey,
+  });
 }
 
 export async function runUpdate(state: ConfigState) {
@@ -209,13 +200,9 @@ export async function runUpdate(state: ConfigState) {
   }
 }
 
-export function updateConfigFormValue(
-  state: ConfigState,
-  path: Array<string | number>,
-  value: unknown,
-) {
+function mutateConfigForm(state: ConfigState, mutate: (draft: Record<string, unknown>) => void) {
   const base = cloneConfigObject(state.configForm ?? state.configSnapshot?.config ?? {});
-  setPathValue(base, path, value);
+  mutate(base);
   state.configForm = base;
   state.configFormDirty = true;
   if (state.configFormMode === "form") {
@@ -223,14 +210,16 @@ export function updateConfigFormValue(
   }
 }
 
+export function updateConfigFormValue(
+  state: ConfigState,
+  path: Array<string | number>,
+  value: unknown,
+) {
+  mutateConfigForm(state, (draft) => setPathValue(draft, path, value));
+}
+
 export function removeConfigFormValue(state: ConfigState, path: Array<string | number>) {
-  const base = cloneConfigObject(state.configForm ?? state.configSnapshot?.config ?? {});
-  removePathValue(base, path);
-  state.configForm = base;
-  state.configFormDirty = true;
-  if (state.configFormMode === "form") {
-    state.configRaw = serializeConfigForm(base);
-  }
+  mutateConfigForm(state, (draft) => removePathValue(draft, path));
 }
 
 export function findAgentConfigEntryIndex(

@@ -19,6 +19,7 @@ describe("cli-session helpers", () => {
     setCliSessionBinding(entry, "claude-cli", {
       sessionId: "cli-session-1",
       authProfileId: "anthropic:work",
+      authEpoch: "auth-epoch",
       extraSystemPromptHash: "prompt-hash",
       mcpConfigHash: "mcp-hash",
     });
@@ -28,6 +29,7 @@ describe("cli-session helpers", () => {
     expect(getCliSessionBinding(entry, "claude-cli")).toEqual({
       sessionId: "cli-session-1",
       authProfileId: "anthropic:work",
+      authEpoch: "auth-epoch",
       extraSystemPromptHash: "prompt-hash",
       mcpConfigHash: "mcp-hash",
     });
@@ -79,6 +81,7 @@ describe("cli-session helpers", () => {
     const binding = {
       sessionId: "cli-session-1",
       authProfileId: "anthropic:work",
+      authEpoch: "auth-epoch-a",
       extraSystemPromptHash: "prompt-a",
       mcpConfigHash: "mcp-a",
     };
@@ -87,6 +90,7 @@ describe("cli-session helpers", () => {
       resolveCliSessionReuse({
         binding,
         authProfileId: "anthropic:personal",
+        authEpoch: "auth-epoch-a",
         extraSystemPromptHash: "prompt-a",
         mcpConfigHash: "mcp-a",
       }),
@@ -95,6 +99,16 @@ describe("cli-session helpers", () => {
       resolveCliSessionReuse({
         binding,
         authProfileId: "anthropic:work",
+        authEpoch: "auth-epoch-b",
+        extraSystemPromptHash: "prompt-a",
+        mcpConfigHash: "mcp-a",
+      }),
+    ).toEqual({ invalidatedReason: "auth-epoch" });
+    expect(
+      resolveCliSessionReuse({
+        binding,
+        authProfileId: "anthropic:work",
+        authEpoch: "auth-epoch-a",
         extraSystemPromptHash: "prompt-b",
         mcpConfigHash: "mcp-a",
       }),
@@ -103,6 +117,7 @@ describe("cli-session helpers", () => {
       resolveCliSessionReuse({
         binding,
         authProfileId: "anthropic:work",
+        authEpoch: "auth-epoch-a",
         extraSystemPromptHash: "prompt-a",
         mcpConfigHash: "mcp-b",
       }),
@@ -113,6 +128,7 @@ describe("cli-session helpers", () => {
     const binding = {
       sessionId: "cli-session-1",
       authProfileId: "anthropic:work",
+      authEpoch: "auth-epoch-a",
       extraSystemPromptHash: "prompt-a",
       mcpConfigHash: "mcp-a",
     };
@@ -121,6 +137,7 @@ describe("cli-session helpers", () => {
       resolveCliSessionReuse({
         binding,
         authProfileId: "anthropic:work",
+        authEpoch: "auth-epoch-a",
         extraSystemPromptHash: "prompt-a",
         mcpConfigHash: "mcp-a",
       }),

@@ -19,6 +19,8 @@ export type FlowOption<Value extends string = string> = {
   hint?: string;
   group?: FlowOptionGroup;
   docs?: FlowDocsLink;
+  assistantPriority?: number;
+  assistantVisibility?: "visible" | "manual-only";
 };
 
 export type FlowContribution<Value extends string = string> = {
@@ -28,22 +30,6 @@ export type FlowContribution<Value extends string = string> = {
   option: FlowOption<Value>;
   source?: string;
 };
-
-export function mergeFlowContributions<T extends FlowContribution>(params: {
-  primary: readonly T[];
-  fallbacks?: readonly T[];
-}): T[] {
-  const contributionByValue = new Map<string, T>();
-  for (const contribution of params.primary) {
-    contributionByValue.set(contribution.option.value, contribution);
-  }
-  for (const contribution of params.fallbacks ?? []) {
-    if (!contributionByValue.has(contribution.option.value)) {
-      contributionByValue.set(contribution.option.value, contribution);
-    }
-  }
-  return [...contributionByValue.values()];
-}
 
 export function sortFlowContributionsByLabel<T extends FlowContribution>(
   contributions: readonly T[],

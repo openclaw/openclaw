@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { buildAllPluginInspectReports } from "../status.js";
-import { createPluginRegistryFixture, registerVirtualTestPlugin } from "./testkit.js";
+import {
+  createPluginRegistryFixture,
+  registerVirtualTestPlugin,
+} from "../../../test/helpers/plugins/contracts-testkit.js";
+import { buildPluginShapeSummary } from "../inspect-shape.js";
 
 describe("plugin shape compatibility matrix", () => {
   it("keeps legacy hook-only, plain capability, and hybrid capability shapes explicit", () => {
@@ -91,13 +94,13 @@ describe("plugin shape compatibility matrix", () => {
       },
     });
 
-    const inspect = buildAllPluginInspectReports({
-      config,
-      report: {
-        workspaceDir: "/virtual-workspace",
-        ...registry.registry,
-      },
-    });
+    const report = {
+      workspaceDir: "/virtual-workspace",
+      ...registry.registry,
+    };
+    const inspect = report.plugins.map((plugin) =>
+      Object.assign({ plugin }, buildPluginShapeSummary({ plugin, report })),
+    );
 
     expect(
       inspect.map((entry) => ({

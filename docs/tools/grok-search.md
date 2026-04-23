@@ -88,7 +88,11 @@ citations, similar to Gemini's Google Search grounding approach.
 
 ## Supported parameters
 
-Grok search supports the standard `query` and `count` parameters.
+Grok search supports `query`.
+
+`count` is accepted for shared `web_search` compatibility, but Grok still
+returns one synthesized answer with citations rather than an N-result list.
+
 Provider-specific filters are not currently supported.
 
 ## Related

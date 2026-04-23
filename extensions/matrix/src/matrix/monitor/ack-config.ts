@@ -1,6 +1,7 @@
-import { resolveAckReaction, type OpenClawConfig } from "../../runtime-api.js";
+import { resolveAckReaction } from "openclaw/plugin-sdk/channel-feedback";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { CoreConfig } from "../../types.js";
-import { resolveMatrixAccountConfig } from "../accounts.js";
+import { resolveMatrixAccountConfig } from "../account-config.js";
 
 type MatrixAckReactionScope = "group-mentions" | "group-all" | "direct" | "all" | "none" | "off";
 
@@ -18,10 +19,9 @@ export function resolveMatrixAckReactionConfig(params: {
     channel: "matrix",
     accountId: params.accountId ?? undefined,
   }).trim();
-  const ackReactionScope =
-    accountConfig.ackReactionScope ??
+  const ackReactionScope = (accountConfig.ackReactionScope ??
     matrixConfig?.ackReactionScope ??
     params.cfg.messages?.ackReactionScope ??
-    "group-mentions";
+    "group-mentions") as MatrixAckReactionScope;
   return { ackReaction, ackReactionScope };
 }

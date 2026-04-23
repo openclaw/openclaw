@@ -1,17 +1,30 @@
-import type { OpenClawConfig, ProviderAuthResult } from "openclaw/plugin-sdk/provider-auth";
-import { readClaudeCliCredentialsCached } from "openclaw/plugin-sdk/provider-auth";
+import {
+  CLAUDE_CLI_PROFILE_ID,
+  type OpenClawConfig,
+  type ProviderAuthResult,
+} from "openclaw/plugin-sdk/provider-auth";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import {
+  readClaudeCliCredentialsForSetup,
+  readClaudeCliCredentialsForSetupNonInteractive,
+} from "./cli-auth-seam.js";
+import {
+  CLAUDE_CLI_BACKEND_ID,
+  CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS,
+  CLAUDE_CLI_DEFAULT_MODEL_REF,
+} from "./cli-shared.js";
 
-const DEFAULT_CLAUDE_CLI_MODEL = "claude-cli/claude-sonnet-4-6";
 type AgentDefaultsModel = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["model"];
 type AgentDefaultsModels = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["models"];
+type ClaudeCliCredential = NonNullable<ReturnType<typeof readClaudeCliCredentialsForSetup>>;
 
 function toClaudeCliModelRef(raw: string): string | null {
   const trimmed = raw.trim();
-  if (!trimmed.toLowerCase().startsWith("anthropic/")) {
+  if (!normalizeLowercaseStringOrEmpty(trimmed).startsWith("anthropic/")) {
     return null;
   }
   const modelId = trimmed.slice("anthropic/".length).trim();
-  if (!modelId.toLowerCase().startsWith("claude-")) {
+  if (!normalizeLowercaseStringOrEmpty(modelId).startsWith("claude-")) {
     return null;
   }
   return `claude-cli/${modelId}`;
@@ -93,29 +106,77 @@ function rewriteModelEntryMap(models: Record<string, unknown> | undefined): {
   };
 }
 
-export function hasClaudeCliAuth(): boolean {
-  return Boolean(readClaudeCliCredentialsCached());
+function seedClaudeCliAllowlist(
+  models: NonNullable<AgentDefaultsModels>,
+): NonNullable<AgentDefaultsModels> {
+  const next = { ...models };
+  for (const ref of CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS) {
+    next[ref] = next[ref] ?? {};
+  }
+  return next;
 }
 
-export function buildAnthropicCliMigrationResult(config: OpenClawConfig): ProviderAuthResult {
+export function hasClaudeCliAuth(options?: { allowKeychainPrompt?: boolean }): boolean {
+  return Boolean(
+    options?.allowKeychainPrompt === false
+      ? readClaudeCliCredentialsForSetupNonInteractive()
+      : readClaudeCliCredentialsForSetup(),
+  );
+}
+
+function buildClaudeCliAuthProfiles(
+  credential?: ClaudeCliCredential | null,
+): ProviderAuthResult["profiles"] {
+  if (!credential) {
+    return [];
+  }
+  if (credential.type === "oauth") {
+    return [
+      {
+        profileId: CLAUDE_CLI_PROFILE_ID,
+        credential: {
+          type: "oauth",
+          provider: CLAUDE_CLI_BACKEND_ID,
+          access: credential.access,
+          refresh: credential.refresh,
+          expires: credential.expires,
+        },
+      },
+    ];
+  }
+  return [
+    {
+      profileId: CLAUDE_CLI_PROFILE_ID,
+      credential: {
+        type: "token",
+        provider: CLAUDE_CLI_BACKEND_ID,
+        token: credential.token,
+        expires: credential.expires,
+      },
+    },
+  ];
+}
+
+export function buildAnthropicCliMigrationResult(
+  config: OpenClawConfig,
+  credential?: ClaudeCliCredential | null,
+): ProviderAuthResult {
   const defaults = config.agents?.defaults;
   const rewrittenModel = rewriteModelSelection(defaults?.model);
   const rewrittenModels = rewriteModelEntryMap(defaults?.models);
   const existingModels = (rewrittenModels.value ??
     defaults?.models ??
     {}) as NonNullable<AgentDefaultsModels>;
-  const defaultModel = rewrittenModel.primary ?? DEFAULT_CLAUDE_CLI_MODEL;
+  const nextModels = seedClaudeCliAllowlist(existingModels);
+  const defaultModel = rewrittenModel.primary ?? CLAUDE_CLI_DEFAULT_MODEL_REF;
 
   return {
-    profiles: [],
+    profiles: buildClaudeCliAuthProfiles(credential),
     configPatch: {
       agents: {
         defaults: {
           ...(rewrittenModel.changed ? { model: rewrittenModel.value } : {}),
-          models: {
-            ...existingModels,
-            [defaultModel]: existingModels[defaultModel] ?? {},
-          } as NonNullable<AgentDefaultsModels>,
+          models: nextModels,
         },
       },
     },

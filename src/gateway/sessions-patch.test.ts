@@ -95,7 +95,7 @@ function createAllowlistedAnthropicModelCfg(): OpenClawConfig {
   return {
     agents: {
       defaults: {
-        model: { primary: "openai/gpt-5.2" },
+        model: { primary: "openai/gpt-5.4" },
         models: {
           "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
         },
@@ -224,7 +224,7 @@ describe("gateway sessions patch", () => {
         sessionId: "sess",
         updatedAt: 1,
         providerOverride: "anthropic",
-        modelOverride: "claude-opus-4-5",
+        modelOverride: "claude-opus-4-6",
         authProfileOverride: "anthropic:default",
         authProfileOverrideSource: "user",
         authProfileOverrideCompactionCount: 3,
@@ -233,17 +233,65 @@ describe("gateway sessions patch", () => {
     const entry = expectPatchOk(
       await runPatch({
         store,
-        patch: { key: MAIN_SESSION_KEY, model: "openai/gpt-5.2" },
+        patch: { key: MAIN_SESSION_KEY, model: "anthropic/claude-sonnet-4-6" },
         loadGatewayModelCatalog: async () => [
-          { provider: "openai", id: "gpt-5.2", name: "gpt-5.2" },
+          { provider: "anthropic", id: "claude-sonnet-4-6", name: "claude-sonnet-4-6" },
         ],
       }),
     );
-    expect(entry.providerOverride).toBe("openai");
-    expect(entry.modelOverride).toBe("gpt-5.2");
+    expect(entry.providerOverride).toBe("anthropic");
+    expect(entry.modelOverride).toBe("claude-sonnet-4-6");
     expect(entry.authProfileOverride).toBeUndefined();
     expect(entry.authProfileOverrideSource).toBeUndefined();
     expect(entry.authProfileOverrideCompactionCount).toBeUndefined();
+  });
+
+  test("marks explicit model patches as pending live model switches", async () => {
+    const store: Record<string, SessionEntry> = {
+      [MAIN_SESSION_KEY]: {
+        sessionId: "sess-live",
+        updatedAt: 1,
+        providerOverride: "openai",
+        modelOverride: "gpt-5.4",
+      } as SessionEntry,
+    };
+    const entry = expectPatchOk(
+      await runPatch({
+        store,
+        cfg: createAllowlistedAnthropicModelCfg(),
+        patch: { key: MAIN_SESSION_KEY, model: "anthropic/claude-sonnet-4-6" },
+        loadGatewayModelCatalog: async () => [
+          { provider: "openai", id: "gpt-5.4", name: "gpt-5.4" },
+          { provider: "anthropic", id: "claude-sonnet-4-6", name: "claude-sonnet-4-6" },
+        ],
+      }),
+    );
+
+    expect(entry.providerOverride).toBe("anthropic");
+    expect(entry.modelOverride).toBe("claude-sonnet-4-6");
+    expect(entry.liveModelSwitchPending).toBe(true);
+  });
+
+  test("marks model reset patches as pending live model switches", async () => {
+    const store: Record<string, SessionEntry> = {
+      [MAIN_SESSION_KEY]: {
+        sessionId: "sess-live-reset",
+        updatedAt: 1,
+        providerOverride: "anthropic",
+        modelOverride: "claude-sonnet-4-6",
+      } as SessionEntry,
+    };
+    const entry = expectPatchOk(
+      await runPatch({
+        store,
+        cfg: createAllowlistedAnthropicModelCfg(),
+        patch: { key: MAIN_SESSION_KEY, model: null },
+      }),
+    );
+
+    expect(entry.providerOverride).toBeUndefined();
+    expect(entry.modelOverride).toBeUndefined();
+    expect(entry.liveModelSwitchPending).toBe(true);
   });
 
   test.each([
@@ -251,14 +299,14 @@ describe("gateway sessions patch", () => {
       name: "accepts explicit allowlisted provider/model refs from sessions.patch",
       catalog: [
         { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
-        { provider: "anthropic", id: "claude-sonnet-4-5", name: "Claude Sonnet 4.5" },
+        { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet 4.5" },
       ],
     },
     {
       name: "accepts explicit allowlisted refs absent from bundled catalog",
       catalog: [
-        { provider: "anthropic", id: "claude-sonnet-4-5", name: "Claude Sonnet 4.5" },
-        { provider: "openai", id: "gpt-5.2", name: "GPT-5.2" },
+        { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet 4.5" },
+        { provider: "openai", id: "gpt-5.4", name: "GPT-5.2" },
       ],
     },
   ])("$name", async ({ catalog }) => {

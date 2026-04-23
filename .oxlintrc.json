@@ -8,25 +8,49 @@
   },
   "rules": {
     "curly": "error",
-    "eslint-plugin-unicorn/prefer-array-find": "off",
+    "eslint-plugin-unicorn/prefer-array-find": "error",
+    "eslint/no-array-constructor": "error",
     "eslint/no-await-in-loop": "off",
-    "eslint/no-new": "off",
+    "eslint/no-new": "error",
+    "eslint/no-object-constructor": "error",
+    "eslint/no-return-assign": "error",
     "eslint/no-shadow": "off",
-    "eslint/no-unmodified-loop-condition": "off",
-    "oxc/no-accumulating-spread": "off",
-    "oxc/no-async-endpoint-handlers": "off",
-    "oxc/no-map-spread": "off",
+    "eslint/no-useless-call": "error",
+    "eslint/no-useless-computed-key": "error",
+    "eslint/no-useless-concat": "error",
+    "eslint/no-useless-constructor": "error",
+    "eslint/no-warning-comments": "error",
+    "eslint/no-unmodified-loop-condition": "error",
+    "eslint-plugin-unicorn/prefer-set-size": "error",
+    "oxc/no-accumulating-spread": "error",
+    "oxc/no-async-endpoint-handlers": "error",
+    "oxc/no-map-spread": "error",
+    "typescript/consistent-return": "error",
     "typescript/no-explicit-any": "error",
-    "typescript/no-extraneous-class": "off",
+    "typescript/no-extraneous-class": "error",
+    "typescript/no-meaningless-void-operator": "error",
+    "typescript/no-unnecessary-type-assertion": "error",
+    "typescript/no-unnecessary-type-arguments": "error",
+    "typescript/no-unnecessary-type-constraint": "error",
+    "typescript/no-unnecessary-type-conversion": "error",
+    "typescript/no-unnecessary-type-parameters": "error",
     "typescript/no-unsafe-type-assertion": "off",
+    "typescript/no-useless-default-assignment": "error",
+    "typescript/prefer-ts-expect-error": "error",
     "unicorn/consistent-function-scoping": "off",
-    "unicorn/require-post-message-target-origin": "off"
+    "unicorn/no-unnecessary-array-flat-depth": "error",
+    "unicorn/no-unnecessary-array-splice-count": "error",
+    "unicorn/no-unnecessary-slice-end": "error",
+    "unicorn/no-useless-promise-resolve-reject": "error",
+    "unicorn/prefer-date-now": "error",
+    "unicorn/prefer-set-size": "error",
+    "unicorn/require-post-message-target-origin": "error"
   },
   "ignorePatterns": [
     "assets/",
     "dist/",
+    "dist-runtime/",
     "docs/_layouts/",
-    "extensions/",
     "node_modules/",
     "patches/",
     "pnpm-lock.yaml",
@@ -34,6 +58,37 @@
     "src/auto-reply/reply/export-html/template.js",
     "src/canvas-host/a2ui/a2ui.bundle.js",
     "Swabble/",
-    "vendor/"
+    "vendor/",
+    "**/.cache/**",
+    "**/build/**",
+    "**/coverage/**",
+    "**/dist/**",
+    "**/dist-runtime/**",
+    "**/node_modules/**"
+  ],
+  "overrides": [
+    {
+      "files": ["src/security/**"],
+      "rules": {
+        "eslint/no-warning-comments": "off",
+        "oxc/no-map-spread": "off"
+      }
+    },
+    {
+      "files": [
+        "**/*.test.ts",
+        "**/*.test.tsx",
+        "**/*.e2e.test.ts",
+        "**/*.live.test.ts",
+        "**/*test-harness.ts",
+        "**/*test-helpers.ts",
+        "**/*test-support.ts"
+      ],
+      "rules": {
+        "typescript/no-explicit-any": "off",
+        "typescript/unbound-method": "off",
+        "eslint/no-unsafe-optional-chaining": "off"
+      }
+    }
   ]
 }

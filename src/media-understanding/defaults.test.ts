@@ -1,38 +1,79 @@
 import { describe, expect, it } from "vitest";
 import {
-  AUTO_AUDIO_KEY_PROVIDERS,
-  AUTO_IMAGE_KEY_PROVIDERS,
-  AUTO_VIDEO_KEY_PROVIDERS,
-  DEFAULT_AUDIO_MODELS,
-  DEFAULT_IMAGE_MODELS,
+  providerSupportsNativePdfDocument,
+  resolveAutoMediaKeyProviders,
+  resolveDefaultMediaModel,
 } from "./defaults.js";
 
-describe("DEFAULT_AUDIO_MODELS", () => {
-  it("includes Mistral Voxtral default", () => {
-    expect(DEFAULT_AUDIO_MODELS.mistral).toBe("voxtral-mini-latest");
+describe("resolveDefaultMediaModel", () => {
+  it("resolves bundled audio defaults from provider metadata", () => {
+    expect(resolveDefaultMediaModel({ providerId: "mistral", capability: "audio" })).toBe(
+      "voxtral-mini-latest",
+    );
+  });
+
+  it("resolves bundled image defaults beyond the historical core set", () => {
+    expect(resolveDefaultMediaModel({ providerId: "minimax-portal", capability: "image" })).toBe(
+      "MiniMax-VL-01",
+    );
+    expect(resolveDefaultMediaModel({ providerId: "openai-codex", capability: "image" })).toBe(
+      "gpt-5.4",
+    );
+    expect(resolveDefaultMediaModel({ providerId: "moonshot", capability: "image" })).toBe(
+      "kimi-k2.6",
+    );
+    expect(resolveDefaultMediaModel({ providerId: "openrouter", capability: "image" })).toBe(
+      "auto",
+    );
   });
 });
 
-describe("AUTO_AUDIO_KEY_PROVIDERS", () => {
-  it("includes mistral auto key resolution", () => {
-    expect(AUTO_AUDIO_KEY_PROVIDERS).toContain("mistral");
+describe("resolveAutoMediaKeyProviders", () => {
+  it("keeps the bundled audio fallback order", () => {
+    expect(resolveAutoMediaKeyProviders({ capability: "audio" })).toEqual([
+      "openai",
+      "groq",
+      "deepgram",
+      "google",
+      "mistral",
+    ]);
+  });
+
+  it("keeps the bundled image fallback order", () => {
+    expect(resolveAutoMediaKeyProviders({ capability: "image" })).toEqual([
+      "openai",
+      "anthropic",
+      "google",
+      "minimax",
+      "minimax-portal",
+      "zai",
+    ]);
+  });
+
+  it("keeps the bundled video fallback order", () => {
+    expect(resolveAutoMediaKeyProviders({ capability: "video" })).toEqual([
+      "google",
+      "qwen",
+      "moonshot",
+    ]);
   });
 });
 
-describe("AUTO_VIDEO_KEY_PROVIDERS", () => {
-  it("includes moonshot auto key resolution", () => {
-    expect(AUTO_VIDEO_KEY_PROVIDERS).toContain("moonshot");
-  });
-});
-
-describe("AUTO_IMAGE_KEY_PROVIDERS", () => {
-  it("includes minimax-portal auto key resolution", () => {
-    expect(AUTO_IMAGE_KEY_PROVIDERS).toContain("minimax-portal");
-  });
-});
-
-describe("DEFAULT_IMAGE_MODELS", () => {
-  it("includes the MiniMax portal vision default", () => {
-    expect(DEFAULT_IMAGE_MODELS["minimax-portal"]).toBe("MiniMax-VL-01");
+describe("providerSupportsNativePdfDocument", () => {
+  it("reads native PDF support from provider metadata", () => {
+    const providerRegistry = new Map([
+      ["anthropic", { id: "anthropic", nativeDocumentInputs: ["pdf" as const] }],
+      ["google", { id: "google", nativeDocumentInputs: ["pdf" as const] }],
+      ["openai", { id: "openai", nativeDocumentInputs: [] }],
+    ]);
+    expect(providerSupportsNativePdfDocument({ providerId: "anthropic", providerRegistry })).toBe(
+      true,
+    );
+    expect(providerSupportsNativePdfDocument({ providerId: "google", providerRegistry })).toBe(
+      true,
+    );
+    expect(providerSupportsNativePdfDocument({ providerId: "openai", providerRegistry })).toBe(
+      false,
+    );
   });
 });

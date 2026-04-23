@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
 IMAGE_NAME="${OPENCLAW_IMAGE:-openclaw-mcp-channels-e2e}"
 PORT="18789"
 TOKEN="mcp-e2e-$(date +%s)-$$"
@@ -15,7 +16,7 @@ cleanup() {
 trap cleanup EXIT
 
 echo "Building Docker image..."
-docker build -t "$IMAGE_NAME" -f "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR"
+run_logged mcp-channels-build docker build -t "$IMAGE_NAME" -f "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR"
 
 echo "Running in-container gateway + MCP smoke..."
 set +e
@@ -42,7 +43,16 @@ docker run --rm \
       kill \"\$gateway_pid\" >/dev/null 2>&1 || true
       wait \"\$gateway_pid\" >/dev/null 2>&1 || true
     }
+    dump_gateway_log_on_error() {
+      status=\$?
+      if [ \"\$status\" -ne 0 ]; then
+        tail -n 80 /tmp/mcp-channels-gateway.log 2>/dev/null || true
+      fi
+      cleanup_inner
+      exit \"\$status\"
+    }
     trap cleanup_inner EXIT
+    trap dump_gateway_log_on_error ERR
     for _ in \$(seq 1 80); do
       if node --input-type=module -e '
         import net from \"node:net\";
@@ -66,13 +76,13 @@ docker run --rm \
       sleep 0.25
     done
     node --import tsx scripts/e2e/mcp-channels-docker-client.ts
-    tail -n 80 /tmp/mcp-channels-gateway.log
-  " | tee "$CLIENT_LOG"
+  " >"$CLIENT_LOG" 2>&1
 status=${PIPESTATUS[0]}
 set -e
 
 if [ "$status" -ne 0 ]; then
   echo "Docker MCP smoke failed"
+  cat "$CLIENT_LOG"
   exit "$status"
 fi
 

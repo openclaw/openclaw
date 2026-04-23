@@ -25,7 +25,7 @@ binary, and can index content beyond your workspace memory files.
 
 ### Prerequisites
 
-- Install QMD: `bun install -g @tobilu/qmd`
+- Install QMD: `npm install -g @tobilu/qmd` or `bun install -g @tobilu/qmd`
 - SQLite build that allows extensions (`brew install sqlite` on macOS).
 - QMD must be on the gateway's `PATH`.
 - macOS and Linux work out of the box. Windows is best supported via WSL2.
@@ -43,12 +43,17 @@ binary, and can index content beyond your workspace memory files.
 OpenClaw creates a self-contained QMD home under
 `~/.openclaw/agents/<agentId>/qmd/` and manages the sidecar lifecycle
 automatically -- collections, updates, and embedding runs are handled for you.
+It prefers current QMD collection and MCP query shapes, but still falls back to
+legacy `--mask` collection flags and older MCP tool names when needed.
 
 ## How the sidecar works
 
 - OpenClaw creates collections from your workspace memory files and any
   configured `memory.qmd.paths`, then runs `qmd update` + `qmd embed` on boot
   and periodically (default every 5 minutes).
+- The default workspace collection tracks `MEMORY.md` plus the `memory/`
+  tree. Lowercase `memory.md` remains a bootstrap fallback, not a separate QMD
+  collection.
 - Boot refresh runs in the background so chat startup is not blocked.
 - Searches use the configured `searchMode` (default: `search`; also supports
   `vsearch` and `query`). If a mode fails, OpenClaw retries with `qmd query`.
@@ -58,6 +63,20 @@ automatically -- collections, updates, and embedding runs are handled for you.
 The first search may be slow -- QMD auto-downloads GGUF models (~2 GB) for
 reranking and query expansion on the first `qmd query` run.
 </Info>
+
+## Model overrides
+
+QMD model environment variables pass through unchanged from the gateway
+process, so you can tune QMD globally without adding new OpenClaw config:
+
+```bash
+export QMD_EMBED_MODEL="hf:Qwen/Qwen3-Embedding-0.6B-GGUF/Qwen3-Embedding-0.6B-Q8_0.gguf"
+export QMD_RERANK_MODEL="/absolute/path/to/reranker.gguf"
+export QMD_GENERATE_MODEL="/absolute/path/to/generator.gguf"
+```
+
+After changing the embedding model, rerun embeddings so the index matches the
+new vector space.
 
 ## Indexing extra paths
 
@@ -98,8 +117,8 @@ collection under `~/.openclaw/agents/<id>/qmd/sessions/`.
 
 ## Search scope
 
-By default, QMD search results are only surfaced in DM sessions (not groups or
-channels). Configure `memory.qmd.scope` to change this:
+By default, QMD search results are surfaced in direct and channel sessions
+(not groups). Configure `memory.qmd.scope` to change this:
 
 ```json5
 {
@@ -148,7 +167,13 @@ with `qmd query "test"` using the same XDG dirs OpenClaw uses.
 Set to `120000` for slower hardware.
 
 **Empty results in group chats?** Check `memory.qmd.scope` -- the default only
-allows DM sessions.
+allows direct and channel sessions.
+
+**Workspace-visible temp repos causing `ENAMETOOLONG` or broken indexing?**
+QMD traversal currently follows the underlying QMD scanner behavior rather than
+OpenClaw's builtin symlink rules. Keep temporary monorepo checkouts under
+hidden directories like `.tmp/` or outside indexed QMD roots until QMD exposes
+cycle-safe traversal or explicit exclusion controls.
 
 ## Configuration
 

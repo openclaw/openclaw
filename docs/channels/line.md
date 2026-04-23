@@ -7,19 +7,23 @@ read_when:
 title: LINE
 ---
 
-# LINE (plugin)
+# LINE
 
 LINE connects to OpenClaw via the LINE Messaging API. The plugin runs as a webhook
 receiver on the gateway and uses your channel access token + channel secret for
 authentication.
 
-Status: supported via plugin. Direct messages, group chats, media, locations, Flex
+Status: bundled plugin. Direct messages, group chats, media, locations, Flex
 messages, template messages, and quick replies are supported. Reactions and threads
 are not supported.
 
-## Plugin required
+## Bundled plugin
 
-Install the LINE plugin:
+LINE ships as a bundled plugin in current OpenClaw releases, so normal
+packaged builds do not need a separate install.
+
+If you are on an older build or a custom install that excludes LINE, install it
+manually:
 
 ```bash
 openclaw plugins install @openclaw/line

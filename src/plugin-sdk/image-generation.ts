@@ -3,6 +3,7 @@
 export type {
   GeneratedImageAsset,
   ImageGenerationProvider,
+  ImageGenerationProviderConfiguredContext,
   ImageGenerationResolution,
   ImageGenerationRequest,
   ImageGenerationResult,

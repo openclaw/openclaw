@@ -1,6 +1,8 @@
 import type { Command } from "commander";
+import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import { formatZonedTimestamp } from "openclaw/plugin-sdk/matrix-runtime-shared";
+import type { ChannelSetupInput } from "openclaw/plugin-sdk/setup";
 import { resolveMatrixAccount, resolveMatrixAccountConfig } from "./matrix/accounts.js";
-import { withResolvedActionClient, withStartedActionClient } from "./matrix/actions/client.js";
 import { listMatrixOwnDevices, pruneMatrixStaleGatewayDevices } from "./matrix/actions/devices.js";
 import { updateMatrixOwnProfile } from "./matrix/actions/profile.js";
 import {
@@ -16,18 +18,33 @@ import { resolveMatrixAuthContext } from "./matrix/client.js";
 import { setMatrixSdkConsoleLogging, setMatrixSdkLogMode } from "./matrix/client/logging.js";
 import { resolveMatrixConfigPath, updateMatrixAccountConfig } from "./matrix/config-update.js";
 import { isOpenClawManagedMatrixDevice } from "./matrix/device-health.js";
-import {
-  inspectMatrixDirectRooms,
-  repairMatrixDirectRooms,
-  type MatrixDirectRoomCandidate,
-} from "./matrix/direct-management.js";
+import type { MatrixDirectRoomCandidate } from "./matrix/direct-management.js";
+import { formatMatrixErrorMessage } from "./matrix/errors.js";
 import { applyMatrixProfileUpdate, type MatrixProfileUpdateResult } from "./profile-update.js";
-import { formatZonedTimestamp, normalizeAccountId, type ChannelSetupInput } from "./runtime-api.js";
 import { getMatrixRuntime } from "./runtime.js";
 import { matrixSetupAdapter } from "./setup-core.js";
 import type { CoreConfig } from "./types.js";
 
 let matrixCliExitScheduled = false;
+type MatrixActionClientModule = typeof import("./matrix/actions/client.js");
+type MatrixDirectManagementModule = typeof import("./matrix/direct-management.js");
+
+let matrixActionClientModulePromise: Promise<MatrixActionClientModule> | undefined;
+let matrixDirectManagementModulePromise: Promise<MatrixDirectManagementModule> | undefined;
+
+function loadMatrixActionClientModule(): Promise<MatrixActionClientModule> {
+  matrixActionClientModulePromise ??= import("./matrix/actions/client.js");
+  return matrixActionClientModulePromise;
+}
+
+function loadMatrixDirectManagementModule(): Promise<MatrixDirectManagementModule> {
+  matrixDirectManagementModulePromise ??= import("./matrix/direct-management.js");
+  return matrixDirectManagementModulePromise;
+}
+
+export function resetMatrixCliStateForTests(): void {
+  matrixCliExitScheduled = false;
+}
 
 function scheduleMatrixCliExit(): void {
   if (matrixCliExitScheduled || process.env.VITEST) {
@@ -45,7 +62,7 @@ function markCliFailure(): void {
 }
 
 function toErrorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
+  return formatMatrixErrorMessage(err);
 }
 
 function printJson(payload: unknown): void {
@@ -173,11 +190,11 @@ async function addMatrixAccount(params: {
     throw new Error("Matrix account setup is unavailable.");
   }
 
-  const input: ChannelSetupInput & { avatarUrl?: string } = {
+  const input: ChannelSetupInput = {
     name: params.name,
     avatarUrl: params.avatarUrl,
     homeserver: params.homeserver,
-    allowPrivateNetwork: params.allowPrivateNetwork,
+    dangerouslyAllowPrivateNetwork: params.allowPrivateNetwork,
     proxy: params.proxy,
     userId: params.userId,
     accessToken: params.accessToken,
@@ -329,6 +346,10 @@ async function inspectMatrixDirectRoom(params: {
   accountId: string;
   userId: string;
 }): Promise<MatrixCliDirectRoomInspection> {
+  const [{ withResolvedActionClient }, { inspectMatrixDirectRooms }] = await Promise.all([
+    loadMatrixActionClientModule(),
+    loadMatrixDirectManagementModule(),
+  ]);
   return await withResolvedActionClient(
     { accountId: params.accountId },
     async (client) => {
@@ -356,6 +377,10 @@ async function repairMatrixDirectRoom(params: {
 }): Promise<MatrixCliDirectRoomRepair> {
   const cfg = getMatrixRuntime().config.loadConfig() as CoreConfig;
   const account = resolveMatrixAccount({ cfg, accountId: params.accountId });
+  const [{ withStartedActionClient }, { repairMatrixDirectRooms }] = await Promise.all([
+    loadMatrixActionClientModule(),
+    loadMatrixDirectManagementModule(),
+  ]);
   return await withStartedActionClient({ accountId: params.accountId }, async (client) => {
     const repaired = await repairMatrixDirectRooms({
       client,
@@ -606,14 +631,14 @@ function buildVerificationGuidance(
       `Backup key mismatch on this device. Re-run '${formatMatrixCliCommand("verify device <key>", accountId)}' with the matching recovery key.`,
     );
     nextSteps.add(
-      `If you want a fresh backup baseline and accept losing unrecoverable history, run '${formatMatrixCliCommand("verify backup reset --yes", accountId)}'.`,
+      `If you want a fresh backup baseline and accept losing unrecoverable history, run '${formatMatrixCliCommand("verify backup reset --yes", accountId)}'. This may also repair secret storage so the new backup key can be loaded after restart.`,
     );
   } else if (backupIssue.code === "untrusted-signature") {
     nextSteps.add(
       `Backup trust chain is not verified on this device. Re-run '${formatMatrixCliCommand("verify device <key>", accountId)}' if you have the correct recovery key.`,
     );
     nextSteps.add(
-      `If you want a fresh backup baseline and accept losing unrecoverable history, run '${formatMatrixCliCommand("verify backup reset --yes", accountId)}'.`,
+      `If you want a fresh backup baseline and accept losing unrecoverable history, run '${formatMatrixCliCommand("verify backup reset --yes", accountId)}'. This may also repair secret storage so the new backup key can be loaded after restart.`,
     );
   } else if (backupIssue.code === "indeterminate") {
     nextSteps.add(
@@ -945,7 +970,9 @@ export function registerMatrixCli(params: { program: Command }): void {
 
   backup
     .command("reset")
-    .description("Delete the current server backup and create a fresh room-key backup baseline")
+    .description(
+      "Delete the current server backup and create a fresh room-key backup baseline, repairing secret storage if needed for a durable reset",
+    )
     .option("--account <id>", "Account ID (for multi-account setups)")
     .option("--yes", "Confirm destructive backup reset", false)
     .option("--verbose", "Show detailed diagnostics")

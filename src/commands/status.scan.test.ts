@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   applyStatusScanDefaults,
   createStatusMemorySearchConfig,
@@ -20,11 +20,15 @@ let originalForceStderr: boolean;
 let loggingStateRef: typeof import("../logging/state.js").loggingState;
 let scanStatus: typeof import("./status.scan.js").scanStatus;
 
-beforeEach(async () => {
-  vi.clearAllMocks();
+beforeAll(async () => {
   configureScanStatus();
   ({ scanStatus } = await loadStatusScanModuleForTest(mocks));
   ({ loggingState: loggingStateRef } = await import("../logging/state.js"));
+});
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  configureScanStatus();
   originalForceStderr = loggingStateRef.forceConsoleToStderr;
   loggingStateRef.forceConsoleToStderr = false;
 });
@@ -186,10 +190,12 @@ describe("scanStatus", () => {
     configureScanStatus({
       hasConfiguredChannels: true,
       sourceConfig: createStatusScanConfig({
+        marker: "source-preload",
         plugins: { enabled: false },
         channels: { telegram: { enabled: false } },
       }),
       resolvedConfig: createStatusScanConfig({
+        marker: "resolved-preload",
         plugins: { enabled: false },
         channels: { telegram: { enabled: false } },
       }),
@@ -198,9 +204,13 @@ describe("scanStatus", () => {
 
     await scanStatus({ json: true }, {} as never);
 
-    expect(mocks.ensurePluginRegistryLoaded).toHaveBeenCalledWith({
-      scope: "configured-channels",
-    });
+    expect(mocks.ensurePluginRegistryLoaded).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scope: "configured-channels",
+        config: expect.objectContaining({ marker: "resolved-preload" }),
+        activationSourceConfig: expect.objectContaining({ marker: "source-preload" }),
+      }),
+    );
     // Verify plugin logs were routed to stderr during loading and restored after
     expect(loggingStateRef.forceConsoleToStderr).toBe(false);
     expect(mocks.probeGateway).toHaveBeenCalledWith(
@@ -215,9 +225,11 @@ describe("scanStatus", () => {
     configureScanStatus({
       hasConfiguredChannels: true,
       sourceConfig: createStatusScanConfig({
+        marker: "source-env-only",
         plugins: { enabled: false },
       }),
       resolvedConfig: createStatusScanConfig({
+        marker: "resolved-env-only",
         plugins: { enabled: false },
       }),
       summary: createStatusSummary({ linkChannel: { linked: false } }),
@@ -227,8 +239,12 @@ describe("scanStatus", () => {
       await scanStatus({ json: true }, {} as never);
     });
 
-    expect(mocks.ensurePluginRegistryLoaded).toHaveBeenCalledWith({
-      scope: "configured-channels",
-    });
+    expect(mocks.ensurePluginRegistryLoaded).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scope: "configured-channels",
+        config: expect.objectContaining({ marker: "resolved-env-only" }),
+        activationSourceConfig: expect.objectContaining({ marker: "source-env-only" }),
+      }),
+    );
   });
 });

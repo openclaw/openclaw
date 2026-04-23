@@ -1,9 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { BrowserProfileConfig, OpenClawConfig } from "../config/config.js";
 import { loadConfig, writeConfigFile } from "../config/config.js";
 import { deriveDefaultBrowserCdpPortRange } from "../config/port-defaults.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { resolveUserPath } from "../utils.js";
+import { assertCdpEndpointAllowed } from "./cdp.helpers.js";
 import { resolveOpenClawUserDataDir } from "./chrome.js";
 import { parseHttpUrl, resolveProfile } from "./config.js";
 import {
@@ -81,8 +84,8 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
 
   const createProfile = async (params: CreateProfileParams): Promise<CreateProfileResult> => {
     const name = params.name.trim();
-    const rawCdpUrl = params.cdpUrl?.trim() || undefined;
-    const rawUserDataDir = params.userDataDir?.trim() || undefined;
+    const rawCdpUrl = normalizeOptionalString(params.cdpUrl);
+    const rawUserDataDir = normalizeOptionalString(params.userDataDir);
     const normalizedUserDataDir = rawUserDataDir ? resolveUserPath(rawUserDataDir) : undefined;
     const driver = params.driver === "existing-session" ? "existing-session" : undefined;
 
@@ -121,16 +124,17 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
     }
 
     if (rawCdpUrl) {
-      let parsed: ReturnType<typeof parseHttpUrl>;
-      try {
-        parsed = parseHttpUrl(rawCdpUrl, "browser.profiles.cdpUrl");
-      } catch (err) {
-        throw new BrowserValidationError(String(err));
-      }
       if (driver === "existing-session") {
         throw new BrowserValidationError(
           "driver=existing-session does not accept cdpUrl; it attaches via the Chrome MCP auto-connect flow",
         );
+      }
+      let parsed: ReturnType<typeof parseHttpUrl>;
+      try {
+        parsed = parseHttpUrl(rawCdpUrl, "browser.profiles.cdpUrl");
+        await assertCdpEndpointAllowed(parsed.normalized, state.resolved.ssrfPolicy);
+      } catch (err) {
+        throw new BrowserValidationError(formatErrorMessage(err));
       }
       profileConfig = {
         cdpUrl: parsed.normalized,

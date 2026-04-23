@@ -1,17 +1,17 @@
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
+import { chunkMarkdownTextWithMode, type ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-chunking";
 import {
   resolveOutboundMediaUrls,
   sendMediaWithLeadingCaption,
 } from "openclaw/plugin-sdk/reply-payload";
-import { chunkMarkdownTextWithMode, type ChunkMode } from "openclaw/plugin-sdk/reply-runtime";
-import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
-import { markdownToWhatsApp } from "openclaw/plugin-sdk/text-runtime";
-import { sleep } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { loadWebMedia } from "../media.js";
 import { newConnectionId } from "../reconnect.js";
 import { formatError } from "../session.js";
+import { convertMarkdownTables, sleep } from "../text-runtime.js";
+import { markdownToWhatsApp } from "../text-runtime.js";
 import { whatsappOutboundLog } from "./loggers.js";
 import type { WebInboundMsg } from "./types.js";
 import { elide } from "./util.js";
@@ -26,7 +26,7 @@ function shouldSuppressReasoningReply(payload: ReplyPayload): boolean {
   if (typeof text !== "string") {
     return false;
   }
-  return text.trimStart().toLowerCase().startsWith(REASONING_PREFIX);
+  return normalizeLowercaseStringOrEmpty(text.trimStart()).startsWith(REASONING_PREFIX);
 }
 
 export async function deliverWebReply(params: {

@@ -1,12 +1,12 @@
-import type { OpenClawConfig } from "../../config/config.js";
 import type {
   SessionAcpIdentity,
   AcpSessionRuntimeOptions,
   SessionAcpMeta,
   SessionEntry,
 } from "../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { AcpRuntimeError } from "../runtime/errors.js";
-import { requireAcpRuntimeBackend } from "../runtime/registry.js";
+import { getAcpRuntimeBackend, requireAcpRuntimeBackend } from "../runtime/registry.js";
 import {
   listAcpSessionEntries,
   readAcpSessionEntry,
@@ -68,6 +68,7 @@ export type AcpCloseSessionInput = {
   cfg: OpenClawConfig;
   sessionKey: string;
   reason: string;
+  discardPersistentState?: boolean;
   clearMeta?: boolean;
   allowBackendUnavailable?: boolean;
   requireAcpSession?: boolean;
@@ -135,6 +136,7 @@ export type AcpSessionManagerDeps = {
   listAcpSessions: typeof listAcpSessionEntries;
   readSessionEntry: typeof readAcpSessionEntry;
   upsertSessionMeta: typeof upsertAcpSessionMeta;
+  getRuntimeBackend: typeof getAcpRuntimeBackend;
   requireRuntimeBackend: typeof requireAcpRuntimeBackend;
 };
 
@@ -142,6 +144,7 @@ export const DEFAULT_DEPS: AcpSessionManagerDeps = {
   listAcpSessions: listAcpSessionEntries,
   readSessionEntry: readAcpSessionEntry,
   upsertSessionMeta: upsertAcpSessionMeta,
+  getRuntimeBackend: getAcpRuntimeBackend,
   requireRuntimeBackend: requireAcpRuntimeBackend,
 };
 

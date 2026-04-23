@@ -51,7 +51,7 @@ const QUERY_KEYS = new Set([
   "maxmessages",
 ]);
 
-const normalizeQueryText = (value: string): string => value.trim().toLowerCase();
+const normalizeQueryText = (value: string): string => normalizeLowercaseStringOrEmpty(value);
 
 const globToRegex = (pattern: string): RegExp => {
   const escaped = pattern
@@ -62,7 +62,7 @@ const globToRegex = (pattern: string): RegExp => {
 };
 
 const parseQueryNumber = (value: string): number | null => {
-  let raw = value.trim().toLowerCase();
+  let raw = normalizeLowercaseStringOrEmpty(value);
   if (!raw) {
     return null;
   }
@@ -101,23 +101,25 @@ export const extractQueryTerms = (query: string): UsageQueryTerm[] => {
 
 const getSessionText = (session: UsageSessionQueryTarget): string[] => {
   const items: Array<string | undefined> = [session.label, session.key, session.sessionId];
-  return items.filter((item): item is string => Boolean(item)).map((item) => item.toLowerCase());
+  return items
+    .filter((item): item is string => Boolean(item))
+    .map((item) => normalizeLowercaseStringOrEmpty(item));
 };
 
 const getSessionProviders = (session: UsageSessionQueryTarget): string[] => {
   const providers = new Set<string>();
   if (session.modelProvider) {
-    providers.add(session.modelProvider.toLowerCase());
+    providers.add(normalizeLowercaseStringOrEmpty(session.modelProvider));
   }
   if (session.providerOverride) {
-    providers.add(session.providerOverride.toLowerCase());
+    providers.add(normalizeLowercaseStringOrEmpty(session.providerOverride));
   }
   if (session.origin?.provider) {
-    providers.add(session.origin.provider.toLowerCase());
+    providers.add(normalizeLowercaseStringOrEmpty(session.origin.provider));
   }
   for (const entry of session.usage?.modelUsage ?? []) {
     if (entry.provider) {
-      providers.add(entry.provider.toLowerCase());
+      providers.add(normalizeLowercaseStringOrEmpty(entry.provider));
     }
   }
   return Array.from(providers);
@@ -126,23 +128,20 @@ const getSessionProviders = (session: UsageSessionQueryTarget): string[] => {
 const getSessionModels = (session: UsageSessionQueryTarget): string[] => {
   const models = new Set<string>();
   if (session.model) {
-    models.add(session.model.toLowerCase());
+    models.add(normalizeLowercaseStringOrEmpty(session.model));
   }
   for (const entry of session.usage?.modelUsage ?? []) {
     if (entry.model) {
-      models.add(entry.model.toLowerCase());
+      models.add(normalizeLowercaseStringOrEmpty(entry.model));
     }
   }
   return Array.from(models);
 };
 
 const getSessionTools = (session: UsageSessionQueryTarget): string[] =>
-  (session.usage?.toolUsage?.tools ?? []).map((tool) => tool.name.toLowerCase());
+  (session.usage?.toolUsage?.tools ?? []).map((tool) => normalizeLowercaseStringOrEmpty(tool.name));
 
-export const matchesUsageQuery = (
-  session: UsageSessionQueryTarget,
-  term: UsageQueryTerm,
-): boolean => {
+const matchesUsageQuery = (session: UsageSessionQueryTarget, term: UsageQueryTerm): boolean => {
   const value = normalizeQueryText(term.value ?? "");
   if (!value) {
     return true;
@@ -154,11 +153,11 @@ export const matchesUsageQuery = (
   const key = normalizeQueryText(term.key);
   switch (key) {
     case "agent":
-      return session.agentId?.toLowerCase().includes(value) ?? false;
+      return normalizeLowercaseStringOrEmpty(session.agentId).includes(value);
     case "channel":
-      return session.channel?.toLowerCase().includes(value) ?? false;
+      return normalizeLowercaseStringOrEmpty(session.channel).includes(value);
     case "chat":
-      return session.chatType?.toLowerCase().includes(value) ?? false;
+      return normalizeLowercaseStringOrEmpty(session.chatType).includes(value);
     case "provider":
       return getSessionProviders(session).some((provider) => provider.includes(value));
     case "model":
@@ -166,7 +165,7 @@ export const matchesUsageQuery = (
     case "tool":
       return getSessionTools(session).some((tool) => tool.includes(value));
     case "label":
-      return session.label?.toLowerCase().includes(value) ?? false;
+      return normalizeLowercaseStringOrEmpty(session.label).includes(value);
     case "key":
     case "session":
     case "id":
@@ -177,8 +176,8 @@ export const matchesUsageQuery = (
         );
       }
       return (
-        session.key.toLowerCase().includes(value) ||
-        (session.sessionId?.toLowerCase().includes(value) ?? false)
+        normalizeLowercaseStringOrEmpty(session.key).includes(value) ||
+        normalizeLowercaseStringOrEmpty(session.sessionId).includes(value)
       );
     case "has":
       switch (value) {
@@ -319,3 +318,4 @@ export function parseToolSummary(content: string) {
     cleanContent: nonToolLines.join("\n").trim(),
   };
 }
+import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";

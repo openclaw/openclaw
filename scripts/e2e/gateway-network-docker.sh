@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
 IMAGE_NAME="openclaw-gateway-network-e2e"
 
 PORT="18789"
@@ -16,7 +17,7 @@ cleanup() {
 trap cleanup EXIT
 
 echo "Building Docker image..."
-docker build -t "$IMAGE_NAME" -f "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR"
+run_logged gateway-network-build docker build -t "$IMAGE_NAME" -f "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR"
 
 echo "Creating Docker network..."
 docker network create "$NET_NAME" >/dev/null
@@ -31,7 +32,7 @@ docker run -d \
   -e "OPENCLAW_SKIP_CRON=1" \
   -e "OPENCLAW_SKIP_CANVAS_HOST=1" \
   "$IMAGE_NAME" \
-  bash -lc "set -euo pipefail; entry=dist/index.mjs; [ -f \"\$entry\" ] || entry=dist/index.js; node \"\$entry\" config set gateway.controlUi.enabled false >/dev/null; node \"\$entry\" gateway --port $PORT --bind lan --allow-unconfigured > /tmp/gateway-net-e2e.log 2>&1"
+  bash -lc "set -euo pipefail; entry=dist/index.mjs; [ -f \"\$entry\" ] || entry=dist/index.js; node \"\$entry\" config set gateway.controlUi.enabled false >/dev/null; node \"\$entry\" gateway --port $PORT --bind lan --allow-unconfigured > /tmp/gateway-net-e2e.log 2>&1" >/dev/null
 
 echo "Waiting for gateway to come up..."
 ready=0
@@ -59,7 +60,7 @@ for _ in $(seq 1 40); do
     ready=1
     break
   fi
-  if docker exec "$GW_NAME" bash -lc "grep -q \"listening on ws://\" /tmp/gateway-net-e2e.log"; then
+  if docker exec "$GW_NAME" bash -lc "grep -q \"listening on ws://\" /tmp/gateway-net-e2e.log 2>/dev/null"; then
     ready=1
     break
   fi
@@ -76,10 +77,8 @@ if [ "$ready" -ne 1 ]; then
   exit 1
 fi
 
-docker exec "$GW_NAME" bash -lc "tail -n 50 /tmp/gateway-net-e2e.log"
-
 echo "Running client container (connect + health)..."
-docker run --rm \
+run_logged gateway-network-client docker run --rm \
   --network "$NET_NAME" \
   -e "GW_URL=ws://$GW_NAME:$PORT" \
   -e "GW_TOKEN=$TOKEN" \

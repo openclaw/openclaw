@@ -39,9 +39,13 @@ vi.mock("../agents/pi-tools.before-tool-call.js", () => ({
   runBeforeToolCallHook,
 }));
 
-vi.mock("../plugins/config-state.js", () => ({
-  isTestDefaultMemorySlotDisabled: disableDefaultMemorySlot,
-}));
+vi.mock("../plugins/config-state.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/config-state.js")>();
+  return {
+    ...actual,
+    isTestDefaultMemorySlotDisabled: disableDefaultMemorySlot,
+  };
+});
 
 vi.mock("../plugins/tools.js", () => ({
   getPluginToolMeta: noPluginToolMeta,
@@ -72,14 +76,18 @@ let server: ReturnType<typeof createServer> | undefined;
 
 beforeAll(async () => {
   server = createServer((req, res) => {
-    void handleToolsInvokeHttpRequest(req, res, {
-      auth: { mode: "token", token: TEST_GATEWAY_TOKEN, allowTailscale: false },
-    }).then((handled) => {
+    void (async () => {
+      const handled = await handleToolsInvokeHttpRequest(req, res, {
+        auth: { mode: "token", token: TEST_GATEWAY_TOKEN, allowTailscale: false },
+      });
       if (handled) {
         return;
       }
       res.statusCode = 404;
       res.end("not found");
+    })().catch((err) => {
+      res.statusCode = 500;
+      res.end(String(err));
     });
   });
   await new Promise<void>((resolve, reject) => {
@@ -125,7 +133,7 @@ describe("tools invoke HTTP denylist", () => {
     expect(cronRes.status).toBe(404);
   });
 
-  it("keeps cron hidden even when explicitly enabled in gateway.tools.allow", async () => {
+  it("allows cron once gateway.tools.allow explicitly removes the default deny", async () => {
     cfg = {
       gateway: {
         tools: {
@@ -136,10 +144,10 @@ describe("tools invoke HTTP denylist", () => {
 
     const cronRes = await invoke("cron", "operator.admin");
 
-    expect(cronRes.status).toBe(404);
+    expect(cronRes.status).toBe(200);
   });
 
-  it("keeps cron and gateway hidden under the coding profile", async () => {
+  it("keeps gateway denied under the coding profile while honoring explicit cron allow", async () => {
     cfg = {
       tools: {
         profile: "coding",
@@ -154,7 +162,7 @@ describe("tools invoke HTTP denylist", () => {
     const cronRes = await invoke("cron", "operator.admin");
     const gatewayRes = await invoke("gateway");
 
-    expect(cronRes.status).toBe(404);
+    expect(cronRes.status).toBe(200);
     expect(gatewayRes.status).toBe(404);
   });
 });

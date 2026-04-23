@@ -1,5 +1,4 @@
 import { DEFAULT_ACCOUNT_ID, type OpenClawConfig } from "openclaw/plugin-sdk/account-resolution";
-import { waitUntilAbort } from "openclaw/plugin-sdk/channel-lifecycle";
 import { registerPluginHttpRoute } from "openclaw/plugin-sdk/webhook-ingress";
 import { listAccountIds, resolveAccount } from "./accounts.js";
 import { dispatchSynologyChatInboundTurn } from "./inbound-turn.js";
@@ -59,10 +58,12 @@ function createUnknownArgsLogAdapter(
   if (!log) {
     return undefined;
   }
+  const formatArg = (value: unknown): string =>
+    typeof value === "string" ? value : value instanceof Error ? value.message : "";
   return {
-    info: (...args) => log.info?.(String(args[0] ?? "")),
-    warn: (...args) => log.warn?.(String(args[0] ?? "")),
-    error: (...args) => log.error?.(String(args[0] ?? "")),
+    info: (...args) => log.info?.(formatArg(args[0])),
+    warn: (...args) => log.warn?.(formatArg(args[0])),
+    error: (...args) => log.error?.(formatArg(args[0])),
   };
 }
 

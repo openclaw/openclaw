@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { t } from "../../i18n/index.ts";
 import type { EventLogEntry } from "../app-events.ts";
 import { formatEventPayload } from "../presenter.ts";
 
@@ -42,7 +43,7 @@ export function renderDebug(props: DebugProps) {
             <div class="card-sub">Status, health, and heartbeat data.</div>
           </div>
           <button class="btn" ?disabled=${props.loading} @click=${props.onRefresh}>
-            ${props.loading ? "Refreshing…" : "Refresh"}
+            ${props.loading ? t("common.refreshing") : t("common.refresh")}
           </button>
         </div>
         <div class="stack" style="margin-top: 12px;">
@@ -95,7 +96,7 @@ export function renderDebug(props: DebugProps) {
           </label>
         </div>
         <div class="row" style="margin-top: 12px;">
-          <button class="btn primary" @click=${props.onCall}>Call</button>
+          <button class="btn primary" @click=${props.onCall}>${t("common.call")}</button>
         </div>
         ${props.callError
           ? html`<div class="callout danger" style="margin-top: 12px;">${props.callError}</div>`

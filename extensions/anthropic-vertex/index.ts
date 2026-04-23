@@ -1,4 +1,5 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import { NATIVE_ANTHROPIC_REPLAY_HOOKS } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   mergeImplicitAnthropicVertexProvider,
   resolveAnthropicVertexConfigApiKey,
@@ -20,7 +21,7 @@ export default definePluginEntry({
       catalog: {
         order: "simple",
         run: async (ctx) => {
-          const implicit = await resolveImplicitAnthropicVertexProvider({
+          const implicit = resolveImplicitAnthropicVertexProvider({
             env: ctx.env,
           });
           if (!implicit) {
@@ -35,10 +36,7 @@ export default definePluginEntry({
         },
       },
       resolveConfigApiKey: ({ env }) => resolveAnthropicVertexConfigApiKey(env),
-      capabilities: {
-        providerFamily: "anthropic",
-        dropThinkingBlockModelHints: ["claude"],
-      },
+      ...NATIVE_ANTHROPIC_REPLAY_HOOKS,
     });
   },
 });

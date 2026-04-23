@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   clampPercent,
   resolveLegacyPiAgentAccessToken,
@@ -13,15 +13,11 @@ async function withLegacyPiAuthFile(
   contents: string,
   run: (home: string) => Promise<void> | void,
 ): Promise<void> {
-  const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-provider-usage-"));
-  await fs.mkdir(path.join(home, ".pi", "agent"), { recursive: true });
-  await fs.writeFile(path.join(home, ".pi", "agent", "auth.json"), contents, "utf8");
-
-  try {
+  await withTempDir({ prefix: "openclaw-provider-usage-" }, async (home) => {
+    await fs.mkdir(path.join(home, ".pi", "agent"), { recursive: true });
+    await fs.writeFile(path.join(home, ".pi", "agent", "auth.json"), contents, "utf8");
     await run(home);
-  } finally {
-    await fs.rm(home, { recursive: true, force: true });
-  }
+  });
 }
 
 describe("provider-usage.shared", () => {
@@ -33,6 +29,9 @@ describe("provider-usage.shared", () => {
   it.each([
     { value: "z-ai", expected: "zai" },
     { value: " GOOGLE-GEMINI-CLI ", expected: "google-gemini-cli" },
+    { value: "minimax-portal", expected: "minimax" },
+    { value: "minimax-cn", expected: "minimax" },
+    { value: "minimax-portal-cn", expected: "minimax" },
     { value: "unknown-provider", expected: undefined },
     { value: undefined, expected: undefined },
     { value: null, expected: undefined },

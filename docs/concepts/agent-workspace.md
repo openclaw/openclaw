@@ -73,6 +73,7 @@ These are the standard files OpenClaw expects inside the workspace:
 - `SOUL.md`
   - Persona, tone, and boundaries.
   - Loaded every session.
+  - Guide: [SOUL.md Personality Guide](/concepts/soul)
 
 - `USER.md`
   - Who the user is and how to address them.
@@ -111,15 +112,16 @@ See [Memory](/concepts/memory) for the workflow and automatic memory flush.
 
 - `skills/` (optional)
   - Workspace-specific skills.
-  - Overrides managed/bundled skills when names collide.
+  - Highest-precedence skill location for that workspace.
+  - Overrides project agent skills, personal agent skills, managed skills, bundled skills, and `skills.load.extraDirs` when names collide.
 
 - `canvas/` (optional)
   - Canvas UI files for node displays (for example `canvas/index.html`).
 
 If any bootstrap file is missing, OpenClaw injects a "missing file" marker into
 the session and continues. Large bootstrap files are truncated when injected;
-adjust limits with `agents.defaults.bootstrapMaxChars` (default: 20000) and
-`agents.defaults.bootstrapTotalMaxChars` (default: 150000).
+adjust limits with `agents.defaults.bootstrapMaxChars` (default: 12000) and
+`agents.defaults.bootstrapTotalMaxChars` (default: 60000).
 `openclaw setup` can recreate missing defaults without overwriting existing
 files.
 
@@ -128,7 +130,8 @@ files.
 These live under `~/.openclaw/` and should NOT be committed to the workspace repo:
 
 - `~/.openclaw/openclaw.json` (config)
-- `~/.openclaw/credentials/` (OAuth tokens, API keys)
+- `~/.openclaw/agents/<agentId>/agent/auth-profiles.json` (model auth profiles: OAuth + API keys)
+- `~/.openclaw/credentials/` (channel/provider state plus legacy OAuth import data)
 - `~/.openclaw/agents/<agentId>/sessions/` (session transcripts + metadata)
 - `~/.openclaw/skills/` (managed skills)
 

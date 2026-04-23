@@ -1,3 +1,5 @@
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+
 export type LineOutboundMediaKind = "image" | "video" | "audio";
 
 export type LineOutboundMediaResolved = {
@@ -31,7 +33,7 @@ export function validateLineMediaUrl(url: string): void {
 }
 
 export function detectLineMediaKind(mimeType: string): LineOutboundMediaKind {
-  const normalized = mimeType.toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(mimeType);
   if (normalized.startsWith("image/")) {
     return "image";
   }
@@ -54,7 +56,7 @@ function isHttpsUrl(url: string): boolean {
 
 function detectLineMediaKindFromUrl(url: string): LineOutboundMediaKind | undefined {
   try {
-    const pathname = new URL(url).pathname.toLowerCase();
+    const pathname = normalizeLowercaseStringOrEmpty(new URL(url).pathname);
     if (/\.(png|jpe?g|gif|webp|bmp|heic|heif|avif)$/i.test(pathname)) {
       return "image";
     }

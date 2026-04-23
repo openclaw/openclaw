@@ -9,13 +9,13 @@ import type {
   ChannelMessageActionAdapter,
   ChannelMessageToolDiscovery,
 } from "openclaw/plugin-sdk/channel-contract";
+import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import {
   createAllowlistProviderGroupPolicyWarningCollector,
   projectConfigAccountIdWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
 import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
-import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
 import {
   createChannelDirectoryAdapter,
   createRuntimeDirectoryLiveAdapter,
@@ -23,7 +23,23 @@ import {
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import { createRuntimeOutboundDelegates } from "openclaw/plugin-sdk/outbound-runtime";
 import { createComputedAccountStatusAdapter } from "openclaw/plugin-sdk/status-helpers";
-import type { ChannelMeta, ChannelPlugin, ClawdbotConfig } from "../runtime-api.js";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import {
+  inspectFeishuCredentials,
+  listEnabledFeishuAccounts,
+  listFeishuAccountIds,
+  resolveDefaultFeishuAccountId,
+  resolveFeishuAccount,
+  resolveFeishuRuntimeAccount,
+} from "./accounts.js";
+import { feishuApprovalAuth } from "./approval-auth.js";
+import { FEISHU_CARD_INTERACTION_VERSION } from "./card-interaction.js";
+import type {
+  ChannelMessageActionName,
+  ChannelMeta,
+  ChannelPlugin,
+  ClawdbotConfig,
+} from "./channel-runtime-api.js";
 import {
   buildChannelConfigSchema,
   buildProbeChannelStatusSummary,
@@ -32,33 +48,26 @@ import {
   createDefaultChannelRuntimeState,
   DEFAULT_ACCOUNT_ID,
   PAIRING_APPROVED_MESSAGE,
-} from "../runtime-api.js";
-import type { ChannelMessageActionName } from "../runtime-api.js";
-import {
-  inspectFeishuCredentials,
-  resolveFeishuAccount,
-  resolveFeishuRuntimeAccount,
-  listFeishuAccountIds,
-  listEnabledFeishuAccounts,
-  resolveDefaultFeishuAccountId,
-} from "./accounts.js";
-import { feishuApprovalAuth } from "./approval-auth.js";
-import { FEISHU_CARD_INTERACTION_VERSION } from "./card-interaction.js";
-import { createFeishuClient } from "./client.js";
+} from "./channel-runtime-api.js";
+import { isRecord } from "./comment-shared.js";
 import { FeishuConfigSchema } from "./config-schema.js";
 import {
   buildFeishuConversationId,
+  buildFeishuModelOverrideParentCandidates,
   parseFeishuConversationId,
   parseFeishuDirectConversationId,
   parseFeishuTargetId,
 } from "./conversation-id.js";
-import { listFeishuDirectoryPeers, listFeishuDirectoryGroups } from "./directory.static.js";
+import { listFeishuDirectoryGroups, listFeishuDirectoryPeers } from "./directory.static.js";
+import { messageActionTargetAliases } from "./message-action-contract.js";
 import { resolveFeishuGroupToolPolicy } from "./policy.js";
-import { getFeishuRuntime } from "./runtime.js";
+import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
+import { collectFeishuSecurityAuditFindings } from "./security-audit.js";
+import { resolveFeishuSessionConversation } from "./session-conversation.js";
 import { resolveFeishuOutboundSessionRoute } from "./session-route.js";
 import { feishuSetupAdapter } from "./setup-core.js";
-import { feishuSetupWizard } from "./setup-surface.js";
-import { normalizeFeishuTarget, looksLikeFeishuId, formatFeishuTarget } from "./targets.js";
+import { feishuSetupWizard, runFeishuLogin } from "./setup-surface.js";
+import { looksLikeFeishuId, normalizeFeishuTarget } from "./targets.js";
 import type { FeishuConfig, FeishuProbeResult, ResolvedFeishuAccount } from "./types.js";
 
 function readFeishuMediaParam(params: Record<string, unknown>): string | undefined {
@@ -67,10 +76,6 @@ function readFeishuMediaParam(params: Record<string, unknown>): string | undefin
     return undefined;
   }
   return media.trim() ? media : undefined;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
 }
 
 function hasLegacyFeishuCardCommandValue(actionValue: unknown): boolean {
@@ -113,6 +118,11 @@ const loadFeishuChannelRuntime = createLazyRuntimeNamedExport(
   "feishuChannelRuntime",
 );
 
+async function createFeishuActionClient(account: ResolvedFeishuAccount) {
+  const { createFeishuClient } = await import("./client.js");
+  return createFeishuClient(account);
+}
+
 const collectFeishuSecurityWarnings = createAllowlistProviderGroupPolicyWarningCollector<{
   cfg: ClawdbotConfig;
   accountId?: string | null;
@@ -133,13 +143,21 @@ const collectFeishuSecurityWarnings = createAllowlistProviderGroupPolicyWarningC
 
 function describeFeishuMessageTool({
   cfg,
+  accountId,
 }: Parameters<
   NonNullable<ChannelMessageActionAdapter["describeMessageTool"]>
 >[0]): ChannelMessageToolDiscovery {
+  const enabledAccounts = accountId
+    ? [resolveFeishuAccount({ cfg, accountId })].filter(
+        (account) => account.enabled && account.configured,
+      )
+    : listEnabledFeishuAccounts(cfg);
   const enabled =
-    cfg.channels?.feishu?.enabled !== false &&
-    Boolean(inspectFeishuCredentials(cfg.channels?.feishu as FeishuConfig | undefined));
-  if (listEnabledFeishuAccounts(cfg).length === 0) {
+    enabledAccounts.length > 0 ||
+    (!accountId &&
+      cfg.channels?.feishu?.enabled !== false &&
+      Boolean(inspectFeishuCredentials(cfg.channels?.feishu as FeishuConfig | undefined)));
+  if (enabledAccounts.length === 0) {
     return {
       actions: [],
       capabilities: enabled ? ["cards"] : [],
@@ -164,7 +182,11 @@ function describeFeishuMessageTool({
     "channel-info",
     "channel-list",
   ]);
-  if (areAnyFeishuReactionActionsEnabled(cfg)) {
+  if (
+    accountId
+      ? enabledAccounts.some((account) => isFeishuReactionsActionEnabled({ cfg, account }))
+      : areAnyFeishuReactionActionsEnabled(cfg)
+  ) {
     actions.add("react");
     actions.add("reactions");
   }
@@ -207,8 +229,7 @@ function setFeishuNamedAccountEnabled(
 
 const feishuConfigAdapter = createHybridChannelConfigAdapter<
   ResolvedFeishuAccount,
-  ResolvedFeishuAccount,
-  ClawdbotConfig
+  ResolvedFeishuAccount
 >({
   sectionKey: "feishu",
   listAccountIds: listFeishuAccountIds,
@@ -330,9 +351,9 @@ function resolveFeishuSenderScopedCommandConversation(params: {
   if (!parentConversationId || !threadId || !senderId) {
     return undefined;
   }
-  const expectedScopePrefix = `feishu:group:${parentConversationId.toLowerCase()}:topic:${threadId.toLowerCase()}:sender:`;
+  const expectedScopePrefix = `feishu:group:${normalizeLowercaseStringOrEmpty(parentConversationId)}:topic:${normalizeLowercaseStringOrEmpty(threadId)}:sender:`;
   const isSenderScopedSession = [params.sessionKey, params.parentSessionKey].some((candidate) => {
-    const normalized = typeof candidate === "string" ? candidate.trim().toLowerCase() : "";
+    const normalized = normalizeLowercaseStringOrEmpty(candidate ?? "");
     if (!normalized) {
       return false;
     }
@@ -547,6 +568,11 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
       groups: {
         resolveToolPolicy: resolveFeishuGroupToolPolicy,
       },
+      conversationBindings: {
+        defaultTopLevelPlacement: "current",
+        buildModelOverrideParentCandidates: ({ parentConversationId }) =>
+          buildFeishuModelOverrideParentCandidates(parentConversationId),
+      },
       mentions: {
         stripPatterns: () => ['<at user_id="[^"]*">[^<]*</at>'],
       },
@@ -613,8 +639,13 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
             },
           }),
       },
-      auth: feishuApprovalAuth,
+      approvalCapability: feishuApprovalAuth,
+      secrets: {
+        secretTargetRegistryEntries,
+        collectRuntimeConfigAssignments,
+      },
       actions: {
+        messageActionTargetAliases,
         describeMessageTool: describeFeishuMessageTool,
         handleAction: async (ctx) => {
           const account = resolveFeishuAccount({
@@ -814,7 +845,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
               throw new Error("Feishu channel-info requires chatId or channelId.");
             }
             const runtime = await loadFeishuChannelRuntime();
-            const client = createFeishuClient(account);
+            const client = await createFeishuActionClient(account);
             const channel = await runtime.getChatInfo(client, chatId);
             const includeMembers =
               ctx.params.includeMembers === true || ctx.params.members === true;
@@ -844,7 +875,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
 
           if (ctx.action === "member-info") {
             const runtime = await loadFeishuChannelRuntime();
-            const client = createFeishuClient(account);
+            const client = await createFeishuActionClient(account);
             const memberId = resolveFeishuMemberId(ctx.params);
             if (memberId) {
               const member = await runtime.getFeishuMemberInfo(
@@ -1031,7 +1062,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
             return jsonActionResult({ ok: true, reactions });
           }
 
-          throw new Error(`Unsupported Feishu action: "${String(ctx.action)}"`);
+          throw new Error(`Unsupported Feishu action: "${ctx.action}"`);
         },
       },
       bindings: {
@@ -1064,10 +1095,23 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
             fallbackTo,
           }),
       },
+      auth: {
+        login: async ({ cfg }) => {
+          const { createClackPrompter } = await import("openclaw/plugin-sdk/setup-runtime");
+          const { writeConfigFile } = await import("openclaw/plugin-sdk/config-runtime");
+          const prompter = createClackPrompter();
+          const nextCfg = await runFeishuLogin({ cfg, prompter });
+          if (nextCfg !== cfg) {
+            await writeConfigFile(nextCfg);
+          }
+        },
+      },
       setup: feishuSetupAdapter,
       setupWizard: feishuSetupWizard,
       messaging: {
         normalizeTarget: (raw) => normalizeFeishuTarget(raw) ?? undefined,
+        resolveSessionConversation: ({ kind, rawId }) =>
+          resolveFeishuSessionConversation({ kind, rawId }),
         resolveOutboundSessionRoute: (params) => resolveFeishuOutboundSessionRoute(params),
         targetResolver: {
           looksLikeId: looksLikeFeishuId,
@@ -1157,6 +1201,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
         cfg: ClawdbotConfig;
         accountId?: string | null;
       }>(collectFeishuSecurityWarnings),
+      collectAuditFindings: ({ cfg }) => collectFeishuSecurityAuditFindings({ cfg }),
     },
     pairing: {
       text: {

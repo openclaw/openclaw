@@ -1,11 +1,13 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => {
   const spawnSubagentDirectMock = vi.fn();
   const spawnAcpDirectMock = vi.fn();
+  const registerSubagentRunMock = vi.fn();
   return {
     spawnSubagentDirectMock,
     spawnAcpDirectMock,
+    registerSubagentRunMock,
   };
 });
 
@@ -17,27 +19,22 @@ vi.mock("../subagent-spawn.js", () => ({
 vi.mock("../acp-spawn.js", () => ({
   ACP_SPAWN_MODES: ["run", "session"],
   ACP_SPAWN_STREAM_TARGETS: ["parent"],
+  isSpawnAcpAcceptedResult: (result: { status?: string }) => result?.status === "accepted",
   spawnAcpDirect: (...args: unknown[]) => hoisted.spawnAcpDirectMock(...args),
+}));
+
+vi.mock("../subagent-registry.js", () => ({
+  registerSubagentRun: (...args: unknown[]) => hoisted.registerSubagentRunMock(...args),
 }));
 
 let createSessionsSpawnTool: typeof import("./sessions-spawn-tool.js").createSessionsSpawnTool;
 
-async function loadFreshSessionsSpawnToolModuleForTest() {
-  vi.resetModules();
-  vi.doMock("../subagent-spawn.js", () => ({
-    SUBAGENT_SPAWN_MODES: ["run", "session"],
-    spawnSubagentDirect: (...args: unknown[]) => hoisted.spawnSubagentDirectMock(...args),
-  }));
-  vi.doMock("../acp-spawn.js", () => ({
-    ACP_SPAWN_MODES: ["run", "session"],
-    ACP_SPAWN_STREAM_TARGETS: ["parent"],
-    spawnAcpDirect: (...args: unknown[]) => hoisted.spawnAcpDirectMock(...args),
-  }));
-  ({ createSessionsSpawnTool } = await import("./sessions-spawn-tool.js"));
-}
-
 describe("sessions_spawn tool", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
+    ({ createSessionsSpawnTool } = await import("./sessions-spawn-tool.js"));
+  });
+
+  beforeEach(() => {
     hoisted.spawnSubagentDirectMock.mockReset().mockResolvedValue({
       status: "accepted",
       childSessionKey: "agent:main:subagent:1",
@@ -48,13 +45,13 @@ describe("sessions_spawn tool", () => {
       childSessionKey: "agent:codex:acp:1",
       runId: "run-acp",
     });
-    await loadFreshSessionsSpawnToolModuleForTest();
+    hoisted.registerSubagentRunMock.mockReset();
   });
 
   it("uses subagent runtime by default", async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
-      agentChannel: "discord",
+      agentChannel: "quietchat",
       agentAccountId: "default",
       agentTo: "channel:123",
       agentThreadId: "456",
@@ -76,6 +73,7 @@ describe("sessions_spawn tool", () => {
       childSessionKey: "agent:main:subagent:1",
       runId: "run-subagent",
     });
+    expect(result.details).not.toHaveProperty("role");
     expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledWith(
       expect.objectContaining({
         task: "build feature",
@@ -92,6 +90,65 @@ describe("sessions_spawn tool", () => {
       }),
     );
     expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { status: "error" as const, error: "spawn failed" },
+    { status: "forbidden" as const, error: "not allowed" },
+  ])("adds requested role to forwarded subagent $status results", async (spawnResult) => {
+    hoisted.spawnSubagentDirectMock.mockResolvedValueOnce(spawnResult);
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    const result = await tool.execute("call-role-error", {
+      task: "build feature",
+      agentId: "reviewer",
+    });
+
+    expect(result.details).toMatchObject({
+      ...spawnResult,
+      role: "reviewer",
+    });
+  });
+
+  it("does not add role to forwarded failures when agentId is absent", async () => {
+    hoisted.spawnSubagentDirectMock.mockResolvedValueOnce({
+      status: "error",
+      error: "spawn failed",
+    });
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    const result = await tool.execute("call-no-role-error", {
+      task: "build feature",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "error",
+      error: "spawn failed",
+    });
+    expect(result.details).not.toHaveProperty("role");
+  });
+
+  it("supports legacy timeoutSeconds alias", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    await tool.execute("call-timeout-alias", {
+      task: "do thing",
+      timeoutSeconds: 2,
+    });
+
+    expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        task: "do thing",
+        runTimeoutSeconds: 2,
+      }),
+      expect.any(Object),
+    );
   });
 
   it("passes inherited workspaceDir from tool context, not from tool args", async () => {
@@ -113,10 +170,46 @@ describe("sessions_spawn tool", () => {
     );
   });
 
+  it("passes lightContext through to subagent spawns", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    await tool.execute("call-light", {
+      task: "summarize this",
+      lightContext: true,
+    });
+
+    expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        task: "summarize this",
+        lightContext: true,
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it('rejects lightContext when runtime is not "subagent"', async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    await expect(
+      tool.execute("call-light-acp", {
+        runtime: "acp",
+        task: "summarize this",
+        lightContext: true,
+      }),
+    ).rejects.toThrow("lightContext is only supported for runtime='subagent'.");
+
+    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
+  });
+
   it("routes to ACP runtime when runtime=acp", async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
-      agentChannel: "discord",
+      agentChannel: "quietchat",
       agentAccountId: "default",
       agentTo: "channel:123",
       agentThreadId: "456",
@@ -151,6 +244,31 @@ describe("sessions_spawn tool", () => {
       }),
     );
     expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
+  });
+
+  it("adds requested role to forwarded ACP failures", async () => {
+    hoisted.spawnAcpDirectMock.mockResolvedValueOnce({
+      status: "forbidden",
+      error: "ACP disabled",
+      errorCode: "acp_disabled",
+    });
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    const result = await tool.execute("call-acp-role-error", {
+      runtime: "acp",
+      task: "investigate",
+      agentId: "codex",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "forbidden",
+      error: "ACP disabled",
+      errorCode: "acp_disabled",
+      role: "codex",
+    });
   });
 
   it("forwards ACP sandbox options and requester sandbox context", async () => {
@@ -174,6 +292,16 @@ describe("sessions_spawn tool", () => {
       expect.objectContaining({
         agentSessionKey: "agent:main:subagent:parent",
         sandboxed: true,
+      }),
+    );
+    expect(hoisted.registerSubagentRunMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "run-acp",
+        childSessionKey: "agent:codex:acp:1",
+        requesterSessionKey: "agent:main:subagent:parent",
+        task: "investigate",
+        cleanup: "keep",
+        spawnMode: "run",
       }),
     );
   });
@@ -218,7 +346,7 @@ describe("sessions_spawn tool", () => {
   it("rejects attachments for ACP runtime", async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
-      agentChannel: "discord",
+      agentChannel: "quietchat",
       agentAccountId: "default",
       agentTo: "channel:123",
       agentThreadId: "456",

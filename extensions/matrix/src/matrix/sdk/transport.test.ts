@@ -1,14 +1,34 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MatrixMediaSizeLimitError } from "../media-errors.js";
 import { performMatrixRequest } from "./transport.js";
+
+const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
+
+function clearTestUndiciRuntimeDepsOverride(): void {
+  Reflect.deleteProperty(globalThis as object, TEST_UNDICI_RUNTIME_DEPS_KEY);
+}
+
+function stubRuntimeFetch(fetchImpl: typeof fetch): void {
+  (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+    Agent: function MockAgent() {},
+    EnvHttpProxyAgent: function MockEnvHttpProxyAgent() {},
+    ProxyAgent: function MockProxyAgent() {},
+    fetch: fetchImpl,
+  };
+}
 
 describe("performMatrixRequest", () => {
   beforeEach(() => {
     vi.unstubAllGlobals();
+    clearTestUndiciRuntimeDepsOverride();
+  });
+
+  afterEach(() => {
+    clearTestUndiciRuntimeDepsOverride();
   });
 
   it("rejects oversized raw responses before buffering the whole body", async () => {
-    vi.stubGlobal(
-      "fetch",
+    stubRuntimeFetch(
       vi.fn(
         async () =>
           new Response("too-big", {
@@ -31,7 +51,7 @@ describe("performMatrixRequest", () => {
         maxBytes: 1024,
         ssrfPolicy: { allowPrivateNetwork: true },
       }),
-    ).rejects.toThrow("Matrix media exceeds configured size limit");
+    ).rejects.toBeInstanceOf(MatrixMediaSizeLimitError);
   });
 
   it("applies streaming byte limits when raw responses omit content-length", async () => {
@@ -43,8 +63,7 @@ describe("performMatrixRequest", () => {
         controller.close();
       },
     });
-    vi.stubGlobal(
-      "fetch",
+    stubRuntimeFetch(
       vi.fn(
         async () =>
           new Response(stream, {
@@ -64,7 +83,7 @@ describe("performMatrixRequest", () => {
         maxBytes: 1024,
         ssrfPolicy: { allowPrivateNetwork: true },
       }),
-    ).rejects.toThrow("Matrix media exceeds configured size limit");
+    ).rejects.toBeInstanceOf(MatrixMediaSizeLimitError);
   });
 
   it("uses the matrix-specific idle-timeout error for stalled raw downloads", async () => {
@@ -75,8 +94,7 @@ describe("performMatrixRequest", () => {
           controller.enqueue(new Uint8Array([1, 2, 3]));
         },
       });
-      vi.stubGlobal(
-        "fetch",
+      stubRuntimeFetch(
         vi.fn(
           async () =>
             new Response(stream, {
@@ -106,4 +124,39 @@ describe("performMatrixRequest", () => {
       vi.useRealTimers();
     }
   }, 5_000);
+
+  it("uses undici runtime fetch for pinned Matrix requests so the dispatcher stays bound", async () => {
+    let ambientFetchCalls = 0;
+    vi.stubGlobal("fetch", (async () => {
+      ambientFetchCalls += 1;
+      throw new Error("expected pinned Matrix requests to avoid ambient fetch");
+    }) as typeof fetch);
+    const runtimeFetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const requestInit = init as RequestInit & { dispatcher?: unknown };
+      expect(requestInit.dispatcher).toBeDefined();
+      return new Response('{"ok":true}', {
+        status: 200,
+        headers: {
+          "content-type": "application/json",
+        },
+      });
+    });
+    stubRuntimeFetch(runtimeFetch);
+
+    const result = await performMatrixRequest({
+      homeserver: "http://127.0.0.1:8008",
+      accessToken: "token",
+      method: "GET",
+      endpoint: "/_matrix/client/v3/account/whoami",
+      timeoutMs: 5000,
+      ssrfPolicy: { allowPrivateNetwork: true },
+    });
+
+    expect(result.text).toBe('{"ok":true}');
+    expect(ambientFetchCalls).toBe(0);
+    expect(runtimeFetch).toHaveBeenCalledTimes(1);
+    expect(
+      (runtimeFetch.mock.calls[0]?.[1] as RequestInit & { dispatcher?: unknown })?.dispatcher,
+    ).toBeDefined();
+  });
 });

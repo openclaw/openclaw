@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { describeCodexNativeWebSearch } from "../agents/codex-native-web-search.shared.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../agents/workspace.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import {
@@ -22,13 +23,14 @@ import {
   resolveControlUiLinks,
 } from "../commands/onboard-helpers.js";
 import type { OnboardOptions } from "../commands/onboard-types.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { describeGatewayServiceRestart, resolveGatewayService } from "../daemon/service.js";
 import { isSystemdUserServiceAvailable } from "../daemon/systemd.js";
 import { ensureControlUiAssetsBuilt } from "../infra/control-ui-assets.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { restoreTerminalState } from "../terminal/restore.js";
-import { runTui } from "../tui/tui.js";
+import { launchTuiCli } from "../tui/tui-launch.js";
 import { resolveUserPath } from "../utils.js";
 import { listConfiguredWebSearchProviders } from "../web-search/runtime.js";
 import type { WizardPrompter } from "./prompts.js";
@@ -46,6 +48,15 @@ type FinalizeOnboardingOptions = {
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
 };
+
+type OnboardSearchModule = typeof import("../commands/onboard-search.js");
+
+let onboardSearchModulePromise: Promise<OnboardSearchModule> | undefined;
+
+function loadOnboardSearchModule(): Promise<OnboardSearchModule> {
+  onboardSearchModulePromise ??= import("../commands/onboard-search.js");
+  return onboardSearchModulePromise;
+}
 
 export async function finalizeSetupWizard(
   options: FinalizeOnboardingOptions,
@@ -212,7 +223,7 @@ export async function finalizeSetupWizard(
           });
         }
       } catch (err) {
-        installError = err instanceof Error ? err.message : String(err);
+        installError = formatErrorMessage(err);
       } finally {
         progress.stop(
           installError ? "Gateway service install failed." : "Gateway service installed.",
@@ -327,7 +338,7 @@ export async function finalizeSetupWizard(
       await prompter.note(
         [
           "Could not resolve gateway.auth.password SecretRef for setup auth.",
-          error instanceof Error ? error.message : String(error),
+          formatErrorMessage(error),
         ].join("\n"),
         "Gateway auth",
       );
@@ -412,14 +423,21 @@ export async function finalizeSetupWizard(
 
     if (hatchChoice === "tui") {
       restoreTerminalState("pre-setup tui", { resumeStdinIfPaused: true });
-      await runTui({
-        url: links.wsUrl,
-        token: settings.authMode === "token" ? settings.gatewayToken : undefined,
-        password: settings.authMode === "password" ? resolvedGatewayPassword : "",
-        // Safety: setup TUI should not auto-deliver to lastProvider/lastTo.
-        deliver: false,
-        message: hasBootstrap ? "Wake up, my friend!" : undefined,
-      });
+      try {
+        await launchTuiCli(
+          {
+            // Safety: setup TUI should not auto-deliver to lastProvider/lastTo.
+            deliver: false,
+            message: hasBootstrap ? "Wake up, my friend!" : undefined,
+          },
+          {
+            authSource: "config",
+            gatewayUrl: links.wsUrl,
+          },
+        );
+      } finally {
+        restoreTerminalState("post-setup tui", { resumeStdinIfPaused: true });
+      }
       launchedTui = true;
     } else if (hatchChoice === "web") {
       const browserSupport = await detectBrowserOpenSupport();
@@ -515,12 +533,12 @@ export async function finalizeSetupWizard(
     );
   }
 
+  const codexNativeSummary = describeCodexNativeWebSearch(nextConfig);
   const webSearchProvider = nextConfig.tools?.web?.search?.provider;
   const webSearchEnabled = nextConfig.tools?.web?.search?.enabled;
   const configuredSearchProviders = listConfiguredWebSearchProviders({ config: nextConfig });
   if (webSearchProvider) {
-    const { resolveExistingKey, hasExistingKey, hasKeyInEnv } =
-      await import("../commands/onboard-search.js");
+    const { resolveExistingKey, hasExistingKey, hasKeyInEnv } = await loadOnboardSearchModule();
     const entry = configuredSearchProviders.find((e) => e.id === webSearchProvider);
     const label = entry?.label ?? webSearchProvider;
     const storedKey = entry ? resolveExistingKey(nextConfig, webSearchProvider) : undefined;
@@ -582,7 +600,7 @@ export async function finalizeSetupWizard(
   } else {
     // Legacy configs may have a working key (e.g. apiKey or BRAVE_API_KEY) without
     // an explicit provider. Runtime auto-detects these, so avoid saying "skipped".
-    const { hasExistingKey, hasKeyInEnv } = await import("../commands/onboard-search.js");
+    const { hasExistingKey, hasKeyInEnv } = await loadOnboardSearchModule();
     const legacyDetected = configuredSearchProviders.find(
       (e) => hasExistingKey(nextConfig, e.id) || hasKeyInEnv(e),
     );
@@ -590,6 +608,15 @@ export async function finalizeSetupWizard(
       await prompter.note(
         [
           `Web search is available via ${legacyDetected.label} (auto-detected).`,
+          "Docs: https://docs.openclaw.ai/tools/web",
+        ].join("\n"),
+        "Web search",
+      );
+    } else if (codexNativeSummary) {
+      await prompter.note(
+        [
+          "Managed web search provider was skipped.",
+          codexNativeSummary,
           "Docs: https://docs.openclaw.ai/tools/web",
         ].join("\n"),
         "Web search",
@@ -605,6 +632,17 @@ export async function finalizeSetupWizard(
         "Web search",
       );
     }
+  }
+
+  if (codexNativeSummary) {
+    await prompter.note(
+      [
+        codexNativeSummary,
+        "Used only for Codex-capable models.",
+        "Docs: https://docs.openclaw.ai/tools/web",
+      ].join("\n"),
+      "Codex native search",
+    );
   }
 
   await prompter.note(

@@ -1,13 +1,9 @@
 import type { SessionEntry } from "../config/sessions/types.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 export type AcpSessionInteractionMode = "interactive" | "parent-owned-background";
 
 type SessionInteractionEntry = Pick<SessionEntry, "spawnedBy" | "parentSessionKey" | "acp">;
-
-function normalizeText(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
-}
 
 export function resolveAcpSessionInteractionMode(
   entry?: SessionInteractionEntry | null,
@@ -18,7 +14,7 @@ export function resolveAcpSessionInteractionMode(
   if (entry?.acp?.mode !== "oneshot") {
     return "interactive";
   }
-  if (normalizeText(entry.spawnedBy) || normalizeText(entry.parentSessionKey)) {
+  if (normalizeOptionalString(entry.spawnedBy) || normalizeOptionalString(entry.parentSessionKey)) {
     return "parent-owned-background";
   }
   return "interactive";

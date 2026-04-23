@@ -1,3 +1,5 @@
+import { normalizeLowercaseStringOrEmpty } from "../../../../src/shared/string-coerce.js";
+
 /**
  * Query expansion for FTS-only search mode.
  *
@@ -673,7 +675,7 @@ function isValidKeyword(token: string): boolean {
 function tokenize(text: string, opts?: { ftsTokenizer?: "unicode61" | "trigram" }): string[] {
   const useTrigram = opts?.ftsTokenizer === "trigram";
   const tokens: string[] = [];
-  const normalized = text.toLowerCase().trim();
+  const normalized = normalizeLowercaseStringOrEmpty(text);
 
   // Split into segments (English words, Chinese character sequences, etc.)
   const segments = normalized.split(/[\s\p{P}]+/u).filter(Boolean);

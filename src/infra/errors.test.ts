@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   collectErrorGraphCandidates,
+  detectErrorKind,
   extractErrorCode,
   formatErrorMessage,
   formatUncaughtError,
@@ -68,11 +69,59 @@ describe("error helpers", () => {
     expect(formatErrorMessage(value)).toBe(expected);
   });
 
+  it("traverses .cause chain to include nested error messages", () => {
+    const rootCause = new Error("ECONNRESET");
+    const httpError = Object.assign(new Error("Network request for 'sendMessage' failed!"), {
+      cause: rootCause,
+    });
+    const formatted = formatErrorMessage(httpError);
+    expect(formatted).toContain("Network request for 'sendMessage' failed!");
+    expect(formatted).toContain("ECONNRESET");
+  });
+
+  it("handles circular .cause references without infinite loop", () => {
+    const a: Error & { cause?: unknown } = new Error("error A");
+    const b: Error & { cause?: unknown } = new Error("error B");
+    a.cause = b;
+    b.cause = a;
+    const formatted = formatErrorMessage(a);
+    expect(formatted).toBe("error A | error B");
+  });
+
   it("redacts sensitive tokens from formatted error messages", () => {
     const token = "sk-abcdefghijklmnopqrstuv";
     const formatted = formatErrorMessage(new Error(`Authorization: Bearer ${token}`));
     expect(formatted).toContain("Authorization: Bearer");
     expect(formatted).not.toContain(token);
+  });
+
+  it.each([
+    {
+      value: new Error("Unhandled stop reason: refusal_policy"),
+      expected: "refusal",
+    },
+    {
+      value: Object.assign(new Error("request timed out"), { code: "ETIMEDOUT" }),
+      expected: "timeout",
+    },
+    {
+      value: Object.assign(new Error("Too many requests"), { code: 429 }),
+      expected: "rate_limit",
+    },
+    {
+      value: new Error("context_window exceeded with too many tokens"),
+      expected: "context_length",
+    },
+    {
+      value: new Error("plain provider failure"),
+      expected: undefined,
+    },
+    {
+      value: undefined,
+      expected: undefined,
+    },
+  ] as const)("detects error kind for case %#", ({ value, expected }) => {
+    expect(detectErrorKind(value)).toBe(expected);
   });
 
   it("uses message-only formatting for INVALID_CONFIG and stack formatting otherwise", () => {

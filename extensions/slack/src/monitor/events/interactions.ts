@@ -1,10 +1,6 @@
 import { truncateSlackText } from "../../truncate.js";
 import type { SlackMonitorContext } from "../context.js";
-import {
-  registerSlackBlockActionHandler,
-  summarizeAction,
-  type InteractionSummary,
-} from "./interactions.block-actions.js";
+import { registerSlackBlockActionHandler, summarizeAction } from "./interactions.block-actions.js";
 import {
   registerModalLifecycleHandler,
   type ModalInputSummary,

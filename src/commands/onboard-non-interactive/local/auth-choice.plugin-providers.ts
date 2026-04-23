@@ -5,9 +5,10 @@ import {
 } from "../../../agents/agent-scope.js";
 import type { ApiKeyCredential } from "../../../agents/auth-profiles/types.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../../agents/workspace.js";
-import type { OpenClawConfig } from "../../../config/config.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { enablePluginInConfig } from "../../../plugins/enable.js";
 import { resolvePreferredProviderForAuthChoice } from "../../../plugins/provider-auth-choice-preference.js";
+import { resolveManifestProviderAuthChoice } from "../../../plugins/provider-auth-choices.js";
 import type {
   ProviderAuthOptionBag,
   ProviderNonInteractiveApiKeyCredentialParams,
@@ -27,40 +28,6 @@ const loadAuthChoicePluginProvidersRuntime = createLazyRuntimeSurface(
   loadPluginProviderRuntime,
   ({ authChoicePluginProvidersRuntime }) => authChoicePluginProvidersRuntime,
 );
-
-function buildIsolatedProviderResolutionConfig(
-  cfg: OpenClawConfig,
-  ids: Iterable<string | undefined>,
-): OpenClawConfig {
-  const allow = new Set(cfg.plugins?.allow ?? []);
-  const entries = {
-    ...cfg.plugins?.entries,
-  };
-  let changed = false;
-  for (const rawId of ids) {
-    const id = rawId?.trim();
-    if (!id) {
-      continue;
-    }
-    allow.add(id);
-    entries[id] = {
-      ...cfg.plugins?.entries?.[id],
-      enabled: true,
-    };
-    changed = true;
-  }
-  if (!changed) {
-    return cfg;
-  }
-  return {
-    ...cfg,
-    plugins: {
-      ...cfg.plugins,
-      allow: Array.from(allow),
-      entries,
-    },
-  };
-}
 
 export async function applyNonInteractivePluginProviderChoice(params: {
   nextConfig: OpenClawConfig;
@@ -90,6 +57,7 @@ export async function applyNonInteractivePluginProviderChoice(params: {
       choice: params.authChoice,
       config: params.nextConfig,
       workspaceDir,
+      includeUntrustedWorkspacePlugins: false,
     }));
   const { resolveOwningPluginIdsForProvider, resolveProviderPluginChoice, resolvePluginProviders } =
     await loadAuthChoicePluginProvidersRuntime();
@@ -100,21 +68,50 @@ export async function applyNonInteractivePluginProviderChoice(params: {
         workspaceDir,
       })
     : undefined;
-  const resolutionConfig = buildIsolatedProviderResolutionConfig(params.nextConfig, [
-    preferredProviderId,
-    ...(owningPluginIds ?? []),
-  ]);
   const providerChoice = resolveProviderPluginChoice({
     providers: resolvePluginProviders({
-      config: resolutionConfig,
+      config: params.nextConfig,
       workspaceDir,
       onlyPluginIds: owningPluginIds,
-      bundledProviderAllowlistCompat: true,
-      bundledProviderVitestCompat: true,
+      mode: "setup",
+      includeUntrustedWorkspacePlugins: false,
     }),
     choice: params.authChoice,
   });
   if (!providerChoice) {
+    if (prefixedProviderId) {
+      params.runtime.error(
+        [
+          `Auth choice "${params.authChoice}" was not matched to a trusted provider plugin.`,
+          "If this provider comes from a workspace plugin, trust/allow it first and retry.",
+        ].join("\n"),
+      );
+      params.runtime.exit(1);
+      return null;
+    }
+    // Keep mismatch diagnostics metadata-only so untrusted workspace plugins are not loaded.
+    const trustedManifestMatch = resolveManifestProviderAuthChoice(params.authChoice, {
+      config: params.nextConfig,
+      workspaceDir,
+      includeUntrustedWorkspacePlugins: false,
+    });
+    const untrustedOnlyManifestMatch =
+      !trustedManifestMatch &&
+      resolveManifestProviderAuthChoice(params.authChoice, {
+        config: params.nextConfig,
+        workspaceDir,
+        includeUntrustedWorkspacePlugins: true,
+      });
+    if (untrustedOnlyManifestMatch) {
+      params.runtime.error(
+        [
+          `Auth choice "${params.authChoice}" matched a provider plugin that is not trusted or enabled for setup.`,
+          "If this provider comes from a workspace plugin, trust/allow it first and retry.",
+        ].join("\n"),
+      );
+      params.runtime.exit(1);
+      return null;
+    }
     return undefined;
   }
 

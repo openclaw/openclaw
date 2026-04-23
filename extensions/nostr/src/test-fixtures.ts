@@ -1,4 +1,3 @@
-import type { OpenClawConfig } from "../api.js";
 import type { ResolvedNostrAccount } from "./types.js";
 
 export const TEST_HEX_PRIVATE_KEY =

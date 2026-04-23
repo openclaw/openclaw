@@ -1,3 +1,5 @@
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+
 /**
  * Channel-agnostic status reaction controller.
  * Provides a unified interface for displaying agent status via message reactions.
@@ -102,7 +104,7 @@ export function resolveToolEmoji(
   toolName: string | undefined,
   emojis: Required<StatusReactionEmojis>,
 ): string {
-  const normalized = toolName?.trim().toLowerCase() ?? "";
+  const normalized = normalizeOptionalLowercaseString(toolName) ?? "";
   if (!normalized) {
     return emojis.tool;
   }

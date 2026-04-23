@@ -5,6 +5,7 @@ export type ChangedScope = {
   runWindows: boolean;
   runSkillsPython: boolean;
   runChangedSmoke: boolean;
+  runControlUiI18n: boolean;
 };
 
 export function detectChangedScope(changedPaths: string[]): ChangedScope;

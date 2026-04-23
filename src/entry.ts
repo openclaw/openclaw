@@ -3,11 +3,12 @@ import { spawn } from "node:child_process";
 import { enableCompileCache } from "node:module";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { isRootHelpInvocation, isRootVersionInvocation } from "./cli/argv.js";
+import { isRootHelpInvocation } from "./cli/argv.js";
 import { parseCliContainerArgs, resolveCliContainerTarget } from "./cli/container-target.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./cli/profile.js";
 import { normalizeWindowsArgv } from "./cli/windows-argv.js";
 import { buildCliRespawnPlan } from "./entry.respawn.js";
+import { tryHandleRootVersionFastPath } from "./entry.version-fast-path.js";
 import { isTruthyEnvValue, normalizeEnv } from "./infra/env.js";
 import { isMainModule } from "./infra/is-main.js";
 import { ensureOpenClawExecMarkerOnProcess } from "./infra/openclaw-exec-env.js";
@@ -99,29 +100,6 @@ if (
     return true;
   }
 
-  function tryHandleRootVersionFastPath(argv: string[]): boolean {
-    if (resolveCliContainerTarget(argv)) {
-      return false;
-    }
-    if (!isRootVersionInvocation(argv)) {
-      return false;
-    }
-    Promise.all([import("./version.js"), import("./infra/git-commit.js")])
-      .then(([{ VERSION }, { resolveCommitHash }]) => {
-        const commit = resolveCommitHash({ moduleUrl: import.meta.url });
-        console.log(commit ? `OpenClaw ${VERSION} (${commit})` : `OpenClaw ${VERSION}`);
-        process.exit(0);
-      })
-      .catch((error) => {
-        console.error(
-          "[openclaw] Failed to resolve version:",
-          error instanceof Error ? (error.stack ?? error.message) : error,
-        );
-        process.exitCode = 1;
-      });
-    return true;
-  }
-
   process.argv = normalizeWindowsArgv(process.argv);
 
   if (!ensureCliRespawnReady()) {
@@ -185,9 +163,13 @@ export function tryHandleRootHelpFastPath(
       .catch(handleError);
     return true;
   }
-  import("./cli/program/root-help.js")
-    .then(({ outputRootHelp }) => {
-      return outputRootHelp();
+  import("./cli/root-help-metadata.js")
+    .then(async ({ outputPrecomputedRootHelpText }) => {
+      if (outputPrecomputedRootHelpText()) {
+        return;
+      }
+      const { outputRootHelp } = await import("./cli/program/root-help.js");
+      await outputRootHelp();
     })
     .catch(handleError);
   return true;

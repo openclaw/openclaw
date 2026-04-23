@@ -1,31 +1,24 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildSessionWriteLockModuleMock } from "../../test-utils/session-write-lock-module-mock.js";
 
 const acquireSessionWriteLockReleaseMock = vi.hoisted(() => vi.fn(async () => {}));
 const acquireSessionWriteLockMock = vi.hoisted(() =>
   vi.fn(async (_params?: unknown) => ({ release: acquireSessionWriteLockReleaseMock })),
 );
 
-vi.mock("../session-write-lock.js", () => ({
-  acquireSessionWriteLock: (params: unknown) => acquireSessionWriteLockMock(params),
-}));
+vi.mock("../session-write-lock.js", () =>
+  buildSessionWriteLockModuleMock(
+    () => vi.importActual<typeof import("../session-write-lock.js")>("../session-write-lock.js"),
+    (params) => acquireSessionWriteLockMock(params),
+  ),
+);
 
 let rewriteTranscriptEntriesInSessionFile: typeof import("./transcript-rewrite.js").rewriteTranscriptEntriesInSessionFile;
 let rewriteTranscriptEntriesInSessionManager: typeof import("./transcript-rewrite.js").rewriteTranscriptEntriesInSessionManager;
 let onSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onSessionTranscriptUpdate;
 let installSessionToolResultGuard: typeof import("../session-tool-result-guard.js").installSessionToolResultGuard;
-
-async function loadFreshTranscriptRewriteModuleForTest() {
-  vi.resetModules();
-  vi.doMock("../session-write-lock.js", () => ({
-    acquireSessionWriteLock: (params: unknown) => acquireSessionWriteLockMock(params),
-  }));
-  ({ onSessionTranscriptUpdate } = await import("../../sessions/transcript-events.js"));
-  ({ installSessionToolResultGuard } = await import("../session-tool-result-guard.js"));
-  ({ rewriteTranscriptEntriesInSessionFile, rewriteTranscriptEntriesInSessionManager } =
-    await import("./transcript-rewrite.js"));
-}
 
 type AppendMessage = Parameters<SessionManager["appendMessage"]>[0];
 
@@ -136,10 +129,16 @@ function findAssistantEntryByText(sessionManager: SessionManager, text: string) 
     );
 }
 
-beforeEach(async () => {
+beforeAll(async () => {
+  ({ onSessionTranscriptUpdate } = await import("../../sessions/transcript-events.js"));
+  ({ installSessionToolResultGuard } = await import("../session-tool-result-guard.js"));
+  ({ rewriteTranscriptEntriesInSessionFile, rewriteTranscriptEntriesInSessionManager } =
+    await import("./transcript-rewrite.js"));
+});
+
+beforeEach(() => {
   acquireSessionWriteLockMock.mockClear();
   acquireSessionWriteLockReleaseMock.mockClear();
-  await loadFreshTranscriptRewriteModuleForTest();
 });
 
 describe("rewriteTranscriptEntriesInSessionManager", () => {

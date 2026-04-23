@@ -1,4 +1,4 @@
-import type { ChannelId } from "../channels/plugins/types.js";
+import type { ChannelId } from "../channels/plugins/types.public.js";
 
 export type ChannelHealthSnapshot = {
   running?: boolean;
@@ -35,6 +35,7 @@ export type ChannelHealthPolicy = {
   now: number;
   staleEventThresholdMs: number;
   channelConnectGraceMs: number;
+  skipStaleSocketCheck?: boolean;
 };
 
 export type ChannelRestartReason =
@@ -58,6 +59,7 @@ export function evaluateChannelHealth(
   snapshot: ChannelHealthSnapshot,
   policy: ChannelHealthPolicy,
 ): ChannelHealthEvaluation {
+  const mode = typeof snapshot.mode === "string" ? snapshot.mode.trim().toLowerCase() : undefined;
   if (!isManagedAccount(snapshot)) {
     return { healthy: true, reason: "unmanaged" };
   }
@@ -76,6 +78,10 @@ export function evaluateChannelHealth(
   const lastRunActivityAt =
     typeof snapshot.lastRunActivityAt === "number" && Number.isFinite(snapshot.lastRunActivityAt)
       ? snapshot.lastRunActivityAt
+      : null;
+  const lastEventAt =
+    typeof snapshot.lastEventAt === "number" && Number.isFinite(snapshot.lastEventAt)
+      ? snapshot.lastEventAt
       : null;
   const busyStateInitializedForLifecycle =
     lastStartAt == null || (lastRunActivityAt != null && lastRunActivityAt >= lastStartAt);
@@ -106,24 +112,23 @@ export function evaluateChannelHealth(
   if (snapshot.connected === false) {
     return { healthy: false, reason: "disconnected" };
   }
-  // Skip stale-socket check for Telegram (long-polling mode) and any channel
-  // explicitly operating in webhook mode. In these cases, there is no persistent
-  // outgoing socket that can go half-dead, so the lack of incoming events
-  // does not necessarily indicate a connection failure.
-  if (
-    policy.channelId !== "telegram" &&
-    snapshot.mode !== "webhook" &&
+  // Telegram only has reliable stale-socket liveness in explicit polling mode.
+  // Webhook accounts and malformed legacy mode values do not have a persistent
+  // outgoing socket to age-check.
+  const shouldCheckStaleSocket =
+    policy.skipStaleSocketCheck !== true &&
     snapshot.connected === true &&
-    snapshot.lastEventAt != null
-  ) {
-    if (lastStartAt != null && snapshot.lastEventAt < lastStartAt) {
+    lastEventAt != null &&
+    (policy.channelId === "telegram" ? mode === "polling" : mode !== "webhook");
+  if (shouldCheckStaleSocket) {
+    if (lastStartAt != null && lastEventAt < lastStartAt) {
       const lifecycleEventGap = Math.max(0, policy.now - lastStartAt);
       if (lifecycleEventGap <= policy.staleEventThresholdMs) {
         return { healthy: true, reason: "healthy" };
       }
       return { healthy: false, reason: "stale-socket" };
     }
-    const eventAge = policy.now - snapshot.lastEventAt;
+    const eventAge = policy.now - lastEventAt;
     if (eventAge > policy.staleEventThresholdMs) {
       return { healthy: false, reason: "stale-socket" };
     }

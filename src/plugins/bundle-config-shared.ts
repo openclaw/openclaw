@@ -1,12 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { OpenClawConfig } from "../config/config.js";
 import { applyMergePatch } from "../config/merge-patch.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { matchBoundaryFileOpenFailure, openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { isRecord } from "../utils.js";
-import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
+import { normalizePluginsConfig, resolveEffectivePluginActivationState } from "./config-state.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
-import type { PluginBundleFormat } from "./types.js";
+import type { PluginBundleFormat } from "./manifest-types.js";
 
 type ReadBundleJsonResult =
   | { ok: true; raw: Record<string, unknown> }
@@ -102,11 +102,15 @@ export function loadEnabledBundleConfig<TConfig, TDiagnostic>(params: {
   }) => { config: TConfig; diagnostics: string[] };
   createDiagnostic: (pluginId: string, message: string) => TDiagnostic;
 }): { config: TConfig; diagnostics: TDiagnostic[] } {
+  const normalizedPlugins = normalizePluginsConfig(params.cfg?.plugins);
+  if (!normalizedPlugins.enabled) {
+    return { config: params.createEmptyConfig(), diagnostics: [] };
+  }
+
   const registry = loadPluginManifestRegistry({
     workspaceDir: params.workspaceDir,
     config: params.cfg,
   });
-  const normalizedPlugins = normalizePluginsConfig(params.cfg?.plugins);
   const diagnostics: TDiagnostic[] = [];
   let merged = params.createEmptyConfig();
 
@@ -114,13 +118,13 @@ export function loadEnabledBundleConfig<TConfig, TDiagnostic>(params: {
     if (record.format !== "bundle" || !record.bundleFormat) {
       continue;
     }
-    const enableState = resolveEffectiveEnableState({
+    const activationState = resolveEffectivePluginActivationState({
       id: record.id,
       origin: record.origin,
       config: normalizedPlugins,
       rootConfig: params.cfg,
     });
-    if (!enableState.enabled) {
+    if (!activationState.activated) {
       continue;
     }
 

@@ -1,20 +1,18 @@
-import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedBlueBubblesAccount } from "./accounts.js";
 import { fetchBlueBubblesHistory } from "./history.js";
 import { createBlueBubblesDebounceRegistry } from "./monitor-debounce.js";
 import type { NormalizedWebhookMessage } from "./monitor-normalize.js";
 import { resetBlueBubblesSelfChatCache } from "./monitor-self-chat-cache.js";
-import { handleBlueBubblesWebhookRequest, resolveBlueBubblesMessageId } from "./monitor.js";
+import { resolveBlueBubblesMessageId } from "./monitor.js";
 import {
   createMockAccount,
-  createNewMessagePayloadForTest,
   createMockRequest,
-  createTimestampedNewMessagePayloadForTest,
+  createNewMessagePayloadForTest,
   createTimestampedMessageReactionPayloadForTest,
-  dispatchWebhookRequestForTest,
+  createTimestampedNewMessagePayloadForTest,
   dispatchWebhookPayloadForTest,
-  flushAsync,
+  dispatchWebhookRequestForTest,
   setupWebhookTargetForTest,
   setupWebhookTargetsForTest,
   trackWebhookRegistrationForTest,
@@ -24,12 +22,14 @@ import {
   setBlueBubblesParticipantContactDepsForTest,
 } from "./participant-contact-names.js";
 import type { OpenClawConfig, PluginRuntime } from "./runtime-api.js";
+import { createBlueBubblesFetchGuardPassthroughInstaller } from "./test-harness.js";
 import {
   createBlueBubblesMonitorTestRuntime,
   EMPTY_DISPATCH_RESULT,
   resetBlueBubblesMonitorTestState,
   type DispatchReplyParams,
 } from "./test-support/monitor-test-support.js";
+import { _setFetchGuardForTesting } from "./types.js";
 
 // Mock dependencies
 vi.mock("./send.js", () => ({
@@ -66,14 +66,18 @@ const mockEnqueueSystemEvent = vi.fn();
 const mockBuildPairingReply = vi.fn(() => "Pairing code: TESTCODE");
 const mockReadAllowFromStore = vi.fn().mockResolvedValue([]);
 const mockUpsertPairingRequest = vi.fn().mockResolvedValue({ code: "TESTCODE", created: true });
-const mockResolveAgentRoute = vi.fn(() => ({
+const DEFAULT_RESOLVED_AGENT_ROUTE: ReturnType<
+  PluginRuntime["channel"]["routing"]["resolveAgentRoute"]
+> = {
   agentId: "main",
   channel: "bluebubbles",
   accountId: "default",
   sessionKey: "agent:main:bluebubbles:dm:+15551234567",
   mainSessionKey: "agent:main:main",
+  lastRoutePolicy: "main",
   matchedBy: "default",
-}));
+};
+const mockResolveAgentRoute = vi.fn(() => DEFAULT_RESOLVED_AGENT_ROUTE);
 const mockBuildMentionRegexes = vi.fn(() => [/\bbert\b/i]);
 const mockMatchesMentionPatterns = vi.fn((text: string, regexes: RegExp[]) =>
   regexes.some((r) => r.test(text)),
@@ -87,7 +91,10 @@ const mockMatchesMentionWithExplicit = vi.fn(
   },
 );
 const mockResolveRequireMention = vi.fn(() => false);
-const mockResolveGroupPolicy = vi.fn(() => "open" as const);
+const mockResolveGroupPolicy = vi.fn(() => ({
+  allowlistEnabled: false,
+  allowed: true,
+}));
 const mockDispatchReplyWithBufferedBlockDispatcher = vi.fn(
   async (_params: DispatchReplyParams) => EMPTY_DISPATCH_RESULT,
 );
@@ -151,9 +158,7 @@ function getFirstDispatchCall(): DispatchReplyParams {
 
 function installTimingAwareInboundDebouncer(core: PluginRuntime) {
   // Use a timing-aware debouncer test double that respects debounceMs/buildKey/shouldDebounce.
-  // oxlint-disable-next-line typescript/no-explicit-any
   core.channel.debounce.createInboundDebouncer = vi.fn((params: any) => {
-    // oxlint-disable-next-line typescript/no-explicit-any
     type Item = any;
     const buckets = new Map<
       string,
@@ -252,8 +257,16 @@ describe("BlueBubbles webhook monitor", () => {
     return handled;
   }
 
+  const installFetchGuardPassthrough = createBlueBubblesFetchGuardPassthroughInstaller();
+
   beforeEach(() => {
     vi.stubGlobal("fetch", mockFetch);
+    // The BlueBubblesClient now routes every BB API call through the SSRF
+    // guard (mode-2 allowlist for configured hostnames). Install a passthrough
+    // that wraps `globalThis.fetch` (our stubbed mockFetch) in a real Response
+    // so guarded callers get the same mocked behavior the pre-migration
+    // callsites did. (#34749, #59722)
+    installFetchGuardPassthrough();
     mockFetch.mockReset();
     mockFetch.mockResolvedValue({
       ok: true,
@@ -281,6 +294,7 @@ describe("BlueBubbles webhook monitor", () => {
     setBlueBubblesParticipantContactDepsForTest();
     vi.useRealTimers();
     vi.unstubAllGlobals();
+    _setFetchGuardForTesting(null);
   });
 
   describe("DM pairing behavior vs allowFrom", () => {
@@ -579,6 +593,100 @@ describe("BlueBubbles webhook monitor", () => {
       expect(callArgs.ctx.GroupMembers).toBe("Alice (+15551234567), Bob (+15557654321)");
     });
 
+    it("threads per-group systemPrompt into ctx for group messages", async () => {
+      setupWebhookTarget({
+        account: createMockAccount({
+          groups: {
+            "iMessage;+;chat123456": {
+              systemPrompt: "Reply in thread with action=reply; ack via action=react.",
+            },
+          },
+        }),
+      });
+
+      const payload = createTimestampedNewMessagePayloadForTest({
+        text: "hello group",
+        isGroup: true,
+        chatGuid: "iMessage;+;chat123456",
+        chatName: "Family",
+        participants: [{ address: "+15551234567", displayName: "Alice" }],
+      });
+
+      await dispatchWebhookPayload(payload);
+
+      const callArgs = getFirstDispatchCall();
+      expect(callArgs.ctx.GroupSystemPrompt).toBe(
+        "Reply in thread with action=reply; ack via action=react.",
+      );
+    });
+
+    it("falls back to the '*' wildcard systemPrompt when no exact group match", async () => {
+      setupWebhookTarget({
+        account: createMockAccount({
+          groups: {
+            "*": { systemPrompt: "Default group rule: keep it short." },
+          },
+        }),
+      });
+
+      const payload = createTimestampedNewMessagePayloadForTest({
+        text: "hi group",
+        isGroup: true,
+        chatGuid: "iMessage;+;chat-unmapped",
+        chatName: "Family",
+        participants: [{ address: "+15551234567", displayName: "Alice" }],
+      });
+
+      await dispatchWebhookPayload(payload);
+
+      const callArgs = getFirstDispatchCall();
+      expect(callArgs.ctx.GroupSystemPrompt).toBe("Default group rule: keep it short.");
+    });
+
+    it("prefers an exact group systemPrompt over the '*' wildcard", async () => {
+      setupWebhookTarget({
+        account: createMockAccount({
+          groups: {
+            "*": { systemPrompt: "wildcard value" },
+            "iMessage;+;chat123456": { systemPrompt: "exact value" },
+          },
+        }),
+      });
+
+      const payload = createTimestampedNewMessagePayloadForTest({
+        text: "hi group",
+        isGroup: true,
+        chatGuid: "iMessage;+;chat123456",
+        chatName: "Family",
+        participants: [{ address: "+15551234567", displayName: "Alice" }],
+      });
+
+      await dispatchWebhookPayload(payload);
+
+      const callArgs = getFirstDispatchCall();
+      expect(callArgs.ctx.GroupSystemPrompt).toBe("exact value");
+    });
+
+    it("omits GroupSystemPrompt for DMs even when the group config would match", async () => {
+      setupWebhookTarget({
+        account: createMockAccount({
+          groups: {
+            "+15551234567": { systemPrompt: "unused in DM" },
+          },
+        }),
+      });
+
+      const payload = createTimestampedNewMessagePayloadForTest({
+        text: "hi",
+        isGroup: false,
+      });
+
+      await dispatchWebhookPayload(payload);
+
+      const callArgs = getFirstDispatchCall();
+      expect(callArgs.ctx.GroupSystemPrompt).toBeUndefined();
+    });
+
     it("does not enrich group participants when the config flag is disabled", async () => {
       const resolvePhoneNames = vi.fn(async () => new Map([["5551234567", "Alice Contact"]]));
       setupWebhookTarget({
@@ -798,7 +906,7 @@ describe("BlueBubbles webhook monitor", () => {
         const core = createMockRuntime();
         installTimingAwareInboundDebouncer(core);
 
-        const registration = trackWebhookRegistrationForTest(
+        const _registration = trackWebhookRegistrationForTest(
           setupWebhookTargetForTest({
             createCore: createMockRuntime,
             core,
@@ -991,6 +1099,79 @@ describe("BlueBubbles webhook monitor", () => {
       expect(callArgs.ctx.ReplyToBody).toBe("original message");
       expect(callArgs.ctx.ReplyToSender).toBe("+15550000000");
       // Body uses inline [[reply_to:N]] tag format
+      expect(callArgs.ctx.Body).toContain("[[reply_to:msg-0]]");
+    });
+
+    it("drops group reply context from non-allowlisted senders in allowlist mode", async () => {
+      setupWebhookTarget({
+        account: createMockAccount({
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["+15551234567"],
+        }),
+        config: {
+          channels: {
+            bluebubbles: {
+              contextVisibility: "allowlist",
+            },
+          },
+        } as OpenClawConfig,
+      });
+
+      const payload = createTimestampedNewMessagePayloadForTest({
+        text: "replying now",
+        isGroup: true,
+        chatGuid: "iMessage;+;chat-reply-visibility",
+        replyTo: {
+          guid: "msg-0",
+          text: "blocked context",
+          handle: { address: "+15550000000", displayName: "Alice" },
+        },
+      });
+
+      await dispatchWebhookPayload(payload);
+
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalled();
+      const callArgs = getFirstDispatchCall();
+      expect(callArgs.ctx.ReplyToId).toBeUndefined();
+      expect(callArgs.ctx.ReplyToIdFull).toBeUndefined();
+      expect(callArgs.ctx.ReplyToBody).toBeUndefined();
+      expect(callArgs.ctx.ReplyToSender).toBeUndefined();
+      expect(callArgs.ctx.Body).not.toContain("[[reply_to:");
+    });
+
+    it("keeps group reply context in allowlist_quote mode", async () => {
+      setupWebhookTarget({
+        account: createMockAccount({
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["+15551234567"],
+        }),
+        config: {
+          channels: {
+            bluebubbles: {
+              contextVisibility: "allowlist_quote",
+            },
+          },
+        } as OpenClawConfig,
+      });
+
+      const payload = createTimestampedNewMessagePayloadForTest({
+        text: "replying now",
+        isGroup: true,
+        chatGuid: "iMessage;+;chat-reply-visibility",
+        replyTo: {
+          guid: "msg-0",
+          text: "quoted context",
+          handle: { address: "+15550000000", displayName: "Alice" },
+        },
+      });
+
+      await dispatchWebhookPayload(payload);
+
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalled();
+      const callArgs = getFirstDispatchCall();
+      expect(callArgs.ctx.ReplyToId).toBe("msg-0");
+      expect(callArgs.ctx.ReplyToBody).toBe("quoted context");
+      expect(callArgs.ctx.ReplyToSender).toBe("+15550000000");
       expect(callArgs.ctx.Body).toContain("[[reply_to:msg-0]]");
     });
 
@@ -1294,7 +1475,7 @@ describe("BlueBubbles webhook monitor", () => {
       mockDispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async (params) => {
         await params.dispatcherOptions.onReplyStart?.();
         await params.dispatcherOptions.deliver({ text: "replying now" }, { kind: "final" });
-        await params.dispatcherOptions.onIdle?.();
+        params.dispatcherOptions.onIdle?.();
         return EMPTY_DISPATCH_RESULT;
       });
 

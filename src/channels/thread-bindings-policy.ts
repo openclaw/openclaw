@@ -1,8 +1,17 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAccountId } from "../routing/session-key.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import {
+  resolveThreadBindingLifecycle as resolveSharedThreadBindingLifecycle,
+  type ThreadBindingLifecycleRecord,
+} from "../shared/thread-binding-lifecycle.js";
+import { getChannelPlugin } from "./plugins/index.js";
 
-export const DISCORD_THREAD_BINDING_CHANNEL = "discord";
-export const MATRIX_THREAD_BINDING_CHANNEL = "matrix";
+export {
+  resolveThreadBindingLifecycle,
+  type ThreadBindingLifecycleRecord,
+} from "../shared/thread-binding-lifecycle.js";
+
 const DEFAULT_THREAD_BINDING_IDLE_HOURS = 24;
 const DEFAULT_THREAD_BINDING_MAX_AGE_HOURS = 0;
 
@@ -29,31 +38,33 @@ export type ThreadBindingSpawnPolicy = {
 };
 
 function normalizeChannelId(value: string | undefined | null): string {
-  return String(value ?? "")
-    .trim()
-    .toLowerCase();
+  return normalizeLowercaseStringOrEmpty(value);
 }
 
 export function supportsAutomaticThreadBindingSpawn(channel: string): boolean {
-  const normalized = normalizeChannelId(channel);
-  return (
-    normalized === DISCORD_THREAD_BINDING_CHANNEL || normalized === MATRIX_THREAD_BINDING_CHANNEL
-  );
+  return resolveDefaultTopLevelPlacement(channel) === "child";
 }
 
 export function requiresNativeThreadContextForThreadHere(channel: string): boolean {
-  const normalized = normalizeChannelId(channel);
-  return normalized !== "telegram" && normalized !== "feishu" && normalized !== "line";
+  return resolveDefaultTopLevelPlacement(channel) === "child";
 }
 
 export function resolveThreadBindingPlacementForCurrentContext(params: {
   channel: string;
   threadId?: string;
 }): "current" | "child" {
-  if (!requiresNativeThreadContextForThreadHere(params.channel)) {
+  if (resolveDefaultTopLevelPlacement(params.channel) !== "child") {
     return "current";
   }
   return params.threadId ? "current" : "child";
+}
+
+function resolveDefaultTopLevelPlacement(channel: string): "current" | "child" {
+  const normalized = normalizeChannelId(channel);
+  if (!normalized) {
+    return "current";
+  }
+  return getChannelPlugin(normalized)?.conversationBindings?.defaultTopLevelPlacement ?? "current";
 }
 
 function normalizeBoolean(value: unknown): boolean | undefined {
@@ -95,56 +106,12 @@ export function resolveThreadBindingMaxAgeMs(params: {
   return Math.floor(maxAgeHours * 60 * 60 * 1000);
 }
 
-type ThreadBindingLifecycleRecord = {
-  boundAt: number;
-  lastActivityAt: number;
-  idleTimeoutMs?: number;
-  maxAgeMs?: number;
-};
-
-export function resolveThreadBindingLifecycle(params: {
-  record: ThreadBindingLifecycleRecord;
-  defaultIdleTimeoutMs: number;
-  defaultMaxAgeMs: number;
-}): {
-  expiresAt?: number;
-  reason?: "idle-expired" | "max-age-expired";
-} {
-  const idleTimeoutMs =
-    typeof params.record.idleTimeoutMs === "number"
-      ? Math.max(0, Math.floor(params.record.idleTimeoutMs))
-      : params.defaultIdleTimeoutMs;
-  const maxAgeMs =
-    typeof params.record.maxAgeMs === "number"
-      ? Math.max(0, Math.floor(params.record.maxAgeMs))
-      : params.defaultMaxAgeMs;
-
-  const inactivityExpiresAt =
-    idleTimeoutMs > 0
-      ? Math.max(params.record.lastActivityAt, params.record.boundAt) + idleTimeoutMs
-      : undefined;
-  const maxAgeExpiresAt = maxAgeMs > 0 ? params.record.boundAt + maxAgeMs : undefined;
-
-  if (inactivityExpiresAt != null && maxAgeExpiresAt != null) {
-    return inactivityExpiresAt <= maxAgeExpiresAt
-      ? { expiresAt: inactivityExpiresAt, reason: "idle-expired" }
-      : { expiresAt: maxAgeExpiresAt, reason: "max-age-expired" };
-  }
-  if (inactivityExpiresAt != null) {
-    return { expiresAt: inactivityExpiresAt, reason: "idle-expired" };
-  }
-  if (maxAgeExpiresAt != null) {
-    return { expiresAt: maxAgeExpiresAt, reason: "max-age-expired" };
-  }
-  return {};
-}
-
 export function resolveThreadBindingEffectiveExpiresAt(params: {
   record: ThreadBindingLifecycleRecord;
   defaultIdleTimeoutMs: number;
   defaultMaxAgeMs: number;
 }): number | undefined {
-  return resolveThreadBindingLifecycle(params).expiresAt;
+  return resolveSharedThreadBindingLifecycle(params).expiresAt;
 }
 
 export function resolveThreadBindingsEnabled(params: {
@@ -202,7 +169,7 @@ export function resolveThreadBindingSpawnPolicy(params: {
   const spawnFlagKey = resolveSpawnFlagKey(params.kind);
   const spawnEnabledRaw =
     normalizeBoolean(account?.[spawnFlagKey]) ?? normalizeBoolean(root?.[spawnFlagKey]);
-  const spawnEnabled = spawnEnabledRaw ?? !supportsAutomaticThreadBindingSpawn(channel);
+  const spawnEnabled = spawnEnabledRaw ?? resolveDefaultTopLevelPlacement(channel) !== "child";
   return {
     channel,
     accountId,
@@ -254,13 +221,7 @@ export function formatThreadBindingDisabledError(params: {
   accountId: string;
   kind: ThreadBindingSpawnKind;
 }): string {
-  if (params.channel === DISCORD_THREAD_BINDING_CHANNEL) {
-    return "Discord thread bindings are disabled (set channels.discord.threadBindings.enabled=true to override for this account, or session.threadBindings.enabled=true globally).";
-  }
-  if (params.channel === MATRIX_THREAD_BINDING_CHANNEL) {
-    return "Matrix thread bindings are disabled (set channels.matrix.threadBindings.enabled=true to override for this account, or session.threadBindings.enabled=true globally).";
-  }
-  return `Thread bindings are disabled for ${params.channel} (set session.threadBindings.enabled=true to enable).`;
+  return `Thread bindings are disabled for ${params.channel} (set channels.${params.channel}.threadBindings.enabled=true to override for this account, or session.threadBindings.enabled=true globally).`;
 }
 
 export function formatThreadBindingSpawnDisabledError(params: {
@@ -268,17 +229,6 @@ export function formatThreadBindingSpawnDisabledError(params: {
   accountId: string;
   kind: ThreadBindingSpawnKind;
 }): string {
-  if (params.channel === DISCORD_THREAD_BINDING_CHANNEL && params.kind === "acp") {
-    return "Discord thread-bound ACP spawns are disabled for this account (set channels.discord.threadBindings.spawnAcpSessions=true to enable).";
-  }
-  if (params.channel === DISCORD_THREAD_BINDING_CHANNEL && params.kind === "subagent") {
-    return "Discord thread-bound subagent spawns are disabled for this account (set channels.discord.threadBindings.spawnSubagentSessions=true to enable).";
-  }
-  if (params.channel === MATRIX_THREAD_BINDING_CHANNEL && params.kind === "acp") {
-    return "Matrix thread-bound ACP spawns are disabled for this account (set channels.matrix.threadBindings.spawnAcpSessions=true to enable).";
-  }
-  if (params.channel === MATRIX_THREAD_BINDING_CHANNEL && params.kind === "subagent") {
-    return "Matrix thread-bound subagent spawns are disabled for this account (set channels.matrix.threadBindings.spawnSubagentSessions=true to enable).";
-  }
-  return `Thread-bound ${params.kind} spawns are disabled for ${params.channel}.`;
+  const spawnFlagKey = resolveSpawnFlagKey(params.kind);
+  return `Thread-bound ${params.kind} spawns are disabled for ${params.channel} (set channels.${params.channel}.threadBindings.${spawnFlagKey}=true to enable).`;
 }

@@ -6,12 +6,28 @@ import { captureFullEnv } from "../test-utils/env.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 const resolvePreferredOpenClawTmpDirMock = vi.hoisted(() => vi.fn(() => os.tmpdir()));
+const resolveTaskScriptPathMock = vi.hoisted(() =>
+  vi.fn((env: Record<string, string | undefined>) => {
+    const home = env.USERPROFILE || env.HOME || os.homedir();
+    return path.join(home, ".openclaw", "gateway.cmd");
+  }),
+);
 
-vi.mock("node:child_process", () => ({
-  spawn: (...args: unknown[]) => spawnMock(...args),
-}));
+vi.mock("node:child_process", async () => {
+  const { mockNodeBuiltinModule } = await import("../../test/helpers/node-builtin-mocks.js");
+  return mockNodeBuiltinModule(
+    () => vi.importActual<typeof import("node:child_process")>("node:child_process"),
+    {
+      spawn: (...args: unknown[]) => spawnMock(...args),
+    },
+  );
+});
 vi.mock("./tmp-openclaw-dir.js", () => ({
   resolvePreferredOpenClawTmpDir: () => resolvePreferredOpenClawTmpDirMock(),
+}));
+vi.mock("../daemon/schtasks.js", () => ({
+  resolveTaskScriptPath: (env: Record<string, string | undefined>) =>
+    resolveTaskScriptPathMock(env),
 }));
 
 type WindowsTaskRestartModule = typeof import("./windows-task-restart.js");
@@ -31,9 +47,6 @@ function decodeCmdPathArg(value: string): string {
 
 afterEach(() => {
   envSnapshot.restore();
-  spawnMock.mockReset();
-  resolvePreferredOpenClawTmpDirMock.mockReset();
-  resolvePreferredOpenClawTmpDirMock.mockReturnValue(os.tmpdir());
   for (const scriptPath of createdScriptPaths) {
     try {
       fs.unlinkSync(scriptPath);
@@ -61,6 +74,11 @@ describe("relaunchGatewayScheduledTask", () => {
     spawnMock.mockReset();
     resolvePreferredOpenClawTmpDirMock.mockReset();
     resolvePreferredOpenClawTmpDirMock.mockReturnValue(os.tmpdir());
+    resolveTaskScriptPathMock.mockReset();
+    resolveTaskScriptPathMock.mockImplementation((env: Record<string, string | undefined>) => {
+      const home = env.USERPROFILE || env.HOME || os.homedir();
+      return path.join(home, ".openclaw", "gateway.cmd");
+    });
   });
 
   it("writes a detached schtasks relaunch helper", () => {
@@ -95,7 +113,11 @@ describe("relaunchGatewayScheduledTask", () => {
     expect(scriptPath).toBeTruthy();
     const script = fs.readFileSync(scriptPath, "utf8");
     expect(script).toContain("timeout /t 1 /nobreak >nul");
-    expect(script).toContain('schtasks /Run /TN "OpenClaw Gateway (work)" >nul 2>&1');
+    expect(script).toContain("gateway-restart.log");
+    expect(script).toContain(
+      'openclaw restart attempt source=windows-task-handoff target="OpenClaw Gateway (work)"',
+    );
+    expect(script).toContain('schtasks /Run /TN "OpenClaw Gateway (work)" >>');
     expect(script).toContain('del "%~f0" >nul 2>&1');
   });
 
@@ -112,7 +134,7 @@ describe("relaunchGatewayScheduledTask", () => {
 
     const scriptPath = [...createdScriptPaths][0];
     const script = fs.readFileSync(scriptPath, "utf8");
-    expect(script).toContain('schtasks /Run /TN "OpenClaw Gateway (custom)" >nul 2>&1');
+    expect(script).toContain('schtasks /Run /TN "OpenClaw Gateway (custom)" >>');
   });
 
   it("returns failed when the helper cannot be spawned", () => {
@@ -141,5 +163,28 @@ describe("relaunchGatewayScheduledTask", () => {
       ["/d", "/s", "/c", expect.stringMatching(/^".*&.*"$/)],
       expect.any(Object),
     );
+  });
+
+  it("includes startup fallback", () => {
+    const taskScriptDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-state-"));
+    createdTmpDirs.add(taskScriptDir);
+    const taskScriptPath = path.join(taskScriptDir, "gateway.cmd");
+    fs.writeFileSync(taskScriptPath, "@echo off\r\nrem placeholder\r\n", "utf8");
+    resolveTaskScriptPathMock.mockReturnValue(taskScriptPath);
+
+    spawnMock.mockImplementation((_file: string, args: string[]) => {
+      createdScriptPaths.add(decodeCmdPathArg(args[3]));
+      return { unref: vi.fn() };
+    });
+
+    const result = relaunchGatewayScheduledTask({ OPENCLAW_PROFILE: "work" });
+
+    expect(result.ok).toBe(true);
+    const scriptPath = [...createdScriptPaths][0];
+    const script = fs.readFileSync(scriptPath, "utf8");
+    expect(script).toContain(`schtasks /Query /TN`);
+    expect(script).toContain(":fallback");
+    expect(script).toContain(`start "" /min cmd.exe /d /c`);
+    expect(script).toContain(taskScriptPath);
   });
 });

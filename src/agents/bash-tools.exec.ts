@@ -1,8 +1,14 @@
-import fs from "node:fs/promises";
 import path from "node:path";
-import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { analyzeShellCommand } from "../infra/exec-approvals-analysis.js";
-import { type ExecHost, loadExecApprovals, maxAsk, minSecurity } from "../infra/exec-approvals.js";
+import {
+  type ExecAsk,
+  type ExecHost,
+  type ExecSecurity,
+  loadExecApprovals,
+  maxAsk,
+  minSecurity,
+} from "../infra/exec-approvals.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import { sanitizeHostExecEnvWithDiagnostics } from "../infra/host-env-security.js";
 import {
@@ -11,8 +17,15 @@ import {
 } from "../infra/shell-env.js";
 import { logInfo } from "../logger.js";
 import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
+import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { splitShellArgs } from "../utils/shell-argv.js";
 import { markBackgrounded } from "./bash-process-registry.js";
+import { describeExecTool } from "./bash-tools.descriptions.js";
 import { processGatewayAllowlist } from "./bash-tools.exec-host-gateway.js";
 import { executeNodeHostCommand } from "./bash-tools.exec-host-node.js";
 import {
@@ -45,8 +58,8 @@ import {
   resolveWorkdir,
   truncateMiddle,
 } from "./bash-tools.shared.js";
-import { assertSandboxPath } from "./sandbox-paths.js";
-import { failedTextResult, textResult } from "./tools/common.js";
+import { EXEC_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
+import { type AgentToolWithMeta, failedTextResult, textResult } from "./tools/common.js";
 
 export type { BashSandboxConfig } from "./bash-tools.shared.js";
 export type {
@@ -67,6 +80,7 @@ function buildExecForegroundResult(params: {
       exitCode: params.outcome.exitCode ?? null,
       durationMs: params.outcome.durationMs,
       aggregated: params.outcome.aggregated,
+      timedOut: params.outcome.timedOut,
       cwd: params.cwd,
     });
   }
@@ -79,29 +93,849 @@ function buildExecForegroundResult(params: {
   });
 }
 
-function extractScriptTargetFromCommand(
-  command: string,
-): { kind: "python"; relOrAbsPath: string } | { kind: "node"; relOrAbsPath: string } | null {
-  const raw = command.trim();
-  if (!raw) {
+const PREFLIGHT_ENV_OPTIONS_WITH_VALUES = new Set([
+  "-C",
+  "-S",
+  "-u",
+  "--argv0",
+  "--block-signal",
+  "--chdir",
+  "--default-signal",
+  "--ignore-signal",
+  "--split-string",
+  "--unset",
+]);
+
+const SKIPPABLE_SCRIPT_PREFLIGHT_FS_ERROR_CODES = new Set([
+  "EACCES",
+  "EISDIR",
+  "ELOOP",
+  "EINVAL",
+  "ENAMETOOLONG",
+  "ENOENT",
+  "ENOTDIR",
+  "EPERM",
+]);
+
+function getNodeErrorCode(error: unknown): string | undefined {
+  if (typeof error !== "object" || error === null || !("code" in error)) {
+    return undefined;
+  }
+  return String((error as { code?: unknown }).code);
+}
+
+type FsSafeModule = typeof import("../infra/fs-safe.js");
+
+let fsSafeModulePromise: Promise<FsSafeModule> | undefined;
+
+async function loadFsSafeModule(): Promise<FsSafeModule> {
+  fsSafeModulePromise ??= import("../infra/fs-safe.js");
+  return await fsSafeModulePromise;
+}
+
+function shouldSkipScriptPreflightPathError(
+  error: unknown,
+  SafeOpenError: FsSafeModule["SafeOpenError"],
+): boolean {
+  if (error instanceof SafeOpenError) {
+    return true;
+  }
+  const errorCode = getNodeErrorCode(error);
+  return !!(errorCode && SKIPPABLE_SCRIPT_PREFLIGHT_FS_ERROR_CODES.has(errorCode));
+}
+
+function resolvePreflightRelativePath(params: { rootDir: string; absPath: string }): string | null {
+  const root = path.resolve(params.rootDir);
+  const candidate = path.resolve(params.absPath);
+  const relative = path.relative(root, candidate);
+  if (/^\.\.(?:[\\/]|$)/u.test(relative) || path.isAbsolute(relative)) {
     return null;
   }
+  // Preserve literal "~" path segments under the workdir. `readFileWithinRoot`
+  // expands home prefixes for relative paths, so normalize `~/...` to `./~/...`.
+  return /^~(?:$|[\\/])/u.test(relative) ? `.${path.sep}${relative}` : relative;
+}
 
-  // Intentionally simple parsing: we only support common forms like
-  //   python file.py
-  //   python3 -u file.py
-  //   node --experimental-something file.js
-  // If the command is more complex (pipes, heredocs, quoted paths with spaces), skip preflight.
-  const pythonMatch = raw.match(/^\s*(python3?|python)\s+(?:-[^\s]+\s+)*([^\s]+\.py)\b/i);
-  if (pythonMatch?.[2]) {
-    return { kind: "python", relOrAbsPath: pythonMatch[2] };
-  }
-  const nodeMatch = raw.match(/^\s*(node)\s+(?:--[^\s]+\s+)*([^\s]+\.js)\b/i);
-  if (nodeMatch?.[2]) {
-    return { kind: "node", relOrAbsPath: nodeMatch[2] };
-  }
+function isShellEnvAssignmentToken(token: string): boolean {
+  return /^[A-Za-z_][A-Za-z0-9_]*=.*$/u.test(token);
+}
 
+function isEnvExecutableToken(token: string | undefined): boolean {
+  if (!token) {
+    return false;
+  }
+  const base = normalizeOptionalLowercaseString(token.split(/[\\/]/u).at(-1)) ?? "";
+  const normalizedBase = base.endsWith(".exe") ? base.slice(0, -4) : base;
+  return normalizedBase === "env";
+}
+
+function stripPreflightEnvPrefix(argv: string[]): string[] {
+  if (argv.length === 0) {
+    return argv;
+  }
+  let idx = 0;
+  while (idx < argv.length && isShellEnvAssignmentToken(argv[idx])) {
+    idx += 1;
+  }
+  if (!isEnvExecutableToken(argv[idx])) {
+    return argv;
+  }
+  idx += 1;
+  while (idx < argv.length) {
+    const token = argv[idx];
+    if (token === "--") {
+      idx += 1;
+      break;
+    }
+    if (isShellEnvAssignmentToken(token)) {
+      idx += 1;
+      continue;
+    }
+    if (!token.startsWith("-") || token === "-") {
+      break;
+    }
+    idx += 1;
+    const option = token.split("=", 1)[0];
+    if (
+      PREFLIGHT_ENV_OPTIONS_WITH_VALUES.has(option) &&
+      !token.includes("=") &&
+      idx < argv.length
+    ) {
+      idx += 1;
+    }
+  }
+  return argv.slice(idx);
+}
+
+function findFirstPythonScriptArg(tokens: string[]): string | null {
+  const optionsWithSeparateValue = new Set(["-W", "-X", "-Q", "--check-hash-based-pycs"]);
+  for (let i = 0; i < tokens.length; i += 1) {
+    const token = tokens[i];
+    if (token === "--") {
+      const next = tokens[i + 1];
+      return normalizeLowercaseStringOrEmpty(next).endsWith(".py") ? next : null;
+    }
+    if (token === "-") {
+      return null;
+    }
+    if (token === "-c" || token === "-m") {
+      return null;
+    }
+    if ((token.startsWith("-c") || token.startsWith("-m")) && token.length > 2) {
+      return null;
+    }
+    if (optionsWithSeparateValue.has(token)) {
+      i += 1;
+      continue;
+    }
+    if (token.startsWith("-")) {
+      continue;
+    }
+    return normalizeLowercaseStringOrEmpty(token).endsWith(".py") ? token : null;
+  }
   return null;
+}
+
+function findNodeScriptArgs(tokens: string[]): string[] {
+  const optionsWithSeparateValue = new Set(["-r", "--require", "--import"]);
+  const preloadScripts: string[] = [];
+  let entryScript: string | null = null;
+  let hasInlineEvalOrPrint = false;
+  for (let i = 0; i < tokens.length; i += 1) {
+    const token = tokens[i];
+    if (token === "--") {
+      if (!hasInlineEvalOrPrint && !entryScript) {
+        const next = tokens[i + 1];
+        if (normalizeLowercaseStringOrEmpty(next).endsWith(".js")) {
+          entryScript = next;
+        }
+      }
+      break;
+    }
+    if (
+      token === "-e" ||
+      token === "-p" ||
+      token === "--eval" ||
+      token === "--print" ||
+      token.startsWith("--eval=") ||
+      token.startsWith("--print=") ||
+      ((token.startsWith("-e") || token.startsWith("-p")) && token.length > 2)
+    ) {
+      hasInlineEvalOrPrint = true;
+      if (token === "-e" || token === "-p" || token === "--eval" || token === "--print") {
+        i += 1;
+      }
+      continue;
+    }
+    if (optionsWithSeparateValue.has(token)) {
+      const next = tokens[i + 1];
+      if (normalizeLowercaseStringOrEmpty(next).endsWith(".js")) {
+        preloadScripts.push(next);
+      }
+      i += 1;
+      continue;
+    }
+    if (
+      (token.startsWith("-r") && token.length > 2) ||
+      token.startsWith("--require=") ||
+      token.startsWith("--import=")
+    ) {
+      const inlineValue = token.startsWith("-r")
+        ? token.slice(2)
+        : token.slice(token.indexOf("=") + 1);
+      if (normalizeLowercaseStringOrEmpty(inlineValue).endsWith(".js")) {
+        preloadScripts.push(inlineValue);
+      }
+      continue;
+    }
+    if (token.startsWith("-")) {
+      continue;
+    }
+    if (
+      !hasInlineEvalOrPrint &&
+      !entryScript &&
+      normalizeLowercaseStringOrEmpty(token).endsWith(".js")
+    ) {
+      entryScript = token;
+    }
+    break;
+  }
+  const targets = [...preloadScripts];
+  if (entryScript) {
+    targets.push(entryScript);
+  }
+  return targets;
+}
+
+function extractInterpreterScriptTargetFromArgv(
+  argv: string[] | null,
+): { kind: "python"; relOrAbsPaths: string[] } | { kind: "node"; relOrAbsPaths: string[] } | null {
+  if (!argv || argv.length === 0) {
+    return null;
+  }
+  let commandIdx = 0;
+  while (commandIdx < argv.length && /^[A-Za-z_][A-Za-z0-9_]*=.*$/u.test(argv[commandIdx])) {
+    commandIdx += 1;
+  }
+  const executable = normalizeOptionalLowercaseString(argv[commandIdx]);
+  if (!executable) {
+    return null;
+  }
+  const args = argv.slice(commandIdx + 1);
+  if (/^python(?:3(?:\.\d+)?)?$/i.test(executable)) {
+    const script = findFirstPythonScriptArg(args);
+    if (script) {
+      return { kind: "python", relOrAbsPaths: [script] };
+    }
+    return null;
+  }
+  if (executable === "node") {
+    const scripts = findNodeScriptArgs(args);
+    if (scripts.length > 0) {
+      return { kind: "node", relOrAbsPaths: scripts };
+    }
+    return null;
+  }
+  return null;
+}
+
+function extractInterpreterScriptPathsFromSegment(rawSegment: string): string[] {
+  const argv = splitShellArgs(rawSegment.trim());
+  if (!argv || argv.length === 0) {
+    return [];
+  }
+  const withoutLeadingKeyword = /^(?:if|then|do|elif|else|while|until|time)$/i.test(argv[0] ?? "")
+    ? argv.slice(1)
+    : argv;
+  const target = extractInterpreterScriptTargetFromArgv(
+    stripPreflightEnvPrefix(withoutLeadingKeyword),
+  );
+  return target?.relOrAbsPaths ?? [];
+}
+
+function extractScriptTargetFromCommand(
+  command: string,
+): { kind: "python"; relOrAbsPaths: string[] } | { kind: "node"; relOrAbsPaths: string[] } | null {
+  const raw = command.trim();
+  const splitShellArgsPreservingBackslashes = (value: string): string[] | null => {
+    const tokens: string[] = [];
+    let buf = "";
+    let inSingle = false;
+    let inDouble = false;
+
+    const pushToken = () => {
+      if (buf.length > 0) {
+        tokens.push(buf);
+        buf = "";
+      }
+    };
+
+    for (let i = 0; i < value.length; i += 1) {
+      const ch = value[i];
+      if (inSingle) {
+        if (ch === "'") {
+          inSingle = false;
+        } else {
+          buf += ch;
+        }
+        continue;
+      }
+      if (inDouble) {
+        if (ch === '"') {
+          inDouble = false;
+        } else {
+          buf += ch;
+        }
+        continue;
+      }
+      if (ch === "'") {
+        inSingle = true;
+        continue;
+      }
+      if (ch === '"') {
+        inDouble = true;
+        continue;
+      }
+      if (/\s/.test(ch)) {
+        pushToken();
+        continue;
+      }
+      buf += ch;
+    }
+
+    if (inSingle || inDouble) {
+      return null;
+    }
+    pushToken();
+    return tokens;
+  };
+  const shouldUseWindowsPathTokenizer =
+    process.platform === "win32" &&
+    /(?:^|[\s"'`])(?:[A-Za-z]:\\|\\\\|[^\s"'`|&;()<>]+\\[^\s"'`|&;()<>]+)/.test(raw);
+  const candidateArgv = shouldUseWindowsPathTokenizer
+    ? [splitShellArgsPreservingBackslashes(raw)]
+    : [splitShellArgs(raw)];
+
+  for (const argv of candidateArgv) {
+    const attempts = [argv, argv ? stripPreflightEnvPrefix(argv) : null];
+    for (const attempt of attempts) {
+      const target = extractInterpreterScriptTargetFromArgv(attempt);
+      if (target) {
+        return target;
+      }
+    }
+  }
+  return null;
+}
+
+function extractUnquotedShellText(raw: string): string | null {
+  let out = "";
+  let inSingle = false;
+  let inDouble = false;
+  let escaped = false;
+
+  for (let i = 0; i < raw.length; i += 1) {
+    const ch = raw[i];
+    if (escaped) {
+      if (!inSingle && !inDouble) {
+        // Preserve escapes outside quotes so downstream heuristics can distinguish
+        // escaped literals (e.g. `\|`) from executable shell operators.
+        out += `\\${ch}`;
+      }
+      escaped = false;
+      continue;
+    }
+    if (!inSingle && ch === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (inSingle) {
+      if (ch === "'") {
+        inSingle = false;
+      }
+      continue;
+    }
+    if (inDouble) {
+      const next = raw[i + 1];
+      if (ch === "\\" && next && /[\\'"$`\n\r]/.test(next)) {
+        i += 1;
+        continue;
+      }
+      if (ch === '"') {
+        inDouble = false;
+      }
+      continue;
+    }
+    if (ch === "'") {
+      inSingle = true;
+      continue;
+    }
+    if (ch === '"') {
+      inDouble = true;
+      continue;
+    }
+    out += ch;
+  }
+
+  if (escaped || inSingle || inDouble) {
+    return null;
+  }
+  return out;
+}
+
+function splitShellSegmentsOutsideQuotes(
+  rawText: string,
+  params: { splitPipes: boolean },
+): string[] {
+  const segments: string[] = [];
+  let buf = "";
+  let inSingle = false;
+  let inDouble = false;
+  let escaped = false;
+
+  const pushSegment = () => {
+    if (buf.trim().length > 0) {
+      segments.push(buf);
+    }
+    buf = "";
+  };
+
+  for (let i = 0; i < rawText.length; i += 1) {
+    const ch = rawText[i];
+    const next = rawText[i + 1];
+
+    if (escaped) {
+      buf += ch;
+      escaped = false;
+      continue;
+    }
+
+    if (!inSingle && ch === "\\") {
+      buf += ch;
+      escaped = true;
+      continue;
+    }
+
+    if (inSingle) {
+      buf += ch;
+      if (ch === "'") {
+        inSingle = false;
+      }
+      continue;
+    }
+
+    if (inDouble) {
+      buf += ch;
+      if (ch === '"') {
+        inDouble = false;
+      }
+      continue;
+    }
+
+    if (ch === "'") {
+      inSingle = true;
+      buf += ch;
+      continue;
+    }
+
+    if (ch === '"') {
+      inDouble = true;
+      buf += ch;
+      continue;
+    }
+
+    if (ch === "\n" || ch === "\r") {
+      pushSegment();
+      continue;
+    }
+    if (ch === ";") {
+      pushSegment();
+      continue;
+    }
+    if (ch === "&" && next === "&") {
+      pushSegment();
+      i += 1;
+      continue;
+    }
+    if (ch === "|" && next === "|") {
+      pushSegment();
+      i += 1;
+      continue;
+    }
+    if (params.splitPipes && ch === "|") {
+      pushSegment();
+      continue;
+    }
+
+    buf += ch;
+  }
+  pushSegment();
+  return segments;
+}
+
+function isInterpreterExecutable(executable: string | undefined): boolean {
+  if (!executable) {
+    return false;
+  }
+  return /^python(?:3(?:\.\d+)?)?$/i.test(executable) || executable === "node";
+}
+
+function hasUnescapedSequence(raw: string, sequence: string): boolean {
+  if (sequence.length === 0) {
+    return false;
+  }
+  let escaped = false;
+  for (let i = 0; i < raw.length; i += 1) {
+    const ch = raw[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (ch === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (raw.startsWith(sequence, i)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function hasUnquotedScriptHint(raw: string): boolean {
+  let inSingle = false;
+  let inDouble = false;
+  let escaped = false;
+  let token = "";
+
+  const flushToken = (): boolean => {
+    const normalizedToken = normalizeLowercaseStringOrEmpty(token);
+    if (normalizedToken.endsWith(".py") || normalizedToken.endsWith(".js")) {
+      return true;
+    }
+    token = "";
+    return false;
+  };
+
+  for (let i = 0; i < raw.length; i += 1) {
+    const ch = raw[i];
+    if (escaped) {
+      if (!inSingle && !inDouble) {
+        token += ch;
+      }
+      escaped = false;
+      continue;
+    }
+    if (!inSingle && ch === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (inSingle) {
+      if (ch === "'") {
+        inSingle = false;
+      }
+      continue;
+    }
+    if (inDouble) {
+      if (ch === '"') {
+        inDouble = false;
+      }
+      continue;
+    }
+    if (ch === "'") {
+      if (flushToken()) {
+        return true;
+      }
+      inSingle = true;
+      continue;
+    }
+    if (ch === '"') {
+      if (flushToken()) {
+        return true;
+      }
+      inDouble = true;
+      continue;
+    }
+    if (/\s/u.test(ch) || "|&;()<>".includes(ch)) {
+      if (flushToken()) {
+        return true;
+      }
+      continue;
+    }
+    token += ch;
+  }
+  return flushToken();
+}
+
+function resolveLeadingShellSegmentExecutable(rawSegment: string): string | undefined {
+  const segment = (extractUnquotedShellText(rawSegment) ?? rawSegment).trim();
+  const argv = splitShellArgs(segment);
+  if (!argv || argv.length === 0) {
+    return undefined;
+  }
+  const withoutLeadingKeyword = /^(?:if|then|do|elif|else|while|until|time)$/i.test(argv[0] ?? "")
+    ? argv.slice(1)
+    : argv;
+  if (withoutLeadingKeyword.length === 0) {
+    return undefined;
+  }
+  const normalizedArgv = stripPreflightEnvPrefix(withoutLeadingKeyword);
+  let commandIdx = 0;
+  while (
+    commandIdx < normalizedArgv.length &&
+    /^[A-Za-z_][A-Za-z0-9_]*=.*$/u.test(normalizedArgv[commandIdx] ?? "")
+  ) {
+    commandIdx += 1;
+  }
+  return normalizeOptionalLowercaseString(normalizedArgv[commandIdx]);
+}
+
+function analyzeInterpreterHeuristicsFromUnquoted(raw: string): {
+  hasPython: boolean;
+  hasNode: boolean;
+  hasComplexSyntax: boolean;
+  hasProcessSubstitution: boolean;
+  hasScriptHint: boolean;
+} {
+  const hasPython = splitShellSegmentsOutsideQuotes(raw, { splitPipes: true }).some((segment) =>
+    /^python(?:3(?:\.\d+)?)?$/i.test(resolveLeadingShellSegmentExecutable(segment) ?? ""),
+  );
+  const hasNode = splitShellSegmentsOutsideQuotes(raw, { splitPipes: true }).some(
+    (segment) => resolveLeadingShellSegmentExecutable(segment) === "node",
+  );
+  const hasProcessSubstitution = hasUnescapedSequence(raw, "<(") || hasUnescapedSequence(raw, ">(");
+  const hasComplexSyntax =
+    hasUnescapedSequence(raw, "|") ||
+    hasUnescapedSequence(raw, "&&") ||
+    hasUnescapedSequence(raw, "||") ||
+    hasUnescapedSequence(raw, ";") ||
+    raw.includes("\n") ||
+    raw.includes("\r") ||
+    hasUnescapedSequence(raw, "$(") ||
+    hasUnescapedSequence(raw, "`") ||
+    hasProcessSubstitution;
+  const hasScriptHint = hasUnquotedScriptHint(raw);
+
+  return { hasPython, hasNode, hasComplexSyntax, hasProcessSubstitution, hasScriptHint };
+}
+
+function extractShellWrappedCommandPayload(
+  executable: string | undefined,
+  args: string[],
+): string | null {
+  if (!executable) {
+    return null;
+  }
+  const executableBase = normalizeOptionalLowercaseString(executable.split(/[\\/]/u).at(-1)) ?? "";
+  const normalizedExecutable = executableBase.endsWith(".exe")
+    ? executableBase.slice(0, -4)
+    : executableBase;
+  if (!/^(?:bash|dash|fish|ksh|sh|zsh)$/i.test(normalizedExecutable)) {
+    return null;
+  }
+  const shortOptionsWithSeparateValue = new Set(["-O", "-o"]);
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (arg === "--") {
+      return null;
+    }
+    if (arg === "-c") {
+      return args[i + 1] ?? null;
+    }
+    if (/^-[A-Za-z]+$/u.test(arg)) {
+      if (arg.includes("c")) {
+        return args[i + 1] ?? null;
+      }
+      if (shortOptionsWithSeparateValue.has(arg)) {
+        i += 1;
+      }
+      continue;
+    }
+    if (/^--[A-Za-z0-9][A-Za-z0-9-]*(?:=.*)?$/u.test(arg)) {
+      if (!arg.includes("=")) {
+        const next = args[i + 1];
+        if (next && next !== "--" && !next.startsWith("-")) {
+          i += 1;
+        }
+      }
+      continue;
+    }
+    return null;
+  }
+  return null;
+}
+
+function shouldFailClosedInterpreterPreflight(command: string): {
+  hasInterpreterInvocation: boolean;
+  hasComplexSyntax: boolean;
+  hasProcessSubstitution: boolean;
+  hasInterpreterSegmentScriptHint: boolean;
+  hasInterpreterPipelineScriptHint: boolean;
+  isDirectInterpreterCommand: boolean;
+} {
+  const raw = command.trim();
+  const rawArgv = splitShellArgs(raw);
+  const argv = rawArgv ? stripPreflightEnvPrefix(rawArgv) : null;
+  let commandIdx = 0;
+  if (argv) {
+    while (
+      commandIdx < argv.length &&
+      /^[A-Za-z_][A-Za-z0-9_]*=.*$/u.test(argv[commandIdx] ?? "")
+    ) {
+      commandIdx += 1;
+    }
+  }
+  const directExecutable = normalizeOptionalLowercaseString(argv?.[commandIdx]);
+  const args = argv ? argv.slice(commandIdx + 1) : [];
+
+  const isDirectPythonExecutable = Boolean(
+    directExecutable && /^python(?:3(?:\.\d+)?)?$/i.test(directExecutable),
+  );
+  const isDirectNodeExecutable = directExecutable === "node";
+  const isDirectInterpreterCommand = isDirectPythonExecutable || isDirectNodeExecutable;
+
+  const unquotedRaw = extractUnquotedShellText(raw) ?? raw;
+  const topLevel = analyzeInterpreterHeuristicsFromUnquoted(unquotedRaw);
+
+  const shellWrappedPayload = extractShellWrappedCommandPayload(directExecutable, args);
+  const nestedUnquoted = shellWrappedPayload
+    ? (extractUnquotedShellText(shellWrappedPayload) ?? shellWrappedPayload)
+    : "";
+  const nested = shellWrappedPayload
+    ? analyzeInterpreterHeuristicsFromUnquoted(nestedUnquoted)
+    : {
+        hasPython: false,
+        hasNode: false,
+        hasComplexSyntax: false,
+        hasProcessSubstitution: false,
+        hasScriptHint: false,
+      };
+  const hasInterpreterInvocationInSegment = (rawSegment: string): boolean =>
+    isInterpreterExecutable(resolveLeadingShellSegmentExecutable(rawSegment));
+  const isScriptExecutingInterpreterCommand = (rawCommand: string): boolean => {
+    const argv = splitShellArgs(rawCommand.trim());
+    if (!argv || argv.length === 0) {
+      return false;
+    }
+    const withoutLeadingKeyword = /^(?:if|then|do|elif|else|while|until|time)$/i.test(argv[0] ?? "")
+      ? argv.slice(1)
+      : argv;
+    if (withoutLeadingKeyword.length === 0) {
+      return false;
+    }
+    const normalizedArgv = stripPreflightEnvPrefix(withoutLeadingKeyword);
+    let commandIdx = 0;
+    while (
+      commandIdx < normalizedArgv.length &&
+      /^[A-Za-z_][A-Za-z0-9_]*=.*$/u.test(normalizedArgv[commandIdx] ?? "")
+    ) {
+      commandIdx += 1;
+    }
+    const executable = normalizeOptionalLowercaseString(normalizedArgv[commandIdx]);
+    if (!executable) {
+      return false;
+    }
+    const args = normalizedArgv.slice(commandIdx + 1);
+
+    if (/^python(?:3(?:\.\d+)?)?$/i.test(executable)) {
+      const pythonInfoOnlyFlags = new Set(["-V", "--version", "-h", "--help"]);
+      if (args.some((arg) => pythonInfoOnlyFlags.has(arg))) {
+        return false;
+      }
+      if (
+        args.some(
+          (arg) =>
+            arg === "-c" ||
+            arg === "-m" ||
+            arg.startsWith("-c") ||
+            arg.startsWith("-m") ||
+            arg === "--check-hash-based-pycs",
+        )
+      ) {
+        return false;
+      }
+      return true;
+    }
+
+    if (executable === "node") {
+      const nodeInfoOnlyFlags = new Set(["-v", "--version", "-h", "--help", "-c", "--check"]);
+      if (args.some((arg) => nodeInfoOnlyFlags.has(arg))) {
+        return false;
+      }
+      if (
+        args.some(
+          (arg) =>
+            arg === "-e" ||
+            arg === "-p" ||
+            arg === "--eval" ||
+            arg === "--print" ||
+            arg.startsWith("--eval=") ||
+            arg.startsWith("--print=") ||
+            ((arg.startsWith("-e") || arg.startsWith("-p")) && arg.length > 2),
+        )
+      ) {
+        return false;
+      }
+      return true;
+    }
+
+    return false;
+  };
+  const hasScriptHintInSegment = (segment: string): boolean =>
+    extractInterpreterScriptPathsFromSegment(segment).length > 0 || hasUnquotedScriptHint(segment);
+  const hasInterpreterAndScriptHintInSameSegment = (rawText: string): boolean => {
+    const segments = splitShellSegmentsOutsideQuotes(rawText, { splitPipes: true });
+    return segments.some((segment) => {
+      if (!isScriptExecutingInterpreterCommand(segment)) {
+        return false;
+      }
+      return hasScriptHintInSegment(segment);
+    });
+  };
+  const hasInterpreterPipelineScriptHintInSameSegment = (rawText: string): boolean => {
+    const commandSegments = splitShellSegmentsOutsideQuotes(rawText, { splitPipes: false });
+    return commandSegments.some((segment) => {
+      const pipelineCommands = splitShellSegmentsOutsideQuotes(segment, { splitPipes: true });
+      const hasScriptExecutingPipedInterpreter = pipelineCommands
+        .slice(1)
+        .some((pipelineCommand) => isScriptExecutingInterpreterCommand(pipelineCommand));
+      if (!hasScriptExecutingPipedInterpreter) {
+        return false;
+      }
+      return hasScriptHintInSegment(segment);
+    });
+  };
+  const hasInterpreterSegmentScriptHint =
+    hasInterpreterAndScriptHintInSameSegment(raw) ||
+    (shellWrappedPayload !== null && hasInterpreterAndScriptHintInSameSegment(shellWrappedPayload));
+  const hasInterpreterPipelineScriptHint =
+    hasInterpreterPipelineScriptHintInSameSegment(raw) ||
+    (shellWrappedPayload !== null &&
+      hasInterpreterPipelineScriptHintInSameSegment(shellWrappedPayload));
+  const hasShellWrappedInterpreterSegmentScriptHint =
+    shellWrappedPayload !== null && hasInterpreterAndScriptHintInSameSegment(shellWrappedPayload);
+  const hasShellWrappedInterpreterInvocation =
+    (nested.hasPython || nested.hasNode) &&
+    (hasShellWrappedInterpreterSegmentScriptHint ||
+      nested.hasScriptHint ||
+      nested.hasComplexSyntax ||
+      nested.hasProcessSubstitution);
+  const hasTopLevelInterpreterInvocation = splitShellSegmentsOutsideQuotes(raw, {
+    splitPipes: true,
+  }).some((segment) => hasInterpreterInvocationInSegment(segment));
+  const hasInterpreterInvocation =
+    isDirectInterpreterCommand ||
+    hasShellWrappedInterpreterInvocation ||
+    hasTopLevelInterpreterInvocation;
+
+  return {
+    hasInterpreterInvocation,
+    hasComplexSyntax: topLevel.hasComplexSyntax || hasShellWrappedInterpreterInvocation,
+    hasProcessSubstitution: topLevel.hasProcessSubstitution || nested.hasProcessSubstitution,
+    hasInterpreterSegmentScriptHint,
+    hasInterpreterPipelineScriptHint,
+    isDirectInterpreterCommand,
+  };
 }
 
 async function validateScriptFileForShellBleed(params: {
@@ -110,69 +944,111 @@ async function validateScriptFileForShellBleed(params: {
 }): Promise<void> {
   const target = extractScriptTargetFromCommand(params.command);
   if (!target) {
-    return;
-  }
-
-  const absPath = path.isAbsolute(target.relOrAbsPath)
-    ? path.resolve(target.relOrAbsPath)
-    : path.resolve(params.workdir, target.relOrAbsPath);
-
-  // Best-effort: only validate if file exists and is reasonably small.
-  let stat: { isFile(): boolean; size: number };
-  try {
-    await assertSandboxPath({
-      filePath: absPath,
-      cwd: params.workdir,
-      root: params.workdir,
-    });
-    stat = await fs.stat(absPath);
-  } catch {
-    return;
-  }
-  if (!stat.isFile()) {
-    return;
-  }
-  if (stat.size > 512 * 1024) {
-    return;
-  }
-
-  const content = await fs.readFile(absPath, "utf-8");
-
-  // Common failure mode: shell env var syntax leaking into Python/JS.
-  // We deliberately match all-caps/underscore vars to avoid false positives with `$` as a JS identifier.
-  const envVarRegex = /\$[A-Z_][A-Z0-9_]{1,}/g;
-  const first = envVarRegex.exec(content);
-  if (first) {
-    const idx = first.index;
-    const before = content.slice(0, idx);
-    const line = before.split("\n").length;
-    const token = first[0];
-    throw new Error(
-      [
-        `exec preflight: detected likely shell variable injection (${token}) in ${target.kind} script: ${path.basename(
-          absPath,
-        )}:${line}.`,
-        target.kind === "python"
-          ? `In Python, use os.environ.get(${JSON.stringify(token.slice(1))}) instead of raw ${token}.`
-          : `In Node.js, use process.env[${JSON.stringify(token.slice(1))}] instead of raw ${token}.`,
-        "(If this is inside a string literal on purpose, escape it or restructure the code.)",
-      ].join("\n"),
-    );
-  }
-
-  // Another recurring pattern from the issue: shell commands accidentally emitted as JS.
-  if (target.kind === "node") {
-    const firstNonEmpty = content
-      .split(/\r?\n/)
-      .map((l) => l.trim())
-      .find((l) => l.length > 0);
-    if (firstNonEmpty && /^NODE\b/.test(firstNonEmpty)) {
+    const {
+      hasInterpreterInvocation,
+      hasComplexSyntax,
+      hasProcessSubstitution,
+      hasInterpreterSegmentScriptHint,
+      hasInterpreterPipelineScriptHint,
+      isDirectInterpreterCommand,
+    } = shouldFailClosedInterpreterPreflight(params.command);
+    if (
+      hasInterpreterInvocation &&
+      hasComplexSyntax &&
+      (hasInterpreterSegmentScriptHint ||
+        hasInterpreterPipelineScriptHint ||
+        (hasProcessSubstitution && isDirectInterpreterCommand))
+    ) {
+      // Fail closed when interpreter-driven script execution is ambiguous; otherwise
+      // attackers can route script content through forms our fast parser cannot validate.
       throw new Error(
-        `exec preflight: JS file starts with shell syntax (${firstNonEmpty}). ` +
-          `This looks like a shell command, not JavaScript.`,
+        "exec preflight: complex interpreter invocation detected; refusing to run without script preflight validation. " +
+          "Use a direct `python <file>.py` or `node <file>.js` command.",
       );
     }
+    return;
   }
+
+  const { SafeOpenError, readFileWithinRoot } = await loadFsSafeModule();
+  for (const relOrAbsPath of target.relOrAbsPaths) {
+    const absPath = path.isAbsolute(relOrAbsPath)
+      ? path.resolve(relOrAbsPath)
+      : path.resolve(params.workdir, relOrAbsPath);
+    const relativePath = resolvePreflightRelativePath({
+      rootDir: params.workdir,
+      absPath,
+    });
+    if (!relativePath) {
+      continue;
+    }
+
+    // Best-effort: only validate files that safely resolve within workdir and
+    // are reasonably small. This keeps preflight checks on a pinned file
+    // identity instead of trusting mutable pathnames across multiple ops.
+    // Use non-blocking open to avoid stalls if a path is swapped to a FIFO.
+    let content: string;
+    try {
+      const safeRead = await readFileWithinRoot({
+        rootDir: params.workdir,
+        relativePath,
+        nonBlockingRead: true,
+        allowSymlinkTargetWithinRoot: true,
+        maxBytes: 512 * 1024,
+      });
+      content = safeRead.buffer.toString("utf-8");
+    } catch (error) {
+      if (shouldSkipScriptPreflightPathError(error, SafeOpenError)) {
+        // Preflight validation is best-effort: skip path/read failures and
+        // continue to execute the command normally.
+        continue;
+      }
+      throw error;
+    }
+
+    // Common failure mode: shell env var syntax leaking into Python/JS.
+    // We deliberately match all-caps/underscore vars to avoid false positives with `$` as a JS identifier.
+    const envVarRegex = /\$[A-Z_][A-Z0-9_]{1,}/g;
+    const first = envVarRegex.exec(content);
+    if (first) {
+      const idx = first.index;
+      const before = content.slice(0, idx);
+      const line = before.split("\n").length;
+      const token = first[0];
+      throw new Error(
+        [
+          `exec preflight: detected likely shell variable injection (${token}) in ${target.kind} script: ${path.basename(
+            absPath,
+          )}:${line}.`,
+          target.kind === "python"
+            ? `In Python, use os.environ.get(${JSON.stringify(token.slice(1))}) instead of raw ${token}.`
+            : `In Node.js, use process.env[${JSON.stringify(token.slice(1))}] instead of raw ${token}.`,
+          "(If this is inside a string literal on purpose, escape it or restructure the code.)",
+        ].join("\n"),
+      );
+    }
+
+    // Another recurring pattern from the issue: shell commands accidentally emitted as JS.
+    if (target.kind === "node") {
+      const firstNonEmpty = content
+        .split(/\r?\n/)
+        .map((l) => l.trim())
+        .find((l) => l.length > 0);
+      if (firstNonEmpty && /^NODE\b/.test(firstNonEmpty)) {
+        throw new Error(
+          `exec preflight: JS file starts with shell syntax (${firstNonEmpty}). ` +
+            `This looks like a shell command, not JavaScript.`,
+        );
+      }
+    }
+  }
+}
+
+function shouldSkipExecScriptPreflight(params: {
+  host: ExecHost;
+  security: ExecSecurity;
+  ask: ExecAsk;
+}): boolean {
+  return params.host === "gateway" && params.security === "full" && params.ask === "off";
 }
 
 type ParsedExecApprovalCommand = {
@@ -191,9 +1067,9 @@ function parseExecApprovalShellCommand(raw: string): ParsedExecApprovalCommand |
   return {
     approvalId: match[1],
     decision:
-      match[2].toLowerCase() === "always"
+      normalizeLowercaseStringOrEmpty(match[2]) === "always"
         ? "allow-always"
-        : (match[2].toLowerCase() as ParsedExecApprovalCommand["decision"]),
+        : (normalizeLowercaseStringOrEmpty(match[2]) as ParsedExecApprovalCommand["decision"]),
   };
 }
 
@@ -432,8 +1308,7 @@ function rejectExecApprovalShellCommand(command: string): void {
 
 export function createExecTool(
   defaults?: ExecToolDefaults,
-  // oxlint-disable-next-line typescript/no-explicit-any
-): AgentTool<any, ExecToolDetails> {
+): AgentToolWithMeta<typeof execSchema, ExecToolDetails> {
   const defaultBackgroundMs = clampWithDefault(
     defaults?.backgroundMs ?? readEnvInt("PI_BASH_YIELD_MS"),
     10_000,
@@ -474,7 +1349,13 @@ export function createExecTool(
   }
   const notifyOnExit = defaults?.notifyOnExit !== false;
   const notifyOnExitEmptySuccess = defaults?.notifyOnExitEmptySuccess === true;
-  const notifySessionKey = defaults?.sessionKey?.trim() || undefined;
+  const notifySessionKey = normalizeOptionalString(defaults?.sessionKey);
+  const notifyDeliveryContext = normalizeDeliveryContext({
+    channel: defaults?.messageProvider,
+    to: defaults?.currentChannelId,
+    accountId: defaults?.accountId,
+    threadId: defaults?.currentThreadTs,
+  });
   const approvalRunningNoticeMs = resolveApprovalRunningNoticeMs(defaults?.approvalRunningNoticeMs);
   // Derive agentId only when sessionKey is an agent session key.
   const parsedAgentSession = parseAgentSessionKey(defaults?.sessionKey);
@@ -485,8 +1366,10 @@ export function createExecTool(
   return {
     name: "exec",
     label: "exec",
-    description:
-      "Execute shell commands with background continuation. Use yieldMs/background to continue later via process tool. Use pty=true for TTY-required commands (terminal UIs, coding agents).",
+    displaySummary: EXEC_TOOL_DISPLAY_SUMMARY,
+    get description() {
+      return describeExecTool({ agentId, hasCronTool: defaults?.hasCronTool === true });
+    },
     parameters: execSchema,
     execute: async (_toolCallId, args, signal, onUpdate) => {
       const params = args as {
@@ -552,8 +1435,8 @@ export function createExecTool(
           const runtime = defaults?.sandbox ? "sandboxed" : "direct";
           const gates: string[] = [];
           const contextParts: string[] = [];
-          const provider = defaults?.messageProvider?.trim();
-          const sessionKey = defaults?.sessionKey?.trim();
+          const provider = normalizeOptionalString(defaults?.messageProvider);
+          const sessionKey = normalizeOptionalString(defaults?.sessionKey);
           if (provider) {
             contextParts.push(`provider=${provider}`);
           }
@@ -594,14 +1477,16 @@ export function createExecTool(
       });
       const host: ExecHost = target.effectiveHost;
 
-      const configuredSecurity = defaults?.security ?? (host === "sandbox" ? "deny" : "allowlist");
+      const approvalDefaults = loadExecApprovals().defaults;
+      const configuredSecurity =
+        defaults?.security ?? approvalDefaults?.security ?? (host === "sandbox" ? "deny" : "full");
       const requestedSecurity = normalizeExecSecurity(params.security);
       let security = minSecurity(configuredSecurity, requestedSecurity ?? configuredSecurity);
       if (elevatedRequested && elevatedMode === "full") {
         security = "full";
       }
-      // Keep local exec defaults in sync with exec-approvals.json when tools.exec.ask is unset.
-      const configuredAsk = defaults?.ask ?? loadExecApprovals().defaults?.ask ?? "on-miss";
+      // Keep local exec defaults in sync with exec-approvals.json when tools.exec.* is unset.
+      const configuredAsk = defaults?.ask ?? approvalDefaults?.ask ?? "off";
       const requestedAsk = normalizeExecAsk(params.ask);
       let ask = maxAsk(configuredAsk, requestedAsk ?? configuredAsk);
       const bypassApprovals = elevatedRequested && elevatedMode === "full";
@@ -618,21 +1503,32 @@ export function createExecTool(
           ].join("\n"),
         );
       }
-      const rawWorkdir = params.workdir?.trim() || defaults?.cwd || process.cwd();
-      let workdir = rawWorkdir;
+      const explicitWorkdir = normalizeOptionalString(params.workdir);
+      const defaultWorkdir = normalizeOptionalString(defaults?.cwd);
+      let workdir: string | undefined;
       let containerWorkdir = sandbox?.containerWorkdir;
       if (sandbox) {
+        const sandboxWorkdir = explicitWorkdir ?? defaultWorkdir ?? process.cwd();
         const resolved = await resolveSandboxWorkdir({
-          workdir: rawWorkdir,
+          workdir: sandboxWorkdir,
           sandbox,
           warnings,
         });
         workdir = resolved.hostWorkdir;
         containerWorkdir = resolved.containerWorkdir;
-      } else if (host !== "node") {
-        // Skip local workdir resolution for remote node execution: the remote node's
-        // filesystem is not visible to the gateway, so resolveWorkdir() would incorrectly
-        // fall back to the gateway's cwd. The node is responsible for validating its own cwd.
+      } else if (host === "node") {
+        // For remote node execution, only forward a cwd that was explicitly
+        // requested on the tool call. The gateway's workspace root is wired in as a
+        // local default, but it is not meaningful on the remote node and would
+        // recreate the cross-platform approval failure this path is fixing.
+        // When no explicit cwd was given, the gateway's own
+        // process.cwd() is meaningless on the remote node (especially cross-platform,
+        // e.g. Linux gateway + Windows node) and would cause
+        // "SYSTEM_RUN_DENIED: approval requires an existing canonical cwd".
+        // Passing undefined lets the node use its own default working directory.
+        workdir = explicitWorkdir;
+      } else {
+        const rawWorkdir = explicitWorkdir ?? defaultWorkdir ?? process.cwd();
         workdir = resolveWorkdir(rawWorkdir, warnings);
       }
       rejectExecApprovalShellCommand(params.command);
@@ -726,6 +1622,7 @@ export function createExecTool(
           security,
           ask,
           strictInlineEval: defaults?.strictInlineEval,
+          trigger: defaults?.trigger,
           timeoutSec: params.timeout,
           defaultTimeoutSec,
           approvalRunningNoticeMs,
@@ -733,6 +1630,10 @@ export function createExecTool(
           notifySessionKey,
           trustedSafeBinDirs,
         });
+      }
+
+      if (!workdir) {
+        throw new Error("exec internal error: local execution requires a resolved workdir");
       }
 
       if (host === "gateway" && !bypassApprovals) {
@@ -749,6 +1650,7 @@ export function createExecTool(
           safeBins,
           safeBinProfiles,
           strictInlineEval: defaults?.strictInlineEval,
+          trigger: defaults?.trigger,
           agentId,
           sessionKey: defaults?.sessionKey,
           turnSourceChannel: defaults?.messageProvider,
@@ -767,6 +1669,9 @@ export function createExecTool(
           return gatewayResult.pendingResult;
         }
         execCommandOverride = gatewayResult.execCommandOverride;
+        if (gatewayResult.allowWithoutEnforcedCommand) {
+          execCommandOverride = undefined;
+        }
       }
 
       const explicitTimeoutSec = typeof params.timeout === "number" ? params.timeout : null;
@@ -780,7 +1685,9 @@ export function createExecTool(
 
       // Preflight: catch a common model failure mode (shell syntax leaking into Python/JS sources)
       // before we execute and burn tokens in cron loops.
-      await validateScriptFileForShellBleed({ command: params.command, workdir });
+      if (!shouldSkipExecScriptPreflight({ host, security, ask })) {
+        await validateScriptFileForShellBleed({ command: params.command, workdir });
+      }
 
       const run = await runExecProcess({
         command: params.command,
@@ -797,6 +1704,7 @@ export function createExecTool(
         notifyOnExitEmptySuccess,
         scopeKey: defaults?.scopeKey,
         sessionKey: notifySessionKey,
+        notifyDeliveryContext,
         timeoutSec: effectiveTimeout,
         onUpdate,
       });
@@ -806,6 +1714,14 @@ export function createExecTool(
 
       // Tool-call abort should not kill backgrounded sessions; timeouts still must.
       const onAbortSignal = () => {
+        // Immediately suppress onUpdate calls so that any late stdout/stderr
+        // from the still-running process cannot push a rejected Promise into
+        // pi-agent-core's updateEvents after the agent run has ended (#62520).
+        // Intentionally placed *before* the yielded/backgrounded guard: the
+        // agent run is ending regardless, so no consumer exists for further
+        // tool_execution_update events even for backgrounded sessions (which
+        // retrieve output via process poll/log instead of onUpdate callbacks).
+        run.disableUpdates();
         if (yielded || run.session.backgrounded) {
           return;
         }
@@ -897,3 +1813,7 @@ export function createExecTool(
 }
 
 export const execTool = createExecTool();
+
+export const __testing = {
+  validateScriptFileForShellBleed,
+};

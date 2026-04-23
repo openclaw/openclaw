@@ -4,17 +4,9 @@ const ensureConfiguredBindingRouteReadyMock = vi.hoisted(() => vi.fn());
 const recordInboundSessionMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const resolveTelegramConversationRouteMock = vi.hoisted(() => vi.fn());
 
-vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
-  return {
-    ...actual,
-    ensureConfiguredBindingRouteReady: (...args: unknown[]) =>
-      ensureConfiguredBindingRouteReadyMock(...args),
-    recordInboundSession: (...args: unknown[]) => recordInboundSessionMock(...args),
-  };
-});
-vi.mock("./conversation-route.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./conversation-route.js")>();
+vi.mock("./conversation-route.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("./conversation-route.js")>("./conversation-route.js");
   return {
     ...actual,
     resolveTelegramConversationRoute: (...args: unknown[]) =>
@@ -23,6 +15,19 @@ vi.mock("./conversation-route.js", async (importOriginal) => {
 });
 
 let buildTelegramMessageContextForTest: typeof import("./bot-message-context.test-harness.js").buildTelegramMessageContextForTest;
+
+const configuredBindingRuntime = {
+  ensureConfiguredBindingRouteReady: (...args: unknown[]) =>
+    ensureConfiguredBindingRouteReadyMock(...args),
+} as NonNullable<
+  import("./bot-message-context.types.js").BuildTelegramMessageContextParams["runtime"]
+>;
+
+const configuredBindingSessionRuntime = {
+  recordInboundSession: (...args: unknown[]) => recordInboundSessionMock(...args),
+} as NonNullable<
+  import("./bot-message-context.types.js").BuildTelegramMessageContextParams["sessionRuntime"]
+>;
 
 function createConfiguredTelegramBinding() {
   return {
@@ -136,7 +141,6 @@ function createConfiguredTelegramRoute() {
 
 describe("buildTelegramMessageContext ACP configured bindings", () => {
   beforeAll(async () => {
-    vi.resetModules();
     ({ buildTelegramMessageContextForTest } =
       await import("./bot-message-context.test-harness.js"));
   });
@@ -152,6 +156,8 @@ describe("buildTelegramMessageContext ACP configured bindings", () => {
   it("treats configured topic bindings as explicit route matches on non-default accounts", async () => {
     const ctx = await buildTelegramMessageContextForTest({
       accountId: "work",
+      runtime: configuredBindingRuntime,
+      sessionRuntime: configuredBindingSessionRuntime,
       message: {
         chat: { id: -1001234567890, type: "supergroup", title: "OpenClaw", is_forum: true },
         message_thread_id: 42,
@@ -172,6 +178,8 @@ describe("buildTelegramMessageContext ACP configured bindings", () => {
   it("skips ACP session initialization when topic access is denied", async () => {
     const ctx = await buildTelegramMessageContextForTest({
       accountId: "work",
+      runtime: configuredBindingRuntime,
+      sessionRuntime: configuredBindingSessionRuntime,
       message: {
         chat: { id: -1001234567890, type: "supergroup", title: "OpenClaw", is_forum: true },
         message_thread_id: 42,
@@ -191,6 +199,8 @@ describe("buildTelegramMessageContext ACP configured bindings", () => {
   it("defers ACP session initialization for unauthorized control commands", async () => {
     const ctx = await buildTelegramMessageContextForTest({
       accountId: "work",
+      runtime: configuredBindingRuntime,
+      sessionRuntime: configuredBindingSessionRuntime,
       message: {
         chat: { id: -1001234567890, type: "supergroup", title: "OpenClaw", is_forum: true },
         message_thread_id: 42,
@@ -219,6 +229,8 @@ describe("buildTelegramMessageContext ACP configured bindings", () => {
 
     const ctx = await buildTelegramMessageContextForTest({
       accountId: "work",
+      runtime: configuredBindingRuntime,
+      sessionRuntime: configuredBindingSessionRuntime,
       message: {
         chat: { id: -1001234567890, type: "supergroup", title: "OpenClaw", is_forum: true },
         message_thread_id: 42,

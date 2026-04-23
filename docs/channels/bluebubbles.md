@@ -11,6 +11,11 @@ title: "BlueBubbles"
 
 Status: bundled plugin that talks to the BlueBubbles macOS server over HTTP. **Recommended for iMessage integration** due to its richer API and easier setup compared to the legacy imsg channel.
 
+## Bundled plugin
+
+Current OpenClaw releases bundle BlueBubbles, so normal packaged builds do not
+need a separate `openclaw plugins install` step.
+
 ## Overview
 
 - Runs on macOS via the BlueBubbles helper app ([bluebubbles.app](https://bluebubbles.app)).
@@ -212,6 +217,54 @@ Per-group configuration:
 - Uses `allowFrom` and `groupAllowFrom` to determine command authorization.
 - Authorized senders can run control commands even without mentioning in groups.
 
+### Per-group system prompt
+
+Each entry under `channels.bluebubbles.groups.*` accepts an optional `systemPrompt` string. The value is injected into the agent's system prompt on every turn that handles a message in that group, so you can set per-group persona or behavioral rules without editing agent prompts:
+
+```json5
+{
+  channels: {
+    bluebubbles: {
+      groups: {
+        "iMessage;-;chat123": {
+          systemPrompt: "Keep responses under 3 sentences. Mirror the group's casual tone.",
+        },
+      },
+    },
+  },
+}
+```
+
+The key matches whatever BlueBubbles reports as `chatGuid` / `chatIdentifier` / numeric `chatId` for the group, and a `"*"` wildcard entry provides a default for every group without an exact match (same pattern used by `requireMention` and per-group tool policies). Exact matches always win over the wildcard. DMs ignore this field; use agent-level or account-level prompt customization instead.
+
+#### Worked example: threaded replies and tapback reactions (Private API)
+
+With the BlueBubbles Private API enabled, inbound messages arrive with short message IDs (for example `[[reply_to:5]]`) and the agent can call `action=reply` to thread into a specific message or `action=react` to drop a tapback. A per-group `systemPrompt` is a reliable way to keep the agent choosing the right tool:
+
+```json5
+{
+  channels: {
+    bluebubbles: {
+      groups: {
+        "iMessage;+;chat-family": {
+          systemPrompt: [
+            "When replying in this group, always call action=reply with the",
+            "[[reply_to:N]] messageId from context so your response threads",
+            "under the triggering message. Never send a new unlinked message.",
+            "",
+            "For short acknowledgements ('ok', 'got it', 'on it'), use",
+            "action=react with an appropriate tapback emoji (❤️, 👍, 😂, ‼️, ❓)",
+            "instead of sending a text reply.",
+          ].join(" "),
+        },
+      },
+    },
+  },
+}
+```
+
+Tapback reactions and threaded replies both require the BlueBubbles Private API; see [Advanced actions](#advanced-actions) and [Message IDs](#message-ids-short-vs-full) for the underlying mechanics.
+
 ## ACP conversation bindings
 
 BlueBubbles chats can be turned into durable ACP workspaces without changing the transport layer.
@@ -379,6 +432,7 @@ Provider options:
 - `channels.bluebubbles.sendReadReceipts`: Send read receipts (default: `true`).
 - `channels.bluebubbles.blockStreaming`: Enable block streaming (default: `false`; required for streaming replies).
 - `channels.bluebubbles.textChunkLimit`: Outbound chunk size in chars (default: 4000).
+- `channels.bluebubbles.sendTimeoutMs`: Per-request timeout in ms for outbound text sends via `/api/v1/message/text` (default: 30000). Raise on macOS 26 setups where Private API iMessage sends can stall for 60+ seconds inside the iMessage framework; for example `45000` or `60000`. Probes, chat lookups, reactions, edits, and health checks currently keep the shorter 10s default; broadening coverage to reactions and edits is planned as a follow-up. Per-account override: `channels.bluebubbles.accounts.<accountId>.sendTimeoutMs`.
 - `channels.bluebubbles.chunkMode`: `length` (default) splits only when exceeding `textChunkLimit`; `newline` splits on blank lines (paragraph boundaries) before length chunking.
 - `channels.bluebubbles.mediaMaxMb`: Inbound/outbound media cap in MB (default: 8).
 - `channels.bluebubbles.mediaLocalRoots`: Explicit allowlist of absolute local directories permitted for outbound local media paths. Local path sends are denied by default unless this is configured. Per-account override: `channels.bluebubbles.accounts.<accountId>.mediaLocalRoots`.
@@ -404,9 +458,9 @@ Prefer `chat_guid` for stable routing:
 
 ## Security
 
-- Webhook requests are authenticated by comparing `guid`/`password` query params or headers against `channels.bluebubbles.password`. Requests from `localhost` are also accepted.
+- Webhook requests are authenticated by comparing `guid`/`password` query params or headers against `channels.bluebubbles.password`.
 - Keep the API password and webhook endpoint secret (treat them like credentials).
-- Localhost trust means a same-host reverse proxy can unintentionally bypass the password. If you proxy the gateway, require auth at the proxy and configure `gateway.trustedProxies`. See [Gateway security](/gateway/security#reverse-proxy-configuration).
+- There is no localhost bypass for BlueBubbles webhook auth. If you proxy webhook traffic, keep the BlueBubbles password on the request end-to-end. `gateway.trustedProxies` does not replace `channels.bluebubbles.password` here. See [Gateway security](/gateway/security#reverse-proxy-configuration).
 - Enable HTTPS + firewall rules on the BlueBubbles server if exposing it outside your LAN.
 
 ## Troubleshooting

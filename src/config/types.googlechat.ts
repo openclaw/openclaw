@@ -18,10 +18,8 @@ export type GoogleChatDmConfig = {
 };
 
 export type GoogleChatGroupConfig = {
-  /** If false, disable the bot in this space. (Alias for allow: false.) */
+  /** If false, disable the bot in this space. */
   enabled?: boolean;
-  /** Legacy allow toggle; prefer enabled. */
-  allow?: boolean;
   /** Require mentioning the bot to trigger replies. */
   requireMention?: boolean;
   /** Allowlist of users that can invoke the bot in this space. */
@@ -97,7 +95,7 @@ export type GoogleChatAccountConfig = {
   /** Merge streamed block replies before sending. */
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
   mediaMaxMb?: number;
-  /** Control reply threading when reply tags are present (off|first|all). */
+  /** Control reply threading when reply tags are present (off|first|all|batched). */
   replyToMode?: ReplyToMode;
   /** Per-action tool gating (default: true for all). */
   actions?: GoogleChatActionConfig;

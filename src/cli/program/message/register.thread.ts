@@ -1,21 +1,26 @@
 import type { Command } from "commander";
+import { getChannelPlugin } from "../../../channels/plugins/index.js";
+import type { ChannelMessageActionName } from "../../../channels/plugins/types.public.js";
+import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
 import type { MessageCliHelpers } from "./helpers.js";
 
 function resolveThreadCreateRequest(opts: Record<string, unknown>) {
-  const channel = typeof opts.channel === "string" ? opts.channel.trim().toLowerCase() : "";
-  if (channel !== "telegram") {
-    return {
-      action: "thread-create" as const,
-      params: opts,
-    };
+  const channel = normalizeLowercaseStringOrEmpty(opts.channel);
+  if (channel) {
+    const request = getChannelPlugin(channel)?.actions?.resolveCliActionRequest?.({
+      action: "thread-create",
+      args: opts,
+    });
+    if (request) {
+      return {
+        action: request.action,
+        params: request.args,
+      };
+    }
   }
-  const { threadName, ...rest } = opts;
   return {
-    action: "topic-create" as const,
-    params: {
-      ...rest,
-      name: typeof threadName === "string" ? threadName : undefined,
-    },
+    action: "thread-create" as ChannelMessageActionName,
+    params: opts,
   };
 }
 

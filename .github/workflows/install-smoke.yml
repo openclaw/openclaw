@@ -7,6 +7,9 @@ on:
     types: [opened, reopened, synchronize, ready_for_review, converted_to_draft]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.event_name == 'pull_request' && format('{0}-{1}', github.workflow, github.event.pull_request.number) || format('{0}-{1}', github.workflow, github.run_id) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -61,27 +64,28 @@ jobs:
         with:
           install-bun: "false"
           install-deps: "false"
-          use-sticky-disk: "false"
 
       - name: Build install-smoke CI manifest
         id: manifest
         env:
           OPENCLAW_CI_DOCS_ONLY: ${{ steps.docs_scope.outputs.docs_only }}
-          OPENCLAW_CI_DOCS_CHANGED: "false"
-          OPENCLAW_CI_RUN_NODE: "false"
-          OPENCLAW_CI_RUN_MACOS: "false"
-          OPENCLAW_CI_RUN_ANDROID: "false"
-          OPENCLAW_CI_RUN_WINDOWS: "false"
-          OPENCLAW_CI_RUN_SKILLS_PYTHON: "false"
-          OPENCLAW_CI_HAS_CHANGED_EXTENSIONS: "false"
-          OPENCLAW_CI_CHANGED_EXTENSIONS_MATRIX: '{"include":[]}'
           OPENCLAW_CI_RUN_CHANGED_SMOKE: ${{ steps.changed_scope.outputs.run_changed_smoke || 'false' }}
-        run: node scripts/ci-write-manifest-outputs.mjs --workflow install-smoke
+        run: |
+          docs_only="${OPENCLAW_CI_DOCS_ONLY:-false}"
+          run_changed_smoke="${OPENCLAW_CI_RUN_CHANGED_SMOKE:-false}"
+          run_install_smoke=false
+          if [ "$docs_only" != "true" ] && [ "$run_changed_smoke" = "true" ]; then
+            run_install_smoke=true
+          fi
+          {
+            echo "docs_only=$docs_only"
+            echo "run_install_smoke=$run_install_smoke"
+          } >> "$GITHUB_OUTPUT"
 
   install-smoke:
     needs: [preflight]
     if: needs.preflight.outputs.run_install_smoke == 'true'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: blacksmith-32vcpu-ubuntu-2404
     env:
       DOCKER_BUILD_SUMMARY: "false"
       DOCKER_BUILD_RECORD_UPLOAD: "false"
@@ -89,13 +93,13 @@ jobs:
       - name: Checkout CLI
         uses: actions/checkout@v6
 
-      - name: Set up Docker Builder
-        uses: docker/setup-buildx-action@v4
+      - name: Set up Blacksmith Docker Builder
+        uses: useblacksmith/setup-docker-builder@ac083cc84672d01c60d5e8561d0a939b697de542 # v1
 
-      # Blacksmith can fall back to the local docker driver, which rejects gha
-      # cache export/import. Keep smoke builds driver-agnostic.
+      # Blacksmith's builder owns the Docker layer cache; keep smoke builds off
+      # explicit gha cache directives so local tags still load cleanly.
       - name: Build root Dockerfile smoke image
-        uses: useblacksmith/build-push-action@v2
+        uses: useblacksmith/build-push-action@cbd1f60d194a98cb3be5523b15134501eaf0fbf3 # v2
         with:
           context: .
           file: ./Dockerfile
@@ -114,7 +118,7 @@ jobs:
       # runtime deps declared by the plugin and that matrix discovery stays
       # healthy in the final runtime image.
       - name: Build extension Dockerfile smoke image
-        uses: useblacksmith/build-push-action@v2
+        uses: useblacksmith/build-push-action@cbd1f60d194a98cb3be5523b15134501eaf0fbf3 # v2
         with:
           context: .
           file: ./Dockerfile
@@ -172,7 +176,7 @@ jobs:
           '
 
       - name: Build installer smoke image
-        uses: useblacksmith/build-push-action@v2
+        uses: useblacksmith/build-push-action@cbd1f60d194a98cb3be5523b15134501eaf0fbf3 # v2
         with:
           context: ./scripts/docker
           file: ./scripts/docker/install-sh-smoke/Dockerfile
@@ -183,7 +187,7 @@ jobs:
 
       - name: Build installer non-root image
         if: github.event_name != 'pull_request'
-        uses: useblacksmith/build-push-action@v2
+        uses: useblacksmith/build-push-action@cbd1f60d194a98cb3be5523b15134501eaf0fbf3 # v2
         with:
           context: ./scripts/docker
           file: ./scripts/docker/install-sh-nonroot/Dockerfile
@@ -191,6 +195,12 @@ jobs:
           load: true
           push: false
           provenance: false
+
+      - name: Setup Node environment for local pack smoke
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          install-deps: "true"
 
       - name: Run installer docker tests
         env:
@@ -202,4 +212,6 @@ jobs:
           OPENCLAW_INSTALL_NONROOT_SKIP_IMAGE_BUILD: ${{ github.event_name == 'pull_request' && '0' || '1' }}
           OPENCLAW_INSTALL_SMOKE_SKIP_NONROOT: ${{ github.event_name == 'pull_request' && '1' || '0' }}
           OPENCLAW_INSTALL_SMOKE_SKIP_PREVIOUS: "1"
+          OPENCLAW_INSTALL_SMOKE_UPDATE_DIST_IMAGE: openclaw-dockerfile-smoke:local
+          OPENCLAW_INSTALL_SMOKE_UPDATE_SKIP_LOCAL_BUILD: "1"
         run: bash scripts/test-install-sh-docker.sh

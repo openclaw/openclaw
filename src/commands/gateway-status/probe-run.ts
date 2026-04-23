@@ -4,6 +4,8 @@ import {
   discoverGatewayBeacons,
   type GatewayBonjourBeacon,
 } from "../../infra/bonjour-discovery.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { normalizeOptionalString, readStringValue } from "../../shared/string-coerce.js";
 import { pickAutoSshTargetFromDiscovery } from "./discovery.js";
 import {
   extractConfigSummary,
@@ -37,6 +39,7 @@ export async function runGatewayStatusProbePass(params: {
   sshTarget: string | null;
   sshIdentity: string | null;
   loadSshTunnelModule: () => Promise<typeof import("../../infra/ssh-tunnel.js")>;
+  localTlsFingerprint?: string;
 }): Promise<{
   discovery: GatewayBonjourBeacon[];
   probed: GatewayStatusProbedTarget[];
@@ -69,7 +72,7 @@ export async function runGatewayStatusProbePass(params: {
       sshTunnelStarted = true;
       return tunnel;
     } catch (err) {
-      sshTunnelError = err instanceof Error ? err.message : String(err);
+      sshTunnelError = formatErrorMessage(err);
       return null;
     }
   };
@@ -83,7 +86,7 @@ export async function runGatewayStatusProbePass(params: {
     sshTarget = pickAutoSshTargetFromDiscovery({
       discovery,
       parseSshTarget,
-      sshUser: process.env.USER?.trim() || "",
+      sshUser: normalizeOptionalString(process.env.USER) ?? "",
     });
   }
 
@@ -115,8 +118,8 @@ export async function runGatewayStatusProbePass(params: {
     const probed = await Promise.all(
       targets.map(async (target) => {
         const authResolution = await resolveAuthForTarget(params.cfg, target, {
-          token: typeof params.opts.token === "string" ? params.opts.token : undefined,
-          password: typeof params.opts.password === "string" ? params.opts.password : undefined,
+          token: readStringValue(params.opts.token),
+          password: readStringValue(params.opts.password),
         });
         const probe = await probeGateway({
           url: target.url,
@@ -124,6 +127,10 @@ export async function runGatewayStatusProbePass(params: {
             token: authResolution.token,
             password: authResolution.password,
           },
+          tlsFingerprint:
+            target.kind === "localLoopback" && target.url.startsWith("wss://")
+              ? params.localTlsFingerprint
+              : undefined,
           timeoutMs: resolveProbeBudgetMs(params.overallTimeoutMs, target),
         });
         return {

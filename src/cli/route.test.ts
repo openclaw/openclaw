@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const emitCliBannerMock = vi.hoisted(() => vi.fn());
 const ensureConfigReadyMock = vi.hoisted(() => vi.fn(async () => {}));
@@ -38,15 +38,20 @@ describe("tryRouteCli", () => {
   // Capture the same reference that route.js uses.
   let loggingState: typeof import("../logging/state.js").loggingState;
   let originalDisableRouteFirst: string | undefined;
+  let originalHideBanner: string | undefined;
   let originalForceStderr: boolean;
 
-  beforeEach(async () => {
-    vi.clearAllMocks();
-    originalDisableRouteFirst = process.env.OPENCLAW_DISABLE_ROUTE_FIRST;
-    delete process.env.OPENCLAW_DISABLE_ROUTE_FIRST;
-    vi.resetModules();
+  beforeAll(async () => {
     ({ tryRouteCli } = await import("./route.js"));
     ({ loggingState } = await import("../logging/state.js"));
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    originalDisableRouteFirst = process.env.OPENCLAW_DISABLE_ROUTE_FIRST;
+    originalHideBanner = process.env.OPENCLAW_HIDE_BANNER;
+    delete process.env.OPENCLAW_DISABLE_ROUTE_FIRST;
+    delete process.env.OPENCLAW_HIDE_BANNER;
     originalForceStderr = loggingState.forceConsoleToStderr;
     loggingState.forceConsoleToStderr = false;
     findRoutedCommandMock.mockReturnValue({
@@ -63,6 +68,11 @@ describe("tryRouteCli", () => {
       delete process.env.OPENCLAW_DISABLE_ROUTE_FIRST;
     } else {
       process.env.OPENCLAW_DISABLE_ROUTE_FIRST = originalDisableRouteFirst;
+    }
+    if (originalHideBanner === undefined) {
+      delete process.env.OPENCLAW_HIDE_BANNER;
+    } else {
+      process.env.OPENCLAW_HIDE_BANNER = originalHideBanner;
     }
   });
 
@@ -132,5 +142,13 @@ describe("tryRouteCli", () => {
       commandPath: ["status"],
     });
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({ scope: "channels" });
+  });
+
+  it("respects OPENCLAW_HIDE_BANNER for routed commands", async () => {
+    process.env.OPENCLAW_HIDE_BANNER = "1";
+
+    await expect(tryRouteCli(["node", "openclaw", "status"])).resolves.toBe(true);
+
+    expect(emitCliBannerMock).not.toHaveBeenCalled();
   });
 });

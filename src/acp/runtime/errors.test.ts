@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AcpRuntimeError, withAcpRuntimeErrorBoundary } from "./errors.js";
+import { AcpRuntimeError, isAcpRuntimeError, withAcpRuntimeErrorBoundary } from "./errors.js";
 
 describe("withAcpRuntimeErrorBoundary", () => {
   it("wraps generic errors with fallback code and source message", async () => {
@@ -29,5 +29,30 @@ describe("withAcpRuntimeErrorBoundary", () => {
         fallbackMessage: "fallback",
       }),
     ).rejects.toBe(existing);
+  });
+
+  it("preserves ACP runtime codes from foreign package errors", async () => {
+    class ForeignAcpRuntimeError extends Error {
+      readonly code = "ACP_BACKEND_MISSING" as const;
+    }
+
+    const foreignError = new ForeignAcpRuntimeError("backend missing");
+
+    await expect(
+      withAcpRuntimeErrorBoundary({
+        run: async () => {
+          throw foreignError;
+        },
+        fallbackCode: "ACP_TURN_FAILED",
+        fallbackMessage: "fallback",
+      }),
+    ).rejects.toMatchObject({
+      name: "AcpRuntimeError",
+      code: "ACP_BACKEND_MISSING",
+      message: "backend missing",
+      cause: foreignError,
+    });
+
+    expect(isAcpRuntimeError(foreignError)).toBe(true);
   });
 });

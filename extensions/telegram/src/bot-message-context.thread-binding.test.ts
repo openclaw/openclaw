@@ -1,17 +1,21 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { telegramRouteTestSessionRuntime } from "./bot-message-context.route-test-support.js";
+import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
 
 const recordInboundSessionMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const resolveTelegramConversationRouteMock = vi.hoisted(() => vi.fn());
+type TelegramTestSessionRuntime = NonNullable<
+  import("./bot-message-context.types.js").BuildTelegramMessageContextParams["sessionRuntime"]
+>;
+const recordInboundSessionForThreadBindingTest: NonNullable<
+  TelegramTestSessionRuntime["recordInboundSession"]
+> = async (params) => {
+  await recordInboundSessionMock(params);
+};
 
-vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
-  return {
-    ...actual,
-    recordInboundSession: (...args: unknown[]) => recordInboundSessionMock(...args),
-  };
-});
-vi.mock("./conversation-route.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./conversation-route.js")>();
+vi.mock("./conversation-route.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("./conversation-route.js")>("./conversation-route.js");
   return {
     ...actual,
     resolveTelegramConversationRoute: (...args: unknown[]) =>
@@ -19,7 +23,10 @@ vi.mock("./conversation-route.js", async (importOriginal) => {
   };
 });
 
-let buildTelegramMessageContextForTest: typeof import("./bot-message-context.test-harness.js").buildTelegramMessageContextForTest;
+const threadBindingSessionRuntime = {
+  ...telegramRouteTestSessionRuntime,
+  recordInboundSession: recordInboundSessionForThreadBindingTest,
+} satisfies TelegramTestSessionRuntime;
 
 function createBoundRoute(params: { accountId: string; sessionKey: string; agentId: string }) {
   return {
@@ -37,13 +44,28 @@ function createBoundRoute(params: { accountId: string; sessionKey: string; agent
   } as const;
 }
 
-describe("buildTelegramMessageContext thread binding override", () => {
-  beforeAll(async () => {
-    vi.resetModules();
-    ({ buildTelegramMessageContextForTest } =
-      await import("./bot-message-context.test-harness.js"));
-  });
+function createForumTopicMessage() {
+  return {
+    message_id: 1,
+    chat: { id: -100200300, type: "supergroup", is_forum: true },
+    message_thread_id: 77,
+    date: 1_700_000_000,
+    text: "hello",
+    from: { id: 42, first_name: "Alice" },
+  } as const;
+}
 
+async function buildForumTopicMessageContext(accountId?: string) {
+  return await buildTelegramMessageContextForTest({
+    ...(accountId ? { accountId } : {}),
+    sessionRuntime: threadBindingSessionRuntime,
+    message: createForumTopicMessage(),
+    options: { forceWasMentioned: true },
+    resolveGroupActivation: () => true,
+  });
+}
+
+describe("buildTelegramMessageContext thread binding override", () => {
   beforeEach(() => {
     recordInboundSessionMock.mockClear();
     resolveTelegramConversationRouteMock.mockReset();
@@ -58,18 +80,7 @@ describe("buildTelegramMessageContext thread binding override", () => {
       }),
     );
 
-    const ctx = await buildTelegramMessageContextForTest({
-      message: {
-        message_id: 1,
-        chat: { id: -100200300, type: "supergroup", is_forum: true },
-        message_thread_id: 77,
-        date: 1_700_000_000,
-        text: "hello",
-        from: { id: 42, first_name: "Alice" },
-      },
-      options: { forceWasMentioned: true },
-      resolveGroupActivation: () => true,
-    });
+    const ctx = await buildForumTopicMessageContext();
 
     expect(resolveTelegramConversationRouteMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -96,19 +107,7 @@ describe("buildTelegramMessageContext thread binding override", () => {
       }),
     );
 
-    const ctx = await buildTelegramMessageContextForTest({
-      accountId: "work",
-      message: {
-        message_id: 1,
-        chat: { id: -100200300, type: "supergroup", is_forum: true },
-        message_thread_id: 77,
-        date: 1_700_000_000,
-        text: "hello",
-        from: { id: 42, first_name: "Alice" },
-      },
-      options: { forceWasMentioned: true },
-      resolveGroupActivation: () => true,
-    });
+    const ctx = await buildForumTopicMessageContext("work");
 
     expect(resolveTelegramConversationRouteMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -136,6 +135,7 @@ describe("buildTelegramMessageContext thread binding override", () => {
     );
 
     const ctx = await buildTelegramMessageContextForTest({
+      sessionRuntime: threadBindingSessionRuntime,
       message: {
         message_id: 1,
         chat: { id: 1234, type: "private" },

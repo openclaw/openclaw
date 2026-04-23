@@ -1,20 +1,16 @@
 // Keep provider onboarding helpers dependency-light so bundled provider plugins
 // do not pull heavyweight runtime graphs at activation time.
 
-import type { OpenClawConfig } from "../config/config.js";
+import { ensureStaticModelAllowlistEntry } from "../agents/model-allowlist-entry.js";
+import { findNormalizedProviderKey } from "../agents/provider-id.js";
 import type { AgentModelEntryConfig } from "../config/types.agent-defaults.js";
 import type {
   ModelApi,
   ModelDefinitionConfig,
   ModelProviderConfig,
 } from "../config/types.models.js";
-
-const DEFAULT_PROVIDER = "anthropic";
-
-type NormalizedModelRef = {
-  provider: string;
-  model: string;
-};
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolvePrimaryStringValue } from "../shared/string-coerce.js";
 
 export type { OpenClawConfig, ModelApi, ModelDefinitionConfig, ModelProviderConfig };
 export {
@@ -29,83 +25,17 @@ export type AgentModelAliasEntry =
       alias?: string;
     };
 
+const LEGACY_OPENCODE_ZEN_DEFAULT_MODELS = new Set([
+  "opencode/claude-opus-4-5",
+  "opencode-zen/claude-opus-4-5",
+]);
+
+export const OPENCODE_ZEN_DEFAULT_MODEL = "opencode/claude-opus-4-6";
+
 export type ProviderOnboardPresetAppliers<TArgs extends unknown[]> = {
   applyProviderConfig: (cfg: OpenClawConfig, ...args: TArgs) => OpenClawConfig;
   applyConfig: (cfg: OpenClawConfig, ...args: TArgs) => OpenClawConfig;
 };
-
-function normalizeProviderId(provider: string): string {
-  const normalized = provider.trim().toLowerCase();
-  if (normalized === "z.ai" || normalized === "z-ai") {
-    return "zai";
-  }
-  if (normalized === "opencode-zen") {
-    return "opencode";
-  }
-  if (normalized === "opencode-go-auth") {
-    return "opencode-go";
-  }
-  if (normalized === "kimi" || normalized === "kimi-code" || normalized === "kimi-coding") {
-    return "kimi";
-  }
-  if (normalized === "bedrock" || normalized === "aws-bedrock") {
-    return "amazon-bedrock";
-  }
-  if (normalized === "bytedance" || normalized === "doubao") {
-    return "volcengine";
-  }
-  return normalized;
-}
-
-function findNormalizedProviderKey(
-  entries: Record<string, unknown> | undefined,
-  provider: string,
-): string | undefined {
-  if (!entries) {
-    return undefined;
-  }
-  const providerKey = normalizeProviderId(provider);
-  return Object.keys(entries).find((key) => normalizeProviderId(key) === providerKey);
-}
-
-function modelKey(provider: string, model: string): string {
-  const providerId = provider.trim();
-  const modelId = model.trim();
-  if (!providerId) {
-    return modelId;
-  }
-  if (!modelId) {
-    return providerId;
-  }
-  return modelId.toLowerCase().startsWith(`${providerId.toLowerCase()}/`)
-    ? modelId
-    : `${providerId}/${modelId}`;
-}
-
-function parseModelRef(raw: string, defaultProvider: string): NormalizedModelRef | null {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return null;
-  }
-  const slash = trimmed.indexOf("/");
-  if (slash === -1) {
-    return { provider: normalizeProviderId(defaultProvider), model: trimmed };
-  }
-  const providerRaw = trimmed.slice(0, slash).trim();
-  const model = trimmed.slice(slash + 1).trim();
-  if (!providerRaw || !model) {
-    return null;
-  }
-  return { provider: normalizeProviderId(providerRaw), model };
-}
-
-function resolveAllowlistModelKey(raw: string, defaultProvider: string): string | null {
-  const parsed = parseModelRef(raw, defaultProvider);
-  if (!parsed) {
-    return null;
-  }
-  return modelKey(parsed.provider, parsed.model);
-}
 
 function extractAgentDefaultModelFallbacks(model: unknown): string[] | undefined {
   if (!model || typeof model !== "object") {
@@ -285,6 +215,24 @@ export function applyAgentDefaultModelPrimary(
         },
       },
     },
+  };
+}
+
+export function applyOpencodeZenModelDefault(cfg: OpenClawConfig): {
+  next: OpenClawConfig;
+  changed: boolean;
+} {
+  const current = resolvePrimaryStringValue(cfg.agents?.defaults?.model);
+  const normalizedCurrent =
+    current && LEGACY_OPENCODE_ZEN_DEFAULT_MODELS.has(current)
+      ? OPENCODE_ZEN_DEFAULT_MODEL
+      : current;
+  if (normalizedCurrent === OPENCODE_ZEN_DEFAULT_MODEL) {
+    return { next: cfg, changed: false };
+  }
+  return {
+    next: applyAgentDefaultModelPrimary(cfg, OPENCODE_ZEN_DEFAULT_MODEL),
+    changed: true,
   };
 }
 
@@ -504,35 +452,5 @@ export function ensureModelAllowlistEntry(params: {
   modelRef: string;
   defaultProvider?: string;
 }): OpenClawConfig {
-  const rawModelRef = params.modelRef.trim();
-  if (!rawModelRef) {
-    return params.cfg;
-  }
-
-  const models = { ...params.cfg.agents?.defaults?.models };
-  const keySet = new Set<string>([rawModelRef]);
-  const canonicalKey = resolveAllowlistModelKey(
-    rawModelRef,
-    params.defaultProvider ?? DEFAULT_PROVIDER,
-  );
-  if (canonicalKey) {
-    keySet.add(canonicalKey);
-  }
-
-  for (const key of keySet) {
-    models[key] = {
-      ...models[key],
-    };
-  }
-
-  return {
-    ...params.cfg,
-    agents: {
-      ...params.cfg.agents,
-      defaults: {
-        ...params.cfg.agents?.defaults,
-        models,
-      },
-    },
-  };
+  return ensureStaticModelAllowlistEntry(params);
 }

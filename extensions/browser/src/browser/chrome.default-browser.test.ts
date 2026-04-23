@@ -1,40 +1,41 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("node:child_process", () => ({
-  execFileSync: vi.fn(),
-}));
-vi.mock("node:fs", () => {
+vi.mock("node:child_process", async () => {
+  const { mockNodeBuiltinModule } = await import("../../../../test/helpers/node-builtin-mocks.js");
+  return mockNodeBuiltinModule(
+    () => vi.importActual<typeof import("node:child_process")>("node:child_process"),
+    {
+      execFileSync: vi.fn(),
+    },
+  );
+});
+vi.mock("node:fs", async () => {
+  const { mockNodeBuiltinModule } = await import("../../../../test/helpers/node-builtin-mocks.js");
   const existsSync = vi.fn();
   const readFileSync = vi.fn();
-  const module = { existsSync, readFileSync };
-  return {
-    ...module,
-    default: module,
-  };
+  return mockNodeBuiltinModule(
+    () => vi.importActual<typeof import("node:fs")>("node:fs"),
+    { existsSync, readFileSync },
+    { mirrorToDefault: true },
+  );
 });
-vi.mock("node:os", () => {
+vi.mock("node:os", async () => {
+  const { mockNodeBuiltinModule } = await import("../../../../test/helpers/node-builtin-mocks.js");
   const homedir = vi.fn();
-  const module = { homedir };
-  return {
-    ...module,
-    default: module,
-  };
+  return mockNodeBuiltinModule(
+    () => vi.importActual<typeof import("node:os")>("node:os"),
+    { homedir },
+    { mirrorToDefault: true },
+  );
 });
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import os from "node:os";
-
-async function loadResolveBrowserExecutableForPlatform() {
-  const mod = await import("./chrome.executables.js");
-  return mod.resolveBrowserExecutableForPlatform;
-}
+const { resolveBrowserExecutableForPlatform } = await import("./chrome.executables.js");
 
 describe("browser default executable detection", () => {
   const launchServicesPlist = "com.apple.launchservices.secure.plist";
   const chromeExecutablePath = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
-  let resolveBrowserExecutableForPlatform: Awaited<
-    ReturnType<typeof loadResolveBrowserExecutableForPlatform>
-  >;
 
   function mockMacDefaultBrowser(bundleId: string, appPath = ""): void {
     vi.mocked(execFileSync).mockImplementation((cmd, args) => {
@@ -62,11 +63,9 @@ describe("browser default executable detection", () => {
     });
   }
 
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(os.homedir).mockReturnValue("/Users/test");
-    resolveBrowserExecutableForPlatform = await loadResolveBrowserExecutableForPlatform();
   });
 
   it("prefers default Chromium browser on macOS", async () => {
@@ -119,8 +118,6 @@ describe("browser default executable detection", () => {
       // return Chrome from the fallback list — not Edge — failing the assert.
       return value === edgeExecutablePath || value.includes(chromeExecutablePath);
     });
-    const resolveBrowserExecutableForPlatform = await loadResolveBrowserExecutableForPlatform();
-
     const exe = resolveBrowserExecutableForPlatform(
       {} as Parameters<typeof resolveBrowserExecutableForPlatform>[0],
       "darwin",
@@ -144,8 +141,6 @@ describe("browser default executable detection", () => {
       return "";
     });
     mockChromeExecutableExists();
-    const resolveBrowserExecutableForPlatform = await loadResolveBrowserExecutableForPlatform();
-
     const exe = resolveBrowserExecutableForPlatform(
       {} as Parameters<typeof resolveBrowserExecutableForPlatform>[0],
       "darwin",

@@ -61,6 +61,6 @@ describe("slash-state token routing", () => {
 
     const match = resolveSlashHandlerForToken("tok-shared");
     expect(match.kind).toBe("ambiguous");
-    expect(match.accountIds?.sort()).toEqual(["a1", "a2"]);
+    expect(match.accountIds?.toSorted()).toEqual(["a1", "a2"]);
   });
 });

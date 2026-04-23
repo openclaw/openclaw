@@ -1,6 +1,7 @@
 import type { ErrorObject } from "ajv";
 import { describe, expect, it } from "vitest";
-import { formatValidationErrors, validateTalkConfigResult } from "./index.js";
+import { TALK_TEST_PROVIDER_ID } from "../../test-utils/talk-test-provider.js";
+import { formatValidationErrors, validateTalkConfigResult, validateWakeParams } from "./index.js";
 
 const makeError = (overrides: Partial<ErrorObject>): ErrorObject => ({
   keyword: "type",
@@ -69,9 +70,9 @@ describe("validateTalkConfigResult", () => {
       validateTalkConfigResult({
         config: {
           talk: {
-            provider: "elevenlabs",
+            provider: TALK_TEST_PROVIDER_ID,
             providers: {
-              elevenlabs: {
+              [TALK_TEST_PROVIDER_ID]: {
                 apiKey: {
                   source: "env",
                   provider: "default",
@@ -80,7 +81,7 @@ describe("validateTalkConfigResult", () => {
               },
             },
             resolved: {
-              provider: "elevenlabs",
+              provider: TALK_TEST_PROVIDER_ID,
               config: {
                 apiKey: {
                   source: "env",
@@ -88,11 +89,6 @@ describe("validateTalkConfigResult", () => {
                   id: "ELEVENLABS_API_KEY",
                 },
               },
-            },
-            apiKey: {
-              source: "env",
-              provider: "default",
-              id: "ELEVENLABS_API_KEY",
             },
           },
         },
@@ -105,9 +101,9 @@ describe("validateTalkConfigResult", () => {
       validateTalkConfigResult({
         config: {
           talk: {
-            provider: "elevenlabs",
+            provider: TALK_TEST_PROVIDER_ID,
             providers: {
-              elevenlabs: {
+              [TALK_TEST_PROVIDER_ID]: {
                 voiceId: "voice-normalized",
               },
             },
@@ -115,5 +111,37 @@ describe("validateTalkConfigResult", () => {
         },
       }),
     ).toBe(false);
+  });
+});
+
+describe("validateWakeParams", () => {
+  it("accepts valid wake params", () => {
+    expect(validateWakeParams({ mode: "now", text: "hello" })).toBe(true);
+    expect(validateWakeParams({ mode: "next-heartbeat", text: "remind me" })).toBe(true);
+  });
+
+  it("rejects missing required fields", () => {
+    expect(validateWakeParams({ mode: "now" })).toBe(false);
+    expect(validateWakeParams({ text: "hello" })).toBe(false);
+    expect(validateWakeParams({})).toBe(false);
+  });
+
+  it("accepts unknown properties for forward compatibility", () => {
+    expect(
+      validateWakeParams({
+        mode: "now",
+        text: "hello",
+        paperclip: { version: "2026.416.0", source: "wake" },
+      }),
+    ).toBe(true);
+
+    expect(
+      validateWakeParams({
+        mode: "next-heartbeat",
+        text: "check back",
+        unknownFutureField: 42,
+        anotherExtra: true,
+      }),
+    ).toBe(true);
   });
 });

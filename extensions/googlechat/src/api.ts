@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
-import { fetchWithSsrFGuard } from "../runtime-api.js";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { getGoogleChatAccessToken } from "./auth.js";
 import type { GoogleChatReaction } from "./types.js";
@@ -153,10 +154,12 @@ export async function sendGoogleChatMessage(params: {
     body.thread = { name: thread };
   }
   if (attachments && attachments.length > 0) {
-    body.attachment = attachments.map((item) => ({
-      attachmentDataRef: { attachmentUploadToken: item.attachmentUploadToken },
-      ...(item.contentName ? { contentName: item.contentName } : {}),
-    }));
+    body.attachment = attachments.map((item) =>
+      Object.assign(
+        { attachmentDataRef: { attachmentUploadToken: item.attachmentUploadToken } },
+        item.contentName ? { contentName: item.contentName } : {},
+      ),
+    );
   }
   const urlObj = new URL(`${CHAT_API_BASE}/${space}/messages`);
   if (thread) {
@@ -313,7 +316,7 @@ export async function probeGoogleChat(account: ResolvedGoogleChatAccount): Promi
   } catch (err) {
     return {
       ok: false,
-      error: err instanceof Error ? err.message : String(err),
+      error: formatErrorMessage(err),
     };
   }
 }

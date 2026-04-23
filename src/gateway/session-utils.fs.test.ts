@@ -628,6 +628,56 @@ describe("readSessionPreviewItemsFromTranscript", () => {
     expect(result).toHaveLength(1);
     expect(result[0]?.text).toBe("A  B");
   });
+
+  test("prefers final_answer text for assistant preview items", () => {
+    const sessionId = "preview-final-answer";
+    const lines = [
+      JSON.stringify({
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "thinking like caveman",
+              textSignature: JSON.stringify({ v: 1, id: "msg_commentary", phase: "commentary" }),
+            },
+            {
+              type: "text",
+              text: "Actual final answer",
+              textSignature: JSON.stringify({ v: 1, id: "msg_final", phase: "final_answer" }),
+            },
+          ],
+        },
+      }),
+    ];
+    writeTranscriptLines(sessionId, lines);
+    const result = readPreview(sessionId, 1, 120);
+
+    expect(result).toHaveLength(1);
+    expect(result[0]?.text).toBe("Actual final answer");
+  });
+
+  test("hides commentary-only assistant preview items", () => {
+    const sessionId = "preview-commentary-only";
+    const lines = [
+      JSON.stringify({
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "thinking like caveman",
+              textSignature: JSON.stringify({ v: 1, id: "msg_commentary", phase: "commentary" }),
+            },
+          ],
+        },
+      }),
+    ];
+    writeTranscriptLines(sessionId, lines);
+    const result = readPreview(sessionId, 1, 120);
+
+    expect(result).toHaveLength(0);
+  });
 });
 
 describe("readLatestSessionUsageFromTranscript", () => {

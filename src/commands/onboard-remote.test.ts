@@ -10,8 +10,10 @@ const discoverGatewayBeacons = vi.hoisted(() => vi.fn<() => Promise<GatewayBonjo
 const resolveWideAreaDiscoveryDomain = vi.hoisted(() => vi.fn(() => undefined));
 const detectBinary = vi.hoisted(() => vi.fn<(name: string) => Promise<boolean>>());
 
-vi.mock("../infra/bonjour-discovery.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../infra/bonjour-discovery.js")>();
+vi.mock("../infra/bonjour-discovery.js", async () => {
+  const actual = await vi.importActual<typeof import("../infra/bonjour-discovery.js")>(
+    "../infra/bonjour-discovery.js",
+  );
   return {
     ...actual,
     discoverGatewayBeacons,
@@ -40,6 +42,16 @@ function createSelectPrompter(
     }
     return (params.options[0]?.value ?? "") as never;
   });
+}
+
+function createGatewayDiscoveryBeacon(): GatewayBonjourBeacon {
+  return {
+    instanceName: "gateway",
+    displayName: "Gateway",
+    host: "gateway.tailnet.ts.net",
+    port: 18789,
+    gatewayTlsFingerprintSha256: "sha256:abc123",
+  };
 }
 
 describe("promptRemoteGatewayConfig", () => {
@@ -76,15 +88,7 @@ describe("promptRemoteGatewayConfig", () => {
 
   it("defaults discovered direct remote URLs to wss://", async () => {
     detectBinary.mockResolvedValue(true);
-    discoverGatewayBeacons.mockResolvedValue([
-      {
-        instanceName: "gateway",
-        displayName: "Gateway",
-        host: "gateway.tailnet.ts.net",
-        port: 18789,
-        gatewayTlsFingerprintSha256: "sha256:abc123",
-      },
-    ]);
+    discoverGatewayBeacons.mockResolvedValue([createGatewayDiscoveryBeacon()]);
 
     const text: WizardPrompter["text"] = vi.fn(async (params) => {
       if (params.message === "Gateway WebSocket URL") {
@@ -199,15 +203,7 @@ describe("promptRemoteGatewayConfig", () => {
 
   it("drops discovery tlsFingerprint when the URL is edited after trust confirmation", async () => {
     detectBinary.mockResolvedValue(true);
-    discoverGatewayBeacons.mockResolvedValue([
-      {
-        instanceName: "gateway",
-        displayName: "Gateway",
-        host: "gateway.tailnet.ts.net",
-        port: 18789,
-        gatewayTlsFingerprintSha256: "sha256:abc123",
-      },
-    ]);
+    discoverGatewayBeacons.mockResolvedValue([createGatewayDiscoveryBeacon()]);
 
     const text: WizardPrompter["text"] = vi.fn(async (params) => {
       if (params.message === "Gateway WebSocket URL") {

@@ -1,5 +1,5 @@
 import type { CliSessionBinding, SessionSystemPromptReport } from "../../config/sessions/types.js";
-import type { MessagingToolSend } from "../pi-embedded-messaging.js";
+import type { MessagingToolSend } from "../pi-embedded-messaging.types.js";
 
 export type EmbeddedPiAgentMeta = {
   sessionId: string;
@@ -31,11 +31,79 @@ export type EmbeddedPiAgentMeta = {
   };
 };
 
+export type TraceAttempt = {
+  provider: string;
+  model: string;
+  result:
+    | "success"
+    | "timeout"
+    | "surface_error"
+    | "candidate_failed"
+    | "rotate_profile"
+    | "fallback_model"
+    | "aborted"
+    | "error";
+  reason?: string;
+  stage?: "prompt" | "assistant";
+  elapsedMs?: number;
+  status?: number;
+};
+
+export type ExecutionTrace = {
+  winnerProvider?: string;
+  winnerModel?: string;
+  attempts?: TraceAttempt[];
+  fallbackUsed?: boolean;
+  runner?: "embedded" | "cli";
+};
+
+export type RequestShapingTrace = {
+  authMode?: string;
+  thinking?: string;
+  reasoning?: string;
+  verbose?: string;
+  trace?: string;
+  fallbackEligible?: boolean;
+  blockStreaming?: string;
+};
+
+export type PromptSegmentTrace = {
+  key: string;
+  chars: number;
+};
+
+export type ToolSummaryTrace = {
+  calls: number;
+  tools: string[];
+  failures?: number;
+  totalToolTimeMs?: number;
+};
+
+export type CompletionTrace = {
+  finishReason?: string;
+  stopReason?: string;
+  refusal?: boolean;
+};
+
+export type ContextManagementTrace = {
+  sessionCompactions?: number;
+  lastTurnCompactions?: number;
+  preflightCompactionApplied?: boolean;
+  postCompactionContextInjected?: boolean;
+};
+
+export type EmbeddedRunLivenessState = "working" | "paused" | "blocked" | "abandoned";
+
 export type EmbeddedPiRunMeta = {
   durationMs: number;
   agentMeta?: EmbeddedPiAgentMeta;
   aborted?: boolean;
   systemPromptReport?: SessionSystemPromptReport;
+  finalPromptText?: string;
+  finalAssistantVisibleText?: string;
+  finalAssistantRawText?: string;
+  replayInvalid?: boolean;
+  livenessState?: EmbeddedRunLivenessState;
   error?: {
     kind:
       | "context_overflow"
@@ -53,6 +121,12 @@ export type EmbeddedPiRunMeta = {
     name: string;
     arguments: string;
   }>;
+  executionTrace?: ExecutionTrace;
+  requestShaping?: RequestShapingTrace;
+  promptSegments?: PromptSegmentTrace[];
+  toolSummary?: ToolSummaryTrace;
+  completion?: CompletionTrace;
+  contextManagement?: ContextManagementTrace;
 };
 
 export type EmbeddedPiRunResult = {
@@ -63,6 +137,7 @@ export type EmbeddedPiRunResult = {
     replyToId?: string;
     isError?: boolean;
     isReasoning?: boolean;
+    audioAsVoice?: boolean;
   }>;
   meta: EmbeddedPiRunMeta;
   // True if a messaging tool (telegram, whatsapp, discord, slack, sessions_send)
@@ -91,6 +166,8 @@ export type EmbeddedPiCompactResult = {
   };
 };
 
+export type EmbeddedFullAccessBlockedReason = "sandbox" | "host-policy" | "channel" | "runtime";
+
 export type EmbeddedSandboxInfo = {
   enabled: boolean;
   workspaceDir?: string;
@@ -98,10 +175,11 @@ export type EmbeddedSandboxInfo = {
   workspaceAccess?: "none" | "ro" | "rw";
   agentWorkspaceMount?: string;
   browserBridgeUrl?: string;
-  browserNoVncUrl?: string;
   hostBrowserAllowed?: boolean;
   elevated?: {
     allowed: boolean;
     defaultLevel: "on" | "off" | "ask" | "full";
+    fullAccessAvailable: boolean;
+    fullAccessBlockedReason?: EmbeddedFullAccessBlockedReason;
   };
 };

@@ -1,4 +1,6 @@
 import { GoogleAuth, OAuth2Client } from "google-auth-library";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { fetchWithSsrFGuard } from "../runtime-api.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 
 const CHAT_SCOPE = "https://www.googleapis.com/auth/chat.bot";
@@ -79,13 +81,20 @@ async function fetchChatCerts(): Promise<Record<string, string>> {
   if (cachedCerts && now - cachedCerts.fetchedAt < 10 * 60 * 1000) {
     return cachedCerts.certs;
   }
-  const res = await fetch(CHAT_CERTS_URL);
-  if (!res.ok) {
-    throw new Error(`Failed to fetch Chat certs (${res.status})`);
+  const { response, release } = await fetchWithSsrFGuard({
+    url: CHAT_CERTS_URL,
+    auditContext: "googlechat.auth.certs",
+  });
+  try {
+    if (!response.ok) {
+      throw new Error(`Failed to fetch Chat certs (${response.status})`);
+    }
+    const certs = (await response.json()) as Record<string, string>;
+    cachedCerts = { fetchedAt: now, certs };
+    return certs;
+  } finally {
+    await release();
   }
-  const certs = (await res.json()) as Record<string, string>;
-  cachedCerts = { fetchedAt: now, certs };
-  return certs;
 }
 
 export type GoogleChatAudienceType = "app-url" | "project-number";
@@ -113,9 +122,7 @@ export async function verifyGoogleChatRequest(params: {
         audience,
       });
       const payload = ticket.getPayload();
-      const email = String(payload?.email ?? "")
-        .trim()
-        .toLowerCase();
+      const email = normalizeLowercaseStringOrEmpty(payload?.email ?? "");
       if (!payload?.email_verified) {
         return { ok: false, reason: "email not verified" };
       }
@@ -125,13 +132,13 @@ export async function verifyGoogleChatRequest(params: {
       if (!ADDON_ISSUER_PATTERN.test(email)) {
         return { ok: false, reason: `invalid issuer: ${email}` };
       }
-      const expectedAddOnPrincipal = params.expectedAddOnPrincipal?.trim().toLowerCase();
+      const expectedAddOnPrincipal = normalizeLowercaseStringOrEmpty(
+        params.expectedAddOnPrincipal ?? "",
+      );
       if (!expectedAddOnPrincipal) {
         return { ok: false, reason: "missing add-on principal binding" };
       }
-      const tokenPrincipal = String(payload?.sub ?? "")
-        .trim()
-        .toLowerCase();
+      const tokenPrincipal = normalizeLowercaseStringOrEmpty(payload?.sub ?? "");
       if (!tokenPrincipal || tokenPrincipal !== expectedAddOnPrincipal) {
         return {
           ok: false,
