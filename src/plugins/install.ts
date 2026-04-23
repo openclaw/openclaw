@@ -621,10 +621,7 @@ async function linkOpenClawPeerDependencies(params: {
   peerDependencies: Record<string, string>;
   logger: PluginInstallLogger;
 }): Promise<void> {
-  const OPENCLAW_PEER_NAMES = new Set(["openclaw"]);
-  const peers = Object.keys(params.peerDependencies).filter((name) =>
-    OPENCLAW_PEER_NAMES.has(name),
-  );
+  const peers = Object.keys(params.peerDependencies).filter((name) => name === "openclaw");
   if (peers.length === 0) {
     return;
   }
