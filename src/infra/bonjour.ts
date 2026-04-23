@@ -123,6 +123,10 @@ function isAnnouncedState(state: string) {
   return state === BONJOUR_ANNOUNCED_STATE;
 }
 
+function isCiaoCancellation(reason: unknown): boolean {
+  return classifyCiaoUnhandledRejection(reason)?.kind === "cancellation";
+}
+
 function handleCiaoUnhandledRejection(reason: unknown): boolean {
   const classification = classifyCiaoUnhandledRejection(reason);
   if (!classification) {
@@ -306,6 +310,38 @@ export async function startGatewayBonjourAdvertiser(
       }
     }
 
+    let watchdog: NodeJS.Timeout | null = null;
+    let bonjourDisabled = false;
+    let disablePromise: Promise<void> | null = null;
+
+    const disableAdvertiser = async (reason: string) => {
+      if (disablePromise) {
+        return disablePromise;
+      }
+      bonjourDisabled = true;
+      disablePromise = (async () => {
+        logWarn(`bonjour: disabling advertiser (${reason})`);
+        if (watchdog) {
+          clearInterval(watchdog);
+          watchdog = null;
+        }
+        const previous = cycle;
+        cycle = null;
+        await stopCycle(previous);
+      })().finally(() => {
+        disablePromise = null;
+      });
+      return disablePromise;
+    };
+
+    const handleAdvertiseFailure = (prefix: string, label: string, svc: BonjourService, err: unknown) => {
+      const formatted = formatBonjourError(err);
+      logWarn(`${prefix} (${serviceSummary(label, svc)}): ${formatted}`);
+      if (isCiaoCancellation(err)) {
+        void disableAdvertiser(`${label} advertise cancelled, mDNS unavailable (${formatted})`);
+      }
+    };
+
     function startAdvertising(services: Array<{ label: string; svc: BonjourService }>) {
       for (const { label, svc } of services) {
         try {
@@ -316,14 +352,10 @@ export async function startGatewayBonjourAdvertiser(
               getLogger().info(`bonjour: advertised ${serviceSummary(label, svc)}`);
             })
             .catch((err) => {
-              logWarn(
-                `bonjour: advertise failed (${serviceSummary(label, svc)}): ${formatBonjourError(err)}`,
-              );
+              handleAdvertiseFailure("bonjour: advertise failed", label, svc, err);
             });
         } catch (err) {
-          logWarn(
-            `bonjour: advertise threw (${serviceSummary(label, svc)}): ${formatBonjourError(err)}`,
-          );
+          handleAdvertiseFailure("bonjour: advertise threw", label, svc, err);
         }
       }
     }
@@ -336,10 +368,23 @@ export async function startGatewayBonjourAdvertiser(
 
     let stopped = false;
     let recreatePromise: Promise<void> | null = null;
-    let cycle = createCycle();
+    let cycle: BonjourCycle | null = createCycle();
     const stateTracker = new Map<string, ServiceStateTracker>();
     attachConflictListeners(cycle.services);
     startAdvertising(cycle.services);
+
+    const handleCiaoUnhandledRejectionWithRecovery = (reason: unknown): boolean => {
+      const handled = handleCiaoUnhandledRejection(reason);
+      if (handled && isCiaoCancellation(reason)) {
+        void disableAdvertiser(`ciao probing cancelled, mDNS unavailable (${formatBonjourError(reason)})`);
+      }
+      return handled;
+    };
+
+    cycle.cleanupUnhandledRejection?.();
+    cycle.cleanupUnhandledRejection = registerUnhandledRejectionHandler(
+      handleCiaoUnhandledRejectionWithRecovery,
+    );
 
     const updateStateTrackers = (services: Array<{ label: string; svc: BonjourService }>) => {
       const now = Date.now();
@@ -357,7 +402,7 @@ export async function startGatewayBonjourAdvertiser(
     };
 
     const recreateAdvertiser = async (reason: string) => {
-      if (stopped) {
+      if (stopped || bonjourDisabled) {
         return;
       }
       if (recreatePromise) {
@@ -368,6 +413,10 @@ export async function startGatewayBonjourAdvertiser(
         const previous = cycle;
         await stopCycle(previous);
         cycle = createCycle();
+        cycle.cleanupUnhandledRejection?.();
+        cycle.cleanupUnhandledRejection = registerUnhandledRejectionHandler(
+          handleCiaoUnhandledRejectionWithRecovery,
+        );
         stateTracker.clear();
         attachConflictListeners(cycle.services);
         startAdvertising(cycle.services);
@@ -380,8 +429,8 @@ export async function startGatewayBonjourAdvertiser(
     // Watchdog: if we ever end up in an unannounced state (e.g. after sleep/wake or
     // interface churn), try to re-advertise instead of requiring a full gateway restart.
     const lastRepairAttempt = new Map<string, number>();
-    const watchdog = setInterval(() => {
-      if (stopped || recreatePromise) {
+    watchdog = setInterval(() => {
+      if (stopped || bonjourDisabled || recreatePromise || !cycle) {
         return;
       }
       updateStateTrackers(cycle.services);
@@ -429,14 +478,10 @@ export async function startGatewayBonjourAdvertiser(
         );
         try {
           void svc.advertise().catch((err) => {
-            logWarn(
-              `bonjour: watchdog advertise failed (${serviceSummary(label, svc)}): ${formatBonjourError(err)}`,
-            );
+            handleAdvertiseFailure("bonjour: watchdog advertise failed", label, svc, err);
           });
         } catch (err) {
-          logWarn(
-            `bonjour: watchdog advertise threw (${serviceSummary(label, svc)}): ${formatBonjourError(err)}`,
-          );
+          handleAdvertiseFailure("bonjour: watchdog advertise threw", label, svc, err);
         }
       }
     }, WATCHDOG_INTERVAL_MS);
@@ -446,8 +491,12 @@ export async function startGatewayBonjourAdvertiser(
       stop: async () => {
         stopped = true;
         try {
-          clearInterval(watchdog);
+          if (watchdog) {
+            clearInterval(watchdog);
+            watchdog = null;
+          }
           await recreatePromise;
+          await disablePromise;
           await stopCycle(cycle);
         } finally {
           restoreConsoleLog();

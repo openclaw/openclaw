@@ -274,6 +274,36 @@ describe("gateway bonjour advertiser", () => {
     await started.stop();
   });
 
+  it("disables bonjour after ciao probing cancellation rejection", async () => {
+    enableAdvertiserUnitMode();
+
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const advertise = vi.fn().mockResolvedValue(undefined);
+    mockCiaoService({ advertise, destroy });
+
+    const started = await startGatewayBonjourAdvertiser({
+      gatewayPort: 18789,
+      sshPort: 2222,
+    });
+
+    const handler = registerUnhandledRejectionHandler.mock.calls[0]?.[0] as
+      | ((reason: unknown) => boolean)
+      | undefined;
+    expect(handler).toBeTypeOf("function");
+
+    expect(handler?.(new Error("CIAO PROBING CANCELLED"))).toBe(true);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(logWarn).toHaveBeenCalledWith(expect.stringContaining("disabling advertiser"));
+    expect(destroy).toHaveBeenCalledTimes(1);
+    expect(shutdown).toHaveBeenCalledTimes(1);
+
+    await started.stop();
+    expect(destroy).toHaveBeenCalledTimes(1);
+    expect(shutdown).toHaveBeenCalledTimes(1);
+  });
+
   it("logs advertise failures and retries via watchdog", async () => {
     enableAdvertiserUnitMode();
     vi.useFakeTimers();
@@ -327,6 +357,40 @@ describe("gateway bonjour advertiser", () => {
     expect(logWarn).toHaveBeenCalledWith(expect.stringContaining("advertise threw"));
 
     await started.stop();
+  });
+
+  it("disables bonjour after watchdog advertise cancellation on unsupported networks", async () => {
+    enableAdvertiserUnitMode();
+    vi.useFakeTimers();
+
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const advertise = vi
+      .fn()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("CIAO PROBING CANCELLED"));
+    mockCiaoService({ advertise, destroy, serviceState: "unannounced" });
+
+    const started = await startGatewayBonjourAdvertiser({
+      gatewayPort: 18789,
+      sshPort: 2222,
+    });
+
+    expect(advertise).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    await Promise.resolve();
+
+    expect(logWarn).toHaveBeenCalledWith(expect.stringContaining("watchdog advertise failed"));
+    expect(logWarn).toHaveBeenCalledWith(expect.stringContaining("disabling advertiser"));
+    expect(destroy).toHaveBeenCalledTimes(1);
+    expect(shutdown).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(advertise).toHaveBeenCalledTimes(2);
+
+    await started.stop();
+    expect(destroy).toHaveBeenCalledTimes(1);
+    expect(shutdown).toHaveBeenCalledTimes(1);
   });
 
   it("suppresses ciao self-probe retry console noise while advertising", async () => {
