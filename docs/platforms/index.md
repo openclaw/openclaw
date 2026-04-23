@@ -24,6 +24,7 @@ Native companion apps for Windows are also planned; the Gateway is recommended v
 ## VPS & hosting
 
 - VPS hub: [VPS hosting](/vps)
+- Agent Computer (one-click, browser setup): [Agent Computer](/install/agentcomputer)
 - Fly.io: [Fly.io](/install/fly)
 - Hetzner (Docker): [Hetzner](/install/hetzner)
 - GCP (Compute Engine): [GCP](/install/gcp)

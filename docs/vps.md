@@ -15,6 +15,7 @@ tuning that applies everywhere.
 ## Pick a provider
 
 <CardGroup cols={2}>
+  <Card title="Agent Computer" href="/install/agentcomputer">One-click, browser setup</Card>
   <Card title="Railway" href="/install/railway">One-click, browser setup</Card>
   <Card title="Northflank" href="/install/northflank">One-click, browser setup</Card>
   <Card title="DigitalOcean" href="/install/digitalocean">Simple paid VPS</Card>

@@ -849,12 +849,20 @@
       "destination": "/install/render"
     },
     {
+      "source": "/agentcomputer",
+      "destination": "/install/agentcomputer"
+    },
+    {
       "source": "/gcp",
       "destination": "/install/gcp"
     },
     {
       "source": "/azure",
       "destination": "/install/azure"
+    },
+    {
+      "source": "/platforms/agentcomputer",
+      "destination": "/install/agentcomputer"
     },
     {
       "source": "/platforms/fly",
@@ -977,6 +985,7 @@
               {
                 "group": "Hosting",
                 "pages": [
+                  "install/agentcomputer",
                   "install/azure",
                   "install/digitalocean",
                   "install/docker-vm-runtime",

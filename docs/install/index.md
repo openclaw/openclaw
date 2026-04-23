@@ -165,6 +165,7 @@ If you want managed startup after install:
 Deploy OpenClaw on a cloud server or VPS:
 
 <CardGroup cols={3}>
+  <Card title="Agent Computer" href="/install/agentcomputer">One-click, browser setup</Card>
   <Card title="VPS" href="/vps">Any Linux VPS</Card>
   <Card title="Docker VM" href="/install/docker-vm-runtime">Shared Docker steps</Card>
   <Card title="Kubernetes" href="/install/kubernetes">K8s</Card>
