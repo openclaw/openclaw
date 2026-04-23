@@ -1922,7 +1922,7 @@ run_upgrade_lane() {
   phase_run "upgrade.restore-snapshot" "$TIMEOUT_SNAPSHOT_S" restore_snapshot "$snapshot_id"
   phase_run "upgrade.install-latest" "$TIMEOUT_INSTALL_SITE_S" install_latest_release
   LATEST_INSTALLED_VERSION="$(extract_last_version "$(phase_log_path upgrade.install-latest)")"
-  phase_run "upgrade.verify-latest-version" "$TIMEOUT_VERIFY_S" verify_version_contains "$LATEST_VERSION"
+  phase_run "upgrade.verify-latest-version" "$TIMEOUT_VERIFY_S" verify_version_contains "$INSTALL_VERSION"
   if [[ "$CHECK_LATEST_REF" -eq 1 ]]; then
     if phase_run "upgrade.latest-ref-precheck" "$TIMEOUT_ONBOARD_S" capture_latest_ref_failure; then
       UPGRADE_PRECHECK_STATUS="latest-ref-pass"
