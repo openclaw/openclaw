@@ -149,6 +149,20 @@ Scoped guides:
 - Changelog: user-facing only. Pure test/internal changes usually no entry.
 - Changelog placement: append to active version `### Changes`/`### Fixes`; at most one contributor mention, prefer `Thanks @user`.
 
+## Worktree Discipline (Non-negotiable)
+
+- **Production branch:** `main`
+- **Never `git checkout` a feature branch in the production tree.** The working tree runs the live gateway.
+- All code changes MUST use `agentos-dev` to create a worktree.
+  - `agentos-dev start <issue-id>` — creates worktree at `~/worktrees/<repo>/<branch>`
+  - `agentos-dev commit "<message>"` — commits with Co-Authored-By trailer
+  - `agentos-dev finish` — pushes branch, opens PR, links back to PaperClip issue
+  - `agentos-dev cleanup <issue-id-or-branch>` — removes worktree after PR merge
+- Emergency override: `OPENCLAW_ALLOW_BRANCH_SWITCH=1` (maintenance-window only, post-push alert fires)
+- Pre-push hook blocks direct pushes to `main` from production tree
+- See `agentos-sdlc` skill for full workflow
+- 2026-04-22 incident: an agent's `git checkout` in `.openclaw` deleted 774 files and caused 4+ hour gateway outage
+
 ## Git
 
 - Use `scripts/committer "<msg>" <file...>`; stage only intended files.
