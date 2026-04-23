@@ -5352,8 +5352,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                       noNewPrivileges: {
                         type: "boolean",
                         title: "Sandbox Docker No New Privileges",
-                        description:
-                          "Enable Docker no-new-privileges hardening for sandbox containers (default: true). Disable only on trusted hosts where this flag is known to break container exec.",
                       },
                       dangerouslyAllowReservedContainerTargets: {
                         type: "boolean",
@@ -6692,8 +6690,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         noNewPrivileges: {
                           type: "boolean",
                           title: "Agent Sandbox Docker No New Privileges",
-                          description:
-                            "Per-agent override for Docker no-new-privileges sandbox hardening. Disable only on trusted hosts where this flag is known to break container exec.",
                         },
                         dangerouslyAllowReservedContainerTargets: {
                           type: "boolean",
@@ -26021,8 +26017,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "agents.defaults.sandbox.docker.noNewPrivileges": {
       label: "Sandbox Docker No New Privileges",
-      help: "Enable Docker no-new-privileges hardening for sandbox containers (default: true). Disable only on trusted hosts where this flag is known to break container exec.",
-      tags: ["security", "storage", "advanced"],
+      tags: ["storage"],
     },
     "agents.defaults.sandbox.docker.dangerouslyAllowContainerNamespaceJoin": {
       label: "Sandbox Docker Allow Container Namespace Join",
@@ -27094,8 +27089,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "agents.list[].sandbox.docker.noNewPrivileges": {
       label: "Agent Sandbox Docker No New Privileges",
-      help: "Per-agent override for Docker no-new-privileges sandbox hardening. Disable only on trusted hosts where this flag is known to break container exec.",
-      tags: ["security", "storage", "advanced"],
+      tags: ["storage"],
     },
     "agents.list[].sandbox.docker.dangerouslyAllowContainerNamespaceJoin": {
       label: "Agent Sandbox Docker Allow Container Namespace Join",
