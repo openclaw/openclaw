@@ -26,7 +26,7 @@ configured through the MLflow UI.
 <Steps>
   <Step title="Install MLflow and start the server">
     ```bash
-    pip install mlflow[genai]
+    pip install 'mlflow[genai]'
     mlflow server --host 127.0.0.1 --port 5000
     ```
   </Step>
