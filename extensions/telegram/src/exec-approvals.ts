@@ -119,7 +119,7 @@ function matchesTelegramRequestAccount(params: {
     request: params.request,
     channel: "telegram",
   });
-  if (turnSourceChannel && turnSourceChannel !== "telegram" && !boundAccountId) {
+  if (!boundAccountId && turnSourceChannel) {
     return (
       countTelegramExecApprovalEligibleAccounts({
         cfg: params.cfg,

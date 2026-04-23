@@ -109,6 +109,25 @@ function makeForeignChannelApprovalRequest(params: {
   };
 }
 
+function makeTelegramApprovalRequest(params: {
+  id: string;
+  sessionKey?: string;
+  turnSourceAccountId?: string;
+}): TelegramExecApprovalRequest {
+  return {
+    id: params.id,
+    request: {
+      command: "echo hi",
+      sessionKey: params.sessionKey ?? "agent:ops:telegram:direct:123",
+      turnSourceChannel: "telegram",
+      turnSourceTo: "123",
+      turnSourceAccountId: params.turnSourceAccountId,
+    },
+    createdAtMs: 0,
+    expiresAtMs: 1000,
+  };
+}
+
 describe("telegram exec approvals", () => {
   it("auto-enables when approvers resolve and disables only when forced off", () => {
     expect(isTelegramExecApprovalClientEnabled({ cfg: buildConfig() })).toBe(false);
@@ -317,6 +336,71 @@ describe("telegram exec approvals", () => {
         request,
       }),
     ).toBe(false);
+  });
+
+  it("rejects unbound telegram approvals in multi-account configs", () => {
+    const cfg = buildMultiAccountTelegramConfig({});
+    const request = makeTelegramApprovalRequest({ id: "req-7" });
+
+    expect(
+      shouldHandleTelegramExecApprovalRequest({
+        cfg,
+        accountId: "default",
+        request,
+      }),
+    ).toBe(false);
+    expect(
+      shouldHandleTelegramExecApprovalRequest({
+        cfg,
+        accountId: "ops",
+        request,
+      }),
+    ).toBe(false);
+  });
+
+  it("allows unbound telegram approvals when only one telegram account can handle them", () => {
+    const cfg = buildMultiAccountTelegramConfig({
+      opsExecApprovals: { enabled: false, approvers: ["123"] },
+    });
+    const request = makeTelegramApprovalRequest({ id: "req-8" });
+
+    expect(
+      shouldHandleTelegramExecApprovalRequest({
+        cfg,
+        accountId: "default",
+        request,
+      }),
+    ).toBe(true);
+    expect(
+      shouldHandleTelegramExecApprovalRequest({
+        cfg,
+        accountId: "ops",
+        request,
+      }),
+    ).toBe(false);
+  });
+
+  it("still honors explicitly bound telegram account ids", () => {
+    const cfg = buildMultiAccountTelegramConfig({});
+    const request = makeTelegramApprovalRequest({
+      id: "req-9",
+      turnSourceAccountId: "ops",
+    });
+
+    expect(
+      shouldHandleTelegramExecApprovalRequest({
+        cfg,
+        accountId: "default",
+        request,
+      }),
+    ).toBe(false);
+    expect(
+      shouldHandleTelegramExecApprovalRequest({
+        cfg,
+        accountId: "ops",
+        request,
+      }),
+    ).toBe(true);
   });
 
   it("only injects approval buttons on eligible telegram targets", () => {
