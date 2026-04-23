@@ -89,6 +89,9 @@ Scoped guides:
 
 ## GitHub API
 
+- Issue/PR triage: list first, hydrate few. Use bounded fields + `--jq`, e.g. `gh issue list --state open --limit 80 --json number,title,labels,updatedAt,comments --jq '.[]|[.number,.updatedAt,.comments,.title]|@tsv'`; then `gh issue view <n> --json title,body,comments,labels,createdAt,updatedAt,url --jq '{title,labels,createdAt,updatedAt,url,body,comments:[.comments[]|{author:.author.login,createdAt,body}]}'` only for shortlisted items.
+- Search/dedupe: prefer `gh search issues 'repo:openclaw/openclaw is:open <terms>' --json number,title,state,updatedAt --limit 20 --jq '.[]|[.number,.updatedAt,.title]|@tsv'`; avoid repeated full `--comments` scans.
+- PR links: `gh pr list --state open --search '<issue-or-terms>' --json number,title,updatedAt,headRefName --limit 20`; use `gh pr view <n> --json number,title,body,closingIssuesReferences,files,statusCheckRollup,reviewDecision` only after shortlist.
 - CI polling: keep full `gh` capability, but request only needed fields. Known run status: `gh api repos/<owner>/<repo>/actions/runs/<id> --jq '{status,conclusion,head_sha,updated_at,name,path}'`.
 - Waiting: poll lightly, usually 30-60s backoff. Fetch jobs/logs/artifacts only after completion/failure or when job detail is needed; avoid repeated workflow + run + jobs loops.
 

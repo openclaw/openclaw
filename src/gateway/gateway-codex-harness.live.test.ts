@@ -25,6 +25,7 @@ import {
   runOpenClawCliJson,
   type CronListJob,
 } from "./live-agent-probes.js";
+import { restoreLiveEnv, snapshotLiveEnv, type LiveEnvSnapshot } from "./live-env-test-helpers.js";
 import { renderCatFacePngBase64 } from "./live-image-probe.js";
 
 const LIVE = isLiveTestEnabled();
@@ -65,20 +66,6 @@ type CapturedAgentEvent = {
   sessionKey?: string;
 };
 
-type EnvSnapshot = {
-  agentRuntime?: string;
-  configPath?: string;
-  gatewayToken?: string;
-  openaiApiKey?: string;
-  openaiBaseUrl?: string;
-  skipBrowserControl?: string;
-  skipCanvas?: string;
-  skipChannels?: string;
-  skipCron?: string;
-  skipGmail?: string;
-  stateDir?: string;
-};
-
 function resolveLiveTimeoutMs(raw: string | undefined, fallback: number): number {
   const parsed = raw ? Number(raw) : Number.NaN;
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
@@ -109,42 +96,12 @@ async function subscribeCodexLiveDebugEvents(sessionKey: string): Promise<() => 
   });
 }
 
-function snapshotEnv(): EnvSnapshot {
-  return {
-    agentRuntime: process.env.OPENCLAW_AGENT_RUNTIME,
-    configPath: process.env.OPENCLAW_CONFIG_PATH,
-    gatewayToken: process.env.OPENCLAW_GATEWAY_TOKEN,
-    openaiApiKey: process.env.OPENAI_API_KEY,
-    openaiBaseUrl: process.env.OPENAI_BASE_URL,
-    skipBrowserControl: process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER,
-    skipCanvas: process.env.OPENCLAW_SKIP_CANVAS_HOST,
-    skipChannels: process.env.OPENCLAW_SKIP_CHANNELS,
-    skipCron: process.env.OPENCLAW_SKIP_CRON,
-    skipGmail: process.env.OPENCLAW_SKIP_GMAIL_WATCHER,
-    stateDir: process.env.OPENCLAW_STATE_DIR,
-  };
+function snapshotEnv(): LiveEnvSnapshot {
+  return snapshotLiveEnv();
 }
 
-function restoreEnv(snapshot: EnvSnapshot): void {
-  restoreEnvVar("OPENCLAW_AGENT_RUNTIME", snapshot.agentRuntime);
-  restoreEnvVar("OPENCLAW_CONFIG_PATH", snapshot.configPath);
-  restoreEnvVar("OPENCLAW_GATEWAY_TOKEN", snapshot.gatewayToken);
-  restoreEnvVar("OPENAI_API_KEY", snapshot.openaiApiKey);
-  restoreEnvVar("OPENAI_BASE_URL", snapshot.openaiBaseUrl);
-  restoreEnvVar("OPENCLAW_SKIP_BROWSER_CONTROL_SERVER", snapshot.skipBrowserControl);
-  restoreEnvVar("OPENCLAW_SKIP_CANVAS_HOST", snapshot.skipCanvas);
-  restoreEnvVar("OPENCLAW_SKIP_CHANNELS", snapshot.skipChannels);
-  restoreEnvVar("OPENCLAW_SKIP_CRON", snapshot.skipCron);
-  restoreEnvVar("OPENCLAW_SKIP_GMAIL_WATCHER", snapshot.skipGmail);
-  restoreEnvVar("OPENCLAW_STATE_DIR", snapshot.stateDir);
-}
-
-function restoreEnvVar(name: string, value: string | undefined): void {
-  if (value === undefined) {
-    delete process.env[name];
-    return;
-  }
-  process.env[name] = value;
+function restoreEnv(snapshot: LiveEnvSnapshot): void {
+  restoreLiveEnv(snapshot);
 }
 
 async function getFreeGatewayPort(): Promise<number> {

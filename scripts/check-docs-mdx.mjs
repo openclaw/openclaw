@@ -119,8 +119,58 @@ function formatMdxError(filePath, error) {
   };
 }
 
+function checkMintlifyMdxStructure(filePath, raw) {
+  const errors = [];
+  const lines = stripFrontmatter(raw).split(/\r?\n/u);
+  const accordionStack = [];
+  let inCodeFence = false;
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (/^\s*(```|~~~)/u.test(line)) {
+      inCodeFence = !inCodeFence;
+      continue;
+    }
+    if (inCodeFence) {
+      continue;
+    }
+
+    const openAccordion = line.match(/^(\s*)<Accordion\b/u);
+    if (openAccordion) {
+      accordionStack.push({
+        indent: openAccordion[1].length,
+        line: index + 1,
+      });
+      continue;
+    }
+
+    const closeAccordion = line.match(/^(\s*)<\/Accordion>/u);
+    if (!closeAccordion) {
+      continue;
+    }
+
+    const opening = accordionStack.pop();
+    if (opening && closeAccordion[1].length > opening.indent) {
+      errors.push({
+        type: "mintlify-mdx",
+        file: filePath,
+        line: index + 1,
+        column: closeAccordion[1].length + 1,
+        message:
+          "Accordion closing tag is indented deeper than its opening tag; Mintlify can parse following markdown as nested content.",
+      });
+    }
+  }
+
+  return errors;
+}
+
 async function checkMdxFile(filePath) {
   const raw = fs.readFileSync(filePath, "utf8");
+  const structureErrors = checkMintlifyMdxStructure(filePath, raw);
+  if (structureErrors.length > 0) {
+    return structureErrors;
+  }
   const value = stripFrontmatter(raw);
   await compile(
     { path: filePath, value },
@@ -129,6 +179,7 @@ async function checkMdxFile(filePath) {
       jsx: false,
     },
   );
+  return [];
 }
 
 function findDocsJsonPaths(roots) {
@@ -230,7 +281,7 @@ async function main() {
 
   for (const file of files) {
     try {
-      await checkMdxFile(file);
+      errors.push(...(await checkMdxFile(file)));
     } catch (error) {
       errors.push(formatMdxError(file, error));
       if (errors.length >= args.maxErrors) {

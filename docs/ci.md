@@ -19,6 +19,19 @@ Telegram lane as parallel jobs. The live jobs use the `qa-live-shared`
 environment, and the Telegram lane uses Convex leases. `OpenClaw Release
 Checks` also runs the same QA Lab lanes before release approval.
 
+The `Duplicate PRs After Merge` workflow is a manual maintainer workflow for
+post-land duplicate cleanup. It defaults to dry-run and only closes explicitly
+listed PRs when `apply=true`. Before mutating GitHub, it verifies that the
+landed PR is merged and that each duplicate has either a shared referenced issue
+or overlapping changed hunks.
+
+```bash
+gh workflow run duplicate-after-merge.yml \
+  -f landed_pr=70532 \
+  -f duplicate_prs='70530,70592' \
+  -f apply=true
+```
+
 ## Job Overview
 
 | Job                              | Purpose                                                                                      | When it runs                         |

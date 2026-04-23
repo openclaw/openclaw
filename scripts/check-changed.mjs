@@ -145,9 +145,9 @@ export async function runChangedCheck(result, options = {}) {
     }
   } else if (plan.runChangedTestsBroad) {
     const testArgs = options.explicitPaths
-      ? ["scripts/test-projects.mjs"]
-      : ["scripts/test-projects.mjs", "--changed", options.base ?? "origin/main"];
-    const status = await runNode(
+      ? ["test"]
+      : ["test", "--changed", options.base ?? "origin/main"];
+    const status = await runPnpm(
       {
         name: options.explicitPaths ? "tests all" : "tests changed broad",
         args: testArgs,
@@ -159,10 +159,10 @@ export async function runChangedCheck(result, options = {}) {
       return status;
     }
   } else if (plan.testTargets.length > 0) {
-    const status = await runNode(
+    const status = await runPnpm(
       {
         name: "tests changed",
-        args: ["scripts/test-projects.mjs", ...plan.testTargets],
+        args: ["test", ...plan.testTargets],
       },
       timings,
     );
@@ -207,10 +207,6 @@ function printPlan(result, plan, options) {
 
 async function runPnpm(command, timings) {
   return await runCommand({ ...command, bin: "pnpm" }, timings);
-}
-
-async function runNode(command, timings) {
-  return await runCommand({ ...command, bin: process.execPath }, timings);
 }
 
 async function runCommand(command, timings) {

@@ -18,7 +18,7 @@ function formatSeconds(value) {
   return value === null ? "" : `${value}s`;
 }
 
-export function summarizeRunTimings(run, limit = 15) {
+function collectRunTimingContext(run) {
   const created = parseTime(run.createdAt);
   const updated = parseTime(run.updatedAt);
   const jobs = (run.jobs ?? [])
@@ -31,9 +31,17 @@ export function summarizeRunTimings(run, limit = 15) {
         durationSeconds: secondsBetween(started, completed),
         name: job.name,
         queueSeconds: secondsBetween(created, started),
+        started,
+        completed,
         status: job.status,
       };
     });
+
+  return { created, jobs, updated };
+}
+
+export function summarizeRunTimings(run, limit = 15) {
+  const { created, jobs, updated } = collectRunTimingContext(run);
   const byDuration = [...jobs]
     .filter((job) => job.durationSeconds !== null)
     .toSorted((left, right) => right.durationSeconds - left.durationSeconds)
@@ -105,30 +113,14 @@ function loadRun(runId) {
 }
 
 function summarizeJobs(run) {
-  const created = parseTime(run.createdAt);
-  const updated = parseTime(run.updatedAt);
-  const jobs = (run.jobs ?? [])
-    .filter((job) => !job.name?.startsWith("matrix."))
-    .map((job) => {
-      const started = parseTime(job.startedAt);
-      const completed = parseTime(job.completedAt);
-      return {
-        conclusion: job.conclusion ?? "",
-        durationSeconds: secondsBetween(started, completed),
-        name: job.name,
-        queueSeconds: secondsBetween(created, started),
-        started,
-        completed,
-        status: job.status,
-      };
-    })
-    .filter((job) => job.started !== null && job.completed !== null);
+  const { created, jobs, updated } = collectRunTimingContext(run);
+  const completedJobs = jobs.filter((job) => job.started !== null && job.completed !== null);
   const successfulDurations = jobs
     .filter((job) => job.status === "completed" && job.conclusion === "success")
     .map((job) => job.durationSeconds)
     .filter((duration) => duration !== null);
-  const firstStart = Math.min(...jobs.map((job) => job.started));
-  const lastComplete = Math.max(...jobs.map((job) => job.completed));
+  const firstStart = Math.min(...completedJobs.map((job) => job.started));
+  const lastComplete = Math.max(...completedJobs.map((job) => job.completed));
 
   return {
     avgDurationSeconds:

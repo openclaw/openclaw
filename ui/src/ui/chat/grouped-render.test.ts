@@ -241,6 +241,53 @@ describe("grouped chat rendering", () => {
     expect(avatar?.getAttribute("src")).toBe("/openclaw-logo.svg");
   });
 
+  it("includes cache tokens when rendering assistant context usage", () => {
+    const container = document.createElement("div");
+
+    renderAssistantMessage(
+      container,
+      {
+        role: "assistant",
+        content: "Done",
+        usage: {
+          input: 1,
+          output: 1200,
+          cacheRead: 438_400,
+          cacheWrite: 307,
+        },
+        model: "anthropic/claude-opus-4-7",
+        timestamp: 1000,
+      },
+      { contextWindow: 1_000_000 },
+    );
+
+    expect(container.querySelector(".msg-meta__ctx")?.textContent).toBe("44% ctx");
+    expect(container.textContent).toContain("R438.4k");
+    expect(container.textContent).toContain("W307");
+  });
+
+  it("excludes output tokens when rendering assistant context usage", () => {
+    const container = document.createElement("div");
+
+    renderAssistantMessage(
+      container,
+      {
+        role: "assistant",
+        content: "Long response",
+        usage: {
+          input: 1_000,
+          output: 9_000,
+          cacheRead: 0,
+          cacheWrite: 0,
+        },
+        timestamp: 1000,
+      },
+      { contextWindow: 10_000 },
+    );
+
+    expect(container.querySelector(".msg-meta__ctx")?.textContent).toBe("10% ctx");
+  });
+
   it("renders the configured local user name in user message footers", () => {
     const container = document.createElement("div");
 
