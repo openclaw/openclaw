@@ -71,14 +71,15 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
   return {
     id: "diagnostics-otel",
     async start(ctx) {
-      if (process.env.OPENCLAW_OTEL_PRELOADED === "1") {
-        ctx.logger.info("diagnostics-otel: skipping OTel SDK start (preloaded)");
-        return;
-      }
       const cfg = ctx.config.diagnostics;
       const otel = cfg?.otel;
       if (!cfg?.enabled || !otel?.enabled) {
         return;
+      }
+
+      const preloaded = process.env.OPENCLAW_OTEL_PRELOADED === "1";
+      if (preloaded) {
+        ctx.logger.info("diagnostics-otel: OTel SDK already started via preload");
       }
 
       const protocol = otel.protocol ?? process.env.OTEL_EXPORTER_OTLP_PROTOCOL ?? "http/protobuf";
@@ -130,7 +131,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           })
         : undefined;
 
-      if (tracesEnabled || metricsEnabled) {
+      if (!preloaded && (tracesEnabled || metricsEnabled)) {
         sdk = new NodeSDK({
           resource,
           ...(traceExporter ? { traceExporter } : {}),

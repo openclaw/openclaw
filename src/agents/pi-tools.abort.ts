@@ -1,3 +1,4 @@
+import { trace, SpanStatusCode, context } from "@opentelemetry/api";
 import { copyPluginToolMeta } from "../plugins/tools.js";
 import { bindAbortRelay } from "../utils/fetch-timeout.js";
 import { copyChannelAgentToolMeta } from "./channel-tools.js";

@@ -27,10 +27,14 @@ const sdk = new NodeSDK({
 });
 
 sdk.start();
+process.env.OPENCLAW_OTEL_PRELOADED = "1";
 
-process.on("SIGTERM", () => {
+const shutdown = () => {
   sdk.shutdown()
     .then(() => console.log("OTel SDK shut down"))
     .catch((err) => console.log("Error shutting down OTel SDK", err))
     .finally(() => process.exit(0));
-});
+};
+
+process.on("SIGTERM", shutdown);
+process.on("SIGINT", shutdown);

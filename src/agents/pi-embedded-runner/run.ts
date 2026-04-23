@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
+import { trace, SpanStatusCode, context } from "@opentelemetry/api";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
 import { resolveContextEngine } from "../../context-engine/registry.js";
