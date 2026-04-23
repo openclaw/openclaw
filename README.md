@@ -108,7 +108,7 @@ See openclaw-EXAMPLE.json
     </picture>
 </p>
 
-## Install (recommended)
+## Install
 
 I recommend you install globally and then have your config in a user folder like /home/openclaw
 
