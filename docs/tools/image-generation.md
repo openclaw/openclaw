@@ -35,6 +35,10 @@ Codex OAuth uses the same `openai/gpt-image-2` model ref. When an
 through that same OAuth profile instead of first trying `OPENAI_API_KEY`.
 Explicit custom `models.providers.openai` image config, such as an API key or
 custom/Azure base URL, opts back into the direct OpenAI Images API route.
+For OpenAI-compatible LAN endpoints such as LocalAI, keep the custom
+`models.providers.openai.baseUrl` and explicitly opt in with
+`browser.ssrfPolicy.dangerouslyAllowPrivateNetwork: true`; private/internal
+image endpoints remain blocked by default.
 
 3. Ask the agent: _"Generate an image of a friendly robot mascot."_
 

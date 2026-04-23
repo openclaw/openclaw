@@ -21,6 +21,7 @@ import {
   resolveProviderHttpRequestConfig,
   sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
+import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import { OPENAI_DEFAULT_IMAGE_MODEL as DEFAULT_OPENAI_IMAGE_MODEL } from "./default-models.js";
 import { resolveConfiguredOpenAIBaseUrl } from "./shared.js";
 
@@ -188,6 +189,9 @@ function shouldAllowPrivateImageEndpoint(req: {
   cfg: OpenClawConfig | undefined;
 }) {
   if (req.provider === MOCK_OPENAI_PROVIDER_ID) {
+    return true;
+  }
+  if (isPrivateNetworkOptInEnabled(req.cfg?.browser?.ssrfPolicy)) {
     return true;
   }
   const baseUrl = resolveConfiguredOpenAIBaseUrl(req.cfg);

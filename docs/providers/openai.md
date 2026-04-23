@@ -236,6 +236,10 @@ does not first try `OPENAI_API_KEY` or silently fall back to an API key for that
 request. Configure `models.providers.openai` explicitly with an API key,
 custom base URL, or Azure endpoint when you want the direct OpenAI Images API
 route instead.
+If that custom image endpoint is on a trusted LAN/private address, also set
+`browser.ssrfPolicy.dangerouslyAllowPrivateNetwork: true`; OpenClaw keeps
+private/internal OpenAI-compatible image endpoints blocked unless this opt-in is
+present.
 
 Generate:
 

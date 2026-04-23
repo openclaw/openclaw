@@ -316,6 +316,47 @@ describe("openai image generation provider", () => {
     expect(result.images).toHaveLength(1);
   });
 
+  it("allows OpenAI-compatible private image endpoints when browser SSRF policy opts in", async () => {
+    mockGeneratedPngResponse();
+
+    const provider = buildOpenAIImageGenerationProvider();
+    const result = await provider.generateImage({
+      provider: "openai",
+      model: "flux2-klein",
+      prompt: "A simple, clean illustration of a red apple with a green leaf",
+      cfg: {
+        browser: {
+          ssrfPolicy: {
+            dangerouslyAllowPrivateNetwork: true,
+          },
+        },
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "http://192.168.1.15:8082/v1",
+              apiKey: "local-noauth",
+              models: [],
+            },
+          },
+        },
+      },
+    });
+
+    expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        baseUrl: "http://192.168.1.15:8082/v1",
+        allowPrivateNetwork: true,
+      }),
+    );
+    expect(postJsonRequestMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "http://192.168.1.15:8082/v1/images/generations",
+        allowPrivateNetwork: true,
+      }),
+    );
+    expect(result.images).toHaveLength(1);
+  });
+
   it("forwards generation count and custom size overrides", async () => {
     mockGeneratedPngResponse();
 
