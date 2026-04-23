@@ -113,7 +113,7 @@ function matchesQuotedConversationTarget(targetJid: string, candidate: QuotedMet
   }
   return (
     areComparableJidsEqual(targetJid, candidate.participant) ||
-    areComparableE164sEqual(jidToE164(targetJid), candidate.participantE164)
+    areComparableE164sEqual(jidToE164(targetJid) ?? undefined, candidate.participantE164)
   );
 }
 
