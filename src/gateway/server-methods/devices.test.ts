@@ -135,9 +135,9 @@ describe("deviceHandlers", () => {
   it("invalidates affected clients synchronously before responding to device.pair.remove", async () => {
     removePairedDeviceMock.mockResolvedValue({ deviceId: "device-1", removedAtMs: 123 });
     const opts = createOptions("device.pair.remove", { deviceId: "device-1" });
-    const respond = opts.respond as ReturnType<typeof vi.fn>;
-    const invalidate = opts.context.invalidateClientsForDevice as ReturnType<typeof vi.fn>;
-    const disconnect = opts.context.disconnectClientsForDevice as ReturnType<typeof vi.fn>;
+    const respond = vi.mocked(opts.respond);
+    const invalidate = vi.mocked(opts.context.invalidateClientsForDevice!);
+    const disconnect = vi.mocked(opts.context.disconnectClientsForDevice!);
 
     respond.mockImplementation(() => {
       // At the moment the response is emitted, the client flag must already
@@ -332,9 +332,9 @@ describe("deviceHandlers", () => {
       { deviceId: "device-1", role: "operator", scopes: ["operator.pairing"] },
       { client: createClient(["operator.pairing"], "device-1", { isDeviceTokenAuth: true }) },
     );
-    const respond = opts.respond as ReturnType<typeof vi.fn>;
-    const invalidate = opts.context.invalidateClientsForDevice as ReturnType<typeof vi.fn>;
-    const disconnect = opts.context.disconnectClientsForDevice as ReturnType<typeof vi.fn>;
+    const respond = vi.mocked(opts.respond);
+    const invalidate = vi.mocked(opts.context.invalidateClientsForDevice!);
+    const disconnect = vi.mocked(opts.context.disconnectClientsForDevice!);
 
     respond.mockImplementation(() => {
       expect(invalidate).toHaveBeenCalledWith("device-1", {
@@ -358,9 +358,9 @@ describe("deviceHandlers", () => {
       { deviceId: "device-1", role: "operator" },
       { client: createClient(["operator.pairing"], "device-1", { isDeviceTokenAuth: true }) },
     );
-    const respond = opts.respond as ReturnType<typeof vi.fn>;
-    const invalidate = opts.context.invalidateClientsForDevice as ReturnType<typeof vi.fn>;
-    const disconnect = opts.context.disconnectClientsForDevice as ReturnType<typeof vi.fn>;
+    const respond = vi.mocked(opts.respond);
+    const invalidate = vi.mocked(opts.context.invalidateClientsForDevice!);
+    const disconnect = vi.mocked(opts.context.disconnectClientsForDevice!);
 
     respond.mockImplementation(() => {
       expect(invalidate).toHaveBeenCalledWith("device-1", {
