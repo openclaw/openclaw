@@ -1194,9 +1194,10 @@ export class MatrixClient {
         resolveMatrixRoomKeyBackupReadinessError(status.backup, {
           requireServerBackup: true,
         }) === null;
-      const recoveryKeyAccepted = status.verified || backupUsable;
+      const stagedRecoveryKeyAccepted = this.recoveryKeyStore.hasStagedRecoveryKeyBeenUsed();
+      const recoveryKeyAccepted = stagedRecoveryKeyAccepted && (status.verified || backupUsable);
       if (!status.verified) {
-        if (backupUsable) {
+        if (backupUsable && stagedRecoveryKeyAccepted) {
           this.recoveryKeyStore.commitStagedRecoveryKey({
             keyId: await this.resolveDefaultSecretStorageKeyId(crypto),
           });
@@ -1224,6 +1225,18 @@ export class MatrixClient {
           backupUsable,
           deviceOwnerVerified: true,
           error: backupError,
+          ...status,
+        };
+      }
+      if (!stagedRecoveryKeyAccepted) {
+        this.recoveryKeyStore.discardStagedRecoveryKey();
+        return {
+          success: false,
+          recoveryKeyAccepted: false,
+          backupUsable,
+          deviceOwnerVerified: true,
+          error:
+            "Matrix recovery key could not be verified against active Matrix backup material; existing backup may be usable from previously loaded recovery material.",
           ...status,
         };
       }
