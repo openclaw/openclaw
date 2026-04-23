@@ -34,12 +34,23 @@ type MessageCase = {
   body?: unknown;
 };
 
-function createHandlers(eventName: RegisteredEventName, overrides?: SlackSystemEventTestOverrides) {
+function createHandlers(
+  eventName: RegisteredEventName,
+  overrides?: SlackSystemEventTestOverrides,
+  extras?: {
+    trackEvent?: () => void;
+    shouldDropMismatchedSlackEvent?: (body: unknown) => boolean;
+  },
+) {
   const harness = createSlackSystemEventTestHarness(overrides);
+  if (extras?.shouldDropMismatchedSlackEvent) {
+    harness.ctx.shouldDropMismatchedSlackEvent = extras.shouldDropMismatchedSlackEvent;
+  }
   const handleSlackMessage = vi.fn(async () => {});
   registerSlackMessageEvents({
     ctx: harness.ctx,
     handleSlackMessage,
+    trackEvent: extras?.trackEvent,
   });
   return {
     handler: harness.getHandler(eventName) as MessageHandler | null,
@@ -273,5 +284,92 @@ describe("registerSlackMessageEvents", () => {
     });
 
     expect(handleSlackMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("tracks accepted regular message events", async () => {
+    const trackEvent = vi.fn();
+    const { handler } = createHandlers("message", { dmPolicy: "open" }, { trackEvent });
+    expect(handler).toBeTruthy();
+    await handler!({
+      event: {
+        type: "message",
+        channel: "D1",
+        user: "U1",
+        text: "hello",
+        ts: "123.456",
+      },
+      body: {},
+    });
+
+    expect(trackEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it("tracks subtype system-event messages", async () => {
+    const trackEvent = vi.fn();
+    const { handler } = createHandlers(
+      "message",
+      { dmPolicy: "open", channelType: "channel" },
+      { trackEvent },
+    );
+    expect(handler).toBeTruthy();
+    await handler!({
+      event: {
+        ...makeChangedEvent({ channel: "C1", user: "U1" }),
+        channel_type: "channel",
+      },
+      body: {},
+    });
+
+    expect(trackEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it("tracks accepted app_mention events", async () => {
+    const trackEvent = vi.fn();
+    const { handler } = createHandlers("app_mention", { dmPolicy: "open" }, { trackEvent });
+    expect(handler).toBeTruthy();
+    await handler!({
+      event: makeAppMentionEvent({ channel: "C123", channelType: "channel", ts: "123.789" }),
+      body: {},
+    });
+
+    expect(trackEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not track mismatched message events", async () => {
+    const trackEvent = vi.fn();
+    const { handler } = createHandlers(
+      "message",
+      { dmPolicy: "open" },
+      { trackEvent, shouldDropMismatchedSlackEvent: () => true },
+    );
+    expect(handler).toBeTruthy();
+    await handler!({
+      event: {
+        type: "message",
+        channel: "D1",
+        user: "U1",
+        text: "hello",
+        ts: "123.456",
+      },
+      body: { api_app_id: "A_OTHER" },
+    });
+
+    expect(trackEvent).not.toHaveBeenCalled();
+  });
+
+  it("does not track mismatched app_mention events", async () => {
+    const trackEvent = vi.fn();
+    const { handler } = createHandlers(
+      "app_mention",
+      { dmPolicy: "open" },
+      { trackEvent, shouldDropMismatchedSlackEvent: () => true },
+    );
+    expect(handler).toBeTruthy();
+    await handler!({
+      event: makeAppMentionEvent({ channel: "C123", channelType: "channel", ts: "123.789" }),
+      body: { api_app_id: "A_OTHER" },
+    });
+
+    expect(trackEvent).not.toHaveBeenCalled();
   });
 });

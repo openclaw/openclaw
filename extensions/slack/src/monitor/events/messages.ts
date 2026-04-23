@@ -12,14 +12,16 @@ import { authorizeAndResolveSlackSystemEventContext } from "./system-event-conte
 export function registerSlackMessageEvents(params: {
   ctx: SlackMonitorContext;
   handleSlackMessage: SlackMessageHandler;
+  trackEvent?: () => void;
 }) {
-  const { ctx, handleSlackMessage } = params;
+  const { ctx, handleSlackMessage, trackEvent } = params;
 
   const handleIncomingMessageEvent = async ({ event, body }: { event: unknown; body: unknown }) => {
     try {
       if (ctx.shouldDropMismatchedSlackEvent(body)) {
         return;
       }
+      trackEvent?.();
 
       const message = event as SlackMessageEvent;
       const subtypeHandler = resolveSlackMessageSubtypeHandler(message);
@@ -63,6 +65,7 @@ export function registerSlackMessageEvents(params: {
       if (ctx.shouldDropMismatchedSlackEvent(body)) {
         return;
       }
+      trackEvent?.();
 
       const mention = event as SlackAppMentionEvent;
 
