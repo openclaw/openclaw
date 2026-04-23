@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { deleteSessionsAndRefresh, subscribeSessions, type SessionsState } from "./sessions.ts";
+import {
+  deleteSessionsAndRefresh,
+  loadSessions,
+  subscribeSessions,
+  type SessionsState,
+} from "./sessions.ts";
 
 type RequestFn = (method: string, params?: unknown) => Promise<unknown>;
 
@@ -22,6 +27,11 @@ function createState(request: RequestFn, overrides: Partial<SessionsState> = {})
     sessionsFilterLimit: "0",
     sessionsIncludeGlobal: true,
     sessionsIncludeUnknown: true,
+    sessionsExpandedCheckpointKey: null,
+    sessionsCheckpointItemsByKey: {},
+    sessionsCheckpointLoadingKey: null,
+    sessionsCheckpointBusyKey: null,
+    sessionsCheckpointErrorByKey: {},
     ...overrides,
   };
 }
@@ -118,5 +128,93 @@ describe("deleteSessionsAndRefresh", () => {
 
     expect(deleted).toEqual([]);
     expect(request).not.toHaveBeenCalled();
+  });
+});
+
+describe("loadSessions", () => {
+  it("refreshes expanded checkpoint cards when the row summary changes", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.list") {
+        return {
+          ts: 1,
+          path: "(multiple)",
+          count: 1,
+          defaults: {},
+          sessions: [
+            {
+              key: "agent:main:main",
+              kind: "direct",
+              updatedAt: 1,
+              compactionCheckpointCount: 1,
+              latestCompactionCheckpoint: {
+                checkpointId: "checkpoint-new",
+                createdAt: 20,
+              },
+            },
+          ],
+        };
+      }
+      if (method === "sessions.compaction.list") {
+        return {
+          ok: true,
+          key: "agent:main:main",
+          checkpoints: [
+            {
+              checkpointId: "checkpoint-new",
+              sessionKey: "agent:main:main",
+              sessionId: "session-1",
+              createdAt: 20,
+              reason: "manual",
+            },
+          ],
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const state = createState(request, {
+      sessionsExpandedCheckpointKey: "agent:main:main",
+      sessionsResult: {
+        ts: 0,
+        path: "(multiple)",
+        count: 1,
+        defaults: {},
+        sessions: [
+          {
+            key: "agent:main:main",
+            kind: "direct",
+            updatedAt: 0,
+            compactionCheckpointCount: 3,
+            latestCompactionCheckpoint: {
+              checkpointId: "checkpoint-old",
+              createdAt: 10,
+            },
+          },
+        ],
+      } as never,
+      sessionsCheckpointItemsByKey: {
+        "agent:main:main": [
+          {
+            checkpointId: "checkpoint-old",
+            sessionKey: "agent:main:main",
+            sessionId: "session-old",
+            createdAt: 10,
+            reason: "manual",
+          },
+        ] as never,
+      },
+    });
+
+    await loadSessions(state);
+
+    expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {
+      includeGlobal: true,
+      includeUnknown: true,
+    });
+    expect(request).toHaveBeenNthCalledWith(2, "sessions.compaction.list", {
+      key: "agent:main:main",
+    });
+    expect(
+      state.sessionsCheckpointItemsByKey["agent:main:main"]?.map((item) => item.checkpointId),
+    ).toEqual(["checkpoint-new"]);
   });
 });

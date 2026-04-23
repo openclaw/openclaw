@@ -1,6 +1,8 @@
-import { createScopedChannelConfigAdapter } from "openclaw/plugin-sdk/channel-config-helpers";
-import type { ChannelPlugin } from "../runtime-api.js";
-import { buildChannelConfigSchema, formatAllowFromLowercase } from "../runtime-api.js";
+import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
+import {
+  adaptScopedAccountAccessor,
+  createScopedChannelConfigAdapter,
+} from "openclaw/plugin-sdk/channel-config-helpers";
 import {
   listZalouserAccountIds,
   resolveDefaultZalouserAccountId,
@@ -8,7 +10,10 @@ import {
   checkZcaAuthenticated,
   type ResolvedZalouserAccount,
 } from "./accounts.js";
+import type { ChannelPlugin } from "./channel-api.js";
+import { buildChannelConfigSchema, formatAllowFromLowercase } from "./channel-api.js";
 import { ZalouserConfigSchema } from "./config-schema.js";
+import { zalouserDoctor } from "./doctor.js";
 
 export const zalouserMeta = {
   id: "zalouser",
@@ -25,7 +30,7 @@ export const zalouserMeta = {
 const zalouserConfigAdapter = createScopedChannelConfigAdapter<ResolvedZalouserAccount>({
   sectionKey: "zalouser",
   listAccountIds: listZalouserAccountIds,
-  resolveAccount: (cfg, accountId) => resolveZalouserAccountSync({ cfg, accountId }),
+  resolveAccount: adaptScopedAccountAccessor(resolveZalouserAccountSync),
   defaultAccountId: resolveDefaultZalouserAccountId,
   clearBaseFields: [
     "profile",
@@ -48,7 +53,15 @@ export function createZalouserPluginBase(params: {
   setup: NonNullable<ChannelPlugin<ResolvedZalouserAccount>["setup"]>;
 }): Pick<
   ChannelPlugin<ResolvedZalouserAccount>,
-  "id" | "meta" | "setupWizard" | "capabilities" | "reload" | "configSchema" | "config" | "setup"
+  | "id"
+  | "meta"
+  | "setupWizard"
+  | "capabilities"
+  | "doctor"
+  | "reload"
+  | "configSchema"
+  | "config"
+  | "setup"
 > {
   return {
     id: "zalouser",
@@ -63,17 +76,16 @@ export function createZalouserPluginBase(params: {
       nativeCommands: false,
       blockStreaming: true,
     },
+    doctor: zalouserDoctor,
     reload: { configPrefixes: ["channels.zalouser"] },
     configSchema: buildChannelConfigSchema(ZalouserConfigSchema),
     config: {
       ...zalouserConfigAdapter,
       isConfigured: async (account) => await checkZcaAuthenticated(account.profile),
-      describeAccount: (account) => ({
-        accountId: account.accountId,
-        name: account.name,
-        enabled: account.enabled,
-        configured: undefined,
-      }),
+      describeAccount: (account) =>
+        describeAccountSnapshot({
+          account,
+        }),
     },
     setup: params.setup,
   };

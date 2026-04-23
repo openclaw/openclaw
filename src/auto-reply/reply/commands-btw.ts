@@ -1,3 +1,4 @@
+import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { runBtwSideQuestion } from "../../agents/btw.js";
 import { extractBtwQuestion } from "./btw-command.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
@@ -25,14 +26,22 @@ export const handleBtwCommand: CommandHandler = async (params, allowTextCommands
     };
   }
 
-  if (!params.sessionEntry?.sessionId) {
+  const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
+
+  if (!targetSessionEntry?.sessionId) {
     return {
       shouldContinue: false,
       reply: { text: "⚠️ /btw requires an active session with existing context." },
     };
   }
 
-  if (!params.agentDir) {
+  const sessionAgentId = params.sessionKey
+    ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
+    : params.agentId;
+  const agentDir =
+    (sessionAgentId ? resolveAgentDir(params.cfg, sessionAgentId) : undefined) ?? params.agentDir;
+
+  if (!agentDir) {
     return {
       shouldContinue: false,
       reply: {
@@ -45,11 +54,11 @@ export const handleBtwCommand: CommandHandler = async (params, allowTextCommands
     await params.typing?.startTypingLoop();
     const reply = await runBtwSideQuestion({
       cfg: params.cfg,
-      agentDir: params.agentDir,
+      agentDir,
       provider: params.provider,
       model: params.model,
       question,
-      sessionEntry: params.sessionEntry,
+      sessionEntry: targetSessionEntry,
       sessionStore: params.sessionStore,
       sessionKey: params.sessionKey,
       storePath: params.storePath,

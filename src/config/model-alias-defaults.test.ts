@@ -1,9 +1,24 @@
-import { describe, expect, it } from "vitest";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
+import { clearBundledProviderPolicySurfaceCache } from "../plugins/provider-public-artifacts.js";
 import { applyModelDefaults } from "./defaults.js";
 import type { OpenClawConfig } from "./types.js";
 
 describe("applyModelDefaults", () => {
+  beforeEach(() => {
+    clearBundledProviderPolicySurfaceCache();
+    vi.stubEnv(
+      "OPENCLAW_BUNDLED_PLUGINS_DIR",
+      path.resolve(import.meta.dirname, "../../extensions"),
+    );
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    clearBundledProviderPolicySurfaceCache();
+  });
+
   function buildProxyProviderConfig(overrides?: { contextWindow?: number; maxTokens?: number }) {
     return {
       models: {
@@ -14,7 +29,7 @@ describe("applyModelDefaults", () => {
             api: "openai-completions",
             models: [
               {
-                id: "gpt-5.2",
+                id: "gpt-5.4",
                 name: "GPT-5.2",
                 reasoning: false,
                 input: ["text"],
@@ -29,12 +44,41 @@ describe("applyModelDefaults", () => {
     } satisfies OpenClawConfig;
   }
 
+  function buildMistralProviderConfig(overrides?: {
+    modelId?: string;
+    contextWindow?: number;
+    maxTokens?: number;
+  }) {
+    return {
+      models: {
+        providers: {
+          mistral: {
+            baseUrl: "https://api.mistral.ai/v1",
+            apiKey: "sk-mistral", // pragma: allowlist secret
+            api: "openai-completions",
+            models: [
+              {
+                id: overrides?.modelId ?? "mistral-large-latest",
+                name: "Mistral",
+                reasoning: false,
+                input: ["text", "image"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: overrides?.contextWindow ?? 262_144,
+                maxTokens: overrides?.maxTokens ?? 262_144,
+              },
+            ],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+  }
+
   it("adds default aliases when models are present", () => {
     const cfg = {
       agents: {
         defaults: {
           models: {
-            "anthropic/claude-opus-4-6": {},
+            "anthropic/claude-opus-4-7": {},
             "openai/gpt-5.4": {},
           },
         },
@@ -42,7 +86,7 @@ describe("applyModelDefaults", () => {
     } satisfies OpenClawConfig;
     const next = applyModelDefaults(cfg);
 
-    expect(next.agents?.defaults?.models?.["anthropic/claude-opus-4-6"]?.alias).toBe("opus");
+    expect(next.agents?.defaults?.models?.["anthropic/claude-opus-4-7"]?.alias).toBe("opus");
     expect(next.agents?.defaults?.models?.["openai/gpt-5.4"]?.alias).toBe("gpt");
   });
 
@@ -51,7 +95,7 @@ describe("applyModelDefaults", () => {
       agents: {
         defaults: {
           models: {
-            "anthropic/claude-opus-4-5": { alias: "Opus" },
+            "anthropic/claude-opus-4-7": { alias: "Opus" },
           },
         },
       },
@@ -59,7 +103,7 @@ describe("applyModelDefaults", () => {
 
     const next = applyModelDefaults(cfg);
 
-    expect(next.agents?.defaults?.models?.["anthropic/claude-opus-4-5"]?.alias).toBe("Opus");
+    expect(next.agents?.defaults?.models?.["anthropic/claude-opus-4-7"]?.alias).toBe("Opus");
   });
 
   it("respects explicit empty alias disables", () => {
@@ -107,6 +151,16 @@ describe("applyModelDefaults", () => {
 
     expect(model?.contextWindow).toBe(32768);
     expect(model?.maxTokens).toBe(32768);
+  });
+
+  it("normalizes stale mistral maxTokens that matched the full context window", () => {
+    const cfg = buildMistralProviderConfig();
+
+    const next = applyModelDefaults(cfg);
+    const model = next.models?.providers?.mistral?.models?.[0];
+
+    expect(model?.contextWindow).toBe(262144);
+    expect(model?.maxTokens).toBe(16384);
   });
 
   it("defaults anthropic provider and model api to anthropic-messages", () => {

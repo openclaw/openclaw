@@ -2,12 +2,14 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { safeParseJsonWithSchema } from "openclaw/plugin-sdk/extension-shared";
+import { z } from "zod";
 import { getNostrRuntime } from "./runtime.js";
 
 const STORE_VERSION = 2;
 const PROFILE_STATE_VERSION = 1;
 
-type NostrBusStateV1 = {
+type _NostrBusStateV1 = {
   version: 1;
   /** Unix timestamp (seconds) of the last processed event */
   lastProcessedAt: number | null;
@@ -36,6 +38,33 @@ export type NostrProfileState = {
   lastPublishResults: Record<string, "ok" | "failed" | "timeout"> | null;
 };
 
+const NullableFiniteNumberSchema = z.number().finite().nullable().catch(null);
+const NostrBusStateV1Schema = z.object({
+  version: z.literal(1),
+  lastProcessedAt: NullableFiniteNumberSchema,
+  gatewayStartedAt: NullableFiniteNumberSchema,
+});
+
+const NostrBusStateSchema = z.object({
+  version: z.literal(2),
+  lastProcessedAt: NullableFiniteNumberSchema,
+  gatewayStartedAt: NullableFiniteNumberSchema,
+  recentEventIds: z
+    .array(z.unknown())
+    .catch([])
+    .transform((ids) => ids.filter((id): id is string => typeof id === "string")),
+});
+
+const NostrProfileStateSchema = z.object({
+  version: z.literal(1),
+  lastPublishedAt: NullableFiniteNumberSchema,
+  lastPublishedEventId: z.string().nullable().catch(null),
+  lastPublishResults: z
+    .record(z.string(), z.enum(["ok", "failed", "timeout"]))
+    .nullable()
+    .catch(null),
+});
+
 function normalizeAccountId(accountId?: string): string {
   const trimmed = accountId?.trim();
   if (!trimmed) {
@@ -60,36 +89,23 @@ function resolveNostrProfileStatePath(
 }
 
 function safeParseState(raw: string): NostrBusState | null {
-  try {
-    const parsed = JSON.parse(raw) as Partial<NostrBusState> & Partial<NostrBusStateV1>;
+  const parsedV2 = safeParseJsonWithSchema(NostrBusStateSchema, raw);
+  if (parsedV2) {
+    return parsedV2;
+  }
 
-    if (parsed?.version === 2) {
-      return {
-        version: 2,
-        lastProcessedAt: typeof parsed.lastProcessedAt === "number" ? parsed.lastProcessedAt : null,
-        gatewayStartedAt:
-          typeof parsed.gatewayStartedAt === "number" ? parsed.gatewayStartedAt : null,
-        recentEventIds: Array.isArray(parsed.recentEventIds)
-          ? parsed.recentEventIds.filter((x): x is string => typeof x === "string")
-          : [],
-      };
-    }
-
-    // Back-compat: v1 state files
-    if (parsed?.version === 1) {
-      return {
-        version: 2,
-        lastProcessedAt: typeof parsed.lastProcessedAt === "number" ? parsed.lastProcessedAt : null,
-        gatewayStartedAt:
-          typeof parsed.gatewayStartedAt === "number" ? parsed.gatewayStartedAt : null,
-        recentEventIds: [],
-      };
-    }
-
-    return null;
-  } catch {
+  const parsedV1 = safeParseJsonWithSchema(NostrBusStateV1Schema, raw);
+  if (!parsedV1) {
     return null;
   }
+
+  // Back-compat: v1 state files
+  return {
+    version: 2,
+    lastProcessedAt: parsedV1.lastProcessedAt,
+    gatewayStartedAt: parsedV1.gatewayStartedAt,
+    recentEventIds: [],
+  };
 }
 
 export async function readNostrBusState(params: {
@@ -162,26 +178,7 @@ export function computeSinceTimestamp(
 // ============================================================================
 
 function safeParseProfileState(raw: string): NostrProfileState | null {
-  try {
-    const parsed = JSON.parse(raw) as Partial<NostrProfileState>;
-
-    if (parsed?.version === 1) {
-      return {
-        version: 1,
-        lastPublishedAt: typeof parsed.lastPublishedAt === "number" ? parsed.lastPublishedAt : null,
-        lastPublishedEventId:
-          typeof parsed.lastPublishedEventId === "string" ? parsed.lastPublishedEventId : null,
-        lastPublishResults:
-          parsed.lastPublishResults && typeof parsed.lastPublishResults === "object"
-            ? parsed.lastPublishResults
-            : null,
-      };
-    }
-
-    return null;
-  } catch {
-    return null;
-  }
+  return safeParseJsonWithSchema(NostrProfileStateSchema, raw);
 }
 
 export async function readNostrProfileState(params: {

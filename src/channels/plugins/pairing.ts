@@ -1,12 +1,9 @@
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RuntimeEnv } from "../../runtime.js";
-import {
-  type ChannelId,
-  getChannelPlugin,
-  listChannelPlugins,
-  normalizeChannelId,
-} from "./index.js";
-import type { ChannelPairingAdapter } from "./types.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+import type { ChannelId } from "./channel-id.types.js";
+import type { ChannelPairingAdapter } from "./pairing.types.js";
+import { getChannelPlugin, listChannelPlugins, normalizeChannelId } from "./registry.js";
 
 export function listPairingChannels(): ChannelId[] {
   // Channel docking: pairing support is declared via plugin.pairing.
@@ -29,20 +26,18 @@ export function requirePairingAdapter(channelId: ChannelId): ChannelPairingAdapt
 }
 
 export function resolvePairingChannel(raw: unknown): ChannelId {
-  const value = (
+  const value =
     typeof raw === "string"
       ? raw
       : typeof raw === "number" || typeof raw === "boolean"
         ? String(raw)
-        : ""
-  )
-    .trim()
-    .toLowerCase();
-  const normalized = normalizeChannelId(value);
+        : "";
+  const normalizedValue = normalizeLowercaseStringOrEmpty(value);
+  const normalized = normalizeChannelId(normalizedValue);
   const channels = listPairingChannels();
   if (!normalized || !channels.includes(normalized)) {
     throw new Error(
-      `Invalid channel: ${value || "(empty)"} (expected one of: ${channels.join(", ")})`,
+      `Invalid channel: ${normalizedValue || "(empty)"} (expected one of: ${channels.join(", ")})`,
     );
   }
   return normalized;

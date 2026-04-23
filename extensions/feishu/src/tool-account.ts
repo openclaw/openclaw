@@ -1,24 +1,50 @@
 import type * as Lark from "@larksuiteoapi/node-sdk";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { OpenClawPluginApi } from "../runtime-api.js";
-import { resolveFeishuAccount } from "./accounts.js";
+import {
+  listFeishuAccountIds,
+  resolveFeishuAccount,
+  resolveFeishuRuntimeAccount,
+} from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { resolveToolsConfig } from "./tools-config.js";
 import type { FeishuToolsConfig, ResolvedFeishuAccount } from "./types.js";
 
 type AccountAwareParams = { accountId?: string };
 
-function normalizeOptionalAccountId(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
-}
-
-function readConfiguredDefaultAccountId(config: OpenClawPluginApi["config"]): string | undefined {
-  const value = (config?.channels?.feishu as { defaultAccount?: unknown } | undefined)
-    ?.defaultAccount;
-  if (typeof value !== "string") {
-    return undefined;
+function resolveImplicitToolAccountId(params: {
+  api: Pick<OpenClawPluginApi, "config">;
+  executeParams?: AccountAwareParams;
+  defaultAccountId?: string;
+}): string | undefined {
+  const explicitAccountId = normalizeOptionalString(params.executeParams?.accountId);
+  if (explicitAccountId) {
+    return explicitAccountId;
   }
-  return normalizeOptionalAccountId(value);
+
+  const contextualAccountId = normalizeOptionalString(params.defaultAccountId);
+  if (
+    contextualAccountId &&
+    listFeishuAccountIds(params.api.config).includes(contextualAccountId)
+  ) {
+    const contextualAccount = resolveFeishuAccount({
+      cfg: params.api.config,
+      accountId: contextualAccountId,
+    });
+    if (contextualAccount.enabled) {
+      return contextualAccountId;
+    }
+  }
+
+  const configuredDefaultAccountId = normalizeOptionalString(
+    (params.api.config?.channels?.feishu as { defaultAccount?: unknown } | undefined)
+      ?.defaultAccount,
+  );
+  if (configuredDefaultAccountId) {
+    return configuredDefaultAccountId;
+  }
+
+  return undefined;
 }
 
 export function resolveFeishuToolAccount(params: {
@@ -29,12 +55,9 @@ export function resolveFeishuToolAccount(params: {
   if (!params.api.config) {
     throw new Error("Feishu config unavailable");
   }
-  return resolveFeishuAccount({
+  return resolveFeishuRuntimeAccount({
     cfg: params.api.config,
-    accountId:
-      normalizeOptionalAccountId(params.executeParams?.accountId) ??
-      readConfiguredDefaultAccountId(params.api.config) ??
-      normalizeOptionalAccountId(params.defaultAccountId),
+    accountId: resolveImplicitToolAccountId(params),
   });
 }
 

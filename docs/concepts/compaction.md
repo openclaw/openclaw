@@ -1,25 +1,43 @@
 ---
-summary: "Context window + compaction: how OpenClaw keeps sessions under model limits"
+summary: "How OpenClaw summarizes long conversations to stay within model limits"
 read_when:
   - You want to understand auto-compaction and /compact
   - You are debugging long sessions hitting context limits
 title: "Compaction"
 ---
 
-# Context Window & Compaction
+Every model has a context window -- the maximum number of tokens it can process.
+When a conversation approaches that limit, OpenClaw **compacts** older messages
+into a summary so the chat can continue.
 
-Every model has a **context window** (max tokens it can see). Long-running chats accumulate messages and tool results; once the window is tight, OpenClaw **compacts** older history to stay within limits.
+## How it works
 
-## What compaction is
+1. Older conversation turns are summarized into a compact entry.
+2. The summary is saved in the session transcript.
+3. Recent messages are kept intact.
 
-Compaction **summarizes older conversation** into a compact summary entry and keeps recent messages intact. The summary is stored in the session history, so future requests use:
+When OpenClaw splits history into compaction chunks, it keeps assistant tool
+calls paired with their matching `toolResult` entries. If a split point lands
+inside a tool block, OpenClaw moves the boundary so the pair stays together and
+the current unsummarized tail is preserved.
 
-- The compaction summary
-- Recent messages after the compaction point
+The full conversation history stays on disk. Compaction only changes what the
+model sees on the next turn.
 
-Compaction **persists** in the session’s JSONL history.
+## Auto-compaction
 
-## Configuration
+Auto-compaction is on by default. It runs when the session nears the context
+limit, or when the model returns a context-overflow error (in which case
+OpenClaw compacts and retries). Typical overflow signatures include
+`request_too_large`, `context length exceeded`, `input exceeds the maximum
+number of tokens`, `input token count exceeds the maximum number of input
+tokens`, `input is too long for the model`, and `ollama error: context length
+exceeded`.
+
+<Info>
+Before compacting, OpenClaw automatically reminds the agent to save important
+notes to [memory](/concepts/memory) files. This prevents context loss.
+</Info>
 
 Use the `agents.defaults.compaction` setting in your `openclaw.json` to configure compaction behavior (mode, target tokens, etc.).
 Compaction summarization preserves opaque identifiers by default (`identifierPolicy: "strict"`). You can override this with `identifierPolicy: "off"` or provide custom text with `identifierPolicy: "custom"` and `identifierInstructions`.
@@ -52,7 +70,27 @@ This also works with local models, for example a second Ollama model dedicated t
 }
 ```
 
-When unset, compaction uses the agent's primary model.
+When unset, compaction uses the agent’s primary model.
+
+## Pluggable compaction providers
+
+Plugins can register a custom compaction provider via `registerCompactionProvider()` on the plugin API. When a provider is registered and configured, OpenClaw delegates summarization to it instead of the built-in LLM pipeline.
+
+To use a registered provider, set the provider id in your config:
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "compaction": {
+        "provider": "my-provider"
+      }
+    }
+  }
+}
+```
+
+Setting a `provider` automatically forces `mode: "safeguard"`. Providers receive the same compaction instructions and identifier-preservation policy as the built-in path, and OpenClaw still preserves recent-turn and split-turn suffix context after provider output. If the provider fails or returns an empty result, OpenClaw falls back to built-in LLM summarization.
 
 ## Auto-compaction (default on)
 
@@ -68,56 +106,80 @@ durable notes to disk. See [Memory](/concepts/memory) for details and config.
 
 ## Manual compaction
 
-Use `/compact` (optionally with instructions) to force a compaction pass:
+Type `/compact` in any chat to force a compaction. Add instructions to guide
+the summary:
 
 ```
-/compact Focus on decisions and open questions
+/compact Focus on the API design decisions
 ```
 
-## Context window source
+## Using a different model
 
-Context window is model-specific. OpenClaw uses the model definition from the configured provider catalog to determine limits.
+By default, compaction uses your agent's primary model. You can use a more
+capable model for better summaries:
+
+```json5
+{
+  agents: {
+    defaults: {
+      compaction: {
+        model: "openrouter/anthropic/claude-sonnet-4-6",
+      },
+    },
+  },
+}
+```
+
+## Compaction notices
+
+By default, compaction runs silently. To show brief notices when compaction
+starts and when it completes, enable `notifyUser`:
+
+```json5
+{
+  agents: {
+    defaults: {
+      compaction: {
+        notifyUser: true,
+      },
+    },
+  },
+}
+```
+
+When enabled, the user sees short status messages around each compaction run
+(for example, "Compacting context..." and "Compaction complete").
 
 ## Compaction vs pruning
 
-- **Compaction**: summarises and **persists** in JSONL.
-- **Session pruning**: trims old **tool results** only, **in-memory**, per request.
+|                  | Compaction                    | Pruning                          |
+| ---------------- | ----------------------------- | -------------------------------- |
+| **What it does** | Summarizes older conversation | Trims old tool results           |
+| **Saved?**       | Yes (in session transcript)   | No (in-memory only, per request) |
+| **Scope**        | Entire conversation           | Tool results only                |
 
-See [/concepts/session-pruning](/concepts/session-pruning) for pruning details.
+[Session pruning](/concepts/session-pruning) is a lighter-weight complement that
+trims tool output without summarizing.
 
-## OpenAI server-side compaction
+## Troubleshooting
 
-OpenClaw also supports OpenAI Responses server-side compaction hints for
-compatible direct OpenAI models. This is separate from local OpenClaw
-compaction and can run alongside it.
+**Compacting too often?** The model's context window may be small, or tool
+outputs may be large. Try enabling
+[session pruning](/concepts/session-pruning).
 
-- Local compaction: OpenClaw summarizes and persists into session JSONL.
-- Server-side compaction: OpenAI compacts context on the provider side when
-  `store` + `context_management` are enabled.
+**Context feels stale after compaction?** Use `/compact Focus on <topic>` to
+guide the summary, or enable the [memory flush](/concepts/memory) so notes
+survive.
 
-See [OpenAI provider](/providers/openai) for model params and overrides.
+**Need a clean slate?** `/new` starts a fresh session without compacting.
 
-## Custom context engines
+For advanced configuration (reserve tokens, identifier preservation, custom
+context engines, OpenAI server-side compaction), see the
+[Session Management Deep Dive](/reference/session-management-compaction).
 
-Compaction behavior is owned by the active
-[context engine](/concepts/context-engine). The legacy engine uses the built-in
-summarization described above. Plugin engines (selected via
-`plugins.slots.contextEngine`) can implement any compaction strategy — DAG
-summaries, vector retrieval, incremental condensation, etc.
+## Related
 
-When a plugin engine sets `ownsCompaction: true`, OpenClaw delegates all
-compaction decisions to the engine and does not run built-in auto-compaction.
-
-When `ownsCompaction` is `false` or unset, OpenClaw may still use Pi's
-built-in in-attempt auto-compaction, but the active engine's `compact()` method
-still handles `/compact` and overflow recovery. There is no automatic fallback
-to the legacy engine's compaction path.
-
-If you are building a non-owning context engine, implement `compact()` by
-calling `delegateCompactionToRuntime(...)` from `openclaw/plugin-sdk/core`.
-
-## Tips
-
-- Use `/compact` when sessions feel stale or context is bloated.
-- Large tool outputs are already truncated; pruning can further reduce tool-result buildup.
-- If you need a fresh slate, `/new` or `/reset` starts a new session id.
+- [Session](/concepts/session) — session management and lifecycle
+- [Session Pruning](/concepts/session-pruning) — trimming tool results
+- [Context](/concepts/context) — how context is built for agent turns
+- [Hooks](/automation/hooks) — compaction lifecycle hooks (before_compaction, after_compaction)

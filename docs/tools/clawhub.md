@@ -1,21 +1,58 @@
 ---
-summary: "ClawHub guide: public skills registry + CLI workflows"
+summary: "ClawHub guide: public registry, native OpenClaw install flows, and ClawHub CLI workflows"
 read_when:
   - Introducing ClawHub to new users
-  - Installing, searching, or publishing skills
+  - Installing, searching, or publishing skills or plugins
   - Explaining ClawHub CLI flags and sync behavior
 title: "ClawHub"
 ---
 
-# ClawHub
+ClawHub is the public registry for **OpenClaw skills and plugins**.
 
-ClawHub is the **public skill registry for OpenClaw**. It is a free service: all skills are public, open, and visible to everyone for sharing and reuse. A skill is just a folder with a `SKILL.md` file (plus supporting text files). You can browse skills in the web app or use the CLI to search, install, update, and publish skills.
+- Use native `openclaw` commands to search/install/update skills and install
+  plugins from ClawHub.
+- Use the separate `clawhub` CLI when you need registry auth, publish, delete,
+  undelete, or sync workflows.
 
 Site: [clawhub.ai](https://clawhub.ai)
 
+## Native OpenClaw flows
+
+Skills:
+
+```bash
+openclaw skills search "calendar"
+openclaw skills install <skill-slug>
+openclaw skills update --all
+```
+
+Plugins:
+
+```bash
+openclaw plugins install clawhub:<package>
+openclaw plugins update --all
+```
+
+Bare npm-safe plugin specs are also tried against ClawHub before npm:
+
+```bash
+openclaw plugins install openclaw-codex-app-server
+```
+
+Native `openclaw` commands install into your active workspace and persist source
+metadata so later `update` calls can stay on ClawHub.
+
+Plugin installs validate advertised `pluginApi` and `minGatewayVersion`
+compatibility before archive install runs, so incompatible hosts fail closed
+early instead of partially installing the package.
+
+`openclaw plugins install clawhub:...` only accepts installable plugin families.
+If a ClawHub package is actually a skill, OpenClaw stops and points you at
+`openclaw skills install <slug>` instead.
+
 ## What ClawHub is
 
-- A public registry for OpenClaw skills.
+- A public registry for OpenClaw skills and plugins.
 - A versioned store of skill bundles and metadata.
 - A discovery surface for search, tags, and usage signals.
 
@@ -45,16 +82,17 @@ If you want to add new capabilities to your OpenClaw agent, ClawHub is the easie
 
 ## Quick start (non-technical)
 
-1. Install the CLI (see next section).
-2. Search for something you need:
-   - `clawhub search "calendar"`
-3. Install a skill:
-   - `clawhub install <skill-slug>`
-4. Start a new OpenClaw session so it picks up the new skill.
+1. Search for something you need:
+   - `openclaw skills search "calendar"`
+2. Install a skill:
+   - `openclaw skills install <skill-slug>`
+3. Start a new OpenClaw session so it picks up the new skill.
+4. If you want to publish or manage registry auth, install the separate
+   `clawhub` CLI too.
 
-## Install the CLI
+## Install the ClawHub CLI
 
-Pick one:
+You only need this for registry-authenticated workflows such as publish/sync:
 
 ```bash
 npm i -g clawhub
@@ -66,7 +104,20 @@ pnpm add -g clawhub
 
 ## How it fits into OpenClaw
 
-By default, the CLI installs skills into `./skills` under your current working directory. If an OpenClaw workspace is configured, `clawhub` falls back to that workspace unless you override `--workdir` (or `CLAWHUB_WORKDIR`). OpenClaw loads workspace skills from `<workspace>/skills` and will pick them up in the **next** session. If you already use `~/.openclaw/skills` or bundled skills, workspace skills take precedence.
+Native `openclaw skills install` installs into the active workspace `skills/`
+directory. `openclaw plugins install clawhub:...` records a normal managed
+plugin install plus ClawHub source metadata for updates.
+
+Anonymous ClawHub plugin installs also fail closed for private packages.
+Community or other non-official channels can still install, but OpenClaw warns
+so operators can review source and verification before enabling them.
+
+The separate `clawhub` CLI also installs skills into `./skills` under your
+current working directory. If an OpenClaw workspace is configured, `clawhub`
+falls back to that workspace unless you override `--workdir` (or
+`CLAWHUB_WORKDIR`). OpenClaw loads workspace skills from `<workspace>/skills`
+and will pick them up in the **next** session. If you already use
+`~/.openclaw/skills` or bundled skills, workspace skills take precedence.
 
 For more detail on how skills are loaded, shared, and gated, see
 [Skills](/tools/skills).
@@ -160,14 +211,22 @@ List:
 
 - `clawhub list` (reads `.clawhub/lock.json`)
 
-Publish:
+Publish skills:
 
-- `clawhub publish <path>`
+- `clawhub skill publish <path>`
 - `--slug <slug>`: Skill slug.
 - `--name <name>`: Display name.
 - `--version <version>`: Semver version.
 - `--changelog <text>`: Changelog text (can be empty).
 - `--tags <tags>`: Comma-separated tags (default: `latest`).
+
+Publish plugins:
+
+- `clawhub package publish <source>`
+- `<source>` can be a local folder, `owner/repo`, `owner/repo@ref`, or a GitHub URL.
+- `--dry-run`: Build the exact publish plan without uploading anything.
+- `--json`: Emit machine-readable output for CI.
+- `--source-repo`, `--source-commit`, `--source-ref`: Optional overrides when auto-detection is not enough.
 
 Delete/undelete (owner/admin only):
 
@@ -210,7 +269,7 @@ clawhub update --all
 For a single skill folder:
 
 ```bash
-clawhub publish ./my-skill --slug my-skill --name "My Skill" --version 1.0.0 --tags latest
+clawhub skill publish ./my-skill --slug my-skill --name "My Skill" --version 1.0.0 --tags latest
 ```
 
 To scan and back up many skills at once:
@@ -218,6 +277,42 @@ To scan and back up many skills at once:
 ```bash
 clawhub sync --all
 ```
+
+### Publish a plugin from GitHub
+
+```bash
+clawhub package publish your-org/your-plugin --dry-run
+clawhub package publish your-org/your-plugin
+clawhub package publish your-org/your-plugin@v1.0.0
+clawhub package publish https://github.com/your-org/your-plugin
+```
+
+Code plugins must include the required OpenClaw metadata in `package.json`:
+
+```json
+{
+  "name": "@myorg/openclaw-my-plugin",
+  "version": "1.0.0",
+  "type": "module",
+  "openclaw": {
+    "extensions": ["./src/index.ts"],
+    "runtimeExtensions": ["./dist/index.js"],
+    "compat": {
+      "pluginApi": ">=2026.3.24-beta.2",
+      "minGatewayVersion": "2026.3.24-beta.2"
+    },
+    "build": {
+      "openclawVersion": "2026.3.24-beta.2",
+      "pluginSdkVersion": "2026.3.24-beta.2"
+    }
+  }
+}
+```
+
+Published packages should ship built JavaScript and point `runtimeExtensions`
+at that output. Git checkout installs can still fall back to TypeScript source
+when no built files exist, but built runtime entries avoid runtime TypeScript
+compilation in startup, doctor, and plugin loading paths.
 
 ## Advanced details (technical)
 

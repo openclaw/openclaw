@@ -1,35 +1,46 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 
-const mocks = vi.hoisted(() => ({
-  syncExternalCliCredentials: vi.fn((store: AuthProfileStore) => {
-    store.profiles["qwen-portal:default"] = {
-      type: "oauth",
-      provider: "qwen-portal",
+const resolveExternalAuthProfilesWithPluginsMock = vi.fn(() => [
+  {
+    profileId: "minimax-portal:default",
+    credential: {
+      type: "oauth" as const,
+      provider: "minimax-portal",
       access: "access-token",
       refresh: "refresh-token",
       expires: Date.now() + 60_000,
-    };
-    return true;
-  }),
+    },
+    persistence: "runtime-only" as const,
+  },
+]);
+
+vi.mock("../plugins/provider-runtime.js", () => ({
+  resolveExternalAuthProfilesWithPlugins: resolveExternalAuthProfilesWithPluginsMock,
 }));
 
-vi.mock("./auth-profiles/external-cli-sync.js", () => ({
-  syncExternalCliCredentials: mocks.syncExternalCliCredentials,
-}));
+let clearRuntimeAuthProfileStoreSnapshots: typeof import("./auth-profiles.js").clearRuntimeAuthProfileStoreSnapshots;
+let loadAuthProfileStoreForRuntime: typeof import("./auth-profiles.js").loadAuthProfileStoreForRuntime;
 
-const { loadAuthProfileStoreForRuntime } = await import("./auth-profiles.js");
+describe("auth profiles read-only external auth overlay", () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ clearRuntimeAuthProfileStoreSnapshots, loadAuthProfileStoreForRuntime } =
+      await import("./auth-profiles.js"));
+    clearRuntimeAuthProfileStoreSnapshots();
+    resolveExternalAuthProfilesWithPluginsMock.mockClear();
+  });
 
-describe("auth profiles read-only external CLI sync", () => {
   afterEach(() => {
+    clearRuntimeAuthProfileStoreSnapshots();
     vi.clearAllMocks();
   });
 
-  it("syncs external CLI credentials in-memory without writing auth-profiles.json in read-only mode", () => {
+  it("overlays runtime-only external auth without writing auth-profiles.json in read-only mode", () => {
     const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-readonly-sync-"));
     try {
       const authPath = path.join(agentDir, "auth-profiles.json");
@@ -47,17 +58,14 @@ describe("auth profiles read-only external CLI sync", () => {
 
       const loaded = loadAuthProfileStoreForRuntime(agentDir, { readOnly: true });
 
-      expect(mocks.syncExternalCliCredentials).toHaveBeenCalledWith(
-        expect.any(Object),
-        expect.objectContaining({ log: false }),
-      );
-      expect(loaded.profiles["qwen-portal:default"]).toMatchObject({
+      expect(resolveExternalAuthProfilesWithPluginsMock).toHaveBeenCalled();
+      expect(loaded.profiles["minimax-portal:default"]).toMatchObject({
         type: "oauth",
-        provider: "qwen-portal",
+        provider: "minimax-portal",
       });
 
       const persisted = JSON.parse(fs.readFileSync(authPath, "utf8")) as AuthProfileStore;
-      expect(persisted.profiles["qwen-portal:default"]).toBeUndefined();
+      expect(persisted.profiles["minimax-portal:default"]).toBeUndefined();
       expect(persisted.profiles["openai:default"]).toMatchObject({
         type: "api_key",
         provider: "openai",

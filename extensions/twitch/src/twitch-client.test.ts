@@ -9,7 +9,8 @@
  * - Error handling and edge cases
  */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveTwitchToken } from "./token.js";
 import { TwitchClientManager } from "./twitch-client.js";
 import type { ChannelLogSink, TwitchAccountConfig, TwitchChatMessage } from "./types.js";
 
@@ -21,12 +22,10 @@ const mockQuit = vi.fn();
 const mockUnbind = vi.fn();
 
 // Event handler storage for testing
-// oxlint-disable-next-line typescript/no-explicit-any
 const messageHandlers: Array<(channel: string, user: string, message: string, msg: any) => void> =
   [];
 
 // Mock functions that track handlers and return unbind objects
-// oxlint-disable-next-line typescript/no-explicit-any
 const mockOnMessage = vi.fn((handler: any) => {
   messageHandlers.push(handler);
   return { unbind: mockUnbind };
@@ -59,10 +58,8 @@ const mockAuthProvider = {
 };
 
 vi.mock("@twurple/auth", () => ({
-  StaticAuthProvider: class {
-    constructor(...args: unknown[]) {
-      mockAuthProvider.constructor(...args);
-    }
+  StaticAuthProvider: function StaticAuthProvider(...args: unknown[]) {
+    mockAuthProvider.constructor(...args);
   },
   RefreshingAuthProvider: class {
     addUserForToken = mockAddUserForToken;
@@ -83,6 +80,7 @@ vi.mock("./token.js", () => ({
 describe("TwitchClientManager", () => {
   let manager: TwitchClientManager;
   let mockLogger: ChannelLogSink;
+  let resolveTwitchTokenMock: ReturnType<typeof vi.mocked<typeof resolveTwitchToken>>;
 
   const testAccount: TwitchAccountConfig = {
     username: "testbot",
@@ -100,7 +98,11 @@ describe("TwitchClientManager", () => {
     enabled: true,
   };
 
-  beforeEach(async () => {
+  beforeAll(() => {
+    resolveTwitchTokenMock = vi.mocked(resolveTwitchToken);
+  });
+
+  beforeEach(() => {
     // Clear all mocks first
     vi.clearAllMocks();
 
@@ -108,8 +110,7 @@ describe("TwitchClientManager", () => {
     messageHandlers.length = 0;
 
     // Re-set up the default token mock implementation after clearing
-    const { resolveTwitchToken } = await import("./token.js");
-    vi.mocked(resolveTwitchToken).mockReturnValue({
+    resolveTwitchTokenMock.mockReturnValue({
       token: "oauth:mock-token-from-tests",
       source: "config" as const,
     });
@@ -176,8 +177,7 @@ describe("TwitchClientManager", () => {
       };
 
       // Override the mock to return a specific token for this test
-      const { resolveTwitchToken } = await import("./token.js");
-      vi.mocked(resolveTwitchToken).mockReturnValue({
+      resolveTwitchTokenMock.mockReturnValue({
         token: "oauth:actualtoken123",
         source: "config" as const,
       });
@@ -189,8 +189,7 @@ describe("TwitchClientManager", () => {
 
     it("should use token directly when no oauth: prefix", async () => {
       // Override the mock to return a token without oauth: prefix
-      const { resolveTwitchToken } = await import("./token.js");
-      vi.mocked(resolveTwitchToken).mockReturnValue({
+      resolveTwitchTokenMock.mockReturnValue({
         token: "oauth:mock-token-from-tests",
         source: "config" as const,
       });
@@ -221,8 +220,7 @@ describe("TwitchClientManager", () => {
 
     it("should throw error when token is missing", async () => {
       // Override the mock to return empty token
-      const { resolveTwitchToken } = await import("./token.js");
-      vi.mocked(resolveTwitchToken).mockReturnValue({
+      resolveTwitchTokenMock.mockReturnValue({
         token: "",
         source: "none" as const,
       });
@@ -271,7 +269,6 @@ describe("TwitchClientManager", () => {
 
       // Check the stored handler is handler2
       const key = manager.getAccountKey(testAccount);
-      // oxlint-disable-next-line typescript/no-explicit-any
       expect((manager as any).messageHandlers.get(key)).toBe(handler2);
     });
   });
@@ -293,9 +290,7 @@ describe("TwitchClientManager", () => {
       await manager.disconnect(testAccount);
 
       const key = manager.getAccountKey(testAccount);
-      // oxlint-disable-next-line typescript/no-explicit-any
       expect((manager as any).clients.has(key)).toBe(false);
-      // oxlint-disable-next-line typescript/no-explicit-any
       expect((manager as any).messageHandlers.has(key)).toBe(false);
     });
 
@@ -314,7 +309,6 @@ describe("TwitchClientManager", () => {
       expect(mockQuit).toHaveBeenCalledTimes(1);
 
       const key2 = manager.getAccountKey(testAccount2);
-      // oxlint-disable-next-line typescript/no-explicit-any
       expect((manager as any).clients.has(key2)).toBe(true);
     });
   });
@@ -327,9 +321,7 @@ describe("TwitchClientManager", () => {
       await manager.disconnectAll();
 
       expect(mockQuit).toHaveBeenCalledTimes(2);
-      // oxlint-disable-next-line typescript/no-explicit-any
       expect((manager as any).clients.size).toBe(0);
-      // oxlint-disable-next-line typescript/no-explicit-any
       expect((manager as any).messageHandlers.size).toBe(0);
     });
 
@@ -348,8 +340,10 @@ describe("TwitchClientManager", () => {
     it("should send message successfully", async () => {
       const result = await manager.sendMessage(testAccount, "testchannel", "Hello, world!");
 
-      expect(result.ok).toBe(true);
-      expect(result.messageId).toBeDefined();
+      expect(result).toMatchObject({ ok: true });
+      expect(result.messageId).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+      );
       expect(mockSay).toHaveBeenCalledWith("testchannel", "Hello, world!");
     });
 
@@ -395,7 +389,6 @@ describe("TwitchClientManager", () => {
 
     it("should create client if not already connected", async () => {
       // Clear the existing client
-      // oxlint-disable-next-line typescript/no-explicit-any
       (manager as any).clients.clear();
 
       // Reset connect call count for this specific test

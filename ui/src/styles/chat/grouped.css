@@ -24,17 +24,12 @@
   gap: 2px;
   flex: 1 1 auto;
   max-width: min(900px, 68%);
+  align-items: flex-start;
 }
 
 /* User messages align content right */
 .chat-group.user .chat-group-messages {
-  align-items: stretch;
-}
-
-@media (max-width: 600px) {
-  .chat-group-messages {
-    max-width: 82%;
-  }
+  align-items: flex-end;
 }
 
 .chat-group.user .chat-group-footer {
@@ -66,7 +61,9 @@
   background: none;
   border: none;
   cursor: pointer;
-  padding: 2px;
+  padding: 4px;
+  min-width: 24px;
+  min-height: 24px;
   border-radius: var(--radius-sm, 4px);
   color: var(--muted);
   opacity: 0;
@@ -133,7 +130,7 @@
 .chat-divider__label {
   padding: 2px 10px;
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: rgba(255, 255, 255, 0.02);
 }
 
@@ -141,7 +138,7 @@
 .chat-avatar {
   width: 36px;
   height: 36px;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   background: var(--panel-strong);
   display: grid;
   place-items: center;
@@ -193,14 +190,14 @@ img.chat-avatar {
   transition:
     background var(--duration-fast) ease-out,
     border-color var(--duration-fast) ease-out;
-  width: 100%;
+  width: auto;
   max-width: 100%;
   box-sizing: border-box;
   word-wrap: break-word;
 }
 
 .chat-bubble.has-copy {
-  padding-right: 36px;
+  padding-right: 70px;
 }
 
 .chat-bubble-actions {
@@ -228,15 +225,8 @@ img.chat-avatar {
 
 .chat-copy-btn,
 .chat-expand-btn {
-  border: 1px solid var(--border);
   background: var(--bg);
   color: var(--muted);
-  border-radius: var(--radius-md);
-  padding: 4px 6px;
-  font-size: 14px;
-  line-height: 1;
-  cursor: pointer;
-  transition: background 120ms ease-out;
 }
 
 .chat-copy-btn__icon {
@@ -246,14 +236,10 @@ img.chat-avatar {
   position: relative;
 }
 
-.chat-copy-btn__icon svg {
+.chat-copy-btn__icon svg,
+.chat-expand-btn__icon svg {
   width: 14px;
   height: 14px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.5px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .chat-copy-btn__icon-copy,
@@ -274,11 +260,6 @@ img.chat-avatar {
 
 .chat-copy-btn[data-copied="1"] .chat-copy-btn__icon-check {
   opacity: 1;
-}
-
-.chat-copy-btn:hover,
-.chat-expand-btn:hover {
-  background: var(--bg-hover);
 }
 
 .chat-copy-btn[data-copying="1"] {
@@ -308,16 +289,6 @@ img.chat-avatar {
   display: inline-flex;
   width: 14px;
   height: 14px;
-}
-
-.chat-expand-btn__icon svg {
-  width: 14px;
-  height: 14px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.5px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 /* Light mode: restore borders */
@@ -506,4 +477,26 @@ img.chat-avatar {
 
 .chat-delete-confirm__yes:hover {
   background: #dc2626;
+}
+
+@media (max-width: 768px) {
+  .chat-group {
+    margin-left: 0;
+    margin-right: 0;
+  }
+
+  .chat-group-messages {
+    max-width: 82%;
+  }
+}
+
+@media (max-width: 400px) {
+  .chat-group-messages {
+    max-width: 100%;
+  }
+
+  .chat-avatar,
+  img.chat-avatar {
+    display: none;
+  }
 }

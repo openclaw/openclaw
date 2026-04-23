@@ -7,8 +7,6 @@ read_when:
 title: "Raspberry Pi"
 ---
 
-# Raspberry Pi
-
 Run a persistent, always-on OpenClaw Gateway on a Raspberry Pi. Since the Pi is just the gateway (models run in the cloud via API), even a modest Pi handles the workload well.
 
 ## Prerequisites
@@ -95,8 +93,8 @@ Run a persistent, always-on OpenClaw Gateway on a Raspberry Pi. Since the Pi is 
   <Step title="Verify">
     ```bash
     openclaw status
-    sudo systemctl status openclaw
-    journalctl -u openclaw -f
+    systemctl --user status openclaw-gateway.service
+    journalctl --user -u openclaw-gateway.service -f
     ```
   </Step>
 
@@ -146,7 +144,7 @@ sudo systemctl disable bluetooth
 
 **Slow performance** -- Use a USB SSD instead of an SD card. Check for CPU throttling with `vcgencmd get_throttled` (should return `0x0`).
 
-**Service will not start** -- Check logs with `journalctl -u openclaw --no-pager -n 100` and run `openclaw doctor --non-interactive`.
+**Service will not start** -- Check logs with `journalctl --user -u openclaw-gateway.service --no-pager -n 100` and run `openclaw doctor --non-interactive`. If this is a headless Pi, also verify lingering is enabled: `sudo loginctl enable-linger "$(whoami)"`.
 
 **ARM binary issues** -- If a skill fails with "exec format error", check whether the binary has an ARM64 build. Verify architecture with `uname -m` (should show `aarch64`).
 

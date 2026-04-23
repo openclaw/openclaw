@@ -1,11 +1,12 @@
+import { normalizeAccountId } from "openclaw/plugin-sdk/account-resolution";
 import type { ChannelGroupContext } from "openclaw/plugin-sdk/channel-contract";
 import {
   resolveToolsBySender,
   type GroupToolPolicyBySenderConfig,
   type GroupToolPolicyConfig,
 } from "openclaw/plugin-sdk/channel-policy";
-import { normalizeHyphenSlug } from "openclaw/plugin-sdk/core";
-import { inspectSlackAccount } from "./account-inspect.js";
+import { normalizeHyphenSlug } from "openclaw/plugin-sdk/string-normalization-runtime";
+import { mergeSlackAccountConfig, resolveDefaultSlackAccountId } from "./accounts.js";
 
 type SlackChannelPolicyEntry = {
   requireMention?: boolean;
@@ -16,12 +17,14 @@ type SlackChannelPolicyEntry = {
 function resolveSlackChannelPolicyEntry(
   params: ChannelGroupContext,
 ): SlackChannelPolicyEntry | undefined {
-  const account = inspectSlackAccount({
-    cfg: params.cfg,
-    accountId: params.accountId,
-  });
-  const channels = (account.channels ?? {}) as Record<string, SlackChannelPolicyEntry>;
-  if (Object.keys(channels).length === 0) {
+  const accountId = normalizeAccountId(
+    params.accountId ?? resolveDefaultSlackAccountId(params.cfg),
+  );
+  const channels = mergeSlackAccountConfig(params.cfg, accountId).channels as
+    | Record<string, SlackChannelPolicyEntry>
+    | undefined;
+  const channelMap = channels ?? {};
+  if (Object.keys(channelMap).length === 0) {
     return undefined;
   }
   const channelId = params.groupId?.trim();
@@ -35,11 +38,11 @@ function resolveSlackChannelPolicyEntry(
     normalizedName,
   ].filter(Boolean);
   for (const candidate of candidates) {
-    if (candidate && channels[candidate]) {
-      return channels[candidate];
+    if (candidate && channelMap[candidate]) {
+      return channelMap[candidate];
     }
   }
-  return channels["*"];
+  return channelMap["*"];
 }
 
 function resolveSenderToolsEntry(

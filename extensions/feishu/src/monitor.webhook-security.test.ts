@@ -1,3 +1,4 @@
+import { createConnection } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createFeishuClientMockModule,
@@ -27,6 +28,15 @@ vi.mock("@larksuiteoapi/node-sdk", () => ({
   ),
 }));
 
+vi.mock("./monitor.state.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./monitor.state.js")>();
+  return {
+    ...actual,
+    FEISHU_WEBHOOK_BODY_TIMEOUT_MS: 50,
+  };
+});
+
+import type { RuntimeEnv } from "../runtime-api.js";
 import {
   clearFeishuWebhookRateLimitStateForTest,
   getFeishuWebhookRateLimitStateSizeForTest,
@@ -34,6 +44,49 @@ import {
   monitorFeishuProvider,
   stopFeishuMonitor,
 } from "./monitor.js";
+import { monitorWebhook } from "./monitor.transport.js";
+import type { ResolvedFeishuAccount } from "./types.js";
+
+async function waitForSlowBodyTimeoutResponse(
+  url: string,
+  timeoutMs: number,
+): Promise<{ body: string; elapsedMs: number }> {
+  return await new Promise<{ body: string; elapsedMs: number }>((resolve, reject) => {
+    const target = new URL(url);
+    const startedAt = Date.now();
+    let response = "";
+    const socket = createConnection(
+      {
+        host: target.hostname,
+        port: Number(target.port),
+      },
+      () => {
+        socket.write(`POST ${target.pathname} HTTP/1.1\r\n`);
+        socket.write(`Host: ${target.hostname}\r\n`);
+        socket.write("Content-Type: application/json\r\n");
+        socket.write("Content-Length: 65536\r\n");
+        socket.write("\r\n");
+        socket.write('{"type":"url_verification"');
+      },
+    );
+
+    socket.setEncoding("utf8");
+    socket.on("error", () => {});
+    socket.on("data", (chunk) => {
+      response += chunk;
+      if (response.includes("Request body timeout")) {
+        clearTimeout(failTimer);
+        socket.destroy();
+        resolve({ body: response, elapsedMs: Date.now() - startedAt });
+      }
+    });
+
+    const failTimer = setTimeout(() => {
+      socket.destroy();
+      reject(new Error(`timeout response did not arrive within ${timeoutMs}ms`));
+    }, timeoutMs);
+  });
+}
 
 afterEach(() => {
   clearFeishuWebhookRateLimitStateForTest();
@@ -68,6 +121,33 @@ describe("Feishu webhook security hardening", () => {
     await expect(monitorFeishuProvider({ config: cfg })).rejects.toThrow(/requires encryptKey/i);
   });
 
+  it("refuses to start the webhook transport without encryptKey", async () => {
+    const account = {
+      accountId: "transport-missing-encrypt-key",
+      config: {
+        enabled: true,
+        connectionMode: "webhook",
+        webhookHost: "127.0.0.1",
+        webhookPort: await getFreePort(),
+        webhookPath: "/hook-transport-missing-encrypt",
+      },
+    } as ResolvedFeishuAccount;
+
+    await expect(
+      monitorWebhook({
+        account,
+        accountId: account.accountId,
+        runtime: {
+          log: vi.fn(),
+          error: vi.fn(),
+          exit: vi.fn(),
+        } as RuntimeEnv,
+        abortSignal: new AbortController().signal,
+        eventDispatcher: {} as never,
+      }),
+    ).rejects.toThrow(/requires encryptKey/i);
+  });
+
   it("returns 415 for POST requests without json content type", async () => {
     probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_open_id" });
     await withRunningWebhookMonitor(
@@ -87,6 +167,48 @@ describe("Feishu webhook security hardening", () => {
 
         expect(response.status).toBe(415);
         expect(await response.text()).toBe("Unsupported Media Type");
+      },
+    );
+  });
+
+  it("rejects oversized unsigned webhook bodies with 413 before signature verification", async () => {
+    probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_open_id" });
+    await withRunningWebhookMonitor(
+      {
+        accountId: "payload-too-large",
+        path: "/hook-payload-too-large",
+        verificationToken: "verify_token",
+        encryptKey: "encrypt_key",
+      },
+      monitorFeishuProvider,
+      async (url) => {
+        const response = await fetch(url, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ payload: "x".repeat(70 * 1024) }),
+        });
+
+        expect(response.status).toBe(413);
+        expect(await response.text()).toBe("Payload too large");
+      },
+    );
+  });
+
+  it("drops slow-body webhook requests within the tightened pre-auth timeout", async () => {
+    probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_open_id" });
+    await withRunningWebhookMonitor(
+      {
+        accountId: "slow-body-timeout",
+        path: "/hook-slow-body-timeout",
+        verificationToken: "verify_token",
+        encryptKey: "encrypt_key",
+      },
+      monitorFeishuProvider,
+      async (url) => {
+        const result = await waitForSlowBodyTimeoutResponse(url, 1_000);
+        expect(result.body).toContain("408 Request Timeout");
+        expect(result.body).toContain("Request body timeout");
+        expect(result.elapsedMs).toBeLessThan(500);
       },
     );
   });

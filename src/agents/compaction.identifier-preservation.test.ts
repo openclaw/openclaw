@@ -2,10 +2,9 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import * as piCodingAgent from "@mariozechner/pi-coding-agent";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { buildCompactionSummarizationInstructions, summarizeInStages } from "./compaction.js";
 
-vi.mock("@mariozechner/pi-coding-agent", async (importOriginal) => {
-  const actual = await importOriginal<typeof piCodingAgent>();
+vi.mock("@mariozechner/pi-coding-agent", async () => {
+  const actual = await vi.importActual<typeof piCodingAgent>("@mariozechner/pi-coding-agent");
   return {
     ...actual,
     generateSummary: vi.fn(),
@@ -13,7 +12,10 @@ vi.mock("@mariozechner/pi-coding-agent", async (importOriginal) => {
 });
 
 const mockGenerateSummary = vi.mocked(piCodingAgent.generateSummary);
-type SummarizeInStagesInput = Parameters<typeof summarizeInStages>[0];
+type SummarizeInStagesInput = Parameters<typeof import("./compaction.js").summarizeInStages>[0];
+
+const { buildCompactionSummarizationInstructions, summarizeInStages } =
+  await import("./compaction.js");
 
 function makeMessage(index: number, size = 1200): AgentMessage {
   return {
@@ -56,7 +58,7 @@ describe("compaction identifier-preservation instructions", () => {
   }
 
   function firstSummaryInstructions() {
-    return mockGenerateSummary.mock.calls[0]?.[5];
+    return extractSummaryInstructions(mockGenerateSummary.mock.calls[0]);
   }
 
   it("injects identifier-preservation guidance even without custom instructions", async () => {
@@ -69,6 +71,8 @@ describe("compaction identifier-preservation instructions", () => {
     expect(firstSummaryInstructions()).toContain("UUIDs");
     expect(firstSummaryInstructions()).toContain("IPs");
     expect(firstSummaryInstructions()).toContain("ports");
+    expect(firstSummaryInstructions()).not.toContain("tokens");
+    expect(firstSummaryInstructions()).not.toContain("API keys");
   });
 
   it("keeps identifier-preservation guidance when custom instructions are provided", async () => {
@@ -92,7 +96,9 @@ describe("compaction identifier-preservation instructions", () => {
 
     expect(mockGenerateSummary.mock.calls.length).toBeGreaterThan(1);
     for (const call of mockGenerateSummary.mock.calls) {
-      expect(call[5]).toContain("Preserve all opaque identifiers exactly as written");
+      expect(extractSummaryInstructions(call)).toContain(
+        "Preserve all opaque identifiers exactly as written",
+      );
     }
   });
 
@@ -105,18 +111,38 @@ describe("compaction identifier-preservation instructions", () => {
     });
 
     const mergedCall = mockGenerateSummary.mock.calls.at(-1);
-    const instructions = mergedCall?.[5] ?? "";
+    const instructions = extractSummaryInstructions(mergedCall);
     expect(instructions).toContain("Merge these partial summaries into a single cohesive summary.");
     expect(instructions).toContain("Prioritize customer-visible regressions.");
     expect((instructions.match(/Additional focus:/g) ?? []).length).toBe(1);
   });
 });
 
+function extractSummaryInstructions(call: unknown[] | undefined): string {
+  if (!call) {
+    return "";
+  }
+  for (let index = call.length - 1; index >= 4; index -= 1) {
+    const arg = call[index];
+    if (
+      typeof arg === "string" &&
+      (arg.includes("Preserve all opaque identifiers exactly as written") ||
+        arg.includes("Merge these partial summaries into a single cohesive summary.") ||
+        arg.includes("Additional focus:"))
+    ) {
+      return arg;
+    }
+  }
+  return "";
+}
+
 describe("buildCompactionSummarizationInstructions", () => {
   it("returns base instructions when no custom text is provided", () => {
     const result = buildCompactionSummarizationInstructions();
     expect(result).toContain("Preserve all opaque identifiers exactly as written");
     expect(result).not.toContain("Additional focus:");
+    expect(result).not.toContain("tokens");
+    expect(result).not.toContain("API keys");
   });
 
   it("appends custom instructions in a stable format", () => {

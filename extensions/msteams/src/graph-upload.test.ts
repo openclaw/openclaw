@@ -1,5 +1,6 @@
+import { withFetchPreconnect } from "openclaw/plugin-sdk/testing";
 import { describe, expect, it, vi } from "vitest";
-import { withFetchPreconnect } from "../../../test/helpers/extensions/fetch-mock.js";
+import { buildTeamsFileInfoCard } from "./graph-chat.js";
 import { resolveGraphChatId, uploadToOneDrive, uploadToSharePoint } from "./graph-upload.js";
 
 describe("graph upload helpers", () => {
@@ -33,6 +34,7 @@ describe("graph upload helpers", () => {
         headers: expect.objectContaining({
           Authorization: "Bearer graph-token",
           "Content-Type": "application/octet-stream",
+          "User-Agent": expect.stringMatching(/^teams\.ts\[apps\]\/.+ OpenClaw\/.+$/),
         }),
       }),
     );
@@ -70,6 +72,7 @@ describe("graph upload helpers", () => {
         headers: expect.objectContaining({
           Authorization: "Bearer graph-token",
           "Content-Type": "application/octet-stream",
+          "User-Agent": expect.stringMatching(/^teams\.ts\[apps\]\/.+ OpenClaw\/.+$/),
         }),
       }),
     );
@@ -111,7 +114,7 @@ describe("resolveGraphChatId", () => {
     const result = await resolveGraphChatId({
       botFrameworkConversationId: "19:abc123@thread.tacv2",
       tokenProvider,
-      fetchFn,
+      fetchFn: withFetchPreconnect(fetchFn),
     });
     // Should short-circuit without making any API call
     expect(fetchFn).not.toHaveBeenCalled();
@@ -131,18 +134,30 @@ describe("resolveGraphChatId", () => {
       botFrameworkConversationId: "a:1abc_bot_framework_dm_id",
       userAadObjectId: "user-aad-object-id-123",
       tokenProvider,
-      fetchFn,
+      fetchFn: withFetchPreconnect(fetchFn),
     });
 
     expect(fetchFn).toHaveBeenCalledWith(
       expect.stringContaining("/me/chats"),
       expect.objectContaining({
-        headers: expect.objectContaining({ Authorization: "Bearer graph-token" }),
+        headers: expect.objectContaining({
+          Authorization: "Bearer graph-token",
+          "User-Agent": expect.stringMatching(/^teams\.ts\[apps\]\/.+ OpenClaw\/.+$/),
+        }),
       }),
     );
-    // Should filter by user AAD object ID
-    const callUrl = (fetchFn.mock.calls[0] as unknown[])[0];
-    expect(callUrl).toContain("user-aad-object-id-123");
+    const firstCall = fetchFn.mock.calls[0];
+    if (!firstCall) {
+      throw new Error("expected Graph chat lookup request");
+    }
+    const [callUrlRaw] = firstCall as unknown as [string, RequestInit?];
+    const callUrl = new URL(callUrlRaw);
+    expect(callUrl.origin).toBe("https://graph.microsoft.com");
+    expect(callUrl.pathname).toBe("/v1.0/me/chats");
+    expect(callUrl.searchParams.get("$filter")).toBe(
+      "chatType eq 'oneOnOne' and members/any(m:m/microsoft.graph.aadUserConversationMember/userId eq 'user-aad-object-id-123')",
+    );
+    expect(callUrl.searchParams.get("$select")).toBe("id");
     expect(result).toBe("19:dm-chat-id@unq.gbl.spaces");
   });
 
@@ -158,7 +173,7 @@ describe("resolveGraphChatId", () => {
     const result = await resolveGraphChatId({
       botFrameworkConversationId: "8:orgid:user-object-id",
       tokenProvider,
-      fetchFn,
+      fetchFn: withFetchPreconnect(fetchFn),
     });
 
     expect(fetchFn).toHaveBeenCalledOnce();
@@ -178,7 +193,7 @@ describe("resolveGraphChatId", () => {
       botFrameworkConversationId: "a:1unknown_dm",
       userAadObjectId: "some-user",
       tokenProvider,
-      fetchFn,
+      fetchFn: withFetchPreconnect(fetchFn),
     });
 
     expect(result).toBeNull();
@@ -197,9 +212,47 @@ describe("resolveGraphChatId", () => {
       botFrameworkConversationId: "a:1some_dm_id",
       userAadObjectId: "some-user",
       tokenProvider,
-      fetchFn,
+      fetchFn: withFetchPreconnect(fetchFn),
     });
 
     expect(result).toBeNull();
+  });
+});
+
+describe("buildTeamsFileInfoCard", () => {
+  it("extracts a unique id from quoted etags and lowercases file extensions", () => {
+    expect(
+      buildTeamsFileInfoCard({
+        eTag: '"{ABC-123},42"',
+        name: "Quarterly.Report.PDF",
+        webDavUrl: "https://sharepoint.example.com/file.pdf",
+      }),
+    ).toEqual({
+      contentType: "application/vnd.microsoft.teams.card.file.info",
+      contentUrl: "https://sharepoint.example.com/file.pdf",
+      name: "Quarterly.Report.PDF",
+      content: {
+        uniqueId: "ABC-123",
+        fileType: "pdf",
+      },
+    });
+  });
+
+  it("keeps the raw etag when no version suffix exists and handles extensionless files", () => {
+    expect(
+      buildTeamsFileInfoCard({
+        eTag: "plain-etag",
+        name: "README",
+        webDavUrl: "https://sharepoint.example.com/readme",
+      }),
+    ).toEqual({
+      contentType: "application/vnd.microsoft.teams.card.file.info",
+      contentUrl: "https://sharepoint.example.com/readme",
+      name: "README",
+      content: {
+        uniqueId: "plain-etag",
+        fileType: "",
+      },
+    });
   });
 });

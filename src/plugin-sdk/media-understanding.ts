@@ -16,12 +16,11 @@ export type {
 export {
   describeImageWithModel,
   describeImagesWithModel,
-} from "../media-understanding/providers/image-runtime.js";
-export { transcribeOpenAiCompatibleAudio } from "../media-understanding/providers/openai-compatible-audio.js";
+} from "../media-understanding/image-runtime.js";
 export {
-  assertOkOrThrowHttpError,
-  normalizeBaseUrl,
-  postJsonRequest,
-  postTranscriptionRequest,
-  requireTranscriptionText,
-} from "../media-understanding/providers/shared.js";
+  buildOpenAiCompatibleVideoRequestBody,
+  coerceOpenAiCompatibleVideoText,
+  resolveMediaUnderstandingString,
+  type OpenAiCompatibleVideoPayload,
+} from "../media-understanding/openai-compatible-video.ts";
+export { transcribeOpenAiCompatibleAudio } from "../media-understanding/openai-compatible-audio.js";

@@ -1,6 +1,7 @@
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { chromium } from "playwright-core";
 import type { OpenClawConfig } from "../api.js";
 import type { DiffRenderOptions, DiffTheme } from "./types.js";
@@ -11,6 +12,7 @@ const SHARED_BROWSER_KEY = "__default__";
 const IMAGE_SIZE_LIMIT_ERROR = "Diff frame did not render within image size limits.";
 const PDF_REFERENCE_PAGE_HEIGHT_PX = 1_056;
 const MAX_PDF_PAGES = 50;
+const LOCAL_VIEWER_BASE_HREF = "http://127.0.0.1/plugins/diffs/view/local/local";
 
 export type DiffScreenshotter = {
   screenshotHtml(params: {
@@ -254,9 +256,10 @@ export class PlaywrightDiffScreenshotter implements DiffScreenshotter {
       if (error instanceof Error && error.message === IMAGE_SIZE_LIMIT_ERROR) {
         throw error;
       }
-      const reason = error instanceof Error ? error.message : String(error);
+      const reason = formatErrorMessage(error);
       throw new Error(
         `Diff PNG/PDF rendering requires a Chromium-compatible browser. Set browser.executablePath or install Chrome/Chromium. ${reason}`,
+        { cause: error },
       );
     } finally {
       await page?.close().catch(() => {});
@@ -274,7 +277,7 @@ function injectBaseHref(html: string): string {
   if (html.includes("<base ")) {
     return html;
   }
-  return html.replace("<head>", '<head><base href="http://127.0.0.1/" />');
+  return html.replace("<head>", `<head><base href="${LOCAL_VIEWER_BASE_HREF}" />`);
 }
 
 async function resolveBrowserExecutablePath(config: OpenClawConfig): Promise<string | undefined> {

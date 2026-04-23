@@ -86,6 +86,14 @@ function createProps(overrides: Partial<AgentsProps> = {}): AgentsProps {
       error: null,
       result: null,
     },
+    toolsEffective: {
+      loading: false,
+      error: null,
+      result: null,
+    },
+    runtimeSessionKey: "main",
+    runtimeSessionMatchesSelectedAgent: false,
+    modelCatalog: [],
     onRefresh: () => undefined,
     onSelectAgent: () => undefined,
     onSelectPanel: () => undefined,
@@ -136,15 +144,12 @@ describe("renderAgents", () => {
     );
     await Promise.resolve();
 
-    const skillsTab = Array.from(container.querySelectorAll<HTMLButtonElement>(".agent-tab")).find(
+    let skillsTab = Array.from(container.querySelectorAll<HTMLButtonElement>(".agent-tab")).find(
       (button) => button.textContent?.includes("Skills"),
     );
 
     expect(skillsTab?.textContent?.trim()).toBe("Skills");
-  });
 
-  it("shows the selected agent's skills count when the report matches", async () => {
-    const container = document.createElement("div");
     render(
       renderAgents(
         createProps({
@@ -165,7 +170,7 @@ describe("renderAgents", () => {
     );
     await Promise.resolve();
 
-    const skillsTab = Array.from(container.querySelectorAll<HTMLButtonElement>(".agent-tab")).find(
+    skillsTab = Array.from(container.querySelectorAll<HTMLButtonElement>(".agent-tab")).find(
       (button) => button.textContent?.includes("Skills"),
     );
 

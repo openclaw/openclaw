@@ -1,6 +1,17 @@
-import { createAccountListHelpers } from "openclaw/plugin-sdk/account-helpers";
-import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
+import {
+  createAccountListHelpers,
+  normalizeAccountId,
+  resolveMergedAccountConfig,
+} from "openclaw/plugin-sdk/account-resolution";
+import { resolveChannelStreamingChunkMode } from "openclaw/plugin-sdk/channel-streaming";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeBlueBubblesAccountsMap,
+  normalizeBlueBubblesPrivateNetworkAliases,
+  resolveBlueBubblesEffectiveAllowPrivateNetworkFromConfig,
+  resolveBlueBubblesPrivateNetworkConfigValue as resolveBlueBubblesPrivateNetworkConfigValueFromRecord,
+} from "./accounts-normalization.js";
 import { hasConfiguredSecretInput, normalizeSecretInputString } from "./secret-input.js";
 import { normalizeBlueBubblesServerUrl, type BlueBubblesAccountConfig } from "./types.js";
 
@@ -19,51 +30,67 @@ const {
 } = createAccountListHelpers("bluebubbles");
 export { listBlueBubblesAccountIds, resolveDefaultBlueBubblesAccountId };
 
-function resolveAccountConfig(
-  cfg: OpenClawConfig,
-  accountId: string,
-): BlueBubblesAccountConfig | undefined {
-  const accounts = cfg.channels?.bluebubbles?.accounts;
-  if (!accounts || typeof accounts !== "object") {
-    return undefined;
-  }
-  return accounts[accountId] as BlueBubblesAccountConfig | undefined;
-}
-
 function mergeBlueBubblesAccountConfig(
   cfg: OpenClawConfig,
   accountId: string,
 ): BlueBubblesAccountConfig {
-  const base = (cfg.channels?.bluebubbles ?? {}) as BlueBubblesAccountConfig & {
-    accounts?: unknown;
-    defaultAccount?: unknown;
+  const channelConfig = normalizeBlueBubblesPrivateNetworkAliases(
+    cfg.channels?.bluebubbles as BlueBubblesAccountConfig | undefined,
+  );
+  const accounts = normalizeBlueBubblesAccountsMap(
+    cfg.channels?.bluebubbles?.accounts as
+      | Record<string, Partial<BlueBubblesAccountConfig>>
+      | undefined,
+  );
+  const merged = resolveMergedAccountConfig<BlueBubblesAccountConfig>({
+    channelConfig,
+    accounts,
+    accountId,
+    omitKeys: ["defaultAccount"],
+    normalizeAccountId,
+    nestedObjectKeys: ["network", "catchup"],
+  });
+  return {
+    ...merged,
+    chunkMode: resolveChannelStreamingChunkMode(merged) ?? merged.chunkMode ?? "length",
   };
-  const { accounts: _ignored, defaultAccount: _ignoredDefaultAccount, ...rest } = base;
-  const account = resolveAccountConfig(cfg, accountId) ?? {};
-  const chunkMode = account.chunkMode ?? rest.chunkMode ?? "length";
-  return { ...rest, ...account, chunkMode };
 }
 
 export function resolveBlueBubblesAccount(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): ResolvedBlueBubblesAccount {
-  const accountId = normalizeAccountId(params.accountId);
+  const accountId = normalizeAccountId(
+    params.accountId ?? resolveDefaultBlueBubblesAccountId(params.cfg),
+  );
   const baseEnabled = params.cfg.channels?.bluebubbles?.enabled;
   const merged = mergeBlueBubblesAccountConfig(params.cfg, accountId);
   const accountEnabled = merged.enabled !== false;
   const serverUrl = normalizeSecretInputString(merged.serverUrl);
-  const password = normalizeSecretInputString(merged.password);
+  const _password = normalizeSecretInputString(merged.password);
   const configured = Boolean(serverUrl && hasConfiguredSecretInput(merged.password));
   const baseUrl = serverUrl ? normalizeBlueBubblesServerUrl(serverUrl) : undefined;
   return {
     accountId,
     enabled: baseEnabled !== false && accountEnabled,
-    name: merged.name?.trim() || undefined,
+    name: normalizeOptionalString(merged.name),
     config: merged,
     configured,
     baseUrl,
   };
+}
+
+export function resolveBlueBubblesPrivateNetworkConfigValue(
+  config: BlueBubblesAccountConfig | null | undefined,
+): boolean | undefined {
+  return resolveBlueBubblesPrivateNetworkConfigValueFromRecord(config);
+}
+
+export function resolveBlueBubblesEffectiveAllowPrivateNetwork(params: {
+  baseUrl?: string;
+  config?: BlueBubblesAccountConfig | null;
+}): boolean {
+  return resolveBlueBubblesEffectiveAllowPrivateNetworkFromConfig(params);
 }
 
 export function listEnabledBlueBubblesAccounts(cfg: OpenClawConfig): ResolvedBlueBubblesAccount[] {

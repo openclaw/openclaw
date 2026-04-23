@@ -1,3 +1,5 @@
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+
 const warningFilterKey = Symbol.for("openclaw.warning-filter");
 
 export type ProcessWarning = {
@@ -63,10 +65,10 @@ function normalizeWarningArgs(args: unknown[]): ProcessWarning {
 }
 
 export function installProcessWarningFilter(): void {
-  const globalState = globalThis as typeof globalThis & {
-    [warningFilterKey]?: ProcessWarningInstallState;
-  };
-  if (globalState[warningFilterKey]?.installed) {
+  const state = resolveGlobalSingleton<ProcessWarningInstallState>(warningFilterKey, () => ({
+    installed: false,
+  }));
+  if (state.installed) {
     return;
   }
 
@@ -89,11 +91,10 @@ export function installProcessWarningFilter(): void {
       process.emit("warning", emitted);
       return;
     }
-    return Reflect.apply(originalEmitWarning, process, args);
+    Reflect.apply(originalEmitWarning, process, args);
+    return;
   }) as typeof process.emitWarning;
 
   process.emitWarning = wrappedEmitWarning;
-  globalState[warningFilterKey] = {
-    installed: true,
-  };
+  state.installed = true;
 }

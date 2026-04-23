@@ -29,6 +29,8 @@ export type BoundaryFileOpenResult =
   | { ok: true; path: string; fd: number; stat: fs.Stats; rootRealPath: string }
   | { ok: false; reason: BoundaryFileOpenFailureReason; error?: unknown };
 
+export type BoundaryFileOpenFailure = Extract<BoundaryFileOpenResult, { ok: false }>;
+
 export type OpenBoundaryFileSyncParams = {
   absolutePath: string;
   rootPath: string;
@@ -87,6 +89,26 @@ export function openBoundaryFileSync(params: OpenBoundaryFileSyncParams): Bounda
     allowedType: params.allowedType,
     ioFs,
   });
+}
+
+export function matchBoundaryFileOpenFailure<T>(
+  failure: BoundaryFileOpenFailure,
+  handlers: {
+    path?: (failure: BoundaryFileOpenFailure) => T;
+    validation?: (failure: BoundaryFileOpenFailure) => T;
+    io?: (failure: BoundaryFileOpenFailure) => T;
+    fallback: (failure: BoundaryFileOpenFailure) => T;
+  },
+): T {
+  switch (failure.reason) {
+    case "path":
+      return handlers.path ? handlers.path(failure) : handlers.fallback(failure);
+    case "validation":
+      return handlers.validation ? handlers.validation(failure) : handlers.fallback(failure);
+    case "io":
+      return handlers.io ? handlers.io(failure) : handlers.fallback(failure);
+  }
+  return handlers.fallback(failure);
 }
 
 function openBoundaryFileResolved(params: {

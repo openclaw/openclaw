@@ -1,6 +1,14 @@
 import type { MsgContext } from "../auto-reply/templating.js";
-import type { OpenClawConfig } from "../config/config.js";
-import { recordSessionMetaFromInbound, resolveStorePath } from "../config/sessions.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+
+let inboundSessionRuntimePromise: Promise<
+  typeof import("../config/sessions/inbound.runtime.js")
+> | null = null;
+
+function loadInboundSessionRuntime() {
+  inboundSessionRuntimePromise ??= import("../config/sessions/inbound.runtime.js");
+  return inboundSessionRuntimePromise;
+}
 
 export async function recordInboundSessionMetaSafe(params: {
   cfg: OpenClawConfig;
@@ -9,11 +17,12 @@ export async function recordInboundSessionMetaSafe(params: {
   ctx: MsgContext;
   onError?: (error: unknown) => void;
 }): Promise<void> {
-  const storePath = resolveStorePath(params.cfg.session?.store, {
+  const runtime = await loadInboundSessionRuntime();
+  const storePath = runtime.resolveStorePath(params.cfg.session?.store, {
     agentId: params.agentId,
   });
   try {
-    await recordSessionMetaFromInbound({
+    await runtime.recordSessionMetaFromInbound({
       storePath,
       sessionKey: params.sessionKey,
       ctx: params.ctx,

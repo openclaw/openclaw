@@ -1,3 +1,5 @@
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+
 const REPLY_CACHE_MAX = 2000;
 const REPLY_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 
@@ -20,11 +22,6 @@ const blueBubblesReplyCacheByMessageId = new Map<string, BlueBubblesReplyCacheEn
 const blueBubblesShortIdToUuid = new Map<string, string>();
 const blueBubblesUuidToShortId = new Map<string, string>();
 let blueBubblesShortIdCounter = 0;
-
-function trimOrUndefined(value?: string | null): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
-}
 
 function generateShortId(): string {
   blueBubblesShortIdCounter += 1;
@@ -68,7 +65,7 @@ export function rememberBlueBubblesReplyCache(
     break;
   }
   while (blueBubblesReplyCacheByMessageId.size > REPLY_CACHE_MAX) {
-    const oldest = blueBubblesReplyCacheByMessageId.keys().next().value as string | undefined;
+    const oldest = blueBubblesReplyCacheByMessageId.keys().next().value;
     if (!oldest) {
       break;
     }
@@ -158,10 +155,10 @@ export function resolveReplyContextFromCache(params: {
     return null;
   }
 
-  const chatGuid = trimOrUndefined(params.chatGuid);
-  const chatIdentifier = trimOrUndefined(params.chatIdentifier);
-  const cachedChatGuid = trimOrUndefined(cached.chatGuid);
-  const cachedChatIdentifier = trimOrUndefined(cached.chatIdentifier);
+  const chatGuid = normalizeOptionalString(params.chatGuid);
+  const chatIdentifier = normalizeOptionalString(params.chatIdentifier);
+  const cachedChatGuid = normalizeOptionalString(cached.chatGuid);
+  const cachedChatIdentifier = normalizeOptionalString(cached.chatIdentifier);
   const chatId = typeof params.chatId === "number" ? params.chatId : undefined;
   const cachedChatId = typeof cached.chatId === "number" ? cached.chatId : undefined;
 

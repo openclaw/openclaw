@@ -1,4 +1,10 @@
-import type { ChannelMessageActionName } from "../../channels/plugins/types.js";
+import { getBootstrapChannelPlugin } from "../../channels/plugins/bootstrap-registry.js";
+import type { ChannelMessageActionName } from "../../channels/plugins/types.public.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
+import { hasPotentialPluginActionParam } from "./message-action-param-keys.js";
 
 export type MessageActionTargetMode = "to" | "channelId" | "none";
 
@@ -59,21 +65,16 @@ export const MESSAGE_ACTION_TARGET_MODE: Record<ChannelMessageActionName, Messag
     "set-profile": "none",
     "set-presence": "none",
     "download-file": "none",
+    "upload-file": "to",
   };
 
 type ActionTargetAliasSpec = {
   aliases: string[];
-  channels?: string[];
 };
 
 const ACTION_TARGET_ALIASES: Partial<Record<ChannelMessageActionName, ActionTargetAliasSpec>> = {
-  read: { aliases: ["messageId"], channels: ["feishu"] },
   unsend: { aliases: ["messageId"] },
   edit: { aliases: ["messageId"] },
-  pin: { aliases: ["messageId"], channels: ["feishu"] },
-  unpin: { aliases: ["messageId"], channels: ["feishu"] },
-  "list-pins": { aliases: ["chatId"], channels: ["feishu"] },
-  "channel-info": { aliases: ["chatId"], channels: ["feishu"] },
   react: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
   renameGroup: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
   setGroupIcon: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
@@ -81,6 +82,28 @@ const ACTION_TARGET_ALIASES: Partial<Record<ChannelMessageActionName, ActionTarg
   removeParticipant: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
   leaveGroup: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
 };
+
+function listActionTargetAliasSpecs(
+  action: ChannelMessageActionName,
+  params: Record<string, unknown>,
+  channel?: string,
+): ActionTargetAliasSpec[] {
+  const specs: ActionTargetAliasSpec[] = [];
+  const coreSpec = ACTION_TARGET_ALIASES[action];
+  if (coreSpec) {
+    specs.push(coreSpec);
+  }
+  const normalizedChannel = normalizeOptionalLowercaseString(channel);
+  if (!normalizedChannel || !hasPotentialPluginActionParam(params)) {
+    return specs;
+  }
+  const plugin = getBootstrapChannelPlugin(normalizedChannel);
+  const channelSpec = plugin?.actions?.messageActionTargetAliases?.[action];
+  if (channelSpec) {
+    specs.push(channelSpec);
+  }
+  return specs;
+}
 
 export function actionRequiresTarget(action: ChannelMessageActionName): boolean {
   return MESSAGE_ACTION_TARGET_MODE[action] !== "none";
@@ -91,32 +114,28 @@ export function actionHasTarget(
   params: Record<string, unknown>,
   options?: { channel?: string },
 ): boolean {
-  const to = typeof params.to === "string" ? params.to.trim() : "";
+  const to = normalizeOptionalString(params.to) ?? "";
   if (to) {
     return true;
   }
-  const channelId = typeof params.channelId === "string" ? params.channelId.trim() : "";
+  const channelId = normalizeOptionalString(params.channelId) ?? "";
   if (channelId) {
     return true;
   }
-  const spec = ACTION_TARGET_ALIASES[action];
-  if (!spec) {
+  const specs = listActionTargetAliasSpecs(action, params, options?.channel);
+  if (specs.length === 0) {
     return false;
   }
-  if (
-    spec.channels &&
-    (!options?.channel || !spec.channels.includes(options.channel.trim().toLowerCase()))
-  ) {
-    return false;
-  }
-  return spec.aliases.some((alias) => {
-    const value = params[alias];
-    if (typeof value === "string") {
-      return value.trim().length > 0;
-    }
-    if (typeof value === "number") {
-      return Number.isFinite(value);
-    }
-    return false;
-  });
+  return specs.some((spec) =>
+    spec.aliases.some((alias) => {
+      const value = params[alias];
+      if (typeof value === "string") {
+        return Boolean(normalizeOptionalString(value));
+      }
+      if (typeof value === "number") {
+        return Number.isFinite(value);
+      }
+      return false;
+    }),
+  );
 }

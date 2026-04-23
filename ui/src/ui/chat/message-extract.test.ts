@@ -42,6 +42,41 @@ describe("extractTextCached", () => {
     expect(extractText(message)).toBe("Final user answer");
     expect(extractTextCached(message)).toBe("Final user answer");
   });
+
+  it("prefers final_answer assistant text over commentary text", () => {
+    const message = {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "thinking like caveman",
+          textSignature: JSON.stringify({ v: 1, id: "msg_commentary", phase: "commentary" }),
+        },
+        {
+          type: "text",
+          text: "Actual final answer",
+          textSignature: JSON.stringify({ v: 1, id: "msg_final", phase: "final_answer" }),
+        },
+      ],
+    };
+    expect(extractText(message)).toBe("Actual final answer");
+    expect(extractTextCached(message)).toBe("Actual final answer");
+  });
+
+  it("does not render commentary-only assistant text", () => {
+    const message = {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "thinking like caveman",
+          textSignature: JSON.stringify({ v: 1, id: "msg_commentary", phase: "commentary" }),
+        },
+      ],
+    };
+    expect(extractText(message)).toBeNull();
+    expect(extractTextCached(message)).toBeNull();
+  });
 });
 
 describe("extractThinkingCached", () => {

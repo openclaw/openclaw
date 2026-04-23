@@ -1,6 +1,12 @@
 import fs from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { onDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
+import { importFreshModule } from "../../test/helpers/import-fresh.js";
+import {
+  emitDiagnosticEvent,
+  onDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  setDiagnosticsEnabledForProcess,
+} from "../infra/diagnostic-events.js";
 import {
   diagnosticSessionStates,
   getDiagnosticSessionStateCountForTest,
@@ -8,12 +14,23 @@ import {
   pruneDiagnosticSessionStates,
   resetDiagnosticSessionStateForTest,
 } from "./diagnostic-session-state.js";
+import { getDiagnosticStabilitySnapshot } from "./diagnostic-stability.js";
 import {
   logSessionStateChange,
   resetDiagnosticStateForTest,
   resolveStuckSessionWarnMs,
   startDiagnosticHeartbeat,
 } from "./diagnostic.js";
+
+function createEmitMemorySampleMock() {
+  return vi.fn(() => ({
+    rssBytes: 100,
+    heapTotalBytes: 80,
+    heapUsedBytes: 40,
+    externalBytes: 10,
+    arrayBuffersBytes: 5,
+  }));
+}
 
 describe("diagnostic session state pruning", () => {
   beforeEach(() => {
@@ -54,12 +71,12 @@ describe("diagnostic session state pruning", () => {
   it("reuses keyed session state when later looked up by sessionId", () => {
     const keyed = getDiagnosticSessionState({
       sessionId: "s1",
-      sessionKey: "agent:main:discord:channel:c1",
+      sessionKey: "agent:main:demo-channel:channel:c1",
     });
     const bySessionId = getDiagnosticSessionState({ sessionId: "s1" });
 
     expect(bySessionId).toBe(keyed);
-    expect(bySessionId.sessionKey).toBe("agent:main:discord:channel:c1");
+    expect(bySessionId.sessionKey).toBe("agent:main:demo-channel:channel:c1");
     expect(getDiagnosticSessionStateCountForTest()).toBe(1);
   });
 });
@@ -72,11 +89,13 @@ describe("logger import side effects", () => {
 
   it("does not mkdir at import time", async () => {
     vi.useRealTimers();
-    vi.resetModules();
 
     const mkdirSpy = vi.spyOn(fs, "mkdirSync");
 
-    await import("./logger.js");
+    await importFreshModule<typeof import("./logger.js")>(
+      import.meta.url,
+      "./logger.js?scope=diagnostic-mkdir",
+    );
 
     expect(mkdirSpy).not.toHaveBeenCalled();
   });
@@ -114,6 +133,81 @@ describe("stuck session diagnostics threshold", () => {
     }
 
     expect(events.filter((event) => event.type === "session.stuck")).toHaveLength(1);
+  });
+
+  it("starts and stops the stability recorder with the heartbeat lifecycle", () => {
+    startDiagnosticHeartbeat({
+      diagnostics: {
+        enabled: true,
+      },
+    });
+    logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+
+    expect(getDiagnosticStabilitySnapshot({ limit: 10 }).events).toContainEqual(
+      expect.objectContaining({
+        type: "session.state",
+        outcome: "processing",
+      }),
+    );
+    const [event] = getDiagnosticStabilitySnapshot({ limit: 10 }).events;
+    expect(event).not.toHaveProperty("sessionId");
+    expect(event).not.toHaveProperty("sessionKey");
+
+    resetDiagnosticStateForTest();
+    emitDiagnosticEvent({ type: "webhook.received", channel: "telegram" });
+
+    expect(getDiagnosticStabilitySnapshot({ limit: 10 }).events).toEqual([]);
+  });
+
+  it("does not track session state when diagnostics are disabled", () => {
+    const events: string[] = [];
+    const unsubscribe = onDiagnosticEvent((event) => events.push(event.type));
+    try {
+      setDiagnosticsEnabledForProcess(false);
+      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+    } finally {
+      unsubscribe();
+    }
+
+    expect(events).toEqual([]);
+    expect(getDiagnosticSessionStateCountForTest()).toBe(0);
+  });
+
+  it("checks memory pressure every tick without recording idle samples", () => {
+    const emitMemorySample = createEmitMemorySampleMock();
+
+    startDiagnosticHeartbeat(
+      {
+        diagnostics: {
+          enabled: true,
+        },
+      },
+      { emitMemorySample },
+    );
+
+    vi.advanceTimersByTime(30_000);
+    expect(emitMemorySample).toHaveBeenLastCalledWith({ emitSample: false });
+
+    logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+    vi.advanceTimersByTime(30_000);
+
+    expect(emitMemorySample).toHaveBeenLastCalledWith({ emitSample: true });
+  });
+
+  it("does not start the heartbeat when diagnostics are disabled by config", () => {
+    const emitMemorySample = createEmitMemorySampleMock();
+
+    startDiagnosticHeartbeat(
+      {
+        diagnostics: {
+          enabled: false,
+        },
+      },
+      { emitMemorySample },
+    );
+    vi.advanceTimersByTime(30_000);
+
+    expect(emitMemorySample).not.toHaveBeenCalled();
   });
 
   it("falls back to default threshold when config is absent", () => {

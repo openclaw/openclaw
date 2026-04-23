@@ -6,8 +6,6 @@ read_when:
 title: "Reactions"
 ---
 
-# Reactions
-
 The agent can add and remove emoji reactions on messages using the `message`
 tool with the `react` action. Reaction behavior varies by channel.
 
@@ -53,10 +51,24 @@ tool with the `react` action. Reaction behavior varies by channel.
     - `remove: true` removes that specific emoji reaction.
   </Accordion>
 
+  <Accordion title="Feishu/Lark">
+    - Use the `feishu_reaction` tool with actions `add`, `remove`, and `list`.
+    - Add/remove requires `emoji_type`; remove also requires `reaction_id`.
+  </Accordion>
+
   <Accordion title="Signal">
-    - Inbound reaction notifications emit system events when `channels.signal.reactionNotifications` is enabled.
+    - Inbound reaction notifications are controlled by `channels.signal.reactionNotifications`: `"off"` disables them, `"own"` (default) emits events when users react to bot messages, and `"all"` emits events for all reactions.
   </Accordion>
 </AccordionGroup>
+
+## Reaction level
+
+Per-channel `reactionLevel` config controls how broadly the agent uses reactions. Values are typically `off`, `ack`, `minimal`, or `extensive`.
+
+- [Telegram reactionLevel](/channels/telegram#reaction-notifications) — `channels.telegram.reactionLevel`
+- [WhatsApp reactionLevel](/channels/whatsapp#reaction-level) — `channels.whatsapp.reactionLevel`
+
+Set `reactionLevel` on individual channels to tune how actively the agent reacts to messages on each platform.
 
 ## Related
 

@@ -1,16 +1,16 @@
 import { completeSimple, getModel, streamSimple } from "@mariozechner/pi-ai";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
-import { isTruthyEnvValue } from "../infra/env.js";
 import {
   createSingleUserPromptMessage,
   extractNonEmptyAssistantText,
+  isLiveTestEnabled,
 } from "./live-test-helpers.js";
 import { applyExtraParamsToAgent } from "./pi-embedded-runner.js";
 import { createWebSearchTool } from "./tools/web-search.js";
 
 const XAI_KEY = process.env.XAI_API_KEY ?? "";
-const LIVE = isTruthyEnvValue(process.env.XAI_LIVE_TEST) || isTruthyEnvValue(process.env.LIVE);
+const LIVE = isLiveTestEnabled(["XAI_LIVE_TEST"]);
 
 const describeLive = LIVE && XAI_KEY ? describe : describe.skip;
 

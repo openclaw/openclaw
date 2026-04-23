@@ -1,14 +1,13 @@
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
-import { hasPotentialConfiguredChannels } from "../channels/config-presence.js";
-import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { resolveMainSessionKey } from "../config/sessions/main-session.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { readSessionStoreReadOnly } from "../config/sessions/store-read.js";
-import { resolveFreshSessionTotalTokens, type SessionEntry } from "../config/sessions/types.js";
+import { resolveSessionTotalTokens, type SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { listGatewayAgentsBasic } from "../gateway/agent-list.js";
 import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-summary.js";
 import { peekSystemEvents } from "../infra/system-events.js";
+import { hasConfiguredChannelsForReadOnlyScope } from "../plugins/channel-plugin-ids.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
@@ -17,6 +16,9 @@ import type { HeartbeatStatus, SessionStatus, StatusSummary } from "./status.typ
 let channelSummaryModulePromise: Promise<typeof import("../infra/channel-summary.js")> | undefined;
 let linkChannelModulePromise: Promise<typeof import("./status.link-channel.js")> | undefined;
 let configIoModulePromise: Promise<typeof import("../config/io.js")> | undefined;
+let taskRegistryMaintenanceModulePromise:
+  | Promise<typeof import("../tasks/task-registry.maintenance.js")>
+  | undefined;
 
 function loadChannelSummaryModule() {
   channelSummaryModulePromise ??= import("../infra/channel-summary.js");
@@ -38,76 +40,9 @@ function loadConfigIoModule() {
   return configIoModulePromise;
 }
 
-function parseStatusModelRef(
-  raw: string,
-  defaultProvider: string,
-): { provider: string; model: string } | null {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return null;
-  }
-  const slash = trimmed.indexOf("/");
-  if (slash === -1) {
-    return { provider: defaultProvider, model: trimmed };
-  }
-  const provider = trimmed.slice(0, slash).trim();
-  const model = trimmed.slice(slash + 1).trim();
-  if (!provider || !model) {
-    return null;
-  }
-  return { provider, model };
-}
-
-function resolveConfiguredStatusModelRef(params: {
-  cfg: OpenClawConfig;
-  defaultProvider: string;
-  defaultModel: string;
-}): { provider: string; model: string } {
-  const rawModel = resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model) ?? "";
-  if (rawModel) {
-    const trimmed = rawModel.trim();
-    const configuredModels = params.cfg.agents?.defaults?.models ?? {};
-    if (!trimmed.includes("/")) {
-      const aliasKey = trimmed.toLowerCase();
-      for (const [modelKey, entry] of Object.entries(configuredModels)) {
-        const aliasValue = (entry as { alias?: unknown } | undefined)?.alias;
-        const alias = typeof aliasValue === "string" ? aliasValue.trim() : "";
-        if (!alias || alias.toLowerCase() !== aliasKey) {
-          continue;
-        }
-        const parsed = parseStatusModelRef(modelKey, params.defaultProvider);
-        if (parsed) {
-          return parsed;
-        }
-      }
-      return { provider: "anthropic", model: trimmed };
-    }
-    const parsed = parseStatusModelRef(trimmed, params.defaultProvider);
-    if (parsed) {
-      return parsed;
-    }
-  }
-
-  const configuredProviders = params.cfg.models?.providers;
-  if (configuredProviders && typeof configuredProviders === "object") {
-    const hasDefaultProvider = Boolean(configuredProviders[params.defaultProvider]);
-    if (!hasDefaultProvider) {
-      const availableProvider = Object.entries(configuredProviders).find(
-        ([, providerCfg]) =>
-          providerCfg &&
-          Array.isArray(providerCfg.models) &&
-          providerCfg.models.length > 0 &&
-          providerCfg.models[0]?.id,
-      );
-      if (availableProvider) {
-        const [providerName, providerCfg] = availableProvider;
-        const firstModel = providerCfg.models[0];
-        return { provider: providerName, model: firstModel.id };
-      }
-    }
-  }
-
-  return { provider: params.defaultProvider, model: params.defaultModel };
+function loadTaskRegistryMaintenanceModule() {
+  taskRegistryMaintenanceModulePromise ??= import("../tasks/task-registry.maintenance.js");
+  return taskRegistryMaintenanceModulePromise;
 }
 
 const buildFlags = (entry?: SessionEntry): string[] => {
@@ -170,18 +105,28 @@ export function redactSensitiveStatusSummary(summary: StatusSummary): StatusSumm
 export async function getStatusSummary(
   options: {
     includeSensitive?: boolean;
+    includeChannelSummary?: boolean;
     config?: OpenClawConfig;
     sourceConfig?: OpenClawConfig;
   } = {},
 ): Promise<StatusSummary> {
-  const { includeSensitive = true } = options;
-  const { classifySessionKey, resolveContextTokensForModel, resolveSessionModelRef } =
-    await loadStatusSummaryRuntimeModule();
+  const { includeSensitive = true, includeChannelSummary = true } = options;
+  const {
+    classifySessionKey,
+    resolveConfiguredStatusModelRef,
+    resolveContextTokensForModel,
+    resolveSessionModelRef,
+  } = await loadStatusSummaryRuntimeModule();
   const cfg = options.config ?? (await loadConfigIoModule()).loadConfig();
-  const needsChannelPlugins = hasPotentialConfiguredChannels(cfg);
+  const channelScopeConfig =
+    options.sourceConfig === undefined
+      ? { config: cfg }
+      : { config: cfg, activationSourceConfig: options.sourceConfig };
+  const needsChannelPlugins =
+    includeChannelSummary && hasConfiguredChannelsForReadOnlyScope(channelScopeConfig);
   const linkContext = needsChannelPlugins
     ? await loadLinkChannelModule().then(({ resolveLinkChannelContext }) =>
-        resolveLinkChannelContext(cfg),
+        resolveLinkChannelContext(cfg, { sourceConfig: options.sourceConfig }),
       )
     : null;
   const agentList = listGatewayAgentsBasic(cfg);
@@ -205,6 +150,9 @@ export async function getStatusSummary(
     : [];
   const mainSessionKey = resolveMainSessionKey(cfg);
   const queuedSystemEvents = peekSystemEvents(mainSessionKey);
+  const taskMaintenanceModule = await loadTaskRegistryMaintenanceModule();
+  const tasks = taskMaintenanceModule.getInspectableTaskRegistrySummary();
+  const taskAudit = taskMaintenanceModule.getInspectableTaskAuditSummary();
 
   const resolved = resolveConfiguredStatusModelRef({
     cfg,
@@ -255,7 +203,7 @@ export async function getStatusSummary(
             fallbackContextTokens: configContextTokens ?? undefined,
             allowAsyncLoad: false,
           }) ?? null;
-        const total = resolveFreshSessionTotalTokens(entry);
+        const total = resolveSessionTotalTokens(entry);
         const totalTokensFresh =
           typeof entry?.totalTokens === "number" ? entry?.totalTokensFresh !== false : false;
         const remaining =
@@ -277,6 +225,7 @@ export async function getStatusSummary(
           thinkingLevel: entry?.thinkingLevel,
           fastMode: entry?.fastMode,
           verboseLevel: entry?.verboseLevel,
+          traceLevel: entry?.traceLevel,
           reasoningLevel: entry?.reasoningLevel,
           elevatedLevel: entry?.elevatedLevel,
           systemSent: entry?.systemSent,
@@ -332,6 +281,8 @@ export async function getStatusSummary(
     },
     channelSummary,
     queuedSystemEvents,
+    tasks,
+    taskAudit,
     sessions: {
       paths: Array.from(paths),
       count: totalSessions,

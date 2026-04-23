@@ -1,5 +1,6 @@
 ---
 summary: "User profile record"
+title: "USER template"
 read_when:
   - Bootstrapping a workspace manually
 ---

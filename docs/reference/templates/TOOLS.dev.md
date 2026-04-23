@@ -1,5 +1,6 @@
 ---
 summary: "Dev agent tools notes (C-3PO)"
+title: "TOOLS.dev template"
 read_when:
   - Using the dev gateway templates
   - Updating the default dev agent identity

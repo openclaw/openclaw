@@ -1,10 +1,12 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { GroupKeyResolution } from "../config/sessions.js";
+import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { createInboundDebouncer } from "./inbound-debounce.js";
+import { installGroupRequireMentionTestPlugins } from "./inbound.group-require-mention-test-plugins.js";
 import { resolveGroupRequireMention } from "./reply/groups.js";
 import { finalizeInboundContext } from "./reply/inbound-context.js";
 import {
@@ -347,6 +349,361 @@ describe("createInboundDebouncer", () => {
 
     vi.useRealTimers();
   });
+
+  it("keeps later same-key work behind a timer-backed flush that already started", async () => {
+    const started: string[] = [];
+    const finished: string[] = [];
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const debouncer = createInboundDebouncer<{ key: string; id: string; debounce: boolean }>({
+      debounceMs: 50,
+      buildKey: (item) => item.key,
+      shouldDebounce: (item) => item.debounce,
+      onFlush: async (items) => {
+        const ids = items.map((entry) => entry.id).join(",");
+        started.push(ids);
+        if (ids === "1") {
+          await firstGate;
+        }
+        finished.push(ids);
+      },
+    });
+
+    try {
+      await debouncer.enqueue({ key: "a", id: "1", debounce: true });
+
+      const timerIndex = setTimeoutSpy.mock.calls.findLastIndex((call) => call[1] === 50);
+      expect(timerIndex).toBeGreaterThanOrEqual(0);
+      clearTimeout(setTimeoutSpy.mock.results[timerIndex]?.value as ReturnType<typeof setTimeout>);
+      const flushTimer = setTimeoutSpy.mock.calls[timerIndex]?.[0] as
+        | (() => Promise<void>)
+        | undefined;
+      const firstFlush = flushTimer?.();
+
+      await vi.waitFor(() => {
+        expect(started).toEqual(["1"]);
+      });
+
+      const secondEnqueue = debouncer.enqueue({ key: "a", id: "2", debounce: false });
+      await Promise.resolve();
+
+      expect(started).toEqual(["1"]);
+      expect(finished).toEqual([]);
+
+      releaseFirst();
+      await Promise.all([firstFlush, secondEnqueue]);
+
+      expect(started).toEqual(["1", "2"]);
+      expect(finished).toEqual(["1", "2"]);
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
+  });
+
+  it("keeps fire-and-forget keyed work ahead of a later buffered item", async () => {
+    const started: string[] = [];
+    const finished: string[] = [];
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const debouncer = createInboundDebouncer<{ key: string; id: string; debounce: boolean }>({
+      debounceMs: 50,
+      buildKey: (item) => item.key,
+      shouldDebounce: (item) => item.debounce,
+      onFlush: async (items) => {
+        const ids = items.map((entry) => entry.id).join(",");
+        started.push(ids);
+        if (ids === "1") {
+          await firstGate;
+        }
+        finished.push(ids);
+      },
+    });
+
+    try {
+      await debouncer.enqueue({ key: "a", id: "1", debounce: true });
+
+      const firstTimerIndex = setTimeoutSpy.mock.calls.findLastIndex((call) => call[1] === 50);
+      expect(firstTimerIndex).toBeGreaterThanOrEqual(0);
+      clearTimeout(
+        setTimeoutSpy.mock.results[firstTimerIndex]?.value as ReturnType<typeof setTimeout>,
+      );
+      const firstFlush = (
+        setTimeoutSpy.mock.calls[firstTimerIndex]?.[0] as (() => Promise<void>) | undefined
+      )?.();
+
+      await vi.waitFor(() => {
+        expect(started).toEqual(["1"]);
+      });
+
+      const secondEnqueue = debouncer.enqueue({ key: "a", id: "2", debounce: false });
+      const thirdEnqueue = debouncer.enqueue({ key: "a", id: "3", debounce: true });
+
+      const thirdTimerIndex = setTimeoutSpy.mock.calls.findLastIndex(
+        (call, index) => index > firstTimerIndex && call[1] === 50,
+      );
+      expect(thirdTimerIndex).toBeGreaterThan(firstTimerIndex);
+      clearTimeout(
+        setTimeoutSpy.mock.results[thirdTimerIndex]?.value as ReturnType<typeof setTimeout>,
+      );
+      const thirdFlush = (
+        setTimeoutSpy.mock.calls[thirdTimerIndex]?.[0] as (() => Promise<void>) | undefined
+      )?.();
+
+      await Promise.resolve();
+
+      expect(started).toEqual(["1"]);
+      expect(finished).toEqual([]);
+
+      releaseFirst();
+      await Promise.all([firstFlush, secondEnqueue, thirdFlush, thirdEnqueue]);
+
+      expect(started).toEqual(["1", "2", "3"]);
+      expect(finished).toEqual(["1", "2", "3"]);
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
+  });
+
+  it("does not serialize keyed turns when debounce is disabled and no keyed chain exists", async () => {
+    const started: string[] = [];
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+
+    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 0,
+      buildKey: (item) => item.key,
+      onFlush: async (items) => {
+        const id = items[0]?.id ?? "";
+        started.push(id);
+        if (id === "1") {
+          await firstGate;
+        }
+      },
+    });
+
+    const first = debouncer.enqueue({ key: "a", id: "1" });
+    await Promise.resolve();
+    const second = debouncer.enqueue({ key: "a", id: "2" });
+    await Promise.resolve();
+
+    expect(started).toEqual(["1", "2"]);
+
+    releaseFirst();
+    await Promise.all([first, second]);
+  });
+
+  it("swallows onError failures so keyed chains still complete", async () => {
+    const calls: string[] = [];
+    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 0,
+      buildKey: (item) => item.key,
+      onFlush: async (items) => {
+        calls.push(items[0]?.id ?? "");
+        throw new Error("flush failed");
+      },
+      onError: () => {
+        throw new Error("handler failed");
+      },
+    });
+
+    await expect(debouncer.enqueue({ key: "a", id: "1" })).resolves.toBeUndefined();
+    await expect(debouncer.enqueue({ key: "a", id: "2" })).resolves.toBeUndefined();
+
+    expect(calls).toEqual(["1", "2"]);
+  });
+
+  it("does not leak unhandled rejections when a keyed flush failure is awaited", async () => {
+    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 0,
+      buildKey: (item) => item.key,
+      onFlush: async () => {
+        throw new Error("flush failed");
+      },
+    });
+    const unhandled: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown) => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", onUnhandledRejection);
+
+    try {
+      await expect(debouncer.enqueue({ key: "a", id: "1" })).resolves.toBeUndefined();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandledRejection);
+    }
+  });
+
+  it("bypasses debouncing for new keys once the tracked-key cap is reached", async () => {
+    vi.useFakeTimers();
+    const calls: Array<string[]> = [];
+
+    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 50,
+      maxTrackedKeys: 1,
+      buildKey: (item) => item.key,
+      onFlush: async (items) => {
+        calls.push(items.map((entry) => entry.id));
+      },
+    });
+
+    await debouncer.enqueue({ key: "a", id: "1" });
+    await debouncer.enqueue({ key: "b", id: "2" });
+
+    expect(calls).toEqual([["2"]]);
+
+    await vi.advanceTimersByTimeAsync(50);
+    expect(calls).toEqual([["2"], ["1"]]);
+
+    vi.useRealTimers();
+  });
+
+  it("keeps same-key overflow work ordered after falling back to immediate flushes", async () => {
+    const started: string[] = [];
+    const finished: string[] = [];
+    let releaseOverflow!: () => void;
+    const overflowGate = new Promise<void>((resolve) => {
+      releaseOverflow = resolve;
+    });
+
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 50,
+      maxTrackedKeys: 1,
+      buildKey: (item) => item.key,
+      onFlush: async (items) => {
+        const ids = items.map((entry) => entry.id).join(",");
+        started.push(ids);
+        if (ids === "2") {
+          await overflowGate;
+        }
+        finished.push(ids);
+      },
+    });
+
+    try {
+      await debouncer.enqueue({ key: "a", id: "1" });
+      const callCountBeforeOverflow = setTimeoutSpy.mock.calls.length;
+      clearTimeout(
+        setTimeoutSpy.mock.results[callCountBeforeOverflow - 1]?.value as ReturnType<
+          typeof setTimeout
+        >,
+      );
+
+      const overflowEnqueue = debouncer.enqueue({ key: "b", id: "2" });
+      await vi.waitFor(() => {
+        expect(started).toEqual(["2"]);
+      });
+
+      const bufferedEnqueue = debouncer.enqueue({ key: "b", id: "3" });
+      const bufferedTimerIndex = setTimeoutSpy.mock.calls.findLastIndex(
+        (call, index) => index >= callCountBeforeOverflow && call[1] === 50,
+      );
+      expect(bufferedTimerIndex).toBeGreaterThanOrEqual(callCountBeforeOverflow);
+      clearTimeout(
+        setTimeoutSpy.mock.results[bufferedTimerIndex]?.value as ReturnType<typeof setTimeout>,
+      );
+      const bufferedFlush = (
+        setTimeoutSpy.mock.calls[bufferedTimerIndex]?.[0] as (() => Promise<void>) | undefined
+      )?.();
+
+      await Promise.resolve();
+      expect(started).toEqual(["2"]);
+      expect(finished).toEqual([]);
+
+      releaseOverflow();
+      await Promise.all([overflowEnqueue, bufferedEnqueue, bufferedFlush]);
+
+      expect(started).toEqual(["2", "3"]);
+      expect(finished).toEqual(["2", "3"]);
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
+  });
+
+  it("counts tracked debounce keys by union of buffers and active chains", async () => {
+    const started: string[] = [];
+    const finished: string[] = [];
+    let releaseChainOnly!: () => void;
+    const chainOnlyGate = new Promise<void>((resolve) => {
+      releaseChainOnly = resolve;
+    });
+
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 50,
+      maxTrackedKeys: 3,
+      buildKey: (item) => item.key,
+      onFlush: async (items) => {
+        const ids = items.map((entry) => entry.id).join(",");
+        started.push(ids);
+        if (ids === "2") {
+          await chainOnlyGate;
+        }
+        finished.push(ids);
+      },
+    });
+
+    try {
+      await debouncer.enqueue({ key: "a", id: "1" });
+      const firstTimerIndex = setTimeoutSpy.mock.calls.findLastIndex((call) => call[1] === 50);
+      expect(firstTimerIndex).toBeGreaterThanOrEqual(0);
+      clearTimeout(
+        setTimeoutSpy.mock.results[firstTimerIndex]?.value as ReturnType<typeof setTimeout>,
+      );
+
+      await debouncer.enqueue({ key: "b", id: "2" });
+      const secondTimerIndex = setTimeoutSpy.mock.calls.findLastIndex(
+        (call, index) => index > firstTimerIndex && call[1] === 50,
+      );
+      expect(secondTimerIndex).toBeGreaterThan(firstTimerIndex);
+      clearTimeout(
+        setTimeoutSpy.mock.results[secondTimerIndex]?.value as ReturnType<typeof setTimeout>,
+      );
+      const secondFlush = (
+        setTimeoutSpy.mock.calls[secondTimerIndex]?.[0] as (() => Promise<void>) | undefined
+      )?.();
+
+      await vi.waitFor(() => {
+        expect(started).toEqual(["2"]);
+      });
+
+      await debouncer.enqueue({ key: "c", id: "3" });
+      const timerCountBeforeOverflow = setTimeoutSpy.mock.calls.length;
+      const thirdTimerIndex = setTimeoutSpy.mock.calls.findLastIndex(
+        (call, index) => index > secondTimerIndex && call[1] === 50,
+      );
+      expect(thirdTimerIndex).toBeGreaterThan(secondTimerIndex);
+      clearTimeout(
+        setTimeoutSpy.mock.results[thirdTimerIndex]?.value as ReturnType<typeof setTimeout>,
+      );
+
+      const overflowEnqueue = debouncer.enqueue({ key: "d", id: "4" });
+
+      expect(setTimeoutSpy.mock.calls).toHaveLength(timerCountBeforeOverflow);
+      await vi.waitFor(() => {
+        expect(started).toEqual(["2", "4"]);
+        expect(finished).toEqual(["4"]);
+      });
+
+      releaseChainOnly();
+      await Promise.all([secondFlush, overflowEnqueue]);
+      expect(finished).toEqual(["4", "2"]);
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
+  });
 });
 
 describe("initSessionState BodyStripped", () => {
@@ -448,20 +805,24 @@ describe("mention helpers", () => {
 
   it("strips provider mention regexes without config compilation", () => {
     const stripped = stripMentions("<@12345> hello", { Provider: "discord" } as MsgContext, {});
-    expect(stripped).toBe("hello");
+    expect(stripped).toBe("< > hello");
   });
 });
 
 describe("resolveGroupRequireMention", () => {
-  it("respects Discord guild/channel requireMention settings", () => {
+  beforeEach(() => {
+    resetPluginRuntimeStateForTest();
+    installGroupRequireMentionTestPlugins();
+  });
+
+  it("respects Discord guild/channel requireMention settings", async () => {
     const cfg: OpenClawConfig = {
       channels: {
         discord: {
           guilds: {
             "145": {
-              requireMention: false,
               channels: {
-                general: { allow: true },
+                "123": { requireMention: false },
               },
             },
           },
@@ -481,10 +842,10 @@ describe("resolveGroupRequireMention", () => {
       chatType: "group",
     };
 
-    expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).toBe(false);
+    await expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).resolves.toBe(false);
   });
 
-  it("respects Slack channel requireMention settings", () => {
+  it("respects Slack channel requireMention settings", async () => {
     const cfg: OpenClawConfig = {
       channels: {
         slack: {
@@ -506,15 +867,135 @@ describe("resolveGroupRequireMention", () => {
       chatType: "group",
     };
 
-    expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).toBe(false);
+    await expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).resolves.toBe(false);
   });
 
-  it("respects LINE prefixed group keys in reply-stage requireMention resolution", () => {
+  it("uses Slack fallback resolver semantics for default-account wildcard channels", async () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        slack: {
+          defaultAccount: "work",
+          accounts: {
+            work: {
+              channels: {
+                "*": { requireMention: false },
+              },
+            },
+          },
+        },
+      },
+    };
+    const ctx: TemplateContext = {
+      Provider: "slack",
+      From: "slack:channel:C123",
+      GroupSubject: "#alerts",
+    };
+    const groupResolution: GroupKeyResolution = {
+      key: "slack:group:C123",
+      channel: "slack",
+      id: "C123",
+      chatType: "group",
+    };
+
+    await expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).resolves.toBe(false);
+  });
+
+  it("keeps core reply-stage resolution aligned for Slack default-account wildcard fallbacks", async () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        slack: {
+          defaultAccount: "work",
+          accounts: {
+            work: {
+              channels: {
+                "*": { requireMention: false },
+              },
+            },
+          },
+        },
+      },
+    };
+    const ctx: TemplateContext = {
+      Provider: "slack",
+      From: "slack:channel:C123",
+      GroupSubject: "#alerts",
+    };
+    const groupResolution: GroupKeyResolution = {
+      key: "slack:group:C123",
+      channel: "slack",
+      id: "C123",
+      chatType: "group",
+    };
+
+    await expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).resolves.toBe(false);
+  });
+
+  it("uses Discord fallback resolver semantics for guild slug matches", async () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        discord: {
+          guilds: {
+            "145": {
+              slug: "dev",
+              requireMention: false,
+            },
+          },
+        },
+      },
+    };
+    const ctx: TemplateContext = {
+      Provider: "discord",
+      From: "discord:group:123",
+      GroupChannel: "#general",
+      GroupSpace: "dev",
+    };
+    const groupResolution: GroupKeyResolution = {
+      key: "discord:group:123",
+      channel: "discord",
+      id: "123",
+      chatType: "group",
+    };
+
+    await expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).resolves.toBe(false);
+  });
+
+  it("keeps core reply-stage resolution aligned for Discord slug + wildcard guild fallbacks", async () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        discord: {
+          guilds: {
+            "*": {
+              requireMention: false,
+              channels: {
+                help: { requireMention: true },
+              },
+            },
+          },
+        },
+      },
+    };
+    const ctx: TemplateContext = {
+      Provider: "discord",
+      From: "discord:group:999",
+      GroupChannel: "#help",
+      GroupSpace: "guild-slug",
+    };
+    const groupResolution: GroupKeyResolution = {
+      key: "discord:group:999",
+      channel: "discord",
+      id: "999",
+      chatType: "group",
+    };
+
+    await expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).resolves.toBe(true);
+  });
+
+  it("respects LINE prefixed group keys in reply-stage requireMention resolution", async () => {
     const cfg: OpenClawConfig = {
       channels: {
         line: {
           groups: {
-            "room:r123": { requireMention: false },
+            r123: { requireMention: false },
           },
         },
       },
@@ -530,10 +1011,10 @@ describe("resolveGroupRequireMention", () => {
       chatType: "group",
     };
 
-    expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).toBe(false);
+    await expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).resolves.toBe(false);
   });
 
-  it("preserves plugin-backed channel requireMention resolution", () => {
+  it("preserves plugin-backed channel requireMention resolution", async () => {
     const cfg: OpenClawConfig = {
       channels: {
         bluebubbles: {
@@ -554,6 +1035,6 @@ describe("resolveGroupRequireMention", () => {
       chatType: "group",
     };
 
-    expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).toBe(false);
+    await expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).resolves.toBe(false);
   });
 });

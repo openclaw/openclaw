@@ -1,34 +1,48 @@
 import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
-} from "openclaw/plugin-sdk/provider-models";
+} from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  DEFAULT_MINIMAX_CONTEXT_WINDOW,
+  DEFAULT_MINIMAX_MAX_TOKENS,
+  MINIMAX_API_BASE_URL,
+  resolveMinimaxApiCost,
+} from "./model-definitions.js";
+import { MINIMAX_TEXT_MODEL_CATALOG, MINIMAX_TEXT_MODEL_ORDER } from "./provider-models.js";
 
-const MINIMAX_PORTAL_BASE_URL = "https://api.minimax.io/anthropic";
-export const MINIMAX_DEFAULT_MODEL_ID = "MiniMax-M2.7";
-const MINIMAX_DEFAULT_VISION_MODEL_ID = "MiniMax-VL-01";
-const MINIMAX_DEFAULT_CONTEXT_WINDOW = 200000;
-const MINIMAX_DEFAULT_MAX_TOKENS = 8192;
-const MINIMAX_API_COST = {
-  input: 0.3,
-  output: 1.2,
-  cacheRead: 0.03,
-  cacheWrite: 0.12,
-};
+function resolveMinimaxCatalogBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
+  const rawHost = env.MINIMAX_API_HOST?.trim();
+  if (!rawHost) {
+    return MINIMAX_API_BASE_URL;
+  }
+
+  try {
+    const url = new URL(rawHost);
+    const basePath = url.pathname.replace(/\/+$/, "");
+    if (basePath.endsWith("/anthropic")) {
+      return `${url.origin}${basePath}`;
+    }
+    return `${url.origin}/anthropic`;
+  } catch {
+    return MINIMAX_API_BASE_URL;
+  }
+}
 
 function buildMinimaxModel(params: {
   id: string;
   name: string;
   reasoning: boolean;
   input: ModelDefinitionConfig["input"];
+  cost: ModelDefinitionConfig["cost"];
 }): ModelDefinitionConfig {
   return {
     id: params.id,
     name: params.name,
     reasoning: params.reasoning,
     input: params.input,
-    cost: MINIMAX_API_COST,
-    contextWindow: MINIMAX_DEFAULT_CONTEXT_WINDOW,
-    maxTokens: MINIMAX_DEFAULT_MAX_TOKENS,
+    cost: params.cost,
+    contextWindow: DEFAULT_MINIMAX_CONTEXT_WINDOW,
+    maxTokens: DEFAULT_MINIMAX_MAX_TOKENS,
   };
 }
 
@@ -36,53 +50,35 @@ function buildMinimaxTextModel(params: {
   id: string;
   name: string;
   reasoning: boolean;
+  cost: ModelDefinitionConfig["cost"];
 }): ModelDefinitionConfig {
   return buildMinimaxModel({ ...params, input: ["text"] });
 }
 
 function buildMinimaxCatalog(): ModelDefinitionConfig[] {
-  return [
-    buildMinimaxModel({
-      id: MINIMAX_DEFAULT_VISION_MODEL_ID,
-      name: "MiniMax VL 01",
-      reasoning: false,
-      input: ["text", "image"],
-    }),
-    buildMinimaxTextModel({
-      id: MINIMAX_DEFAULT_MODEL_ID,
-      name: "MiniMax M2.7",
-      reasoning: true,
-    }),
-    buildMinimaxTextModel({
-      id: "MiniMax-M2.7-highspeed",
-      name: "MiniMax M2.7 Highspeed",
-      reasoning: true,
-    }),
-    buildMinimaxTextModel({
-      id: "MiniMax-M2.5",
-      name: "MiniMax M2.5",
-      reasoning: true,
-    }),
-    buildMinimaxTextModel({
-      id: "MiniMax-M2.5-highspeed",
-      name: "MiniMax M2.5 Highspeed",
-      reasoning: true,
-    }),
-  ];
+  return MINIMAX_TEXT_MODEL_ORDER.map((id) => {
+    const model = MINIMAX_TEXT_MODEL_CATALOG[id];
+    return buildMinimaxTextModel({
+      id,
+      name: model.name,
+      reasoning: model.reasoning,
+      cost: resolveMinimaxApiCost(id),
+    });
+  });
 }
 
-export function buildMinimaxProvider(): ModelProviderConfig {
+export function buildMinimaxProvider(env?: NodeJS.ProcessEnv): ModelProviderConfig {
   return {
-    baseUrl: MINIMAX_PORTAL_BASE_URL,
+    baseUrl: resolveMinimaxCatalogBaseUrl(env),
     api: "anthropic-messages",
     authHeader: true,
     models: buildMinimaxCatalog(),
   };
 }
 
-export function buildMinimaxPortalProvider(): ModelProviderConfig {
+export function buildMinimaxPortalProvider(env?: NodeJS.ProcessEnv): ModelProviderConfig {
   return {
-    baseUrl: MINIMAX_PORTAL_BASE_URL,
+    baseUrl: resolveMinimaxCatalogBaseUrl(env),
     api: "anthropic-messages",
     authHeader: true,
     models: buildMinimaxCatalog(),

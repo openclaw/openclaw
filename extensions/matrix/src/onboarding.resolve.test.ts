@@ -1,7 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createNonExitingTypedRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
-import type { RuntimeEnv, WizardPrompter } from "../runtime-api.js";
-import { matrixOnboardingAdapter } from "./onboarding.js";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { WizardPrompter } from "../runtime-api.js";
 import { installMatrixTestRuntime } from "./test-runtime.js";
 import type { CoreConfig } from "./types.js";
 
@@ -13,7 +11,13 @@ vi.mock("./resolve-targets.js", () => ({
   resolveMatrixTargets: resolveMatrixTargetsMock,
 }));
 
+let promptMatrixAllowFrom: typeof import("./onboarding.js").__testing.promptMatrixAllowFrom;
+
 describe("matrix onboarding account-scoped resolution", () => {
+  beforeAll(async () => {
+    ({ promptMatrixAllowFrom } = (await import("./onboarding.js")).__testing);
+  });
+
   beforeEach(() => {
     installMatrixTestRuntime();
     resolveMatrixTargetsMock.mockClear();
@@ -26,51 +30,9 @@ describe("matrix onboarding account-scoped resolution", () => {
   it("passes accountId into Matrix allowlist target resolution during onboarding", async () => {
     const prompter = {
       note: vi.fn(async () => {}),
-      select: vi.fn(async ({ message }: { message: string }) => {
-        if (message === "Matrix already configured. What do you want to do?") {
-          return "add-account";
-        }
-        if (message === "Matrix auth method") {
-          return "token";
-        }
-        if (message === "Matrix rooms access") {
-          return "allowlist";
-        }
-        throw new Error(`unexpected select prompt: ${message}`);
-      }),
-      text: vi.fn(async ({ message }: { message: string }) => {
-        if (message === "Matrix account name") {
-          return "ops";
-        }
-        if (message === "Matrix homeserver URL") {
-          return "https://matrix.ops.example.org";
-        }
-        if (message === "Matrix access token") {
-          return "ops-token";
-        }
-        if (message === "Matrix device name (optional)") {
-          return "";
-        }
-        if (message === "Matrix allowFrom (full @user:server; display name only if unique)") {
-          return "Alice";
-        }
-        if (message === "Matrix rooms allowlist (comma-separated)") {
-          return "";
-        }
-        throw new Error(`unexpected text prompt: ${message}`);
-      }),
-      confirm: vi.fn(async ({ message }: { message: string }) => {
-        if (message === "Enable end-to-end encryption (E2EE)?") {
-          return false;
-        }
-        if (message === "Configure Matrix rooms access?") {
-          return true;
-        }
-        return false;
-      }),
+      text: vi.fn(async () => "Alice"),
     } as unknown as WizardPrompter;
-
-    const result = await matrixOnboardingAdapter.configureInteractive!({
+    const result = await promptMatrixAllowFrom({
       cfg: {
         channels: {
           matrix: {
@@ -79,21 +41,19 @@ describe("matrix onboarding account-scoped resolution", () => {
                 homeserver: "https://matrix.main.example.org",
                 accessToken: "main-token",
               },
+              ops: {
+                homeserver: "https://matrix.ops.example.org",
+                accessToken: "ops-token",
+              },
             },
           },
         },
       } as CoreConfig,
-      runtime: createNonExitingTypedRuntimeEnv<RuntimeEnv>(),
       prompter,
-      options: undefined,
-      accountOverrides: {},
-      shouldPromptAccountIds: true,
-      forceAllowFrom: true,
-      configured: true,
-      label: "Matrix",
+      accountId: "ops",
     });
 
-    expect(result).not.toBe("skip");
+    expect(result.channels?.matrix?.accounts?.ops?.dm?.allowFrom).toEqual(["@alice:example.org"]);
     expect(resolveMatrixTargetsMock).toHaveBeenCalledWith({
       cfg: expect.any(Object),
       accountId: "ops",

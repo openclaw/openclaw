@@ -2,7 +2,8 @@ import fs from "node:fs/promises";
 import { listChannelPlugins } from "../../channels/plugins/index.js";
 import { getResolvedLoggerSettings } from "../../logging.js";
 import { parseLogLine } from "../../logging/parse-log-line.js";
-import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
+import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { theme } from "../../terminal/theme.js";
 
 export type ChannelsLogsOptions = {
@@ -20,7 +21,7 @@ const getChannelSet = () =>
   new Set<string>([...listChannelPlugins().map((plugin) => plugin.id), "all"]);
 
 function parseChannelFilter(raw?: string) {
-  const trimmed = raw?.trim().toLowerCase();
+  const trimmed = normalizeLowercaseStringOrEmpty(raw);
   if (!trimmed) {
     return "all";
   }
@@ -93,7 +94,7 @@ export async function channelsLogsCommand(
   const lines = filtered.slice(Math.max(0, filtered.length - limit));
 
   if (opts.json) {
-    runtime.log(JSON.stringify({ file, channel, lines }, null, 2));
+    writeRuntimeJson(runtime, { file, channel, lines });
     return;
   }
 
@@ -107,7 +108,7 @@ export async function channelsLogsCommand(
   }
   for (const line of lines) {
     const ts = line.time ? `${line.time} ` : "";
-    const level = line.level ? `${line.level.toLowerCase()} ` : "";
+    const level = line.level ? `${normalizeLowercaseStringOrEmpty(line.level)} ` : "";
     runtime.log(`${ts}${level}${line.message}`.trim());
   }
 }

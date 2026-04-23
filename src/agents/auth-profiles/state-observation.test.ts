@@ -5,11 +5,14 @@ import { logAuthProfileFailureStateChange } from "./state-observation.js";
 afterEach(() => {
   setLoggerOverride(null);
   resetLogger();
+  vi.unstubAllEnvs();
 });
 
 describe("logAuthProfileFailureStateChange", () => {
   it("sanitizes consoleMessage fields before logging", () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.stubEnv("FORCE_COLOR", "0");
+    vi.stubEnv("NO_COLOR", "1");
     setLoggerOverride({ level: "silent", consoleLevel: "warn" });
 
     logAuthProfileFailureStateChange({

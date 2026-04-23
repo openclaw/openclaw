@@ -1,24 +1,28 @@
-import type { loadConfig } from "../config/config.js";
-import { resolveGatewayProbeAuthSafe } from "../gateway/probe-auth.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  resolveGatewayProbeAuthSafeWithSecretInputs,
+  resolveGatewayProbeTarget,
+} from "../gateway/probe-auth.js";
 export { pickGatewaySelfPresence } from "./gateway-presence.js";
 
-export function resolveGatewayProbeAuthResolution(cfg: ReturnType<typeof loadConfig>): {
+export async function resolveGatewayProbeAuthResolution(cfg: OpenClawConfig): Promise<{
   auth: {
     token?: string;
     password?: string;
   };
   warning?: string;
-} {
-  return resolveGatewayProbeAuthSafe({
+}> {
+  const target = resolveGatewayProbeTarget(cfg);
+  return resolveGatewayProbeAuthSafeWithSecretInputs({
     cfg,
-    mode: cfg.gateway?.mode === "remote" ? "remote" : "local",
+    mode: target.mode,
     env: process.env,
   });
 }
 
-export function resolveGatewayProbeAuth(cfg: ReturnType<typeof loadConfig>): {
+export async function resolveGatewayProbeAuth(cfg: OpenClawConfig): Promise<{
   token?: string;
   password?: string;
-} {
-  return resolveGatewayProbeAuthResolution(cfg).auth;
+}> {
+  return (await resolveGatewayProbeAuthResolution(cfg)).auth;
 }

@@ -2,33 +2,55 @@ import { describe, expect, it, vi } from "vitest";
 import { createChannelReplyPipeline } from "./channel-reply-pipeline.js";
 
 describe("createChannelReplyPipeline", () => {
-  it("builds prefix options without forcing typing support", () => {
-    const pipeline = createChannelReplyPipeline({
-      cfg: {},
-      agentId: "main",
-      channel: "telegram",
-      accountId: "default",
-    });
+  it.each([
+    {
+      name: "builds prefix options without forcing typing support",
+      input: {
+        cfg: {},
+        agentId: "main",
+        channel: "telegram",
+        accountId: "default",
+      },
+      expectTypingCallbacks: false,
+    },
+    {
+      name: "builds typing callbacks when typing config is provided",
+      input: {
+        cfg: {},
+        agentId: "main",
+        channel: "discord",
+        accountId: "default",
+        typing: {
+          start: vi.fn(async () => {}),
+          stop: vi.fn(async () => {}),
+          onStartError: () => {},
+        },
+      },
+      expectTypingCallbacks: true,
+    },
+  ])("$name", async ({ input, expectTypingCallbacks }) => {
+    const start = vi.fn(async () => {});
+    const stop = vi.fn(async () => {});
+    const pipeline = createChannelReplyPipeline(
+      expectTypingCallbacks
+        ? {
+            ...input,
+            typing: {
+              start,
+              stop,
+              onStartError: () => {},
+            },
+          }
+        : input,
+    );
 
     expect(typeof pipeline.onModelSelected).toBe("function");
     expect(typeof pipeline.responsePrefixContextProvider).toBe("function");
-    expect(pipeline.typingCallbacks).toBeUndefined();
-  });
 
-  it("builds typing callbacks when typing config is provided", async () => {
-    const start = vi.fn(async () => {});
-    const stop = vi.fn(async () => {});
-    const pipeline = createChannelReplyPipeline({
-      cfg: {},
-      agentId: "main",
-      channel: "discord",
-      accountId: "default",
-      typing: {
-        start,
-        stop,
-        onStartError: () => {},
-      },
-    });
+    if (!expectTypingCallbacks) {
+      expect(pipeline.typingCallbacks).toBeUndefined();
+      return;
+    }
 
     await pipeline.typingCallbacks?.onReplyStart();
     pipeline.typingCallbacks?.onIdle?.();
@@ -55,5 +77,17 @@ describe("createChannelReplyPipeline", () => {
 
     expect(onReplyStart).toHaveBeenCalledTimes(1);
     expect(onIdle).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses an explicit reply transform without resolving the channel plugin", () => {
+    const transformReplyPayload = vi.fn((payload) => payload);
+    const pipeline = createChannelReplyPipeline({
+      cfg: {},
+      agentId: "main",
+      channel: "slack",
+      transformReplyPayload,
+    });
+
+    expect(pipeline.transformReplyPayload).toBe(transformReplyPayload);
   });
 });

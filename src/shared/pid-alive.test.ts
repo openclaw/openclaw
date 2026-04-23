@@ -14,16 +14,22 @@ function mockProcReads(entries: Record<string, string>) {
 }
 
 async function withLinuxProcessPlatform<T>(run: () => Promise<T>): Promise<T> {
+  return withProcessPlatform("linux", run);
+}
+
+async function withProcessPlatform<T>(
+  platform: NodeJS.Platform,
+  run: () => Promise<T>,
+): Promise<T> {
   const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
   if (!originalPlatformDescriptor) {
     throw new Error("missing process.platform descriptor");
   }
   Object.defineProperty(process, "platform", {
     ...originalPlatformDescriptor,
-    value: "linux",
+    value: platform,
   });
   try {
-    vi.resetModules();
     return await run();
   } finally {
     Object.defineProperty(process, "platform", originalPlatformDescriptor);
@@ -55,8 +61,7 @@ describe("isPidAlive", () => {
       [`/proc/${zombiePid}/status`]: `Name:\tnode\nUmask:\t0022\nState:\tZ (zombie)\nTgid:\t${zombiePid}\nPid:\t${zombiePid}\n`,
     });
     await withLinuxProcessPlatform(async () => {
-      const { isPidAlive: freshIsPidAlive } = await import("./pid-alive.js");
-      expect(freshIsPidAlive(zombiePid)).toBe(false);
+      expect(isPidAlive(zombiePid)).toBe(false);
     });
   });
 
@@ -67,8 +72,7 @@ describe("isPidAlive", () => {
     const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
 
     await withLinuxProcessPlatform(async () => {
-      const { isPidAlive: freshIsPidAlive } = await import("./pid-alive.js");
-      expect(freshIsPidAlive(42)).toBe(true);
+      expect(isPidAlive(42)).toBe(true);
     });
 
     expect(readFileSyncSpy).toHaveBeenCalledWith("/proc/42/status", "utf8");
@@ -91,23 +95,19 @@ describe("getProcessStartTime", () => {
     });
 
     await withLinuxProcessPlatform(async () => {
-      const { getProcessStartTime: fresh } = await import("./pid-alive.js");
-      expect(fresh(process.pid)).toBe(98765);
-      expect(fresh(42)).toBe(55555);
-      expect(fresh(43)).toBeNull();
-      expect(fresh(44)).toBe(66666);
-      expect(fresh(45)).toBeNull();
-      expect(fresh(46)).toBeNull();
+      expect(getProcessStartTime(process.pid)).toBe(98765);
+      expect(getProcessStartTime(42)).toBe(55555);
+      expect(getProcessStartTime(43)).toBeNull();
+      expect(getProcessStartTime(44)).toBe(66666);
+      expect(getProcessStartTime(45)).toBeNull();
+      expect(getProcessStartTime(46)).toBeNull();
     });
   });
 
   it("returns null on non-Linux platforms", () => {
-    if (process.platform === "linux") {
-      // On actual Linux, this test is trivially satisfied by the other tests.
-      expect(true).toBe(true);
-      return;
-    }
-    expect(getProcessStartTime(process.pid)).toBeNull();
+    return withProcessPlatform("darwin", async () => {
+      expect(getProcessStartTime(process.pid)).toBeNull();
+    });
   });
 
   it("returns null for invalid PIDs", () => {

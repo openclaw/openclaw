@@ -1,5 +1,5 @@
 import type { MsgContext } from "../auto-reply/templating.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.js";
 import type {
   MediaUnderstandingConfig,
   MediaUnderstandingModelConfig,
@@ -12,7 +12,8 @@ import {
   DEFAULT_MEDIA_CONCURRENCY,
   DEFAULT_PROMPT,
 } from "./defaults.js";
-import { normalizeMediaProviderId } from "./providers/index.js";
+import { resolveEffectiveMediaEntryCapabilities } from "./entry-capabilities.js";
+import { normalizeMediaProviderId } from "./provider-id.js";
 import { normalizeMediaUnderstandingChatType, resolveMediaUnderstandingScope } from "./scope.js";
 import type { MediaUnderstandingCapability } from "./types.js";
 
@@ -83,21 +84,6 @@ export function resolveScopeDecision(params: {
   });
 }
 
-function resolveEntryCapabilities(params: {
-  entry: MediaUnderstandingModelConfig;
-  providerRegistry: Map<string, { capabilities?: MediaUnderstandingCapability[] }>;
-}): MediaUnderstandingCapability[] | undefined {
-  const entryType = params.entry.type ?? (params.entry.command ? "cli" : "provider");
-  if (entryType === "cli") {
-    return undefined;
-  }
-  const providerId = normalizeMediaProviderId(params.entry.provider ?? "");
-  if (!providerId) {
-    return undefined;
-  }
-  return params.providerRegistry.get(providerId)?.capabilities;
-}
-
 export function resolveModelEntries(params: {
   cfg: OpenClawConfig;
   capability: MediaUnderstandingCapability;
@@ -116,12 +102,11 @@ export function resolveModelEntries(params: {
 
   return entries
     .filter(({ entry, source }) => {
-      const caps =
-        entry.capabilities && entry.capabilities.length > 0
-          ? entry.capabilities
-          : source === "shared"
-            ? resolveEntryCapabilities({ entry, providerRegistry: params.providerRegistry })
-            : undefined;
+      const caps = resolveEffectiveMediaEntryCapabilities({
+        entry,
+        source,
+        providerRegistry: params.providerRegistry,
+      });
       if (!caps || caps.length === 0) {
         if (source === "shared") {
           if (shouldLogVerbose()) {

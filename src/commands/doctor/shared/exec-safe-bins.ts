@@ -1,21 +1,25 @@
-import type { OpenClawConfig } from "../../../config/config.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveCommandResolutionFromArgv } from "../../../infra/exec-command-resolution.js";
 import {
   listInterpreterLikeSafeBins,
   resolveMergedSafeBinProfileFixtures,
 } from "../../../infra/exec-safe-bin-runtime-policy.js";
+import { listRiskyConfiguredSafeBins } from "../../../infra/exec-safe-bin-semantics.js";
 import {
   getTrustedSafeBinDirs,
   isTrustedSafeBinPath,
   normalizeTrustedSafeBinDirs,
 } from "../../../infra/exec-safe-bin-trust.js";
+import { normalizeOptionalLowercaseString } from "../../../shared/string-coerce.js";
 import { sanitizeForLog } from "../../../terminal/ansi.js";
 import { asObjectRecord } from "./object.js";
 
 export type ExecSafeBinCoverageHit = {
   scopePath: string;
   bin: string;
-  isInterpreter: boolean;
+  kind: "missingProfile" | "riskySemantics";
+  isInterpreter?: boolean;
+  warning?: string;
 };
 
 type ExecSafeBinScopeRef = {
@@ -39,7 +43,7 @@ function normalizeConfiguredSafeBins(entries: unknown): string[] {
   return Array.from(
     new Set(
       entries
-        .map((entry) => (typeof entry === "string" ? entry.trim().toLowerCase() : ""))
+        .map((entry) => normalizeOptionalLowercaseString(entry) ?? "")
         .filter((entry) => entry.length > 0),
     ),
   ).toSorted();
@@ -119,7 +123,16 @@ export function scanExecSafeBinCoverage(cfg: OpenClawConfig): ExecSafeBinCoverag
       hits.push({
         scopePath: scope.scopePath,
         bin,
+        kind: "missingProfile",
         isInterpreter: interpreterBins.has(bin),
+      });
+    }
+    for (const hit of listRiskyConfiguredSafeBins(scope.safeBins)) {
+      hits.push({
+        scopePath: scope.scopePath,
+        bin: hit.bin,
+        kind: "riskySemantics",
+        warning: hit.warning,
       });
     }
   }
@@ -133,12 +146,12 @@ export function scanExecSafeBinTrustedDirHints(
   for (const scope of collectExecSafeBinScopes(cfg)) {
     for (const bin of scope.safeBins) {
       const resolution = resolveCommandResolutionFromArgv([bin]);
-      if (!resolution?.resolvedPath) {
+      if (!resolution?.execution.resolvedPath) {
         continue;
       }
       if (
         isTrustedSafeBinPath({
-          resolvedPath: resolution.resolvedPath,
+          resolvedPath: resolution.execution.resolvedPath,
           trustedDirs: scope.trustedSafeBinDirs,
         })
       ) {
@@ -147,7 +160,7 @@ export function scanExecSafeBinTrustedDirHints(
       hits.push({
         scopePath: scope.scopePath,
         bin,
-        resolvedPath: resolution.resolvedPath,
+        resolvedPath: resolution.execution.resolvedPath,
       });
     }
   }
@@ -161,8 +174,13 @@ export function collectExecSafeBinCoverageWarnings(params: {
   if (params.hits.length === 0) {
     return [];
   }
-  const interpreterHits = params.hits.filter((hit) => hit.isInterpreter);
-  const customHits = params.hits.filter((hit) => !hit.isInterpreter);
+  const interpreterHits = params.hits.filter(
+    (hit) => hit.kind === "missingProfile" && hit.isInterpreter,
+  );
+  const customHits = params.hits.filter(
+    (hit) => hit.kind === "missingProfile" && !hit.isInterpreter,
+  );
+  const riskyHits = params.hits.filter((hit) => hit.kind === "riskySemantics");
   const lines: string[] = [];
   if (interpreterHits.length > 0) {
     for (const hit of interpreterHits.slice(0, 5)) {
@@ -184,6 +202,18 @@ export function collectExecSafeBinCoverageWarnings(params: {
     }
     if (customHits.length > 5) {
       lines.push(`- ${customHits.length - 5} more custom safeBins entries are missing profiles.`);
+    }
+  }
+  if (riskyHits.length > 0) {
+    for (const hit of riskyHits.slice(0, 5)) {
+      lines.push(
+        `- ${sanitizeForLog(hit.scopePath)}.safeBins includes '${sanitizeForLog(hit.bin)}': ${sanitizeForLog(hit.warning ?? "prefer explicit allowlist entries or approval-gated runs.")}`,
+      );
+    }
+    if (riskyHits.length > 5) {
+      lines.push(
+        `- ${riskyHits.length - 5} more safeBins entries should not use the low-risk safeBins fast path.`,
+      );
     }
   }
   lines.push(
@@ -224,6 +254,9 @@ export function maybeRepairExecSafeBinProfiles(cfg: OpenClawConfig): {
 
   for (const scope of collectExecSafeBinScopes(next)) {
     const interpreterBins = new Set(listInterpreterLikeSafeBins(scope.safeBins));
+    for (const hit of listRiskyConfiguredSafeBins(scope.safeBins)) {
+      warnings.push(`- ${scope.scopePath}.safeBins includes '${hit.bin}': ${hit.warning}`);
+    }
     const missingBins = scope.safeBins.filter((bin) => !scope.mergedProfiles[bin]);
     if (missingBins.length === 0) {
       continue;

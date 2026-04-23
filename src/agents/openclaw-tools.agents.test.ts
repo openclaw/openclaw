@@ -1,21 +1,19 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createPerSenderSessionConfig } from "./test-helpers/session-config.js";
+import { createAgentsListTool } from "./tools/agents-list-tool.js";
 
 let configOverride: ReturnType<(typeof import("../config/config.js"))["loadConfig"]> = {
   session: createPerSenderSessionConfig(),
 };
 
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
+vi.mock("../config/config.js", async () => {
+  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   return {
     ...actual,
     loadConfig: () => configOverride,
     resolveGatewayPort: () => 18789,
   };
 });
-
-import "./test-helpers/fast-core-tools.js";
-import { createOpenClawTools } from "./openclaw-tools.js";
 
 describe("agents_list", () => {
   type AgentConfig = NonNullable<NonNullable<typeof configOverride.agents>["list"]>[number];
@@ -29,14 +27,10 @@ describe("agents_list", () => {
     };
   }
 
-  function requireAgentsListTool() {
-    const tool = createOpenClawTools({
+  function createTool() {
+    return createAgentsListTool({
       agentSessionKey: "main",
-    }).find((candidate) => candidate.name === "agents_list");
-    if (!tool) {
-      throw new Error("missing agents_list tool");
-    }
-    return tool;
+    });
   }
 
   function readAgentList(result: unknown) {
@@ -44,14 +38,11 @@ describe("agents_list", () => {
       .details?.agents;
   }
 
-  beforeEach(() => {
+  it("defaults to the requester agent only", async () => {
     configOverride = {
       session: createPerSenderSessionConfig(),
     };
-  });
-
-  it("defaults to the requester agent only", async () => {
-    const tool = requireAgentsListTool();
+    const tool = createTool();
     const result = await tool.execute("call1", {});
     expect(result.details).toMatchObject({
       requester: "main",
@@ -76,8 +67,36 @@ describe("agents_list", () => {
       },
     ]);
 
-    const tool = requireAgentsListTool();
+    const tool = createTool();
     const result = await tool.execute("call2", {});
+    const agents = readAgentList(result);
+    expect(agents?.map((agent) => agent.id)).toEqual(["main", "research"]);
+  });
+
+  it("falls back to default allowlist when the requester agent omits allowAgents", async () => {
+    configOverride = {
+      session: createPerSenderSessionConfig(),
+      agents: {
+        defaults: {
+          subagents: {
+            allowAgents: ["research"],
+          },
+        },
+        list: [
+          {
+            id: "main",
+            name: "Main",
+          },
+          {
+            id: "research",
+            name: "Research",
+          },
+        ],
+      },
+    };
+
+    const tool = createTool();
+    const result = await tool.execute("call2b", {});
     const agents = readAgentList(result);
     expect(agents?.map((agent) => agent.id)).toEqual(["main", "research"]);
   });
@@ -100,7 +119,7 @@ describe("agents_list", () => {
       },
     ]);
 
-    const tool = requireAgentsListTool();
+    const tool = createTool();
     const result = await tool.execute("call3", {});
     expect(result.details).toMatchObject({
       allowAny: true,
@@ -119,7 +138,7 @@ describe("agents_list", () => {
       },
     ]);
 
-    const tool = requireAgentsListTool();
+    const tool = createTool();
     const result = await tool.execute("call4", {});
     const agents = readAgentList(result);
     expect(agents?.map((agent) => agent.id)).toEqual(["main", "research"]);

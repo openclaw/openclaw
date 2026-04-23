@@ -9,6 +9,7 @@ export const ACP_ERROR_CODES = [
 ] as const;
 
 export type AcpRuntimeErrorCode = (typeof ACP_ERROR_CODES)[number];
+const ACP_ERROR_CODE_SET = new Set<AcpRuntimeErrorCode>(ACP_ERROR_CODES);
 
 export class AcpRuntimeError extends Error {
   readonly code: AcpRuntimeErrorCode;
@@ -22,8 +23,25 @@ export class AcpRuntimeError extends Error {
   }
 }
 
+function getForeignAcpRuntimeError(value: unknown): {
+  code: AcpRuntimeErrorCode;
+  message: string;
+} | null {
+  if (!(value instanceof Error)) {
+    return null;
+  }
+  const code = (value as { code?: unknown }).code;
+  if (typeof code !== "string" || !ACP_ERROR_CODE_SET.has(code as AcpRuntimeErrorCode)) {
+    return null;
+  }
+  return {
+    code: code as AcpRuntimeErrorCode,
+    message: value.message,
+  };
+}
+
 export function isAcpRuntimeError(value: unknown): value is AcpRuntimeError {
-  return value instanceof AcpRuntimeError;
+  return value instanceof AcpRuntimeError || getForeignAcpRuntimeError(value) !== null;
 }
 
 export function toAcpRuntimeError(params: {
@@ -33,6 +51,12 @@ export function toAcpRuntimeError(params: {
 }): AcpRuntimeError {
   if (params.error instanceof AcpRuntimeError) {
     return params.error;
+  }
+  const foreignAcpRuntimeError = getForeignAcpRuntimeError(params.error);
+  if (foreignAcpRuntimeError) {
+    return new AcpRuntimeError(foreignAcpRuntimeError.code, foreignAcpRuntimeError.message, {
+      cause: params.error,
+    });
   }
   if (params.error instanceof Error) {
     return new AcpRuntimeError(params.fallbackCode, params.error.message, {

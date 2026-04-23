@@ -1,44 +1,248 @@
-import { Type } from "@sinclair/typebox";
+import { Type, type TSchema } from "typebox";
 import { loadConfig } from "../../config/config.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
 import type { CronDelivery, CronMessageChannel } from "../../cron/types.js";
 import { normalizeHttpWebhookUrl } from "../../cron/webhook-url.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../../shared/string-coerce.js";
 import { isRecord, truncateUtf16Safe } from "../../utils.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
+import { CRON_TOOL_DISPLAY_SUMMARY } from "../tool-description-presets.js";
 import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
 import { callGatewayTool, readGatewayCallOptions, type GatewayCallOptions } from "./gateway.js";
+import { isOpenClawOwnerOnlyCoreToolName } from "./owner-only-tools.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-helpers.js";
 
-// NOTE: We use Type.Object({}, { additionalProperties: true }) for job/patch
-// instead of CronAddParamsSchema/CronJobPatchSchema because the gateway schemas
-// contain nested unions. Tool schemas need to stay provider-friendly, so we
-// accept "any object" here and validate at runtime.
+// We spell out job/patch properties so that LLMs know what fields to send.
+// Nested unions are avoided; runtime validation happens in normalizeCronJob*.
 
 const CRON_ACTIONS = ["status", "list", "add", "update", "remove", "run", "runs", "wake"] as const;
 
+const CRON_SCHEDULE_KINDS = ["at", "every", "cron"] as const;
 const CRON_WAKE_MODES = ["now", "next-heartbeat"] as const;
+const CRON_PAYLOAD_KINDS = ["systemEvent", "agentTurn"] as const;
+const CRON_DELIVERY_MODES = ["none", "announce", "webhook"] as const;
 const CRON_RUN_MODES = ["due", "force"] as const;
+const CRON_FLAT_PAYLOAD_KEYS = [
+  "message",
+  "text",
+  "model",
+  "fallbacks",
+  "toolsAllow",
+  "thinking",
+  "timeoutSeconds",
+  "lightContext",
+  "allowUnsafeExternalContent",
+] as const;
+const CRON_RECOVERABLE_OBJECT_KEYS: ReadonlySet<string> = new Set([
+  "name",
+  "schedule",
+  "sessionTarget",
+  "wakeMode",
+  "payload",
+  "delivery",
+  "enabled",
+  "description",
+  "deleteAfterRun",
+  "agentId",
+  "sessionKey",
+  "failureAlert",
+  ...CRON_FLAT_PAYLOAD_KEYS,
+]);
 
 const REMINDER_CONTEXT_MESSAGES_MAX = 10;
 const REMINDER_CONTEXT_PER_MESSAGE_MAX = 220;
 const REMINDER_CONTEXT_TOTAL_MAX = 700;
 const REMINDER_CONTEXT_MARKER = "\n\nRecent context:\n";
 
+function isMissingOrEmptyObject(value: unknown): boolean {
+  return !value || (isRecord(value) && Object.keys(value).length === 0);
+}
+
+function recoverCronObjectFromFlatParams(params: Record<string, unknown>): {
+  found: boolean;
+  value: Record<string, unknown>;
+} {
+  const value: Record<string, unknown> = {};
+  let found = false;
+  for (const key of Object.keys(params)) {
+    if (CRON_RECOVERABLE_OBJECT_KEYS.has(key) && params[key] !== undefined) {
+      value[key] = params[key];
+      found = true;
+    }
+  }
+  return { found, value };
+}
+
+function hasCronCreateSignal(value: Record<string, unknown>): boolean {
+  return (
+    value.schedule !== undefined ||
+    value.payload !== undefined ||
+    value.message !== undefined ||
+    value.text !== undefined
+  );
+}
+
+function nullableStringSchema(description: string) {
+  return Type.Optional(Type.String({ description }));
+}
+
+function nullableStringArraySchema(description: string) {
+  return Type.Optional(Type.Array(Type.String(), { description }));
+}
+
+function cronPayloadObjectSchema(params: { toolsAllow: TSchema }) {
+  return Type.Object(
+    {
+      kind: optionalStringEnum(CRON_PAYLOAD_KINDS, { description: "Payload type" }),
+      text: Type.Optional(Type.String({ description: "Message text (kind=systemEvent)" })),
+      message: Type.Optional(Type.String({ description: "Agent prompt (kind=agentTurn)" })),
+      model: Type.Optional(Type.String({ description: "Model override" })),
+      thinking: Type.Optional(Type.String({ description: "Thinking level override" })),
+      timeoutSeconds: Type.Optional(Type.Number()),
+      lightContext: Type.Optional(Type.Boolean()),
+      allowUnsafeExternalContent: Type.Optional(Type.Boolean()),
+      fallbacks: Type.Optional(Type.Array(Type.String(), { description: "Fallback model ids" })),
+      toolsAllow: params.toolsAllow,
+    },
+    { additionalProperties: true },
+  );
+}
+
+const CronScheduleSchema = Type.Optional(
+  Type.Object(
+    {
+      kind: optionalStringEnum(CRON_SCHEDULE_KINDS, { description: "Schedule type" }),
+      at: Type.Optional(Type.String({ description: "ISO-8601 timestamp (kind=at)" })),
+      everyMs: Type.Optional(Type.Number({ description: "Interval in milliseconds (kind=every)" })),
+      anchorMs: Type.Optional(
+        Type.Number({ description: "Optional start anchor in milliseconds (kind=every)" }),
+      ),
+      expr: Type.Optional(Type.String({ description: "Cron expression (kind=cron)" })),
+      tz: Type.Optional(Type.String({ description: "IANA timezone (kind=cron)" })),
+      staggerMs: Type.Optional(Type.Number({ description: "Random jitter in ms (kind=cron)" })),
+    },
+    { additionalProperties: true },
+  ),
+);
+
+const CronPayloadSchema = Type.Optional(
+  cronPayloadObjectSchema({
+    toolsAllow: Type.Optional(Type.Array(Type.String(), { description: "Allowed tool ids" })),
+  }),
+);
+
+const CronDeliverySchema = Type.Optional(
+  Type.Object(
+    {
+      mode: optionalStringEnum(CRON_DELIVERY_MODES, { description: "Delivery mode" }),
+      channel: Type.Optional(Type.String({ description: "Delivery channel" })),
+      to: Type.Optional(Type.String({ description: "Delivery target" })),
+      bestEffort: Type.Optional(Type.Boolean()),
+      accountId: Type.Optional(Type.String({ description: "Account target for delivery" })),
+      failureDestination: Type.Optional(
+        Type.Object(
+          {
+            channel: Type.Optional(Type.String()),
+            to: Type.Optional(Type.String()),
+            accountId: Type.Optional(Type.String()),
+            mode: optionalStringEnum(["announce", "webhook"] as const),
+          },
+          { additionalProperties: true },
+        ),
+      ),
+    },
+    { additionalProperties: true },
+  ),
+);
+
+// Omitting `failureAlert` means "leave defaults/unchanged"; `false` explicitly disables alerts.
+// Runtime handles `failureAlert === false` in cron/service/timer.ts.
+// The schema declares `type: "object"` to stay compatible with providers that
+// enforce an OpenAPI 3.0 subset (e.g. Gemini via GitHub Copilot).  The
+// description tells the LLM that `false` is also accepted.
+const CronFailureAlertSchema = Type.Optional(
+  Type.Unsafe<Record<string, unknown> | false>({
+    type: "object",
+    properties: {
+      after: Type.Optional(Type.Number({ description: "Failures before alerting" })),
+      channel: Type.Optional(Type.String({ description: "Alert channel" })),
+      to: Type.Optional(Type.String({ description: "Alert target" })),
+      cooldownMs: Type.Optional(Type.Number({ description: "Cooldown between alerts in ms" })),
+      mode: optionalStringEnum(["announce", "webhook"] as const),
+      accountId: Type.Optional(Type.String()),
+    },
+    additionalProperties: true,
+    description:
+      "Failure alert config object, or the boolean value false to disable alerts for this job",
+  }),
+);
+
+const CronJobObjectSchema = Type.Optional(
+  Type.Object(
+    {
+      name: Type.Optional(Type.String({ description: "Job name" })),
+      schedule: CronScheduleSchema,
+      sessionTarget: Type.Optional(
+        Type.String({
+          description: 'Session target: "main", "isolated", "current", or "session:<id>"',
+        }),
+      ),
+      wakeMode: optionalStringEnum(CRON_WAKE_MODES, { description: "When to wake the session" }),
+      payload: CronPayloadSchema,
+      delivery: CronDeliverySchema,
+      agentId: nullableStringSchema("Agent id, or null to keep it unset"),
+      description: Type.Optional(Type.String({ description: "Human-readable description" })),
+      enabled: Type.Optional(Type.Boolean()),
+      deleteAfterRun: Type.Optional(Type.Boolean({ description: "Delete after first execution" })),
+      sessionKey: nullableStringSchema("Explicit session key, or null to clear it"),
+      failureAlert: CronFailureAlertSchema,
+    },
+    { additionalProperties: true },
+  ),
+);
+
+const CronPatchObjectSchema = Type.Optional(
+  Type.Object(
+    {
+      name: Type.Optional(Type.String({ description: "Job name" })),
+      schedule: CronScheduleSchema,
+      sessionTarget: Type.Optional(Type.String({ description: "Session target" })),
+      wakeMode: optionalStringEnum(CRON_WAKE_MODES),
+      payload: Type.Optional(
+        cronPayloadObjectSchema({
+          toolsAllow: nullableStringArraySchema("Allowed tool ids, or null to clear"),
+        }),
+      ),
+      delivery: CronDeliverySchema,
+      description: Type.Optional(Type.String()),
+      enabled: Type.Optional(Type.Boolean()),
+      deleteAfterRun: Type.Optional(Type.Boolean()),
+      agentId: nullableStringSchema("Agent id, or null to clear it"),
+      sessionKey: nullableStringSchema("Explicit session key, or null to clear it"),
+      failureAlert: CronFailureAlertSchema,
+    },
+    { additionalProperties: true },
+  ),
+);
+
 // Flattened schema: runtime validates per-action requirements.
-const CronToolSchema = Type.Object(
+export const CronToolSchema = Type.Object(
   {
     action: stringEnum(CRON_ACTIONS),
     gatewayUrl: Type.Optional(Type.String()),
     gatewayToken: Type.Optional(Type.String()),
     timeoutMs: Type.Optional(Type.Number()),
     includeDisabled: Type.Optional(Type.Boolean()),
-    job: Type.Optional(Type.Object({}, { additionalProperties: true })),
+    job: CronJobObjectSchema,
     jobId: Type.Optional(Type.String()),
     id: Type.Optional(Type.String()),
-    patch: Type.Optional(Type.Object({}, { additionalProperties: true })),
+    patch: CronPatchObjectSchema,
     text: Type.Optional(Type.String()),
     mode: optionalStringEnum(CRON_WAKE_MODES),
     runMode: optionalStringEnum(CRON_RUN_MODES),
@@ -145,7 +349,7 @@ async function buildReminderContextLines(params: {
 }
 
 function stripThreadSuffixFromSessionKey(sessionKey: string): string {
-  const normalized = sessionKey.toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(sessionKey);
   const idx = normalized.lastIndexOf(":thread:");
   if (idx <= 0) {
     return sessionKey;
@@ -167,7 +371,7 @@ function inferDeliveryFromSessionKey(agentSessionKey?: string): CronDelivery | n
   if (parts.length === 0) {
     return null;
   }
-  const head = parts[0]?.trim().toLowerCase();
+  const head = normalizeOptionalLowercaseString(parts[0]);
   if (!head || head === "main" || head === "subagent" || head === "acp") {
     return null;
   }
@@ -197,7 +401,7 @@ function inferDeliveryFromSessionKey(agentSessionKey?: string): CronDelivery | n
 
   let channel: CronMessageChannel | undefined;
   if (markerIndex >= 1) {
-    channel = parts[0]?.trim().toLowerCase() as CronMessageChannel;
+    channel = normalizeOptionalLowercaseString(parts[0]) as CronMessageChannel | undefined;
   }
 
   const delivery: CronDelivery = { mode: "announce", to: peerId };
@@ -212,8 +416,11 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
   return {
     label: "Cron",
     name: "cron",
-    ownerOnly: true,
-    description: `Manage Gateway cron jobs (status/list/add/update/remove/run/runs) and send wake events.
+    ownerOnly: isOpenClawOwnerOnlyCoreToolName("cron"),
+    displaySummary: CRON_TOOL_DISPLAY_SUMMARY,
+    description: `Manage Gateway cron jobs (status/list/add/update/remove/run/runs) and send wake events. Use this for reminders, "check back later" requests, delayed follow-ups, and recurring tasks. Do not emulate scheduling with exec sleep or process polling.
+
+Main-session cron jobs enqueue system events for heartbeat handling. Isolated cron jobs create background task runs that appear in \`openclaw tasks\`.
 
 ACTIONS:
 - status: Check cron scheduler status
@@ -307,50 +514,13 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
           // them inside `job`. When `params.job` is missing or empty, reconstruct
           // a synthetic job object from any recognised top-level job fields.
           // See: https://github.com/openclaw/openclaw/issues/11310
-          if (
-            !params.job ||
-            (typeof params.job === "object" &&
-              params.job !== null &&
-              Object.keys(params.job as Record<string, unknown>).length === 0)
-          ) {
-            const JOB_KEYS: ReadonlySet<string> = new Set([
-              "name",
-              "schedule",
-              "sessionTarget",
-              "wakeMode",
-              "payload",
-              "delivery",
-              "enabled",
-              "description",
-              "deleteAfterRun",
-              "agentId",
-              "sessionKey",
-              "message",
-              "text",
-              "model",
-              "thinking",
-              "timeoutSeconds",
-              "allowUnsafeExternalContent",
-            ]);
-            const synthetic: Record<string, unknown> = {};
-            let found = false;
-            for (const key of Object.keys(params)) {
-              if (JOB_KEYS.has(key) && params[key] !== undefined) {
-                synthetic[key] = params[key];
-                found = true;
-              }
-            }
+          if (isMissingOrEmptyObject(params.job)) {
+            const synthetic = recoverCronObjectFromFlatParams(params);
             // Only use the synthetic job if at least one meaningful field is present
             // (schedule, payload, message, or text are the minimum signals that the
             // LLM intended to create a job).
-            if (
-              found &&
-              (synthetic.schedule !== undefined ||
-                synthetic.payload !== undefined ||
-                synthetic.message !== undefined ||
-                synthetic.text !== undefined)
-            ) {
-              params.job = synthetic;
+            if (synthetic.found && hasCronCreateSignal(synthetic.value)) {
+              params.job = synthetic.value;
             }
           }
 
@@ -390,7 +560,7 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
             const deliveryValue = (job as { delivery?: unknown }).delivery;
             const delivery = isRecord(deliveryValue) ? deliveryValue : undefined;
             const modeRaw = typeof delivery?.mode === "string" ? delivery.mode : "";
-            const mode = modeRaw.trim().toLowerCase();
+            const mode = normalizeLowercaseStringOrEmpty(modeRaw);
             if (mode === "webhook") {
               const webhookUrl = normalizeHttpWebhookUrl(delivery?.to);
               if (!webhookUrl) {
@@ -454,37 +624,12 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
           }
 
           // Flat-params recovery for patch
-          if (
-            !params.patch ||
-            (typeof params.patch === "object" &&
-              params.patch !== null &&
-              Object.keys(params.patch as Record<string, unknown>).length === 0)
-          ) {
-            const PATCH_KEYS: ReadonlySet<string> = new Set([
-              "name",
-              "schedule",
-              "payload",
-              "delivery",
-              "enabled",
-              "description",
-              "deleteAfterRun",
-              "agentId",
-              "sessionKey",
-              "sessionTarget",
-              "wakeMode",
-              "failureAlert",
-              "allowUnsafeExternalContent",
-            ]);
-            const synthetic: Record<string, unknown> = {};
-            let found = false;
-            for (const key of Object.keys(params)) {
-              if (PATCH_KEYS.has(key) && params[key] !== undefined) {
-                synthetic[key] = params[key];
-                found = true;
-              }
-            }
-            if (found) {
-              params.patch = synthetic;
+          let recoveredFlatPatch = false;
+          if (isMissingOrEmptyObject(params.patch)) {
+            const synthetic = recoverCronObjectFromFlatParams(params);
+            if (synthetic.found) {
+              params.patch = synthetic.value;
+              recoveredFlatPatch = true;
             }
           }
 
@@ -492,6 +637,14 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
             throw new Error("patch required");
           }
           const patch = normalizeCronJobPatch(params.patch) ?? params.patch;
+          if (
+            recoveredFlatPatch &&
+            typeof patch === "object" &&
+            patch !== null &&
+            Object.keys(patch as Record<string, unknown>).length === 0
+          ) {
+            throw new Error("patch required");
+          }
           return jsonResult(
             await callGateway("cron.update", gatewayOpts, {
               id,

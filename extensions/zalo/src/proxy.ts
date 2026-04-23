@@ -1,4 +1,4 @@
-import type { Dispatcher, RequestInit as UndiciRequestInit } from "undici";
+import type { RequestInit as UndiciRequestInit } from "undici";
 import { ProxyAgent, fetch as undiciFetch } from "undici";
 import type { ZaloFetch } from "./api.js";
 

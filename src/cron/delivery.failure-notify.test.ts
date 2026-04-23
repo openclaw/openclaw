@@ -95,6 +95,27 @@ describe("sendFailureNotificationAnnounce", () => {
     );
   });
 
+  it("passes sessionKey through to delivery-target resolution", async () => {
+    await sendFailureNotificationAnnounce(
+      {} as never,
+      {} as never,
+      "main",
+      "job-1",
+      {
+        channel: "telegram",
+        sessionKey: "agent:main:telegram:direct:123:thread:99",
+      },
+      "Cron failed",
+    );
+
+    expect(mocks.resolveDeliveryTarget).toHaveBeenCalledWith({} as never, "main", {
+      channel: "telegram",
+      to: undefined,
+      accountId: undefined,
+      sessionKey: "agent:main:telegram:direct:123:thread:99",
+    });
+  });
+
   it("does not send when target resolution fails", async () => {
     mocks.resolveDeliveryTarget.mockResolvedValue({
       ok: false,

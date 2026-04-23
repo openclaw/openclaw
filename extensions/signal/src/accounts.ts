@@ -1,10 +1,11 @@
 import {
   createAccountListHelpers,
   normalizeAccountId,
-  resolveAccountEntry,
+  resolveMergedAccountConfig,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/account-resolution";
-import type { SignalAccountConfig } from "./runtime-api.js";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import type { SignalAccountConfig } from "./account-types.js";
 
 export type ResolvedSignalAccount = {
   accountId: string;
@@ -19,45 +20,42 @@ const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("si
 export const listSignalAccountIds = listAccountIds;
 export const resolveDefaultSignalAccountId = resolveDefaultAccountId;
 
-function resolveAccountConfig(
-  cfg: OpenClawConfig,
-  accountId: string,
-): SignalAccountConfig | undefined {
-  return resolveAccountEntry(cfg.channels?.signal?.accounts, accountId);
-}
-
 function mergeSignalAccountConfig(cfg: OpenClawConfig, accountId: string): SignalAccountConfig {
-  const { accounts: _ignored, ...base } = (cfg.channels?.signal ?? {}) as SignalAccountConfig & {
-    accounts?: unknown;
-  };
-  const account = resolveAccountConfig(cfg, accountId) ?? {};
-  return { ...base, ...account };
+  return resolveMergedAccountConfig<SignalAccountConfig>({
+    channelConfig: cfg.channels?.signal as SignalAccountConfig | undefined,
+    accounts: cfg.channels?.signal?.accounts as
+      | Record<string, Partial<SignalAccountConfig>>
+      | undefined,
+    accountId,
+  });
 }
 
 export function resolveSignalAccount(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): ResolvedSignalAccount {
-  const accountId = normalizeAccountId(params.accountId);
+  const accountId = normalizeAccountId(
+    params.accountId ?? resolveDefaultSignalAccountId(params.cfg),
+  );
   const baseEnabled = params.cfg.channels?.signal?.enabled !== false;
   const merged = mergeSignalAccountConfig(params.cfg, accountId);
   const accountEnabled = merged.enabled !== false;
   const enabled = baseEnabled && accountEnabled;
-  const host = merged.httpHost?.trim() || "127.0.0.1";
+  const host = normalizeOptionalString(merged.httpHost) ?? "127.0.0.1";
   const port = merged.httpPort ?? 8080;
-  const baseUrl = merged.httpUrl?.trim() || `http://${host}:${port}`;
+  const baseUrl = normalizeOptionalString(merged.httpUrl) ?? `http://${host}:${port}`;
   const configured = Boolean(
-    merged.account?.trim() ||
-    merged.httpUrl?.trim() ||
-    merged.cliPath?.trim() ||
-    merged.httpHost?.trim() ||
+    normalizeOptionalString(merged.account) ||
+    normalizeOptionalString(merged.httpUrl) ||
+    normalizeOptionalString(merged.cliPath) ||
+    normalizeOptionalString(merged.httpHost) ||
     typeof merged.httpPort === "number" ||
     typeof merged.autoStart === "boolean",
   );
   return {
     accountId,
     enabled,
-    name: merged.name?.trim() || undefined,
+    name: normalizeOptionalString(merged.name),
     baseUrl,
     configured,
     config: merged,

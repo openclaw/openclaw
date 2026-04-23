@@ -1,164 +1,198 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, it, vi } from "vitest";
+import {
+  buildForwardCompatTemplate,
+  expectResolvedForwardCompatFallbackWithRegistryResult,
+} from "./model.forward-compat.test-support.js";
+import { resolveModelWithRegistry } from "./model.js";
+import { createProviderRuntimeTestMock } from "./model.provider-runtime.test-support.js";
 
-vi.mock("../pi-model-discovery.js", () => ({
-  discoverAuthStorage: vi.fn(() => ({ mocked: true })),
-  discoverModels: vi.fn(() => ({ find: vi.fn(() => null) })),
+vi.mock("../../plugins/provider-runtime.js", () => ({
+  applyProviderResolvedModelCompatWithPlugins: () => undefined,
+  applyProviderResolvedTransportWithPlugin: () => undefined,
+  buildProviderUnknownModelHintWithPlugin: () => undefined,
+  clearProviderRuntimeHookCache: () => undefined,
+  normalizeProviderResolvedModelWithPlugin: () => undefined,
+  normalizeProviderTransportWithPlugin: () => undefined,
+  prepareProviderDynamicModel: async () => undefined,
+  resolveProviderBuiltInModelSuppression: () => undefined,
+  runProviderDynamicModel: () => undefined,
+  shouldPreferProviderRuntimeResolvedModel: () => false,
 }));
 
-import { buildInlineProviderModels, resolveModel } from "./model.js";
-import {
-  GOOGLE_GEMINI_CLI_FLASH_TEMPLATE_MODEL,
-  GOOGLE_GEMINI_CLI_PRO_TEMPLATE_MODEL,
-  makeModel,
-  mockDiscoveredModel,
-  mockGoogleGeminiCliFlashTemplateModel,
-  mockGoogleGeminiCliProTemplateModel,
-  resetMockDiscoverModels,
-} from "./model.test-harness.js";
-
-beforeEach(() => {
-  resetMockDiscoverModels();
+const ANTHROPIC_OPUS_TEMPLATE = buildForwardCompatTemplate({
+  id: "claude-opus-4-5",
+  name: "Claude Opus 4.5",
+  provider: "anthropic",
+  api: "anthropic-messages",
+  baseUrl: "https://api.anthropic.com",
 });
 
-describe("pi embedded model e2e smoke", () => {
-  it("attaches provider ids and provider-level baseUrl for inline models", () => {
-    const providers = {
-      custom: {
-        baseUrl: "http://localhost:8000",
-        models: [makeModel("custom-model")],
-      },
-    };
+const ANTHROPIC_OPUS_EXPECTED = {
+  provider: "anthropic",
+  id: "claude-opus-4-6",
+  api: "anthropic-messages",
+  baseUrl: "https://api.anthropic.com",
+  reasoning: true,
+};
 
-    const result = buildInlineProviderModels(providers);
-    expect(result).toEqual([
-      {
-        ...makeModel("custom-model"),
-        provider: "custom",
-        baseUrl: "http://localhost:8000",
-        api: undefined,
-      },
-    ]);
+const ANTHROPIC_SONNET_TEMPLATE = buildForwardCompatTemplate({
+  id: "claude-sonnet-4-5",
+  name: "Claude Sonnet 4.5",
+  provider: "anthropic",
+  api: "anthropic-messages",
+  baseUrl: "https://api.anthropic.com",
+});
+
+const ANTHROPIC_SONNET_EXPECTED = {
+  provider: "anthropic",
+  id: "claude-sonnet-4-6",
+  api: "anthropic-messages",
+  baseUrl: "https://api.anthropic.com",
+  reasoning: true,
+};
+
+const ZAI_GLM5_CASE = {
+  provider: "zai",
+  id: "glm-5",
+  expectedModel: {
+    provider: "zai",
+    id: "glm-5",
+    api: "openai-completions",
+    baseUrl: "https://api.z.ai/api/paas/v4",
+    reasoning: true,
+  },
+  registryEntries: [
+    {
+      provider: "zai",
+      modelId: "glm-4.7",
+      model: buildForwardCompatTemplate({
+        id: "glm-4.7",
+        name: "GLM-4.7",
+        provider: "zai",
+        api: "openai-completions",
+        baseUrl: "https://api.z.ai/api/paas/v4",
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        maxTokens: 131072,
+      }),
+    },
+  ],
+} as const;
+
+function createRuntimeHooks() {
+  return createProviderRuntimeTestMock({
+    handledDynamicProviders: ["anthropic", "claude-cli", "zai", "openai-codex"],
   });
+}
 
-  it("keeps unknown-model errors for non-forward-compat IDs", () => {
-    const result = resolveModel("openai-codex", "gpt-4.1-mini", "/tmp/agent");
-    expect(result.model).toBeUndefined();
-    expect(result.error).toBe("Unknown model: openai-codex/gpt-4.1-mini");
+function createRegistry(
+  entries: Array<{ provider: string; modelId: string; model: Record<string, unknown> }>,
+) {
+  return {
+    find(provider: string, modelId: string) {
+      const match = entries.find(
+        (entry) => entry.provider === provider && entry.modelId === modelId,
+      );
+      return match?.model ?? null;
+    },
+  } as never;
+}
+
+function runAnthropicOpusForwardCompatFallback() {
+  expectResolvedForwardCompatFallbackWithRegistryResult({
+    result: resolveModelWithRegistry({
+      provider: "anthropic",
+      modelId: "claude-opus-4-6",
+      agentDir: "/tmp/agent",
+      modelRegistry: createRegistry([
+        {
+          provider: "anthropic",
+          modelId: "claude-opus-4-5",
+          model: ANTHROPIC_OPUS_TEMPLATE,
+        },
+      ]),
+      runtimeHooks: createRuntimeHooks(),
+    }),
+    expectedModel: ANTHROPIC_OPUS_EXPECTED,
   });
+}
 
-  it("builds a google-gemini-cli forward-compat fallback for gemini-3.1-pro-preview", () => {
-    mockGoogleGeminiCliProTemplateModel();
-
-    const result = resolveModel("google-gemini-cli", "gemini-3.1-pro-preview", "/tmp/agent");
-    expect(result.error).toBeUndefined();
-    expect(result.model).toMatchObject({
-      ...GOOGLE_GEMINI_CLI_PRO_TEMPLATE_MODEL,
-      id: "gemini-3.1-pro-preview",
-      name: "gemini-3.1-pro-preview",
-      reasoning: true,
-    });
+function runAnthropicSonnetForwardCompatFallback() {
+  expectResolvedForwardCompatFallbackWithRegistryResult({
+    result: resolveModelWithRegistry({
+      provider: "anthropic",
+      modelId: "claude-sonnet-4-6",
+      agentDir: "/tmp/agent",
+      modelRegistry: createRegistry([
+        {
+          provider: "anthropic",
+          modelId: "claude-sonnet-4-5",
+          model: ANTHROPIC_SONNET_TEMPLATE,
+        },
+      ]),
+      runtimeHooks: createRuntimeHooks(),
+    }),
+    expectedModel: ANTHROPIC_SONNET_EXPECTED,
   });
+}
 
-  it("builds a google-gemini-cli forward-compat fallback for gemini-3.1-flash-preview", () => {
-    mockGoogleGeminiCliFlashTemplateModel();
-
-    const result = resolveModel("google-gemini-cli", "gemini-3.1-flash-preview", "/tmp/agent");
-    expect(result.error).toBeUndefined();
-    expect(result.model).toMatchObject({
-      ...GOOGLE_GEMINI_CLI_FLASH_TEMPLATE_MODEL,
-      id: "gemini-3.1-flash-preview",
-      name: "gemini-3.1-flash-preview",
-      reasoning: true,
-    });
+function runClaudeCliSonnetForwardCompatFallback() {
+  expectResolvedForwardCompatFallbackWithRegistryResult({
+    result: resolveModelWithRegistry({
+      provider: "claude-cli",
+      modelId: "claude-sonnet-4-6",
+      agentDir: "/tmp/agent",
+      modelRegistry: createRegistry([
+        {
+          provider: "anthropic",
+          modelId: "claude-sonnet-4-5",
+          model: ANTHROPIC_SONNET_TEMPLATE,
+        },
+      ]),
+      runtimeHooks: createRuntimeHooks(),
+    }),
+    expectedModel: {
+      ...ANTHROPIC_SONNET_EXPECTED,
+      provider: "claude-cli",
+    },
   });
+}
 
-  it("builds a google-gemini-cli forward-compat fallback for gemini-3.1-flash-lite-preview", () => {
-    mockGoogleGeminiCliFlashTemplateModel();
-
-    const result = resolveModel("google-gemini-cli", "gemini-3.1-flash-lite-preview", "/tmp/agent");
-    expect(result.error).toBeUndefined();
-    expect(result.model).toMatchObject({
-      ...GOOGLE_GEMINI_CLI_FLASH_TEMPLATE_MODEL,
-      id: "gemini-3.1-flash-lite-preview",
-      name: "gemini-3.1-flash-lite-preview",
-      reasoning: true,
-    });
+function runZaiForwardCompatFallback() {
+  const result = resolveModelWithRegistry({
+    provider: ZAI_GLM5_CASE.provider,
+    modelId: ZAI_GLM5_CASE.id,
+    agentDir: "/tmp/agent",
+    modelRegistry: createRegistry(
+      ZAI_GLM5_CASE.registryEntries.map((entry) => ({
+        provider: entry.provider,
+        modelId: entry.modelId,
+        model: entry.model,
+      })),
+    ),
+    runtimeHooks: createRuntimeHooks(),
   });
-
-  it("builds a google forward-compat fallback for gemini-3.1-pro-preview", () => {
-    mockDiscoveredModel({
-      provider: "google",
-      modelId: "gemini-3-pro-preview",
-      templateModel: {
-        ...GOOGLE_GEMINI_CLI_PRO_TEMPLATE_MODEL,
-        provider: "google",
-        api: "google-generative-ai",
-        baseUrl: "https://generativelanguage.googleapis.com",
-      },
-    });
-
-    const result = resolveModel("google", "gemini-3.1-pro-preview", "/tmp/agent");
-    expect(result.error).toBeUndefined();
-    expect(result.model).toMatchObject({
-      provider: "google",
-      api: "google-generative-ai",
-      baseUrl: "https://generativelanguage.googleapis.com",
-      id: "gemini-3.1-pro-preview",
-      name: "gemini-3.1-pro-preview",
-      reasoning: true,
-    });
+  expectResolvedForwardCompatFallbackWithRegistryResult({
+    result,
+    expectedModel: ZAI_GLM5_CASE.expectedModel,
   });
+}
 
-  it("builds a google forward-compat fallback for gemini-3.1-flash-lite-preview", () => {
-    mockDiscoveredModel({
-      provider: "google",
-      modelId: "gemini-3-flash-preview",
-      templateModel: {
-        ...GOOGLE_GEMINI_CLI_FLASH_TEMPLATE_MODEL,
-        provider: "google",
-        api: "google-generative-ai",
-        baseUrl: "https://generativelanguage.googleapis.com",
-      },
-    });
+describe("resolveModel forward-compat tail", () => {
+  it(
+    "builds an anthropic forward-compat fallback for claude-opus-4-6",
+    runAnthropicOpusForwardCompatFallback,
+  );
 
-    const result = resolveModel("google", "gemini-3.1-flash-lite-preview", "/tmp/agent");
-    expect(result.error).toBeUndefined();
-    expect(result.model).toMatchObject({
-      provider: "google",
-      api: "google-generative-ai",
-      baseUrl: "https://generativelanguage.googleapis.com",
-      id: "gemini-3.1-flash-lite-preview",
-      name: "gemini-3.1-flash-lite-preview",
-      reasoning: true,
-    });
-  });
+  it(
+    "builds an anthropic forward-compat fallback for claude-sonnet-4-6",
+    runAnthropicSonnetForwardCompatFallback,
+  );
 
-  it("builds an xai forward-compat fallback for Grok 4.1 fast reasoning", () => {
-    const result = resolveModel("xai", "grok-4-1-fast-reasoning", "/tmp/agent");
-    expect(result.error).toBeUndefined();
-    expect(result.model).toMatchObject({
-      provider: "xai",
-      api: "openai-completions",
-      baseUrl: "https://api.x.ai/v1",
-      id: "grok-4-1-fast-reasoning",
-      reasoning: true,
-      contextWindow: 2_000_000,
-    });
-  });
+  it(
+    "preserves the claude-cli provider for anthropic forward-compat fallback models",
+    runClaudeCliSonnetForwardCompatFallback,
+  );
 
-  it("keeps unknown-model errors for xai multi-agent-only ids", () => {
-    const result = resolveModel(
-      "xai",
-      "grok-4.20-multi-agent-experimental-beta-0304",
-      "/tmp/agent",
-    );
-    expect(result.model).toBeUndefined();
-    expect(result.error).toBe("Unknown model: xai/grok-4.20-multi-agent-experimental-beta-0304");
-  });
-
-  it("keeps unknown-model errors for unrecognized google-gemini-cli model IDs", () => {
-    const result = resolveModel("google-gemini-cli", "gemini-4-unknown", "/tmp/agent");
-    expect(result.model).toBeUndefined();
-    expect(result.error).toBe("Unknown model: google-gemini-cli/gemini-4-unknown");
-  });
+  it("builds a zai forward-compat fallback for glm-5", runZaiForwardCompatFallback);
 });

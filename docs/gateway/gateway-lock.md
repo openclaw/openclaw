@@ -3,12 +3,8 @@ summary: "Gateway singleton guard using the WebSocket listener bind"
 read_when:
   - Running or debugging the gateway process
   - Investigating single-instance enforcement
-title: "Gateway Lock"
+title: "Gateway lock"
 ---
-
-# Gateway lock
-
-Last updated: 2025-12-11
 
 ## Why
 
@@ -32,3 +28,8 @@ Last updated: 2025-12-11
 
 - If the port is occupied by _another_ process, the error is the same; free the port or choose another with `openclaw gateway --port <port>`.
 - The macOS app still maintains its own lightweight PID guard before spawning the gateway; the runtime lock is enforced by the WebSocket bind.
+
+## Related
+
+- [Multiple Gateways](/gateway/multiple-gateways) — running multiple instances with unique ports
+- [Troubleshooting](/gateway/troubleshooting) — diagnosing `EADDRINUSE` and port conflicts

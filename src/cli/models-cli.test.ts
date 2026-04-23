@@ -1,45 +1,84 @@
 import { Command } from "commander";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { runRegisteredCli } from "../test-utils/command-runner.js";
+import { registerModelsCli } from "./models-cli.js";
 
-const modelsStatusCommand = vi.fn().mockResolvedValue(undefined);
-const noopAsync = vi.fn(async () => undefined);
-const modelsAuthLoginCommand = vi.fn().mockResolvedValue(undefined);
+const mocks = vi.hoisted(() => ({
+  modelsStatusCommand: vi.fn().mockResolvedValue(undefined),
+  noopAsync: vi.fn(async () => undefined),
+  modelsAuthLoginCommand: vi.fn().mockResolvedValue(undefined),
+}));
+
+const { modelsStatusCommand, modelsAuthLoginCommand } = mocks;
 
 vi.mock("../commands/models.js", () => ({
-  modelsStatusCommand,
-  modelsAliasesAddCommand: noopAsync,
-  modelsAliasesListCommand: noopAsync,
-  modelsAliasesRemoveCommand: noopAsync,
-  modelsAuthAddCommand: noopAsync,
-  modelsAuthLoginCommand,
-  modelsAuthOrderClearCommand: noopAsync,
-  modelsAuthOrderGetCommand: noopAsync,
-  modelsAuthOrderSetCommand: noopAsync,
-  modelsAuthPasteTokenCommand: noopAsync,
-  modelsAuthSetupTokenCommand: noopAsync,
-  modelsFallbacksAddCommand: noopAsync,
-  modelsFallbacksClearCommand: noopAsync,
-  modelsFallbacksListCommand: noopAsync,
-  modelsFallbacksRemoveCommand: noopAsync,
-  modelsImageFallbacksAddCommand: noopAsync,
-  modelsImageFallbacksClearCommand: noopAsync,
-  modelsImageFallbacksListCommand: noopAsync,
-  modelsImageFallbacksRemoveCommand: noopAsync,
-  modelsListCommand: noopAsync,
-  modelsScanCommand: noopAsync,
-  modelsSetCommand: noopAsync,
-  modelsSetImageCommand: noopAsync,
+  modelsStatusCommand: mocks.modelsStatusCommand,
+  modelsAliasesAddCommand: mocks.noopAsync,
+  modelsAliasesListCommand: mocks.noopAsync,
+  modelsAliasesRemoveCommand: mocks.noopAsync,
+  modelsAuthAddCommand: mocks.noopAsync,
+  modelsAuthLoginCommand: mocks.modelsAuthLoginCommand,
+  modelsAuthOrderClearCommand: mocks.noopAsync,
+  modelsAuthOrderGetCommand: mocks.noopAsync,
+  modelsAuthOrderSetCommand: mocks.noopAsync,
+  modelsAuthPasteTokenCommand: mocks.noopAsync,
+  modelsAuthSetupTokenCommand: mocks.noopAsync,
+  modelsFallbacksAddCommand: mocks.noopAsync,
+  modelsFallbacksClearCommand: mocks.noopAsync,
+  modelsFallbacksListCommand: mocks.noopAsync,
+  modelsFallbacksRemoveCommand: mocks.noopAsync,
+  modelsImageFallbacksAddCommand: mocks.noopAsync,
+  modelsImageFallbacksClearCommand: mocks.noopAsync,
+  modelsImageFallbacksListCommand: mocks.noopAsync,
+  modelsImageFallbacksRemoveCommand: mocks.noopAsync,
+  modelsListCommand: mocks.noopAsync,
+  modelsScanCommand: mocks.noopAsync,
+  modelsSetCommand: mocks.noopAsync,
+  modelsSetImageCommand: mocks.noopAsync,
+}));
+vi.mock("../commands/models/list.js", () => ({
+  modelsListCommand: mocks.noopAsync,
+  modelsStatusCommand: mocks.modelsStatusCommand,
+}));
+vi.mock("../commands/models/auth.js", () => ({
+  modelsAuthAddCommand: mocks.noopAsync,
+  modelsAuthLoginCommand: mocks.modelsAuthLoginCommand,
+  modelsAuthPasteTokenCommand: mocks.noopAsync,
+  modelsAuthSetupTokenCommand: mocks.noopAsync,
+}));
+vi.mock("../commands/models/auth-order.js", () => ({
+  modelsAuthOrderClearCommand: mocks.noopAsync,
+  modelsAuthOrderGetCommand: mocks.noopAsync,
+  modelsAuthOrderSetCommand: mocks.noopAsync,
+}));
+vi.mock("../commands/models/aliases.js", () => ({
+  modelsAliasesAddCommand: mocks.noopAsync,
+  modelsAliasesListCommand: mocks.noopAsync,
+  modelsAliasesRemoveCommand: mocks.noopAsync,
+}));
+vi.mock("../commands/models/fallbacks.js", () => ({
+  modelsFallbacksAddCommand: mocks.noopAsync,
+  modelsFallbacksClearCommand: mocks.noopAsync,
+  modelsFallbacksListCommand: mocks.noopAsync,
+  modelsFallbacksRemoveCommand: mocks.noopAsync,
+}));
+vi.mock("../commands/models/image-fallbacks.js", () => ({
+  modelsImageFallbacksAddCommand: mocks.noopAsync,
+  modelsImageFallbacksClearCommand: mocks.noopAsync,
+  modelsImageFallbacksListCommand: mocks.noopAsync,
+  modelsImageFallbacksRemoveCommand: mocks.noopAsync,
+}));
+vi.mock("../commands/models/scan.js", () => ({
+  modelsScanCommand: mocks.noopAsync,
+}));
+vi.mock("../commands/models/set.js", () => ({
+  modelsSetCommand: mocks.noopAsync,
+}));
+vi.mock("../commands/models/set-image.js", () => ({
+  modelsSetImageCommand: mocks.noopAsync,
 }));
 
 describe("models cli", () => {
-  let registerModelsCli: (typeof import("./models-cli.js"))["registerModelsCli"];
-
-  beforeAll(async () => {
-    // Load once; vi.mock above ensures command handlers are already mocked.
-    ({ registerModelsCli } = await import("./models-cli.js"));
-  });
-
   beforeEach(() => {
     modelsAuthLoginCommand.mockClear();
     modelsStatusCommand.mockClear();

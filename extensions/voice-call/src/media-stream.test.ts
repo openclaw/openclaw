@@ -1,28 +1,33 @@
-import { once } from "node:events";
-import http from "node:http";
+import type { IncomingMessage } from "node:http";
+import net from "node:net";
+import type {
+  RealtimeTranscriptionProviderPlugin,
+  RealtimeTranscriptionSession,
+} from "openclaw/plugin-sdk/realtime-transcription";
 import { describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
-import { MediaStreamHandler } from "./media-stream.js";
-import type {
-  OpenAIRealtimeSTTProvider,
-  RealtimeSTTSession,
-} from "./providers/stt-openai-realtime.js";
+import { MediaStreamHandler, sanitizeLogText } from "./media-stream.js";
+import {
+  connectWs,
+  startUpgradeWsServer,
+  waitForClose,
+  withTimeout,
+} from "./websocket-test-support.js";
 
-const createStubSession = (): RealtimeSTTSession => ({
+const createStubSession = (): RealtimeTranscriptionSession => ({
   connect: async () => {},
   sendAudio: () => {},
-  waitForTranscript: async () => "",
-  onPartial: () => {},
-  onTranscript: () => {},
-  onSpeechStart: () => {},
   close: () => {},
   isConnected: () => true,
 });
 
-const createStubSttProvider = (): OpenAIRealtimeSTTProvider =>
+const createStubSttProvider = (): RealtimeTranscriptionProviderPlugin =>
   ({
     createSession: () => createStubSession(),
-  }) as unknown as OpenAIRealtimeSTTProvider;
+    id: "openai",
+    label: "OpenAI",
+    isConfigured: () => true,
+  }) as unknown as RealtimeTranscriptionProviderPlugin;
 
 const flush = async (): Promise<void> => {
   await new Promise((resolve) => setTimeout(resolve, 0));
@@ -37,74 +42,24 @@ const waitForAbort = (signal: AbortSignal): Promise<void> =>
     signal.addEventListener("abort", () => resolve(), { once: true });
   });
 
-const withTimeout = async <T>(promise: Promise<T>, timeoutMs = 2000): Promise<T> => {
-  let timer: ReturnType<typeof setTimeout> | null = null;
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`Timed out after ${timeoutMs}ms`)), timeoutMs);
-  });
-
-  try {
-    return await Promise.race([promise, timeout]);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-  }
-};
-
 const startWsServer = async (
   handler: MediaStreamHandler,
 ): Promise<{
   url: string;
   close: () => Promise<void>;
-}> => {
-  const server = http.createServer();
-  server.on("upgrade", (request, socket, head) => {
-    handler.handleUpgrade(request, socket, head);
-  });
-
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("Failed to resolve test server address");
-  }
-
-  return {
-    url: `ws://127.0.0.1:${address.port}/voice/stream`,
-    close: async () => {
-      await new Promise<void>((resolve, reject) => {
-        server.close((err) => (err ? reject(err) : resolve()));
-      });
+}> =>
+  startUpgradeWsServer({
+    urlPath: "/voice/stream",
+    onUpgrade: (request, socket, head) => {
+      handler.handleUpgrade(request, socket, head);
     },
-  };
-};
-
-const connectWs = async (url: string): Promise<WebSocket> => {
-  const ws = new WebSocket(url);
-  await withTimeout(once(ws, "open") as Promise<[unknown]>);
-  return ws;
-};
-
-const waitForClose = async (
-  ws: WebSocket,
-): Promise<{
-  code: number;
-  reason: string;
-}> => {
-  const [code, reason] = (await withTimeout(once(ws, "close") as Promise<[number, Buffer]>)) ?? [];
-  return {
-    code,
-    reason: Buffer.isBuffer(reason) ? reason.toString() : String(reason || ""),
-  };
-};
+  });
 
 describe("MediaStreamHandler TTS queue", () => {
   it("serializes TTS playback and resolves in order", async () => {
     const handler = new MediaStreamHandler({
-      sttProvider: createStubSttProvider(),
+      transcriptionProvider: createStubSttProvider(),
+      providerConfig: {},
     });
     const started: number[] = [];
     const finished: number[] = [];
@@ -137,7 +92,8 @@ describe("MediaStreamHandler TTS queue", () => {
 
   it("cancels active playback and clears queued items", async () => {
     const handler = new MediaStreamHandler({
-      sttProvider: createStubSttProvider(),
+      transcriptionProvider: createStubSttProvider(),
+      providerConfig: {},
     });
 
     let queuedRan = false;
@@ -165,7 +121,8 @@ describe("MediaStreamHandler TTS queue", () => {
 describe("MediaStreamHandler security hardening", () => {
   it("fails sends and closes stream when buffered bytes already exceed the cap", () => {
     const handler = new MediaStreamHandler({
-      sttProvider: createStubSttProvider(),
+      transcriptionProvider: createStubSttProvider(),
+      providerConfig: {},
     });
     const ws = {
       readyState: WebSocket.OPEN,
@@ -177,7 +134,12 @@ describe("MediaStreamHandler security hardening", () => {
       handler as unknown as {
         sessions: Map<
           string,
-          { callId: string; streamSid: string; ws: WebSocket; sttSession: RealtimeSTTSession }
+          {
+            callId: string;
+            streamSid: string;
+            ws: WebSocket;
+            sttSession: RealtimeTranscriptionSession;
+          }
         >;
       }
     ).sessions.set("MZ-backpressure", {
@@ -196,7 +158,8 @@ describe("MediaStreamHandler security hardening", () => {
 
   it("fails sends when buffered bytes exceed cap after enqueueing a frame", () => {
     const handler = new MediaStreamHandler({
-      sttProvider: createStubSttProvider(),
+      transcriptionProvider: createStubSttProvider(),
+      providerConfig: {},
     });
     const ws = {
       readyState: WebSocket.OPEN,
@@ -214,7 +177,12 @@ describe("MediaStreamHandler security hardening", () => {
       handler as unknown as {
         sessions: Map<
           string,
-          { callId: string; streamSid: string; ws: WebSocket; sttSession: RealtimeSTTSession }
+          {
+            callId: string;
+            streamSid: string;
+            ws: WebSocket;
+            sttSession: RealtimeTranscriptionSession;
+          }
         >;
       }
     ).sessions.set("MZ-overflow", {
@@ -231,42 +199,20 @@ describe("MediaStreamHandler security hardening", () => {
     expect(ws.close).toHaveBeenCalledWith(1013, "Backpressure: send buffer exceeded");
   });
 
-  it("sanitizes websocket close reason before logging", async () => {
-    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-    const handler = new MediaStreamHandler({
-      sttProvider: createStubSttProvider(),
-      preStartTimeoutMs: 5_000,
-      shouldAcceptStream: () => true,
-    });
-    const server = await startWsServer(handler);
-
-    try {
-      const ws = await connectWs(server.url);
-      ws.close(1000, "forged\nline\r\tentry");
-      await waitForClose(ws);
-
-      const closeLog = logSpy.mock.calls
-        .map((call) => call[0])
-        .find(
-          (value): value is string =>
-            typeof value === "string" && value.includes("[MediaStream] WebSocket closed"),
-        );
-      expect(closeLog).toBeDefined();
-      expect(closeLog).not.toContain("\n");
-      expect(closeLog).not.toContain("\r");
-      expect(closeLog).not.toContain("\t");
-      expect(closeLog).toContain("forged line entry");
-    } finally {
-      logSpy.mockRestore();
-      await server.close();
-    }
+  it("sanitizes websocket close reason before logging", () => {
+    const reason = sanitizeLogText("forged\nline\r\tentry", 120);
+    expect(reason).not.toContain("\n");
+    expect(reason).not.toContain("\r");
+    expect(reason).not.toContain("\t");
+    expect(reason).toContain("forged line entry");
   });
 
   it("closes idle pre-start connections after timeout", async () => {
     const shouldAcceptStreamCalls: Array<{ callId: string; streamSid: string; token?: string }> =
       [];
     const handler = new MediaStreamHandler({
-      sttProvider: createStubSttProvider(),
+      transcriptionProvider: createStubSttProvider(),
+      providerConfig: {},
       preStartTimeoutMs: 40,
       shouldAcceptStream: (params) => {
         shouldAcceptStreamCalls.push(params);
@@ -289,7 +235,8 @@ describe("MediaStreamHandler security hardening", () => {
 
   it("enforces pending connection limits", async () => {
     const handler = new MediaStreamHandler({
-      sttProvider: createStubSttProvider(),
+      transcriptionProvider: createStubSttProvider(),
+      providerConfig: {},
       preStartTimeoutMs: 5_000,
       maxPendingConnections: 1,
       maxPendingConnectionsPerIp: 1,
@@ -312,9 +259,46 @@ describe("MediaStreamHandler security hardening", () => {
     }
   });
 
+  it("uses resolved client IPs for per-IP pending limits", async () => {
+    const handler = new MediaStreamHandler({
+      transcriptionProvider: createStubSttProvider(),
+      providerConfig: {},
+      preStartTimeoutMs: 5_000,
+      maxPendingConnections: 10,
+      maxPendingConnectionsPerIp: 1,
+      resolveClientIp: (request) => String(request.headers["x-forwarded-for"] ?? ""),
+    });
+    const server = await startWsServer(handler);
+
+    try {
+      const first = new WebSocket(server.url, {
+        headers: { "x-forwarded-for": "198.51.100.10" },
+      });
+      await withTimeout(new Promise((resolve) => first.once("open", resolve)));
+
+      const second = new WebSocket(server.url, {
+        headers: { "x-forwarded-for": "203.0.113.20" },
+      });
+      await withTimeout(new Promise((resolve) => second.once("open", resolve)));
+
+      expect(first.readyState).toBe(WebSocket.OPEN);
+      expect(second.readyState).toBe(WebSocket.OPEN);
+
+      const firstClosed = waitForClose(first);
+      const secondClosed = waitForClose(second);
+      first.close();
+      second.close();
+      await firstClosed;
+      await secondClosed;
+    } finally {
+      await server.close();
+    }
+  });
+
   it("rejects upgrades when max connection cap is reached", async () => {
     const handler = new MediaStreamHandler({
-      sttProvider: createStubSttProvider(),
+      transcriptionProvider: createStubSttProvider(),
+      providerConfig: {},
       preStartTimeoutMs: 5_000,
       maxConnections: 1,
       maxPendingConnections: 10,
@@ -327,7 +311,7 @@ describe("MediaStreamHandler security hardening", () => {
       const secondError = await withTimeout(
         new Promise<Error>((resolve) => {
           const ws = new WebSocket(server.url);
-          ws.once("error", (err) => resolve(err as Error));
+          ws.once("error", (err) => resolve(err));
         }),
       );
 
@@ -340,9 +324,132 @@ describe("MediaStreamHandler security hardening", () => {
     }
   });
 
+  it("counts in-flight upgrades against the max connection cap", () => {
+    const handler = new MediaStreamHandler({
+      transcriptionProvider: createStubSttProvider(),
+      providerConfig: {},
+      maxConnections: 2,
+      maxPendingConnections: 10,
+      maxPendingConnectionsPerIp: 10,
+    });
+
+    const fakeWss = {
+      clients: new Set([{}]),
+      handleUpgrade: vi.fn(),
+      emit: vi.fn(),
+      on: vi.fn(),
+    };
+    let upgradeCallback: ((ws: WebSocket) => void) | null = null;
+    fakeWss.handleUpgrade.mockImplementation(
+      (
+        _request: IncomingMessage,
+        _socket: unknown,
+        _head: Buffer,
+        callback: (ws: WebSocket) => void,
+      ) => {
+        upgradeCallback = callback;
+      },
+    );
+
+    (
+      handler as unknown as {
+        wss: typeof fakeWss;
+      }
+    ).wss = fakeWss;
+
+    const firstSocket = {
+      once: vi.fn(),
+      removeListener: vi.fn(),
+      write: vi.fn(),
+      destroy: vi.fn(),
+    };
+    handler.handleUpgrade(
+      { socket: { remoteAddress: "127.0.0.1" } } as IncomingMessage,
+      firstSocket as never,
+      Buffer.alloc(0),
+    );
+
+    const secondSocket = {
+      once: vi.fn(),
+      removeListener: vi.fn(),
+      write: vi.fn(),
+      destroy: vi.fn(),
+    };
+    handler.handleUpgrade(
+      { socket: { remoteAddress: "127.0.0.1" } } as IncomingMessage,
+      secondSocket as never,
+      Buffer.alloc(0),
+    );
+
+    expect(fakeWss.handleUpgrade).toHaveBeenCalledTimes(1);
+    expect(secondSocket.write).toHaveBeenCalledOnce();
+    expect(secondSocket.destroy).toHaveBeenCalledOnce();
+
+    expect(upgradeCallback).not.toBeNull();
+    const completeUpgrade = upgradeCallback as ((ws: WebSocket) => void) | null;
+    if (!completeUpgrade) {
+      throw new Error("Expected upgrade callback to be registered");
+    }
+    completeUpgrade({} as WebSocket);
+    expect(fakeWss.emit).toHaveBeenCalledWith(
+      "connection",
+      expect.anything(),
+      expect.objectContaining({ socket: { remoteAddress: "127.0.0.1" } }),
+    );
+  });
+
+  it("releases in-flight reservations when ws rejects a malformed upgrade before the callback", async () => {
+    const handler = new MediaStreamHandler({
+      transcriptionProvider: createStubSttProvider(),
+      providerConfig: {},
+      preStartTimeoutMs: 5_000,
+      maxConnections: 1,
+      maxPendingConnections: 10,
+      maxPendingConnectionsPerIp: 10,
+    });
+    const server = await startWsServer(handler);
+    const serverUrl = new URL(server.url);
+
+    try {
+      await withTimeout(
+        new Promise<void>((resolve, reject) => {
+          const socket = net.createConnection(
+            { host: serverUrl.hostname, port: Number(serverUrl.port) },
+            () => {
+              socket.write(
+                [
+                  "GET /voice/stream HTTP/1.1",
+                  `Host: ${serverUrl.host}`,
+                  "Upgrade: websocket",
+                  "Connection: Upgrade",
+                  "Sec-WebSocket-Version: 13",
+                  "",
+                  "",
+                ].join("\r\n"),
+              );
+            },
+          );
+          socket.once("error", reject);
+          socket.once("data", () => {
+            socket.end();
+          });
+          socket.once("close", () => resolve());
+        }),
+      );
+
+      const ws = await connectWs(server.url);
+      expect(ws.readyState).toBe(WebSocket.OPEN);
+      ws.close();
+      await waitForClose(ws);
+    } finally {
+      await server.close();
+    }
+  });
+
   it("clears pending state after valid start", async () => {
     const handler = new MediaStreamHandler({
-      sttProvider: createStubSttProvider(),
+      transcriptionProvider: createStubSttProvider(),
+      providerConfig: {},
       preStartTimeoutMs: 40,
       shouldAcceptStream: () => true,
     });
@@ -363,6 +470,42 @@ describe("MediaStreamHandler security hardening", () => {
 
       ws.close();
       await waitForClose(ws);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("rejects oversized pre-start frames at the websocket maxPayload guard before validation runs", async () => {
+    const shouldAcceptStreamCalls: Array<{ callId: string; streamSid: string; token?: string }> =
+      [];
+    const handler = new MediaStreamHandler({
+      transcriptionProvider: createStubSttProvider(),
+      providerConfig: {},
+      preStartTimeoutMs: 1_000,
+      shouldAcceptStream: (params) => {
+        shouldAcceptStreamCalls.push(params);
+        return true;
+      },
+    });
+    const server = await startWsServer(handler);
+
+    try {
+      const ws = await connectWs(server.url);
+      ws.send(
+        JSON.stringify({
+          event: "start",
+          streamSid: "MZ-oversized",
+          start: {
+            callSid: "CA-oversized",
+            customParameters: { token: "token-oversized", padding: "A".repeat(256 * 1024) },
+          },
+        }),
+      );
+
+      const closed = await waitForClose(ws);
+
+      expect(closed.code).toBe(1009);
+      expect(shouldAcceptStreamCalls).toEqual([]);
     } finally {
       await server.close();
     }

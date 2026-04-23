@@ -1,4 +1,16 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OAuthCredential } from "./auth-profiles/types.js";
+
+const { readCodexCliCredentialsCachedMock } = vi.hoisted(() => ({
+  readCodexCliCredentialsCachedMock: vi.fn<() => OAuthCredential | null>(() => null),
+}));
+
+vi.mock("./cli-credentials.js", () => ({
+  readCodexCliCredentialsCached: readCodexCliCredentialsCachedMock,
+  readMiniMaxCliCredentialsCached: () => null,
+  resetCliCredentialCachesForTest: () => undefined,
+}));
+
 import {
   buildAuthHealthSummary,
   DEFAULT_OAUTH_WARN_MS,
@@ -12,8 +24,42 @@ describe("buildAuthHealthSummary", () => {
   const profileReasonCodes = (summary: ReturnType<typeof buildAuthHealthSummary>) =>
     Object.fromEntries(summary.profiles.map((profile) => [profile.profileId, profile.reasonCode]));
 
+  function mockFreshCodexCliCredentials() {
+    readCodexCliCredentialsCachedMock.mockReturnValue({
+      type: "oauth",
+      provider: "openai-codex",
+      access: "fresh-cli-access",
+      refresh: "fresh-cli-refresh",
+      expires: now + DEFAULT_OAUTH_WARN_MS + 60_000,
+      accountId: "acct-cli",
+    });
+  }
+
+  function buildOpenAiCodexOAuthStore(params: {
+    access: string;
+    refresh: string;
+    expires: number;
+    accountId?: string;
+  }) {
+    return {
+      version: 1,
+      profiles: {
+        "openai-codex:default": {
+          type: "oauth" as const,
+          provider: "openai-codex",
+          ...params,
+        },
+      },
+    };
+  }
+
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  beforeEach(() => {
+    readCodexCliCredentialsCachedMock.mockReset();
+    readCodexCliCredentialsCachedMock.mockReturnValue(null);
   });
 
   it("classifies OAuth and API key profiles", () => {
@@ -58,13 +104,12 @@ describe("buildAuthHealthSummary", () => {
     const statuses = profileStatuses(summary);
 
     expect(statuses["anthropic:ok"]).toBe("ok");
-    // OAuth credentials with refresh tokens are auto-renewable, so they report "ok"
-    expect(statuses["anthropic:expiring"]).toBe("ok");
-    expect(statuses["anthropic:expired"]).toBe("ok");
+    expect(statuses["anthropic:expiring"]).toBe("expiring");
+    expect(statuses["anthropic:expired"]).toBe("expired");
     expect(statuses["anthropic:api"]).toBe("static");
 
     const provider = summary.providers.find((entry) => entry.provider === "anthropic");
-    expect(provider?.status).toBe("ok");
+    expect(provider?.status).toBe("expired");
   });
 
   it("reports expired for OAuth without a refresh token", () => {
@@ -92,6 +137,101 @@ describe("buildAuthHealthSummary", () => {
     expect(statuses["google:no-refresh"]).toBe("expired");
   });
 
+  it("does not let fresh .codex state override expired canonical health", () => {
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    mockFreshCodexCliCredentials();
+    const store = buildOpenAiCodexOAuthStore({
+      access: "expired-access",
+      refresh: "expired-refresh",
+      expires: now - 10_000,
+      accountId: "acct-cli",
+    });
+
+    const summary = buildAuthHealthSummary({
+      store,
+      warnAfterMs: DEFAULT_OAUTH_WARN_MS,
+    });
+
+    const statuses = profileStatuses(summary);
+    expect(statuses["openai-codex:default"]).toBe("expired");
+  });
+
+  it("keeps healthy local oauth over fresher imported Codex CLI credentials in health status", () => {
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    readCodexCliCredentialsCachedMock.mockReturnValue({
+      type: "oauth",
+      provider: "openai-codex",
+      access: "fresh-cli-access",
+      refresh: "fresh-cli-refresh",
+      expires: now + 7 * DEFAULT_OAUTH_WARN_MS,
+      accountId: "acct-cli",
+    });
+    const store = {
+      version: 1,
+      profiles: {
+        "openai-codex:default": {
+          type: "oauth" as const,
+          provider: "openai-codex",
+          access: "healthy-local-access",
+          refresh: "healthy-local-refresh",
+          expires: now + DEFAULT_OAUTH_WARN_MS + 10_000,
+        },
+      },
+    };
+
+    const summary = buildAuthHealthSummary({
+      store,
+      warnAfterMs: DEFAULT_OAUTH_WARN_MS,
+    });
+
+    const profile = summary.profiles.find((entry) => entry.profileId === "openai-codex:default");
+    expect(profile?.status).toBe("ok");
+    expect(profile?.expiresAt).toBe(now + DEFAULT_OAUTH_WARN_MS + 10_000);
+  });
+
+  it("marks oauth as expiring when it falls within the shared refresh margin", () => {
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const store = {
+      version: 1,
+      profiles: {
+        "openai-codex:default": {
+          type: "oauth" as const,
+          provider: "openai-codex",
+          access: "near-expiry-access",
+          refresh: "near-expiry-refresh",
+          expires: now + 2 * 60_000,
+        },
+      },
+    };
+
+    const summary = buildAuthHealthSummary({
+      store,
+      warnAfterMs: 60_000,
+    });
+
+    const profile = summary.profiles.find((entry) => entry.profileId === "openai-codex:default");
+    expect(profile?.status).toBe("expiring");
+  });
+
+  it("does not let fresh .codex state override near-expiry canonical health", () => {
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    mockFreshCodexCliCredentials();
+    const store = buildOpenAiCodexOAuthStore({
+      access: "near-expiry-local-access",
+      refresh: "near-expiry-local-refresh",
+      expires: now + 2 * 60_000,
+    });
+
+    const summary = buildAuthHealthSummary({
+      store,
+      warnAfterMs: 60_000,
+    });
+
+    const profile = summary.profiles.find((entry) => entry.profileId === "openai-codex:default");
+    expect(profile?.status).toBe("expiring");
+    expect(profile?.expiresAt).toBe(now + 2 * 60_000);
+  });
+
   it("marks token profiles with invalid expires as missing with reason code", () => {
     vi.spyOn(Date, "now").mockReturnValue(now);
     const store = {
@@ -115,6 +255,42 @@ describe("buildAuthHealthSummary", () => {
 
     expect(statuses["github-copilot:invalid-expires"]).toBe("missing");
     expect(reasonCodes["github-copilot:invalid-expires"]).toBe("invalid_expires");
+  });
+
+  it("normalizes provider aliases when filtering and grouping profile health", () => {
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const store = {
+      version: 1,
+      profiles: {
+        "zai:dot": {
+          type: "api_key" as const,
+          provider: "z.ai",
+          key: "sk-dot",
+        },
+        "zai:dash": {
+          type: "api_key" as const,
+          provider: "z-ai",
+          key: "sk-dash",
+        },
+      },
+    };
+
+    const summary = buildAuthHealthSummary({
+      store,
+      providers: ["zai"],
+    });
+
+    expect(summary.profiles.map((profile) => [profile.profileId, profile.provider])).toEqual([
+      ["zai:dash", "zai"],
+      ["zai:dot", "zai"],
+    ]);
+    expect(summary.providers).toEqual([
+      {
+        provider: "zai",
+        status: "static",
+        profiles: summary.profiles,
+      },
+    ]);
   });
 });
 

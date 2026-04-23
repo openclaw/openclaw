@@ -2,140 +2,87 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { OAuthCredentials } from "@mariozechner/pi-ai";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  applyMinimaxApiConfig,
-  applyMinimaxApiProviderConfig,
-} from "../../extensions/minimax/onboard.js";
-import {
-  applyMistralConfig,
-  applyMistralProviderConfig,
-} from "../../extensions/mistral/onboard.js";
-import {
-  applyOpencodeGoConfig,
-  applyOpencodeGoProviderConfig,
-} from "../../extensions/opencode-go/onboard.js";
-import {
-  applyOpencodeZenConfig,
-  applyOpencodeZenProviderConfig,
-} from "../../extensions/opencode/onboard.js";
-import {
-  applyOpenrouterConfig,
-  applyOpenrouterProviderConfig,
-} from "../../extensions/openrouter/onboard.js";
-import {
-  applySyntheticConfig,
-  applySyntheticProviderConfig,
-  SYNTHETIC_DEFAULT_MODEL_REF,
-} from "../../extensions/synthetic/onboard.js";
-import {
-  applyXaiConfig,
-  applyXaiProviderConfig,
-  XAI_DEFAULT_MODEL_REF,
-} from "../../extensions/xai/onboard.js";
-import { applyXiaomiConfig, applyXiaomiProviderConfig } from "../../extensions/xiaomi/onboard.js";
-import { applyZaiConfig, applyZaiProviderConfig } from "../../extensions/zai/onboard.js";
-import {
-  clearRuntimeAuthProfileStoreSnapshots,
-  ensureAuthProfileStore,
-  replaceRuntimeAuthProfileStoreSnapshots,
-} from "../agents/auth-profiles.js";
-import { SYNTHETIC_DEFAULT_MODEL_ID } from "../agents/synthetic-models.js";
-import type { OpenClawConfig } from "../config/config.js";
-import {
-  resolveAgentModelFallbackValues,
-  resolveAgentModelPrimaryValue,
-} from "../config/model-input.js";
-import type { ModelApi } from "../config/types.models.js";
-import { applyAuthProfileConfig } from "../plugins/provider-auth-helpers.js";
-import {
-  OPENROUTER_DEFAULT_MODEL_REF,
-  setMinimaxApiKey,
+  applyAuthProfileConfig,
+  upsertApiKeyProfile,
   writeOAuthCredentials,
-} from "../plugins/provider-auth-storage.js";
-import {
-  MISTRAL_DEFAULT_MODEL_REF,
-  ZAI_CODING_CN_BASE_URL,
-  ZAI_GLOBAL_BASE_URL,
-} from "../plugins/provider-model-definitions.js";
-import { applyLitellmProviderConfig } from "./onboard-auth.config-litellm.js";
+} from "../plugins/provider-auth-helpers.js";
 import {
   createAuthTestLifecycle,
   readAuthProfilesForAgent,
   setupAuthTestEnv,
 } from "./test-wizard-helpers.js";
 
-function createLegacyProviderConfig(params: {
-  providerId: string;
-  api: ModelApi;
-  modelId?: string;
-  modelName?: string;
-  baseUrl?: string;
-  apiKey?: string;
-}): OpenClawConfig {
+const providerEnvVarsById = vi.hoisted(
+  (): Record<string, readonly string[]> => ({
+    "cloudflare-ai-gateway": ["CLOUDFLARE_AI_GATEWAY_API_KEY"],
+    byteplus: ["BYTEPLUS_API_KEY"],
+    moonshot: ["MOONSHOT_API_KEY"],
+    openai: ["OPENAI_API_KEY"],
+    opencode: ["OPENCODE_API_KEY"],
+    "opencode-go": ["OPENCODE_API_KEY"],
+    volcengine: ["VOLCANO_ENGINE_API_KEY"],
+  }),
+);
+
+vi.mock("../agents/agent-paths.js", () => ({
+  resolveOpenClawAgentDir: () => process.env.OPENCLAW_AGENT_DIR ?? "/tmp/openclaw-agent",
+}));
+
+vi.mock("../config/paths.js", () => ({
+  resolveStateDir: () => process.env.OPENCLAW_STATE_DIR ?? "/tmp/openclaw-state",
+}));
+
+vi.mock("../agents/auth-profiles/profiles.js", async () => {
+  const fs = await import("node:fs");
+  const path = await import("node:path");
   return {
-    models: {
-      providers: {
-        [params.providerId]: {
-          baseUrl: params.baseUrl ?? "https://old.example.com",
-          apiKey: params.apiKey ?? "old-key",
-          api: params.api,
-          models: [
-            {
-              id: params.modelId ?? "old-model",
-              name: params.modelName ?? "Old",
-              reasoning: false,
-              input: ["text"],
-              cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
-              contextWindow: 1000,
-              maxTokens: 100,
+    upsertAuthProfile: (params: { profileId: string; credential: unknown; agentDir?: string }) => {
+      const agentDir = params.agentDir ?? process.env.OPENCLAW_AGENT_DIR ?? "/tmp/openclaw-agent";
+      const file = path.join(agentDir, "auth-profiles.json");
+      fs.mkdirSync(agentDir, { recursive: true });
+      const existing = (() => {
+        try {
+          return JSON.parse(fs.readFileSync(file, "utf8")) as {
+            version?: number;
+            profiles?: Record<string, unknown>;
+          };
+        } catch {
+          return { version: 1, profiles: {} };
+        }
+      })();
+      fs.writeFileSync(
+        file,
+        `${JSON.stringify(
+          {
+            version: existing.version ?? 1,
+            profiles: {
+              ...existing.profiles,
+              [params.profileId]: params.credential,
             },
-          ],
-        },
-      },
-    },
-  } as OpenClawConfig;
-}
-
-const EXPECTED_FALLBACKS = ["anthropic/claude-opus-4-5"] as const;
-
-function createConfigWithFallbacks() {
-  return {
-    agents: {
-      defaults: {
-        model: { fallbacks: [...EXPECTED_FALLBACKS] },
-      },
+          },
+          null,
+          2,
+        )}\n`,
+      );
     },
   };
-}
+});
 
-function expectFallbacksPreserved(cfg: ReturnType<typeof applyMinimaxApiConfig>) {
-  expect(resolveAgentModelFallbackValues(cfg.agents?.defaults?.model)).toEqual([
-    ...EXPECTED_FALLBACKS,
-  ]);
-}
+vi.mock("../agents/provider-auth-aliases.js", () => ({
+  resolveProviderIdForAuth: (provider: string) => {
+    const normalized = provider.trim().toLowerCase();
+    if (normalized === "z.ai" || normalized === "z-ai") {
+      return "zai";
+    }
+    return normalized;
+  },
+}));
 
-function expectPrimaryModelPreserved(cfg: ReturnType<typeof applyMinimaxApiProviderConfig>) {
-  expect(resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model)).toBe(
-    "anthropic/claude-opus-4-5",
-  );
-}
-
-function expectAllowlistContains(
-  cfg: ReturnType<typeof applyOpenrouterProviderConfig>,
-  key: string,
-) {
-  const models = cfg.agents?.defaults?.models ?? {};
-  expect(Object.keys(models)).toContain(key);
-}
-
-function expectAliasPreserved(
-  cfg: ReturnType<typeof applyOpenrouterProviderConfig>,
-  key: string,
-  alias: string,
-) {
-  expect(cfg.agents?.defaults?.models?.[key]?.alias).toBe(alias);
-}
+vi.mock("../secrets/provider-env-vars.js", () => ({
+  getProviderEnvVars: vi.fn((provider: string) => providerEnvVarsById[provider] ?? []),
+}));
 
 describe("writeOAuthCredentials", () => {
   const lifecycle = createAuthTestLifecycle([
@@ -149,7 +96,6 @@ describe("writeOAuthCredentials", () => {
   const authProfilePathFor = (dir: string) => path.join(dir, "auth-profiles.json");
 
   afterEach(async () => {
-    clearRuntimeAuthProfileStoreSnapshots();
     await lifecycle.cleanup();
   });
 
@@ -248,52 +194,6 @@ describe("writeOAuthCredentials", () => {
     await expect(fs.readFile(authProfilePathFor(mainAgentDir), "utf8")).rejects.toThrow();
   });
 
-  it("preserves written OAuth profiles when runtime snapshots are stale", async () => {
-    const env = await setupAuthTestEnv("openclaw-oauth-stale-runtime-");
-    lifecycle.setStateDir(env.stateDir);
-
-    replaceRuntimeAuthProfileStoreSnapshots([
-      {
-        agentDir: env.agentDir,
-        store: {
-          version: 1,
-          profiles: {},
-          order: {},
-        },
-      },
-    ]);
-
-    const creds = {
-      refresh: "refresh-stale",
-      access: "access-stale",
-      expires: Date.now() + 60_000,
-    } satisfies OAuthCredentials;
-
-    await writeOAuthCredentials("openai-codex", creds);
-
-    const raw = await fs.readFile(authProfilePathFor(env.agentDir), "utf8");
-    const parsed = JSON.parse(raw) as {
-      profiles?: Record<string, OAuthCredentials & { type?: string; provider?: string }>;
-      order?: Record<string, string[]>;
-    };
-
-    expect(parsed.profiles?.["openai-codex:default"]).toMatchObject({
-      refresh: "refresh-stale",
-      access: "access-stale",
-      type: "oauth",
-      provider: "openai-codex",
-    });
-    expect(parsed.order?.["openai-codex"]).toEqual(["openai-codex:default"]);
-
-    const reloaded = ensureAuthProfileStore(env.agentDir);
-    expect(reloaded.profiles["openai-codex:default"]).toMatchObject({
-      refresh: "refresh-stale",
-      access: "access-stale",
-      type: "oauth",
-      provider: "openai-codex",
-    });
-  });
-
   it("syncs siblings from explicit agentDir outside OPENCLAW_STATE_DIR", async () => {
     tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-oauth-external-"));
     process.env.OPENCLAW_STATE_DIR = tempStateDir;
@@ -336,7 +236,153 @@ describe("writeOAuthCredentials", () => {
   });
 });
 
-describe("setMinimaxApiKey", () => {
+describe("upsertApiKeyProfile secret refs", () => {
+  const lifecycle = createAuthTestLifecycle([
+    "OPENCLAW_STATE_DIR",
+    "OPENCLAW_AGENT_DIR",
+    "PI_CODING_AGENT_DIR",
+    "MOONSHOT_API_KEY",
+    "OPENAI_API_KEY",
+    "CLOUDFLARE_AI_GATEWAY_API_KEY",
+    "VOLCANO_ENGINE_API_KEY",
+    "BYTEPLUS_API_KEY",
+    "OPENCODE_API_KEY",
+  ]);
+
+  type AuthProfileEntry = { key?: string; keyRef?: unknown; metadata?: unknown };
+
+  afterEach(async () => {
+    await lifecycle.cleanup();
+  });
+
+  async function readProfile(
+    agentDir: string,
+    profileId: string,
+  ): Promise<AuthProfileEntry | undefined> {
+    const parsed = await readAuthProfilesForAgent<{
+      profiles?: Record<string, AuthProfileEntry>;
+    }>(agentDir);
+    return parsed.profiles?.[profileId];
+  }
+
+  it("handles plaintext, ref mode, and inline env-ref provider keys", async () => {
+    const env = await setupAuthTestEnv("openclaw-onboard-auth-credentials-");
+    lifecycle.setStateDir(env.stateDir);
+    process.env.MOONSHOT_API_KEY = "sk-moonshot-env"; // pragma: allowlist secret
+    process.env.OPENAI_API_KEY = "sk-openai-env"; // pragma: allowlist secret
+
+    upsertApiKeyProfile({
+      provider: "moonshot",
+      input: "sk-moonshot-env",
+      agentDir: env.agentDir,
+    });
+    upsertApiKeyProfile({ provider: "openai", input: "sk-openai-env", agentDir: env.agentDir });
+
+    expect(await readProfile(env.agentDir, "moonshot:default")).toMatchObject({
+      key: "sk-moonshot-env",
+    });
+    expect((await readProfile(env.agentDir, "moonshot:default"))?.keyRef).toBeUndefined();
+    expect(await readProfile(env.agentDir, "openai:default")).toMatchObject({
+      key: "sk-openai-env",
+    });
+    expect((await readProfile(env.agentDir, "openai:default"))?.keyRef).toBeUndefined();
+
+    upsertApiKeyProfile({
+      provider: "moonshot",
+      input: "sk-moonshot-env",
+      agentDir: env.agentDir,
+      options: { secretInputMode: "ref" }, // pragma: allowlist secret
+    });
+    upsertApiKeyProfile({
+      provider: "openai",
+      input: "sk-openai-env",
+      agentDir: env.agentDir,
+      options: { secretInputMode: "ref" }, // pragma: allowlist secret
+    });
+    upsertApiKeyProfile({
+      provider: "moonshot",
+      input: "${MOONSHOT_API_KEY}",
+      agentDir: env.agentDir,
+      profileId: "moonshot:inline",
+    });
+    process.env.MOONSHOT_API_KEY = "sk-moonshot-other"; // pragma: allowlist secret
+    upsertApiKeyProfile({
+      provider: "moonshot",
+      input: "sk-moonshot-plaintext",
+      agentDir: env.agentDir,
+      profileId: "moonshot:plain",
+    });
+
+    expect(await readProfile(env.agentDir, "moonshot:default")).toMatchObject({
+      keyRef: { source: "env", provider: "default", id: "MOONSHOT_API_KEY" },
+    });
+    expect((await readProfile(env.agentDir, "moonshot:default"))?.key).toBeUndefined();
+    expect(await readProfile(env.agentDir, "openai:default")).toMatchObject({
+      keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+    });
+    expect((await readProfile(env.agentDir, "openai:default"))?.key).toBeUndefined();
+    expect(await readProfile(env.agentDir, "moonshot:inline")).toMatchObject({
+      keyRef: { source: "env", provider: "default", id: "MOONSHOT_API_KEY" },
+    });
+    expect(await readProfile(env.agentDir, "moonshot:plain")).toMatchObject({
+      key: "sk-moonshot-plaintext",
+    });
+    expect((await readProfile(env.agentDir, "moonshot:plain"))?.keyRef).toBeUndefined();
+  });
+
+  it("stores provider-specific env refs and metadata in ref mode", async () => {
+    const env = await setupAuthTestEnv("openclaw-onboard-auth-credentials-provider-ref-");
+    lifecycle.setStateDir(env.stateDir);
+    process.env.CLOUDFLARE_AI_GATEWAY_API_KEY = "cf-secret"; // pragma: allowlist secret
+    process.env.VOLCANO_ENGINE_API_KEY = "volcengine-secret"; // pragma: allowlist secret
+    process.env.BYTEPLUS_API_KEY = "byteplus-secret"; // pragma: allowlist secret
+    process.env.OPENCODE_API_KEY = "sk-opencode-env"; // pragma: allowlist secret
+
+    upsertApiKeyProfile({
+      provider: "cloudflare-ai-gateway",
+      input: "cf-secret",
+      agentDir: env.agentDir,
+      options: { secretInputMode: "ref" }, // pragma: allowlist secret
+      metadata: {
+        accountId: "account-1",
+        gatewayId: "gateway-1",
+      },
+    });
+    for (const [provider, input] of [
+      ["volcengine", "volcengine-secret"],
+      ["byteplus", "byteplus-secret"],
+      ["opencode", "sk-opencode-env"],
+      ["opencode-go", "sk-opencode-env"],
+    ] as const) {
+      upsertApiKeyProfile({
+        provider,
+        input,
+        agentDir: env.agentDir,
+        options: { secretInputMode: "ref" }, // pragma: allowlist secret
+      });
+    }
+
+    expect(await readProfile(env.agentDir, "cloudflare-ai-gateway:default")).toMatchObject({
+      keyRef: { source: "env", provider: "default", id: "CLOUDFLARE_AI_GATEWAY_API_KEY" },
+      metadata: { accountId: "account-1", gatewayId: "gateway-1" },
+    });
+    expect((await readProfile(env.agentDir, "cloudflare-ai-gateway:default"))?.key).toBeUndefined();
+    expect(await readProfile(env.agentDir, "volcengine:default")).toMatchObject({
+      keyRef: { source: "env", provider: "default", id: "VOLCANO_ENGINE_API_KEY" },
+    });
+    expect(await readProfile(env.agentDir, "byteplus:default")).toMatchObject({
+      keyRef: { source: "env", provider: "default", id: "BYTEPLUS_API_KEY" },
+    });
+    expect(await readProfile(env.agentDir, "opencode:default")).toMatchObject({
+      keyRef: { source: "env", provider: "default", id: "OPENCODE_API_KEY" },
+    });
+    expect(await readProfile(env.agentDir, "opencode-go:default")).toMatchObject({
+      keyRef: { source: "env", provider: "default", id: "OPENCODE_API_KEY" },
+    });
+  });
+});
+
+describe("upsertApiKeyProfile", () => {
   const lifecycle = createAuthTestLifecycle([
     "OPENCLAW_STATE_DIR",
     "OPENCLAW_AGENT_DIR",
@@ -351,7 +397,7 @@ describe("setMinimaxApiKey", () => {
     const env = await setupAuthTestEnv("openclaw-minimax-", { agentSubdir: "custom-agent" });
     lifecycle.setStateDir(env.stateDir);
 
-    await setMinimaxApiKey("sk-minimax-test");
+    upsertApiKeyProfile({ provider: "minimax", input: "sk-minimax-test" });
 
     const parsed = await readAuthProfilesForAgent<{
       profiles?: Record<string, { type?: string; provider?: string; key?: string }>;
@@ -408,6 +454,54 @@ describe("applyAuthProfileConfig", () => {
     expect(next.auth?.order?.kilocode).toEqual(["kilocode:default", "kilocode:legacy"]);
   });
 
+  it("repairs aliased auth.order keys instead of duplicating them", () => {
+    const next = applyAuthProfileConfig(
+      {
+        auth: {
+          profiles: {
+            "zai:default": { provider: "z.ai", mode: "api_key" },
+          },
+          order: { "z.ai": ["zai:default"] },
+        },
+      },
+      {
+        profileId: "zai:work",
+        provider: "z-ai",
+        mode: "oauth",
+      },
+    );
+
+    expect(next.auth?.order).toEqual({
+      zai: ["zai:work", "zai:default"],
+    });
+  });
+
+  it("merges split canonical and aliased auth.order entries for the same provider", () => {
+    const next = applyAuthProfileConfig(
+      {
+        auth: {
+          profiles: {
+            "zai:default": { provider: "z.ai", mode: "api_key" },
+            "zai:backup": { provider: "z-ai", mode: "token" },
+          },
+          order: {
+            zai: ["zai:default"],
+            "z.ai": ["zai:backup"],
+          },
+        },
+      },
+      {
+        profileId: "zai:work",
+        provider: "z-ai",
+        mode: "oauth",
+      },
+    );
+
+    expect(next.auth?.order).toEqual({
+      zai: ["zai:work", "zai:default", "zai:backup"],
+    });
+  });
+
   it("keeps implicit round-robin when no mixed provider modes are present", () => {
     const next = applyAuthProfileConfig(
       {
@@ -426,412 +520,22 @@ describe("applyAuthProfileConfig", () => {
 
     expect(next.auth?.order).toBeUndefined();
   });
-});
 
-describe("applyMinimaxApiConfig", () => {
-  it("adds minimax provider with correct settings", () => {
-    const cfg = applyMinimaxApiConfig({});
-    expect(cfg.models?.providers?.minimax).toMatchObject({
-      baseUrl: "https://api.minimax.io/anthropic",
-      api: "anthropic-messages",
-      authHeader: true,
+  it("stores display metadata without overloading email", () => {
+    const next = applyAuthProfileConfig(
+      {},
+      {
+        profileId: "openai-codex:id-abc",
+        provider: "openai-codex",
+        mode: "oauth",
+        displayName: "Work account",
+      },
+    );
+
+    expect(next.auth?.profiles?.["openai-codex:id-abc"]).toEqual({
+      provider: "openai-codex",
+      mode: "oauth",
+      displayName: "Work account",
     });
-  });
-
-  it("keeps reasoning enabled for MiniMax-M2.7", () => {
-    const cfg = applyMinimaxApiConfig({}, "MiniMax-M2.7");
-    expect(cfg.models?.providers?.minimax?.models[0]?.reasoning).toBe(true);
-  });
-
-  it("preserves existing model params when adding alias", () => {
-    const cfg = applyMinimaxApiConfig(
-      {
-        agents: {
-          defaults: {
-            models: {
-              "minimax/MiniMax-M2.7": {
-                alias: "MiniMax",
-                params: { custom: "value" },
-              },
-            },
-          },
-        },
-      },
-      "MiniMax-M2.7",
-    );
-    expect(cfg.agents?.defaults?.models?.["minimax/MiniMax-M2.7"]).toMatchObject({
-      alias: "Minimax",
-      params: { custom: "value" },
-    });
-  });
-
-  it("merges existing minimax provider models", () => {
-    const cfg = applyMinimaxApiConfig(
-      createLegacyProviderConfig({
-        providerId: "minimax",
-        api: "openai-completions",
-      }),
-    );
-    expect(cfg.models?.providers?.minimax?.baseUrl).toBe("https://api.minimax.io/anthropic");
-    expect(cfg.models?.providers?.minimax?.api).toBe("anthropic-messages");
-    expect(cfg.models?.providers?.minimax?.authHeader).toBe(true);
-    expect(cfg.models?.providers?.minimax?.apiKey).toBe("old-key");
-    expect(cfg.models?.providers?.minimax?.models.map((m) => m.id)).toEqual([
-      "old-model",
-      "MiniMax-M2.7",
-    ]);
-  });
-
-  it("preserves other providers when adding minimax", () => {
-    const cfg = applyMinimaxApiConfig({
-      models: {
-        providers: {
-          anthropic: {
-            baseUrl: "https://api.anthropic.com",
-            apiKey: "anthropic-key", // pragma: allowlist secret
-            api: "anthropic-messages",
-            models: [
-              {
-                id: "claude-opus-4-5",
-                name: "Claude Opus 4.5",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 15, output: 75, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 200000,
-                maxTokens: 8192,
-              },
-            ],
-          },
-        },
-      },
-    });
-    expect(cfg.models?.providers?.anthropic).toBeDefined();
-    expect(cfg.models?.providers?.minimax).toBeDefined();
-  });
-
-  it("preserves existing models mode", () => {
-    const cfg = applyMinimaxApiConfig({
-      models: { mode: "replace", providers: {} },
-    });
-    expect(cfg.models?.mode).toBe("replace");
-  });
-});
-
-describe("provider config helpers", () => {
-  it("does not overwrite existing primary model", () => {
-    const providerConfigAppliers = [applyMinimaxApiProviderConfig, applyZaiProviderConfig];
-    for (const applyConfig of providerConfigAppliers) {
-      const cfg = applyConfig({
-        agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" } } },
-      });
-      expectPrimaryModelPreserved(cfg);
-    }
-  });
-});
-
-describe("applyZaiConfig", () => {
-  it("adds zai provider with correct settings", () => {
-    const cfg = applyZaiConfig({});
-    expect(cfg.models?.providers?.zai).toMatchObject({
-      // Default: general (non-coding) endpoint. Coding Plan endpoint is detected during setup.
-      baseUrl: ZAI_GLOBAL_BASE_URL,
-      api: "openai-completions",
-    });
-    const ids = cfg.models?.providers?.zai?.models?.map((m) => m.id);
-    expect(ids).toContain("glm-5");
-    expect(ids).toContain("glm-5-turbo");
-    expect(ids).toContain("glm-4.7");
-    expect(ids).toContain("glm-4.7-flash");
-    expect(ids).toContain("glm-4.7-flashx");
-  });
-
-  it("supports CN endpoint for supported coding models", () => {
-    for (const modelId of ["glm-4.7-flash", "glm-4.7-flashx"] as const) {
-      const cfg = applyZaiConfig({}, { endpoint: "coding-cn", modelId });
-      expect(cfg.models?.providers?.zai?.baseUrl).toBe(ZAI_CODING_CN_BASE_URL);
-      expect(resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model)).toBe(`zai/${modelId}`);
-    }
-  });
-});
-
-describe("applySyntheticConfig", () => {
-  it("adds synthetic provider with correct settings", () => {
-    const cfg = applySyntheticConfig({});
-    expect(cfg.models?.providers?.synthetic).toMatchObject({
-      baseUrl: "https://api.synthetic.new/anthropic",
-      api: "anthropic-messages",
-    });
-  });
-
-  it("merges existing synthetic provider models", () => {
-    const cfg = applySyntheticProviderConfig(
-      createLegacyProviderConfig({
-        providerId: "synthetic",
-        api: "openai-completions",
-      }),
-    );
-    expect(cfg.models?.providers?.synthetic?.baseUrl).toBe("https://api.synthetic.new/anthropic");
-    expect(cfg.models?.providers?.synthetic?.api).toBe("anthropic-messages");
-    expect(cfg.models?.providers?.synthetic?.apiKey).toBe("old-key");
-    const ids = cfg.models?.providers?.synthetic?.models.map((m) => m.id);
-    expect(ids).toContain("old-model");
-    expect(ids).toContain(SYNTHETIC_DEFAULT_MODEL_ID);
-  });
-});
-
-describe("primary model defaults", () => {
-  it("sets correct primary model", () => {
-    const configCases = [
-      {
-        getConfig: () => applyMinimaxApiConfig({}, "MiniMax-M2.5-highspeed"),
-        primaryModel: "minimax/MiniMax-M2.5-highspeed",
-      },
-      {
-        getConfig: () => applyZaiConfig({}, { modelId: "glm-5" }),
-        primaryModel: "zai/glm-5",
-      },
-      {
-        getConfig: () => applySyntheticConfig({}),
-        primaryModel: SYNTHETIC_DEFAULT_MODEL_REF,
-      },
-    ] as const;
-    for (const { getConfig, primaryModel } of configCases) {
-      const cfg = getConfig();
-      expect(resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model)).toBe(primaryModel);
-    }
-  });
-});
-
-describe("applyXiaomiConfig", () => {
-  it("adds Xiaomi provider with correct settings", () => {
-    const cfg = applyXiaomiConfig({});
-    expect(cfg.models?.providers?.xiaomi).toMatchObject({
-      baseUrl: "https://api.xiaomimimo.com/v1",
-      api: "openai-completions",
-    });
-    expect(cfg.models?.providers?.xiaomi?.models.map((m) => m.id)).toEqual([
-      "mimo-v2-flash",
-      "mimo-v2-pro",
-      "mimo-v2-omni",
-    ]);
-    expect(resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model)).toBe("xiaomi/mimo-v2-flash");
-  });
-
-  it("merges Xiaomi models and keeps existing provider overrides", () => {
-    const cfg = applyXiaomiProviderConfig(
-      createLegacyProviderConfig({
-        providerId: "xiaomi",
-        api: "openai-completions",
-        modelId: "custom-model",
-        modelName: "Custom",
-      }),
-    );
-
-    expect(cfg.models?.providers?.xiaomi?.baseUrl).toBe("https://api.xiaomimimo.com/v1");
-    expect(cfg.models?.providers?.xiaomi?.api).toBe("openai-completions");
-    expect(cfg.models?.providers?.xiaomi?.apiKey).toBe("old-key");
-    expect(cfg.models?.providers?.xiaomi?.models.map((m) => m.id)).toEqual([
-      "custom-model",
-      "mimo-v2-flash",
-      "mimo-v2-pro",
-      "mimo-v2-omni",
-    ]);
-  });
-});
-
-describe("applyXaiConfig", () => {
-  it("adds xAI provider with correct settings", () => {
-    const cfg = applyXaiConfig({});
-    expect(cfg.models?.providers?.xai).toMatchObject({
-      baseUrl: "https://api.x.ai/v1",
-      api: "openai-completions",
-    });
-    expect(resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model)).toBe(XAI_DEFAULT_MODEL_REF);
-  });
-});
-
-describe("applyXaiProviderConfig", () => {
-  it("merges xAI models and keeps existing provider overrides", () => {
-    const cfg = applyXaiProviderConfig(
-      createLegacyProviderConfig({
-        providerId: "xai",
-        api: "anthropic-messages",
-        modelId: "custom-model",
-        modelName: "Custom",
-      }),
-    );
-
-    expect(cfg.models?.providers?.xai?.baseUrl).toBe("https://api.x.ai/v1");
-    expect(cfg.models?.providers?.xai?.api).toBe("openai-completions");
-    expect(cfg.models?.providers?.xai?.apiKey).toBe("old-key");
-    expect(cfg.models?.providers?.xai?.models.map((m) => m.id)).toEqual(
-      expect.arrayContaining([
-        "custom-model",
-        "grok-4",
-        "grok-4-1-fast-reasoning",
-        "grok-code-fast-1",
-      ]),
-    );
-  });
-});
-
-describe("applyMistralConfig", () => {
-  it("adds Mistral provider with correct settings", () => {
-    const cfg = applyMistralConfig({});
-    expect(cfg.models?.providers?.mistral).toMatchObject({
-      baseUrl: "https://api.mistral.ai/v1",
-      api: "openai-completions",
-    });
-    expect(resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model)).toBe(
-      MISTRAL_DEFAULT_MODEL_REF,
-    );
-  });
-});
-
-describe("applyMistralProviderConfig", () => {
-  it("merges Mistral models and keeps existing provider overrides", () => {
-    const cfg = applyMistralProviderConfig(
-      createLegacyProviderConfig({
-        providerId: "mistral",
-        api: "anthropic-messages",
-        modelId: "custom-model",
-        modelName: "Custom",
-      }),
-    );
-
-    expect(cfg.models?.providers?.mistral?.baseUrl).toBe("https://api.mistral.ai/v1");
-    expect(cfg.models?.providers?.mistral?.api).toBe("openai-completions");
-    expect(cfg.models?.providers?.mistral?.apiKey).toBe("old-key");
-    expect(cfg.models?.providers?.mistral?.models.map((m) => m.id)).toEqual([
-      "custom-model",
-      "mistral-large-latest",
-    ]);
-    const mistralDefault = cfg.models?.providers?.mistral?.models.find(
-      (model) => model.id === "mistral-large-latest",
-    );
-    expect(mistralDefault?.contextWindow).toBe(262144);
-    expect(mistralDefault?.maxTokens).toBe(262144);
-  });
-});
-
-describe("fallback preservation helpers", () => {
-  it("preserves existing model fallbacks", () => {
-    const fallbackCases = [applyMinimaxApiConfig, applyXaiConfig, applyMistralConfig] as const;
-    for (const applyConfig of fallbackCases) {
-      const cfg = applyConfig(createConfigWithFallbacks());
-      expectFallbacksPreserved(cfg);
-    }
-  });
-});
-
-describe("provider alias defaults", () => {
-  it("adds expected alias for provider defaults", () => {
-    const aliasCases = [
-      {
-        applyConfig: () => applyMinimaxApiConfig({}, "MiniMax-M2.7"),
-        modelRef: "minimax/MiniMax-M2.7",
-        alias: "Minimax",
-      },
-      {
-        applyConfig: () => applyXaiProviderConfig({}),
-        modelRef: XAI_DEFAULT_MODEL_REF,
-        alias: "Grok",
-      },
-      {
-        applyConfig: () => applyMistralProviderConfig({}),
-        modelRef: MISTRAL_DEFAULT_MODEL_REF,
-        alias: "Mistral",
-      },
-    ] as const;
-    for (const testCase of aliasCases) {
-      const cfg = testCase.applyConfig();
-      expect(cfg.agents?.defaults?.models?.[testCase.modelRef]?.alias).toBe(testCase.alias);
-    }
-  });
-});
-
-describe("allowlist provider helpers", () => {
-  it("adds allowlist entry and preserves alias", () => {
-    const providerCases = [
-      {
-        applyConfig: applyOpencodeZenProviderConfig,
-        modelRef: "opencode/claude-opus-4-6",
-        alias: "My Opus",
-      },
-      {
-        applyConfig: applyOpencodeGoProviderConfig,
-        modelRef: "opencode-go/kimi-k2.5",
-        alias: "Kimi",
-      },
-      {
-        applyConfig: applyOpenrouterProviderConfig,
-        modelRef: OPENROUTER_DEFAULT_MODEL_REF,
-        alias: "Router",
-      },
-    ] as const;
-    for (const { applyConfig, modelRef, alias } of providerCases) {
-      const withDefault = applyConfig({});
-      expectAllowlistContains(withDefault, modelRef);
-
-      const withAlias = applyConfig({
-        agents: {
-          defaults: {
-            models: {
-              [modelRef]: { alias },
-            },
-          },
-        },
-      });
-      expectAliasPreserved(withAlias, modelRef, alias);
-    }
-  });
-});
-
-describe("applyLitellmProviderConfig", () => {
-  it("preserves existing baseUrl and api key while adding the default model", () => {
-    const cfg = applyLitellmProviderConfig(
-      createLegacyProviderConfig({
-        providerId: "litellm",
-        api: "anthropic-messages",
-        modelId: "custom-model",
-        modelName: "Custom",
-        baseUrl: "https://litellm.example/v1",
-        apiKey: "  old-key  ",
-      }),
-    );
-
-    expect(cfg.models?.providers?.litellm?.baseUrl).toBe("https://litellm.example/v1");
-    expect(cfg.models?.providers?.litellm?.api).toBe("openai-completions");
-    expect(cfg.models?.providers?.litellm?.apiKey).toBe("old-key");
-    expect(cfg.models?.providers?.litellm?.models.map((m) => m.id)).toEqual([
-      "custom-model",
-      "claude-opus-4-6",
-    ]);
-  });
-});
-
-describe("default-model config helpers", () => {
-  it("sets primary model and preserves existing model fallbacks", () => {
-    const configCases = [
-      {
-        applyConfig: applyOpencodeZenConfig,
-        primaryModel: "opencode/claude-opus-4-6",
-      },
-      {
-        applyConfig: applyOpencodeGoConfig,
-        primaryModel: "opencode-go/kimi-k2.5",
-      },
-      {
-        applyConfig: applyOpenrouterConfig,
-        primaryModel: OPENROUTER_DEFAULT_MODEL_REF,
-      },
-    ] as const;
-    for (const { applyConfig, primaryModel } of configCases) {
-      const cfg = applyConfig({});
-      expect(resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model)).toBe(primaryModel);
-
-      const cfgWithFallbacks = applyConfig(createConfigWithFallbacks());
-      expectFallbacksPreserved(cfgWithFallbacks);
-    }
   });
 });

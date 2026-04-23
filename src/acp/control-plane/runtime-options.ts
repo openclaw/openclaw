@@ -1,6 +1,10 @@
 import { isAbsolute } from "node:path";
 import type { AcpSessionRuntimeOptions, SessionAcpMeta } from "../../config/sessions/types.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+import { normalizeText } from "../normalize-text.js";
 import { AcpRuntimeError } from "../runtime/errors.js";
+
+export { normalizeText } from "../normalize-text.js";
 
 const MAX_RUNTIME_MODE_LENGTH = 64;
 const MAX_MODEL_LENGTH = 200;
@@ -211,14 +215,6 @@ export function validateRuntimeOptionPatch(
   return next;
 }
 
-export function normalizeText(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed || undefined;
-}
-
 export function normalizeRuntimeOptions(
   options: AcpSessionRuntimeOptions | undefined,
 ): AcpSessionRuntimeOptions {
@@ -324,7 +320,7 @@ export function inferRuntimeOptionPatchFromConfigOption(
   value: string,
 ): Partial<AcpSessionRuntimeOptions> {
   const validated = validateRuntimeConfigOptionInput(key, value);
-  const normalizedKey = validated.key.toLowerCase();
+  const normalizedKey = normalizeLowercaseStringOrEmpty(validated.key);
   if (normalizedKey === "model") {
     return { model: validateRuntimeModelInput(validated.value) };
   }

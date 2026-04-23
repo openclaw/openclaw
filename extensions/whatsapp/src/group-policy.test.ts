@@ -3,6 +3,7 @@ import {
   resolveWhatsAppGroupRequireMention,
   resolveWhatsAppGroupToolPolicy,
 } from "./group-policy.js";
+import type { OpenClawConfig } from "./runtime-api.js";
 
 describe("whatsapp group policy", () => {
   it("uses generic channel group policy helpers", () => {
@@ -21,8 +22,7 @@ describe("whatsapp group policy", () => {
           },
         },
       },
-      // oxlint-disable-next-line typescript/no-explicit-any
-    } as any;
+    } as OpenClawConfig;
 
     expect(resolveWhatsAppGroupRequireMention({ cfg, groupId: "1203630@g.us" })).toBe(false);
     expect(resolveWhatsAppGroupRequireMention({ cfg, groupId: "other@g.us" })).toBe(true);

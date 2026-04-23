@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { cleanupSessionStateForTest } from "../../src/test-utils/session-state-cleanup.js";
 
 type EnvValue = string | undefined | ((home: string) => string | undefined);
 
@@ -100,7 +101,11 @@ async function allocateTempHomeBase(prefix: string): Promise<string> {
 
 export async function withTempHome<T>(
   fn: (home: string) => Promise<T>,
-  opts: { env?: Record<string, EnvValue>; prefix?: string } = {},
+  opts: {
+    env?: Record<string, EnvValue>;
+    prefix?: string;
+    skipSessionCleanup?: boolean;
+  } = {},
 ): Promise<T> {
   const prefix = opts.prefix ?? "openclaw-test-home-";
   const base = await allocateTempHomeBase(prefix);
@@ -129,6 +134,9 @@ export async function withTempHome<T>(
   try {
     return await fn(base);
   } finally {
+    if (!opts.skipSessionCleanup) {
+      await cleanupSessionStateForTest().catch(() => undefined);
+    }
     restoreExtraEnv(envSnapshot);
     restoreEnv(snapshot);
     try {

@@ -1,25 +1,37 @@
 import { afterEach, expect, test } from "vitest";
-import { resetProcessRegistryForTests } from "./bash-process-registry.js";
-import { createExecTool } from "./bash-tools.exec.js";
+import { markBackgrounded, resetProcessRegistryForTests } from "./bash-process-registry.js";
+import { runExecProcess } from "./bash-tools.exec-runtime.js";
 import { createProcessTool } from "./bash-tools.process.js";
 
 afterEach(() => {
   resetProcessRegistryForTests();
 });
 
-async function startPtySession(command: string) {
-  const execTool = createExecTool({ security: "full", ask: "off" });
-  const processTool = createProcessTool();
-  const result = await execTool.execute("toolcall", {
-    command,
-    pty: true,
-    background: true,
-  });
+function currentEnv(): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (typeof value === "string") {
+      env[key] = value;
+    }
+  }
+  return env;
+}
 
-  expect(result.details.status).toBe("running");
-  const sessionId = (result.details as { sessionId: string }).sessionId;
-  expect(sessionId).toBeTruthy();
-  return { processTool, sessionId };
+async function startPtySession(command: string) {
+  const processTool = createProcessTool();
+  const run = await runExecProcess({
+    command,
+    workdir: process.cwd(),
+    env: currentEnv(),
+    usePty: true,
+    warnings: [],
+    maxOutput: 20_000,
+    pendingMaxOutput: 20_000,
+    notifyOnExit: false,
+    timeoutSec: 5,
+  });
+  markBackgrounded(run.session);
+  return { processTool, sessionId: run.session.id };
 }
 
 async function waitForSessionCompletion(params: {

@@ -1,17 +1,20 @@
 {
   "name": "@openclaw/googlechat",
-  "version": "2026.3.14",
+  "version": "2026.4.20",
   "private": true,
   "description": "OpenClaw Google Chat channel plugin",
   "type": "module",
   "dependencies": {
-    "google-auth-library": "^10.6.2"
+    "gaxios": "7.1.4",
+    "google-auth-library": "10.6.2",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.3.14"
+    "openclaw": ">=2026.4.20"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -19,6 +22,9 @@
     }
   },
   "openclaw": {
+    "bundle": {
+      "stageRuntimeDependencies": true
+    },
     "extensions": [
       "./index.ts"
     ],
@@ -30,17 +36,43 @@
       "detailLabel": "Google Chat",
       "docsPath": "/channels/googlechat",
       "docsLabel": "googlechat",
-      "blurb": "Google Workspace Chat app via HTTP webhooks.",
+      "blurb": "Google Workspace Chat app with HTTP webhook.",
       "aliases": [
         "gchat",
         "google-chat"
       ],
-      "order": 55
+      "order": 55,
+      "systemImage": "message.badge",
+      "markdownCapable": true,
+      "doctorCapabilities": {
+        "dmAllowFromMode": "nestedOnly",
+        "groupModel": "route",
+        "groupAllowFromFallbackToAllowFrom": false,
+        "warnOnEmptyGroupSenderAllowlist": false
+      },
+      "cliAddOptions": [
+        {
+          "flags": "--webhook-path <path>",
+          "description": "Google Chat webhook path"
+        },
+        {
+          "flags": "--webhook-url <url>",
+          "description": "Google Chat webhook URL"
+        },
+        {
+          "flags": "--audience-type <type>",
+          "description": "Google Chat audience type (app-url|project-number)"
+        },
+        {
+          "flags": "--audience <value>",
+          "description": "Google Chat audience value (app URL or project number)"
+        }
+      ]
     },
     "install": {
       "npmSpec": "@openclaw/googlechat",
-      "localPath": "extensions/googlechat",
-      "defaultChoice": "npm"
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.4.10"
     }
   }
 }

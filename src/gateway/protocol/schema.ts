@@ -1,6 +1,7 @@
 export * from "./schema/agent.js";
 export * from "./schema/agents-models-skills.js";
 export * from "./schema/channels.js";
+export * from "./schema/commands.js";
 export * from "./schema/config.js";
 export * from "./schema/cron.js";
 export * from "./schema/error-codes.js";
@@ -15,4 +16,5 @@ export * from "./schema/secrets.js";
 export * from "./schema/sessions.js";
 export * from "./schema/snapshot.js";
 export * from "./schema/types.js";
+export * from "./schema/plugin-approvals.js";
 export * from "./schema/wizard.js";

@@ -1,4 +1,5 @@
 import { normalizeThinkLevel, type ThinkLevel } from "../../auto-reply/thinking.js";
+import { isReasoningConstraintErrorMessage } from "./errors.js";
 
 function extractSupportedValues(raw: string): string[] {
   const match =
@@ -26,6 +27,11 @@ export function pickFallbackThinkingLevel(params: {
   const raw = params.message?.trim();
   if (!raw) {
     return undefined;
+  }
+  // Some OpenRouter/MiniMax endpoints reject `off` entirely and require a
+  // non-zero reasoning level, so our first safe retry is `minimal`.
+  if (isReasoningConstraintErrorMessage(raw) && !params.attempted.has("minimal")) {
+    return "minimal";
   }
   const supported = extractSupportedValues(raw);
   if (supported.length === 0) {

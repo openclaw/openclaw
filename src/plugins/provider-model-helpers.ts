@@ -1,5 +1,15 @@
-import { normalizeModelCompat } from "../agents/model-compat.js";
-import type { ProviderResolveDynamicModelContext, ProviderRuntimeModel } from "./types.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { normalizeModelCompat } from "./provider-model-compat.js";
+import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
+import type { ProviderResolveDynamicModelContext } from "./types.js";
+
+export function matchesExactOrPrefix(id: string, values: readonly string[]): boolean {
+  const normalizedId = normalizeLowercaseStringOrEmpty(id);
+  return values.some((value) => {
+    const normalizedValue = normalizeLowercaseStringOrEmpty(value);
+    return normalizedId === normalizedValue || normalizedId.startsWith(normalizedValue);
+  });
+}
 
 export function cloneFirstTemplateModel(params: {
   providerId: string;

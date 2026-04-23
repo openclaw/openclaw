@@ -30,23 +30,32 @@ export function createVoiceCallBaseConfig(params?: {
     },
     streaming: {
       enabled: false,
-      sttProvider: "openai-realtime",
-      sttModel: "gpt-4o-transcribe",
-      silenceDurationMs: 800,
-      vadThreshold: 0.5,
+      providers: {
+        openai: {
+          model: "gpt-4o-transcribe",
+          silenceDurationMs: 800,
+          vadThreshold: 0.5,
+        },
+      },
       streamPath: "/voice/stream",
       preStartTimeoutMs: 5000,
       maxPendingConnections: 32,
       maxPendingConnectionsPerIp: 4,
       maxConnections: 128,
     },
+    realtime: {
+      enabled: false,
+      streamPath: "/voice/stream/realtime",
+      tools: [],
+      providers: {},
+    },
     skipSignatureVerification: false,
-    stt: { provider: "openai", model: "whisper-1" },
     tts: {
       provider: "openai",
-      openai: { model: "gpt-4o-mini-tts", voice: "coral" },
+      providers: {
+        openai: { model: "gpt-4o-mini-tts", voice: "coral" },
+      },
     },
-    responseModel: "openai/gpt-4o-mini",
     responseTimeoutMs: 30000,
   };
 }

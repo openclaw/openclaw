@@ -92,7 +92,9 @@ function expectReplayResultPair(
 ) {
   expect(first.ok).toBe(true);
   expect(first.isReplay).toBeFalsy();
-  expect(first.verifiedRequestKey).toBeTruthy();
+  if (!first.verifiedRequestKey) {
+    throw new Error("verified webhook request did not produce a request key");
+  }
   expect(second.ok).toBe(true);
   expect(second.isReplay).toBe(true);
   expect(second.verifiedRequestKey).toBe(first.verifiedRequestKey);
@@ -141,6 +143,36 @@ function verifyTwilioSignedRequest(params: {
     params.authToken,
     { publicUrl: params.publicUrl },
   );
+}
+
+function createSignedTelnyxWebhookRequest() {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
+  const pemPublicKey = publicKey.export({ format: "pem", type: "spki" });
+  const timestamp = String(Math.floor(Date.now() / 1000));
+  const rawBody = JSON.stringify({
+    data: { event_type: "call.initiated", payload: { call_control_id: "call-1" } },
+    nonce: crypto.randomUUID(),
+  });
+  const signedPayload = `${timestamp}|${rawBody}`;
+  const signature = crypto.sign(null, Buffer.from(signedPayload), privateKey).toString("base64");
+
+  return {
+    pemPublicKey,
+    timestamp,
+    rawBody,
+    signature,
+    makeCtx(signatureValue = signature) {
+      return {
+        headers: {
+          "telnyx-signature-ed25519": signatureValue,
+          "telnyx-timestamp": timestamp,
+        },
+        rawBody,
+        url: "https://example.com/voice/webhook",
+        method: "POST" as const,
+      };
+    },
+  };
 }
 
 describe("verifyPlivoWebhook", () => {
@@ -254,6 +286,52 @@ describe("verifyPlivoWebhook", () => {
     expectReplayResultPair(first, second);
   });
 
+  it("treats query-only V2 variants as the same verified request", () => {
+    const authToken = "test-auth-token";
+    const nonce = "nonce-replay-v2";
+    const verificationUrl = "https://example.com/voice/webhook";
+    const signature = plivoV2Signature({
+      authToken,
+      urlNoQuery: verificationUrl,
+      nonce,
+    });
+
+    const baseHeaders = {
+      host: "example.com",
+      "x-forwarded-proto": "https",
+      "x-plivo-signature-v2": signature,
+      "x-plivo-signature-v2-nonce": nonce,
+    };
+    const rawBody = "CallUUID=uuid&CallStatus=in-progress";
+
+    const first = verifyPlivoWebhook(
+      {
+        headers: baseHeaders,
+        rawBody,
+        url: `${verificationUrl}?flow=answer&callId=abc`,
+        method: "POST",
+        query: { flow: "answer", callId: "abc" },
+      },
+      authToken,
+    );
+    const second = verifyPlivoWebhook(
+      {
+        headers: baseHeaders,
+        rawBody,
+        url: `${verificationUrl}?flow=getinput&callId=abc`,
+        method: "POST",
+        query: { flow: "getinput", callId: "abc" },
+      },
+      authToken,
+    );
+
+    expect(first.ok).toBe(true);
+    expect(first.verifiedRequestKey).toBeDefined();
+    expect(second.ok).toBe(true);
+    expect(second.verifiedRequestKey).toBe(first.verifiedRequestKey);
+    expect(second.isReplay).toBe(true);
+  });
+
   it("returns a stable request key when verification is skipped", () => {
     const ctx = {
       headers: {},
@@ -269,31 +347,73 @@ describe("verifyPlivoWebhook", () => {
     expect(second.verifiedRequestKey).toBe(first.verifiedRequestKey);
     expect(second.isReplay).toBe(true);
   });
+
+  it("detects V3 replay when query parameters are reordered", () => {
+    const authToken = "test-auth-token";
+    const nonce = "nonce-v3-reorder";
+    const postBody = "CallUUID=uuid&CallStatus=in-progress";
+
+    const urlA = "https://example.com/voice/webhook?flow=answer&callId=abc";
+    const urlB = "https://example.com/voice/webhook?callId=abc&flow=answer";
+
+    const signatureA = plivoV3Signature({ authToken, urlWithQuery: urlA, postBody, nonce });
+    const signatureB = plivoV3Signature({ authToken, urlWithQuery: urlB, postBody, nonce });
+    expect(signatureA).toBe(signatureB);
+
+    const first = verifyPlivoWebhook(
+      {
+        headers: {
+          host: "example.com",
+          "x-forwarded-proto": "https",
+          "x-plivo-signature-v3": signatureA,
+          "x-plivo-signature-v3-nonce": nonce,
+        },
+        rawBody: postBody,
+        url: urlA,
+        method: "POST",
+        query: { flow: "answer", callId: "abc" },
+      },
+      authToken,
+    );
+
+    const second = verifyPlivoWebhook(
+      {
+        headers: {
+          host: "example.com",
+          "x-forwarded-proto": "https",
+          "x-plivo-signature-v3": signatureB,
+          "x-plivo-signature-v3-nonce": nonce,
+        },
+        rawBody: postBody,
+        url: urlB,
+        method: "POST",
+        query: { callId: "abc", flow: "answer" },
+      },
+      authToken,
+    );
+
+    expectReplayResultPair(first, second);
+  });
 });
 
 describe("verifyTelnyxWebhook", () => {
   it("marks replayed valid requests as replay without failing auth", () => {
-    const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
-    const pemPublicKey = publicKey.export({ format: "pem", type: "spki" }).toString();
-    const timestamp = String(Math.floor(Date.now() / 1000));
-    const rawBody = JSON.stringify({
-      data: { event_type: "call.initiated", payload: { call_control_id: "call-1" } },
-      nonce: crypto.randomUUID(),
-    });
-    const signedPayload = `${timestamp}|${rawBody}`;
-    const signature = crypto.sign(null, Buffer.from(signedPayload), privateKey).toString("base64");
-    const ctx = {
-      headers: {
-        "telnyx-signature-ed25519": signature,
-        "telnyx-timestamp": timestamp,
-      },
-      rawBody,
-      url: "https://example.com/voice/webhook",
-      method: "POST" as const,
-    };
+    const request = createSignedTelnyxWebhookRequest();
 
-    const first = verifyTelnyxWebhook(ctx, pemPublicKey);
-    const second = verifyTelnyxWebhook(ctx, pemPublicKey);
+    const first = verifyTelnyxWebhook(request.makeCtx(), request.pemPublicKey);
+    const second = verifyTelnyxWebhook(request.makeCtx(), request.pemPublicKey);
+
+    expectReplayResultPair(first, second);
+  });
+
+  it("treats Base64 and Base64URL signatures as the same replayed request", () => {
+    const request = createSignedTelnyxWebhookRequest();
+    const urlSafeSignature = request.signature
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=+$/g, "");
+    const first = verifyTelnyxWebhook(request.makeCtx(), request.pemPublicKey);
+    const second = verifyTelnyxWebhook(request.makeCtx(urlSafeSignature), request.pemPublicKey);
 
     expectReplayResultPair(first, second);
   });

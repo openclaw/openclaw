@@ -1,4 +1,5 @@
-import type { RuntimeEnv } from "../../runtime.js";
+import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
+import { sanitizeTerminalText } from "../../terminal/safe-text.js";
 import { colorize, theme } from "../../terminal/theme.js";
 import { formatTag, isRich, pad, truncate } from "./list.format.js";
 import type { ModelRow } from "./list.types.js";
@@ -16,22 +17,16 @@ export function printModelTable(
   opts: { json?: boolean; plain?: boolean } = {},
 ) {
   if (opts.json) {
-    runtime.log(
-      JSON.stringify(
-        {
-          count: rows.length,
-          models: rows,
-        },
-        null,
-        2,
-      ),
-    );
+    writeRuntimeJson(runtime, {
+      count: rows.length,
+      models: rows,
+    });
     return;
   }
 
   if (opts.plain) {
     for (const row of rows) {
-      runtime.log(row.key);
+      runtime.log(sanitizeTerminalText(row.key));
     }
     return;
   }
@@ -48,18 +43,19 @@ export function printModelTable(
   runtime.log(rich ? theme.heading(header) : header);
 
   for (const row of rows) {
-    const keyLabel = pad(truncate(row.key, MODEL_PAD), MODEL_PAD);
-    const inputLabel = pad(row.input || "-", INPUT_PAD);
+    const keyLabel = pad(truncate(sanitizeTerminalText(row.key), MODEL_PAD), MODEL_PAD);
+    const inputLabel = pad(sanitizeTerminalText(row.input) || "-", INPUT_PAD);
     const ctxLabel = pad(formatTokenK(row.contextWindow), CTX_PAD);
     const localText = row.local === null ? "-" : row.local ? "yes" : "no";
     const localLabel = pad(localText, LOCAL_PAD);
     const authText = row.available === null ? "-" : row.available ? "yes" : "no";
     const authLabel = pad(authText, AUTH_PAD);
+    const tags = row.tags.map(sanitizeTerminalText);
     const tagsLabel =
-      row.tags.length > 0
+      tags.length > 0
         ? rich
-          ? row.tags.map((tag) => formatTag(tag, rich)).join(",")
-          : row.tags.join(",")
+          ? tags.map((tag) => formatTag(tag, rich)).join(",")
+          : tags.join(",")
         : "";
 
     const coloredInput = colorize(

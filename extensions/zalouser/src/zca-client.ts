@@ -1,4 +1,3 @@
-import * as zcaJsRuntime from "zca-js";
 import {
   LoginQRCallbackEventType,
   Reactions,
@@ -7,9 +6,18 @@ import {
   type Style,
 } from "./zca-constants.js";
 
-const zcaJs = zcaJsRuntime as unknown as {
+type ZcaJsRuntime = {
   Zalo: unknown;
 };
+let zcaJsRuntimePromise: Promise<ZcaJsRuntime> | null = null;
+
+async function loadZcaJsRuntime(): Promise<ZcaJsRuntime> {
+  // Keep zca-js behind a runtime boundary so bundled metadata/contracts can load
+  // without resolving its optional WebSocket dependency tree.
+  zcaJsRuntimePromise ??= import("zca-js").then((mod) => mod as unknown as ZcaJsRuntime);
+  return await zcaJsRuntimePromise;
+}
+
 export { LoginQRCallbackEventType, Reactions, TextStyle, ThreadType };
 export type { Style };
 
@@ -242,4 +250,10 @@ type ZaloCtor = new (options?: { logging?: boolean; selfListen?: boolean }) => {
   ): Promise<API>;
 };
 
-export const Zalo = zcaJs.Zalo as unknown as ZaloCtor;
+export async function createZalo(
+  options?: ConstructorParameters<ZaloCtor>[0],
+): Promise<InstanceType<ZaloCtor>> {
+  const zcaJs = await loadZcaJsRuntime();
+  const Zalo = zcaJs.Zalo as ZaloCtor;
+  return new Zalo(options);
+}

@@ -1,4 +1,4 @@
-import * as ssrf from "openclaw/plugin-sdk/infra-runtime";
+import * as ssrf from "openclaw/plugin-sdk/ssrf-runtime";
 import { afterEach, beforeAll, beforeEach, expect, vi, type Mock } from "vitest";
 import * as harness from "./bot.media.e2e-harness.js";
 
@@ -16,8 +16,6 @@ export const TELEGRAM_TEST_TIMINGS = {
   mediaGroupFlushMs: 20,
   textFragmentGapMs: 30,
 } as const;
-
-const TELEGRAM_BOT_IMPORT_TIMEOUT_MS = process.platform === "win32" ? 180_000 : 150_000;
 
 let createTelegramBotRef: typeof import("./bot.js").createTelegramBot;
 let replySpyRef: ReturnType<typeof vi.fn>;
@@ -117,21 +115,7 @@ export function watchTelegramFetch(): FetchMockHandle {
   return createFetchMockHandle();
 }
 
-beforeEach(() => {
-  vi.useRealTimers();
-  lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
-  resolvePinnedHostnameSpy = vi
-    .spyOn(ssrf, "resolvePinnedHostname")
-    .mockImplementation((hostname) => resolvePinnedHostname(hostname, lookupMock));
-});
-
-afterEach(() => {
-  lookupMock.mockClear();
-  resolvePinnedHostnameSpy?.mockRestore();
-  resolvePinnedHostnameSpy = null;
-});
-
-beforeAll(async () => {
+async function loadTelegramBotHarness() {
   onSpyRef = harness.onSpy;
   sendChatActionSpyRef = harness.sendChatActionSpy;
   fetchRemoteMediaSpyRef = harness.fetchRemoteMediaSpy;
@@ -148,16 +132,35 @@ beforeAll(async () => {
       ...opts,
       telegramDeps: harness.telegramBotDepsForTest,
     });
-  const replyModule = await import("openclaw/plugin-sdk/reply-runtime");
-  replySpyRef = (replyModule as unknown as { __replySpy: ReturnType<typeof vi.fn> }).__replySpy;
-}, TELEGRAM_BOT_IMPORT_TIMEOUT_MS);
+  replySpyRef = harness.mediaHarnessReplySpy;
+}
 
-vi.mock("./sticker-cache.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./sticker-cache.js")>();
-  return {
-    ...actual,
-    cacheSticker: (...args: unknown[]) => cacheStickerSpy(...args),
-    getCachedSticker: (...args: unknown[]) => getCachedStickerSpy(...args),
-    describeStickerImage: (...args: unknown[]) => describeStickerImageSpy(...args),
-  };
+beforeAll(async () => {
+  await loadTelegramBotHarness();
 });
+
+beforeEach(() => {
+  onSpyRef.mockClear();
+  replySpyRef.mockClear();
+  sendChatActionSpyRef.mockClear();
+  vi.useRealTimers();
+  lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+  resolvePinnedHostnameSpy = vi
+    .spyOn(ssrf, "resolvePinnedHostname")
+    .mockImplementation((hostname) => resolvePinnedHostname(hostname, lookupMock));
+});
+
+afterEach(() => {
+  lookupMock.mockClear();
+  resolvePinnedHostnameSpy?.mockRestore();
+  resolvePinnedHostnameSpy = null;
+});
+
+vi.mock("./sticker-cache.js", () => ({
+  cacheSticker: (...args: unknown[]) => cacheStickerSpy(...args),
+  getCachedSticker: (...args: unknown[]) => getCachedStickerSpy(...args),
+  describeStickerImage: (...args: unknown[]) => describeStickerImageSpy(...args),
+  getAllCachedStickers: vi.fn(() => []),
+  getCacheStats: vi.fn(() => ({ count: 0 })),
+  searchStickers: vi.fn(() => []),
+}));

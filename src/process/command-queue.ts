@@ -1,4 +1,8 @@
-import { diagnosticLogger as diag, logLaneDequeue, logLaneEnqueue } from "../logging/diagnostic.js";
+import {
+  diagnosticLogger as diag,
+  logLaneDequeue,
+  logLaneEnqueue,
+} from "../logging/diagnostic-runtime.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { CommandLane } from "./lanes.js";
 /**
@@ -47,19 +51,51 @@ type LaneState = {
   generation: number;
 };
 
+type ActiveTaskWaiter = {
+  activeTaskIds: Set<number>;
+  resolve: (value: { drained: boolean }) => void;
+  timeout?: ReturnType<typeof setTimeout>;
+};
+
+function isExpectedNonErrorLaneFailure(err: unknown): boolean {
+  return err instanceof Error && err.name === "LiveSessionModelSwitchError";
+}
+
 /**
  * Keep queue runtime state on globalThis so every bundled entry/chunk shares
  * the same lanes, counters, and draining flag in production builds.
  */
 const COMMAND_QUEUE_STATE_KEY = Symbol.for("openclaw.commandQueueState");
 
-const queueState = resolveGlobalSingleton(COMMAND_QUEUE_STATE_KEY, () => ({
-  gatewayDraining: false,
-  lanes: new Map<string, LaneState>(),
-  nextTaskId: 1,
-}));
+function getQueueState() {
+  const state = resolveGlobalSingleton(COMMAND_QUEUE_STATE_KEY, () => ({
+    gatewayDraining: false,
+    lanes: new Map<string, LaneState>(),
+    activeTaskWaiters: new Set<ActiveTaskWaiter>(),
+    nextTaskId: 1,
+  }));
+  // Schema migration: the singleton may have been created by an older code
+  // version (e.g. v2026.4.2) that did not include `activeTaskWaiters`.  After
+  // a SIGUSR1 in-process restart the new code inherits the stale object via
+  // `resolveGlobalSingleton` because the Symbol key already exists on
+  // globalThis.  Patch the missing field so all downstream consumers see a
+  // valid Set instead of `undefined`.
+  if (!state.activeTaskWaiters) {
+    state.activeTaskWaiters = new Set<ActiveTaskWaiter>();
+  }
+  return state;
+}
+
+function normalizeLane(lane: string): string {
+  return lane.trim() || CommandLane.Main;
+}
+
+function getLaneDepth(state: LaneState): number {
+  return state.queue.length + state.activeTaskIds.size;
+}
 
 function getLaneState(lane: string): LaneState {
+  const queueState = getQueueState();
   const existing = queueState.lanes.get(lane);
   if (existing) {
     return existing;
@@ -82,6 +118,38 @@ function completeTask(state: LaneState, taskId: number, taskGeneration: number):
   }
   state.activeTaskIds.delete(taskId);
   return true;
+}
+
+function hasPendingActiveTasks(taskIds: Set<number>): boolean {
+  const queueState = getQueueState();
+  for (const state of queueState.lanes.values()) {
+    for (const taskId of state.activeTaskIds) {
+      if (taskIds.has(taskId)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function resolveActiveTaskWaiter(waiter: ActiveTaskWaiter, result: { drained: boolean }): void {
+  const queueState = getQueueState();
+  if (!queueState.activeTaskWaiters.delete(waiter)) {
+    return;
+  }
+  if (waiter.timeout) {
+    clearTimeout(waiter.timeout);
+  }
+  waiter.resolve(result);
+}
+
+function notifyActiveTaskWaiters(): void {
+  const queueState = getQueueState();
+  for (const waiter of Array.from(queueState.activeTaskWaiters)) {
+    if (waiter.activeTaskIds.size === 0 || !hasPendingActiveTasks(waiter.activeTaskIds)) {
+      resolveActiveTaskWaiter(waiter, { drained: true });
+    }
+  }
 }
 
 function drainLane(lane: string) {
@@ -112,7 +180,7 @@ function drainLane(lane: string) {
           );
         }
         logLaneDequeue(lane, waitedMs, state.queue.length);
-        const taskId = queueState.nextTaskId++;
+        const taskId = getQueueState().nextTaskId++;
         const taskGeneration = state.generation;
         state.activeTaskIds.add(taskId);
         void (async () => {
@@ -121,6 +189,7 @@ function drainLane(lane: string) {
             const result = await entry.task();
             const completedCurrentGeneration = completeTask(state, taskId, taskGeneration);
             if (completedCurrentGeneration) {
+              notifyActiveTaskWaiters();
               diag.debug(
                 `lane task done: lane=${lane} durationMs=${Date.now() - startTime} active=${state.activeTaskIds.size} queued=${state.queue.length}`,
               );
@@ -130,12 +199,17 @@ function drainLane(lane: string) {
           } catch (err) {
             const completedCurrentGeneration = completeTask(state, taskId, taskGeneration);
             const isProbeLane = lane.startsWith("auth-probe:") || lane.startsWith("session:probe-");
-            if (!isProbeLane) {
+            if (!isProbeLane && !isExpectedNonErrorLaneFailure(err)) {
               diag.error(
                 `lane task error: lane=${lane} durationMs=${Date.now() - startTime} error="${String(err)}"`,
               );
+            } else if (!isProbeLane) {
+              diag.debug(
+                `lane task interrupted: lane=${lane} durationMs=${Date.now() - startTime} reason="${String(err)}"`,
+              );
             }
             if (completedCurrentGeneration) {
+              notifyActiveTaskWaiters();
               pump();
             }
             entry.reject(err);
@@ -155,11 +229,11 @@ function drainLane(lane: string) {
  * `GatewayDrainingError` instead of being silently killed on shutdown.
  */
 export function markGatewayDraining(): void {
-  queueState.gatewayDraining = true;
+  getQueueState().gatewayDraining = true;
 }
 
 export function setCommandLaneConcurrency(lane: string, maxConcurrent: number) {
-  const cleaned = lane.trim() || CommandLane.Main;
+  const cleaned = normalizeLane(lane);
   const state = getLaneState(cleaned);
   state.maxConcurrent = Math.max(1, Math.floor(maxConcurrent));
   drainLane(cleaned);
@@ -173,10 +247,11 @@ export function enqueueCommandInLane<T>(
     onWait?: (waitMs: number, queuedAhead: number) => void;
   },
 ): Promise<T> {
+  const queueState = getQueueState();
   if (queueState.gatewayDraining) {
     return Promise.reject(new GatewayDrainingError());
   }
-  const cleaned = lane.trim() || CommandLane.Main;
+  const cleaned = normalizeLane(lane);
   const warnAfterMs = opts?.warnAfterMs ?? 2_000;
   const state = getLaneState(cleaned);
   return new Promise<T>((resolve, reject) => {
@@ -188,7 +263,7 @@ export function enqueueCommandInLane<T>(
       warnAfterMs,
       onWait: opts?.onWait,
     });
-    logLaneEnqueue(cleaned, state.queue.length + state.activeTaskIds.size);
+    logLaneEnqueue(cleaned, getLaneDepth(state));
     drainLane(cleaned);
   });
 }
@@ -204,25 +279,25 @@ export function enqueueCommand<T>(
 }
 
 export function getQueueSize(lane: string = CommandLane.Main) {
-  const resolved = lane.trim() || CommandLane.Main;
-  const state = queueState.lanes.get(resolved);
+  const resolved = normalizeLane(lane);
+  const state = getQueueState().lanes.get(resolved);
   if (!state) {
     return 0;
   }
-  return state.queue.length + state.activeTaskIds.size;
+  return getLaneDepth(state);
 }
 
 export function getTotalQueueSize() {
   let total = 0;
-  for (const s of queueState.lanes.values()) {
-    total += s.queue.length + s.activeTaskIds.size;
+  for (const s of getQueueState().lanes.values()) {
+    total += getLaneDepth(s);
   }
   return total;
 }
 
 export function clearCommandLane(lane: string = CommandLane.Main) {
-  const cleaned = lane.trim() || CommandLane.Main;
-  const state = queueState.lanes.get(cleaned);
+  const cleaned = normalizeLane(lane);
+  const state = getQueueState().lanes.get(cleaned);
   if (!state) {
     return 0;
   }
@@ -232,6 +307,21 @@ export function clearCommandLane(lane: string = CommandLane.Main) {
     entry.reject(new CommandLaneClearedError(cleaned));
   }
   return removed;
+}
+
+/**
+ * Test-only hard reset that discards all queue state, including preserved
+ * queued work from previous generations. Use this when a suite needs an
+ * isolated baseline across shared-worker runs.
+ */
+export function resetCommandQueueStateForTest(): void {
+  const queueState = getQueueState();
+  queueState.gatewayDraining = false;
+  queueState.lanes.clear();
+  for (const waiter of Array.from(queueState.activeTaskWaiters)) {
+    resolveActiveTaskWaiter(waiter, { drained: true });
+  }
+  queueState.nextTaskId = 1;
 }
 
 /**
@@ -249,6 +339,7 @@ export function clearCommandLane(lane: string = CommandLane.Main) {
  * `enqueueCommandInLane()` call (which may never come).
  */
 export function resetAllLanes(): void {
+  const queueState = getQueueState();
   queueState.gatewayDraining = false;
   const lanesToDrain: string[] = [];
   for (const state of queueState.lanes.values()) {
@@ -263,6 +354,7 @@ export function resetAllLanes(): void {
   for (const lane of lanesToDrain) {
     drainLane(lane);
   }
+  notifyActiveTaskWaiters();
 }
 
 /**
@@ -270,6 +362,7 @@ export function resetAllLanes(): void {
  * (excludes queued-but-not-started entries).
  */
 export function getActiveTaskCount(): number {
+  const queueState = getQueueState();
   let total = 0;
   for (const s of queueState.lanes.values()) {
     total += s.activeTaskIds.size;
@@ -286,9 +379,7 @@ export function getActiveTaskCount(): number {
  * already executing are waited on.
  */
 export function waitForActiveTasks(timeoutMs: number): Promise<{ drained: boolean }> {
-  // Keep shutdown/drain checks responsive without busy looping.
-  const POLL_INTERVAL_MS = 50;
-  const deadline = Date.now() + timeoutMs;
+  const queueState = getQueueState();
   const activeAtStart = new Set<number>();
   for (const state of queueState.lanes.values()) {
     for (const taskId of state.activeTaskIds) {
@@ -296,36 +387,22 @@ export function waitForActiveTasks(timeoutMs: number): Promise<{ drained: boolea
     }
   }
 
+  if (activeAtStart.size === 0) {
+    return Promise.resolve({ drained: true });
+  }
+  if (timeoutMs <= 0) {
+    return Promise.resolve({ drained: false });
+  }
+
   return new Promise((resolve) => {
-    const check = () => {
-      if (activeAtStart.size === 0) {
-        resolve({ drained: true });
-        return;
-      }
-
-      let hasPending = false;
-      for (const state of queueState.lanes.values()) {
-        for (const taskId of state.activeTaskIds) {
-          if (activeAtStart.has(taskId)) {
-            hasPending = true;
-            break;
-          }
-        }
-        if (hasPending) {
-          break;
-        }
-      }
-
-      if (!hasPending) {
-        resolve({ drained: true });
-        return;
-      }
-      if (Date.now() >= deadline) {
-        resolve({ drained: false });
-        return;
-      }
-      setTimeout(check, POLL_INTERVAL_MS);
+    const waiter: ActiveTaskWaiter = {
+      activeTaskIds: activeAtStart,
+      resolve,
     };
-    check();
+    waiter.timeout = setTimeout(() => {
+      resolveActiveTaskWaiter(waiter, { drained: false });
+    }, timeoutMs);
+    queueState.activeTaskWaiters.add(waiter);
+    notifyActiveTaskWaiters();
   });
 }

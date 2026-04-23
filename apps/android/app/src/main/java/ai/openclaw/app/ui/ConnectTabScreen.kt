@@ -38,6 +38,7 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -53,6 +54,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import ai.openclaw.app.MainViewModel
+import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.ui.mobileCardSurface
 
 private enum class ConnectInputMode {
@@ -71,6 +73,7 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
   val manualTls by viewModel.manualTls.collectAsState()
   val manualEnabled by viewModel.manualEnabled.collectAsState()
   val gatewayToken by viewModel.gatewayToken.collectAsState()
+  val gatewayBootstrapToken by viewModel.gatewayBootstrapToken.collectAsState()
   val pendingTrust by viewModel.pendingGatewayTrust.collectAsState()
 
   var advancedOpen by rememberSaveable { mutableStateOf(false) }
@@ -138,7 +141,12 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
     }
 
   val showDiagnostics = !isConnected && gatewayStatusHasDiagnostics(statusText)
+  val pairingRequired = !isConnected && gatewayStatusLooksLikePairing(statusText)
   val statusLabel = gatewayStatusForDisplay(statusText)
+
+  PairingAutoRetryEffect(enabled = pairingRequired) {
+    viewModel.refreshGatewayConnection()
+  }
 
   Column(
     modifier = Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 16.dp),
@@ -240,9 +248,13 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
             resolveGatewayConnectConfig(
               useSetupCode = inputMode == ConnectInputMode.SetupCode,
               setupCode = setupCode,
-              manualHost = manualHostInput,
-              manualPort = manualPortInput,
-              manualTls = manualTlsInput,
+              savedManualHost = manualHost,
+              savedManualPort = manualPort.toString(),
+              savedManualTls = manualTls,
+              manualHostInput = manualHostInput,
+              manualPortInput = manualPortInput,
+              manualTlsInput = manualTlsInput,
+              fallbackBootstrapToken = gatewayBootstrapToken,
               fallbackToken = gatewayToken,
               fallbackPassword = passwordInput,
             )
@@ -250,14 +262,31 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
           if (config == null) {
             validationText =
               if (inputMode == ConnectInputMode.SetupCode) {
-                "Paste a valid setup code to connect."
+                val parsedSetup = decodeGatewaySetupCode(setupCode)
+                if (parsedSetup == null) {
+                  "Paste a valid setup code to connect."
+                } else {
+                  val parsedGateway = parseGatewayEndpointResult(parsedSetup.url)
+                  gatewayEndpointValidationMessage(
+                    parsedGateway.error ?: GatewayEndpointValidationError.INVALID_URL,
+                    GatewayEndpointInputSource.SETUP_CODE,
+                  )
+                }
               } else {
-                "Enter a valid manual host and port to connect."
+                val manualUrl = composeGatewayManualUrl(manualHostInput, manualPortInput, manualTlsInput)
+                val parsedGateway = manualUrl?.let(::parseGatewayEndpointResult)
+                gatewayEndpointValidationMessage(
+                  parsedGateway?.error ?: GatewayEndpointValidationError.INVALID_URL,
+                  GatewayEndpointInputSource.MANUAL,
+                )
               }
             return@Button
           }
 
           validationText = null
+          if (inputMode == ConnectInputMode.SetupCode) {
+            viewModel.resetGatewaySetupAuth()
+          }
           viewModel.setManualEnabled(true)
           viewModel.setManualHost(config.host)
           viewModel.setManualPort(config.port)
@@ -269,7 +298,12 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
             viewModel.setGatewayToken("")
           }
           viewModel.setGatewayPassword(config.password)
-          viewModel.connectManual()
+          viewModel.connect(
+            GatewayEndpoint.manual(host = config.host, port = config.port),
+            token = config.token.ifEmpty { null },
+            bootstrapToken = config.bootstrapToken.ifEmpty { null },
+            password = config.password.ifEmpty { null },
+          )
         },
         modifier = Modifier.fillMaxWidth().height(52.dp),
         shape = RoundedCornerShape(14.dp),
@@ -294,8 +328,17 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
           modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 14.dp),
           verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-          Text("Last gateway error", style = mobileHeadline, color = mobileWarning)
+          Text(if (pairingRequired) "Pairing required" else "Last gateway error", style = mobileHeadline, color = mobileWarning)
           Text(statusLabel, style = mobileBody.copy(fontFamily = FontFamily.Monospace), color = mobileText)
+          if (pairingRequired) {
+            Text(
+              "Approve this phone on the gateway. OpenClaw retries automatically while this screen stays open.",
+              style = mobileCallout,
+              color = mobileTextSecondary,
+            )
+            CommandBlock("openclaw devices list")
+            CommandBlock("openclaw devices approve <requestId>")
+          }
           Text("OpenClaw Android ${openClawAndroidVersionLabel()}", style = mobileCaption1, color = mobileTextSecondary)
           Button(
             onClick = {
@@ -375,6 +418,11 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
           Text("Run these on the gateway host:", style = mobileCallout, color = mobileTextSecondary)
           CommandBlock("openclaw qr --setup-code-only")
           CommandBlock("openclaw qr --json")
+          Text(
+            "For Tailscale or public hosts, use wss:// or Tailscale Serve. Private LAN ws:// remains supported.",
+            style = mobileCaption1,
+            color = mobileTextSecondary,
+          )
 
           if (inputMode == ConnectInputMode.SetupCode) {
             Text("Setup Code", style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold), color = mobileTextSecondary)
@@ -434,14 +482,18 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
               colors = outlinedColors(),
             )
 
-            Text("Port", style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold), color = mobileTextSecondary)
+            Text(
+              if (manualTlsInput) "Port (optional, defaults to 443)" else "Port",
+              style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold),
+              color = mobileTextSecondary,
+            )
             OutlinedTextField(
               value = manualPortInput,
               onValueChange = {
                 manualPortInput = it
                 validationText = null
               },
-              placeholder = { Text("18789", style = mobileBody, color = mobileTextTertiary) },
+              placeholder = { Text(if (manualTlsInput) "443" else "18789", style = mobileBody, color = mobileTextTertiary) },
               modifier = Modifier.fillMaxWidth(),
               singleLine = true,
               keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
@@ -457,7 +509,11 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
             ) {
               Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text("Use TLS", style = mobileHeadline, color = mobileText)
-                Text("Switch to secure websocket (`wss`).", style = mobileCallout, color = mobileTextSecondary)
+                Text(
+                  "Turn this on for Tailscale or public hosts. Private LAN ws:// remains supported.",
+                  style = mobileCallout,
+                  color = mobileTextSecondary,
+                )
               }
               Switch(
                 checked = manualTlsInput,

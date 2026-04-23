@@ -1,6 +1,6 @@
-import { afterEach, expect, test, vi } from "vitest";
-import { resetProcessRegistryForTests } from "./bash-process-registry.js";
-import { createExecTool } from "./bash-tools.exec.js";
+import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
+let createExecTool: typeof import("./bash-tools.exec.js").createExecTool;
+let resetProcessRegistryForTests: typeof import("./bash-process-registry.js").resetProcessRegistryForTests;
 
 const { ptySpawnMock } = vi.hoisted(() => ({
   ptySpawnMock: vi.fn(),
@@ -9,6 +9,15 @@ const { ptySpawnMock } = vi.hoisted(() => ({
 vi.mock("@lydell/node-pty", () => ({
   spawn: (...args: unknown[]) => ptySpawnMock(...args),
 }));
+
+beforeAll(async () => {
+  ({ createExecTool } = await import("./bash-tools.exec.js"));
+  ({ resetProcessRegistryForTests } = await import("./bash-process-registry.js"));
+});
+
+beforeEach(() => {
+  ptySpawnMock.mockReset();
+});
 
 afterEach(() => {
   resetProcessRegistryForTests();
@@ -75,13 +84,18 @@ test("exec tears down PTY resources on timeout", async () => {
     security: "full",
     ask: "off",
   });
-  await expect(
-    tool.execute("toolcall", {
-      command: "sleep 5",
-      pty: true,
-      timeout: 0.01,
-    }),
-  ).rejects.toThrow("Command timed out");
+  const result = await tool.execute("toolcall", {
+    command: "sleep 5",
+    pty: true,
+    timeout: 0.01,
+  });
+
+  expect(result.details).toMatchObject({
+    status: "failed",
+    timedOut: true,
+    exitCode: 137,
+  });
+  expect((result.content[0] as { text?: string }).text).toMatch(/Command timed out/);
   expect(kill).toHaveBeenCalledTimes(1);
   expect(disposeData).toHaveBeenCalledTimes(1);
   expect(disposeExit).toHaveBeenCalledTimes(1);

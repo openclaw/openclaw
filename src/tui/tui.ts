@@ -1,3 +1,7 @@
+import { execFileSync, spawn } from "node:child_process";
+import { existsSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   CombinedAutocompleteProvider,
   Container,
@@ -10,23 +14,33 @@ import {
 } from "@mariozechner/pi-tui";
 import { resolveAgentIdByWorkspacePath, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { loadConfig, type OpenClawConfig } from "../config/config.js";
+import { setConsoleSubsystemFilter } from "../logging/console.js";
+import { loggingState } from "../logging/state.js";
 import {
   buildAgentMainSessionKey,
   normalizeAgentId,
   normalizeMainKey,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { getSlashCommands } from "./commands.js";
 import { ChatLog } from "./components/chat-log.js";
 import { CustomEditor } from "./components/custom-editor.js";
+import { EmbeddedTuiBackend } from "./embedded-backend.js";
 import { GatewayChatClient } from "./gateway-chat.js";
 import { editorTheme, theme } from "./theme/theme.js";
+import type { TuiBackend } from "./tui-backend.js";
 import { createCommandHandlers } from "./tui-command-handlers.js";
 import { createEventHandlers } from "./tui-event-handlers.js";
 import { formatTokens } from "./tui-formatters.js";
 import { createLocalShellRunner } from "./tui-local-shell.js";
 import { createOverlayHandlers } from "./tui-overlays.js";
 import { createSessionActions } from "./tui-session-actions.js";
+import {
+  createEditorSubmitHandler,
+  createSubmitBurstCoalescer,
+  shouldEnableWindowsGitBashPasteFallback,
+} from "./tui-submit.js";
 import type {
   AgentSummary,
   SessionInfo,
@@ -38,149 +52,81 @@ import { buildWaitingStatusMessage, defaultWaitingPhrases } from "./tui-waiting.
 
 export { resolveFinalAssistantText } from "./tui-formatters.js";
 export type { TuiOptions } from "./tui-types.js";
+export {
+  createEditorSubmitHandler,
+  createSubmitBurstCoalescer,
+  shouldEnableWindowsGitBashPasteFallback,
+} from "./tui-submit.js";
 
-export function createEditorSubmitHandler(params: {
-  editor: {
-    setText: (value: string) => void;
-    addToHistory: (value: string) => void;
-  };
-  handleCommand: (value: string) => Promise<void> | void;
-  sendMessage: (value: string) => Promise<void> | void;
-  handleBangLine: (value: string) => Promise<void> | void;
-}) {
-  return (text: string) => {
-    const raw = text;
-    const value = raw.trim();
-    params.editor.setText("");
+const OPENCLAW_CLI_WRAPPER_PATH = fileURLToPath(new URL("../../openclaw.mjs", import.meta.url));
+const OPENCLAW_RUN_NODE_SCRIPT_PATH = fileURLToPath(
+  new URL("../../scripts/run-node.mjs", import.meta.url),
+);
+const OPENCLAW_DIST_ENTRY_JS_PATH = fileURLToPath(new URL("../../dist/entry.js", import.meta.url));
+const OPENCLAW_DIST_ENTRY_MJS_PATH = fileURLToPath(
+  new URL("../../dist/entry.mjs", import.meta.url),
+);
 
-    // Keep previous behavior: ignore empty/whitespace-only submissions.
-    if (!value) {
-      return;
-    }
+const OPENAI_CODEX_PROVIDER = "openai-codex";
 
-    // Bash mode: only if the very first character is '!' and it's not just '!'.
-    // IMPORTANT: use the raw (untrimmed) text so leading spaces do NOT trigger.
-    // Per requirement: a lone '!' should be treated as a normal message.
-    if (raw.startsWith("!") && raw !== "!") {
-      params.editor.addToHistory(raw);
-      void params.handleBangLine(raw);
-      return;
-    }
-
-    // Enable built-in editor prompt history navigation (up/down).
-    params.editor.addToHistory(value);
-
-    if (value.startsWith("/")) {
-      void params.handleCommand(value);
-      return;
-    }
-
-    void params.sendMessage(value);
-  };
+/** Resolve the absolute path to the `codex` CLI binary, or `null` if not installed. */
+export function resolveCodexCliBin(): string | null {
+  try {
+    const lookupCmd = process.platform === "win32" ? "where" : "which";
+    // `where` on Windows can return multiple lines; take the first match.
+    const raw = execFileSync(lookupCmd, ["codex"], { encoding: "utf8" }).trim();
+    return raw.split(/\r?\n/)[0] || null;
+  } catch {
+    return null;
+  }
 }
 
-export function shouldEnableWindowsGitBashPasteFallback(params?: {
-  platform?: string;
-  env?: NodeJS.ProcessEnv;
-}): boolean {
-  const platform = params?.platform ?? process.platform;
-  const env = params?.env ?? process.env;
-  const termProgram = (env.TERM_PROGRAM ?? "").toLowerCase();
+export function resolveLocalAuthCliInvocation(params?: {
+  execPath?: string;
+  wrapperPath?: string;
+  runNodePath?: string;
+  hasDistEntry?: boolean;
+  hasRunNodeScript?: boolean;
+}): { command: string; args: string[] } {
+  const hasDistEntry =
+    params?.hasDistEntry ??
+    (existsSync(OPENCLAW_DIST_ENTRY_JS_PATH) || existsSync(OPENCLAW_DIST_ENTRY_MJS_PATH));
+  const hasRunNodeScript = params?.hasRunNodeScript ?? existsSync(OPENCLAW_RUN_NODE_SCRIPT_PATH);
+  const command = params?.execPath ?? process.execPath;
+  const wrapperPath = params?.wrapperPath ?? OPENCLAW_CLI_WRAPPER_PATH;
+  const runNodePath = params?.runNodePath ?? OPENCLAW_RUN_NODE_SCRIPT_PATH;
 
-  // Some macOS terminals emit multiline paste as rapid single-line submits.
-  // Enable burst coalescing so pasted blocks stay as one user message.
-  if (platform === "darwin") {
-    if (termProgram.includes("iterm") || termProgram.includes("apple_terminal")) {
-      return true;
-    }
-    return false;
-  }
-
-  if (platform !== "win32") {
-    return false;
-  }
-
-  const msystem = (env.MSYSTEM ?? "").toUpperCase();
-  const shell = env.SHELL ?? "";
-  if (msystem.startsWith("MINGW") || msystem.startsWith("MSYS")) {
-    return true;
-  }
-  if (shell.toLowerCase().includes("bash")) {
-    return true;
-  }
-  return termProgram.includes("mintty");
+  // Prefer the packaged wrapper when build output exists, but keep source-tree
+  // auth working in unbuilt checkouts that only have scripts/run-node.mjs.
+  return hasDistEntry || !hasRunNodeScript
+    ? { command, args: [wrapperPath, "models", "auth", "login"] }
+    : { command, args: [runNodePath, "models", "auth", "login"] };
 }
 
-export function createSubmitBurstCoalescer(params: {
-  submit: (value: string) => void;
-  enabled: boolean;
-  burstWindowMs?: number;
-  now?: () => number;
-  setTimer?: typeof setTimeout;
-  clearTimer?: typeof clearTimeout;
-}) {
-  const windowMs = Math.max(1, params.burstWindowMs ?? 50);
-  const now = params.now ?? (() => Date.now());
-  const setTimer = params.setTimer ?? setTimeout;
-  const clearTimer = params.clearTimer ?? clearTimeout;
-  let pending: string | null = null;
-  let pendingAt = 0;
-  let flushTimer: ReturnType<typeof setTimeout> | null = null;
+export function resolveLocalAuthSpawnOptions(params: {
+  command: string;
+  platform?: NodeJS.Platform;
+}): { shell?: true } {
+  const platform = params.platform ?? process.platform;
+  return platform === "win32" && /\.(cmd|bat)$/iu.test(params.command.trim())
+    ? { shell: true }
+    : {};
+}
 
-  const clearFlushTimer = () => {
-    if (!flushTimer) {
-      return;
-    }
-    clearTimer(flushTimer);
-    flushTimer = null;
-  };
-
-  const flushPending = () => {
-    if (pending === null) {
-      return;
-    }
-    const value = pending;
-    pending = null;
-    pendingAt = 0;
-    clearFlushTimer();
-    params.submit(value);
-  };
-
-  const scheduleFlush = () => {
-    clearFlushTimer();
-    flushTimer = setTimer(() => {
-      flushPending();
-    }, windowMs);
-  };
-
-  return (value: string) => {
-    if (!params.enabled) {
-      params.submit(value);
-      return;
-    }
-    if (value.includes("\n")) {
-      flushPending();
-      params.submit(value);
-      return;
-    }
-    const ts = now();
-    if (pending === null) {
-      pending = value;
-      pendingAt = ts;
-      scheduleFlush();
-      return;
-    }
-    if (ts - pendingAt <= windowMs) {
-      pending = `${pending}\n${value}`;
-      pendingAt = ts;
-      scheduleFlush();
-      return;
-    }
-    flushPending();
-    pending = value;
-    pendingAt = ts;
-    scheduleFlush();
-  };
+export function resolveLocalAuthSpawnCwd(params: { args: string[]; defaultCwd?: string }): string {
+  const defaultCwd = params.defaultCwd ?? process.cwd();
+  const entryArg = params.args[0]?.trim();
+  if (!entryArg) {
+    return defaultCwd;
+  }
+  const entryBase = path.basename(entryArg).toLowerCase();
+  if (entryBase === "openclaw.mjs") {
+    return path.dirname(entryArg);
+  }
+  if (entryBase === "run-node.mjs") {
+    return path.dirname(path.dirname(entryArg));
+  }
+  return defaultCwd;
 }
 
 export function resolveTuiSessionKey(params: {
@@ -203,9 +149,9 @@ export function resolveTuiSessionKey(params: {
     return trimmed;
   }
   if (trimmed.startsWith("agent:")) {
-    return trimmed.toLowerCase();
+    return normalizeLowercaseStringOrEmpty(trimmed);
   }
-  return `agent:${params.currentAgentId}:${trimmed.toLowerCase()}`;
+  return `agent:${params.currentAgentId}:${normalizeLowercaseStringOrEmpty(trimmed)}`;
 }
 
 export function resolveInitialTuiAgentId(params: {
@@ -292,6 +238,24 @@ export function stopTuiSafely(stop: () => void): void {
   }
 }
 
+type DrainableTui = {
+  stop: () => void;
+  terminal?: {
+    drainInput?: (maxMs?: number, idleMs?: number) => Promise<void>;
+  };
+};
+
+export async function drainAndStopTuiSafely(tui: DrainableTui): Promise<void> {
+  if (typeof tui.terminal?.drainInput === "function") {
+    try {
+      await tui.terminal.drainInput();
+    } catch {
+      // Best-effort only. A failed drain should not skip terminal shutdown.
+    }
+  }
+  stopTuiSafely(() => tui.stop());
+}
+
 type CtrlCAction = "clear" | "warn" | "exit";
 
 export function resolveCtrlCAction(params: {
@@ -320,6 +284,7 @@ export function resolveCtrlCAction(params: {
 }
 
 export async function runTui(opts: TuiOptions) {
+  const isLocalMode = opts.local === true;
   const config = loadConfig();
   const initialSessionInput = (opts.session ?? "").trim();
   let sessionScope: SessionScope = (config.session?.scope ?? "per-sender") as SessionScope;
@@ -337,6 +302,7 @@ export async function runTui(opts: TuiOptions) {
   let initialSessionApplied = false;
   let currentSessionId: string | null = null;
   let activeChatRunId: string | null = null;
+  let pendingOptimisticUserMessage = false;
   let historyLoaded = false;
   let isConnected = false;
   let wasDisconnected = false;
@@ -353,7 +319,7 @@ export async function runTui(opts: TuiOptions) {
   let lastCtrlCAt = 0;
   let exitRequested = false;
   let activityStatus = "idle";
-  let connectionStatus = "connecting";
+  let connectionStatus = isLocalMode ? "starting local runtime" : "connecting";
   let statusTimeout: NodeJS.Timeout | null = null;
   let statusTimer: NodeJS.Timeout | null = null;
   let statusStartedAt: number | null = null;
@@ -407,6 +373,12 @@ export async function runTui(opts: TuiOptions) {
     },
     set activeChatRunId(value) {
       activeChatRunId = value;
+    },
+    get pendingOptimisticUserMessage() {
+      return pendingOptimisticUserMessage;
+    },
+    set pendingOptimisticUserMessage(value) {
+      pendingOptimisticUserMessage = value;
     },
     get historyLoaded() {
       return historyLoaded;
@@ -522,11 +494,21 @@ export async function runTui(opts: TuiOptions) {
     localBtwRunIds.clear();
   };
 
-  const client = await GatewayChatClient.connect({
-    url: opts.url,
-    token: opts.token,
-    password: opts.password,
-  });
+  const client: TuiBackend = opts.local
+    ? new EmbeddedTuiBackend()
+    : await GatewayChatClient.connect({
+        url: opts.url,
+        token: opts.token,
+        password: opts.password,
+      });
+  const previousConsoleSubsystemFilter = isLocalMode
+    ? loggingState.consoleSubsystemFilter
+      ? [...loggingState.consoleSubsystemFilter]
+      : null
+    : null;
+  if (isLocalMode) {
+    setConsoleSubsystemFilter(["__openclaw_tui_quiet__"]);
+  }
 
   const tui = new TUI(new ProcessTerminal());
   const dedupeBackspace = createBackspaceDeduper();
@@ -554,6 +536,7 @@ export async function runTui(opts: TuiOptions) {
       new CombinedAutocompleteProvider(
         getSlashCommands({
           cfg: config,
+          local: isLocalMode,
           provider: sessionInfo.modelProvider,
           model: sessionInfo.model,
         }),
@@ -752,7 +735,13 @@ export async function runTui(opts: TuiOptions) {
     }
     if (ttlMs && ttlMs > 0) {
       statusTimeout = setTimeout(() => {
-        connectionStatus = isConnected ? "connected" : "disconnected";
+        connectionStatus = isConnected
+          ? isLocalMode
+            ? "local ready"
+            : "connected"
+          : isLocalMode
+            ? "local stopped"
+            : "disconnected";
         renderStatus();
       }, ttlMs);
     }
@@ -762,6 +751,67 @@ export async function runTui(opts: TuiOptions) {
     activityStatus = text;
     renderStatus();
   };
+
+  const withTuiSuspended = async <T>(work: () => Promise<T>): Promise<T> => {
+    await drainAndStopTuiSafely(tui);
+    if (isLocalMode) {
+      setConsoleSubsystemFilter(previousConsoleSubsystemFilter);
+    }
+    try {
+      return await work();
+    } finally {
+      if (isLocalMode) {
+        setConsoleSubsystemFilter(["__openclaw_tui_quiet__"]);
+      }
+      tui.start();
+      tui.setFocus(editor);
+      updateHeader();
+      updateFooter();
+      tui.requestRender(true);
+    }
+  };
+
+  const runAuthFlow = isLocalMode
+    ? async (params: { provider?: string }) =>
+        await withTuiSuspended(
+          async () =>
+            await new Promise<{ exitCode: number | null; signal: NodeJS.Signals | null }>(
+              (resolve, reject) => {
+                const provider = params.provider?.trim() || undefined;
+
+                // Codex owns its auth store; delegate when the CLI is available.
+                const codexBin =
+                  provider === OPENAI_CODEX_PROVIDER ||
+                  (!provider && sessionInfo.modelProvider === OPENAI_CODEX_PROVIDER)
+                    ? resolveCodexCliBin()
+                    : null;
+
+                let command: string;
+                let args: string[];
+                if (codexBin) {
+                  command = codexBin;
+                  args = ["login"];
+                } else {
+                  ({ command, args } = resolveLocalAuthCliInvocation());
+                  if (provider) {
+                    args.push("--provider", provider);
+                  }
+                }
+
+                const child = spawn(command, args, {
+                  cwd: resolveLocalAuthSpawnCwd({ args, defaultCwd: process.cwd() }),
+                  env: process.env,
+                  stdio: "inherit",
+                  ...resolveLocalAuthSpawnOptions({ command }),
+                });
+                child.once("error", reject);
+                child.once("exit", (exitCode, signal) => {
+                  resolve({ exitCode, signal });
+                });
+              },
+            ),
+        )
+    : undefined;
 
   const updateFooter = () => {
     const sessionKeyLabel = formatSessionKey(currentSessionKey);
@@ -843,9 +893,11 @@ export async function runTui(opts: TuiOptions) {
     btw,
     tui,
     state,
+    localMode: isLocalMode,
     setActivityStatus,
     refreshSessionInfo,
     loadHistory,
+    noteLocalRunId,
     isLocalRunId,
     forgetLocalRunId,
     clearLocalRunIds,
@@ -860,8 +912,9 @@ export async function runTui(opts: TuiOptions) {
     }
     exitRequested = true;
     client.stop();
-    stopTuiSafely(() => tui.stop());
-    process.exit(0);
+    void drainAndStopTuiSafely(tui).then(() => {
+      process.exit(0);
+    });
   };
 
   const { handleCommand, sendMessage, openModelSelector, openAgentSelector, openSessionSelector } =
@@ -886,6 +939,7 @@ export async function runTui(opts: TuiOptions) {
       noteLocalBtwRunId,
       forgetLocalRunId,
       forgetLocalBtwRunId,
+      runAuthFlow,
       requestExit,
     });
 
@@ -994,12 +1048,15 @@ export async function runTui(opts: TuiOptions) {
     pairingHintShown = false;
     const reconnected = wasDisconnected;
     wasDisconnected = false;
-    setConnectionStatus("connected");
+    setConnectionStatus(isLocalMode ? "local ready" : "connected");
     void (async () => {
       await refreshAgents();
       updateHeader();
       await loadHistory();
-      setConnectionStatus(reconnected ? "gateway reconnected" : "gateway connected", 4000);
+      setConnectionStatus(
+        isLocalMode ? "local ready" : reconnected ? "gateway reconnected" : "gateway connected",
+        4000,
+      );
       tui.requestRender();
       if (!autoMessageSent && autoMessage) {
         autoMessageSent = true;
@@ -1014,7 +1071,13 @@ export async function runTui(opts: TuiOptions) {
     isConnected = false;
     wasDisconnected = true;
     historyLoaded = false;
-    const disconnectState = resolveGatewayDisconnectState(reason);
+    const disconnectState = isLocalMode
+      ? {
+          connectionStatus: `local runtime stopped${reason ? `: ${reason}` : ""}`,
+          activityStatus: "idle",
+          pairingHint: undefined,
+        }
+      : resolveGatewayDisconnectState(reason);
     setConnectionStatus(disconnectState.connectionStatus, 5000);
     setActivityStatus(disconnectState.activityStatus);
     if (disconnectState.pairingHint && !pairingHintShown) {
@@ -1031,7 +1094,7 @@ export async function runTui(opts: TuiOptions) {
   };
 
   updateHeader();
-  setConnectionStatus("connecting");
+  setConnectionStatus(isLocalMode ? "starting local runtime" : "connecting");
   updateFooter();
   const sigintHandler = () => {
     handleCtrlC();
@@ -1045,6 +1108,9 @@ export async function runTui(opts: TuiOptions) {
   client.start();
   await new Promise<void>((resolve) => {
     const finish = () => {
+      if (isLocalMode) {
+        setConsoleSubsystemFilter(previousConsoleSubsystemFilter);
+      }
       process.removeListener("SIGINT", sigintHandler);
       process.removeListener("SIGTERM", sigtermHandler);
       resolve();

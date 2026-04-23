@@ -1,9 +1,14 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
-import { saveAuthProfileStore } from "./auth-profiles.js";
+import { describe, expect, it, vi } from "vitest";
+import { saveAuthProfileStore } from "./auth-profiles/store.js";
 import { ensurePiAuthJsonFromAuthProfiles } from "./pi-auth-json.js";
+
+vi.mock("./auth-profiles/external-auth.js", () => ({
+  overlayExternalAuthProfiles: <T>(store: T) => store,
+  shouldPersistExternalAuthProfile: () => true,
+}));
 
 type AuthProfileStore = Parameters<typeof saveAuthProfileStore>[0];
 
@@ -201,6 +206,28 @@ describe("ensurePiAuthJsonFromAuthProfiles", () => {
 
     const auth = await readAuthJson(agentDir);
     expect(auth["legacy-provider"]).toMatchObject({ type: "api_key", key: "legacy-key" });
+    expect(auth["openrouter"]).toMatchObject({ type: "api_key", key: "new-key" });
+  });
+
+  it("treats malformed existing provider entries as stale and replaces them", async () => {
+    const agentDir = await createAgentDir();
+    const authPath = path.join(agentDir, "auth.json");
+
+    await fs.mkdir(agentDir, { recursive: true });
+    await fs.writeFile(authPath, JSON.stringify({ openrouter: { type: "api_key", key: 123 } }));
+
+    writeProfiles(agentDir, {
+      "openrouter:default": {
+        type: "api_key",
+        provider: "openrouter",
+        key: "new-key",
+      },
+    });
+
+    const result = await ensurePiAuthJsonFromAuthProfiles(agentDir);
+    expect(result.wrote).toBe(true);
+
+    const auth = await readAuthJson(agentDir);
     expect(auth["openrouter"]).toMatchObject({ type: "api_key", key: "new-key" });
   });
 });

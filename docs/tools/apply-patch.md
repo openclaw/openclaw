@@ -3,10 +3,8 @@ summary: "Apply multi-file patches with the apply_patch tool"
 read_when:
   - You need structured file edits across multiple files
   - You want to document or debug patch-based edits
-title: "apply_patch Tool"
+title: "apply_patch tool"
 ---
-
-# apply_patch tool
 
 Apply file changes using a structured patch format. This is ideal for multi-file
 or multi-hunk edits where a single `edit` call would be brittle.
@@ -36,8 +34,9 @@ The tool accepts a single `input` string that wraps one or more file operations:
 - `tools.exec.applyPatch.workspaceOnly` defaults to `true` (workspace-contained). Set it to `false` only if you intentionally want `apply_patch` to write/delete outside the workspace directory.
 - Use `*** Move to:` within an `*** Update File:` hunk to rename files.
 - `*** End of File` marks an EOF-only insert when needed.
-- Experimental and disabled by default. Enable with `tools.exec.applyPatch.enabled`.
-- OpenAI-only (including OpenAI Codex). Optionally gate by model via
+- Available by default for OpenAI and OpenAI Codex models. Set
+  `tools.exec.applyPatch.enabled: false` to disable it.
+- Optionally gate by model via
   `tools.exec.applyPatch.allowModels`.
 - Config is only under `tools.exec`.
 

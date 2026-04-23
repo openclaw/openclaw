@@ -30,7 +30,6 @@ describe("compaction token accounting sanitization", () => {
         content: [{ type: "text", text: "ok" }],
         details: { raw: "x".repeat(50_000) },
         timestamp: 1,
-        // oxlint-disable-next-line typescript/no-explicit-any
       } as any,
       {
         role: "user",

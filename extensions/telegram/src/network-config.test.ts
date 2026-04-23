@@ -1,21 +1,40 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import type { TelegramNetworkConfig } from "../../../src/config/types.telegram.js";
-import {
-  resetTelegramNetworkConfigStateForTests,
-  resolveTelegramAutoSelectFamilyDecision,
-  resolveTelegramDnsResultOrderDecision,
-} from "./network-config.js";
+import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-runtime";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Mock isWSL2Sync at the top level
-vi.mock("../../../src/infra/wsl.js", () => ({
+vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
+  isTruthyEnvValue: (value: string | undefined) =>
+    typeof value === "string" && /^(1|true|yes|on)$/i.test(value.trim()),
   isWSL2Sync: vi.fn(() => false),
 }));
 
-import { isWSL2Sync } from "../../../src/infra/wsl.js";
+let isWSL2Sync: typeof import("openclaw/plugin-sdk/runtime-env").isWSL2Sync;
+let resetTelegramNetworkConfigStateForTests: typeof import("./network-config.js").resetTelegramNetworkConfigStateForTests;
+let resolveTelegramAutoSelectFamilyDecision: typeof import("./network-config.js").resolveTelegramAutoSelectFamilyDecision;
+let resolveTelegramDnsResultOrderDecision: typeof import("./network-config.js").resolveTelegramDnsResultOrderDecision;
+
+async function loadModule() {
+  ({ isWSL2Sync } = await import("openclaw/plugin-sdk/runtime-env"));
+  ({
+    resetTelegramNetworkConfigStateForTests,
+    resolveTelegramAutoSelectFamilyDecision,
+    resolveTelegramDnsResultOrderDecision,
+  } = await import("./network-config.js"));
+}
 
 describe("resolveTelegramAutoSelectFamilyDecision", () => {
-  afterEach(() => {
+  beforeAll(async () => {
+    await loadModule();
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(async () => {
     vi.restoreAllMocks();
+    if (!resetTelegramNetworkConfigStateForTests) {
+      await loadModule();
+    }
     resetTelegramNetworkConfigStateForTests();
   });
 
@@ -64,6 +83,9 @@ describe("resolveTelegramAutoSelectFamilyDecision", () => {
       expected: { value: true, source: "config" },
     },
   ])("$name", ({ env, network, expected }) => {
+    if (!resolveTelegramAutoSelectFamilyDecision) {
+      throw new Error("network-config module not loaded");
+    }
     const decision = resolveTelegramAutoSelectFamilyDecision({
       env,
       network,
@@ -110,6 +132,9 @@ describe("resolveTelegramAutoSelectFamilyDecision", () => {
         expected: { value: true, source: "default-node22" },
       },
     ])("$name", ({ env, network, expected, wsl2 = true }) => {
+      if (!isWSL2Sync) {
+        throw new Error("runtime-env mock not loaded");
+      }
       vi.mocked(isWSL2Sync).mockReturnValue(wsl2);
       const decision = resolveTelegramAutoSelectFamilyDecision({
         env,
@@ -131,6 +156,10 @@ describe("resolveTelegramAutoSelectFamilyDecision", () => {
 });
 
 describe("resolveTelegramDnsResultOrderDecision", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it.each([
     {
       name: "uses env override when provided",
@@ -158,9 +187,7 @@ describe("resolveTelegramDnsResultOrderDecision", () => {
     },
     {
       name: "normalizes trimmed config values",
-      network: { dnsResultOrder: "  Verbatim  " } as TelegramNetworkConfig & {
-        dnsResultOrder: string;
-      },
+      network: { dnsResultOrder: "  Verbatim  " } as unknown as TelegramNetworkConfig,
       nodeMajor: 20,
       expected: { value: "verbatim", source: "config" },
     },
@@ -174,14 +201,14 @@ describe("resolveTelegramDnsResultOrderDecision", () => {
     {
       name: "ignores invalid env and config values before applying Node 22 default",
       env: { OPENCLAW_TELEGRAM_DNS_RESULT_ORDER: "bogus" },
-      network: { dnsResultOrder: "invalid" } as TelegramNetworkConfig & { dnsResultOrder: string },
+      network: { dnsResultOrder: "invalid" } as unknown as TelegramNetworkConfig,
       nodeMajor: 22,
       expected: { value: "ipv4first", source: "default-node22" },
     },
   ] satisfies Array<{
     name: string;
     env?: NodeJS.ProcessEnv;
-    network?: TelegramNetworkConfig | (TelegramNetworkConfig & { dnsResultOrder: string });
+    network?: TelegramNetworkConfig;
     nodeMajor: number;
     expected: ReturnType<typeof resolveTelegramDnsResultOrderDecision>;
   }>)("$name", ({ env, network, nodeMajor, expected }) => {

@@ -1,10 +1,10 @@
 import { buildDockerExecArgs } from "../bash-tools.shared.js";
+import type { SandboxBackendCommandParams } from "./backend-handle.types.js";
 import type {
   CreateSandboxBackendParams,
-  SandboxBackendManager,
-  SandboxBackendCommandParams,
   SandboxBackendHandle,
-} from "./backend.js";
+  SandboxBackendManager,
+} from "./backend.types.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
 import {
   dockerContainerState,
@@ -12,6 +12,22 @@ import {
   execDocker,
   execDockerRaw,
 } from "./docker.js";
+
+function resolveConfiguredDockerRuntimeImage(params: {
+  config: CreateSandboxBackendParams["cfg"] | import("../../config/config.js").OpenClawConfig;
+  agentId?: string;
+  configLabelKind?: string;
+}): string {
+  const sandboxCfg = resolveSandboxConfigForAgent(params.config, params.agentId);
+  switch (params.configLabelKind) {
+    case "BrowserImage":
+      return sandboxCfg.browser.image;
+    case "Image":
+    case undefined:
+    default:
+      return sandboxCfg.docker.image;
+  }
+}
 
 export async function createDockerSandboxBackend(
   params: CreateSandboxBackendParams,
@@ -84,7 +100,7 @@ export function runDockerSandboxShellCommand(
     "sh",
     "-c",
     params.script,
-    "moltbot-sandbox-fs",
+    "openclaw-sandbox-fs",
   ];
   if (params.args?.length) {
     dockerArgs.push(...params.args);
@@ -113,7 +129,11 @@ export const dockerSandboxBackendManager: SandboxBackendManager = {
         // ignore inspect failures
       }
     }
-    const configuredImage = resolveSandboxConfigForAgent(config, agentId).docker.image;
+    const configuredImage = resolveConfiguredDockerRuntimeImage({
+      config,
+      agentId,
+      configLabelKind: entry.configLabelKind,
+    });
     return {
       running: state.running,
       actualConfigLabel,

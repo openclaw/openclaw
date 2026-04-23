@@ -1,11 +1,8 @@
 import path from "node:path";
-import type { OpenClawConfig } from "../config/config.js";
 
 const WILDCARD_SEGMENT = "*";
 const WINDOWS_DRIVE_ABS_RE = /^[A-Za-z]:\//;
 const WINDOWS_DRIVE_ROOT_RE = /^[A-Za-z]:$/;
-
-export const DEFAULT_IMESSAGE_ATTACHMENT_ROOTS = ["/Users/*/Library/Messages/Attachments"] as const;
 
 function normalizePosixAbsolutePath(value: string): string | undefined {
   const trimmed = value.trim();
@@ -113,38 +110,4 @@ export function isInboundPathAllowed(params: {
     return false;
   }
   return effectiveRoots.some((rootPattern) => matchesRootPattern({ candidatePath, rootPattern }));
-}
-
-function resolveIMessageAccountConfig(params: { cfg: OpenClawConfig; accountId?: string | null }) {
-  const accountId = params.accountId?.trim();
-  if (!accountId) {
-    return undefined;
-  }
-  return params.cfg.channels?.imessage?.accounts?.[accountId];
-}
-
-export function resolveIMessageAttachmentRoots(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-}): string[] {
-  const accountConfig = resolveIMessageAccountConfig(params);
-  return mergeInboundPathRoots(
-    accountConfig?.attachmentRoots,
-    params.cfg.channels?.imessage?.attachmentRoots,
-    DEFAULT_IMESSAGE_ATTACHMENT_ROOTS,
-  );
-}
-
-export function resolveIMessageRemoteAttachmentRoots(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-}): string[] {
-  const accountConfig = resolveIMessageAccountConfig(params);
-  return mergeInboundPathRoots(
-    accountConfig?.remoteAttachmentRoots,
-    params.cfg.channels?.imessage?.remoteAttachmentRoots,
-    accountConfig?.attachmentRoots,
-    params.cfg.channels?.imessage?.attachmentRoots,
-    DEFAULT_IMESSAGE_ATTACHMENT_ROOTS,
-  );
 }

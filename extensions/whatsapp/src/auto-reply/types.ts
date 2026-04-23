@@ -1,11 +1,16 @@
-import type { monitorWebInbox } from "../inbound.js";
+import type { WebInboundMessage } from "../inbound/types.js";
 import type { ReconnectPolicy } from "../reconnect.js";
 
-export type WebInboundMsg = Parameters<typeof monitorWebInbox>[0]["onMessage"] extends (
-  msg: infer M,
-) => unknown
-  ? M
-  : never;
+export type WebChannelHealthState =
+  | "starting"
+  | "healthy"
+  | "stale"
+  | "reconnecting"
+  | "conflict"
+  | "logged-out"
+  | "stopped";
+
+export type WebInboundMsg = WebInboundMessage;
 
 export type WebChannelStatus = {
   running: boolean;
@@ -18,9 +23,11 @@ export type WebChannelStatus = {
     error?: string;
     loggedOut?: boolean;
   } | null;
+  lastInboundAt?: number | null;
   lastMessageAt?: number | null;
   lastEventAt?: number | null;
   lastError?: string | null;
+  healthState?: WebChannelHealthState;
 };
 
 export type WebMonitorTuning = {

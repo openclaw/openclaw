@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { __testing, resolveCliChannelOptions } from "./channel-options.js";
 
 const readFileSyncMock = vi.hoisted(() => vi.fn());
 
@@ -15,27 +16,22 @@ vi.mock("node:fs", async () => {
   };
 });
 
-vi.mock("../channels/registry.js", () => ({
-  CHAT_CHANNEL_ORDER: ["telegram", "discord"],
+vi.mock("../channels/ids.js", () => ({
+  CHAT_CHANNEL_ORDER: ["quietchat", "forum"],
 }));
-
-async function loadModule() {
-  return await import("./channel-options.js");
-}
 
 describe("resolveCliChannelOptions", () => {
   afterEach(() => {
-    vi.resetModules();
+    __testing.resetPrecomputedChannelOptionsForTests();
     vi.clearAllMocks();
   });
 
   it("uses precomputed startup metadata when available", async () => {
     readFileSyncMock.mockReturnValue(
-      JSON.stringify({ channelOptions: ["cached", "telegram", "cached"] }),
+      JSON.stringify({ channelOptions: ["cached", "quietchat", "cached"] }),
     );
 
-    const mod = await loadModule();
-    expect(mod.resolveCliChannelOptions()).toEqual(["cached", "telegram"]);
+    expect(resolveCliChannelOptions()).toEqual(["cached", "quietchat"]);
   });
 
   it("falls back to core channel order when metadata is missing", async () => {
@@ -43,16 +39,14 @@ describe("resolveCliChannelOptions", () => {
       throw new Error("ENOENT");
     });
 
-    const mod = await loadModule();
-    expect(mod.resolveCliChannelOptions()).toEqual(["telegram", "discord"]);
+    expect(resolveCliChannelOptions()).toEqual(["quietchat", "forum"]);
   });
 
   it("ignores external catalog env during CLI bootstrap", async () => {
     process.env.OPENCLAW_PLUGIN_CATALOG_PATHS = "/tmp/plugins-catalog.json";
-    readFileSyncMock.mockReturnValue(JSON.stringify({ channelOptions: ["cached", "telegram"] }));
+    readFileSyncMock.mockReturnValue(JSON.stringify({ channelOptions: ["cached", "quietchat"] }));
 
-    const mod = await loadModule();
-    expect(mod.resolveCliChannelOptions()).toEqual(["cached", "telegram"]);
+    expect(resolveCliChannelOptions()).toEqual(["cached", "quietchat"]);
     delete process.env.OPENCLAW_PLUGIN_CATALOG_PATHS;
   });
 });

@@ -1,9 +1,9 @@
 // Private helper surface for the bundled twitch plugin.
-// Keep this list additive and scoped to symbols used under extensions/twitch.
+// Keep this list additive and scoped to the bundled Twitch surface.
 
 import { createOptionalChannelSetupSurface } from "./channel-setup.js";
 
-export type { ReplyPayload } from "../auto-reply/types.js";
+export type { ReplyPayload } from "./reply-payload.js";
 export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
 export type {
   ChannelGatewayContext,
@@ -22,7 +22,7 @@ export type {
   ChannelMessageActionContext,
   ChannelMeta,
   ChannelStatusIssue,
-} from "../channels/plugins/types.js";
+} from "../channels/plugins/types.public.js";
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export { createChannelReplyPipeline } from "./channel-reply-pipeline.js";
 export type { OpenClawConfig } from "../config/config.js";

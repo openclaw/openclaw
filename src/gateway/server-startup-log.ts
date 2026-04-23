@@ -1,15 +1,17 @@
 import chalk from "chalk";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveConfiguredModelRef } from "../agents/model-selection.js";
-import type { loadConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getResolvedLoggerSettings } from "../logging.js";
 import { collectEnabledInsecureOrDangerousFlags } from "../security/dangerous-config-flags.js";
 
 export function logGatewayStartup(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   bindHost: string;
   bindHosts?: string[];
   port: number;
+  loadedPluginIds: readonly string[];
+  startupStartedAt?: number;
   tlsEnabled?: boolean;
   log: { info: (msg: string, meta?: Record<string, unknown>) => void; warn: (msg: string) => void };
   isNixMode: boolean;
@@ -23,12 +25,11 @@ export function logGatewayStartup(params: {
   params.log.info(`agent model: ${modelRef}`, {
     consoleMessage: `agent model: ${chalk.whiteBright(modelRef)}`,
   });
-  const scheme = params.tlsEnabled ? "wss" : "ws";
-  const formatHost = (host: string) => (host.includes(":") ? `[${host}]` : host);
-  const hosts =
-    params.bindHosts && params.bindHosts.length > 0 ? params.bindHosts : [params.bindHost];
-  const listenEndpoints = hosts.map((host) => `${scheme}://${formatHost(host)}:${params.port}`);
-  params.log.info(`listening on ${listenEndpoints.join(", ")} (PID ${process.pid})`);
+  const startupDurationMs =
+    typeof params.startupStartedAt === "number" ? Date.now() - params.startupStartedAt : null;
+  const startupDurationLabel =
+    startupDurationMs == null ? null : `${(startupDurationMs / 1000).toFixed(1)}s`;
+  params.log.info(`ready (${formatReadyDetails(params.loadedPluginIds, startupDurationLabel)})`);
   params.log.info(`log file: ${getResolvedLoggerSettings().file}`);
   if (params.isNixMode) {
     params.log.info("gateway: running in Nix mode (config managed externally)");
@@ -41,4 +42,24 @@ export function logGatewayStartup(params: {
       "Run `openclaw security audit`.";
     params.log.warn(warning);
   }
+}
+
+function formatReadyDetails(
+  loadedPluginIds: readonly string[],
+  startupDurationLabel: string | null,
+) {
+  const pluginIds = [...new Set(loadedPluginIds.map((id) => id.trim()).filter(Boolean))].toSorted(
+    (a, b) => a.localeCompare(b),
+  );
+  const pluginSummary =
+    pluginIds.length === 0
+      ? "0 plugins"
+      : `${pluginIds.length} ${pluginIds.length === 1 ? "plugin" : "plugins"}: ${pluginIds.join(", ")}`;
+
+  if (!startupDurationLabel) {
+    return pluginSummary;
+  }
+  return pluginIds.length === 0
+    ? `${pluginSummary}, ${startupDurationLabel}`
+    : `${pluginSummary}; ${startupDurationLabel}`;
 }

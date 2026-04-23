@@ -1,4 +1,3 @@
-import type { Server } from "node:http";
 import type { Request, Response } from "express";
 import {
   DEFAULT_WEBHOOK_MAX_BODY_BYTES,
@@ -19,8 +18,16 @@ import {
   resolveMSTeamsUserAllowlist,
 } from "./resolve-allowlist.js";
 import { getMSTeamsRuntime } from "./runtime.js";
-import { createMSTeamsAdapter, loadMSTeamsSdkWithAuth } from "./sdk.js";
+import {
+  createBotFrameworkJwtValidator,
+  createMSTeamsAdapter,
+  createMSTeamsTokenProvider,
+  loadMSTeamsSdkWithAuth,
+} from "./sdk.js";
+import { createMSTeamsSsoTokenStoreFs } from "./sso-token-store.js";
+import type { MSTeamsSsoDeps } from "./sso.js";
 import { resolveMSTeamsCredentials } from "./token.js";
+import { applyMSTeamsWebhookTimeouts } from "./webhook-timeouts.js";
 
 export type MonitorMSTeamsOpts = {
   cfg: OpenClawConfig;
@@ -36,32 +43,6 @@ export type MonitorMSTeamsResult = {
 };
 
 const MSTEAMS_WEBHOOK_MAX_BODY_BYTES = DEFAULT_WEBHOOK_MAX_BODY_BYTES;
-const MSTEAMS_WEBHOOK_INACTIVITY_TIMEOUT_MS = 30_000;
-const MSTEAMS_WEBHOOK_REQUEST_TIMEOUT_MS = 30_000;
-const MSTEAMS_WEBHOOK_HEADERS_TIMEOUT_MS = 15_000;
-
-export type ApplyMSTeamsWebhookTimeoutsOpts = {
-  inactivityTimeoutMs?: number;
-  requestTimeoutMs?: number;
-  headersTimeoutMs?: number;
-};
-
-export function applyMSTeamsWebhookTimeouts(
-  httpServer: Server,
-  opts?: ApplyMSTeamsWebhookTimeoutsOpts,
-): void {
-  const inactivityTimeoutMs = opts?.inactivityTimeoutMs ?? MSTEAMS_WEBHOOK_INACTIVITY_TIMEOUT_MS;
-  const requestTimeoutMs = opts?.requestTimeoutMs ?? MSTEAMS_WEBHOOK_REQUEST_TIMEOUT_MS;
-  const headersTimeoutMs = Math.min(
-    opts?.headersTimeoutMs ?? MSTEAMS_WEBHOOK_HEADERS_TIMEOUT_MS,
-    requestTimeoutMs,
-  );
-
-  httpServer.setTimeout(inactivityTimeoutMs);
-  httpServer.requestTimeout = requestTimeoutMs;
-  httpServer.headersTimeout = headersTimeoutMs;
-}
-
 export async function monitorMSTeamsProvider(
   opts: MonitorMSTeamsOpts,
 ): Promise<MonitorMSTeamsResult> {
@@ -122,9 +103,8 @@ export async function monitorMSTeamsProvider(
 
   try {
     const allowEntries =
-      allowFrom
-        ?.map((entry) => cleanAllowEntry(String(entry)))
-        .filter((entry) => entry && entry !== "*") ?? [];
+      allowFrom?.map((entry) => cleanAllowEntry(entry)).filter((entry) => entry && entry !== "*") ??
+      [];
     if (allowEntries.length > 0) {
       const { additions } = await resolveAllowlistUsers("msteams users", allowEntries);
       allowFrom = mergeAllowlist({ existing: allowFrom, additions });
@@ -132,7 +112,7 @@ export async function monitorMSTeamsProvider(
 
     if (Array.isArray(groupAllowFrom) && groupAllowFrom.length > 0) {
       const groupEntries = groupAllowFrom
-        .map((entry) => cleanAllowEntry(String(entry)))
+        .map((entry) => cleanAllowEntry(entry))
         .filter((entry) => entry && entry !== "*");
       if (groupEntries.length > 0) {
         const { additions } = await resolveAllowlistUsers("msteams group users", groupEntries);
@@ -214,7 +194,7 @@ export async function monitorMSTeamsProvider(
       }
     }
   } catch (err) {
-    runtime.log?.(`msteams resolve failed; using config entries. ${String(err)}`);
+    runtime.log?.(`msteams resolve failed; using config entries. ${formatUnknownError(err)}`);
   }
 
   msteamsCfg = {
@@ -247,14 +227,32 @@ export async function monitorMSTeamsProvider(
   // Dynamic import to avoid loading SDK when provider is disabled
   const express = await import("express");
 
-  const { sdk, authConfig } = await loadMSTeamsSdkWithAuth(creds);
-  const { ActivityHandler, MsalTokenProvider, authorizeJWT } = sdk;
+  const { sdk, app } = await loadMSTeamsSdkWithAuth(creds);
 
-  // Auth configuration - create early so adapter is available for deliverReplies
-  const tokenProvider = new MsalTokenProvider(authConfig);
-  const adapter = createMSTeamsAdapter(authConfig, sdk);
+  // Build a token provider adapter for Graph API operations
+  const tokenProvider = createMSTeamsTokenProvider(app);
 
-  const handler = registerMSTeamsHandlers(new ActivityHandler() as MSTeamsActivityHandler, {
+  const adapter = createMSTeamsAdapter(app, sdk);
+
+  // Build SSO deps when the operator has opted in and a connection name
+  // is configured. Leaving `sso` undefined matches the pre-SSO behavior
+  // (the plugin will still ack signin invokes, but will not attempt a
+  // Bot Framework token exchange or persist anything).
+  let ssoDeps: MSTeamsSsoDeps | undefined;
+  if (msteamsCfg.sso?.enabled && msteamsCfg.sso.connectionName) {
+    ssoDeps = {
+      tokenProvider,
+      tokenStore: createMSTeamsSsoTokenStoreFs(),
+      connectionName: msteamsCfg.sso.connectionName,
+    };
+    log.debug?.("msteams sso enabled", {
+      connectionName: msteamsCfg.sso.connectionName,
+    });
+  }
+
+  // Build a simple ActivityHandler-compatible object
+  const handler = buildActivityHandler();
+  registerMSTeamsHandlers(handler, {
     cfg,
     runtime,
     appId,
@@ -265,11 +263,48 @@ export async function monitorMSTeamsProvider(
     conversationStore,
     pollStore,
     log,
+    sso: ssoDeps,
   });
 
   // Create Express server
   const expressApp = express.default();
-  expressApp.use(authorizeJWT(authConfig));
+
+  // Cheap pre-parse auth gate: reject requests without a Bearer token before
+  // spending CPU/memory on JSON body parsing. This prevents unauthenticated
+  // request floods from forcing body parsing on internet-exposed webhooks.
+  expressApp.use((req: Request, res: Response, next: (err?: unknown) => void) => {
+    const auth = req.headers.authorization;
+    if (!auth || !auth.startsWith("Bearer ")) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+    next();
+  });
+
+  // JWT validation — verify Bot Framework tokens using the Teams SDK's
+  // JwtValidator (validates signature via JWKS, audience, issuer, expiration).
+  const jwtValidator = await createBotFrameworkJwtValidator(creds);
+  expressApp.use((req: Request, res: Response, next: (err?: unknown) => void) => {
+    // Authorization header is guaranteed by the pre-parse auth gate above.
+    // `serviceUrl` is optional, so authenticate from headers alone before body
+    // I/O to avoid spending memory and CPU on unauthenticated requests.
+    const authHeader = req.headers.authorization!;
+    jwtValidator
+      .validate(authHeader)
+      .then((valid) => {
+        if (!valid) {
+          log.debug?.("JWT validation failed");
+          res.status(401).json({ error: "Unauthorized" });
+          return;
+        }
+        next();
+      })
+      .catch((err) => {
+        log.debug?.(`JWT validation error: ${formatUnknownError(err)}`);
+        res.status(401).json({ error: "Unauthorized" });
+      });
+  });
+
   expressApp.use(express.json({ limit: MSTEAMS_WEBHOOK_MAX_BODY_BYTES }));
   expressApp.use((err: unknown, _req: Request, res: Response, next: (err?: unknown) => void) => {
     if (err && typeof err === "object" && "status" in err && err.status === 413) {
@@ -310,7 +345,7 @@ export async function monitorMSTeamsProvider(
     };
     const onError = (err: unknown) => {
       httpServer.off("listening", onListening);
-      log.error("msteams server error", { error: String(err) });
+      log.error("msteams server error", { error: formatUnknownError(err) });
       reject(err);
     };
     httpServer.once("listening", onListening);
@@ -319,7 +354,7 @@ export async function monitorMSTeamsProvider(
   applyMSTeamsWebhookTimeouts(httpServer);
 
   httpServer.on("error", (err) => {
-    log.error("msteams server error", { error: String(err) });
+    log.error("msteams server error", { error: formatUnknownError(err) });
   });
 
   const shutdown = async () => {
@@ -327,7 +362,7 @@ export async function monitorMSTeamsProvider(
     return new Promise<void>((resolve) => {
       httpServer.close((err) => {
         if (err) {
-          log.debug?.("msteams server close error", { error: String(err) });
+          log.debug?.("msteams server close error", { error: formatUnknownError(err) });
         }
         resolve();
       });
@@ -342,4 +377,66 @@ export async function monitorMSTeamsProvider(
   });
 
   return { app: expressApp, shutdown };
+}
+
+/**
+ * Build a minimal ActivityHandler-compatible object that supports
+ * onMessage / onMembersAdded registration and a run() method.
+ */
+function buildActivityHandler(): MSTeamsActivityHandler {
+  type Handler = (context: unknown, next: () => Promise<void>) => Promise<void>;
+  const messageHandlers: Handler[] = [];
+  const membersAddedHandlers: Handler[] = [];
+  const reactionsAddedHandlers: Handler[] = [];
+  const reactionsRemovedHandlers: Handler[] = [];
+
+  const handler: MSTeamsActivityHandler = {
+    onMessage(cb) {
+      messageHandlers.push(cb);
+      return handler;
+    },
+    onMembersAdded(cb) {
+      membersAddedHandlers.push(cb);
+      return handler;
+    },
+    onReactionsAdded(cb) {
+      reactionsAddedHandlers.push(cb);
+      return handler;
+    },
+    onReactionsRemoved(cb) {
+      reactionsRemovedHandlers.push(cb);
+      return handler;
+    },
+    async run(context: unknown) {
+      const ctx = context as { activity?: { type?: string } };
+      const activityType = ctx?.activity?.type;
+      const noop = async () => {};
+
+      if (activityType === "message") {
+        for (const h of messageHandlers) {
+          await h(context, noop);
+        }
+      } else if (activityType === "conversationUpdate") {
+        for (const h of membersAddedHandlers) {
+          await h(context, noop);
+        }
+      } else if (activityType === "messageReaction") {
+        const activity = (
+          ctx as { activity?: { reactionsAdded?: unknown[]; reactionsRemoved?: unknown[] } }
+        )?.activity;
+        if (activity?.reactionsAdded?.length) {
+          for (const h of reactionsAddedHandlers) {
+            await h(context, noop);
+          }
+        }
+        if (activity?.reactionsRemoved?.length) {
+          for (const h of reactionsRemovedHandlers) {
+            await h(context, noop);
+          }
+        }
+      }
+    },
+  };
+
+  return handler;
 }

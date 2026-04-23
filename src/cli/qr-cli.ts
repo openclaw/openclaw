@@ -1,9 +1,10 @@
 import type { Command } from "commander";
-import qrcode from "qrcode-terminal";
 import { loadConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasConfiguredSecretInput } from "../config/types.secrets.js";
-import { readGatewayPasswordEnv, readGatewayTokenEnv } from "../gateway/credentials.js";
+import { trimToUndefined } from "../gateway/credentials.js";
 import { resolveRequiredConfiguredSecretRefInputString } from "../gateway/resolve-configured-secret-input-string.js";
+import { renderQrTerminal } from "../media/qr-terminal.ts";
 import { resolvePairingSetupFromConfig, encodePairingSetupCode } from "../pairing/setup-code.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime } from "../runtime.js";
@@ -24,14 +25,9 @@ type QrCliOptions = {
 };
 
 function renderQrAscii(data: string): Promise<string> {
-  return new Promise((resolve) => {
-    qrcode.generate(data, { small: true }, (output: string) => {
-      resolve(output);
-    });
-  });
+  return renderQrTerminal(data, { small: true });
 }
-
-function readDevicePairPublicUrlFromConfig(cfg: ReturnType<typeof loadConfig>): string | undefined {
+function readDevicePairPublicUrlFromConfig(cfg: OpenClawConfig): string | undefined {
   const value = cfg.plugins?.entries?.["device-pair"]?.config?.["publicUrl"];
   if (typeof value !== "string") {
     return undefined;
@@ -41,10 +37,10 @@ function readDevicePairPublicUrlFromConfig(cfg: ReturnType<typeof loadConfig>): 
 }
 
 function shouldResolveLocalGatewayPasswordSecret(
-  cfg: ReturnType<typeof loadConfig>,
+  cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,
 ): boolean {
-  if (readGatewayPasswordEnv(env)) {
+  if (trimToUndefined(env.OPENCLAW_GATEWAY_PASSWORD)) {
     return false;
   }
   const authMode = cfg.gateway?.auth?.mode;
@@ -54,7 +50,7 @@ function shouldResolveLocalGatewayPasswordSecret(
   if (authMode === "token" || authMode === "none" || authMode === "trusted-proxy") {
     return false;
   }
-  const envToken = readGatewayTokenEnv(env);
+  const envToken = trimToUndefined(env.OPENCLAW_GATEWAY_TOKEN);
   const configTokenConfigured = hasConfiguredSecretInput(
     cfg.gateway?.auth?.token,
     cfg.secrets?.defaults,
@@ -62,9 +58,7 @@ function shouldResolveLocalGatewayPasswordSecret(
   return !envToken && !configTokenConfigured;
 }
 
-async function resolveLocalGatewayPasswordSecretIfNeeded(
-  cfg: ReturnType<typeof loadConfig>,
-): Promise<void> {
+async function resolveLocalGatewayPasswordSecretIfNeeded(cfg: OpenClawConfig): Promise<void> {
   const resolvedPassword = await resolveRequiredConfiguredSecretRefInputString({
     config: cfg,
     env: process.env,
@@ -98,7 +92,7 @@ function emitQrSecretResolveDiagnostics(diagnostics: string[], opts: QrCliOption
 export function registerQrCli(program: Command) {
   program
     .command("qr")
-    .description("Generate an iOS pairing QR code and setup code")
+    .description("Generate a mobile pairing QR code and setup code")
     .addHelpText(
       "after",
       () => `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/qr", "docs.openclaw.ai/cli/qr")}\n`,
@@ -121,15 +115,15 @@ export function registerQrCli(program: Command) {
           throw new Error("Use either --token or --password, not both.");
         }
 
-        const token = typeof opts.token === "string" ? opts.token.trim() : "";
-        const password = typeof opts.password === "string" ? opts.password.trim() : "";
+        const token = trimToUndefined(opts.token) ?? "";
+        const password = trimToUndefined(opts.password) ?? "";
         const wantsRemote = opts.remote === true;
 
         const loadedRaw = loadConfig();
         if (wantsRemote && !opts.url && !opts.publicUrl) {
           const tailscaleMode = loadedRaw.gateway?.tailscale?.mode ?? "off";
           const remoteUrl = loadedRaw.gateway?.remote?.url;
-          const hasRemoteUrl = typeof remoteUrl === "string" && remoteUrl.trim().length > 0;
+          const hasRemoteUrl = Boolean(trimToUndefined(remoteUrl));
           const hasTailscaleServe = tailscaleMode === "serve" || tailscaleMode === "funnel";
           if (!hasRemoteUrl && !hasTailscaleServe) {
             throw new Error(
@@ -170,12 +164,8 @@ export function registerQrCli(program: Command) {
           cfg.gateway.auth.token = undefined;
         }
         if (wantsRemote && !token && !password) {
-          const remoteToken =
-            typeof cfg.gateway?.remote?.token === "string" ? cfg.gateway.remote.token.trim() : "";
-          const remotePassword =
-            typeof cfg.gateway?.remote?.password === "string"
-              ? cfg.gateway.remote.password.trim()
-              : "";
+          const remoteToken = trimToUndefined(cfg.gateway?.remote?.token) ?? "";
+          const remotePassword = trimToUndefined(cfg.gateway?.remote?.password) ?? "";
           if (remoteToken) {
             cfg.gateway.auth.mode = "token";
             cfg.gateway.auth.token = remoteToken;
@@ -225,24 +215,18 @@ export function registerQrCli(program: Command) {
         }
 
         if (opts.json) {
-          defaultRuntime.log(
-            JSON.stringify(
-              {
-                setupCode,
-                gatewayUrl: resolved.payload.url,
-                auth: resolved.authLabel,
-                urlSource: resolved.urlSource,
-              },
-              null,
-              2,
-            ),
-          );
+          defaultRuntime.writeJson({
+            setupCode,
+            gatewayUrl: resolved.payload.url,
+            auth: resolved.authLabel,
+            urlSource: resolved.urlSource,
+          });
           return;
         }
 
         const lines: string[] = [
           theme.heading("Pairing QR"),
-          "Scan this with the OpenClaw iOS app (Onboarding -> Scan QR).",
+          "Scan this with the OpenClaw mobile app (Onboarding -> Scan QR).",
           "",
         ];
 

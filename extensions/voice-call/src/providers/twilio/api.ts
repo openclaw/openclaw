@@ -9,7 +9,7 @@ export async function twilioApiRequest<T = unknown>(params: {
   const bodyParams =
     params.body instanceof URLSearchParams
       ? params.body
-      : Object.entries(params.body).reduce<URLSearchParams>((acc, [key, value]) => {
+      : Object.entries(params.body).reduce((acc, [key, value]) => {
           if (Array.isArray(value)) {
             for (const entry of value) {
               acc.append(key, entry);

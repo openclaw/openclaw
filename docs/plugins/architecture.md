@@ -5,33 +5,50 @@ read_when:
   - Understanding the plugin capability model or ownership boundaries
   - Working on the plugin load pipeline or registry
   - Implementing provider runtime hooks or channel plugins
-title: "Plugin Internals"
+title: "Plugin internals"
 sidebarTitle: "Internals"
 ---
 
-# Plugin Internals
+This is the **deep architecture reference** for the OpenClaw plugin system. For
+practical guides, start with one of the focused pages below.
 
-<Info>
-  This page is for **plugin developers and contributors**. If you just want to
-  install and use plugins, see [Plugins](/tools/plugin). If you want to build
-  a plugin, see [Building Plugins](/plugins/building-plugins).
-</Info>
-
-This page covers the internal architecture of the OpenClaw plugin system.
+<CardGroup cols={2}>
+  <Card title="Install and use plugins" icon="plug" href="/tools/plugin">
+    End-user guide for adding, enabling, and troubleshooting plugins.
+  </Card>
+  <Card title="Building plugins" icon="rocket" href="/plugins/building-plugins">
+    First-plugin tutorial with the smallest working manifest.
+  </Card>
+  <Card title="Channel plugins" icon="comments" href="/plugins/sdk-channel-plugins">
+    Build a messaging channel plugin.
+  </Card>
+  <Card title="Provider plugins" icon="microchip" href="/plugins/sdk-provider-plugins">
+    Build a model provider plugin.
+  </Card>
+  <Card title="SDK overview" icon="book" href="/plugins/sdk-overview">
+    Import map and registration API reference.
+  </Card>
+</CardGroup>
 
 ## Public capability model
 
 Capabilities are the public **native plugin** model inside OpenClaw. Every
 native OpenClaw plugin registers against one or more capability types:
 
-| Capability          | Registration method                           | Example plugins           |
-| ------------------- | --------------------------------------------- | ------------------------- |
-| Text inference      | `api.registerProvider(...)`                   | `openai`, `anthropic`     |
-| Speech              | `api.registerSpeechProvider(...)`             | `elevenlabs`, `microsoft` |
-| Media understanding | `api.registerMediaUnderstandingProvider(...)` | `openai`, `google`        |
-| Image generation    | `api.registerImageGenerationProvider(...)`    | `openai`, `google`        |
-| Web search          | `api.registerWebSearchProvider(...)`          | `google`                  |
-| Channel / messaging | `api.registerChannel(...)`                    | `msteams`, `matrix`       |
+| Capability             | Registration method                              | Example plugins                      |
+| ---------------------- | ------------------------------------------------ | ------------------------------------ |
+| Text inference         | `api.registerProvider(...)`                      | `openai`, `anthropic`                |
+| CLI inference backend  | `api.registerCliBackend(...)`                    | `openai`, `anthropic`                |
+| Speech                 | `api.registerSpeechProvider(...)`                | `elevenlabs`, `microsoft`            |
+| Realtime transcription | `api.registerRealtimeTranscriptionProvider(...)` | `openai`                             |
+| Realtime voice         | `api.registerRealtimeVoiceProvider(...)`         | `openai`                             |
+| Media understanding    | `api.registerMediaUnderstandingProvider(...)`    | `openai`, `google`                   |
+| Image generation       | `api.registerImageGenerationProvider(...)`       | `openai`, `google`, `fal`, `minimax` |
+| Music generation       | `api.registerMusicGenerationProvider(...)`       | `google`, `minimax`                  |
+| Video generation       | `api.registerVideoGenerationProvider(...)`       | `qwen`                               |
+| Web fetch              | `api.registerWebFetchProvider(...)`              | `firecrawl`                          |
+| Web search             | `api.registerWebSearchProvider(...)`             | `google`                             |
+| Channel / messaging    | `api.registerChannel(...)`                       | `msteams`, `matrix`                  |
 
 A plugin that registers zero capabilities but provides hooks, tools, or
 services is a **legacy hook-only** plugin. That pattern is still fully supported.
@@ -42,38 +59,31 @@ The capability model is landed in core and used by bundled/native plugins
 today, but external plugin compatibility still needs a tighter bar than "it is
 exported, therefore it is frozen."
 
-Current guidance:
+| Plugin situation                                  | Guidance                                                                                         |
+| ------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| Existing external plugins                         | Keep hook-based integrations working; this is the compatibility baseline.                        |
+| New bundled/native plugins                        | Prefer explicit capability registration over vendor-specific reach-ins or new hook-only designs. |
+| External plugins adopting capability registration | Allowed, but treat capability-specific helper surfaces as evolving unless docs mark them stable. |
 
-- **existing external plugins:** keep hook-based integrations working; treat
-  this as the compatibility baseline
-- **new bundled/native plugins:** prefer explicit capability registration over
-  vendor-specific reach-ins or new hook-only designs
-- **external plugins adopting capability registration:** allowed, but treat the
-  capability-specific helper surfaces as evolving unless docs explicitly mark a
-  contract as stable
-
-Practical rule:
-
-- capability registration APIs are the intended direction
-- legacy hooks remain the safest no-breakage path for external plugins during
-  the transition
-- exported helper subpaths are not all equal; prefer the narrow documented
-  contract, not incidental helper exports
+Capability registration is the intended direction. Legacy hooks remain the
+safest no-breakage path for external plugins during the transition. Exported
+helper subpaths are not all equal — prefer narrow documented contracts over
+incidental helper exports.
 
 ### Plugin shapes
 
 OpenClaw classifies every loaded plugin into a shape based on its actual
 registration behavior (not just static metadata):
 
-- **plain-capability** -- registers exactly one capability type (for example a
-  provider-only plugin like `mistral`)
-- **hybrid-capability** -- registers multiple capability types (for example
+- **plain-capability**: registers exactly one capability type (for example a
+  provider-only plugin like `mistral`).
+- **hybrid-capability**: registers multiple capability types (for example
   `openai` owns text inference, speech, media understanding, and image
-  generation)
-- **hook-only** -- registers only hooks (typed or custom), no capabilities,
-  tools, commands, or services
-- **non-capability** -- registers tools, commands, services, or routes but no
-  capabilities
+  generation).
+- **hook-only**: registers only hooks (typed or custom), no capabilities,
+  tools, commands, or services.
+- **non-capability**: registers tools, commands, services, or routes but no
+  capabilities.
 
 Use `openclaw plugins inspect <id>` to see a plugin's shape and capability
 breakdown. See [CLI reference](/cli/plugins#inspect) for details.
@@ -103,7 +113,7 @@ one of these labels:
 | **legacy warning**         | Plugin uses `before_agent_start`, which is deprecated        |
 | **hard error**             | Config is invalid or plugin failed to load                   |
 
-Neither `hook-only` nor `before_agent_start` will break your plugin today --
+Neither `hook-only` nor `before_agent_start` will break your plugin today:
 `hook-only` is advisory, and `before_agent_start` only triggers a warning. These
 signals also appear in `openclaw status --all` and `openclaw plugins doctor`.
 
@@ -113,7 +123,7 @@ OpenClaw's plugin system has four layers:
 
 1. **Manifest + discovery**
    OpenClaw finds candidate plugins from configured paths, workspace roots,
-   global extension roots, and bundled extensions. Discovery reads native
+   global plugin roots, and bundled plugins. Discovery reads native
    `openclaw.plugin.json` manifests plus supported bundle manifests first.
 2. **Enablement + validation**
    Core decides whether a discovered plugin is enabled, disabled, blocked, or
@@ -125,6 +135,14 @@ OpenClaw's plugin system has four layers:
 4. **Surface consumption**
    The rest of OpenClaw reads the registry to expose tools, channels, provider
    setup, hooks, HTTP routes, CLI commands, and services.
+
+For plugin CLI specifically, root command discovery is split in two phases:
+
+- parse-time metadata comes from `registerCli(..., { descriptors: [...] })`
+- the real plugin CLI module can stay lazy and register on first invocation
+
+That keeps plugin-owned CLI code inside the plugin while still letting OpenClaw
+reserve root command names before parsing.
 
 The important design boundary:
 
@@ -147,12 +165,23 @@ The current boundary is:
   bookkeeping, and execution dispatch
 - channel plugins own scoped action discovery, capability discovery, and any
   channel-specific schema fragments
+- channel plugins own provider-specific session conversation grammar, such as
+  how conversation ids encode thread ids or inherit from parent conversations
 - channel plugins execute the final action through their action adapter
 
 For channel plugins, the SDK surface is
 `ChannelMessageActionAdapter.describeMessageTool(...)`. That unified discovery
 call lets a plugin return its visible actions, capabilities, and schema
 contributions together so those pieces do not drift apart.
+
+When a channel-specific message-tool param carries a media source such as a
+local path or remote media URL, the plugin should also return
+`mediaSourceParams` from `describeMessageTool(...)`. Core uses that explicit
+list to apply sandbox path normalization and outbound media-access hints
+without hardcoding plugin-owned param names.
+Prefer action-scoped maps there, not one channel-wide flat list, so a
+profile-only media param does not get normalized on unrelated actions like
+`send`.
 
 Core passes runtime scope into that discovery step. Important fields include:
 
@@ -182,6 +211,12 @@ We do not publish separate `plugin-sdk/*-action-runtime` subpaths, and bundled
 plugins should import their own local runtime code directly from their
 extension-owned modules.
 
+The same boundary applies to provider-named SDK seams in general: core should
+not import channel-specific convenience barrels for Slack, Discord, Signal,
+WhatsApp, or similar extensions. If core needs a behavior, either consume the
+bundled plugin's own `api.ts` / `runtime-api.ts` barrel or promote the need
+into a narrow generic capability in the shared SDK.
+
 For polls specifically, there are two execution paths:
 
 - `outbound.sendPoll` is the shared baseline for channels that fit the common
@@ -208,19 +243,19 @@ That means:
 - channels should consume shared core capabilities instead of re-implementing
   provider behavior ad hoc
 
-Examples:
-
-- the bundled `openai` plugin owns OpenAI model-provider behavior and OpenAI
-  speech + media-understanding + image-generation behavior
-- the bundled `elevenlabs` plugin owns ElevenLabs speech behavior
-- the bundled `microsoft` plugin owns Microsoft speech behavior
-- the bundled `google` plugin owns Google model-provider behavior plus Google
-  media-understanding + image-generation + web-search behavior
-- the bundled `minimax`, `mistral`, `moonshot`, and `zai` plugins own their
-  media-understanding backends
-- the `voice-call` plugin is a feature plugin: it owns call transport, tools,
-  CLI, routes, and runtime, but it consumes core TTS/STT capability instead of
-  inventing a second speech stack
+<Accordion title="Example ownership patterns across bundled plugins">
+  - **Vendor multi-capability**: `openai` owns text inference, speech, realtime
+    voice, media understanding, and image generation. `google` owns text
+    inference plus media understanding, image generation, and web search.
+    `qwen` owns text inference plus media understanding and video generation.
+  - **Vendor single-capability**: `elevenlabs` and `microsoft` own speech;
+    `firecrawl` owns web-fetch; `minimax` / `mistral` / `moonshot` / `zai` own
+    media-understanding backends.
+  - **Feature plugin**: `voice-call` owns call transport, tools, CLI, routes,
+    and Twilio media-stream bridging, but consumes shared speech, realtime
+    transcription, and realtime voice capabilities instead of importing vendor
+    plugins directly.
+</Accordion>
 
 The intended end state is:
 
@@ -272,17 +307,16 @@ That same pattern should be preferred for future capabilities.
 ### Multi-capability company plugin example
 
 A company plugin should feel cohesive from the outside. If OpenClaw has shared
-contracts for models, speech, media understanding, and web search, a vendor can
-own all of its surfaces in one place:
+contracts for models, speech, realtime transcription, realtime voice, media
+understanding, image generation, video generation, web fetch, and web search,
+a vendor can own all of its surfaces in one place:
 
 ```ts
-import type { OpenClawPluginDefinition } from "openclaw/plugin-sdk";
+import type { OpenClawPluginDefinition } from "openclaw/plugin-sdk/plugin-entry";
 import {
-  buildOpenAISpeechProvider,
-  createPluginBackedWebSearchProvider,
   describeImageWithModel,
   transcribeOpenAiCompatibleAudio,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/media-understanding";
 
 const plugin: OpenClawPluginDefinition = {
   id: "exampleai",
@@ -293,12 +327,10 @@ const plugin: OpenClawPluginDefinition = {
       // auth/model catalog/runtime hooks
     });
 
-    api.registerSpeechProvider(
-      buildOpenAISpeechProvider({
-        id: "exampleai",
-        // vendor speech config
-      }),
-    );
+    api.registerSpeechProvider({
+      id: "exampleai",
+      // vendor speech config — implement the SpeechProviderPlugin interface directly
+    });
 
     api.registerMediaUnderstandingProvider({
       id: "exampleai",
@@ -353,9 +385,9 @@ capability. The same ownership model applies there:
 That avoids baking one provider's video assumptions into core. The plugin owns
 the vendor surface; core owns the capability contract and fallback behavior.
 
-If OpenClaw adds a new domain later, such as video generation, use the same
-sequence again: define the core capability first, then let vendor plugins
-register implementations against it.
+Video generation already uses that same sequence: core owns the typed
+capability contract and runtime helper, and vendor plugins register
+`api.registerVideoGenerationProvider(...)` implementations against it.
 
 Need a concrete rollout checklist? See
 [Capability Cookbook](/tools/capability-cookbook).
@@ -432,12 +464,21 @@ skills.
 Use allowlists and explicit install/load paths for non-bundled plugins. Treat
 workspace plugins as development-time code, not production defaults.
 
+For bundled workspace package names, keep the plugin id anchored in the npm
+name: `@openclaw/<id>` by default, or an approved typed suffix such as
+`-provider`, `-plugin`, `-speech`, `-sandbox`, or `-media-understanding` when
+the package intentionally exposes a narrower plugin role.
+
 Important trust note:
 
 - `plugins.allow` trusts **plugin ids**, not source provenance.
 - A workspace plugin with the same id as a bundled plugin intentionally shadows
   the bundled copy when that workspace plugin is enabled/allowlisted.
 - This is normal and useful for local development, patch testing, and hotfixes.
+- Bundled-plugin trust is resolved from the source snapshot — the manifest and
+  code on disk at load time — rather than from install metadata. A corrupted
+  or substituted install record cannot silently widen a bundled plugin's trust
+  surface beyond what the actual source claims.
 
 ## Export boundary
 
@@ -450,6 +491,13 @@ Keep capability registration public. Trim non-contract helper exports:
 - vendor-specific convenience helpers
 - setup/onboarding helpers that are implementation details
 
+Some bundled-plugin helper subpaths still remain in the generated SDK export
+map for compatibility and bundled-plugin maintenance. Current examples include
+`plugin-sdk/feishu`, `plugin-sdk/feishu-setup`, `plugin-sdk/zalo`,
+`plugin-sdk/zalo-setup`, and several `plugin-sdk/matrix*` seams. Treat those as
+reserved implementation-detail exports, not as the recommended SDK pattern for
+new third-party plugins.
+
 ## Load pipeline
 
 At startup, OpenClaw does roughly this:
@@ -460,9 +508,14 @@ At startup, OpenClaw does roughly this:
 4. normalize plugin config (`plugins.enabled`, `allow`, `deny`, `entries`,
    `slots`, `load.paths`)
 5. decide enablement for each candidate
-6. load enabled native modules via jiti
+6. load enabled native modules: built bundled modules use a native loader;
+   unbuilt native plugins use jiti
 7. call native `register(api)` hooks and collect registrations into the plugin registry
 8. expose the registry to commands/runtime surfaces
+
+<Note>
+`activate` is a legacy alias for `register` — the loader resolves whichever is present (`def.register ?? def.activate`) and calls it at the same point. All bundled plugins use `register`; prefer `register` for new plugins.
+</Note>
 
 The safety gates happen **before** runtime execution. Candidates are blocked
 when the entry escapes the plugin root, the path is world-writable, or path
@@ -477,9 +530,29 @@ The manifest is the control-plane source of truth. OpenClaw uses it to:
 - validate `plugins.entries.<id>.config`
 - augment Control UI labels/placeholders
 - show install/catalog metadata
+- preserve cheap activation and setup descriptors without loading plugin runtime
 
 For native plugins, the runtime module is the data-plane part. It registers
 actual behavior such as hooks, tools, commands, or provider flows.
+
+Optional manifest `activation` and `setup` blocks stay on the control plane.
+They are metadata-only descriptors for activation planning and setup discovery;
+they do not replace runtime registration, `register(...)`, or `setupEntry`.
+The first live activation consumers now use manifest command, channel, and provider hints
+to narrow plugin loading before broader registry materialization:
+
+- CLI loading narrows to plugins that own the requested primary command
+- channel setup/plugin resolution narrows to plugins that own the requested
+  channel id
+- explicit provider setup/runtime resolution narrows to plugins that own the
+  requested provider id
+
+Setup discovery now prefers descriptor-owned ids such as `setup.providers` and
+`setup.cliBackends` to narrow candidate plugins before it falls back to
+`setup-api` for plugins that still need setup-time runtime hooks. If more than
+one discovered plugin claims the same normalized setup provider or CLI backend
+id, setup lookup refuses the ambiguous owner instead of relying on discovery
+order.
 
 ### What the loader caches
 
@@ -565,55 +638,95 @@ conversation, and it runs after core approval handling finishes.
 
 ## Provider runtime hooks
 
-Provider plugins now have two layers:
+Provider plugins have three layers:
 
-- manifest metadata: `providerAuthEnvVars` for cheap env-auth lookup before
-  runtime load, plus `providerAuthChoices` for cheap onboarding/auth-choice
-  labels and CLI flag metadata before runtime load
-- config-time hooks: `catalog` / legacy `discovery`
-- runtime hooks: `resolveDynamicModel`, `prepareDynamicModel`, `normalizeResolvedModel`, `capabilities`, `prepareExtraParams`, `wrapStreamFn`, `formatApiKey`, `refreshOAuth`, `buildAuthDoctorHint`, `isCacheTtlEligible`, `buildMissingAuthMessage`, `suppressBuiltInModel`, `augmentModelCatalog`, `isBinaryThinking`, `supportsXHighThinking`, `resolveDefaultThinkingLevel`, `isModernModelRef`, `prepareRuntimeAuth`, `resolveUsageAuth`, `fetchUsageSnapshot`
+- **Manifest metadata** for cheap pre-runtime lookup: `providerAuthEnvVars`,
+  `providerAuthAliases`, `providerAuthChoices`, and `channelEnvVars`.
+- **Config-time hooks**: `catalog` (legacy `discovery`) plus
+  `applyConfigDefaults`.
+- **Runtime hooks**: 40+ optional hooks covering auth, model resolution,
+  stream wrapping, thinking levels, replay policy, and usage endpoints. See
+  the full list under [Hook order and usage](#hook-order-and-usage).
 
 OpenClaw still owns the generic agent loop, failover, transcript handling, and
-tool policy. These hooks are the extension surface for provider-specific behavior without
-needing a whole custom inference transport.
+tool policy. These hooks are the extension surface for provider-specific
+behavior without needing a whole custom inference transport.
 
 Use manifest `providerAuthEnvVars` when the provider has env-based credentials
 that generic auth/status/model-picker paths should see without loading plugin
-runtime. Use manifest `providerAuthChoices` when onboarding/auth-choice CLI
-surfaces should know the provider's choice id, group labels, and simple
+runtime. Use manifest `providerAuthAliases` when one provider id should reuse
+another provider id's env vars, auth profiles, config-backed auth, and API-key
+onboarding choice. Use manifest `providerAuthChoices` when onboarding/auth-choice
+CLI surfaces should know the provider's choice id, group labels, and simple
 one-flag auth wiring without loading provider runtime. Keep provider runtime
 `envVars` for operator-facing hints such as onboarding labels or OAuth
 client-id/client-secret setup vars.
+
+Use manifest `channelEnvVars` when a channel has env-driven auth or setup that
+generic shell-env fallback, config/status checks, or setup prompts should see
+without loading channel runtime.
 
 ### Hook order and usage
 
 For model/provider plugins, OpenClaw calls hooks in this rough order.
 The "When to use" column is the quick decision guide.
 
-| #   | Hook                          | What it does                                                                             | When to use                                                                          |
-| --- | ----------------------------- | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| 1   | `catalog`                     | Publish provider config into `models.providers` during `models.json` generation          | Provider owns a catalog or base URL defaults                                         |
-| --  | _(built-in model lookup)_     | OpenClaw tries the normal registry/catalog path first                                    | _(not a plugin hook)_                                                                |
-| 2   | `resolveDynamicModel`         | Sync fallback for provider-owned model ids not in the local registry yet                 | Provider accepts arbitrary upstream model ids                                        |
-| 3   | `prepareDynamicModel`         | Async warm-up, then `resolveDynamicModel` runs again                                     | Provider needs network metadata before resolving unknown ids                         |
-| 4   | `normalizeResolvedModel`      | Final rewrite before the embedded runner uses the resolved model                         | Provider needs transport rewrites but still uses a core transport                    |
-| 5   | `capabilities`                | Provider-owned transcript/tooling metadata used by shared core logic                     | Provider needs transcript/provider-family quirks                                     |
-| 6   | `prepareExtraParams`          | Request-param normalization before generic stream option wrappers                        | Provider needs default request params or per-provider param cleanup                  |
-| 7   | `wrapStreamFn`                | Stream wrapper after generic wrappers are applied                                        | Provider needs request headers/body/model compat wrappers without a custom transport |
-| 8   | `formatApiKey`                | Auth-profile formatter: stored profile becomes the runtime `apiKey` string               | Provider stores extra auth metadata and needs a custom runtime token shape           |
-| 9   | `refreshOAuth`                | OAuth refresh override for custom refresh endpoints or refresh-failure policy            | Provider does not fit the shared `pi-ai` refreshers                                  |
-| 10  | `buildAuthDoctorHint`         | Repair hint appended when OAuth refresh fails                                            | Provider needs provider-owned auth repair guidance after refresh failure             |
-| 11  | `isCacheTtlEligible`          | Prompt-cache policy for proxy/backhaul providers                                         | Provider needs proxy-specific cache TTL gating                                       |
-| 12  | `buildMissingAuthMessage`     | Replacement for the generic missing-auth recovery message                                | Provider needs a provider-specific missing-auth recovery hint                        |
-| 13  | `suppressBuiltInModel`        | Stale upstream model suppression plus optional user-facing error hint                    | Provider needs to hide stale upstream rows or replace them with a vendor hint        |
-| 14  | `augmentModelCatalog`         | Synthetic/final catalog rows appended after discovery                                    | Provider needs synthetic forward-compat rows in `models list` and pickers            |
-| 15  | `isBinaryThinking`            | On/off reasoning toggle for binary-thinking providers                                    | Provider exposes only binary thinking on/off                                         |
-| 16  | `supportsXHighThinking`       | `xhigh` reasoning support for selected models                                            | Provider wants `xhigh` on only a subset of models                                    |
-| 17  | `resolveDefaultThinkingLevel` | Default `/think` level for a specific model family                                       | Provider owns default `/think` policy for a model family                             |
-| 18  | `isModernModelRef`            | Modern-model matcher for live profile filters and smoke selection                        | Provider owns live/smoke preferred-model matching                                    |
-| 19  | `prepareRuntimeAuth`          | Exchange a configured credential into the actual runtime token/key just before inference | Provider needs a token exchange or short-lived request credential                    |
-| 20  | `resolveUsageAuth`            | Resolve usage/billing credentials for `/usage` and related status surfaces               | Provider needs custom usage/quota token parsing or a different usage credential      |
-| 21  | `fetchUsageSnapshot`          | Fetch and normalize provider-specific usage/quota snapshots after auth is resolved       | Provider needs a provider-specific usage endpoint or payload parser                  |
+| #   | Hook                              | What it does                                                                                                   | When to use                                                                                                                                   |
+| --- | --------------------------------- | -------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | `catalog`                         | Publish provider config into `models.providers` during `models.json` generation                                | Provider owns a catalog or base URL defaults                                                                                                  |
+| 2   | `applyConfigDefaults`             | Apply provider-owned global config defaults during config materialization                                      | Defaults depend on auth mode, env, or provider model-family semantics                                                                         |
+| --  | _(built-in model lookup)_         | OpenClaw tries the normal registry/catalog path first                                                          | _(not a plugin hook)_                                                                                                                         |
+| 3   | `normalizeModelId`                | Normalize legacy or preview model-id aliases before lookup                                                     | Provider owns alias cleanup before canonical model resolution                                                                                 |
+| 4   | `normalizeTransport`              | Normalize provider-family `api` / `baseUrl` before generic model assembly                                      | Provider owns transport cleanup for custom provider ids in the same transport family                                                          |
+| 5   | `normalizeConfig`                 | Normalize `models.providers.<id>` before runtime/provider resolution                                           | Provider needs config cleanup that should live with the plugin; bundled Google-family helpers also backstop supported Google config entries   |
+| 6   | `applyNativeStreamingUsageCompat` | Apply native streaming-usage compat rewrites to config providers                                               | Provider needs endpoint-driven native streaming usage metadata fixes                                                                          |
+| 7   | `resolveConfigApiKey`             | Resolve env-marker auth for config providers before runtime auth loading                                       | Provider has provider-owned env-marker API-key resolution; `amazon-bedrock` also has a built-in AWS env-marker resolver here                  |
+| 8   | `resolveSyntheticAuth`            | Surface local/self-hosted or config-backed auth without persisting plaintext                                   | Provider can operate with a synthetic/local credential marker                                                                                 |
+| 9   | `resolveExternalAuthProfiles`     | Overlay provider-owned external auth profiles; default `persistence` is `runtime-only` for CLI/app-owned creds | Provider reuses external auth credentials without persisting copied refresh tokens; declare `contracts.externalAuthProviders` in the manifest |
+| 10  | `shouldDeferSyntheticProfileAuth` | Lower stored synthetic profile placeholders behind env/config-backed auth                                      | Provider stores synthetic placeholder profiles that should not win precedence                                                                 |
+| 11  | `resolveDynamicModel`             | Sync fallback for provider-owned model ids not in the local registry yet                                       | Provider accepts arbitrary upstream model ids                                                                                                 |
+| 12  | `prepareDynamicModel`             | Async warm-up, then `resolveDynamicModel` runs again                                                           | Provider needs network metadata before resolving unknown ids                                                                                  |
+| 13  | `normalizeResolvedModel`          | Final rewrite before the embedded runner uses the resolved model                                               | Provider needs transport rewrites but still uses a core transport                                                                             |
+| 14  | `contributeResolvedModelCompat`   | Contribute compat flags for vendor models behind another compatible transport                                  | Provider recognizes its own models on proxy transports without taking over the provider                                                       |
+| 15  | `capabilities`                    | Provider-owned transcript/tooling metadata used by shared core logic                                           | Provider needs transcript/provider-family quirks                                                                                              |
+| 16  | `normalizeToolSchemas`            | Normalize tool schemas before the embedded runner sees them                                                    | Provider needs transport-family schema cleanup                                                                                                |
+| 17  | `inspectToolSchemas`              | Surface provider-owned schema diagnostics after normalization                                                  | Provider wants keyword warnings without teaching core provider-specific rules                                                                 |
+| 18  | `resolveReasoningOutputMode`      | Select native vs tagged reasoning-output contract                                                              | Provider needs tagged reasoning/final output instead of native fields                                                                         |
+| 19  | `prepareExtraParams`              | Request-param normalization before generic stream option wrappers                                              | Provider needs default request params or per-provider param cleanup                                                                           |
+| 20  | `createStreamFn`                  | Fully replace the normal stream path with a custom transport                                                   | Provider needs a custom wire protocol, not just a wrapper                                                                                     |
+| 21  | `wrapStreamFn`                    | Stream wrapper after generic wrappers are applied                                                              | Provider needs request headers/body/model compat wrappers without a custom transport                                                          |
+| 22  | `resolveTransportTurnState`       | Attach native per-turn transport headers or metadata                                                           | Provider wants generic transports to send provider-native turn identity                                                                       |
+| 23  | `resolveWebSocketSessionPolicy`   | Attach native WebSocket headers or session cool-down policy                                                    | Provider wants generic WS transports to tune session headers or fallback policy                                                               |
+| 24  | `formatApiKey`                    | Auth-profile formatter: stored profile becomes the runtime `apiKey` string                                     | Provider stores extra auth metadata and needs a custom runtime token shape                                                                    |
+| 25  | `refreshOAuth`                    | OAuth refresh override for custom refresh endpoints or refresh-failure policy                                  | Provider does not fit the shared `pi-ai` refreshers                                                                                           |
+| 26  | `buildAuthDoctorHint`             | Repair hint appended when OAuth refresh fails                                                                  | Provider needs provider-owned auth repair guidance after refresh failure                                                                      |
+| 27  | `matchesContextOverflowError`     | Provider-owned context-window overflow matcher                                                                 | Provider has raw overflow errors generic heuristics would miss                                                                                |
+| 28  | `classifyFailoverReason`          | Provider-owned failover reason classification                                                                  | Provider can map raw API/transport errors to rate-limit/overload/etc                                                                          |
+| 29  | `isCacheTtlEligible`              | Prompt-cache policy for proxy/backhaul providers                                                               | Provider needs proxy-specific cache TTL gating                                                                                                |
+| 30  | `buildMissingAuthMessage`         | Replacement for the generic missing-auth recovery message                                                      | Provider needs a provider-specific missing-auth recovery hint                                                                                 |
+| 31  | `suppressBuiltInModel`            | Stale upstream model suppression plus optional user-facing error hint                                          | Provider needs to hide stale upstream rows or replace them with a vendor hint                                                                 |
+| 32  | `augmentModelCatalog`             | Synthetic/final catalog rows appended after discovery                                                          | Provider needs synthetic forward-compat rows in `models list` and pickers                                                                     |
+| 33  | `resolveThinkingProfile`          | Model-specific `/think` level set, display labels, and default                                                 | Provider exposes a custom thinking ladder or binary label for selected models                                                                 |
+| 34  | `isBinaryThinking`                | On/off reasoning toggle compatibility hook                                                                     | Provider exposes only binary thinking on/off                                                                                                  |
+| 35  | `supportsXHighThinking`           | `xhigh` reasoning support compatibility hook                                                                   | Provider wants `xhigh` on only a subset of models                                                                                             |
+| 36  | `resolveDefaultThinkingLevel`     | Default `/think` level compatibility hook                                                                      | Provider owns default `/think` policy for a model family                                                                                      |
+| 37  | `isModernModelRef`                | Modern-model matcher for live profile filters and smoke selection                                              | Provider owns live/smoke preferred-model matching                                                                                             |
+| 38  | `prepareRuntimeAuth`              | Exchange a configured credential into the actual runtime token/key just before inference                       | Provider needs a token exchange or short-lived request credential                                                                             |
+| 39  | `resolveUsageAuth`                | Resolve usage/billing credentials for `/usage` and related status surfaces                                     | Provider needs custom usage/quota token parsing or a different usage credential                                                               |
+| 40  | `fetchUsageSnapshot`              | Fetch and normalize provider-specific usage/quota snapshots after auth is resolved                             | Provider needs a provider-specific usage endpoint or payload parser                                                                           |
+| 41  | `createEmbeddingProvider`         | Build a provider-owned embedding adapter for memory/search                                                     | Memory embedding behavior belongs with the provider plugin                                                                                    |
+| 42  | `buildReplayPolicy`               | Return a replay policy controlling transcript handling for the provider                                        | Provider needs custom transcript policy (for example, thinking-block stripping)                                                               |
+| 43  | `sanitizeReplayHistory`           | Rewrite replay history after generic transcript cleanup                                                        | Provider needs provider-specific replay rewrites beyond shared compaction helpers                                                             |
+| 44  | `validateReplayTurns`             | Final replay-turn validation or reshaping before the embedded runner                                           | Provider transport needs stricter turn validation after generic sanitation                                                                    |
+| 45  | `onModelSelected`                 | Run provider-owned post-selection side effects                                                                 | Provider needs telemetry or provider-owned state when a model becomes active                                                                  |
+
+`normalizeModelId`, `normalizeTransport`, and `normalizeConfig` first check the
+matched provider plugin, then fall through other hook-capable provider plugins
+until one actually changes the model id or transport/config. That keeps
+alias/compat provider shims working without requiring the caller to know which
+bundled plugin owns the rewrite. If no provider hook rewrites a supported
+Google-family config entry, the bundled Google config normalizer still applies
+that compatibility cleanup.
 
 If the provider needs a fully custom wire protocol or custom request executor,
 that is a different class of extension. These hooks are for provider behavior
@@ -675,62 +788,41 @@ api.registerProvider({
 
 ### Built-in examples
 
-- Anthropic uses `resolveDynamicModel`, `capabilities`, `buildAuthDoctorHint`,
-  `resolveUsageAuth`, `fetchUsageSnapshot`, `isCacheTtlEligible`,
-  `resolveDefaultThinkingLevel`, and `isModernModelRef` because it owns Claude
-  4.6 forward-compat, provider-family hints, auth repair guidance, usage
-  endpoint integration, prompt-cache eligibility, and Claude default/adaptive
-  thinking policy.
-- OpenAI uses `resolveDynamicModel`, `normalizeResolvedModel`, and
-  `capabilities` plus `buildMissingAuthMessage`, `suppressBuiltInModel`,
-  `augmentModelCatalog`, `supportsXHighThinking`, and `isModernModelRef`
-  because it owns GPT-5.4 forward-compat, the direct OpenAI
-  `openai-completions` -> `openai-responses` normalization, Codex-aware auth
-  hints, Spark suppression, synthetic OpenAI list rows, and GPT-5 thinking /
-  live-model policy.
-- OpenRouter uses `catalog` plus `resolveDynamicModel` and
-  `prepareDynamicModel` because the provider is pass-through and may expose new
-  model ids before OpenClaw's static catalog updates; it also uses
-  `capabilities`, `wrapStreamFn`, and `isCacheTtlEligible` to keep
-  provider-specific request headers, routing metadata, reasoning patches, and
-  prompt-cache policy out of core.
-- GitHub Copilot uses `catalog`, `auth`, `resolveDynamicModel`, and
-  `capabilities` plus `prepareRuntimeAuth` and `fetchUsageSnapshot` because it
-  needs provider-owned device login, model fallback behavior, Claude transcript
-  quirks, a GitHub token -> Copilot token exchange, and a provider-owned usage
-  endpoint.
-- OpenAI Codex uses `catalog`, `resolveDynamicModel`,
-  `normalizeResolvedModel`, `refreshOAuth`, and `augmentModelCatalog` plus
-  `prepareExtraParams`, `resolveUsageAuth`, and `fetchUsageSnapshot` because it
-  still runs on core OpenAI transports but owns its transport/base URL
-  normalization, OAuth refresh fallback policy, default transport choice,
-  synthetic Codex catalog rows, and ChatGPT usage endpoint integration.
-- Google AI Studio and Gemini CLI OAuth use `resolveDynamicModel` and
-  `isModernModelRef` because they own Gemini 3.1 forward-compat fallback and
-  modern-model matching; Gemini CLI OAuth also uses `formatApiKey`,
-  `resolveUsageAuth`, and `fetchUsageSnapshot` for token formatting, token
-  parsing, and quota endpoint wiring.
-- Moonshot uses `catalog` plus `wrapStreamFn` because it still uses the shared
-  OpenAI transport but needs provider-owned thinking payload normalization.
-- Kilocode uses `catalog`, `capabilities`, `wrapStreamFn`, and
-  `isCacheTtlEligible` because it needs provider-owned request headers,
-  reasoning payload normalization, Gemini transcript hints, and Anthropic
-  cache-TTL gating.
-- Z.AI uses `resolveDynamicModel`, `prepareExtraParams`, `wrapStreamFn`,
-  `isCacheTtlEligible`, `isBinaryThinking`, `isModernModelRef`,
-  `resolveUsageAuth`, and `fetchUsageSnapshot` because it owns GLM-5 fallback,
-  `tool_stream` defaults, binary thinking UX, modern-model matching, and both
-  usage auth + quota fetching.
-- Mistral, OpenCode Zen, and OpenCode Go use `capabilities` only to keep
-  transcript/tooling quirks out of core.
-- Catalog-only bundled providers such as `byteplus`, `cloudflare-ai-gateway`,
-  `huggingface`, `kimi-coding`, `modelstudio`, `nvidia`, `qianfan`,
-  `synthetic`, `together`, `venice`, `vercel-ai-gateway`, and `volcengine` use
-  `catalog` only.
-- Qwen portal uses `catalog`, `auth`, and `refreshOAuth`.
-- MiniMax and Xiaomi use `catalog` plus usage hooks because their `/usage`
-  behavior is plugin-owned even though inference still runs through the shared
-  transports.
+Bundled provider plugins combine the hooks above to fit each vendor's catalog,
+auth, thinking, replay, and usage needs. The authoritative hook set lives with
+each plugin under `extensions/`; this page illustrates the shapes rather than
+mirroring the list.
+
+<AccordionGroup>
+  <Accordion title="Pass-through catalog providers">
+    OpenRouter, Kilocode, Z.AI, xAI register `catalog` plus
+    `resolveDynamicModel` / `prepareDynamicModel` so they can surface upstream
+    model ids ahead of OpenClaw's static catalog.
+  </Accordion>
+  <Accordion title="OAuth and usage endpoint providers">
+    GitHub Copilot, Gemini CLI, ChatGPT Codex, MiniMax, Xiaomi, z.ai pair
+    `prepareRuntimeAuth` or `formatApiKey` with `resolveUsageAuth` +
+    `fetchUsageSnapshot` to own token exchange and `/usage` integration.
+  </Accordion>
+  <Accordion title="Replay and transcript cleanup families">
+    Shared named families (`google-gemini`, `passthrough-gemini`,
+    `anthropic-by-model`, `hybrid-anthropic-openai`) let providers opt into
+    transcript policy via `buildReplayPolicy` instead of each plugin
+    re-implementing cleanup.
+  </Accordion>
+  <Accordion title="Catalog-only providers">
+    `byteplus`, `cloudflare-ai-gateway`, `huggingface`, `kimi-coding`, `nvidia`,
+    `qianfan`, `synthetic`, `together`, `venice`, `vercel-ai-gateway`, and
+    `volcengine` register just `catalog` and ride the shared inference loop.
+  </Accordion>
+  <Accordion title="Anthropic-specific stream helpers">
+    Beta headers, `/fast` / `serviceTier`, and `context1m` live inside the
+    Anthropic plugin's public `api.ts` / `contract-api.ts` seam
+    (`wrapAnthropicProviderStream`, `resolveAnthropicBetas`,
+    `resolveAnthropicFastMode`, `resolveAnthropicServiceTier`) rather than in
+    the generic SDK.
+  </Accordion>
+</AccordionGroup>
 
 ## Runtime helpers
 
@@ -808,8 +900,10 @@ Notes:
 - Keep vendor behavior in the provider plugin.
 - Additive expansion should stay typed: new optional methods, new optional
   result fields, new optional capabilities.
-- If OpenClaw adds a new capability such as video generation later, define the
-  core capability contract first, then let vendor plugins register against it.
+- Video generation already follows the same pattern:
+  - core owns the capability contract and runtime helper
+  - vendor plugins register `api.registerVideoGenerationProvider(...)`
+  - feature/channel plugins consume `api.runtime.videoGeneration.*`
 
 For media-understanding runtime helpers, plugins can call:
 
@@ -892,6 +986,22 @@ Notes:
 - Use web-search providers for vendor-specific search transports.
 - `api.runtime.webSearch.*` is the preferred shared surface for feature/channel plugins that need search behavior without depending on the agent tool wrapper.
 
+### `api.runtime.imageGeneration`
+
+```ts
+const result = await api.runtime.imageGeneration.generate({
+  config: api.config,
+  args: { prompt: "A friendly lobster mascot", size: "1024x1024" },
+});
+
+const providers = api.runtime.imageGeneration.listProviders({
+  config: api.config,
+});
+```
+
+- `generate(...)`: generate an image using the configured image-generation provider chain.
+- `listProviders(...)`: list available image-generation providers and their capabilities.
+
 ## Gateway HTTP routes
 
 Plugins can expose HTTP endpoints with `api.registerHttpRoute(...)`.
@@ -919,93 +1029,81 @@ Route fields:
 
 Notes:
 
-- `api.registerHttpHandler(...)` is obsolete. Use `api.registerHttpRoute(...)`.
+- `api.registerHttpHandler(...)` was removed and will cause a plugin-load error. Use `api.registerHttpRoute(...)` instead.
 - Plugin routes must declare `auth` explicitly.
 - Exact `path + match` conflicts are rejected unless `replaceExisting: true`, and one plugin cannot replace another plugin's route.
 - Overlapping routes with different `auth` levels are rejected. Keep `exact`/`prefix` fallthrough chains on the same auth level only.
+- `auth: "plugin"` routes do **not** receive operator runtime scopes automatically. They are for plugin-managed webhooks/signature verification, not privileged Gateway helper calls.
+- `auth: "gateway"` routes run inside a Gateway request runtime scope, but that scope is intentionally conservative:
+  - shared-secret bearer auth (`gateway.auth.mode = "token"` / `"password"`) keeps plugin-route runtime scopes pinned to `operator.write`, even if the caller sends `x-openclaw-scopes`
+  - trusted identity-bearing HTTP modes (for example `trusted-proxy` or `gateway.auth.mode = "none"` on a private ingress) honor `x-openclaw-scopes` only when the header is explicitly present
+  - if `x-openclaw-scopes` is absent on those identity-bearing plugin-route requests, runtime scope falls back to `operator.write`
+- Practical rule: do not assume a gateway-auth plugin route is an implicit admin surface. If your route needs admin-only behavior, require an identity-bearing auth mode and document the explicit `x-openclaw-scopes` header contract.
 
 ## Plugin SDK import paths
 
-Use SDK subpaths instead of the monolithic `openclaw/plugin-sdk` import when
-authoring plugins:
+Use narrow SDK subpaths instead of the monolithic `openclaw/plugin-sdk` root
+barrel when authoring new plugins. Core subpaths:
 
-- `openclaw/plugin-sdk/plugin-entry` for plugin registration primitives.
-- `openclaw/plugin-sdk/core` for the generic shared plugin-facing contract.
-- Stable channel primitives such as `openclaw/plugin-sdk/channel-setup`,
-  `openclaw/plugin-sdk/channel-pairing`,
-  `openclaw/plugin-sdk/channel-contract`,
-  `openclaw/plugin-sdk/channel-feedback`,
-  `openclaw/plugin-sdk/channel-inbound`,
-  `openclaw/plugin-sdk/channel-lifecycle`,
-  `openclaw/plugin-sdk/channel-reply-pipeline`,
-  `openclaw/plugin-sdk/command-auth`,
-  `openclaw/plugin-sdk/secret-input`, and
-  `openclaw/plugin-sdk/webhook-ingress` for shared setup/auth/reply/webhook
-  wiring. `channel-inbound` is the shared home for debounce, mention matching,
-  envelope formatting, and inbound envelope context helpers.
-- Domain subpaths such as `openclaw/plugin-sdk/channel-config-helpers`,
-  `openclaw/plugin-sdk/allow-from`,
-  `openclaw/plugin-sdk/channel-config-schema`,
-  `openclaw/plugin-sdk/channel-policy`,
-  `openclaw/plugin-sdk/config-runtime`,
-  `openclaw/plugin-sdk/infra-runtime`,
-  `openclaw/plugin-sdk/agent-runtime`,
-  `openclaw/plugin-sdk/lazy-runtime`,
-  `openclaw/plugin-sdk/reply-history`,
-  `openclaw/plugin-sdk/routing`,
-  `openclaw/plugin-sdk/status-helpers`,
-  `openclaw/plugin-sdk/runtime-store`, and
-  `openclaw/plugin-sdk/directory-runtime` for shared runtime/config helpers.
-- `openclaw/plugin-sdk/channel-runtime` remains only as a compatibility shim.
-  New code should import the narrower primitives instead.
-- Bundled extension internals remain private. External plugins should use only
-  `openclaw/plugin-sdk/*` subpaths. OpenClaw core/test code may use the repo
-  public entry points under `extensions/<id>/index.js`, `api.js`, `runtime-api.js`,
-  `setup-entry.js`, and narrowly scoped files such as `login-qr-api.js`. Never
-  import `extensions/<id>/src/*` from core or from another extension.
-- Repo entry point split:
-  `extensions/<id>/api.js` is the helper/types barrel,
-  `extensions/<id>/runtime-api.js` is the runtime-only barrel,
-  `extensions/<id>/index.js` is the bundled plugin entry,
-  and `extensions/<id>/setup-entry.js` is the setup plugin entry.
-- No bundled channel-branded public subpaths remain. Channel-specific helper and
-  runtime seams live under `extensions/<id>/api.js` and `extensions/<id>/runtime-api.js`;
-  the public SDK contract is the generic shared primitives instead.
+| Subpath                             | Purpose                                            |
+| ----------------------------------- | -------------------------------------------------- |
+| `openclaw/plugin-sdk/plugin-entry`  | Plugin registration primitives                     |
+| `openclaw/plugin-sdk/channel-core`  | Channel entry/build helpers                        |
+| `openclaw/plugin-sdk/core`          | Generic shared helpers and umbrella contract       |
+| `openclaw/plugin-sdk/config-schema` | Root `openclaw.json` Zod schema (`OpenClawSchema`) |
 
-Compatibility note:
+Channel plugins pick from a family of narrow seams — `channel-setup`,
+`setup-runtime`, `setup-adapter-runtime`, `setup-tools`, `channel-pairing`,
+`channel-contract`, `channel-feedback`, `channel-inbound`, `channel-lifecycle`,
+`channel-reply-pipeline`, `command-auth`, `secret-input`, `webhook-ingress`,
+`channel-targets`, and `channel-actions`. Approval behavior should consolidate
+on one `approvalCapability` contract rather than mixing across unrelated
+plugin fields. See [Channel plugins](/plugins/sdk-channel-plugins).
 
-- Avoid the root `openclaw/plugin-sdk` barrel for new code.
-- Prefer the narrow stable primitives first. The newer setup/pairing/reply/
-  feedback/contract/inbound/threading/command/secret-input/webhook/infra/
-  allowlist/status/message-tool subpaths are the intended contract for new
-  bundled and external plugin work.
-  Target parsing/matching belongs on `openclaw/plugin-sdk/channel-targets`.
-  Message action gates and reaction message-id helpers belong on
-  `openclaw/plugin-sdk/channel-actions`.
-- Bundled extension-specific helper barrels are not stable by default. If a
-  helper is only needed by a bundled extension, keep it behind the extension's
-  local `api.js` or `runtime-api.js` seam instead of promoting it into
-  `openclaw/plugin-sdk/<extension>`.
-- Channel-branded bundled bars stay private unless they are explicitly added
-  back to the public contract.
-- Capability-specific subpaths such as `image-generation`,
-  `media-understanding`, and `speech` exist because bundled/native plugins use
-  them today. Their presence does not by itself mean every exported helper is a
-  long-term frozen external contract.
+Runtime and config helpers live under matching `*-runtime` subpaths
+(`approval-runtime`, `config-runtime`, `infra-runtime`, `agent-runtime`,
+`lazy-runtime`, `directory-runtime`, `text-runtime`, `runtime-store`, etc.).
+
+<Info>
+`openclaw/plugin-sdk/channel-runtime` is deprecated — a compatibility shim for
+older plugins. New code should import narrower generic primitives instead.
+</Info>
+
+Repo-internal entry points (per bundled plugin package root):
+
+- `index.js` — bundled plugin entry
+- `api.js` — helper/types barrel
+- `runtime-api.js` — runtime-only barrel
+- `setup-entry.js` — setup plugin entry
+
+External plugins should only import `openclaw/plugin-sdk/*` subpaths. Never
+import another plugin package's `src/*` from core or from another plugin.
+Facade-loaded entry points prefer the active runtime config snapshot when one
+exists, then fall back to the resolved config file on disk.
+
+Capability-specific subpaths such as `image-generation`, `media-understanding`,
+and `speech` exist because bundled plugins use them today. They are not
+automatically long-term frozen external contracts — check the relevant SDK
+reference page when relying on them.
 
 ## Message tool schemas
 
 Plugins should own channel-specific `describeMessageTool(...)` schema
-contributions. Keep provider-specific fields in the plugin, not in shared core.
+contributions for non-message primitives such as reactions, reads, and polls.
+Shared send presentation should use the generic `MessagePresentation` contract
+instead of provider-native button, component, block, or card fields.
+See [Message Presentation](/plugins/message-presentation) for the contract,
+fallback rules, provider mapping, and plugin author checklist.
 
-For shared portable schema fragments, reuse the generic helpers exported through
-`openclaw/plugin-sdk/channel-actions`:
+Send-capable plugins declare what they can render through message capabilities:
 
-- `createMessageToolButtonsSchema()` for button-grid style payloads
-- `createMessageToolCardSchema()` for structured card payloads
+- `presentation` for semantic presentation blocks (`text`, `context`, `divider`, `buttons`, `select`)
+- `delivery-pin` for pinned-delivery requests
 
-If a schema shape only makes sense for one provider, define it in that plugin's
-own source instead of promoting it into the shared SDK.
+Core decides whether to render the presentation natively or degrade it to text.
+Do not expose provider-native UI escape hatches from the generic message tool.
+Deprecated SDK helpers for legacy native schemas remain exported for existing
+third-party plugins, but new plugins should not use them.
 
 ## Channel target resolution
 
@@ -1142,7 +1240,7 @@ directory after symlink resolution. Entries that escape the package directory ar
 rejected.
 
 Security note: `openclaw plugins install` installs plugin dependencies with
-`npm install --ignore-scripts` (no lifecycle scripts). Keep plugin dependency
+`npm install --omit=dev --ignore-scripts` (no lifecycle scripts, no dev dependencies at runtime). Keep plugin dependency
 trees "pure JS/TS" and avoid packages that require `postinstall` builds.
 
 Optional: `openclaw.setupEntry` can point at a lightweight setup-only module.
@@ -1167,6 +1265,30 @@ must register every channel-owned capability that startup depends on, such as:
 If your full entry still owns any required startup capability, do not enable
 this flag. Keep the plugin on the default behavior and let OpenClaw load the
 full entry during startup.
+
+Bundled channels can also publish setup-only contract-surface helpers that core
+can consult before the full channel runtime is loaded. The current setup
+promotion surface is:
+
+- `singleAccountKeysToMove`
+- `namedAccountPromotionKeys`
+- `resolveSingleAccountPromotionTarget(...)`
+
+Core uses that surface when it needs to promote a legacy single-account channel
+config into `channels.<id>.accounts.*` without loading the full plugin entry.
+Matrix is the current bundled example: it moves only auth/bootstrap keys into a
+named promoted account when named accounts already exist, and it can preserve a
+configured non-canonical default-account key instead of always creating
+`accounts.default`.
+
+Those setup patch adapters keep bundled contract-surface discovery lazy. Import
+time stays light; the promotion surface is loaded only on first use instead of
+re-entering bundled channel startup on module import.
+
+When those startup surfaces include gateway RPC methods, keep them on a
+plugin-specific prefix. Core admin namespaces (`config.*`,
+`exec.approvals.*`, `wizard.*`, `update.*`) remain reserved and always resolve
+to `operator.admin`, even if a plugin requests a narrower scope.
 
 Example:
 
@@ -1207,12 +1329,27 @@ Example:
     },
     "install": {
       "npmSpec": "@openclaw/nextcloud-talk",
-      "localPath": "extensions/nextcloud-talk",
+      "localPath": "<bundled-plugin-local-path>",
       "defaultChoice": "npm"
     }
   }
 }
 ```
+
+Useful `openclaw.channel` fields beyond the minimal example:
+
+- `detailLabel`: secondary label for richer catalog/status surfaces
+- `docsLabel`: override link text for the docs link
+- `preferOver`: lower-priority plugin/channel ids this catalog entry should outrank
+- `selectionDocsPrefix`, `selectionDocsOmitLabel`, `selectionExtras`: selection-surface copy controls
+- `markdownCapable`: marks the channel as markdown-capable for outbound formatting decisions
+- `exposure.configured`: hide the channel from configured-channel listing surfaces when set to `false`
+- `exposure.setup`: hide the channel from interactive setup/configure pickers when set to `false`
+- `exposure.docs`: mark the channel as internal/private for docs navigation surfaces
+- `showConfigured` / `showInSetup`: legacy aliases still accepted for compatibility; prefer `exposure`
+- `quickstartAllowFrom`: opt the channel into the standard quickstart `allowFrom` flow
+- `forceAccountBinding`: require explicit account binding even when only one account exists
+- `preferSessionLookupForAnnounceTarget`: prefer session lookup when resolving announce targets
 
 OpenClaw can also merge **external channel catalogs** (for example, an MPM
 registry export). Drop a JSON file at one of:
@@ -1223,7 +1360,7 @@ registry export). Drop a JSON file at one of:
 
 Or point `OPENCLAW_PLUGIN_CATALOG_PATHS` (or `OPENCLAW_MPM_CATALOG_PATHS`) at
 one or more JSON files (comma/semicolon/`PATH`-delimited). Each file should
-contain `{ "entries": [ { "name": "@scope/pkg", "openclaw": { "channel": {...}, "install": {...} } } ] }`.
+contain `{ "entries": [ { "name": "@scope/pkg", "openclaw": { "channel": {...}, "install": {...} } } ] }`. The parser also accepts `"packages"` or `"plugins"` as legacy aliases for the `"entries"` key.
 
 ## Context engine plugins
 
@@ -1236,14 +1373,23 @@ Use this when your plugin needs to replace or extend the default context
 pipeline rather than just add memory search or hooks.
 
 ```ts
+import { buildMemorySystemPromptAddition } from "openclaw/plugin-sdk/core";
+
 export default function (api) {
   api.registerContextEngine("lossless-claw", () => ({
     info: { id: "lossless-claw", name: "Lossless Claw", ownsCompaction: true },
     async ingest() {
       return { ingested: true };
     },
-    async assemble({ messages }) {
-      return { messages, estimatedTokens: 0 };
+    async assemble({ messages, availableTools, citationsMode }) {
+      return {
+        messages,
+        estimatedTokens: 0,
+        systemPromptAddition: buildMemorySystemPromptAddition({
+          availableTools: availableTools ?? new Set(),
+          citationsMode,
+        }),
+      };
     },
     async compact() {
       return { ok: true, compacted: false };
@@ -1256,7 +1402,10 @@ If your engine does **not** own the compaction algorithm, keep `compact()`
 implemented and delegate it explicitly:
 
 ```ts
-import { delegateCompactionToRuntime } from "openclaw/plugin-sdk/core";
+import {
+  buildMemorySystemPromptAddition,
+  delegateCompactionToRuntime,
+} from "openclaw/plugin-sdk/core";
 
 export default function (api) {
   api.registerContextEngine("my-memory-engine", () => ({
@@ -1268,8 +1417,15 @@ export default function (api) {
     async ingest() {
       return { ingested: true };
     },
-    async assemble({ messages }) {
-      return { messages, estimatedTokens: 0 };
+    async assemble({ messages, availableTools, citationsMode }) {
+      return {
+        messages,
+        estimatedTokens: 0,
+        systemPromptAddition: buildMemorySystemPromptAddition({
+          availableTools: availableTools ?? new Set(),
+          citationsMode,
+        }),
+      };
     },
     async compact(params) {
       return await delegateCompactionToRuntime(params);
@@ -1343,7 +1499,7 @@ api.registerVideoGenerationProvider({
 });
 
 // shared runtime helper for feature/channel plugins
-const clip = await api.runtime.videoGeneration.generateFile({
+const clip = await api.runtime.videoGeneration.generate({
   prompt: "Show the robot walking through the lab.",
   cfg,
 });

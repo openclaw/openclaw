@@ -5,7 +5,7 @@
 .chat-thinking {
   margin-bottom: 10px;
   padding: 10px 12px;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   border: 1px dashed rgba(255, 255, 255, 0.18);
   background: rgba(255, 255, 255, 0.04);
   color: var(--muted);
@@ -41,6 +41,20 @@
   margin-top: 0.25em;
 }
 
+/* Hide default marker only for unordered task lists; ordered lists keep numbers */
+.chat-text :where(ul > .task-list-item),
+.sidebar-markdown :where(ul > .task-list-item),
+.chat-thinking :where(ul > .task-list-item) {
+  list-style: none;
+}
+
+.chat-text :where(.task-list-item-checkbox),
+.sidebar-markdown :where(.task-list-item-checkbox),
+.chat-thinking :where(.task-list-item-checkbox) {
+  margin-right: 0.4em;
+  vertical-align: middle;
+}
+
 .chat-text :where(a) {
   color: var(--accent);
   text-decoration: underline;
@@ -72,14 +86,14 @@
 .chat-text :where(:not(pre) > code) {
   background: rgba(0, 0, 0, 0.15);
   padding: 0.15em 0.4em;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   overflow-wrap: normal;
   word-break: keep-all;
 }
 
 .chat-text :where(pre) {
   background: rgba(0, 0, 0, 0.15);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   padding: 10px 12px;
   overflow-x: auto;
 }
@@ -162,7 +176,7 @@
   .chat-text :where(pre) {
     padding: 8px 10px;
     font-size: 12px;
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
   }
 
   .chat-text :where(.markdown-inline-image) {

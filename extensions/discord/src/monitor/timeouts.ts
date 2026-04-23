@@ -2,6 +2,8 @@ const MAX_DISCORD_TIMEOUT_MS = 2_147_483_647;
 
 export const DISCORD_DEFAULT_LISTENER_TIMEOUT_MS = 120_000;
 export const DISCORD_DEFAULT_INBOUND_WORKER_TIMEOUT_MS = 30 * 60_000;
+export const DISCORD_ATTACHMENT_IDLE_TIMEOUT_MS = 60_000;
+export const DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS = 120_000;
 
 function clampDiscordTimeoutMs(timeoutMs: number, minimumMs: number): number {
   return Math.max(minimumMs, Math.min(Math.floor(timeoutMs), MAX_DISCORD_TIMEOUT_MS));
@@ -69,7 +71,7 @@ export async function runDiscordTaskWithTimeout(params: {
   run: (abortSignal: AbortSignal | undefined) => Promise<void>;
   timeoutMs?: number;
   abortSignals?: Array<AbortSignal | undefined>;
-  onTimeout: (timeoutMs: number) => void;
+  onTimeout: (timeoutMs: number) => void | Promise<void>;
   onAbortAfterTimeout?: () => void;
   onErrorAfterTimeout?: (error: unknown) => void;
 }): Promise<boolean> {
@@ -108,7 +110,7 @@ export async function runDiscordTaskWithTimeout(params: {
     if (result === "timeout") {
       timedOut = true;
       timeoutAbortController?.abort();
-      params.onTimeout(params.timeoutMs);
+      await params.onTimeout(params.timeoutMs);
       return true;
     }
     return false;

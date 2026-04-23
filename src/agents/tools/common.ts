@@ -1,14 +1,44 @@
 import fs from "node:fs/promises";
-import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
+import type {
+  AgentTool,
+  AgentToolResult,
+  AgentToolUpdateCallback,
+} from "@mariozechner/pi-agent-core";
+import type { TSchema } from "typebox";
 import { detectMime } from "../../media/mime.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
 import type { ImageSanitizationLimits } from "../image-sanitization.js";
 import { sanitizeToolResultImages } from "../tool-images.js";
 
-// oxlint-disable-next-line typescript/no-explicit-any
-export type AnyAgentTool = AgentTool<any, unknown> & {
+export type AgentToolWithMeta<TParameters extends TSchema, TResult> = AgentTool<
+  TParameters,
+  TResult
+> & {
   ownerOnly?: boolean;
+  displaySummary?: string;
 };
+
+type ErasedAgentToolExecute = {
+  execute(
+    this: void,
+    toolCallId: string,
+    params: unknown,
+    signal?: AbortSignal,
+    onUpdate?: AgentToolUpdateCallback<unknown>,
+  ): Promise<AgentToolResult<unknown>>;
+};
+
+export type AnyAgentTool = Omit<AgentTool<TSchema, unknown>, "execute"> &
+  ErasedAgentToolExecute & {
+    ownerOnly?: boolean;
+    displaySummary?: string;
+  };
+
+export function asToolParamsRecord(params: unknown): Record<string, unknown> {
+  return params && typeof params === "object" && !Array.isArray(params)
+    ? (params as Record<string, unknown>)
+    : {};
+}
 
 export type StringParamOptions = {
   required?: boolean;
@@ -214,16 +244,46 @@ export function readReactionParams(
   return { emoji, remove, isEmpty: !emoji };
 }
 
-export function jsonResult(payload: unknown): AgentToolResult<unknown> {
+export function stringifyToolPayload(payload: unknown): string {
+  if (typeof payload === "string") {
+    return payload;
+  }
+  try {
+    const encoded = JSON.stringify(payload, null, 2);
+    if (typeof encoded === "string") {
+      return encoded;
+    }
+  } catch {
+    // Fall through to String(payload) for non-serializable values.
+  }
+  return String(payload);
+}
+
+export function textResult<TDetails>(text: string, details: TDetails): AgentToolResult<TDetails> {
   return {
     content: [
       {
         type: "text",
-        text: JSON.stringify(payload, null, 2),
+        text,
       },
     ],
-    details: payload,
+    details,
   };
+}
+
+export function failedTextResult<TDetails extends { status: "failed" }>(
+  text: string,
+  details: TDetails,
+): AgentToolResult<TDetails> {
+  return textResult(text, details);
+}
+
+export function payloadTextResult<TDetails>(payload: TDetails): AgentToolResult<TDetails> {
+  return textResult(stringifyToolPayload(payload), payload);
+}
+
+export function jsonResult(payload: unknown): AgentToolResult<unknown> {
+  return textResult(JSON.stringify(payload, null, 2), payload);
 }
 
 export function wrapOwnerOnlyToolExecution(
@@ -251,19 +311,29 @@ export async function imageResult(params: {
   imageSanitization?: ImageSanitizationLimits;
 }): Promise<AgentToolResult<unknown>> {
   const content: AgentToolResult<unknown>["content"] = [
-    {
-      type: "text",
-      text: params.extraText ?? `MEDIA:${params.path}`,
-    },
+    ...(params.extraText ? [{ type: "text" as const, text: params.extraText }] : []),
     {
       type: "image",
       data: params.base64,
       mimeType: params.mimeType,
     },
   ];
+  const detailsMedia =
+    params.details?.media &&
+    typeof params.details.media === "object" &&
+    !Array.isArray(params.details.media)
+      ? (params.details.media as Record<string, unknown>)
+      : undefined;
   const result: AgentToolResult<unknown> = {
     content,
-    details: { path: params.path, ...params.details },
+    details: {
+      path: params.path,
+      ...params.details,
+      media: {
+        ...detailsMedia,
+        mediaUrl: params.path,
+      },
+    },
   };
   return await sanitizeToolResultImages(result, params.label, params.imageSanitization);
 }
@@ -313,15 +383,18 @@ export function parseAvailableTags(raw: unknown): AvailableTag[] | undefined {
       (t): t is Record<string, unknown> =>
         typeof t === "object" && t !== null && typeof t.name === "string",
     )
-    .map((t) => ({
-      ...(t.id !== undefined && typeof t.id === "string" ? { id: t.id } : {}),
-      name: t.name as string,
-      ...(typeof t.moderated === "boolean" ? { moderated: t.moderated } : {}),
-      ...(t.emoji_id === null || typeof t.emoji_id === "string" ? { emoji_id: t.emoji_id } : {}),
-      ...(t.emoji_name === null || typeof t.emoji_name === "string"
-        ? { emoji_name: t.emoji_name }
-        : {}),
-    }));
+    .map((t) =>
+      Object.assign(
+        {},
+        t.id !== undefined && typeof t.id === `string` ? { id: t.id } : {},
+        { name: t.name as string },
+        typeof t.moderated === `boolean` ? { moderated: t.moderated } : {},
+        t.emoji_id === null || typeof t.emoji_id === `string` ? { emoji_id: t.emoji_id } : {},
+        t.emoji_name === null || typeof t.emoji_name === `string`
+          ? { emoji_name: t.emoji_name }
+          : {},
+      ),
+    );
   // Return undefined instead of empty array to avoid accidentally clearing all tags
   return result.length ? result : undefined;
 }

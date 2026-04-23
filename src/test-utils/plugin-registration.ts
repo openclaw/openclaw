@@ -7,9 +7,9 @@ type RegistrablePlugin = {
   register(api: OpenClawPluginApi): void;
 };
 
-export function registerSingleProviderPlugin(params: {
+export async function registerSingleProviderPlugin(params: {
   register(api: OpenClawPluginApi): void;
-}): ProviderPlugin {
+}): Promise<ProviderPlugin> {
   const captured = createCapturedPluginRegistration();
   params.register(captured.api);
   const provider = captured.providers[0];
@@ -19,7 +19,9 @@ export function registerSingleProviderPlugin(params: {
   return provider;
 }
 
-export function registerProviderPlugins(...plugins: RegistrablePlugin[]): ProviderPlugin[] {
+export async function registerProviderPlugins(
+  ...plugins: RegistrablePlugin[]
+): Promise<ProviderPlugin[]> {
   const captured = createCapturedPluginRegistration();
   for (const plugin of plugins) {
     plugin.register(captured.api);

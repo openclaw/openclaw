@@ -1,5 +1,12 @@
+import { createAccountListHelpers } from "openclaw/plugin-sdk/account-helpers";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import { createAccountListHelpers, type OpenClawConfig } from "../runtime-api.js";
+import { resolveMergedAccountConfig } from "openclaw/plugin-sdk/account-resolution";
+import {
+  resolveChannelStreamingBlockCoalesce,
+  resolveChannelStreamingBlockEnabled,
+  resolveChannelStreamingChunkMode,
+} from "openclaw/plugin-sdk/channel-streaming";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { normalizeResolvedSecretInputString, normalizeSecretInputString } from "../secret-input.js";
 import type {
   MattermostAccountConfig,
@@ -8,6 +15,7 @@ import type {
   MattermostReplyToMode,
 } from "../types.js";
 import { normalizeMattermostBaseUrl } from "./client.js";
+import type { OpenClawConfig } from "./runtime-api.js";
 
 export type MattermostTokenSource = "env" | "config" | "none";
 export type MattermostBaseUrlSource = "env" | "config" | "none";
@@ -25,55 +33,34 @@ export type ResolvedMattermostAccount = {
   oncharPrefixes?: string[];
   requireMention?: boolean;
   textChunkLimit?: number;
+  chunkMode?: MattermostAccountConfig["chunkMode"];
   blockStreaming?: boolean;
   blockStreamingCoalesce?: MattermostAccountConfig["blockStreamingCoalesce"];
 };
 
-const {
-  listAccountIds: listMattermostAccountIds,
-  resolveDefaultAccountId: resolveDefaultMattermostAccountId,
-} = createAccountListHelpers("mattermost");
-export { listMattermostAccountIds, resolveDefaultMattermostAccountId };
+const mattermostAccountHelpers = createAccountListHelpers("mattermost");
 
-function resolveAccountConfig(
-  cfg: OpenClawConfig,
-  accountId: string,
-): MattermostAccountConfig | undefined {
-  const accounts = cfg.channels?.mattermost?.accounts;
-  if (!accounts || typeof accounts !== "object") {
-    return undefined;
-  }
-  return accounts[accountId] as MattermostAccountConfig | undefined;
+export function listMattermostAccountIds(cfg: OpenClawConfig): string[] {
+  return mattermostAccountHelpers.listAccountIds(cfg);
+}
+
+export function resolveDefaultMattermostAccountId(cfg: OpenClawConfig): string {
+  return mattermostAccountHelpers.resolveDefaultAccountId(cfg);
 }
 
 function mergeMattermostAccountConfig(
   cfg: OpenClawConfig,
   accountId: string,
 ): MattermostAccountConfig {
-  const {
-    accounts: _ignored,
-    defaultAccount: _ignoredDefaultAccount,
-    ...base
-  } = (cfg.channels?.mattermost ?? {}) as MattermostAccountConfig & {
-    accounts?: unknown;
-    defaultAccount?: unknown;
-  };
-  const account = resolveAccountConfig(cfg, accountId) ?? {};
-
-  // Shallow merging is fine for most keys, but `commands` should be merged
-  // so that account-specific overrides (callbackPath/callbackUrl) do not
-  // accidentally reset global settings like `native: true`.
-  const mergedCommands = {
-    ...(base.commands ?? {}),
-    ...(account.commands ?? {}),
-  };
-
-  const merged = { ...base, ...account };
-  if (Object.keys(mergedCommands).length > 0) {
-    merged.commands = mergedCommands;
-  }
-
-  return merged;
+  return resolveMergedAccountConfig<MattermostAccountConfig>({
+    channelConfig: cfg.channels?.mattermost as MattermostAccountConfig | undefined,
+    accounts: cfg.channels?.mattermost?.accounts as
+      | Record<string, Partial<MattermostAccountConfig>>
+      | undefined,
+    accountId,
+    omitKeys: ["defaultAccount"],
+    nestedObjectKeys: ["commands"],
+  });
 }
 
 function resolveMattermostRequireMention(config: MattermostAccountConfig): boolean | undefined {
@@ -94,7 +81,9 @@ export function resolveMattermostAccount(params: {
   accountId?: string | null;
   allowUnresolvedSecretRef?: boolean;
 }): ResolvedMattermostAccount {
-  const accountId = normalizeAccountId(params.accountId);
+  const accountId = normalizeAccountId(
+    params.accountId ?? resolveDefaultMattermostAccountId(params.cfg),
+  );
   const baseEnabled = params.cfg.channels?.mattermost?.enabled !== false;
   const merged = mergeMattermostAccountConfig(params.cfg, accountId);
   const accountEnabled = merged.enabled !== false;
@@ -120,7 +109,7 @@ export function resolveMattermostAccount(params: {
   return {
     accountId,
     enabled,
-    name: merged.name?.trim() || undefined,
+    name: normalizeOptionalString(merged.name),
     botToken,
     baseUrl,
     botTokenSource,
@@ -130,8 +119,10 @@ export function resolveMattermostAccount(params: {
     oncharPrefixes: merged.oncharPrefixes,
     requireMention,
     textChunkLimit: merged.textChunkLimit,
-    blockStreaming: merged.blockStreaming,
-    blockStreamingCoalesce: merged.blockStreamingCoalesce,
+    chunkMode: resolveChannelStreamingChunkMode(merged) ?? merged.chunkMode,
+    blockStreaming: resolveChannelStreamingBlockEnabled(merged) ?? merged.blockStreaming,
+    blockStreamingCoalesce:
+      resolveChannelStreamingBlockCoalesce(merged) ?? merged.blockStreamingCoalesce,
   };
 }
 

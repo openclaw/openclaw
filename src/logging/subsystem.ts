@@ -1,7 +1,9 @@
 import { Chalk } from "chalk";
 import type { Logger as TsLogger } from "tslog";
-import { isVerbose } from "../globals.js";
-import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import { normalizeChatChannelId } from "../channels/ids.js";
+import { isVerbose } from "../global-state.js";
+import { defaultRuntime, type OutputRuntimeEnv, type RuntimeEnv } from "../runtime.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { clearActiveProgressLine } from "../terminal/progress-line.js";
 import {
   formatConsoleTimestamp,
@@ -27,13 +29,24 @@ export type SubsystemLogger = {
   child: (name: string) => SubsystemLogger;
 };
 
+function normalizeSubsystemLabel(subsystem?: string | null): string {
+  if (typeof subsystem !== "string") {
+    return "unknown";
+  }
+  const normalized = subsystem.trim();
+  return normalized.length > 0 ? normalized : "unknown";
+}
+
 function shouldLogToConsole(level: LogLevel, settings: { level: LogLevel }): boolean {
+  if (level === "silent") {
+    return false;
+  }
   if (settings.level === "silent") {
     return false;
   }
   const current = levelToMinLevel(level);
   const min = levelToMinLevel(settings.level);
-  return current <= min;
+  return current >= min;
 }
 
 type ChalkInstance = InstanceType<typeof Chalk>;
@@ -72,7 +85,7 @@ function formatRuntimeArg(arg: unknown): string {
 }
 
 function isRichConsoleEnv(): boolean {
-  const term = (process.env.TERM ?? "").toLowerCase();
+  const term = normalizeLowercaseStringOrEmpty(process.env.TERM);
   if (process.env.COLORTERM || process.env.TERM_PROGRAM) {
     return true;
   }
@@ -87,7 +100,7 @@ function getColorForConsole(): ChalkInstance {
   if (process.env.NO_COLOR && !hasForceColor) {
     return new Chalk({ level: 0 });
   }
-  const hasTty = Boolean(process.stdout.isTTY || process.stderr.isTTY);
+  const hasTty = process.stdout.isTTY || process.stderr.isTTY;
   return hasTty || isRichConsoleEnv() ? new Chalk({ level: 1 }) : new Chalk({ level: 0 });
 }
 
@@ -97,17 +110,14 @@ const SUBSYSTEM_COLOR_OVERRIDES: Record<string, (typeof SUBSYSTEM_COLORS)[number
 };
 const SUBSYSTEM_PREFIXES_TO_DROP = ["gateway", "channels", "providers"] as const;
 const SUBSYSTEM_MAX_SEGMENTS = 2;
-// Keep local to avoid importing channel registry into hot logging paths.
-const CHANNEL_SUBSYSTEM_PREFIXES = new Set<string>([
-  "telegram",
-  "whatsapp",
-  "discord",
-  "irc",
-  "googlechat",
-  "slack",
-  "signal",
-  "imessage",
-]);
+
+function isChannelSubsystemPrefix(value: string): boolean {
+  const normalized = normalizeLowercaseStringOrEmpty(value);
+  if (!normalized) {
+    return false;
+  }
+  return normalizeChatChannelId(normalized) === normalized || normalized === "webchat";
+}
 
 function pickSubsystemColor(color: ChalkInstance, subsystem: string): ChalkInstance {
   const override = SUBSYSTEM_COLOR_OVERRIDES[subsystem];
@@ -135,7 +145,7 @@ function formatSubsystemForConsole(subsystem: string): string {
   if (parts.length === 0) {
     return original;
   }
-  if (CHANNEL_SUBSYSTEM_PREFIXES.has(parts[0])) {
+  if (isChannelSubsystemPrefix(parts[0])) {
     return parts[0];
   }
   if (parts.length > SUBSYSTEM_MAX_SEGMENTS) {
@@ -152,12 +162,15 @@ export function stripRedundantSubsystemPrefixForConsole(
     return message;
   }
 
-  // Common duplication: "[discord] discord: ..." (when a message manually includes the subsystem tag).
+  // Common duplication when a message manually includes the subsystem tag.
   if (message.startsWith("[")) {
     const closeIdx = message.indexOf("]");
     if (closeIdx > 1) {
       const bracketTag = message.slice(1, closeIdx);
-      if (bracketTag.toLowerCase() === displaySubsystem.toLowerCase()) {
+      if (
+        normalizeLowercaseStringOrEmpty(bracketTag) ===
+        normalizeLowercaseStringOrEmpty(displaySubsystem)
+      ) {
         let i = closeIdx + 1;
         while (message[i] === " ") {
           i += 1;
@@ -168,7 +181,9 @@ export function stripRedundantSubsystemPrefixForConsole(
   }
 
   const prefix = message.slice(0, displaySubsystem.length);
-  if (prefix.toLowerCase() !== displaySubsystem.toLowerCase()) {
+  if (
+    normalizeLowercaseStringOrEmpty(prefix) !== normalizeLowercaseStringOrEmpty(displaySubsystem)
+  ) {
     return message;
   }
 
@@ -252,8 +267,8 @@ function writeConsoleLine(level: LogLevel, line: string) {
 
 function shouldSuppressProbeConsoleLine(params: {
   level: LogLevel;
-  subsystem: string;
-  message: string;
+  subsystem?: string | null;
+  message?: string | null;
   meta?: Record<string, unknown>;
 }): boolean {
   if (isVerbose()) {
@@ -262,11 +277,13 @@ function shouldSuppressProbeConsoleLine(params: {
   if (params.level === "error" || params.level === "fatal") {
     return false;
   }
+  const subsystem = normalizeSubsystemLabel(params.subsystem);
+  const message = typeof params.message === "string" ? params.message : "";
   const isProbeSuppressedSubsystem =
-    params.subsystem === "agent/embedded" ||
-    params.subsystem.startsWith("agent/embedded/") ||
-    params.subsystem === "model-fallback" ||
-    params.subsystem.startsWith("model-fallback/");
+    subsystem === "agent/embedded" ||
+    subsystem.startsWith("agent/embedded/") ||
+    subsystem === "model-fallback" ||
+    subsystem.startsWith("model-fallback/");
   if (!isProbeSuppressedSubsystem) {
     return false;
   }
@@ -279,7 +296,7 @@ function shouldSuppressProbeConsoleLine(params: {
   if (runLikeId?.startsWith("probe-")) {
     return true;
   }
-  return /(sessionId|runId)=probe-/.test(params.message);
+  return /(sessionId|runId)=probe-/.test(message);
 }
 
 function logToFile(
@@ -306,18 +323,14 @@ function logToFile(
 }
 
 export function createSubsystemLogger(subsystem: string): SubsystemLogger {
+  const resolvedSubsystem = normalizeSubsystemLabel(subsystem);
   let fileLogger: TsLogger<LogObj> | null = null;
-  const getFileLogger = () => {
-    if (!fileLogger) {
-      fileLogger = getChildLogger({ subsystem });
-    }
-    return fileLogger;
-  };
-  const emit = (level: LogLevel, message: string, meta?: Record<string, unknown>) => {
+
+  const emitLog = (level: LogLevel, message: string, meta?: Record<string, unknown>) => {
     const consoleSettings = getConsoleSettings();
     const consoleEnabled =
       shouldLogToConsole(level, { level: consoleSettings.level }) &&
-      shouldLogSubsystemToConsole(subsystem);
+      shouldLogSubsystemToConsole(resolvedSubsystem);
     const fileEnabled = isFileLogLevelEnabled(level);
     if (!consoleEnabled && !fileEnabled) {
       return;
@@ -334,7 +347,10 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
       fileMeta = Object.keys(rest).length > 0 ? rest : undefined;
     }
     if (fileEnabled) {
-      logToFile(getFileLogger(), level, message, fileMeta);
+      if (!fileLogger) {
+        fileLogger = getChildLogger({ subsystem: resolvedSubsystem });
+      }
+      logToFile(fileLogger, level, message, fileMeta);
     }
     if (!consoleEnabled) {
       return;
@@ -343,60 +359,84 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
     if (
       shouldSuppressProbeConsoleLine({
         level,
-        subsystem,
+        subsystem: resolvedSubsystem,
         message: consoleMessage,
         meta: fileMeta,
       })
     ) {
       return;
     }
-    const line = formatConsoleLine({
+    writeConsoleLine(
       level,
-      subsystem,
-      message: consoleSettings.style === "json" ? message : consoleMessage,
-      style: consoleSettings.style,
-      meta: fileMeta,
-    });
-    writeConsoleLine(level, line);
-  };
-  const isConsoleEnabled = (level: LogLevel): boolean => {
-    const consoleSettings = getConsoleSettings();
-    return (
-      shouldLogToConsole(level, { level: consoleSettings.level }) &&
-      shouldLogSubsystemToConsole(subsystem)
+      formatConsoleLine({
+        level,
+        subsystem: resolvedSubsystem,
+        message: consoleSettings.style === "json" ? message : consoleMessage,
+        style: consoleSettings.style,
+        meta: fileMeta,
+      }),
     );
   };
-  const isFileEnabled = (level: LogLevel): boolean => isFileLogLevelEnabled(level);
 
   const logger: SubsystemLogger = {
-    subsystem,
-    isEnabled: (level, target = "any") => {
+    subsystem: resolvedSubsystem,
+    isEnabled(level, target = "any") {
+      const isConsoleEnabled =
+        shouldLogToConsole(level, { level: getConsoleSettings().level }) &&
+        shouldLogSubsystemToConsole(resolvedSubsystem);
+      const isFileEnabled = isFileLogLevelEnabled(level);
       if (target === "console") {
-        return isConsoleEnabled(level);
+        return isConsoleEnabled;
       }
       if (target === "file") {
-        return isFileEnabled(level);
+        return isFileEnabled;
       }
-      return isConsoleEnabled(level) || isFileEnabled(level);
+      return isConsoleEnabled || isFileEnabled;
     },
-    trace: (message, meta) => emit("trace", message, meta),
-    debug: (message, meta) => emit("debug", message, meta),
-    info: (message, meta) => emit("info", message, meta),
-    warn: (message, meta) => emit("warn", message, meta),
-    error: (message, meta) => emit("error", message, meta),
-    fatal: (message, meta) => emit("fatal", message, meta),
-    raw: (message) => {
-      if (isFileEnabled("info")) {
-        logToFile(getFileLogger(), "info", message, { raw: true });
+    trace(message, meta) {
+      emitLog("trace", message, meta);
+    },
+    debug(message, meta) {
+      emitLog("debug", message, meta);
+    },
+    info(message, meta) {
+      emitLog("info", message, meta);
+    },
+    warn(message, meta) {
+      emitLog("warn", message, meta);
+    },
+    error(message, meta) {
+      emitLog("error", message, meta);
+    },
+    fatal(message, meta) {
+      emitLog("fatal", message, meta);
+    },
+    raw(message) {
+      if (isFileLogLevelEnabled("info")) {
+        if (!fileLogger) {
+          fileLogger = getChildLogger({ subsystem: resolvedSubsystem });
+        }
+        logToFile(fileLogger, "info", message, { raw: true });
       }
-      if (isConsoleEnabled("info")) {
-        if (shouldSuppressProbeConsoleLine({ level: "info", subsystem, message })) {
+      if (
+        shouldLogToConsole("info", { level: getConsoleSettings().level }) &&
+        shouldLogSubsystemToConsole(resolvedSubsystem)
+      ) {
+        if (
+          shouldSuppressProbeConsoleLine({
+            level: "info",
+            subsystem: resolvedSubsystem,
+            message,
+          })
+        ) {
           return;
         }
         writeConsoleLine("info", message);
       }
     },
-    child: (name) => createSubsystemLogger(`${subsystem}/${name}`),
+    child(name) {
+      return createSubsystemLogger(`${resolvedSubsystem}/${name}`);
+    },
   };
   return logger;
 }
@@ -404,15 +444,30 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
 export function runtimeForLogger(
   logger: SubsystemLogger,
   exit: RuntimeEnv["exit"] = defaultRuntime.exit,
-): RuntimeEnv {
-  const formatArgs = (...args: unknown[]) =>
-    args
-      .map((arg) => formatRuntimeArg(arg))
-      .join(" ")
-      .trim();
+): OutputRuntimeEnv {
   return {
-    log: (...args: unknown[]) => logger.info(formatArgs(...args)),
-    error: (...args: unknown[]) => logger.error(formatArgs(...args)),
+    log(...args) {
+      logger.info(
+        args
+          .map((arg) => formatRuntimeArg(arg))
+          .join(" ")
+          .trim(),
+      );
+    },
+    error(...args) {
+      logger.error(
+        args
+          .map((arg) => formatRuntimeArg(arg))
+          .join(" ")
+          .trim(),
+      );
+    },
+    writeStdout(value) {
+      logger.info(value);
+    },
+    writeJson(value: unknown, space = 2) {
+      logger.info(JSON.stringify(value, null, space > 0 ? space : undefined));
+    },
     exit,
   };
 }
@@ -420,6 +475,6 @@ export function runtimeForLogger(
 export function createSubsystemRuntime(
   subsystem: string,
   exit: RuntimeEnv["exit"] = defaultRuntime.exit,
-): RuntimeEnv {
+): OutputRuntimeEnv {
   return runtimeForLogger(createSubsystemLogger(subsystem), exit);
 }

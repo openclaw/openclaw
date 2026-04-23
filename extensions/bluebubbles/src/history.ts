@@ -1,6 +1,6 @@
 import { resolveBlueBubblesServerAccount } from "./account-resolve.js";
+import { createBlueBubblesClientFromParts } from "./client.js";
 import type { OpenClawConfig } from "./runtime-api.js";
-import { blueBubblesFetchWithTimeout, buildBlueBubblesApiUrl } from "./types.js";
 
 export type BlueBubblesHistoryEntry = {
   sender: string;
@@ -83,11 +83,18 @@ export async function fetchBlueBubblesHistory(
 
   let baseUrl: string;
   let password: string;
+  let allowPrivateNetwork = false;
   try {
-    ({ baseUrl, password } = resolveAccount(opts));
+    ({ baseUrl, password, allowPrivateNetwork } = resolveAccount(opts));
   } catch {
     return { entries: [], resolved: false };
   }
+  const client = createBlueBubblesClientFromParts({
+    baseUrl,
+    password,
+    allowPrivateNetwork,
+    timeoutMs: opts.timeoutMs ?? 10000,
+  });
 
   // Try different common API patterns for fetching messages
   const possiblePaths = [
@@ -98,12 +105,11 @@ export async function fetchBlueBubblesHistory(
 
   for (const path of possiblePaths) {
     try {
-      const url = buildBlueBubblesApiUrl({ baseUrl, path, password });
-      const res = await blueBubblesFetchWithTimeout(
-        url,
-        { method: "GET" },
-        opts.timeoutMs ?? 10000,
-      );
+      const res = await client.request({
+        method: "GET",
+        path,
+        timeoutMs: opts.timeoutMs ?? 10000,
+      });
 
       if (!res.ok) {
         continue; // Try next path
@@ -166,7 +172,7 @@ export async function fetchBlueBubblesHistory(
         entries: historyEntries.slice(0, effectiveLimit), // Ensure we don't exceed the requested limit
         resolved: true,
       };
-    } catch (error) {
+    } catch {
       // Continue to next path
       continue;
     }

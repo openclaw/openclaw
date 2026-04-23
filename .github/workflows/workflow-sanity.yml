@@ -6,43 +6,20 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
-  group: workflow-sanity-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
-  gate-sync-merge:
-    # Skip on the mctlhq fork — Blacksmith runners are not provisioned
-    # there, so without this guard the job sits QUEUED and blocks PR merges.
-    if: github.repository == 'openclaw/openclaw'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
-    outputs:
-      skip_push_sync: ${{ steps.gate.outputs.skip_push_sync }}
-    steps:
-      - name: Detect upstream sync merge push
-        id: gate
-        shell: bash
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          HEAD_COMMIT_MESSAGE: ${{ github.event.head_commit.message || '' }}
-        run: |
-          set -euo pipefail
-          skip="false"
-          if [[ "${EVENT_NAME}" == "push" ]]; then
-            msg="${HEAD_COMMIT_MESSAGE}"
-            if [[ "${msg}" == "chore(sync): merge upstream/main into main ("* ]]; then
-              skip="true"
-            fi
-          fi
-          echo "skip_push_sync=${skip}" >> "$GITHUB_OUTPUT"
-
   no-tabs:
-    needs: [gate-sync-merge]
-    if: needs.gate-sync-merge.outputs.skip_push_sync != 'true' && github.event_name != 'workflow_dispatch'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -73,9 +50,8 @@ jobs:
           PY
 
   actionlint:
-    needs: [gate-sync-merge]
-    if: needs.gate-sync-merge.outputs.skip_push_sync != 'true' && github.event_name != 'workflow_dispatch'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -87,8 +63,11 @@ jobs:
           ACTIONLINT_VERSION="1.7.11"
           archive="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
           base_url="https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}"
-          curl -sSfL -o "${archive}" "${base_url}/${archive}"
-          curl -sSfL -o checksums.txt "${base_url}/actionlint_${ACTIONLINT_VERSION}_checksums.txt"
+          # GitHub release downloads occasionally return transient 5xx responses.
+          # Retry all curl errors here so workflow-sanity does not fail closed on
+          # a one-off release edge outage.
+          curl --retry 5 --retry-delay 2 --retry-all-errors -sSfL -o "${archive}" "${base_url}/${archive}"
+          curl --retry 5 --retry-delay 2 --retry-all-errors -sSfL -o checksums.txt "${base_url}/actionlint_${ACTIONLINT_VERSION}_checksums.txt"
           grep " ${archive}\$" checksums.txt | sha256sum -c -
           tar -xzf "${archive}" actionlint
           sudo install -m 0755 actionlint /usr/local/bin/actionlint
@@ -99,10 +78,12 @@ jobs:
       - name: Disallow direct inputs interpolation in composite run blocks
         run: python3 scripts/check-composite-action-input-interpolation.py
 
-  config-docs-drift:
-    needs: [gate-sync-merge]
-    if: needs.gate-sync-merge.outputs.skip_push_sync != 'true' && github.event_name == 'workflow_dispatch'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+      - name: Disallow tracked merge conflict markers
+        run: node scripts/check-no-conflict-markers.mjs
+
+  generated-doc-baselines:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -111,7 +92,9 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          use-sticky-disk: "false"
 
       - name: Check config docs drift statefile
         run: pnpm config:docs:check
+
+      - name: Check plugin SDK API baseline drift
+        run: pnpm plugin-sdk:api:check
