@@ -201,15 +201,10 @@ function resolveDreamingNextCycle(
   if (!status?.phases) {
     return null;
   }
-  let nextRunAtMs: number | undefined;
-  for (const phase of Object.values(status.phases)) {
-    if (!phase.enabled || typeof phase.nextRunAtMs !== "number") {
-      continue;
-    }
-    if (nextRunAtMs === undefined || phase.nextRunAtMs < nextRunAtMs) {
-      nextRunAtMs = phase.nextRunAtMs;
-    }
-  }
+  const nextRunAtMs = Object.values(status.phases)
+    .filter((phase) => phase.enabled && typeof phase.nextRunAtMs === "number")
+    .map((phase) => phase.nextRunAtMs as number)
+    .toSorted((a, b) => a - b)[0];
   return formatDreamNextCycle(nextRunAtMs);
 }
 
@@ -2222,6 +2217,18 @@ export function renderApp(state: AppViewState) {
               streamSegments: state.chatStreamSegments,
               stream: state.chatStream,
               streamStartedAt: state.chatStreamStartedAt,
+              runId: state.chatRunId,
+              activeToolCallCount: state.chatActiveToolCallCount,
+              lastActivityAt: state.chatLastActivityAt,
+              lastToolActivityAt: state.chatLastToolActivityAt,
+              lastTerminalAt: state.chatLastTerminalAt,
+              lastTerminalKind: state.chatLastTerminalKind,
+              reconnectPendingAt: state.chatReconnectPendingAt,
+              approvalRequests: state.execApprovalQueue.map((entry) => ({
+                kind: entry.kind,
+                sessionKey: entry.request.sessionKey ?? null,
+                createdAtMs: entry.createdAtMs,
+              })),
               draft: state.chatMessage,
               queue: state.chatQueue,
               connected: state.connected,

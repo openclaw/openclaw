@@ -1,6 +1,7 @@
 import { html } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import type { AppViewState } from "../app-view-state.ts";
+import { resolveChatActivityState, resolveCurrentSessionApproval } from "../chat-activity.ts";
 import { createChatModelOverride } from "../chat-model-ref.ts";
 import {
   resolveChatModelOverrideValue,
@@ -8,7 +9,6 @@ import {
 } from "../chat-model-select-state.ts";
 import { refreshVisibleToolsEffectiveForCurrentSession } from "../controllers/agents.ts";
 import { loadSessions } from "../controllers/sessions.ts";
-import { pushUniqueTrimmedSelectOption } from "../select-options.ts";
 import { parseAgentSessionKey } from "../session-key.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../string-coerce.ts";
 import {
@@ -80,10 +80,36 @@ async function refreshSessionOptions(state: AppViewState) {
   });
 }
 
+function resolveChatControlBusy(state: AppViewState): boolean {
+  const activeSession = state.sessionsResult?.sessions?.find((row) => row.key === state.sessionKey);
+  const activity = resolveChatActivityState({
+    connected: state.connected,
+    sending: state.chatSending,
+    runId: state.chatRunId,
+    stream: state.chatStream,
+    activeToolCallCount: state.chatActiveToolCallCount,
+    reconnectPendingAt: state.chatReconnectPendingAt,
+    lastActivityAt: state.chatLastActivityAt,
+    lastToolActivityAt: state.chatLastToolActivityAt,
+    lastTerminalAt: state.chatLastTerminalAt,
+    lastTerminalKind: state.chatLastTerminalKind,
+    sessionStatus: activeSession?.status,
+    sessionEndedAt: activeSession?.endedAt,
+    currentSessionApproval: resolveCurrentSessionApproval(
+      state.execApprovalQueue.map((entry) => ({
+        kind: entry.kind,
+        sessionKey: entry.request.sessionKey ?? null,
+        createdAtMs: entry.createdAtMs,
+      })),
+      state.sessionKey,
+    ),
+  });
+  return state.chatLoading || activity.isBusy;
+}
+
 function renderChatModelSelect(state: AppViewState) {
   const { currentOverride, defaultLabel, options } = resolveChatModelSelectState(state);
-  const busy =
-    state.chatLoading || state.chatSending || Boolean(state.chatRunId) || state.chatStream !== null;
+  const busy = resolveChatControlBusy(state);
   const disabled =
     !state.connected || busy || (state.chatModelsLoading && options.length === 0) || !state.client;
   const selectedLabel =
@@ -146,17 +172,24 @@ function buildThinkingOptions(
   const options: ChatThinkingSelectOption[] = [];
 
   const addOption = (value: string, label?: string) => {
-    pushUniqueTrimmedSelectOption(
-      options,
-      seen,
-      value,
-      (trimmed) =>
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return;
+    }
+    const key = normalizeLowercaseStringOrEmpty(trimmed);
+    if (seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    options.push({
+      value: trimmed,
+      label:
         label ??
         trimmed
           .split(/[-_]/g)
           .map((part) => (part ? part[0].toUpperCase() + part.slice(1) : part))
           .join(" "),
-    );
+    });
   };
 
   for (const label of labels) {
@@ -198,8 +231,7 @@ function resolveChatThinkingSelectState(state: AppViewState): ChatThinkingSelect
 
 export function renderChatThinkingSelect(state: AppViewState) {
   const { currentOverride, defaultLabel, options } = resolveChatThinkingSelectState(state);
-  const busy =
-    state.chatLoading || state.chatSending || Boolean(state.chatRunId) || state.chatStream !== null;
+  const busy = resolveChatControlBusy(state);
   const disabled = !state.connected || busy || !state.client;
   const selectedLabel =
     currentOverride === ""
