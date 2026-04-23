@@ -187,7 +187,8 @@ Current bundled examples:
   normalization, proxy-Gemini thought-signature sanitation, and cache-TTL
   policy
 - `zai`: GLM-5 forward-compat fallback, `tool_stream` defaults, cache-TTL
-  policy, binary-thinking/live-model policy, and usage auth + quota fetching;
+  policy, `X-Session-Id` sticky routing for prompt cache stickiness,
+  binary-thinking/live-model policy, and usage auth + quota fetching;
   unknown `glm-5*` ids synthesize from the bundled `glm-4.7` template
 - `xai`: native Responses transport normalization, `/fast` alias rewrites for
   Grok fast variants, default `tool_stream`, xAI-specific tool-schema /
