@@ -169,6 +169,67 @@ const LIFECYCLE_ERROR_RETRY_GRACE_MS = 15_000;
 const SESSION_RUN_TTL_MS = 5 * 60_000; // 5 minutes
 /** Absolute TTL for orphaned pendingLifecycleError entries. */
 const PENDING_ERROR_TTL_MS = 5 * 60_000; // 5 minutes
+const SUBAGENT_SWEEP_DELETE_TIMEOUT_MS = 20_000;
+const SUBAGENT_SWEEP_DELETE_RETRY_DELAYS_MS = [1_000, 3_000] as const;
+
+function summarizeGatewayLifecycleError(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message || "error";
+  }
+  if (typeof error === "string") {
+    return error;
+  }
+  return "error";
+}
+
+function isRetryableGatewayLifecycleError(error: unknown): boolean {
+  const message = summarizeGatewayLifecycleError(error).toLowerCase();
+  if (!message) {
+    return false;
+  }
+  return (
+    message.includes("gateway timeout") ||
+    message.includes("gateway closed") ||
+    message.includes("handshake timeout") ||
+    message.includes("closed before connect") ||
+    message.includes("not yet ready to accept connections")
+  );
+}
+
+async function waitForGatewayLifecycleRetryDelay(ms: number): Promise<void> {
+  if (!Number.isFinite(ms) || ms <= 0) {
+    return;
+  }
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function deleteSubagentSessionWithRetry(params: {
+  callGateway: typeof subagentRegistryDeps.callGateway;
+  sessionKey: string;
+}): Promise<void> {
+  let attempt = 0;
+  for (;;) {
+    try {
+      await params.callGateway({
+        method: "sessions.delete",
+        params: {
+          key: params.sessionKey,
+          deleteTranscript: true,
+          emitLifecycleHooks: false,
+        },
+        timeoutMs: SUBAGENT_SWEEP_DELETE_TIMEOUT_MS,
+      });
+      return;
+    } catch (err) {
+      const delayMs = SUBAGENT_SWEEP_DELETE_RETRY_DELAYS_MS[attempt];
+      if (delayMs == null || !isRetryableGatewayLifecycleError(err)) {
+        throw err;
+      }
+      attempt += 1;
+      await waitForGatewayLifecycleRetryDelay(delayMs);
+    }
+  }
+}
 
 function loadContextEngineInitModule(): Promise<ContextEngineInitModule> {
   contextEngineInitPromise ??= importRuntimeModule<ContextEngineInitModule>(
@@ -603,14 +664,9 @@ async function sweepSubagentRuns() {
       }
       clearPendingLifecycleError(runId);
       try {
-        await subagentRegistryDeps.callGateway({
-          method: "sessions.delete",
-          params: {
-            key: entry.childSessionKey,
-            deleteTranscript: true,
-            emitLifecycleHooks: false,
-          },
-          timeoutMs: 10_000,
+        await deleteSubagentSessionWithRetry({
+          callGateway: subagentRegistryDeps.callGateway,
+          sessionKey: entry.childSessionKey,
         });
       } catch (err) {
         log.warn("sessions.delete failed during subagent sweep; keeping run for retry", {

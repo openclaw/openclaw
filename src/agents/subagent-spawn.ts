@@ -287,6 +287,62 @@ function summarizeError(err: unknown): string {
   return "error";
 }
 
+const SUBAGENT_GATEWAY_PREFLIGHT_TIMEOUT_MS = 5_000;
+const SUBAGENT_GATEWAY_PREFLIGHT_RETRY_DELAYS_MS = [250, 750, 1_500] as const;
+const SUBAGENT_AGENT_START_TIMEOUT_MS = 30_000;
+
+function isGatewayReadinessErrorMessage(message: unknown): boolean {
+  const lowered = normalizeOptionalString(
+    typeof message === "string" ? message : message instanceof Error ? message.message : undefined,
+  )?.toLowerCase();
+  if (!lowered) {
+    return false;
+  }
+  return (
+    lowered.includes("gateway timeout") ||
+    lowered.includes("gateway closed") ||
+    lowered.includes("handshake timeout") ||
+    lowered.includes("closed before connect") ||
+    lowered.includes("not yet ready to accept connections")
+  );
+}
+
+async function waitForDelay(ms: number): Promise<void> {
+  if (!Number.isFinite(ms) || ms <= 0) {
+    return;
+  }
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function ensureGatewayReadyForSubagentSpawn(): Promise<void> {
+  let lastError = "";
+  for (
+    let attempt = 0;
+    attempt <= SUBAGENT_GATEWAY_PREFLIGHT_RETRY_DELAYS_MS.length;
+    attempt += 1
+  ) {
+    try {
+      await callSubagentGateway({
+        method: "sessions.patch",
+        params: { key: "global" },
+        timeoutMs: SUBAGENT_GATEWAY_PREFLIGHT_TIMEOUT_MS,
+      });
+      return;
+    } catch (err) {
+      lastError = summarizeError(err);
+      if (!isGatewayReadinessErrorMessage(err)) {
+        throw err;
+      }
+      const delayMs = SUBAGENT_GATEWAY_PREFLIGHT_RETRY_DELAYS_MS[attempt];
+      if (delayMs == null) {
+        break;
+      }
+      await waitForDelay(delayMs);
+    }
+  }
+  throw new Error(`Gateway not ready for subagent spawn: ${lastError || "unknown error"}`);
+}
+
 async function ensureThreadBindingForSubagentSpawn(params: {
   hookRunner: SubagentLifecycleHookRunner | null;
   childSessionKey: string;
@@ -450,6 +506,15 @@ export async function spawnSubagentDirect(
   const requesterAgentId = normalizeAgentId(
     ctx.requesterAgentIdOverride ?? parseAgentSessionKey(requesterInternalKey)?.agentId,
   );
+
+  try {
+    await ensureGatewayReadyForSubagentSpawn();
+  } catch (err) {
+    return {
+      status: "error",
+      error: summarizeError(err),
+    };
+  }
   const requireAgentId =
     resolveAgentConfig(cfg, requesterAgentId)?.subagents?.requireAgentId ??
     cfg.agents?.defaults?.subagents?.requireAgentId ??
@@ -762,7 +827,7 @@ export async function spawnSubagentDirect(
           : {}),
         ...publicSpawnedMetadata,
       },
-      timeoutMs: 10_000,
+      timeoutMs: SUBAGENT_AGENT_START_TIMEOUT_MS,
     });
     const runId = readGatewayRunId(response);
     if (runId) {

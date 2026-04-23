@@ -154,6 +154,53 @@ function stripAndClassifyReply(text: string): string | null {
   return result;
 }
 
+const SUBAGENT_ANNOUNCE_SESSION_FINALIZE_TIMEOUT_MS = 20_000;
+
+function isGatewayLifecycleRetryableError(error: unknown): boolean {
+  const message = normalizeOptionalString(
+    error instanceof Error ? error.message : typeof error === "string" ? error : undefined,
+  )?.toLowerCase();
+  if (!message) {
+    return false;
+  }
+  return (
+    message.includes("gateway timeout") ||
+    message.includes("gateway closed") ||
+    message.includes("handshake timeout") ||
+    message.includes("closed before connect") ||
+    message.includes("not yet ready to accept connections")
+  );
+}
+
+async function callGatewayForAnnounceFinalize(params: {
+  method: "sessions.patch" | "sessions.delete";
+  params: Record<string, unknown>;
+  signal?: AbortSignal;
+}): Promise<void> {
+  try {
+    await subagentAnnounceDeps.callGateway({
+      method: params.method,
+      params: params.params,
+      timeoutMs: SUBAGENT_ANNOUNCE_SESSION_FINALIZE_TIMEOUT_MS,
+    });
+    return;
+  } catch (error) {
+    if (!isGatewayLifecycleRetryableError(error)) {
+      throw error;
+    }
+    await runAnnounceDeliveryWithRetry({
+      operation: `${params.method} finalize`,
+      signal: params.signal,
+      run: async () =>
+        await subagentAnnounceDeps.callGateway({
+          method: params.method,
+          params: params.params,
+          timeoutMs: SUBAGENT_ANNOUNCE_SESSION_FINALIZE_TIMEOUT_MS,
+        }),
+    });
+  }
+}
+
 async function wakeSubagentRunAfterDescendants(params: {
   runId: string;
   childSessionKey: string;
@@ -572,10 +619,10 @@ export async function runSubagentAnnounceFlow(params: {
     // Patch label after all writes complete
     if (params.label) {
       try {
-        await subagentAnnounceDeps.callGateway({
+        await callGatewayForAnnounceFinalize({
           method: "sessions.patch",
           params: { key: params.childSessionKey, label: params.label },
-          timeoutMs: 10_000,
+          signal: params.signal,
         });
       } catch {
         // Best-effort
@@ -583,14 +630,14 @@ export async function runSubagentAnnounceFlow(params: {
     }
     if (shouldDeleteChildSession) {
       try {
-        await subagentAnnounceDeps.callGateway({
+        await callGatewayForAnnounceFinalize({
           method: "sessions.delete",
           params: {
             key: params.childSessionKey,
             deleteTranscript: true,
             emitLifecycleHooks: params.spawnMode === "session",
           },
-          timeoutMs: 10_000,
+          signal: params.signal,
         });
       } catch {
         // ignore
