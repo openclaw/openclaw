@@ -4,7 +4,8 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before touching a subt
 
 ## Start
 
-- Repo: `https://github.com/openclaw/openclaw`
+- Repo: `https://github.com/gemmaclaw/gemmaclaw`
+- Note: this repo is Gemmaclaw (Gemma-specific project). It is not Frank's `frankclaw` repo that Doramon runs on, do not mix them up.
 - Replies: repo-root file refs only, e.g. `extensions/telegram/src/index.ts:80`. No absolute paths, no `~/`.
 - CODEOWNERS: maintenance/refactors/tests are ok. For larger behavior, product, security, or ownership-sensitive changes, get a listed owner request/review first.
 - First pass: run docs list (`pnpm docs:list`; ignore if unavailable), then read only relevant docs/guides.
