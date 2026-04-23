@@ -170,6 +170,50 @@ describe("resolveCronSession", () => {
       expect(clearBootstrapSnapshot).toHaveBeenCalledWith("webhook:stable-key");
     });
 
+    it("clears stale lifecycle fields (status/startedAt/endedAt) when forceNew is true (issue #70619)", () => {
+      const result = resolveWithStoredEntry({
+        entry: {
+          sessionId: "existing-session-id-prev",
+          updatedAt: NOW_MS - 1000,
+          status: "done",
+          startedAt: NOW_MS - 5000,
+          endedAt: NOW_MS - 1000,
+          modelOverride: "sonnet-4",
+        },
+        fresh: true,
+        forceNew: true,
+      });
+
+      expect(result.sessionEntry.sessionId).not.toBe("existing-session-id-prev");
+      expect(result.isNewSession).toBe(true);
+      // Lifecycle fields from the prior run must be cleared
+      expect(result.sessionEntry.status).toBeUndefined();
+      expect(result.sessionEntry.startedAt).toBeUndefined();
+      expect(result.sessionEntry.endedAt).toBeUndefined();
+      // Per-session overrides should still be preserved
+      expect(result.sessionEntry.modelOverride).toBe("sonnet-4");
+    });
+
+    it("clears stale lifecycle fields (status/startedAt/endedAt) when session is stale", () => {
+      const result = resolveWithStoredEntry({
+        entry: {
+          sessionId: "old-session-id-prev",
+          updatedAt: NOW_MS - 86_400_000,
+          status: "failed",
+          startedAt: NOW_MS - 90_000_000,
+          endedAt: NOW_MS - 86_400_000,
+          modelOverride: "gpt-4.1",
+        },
+        fresh: false,
+      });
+
+      expect(result.isNewSession).toBe(true);
+      expect(result.sessionEntry.status).toBeUndefined();
+      expect(result.sessionEntry.startedAt).toBeUndefined();
+      expect(result.sessionEntry.endedAt).toBeUndefined();
+      expect(result.sessionEntry.modelOverride).toBe("gpt-4.1");
+    });
+
     it("clears stale sessionFile when forceNew rolls to a fresh session", () => {
       const result = resolveWithStoredEntry({
         entry: {

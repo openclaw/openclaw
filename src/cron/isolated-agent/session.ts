@@ -78,6 +78,8 @@ export function resolveCronSession(params: {
     // replies instead of channel top-level messages.
     // deliveryContext must also be cleared because normalizeSessionEntryDelivery
     // repopulates lastThreadId from deliveryContext.threadId on store writes.
+    // Lifecycle fields (status/startedAt/endedAt) are also cleared so that each
+    // isolated cron run starts with fresh state (issue #70619).
     ...(isNewSession && {
       lastChannel: undefined,
       lastTo: undefined,
@@ -85,6 +87,9 @@ export function resolveCronSession(params: {
       lastThreadId: undefined,
       deliveryContext: undefined,
       sessionFile: undefined,
+      status: undefined,
+      startedAt: undefined,
+      endedAt: undefined,
     }),
   };
   return { storePath, store, sessionEntry, systemSent, isNewSession, previousSessionId };

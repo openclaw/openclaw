@@ -32,12 +32,16 @@ export function createPersistCronSessionEntry(params: {
     }
     params.cronSession.store[params.agentSessionKey] = params.cronSession.sessionEntry;
     if (params.runSessionKey !== params.agentSessionKey) {
-      params.cronSession.store[params.runSessionKey] = params.cronSession.sessionEntry;
+      // Use a shallow copy so the run-scoped row does not share a mutable
+      // reference with the base agent key. Sharing the same object causes
+      // subsequent runs to inherit stale lifecycle fields (status/startedAt/
+      // endedAt) written into the entry after the run completes (issue #70619).
+      params.cronSession.store[params.runSessionKey] = { ...params.cronSession.sessionEntry };
     }
     await params.updateSessionStore(params.cronSession.storePath, (store) => {
       store[params.agentSessionKey] = params.cronSession.sessionEntry;
       if (params.runSessionKey !== params.agentSessionKey) {
-        store[params.runSessionKey] = params.cronSession.sessionEntry;
+        store[params.runSessionKey] = { ...params.cronSession.sessionEntry };
       }
     });
   };
