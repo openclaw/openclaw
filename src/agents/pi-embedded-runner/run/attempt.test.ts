@@ -389,7 +389,7 @@ describe("mergeOrphanedTrailingUserPrompt", () => {
     expect(result.prompt).not.toContain("aaaa");
   });
 
-  it("does not remove an orphaned user leaf when it cannot preserve the payload", () => {
+  it("removes an empty orphaned user leaf to prevent consecutive user turns", () => {
     expect(
       mergeOrphanedTrailingUserPrompt({
         prompt: "newest inbound message",
@@ -400,12 +400,12 @@ describe("mergeOrphanedTrailingUserPrompt", () => {
       }),
     ).toEqual({
       merged: false,
-      removeLeaf: false,
+      removeLeaf: true,
       prompt: "newest inbound message",
     });
   });
 
-  it("skips orphan prompt merging for non-user triggers", () => {
+  it("merges orphan prompt text for non-user triggers without warning policy changes", () => {
     expect(
       mergeOrphanedTrailingUserPrompt({
         prompt: "HEARTBEAT_OK",
@@ -415,9 +415,11 @@ describe("mergeOrphanedTrailingUserPrompt", () => {
         } as never,
       }),
     ).toEqual({
-      merged: false,
-      removeLeaf: false,
-      prompt: "HEARTBEAT_OK",
+      merged: true,
+      removeLeaf: true,
+      prompt:
+        "[Queued user message that arrived while the previous turn was still active]\n" +
+        "older active-turn message\n\nHEARTBEAT_OK",
     });
   });
 });

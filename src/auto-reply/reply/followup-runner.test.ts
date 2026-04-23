@@ -1279,7 +1279,7 @@ describe("createFollowupRunner messaging tool dedupe", () => {
     persistSpy.mockRestore();
   });
 
-  it("falls back to dispatcher when cross-channel origin routing fails", async () => {
+  it("does not send cross-channel payload content to dispatcher when origin routing fails", async () => {
     routeReplyMock.mockResolvedValueOnce({
       ok: false,
       error: "forced route failure",
@@ -1295,7 +1295,15 @@ describe("createFollowupRunner messaging tool dedupe", () => {
 
     expect(routeReplyMock).toHaveBeenCalled();
     expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(onBlockReply).toHaveBeenCalledWith(expect.objectContaining({ text: "hello world!" }));
+    expect(onBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        isError: true,
+        text: expect.stringContaining("could not deliver it to the originating channel"),
+      }),
+    );
+    expect(onBlockReply).not.toHaveBeenCalledWith(
+      expect.objectContaining({ text: "hello world!" }),
+    );
   });
 
   it("uses dispatcher when origin routing metadata is incomplete", async () => {

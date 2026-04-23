@@ -222,13 +222,9 @@ export function mergeOrphanedTrailingUserPrompt(params: {
   trigger: EmbeddedRunAttemptParams["trigger"];
   leafMessage: { content?: unknown };
 }): { prompt: string; merged: boolean; removeLeaf: boolean } {
-  if (!shouldWarnOnOrphanedUserRepair(params.trigger)) {
-    return { prompt: params.prompt, merged: false, removeLeaf: false };
-  }
-
   const orphanText = extractUserMessagePromptText(params.leafMessage.content);
-  if (!orphanText || orphanText.length < 4) {
-    return { prompt: params.prompt, merged: false, removeLeaf: false };
+  if (!orphanText) {
+    return { prompt: params.prompt, merged: false, removeLeaf: true };
   }
   if (params.prompt.includes(orphanText)) {
     return { prompt: params.prompt, merged: false, removeLeaf: true };

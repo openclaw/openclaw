@@ -117,11 +117,24 @@ export function createFollowupRunner(params: {
         if (!result.ok) {
           const errorMsg = result.error ?? "unknown error";
           logVerbose(`followup queue: route-reply failed: ${errorMsg}`);
-          // Do not silently drop successful completions.  The dispatcher may
-          // not be the perfect origin route, but it is the last visible reply
-          // path available to the caller.
+          const provider = resolveOriginMessageProvider({
+            provider: queued.run.messageProvider,
+          });
+          const origin = resolveOriginMessageProvider({
+            originatingChannel,
+          });
           if (opts?.onBlockReply) {
-            await opts.onBlockReply(payload);
+            if (origin && origin === provider) {
+              await opts.onBlockReply(payload);
+            } else {
+              await opts.onBlockReply({
+                text:
+                  "Follow-up completed, but OpenClaw could not deliver it to the originating " +
+                  "channel. The reply content was not forwarded to this channel to avoid " +
+                  "cross-channel misdelivery.",
+                isError: true,
+              });
+            }
           } else {
             defaultRuntime.error?.(`followup queue: route-reply failed: ${errorMsg}`);
           }
