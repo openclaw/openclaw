@@ -1,9 +1,9 @@
 import path from "node:path";
 import { parseUsageCountedSessionIdFromFileName } from "../config/sessions/artifacts.js";
-import { loadCombinedSessionStoreForGateway } from "../config/sessions/combined-store-gateway.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+
+export { loadCombinedSessionStoreForGateway } from "../config/sessions/combined-store-gateway.js";
 
 /**
  * Derive transcript stem `S` from a memory search hit path for `source === "sessions"`.
@@ -27,22 +27,20 @@ export function extractTranscriptStemFromSessionsMemoryHit(hitPath: string): str
 }
 
 /**
- * Map transcript stem to canonical session store keys for the given agent.
+ * Map transcript stem to canonical session store keys (all agents in the combined store).
+ * Session tools visibility and agent-to-agent policy are enforced by the caller (e.g.
+ * `createSessionVisibilityGuard`), including cross-agent cases.
  */
 export function resolveTranscriptStemToSessionKeys(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
+  store: Record<string, SessionEntry>;
   stem: string;
 }): string[] {
-  const { store } = loadCombinedSessionStoreForGateway(params.cfg);
+  const { store } = params;
   const matches: string[] = [];
   const stemAsFile = params.stem.endsWith(".jsonl") ? params.stem : `${params.stem}.jsonl`;
   const parsedStemId = parseUsageCountedSessionIdFromFileName(stemAsFile);
 
   for (const [sessionKey, entry] of Object.entries(store)) {
-    if (resolveAgentIdFromSessionKey(sessionKey) !== params.agentId) {
-      continue;
-    }
     const sessionFile = normalizeOptionalString(entry.sessionFile);
     if (sessionFile) {
       const base = path.basename(sessionFile);

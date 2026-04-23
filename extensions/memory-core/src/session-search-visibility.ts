@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-runtim
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import {
   extractTranscriptStemFromSessionsMemoryHit,
+  loadCombinedSessionStoreForGateway,
   resolveTranscriptStemToSessionKeys,
 } from "openclaw/plugin-sdk/session-transcript-hit";
 import {
@@ -12,7 +13,6 @@ import {
 
 export async function filterMemorySearchHitsBySessionVisibility(params: {
   cfg: OpenClawConfig;
-  agentId: string;
   requesterSessionKey: string | undefined;
   sandboxed: boolean;
   hits: MemorySearchResult[];
@@ -31,6 +31,8 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
       })
     : null;
 
+  const { store: combinedSessionStore } = loadCombinedSessionStoreForGateway(params.cfg);
+
   const next: MemorySearchResult[] = [];
   for (const hit of params.hits) {
     if (hit.source !== "sessions") {
@@ -45,8 +47,7 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
       continue;
     }
     const keys = resolveTranscriptStemToSessionKeys({
-      cfg: params.cfg,
-      agentId: params.agentId,
+      store: combinedSessionStore,
       stem,
     });
     if (keys.length === 0) {
