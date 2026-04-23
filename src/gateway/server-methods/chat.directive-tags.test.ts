@@ -1660,7 +1660,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(mockState.lastDispatchCtx?.CommandBody).toBe("bench update");
   });
 
-  it("emits a user transcript update when chat.send starts an agent run", async () => {
+  it("emits a user transcript update and final resync when chat.send starts an agent run", async () => {
     createTranscriptFixture("openclaw-chat-send-user-transcript-agent-run-");
     mockState.finalText = "ok";
     mockState.triggerAgentRunStart = true;
@@ -1690,6 +1690,15 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         timestamp: expect.any(Number),
       },
     });
+    const finalBroadcast = (
+      context.broadcast as unknown as ReturnType<typeof vi.fn>
+    ).mock.calls.find((call) => call[0] === "chat")?.[1];
+    expect(finalBroadcast).toMatchObject({
+      runId: "idem-user-transcript-agent-run",
+      sessionKey: "main",
+      state: "final",
+    });
+    expect(finalBroadcast.message).toBeUndefined();
   });
 
   it("adds persisted media paths to the user transcript update", async () => {
