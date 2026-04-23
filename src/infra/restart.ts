@@ -206,8 +206,7 @@ async function emitPreparedGatewayRestart(hooks?: RestartEmitHooks): Promise<voi
   try {
     await hooks?.beforeEmit?.();
   } catch (err) {
-    restartLog.warn(`restart preparation failed; restart not emitted: ${String(err)}`);
-    return;
+    restartLog.warn(`restart preparation failed; restart will continue without it: ${String(err)}`);
   }
 
   const emitted = emitGatewayRestart();

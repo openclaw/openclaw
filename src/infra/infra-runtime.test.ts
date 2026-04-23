@@ -133,6 +133,27 @@ describe("infra runtime", () => {
       expect(afterEmitRejected).toHaveBeenCalledTimes(1);
     });
 
+    it("still emits restart when preparation fails", async () => {
+      const beforeEmit = vi.fn(async () => {
+        throw new Error("state dir readonly");
+      });
+      const emitSpy = vi.spyOn(process, "emit");
+      const handler = () => {};
+      process.on("SIGUSR1", handler);
+      try {
+        scheduleGatewaySigusr1Restart({
+          delayMs: 0,
+          emitHooks: { beforeEmit },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(beforeEmit).toHaveBeenCalledTimes(1);
+        expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
+      } finally {
+        process.removeListener("SIGUSR1", handler);
+      }
+    });
+
     it("applies restart cooldown between emitted restart cycles", async () => {
       const emitSpy = vi.spyOn(process, "emit");
       const handler = () => {};
