@@ -89,12 +89,8 @@ export function resolveAnthropicCacheRetentionFamily(params: {
     // cacheRetention, honor it — the extension's GetInferenceProfile resolution
     // handles the actual model detection at runtime.
     if (
-      BEDROCK_APP_INFERENCE_PROFILE_ARN_RE.test(
-        normalizeLowercaseStringOrEmpty(params.modelId),
-      ) &&
-      normalizeLowercaseStringOrEmpty(params.modelId).includes(
-        ":application-inference-profile/",
-      )
+      BEDROCK_APP_INFERENCE_PROFILE_ARN_RE.test(normalizeLowercaseStringOrEmpty(params.modelId)) &&
+      normalizeLowercaseStringOrEmpty(params.modelId).includes(":application-inference-profile/")
     ) {
       return "anthropic-bedrock";
     }

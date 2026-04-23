@@ -618,6 +618,7 @@ export async function runSetupWizard(
         : [];
     nextConfig = await setupChannels(nextConfig, runtime, prompter, {
       allowSignalInstall: true,
+      deferStatusUntilSelection: flow === "quickstart",
       forceAllowFromChannels: quickstartAllowFromChannels,
       skipDmPolicyPrompt: flow === "quickstart",
       skipConfirm: flow === "quickstart",

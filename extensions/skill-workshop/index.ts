@@ -1,4 +1,4 @@
-import { resolvePluginConfigObject } from "openclaw/plugin-sdk/config-runtime";
+import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/config-runtime";
 import { definePluginEntry, resolveDefaultAgentId } from "./api.js";
 import { resolveConfig } from "./src/config.js";
 import { buildWorkshopGuidance } from "./src/prompt.js";
@@ -18,11 +18,11 @@ export default definePluginEntry({
       return;
     }
     const resolveCurrentConfig = () => {
-      const runtimeConfigAvailable = typeof api.runtime.config?.loadConfig === "function";
-      const runtimeConfig = runtimeConfigAvailable ? api.runtime.config.loadConfig() : undefined;
-      const runtimePluginConfig =
-        resolvePluginConfigObject(runtimeConfig, "skill-workshop") ??
-        (!runtimeConfigAvailable ? api.pluginConfig : undefined);
+      const runtimePluginConfig = resolveLivePluginConfigObject(
+        api.runtime.config?.loadConfig,
+        "skill-workshop",
+        api.pluginConfig as Record<string, unknown>,
+      );
       return resolveConfig(runtimePluginConfig);
     };
 
