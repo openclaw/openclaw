@@ -210,7 +210,6 @@ async function completeMatrixSelfVerification(params: {
 }): Promise<MatrixSelfVerificationResult> {
   const bootstrap = await params.client.bootstrapOwnDeviceVerification({
     allowAutomaticCrossSigningReset: false,
-    verifyOwnIdentity: true,
   });
   if (!bootstrap.verification.verified) {
     throw new Error(

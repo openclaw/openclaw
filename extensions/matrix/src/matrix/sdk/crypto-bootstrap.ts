@@ -28,7 +28,6 @@ export type MatrixCryptoBootstrapOptions = {
   forceResetCrossSigning?: boolean;
   allowAutomaticCrossSigningReset?: boolean;
   allowSecretStorageRecreateWithoutRecoveryKey?: boolean;
-  verifyOwnIdentity?: boolean;
   strict?: boolean;
 };
 
@@ -86,7 +85,6 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
     }
     const ownDeviceVerified = await this.ensureOwnDeviceTrust(crypto, {
       strict,
-      verifyOwnIdentity: options.verifyOwnIdentity === true,
     });
     return {
       crossSigningReady: crossSigning.ready,
@@ -351,29 +349,10 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
     LogService.info("MatrixClientLite", "Verification request handler registered");
   }
 
-  private async verifyOwnIdentityTrust(crypto: MatrixCryptoBootstrapApi): Promise<void> {
-    if (typeof crypto.getOwnIdentity !== "function") {
-      return;
-    }
-    const identity = await crypto.getOwnIdentity();
-    if (!identity) {
-      return;
-    }
-    try {
-      if (identity.isVerified?.() === true) {
-        return;
-      }
-      await identity.verify?.();
-    } finally {
-      identity.free?.();
-    }
-  }
-
   private async ensureOwnDeviceTrust(
     crypto: MatrixCryptoBootstrapApi,
     options: {
       strict: boolean;
-      verifyOwnIdentity: boolean;
     },
   ): Promise<boolean | null> {
     const deviceId = this.deps.getDeviceId()?.trim();
@@ -390,10 +369,6 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
 
     if (alreadyVerified) {
       return true;
-    }
-
-    if (options.verifyOwnIdentity) {
-      await this.verifyOwnIdentityTrust(crypto);
     }
 
     if (typeof crypto.setDeviceVerified === "function") {

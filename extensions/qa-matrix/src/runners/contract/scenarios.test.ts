@@ -14,11 +14,13 @@ const { createMatrixQaE2eeScenarioClient, runMatrixQaE2eeBootstrap, startMatrixQ
 const {
   formatMatrixQaCliCommand,
   redactMatrixQaCliOutput,
+  resolveMatrixQaOpenClawCliEntryPath,
   runMatrixQaOpenClawCli,
   startMatrixQaOpenClawCli,
 } = vi.hoisted(() => ({
   formatMatrixQaCliCommand: (args: string[]) => `openclaw ${args.join(" ")}`,
   redactMatrixQaCliOutput: (text: string) => text,
+  resolveMatrixQaOpenClawCliEntryPath: (cwd: string) => `${cwd}/dist/index.js`,
   runMatrixQaOpenClawCli: vi.fn(),
   startMatrixQaOpenClawCli: vi.fn(),
 }));
@@ -36,6 +38,7 @@ vi.mock("../../substrate/fault-proxy.js", () => ({
 vi.mock("./scenario-runtime-cli.js", () => ({
   formatMatrixQaCliCommand,
   redactMatrixQaCliOutput,
+  resolveMatrixQaOpenClawCliEntryPath,
   runMatrixQaOpenClawCli,
   startMatrixQaOpenClawCli,
 }));

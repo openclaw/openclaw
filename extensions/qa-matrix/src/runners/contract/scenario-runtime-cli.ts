@@ -1,4 +1,5 @@
 import { spawn as startOpenClawCliProcess } from "node:child_process";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -48,6 +49,14 @@ export function formatMatrixQaCliCommand(args: string[]) {
   return `openclaw ${redactMatrixQaCliArgs(args).join(" ")}`;
 }
 
+export function resolveMatrixQaOpenClawCliEntryPath(cwd: string): string {
+  const mjsEntryPath = path.join(cwd, "dist", "index.mjs");
+  if (existsSync(mjsEntryPath)) {
+    return mjsEntryPath;
+  }
+  return path.join(cwd, "dist", "index.js");
+}
+
 function buildMatrixQaCliResult(params: {
   args: string[];
   exitCode: number;
@@ -78,7 +87,7 @@ export function startMatrixQaOpenClawCli(params: {
   timeoutMs: number;
 }): MatrixQaCliSession {
   const cwd = params.cwd ?? process.cwd();
-  const distEntryPath = path.join(cwd, "dist", "index.js");
+  const distEntryPath = resolveMatrixQaOpenClawCliEntryPath(cwd);
   const stdout: Buffer[] = [];
   const stderr: Buffer[] = [];
   let closed = false;

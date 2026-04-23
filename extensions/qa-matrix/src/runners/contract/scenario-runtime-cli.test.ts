@@ -1,5 +1,12 @@
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { formatMatrixQaCliCommand, redactMatrixQaCliOutput } from "./scenario-runtime-cli.js";
+import {
+  formatMatrixQaCliCommand,
+  redactMatrixQaCliOutput,
+  resolveMatrixQaOpenClawCliEntryPath,
+} from "./scenario-runtime-cli.js";
 
 describe("Matrix QA CLI runtime", () => {
   it("redacts secret CLI arguments in diagnostic command text", () => {
@@ -22,5 +29,16 @@ describe("Matrix QA CLI runtime", () => {
     expect(
       redactMatrixQaCliOutput("GET /_matrix/client/v3/sync?access_token=abcdef1234567890ghij"),
     ).toBe("GET /_matrix/client/v3/sync?access_token=abcdef…ghij");
+  });
+
+  it("prefers the ESM OpenClaw CLI entrypoint when present", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "matrix-qa-cli-entry-"));
+    try {
+      await mkdir(path.join(root, "dist"));
+      await writeFile(path.join(root, "dist", "index.mjs"), "");
+      expect(resolveMatrixQaOpenClawCliEntryPath(root)).toBe(path.join(root, "dist", "index.mjs"));
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
   });
 });

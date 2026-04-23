@@ -165,13 +165,11 @@ const MATRIX_AUTOMATIC_REPAIR_BOOTSTRAP_OPTIONS = {
 function createMatrixExplicitBootstrapOptions(params?: {
   allowAutomaticCrossSigningReset?: boolean;
   forceResetCrossSigning?: boolean;
-  verifyOwnIdentity?: boolean;
 }): MatrixCryptoBootstrapOptions {
   return {
     forceResetCrossSigning: params?.forceResetCrossSigning === true,
     allowAutomaticCrossSigningReset: params?.allowAutomaticCrossSigningReset !== false,
     allowSecretStorageRecreateWithoutRecoveryKey: true,
-    verifyOwnIdentity: params?.verifyOwnIdentity === true,
     strict: true,
   };
 }
@@ -1168,10 +1166,12 @@ export class MatrixClient {
       return await fail("Matrix recovery key is required");
     }
 
+    let stagedKeyId: string | null = null;
     try {
+      stagedKeyId = (await this.resolveDefaultSecretStorageKeyId(crypto)) ?? null;
       this.recoveryKeyStore.stageEncodedRecoveryKey({
         encodedPrivateKey: trimmedRecoveryKey,
-        keyId: await this.resolveDefaultSecretStorageKeyId(crypto),
+        keyId: stagedKeyId,
       });
     } catch (err) {
       return await fail(formatMatrixErrorMessage(err));
@@ -1195,11 +1195,20 @@ export class MatrixClient {
           requireServerBackup: true,
         }) === null;
       const stagedRecoveryKeyUsed = this.recoveryKeyStore.hasStagedRecoveryKeyBeenUsed();
-      const recoveryKeyAccepted = stagedRecoveryKeyUsed && (status.verified || backupUsable);
+      const secretStorageStatus =
+        typeof crypto.getSecretStorageStatus === "function"
+          ? await crypto.getSecretStorageStatus().catch(() => null)
+          : null;
+      const stagedRecoveryKeyValidated = Boolean(
+        stagedRecoveryKeyUsed &&
+        stagedKeyId &&
+        secretStorageStatus?.secretStorageKeyValidityMap?.[stagedKeyId] === true,
+      );
+      const recoveryKeyAccepted = stagedRecoveryKeyValidated && (status.verified || backupUsable);
       if (!status.verified) {
-        if (backupUsable && stagedRecoveryKeyUsed) {
+        if (backupUsable && stagedRecoveryKeyValidated) {
           this.recoveryKeyStore.commitStagedRecoveryKey({
-            keyId: await this.resolveDefaultSecretStorageKeyId(crypto),
+            keyId: stagedKeyId,
           });
         } else {
           this.recoveryKeyStore.discardStagedRecoveryKey();
@@ -1228,7 +1237,7 @@ export class MatrixClient {
           ...status,
         };
       }
-      if (!stagedRecoveryKeyUsed) {
+      if (!stagedRecoveryKeyValidated) {
         this.recoveryKeyStore.discardStagedRecoveryKey();
         return {
           success: false,
@@ -1242,7 +1251,7 @@ export class MatrixClient {
       }
 
       this.recoveryKeyStore.commitStagedRecoveryKey({
-        keyId: await this.resolveDefaultSecretStorageKeyId(crypto),
+        keyId: stagedKeyId,
       });
       const committedStatus = await this.getOwnDeviceVerificationStatus();
       return {
@@ -1477,7 +1486,6 @@ export class MatrixClient {
     allowAutomaticCrossSigningReset?: boolean;
     recoveryKey?: string;
     forceResetCrossSigning?: boolean;
-    verifyOwnIdentity?: boolean;
   }): Promise<MatrixVerificationBootstrapResult> {
     const pendingVerifications = async (): Promise<number> =>
       this.crypto ? (await this.crypto.listVerifications()).length : 0;

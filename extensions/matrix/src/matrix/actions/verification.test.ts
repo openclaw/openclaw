@@ -370,7 +370,6 @@ describe("matrix verification actions", () => {
     expect(crypto.confirmVerificationSas).toHaveBeenCalledWith("verification-1");
     expect(bootstrapOwnDeviceVerification).toHaveBeenCalledWith({
       allowAutomaticCrossSigningReset: false,
-      verifyOwnIdentity: true,
     });
     expect(getOwnDeviceVerificationStatus).toHaveBeenCalled();
   });

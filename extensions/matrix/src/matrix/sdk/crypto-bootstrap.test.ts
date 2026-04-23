@@ -253,7 +253,7 @@ describe("MatrixCryptoBootstrapper", () => {
     );
   });
 
-  it("can mark the own Matrix identity verified before cross-signing the current device", async () => {
+  it("does not mark the own Matrix identity verified before cross-signing the current device", async () => {
     const verifyOwnIdentity = vi.fn(async () => undefined);
     const freeOwnIdentity = vi.fn();
     const setDeviceVerified = vi.fn(async () => {});
@@ -287,11 +287,10 @@ describe("MatrixCryptoBootstrapper", () => {
 
     await bootstrapper.bootstrap(crypto, {
       allowAutomaticCrossSigningReset: false,
-      verifyOwnIdentity: true,
     });
 
-    expect(verifyOwnIdentity).toHaveBeenCalledTimes(1);
-    expect(freeOwnIdentity).toHaveBeenCalledTimes(1);
+    expect(verifyOwnIdentity).not.toHaveBeenCalled();
+    expect(freeOwnIdentity).not.toHaveBeenCalled();
     expect(setDeviceVerified).toHaveBeenCalledWith("@bot:example.org", "DEVICE123", true);
     expect(crossSignDevice).toHaveBeenCalledWith("DEVICE123");
   });
