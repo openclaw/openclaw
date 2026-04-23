@@ -50,6 +50,11 @@ OpenClaw has separate routes for OpenAI and Codex-shaped access:
 The Codex harness only claims `codex/*` model refs. Existing `openai/*`,
 `openai-codex/*`, Anthropic, Gemini, xAI, local, and custom provider refs keep
 their normal paths.
+Enable debug logging for the `agents/harness` subsystem to inspect the
+structured `agent harness selected` record. It includes the selected harness id,
+policy runtime/fallback values, and the support result for each registered
+plugin harness, which makes prefix mistakes (`openai-codex/*` vs `codex/*`)
+visible without changing runtime behavior.
 
 Harness selection is not a live session control. When an embedded turn runs,
 OpenClaw records the selected harness id on that session and keeps using it for

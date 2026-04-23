@@ -9,6 +9,7 @@ import { clearAgentHarnesses, registerAgentHarness } from "./registry.js";
 import {
   maybeCompactAgentHarnessSession,
   runAgentHarnessAttemptWithFallback,
+  resolveAgentHarnessSelection,
   selectAgentHarness,
 } from "./selection.js";
 import type { AgentHarness } from "./types.js";
@@ -152,6 +153,103 @@ describe("runAgentHarnessAttemptWithFallback", () => {
 });
 
 describe("selectAgentHarness", () => {
+  it("exposes an observable auto-selection decision without duplicate support probes", () => {
+    process.env.OPENCLAW_AGENT_RUNTIME = "auto";
+    const lowPrioritySupports = vi.fn(() => ({
+      supported: true as const,
+      priority: 10,
+      reason: "generic codex support",
+    }));
+    const highPrioritySupports = vi.fn(() => ({
+      supported: true as const,
+      priority: 100,
+      reason: "native codex app-server",
+    }));
+    const unsupportedSupports = vi.fn(() => ({
+      supported: false as const,
+      reason: "provider mismatch",
+    }));
+    registerAgentHarness(
+      {
+        id: "codex-low",
+        label: "Low Codex",
+        supports: lowPrioritySupports,
+        runAttempt: vi.fn(async () => createAttemptResult("codex-low")),
+      },
+      { ownerPluginId: "codex-low" },
+    );
+    registerAgentHarness(
+      {
+        id: "codex-high",
+        label: "High Codex",
+        supports: highPrioritySupports,
+        runAttempt: vi.fn(async () => createAttemptResult("codex-high")),
+      },
+      { ownerPluginId: "codex-high" },
+    );
+    registerAgentHarness(
+      {
+        id: "other",
+        label: "Other Harness",
+        supports: unsupportedSupports,
+        runAttempt: vi.fn(async () => createAttemptResult("other")),
+      },
+      { ownerPluginId: "other" },
+    );
+
+    const decision = resolveAgentHarnessSelection({
+      provider: "codex",
+      modelId: "gpt-5.4",
+    });
+
+    expect(decision.selectedHarnessId).toBe("codex-high");
+    expect(decision.selectedReason).toBe("auto_plugin");
+    expect(decision.policy).toEqual({ runtime: "auto", fallback: "pi" });
+    expect(decision.candidates).toEqual([
+      expect.objectContaining({
+        id: "codex-low",
+        supported: true,
+        priority: 10,
+        reason: "generic codex support",
+      }),
+      expect.objectContaining({
+        id: "codex-high",
+        supported: true,
+        priority: 100,
+        reason: "native codex app-server",
+      }),
+      expect.objectContaining({
+        id: "other",
+        supported: false,
+        reason: "provider mismatch",
+      }),
+    ]);
+    expect(lowPrioritySupports).toHaveBeenCalledTimes(1);
+    expect(highPrioritySupports).toHaveBeenCalledTimes(1);
+    expect(unsupportedSupports).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports pinned PI selection without probing plugin support", () => {
+    const supports = vi.fn(() => ({ supported: true as const, priority: 100 }));
+    registerAgentHarness({
+      id: "codex",
+      label: "Codex",
+      supports,
+      runAttempt: vi.fn(async () => createAttemptResult("codex")),
+    });
+
+    const decision = resolveAgentHarnessSelection({
+      provider: "codex",
+      modelId: "gpt-5.4",
+      agentHarnessId: "pi",
+    });
+
+    expect(decision.selectedHarnessId).toBe("pi");
+    expect(decision.selectedReason).toBe("pinned");
+    expect(decision.candidates).toEqual([expect.objectContaining({ id: "codex" })]);
+    expect(supports).not.toHaveBeenCalled();
+  });
+
   it("fails instead of choosing PI when no plugin harness matches and fallback is none", () => {
     expect(() =>
       selectAgentHarness({
