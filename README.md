@@ -68,6 +68,7 @@ This custom build adds comprehensive media support to OpenClaw across multiple c
 - Added resize handles on webchat messages so you can resize media!
 - Added audio/video memory playback. Close or refresh the browser, it remembers where you stopped.
 - Added new core tool for downloading YouTube and other video's called download_video using yt-dlp
+- UI changes to get rid of most of the dead screen space.  Larger area now for messages.
 
 ## Implementation details
   
