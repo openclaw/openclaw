@@ -266,6 +266,9 @@ describe("deliverOutboundPayloads", () => {
     queueMocks.ackDelivery.mockResolvedValue(undefined);
     queueMocks.failDelivery.mockClear();
     queueMocks.failDelivery.mockResolvedValue(undefined);
+    queueMocks.tryClaimActiveDelivery.mockClear();
+    queueMocks.tryClaimActiveDelivery.mockReturnValue(true);
+    queueMocks.releaseActiveDelivery.mockClear();
     logMocks.warn.mockClear();
   });
 
@@ -956,6 +959,30 @@ describe("deliverOutboundPayloads", () => {
     });
 
     expect(sendMatrix).not.toHaveBeenCalled();
+  });
+
+  it("bails out without sending when a concurrent drain already claimed the queue entry", async () => {
+    // Regression for openclaw/openclaw#70386: if a reconnect or startup drain
+    // observes the newly enqueued entry and claims it before the live send
+    // path claims it, the live path must not send. The drain already owns
+    // ack/fail for that id; sending here would duplicate the outbound and
+    // race queue cleanup.
+    queueMocks.tryClaimActiveDelivery.mockReturnValueOnce(false);
+    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m1", roomId: "!room:example" });
+
+    const results = await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room:example",
+      payloads: [{ text: "hi" }],
+      deps: { matrix: sendMatrix },
+    });
+
+    expect(results).toEqual([]);
+    expect(sendMatrix).not.toHaveBeenCalled();
+    expect(queueMocks.ackDelivery).not.toHaveBeenCalled();
+    expect(queueMocks.failDelivery).not.toHaveBeenCalled();
+    expect(queueMocks.releaseActiveDelivery).not.toHaveBeenCalled();
   });
 
   it("acks the queue entry when delivery is aborted", async () => {
