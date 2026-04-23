@@ -99,8 +99,7 @@ export function resolveApprovalRequestChannelAccountId(params: {
     return resolveApprovalRequestAccountId(params);
   }
 
-  const sessionBinding = resolvePersistedApprovalRequestSessionBinding(params);
-  return sessionBinding?.channel === expectedChannel ? (sessionBinding.accountId ?? null) : null;
+  return null;
 }
 
 export function doesApprovalRequestMatchChannelAccount(params: {

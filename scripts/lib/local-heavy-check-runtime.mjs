@@ -6,6 +6,7 @@ import path from "node:path";
 const GIB = 1024 ** 3;
 const DEFAULT_LOCAL_GO_GC = "30";
 const DEFAULT_LOCAL_GO_MEMORY_LIMIT = "3GiB";
+const DEFAULT_LOCAL_NODE_MAX_OLD_SPACE_MB = 6144;
 const DEFAULT_LOCAL_TSGO_BUILD_INFO_FILE = ".artifacts/tsgo-cache/root.tsbuildinfo";
 const DEFAULT_LOCK_TIMEOUT_MS = 10 * 60 * 1000;
 const DEFAULT_LOCK_POLL_MS = 500;
@@ -45,6 +46,12 @@ export function applyLocalTsgoPolicy(args, env, hostResources) {
       nextEnv.OPENCLAW_TSGO_BUILD_INFO_FILE ?? DEFAULT_LOCAL_TSGO_BUILD_INFO_FILE,
     );
   }
+
+  nextEnv.NODE_OPTIONS = ensureNodeOptionFlag(
+    nextEnv.NODE_OPTIONS,
+    `--max-old-space-size=${DEFAULT_LOCAL_NODE_MAX_OLD_SPACE_MB}`,
+    /^--max-old-space-size(?:=|$)/,
+  );
 
   if (shouldThrottleLocalHeavyChecks(nextEnv, hostResources)) {
     insertBeforeSeparator(nextArgs, "--singleThreaded");
@@ -296,6 +303,14 @@ function insertBeforeSeparator(args, ...items) {
   const separatorIndex = args.indexOf("--");
   const insertIndex = separatorIndex === -1 ? args.length : separatorIndex;
   args.splice(insertIndex, 0, ...items);
+}
+
+function ensureNodeOptionFlag(existingValue, flag, matcher) {
+  const parts = existingValue?.trim() ? existingValue.trim().split(/\s+/) : [];
+  if (parts.some((part) => matcher.test(part))) {
+    return existingValue;
+  }
+  return [...parts, flag].join(" ").trim();
 }
 
 function readLocalCheckMode(env) {

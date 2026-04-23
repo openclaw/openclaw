@@ -24,6 +24,46 @@ function buildConfig(
   } as OpenClawConfig;
 }
 
+function buildMultiAccountConfig(params?: {
+  approvalTargets?: Array<{ channel: string; to: string; accountId?: string }>;
+}): OpenClawConfig {
+  return {
+    ...(params?.approvalTargets
+      ? {
+          approvals: {
+            exec: {
+              enabled: true,
+              mode: "targets",
+              targets: params.approvalTargets,
+            },
+          },
+        }
+      : {}),
+    channels: {
+      telegram: {
+        accounts: {
+          default: {
+            botToken: "tok-default",
+            execApprovals: {
+              enabled: true,
+              approvers: ["8460800771"],
+              target: "dm",
+            },
+          },
+          ops: {
+            botToken: "tok-ops",
+            execApprovals: {
+              enabled: true,
+              approvers: ["8460800771"],
+              target: "dm",
+            },
+          },
+        },
+      },
+    },
+  } as OpenClawConfig;
+}
+
 const STORE_PATH = path.join(os.tmpdir(), "openclaw-telegram-approval-native-test.json");
 
 function writeStore(store: Record<string, unknown>) {
@@ -211,5 +251,38 @@ describe("telegram native approval adapter", () => {
       supportsApproverDmSurface: true,
       notifyOriginWhenDmOnly: true,
     });
+  });
+
+  it("only resolves approver DM targets for the explicitly targeted telegram account", async () => {
+    const cfg = buildMultiAccountConfig({
+      approvalTargets: [{ channel: "telegram", to: "8460800771", accountId: "ops" }],
+    });
+    const request = {
+      id: "req-target-scope-1",
+      request: {
+        command: "echo hi",
+        turnSourceChannel: "slack",
+        turnSourceTo: "channel:C123",
+        sessionKey: "agent:ops:missing",
+      },
+      createdAtMs: 0,
+      expiresAtMs: 1000,
+    };
+
+    const defaultTargets = await telegramNativeApprovalAdapter.native?.resolveApproverDmTargets?.({
+      cfg,
+      accountId: "default",
+      approvalKind: "exec",
+      request,
+    });
+    const opsTargets = await telegramNativeApprovalAdapter.native?.resolveApproverDmTargets?.({
+      cfg,
+      accountId: "ops",
+      approvalKind: "exec",
+      request,
+    });
+
+    expect(defaultTargets).toEqual([]);
+    expect(opsTargets).toEqual([{ to: "8460800771" }]);
   });
 });
