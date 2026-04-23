@@ -47,12 +47,11 @@ OpenClaw now keeps OpenAI GPT model refs canonical as `openai/*`:
 Legacy `openai-codex/gpt-*` and `codex/gpt-*` refs remain accepted as
 compatibility aliases, but new docs/config examples should use `openai/gpt-*`.
 
-Enable debug logging for the `agents/harness` subsystem to inspect the
-structured `agent harness selected` record. It includes the selected harness id,
-policy runtime/fallback values, and, in `auto` mode, support results for each
-registered plugin harness. Forced or pinned runtime paths list candidate
-ids/labels without support probes. This makes prefix mistakes
-(`openai-codex/*` vs `codex/*`) visible without changing runtime behavior.
+Use `/status` to confirm the effective harness for the current session. If the
+selection is surprising, enable debug logging for the `agents/harness` subsystem
+and inspect the gateway's structured `agent harness selected` record. It
+includes the selected harness id, selection reason, runtime/fallback policy, and,
+in `auto` mode, each plugin candidate's support result.
 
 Harness selection is not a live session control. When an embedded turn runs,
 OpenClaw records the selected harness id on that session and keeps using it for

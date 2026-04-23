@@ -28,7 +28,7 @@ type AgentHarnessPolicy = {
   fallback: EmbeddedAgentHarnessFallback;
 };
 
-export type AgentHarnessSelectionCandidate = {
+type AgentHarnessSelectionCandidate = {
   id: string;
   label: string;
   pluginId?: string;
@@ -37,11 +37,10 @@ export type AgentHarnessSelectionCandidate = {
   reason?: string;
 };
 
-export type AgentHarnessSelectionDecision = {
+type AgentHarnessSelectionDecision = {
   harness: AgentHarness;
   policy: AgentHarnessPolicy;
   selectedHarnessId: string;
-  selectedHarnessLabel: string;
   selectedReason:
     | "pinned"
     | "forced_pi"
@@ -75,10 +74,10 @@ export function selectAgentHarness(params: {
   sessionKey?: string;
   agentHarnessId?: string;
 }): AgentHarness {
-  return resolveAgentHarnessSelection(params).harness;
+  return selectAgentHarnessDecision(params).harness;
 }
 
-export function resolveAgentHarnessSelection(params: {
+function selectAgentHarnessDecision(params: {
   provider: string;
   modelId?: string;
   config?: OpenClawConfig;
@@ -171,7 +170,7 @@ export function resolveAgentHarnessSelection(params: {
 export async function runAgentHarnessAttemptWithFallback(
   params: EmbeddedRunAttemptParams,
 ): Promise<EmbeddedRunAttemptResult> {
-  const selection = resolveAgentHarnessSelection({
+  const selection = selectAgentHarnessDecision({
     provider: params.provider,
     modelId: params.modelId,
     config: params.config,
@@ -237,7 +236,6 @@ function buildSelectionDecision(params: {
     harness: params.harness,
     policy: params.policy,
     selectedHarnessId: params.harness.id,
-    selectedHarnessLabel: params.harness.label,
     selectedReason: params.selectedReason,
     candidates: params.candidates,
   };

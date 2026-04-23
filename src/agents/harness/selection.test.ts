@@ -9,7 +9,6 @@ import { clearAgentHarnesses, registerAgentHarness } from "./registry.js";
 import {
   maybeCompactAgentHarnessSession,
   runAgentHarnessAttemptWithFallback,
-  resolveAgentHarnessSelection,
   selectAgentHarness,
 } from "./selection.js";
 import type { AgentHarness } from "./types.js";
@@ -153,7 +152,7 @@ describe("runAgentHarnessAttemptWithFallback", () => {
 });
 
 describe("selectAgentHarness", () => {
-  it("exposes an observable auto-selection decision without duplicate support probes", () => {
+  it("auto-selects the highest-priority plugin harness without duplicate support probes", () => {
     process.env.OPENCLAW_AGENT_RUNTIME = "auto";
     const lowPrioritySupports = vi.fn(() => ({
       supported: true as const,
@@ -197,39 +196,18 @@ describe("selectAgentHarness", () => {
       { ownerPluginId: "other" },
     );
 
-    const decision = resolveAgentHarnessSelection({
+    const harness = selectAgentHarness({
       provider: "codex",
       modelId: "gpt-5.4",
     });
 
-    expect(decision.selectedHarnessId).toBe("codex-high");
-    expect(decision.selectedReason).toBe("auto_plugin");
-    expect(decision.policy).toEqual({ runtime: "auto", fallback: "pi" });
-    expect(decision.candidates).toEqual([
-      expect.objectContaining({
-        id: "codex-low",
-        supported: true,
-        priority: 10,
-        reason: "generic codex support",
-      }),
-      expect.objectContaining({
-        id: "codex-high",
-        supported: true,
-        priority: 100,
-        reason: "native codex app-server",
-      }),
-      expect.objectContaining({
-        id: "other",
-        supported: false,
-        reason: "provider mismatch",
-      }),
-    ]);
+    expect(harness.id).toBe("codex-high");
     expect(lowPrioritySupports).toHaveBeenCalledTimes(1);
     expect(highPrioritySupports).toHaveBeenCalledTimes(1);
     expect(unsupportedSupports).toHaveBeenCalledTimes(1);
   });
 
-  it("reports pinned PI selection without probing plugin support", () => {
+  it("keeps pinned PI selection from probing plugin support", () => {
     const supports = vi.fn(() => ({ supported: true as const, priority: 100 }));
     registerAgentHarness({
       id: "codex",
@@ -238,15 +216,13 @@ describe("selectAgentHarness", () => {
       runAttempt: vi.fn(async () => createAttemptResult("codex")),
     });
 
-    const decision = resolveAgentHarnessSelection({
+    const harness = selectAgentHarness({
       provider: "codex",
       modelId: "gpt-5.4",
       agentHarnessId: "pi",
     });
 
-    expect(decision.selectedHarnessId).toBe("pi");
-    expect(decision.selectedReason).toBe("pinned");
-    expect(decision.candidates).toEqual([expect.objectContaining({ id: "codex" })]);
+    expect(harness.id).toBe("pi");
     expect(supports).not.toHaveBeenCalled();
   });
 
