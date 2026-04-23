@@ -145,26 +145,33 @@ export async function snapshotRoleViaPlaywright(opts: {
       throw new Error("refs=aria does not support selector/frame snapshots yet.");
     }
     const maybe = page as unknown as WithSnapshotForAI;
-    if (!maybe._snapshotForAI) {
-      throw new Error("refs=aria requires Playwright _snapshotForAI support.");
+    if (maybe._snapshotForAI) {
+      const result = await maybe._snapshotForAI({
+        timeout: 5000,
+        track: "response",
+      });
+      const built = buildRoleSnapshotFromAiSnapshot(result?.full ?? "", opts.options);
+      storeRoleRefsForTarget({
+        page,
+        cdpUrl: opts.cdpUrl,
+        targetId: opts.targetId,
+        refs: built.refs,
+        mode: "aria",
+      });
+      return {
+        snapshot: built.snapshot,
+        refs: built.refs,
+        stats: getRoleSnapshotStats(built.snapshot, built.refs),
+      };
     }
-    const result = await maybe._snapshotForAI({
-      timeout: 5000,
-      track: "response",
-    });
-    const built = buildRoleSnapshotFromAiSnapshot(result?.full ?? "", opts.options);
-    storeRoleRefsForTarget({
-      page,
-      cdpUrl: opts.cdpUrl,
-      targetId: opts.targetId,
-      refs: built.refs,
-      mode: "aria",
-    });
-    return {
-      snapshot: built.snapshot,
-      refs: built.refs,
-      stats: getRoleSnapshotStats(built.snapshot, built.refs),
-    };
+    // Graceful fallback for Playwright builds without the private
+    // _snapshotForAI helper (e.g. older playwright-core, certain Windows
+    // bundle variants — see #70337). The public ariaSnapshot() path below
+    // produces functionally-equivalent role-based refs; the only behavioral
+    // difference is that aria refs (`aria-ref=N`) are downgraded to standard
+    // role refs (`e<N>`). Consumers that hold previously-issued aria refs in
+    // memory will see them invalidate after the next snapshot, which mirrors
+    // existing behavior when refsMode is changed mid-session.
   }
 
   const frameSelector = normalizeOptionalString(opts.frameSelector) ?? "";
