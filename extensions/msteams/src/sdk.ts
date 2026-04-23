@@ -470,11 +470,12 @@ export async function createBotFrameworkJwtValidator(creds: MSTeamsCredentials):
 }> {
   const jwt = await import("jsonwebtoken");
   const { JwksClient } = await import("jwks-rsa");
+  const BOT_FRAMEWORK_GLOBAL_AUDIENCE = "https://api.botframework.com";
 
   const allowedAudiences: [string, ...string[]] = [
     creds.appId,
     `api://${creds.appId}`,
-    "https://api.botframework.com",
+    BOT_FRAMEWORK_GLOBAL_AUDIENCE,
   ];
 
   const allowedIssuers = BOT_FRAMEWORK_ISSUERS.map((entry) =>
@@ -515,6 +516,25 @@ export async function createBotFrameworkJwtValidator(creds: MSTeamsCredentials):
     });
   }
 
+  function getAudienceClaims(payload: unknown): ReadonlyArray<string> {
+    if (!payload || typeof payload !== "object") {
+      return [];
+    }
+    const aud = (payload as { aud?: string | string[] }).aud;
+    if (Array.isArray(aud)) {
+      return aud.filter((value): value is string => typeof value === "string");
+    }
+    return typeof aud === "string" ? [aud] : [];
+  }
+
+  function hasExpectedBotIdentity(payload: unknown): boolean {
+    if (!payload || typeof payload !== "object") {
+      return false;
+    }
+    const { appid, azp } = payload as { appid?: string; azp?: string };
+    return appid === creds.appId || azp === creds.appId;
+  }
+
   return {
     async validate(authHeader: string, _serviceUrl?: string): Promise<boolean> {
       const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : authHeader;
@@ -539,12 +559,19 @@ export async function createBotFrameworkJwtValidator(creds: MSTeamsCredentials):
       try {
         const signingKey = await client.getSigningKey(header.kid);
         const publicKey = signingKey.getPublicKey();
-        jwt.verify(token, publicKey, {
+        const verifiedPayload = jwt.verify(token, publicKey, {
           audience: allowedAudiences,
           issuer: allowedIssuers,
           algorithms: ["RS256"],
           clockTolerance: 300,
         });
+        const audiences = getAudienceClaims(verifiedPayload);
+        if (
+          audiences.includes(BOT_FRAMEWORK_GLOBAL_AUDIENCE) &&
+          !hasExpectedBotIdentity(verifiedPayload)
+        ) {
+          return false;
+        }
         return true;
       } catch {
         return false;

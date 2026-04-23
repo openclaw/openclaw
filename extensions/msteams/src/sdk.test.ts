@@ -16,6 +16,10 @@ const jwtState = vi.hoisted(() => ({
   verifyBehavior: "success" as "success" | "throw",
   decodedHeader: { kid: "key-1" } as { kid?: string } | null,
   decodedPayload: { iss: "https://api.botframework.com" } as { iss?: string } | null,
+  verifyResult: {
+    aud: "https://api.botframework.com",
+    appid: "app-id",
+  } as Record<string, unknown>,
   verifyCalls: [] as Array<{ token: string; options: unknown }>,
 }));
 
@@ -31,7 +35,7 @@ const jwtMockImpl = {
     if (jwtState.verifyBehavior === "throw") {
       throw new Error("invalid signature");
     }
-    return { sub: "ok" };
+    return jwtState.verifyResult;
   },
 };
 
@@ -57,6 +61,10 @@ afterEach(() => {
   jwtState.verifyBehavior = "success";
   jwtState.decodedHeader = { kid: "key-1" };
   jwtState.decodedPayload = { iss: "https://api.botframework.com" };
+  jwtState.verifyResult = {
+    aud: "https://api.botframework.com",
+    appid: "app-id",
+  };
   vi.restoreAllMocks();
 });
 
@@ -213,6 +221,10 @@ describe("createBotFrameworkJwtValidator", () => {
   it("accepts tokens with aud: https://api.botframework.com (#58249)", async () => {
     // This is the critical fix: the old JwtValidator rejected this audience.
     jwtState.decodedPayload = { iss: "https://api.botframework.com" };
+    jwtState.verifyResult = {
+      aud: "https://api.botframework.com",
+      appid: "app-id",
+    };
 
     const validator = await createBotFrameworkJwtValidator(creds);
     await expect(validator.validate("Bearer botfw-token")).resolves.toBe(true);
@@ -223,6 +235,7 @@ describe("createBotFrameworkJwtValidator", () => {
 
   it("validates a token with Entra issuer", async () => {
     jwtState.decodedPayload = { iss: `https://login.microsoftonline.com/tenant-id/v2.0` };
+    jwtState.verifyResult = { aud: "app-id" };
 
     const validator = await createBotFrameworkJwtValidator(creds);
     await expect(validator.validate("Bearer token-entra")).resolves.toBe(true);
@@ -236,6 +249,7 @@ describe("createBotFrameworkJwtValidator", () => {
     jwtState.decodedPayload = {
       iss: "https://sts.windows.net/d6d49420-f39b-4df7-a1dc-d59a935871db/",
     };
+    jwtState.verifyResult = { aud: "app-id" };
 
     const validator = await createBotFrameworkJwtValidator(creds);
     await expect(validator.validate("Bearer token-sts")).resolves.toBe(true);
@@ -260,6 +274,17 @@ describe("createBotFrameworkJwtValidator", () => {
 
     const validator = await createBotFrameworkJwtValidator(creds);
     await expect(validator.validate("Bearer token-bad")).resolves.toBe(false);
+  });
+
+  it("rejects global Bot Framework audience token for another bot app", async () => {
+    jwtState.decodedPayload = { iss: "https://api.botframework.com" };
+    jwtState.verifyResult = {
+      aud: "https://api.botframework.com",
+      azp: "different-app-id",
+    };
+
+    const validator = await createBotFrameworkJwtValidator(creds);
+    await expect(validator.validate("Bearer token-other-bot")).resolves.toBe(false);
   });
 
   it("returns false for empty bearer token", async () => {
