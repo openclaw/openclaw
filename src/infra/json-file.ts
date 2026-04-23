@@ -19,11 +19,25 @@ export function saveJsonFile(pathname: string, data: unknown) {
   // keep pointing at the same underlying file after this save. Without
   // this, the atomic rename below would replace the symlink entry itself
   // with a regular file and the old target would be silently abandoned.
+  //
+  // Using lstat + readlink (instead of realpathSync) on purpose: the first
+  // save after a fresh pod boot is often the *creating* write, so the
+  // symlink target does not exist yet. realpathSync would throw in that
+  // case and we would fall back to renaming over the link itself. lstat
+  // tells us whether `pathname` is a symlink without touching its target,
+  // and readlink gives us the target path we should be renaming onto.
   let target = pathname;
+  let isSymlink = false;
   try {
-    target = fs.realpathSync(pathname);
+    isSymlink = fs.lstatSync(pathname).isSymbolicLink();
   } catch {
-    /* first write, path does not exist yet — fall through with pathname */
+    /* path does not exist at all — fresh write, use pathname */
+  }
+  if (isSymlink) {
+    const linkTarget = fs.readlinkSync(pathname);
+    target = path.isAbsolute(linkTarget)
+      ? linkTarget
+      : path.resolve(path.dirname(pathname), linkTarget);
   }
   const dir = path.dirname(target);
   if (!fs.existsSync(dir)) {
