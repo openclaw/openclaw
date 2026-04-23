@@ -372,7 +372,7 @@ export class MatrixClient {
       trustOwnDeviceAfterSas: async (deviceId: string) => {
         const crypto = this.client.getCrypto() as MatrixCryptoBootstrapApi | undefined;
         if (typeof crypto?.crossSignDevice !== "function") {
-          throw new Error("Matrix crypto backend does not support cross-signing devices");
+          return;
         }
         await crypto.crossSignDevice(deviceId);
       },

@@ -204,10 +204,14 @@ export class MatrixVerificationManager {
       leftIdentity.transactionId === rightIdentity.transactionId &&
       leftIdentity.roomId === rightIdentity.roomId &&
       leftIdentity.otherUserId === rightIdentity.otherUserId &&
-      leftIdentity.otherDeviceId === rightIdentity.otherDeviceId &&
+      this.isSameOptionalIdentityValue(leftIdentity.otherDeviceId, rightIdentity.otherDeviceId) &&
       leftIdentity.isSelfVerification === rightIdentity.isSelfVerification &&
       leftIdentity.initiatedByMe === rightIdentity.initiatedByMe
     );
+  }
+
+  private isSameOptionalIdentityValue(left: string, right: string): boolean {
+    return left === "" || right === "" || left === right;
   }
 
   private pruneVerificationSessions(nowMs: number): void {

@@ -188,6 +188,45 @@ describe("MatrixVerificationManager", () => {
     expect(secondSummary.chosenMethod).toBe("m.sas.v1");
   });
 
+  it("reuses the tracked id when the other device id is populated later", () => {
+    const manager = new MatrixVerificationManager();
+    const first = new MockVerificationRequest({
+      transactionId: "txn-device-later",
+      phase: VerificationPhase.Requested,
+    });
+    const second = new MockVerificationRequest({
+      transactionId: "txn-device-later",
+      phase: VerificationPhase.Ready,
+      otherDeviceId: "DEVICE_LATER",
+      pending: false,
+    });
+
+    const firstSummary = manager.trackVerificationRequest(first);
+    const secondSummary = manager.trackVerificationRequest(second);
+
+    expect(secondSummary.id).toBe(firstSummary.id);
+    expect(secondSummary.otherDeviceId).toBe("DEVICE_LATER");
+    expect(manager.listVerifications()).toHaveLength(1);
+  });
+
+  it("keeps separate sessions when stable other device ids differ", () => {
+    const manager = new MatrixVerificationManager();
+    const first = new MockVerificationRequest({
+      transactionId: "txn-different-devices",
+      otherDeviceId: "DEVICE_A",
+    });
+    const second = new MockVerificationRequest({
+      transactionId: "txn-different-devices",
+      otherDeviceId: "DEVICE_B",
+    });
+
+    const firstSummary = manager.trackVerificationRequest(first);
+    const secondSummary = manager.trackVerificationRequest(second);
+
+    expect(secondSummary.id).not.toBe(firstSummary.id);
+    expect(manager.listVerifications()).toHaveLength(2);
+  });
+
   it("does not overwrite a different verification request with a colliding transaction ID", async () => {
     const manager = new MatrixVerificationManager();
     const first = new MockVerificationRequest({
