@@ -22,6 +22,7 @@ import {
   vectorDimsForModel,
 } from "./config.js";
 import { loadLanceDbModule } from "./lancedb-runtime.js";
+import { extractMemories } from "./smart-extractor.js";
 
 // ============================================================================
 // Types
@@ -623,30 +624,21 @@ export default definePluginEntry({
         }
 
         try {
-          // Extract text content from messages (handling unknown[] type)
           const texts: string[] = [];
           for (const msg of event.messages) {
-            // Type guard for message object
             if (!msg || typeof msg !== "object") {
               continue;
             }
             const msgObj = msg as Record<string, unknown>;
-
-            // Only process user messages to avoid self-poisoning from model output
             const role = msgObj.role;
             if (role !== "user") {
               continue;
             }
-
             const content = msgObj.content;
-
-            // Handle string content directly
             if (typeof content === "string") {
               texts.push(content);
               continue;
             }
-
-            // Handle array content (content blocks)
             if (Array.isArray(content)) {
               for (const block of content) {
                 if (
@@ -663,7 +655,60 @@ export default definePluginEntry({
             }
           }
 
-          // Filter for capturable content
+          if (texts.length === 0) {
+            return;
+          }
+
+          if (cfg.smartExtraction?.enabled) {
+            const chatClient = new OpenAI({
+              apiKey: cfg.smartExtraction.apiKey ?? cfg.embedding.apiKey,
+              baseURL: cfg.smartExtraction.baseUrl ?? cfg.embedding.baseUrl,
+            });
+            const existingTexts: string[] = [];
+            try {
+              const probeVector = await embeddings.embed(texts[0].slice(0, 200));
+              const probeResults = await db.search(probeVector, 10, 0.1);
+              for (const r of probeResults) {
+                existingTexts.push(r.entry.text);
+              }
+            } catch {
+              // best-effort: proceed without existing context
+            }
+
+            const extraction = await extractMemories(
+              chatClient,
+              cfg.smartExtraction.model ?? "gpt-4o-mini",
+              texts,
+              existingTexts,
+            );
+
+            if (extraction.memories.length === 0) {
+              return;
+            }
+
+            let stored = 0;
+            for (const mem of extraction.memories.slice(0, 5)) {
+              const vector = await embeddings.embed(mem.text);
+              const existing = await db.search(vector, 1, 0.95);
+              if (existing.length > 0) {
+                continue;
+              }
+
+              await db.store({
+                text: mem.text,
+                vector,
+                importance: mem.importance,
+                category: mem.category,
+              });
+              stored++;
+            }
+
+            if (stored > 0) {
+              api.logger.info(`memory-lancedb: smart-captured ${stored} memories (source: ${extraction.source})`);
+            }
+            return;
+          }
+
           const toCapture = texts.filter(
             (text) => text && shouldCapture(text, { maxChars: currentCfg.captureMaxChars }),
           );
@@ -671,13 +716,11 @@ export default definePluginEntry({
             return;
           }
 
-          // Store each capturable piece (limit to 3 per conversation)
           let stored = 0;
           for (const text of toCapture.slice(0, 3)) {
             const category = detectCategory(text);
             const vector = await embeddings.embed(text);
 
-            // Check for duplicates (high similarity threshold)
             const existing = await db.search(vector, 1, 0.95);
             if (existing.length > 0) {
               continue;
