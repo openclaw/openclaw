@@ -1,0 +1,29 @@
+{
+  "id": "wavespeed",
+  "enabledByDefault": true,
+  "providers": ["wavespeed"],
+  "providerAuthEnvVars": {
+    "wavespeed": ["WAVESPEED_API_KEY"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "wavespeed",
+      "method": "wavespeed-platform",
+      "choiceId": "wavespeed-api-key",
+      "choiceLabel": "WaveSpeed API key",
+      "choiceHint": "Direct (llm.wavespeed.ai)",
+      "groupId": "wavespeed",
+      "groupLabel": "WaveSpeed",
+      "groupHint": "OpenAI-compatible LLM access",
+      "optionKey": "wavespeedApiKey",
+      "cliFlag": "--wavespeed-api-key",
+      "cliOption": "--wavespeed-api-key <key>",
+      "cliDescription": "WaveSpeed API key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
