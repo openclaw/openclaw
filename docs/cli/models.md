@@ -46,6 +46,9 @@ Notes:
 - `models list --all` includes bundled provider-owned static catalog rows even
   when you have not authenticated with that provider yet. Those rows still show
   as unavailable until matching auth is configured.
+- `models list --provider <id>` filters by provider id, such as `moonshot` or
+  `openai-codex`. It does not accept display labels from interactive provider
+  pickers, such as `Moonshot AI`.
 - Model refs are parsed by splitting on the **first** `/`. If the model ID includes `/` (OpenRouter-style), include the provider prefix (example: `openrouter/moonshotai/kimi-k2`).
 - If you omit the provider, OpenClaw resolves the input as an alias first, then
   as a unique configured-provider match for that exact model id, and only then

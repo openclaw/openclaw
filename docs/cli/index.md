@@ -1528,7 +1528,7 @@ Options:
 
 - `--all`
 - `--local`
-- `--provider <name>`
+- `--provider <id>`
 - `--json`
 - `--plain`
 
