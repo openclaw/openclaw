@@ -200,6 +200,7 @@ vi.mock("../../channels/plugins/index.js", () => ({
     hoisted.runtimeChannelRegistry.channels.find((entry) => entry.plugin.id === channelId)?.plugin,
   getLoadedChannelPlugin: (channelId: string) =>
     hoisted.runtimeChannelRegistry.channels.find((entry) => entry.plugin.id === channelId)?.plugin,
+  listChannelPlugins: () => hoisted.runtimeChannelRegistry.channels.map((entry) => entry.plugin),
   normalizeChannelId: (raw?: string | null) => {
     const normalized = raw?.trim().toLowerCase();
     return normalized || null;
