@@ -1,4 +1,4 @@
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { loadConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { parseImageGenerationModelRef } from "../../image-generation/model-ref.js";
@@ -75,7 +75,7 @@ const ImageGenerateToolSchema = Type.Object({
     }),
   ),
   model: Type.Optional(
-    Type.String({ description: "Optional provider/model override, e.g. openai/gpt-image-1." }),
+    Type.String({ description: "Optional provider/model override, e.g. openai/gpt-image-2." }),
   ),
   filename: Type.Optional(
     Type.String({
@@ -86,7 +86,7 @@ const ImageGenerateToolSchema = Type.Object({
   size: Type.Optional(
     Type.String({
       description:
-        "Optional size hint like 1024x1024, 1536x1024, 1024x1536, 1024x1792, or 1792x1024.",
+        "Optional size hint like 1024x1024, 1536x1024, 1024x1536, 2048x2048, or 3840x2160.",
     }),
   ),
   aspectRatio: Type.Optional(
@@ -396,20 +396,24 @@ export function createImageGenerateTool(options?: {
       const action = resolveAction(params);
       if (action === "list") {
         const runtimeProviders = listRuntimeImageGenerationProviders({ config: effectiveCfg });
-        const providers = runtimeProviders.map((provider) => ({
-          id: provider.id,
-          ...(provider.label ? { label: provider.label } : {}),
-          ...(provider.defaultModel ? { defaultModel: provider.defaultModel } : {}),
-          models: provider.models ?? (provider.defaultModel ? [provider.defaultModel] : []),
-          configured: isCapabilityProviderConfigured({
-            providers: runtimeProviders,
-            provider,
-            cfg: effectiveCfg,
-            agentDir: options?.agentDir,
-          }),
-          authEnvVars: getImageGenerationProviderAuthEnvVars(provider.id),
-          capabilities: provider.capabilities,
-        }));
+        const providers = runtimeProviders.map((provider) =>
+          Object.assign(
+            { id: provider.id },
+            provider.label ? { label: provider.label } : {},
+            provider.defaultModel ? { defaultModel: provider.defaultModel } : {},
+            {
+              models: provider.models ?? (provider.defaultModel ? [provider.defaultModel] : []),
+              configured: isCapabilityProviderConfigured({
+                providers: runtimeProviders,
+                provider,
+                cfg: effectiveCfg,
+                agentDir: options?.agentDir,
+              }),
+              authEnvVars: getImageGenerationProviderAuthEnvVars(provider.id),
+              capabilities: provider.capabilities,
+            },
+          ),
+        );
         const lines = providers.flatMap((provider) => {
           const caps: string[] = [];
           if (provider.capabilities.edit.enabled) {

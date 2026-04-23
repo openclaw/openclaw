@@ -176,6 +176,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
         cfg,
         sessionEntry,
         agentDir: statusAgentDir,
+        includeExternalProfiles: false,
       });
   const activeModelAuth = Object.hasOwn(params, "activeModelAuthOverride")
     ? params.activeModelAuthOverride
@@ -185,6 +186,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
           cfg,
           sessionEntry,
           agentDir: statusAgentDir,
+          includeExternalProfiles: false,
         })
       : selectedModelAuth;
   const currentUsageProvider = (() => {
@@ -286,6 +288,9 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     }).enabled;
   const agentFallbacksOverride = resolveAgentModelFallbacksOverride(cfg, statusAgentId);
   const { buildStatusMessage } = await loadStatusMessageRuntime();
+  const explicitThinkingDefault =
+    (agentConfig?.thinkingDefault as ThinkLevel | undefined) ??
+    (agentDefaults.thinkingDefault as ThinkLevel | undefined);
   return buildStatusMessage({
     config: cfg,
     agent: {
@@ -296,7 +301,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
         ...(agentFallbacksOverride === undefined ? {} : { fallbacks: agentFallbacksOverride }),
       },
       ...(typeof contextTokens === "number" && contextTokens > 0 ? { contextTokens } : {}),
-      thinkingDefault: agentConfig?.thinkingDefault ?? agentDefaults.thinkingDefault,
+      thinkingDefault: explicitThinkingDefault,
       verboseDefault: agentDefaults.verboseDefault,
       elevatedDefault: agentDefaults.elevatedDefault,
     },
@@ -311,7 +316,8 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     sessionScope,
     sessionStorePath: storePath,
     groupActivation,
-    resolvedThink: resolvedThinkLevel ?? (await resolveDefaultThinkingLevel()),
+    resolvedThink:
+      resolvedThinkLevel ?? explicitThinkingDefault ?? (await resolveDefaultThinkingLevel()),
     resolvedFast: effectiveFastMode,
     resolvedVerbose: resolvedVerboseLevel,
     resolvedReasoning: resolvedReasoningLevel,

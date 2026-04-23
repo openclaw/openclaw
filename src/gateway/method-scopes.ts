@@ -66,7 +66,9 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "node.rename",
   ],
   [READ_SCOPE]: [
+    "assistant.media.get",
     "health",
+    "diagnostics.stability",
     "doctor.memory.status",
     "doctor.memory.dreamDiary",
     "logs.tail",
@@ -78,6 +80,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "tts.providers",
     "commands.list",
     "models.list",
+    "models.authStatus",
     "tools.catalog",
     "tools.effective",
     "agents.list",
@@ -145,6 +148,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "node.pending.enqueue",
   ],
   [ADMIN_SCOPE]: [
+    "channels.start",
     "channels.logout",
     "agents.create",
     "agents.update",

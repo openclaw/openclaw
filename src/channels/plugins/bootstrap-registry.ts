@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import { listBundledChannelPluginIds } from "./bundled-ids.js";
+import { listBundledChannelPluginIdsForRoot } from "./bundled-ids.js";
+import { resolveBundledChannelRootScope } from "./bundled-root.js";
 import {
   getBundledChannelPlugin,
   getBundledChannelSecrets,
@@ -16,7 +17,11 @@ type CachedBootstrapPlugins = {
   missingIds: Set<string>;
 };
 
-let cachedBootstrapPlugins: CachedBootstrapPlugins | null = null;
+const cachedBootstrapPluginsByRoot = new Map<string, CachedBootstrapPlugins>();
+
+function resolveBootstrapChannelId(id: ChannelId): string {
+  return normalizeOptionalString(id) ?? "";
+}
 
 function mergePluginSection<T>(
   runtimeValue: T | undefined,
@@ -63,22 +68,37 @@ function mergeBootstrapPlugin(
   } as ChannelPlugin;
 }
 
-function buildBootstrapPlugins(): CachedBootstrapPlugins {
+function buildBootstrapPlugins(
+  cacheKey: string,
+  env: NodeJS.ProcessEnv = process.env,
+): CachedBootstrapPlugins {
   return {
-    sortedIds: listBundledChannelPluginIds(),
+    sortedIds: listBundledChannelPluginIdsForRoot(cacheKey, env),
     byId: new Map(),
     secretsById: new Map(),
     missingIds: new Set(),
   };
 }
 
-function getBootstrapPlugins(): CachedBootstrapPlugins {
-  cachedBootstrapPlugins ??= buildBootstrapPlugins();
-  return cachedBootstrapPlugins;
+function getBootstrapPlugins(
+  cacheKey = resolveBundledChannelRootScope().cacheKey,
+  env: NodeJS.ProcessEnv = process.env,
+): CachedBootstrapPlugins {
+  const cached = cachedBootstrapPluginsByRoot.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+  const created = buildBootstrapPlugins(cacheKey, env);
+  cachedBootstrapPluginsByRoot.set(cacheKey, created);
+  return created;
+}
+
+function resolveActiveBootstrapPlugins(): CachedBootstrapPlugins {
+  return getBootstrapPlugins(resolveBundledChannelRootScope().cacheKey);
 }
 
 export function listBootstrapChannelPluginIds(): readonly string[] {
-  return getBootstrapPlugins().sortedIds;
+  return resolveActiveBootstrapPlugins().sortedIds;
 }
 
 export function* iterateBootstrapChannelPlugins(): IterableIterator<ChannelPlugin> {
@@ -95,11 +115,11 @@ export function listBootstrapChannelPlugins(): readonly ChannelPlugin[] {
 }
 
 export function getBootstrapChannelPlugin(id: ChannelId): ChannelPlugin | undefined {
-  const resolvedId = normalizeOptionalString(id) ?? "";
+  const resolvedId = resolveBootstrapChannelId(id);
   if (!resolvedId) {
     return undefined;
   }
-  const registry = getBootstrapPlugins();
+  const registry = resolveActiveBootstrapPlugins();
   const cached = registry.byId.get(resolvedId);
   if (cached) {
     return cached;
@@ -107,8 +127,15 @@ export function getBootstrapChannelPlugin(id: ChannelId): ChannelPlugin | undefi
   if (registry.missingIds.has(resolvedId)) {
     return undefined;
   }
-  const runtimePlugin = getBundledChannelPlugin(resolvedId);
-  const setupPlugin = getBundledChannelSetupPlugin(resolvedId);
+  let runtimePlugin: ChannelPlugin | undefined;
+  let setupPlugin: ChannelPlugin | undefined;
+  try {
+    runtimePlugin = getBundledChannelPlugin(resolvedId);
+    setupPlugin = getBundledChannelSetupPlugin(resolvedId);
+  } catch {
+    registry.missingIds.add(resolvedId);
+    return undefined;
+  }
   const merged =
     runtimePlugin && setupPlugin
       ? mergeBootstrapPlugin(runtimePlugin, setupPlugin)
@@ -122,11 +149,11 @@ export function getBootstrapChannelPlugin(id: ChannelId): ChannelPlugin | undefi
 }
 
 export function getBootstrapChannelSecrets(id: ChannelId): ChannelPlugin["secrets"] | undefined {
-  const resolvedId = normalizeOptionalString(id) ?? "";
+  const resolvedId = resolveBootstrapChannelId(id);
   if (!resolvedId) {
     return undefined;
   }
-  const registry = getBootstrapPlugins();
+  const registry = resolveActiveBootstrapPlugins();
   const cached = registry.secretsById.get(resolvedId);
   if (cached) {
     return cached;
@@ -134,13 +161,23 @@ export function getBootstrapChannelSecrets(id: ChannelId): ChannelPlugin["secret
   if (registry.secretsById.has(resolvedId)) {
     return undefined;
   }
-  const runtimeSecrets = getBundledChannelSecrets(resolvedId);
-  const setupSecrets = getBundledChannelSetupSecrets(resolvedId);
-  const merged = mergePluginSection(runtimeSecrets, setupSecrets);
-  registry.secretsById.set(resolvedId, merged ?? null);
-  return merged;
+  if (registry.missingIds.has(resolvedId)) {
+    registry.secretsById.set(resolvedId, null);
+    return undefined;
+  }
+  try {
+    const runtimeSecrets = getBundledChannelSecrets(resolvedId);
+    const setupSecrets = getBundledChannelSetupSecrets(resolvedId);
+    const merged = mergePluginSection(runtimeSecrets, setupSecrets);
+    registry.secretsById.set(resolvedId, merged ?? null);
+    return merged;
+  } catch {
+    registry.missingIds.add(resolvedId);
+    registry.secretsById.set(resolvedId, null);
+    return undefined;
+  }
 }
 
 export function clearBootstrapChannelPluginCache(): void {
-  cachedBootstrapPlugins = null;
+  cachedBootstrapPluginsByRoot.clear();
 }

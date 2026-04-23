@@ -39,6 +39,7 @@ import {
 } from "./app-scroll.ts";
 import {
   applySettings as applySettingsInternal,
+  applyLocalUserIdentity as applyLocalUserIdentityInternal,
   loadCron as loadCronInternal,
   loadOverview as loadOverviewInternal,
   setTab as setTabInternal,
@@ -77,7 +78,7 @@ import type {
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import type { Tab } from "./navigation.ts";
 import type { SidebarContent } from "./sidebar-content.ts";
-import { loadSettings, type UiSettings } from "./storage.ts";
+import { loadLocalUserIdentity, loadSettings, type UiSettings } from "./storage.ts";
 import { VALID_THEME_NAMES, type ResolvedTheme, type ThemeMode, type ThemeName } from "./theme.ts";
 import type {
   AgentsListResult,
@@ -92,6 +93,7 @@ import type {
   HealthSummary,
   LogEntry,
   LogLevel,
+  ModelAuthStatusResult,
   ModelCatalogEntry,
   PresenceEntry,
   ChannelsStatusSnapshot,
@@ -114,6 +116,7 @@ declare global {
 }
 
 const bootAssistantIdentity = normalizeAssistantIdentity({});
+const bootLocalUserIdentity = loadLocalUserIdentity();
 
 function resolveOnboardingMode(): boolean {
   if (!window.location.search) {
@@ -161,6 +164,8 @@ export class OpenClawApp extends LitElement {
   @state() assistantName = bootAssistantIdentity.name;
   @state() assistantAvatar = bootAssistantIdentity.avatar;
   @state() assistantAgentId = bootAssistantIdentity.agentId ?? null;
+  @state() userName = bootLocalUserIdentity.name;
+  @state() userAvatar = bootLocalUserIdentity.avatar;
   @state() localMediaPreviewRoots: string[] = [];
   @state() embedSandboxMode: "strict" | "scripts" | "trusted" = "scripts";
   @state() allowExternalEmbedUrls = false;
@@ -250,6 +255,7 @@ export class OpenClawApp extends LitElement {
   @state() wikiMemoryPalaceError: string | null = null;
   @state() wikiMemoryPalace: WikiMemoryPalace | null = null;
   @state() configFormDirty = false;
+  @state() configSettingsMode: "quick" | "advanced" = "quick";
   @state() configFormMode: "form" | "raw" = "form";
   @state() configSearchQuery = "";
   @state() configActiveSection: string | null = null;
@@ -395,6 +401,11 @@ export class OpenClawApp extends LitElement {
   usageQueryDebounceTimer: number | null = null;
 
   @state() cronLoading = false;
+  @state() cronQuickCreateOpen = false;
+  @state() cronQuickCreateStep: import("./views/cron-quick-create.ts").CronQuickCreateStep = "what";
+  @state() cronQuickCreateDraft:
+    | import("./views/cron-quick-create.ts").CronQuickCreateDraft
+    | null = null;
   @state() cronJobsLoadingMore = false;
   @state() cronJobs: CronJob[] = [];
   @state() cronJobsTotal = 0;
@@ -465,6 +476,10 @@ export class OpenClawApp extends LitElement {
   @state() healthLoading = false;
   @state() healthResult: HealthSummary | null = null;
   @state() healthError: string | null = null;
+
+  @state() modelAuthStatusLoading = false;
+  @state() modelAuthStatusResult: ModelAuthStatusResult | null = null;
+  @state() modelAuthStatusError: string | null = null;
 
   @state() debugLoading = false;
   @state() debugStatus: StatusSummary | null = null;
@@ -625,6 +640,13 @@ export class OpenClawApp extends LitElement {
     applySettingsInternal(this as unknown as Parameters<typeof applySettingsInternal>[0], next);
   }
 
+  applyLocalUserIdentity(next: { name?: string | null; avatar?: string | null }) {
+    applyLocalUserIdentityInternal(
+      this as unknown as Parameters<typeof applyLocalUserIdentityInternal>[0],
+      next,
+    );
+  }
+
   setTab(next: Tab) {
     setTabInternal(this as unknown as Parameters<typeof setTabInternal>[0], next);
     this.navDrawerOpen = false;
@@ -657,8 +679,8 @@ export class OpenClawApp extends LitElement {
     return [active, ...rest];
   }
 
-  async loadOverview() {
-    await loadOverviewInternal(this as unknown as Parameters<typeof loadOverviewInternal>[0]);
+  async loadOverview(opts?: { refresh?: boolean }) {
+    await loadOverviewInternal(this as unknown as Parameters<typeof loadOverviewInternal>[0], opts);
   }
 
   async loadCron() {

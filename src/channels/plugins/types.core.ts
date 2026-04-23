@@ -1,10 +1,11 @@
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
-import type { TSchema } from "@sinclair/typebox";
+import type { TSchema } from "typebox";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { MarkdownTableMode } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayClientMode, GatewayClientName } from "../../gateway/protocol/client-info.js";
+import type { MessagePresentation } from "../../interactive/payload.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import type { PollInput } from "../../polls.js";
 import type { ChatType } from "../chat-type.js";
@@ -180,6 +181,7 @@ export type ChannelAccountSnapshot = {
   name?: string;
   enabled?: boolean;
   configured?: boolean;
+  statusState?: string;
   linked?: boolean;
   running?: boolean;
   connected?: boolean;
@@ -197,6 +199,7 @@ export type ChannelAccountSnapshot = {
     | null;
   lastMessageAt?: number | null;
   lastEventAt?: number | null;
+  lastTransportActivityAt?: number | null;
   lastError?: string | null;
   healthState?: string;
   lastStartAt?: number | null;
@@ -321,12 +324,12 @@ export type ChannelStreamingAdapter = {
 // their side and cast at the boundary.
 export type ChannelStructuredComponents = unknown[];
 
-export type ChannelCrossContextComponentsFactory = (params: {
+export type ChannelCrossContextPresentationFactory = (params: {
   originLabel: string;
   message: string;
   cfg: OpenClawConfig;
   accountId?: string | null;
-}) => ChannelStructuredComponents;
+}) => MessagePresentation;
 
 export type ChannelReplyTransport = {
   replyToId?: string | null;
@@ -382,6 +385,10 @@ export type ChannelThreadingAdapter = {
     to: string;
     toolContext?: ChannelThreadingToolContext;
     replyToId?: string | null;
+  }) => string | undefined;
+  resolveCurrentChannelId?: (params: {
+    to: string;
+    threadId?: string | number | null;
   }) => string | undefined;
   resolveReplyTransport?: (params: {
     cfg: OpenClawConfig;
@@ -454,6 +461,10 @@ export type ChannelMessagingAdapter = {
     cfg: OpenClawConfig;
     accountId?: string | null;
   }) => string[];
+  /**
+   * Bundled plugins that need inbound conversation resolution before runtime
+   * bootstrap can mirror it through a top-level `thread-binding-api.ts` surface.
+   */
   resolveInboundConversation?: (params: {
     from?: string;
     to?: string;
@@ -510,7 +521,12 @@ export type ChannelMessagingAdapter = {
    * steer peer-vs-group resolution without reimplementing host search flow.
    */
   inferTargetChatType?: (params: { to: string }) => ChatType | undefined;
-  buildCrossContextComponents?: ChannelCrossContextComponentsFactory;
+  /**
+   * Preserve the session thread/topic id for heartbeat replies when that thread
+   * is part of the destination identity, not a transient reply thread.
+   */
+  preserveHeartbeatThreadIdForGroupRoute?: boolean;
+  buildCrossContextPresentation?: ChannelCrossContextPresentationFactory;
   transformReplyPayload?: (params: {
     payload: ReplyPayload;
     cfg: OpenClawConfig;

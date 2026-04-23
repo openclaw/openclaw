@@ -17,6 +17,7 @@ export type OpenAICompletionsCompatDefaults = {
   supportsUsageInStreaming: boolean;
   maxTokensField: "max_completion_tokens" | "max_tokens";
   thinkingFormat: "openai" | "openrouter" | "zai";
+  visibleReasoningDetailTypes: string[];
   supportsStrictMode: boolean;
 };
 
@@ -27,6 +28,27 @@ export type DetectedOpenAICompletionsCompat = {
 
 function isDefaultRouteProvider(provider: string | undefined, ...ids: string[]) {
   return provider !== undefined && ids.includes(provider);
+}
+
+const KNOWN_LOCAL_STREAMING_USAGE_PROVIDERS = new Set([
+  "jan",
+  "llama-cpp",
+  "llama.cpp",
+  "llamacpp",
+  "lm-studio",
+  "lmstudio",
+  "localai",
+  "sglang",
+  "tabby",
+  "tabbyapi",
+  "text-generation-webui",
+  "vllm",
+]);
+
+function isKnownLocalStreamingUsageProvider(...ids: Array<string | undefined>): boolean {
+  return ids.some(
+    (id) => id !== undefined && KNOWN_LOCAL_STREAMING_USAGE_PROVIDERS.has(id.toLowerCase()),
+  );
 }
 
 export function resolveOpenAICompletionsCompatDefaults(
@@ -66,8 +88,10 @@ export function resolveOpenAICompletionsCompatDefaults(
     endpointClass === "mistral-public" ||
     knownProviderFamily === "mistral" ||
     (isDefaultRoute && isDefaultRouteProvider(provider, "chutes"));
-  const isOllamaCompatProvider = provider === "ollama";
-
+  const supportsKnownLocalStreamingUsage = isKnownLocalStreamingUsageProvider(
+    provider,
+    knownProviderFamily,
+  );
   return {
     supportsStore:
       !isNonStandard && knownProviderFamily !== "mistral" && !usesExplicitProxyLikeEndpoint,
@@ -78,10 +102,11 @@ export function resolveOpenAICompletionsCompatDefaults(
       endpointClass !== "xai-native" &&
       !usesExplicitProxyLikeEndpoint,
     supportsUsageInStreaming:
-      isOllamaCompatProvider ||
+      supportsKnownLocalStreamingUsage ||
       (!isNonStandard && (!usesConfiguredNonOpenAIEndpoint || supportsNativeStreamingUsageCompat)),
     maxTokensField: usesMaxTokens ? "max_tokens" : "max_completion_tokens",
     thinkingFormat: isZai ? "zai" : isOpenRouterLike ? "openrouter" : "openai",
+    visibleReasoningDetailTypes: isOpenRouterLike ? ["response.output_text", "response.text"] : [],
     supportsStrictMode: !isZai && !usesConfiguredNonOpenAIEndpoint,
   };
 }

@@ -129,15 +129,14 @@ What you set:
   <Accordion title="Anthropic API key">
     Uses `ANTHROPIC_API_KEY` if present or prompts for a key, then saves it for daemon use.
   </Accordion>
-  <Accordion title="OpenAI Code subscription (Codex CLI reuse)">
-    If `~/.codex/auth.json` exists, the wizard can reuse it.
-    Reused Codex CLI credentials stay managed by Codex CLI; on expiry OpenClaw
-    re-reads that source first and, when the provider can refresh it, writes
-    the refreshed credential back to Codex storage instead of taking ownership
-    itself.
-  </Accordion>
   <Accordion title="OpenAI Code subscription (OAuth)">
     Browser flow; paste `code#state`.
+
+    Sets `agents.defaults.model` to `openai-codex/gpt-5.4` when model is unset or `openai/*`.
+
+  </Accordion>
+  <Accordion title="OpenAI Code subscription (device pairing)">
+    Browser pairing flow with a short-lived device code.
 
     Sets `agents.defaults.model` to `openai-codex/gpt-5.4` when model is unset or `openai/*`.
 
@@ -181,8 +180,10 @@ What you set:
     More detail: [Synthetic](/providers/synthetic).
   </Accordion>
   <Accordion title="Ollama (Cloud and local open models)">
-    Prompts for base URL (default `http://127.0.0.1:11434`), then offers Cloud + Local or Local mode.
-    Discovers available models and suggests defaults.
+    Prompts for `Cloud + Local`, `Cloud only`, or `Local only` first.
+    `Cloud only` uses `OLLAMA_API_KEY` with `https://ollama.com`.
+    The host-backed modes prompt for base URL (default `http://127.0.0.1:11434`), discover available models, and suggest defaults.
+    `Cloud + Local` also checks whether that Ollama host is signed in for cloud access.
     More detail: [Ollama](/providers/ollama).
   </Accordion>
   <Accordion title="Moonshot and Kimi Coding">

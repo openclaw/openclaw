@@ -1,5 +1,5 @@
 import { createInterface, type Interface as ReadlineInterface } from "node:readline";
-import { embeddedAgentLog, OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness";
+import { embeddedAgentLog, OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveCodexAppServerRuntimeOptions, type CodexAppServerStartOptions } from "./config.js";
 import {
   type CodexInitializeResponse,
@@ -74,6 +74,13 @@ export class CodexAppServerClient {
         ),
       );
     });
+    // Guard against unhandled EPIPE / write-after-close errors on the stdin
+    // stream. When the child process terminates abruptly the pipe can break
+    // before the "exit" event fires, so a pending writeMessage() produces an
+    // asynchronous error on stdin that would otherwise crash the gateway.
+    child.stdin.on?.("error", (error) =>
+      this.closeWithError(error instanceof Error ? error : new Error(String(error))),
+    );
   }
 
   static start(options?: Partial<CodexAppServerStartOptions>): CodexAppServerClient {
@@ -212,6 +219,9 @@ export class CodexAppServerClient {
   }
 
   private writeMessage(message: RpcRequest | RpcResponse): void {
+    if (this.closed) {
+      return;
+    }
     this.child.stdin.write(`${JSON.stringify(message)}\n`);
   }
 
@@ -300,7 +310,9 @@ export class CodexAppServerClient {
       return;
     }
     this.closed = true;
+    this.lines.close();
     this.rejectPendingRequests(error);
+    closeCodexAppServerTransport(this.child);
   }
 
   private rejectPendingRequests(error: Error): void {
@@ -373,8 +385,11 @@ function assertSupportedCodexAppServerVersion(response: CodexInitializeResponse)
 
 export function readCodexVersionFromUserAgent(userAgent: string | undefined): string | undefined {
   // Codex returns `<originator>/<codex-version> ...`; the originator can be
-  // OpenClaw or an env override, so only the slash-delimited version is stable.
-  const match = userAgent?.match(/^[^/\s]+\/(\d+\.\d+\.\d+(?:[-+][^\s()]*)?)/);
+  // OpenClaw, Codex Desktop, or an env override, so only the slash-delimited
+  // version in the leading product field is stable.
+  const match = userAgent?.match(
+    /^[^/]+\/(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)(?:[\s(]|$)/,
+  );
   return match?.[1];
 }
 
@@ -401,8 +416,14 @@ function numericVersionParts(version: string): number[] {
     .map((part) => (Number.isFinite(part) ? part : 0));
 }
 
+const CODEX_APP_SERVER_APPROVAL_REQUEST_METHODS = new Set([
+  "item/commandExecution/requestApproval",
+  "item/fileChange/requestApproval",
+  "item/permissions/requestApproval",
+]);
+
 export function isCodexAppServerApprovalRequest(method: string): boolean {
-  return method.includes("requestApproval") || method.includes("Approval");
+  return CODEX_APP_SERVER_APPROVAL_REQUEST_METHODS.has(method);
 }
 
 function formatExitValue(value: unknown): string {

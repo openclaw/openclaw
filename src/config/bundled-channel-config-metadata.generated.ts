@@ -214,6 +214,11 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           exclusiveMinimum: 0,
           maximum: 9007199254740991,
         },
+        sendTimeoutMs: {
+          type: "integer",
+          exclusiveMinimum: 0,
+          maximum: 9007199254740991,
+        },
         chunkMode: {
           type: "string",
           enum: ["length", "newline"],
@@ -262,6 +267,11 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               exclusiveMinimum: 0,
               maximum: 9007199254740991,
             },
+            maxFailureRetries: {
+              type: "integer",
+              exclusiveMinimum: 0,
+              maximum: 9007199254740991,
+            },
           },
           additionalProperties: false,
         },
@@ -301,9 +311,15 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 },
                 additionalProperties: false,
               },
+              systemPrompt: {
+                type: "string",
+              },
             },
             additionalProperties: false,
           },
+        },
+        coalesceSameSenderDms: {
+          type: "boolean",
         },
         accounts: {
           type: "object",
@@ -515,6 +531,11 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 exclusiveMinimum: 0,
                 maximum: 9007199254740991,
               },
+              sendTimeoutMs: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
+              },
               chunkMode: {
                 type: "string",
                 enum: ["length", "newline"],
@@ -563,6 +584,11 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                     exclusiveMinimum: 0,
                     maximum: 9007199254740991,
                   },
+                  maxFailureRetries: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
                 },
                 additionalProperties: false,
               },
@@ -602,9 +628,15 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                       },
                       additionalProperties: false,
                     },
+                    systemPrompt: {
+                      type: "string",
+                    },
                   },
                   additionalProperties: false,
                 },
+              },
+              coalesceSameSenderDms: {
+                type: "boolean",
               },
             },
             required: ["enrichGroupParticipantsFromContacts"],
@@ -1014,6 +1046,15 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               const: "batched",
             },
           ],
+        },
+        thread: {
+          type: "object",
+          properties: {
+            inheritParent: {
+              type: "boolean",
+            },
+          },
+          additionalProperties: false,
         },
         dmPolicy: {
           type: "string",
@@ -2179,6 +2220,15 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                   },
                 ],
               },
+              thread: {
+                type: "object",
+                properties: {
+                  inheritParent: {
+                    type: "boolean",
+                  },
+                },
+                additionalProperties: false,
+              },
               dmPolicy: {
                 type: "string",
                 enum: ["pairing", "allowlist", "open", "disabled"],
@@ -3050,6 +3100,10 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
       maxLinesPerMessage: {
         label: "Discord Max Lines Per Message",
         help: "Soft max line count per Discord message (default: 17).",
+      },
+      "thread.inheritParent": {
+        label: "Discord Thread Parent Inheritance",
+        help: "If true, Discord thread sessions inherit the parent channel transcript (default: false).",
       },
       "inboundWorker.runTimeoutMs": {
         label: "Discord Inbound Worker Timeout (ms)",
@@ -13049,6 +13103,11 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           exclusiveMinimum: 0,
           maximum: 9007199254740991,
         },
+        pollingStallThresholdMs: {
+          type: "integer",
+          minimum: 30000,
+          maximum: 600000,
+        },
         retry: {
           type: "object",
           properties: {
@@ -14082,6 +14141,11 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 exclusiveMinimum: 0,
                 maximum: 9007199254740991,
               },
+              pollingStallThresholdMs: {
+                type: "integer",
+                minimum: 30000,
+                maximum: 600000,
+              },
               retry: {
                 type: "object",
                 properties: {
@@ -14461,6 +14525,10 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
       timeoutSeconds: {
         label: "Telegram API Timeout (seconds)",
         help: "Max seconds before Telegram API requests are aborted (default: 500 per grammY).",
+      },
+      pollingStallThresholdMs: {
+        label: "Telegram Polling Stall Threshold (ms)",
+        help: "Milliseconds without completed Telegram getUpdates liveness before the polling watchdog restarts the polling runner. Default: 120000.",
       },
       silentErrorReplies: {
         label: "Telegram Silent Error Replies",
@@ -15108,6 +15176,24 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                   additionalProperties: false,
                 },
               },
+              systemPrompt: {
+                type: "string",
+              },
+            },
+            additionalProperties: false,
+          },
+        },
+        direct: {
+          type: "object",
+          propertyNames: {
+            type: "string",
+          },
+          additionalProperties: {
+            type: "object",
+            properties: {
+              systemPrompt: {
+                type: "string",
+              },
             },
             additionalProperties: false,
           },
@@ -15140,6 +15226,26 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           type: "integer",
           minimum: 0,
           maximum: 9007199254740991,
+        },
+        replyToMode: {
+          anyOf: [
+            {
+              type: "string",
+              const: "off",
+            },
+            {
+              type: "string",
+              const: "first",
+            },
+            {
+              type: "string",
+              const: "all",
+            },
+            {
+              type: "string",
+              const: "batched",
+            },
+          ],
         },
         heartbeat: {
           type: "object",
@@ -15205,7 +15311,6 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 type: "string",
               },
               dmPolicy: {
-                default: "pairing",
                 type: "string",
                 enum: ["pairing", "allowlist", "open", "disabled"],
               },
@@ -15228,7 +15333,6 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 },
               },
               groupPolicy: {
-                default: "allowlist",
                 type: "string",
                 enum: ["open", "disabled", "allowlist"],
               },
@@ -15361,6 +15465,24 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                         additionalProperties: false,
                       },
                     },
+                    systemPrompt: {
+                      type: "string",
+                    },
+                  },
+                  additionalProperties: false,
+                },
+              },
+              direct: {
+                type: "object",
+                propertyNames: {
+                  type: "string",
+                },
+                additionalProperties: {
+                  type: "object",
+                  properties: {
+                    systemPrompt: {
+                      type: "string",
+                    },
                   },
                   additionalProperties: false,
                 },
@@ -15389,10 +15511,29 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 enum: ["off", "ack", "minimal", "extensive"],
               },
               debounceMs: {
-                default: 0,
                 type: "integer",
                 minimum: 0,
                 maximum: 9007199254740991,
+              },
+              replyToMode: {
+                anyOf: [
+                  {
+                    type: "string",
+                    const: "off",
+                  },
+                  {
+                    type: "string",
+                    const: "first",
+                  },
+                  {
+                    type: "string",
+                    const: "all",
+                  },
+                  {
+                    type: "string",
+                    const: "batched",
+                  },
+                ],
               },
               heartbeat: {
                 type: "object",
@@ -15430,7 +15571,6 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 maximum: 9007199254740991,
               },
             },
-            required: ["dmPolicy", "groupPolicy", "debounceMs"],
             additionalProperties: false,
           },
         },

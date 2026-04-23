@@ -257,15 +257,17 @@ function resolveProviderSyntheticRuntimeAuth(params: {
     config: OpenClawConfig | undefined,
   ): ResolvedProviderAuth | undefined => {
     const providerConfig = resolveProviderConfig(config, params.provider);
-    return resolveProviderSyntheticAuthWithPlugin({
-      provider: params.provider,
-      config,
-      context: {
-        config,
+    return (
+      resolveProviderSyntheticAuthWithPlugin({
         provider: params.provider,
-        providerConfig,
-      },
-    });
+        config,
+        context: {
+          config,
+          provider: params.provider,
+          providerConfig,
+        },
+      }) ?? undefined
+    );
   };
 
   const directAuth = resolveFromConfig(params.cfg);
@@ -414,7 +416,7 @@ export async function resolveApiKeyForProvider(params: {
   store?: AuthProfileStore;
   agentDir?: string;
   /** When true, treat profileId as a user-locked selection that must not be
-   *  silently overridden by env/config credentials (e.g. ollama-local). */
+   *  silently overridden by env/config credentials. */
   lockedProfile?: boolean;
   credentialPrecedence?: ProviderCredentialPrecedence;
 }): Promise<ResolvedProviderAuth> {

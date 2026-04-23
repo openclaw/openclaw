@@ -1,6 +1,9 @@
+import { createHash } from "node:crypto";
 import { z } from "zod";
+import type { CodexServiceTier } from "./protocol.js";
 
 export type CodexAppServerTransportMode = "stdio" | "websocket";
+export type CodexAppServerPolicyMode = "yolo" | "guardian";
 export type CodexAppServerApprovalPolicy = "never" | "on-request" | "on-failure" | "untrusted";
 export type CodexAppServerSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
 export type CodexAppServerApprovalsReviewer = "user" | "guardian_subagent";
@@ -12,6 +15,8 @@ export type CodexAppServerStartOptions = {
   url?: string;
   authToken?: string;
   headers: Record<string, string>;
+  env?: Record<string, string>;
+  clearEnv?: string[];
 };
 
 export type CodexAppServerRuntimeOptions = {
@@ -20,7 +25,7 @@ export type CodexAppServerRuntimeOptions = {
   approvalPolicy: CodexAppServerApprovalPolicy;
   sandbox: CodexAppServerSandboxMode;
   approvalsReviewer: CodexAppServerApprovalsReviewer;
-  serviceTier?: string;
+  serviceTier?: CodexServiceTier;
 };
 
 export type CodexPluginConfig = {
@@ -29,6 +34,7 @@ export type CodexPluginConfig = {
     timeoutMs?: number;
   };
   appServer?: {
+    mode?: CodexAppServerPolicyMode;
     transport?: CodexAppServerTransportMode;
     command?: string;
     args?: string[] | string;
@@ -39,11 +45,12 @@ export type CodexPluginConfig = {
     approvalPolicy?: CodexAppServerApprovalPolicy;
     sandbox?: CodexAppServerSandboxMode;
     approvalsReviewer?: CodexAppServerApprovalsReviewer;
-    serviceTier?: string;
+    serviceTier?: CodexServiceTier | null;
   };
 };
 
 export const CODEX_APP_SERVER_CONFIG_KEYS = [
+  "mode",
   "transport",
   "command",
   "args",
@@ -58,6 +65,7 @@ export const CODEX_APP_SERVER_CONFIG_KEYS = [
 ] as const;
 
 const codexAppServerTransportSchema = z.enum(["stdio", "websocket"]);
+const codexAppServerPolicyModeSchema = z.enum(["yolo", "guardian"]);
 const codexAppServerApprovalPolicySchema = z.enum([
   "never",
   "on-request",
@@ -66,6 +74,10 @@ const codexAppServerApprovalPolicySchema = z.enum([
 ]);
 const codexAppServerSandboxSchema = z.enum(["read-only", "workspace-write", "danger-full-access"]);
 const codexAppServerApprovalsReviewerSchema = z.enum(["user", "guardian_subagent"]);
+const codexAppServerServiceTierSchema = z.preprocess(
+  (value) => (value === null ? null : resolveServiceTier(value)),
+  z.enum(["fast", "flex"]).nullable().optional(),
+);
 
 const codexPluginConfigSchema = z
   .object({
@@ -78,6 +90,7 @@ const codexPluginConfigSchema = z
       .optional(),
     appServer: z
       .object({
+        mode: codexAppServerPolicyModeSchema.optional(),
         transport: codexAppServerTransportSchema.optional(),
         command: z.string().optional(),
         args: z.union([z.array(z.string()), z.string()]).optional(),
@@ -88,7 +101,7 @@ const codexPluginConfigSchema = z
         approvalPolicy: codexAppServerApprovalPolicySchema.optional(),
         sandbox: codexAppServerSandboxSchema.optional(),
         approvalsReviewer: codexAppServerApprovalsReviewerSchema.optional(),
-        serviceTier: z.string().optional(),
+        serviceTier: codexAppServerServiceTierSchema,
       })
       .strict()
       .optional(),
@@ -115,6 +128,11 @@ export function resolveCodexAppServerRuntimeOptions(
   const headers = normalizeHeaders(config.headers);
   const authToken = readNonEmptyString(config.authToken);
   const url = readNonEmptyString(config.url);
+  const policyMode =
+    resolvePolicyMode(config.mode) ??
+    resolvePolicyMode(env.OPENCLAW_CODEX_APP_SERVER_MODE) ??
+    "yolo";
+  const serviceTier = resolveServiceTier(config.serviceTier);
   if (transport === "websocket" && !url) {
     throw new Error(
       "plugins.entries.codex.config.appServer.url is required when appServer.transport is websocket",
@@ -134,17 +152,15 @@ export function resolveCodexAppServerRuntimeOptions(
     approvalPolicy:
       resolveApprovalPolicy(config.approvalPolicy) ??
       resolveApprovalPolicy(env.OPENCLAW_CODEX_APP_SERVER_APPROVAL_POLICY) ??
-      "never",
+      (policyMode === "guardian" ? "on-request" : "never"),
     sandbox:
       resolveSandbox(config.sandbox) ??
       resolveSandbox(env.OPENCLAW_CODEX_APP_SERVER_SANDBOX) ??
-      "workspace-write",
+      (policyMode === "guardian" ? "workspace-write" : "danger-full-access"),
     approvalsReviewer:
       resolveApprovalsReviewer(config.approvalsReviewer) ??
-      (env.OPENCLAW_CODEX_APP_SERVER_GUARDIAN === "1" ? "guardian_subagent" : "user"),
-    ...(readNonEmptyString(config.serviceTier)
-      ? { serviceTier: readNonEmptyString(config.serviceTier) }
-      : {}),
+      (policyMode === "guardian" ? "guardian_subagent" : "user"),
+    ...(serviceTier ? { serviceTier } : {}),
   };
 }
 
@@ -154,15 +170,21 @@ export function codexAppServerStartOptionsKey(options: CodexAppServerStartOption
     command: options.command,
     args: options.args,
     url: options.url ?? null,
-    authToken: options.authToken ? "<set>" : null,
+    authToken: hashSecretForKey(options.authToken),
     headers: Object.entries(options.headers).toSorted(([left], [right]) =>
       left.localeCompare(right),
     ),
+    env: Object.entries(options.env ?? {}).toSorted(([left], [right]) => left.localeCompare(right)),
+    clearEnv: [...(options.clearEnv ?? [])].toSorted(),
   });
 }
 
 function resolveTransport(value: unknown): CodexAppServerTransportMode {
   return value === "websocket" ? "websocket" : "stdio";
+}
+
+function resolvePolicyMode(value: unknown): CodexAppServerPolicyMode | undefined {
+  return value === "guardian" || value === "yolo" ? value : undefined;
 }
 
 function resolveApprovalPolicy(value: unknown): CodexAppServerApprovalPolicy | undefined {
@@ -182,6 +204,10 @@ function resolveSandbox(value: unknown): CodexAppServerSandboxMode | undefined {
 
 function resolveApprovalsReviewer(value: unknown): CodexAppServerApprovalsReviewer | undefined {
   return value === "guardian_subagent" || value === "user" ? value : undefined;
+}
+
+function resolveServiceTier(value: unknown): CodexServiceTier | undefined {
+  return value === "fast" || value === "flex" ? value : undefined;
 }
 
 function normalizePositiveNumber(value: unknown, fallback: number): number {
@@ -217,6 +243,13 @@ function readNonEmptyString(value: unknown): string | undefined {
   }
   const trimmed = value.trim();
   return trimmed || undefined;
+}
+
+function hashSecretForKey(value: string | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+  return createHash("sha256").update(value).digest("hex");
 }
 
 function splitShellWords(value: string): string[] {

@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { ExtensionFactory } from "@mariozechner/pi-coding-agent";
 import {
   getRegisteredAgentHarness,
   registerAgentHarness as registerGlobalAgentHarness,
@@ -6,7 +7,10 @@ import {
 import type { AgentHarness } from "../agents/harness/types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
-import { registerContextEngineForOwner } from "../context-engine/registry.js";
+import {
+  clearContextEnginesForOwner,
+  registerContextEngineForOwner,
+} from "../context-engine/registry.js";
 import type { OperatorScope } from "../gateway/operator-scopes.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import { registerInternalHook, unregisterInternalHook } from "../hooks/internal-hooks.js";
@@ -19,17 +23,28 @@ import {
 import { normalizePluginGatewayMethodScope } from "../shared/gateway-method-policy.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  getDetachedTaskLifecycleRuntimeRegistration,
+  registerDetachedTaskLifecycleRuntime,
+} from "../tasks/detached-task-runtime-state.js";
 import { resolveUserPath } from "../utils.js";
 import { buildPluginApi } from "./api-builder.js";
 import { normalizeRegisteredChannelPlugin } from "./channel-validation.js";
+import { CODEX_APP_SERVER_EXTENSION_RUNTIME_ID } from "./codex-app-server-extension-factory.js";
+import type { CodexAppServerExtensionFactory } from "./codex-app-server-extension-types.js";
 import { registerPluginCommand, validatePluginCommandDefinition } from "./command-registration.js";
+import { clearPluginCommandsForPlugin } from "./command-registry-state.js";
 import {
   getRegisteredCompactionProvider,
   registerCompactionProvider,
 } from "./compaction-provider.js";
+import { PI_EMBEDDED_EXTENSION_RUNTIME_ID } from "./embedded-extension-factory.js";
 import { normalizePluginHttpPath } from "./http-path.js";
 import { findOverlappingPluginHttpRoute } from "./http-route-overlap.js";
-import { registerPluginInteractiveHandler } from "./interactive-registry.js";
+import {
+  clearPluginInteractiveHandlersForPlugin,
+  registerPluginInteractiveHandler,
+} from "./interactive-registry.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import {
   getRegisteredMemoryEmbeddingProvider,
@@ -173,12 +188,142 @@ const activePluginHookRegistrations = resolveGlobalSingleton<
   Map<string, Array<{ event: string; handler: Parameters<typeof registerInternalHook>[1] }>>
 >(ACTIVE_PLUGIN_HOOK_REGISTRATIONS_KEY, () => new Map());
 
+type HookRegistration = { event: string; handler: Parameters<typeof registerInternalHook>[1] };
+type HookRollbackEntry = { name: string; previousRegistrations: HookRegistration[] };
+
 export function createPluginRegistry(registryParams: PluginRegistryParams) {
   const registry = createEmptyPluginRegistry();
   const coreGatewayMethods = new Set(Object.keys(registryParams.coreGatewayHandlers ?? {}));
+  const pluginHookRollback = new Map<string, HookRollbackEntry[]>();
 
   const pushDiagnostic = (diag: PluginDiagnostic) => {
     registry.diagnostics.push(diag);
+  };
+
+  const registerPiEmbeddedExtensionFactory = (
+    record: PluginRecord,
+    factory: Parameters<OpenClawPluginApi["registerEmbeddedExtensionFactory"]>[0],
+  ) => {
+    if (record.origin !== "bundled") {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "only bundled plugins can register Pi embedded extension factories",
+      });
+      return;
+    }
+    if (
+      !(record.contracts?.embeddedExtensionFactories ?? []).includes(
+        PI_EMBEDDED_EXTENSION_RUNTIME_ID,
+      )
+    ) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message:
+          'plugin must declare contracts.embeddedExtensionFactories: ["pi"] to register Pi embedded extension factories',
+      });
+      return;
+    }
+    if (typeof (factory as unknown) !== "function") {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "embedded extension factory must be a function",
+      });
+      return;
+    }
+    if (
+      registry.embeddedExtensionFactories.some(
+        (entry) => entry.pluginId === record.id && entry.rawFactory === factory,
+      )
+    ) {
+      return;
+    }
+    const safeFactory: ExtensionFactory = async (pi) => {
+      try {
+        await factory(pi);
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        registryParams.logger.warn(
+          `[plugins] embedded extension factory failed for ${record.id}: ${detail}`,
+        );
+      }
+    };
+    registry.embeddedExtensionFactories.push({
+      pluginId: record.id,
+      pluginName: record.name,
+      rawFactory: factory,
+      factory: safeFactory,
+      source: record.source,
+      rootDir: record.rootDir,
+    });
+  };
+
+  const registerCodexAppServerExtensionFactory = (
+    record: PluginRecord,
+    factory: Parameters<OpenClawPluginApi["registerCodexAppServerExtensionFactory"]>[0],
+  ) => {
+    if (record.origin !== "bundled") {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "only bundled plugins can register Codex app-server extension factories",
+      });
+      return;
+    }
+    if (
+      !(record.contracts?.embeddedExtensionFactories ?? []).includes(
+        CODEX_APP_SERVER_EXTENSION_RUNTIME_ID,
+      )
+    ) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message:
+          'plugin must declare contracts.embeddedExtensionFactories: ["codex-app-server"] to register Codex app-server extension factories',
+      });
+      return;
+    }
+    if (typeof (factory as unknown) !== "function") {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "codex app-server extension factory must be a function",
+      });
+      return;
+    }
+    if (
+      registry.codexAppServerExtensionFactories.some(
+        (entry) => entry.pluginId === record.id && entry.rawFactory === factory,
+      )
+    ) {
+      return;
+    }
+    const safeFactory: CodexAppServerExtensionFactory = async (codex) => {
+      try {
+        await factory(codex);
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        registryParams.logger.warn(
+          `[plugins] codex app-server extension factory failed for ${record.id}: ${detail}`,
+        );
+      }
+    };
+    registry.codexAppServerExtensionFactories.push({
+      pluginId: record.id,
+      pluginName: record.name,
+      rawFactory: factory,
+      factory: safeFactory,
+      source: record.source,
+      rootDir: record.rootDir,
+    });
   };
 
   const registerTool = (
@@ -303,6 +448,12 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       nextRegistrations.push({ event, handler });
     }
     activePluginHookRegistrations.set(name, nextRegistrations);
+    const rollbackEntries = pluginHookRollback.get(record.id) ?? [];
+    rollbackEntries.push({
+      name,
+      previousRegistrations: [...previousRegistrations],
+    });
+    pluginHookRollback.set(record.id, rollbackEntries);
   };
 
   const registerGatewayMethod = (
@@ -637,14 +788,11 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     });
   };
 
-  const registerUniqueProviderLike = <
-    T extends { id: string },
-    R extends PluginOwnedProviderRegistration<T>,
-  >(params: {
+  const registerUniqueProviderLike = <T extends { id: string }>(params: {
     record: PluginRecord;
     provider: T;
     kindLabel: string;
-    registrations: R[];
+    registrations: Array<PluginOwnedProviderRegistration<T>>;
     ownedIds: string[];
   }) => {
     const id = params.provider.id.trim();
@@ -677,7 +825,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       provider: params.provider,
       source: record.source,
       rootDir: record.rootDir,
-    } as R);
+    });
   };
 
   const registerSpeechProvider = (record: PluginRecord, provider: SpeechProviderPlugin) => {
@@ -1155,6 +1303,19 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               registerHttpRoute: (routeParams) => registerHttpRoute(record, routeParams),
               registerProvider: (provider) => registerProvider(record, provider),
               registerAgentHarness: (harness) => registerAgentHarness(record, harness),
+              registerDetachedTaskRuntime: (runtime) => {
+                const existing = getDetachedTaskLifecycleRuntimeRegistration();
+                if (existing && existing.pluginId !== record.id) {
+                  pushDiagnostic({
+                    level: "error",
+                    pluginId: record.id,
+                    source: record.source,
+                    message: `detached task runtime already registered by ${existing.pluginId}`,
+                  });
+                  return;
+                }
+                registerDetachedTaskLifecycleRuntime(record.id, runtime);
+              },
               registerSpeechProvider: (provider) => registerSpeechProvider(record, provider),
               registerRealtimeTranscriptionProvider: (provider) =>
                 registerRealtimeTranscriptionProvider(record, provider),
@@ -1239,6 +1400,12 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                   return;
                 }
                 registerCompactionProvider(provider, { ownerPluginId: record.id });
+              },
+              registerEmbeddedExtensionFactory: (factory) => {
+                registerPiEmbeddedExtensionFactory(record, factory);
+              },
+              registerCodexAppServerExtensionFactory: (factory) => {
+                registerCodexAppServerExtensionFactory(record, factory);
               },
               registerMemoryCapability: (capability) => {
                 if (!hasKind(record.kind, "memory")) {
@@ -1413,9 +1580,39 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     });
   };
 
+  const rollbackPluginGlobalSideEffects = (pluginId: string) => {
+    if (registryParams.activateGlobalSideEffects === false) {
+      return;
+    }
+
+    clearPluginCommandsForPlugin(pluginId);
+    clearPluginInteractiveHandlersForPlugin(pluginId);
+    clearContextEnginesForOwner(`plugin:${pluginId}`);
+
+    const hookRollbackEntries = pluginHookRollback.get(pluginId) ?? [];
+    for (const entry of hookRollbackEntries.toReversed()) {
+      const activeRegistrations = activePluginHookRegistrations.get(entry.name) ?? [];
+      for (const registration of activeRegistrations) {
+        unregisterInternalHook(registration.event, registration.handler);
+      }
+
+      if (entry.previousRegistrations.length === 0) {
+        activePluginHookRegistrations.delete(entry.name);
+        continue;
+      }
+
+      for (const registration of entry.previousRegistrations) {
+        registerInternalHook(registration.event, registration.handler);
+      }
+      activePluginHookRegistrations.set(entry.name, [...entry.previousRegistrations]);
+    }
+    pluginHookRollback.delete(pluginId);
+  };
+
   return {
     registry,
     createApi,
+    rollbackPluginGlobalSideEffects,
     pushDiagnostic,
     registerTool,
     registerChannel,

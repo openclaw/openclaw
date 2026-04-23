@@ -631,7 +631,7 @@ exec ssh -T gateway-host imsg "$@"
 
 ### Matrix
 
-Matrix is extension-backed and configured under `channels.matrix`.
+Matrix is plugin-backed and configured under `channels.matrix`.
 
 ```json5
 {
@@ -679,7 +679,7 @@ Matrix is extension-backed and configured under `channels.matrix`.
 
 ### Microsoft Teams
 
-Microsoft Teams is extension-backed and configured under `channels.msteams`.
+Microsoft Teams is plugin-backed and configured under `channels.msteams`.
 
 ```json5
 {
@@ -699,7 +699,7 @@ Microsoft Teams is extension-backed and configured under `channels.msteams`.
 
 ### IRC
 
-IRC is extension-backed and configured under `channels.irc`.
+IRC is plugin-backed and configured under `channels.irc`.
 
 ```json5
 {
@@ -755,9 +755,9 @@ Run multiple accounts per channel (each with its own `accountId`):
 - Existing channel-only bindings (no `accountId`) keep matching the default account; account-scoped bindings remain optional.
 - `openclaw doctor --fix` also repairs mixed shapes by moving account-scoped top-level single-account values into the promoted account chosen for that channel. Most channels use `accounts.default`; Matrix can preserve an existing matching named/default target instead.
 
-### Other extension channels
+### Other plugin channels
 
-Many extension channels are configured as `channels.<id>` and documented in their dedicated channel pages (for example Feishu, Matrix, LINE, Nostr, Zalo, Nextcloud Talk, Synology Chat, and Twitch).
+Many plugin channels are configured as `channels.<id>` and documented in their dedicated channel pages (for example Feishu, Matrix, LINE, Nostr, Zalo, Nextcloud Talk, Synology Chat, and Twitch).
 See the full channel index: [Channels](/channels).
 
 ### Group chat mention gating
@@ -955,21 +955,21 @@ Controls when workspace bootstrap files are injected into the system prompt. Def
 
 ### `agents.defaults.bootstrapMaxChars`
 
-Max characters per workspace bootstrap file before truncation. Default: `20000`.
+Max characters per workspace bootstrap file before truncation. Default: `12000`.
 
 ```json5
 {
-  agents: { defaults: { bootstrapMaxChars: 20000 } },
+  agents: { defaults: { bootstrapMaxChars: 12000 } },
 }
 ```
 
 ### `agents.defaults.bootstrapTotalMaxChars`
 
-Max total characters injected across all workspace bootstrap files. Default: `150000`.
+Max total characters injected across all workspace bootstrap files. Default: `60000`.
 
 ```json5
 {
-  agents: { defaults: { bootstrapTotalMaxChars: 150000 } },
+  agents: { defaults: { bootstrapTotalMaxChars: 60000 } },
 }
 ```
 
@@ -985,6 +985,142 @@ Default: `"once"`.
 ```json5
 {
   agents: { defaults: { bootstrapPromptTruncationWarning: "once" } }, // off | once | always
+}
+```
+
+### Context budget ownership map
+
+OpenClaw has multiple high-volume prompt/context budgets, and they are
+intentionally split by subsystem instead of all flowing through one generic
+knob.
+
+- `agents.defaults.bootstrapMaxChars` /
+  `agents.defaults.bootstrapTotalMaxChars`:
+  normal workspace bootstrap injection.
+- `agents.defaults.startupContext.*`:
+  one-shot `/new` and `/reset` startup prelude, including recent daily
+  `memory/*.md` files.
+- `skills.limits.*`:
+  the compact skills list injected into the system prompt.
+- `agents.defaults.contextLimits.*`:
+  bounded runtime excerpts and injected runtime-owned blocks.
+- `memory.qmd.limits.*`:
+  indexed memory-search snippet and injection sizing.
+
+Use the matching per-agent override only when one agent needs a different
+budget:
+
+- `agents.list[].skillsLimits.maxSkillsPromptChars`
+- `agents.list[].contextLimits.*`
+
+#### `agents.defaults.startupContext`
+
+Controls the first-turn startup prelude injected on bare `/new` and `/reset`
+runs.
+
+```json5
+{
+  agents: {
+    defaults: {
+      startupContext: {
+        enabled: true,
+        applyOn: ["new", "reset"],
+        dailyMemoryDays: 2,
+        maxFileBytes: 16384,
+        maxFileChars: 1200,
+        maxTotalChars: 2800,
+      },
+    },
+  },
+}
+```
+
+#### `agents.defaults.contextLimits`
+
+Shared defaults for bounded runtime context surfaces.
+
+```json5
+{
+  agents: {
+    defaults: {
+      contextLimits: {
+        memoryGetMaxChars: 12000,
+        memoryGetDefaultLines: 120,
+        toolResultMaxChars: 16000,
+        postCompactionMaxChars: 1800,
+      },
+    },
+  },
+}
+```
+
+- `memoryGetMaxChars`: default `memory_get` excerpt cap before truncation
+  metadata and continuation notice are added.
+- `memoryGetDefaultLines`: default `memory_get` line window when `lines` is
+  omitted.
+- `toolResultMaxChars`: live tool-result cap used for persisted results and
+  overflow recovery.
+- `postCompactionMaxChars`: AGENTS.md excerpt cap used during post-compaction
+  refresh injection.
+
+#### `agents.list[].contextLimits`
+
+Per-agent override for the shared `contextLimits` knobs. Omitted fields inherit
+from `agents.defaults.contextLimits`.
+
+```json5
+{
+  agents: {
+    defaults: {
+      contextLimits: {
+        memoryGetMaxChars: 12000,
+        toolResultMaxChars: 16000,
+      },
+    },
+    list: [
+      {
+        id: "tiny-local",
+        contextLimits: {
+          memoryGetMaxChars: 6000,
+          toolResultMaxChars: 8000,
+        },
+      },
+    ],
+  },
+}
+```
+
+#### `skills.limits.maxSkillsPromptChars`
+
+Global cap for the compact skills list injected into the system prompt. This
+does not affect reading `SKILL.md` files on demand.
+
+```json5
+{
+  skills: {
+    limits: {
+      maxSkillsPromptChars: 18000,
+    },
+  },
+}
+```
+
+#### `agents.list[].skillsLimits.maxSkillsPromptChars`
+
+Per-agent override for the skills prompt budget.
+
+```json5
+{
+  agents: {
+    list: [
+      {
+        id: "tiny-local",
+        skillsLimits: {
+          maxSkillsPromptChars: 6000,
+        },
+      },
+    ],
+  },
 }
 ```
 
@@ -1041,7 +1177,7 @@ Time format in system prompt. Default: `auto` (OS preference).
         fallbacks: ["openrouter/google/gemini-2.0-flash-vision:free"],
       },
       imageGenerationModel: {
-        primary: "openai/gpt-image-1",
+        primary: "openai/gpt-image-2",
         fallbacks: ["google/gemini-3.1-flash-image-preview"],
       },
       videoGenerationModel: {
@@ -1079,7 +1215,7 @@ Time format in system prompt. Default: `auto` (OS preference).
   - Also used as fallback routing when the selected/default model cannot accept image input.
 - `imageGenerationModel`: accepts either a string (`"provider/model"`) or an object (`{ primary, fallbacks }`).
   - Used by the shared image-generation capability and any future tool/plugin surface that generates images.
-  - Typical values: `google/gemini-3.1-flash-image-preview` for native Gemini image generation, `fal/fal-ai/flux/dev` for fal, or `openai/gpt-image-1` for OpenAI Images.
+  - Typical values: `google/gemini-3.1-flash-image-preview` for native Gemini image generation, `fal/fal-ai/flux/dev` for fal, or `openai/gpt-image-2` for OpenAI Images.
   - If you select a provider/model directly, configure the matching provider auth/API key too (for example `GEMINI_API_KEY` or `GOOGLE_API_KEY` for `google/*`, `OPENAI_API_KEY` for `openai/*`, `FAL_KEY` for `fal/*`).
   - If omitted, `image_generate` can still infer an auth-backed provider default. It tries the current default provider first, then the remaining registered image-generation providers in provider-id order.
 - `musicGenerationModel`: accepts either a string (`"provider/model"`) or an object (`{ primary, fallbacks }`).
@@ -1102,6 +1238,8 @@ Time format in system prompt. Default: `auto` (OS preference).
 - `elevatedDefault`: default elevated-output level for agents. Values: `"off"`, `"on"`, `"ask"`, `"full"`. Default: `"on"`.
 - `model.primary`: format `provider/model` (e.g. `openai/gpt-5.4`). If you omit the provider, OpenClaw tries an alias first, then a unique configured-provider match for that exact model id, and only then falls back to the configured default provider (deprecated compatibility behavior, so prefer explicit `provider/model`). If that provider no longer exposes the configured default model, OpenClaw falls back to the first configured provider/model instead of surfacing a stale removed-provider default.
 - `models`: the configured model catalog and allowlist for `/model`. Each entry can include `alias` (shortcut) and `params` (provider-specific, for example `temperature`, `maxTokens`, `cacheRetention`, `context1m`).
+  - Safe edits: use `openclaw config set agents.defaults.models '<json>' --strict-json --merge` to add entries. `config set` refuses replacements that would remove existing allowlist entries unless you pass `--replace`.
+  - Provider-scoped configure/onboarding flows merge selected provider models into this map and preserve unrelated providers already configured.
 - `params`: global default provider parameters applied to all models. Set at `agents.defaults.params` (e.g. `{ cacheRetention: "long" }`).
 - `params` merge precedence (config): `agents.defaults.params` (global base) is overridden by `agents.defaults.models["provider/model"].params` (per-model), then `agents.list[].params` (matching agent id) overrides by key. See [Prompt Caching](/reference/prompt-caching) for details.
 - `embeddedHarness`: default low-level embedded agent runtime policy. Use `runtime: "auto"` to let registered plugin harnesses claim supported models, `runtime: "pi"` to force the built-in PI harness, or a registered harness id such as `runtime: "codex"`. Set `fallback: "none"` to disable automatic PI fallback.
@@ -1130,7 +1268,7 @@ Codex app-server harness.
 ```
 
 - `runtime`: `"auto"`, `"pi"`, or a registered plugin harness id. The bundled Codex plugin registers `codex`.
-- `fallback`: `"pi"` or `"none"`. `"pi"` keeps the built-in PI harness as the compatibility fallback. `"none"` makes missing or unsupported plugin harness selection fail instead of silently using PI.
+- `fallback`: `"pi"` or `"none"`. `"pi"` keeps the built-in PI harness as the compatibility fallback when no plugin harness is selected. `"none"` makes missing or unsupported plugin harness selection fail instead of silently using PI. Selected plugin harness failures always surface directly.
 - Environment overrides: `OPENCLAW_AGENT_RUNTIME=<id|auto|pi>` overrides `runtime`; `OPENCLAW_AGENT_HARNESS_FALLBACK=none` disables PI fallback for that process.
 - For Codex-only deployments, set `model: "codex/gpt-5.4"`, `embeddedHarness.runtime: "codex"`, and `embeddedHarness.fallback: "none"`.
 - This only controls the embedded chat harness. Media generation, vision, PDF, music, video, and TTS still use their provider/model settings.
@@ -1202,6 +1340,28 @@ Replace the entire OpenClaw-assembled system prompt with a fixed string. Set at 
 }
 ```
 
+### `agents.defaults.promptOverlays`
+
+Provider-independent prompt overlays applied by model family. GPT-5-family model ids receive the shared behavior contract across providers; `personality` controls only the friendly interaction-style layer.
+
+```json5
+{
+  agents: {
+    defaults: {
+      promptOverlays: {
+        gpt5: {
+          personality: "friendly", // friendly | on | off
+        },
+      },
+    },
+  },
+}
+```
+
+- `"friendly"` (default) and `"on"` enable the friendly interaction-style layer.
+- `"off"` disables only the friendly layer; the tagged GPT-5 behavior contract remains enabled.
+- Legacy `plugins.entries.openai.config.personality` is still read when this shared setting is unset.
+
 ### `agents.defaults.heartbeat`
 
 Periodic heartbeat runs.
@@ -1256,7 +1416,7 @@ Periodic heartbeat runs.
         identifierInstructions: "Preserve deployment IDs, ticket IDs, and host:port pairs exactly.", // used when identifierPolicy=custom
         postCompactionSections: ["Session Startup", "Red Lines"], // [] disables reinjection
         model: "openrouter/anthropic/claude-sonnet-4-6", // optional compaction-only model override
-        notifyUser: true, // send a brief notice when compaction starts (default: false)
+        notifyUser: true, // send brief notices when compaction starts and completes (default: false)
         memoryFlush: {
           enabled: true,
           softThresholdTokens: 6000,
@@ -1276,7 +1436,7 @@ Periodic heartbeat runs.
 - `identifierInstructions`: optional custom identifier-preservation text used when `identifierPolicy=custom`.
 - `postCompactionSections`: optional AGENTS.md H2/H3 section names to re-inject after compaction. Defaults to `["Session Startup", "Red Lines"]`; set `[]` to disable reinjection. When unset or explicitly set to that default pair, older `Every Session`/`Safety` headings are also accepted as a legacy fallback.
 - `model`: optional `provider/model-id` override for compaction summarization only. Use this when the main session should keep one model but compaction summaries should run on another; when unset, compaction uses the session's primary model.
-- `notifyUser`: when `true`, sends a brief notice to the user when compaction starts (for example, "Compacting context..."). Disabled by default to keep compaction silent.
+- `notifyUser`: when `true`, sends brief notices to the user when compaction starts and when it completes (for example, "Compacting context..." and "Compaction complete"). Disabled by default to keep compaction silent.
 - `memoryFlush`: silent agentic turn before auto-compaction to store durable memories. Skipped when workspace is read-only.
 
 ### `agents.defaults.contextPruning`
@@ -1655,7 +1815,7 @@ scripts/sandbox-browser-setup.sh   # optional browser image
 - `model`: string form overrides `primary` only; object form `{ primary, fallbacks }` overrides both (`[]` disables global fallbacks). Cron jobs that only override `primary` still inherit default fallbacks unless you set `fallbacks: []`.
 - `params`: per-agent stream params merged over the selected model entry in `agents.defaults.models`. Use this for agent-specific overrides like `cacheRetention`, `temperature`, or `maxTokens` without duplicating the whole model catalog.
 - `skills`: optional per-agent skill allowlist. If omitted, the agent inherits `agents.defaults.skills` when set; an explicit list replaces defaults instead of merging, and `[]` means no skills.
-- `thinkingDefault`: optional per-agent default thinking level (`off | minimal | low | medium | high | xhigh | adaptive`). Overrides `agents.defaults.thinkingDefault` for this agent when no per-message or session override is set.
+- `thinkingDefault`: optional per-agent default thinking level (`off | minimal | low | medium | high | xhigh | adaptive | max`). Overrides `agents.defaults.thinkingDefault` for this agent when no per-message or session override is set.
 - `reasoningDefault`: optional per-agent default reasoning visibility (`on | off | stream`). Applies when no per-message or session reasoning override is set.
 - `fastModeDefault`: optional per-agent default for fast mode (`true | false`). Applies when no per-message or session fast-mode override is set.
 - `embeddedHarness`: optional per-agent low-level harness policy override. Use `{ runtime: "codex", fallback: "none" }` to make one agent Codex-only while other agents keep the default PI fallback.
@@ -2333,6 +2493,8 @@ Notes:
 - File permissions are `0700` for directories and `0600` for files.
 - Cleanup follows the `cleanup` policy: `delete` always removes attachments; `keep` retains them only when `retainOnSessionKeep: true`.
 
+<a id="toolsexperimental"></a>
+
 ### `tools.experimental`
 
 Experimental built-in tool flags. Default off unless a strict-agentic GPT-5 auto-enable rule applies.
@@ -2426,6 +2588,7 @@ OpenClaw uses the built-in model catalog. Add custom providers via `models.provi
 
 - `models.mode`: provider catalog behavior (`merge` or `replace`).
 - `models.providers`: custom provider map keyed by provider id.
+  - Safe edits: use `openclaw config set models.providers.<id> '<json>' --strict-json --merge` or `openclaw config set models.providers.<id>.models '<json-array>' --strict-json --merge` for additive updates. `config set` refuses destructive replacements unless you pass `--replace`.
 - `models.providers.*.api`: request adapter (`openai-completions`, `openai-responses`, `anthropic-messages`, `google-generative-ai`, etc).
 - `models.providers.*.apiKey`: provider credential (prefer SecretRef/env substitution).
 - `models.providers.*.auth`: auth strategy (`api-key`, `token`, `oauth`, `aws-sdk`).
@@ -2537,8 +2700,8 @@ Set `ZAI_API_KEY`. `z.ai/*` and `z-ai/*` are accepted aliases. Shortcut: `opencl
   env: { MOONSHOT_API_KEY: "sk-..." },
   agents: {
     defaults: {
-      model: { primary: "moonshot/kimi-k2.5" },
-      models: { "moonshot/kimi-k2.5": { alias: "Kimi K2.5" } },
+      model: { primary: "moonshot/kimi-k2.6" },
+      models: { "moonshot/kimi-k2.6": { alias: "Kimi K2.6" } },
     },
   },
   models: {
@@ -2550,11 +2713,11 @@ Set `ZAI_API_KEY`. `z.ai/*` and `z-ai/*` are accepted aliases. Shortcut: `opencl
         api: "openai-completions",
         models: [
           {
-            id: "kimi-k2.5",
-            name: "Kimi K2.5",
+            id: "kimi-k2.6",
+            name: "Kimi K2.6",
             reasoning: false,
             input: ["text", "image"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            cost: { input: 0.95, output: 4, cacheRead: 0.16, cacheWrite: 0 },
             contextWindow: 262144,
             maxTokens: 262144,
           },
@@ -2730,7 +2893,7 @@ See [Local Models](/gateway/local-models). TL;DR: run a large local model via LM
     allow: ["voice-call"],
     deny: [],
     load: {
-      paths: ["~/Projects/oss/voice-call-extension"],
+      paths: ["~/Projects/oss/voice-call-plugin"],
     },
     entries: {
       "voice-call": {
@@ -2764,7 +2927,7 @@ See [Local Models](/gateway/local-models). TL;DR: run a large local model via LM
 - `plugins.entries.xai.config.xSearch`: xAI X Search (Grok web search) settings.
   - `enabled`: enable the X Search provider.
   - `model`: Grok model to use for search (e.g. `"grok-4-1-fast"`).
-- `plugins.entries.memory-core.config.dreaming`: memory dreaming (experimental) settings. See [Dreaming](/concepts/dreaming) for phases and thresholds.
+- `plugins.entries.memory-core.config.dreaming`: memory dreaming settings. See [Dreaming](/concepts/dreaming) for phases and thresholds.
   - `enabled`: master dreaming switch (default `false`).
   - `frequency`: cron cadence for each full dreaming sweep (`"0 3 * * *"` by default).
   - phase policy and thresholds are implementation details (not user-facing config keys).
@@ -2831,7 +2994,8 @@ See [Plugins](/tools/plugin).
 - `profiles.*.cdpUrl` accepts `http://`, `https://`, `ws://`, and `wss://`.
   Use HTTP(S) when you want OpenClaw to discover `/json/version`; use WS(S)
   when your provider gives you a direct DevTools WebSocket URL.
-- `existing-session` profiles are host-only and use Chrome MCP instead of CDP.
+- `existing-session` profiles use Chrome MCP instead of CDP and can attach on
+  the selected host or through a connected browser node.
 - `existing-session` profiles can set `userDataDir` to target a specific
   Chromium-based browser profile such as Brave or Edge.
 - `existing-session` profiles keep the current Chrome MCP route limits:
@@ -3056,8 +3220,8 @@ See [Multiple Gateways](/gateway/multiple-gateways).
     path: "/hooks",
     maxBodyBytes: 262144,
     defaultSessionKey: "hook:ingress",
-    allowRequestSessionKey: false,
-    allowedSessionKeyPrefixes: ["hook:"],
+    allowRequestSessionKey: true,
+    allowedSessionKeyPrefixes: ["hook:", "hook:gmail:"],
     allowedAgentIds: ["hooks", "main"],
     presets: ["gmail"],
     transformsDir: "~/.openclaw/hooks/transforms",
@@ -3088,6 +3252,7 @@ Validation and safety notes:
 - `hooks.token` must be **distinct** from `gateway.auth.token`; reusing the Gateway token is rejected.
 - `hooks.path` cannot be `/`; use a dedicated subpath such as `/hooks`.
 - If `hooks.allowRequestSessionKey=true`, constrain `hooks.allowedSessionKeyPrefixes` (for example `["hook:"]`).
+- If a mapping or preset uses a templated `sessionKey`, set `hooks.allowedSessionKeyPrefixes` and `hooks.allowRequestSessionKey=true`. Static mapping keys do not require that opt-in.
 
 **Endpoints:**
 
@@ -3095,6 +3260,7 @@ Validation and safety notes:
 - `POST /hooks/agent` → `{ message, name?, agentId?, sessionKey?, wakeMode?, deliver?, channel?, to?, model?, thinking?, timeoutSeconds? }`
   - `sessionKey` from request payload is accepted only when `hooks.allowRequestSessionKey=true` (default: `false`).
 - `POST /hooks/<name>` → resolved via `hooks.mappings`
+  - Template-rendered mapping `sessionKey` values are treated as externally supplied and also require `hooks.allowRequestSessionKey=true`.
 
 <Accordion title="Mapping details">
 
@@ -3106,14 +3272,18 @@ Validation and safety notes:
 - `agentId` routes to a specific agent; unknown IDs fall back to default.
 - `allowedAgentIds`: restricts explicit routing (`*` or omitted = allow all, `[]` = deny all).
 - `defaultSessionKey`: optional fixed session key for hook agent runs without explicit `sessionKey`.
-- `allowRequestSessionKey`: allow `/hooks/agent` callers to set `sessionKey` (default: `false`).
-- `allowedSessionKeyPrefixes`: optional prefix allowlist for explicit `sessionKey` values (request + mapping), e.g. `["hook:"]`.
+- `allowRequestSessionKey`: allow `/hooks/agent` callers and template-driven mapping session keys to set `sessionKey` (default: `false`).
+- `allowedSessionKeyPrefixes`: optional prefix allowlist for explicit `sessionKey` values (request + mapping), e.g. `["hook:"]`. It becomes required when any mapping or preset uses a templated `sessionKey`.
 - `deliver: true` sends final reply to a channel; `channel` defaults to `last`.
 - `model` overrides LLM for this hook run (must be allowed if model catalog is set).
 
 </Accordion>
 
 ### Gmail integration
+
+- The built-in Gmail preset uses `sessionKey: "hook:gmail:{{messages[0].id}}"`.
+- If you keep that per-message routing, set `hooks.allowRequestSessionKey: true` and constrain `hooks.allowedSessionKeyPrefixes` to match the Gmail namespace, for example `["hook:", "hook:gmail:"]`.
+- If you need `hooks.allowRequestSessionKey: false`, override the preset with a static `sessionKey` instead of the templated default.
 
 ```json5
 {
@@ -3735,6 +3905,8 @@ Split config into multiple files:
 - Sibling keys: merged after includes (override included values).
 - Nested includes: up to 10 levels deep.
 - Paths: resolved relative to the including file, but must stay inside the top-level config directory (`dirname` of `openclaw.json`). Absolute/`../` forms are allowed only when they still resolve inside that boundary.
+- OpenClaw-owned writes that change only one top-level section backed by a single-file include write through to that included file. For example, `plugins install` updates `plugins: { $include: "./plugins.json5" }` in `plugins.json5` and leaves `openclaw.json` intact.
+- Root includes, include arrays, and includes with sibling overrides are read-only for OpenClaw-owned writes; those writes fail closed instead of flattening the config.
 - Errors: clear messages for missing files, parse errors, and circular includes.
 
 ---

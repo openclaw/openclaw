@@ -69,6 +69,7 @@ They run immediately, are stripped before the model sees the message, and the re
 - `commands.debug` (default `false`) enables `/debug` (runtime-only overrides).
 - `commands.restart` (default `true`) enables `/restart` plus gateway restart tool actions.
 - `commands.ownerAllowFrom` (optional) sets the explicit owner allowlist for owner-only command/tool surfaces. This is separate from `commands.allowFrom`.
+- Per-channel `channels.<channel>.commands.enforceOwnerForCommands` (optional, default `false`) makes owner-only commands require **owner identity** to run on that surface. When `true`, the sender must either match a resolved owner candidate (for example an entry in `commands.ownerAllowFrom` or provider-native owner metadata) or hold internal `operator.admin` scope on an internal message channel. A wildcard entry in channel `allowFrom`, or an empty/unresolved owner-candidate list, is **not** sufficient — owner-only commands fail closed on that channel. Leave this off if you want owner-only commands gated only by `ownerAllowFrom` and the standard command allowlists.
 - `commands.ownerDisplay` controls how owner ids appear in the system prompt: `raw` or `hash`.
 - `commands.ownerDisplaySecret` optionally sets the HMAC secret used when `commands.ownerDisplay="hash"`.
 - `commands.allowFrom` (optional) sets a per-provider allowlist for command authorization. When configured, it is the
@@ -90,10 +91,11 @@ Current source-of-truth:
 Built-in commands available today:
 
 - `/new [model]` starts a new session; `/reset` is the reset alias.
+- `/reset soft [message]` keeps the current transcript, drops reused CLI backend session ids, and reruns startup/system-prompt loading in-place.
 - `/compact [instructions]` compacts the session context. See [/concepts/compaction](/concepts/compaction).
 - `/stop` aborts the current run.
 - `/session idle <duration|off>` and `/session max-age <duration|off>` manage thread-binding expiry.
-- `/think <off|minimal|low|medium|high|xhigh>` sets the thinking level. Aliases: `/thinking`, `/t`.
+- `/think <level>` sets the thinking level. Options come from the active model's provider profile; common levels are `off`, `minimal`, `low`, `medium`, and `high`, with custom levels such as `xhigh`, `adaptive`, `max`, or binary `on` only where supported. Aliases: `/thinking`, `/t`.
 - `/verbose on|off|full` toggles verbose output. Alias: `/v`.
 - `/trace on|off` toggles plugin trace output for the current session.
 - `/fast [status|on|off]` shows or sets fast mode.
@@ -106,10 +108,11 @@ Built-in commands available today:
 - `/help` shows the short help summary.
 - `/commands` shows the generated command catalog.
 - `/tools [compact|verbose]` shows what the current agent can use right now.
-- `/status` shows runtime status, including provider usage/quota when available.
+- `/status` shows runtime status, including `Runtime`/`Runner` labels and provider usage/quota when available.
 - `/tasks` lists active/recent background tasks for the current session.
 - `/context [list|detail|json]` explains how context is assembled.
 - `/export-session [path]` exports the current session to HTML. Alias: `/export`.
+- `/export-trajectory [path]` exports a JSONL [trajectory bundle](/tools/trajectory) for the current session. Alias: `/trajectory`.
 - `/whoami` shows your sender id. Alias: `/id`.
 - `/skill <name> [input]` runs a skill by name.
 - `/allowlist [list|add|remove] ...` manages allowlist entries. Text-only.
@@ -226,6 +229,7 @@ of treating `/tools` as a static catalog.
 
 - **Provider usage/quota** (example: “Claude 80% left”) shows up in `/status` for the current model provider when usage tracking is enabled. OpenClaw normalizes provider windows to `% left`; for MiniMax, remaining-only percent fields are inverted before display, and `model_remains` responses prefer the chat-model entry plus a model-tagged plan label.
 - **Token/cache lines** in `/status` can fall back to the latest transcript usage entry when the live session snapshot is sparse. Existing nonzero live values still win, and transcript fallback can also recover the active runtime model label plus a larger prompt-oriented total when stored totals are missing or smaller.
+- **Runtime vs runner:** `/status` reports `Runtime` for the effective execution path and sandbox state, and `Runner` for who is actually running the session: embedded Pi, a CLI-backed provider, or an ACP harness/backend.
 - **Per-response tokens/cost** is controlled by `/usage off|tokens|full` (appended to normal replies).
 - `/model status` is about **models/auth/endpoints**, not usage.
 

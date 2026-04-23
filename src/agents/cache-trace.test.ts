@@ -5,6 +5,26 @@ import { resolveUserPath } from "../utils.js";
 import { createCacheTrace } from "./cache-trace.js";
 
 describe("createCacheTrace", () => {
+  function createMemoryTraceForTest() {
+    const lines: string[] = [];
+    const trace = createCacheTrace({
+      cfg: {
+        diagnostics: {
+          cacheTrace: {
+            enabled: true,
+          },
+        },
+      },
+      env: {},
+      writer: {
+        filePath: "memory",
+        write: (line) => lines.push(line),
+        flush: async () => undefined,
+      },
+    });
+    return { lines, trace };
+  }
+
   it("returns null when diagnostics cache tracing is disabled", () => {
     const trace = createCacheTrace({
       cfg: {} as OpenClawConfig,
@@ -29,6 +49,7 @@ describe("createCacheTrace", () => {
       writer: {
         filePath: "memory",
         write: (line) => lines.push(line),
+        flush: async () => undefined,
       },
     });
 
@@ -59,6 +80,7 @@ describe("createCacheTrace", () => {
       writer: {
         filePath: "memory",
         write: (line) => lines.push(line),
+        flush: async () => undefined,
       },
     });
 
@@ -84,6 +106,7 @@ describe("createCacheTrace", () => {
       writer: {
         filePath: "memory",
         write: (line) => lines.push(line),
+        flush: async () => undefined,
       },
     });
 
@@ -128,6 +151,7 @@ describe("createCacheTrace", () => {
       writer: {
         filePath: "memory",
         write: (line) => lines.push(line),
+        flush: async () => undefined,
       },
     });
 
@@ -135,21 +159,7 @@ describe("createCacheTrace", () => {
   });
 
   it("sanitizes cache-trace payloads before writing", () => {
-    const lines: string[] = [];
-    const trace = createCacheTrace({
-      cfg: {
-        diagnostics: {
-          cacheTrace: {
-            enabled: true,
-          },
-        },
-      },
-      env: {},
-      writer: {
-        filePath: "memory",
-        write: (line) => lines.push(line),
-      },
-    });
+    const { lines, trace } = createMemoryTraceForTest();
 
     trace?.recordStage("stream:context", {
       system: {
@@ -241,21 +251,7 @@ describe("createCacheTrace", () => {
   });
 
   it("handles circular references in messages without stack overflow", () => {
-    const lines: string[] = [];
-    const trace = createCacheTrace({
-      cfg: {
-        diagnostics: {
-          cacheTrace: {
-            enabled: true,
-          },
-        },
-      },
-      env: {},
-      writer: {
-        filePath: "memory",
-        write: (line) => lines.push(line),
-      },
-    });
+    const { lines, trace } = createMemoryTraceForTest();
 
     const parent: Record<string, unknown> = { role: "user", content: "hello" };
     const child: Record<string, unknown> = { ref: parent };

@@ -4,6 +4,7 @@ import { isValidNonNegativeByteSizeString } from "./byte-size.js";
 import {
   HeartbeatSchema,
   AgentSandboxSchema,
+  AgentContextLimitsSchema,
   AgentEmbeddedHarnessSchema,
   AgentModelSchema,
   MemorySearchSchema,
@@ -15,6 +16,24 @@ import {
   HumanDelaySchema,
   TypingModeSchema,
 } from "./zod-schema.core.js";
+
+export const SilentReplyPolicySchema = z.union([z.literal("allow"), z.literal("disallow")]);
+
+export const SilentReplyPolicyConfigSchema = z
+  .object({
+    direct: SilentReplyPolicySchema.optional(),
+    group: SilentReplyPolicySchema.optional(),
+    internal: SilentReplyPolicySchema.optional(),
+  })
+  .strict();
+
+export const SilentReplyRewriteConfigSchema = z
+  .object({
+    direct: z.boolean().optional(),
+    group: z.boolean().optional(),
+    internal: z.boolean().optional(),
+  })
+  .strict();
 
 export const AgentDefaultsSchema = z
   .object({
@@ -46,13 +65,33 @@ export const AgentDefaultsSchema = z
       .optional(),
     workspace: z.string().optional(),
     skills: z.array(z.string()).optional(),
+    silentReply: SilentReplyPolicyConfigSchema.optional(),
+    silentReplyRewrite: SilentReplyRewriteConfigSchema.optional(),
     repoRoot: z.string().optional(),
     systemPromptOverride: z.string().optional(),
+    promptOverlays: z
+      .object({
+        gpt5: z
+          .object({
+            personality: z
+              .union([z.literal("friendly"), z.literal("on"), z.literal("off")])
+              .optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
     skipBootstrap: z.boolean().optional(),
     contextInjection: z.union([z.literal("always"), z.literal("continuation-skip")]).optional(),
     bootstrapMaxChars: z.number().int().positive().optional(),
     bootstrapTotalMaxChars: z.number().int().positive().optional(),
-    localModelMode: z.union([z.literal("default"), z.literal("lean")]).optional(),
+    experimental: z
+      .object({
+        localModelLean: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     bootstrapPromptTruncationWarning: z
       .union([z.literal("off"), z.literal("once"), z.literal("always")])
       .optional(),
@@ -73,6 +112,7 @@ export const AgentDefaultsSchema = z
       })
       .strict()
       .optional(),
+    contextLimits: AgentContextLimitsSchema,
     timeFormat: z.union([z.literal("auto"), z.literal("12"), z.literal("24")]).optional(),
     envelopeTimezone: z.string().optional(),
     envelopeTimestamp: z.union([z.literal("on"), z.literal("off")]).optional(),
@@ -168,6 +208,7 @@ export const AgentDefaultsSchema = z
           })
           .strict()
           .optional(),
+        truncateAfterCompaction: z.boolean().optional(),
         notifyUser: z.boolean().optional(),
       })
       .strict()
@@ -190,6 +231,7 @@ export const AgentDefaultsSchema = z
         z.literal("high"),
         z.literal("xhigh"),
         z.literal("adaptive"),
+        z.literal("max"),
       ])
       .optional(),
     verboseDefault: z.union([z.literal("off"), z.literal("on"), z.literal("full")]).optional(),

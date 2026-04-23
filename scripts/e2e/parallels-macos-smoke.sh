@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/e2e/lib/parallels-macos-common.sh"
+source "$ROOT_DIR/scripts/e2e/lib/parallels-package-common.sh"
 
 VM_NAME="macOS Tahoe"
 SNAPSHOT_HINT="macOS 26.3.1 latest"
@@ -44,19 +45,20 @@ SERVER_PID=""
 RUN_DIR="$(mktemp -d /tmp/openclaw-parallels-smoke.XXXXXX)"
 BUILD_LOCK_DIR="${TMPDIR:-/tmp}/openclaw-parallels-build.lock"
 
-TIMEOUT_INSTALL_SITE_S=900
-TIMEOUT_INSTALL_TGZ_S=900
-TIMEOUT_INSTALL_REGISTRY_S=480
-TIMEOUT_UPDATE_DEV_S=1500
+TIMEOUT_INSTALL_SITE_S=420
+TIMEOUT_INSTALL_TGZ_S=420
+TIMEOUT_INSTALL_REGISTRY_S=420
+TIMEOUT_UPDATE_DEV_S="${OPENCLAW_PARALLELS_MACOS_UPDATE_DEV_TIMEOUT_S:-1200}"
 TIMEOUT_VERIFY_S=60
 TIMEOUT_ONBOARD_S=180
-TIMEOUT_GATEWAY_S=120
+TIMEOUT_GATEWAY_S=180
 TIMEOUT_AGENT_S=240
 TIMEOUT_PERMISSION_S=60
-TIMEOUT_DASHBOARD_S=90
-TIMEOUT_SNAPSHOT_S=180
+TIMEOUT_DASHBOARD_S=180
+TIMEOUT_SNAPSHOT_S=360
 TIMEOUT_CURRENT_USER_PRLCTL_S=45
 TIMEOUT_DISCORD_S=180
+PHASE_STALE_WARN_S=60
 
 FRESH_MAIN_VERSION="skip"
 LATEST_INSTALLED_VERSION="skip"
@@ -646,9 +648,33 @@ guest_current_user_exec_path() {
       "$@"
     return
   fi
-  prlctl exec "$VM_NAME" --current-user /usr/bin/env \
-    "PATH=$path_value" \
-    "$@"
+  local output rc user_name
+  set +e
+  output="$(
+    prlctl exec "$VM_NAME" --current-user /usr/bin/env \
+      "PATH=$path_value" \
+      "$@" 2>&1
+  )"
+  rc=$?
+  set -e
+  if [[ $rc -eq 0 ]]; then
+    printf '%s' "$output"
+    [[ -z "$output" || "$output" == *$'\n' ]] || printf '\n'
+    return 0
+  fi
+  if [[ "$output" == *"Unable to authenticate the user"* ]]; then
+    user_name="$(resolve_headless_guest_user || true)"
+    if [[ -n "$user_name" ]]; then
+      GUEST_CURRENT_USER="$user_name"
+      GUEST_CURRENT_USER_TRANSPORT="sudo"
+      save_guest_current_user_transport
+      warn "macOS --current-user became unavailable; switching to root sudo fallback for $user_name"
+      guest_current_user_exec_path "$path_value" "$@"
+      return
+    fi
+  fi
+  printf '%s\n' "$output" >&2
+  return "$rc"
 }
 
 guest_current_user_exec() {
@@ -770,6 +796,31 @@ guest_current_user_tail_file() {
   guest_current_user_exec /usr/bin/tail -n "$lines" "$file_path"
 }
 
+guest_current_user_kill_process_tree() {
+  local pid="$1"
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 0
+  guest_current_user_sh "$(cat <<EOF
+kill_tree() {
+  local target="\$1" child
+  for child in \$(/usr/bin/pgrep -P "\$target" 2>/dev/null || true); do
+    kill_tree "\$child"
+  done
+  /bin/kill -TERM "\$target" 2>/dev/null || true
+}
+kill_tree $(shell_quote "$pid")
+/bin/sleep 2
+kill_tree_force() {
+  local target="\$1" child
+  for child in \$(/usr/bin/pgrep -P "\$target" 2>/dev/null || true); do
+    kill_tree_force "\$child"
+  done
+  /bin/kill -KILL "\$target" 2>/dev/null || true
+}
+kill_tree_force $(shell_quote "$pid")
+EOF
+)" >/dev/null 2>&1 || true
+}
+
 latest_guest_npm_debug_log_path() {
   local guest_home="$1"
   guest_current_user_sh "$(cat <<EOF
@@ -853,9 +904,13 @@ run_logged_guest_current_user_sh() {
   local done_path="$3"
   local timeout_s="$4"
   local runner_path="$5"
-  local deadline rc runner_body write_runner_cmd
-  local guest_home guest_log_state_path latest_npm_log_path latest_npm_log_state_path npm_state_path
-  guest_current_user_exec /bin/rm -f "$log_path" "$done_path" "$runner_path"
+  local deadline rc done_rc runner_body write_runner_cmd
+  local guest_home guest_log_state_path latest_npm_log_path latest_npm_log_state_path npm_state_path runner_pid_path runner_pid
+  rc=""
+  done_rc=""
+  latest_npm_log_path=""
+  runner_pid_path="$done_path.pid"
+  guest_current_user_exec /bin/rm -f "$log_path" "$done_path" "$runner_path" "$runner_pid_path"
   runner_body="$(cat <<EOF
 status=0
 (
@@ -877,7 +932,7 @@ EOF
   write_runner_cmd+="$runner_body"$'\n'
   write_runner_cmd+="__OPENCLAW_RUNNER__"$'\n'
   write_runner_cmd+="/bin/chmod +x $(shell_quote "$runner_path")"$'\n'
-  write_runner_cmd+="(/bin/bash $(shell_quote "$runner_path") > $(shell_quote "$log_path") 2>&1 < /dev/null &) >/dev/null 2>&1"
+  write_runner_cmd+="(/bin/bash $(shell_quote "$runner_path") > $(shell_quote "$log_path") 2>&1 < /dev/null & printf '%s\n' \"\$!\" > $(shell_quote "$runner_pid_path")) >/dev/null 2>&1"
   guest_current_user_sh "$write_runner_cmd"
   guest_home="$(resolve_guest_current_user_home)"
   guest_log_state_path="$(mktemp "${TMPDIR:-/tmp}/openclaw-guest-log-state.XXXXXX")"
@@ -889,6 +944,33 @@ EOF
   deadline=$((SECONDS + timeout_s))
   while (( SECONDS < deadline )); do
     stream_guest_file_delta "$log_path" "$guest_log_state_path" ""
+    rc="$(
+      python3 - "$guest_log_state_path" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+path = Path(sys.argv[1])
+if not path.exists():
+    raise SystemExit(1)
+
+text = path.read_text(encoding="utf-8", errors="replace")
+matches = re.findall(r"^__OPENCLAW_RC__:(-?\d+)$", text, flags=re.MULTILINE)
+if not matches:
+    raise SystemExit(1)
+print(matches[-1])
+PY
+    )" || rc=""
+    if [[ "$rc" =~ ^-?[0-9]+$ ]]; then
+      guest_current_user_exec /bin/rm -f "$done_path" "$runner_path" "$runner_pid_path" >/dev/null 2>&1 || true
+      stream_guest_file_delta "$log_path" "$guest_log_state_path" ""
+      if [[ -n "$latest_npm_log_path" ]]; then
+        stream_guest_file_delta "$latest_npm_log_path" "$latest_npm_log_state_path" "npm-debug: "
+      fi
+      rm -f "$guest_log_state_path" "$latest_npm_log_state_path" "$npm_state_path"
+      [[ -n "$rc" ]] || rc=1
+      return "$rc"
+    fi
     latest_npm_log_path="$(latest_guest_npm_debug_log_path "$guest_home" || true)"
     if [[ -n "$latest_npm_log_path" ]]; then
       if [[ "$(cat "$npm_state_path" 2>/dev/null || true)" != "$latest_npm_log_path" ]]; then
@@ -898,9 +980,21 @@ EOF
       fi
       stream_guest_file_delta "$latest_npm_log_path" "$latest_npm_log_state_path" "npm-debug: "
     fi
+    done_rc="$(guest_current_user_exec /bin/cat "$done_path" 2>/dev/null | tr -d '\r\n' || true)"
+    if [[ "$done_rc" =~ ^-?[0-9]+$ ]]; then
+      rc="$done_rc"
+      guest_current_user_exec /bin/rm -f "$done_path" "$runner_path" "$runner_pid_path" >/dev/null 2>&1 || true
+      stream_guest_file_delta "$log_path" "$guest_log_state_path" ""
+      if [[ -n "$latest_npm_log_path" ]]; then
+        stream_guest_file_delta "$latest_npm_log_path" "$latest_npm_log_state_path" "npm-debug: "
+      fi
+      rm -f "$guest_log_state_path" "$latest_npm_log_state_path" "$npm_state_path"
+      [[ -n "$rc" ]] || rc=1
+      return "$rc"
+    fi
     rc="$(guest_runner_rc_from_log "$log_path" 2>/dev/null || true)"
     if [[ "$rc" =~ ^-?[0-9]+$ ]]; then
-      guest_current_user_exec /bin/rm -f "$done_path" "$runner_path" >/dev/null 2>&1 || true
+      guest_current_user_exec /bin/rm -f "$done_path" "$runner_path" "$runner_pid_path" >/dev/null 2>&1 || true
       stream_guest_file_delta "$log_path" "$guest_log_state_path" ""
       if [[ -n "$latest_npm_log_path" ]]; then
         stream_guest_file_delta "$latest_npm_log_path" "$latest_npm_log_state_path" "npm-debug: "
@@ -911,6 +1005,12 @@ EOF
     fi
     sleep 2
   done
+  runner_pid="$(guest_current_user_exec /bin/cat "$runner_pid_path" 2>/dev/null | tr -d '\r\n' || true)"
+  if [[ "$runner_pid" =~ ^[0-9]+$ ]]; then
+    warn "terminating timed-out guest runner pid $runner_pid"
+    guest_current_user_kill_process_tree "$runner_pid"
+  fi
+  guest_current_user_exec /bin/rm -f "$done_path" "$runner_path" "$runner_pid_path" >/dev/null 2>&1 || true
   rm -f "$guest_log_state_path" "$latest_npm_log_state_path" "$npm_state_path"
   warn "guest script timed out after ${timeout_s}s"
   guest_current_user_tail_file "$log_path" 120 >&2 || true
@@ -1069,7 +1169,7 @@ extract_package_build_commit_from_tgz() {
 }
 
 pack_main_tgz() {
-  local short_head pkg packed_commit
+  local short_head pkg packed_commit rc
   if target_package_installs_directly; then
     say "Use direct guest install for target package spec: $TARGET_PACKAGE_SPEC"
     TARGET_EXPECT_VERSION="$(npm view "$TARGET_PACKAGE_SPEC" version --userconfig "$(mktemp)")"
@@ -1089,13 +1189,22 @@ pack_main_tgz() {
     return
   fi
   say "Pack current main tgz"
-  ensure_current_build
-  stage_pack_runtime_deps
-  short_head="$(git rev-parse --short HEAD)"
-  pkg="$(
-    npm pack --ignore-scripts --json --pack-destination "$MAIN_TGZ_DIR" \
-      | python3 -c 'import json, sys; data = json.load(sys.stdin); print(data[-1]["filename"])'
-  )"
+  acquire_build_lock
+  set +e
+  {
+    OPENCLAW_PARALLELS_BUILD_LOCK_HELD=1 ensure_current_build &&
+      write_package_dist_inventory &&
+      stage_pack_runtime_deps &&
+      short_head="$(git rev-parse --short HEAD)" &&
+      pkg="$(
+        npm pack --ignore-scripts --json --pack-destination "$MAIN_TGZ_DIR" \
+          | python3 -c 'import json, sys; data = json.load(sys.stdin); print(data[-1]["filename"])'
+      )"
+  }
+  rc=$?
+  set -e
+  release_build_lock
+  [[ $rc -eq 0 ]] || return "$rc"
   MAIN_TGZ_PATH="$MAIN_TGZ_DIR/openclaw-main-$short_head.tgz"
   cp "$MAIN_TGZ_DIR/$pkg" "$MAIN_TGZ_PATH"
   packed_commit="$(extract_package_build_commit_from_tgz "$MAIN_TGZ_PATH")"
@@ -1115,16 +1224,7 @@ verify_target_version() {
 }
 
 current_build_commit() {
-  python3 - <<'PY'
-import json
-import pathlib
-
-path = pathlib.Path("dist/build-info.json")
-if not path.exists():
-    print("")
-else:
-    print(json.loads(path.read_text()).get("commit", ""))
-PY
+  parallels_package_current_build_commit
 }
 
 current_control_ui_ready() {
@@ -1132,44 +1232,59 @@ current_control_ui_ready() {
 }
 
 acquire_build_lock() {
-  local owner_pid=""
-  while ! mkdir "$BUILD_LOCK_DIR" 2>/dev/null; do
-    if [[ -f "$BUILD_LOCK_DIR/pid" ]]; then
-      owner_pid="$(cat "$BUILD_LOCK_DIR/pid" 2>/dev/null || true)"
-      if [[ -n "$owner_pid" ]] && ! kill -0 "$owner_pid" >/dev/null 2>&1; then
-        warn "Removing stale Parallels build lock"
-        rm -rf "$BUILD_LOCK_DIR"
-        continue
-      fi
-    fi
-    sleep 1
-  done
-  printf '%s\n' "$$" >"$BUILD_LOCK_DIR/pid"
+  parallels_package_acquire_build_lock "$BUILD_LOCK_DIR"
 }
 
 release_build_lock() {
-  if [[ -d "$BUILD_LOCK_DIR" ]]; then
-    rm -rf "$BUILD_LOCK_DIR"
-  fi
+  parallels_package_release_build_lock "$BUILD_LOCK_DIR"
 }
 
 ensure_current_build() {
-  local head build_commit
-  acquire_build_lock
+  local head build_commit rc lock_owned
+  lock_owned=0
+  if [[ "${OPENCLAW_PARALLELS_BUILD_LOCK_HELD:-0}" != "1" ]]; then
+    acquire_build_lock
+    lock_owned=1
+  fi
   head="$(git rev-parse HEAD)"
   build_commit="$(current_build_commit)"
   if [[ "$build_commit" == "$head" ]] && current_control_ui_ready; then
-    release_build_lock
+    if [[ "$lock_owned" -eq 1 ]]; then
+      release_build_lock
+    fi
     return
   fi
   say "Build dist for current head"
+  set +e
   pnpm build
-  say "Build Control UI for current head"
-  pnpm ui:build
+  rc=$?
+  if [[ $rc -eq 0 ]]; then
+    parallels_package_assert_no_generated_drift
+    rc=$?
+  fi
+  if [[ $rc -eq 0 ]]; then
+    say "Build Control UI for current head"
+    pnpm ui:build
+    rc=$?
+  fi
   build_commit="$(current_build_commit)"
-  release_build_lock
-  [[ "$build_commit" == "$head" ]] || die "dist/build-info.json still does not match HEAD after build"
-  current_control_ui_ready || die "dist/control-ui/index.html missing after ui build"
+  set -e
+  if [[ "$lock_owned" -eq 1 ]]; then
+    release_build_lock
+  fi
+  [[ $rc -eq 0 ]] || return "$rc"
+  if [[ "$build_commit" != "$head" ]]; then
+    warn "dist/build-info.json still does not match HEAD after build"
+    return 1
+  fi
+  if ! current_control_ui_ready; then
+    warn "dist/control-ui/index.html missing after ui build"
+    return 1
+  fi
+}
+
+write_package_dist_inventory() {
+  parallels_package_write_dist_inventory
 }
 
 stage_pack_runtime_deps() {
@@ -1199,27 +1314,22 @@ install_main_timeout() {
 install_main_tgz() {
   local host_ip="$1"
   local temp_name="$2"
-  local install_done install_log install_runner tgz_url_q
-  install_log="/tmp/${temp_name}.log"
-  install_done="/tmp/${temp_name}.done"
-  install_runner="/tmp/${temp_name}.runner.sh"
+  local tgz_url_q
   if target_package_installs_directly; then
-    run_logged_guest_current_user_sh "$(cat <<EOF
+    guest_current_user_sh "$(cat <<EOF
 printf 'install-source: registry-spec %s\n' $(shell_quote "$TARGET_PACKAGE_SPEC")
 $GUEST_NPM_BIN install -g $(shell_quote "$TARGET_PACKAGE_SPEC")
-$GUEST_OPENCLAW_BIN --version
 EOF
-)" "$install_log" "$install_done" "$(install_main_timeout)" "$install_runner"
+)"
     return
   fi
   tgz_url_q="$(shell_quote "http://$host_ip:$HOST_PORT/$(basename "$MAIN_TGZ_PATH")")"
-  run_logged_guest_current_user_sh "$(cat <<EOF
+  guest_current_user_sh "$(cat <<EOF
 printf 'install-source: host-tgz %s\n' $(shell_quote "$tgz_url_q")
 curl -fsSL $tgz_url_q -o /tmp/$temp_name
 $GUEST_NPM_BIN install -g /tmp/$temp_name
-$GUEST_OPENCLAW_BIN --version
 EOF
-)" "$install_log" "$install_done" "$(install_main_timeout)" "$install_runner"
+)"
 }
 
 verify_bundle_permissions() {
@@ -1276,17 +1386,20 @@ start_manual_gateway_if_needed() {
   if ! headless_guest_fallback; then
     return 0
   fi
-  local gateway_log guest_gateway_log guest_home launch_cmd
+  local gateway_log guest_gateway_log guest_home launch_cmd runner_log done_path runner_path
   guest_home="$(parallels_macos_resolve_desktop_home "$VM_NAME" "$GUEST_CURRENT_USER")"
   gateway_log="$RUN_DIR/macos-gateway-prlctl.log"
   guest_gateway_log="/tmp/openclaw-parallels-macos-gateway.log"
+  runner_log="/tmp/openclaw-parallels-gateway-start.log"
+  done_path="/tmp/openclaw-parallels-gateway-start.done"
+  runner_path="/tmp/openclaw-parallels-gateway-start.sh"
   printf 'manual gateway launch transport=%s user=%s\n' "$GUEST_CURRENT_USER_TRANSPORT" "$GUEST_CURRENT_USER"
-  guest_current_user_exec /usr/bin/pkill -f 'openclaw.*gateway run' >/dev/null 2>&1 || true
-  guest_current_user_exec /usr/bin/pkill -f 'openclaw-gateway' >/dev/null 2>&1 || true
-  guest_current_user_exec /usr/bin/pkill -f 'openclaw.mjs gateway' >/dev/null 2>&1 || true
   launch_cmd="$(cat <<EOF
 set -euo pipefail
 trap '' HUP
+/usr/bin/pkill -f 'openclaw.*gateway run' >/dev/null 2>&1 || true
+/usr/bin/pkill -f 'openclaw-gateway' >/dev/null 2>&1 || true
+/usr/bin/pkill -f 'openclaw.mjs gateway' >/dev/null 2>&1 || true
 /usr/bin/env \\
   HOME=$(shell_quote "$guest_home") \\
   USER=$(shell_quote "$GUEST_CURRENT_USER") \\
@@ -1308,7 +1421,7 @@ if ! kill -0 "\$gateway_pid" >/dev/null 2>&1; then
 fi
 EOF
 )"
-  if ! guest_current_user_sh "$launch_cmd" >"$gateway_log" 2>&1; then
+  if ! run_logged_guest_current_user_sh "$launch_cmd" "$runner_log" "$done_path" "$TIMEOUT_GATEWAY_S" "$runner_path" >"$gateway_log" 2>&1; then
     cat "$gateway_log" >&2 || true
     return 1
   fi
@@ -1448,7 +1561,7 @@ print(
             os.environ["DISCORD_GUILD_ID"]: {
                 "channels": {
                     os.environ["DISCORD_CHANNEL_ID"]: {
-                        "allow": True,
+                        "enabled": True,
                         "requireMention": False,
                     }
                 }
@@ -1504,14 +1617,23 @@ PY
 
 wait_for_discord_host_visibility() {
   local nonce="$1"
+  local message_id="${2:-}"
   local response
   local deadline=$((SECONDS + TIMEOUT_DISCORD_S))
   while (( SECONDS < deadline )); do
     set +e
+    if [[ -n "$message_id" ]]; then
+      response="$(discord_api_request GET "/channels/$DISCORD_CHANNEL_ID/messages/$message_id")"
+      local direct_rc=$?
+      if [[ $direct_rc -eq 0 ]] && [[ -n "$response" ]] && { [[ "$response" == *"$nonce"* ]] || printf '%s' "$response" | json_contains_string "$nonce"; }; then
+        set -e
+        return 0
+      fi
+    fi
     response="$(discord_api_request GET "/channels/$DISCORD_CHANNEL_ID/messages?limit=20")"
     local rc=$?
     set -e
-    if [[ $rc -eq 0 ]] && [[ -n "$response" ]] && printf '%s' "$response" | json_contains_string "$nonce"; then
+    if [[ $rc -eq 0 ]] && [[ -n "$response" ]] && { [[ "$response" == *"$nonce"* ]] || printf '%s' "$response" | json_contains_string "$nonce"; }; then
       return 0
     fi
     sleep 2
@@ -1539,12 +1661,13 @@ print(
 PY
   )"
   response="$(discord_api_request POST "/channels/$DISCORD_CHANNEL_ID/messages" "$payload")"
-  printf '%s' "$response" | python3 - "$id_file" <<'PY'
+  RESPONSE="$response" python3 - "$id_file" <<'PY'
 import json
+import os
 import pathlib
 import sys
 
-payload = json.load(sys.stdin)
+payload = json.loads(os.environ["RESPONSE"])
 message_id = payload.get("id")
 if not isinstance(message_id, str) or not message_id:
     raise SystemExit("host Discord post missing message id")
@@ -1573,7 +1696,7 @@ wait_for_guest_discord_readback() {
     if [[ -n "$response" ]]; then
       printf '%s' "$response" >"$last_response_path"
     fi
-    if [[ $rc -eq 0 ]] && [[ -n "$response" ]] && printf '%s' "$response" | json_contains_string "$nonce"; then
+    if [[ $rc -eq 0 ]] && [[ -n "$response" ]] && { [[ "$response" == *"$nonce"* ]] || printf '%s' "$response" | json_contains_string "$nonce"; }; then
       return 0
     fi
     sleep 3
@@ -1583,7 +1706,7 @@ wait_for_guest_discord_readback() {
 
 run_discord_roundtrip_smoke() {
   local phase="$1"
-  local nonce outbound_nonce inbound_nonce outbound_message outbound_log sent_id_file host_id_file
+  local nonce outbound_nonce inbound_nonce outbound_message outbound_log sent_id_file host_id_file sent_message_id
   nonce="$(date +%s)-$RANDOM"
   outbound_nonce="$phase-out-$nonce"
   inbound_nonce="$phase-in-$nonce"
@@ -1592,6 +1715,7 @@ run_discord_roundtrip_smoke() {
   sent_id_file="$RUN_DIR/$phase.discord-sent-message-id"
   host_id_file="$RUN_DIR/$phase.discord-host-message-id"
 
+  printf 'discord: guest-send\n'
   guest_current_user_exec \
     "$GUEST_OPENCLAW_BIN" \
     message send \
@@ -1601,14 +1725,26 @@ run_discord_roundtrip_smoke() {
     --silent \
     --json >"$outbound_log"
 
-  discord_message_id_from_send_log "$outbound_log" >"$sent_id_file"
-  wait_for_discord_host_visibility "$outbound_nonce"
+  sent_message_id="$(discord_message_id_from_send_log "$outbound_log")"
+  printf '%s\n' "$sent_message_id" >"$sent_id_file"
+  printf 'discord: host-visibility %s\n' "$sent_message_id"
+  wait_for_discord_host_visibility "$outbound_nonce" "$sent_message_id"
+  printf 'discord: host-reply\n'
   post_host_discord_message "$inbound_nonce" "$host_id_file"
+  printf 'discord: guest-readback\n'
   wait_for_guest_discord_readback "$inbound_nonce"
 }
 
 phase_log_path() {
   printf '%s/%s.log\n' "$RUN_DIR" "$1"
+}
+
+child_job_running() {
+  local target="$1"
+  local ppid
+  kill -0 "$target" >/dev/null 2>&1 || return 1
+  ppid="$(ps -o ppid= -p "$target" 2>/dev/null | tr -d '[:space:]')"
+  [[ "$ppid" == "$$" ]]
 }
 
 extract_last_version() {
@@ -1642,10 +1778,11 @@ phase_run() {
   local timeout_s="$2"
   shift 2
 
-  local log_path pid start rc timed_out
+  local log_path pid start rc timed_out next_warn summary
   log_path="$(phase_log_path "$phase_id")"
   say "$phase_id"
   start=$SECONDS
+  next_warn=$((start + PHASE_STALE_WARN_S))
   timed_out=0
 
   (
@@ -1653,7 +1790,13 @@ phase_run() {
   ) >"$log_path" 2>&1 &
   pid=$!
 
-  while kill -0 "$pid" >/dev/null 2>&1; do
+  while child_job_running "$pid"; do
+    if (( SECONDS >= next_warn )); then
+      summary="$(parallels_log_progress_extract python3 "$log_path")"
+      [[ -n "$summary" ]] || summary="waiting for first log line"
+      warn "$phase_id still running after $((SECONDS - start))s: $summary"
+      next_warn=$((SECONDS + PHASE_STALE_WARN_S))
+    fi
     if (( SECONDS - start >= timeout_s )); then
       timed_out=1
       kill "$pid" >/dev/null 2>&1 || true
@@ -1779,7 +1922,7 @@ run_upgrade_lane() {
   phase_run "upgrade.restore-snapshot" "$TIMEOUT_SNAPSHOT_S" restore_snapshot "$snapshot_id"
   phase_run "upgrade.install-latest" "$TIMEOUT_INSTALL_SITE_S" install_latest_release
   LATEST_INSTALLED_VERSION="$(extract_last_version "$(phase_log_path upgrade.install-latest)")"
-  phase_run "upgrade.verify-latest-version" "$TIMEOUT_VERIFY_S" verify_version_contains "$LATEST_VERSION"
+  phase_run "upgrade.verify-latest-version" "$TIMEOUT_VERIFY_S" verify_version_contains "$INSTALL_VERSION"
   if [[ "$CHECK_LATEST_REF" -eq 1 ]]; then
     if phase_run "upgrade.latest-ref-precheck" "$TIMEOUT_ONBOARD_S" capture_latest_ref_failure; then
       UPGRADE_PRECHECK_STATUS="latest-ref-pass"

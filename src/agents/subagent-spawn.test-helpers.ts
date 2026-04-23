@@ -121,10 +121,28 @@ export async function loadSubagentSpawnModuleForTest(params: {
   resolveAgentConfig?: (cfg: Record<string, unknown>, agentId: string) => unknown;
   resolveAgentWorkspaceDir?: (cfg: Record<string, unknown>, agentId: string) => string;
   resolveSubagentSpawnModelSelection?: () => string | undefined;
+  getSubagentDepthFromSessionStore?: (sessionKey: string, opts?: unknown) => number;
+  countActiveRunsForSession?: (sessionKey: string) => number;
   resolveSandboxRuntimeStatus?: (params: {
     cfg?: Record<string, unknown>;
     sessionKey?: string;
   }) => { sandboxed: boolean };
+  getSessionBindingService?: () => {
+    listBySession: (targetSessionKey: string) => Array<{
+      status?: string;
+      conversation: {
+        channel: string;
+        accountId?: string;
+        conversationId: string;
+        parentConversationId?: string;
+      };
+    }>;
+  };
+  resolveConversationDeliveryTarget?: (params: {
+    channel?: string;
+    conversationId?: string | number;
+    parentConversationId?: string | number;
+  }) => { to?: string; threadId?: string };
   workspaceDir?: string;
   sessionStorePath?: string;
   resetModules?: boolean;
@@ -143,6 +161,7 @@ export async function loadSubagentSpawnModuleForTest(params: {
       params.emitSessionLifecycleEventMock?.(...args),
     formatThinkingLevels: (levels: string[]) => levels.join(", "),
     normalizeThinkLevel: (level: unknown) => normalizeOptionalString(level),
+    DEFAULT_SUBAGENT_MAX_CHILDREN_PER_AGENT: 5,
     DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH: 3,
     ADMIN_SCOPE: "operator.admin",
     AGENT_LANE_SUBAGENT: "subagent",
@@ -165,6 +184,22 @@ export async function loadSubagentSpawnModuleForTest(params: {
     isAdminOnlyMethod: (method: string) =>
       method === "sessions.patch" || method === "sessions.delete",
     pruneLegacyStoreKeys: (...args: unknown[]) => params.pruneLegacyStoreKeysMock?.(...args),
+    getSessionBindingService:
+      params.getSessionBindingService ?? (() => ({ listBySession: () => [] })),
+    resolveConversationDeliveryTarget:
+      params.resolveConversationDeliveryTarget ??
+      ((targetParams: { channel?: string; conversationId?: string | number }) => ({
+        to: targetParams.conversationId
+          ? `channel:${String(targetParams.conversationId)}`
+          : undefined,
+      })),
+    mergeDeliveryContext: (
+      primary?: Record<string, unknown>,
+      fallback?: Record<string, unknown>,
+    ) => ({
+      ...fallback,
+      ...primary,
+    }),
     resolveGatewaySessionStoreTarget: (targetParams: { key: string }) => ({
       agentId: "main",
       storePath: params.sessionStorePath ?? "/tmp/subagent-spawn-model-session.json",
@@ -187,11 +222,11 @@ export async function loadSubagentSpawnModuleForTest(params: {
   }));
 
   vi.doMock("./subagent-depth.js", () => ({
-    getSubagentDepthFromSessionStore: () => 0,
+    getSubagentDepthFromSessionStore: params.getSubagentDepthFromSessionStore ?? (() => 0),
   }));
 
   vi.doMock("./subagent-registry.js", () => ({
-    countActiveRunsForSession: () => 0,
+    countActiveRunsForSession: params.countActiveRunsForSession ?? (() => 0),
     registerSubagentRun:
       params.registerSubagentRunMock ?? vi.fn((_record: Record<string, unknown>) => undefined),
     resetSubagentRegistryForTests,

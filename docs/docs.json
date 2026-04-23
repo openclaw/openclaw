@@ -457,6 +457,14 @@
       "destination": "/channels/telegram"
     },
     {
+      "source": "/channels/openclaw-weixin",
+      "destination": "/channels/wechat"
+    },
+    {
+      "source": "/channels/weixin",
+      "destination": "/channels/wechat"
+    },
+    {
       "source": "/group-messages",
       "destination": "/channels/group-messages"
     },
@@ -1028,6 +1036,7 @@
                   "channels/telegram",
                   "channels/tlon",
                   "channels/twitch",
+                  "channels/wechat",
                   "channels/whatsapp",
                   "channels/zalo",
                   "channels/zalouser"
@@ -1062,7 +1071,8 @@
                   "concepts/agent-workspace",
                   "concepts/soul",
                   "concepts/oauth",
-                  "start/bootstrapping"
+                  "start/bootstrapping",
+                  "concepts/experimental-features"
                 ]
               },
               {
@@ -1205,6 +1215,7 @@
                   "tools/btw",
                   "tools/code-execution",
                   "tools/diffs",
+                  "tools/trajectory",
                   "tools/elevated",
                   "tools/exec",
                   "tools/exec-approvals",
@@ -1216,6 +1227,7 @@
                   "tools/pdf",
                   "tools/reactions",
                   "tools/thinking",
+                  "tools/tokenjuice",
                   "tools/video-generation"
                 ]
               },
@@ -1255,6 +1267,7 @@
                   "providers/comfy",
                   "providers/deepgram",
                   "providers/deepseek",
+                  "providers/elevenlabs",
                   "providers/fal",
                   "providers/fireworks",
                   "providers/github-copilot",
@@ -1282,6 +1295,7 @@
                   "providers/sglang",
                   "providers/stepfun",
                   "providers/synthetic",
+                  "providers/tencent",
                   "providers/together",
                   "providers/venice",
                   "providers/vercel-ai-gateway",
@@ -1366,6 +1380,7 @@
                     "group": "Security and sandboxing",
                     "pages": [
                       "gateway/security/index",
+                      "gateway/security/audit-checks",
                       "gateway/sandboxing",
                       "gateway/openshell",
                       "gateway/sandbox-vs-tool-policy-vs-elevated"
@@ -1471,7 +1486,8 @@
                       "cli/message",
                       "cli/models",
                       "cli/sessions",
-                      "cli/system"
+                      "cli/system",
+                      "cli/tasks"
                     ]
                   },
                   {

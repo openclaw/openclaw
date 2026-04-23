@@ -3,14 +3,17 @@
 
 export {
   assertOkOrThrowHttpError,
+  buildAudioTranscriptionFormData,
   createProviderOperationDeadline,
   fetchWithTimeout,
   fetchWithTimeoutGuarded,
   normalizeBaseUrl,
+  pollProviderOperationJson,
   postJsonRequest,
   postTranscriptionRequest,
   resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
+  resolveAudioTranscriptionUploadFileName,
   requireTranscriptionText,
   waitProviderOperationPollInterval,
 } from "../media-understanding/shared.js";
