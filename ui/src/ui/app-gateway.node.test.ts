@@ -10,6 +10,7 @@ const loadControlUiBootstrapConfigMock = vi.hoisted(() => vi.fn(async () => unde
 type GatewayClientMock = {
   start: ReturnType<typeof vi.fn>;
   stop: ReturnType<typeof vi.fn>;
+  request: ReturnType<typeof vi.fn>;
   options: { clientVersion?: string };
   emitHello: (hello?: GatewayHelloOk) => void;
   emitClose: (info: {
@@ -40,6 +41,12 @@ vi.mock("./gateway.ts", async (importOriginal) => {
   class GatewayBrowserClient {
     readonly start = vi.fn();
     readonly stop = vi.fn();
+    readonly request = vi.fn(async (method: string) => {
+      if (method === "models.authStatus") {
+        return { ts: 0, providers: [] };
+      }
+      return {};
+    });
 
     constructor(
       private opts: {
@@ -57,6 +64,7 @@ vi.mock("./gateway.ts", async (importOriginal) => {
       gatewayClientInstances.push({
         start: this.start,
         stop: this.stop,
+        request: this.request,
         options: { clientVersion: this.opts.clientVersion },
         emitHello: (hello) => {
           this.opts.onHello?.(
@@ -522,6 +530,49 @@ describe("connectGateway", () => {
 
     expect(loadControlUiBootstrapConfigMock).toHaveBeenCalledTimes(1);
     expect(loadControlUiBootstrapConfigMock).toHaveBeenCalledWith(host);
+  });
+
+  it("sends queued chat aborts after reconnect before clearing pending state", async () => {
+    const host = createHost();
+    host.chatRunId = "run-main";
+    host.chatStream = "partial";
+    host.pendingAbort = { runId: "run-main", sessionKey: "main" };
+
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
+
+    client.emitHello();
+    await Promise.resolve();
+
+    expect(client.request).toHaveBeenCalledWith("chat.abort", {
+      sessionKey: "main",
+      runId: "run-main",
+    });
+    expect(host.pendingAbort).toBeNull();
+    expect(host.chatRunId).toBeNull();
+    expect(host.chatStream).toBeNull();
+  });
+
+  it("logs and drops stale queued chat abort failures after reconnect", async () => {
+    const host = createHost();
+    host.pendingAbort = { runId: "run-stale", sessionKey: "main" };
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
+    const error = new Error("run already finished");
+    client.request.mockImplementationOnce(async () => {
+      throw error;
+    });
+
+    client.emitHello();
+    await Promise.resolve();
+
+    expect(host.pendingAbort).toBeNull();
+    expect(warn).toHaveBeenCalledWith("[openclaw] pending abort failed:", error);
+    warn.mockRestore();
   });
 
   it("keeps shutdown restart reasons on service restart closes", () => {
