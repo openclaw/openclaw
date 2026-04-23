@@ -15,7 +15,7 @@ import {
   type DiagnosticSupportBundleFile,
 } from "../logging/diagnostic-support-bundle.js";
 import {
-  redactPathForSupport,
+  redactSupportString,
   type SupportRedactionContext,
 } from "../logging/diagnostic-support-redaction.js";
 import { safeJsonStringify } from "../utils/safe-json.js";
@@ -422,18 +422,16 @@ function redactWorkspacePathString(value: string, redaction: TrajectoryExportRed
 
 function maybeRedactPathString(value: string, redaction: TrajectoryExportRedaction): string {
   const workspaceRedacted = redactWorkspacePathString(value, redaction);
-  if (workspaceRedacted !== value) {
-    return workspaceRedacted;
-  }
   if (
-    path.isAbsolute(value) ||
-    value.includes(redaction.stateDir) ||
-    (redaction.env.HOME ? value.includes(redaction.env.HOME) : false) ||
-    (redaction.env.USERPROFILE ? value.includes(redaction.env.USERPROFILE) : false)
+    workspaceRedacted !== value ||
+    path.isAbsolute(workspaceRedacted) ||
+    workspaceRedacted.includes(redaction.stateDir) ||
+    (redaction.env.HOME ? workspaceRedacted.includes(redaction.env.HOME) : false) ||
+    (redaction.env.USERPROFILE ? workspaceRedacted.includes(redaction.env.USERPROFILE) : false)
   ) {
-    return redactPathForSupport(value, redaction);
+    return redactSupportString(workspaceRedacted, redaction);
   }
-  return value;
+  return workspaceRedacted;
 }
 
 function redactLocalPathValues(value: unknown, redaction: TrajectoryExportRedaction): unknown {

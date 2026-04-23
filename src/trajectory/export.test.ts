@@ -491,6 +491,60 @@ describe("exportTrajectoryBundle", () => {
     expect(bundle.events.some((event) => event.type === "other-runtime")).toBe(false);
   });
 
+  it("redacts non-workspace paths in strings that also contain workspace paths", () => {
+    const tmpDir = makeTempDir();
+    const homeDir = makeTempDir();
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    const runtimeFile = path.join(tmpDir, "session.trajectory.jsonl");
+    const outputDir = path.join(tmpDir, "bundle");
+    const previousHome = process.env.HOME;
+    writeSimpleSessionFile(sessionFile);
+    fs.writeFileSync(
+      runtimeFile,
+      `${JSON.stringify({
+        traceSchema: "openclaw-trajectory",
+        schemaVersion: 1,
+        traceId: "session-1",
+        source: "runtime",
+        type: "mixed-paths",
+        ts: "2026-04-22T08:00:00.000Z",
+        seq: 1,
+        sourceSeq: 1,
+        sessionId: "session-1",
+        data: {
+          value: `workspace=${path.join(tmpDir, "inside.txt")} home=${path.join(
+            homeDir,
+            "secret.txt",
+          )}`,
+        },
+      })}\n`,
+      "utf8",
+    );
+
+    process.env.HOME = homeDir;
+    try {
+      exportTrajectoryBundle({
+        outputDir,
+        sessionFile,
+        sessionId: "session-1",
+        workspaceDir: tmpDir,
+        runtimeFile,
+      });
+    } finally {
+      if (previousHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = previousHome;
+      }
+    }
+
+    const events = fs.readFileSync(path.join(outputDir, "events.jsonl"), "utf8");
+    expect(events).toContain("$WORKSPACE_DIR");
+    expect(events).toContain("~");
+    expect(events).not.toContain(tmpDir);
+    expect(events).not.toContain(homeDir);
+  });
+
   it("exports merged runtime and transcript events plus convenience files", () => {
     const tmpDir = makeTempDir();
     const sessionFile = path.join(tmpDir, "session.jsonl");
