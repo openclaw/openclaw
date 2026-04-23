@@ -9,6 +9,7 @@ const resolveDefaultAgentId = vi.hoisted(() => vi.fn(() => "main"));
 const resolveAgentWorkspaceDir = vi.hoisted(() =>
   vi.fn((_cfg: OpenClawConfig, _agentId: string) => "/tmp/openclaw"),
 );
+const listAgentIds = vi.hoisted(() => vi.fn((_cfg: OpenClawConfig) => ["main"]));
 const resolveMemorySearchConfig = vi.hoisted(() =>
   vi.fn<(_cfg: OpenClawConfig, _agentId: string) => { enabled: boolean } | null>(() => ({
     enabled: true,
@@ -27,6 +28,7 @@ vi.mock("../../config/config.js", () => ({
 }));
 
 vi.mock("../../agents/agent-scope.js", () => ({
+  listAgentIds,
   resolveDefaultAgentId,
   resolveAgentWorkspaceDir,
 }));
@@ -158,6 +160,7 @@ describe("doctor.memory.status", () => {
     loadConfig.mockClear();
     resolveDefaultAgentId.mockClear();
     resolveAgentWorkspaceDir.mockReset().mockReturnValue("/tmp/openclaw");
+    listAgentIds.mockReset().mockReturnValue(["main"]);
     resolveMemorySearchConfig.mockReset().mockReturnValue({ enabled: true });
     getMemorySearchManager.mockReset();
     previewGroundedRemMarkdown.mockReset();
@@ -743,6 +746,112 @@ describe("doctor.memory.status", () => {
       readFileSpy.mockRestore();
       await fs.rm(workspaceRoot, { recursive: true, force: true });
     }
+  });
+
+  it("includes a perAgent entry for the default agent from manager.status()", async () => {
+    const close = vi.fn().mockResolvedValue(undefined);
+    getMemorySearchManager.mockResolvedValue({
+      manager: {
+        status: () => ({ provider: "gemini", files: 142, chunks: 3891, dirty: false }),
+        probeEmbeddingAvailability: vi.fn().mockResolvedValue({ ok: true }),
+        close,
+      },
+    });
+    const respond = vi.fn();
+
+    await invokeDoctorMemoryStatus(respond);
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        perAgent: [{ agentId: "main", dirty: false, files: 142, chunks: 3891 }],
+      }),
+      undefined,
+    );
+  });
+
+  it("collects perAgent entries for every configured agent", async () => {
+    listAgentIds.mockReturnValue(["main", "alpha", "beta"]);
+    const close = vi.fn().mockResolvedValue(undefined);
+    getMemorySearchManager.mockImplementation(
+      async ({ agentId }: { agentId: string }) =>
+        ({
+          main: {
+            manager: {
+              status: () => ({ provider: "gemini", files: 10, chunks: 100, dirty: true }),
+              probeEmbeddingAvailability: vi.fn().mockResolvedValue({ ok: true }),
+              close,
+            },
+          },
+          alpha: {
+            manager: {
+              status: () => ({ files: 5, chunks: 40, dirty: false }),
+              close,
+            },
+          },
+          beta: {
+            manager: null,
+            error: "memory search unavailable",
+          },
+        })[agentId] ?? { manager: null, error: "unknown agent" },
+    );
+    const respond = vi.fn();
+
+    await invokeDoctorMemoryStatus(respond);
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        perAgent: [
+          { agentId: "main", dirty: true, files: 10, chunks: 100 },
+          { agentId: "alpha", dirty: false, files: 5, chunks: 40 },
+          {
+            agentId: "beta",
+            dirty: false,
+            files: 0,
+            chunks: 0,
+            error: "memory search unavailable",
+          },
+        ],
+      }),
+      undefined,
+    );
+  });
+
+  it("exposes perAgent entries even when the default agent manager is unavailable", async () => {
+    listAgentIds.mockReturnValue(["main", "alpha"]);
+    const close = vi.fn().mockResolvedValue(undefined);
+    getMemorySearchManager.mockImplementation(async ({ agentId }: { agentId: string }) =>
+      agentId === "main"
+        ? { manager: null, error: "memory plugin unavailable" }
+        : {
+            manager: {
+              status: () => ({ files: 7, chunks: 77, dirty: false }),
+              close,
+            },
+          },
+    );
+    const respond = vi.fn();
+
+    await invokeDoctorMemoryStatus(respond);
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        embedding: { ok: false, error: "memory plugin unavailable" },
+        perAgent: [
+          {
+            agentId: "main",
+            dirty: false,
+            files: 0,
+            chunks: 0,
+            error: "memory plugin unavailable",
+          },
+          { agentId: "alpha", dirty: false, files: 7, chunks: 77 },
+        ],
+      }),
+      undefined,
+    );
   });
 });
 

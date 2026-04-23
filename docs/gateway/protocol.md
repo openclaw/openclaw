@@ -295,7 +295,9 @@ implemented in `src/gateway/server-methods/*.ts`.
 - `usage.status` returns provider usage windows/remaining quota summaries.
 - `usage.cost` returns aggregated cost usage summaries for a date range.
 - `doctor.memory.status` returns vector-memory / embedding readiness for the
-  active default agent workspace.
+  active default agent workspace, plus a `perAgent: [{ agentId, dirty, files,
+chunks, error? }]` array covering every configured agent so dashboards can
+  render per-agent memory state without shelling out to the CLI.
 - `sessions.usage` returns per-session usage summaries.
 - `sessions.usage.timeseries` returns timeseries usage for one session.
 - `sessions.usage.logs` returns usage log entries for one session.
