@@ -89,6 +89,7 @@ USER.md
 
 # local tooling
 .serena/
+.artifacts/
 
 # Agent credentials and memory (NEVER COMMIT)
 /memory/
