@@ -744,4 +744,30 @@ describe("google transport stream", () => {
 
     expect(params.contents).toEqual([{ role: "user", parts: [{ text: " " }] }]);
   });
+
+  it.each([
+    ["gemini-2.5-flash-lite", "minimal", 512],
+    ["gemini-2.5-flash-lite", "low", 2048],
+    ["gemini-2.5-flash", "minimal", 512],
+    ["gemini-2.5-flash", "low", 2048],
+    ["gemini-2.5-pro", "minimal", 512],
+    ["gemini-2.5-pro", "low", 2048],
+    ["gemini-2.5-flash", "medium", 8192],
+    ["gemini-2.5-pro", "medium", 8192],
+  ] as const)(
+    "uses thinkingBudget %i for %s with reasoning=%s",
+    (id, reasoning, expectedBudget) => {
+      const params = buildGoogleGenerativeAiParams(
+        buildGeminiModel({ id }),
+        {
+          messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        } as never,
+        { reasoning },
+      );
+
+      expect(params.generationConfig).toMatchObject({
+        thinkingConfig: { includeThoughts: true, thinkingBudget: expectedBudget },
+      });
+    },
+  );
 });
