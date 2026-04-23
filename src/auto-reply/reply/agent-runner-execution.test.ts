@@ -15,6 +15,8 @@ const state = vi.hoisted(() => ({
   runWithModelFallbackMock: vi.fn(),
   isCliProviderMock: vi.fn((_: unknown) => false),
   isInternalMessageChannelMock: vi.fn((_: unknown) => false),
+  isLikelyContextOverflowErrorMock: vi.fn((_?: string) => false),
+  isContextOverflowErrorMock: vi.fn((_?: string) => false),
 }));
 
 vi.mock("../../agents/pi-embedded.js", () => ({
@@ -50,9 +52,9 @@ vi.mock("../../agents/bootstrap-budget.js", () => ({
 vi.mock("../../agents/pi-embedded-helpers.js", () => ({
   BILLING_ERROR_USER_MESSAGE: "billing",
   isCompactionFailureError: () => false,
-  isContextOverflowError: () => false,
+  isContextOverflowError: (msg?: string) => state.isContextOverflowErrorMock(msg),
   isBillingErrorMessage: () => false,
-  isLikelyContextOverflowError: () => false,
+  isLikelyContextOverflowError: (msg?: string) => state.isLikelyContextOverflowErrorMock(msg),
   isRateLimitErrorMessage: () => false,
   isTransientHttpError: () => false,
   sanitizeUserFacingText: (text?: string) => text ?? "",
@@ -243,6 +245,10 @@ describe("runAgentTurnWithFallback", () => {
     state.isCliProviderMock.mockReturnValue(false);
     state.isInternalMessageChannelMock.mockReset();
     state.isInternalMessageChannelMock.mockReturnValue(false);
+    state.isLikelyContextOverflowErrorMock.mockReset();
+    state.isLikelyContextOverflowErrorMock.mockReturnValue(false);
+    state.isContextOverflowErrorMock.mockReset();
+    state.isContextOverflowErrorMock.mockReturnValue(false);
     state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => ({
       result: await params.run("anthropic", "claude"),
       provider: "anthropic",
@@ -2215,5 +2221,95 @@ describe("runAgentTurnWithFallback", () => {
       authProfileOverride: "anthropic:openclaw",
       authProfileOverrideSource: "user",
     });
+  });
+
+  it("auto-resets session when context overflow is thrown", async () => {
+    state.isLikelyContextOverflowErrorMock.mockReturnValue(true);
+
+    state.runWithModelFallbackMock.mockImplementation(async (_params: FallbackRunnerParams) => {
+      throw new Error("Context window exceeded: prompt is too long");
+    });
+
+    const resetMock = vi.fn(async () => true);
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const { replyOperation } = createMockReplyOperation();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun: createFollowupRun(),
+      sessionCtx: {
+        Provider: "telegram",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: {} satisfies GetReplyOptions,
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: resetMock,
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "agent:main:main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+      replyOperation,
+    });
+
+    expect(resetMock).toHaveBeenCalledTimes(1);
+    expect(result.kind).toBe("final");
+    expect((result as { payload: { text: string } }).payload.text).toContain(
+      "reset our conversation",
+    );
+  });
+
+  it("auto-resets session on final embedded context overflow with no payload", async () => {
+    state.isContextOverflowErrorMock.mockReturnValue(true);
+
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => ({
+      payloads: [],
+      meta: {
+        error: {
+          message: "Context window exceeded",
+          kind: "context_overflow",
+        },
+      },
+    }));
+
+    const resetMock = vi.fn(async () => true);
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const { replyOperation } = createMockReplyOperation();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun: createFollowupRun(),
+      sessionCtx: {
+        Provider: "telegram",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: {} satisfies GetReplyOptions,
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: resetMock,
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "agent:main:main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+      replyOperation,
+    });
+
+    expect(resetMock).toHaveBeenCalledTimes(1);
+    expect(result.kind).toBe("final");
+    expect((result as { payload: { text: string } }).payload.text).toContain(
+      "reset our conversation",
+    );
   });
 });

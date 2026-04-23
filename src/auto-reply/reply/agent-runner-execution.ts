@@ -1496,6 +1496,25 @@ export async function runAgentTurnWithFallback(params: {
         };
       }
 
+      // Auto-recover from context overflow by resetting the session.
+      // Without this, the bloated session persists and every subsequent
+      // message fails with the same overflow error, causing channels like
+      // Telegram to stall permanently.  See #68494.
+      if (
+        isContextOverflow &&
+        !didResetAfterCompactionFailure &&
+        (await params.resetSessionAfterCompactionFailure(message))
+      ) {
+        didResetAfterCompactionFailure = true;
+        params.replyOperation?.fail("run_failed", err);
+        return {
+          kind: "final",
+          payload: {
+            text: "⚠️ Context overflow — I've reset our conversation to start fresh. Please try again.",
+          },
+        };
+      }
+
       if (isTransientHttp && !didRetryTransientHttpError) {
         didRetryTransientHttpError = true;
         // Retry the full runWithModelFallback() cycle — transient errors
@@ -1555,6 +1574,21 @@ export async function runAgentTurnWithFallback(params: {
   if (finalEmbeddedError && !hasPayloadText) {
     const errorMsg = finalEmbeddedError.message ?? "";
     if (isContextOverflowError(errorMsg)) {
+      // Attempt auto-reset so the next inbound message starts fresh instead
+      // of hitting the same overflow.  See #68494.
+      if (
+        !didResetAfterCompactionFailure &&
+        (await params.resetSessionAfterCompactionFailure(errorMsg))
+      ) {
+        didResetAfterCompactionFailure = true;
+        params.replyOperation?.fail("run_failed", finalEmbeddedError);
+        return {
+          kind: "final",
+          payload: {
+            text: "⚠️ Context overflow — I've reset our conversation to start fresh. Please try again.",
+          },
+        };
+      }
       params.replyOperation?.fail("run_failed", finalEmbeddedError);
       return {
         kind: "final",
