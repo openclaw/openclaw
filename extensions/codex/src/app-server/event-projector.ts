@@ -107,11 +107,7 @@ export class CodexAppServerEventProjector {
         break;
       case "item/autoApprovalReview/started":
       case "item/autoApprovalReview/completed":
-        this.guardianReviewCount += 1;
-        this.emitAgentEvent({
-          stream: "codex_app_server.guardian",
-          data: { method: notification.method },
-        });
+        this.handleGuardianReviewNotification(notification.method, params);
         break;
       case "thread/tokenUsage/updated":
         this.handleTokenUsage(params);
@@ -377,6 +373,27 @@ export class CodexAppServerEventProjector {
     if (usage) {
       this.tokenUsage = usage;
     }
+  }
+
+  private handleGuardianReviewNotification(method: string, params: JsonObject): void {
+    this.guardianReviewCount += 1;
+    const review = isJsonObject(params.review) ? params.review : undefined;
+    const action = isJsonObject(params.action) ? params.action : undefined;
+    this.emitAgentEvent({
+      stream: "codex_app_server.guardian",
+      data: {
+        method,
+        phase: method.endsWith("/started") ? "started" : "completed",
+        reviewId: readString(params, "reviewId"),
+        targetItemId: readNullableString(params, "targetItemId"),
+        decisionSource: readString(params, "decisionSource"),
+        status: review ? readString(review, "status") : undefined,
+        riskLevel: review ? readString(review, "riskLevel") : undefined,
+        userAuthorization: review ? readString(review, "userAuthorization") : undefined,
+        rationale: review ? readNullableString(review, "rationale") : undefined,
+        actionType: action ? readString(action, "type") : undefined,
+      },
+    });
   }
 
   private async handleTurnCompleted(params: JsonObject): Promise<void> {

@@ -41,6 +41,21 @@ function shouldStartGatewayMemoryBackend(cfg: OpenClawConfig): boolean {
   return cfg.memory?.backend === "qmd";
 }
 
+function isConfiguredCliBackendPrimary(params: {
+  cfg: OpenClawConfig;
+  explicitPrimary: string;
+  normalizeProviderId: (provider: string) => string;
+}): boolean {
+  const slashIndex = params.explicitPrimary.indexOf("/");
+  if (slashIndex <= 0) {
+    return false;
+  }
+  const provider = params.normalizeProviderId(params.explicitPrimary.slice(0, slashIndex));
+  return Object.keys(params.cfg.agents?.defaults?.cliBackends ?? {}).some(
+    (backend) => params.normalizeProviderId(backend) === provider,
+  );
+}
+
 async function hasGatewayStartupInternalHookListeners(): Promise<boolean> {
   const { hasInternalHookListeners } = await import("../hooks/internal-hooks.js");
   return hasInternalHookListeners("gateway", "startup");
@@ -53,6 +68,16 @@ async function prewarmConfiguredPrimaryModel(params: {
   const { resolveAgentModelPrimaryValue } = await import("../config/model-input.js");
   const explicitPrimary = resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model)?.trim();
   if (!explicitPrimary) {
+    return;
+  }
+  const { normalizeProviderId } = await import("../agents/provider-id.js");
+  if (
+    isConfiguredCliBackendPrimary({
+      cfg: params.cfg,
+      explicitPrimary,
+      normalizeProviderId,
+    })
+  ) {
     return;
   }
   const [

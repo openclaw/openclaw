@@ -576,7 +576,7 @@ async function updatePluginsAfterCoreUpdate(params: {
   }
 
   const syncResult = await syncPluginsForUpdateChannel({
-    config: params.configSnapshot.config,
+    config: params.configSnapshot.sourceConfig,
     channel: params.channel,
     workspaceDir: params.root,
     logger: pluginLogger,
@@ -1324,9 +1324,9 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
       }
     } else {
       const next = {
-        ...configSnapshot.config,
+        ...configSnapshot.sourceConfig,
         update: {
-          ...configSnapshot.config.update,
+          ...configSnapshot.sourceConfig.update,
           channel: requestedChannel,
         },
       };

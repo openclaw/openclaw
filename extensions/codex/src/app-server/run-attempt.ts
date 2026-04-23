@@ -5,6 +5,7 @@ import {
   clearActiveEmbeddedRun,
   createOpenClawCodingTools,
   embeddedAgentLog,
+  formatErrorMessage,
   isSubagentSessionKey,
   normalizeProviderToolSchemas,
   resolveAttemptSpawnWorkspaceDir,
@@ -14,6 +15,9 @@ import {
   resolveSessionAgentIds,
   resolveUserPath,
   resolveAgentHarnessBeforePromptBuildResult,
+  runAgentHarnessAgentEndHook,
+  runAgentHarnessLlmInputHook,
+  runAgentHarnessLlmOutputHook,
   setActiveEmbeddedRun,
   supportsModelTools,
   type EmbeddedRunAttemptParams,
@@ -51,6 +55,7 @@ export async function runCodexAppServerAttempt(
   params: EmbeddedRunAttemptParams,
   options: { pluginConfig?: unknown; startupTimeoutFloorMs?: number } = {},
 ): Promise<EmbeddedRunAttemptResult> {
+  const attemptStartedAt = Date.now();
   const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig: options.pluginConfig });
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
   await fs.mkdir(resolvedWorkspace, { recursive: true });
@@ -100,22 +105,29 @@ export async function runCodexAppServerAttempt(
   const toolBridge = createCodexDynamicToolBridge({
     tools,
     signal: runAbortController.signal,
+    hookContext: {
+      agentId: sessionAgentId,
+      sessionId: params.sessionId,
+      sessionKey: sandboxSessionKey,
+      runId: params.runId,
+    },
   });
   const historyMessages = readMirroredSessionHistoryMessages(params.sessionFile);
+  const hookContext = {
+    runId: params.runId,
+    agentId: sessionAgentId,
+    sessionKey: sandboxSessionKey,
+    sessionId: params.sessionId,
+    workspaceDir: params.workspaceDir,
+    messageProvider: params.messageProvider ?? undefined,
+    trigger: params.trigger,
+    channelId: params.messageChannel ?? params.messageProvider ?? undefined,
+  };
   const promptBuild = await resolveAgentHarnessBeforePromptBuildResult({
     prompt: params.prompt,
     developerInstructions: buildDeveloperInstructions(params),
     messages: historyMessages,
-    ctx: {
-      runId: params.runId,
-      agentId: sessionAgentId,
-      sessionKey: params.sessionKey,
-      sessionId: params.sessionId,
-      workspaceDir: params.workspaceDir,
-      messageProvider: params.messageProvider ?? undefined,
-      trigger: params.trigger,
-      channelId: params.messageChannel ?? params.messageProvider ?? undefined,
-    },
+    ctx: hookContext,
   });
   let client: CodexAppServerClient;
   let thread: CodexAppServerThreadBinding;
@@ -211,8 +223,30 @@ export async function runCodexAppServerAttempt(
     return toolBridge.handleToolCall(call) as Promise<JsonValue>;
   });
 
+  const llmInputEvent = {
+    runId: params.runId,
+    sessionId: params.sessionId,
+    provider: params.provider,
+    model: params.modelId,
+    systemPrompt: promptBuild.developerInstructions,
+    prompt: promptBuild.prompt,
+    historyMessages,
+    imagesCount: params.images?.length ?? 0,
+  };
+  const turnStartFailureMessages = [
+    ...historyMessages,
+    {
+      role: "user",
+      content: [{ type: "text", text: promptBuild.prompt }],
+    },
+  ];
+
   let turn: CodexTurnStartResponse;
   try {
+    runAgentHarnessLlmInputHook({
+      event: llmInputEvent,
+      ctx: hookContext,
+    });
     turn = await client.request<CodexTurnStartResponse>(
       "turn/start",
       buildTurnStartParams(params, {
@@ -224,6 +258,25 @@ export async function runCodexAppServerAttempt(
       { timeoutMs: params.timeoutMs, signal: runAbortController.signal },
     );
   } catch (error) {
+    runAgentHarnessLlmOutputHook({
+      event: {
+        runId: params.runId,
+        sessionId: params.sessionId,
+        provider: params.provider,
+        model: params.modelId,
+        assistantTexts: [],
+      },
+      ctx: hookContext,
+    });
+    runAgentHarnessAgentEndHook({
+      event: {
+        messages: turnStartFailureMessages,
+        success: false,
+        error: formatErrorMessage(error),
+        durationMs: Date.now() - attemptStartedAt,
+      },
+      ctx: hookContext,
+    });
     notificationCleanup();
     requestCleanup();
     params.abortSignal?.removeEventListener("abort", abortFromUpstream);
@@ -277,18 +330,44 @@ export async function runCodexAppServerAttempt(
   try {
     await completion;
     const result = activeProjector.buildResult(toolBridge.telemetry, { yieldDetected });
+    const finalAborted = result.aborted || runAbortController.signal.aborted;
+    const finalPromptError = timedOut ? "codex app-server attempt timed out" : result.promptError;
+    const finalPromptErrorSource = timedOut ? "prompt" : result.promptErrorSource;
     await mirrorTranscriptBestEffort({
       params,
+      agentId: sessionAgentId,
       result,
+      sessionKey: sandboxSessionKey,
       threadId: thread.threadId,
       turnId: activeTurnId,
+    });
+    runAgentHarnessLlmOutputHook({
+      event: {
+        runId: params.runId,
+        sessionId: params.sessionId,
+        provider: params.provider,
+        model: params.modelId,
+        assistantTexts: result.assistantTexts,
+        ...(result.lastAssistant ? { lastAssistant: result.lastAssistant } : {}),
+        ...(result.attemptUsage ? { usage: result.attemptUsage } : {}),
+      },
+      ctx: hookContext,
+    });
+    runAgentHarnessAgentEndHook({
+      event: {
+        messages: result.messagesSnapshot,
+        success: !finalAborted && !finalPromptError,
+        ...(finalPromptError ? { error: formatErrorMessage(finalPromptError) } : {}),
+        durationMs: Date.now() - attemptStartedAt,
+      },
+      ctx: hookContext,
     });
     return {
       ...result,
       timedOut,
-      aborted: result.aborted || runAbortController.signal.aborted,
-      promptError: timedOut ? "codex app-server attempt timed out" : result.promptError,
-      promptErrorSource: timedOut ? "prompt" : result.promptErrorSource,
+      aborted: finalAborted,
+      promptError: finalPromptError,
+      promptErrorSource: finalPromptErrorSource,
     };
   } finally {
     clearTimeout(timeout);
@@ -504,7 +583,7 @@ function readMirroredSessionHistoryMessages(sessionFile: string): unknown[] {
   try {
     return SessionManager.open(sessionFile).buildSessionContext().messages;
   } catch (error) {
-    embeddedAgentLog.warn("failed to read mirrored session history for codex prompt hooks", {
+    embeddedAgentLog.warn("failed to read mirrored session history for codex harness hooks", {
       error,
       sessionFile,
     });
@@ -514,14 +593,17 @@ function readMirroredSessionHistoryMessages(sessionFile: string): unknown[] {
 
 async function mirrorTranscriptBestEffort(params: {
   params: EmbeddedRunAttemptParams;
+  agentId?: string;
   result: EmbeddedRunAttemptResult;
+  sessionKey?: string;
   threadId: string;
   turnId: string;
 }): Promise<void> {
   try {
     await mirrorCodexAppServerTranscript({
       sessionFile: params.params.sessionFile,
-      sessionKey: params.params.sessionKey,
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
       messages: params.result.messagesSnapshot,
       idempotencyScope: `codex-app-server:${params.threadId}:${params.turnId}`,
     });

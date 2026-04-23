@@ -81,6 +81,7 @@ type ManagedGatewayConfigReloaderParams = Omit<
 > & {
   minimalTestGateway: boolean;
   initialConfig: OpenClawConfig;
+  initialCompareConfig?: OpenClawConfig;
   initialInternalWriteHash: string | null;
   watchPath: string;
   readSnapshot: typeof import("../config/config.js").readConfigFileSnapshot;
@@ -316,6 +317,7 @@ export function startManagedGatewayConfigReloader(params: ManagedGatewayConfigRe
 
   return startGatewayConfigReloader({
     initialConfig: params.initialConfig,
+    initialCompareConfig: params.initialCompareConfig,
     initialInternalWriteHash: params.initialInternalWriteHash,
     readSnapshot: params.readSnapshot,
     recoverSnapshot: async (snapshot, reason) =>

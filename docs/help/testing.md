@@ -608,11 +608,15 @@ Docker notes:
     thread can resume
   - run `/codex status` and `/codex models` through the same gateway command
     path
+  - optionally run two Guardian-reviewed escalated shell probes: one benign
+    command that should be approved and one fake-secret upload that should be
+    denied so the agent asks back
 - Test: `src/gateway/gateway-codex-harness.live.test.ts`
 - Enable: `OPENCLAW_LIVE_CODEX_HARNESS=1`
 - Default model: `codex/gpt-5.4`
 - Optional image probe: `OPENCLAW_LIVE_CODEX_HARNESS_IMAGE_PROBE=1`
 - Optional MCP/tool probe: `OPENCLAW_LIVE_CODEX_HARNESS_MCP_PROBE=1`
+- Optional Guardian probe: `OPENCLAW_LIVE_CODEX_HARNESS_GUARDIAN_PROBE=1`
 - The smoke sets `OPENCLAW_AGENT_HARNESS_FALLBACK=none` so a broken Codex
   harness cannot pass by silently falling back to PI.
 - Auth: `OPENAI_API_KEY` from the shell/profile, plus optional copied
@@ -625,6 +629,7 @@ source ~/.profile
 OPENCLAW_LIVE_CODEX_HARNESS=1 \
   OPENCLAW_LIVE_CODEX_HARNESS_IMAGE_PROBE=1 \
   OPENCLAW_LIVE_CODEX_HARNESS_MCP_PROBE=1 \
+  OPENCLAW_LIVE_CODEX_HARNESS_GUARDIAN_PROBE=1 \
   OPENCLAW_LIVE_CODEX_HARNESS_MODEL=codex/gpt-5.4 \
   pnpm test:live -- src/gateway/gateway-codex-harness.live.test.ts
 ```
@@ -642,9 +647,11 @@ Docker notes:
 - It sources the mounted `~/.profile`, passes `OPENAI_API_KEY`, copies Codex CLI
   auth files when present, installs `@openai/codex` into a writable mounted npm
   prefix, stages the source tree, then runs only the Codex-harness live test.
-- Docker enables the image and MCP/tool probes by default. Set
+- Docker enables the image, MCP/tool, and Guardian probes by default. Set
   `OPENCLAW_LIVE_CODEX_HARNESS_IMAGE_PROBE=0` or
-  `OPENCLAW_LIVE_CODEX_HARNESS_MCP_PROBE=0` when you need a narrower debug run.
+  `OPENCLAW_LIVE_CODEX_HARNESS_MCP_PROBE=0` or
+  `OPENCLAW_LIVE_CODEX_HARNESS_GUARDIAN_PROBE=0` when you need a narrower debug
+  run.
 - Docker also exports `OPENCLAW_AGENT_HARNESS_FALLBACK=none`, matching the live
   test config so `openai-codex/*` or PI fallback cannot hide a Codex harness
   regression.
@@ -875,7 +882,7 @@ These Docker runners split into two buckets:
   `OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=90000`. Override those env vars when you
   explicitly want the larger exhaustive scan.
 - `test:docker:all` builds the live Docker image once via `test:docker:live-build`, then reuses it for the two live Docker lanes.
-- Container smoke runners: `test:docker:openwebui`, `test:docker:onboard`, `test:docker:gateway-network`, `test:docker:mcp-channels`, and `test:docker:plugins` boot one or more real containers and verify higher-level integration paths.
+- Container smoke runners: `test:docker:openwebui`, `test:docker:onboard`, `test:docker:gateway-network`, `test:docker:mcp-channels`, `test:docker:pi-bundle-mcp-tools`, and `test:docker:plugins` boot one or more real containers and verify higher-level integration paths.
 
 The live-model Docker runners also bind-mount only the needed CLI auth homes (or all supported ones when the run is not narrowed), then copy them into the container home before the run so external-CLI OAuth can refresh tokens without mutating the host auth store:
 
@@ -888,7 +895,11 @@ The live-model Docker runners also bind-mount only the needed CLI auth homes (or
 - Onboarding wizard (TTY, full scaffolding): `pnpm test:docker:onboard` (script: `scripts/e2e/onboard-docker.sh`)
 - Gateway networking (two containers, WS auth + health): `pnpm test:docker:gateway-network` (script: `scripts/e2e/gateway-network-docker.sh`)
 - MCP channel bridge (seeded Gateway + stdio bridge + raw Claude notification-frame smoke): `pnpm test:docker:mcp-channels` (script: `scripts/e2e/mcp-channels-docker.sh`)
+- Pi bundle MCP tools (real stdio MCP server + embedded Pi profile allow/deny smoke): `pnpm test:docker:pi-bundle-mcp-tools` (script: `scripts/e2e/pi-bundle-mcp-tools-docker.sh`)
 - Plugins (install smoke + `/plugin` alias + Claude-bundle restart semantics): `pnpm test:docker:plugins` (script: `scripts/e2e/plugins-docker.sh`)
+- Bundled plugin runtime deps: `pnpm test:docker:bundled-channel-deps` builds a small Docker runner image by default, builds and packs OpenClaw once on the host, then mounts that tarball into each Linux install scenario. Reuse the image with `OPENCLAW_SKIP_DOCKER_BUILD=1`, skip the host rebuild after a fresh local build with `OPENCLAW_BUNDLED_CHANNEL_HOST_BUILD=0`, or point at an existing tarball with `OPENCLAW_BUNDLED_CHANNEL_PACKAGE_TGZ=/path/to/openclaw-*.tgz`.
+- Narrow bundled plugin runtime deps while iterating by disabling unrelated scenarios, for example:
+  `OPENCLAW_BUNDLED_CHANNEL_SCENARIOS=0 OPENCLAW_BUNDLED_CHANNEL_UPDATE_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_ROOT_OWNED_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_SETUP_ENTRY_SCENARIO=0 pnpm test:docker:bundled-channel-deps`.
 
 The live-model Docker runners also bind-mount the current checkout read-only and
 stage it into a temporary workdir inside the container. This keeps the runtime
@@ -921,6 +932,11 @@ live event queue behavior, outbound send routing, and Claude-style channel +
 permission notifications over the real stdio MCP bridge. The notification check
 inspects the raw stdio MCP frames directly so the smoke validates what the
 bridge actually emits, not just what a specific client SDK happens to surface.
+`test:docker:pi-bundle-mcp-tools` is deterministic and does not need a live
+model key. It builds the repo Docker image, starts a real stdio MCP probe server
+inside the container, materializes that server through the embedded Pi bundle
+MCP runtime, executes the tool, then verifies `coding` and `messaging` keep
+`bundle-mcp` tools while `minimal` and `tools.deny: ["bundle-mcp"]` filter them.
 
 Manual ACP plain-language thread smoke (not CI):
 

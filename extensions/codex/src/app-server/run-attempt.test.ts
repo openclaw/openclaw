@@ -114,6 +114,9 @@ function createAppServerHarness(
         },
       });
     },
+    async notify(notification: CodexServerNotification) {
+      await notify(notification);
+    },
   };
 }
 
@@ -174,6 +177,44 @@ async function writeExistingBinding(
     modelProvider: "openai",
     ...overrides,
   });
+}
+
+function createThreadLifecycleAppServerOptions(): Parameters<
+  typeof startOrResumeThread
+>[0]["appServer"] {
+  return {
+    start: {
+      transport: "stdio",
+      command: "codex",
+      args: ["app-server"],
+      headers: {},
+    },
+    requestTimeoutMs: 60_000,
+    approvalPolicy: "never",
+    approvalsReviewer: "user",
+    sandbox: "workspace-write",
+  };
+}
+
+function createMessageDynamicTool(
+  description: string,
+  actions: string[] = ["send"],
+): Parameters<typeof startOrResumeThread>[0]["dynamicTools"][number] {
+  return {
+    name: "message",
+    description,
+    inputSchema: {
+      type: "object",
+      properties: {
+        action: {
+          type: "string",
+          enum: actions,
+        },
+      },
+      required: ["action"],
+      additionalProperties: false,
+    },
+  };
 }
 
 describe("runCodexAppServerAttempt", () => {
@@ -238,6 +279,209 @@ describe("runCodexAppServerAttempt", () => {
     );
   });
 
+  it("fires llm_input, llm_output, and agent_end hooks for codex turns", async () => {
+    const llmInput = vi.fn();
+    const llmOutput = vi.fn();
+    const agentEnd = vi.fn();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        { hookName: "llm_input", handler: llmInput },
+        { hookName: "llm_output", handler: llmOutput },
+        { hookName: "agent_end", handler: agentEnd },
+      ]),
+    );
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const sessionManager = SessionManager.open(sessionFile);
+    sessionManager.appendMessage(assistantMessage("existing context", Date.now()));
+    const harness = createStartedThreadHarness();
+
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+    await harness.waitForMethod("turn/start");
+    await vi.waitFor(() => expect(llmInput).toHaveBeenCalledTimes(1), { interval: 1 });
+
+    expect(llmInput).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "run-1",
+        sessionId: "session-1",
+        provider: "codex",
+        model: "gpt-5.4-codex",
+        prompt: "hello",
+        imagesCount: 0,
+        historyMessages: [expect.objectContaining({ role: "assistant" })],
+        systemPrompt: expect.stringContaining(CODEX_GPT5_BEHAVIOR_CONTRACT),
+      }),
+      expect.objectContaining({
+        runId: "run-1",
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+      }),
+    );
+
+    await harness.notify({
+      method: "item/agentMessage/delta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "msg-1",
+        delta: "hello back",
+      },
+    });
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    const result = await run;
+
+    expect(result.assistantTexts).toEqual(["hello back"]);
+    await vi.waitFor(() => expect(llmOutput).toHaveBeenCalledTimes(1), { interval: 1 });
+    await vi.waitFor(() => expect(agentEnd).toHaveBeenCalledTimes(1), { interval: 1 });
+
+    expect(llmOutput).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "run-1",
+        sessionId: "session-1",
+        provider: "codex",
+        model: "gpt-5.4-codex",
+        assistantTexts: ["hello back"],
+        lastAssistant: expect.objectContaining({
+          role: "assistant",
+        }),
+      }),
+      expect.objectContaining({
+        runId: "run-1",
+        sessionId: "session-1",
+      }),
+    );
+    expect(agentEnd).toHaveBeenCalledWith(
+      expect.objectContaining({
+        success: true,
+        messages: expect.arrayContaining([
+          expect.objectContaining({ role: "user" }),
+          expect.objectContaining({ role: "assistant" }),
+        ]),
+      }),
+      expect.objectContaining({
+        runId: "run-1",
+        sessionId: "session-1",
+      }),
+    );
+  });
+
+  it("fires agent_end with failure metadata when the codex turn fails", async () => {
+    const agentEnd = vi.fn();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "agent_end", handler: agentEnd }]),
+    );
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const harness = createStartedThreadHarness();
+
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+    await harness.waitForMethod("turn/start");
+    await harness.notify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        turn: {
+          id: "turn-1",
+          status: "failed",
+          error: { message: "codex exploded" },
+        },
+      },
+    });
+
+    const result = await run;
+
+    expect(result.promptError).toBe("codex exploded");
+    await vi.waitFor(() => expect(agentEnd).toHaveBeenCalledTimes(1), { interval: 1 });
+    expect(agentEnd).toHaveBeenCalledWith(
+      expect.objectContaining({
+        success: false,
+        error: "codex exploded",
+      }),
+      expect.objectContaining({
+        runId: "run-1",
+        sessionId: "session-1",
+      }),
+    );
+  });
+
+  it("fires llm_output and agent_end when turn/start fails", async () => {
+    const llmInput = vi.fn();
+    const llmOutput = vi.fn();
+    const agentEnd = vi.fn();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        { hookName: "llm_input", handler: llmInput },
+        { hookName: "llm_output", handler: llmOutput },
+        { hookName: "agent_end", handler: agentEnd },
+      ]),
+    );
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    SessionManager.open(sessionFile).appendMessage(
+      assistantMessage("existing context", Date.now()),
+    );
+    createStartedThreadHarness(async (method) => {
+      if (method === "turn/start") {
+        throw new Error("turn start exploded");
+      }
+      return undefined;
+    });
+
+    await expect(runCodexAppServerAttempt(createParams(sessionFile, workspaceDir))).rejects.toThrow(
+      "turn start exploded",
+    );
+
+    await vi.waitFor(() => expect(llmInput).toHaveBeenCalledTimes(1), { interval: 1 });
+    await vi.waitFor(() => expect(llmOutput).toHaveBeenCalledTimes(1), { interval: 1 });
+    await vi.waitFor(() => expect(agentEnd).toHaveBeenCalledTimes(1), { interval: 1 });
+    expect(llmOutput).toHaveBeenCalledWith(
+      expect.objectContaining({
+        assistantTexts: [],
+        model: "gpt-5.4-codex",
+        provider: "codex",
+        runId: "run-1",
+        sessionId: "session-1",
+      }),
+      expect.any(Object),
+    );
+    expect(agentEnd).toHaveBeenCalledWith(
+      expect.objectContaining({
+        success: false,
+        error: "turn start exploded",
+        messages: expect.arrayContaining([
+          expect.objectContaining({ role: "assistant" }),
+          expect.objectContaining({ role: "user" }),
+        ]),
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it("fires agent_end with success false when the codex turn is aborted", async () => {
+    const agentEnd = vi.fn();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "agent_end", handler: agentEnd }]),
+    );
+    const { waitForMethod } = createStartedThreadHarness();
+    const run = runCodexAppServerAttempt(
+      createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace")),
+    );
+
+    await waitForMethod("turn/start");
+    expect(abortAgentHarnessRun("session-1")).toBe(true);
+
+    const result = await run;
+    expect(result.aborted).toBe(true);
+    await vi.waitFor(() => expect(agentEnd).toHaveBeenCalledTimes(1), { interval: 1 });
+    expect(agentEnd).toHaveBeenCalledWith(
+      expect.objectContaining({
+        success: false,
+      }),
+      expect.any(Object),
+    );
+  });
+
   it("forwards queued user input and aborts the active app-server turn", async () => {
     const { requests, waitForMethod } = createStartedThreadHarness();
 
@@ -268,6 +512,7 @@ describe("runCodexAppServerAttempt", () => {
             modelProvider: "openai",
             approvalPolicy: "never",
             sandbox: "danger-full-access",
+            approvalsReviewer: "user",
             developerInstructions: expect.stringContaining(CODEX_GPT5_BEHAVIOR_CONTRACT),
           }),
         },
@@ -522,6 +767,76 @@ describe("runCodexAppServerAttempt", () => {
       developerInstructions: expect.stringContaining(CODEX_GPT5_BEHAVIOR_CONTRACT),
       persistExtendedHistory: true,
     });
+  });
+
+  it("resumes a bound Codex thread when only dynamic tool descriptions change", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    const appServer = createThreadLifecycleAppServerOptions();
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-existing");
+      }
+      if (method === "thread/resume") {
+        return { thread: { id: "thread-existing" }, modelProvider: "openai" };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [
+        createMessageDynamicTool("Send and manage messages for the current Slack thread."),
+      ],
+      appServer,
+    });
+    const binding = await startOrResumeThread({
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [
+        createMessageDynamicTool("Send and manage messages for the current Discord channel."),
+      ],
+      appServer,
+    });
+
+    expect(binding.threadId).toBe("thread-existing");
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start", "thread/resume"]);
+  });
+
+  it("starts a new Codex thread when dynamic tool schemas change", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    const appServer = createThreadLifecycleAppServerOptions();
+    let nextThread = 1;
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult(`thread-${nextThread++}`);
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [createMessageDynamicTool("Send and manage messages.", ["send"])],
+      appServer,
+    });
+    const binding = await startOrResumeThread({
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [createMessageDynamicTool("Send and manage messages.", ["send", "read"])],
+      appServer,
+    });
+
+    expect(binding.threadId).toBe("thread-2");
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start", "thread/start"]);
   });
 
   it("passes configured app-server policy, sandbox, service tier, and model on resume", async () => {

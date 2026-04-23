@@ -12,6 +12,7 @@ describe("Codex app-server config", () => {
     const runtime = resolveCodexAppServerRuntimeOptions({
       pluginConfig: {
         appServer: {
+          mode: "guardian",
           transport: "websocket",
           url: "ws://127.0.0.1:39175",
           headers: { "X-Test": "yes" },
@@ -70,6 +71,77 @@ describe("Codex app-server config", () => {
     expect(runtime).toEqual(
       expect.objectContaining({
         approvalPolicy: "never",
+        sandbox: "danger-full-access",
+        approvalsReviewer: "user",
+      }),
+    );
+  });
+
+  it("allows plugin config to opt in to guardian-reviewed local execution", () => {
+    const runtime = resolveCodexAppServerRuntimeOptions({
+      pluginConfig: {
+        appServer: {
+          mode: "guardian",
+        },
+      },
+      env: {},
+    });
+
+    expect(runtime).toEqual(
+      expect.objectContaining({
+        approvalPolicy: "on-request",
+        sandbox: "workspace-write",
+        approvalsReviewer: "guardian_subagent",
+      }),
+    );
+  });
+
+  it("allows environment mode fallback to opt in to guardian-reviewed local execution", () => {
+    const runtime = resolveCodexAppServerRuntimeOptions({
+      pluginConfig: {},
+      env: { OPENCLAW_CODEX_APP_SERVER_MODE: "guardian" },
+    });
+
+    expect(runtime).toEqual(
+      expect.objectContaining({
+        approvalPolicy: "on-request",
+        sandbox: "workspace-write",
+        approvalsReviewer: "guardian_subagent",
+      }),
+    );
+  });
+
+  it("ignores removed OPENCLAW_CODEX_APP_SERVER_GUARDIAN fallback", () => {
+    const runtime = resolveCodexAppServerRuntimeOptions({
+      pluginConfig: {},
+      env: { OPENCLAW_CODEX_APP_SERVER_GUARDIAN: "1" },
+    });
+
+    expect(runtime).toEqual(
+      expect.objectContaining({
+        approvalPolicy: "never",
+        sandbox: "danger-full-access",
+        approvalsReviewer: "user",
+      }),
+    );
+  });
+
+  it("lets explicit policy fields override guardian mode", () => {
+    const runtime = resolveCodexAppServerRuntimeOptions({
+      pluginConfig: {
+        appServer: {
+          mode: "guardian",
+          approvalPolicy: "on-failure",
+          sandbox: "danger-full-access",
+          approvalsReviewer: "user",
+        },
+      },
+      env: {},
+    });
+
+    expect(runtime).toEqual(
+      expect.objectContaining({
+        approvalPolicy: "on-failure",
         sandbox: "danger-full-access",
         approvalsReviewer: "user",
       }),

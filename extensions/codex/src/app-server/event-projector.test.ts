@@ -314,6 +314,74 @@ describe("CodexAppServerEventProjector", () => {
     expect(result.yieldDetected).toBe(true);
   });
 
+  it("projects guardian review lifecycle details into agent events", async () => {
+    const onAgentEvent = vi.fn();
+    const projector = await createProjector({ ...(await createParams()), onAgentEvent });
+
+    await projector.handleNotification(
+      forCurrentTurn("item/autoApprovalReview/started", {
+        reviewId: "review-1",
+        targetItemId: "cmd-1",
+        review: { status: "inProgress" },
+        action: {
+          type: "execve",
+          source: "shell",
+          program: "/bin/printf",
+          argv: ["printf", "hello"],
+          cwd: "/tmp",
+        },
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/autoApprovalReview/completed", {
+        reviewId: "review-1",
+        targetItemId: "cmd-1",
+        decisionSource: "agent",
+        review: {
+          status: "approved",
+          riskLevel: "low",
+          userAuthorization: "high",
+          rationale: "Benign local probe.",
+        },
+        action: {
+          type: "execve",
+          source: "shell",
+          program: "/bin/printf",
+          argv: ["printf", "hello"],
+          cwd: "/tmp",
+        },
+      }),
+    );
+
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "codex_app_server.guardian",
+      data: expect.objectContaining({
+        phase: "started",
+        reviewId: "review-1",
+        targetItemId: "cmd-1",
+        status: "inProgress",
+        actionType: "execve",
+      }),
+    });
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "codex_app_server.guardian",
+      data: expect.objectContaining({
+        phase: "completed",
+        reviewId: "review-1",
+        targetItemId: "cmd-1",
+        decisionSource: "agent",
+        status: "approved",
+        riskLevel: "low",
+        userAuthorization: "high",
+        rationale: "Benign local probe.",
+        actionType: "execve",
+      }),
+    });
+    expect(
+      projector.buildResult(buildEmptyToolTelemetry()).didSendDeterministicApprovalPrompt,
+    ).toBe(false);
+  });
+
   it("projects reasoning end, plan updates, compaction state, and tool metadata", async () => {
     const onReasoningStream = vi.fn();
     const onReasoningEnd = vi.fn();
