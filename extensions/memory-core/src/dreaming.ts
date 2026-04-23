@@ -126,7 +126,12 @@ type ShortTermPromotionDreamingConfig = {
 type ReconcileResult =
   | { status: "unavailable"; removed: number }
   | { status: "disabled"; removed: number }
-  | { status: "invalid"; removed: number }
+  | {
+      status: "invalid";
+      removed: number;
+      hasPreservedManagedSchedule: boolean;
+      preservedScheduleTimezone?: string;
+    }
   | { status: "added"; removed: number }
   | { status: "updated"; removed: number }
   | { status: "noop"; removed: number };
@@ -422,6 +427,8 @@ export async function reconcileShortTermDreamingCronJob(params: {
   const allJobs = await cron.list({ includeDisabled: true });
   const managed = allJobs.filter(isManagedDreamingJob);
   const legacyPhaseJobs = allJobs.filter(isLegacyPhaseDreamingJob);
+  const sortedManaged = sortManagedJobs(managed);
+  const [primary, ...duplicates] = sortedManaged;
 
   if (!params.config.enabled) {
     let removed = await migrateLegacyPhaseDreamingCronJobs({
@@ -472,11 +479,15 @@ export async function reconcileShortTermDreamingCronJob(params: {
       logMessage = `memory-core: dreaming.frequency contains invalid cron expression: ${errorText}.`;
     }
     params.logger.error(logMessage);
-    return { status: "invalid", removed: 0 };
+    const preservedScheduleTimezone = normalizeTrimmedString(primary?.schedule?.tz);
+    return {
+      status: "invalid",
+      removed: 0,
+      hasPreservedManagedSchedule: Boolean(primary),
+      ...(preservedScheduleTimezone ? { preservedScheduleTimezone } : {}),
+    };
   }
 
-  const sortedManaged = sortManagedJobs(managed);
-  const [primary, ...duplicates] = sortedManaged;
   const desired = buildManagedDreamingCronJob(params.config);
 
   if (!primary) {
@@ -536,6 +547,8 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
   workspaceDir?: string;
   cfg?: OpenClawConfig;
   config: ShortTermPromotionDreamingConfig;
+  preservedScheduleKnown?: boolean;
+  preservedScheduleTimezone?: string;
   logger: Logger;
   subagent?: OpenClawPluginApi["runtime"]["subagent"];
 }): Promise<{ handled: true; reason: string } | undefined> {
@@ -550,15 +563,25 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
   }
 
   // Reconcile leaves the last-known-good cron entry in place when config is
-  // invalid. Keep letting that preserved schedule execute for frequency parse
-  // mistakes, but block an invalid configured timezone because the runtime path
-  // reads it fresh and would silently fall back to host-local day stamps.
+  // invalid. Let that preserved schedule execute for frequency parse mistakes
+  // only while its timezone still matches the runtime config; otherwise the
+  // trigger cadence and day-stamp timezone can diverge.
   const validation = validateMemoryDreamingFrequency(params.config.cron, params.config.timezone);
-  if (!validation.valid && validation.reason === "timezone") {
-    params.logger.warn(
-      "memory-core: dreaming promotion skipped because dreaming.timezone is invalid.",
-    );
-    return { handled: true, reason: "memory-core: short-term dreaming invalid config" };
+  if (!validation.valid) {
+    if (validation.reason === "timezone") {
+      params.logger.warn(
+        "memory-core: dreaming promotion skipped because dreaming.timezone is invalid.",
+      );
+      return { handled: true, reason: "memory-core: short-term dreaming invalid config" };
+    }
+    const currentTimezone = normalizeTrimmedString(params.config.timezone);
+    const preservedTimezone = normalizeTrimmedString(params.preservedScheduleTimezone);
+    if (params.preservedScheduleKnown !== true || currentTimezone !== preservedTimezone) {
+      params.logger.warn(
+        "memory-core: dreaming promotion skipped because dreaming.timezone does not match the preserved schedule timezone.",
+      );
+      return { handled: true, reason: "memory-core: short-term dreaming invalid config" };
+    }
   }
 
   const recencyHalfLifeDays =
@@ -809,11 +832,18 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
       config.storage?.separateReports ? "separate" : "inline",
     ].join("|");
 
+  let lastKnownManagedScheduleTimezone: string | undefined;
+  let hasLastKnownManagedSchedule = false;
+
   const reconcileManagedDreamingCron = async (params: {
     reason: "startup" | "runtime";
     startupConfig?: OpenClawConfig;
     startupCron?: (() => CronServiceLike | null) | null;
-  }): Promise<ShortTermPromotionDreamingConfig> => {
+  }): Promise<{
+    config: ShortTermPromotionDreamingConfig;
+    preservedScheduleKnown: boolean;
+    preservedScheduleTimezone?: string;
+  }> => {
     const startupCfg =
       params.reason === "startup" ? (params.startupConfig ?? api.config) : resolveCurrentConfig();
     const pluginConfig =
@@ -874,18 +904,42 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
         lastRuntimeConfigKey === configKey &&
         lastRuntimeCronRef === cron
       ) {
-        return config;
+        return {
+          config,
+          preservedScheduleKnown: hasLastKnownManagedSchedule,
+          ...(lastKnownManagedScheduleTimezone
+            ? { preservedScheduleTimezone: lastKnownManagedScheduleTimezone }
+            : {}),
+        };
       }
       lastRuntimeReconcileAtMs = now;
       lastRuntimeConfigKey = configKey;
       lastRuntimeCronRef = cron;
     }
-    await reconcileShortTermDreamingCronJob({
+    const reconcileResult = await reconcileShortTermDreamingCronJob({
       cron,
       config,
       logger: api.logger,
     });
-    return config;
+    if (reconcileResult.status === "invalid") {
+      if (reconcileResult.hasPreservedManagedSchedule) {
+        hasLastKnownManagedSchedule = true;
+        lastKnownManagedScheduleTimezone = reconcileResult.preservedScheduleTimezone;
+      }
+    } else if (cron && config.enabled) {
+      hasLastKnownManagedSchedule = true;
+      lastKnownManagedScheduleTimezone = normalizeTrimmedString(config.timezone);
+    } else if (!config.enabled) {
+      hasLastKnownManagedSchedule = false;
+      lastKnownManagedScheduleTimezone = undefined;
+    }
+    return {
+      config,
+      preservedScheduleKnown: hasLastKnownManagedSchedule,
+      ...(lastKnownManagedScheduleTimezone
+        ? { preservedScheduleTimezone: lastKnownManagedScheduleTimezone }
+        : {}),
+    };
   };
 
   const scheduleStartupCronRetry = (): void => {
@@ -975,7 +1029,7 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
       if (!shouldHandleManagedDreaming && !hasCronManagementContext()) {
         return undefined;
       }
-      const config = await reconcileManagedDreamingCron({
+      const dreamingCronState = await reconcileManagedDreamingCron({
         reason: "runtime",
       });
       if (!shouldHandleManagedDreaming) {
@@ -986,9 +1040,11 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
         trigger: ctx.trigger,
         workspaceDir: ctx.workspaceDir,
         cfg: currentConfig,
-        config,
+        config: dreamingCronState.config,
+        preservedScheduleKnown: dreamingCronState.preservedScheduleKnown,
+        preservedScheduleTimezone: dreamingCronState.preservedScheduleTimezone,
         logger: api.logger,
-        subagent: config.enabled ? api.runtime?.subagent : undefined,
+        subagent: dreamingCronState.config.enabled ? api.runtime?.subagent : undefined,
       });
     } catch (err) {
       api.logger.error(`memory-core: dreaming trigger failed: ${formatErrorMessage(err)}`);
