@@ -1,7 +1,7 @@
 import { resolveOAuthPath } from "../../config/paths.js";
 import { coerceSecretRef } from "../../config/types.secrets.js";
 import { loadJsonFile } from "../../infra/json-file.js";
-import { normalizeProviderId } from "../provider-id.js";
+import { findNormalizedProviderValue, normalizeProviderId } from "../provider-id.js";
 import { AUTH_STORE_VERSION, log } from "./constants.js";
 import {
   hasOAuthIdentity,
@@ -172,6 +172,25 @@ function dedupeMergedProfileOrder(profileIds: string[]): string[] {
   return Array.from(new Set(profileIds));
 }
 
+function rewriteMergedProfileOrder(params: {
+  provider: string;
+  profileIds: string[];
+  base: AuthProfileStore;
+  profiles: AuthProfileStore["profiles"];
+  replacements: Map<string, string>;
+}): string[] {
+  const rewrittenProfileIds = params.profileIds.map(
+    (profileId) => params.replacements.get(profileId) ?? profileId,
+  );
+  const hasReplacement = params.profileIds.some((profileId) => params.replacements.has(profileId));
+  const baseProfileIds = hasReplacement
+    ? (findNormalizedProviderValue(params.base.order, params.provider) ?? []).filter(
+        (profileId) => params.profiles[profileId],
+      )
+    : [];
+  return dedupeMergedProfileOrder([...rewrittenProfileIds, ...baseProfileIds]);
+}
+
 function hasComparableOAuthIdentityConflict(
   existing: OAuthCredential,
   candidate: OAuthCredential,
@@ -290,9 +309,7 @@ function replaceMergedProfileReferences(params: {
     ? Object.fromEntries(
         Object.entries(store.order).map(([provider, profileIds]) => [
           provider,
-          dedupeMergedProfileOrder(
-            profileIds.map((profileId) => replacements.get(profileId) ?? profileId),
-          ),
+          rewriteMergedProfileOrder({ provider, profileIds, base, profiles, replacements }),
         ]),
       )
     : undefined;

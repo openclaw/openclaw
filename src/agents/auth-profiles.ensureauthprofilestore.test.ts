@@ -7,6 +7,7 @@ import {
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
   loadAuthProfileStoreForRuntime,
+  resolveAuthProfileOrder,
   saveAuthProfileStore,
 } from "./auth-profiles.js";
 import { AUTH_STORE_VERSION, log } from "./auth-profiles/constants.js";
@@ -369,6 +370,9 @@ describe("ensureAuthProfileStore", () => {
             "openai-codex": [freshProfileId, defaultProfileId],
           },
           usageStats: {
+            [freshProfileId]: {
+              cooldownUntil: Date.now() + 10 * 60 * 1000,
+            },
             [defaultProfileId]: {
               lastUsed: 123,
             },
@@ -404,7 +408,11 @@ describe("ensureAuthProfileStore", () => {
 
       const store = loadAuthProfileStoreForRuntime(agentDir, { readOnly: true });
 
-      expect(store.order?.["openai-codex"]).toEqual([freshProfileId]);
+      expect(store.order?.["openai-codex"]).toEqual([freshProfileId, defaultProfileId]);
+      expect(resolveAuthProfileOrder({ store, provider: "openai-codex" })).toEqual([
+        defaultProfileId,
+        freshProfileId,
+      ]);
       expect(store.profiles[defaultProfileId]).toMatchObject({
         type: "oauth",
         provider: "openai-codex",
