@@ -92,6 +92,14 @@ const gatewayCallDeps = {
   ...defaultGatewayCallDeps,
 };
 
+async function stopGatewayClient(client: GatewayClient): Promise<void> {
+  try {
+    await client.stopAndWait({ timeoutMs: 1_000 });
+  } catch {
+    client.stop();
+  }
+}
+
 function resolveGatewayClientDisplayName(opts: CallGatewayBaseOptions): string | undefined {
   if (opts.clientDisplayName) {
     return opts.clientDisplayName;
@@ -520,11 +528,11 @@ async function executeGatewayRequestWithScopes<T>(params: {
             timeoutMs: opts.timeoutMs,
           });
           ignoreClose = true;
+          await stopGatewayClient(client);
           stop(undefined, result);
-          client.stop();
         } catch (err) {
           ignoreClose = true;
-          client.stop();
+          await stopGatewayClient(client);
           stop(err as Error);
         }
       },
@@ -533,15 +541,17 @@ async function executeGatewayRequestWithScopes<T>(params: {
           return;
         }
         ignoreClose = true;
-        client.stop();
-        stop(new Error(formatGatewayCloseError(code, reason, params.connectionDetails)));
+        void stopGatewayClient(client).finally(() => {
+          stop(new Error(formatGatewayCloseError(code, reason, params.connectionDetails)));
+        });
       },
     });
 
     const timer = setTimeout(() => {
       ignoreClose = true;
-      client.stop();
-      stop(new Error(formatGatewayTimeoutError(timeoutMs, params.connectionDetails)));
+      void stopGatewayClient(client).finally(() => {
+        stop(new Error(formatGatewayTimeoutError(timeoutMs, params.connectionDetails)));
+      });
     }, safeTimerTimeoutMs);
 
     client.start();
