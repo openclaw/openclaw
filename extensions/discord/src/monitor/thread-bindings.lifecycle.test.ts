@@ -984,6 +984,105 @@ describe("thread binding lifecycle", () => {
     expect(usedTokenNew).toBe(true);
   });
 
+  it("normalizes prefixed parentConversationId before creating child thread bindings", async () => {
+    createThreadBindingManager({
+      accountId: "default",
+      persist: false,
+      enableSweeper: false,
+      idleTimeoutMs: 24 * 60 * 60 * 1000,
+      maxAgeMs: 0,
+    });
+
+    hoisted.restGet.mockClear();
+    hoisted.createThreadDiscord.mockClear();
+    hoisted.createThreadDiscord.mockResolvedValueOnce({ id: "thread-created-parent-normalized" });
+
+    const bound = await getSessionBindingService().bind({
+      targetSessionKey: "agent:codex:acp:test-parent-normalized",
+      targetKind: "session",
+      conversation: {
+        channel: "discord",
+        accountId: "default",
+        conversationId: "channel:1491611525914558668",
+        parentConversationId: "channel:1491611525914558667",
+      },
+      placement: "child",
+      metadata: {
+        agentId: "codex",
+        label: "Codex ACP bind test",
+        threadName: "Codex ACP bind test",
+      },
+    });
+
+    expect(bound).toMatchObject({
+      conversation: {
+        channel: "discord",
+        accountId: "default",
+        conversationId: "thread-created-parent-normalized",
+      },
+    });
+    expect(hoisted.createThreadDiscord).toHaveBeenCalledWith(
+      "1491611525914558667",
+      expect.objectContaining({ autoArchiveMinutes: 60 }),
+      expect.objectContaining({ accountId: "default" }),
+    );
+    expect(hoisted.restGet).not.toHaveBeenCalled();
+  });
+
+  it("preserves prefixed current channel conversation ids as binding keys", async () => {
+    createThreadBindingManager({
+      accountId: "default",
+      persist: false,
+      enableSweeper: false,
+      idleTimeoutMs: 24 * 60 * 60 * 1000,
+      maxAgeMs: 0,
+    });
+
+    hoisted.restGet.mockClear();
+    hoisted.restPost.mockClear();
+
+    const service = getSessionBindingService();
+    const bound = await service.bind({
+      targetSessionKey: "agent:codex:acp:current-channel",
+      targetKind: "session",
+      conversation: {
+        channel: "discord",
+        accountId: "default",
+        conversationId: "channel:1491611525914558667",
+      },
+      placement: "current",
+      metadata: {
+        agentId: "codex",
+      },
+    });
+
+    expect(bound).toMatchObject({
+      conversation: {
+        channel: "discord",
+        accountId: "default",
+        conversationId: "channel:1491611525914558667",
+      },
+    });
+    expect(
+      service.resolveByConversation({
+        channel: "discord",
+        accountId: "default",
+        conversationId: "channel:1491611525914558667",
+      }),
+    ).toMatchObject({
+      targetSessionKey: "agent:codex:acp:current-channel",
+    });
+    expect(
+      service.resolveByConversation({
+        channel: "discord",
+        accountId: "default",
+        conversationId: "1491611525914558667",
+      }),
+    ).toBeNull();
+    expect(hoisted.restGet).not.toHaveBeenCalled();
+    expect(hoisted.restPost).not.toHaveBeenCalled();
+  });
+
   it("binds current Discord DMs as direct conversation bindings", async () => {
     createThreadBindingManager({
       accountId: "default",

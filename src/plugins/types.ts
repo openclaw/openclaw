@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { StreamFn } from "@mariozechner/pi-agent-core";
-import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
+import type { ExtensionFactory, ModelRegistry } from "@mariozechner/pi-coding-agent";
 import type { Command } from "commander";
 import type {
   ApiKeyCredential,
@@ -75,6 +75,7 @@ import type {
   PluginTextReplacement,
   PluginTextTransforms,
 } from "./cli-backend.types.js";
+import type { CodexAppServerExtensionFactory } from "./codex-app-server-extension-types.js";
 import type {
   PluginConversationBinding,
   PluginConversationBindingRequestParams,
@@ -2007,6 +2008,10 @@ export type OpenClawPluginApi = {
   ) => void;
   /** Register an agent harness implementation. */
   registerAgentHarness: (harness: AgentHarness) => void;
+  /** Register a Pi embedded extension factory for OpenClaw embedded runs. Only bundled plugins may use this seam, and `contracts.embeddedExtensionFactories` must include `"pi"`. */
+  registerEmbeddedExtensionFactory: (factory: ExtensionFactory) => void;
+  /** Register a Codex app-server extension factory for Codex harness tool-result middleware. Only bundled plugins may use this seam, and `contracts.embeddedExtensionFactories` must include `"codex-app-server"`. */
+  registerCodexAppServerExtensionFactory: (factory: CodexAppServerExtensionFactory) => void;
   /** Register the active detached task runtime for this plugin (exclusive slot). */
   registerDetachedTaskRuntime: (
     runtime: import("./runtime/runtime-tasks.types.js").DetachedTaskLifecycleRuntime,

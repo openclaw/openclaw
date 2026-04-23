@@ -761,7 +761,6 @@ export const telegramPlugin = createChatChannelPlugin({
     actions: telegramMessageActions,
     status: createComputedAccountStatusAdapter<ResolvedTelegramAccount, TelegramProbe>({
       defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
-      staleSocketHealthCheckModes: ["polling"],
       collectStatusIssues: collectTelegramStatusIssues,
       buildChannelSummary: ({ snapshot }) => buildTokenChannelStatusSummary(snapshot),
       probeAccount: async ({ account, timeoutMs }) =>

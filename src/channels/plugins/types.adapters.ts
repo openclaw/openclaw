@@ -172,9 +172,6 @@ export type ChannelGroupAdapter = {
 
 export type ChannelStatusAdapter<ResolvedAccount, Probe = unknown, Audit = unknown> = {
   defaultRuntime?: ChannelAccountSnapshot;
-  skipStaleSocketHealthCheck?: boolean;
-  /** Runtime `mode` values where `lastEventAt` can prove connected socket liveness. */
-  staleSocketHealthCheckModes?: readonly string[];
   buildChannelSummary?: BivariantCallback<
     (params: {
       account: ResolvedAccount;
@@ -467,8 +464,14 @@ export type ChannelCommandAdapter = {
     totalPages: number;
     agentId?: string;
   }) => ReplyPayload["channelData"] | null;
+  buildModelsMenuChannelData?: (params: {
+    providers: Array<{ id: string; count: number }>;
+  }) => ReplyPayload["channelData"] | null;
   buildModelsProviderChannelData?: (params: {
     providers: Array<{ id: string; count: number }>;
+  }) => ReplyPayload["channelData"] | null;
+  buildModelsAddProviderChannelData?: (params: {
+    providers: Array<{ id: string }>;
   }) => ReplyPayload["channelData"] | null;
   buildModelsListChannelData?: (params: {
     provider: string;

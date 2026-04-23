@@ -9,7 +9,6 @@ import {
   pruneInstalledPackageDist,
   discoverBundledPluginRuntimeDeps,
   pruneBundledPluginSourceNodeModules,
-  restoreLegacyUpdaterCompatSidecars,
   runBundledPluginPostinstall,
 } from "../../scripts/postinstall-bundled-plugins.mjs";
 import { writePackageDistInventory } from "../../src/infra/package-dist-inventory.ts";
@@ -292,46 +291,10 @@ describe("bundled plugin postinstall", () => {
     await expect(fs.stat(stalePackage)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(fs.stat(staleManifest)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(
-      fs.readFile(
-        path.join(packageRoot, "dist", "extensions", "qa-channel", "runtime-api.js"),
-        "utf8",
-      ),
-    ).resolves.toContain("QA channel implementation is not packaged");
-    await expect(
-      fs.readFile(path.join(packageRoot, "dist", "extensions", "qa-lab", "runtime-api.js"), "utf8"),
-    ).resolves.toContain("QA lab implementation is not packaged");
-  });
-
-  it("creates only empty QA compat sidecars for fresh installs", async () => {
-    const packageRoot = await createTempDirAsync("openclaw-packaged-install-no-qa-compat-");
-    await fs.mkdir(path.join(packageRoot, "dist"), { recursive: true });
-    await fs.writeFile(path.join(packageRoot, "dist", "entry.js"), "export {};\n");
-    await writePackageDistInventory(packageRoot);
-
-    expect(
-      restoreLegacyUpdaterCompatSidecars({
-        packageRoot,
-        removedFiles: ["dist/entry-old.js"],
-        log: { log: vi.fn(), warn: vi.fn() },
+      fs.readFile(path.join(packageRoot, "dist", "extensions", "qa-channel", "runtime-api.js"), {
+        encoding: "utf8",
       }),
-    ).toEqual([
-      "dist/extensions/qa-channel/runtime-api.js",
-      "dist/extensions/qa-lab/runtime-api.js",
-    ]);
-
-    await expect(
-      fs.readFile(
-        path.join(packageRoot, "dist", "extensions", "qa-channel", "runtime-api.js"),
-        "utf8",
-      ),
-    ).resolves.toBe(
-      "// Compatibility stub for older OpenClaw updaters. The QA channel implementation is not packaged.\nexport {};\n",
-    );
-    await expect(
-      fs.readFile(path.join(packageRoot, "dist", "extensions", "qa-lab", "runtime-api.js"), "utf8"),
-    ).resolves.toBe(
-      "// Compatibility stub for older OpenClaw updaters. The QA lab implementation is not packaged.\nexport {};\n",
-    );
+    ).resolves.toBe("export {};\n");
     await expect(
       fs.stat(path.join(packageRoot, "dist", "extensions", "qa-channel", "package.json")),
     ).rejects.toMatchObject({ code: "ENOENT" });
@@ -339,11 +302,10 @@ describe("bundled plugin postinstall", () => {
       fs.stat(path.join(packageRoot, "dist", "extensions", "qa-channel", "openclaw.plugin.json")),
     ).rejects.toMatchObject({ code: "ENOENT" });
     await expect(
-      fs.stat(path.join(packageRoot, "dist", "extensions", "qa-lab", "package.json")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(
-      fs.stat(path.join(packageRoot, "dist", "extensions", "qa-lab", "openclaw.plugin.json")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
+      fs.readFile(path.join(packageRoot, "dist", "extensions", "qa-lab", "runtime-api.js"), {
+        encoding: "utf8",
+      }),
+    ).resolves.toBe("export {};\n");
   });
 
   it("keeps packaged postinstall non-fatal when the dist inventory is missing", async () => {
@@ -434,6 +396,27 @@ describe("bundled plugin postinstall", () => {
         log: { log: vi.fn(), warn: vi.fn() },
       }),
     ).toThrow("unsafe dist entry: dist/escape");
+  });
+
+  it("ignores staged bundled plugin node_modules when pruning packaged dist", async () => {
+    const packageRoot = await createTempDirAsync("openclaw-packaged-install-runtime-deps-");
+    const staleFile = path.join(packageRoot, "dist", "stale-runtime.js");
+    const packageJson = path.join(packageRoot, "dist", "extensions", "slack", "package.json");
+    const binDir = path.join(packageRoot, "dist", "extensions", "slack", "node_modules", ".bin");
+    await fs.mkdir(path.dirname(staleFile), { recursive: true });
+    await fs.mkdir(path.dirname(packageJson), { recursive: true });
+    await fs.mkdir(binDir, { recursive: true });
+    await fs.writeFile(staleFile, "export {};\n");
+    await fs.writeFile(packageJson, "{}\n");
+    await fs.symlink("../fxparser/bin.js", path.join(binDir, "fxparser"));
+
+    expect(
+      pruneInstalledPackageDist({
+        packageRoot,
+        expectedFiles: new Set(["dist/extensions/slack/package.json"]),
+        log: { log: vi.fn(), warn: vi.fn() },
+      }),
+    ).toEqual(["dist/stale-runtime.js"]);
   });
 
   it("unlinks stale files instead of recursive pruning them", () => {

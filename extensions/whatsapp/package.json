@@ -43,7 +43,13 @@
       "persistedAuthState": {
         "specifier": "./auth-presence",
         "exportName": "hasAnyWhatsAppAuth"
-      }
+      },
+      "cliAddOptions": [
+        {
+          "flags": "--auth-dir <path>",
+          "description": "WhatsApp auth directory override"
+        }
+      ]
     },
     "install": {
       "npmSpec": "@openclaw/whatsapp",

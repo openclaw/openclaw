@@ -104,11 +104,12 @@ legacy `tools.bash.*` aliases normalize to the same protected exec paths.
 
 Plugins can register additional tools. Some examples:
 
-- [Lobster](/tools/lobster) — typed workflow runtime with resumable approvals
-- [LLM Task](/tools/llm-task) — JSON-only LLM step for structured output
-- [Music Generation](/tools/music-generation) — shared `music_generate` tool with workflow-backed providers
 - [Diffs](/tools/diffs) — diff viewer and renderer
+- [LLM Task](/tools/llm-task) — JSON-only LLM step for structured output
+- [Lobster](/tools/lobster) — typed workflow runtime with resumable approvals
+- [Music Generation](/tools/music-generation) — shared `music_generate` tool with workflow-backed providers
 - [OpenProse](/prose) — markdown-first workflow orchestration
+- [Tokenjuice](/tools/tokenjuice) — compact noisy `exec` and `bash` tool results
 
 ## Tool configuration
 
@@ -137,6 +138,11 @@ Per-agent override: `agents.list[].tools.profile`.
 | `coding`    | `group:fs`, `group:runtime`, `group:web`, `group:sessions`, `group:memory`, `cron`, `image`, `image_generate`, `music_generate`, `video_generate` |
 | `messaging` | `group:messaging`, `sessions_list`, `sessions_history`, `sessions_send`, `session_status`                                                         |
 | `minimal`   | `session_status` only                                                                                                                             |
+
+The `coding` and `messaging` profiles also allow configured bundle MCP tools
+under the plugin key `bundle-mcp`. Add `tools.deny: ["bundle-mcp"]` when you
+want a profile to keep its normal built-ins but hide all configured MCP tools.
+The `minimal` profile does not include bundle MCP tools.
 
 ### Tool groups
 

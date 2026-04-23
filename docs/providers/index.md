@@ -82,6 +82,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 ## Transcription providers
 
 - [Deepgram (audio transcription)](/providers/deepgram)
+- [xAI](/providers/xai#speech-to-text)
 
 ## Community tools
 

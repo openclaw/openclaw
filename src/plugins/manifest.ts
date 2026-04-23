@@ -230,6 +230,7 @@ export type PluginManifest = {
 };
 
 export type PluginManifestContracts = {
+  embeddedExtensionFactories?: string[];
   memoryEmbeddingProviders?: string[];
   speechProviders?: string[];
   realtimeTranscriptionProviders?: string[];
@@ -416,6 +417,7 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
     return undefined;
   }
 
+  const embeddedExtensionFactories = normalizeTrimmedStringList(value.embeddedExtensionFactories);
   const memoryEmbeddingProviders = normalizeTrimmedStringList(value.memoryEmbeddingProviders);
   const speechProviders = normalizeTrimmedStringList(value.speechProviders);
   const realtimeTranscriptionProviders = normalizeTrimmedStringList(
@@ -430,6 +432,7 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
   const webSearchProviders = normalizeTrimmedStringList(value.webSearchProviders);
   const tools = normalizeTrimmedStringList(value.tools);
   const contracts = {
+    ...(embeddedExtensionFactories.length > 0 ? { embeddedExtensionFactories } : {}),
     ...(memoryEmbeddingProviders.length > 0 ? { memoryEmbeddingProviders } : {}),
     ...(speechProviders.length > 0 ? { speechProviders } : {}),
     ...(realtimeTranscriptionProviders.length > 0 ? { realtimeTranscriptionProviders } : {}),
@@ -956,6 +959,21 @@ export type PluginPackageChannel = {
     specifier?: string;
     exportName?: string;
   };
+  doctorCapabilities?: PluginPackageChannelDoctorCapabilities;
+  cliAddOptions?: readonly PluginPackageChannelCliOption[];
+};
+
+export type PluginPackageChannelDoctorCapabilities = {
+  dmAllowFromMode?: "topOnly" | "topOrNested" | "nestedOnly";
+  groupModel?: "sender" | "route" | "hybrid";
+  groupAllowFromFallbackToAllowFrom?: boolean;
+  warnOnEmptyGroupSenderAllowlist?: boolean;
+};
+
+export type PluginPackageChannelCliOption = {
+  flags: string;
+  description: string;
+  defaultValue?: boolean | string;
 };
 
 export type PluginPackageInstall = {

@@ -150,6 +150,7 @@ export const AgentParamsSchema = Type.Object(
     timeout: Type.Optional(Type.Integer({ minimum: 0 })),
     bestEffortDeliver: Type.Optional(Type.Boolean()),
     lane: Type.Optional(Type.String()),
+    cleanupBundleMcpOnRunEnd: Type.Optional(Type.Boolean()),
     extraSystemPrompt: Type.Optional(Type.String()),
     bootstrapContextMode: Type.Optional(
       Type.Union([Type.Literal("full"), Type.Literal("lightweight")]),
