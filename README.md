@@ -133,11 +133,11 @@ pnpm build
 ```
 
 `pnpm openclaw setup` writes the local config/workspace needed for `pnpm gateway:watch`. It is safe to re-run, but you normally only need it on first setup or after resetting local state. `pnpm gateway:watch` does not rebuild `dist/control-ui`, so rerun `pnpm ui:build` after `ui/` changes or use `pnpm ui:dev` when iterating on the Control UI. If you want this checkout to run onboarding directly, use `pnpm openclaw onboard --install-daemon`.
-
-Note: You still need to install the configuration portion in a user folder ie. /home/openclaw
-
-I created a copy with an example config you can simple download and 'tar xzvf file.tgz ~/' to extract to your current user folder.
-Edit popenclaw.json config to add your API keys, change root folders, and run setup for some extra plugins.
+  
+Note: You still need to install the configuration portion in a user folder ie. /home/openclaw<br>
+  
+I created a copy with an example config you can simple download and 'tar xzvf file.tgz ~/' to extract to your current user folder.<br>
+Edit openclaw.json config to add your API keys, change root folders, and run setup for some extra plugins.<br>
 
 
 
