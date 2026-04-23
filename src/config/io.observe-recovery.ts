@@ -225,7 +225,6 @@ function createConfigObserveAnomalyAuditAppendParams(
   });
 }
 
-
 function hashConfigRaw(raw: string | null): string {
   return crypto
     .createHash("sha256")
@@ -689,9 +688,9 @@ export async function maybeRecoverSuspiciousConfigRead(params: {
     );
   } else {
     params.deps.logger.warn(
-      `Config auto-restore from backup failed: ${params.configPath} (${suspicious.join(", ")})${
-        restoreErrorDetails.message ? `: ${restoreErrorDetails.message}` : ""
-      }`,
+      `Config auto-restore from backup failed: ${params.configPath} (${suspicious.join(", ")}${
+        restoreErrorDetails.message ? `; ${restoreErrorDetails.message}` : ""
+      })`,
     );
   }
   await appendConfigAuditRecord(
@@ -796,9 +795,9 @@ export function maybeRecoverSuspiciousConfigReadSync(params: {
     );
   } else {
     params.deps.logger.warn(
-      `Config auto-restore from backup failed: ${params.configPath} (${suspicious.join(", ")})${
-        restoreErrorDetails.message ? `: ${restoreErrorDetails.message}` : ""
-      }`,
+      `Config auto-restore from backup failed: ${params.configPath} (${suspicious.join(", ")}${
+        restoreErrorDetails.message ? `; ${restoreErrorDetails.message}` : ""
+      })`,
     );
   }
   appendConfigAuditRecordSync(
