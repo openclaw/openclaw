@@ -272,7 +272,7 @@ function hasDreamingNarrativeLead(snippet: string): boolean {
   return /^Candidate:/i.test(withoutPrefix) || /^Reflections?:/i.test(withoutPrefix);
 }
 
-function isContaminatedDreamingSnippet(raw: string): boolean {
+export function isContaminatedDreamingSnippet(raw: string): boolean {
   const snippet = normalizeSnippet(raw);
   if (!snippet) {
     return false;
