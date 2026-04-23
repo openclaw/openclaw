@@ -42,6 +42,14 @@ describe("applyProviderAuthConfigPatch", () => {
     expect(next.agents?.defaults?.model).toEqual(base.agents.defaults.model);
   });
 
+  it("drops prototype-pollution keys from the merge", () => {
+    const patch = JSON.parse('{"__proto__":{"polluted":true},"agents":{"defaults":{}}}');
+    const next = applyProviderAuthConfigPatch(base, patch);
+    expect(next.agents?.defaults?.models).toEqual(base.agents.defaults.models);
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+    expect(Object.getPrototypeOf(next).polluted).toBeUndefined();
+  });
+
   it("keeps normal recursive merges for unrelated provider auth patch fields", () => {
     const base = {
       agents: {

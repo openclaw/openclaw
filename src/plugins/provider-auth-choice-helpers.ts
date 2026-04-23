@@ -46,6 +46,10 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
+// Guard the recursive merge against prototype-pollution payloads if a
+// patch ever arrives from a JSON-parsed source that preserves these keys.
+const BLOCKED_MERGE_KEYS = new Set(["__proto__", "prototype", "constructor"]);
+
 export function mergeConfigPatch<T>(base: T, patch: unknown): T {
   if (!isPlainRecord(base) || !isPlainRecord(patch)) {
     return patch as T;
@@ -53,6 +57,9 @@ export function mergeConfigPatch<T>(base: T, patch: unknown): T {
 
   const next: Record<string, unknown> = { ...base };
   for (const [key, value] of Object.entries(patch)) {
+    if (BLOCKED_MERGE_KEYS.has(key)) {
+      continue;
+    }
     const existing = next[key];
     if (isPlainRecord(existing) && isPlainRecord(value)) {
       next[key] = mergeConfigPatch(existing, value);
