@@ -116,6 +116,63 @@ describe("infra runtime", () => {
       }
     });
 
+    it("uses the latest preparation hook when scheduled restarts coalesce", async () => {
+      const firstBeforeEmit = vi.fn(async () => {});
+      const latestBeforeEmit = vi.fn(async () => {});
+      const emitSpy = vi.spyOn(process, "emit");
+      const handler = () => {};
+      process.on("SIGUSR1", handler);
+      try {
+        const first = scheduleGatewaySigusr1Restart({
+          delayMs: 1_000,
+          reason: "first",
+          emitHooks: { beforeEmit: firstBeforeEmit },
+        });
+        const second = scheduleGatewaySigusr1Restart({
+          delayMs: 1_000,
+          reason: "second",
+          emitHooks: { beforeEmit: latestBeforeEmit },
+        });
+
+        expect(first.coalesced).toBe(false);
+        expect(second.coalesced).toBe(true);
+
+        await vi.advanceTimersByTimeAsync(1_000);
+
+        expect(firstBeforeEmit).not.toHaveBeenCalled();
+        expect(latestBeforeEmit).toHaveBeenCalledTimes(1);
+        expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
+      } finally {
+        process.removeListener("SIGUSR1", handler);
+      }
+    });
+
+    it("keeps existing preparation hook when a hookless restart coalesces", async () => {
+      const beforeEmit = vi.fn(async () => {});
+      const emitSpy = vi.spyOn(process, "emit");
+      const handler = () => {};
+      process.on("SIGUSR1", handler);
+      try {
+        scheduleGatewaySigusr1Restart({
+          delayMs: 1_000,
+          emitHooks: { beforeEmit },
+        });
+        const second = scheduleGatewaySigusr1Restart({
+          delayMs: 1_000,
+          reason: "hookless",
+        });
+
+        expect(second.coalesced).toBe(true);
+
+        await vi.advanceTimersByTimeAsync(1_000);
+
+        expect(beforeEmit).toHaveBeenCalledTimes(1);
+        expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
+      } finally {
+        process.removeListener("SIGUSR1", handler);
+      }
+    });
+
     it("rolls back prepared restart state when emission is rejected", async () => {
       const beforeEmit = vi.fn(async () => {});
       const afterEmitRejected = vi.fn(async () => {});

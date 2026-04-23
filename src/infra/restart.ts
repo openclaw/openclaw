@@ -36,6 +36,7 @@ let lastRestartEmittedAt = 0;
 let pendingRestartTimer: ReturnType<typeof setTimeout> | null = null;
 let pendingRestartDueAt = 0;
 let pendingRestartReason: string | undefined;
+let pendingRestartEmitHooks: RestartEmitHooks | undefined;
 const activeDeferralPolls = new Set<ReturnType<typeof setInterval>>();
 
 function hasUnconsumedRestartSignal(): boolean {
@@ -49,6 +50,7 @@ function clearPendingScheduledRestart(): void {
   pendingRestartTimer = null;
   pendingRestartDueAt = 0;
   pendingRestartReason = undefined;
+  pendingRestartEmitHooks = undefined;
 }
 
 function clearActiveDeferralPolls(): void {
@@ -201,6 +203,12 @@ export type RestartEmitHooks = {
   beforeEmit?: () => Promise<void>;
   afterEmitRejected?: () => Promise<void>;
 };
+
+function updatePendingRestartEmitHooks(hooks?: RestartEmitHooks): void {
+  if (hooks) {
+    pendingRestartEmitHooks = hooks;
+  }
+}
 
 async function emitPreparedGatewayRestart(hooks?: RestartEmitHooks): Promise<void> {
   try {
@@ -482,6 +490,7 @@ export function scheduleGatewaySigusr1Restart(opts?: {
       restartLog.warn(
         `restart request coalesced (already scheduled) reason=${reason ?? "unspecified"} pendingReason=${pendingRestartReason ?? "unspecified"} delayMs=${remainingMs} ${formatRestartAudit(opts?.audit)}`,
       );
+      updatePendingRestartEmitHooks(opts?.emitHooks);
       return {
         ok: true,
         pid: process.pid,
@@ -497,21 +506,24 @@ export function scheduleGatewaySigusr1Restart(opts?: {
 
   pendingRestartDueAt = requestedDueAt;
   pendingRestartReason = reason;
+  pendingRestartEmitHooks = opts?.emitHooks;
   pendingRestartTimer = setTimeout(
     () => {
       pendingRestartTimer = null;
       pendingRestartDueAt = 0;
       pendingRestartReason = undefined;
+      const emitHooks = pendingRestartEmitHooks;
+      pendingRestartEmitHooks = undefined;
       const pendingCheck = preRestartCheck;
       if (!pendingCheck) {
-        void emitPreparedGatewayRestart(opts?.emitHooks);
+        void emitPreparedGatewayRestart(emitHooks);
         return;
       }
       const cfg = getRuntimeConfig();
       deferGatewayRestartUntilIdle({
         getPendingCount: pendingCheck,
         maxWaitMs: cfg.gateway?.reload?.deferralTimeoutMs,
-        emitHooks: opts?.emitHooks,
+        emitHooks,
       });
     },
     Math.max(0, requestedDueAt - nowMs),
