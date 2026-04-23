@@ -32,9 +32,19 @@ jobs:
           OPENCLAW_DOCS_SYNC_TOKEN: ${{ secrets.OPENCLAW_DOCS_SYNC_TOKEN }}
         run: |
           set -euo pipefail
-          git clone \
-            "https://x-access-token:${OPENCLAW_DOCS_SYNC_TOKEN}@github.com/openclaw/docs.git" \
-            publish
+          for attempt in 1 2 3 4 5; do
+            rm -rf publish
+            if git clone \
+              "https://x-access-token:${OPENCLAW_DOCS_SYNC_TOKEN}@github.com/openclaw/docs.git" \
+              publish; then
+              exit 0
+            fi
+            echo "Clone attempt ${attempt} failed; retrying."
+            sleep $((attempt * 2))
+          done
+
+          echo "Failed to clone publish repo after retries." >&2
+          exit 1
 
       - name: Sync docs into publish repo
         run: |

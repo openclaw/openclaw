@@ -502,23 +502,14 @@ Azure portal.
 
 <Note>
 Azure OpenAI uses native transport and compat behavior but does not receive
-OpenClaw's hidden attribution headers. See the **Native vs OpenAI-compatible
-routes** accordion under [Advanced configuration](#advanced-configuration)
-for details.
-</Note>
+OpenClaw's hidden attribution headers — see the **Native vs OpenAI-compatible
+routes** accordion under [Advanced configuration](#advanced-configuration).
 
-<Tip>
-For a separate Azure OpenAI Responses provider (distinct from the `openai`
-provider), see the `azure-openai-responses/*` model refs in the
-[Server-side compaction](#server-side-compaction-responses-api) accordion.
-</Tip>
-
-<Note>
-Azure chat and Responses traffic need Azure-specific provider/API config in
-addition to a base URL override. If you want Azure model calls beyond image
-generation, use the onboarding flow or a provider config that sets the
-appropriate Azure API/auth shape rather than assuming `openai.baseUrl` alone
-is enough.
+For chat or Responses traffic on Azure (beyond image generation), use the
+onboarding flow or a dedicated Azure provider config — `openai.baseUrl` alone
+does not pick up the Azure API/auth shape. A separate
+`azure-openai-responses/*` provider exists; see
+the Server-side compaction accordion below.
 </Note>
 
 ## Advanced configuration
@@ -578,8 +569,6 @@ is enough.
     ```
 
   </Accordion>
-
-<a id="openai-fast-mode"></a>
 
   <Accordion title="Fast mode">
     OpenClaw exposes a shared fast-mode toggle for both `openai/*` and `openai-codex/*`:
