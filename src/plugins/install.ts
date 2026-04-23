@@ -836,15 +836,13 @@ async function installPluginFromPackageDir(
       }
     },
     afterInstall: async (installedDir) => {
-      // Symlink any openclaw peerDependencies into the plugin's node_modules/
-      // so that plugins declaring openclaw as a peerDependency (rather than a
-      // regular dependency) can resolve it at runtime.
-      await linkOpenClawPeerDependencies({
-        installedDir,
-        peerDependencies: peerDeps,
-        logger,
-      });
-      return await runInstallSourceScan({
+      // Run the dependency-tree security scan BEFORE linking peer deps.
+      // The scan rejects any node_modules/ symlink whose target resolves
+      // outside the install root — a rule our trusted host-openclaw link
+      // would fail by design. Running the scan first also keeps the check
+      // honest against malicious plugins, because any pre-existing symlink
+      // smuggled in by the source would still be present when we walk.
+      const scanResult = await runInstallSourceScan({
         subject: `Plugin "${pluginId}"`,
         scan: async () =>
           await runtime.scanInstalledPackageDependencyTree({
@@ -853,6 +851,15 @@ async function installPluginFromPackageDir(
             pluginId,
           }),
       });
+      if (scanResult) {
+        return scanResult;
+      }
+      await linkOpenClawPeerDependencies({
+        installedDir,
+        peerDependencies: peerDeps,
+        logger,
+      });
+      return null;
     },
   });
 }

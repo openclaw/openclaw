@@ -2387,7 +2387,9 @@ describe("linkOpenClawPeerDependencies (via installPluginFromDir)", () => {
     const { result } = await installFromDirWithWarnings({ pluginDir, extensionsDir });
 
     expect(result.ok).toBe(true);
-    if (!result.ok) return;
+    if (!result.ok) {
+      return;
+    }
 
     const symlinkPath = path.join(result.targetDir, "node_modules", "openclaw");
     const stat = fs.lstatSync(symlinkPath);
@@ -2404,7 +2406,9 @@ describe("linkOpenClawPeerDependencies (via installPluginFromDir)", () => {
     const { result } = await installFromDirWithWarnings({ pluginDir, extensionsDir });
 
     expect(result.ok).toBe(true);
-    if (!result.ok) return;
+    if (!result.ok) {
+      return;
+    }
 
     const nodeModulesDir = path.join(result.targetDir, "node_modules");
     const symlinkPath = path.join(nodeModulesDir, "openclaw");
@@ -2431,7 +2435,9 @@ describe("linkOpenClawPeerDependencies (via installPluginFromDir)", () => {
     expect(second.ok).toBe(true);
     expect(warnings).toHaveLength(0);
 
-    if (!second.ok) return;
+    if (!second.ok) {
+      return;
+    }
     const symlinkPath = path.join(second.targetDir, "node_modules", "openclaw");
     expect(fs.lstatSync(symlinkPath).isSymbolicLink()).toBe(true);
   });
