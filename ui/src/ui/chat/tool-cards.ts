@@ -125,20 +125,24 @@ ${text}
 }
 
 function findFirstUnmatchedCard(cards: ToolCard[], id: string, name: string): ToolCard | undefined {
-  // Iterate forward (oldest first) so that when multiple tool calls share the same
-  // name, each result pairs with the earliest unmatched call. This ensures sequential
-  // calls like read→read→read pair with their results in order: result#1→call#1,
-  // result#2→call#2, result#3→call#3.
+  // Two-pass: exact ID match has priority, then name-only fallback.
+  // This ensures that when result "tool:b" arrives, it finds card "tool:b" even if
+  // a name-only match ("read", no outputText) appears earlier in the array.
+  let nameOnlyCandidate: ToolCard | undefined;
   for (let i = 0; i < cards.length; i++) {
     const card = cards[i];
     if (!card) {
       continue;
     }
-    if (card.id === id || (card.name === name && !card.outputText)) {
+    if (card.id === id) {
       return card;
     }
+    // Remember first name-only match but keep searching for exact ID
+    if (!nameOnlyCandidate && card.name === name && !card.outputText) {
+      nameOnlyCandidate = card;
+    }
   }
-  return undefined;
+  return nameOnlyCandidate;
 }
 
 export function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] {
