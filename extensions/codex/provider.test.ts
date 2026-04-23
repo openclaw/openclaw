@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CODEX_GPT5_BEHAVIOR_CONTRACT } from "./prompt-overlay.js";
+import { codexProviderDiscovery } from "./provider-discovery.js";
 import { buildCodexProvider, buildCodexProviderCatalog } from "./provider.js";
 import { CodexAppServerClient } from "./src/app-server/client.js";
 import {
@@ -176,6 +177,25 @@ describe("codex provider", () => {
       source: "codex-app-server",
       mode: "token",
     });
+  });
+
+  it("exposes a lightweight provider-discovery entry for model list/status", async () => {
+    expect(codexProviderDiscovery.id).toBe("codex");
+    expect(codexProviderDiscovery.resolveSyntheticAuth?.({ provider: "codex" })).toEqual({
+      apiKey: "codex-app-server",
+      source: "codex-app-server",
+      mode: "token",
+    });
+
+    const result = await codexProviderDiscovery.staticCatalog?.run({
+      config: {},
+      env: {},
+      agentDir: "/tmp/openclaw-agent",
+    } as never);
+
+    expect(
+      result && "provider" in result ? result.provider.models.map((model) => model.id) : [],
+    ).toEqual(["gpt-5.4", "gpt-5.4-mini", "gpt-5.2"]);
   });
 
   it("adds the GPT-5 prompt overlay to Codex provider runs", () => {

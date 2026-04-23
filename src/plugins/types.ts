@@ -48,6 +48,7 @@ import type {
 } from "../realtime-voice/provider-types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { SecurityAuditFinding } from "../security/audit.types.js";
+import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import type {
   SpeechDirectiveTokenParseContext,
   SpeechDirectiveTokenParseResult,
@@ -75,6 +76,7 @@ import type {
   PluginTextReplacement,
   PluginTextTransforms,
 } from "./cli-backend.types.js";
+import type { CodexAppServerExtensionFactory } from "./codex-app-server-extension-types.js";
 import type {
   PluginConversationBinding,
   PluginConversationBindingRequestParams,
@@ -220,7 +222,7 @@ export type OpenClawPluginConfigSchema = {
   parse?: (value: unknown) => unknown;
   validate?: (value: unknown) => PluginConfigValidation;
   uiHints?: Record<string, PluginConfigUiHint>;
-  jsonSchema?: Record<string, unknown>;
+  jsonSchema?: JsonSchemaObject;
 };
 
 export type ProviderAuthKind = "oauth" | "api_key" | "token" | "device_code" | "custom";
@@ -1760,10 +1762,6 @@ export type PluginInteractiveHandlerResult = {
   handled?: boolean;
 } | void;
 
-type BivariantInteractiveHandler<TContext, TResult> = {
-  bivarianceHack: (ctx: TContext) => Promise<TResult> | TResult;
-}["bivarianceHack"];
-
 export type PluginInteractiveRegistration<
   TContext = unknown,
   TChannel extends string = string,
@@ -1771,7 +1769,7 @@ export type PluginInteractiveRegistration<
 > = {
   channel: TChannel;
   namespace: string;
-  handler: BivariantInteractiveHandler<TContext, TResult>;
+  handler: (ctx: TContext) => Promise<TResult> | TResult;
 };
 
 export type PluginInteractiveHandlerRegistration = PluginInteractiveRegistration;
@@ -2009,6 +2007,8 @@ export type OpenClawPluginApi = {
   registerAgentHarness: (harness: AgentHarness) => void;
   /** Register a Pi embedded extension factory for OpenClaw embedded runs. Only bundled plugins may use this seam, and `contracts.embeddedExtensionFactories` must include `"pi"`. */
   registerEmbeddedExtensionFactory: (factory: ExtensionFactory) => void;
+  /** Register a Codex app-server extension factory for Codex harness tool-result middleware. Only bundled plugins may use this seam, and `contracts.embeddedExtensionFactories` must include `"codex-app-server"`. */
+  registerCodexAppServerExtensionFactory: (factory: CodexAppServerExtensionFactory) => void;
   /** Register the active detached task runtime for this plugin (exclusive slot). */
   registerDetachedTaskRuntime: (
     runtime: import("./runtime/runtime-tasks.types.js").DetachedTaskLifecycleRuntime,

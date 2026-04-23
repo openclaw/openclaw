@@ -77,6 +77,7 @@ function createModelPickerContext(): ModelPickerContext {
     accountId: "default",
     sessionPrefix: "discord:slash",
     threadBindings: createNoopThreadBindingManager("default"),
+    postApplySettleMs: 0,
   };
 }
 

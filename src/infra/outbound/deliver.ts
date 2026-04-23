@@ -36,7 +36,12 @@ import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
 import type { OutboundDeliveryResult } from "./deliver-types.js";
-import { ackDelivery, enqueueDelivery, failDelivery } from "./delivery-queue.js";
+import {
+  ackDelivery,
+  enqueueDelivery,
+  failDelivery,
+  withActiveDeliveryClaim,
+} from "./delivery-queue.js";
 import type { OutboundIdentity } from "./identity.js";
 import type { DeliveryMirror } from "./mirror.js";
 import {
@@ -660,6 +665,25 @@ export async function deliverOutboundPayloads(
         gatewayClientScopes: params.gatewayClientScopes,
       }).catch(() => null); // Best-effort — don't block delivery if queue write fails.
 
+  if (!queueId) {
+    return await deliverOutboundPayloadsWithQueueCleanup(params, null);
+  }
+
+  // Hold the same in-process claim used by recovery/drain while the live send
+  // owns this queue entry.
+  const claimResult = await withActiveDeliveryClaim(queueId, () =>
+    deliverOutboundPayloadsWithQueueCleanup(params, queueId),
+  );
+  if (claimResult.status === "claimed-by-other-owner") {
+    return [];
+  }
+  return claimResult.value;
+}
+
+async function deliverOutboundPayloadsWithQueueCleanup(
+  params: DeliverOutboundPayloadsParams,
+  queueId: string | null,
+): Promise<OutboundDeliveryResult[]> {
   // Wrap onError to detect partial failures under bestEffort mode.
   // When bestEffort is true, per-payload errors are caught and passed to onError
   // without throwing — so the outer try/catch never fires. We track whether any

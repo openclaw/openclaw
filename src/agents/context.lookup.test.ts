@@ -20,7 +20,7 @@ vi.mock("../config/config.js", () => ({
   loadConfig: () => contextTestState.loadConfigImpl(),
 }));
 
-vi.mock("./models-config.js", () => ({
+vi.mock("./models-config.runtime.js", () => ({
   ensureOpenClawModelsJson: contextTestState.ensureOpenClawModelsJson,
 }));
 
@@ -75,7 +75,9 @@ async function flushAsyncWarmup() {
     await vi.advanceTimersByTimeAsync(0);
     return;
   }
+  await Promise.resolve();
   await new Promise((r) => setTimeout(r, 0));
+  await Promise.resolve();
 }
 
 let contextModule: ContextModule;
