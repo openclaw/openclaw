@@ -176,6 +176,11 @@ test_shell_sections_display_exe = executable('test_shell_sections_display',
   dependencies : [glib_dep, gtk4_dep])
 test('shell_sections_display', test_shell_sections_display_exe)
 
+test_section_debug_exe = executable('test_section_debug',
+  ['tests/test_section_debug.c', 'src/section_debug.c'],
+  dependencies : [glib_dep, gio_dep, gtk4_dep, adwaita_dep])
+test('section_debug', test_section_debug_exe)
+
 test_onboarding_controller_exe = executable('test_onboarding_controller',
   ['tests/test_onboarding_controller.c', 'src/onboarding.c', 'src/test_seams.c'],
   dependencies : [glib_dep, gio_dep, json_glib_dep, gtk4_dep, adwaita_dep])
