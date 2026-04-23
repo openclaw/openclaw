@@ -1,55 +1,54 @@
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 
-const NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1";
-const NVIDIA_DEFAULT_MODEL_ID = "nvidia/nemotron-3-super-120b-a12b";
-const NVIDIA_DEFAULT_MAX_TOKENS = 8192;
-const NVIDIA_DEFAULT_COST = {
+const NIM_BASE_URL = "https://integrate.api.nvidia.com/v1";
+const NIM_DEFAULT_MAX_TOKENS = 4096;
+const NIM_DEFAULT_COST = {
   input: 0,
   output: 0,
   cacheRead: 0,
   cacheWrite: 0,
 };
 
-export function buildNvidiaProvider(): ModelProviderConfig {
+export function buildNimProvider(): ModelProviderConfig {
   return {
-    baseUrl: NVIDIA_BASE_URL,
+    baseUrl: NIM_BASE_URL,
     api: "openai-completions",
     models: [
       {
-        id: NVIDIA_DEFAULT_MODEL_ID,
-        name: "NVIDIA Nemotron 3 Super 120B",
+        id: "nvidia/llama-3.1-nemotron-70b-instruct",
+        name: "Llama 3.1 Nemotron 70B",
         reasoning: false,
         input: ["text"],
-        cost: NVIDIA_DEFAULT_COST,
-        contextWindow: 262144,
-        maxTokens: NVIDIA_DEFAULT_MAX_TOKENS,
+        cost: NIM_DEFAULT_COST,
+        contextWindow: 131072,
+        maxTokens: NIM_DEFAULT_MAX_TOKENS,
       },
       {
-        id: "moonshotai/kimi-k2.5",
-        name: "Kimi K2.5",
+        id: "meta/llama-3.1-405b-instruct",
+        name: "Meta Llama 3.1 405B Instruct",
         reasoning: false,
         input: ["text"],
-        cost: NVIDIA_DEFAULT_COST,
-        contextWindow: 262144,
-        maxTokens: NVIDIA_DEFAULT_MAX_TOKENS,
+        cost: NIM_DEFAULT_COST,
+        contextWindow: 131072,
+        maxTokens: NIM_DEFAULT_MAX_TOKENS,
       },
       {
-        id: "minimaxai/minimax-m2.5",
-        name: "MiniMax M2.5",
+        id: "meta/llama-3.1-70b-instruct",
+        name: "Meta Llama 3.1 70B Instruct",
         reasoning: false,
         input: ["text"],
-        cost: NVIDIA_DEFAULT_COST,
-        contextWindow: 196608,
-        maxTokens: NVIDIA_DEFAULT_MAX_TOKENS,
+        cost: NIM_DEFAULT_COST,
+        contextWindow: 131072,
+        maxTokens: NIM_DEFAULT_MAX_TOKENS,
       },
       {
-        id: "z-ai/glm5",
-        name: "GLM-5",
+        id: "mistralai/mixtral-8x22b-instruct-v0.1",
+        name: "Mistral Mixtral 8x22B",
         reasoning: false,
         input: ["text"],
-        cost: NVIDIA_DEFAULT_COST,
-        contextWindow: 202752,
-        maxTokens: NVIDIA_DEFAULT_MAX_TOKENS,
+        cost: NIM_DEFAULT_COST,
+        contextWindow: 65536,
+        maxTokens: NIM_DEFAULT_MAX_TOKENS,
       },
     ],
   };

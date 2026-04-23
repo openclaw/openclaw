@@ -1,1 +1,1 @@
-export { buildNvidiaProvider } from "./provider-catalog.js";
+export { buildNimProvider } from "./provider-catalog.js";
