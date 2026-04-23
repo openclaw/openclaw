@@ -1353,13 +1353,13 @@ describe("openai transport stream", () => {
     expect(params.stream_options).toMatchObject({ include_usage: true });
   });
 
-  it("always includes stream_options.include_usage for non-standard backends like llama-cpp", () => {
+  it("always includes stream_options.include_usage for known local backends like llama-cpp", () => {
     const params = buildOpenAICompletionsParams(
       {
         id: "llama-3",
         name: "Llama 3",
         api: "openai-completions",
-        provider: "custom-cpa",
+        provider: "llama-cpp",
         baseUrl: "http://localhost:8080/v1",
         reasoning: false,
         input: ["text"],

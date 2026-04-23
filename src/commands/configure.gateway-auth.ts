@@ -163,7 +163,9 @@ export async function promptAuthConfig(
       preferredProvider,
     });
     if (allowlistSelection.models) {
-      next = applyModelAllowlist(next, allowlistSelection.models);
+      next = applyModelAllowlist(next, allowlistSelection.models, {
+        scopeKeys: allowlistSelection.scopeKeys,
+      });
       next = applyModelFallbacksFromSelection(next, allowlistSelection.models);
     }
   }

@@ -1,5 +1,5 @@
 import path from "node:path";
-import { resolvePluginConfigObject } from "openclaw/plugin-sdk/config-runtime";
+import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/config-runtime";
 import { resolvePreferredOpenClawTmpDir, type OpenClawPluginApi } from "../api.js";
 import {
   resolveDiffsPluginDefaults,
@@ -12,24 +12,38 @@ import { DiffArtifactStore } from "./store.js";
 import { createDiffsTool } from "./tool.js";
 
 export function registerDiffsPlugin(api: OpenClawPluginApi): void {
-  const defaults = resolveDiffsPluginDefaults(api.pluginConfig);
-  const viewerBaseUrl = resolveDiffsPluginViewerBaseUrl(api.pluginConfig);
   const store = new DiffArtifactStore({
     rootDir: path.join(resolvePreferredOpenClawTmpDir(), "openclaw-diffs"),
     logger: api.logger,
   });
+  const resolveCurrentPluginConfig = () =>
+    resolveLivePluginConfigObject(
+      api.runtime.config?.loadConfig,
+      "diffs",
+      api.pluginConfig as Record<string, unknown>,
+    ) ?? {};
   const resolveCurrentAccessConfig = () => {
     const currentConfig = api.runtime.config?.loadConfig?.() ?? api.config;
-    const pluginConfig = resolvePluginConfigObject(currentConfig, "diffs") ?? api.pluginConfig;
+    const pluginConfig = resolveCurrentPluginConfig();
     return {
       allowRemoteViewer: resolveDiffsPluginSecurity(pluginConfig).allowRemoteViewer,
       trustedProxies: currentConfig.gateway?.trustedProxies,
       allowRealIpFallback: currentConfig.gateway?.allowRealIpFallback === true,
     };
   };
+  const initialAccessConfig = resolveCurrentAccessConfig();
 
   api.registerTool(
-    (ctx) => createDiffsTool({ api, store, defaults, viewerBaseUrl, context: ctx }),
+    (ctx) => {
+      const pluginConfig = resolveCurrentPluginConfig();
+      return createDiffsTool({
+        api,
+        store,
+        defaults: resolveDiffsPluginDefaults(pluginConfig),
+        viewerBaseUrl: resolveDiffsPluginViewerBaseUrl(pluginConfig),
+        context: ctx,
+      });
+    },
     {
       name: "diffs",
     },
@@ -41,9 +55,9 @@ export function registerDiffsPlugin(api: OpenClawPluginApi): void {
     handler: createDiffsHttpHandler({
       store,
       logger: api.logger,
-      allowRemoteViewer: resolveDiffsPluginSecurity(api.pluginConfig).allowRemoteViewer,
-      trustedProxies: api.config.gateway?.trustedProxies,
-      allowRealIpFallback: api.config.gateway?.allowRealIpFallback === true,
+      allowRemoteViewer: initialAccessConfig.allowRemoteViewer,
+      trustedProxies: initialAccessConfig.trustedProxies,
+      allowRealIpFallback: initialAccessConfig.allowRealIpFallback,
       resolveAccessConfig: resolveCurrentAccessConfig,
     }),
   });

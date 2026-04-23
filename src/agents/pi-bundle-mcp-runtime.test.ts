@@ -5,6 +5,7 @@ import {
   getOrCreateSessionMcpRuntime,
   materializeBundleMcpToolsForRun,
   retireSessionMcpRuntime,
+  retireSessionMcpRuntimeForSessionKey,
 } from "./pi-bundle-mcp-tools.js";
 import type { SessionMcpRuntime } from "./pi-bundle-mcp-types.js";
 
@@ -318,5 +319,26 @@ describe("session MCP runtime", () => {
     expect(__testing.getCachedSessionIds()).not.toContain("session-retire");
 
     await expect(retireSessionMcpRuntime({ sessionId: " ", reason: "test" })).resolves.toBe(false);
+  });
+
+  it("retires global session runtimes by session key", async () => {
+    await getOrCreateSessionMcpRuntime({
+      sessionId: "session-retire-key",
+      sessionKey: "agent:test:session-retire-key",
+      workspaceDir: "/workspace",
+    });
+    expect(__testing.getCachedSessionIds()).toContain("session-retire-key");
+
+    await expect(
+      retireSessionMcpRuntimeForSessionKey({
+        sessionKey: " agent:test:session-retire-key ",
+        reason: "test",
+      }),
+    ).resolves.toBe(true);
+    expect(__testing.getCachedSessionIds()).not.toContain("session-retire-key");
+
+    await expect(
+      retireSessionMcpRuntimeForSessionKey({ sessionKey: "agent:test:missing", reason: "test" }),
+    ).resolves.toBe(false);
   });
 });

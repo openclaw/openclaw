@@ -47,7 +47,7 @@ import {
   type DeliveryProgress as ReplyThreadDeliveryProgress,
 } from "./reply-threading.js";
 
-const VOICE_FORBIDDEN_RE = /VOICE_MESSAGES_FORBIDDEN/;
+const VOICE_FORBIDDEN_MARKER = "VOICE_MESSAGES_FORBIDDEN";
 const CAPTION_TOO_LONG_RE = /caption is too long/i;
 const GrammyErrorCtor: typeof GrammyError | undefined =
   typeof GrammyError === "function" ? GrammyError : undefined;
@@ -193,9 +193,9 @@ async function sendPendingFollowUpText(params: {
 
 function isVoiceMessagesForbidden(err: unknown): boolean {
   if (GrammyErrorCtor && err instanceof GrammyErrorCtor) {
-    return VOICE_FORBIDDEN_RE.test(err.description);
+    return err.description.includes(VOICE_FORBIDDEN_MARKER);
   }
-  return VOICE_FORBIDDEN_RE.test(formatErrorMessage(err));
+  return formatErrorMessage(err).includes(VOICE_FORBIDDEN_MARKER);
 }
 
 function isCaptionTooLong(err: unknown): boolean {

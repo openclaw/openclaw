@@ -131,10 +131,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
     expect(agentShard).toEqual({
       checkName: "checks-node-agentic-agents",
       shardName: "agentic-agents",
-      configs: [
-        "test/vitest/vitest.agents.config.ts",
-        "test/vitest/vitest.gateway-client.config.ts",
-      ],
+      configs: ["test/vitest/vitest.agents.config.ts"],
       requiresDist: false,
     });
     expect(pluginSdkShard).toEqual({
@@ -142,6 +139,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       shardName: "agentic-plugin-sdk",
       configs: [
         "test/vitest/vitest.gateway-core.config.ts",
+        "test/vitest/vitest.gateway-client.config.ts",
         "test/vitest/vitest.gateway-methods.config.ts",
         "test/vitest/vitest.plugin-sdk-light.config.ts",
         "test/vitest/vitest.plugin-sdk.config.ts",
