@@ -12,6 +12,24 @@ export type QueuedFileWriterOptions = {
   maxFileBytes?: number;
 };
 
+type QueuedFileAppendFlagConstants = Pick<
+  typeof nodeFs.constants,
+  "O_APPEND" | "O_CREAT" | "O_WRONLY"
+> &
+  Partial<Pick<typeof nodeFs.constants, "O_NOFOLLOW">>;
+
+export function resolveQueuedFileAppendFlags(
+  constants: QueuedFileAppendFlagConstants = nodeFs.constants,
+): number {
+  const noFollow = constants.O_NOFOLLOW;
+  return (
+    constants.O_CREAT |
+    constants.O_APPEND |
+    constants.O_WRONLY |
+    (typeof noFollow === "number" ? noFollow : 0)
+  );
+}
+
 async function assertNoSymlinkParents(filePath: string): Promise<void> {
   const resolvedDir = path.resolve(path.dirname(filePath));
   const parsed = path.parse(resolvedDir);
@@ -54,10 +72,6 @@ async function safeAppendFile(
   line: string,
   options: QueuedFileWriterOptions,
 ): Promise<void> {
-  const noFollow = nodeFs.constants.O_NOFOLLOW;
-  if (typeof noFollow !== "number") {
-    throw new Error("O_NOFOLLOW is unavailable; refusing to write queued log");
-  }
   await assertNoSymlinkParents(filePath);
 
   let preOpenStat: nodeFs.Stats | undefined;
@@ -83,11 +97,7 @@ async function safeAppendFile(
     return;
   }
 
-  const handle = await fs.open(
-    filePath,
-    nodeFs.constants.O_CREAT | nodeFs.constants.O_APPEND | nodeFs.constants.O_WRONLY | noFollow,
-    0o600,
-  );
+  const handle = await fs.open(filePath, resolveQueuedFileAppendFlags(), 0o600);
   try {
     const stat = await handle.stat();
     verifyStableOpenedFile({ preOpenStat, postOpenStat: stat, filePath });
