@@ -9,6 +9,7 @@ import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { sanitizeForLog } from "../terminal/ansi.js";
 import {
   __testing as providerHookRuntimeTesting,
   clearProviderRuntimeHookCache,
@@ -78,6 +79,11 @@ import type {
 
 const log = createSubsystemLogger("plugins/provider-runtime");
 const warnedExternalAuthFallbackPluginIds = new Set<string>();
+
+function resetExternalAuthFallbackWarningCacheForTest(): void {
+  warnedExternalAuthFallbackPluginIds.clear();
+}
+
 export {
   clearProviderRuntimeHookCache,
   prepareProviderExtraParams,
@@ -88,6 +94,7 @@ export {
 
 export const __testing = {
   ...providerHookRuntimeTesting,
+  resetExternalAuthFallbackWarningCacheForTest,
 } as const;
 
 function resolveProviderPluginsForCatalogHooks(params: {
@@ -770,10 +777,12 @@ export function resolveExternalAuthProfilesWithPlugins(params: {
     workspaceDir,
     env,
   });
+  const declaredPluginIds = new Set(externalAuthPluginIds);
   const fallbackPluginIds = resolveExternalAuthProfileCompatFallbackPluginIds({
     config: params.config,
     workspaceDir,
     env,
+    declaredPluginIds,
   });
   const pluginIds = [...new Set([...externalAuthPluginIds, ...fallbackPluginIds])].toSorted(
     (left, right) => left.localeCompare(right),
@@ -781,7 +790,6 @@ export function resolveExternalAuthProfilesWithPlugins(params: {
   if (pluginIds.length === 0) {
     return [];
   }
-  const declaredPluginIds = new Set(externalAuthPluginIds);
   const matches: ProviderExternalAuthProfile[] = [];
   for (const plugin of resolveProviderPluginsForHooks({
     ...params,
@@ -802,7 +810,7 @@ export function resolveExternalAuthProfilesWithPlugins(params: {
       // resolveExternalOAuthProfiles or omit contracts.externalAuthProviders.
       // Remove this warning with the fallback resolver after the migration window.
       log.warn(
-        `Provider plugin "${pluginId}" uses external auth hooks without declaring contracts.externalAuthProviders. This compatibility fallback is deprecated and will be removed in a future release.`,
+        `Provider plugin "${sanitizeForLog(pluginId)}" uses external auth hooks without declaring contracts.externalAuthProviders. This compatibility fallback is deprecated and will be removed in a future release.`,
       );
     }
     matches.push(...profiles);

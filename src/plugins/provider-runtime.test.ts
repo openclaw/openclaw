@@ -316,6 +316,7 @@ describe("provider-runtime", () => {
 
   beforeEach(() => {
     resetProviderRuntimeHookCacheForTest();
+    providerRuntimeTesting.resetExternalAuthFallbackWarningCacheForTest();
     resolvePluginProvidersMock.mockReset();
     resolvePluginProvidersMock.mockReturnValue([]);
     isPluginProvidersLoadInFlightMock.mockReset();
@@ -392,6 +393,52 @@ describe("provider-runtime", () => {
       }),
     ).toEqual([]);
     expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
+  });
+
+  it("warns once with a log-safe plugin id for undeclared external auth fallback plugins", () => {
+    const unsafePluginId = "legacy-provider\nWARN forged";
+    resolveExternalAuthProfileCompatFallbackPluginIdsMock.mockReturnValue([unsafePluginId]);
+    resolvePluginProvidersMock.mockReturnValue([
+      {
+        id: "legacy-provider",
+        pluginId: unsafePluginId,
+        label: "Legacy Provider",
+        auth: [],
+        resolveExternalOAuthProfiles: () => [
+          {
+            profileId: "legacy-provider:external",
+            credential: {
+              type: "oauth",
+              provider: "legacy-provider",
+              access: "access",
+              refresh: "refresh",
+              expires: Date.now() + 60_000,
+            },
+          },
+        ],
+      },
+    ]);
+
+    for (let i = 0; i < 2; i += 1) {
+      expect(
+        resolveExternalAuthProfilesWithPlugins({
+          env: process.env,
+          context: {
+            env: process.env,
+            store: { version: 1, profiles: {} },
+          },
+        }),
+      ).toEqual([
+        expect.objectContaining({
+          profileId: "legacy-provider:external",
+        }),
+      ]);
+    }
+
+    expect(providerRuntimeWarnMock).toHaveBeenCalledTimes(1);
+    const warning = String(providerRuntimeWarnMock.mock.calls[0]?.[0] ?? "");
+    expect(warning).toContain('Provider plugin "legacy-providerWARN forged"');
+    expect(warning).not.toContain("\n");
   });
 
   it("does not warn for declared external auth plugins with different provider ids", () => {
