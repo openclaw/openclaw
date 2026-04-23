@@ -1,6 +1,10 @@
 import { z } from "zod";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { hasConfiguredSecretInput } from "./types.secrets.js";
+import {
+  coerceSecretRef,
+  hasConfiguredSecretInput,
+  normalizeSecretInputString,
+} from "./types.secrets.js";
 
 type TelegramAccountLike = {
   enabled?: unknown;
@@ -25,6 +29,40 @@ type SlackConfigLike = {
   signingSecret?: unknown;
   accounts?: Record<string, SlackAccountLike | undefined>;
 };
+
+type BlueBubblesAccountLike = {
+  enabled?: unknown;
+  serverUrl?: unknown;
+  password?: unknown;
+  webhookSecret?: unknown;
+};
+
+type BlueBubblesConfigLike = {
+  serverUrl?: unknown;
+  password?: unknown;
+  webhookSecret?: unknown;
+  accounts?: Record<string, BlueBubblesAccountLike | undefined>;
+};
+
+function hasMatchingSecretInput(left: unknown, right: unknown): boolean {
+  const leftString = normalizeSecretInputString(left);
+  const rightString = normalizeSecretInputString(right);
+  if (leftString && rightString) {
+    return leftString === rightString;
+  }
+
+  const leftRef = coerceSecretRef(left);
+  const rightRef = coerceSecretRef(right);
+  if (!leftRef || !rightRef) {
+    return false;
+  }
+
+  return (
+    leftRef.source === rightRef.source &&
+    leftRef.provider === rightRef.provider &&
+    leftRef.id === rightRef.id
+  );
+}
 
 function forEachEnabledAccount<T extends { enabled?: unknown }>(
   accounts: Record<string, T | undefined> | undefined,
@@ -65,6 +103,61 @@ export function validateTelegramWebhookSecretRequirements(
         code: z.ZodIssueCode.custom,
         message:
           "channels.telegram.accounts.*.webhookUrl requires channels.telegram.webhookSecret or channels.telegram.accounts.*.webhookSecret",
+        path: ["accounts", accountId, "webhookSecret"],
+      });
+    }
+  });
+}
+
+export function validateBlueBubblesWebhookSecretRequirements(
+  value: BlueBubblesConfigLike,
+  ctx: z.RefinementCtx,
+): void {
+  const baseServerUrl = normalizeOptionalString(value.serverUrl) ?? "";
+  const hasBaseWebhookSecret = hasConfiguredSecretInput(value.webhookSecret);
+  if (baseServerUrl && !hasBaseWebhookSecret) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message:
+        "channels.bluebubbles.webhookSecret is required when channels.bluebubbles.serverUrl is configured",
+      path: ["webhookSecret"],
+    });
+  }
+  if (
+    baseServerUrl &&
+    hasConfiguredSecretInput(value.password) &&
+    hasBaseWebhookSecret &&
+    hasMatchingSecretInput(value.password, value.webhookSecret)
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "channels.bluebubbles.webhookSecret must differ from channels.bluebubbles.password",
+      path: ["webhookSecret"],
+    });
+  }
+  forEachEnabledAccount(value.accounts, (accountId, account) => {
+    const accountServerUrl = normalizeOptionalString(account.serverUrl) ?? "";
+    if (!accountServerUrl) {
+      return;
+    }
+    const hasAccountWebhookSecret = hasConfiguredSecretInput(account.webhookSecret);
+    if (!hasAccountWebhookSecret) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "channels.bluebubbles.accounts.*.webhookSecret is required when channels.bluebubbles.accounts.*.serverUrl is configured",
+        path: ["accounts", accountId, "webhookSecret"],
+      });
+    }
+    if (
+      hasConfiguredSecretInput(account.password) &&
+      hasAccountWebhookSecret &&
+      hasMatchingSecretInput(account.password, account.webhookSecret)
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "channels.bluebubbles.accounts.*.webhookSecret must differ from channels.bluebubbles.accounts.*.password",
         path: ["accounts", accountId, "webhookSecret"],
       });
     }

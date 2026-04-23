@@ -9,7 +9,11 @@ import {
 } from "openclaw/plugin-sdk/channel-config-schema";
 import { z } from "openclaw/plugin-sdk/zod";
 import { bluebubblesChannelConfigUiHints } from "./config-ui-hints.js";
-import { buildSecretInputSchema, hasConfiguredSecretInput } from "./secret-input.js";
+import {
+  buildSecretInputSchema,
+  hasConfiguredSecretInput,
+  hasMatchingSecretInput,
+} from "./secret-input.js";
 
 const bluebubblesActionSchema = z
   .object({
@@ -113,6 +117,18 @@ const bluebubblesAccountSchema = z
         code: z.ZodIssueCode.custom,
         path: ["webhookSecret"],
         message: "webhookSecret is required when serverUrl is configured",
+      });
+    }
+    if (
+      serverUrl &&
+      passwordConfigured &&
+      webhookSecretConfigured &&
+      hasMatchingSecretInput(value.password, value.webhookSecret)
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["webhookSecret"],
+        message: "webhookSecret must differ from password",
       });
     }
   });

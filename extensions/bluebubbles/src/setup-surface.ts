@@ -11,7 +11,11 @@ import {
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { resolveBlueBubblesAccount, resolveDefaultBlueBubblesAccountId } from "./accounts.js";
 import { applyBlueBubblesConnectionConfig } from "./config-apply.js";
-import { hasConfiguredSecretInput, normalizeSecretInputString } from "./secret-input.js";
+import {
+  hasConfiguredSecretInput,
+  hasMatchingSecretInput,
+  normalizeSecretInputString,
+} from "./secret-input.js";
 import {
   blueBubblesSetupAdapter,
   setBlueBubblesAllowFrom,
@@ -205,10 +209,15 @@ export const blueBubblesSetupWizard: ChannelSetupWizard = {
           resolvedValue: normalizeSecretInputString(existingPassword) ?? undefined,
         };
       },
-      applySet: async ({ cfg, accountId, value }) =>
-        applyBlueBubblesSetupPatch(cfg, accountId, {
+      applySet: async ({ cfg, accountId, value }) => {
+        const existingSecret = resolveBlueBubblesAccount({ cfg, accountId }).config.webhookSecret;
+        if (hasMatchingSecretInput(existingSecret, value)) {
+          throw new Error("BlueBubbles password must differ from the webhook secret.");
+        }
+        return applyBlueBubblesSetupPatch(cfg, accountId, {
           password: value,
-        }),
+        });
+      },
     },
     {
       inputKey: "webhookSecret",
@@ -223,17 +232,27 @@ export const blueBubblesSetupWizard: ChannelSetupWizard = {
       keepPrompt: "BlueBubbles webhook secret already set. Keep it?",
       inputPrompt: "BlueBubbles webhook secret",
       inspect: ({ cfg, accountId }) => {
-        const existingSecret = resolveBlueBubblesAccount({ cfg, accountId }).config.webhookSecret;
+        const account = resolveBlueBubblesAccount({ cfg, accountId }).config;
+        const existingPassword = account.password;
+        const existingSecret = account.webhookSecret;
+        const distinctFromPassword = !hasMatchingSecretInput(existingPassword, existingSecret);
         return {
-          accountConfigured: hasConfiguredSecretInput(existingSecret),
-          hasConfiguredValue: hasConfiguredSecretInput(existingSecret),
-          resolvedValue: normalizeSecretInputString(existingSecret) ?? undefined,
+          accountConfigured: hasConfiguredSecretInput(existingSecret) && distinctFromPassword,
+          hasConfiguredValue: hasConfiguredSecretInput(existingSecret) && distinctFromPassword,
+          resolvedValue: distinctFromPassword
+            ? (normalizeSecretInputString(existingSecret) ?? undefined)
+            : undefined,
         };
       },
-      applySet: async ({ cfg, accountId, value }) =>
-        applyBlueBubblesSetupPatch(cfg, accountId, {
+      applySet: async ({ cfg, accountId, value }) => {
+        const existingPassword = resolveBlueBubblesAccount({ cfg, accountId }).config.password;
+        if (hasMatchingSecretInput(existingPassword, value)) {
+          throw new Error("BlueBubbles webhook secret must differ from the server password.");
+        }
+        return applyBlueBubblesSetupPatch(cfg, accountId, {
           webhookSecret: value,
-        }),
+        });
+      },
     },
   ],
   textInputs: [

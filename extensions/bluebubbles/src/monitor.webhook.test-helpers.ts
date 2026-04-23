@@ -32,7 +32,7 @@ export function createMockAccount(
     config: {
       serverUrl: "http://localhost:1234",
       password: "test-password",
-      webhookSecret: "test-password",
+      webhookSecret: "test-webhook-secret",
       dmPolicy: "open",
       groupPolicy: "open",
       allowFrom: [],
@@ -42,8 +42,8 @@ export function createMockAccount(
   };
 }
 
-export function createProtectedWebhookAccountForTest(password = "test-password") {
-  return createMockAccount({ password, webhookSecret: password });
+export function createProtectedWebhookAccountForTest(webhookSecret = "test-webhook-secret") {
+  return createMockAccount({ password: "test-password", webhookSecret });
 }
 
 export function createNewMessagePayloadForTest(dataOverrides: Record<string, unknown> = {}) {
@@ -110,7 +110,7 @@ export function createMockRequest(
     headers["x-bluebubbles-guid"] !== undefined ||
     headers.authorization !== undefined;
   if (!hasAuthQuery && !hasAuthHeader) {
-    parsedUrl.searchParams.set("password", "test-password");
+    parsedUrl.searchParams.set("password", "test-webhook-secret");
   }
 
   const req = new EventEmitter() as IncomingMessage;
@@ -165,7 +165,7 @@ export function createPasswordQueryRequestParamsForTest(
     body: params.body,
     remoteAddress: params.remoteAddress,
     overrides: {
-      url: `/bluebubbles-webhook?password=${params.password ?? "test-password"}`,
+      url: `/bluebubbles-webhook?password=${params.password ?? "test-webhook-secret"}`,
       ...params.overrides,
     },
   });
@@ -181,12 +181,13 @@ export function createLoopbackWebhookRequestParamsForTest(
   return {
     body: params.body ?? createNewMessagePayloadForTest(),
     remoteAddress,
+    url: params.overrides?.url ?? "/bluebubbles-webhook?password=wrong-token",
     ...params.overrides,
   };
 }
 
 export function createHangingWebhookRequestForTest(
-  url = "/bluebubbles-webhook?password=test-password",
+  url = "/bluebubbles-webhook?password=test-webhook-secret",
   remoteAddress = "127.0.0.1",
 ): HangingWebhookRequestForTest {
   const req = new EventEmitter() as IncomingMessage;

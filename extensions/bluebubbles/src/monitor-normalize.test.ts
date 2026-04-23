@@ -120,6 +120,41 @@ describe("normalizeWebhookMessage", () => {
     expect(result).not.toBeNull();
     expect(result?.participants).toEqual([{ id: "+15551234567" }, { id: "+15557654321" }]);
   });
+
+  it("parses string chatId values for group messages", () => {
+    const result = normalizeWebhookMessage({
+      type: "new-message",
+      data: {
+        guid: "msg-chat-id-string-1",
+        text: "hello group",
+        isGroup: true,
+        isFromMe: false,
+        handle: { address: "+15550000000" },
+        chatGuid: "iMessage;+;chat123456",
+        chatId: "123",
+      },
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.chatId).toBe(123);
+  });
+
+  it("extracts nested chat chatGuid values", () => {
+    const result = normalizeWebhookMessage({
+      type: "new-message",
+      data: {
+        guid: "msg-nested-chat-guid-1",
+        text: "hello group",
+        isGroup: true,
+        isFromMe: false,
+        handle: { address: "+15550000000" },
+        chat: { chatGuid: "iMessage;+;chat123456" },
+      },
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.chatGuid).toBe("iMessage;+;chat123456");
+  });
 });
 
 describe("normalizeWebhookReaction", () => {

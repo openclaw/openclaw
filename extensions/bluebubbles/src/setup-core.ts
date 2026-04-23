@@ -9,6 +9,7 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/setup";
 import { applyBlueBubblesConnectionConfig } from "./config-apply.js";
+import { hasMatchingSecretInput } from "./secret-input.js";
 
 const channel = "bluebubbles" as const;
 
@@ -76,6 +77,9 @@ export const blueBubblesSetupAdapter: ChannelSetupAdapter = {
       }
       if (!input.webhookSecret) {
         return "BlueBubbles requires --webhook-secret.";
+      }
+      if (hasMatchingSecretInput(input.password, input.webhookSecret)) {
+        return "BlueBubbles requires --webhook-secret to differ from --password.";
       }
       return null;
     },

@@ -137,7 +137,7 @@ const mockChunkMarkdownTextWithMode = vi.fn((text: string) => (text ? [text] : [
 const mockResolveChunkMode = vi.fn(() => "length" as const);
 const mockFetchBlueBubblesHistory = vi.mocked(fetchBlueBubblesHistory);
 const mockFetch = vi.fn();
-const TEST_WEBHOOK_PASSWORD = "secret-token";
+const TEST_WEBHOOK_PASSWORD = "test-webhook-secret";
 
 function createMockRuntime(): PluginRuntime {
   return createBlueBubblesMonitorTestRuntime({
@@ -269,11 +269,6 @@ describe("BlueBubbles webhook monitor", () => {
     return expectWebhookRequestStatusForTest(params, expectedStatus, expectedBody);
   }
 
-  async function dispatchWebhookPayloadWithSetup(setup: () => void, payload: unknown) {
-    setup();
-    return dispatchWebhookPayloadForTest({ body: payload });
-  }
-
   async function expectProtectedPasswordQueryRequestStatus(
     expectedStatus: number,
     password = TEST_WEBHOOK_PASSWORD,
@@ -312,12 +307,6 @@ describe("BlueBubbles webhook monitor", () => {
       expectedStatus,
       expectedBody,
     );
-  }
-
-  async function dispatchRegisteredWebhookPayload(payload: unknown) {
-    return dispatchWebhookPayloadWithSetup(() => {
-      setupWebhookTarget();
-    }, payload);
   }
 
   async function expectLoopbackWebhookRequestStatus(
@@ -673,51 +662,6 @@ describe("BlueBubbles webhook monitor", () => {
       });
 
       expect(handled).toBe(false);
-    });
-
-    it("parses chatId when provided as a string (webhook variant)", async () => {
-      const { resolveChatGuidForTarget } = await import("./send.js");
-      vi.mocked(resolveChatGuidForTarget).mockClear();
-
-      const payload = createTimestampedNewMessagePayloadForTest({
-        text: "hello from group",
-        isGroup: true,
-        chatId: "123",
-      });
-
-      await dispatchRegisteredWebhookPayload(payload);
-
-      expect(resolveChatGuidForTarget).toHaveBeenCalledWith(
-        expect.objectContaining({
-          target: { kind: "chat_id", chatId: 123 },
-        }),
-      );
-    });
-
-    it("extracts chatGuid from nested chat object fields (webhook variant)", async () => {
-      const { sendMessageBlueBubbles, resolveChatGuidForTarget } = await import("./send.js");
-      vi.mocked(sendMessageBlueBubbles).mockClear();
-      vi.mocked(resolveChatGuidForTarget).mockClear();
-
-      mockDispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async (params) => {
-        await params.dispatcherOptions.deliver({ text: "replying now" }, { kind: "final" });
-        return EMPTY_DISPATCH_RESULT;
-      });
-
-      const payload = createTimestampedNewMessagePayloadForTest({
-        text: "hello from group",
-        isGroup: true,
-        chat: { chatGuid: "iMessage;+;chat123456" },
-      });
-
-      await dispatchRegisteredWebhookPayload(payload);
-
-      expect(resolveChatGuidForTarget).not.toHaveBeenCalled();
-      expect(sendMessageBlueBubbles).toHaveBeenCalledWith(
-        "chat_guid:iMessage;+;chat123456",
-        expect.any(String),
-        expect.any(Object),
-      );
     });
   });
 });

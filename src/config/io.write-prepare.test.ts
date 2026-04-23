@@ -277,6 +277,7 @@ describe("config io write prepare", () => {
         bluebubbles: {
           serverUrl: "http://localhost:1234",
           password: "test-password",
+          webhookSecret: "test-webhook-secret",
         },
       },
     } satisfies OpenClawConfig;
@@ -287,6 +288,7 @@ describe("config io write prepare", () => {
         bluebubbles: {
           serverUrl: "http://localhost:1234",
           password: "test-password",
+          webhookSecret: "test-webhook-secret",
           enrichGroupParticipantsFromContacts: true,
         },
       },

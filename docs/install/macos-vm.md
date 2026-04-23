@@ -205,7 +205,7 @@ Inside the VM:
 1. Download BlueBubbles from bluebubbles.app
 2. Sign in with your Apple ID
 3. Enable the Web API and set a password
-4. Point BlueBubbles webhooks at your gateway (example: `https://your-gateway-host:3000/bluebubbles-webhook?password=<password>`)
+4. Set a dedicated BlueBubbles webhook secret and point webhooks at your gateway (example: `https://your-gateway-host:3000/bluebubbles-webhook?guid=<webhook-secret>`)
 
 Add to your OpenClaw config:
 
@@ -215,6 +215,7 @@ Add to your OpenClaw config:
     bluebubbles: {
       serverUrl: "http://localhost:1234",
       password: "your-api-password",
+      webhookSecret: "your-webhook-secret",
       webhookPath: "/bluebubbles-webhook",
     },
   },

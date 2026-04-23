@@ -67,7 +67,7 @@ export function collectBlueBubblesStatusIssues(accounts: ChannelAccountSnapshot[
           channel: "bluebubbles",
           accountId,
           kind: "config",
-          message: "Not configured (missing serverUrl, password, or webhookSecret).",
+          message: "Not configured (missing serverUrl, password, or a distinct webhookSecret).",
           fix: "Run: openclaw channels add bluebubbles --http-url <server-url> --password <password> --webhook-secret <secret>",
         });
         return;

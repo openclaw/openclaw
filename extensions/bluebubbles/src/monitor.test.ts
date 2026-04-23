@@ -2326,7 +2326,7 @@ describe("BlueBubbles webhook monitor", () => {
         ...createMockAccount({
           dmHistoryLimit: 3,
           password: "password-a",
-          webhookSecret: "password-a",
+          webhookSecret: "webhook-secret-a",
         }), // pragma: allowlist secret
         accountId: "acc-a",
       };
@@ -2334,7 +2334,7 @@ describe("BlueBubbles webhook monitor", () => {
         ...createMockAccount({
           dmHistoryLimit: 3,
           password: "password-b",
-          webhookSecret: "password-b",
+          webhookSecret: "webhook-secret-b",
         }), // pragma: allowlist secret
         accountId: "acc-b",
       };
@@ -2356,7 +2356,7 @@ describe("BlueBubbles webhook monitor", () => {
           guid: "a-msg-1",
           chatGuid: "iMessage;-;+15551234567",
         }),
-        "/bluebubbles-webhook?password=password-a",
+        "/bluebubbles-webhook?password=webhook-secret-a",
       );
 
       await dispatchWebhookPayload(
@@ -2365,7 +2365,7 @@ describe("BlueBubbles webhook monitor", () => {
           guid: "b-msg-1",
           chatGuid: "iMessage;-;+15551234567",
         }),
-        "/bluebubbles-webhook?password=password-b",
+        "/bluebubbles-webhook?password=webhook-secret-b",
       );
 
       expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(2);

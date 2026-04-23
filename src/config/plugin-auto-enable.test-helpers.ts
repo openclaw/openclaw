@@ -97,7 +97,7 @@ export function makeApnChannelConfig() {
 
 export function makeBluebubblesAndImessageChannels() {
   return {
-    bluebubbles: { serverUrl: "http://localhost:1234", password: "x" },
+    bluebubbles: { serverUrl: "http://localhost:1234", password: "x", webhookSecret: "webhook-x" },
     imessage: { cliPath: "/usr/local/bin/imsg" },
   };
 }

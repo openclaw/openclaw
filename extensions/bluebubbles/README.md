@@ -35,7 +35,7 @@ If you’re looking for **how to use BlueBubbles as an agent/tool user**, see:
 
 ## Config (core)
 
-- `channels.bluebubbles.serverUrl` (base URL), `channels.bluebubbles.password`, `channels.bluebubbles.webhookPath`.
+- `channels.bluebubbles.serverUrl` (base URL), `channels.bluebubbles.password`, `channels.bluebubbles.webhookSecret`, `channels.bluebubbles.webhookPath`.
 - Action gating: `channels.bluebubbles.actions.reactions` (default true).
 
 ## Message tool notes

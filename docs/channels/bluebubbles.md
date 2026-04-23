@@ -143,6 +143,7 @@ The wizard prompts for:
 
 - **Server URL** (required): BlueBubbles server address (e.g., `http://192.168.1.100:1234`)
 - **Password** (required): API password from BlueBubbles Server settings
+- **Webhook secret** (required): Dedicated secret used only for inbound webhook authentication
 - **Webhook path** (optional): Defaults to `/bluebubbles-webhook`
 - **DM policy**: pairing, allowlist, open, or disabled
 - **Allow list**: Phone numbers, emails, or chat targets
@@ -150,7 +151,7 @@ The wizard prompts for:
 You can also add BlueBubbles via CLI:
 
 ```
-openclaw channels add bluebubbles --http-url http://192.168.1.100:1234 --password <password>
+openclaw channels add bluebubbles --http-url http://192.168.1.100:1234 --password <password> --webhook-secret <webhook-secret>
 ```
 
 ## Access control (DMs + groups)
@@ -520,7 +521,8 @@ Provider options:
 
 - `channels.bluebubbles.enabled`: Enable/disable the channel.
 - `channels.bluebubbles.serverUrl`: BlueBubbles REST API base URL.
-- `channels.bluebubbles.password`: API password.
+- `channels.bluebubbles.password`: API password used for the BlueBubbles REST/Private API.
+- `channels.bluebubbles.webhookSecret`: Dedicated inbound webhook secret. Use a value distinct from `channels.bluebubbles.password`.
 - `channels.bluebubbles.webhookPath`: Webhook endpoint path (default: `/bluebubbles-webhook`).
 - `channels.bluebubbles.dmPolicy`: `pairing | allowlist | open | disabled` (default: `pairing`).
 - `channels.bluebubbles.allowFrom`: DM allowlist (handles, emails, E.164 numbers, `chat_id:*`, `chat_guid:*`).
@@ -562,9 +564,9 @@ When the same handle has both an iMessage and an SMS chat on the Mac (for exampl
 
 ## Security
 
-- Webhook requests are authenticated by comparing `guid`/`password` query params or headers against `channels.bluebubbles.password`.
-- Keep the API password and webhook endpoint secret (treat them like credentials).
-- There is no localhost bypass for BlueBubbles webhook auth. If you proxy webhook traffic, keep the BlueBubbles password on the request end-to-end. `gateway.trustedProxies` does not replace `channels.bluebubbles.password` here. See [Gateway security](/gateway/security#reverse-proxy-configuration).
+- Webhook requests are authenticated by comparing `guid`/`password` query params or headers against `channels.bluebubbles.webhookSecret`.
+- Keep the API password and webhook secret separate; never publish `channels.bluebubbles.password` on the webhook URL.
+- There is no localhost bypass for BlueBubbles webhook auth. If you proxy webhook traffic, keep the dedicated webhook secret on the request end-to-end. `gateway.trustedProxies` does not replace `channels.bluebubbles.webhookSecret` here. See [Gateway security](/gateway/security#reverse-proxy-configuration).
 - Enable HTTPS + firewall rules on the BlueBubbles server if exposing it outside your LAN.
 
 ## Troubleshooting

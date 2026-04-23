@@ -33,6 +33,7 @@ import {
   requireOpenAllowFrom,
 } from "./zod-schema.core.js";
 import {
+  validateBlueBubblesWebhookSecretRequirements,
   validateSlackSigningSecretRequirements,
   validateTelegramWebhookSecretRequirements,
 } from "./zod-schema.secret-input-validation.js";
@@ -1483,6 +1484,7 @@ export const BlueBubblesConfigSchema = BlueBubblesAccountSchemaBase.extend({
   defaultAccount: z.string().optional(),
   actions: BlueBubblesActionSchema,
 }).superRefine((value, ctx) => {
+  validateBlueBubblesWebhookSecretRequirements(value, ctx);
   requireOpenAllowFrom({
     policy: value.dmPolicy,
     allowFrom: value.allowFrom,

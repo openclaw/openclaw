@@ -12,7 +12,11 @@ import {
   resolveBlueBubblesEffectiveAllowPrivateNetworkFromConfig,
   resolveBlueBubblesPrivateNetworkConfigValue as resolveBlueBubblesPrivateNetworkConfigValueFromRecord,
 } from "./accounts-normalization.js";
-import { hasConfiguredSecretInput, normalizeSecretInputString } from "./secret-input.js";
+import {
+  hasConfiguredSecretInput,
+  hasMatchingSecretInput,
+  normalizeSecretInputString,
+} from "./secret-input.js";
 import { normalizeBlueBubblesServerUrl, type BlueBubblesAccountConfig } from "./types.js";
 
 export type ResolvedBlueBubblesAccount = {
@@ -70,7 +74,8 @@ export function resolveBlueBubblesAccount(params: {
   const configured = Boolean(
     serverUrl &&
     hasConfiguredSecretInput(merged.password) &&
-    hasConfiguredSecretInput(merged.webhookSecret),
+    hasConfiguredSecretInput(merged.webhookSecret) &&
+    !hasMatchingSecretInput(merged.password, merged.webhookSecret),
   );
   const baseUrl = serverUrl ? normalizeBlueBubblesServerUrl(serverUrl) : undefined;
   return {

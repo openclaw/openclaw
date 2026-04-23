@@ -399,6 +399,24 @@ describe("resolveBlueBubblesAccount", () => {
     expect(resolved.baseUrl).toBe("http://localhost:1234");
   });
 
+  it("does not treat accounts with reused password and webhookSecret as configured", () => {
+    const resolved = resolveBlueBubblesAccount({
+      cfg: {
+        channels: {
+          bluebubbles: {
+            enabled: true,
+            serverUrl: "http://localhost:1234",
+            password: "secret",
+            webhookSecret: "secret",
+          },
+        },
+      },
+    });
+
+    expect(resolved.configured).toBe(false);
+    expect(resolved.baseUrl).toBe("http://localhost:1234");
+  });
+
   it("strips stale legacy private-network aliases after canonical normalization", () => {
     const resolved = resolveBlueBubblesAccount({
       cfg: {
@@ -455,6 +473,42 @@ describe("BlueBubblesConfigSchema", () => {
       },
     });
     expect(parsed.success).toBe(true);
+  });
+
+  it("rejects webhookSecret when it matches password", () => {
+    const parsed = BlueBubblesConfigSchema.safeParse({
+      serverUrl: "http://localhost:1234",
+      password: "secret",
+      webhookSecret: "secret",
+    });
+    expect(parsed.success).toBe(false);
+    if (parsed.success) {
+      return;
+    }
+    expect(parsed.error.issues[0]?.path).toEqual(["webhookSecret"]);
+    expect(parsed.error.issues[0]?.message).toBe("webhookSecret must differ from password");
+  });
+
+  it("rejects webhookSecret when it reuses the same SecretRef as password", () => {
+    const parsed = BlueBubblesConfigSchema.safeParse({
+      serverUrl: "http://localhost:1234",
+      password: {
+        source: "env",
+        provider: "default",
+        id: "BLUEBUBBLES_PASSWORD",
+      },
+      webhookSecret: {
+        source: "env",
+        provider: "default",
+        id: "BLUEBUBBLES_PASSWORD",
+      },
+    });
+    expect(parsed.success).toBe(false);
+    if (parsed.success) {
+      return;
+    }
+    expect(parsed.error.issues[0]?.path).toEqual(["webhookSecret"]);
+    expect(parsed.error.issues[0]?.message).toBe("webhookSecret must differ from password");
   });
 
   it("requires password when top-level serverUrl is configured", () => {
@@ -596,6 +650,22 @@ describe("blueBubblesSetupAdapter", () => {
         },
       } as never),
     ).toBe("BlueBubbles requires --webhook-secret.");
+  });
+
+  it("rejects reused webhookSecret during CLI setup", () => {
+    if (!blueBubblesSetupAdapter.validateInput) {
+      throw new Error("Expected blueBubblesSetupAdapter.validateInput to be defined");
+    }
+    expect(
+      blueBubblesSetupAdapter.validateInput({
+        accountId: DEFAULT_ACCOUNT_ID,
+        input: {
+          httpUrl: "http://localhost:1234",
+          password: "secret",
+          webhookSecret: "secret",
+        },
+      } as never),
+    ).toBe("BlueBubbles requires --webhook-secret to differ from --password.");
   });
 });
 
