@@ -1348,6 +1348,9 @@ jobs:
           set -euo pipefail
           if [ "$OPENCLAW_CHANGED_EXTENSION" = "telegram" ]; then
             export OPENCLAW_VITEST_MAX_WORKERS=1
+            export NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--max-old-space-size=6144"
+            pnpm test:extension "$OPENCLAW_CHANGED_EXTENSION" -- --pool=forks
+            exit 0
           fi
           pnpm test:extension "$OPENCLAW_CHANGED_EXTENSION"
 
