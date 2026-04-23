@@ -1793,6 +1793,10 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                       lastToolItemId = callId;
                       lastToolItemTitle = undefined;
                       await onDraftBoundary();
+                      // onDraftBoundary clears lastToolItemId; restore it after the
+                      // await so any onToolStart that races in afterwards still sees
+                      // a defined value and skips writing the no-title placeholder.
+                      lastToolItemId = callId;
                     }
                     if (payload.name) lastToolItemName = payload.name;
                     // Same call may emit multiple item events (kind=tool wrapper +
