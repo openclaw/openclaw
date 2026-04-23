@@ -9,10 +9,7 @@ const { mockFetchGuard, mockRelease, mockGetSignedUrl } = vi.hoisted(() => ({
 }));
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => {
-  const original = (await vi.importActual("openclaw/plugin-sdk/ssrf-runtime")) as Record<
-    string,
-    unknown
-  >;
+  const original = await vi.importActual("openclaw/plugin-sdk/ssrf-runtime");
   return {
     ...original,
     fetchWithSsrFGuard: mockFetchGuard,

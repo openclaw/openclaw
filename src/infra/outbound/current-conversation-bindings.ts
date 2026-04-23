@@ -51,6 +51,16 @@ function isBindingExpired(record: SessionBindingRecord, now = Date.now()): boole
     : false;
 }
 
+function isPersistedBindingsFile(
+  value: unknown,
+): value is PersistedCurrentConversationBindingsFile {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const record = value as { version?: unknown; bindings?: unknown };
+  return record.version === CURRENT_BINDINGS_FILE_VERSION && Array.isArray(record.bindings);
+}
+
 function toPersistedFile(): PersistedCurrentConversationBindingsFile {
   const bindings = [...bindingsByConversationKey.values()]
     .filter((record) => !isBindingExpired(record))
@@ -68,7 +78,7 @@ function loadBindingsIntoMemory(): void {
   bindingsLoaded = true;
   bindingsByConversationKey.clear();
   const parsed = loadJsonFile(resolveBindingsFilePath());
-  const bindings = parsed?.version === CURRENT_BINDINGS_FILE_VERSION ? parsed.bindings : [];
+  const bindings = isPersistedBindingsFile(parsed) ? parsed.bindings : [];
   for (const record of bindings ?? []) {
     if (!record?.bindingId || !record?.conversation?.conversationId || isBindingExpired(record)) {
       continue;

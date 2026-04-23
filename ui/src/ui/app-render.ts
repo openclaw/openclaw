@@ -652,6 +652,10 @@ function renderCronQuickCreateForTab(
   });
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
+}
+
 export function renderApp(state: AppViewState) {
   const updatableState = state as AppViewState & { requestUpdate?: () => void };
   const requestHostUpdate =
@@ -700,11 +704,13 @@ export function renderApp(state: AppViewState) {
     if (!state.client || !state.connected) {
       return null;
     }
-    const payload = (await state.client.request("wiki.get", {
-      lookup,
-      fromLine: 1,
-      lineCount: 5000,
-    }));
+    const payload = asRecord(
+      await state.client.request("wiki.get", {
+        lookup,
+        fromLine: 1,
+        lineCount: 5000,
+      }),
+    );
     const title =
       typeof payload?.title === "string" && payload.title.trim() ? payload.title.trim() : lookup;
     const path =

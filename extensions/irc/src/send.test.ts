@@ -41,10 +41,7 @@ vi.mock("./protocol.js", async () => {
 });
 
 vi.mock("openclaw/plugin-sdk/config-runtime", async () => {
-  const original = (await vi.importActual("openclaw/plugin-sdk/config-runtime")) as Record<
-    string,
-    unknown
-  >;
+  const original = await vi.importActual("openclaw/plugin-sdk/config-runtime");
   return {
     ...original,
     resolveMarkdownTableMode: hoisted.resolveMarkdownTableMode,
@@ -52,10 +49,7 @@ vi.mock("openclaw/plugin-sdk/config-runtime", async () => {
 });
 
 vi.mock("openclaw/plugin-sdk/text-runtime", async () => {
-  const original = (await vi.importActual("openclaw/plugin-sdk/text-runtime")) as Record<
-    string,
-    unknown
-  >;
+  const original = await vi.importActual("openclaw/plugin-sdk/text-runtime");
   return {
     ...original,
     convertMarkdownTables: hoisted.convertMarkdownTables,

@@ -35,8 +35,8 @@ export function describePackageManifestContract(params: PackageManifestContractP
     if (params.pluginLocalRuntimeDeps?.length) {
       for (const dependencyName of params.pluginLocalRuntimeDeps) {
         it(`keeps ${dependencyName} plugin-local`, () => {
-          const rootManifest = readJson("package.json") as PackageManifest;
-          const pluginManifest = readJson(packagePath) as PackageManifest;
+          const rootManifest = readJson<PackageManifest>("package.json");
+          const pluginManifest = readJson<PackageManifest>(packagePath);
           const pluginSpec =
             pluginManifest.dependencies?.[dependencyName] ??
             pluginManifest.optionalDependencies?.[dependencyName];

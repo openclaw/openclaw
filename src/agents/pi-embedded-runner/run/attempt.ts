@@ -16,13 +16,13 @@ import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { resolveToolCallArgumentsEncoding } from "../../../plugins/provider-model-compat.js";
-import type { PluginHookAfterToolsResolvedEvent } from "../../../plugins/types.js";
 import {
   resolveProviderSystemPromptContribution,
   resolveProviderTextTransforms,
   transformProviderSystemPrompt,
 } from "../../../plugins/provider-runtime.js";
 import { getPluginToolMeta } from "../../../plugins/tools.js";
+import type { PluginHookAfterToolsResolvedEvent } from "../../../plugins/types.js";
 import { isAcpSessionKey, isSubagentSessionKey } from "../../../routing/session-key.js";
 import { normalizeOptionalLowercaseString } from "../../../shared/string-coerce.js";
 import { normalizeOptionalString } from "../../../shared/string-coerce.js";
@@ -1163,7 +1163,7 @@ export async function runEmbeddedAttempt(
 
       if (hookRunner?.hasHooks("after_tools_resolved")) {
         const resolvedTools = buildAfterToolsResolvedToolMetadata([
-          ...builtInTools,
+          ...effectiveTools,
           ...allCustomTools,
         ]);
         void hookRunner

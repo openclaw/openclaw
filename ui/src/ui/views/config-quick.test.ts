@@ -70,7 +70,7 @@ describe("renderQuickSettings", () => {
       const container = document.createElement("div");
       render(renderQuickSettings(createProps({ onUserAvatarChange })), container);
 
-      const input = container.querySelector('input[type="file"]') as HTMLInputElement | null;
+      const input = container.querySelector('input[type="file"]');
       expect(input).not.toBeNull();
       if (!input) {
         return;

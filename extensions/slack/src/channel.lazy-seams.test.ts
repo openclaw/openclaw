@@ -22,6 +22,11 @@ const collectAuditFindingsMock = vi.hoisted(() => vi.fn());
 const fetchSlackScopesMock = vi.hoisted(() => vi.fn());
 const resolveTargetsWithOptionalTokenMock = vi.hoisted(() => vi.fn());
 const buildPassiveProbedChannelStatusSummaryMock = vi.hoisted(() => vi.fn());
+
+function asMockModule(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+}
+
 vi.mock("./security-audit.js", () => ({
   collectSlackSecurityAuditFindings: collectAuditFindingsMock,
 }));
@@ -33,7 +38,7 @@ vi.mock("./scopes.js", () => ({
 vi.mock("openclaw/plugin-sdk/target-resolver-runtime", async (orig) => {
   // Preserve any sibling exports so importers that touch unrelated helpers
   // do not break; only override the function the channel actually calls.
-  const original = (await orig()) as Record<string, unknown>;
+  const original = asMockModule(await orig());
   return {
     ...original,
     resolveTargetsWithOptionalToken: resolveTargetsWithOptionalTokenMock,
@@ -41,7 +46,7 @@ vi.mock("openclaw/plugin-sdk/target-resolver-runtime", async (orig) => {
 });
 
 vi.mock("openclaw/plugin-sdk/extension-shared", async (orig) => {
-  const original = (await orig()) as Record<string, unknown>;
+  const original = asMockModule(await orig());
   return {
     ...original,
     buildPassiveProbedChannelStatusSummary: buildPassiveProbedChannelStatusSummaryMock,

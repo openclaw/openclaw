@@ -80,7 +80,7 @@ type EnvSnapshot = {
 };
 
 function resolveLiveTimeoutMs(raw: string | undefined, fallback: number): number {
-  const parsed = raw ? Number(raw) : NaN;
+  const parsed = raw ? Number(raw) : Number.NaN;
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
 }
 
