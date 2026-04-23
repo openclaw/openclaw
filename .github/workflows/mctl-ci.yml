@@ -114,9 +114,11 @@ jobs:
           set -euo pipefail
           # Reject common credential patterns — the platform copies these
           # files verbatim into every tenant image, so anything here ships
-          # to every customer.
+          # to every customer. Scan every file (not just *.md) because the
+          # Dockerfile COPY is recursive and a stray .env / .pem / .json
+          # under mctl-skills could carry credentials into the image.
           pattern='ghp_[A-Za-z0-9]{36}|gho_[A-Za-z0-9]{36}|ghu_[A-Za-z0-9]{36}|ghs_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9]{22}_[A-Za-z0-9]{59}|AKIA[0-9A-Z]{16}|xox[bpoa]-[A-Za-z0-9-]{10,}|-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----'
-          if grep -REn --include='*.md' "$pattern" src/mctl-skills src/mctl-identity; then
+          if grep -REnI "$pattern" src/mctl-skills src/mctl-identity; then
             echo "::error::potential secret detected in overlay content"
             exit 1
           fi
