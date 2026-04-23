@@ -21,6 +21,7 @@ export type ExecHost = "sandbox" | "gateway" | "node";
 export type ExecTarget = "auto" | ExecHost;
 export type ExecSecurity = "deny" | "allowlist" | "full";
 export type ExecAsk = "off" | "on-miss" | "always";
+export type ExecMode = "deny" | "allowlist" | "ask" | "auto" | "full";
 
 export function normalizeExecHost(value?: string | null): ExecHost | null {
   const normalized = normalizeOptionalLowercaseString(value);
@@ -55,6 +56,82 @@ export function normalizeExecAsk(value?: string | null): ExecAsk | null {
     return normalized;
   }
   return null;
+}
+
+export function normalizeExecMode(value?: string | null): ExecMode | null {
+  const normalized = normalizeOptionalLowercaseString(value);
+  if (
+    normalized === "deny" ||
+    normalized === "allowlist" ||
+    normalized === "ask" ||
+    normalized === "auto" ||
+    normalized === "full"
+  ) {
+    return normalized;
+  }
+  return null;
+}
+
+export function resolveExecModeFromPolicy(params: {
+  security: ExecSecurity;
+  ask: ExecAsk;
+}): ExecMode {
+  if (params.security === "deny") {
+    return "deny";
+  }
+  if (params.security === "allowlist" && params.ask === "off") {
+    return "allowlist";
+  }
+  if (params.security === "full" && params.ask === "off") {
+    return "full";
+  }
+  return "ask";
+}
+
+export function resolveExecPolicyForMode(mode: ExecMode): {
+  security: ExecSecurity;
+  ask: ExecAsk;
+  autoReview: boolean;
+} {
+  switch (mode) {
+    case "deny":
+      return { security: "deny", ask: "off", autoReview: false };
+    case "allowlist":
+      return { security: "allowlist", ask: "off", autoReview: false };
+    case "ask":
+      return { security: "allowlist", ask: "on-miss", autoReview: false };
+    case "auto":
+      return { security: "allowlist", ask: "on-miss", autoReview: true };
+    case "full":
+      return { security: "full", ask: "off", autoReview: false };
+  }
+  const _exhaustive: never = mode;
+  void _exhaustive;
+  throw new Error("Unsupported exec mode");
+}
+
+export function resolveExecModePolicy(params: {
+  mode?: ExecMode | null;
+  security: ExecSecurity;
+  ask: ExecAsk;
+}): {
+  mode: ExecMode;
+  security: ExecSecurity;
+  ask: ExecAsk;
+  autoReview: boolean;
+} {
+  if (!params.mode) {
+    return {
+      mode: resolveExecModeFromPolicy({ security: params.security, ask: params.ask }),
+      security: params.security,
+      ask: params.ask,
+      autoReview: false,
+    };
+  }
+  return {
+    mode: params.mode,
+    ...resolveExecPolicyForMode(params.mode),
+  };
 }
 
 export type SystemRunApprovalBinding = {

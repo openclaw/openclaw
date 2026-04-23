@@ -110,6 +110,7 @@ If you want host exec to run without approval prompts, you must open **both** po
 
 This is now the default host behavior unless you tighten it explicitly:
 
+- `tools.exec.mode`: `full` on `gateway`/`node` when inferred from defaults
 - `tools.exec.security`: `full` on `gateway`/`node`
 - `tools.exec.ask`: `off`
 - host `askFallback`: `full`
@@ -117,7 +118,8 @@ This is now the default host behavior unless you tighten it explicitly:
 Important distinction:
 
 - `tools.exec.host=auto` chooses where exec runs: sandbox when available, otherwise gateway.
-- YOLO chooses how host exec is approved: `security=full` plus `ask=off`.
+- `tools.exec.mode=auto` chooses how approval misses are reviewed: deterministic safe commands run directly, and misses go through OpenClaw's native auto reviewer.
+- YOLO chooses how host exec is approved: `mode=full`, or legacy `security=full` plus `ask=off`.
 - In YOLO mode, OpenClaw does not add a separate heuristic command-obfuscation approval gate or script-preflight rejection layer on top of the configured host exec policy.
 - `auto` does not make gateway routing a free override from a sandboxed session. A per-call `host=node` request is allowed from `auto`, and `host=gateway` is only allowed from `auto` when no sandbox runtime is active. If you want a stable non-auto default, set `tools.exec.host` or use `/exec host=...` explicitly.
 

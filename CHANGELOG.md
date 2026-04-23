@@ -37,6 +37,7 @@ Docs: https://docs.openclaw.ai
 - Codex harness/hooks: route native Codex app-server turns through `before_prompt_build` and emit `before_compaction` / `after_compaction` for native compaction items so prompt and compaction hooks stop drifting from Pi. Thanks @vincentkoc.
 - Codex harness/plugins: add a bundled-plugin Codex app-server extension seam for async `tool_result` middleware, fire `after_tool_call` for Codex tool runs, and route mirrored Codex transcript writes through `before_message_write` so tool integrations stop diverging from Pi. Thanks @vincentkoc.
 - Codex harness/hooks: fire `llm_input`, `llm_output`, and `agent_end` for native Codex app-server turns so lifecycle hooks stop drifting from Pi. Thanks @vincentkoc.
+- Exec/Codex harness: add normalized `tools.exec.mode`, including native `auto` review for exec approval misses and Codex app-server mapping from OpenClaw `auto` to Guardian-reviewed approvals. Thanks @vincentkoc.
 
 ### Fixes
 

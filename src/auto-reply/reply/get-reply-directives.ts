@@ -284,7 +284,7 @@ export async function resolveReplyDirectives(params: {
     }
   }
   if (isGroup && ctx.WasMentioned !== true && parsedDirectives.hasExecDirective) {
-    if (parsedDirectives.execSecurity !== "deny") {
+    if (parsedDirectives.execMode !== "deny" && parsedDirectives.execSecurity !== "deny") {
       parsedDirectives = clearExecInlineDirectives(parsedDirectives);
     }
   }

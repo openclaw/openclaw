@@ -17,9 +17,13 @@ import {
   type ExecApprovalsFile,
   normalizeExecAsk,
   normalizeExecHost,
+  normalizeExecMode,
   normalizeExecTarget,
   normalizeExecSecurity,
   requiresExecApproval,
+  resolveExecModeFromPolicy,
+  resolveExecModePolicy,
+  resolveExecPolicyForMode,
 } from "./exec-approvals.js";
 
 function expectMalformedAgentAskUsesDefaults(agentAsk: unknown): void {
@@ -87,6 +91,72 @@ describe("exec approvals policy helpers", () => {
     { raw: "maybe", expected: null },
   ])("normalizes exec ask value %j", ({ raw, expected }) => {
     expect(normalizeExecAsk(raw)).toBe(expected);
+  });
+
+  it.each([
+    { raw: " auto ", expected: "auto" },
+    { raw: "ASK", expected: "ask" },
+    { raw: "allowlist", expected: "allowlist" },
+    { raw: "maybe", expected: null },
+  ])("normalizes exec mode value %j", ({ raw, expected }) => {
+    expect(normalizeExecMode(raw)).toBe(expected);
+  });
+
+  it.each([
+    { security: "deny" as const, ask: "off" as const, expected: "deny" as const },
+    {
+      security: "allowlist" as const,
+      ask: "off" as const,
+      expected: "allowlist" as const,
+    },
+    {
+      security: "allowlist" as const,
+      ask: "on-miss" as const,
+      expected: "ask" as const,
+    },
+    { security: "full" as const, ask: "off" as const, expected: "full" as const },
+    { security: "full" as const, ask: "always" as const, expected: "ask" as const },
+  ])("derives normalized exec mode from legacy policy %j", ({ security, ask, expected }) => {
+    expect(resolveExecModeFromPolicy({ security, ask })).toBe(expected);
+  });
+
+  it.each([
+    {
+      mode: "deny" as const,
+      expected: { security: "deny" as const, ask: "off" as const, autoReview: false },
+    },
+    {
+      mode: "allowlist" as const,
+      expected: { security: "allowlist" as const, ask: "off" as const, autoReview: false },
+    },
+    {
+      mode: "ask" as const,
+      expected: { security: "allowlist" as const, ask: "on-miss" as const, autoReview: false },
+    },
+    {
+      mode: "auto" as const,
+      expected: { security: "allowlist" as const, ask: "on-miss" as const, autoReview: true },
+    },
+    {
+      mode: "full" as const,
+      expected: { security: "full" as const, ask: "off" as const, autoReview: false },
+    },
+  ])("maps explicit exec mode to effective policy %j", ({ mode, expected }) => {
+    expect(resolveExecPolicyForMode(mode)).toEqual(expected);
+  });
+
+  it("preserves legacy security and ask when no explicit mode is set", () => {
+    expect(
+      resolveExecModePolicy({
+        security: "full",
+        ask: "always",
+      }),
+    ).toEqual({
+      mode: "ask",
+      security: "full",
+      ask: "always",
+      autoReview: false,
+    });
   });
 
   it.each([

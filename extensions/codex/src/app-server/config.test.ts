@@ -5,6 +5,7 @@ import {
   codexAppServerStartOptionsKey,
   readCodexPluginConfig,
   resolveCodexAppServerRuntimeOptions,
+  resolveOpenClawExecModeFromConfig,
 } from "./config.js";
 
 describe("Codex app-server config", () => {
@@ -132,6 +133,83 @@ describe("Codex app-server config", () => {
         approvalsReviewer: "guardian_subagent",
       }),
     );
+  });
+
+  it("maps normalized OpenClaw exec auto mode to guardian-reviewed local execution", () => {
+    const runtime = resolveCodexAppServerRuntimeOptions({
+      pluginConfig: {},
+      execMode: "auto",
+      env: {},
+    });
+
+    expect(runtime).toEqual(
+      expect.objectContaining({
+        approvalPolicy: "on-request",
+        sandbox: "workspace-write",
+        approvalsReviewer: "guardian_subagent",
+      }),
+    );
+  });
+
+  it("lets explicit app-server mode override normalized OpenClaw exec auto mode", () => {
+    const runtime = resolveCodexAppServerRuntimeOptions({
+      pluginConfig: {
+        appServer: {
+          mode: "yolo",
+        },
+      },
+      execMode: "auto",
+      env: {},
+    });
+
+    expect(runtime).toEqual(
+      expect.objectContaining({
+        approvalPolicy: "never",
+        sandbox: "danger-full-access",
+        approvalsReviewer: "user",
+      }),
+    );
+  });
+
+  it("accepts Codex auto_review as an explicit app-server reviewer", () => {
+    const runtime = resolveCodexAppServerRuntimeOptions({
+      pluginConfig: {
+        appServer: {
+          approvalsReviewer: "auto_review",
+        },
+      },
+      env: {},
+    });
+
+    expect(runtime.approvalsReviewer).toBe("auto_review");
+  });
+
+  it("resolves agent-scoped OpenClaw exec mode before global mode", () => {
+    expect(
+      resolveOpenClawExecModeFromConfig({
+        agentId: "runner",
+        config: {
+          tools: { exec: { mode: "full" } },
+          agents: {
+            list: [{ id: "runner", tools: { exec: { mode: "auto" } } }],
+          },
+        },
+      }),
+    ).toBe("auto");
+  });
+
+  it("lets agent-scoped legacy exec policy override global OpenClaw exec mode", () => {
+    expect(
+      resolveOpenClawExecModeFromConfig({
+        agentId: "runner",
+        config: {
+          tools: { exec: { mode: "auto" } },
+          agents: {
+            list: [{ id: "runner", tools: { exec: { security: "full", ask: "off" } } }],
+          },
+        },
+      }),
+    ).toBeUndefined();
   });
 
   it("ignores removed OPENCLAW_CODEX_APP_SERVER_GUARDIAN fallback", () => {

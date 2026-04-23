@@ -12,6 +12,7 @@ import {
   resolveApprovalAuditCandidatePath,
   requiresExecApproval,
 } from "../infra/exec-approvals.js";
+import { defaultExecAutoReviewer } from "../infra/exec-auto-review.js";
 import {
   describeInterpreterInlineEval,
   detectInterpreterInlineEvalArgv,
@@ -54,6 +55,7 @@ export type ProcessGatewayAllowlistParams = {
   defaultTimeoutSec: number;
   security: ExecSecurity;
   ask: ExecAsk;
+  autoReview?: boolean;
   safeBins: Set<string>;
   safeBinProfiles: Readonly<Record<string, SafeBinProfile>>;
   strictInlineEval?: boolean;
@@ -193,6 +195,41 @@ export async function processGatewayAllowlist(
   }
 
   if (requiresAsk) {
+    if (params.autoReview === true) {
+      const decision = await defaultExecAutoReviewer({
+        command: params.command,
+        argv: allowlistEval.segments[0]?.argv,
+        cwd: params.workdir,
+        envKeys: Object.keys(params.requestedEnv ?? {}).toSorted(),
+        host: "gateway",
+        reason: requiresInlineEvalApproval ? "strict-inline-eval" : "approval-required",
+        analysis: {
+          parsed: analysisOk,
+          allowlistMatched: allowlistSatisfied,
+          durableApprovalMatched: durableApprovalSatisfied,
+          inlineEval: requiresInlineEvalApproval,
+        },
+        agent: {
+          id: params.agentId,
+          sessionKey: params.sessionKey,
+        },
+      });
+      if (decision.decision === "allow-once") {
+        recordMatchedAllowlistUse(
+          resolveApprovalAuditCandidatePath(
+            allowlistEval.segments[0]?.resolution ?? null,
+            params.workdir,
+          ),
+        );
+        return {
+          execCommandOverride: enforcedCommand,
+          allowWithoutEnforcedCommand: enforcedCommand === undefined,
+        };
+      }
+      if (decision.decision === "deny") {
+        throw new Error(`exec denied by auto reviewer: ${decision.rationale}`);
+      }
+    }
     const requestArgs = buildDefaultExecApprovalRequestArgs({
       warnings: params.warnings,
       approvalRunningNoticeMs: params.approvalRunningNoticeMs,

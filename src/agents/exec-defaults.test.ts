@@ -99,6 +99,7 @@ describe("resolveExecDefaults", () => {
     ).toMatchObject({
       host: "auto",
       effectiveHost: "gateway",
+      mode: "full",
       security: "full",
       ask: "off",
     });
@@ -119,7 +120,85 @@ describe("resolveExecDefaults", () => {
     ).toMatchObject({
       host: "auto",
       effectiveHost: "sandbox",
+      mode: "deny",
       security: "deny",
+      ask: "off",
+    });
+  });
+
+  it("maps explicit exec auto mode to approval-miss policy", () => {
+    expect(
+      resolveExecDefaults({
+        cfg: {
+          tools: {
+            exec: {
+              mode: "auto",
+              security: "full",
+              ask: "off",
+            },
+          },
+        },
+        sandboxAvailable: false,
+      }),
+    ).toMatchObject({
+      mode: "auto",
+      security: "allowlist",
+      ask: "on-miss",
+    });
+  });
+
+  it("lets session legacy policy override global exec mode", () => {
+    expect(
+      resolveExecDefaults({
+        cfg: {
+          tools: {
+            exec: {
+              mode: "auto",
+            },
+          },
+        },
+        sessionEntry: {
+          execSecurity: "full",
+          execAsk: "off",
+        } as SessionEntry,
+        sandboxAvailable: false,
+      }),
+    ).toMatchObject({
+      mode: "full",
+      security: "full",
+      ask: "off",
+    });
+  });
+
+  it("lets agent legacy policy override global exec mode", () => {
+    expect(
+      resolveExecDefaults({
+        cfg: {
+          tools: {
+            exec: {
+              mode: "auto",
+            },
+          },
+          agents: {
+            list: [
+              {
+                id: "runner",
+                tools: {
+                  exec: {
+                    security: "full",
+                    ask: "off",
+                  },
+                },
+              },
+            ],
+          },
+        },
+        agentId: "runner",
+        sandboxAvailable: false,
+      }),
+    ).toMatchObject({
+      mode: "full",
+      security: "full",
       ask: "off",
     });
   });

@@ -170,6 +170,7 @@ export type SessionEntry = {
   elevatedLevel?: string;
   ttsAuto?: TtsAutoMode;
   execHost?: string;
+  execMode?: string;
   execSecurity?: string;
   execAsk?: string;
   execNode?: string;

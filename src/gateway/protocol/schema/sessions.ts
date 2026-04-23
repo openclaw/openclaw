@@ -149,6 +149,7 @@ export const SessionsPatchParamsSchema = Type.Object(
     ),
     elevatedLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     execHost: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+    execMode: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     execSecurity: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     execAsk: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     execNode: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),

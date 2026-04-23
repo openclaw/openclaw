@@ -7197,6 +7197,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                           type: "string",
                           enum: ["auto", "sandbox", "gateway", "node"],
                         },
+                        mode: {
+                          type: "string",
+                          enum: ["deny", "allowlist", "ask", "auto", "full"],
+                        },
                         security: {
                           type: "string",
                           enum: ["deny", "allowlist", "full"],
@@ -17414,6 +17418,13 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 description:
                   'Selects execution target strategy for shell commands. Use "auto" for runtime-aware behavior (sandbox when available, otherwise gateway), or pin sandbox/gateway/node explicitly when you need a fixed surface.',
               },
+              mode: {
+                type: "string",
+                enum: ["deny", "allowlist", "ask", "auto", "full"],
+                title: "Exec Mode",
+                description:
+                  'Normalized exec policy selector. Use "auto" for classifier-reviewed approval misses, "ask" for human-reviewed misses, "allowlist" for deterministic safe commands only, or "full" for trusted local operation.',
+              },
               security: {
                 type: "string",
                 enum: ["deny", "allowlist", "full"],
@@ -24216,6 +24227,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Exec Target",
       help: 'Selects execution target strategy for shell commands. Use "auto" for runtime-aware behavior (sandbox when available, otherwise gateway), or pin sandbox/gateway/node explicitly when you need a fixed surface.',
       tags: ["tools"],
+    },
+    "tools.exec.mode": {
+      label: "Exec Mode",
+      help: 'Normalized exec policy selector. Use "auto" for classifier-reviewed approval misses, "ask" for human-reviewed misses, "allowlist" for deterministic safe commands only, or "full" for trusted local operation.',
+      tags: ["security", "access", "tools"],
     },
     "tools.exec.security": {
       label: "Exec Security",

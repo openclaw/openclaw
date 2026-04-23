@@ -1,4 +1,4 @@
-import type { ExecAsk, ExecSecurity, ExecTarget } from "../../infra/exec-approvals.js";
+import type { ExecAsk, ExecMode, ExecSecurity, ExecTarget } from "../../infra/exec-approvals.js";
 import { extractModelDirective } from "../model.js";
 import type {
   ElevatedLevel,
@@ -42,15 +42,18 @@ export type InlineDirectives = {
   rawElevatedLevel?: string;
   hasExecDirective: boolean;
   execHost?: ExecTarget;
+  execMode?: ExecMode;
   execSecurity?: ExecSecurity;
   execAsk?: ExecAsk;
   execNode?: string;
   rawExecHost?: string;
+  rawExecMode?: string;
   rawExecSecurity?: string;
   rawExecAsk?: string;
   rawExecNode?: string;
   hasExecOptions: boolean;
   invalidExecHost: boolean;
+  invalidExecMode: boolean;
   invalidExecSecurity: boolean;
   invalidExecAsk: boolean;
   invalidExecNode: boolean;
@@ -125,15 +128,18 @@ export function parseInlineDirectives(
   const {
     cleaned: execCleaned,
     execHost,
+    execMode,
     execSecurity,
     execAsk,
     execNode,
     rawExecHost,
+    rawExecMode,
     rawExecSecurity,
     rawExecAsk,
     rawExecNode,
     hasExecOptions,
     invalidHost: invalidExecHost,
+    invalidMode: invalidExecMode,
     invalidSecurity: invalidExecSecurity,
     invalidAsk: invalidExecAsk,
     invalidNode: invalidExecNode,
@@ -188,15 +194,18 @@ export function parseInlineDirectives(
     rawElevatedLevel,
     hasExecDirective,
     execHost,
+    execMode,
     execSecurity,
     execAsk,
     execNode,
     rawExecHost,
+    rawExecMode,
     rawExecSecurity,
     rawExecAsk,
     rawExecNode,
     hasExecOptions,
     invalidExecHost,
+    invalidExecMode,
     invalidExecSecurity,
     invalidExecAsk,
     invalidExecNode,

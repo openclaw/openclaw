@@ -8,6 +8,7 @@ import {
   recordAllowlistMatchesUse,
   resolveApprovalAuditCandidatePath,
   resolveExecApprovals,
+  resolveExecModePolicy,
   type ExecAllowlistEntry,
   type ExecAsk,
   type ExecCommandSegment,
@@ -372,10 +373,19 @@ async function evaluateSystemRunPolicyPhase(
 ): Promise<SystemRunPolicyPhase | null> {
   const cfg = await loadSystemRunConfig(opts);
   const agentExec = resolveAgentExecConfig(cfg, parsed.agentId);
-  const configuredSecurity = opts.resolveExecSecurity(
-    agentExec?.security ?? cfg.tools?.exec?.security,
-  );
-  const configuredAsk = opts.resolveExecAsk(agentExec?.ask ?? cfg.tools?.exec?.ask);
+  const globalExec = cfg.tools?.exec;
+  const mode =
+    agentExec?.mode ??
+    (agentExec?.security !== undefined || agentExec?.ask !== undefined
+      ? undefined
+      : globalExec?.mode);
+  const modePolicy = resolveExecModePolicy({
+    mode,
+    security: opts.resolveExecSecurity(agentExec?.security ?? globalExec?.security),
+    ask: opts.resolveExecAsk(agentExec?.ask ?? globalExec?.ask),
+  });
+  const configuredSecurity = modePolicy.security;
+  const configuredAsk = modePolicy.ask;
   const approvals = resolveExecApprovals(parsed.agentId, {
     security: configuredSecurity,
     ask: configuredAsk,

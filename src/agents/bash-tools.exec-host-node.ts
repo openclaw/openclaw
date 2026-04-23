@@ -10,6 +10,7 @@ import {
   resolveExecApprovalAllowedDecisions,
   resolveExecApprovalsFromFile,
 } from "../infra/exec-approvals.js";
+import { defaultExecAutoReviewer } from "../infra/exec-auto-review.js";
 import {
   describeInterpreterInlineEval,
   detectInterpreterInlineEvalArgv,
@@ -47,6 +48,7 @@ export type ExecuteNodeHostCommandParams = {
   agentId?: string;
   security: ExecSecurity;
   ask: ExecAsk;
+  autoReview?: boolean;
   strictInlineEval?: boolean;
   timeoutSec?: number;
   defaultTimeoutSec: number;
@@ -237,6 +239,34 @@ export async function executeNodeHostCommand(
   let inlineApprovalDecision: "allow-once" | "allow-always" | null = null;
   let inlineApprovalId: string | undefined;
   if (requiresAsk) {
+    if (params.autoReview === true) {
+      const decision = await defaultExecAutoReviewer({
+        command: params.command,
+        argv: baseAllowlistEval.segments[0]?.argv,
+        cwd: params.workdir,
+        envKeys: Object.keys(params.requestedEnv ?? {}).toSorted(),
+        host: "node",
+        reason: inlineEvalHit ? "strict-inline-eval" : "approval-required",
+        analysis: {
+          parsed: analysisOk,
+          allowlistMatched: allowlistSatisfied,
+          durableApprovalMatched: durableApprovalSatisfied,
+          inlineEval: inlineEvalHit !== null,
+        },
+        agent: {
+          id: runAgentId,
+          sessionKey: runSessionKey,
+        },
+      });
+      if (decision.decision === "allow-once") {
+        inlineApprovedByAsk = true;
+        inlineApprovalDecision = "allow-once";
+      } else if (decision.decision === "deny") {
+        throw new Error(`exec denied by auto reviewer: ${decision.rationale}`);
+      }
+    }
+  }
+  if (requiresAsk && !inlineApprovedByAsk) {
     const requestArgs = execHostShared.buildDefaultExecApprovalRequestArgs({
       warnings: params.warnings,
       approvalRunningNoticeMs: params.approvalRunningNoticeMs,
