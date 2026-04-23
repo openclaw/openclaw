@@ -170,6 +170,8 @@
   "session-binding-runtime",
   "session-key-runtime",
   "session-store-runtime",
+  "session-transcript-hit",
+  "session-visibility",
   "ssrf-dispatcher",
   "string-coerce-runtime",
   "group-activation",
