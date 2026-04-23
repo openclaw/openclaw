@@ -6,6 +6,7 @@ import {
   READ_SCOPE,
   WRITE_SCOPE,
 } from "./method-scopes.js";
+import { buildRedactedFrame } from "./outbound-redact.js";
 import type {
   GatewayBroadcastFn,
   GatewayBroadcastOpts,
@@ -158,7 +159,7 @@ export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient>
         if (!isTargeted) {
           clientSeq.set(c, nextSeq);
         }
-        const frame = JSON.stringify({
+        const frame = buildRedactedFrame({
           type: "event",
           event,
           payload,
