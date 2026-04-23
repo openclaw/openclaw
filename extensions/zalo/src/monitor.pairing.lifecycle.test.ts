@@ -44,7 +44,10 @@ describe("Zalo pairing lifecycle", () => {
   }
 
   it("emits one pairing reply across duplicate webhook replay and scopes reads and writes to accountId", async () => {
-    const monitor = await startWebhookLifecycleMonitor(createPairingMonitorSetup());
+    const monitor = await startWebhookLifecycleMonitor({
+      ...createPairingMonitorSetup(),
+      cacheKey: "zalo-pairing-lifecycle",
+    });
 
     try {
       await withServer(
@@ -100,7 +103,10 @@ describe("Zalo pairing lifecycle", () => {
   it("does not emit a second pairing reply when replay arrives after the first send fails", async () => {
     sendMessageMock.mockRejectedValueOnce(new Error("pairing send failed"));
 
-    const monitor = await startWebhookLifecycleMonitor(createPairingMonitorSetup());
+    const monitor = await startWebhookLifecycleMonitor({
+      ...createPairingMonitorSetup(),
+      cacheKey: "zalo-pairing-lifecycle",
+    });
 
     try {
       await withServer(

@@ -373,6 +373,11 @@ jobs:
             command: pnpm test:docker:gateway-network
             timeout_minutes: 60
             release_path: true
+          - suite_id: docker-openai-web-search-minimal
+            label: OpenAI Web Search Minimal Docker E2E
+            command: pnpm test:docker:openai-web-search-minimal
+            timeout_minutes: 60
+            release_path: true
           - suite_id: docker-mcp-channels
             label: MCP Channels Docker E2E
             command: pnpm test:docker:mcp-channels

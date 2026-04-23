@@ -155,7 +155,9 @@ export async function runProviderPluginAuthMethod(params: {
 
   let nextConfig = params.config;
   if (result.configPatch) {
-    nextConfig = applyProviderAuthConfigPatch(nextConfig, result.configPatch);
+    nextConfig = applyProviderAuthConfigPatch(nextConfig, result.configPatch, {
+      replaceDefaultModels: result.replaceDefaultModels,
+    });
   }
 
   for (const profile of result.profiles) {

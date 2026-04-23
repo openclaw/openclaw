@@ -63,6 +63,12 @@ Important behavior:
 - older transcript history is read with `messages_read`
 - Claude push notifications only exist while the MCP session is alive
 - when the client disconnects, the bridge exits and the live queue is gone
+- stdio MCP servers launched by OpenClaw (bundled or user-configured) are torn
+  down as a process tree on shutdown, so child subprocesses started by the
+  server do not survive after the parent stdio client exits
+- deleting or resetting a session disposes that session's MCP clients through
+  the shared runtime cleanup path, so there are no lingering stdio connections
+  tied to a removed session
 
 ## Choose a client mode
 

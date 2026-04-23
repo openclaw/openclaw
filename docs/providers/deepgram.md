@@ -171,10 +171,10 @@ Twilio media frames can be forwarded directly.
 ## Related
 
 <CardGroup cols={2}>
-  <Card title="Media tools" href="/tools/media" icon="photo-film">
+  <Card title="Media tools" href="/tools/media-overview" icon="photo-film">
     Audio, image, and video processing pipeline overview.
   </Card>
-  <Card title="Configuration" href="/configuration" icon="gear">
+  <Card title="Configuration" href="/gateway/configuration" icon="gear">
     Full config reference including media tool settings.
   </Card>
   <Card title="Troubleshooting" href="/help/troubleshooting" icon="wrench">

@@ -579,127 +579,123 @@ export default definePluginEntry({
     // ========================================================================
 
     // Auto-recall: inject relevant memories during prompt build
-    if (cfg.autoRecall) {
-      api.on("before_prompt_build", async (event) => {
-        const currentCfg = resolveCurrentHookConfig();
-        if (!currentCfg.autoRecall) {
-          return undefined;
-        }
-        if (!event.prompt || event.prompt.length < 5) {
-          return undefined;
-        }
-
-        try {
-          const vector = await embeddings.embed(event.prompt);
-          const results = await db.search(vector, 3, 0.3);
-
-          if (results.length === 0) {
-            return undefined;
-          }
-
-          api.logger.info?.(`memory-lancedb: injecting ${results.length} memories into context`);
-
-          return {
-            prependContext: formatRelevantMemoriesContext(
-              results.map((r) => ({ category: r.entry.category, text: r.entry.text })),
-            ),
-          };
-        } catch (err) {
-          api.logger.warn(`memory-lancedb: recall failed: ${String(err)}`);
-        }
+    api.on("before_prompt_build", async (event) => {
+      const currentCfg = resolveCurrentHookConfig();
+      if (!currentCfg.autoRecall) {
         return undefined;
-      });
-    }
+      }
+      if (!event.prompt || event.prompt.length < 5) {
+        return undefined;
+      }
+
+      try {
+        const vector = await embeddings.embed(event.prompt);
+        const results = await db.search(vector, 3, 0.3);
+
+        if (results.length === 0) {
+          return undefined;
+        }
+
+        api.logger.info?.(`memory-lancedb: injecting ${results.length} memories into context`);
+
+        return {
+          prependContext: formatRelevantMemoriesContext(
+            results.map((r) => ({ category: r.entry.category, text: r.entry.text })),
+          ),
+        };
+      } catch (err) {
+        api.logger.warn(`memory-lancedb: recall failed: ${String(err)}`);
+      }
+      return undefined;
+    });
 
     // Auto-capture: analyze and store important information after agent ends
-    if (cfg.autoCapture) {
-      api.on("agent_end", async (event) => {
-        const currentCfg = resolveCurrentHookConfig();
-        if (!currentCfg.autoCapture) {
-          return;
-        }
-        if (!event.success || !event.messages || event.messages.length === 0) {
-          return;
-        }
+    api.on("agent_end", async (event) => {
+      const currentCfg = resolveCurrentHookConfig();
+      if (!currentCfg.autoCapture) {
+        return;
+      }
+      if (!event.success || !event.messages || event.messages.length === 0) {
+        return;
+      }
 
-        try {
-          // Extract text content from messages (handling unknown[] type)
-          const texts: string[] = [];
-          for (const msg of event.messages) {
-            // Type guard for message object
-            if (!msg || typeof msg !== "object") {
-              continue;
-            }
-            const msgObj = msg as Record<string, unknown>;
+      try {
+        // Extract text content from messages (handling unknown[] type)
+        const texts: string[] = [];
+        for (const msg of event.messages) {
+          // Type guard for message object
+          if (!msg || typeof msg !== "object") {
+            continue;
+          }
+          const msgObj = msg as Record<string, unknown>;
 
-            // Only process user messages to avoid self-poisoning from model output
-            const role = msgObj.role;
-            if (role !== "user") {
-              continue;
-            }
+          // Only process user messages to avoid self-poisoning from model output
+          const role = msgObj.role;
+          if (role !== "user") {
+            continue;
+          }
 
-            const content = msgObj.content;
+          const content = msgObj.content;
 
-            // Handle string content directly
-            if (typeof content === "string") {
-              texts.push(content);
-              continue;
-            }
+          // Handle string content directly
+          if (typeof content === "string") {
+            texts.push(content);
+            continue;
+          }
 
-            // Handle array content (content blocks)
-            if (Array.isArray(content)) {
-              for (const block of content) {
-                if (
-                  block &&
-                  typeof block === "object" &&
-                  "type" in block &&
-                  (block as Record<string, unknown>).type === "text" &&
-                  "text" in block &&
-                  typeof (block as Record<string, unknown>).text === "string"
-                ) {
-                  texts.push((block as Record<string, unknown>).text as string);
-                }
+          // Handle array content (content blocks)
+          if (Array.isArray(content)) {
+            for (const block of content) {
+              if (
+                block &&
+                typeof block === "object" &&
+                "type" in block &&
+                (block as Record<string, unknown>).type === "text" &&
+                "text" in block &&
+                typeof (block as Record<string, unknown>).text === "string"
+              ) {
+                texts.push((block as Record<string, unknown>).text as string);
               }
             }
           }
-
-          // Filter for capturable content
-          const toCapture = texts.filter(
-            (text) => text && shouldCapture(text, { maxChars: currentCfg.captureMaxChars }),
-          );
-          if (toCapture.length === 0) {
-            return;
-          }
-
-          // Store each capturable piece (limit to 3 per conversation)
-          let stored = 0;
-          for (const text of toCapture.slice(0, 3)) {
-            const category = detectCategory(text);
-            const vector = await embeddings.embed(text);
-
-            // Check for duplicates (high similarity threshold)
-            const existing = await db.search(vector, 1, 0.95);
-            if (existing.length > 0) {
-              continue;
-            }
-
-            await db.store({
-              text,
-              vector,
-              importance: 0.7,
-              category,
-            });
-            stored++;
-          }
-
-          if (stored > 0) {
-            api.logger.info(`memory-lancedb: auto-captured ${stored} memories`);
-          }
-        } catch (err) {
-          api.logger.warn(`memory-lancedb: capture failed: ${String(err)}`);
         }
-      });
-    }
+
+        // Filter for capturable content
+        const toCapture = texts.filter(
+          (text) => text && shouldCapture(text, { maxChars: currentCfg.captureMaxChars }),
+        );
+        if (toCapture.length === 0) {
+          return;
+        }
+
+        // Store each capturable piece (limit to 3 per conversation)
+        let stored = 0;
+        for (const text of toCapture.slice(0, 3)) {
+          const category = detectCategory(text);
+          const vector = await embeddings.embed(text);
+
+          // Check for duplicates (high similarity threshold)
+          const existing = await db.search(vector, 1, 0.95);
+          if (existing.length > 0) {
+            continue;
+          }
+
+          await db.store({
+            text,
+            vector,
+            importance: 0.7,
+            category,
+          });
+          stored++;
+        }
+
+        if (stored > 0) {
+          api.logger.info(`memory-lancedb: auto-captured ${stored} memories`);
+        }
+      } catch (err) {
+        api.logger.warn(`memory-lancedb: capture failed: ${String(err)}`);
+      }
+    });
 
     // ========================================================================
     // Service

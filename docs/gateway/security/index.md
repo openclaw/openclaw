@@ -941,6 +941,9 @@ Local device pairing:
   trusted shared-secret helper flows.
 - Tailnet and LAN connects, including same-host tailnet binds, are treated as
   remote for pairing and still need approval.
+- Forwarded-header evidence on a loopback request disqualifies loopback
+  locality. Metadata-upgrade auto-approval is scoped narrowly. See
+  [Gateway pairing](/gateway/pairing) for both rules.
 
 Auth modes:
 
@@ -1042,6 +1045,7 @@ Hardening tips:
 OpenClaw loads workspace-local `.env` files for agents and tools, but never lets those files silently override gateway runtime controls.
 
 - Any key that starts with `OPENCLAW_*` is blocked from untrusted workspace `.env` files.
+- Channel endpoint settings for Matrix, Mattermost, IRC, and Synology Chat are also blocked from workspace `.env` overrides, so cloned workspaces cannot redirect bundled connector traffic through local endpoint config. Endpoint env keys (such as `MATRIX_HOMESERVER`, `MATTERMOST_URL`, `IRC_HOST`, `SYNOLOGY_CHAT_INCOMING_URL`) must come from the gateway process environment or `env.shellEnv`, not from a workspace-loaded `.env`.
 - The block is fail-closed: a new runtime-control variable added in a future release cannot be inherited from a checked-in or attacker-supplied `.env`; the key is ignored and the gateway keeps its own value.
 - Trusted process/OS environment variables (the gateway's own shell, launchd/systemd unit, app bundle) still apply — this only constrains `.env` file loading.
 

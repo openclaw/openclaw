@@ -1082,7 +1082,7 @@ export async function runTelegramQaLive(params: {
           const scenarioIdForLog = sanitizeTelegramQaProgressValue(scenario.id);
           writeTelegramQaProgress(
             progressEnabled,
-            `scenario start (${scenarioIndexLabel}): ${scenarioIdForLog}`,
+            `scenario start ${scenarioIndexLabel}: ${scenarioIdForLog}`,
           );
           assertLeaseHealthy();
           const scenarioRun = scenario.buildRun(sutUsername);
@@ -1127,7 +1127,7 @@ export async function runTelegramQaLive(params: {
             scenarioResults.push(result);
             writeTelegramQaProgress(
               progressEnabled,
-              `scenario pass (${scenarioIndexLabel}): ${scenarioIdForLog} details=${formatTelegramQaProgressDetails(result.details)}`,
+              `scenario pass ${scenarioIndexLabel}: ${scenarioIdForLog}`,
             );
           } catch (error) {
             if (!scenarioRun.expectReply) {
@@ -1144,7 +1144,7 @@ export async function runTelegramQaLive(params: {
                 scenarioResults.push(result);
                 writeTelegramQaProgress(
                   progressEnabled,
-                  `scenario pass (${scenarioIndexLabel}): ${scenarioIdForLog} details=${formatTelegramQaProgressDetails(result.details)}`,
+                  `scenario pass ${scenarioIndexLabel}: ${scenarioIdForLog}`,
                 );
                 continue;
               }
@@ -1158,7 +1158,7 @@ export async function runTelegramQaLive(params: {
             scenarioResults.push(result);
             writeTelegramQaProgress(
               progressEnabled,
-              `scenario fail (${scenarioIndexLabel}): ${scenarioIdForLog} details=${formatTelegramQaProgressDetails(result.details)}`,
+              `scenario fail ${scenarioIndexLabel}: ${scenarioIdForLog} details=${formatTelegramQaProgressDetails(result.details)}`,
             );
           }
           assertLeaseHealthy();
