@@ -292,13 +292,13 @@ function resolveExecutionConfig(
       ? Math.min(2, temperatureRaw)
       : undefined;
 
+  const resolvedModel =
+    normalizeTrimmedString(record?.model) ?? normalizeTrimmedString(fallback.model);
   return {
     speed: normalizeSpeed(record?.speed) ?? fallback.speed,
     thinking: normalizeThinking(record?.thinking) ?? fallback.thinking,
     budget: normalizeBudget(record?.budget) ?? fallback.budget,
-    ...(normalizeTrimmedString(record?.model)
-      ? { model: normalizeTrimmedString(record?.model) }
-      : {}),
+    ...(resolvedModel ? { model: resolvedModel } : {}),
     ...(typeof maxOutputTokens === "number" ? { maxOutputTokens } : {}),
     ...(typeof temperature === "number" ? { temperature } : {}),
     ...(typeof timeoutMs === "number" ? { timeoutMs } : {}),
@@ -360,10 +360,14 @@ export function resolveMemoryDreamingConfig(params: {
   const execution = asNullableRecord(dreaming?.execution);
   const phases = asNullableRecord(dreaming?.phases);
 
+  // dreaming.model is the top-level shorthand; execution.defaults.model takes
+  // precedence if both are set, and per-phase execution.model overrides either.
+  const topLevelModel = normalizeTrimmedString(dreaming?.model);
   const defaultExecution = resolveExecutionConfig(execution?.defaults, {
     speed: DEFAULT_MEMORY_DREAMING_SPEED,
     thinking: DEFAULT_MEMORY_DREAMING_THINKING,
     budget: DEFAULT_MEMORY_DREAMING_BUDGET,
+    ...(topLevelModel ? { model: topLevelModel } : {}),
   });
 
   const light = asNullableRecord(phases?.light);

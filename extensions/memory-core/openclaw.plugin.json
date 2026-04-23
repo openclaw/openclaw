@@ -35,6 +35,9 @@
           "verboseLogging": {
             "type": "boolean"
           },
+          "model": {
+            "type": "string"
+          },
           "storage": {
             "type": "object",
             "additionalProperties": false,
@@ -71,6 +74,13 @@
                     "type": "number",
                     "minimum": 0,
                     "maximum": 1
+                  },
+                  "execution": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "model": { "type": "string" }
+                    }
                   }
                 }
               },
@@ -105,6 +115,13 @@
                   "maxAgeDays": {
                     "type": "integer",
                     "minimum": 1
+                  },
+                  "execution": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "model": { "type": "string" }
+                    }
                   }
                 }
               },
@@ -127,6 +144,13 @@
                     "type": "number",
                     "minimum": 0,
                     "maximum": 1
+                  },
+                  "execution": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "model": { "type": "string" }
+                    }
                   }
                 }
               }

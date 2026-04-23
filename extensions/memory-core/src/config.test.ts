@@ -50,4 +50,52 @@ describe("memory-core manifest config schema", () => {
 
     expect(result.ok).toBe(true);
   });
+
+  it("accepts dreaming.model for all-phase model override", () => {
+    const result = validateJsonSchemaValue({
+      schema: manifest.configSchema,
+      cacheKey: "memory-core.manifest.dreaming-model",
+      value: {
+        dreaming: {
+          enabled: true,
+          model: "google/gemini-2.5-flash",
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("accepts per-phase execution.model overrides", () => {
+    const result = validateJsonSchemaValue({
+      schema: manifest.configSchema,
+      cacheKey: "memory-core.manifest.dreaming-per-phase-execution-model",
+      value: {
+        dreaming: {
+          enabled: true,
+          phases: {
+            light: { execution: { model: "google/gemini-2.5-flash" } },
+            deep: { execution: { model: "anthropic/claude-sonnet-4-6" } },
+            rem: { execution: { model: "google/gemini-2.5-flash" } },
+          },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("rejects unknown keys on dreaming", () => {
+    const result = validateJsonSchemaValue({
+      schema: manifest.configSchema,
+      cacheKey: "memory-core.manifest.dreaming-unknown-key",
+      value: {
+        dreaming: {
+          unknownKey: "value",
+        },
+      },
+    });
+
+    expect(result.ok).toBe(false);
+  });
 });

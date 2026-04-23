@@ -613,6 +613,39 @@ describe("generateAndAppendDreamNarrative", () => {
     expect(logger.info).toHaveBeenCalled();
   });
 
+  it("forwards model override to subagent.run when provided", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
+    const subagent = createMockSubagent("Stars aligned across the commit graph.");
+    const logger = createMockLogger();
+
+    await generateAndAppendDreamNarrative({
+      subagent,
+      workspaceDir,
+      data: { phase: "deep", snippets: ["memory fragment"] },
+      model: "local/stronger-model",
+      logger,
+    });
+
+    expect(subagent.run).toHaveBeenCalledOnce();
+    expect(subagent.run.mock.calls[0][0]).toMatchObject({ model: "local/stronger-model" });
+  });
+
+  it("omits model from subagent.run when not provided", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
+    const subagent = createMockSubagent("Quiet moments between keystrokes.");
+    const logger = createMockLogger();
+
+    await generateAndAppendDreamNarrative({
+      subagent,
+      workspaceDir,
+      data: { phase: "light", snippets: ["memory fragment"] },
+      logger,
+    });
+
+    expect(subagent.run).toHaveBeenCalledOnce();
+    expect(subagent.run.mock.calls[0][0]).not.toHaveProperty("model");
+  });
+
   it("skips narrative when no snippets are available", async () => {
     const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
     const subagent = createMockSubagent("Should not appear.");

@@ -490,10 +490,11 @@ For conceptual behavior and slash commands, see [Dreaming](/concepts/dreaming).
 
 ### User settings
 
-| Key         | Type      | Default     | Description                                       |
-| ----------- | --------- | ----------- | ------------------------------------------------- |
-| `enabled`   | `boolean` | `false`     | Enable or disable dreaming entirely               |
-| `frequency` | `string`  | `0 3 * * *` | Optional cron cadence for the full dreaming sweep |
+| Key         | Type      | Default       | Description                                 |
+| ----------- | --------- | ------------- | ------------------------------------------- |
+| `enabled`   | `boolean` | `false`       | Enable or disable dreaming entirely         |
+| `frequency` | `string`  | `0 3 * * *`   | Cron cadence for the full dreaming sweep    |
+| `model`     | `string`  | agent default | Model used for all dreaming subagent calls. |
 
 ### Example
 
@@ -506,6 +507,7 @@ For conceptual behavior and slash commands, see [Dreaming](/concepts/dreaming).
           dreaming: {
             enabled: true,
             frequency: "0 3 * * *",
+            model: "google/gemini-2.5-flash",
           },
         },
       },

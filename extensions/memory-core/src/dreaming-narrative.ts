@@ -26,6 +26,7 @@ type SubagentSurface = {
     idempotencyKey: string;
     sessionKey: string;
     message: string;
+    model?: string;
     extraSystemPrompt?: string;
     deliver?: boolean;
   }) => Promise<{ runId: string }>;
@@ -139,6 +140,7 @@ async function startNarrativeRunOrFallback(params: {
   subagent: SubagentSurface;
   sessionKey: string;
   message: string;
+  model?: string;
   data: NarrativePhaseData;
   workspaceDir: string;
   nowMs: number;
@@ -150,6 +152,7 @@ async function startNarrativeRunOrFallback(params: {
       idempotencyKey: params.sessionKey,
       sessionKey: params.sessionKey,
       message: params.message,
+      ...(params.model ? { model: params.model } : {}),
       extraSystemPrompt: NARRATIVE_SYSTEM_PROMPT,
       deliver: false,
     });
@@ -838,6 +841,9 @@ export async function generateAndAppendDreamNarrative(params: {
   subagent: SubagentSurface;
   workspaceDir: string;
   data: NarrativePhaseData;
+  /** Optional model override for the narrative subagent. When set, the dreaming
+   * sweep uses this model instead of the agent's default model. */
+  model?: string;
   nowMs?: number;
   timezone?: string;
   logger: Logger;
@@ -862,6 +868,7 @@ export async function generateAndAppendDreamNarrative(params: {
       subagent: params.subagent,
       sessionKey,
       message,
+      ...(params.model ? { model: params.model } : {}),
       data: params.data,
       workspaceDir: params.workspaceDir,
       nowMs,

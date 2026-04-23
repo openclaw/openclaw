@@ -75,7 +75,9 @@ before ingestion.
 
 Dreaming also keeps a narrative **Dream Diary** in `DREAMS.md`.
 After each phase has enough material, `memory-core` runs a best-effort background
-subagent turn (using the default runtime model) and appends a short diary entry.
+subagent turn and appends a short diary entry. By default it uses the agent's
+default model; set `dreaming.model` to use a different model for all dreaming
+subagent calls.
 
 This diary is for human reading in the Dreams UI, not a promotion source.
 Dreaming-generated diary/report artifacts are excluded from short-term
@@ -205,10 +207,11 @@ openclaw memory rem-harness --json
 
 All settings live under `plugins.entries.memory-core.config.dreaming`.
 
-| Key         | Default     |
-| ----------- | ----------- |
-| `enabled`   | `false`     |
-| `frequency` | `0 3 * * *` |
+| Key         | Default       | Description                              |
+| ----------- | ------------- | ---------------------------------------- |
+| `enabled`   | `false`       | Enable or disable dreaming               |
+| `frequency` | `0 3 * * *`   | Cron cadence for the full dreaming sweep |
+| `model`     | agent default | Model for all dreaming subagent calls    |
 
 Phase policy, thresholds, and storage behavior are internal implementation
 details (not user-facing config).
