@@ -179,6 +179,44 @@ async function writeExistingBinding(
   });
 }
 
+function createThreadLifecycleAppServerOptions(): Parameters<
+  typeof startOrResumeThread
+>[0]["appServer"] {
+  return {
+    start: {
+      transport: "stdio",
+      command: "codex",
+      args: ["app-server"],
+      headers: {},
+    },
+    requestTimeoutMs: 60_000,
+    approvalPolicy: "never",
+    approvalsReviewer: "user",
+    sandbox: "workspace-write",
+  };
+}
+
+function createMessageDynamicTool(
+  description: string,
+  actions: string[] = ["send"],
+): Parameters<typeof startOrResumeThread>[0]["dynamicTools"][number] {
+  return {
+    name: "message",
+    description,
+    inputSchema: {
+      type: "object",
+      properties: {
+        action: {
+          type: "string",
+          enum: actions,
+        },
+      },
+      required: ["action"],
+      additionalProperties: false,
+    },
+  };
+}
+
 describe("runCodexAppServerAttempt", () => {
   beforeEach(async () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-run-"));
@@ -729,6 +767,76 @@ describe("runCodexAppServerAttempt", () => {
       developerInstructions: expect.stringContaining(CODEX_GPT5_BEHAVIOR_CONTRACT),
       persistExtendedHistory: true,
     });
+  });
+
+  it("resumes a bound Codex thread when only dynamic tool descriptions change", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    const appServer = createThreadLifecycleAppServerOptions();
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-existing");
+      }
+      if (method === "thread/resume") {
+        return { thread: { id: "thread-existing" }, modelProvider: "openai" };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [
+        createMessageDynamicTool("Send and manage messages for the current Slack thread."),
+      ],
+      appServer,
+    });
+    const binding = await startOrResumeThread({
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [
+        createMessageDynamicTool("Send and manage messages for the current Discord channel."),
+      ],
+      appServer,
+    });
+
+    expect(binding.threadId).toBe("thread-existing");
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start", "thread/resume"]);
+  });
+
+  it("starts a new Codex thread when dynamic tool schemas change", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    const appServer = createThreadLifecycleAppServerOptions();
+    let nextThread = 1;
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult(`thread-${nextThread++}`);
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [createMessageDynamicTool("Send and manage messages.", ["send"])],
+      appServer,
+    });
+    const binding = await startOrResumeThread({
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [createMessageDynamicTool("Send and manage messages.", ["send", "read"])],
+      appServer,
+    });
+
+    expect(binding.threadId).toBe("thread-2");
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start", "thread/start"]);
   });
 
   it("passes configured app-server policy, sandbox, service tier, and model on resume", async () => {
