@@ -83,6 +83,7 @@ import { withPluginRuntimePluginIdScope } from "./runtime/gateway-request-scope.
 import type { PluginRuntime } from "./runtime/types.js";
 import { defaultSlotIdForKey, hasKind } from "./slots.js";
 import {
+  isConversationHookName,
   isPluginHookName,
   isPromptInjectionHookName,
   stripPromptMutationFieldsFromLegacyHookResult,
@@ -165,6 +166,7 @@ export type {
 
 type PluginTypedHookPolicy = {
   allowPromptInjection?: boolean;
+  allowConversationAccess?: boolean;
 };
 
 const constrainLegacyPromptInjectionHook = (
@@ -1208,6 +1210,29 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         effectiveHandler = constrainLegacyPromptInjectionHook(
           handler as PluginHookHandlerMap["before_agent_start"],
         ) as PluginHookHandlerMap[K];
+      }
+    }
+    if (isConversationHookName(hookName)) {
+      const explicitConversationAccess = policy?.allowConversationAccess;
+      if (record.origin !== "bundled" && explicitConversationAccess !== true) {
+        pushDiagnostic({
+          level: "warn",
+          pluginId: record.id,
+          source: record.source,
+          message:
+            `typed hook "${hookName}" blocked because non-bundled plugins must set ` +
+            `plugins.entries.${record.id}.hooks.allowConversationAccess=true`,
+        });
+        return;
+      }
+      if (record.origin === "bundled" && explicitConversationAccess === false) {
+        pushDiagnostic({
+          level: "warn",
+          pluginId: record.id,
+          source: record.source,
+          message: `typed hook "${hookName}" blocked by plugins.entries.${record.id}.hooks.allowConversationAccess=false`,
+        });
+        return;
       }
     }
     record.hookCount += 1;
