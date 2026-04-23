@@ -551,6 +551,8 @@ describe("handleControlUiHttpRequest", () => {
           headers: {
             host: "127.0.0.1:18789",
             origin: "http://127.0.0.1:18789",
+            "sec-fetch-mode": "cors",
+            "sec-fetch-dest": "empty",
           },
         });
         expect(handled).toBe(true);
@@ -607,11 +609,50 @@ describe("handleControlUiHttpRequest", () => {
           headers: {
             host: "127.0.0.1:18789",
             origin: "http://127.0.0.1:18789",
+            "sec-fetch-mode": "cors",
+            "sec-fetch-dest": "empty",
           },
         });
         expect(handled).toBe(true);
         const parsed = parseBootstrapPayload(end);
         expect(parsed.gatewayToken).toBe("loopback-token");
+      },
+    });
+  });
+
+  it("rejects bootstrap config requests without auth when loopback browser fetch metadata is missing", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const { res, handled, end } = await runBootstrapConfigRequest({
+          rootPath: tmp,
+          auth: { mode: "token", token: "test-token", allowTailscale: false },
+          headers: {
+            host: "127.0.0.1:18789",
+            origin: "http://127.0.0.1:18789",
+          },
+        });
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(401);
+        expect(String(end.mock.calls[0]?.[0] ?? "")).toContain("Unauthorized");
+      },
+    });
+  });
+
+  it("rejects bootstrap config requests without auth when the loopback origin is missing", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const { res, handled, end } = await runBootstrapConfigRequest({
+          rootPath: tmp,
+          auth: { mode: "token", token: "test-token", allowTailscale: false },
+          headers: {
+            host: "127.0.0.1:18789",
+            "sec-fetch-mode": "cors",
+            "sec-fetch-dest": "empty",
+          },
+        });
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(401);
+        expect(String(end.mock.calls[0]?.[0] ?? "")).toContain("Unauthorized");
       },
     });
   });

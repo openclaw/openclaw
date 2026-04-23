@@ -112,6 +112,7 @@ export type ChatState = {
   chatMessage: string;
   chatAttachments: ChatAttachment[];
   chatRunId: string | null;
+  chatAbortPendingRunId?: string | null;
   chatStream: string | null;
   chatStreamStartedAt: number | null;
   chatActiveToolCallCount?: number;
@@ -411,6 +412,7 @@ export async function abortChatRun(state: ChatState): Promise<boolean> {
     if (result?.aborted === false) {
       return false;
     }
+    state.chatAbortPendingRunId = runId ?? null;
     state.chatRunId = null;
     state.chatStream = null;
     state.chatStreamStartedAt = null;
@@ -430,6 +432,18 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     return null;
   }
   if (payload.sessionKey !== state.sessionKey) {
+    return null;
+  }
+
+  if (
+    payload.runId &&
+    state.chatAbortPendingRunId &&
+    payload.runId === state.chatAbortPendingRunId
+  ) {
+    if (payload.state === "final" || payload.state === "aborted" || payload.state === "error") {
+      state.chatAbortPendingRunId = null;
+      return payload.state;
+    }
     return null;
   }
 
@@ -470,6 +484,7 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     }
     state.chatStream = null;
     state.chatRunId = null;
+    state.chatAbortPendingRunId = null;
     state.chatStreamStartedAt = null;
     state.chatLastTerminalAt = Date.now();
     state.chatLastTerminalKind = "completed";
@@ -493,6 +508,7 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     }
     state.chatStream = null;
     state.chatRunId = null;
+    state.chatAbortPendingRunId = null;
     state.chatStreamStartedAt = null;
     state.chatLastTerminalAt = Date.now();
     state.chatLastTerminalKind = "aborted";
@@ -500,6 +516,7 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   } else if (payload.state === "error") {
     state.chatStream = null;
     state.chatRunId = null;
+    state.chatAbortPendingRunId = null;
     state.chatStreamStartedAt = null;
     state.lastError = payload.errorMessage ?? "chat error";
     state.chatLastTerminalAt = Date.now();

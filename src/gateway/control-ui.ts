@@ -50,6 +50,7 @@ import {
 } from "./http-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { isLoopbackHost, resolveHostName } from "./net.js";
+import { checkBrowserOrigin } from "./origin-check.js";
 
 const ROOT_PREFIX = "/";
 const CONTROL_UI_ASSISTANT_MEDIA_PREFIX = "/__openclaw__/assistant-media";
@@ -151,21 +152,22 @@ function sendJson(res: ServerResponse, status: number, body: unknown) {
 }
 
 function hasTrustedLoopbackBootstrapOrigin(req: IncomingMessage): boolean {
+  const secFetchMode = getHeader(req, "sec-fetch-mode")?.trim().toLowerCase();
+  const secFetchDest = getHeader(req, "sec-fetch-dest")?.trim().toLowerCase();
+  if (secFetchMode !== "cors" || secFetchDest !== "empty") {
+    return false;
+  }
+
   const requestHost = resolveHostName(getHeader(req, "host"));
   if (!requestHost || !isLoopbackHost(requestHost)) {
     return false;
   }
 
-  const origin = getHeader(req, "origin")?.trim();
-  if (!origin || origin === "null") {
-    return true;
-  }
-
-  try {
-    return isLoopbackHost(new URL(origin).hostname);
-  } catch {
-    return false;
-  }
+  return checkBrowserOrigin({
+    requestHost,
+    origin: getHeader(req, "origin"),
+    isLocalClient: isLocalDirectRequest(req),
+  }).ok;
 }
 
 function respondControlUiAssetsUnavailable(

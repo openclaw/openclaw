@@ -12,7 +12,7 @@ type ControlUiAuthSource = {
 // server-side contract for `gateway.auth.mode="password"`. Callers that need
 // resilience to stale credentials should use `resolveControlUiAuthCandidates`
 // below to retry with the alternate credential on 401.
-function sanitizeHeaderToken(value: string | null): string | null {
+export function sanitizeHeaderToken(value: string | null): string | null {
   if (!value) {
     return null;
   }

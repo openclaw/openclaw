@@ -6,6 +6,7 @@ import {
   type ChannelsState,
 } from "./controllers/channels.ts";
 import { loadConfig, saveConfig, type ConfigState } from "./controllers/config.ts";
+import { sanitizeHeaderToken } from "./control-ui-auth.ts";
 import { resolvePreferredGatewayAccessToken } from "./gateway-bootstrap-token.ts";
 import { normalizeOptionalString } from "./string-coerce.ts";
 import type { NostrProfile } from "./types.ts";
@@ -81,19 +82,23 @@ function buildNostrProfileUrl(accountId: string, suffix = ""): string {
 }
 
 function resolveGatewayHttpAuthHeader(host: ChannelsActionHost): string | null {
-  const deviceToken = normalizeOptionalString(host.hello?.auth?.deviceToken);
+  const deviceToken = sanitizeHeaderToken(
+    normalizeOptionalString(host.hello?.auth?.deviceToken) ?? null,
+  );
   if (deviceToken) {
     return `Bearer ${deviceToken}`;
   }
-  const token = resolvePreferredGatewayAccessToken({
-    gatewayUrl: host.settings.gatewayUrl ?? null,
-    bootstrapGatewayToken: host.bootstrapGatewayToken ?? null,
-    storedToken: host.settings.token,
-  });
+  const token = sanitizeHeaderToken(
+    resolvePreferredGatewayAccessToken({
+      gatewayUrl: host.settings.gatewayUrl ?? null,
+      bootstrapGatewayToken: host.bootstrapGatewayToken ?? null,
+      storedToken: host.settings.token,
+    }) ?? null,
+  );
   if (token) {
     return `Bearer ${token}`;
   }
-  const password = normalizeOptionalString(host.password);
+  const password = sanitizeHeaderToken(normalizeOptionalString(host.password) ?? null);
   if (password) {
     return `Bearer ${password}`;
   }

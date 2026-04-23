@@ -16,6 +16,7 @@ function createState(overrides: Partial<ChatState> = {}): ChatState {
     chatMessage: "",
     chatMessages: [],
     chatRunId: null,
+    chatAbortPendingRunId: null,
     chatSending: false,
     chatStream: null,
     chatStreamStartedAt: null,
@@ -417,6 +418,31 @@ describe("handleChatEvent", () => {
     expect(state.chatStream).toBe("Working...");
   });
 
+  it("ignores terminal events from a pending-abort run after a replacement run starts", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-new",
+      chatAbortPendingRunId: "run-old",
+      chatStream: "Working on replacement run",
+      chatStreamStartedAt: 123,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-old",
+      sessionKey: "main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "stale cancelled reply" }],
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatAbortPendingRunId).toBeNull();
+    expect(state.chatRunId).toBe("run-new");
+    expect(state.chatMessages).toEqual([]);
+    expect(state.chatStream).toBe("Working on replacement run");
+  });
+
   it("drops NO_REPLY final payload from own run", () => {
     const state = createState({
       sessionKey: "main",
@@ -700,6 +726,7 @@ describe("abortChatRun", () => {
       sessionKey: "main",
       runId: "run-1",
     });
+    expect(state.chatAbortPendingRunId).toBe("run-1");
     expect(state.chatRunId).toBeNull();
     expect(state.chatStream).toBeNull();
     expect(state.chatActiveToolCallCount).toBe(0);
