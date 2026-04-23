@@ -113,7 +113,7 @@ See openclaw-EXAMPLE.json
 I recommend you install globally and then have your config in a user folder like /home/openclaw
 
 ```bash
-git clone https://github.com/openclaw/openclaw.git
+git clone https://github.com/jdc4429/openclaw/tree/jdc4429-custom-build
 cd openclaw
 
 pnpm install
