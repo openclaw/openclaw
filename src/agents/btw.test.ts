@@ -466,6 +466,7 @@ describe("runBtwSideQuestion", () => {
           api: "openai-completions",
           baseUrl: "https://ollama.com/",
         }),
+        workspaceDir: "/tmp/workspace",
       }),
     );
     expect(providerStreamFn).toHaveBeenCalledTimes(1);

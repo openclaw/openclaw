@@ -398,12 +398,12 @@ export async function runBtwSideQuestion(
     apiKeyInfo.mode === "aws-sdk" && !apiKeyInfo.apiKey
       ? undefined
       : requireApiKey(apiKeyInfo, model.provider);
+  const sessionAgentId = resolveSessionAgentId({
+    sessionKey: params.sessionKey,
+    config: params.cfg,
+  });
+  const workspaceDir = resolveAgentWorkspaceDir(params.cfg, sessionAgentId);
   if (apiKey) {
-    const sessionAgentId = resolveSessionAgentId({
-      sessionKey: params.sessionKey,
-      config: params.cfg,
-    });
-    const workspaceDir = resolveAgentWorkspaceDir(params.cfg, sessionAgentId);
     const preparedAuth = await prepareProviderRuntimeAuth({
       provider: model.provider,
       config: params.cfg,
@@ -441,6 +441,7 @@ export async function runBtwSideQuestion(
     model: runtimeModel,
     cfg: params.cfg,
     agentDir: params.agentDir,
+    workspaceDir,
     env: process.env,
   });
 
