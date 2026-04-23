@@ -515,51 +515,50 @@ export async function runSetupWizard(
     if (authChoice === undefined) {
       throw new WizardCancelledError("auth choice is required");
     }
-    break;
-  }
-  if (authChoice === undefined) {
-    throw new WizardCancelledError("auth choice is required");
-  }
-  if (typeof authChoice === "string" && authChoice.trim() === "") {
-    runtime.error("Invalid --auth-choice. Use a supported auth choice or omit the flag.");
-    runtime.exit(1);
-    return;
-  }
-
-  if (authChoice === "custom-api-key") {
-    const { promptCustomApiConfig } = await import("../commands/onboard-custom.js");
-    const customResult = await promptCustomApiConfig({
-      prompter,
-      runtime,
-      config: nextConfig,
-      secretInputMode: opts.secretInputMode,
-    });
-    nextConfig = customResult.config;
-  } else if (authChoice === "skip") {
-    // Explicit skip should stay cold: do not bootstrap auth/profile machinery
-    // or run model/auth checks when the caller already chose to skip setup.
-    if (authChoiceFromPrompt) {
-      const { applyPrimaryModel, promptDefaultModel } = await loadModelPickerModule();
-      const modelSelection = await promptDefaultModel({
-        config: nextConfig,
-        prompter,
-        allowKeep: true,
-        ignoreAllowlist: true,
-        includeProviderPluginSetups: true,
-        workspaceDir,
-        runtime,
-      });
-      if (modelSelection.config) {
-        nextConfig = modelSelection.config;
-      }
-      if (modelSelection.model) {
-        nextConfig = applyPrimaryModel(nextConfig, modelSelection.model);
-      }
-
-      const { warnIfModelConfigLooksOff } = await loadAuthChoiceModule();
-      await warnIfModelConfigLooksOff(nextConfig, prompter);
+    if (typeof authChoice === "string" && authChoice.trim() === "") {
+      runtime.error("Invalid --auth-choice. Use a supported auth choice or omit the flag.");
+      runtime.exit(1);
+      return;
     }
-  } else {
+
+    if (authChoice === "custom-api-key") {
+      const { promptCustomApiConfig } = await import("../commands/onboard-custom.js");
+      const customResult = await promptCustomApiConfig({
+        prompter,
+        runtime,
+        config: nextConfig,
+        secretInputMode: opts.secretInputMode,
+      });
+      nextConfig = customResult.config;
+      break;
+    }
+    if (authChoice === "skip") {
+      // Explicit skip should stay cold: do not bootstrap auth/profile machinery
+      // or run model/auth checks when the caller already chose to skip setup.
+      if (authChoiceFromPrompt) {
+        const { applyPrimaryModel, promptDefaultModel } = await loadModelPickerModule();
+        const modelSelection = await promptDefaultModel({
+          config: nextConfig,
+          prompter,
+          allowKeep: true,
+          ignoreAllowlist: true,
+          includeProviderPluginSetups: true,
+          workspaceDir,
+          runtime,
+        });
+        if (modelSelection.config) {
+          nextConfig = modelSelection.config;
+        }
+        if (modelSelection.model) {
+          nextConfig = applyPrimaryModel(nextConfig, modelSelection.model);
+        }
+
+        const { warnIfModelConfigLooksOff } = await loadAuthChoiceModule();
+        await warnIfModelConfigLooksOff(nextConfig, prompter);
+      }
+      break;
+    }
+
     const [
       { applyAuthChoice, resolvePreferredProviderForAuthChoice, warnIfModelConfigLooksOff },
       { applyPrimaryModel, promptDefaultModel },

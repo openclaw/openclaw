@@ -397,7 +397,7 @@ let heartbeatInterval: NodeJS.Timeout | null = null;
 
 async function runDiagnosticHeartbeatTick(
   config?: OpenClawConfig,
-  opts?: { getConfig?: () => OpenClawConfig },
+  opts?: { getConfig?: () => OpenClawConfig; emitMemorySample?: EmitDiagnosticMemorySample },
 ) {
   let heartbeatConfig = config;
   if (!heartbeatConfig) {
@@ -411,35 +411,18 @@ async function runDiagnosticHeartbeatTick(
   const stuckSessionWarnMs = resolveStuckSessionWarnMs(heartbeatConfig);
   const now = Date.now();
   pruneDiagnosticSessionStates(now, true);
-  const activeCount = Array.from(diagnosticSessionStates.values()).filter(
-    (s) => s.state === "processing",
-  ).length;
-  const waitingCount = Array.from(diagnosticSessionStates.values()).filter(
-    (s) => s.state === "waiting",
-  ).length;
-  const totalQueued = Array.from(diagnosticSessionStates.values()).reduce(
-    (sum, s) => sum + s.queueDepth,
-    0,
-  );
-  const hasActivity =
-    getLastDiagnosticActivityAt() > 0 ||
-    webhookStats.received > 0 ||
-    activeCount > 0 ||
-    waitingCount > 0 ||
-    totalQueued > 0;
-  if (!hasActivity) {
-    return;
-  }
-  if (
-    now - getLastDiagnosticActivityAt() > 120_000 &&
-    activeCount === 0 &&
-    waitingCount === 0
-  ) {
+  const snapshot = getDiagnosticWorkSnapshot();
+  const shouldRecordMemorySample =
+    hasRecentDiagnosticActivity(now) || hasOpenDiagnosticWork(snapshot);
+  (opts?.emitMemorySample ?? emitDiagnosticMemorySample)({
+    emitSample: shouldRecordMemorySample,
+  });
+  if (!shouldRecordMemorySample) {
     return;
   }
 
   diag.debug(
-    `heartbeat: webhooks=${webhookStats.received}/${webhookStats.processed}/${webhookStats.errors} active=${activeCount} waiting=${waitingCount} queued=${totalQueued}`,
+    `heartbeat: webhooks=${webhookStats.received}/${webhookStats.processed}/${webhookStats.errors} active=${snapshot.activeCount} waiting=${snapshot.waitingCount} queued=${snapshot.queuedCount}`,
   );
   emitDiagnosticEvent({
     type: "diagnostic.heartbeat",
@@ -448,9 +431,9 @@ async function runDiagnosticHeartbeatTick(
       processed: webhookStats.processed,
       errors: webhookStats.errors,
     },
-    active: activeCount,
-    waiting: waitingCount,
-    queued: totalQueued,
+    active: snapshot.activeCount,
+    waiting: snapshot.waitingCount,
+    queued: snapshot.queuedCount,
   });
 
   void loadCommandPollBackoffRuntime()
