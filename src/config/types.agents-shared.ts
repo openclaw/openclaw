@@ -44,4 +44,10 @@ export type AgentSandboxConfig = {
   browser?: SandboxBrowserSettings;
   /** Auto-prune sandbox settings. */
   prune?: SandboxPruneSettings;
+  /**
+   * Max time (ms) to wait for sandbox initialization (container start + browser setup)
+   * before aborting. Prevents a hung Docker daemon from blocking the message pipeline.
+   * Default: 60000 (60s) for docker, 300000 (5min) for ssh/remote backends.
+   */
+  initTimeoutMs?: number;
 };

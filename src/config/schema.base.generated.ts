@@ -5720,6 +5720,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     },
                     additionalProperties: false,
                   },
+                  initTimeoutMs: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
                 },
                 additionalProperties: false,
               },
@@ -7051,6 +7056,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         },
                       },
                       additionalProperties: false,
+                    },
+                    initTimeoutMs: {
+                      type: "integer",
+                      exclusiveMinimum: 0,
+                      maximum: 9007199254740991,
                     },
                   },
                   additionalProperties: false,
