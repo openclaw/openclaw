@@ -34,12 +34,52 @@ function getProviderModelId(model: unknown): string {
   return normalizeOptionalString(id) ?? "";
 }
 
+function buildSourceModelInputPresence(
+  sourceModels: ProviderConfig["models"] | undefined,
+): Map<string, boolean> {
+  const map = new Map<string, boolean>();
+  if (!Array.isArray(sourceModels)) {
+    return map;
+  }
+  for (const model of sourceModels) {
+    const id = getProviderModelId(model);
+    if (!id || !model || typeof model !== "object") {
+      continue;
+    }
+    map.set(id, `input` in model);
+  }
+  return map;
+}
+
+function resolveMergedModelInput(params: {
+  explicitModel: NonNullable<ProviderConfig["models"]>[number];
+  implicitModel: NonNullable<ProviderConfig["models"]>[number];
+  sourceModelInputPresence: Map<string, boolean> | undefined;
+  modelId: string;
+}): NonNullable<ProviderConfig["models"]>[number]["input"] {
+  const { explicitModel, implicitModel, sourceModelInputPresence, modelId } = params;
+  const explicitHasInput = `input` in explicitModel;
+  // When source config is available, only treat an explicit `input` as a real
+  // user override if the un-materialized source declared it. Otherwise
+  // `applyModelDefaults` (src/config/defaults.ts) would fill a synthetic
+  // ["text"] default and silently strip image support from the implicit
+  // catalog on every merge.
+  if (sourceModelInputPresence && explicitHasInput && !sourceModelInputPresence.get(modelId)) {
+    return implicitModel.input;
+  }
+  return explicitHasInput ? explicitModel.input : implicitModel.input;
+}
+
 export function mergeProviderModels(
   implicit: ProviderConfig,
   explicit: ProviderConfig,
+  sourceExplicit?: ProviderConfig,
 ): ProviderConfig {
   const implicitModels = Array.isArray(implicit.models) ? implicit.models : [];
   const explicitModels = Array.isArray(explicit.models) ? explicit.models : [];
+  const sourceModelInputPresence = sourceExplicit
+    ? buildSourceModelInputPresence(sourceExplicit.models)
+    : undefined;
   const implicitHeaders =
     implicit.headers && typeof implicit.headers === "object" && !Array.isArray(implicit.headers)
       ? implicit.headers
@@ -101,7 +141,12 @@ export function mergeProviderModels(
       {},
       explicitModel,
       {
-        input: implicitModel.input,
+        input: resolveMergedModelInput({
+          explicitModel,
+          implicitModel,
+          sourceModelInputPresence,
+          modelId: id,
+        }),
         reasoning: `reasoning` in explicitModel ? explicitModel.reasoning : implicitModel.reasoning,
       },
       contextWindow === undefined ? {} : { contextWindow },
@@ -137,6 +182,7 @@ export function mergeProviderModels(
 export function mergeProviders(params: {
   implicit?: Record<string, ProviderConfig> | null;
   explicit?: Record<string, ProviderConfig> | null;
+  sourceExplicit?: Record<string, ProviderConfig> | null;
 }): Record<string, ProviderConfig> {
   const out: Record<string, ProviderConfig> = params.implicit ? { ...params.implicit } : {};
   for (const [key, explicit] of Object.entries(params.explicit ?? {})) {
@@ -145,7 +191,10 @@ export function mergeProviders(params: {
       continue;
     }
     const implicit = out[providerKey];
-    out[providerKey] = implicit ? mergeProviderModels(implicit, explicit) : explicit;
+    const sourceExplicit = params.sourceExplicit?.[providerKey] ?? params.sourceExplicit?.[key];
+    out[providerKey] = implicit
+      ? mergeProviderModels(implicit, explicit, sourceExplicit)
+      : explicit;
   }
   return out;
 }

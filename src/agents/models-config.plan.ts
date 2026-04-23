@@ -36,6 +36,7 @@ export type ModelsJsonPlan =
 export async function resolveProvidersForModelsJsonWithDeps(
   params: {
     cfg: OpenClawConfig;
+    sourceConfigForSecrets?: OpenClawConfig;
     agentDir: string;
     env: NodeJS.ProcessEnv;
   },
@@ -55,6 +56,7 @@ export async function resolveProvidersForModelsJsonWithDeps(
   return mergeProviders({
     implicit: implicitProviders,
     explicit: explicitProviders,
+    sourceExplicit: params.sourceConfigForSecrets?.models?.providers,
   });
 }
 
@@ -96,7 +98,10 @@ export async function planOpenClawModelsJsonWithDeps(
   },
 ): Promise<ModelsJsonPlan> {
   const { cfg, agentDir, env } = params;
-  const providers = await resolveProvidersForModelsJsonWithDeps({ cfg, agentDir, env }, deps);
+  const providers = await resolveProvidersForModelsJsonWithDeps(
+    { cfg, sourceConfigForSecrets: params.sourceConfigForSecrets, agentDir, env },
+    deps,
+  );
 
   if (Object.keys(providers).length === 0) {
     return { action: "skip" };

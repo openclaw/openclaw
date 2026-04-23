@@ -58,7 +58,7 @@ describe("models-config merge helpers", () => {
     } as ExistingProviderConfig;
   }
 
-  it("refreshes implicit model metadata while preserving explicit reasoning overrides", async () => {
+  it("refreshes implicit model metadata while preserving explicit input and reasoning overrides", async () => {
     const merged = mergeProviderModels(
       {
         api: "openai-responses",
@@ -92,13 +92,170 @@ describe("models-config merge helpers", () => {
     expect(merged.models).toEqual([
       expect.objectContaining({
         id: "gpt-5.4",
-        input: ["text"],
+        input: ["image"],
         reasoning: false,
         cost: { input: 123, output: 456, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 2_000_000,
         maxTokens: 200_000,
       }),
     ]);
+  });
+
+  it("preserves explicit input modalities when the implicit catalog omits image support", async () => {
+    const merged = mergeProviderModels(
+      {
+        api: "openai-completions",
+        models: [
+          {
+            id: "qwen3.6-plus",
+            name: "Qwen 3.6 Plus",
+            input: ["text"],
+          },
+        ],
+      } as ProviderConfig,
+      {
+        api: "openai-completions",
+        models: [
+          {
+            id: "qwen3.6-plus",
+            name: "Qwen 3.6 Plus",
+            input: ["text", "image"],
+          },
+        ],
+      } as ProviderConfig,
+    );
+
+    expect(merged.models?.[0]?.input).toEqual(["text", "image"]);
+  });
+
+  it("refreshes input from implicit when explicit omits the field", async () => {
+    const merged = mergeProviderModels(
+      {
+        api: "openai-completions",
+        models: [
+          {
+            id: "qwen3.6-plus",
+            name: "Qwen 3.6 Plus",
+            input: ["text", "image"],
+          },
+        ],
+      } as ProviderConfig,
+      {
+        api: "openai-completions",
+        models: [
+          {
+            id: "qwen3.6-plus",
+            name: "Qwen 3.6 Plus",
+          },
+        ],
+      } as ProviderConfig,
+    );
+
+    expect(merged.models?.[0]?.input).toEqual(["text", "image"]);
+  });
+
+  it("preserves an explicit empty input array over implicit capabilities", async () => {
+    const merged = mergeProviderModels(
+      {
+        api: "openai-completions",
+        models: [
+          {
+            id: "qwen3.6-plus",
+            name: "Qwen 3.6 Plus",
+            input: ["text", "image"],
+          },
+        ],
+      } as ProviderConfig,
+      {
+        api: "openai-completions",
+        models: [
+          {
+            id: "qwen3.6-plus",
+            name: "Qwen 3.6 Plus",
+            input: [] as string[],
+          },
+        ],
+      } as ProviderConfig,
+    );
+
+    expect(merged.models?.[0]?.input).toEqual([]);
+  });
+
+  it("refreshes input from implicit when sourceExplicit shows the user omitted it", async () => {
+    // Simulates `applyModelDefaults` materializing input: ["text"] onto an
+    // explicit model whose source config omitted `input`. With the
+    // sourceExplicit pointer, the merge must still refresh from the implicit
+    // catalog so vision capability is not silently stripped.
+    const merged = mergeProviderModels(
+      {
+        api: "openai-completions",
+        models: [
+          {
+            id: "qwen3.6-plus",
+            name: "Qwen 3.6 Plus",
+            input: ["text", "image"],
+          },
+        ],
+      } as ProviderConfig,
+      {
+        api: "openai-completions",
+        models: [
+          {
+            id: "qwen3.6-plus",
+            name: "Qwen 3.6 Plus",
+            input: ["text"],
+          },
+        ],
+      } as ProviderConfig,
+      {
+        api: "openai-completions",
+        models: [
+          {
+            id: "qwen3.6-plus",
+            name: "Qwen 3.6 Plus",
+          },
+        ],
+      } as ProviderConfig,
+    );
+
+    expect(merged.models?.[0]?.input).toEqual(["text", "image"]);
+  });
+
+  it("preserves explicit input over implicit when sourceExplicit shows the user declared it", async () => {
+    const merged = mergeProviderModels(
+      {
+        api: "openai-completions",
+        models: [
+          {
+            id: "qwen3.6-plus",
+            name: "Qwen 3.6 Plus",
+            input: ["text"],
+          },
+        ],
+      } as ProviderConfig,
+      {
+        api: "openai-completions",
+        models: [
+          {
+            id: "qwen3.6-plus",
+            name: "Qwen 3.6 Plus",
+            input: ["text", "image"],
+          },
+        ],
+      } as ProviderConfig,
+      {
+        api: "openai-completions",
+        models: [
+          {
+            id: "qwen3.6-plus",
+            name: "Qwen 3.6 Plus",
+            input: ["text", "image"],
+          },
+        ],
+      } as ProviderConfig,
+    );
+
+    expect(merged.models?.[0]?.input).toEqual(["text", "image"]);
   });
 
   it("merges explicit providers onto trimmed keys", async () => {
