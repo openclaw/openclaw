@@ -40,8 +40,7 @@ import {
   ackDelivery,
   enqueueDelivery,
   failDelivery,
-  releaseActiveDelivery,
-  tryClaimActiveDelivery,
+  withActiveDeliveryClaim,
 } from "./delivery-queue.js";
 import type { OutboundIdentity } from "./identity.js";
 import type { DeliveryMirror } from "./mirror.js";
@@ -666,22 +665,25 @@ export async function deliverOutboundPayloads(
         gatewayClientScopes: params.gatewayClientScopes,
       }).catch(() => null); // Best-effort — don't block delivery if queue write fails.
 
-  // Claim the queue entry against the shared in-memory recovery set so a
-  // concurrent reconnect/startup drain skips this id while the live send is
-  // still running. Without this, a reconnect during an in-flight delivery can
-  // re-drive the same entry (retryCount=0, lastAttemptAt=undefined is drain-
-  // eligible by design to preserve crash replay) and produce duplicates.
-  const heldActiveClaim = queueId ? tryClaimActiveDelivery(queueId) : false;
-
-  // If a concurrent reconnect/startup drain already claimed this queue entry
-  // in the window between enqueueDelivery resolving and this synchronous
-  // claim attempt, bail out of the live send and leave the queue entry in
-  // place. The drain already owns ack/fail for this id; sending here would
-  // duplicate the outbound message and race cleanup.
-  if (queueId && !heldActiveClaim) {
-    return [];
+  if (!queueId) {
+    return await deliverOutboundPayloadsWithQueueCleanup(params, null);
   }
 
+  // Hold the same in-process claim used by recovery/drain while the live send
+  // owns this queue entry.
+  const claimResult = await withActiveDeliveryClaim(queueId, () =>
+    deliverOutboundPayloadsWithQueueCleanup(params, queueId),
+  );
+  if (claimResult.status === "claimed-by-other-owner") {
+    return [];
+  }
+  return claimResult.value;
+}
+
+async function deliverOutboundPayloadsWithQueueCleanup(
+  params: DeliverOutboundPayloadsParams,
+  queueId: string | null,
+): Promise<OutboundDeliveryResult[]> {
   // Wrap onError to detect partial failures under bestEffort mode.
   // When bestEffort is true, per-payload errors are caught and passed to onError
   // without throwing — so the outer try/catch never fires. We track whether any
@@ -716,10 +718,6 @@ export async function deliverOutboundPayloads(
       }
     }
     throw err;
-  } finally {
-    if (queueId && heldActiveClaim) {
-      releaseActiveDelivery(queueId);
-    }
   }
 }
 

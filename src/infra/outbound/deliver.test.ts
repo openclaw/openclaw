@@ -36,8 +36,12 @@ const queueMocks = vi.hoisted(() => ({
   enqueueDelivery: vi.fn(async () => "mock-queue-id"),
   ackDelivery: vi.fn(async () => {}),
   failDelivery: vi.fn(async () => {}),
-  tryClaimActiveDelivery: vi.fn<(entryId: string) => boolean>(() => true),
-  releaseActiveDelivery: vi.fn<(entryId: string) => void>(() => {}),
+  withActiveDeliveryClaim: vi.fn<
+    (
+      entryId: string,
+      fn: () => Promise<unknown>,
+    ) => Promise<{ status: "claimed"; value: unknown } | { status: "claimed-by-other-owner" }>
+  >(async (_entryId, fn) => ({ status: "claimed", value: await fn() })),
 }));
 const logMocks = vi.hoisted(() => ({
   warn: vi.fn(),
@@ -72,8 +76,7 @@ vi.mock("./delivery-queue.js", () => ({
   enqueueDelivery: queueMocks.enqueueDelivery,
   ackDelivery: queueMocks.ackDelivery,
   failDelivery: queueMocks.failDelivery,
-  tryClaimActiveDelivery: queueMocks.tryClaimActiveDelivery,
-  releaseActiveDelivery: queueMocks.releaseActiveDelivery,
+  withActiveDeliveryClaim: queueMocks.withActiveDeliveryClaim,
 }));
 vi.mock("../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => {
@@ -266,9 +269,11 @@ describe("deliverOutboundPayloads", () => {
     queueMocks.ackDelivery.mockResolvedValue(undefined);
     queueMocks.failDelivery.mockClear();
     queueMocks.failDelivery.mockResolvedValue(undefined);
-    queueMocks.tryClaimActiveDelivery.mockClear();
-    queueMocks.tryClaimActiveDelivery.mockReturnValue(true);
-    queueMocks.releaseActiveDelivery.mockClear();
+    queueMocks.withActiveDeliveryClaim.mockClear();
+    queueMocks.withActiveDeliveryClaim.mockImplementation(async (_entryId, fn) => ({
+      status: "claimed",
+      value: await fn(),
+    }));
     logMocks.warn.mockClear();
   });
 
@@ -967,7 +972,9 @@ describe("deliverOutboundPayloads", () => {
     // path claims it, the live path must not send. The drain already owns
     // ack/fail for that id; sending here would duplicate the outbound and
     // race queue cleanup.
-    queueMocks.tryClaimActiveDelivery.mockReturnValueOnce(false);
+    queueMocks.withActiveDeliveryClaim.mockResolvedValueOnce({
+      status: "claimed-by-other-owner",
+    });
     const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m1", roomId: "!room:example" });
 
     const results = await deliverOutboundPayloads({
@@ -982,7 +989,6 @@ describe("deliverOutboundPayloads", () => {
     expect(sendMatrix).not.toHaveBeenCalled();
     expect(queueMocks.ackDelivery).not.toHaveBeenCalled();
     expect(queueMocks.failDelivery).not.toHaveBeenCalled();
-    expect(queueMocks.releaseActiveDelivery).not.toHaveBeenCalled();
   });
 
   it("acks the queue entry when delivery is aborted", async () => {

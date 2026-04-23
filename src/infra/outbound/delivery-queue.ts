@@ -15,10 +15,10 @@ export {
   isPermanentDeliveryError,
   MAX_RETRIES,
   recoverPendingDeliveries,
-  releaseActiveDelivery,
-  tryClaimActiveDelivery,
+  withActiveDeliveryClaim,
 } from "./delivery-queue-recovery.js";
 export type {
+  ActiveDeliveryClaimResult,
   DeliverFn,
   PendingDeliveryDrainDecision,
   RecoveryLogger,
