@@ -422,6 +422,27 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
+  it("accepts paired operator device tokens in assistant media query auth", async () => {
+    await withPairedOperatorDeviceToken({
+      fn: async (operatorToken) => {
+        await withAllowedAssistantMediaRoot({
+          prefix: "ui-media-device-token-query-",
+          fn: async (tmpRoot) => {
+            const filePath = path.join(tmpRoot, "photo.png");
+            await fs.writeFile(filePath, Buffer.from("not-a-real-png"));
+            const { res, handled } = await runAssistantMediaRequest({
+              url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=${encodeURIComponent(operatorToken)}`,
+              method: "GET",
+              auth: { mode: "token", token: "shared-token", allowTailscale: false },
+            });
+            expect(handled).toBe(true);
+            expect(res.statusCode).toBe(200);
+          },
+        });
+      },
+    });
+  });
+
   it("rejects trusted-proxy assistant media requests from disallowed browser origins", async () => {
     await withAllowedAssistantMediaRoot({
       prefix: "ui-media-proxy-",

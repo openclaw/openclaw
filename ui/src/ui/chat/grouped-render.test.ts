@@ -837,18 +837,6 @@ describe("grouped chat rendering", () => {
 
   it("renders verified local assistant attachments through the Control UI media route", async () => {
     resetAssistantAttachmentAvailabilityCacheForTest();
-    const createObjectURL = vi
-      .fn<(blob: Blob) => string>()
-      .mockReturnValueOnce("blob:assistant-image")
-      .mockReturnValueOnce("blob:assistant-doc");
-    const revokeObjectURL = vi.fn();
-    vi.stubGlobal(
-      "URL",
-      class URL extends globalThis.URL {
-        static createObjectURL = createObjectURL;
-        static revokeObjectURL = revokeObjectURL;
-      },
-    );
     const fetchMock = vi.fn(async (url: string) => {
       if (url.includes("meta=1")) {
         return {
@@ -856,10 +844,7 @@ describe("grouped chat rendering", () => {
           json: async () => ({ available: true }),
         };
       }
-      return {
-        ok: true,
-        blob: async () => new Blob(["ok"], { type: "application/octet-stream" }),
-      };
+      throw new Error(`Unexpected fetch: ${url}`);
     });
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
     const container = document.createElement("div");
@@ -885,174 +870,35 @@ describe("grouped chat rendering", () => {
     renderMessage();
     expect(container.textContent).toContain("Checking...");
     await flushAssistantAttachmentAvailabilityChecks();
-    await flushAssistantAttachmentAvailabilityChecks();
 
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      1,
+    expect(fetchMock).toHaveBeenCalledWith(
       "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Ftest+image.png&token=session-token&meta=1",
-      expect.objectContaining({
-        credentials: "same-origin",
-        method: "GET",
-        headers: {
-          Accept: "application/json",
-          Authorization: "Bearer session-token",
-        },
-      }),
-    );
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      2,
-      "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Ftest-doc.pdf&token=session-token&meta=1",
-      expect.objectContaining({
-        credentials: "same-origin",
-        method: "GET",
-        headers: {
-          Accept: "application/json",
-          Authorization: "Bearer session-token",
-        },
-      }),
-    );
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      3,
-      "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Ftest+image.png",
-      expect.objectContaining({
-        credentials: "same-origin",
-        method: "GET",
-        headers: {
-          Accept: "application/octet-stream",
-          Authorization: "Bearer session-token",
-        },
-      }),
-    );
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      4,
-      "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Ftest-doc.pdf",
-      expect.objectContaining({
-        credentials: "same-origin",
-        method: "GET",
-        headers: {
-          Accept: "application/octet-stream",
-          Authorization: "Bearer session-token",
-        },
-      }),
+      expect.objectContaining({ credentials: "same-origin", method: "GET" }),
     );
 
     const image = container.querySelector<HTMLImageElement>(".chat-message-image");
     const docLink = container.querySelector<HTMLAnchorElement>(
       ".chat-assistant-attachment-card__link",
     );
-    expect(image?.getAttribute("src")).toBe("blob:assistant-image");
-    expect(docLink?.getAttribute("href")).toBe("blob:assistant-doc");
-    expect(createObjectURL).toHaveBeenCalledTimes(2);
-    expect(revokeObjectURL).not.toHaveBeenCalled();
+    expect(image?.getAttribute("src")).toBe(
+      "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Ftest+image.png&token=session-token",
+    );
+    expect(docLink?.getAttribute("href")).toBe(
+      "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Ftest-doc.pdf&token=session-token",
+    );
     expect(container.textContent).not.toContain("test image.png");
     vi.unstubAllGlobals();
   });
 
-  it("evicts stale local assistant attachment blob URLs and refetches on demand", async () => {
-    resetAssistantAttachmentAvailabilityCacheForTest();
-    vi.useFakeTimers();
-    const createObjectURL = vi
-      .fn<(blob: Blob) => string>()
-      .mockReturnValueOnce("blob:first-image")
-      .mockReturnValueOnce("blob:second-image");
-    const revokeObjectURL = vi.fn();
-    vi.stubGlobal(
-      "URL",
-      class URL extends globalThis.URL {
-        static createObjectURL = createObjectURL;
-        static revokeObjectURL = revokeObjectURL;
-      },
-    );
-    const fetchMock = vi.fn(async (url: string) => {
-      if (url.includes("meta=1")) {
-        return {
-          ok: true,
-          json: async () => ({ available: true }),
-        };
-      }
-      return {
-        ok: true,
-        blob: async () => new Blob(["ok"], { type: "image/png" }),
-      };
-    });
-    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
-    const container = document.createElement("div");
-    const renderMessage = () =>
-      renderAssistantMessage(
-        container,
-        {
-          id: "assistant-local-media-blob-eviction",
-          role: "assistant",
-          content: "Local image\nMEDIA:/tmp/openclaw/test image.png",
-          timestamp: Date.now(),
-        },
-        {
-          showToolCalls: false,
-          basePath: "/openclaw",
-          assistantAttachmentAuthToken: "session-token",
-          localMediaPreviewRoots: ["/tmp/openclaw"],
-          onRequestUpdate: renderMessage,
-        },
-      );
-
-    renderMessage();
-    await flushAssistantAttachmentAvailabilityChecks();
-    await flushAssistantAttachmentAvailabilityChecks();
-    expect(
-      container.querySelector<HTMLImageElement>(".chat-message-image")?.getAttribute("src"),
-    ).toBe("blob:first-image");
-
-    vi.advanceTimersByTime(5 * 60_000 + 1);
-    renderMessage();
-    await flushAssistantAttachmentAvailabilityChecks();
-    await flushAssistantAttachmentAvailabilityChecks();
-
-    expect(
-      container.querySelector<HTMLImageElement>(".chat-message-image")?.getAttribute("src"),
-    ).toBe("blob:second-image");
-    expect(revokeObjectURL).toHaveBeenCalledWith("blob:first-image");
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      3,
-      "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Ftest+image.png",
-      expect.objectContaining({
-        credentials: "same-origin",
-        method: "GET",
-        headers: {
-          Accept: "application/octet-stream",
-          Authorization: "Bearer session-token",
-        },
-      }),
-    );
-    expect(fetchMock).toHaveBeenCalledTimes(3);
-    vi.unstubAllGlobals();
-    vi.useRealTimers();
-  });
-
   it("rechecks local assistant attachment availability when the auth token changes", async () => {
     resetAssistantAttachmentAvailabilityCacheForTest();
-    const createObjectURL = vi.fn(() => "blob:fresh-token-image");
-    const revokeObjectURL = vi.fn();
-    vi.stubGlobal(
-      "URL",
-      class URL extends globalThis.URL {
-        static createObjectURL = createObjectURL;
-        static revokeObjectURL = revokeObjectURL;
-      },
-    );
-    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
-      if (url.includes("meta=1")) {
-        return {
-          ok: true,
-          json: async () => ({
-            available: init?.headers
-              ? "Authorization" in (init.headers as Record<string, string>)
-              : false,
-          }),
-        };
+    const fetchMock = vi.fn(async (url: string) => {
+      if (!url.includes("meta=1")) {
+        throw new Error(`Unexpected fetch: ${url}`);
       }
       return {
         ok: true,
-        blob: async () => new Blob(["ok"], { type: "image/png" }),
+        json: async () => ({ available: url.includes("token=fresh-token") }),
       };
     });
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
@@ -1082,43 +928,17 @@ describe("grouped chat rendering", () => {
 
     renderWithToken("fresh-token");
     await flushAssistantAttachmentAvailabilityChecks();
-    await flushAssistantAttachmentAvailabilityChecks();
 
-    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
       "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Ftest+image.png&meta=1",
-      expect.objectContaining({
-        credentials: "same-origin",
-        method: "GET",
-        headers: {
-          Accept: "application/json",
-        },
-      }),
+      expect.objectContaining({ credentials: "same-origin", method: "GET" }),
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
       "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Ftest+image.png&token=fresh-token&meta=1",
-      expect.objectContaining({
-        credentials: "same-origin",
-        method: "GET",
-        headers: {
-          Accept: "application/json",
-          Authorization: "Bearer fresh-token",
-        },
-      }),
-    );
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      3,
-      "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Ftest+image.png",
-      expect.objectContaining({
-        credentials: "same-origin",
-        method: "GET",
-        headers: {
-          Accept: "application/octet-stream",
-          Authorization: "Bearer fresh-token",
-        },
-      }),
+      expect.objectContaining({ credentials: "same-origin", method: "GET" }),
     );
     expect(container.querySelector(".chat-message-image")).not.toBeNull();
     expect(container.textContent).not.toContain("Unavailable");
@@ -1181,25 +1001,13 @@ describe("grouped chat rendering", () => {
 
   it("allows platform-specific local assistant attachments inside preview roots", async () => {
     resetAssistantAttachmentAvailabilityCacheForTest();
-    const createObjectURL = vi.fn(() => "blob:platform-local");
-    const revokeObjectURL = vi.fn();
-    vi.stubGlobal(
-      "URL",
-      class URL extends globalThis.URL {
-        static createObjectURL = createObjectURL;
-        static revokeObjectURL = revokeObjectURL;
-      },
-    );
     const fetchMock = vi.fn(async (url: string) => {
-      if (url.includes("meta=1")) {
-        return {
-          ok: true,
-          json: async () => ({ available: true }),
-        };
+      if (!url.includes("meta=1")) {
+        throw new Error(`Unexpected fetch: ${url}`);
       }
       return {
         ok: true,
-        blob: async () => new Blob(["ok"], { type: "image/png" }),
+        json: async () => ({ available: true }),
       };
     });
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
@@ -1225,7 +1033,7 @@ describe("grouped chat rendering", () => {
           timestamp: Date.now(),
         },
         expectedUrl:
-          "/openclaw/__openclaw__/assistant-media?source=%2FC%3A%2Ftmp%2Fopenclaw%2Ftest%2520image.png",
+          "/openclaw/__openclaw__/assistant-media?source=%2FC%3A%2Ftmp%2Fopenclaw%2Ftest%2520image.png&meta=1",
       }),
       renderCase({
         roots: ["c:\\users\\test\\pictures"],
@@ -1236,7 +1044,7 @@ describe("grouped chat rendering", () => {
           timestamp: Date.now(),
         },
         expectedUrl:
-          "/openclaw/__openclaw__/assistant-media?source=C%3A%5CUsers%5CTest%5CPictures%5Ctest+image.png",
+          "/openclaw/__openclaw__/assistant-media?source=C%3A%5CUsers%5CTest%5CPictures%5Ctest+image.png&meta=1",
       }),
       renderCase({
         roots: ["/Users/test/Pictures"],
@@ -1258,23 +1066,16 @@ describe("grouped chat rendering", () => {
           timestamp: Date.now(),
         }),
         expectedUrl:
-          "/openclaw/__openclaw__/assistant-media?source=%7E%2FPictures%2Ftest+image.png",
+          "/openclaw/__openclaw__/assistant-media?source=%7E%2FPictures%2Ftest+image.png&meta=1",
       }),
     ];
 
     await flushAssistantAttachmentAvailabilityChecks();
-    await flushAssistantAttachmentAvailabilityChecks();
 
     for (const expectedUrl of cases) {
       expect(fetchMock).toHaveBeenCalledWith(
-        `${expectedUrl}&meta=1`,
-        expect.objectContaining({
-          credentials: "same-origin",
-          method: "GET",
-          headers: {
-            Accept: "application/json",
-          },
-        }),
+        expectedUrl,
+        expect.objectContaining({ credentials: "same-origin", method: "GET" }),
       );
     }
     expect(container.textContent).not.toContain("Outside allowed folders");
@@ -1284,24 +1085,8 @@ describe("grouped chat rendering", () => {
   it("revalidates cached unavailable local assistant attachments after retry window", async () => {
     resetAssistantAttachmentAvailabilityCacheForTest();
     vi.useFakeTimers();
-    const createObjectURL = vi.fn(() => "blob:retry-image");
-    const revokeObjectURL = vi.fn();
-    vi.stubGlobal(
-      "URL",
-      class URL extends globalThis.URL {
-        static createObjectURL = createObjectURL;
-        static revokeObjectURL = revokeObjectURL;
-      },
-    );
     const fetchMock = vi
-      .fn<
-        (
-          url: string,
-        ) => Promise<
-          | { ok: boolean; json: () => Promise<{ available: boolean }> }
-          | { ok: true; blob: () => Promise<Blob> }
-        >
-      >()
+      .fn<(url: string) => Promise<{ ok: true; json: () => Promise<{ available: boolean }> }>>()
       .mockResolvedValueOnce({
         ok: true,
         json: async () => ({ available: false }),
@@ -1309,10 +1094,6 @@ describe("grouped chat rendering", () => {
       .mockResolvedValueOnce({
         ok: true,
         json: async () => ({ available: true }),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        blob: async () => new Blob(["ok"], { type: "image/png" }),
       });
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
     const container = document.createElement("div");
@@ -1344,10 +1125,8 @@ describe("grouped chat rendering", () => {
     renderMessage();
     await vi.runAllTimersAsync();
     await Promise.resolve();
-    await flushAssistantAttachmentAvailabilityChecks();
 
-    expect(fetchMock).toHaveBeenCalledTimes(3);
-    expect(createObjectURL).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(container.querySelector(".chat-message-image")).not.toBeNull();
     expect(container.textContent).not.toContain("Unavailable");
 

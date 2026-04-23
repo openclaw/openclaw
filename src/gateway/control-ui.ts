@@ -253,7 +253,6 @@ async function authorizeControlUiReadRequest(
     return true;
   }
 
-  const bearerToken = getBearerToken(req);
   const token = resolveControlUiReadAuthToken(req, {
     allowQueryToken: opts.allowQueryToken,
   });
@@ -274,7 +273,7 @@ async function authorizeControlUiReadRequest(
   let resolvedAuthResult = authResult;
   if (
     !resolvedAuthResult.ok &&
-    bearerToken &&
+    token &&
     opts.auth.mode !== "trusted-proxy" &&
     opts.auth.mode !== "none"
   ) {
@@ -287,7 +286,7 @@ async function authorizeControlUiReadRequest(
         retryAfterMs: deviceRateCheck.retryAfterMs,
       };
     } else {
-      const deviceTokenOk = await authorizeControlUiDeviceReadToken(bearerToken);
+      const deviceTokenOk = await authorizeControlUiDeviceReadToken(token);
       if (deviceTokenOk) {
         opts.rateLimiter?.reset(clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
         opts.rateLimiter?.reset(clientIp, AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET);

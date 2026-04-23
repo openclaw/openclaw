@@ -43,23 +43,14 @@ import {
 
 type AssistantAttachmentAvailability =
   | { status: "checking" }
-  | { status: "available"; url?: string; lastAccessedAt?: number }
+  | { status: "available" }
   | { status: "unavailable"; reason: string; checkedAt: number };
 
 const assistantAttachmentAvailabilityCache = new Map<string, AssistantAttachmentAvailability>();
-const assistantAttachmentBlobFetchInFlight = new Set<string>();
 const ASSISTANT_ATTACHMENT_UNAVAILABLE_RETRY_MS = 5_000;
-const ASSISTANT_ATTACHMENT_BLOB_URL_MAX_ENTRIES = 24;
-const ASSISTANT_ATTACHMENT_BLOB_URL_TTL_MS = 5 * 60_000;
 
 export function resetAssistantAttachmentAvailabilityCacheForTest() {
-  for (const entry of assistantAttachmentAvailabilityCache.values()) {
-    if (entry.status === "available" && entry.url?.startsWith("blob:")) {
-      URL.revokeObjectURL(entry.url);
-    }
-  }
   assistantAttachmentAvailabilityCache.clear();
-  assistantAttachmentBlobFetchInFlight.clear();
   for (const blobUrl of managedImageBlobUrlResolvedCache.values()) {
     URL.revokeObjectURL(blobUrl);
   }
@@ -1012,20 +1003,6 @@ async function resolveManagedOutgoingImageBlobUrl(
   return pending;
 }
 
-function buildAssistantAttachmentFetchHeaders(
-  accept: string,
-  authToken: string | null | undefined,
-): Record<string, string> {
-  const headers: Record<string, string> = {
-    Accept: accept,
-  };
-  const normalizedAuthToken = authToken?.trim();
-  if (normalizedAuthToken) {
-    headers.Authorization = `Bearer ${normalizedAuthToken}`;
-  }
-  return headers;
-}
-
 function buildAssistantAttachmentMetaUrl(
   source: string,
   basePath?: string,
@@ -1033,131 +1010,6 @@ function buildAssistantAttachmentMetaUrl(
 ): string {
   const attachmentUrl = buildAssistantAttachmentUrl(source, basePath, authToken);
   return `${attachmentUrl}${attachmentUrl.includes("?") ? "&" : "?"}meta=1`;
-}
-
-function buildAssistantAttachmentCacheKey(
-  source: string,
-  basePath: string | undefined,
-  authToken: string | null | undefined,
-): string {
-  const normalizedAuthToken = authToken?.trim() ?? "";
-  return `${basePath ?? ""}::${normalizedAuthToken}::${source}`;
-}
-
-function revokeAssistantAttachmentBlobUrl(entry: AssistantAttachmentAvailability) {
-  if (entry.status === "available" && entry.url?.startsWith("blob:")) {
-    URL.revokeObjectURL(entry.url);
-  }
-}
-
-function clearAssistantAttachmentBlobUrl(
-  cacheKey: string,
-  entry?: AssistantAttachmentAvailability,
-) {
-  const current = entry ?? assistantAttachmentAvailabilityCache.get(cacheKey);
-  if (!current || current.status !== "available" || !current.url) {
-    return;
-  }
-  revokeAssistantAttachmentBlobUrl(current);
-  assistantAttachmentAvailabilityCache.set(cacheKey, { status: "available" });
-}
-
-function pruneAssistantAttachmentBlobUrls(now: number) {
-  const blobEntries = [...assistantAttachmentAvailabilityCache.entries()].filter(
-    (entry): entry is [string, Extract<AssistantAttachmentAvailability, { status: "available" }>] =>
-      entry[1].status === "available" && Boolean(entry[1].url),
-  );
-  for (const [cacheKey, entry] of blobEntries) {
-    if (now - (entry.lastAccessedAt ?? 0) >= ASSISTANT_ATTACHMENT_BLOB_URL_TTL_MS) {
-      clearAssistantAttachmentBlobUrl(cacheKey, entry);
-    }
-  }
-  const remainingBlobEntries = [...assistantAttachmentAvailabilityCache.entries()]
-    .filter(
-      (
-        entry,
-      ): entry is [string, Extract<AssistantAttachmentAvailability, { status: "available" }>] =>
-        entry[1].status === "available" && Boolean(entry[1].url),
-    )
-    .toSorted((left, right) => (left[1].lastAccessedAt ?? 0) - (right[1].lastAccessedAt ?? 0));
-  while (remainingBlobEntries.length > ASSISTANT_ATTACHMENT_BLOB_URL_MAX_ENTRIES) {
-    const oldest = remainingBlobEntries.shift();
-    if (!oldest) {
-      break;
-    }
-    clearAssistantAttachmentBlobUrl(oldest[0], oldest[1]);
-  }
-}
-
-function setAssistantAttachmentAvailabilityCache(
-  cacheKey: string,
-  next: AssistantAttachmentAvailability,
-) {
-  const previous = assistantAttachmentAvailabilityCache.get(cacheKey);
-  if (
-    previous?.status === "available" &&
-    previous.url?.startsWith("blob:") &&
-    previous.url !== (next.status === "available" ? next.url : undefined)
-  ) {
-    revokeAssistantAttachmentBlobUrl(previous);
-  }
-  assistantAttachmentAvailabilityCache.set(cacheKey, next);
-}
-
-function ensureAssistantAttachmentBlobUrl(
-  source: string,
-  basePath: string | undefined,
-  authToken: string | null | undefined,
-  onRequestUpdate: (() => void) | undefined,
-): string | null {
-  const now = Date.now();
-  pruneAssistantAttachmentBlobUrls(now);
-  const cacheKey = buildAssistantAttachmentCacheKey(source, basePath, authToken);
-  const cached = assistantAttachmentAvailabilityCache.get(cacheKey);
-  if (cached?.status !== "available") {
-    return null;
-  }
-  if (cached.url) {
-    setAssistantAttachmentAvailabilityCache(cacheKey, {
-      status: "available",
-      url: cached.url,
-      lastAccessedAt: now,
-    });
-    return cached.url;
-  }
-  if (assistantAttachmentBlobFetchInFlight.has(cacheKey) || typeof fetch !== "function") {
-    return null;
-  }
-  assistantAttachmentBlobFetchInFlight.add(cacheKey);
-  void fetch(buildAssistantAttachmentUrl(source, basePath), {
-    method: "GET",
-    headers: buildAssistantAttachmentFetchHeaders("application/octet-stream", authToken),
-    credentials: "same-origin",
-  })
-    .then(async (res) => {
-      if (!res.ok || typeof URL.createObjectURL !== "function") {
-        throw new Error(`assistant attachment fetch failed: ${res.status}`);
-      }
-      const objectUrl = URL.createObjectURL(await res.blob());
-      setAssistantAttachmentAvailabilityCache(cacheKey, {
-        status: "available",
-        url: objectUrl,
-        lastAccessedAt: Date.now(),
-      });
-      pruneAssistantAttachmentBlobUrls(Date.now());
-    })
-    .catch(() => {
-      setAssistantAttachmentAvailabilityCache(cacheKey, {
-        status: "unavailable",
-        reason: "Attachment unavailable",
-        checkedAt: Date.now(),
-      });
-    })
-    .finally(() => {
-      assistantAttachmentBlobFetchInFlight.delete(cacheKey);
-      onRequestUpdate?.();
-    });
-  return null;
 }
 
 function resolveAssistantAttachmentAvailability(
@@ -1173,8 +1025,8 @@ function resolveAssistantAttachmentAvailability(
   if (!isLocalAttachmentPreviewAllowed(source, localMediaPreviewRoots)) {
     return { status: "unavailable", reason: "Outside allowed folders", checkedAt: Date.now() };
   }
-  pruneAssistantAttachmentBlobUrls(Date.now());
-  const cacheKey = buildAssistantAttachmentCacheKey(source, basePath, authToken);
+  const normalizedAuthToken = authToken?.trim() ?? "";
+  const cacheKey = `${basePath ?? ""}::${normalizedAuthToken}::${source}`;
   const cached = assistantAttachmentAvailabilityCache.get(cacheKey);
   if (cached) {
     if (
@@ -1190,29 +1042,26 @@ function resolveAssistantAttachmentAvailability(
   if (typeof fetch === "function") {
     void fetch(buildAssistantAttachmentMetaUrl(source, basePath, authToken), {
       method: "GET",
-      headers: buildAssistantAttachmentFetchHeaders("application/json", authToken),
+      headers: { Accept: "application/json" },
       credentials: "same-origin",
     })
       .then(async (res) => {
-        if (!res.ok) {
-          throw new Error(`assistant attachment fetch failed: ${res.status}`);
-        }
         const payload = (await res.json().catch(() => null)) as {
           available?: boolean;
           reason?: string;
         } | null;
         if (payload?.available === true) {
-          setAssistantAttachmentAvailabilityCache(cacheKey, { status: "available" });
-          return;
+          assistantAttachmentAvailabilityCache.set(cacheKey, { status: "available" });
+        } else {
+          assistantAttachmentAvailabilityCache.set(cacheKey, {
+            status: "unavailable",
+            reason: payload?.reason?.trim() || "Attachment unavailable",
+            checkedAt: Date.now(),
+          });
         }
-        setAssistantAttachmentAvailabilityCache(cacheKey, {
-          status: "unavailable",
-          reason: payload?.reason?.trim() || "Attachment unavailable",
-          checkedAt: Date.now(),
-        });
       })
       .catch(() => {
-        setAssistantAttachmentAvailabilityCache(cacheKey, {
+        assistantAttachmentAvailabilityCache.set(cacheKey, {
           status: "unavailable",
           reason: "Attachment unavailable",
           checkedAt: Date.now(),
@@ -1268,7 +1117,6 @@ function renderAssistantAttachments(
   return html`
     <div class="chat-assistant-attachments">
       ${attachments.map(({ attachment }) => {
-        const isLocalAttachment = isLocalAssistantAttachmentSource(attachment.url);
         const availability = resolveAssistantAttachmentAvailability(
           attachment.url,
           localMediaPreviewRoots,
@@ -1278,30 +1126,14 @@ function renderAssistantAttachments(
         );
         const attachmentUrl =
           availability.status === "available"
-            ? isLocalAttachment
-              ? (availability.url ??
-                ensureAssistantAttachmentBlobUrl(
-                  attachment.url,
-                  basePath,
-                  authToken,
-                  onRequestUpdate,
-                ))
-              : attachment.url
+            ? buildAssistantAttachmentUrl(attachment.url, basePath, authToken)
             : null;
-        const attachmentBadge =
-          availability.status === "unavailable"
-            ? "Unavailable"
-            : attachmentUrl
-              ? null
-              : availability.status === "available"
-                ? "Loading..."
-                : "Checking...";
         if (attachment.kind === "image") {
           if (!attachmentUrl) {
             return renderAssistantAttachmentStatusCard({
               kind: "image",
               label: attachment.label,
-              badge: attachmentBadge ?? "Unavailable",
+              badge: availability.status === "checking" ? "Checking..." : "Unavailable",
               reason: availability.status === "unavailable" ? availability.reason : undefined,
             });
           }
@@ -1322,7 +1154,7 @@ function renderAssistantAttachments(
                 ${!attachmentUrl
                   ? html`<span
                       class="chat-assistant-attachment-badge chat-assistant-attachment-badge--muted"
-                      >${attachmentBadge ?? "Unavailable"}</span
+                      >${availability.status === "checking" ? "Checking..." : "Unavailable"}</span
                     >`
                   : attachment.isVoiceNote
                     ? html`<span class="chat-assistant-attachment-badge">Voice note</span>`
@@ -1343,7 +1175,7 @@ function renderAssistantAttachments(
             return renderAssistantAttachmentStatusCard({
               kind: "video",
               label: attachment.label,
-              badge: attachmentBadge ?? "Unavailable",
+              badge: availability.status === "checking" ? "Checking..." : "Unavailable",
               reason: availability.status === "unavailable" ? availability.reason : undefined,
             });
           }
@@ -1364,7 +1196,7 @@ function renderAssistantAttachments(
           return renderAssistantAttachmentStatusCard({
             kind: "document",
             label: attachment.label,
-            badge: attachmentBadge ?? "Unavailable",
+            badge: availability.status === "checking" ? "Checking..." : "Unavailable",
             reason: availability.status === "unavailable" ? availability.reason : undefined,
           });
         }
