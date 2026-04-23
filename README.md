@@ -113,7 +113,7 @@ See openclaw-EXAMPLE.json
 I recommend you install globally and then have your config in a user folder like /home/openclaw
 
 ```bash
-git clone https://github.com/jdc4429/openclaw/tree/jdc4429-custom-build
+git clone https://github.com/jdc4429/openclaw.git
 cd openclaw
 
 pnpm install
@@ -121,18 +121,12 @@ pnpm install
 # First run only (or after resetting local OpenClaw config/workspace)
 pnpm openclaw setup
 
-# Optional: prebuild Control UI before first startup
 pnpm ui:build
 
 # Dev loop (auto-reload on source/config changes)
 pnpm gateway:watch
-```
 
-If you need a built `dist/` from the checkout (for Node, packaging, or release validation), run:
-
-```bash
 pnpm build
-pnpm ui:build
 ```
 
 `pnpm openclaw setup` writes the local config/workspace needed for `pnpm gateway:watch`. It is safe to re-run, but you normally only need it on first setup or after resetting local state. `pnpm gateway:watch` does not rebuild `dist/control-ui`, so rerun `pnpm ui:build` after `ui/` changes or use `pnpm ui:dev` when iterating on the Control UI. If you want this checkout to run onboarding directly, use `pnpm openclaw onboard --install-daemon`.
