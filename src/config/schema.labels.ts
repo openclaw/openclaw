@@ -820,6 +820,11 @@ export const FIELD_LABELS: Record<string, string> = {
   "messages.inbound.debounceMs": "Inbound Message Debounce (ms)",
   "messages.inbound.byChannel": "Inbound Debounce by Channel (ms)",
   "messages.tts": "Message Text-to-Speech",
+  "messages.tts.persona": "TTS Persona",
+  "messages.tts.personas": "TTS Personas",
+  "messages.tts.personas.*": "TTS Persona",
+  "messages.tts.personas.*.prompt": "TTS Persona Prompt",
+  "messages.tts.personas.*.providers": "TTS Persona Provider Bindings",
   "messages.tts.providers": "TTS Provider Settings",
   "messages.tts.providers.*": "TTS Provider Config",
   "messages.tts.providers.*.apiKey": "TTS Provider API Key", // pragma: allowlist secret

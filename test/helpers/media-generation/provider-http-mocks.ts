@@ -15,6 +15,7 @@ const providerHttpMocks = vi.hoisted(() => ({
   fetchWithTimeoutMock: vi.fn(),
   pollProviderOperationJsonMock: vi.fn(),
   assertOkOrThrowHttpErrorMock: vi.fn(async (_response: Response, _label: string) => {}),
+  assertOkOrThrowProviderErrorMock: vi.fn(async (_response: Response, _label: string) => {}),
   resolveProviderHttpRequestConfigMock: vi.fn((params: ResolveProviderHttpRequestConfigParams) => ({
     baseUrl: params.baseUrl ?? params.defaultBaseUrl,
     allowPrivateNetwork: false,
@@ -55,6 +56,7 @@ vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
 
 vi.mock("openclaw/plugin-sdk/provider-http", () => ({
   assertOkOrThrowHttpError: providerHttpMocks.assertOkOrThrowHttpErrorMock,
+  assertOkOrThrowProviderError: providerHttpMocks.assertOkOrThrowProviderErrorMock,
   createProviderOperationDeadline: ({
     label,
     timeoutMs,
@@ -85,6 +87,7 @@ export function installProviderHttpMockCleanup(): void {
     providerHttpMocks.fetchWithTimeoutMock.mockReset();
     providerHttpMocks.pollProviderOperationJsonMock.mockClear();
     providerHttpMocks.assertOkOrThrowHttpErrorMock.mockClear();
+    providerHttpMocks.assertOkOrThrowProviderErrorMock.mockClear();
     providerHttpMocks.resolveProviderHttpRequestConfigMock.mockClear();
   });
 }

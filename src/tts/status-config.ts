@@ -20,6 +20,7 @@ type TtsUserPrefs = {
     auto?: TtsAutoMode;
     enabled?: boolean;
     provider?: TtsProvider;
+    persona?: string | null;
     maxLength?: number;
     summarize?: boolean;
   };
@@ -31,6 +32,7 @@ type TtsStatusSnapshot = {
   displayName?: string;
   model?: string;
   voice?: string;
+  persona?: string;
   baseUrl?: string;
   customBaseUrl?: boolean;
   maxLength: number;
@@ -49,6 +51,27 @@ function normalizeConfiguredSpeechProviderId(
     return undefined;
   }
   return normalized === "edge" ? "microsoft" : normalized;
+}
+
+function normalizeTtsPersonaId(personaId: string | null | undefined): string | undefined {
+  return normalizeOptionalLowercaseString(personaId ?? undefined);
+}
+
+function resolvePersonaPreferredProvider(
+  raw: TtsConfig,
+  personaId: string | undefined,
+): TtsProvider | undefined {
+  if (!personaId || !raw.personas) {
+    return undefined;
+  }
+  for (const [id, persona] of Object.entries(raw.personas)) {
+    if (normalizeTtsPersonaId(id) !== personaId) {
+      continue;
+    }
+    const provider = normalizeConfiguredSpeechProviderId(persona.provider) ?? persona.provider;
+    return normalizeOptionalString(provider);
+  }
+  return undefined;
 }
 
 function resolveTtsPrefsPathValue(prefsPath: string | undefined): string {
@@ -212,8 +235,13 @@ export function resolveStatusTtsSnapshot(params: {
     return null;
   }
 
+  const persona =
+    prefs.tts && Object.prototype.hasOwnProperty.call(prefs.tts, "persona")
+      ? normalizeTtsPersonaId(prefs.tts.persona)
+      : normalizeTtsPersonaId(raw.persona);
   const provider =
     normalizeConfiguredSpeechProviderId(prefs.tts?.provider) ??
+    resolvePersonaPreferredProvider(raw, persona) ??
     normalizeConfiguredSpeechProviderId(raw.provider) ??
     "auto";
 
@@ -221,6 +249,7 @@ export function resolveStatusTtsSnapshot(params: {
     autoMode,
     provider,
     ...resolveStatusProviderDetails(raw, provider),
+    ...(persona ? { persona } : {}),
     maxLength: prefs.tts?.maxLength ?? DEFAULT_TTS_MAX_LENGTH,
     summarize: prefs.tts?.summarize ?? DEFAULT_TTS_SUMMARIZE,
   };

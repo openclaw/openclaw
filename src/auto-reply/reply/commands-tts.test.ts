@@ -9,16 +9,19 @@ const ttsMocks = vi.hoisted(() => ({
   getResolvedSpeechProviderConfig: vi.fn(),
   getLastTtsAttempt: vi.fn(),
   getTtsMaxLength: vi.fn(),
+  getTtsPersona: vi.fn(),
   getTtsProvider: vi.fn(),
   isSummarizationEnabled: vi.fn(),
   isTtsEnabled: vi.fn(),
   isTtsProviderConfigured: vi.fn(),
+  listTtsPersonas: vi.fn(),
   resolveTtsConfig: vi.fn(),
   resolveTtsPrefsPath: vi.fn(),
   setLastTtsAttempt: vi.fn(),
   setSummarizationEnabled: vi.fn(),
   setTtsEnabled: vi.fn(),
   setTtsMaxLength: vi.fn(),
+  setTtsPersona: vi.fn(),
   setTtsProvider: vi.fn(),
   textToSpeech: vi.fn(),
 }));
@@ -66,10 +69,12 @@ describe("handleTtsCommands status fallback reporting", () => {
     ttsMocks.resolveTtsPrefsPath.mockReturnValue("/tmp/tts-prefs.json");
     ttsMocks.isTtsEnabled.mockReturnValue(true);
     ttsMocks.getTtsProvider.mockReturnValue(PRIMARY_TTS_PROVIDER);
+    ttsMocks.getTtsPersona.mockReturnValue(undefined);
     ttsMocks.isTtsProviderConfigured.mockReturnValue(true);
     ttsMocks.getTtsMaxLength.mockReturnValue(1500);
     ttsMocks.isSummarizationEnabled.mockReturnValue(true);
     ttsMocks.getLastTtsAttempt.mockReturnValue(undefined);
+    ttsMocks.listTtsPersonas.mockReturnValue([]);
   });
 
   it("shows fallback provider details for successful attempts", async () => {
@@ -232,6 +237,24 @@ describe("handleTtsCommands status fallback reporting", () => {
         agentId: "reader",
       }),
     );
+  });
+
+  it("lists and sets configured TTS personas", async () => {
+    ttsMocks.listTtsPersonas.mockReturnValue([
+      {
+        id: "alfred",
+        label: "Alfred",
+        provider: "google",
+      },
+    ]);
+
+    const listResult = await handleTtsCommands(buildTtsParams("/tts persona"), true);
+    expect(listResult?.shouldContinue).toBe(false);
+    expect(listResult?.reply?.text).toContain("alfred (Alfred) provider=google");
+
+    const setResult = await handleTtsCommands(buildTtsParams("/tts persona alfred"), true);
+    expect(setResult?.shouldContinue).toBe(false);
+    expect(ttsMocks.setTtsPersona).toHaveBeenCalledWith("/tmp/tts-prefs.json", "alfred");
   });
 
   it("reads the latest assistant transcript reply once", async () => {
