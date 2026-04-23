@@ -1,4 +1,4 @@
-# OpenClaw Incident Response Plan
+# Gemmaclaw Incident Response Plan
 
 ## 1. Detection and triage
 

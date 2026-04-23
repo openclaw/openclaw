@@ -1,6 +1,7 @@
 # Security Policy
 
-If you believe you've found a security issue in OpenClaw, please report it privately.
+If you believe you've found a security issue in Gemmaclaw, please report it privately.
+For issues in the upstream OpenClaw core, report to the upstream project directly.
 
 ## Reporting
 
@@ -35,12 +36,12 @@ Reports without reproduction steps, demonstrated impact, and remediation advice 
 For fastest triage, include all of the following:
 
 - Exact vulnerable path (`file`, function, and line range) on a current revision.
-- Tested version details (OpenClaw version and/or commit SHA).
+- Tested version details (Gemmaclaw/OpenClaw version and/or commit SHA).
 - Reproducible PoC against latest `main` or latest released version.
 - If the claim targets a released version, evidence from the shipped tag and published artifact/package for that exact version (not only `main`).
-- For dependency CVE reports, evidence that the shipped dependency version is actually affected, plus a PoC that reproduces impact through OpenClaw. Showing that OpenClaw can reach a native parser is not enough by itself.
-- Demonstrated impact tied to OpenClaw's documented trust boundaries.
-- For exposed-secret reports: proof the credential is OpenClaw-owned (or grants access to OpenClaw-operated infrastructure/services).
+- For dependency CVE reports, evidence that the shipped dependency version is actually affected, plus a PoC that reproduces impact through Gemmaclaw. Showing that Gemmaclaw can reach a native parser is not enough by itself.
+- Demonstrated impact tied to Gemmaclaw's (or upstream OpenClaw's) documented trust boundaries.
+- For exposed-secret reports: proof the credential is Gemmaclaw/OpenClaw-owned (or grants access to Gemmaclaw/OpenClaw-operated infrastructure/services).
 - Explicit statement that the report does not rely on adversarial operators sharing one gateway host/config.
 - Scope check explaining why the report is **not** covered by the Out of Scope section below.
 - For command-risk/parity reports (for example obfuscation detection differences), a concrete boundary-bypass path is required (auth/approval/allowlist/sandbox). Parity-only findings are treated as hardening, not vulnerabilities.
@@ -63,7 +64,7 @@ These are frequently reported but are typically closed with no code change:
 - Reports that treat `POST /tools/invoke` under shared-secret bearer auth (`gateway.auth.mode="token"` or `"password"`) as a narrower per-request/per-scope authorization surface. That endpoint is designed as the same trusted-operator HTTP boundary: shared-secret bearer auth is full operator access there, narrower `x-openclaw-scopes` values do not reduce that path, and owner-only tool policy follows the shared-secret operator contract.
 - Reports that only show differences in heuristic detection/parity (for example obfuscation-pattern detection on one exec path but not another, such as `node.invoke -> system.run` parity gaps) without demonstrating bypass of auth, approvals, allowlist enforcement, sandboxing, or other documented trust boundaries.
 - Reports that only show an ACP tool can indirectly execute, mutate, orchestrate sessions, or reach another tool/runtime without demonstrating bypass of ACP prompt/approval, allowlist enforcement, sandboxing, or another documented trust boundary. ACP silent approval is intentionally limited to narrow readonly classes; parity-only indirect-command findings are hardening, not vulnerabilities.
-- Reports that only show untrusted media bytes reaching a maintained native decoder dependency (for example Sharp/libvips/libheif) without proving the shipped dependency version is vulnerable and demonstrating crash, memory corruption, data exposure, or a boundary bypass through OpenClaw. JavaScript header sniffing and image dimension fast-paths are preflight/UX checks, not the security boundary for native decoder correctness.
+- Reports that only show untrusted media bytes reaching a maintained native decoder dependency (for example Sharp/libvips/libheif) without proving the shipped dependency version is vulnerable and demonstrating crash, memory corruption, data exposure, or a boundary bypass through Gemmaclaw. JavaScript header sniffing and image dimension fast-paths are preflight/UX checks, not the security boundary for native decoder correctness.
 - ReDoS/DoS claims that require trusted operator configuration input (for example catastrophic regex in `sessionFilter` or `logging.redactPatterns`) without a trust-boundary bypass.
 - Archive/install extraction claims that require pre-existing local filesystem priming in trusted state (for example planting symlink/hardlink aliases under destination directories such as skills/tools paths) without showing an untrusted path that can create/control that primitive.
 - Reports that depend on replacing or rewriting an already-approved executable path on a trusted host (same-path inode/content swap) without showing an untrusted path to perform that write.
@@ -88,7 +89,7 @@ These are frequently reported but are typically closed with no code change:
 
 ## Bug Bounties
 
-OpenClaw is a labor of love. There is no bug bounty program and no budget for paid reports. Please still disclose responsibly so we can fix issues quickly.
+Gemmaclaw is a labor of love. There is no bug bounty program and no budget for paid reports. Please still disclose responsibly so we can fix issues quickly.
 The best way to help the project right now is by sending PRs.
 
 ## Maintainers: GHSA Updates via CLI
@@ -97,7 +98,7 @@ When patching a GHSA via `gh api`, include `X-GitHub-Api-Version: 2022-11-28` (o
 
 ## Operator Trust Model (Important)
 
-OpenClaw does **not** model one gateway as a multi-tenant, adversarial user boundary.
+Gemmaclaw does **not** model one gateway as a multi-tenant, adversarial user boundary.
 
 - Authenticated Gateway callers are treated as trusted operators for that gateway instance.
 - Direct localhost/loopback Control UI and Gateway WebSocket sessions authenticated with the shared gateway secret (`token` / `password`) are in that same trusted-operator bucket. Local auto-paired device sessions on that path are expected to retain full localhost operator capability; they do not create a separate `operator.write` vs `operator.admin` security boundary.
@@ -111,18 +112,18 @@ OpenClaw does **not** model one gateway as a multi-tenant, adversarial user boun
   - only identity-bearing HTTP modes (for example trusted proxy auth or `gateway.auth.mode="none"` on private ingress) honor declared per-request operator scopes
 - Session identifiers (`sessionKey`, session IDs, labels) are routing controls, not per-user authorization boundaries.
 - If one operator can view data from another operator on the same gateway, that is expected in this trust model.
-- OpenClaw can technically run multiple gateway instances on one machine, but recommended operations are clean separation by trust boundary.
+- Gemmaclaw can technically run multiple gateway instances on one machine, but recommended operations are clean separation by trust boundary.
 - Recommended mode: one user per machine/host (or VPS), one gateway for that user, and one or more agents inside that gateway.
-- If multiple users need OpenClaw, use one VPS (or host/OS user boundary) per user.
+- If multiple users need Gemmaclaw, use one VPS (or host/OS user boundary) per user.
 - For advanced setups, multiple gateways on one machine are possible, but only with strict isolation and are not the recommended default.
 - Exec behavior is host-first by default: `agents.defaults.sandbox.mode` defaults to `off`.
 - `tools.exec.host` defaults to `auto`: sandbox when sandbox runtime is active for the session, otherwise gateway.
 - Implicit exec calls (no explicit host in the tool call) follow the same behavior.
-- This is expected in OpenClaw's one-user trusted-operator model. If you need isolation, enable sandbox mode (`non-main`/`all`) and keep strict tool policy.
+- This is expected in Gemmaclaw's one-user trusted-operator model. If you need isolation, enable sandbox mode (`non-main`/`all`) and keep strict tool policy.
 
 ## Trusted Plugin Concept (Core)
 
-Plugins/extensions are part of OpenClaw's trusted computing base for a gateway.
+Plugins/extensions are part of Gemmaclaw's trusted computing base for a gateway.
 
 - Installing or enabling a plugin grants it the same trust level as local code running on that gateway host.
 - Plugin behavior such as reading env/files or running host commands is expected inside this trust boundary.
@@ -131,8 +132,8 @@ Plugins/extensions are part of OpenClaw's trusted computing base for a gateway.
 ## Out of Scope
 
 - Public Internet Exposure
-- Using OpenClaw in ways that the docs recommend not to
-- Test-only code and maintainer harnesses, including QA Lab, QE Lab, E2E fixtures, benchmark rigs, smoke-test containers, and local debugging proxies, unless the report demonstrates that the same vulnerable behavior is reachable from shipped OpenClaw production code or a published package artifact intended for users.
+- Using Gemmaclaw in ways that the docs recommend not to
+- Test-only code and maintainer harnesses, including QA Lab, QE Lab, E2E fixtures, benchmark rigs, smoke-test containers, and local debugging proxies, unless the report demonstrates that the same vulnerable behavior is reachable from shipped Gemmaclaw production code or a published package artifact intended for users.
 - Deployments where mutually untrusted/adversarial operators share one gateway host and config (for example, reports expecting per-operator isolation for `sessions.list`, `sessions.preview`, `chat.history`, or similar control-plane reads)
 - Prompt-injection-only attacks (without a policy/auth/sandbox boundary bypass)
 - Reports that require write access to trusted local state (`~/.openclaw`, workspace files like `MEMORY.md` / `memory/*.md`)
@@ -148,15 +149,15 @@ Plugins/extensions are part of OpenClaw's trusted computing base for a gateway.
 - Reports whose only claim is that an ACP-exposed tool can indirectly execute commands, mutate host state, or reach another privileged tool/runtime without demonstrating a bypass of ACP prompt/approval, allowlist enforcement, sandboxing, or another documented trust boundary. These are hardening-only findings, not vulnerabilities.
 - Reports whose only claim is that exec approvals do not semantically model every interpreter/runtime loader form, subcommand, flag combination, package script, or transitive module/config import. Exec approvals bind exact request context and best-effort direct local file operands; they are not a complete semantic model of everything a runtime may load.
 - Reports whose only claim is parser reachability in an up-to-date maintained dependency without showing that the exact shipped dependency build is vulnerable. We keep native media dependencies current; dependency exposure alone is not a vulnerability.
-- Exposed secrets that are third-party/user-controlled credentials (not OpenClaw-owned and not granting access to OpenClaw-operated infrastructure/services) without demonstrated OpenClaw impact
+- Exposed secrets that are third-party/user-controlled credentials (not Gemmaclaw-owned and not granting access to Gemmaclaw-operated infrastructure/services) without demonstrated Gemmaclaw impact
 - Reports whose only claim is host-side exec when sandbox runtime is disabled/unavailable (documented default behavior in the trusted-operator model), without a boundary bypass.
 - Reports whose only claim is that a platform-provided upload destination URL is untrusted (for example Microsoft Teams `fileConsent/invoke` `uploadInfo.uploadUrl`) without proving attacker control in an authenticated production flow.
 
 ## Deployment Assumptions
 
-OpenClaw security guidance assumes:
+Gemmaclaw security guidance assumes:
 
-- The host where OpenClaw runs is within a trusted OS/admin boundary.
+- The host where Gemmaclaw runs is within a trusted OS/admin boundary.
 - Anyone who can modify `~/.openclaw` state/config (including `openclaw.json`) is effectively a trusted operator.
 - A single Gateway shared by mutually untrusted people is **not a recommended setup**. Use separate gateways (or at minimum separate OS users/hosts) per trust boundary.
 - Authenticated Gateway callers are treated as trusted operators. Session identifiers (for example `sessionKey`) are routing controls, not per-user authorization boundaries.
@@ -164,7 +165,7 @@ OpenClaw security guidance assumes:
 
 ## One-User Trust Model (Personal Assistant)
 
-OpenClaw's security model is "personal assistant" (one trusted operator, potentially many agents), not "shared multi-tenant bus."
+Gemmaclaw's security model is "personal assistant" (one trusted operator, potentially many agents), not "shared multi-tenant bus."
 
 - If multiple people can message the same tool-enabled agent (for example a shared Slack workspace), they can all steer that agent within its granted permissions.
 - Non-owner sender status only affects owner-only tools/commands. If a non-owner can still access a non-owner-only tool on that same agent (for example `canvas`), that is within the granted tool boundary unless the report demonstrates an auth, policy, allowlist, approval, or sandbox bypass.
@@ -176,7 +177,7 @@ OpenClaw's security model is "personal assistant" (one trusted operator, potenti
 
 ## Context Visibility and Allowlists
 
-OpenClaw distinguishes:
+Gemmaclaw distinguishes:
 
 - **Trigger authorization**: who can trigger the agent (`dmPolicy`, `groupPolicy`, allowlists, mention gates)
 - **Context visibility**: what supplemental context is provided to the model (reply body, quoted text, thread history, forwarded metadata)
@@ -202,12 +203,12 @@ Hardening roadmap may add explicit visibility modes (for example `all`, `allowli
 
 ## Gateway and Node trust concept
 
-OpenClaw separates routing from execution, but both remain inside the same operator trust boundary:
+Gemmaclaw separates routing from execution, but both remain inside the same operator trust boundary:
 
 - **Gateway** is the control plane. If a caller passes Gateway auth, they are treated as a trusted operator for that Gateway.
 - **Node** is an execution extension of the Gateway. Pairing a node grants operator-level remote capability on that node.
 - **Exec approvals** (allowlist/ask UI) are operator guardrails to reduce accidental command execution, not a multi-tenant authorization boundary.
-- Exec approvals bind exact command/cwd/env context and, when OpenClaw can identify one concrete local script/file operand, that file snapshot too. This is best-effort integrity hardening, not a complete semantic model of every interpreter/runtime loader path.
+- Exec approvals bind exact command/cwd/env context and, when Gemmaclaw can identify one concrete local script/file operand, that file snapshot too. This is best-effort integrity hardening, not a complete semantic model of every interpreter/runtime loader path.
 - Differences in command-risk warning heuristics between exec surfaces (`gateway`, `node`, `sandbox`) do not, by themselves, constitute a security-boundary bypass.
 - For untrusted-user isolation, split by trust boundary: separate gateways and separate OS users/hosts per boundary.
 
@@ -224,22 +225,22 @@ OpenClaw separates routing from execution, but both remain inside the same opera
 
 Plugins/extensions are loaded **in-process** with the Gateway and are treated as trusted code.
 
-- Plugins can execute with the same OS privileges as the OpenClaw process.
+- Plugins can execute with the same OS privileges as the Gemmaclaw process.
 - Runtime helpers (for example `runtime.system.runCommandWithTimeout`) are convenience APIs, not a sandbox boundary.
 - Only install plugins you trust, and prefer `plugins.allow` to pin explicit trusted plugin ids.
 
 ## Temp Folder Boundary (Media/Sandbox)
 
-OpenClaw uses a dedicated temp root for local media handoff and sandbox-adjacent temp artifacts:
+Gemmaclaw uses a dedicated temp root for local media handoff and sandbox-adjacent temp artifacts:
 
 - Preferred temp root: `/tmp/openclaw` (when available and safe on the host).
 - Fallback temp root: `os.tmpdir()/openclaw` (or `openclaw-<uid>` on multi-user hosts).
 
 Security boundary notes:
 
-- Sandbox media validation allows absolute temp paths only under the OpenClaw-managed temp root.
+- Sandbox media validation allows absolute temp paths only under the Gemmaclaw-managed temp root.
 - Arbitrary host tmp paths are not treated as trusted media roots.
-- Plugin/extension code should use OpenClaw temp helpers (`resolvePreferredOpenClawTmpDir`, `buildRandomTempFilePath`, `withTempDownloadPath`) rather than raw `os.tmpdir()` defaults when handling media files.
+- Plugin/extension code should use Gemmaclaw temp helpers (`resolvePreferredOpenClawTmpDir`, `buildRandomTempFilePath`, `withTempDownloadPath`) rather than raw `os.tmpdir()` defaults when handling media files.
 - Enforcement reference points:
   - temp root resolver: `src/infra/tmp-openclaw-dir.ts`
   - SDK temp helpers: `src/plugin-sdk/temp-path.ts`
@@ -247,7 +248,7 @@ Security boundary notes:
 
 ## Operational Guidance
 
-For threat model + hardening guidance (including `openclaw security audit --deep` and `--fix`), see:
+For threat model + hardening guidance (including `gemmaclaw security audit --deep` and `--fix`), see:
 
 - `https://docs.openclaw.ai/gateway/security`
 
@@ -267,14 +268,14 @@ For threat model + hardening guidance (including `openclaw security audit --deep
 
 ### Web Interface Safety
 
-OpenClaw's web interface (Gateway Control UI + HTTP endpoints) is intended for **local use only**.
+Gemmaclaw's web interface (Gateway Control UI + HTTP endpoints) is intended for **local use only**.
 
 - Recommended: keep the Gateway **loopback-only** (`127.0.0.1` / `::1`).
   - Config: `gateway.bind="loopback"` (default).
-  - CLI: `openclaw gateway run --bind loopback`.
+  - CLI: `gemmaclaw gateway run --bind loopback`.
 - `gateway.controlUi.dangerouslyDisableDeviceAuth` is intended for localhost-only break-glass use.
-  - OpenClaw keeps deployment flexibility by design and does not hard-forbid non-local setups.
-  - Non-local and other risky configurations are surfaced by `openclaw security audit` as dangerous findings.
+  - Gemmaclaw keeps deployment flexibility by design and does not hard-forbid non-local setups.
+  - Non-local and other risky configurations are surfaced by `gemmaclaw security audit` as dangerous findings.
   - This operator-selected tradeoff is by design and not, by itself, a security vulnerability.
 - Canvas host note: network-visible canvas is **intentional** for trusted node scenarios (LAN/tailnet).
   - Expected setup: non-loopback bind + Gateway auth (token/password/trusted-proxy) + firewall/tailnet controls.
@@ -288,7 +289,7 @@ OpenClaw's web interface (Gateway Control UI + HTTP endpoints) is intended for *
 
 ### Node.js Version
 
-OpenClaw requires **Node.js 22.12.0 or later** (LTS). This version includes important security patches:
+Gemmaclaw requires **Node.js 22.12.0 or later** (LTS). This version includes important security patches:
 
 - CVE-2025-59466: async_hooks DoS vulnerability
 - CVE-2026-21636: Permission model bypass vulnerability
@@ -301,7 +302,7 @@ node --version  # Should be v22.12.0 or later
 
 ### Docker Security
 
-When running OpenClaw in Docker:
+When running Gemmaclaw in Docker:
 
 1. The official image runs as a non-root user (`node`) for reduced attack surface
 2. Use `--read-only` flag when possible for additional filesystem protection
@@ -311,8 +312,8 @@ Example secure Docker run:
 
 ```bash
 docker run --read-only --cap-drop=ALL \
-  -v openclaw-data:/app/data \
-  openclaw/openclaw:latest
+  -v gemmaclaw-data:/app/data \
+  gemmaclaw/gemmaclaw:latest
 ```
 
 ## Security Scanning

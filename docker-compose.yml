@@ -1,6 +1,6 @@
 services:
-  openclaw-gateway:
-    image: ${OPENCLAW_IMAGE:-openclaw:local}
+  gemmaclaw-gateway:
+    image: ${OPENCLAW_IMAGE:-gemmaclaw:local}
     environment:
       HOME: /home/node
       TERM: xterm-256color
@@ -49,9 +49,9 @@ services:
       retries: 5
       start_period: 20s
 
-  openclaw-cli:
-    image: ${OPENCLAW_IMAGE:-openclaw:local}
-    network_mode: "service:openclaw-gateway"
+  gemmaclaw-cli:
+    image: ${OPENCLAW_IMAGE:-gemmaclaw:local}
+    network_mode: "service:gemmaclaw-gateway"
     cap_drop:
       - NET_RAW
       - NET_ADMIN
@@ -75,4 +75,4 @@ services:
     init: true
     entrypoint: ["node", "dist/index.js"]
     depends_on:
-      - openclaw-gateway
+      - gemmaclaw-gateway

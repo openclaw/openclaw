@@ -740,7 +740,7 @@ describe("createTelegramBot", () => {
       const pairingText = String(sendMessageSpy.mock.calls[0]?.[1]);
       expect(pairingText, testCase.name).toContain(`Your Telegram user id: ${senderId}`);
       expect(pairingText, testCase.name).toContain("Pairing code:");
-      expect(pairingText, testCase.name).toContain("openclaw pairing approve telegram");
+      expect(pairingText, testCase.name).toContain("gemmaclaw pairing approve telegram");
       expect(sendMessageSpy.mock.calls[0]?.[2], testCase.name).toEqual(
         expect.objectContaining({ parse_mode: "HTML" }),
       );
