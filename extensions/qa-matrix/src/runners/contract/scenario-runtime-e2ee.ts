@@ -29,6 +29,8 @@ import {
   MATRIX_QA_IMAGE_ATTACHMENT_FILENAME,
 } from "./scenario-media-fixtures.js";
 import {
+  formatMatrixQaCliCommand,
+  redactMatrixQaCliOutput,
   runMatrixQaOpenClawCli,
   startMatrixQaOpenClawCli,
   type MatrixQaCliRunResult,
@@ -245,7 +247,7 @@ function parseMatrixQaCliJson(result: MatrixQaCliRunResult): unknown {
   const stderr = result.stderr.trim();
   if (stdout && stderr) {
     throw new Error(
-      `openclaw ${result.args.join(" ")} printed JSON with extra output\nstdout:\n${stdout}\nstderr:\n${stderr}`,
+      `${formatMatrixQaCliCommand(result.args)} printed JSON with extra output\nstdout:\n${redactMatrixQaCliOutput(stdout)}\nstderr:\n${redactMatrixQaCliOutput(stderr)}`,
     );
   }
   if (stdout) {
@@ -253,24 +255,24 @@ function parseMatrixQaCliJson(result: MatrixQaCliRunResult): unknown {
       return parseMatrixQaCliJsonText(stdout);
     } catch (error) {
       throw new Error(
-        `openclaw ${result.args.join(" ")} printed invalid JSON: ${
+        `${formatMatrixQaCliCommand(result.args)} printed invalid JSON: ${
           error instanceof Error ? error.message : String(error)
-        }\nstdout:\n${stdout}`,
+        }\nstdout:\n${redactMatrixQaCliOutput(stdout)}`,
         { cause: error },
       );
     }
   }
 
   if (!stderr) {
-    throw new Error(`openclaw ${result.args.join(" ")} did not print JSON`);
+    throw new Error(`${formatMatrixQaCliCommand(result.args)} did not print JSON`);
   }
   try {
     return parseMatrixQaCliJsonText(stderr);
   } catch (error) {
     throw new Error(
-      `openclaw ${result.args.join(" ")} printed invalid JSON: ${
+      `${formatMatrixQaCliCommand(result.args)} printed invalid JSON: ${
         error instanceof Error ? error.message : String(error)
-      }\nstderr:\n${stderr}`,
+      }\nstderr:\n${redactMatrixQaCliOutput(stderr)}`,
       { cause: error },
     );
   }
@@ -307,8 +309,8 @@ async function writeMatrixQaCliOutputArtifacts(params: {
   const stdoutPath = path.join(params.rootDir, `${prefix}.stdout.txt`);
   const stderrPath = path.join(params.rootDir, `${prefix}.stderr.txt`);
   await Promise.all([
-    writeFile(stdoutPath, params.result.stdout, { mode: 0o600 }),
-    writeFile(stderrPath, params.result.stderr, { mode: 0o600 }),
+    writeFile(stdoutPath, redactMatrixQaCliOutput(params.result.stdout), { mode: 0o600 }),
+    writeFile(stderrPath, redactMatrixQaCliOutput(params.result.stderr), { mode: 0o600 }),
   ]);
   return { stderrPath, stdoutPath };
 }

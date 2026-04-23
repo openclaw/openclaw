@@ -133,6 +133,15 @@ type MatrixVerificationSession = {
   reciprocateQrCallbacks?: MatrixShowQrCodeCallbacks;
 };
 
+type MatrixVerificationRequestIdentity = {
+  transactionId: string;
+  roomId: string;
+  otherUserId: string;
+  otherDeviceId: string;
+  isSelfVerification: boolean;
+  initiatedByMe: boolean;
+};
+
 const MAX_TRACKED_VERIFICATION_SESSIONS = 256;
 const TERMINAL_SESSION_RETENTION_MS = 24 * 60 * 60 * 1000;
 const SAS_AUTO_CONFIRM_DELAY_MS = 30_000;
@@ -162,6 +171,36 @@ export class MatrixVerificationManager {
   ): MatrixVerificationPhase {
     const phase = this.readRequestValue<unknown>(request, () => request.phase, fallback);
     return isMatrixVerificationPhase(phase) ? phase : fallback;
+  }
+
+  private readVerificationRequestIdentity(
+    request: MatrixVerificationRequestLike,
+  ): MatrixVerificationRequestIdentity {
+    return {
+      transactionId: this.readRequestValue(request, () => request.transactionId?.trim() ?? "", ""),
+      roomId: this.readRequestValue(request, () => request.roomId ?? "", ""),
+      otherUserId: this.readRequestValue(request, () => request.otherUserId, ""),
+      otherDeviceId: this.readRequestValue(request, () => request.otherDeviceId ?? "", ""),
+      isSelfVerification: this.readRequestValue(request, () => request.isSelfVerification, false),
+      initiatedByMe: this.readRequestValue(request, () => request.initiatedByMe, false),
+    };
+  }
+
+  private isSameLogicalVerificationRequest(
+    left: MatrixVerificationRequestLike,
+    right: MatrixVerificationRequestLike,
+  ): boolean {
+    const leftIdentity = this.readVerificationRequestIdentity(left);
+    const rightIdentity = this.readVerificationRequestIdentity(right);
+    return (
+      leftIdentity.transactionId !== "" &&
+      leftIdentity.transactionId === rightIdentity.transactionId &&
+      leftIdentity.roomId === rightIdentity.roomId &&
+      leftIdentity.otherUserId === rightIdentity.otherUserId &&
+      leftIdentity.otherDeviceId === rightIdentity.otherDeviceId &&
+      leftIdentity.isSelfVerification === rightIdentity.isSelfVerification &&
+      leftIdentity.initiatedByMe === rightIdentity.initiatedByMe
+    );
   }
 
   private pruneVerificationSessions(nowMs: number): void {
@@ -277,11 +316,21 @@ export class MatrixVerificationManager {
     if (direct) {
       return direct;
     }
-    for (const session of this.verificationSessions.values()) {
-      const txId = this.readRequestValue(session.request, () => session.request.transactionId, "");
-      if (txId === id) {
-        return session;
-      }
+    const transactionMatches = Array.from(this.verificationSessions.values()).filter((session) => {
+      const txId = this.readRequestValue(
+        session.request,
+        () => session.request.transactionId?.trim(),
+        "",
+      );
+      return txId === id;
+    });
+    if (transactionMatches.length === 1) {
+      return transactionMatches[0];
+    }
+    if (transactionMatches.length > 1) {
+      throw new Error(
+        `Matrix verification request id is ambiguous for transaction ${id}; use the verification id instead`,
+      );
     }
     throw new Error(`Matrix verification request not found: ${id}`);
   }
@@ -482,15 +531,17 @@ export class MatrixVerificationManager {
 
   trackVerificationRequest(request: MatrixVerificationRequestLike): MatrixVerificationSummary {
     this.pruneVerificationSessions(Date.now());
-    const txId = this.readRequestValue(request, () => request.transactionId?.trim(), "");
+    const requestObj = request as unknown as object;
+    for (const existing of this.verificationSessions.values()) {
+      if ((existing.request as unknown as object) === requestObj) {
+        this.touchVerificationSession(existing);
+        return this.buildVerificationSummary(existing);
+      }
+    }
+    const txId = this.readVerificationRequestIdentity(request).transactionId;
     if (txId) {
       for (const existing of this.verificationSessions.values()) {
-        const existingTxId = this.readRequestValue(
-          existing.request,
-          () => existing.request.transactionId,
-          "",
-        );
-        if (existingTxId === txId) {
+        if (this.isSameLogicalVerificationRequest(existing.request, request)) {
           existing.request = request;
           this.ensureVerificationRequestTracked(existing);
           const verifier = this.readRequestValue(request, () => request.verifier, null);

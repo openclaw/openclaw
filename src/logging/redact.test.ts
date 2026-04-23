@@ -45,6 +45,17 @@ describe("redactSensitiveText", () => {
     expect(output).toBe('{"token":"abcdef…ghij"}');
   });
 
+  it("masks Matrix access token fields and query parameters", () => {
+    const json = '{"access_token":"abcdef1234567890ghij"}';
+    const url = "https://matrix.example/_matrix/client/v3/sync?access_token=zyxwv9876543210token";
+    expect(redactSensitiveText(json, { mode: "tools", patterns: defaults })).toBe(
+      '{"access_token":"abcdef…ghij"}',
+    );
+    expect(redactSensitiveText(url, { mode: "tools", patterns: defaults })).toBe(
+      "https://matrix.example/_matrix/client/v3/sync?access_token=zyxwv9…oken",
+    );
+  });
+
   it("masks bearer tokens", () => {
     const input = "Authorization: Bearer abcdef1234567890ghij";
     const output = redactSensitiveText(input, {

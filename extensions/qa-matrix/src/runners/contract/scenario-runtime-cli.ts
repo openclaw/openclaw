@@ -2,6 +2,7 @@ import { spawn as startOpenClawCliProcess } from "node:child_process";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
 
 export type MatrixQaCliRunResult = {
   args: string[];
@@ -23,8 +24,28 @@ export type MatrixQaCliSession = {
   kill: () => void;
 };
 
-function formatMatrixQaCliCommand(args: string[]) {
-  return `openclaw ${args.join(" ")}`;
+const MATRIX_QA_CLI_SECRET_ARG_FLAGS = new Set(["--access-token", "--password", "--recovery-key"]);
+
+function redactMatrixQaCliArgs(args: string[]): string[] {
+  return args.map((arg, index) => {
+    const [flag] = arg.split("=", 1);
+    if (MATRIX_QA_CLI_SECRET_ARG_FLAGS.has(flag) && arg.includes("=")) {
+      return `${flag}=[REDACTED]`;
+    }
+    const previous = args[index - 1];
+    if (previous && MATRIX_QA_CLI_SECRET_ARG_FLAGS.has(previous)) {
+      return "[REDACTED]";
+    }
+    return arg;
+  });
+}
+
+export function redactMatrixQaCliOutput(text: string): string {
+  return redactSensitiveText(text);
+}
+
+export function formatMatrixQaCliCommand(args: string[]) {
+  return `openclaw ${redactMatrixQaCliArgs(args).join(" ")}`;
 }
 
 function buildMatrixQaCliResult(params: {
@@ -43,8 +64,8 @@ function buildMatrixQaCliResult(params: {
 function formatMatrixQaCliExitError(result: MatrixQaCliRunResult) {
   return [
     `${formatMatrixQaCliCommand(result.args)} exited ${result.exitCode}`,
-    result.stderr.trim() ? `stderr:\n${result.stderr.trim()}` : null,
-    result.stdout.trim() ? `stdout:\n${result.stdout.trim()}` : null,
+    result.stderr.trim() ? `stderr:\n${redactMatrixQaCliOutput(result.stderr.trim())}` : null,
+    result.stdout.trim() ? `stdout:\n${redactMatrixQaCliOutput(result.stdout.trim())}` : null,
   ]
     .filter(Boolean)
     .join("\n");
@@ -150,7 +171,7 @@ export function startMatrixQaOpenClawCli(params: {
         settleWait = { reject, resolve };
       }).catch((error) => {
         throw new Error(
-          `Matrix QA CLI command failed (${params.args.join(" ")}): ${formatErrorMessage(error)}`,
+          `Matrix QA CLI command failed (${formatMatrixQaCliCommand(params.args)}): ${redactMatrixQaCliOutput(formatErrorMessage(error))}`,
         );
       }),
     waitForOutput: async (predicate, label, timeoutMs) => {
@@ -168,7 +189,7 @@ export function startMatrixQaOpenClawCli(params: {
       }
       const output = readOutput();
       throw new Error(
-        `openclaw ${params.args.join(" ")} did not print ${label} before timeout\nstdout:\n${output.stdout.trim()}\nstderr:\n${output.stderr.trim()}`,
+        `${formatMatrixQaCliCommand(params.args)} did not print ${label} before timeout\nstdout:\n${redactMatrixQaCliOutput(output.stdout.trim())}\nstderr:\n${redactMatrixQaCliOutput(output.stderr.trim())}`,
       );
     },
     writeStdin: async (text) => {

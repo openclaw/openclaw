@@ -188,6 +188,34 @@ describe("MatrixVerificationManager", () => {
     expect(secondSummary.chosenMethod).toBe("m.sas.v1");
   });
 
+  it("does not overwrite a different verification request with a colliding transaction ID", async () => {
+    const manager = new MatrixVerificationManager();
+    const first = new MockVerificationRequest({
+      transactionId: "txn-collision",
+      initiatedByMe: true,
+      otherUserId: "@alice:example.org",
+      otherDeviceId: "ALICE1",
+    });
+    const second = new MockVerificationRequest({
+      transactionId: "txn-collision",
+      initiatedByMe: true,
+      otherUserId: "@mallory:example.org",
+      otherDeviceId: "MALLORY1",
+    });
+
+    const firstSummary = manager.trackVerificationRequest(first);
+    const secondSummary = manager.trackVerificationRequest(second);
+
+    expect(secondSummary.id).not.toBe(firstSummary.id);
+    expect(manager.listVerifications()).toHaveLength(2);
+    expect(() => manager.getVerificationSas("txn-collision")).toThrow(
+      "Matrix verification request id is ambiguous for transaction txn-collision",
+    );
+    await manager.acceptVerification(firstSummary.id);
+    expect(first.accept).toHaveBeenCalledTimes(1);
+    expect(second.accept).not.toHaveBeenCalled();
+  });
+
   it("starts SAS verification and exposes SAS payload/callback flow", async () => {
     const confirm = vi.fn(async () => {});
     const mismatch = vi.fn();
