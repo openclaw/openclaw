@@ -99,7 +99,7 @@ export async function handleAbortChat(host: ChatHost) {
     await abortChatRun(host as unknown as ChatState);
   } else if (host.chatRunId) {
     host.chatRunId = null;
-    (host as unknown as { chatStream: string | null }).chatStream = null;
+    host.chatStream = null;
     host.lastError = "Aborted (gateway offline)";
   }
 }
