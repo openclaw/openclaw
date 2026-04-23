@@ -56,30 +56,30 @@ This custom build adds comprehensive media support to OpenClaw across multiple c
 - SVG
 - BMP
   
+## Platform summary
+  
+| Platform | Images | Audio | Video | Social Embeds |
+| -------- | ------ | ----- | ----- | ------------- |
+| WebChat  | ✅     | ✅    | ✅    | ✅            |
+| Telegram | ✅     | ❌    | ❌    | ❌            |
+  
 ## Extra features
   
 - Added resize handles on webchat messages so you can resize media!
 - Added audio/video memory playback. Close or refresh the browser, it remembers where you stopped.
 - Added new core tool for downloading YouTube and other video's called download_video using yt-dlp
 
-## Platform summary
-
-| Platform | Images | Audio | Video | Social Embeds |
-| -------- | ------ | ----- | ----- | ------------- |
-| WebChat  | ✅     | ✅    | ✅    | ✅            |
-| Telegram | ✅     | ❌    | ❌    | ❌            |
-
 ## Implementation details
-
+  
 - Local HTTP media server (port 18791) for WebChat streaming of local files.
 - Extension-based MIME mapping for audio/video
 - MIME detection for images
 - Social media URL pattern matching
-
+  
 ## Breaking changes
-
+  
 None - all features are additive.
-
+  
 ## Some Screenshots
 
 <img width="1446" height="953" alt="Rocky-Mountaineer-screenshot-small" src="https://github.com/user-attachments/assets/7f49f842-af5b-45fd-8fd3-30e6c79c2bb4" /><br>
@@ -91,7 +91,6 @@ None - all features are additive.
 <img width="1627" height="1078" alt="media-server" src="https://github.com/user-attachments/assets/42f464e9-2b48-4e89-a3fd-e743b01124fa" /><br>  
   
 https://github.com/user-attachments/assets/a11f41b2-0262-48c7-8ba2-7c5462840d6f  
-  
 
 ## Examples
   
