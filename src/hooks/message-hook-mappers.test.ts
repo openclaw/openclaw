@@ -6,6 +6,7 @@ import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/c
 import {
   buildCanonicalSentMessageHookContext,
   deriveInboundMessageHookContext,
+  normalizeMessagingConversationId,
   toPluginInboundClaimEvent,
   toPluginInboundClaimContext,
   toInternalMessagePreprocessedContext,
@@ -137,7 +138,7 @@ describe("message hook mappers", () => {
     expect(toPluginMessageContext(canonical)).toEqual({
       channelId: "demo-chat",
       accountId: "acc-1",
-      conversationId: "demo-chat:chat:456",
+      conversationId: "chat:456",
     });
     expect(toPluginMessageReceivedEvent(canonical)).toEqual({
       from: "demo-chat:user:123",
@@ -245,7 +246,7 @@ describe("message hook mappers", () => {
     expect(toPluginMessageContext(canonical)).toEqual({
       channelId: "demo-chat",
       accountId: "acc-1",
-      conversationId: "demo-chat:chat:456",
+      conversationId: "chat:456",
     });
     expect(toPluginMessageSentEvent(canonical)).toEqual({
       to: "demo-chat:chat:456",
@@ -265,5 +266,16 @@ describe("message hook mappers", () => {
       isGroup: true,
       groupId: "demo-chat:chat:456",
     });
+  });
+
+  it("normalizes outbound conversation ids with common prefixes", () => {
+    expect(normalizeMessagingConversationId("telegram", "telegram:8514222276")).toBe("8514222276");
+    expect(normalizeMessagingConversationId("slack", "channel:C02GQA1RLB0")).toBe("C02GQA1RLB0");
+    expect(normalizeMessagingConversationId("discord", "user:1177378744822943744")).toBe(
+      "1177378744822943744",
+    );
+    expect(normalizeMessagingConversationId("msteams", "19:conv@thread.v2")).toBe(
+      "19:conv@thread.v2",
+    );
   });
 });
