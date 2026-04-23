@@ -2,8 +2,8 @@ import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pair
 import {
   ensureConfiguredBindingRouteReady,
   resolveConfiguredBindingRoute,
+  resolveRuntimeConversationBindingRoute,
 } from "openclaw/plugin-sdk/conversation-runtime";
-import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
 import { resolveAgentOutboundIdentity } from "openclaw/plugin-sdk/outbound-runtime";
 import {
   buildPendingHistoryContextFromMap,
@@ -12,8 +12,6 @@ import {
   recordPendingHistoryEntryIfEnabled,
   type HistoryEntry,
 } from "openclaw/plugin-sdk/reply-history";
-import { deriveLastRoutePolicy } from "openclaw/plugin-sdk/routing";
-import { resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
 import {
   resolveDefaultGroupPolicy,
   resolveOpenProviderRuntimeGroupPolicy,
@@ -494,7 +492,6 @@ export async function handleFeishuMessage(params: {
       }
       return;
     }
-  } else {
   }
 
   try {
@@ -651,28 +648,22 @@ export async function handleFeishuMessage(params: {
       // Bound Feishu conversations intentionally require an exact live conversation-id match.
       // Sender-scoped topic sessions therefore bind on `chat:topic:root:sender:user`, while
       // configured ACP bindings may still inherit the shared `chat:topic:root` topic session.
-      const threadBinding = getSessionBindingService().resolveByConversation({
-        channel: "feishu",
-        accountId: account.accountId,
-        conversationId: currentConversationId,
-        ...(parentConversationId ? { parentConversationId } : {}),
+      const runtimeRoute = resolveRuntimeConversationBindingRoute({
+        route,
+        conversation: {
+          channel: "feishu",
+          accountId: account.accountId,
+          conversationId: currentConversationId,
+          ...(parentConversationId ? { parentConversationId } : {}),
+        },
       });
-      const boundSessionKey = threadBinding?.targetSessionKey?.trim();
-      if (threadBinding && boundSessionKey) {
-        route = {
-          ...route,
-          sessionKey: boundSessionKey,
-          agentId: resolveAgentIdFromSessionKey(boundSessionKey) || route.agentId,
-          lastRoutePolicy: deriveLastRoutePolicy({
-            sessionKey: boundSessionKey,
-            mainSessionKey: route.mainSessionKey,
-          }),
-          matchedBy: "binding.channel",
-        };
+      route = runtimeRoute.route;
+      if (runtimeRoute.bindingRecord) {
         configuredBinding = null;
-        getSessionBindingService().touch(threadBinding.bindingId);
         log(
-          `feishu[${account.accountId}]: routed via bound conversation ${currentConversationId} -> ${boundSessionKey}`,
+          runtimeRoute.boundSessionKey
+            ? `feishu[${account.accountId}]: routed via bound conversation ${currentConversationId} -> ${runtimeRoute.boundSessionKey}`
+            : `feishu[${account.accountId}]: plugin-bound conversation ${currentConversationId}`,
         );
       }
     }

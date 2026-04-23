@@ -23,9 +23,13 @@ host configuration.
 
 ## Session key shapes (examples)
 
-Direct messages collapse to the agent’s **main** session:
+Direct messages collapse to the agent’s **main** session by default:
 
 - `agent:<agentId>:<mainKey>` (default: `agent:main:main`)
+
+Even when direct-message conversation history is shared with main, sandbox and
+tool policy use a derived per-account direct-chat runtime key for external DMs
+so channel-originated messages are not treated like local main-session runs.
 
 Groups and channels remain isolated per channel:
 

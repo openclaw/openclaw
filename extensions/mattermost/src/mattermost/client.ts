@@ -329,7 +329,7 @@ export async function createMattermostDirectChannelWithRetry(
       // Calculate exponential backoff delay with full-jitter
       // Jitter is proportional to the exponential delay, not a fixed 1000ms
       // This ensures backoff behaves correctly for small delay configurations
-      const exponentialDelay = initialDelayMs * Math.pow(2, attempt);
+      const exponentialDelay = initialDelayMs * 2 ** attempt;
       const jitter = Math.random() * exponentialDelay;
       const delayMs = Math.min(exponentialDelay + jitter, maxDelayMs);
 

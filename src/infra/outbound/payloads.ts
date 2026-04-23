@@ -10,19 +10,25 @@ import { resolveSilentReplySettings } from "../../config/silent-reply.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   hasInteractiveReplyBlocks,
+  hasMessagePresentationBlocks,
   hasReplyChannelData,
   hasReplyPayloadContent,
   type InteractiveReply,
+  type MessagePresentation,
+  type ReplyPayloadDelivery,
 } from "../../interactive/payload.js";
 import {
   resolveSilentReplyRewriteText,
   type SilentReplyConversationType,
 } from "../../shared/silent-reply-policy.js";
+import { resolvePendingSpawnedChildren } from "./pending-spawn-query.js";
 
 export type NormalizedOutboundPayload = {
   text: string;
   mediaUrls: string[];
   audioAsVoice?: boolean;
+  presentation?: MessagePresentation;
+  delivery?: ReplyPayloadDelivery;
   interactive?: InteractiveReply;
   channelData?: Record<string, unknown>;
 };
@@ -32,6 +38,8 @@ export type OutboundPayloadJson = {
   mediaUrl: string | null;
   mediaUrls?: string[];
   audioAsVoice?: boolean;
+  presentation?: MessagePresentation;
+  delivery?: ReplyPayloadDelivery;
   interactive?: InteractiveReply;
   channelData?: Record<string, unknown>;
 };
@@ -39,6 +47,7 @@ export type OutboundPayloadJson = {
 export type OutboundPayloadPlan = {
   payload: ReplyPayload;
   parts: ReturnType<typeof resolveSendableOutboundReplyParts>;
+  hasPresentation: boolean;
   hasInteractive: boolean;
   hasChannelData: boolean;
 };
@@ -48,6 +57,14 @@ type OutboundPayloadPlanContext = {
   sessionKey?: string;
   surface?: string;
   conversationType?: SilentReplyConversationType;
+  /**
+   * When true, bare silent payloads are dropped instead of being rewritten to
+   * visible fallback text. Set by callers that know the parent session has at
+   * least one pending spawned child whose completion will deliver the real
+   * reply. If omitted, the outbound plan consults the registered runtime query
+   * (see `pending-spawn-query.ts`).
+   */
+  hasPendingSpawnedChildren?: boolean;
 };
 
 export type OutboundPayloadMirror = {
@@ -104,6 +121,7 @@ function mergeMediaUrls(...lists: Array<ReadonlyArray<string | undefined> | unde
 
 type PreparedOutboundPayloadPlanEntry = {
   payload: ReplyPayload;
+  hasPresentation: boolean;
   hasInteractive: boolean;
   hasChannelData: boolean;
   isSilent: boolean;
@@ -149,6 +167,7 @@ function createOutboundPayloadPlanEntry(
   const hasChannelData = hasReplyChannelData(normalizedPayload.channelData);
   return {
     payload: normalizedPayload,
+    hasPresentation: hasMessagePresentationBlocks(normalizedPayload.presentation),
     hasInteractive: hasInteractiveReplyBlocks(normalizedPayload.interactive),
     hasChannelData,
     isSilent,
@@ -168,6 +187,8 @@ export function createOutboundPayloadPlan(
     surface: context.surface,
     conversationType: context.conversationType,
   });
+  const hasPendingSpawnedChildren =
+    context.hasPendingSpawnedChildren ?? resolvePendingSpawnedChildren(context.sessionKey);
   const prepared: PreparedOutboundPayloadPlanEntry[] = [];
   for (const payload of payloads) {
     const entry = createOutboundPayloadPlanEntry(payload);
@@ -192,12 +213,17 @@ export function createOutboundPayloadPlan(
       plan.push({
         payload: entry.payload,
         parts: resolveSendableOutboundReplyParts(entry.payload),
+        hasPresentation: entry.hasPresentation,
         hasInteractive: entry.hasInteractive,
         hasChannelData: entry.hasChannelData,
       });
       continue;
     }
-    if (hasVisibleNonSilentContent || resolvedSilentReplySettings.policy === "allow") {
+    if (
+      hasVisibleNonSilentContent ||
+      resolvedSilentReplySettings.policy === "allow" ||
+      hasPendingSpawnedChildren
+    ) {
       continue;
     }
     if (!resolvedSilentReplySettings.rewrite) {
@@ -211,6 +237,7 @@ export function createOutboundPayloadPlan(
       plan.push({
         payload: visibleSilentPayload,
         parts: resolveSendableOutboundReplyParts(visibleSilentPayload),
+        hasPresentation: entry.hasPresentation,
         hasInteractive: entry.hasInteractive,
         hasChannelData: entry.hasChannelData,
       });
@@ -228,6 +255,7 @@ export function createOutboundPayloadPlan(
     plan.push({
       payload: rewrittenPayload,
       parts: resolveSendableOutboundReplyParts(rewrittenPayload),
+      hasPresentation: entry.hasPresentation,
       hasInteractive: entry.hasInteractive,
       hasChannelData: entry.hasChannelData,
     });
@@ -260,6 +288,8 @@ export function projectOutboundPayloadPlanForOutbound(
       text,
       mediaUrls: entry.parts.mediaUrls,
       audioAsVoice: payload.audioAsVoice === true ? true : undefined,
+      ...(entry.hasPresentation ? { presentation: payload.presentation } : {}),
+      ...(payload.delivery ? { delivery: payload.delivery } : {}),
       ...(entry.hasInteractive ? { interactive: payload.interactive } : {}),
       ...(entry.hasChannelData ? { channelData: payload.channelData } : {}),
     });
@@ -278,6 +308,8 @@ export function projectOutboundPayloadPlanForJson(
       mediaUrl: payload.mediaUrl ?? null,
       mediaUrls: entry.parts.mediaUrls.length ? entry.parts.mediaUrls : undefined,
       audioAsVoice: payload.audioAsVoice === true ? true : undefined,
+      presentation: payload.presentation,
+      delivery: payload.delivery,
       interactive: payload.interactive,
       channelData: payload.channelData,
     });
@@ -305,6 +337,8 @@ export function summarizeOutboundPayloadForTransport(
     text: parts.text,
     mediaUrls: parts.mediaUrls,
     audioAsVoice: payload.audioAsVoice === true ? true : undefined,
+    presentation: payload.presentation,
+    delivery: payload.delivery,
     interactive: payload.interactive,
     channelData: payload.channelData,
   };

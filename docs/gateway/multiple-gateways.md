@@ -10,83 +10,31 @@ title: "Multiple Gateways"
 
 Most setups should use one Gateway because a single Gateway can handle multiple messaging connections and agents. If you need stronger isolation or redundancy (e.g., a rescue bot), run separate Gateways with isolated profiles/ports.
 
-## Isolation checklist (required)
+## Best Recommended Setup
 
-- `OPENCLAW_CONFIG_PATH` — per-instance config file
-- `OPENCLAW_STATE_DIR` — per-instance sessions, creds, caches
-- `agents.defaults.workspace` — per-instance workspace root
-- `gateway.port` (or `--port`) — unique per instance
-- Derived ports (browser/canvas) must not overlap
-
-If these are shared, you will hit config races and port conflicts.
-
-## Recommended: use the default profile for main, a named profile for rescue
-
-Profiles auto-scope `OPENCLAW_STATE_DIR` + `OPENCLAW_CONFIG_PATH` and suffix service names. For
-most rescue-bot setups, keep the main bot on the default profile and give only
-the rescue bot a named profile such as `rescue`.
-
-```bash
-# main (default profile)
-openclaw setup
-openclaw gateway --port 18789
-
-# rescue
-openclaw --profile rescue setup
-openclaw --profile rescue gateway --port 19001
-```
-
-Services:
-
-```bash
-openclaw gateway install
-openclaw --profile rescue gateway install
-```
-
-If you want both Gateways to use named profiles, that also works, but it is not
-required.
-
-## Rescue-bot guide
-
-Recommended setup:
+For most users, the simplest rescue-bot setup is:
 
 - keep the main bot on the default profile
 - run the rescue bot on `--profile rescue`
 - use a completely separate Telegram bot for the rescue account
-- keep the rescue bot on a different base port such as `19001`
+- keep the rescue bot on a different base port such as `19789`
 
 This keeps the rescue bot isolated from the main bot so it can debug or apply
 config changes if the primary bot is down. Leave at least 20 ports between
 base ports so the derived browser/canvas/CDP ports never collide.
 
-### Recommended rescue channel/account
+## Rescue-Bot Quickstart
 
-For most setups, use a completely separate Telegram bot for the rescue profile.
-
-Why Telegram:
-
-- easy to keep operator-only
-- separate bot token and identity
-- independent from the main bot's channel/app install
-- simple DM-based recovery path when the main bot is broken
-
-The important part is full independence: separate bot account, separate
-credentials, separate OpenClaw profile, separate workspace, and separate port.
-
-### Recommended install flow
-
-Use this as the default setup unless you have a strong reason to do something
+Use this as the default path unless you have a strong reason to do something
 else:
 
 ```bash
-# Main bot (default profile, port 18789)
-openclaw onboard
-openclaw gateway install
-
-# Rescue bot (separate Telegram bot, separate profile, port 19001)
+# Rescue bot (separate Telegram bot, separate profile, port 19789)
 openclaw --profile rescue onboard
-openclaw --profile rescue gateway install
+openclaw --profile rescue gateway install --port 19789
 ```
+
+If your main bot is already running, that is usually all you need.
 
 During `openclaw --profile rescue onboard`:
 
@@ -98,7 +46,24 @@ During `openclaw --profile rescue onboard`:
 If onboarding already installed the rescue service for you, the final
 `gateway install` is not needed.
 
-### What onboarding changes
+## Why This Works
+
+The rescue bot stays independent because it has its own:
+
+- profile/config
+- state directory
+- workspace
+- base port (plus derived ports)
+- Telegram bot token
+
+For most setups, use a completely separate Telegram bot for the rescue profile:
+
+- easy to keep operator-only
+- separate bot token and identity
+- independent from the main bot's channel/app install
+- simple DM-based recovery path when the main bot is broken
+
+## What `--profile rescue onboard` Changes
 
 `openclaw --profile rescue onboard` uses the normal onboarding flow, but it
 writes everything into a separate profile.
@@ -111,6 +76,57 @@ In practice, that means the rescue bot gets its own:
 - managed service name
 
 The prompts are otherwise the same as normal onboarding.
+
+## General Multi-Gateway Setup
+
+The rescue-bot layout above is the easiest default, but the same isolation
+pattern works for any pair or group of Gateways on one host.
+
+For a more general setup, give each extra Gateway its own named profile and its
+own base port:
+
+```bash
+# main (default profile)
+openclaw setup
+openclaw gateway --port 18789
+
+# extra gateway
+openclaw --profile ops setup
+openclaw --profile ops gateway --port 19789
+```
+
+If you want both Gateways to use named profiles, that also works:
+
+```bash
+openclaw --profile main setup
+openclaw --profile main gateway --port 18789
+
+openclaw --profile ops setup
+openclaw --profile ops gateway --port 19789
+```
+
+Services follow the same pattern:
+
+```bash
+openclaw gateway install
+openclaw --profile ops gateway install --port 19789
+```
+
+Use the rescue-bot quickstart when you want a fallback operator lane. Use the
+general profile pattern when you want multiple long-lived Gateways for
+different channels, tenants, workspaces, or operational roles.
+
+## Isolation Checklist
+
+Keep these unique per Gateway instance:
+
+- `OPENCLAW_CONFIG_PATH` — per-instance config file
+- `OPENCLAW_STATE_DIR` — per-instance sessions, creds, caches
+- `agents.defaults.workspace` — per-instance workspace root
+- `gateway.port` (or `--port`) — unique per instance
+- derived browser/canvas/CDP ports
+
+If these are shared, you will hit config races and port conflicts.
 
 ## Port mapping (derived)
 
@@ -138,7 +154,7 @@ openclaw gateway --port 18789
 
 OPENCLAW_CONFIG_PATH=~/.openclaw/rescue.json \
 OPENCLAW_STATE_DIR=~/.openclaw-rescue \
-openclaw gateway --port 19001
+openclaw gateway --port 19789
 ```
 
 ## Quick checks

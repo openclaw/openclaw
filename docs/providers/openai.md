@@ -16,6 +16,21 @@ OpenAI provides developer APIs for GPT models. OpenClaw supports two auth routes
 
 OpenAI explicitly supports subscription OAuth usage in external tools and workflows like OpenClaw.
 
+## OpenClaw feature coverage
+
+| OpenAI capability         | OpenClaw surface                          | Status                                                 |
+| ------------------------- | ----------------------------------------- | ------------------------------------------------------ |
+| Chat / Responses          | `openai/<model>` model provider           | Yes                                                    |
+| Codex subscription models | `openai-codex/<model>` model provider     | Yes                                                    |
+| Server-side web search    | Native OpenAI Responses tool              | Yes, when web search is enabled and no provider pinned |
+| Images                    | `image_generate`                          | Yes                                                    |
+| Videos                    | `video_generate`                          | Yes                                                    |
+| Text-to-speech            | `messages.tts.provider: "openai"` / `tts` | Yes                                                    |
+| Batch speech-to-text      | `tools.media.audio` / media understanding | Yes                                                    |
+| Streaming speech-to-text  | Voice Call `streaming.provider: "openai"` | Yes                                                    |
+| Realtime voice            | Voice Call `realtime.provider: "openai"`  | Yes                                                    |
+| Embeddings                | memory embedding provider                 | Yes                                                    |
+
 ## Getting started
 
 Choose your preferred auth method and follow the setup steps.
@@ -158,17 +173,17 @@ The bundled `openai` plugin registers image generation through the `image_genera
 
 | Capability                | Value                              |
 | ------------------------- | ---------------------------------- |
-| Default model             | `openai/gpt-image-1`               |
+| Default model             | `openai/gpt-image-2`               |
 | Max images per request    | 4                                  |
 | Edit mode                 | Enabled (up to 5 reference images) |
-| Size overrides            | Supported                          |
+| Size overrides            | Supported, including 2K/4K sizes   |
 | Aspect ratio / resolution | Not forwarded to OpenAI Images API |
 
 ```json5
 {
   agents: {
     defaults: {
-      imageGenerationModel: { primary: "openai/gpt-image-1" },
+      imageGenerationModel: { primary: "openai/gpt-image-2" },
     },
   },
 }
@@ -177,6 +192,22 @@ The bundled `openai` plugin registers image generation through the `image_genera
 <Note>
 See [Image Generation](/tools/image-generation) for shared tool parameters, provider selection, and failover behavior.
 </Note>
+
+`gpt-image-2` is the default for both OpenAI text-to-image generation and image
+editing. `gpt-image-1` remains usable as an explicit model override, but new
+OpenAI image workflows should use `openai/gpt-image-2`.
+
+Generate:
+
+```
+/tool image_generate model=openai/gpt-image-2 prompt="A polished launch poster for OpenClaw on macOS" size=3840x2160 count=1
+```
+
+Edit:
+
+```
+/tool image_generate model=openai/gpt-image-2 prompt="Preserve the object shape, change the material to translucent glass" image=/path/to/reference.png size=1024x1536
+```
 
 ## Video generation
 
@@ -206,7 +237,9 @@ See [Video Generation](/tools/video-generation) for shared tool parameters, prov
 
 ## GPT-5 prompt contribution
 
-OpenClaw adds an OpenAI-specific GPT-5 prompt contribution for `openai/*` and `openai-codex/*` GPT-5-family runs. It lives in the bundled OpenAI plugin, applies to model ids such as `gpt-5`, `gpt-5.2`, `gpt-5.4`, and `gpt-5.4-mini`, and does not apply to older GPT-4.x models.
+OpenClaw adds a shared GPT-5 prompt contribution for GPT-5-family runs across providers. It applies by model id, so `openai/gpt-5.4`, `openai-codex/gpt-5.4`, `openrouter/openai/gpt-5.4`, `opencode/gpt-5.4`, and other compatible GPT-5 refs receive the same overlay. Older GPT-4.x models do not.
+
+The bundled native Codex harness provider (`codex/*`) uses the same GPT-5 behavior and heartbeat overlay through Codex app-server developer instructions, so `codex/gpt-5.x` sessions keep the same follow-through and proactive heartbeat guidance even though Codex owns the rest of the harness prompt.
 
 The GPT-5 contribution adds a tagged behavior contract for persona persistence, execution safety, tool discipline, output shape, completion checks, and verification. Channel-specific reply and silent-message behavior stays in the shared OpenClaw system prompt and outbound delivery policy. The GPT-5 guidance is always enabled for matching models. The friendly interaction-style layer is separate and configurable.
 
@@ -220,9 +253,11 @@ The GPT-5 contribution adds a tagged behavior contract for persona persistence, 
   <Tab title="Config">
     ```json5
     {
-      plugins: {
-        entries: {
-          openai: { config: { personality: "friendly" } },
+      agents: {
+        defaults: {
+          promptOverlays: {
+            gpt5: { personality: "friendly" },
+          },
         },
       },
     }
@@ -230,7 +265,7 @@ The GPT-5 contribution adds a tagged behavior contract for persona persistence, 
   </Tab>
   <Tab title="CLI">
     ```bash
-    openclaw config set plugins.entries.openai.config.personality off
+    openclaw config set agents.defaults.promptOverlays.gpt5.personality off
     ```
   </Tab>
 </Tabs>
@@ -238,6 +273,10 @@ The GPT-5 contribution adds a tagged behavior contract for persona persistence, 
 <Tip>
 Values are case-insensitive at runtime, so `"Off"` and `"off"` both disable the friendly style layer.
 </Tip>
+
+<Note>
+Legacy `plugins.entries.openai.config.personality` is still read as a compatibility fallback when the shared `agents.defaults.promptOverlays.gpt5.personality` setting is not set.
+</Note>
 
 ## Voice and speech
 
@@ -275,18 +314,56 @@ Values are case-insensitive at runtime, so `"Off"` and `"off"` both disable the 
 
   </Accordion>
 
+  <Accordion title="Speech-to-text">
+    The bundled `openai` plugin registers batch speech-to-text through
+    OpenClaw's media-understanding transcription surface.
+
+    - Default model: `gpt-4o-transcribe`
+    - Endpoint: OpenAI REST `/v1/audio/transcriptions`
+    - Input path: multipart audio file upload
+    - Supported by OpenClaw wherever inbound audio transcription uses
+      `tools.media.audio`, including Discord voice-channel segments and channel
+      audio attachments
+
+    To force OpenAI for inbound audio transcription:
+
+    ```json5
+    {
+      tools: {
+        media: {
+          audio: {
+            models: [
+              {
+                type: "provider",
+                provider: "openai",
+                model: "gpt-4o-transcribe",
+              },
+            ],
+          },
+        },
+      },
+    }
+    ```
+
+    Language and prompt hints are forwarded to OpenAI when supplied by the
+    shared audio media config or per-call transcription request.
+
+  </Accordion>
+
   <Accordion title="Realtime transcription">
     The bundled `openai` plugin registers realtime transcription for the Voice Call plugin.
 
     | Setting | Config path | Default |
     |---------|------------|---------|
     | Model | `plugins.entries.voice-call.config.streaming.providers.openai.model` | `gpt-4o-transcribe` |
+    | Language | `...openai.language` | (unset) |
+    | Prompt | `...openai.prompt` | (unset) |
     | Silence duration | `...openai.silenceDurationMs` | `800` |
     | VAD threshold | `...openai.vadThreshold` | `0.5` |
     | API key | `...openai.apiKey` | Falls back to `OPENAI_API_KEY` |
 
     <Note>
-    Uses a WebSocket connection to `wss://api.openai.com/v1/realtime` with G.711 u-law audio.
+    Uses a WebSocket connection to `wss://api.openai.com/v1/realtime` with G.711 u-law (`g711_ulaw` / `audio/pcmu`) audio. This streaming provider is for Voice Call's realtime transcription path; Discord voice currently records short segments and uses the batch `tools.media.audio` transcription path instead.
     </Note>
 
   </Accordion>

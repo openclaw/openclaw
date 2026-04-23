@@ -369,6 +369,9 @@ Important behavior:
   reachable right now
 - runtime adapters decide which transport shapes they actually support at
   execution time
+- embedded Pi exposes configured MCP tools in normal `coding` and `messaging`
+  tool profiles; `minimal` still hides them, and `tools.deny: ["bundle-mcp"]`
+  disables them explicitly
 
 ## Saved MCP server definitions
 
@@ -427,6 +430,12 @@ Launches a local child process and communicates over stdin/stdout.
 | `args`                     | Array of command-line arguments   |
 | `env`                      | Extra environment variables       |
 | `cwd` / `workingDirectory` | Working directory for the process |
+
+#### Stdio env safety filter
+
+OpenClaw rejects interpreter-startup env keys that can alter how a stdio MCP server starts up before the first RPC, even if they appear in a server's `env` block. Blocked keys include `NODE_OPTIONS`, `PYTHONSTARTUP`, `PYTHONPATH`, `PERL5OPT`, `RUBYOPT`, `SHELLOPTS`, `PS4`, and similar runtime-control variables. Startup rejects these with a configuration error so they cannot inject an implicit prelude, swap the interpreter, or enable a debugger against the stdio process. Ordinary credential, proxy, and server-specific env vars (`GITHUB_TOKEN`, `HTTP_PROXY`, custom `*_API_KEY`, etc.) are unaffected.
+
+If your MCP server genuinely needs one of the blocked variables, set it on the gateway host process instead of under the stdio server's `env`.
 
 ### SSE / HTTP transport
 

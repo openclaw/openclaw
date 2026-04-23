@@ -36,6 +36,12 @@ const queueMocks = vi.hoisted(() => ({
   enqueueDelivery: vi.fn(async () => "mock-queue-id"),
   ackDelivery: vi.fn(async () => {}),
   failDelivery: vi.fn(async () => {}),
+  withActiveDeliveryClaim: vi.fn<
+    (
+      entryId: string,
+      fn: () => Promise<unknown>,
+    ) => Promise<{ status: "claimed"; value: unknown } | { status: "claimed-by-other-owner" }>
+  >(async (_entryId, fn) => ({ status: "claimed", value: await fn() })),
 }));
 const logMocks = vi.hoisted(() => ({
   warn: vi.fn(),
@@ -70,6 +76,7 @@ vi.mock("./delivery-queue.js", () => ({
   enqueueDelivery: queueMocks.enqueueDelivery,
   ackDelivery: queueMocks.ackDelivery,
   failDelivery: queueMocks.failDelivery,
+  withActiveDeliveryClaim: queueMocks.withActiveDeliveryClaim,
 }));
 vi.mock("../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => {
@@ -262,6 +269,11 @@ describe("deliverOutboundPayloads", () => {
     queueMocks.ackDelivery.mockResolvedValue(undefined);
     queueMocks.failDelivery.mockClear();
     queueMocks.failDelivery.mockResolvedValue(undefined);
+    queueMocks.withActiveDeliveryClaim.mockClear();
+    queueMocks.withActiveDeliveryClaim.mockImplementation(async (_entryId, fn) => ({
+      status: "claimed",
+      value: await fn(),
+    }));
     logMocks.warn.mockClear();
   });
 
@@ -954,6 +966,31 @@ describe("deliverOutboundPayloads", () => {
     expect(sendMatrix).not.toHaveBeenCalled();
   });
 
+  it("bails out without sending when a concurrent drain already claimed the queue entry", async () => {
+    // Regression for openclaw/openclaw#70386: if a reconnect or startup drain
+    // observes the newly enqueued entry and claims it before the live send
+    // path claims it, the live path must not send. The drain already owns
+    // ack/fail for that id; sending here would duplicate the outbound and
+    // race queue cleanup.
+    queueMocks.withActiveDeliveryClaim.mockResolvedValueOnce({
+      status: "claimed-by-other-owner",
+    });
+    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m1", roomId: "!room:example" });
+
+    const results = await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room:example",
+      payloads: [{ text: "hi" }],
+      deps: { matrix: sendMatrix },
+    });
+
+    expect(results).toEqual([]);
+    expect(sendMatrix).not.toHaveBeenCalled();
+    expect(queueMocks.ackDelivery).not.toHaveBeenCalled();
+    expect(queueMocks.failDelivery).not.toHaveBeenCalled();
+  });
+
   it("acks the queue entry when delivery is aborted", async () => {
     const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m1", roomId: "!room:example" });
     const abortController = new AbortController();
@@ -1126,6 +1163,145 @@ describe("deliverOutboundPayloads", () => {
     expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
       expect.objectContaining({ to: "!room:1", content: "payload text", success: true }),
       expect.objectContaining({ channelId: "matrix" }),
+    );
+  });
+
+  it("does not fail successful sends when optional delivery pinning fails", async () => {
+    const sendText = vi.fn().mockResolvedValue({ channel: "matrix", messageId: "mx-1" });
+    const pinDeliveredMessage = vi.fn().mockRejectedValue(new Error("pin denied"));
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: { deliveryMode: "direct", sendText, pinDeliveredMessage },
+          }),
+        },
+      ]),
+    );
+
+    const results = await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room:1",
+      payloads: [{ text: "hello", delivery: { pin: true } }],
+    });
+
+    expect(results).toEqual([{ channel: "matrix", messageId: "mx-1" }]);
+    expect(pinDeliveredMessage).toHaveBeenCalledTimes(1);
+    expect(logMocks.warn).toHaveBeenCalledWith(
+      "Delivery pin requested, but channel failed to pin delivered message.",
+      expect.objectContaining({
+        channel: "matrix",
+        messageId: "mx-1",
+        error: "pin denied",
+      }),
+    );
+  });
+
+  it("fails sends when required delivery pinning fails", async () => {
+    const sendText = vi.fn().mockResolvedValue({ channel: "matrix", messageId: "mx-1" });
+    const pinDeliveredMessage = vi.fn().mockRejectedValue(new Error("pin denied"));
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: { deliveryMode: "direct", sendText, pinDeliveredMessage },
+          }),
+        },
+      ]),
+    );
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: {},
+        channel: "matrix",
+        to: "!room:1",
+        payloads: [{ text: "hello", delivery: { pin: { enabled: true, required: true } } }],
+      }),
+    ).rejects.toThrow("pin denied");
+  });
+
+  it("pins the first delivered text chunk for chunked payloads", async () => {
+    const sendText = vi
+      .fn()
+      .mockResolvedValueOnce({ channel: "matrix", messageId: "mx-1" })
+      .mockResolvedValueOnce({ channel: "matrix", messageId: "mx-2" });
+    const pinDeliveredMessage = vi.fn();
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: {
+              deliveryMode: "direct",
+              chunker: chunkText,
+              chunkerMode: "text",
+              textChunkLimit: 2,
+              sendText,
+              pinDeliveredMessage,
+            },
+          }),
+        },
+      ]),
+    );
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room:1",
+      payloads: [{ text: "abcd", delivery: { pin: true } }],
+    });
+
+    expect(sendText).toHaveBeenCalledTimes(2);
+    expect(pinDeliveredMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ messageId: "mx-1" }),
+    );
+  });
+
+  it("pins the first delivered media message for multi-media payloads", async () => {
+    const sendText = vi.fn().mockResolvedValue({ channel: "matrix", messageId: "mx-text" });
+    const sendMedia = vi
+      .fn()
+      .mockResolvedValueOnce({ channel: "matrix", messageId: "mx-1" })
+      .mockResolvedValueOnce({ channel: "matrix", messageId: "mx-2" });
+    const pinDeliveredMessage = vi.fn();
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: { deliveryMode: "direct", sendText, sendMedia, pinDeliveredMessage },
+          }),
+        },
+      ]),
+    );
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room:1",
+      payloads: [
+        {
+          text: "caption",
+          mediaUrls: ["https://example.com/a.png", "https://example.com/b.png"],
+          delivery: { pin: true },
+        },
+      ],
+    });
+
+    expect(sendMedia).toHaveBeenCalledTimes(2);
+    expect(pinDeliveredMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ messageId: "mx-1" }),
     );
   });
 
