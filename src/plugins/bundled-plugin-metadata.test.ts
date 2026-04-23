@@ -351,8 +351,8 @@ describe("bundled plugin metadata", () => {
     ).toBe(path.join(pluginRoot, "index.ts"));
   });
 
-  it("prefers direct scan-dir overrides over nested dist artifacts within the same override root", () => {
-    const pluginsDir = createGeneratedPluginTempRoot("openclaw-bundled-plugin-direct-priority-");
+  it("resolves bundled repo entry paths from dist before workspace source", () => {
+    const pluginsDir = createGeneratedPluginTempRoot("openclaw-bundled-plugin-dist-priority-");
     const pluginRoot = path.join(pluginsDir, "alpha");
     const nestedDistPluginRoot = path.join(pluginsDir, "dist", "extensions", "alpha");
 
@@ -375,7 +375,7 @@ describe("bundled plugin metadata", () => {
         "alpha",
         pluginsDir,
       ),
-    ).toBe(path.join(pluginRoot, "index.js"));
+    ).toBe(path.join(nestedDistPluginRoot, "index.js"));
   });
 
   it("resolves bundled repo entry paths from dist before workspace source", () => {
