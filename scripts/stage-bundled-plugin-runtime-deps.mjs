@@ -918,6 +918,28 @@ function stageInstalledRootRuntimeDeps(params) {
     "node_modules",
   );
 
+  // Materialize a minimal openclaw package root so providers can resolve
+  // bare-specifier imports like `import { ... } from "openclaw/plugin-sdk/..."`.
+  // The staging flow copies transitive deps into a fresh node_modules/ under
+  // the plugin cache, but omits the host openclaw package itself. At runtime,
+  // when the provider executes from ~/.openclaw/plugin-runtime-deps/<hash>/,
+  // jiti's resolveLoaderPluginSdkPackageRoot walks up looking for a
+  // package.json with name="openclaw" and fails without this materialized root.
+  const openclawTarget = path.join(stagedNodeModulesDir, "openclaw");
+  fs.mkdirSync(openclawTarget, { recursive: true });
+  // Copy package.json (needed for exports resolution and name="openclaw" detection)
+  const rootPackageJsonPath = path.join(repoRoot, "package.json");
+  if (fs.existsSync(rootPackageJsonPath)) {
+    fs.copyFileSync(rootPackageJsonPath, path.join(openclawTarget, "package.json"));
+  }
+  // Copy only dist/plugin-sdk/ (compiled SDK modules for subpath exports)
+  const rootPluginSdkDist = path.join(repoRoot, "dist", "plugin-sdk");
+  if (fs.existsSync(rootPluginSdkDist)) {
+    fs.cpSync(rootPluginSdkDist, path.join(openclawTarget, "dist", "plugin-sdk"), {
+      recursive: true,
+    });
+  }
+
   try {
     for (const record of rootsToCopy.toSorted((left, right) =>
       left.name.localeCompare(right.name),
