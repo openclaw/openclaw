@@ -194,10 +194,7 @@ describe("buildReplyPayloads media filter integration", () => {
     // path. Without re-normalizing the pipeline's sent URLs through the same
     // `normalizeMediaPaths`, the comparison happens across two different URL
     // spaces and the duplicate attachment is never stripped.
-    const normalizeMediaPaths = async (payload: {
-      mediaUrl?: string;
-      mediaUrls?: string[];
-    }) => {
+    const normalizeMediaPaths = async (payload: { mediaUrl?: string; mediaUrls?: string[] }) => {
       const rewrite = (value?: string) =>
         value === "file:///tmp/voice.ogg" ? "file:///tmp/outbound/abc.ogg" : value;
       return {
@@ -236,6 +233,53 @@ describe("buildReplyPayloads media filter integration", () => {
       mediaUrl: undefined,
       mediaUrls: undefined,
     });
+  });
+
+  it("suppresses a final text+media payload that exactly matches an already-sent block (regression #70441)", async () => {
+    // Codex flagged on PR #70441: if the media filter runs BEFORE hasSentPayload,
+    // a text+media payload already dispatched as a block gets stripped of its
+    // media first. `hasSentPayload` then hashes the payload without media and
+    // never matches the original {text, mediaList} content key, so the text
+    // portion gets re-emitted as a duplicate. The fix is to run content-key
+    // suppression first, THEN strip leftover block-streamed media.
+    const sentBlockKey = JSON.stringify({
+      text: "caption",
+      mediaList: ["file:///tmp/outbound/abc.ogg"],
+    });
+    const pipeline: Parameters<typeof buildReplyPayloads>[0]["blockReplyPipeline"] = {
+      didStream: () => false,
+      isAborted: () => false,
+      hasSentPayload: (payload) => {
+        const reply = {
+          text: (payload.text ?? "").trim(),
+          mediaList: [
+            ...(payload.mediaUrl ? [payload.mediaUrl] : []),
+            ...(payload.mediaUrls ?? []),
+          ],
+        };
+        return JSON.stringify({ text: reply.text, mediaList: reply.mediaList }) === sentBlockKey;
+      },
+      enqueue: () => {},
+      flush: async () => {},
+      stop: () => {},
+      hasBuffered: () => false,
+      getSentMediaUrls: () => ["file:///tmp/outbound/abc.ogg"],
+    };
+
+    const normalizeMediaPaths = async (payload: { mediaUrl?: string; mediaUrls?: string[] }) =>
+      payload;
+
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      blockStreamingEnabled: true,
+      blockReplyPipeline: pipeline,
+      normalizeMediaPaths,
+      payloads: [{ text: "caption", mediaUrl: "file:///tmp/outbound/abc.ogg" }],
+    });
+
+    // The entire payload should be suppressed — neither the text nor the media
+    // should be re-emitted.
+    expect(replyPayloads).toHaveLength(0);
   });
 
   it("drops all final payloads when block pipeline streamed successfully", async () => {

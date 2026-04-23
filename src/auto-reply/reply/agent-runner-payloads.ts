@@ -228,33 +228,41 @@ export async function buildReplyPayloads(params: {
   // leaving the duplicate delivery bug in place for any deployment that
   // rewrites media URLs during normalization. This mirrors the messaging-
   // tool path above.
+  // Order matters: run the exact-content `hasSentPayload` / `directlySentBlockKeys`
+  // suppression BEFORE stripping block-streamed media URLs. `createBlockReplyContentKey`
+  // hashes both text and media, so any mutation of the media list before that check
+  // causes an already-sent text+media block to be re-emitted (its text without media)
+  // in the final payload path. Codex flagged this regression on PR #70441.
+  const contentSuppressedPayloads = shouldDropFinalPayloads
+    ? mediaFilteredPayloads.filter((payload) => payload.isError)
+    : params.blockStreamingEnabled
+      ? mediaFilteredPayloads.filter(
+          (payload) => !params.blockReplyPipeline?.hasSentPayload(payload),
+        )
+      : params.directlySentBlockKeys?.size
+        ? mediaFilteredPayloads.filter(
+            (payload) => !params.directlySentBlockKeys!.has(createBlockReplyContentKey(payload)),
+          )
+        : mediaFilteredPayloads;
   const blockSentMediaUrls = params.blockStreamingEnabled
     ? await normalizeSentMediaUrlsForDedupe({
         sentMediaUrls: params.blockReplyPipeline?.getSentMediaUrls() ?? [],
         normalizeMediaPaths: params.normalizeMediaPaths,
       })
     : [];
-  const blockMediaFilteredPayloads =
+  // After exact-content suppression, strip any block-streamed media URLs from the
+  // remaining final payloads. This handles the mixed case where a MEDIA block was
+  // dispatched mid-stream and the same URL then leaks into a distinct final text
+  // payload: the text should still be delivered, but without the duplicate media.
+  const filteredPayloads =
     blockSentMediaUrls.length > 0
       ? (
           dedupeRuntime ?? (await loadReplyPayloadsDedupeRuntime())
         ).filterMessagingToolMediaDuplicates({
-          payloads: mediaFilteredPayloads,
+          payloads: contentSuppressedPayloads,
           sentMediaUrls: blockSentMediaUrls,
         })
-      : mediaFilteredPayloads;
-  // Filter out payloads already sent via pipeline or directly during tool flush.
-  const filteredPayloads = shouldDropFinalPayloads
-    ? blockMediaFilteredPayloads.filter((payload) => payload.isError)
-    : params.blockStreamingEnabled
-      ? blockMediaFilteredPayloads.filter(
-          (payload) => !params.blockReplyPipeline?.hasSentPayload(payload),
-        )
-      : params.directlySentBlockKeys?.size
-        ? blockMediaFilteredPayloads.filter(
-            (payload) => !params.directlySentBlockKeys!.has(createBlockReplyContentKey(payload)),
-          )
-        : blockMediaFilteredPayloads;
+      : contentSuppressedPayloads;
   const replyPayloads = suppressMessagingToolReplies ? [] : filteredPayloads;
 
   return {
