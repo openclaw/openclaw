@@ -133,7 +133,7 @@ runs the same lanes before release approval.
     want artifacts without a failing exit code.
   - Requires two distinct bots in the same private group, with the SUT bot exposing a Telegram username.
   - For stable bot-to-bot observation, enable Bot-to-Bot Communication Mode in `@BotFather` for both bots and ensure the driver bot can observe group bot traffic.
-  - Writes a Telegram QA report, summary, and observed-messages artifact under `.artifacts/qa-e2e/...`.
+  - Writes a Telegram QA report, summary, and observed-messages artifact under `.artifacts/qa-e2e/...`. Replying scenarios include RTT from driver send request to observed SUT reply.
 
 Live transport lanes share one standard contract so new transports do not drift:
 
