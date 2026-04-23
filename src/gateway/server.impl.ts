@@ -1004,6 +1004,7 @@ export async function startGatewayServer(
           nextConfig,
           resolveRuntimeSnapshotGeneration: resolveSharedGatewaySessionGenerationForRuntimeSnapshot,
           clients,
+          logger: log,
         });
       },
       nodeRegistry,

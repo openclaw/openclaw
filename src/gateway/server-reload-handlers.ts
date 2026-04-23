@@ -467,6 +467,7 @@ export function startManagedGatewayConfigReloader(params: ManagedGatewayConfigRe
         disconnectStaleSharedGatewayAuthClients({
           clients: params.clients,
           expectedGeneration: nextSharedGatewaySessionGeneration,
+          logger: params.logReload,
         });
       }
       try {
@@ -482,6 +483,7 @@ export function startManagedGatewayConfigReloader(params: ManagedGatewayConfigRe
           disconnectStaleSharedGatewayAuthClients({
             clients: params.clients,
             expectedGeneration: previousSharedGatewaySessionGeneration,
+            logger: params.logReload,
           });
         }
         throw err;
@@ -515,6 +517,7 @@ export function startManagedGatewayConfigReloader(params: ManagedGatewayConfigRe
             disconnectStaleSharedGatewayAuthClients({
               clients: params.clients,
               expectedGeneration: nextSharedGatewaySessionGeneration,
+              logger: params.logReload,
             });
           } else {
             params.sharedGatewaySessionGenerationState.required = null;
@@ -526,6 +529,7 @@ export function startManagedGatewayConfigReloader(params: ManagedGatewayConfigRe
           disconnectStaleSharedGatewayAuthClients({
             clients: params.clients,
             expectedGeneration: nextSharedGatewaySessionGeneration,
+            logger: params.logReload,
           });
         } else {
           params.sharedGatewaySessionGenerationState.required = null;
