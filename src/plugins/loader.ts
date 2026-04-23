@@ -1234,6 +1234,13 @@ function validatePluginConfig(params: {
   return { ok: false, errors: result.errors.map((error) => error.text) };
 }
 
+function shouldValidatePluginConfigForLoad(params: {
+  value?: unknown;
+  shouldActivate: boolean;
+}): boolean {
+  return params.shouldActivate || params.value !== undefined;
+}
+
 function resolvePluginModuleExport(moduleExport: unknown): {
   definition?: OpenClawPluginDefinition;
   register?: OpenClawPluginDefinition["register"];
@@ -2526,18 +2533,25 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         }
       }
 
-      const validatedConfig = validatePluginConfig({
-        schema: manifestRecord.configSchema,
-        cacheKey: manifestRecord.schemaCacheKey,
-        value: entry?.config,
-      });
+      if (
+        shouldValidatePluginConfigForLoad({
+          value: entry?.config,
+          shouldActivate,
+        })
+      ) {
+        const validatedConfig = validatePluginConfig({
+          schema: manifestRecord.configSchema,
+          cacheKey: manifestRecord.schemaCacheKey,
+          value: entry?.config,
+        });
 
-      if (!validatedConfig.ok) {
-        logger.error(
-          `[plugins] ${record.id} invalid config: ${validatedConfig.errors?.join(", ")}`,
-        );
-        pushPluginLoadError(`invalid config: ${validatedConfig.errors?.join(", ")}`);
-        continue;
+        if (!validatedConfig.ok) {
+          logger.error(
+            `[plugins] ${record.id} invalid config: ${validatedConfig.errors?.join(", ")}`,
+          );
+          pushPluginLoadError(`invalid config: ${validatedConfig.errors?.join(", ")}`);
+          continue;
+        }
       }
 
       if (!shouldLoadModules) {
@@ -3176,15 +3190,22 @@ export async function loadOpenClawPluginCliRegistry(
       continue;
     }
 
-    const validatedConfig = validatePluginConfig({
-      schema: manifestRecord.configSchema,
-      cacheKey: manifestRecord.schemaCacheKey,
-      value: entry?.config,
-    });
-    if (!validatedConfig.ok) {
-      logger.error(`[plugins] ${record.id} invalid config: ${validatedConfig.errors?.join(", ")}`);
-      pushPluginLoadError(`invalid config: ${validatedConfig.errors?.join(", ")}`);
-      continue;
+    if (
+      shouldValidatePluginConfigForLoad({
+        value: entry?.config,
+        shouldActivate: false,
+      })
+    ) {
+      const validatedConfig = validatePluginConfig({
+        schema: manifestRecord.configSchema,
+        cacheKey: manifestRecord.schemaCacheKey,
+        value: entry?.config,
+      });
+      if (!validatedConfig.ok) {
+        logger.error(`[plugins] ${record.id} invalid config: ${validatedConfig.errors?.join(", ")}`);
+        pushPluginLoadError(`invalid config: ${validatedConfig.errors?.join(", ")}`);
+        continue;
+      }
     }
 
     const pluginRoot = safeRealpathOrResolve(candidate.rootDir);

@@ -2375,6 +2375,60 @@ module.exports = { id: "manifest-only-plugin", register() { throw new Error("man
       },
     },
     {
+      label: "skips undefined config validation during non-activating manifest-only snapshots",
+      run: () => {
+        useNoBundledPlugins();
+        const plugin = writePlugin({
+          id: "snapshot-required-config",
+          filename: "snapshot-required-config.cjs",
+          body: `module.exports = { id: "snapshot-required-config", register() {} };`,
+        });
+        fs.writeFileSync(
+          path.join(plugin.dir, "openclaw.plugin.json"),
+          JSON.stringify(
+            {
+              id: "snapshot-required-config",
+              configSchema: {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  token: { type: "string" },
+                },
+                required: ["token"],
+              },
+            },
+            null,
+            2,
+          ),
+          "utf-8",
+        );
+
+        const registry = loadOpenClawPlugins({
+          cache: false,
+          activate: false,
+          loadModules: false,
+          config: {
+            plugins: {
+              load: { paths: [plugin.file] },
+              allow: ["snapshot-required-config"],
+              entries: {
+                "snapshot-required-config": { enabled: true },
+              },
+            },
+          },
+        });
+
+        expect(registry.plugins).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              id: "snapshot-required-config",
+              status: "loaded",
+            }),
+          ]),
+        );
+      },
+    },
+    {
       label: "marks a selected memory slot as matched during manifest-only snapshots",
       run: () => {
         useNoBundledPlugins();
