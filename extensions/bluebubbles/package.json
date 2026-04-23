@@ -38,6 +38,10 @@
       "order": 75,
       "cliAddOptions": [
         {
+          "flags": "--webhook-secret <secret>",
+          "description": "BlueBubbles webhook secret"
+        },
+        {
           "flags": "--webhook-path <path>",
           "description": "BlueBubbles webhook path"
         }

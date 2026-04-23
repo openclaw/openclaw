@@ -264,6 +264,20 @@ describe("bundled plugin metadata", () => {
     ]);
   });
 
+  it("exposes BlueBubbles webhook secret as a manifest-first channels add flag", () => {
+    const bluebubbles = listRepoBundledPluginMetadata().find(
+      (entry) => entry.dirName === "bluebubbles",
+    );
+    expect(bluebubbles?.packageManifest?.channel?.cliAddOptions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          flags: "--webhook-secret <secret>",
+          description: "BlueBubbles webhook secret",
+        }),
+      ]),
+    );
+  });
+
   it("excludes test-only public surface artifacts", () => {
     listRepoBundledPluginMetadata().forEach((entry) =>
       expectTestOnlyArtifactsExcluded(entry.publicSurfaceArtifacts ?? []),

@@ -165,7 +165,7 @@ export const BlueBubblesConfigSchema = bluebubblesAccountSchemaBase
         continue;
       }
       validateBlueBubblesWebhookCredentials({
-        serverUrl: account.serverUrl,
+        serverUrl: account.serverUrl ?? value.serverUrl,
         password: account.password ?? value.password,
         webhookSecret: account.webhookSecret ?? value.webhookSecret,
         ctx,

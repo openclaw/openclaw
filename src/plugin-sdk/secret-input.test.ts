@@ -7,6 +7,7 @@ import { buildSecretInputSchema } from "./secret-input-schema.js";
 import {
   buildOptionalSecretInputSchema,
   buildSecretInputArraySchema,
+  hasMatchingSecretInput,
   normalizeSecretInputString,
 } from "./secret-input.js";
 
@@ -30,6 +31,15 @@ describe("plugin-sdk secret input helpers", () => {
       name: "normalizes plaintext secret strings",
       run: () => normalizeSecretInputString("  sk-test  "),
       expected: "sk-test",
+    },
+    {
+      name: "matches equivalent SecretRef inputs",
+      run: () =>
+        hasMatchingSecretInput(
+          { source: "env", provider: "default", id: "BLUEBUBBLES_SECRET" },
+          { source: "env", provider: "default", id: "BLUEBUBBLES_SECRET" },
+        ),
+      expected: true,
     },
   ])("$name", ({ run, expected }) => {
     expect(run()).toEqual(expected);

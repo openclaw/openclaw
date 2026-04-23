@@ -1,10 +1,7 @@
 import { z } from "zod";
+import { hasMatchingSecretInput } from "../plugin-sdk/secret-input.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
-import {
-  coerceSecretRef,
-  hasConfiguredSecretInput,
-  normalizeSecretInputString,
-} from "./types.secrets.js";
+import { hasConfiguredSecretInput, normalizeSecretInputString } from "./types.secrets.js";
 
 type TelegramAccountLike = {
   enabled?: unknown;
@@ -43,26 +40,6 @@ type BlueBubblesConfigLike = {
   webhookSecret?: unknown;
   accounts?: Record<string, BlueBubblesAccountLike | undefined>;
 };
-
-function hasMatchingSecretInput(left: unknown, right: unknown): boolean {
-  const leftString = normalizeSecretInputString(left);
-  const rightString = normalizeSecretInputString(right);
-  if (leftString && rightString) {
-    return leftString === rightString;
-  }
-
-  const leftRef = coerceSecretRef(left);
-  const rightRef = coerceSecretRef(right);
-  if (!leftRef || !rightRef) {
-    return false;
-  }
-
-  return (
-    leftRef.source === rightRef.source &&
-    leftRef.provider === rightRef.provider &&
-    leftRef.id === rightRef.id
-  );
-}
 
 function forEachEnabledAccount<T extends { enabled?: unknown }>(
   accounts: Record<string, T | undefined> | undefined,
@@ -136,7 +113,7 @@ export function validateBlueBubblesWebhookSecretRequirements(
     });
   }
   forEachEnabledAccount(value.accounts, (accountId, account) => {
-    const accountServerUrl = normalizeOptionalString(account.serverUrl) ?? "";
+    const accountServerUrl = normalizeSecretInputString(account.serverUrl ?? value.serverUrl) ?? "";
     if (!accountServerUrl) {
       return;
     }

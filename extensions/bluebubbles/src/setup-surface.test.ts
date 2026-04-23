@@ -706,6 +706,49 @@ describe("blueBubblesSetupAdapter", () => {
       } as never),
     ).toBe("BlueBubbles requires --webhook-secret to differ from --password.");
   });
+
+  it("surfaces both missing secrets during CLI setup when only httpUrl is provided", () => {
+    if (!blueBubblesSetupAdapter.validateInput) {
+      throw new Error("Expected blueBubblesSetupAdapter.validateInput to be defined");
+    }
+    expect(
+      blueBubblesSetupAdapter.validateInput({
+        accountId: DEFAULT_ACCOUNT_ID,
+        input: {
+          httpUrl: "http://localhost:1234",
+          password: "",
+          webhookSecret: "",
+        },
+      } as never),
+    ).toBe("BlueBubbles requires --password and --webhook-secret.");
+  });
+
+  it("rejects inherited matching secrets when an account inherits serverUrl", () => {
+    const parsed = BlueBubblesConfigSchema.safeParse({
+      serverUrl: "http://localhost:1234",
+      webhookSecret: "shared-secret",
+      accounts: {
+        work: {
+          password: "shared-secret",
+        },
+      },
+    });
+
+    expect(parsed.success).toBe(false);
+    if (parsed.success) {
+      return;
+    }
+    const issue = parsed.error.issues.find(
+      (entry) =>
+        entry.path.length === 3 &&
+        entry.path[0] === "accounts" &&
+        entry.path[1] === "work" &&
+        entry.path[2] === "webhookSecret",
+    );
+    expect(issue?.message).toBe(
+      "webhookSecret must differ from the effective BlueBubbles password",
+    );
+  });
 });
 
 describe("bluebubbles group policy", () => {

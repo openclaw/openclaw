@@ -26,6 +26,26 @@ export {
   normalizeSecretInputString,
 };
 
+export function hasMatchingSecretInput(left: unknown, right: unknown): boolean {
+  const leftString = normalizeSecretInputString(left);
+  const rightString = normalizeSecretInputString(right);
+  if (leftString && rightString) {
+    return leftString === rightString;
+  }
+
+  const leftRef = coerceSecretRef(left);
+  const rightRef = coerceSecretRef(right);
+  if (!leftRef || !rightRef) {
+    return false;
+  }
+
+  return (
+    leftRef.source === rightRef.source &&
+    leftRef.provider === rightRef.provider &&
+    leftRef.id === rightRef.id
+  );
+}
+
 /** Optional version of the shared secret-input schema. */
 export function buildOptionalSecretInputSchema() {
   return buildSecretInputSchema().optional();

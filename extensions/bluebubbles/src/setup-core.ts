@@ -72,6 +72,9 @@ export const blueBubblesSetupAdapter: ChannelSetupAdapter = {
       if (!input.httpUrl) {
         return "BlueBubbles requires --http-url.";
       }
+      if (!input.password && !input.webhookSecret) {
+        return "BlueBubbles requires --password and --webhook-secret.";
+      }
       if (!input.password) {
         return "BlueBubbles requires --password.";
       }

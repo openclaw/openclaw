@@ -112,4 +112,30 @@ describe("root BlueBubbles webhook secret validation", () => {
       );
     }
   });
+
+  it("rejects inherited serverUrl when an account password matches the inherited webhookSecret", () => {
+    const result = validateConfigObjectRaw({
+      channels: {
+        bluebubbles: {
+          serverUrl: "http://localhost:1234",
+          webhookSecret: "shared-secret",
+          accounts: {
+            work: {
+              password: "shared-secret",
+            },
+          },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      const issue = result.issues.find(
+        (entry) => entry.path === "channels.bluebubbles.accounts.work.webhookSecret",
+      );
+      expect(issue?.message).toBe(
+        "webhookSecret must differ from the effective BlueBubbles password",
+      );
+    }
+  });
 });
