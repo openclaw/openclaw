@@ -202,7 +202,7 @@ export function resolveIncompleteTurnPayloadText(params: {
     !incompleteTerminalAssistant &&
     !reasoningOnlyAssistant &&
     !emptyResponseAssistant &&
-    stopReason !== "error"
+    params.attempt.lastAssistant?.stopReason !== "error"
   ) {
     return null;
   }
