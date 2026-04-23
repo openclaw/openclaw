@@ -391,8 +391,16 @@ Legacy `plugins.entries.openai.config.personality` is still read as a compatibil
 
 The bundled `openai` provider can target an Azure OpenAI resource instead of
 `api.openai.com` by overriding the base URL. OpenClaw detects Azure hostnames
-and switches to Azure's request shape automatically for chat, image generation,
-and voice.
+on `models.providers.openai.baseUrl` and switches to Azure's request shape
+automatically for chat completions, the Responses API, and image generation.
+
+<Note>
+Realtime voice uses a separate configuration path
+(`plugins.entries.voice-call.config.realtime.providers.openai.azureEndpoint`)
+and is not affected by `models.providers.openai.baseUrl`. See the **Realtime
+voice** accordion under [Voice and speech](#voice-and-speech) for its Azure
+settings.
+</Note>
 
 Use Azure OpenAI when:
 
@@ -432,6 +440,13 @@ On a recognized Azure host, OpenClaw:
 
 Other base URLs (public OpenAI, OpenAI-compatible proxies) keep the standard
 OpenAI request shape.
+
+<Note>
+Azure routing for the `openai` provider's image-generation path requires
+OpenClaw 2026.4.22 or later. Earlier versions treat any custom
+`openai.baseUrl` like the public OpenAI endpoint and will fail against Azure
+image deployments.
+</Note>
 
 ### API version
 
