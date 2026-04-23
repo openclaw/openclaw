@@ -1603,7 +1603,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
   async function writeConfigFile(
     cfg: OpenClawConfig,
     options: ConfigWriteOptions = {},
-  ): Promise<{ persistedHash: string }> {
+  ): Promise<{ persistedHash: string; persistedConfig: OpenClawConfig }> {
     clearConfigCache();
     let persistCandidate: unknown = cfg;
     const snapshot = options.baseSnapshot ?? (await readConfigFileSnapshotInternal()).snapshot;
@@ -1857,7 +1857,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
             undefined,
             await deps.fs.promises.stat(configPath).catch(() => null),
           );
-          return { persistedHash: nextHash };
+          return { persistedHash: nextHash, persistedConfig: stampedOutputConfig };
         }
         await deps.fs.promises.unlink(tmp).catch(() => {
           // best-effort
@@ -1871,7 +1871,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         undefined,
         await deps.fs.promises.stat(configPath).catch(() => null),
       );
-      return { persistedHash: nextHash };
+      return { persistedHash: nextHash, persistedConfig: stampedOutputConfig };
     } catch (err) {
       await appendWriteAudit("failed", err);
       throw err;
@@ -2050,6 +2050,7 @@ export async function writeConfigFile(
   ) {
     return;
   }
+  const committedSourceConfig = writeResult.persistedConfig ?? nextCfg;
   const notifyCommittedWrite = () => {
     const currentRuntimeConfig = getRuntimeConfigSnapshotState();
     if (!currentRuntimeConfig) {
@@ -2057,7 +2058,7 @@ export async function writeConfigFile(
     }
     notifyRuntimeConfigWriteListeners({
       configPath: io.configPath,
-      sourceConfig: nextCfg,
+      sourceConfig: committedSourceConfig,
       runtimeConfig: currentRuntimeConfig,
       persistedHash: writeResult.persistedHash,
       writtenAtMs: Date.now(),
@@ -2066,7 +2067,7 @@ export async function writeConfigFile(
   // Keep the last-known-good runtime snapshot active until the specialized refresh path
   // succeeds, so concurrent readers do not observe unresolved SecretRefs mid-refresh.
   await finalizeRuntimeSnapshotWrite({
-    nextSourceConfig: nextCfg,
+    nextSourceConfig: committedSourceConfig,
     hadRuntimeSnapshot,
     hadBothSnapshots,
     loadFreshConfig: () => io.loadConfig(),
