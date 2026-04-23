@@ -1279,6 +1279,7 @@
                   "providers/lmstudio",
                   "providers/minimax",
                   "providers/mistral",
+                  "providers/mlflow-gateway",
                   "providers/moonshot",
                   "providers/nvidia",
                   "providers/ollama",
