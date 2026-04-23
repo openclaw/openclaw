@@ -133,8 +133,7 @@ export async function loadChannels(
   state.channelsError = null;
   try {
     const res = await requestChannelsStatus(state, request);
-    const pendingStronger = isStrongerChannelsRequest(privateState.__channelsPending, request);
-    if (privateState.__channelsRequestSeq === seq && !pendingStronger) {
+    if (privateState.__channelsRequestSeq === seq) {
       state.channelsSnapshot = res;
       state.channelsLastSuccess = Date.now();
     }
