@@ -52,7 +52,7 @@ describe("configured plugin auto-enable blockers", () => {
     expect(repaired.warnings).toEqual([]);
   });
 
-  it("adds Codex to a restrictive allowlist when OpenAI is explicitly allowed", () => {
+  it("warns instead of expanding a restrictive allowlist for OpenAI companion enablement", () => {
     const cfg: OpenClawConfig = {
       plugins: {
         allow: ["openai"],
@@ -65,12 +65,33 @@ describe("configured plugin auto-enable blockers", () => {
       manifestRegistry: registry,
     });
 
-    expect(repaired.config.plugins?.entries?.codex).toEqual({ enabled: true });
-    expect(repaired.config.plugins?.allow).toEqual(["openai", "codex"]);
-    expect(repaired.changes).toEqual([
-      "plugins.entries.codex.enabled: enabled plugin because OpenAI plugin enabled.",
-      'plugins.allow: added "codex" because OpenAI plugin enabled.',
+    expect(repaired.config).toBe(cfg);
+    expect(repaired.changes).toEqual([]);
+    expect(repaired.warnings).toEqual([
+      '- plugins.allow: plugin "codex" is not allowlisted, but OpenAI plugin enabled. Add "codex" to plugins.allow before relying on that configuration.',
     ]);
+  });
+
+  it("does not enable Codex when the plugin is unavailable", () => {
+    const cfg: OpenClawConfig = {
+      plugins: {
+        entries: {
+          openai: {
+            enabled: true,
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const repaired = maybeRepairConfiguredPluginAutoEnableBlockers({
+      cfg,
+      env,
+      manifestRegistry: makeRegistry([]),
+    });
+
+    expect(repaired.config).toBe(cfg);
+    expect(repaired.changes).toEqual([]);
+    expect(repaired.warnings).toEqual([]);
   });
 
   it("does not enable Codex just because OpenAI is enabled by default", () => {
@@ -165,6 +186,36 @@ describe("configured plugin auto-enable blockers", () => {
     ).toEqual([
       '- plugins.entries.codex.enabled: plugin is disabled, but codex agent harness runtime configured. Run "openclaw doctor --fix" to enable it.',
     ]);
+  });
+
+  it("sanitizes config-derived reasons in warnings and changes", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: "codex/gpt-5.5\u001B[31m\r\nforged",
+        },
+      },
+      plugins: {
+        entries: {
+          codex: {
+            enabled: false,
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const repaired = maybeRepairConfiguredPluginAutoEnableBlockers({
+      cfg,
+      env,
+      manifestRegistry: registry,
+    });
+
+    expect(repaired.changes.join("\n")).toContain(
+      "plugins.entries.codex.enabled: enabled plugin because codex/gpt-5.5forged model configured.",
+    );
+    expect(repaired.changes.join("\n")).not.toContain("\u001B");
+    expect(repaired.changes.join("\n")).not.toContain("\r");
+    expect(repaired.changes.join("\n")).not.toContain("\nforged");
   });
 
   it("warns instead of removing denylist blockers", () => {
