@@ -263,6 +263,20 @@ function writeRetainedRuntimeDepsManifest(installRoot: string, specs: readonly s
   );
 }
 
+function removeRetainedRuntimeDepsManifest(installRoot: string): void {
+  fs.rmSync(path.join(installRoot, RETAINED_RUNTIME_DEPS_MANIFEST), { force: true });
+}
+
+function shouldPersistRetainedRuntimeDepsManifest(params: {
+  pluginRoot: string;
+  installRoot: string;
+}): boolean {
+  if (path.resolve(params.installRoot) !== path.resolve(params.pluginRoot)) {
+    return true;
+  }
+  return !resolveSourceCheckoutPackageRoot(params.pluginRoot);
+}
+
 export function isWritableDirectory(dir: string): boolean {
   let probeDir: string | null = null;
   try {
@@ -873,6 +887,13 @@ export function ensureBundledPluginRuntimeDeps(params: {
   const installRoot = resolveBundledRuntimeDependencyInstallRoot(params.pluginRoot, {
     env: params.env,
   });
+  const persistRetainedManifest = shouldPersistRetainedRuntimeDepsManifest({
+    pluginRoot: params.pluginRoot,
+    installRoot,
+  });
+  if (!persistRetainedManifest) {
+    removeRetainedRuntimeDepsManifest(installRoot);
+  }
   const dependencySpecs = deps
     .map((dep) => `${dep.name}@${dep.version}`)
     .toSorted((left, right) => left.localeCompare(right));
@@ -883,7 +904,9 @@ export function ensureBundledPluginRuntimeDeps(params: {
   if (missingSpecs.length === 0) {
     return { installedSpecs: [], retainSpecs: [] };
   }
-  const retainedManifestSpecs = readRetainedRuntimeDepsManifest(installRoot);
+  const retainedManifestSpecs = persistRetainedManifest
+    ? readRetainedRuntimeDepsManifest(installRoot)
+    : [];
   const installSpecs = [
     ...new Set([...(params.retainSpecs ?? []), ...retainedManifestSpecs, ...dependencySpecs]),
   ].toSorted((left, right) => left.localeCompare(right));
@@ -918,7 +941,9 @@ export function ensureBundledPluginRuntimeDeps(params: {
         env: params.env,
       }));
   install({ installRoot, installExecutionRoot, missingSpecs, installSpecs });
-  writeRetainedRuntimeDepsManifest(installRoot, installSpecs);
+  if (persistRetainedManifest) {
+    writeRetainedRuntimeDepsManifest(installRoot, installSpecs);
+  }
   storeSourceCheckoutRuntimeDepsCache({ cacheDir, installRoot });
   return { installedSpecs: missingSpecs, retainSpecs: installSpecs };
 }

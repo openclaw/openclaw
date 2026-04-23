@@ -65,6 +65,9 @@ type TelegramObservedMessage = {
   senderId: number;
   senderIsBot: boolean;
   senderUsername?: string;
+  scenarioId?: string;
+  scenarioTitle?: string;
+  matchedScenario?: boolean;
   text: string;
   caption?: string;
   replyToMessageId?: number;
@@ -80,6 +83,9 @@ type TelegramObservedMessageArtifact = {
   senderId?: number;
   senderIsBot: boolean;
   senderUsername?: string;
+  scenarioId?: string;
+  scenarioTitle?: string;
+  matchedScenario?: boolean;
   text?: string;
   caption?: string;
   replyToMessageId?: number;
@@ -509,6 +515,8 @@ async function waitForObservedMessage(params: {
   timeoutMs: number;
   predicate: (message: TelegramObservedMessage) => boolean;
   observedMessages: TelegramObservedMessage[];
+  observationScenarioId: string;
+  observationScenarioTitle: string;
 }) {
   const startedAt = Date.now();
   let offset = params.initialOffset;
@@ -537,9 +545,16 @@ async function waitForObservedMessage(params: {
       if (!normalized) {
         continue;
       }
-      params.observedMessages.push(normalized);
-      if (params.predicate(normalized)) {
-        return { message: normalized, nextOffset: offset };
+      const matchedScenario = params.predicate(normalized);
+      const observedMessage: TelegramObservedMessage = {
+        ...normalized,
+        scenarioId: params.observationScenarioId,
+        scenarioTitle: params.observationScenarioTitle,
+        matchedScenario,
+      };
+      params.observedMessages.push(observedMessage);
+      if (matchedScenario) {
+        return { message: observedMessage, nextOffset: offset };
       }
     }
   }
@@ -621,13 +636,22 @@ function buildObservedMessagesArtifact(params: {
   redactMetadata: boolean;
 }) {
   return params.observedMessages.map<TelegramObservedMessageArtifact>((message) => {
+    const scenarioContext = {
+      ...(message.scenarioId ? { scenarioId: message.scenarioId } : {}),
+      ...(message.scenarioTitle ? { scenarioTitle: message.scenarioTitle } : {}),
+      ...(typeof message.matchedScenario === "boolean"
+        ? { matchedScenario: message.matchedScenario }
+        : {}),
+    };
     const base = params.redactMetadata
       ? {
+          ...scenarioContext,
           senderIsBot: message.senderIsBot,
           inlineButtonCount: message.inlineButtons.length,
           mediaKinds: message.mediaKinds,
         }
       : {
+          ...scenarioContext,
           senderIsBot: message.senderIsBot,
           timestamp: message.timestamp,
           inlineButtons: message.inlineButtons,
@@ -733,6 +757,8 @@ async function runCanary(params: {
       initialOffset: offset,
       timeoutMs: 30_000,
       observedMessages: params.observedMessages,
+      observationScenarioId: "telegram-canary",
+      observationScenarioTitle: "Telegram canary",
       predicate: (message) => {
         const classification = classifyCanaryReply({
           message,
@@ -991,6 +1017,8 @@ export async function runTelegramQaLive(params: {
               initialOffset: driverOffset,
               timeoutMs: scenario.timeoutMs,
               observedMessages,
+              observationScenarioId: scenario.id,
+              observationScenarioTitle: scenario.title,
               predicate: (message) =>
                 matchesTelegramScenarioReply({
                   groupId: runtimeEnv.groupId,

@@ -65,6 +65,10 @@
     "typescript/no-unnecessary-type-parameters": "error",
     "typescript/no-unsafe-type-assertion": "off",
     "typescript/no-useless-default-assignment": "error",
+    "typescript/switch-exhaustiveness-check": [
+      "error",
+      { "considerDefaultExhaustiveForUnions": true }
+    ],
     "typescript/prefer-return-this-type": "error",
     "typescript/prefer-find": "error",
     "typescript/prefer-function-type": "error",
@@ -74,7 +78,6 @@
     "unicorn/consistent-date-clone": "error",
     "unicorn/consistent-empty-array-spread": "error",
     "unicorn/consistent-function-scoping": "off",
-    "unicorn/consistent-template-literal-escape": "error",
     "unicorn/no-console-spaces": "error",
     "unicorn/no-length-as-slice-end": "error",
     "unicorn/no-instanceof-array": "error",
