@@ -2,7 +2,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { createCodexTrajectoryRecorder } from "./trajectory.js";
+import {
+  createCodexTrajectoryRecorder,
+  resolveCodexTrajectoryAppendFlags,
+  resolveCodexTrajectoryPointerFlags,
+} from "./trajectory.js";
 
 const tempDirs: string[] = [];
 
@@ -19,6 +23,18 @@ afterEach(() => {
 });
 
 describe("Codex trajectory recorder", () => {
+  it("keeps write flags usable when O_NOFOLLOW is unavailable", () => {
+    const constants = {
+      O_APPEND: 0x01,
+      O_CREAT: 0x02,
+      O_TRUNC: 0x04,
+      O_WRONLY: 0x08,
+    };
+
+    expect(resolveCodexTrajectoryAppendFlags(constants)).toBe(0x0b);
+    expect(resolveCodexTrajectoryPointerFlags(constants)).toBe(0x0e);
+  });
+
   it("records by default unless explicitly disabled", async () => {
     const tmpDir = makeTempDir();
     const sessionFile = path.join(tmpDir, "session.jsonl");

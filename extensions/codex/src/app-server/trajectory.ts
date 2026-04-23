@@ -30,6 +30,36 @@ const COOKIE_PAIR_RE = /\b([A-Za-z][A-Za-z0-9_.-]{1,64})=([A-Za-z0-9+/._~%=-]{16
 const TRAJECTORY_RUNTIME_FILE_MAX_BYTES = 50 * 1024 * 1024;
 const TRAJECTORY_RUNTIME_EVENT_MAX_BYTES = 256 * 1024;
 
+type CodexTrajectoryOpenFlagConstants = Pick<
+  typeof nodeFs.constants,
+  "O_APPEND" | "O_CREAT" | "O_TRUNC" | "O_WRONLY"
+> &
+  Partial<Pick<typeof nodeFs.constants, "O_NOFOLLOW">>;
+
+export function resolveCodexTrajectoryAppendFlags(
+  constants: CodexTrajectoryOpenFlagConstants = nodeFs.constants,
+): number {
+  const noFollow = constants.O_NOFOLLOW;
+  return (
+    constants.O_CREAT |
+    constants.O_APPEND |
+    constants.O_WRONLY |
+    (typeof noFollow === "number" ? noFollow : 0)
+  );
+}
+
+export function resolveCodexTrajectoryPointerFlags(
+  constants: CodexTrajectoryOpenFlagConstants = nodeFs.constants,
+): number {
+  const noFollow = constants.O_NOFOLLOW;
+  return (
+    constants.O_CREAT |
+    constants.O_TRUNC |
+    constants.O_WRONLY |
+    (typeof noFollow === "number" ? noFollow : 0)
+  );
+}
+
 async function assertNoSymlinkParents(filePath: string): Promise<void> {
   const resolvedDir = path.resolve(path.dirname(filePath));
   const parsed = path.parse(resolvedDir);
@@ -68,10 +98,6 @@ function verifyStableOpenedTrajectoryFile(params: {
 }
 
 async function safeAppendTrajectoryFile(filePath: string, line: string): Promise<void> {
-  const noFollow = nodeFs.constants.O_NOFOLLOW;
-  if (typeof noFollow !== "number") {
-    throw new Error("O_NOFOLLOW is unavailable; refusing to write trajectory");
-  }
   await assertNoSymlinkParents(filePath);
 
   let preOpenStat: nodeFs.Stats | undefined;
@@ -94,11 +120,7 @@ async function safeAppendTrajectoryFile(filePath: string, line: string): Promise
     return;
   }
 
-  const handle = await fs.open(
-    filePath,
-    nodeFs.constants.O_CREAT | nodeFs.constants.O_APPEND | nodeFs.constants.O_WRONLY | noFollow,
-    0o600,
-  );
+  const handle = await fs.open(filePath, resolveCodexTrajectoryAppendFlags(), 0o600);
   try {
     const stat = await handle.stat();
     verifyStableOpenedTrajectoryFile({ preOpenStat, postOpenStat: stat, filePath });
@@ -144,10 +166,6 @@ function writeTrajectoryPointerBestEffort(params: {
   sessionFile: string;
   sessionId: string;
 }): void {
-  const noFollow = nodeFs.constants.O_NOFOLLOW;
-  if (typeof noFollow !== "number") {
-    return;
-  }
   const pointerPath = resolveTrajectoryPointerFilePath(params.sessionFile);
   try {
     const pointerDir = path.resolve(path.dirname(pointerPath));
@@ -163,11 +181,7 @@ function writeTrajectoryPointerBestEffort(params: {
         return;
       }
     }
-    const fd = nodeFs.openSync(
-      pointerPath,
-      nodeFs.constants.O_CREAT | nodeFs.constants.O_TRUNC | nodeFs.constants.O_WRONLY | noFollow,
-      0o600,
-    );
+    const fd = nodeFs.openSync(pointerPath, resolveCodexTrajectoryPointerFlags(), 0o600);
     try {
       nodeFs.writeFileSync(
         fd,
