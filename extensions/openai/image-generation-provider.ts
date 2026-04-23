@@ -91,8 +91,10 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
       }
       const configuredBaseUrl = resolveConfiguredOpenAIBaseUrl(req.cfg);
       const isAzure = isAzureOpenAIBaseUrl(configuredBaseUrl);
+      // For Azure, the `api-key` header is written once via `azureRoute.headers`
+      // below; keep `defaultHeaders` empty so it isn't set twice.
       const defaultHeaders: Record<string, string> = isAzure
-        ? { "api-key": auth.apiKey }
+        ? {}
         : { Authorization: `Bearer ${auth.apiKey}` };
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
         resolveProviderHttpRequestConfig({

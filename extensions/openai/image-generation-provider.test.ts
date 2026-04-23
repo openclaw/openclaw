@@ -210,7 +210,10 @@ describe("openai image generation provider", () => {
     expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith(
       expect.objectContaining({
         baseUrl: "https://my-resource.openai.azure.com",
-        defaultHeaders: { "api-key": "openai-key" },
+        // Azure branch writes `api-key` exactly once, via the azureRoute override
+        // (not via `defaultHeaders`), so `resolveProviderHttpRequestConfig` must
+        // not receive it here.
+        defaultHeaders: {},
       }),
     );
     const call = postJsonRequestMock.mock.calls[0]?.[0];
@@ -222,6 +225,33 @@ describe("openai image generation provider", () => {
     expect(headers.get("api-key")).toBe("openai-key");
     expect(headers.get("Authorization")).toBeNull();
     expect(headers.get("Content-Type")).toBe("application/json");
+  });
+
+  it("strips an onboarding-style `/openai/v1` suffix from the Azure baseUrl before appending the deployment path", async () => {
+    mockGeneratedPngResponse();
+
+    const provider = buildOpenAIImageGenerationProvider();
+    await provider.generateImage({
+      provider: "openai",
+      model: "gpt-image-2-deployment",
+      prompt: "Azure with /openai/v1 baseUrl",
+      cfg: {
+        models: {
+          providers: {
+            openai: {
+              // Standard OpenClaw onboarding writes Azure baseUrls in this form.
+              baseUrl: "https://my-resource.openai.azure.com/openai/v1",
+              models: [],
+            },
+          },
+        },
+      },
+    });
+
+    const call = postJsonRequestMock.mock.calls[0]?.[0];
+    expect(call.url).toBe(
+      "https://my-resource.openai.azure.com/openai/deployments/gpt-image-2-deployment/images/generations?api-version=2024-12-01-preview",
+    );
   });
 
   it("honors AZURE_OPENAI_API_VERSION when routing Azure image requests", async () => {

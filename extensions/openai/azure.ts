@@ -37,6 +37,12 @@ export type AzureOpenAIImageRoute = {
   headers: Record<string, string>;
 };
 
+// Pathname segments that onboarding/clients commonly append to an Azure endpoint
+// (e.g. OpenClaw onboarding stores `https://<endpoint>/openai/v1`). We must strip
+// these before appending our own `/openai/deployments/...` path, otherwise the
+// resulting URL duplicates the `/openai` segment and returns 404.
+const AZURE_BASE_URL_PATHNAME_STRIP_PATTERN = /\/openai(?:\/v\d+)?\/?$/i;
+
 /**
  * Builds an Azure OpenAI image-route URL + auth header override.
  *
@@ -44,6 +50,12 @@ export type AzureOpenAIImageRoute = {
  * with the key passed as `api-key:` (public OpenAI uses `Authorization: Bearer`).
  * The deployment name comes from `model` — this mirrors the chat path's
  * `resolveAzureDeploymentName` convention where deployment names are routed via `model`.
+ *
+ * The incoming `baseUrl` may carry an OpenAI-style suffix (e.g. `/openai/v1`) from
+ * standard onboarding; we normalize it down to the endpoint origin + surviving
+ * path prefix before appending the deployment-scoped route. Any query/fragment
+ * on the base URL is intentionally dropped — `api-version` is the only query
+ * parameter Azure expects here.
  */
 export function buildAzureOpenAIImageRoute(params: {
   baseUrl: string;
@@ -52,15 +64,34 @@ export function buildAzureOpenAIImageRoute(params: {
   operation: "generations" | "edits";
   apiVersion?: string;
 }): AzureOpenAIImageRoute {
-  const base = params.baseUrl.replace(/\/+$/, "");
   const apiVersion = params.apiVersion?.trim() || resolveAzureOpenAIApiVersion();
   const deployment = encodeURIComponent(params.deployment);
+  const endpoint = normalizeAzureBaseUrlForImageRoute(params.baseUrl);
   return {
-    url: `${base}/openai/deployments/${deployment}/images/${params.operation}?api-version=${encodeURIComponent(
+    url: `${endpoint}/openai/deployments/${deployment}/images/${params.operation}?api-version=${encodeURIComponent(
       apiVersion,
     )}`,
     headers: {
       "api-key": params.apiKey,
     },
   };
+}
+
+/**
+ * Reduce an Azure base URL to the form `<origin><surviving-path>` where any
+ * trailing `/openai` or `/openai/vN` segment has been removed. Falls back to
+ * a simple trailing-slash trim when the URL cannot be parsed.
+ */
+function normalizeAzureBaseUrlForImageRoute(baseUrl: string): string {
+  const trimmed = baseUrl.trim();
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    return trimmed.replace(/\/+$/, "");
+  }
+  let pathname = parsed.pathname.replace(AZURE_BASE_URL_PATHNAME_STRIP_PATTERN, "");
+  pathname = pathname.replace(/\/+$/, "");
+  const origin = `${parsed.protocol}//${parsed.host}`;
+  return pathname ? `${origin}${pathname}` : origin;
 }
