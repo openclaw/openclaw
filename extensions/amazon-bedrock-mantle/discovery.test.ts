@@ -409,7 +409,7 @@ describe("bedrock mantle discovery", () => {
     });
     expect(
       provider?.models?.find((model) => model.id === "anthropic.claude-opus-4-7"),
-    ).not.toHaveProperty("baseUrl");
+    ).toHaveProperty("baseUrl", "https://bedrock-mantle.us-east-1.api.aws/anthropic");
   });
 
   it("returns null when no auth is available", async () => {

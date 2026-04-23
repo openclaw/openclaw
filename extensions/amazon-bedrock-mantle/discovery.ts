@@ -100,6 +100,10 @@ function getCachedIamTokenEntry(
 export async function generateBearerTokenFromIam(params: {
   region: string;
   now?: () => number;
+  tokenProviderFactory?: (opts?: {
+    region?: string;
+    expiresInSeconds?: number;
+  }) => () => Promise<string>;
 }): Promise<string | undefined> {
   const now = params.now?.() ?? Date.now();
   const cached = getCachedIamTokenEntry(params.region, now);
@@ -109,13 +113,18 @@ export async function generateBearerTokenFromIam(params: {
   }
 
   try {
-    const { getTokenProvider } = (await import("@aws/bedrock-token-generator")) as {
-      getTokenProvider: (opts?: {
-        region?: string;
-        expiresInSeconds?: number;
-      }) => () => Promise<string>;
-    };
-    const token = await getTokenProvider({
+    const tokenProviderFactory =
+      params.tokenProviderFactory ??
+      (
+        (await import("@aws/bedrock-token-generator")) as {
+          getTokenProvider: (opts?: {
+            region?: string;
+            expiresInSeconds?: number;
+          }) => () => Promise<string>;
+        }
+      ).getTokenProvider;
+
+    const token = await tokenProviderFactory({
       region: params.region,
       expiresInSeconds: 7200, // 2 hours
     })();
@@ -144,6 +153,10 @@ export async function resolveMantleRuntimeBearerToken(params: {
   apiKey: string;
   env?: NodeJS.ProcessEnv;
   now?: () => number;
+  tokenProviderFactory?: (opts?: {
+    region?: string;
+    expiresInSeconds?: number;
+  }) => () => Promise<string>;
 }): Promise<{ apiKey: string; expiresAt?: number } | undefined> {
   if (params.apiKey !== MANTLE_IAM_TOKEN_MARKER) {
     return { apiKey: params.apiKey };
@@ -160,6 +173,7 @@ export async function resolveMantleRuntimeBearerToken(params: {
   const token = await generateBearerTokenFromIam({
     region,
     now: params.now,
+    tokenProviderFactory: params.tokenProviderFactory,
   });
   if (!token) {
     return undefined;
@@ -317,6 +331,10 @@ export async function discoverMantleModels(params: {
 export async function resolveImplicitMantleProvider(params: {
   env?: NodeJS.ProcessEnv;
   fetchFn?: typeof fetch;
+  tokenProviderFactory?: (opts?: {
+    region?: string;
+    expiresInSeconds?: number;
+  }) => () => Promise<string>;
 }): Promise<ModelProviderConfig | null> {
   const env = params.env ?? process.env;
   const region = resolveMantleRegion(env);
@@ -328,7 +346,12 @@ export async function resolveImplicitMantleProvider(params: {
   }
 
   // Try explicit token first, then generate from IAM credentials
-  const bearerToken = explicitBearerToken ?? (await generateBearerTokenFromIam({ region }));
+  const bearerToken =
+    explicitBearerToken ??
+    (await generateBearerTokenFromIam({
+      region,
+      tokenProviderFactory: params.tokenProviderFactory,
+    }));
 
   if (!bearerToken) {
     return null;
