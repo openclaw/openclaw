@@ -49,9 +49,10 @@ compatibility aliases, but new docs/config examples should use `openai/gpt-*`.
 
 Enable debug logging for the `agents/harness` subsystem to inspect the
 structured `agent harness selected` record. It includes the selected harness id,
-policy runtime/fallback values, and the support result for each registered
-plugin harness, which makes prefix mistakes (`openai-codex/*` vs `codex/*`)
-visible without changing runtime behavior.
+policy runtime/fallback values, and, in `auto` mode, support results for each
+registered plugin harness. Forced or pinned runtime paths list candidate
+ids/labels without support probes. This makes prefix mistakes
+(`openai-codex/*` vs `codex/*`) visible without changing runtime behavior.
 
 Harness selection is not a live session control. When an embedded turn runs,
 OpenClaw records the selected harness id on that session and keeps using it for

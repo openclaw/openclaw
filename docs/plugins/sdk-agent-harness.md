@@ -108,9 +108,11 @@ native plugin harness. `/status` shows non-default harness ids such as `codex`
 next to `Fast`; PI stays hidden because it is the default compatibility path.
 When debug logging is enabled, OpenClaw also emits a structured `agent harness
 selected` record with the resolved runtime policy, PI fallback mode, selected
-harness id, selection reason, and every plugin candidate's support reason. This
-is the safest way to diagnose why a `codex/*` model used the Codex harness while
-an `openai-codex/*` model stayed on the PI compatibility path.
+harness id, and selection reason. In `auto` mode it also includes each plugin
+candidate's support result; forced or pinned modes list candidate ids/labels
+without probing support. This is the safest way to diagnose why a `codex/*`
+model used the Codex harness while an `openai-codex/*` model stayed on the PI
+compatibility path.
 
 The bundled Codex plugin registers `codex` as its harness id. Core treats that
 as an ordinary plugin harness id; Codex-specific aliases belong in the plugin
