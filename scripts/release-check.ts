@@ -11,7 +11,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
@@ -92,6 +92,7 @@ const forbiddenPrivateQaContentScanPrefixes = ["dist/"] as const;
 const appcastPath = resolve("appcast.xml");
 const laneBuildMin = 1_000_000_000;
 const laneFloorAdoptionDateKey = 20260227;
+const SAFE_UNIX_SMOKE_PATH = "/usr/bin:/bin";
 export const PACKED_CLI_SMOKE_COMMANDS = [
   ["--help"],
   ["status", "--json", "--timeout", "1"],
@@ -235,9 +236,7 @@ export function createPackedCliSmokeEnv(
   overrides: NodeJS.ProcessEnv = {},
 ): NodeJS.ProcessEnv {
   const allowlistedEnvEntries = [
-    "PATH",
     "HOME",
-    "USERPROFILE",
     "TMPDIR",
     "TMP",
     "TEMP",
@@ -246,6 +245,13 @@ export function createPackedCliSmokeEnv(
     "PATHEXT",
     "WINDIR",
   ] as const;
+  const windowsRoot = env.SystemRoot ?? env.WINDIR ?? "C:\\Windows";
+  const nodeBinDir = dirname(process.execPath);
+  const safePath =
+    process.platform === "win32"
+      ? `${nodeBinDir};${windowsRoot}\\System32;${windowsRoot}`
+      : `${nodeBinDir}:${SAFE_UNIX_SMOKE_PATH}`;
+  const homeDir = overrides.HOME ?? env.HOME ?? overrides.USERPROFILE ?? env.USERPROFILE ?? "";
 
   return {
     ...Object.fromEntries(
@@ -254,6 +260,14 @@ export function createPackedCliSmokeEnv(
         return typeof value === "string" && value.length > 0 ? [[key, value]] : [];
       }),
     ),
+    PATH: safePath,
+    HOME: homeDir,
+    USERPROFILE: homeDir,
+    APPDATA: homeDir ? join(homeDir, "AppData", "Roaming") : undefined,
+    LOCALAPPDATA: homeDir ? join(homeDir, "AppData", "Local") : undefined,
+    AWS_EC2_METADATA_DISABLED: "true",
+    AWS_SHARED_CREDENTIALS_FILE: homeDir ? join(homeDir, ".aws", "credentials") : undefined,
+    AWS_CONFIG_FILE: homeDir ? join(homeDir, ".aws", "config") : undefined,
     OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK: "1",
     OPENCLAW_NO_ONBOARD: "1",
     OPENCLAW_SUPPRESS_NOTES: "1",
@@ -439,6 +453,7 @@ function runPackedCliSmoke(params: {
       cwd: params.cwd,
       stdio: "inherit",
       env,
+      shell: process.platform === "win32",
     });
   }
 }

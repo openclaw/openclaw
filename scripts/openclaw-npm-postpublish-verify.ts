@@ -50,6 +50,8 @@ const PUBLISHED_BUNDLED_RUNTIME_SIDECAR_PATHS = BUNDLED_RUNTIME_SIDECAR_PATHS.fi
   (relativePath) => listBundledPluginPackArtifacts().includes(relativePath),
 );
 const NODE_BUILTIN_MODULES = new Set(builtinModules.map((name) => name.replace(/^node:/u, "")));
+const MAX_INSTALLED_ROOT_PACKAGE_JSON_BYTES = 1024 * 1024;
+const MAX_INSTALLED_ROOT_DIST_JS_BYTES = 2 * 1024 * 1024;
 
 export type PublishedInstallScenario = {
   name: string;
@@ -325,7 +327,18 @@ export function collectInstalledRootDependencyManifestErrors(packageRoot: string
   if (!existsSync(packageJsonPath)) {
     return ["installed package is missing package.json."];
   }
-  const rootPackageJson = JSON.parse(readFileSync(packageJsonPath, "utf8")) as InstalledPackageJson;
+  const packageJsonStat = lstatSync(packageJsonPath);
+  if (!packageJsonStat.isFile() || packageJsonStat.size > MAX_INSTALLED_ROOT_PACKAGE_JSON_BYTES) {
+    return [
+      `installed package.json is invalid or exceeds ${MAX_INSTALLED_ROOT_PACKAGE_JSON_BYTES} bytes.`,
+    ];
+  }
+  let rootPackageJson: InstalledPackageJson;
+  try {
+    rootPackageJson = JSON.parse(readFileSync(packageJsonPath, "utf8")) as InstalledPackageJson;
+  } catch (error) {
+    return [`installed package.json could not be parsed: ${formatErrorMessage(error)}.`];
+  }
   const declaredRuntimeDeps = new Set([
     ...Object.keys(rootPackageJson.dependencies ?? {}),
     ...Object.keys(rootPackageJson.optionalDependencies ?? {}),
@@ -333,6 +346,13 @@ export function collectInstalledRootDependencyManifestErrors(packageRoot: string
   const missingImporters = new Map<string, Set<string>>();
 
   for (const filePath of listInstalledRootDistJavaScriptFiles(packageRoot)) {
+    const fileStat = lstatSync(filePath);
+    if (!fileStat.isFile() || fileStat.size > MAX_INSTALLED_ROOT_DIST_JS_BYTES) {
+      const relativePath = relative(join(packageRoot, "dist"), filePath).replaceAll("\\", "/");
+      return [
+        `installed package root dist file '${relativePath}' is invalid or exceeds ${MAX_INSTALLED_ROOT_DIST_JS_BYTES} bytes.`,
+      ];
+    }
     const source = readFileSync(filePath, "utf8");
     const relativePath = relative(join(packageRoot, "dist"), filePath).replaceAll("\\", "/");
     for (const specifier of extractJavaScriptImportSpecifiers(source)) {
