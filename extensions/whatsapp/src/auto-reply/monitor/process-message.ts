@@ -456,14 +456,6 @@ export async function processMessage(params: {
           peerId: dmRouteTarget ?? params.msg.from,
         });
 
-  // shoar local: resolve per-group systemPrompt (specific JID entry, then wildcard "*" fallback).
-  const whatsAppGroups = params.cfg.channels?.whatsapp?.groups;
-  const groupEntry =
-    params.msg.chatType === "group"
-      ? (whatsAppGroups?.[params.msg.from] ?? whatsAppGroups?.["*"])
-      : undefined;
-  const groupSystemPrompt = groupEntry?.systemPrompt?.trim() || undefined;
-
   const ctxPayload = buildWhatsAppInboundContext({
     bodyForAgent: msgForAgent.body,
     combinedBody,
@@ -495,8 +487,6 @@ export async function processMessage(params: {
       selfJid: params.msg.selfJid,
       selfE164: params.msg.selfE164,
     }),
-    // shoar local: per-group system prompt (used by the dump group protocol)
-    groupSystemPrompt,
   });
   emitWhatsAppMessageReceivedHooksIfEnabled({
     cfg: params.cfg,
