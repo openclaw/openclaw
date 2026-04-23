@@ -481,6 +481,7 @@ export function resolveIMessageInboundDecision(params: {
       allowTextCommands: true,
       hasControlCommand: hasControlCommandInMessage,
       commandAuthorized,
+      suppressIfOtherAgentMentioned: true,
     },
   });
   const effectiveWasMentioned = mentionDecision.effectiveWasMentioned;

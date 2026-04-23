@@ -51,6 +51,12 @@ export type InboundMentionPolicy = {
   allowTextCommands: boolean;
   hasControlCommand: boolean;
   commandAuthorized: boolean;
+  /**
+   * When true, an always-on agent (requireMention=false) suppresses itself when
+   * the message explicitly mentions a different agent and not this one.
+   * Only takes effect in group chats where mention detection is available.
+   */
+  suppressIfOtherAgentMentioned?: boolean;
 };
 
 /** @deprecated Prefer the nested `{ facts, policy }` call shape for new code. */
@@ -69,6 +75,8 @@ export type InboundMentionDecision = MentionGateResult & {
   implicitMention: boolean;
   matchedImplicitMentionKinds: InboundImplicitMentionKind[];
   shouldBypassMention: boolean;
+  /** True when an always-on agent suppressed itself because another agent was explicitly mentioned. */
+  suppressedByOtherAgentMention: boolean;
 };
 
 export function implicitMentionKindWhen(
@@ -108,6 +116,9 @@ function resolveMentionDecisionCore(params: {
   implicitMentionKinds?: readonly InboundImplicitMentionKind[];
   allowedImplicitMentionKinds?: readonly InboundImplicitMentionKind[];
   shouldBypassMention: boolean;
+  isGroup?: boolean;
+  hasAnyMention?: boolean;
+  suppressIfOtherAgentMentioned?: boolean;
 }): InboundMentionDecision {
   const matchedImplicitMentionKinds = resolveMatchedImplicitMentionKinds({
     implicitMentionKinds: params.implicitMentionKinds,
@@ -116,12 +127,25 @@ function resolveMentionDecisionCore(params: {
   const implicitMention = matchedImplicitMentionKinds.length > 0;
   const effectiveWasMentioned =
     params.wasMentioned || implicitMention || params.shouldBypassMention;
-  const shouldSkip = params.requireMention && params.canDetectMention && !effectiveWasMentioned;
+  // An always-on agent (requireMention=false) yields when another agent is explicitly
+  // mentioned and this agent was not. Only applies in group chats with working mention
+  // detection and when the caller has opted in via suppressIfOtherAgentMentioned.
+  const suppressedByOtherAgentMention =
+    !params.requireMention &&
+    params.suppressIfOtherAgentMentioned === true &&
+    params.isGroup === true &&
+    params.canDetectMention &&
+    (params.hasAnyMention ?? false) &&
+    !effectiveWasMentioned;
+  const shouldSkip =
+    (params.requireMention && params.canDetectMention && !effectiveWasMentioned) ||
+    suppressedByOtherAgentMention;
   return {
     implicitMention,
     matchedImplicitMentionKinds,
     effectiveWasMentioned,
     shouldBypassMention: params.shouldBypassMention,
+    suppressedByOtherAgentMention,
     shouldSkip,
   };
 }
@@ -149,6 +173,7 @@ function normalizeMentionDecisionParams(
     allowTextCommands,
     hasControlCommand,
     commandAuthorized,
+    suppressIfOtherAgentMentioned,
   } = params;
   return {
     facts: {
@@ -164,6 +189,7 @@ function normalizeMentionDecisionParams(
       allowTextCommands,
       hasControlCommand,
       commandAuthorized,
+      suppressIfOtherAgentMentioned,
     },
   };
 }
@@ -187,6 +213,9 @@ export function resolveInboundMentionDecision(
     implicitMentionKinds: facts.implicitMentionKinds,
     allowedImplicitMentionKinds: policy.allowedImplicitMentionKinds,
     shouldBypassMention,
+    isGroup: policy.isGroup,
+    hasAnyMention: facts.hasAnyMention,
+    suppressIfOtherAgentMentioned: policy.suppressIfOtherAgentMentioned,
   });
 }
 

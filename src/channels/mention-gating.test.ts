@@ -259,3 +259,159 @@ describe("implicitMentionKindWhen", () => {
     expect(implicitMentionKindWhen("reply_to_bot", false)).toEqual([]);
   });
 });
+
+describe("resolveInboundMentionDecision — suppressIfOtherAgentMentioned", () => {
+  const baseAlwaysOnPolicy = {
+    isGroup: true,
+    requireMention: false, // always-on agent
+    allowTextCommands: true,
+    hasControlCommand: false,
+    commandAuthorized: false,
+  };
+
+  it("suppresses always-on agent when another agent is explicitly mentioned", () => {
+    const res = resolveInboundMentionDecision({
+      facts: {
+        canDetectMention: true,
+        wasMentioned: false,
+        hasAnyMention: true,
+      },
+      policy: {
+        ...baseAlwaysOnPolicy,
+        suppressIfOtherAgentMentioned: true,
+      },
+    });
+    expect(res.shouldSkip).toBe(true);
+    expect(res.suppressedByOtherAgentMention).toBe(true);
+    expect(res.effectiveWasMentioned).toBe(false);
+  });
+
+  it("does not suppress always-on agent when this agent was mentioned too", () => {
+    const res = resolveInboundMentionDecision({
+      facts: {
+        canDetectMention: true,
+        wasMentioned: true,
+        hasAnyMention: true,
+      },
+      policy: {
+        ...baseAlwaysOnPolicy,
+        suppressIfOtherAgentMentioned: true,
+      },
+    });
+    expect(res.shouldSkip).toBe(false);
+    expect(res.suppressedByOtherAgentMention).toBe(false);
+  });
+
+  it("does not suppress always-on agent when no mention is present (normal message)", () => {
+    const res = resolveInboundMentionDecision({
+      facts: {
+        canDetectMention: true,
+        wasMentioned: false,
+        hasAnyMention: false,
+      },
+      policy: {
+        ...baseAlwaysOnPolicy,
+        suppressIfOtherAgentMentioned: true,
+      },
+    });
+    expect(res.shouldSkip).toBe(false);
+    expect(res.suppressedByOtherAgentMention).toBe(false);
+  });
+
+  it("does not suppress when suppressIfOtherAgentMentioned is not set (opt-in only)", () => {
+    const res = resolveInboundMentionDecision({
+      facts: {
+        canDetectMention: true,
+        wasMentioned: false,
+        hasAnyMention: true,
+      },
+      policy: baseAlwaysOnPolicy,
+    });
+    expect(res.shouldSkip).toBe(false);
+    expect(res.suppressedByOtherAgentMention).toBe(false);
+  });
+
+  it("does not suppress when mention detection is unavailable", () => {
+    const res = resolveInboundMentionDecision({
+      facts: {
+        canDetectMention: false,
+        wasMentioned: false,
+        hasAnyMention: true,
+      },
+      policy: {
+        ...baseAlwaysOnPolicy,
+        suppressIfOtherAgentMentioned: true,
+      },
+    });
+    expect(res.shouldSkip).toBe(false);
+    expect(res.suppressedByOtherAgentMention).toBe(false);
+  });
+
+  it("does not suppress in direct/non-group chats", () => {
+    const res = resolveInboundMentionDecision({
+      facts: {
+        canDetectMention: true,
+        wasMentioned: false,
+        hasAnyMention: true,
+      },
+      policy: {
+        ...baseAlwaysOnPolicy,
+        isGroup: false,
+        suppressIfOtherAgentMentioned: true,
+      },
+    });
+    expect(res.shouldSkip).toBe(false);
+    expect(res.suppressedByOtherAgentMention).toBe(false);
+  });
+
+  it("does not suppress a mention-required agent (requireMention=true handles its own skip)", () => {
+    const res = resolveInboundMentionDecision({
+      facts: {
+        canDetectMention: true,
+        wasMentioned: false,
+        hasAnyMention: true,
+      },
+      policy: {
+        ...baseAlwaysOnPolicy,
+        requireMention: true,
+        suppressIfOtherAgentMentioned: true,
+      },
+    });
+    // shouldSkip is true due to requireMention, but NOT via suppressedByOtherAgentMention
+    expect(res.shouldSkip).toBe(true);
+    expect(res.suppressedByOtherAgentMention).toBe(false);
+  });
+
+  it("suppressedByOtherAgentMention is false when always-on agent is not suppressed", () => {
+    const res = resolveInboundMentionDecision({
+      facts: {
+        canDetectMention: true,
+        wasMentioned: false,
+        hasAnyMention: false,
+      },
+      policy: {
+        ...baseAlwaysOnPolicy,
+        suppressIfOtherAgentMentioned: true,
+      },
+    });
+    expect(res.suppressedByOtherAgentMention).toBe(false);
+    expect(res.shouldSkip).toBe(false);
+  });
+
+  it("forwards suppressIfOtherAgentMentioned through the deprecated flat-params call shape", () => {
+    // Regression: normalizeMentionDecisionParams previously dropped the field silently.
+    const res = resolveInboundMentionDecision({
+      isGroup: true,
+      requireMention: false,
+      canDetectMention: true,
+      wasMentioned: false,
+      hasAnyMention: true,
+      allowTextCommands: true,
+      hasControlCommand: false,
+      commandAuthorized: false,
+      suppressIfOtherAgentMentioned: true,
+    });
+    expect(res.shouldSkip).toBe(true);
+    expect(res.suppressedByOtherAgentMention).toBe(true);
+  });
+});

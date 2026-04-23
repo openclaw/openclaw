@@ -677,6 +677,32 @@ export function pruneBundledPluginSourceNodeModules(params = {}) {
   }
 }
 
+// Removes stale plugin-local node_modules directories left under dist/extensions/*/
+// by older OpenClaw installs that installed runtime deps nested inside each plugin dir.
+// Since runtime deps are now installed at the package root, these nested directories
+// are obsolete. If left in place they shadow the correct package-root resolution and
+// cause the acpx binary to be resolved from a non-existent nested path.
+export function pruneBundledDistPluginNodeModules(params = {}) {
+  const extensionsDir = params.extensionsDir ?? DEFAULT_EXTENSIONS_DIR;
+  const pathExists = params.existsSync ?? existsSync;
+  const readDir = params.readdirSync ?? readdirSync;
+  const removePath = params.rmSync ?? rmSync;
+
+  if (!pathExists(extensionsDir)) {
+    return;
+  }
+
+  for (const entry of readDir(extensionsDir, { withFileTypes: true })) {
+    if (!entry.isDirectory() || entry.isSymbolicLink()) {
+      continue;
+    }
+    const pluginNodeModules = join(extensionsDir, entry.name, "node_modules");
+    if (pathExists(pluginNodeModules)) {
+      removePath(pluginNodeModules, { recursive: true, force: true });
+    }
+  }
+}
+
 function shouldRunBundledPluginPostinstall(params) {
   if (params.env?.[DISABLE_POSTINSTALL_ENV]?.trim()) {
     return false;
@@ -717,6 +743,21 @@ export function runBundledPluginPostinstall(params = {}) {
     });
     return;
   }
+  // Remove stale plugin-local node_modules from dist/ before traversing for pruning.
+  // Older installs placed acpx and other runtime deps inside dist/extensions/*/node_modules/;
+  // those directories contain .bin/ symlinks that cause listInstalledDistFiles to throw
+  // "unsafe dist entry" and abort the rest of postinstall, leaving acpx uninstalled at root.
+  try {
+    pruneBundledDistPluginNodeModules({
+      extensionsDir,
+      existsSync: pathExists,
+      readdirSync: params.readdirSync,
+      rmSync: params.rmSync,
+    });
+  } catch (e) {
+    log.warn(`[postinstall] could not prune stale dist plugin node_modules: ${String(e)}`);
+  }
+
   const prunedDistFiles = pruneInstalledPackageDist({
     packageRoot,
     existsSync: pathExists,

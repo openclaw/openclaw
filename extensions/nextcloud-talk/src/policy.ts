@@ -1,3 +1,4 @@
+import { resolveInboundMentionDecision } from "openclaw/plugin-sdk/channel-inbound";
 import {
   buildChannelKeyCandidates,
   normalizeChannelSlug,
@@ -162,19 +163,26 @@ export function resolveNextcloudTalkMentionGate(params: {
   isGroup: boolean;
   requireMention: boolean;
   wasMentioned: boolean;
+  hasAnyMention?: boolean;
   allowTextCommands: boolean;
   hasControlCommand: boolean;
   commandAuthorized: boolean;
 }): { shouldSkip: boolean; shouldBypassMention: boolean } {
-  const shouldBypassMention =
-    params.isGroup &&
-    params.requireMention &&
-    !params.wasMentioned &&
-    params.allowTextCommands &&
-    params.commandAuthorized &&
-    params.hasControlCommand;
-  return {
-    shouldBypassMention,
-    shouldSkip: params.requireMention && !params.wasMentioned && !shouldBypassMention,
-  };
+  const result = resolveInboundMentionDecision({
+    facts: {
+      canDetectMention: true,
+      wasMentioned: params.wasMentioned,
+      hasAnyMention: params.hasAnyMention,
+      implicitMentionKinds: [],
+    },
+    policy: {
+      isGroup: params.isGroup,
+      requireMention: params.requireMention,
+      allowTextCommands: params.allowTextCommands,
+      hasControlCommand: params.hasControlCommand,
+      commandAuthorized: params.commandAuthorized,
+      suppressIfOtherAgentMentioned: true,
+    },
+  });
+  return { shouldSkip: result.shouldSkip, shouldBypassMention: result.shouldBypassMention };
 }

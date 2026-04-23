@@ -8,6 +8,7 @@ import {
   isDirectPostinstallInvocation,
   pruneInstalledPackageDist,
   discoverBundledPluginRuntimeDeps,
+  pruneBundledDistPluginNodeModules,
   pruneBundledPluginSourceNodeModules,
   runBundledPluginPostinstall,
   restoreLegacyUpdaterCompatSidecars,
@@ -754,5 +755,96 @@ describe("bundled plugin postinstall", () => {
     });
 
     expect(removePath).not.toHaveBeenCalled();
+  });
+
+  it("prunes stale node_modules from dist plugin directories", async () => {
+    const packageRoot = await createTempDirAsync("openclaw-dist-prune-");
+    const extensionsDir = path.join(packageRoot, "dist", "extensions");
+    // Simulate stale nested node_modules left by an older install
+    await fs.mkdir(path.join(extensionsDir, "acpx", "node_modules", ".bin"), { recursive: true });
+    await fs.mkdir(path.join(extensionsDir, "acpx", "node_modules", "acpx"), { recursive: true });
+    await fs.writeFile(
+      path.join(extensionsDir, "acpx", "node_modules", "acpx", "package.json"),
+      JSON.stringify({ name: "acpx", version: "0.4.1" }),
+    );
+
+    pruneBundledDistPluginNodeModules({ extensionsDir });
+
+    await expect(
+      fs.stat(path.join(extensionsDir, "acpx", "node_modules")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("leaves dist plugin directories without node_modules untouched", async () => {
+    const packageRoot = await createTempDirAsync("openclaw-dist-prune-clean-");
+    const extensionsDir = path.join(packageRoot, "dist", "extensions");
+    await fs.mkdir(path.join(extensionsDir, "acpx"), { recursive: true });
+    await fs.writeFile(
+      path.join(extensionsDir, "acpx", "runtime-api.js"),
+      "export {};\n",
+    );
+
+    pruneBundledDistPluginNodeModules({ extensionsDir });
+
+    await expect(
+      fs.stat(path.join(extensionsDir, "acpx", "runtime-api.js")),
+    ).resolves.toBeTruthy();
+  });
+
+  it("skips symlink entries when pruning dist plugin node_modules", () => {
+    const removePath = vi.fn();
+
+    pruneBundledDistPluginNodeModules({
+      extensionsDir: "/dist/extensions",
+      existsSync: vi.fn((value) => value === "/dist/extensions"),
+      readdirSync: vi.fn(() => [
+        {
+          name: "acpx",
+          isDirectory: () => true,
+          isSymbolicLink: () => true,
+        },
+      ]),
+      rmSync: removePath,
+    });
+
+    expect(removePath).not.toHaveBeenCalled();
+  });
+
+  it("prunes stale dist plugin node_modules before dist prune so symlinks do not abort postinstall", async () => {
+    // Regression: stale dist/extensions/*/node_modules/ left by older installs
+    // caused listInstalledDistFiles to throw "unsafe dist entry" on any symlinks inside
+    // them (e.g. .bin/acpx), aborting postinstall before acpx could be installed at root.
+    // pruneBundledDistPluginNodeModules must run first to remove those directories.
+    const extensionsDir = await createExtensionsDir();
+    const packageRoot = path.dirname(path.dirname(extensionsDir));
+    await writePluginPackage(extensionsDir, "acpx", {
+      dependencies: { acpx: "0.5.3" },
+    });
+
+    // Simulate stale plugin-local node_modules left by an older OpenClaw install
+    await fs.mkdir(path.join(extensionsDir, "acpx", "node_modules", ".bin"), { recursive: true });
+    await fs.writeFile(
+      path.join(extensionsDir, "acpx", "node_modules", ".bin", "acpx"),
+      "#!/usr/bin/env node\n",
+    );
+
+    const spawnSync = vi.fn(() => ({ status: 0, stderr: "", stdout: "" }));
+
+    // postinstall should complete and install acpx despite the stale node_modules
+    runBundledPluginPostinstall({
+      env: {
+        npm_config_global: "true",
+        npm_config_location: "global",
+        npm_config_prefix: "/opt/homebrew",
+        HOME: "/tmp/home",
+      },
+      extensionsDir,
+      packageRoot,
+      npmRunner: createBareNpmRunner(["acpx@0.5.3"]),
+      spawnSync,
+      log: { log: vi.fn(), warn: vi.fn() },
+    });
+
+    expectNpmInstallSpawn(spawnSync, packageRoot, ["acpx@0.5.3"]);
   });
 });

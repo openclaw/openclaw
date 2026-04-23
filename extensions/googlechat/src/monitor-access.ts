@@ -309,6 +309,7 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
         allowTextCommands,
         hasControlCommand: core.channel.text.hasControlCommand(rawBody, config),
         commandAuthorized: commandAuthorized === true,
+        suppressIfOtherAgentMentioned: true,
       },
     });
     effectiveWasMentioned = mentionDecision.effectiveWasMentioned;

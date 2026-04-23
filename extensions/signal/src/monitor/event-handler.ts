@@ -686,10 +686,15 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         allowTextCommands: true,
         hasControlCommand: hasControlCommandInMessage,
         commandAuthorized,
+        suppressIfOtherAgentMentioned: true,
       },
     });
     const effectiveWasMentioned = mentionDecision.effectiveWasMentioned;
-    if (isGroup && requireMention && canDetectMention && mentionDecision.shouldSkip) {
+    if (
+      isGroup &&
+      (mentionDecision.suppressedByOtherAgentMention ||
+        (requireMention && canDetectMention && mentionDecision.shouldSkip))
+    ) {
       logInboundDrop({
         log: logVerbose,
         channel: "signal",
