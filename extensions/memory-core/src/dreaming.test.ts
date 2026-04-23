@@ -32,7 +32,6 @@ type DreamingPluginApiTestDouble = {
   pluginConfig: Record<string, unknown>;
   logger: ReturnType<typeof createLogger>;
   runtime: unknown;
-  registerHook: (event: string, handler: (event: unknown) => unknown) => void;
   on: ReturnType<typeof vi.fn>;
 };
 
@@ -739,7 +738,6 @@ describe("gateway startup reconciliation", () => {
       pluginConfig: {},
       logger,
       runtime: {},
-      registerHook: () => {},
       on: onMock,
     };
 
@@ -805,7 +803,6 @@ describe("gateway startup reconciliation", () => {
       pluginConfig: {},
       logger,
       runtime: {},
-      registerHook: () => {},
       on: onMock,
     };
 
@@ -875,7 +872,6 @@ describe("gateway startup reconciliation", () => {
       pluginConfig: {},
       logger,
       runtime: {},
-      registerHook: () => {},
       on: onMock,
     };
 
@@ -963,7 +959,6 @@ describe("gateway startup reconciliation", () => {
       pluginConfig: {},
       logger,
       runtime: {},
-      registerHook: () => {},
       on: onMock,
     };
 
@@ -1025,7 +1020,6 @@ describe("gateway startup reconciliation", () => {
       pluginConfig: {},
       logger,
       runtime: {},
-      registerHook: () => {},
       on: onMock,
     };
 
@@ -1077,7 +1071,6 @@ describe("gateway startup reconciliation", () => {
       pluginConfig: {},
       logger,
       runtime: {},
-      registerHook: () => {},
       on: onMock,
     };
 
@@ -1129,7 +1122,6 @@ describe("gateway startup reconciliation", () => {
       pluginConfig: {},
       logger,
       runtime: {},
-      registerHook: () => {},
       on: onMock,
     };
 
@@ -1192,7 +1184,6 @@ describe("gateway startup reconciliation", () => {
       pluginConfig: {},
       logger,
       runtime: {},
-      registerHook: () => {},
       on: onMock,
     };
 
@@ -1231,7 +1222,6 @@ describe("gateway startup reconciliation", () => {
       pluginConfig: {},
       logger,
       runtime: {},
-      registerHook: () => {},
       on: vi.fn(),
     };
 
@@ -1292,7 +1282,6 @@ describe("gateway startup reconciliation", () => {
       pluginConfig: {},
       logger,
       runtime: {},
-      registerHook: () => {},
       on: onMock,
     };
 
@@ -1314,6 +1303,237 @@ describe("gateway startup reconciliation", () => {
       );
 
       expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("cron service unavailable"));
+    } finally {
+      clearInternalHooks();
+    }
+  });
+
+  it("uses live runtime config for heartbeat dreaming reconciliation", async () => {
+    clearInternalHooks();
+    const logger = createLogger();
+    const harness = createCronHarness();
+    const onMock = vi.fn();
+    const runtimeLoadConfig = vi.fn(
+      () =>
+        ({
+          plugins: {
+            entries: {
+              "memory-core": {
+                config: {
+                  dreaming: {
+                    enabled: false,
+                  },
+                },
+              },
+            },
+          },
+        }) as OpenClawConfig,
+    );
+    const api: DreamingPluginApiTestDouble = {
+      config: {
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  frequency: "15 4 * * *",
+                  timezone: "UTC",
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      pluginConfig: {},
+      logger,
+      runtime: {
+        config: {
+          loadConfig: runtimeLoadConfig,
+        },
+      },
+      on: onMock,
+    };
+
+    try {
+      registerShortTermPromotionDreamingForTest(api);
+      await triggerGatewayStart(onMock, {
+        config: api.config,
+        getCron: () => harness.cron,
+      });
+
+      const sessionKey = "agent:main:main";
+      enqueueSystemEvent(constants.DREAMING_SYSTEM_EVENT_TEXT, {
+        sessionKey,
+        contextKey: "cron:memory-dreaming",
+      });
+
+      const beforeAgentReply = getBeforeAgentReplyHandler(onMock);
+      const result = await beforeAgentReply(
+        { cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT },
+        { trigger: "heartbeat", workspaceDir: ".", sessionKey },
+      );
+
+      expect(runtimeLoadConfig).toHaveBeenCalled();
+      expect(result).toEqual({
+        handled: true,
+        reason: "memory-core: short-term dreaming disabled",
+      });
+    } finally {
+      clearInternalHooks();
+    }
+  });
+
+  it("uses live runtime config for the heartbeat dreaming run payload", async () => {
+    clearInternalHooks();
+    const logger = createLogger();
+    const harness = createCronHarness();
+    const onMock = vi.fn();
+    const workspaceDir = await createTempWorkspace("memory-dreaming-live-config-workspace-");
+    const runtimeLoadConfig = vi.fn(
+      () =>
+        ({
+          agents: {
+            list: [{ id: "main", default: true, workspace: workspaceDir }],
+          },
+          plugins: {
+            entries: {
+              "memory-core": {
+                config: {
+                  dreaming: {
+                    enabled: true,
+                    frequency: "15 4 * * *",
+                    timezone: "UTC",
+                    limit: 0,
+                  },
+                },
+              },
+            },
+          },
+        }) as OpenClawConfig,
+    );
+    const api: DreamingPluginApiTestDouble = {
+      config: {
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  frequency: "15 4 * * *",
+                  timezone: "UTC",
+                  limit: 5,
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      pluginConfig: {},
+      logger,
+      runtime: {
+        config: {
+          loadConfig: runtimeLoadConfig,
+        },
+      },
+      on: onMock,
+    };
+
+    try {
+      registerShortTermPromotionDreamingForTest(api);
+      await triggerGatewayStart(onMock, {
+        config: api.config,
+        getCron: () => harness.cron,
+      });
+
+      const sessionKey = "agent:main:main";
+      enqueueSystemEvent(constants.DREAMING_SYSTEM_EVENT_TEXT, {
+        sessionKey,
+        contextKey: "cron:memory-dreaming",
+      });
+
+      const beforeAgentReply = getBeforeAgentReplyHandler(onMock);
+      const result = await beforeAgentReply(
+        { cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT },
+        { trigger: "heartbeat", sessionKey },
+      );
+
+      expect(result).toEqual({
+        handled: true,
+        reason: "memory-core: short-term dreaming processed",
+      });
+      expect(runtimeLoadConfig).toHaveBeenCalled();
+      expect(logger.warn).not.toHaveBeenCalledWith(
+        "memory-core: dreaming promotion skipped because no memory workspace is available.",
+      );
+    } finally {
+      clearInternalHooks();
+    }
+  });
+
+  it("does not fall back to startup plugin config when live memory-core config is removed", async () => {
+    clearInternalHooks();
+    const logger = createLogger();
+    const harness = createCronHarness();
+    const onMock = vi.fn();
+    const runtimeLoadConfig = vi.fn(
+      () =>
+        ({
+          agents: {
+            list: [{ id: "main", default: true }],
+          },
+        }) as OpenClawConfig,
+    );
+    const api: DreamingPluginApiTestDouble = {
+      config: {
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  frequency: "15 4 * * *",
+                  timezone: "UTC",
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      pluginConfig: {},
+      logger,
+      runtime: {
+        config: {
+          loadConfig: runtimeLoadConfig,
+        },
+      },
+      on: onMock,
+    };
+
+    try {
+      registerShortTermPromotionDreamingForTest(api);
+      await triggerGatewayStart(onMock, {
+        config: api.config,
+        getCron: () => harness.cron,
+      });
+
+      const sessionKey = "agent:main:main";
+      enqueueSystemEvent(constants.DREAMING_SYSTEM_EVENT_TEXT, {
+        sessionKey,
+        contextKey: "cron:memory-dreaming",
+      });
+
+      const beforeAgentReply = getBeforeAgentReplyHandler(onMock);
+      const result = await beforeAgentReply(
+        { cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT },
+        { trigger: "heartbeat", workspaceDir: ".", sessionKey },
+      );
+
+      expect(runtimeLoadConfig).toHaveBeenCalled();
+      expect(result).toEqual({
+        handled: true,
+        reason: "memory-core: short-term dreaming disabled",
+      });
     } finally {
       clearInternalHooks();
     }

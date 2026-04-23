@@ -62,6 +62,7 @@ const {
   createThreadDiscord,
   deleteChannelDiscord,
   editChannelDiscord,
+  fetchReactionsDiscord,
   fetchMessageDiscord,
   kickMemberDiscord,
   listGuildChannelsDiscord,
@@ -196,6 +197,56 @@ describe("handleDiscordMessagingAction", () => {
       "✅",
       expect.objectContaining({ accountId: "work" }),
     );
+  });
+
+  it("resolves Discord DM targets for reaction adds", async () => {
+    const resolveReactionTarget = vi.fn(async () => "DM1");
+    discordMessagingActionRuntime.resolveDiscordReactionTargetChannelId = resolveReactionTarget;
+
+    await handleMessagingAction(
+      "react",
+      {
+        to: "user:U1",
+        messageId: "M1",
+        emoji: "✅",
+      },
+      enableAllActions,
+    );
+
+    expect(resolveReactionTarget).toHaveBeenCalledWith({
+      target: "user:U1",
+      cfg: DISCORD_TEST_CFG,
+      accountId: "default",
+    });
+    expect(reactMessageDiscord).toHaveBeenCalledWith("DM1", "M1", "✅", {
+      cfg: DISCORD_TEST_CFG,
+      accountId: "default",
+    });
+  });
+
+  it("resolves Discord DM targets for reaction listing", async () => {
+    const resolveReactionTarget = vi.fn(async () => "DM1");
+    discordMessagingActionRuntime.resolveDiscordReactionTargetChannelId = resolveReactionTarget;
+
+    await handleMessagingAction(
+      "reactions",
+      {
+        to: "user:U1",
+        messageId: "M1",
+      },
+      enableAllActions,
+    );
+
+    expect(resolveReactionTarget).toHaveBeenCalledWith({
+      target: "user:U1",
+      cfg: DISCORD_TEST_CFG,
+      accountId: "default",
+    });
+    expect(fetchReactionsDiscord).toHaveBeenCalledWith("DM1", "M1", {
+      cfg: DISCORD_TEST_CFG,
+      accountId: "default",
+      limit: undefined,
+    });
   });
 
   it("removes reactions on empty emoji", async () => {

@@ -120,8 +120,9 @@ openclaw gateway
 
 ## Manifest and scope checklist
 
-<Tabs>
-  <Tab title="Socket Mode (default)">
+The base Slack app manifest is the same for Socket Mode and HTTP Request URLs. Only the `settings` block (and the slash command `url`) differs.
+
+Base manifest (Socket Mode default):
 
 ```json
 {
@@ -130,10 +131,7 @@ openclaw gateway
     "description": "Slack connector for OpenClaw"
   },
   "features": {
-    "bot_user": {
-      "display_name": "OpenClaw",
-      "always_online": true
-    },
+    "bot_user": { "display_name": "OpenClaw", "always_online": true },
     "app_home": {
       "messages_tab_enabled": true,
       "messages_tab_read_only_enabled": false
@@ -196,25 +194,11 @@ openclaw gateway
 }
 ```
 
-  </Tab>
-
-  <Tab title="HTTP Request URLs">
+For **HTTP Request URLs mode**, replace `settings` with the HTTP variant and add `url` to each slash command. Public URL required:
 
 ```json
 {
-  "display_information": {
-    "name": "OpenClaw",
-    "description": "Slack connector for OpenClaw"
-  },
   "features": {
-    "bot_user": {
-      "display_name": "OpenClaw",
-      "always_online": true
-    },
-    "app_home": {
-      "messages_tab_enabled": true,
-      "messages_tab_read_only_enabled": false
-    },
     "slash_commands": [
       {
         "command": "/openclaw",
@@ -224,50 +208,11 @@ openclaw gateway
       }
     ]
   },
-  "oauth_config": {
-    "scopes": {
-      "bot": [
-        "app_mentions:read",
-        "assistant:write",
-        "channels:history",
-        "channels:read",
-        "chat:write",
-        "commands",
-        "emoji:read",
-        "files:read",
-        "files:write",
-        "groups:history",
-        "groups:read",
-        "im:history",
-        "im:read",
-        "im:write",
-        "mpim:history",
-        "mpim:read",
-        "mpim:write",
-        "pins:read",
-        "pins:write",
-        "reactions:read",
-        "reactions:write",
-        "users:read"
-      ]
-    }
-  },
   "settings": {
     "event_subscriptions": {
       "request_url": "https://gateway-host.example.com/slack/events",
       "bot_events": [
-        "app_mention",
-        "channel_rename",
-        "member_joined_channel",
-        "member_left_channel",
-        "message.channels",
-        "message.groups",
-        "message.im",
-        "message.mpim",
-        "pin_added",
-        "pin_removed",
-        "reaction_added",
-        "reaction_removed"
+        /* same as Socket Mode */
       ]
     },
     "interactivity": {
@@ -278,9 +223,6 @@ openclaw gateway
   }
 }
 ```
-
-  </Tab>
-</Tabs>
 
 ### Additional manifest settings
 
@@ -708,7 +650,7 @@ Manual reply tags are supported:
 - `[[reply_to_current]]`
 - `[[reply_to:<id>]]`
 
-Note: `replyToMode="off"` disables **all** reply threading in Slack, including explicit `[[reply_to_*]]` tags. This differs from Telegram, where explicit tags are still honored in `"off"` mode. The difference reflects the platform threading models: Slack threads hide messages from the channel, while Telegram replies remain visible in the main chat flow.
+Note: `replyToMode="off"` disables **all** reply threading in Slack, including explicit `[[reply_to_*]]` tags. This differs from Telegram, where explicit tags are still honored in `"off"` mode — Slack threads hide messages from the channel while Telegram replies stay visible inline.
 
 ## Ack reactions
 
@@ -742,7 +684,7 @@ Notes:
 - Channel and group-chat roots can still use the normal draft preview when native streaming is unavailable.
 - Top-level Slack DMs stay off-thread by default, so they do not show the thread-style preview; use thread replies or `typingReaction` if you want visible progress there.
 - Media and non-text payloads fall back to normal delivery.
-- Media/error finals cancel pending preview edits without flushing a temporary draft; eligible text/block finals flush only when they can edit the preview in place.
+- Media/error finals cancel pending preview edits; eligible text/block finals flush only when they can edit the preview in place.
 - If streaming fails mid-reply, OpenClaw falls back to normal delivery for remaining payloads.
 
 Use draft preview instead of Slack native text streaming:

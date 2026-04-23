@@ -1,4 +1,4 @@
-import { ChannelType, type Client } from "@buape/carbon";
+import { ChannelType, type Client, type MessageCreateListener } from "@buape/carbon";
 import { Routes, type APIAttachment, type APIStickerItem } from "discord-api-types/v10";
 import {
   resolveChannelModelOverride,
@@ -14,8 +14,12 @@ import {
   truncateUtf16Safe,
 } from "openclaw/plugin-sdk/text-runtime";
 import type { DiscordChannelConfigResolved } from "./allow-list.js";
-import { resolveDiscordChannelNameSafe } from "./channel-access.js";
-import type { DiscordMessageEvent } from "./listeners.js";
+import {
+  resolveDiscordChannelIdSafe,
+  resolveDiscordChannelNameSafe,
+  resolveDiscordChannelParentIdSafe,
+  resolveDiscordChannelParentSafe,
+} from "./channel-access.js";
 import {
   resolveDiscordChannelInfo,
   resolveDiscordEmbedText,
@@ -80,6 +84,7 @@ type DiscordThreadStarterRestMessage = {
   author?: DiscordThreadStarterRestAuthor | null;
   timestamp?: string | null;
 };
+type DiscordMessageEvent = Parameters<MessageCreateListener["handle"]>[0];
 
 // Cache entry with timestamp for TTL-based eviction
 type DiscordThreadStarterCacheEntry = {
@@ -199,8 +204,12 @@ export async function resolveDiscordThreadParentInfo(params: {
   channelInfo: import("./message-utils.js").DiscordChannelInfo | null;
 }): Promise<DiscordThreadParentInfo> {
   const { threadChannel, channelInfo, client } = params;
+  const parent = resolveDiscordChannelParentSafe(threadChannel);
   let parentId =
-    threadChannel.parentId ?? threadChannel.parent?.id ?? channelInfo?.parentId ?? undefined;
+    resolveDiscordChannelParentIdSafe(threadChannel) ??
+    resolveDiscordChannelIdSafe(parent) ??
+    channelInfo?.parentId ??
+    undefined;
   if (!parentId && threadChannel.id) {
     const threadInfo = await resolveDiscordChannelInfo(client, threadChannel.id);
     parentId = threadInfo?.parentId ?? undefined;
@@ -208,7 +217,7 @@ export async function resolveDiscordThreadParentInfo(params: {
   if (!parentId) {
     return {};
   }
-  let parentName = resolveDiscordChannelNameSafe(threadChannel.parent);
+  let parentName = resolveDiscordChannelNameSafe(parent);
   const parentInfo = await resolveDiscordChannelInfo(client, parentId);
   parentName = parentName ?? parentInfo?.name;
   const parentType = parentInfo?.type;

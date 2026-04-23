@@ -121,6 +121,8 @@ export async function loadSubagentSpawnModuleForTest(params: {
   resolveAgentConfig?: (cfg: Record<string, unknown>, agentId: string) => unknown;
   resolveAgentWorkspaceDir?: (cfg: Record<string, unknown>, agentId: string) => string;
   resolveSubagentSpawnModelSelection?: () => string | undefined;
+  getSubagentDepthFromSessionStore?: (sessionKey: string, opts?: unknown) => number;
+  countActiveRunsForSession?: (sessionKey: string) => number;
   resolveSandboxRuntimeStatus?: (params: {
     cfg?: Record<string, unknown>;
     sessionKey?: string;
@@ -220,11 +222,11 @@ export async function loadSubagentSpawnModuleForTest(params: {
   }));
 
   vi.doMock("./subagent-depth.js", () => ({
-    getSubagentDepthFromSessionStore: () => 0,
+    getSubagentDepthFromSessionStore: params.getSubagentDepthFromSessionStore ?? (() => 0),
   }));
 
   vi.doMock("./subagent-registry.js", () => ({
-    countActiveRunsForSession: () => 0,
+    countActiveRunsForSession: params.countActiveRunsForSession ?? (() => 0),
     registerSubagentRun:
       params.registerSubagentRunMock ?? vi.fn((_record: Record<string, unknown>) => undefined),
     resetSubagentRegistryForTests,

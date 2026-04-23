@@ -81,6 +81,7 @@ type ManagedGatewayConfigReloaderParams = Omit<
 > & {
   minimalTestGateway: boolean;
   initialConfig: OpenClawConfig;
+  initialCompareConfig?: OpenClawConfig;
   initialInternalWriteHash: string | null;
   watchPath: string;
   readSnapshot: typeof import("../config/config.js").readConfigFileSnapshot;
@@ -277,15 +278,14 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         },
       });
       return true;
-    } else {
-      // No active operations or pending replies, restart immediately
-      params.logReload.warn(`config change requires gateway restart (${reasons})`);
-      const emitted = emitGatewayRestart();
-      if (!emitted) {
-        params.logReload.info("gateway restart already scheduled; skipping duplicate signal");
-      }
-      return true;
     }
+    // No active operations or pending replies, restart immediately
+    params.logReload.warn(`config change requires gateway restart (${reasons})`);
+    const emitted = emitGatewayRestart();
+    if (!emitted) {
+      params.logReload.info("gateway restart already scheduled; skipping duplicate signal");
+    }
+    return true;
   };
 
   return { applyHotReload, requestGatewayRestart };
@@ -316,6 +316,7 @@ export function startManagedGatewayConfigReloader(params: ManagedGatewayConfigRe
 
   return startGatewayConfigReloader({
     initialConfig: params.initialConfig,
+    initialCompareConfig: params.initialCompareConfig,
     initialInternalWriteHash: params.initialInternalWriteHash,
     readSnapshot: params.readSnapshot,
     recoverSnapshot: async (snapshot, reason) =>
