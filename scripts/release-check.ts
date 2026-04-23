@@ -96,7 +96,7 @@ export const PACKED_CLI_SMOKE_COMMANDS = [
   ["--help"],
   ["status", "--json", "--timeout", "1"],
   ["config", "schema"],
-  ["models", "list", "amazon-bedrock"],
+  ["models", "list", "--provider", "amazon-bedrock"],
 ] as const;
 
 function collectBundledExtensions(): BundledExtension[] {
@@ -231,11 +231,29 @@ export function createPackedBundledPluginPostinstallEnv(
 }
 
 export function createPackedCliSmokeEnv(
-  env: NodeJS.ProcessEnv = process.env,
+  env: NodeJS.ProcessEnv,
   overrides: NodeJS.ProcessEnv = {},
 ): NodeJS.ProcessEnv {
+  const allowlistedEnvEntries = [
+    "PATH",
+    "HOME",
+    "USERPROFILE",
+    "TMPDIR",
+    "TMP",
+    "TEMP",
+    "SystemRoot",
+    "ComSpec",
+    "PATHEXT",
+    "WINDIR",
+  ] as const;
+
   return {
-    ...env,
+    ...Object.fromEntries(
+      allowlistedEnvEntries.flatMap((key) => {
+        const value = env[key];
+        return typeof value === "string" && value.length > 0 ? [[key, value]] : [];
+      }),
+    ),
     OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK: "1",
     OPENCLAW_NO_ONBOARD: "1",
     OPENCLAW_SUPPRESS_NOTES: "1",

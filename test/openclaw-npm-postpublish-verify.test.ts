@@ -438,19 +438,17 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
     try {
       writePackageFile(packageRoot, "package.json", {
         version: "2026.4.22",
-        dependencies: {
-          typebox: "1.1.28",
-        },
+        dependencies: {},
       });
       mkdirSync(join(packageRoot, "dist"), { recursive: true });
       writeFileSync(
         join(packageRoot, "dist", "typebox-CXXonh2u.js"),
-        'import { Type } from "@sinclair/typebox";\nexport { Type };\n',
+        'import { Type } from "typebox";\nexport { Type };\n',
         "utf8",
       );
 
       expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([
-        "installed package root is missing declared runtime dependency '@sinclair/typebox' for dist importers: typebox-CXXonh2u.js. Add it to package.json dependencies/optionalDependencies.",
+        "installed package root is missing declared runtime dependency 'typebox' for dist importers: typebox-CXXonh2u.js. Add it to package.json dependencies/optionalDependencies.",
       ]);
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
@@ -464,14 +462,39 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
       writePackageFile(packageRoot, "package.json", {
         version: "2026.4.22",
         dependencies: {
-          "@sinclair/typebox": "npm:typebox@1.1.28",
           typebox: "1.1.28",
         },
       });
       mkdirSync(join(packageRoot, "dist"), { recursive: true });
       writeFileSync(
         join(packageRoot, "dist", "typebox-CXXonh2u.js"),
-        'import { Type } from "@sinclair/typebox";\nexport { Type };\n',
+        'import { Type } from "typebox";\nexport { Type };\n',
+        "utf8",
+      );
+
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([]);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores import-like text inside comments", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      writePackageFile(packageRoot, "package.json", {
+        version: "2026.4.22",
+        dependencies: {},
+      });
+      mkdirSync(join(packageRoot, "dist"), { recursive: true });
+      writeFileSync(
+        join(packageRoot, "dist", "comment-only.js"),
+        [
+          '// import "fake-package";',
+          '/* require("fake-package-two"); */',
+          "export const ok = true;",
+          "",
+        ].join("\n"),
         "utf8",
       );
 

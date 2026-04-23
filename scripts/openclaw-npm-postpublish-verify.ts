@@ -49,10 +49,7 @@ const LEGACY_CONTEXT_ENGINE_UNRESOLVED_RUNTIME_MARKER =
 const PUBLISHED_BUNDLED_RUNTIME_SIDECAR_PATHS = BUNDLED_RUNTIME_SIDECAR_PATHS.filter(
   (relativePath) => listBundledPluginPackArtifacts().includes(relativePath),
 );
-const NODE_BUILTIN_MODULES = new Set([
-  ...builtinModules,
-  ...builtinModules.map((name) => name.replace(/^node:/u, "")),
-]);
+const NODE_BUILTIN_MODULES = new Set(builtinModules.map((name) => name.replace(/^node:/u, "")));
 
 export type PublishedInstallScenario = {
   name: string;
@@ -193,8 +190,120 @@ function listInstalledRootDistJavaScriptFiles(packageRoot: string): string[] {
   return files;
 }
 
+function stripJavaScriptComments(source: string): string {
+  let result = "";
+  let index = 0;
+  let resumeState: "code" | "template-expression" = "code";
+  let state:
+    | "code"
+    | "line-comment"
+    | "block-comment"
+    | "single-quote"
+    | "double-quote"
+    | "template"
+    | "template-expression" = "code";
+  let templateExpressionDepth = 0;
+
+  while (index < source.length) {
+    const current = source[index] ?? "";
+    const next = source[index + 1] ?? "";
+    if (state === "code") {
+      if (current === "/" && next === "/") {
+        result += "  ";
+        state = "line-comment";
+        index += 2;
+        continue;
+      }
+      if (current === "/" && next === "*") {
+        result += "  ";
+        state = "block-comment";
+        index += 2;
+        continue;
+      }
+      if (current === "'") {
+        resumeState = state;
+        state = "single-quote";
+      } else if (current === '"') {
+        resumeState = state;
+        state = "double-quote";
+      } else if (current === "`") {
+        state = "template";
+      }
+      result += current;
+      index += 1;
+      continue;
+    }
+
+    if (state === "line-comment") {
+      if (current === "\n") {
+        result += "\n";
+        state = "code";
+      } else {
+        result += " ";
+      }
+      index += 1;
+      continue;
+    }
+
+    if (state === "block-comment") {
+      if (current === "*" && next === "/") {
+        result += "  ";
+        state = "code";
+        index += 2;
+        continue;
+      }
+      result += current === "\n" ? "\n" : " ";
+      index += 1;
+      continue;
+    }
+
+    result += current;
+    if (current === "\\") {
+      result += next;
+      index += 2;
+      continue;
+    }
+    if (state === "single-quote" && current === "'") {
+      state = resumeState;
+    } else if (state === "double-quote" && current === '"') {
+      state = resumeState;
+    } else if (state === "template") {
+      if (current === "`") {
+        state = "code";
+      } else if (current === "$" && next === "{") {
+        result += next;
+        state = "template-expression";
+        templateExpressionDepth = 1;
+        index += 2;
+        continue;
+      }
+    } else if (state === "template-expression") {
+      if (current === "{") {
+        templateExpressionDepth += 1;
+      } else if (current === "}") {
+        templateExpressionDepth -= 1;
+        if (templateExpressionDepth === 0) {
+          state = "template";
+        }
+      } else if (current === "'") {
+        resumeState = "template-expression";
+        state = "single-quote";
+      } else if (current === '"') {
+        resumeState = "template-expression";
+        state = "double-quote";
+      } else if (current === "`") {
+        state = "template";
+      }
+    }
+    index += 1;
+  }
+
+  return result;
+}
+
 function extractJavaScriptImportSpecifiers(source: string): Set<string> {
   const specifiers = new Set<string>();
+  const strippedSource = stripJavaScriptComments(source);
   const patterns = [
     /\bfrom\s*["']([^"']+)["']/g,
     /\bimport\s*["']([^"']+)["']/g,
@@ -202,7 +311,7 @@ function extractJavaScriptImportSpecifiers(source: string): Set<string> {
     /\brequire\s*\(\s*["']([^"']+)["']\s*\)/g,
   ];
   for (const pattern of patterns) {
-    for (const match of source.matchAll(pattern)) {
+    for (const match of strippedSource.matchAll(pattern)) {
       if (match[1]) {
         specifiers.add(match[1]);
       }

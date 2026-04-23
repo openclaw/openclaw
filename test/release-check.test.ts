@@ -62,14 +62,19 @@ describe("packed CLI smoke", () => {
       ["--help"],
       ["status", "--json", "--timeout", "1"],
       ["config", "schema"],
-      ["models", "list", "amazon-bedrock"],
+      ["models", "list", "--provider", "amazon-bedrock"],
     ]);
   });
 
   it("builds a packed CLI smoke env with packaged-install guardrails", () => {
     expect(
       createPackedCliSmokeEnv(
-        { PATH: "/usr/bin", HOME: "/tmp/original-home" },
+        {
+          PATH: "/usr/bin",
+          HOME: "/tmp/original-home",
+          GITHUB_TOKEN: "redacted",
+          OPENAI_API_KEY: "real-secret",
+        },
         { HOME: "/tmp/smoke-home", OPENCLAW_STATE_DIR: "/tmp/smoke-state" },
       ),
     ).toEqual({
