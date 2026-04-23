@@ -27,6 +27,7 @@ export {
   modelsImageFallbacksListCommand,
   modelsImageFallbacksRemoveCommand,
 } from "./models/image-fallbacks.js";
+export { modelsExplainCommand } from "./models/explain.js";
 export { modelsListCommand, modelsStatusCommand } from "./models/list.js";
 export { modelsScanCommand } from "./models/scan.js";
 export { modelsSetCommand } from "./models/set.js";
