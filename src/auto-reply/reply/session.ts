@@ -4,7 +4,7 @@ import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { clearBootstrapSnapshotOnSessionRollover } from "../../agents/bootstrap-cache.js";
 import { getCliSessionBinding } from "../../agents/cli-session.js";
 import { resetRegisteredAgentHarnessSessions } from "../../agents/harness/registry.js";
-import { disposeSessionMcpRuntime } from "../../agents/pi-bundle-mcp-tools.js";
+import { retireSessionMcpRuntime } from "../../agents/pi-bundle-mcp-tools.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
@@ -815,13 +815,14 @@ export async function initSessionState(params: {
       agentId,
       archivedTranscripts,
     });
-    await disposeSessionMcpRuntime(previousSessionEntry.sessionId).catch((error) => {
-      log.warn(
-        `failed to dispose bundle MCP runtime for session ${previousSessionEntry.sessionId}`,
-        {
+    await retireSessionMcpRuntime({
+      sessionId: previousSessionEntry.sessionId,
+      reason: "reply-session-rollover",
+      onError: (error, sessionId) => {
+        log.warn(`failed to dispose bundle MCP runtime for session ${sessionId}`, {
           error: String(error),
-        },
-      );
+        });
+      },
     });
     await resetRegisteredAgentHarnessSessions({
       sessionId: previousSessionEntry.sessionId,

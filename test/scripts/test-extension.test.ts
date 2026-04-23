@@ -173,12 +173,27 @@ describe("scripts/test-extension.mjs", () => {
     expect(plan.hasTests).toBe(true);
   });
 
-  it("keeps non-provider extensions on the shared extensions vitest config", () => {
-    const plan = resolveExtensionTestPlan({ targetArg: "firecrawl", cwd: process.cwd() });
+  it("resolves broad dedicated extension groups onto their narrow vitest configs", () => {
+    expect(resolveExtensionTestPlan({ targetArg: "browser", cwd: process.cwd() }).config).toBe(
+      "test/vitest/vitest.extension-browser.config.ts",
+    );
+    expect(resolveExtensionTestPlan({ targetArg: "qa-lab", cwd: process.cwd() }).config).toBe(
+      "test/vitest/vitest.extension-qa.config.ts",
+    );
+    expect(resolveExtensionTestPlan({ targetArg: "vydra", cwd: process.cwd() }).config).toBe(
+      "test/vitest/vitest.extension-media.config.ts",
+    );
+    expect(resolveExtensionTestPlan({ targetArg: "firecrawl", cwd: process.cwd() }).config).toBe(
+      "test/vitest/vitest.extension-misc.config.ts",
+    );
+  });
 
-    expect(plan.extensionId).toBe("firecrawl");
+  it("keeps unmatched non-provider extensions on the shared extensions vitest config", () => {
+    const plan = resolveExtensionTestPlan({ targetArg: "codex", cwd: process.cwd() });
+
+    expect(plan.extensionId).toBe("codex");
     expect(plan.config).toBe("test/vitest/vitest.extensions.config.ts");
-    expect(plan.roots).toContain(bundledPluginRoot("firecrawl"));
+    expect(plan.roots).toContain(bundledPluginRoot("codex"));
     expect(plan.hasTests).toBe(true);
   });
 
@@ -260,12 +275,16 @@ describe("scripts/test-extension.mjs", () => {
         "bluebubbles",
         "acpx",
         "diffs",
+        "browser",
+        "qa-lab",
+        "vydra",
       ],
     });
 
     expect(batch.extensionIds).toEqual([
       "acpx",
       "bluebubbles",
+      "browser",
       "diffs",
       "feishu",
       "firecrawl",
@@ -276,9 +295,11 @@ describe("scripts/test-extension.mjs", () => {
       "memory-core",
       "msteams",
       "openai",
+      "qa-lab",
       "slack",
       "telegram",
       "voice-call",
+      "vydra",
       "whatsapp",
       "zalo",
       "zalouser",
@@ -296,6 +317,13 @@ describe("scripts/test-extension.mjs", () => {
         estimatedCost: expect.any(Number),
         extensionIds: ["bluebubbles"],
         roots: [bundledPluginRoot("bluebubbles")],
+        testFileCount: expect.any(Number),
+      },
+      {
+        config: "test/vitest/vitest.extension-browser.config.ts",
+        estimatedCost: expect.any(Number),
+        extensionIds: ["browser"],
+        roots: [bundledPluginRoot("browser")],
         testFileCount: expect.any(Number),
       },
       {
@@ -341,10 +369,24 @@ describe("scripts/test-extension.mjs", () => {
         testFileCount: expect.any(Number),
       },
       {
+        config: "test/vitest/vitest.extension-media.config.ts",
+        estimatedCost: expect.any(Number),
+        extensionIds: ["vydra"],
+        roots: [bundledPluginRoot("vydra")],
+        testFileCount: expect.any(Number),
+      },
+      {
         config: "test/vitest/vitest.extension-memory.config.ts",
         estimatedCost: expect.any(Number),
         extensionIds: ["memory-core"],
         roots: [bundledPluginRoot("memory-core")],
+        testFileCount: expect.any(Number),
+      },
+      {
+        config: "test/vitest/vitest.extension-misc.config.ts",
+        estimatedCost: expect.any(Number),
+        extensionIds: ["firecrawl"],
+        roots: [bundledPluginRoot("firecrawl")],
         testFileCount: expect.any(Number),
       },
       {
@@ -359,6 +401,13 @@ describe("scripts/test-extension.mjs", () => {
         estimatedCost: expect.any(Number),
         extensionIds: ["openai"],
         roots: [bundledPluginRoot("openai")],
+        testFileCount: expect.any(Number),
+      },
+      {
+        config: "test/vitest/vitest.extension-qa.config.ts",
+        estimatedCost: expect.any(Number),
+        extensionIds: ["qa-lab"],
+        roots: [bundledPluginRoot("qa-lab")],
         testFileCount: expect.any(Number),
       },
       {
@@ -396,13 +445,6 @@ describe("scripts/test-extension.mjs", () => {
         roots: [bundledPluginRoot("zalo"), bundledPluginRoot("zalouser")],
         testFileCount: expect.any(Number),
       },
-      {
-        config: "test/vitest/vitest.extensions.config.ts",
-        estimatedCost: expect.any(Number),
-        extensionIds: ["firecrawl"],
-        roots: [bundledPluginRoot("firecrawl")],
-        testFileCount: expect.any(Number),
-      },
     ]);
   });
 
@@ -434,10 +476,22 @@ describe("scripts/test-extension.mjs", () => {
 
     const msTeamsShardIndex = shards.findIndex((shard) => shard.extensionIds.includes("msteams"));
     const feishuShardIndex = shards.findIndex((shard) => shard.extensionIds.includes("feishu"));
+    const browserShardIndex = shards.findIndex((shard) => shard.extensionIds.includes("browser"));
+    const slackShardIndex = shards.findIndex((shard) => shard.extensionIds.includes("slack"));
+    const matrixShardIndex = shards.findIndex((shard) => shard.extensionIds.includes("matrix"));
+    const mattermostShardIndex = shards.findIndex((shard) =>
+      shard.extensionIds.includes("mattermost"),
+    );
 
     expect(msTeamsShardIndex).toBeGreaterThanOrEqual(0);
     expect(feishuShardIndex).toBeGreaterThanOrEqual(0);
     expect(msTeamsShardIndex).not.toBe(feishuShardIndex);
+    expect(browserShardIndex).toBeGreaterThanOrEqual(0);
+    expect(slackShardIndex).toBeGreaterThanOrEqual(0);
+    expect(browserShardIndex).not.toBe(slackShardIndex);
+    expect(matrixShardIndex).toBeGreaterThanOrEqual(0);
+    expect(mattermostShardIndex).toBeGreaterThanOrEqual(0);
+    expect(matrixShardIndex).not.toBe(mattermostShardIndex);
   });
 
   it("runs extension batch config groups concurrently when requested", async () => {

@@ -629,13 +629,16 @@ export async function preflightDiscordMessage(
       }) ?? `user:${author.id}`)
     : messageChannelId;
   let threadBinding: SessionBindingRecord | undefined;
-  threadBinding =
-    conversationRuntime.getSessionBindingService().resolveByConversation({
+  const runtimeRoute = conversationRuntime.resolveRuntimeConversationBindingRoute({
+    route,
+    conversation: {
       channel: "discord",
       accountId: params.accountId,
       conversationId: bindingConversationId,
       parentConversationId: earlyThreadParentId,
-    }) ?? undefined;
+    },
+  });
+  threadBinding = runtimeRoute.bindingRecord ?? undefined;
   const configuredRoute =
     threadBinding == null
       ? conversationRuntime.resolveConfiguredBindingRoute({
@@ -666,13 +669,15 @@ export async function preflightDiscordMessage(
   }
   const boundSessionKey = conversationRuntime.isPluginOwnedSessionBindingRecord(threadBinding)
     ? ""
-    : threadBinding?.targetSessionKey?.trim();
-  const effectiveRoute = resolveDiscordEffectiveRoute({
-    route,
-    boundSessionKey,
-    configuredRoute,
-    matchedBy: "binding.channel",
-  });
+    : (runtimeRoute.boundSessionKey ?? threadBinding?.targetSessionKey?.trim());
+  const effectiveRoute = runtimeRoute.boundSessionKey
+    ? runtimeRoute.route
+    : resolveDiscordEffectiveRoute({
+        route,
+        boundSessionKey,
+        configuredRoute,
+        matchedBy: "binding.channel",
+      });
   const boundAgentId = boundSessionKey ? effectiveRoute.agentId : undefined;
   const isBoundThreadSession = Boolean(threadBinding && earlyThreadChannel);
   const bypassMentionRequirement = isBoundThreadSession;

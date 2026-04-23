@@ -22,6 +22,7 @@ import {
   isProviderExtensionRoot,
   isProviderOpenAiExtensionRoot,
 } from "../test/vitest/vitest.extension-provider-paths.mjs";
+import { isQaExtensionRoot } from "../test/vitest/vitest.extension-qa-paths.mjs";
 import { isTelegramExtensionRoot } from "../test/vitest/vitest.extension-telegram-paths.mjs";
 import { isVoiceCallExtensionRoot } from "../test/vitest/vitest.extension-voice-call-paths.mjs";
 import { isWhatsAppExtensionRoot } from "../test/vitest/vitest.extension-whatsapp-paths.mjs";
@@ -79,6 +80,7 @@ const EXTENSION_MESSAGING_VITEST_CONFIG = "test/vitest/vitest.extension-messagin
 const EXTENSION_PROVIDER_OPENAI_VITEST_CONFIG =
   "test/vitest/vitest.extension-provider-openai.config.ts";
 const EXTENSION_PROVIDERS_VITEST_CONFIG = "test/vitest/vitest.extension-providers.config.ts";
+const EXTENSION_QA_VITEST_CONFIG = "test/vitest/vitest.extension-qa.config.ts";
 const EXTENSION_SIGNAL_VITEST_CONFIG = "test/vitest/vitest.extension-signal.config.ts";
 const EXTENSION_SLACK_VITEST_CONFIG = "test/vitest/vitest.extension-slack.config.ts";
 const EXTENSION_TELEGRAM_VITEST_CONFIG = "test/vitest/vitest.extension-telegram.config.ts";
@@ -146,6 +148,7 @@ const VITEST_CONFIG_BY_KIND = {
   extensionMsTeams: EXTENSION_MSTEAMS_VITEST_CONFIG,
   extensionProviderOpenAi: EXTENSION_PROVIDER_OPENAI_VITEST_CONFIG,
   extensionProvider: EXTENSION_PROVIDERS_VITEST_CONFIG,
+  extensionQa: EXTENSION_QA_VITEST_CONFIG,
   extensionSignal: EXTENSION_SIGNAL_VITEST_CONFIG,
   extensionSlack: EXTENSION_SLACK_VITEST_CONFIG,
   extensionTelegram: EXTENSION_TELEGRAM_VITEST_CONFIG,
@@ -457,6 +460,9 @@ function isRoutableChangedTarget(changedPath) {
   if (GENERATED_CHANGED_TEST_TARGETS.has(changedPath)) {
     return false;
   }
+  if (changedPath.endsWith(".live.test.ts")) {
+    return false;
+  }
   return /^(?:src|test|extensions|ui|packages)(?:\/|$)/u.test(changedPath);
 }
 
@@ -536,6 +542,9 @@ function classifyTarget(arg, cwd) {
     }
     if (isProviderOpenAiExtensionRoot(extensionRoot)) {
       return "extensionProviderOpenAi";
+    }
+    if (isQaExtensionRoot(extensionRoot)) {
+      return "extensionQa";
     }
     if (isChannelSurfaceTestFile(relative)) {
       return "extensionChannel";
@@ -837,6 +846,7 @@ export function buildVitestRunPlans(
     "extensionMessaging",
     "extensionProviderOpenAi",
     "extensionProvider",
+    "extensionQa",
     "extensionSignal",
     "extensionSlack",
     "extensionFull",

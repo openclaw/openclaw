@@ -18,9 +18,11 @@ export default definePluginEntry({
       return;
     }
     const resolveCurrentConfig = () => {
-      const runtimeConfig = api.runtime.config?.loadConfig?.();
+      const runtimeConfigAvailable = typeof api.runtime.config?.loadConfig === "function";
+      const runtimeConfig = runtimeConfigAvailable ? api.runtime.config.loadConfig() : undefined;
       const runtimePluginConfig =
-        resolvePluginConfigObject(runtimeConfig, "skill-workshop") ?? api.pluginConfig;
+        resolvePluginConfigObject(runtimeConfig, "skill-workshop") ??
+        (!runtimeConfigAvailable ? api.pluginConfig : undefined);
       return resolveConfig(runtimePluginConfig);
     };
 

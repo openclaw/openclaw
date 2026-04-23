@@ -83,11 +83,14 @@ export default definePluginEntry({
   description: "Slack thread claim coordination for multi-agent setups",
   register(api: OpenClawPluginApi) {
     const resolveCurrentState = () => {
-      const currentConfig = api.runtime.config?.loadConfig?.() ?? api.config;
+      const runtimeConfigAvailable = typeof api.runtime.config?.loadConfig === "function";
+      const currentConfig = runtimeConfigAvailable
+        ? (api.runtime.config.loadConfig() ?? api.config)
+        : api.config;
       const livePluginCfg = resolvePluginConfigObject(currentConfig, "thread-ownership");
       const pluginCfg = isThreadOwnershipConfig(livePluginCfg)
         ? livePluginCfg
-        : isThreadOwnershipConfig(api.pluginConfig)
+        : !runtimeConfigAvailable && isThreadOwnershipConfig(api.pluginConfig)
           ? api.pluginConfig
           : {};
       return {

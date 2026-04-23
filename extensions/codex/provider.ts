@@ -100,8 +100,8 @@ export function buildCodexProvider(options: BuildCodexProviderOptions = {}): Pro
         ...(isKnownXHighCodexModel(modelId) ? [{ id: "xhigh" as const }] : []),
       ],
     }),
-    resolveSystemPromptContribution: ({ modelId }) =>
-      resolveCodexSystemPromptContribution({ modelId }),
+    resolveSystemPromptContribution: ({ config, modelId }) =>
+      resolveCodexSystemPromptContribution({ config, modelId }),
     isModernModelRef: ({ modelId }) => isModernCodexModel(modelId),
   };
 }

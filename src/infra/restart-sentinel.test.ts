@@ -90,6 +90,20 @@ describe("restart sentinel", () => {
     expect(formatRestartSentinelMessage(payload)).toBe("Config updated successfully");
   });
 
+  it("uses the exact auto-recovery message for config recovery notices", () => {
+    const payload = {
+      kind: "config-auto-recovery" as const,
+      status: "ok" as const,
+      ts: Date.now(),
+      message:
+        "Gateway recovered automatically after a failed config change and restored the last known good configuration.",
+      stats: { mode: "config-auto-recovery", reason: "gateway-run-invalid-config" },
+    };
+
+    expect(formatRestartSentinelMessage(payload)).toBe(payload.message);
+    expect(summarizeRestartSentinel(payload)).toBe("Gateway auto-recovery");
+  });
+
   it("formatRestartSentinelMessage falls back to summary when no message", () => {
     const payload = {
       kind: "update" as const,

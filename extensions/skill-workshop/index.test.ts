@@ -324,6 +324,53 @@ describe("skill-workshop", () => {
     ).resolves.toBeUndefined();
   });
 
+  it("does not fall back to startup config when live skill-workshop config is removed", async () => {
+    const workspaceDir = await makeTempDir();
+    const stateDir = await makeTempDir();
+    let configFile: Record<string, unknown> = {};
+    let tool: AnyAgentTool | undefined;
+    let toolFactory:
+      | ((ctx: { workspaceDir?: string }) => AnyAgentTool | AnyAgentTool[] | null | undefined)
+      | undefined;
+    const api = createTestPluginApi({
+      pluginConfig: { approvalPolicy: "auto" },
+      runtime: {
+        agent: {
+          resolveAgentWorkspaceDir: () => workspaceDir,
+        },
+        state: {
+          resolveStateDir: () => stateDir,
+        },
+        config: {
+          loadConfig: () => configFile,
+        },
+      } as never,
+      registerTool(registered) {
+        toolFactory = typeof registered === "function" ? registered : undefined;
+        const resolved =
+          typeof registered === "function" ? registered({ workspaceDir }) : registered;
+        tool = Array.isArray(resolved) ? resolved[0] : (resolved ?? undefined);
+      },
+    });
+
+    plugin.register(api);
+
+    const refreshedTool = toolFactory?.({ workspaceDir });
+    tool = Array.isArray(refreshedTool) ? refreshedTool[0] : (refreshedTool ?? undefined);
+
+    const result = await tool?.execute?.("call-1", {
+      action: "suggest",
+      skillName: "screenshot-asset-workflow",
+      description: "Screenshot asset workflow",
+      body: "Verify dimensions, optimize the PNG, and run the relevant gate.",
+    });
+
+    expect(result?.details).toMatchObject({ status: "pending" });
+    await expect(
+      fs.access(path.join(workspaceDir, "skills", "screenshot-asset-workflow", "SKILL.md")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("skips agent_end hook wiring when auto-capture is disabled", () => {
     const on = vi.fn();
     const api = createTestPluginApi({

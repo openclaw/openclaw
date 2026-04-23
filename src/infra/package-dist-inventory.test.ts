@@ -114,7 +114,6 @@ describe("package dist inventory", () => {
       );
       await fs.writeFile(omittedMap, "{}", "utf8");
 
-<<<<<<< HEAD
       await expect(writePackageDistInventory(packageRoot)).resolves.toEqual([
         "dist/extensions/qa-channel/runtime-api.js",
         "dist/extensions/qa-lab/runtime-api.js",

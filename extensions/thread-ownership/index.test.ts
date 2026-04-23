@@ -211,6 +211,32 @@ describe("thread-ownership plugin", () => {
       expect(globalThis.fetch).not.toHaveBeenCalled();
     });
 
+    it("does not fall back to startup allowlists when live plugin config is removed", async () => {
+      api.pluginConfig = { abTestChannels: ["C999"] };
+      register.register(api as unknown as OpenClawPluginApi);
+      vi.mocked(globalThis.fetch).mockResolvedValue(
+        new Response(JSON.stringify({ owner: "test-agent" }), { status: 200 }),
+      );
+
+      const result = await hooks.message_sending(
+        {
+          content: "hello",
+          replyToId: "1234.5678",
+          to: "C123",
+        },
+        { channelId: "slack", conversationId: "C123" },
+      );
+
+      expect(result).toBeUndefined();
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        "http://localhost:8750/api/v1/ownership/C123/1234.5678",
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({ agent_id: "test-agent" }),
+        }),
+      );
+    });
+
     it("cancels when thread owned by another agent", async () => {
       vi.mocked(globalThis.fetch).mockResolvedValue(
         new Response(JSON.stringify({ owner: "other-agent" }), { status: 409 }),

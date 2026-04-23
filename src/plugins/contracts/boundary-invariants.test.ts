@@ -47,21 +47,27 @@ const BUNDLED_TYPED_HOOK_REGISTRATION_GUARDS = {
   readonly string[]
 >;
 const BUNDLED_LIVE_CONFIG_HOOK_GUARDS = {
-  "extensions/active-memory/index.ts": [
-    'resolvePluginConfigObject(api.runtime.config.loadConfig(), "active-memory")',
-    "api.runtime.config.loadConfig()",
+  "extensions/active-memory/index.ts": ["resolveLivePluginConfigObject(", '"active-memory"'],
+  "extensions/diffs/src/plugin.ts": [
+    "resolveLivePluginConfigObject(",
+    '"diffs"',
+    "api.runtime.config?.loadConfig?.() ?? api.config",
   ],
-  "extensions/memory-lancedb/index.ts": [
-    'resolvePluginConfigObject(runtimeConfig, "memory-lancedb")',
-    "api.runtime.config?.loadConfig?.()",
+  "extensions/memory-core/src/dreaming.ts": [
+    'params.reason === "runtime"',
+    "resolveMemoryCorePluginConfig(startupCfg)",
+    "api.runtime.config?.loadConfig?.() ?? api.config",
   ],
+  "extensions/memory-lancedb/index.ts": ["resolveLivePluginConfigObject(", '"memory-lancedb"'],
   "extensions/skill-workshop/index.ts": [
     'resolvePluginConfigObject(runtimeConfig, "skill-workshop")',
-    "api.runtime.config?.loadConfig?.()",
+    'typeof api.runtime.config?.loadConfig === "function"',
+    "api.runtime.config.loadConfig()",
   ],
   "extensions/thread-ownership/index.ts": [
     'resolvePluginConfigObject(currentConfig, "thread-ownership")',
-    "api.runtime.config?.loadConfig?.() ?? api.config",
+    'typeof api.runtime.config?.loadConfig === "function"',
+    "api.runtime.config.loadConfig() ?? api.config",
   ],
 } as const satisfies Record<string, readonly string[]>;
 
@@ -83,6 +89,9 @@ function listTsFiles(rootRelativePath: string, filter: FileFilter = {}): string[
     for (const entry of readdirSync(directory, { withFileTypes: true })) {
       const fullPath = resolve(directory, entry.name);
       if (entry.isDirectory()) {
+        if (entry.name === "node_modules" || entry.name === "dist" || entry.name === ".git") {
+          continue;
+        }
         walk(fullPath);
         continue;
       }

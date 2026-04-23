@@ -73,6 +73,21 @@ describe("embedded acpx plugin config", () => {
     expect(server.args?.length).toBeGreaterThan(0);
   });
 
+  it("injects the built-in OpenClaw tools MCP server only when explicitly enabled", () => {
+    const resolved = resolveAcpxPluginConfig({
+      rawConfig: {
+        openClawToolsMcpBridge: true,
+      },
+      workspaceDir: "/tmp/openclaw-acpx",
+    });
+
+    const server = resolved.mcpServers["openclaw-tools"];
+    expect(server).toBeDefined();
+    expect(server.command).toBe(process.execPath);
+    expect(Array.isArray(server.args)).toBe(true);
+    expect(server.args?.length).toBeGreaterThan(0);
+  });
+
   it("keeps the runtime json schema in sync with the manifest config schema", () => {
     const pluginRoot = resolveAcpxPluginRoot();
     const manifest = JSON.parse(
@@ -91,6 +106,7 @@ describe("embedded acpx plugin config", () => {
         }),
         agents: expect.any(Object),
         mcpServers: expect.any(Object),
+        openClawToolsMcpBridge: expect.any(Object),
       }),
     });
   });
