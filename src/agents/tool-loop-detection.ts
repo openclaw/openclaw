@@ -538,10 +538,28 @@ export function detectToolCallLoop(
     };
   }
 
-  // Generic detector: warn-only for repeated identical calls.
+  // Generic detector: escalate from warning to critical for repeated identical calls.
   const recentCount = history.filter(
     (h) => h.toolName === toolName && h.argsHash === currentHash,
   ).length;
+
+  if (
+    !knownPollTool &&
+    resolvedConfig.detectors.genericRepeat &&
+    recentCount >= resolvedConfig.criticalThreshold
+  ) {
+    log.error(
+      `Critical generic loop detected: ${toolName} called ${recentCount} times with identical arguments`,
+    );
+    return {
+      stuck: true,
+      level: "critical",
+      detector: "generic_repeat",
+      count: recentCount,
+      message: `CRITICAL: You have called ${toolName} ${recentCount} times with identical arguments and no progress. Session execution blocked to prevent runaway loops. Stop retrying and answer without this tool.`,
+      warningKey: `generic:${toolName}:${currentHash}`,
+    };
+  }
 
   if (
     !knownPollTool &&

@@ -317,7 +317,7 @@ describe("tool-loop-detection", () => {
       }
     });
 
-    it("keeps generic loops warn-only below global breaker threshold", () => {
+    it("escalates generic loops to critical at criticalThreshold", () => {
       const fixture = createReadNoProgressFixture();
       const loopResult = detectLoopAfterRepeatedCalls({
         toolName: fixture.toolName,
@@ -327,7 +327,24 @@ describe("tool-loop-detection", () => {
       });
       expect(loopResult.stuck).toBe(true);
       if (loopResult.stuck) {
+        expect(loopResult.level).toBe("critical");
+        expect(loopResult.detector).toBe("generic_repeat");
+        expect(loopResult.message).toContain("CRITICAL");
+      }
+    });
+
+    it("keeps generic loops at warning between warningThreshold and criticalThreshold", () => {
+      const fixture = createReadNoProgressFixture();
+      const loopResult = detectLoopAfterRepeatedCalls({
+        toolName: fixture.toolName,
+        toolParams: fixture.params,
+        result: fixture.result,
+        count: CRITICAL_THRESHOLD - 1,
+      });
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
         expect(loopResult.level).toBe("warning");
+        expect(loopResult.detector).toBe("generic_repeat");
       }
     });
 
