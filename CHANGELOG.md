@@ -47,7 +47,6 @@ Docs: https://docs.openclaw.ai
 - Providers/Anthropic Vertex: restore ADC-backed model discovery after the lightweight provider-discovery path by resolving emitted discovery entries, exposing synthetic auth on bootstrap discovery, and honoring copied env snapshots when probing the default GCP ADC path. Fixes #65715. (#65716) Thanks @feiskyer.
 - Plugins/install: add newly installed plugin ids to an existing `plugins.allow` list before enabling them, so allowlisted configs load installed plugins after restart.
 - Status: show `Fast` in `/status` when fast mode is enabled, including config/default-derived fast mode, and omit it when disabled.
-- CLI/Claude: run the same prompt-build hooks and trigger/channel context on `claude-cli` turns as on direct embedded runs, keeping Claude Code sessions aligned with OpenClaw workspace identity, routing, and hook-driven prompt mutations.
 - OpenAI/image generation: detect Azure OpenAI-style image endpoints, use Azure `api-key` auth plus deployment-scoped image URLs, and honor `AZURE_OPENAI_API_VERSION` so image generation and edits work against Azure-hosted OpenAI resources. (#70570) Thanks @zhanggpcsu.
 - Models/auth: merge provider-owned default-model additions from `openclaw models auth login` instead of replacing `agents.defaults.models`, so re-authenticating an OAuth provider such as OpenAI Codex no longer wipes other providers' aliases and per-model params. Migrations that must rename keys (Anthropic -> Claude CLI) opt in with `replaceDefaultModels`. Fixes #69414. (#70435) Thanks @neeravmakwana.
 - Media understanding/audio: prefer configured or key-backed STT providers before auto-detected local Whisper CLIs, so installed local transcription tools no longer shadow API providers such as Groq/OpenAI in `tools.media.audio` auto mode. Fixes #68727.
@@ -194,6 +193,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/Control UI: require authenticated Control UI read access before serving `/__openclaw/control-ui-config.json` when `gateway.auth` is enabled, so unauthenticated callers can no longer read bootstrap metadata. (#70247) Thanks @drobison00.
 - Gateway/restart: default session-scoped restart sentinels to a one-shot agent continuation, so chat-initiated Gateway restarts acknowledge successful boot automatically. (#70269) Thanks @obviyus.
 - Build/npm publish: fail postpublish verification when root `dist/*` files import bundled plugin runtime dependencies without mirroring them in the root package manifest, so Slack-style plugin deps cannot silently ship on the wrong module-resolution path again. (#60112) thanks @medns.
+- CLI/Claude: run the same prompt-build hooks and trigger/channel context on `claude-cli` turns as on direct embedded runs, keeping Claude Code sessions aligned with OpenClaw workspace identity, routing, and hook-driven prompt mutations. (#70625) Thanks @mbelinky.
 
 ## 2026.4.21
 
