@@ -467,26 +467,62 @@ describe("models list/status", () => {
     expect(Array.from(loaded.availableKeys ?? [])).toEqual(["openai/gpt-4.1-mini"]);
   });
 
-  it("modelsListCommand persists using the source snapshot config when provided", async () => {
-    modelRegistryState.models = [OPENAI_MODEL];
-    modelRegistryState.available = [OPENAI_MODEL];
+  it("modelsListCommand lists source snapshot provider models without persisting models.json", async () => {
+    modelRegistryState.models = [];
+    modelRegistryState.available = [];
     const sourceConfig = {
-      models: { providers: { openai: { apiKey: "$OPENAI_API_KEY" } } }, // pragma: allowlist secret
+      models: {
+        providers: {
+          "custom-proxy": {
+            baseUrl: "https://custom.example/v1",
+            models: [
+              {
+                id: "custom-model",
+                name: "Custom Model",
+                input: ["text"],
+                contextWindow: 128000,
+              },
+            ],
+          },
+        },
+      },
     };
     const resolvedConfig = {
-      models: { providers: { openai: { apiKey: "sk-resolved-runtime-value" } } }, // pragma: allowlist secret
+      models: {
+        providers: {
+          "custom-proxy": {
+            baseUrl: "https://custom.example/v1",
+            apiKey: "sk-resolved-runtime-value", // pragma: allowlist secret
+            models: [
+              {
+                id: "custom-model",
+                name: "Custom Model",
+                input: ["text"],
+                contextWindow: 128000,
+              },
+            ],
+          },
+        },
+      },
     };
     readConfigFileSnapshotForWrite.mockResolvedValue({
       snapshot: { valid: true, resolved: resolvedConfig, sourceConfig },
       writeOptions: {},
     });
-    setDefaultModel("openai/gpt-4.1-mini");
+    getRuntimeConfig.mockReturnValue(resolvedConfig);
     const runtime = makeRuntime();
 
-    await modelsListCommand({ all: true, json: true }, runtime);
+    await modelsListCommand({ all: true, provider: "custom-proxy", json: true }, runtime);
 
-    expect(ensureOpenClawModelsJson).toHaveBeenCalled();
-    expect(ensureOpenClawModelsJson.mock.calls[0]?.[0]).toEqual(sourceConfig);
+    expect(ensureOpenClawModelsJson).not.toHaveBeenCalled();
+    const payload = parseJsonLog(runtime);
+    expect(payload.models).toEqual([
+      expect.objectContaining({
+        key: "custom-proxy/custom-model",
+        name: "Custom Model",
+        missing: false,
+      }),
+    ]);
   });
 
   it("toModelRow does not crash without cfg/authStore when availability is undefined", async () => {
