@@ -112,6 +112,45 @@ describe("models set + fallbacks", () => {
     expectWrittenPrimaryModel("openrouter/hunter-alpha");
   });
 
+  it("preserves expanded NVIDIA upstream ids in models set", async () => {
+    mockConfigSnapshot({});
+    const runtime = makeRuntime();
+
+    await modelsSetCommand("nvidia/nvidia/nemotron-3-super-120b-a12b", runtime);
+
+    expectWrittenPrimaryModel("nvidia/nvidia/nemotron-3-super-120b-a12b");
+  });
+
+  it("migrates collapsed NVIDIA Nemotron keys on write", async () => {
+    mockConfigSnapshot({
+      agents: {
+        defaults: {
+          models: {
+            "nvidia/nemotron-3-super-120b-a12b": {
+              params: { thinking: "high" },
+            },
+          },
+        },
+      },
+    });
+    const runtime = makeRuntime();
+
+    await modelsSetCommand("nvidia/nvidia/nemotron-3-super-120b-a12b", runtime);
+
+    expect(mocks.writtenConfig).toBeDefined();
+    const written = getWrittenConfig();
+    expect(written.agents).toEqual({
+      defaults: {
+        model: { primary: "nvidia/nvidia/nemotron-3-super-120b-a12b" },
+        models: {
+          "nvidia/nvidia/nemotron-3-super-120b-a12b": {
+            params: { thinking: "high" },
+          },
+        },
+      },
+    });
+  });
+
   it("migrates legacy duplicated OpenRouter keys on write", async () => {
     mockConfigSnapshot({
       agents: {

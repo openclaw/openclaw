@@ -4,6 +4,7 @@ import {
   buildModelAliasIndex,
   legacyModelKey,
   modelKey,
+  normalizeProviderId,
   parseModelRef,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
@@ -151,8 +152,19 @@ export function upsertCanonicalModelConfigEntry(
   models: Record<string, AgentModelEntryConfig>,
   params: { provider: string; model: string },
 ) {
-  const key = modelKey(params.provider, params.model);
-  const legacyKey = legacyModelKey(params.provider, params.model);
+  const normalizedProvider = normalizeProviderId(params.provider);
+  const trimmedModel = params.model.trim();
+  const expandedKey = `${params.provider}/${trimmedModel}`;
+  const collapsedKey = modelKey(params.provider, trimmedModel);
+  const preserveExpandedNvidiaKey =
+    normalizedProvider === "nvidia" &&
+    trimmedModel.toLowerCase().startsWith(`${normalizedProvider}/`);
+  const key = preserveExpandedNvidiaKey ? expandedKey : collapsedKey;
+  const legacyKey = preserveExpandedNvidiaKey
+    ? collapsedKey !== key
+      ? collapsedKey
+      : null
+    : legacyModelKey(params.provider, trimmedModel);
   if (!models[key]) {
     if (legacyKey && models[legacyKey]) {
       models[key] = models[legacyKey];
