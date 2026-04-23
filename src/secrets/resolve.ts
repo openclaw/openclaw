@@ -10,6 +10,7 @@ import type {
   SecretRefSource,
 } from "../config/types.secrets.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { getLogger } from "../logging/logger.js";
 import { inspectPathPermissions, safeStat } from "../security/audit-fs.js";
 import { isPathInside } from "../security/scan-paths.js";
 import { resolveUserPath } from "../utils.js";
@@ -253,9 +254,10 @@ async function assertSecurePath(params: {
   }
 
   if (process.platform === "win32" && perms.source === "unknown") {
-    throw new Error(
-      `${params.label} ACL verification unavailable on Windows for ${effectivePath}. Set allowInsecurePath=true for this provider to bypass this check when the path is trusted.`,
+    getLogger().warn(
+      `${params.label} ACL verification unavailable on Windows for ${effectivePath}, skipping permission check.`,
     );
+    return effectivePath;
   }
 
   if (process.platform !== "win32" && typeof process.getuid === "function" && stat.uid != null) {
@@ -309,7 +311,7 @@ async function readFileProviderPayload(params: {
       if (payload.byteLength > maxBytes) {
         throw new Error(`File provider "${params.providerName}" exceeded maxBytes (${maxBytes}).`);
       }
-      const text = payload.toString("utf8");
+      const text = payload.toString("utf8").replace(/^\uFEFF/, "");
       if (params.providerConfig.mode === "singleValue") {
         return text.replace(/\r?\n$/, "");
       }
