@@ -24,11 +24,16 @@ export function isSessionArchiveArtifactName(fileName: string): boolean {
   );
 }
 
+const CHECKPOINT_SUFFIX_RE = /\.checkpoint\.[0-9a-f-]+\.jsonl$/i;
+
 export function isPrimarySessionTranscriptFileName(fileName: string): boolean {
   if (fileName === "sessions.json") {
     return false;
   }
   if (!fileName.endsWith(".jsonl")) {
+    return false;
+  }
+  if (CHECKPOINT_SUFFIX_RE.test(fileName)) {
     return false;
   }
   return !isSessionArchiveArtifactName(fileName);

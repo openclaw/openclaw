@@ -25,6 +25,23 @@ describe("session artifact helpers", () => {
       false,
     );
     expect(isPrimarySessionTranscriptFileName("sessions.json")).toBe(false);
+    // Compaction checkpoint files must not be counted as primary transcripts
+    expect(
+      isPrimarySessionTranscriptFileName(
+        "8534ecd0-1234-5678-abcd-ef0123456789.checkpoint.b8d30d3b-dead-beef-cafe-123456789abc.jsonl",
+      ),
+    ).toBe(false);
+    expect(
+      isPrimarySessionTranscriptFileName("abc.checkpoint.00000000-0000-0000-0000-000000000000.jsonl"),
+    ).toBe(false);
+  });
+
+  it("excludes checkpoint files from usage-counted transcripts", () => {
+    expect(
+      isUsageCountedSessionTranscriptFileName(
+        "8534ecd0-1234-5678-abcd-ef0123456789.checkpoint.b8d30d3b-dead-beef-cafe-123456789abc.jsonl",
+      ),
+    ).toBe(false);
   });
 
   it("classifies usage-counted transcript files", () => {
