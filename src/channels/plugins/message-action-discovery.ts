@@ -256,10 +256,17 @@ export function listCrossChannelSchemaSupportedMessageActions(
     if ((contribution.visibility ?? "current-channel") !== "current-channel") {
       continue;
     }
-    if (!contribution.actions?.length) {
+    if (!Object.hasOwn(contribution, "actions")) {
       return [];
     }
-    for (const action of contribution.actions) {
+    const actions = contribution.actions;
+    if (!Array.isArray(actions)) {
+      return [];
+    }
+    if (actions.length === 0) {
+      continue;
+    }
+    for (const action of actions) {
       schemaBlockedActions.add(action);
     }
   }

@@ -264,6 +264,46 @@ describe("message action capability checks", () => {
     ).toEqual([]);
   });
 
+  it("treats empty current-channel schema action lists as blocking no cross-channel actions", () => {
+    const emptyScopedSchemaPlugin: ChannelPlugin = {
+      ...createChannelTestPluginBase({
+        id: "demo-empty-scoped-schema",
+        label: "Demo Empty Scoped Schema",
+        capabilities: { chatTypes: ["direct", "group"] },
+        config: {
+          listAccountIds: () => ["default"],
+        },
+      }),
+      actions: {
+        describeMessageTool: () => ({
+          actions: ["read", "list-pins"],
+          schema: {
+            actions: [],
+            properties: {
+              optionalChannelOnlyValue: Type.Optional(Type.String()),
+            },
+          },
+        }),
+      },
+    };
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "demo-empty-scoped-schema",
+          source: "test",
+          plugin: emptyScopedSchemaPlugin,
+        },
+      ]),
+    );
+
+    expect(
+      listCrossChannelSchemaSupportedMessageActions({
+        cfg: {} as OpenClawConfig,
+        channel: "demo-empty-scoped-schema",
+      }),
+    ).toEqual(["read", "list-pins"]);
+  });
+
   it("derives plugin-owned media-source params for the current action", () => {
     const mediaPlugin: ChannelPlugin = {
       ...createChannelTestPluginBase({
