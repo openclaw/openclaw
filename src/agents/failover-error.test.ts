@@ -421,6 +421,18 @@ describe("failover-error", () => {
     ).toBeNull();
   });
 
+  it("does not let cause-based failover classification bypass wrapper session lock suppression", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        message: "wrapper",
+        reason: new Error(
+          "session file locked (timeout 10000ms): pid=37121 /tmp/openclaw/session.jsonl.lock",
+        ),
+        cause: new Error("operation timed out"),
+      }),
+    ).toBeNull();
+  });
+
   it("classifies provider-scoped generic upstream errors for failover", () => {
     expect(
       resolveFailoverReasonFromError({

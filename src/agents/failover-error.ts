@@ -351,6 +351,8 @@ function resolveFailoverClassificationFromErrorInternal(
   const hasExplicitFailoverMetadata =
     typeof inferSignalStatus(signal) === "number" ||
     (codeReason !== null && codeReason !== "timeout");
+  const hasSessionLock = isSessionLockError(err);
+
   const classification = classifyFailoverSignal(signal);
   const nestedCandidates = getNestedErrorCandidates(err);
 
@@ -362,6 +364,9 @@ function resolveFailoverClassificationFromErrorInternal(
         depth + 1,
       );
       if (nestedClassification) {
+        if (hasSessionLock && !hasExplicitFailoverMetadata) {
+          return null;
+        }
         return nestedClassification;
       }
     }
@@ -385,13 +390,13 @@ function resolveFailoverClassificationFromErrorInternal(
   }
 
   if (classification) {
-    if (isSessionLockError(err) && !hasExplicitFailoverMetadata) {
+    if (hasSessionLock && !hasExplicitFailoverMetadata) {
       return null;
     }
     return classification;
   }
 
-  if (isSessionLockError(err)) {
+  if (hasSessionLock) {
     return null;
   }
 
