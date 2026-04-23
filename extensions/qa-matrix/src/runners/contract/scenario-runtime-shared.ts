@@ -27,8 +27,12 @@ export type MatrixQaScenarioContext = {
   observerDeviceId?: string;
   observerPassword?: string;
   observerUserId: string;
+  gatewayStateDir?: string;
   outputDir?: string;
   restartGateway?: () => Promise<void>;
+  restartGatewayAfterStateMutation?: (
+    mutateState: (context: { stateDir: string }) => Promise<void>,
+  ) => Promise<void>;
   restartGatewayWithQueuedMessage?: (queueMessage: () => Promise<void>) => Promise<void>;
   roomId: string;
   interruptTransport?: () => Promise<void>;
@@ -579,13 +583,24 @@ export async function runNoReplyExpectedScenario(params: {
     ...(params.mentionUserIds ? { mentionUserIds: params.mentionUserIds } : {}),
     roomId: params.roomId,
   });
+  let observedTriggerEvent = false;
   const result = await client.waitForOptionalRoomEvent({
     observedEvents: params.observedEvents,
-    predicate: (event) =>
-      event.roomId === params.roomId &&
-      event.sender === params.sutUserId &&
-      event.type === "m.room.message" &&
-      (params.replyPredicate?.(event, { driverEventId, token: params.token }) ?? true),
+    predicate: (event) => {
+      if (event.roomId !== params.roomId) {
+        return false;
+      }
+      if (event.eventId === driverEventId) {
+        observedTriggerEvent = true;
+        return false;
+      }
+      return (
+        observedTriggerEvent &&
+        event.sender === params.sutUserId &&
+        event.type === "m.room.message" &&
+        (params.replyPredicate?.(event, { driverEventId, token: params.token }) ?? true)
+      );
+    },
     roomId: params.roomId,
     since: startSince,
     timeoutMs: params.timeoutMs,

@@ -36,6 +36,7 @@ apps/android/benchmark/results/
 # Bun build artifacts
 *.bun-build
 apps/macos/.build/
+apps/macos-mlx-tts/.build/
 apps/shared/MoltbotKit/.build/
 apps/shared/OpenClawKit/.build/
 apps/shared/OpenClawKit/Package.resolved
@@ -57,6 +58,7 @@ vendor/
 apps/ios/Clawdbot.xcodeproj/
 apps/ios/Clawdbot.xcodeproj/**
 apps/macos/.build/**
+apps/macos-mlx-tts/.build/**
 **/*.bun-build
 apps/ios/*.xcfilelist
 
@@ -150,3 +152,7 @@ test/fixtures/openclaw-vitest-unit-report.json
 analysis/
 .artifacts/qa-e2e/
 extensions/qa-lab/web/dist/
+
+# Generated bundled plugin runtime dependency manifests
+extensions/**/.openclaw-runtime-deps.json
+extensions/**/.openclaw-runtime-deps-stamp.json

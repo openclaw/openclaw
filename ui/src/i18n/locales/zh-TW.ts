@@ -239,6 +239,12 @@ export const zh_TW: TranslationMap = {
     },
     pairing: {
       hint: "此裝置需要閘道主機的配對批准。",
+      scopeUpgradeTitle: "範圍升級等待核准。",
+      scopeUpgradeSummary: "此裝置已完成配對，但所要求的較大範圍仍在等待核准。",
+      roleUpgradeTitle: "角色升級等待核准。",
+      roleUpgradeSummary: "此裝置已完成配對，但所要求的角色變更仍在等待核准。",
+      metadataUpgradeTitle: "裝置中繼資料變更等待核准。",
+      metadataUpgradeSummary: "此裝置已完成配對，但中繼資料變更仍在等待核准。",
       mobileHint:
         "在手機上？從桌面執行 openclaw dashboard --no-open 複製完整 URL（包括 #token=...）。",
       docsTitle: "裝置配對文件（在新分頁中開啟）",
@@ -659,6 +665,7 @@ export const zh_TW: TranslationMap = {
     uk: "Українська (烏克蘭語)",
     id: "Bahasa Indonesia（Indonesian）",
     pl: "Polski（Polish）",
+    th: "ไทย（泰文）",
   },
   cron: {
     summary: {

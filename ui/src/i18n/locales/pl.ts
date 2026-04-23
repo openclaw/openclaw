@@ -244,6 +244,15 @@ export const pl: TranslationMap = {
     },
     pairing: {
       hint: "To urządzenie wymaga zatwierdzenia parowania przez host Gateway.",
+      scopeUpgradeTitle: "Rozszerzenie zakresu oczekuje na zatwierdzenie.",
+      scopeUpgradeSummary:
+        "To urządzenie jest już sparowane, ale żądane rozszerzenie zakresu oczekuje na zatwierdzenie.",
+      roleUpgradeTitle: "Zmiana roli oczekuje na zatwierdzenie.",
+      roleUpgradeSummary:
+        "To urządzenie jest już sparowane, ale żądana zmiana roli oczekuje na zatwierdzenie.",
+      metadataUpgradeTitle: "Zmiana metadanych urządzenia oczekuje na zatwierdzenie.",
+      metadataUpgradeSummary:
+        "To urządzenie jest już sparowane, ale zmiana metadanych oczekuje na zatwierdzenie.",
       mobileHint:
         "Na urządzeniu mobilnym? Skopiuj pełny URL (w tym #token=...) z openclaw dashboard --no-open na komputerze.",
       docsTitle: "Dokumentacja parowania urządzeń (otwiera się w nowej karcie)",
@@ -673,6 +682,7 @@ export const pl: TranslationMap = {
     uk: "Українська (ukraiński)",
     id: "Bahasa Indonesia (indonezyjski)",
     pl: "Polski (polski)",
+    th: "ไทย (tajski)",
   },
   cron: {
     summary: {

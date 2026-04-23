@@ -19,6 +19,7 @@ import { resolveBlueBubblesConversationRoute } from "./conversation-route.js";
 import { fetchBlueBubblesHistory } from "./history.js";
 import {
   claimBlueBubblesInboundMessage,
+  commitBlueBubblesCoalescedMessageIds,
   resolveBlueBubblesInboundDedupeKey,
 } from "./inbound-dedupe.js";
 import { sendBlueBubblesMedia } from "./media-send.js";
@@ -70,10 +71,7 @@ import type {
 } from "./monitor-shared.js";
 import { enrichBlueBubblesParticipantsWithContactNames } from "./participant-contact-names.js";
 import { isBlueBubblesPrivateApiEnabled } from "./probe.js";
-import {
-  normalizeBlueBubblesReactionInputStrict,
-  sendBlueBubblesReaction,
-} from "./reactions.js";
+import { normalizeBlueBubblesReactionInputStrict, sendBlueBubblesReaction } from "./reactions.js";
 import type { OpenClawConfig } from "./runtime-api.js";
 import { normalizeSecretInputString } from "./secret-input.js";
 import { resolveChatGuidForTarget, sendMessageBlueBubbles } from "./send.js";
@@ -180,7 +178,7 @@ async function queryBlueBubblesChats(params: {
     return [];
   }
   const payload = (await res.json().catch(() => null)) as Record<string, unknown> | null;
-  const data = payload && typeof payload.data !== "undefined" ? (payload.data as unknown) : null;
+  const data = payload && payload.data !== undefined ? (payload.data as unknown) : null;
   return Array.isArray(data) ? (data as BlueBubblesChatRecord[]) : [];
 }
 
@@ -668,6 +666,32 @@ export async function processMessage(
           runtime,
           `inbound-dedupe: finalize failed for key=${sanitizeForLog(dedupeKey ?? "")}: ${sanitizeForLog(finalizeError)}`,
         );
+      }
+      // When the debouncer coalesced multiple source webhook events into this
+      // single processed message, every source messageId must reach dedupe so
+      // a later MessagePoller replay of any individual source event is
+      // recognized as a duplicate. The primary is already finalized above;
+      // commit the rest here (best-effort, per-id).
+      const secondaryIds = (message.coalescedMessageIds ?? []).filter((id) => id !== dedupeKey);
+      if (secondaryIds.length > 0) {
+        try {
+          await commitBlueBubblesCoalescedMessageIds({
+            messageIds: secondaryIds,
+            accountId: account.accountId,
+            onDiskError: (error) =>
+              logVerbose(
+                core,
+                runtime,
+                `inbound-dedupe: coalesced secondary commit disk error: ${sanitizeForLog(error)}`,
+              ),
+          });
+        } catch (secondaryError) {
+          logVerbose(
+            core,
+            runtime,
+            `inbound-dedupe: coalesced secondary commit failed for primary=${sanitizeForLog(dedupeKey ?? "")}: ${sanitizeForLog(secondaryError)}`,
+          );
+        }
       }
     }
   }
@@ -1540,6 +1564,14 @@ async function processMessageAfterDedupe(
     OriginatingTo: `bluebubbles:${outboundTarget}`,
     WasMentioned: effectiveWasMentioned,
     CommandAuthorized: commandAuthorized,
+    // Exact group match wins over the "*" wildcard fallback, matching the
+    // pattern used by resolveChannelGroupRequireMention/toolsPolicy.
+    GroupSystemPrompt: isGroup
+      ? normalizeOptionalString(
+          account.config.groups?.[peerId]?.systemPrompt ??
+            account.config.groups?.["*"]?.systemPrompt,
+        )
+      : undefined,
   });
 
   let sentMessage = false;

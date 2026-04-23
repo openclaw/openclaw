@@ -30,6 +30,7 @@ import { resolveConnectChallengeTimeoutMs } from "./handshake-timeouts.js";
 import { isLoopbackHost, isSecureWebSocketUrl } from "./net.js";
 import {
   ConnectErrorDetailCodes,
+  formatConnectErrorMessage,
   readConnectErrorDetailCode,
   readConnectErrorRecoveryAdvice,
   type ConnectErrorRecoveryAdvice,
@@ -88,7 +89,7 @@ export class GatewayClientRequestError extends Error {
   readonly retryAfterMs?: number;
 
   constructor(error: GatewayClientErrorShape) {
-    super(error.message ?? "gateway request failed");
+    super(formatConnectErrorMessage({ message: error.message, details: error.details }));
     this.name = "GatewayClientRequestError";
     this.gatewayCode = error.code ?? "UNAVAILABLE";
     this.details = error.details;
@@ -871,6 +872,9 @@ export class GatewayClient {
         return;
       }
       if (!this.lastTick) {
+        return;
+      }
+      if (this.pending.size > 0) {
         return;
       }
       const gap = Date.now() - this.lastTick;

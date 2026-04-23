@@ -20,7 +20,7 @@ describe("resolveDefaultMediaModel", () => {
       "gpt-5.4",
     );
     expect(resolveDefaultMediaModel({ providerId: "moonshot", capability: "image" })).toBe(
-      "kimi-k2.5",
+      "kimi-k2.6",
     );
     expect(resolveDefaultMediaModel({ providerId: "openrouter", capability: "image" })).toBe(
       "auto",
@@ -33,8 +33,10 @@ describe("resolveAutoMediaKeyProviders", () => {
     expect(resolveAutoMediaKeyProviders({ capability: "audio" })).toEqual([
       "openai",
       "groq",
+      "xai",
       "deepgram",
       "google",
+      "elevenlabs",
       "mistral",
     ]);
   });

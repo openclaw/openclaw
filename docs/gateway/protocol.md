@@ -18,6 +18,13 @@ handshake time.
 
 - WebSocket, text frames with JSON payloads.
 - First frame **must** be a `connect` request.
+- Pre-connect frames are capped at 64 KiB. After a successful handshake, clients
+  should follow the `hello-ok.policy.maxPayload` and
+  `hello-ok.policy.maxBufferedBytes` limits. With diagnostics enabled,
+  oversized inbound frames and slow outbound buffers emit `payload.large` events
+  before the gateway closes or drops the affected frame. These events keep
+  sizes, limits, surfaces, and safe reason codes. They do not keep the message
+  body, attachment contents, raw frame body, tokens, cookies, or secret values.
 
 ## Handshake (connect)
 
@@ -240,6 +247,17 @@ The Gateway treats these as **claims** and enforces server-side allowlists.
 - Presence entries include `deviceId`, `roles`, and `scopes` so UIs can show a single row per device
   even when it connects as both **operator** and **node**.
 
+## Broadcast event scoping
+
+Server-pushed WebSocket broadcast events are scope-gated so that pairing-scoped or node-only sessions do not passively receive session content.
+
+- **Chat, agent, and tool-result frames** (including streamed `agent` events and tool call results) require at least `operator.read`. Sessions without `operator.read` skip these frames entirely.
+- **Plugin-defined `plugin.*` broadcasts** are gated to `operator.write` or `operator.admin`, depending on how the plugin registered them.
+- **Status and transport events** (`heartbeat`, `presence`, `tick`, connect/disconnect lifecycle, etc.) remain unrestricted so transport health stays observable to every authenticated session.
+- **Unknown broadcast event families** are scope-gated by default (fail-closed) unless a registered handler explicitly relaxes them.
+
+Each client connection keeps its own per-client sequence number so broadcasts preserve monotonic ordering on that socket even when different clients see different scope-filtered subsets of the event stream.
+
 ## Common RPC method families
 
 This page is not a generated full dump, but the public WS surface is broader
@@ -254,6 +272,12 @@ implemented in `src/gateway/server-methods/*.ts`.
 ### System and identity
 
 - `health` returns the cached or freshly probed gateway health snapshot.
+- `diagnostics.stability` returns the recent bounded diagnostic stability
+  recorder. It keeps operational metadata such as event names, counts, byte
+  sizes, memory readings, queue/session state, channel/plugin names, and session
+  ids. It does not keep chat text, webhook bodies, tool outputs, raw request or
+  response bodies, tokens, cookies, or secret values. Operator read scope is
+  required.
 - `status` returns the `/status`-style gateway summary; sensitive fields are
   included only for admin-scoped operator clients.
 - `gateway.identity.get` returns the gateway device identity used by relay and

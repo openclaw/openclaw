@@ -243,6 +243,15 @@ export const es: TranslationMap = {
     },
     pairing: {
       hint: "Este dispositivo necesita aprobación de emparejamiento del host de la puerta de enlace.",
+      scopeUpgradeTitle: "Ampliación del alcance pendiente de aprobación.",
+      scopeUpgradeSummary:
+        "Este dispositivo ya está emparejado, pero el alcance más amplio solicitado está pendiente de aprobación.",
+      roleUpgradeTitle: "Actualización del rol pendiente de aprobación.",
+      roleUpgradeSummary:
+        "Este dispositivo ya está emparejado, pero el cambio de rol solicitado está pendiente de aprobación.",
+      metadataUpgradeTitle: "Cambio de metadatos del dispositivo pendiente de aprobación.",
+      metadataUpgradeSummary:
+        "Este dispositivo ya está emparejado, pero el cambio de metadatos está pendiente de aprobación.",
       mobileHint:
         "¿En el móvil? Copia la URL completa (incluyendo #token=...) desde openclaw dashboard --no-open en tu escritorio.",
       docsTitle: "Documentación de emparejamiento de dispositivos (se abre en una pestaña nueva)",
@@ -673,6 +682,7 @@ export const es: TranslationMap = {
     uk: "Українська (ucraniano)",
     id: "Bahasa Indonesia (indonesio)",
     pl: "Polski (polaco)",
+    th: "ไทย (tailandés)",
   },
   cron: {
     summary: {

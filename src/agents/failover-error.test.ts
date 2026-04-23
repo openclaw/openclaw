@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   coerceToFailoverError,
   describeFailoverError,
+  FailoverError,
   isTimeoutError,
   resolveFailoverReasonFromError,
   resolveFailoverStatus,
@@ -510,8 +511,13 @@ describe("failover-error", () => {
 
   it("infers timeout from common node error codes", () => {
     expect(resolveFailoverReasonFromError({ code: "ETIMEDOUT" })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ code: "ECONNREFUSED" })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ code: "ECONNRESET" })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ code: "EAI_AGAIN" })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ code: "EHOSTUNREACH" })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ code: "EHOSTDOWN" })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ code: "ENETRESET" })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ code: "ENETUNREACH" })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ code: "EPIPE" })).toBe("timeout");
   });
 
@@ -538,6 +544,11 @@ describe("failover-error", () => {
   });
 
   it("infers timeout from connection/network error messages", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        message: "model_cooldown: All credentials for model gpt-5 are cooling down",
+      }),
+    ).toBe("rate_limit");
     expect(resolveFailoverReasonFromError({ message: "Connection error." })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ message: "fetch failed" })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ message: "Network error: ECONNREFUSED" })).toBe(
@@ -597,6 +608,25 @@ describe("failover-error", () => {
     expect(err?.status).toBe(402);
     expect(err?.provider).toBe("anthropic");
     expect(err?.model).toBe("claude-opus-4-6");
+  });
+
+  it("preserves raw provider error text for diagnostic logs", () => {
+    const err = new FailoverError("LLM request failed: provider rejected the request schema.", {
+      reason: "format",
+      provider: "openai",
+      model: "gpt-5.4",
+      status: 400,
+      rawError:
+        "400 The following tools cannot be used with reasoning.effort 'minimal': web_search.",
+    });
+
+    expect(describeFailoverError(err)).toMatchObject({
+      message: "LLM request failed: provider rejected the request schema.",
+      rawError:
+        "400 The following tools cannot be used with reasoning.effort 'minimal': web_search.",
+      reason: "format",
+      status: 400,
+    });
   });
 
   it("coerces JSON-wrapped OpenRouter stealth-model 404s into FailoverError", () => {

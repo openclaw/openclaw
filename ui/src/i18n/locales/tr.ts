@@ -246,6 +246,15 @@ export const tr: TranslationMap = {
     },
     pairing: {
       hint: "Bu cihazın Gateway ana bilgisayarından eşleştirme onayı alması gerekiyor.",
+      scopeUpgradeTitle: "Kapsam yükseltmesi onay bekliyor.",
+      scopeUpgradeSummary:
+        "Bu cihaz zaten eşleştirilmiş, ancak istenen daha geniş kapsam onay bekliyor.",
+      roleUpgradeTitle: "Rol yükseltmesi onay bekliyor.",
+      roleUpgradeSummary:
+        "Bu cihaz zaten eşleştirilmiş, ancak istenen rol değişikliği onay bekliyor.",
+      metadataUpgradeTitle: "Cihaz meta veri değişikliği onay bekliyor.",
+      metadataUpgradeSummary:
+        "Bu cihaz zaten eşleştirilmiş, ancak meta veri değişikliği onay bekliyor.",
       mobileHint:
         "Mobilde misiniz? Masaüstünüzde openclaw dashboard --no-open komutundan tam URL'yi (#token=... dahil) kopyalayın.",
       docsTitle: "Cihaz eşleştirme belgeleri (yeni sekmede açılır)",
@@ -673,6 +682,7 @@ export const tr: TranslationMap = {
     uk: "Українська (Ukraynaca)",
     id: "Bahasa Indonesia (Endonezce)",
     pl: "Polski (Lehçe)",
+    th: "ไทย (Tayca)",
   },
   cron: {
     summary: {

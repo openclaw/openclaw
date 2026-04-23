@@ -1,22 +1,24 @@
 {
   "name": "@openclaw/matrix",
-  "version": "2026.4.19-beta.1",
+  "version": "2026.4.20",
   "description": "OpenClaw Matrix channel plugin",
   "type": "module",
   "dependencies": {
     "@matrix-org/matrix-sdk-crypto-nodejs": "^0.4.0",
-    "@matrix-org/matrix-sdk-crypto-wasm": "18.0.0",
+    "@matrix-org/matrix-sdk-crypto-wasm": "18.1.0",
     "fake-indexeddb": "^6.2.5",
+    "jiti": "^2.6.1",
     "markdown-it": "14.1.1",
     "matrix-js-sdk": "41.3.0",
-    "music-metadata": "^11.12.3"
+    "music-metadata": "^11.12.3",
+    "typebox": "1.1.28"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.4.19-beta.1"
+    "openclaw": ">=2026.4.20"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -28,6 +30,9 @@
       "./index.ts"
     ],
     "setupEntry": "./setup-entry.ts",
+    "setupFeatures": {
+      "configPromotion": true
+    },
     "channel": {
       "id": "matrix",
       "label": "Matrix",
@@ -37,6 +42,34 @@
       "blurb": "open protocol; install the plugin to enable.",
       "order": 70,
       "quickstartAllowFrom": true,
+      "doctorCapabilities": {
+        "dmAllowFromMode": "nestedOnly",
+        "groupModel": "sender",
+        "groupAllowFromFallbackToAllowFrom": false,
+        "warnOnEmptyGroupSenderAllowlist": true
+      },
+      "cliAddOptions": [
+        {
+          "flags": "--homeserver <url>",
+          "description": "Matrix homeserver URL"
+        },
+        {
+          "flags": "--user-id <id>",
+          "description": "Matrix user ID"
+        },
+        {
+          "flags": "--access-token <token>",
+          "description": "Matrix access token"
+        },
+        {
+          "flags": "--device-name <name>",
+          "description": "Matrix device name"
+        },
+        {
+          "flags": "--initial-sync-limit <n>",
+          "description": "Matrix initial sync limit"
+        }
+      ],
       "persistedAuthState": {
         "specifier": "./auth-presence",
         "exportName": "hasAnyMatrixAuth"

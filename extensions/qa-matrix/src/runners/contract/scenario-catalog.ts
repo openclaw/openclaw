@@ -41,6 +41,8 @@ export type MatrixQaScenarioId =
   | "matrix-restart-resume"
   | "matrix-post-restart-room-continue"
   | "matrix-initial-catchup-then-incremental"
+  | "matrix-restart-replay-dedupe"
+  | "matrix-stale-sync-replay-dedupe"
   | "matrix-room-membership-loss"
   | "matrix-homeserver-restart-resume"
   | "matrix-mention-gating"
@@ -83,6 +85,11 @@ export const MATRIX_QA_MEDIA_ROOM_KEY = "media";
 export const MATRIX_QA_MEMBERSHIP_ROOM_KEY = "membership";
 export const MATRIX_QA_RESTART_ROOM_KEY = "restart";
 export const MATRIX_QA_SECONDARY_ROOM_KEY = "secondary";
+
+const MATRIX_QA_LIVE_MODEL_TIMEOUT_MS = 120_000;
+const MATRIX_QA_IMAGE_GENERATION_TIMEOUT_MS = 180_000;
+const MATRIX_QA_E2EE_REPLY_TIMEOUT_MS = 150_000;
+const MATRIX_QA_E2EE_MEDIA_TIMEOUT_MS = 180_000;
 
 function buildMatrixQaDmTopology(
   rooms: Array<{
@@ -236,7 +243,7 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
   },
   {
     id: "matrix-subagent-thread-spawn",
-    timeoutMs: 75_000,
+    timeoutMs: MATRIX_QA_LIVE_MODEL_TIMEOUT_MS,
     title: "Matrix sessions_spawn thread=true creates a bound child thread",
     configOverrides: {
       groupsByKey: {
@@ -305,7 +312,7 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
   },
   {
     id: "matrix-room-generated-image-delivery",
-    timeoutMs: 60_000,
+    timeoutMs: MATRIX_QA_IMAGE_GENERATION_TIMEOUT_MS,
     title: "Matrix generated images deliver as real image attachments while streaming",
     topology: MATRIX_QA_MEDIA_ROOM_TOPOLOGY,
     configOverrides: {
@@ -431,6 +438,18 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
     id: "matrix-initial-catchup-then-incremental",
     timeoutMs: 90_000,
     title: "Matrix initial catchup is followed by incremental replies",
+    topology: MATRIX_QA_RESTART_ROOM_TOPOLOGY,
+  },
+  {
+    id: "matrix-restart-replay-dedupe",
+    timeoutMs: 90_000,
+    title: "Matrix restart does not redeliver a handled event",
+    topology: MATRIX_QA_RESTART_ROOM_TOPOLOGY,
+  },
+  {
+    id: "matrix-stale-sync-replay-dedupe",
+    timeoutMs: 90_000,
+    title: "Matrix stale sync replay is absorbed by inbound dedupe",
     topology: MATRIX_QA_RESTART_ROOM_TOPOLOGY,
   },
   {
@@ -580,7 +599,7 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
   },
   {
     id: "matrix-e2ee-restart-resume",
-    timeoutMs: 90_000,
+    timeoutMs: MATRIX_QA_E2EE_REPLY_TIMEOUT_MS,
     title: "Matrix E2EE encrypted rooms resume after gateway restart",
     topology: buildMatrixQaE2eeScenarioTopology({
       scenarioId: "matrix-e2ee-restart-resume",
@@ -600,7 +619,7 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
   },
   {
     id: "matrix-e2ee-artifact-redaction",
-    timeoutMs: 75_000,
+    timeoutMs: MATRIX_QA_E2EE_REPLY_TIMEOUT_MS,
     title: "Matrix E2EE decrypted payloads stay out of default event artifacts",
     topology: buildMatrixQaE2eeScenarioTopology({
       scenarioId: "matrix-e2ee-artifact-redaction",
@@ -610,7 +629,7 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
   },
   {
     id: "matrix-e2ee-media-image",
-    timeoutMs: 90_000,
+    timeoutMs: MATRIX_QA_E2EE_MEDIA_TIMEOUT_MS,
     title: "Matrix E2EE encrypted image attachments reach the model vision path",
     topology: buildMatrixQaE2eeScenarioTopology({
       scenarioId: "matrix-e2ee-media-image",

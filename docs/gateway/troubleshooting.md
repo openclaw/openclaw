@@ -193,12 +193,12 @@ Common signatures:
 
 Use `error.details.code` from the failed `connect` response to pick the next action:
 
-| Detail code                  | Meaning                                                  | Recommended action                                                                                                                                                                                                                                                                       |
-| ---------------------------- | -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `AUTH_TOKEN_MISSING`         | Client did not send a required shared token.             | Paste/set token in the client and retry. For dashboard paths: `openclaw config get gateway.auth.token` then paste into Control UI settings.                                                                                                                                              |
-| `AUTH_TOKEN_MISMATCH`        | Shared token did not match gateway auth token.           | If `canRetryWithDeviceToken=true`, allow one trusted retry. Cached-token retries reuse stored approved scopes; explicit `deviceToken` / `scopes` callers keep requested scopes. If still failing, run the [token drift recovery checklist](/cli/devices#token-drift-recovery-checklist). |
-| `AUTH_DEVICE_TOKEN_MISMATCH` | Cached per-device token is stale or revoked.             | Rotate/re-approve device token using [devices CLI](/cli/devices), then reconnect.                                                                                                                                                                                                        |
-| `PAIRING_REQUIRED`           | Device identity is known but not approved for this role. | Approve pending request: `openclaw devices list` then `openclaw devices approve <requestId>`.                                                                                                                                                                                            |
+| Detail code                  | Meaning                                                                                                                                                                                      | Recommended action                                                                                                                                                                                                                                                                       |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `AUTH_TOKEN_MISSING`         | Client did not send a required shared token.                                                                                                                                                 | Paste/set token in the client and retry. For dashboard paths: `openclaw config get gateway.auth.token` then paste into Control UI settings.                                                                                                                                              |
+| `AUTH_TOKEN_MISMATCH`        | Shared token did not match gateway auth token.                                                                                                                                               | If `canRetryWithDeviceToken=true`, allow one trusted retry. Cached-token retries reuse stored approved scopes; explicit `deviceToken` / `scopes` callers keep requested scopes. If still failing, run the [token drift recovery checklist](/cli/devices#token-drift-recovery-checklist). |
+| `AUTH_DEVICE_TOKEN_MISMATCH` | Cached per-device token is stale or revoked.                                                                                                                                                 | Rotate/re-approve device token using [devices CLI](/cli/devices), then reconnect.                                                                                                                                                                                                        |
+| `PAIRING_REQUIRED`           | Device identity needs approval. Check `error.details.reason` for `not-paired`, `scope-upgrade`, `role-upgrade`, or `metadata-upgrade`, and use `requestId` / `remediationHint` when present. | Approve pending request: `openclaw devices list` then `openclaw devices approve <requestId>`. Scope/role upgrades use the same flow after you review the requested access.                                                                                                               |
 
 Device auth v2 migration check:
 
@@ -260,6 +260,64 @@ Related:
 
 - [/gateway/background-process](/gateway/background-process)
 - [/gateway/configuration](/gateway/configuration)
+- [/gateway/doctor](/gateway/doctor)
+
+## Gateway restored last-known-good config
+
+Use this when the Gateway starts, but logs say it restored `openclaw.json`.
+
+```bash
+openclaw logs --follow
+openclaw config file
+openclaw config validate
+openclaw doctor
+```
+
+Look for:
+
+- `Config auto-restored from last-known-good`
+- `gateway: invalid config was restored from last-known-good backup`
+- `config reload restored last-known-good config after invalid-config`
+- A timestamped `openclaw.json.clobbered.*` file beside the active config
+- A main-agent system event that starts with `Config recovery warning`
+
+What happened:
+
+- The rejected config did not validate during startup or hot reload.
+- OpenClaw preserved the rejected payload as `.clobbered.*`.
+- The active config was restored from the last validated last-known-good copy.
+- The next main-agent turn is warned not to blindly rewrite the rejected config.
+
+Inspect and repair:
+
+```bash
+CONFIG="$(openclaw config file)"
+ls -lt "$CONFIG".clobbered.* "$CONFIG".rejected.* 2>/dev/null | head
+diff -u "$CONFIG" "$(ls -t "$CONFIG".clobbered.* 2>/dev/null | head -n 1)"
+openclaw config validate
+openclaw doctor
+```
+
+Common signatures:
+
+- `.clobbered.*` exists → an external direct edit or startup read was restored.
+- `.rejected.*` exists → an OpenClaw-owned config write failed schema or clobber checks before commit.
+- `Config write rejected:` → the write tried to drop required shape, shrink the file sharply, or persist invalid config.
+- `missing-meta-vs-last-good`, `gateway-mode-missing-vs-last-good`, or `size-drop-vs-last-good:*` → startup treated the current file as clobbered because it lost fields or size compared with the last-known-good backup.
+- `Config last-known-good promotion skipped` → the candidate contained redacted secret placeholders such as `***`.
+
+Fix options:
+
+1. Keep the restored active config if it is correct.
+2. Copy only the intended keys from `.clobbered.*` or `.rejected.*`, then apply them with `openclaw config set` or `config.patch`.
+3. Run `openclaw config validate` before restarting.
+4. If you edit by hand, keep the full JSON5 config, not just the partial object you wanted to change.
+
+Related:
+
+- [/gateway/configuration#strict-validation](/gateway/configuration#strict-validation)
+- [/gateway/configuration#config-hot-reload](/gateway/configuration#config-hot-reload)
+- [/cli/config](/cli/config)
 - [/gateway/doctor](/gateway/doctor)
 
 ## Gateway probe warnings
@@ -414,10 +472,11 @@ Common signatures:
 - `browser.executablePath not found` → configured path is invalid.
 - `browser.cdpUrl must be http(s) or ws(s)` → the configured CDP URL uses an unsupported scheme such as `file:` or `ftp:`.
 - `browser.cdpUrl has invalid port` → the configured CDP URL has a bad or out-of-range port.
+- `Could not find DevToolsActivePort for chrome` → Chrome MCP existing-session could not attach to the selected browser data dir yet. Open the browser inspect page, enable remote debugging, keep the browser open, approve the first attach prompt, then retry. If signed-in state is not required, prefer the managed `openclaw` profile.
 - `No Chrome tabs found for profile="user"` → the Chrome MCP attach profile has no open local Chrome tabs.
 - `Remote CDP for profile "<name>" is not reachable` → the configured remote CDP endpoint is not reachable from the gateway host.
 - `Browser attachOnly is enabled ... not reachable` or `Browser attachOnly is enabled and CDP websocket ... is not reachable` → attach-only profile has no reachable target, or the HTTP endpoint answered but the CDP WebSocket still could not be opened.
-- `Playwright is not available in this gateway build; '<feature>' is unsupported.` → the current gateway install lacks the full Playwright package; ARIA snapshots and basic page screenshots can still work, but navigation, AI snapshots, CSS-selector element screenshots, and PDF export stay unavailable.
+- `Playwright is not available in this gateway build; '<feature>' is unsupported.` → the current gateway install lacks the bundled browser plugin's `playwright-core` runtime dependency; run `openclaw doctor --fix`, then restart the gateway. ARIA snapshots and basic page screenshots can still work, but navigation, AI snapshots, CSS-selector element screenshots, and PDF export stay unavailable.
 - `fullPage is not supported for element screenshots` → screenshot request mixed `--full-page` with `--ref` or `--element`.
 - `element screenshots are not supported for existing-session profiles; use ref from snapshot.` → Chrome MCP / `existing-session` screenshot calls must use page capture or a snapshot `--ref`, not CSS `--element`.
 - `existing-session file uploads do not support element selectors; use ref/inputRef.` → Chrome MCP upload hooks need snapshot refs, not CSS selectors.

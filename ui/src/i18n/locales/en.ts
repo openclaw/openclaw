@@ -239,6 +239,15 @@ export const en: TranslationMap = {
     },
     pairing: {
       hint: "This device needs pairing approval from the gateway host.",
+      scopeUpgradeTitle: "Scope upgrade pending approval.",
+      scopeUpgradeSummary:
+        "This device is already paired, but the requested wider scope is waiting for approval.",
+      roleUpgradeTitle: "Role upgrade pending approval.",
+      roleUpgradeSummary:
+        "This device is already paired, but the requested role change is waiting for approval.",
+      metadataUpgradeTitle: "Device metadata change pending approval.",
+      metadataUpgradeSummary:
+        "This device is already paired, but the metadata change is waiting for approval.",
       mobileHint:
         "On mobile? Copy the full URL (including #token=...) from openclaw dashboard --no-open on your desktop.",
       docsTitle: "Device pairing docs (opens in new tab)",
@@ -661,6 +670,7 @@ export const en: TranslationMap = {
     uk: "Українська (Ukrainian)",
     id: "Bahasa Indonesia (Indonesian)",
     pl: "Polski (Polish)",
+    th: "ไทย (Thai)",
   },
   cron: {
     summary: {

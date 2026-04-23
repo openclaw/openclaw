@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { SystemPresence } from "../infra/system-presence.js";
-import { GatewayClient } from "./client.js";
+import { GatewayClient, GatewayClientRequestError } from "./client.js";
 import { READ_SCOPE } from "./method-scopes.js";
 import { isLoopbackHost } from "./net.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "./protocol/client-info.js";
@@ -36,6 +36,7 @@ export type GatewayProbeResult = {
   url: string;
   connectLatencyMs: number | null;
   error: string | null;
+  connectErrorDetails?: unknown;
   close: GatewayProbeClose | null;
   auth: GatewayProbeAuthSummary;
   health: unknown;
@@ -137,6 +138,7 @@ export async function probeGateway(opts: {
   const instanceId = randomUUID();
   let connectLatencyMs: number | null = null;
   let connectError: string | null = null;
+  let connectErrorDetails: unknown = null;
   let close: GatewayProbeClose | null = null;
   let auth = emptyProbeAuth();
   let authMetadataPresent = false;
@@ -178,14 +180,25 @@ export async function probeGateway(opts: {
       clearProbeTimer();
       timer = setTimeout(onTimeout, clampProbeTimeoutMs(opts.timeoutMs));
     };
-    const settle = (result: Omit<GatewayProbeResult, "url">) => {
+    const settle = (
+      result: Omit<GatewayProbeResult, "url" | "connectErrorDetails"> & {
+        connectErrorDetails?: unknown;
+      },
+    ) => {
       if (settled) {
         return;
       }
       settled = true;
       clearProbeTimer();
       client.stop();
-      resolve({ url: opts.url, ...result });
+      const { connectErrorDetails: resultConnectErrorDetails, ...rest } = result;
+      resolve({
+        url: opts.url,
+        ...rest,
+        ...(resultConnectErrorDetails != null
+          ? { connectErrorDetails: resultConnectErrorDetails }
+          : {}),
+      });
     };
     const settleProbe = (params: {
       ok: boolean;
@@ -200,6 +213,7 @@ export async function probeGateway(opts: {
         ok: params.ok,
         connectLatencyMs,
         error: params.error,
+        connectErrorDetails,
         close,
         auth: resolveProbeAuthSummary({
           role: auth.role,
@@ -230,13 +244,14 @@ export async function probeGateway(opts: {
       deviceIdentity,
       onConnectError: (err) => {
         connectError = formatErrorMessage(err);
+        connectErrorDetails = err instanceof GatewayClientRequestError ? err.details : null;
       },
       onClose: (code, reason) => {
         close = { code, reason };
         if (connectLatencyMs == null) {
           settleProbe({
             ok: false,
-            error: formatProbeCloseError(close),
+            error: connectError || formatProbeCloseError(close),
             health: null,
             status: null,
             presence: null,
