@@ -1457,6 +1457,7 @@ async function buildAssistantDisplayContentFromReplyPayloads(params: {
   managedImageLocalRoots?: Parameters<typeof createManagedOutgoingImageBlocks>[0]["localRoots"];
   includeSensitiveMedia?: boolean;
   onLocalAudioAccessDenied?: (message: string) => void;
+  onManagedImagePrepareError?: (message: string) => void;
 }): Promise<AssistantDisplayContentBlock[] | undefined> {
   const rawTextPayloadCount = params.payloads.filter(
     (payload) => typeof payload.text === "string" && payload.text.trim().length > 0,
@@ -1500,6 +1501,10 @@ async function buildAssistantDisplayContentFromReplyPayloads(params: {
       mediaUrls,
       limits: params.managedImageAttachmentsLimits,
       localRoots: params.managedImageLocalRoots,
+      continueOnPrepareError: true,
+      onPrepareError: (error) => {
+        params.onManagedImagePrepareError?.(error.message);
+      },
     });
     if (imageBlocks.length > 0) {
       content.push(...imageBlocks);
@@ -2454,6 +2459,9 @@ export const chatHandlers: GatewayRequestHandlers = {
                 onLocalAudioAccessDenied: (message) => {
                   context.logGateway.warn(`webchat audio embedding denied local path: ${message}`);
                 },
+                onManagedImagePrepareError: (message) => {
+                  context.logGateway.warn(`webchat image embedding skipped attachment: ${message}`);
+                },
               });
               const transcriptMediaMessage = await buildWebchatAssistantMediaMessage(
                 finalPayloads,
@@ -2477,6 +2485,11 @@ export const chatHandlers: GatewayRequestHandlers = {
                       onLocalAudioAccessDenied: (message) => {
                         context.logGateway.warn(
                           `webchat audio embedding denied local path: ${message}`,
+                        );
+                      },
+                      onManagedImagePrepareError: (message) => {
+                        context.logGateway.warn(
+                          `webchat image embedding skipped attachment: ${message}`,
                         );
                       },
                     })

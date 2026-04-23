@@ -594,6 +594,27 @@ describe("createManagedOutgoingImageBlocks", () => {
     expect(blocks[1]).toMatchObject({ type: "text" });
   });
 
+
+  it("skips broken attachments when continueOnPrepareError is enabled", async () => {
+    const onPrepareError = vi.fn();
+    const blocks = await createManagedOutgoingImageBlocks({
+      sessionKey: "agent:main:main",
+      mediaUrls: [await createPngDataUrl(32, 32), path.join(stateDir, "missing.png")],
+      stateDir,
+      localRoots: [stateDir],
+      continueOnPrepareError: true,
+      onPrepareError,
+    });
+
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]).toMatchObject({ type: "image" });
+    expect(onPrepareError).toHaveBeenCalledTimes(1);
+    expect(onPrepareError.mock.calls[0]?.[0]).toBeInstanceOf(Error);
+    expect(onPrepareError.mock.calls[0]?.[0]?.message).toMatch(
+      /Managed image attachment .* could not be prepared/i,
+    );
+  });
+
   it("accepts URL images up to the configured managed-image byte limit", async () => {
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     process.env.OPENCLAW_STATE_DIR = stateDir;

@@ -988,6 +988,7 @@ export function createGatewayHttpServer(opts: {
           run: async () =>
             (await getSessionHistoryHttpModule()).handleSessionHistoryHttpRequest(req, res, {
               auth: resolvedAuth,
+              getResolvedAuth,
               trustedProxies,
               allowRealIpFallback,
               rateLimiter,

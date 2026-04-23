@@ -136,10 +136,14 @@ function isManagedImageAttachmentSafeError(error: unknown): error is Error {
 }
 
 function throwSanitizedManagedImageAttachmentError(error: unknown, alt: string): never {
+  throw getSanitizedManagedImageAttachmentError(error, alt);
+}
+
+function getSanitizedManagedImageAttachmentError(error: unknown, alt: string): Error {
   if (isManagedImageAttachmentSafeError(error)) {
-    throw error;
+    return error;
   }
-  throw createManagedImageAttachmentError(
+  return createManagedImageAttachmentError(
     `Managed image attachment ${JSON.stringify(alt)} could not be prepared`,
   );
 }
@@ -774,6 +778,8 @@ export async function createManagedOutgoingImageBlocks(params: {
   messageId?: string | null;
   limits?: ManagedImageAttachmentLimitsConfig | null;
   localRoots?: readonly string[] | "any";
+  continueOnPrepareError?: boolean;
+  onPrepareError?: (error: Error) => void;
 }): Promise<ManagedImageBlock[]> {
   const sessionKey = params.sessionKey.trim();
   if (!sessionKey) {
@@ -926,7 +932,12 @@ export async function createManagedOutgoingImageBlocks(params: {
       if (savedOriginalPath) {
         await fs.rm(savedOriginalPath, { force: true }).catch(() => {});
       }
-      throwSanitizedManagedImageAttachmentError(error, alt);
+      const sanitizedError = getSanitizedManagedImageAttachmentError(error, alt);
+      if (params.continueOnPrepareError) {
+        params.onPrepareError?.(sanitizedError);
+        continue;
+      }
+      throw sanitizedError;
     }
   }
   return blocks;
