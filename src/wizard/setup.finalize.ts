@@ -13,7 +13,6 @@ import {
 } from "../commands/daemon-runtime.js";
 import { resolveGatewayInstallToken } from "../commands/gateway-install-token.js";
 import { formatHealthCheckFailure } from "../commands/health-format.js";
-import { healthCommand } from "../commands/health.js";
 import {
   detectBrowserOpenSupport,
   formatControlUiSshHint,
@@ -30,7 +29,7 @@ import { ensureControlUiAssetsBuilt } from "../infra/control-ui-assets.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { restoreTerminalState } from "../terminal/restore.js";
-import { launchTuiCli } from "../tui/tui-launch.js";
+import { runTui } from "../tui/tui.js";
 import { resolveUserPath } from "../utils.js";
 import { listConfiguredWebSearchProviders } from "../web-search/runtime.js";
 import type { WizardPrompter } from "./prompts.js";
@@ -249,21 +248,7 @@ export async function finalizeSetupWizard(
       token: settings.gatewayToken,
       deadlineMs: 15_000,
     });
-    if (gatewayProbe.ok) {
-      try {
-        await healthCommand({ json: false, timeoutMs: 10_000 }, runtime);
-      } catch (err) {
-        runtime.error(formatHealthCheckFailure(err));
-        await prompter.note(
-          [
-            "Docs:",
-            "https://docs.openclaw.ai/gateway/health",
-            "https://docs.openclaw.ai/gateway/troubleshooting",
-          ].join("\n"),
-          "Health check help",
-        );
-      }
-    } else if (installDaemon) {
+    if (!gatewayProbe.ok && installDaemon) {
       runtime.error(
         formatHealthCheckFailure(
           new Error(
@@ -427,15 +412,14 @@ export async function finalizeSetupWizard(
 
     if (hatchChoice === "tui") {
       restoreTerminalState("pre-setup tui", { resumeStdinIfPaused: true });
-      try {
-        await launchTuiCli({
-          local: true,
-          deliver: false,
-          message: hasBootstrap ? "Wake up, my friend!" : undefined,
-        });
-      } finally {
-        restoreTerminalState("post-setup tui", { resumeStdinIfPaused: true });
-      }
+      await runTui({
+        url: links.wsUrl,
+        token: settings.authMode === "token" ? settings.gatewayToken : undefined,
+        password: settings.authMode === "password" ? resolvedGatewayPassword : "",
+        // Safety: setup TUI should not auto-deliver to lastProvider/lastTo.
+        deliver: false,
+        message: hasBootstrap ? "Wake up, my friend!" : undefined,
+      });
       launchedTui = true;
     } else if (hatchChoice === "web") {
       const browserSupport = await detectBrowserOpenSupport();

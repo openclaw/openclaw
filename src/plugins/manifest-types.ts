@@ -5,6 +5,13 @@ export type PluginConfigUiHint = {
   advanced?: boolean;
   sensitive?: boolean;
   placeholder?: string;
+  /**
+   * Include this field in QuickStart onboarding.
+   *
+   * Omit for the default behavior: the field stays available in the normal
+   * plugin setup/configure surfaces without adding extra QuickStart prompts.
+   */
+  quickstart?: boolean;
 };
 
 export type PluginFormat = "openclaw" | "bundle";
