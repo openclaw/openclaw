@@ -384,6 +384,10 @@ function buildExternalRunFailureText(message: string): string {
   return "⚠️ Something went wrong while processing your request. Please try again, or use /new to start a fresh session.";
 }
 
+function buildCompactionFailurePreservedSessionText(): string {
+  return "⚠️ Auto-compaction could not recover this turn. I kept this conversation mapped to the current session. Please try again, use /compact, or use /new to start a fresh session.";
+}
+
 function shouldApplyOpenAIGptChatGuard(params: { provider?: string; model?: string }): boolean {
   if (params.provider !== "openai" && params.provider !== "openai-codex") {
     return false;
@@ -584,7 +588,6 @@ export async function runAgentTurnWithFallback(params: {
   shouldEmitToolResult: () => boolean;
   shouldEmitToolOutput: () => boolean;
   pendingToolTasks: Set<Promise<void>>;
-  resetSessionAfterCompactionFailure: (reason: string) => Promise<boolean>;
   resetSessionAfterRoleOrderingConflict: (reason: string) => Promise<boolean>;
   isHeartbeat: boolean;
   sessionKey?: string;
@@ -678,7 +681,6 @@ export async function runAgentTurnWithFallback(params: {
   let fallbackProvider = params.followupRun.run.provider;
   let fallbackModel = params.followupRun.run.model;
   let fallbackAttempts: RuntimeFallbackAttempt[] = [];
-  let didResetAfterCompactionFailure = false;
   let didRetryTransientHttpError = false;
   let liveModelSwitchRetries = 0;
   let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
@@ -1306,20 +1308,18 @@ export async function runAgentTurnWithFallback(params: {
         : [];
 
       // Some embedded runs surface context overflow as an error payload instead of throwing.
-      // Treat those as a session-level failure and auto-recover by starting a fresh session.
+      // Preserve the active session mapping and surface explicit guidance instead
+      // of silently rotating the session key to a new session id.
       const embeddedError = runResult.meta?.error;
-      if (
-        embeddedError &&
-        isContextOverflowError(embeddedError.message) &&
-        !didResetAfterCompactionFailure &&
-        (await params.resetSessionAfterCompactionFailure(embeddedError.message))
-      ) {
-        didResetAfterCompactionFailure = true;
+      if (embeddedError && isContextOverflowError(embeddedError.message)) {
+        defaultRuntime.error(
+          `Auto-compaction failed (${embeddedError.message}). Preserving existing session mapping for ${params.sessionKey ?? params.followupRun.run.sessionId}.`,
+        );
         params.replyOperation?.fail("run_failed", embeddedError);
         return {
           kind: "final",
           payload: {
-            text: "⚠️ Context limit exceeded. I've reset our conversation to start fresh - please try again.\n\nTo prevent this, increase your compaction buffer by setting `agents.defaults.compaction.reserveTokensFloor` to 20000 or higher in your config.",
+            text: buildCompactionFailurePreservedSessionText(),
           },
         };
       }
@@ -1423,17 +1423,15 @@ export async function runAgentTurnWithFallback(params: {
         };
       }
 
-      if (
-        isCompactionFailure &&
-        !didResetAfterCompactionFailure &&
-        (await params.resetSessionAfterCompactionFailure(message))
-      ) {
-        didResetAfterCompactionFailure = true;
+      if (isCompactionFailure) {
+        defaultRuntime.error(
+          `Auto-compaction failed (${message}). Preserving existing session mapping for ${params.sessionKey ?? params.followupRun.run.sessionId}.`,
+        );
         params.replyOperation?.fail("run_failed", err);
         return {
           kind: "final",
           payload: {
-            text: "⚠️ Context limit exceeded during compaction. I've reset our conversation to start fresh - please try again.\n\nTo prevent this, increase your compaction buffer by setting `agents.defaults.compaction.reserveTokensFloor` to 20000 or higher in your config.",
+            text: buildCompactionFailurePreservedSessionText(),
           },
         };
       }
