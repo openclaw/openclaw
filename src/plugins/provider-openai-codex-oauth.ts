@@ -122,7 +122,7 @@ export async function loginOpenAICodexOAuth(params: {
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
   isRemote: boolean;
-  openUrl: (url: string) => Promise<void>;
+  openUrl: (url: string) => Promise<unknown>;
   localBrowserMessage?: string;
 }): Promise<OAuthCredentials | null> {
   const { prompter, runtime, isRemote, openUrl, localBrowserMessage } = params;
