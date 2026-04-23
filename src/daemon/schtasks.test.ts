@@ -267,6 +267,37 @@ describe("readScheduledTaskCommand", () => {
     );
   });
 
+  it("ignores preparatory batch control flow before the gateway command", async () => {
+    await withScheduledTaskScript(
+      {
+        scriptLines: [
+          "@echo off",
+          'if exist "C:\\state\\.env" (',
+          '  for /f "usebackq tokens=1,* delims==" %%A in ("C:\\state\\.env") do (',
+          '    if /I "%%~A"=="OPENCLAW_GATEWAY_TOKEN" set "OPENCLAW_GATEWAY_TOKEN=%%~B"',
+          "  )",
+          ")",
+          'pushd "C:\\Projects\\openclaw"',
+          '"C:\\Program Files\\nodejs\\node.exe" C:\\Projects\\openclaw\\dist\\index.js gateway --port 18789',
+        ],
+      },
+      async (env) => {
+        const result = await readScheduledTaskCommand(env);
+        expect(result).toEqual({
+          programArguments: [
+            "C:\\Program Files\\nodejs\\node.exe",
+            "C:\\Projects\\openclaw\\dist\\index.js",
+            "gateway",
+            "--port",
+            "18789",
+          ],
+          workingDirectory: "C:\\Projects\\openclaw",
+          sourcePath: resolveTaskScriptPath(env),
+        });
+      },
+    );
+  });
+
   it("preserves UNC paths in command arguments", async () => {
     await withScheduledTaskScript(
       {
