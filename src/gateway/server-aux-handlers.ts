@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isTruthyEnvValue } from "../infra/env.js";
 import { createExecApprovalForwarder } from "../infra/exec-approval-forwarder.js";
 import { type PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
 import {
@@ -6,6 +7,11 @@ import {
   type CommandSecretAssignment,
 } from "../secrets/runtime-command-secrets.js";
 import { getActiveSecretsRuntimeSnapshot } from "../secrets/runtime.js";
+import {
+  buildGatewayReloadPlan,
+  diffConfigPaths,
+  type ChannelKind,
+} from "./config-reload.js";
 import { createExecApprovalIosPushDelivery } from "./exec-approval-ios-push.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
 import { createExecApprovalHandlers } from "./server-methods/exec-approval.js";
@@ -31,6 +37,9 @@ export function createGatewayAuxHandlers(params: {
   sharedGatewaySessionGenerationState: SharedGatewaySessionGenerationState;
   resolveSharedGatewaySessionGenerationForConfig: (config: OpenClawConfig) => string | undefined;
   clients: Iterable<SharedGatewayAuthClient>;
+  startChannel: (name: ChannelKind) => Promise<void>;
+  stopChannel: (name: ChannelKind) => Promise<void>;
+  logChannels: { info: (msg: string) => void };
 }) {
   const execApprovalManager = new ExecApprovalManager();
   const execApprovalForwarder = createExecApprovalForwarder();
@@ -57,6 +66,7 @@ export function createGatewayAuxHandlers(params: {
       });
       const nextSharedGatewaySessionGeneration =
         params.resolveSharedGatewaySessionGenerationForConfig(prepared.config);
+      const plan = buildGatewayReloadPlan(diffConfigPaths(active.config, prepared.config));
       setCurrentSharedGatewaySessionGeneration(
         params.sharedGatewaySessionGenerationState,
         nextSharedGatewaySessionGeneration,
@@ -66,6 +76,22 @@ export function createGatewayAuxHandlers(params: {
           clients: params.clients,
           expectedGeneration: nextSharedGatewaySessionGeneration,
         });
+      }
+      if (plan.restartChannels.size > 0) {
+        if (
+          isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
+          isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS)
+        ) {
+          params.logChannels.info(
+            "skipping channel reload (OPENCLAW_SKIP_CHANNELS=1 or OPENCLAW_SKIP_PROVIDERS=1)",
+          );
+        } else {
+          for (const channel of plan.restartChannels) {
+            params.logChannels.info(`restarting ${channel} channel after secrets reload`);
+            await params.stopChannel(channel);
+            await params.startChannel(channel);
+          }
+        }
       }
       return { warningCount: prepared.warnings.length };
     },
