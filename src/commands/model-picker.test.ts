@@ -566,6 +566,23 @@ describe("applyModelFallbacksFromSelection", () => {
     });
   });
 
+  it("does not inject a phantom primary when none was configured", () => {
+    const config = {
+      agents: {
+        defaults: {},
+      },
+    } as OpenClawConfig;
+
+    const next = applyModelFallbacksFromSelection(config, [
+      "openai/gpt-5.5",
+      "anthropic/claude-sonnet-4-6",
+    ]);
+    expect(next.agents?.defaults?.model).toEqual({
+      fallbacks: ["anthropic/claude-sonnet-4-6"],
+    });
+    expect(next.agents?.defaults?.model).not.toHaveProperty("primary");
+  });
+
   it("keeps existing fallbacks when the primary is not selected", () => {
     const config = {
       agents: {
