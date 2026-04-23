@@ -49,11 +49,5 @@ export async function sleepWithAbort(ms: number, abortSignal?: AbortSignal) {
       timer = null;
       resolve();
     }, ms);
-
-    if (abortSignal) {
-      if (abortSignal.aborted) {
-        onAbort();
-      }
-    }
   });
 }
