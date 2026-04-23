@@ -126,6 +126,9 @@ describe("buildExportTrajectoryReply", () => {
     const reply = await buildExportTrajectoryReply(makeParams());
 
     expect(reply.text).toContain("✅ Trajectory exported!");
+    expect(reply.text).toContain("session-branch.json");
+    expect(reply.text).not.toContain("session.jsonl");
+    expect(reply.text).not.toContain("runtime.jsonl");
     expect(hoisted.resolveDefaultSessionStorePathMock).toHaveBeenCalledWith("target");
     expect(hoisted.exportTrajectoryBundleMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -158,6 +161,31 @@ describe("buildExportTrajectoryReply", () => {
     const reply = await buildExportTrajectoryReply(params);
 
     expect(reply.text).toContain("Failed to resolve output path");
+    expect(hoisted.exportTrajectoryBundleMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects home-relative output paths", async () => {
+    const { buildExportTrajectoryReply } = await import("./commands-export-trajectory.js");
+    const params = makeParams();
+    params.command.commandBodyNormalized = "/export-trajectory ~/bundle";
+
+    const reply = await buildExportTrajectoryReply(params);
+
+    expect(reply.text).toContain("Failed to resolve output path");
+    expect(hoisted.exportTrajectoryBundleMock).not.toHaveBeenCalled();
+  });
+
+  it("does not echo absolute session paths when the transcript is missing", async () => {
+    const { buildExportTrajectoryReply } = await import("./commands-export-trajectory.js");
+    hoisted.existsSyncMock.mockImplementation(
+      (file: fs.PathLike, actualExistsSync: (path: fs.PathLike) => boolean) =>
+        file.toString() === "/tmp/target-store/session.jsonl" ? false : actualExistsSync(file),
+    );
+
+    const reply = await buildExportTrajectoryReply(makeParams());
+
+    expect(reply.text).toBe("❌ Session file not found.");
+    expect(reply.text).not.toContain("/tmp/target-store/session.jsonl");
     expect(hoisted.exportTrajectoryBundleMock).not.toHaveBeenCalled();
   });
 

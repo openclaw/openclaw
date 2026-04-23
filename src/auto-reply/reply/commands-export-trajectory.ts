@@ -100,7 +100,7 @@ export async function buildExportTrajectoryReply(
     };
   }
   if (!fs.existsSync(sessionFile)) {
-    return { text: `❌ Session file not found: ${sessionFile}` };
+    return { text: "❌ Session file not found." };
   }
 
   let outputDir: string;
@@ -132,11 +132,11 @@ export async function buildExportTrajectoryReply(
   }
 
   const relativePath = path.relative(params.workspaceDir, bundle.outputDir);
-  const displayPath = relativePath.startsWith("..") ? bundle.outputDir : relativePath;
-  const files = ["manifest.json", "events.jsonl", "session.jsonl"];
-  if (bundle.runtimeFile) {
-    files.push("runtime.jsonl");
-  }
+  const displayPath =
+    relativePath && !relativePath.startsWith("..") && !path.isAbsolute(relativePath)
+      ? relativePath
+      : path.basename(bundle.outputDir);
+  const files = ["manifest.json", "events.jsonl", "session-branch.json"];
   if (bundle.events.some((event) => event.type === "context.compiled")) {
     files.push("system-prompt.txt", "tools.json");
   }

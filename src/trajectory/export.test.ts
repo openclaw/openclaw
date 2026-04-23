@@ -323,6 +323,82 @@ describe("exportTrajectoryBundle", () => {
     }
   });
 
+  it("ignores runtime pointers that do not look like this session's trajectory file", () => {
+    const tmpDir = makeTempDir();
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    const outsideFile = path.join(tmpDir, "outside.jsonl");
+    const outputDir = path.join(tmpDir, "bundle");
+    writeSimpleSessionFile(sessionFile);
+    fs.writeFileSync(
+      resolveTrajectoryPointerFilePath(sessionFile),
+      `${JSON.stringify({
+        traceSchema: "openclaw-trajectory-pointer",
+        schemaVersion: 1,
+        sessionId: "session-1",
+        runtimeFile: outsideFile,
+      })}\n`,
+      "utf8",
+    );
+    fs.writeFileSync(
+      outsideFile,
+      `${JSON.stringify({
+        traceSchema: "openclaw-trajectory",
+        schemaVersion: 1,
+        traceId: "session-1",
+        source: "runtime",
+        type: "outside-runtime",
+        ts: "2026-04-22T08:00:00.000Z",
+        seq: 1,
+        sourceSeq: 1,
+        sessionId: "session-1",
+      })}\n`,
+      "utf8",
+    );
+
+    const bundle = exportTrajectoryBundle({
+      outputDir,
+      sessionFile,
+      sessionId: "session-1",
+      workspaceDir: tmpDir,
+    });
+
+    expect(bundle.runtimeFile).toBeUndefined();
+    expect(bundle.events.some((event) => event.type === "outside-runtime")).toBe(false);
+  });
+
+  it("skips runtime events for other sessions", () => {
+    const tmpDir = makeTempDir();
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    const runtimeFile = path.join(tmpDir, "session.trajectory.jsonl");
+    const outputDir = path.join(tmpDir, "bundle");
+    writeSimpleSessionFile(sessionFile);
+    fs.writeFileSync(
+      runtimeFile,
+      `${JSON.stringify({
+        traceSchema: "openclaw-trajectory",
+        schemaVersion: 1,
+        traceId: "other-session",
+        source: "runtime",
+        type: "other-runtime",
+        ts: "2026-04-22T08:00:00.000Z",
+        seq: 1,
+        sourceSeq: 1,
+        sessionId: "other-session",
+      })}\n`,
+      "utf8",
+    );
+
+    const bundle = exportTrajectoryBundle({
+      outputDir,
+      sessionFile,
+      sessionId: "session-1",
+      workspaceDir: tmpDir,
+    });
+
+    expect(bundle.manifest.runtimeEventCount).toBe(0);
+    expect(bundle.events.some((event) => event.type === "other-runtime")).toBe(false);
+  });
+
   it("exports merged runtime and transcript events plus convenience files", () => {
     const tmpDir = makeTempDir();
     const sessionFile = path.join(tmpDir, "session.jsonl");
@@ -456,8 +532,8 @@ describe("exportTrajectoryBundle", () => {
     expect(bundle.manifest.runtimeEventCount).toBe(runtimeEvents.length);
     expect(fs.existsSync(path.join(outputDir, "manifest.json"))).toBe(true);
     expect(fs.existsSync(path.join(outputDir, "events.jsonl"))).toBe(true);
-    expect(fs.existsSync(path.join(outputDir, "session.jsonl"))).toBe(true);
-    expect(fs.existsSync(path.join(outputDir, "runtime.jsonl"))).toBe(true);
+    expect(fs.existsSync(path.join(outputDir, "session.jsonl"))).toBe(false);
+    expect(fs.existsSync(path.join(outputDir, "runtime.jsonl"))).toBe(false);
     expect(fs.existsSync(path.join(outputDir, "system-prompt.txt"))).toBe(true);
     expect(fs.existsSync(path.join(outputDir, "tools.json"))).toBe(true);
     expect(fs.existsSync(path.join(outputDir, "metadata.json"))).toBe(true);
@@ -489,9 +565,7 @@ describe("exportTrajectoryBundle", () => {
       "events.jsonl",
       "metadata.json",
       "prompts.json",
-      "runtime.jsonl",
       "session-branch.json",
-      "session.jsonl",
       "system-prompt.txt",
       "tools.json",
     ]);

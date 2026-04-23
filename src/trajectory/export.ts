@@ -6,7 +6,6 @@ import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { sanitizeDiagnosticPayload } from "../agents/payload-redaction.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
-  copySupportBundleFile,
   jsonSupportBundleFile,
   jsonlSupportBundleFile,
   supportBundleContents,
@@ -106,7 +105,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-function isRuntimeTrajectoryEvent(value: unknown): value is TrajectoryEvent {
+function isRuntimeTrajectoryEventForSession(
+  value: unknown,
+  sessionId: string,
+): value is TrajectoryEvent {
   if (!isRecord(value)) {
     return false;
   }
@@ -118,14 +120,27 @@ function isRuntimeTrajectoryEvent(value: unknown): value is TrajectoryEvent {
     typeof value.ts === "string" &&
     !Number.isNaN(Date.parse(value.ts)) &&
     isFiniteNumber(value.seq) &&
-    typeof value.sessionId === "string" &&
+    value.sessionId === sessionId &&
     (!("data" in value) || value.data === undefined || isRecord(value.data))
   );
 }
 
+function isRegularNonSymlinkFile(filePath: string): boolean {
+  try {
+    const linkStat = fs.lstatSync(filePath);
+    if (linkStat.isSymbolicLink() || !linkStat.isFile()) {
+      return false;
+    }
+    const stat = fs.statSync(filePath);
+    return stat.isFile() && stat.dev === linkStat.dev && stat.ino === linkStat.ino;
+  } catch {
+    return false;
+  }
+}
+
 function readRuntimePointerFile(sessionFile: string, sessionId: string): string | undefined {
   const pointerPath = resolveTrajectoryPointerFilePath(sessionFile);
-  if (!fs.existsSync(pointerPath)) {
+  if (!isRegularNonSymlinkFile(pointerPath)) {
     return undefined;
   }
   try {
@@ -136,7 +151,19 @@ function readRuntimePointerFile(sessionFile: string, sessionId: string): string 
     if (parsed.sessionId !== sessionId || typeof parsed.runtimeFile !== "string") {
       return undefined;
     }
-    return parsed.runtimeFile;
+    const runtimeFile = path.resolve(parsed.runtimeFile);
+    const safeRuntimeFileName = `${safeTrajectorySessionFileName(sessionId)}.jsonl`;
+    const defaultRuntimeFile = path.resolve(
+      resolveTrajectoryFilePath({
+        env: {},
+        sessionFile,
+        sessionId,
+      }),
+    );
+    if (runtimeFile !== defaultRuntimeFile && path.basename(runtimeFile) !== safeRuntimeFileName) {
+      return undefined;
+    }
+    return runtimeFile;
   } catch {
     return undefined;
   }
@@ -162,7 +189,7 @@ function resolveTrajectoryRuntimeFile(params: {
       sessionId: params.sessionId,
     }),
   ].filter((candidate): candidate is string => Boolean(candidate));
-  return candidates.find((candidate) => fs.existsSync(candidate)) ?? candidates[0];
+  return candidates.find((candidate) => isRegularNonSymlinkFile(candidate)) ?? candidates[0];
 }
 
 function normalizeTimestamp(value: unknown): string {
@@ -734,7 +761,8 @@ export function exportTrajectoryBundle(params: BuildTrajectoryBundleParams): {
   const runtimeEvents = parseJsonlFile<TrajectoryEvent>(runtimeFile, {
     maxBytes: TRAJECTORY_RUNTIME_FILE_MAX_BYTES,
     maxEvents: MAX_TRAJECTORY_RUNTIME_EVENTS,
-    validate: isRuntimeTrajectoryEvent,
+    validate: (value): value is TrajectoryEvent =>
+      isRuntimeTrajectoryEventForSession(value, params.sessionId),
   });
   if (runtimeEvents.length + branchEntries.length > MAX_TRAJECTORY_TOTAL_EVENTS) {
     throw new Error(
@@ -764,7 +792,7 @@ export function exportTrajectoryBundle(params: BuildTrajectoryBundleParams): {
     transcriptEventCount: transcriptEvents.length,
     sourceFiles: {
       session: maybeRedactPathString(params.sessionFile, redaction),
-      runtime: fs.existsSync(runtimeFile)
+      runtime: isRegularNonSymlinkFile(runtimeFile)
         ? maybeRedactPathString(runtimeFile, redaction)
         : undefined,
     },
@@ -826,46 +854,20 @@ export function exportTrajectoryBundle(params: BuildTrajectoryBundleParams): {
     files.push(jsonSupportBundleFile("tools.json", bundleRuntimeContext.tools));
   }
 
-  const contents: DiagnosticSupportBundleContent[] = [
-    ...supportBundleContents(files),
-    {
-      path: "session.jsonl",
-      mediaType: "application/x-ndjson",
-      bytes: sessionStat.size,
-    },
-  ];
-  if (fs.existsSync(runtimeFile)) {
-    contents.push({
-      path: "runtime.jsonl",
-      mediaType: "application/x-ndjson",
-      bytes: fs.statSync(runtimeFile).size,
-    });
-  }
+  const contents: DiagnosticSupportBundleContent[] = [...supportBundleContents(files)];
   manifest.contents = contents;
 
   writeSupportBundleDirectory({
     outputDir: params.outputDir,
     files: [jsonSupportBundleFile("manifest.json", manifest), ...files],
   });
-  copySupportBundleFile({
-    outputDir: params.outputDir,
-    sourceFile: params.sessionFile,
-    path: "session.jsonl",
-  });
-  if (fs.existsSync(runtimeFile)) {
-    copySupportBundleFile({
-      outputDir: params.outputDir,
-      sourceFile: runtimeFile,
-      path: "runtime.jsonl",
-    });
-  }
 
   return {
     manifest,
     outputDir: params.outputDir,
     events,
     header,
-    runtimeFile: fs.existsSync(runtimeFile) ? runtimeFile : undefined,
+    runtimeFile: isRegularNonSymlinkFile(runtimeFile) ? runtimeFile : undefined,
     supplementalFiles,
   };
 }
