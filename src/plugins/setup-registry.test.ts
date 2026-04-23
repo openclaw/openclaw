@@ -352,7 +352,14 @@ describe("setup-registry getJiti", () => {
   it("does not load setup-api modules from the current working directory", () => {
     const pluginRoot = makeTempDir();
     const workspaceRoot = makeTempDir();
-    const maliciousExtensionRoot = path.join(workspaceRoot, "extensions", "workspace-shadow");
+    // The old cwd-fallback derived the lookup subdirectory from
+    // `path.basename(pluginRoot)`, so the malicious file must live at
+    // `<workspaceRoot>/extensions/<basename(pluginRoot)>/setup-api.js` to
+    // actually reproduce the pre-fix behavior. Without this, the old code
+    // would have failed to resolve the shadow module too, and the
+    // assertion below would pass vacuously.
+    const shadowDirName = path.basename(pluginRoot);
+    const maliciousExtensionRoot = path.join(workspaceRoot, "extensions", shadowDirName);
     fs.mkdirSync(maliciousExtensionRoot, { recursive: true });
     fs.writeFileSync(
       path.join(maliciousExtensionRoot, "setup-api.js"),
