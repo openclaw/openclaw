@@ -96,6 +96,8 @@ export type SpawnAcpParams = {
   thread?: boolean;
   sandbox?: SpawnAcpSandboxMode;
   streamTo?: SpawnAcpStreamTarget;
+  model?: string;
+  thinking?: string;
 };
 
 export type SpawnAcpContext = {
@@ -1165,6 +1167,8 @@ export async function spawnAcpDirect(
         idempotencyKey: childIdem,
         deliver: deliveryPlan.useInlineDelivery,
         label: params.label || undefined,
+        model: params.model,
+        thinking: params.thinking,
       },
       timeoutMs: 10_000,
     });

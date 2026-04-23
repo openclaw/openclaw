@@ -250,6 +250,8 @@ export function createSessionsSpawnTool(
             thread,
             sandbox,
             streamTo,
+            model: modelOverride,
+            thinking: thinkingOverrideRaw,
           },
           {
             agentSessionKey: opts?.agentSessionKey,

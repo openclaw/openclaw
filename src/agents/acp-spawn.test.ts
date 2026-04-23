@@ -687,6 +687,31 @@ describe("spawnAcpDirect", () => {
     expect(transcriptCalls[1]?.threadId).toBe("child-thread");
   });
 
+  it("passes model and thinking to the gateway agent call", async () => {
+    const result = await spawnAcpDirect(
+      {
+        task: "analyze this",
+        agentId: "codex",
+        model: "anthropic/claude-opus-4",
+        thinking: "high",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "discord",
+        agentAccountId: "default",
+        agentTo: "channel:parent-channel",
+        agentThreadId: "requester-thread",
+      },
+    );
+
+    expectAcceptedSpawn(result);
+    const agentCall = hoisted.callGatewayMock.mock.calls
+      .map((call: unknown[]) => call[0] as { method?: string; params?: Record<string, unknown> })
+      .find((request) => request.method === "agent");
+    expect(agentCall?.params?.model).toBe("anthropic/claude-opus-4");
+    expect(agentCall?.params?.thinking).toBe("high");
+  });
+
   it("spawns Matrix thread-bound ACP sessions from top-level room targets", async () => {
     enableMatrixAcpThreadBindings();
     hoisted.sessionBindingBindMock.mockImplementationOnce(

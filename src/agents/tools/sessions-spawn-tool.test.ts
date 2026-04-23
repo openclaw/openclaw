@@ -328,6 +328,34 @@ describe("sessions_spawn tool", () => {
     );
   });
 
+  it("passes model and thinking through to ACP spawns", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      agentChannel: "discord",
+      agentAccountId: "default",
+      agentTo: "channel:123",
+      agentThreadId: "456",
+    });
+
+    await tool.execute("call-model-think-acp", {
+      runtime: "acp",
+      task: "analyze this",
+      agentId: "codex",
+      model: "anthropic/claude-opus-4",
+      thinking: "high",
+    });
+
+    expect(hoisted.spawnAcpDirectMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        task: "analyze this",
+        agentId: "codex",
+        model: "anthropic/claude-opus-4",
+        thinking: "high",
+      }),
+      expect.any(Object),
+    );
+  });
+
   it("rejects resumeSessionId without runtime=acp", async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
