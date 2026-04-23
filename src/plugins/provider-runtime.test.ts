@@ -36,6 +36,7 @@ const resolveExternalAuthProfileCompatFallbackPluginIdsMock =
   vi.fn<ResolveExternalAuthProfileCompatFallbackPluginIds>((_) => [] as string[]);
 const resolveExternalAuthProfileProviderPluginIdsMock =
   vi.fn<ResolveExternalAuthProfileProviderPluginIds>((_) => [] as string[]);
+const providerRuntimeWarnMock = vi.fn();
 
 let augmentModelCatalogWithProviderPlugins: typeof import("./provider-runtime.js").augmentModelCatalogWithProviderPlugins;
 let buildProviderAuthDoctorHintWithPlugin: typeof import("./provider-runtime.js").buildProviderAuthDoctorHintWithPlugin;
@@ -256,6 +257,14 @@ describe("provider-runtime", () => {
       isPluginProvidersLoadInFlight: (params: unknown) =>
         isPluginProvidersLoadInFlightMock(params as never),
     }));
+    vi.doMock("../logging/subsystem.js", () => ({
+      createSubsystemLogger: () => ({
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: providerRuntimeWarnMock,
+        error: vi.fn(),
+      }),
+    }));
     ({
       augmentModelCatalogWithProviderPlugins,
       buildProviderAuthDoctorHintWithPlugin,
@@ -317,6 +326,7 @@ describe("provider-runtime", () => {
     resolveExternalAuthProfileCompatFallbackPluginIdsMock.mockReturnValue([]);
     resolveExternalAuthProfileProviderPluginIdsMock.mockReset();
     resolveExternalAuthProfileProviderPluginIdsMock.mockReturnValue([]);
+    providerRuntimeWarnMock.mockReset();
   });
 
   it("matches providers by alias for runtime hook lookup", () => {
@@ -382,6 +392,45 @@ describe("provider-runtime", () => {
       }),
     ).toEqual([]);
     expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
+  });
+
+  it("does not warn for declared external auth plugins with different provider ids", () => {
+    resolveExternalAuthProfileProviderPluginIdsMock.mockReturnValue(["demo-plugin"]);
+    resolvePluginProvidersMock.mockReturnValue([
+      {
+        id: "demo-provider",
+        pluginId: "demo-plugin",
+        label: "Demo Provider",
+        auth: [],
+        resolveExternalAuthProfiles: () => [
+          {
+            profileId: "demo-provider:external",
+            credential: {
+              type: "oauth",
+              provider: "demo-provider",
+              access: "access",
+              refresh: "refresh",
+              expires: Date.now() + 60_000,
+            },
+          },
+        ],
+      },
+    ]);
+
+    expect(
+      resolveExternalAuthProfilesWithPlugins({
+        env: process.env,
+        context: {
+          env: process.env,
+          store: { version: 1, profiles: {} },
+        },
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        profileId: "demo-provider:external",
+      }),
+    ]);
+    expect(providerRuntimeWarnMock).not.toHaveBeenCalled();
   });
 
   it("returns provider-prepared runtime auth for the matched provider", async () => {

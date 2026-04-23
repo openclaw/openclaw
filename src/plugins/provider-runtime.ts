@@ -795,13 +795,14 @@ export function resolveExternalAuthProfilesWithPlugins(params: {
     if (!profiles || profiles.length === 0) {
       continue;
     }
-    if (!declaredPluginIds.has(plugin.id) && !warnedExternalAuthFallbackPluginIds.has(plugin.id)) {
-      warnedExternalAuthFallbackPluginIds.add(plugin.id);
+    const pluginId = plugin.pluginId ?? plugin.id;
+    if (!declaredPluginIds.has(pluginId) && !warnedExternalAuthFallbackPluginIds.has(pluginId)) {
+      warnedExternalAuthFallbackPluginIds.add(pluginId);
       // Deprecated compatibility path for plugins that still implement
       // resolveExternalOAuthProfiles or omit contracts.externalAuthProviders.
       // Remove this warning with the fallback resolver after the migration window.
       log.warn(
-        `Provider plugin "${plugin.id}" uses external auth hooks without declaring contracts.externalAuthProviders. This compatibility fallback is deprecated and will be removed in a future release.`,
+        `Provider plugin "${pluginId}" uses external auth hooks without declaring contracts.externalAuthProviders. This compatibility fallback is deprecated and will be removed in a future release.`,
       );
     }
     matches.push(...profiles);
