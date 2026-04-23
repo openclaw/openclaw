@@ -9,6 +9,10 @@ import { tryResolveLoadedOutboundTarget } from "../../infra/outbound/targets-loa
 import { resolveSessionDeliveryTarget } from "../../infra/outbound/targets-session.js";
 import type { OutboundChannel } from "../../infra/outbound/targets.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
+import {
+  isDeliverableMessageChannel,
+  normalizeMessageChannel,
+} from "../../utils/message-channel-normalize.js";
 
 export type DeliveryTargetResolution =
   | {
@@ -78,8 +82,31 @@ export async function resolveDeliveryTarget(
   },
   options?: { dryRun?: boolean },
 ): Promise<DeliveryTargetResolution> {
-  const requestedChannel = typeof jobPayload.channel === "string" ? jobPayload.channel : "last";
-  const explicitTo = typeof jobPayload.to === "string" ? jobPayload.to : undefined;
+  const rawRequestedChannel =
+    typeof jobPayload.channel === "string" ? jobPayload.channel.trim() : undefined;
+  const normalizedRequestedChannel =
+    rawRequestedChannel && rawRequestedChannel !== "last"
+      ? normalizeMessageChannel(rawRequestedChannel)
+      : undefined;
+  let requestedChannel = rawRequestedChannel || "last";
+  let explicitTo = typeof jobPayload.to === "string" ? jobPayload.to : undefined;
+  if (
+    rawRequestedChannel &&
+    rawRequestedChannel !== "last" &&
+    !explicitTo &&
+    (!normalizedRequestedChannel || !isDeliverableMessageChannel(normalizedRequestedChannel))
+  ) {
+    try {
+      const { resolveMessageChannelSelection } = await loadChannelSelectionRuntime();
+      const selection = await resolveMessageChannelSelection({ cfg });
+      if (selection.configured.length === 1) {
+        requestedChannel = selection.channel;
+        explicitTo = rawRequestedChannel;
+      }
+    } catch {
+      // Keep the original request when channel inference is ambiguous.
+    }
+  }
   const allowMismatchedLastTo = requestedChannel === "last";
 
   const sessionCfg = cfg.session;
