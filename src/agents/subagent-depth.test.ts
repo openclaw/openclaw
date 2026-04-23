@@ -1,9 +1,24 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { resolveAgentTimeoutMs, resolveAgentTimeoutSeconds } from "./timeout.js";
+
+const tempDirs: string[] = [];
+
+function createTempDir(prefix: string): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  tempDirs.push(dir);
+  return dir;
+}
+
+afterEach(() => {
+  for (const dir of tempDirs.splice(0)) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+  vi.unstubAllEnvs();
+});
 
 describe("getSubagentDepthFromSessionStore", () => {
   it("uses spawnDepth from the session store when available", () => {
@@ -45,7 +60,7 @@ describe("getSubagentDepthFromSessionStore", () => {
   });
 
   it("resolves prefixed store keys when caller key omits the agent prefix", () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-subagent-depth-"));
+    const tmpDir = createTempDir("openclaw-subagent-depth-");
     const storeTemplate = path.join(tmpDir, "sessions-{agentId}.json");
     const prefixedKey = "agent:main:subagent:flat";
     const storePath = storeTemplate.replaceAll("{agentId}", "main");
@@ -77,7 +92,7 @@ describe("getSubagentDepthFromSessionStore", () => {
   });
 
   it("accepts JSON5 syntax in the on-disk depth store for backward compatibility", () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-subagent-depth-json5-"));
+    const tmpDir = createTempDir("openclaw-subagent-depth-json5-");
     const storeTemplate = path.join(tmpDir, "sessions-{agentId}.json");
     const storePath = storeTemplate.replaceAll("{agentId}", "main");
     fs.writeFileSync(
@@ -111,6 +126,72 @@ describe("getSubagentDepthFromSessionStore", () => {
       },
     });
     expect(depth).toBe(1);
+  });
+
+  it("falls back to session-key segment counting when the default store file is absent", () => {
+    const stateDir = createTempDir("openclaw-subagent-depth-missing-default-store-");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+
+    const depth = getSubagentDepthFromSessionStore("agent:main:subagent:orphan");
+
+    expect(depth).toBe(1);
+  });
+
+  it("uses the default on-disk session store for explicit agent keys when cfg is omitted", () => {
+    const stateDir = createTempDir("openclaw-subagent-depth-default-state-");
+    const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+    const key = "agent:main:explicit:new-skills-zoom-panel-20260423a:acct:default";
+    fs.mkdirSync(path.dirname(storePath), { recursive: true });
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify(
+        {
+          [key]: {
+            sessionId: "new-skills-zoom-panel-20260423a",
+            spawnDepth: 1,
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+
+    const depth = getSubagentDepthFromSessionStore(key);
+
+    expect(depth).toBe(1);
+  });
+
+  it("derives spawnedBy ancestry from the default on-disk session store when cfg is omitted", () => {
+    const stateDir = createTempDir("openclaw-subagent-depth-default-ancestry-");
+    const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+    const parentKey = "agent:main:subagent:panel-parent";
+    const key = "agent:main:explicit:new-skills-zoom-panel-20260423a:acct:default";
+    fs.mkdirSync(path.dirname(storePath), { recursive: true });
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify(
+        {
+          [parentKey]: {
+            sessionId: "panel-parent",
+            spawnedBy: "agent:main:main",
+          },
+          [key]: {
+            sessionId: "new-skills-zoom-panel-20260423a",
+            spawnedBy: parentKey,
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+
+    const depth = getSubagentDepthFromSessionStore(key);
+
+    expect(depth).toBe(2);
   });
 });
 
