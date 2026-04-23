@@ -13,7 +13,9 @@ description: >
   Asana, Linear, Attio, Pipedrive, Zoom, Stripe, Shopify, Figma, Instagram,
   TikTok, YouTube, Loom, Mailchimp, Typeform, Calendly, Etsy, Vercel,
   Reddit, Facebook, Monday, Amplitude, Google Analytics, Zendesk, Apollo,
-  Datagma, Mixpanel, PeopleDataLabs, Google BigQuery, Supabase.
+  Datagma, Mixpanel, PeopleDataLabs, Google BigQuery, Supabase, QuickBooks,
+  Brex, Google Ads, Intercom, ZoomInfo, Gong, DocuSign, Box, Todoist, Ashby,
+  Basecamp.
   (3) Native Composio tool catalog (file uploads, attachments, complex
   writes): `blink connector tool-execute <composio_provider> <TOOL_SLUG>
   '<json>'` — unlocks 1000+ Composio tools, auto-uploads URL/path file
@@ -108,6 +110,17 @@ A missing provider means it's not linked — ask the user to connect it in the A
 | Google BigQuery | `composio_bigquery` | `https://bigquery.googleapis.com/bigquery/v2/` |
 | Supabase | `composio_supabase` | `https://api.supabase.com/v1/` |
 | Twitter / X | `composio_twitter` | `https://api.twitter.com/2/` |
+| QuickBooks | `composio_quickbooks` | `https://quickbooks.api.intuit.com/` (path: `v3/company/{realmId}/...`) |
+| Brex | `composio_brex` | `https://platform.brexapis.com/v2/` |
+| Google Ads | `composio_googleads` | `https://googleads.googleapis.com/` (path: `v18/customers/...`) |
+| Intercom | `composio_intercom` | `https://api.intercom.io/` |
+| ZoomInfo | `composio_zoominfo` | `https://api.zoominfo.com/` |
+| Gong | `composio_gong` | `https://api.gong.io/v2/` |
+| DocuSign | `composio_docusign` | `https://account.docusign.com/restapi/` (path: `v2.1/accounts/{accountId}/...`) |
+| Box | `composio_box` | `https://api.box.com/2.0/` |
+| Todoist | `composio_todoist` | `https://api.todoist.com/rest/v2/` |
+| Ashby | `composio_ashby` | `https://api.ashbyhq.com/` |
+| Basecamp | `composio_basecamp` | `https://3.basecampapi.com/` (path: `{accountId}/projects.json`) |
 
 ## Examples by Provider
 
@@ -919,6 +932,186 @@ blink connector exec composio_amplitude 2/charts GET
 
 # Get active users
 blink connector exec composio_amplitude 2/users/search GET '{"user":"user@example.com"}'
+```
+
+### QuickBooks
+
+QuickBooks is multi-tenant: every endpoint is scoped under the user's
+`realmId` (also called `companyId`). Get it from `blink connector status`
+metadata or by listing companies via OpenID Connect.
+
+```bash
+# List customers (replace REALMID with the company id)
+blink connector exec composio_quickbooks v3/company/REALMID/query GET '{"query":"SELECT * FROM Customer MAXRESULTS 10"}'
+
+# Get a specific invoice
+blink connector exec composio_quickbooks v3/company/REALMID/invoice/INVOICE_ID GET
+
+# Create an invoice
+blink connector exec composio_quickbooks v3/company/REALMID/invoice POST '{"Line":[{"Amount":100,"DetailType":"SalesItemLineDetail","SalesItemLineDetail":{"ItemRef":{"value":"1"}}}],"CustomerRef":{"value":"CUSTOMER_ID"}}'
+```
+
+For complex writes (attachments, voids), prefer the native tool catalog:
+
+```bash
+blink connector tool-execute composio_quickbooks QUICKBOOKS_CREATE_INVOICE '{...}'
+```
+
+### Brex
+
+```bash
+# Get current user
+blink connector exec composio_brex users/me GET
+
+# List cards
+blink connector exec composio_brex cards GET '{"limit":"20"}'
+
+# List transactions
+blink connector exec composio_brex transactions/card GET '{"limit":"20"}'
+```
+
+### Google Ads
+
+Requires a `developer-token` header (Composio injects it server-side from the
+auth config). All paths must include the API version:
+
+```bash
+# List accessible customers
+blink connector exec composio_googleads v18/customers:listAccessibleCustomers GET
+
+# Run a Google Ads Query Language (GAQL) report
+blink connector exec composio_googleads v18/customers/CUSTOMER_ID/googleAds:search POST '{"query":"SELECT campaign.id, campaign.name FROM campaign LIMIT 10"}'
+```
+
+### Intercom
+
+```bash
+# Get current admin
+blink connector exec composio_intercom me GET
+
+# List contacts
+blink connector exec composio_intercom contacts GET '{"per_page":"20"}'
+
+# Create a contact
+blink connector exec composio_intercom contacts POST '{"role":"user","email":"new@example.com","name":"Jane Doe"}'
+
+# Search conversations
+blink connector exec composio_intercom conversations/search POST '{"query":{"field":"open","operator":"=","value":"true"}}'
+```
+
+### ZoomInfo
+
+```bash
+# Search people
+blink connector exec composio_zoominfo search/contact POST '{"firstName":"Jane","lastName":"Doe","companyName":"Acme"}'
+
+# Search companies
+blink connector exec composio_zoominfo search/company POST '{"companyName":"Acme"}'
+```
+
+### Gong
+
+```bash
+# List users
+blink connector exec composio_gong users GET
+
+# List calls (last 7 days)
+blink connector exec composio_gong calls GET '{"fromDateTime":"2026-04-16T00:00:00Z","toDateTime":"2026-04-23T00:00:00Z"}'
+
+# Get call transcript
+blink connector exec composio_gong calls/transcript POST '{"filter":{"callIds":["CALL_ID"]}}'
+```
+
+### DocuSign
+
+DocuSign is account-scoped. Get the `accountId` from `/oauth/userinfo` or
+`blink connector status` metadata.
+
+```bash
+# Get my account info
+blink connector exec composio_docusign v2.1/accounts/ACCOUNT_ID GET
+
+# List envelopes
+blink connector exec composio_docusign v2.1/accounts/ACCOUNT_ID/envelopes GET '{"from_date":"2026-01-01"}'
+
+# Create an envelope (use tool-execute for file attachments)
+blink connector tool-execute composio_docusign DOCUSIGN_CREATE_ENVELOPE '{...}'
+```
+
+### Box
+
+```bash
+# Get current user
+blink connector exec composio_box users/me GET
+
+# List items in root folder (folder id 0)
+blink connector exec composio_box folders/0/items GET '{"limit":"20"}'
+
+# Get file info
+blink connector exec composio_box files/FILE_ID GET
+
+# Create a folder
+blink connector exec composio_box folders POST '{"name":"New Folder","parent":{"id":"0"}}'
+
+# Upload a file (use tool-execute for multipart)
+blink connector tool-execute composio_box BOX_UPLOAD_FILE '{"file":"./report.pdf","parent_id":"0"}'
+```
+
+### Todoist
+
+```bash
+# List projects
+blink connector exec composio_todoist projects GET
+
+# List active tasks
+blink connector exec composio_todoist tasks GET
+
+# Filter tasks by project
+blink connector exec composio_todoist tasks GET '{"project_id":"PROJECT_ID"}'
+
+# Create a task
+blink connector exec composio_todoist tasks POST '{"content":"Ship the new connectors","project_id":"PROJECT_ID","due_string":"tomorrow at 5pm"}'
+
+# Close a task
+blink connector exec composio_todoist tasks/TASK_ID/close POST
+```
+
+### Ashby
+
+Ashby uses API-key auth (Basic with empty password). Composio handles the
+encoding — pass the path only.
+
+```bash
+# Get current user
+blink connector exec composio_ashby user.me POST '{}'
+
+# List candidates
+blink connector exec composio_ashby candidate.list POST '{"limit":20}'
+
+# Get a candidate
+blink connector exec composio_ashby candidate.info POST '{"candidateId":"CANDIDATE_ID"}'
+
+# List jobs
+blink connector exec composio_ashby job.list POST '{"limit":20}'
+```
+
+### Basecamp
+
+Basecamp 4 is account-scoped — get the `accountId` (an integer) from
+`https://launchpad.37signals.com/authorization.json` or `blink connector status`.
+
+```bash
+# List projects
+blink connector exec composio_basecamp ACCOUNT_ID/projects.json GET
+
+# Get a specific project
+blink connector exec composio_basecamp ACCOUNT_ID/projects/PROJECT_ID.json GET
+
+# List todos in a todo list
+blink connector exec composio_basecamp ACCOUNT_ID/buckets/PROJECT_ID/todolists/TODOLIST_ID/todos.json GET
+
+# Create a message
+blink connector exec composio_basecamp ACCOUNT_ID/buckets/PROJECT_ID/message_boards/BOARD_ID/messages.json POST '{"subject":"Status update","content":"<div>Shipping today.</div>","status":"active"}'
 ```
 
 ## Scripting — capture output
