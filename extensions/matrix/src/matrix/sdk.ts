@@ -1237,11 +1237,12 @@ export class MatrixClient {
         typeof crypto.getSecretStorageStatus === "function"
           ? await crypto.getSecretStorageStatus().catch(() => null)
           : null;
-      const stagedRecoveryKeyValidated = Boolean(
+      const stagedRecoveryKeyConfirmedBySecretStorage =
+        Boolean(stagedKeyId) &&
+        secretStorageStatus?.secretStorageKeyValidityMap?.[stagedKeyId ?? ""] === true;
+      const stagedRecoveryKeyValidated =
         stagedRecoveryKeyUsed &&
-        stagedKeyId &&
-        secretStorageStatus?.secretStorageKeyValidityMap?.[stagedKeyId] === true,
-      );
+        (stagedRecoveryKeyConfirmedBySecretStorage || (status.verified && backupUsable));
       const recoveryKeyAccepted = stagedRecoveryKeyValidated && (status.verified || backupUsable);
       if (!status.verified) {
         if (backupUsable && stagedRecoveryKeyValidated) {

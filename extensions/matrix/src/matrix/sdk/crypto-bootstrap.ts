@@ -189,6 +189,7 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
       };
       try {
         await resetCrossSigning();
+        await this.trustFreshOwnIdentity(crypto);
       } catch (err) {
         const shouldRepairSecretStorage =
           options.allowSecretStorageRecreateWithoutRecoveryKey &&
@@ -204,6 +205,7 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
               forceNewSecretStorage: true,
             });
             await resetCrossSigning();
+            await this.trustFreshOwnIdentity(crypto);
           } catch (repairErr) {
             LogService.warn("MatrixClientLite", "Forced cross-signing reset failed:", repairErr);
             if (options.strict) {
@@ -289,6 +291,7 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
         setupNewCrossSigning: true,
         authUploadDeviceSigningKeys,
       });
+      await this.trustFreshOwnIdentity(crypto);
     } catch (err) {
       LogService.warn("MatrixClientLite", "Fallback cross-signing bootstrap failed:", err);
       if (options.strict) {
@@ -298,6 +301,25 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
     }
 
     return await finalize();
+  }
+
+  private async trustFreshOwnIdentity(crypto: MatrixCryptoBootstrapApi): Promise<void> {
+    const ownIdentity =
+      typeof crypto.getOwnIdentity === "function"
+        ? await crypto.getOwnIdentity().catch(() => undefined)
+        : undefined;
+    if (!ownIdentity) {
+      return;
+    }
+
+    try {
+      if (typeof ownIdentity.isVerified === "function" && ownIdentity.isVerified()) {
+        return;
+      }
+      await ownIdentity.verify?.();
+    } finally {
+      ownIdentity.free?.();
+    }
   }
 
   private async bootstrapSecretStorage(

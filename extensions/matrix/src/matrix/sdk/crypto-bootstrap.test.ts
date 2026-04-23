@@ -461,6 +461,47 @@ describe("MatrixCryptoBootstrapper", () => {
     });
   });
 
+  it("trusts the fresh own identity after a forced cross-signing reset", async () => {
+    const verifyOwnIdentity = vi.fn(async () => ({}));
+    const freeOwnIdentity = vi.fn();
+    const { crypto, bootstrapper } = createForcedResetHarness(vi.fn(async () => {}));
+    crypto.getOwnIdentity = vi.fn(async () => ({
+      free: freeOwnIdentity,
+      isVerified: () => false,
+      verify: verifyOwnIdentity,
+    }));
+
+    await bootstrapper.bootstrap(crypto, {
+      strict: true,
+      forceResetCrossSigning: true,
+    });
+
+    expect(verifyOwnIdentity).toHaveBeenCalledTimes(1);
+    expect(freeOwnIdentity).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not trust an existing unpublished identity without a reset", async () => {
+    const verifyOwnIdentity = vi.fn(async () => ({}));
+    const { crypto, bootstrapper } = createBootstrapperHarness({
+      bootstrapCrossSigning: vi.fn(async () => {}),
+      getDeviceVerificationStatus: vi.fn(async () => createVerifiedDeviceStatus()),
+      getOwnIdentity: vi.fn(async () => ({
+        isVerified: () => false,
+        verify: verifyOwnIdentity,
+      })),
+      isCrossSigningReady: vi.fn(async () => false),
+      userHasCrossSigningKeys: vi.fn(async () => false),
+    });
+
+    const result = await bootstrapper.bootstrap(crypto, {
+      allowAutomaticCrossSigningReset: false,
+      strict: false,
+    });
+
+    expect(result.crossSigningPublished).toBe(false);
+    expect(verifyOwnIdentity).not.toHaveBeenCalled();
+  });
+
   it("fails in strict mode when cross-signing keys are still unpublished", async () => {
     const deps = createBootstrapperDeps();
     const crypto = createCryptoApi({
