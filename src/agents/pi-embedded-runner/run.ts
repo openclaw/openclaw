@@ -50,7 +50,10 @@ import {
 } from "../model-auth.js";
 import { normalizeProviderId } from "../model-selection.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
-import { disposeSessionMcpRuntime } from "../pi-bundle-mcp-tools.js";
+import {
+  retireSessionMcpRuntime,
+  retireSessionMcpRuntimeForSessionKey,
+} from "../pi-bundle-mcp-tools.js";
 import {
   classifyFailoverReason,
   extractObservedOverflowTokenCount,
@@ -113,7 +116,11 @@ import {
 import type { RunEmbeddedPiAgentParams } from "./run/params.js";
 import { buildEmbeddedRunPayloads } from "./run/payloads.js";
 import { handleRetryLimitExhaustion } from "./run/retry-limit.js";
-import { resolveEffectiveRuntimeModel, resolveHookModelSelection } from "./run/setup.js";
+import {
+  buildBeforeModelResolveAttachments,
+  resolveEffectiveRuntimeModel,
+  resolveHookModelSelection,
+} from "./run/setup.js";
 import { mergeAttemptToolMediaPayloads } from "./run/tool-media-payloads.js";
 import {
   resolveLiveToolResultMaxChars,
@@ -302,6 +309,7 @@ export async function runEmbeddedPiAgent(
 
       const hookSelection = await resolveHookModelSelection({
         prompt: params.prompt,
+        attachments: buildBeforeModelResolveAttachments(params.images),
         provider,
         modelId,
         hookRunner,
@@ -484,6 +492,13 @@ export async function runEmbeddedPiAgent(
       });
       let rateLimitProfileRotations = 0;
       let timeoutCompactionAttempts = 0;
+      // Silent-error retry: non-strict-agentic models (e.g. ollama/glm-5.1) can
+      // end a turn with stopReason="error" + zero output tokens, producing no
+      // user-visible text. The existing empty-response retry is gated on
+      // isStrictAgenticSupportedProviderModel (gpt-5 only). This is an
+      // orthogonal, model-agnostic resubmission.
+      const MAX_EMPTY_ERROR_RETRIES = 3;
+      let emptyErrorRetries = 0;
       const overloadFailoverBackoffMs = resolveOverloadFailoverBackoffMs(params.config);
       const overloadProfileRotationLimit = resolveOverloadProfileRotationLimit(params.config);
       const rateLimitProfileRotationLimit = resolveRateLimitProfileRotationLimit(params.config);
@@ -677,6 +692,7 @@ export async function runEmbeddedPiAgent(
           const attempt = await runEmbeddedAttemptWithBackend({
             sessionId: params.sessionId,
             sessionKey: resolvedSessionKey,
+            sandboxSessionKey: params.sandboxSessionKey,
             trigger: params.trigger,
             memoryFlushWritePath: params.memoryFlushWritePath,
             messageChannel: params.messageChannel,
@@ -765,6 +781,7 @@ export async function runEmbeddedPiAgent(
             bootstrapContextRunKind: params.bootstrapContextRunKind,
             toolsAllow: params.toolsAllow,
             disableMessageTool: params.disableMessageTool,
+            forceMessageTool: params.forceMessageTool,
             requireExplicitMessageTarget: params.requireExplicitMessageTarget,
             internalEvents: params.internalEvents,
             bootstrapPromptWarningSignaturesSeen,
@@ -1696,6 +1713,7 @@ export async function runEmbeddedPiAgent(
           const nextPlanningOnlyRetryInstruction = resolvePlanningOnlyRetryInstruction({
             provider,
             modelId,
+            executionContract,
             prompt: params.prompt,
             aborted,
             timedOut,
@@ -1704,6 +1722,7 @@ export async function runEmbeddedPiAgent(
           const nextReasoningOnlyRetryInstruction = resolveReasoningOnlyRetryInstruction({
             provider: activeErrorContext.provider,
             modelId: activeErrorContext.model,
+            executionContract,
             aborted,
             timedOut,
             attempt,
@@ -1711,6 +1730,7 @@ export async function runEmbeddedPiAgent(
           const nextEmptyResponseRetryInstruction = resolveEmptyResponseRetryInstruction({
             provider: activeErrorContext.provider,
             modelId: activeErrorContext.model,
+            executionContract,
             payloadCount,
             aborted,
             timedOut,
@@ -1906,6 +1926,50 @@ export async function runEmbeddedPiAgent(
                 `provider=${activeErrorContext.provider}/${activeErrorContext.model} attempts=${emptyResponseRetryAttempts}/${maxEmptyResponseRetryAttempts} — surfacing incomplete-turn error`,
             );
           }
+          // ── silent-error retry ────────────────────────────────────────────
+          // Observed with ollama/glm-5.1: a turn can end with stopReason="error"
+          // and zero output tokens AND empty content after a successful
+          // tool-call sequence, producing no user-visible text at all. The
+          // existing empty-response retry path (resolveEmptyResponseRetryInstruction)
+          // is gated on the strict-agentic contract (gpt-5 only), so non-frontier
+          // models fall through to "incomplete turn detected" → silent gap
+          // until the user nudges. This is a narrower, model-agnostic
+          // resubmission: same prompt, same session transcript (tool results
+          // already captured), no instruction injection. Placed before the
+          // incompleteTurnText return so it actually gets a chance to fire.
+          //
+          // Content-empty guard: a reasoning-only error (content has thinking
+          // blocks) is a distinct failure mode handled elsewhere; only retry
+          // when the assistant truly produced nothing.
+          //
+          // Side-effect guard: if the failed attempt already recorded potential
+          // side effects (messaging tool sent, cron add, mutating tool
+          // call that wasn't round-tripped as replay-safe), resubmission can
+          // duplicate those actions. Mirror the gate the other retry resolvers
+          // use (resolveEmptyResponseRetryInstruction, reasoning-only, planning-
+          // only), which short-circuit on attempt.replayMetadata.hadPotentialSideEffects.
+          const silentErrorContent = sessionLastAssistant?.content as Array<unknown> | undefined;
+          if (
+            incompleteTurnText &&
+            !aborted &&
+            !promptError &&
+            !timedOut &&
+            sessionLastAssistant?.stopReason === "error" &&
+            ((sessionLastAssistant?.usage as { output?: number } | undefined)?.output ?? 0) === 0 &&
+            (silentErrorContent?.length ?? 0) === 0 &&
+            !attempt.replayMetadata.hadPotentialSideEffects &&
+            emptyErrorRetries < MAX_EMPTY_ERROR_RETRIES
+          ) {
+            emptyErrorRetries += 1;
+            log.warn(
+              `[empty-error-retry] stopReason=error output=0; resubmitting ` +
+                `attempt=${emptyErrorRetries}/${MAX_EMPTY_ERROR_RETRIES} ` +
+                `provider=${sessionLastAssistant?.provider ?? provider} ` +
+                `model=${sessionLastAssistant?.model ?? model.id} ` +
+                `sessionKey=${params.sessionKey ?? params.sessionId}`,
+            );
+            continue;
+          }
           if (incompleteTurnText) {
             const replayInvalid = resolveReplayInvalidForAttempt(incompleteTurnText);
             const livenessState = resolveRunLivenessState({
@@ -2070,11 +2134,23 @@ export async function runEmbeddedPiAgent(
         await contextEngine.dispose?.();
         stopRuntimeAuthRefreshTimer();
         if (params.cleanupBundleMcpOnRunEnd === true) {
-          await disposeSessionMcpRuntime(params.sessionId).catch((error) => {
+          const onError = (error: unknown, sessionId: string) => {
             log.warn(
-              `bundle-mcp cleanup failed after run for ${params.sessionId}: ${formatErrorMessage(error)}`,
+              `bundle-mcp cleanup failed after run for ${sessionId}: ${formatErrorMessage(error)}`,
             );
+          };
+          const retiredBySessionKey = await retireSessionMcpRuntimeForSessionKey({
+            sessionKey: params.sessionKey,
+            reason: "embedded-run-end",
+            onError,
           });
+          if (!retiredBySessionKey) {
+            await retireSessionMcpRuntime({
+              sessionId: params.sessionId,
+              reason: "embedded-run-end",
+              onError,
+            });
+          }
         }
       }
     });

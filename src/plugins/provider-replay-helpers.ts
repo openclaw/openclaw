@@ -1,4 +1,5 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import { sanitizeGoogleAssistantFirstOrdering } from "../shared/google-turn-ordering.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import type {
   ProviderReasoningOutputMode,
@@ -10,6 +11,7 @@ import type {
 
 export function buildOpenAICompatibleReplayPolicy(
   modelApi: string | null | undefined,
+  options: { sanitizeToolCallIds?: boolean } = {},
 ): ProviderReplayPolicy | undefined {
   if (
     modelApi !== "openai-completions" &&
@@ -20,9 +22,12 @@ export function buildOpenAICompatibleReplayPolicy(
     return undefined;
   }
 
+  const sanitizeToolCallIds = options.sanitizeToolCallIds ?? true;
+
   return {
-    sanitizeToolCallIds: true,
-    toolCallIdMode: "strict",
+    ...(sanitizeToolCallIds
+      ? { sanitizeToolCallIds: true, toolCallIdMode: "strict" as const }
+      : {}),
     ...(modelApi === "openai-completions"
       ? {
           applyAssistantFirstOrderingFix: true,
@@ -130,31 +135,6 @@ export function buildHybridAnthropicOrOpenAIReplayPolicy(
 }
 
 const GOOGLE_TURN_ORDERING_CUSTOM_TYPE = "google-turn-ordering-bootstrap";
-const GOOGLE_TURN_ORDER_BOOTSTRAP_TEXT = "(session bootstrap)";
-
-function sanitizeGoogleAssistantFirstOrdering(messages: AgentMessage[]): AgentMessage[] {
-  const first = messages[0] as { role?: unknown; content?: unknown } | undefined;
-  const role = first?.role;
-  const content = first?.content;
-  if (
-    role === "user" &&
-    typeof content === "string" &&
-    content.trim() === GOOGLE_TURN_ORDER_BOOTSTRAP_TEXT
-  ) {
-    return messages;
-  }
-  if (role !== "assistant") {
-    return messages;
-  }
-
-  const bootstrap: AgentMessage = {
-    role: "user",
-    content: GOOGLE_TURN_ORDER_BOOTSTRAP_TEXT,
-    timestamp: Date.now(),
-  } as AgentMessage;
-
-  return [bootstrap, ...messages];
-}
 
 function hasGoogleTurnOrderingMarker(sessionState: ProviderReplaySessionState): boolean {
   return sessionState

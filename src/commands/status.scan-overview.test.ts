@@ -13,8 +13,8 @@ const mocks = vi.hoisted(() => ({
   buildChannelsTable: vi.fn(),
 }));
 
-vi.mock("../channels/config-presence.js", () => ({
-  hasPotentialConfiguredChannels: mocks.hasPotentialConfiguredChannels,
+vi.mock("../plugins/channel-plugin-ids.js", () => ({
+  hasConfiguredChannelsForReadOnlyScope: mocks.hasPotentialConfiguredChannels,
 }));
 
 vi.mock("../cli/command-config-resolution.js", () => ({
@@ -91,7 +91,7 @@ describe("collectStatusScanOverview", () => {
       skipColdStartNetworkChecks: false,
     });
     mocks.callGateway.mockResolvedValue({ channelAccounts: {} });
-    mocks.collectChannelStatusIssues.mockReturnValue([{ channel: "signal", message: "boom" }]);
+    mocks.collectChannelStatusIssues.mockReturnValue([{ channel: "quietchat", message: "boom" }]);
     mocks.buildChannelsTable.mockResolvedValue({ rows: [], details: [] });
   });
 
@@ -117,7 +117,7 @@ describe("collectStatusScanOverview", () => {
         sourceConfig: { session: {} },
       }),
     );
-    expect(result.channelIssues).toEqual([{ channel: "signal", message: "boom" }]);
+    expect(result.channelIssues).toEqual([{ channel: "quietchat", message: "boom" }]);
   });
 
   it("skips channels.status when the gateway is unreachable", async () => {

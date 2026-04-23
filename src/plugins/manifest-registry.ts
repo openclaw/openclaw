@@ -33,6 +33,7 @@ import {
   type PluginManifest,
   type PluginManifestChannelConfig,
   type PluginManifestContracts,
+  type PluginManifestMediaUnderstandingProviderMetadata,
   type PluginManifestModelSupport,
   type PluginManifestProviderEndpoint,
   type PluginManifestQaRunner,
@@ -46,6 +47,7 @@ import { resolvePluginCacheInputs } from "./roots.js";
 
 type PluginManifestContractListKey =
   | "speechProviders"
+  | "externalAuthProviders"
   | "mediaUnderstandingProviders"
   | "realtimeVoiceProviders"
   | "realtimeTranscriptionProviders"
@@ -112,6 +114,10 @@ export type PluginManifestRecord = {
   configSchema?: Record<string, unknown>;
   configUiHints?: Record<string, PluginConfigUiHint>;
   contracts?: PluginManifestContracts;
+  mediaUnderstandingProviderMetadata?: Record<
+    string,
+    PluginManifestMediaUnderstandingProviderMetadata
+  >;
   configContracts?: PluginManifestConfigContracts;
   channelConfigs?: Record<string, PluginManifestChannelConfig>;
   channelCatalogMeta?: {
@@ -359,6 +365,7 @@ function buildRecord(params: {
     configSchema: params.configSchema,
     configUiHints: params.manifest.uiHints,
     contracts: params.manifest.contracts,
+    mediaUnderstandingProviderMetadata: params.manifest.mediaUnderstandingProviderMetadata,
     configContracts: params.manifest.configContracts,
     channelConfigs,
     ...(params.candidate.packageManifest?.channel?.id
@@ -581,6 +588,20 @@ export function loadPluginManifestRegistry(
         : manifestRes.manifestPath;
     })();
 
+    const record = isBundleRecord
+      ? buildBundleRecord({
+          manifest: manifest as Parameters<typeof buildBundleRecord>[0]["manifest"],
+          candidate,
+          manifestPath: manifestRes.manifestPath,
+        })
+      : buildRecord({
+          manifest: manifest as PluginManifest,
+          candidate,
+          manifestPath: manifestRes.manifestPath,
+          schemaCacheKey,
+          configSchema,
+        });
+
     const existing = seenIds.get(manifest.id);
     if (existing) {
       // Check whether both candidates point to the same physical directory
@@ -599,62 +620,42 @@ export function loadPluginManifestRegistry(
         // Prefer higher-precedence origins even if candidates are passed in
         // an unexpected order (config > workspace > global > bundled).
         if (PLUGIN_ORIGIN_RANK[candidate.origin] < PLUGIN_ORIGIN_RANK[existing.candidate.origin]) {
-          records[existing.recordIndex] = isBundleRecord
-            ? buildBundleRecord({
-                manifest: manifest as Parameters<typeof buildBundleRecord>[0]["manifest"],
-                candidate,
-                manifestPath: manifestRes.manifestPath,
-              })
-            : buildRecord({
-                manifest: manifest as PluginManifest,
-                candidate,
-                manifestPath: manifestRes.manifestPath,
-                schemaCacheKey,
-                configSchema,
-              });
+          records[existing.recordIndex] = record;
           seenIds.set(manifest.id, { candidate, recordIndex: existing.recordIndex });
         }
         continue;
       }
+
+      const candidateRank = resolveDuplicatePrecedenceRank({
+        pluginId: manifest.id,
+        candidate,
+        config,
+        env,
+      });
+      const existingRank = resolveDuplicatePrecedenceRank({
+        pluginId: manifest.id,
+        candidate: existing.candidate,
+        config,
+        env,
+      });
+      const candidateWins = candidateRank < existingRank;
+      const winnerCandidate = candidateWins ? candidate : existing.candidate;
+      const overriddenCandidate = candidateWins ? existing.candidate : candidate;
+      if (candidateWins) {
+        records[existing.recordIndex] = record;
+        seenIds.set(manifest.id, { candidate, recordIndex: existing.recordIndex });
+      }
       diagnostics.push({
         level: "warn",
         pluginId: manifest.id,
-        source: candidate.source,
-        message:
-          resolveDuplicatePrecedenceRank({
-            pluginId: manifest.id,
-            candidate,
-            config,
-            env,
-          }) <
-          resolveDuplicatePrecedenceRank({
-            pluginId: manifest.id,
-            candidate: existing.candidate,
-            config,
-            env,
-          })
-            ? `duplicate plugin id detected; ${existing.candidate.origin} plugin will be overridden by ${candidate.origin} plugin (${candidate.source})`
-            : `duplicate plugin id detected; ${candidate.origin} plugin will be overridden by ${existing.candidate.origin} plugin (${candidate.source})`,
+        source: overriddenCandidate.source,
+        message: `duplicate plugin id detected; ${overriddenCandidate.origin} plugin will be overridden by ${winnerCandidate.origin} plugin (${winnerCandidate.source})`,
       });
-    } else {
-      seenIds.set(manifest.id, { candidate, recordIndex: records.length });
+      continue;
     }
 
-    records.push(
-      isBundleRecord
-        ? buildBundleRecord({
-            manifest: manifest as Parameters<typeof buildBundleRecord>[0]["manifest"],
-            candidate,
-            manifestPath: manifestRes.manifestPath,
-          })
-        : buildRecord({
-            manifest: manifest as PluginManifest,
-            candidate,
-            manifestPath: manifestRes.manifestPath,
-            schemaCacheKey,
-            configSchema,
-          }),
-    );
+    seenIds.set(manifest.id, { candidate, recordIndex: records.length });
+    records.push(record);
   }
 
   const registry = { plugins: records, diagnostics };

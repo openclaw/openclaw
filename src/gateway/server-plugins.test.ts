@@ -88,6 +88,8 @@ const createRegistry = (diagnostics: PluginDiagnostic[]): PluginRegistry => ({
   webFetchProviders: [],
   webSearchProviders: [],
   memoryEmbeddingProviders: [],
+  embeddedExtensionFactories: [],
+  codexAppServerExtensionFactories: [],
   textTransforms: [],
   agentHarnesses: [],
   gatewayHandlers: {},
@@ -200,8 +202,7 @@ async function createSubagentRuntime(
 
 async function reloadServerPluginsModule(): Promise<ServerPluginsModule> {
   vi.resetModules();
-  await loadTestModules();
-  return serverPluginsModule;
+  return await import("./server-plugins.js");
 }
 
 function loadGatewayPluginsForTest(

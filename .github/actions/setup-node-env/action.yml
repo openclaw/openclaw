@@ -14,15 +14,11 @@ inputs:
   pnpm-version:
     description: pnpm version for corepack.
     required: false
-    default: "10.32.1"
+    default: "10.33.0"
   install-bun:
     description: Whether to install Bun alongside Node.
     required: false
     default: "true"
-  use-sticky-disk:
-    description: Request Blacksmith sticky-disk pnpm caching on trusted runs; pull_request runs fall back to actions/cache.
-    required: false
-    default: "false"
   install-deps:
     description: Whether to run pnpm install after environment setup.
     required: false
@@ -41,11 +37,11 @@ runs:
         check-latest: false
 
     - name: Setup pnpm + cache store
+      id: pnpm-cache
       uses: ./.github/actions/setup-pnpm-store-cache
       with:
         pnpm-version: ${{ inputs.pnpm-version }}
         cache-key-suffix: ${{ inputs.cache-key-suffix }}
-        use-sticky-disk: ${{ inputs.use-sticky-disk }}
 
     - name: Setup Bun
       if: inputs.install-bun == 'true'
@@ -64,7 +60,12 @@ runs:
     - name: Capture node path
       if: inputs.install-deps == 'true'
       shell: bash
-      run: echo "NODE_BIN=$(dirname "$(node -p "process.execPath")")" >> "$GITHUB_ENV"
+      run: |
+        node_bin="$(dirname "$(node -p 'process.execPath')")"
+        if command -v cygpath >/dev/null 2>&1; then
+          node_bin="$(cygpath -u "$node_bin")"
+        fi
+        echo "NODE_BIN=$node_bin" >> "$GITHUB_ENV"
 
     - name: Install dependencies
       if: inputs.install-deps == 'true'
@@ -97,3 +98,11 @@ runs:
           install_args+=("$LOCKFILE_FLAG")
         fi
         pnpm "${install_args[@]}" || pnpm "${install_args[@]}"
+
+    - name: Save pnpm store cache
+      if: inputs.install-deps == 'true' && steps.pnpm-cache.outputs.cache-enabled == 'true' && steps.pnpm-cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v5
+      continue-on-error: true
+      with:
+        path: ${{ steps.pnpm-cache.outputs.store-path }}
+        key: ${{ steps.pnpm-cache.outputs.primary-key }}
