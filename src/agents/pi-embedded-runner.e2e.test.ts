@@ -517,6 +517,53 @@ describe("runEmbeddedPiAgent", () => {
     expect(disposeSessionMcpRuntimeMock).toHaveBeenCalledWith("session:test");
   });
 
+  // Regression test for #70364: MCP child process leak — sessions_send via gateway
+  // never calls disposeSessionMcpRuntime.
+  // The sessions_send path triggers runAgentStep() → callGateway({ method: "agent", lane: nested })
+  // → gateway → runEmbeddedPiAgent(). Previously cleanupBundleMcpOnRunEnd was only set for
+  // local mode (opts.local === true), so gateway-path nested runs never cleaned up their
+  // MCP child processes. Fix (commit caab5a6810): remove the flag guard so
+  // disposeSessionMcpRuntime is called unconditionally for every embedded run end.
+  it("calls disposeSessionMcpRuntime for a gateway-path nested lane run (#70364)", async () => {
+    disposeSessionMcpRuntimeMock.mockReset();
+    const sessionFile = nextSessionFile();
+    const cfg = createEmbeddedPiRunnerOpenAiConfig(["mock-1"]);
+    const sessionKey = nextSessionKey();
+    // Simulate the lane used by sessions_send → runAgentStep → callGateway({ method: "agent" })
+    const nestedLane = `nested:agent:test:webchat:channel:1`;
+
+    runEmbeddedAttemptMock.mockResolvedValueOnce(
+      makeEmbeddedRunnerAttempt({
+        assistantTexts: ["nested ok"],
+        lastAssistant: buildEmbeddedRunnerAssistant({
+          content: [{ type: "text", text: "nested ok" }],
+        }),
+      }),
+    );
+
+    await runEmbeddedPiAgent({
+      sessionId: "session:nested-test",
+      sessionKey,
+      sessionFile,
+      workspaceDir,
+      config: cfg,
+      prompt: "hello from nested",
+      provider: "openai",
+      model: "mock-1",
+      timeoutMs: 5_000,
+      agentDir,
+      runId: nextRunId("nested-mcp-cleanup"),
+      enqueue: immediateEnqueue,
+      // Explicitly pass a nested lane — this is what sessions_send → runAgentStep does
+      lane: nestedLane,
+    });
+
+    expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
+    // The fix: disposeSessionMcpRuntime must be called even for nested/gateway-path runs
+    expect(disposeSessionMcpRuntimeMock).toHaveBeenCalledTimes(1);
+    expect(disposeSessionMcpRuntimeMock).toHaveBeenCalledWith("session:nested-test");
+  });
+
   it("retries a planning-only GPT turn once with an act-now steer", async () => {
     const sessionFile = nextSessionFile();
     const cfg = createEmbeddedPiRunnerOpenAiConfig(["gpt-5.4"]);
