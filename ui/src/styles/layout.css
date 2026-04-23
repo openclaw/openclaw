@@ -6,7 +6,7 @@
   --shell-pad: 8px;
   --shell-gap: 8px;
   --shell-nav-width: 180px;
-  --shell-nav-rail-width: 78px;
+  --shell-nav-rail-width: 58px;
   --shell-topbar-height: 40px;
   --shell-focus-duration: 200ms;
   --shell-focus-ease: var(--ease-out);
@@ -611,14 +611,14 @@
 }
 
 .sidebar--collapsed .nav-section {
-  gap: 6px;
-  margin-bottom: 16px;
+  gap: 0px;
+  margin-bottom: 0px;
 }
 
 .sidebar--collapsed .nav-item {
   justify-content: center;
-  width: 44px;
-  min-height: 44px;
+  width: 36px;
+  min-height: 36px;
   padding: 0;
   margin: 0 auto;
   border-radius: var(--radius-lg);
