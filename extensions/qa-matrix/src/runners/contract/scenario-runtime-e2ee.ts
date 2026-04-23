@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -315,6 +315,16 @@ async function writeMatrixQaCliOutputArtifacts(params: {
   return { stderrPath, stdoutPath };
 }
 
+async function assertMatrixQaPrivatePathMode(pathToCheck: string, label: string) {
+  if (process.platform === "win32") {
+    return;
+  }
+  const mode = (await stat(pathToCheck)).mode & 0o777;
+  if ((mode & 0o077) !== 0) {
+    throw new Error(`${label} permissions are too broad: ${mode.toString(8)}`);
+  }
+}
+
 function assertMatrixQaCliSasMatches(params: {
   cliSas: ReturnType<typeof parseMatrixQaCliSasText>;
   owner: MatrixVerificationSummary;
@@ -390,10 +400,13 @@ async function createMatrixQaCliSelfVerificationRuntime(params: {
   const stateDir = path.join(rootDir, "state");
   const configPath = path.join(rootDir, "config.json");
   await chmod(rootDir, 0o700).catch(() => undefined);
+  await assertMatrixQaPrivatePathMode(rootDir, "Matrix QA CLI temp directory");
   await mkdir(artifactDir, { mode: 0o700, recursive: true });
   await chmod(artifactDir, 0o700).catch(() => undefined);
+  await assertMatrixQaPrivatePathMode(artifactDir, "Matrix QA CLI artifact directory");
   await mkdir(stateDir, { mode: 0o700, recursive: true });
   await chmod(stateDir, 0o700).catch(() => undefined);
+  await assertMatrixQaPrivatePathMode(stateDir, "Matrix QA CLI state directory");
   await writeFile(
     configPath,
     `${JSON.stringify(
@@ -422,8 +435,9 @@ async function createMatrixQaCliSelfVerificationRuntime(params: {
       null,
       2,
     )}\n`,
-    { mode: 0o600 },
+    { flag: "wx", mode: 0o600 },
   );
+  await assertMatrixQaPrivatePathMode(configPath, "Matrix QA CLI config file");
   const env = {
     ...requireMatrixQaCliRuntimeEnv(params.context),
     FORCE_COLOR: "0",
