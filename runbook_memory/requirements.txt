@@ -1,0 +1,4 @@
+PyYAML>=6.0.0
+# Optional:
+# numpy>=1.26.0
+# sentence-transformers>=2.7.0

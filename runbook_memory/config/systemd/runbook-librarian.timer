@@ -1,0 +1,11 @@
+[Unit]
+Description=Run OpenClaw runbook librarian nightly
+
+[Timer]
+OnBootSec=10min
+OnCalendar=*-*-* 03:30:00
+Persistent=true
+Unit=runbook-librarian.service
+
+[Install]
+WantedBy=timers.target

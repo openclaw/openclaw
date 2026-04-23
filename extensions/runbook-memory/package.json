@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/runbook-memory",
+  "version": "2026.3.31",
+  "private": true,
+  "description": "OpenClaw runbook memory plugin wrapper",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

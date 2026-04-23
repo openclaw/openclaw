@@ -1,0 +1,11 @@
+[Unit]
+Description=Run OpenClaw runbook indexer every 15 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=15min
+Persistent=true
+Unit=runbook-indexer.service
+
+[Install]
+WantedBy=timers.target

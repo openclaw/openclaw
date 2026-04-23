@@ -137,6 +137,15 @@ Skills provide your tools. When you need one, check its `SKILL.md`. Keep local n
 - **Discord links:** Wrap multiple links in `<>` to suppress embeds: `<https://example.com>`
 - **WhatsApp:** No headers — use **bold** or CAPS for emphasis
 
+## Runbook Memory
+
+- For docs, runbooks, and operational notes, treat the runbook-memory workflow as a mandatory preflight when available.
+- Search the smallest index or bootstrap report before source code or broad config inspection.
+- Update the canonical doc in place and keep any index in the same pass.
+- Avoid duplicate runbooks when one canonical source already exists.
+- If you keep a recovery backup mirror at `~/openclaw-recovery-backup`, sync it from heartbeat runs when docs or runbooks change.
+- Keep `.env` files, secrets, auth tokens, and device keys out of that mirror.
+
 ## 💓 Heartbeats - Be Proactive!
 
 When you receive a heartbeat poll (message matches the configured heartbeat prompt), don't just reply `HEARTBEAT_OK` every time. Use heartbeats productively!

@@ -1,0 +1,8 @@
+[Unit]
+Description=OpenClaw runbook memory changed-doc indexer
+After=network.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/openclaw-upstream
+ExecStart=%h/openclaw-upstream/runbook_memory/scripts/runbook-indexer.sh

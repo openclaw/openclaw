@@ -1,0 +1,37 @@
+{
+  "id": "runbook-memory",
+  "name": "Runbook Memory",
+  "description": "OpenClaw wrapper for the local runbook memory CLI.",
+  "skills": ["./skills"],
+  "contracts": {
+    "tools": [
+      "runbook_search",
+      "runbook_get",
+      "runbook_create",
+      "runbook_update",
+      "runbook_review_queue",
+      "runbook_reindex"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "pythonPath": {
+        "type": "string"
+      },
+      "cliPath": {
+        "type": "string"
+      },
+      "workspaceRoot": {
+        "type": "string"
+      },
+      "dbPath": {
+        "type": "string"
+      },
+      "runbooksRoot": {
+        "type": "string"
+      }
+    }
+  }
+}

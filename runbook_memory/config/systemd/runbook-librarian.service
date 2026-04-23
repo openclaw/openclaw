@@ -1,0 +1,8 @@
+[Unit]
+Description=OpenClaw runbook memory maintenance librarian
+After=network.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/openclaw-upstream
+ExecStart=%h/openclaw-upstream/runbook_memory/scripts/runbook-librarian.sh

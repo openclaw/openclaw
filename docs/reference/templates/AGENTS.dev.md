@@ -39,6 +39,13 @@ git commit -m "Add agent workspace"
 - On session start, read today + yesterday if present.
 - Capture durable facts, preferences, and decisions; avoid secrets.
 
+## Runbook Memory
+
+- For docs, runbooks, and operational notes, treat the runbook-memory workflow as a mandatory preflight when available.
+- Search the smallest index or bootstrap report before source code or broad config inspection.
+- Update the canonical doc in place and keep any index in the same pass.
+- Avoid duplicate runbooks when one canonical source already exists.
+
 ## Heartbeats (optional)
 
 - HEARTBEAT.md can hold a tiny checklist for heartbeat runs; keep it small.

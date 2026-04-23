@@ -36,6 +36,19 @@ Scoped guides:
 - `test/helpers/AGENTS.md`, `test/helpers/channels/AGENTS.md`: shared test helpers
 - `docs/AGENTS.md`, `ui/AGENTS.md`, `scripts/AGENTS.md`: docs/UI/scripts
 
+## Runbook Memory
+
+- For docs, runbooks, and operational notes, treat `runbook-memory` as a mandatory preflight when available.
+- Search the smallest index or bootstrap report before source code or broad config inspection.
+- Update the canonical doc in place and keep any index in the same pass.
+- Avoid duplicate runbooks when one canonical source already exists.
+
+## Recovery Backup
+
+- Keep the recovery backup mirror at `~/openclaw-recovery-backup` synced from heartbeat runs when docs or runbooks change.
+- Never back up `.env` files, secrets, auth tokens, or device keys into that mirror.
+- Capture the stable backup path and sync script in `MEMORY.md` for crash recovery.
+
 ## Architecture
 
 - Core must stay extension-agnostic. No core special cases for bundled plugin/provider/channel ids when manifest/registry/capability contracts can express it.

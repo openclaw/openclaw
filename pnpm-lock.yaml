@@ -1104,6 +1104,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
+  extensions/runbook-memory: {}
+
   extensions/runway:
     devDependencies:
       '@openclaw/plugin-sdk':

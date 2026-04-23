@@ -107,6 +107,10 @@ package-lock.json
 .agent/
 skills-lock.json
 
+# Generated runbook-memory state
+runbook_memory/db/*.sqlite3
+runbook_memory/db/*.sqlite3-*
+
 # Local iOS signing overrides
 apps/ios/LocalSigning.xcconfig
 

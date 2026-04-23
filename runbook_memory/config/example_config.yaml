@@ -1,0 +1,12 @@
+repo_root: /home/ebatter1/openclaw-upstream
+runbooks_root: /home/ebatter1/openclaw-upstream/runbooks
+database_path: /home/ebatter1/openclaw-upstream/runbook_memory/db/runbook_memory.sqlite3
+reports_dir: /home/ebatter1/openclaw-upstream/runbook_memory/reports
+source_roots:
+  - /home/ebatter1/Documents
+embedding:
+  enabled: false
+  model_name: sentence-transformers/all-MiniLM-L6-v2
+index:
+  max_chunk_chars: 1200
+  top_k: 5
