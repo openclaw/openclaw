@@ -29,6 +29,8 @@ describe("normalizeWhatsAppTarget", () => {
   it("normalizes LID JIDs to E.164", () => {
     expect(normalizeWhatsAppTarget("123456789@lid")).toBe("+123456789");
     expect(normalizeWhatsAppTarget("123456789@LID")).toBe("+123456789");
+    expect(normalizeWhatsAppTarget("123456789@hosted.lid")).toBe("+123456789");
+    expect(normalizeWhatsAppTarget("123456789@HOSTED.LID")).toBe("+123456789");
   });
 
   it("rejects invalid targets", () => {
@@ -54,6 +56,8 @@ describe("isWhatsAppUserTarget", () => {
     expect(isWhatsAppUserTarget("1234567890@s.whatsapp.net")).toBe(true);
     expect(isWhatsAppUserTarget("123456789@lid")).toBe(true);
     expect(isWhatsAppUserTarget("123456789@LID")).toBe(true);
+    expect(isWhatsAppUserTarget("123456789@hosted.lid")).toBe(true);
+    expect(isWhatsAppUserTarget("123456789@HOSTED.LID")).toBe(true);
     expect(isWhatsAppUserTarget("123@lid:0")).toBe(false);
     expect(isWhatsAppUserTarget("abc@s.whatsapp.net")).toBe(false);
     expect(isWhatsAppUserTarget("123456789-987654321@g.us")).toBe(false);
