@@ -1,12 +1,12 @@
 import { replaceCliName, resolveCliName } from "./cli-name.js";
 import { normalizeProfileName } from "./profile-utils.js";
 
-const CLI_PREFIX_RE = /^(?:pnpm|npm|bunx|npx)\s+openclaw\b|^openclaw\b/;
+const CLI_PREFIX_RE = /^(?:pnpm|npm|bunx|npx)\s+(?:gemmaclaw|openclaw)\b|^(?:gemmaclaw|openclaw)\b/;
 const CONTAINER_FLAG_RE = /(?:^|\s)--container(?:\s|=|$)/;
 const PROFILE_FLAG_RE = /(?:^|\s)--profile(?:\s|=|$)/;
 const DEV_FLAG_RE = /(?:^|\s)--dev(?:\s|$)/;
 const UPDATE_COMMAND_RE =
-  /^(?:pnpm|npm|bunx|npx)\s+openclaw\b.*(?:^|\s)update(?:\s|$)|^openclaw\b.*(?:^|\s)update(?:\s|$)/;
+  /^(?:pnpm|npm|bunx|npx)\s+(?:gemmaclaw|openclaw)\b.*(?:^|\s)update(?:\s|$)|^(?:gemmaclaw|openclaw)\b.*(?:^|\s)update(?:\s|$)/;
 const CONTAINER_HINT_RE = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/;
 
 export function formatCliCommand(

@@ -9,7 +9,7 @@ title: "Media Overview"
 
 # Media Generation and Understanding
 
-OpenClaw generates images, videos, and music, understands inbound media (images, audio, video), and speaks replies aloud with text-to-speech. All media capabilities are tool-driven: the agent decides when to use them based on the conversation, and each tool only appears when at least one backing provider is configured.
+Gemmaclaw generates images, videos, and music, understands inbound media (images, audio, video), and speaks replies aloud with text-to-speech. All media capabilities are tool-driven: the agent decides when to use them based on the conversation, and each tool only appears when at least one backing provider is configured.
 
 ## Capabilities at a glance
 
@@ -50,7 +50,7 @@ Media understanding uses any vision-capable or audio-capable model registered in
 
 ## How async generation works
 
-Video and music generation run as background tasks because provider processing typically takes 30 seconds to several minutes. When the agent calls `video_generate` or `music_generate`, OpenClaw submits the request to the provider, returns a task ID immediately, and tracks the job in the task ledger. The agent continues responding to other messages while the job runs. When the provider finishes, OpenClaw wakes the agent so it can post the finished media back into the original channel. Image generation and TTS are synchronous and complete inline with the reply.
+Video and music generation run as background tasks because provider processing typically takes 30 seconds to several minutes. When the agent calls `video_generate` or `music_generate`, Gemmaclaw submits the request to the provider, returns a task ID immediately, and tracks the job in the task ledger. The agent continues responding to other messages while the job runs. When the provider finishes, Gemmaclaw wakes the agent so it can post the finished media back into the original channel. Image generation and TTS are synchronous and complete inline with the reply.
 
 Deepgram, ElevenLabs, Mistral, OpenAI, and xAI can all transcribe inbound
 audio through the batch `tools.media.audio` path when configured. Deepgram,
@@ -58,11 +58,11 @@ ElevenLabs, Mistral, OpenAI, and xAI also register Voice Call streaming STT
 providers, so live phone audio can be forwarded to the selected vendor
 without waiting for a completed recording.
 
-OpenAI maps to OpenClaw's image, video, batch TTS, batch STT, Voice Call
+OpenAI maps to Gemmaclaw's image, video, batch TTS, batch STT, Voice Call
 streaming STT, realtime voice, and memory embedding surfaces. xAI currently
-maps to OpenClaw's image, video, search, code-execution, batch TTS, batch STT,
+maps to Gemmaclaw's image, video, search, code-execution, batch TTS, batch STT,
 and Voice Call streaming STT surfaces. xAI Realtime voice is an upstream
-capability, but it is not registered in OpenClaw until the shared realtime
+capability, but it is not registered in Gemmaclaw until the shared realtime
 voice contract can represent it.
 
 ## Quick links

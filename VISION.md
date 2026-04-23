@@ -1,18 +1,19 @@
-## OpenClaw Vision
+## Gemmaclaw Vision
 
-OpenClaw is the AI that actually does things.
-It runs on your devices, in your channels, with your rules.
+Gemmaclaw makes it easy to run the best Gemma configuration for your hardware, out of the box.
 
-This document explains the current state and direction of the project.
-We are still early, so iteration is fast.
+Built on top of [OpenClaw](https://github.com/openclaw/openclaw), Gemmaclaw inherits its multi-channel AI gateway and extends it with Gemma-first hardware auto-detection, model selection, and provisioning. This document describes both the upstream OpenClaw direction we build on and the Gemmaclaw-specific goals.
+
 Project overview and developer docs: [`README.md`](README.md)
 Contribution guide: [`CONTRIBUTING.md`](CONTRIBUTING.md)
+
+### Upstream OpenClaw Context
 
 OpenClaw started as a personal playground to learn AI and build something genuinely useful:
 an assistant that can run real tasks on a real computer.
 It evolved through several names and shells: Warelay -> Clawdbot -> Moltbot -> OpenClaw.
 
-The goal: a personal assistant that is easy to use, supports a wide range of platforms, and respects privacy and security.
+The upstream goal: a personal assistant that is easy to use, supports a wide range of platforms, and respects privacy and security.
 
 The current focus is:
 

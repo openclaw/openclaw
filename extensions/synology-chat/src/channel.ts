@@ -45,7 +45,7 @@ const resolveSynologyChatDmPolicy = createScopedDmSecurityResolver<ResolvedSynol
   resolveAllowFrom: (account) => account.allowedUserIds,
   policyPathSuffix: "dmPolicy",
   defaultPolicy: "allowlist",
-  approveHint: "openclaw pairing approve synology-chat <code>",
+  approveHint: "gemmaclaw pairing approve synology-chat <code>",
   normalizeEntry: (raw) => normalizeLowercaseStringOrEmpty(raw),
 });
 

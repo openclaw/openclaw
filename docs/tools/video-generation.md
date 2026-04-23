@@ -9,13 +9,13 @@ title: "Video Generation"
 
 # Video Generation
 
-OpenClaw agents can generate videos from text prompts, reference images, or existing videos. Fourteen provider backends are supported, each with different model options, input modes, and feature sets. The agent picks the right provider automatically based on your configuration and available API keys.
+Gemmaclaw agents can generate videos from text prompts, reference images, or existing videos. Fourteen provider backends are supported, each with different model options, input modes, and feature sets. The agent picks the right provider automatically based on your configuration and available API keys.
 
 <Note>
 The `video_generate` tool only appears when at least one video-generation provider is available. If you do not see it in your agent tools, set a provider API key or configure `agents.defaults.videoGenerationModel`.
 </Note>
 
-OpenClaw treats video generation as three runtime modes:
+Gemmaclaw treats video generation as three runtime modes:
 
 - `generate` for text-to-video requests with no reference media
 - `imageToVideo` when the request includes one or more reference images
@@ -35,7 +35,7 @@ export GEMINI_API_KEY="your-key"
 2. Optionally pin a default model:
 
 ```bash
-openclaw config set agents.defaults.videoGenerationModel.primary "google/veo-3.1-fast-generate-preview"
+gemmaclaw config set agents.defaults.videoGenerationModel.primary "google/veo-3.1-fast-generate-preview"
 ```
 
 3. Ask the agent:
@@ -48,12 +48,12 @@ The agent calls `video_generate` automatically. No tool allowlisting is needed.
 
 Video generation is asynchronous. When the agent calls `video_generate` in a session:
 
-1. OpenClaw submits the request to the provider and immediately returns a task ID.
+1. Gemmaclaw submits the request to the provider and immediately returns a task ID.
 2. The provider processes the job in the background (typically 30 seconds to 5 minutes depending on the provider and resolution).
-3. When the video is ready, OpenClaw wakes the same session with an internal completion event.
+3. When the video is ready, Gemmaclaw wakes the same session with an internal completion event.
 4. The agent posts the finished video back into the original conversation.
 
-While a job is in flight, duplicate `video_generate` calls in the same session return the current task status instead of starting another generation. Use `openclaw tasks list` or `openclaw tasks show <taskId>` to check progress from the CLI.
+While a job is in flight, duplicate `video_generate` calls in the same session return the current task status instead of starting another generation. Use `gemmaclaw tasks list` or `gemmaclaw tasks show <taskId>` to check progress from the CLI.
 
 Outside of session-backed agent runs (for example, direct tool invocations), the tool falls back to inline generation and returns the final media path in the same turn.
 
@@ -69,9 +69,9 @@ Each `video_generate` request moves through four states:
 Check status from the CLI:
 
 ```bash
-openclaw tasks list
-openclaw tasks show <taskId>
-openclaw tasks cancel <taskId>
+gemmaclaw tasks list
+gemmaclaw tasks show <taskId>
+gemmaclaw tasks cancel <taskId>
 ```
 
 Duplicate prevention: if a video task is already `queued` or `running` for the current session, `video_generate` returns the existing task status instead of starting a new one. Use `action: "status"` to check explicitly without triggering a new generation.
@@ -174,9 +174,9 @@ dimensions). Providers that do not declare it surface the value via
 | `filename`        | string | Output filename hint                                                                                                                                                                                                                                                                                                                                 |
 | `providerOptions` | object | Provider-specific options as a JSON object (e.g. `{"seed": 42, "draft": true}`). Providers that declare a typed schema validate the keys and types; unknown keys or mismatches skip the candidate during fallback. Providers without a declared schema receive the options as-is. Run `video_generate action=list` to see what each provider accepts |
 
-Not all providers support all parameters. OpenClaw already normalizes duration to the closest provider-supported value, and it also remaps translated geometry hints such as size-to-aspect-ratio when a fallback provider exposes a different control surface. Truly unsupported overrides are ignored on a best-effort basis and reported as warnings in the tool result. Hard capability limits (such as too many reference inputs) fail before submission.
+Not all providers support all parameters. Gemmaclaw already normalizes duration to the closest provider-supported value, and it also remaps translated geometry hints such as size-to-aspect-ratio when a fallback provider exposes a different control surface. Truly unsupported overrides are ignored on a best-effort basis and reported as warnings in the tool result. Hard capability limits (such as too many reference inputs) fail before submission.
 
-Tool results report the applied settings. When OpenClaw remaps duration or geometry during provider fallback, the returned `durationSeconds`, `size`, `aspectRatio`, and `resolution` values reflect what was submitted, and `details.normalization` captures the requested-to-applied translation.
+Tool results report the applied settings. When Gemmaclaw remaps duration or geometry during provider fallback, the returned `durationSeconds`, `size`, `aspectRatio`, and `resolution` values reflect what was submitted, and `details.normalization` captures the requested-to-applied translation.
 
 Reference inputs also select the runtime mode:
 
@@ -222,7 +222,7 @@ the aggregated error includes the skip reason for each.
 
 ## Model selection
 
-When generating a video, OpenClaw resolves the model in this order:
+When generating a video, Gemmaclaw resolves the model in this order:
 
 1. **`model` tool parameter** -- if the agent specifies one in the call.
 2. **`videoGenerationModel.primary`** -- from config.
@@ -343,7 +343,7 @@ Today the shared `videoToVideo` live lane covers:
 
 ## Configuration
 
-Set the default video generation model in your OpenClaw config:
+Set the default video generation model in your Gemmaclaw config:
 
 ```json5
 {
@@ -361,7 +361,7 @@ Set the default video generation model in your OpenClaw config:
 Or via the CLI:
 
 ```bash
-openclaw config set agents.defaults.videoGenerationModel.primary "qwen/wan2.6-t2v"
+gemmaclaw config set agents.defaults.videoGenerationModel.primary "qwen/wan2.6-t2v"
 ```
 
 ## Related

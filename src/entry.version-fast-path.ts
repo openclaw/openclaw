@@ -45,7 +45,7 @@ export function tryHandleRootVersionFastPath(
   resolveVersion()
     .then(({ VERSION, resolveCommitHash }) => {
       const commit = resolveCommitHash({ moduleUrl: deps.moduleUrl ?? import.meta.url });
-      output(commit ? `OpenClaw ${VERSION} (${commit})` : `OpenClaw ${VERSION}`);
+      output(commit ? `Gemmaclaw ${VERSION} (${commit})` : `Gemmaclaw ${VERSION}`);
       exit(0);
     })
     .catch(onError);

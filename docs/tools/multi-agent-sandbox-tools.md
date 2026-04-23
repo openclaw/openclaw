@@ -12,7 +12,7 @@ policy. This page covers per-agent configuration, precedence rules, and
 examples.
 
 - **Sandbox backends and modes**: see [Sandboxing](/gateway/sandboxing).
-- **Debugging blocked tools**: see [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) and `openclaw sandbox explain`.
+- **Debugging blocked tools**: see [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) and `gemmaclaw sandbox explain`.
 - **Elevated exec**: see [Elevated Mode](/tools/elevated).
 
 Auth is per-agent: each agent reads from its own `agentDir` auth store at
