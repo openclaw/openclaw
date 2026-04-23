@@ -36,7 +36,13 @@ import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
 import type { OutboundDeliveryResult } from "./deliver-types.js";
-import { ackDelivery, enqueueDelivery, failDelivery } from "./delivery-queue.js";
+import {
+  ackDelivery,
+  enqueueDelivery,
+  failDelivery,
+  releaseActiveDelivery,
+  tryClaimActiveDelivery,
+} from "./delivery-queue.js";
 import type { OutboundIdentity } from "./identity.js";
 import type { DeliveryMirror } from "./mirror.js";
 import {
@@ -660,6 +666,13 @@ export async function deliverOutboundPayloads(
         gatewayClientScopes: params.gatewayClientScopes,
       }).catch(() => null); // Best-effort — don't block delivery if queue write fails.
 
+  // Claim the queue entry against the shared in-memory recovery set so a
+  // concurrent reconnect/startup drain skips this id while the live send is
+  // still running. Without this, a reconnect during an in-flight delivery can
+  // re-drive the same entry (retryCount=0, lastAttemptAt=undefined is drain-
+  // eligible by design to preserve crash replay) and produce duplicates.
+  const heldActiveClaim = queueId ? tryClaimActiveDelivery(queueId) : false;
+
   // Wrap onError to detect partial failures under bestEffort mode.
   // When bestEffort is true, per-payload errors are caught and passed to onError
   // without throwing — so the outer try/catch never fires. We track whether any
@@ -694,6 +707,10 @@ export async function deliverOutboundPayloads(
       }
     }
     throw err;
+  } finally {
+    if (queueId && heldActiveClaim) {
+      releaseActiveDelivery(queueId);
+    }
   }
 }
 

@@ -90,6 +90,22 @@ function releaseRecoveryEntry(entryId: string): void {
   entriesInProgress.delete(entryId);
 }
 
+/**
+ * Claim an entry id against the shared in-memory recovery set so a concurrent
+ * reconnect/startup drain will skip it while the owning caller is mid-flight.
+ * Returns `false` if the id is already claimed. Callers must pair a successful
+ * claim with {@link releaseActiveDelivery} in a `finally`. The claim is
+ * process-local and intentionally does not survive a crash, so crash-replay
+ * paths still recover fresh entries whose owning process died.
+ */
+export function tryClaimActiveDelivery(entryId: string): boolean {
+  return claimRecoveryEntry(entryId);
+}
+
+export function releaseActiveDelivery(entryId: string): void {
+  releaseRecoveryEntry(entryId);
+}
+
 function buildRecoveryDeliverParams(entry: QueuedDelivery, cfg: OpenClawConfig) {
   return {
     cfg,

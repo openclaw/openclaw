@@ -10,6 +10,8 @@ import {
   MAX_RETRIES,
   type RecoveryLogger,
   recoverPendingDeliveries,
+  releaseActiveDelivery,
+  tryClaimActiveDelivery,
 } from "./delivery-queue.js";
 import {
   createRecoveryLog,
@@ -412,5 +414,36 @@ describe("drainPendingDeliveries for reconnect", () => {
     await drainAcct1DirectChatReconnect({ deliver, log, stateDir: tmpDir });
 
     expect(deliver).not.toHaveBeenCalled();
+  });
+
+  it("skips entries that an in-flight live delivery has actively claimed", async () => {
+    // Regression for openclaw/openclaw#70386: a reconnect drain that runs
+    // while the live send is still writing to the adapter must not re-drive
+    // the same entry. The live delivery path holds an in-memory active claim
+    // for `queueId` across its send; drain honors that claim via the same
+    // `entriesInProgress` set used for startup recovery.
+    const log = createRecoveryLog();
+    const deliver = vi.fn<DeliverFn>(async () => {});
+
+    const id = await enqueueDelivery(
+      { channel: "directchat", to: "+1555", payloads: [{ text: "hi" }], accountId: "acct1" },
+      tmpDir,
+    );
+
+    expect(tryClaimActiveDelivery(id)).toBe(true);
+    try {
+      await drainAcct1DirectChatReconnect({ deliver, log, stateDir: tmpDir });
+      expect(deliver).not.toHaveBeenCalled();
+      expect(log.info).toHaveBeenCalledWith(
+        expect.stringContaining(`entry ${id} is already being recovered`),
+      );
+    } finally {
+      releaseActiveDelivery(id);
+    }
+
+    // Once the live delivery path releases its claim (success or failure), a
+    // later reconnect drain is free to pick the entry up again.
+    await drainAcct1DirectChatReconnect({ deliver, log, stateDir: tmpDir });
+    expect(deliver).toHaveBeenCalledTimes(1);
   });
 });
