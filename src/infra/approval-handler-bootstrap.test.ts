@@ -507,4 +507,54 @@ describe("startChannelApprovalHandlerBootstrap", () => {
 
     await cleanup();
   });
+
+  it("does not apply startup jitter to retry-after-failure attempts", async () => {
+    vi.useFakeTimers();
+    const channelRuntime = createRuntimeChannel();
+    const start = vi.fn().mockRejectedValueOnce(new Error("boom")).mockResolvedValueOnce(undefined);
+    const stop = vi.fn().mockResolvedValue(undefined);
+    const logger = {
+      error: vi.fn(),
+      warn: vi.fn(),
+      info: vi.fn(),
+      debug: vi.fn(),
+      child: vi.fn(),
+      isEnabled: vi.fn().mockReturnValue(true),
+      isVerboseEnabled: vi.fn().mockReturnValue(false),
+      verbose: vi.fn(),
+    };
+    createChannelApprovalHandlerFromCapability
+      .mockResolvedValueOnce({ start, stop })
+      .mockResolvedValueOnce({ start, stop });
+
+    // Long jitter window. If the retry path re-applied jitter, it would
+    // extend the effective retry interval well beyond the configured 1s
+    // timer — exactly the regression codex flagged as P2.
+    const startCoordinator = createApprovalHandlerStartCoordinator({
+      jitterMs: 10_000,
+      maxConcurrentStarts: 1_000,
+      random: () => 0.5,
+    });
+
+    const cleanup = await startTestBootstrap({ channelRuntime, logger, startCoordinator });
+
+    registerApprovalContext(channelRuntime);
+
+    // Initial attempt: jitter must elapse (5000ms with random=0.5) before start.
+    await vi.advanceTimersByTimeAsync(5_000);
+    await flushTransitions();
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(logger.error).toHaveBeenCalledWith(
+      "failed to start native approval handler: Error: boom",
+    );
+
+    // Retry must fire on exactly the retry timer (1000ms) with NO extra
+    // jitter on top. Advance to 1000ms since the retry was scheduled and
+    // verify the second start happens, not at 1000 + 5000.
+    await vi.advanceTimersByTimeAsync(1_000);
+    await flushTransitions();
+    expect(start).toHaveBeenCalledTimes(2);
+
+    await cleanup();
+  });
 });

@@ -49,6 +49,12 @@ function readNonNegativeIntEnv(name: string, env: NodeJS.ProcessEnv): number | u
   if (raw === undefined) {
     return undefined;
   }
+  // Require a pure non-negative integer. Number.parseInt is too lenient — it
+  // happily accepts "100ms", "3.5", "42banana" etc., silently ignoring the
+  // tail. An env var that looks wrong should be rejected, not coerced.
+  if (!/^\d+$/.test(raw)) {
+    return undefined;
+  }
   const parsed = Number.parseInt(raw, 10);
   if (!Number.isFinite(parsed) || parsed < 0) {
     return undefined;
@@ -103,7 +109,11 @@ export function createApprovalHandlerStartCoordinator(
     if (jitterMs <= 0 || isCanceled()) {
       return Promise.resolve();
     }
-    const sampled = Math.floor(random() * jitterMs);
+    // Clamp to [0, jitterMs). Math.random() is spec'd to return < 1, so the
+    // clamp is belt-and-suspenders against injected RNGs (or exotic runtimes)
+    // that can return exactly 1 — without it, a pathological RNG extends the
+    // wait to the full jitterMs instead of the advertised upper-exclusive bound.
+    const sampled = Math.min(jitterMs - 1, Math.floor(random() * jitterMs));
     if (sampled <= 0) {
       return Promise.resolve();
     }

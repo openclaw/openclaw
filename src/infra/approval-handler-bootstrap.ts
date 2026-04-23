@@ -64,7 +64,11 @@ export async function startChannelApprovalHandlerBootstrap(params: {
     await handler.stop();
   };
 
-  const startHandlerForContext = async (context: unknown, generation: number) => {
+  const startHandlerForContext = async (
+    context: unknown,
+    generation: number,
+    options: { applyJitter: boolean } = { applyJitter: true },
+  ) => {
     if (generation !== activeGeneration) {
       return;
     }
@@ -76,12 +80,15 @@ export async function startChannelApprovalHandlerBootstrap(params: {
     if (generation !== activeGeneration) {
       return;
     }
-    // Jitter before claiming a start slot: spreads the N-account thundering
-    // herd across a small window so the loopback gateway is not asked to
-    // complete N concurrent preauth handshakes at the same tick.
-    await startCoordinator.waitJitter(() => generation !== activeGeneration);
-    if (generation !== activeGeneration) {
-      return;
+    // Jitter is for the initial startup herd only. Retries have their own
+    // timer (APPROVAL_HANDLER_BOOTSTRAP_RETRY_MS) and must not compound an
+    // extra 0-jitterMs delay on top of it, or transient failures translate
+    // into multi-second approval-handler downtime.
+    if (options.applyJitter) {
+      await startCoordinator.waitJitter(() => generation !== activeGeneration);
+      if (generation !== activeGeneration) {
+        return;
+      }
     }
     const releaseSlot = await startCoordinator.acquireStartSlot(
       () => generation !== activeGeneration,
@@ -139,14 +146,18 @@ export async function startChannelApprovalHandlerBootstrap(params: {
       }
       spawn(
         "failed to retry native approval handler",
-        startHandlerForRegisteredContext(context, generation),
+        startHandlerForRegisteredContext(context, generation, { applyJitter: false }),
       );
     }, APPROVAL_HANDLER_BOOTSTRAP_RETRY_MS);
     retryTimer.unref?.();
   };
-  const startHandlerForRegisteredContext = async (context: unknown, generation: number) => {
+  const startHandlerForRegisteredContext = async (
+    context: unknown,
+    generation: number,
+    options: { applyJitter: boolean } = { applyJitter: true },
+  ) => {
     try {
-      await startHandlerForContext(context, generation);
+      await startHandlerForContext(context, generation, options);
     } catch (error) {
       if (generation === activeGeneration) {
         logger.error(`failed to start native approval handler: ${String(error)}`);

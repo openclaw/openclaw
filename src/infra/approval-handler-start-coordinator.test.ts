@@ -35,6 +35,27 @@ describe("resolveApprovalHandlerStartJitterMs", () => {
       } as NodeJS.ProcessEnv),
     ).toBe(2_000);
   });
+
+  it("rejects partial-number env values like '100ms' and '3.5'", () => {
+    // Number.parseInt is lenient and would accept these; we reject anything
+    // that isn't a pure non-negative integer so misconfigurations surface as
+    // "default" instead of a silently-truncated value.
+    expect(
+      resolveApprovalHandlerStartJitterMs({
+        OPENCLAW_APPROVAL_HANDLER_START_JITTER_MS: "100ms",
+      } as NodeJS.ProcessEnv),
+    ).toBe(2_000);
+    expect(
+      resolveApprovalHandlerStartJitterMs({
+        OPENCLAW_APPROVAL_HANDLER_START_JITTER_MS: "3.5",
+      } as NodeJS.ProcessEnv),
+    ).toBe(2_000);
+    expect(
+      resolveApprovalHandlerStartJitterMs({
+        OPENCLAW_APPROVAL_HANDLER_START_JITTER_MS: "  250 ",
+      } as NodeJS.ProcessEnv),
+    ).toBe(2_000);
+  });
 });
 
 describe("resolveApprovalHandlerMaxConcurrentStarts", () => {
@@ -64,6 +85,19 @@ describe("resolveApprovalHandlerMaxConcurrentStarts", () => {
     expect(
       resolveApprovalHandlerMaxConcurrentStarts({
         OPENCLAW_APPROVAL_HANDLER_MAX_CONCURRENT_STARTS: "nope",
+      } as NodeJS.ProcessEnv),
+    ).toBe(3);
+  });
+
+  it("rejects partial-number env values like '7x' and '2.5'", () => {
+    expect(
+      resolveApprovalHandlerMaxConcurrentStarts({
+        OPENCLAW_APPROVAL_HANDLER_MAX_CONCURRENT_STARTS: "7x",
+      } as NodeJS.ProcessEnv),
+    ).toBe(3);
+    expect(
+      resolveApprovalHandlerMaxConcurrentStarts({
+        OPENCLAW_APPROVAL_HANDLER_MAX_CONCURRENT_STARTS: "2.5",
       } as NodeJS.ProcessEnv),
     ).toBe(3);
   });
@@ -101,6 +135,27 @@ describe("createApprovalHandlerStartCoordinator", () => {
     });
 
     await vi.advanceTimersByTimeAsync(249);
+    expect(resolved).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await waitPromise;
+    expect(resolved).toBe(true);
+  });
+
+  it("clamps jitter sampling to [0, jitterMs) even when random() returns 1", async () => {
+    vi.useFakeTimers();
+    const coordinator = createApprovalHandlerStartCoordinator({
+      jitterMs: 1_000,
+      maxConcurrentStarts: 4,
+      random: () => 1,
+    });
+    let resolved = false;
+    const waitPromise = coordinator.waitJitter(notCanceled).then(() => {
+      resolved = true;
+    });
+
+    // With clamp: max sampled delay is jitterMs - 1 = 999ms.
+    await vi.advanceTimersByTimeAsync(998);
     expect(resolved).toBe(false);
 
     await vi.advanceTimersByTimeAsync(1);
