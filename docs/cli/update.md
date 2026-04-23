@@ -17,6 +17,7 @@ updates happen via the package-manager flow in [Updating](/install/updating).
 
 ```bash
 openclaw update
+openclaw update review
 openclaw update status
 openclaw update wizard
 openclaw update --channel beta
@@ -119,6 +120,35 @@ If pnpm bootstrap still fails, the updater now stops early with a package-manage
 ## `--update` shorthand
 
 `openclaw --update` rewrites to `openclaw update` (useful for shells and launcher scripts).
+
+## `update review`
+
+Run a pre-update risk assessment before deciding whether to upgrade.
+
+```bash
+openclaw update review
+openclaw update review --json
+openclaw update review --timeout 15
+```
+
+Fetches the latest release version from the npm registry and the corresponding
+GitHub release notes, then emits a risk-tiered recommendation card:
+
+- **Risk level** — `🟢 Low` (patch/fixes only), `🟡 Medium` (config or auth changes),
+  `🔴 High` (breaking changes)
+- **Your setup** — notes specific to your local config (e.g. whether you will need
+  to run `openclaw doctor --fix` after upgrading)
+- **What changed** — a preview of the release notes
+- **Recommendation** — `Upgrade now`, `Review before upgrading`, or `Up to date`
+
+`update review` is read-only — it never installs or modifies anything. Run it
+whenever you want to understand the upgrade risk before committing to
+`openclaw update`.
+
+### Options
+
+- `--json` — machine-readable `UpdateReviewResult` JSON
+- `--timeout <seconds>` — timeout for npm registry + GitHub checks (default: 8)
 
 ## See also
 

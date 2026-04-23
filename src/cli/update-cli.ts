@@ -4,6 +4,8 @@ import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
 import { inheritOptionFromParent } from "./command-options.js";
 import { formatHelpExamples } from "./help-format.js";
+import { updateReviewCommand } from "./update-cli/review.js";
+import type { UpdateReviewOptions } from "./update-cli/review.js";
 import {
   type UpdateCommandOptions,
   type UpdateStatusOptions,
@@ -13,8 +15,8 @@ import { updateStatusCommand } from "./update-cli/status.js";
 import { updateCommand } from "./update-cli/update-command.js";
 import { updateWizardCommand } from "./update-cli/wizard.js";
 
-export { updateCommand, updateStatusCommand, updateWizardCommand };
-export type { UpdateCommandOptions, UpdateStatusOptions, UpdateWizardOptions };
+export { updateCommand, updateStatusCommand, updateWizardCommand, updateReviewCommand };
+export type { UpdateCommandOptions, UpdateStatusOptions, UpdateWizardOptions, UpdateReviewOptions };
 
 function inheritedUpdateJson(command?: Command): boolean {
   return Boolean(inheritOptionFromParent<boolean>(command, "json"));
@@ -146,6 +148,39 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
     .action(async (opts, command) => {
       try {
         await updateStatusCommand({
+          json: Boolean(opts.json) || inheritedUpdateJson(command),
+          timeout: inheritedUpdateTimeout(opts, command),
+        });
+      } catch (err) {
+        defaultRuntime.error(String(err));
+        defaultRuntime.exit(1);
+      }
+    });
+
+  update
+    .command("review")
+    .description(
+      "Pre-update risk assessment — summarises what changed and whether it's safe to upgrade",
+    )
+    .option("--json", "Output result as JSON", false)
+    .option("--timeout <seconds>", "Timeout for registry and GitHub checks in seconds (default: 8)")
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.heading("Examples:")}\n${formatHelpExamples([
+          ["openclaw update review", "Show risk assessment for the latest release."],
+          ["openclaw update review --json", "JSON output."],
+        ])}\n\n${theme.heading("Notes:")}\n${theme.muted(
+          "- Fetches the latest release from npm and GitHub release notes",
+        )}\n${theme.muted(
+          "- Detects breaking changes, config migrations, and auth/plugin impacts",
+        )}\n${theme.muted(
+          "- Emits a risk-tiered recommendation before you decide to upgrade",
+        )}\n${theme.muted("- Does not install anything — read-only")}\n`,
+    )
+    .action(async (opts, command) => {
+      try {
+        await updateReviewCommand({
           json: Boolean(opts.json) || inheritedUpdateJson(command),
           timeout: inheritedUpdateTimeout(opts, command),
         });
