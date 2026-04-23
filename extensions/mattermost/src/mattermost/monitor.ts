@@ -1781,14 +1781,13 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                   onItemEvent: async (payload) => {
                     if (payload.kind !== "tool" && payload.kind !== "command") return;
                     if (payload.phase && payload.phase !== "start" && payload.phase !== "update") return;
-                    // Dedupe by (itemId, name). Runtime sometimes emits two layered
-                    // item events for the same tool call (e.g. high-level 'exec' +
-                    // low-level 'command') with different itemIds. Only open a new
-                    // post when *both* differ from the last one.
+                    // Always boundary on a *new* item (different itemId AND name).
+                    // First item of a tool also opens a fresh post so we don't
+                    // overwrite preceding assistant text in the current draft.
                     const itemChanged = payload.itemId && payload.itemId !== lastToolItemId;
                     const nameChanged = payload.name && payload.name !== lastToolItemName;
                     if (itemChanged && nameChanged) {
-                      if (lastToolItemId !== undefined) await onDraftBoundary();
+                      await onDraftBoundary();
                     }
                     if (payload.itemId) lastToolItemId = payload.itemId;
                     if (payload.name) lastToolItemName = payload.name;
