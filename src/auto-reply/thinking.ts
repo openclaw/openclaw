@@ -230,7 +230,15 @@ export function resolveThinkingDefaultForModel(params: {
   if (profile.defaultLevel) {
     return profile.defaultLevel;
   }
-  return resolveThinkingDefaultForModelFallback(params);
+  const fallback = resolveThinkingDefaultForModelFallback(params);
+  if (fallback === "off") {
+    return "off";
+  }
+  return resolveSupportedThinkingLevel({
+    provider: params.provider,
+    model: params.model,
+    level: "medium",
+  });
 }
 
 export function resolveLargestSupportedThinkingLevel(

@@ -28,10 +28,12 @@ import { formatTaskStatusDetail, formatTaskStatusTitle } from "../../tasks/task-
 import { loadModelCatalog } from "../model-catalog.js";
 import {
   buildAllowedModelSet,
+  buildConfiguredModelCatalog,
   buildModelAliasIndex,
   modelKey,
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
+  resolveThinkingDefault,
 } from "../model-selection.js";
 import {
   describeSessionStatusTool,
@@ -561,7 +563,19 @@ export function createSessionStatusTool(opts?: {
         resolvedVerboseLevel: (statusSessionEntry.verboseLevel ?? "off") as VerboseLevel,
         resolvedReasoningLevel: (statusSessionEntry.reasoningLevel ?? "off") as ReasoningLevel,
         resolvedElevatedLevel: statusSessionEntry.elevatedLevel as ElevatedLevel | undefined,
-        resolveDefaultThinkingLevel: async () => cfg.agents?.defaults?.thinkingDefault,
+        resolveDefaultThinkingLevel: async () => {
+          const configuredCatalog = buildConfiguredModelCatalog({ cfg });
+          const catalog =
+            configuredCatalog.length > 0
+              ? configuredCatalog
+              : await loadModelCatalog({ config: cfg });
+          return resolveThinkingDefault({
+            cfg,
+            provider: providerForCard,
+            model: defaultModelForCard,
+            catalog,
+          });
+        },
         isGroup,
         defaultGroupActivation: () => "mention",
         taskLineOverride: taskLine,

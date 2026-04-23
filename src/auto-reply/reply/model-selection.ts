@@ -457,11 +457,13 @@ export async function createModelSelectionState(params: {
       defaultThinkingLevel = explicitThinkingDefault;
       return defaultThinkingLevel;
     }
-    if (!modelCatalog) {
+    let catalogForThinking =
+      modelCatalog && modelCatalog.length > 0 ? modelCatalog : allowedModelCatalog;
+    if ((!catalogForThinking || catalogForThinking.length === 0) && !modelCatalog) {
       modelCatalog = await (await loadModelCatalogRuntime()).loadModelCatalog({ config: cfg });
       logStage("catalog-loaded-for-thinking", `entries=${modelCatalog.length}`);
+      catalogForThinking = modelCatalog.length > 0 ? modelCatalog : allowedModelCatalog;
     }
-    const catalogForThinking = modelCatalog.length > 0 ? modelCatalog : allowedModelCatalog;
     const resolved = resolveThinkingDefault({
       cfg,
       provider,

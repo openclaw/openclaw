@@ -259,12 +259,26 @@ describe("resolveThinkingDefaultForModel", () => {
     ).toBe("off");
   });
 
-  it("defaults reasoning-capable catalog models to low", () => {
+  it("defaults reasoning-capable catalog models to medium", () => {
     expect(
       resolveThinkingDefaultForModel({
         provider: "openai",
         model: "gpt-5.4",
         catalog: [{ provider: "openai", id: "gpt-5.4", reasoning: true }],
+      }),
+    ).toBe("medium");
+  });
+
+  it("remaps implicit reasoning defaults to the strongest supported level at or below medium", () => {
+    providerRuntimeMocks.resolveProviderBinaryThinking.mockImplementation(
+      ({ provider }) => provider === "demo-binary",
+    );
+
+    expect(
+      resolveThinkingDefaultForModel({
+        provider: "demo-binary",
+        model: "demo-model",
+        catalog: [{ provider: "demo-binary", id: "demo-model", reasoning: true }],
       }),
     ).toBe("low");
   });
