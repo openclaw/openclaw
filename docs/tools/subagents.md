@@ -4,10 +4,8 @@ read_when:
   - You want background/parallel work via the agent
   - You are changing sessions_spawn or sub-agent tool policy
   - You are implementing or troubleshooting thread-bound subagent sessions
-title: "Sub-Agents"
+title: "Sub-agents"
 ---
-
-# Sub-agents
 
 Sub-agents are background agent runs spawned from an existing agent run. They run in their own session (`agent:<agentId>:subagent:<uuid>`) and, when finished, **announce** their result back to the requester chat channel. Each sub-agent run is tracked as a [background task](/automation/tasks).
 

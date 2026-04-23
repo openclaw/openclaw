@@ -17,6 +17,7 @@ const listProfilesForProvider = vi.fn().mockReturnValue([]);
 const resolveEnvApiKey = vi.fn().mockReturnValue(undefined);
 const resolveAwsSdkEnvVarName = vi.fn().mockReturnValue(undefined);
 const hasUsableCustomProviderApiKey = vi.fn().mockReturnValue(false);
+const loadModelCatalog = vi.fn(async () => []);
 const loadProviderCatalogModelsForList = vi.fn<() => Promise<Array<Record<string, unknown>>>>(
   async () => [],
 );
@@ -74,7 +75,7 @@ vi.mock("./models/list.runtime.js", () => {
     resolveEnvApiKey,
     resolveAwsSdkEnvVarName,
     hasUsableCustomProviderApiKey,
-    loadModelCatalog: vi.fn(async () => []),
+    loadModelCatalog,
     loadProviderCatalogModelsForList,
     discoverAuthStorage: () => ({}) as unknown,
     discoverModels: () => new MockModelRegistry() as unknown,
@@ -136,6 +137,8 @@ beforeEach(() => {
   getRuntimeConfig.mockReturnValue({});
   listProfilesForProvider.mockReturnValue([]);
   ensureOpenClawModelsJson.mockClear();
+  loadModelCatalog.mockClear();
+  loadModelCatalog.mockResolvedValue([]);
   loadProviderCatalogModelsForList.mockReset();
   loadProviderCatalogModelsForList.mockResolvedValue([]);
   shouldSuppressBuiltInModel.mockReset();
@@ -175,14 +178,6 @@ describe("models list/status", () => {
     name: "GPT-5.3 Codex Spark",
     input: ["text", "image"],
     baseUrl: "https://api.openai.com/v1",
-    contextWindow: 128000,
-  };
-  const OPENAI_CODEX_SPARK_MODEL = {
-    provider: "openai-codex",
-    id: "gpt-5.3-codex-spark",
-    name: "GPT-5.3 Codex Spark",
-    input: ["text"],
-    baseUrl: "https://chatgpt.com/backend-api",
     contextWindow: 128000,
   };
   const MOONSHOT_MODEL = {
@@ -359,6 +354,7 @@ describe("models list/status", () => {
     await modelsListCommand({ all: true, provider: "moonshot", json: true }, runtime);
 
     const payload = parseJsonLog(runtime);
+    expect(loadModelCatalog).toHaveBeenCalledTimes(1);
     expect(payload.models).toEqual([
       expect.objectContaining({
         key: "moonshot/kimi-k2.6",
@@ -367,6 +363,21 @@ describe("models list/status", () => {
         missing: false,
       }),
     ]);
+  });
+
+  it("models list rejects provider display labels", async () => {
+    setDefaultZaiRegistry({ available: false });
+    const runtime = makeRuntime();
+
+    await modelsListCommand({ all: true, provider: "Moonshot AI", json: true }, runtime);
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      'Invalid provider filter "Moonshot AI". Use a provider id such as "moonshot", not a display label.',
+    );
+    expect(runtime.log).not.toHaveBeenCalled();
+    expect(loadModelCatalog).not.toHaveBeenCalled();
+    expect(loadProviderCatalogModelsForList).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(1);
   });
 
   it("models list all local skips unauthenticated provider catalog rows", async () => {
@@ -429,37 +440,31 @@ describe("models list/status", () => {
     expect(ensureOpenClawModelsJson).not.toHaveBeenCalled();
   });
 
-  it("filters stale direct OpenAI spark rows from models list and registry views", async () => {
+  it("filters stale spark rows from models list and registry views", async () => {
     shouldSuppressBuiltInModel.mockImplementation(
       ({ provider, id }: { provider?: string | null; id?: string | null }) =>
         id === "gpt-5.3-codex-spark" &&
-        (provider === "openai" || provider === "azure-openai-responses"),
+        (provider === "openai" ||
+          provider === "azure-openai-responses" ||
+          provider === "openai-codex"),
     );
-    setDefaultModel("openai-codex/gpt-5.3-codex-spark");
-    modelRegistryState.models = [
-      OPENAI_SPARK_MODEL,
-      AZURE_OPENAI_SPARK_MODEL,
-      OPENAI_CODEX_SPARK_MODEL,
-    ];
-    modelRegistryState.available = [
-      OPENAI_SPARK_MODEL,
-      AZURE_OPENAI_SPARK_MODEL,
-      OPENAI_CODEX_SPARK_MODEL,
-    ];
+    setDefaultModel("openai/gpt-5.5");
+    modelRegistryState.models = [OPENAI_MODEL, OPENAI_SPARK_MODEL, AZURE_OPENAI_SPARK_MODEL];
+    modelRegistryState.available = [OPENAI_MODEL, OPENAI_SPARK_MODEL, AZURE_OPENAI_SPARK_MODEL];
     const runtime = makeRuntime();
 
     await modelsListCommand({ all: true, json: true }, runtime);
 
     const payload = parseJsonLog(runtime);
     expect(payload.models.map((model: { key: string }) => model.key)).toEqual([
-      "openai-codex/gpt-5.3-codex-spark",
+      "openai/gpt-4.1-mini",
     ]);
 
     const loaded = await loadModelRegistry({} as never);
     expect(loaded.models.map((model) => `${model.provider}/${model.id}`)).toEqual([
-      "openai-codex/gpt-5.3-codex-spark",
+      "openai/gpt-4.1-mini",
     ]);
-    expect(Array.from(loaded.availableKeys ?? [])).toEqual(["openai-codex/gpt-5.3-codex-spark"]);
+    expect(Array.from(loaded.availableKeys ?? [])).toEqual(["openai/gpt-4.1-mini"]);
   });
 
   it("modelsListCommand persists using the source snapshot config when provided", async () => {

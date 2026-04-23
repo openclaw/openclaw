@@ -1,6 +1,6 @@
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { listBundledPluginPackArtifacts } from "../scripts/lib/bundled-plugin-build-entries.mjs";
 import { listPluginSdkDistArtifacts } from "../scripts/lib/plugin-sdk-entries.mjs";
@@ -15,7 +15,9 @@ import {
   collectForbiddenPackPaths,
   collectMissingPackPaths,
   collectPackUnpackedSizeErrors,
+  createPackedCliSmokeEnv,
   createPackedBundledPluginPostinstallEnv,
+  PACKED_CLI_SMOKE_COMMANDS,
   packageNameFromSpecifier,
 } from "../scripts/release-check.ts";
 import { PACKAGE_DIST_INVENTORY_RELATIVE_PATH } from "../src/infra/package-dist-inventory.ts";
@@ -51,6 +53,53 @@ describe("collectAppcastSparkleVersionErrors", () => {
     const xml = `<rss><channel>${makeItem("2026.3.1", "2026030190")}</channel></rss>`;
 
     expect(collectAppcastSparkleVersionErrors(xml)).toEqual([]);
+  });
+});
+
+describe("packed CLI smoke", () => {
+  it("keeps the expected packaged CLI smoke command list", () => {
+    expect(PACKED_CLI_SMOKE_COMMANDS).toEqual([
+      ["--help"],
+      ["status", "--json", "--timeout", "1"],
+      ["config", "schema"],
+      ["models", "list", "--provider", "amazon-bedrock"],
+    ]);
+  });
+
+  it("builds a packed CLI smoke env with packaged-install guardrails", () => {
+    expect(
+      createPackedCliSmokeEnv(
+        {
+          PATH: "/usr/bin",
+          HOME: "/tmp/original-home",
+          USERPROFILE: "/tmp/original-profile",
+          TMPDIR: "/tmp/original-tmp",
+          SystemRoot: "C:\\Windows",
+          GITHUB_TOKEN: "redacted",
+          OPENAI_API_KEY: "real-secret",
+        },
+        { HOME: "/tmp/smoke-home", OPENCLAW_STATE_DIR: "/tmp/smoke-state" },
+      ),
+    ).toEqual({
+      PATH:
+        process.platform === "win32"
+          ? `${dirname(process.execPath)};C:\\Windows\\System32;C:\\Windows`
+          : `${dirname(process.execPath)}:/usr/bin:/bin`,
+      HOME: "/tmp/smoke-home",
+      USERPROFILE: "/tmp/smoke-home",
+      ComSpec: "C:\\Windows/System32/cmd.exe",
+      APPDATA: "/tmp/smoke-home/AppData/Roaming",
+      LOCALAPPDATA: "/tmp/smoke-home/AppData/Local",
+      AWS_EC2_METADATA_DISABLED: "true",
+      AWS_SHARED_CREDENTIALS_FILE: "/tmp/smoke-home/.aws/credentials",
+      AWS_CONFIG_FILE: "/tmp/smoke-home/.aws/config",
+      TMPDIR: "/tmp/original-tmp",
+      SystemRoot: "C:\\Windows",
+      OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK: "1",
+      OPENCLAW_NO_ONBOARD: "1",
+      OPENCLAW_SUPPRESS_NOTES: "1",
+      OPENCLAW_STATE_DIR: "/tmp/smoke-state",
+    });
   });
 });
 
@@ -176,25 +225,14 @@ describe("bundled plugin root runtime mirrors", () => {
 
       expect([...mirrors.keys()].toSorted((left, right) => left.localeCompare(right))).toEqual([
         "@larksuiteoapi/node-sdk",
-        "@matrix-org/matrix-sdk-crypto-nodejs",
-        "@matrix-org/matrix-sdk-crypto-wasm",
       ]);
-      expect([...mirrors.get("@larksuiteoapi/node-sdk")!.importers]).toEqual([
-        "extensions/feishu/index.js",
-        "probe-Cz2PiFtC.js",
-      ]);
-      expect([...mirrors.get("@matrix-org/matrix-sdk-crypto-nodejs")!.importers]).toEqual([
-        "<curated root runtime surface>",
-      ]);
-      expect([...mirrors.get("@matrix-org/matrix-sdk-crypto-wasm")!.importers]).toEqual([
-        "<curated root runtime surface>",
-      ]);
+      expect([...mirrors.get("@larksuiteoapi/node-sdk")!.importers]).toEqual(["probe-Cz2PiFtC.js"]);
     } finally {
       rmSync(tempRoot, { recursive: true, force: true });
     }
   });
 
-  it("does not require root mirrors for plugin deps imported by root dist", () => {
+  it("flags missing root mirrors for plugin deps imported by root dist", () => {
     expect(
       collectBundledPluginRootRuntimeMirrorErrors({
         bundledRuntimeDependencySpecs: makeBundledSpecs(),
@@ -210,7 +248,32 @@ describe("bundled plugin root runtime mirrors", () => {
         ]),
         rootPackageJson: { dependencies: {} },
       }),
-    ).toEqual([]);
+    ).toEqual([
+      "installed package root is missing mirrored bundled runtime dependency '@larksuiteoapi/node-sdk' for dist importers: probe-Cz2PiFtC.js. Add it to package.json dependencies/optionalDependencies or keep imports under dist/extensions/feishu/.",
+    ]);
+  });
+
+  it("does not derive root mirrors for root chunks sourced from the owning plugin", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "openclaw-root-mirror-owned-"));
+
+    try {
+      const distDir = join(tempRoot, "dist");
+      mkdirSync(distDir, { recursive: true });
+      writeFileSync(
+        join(distDir, "probe-Cz2PiFtC.js"),
+        `//#region extensions/feishu/client.ts\nimport("@larksuiteoapi/node-sdk");\n`,
+        "utf8",
+      );
+
+      const mirrors = collectRootDistBundledRuntimeMirrors({
+        bundledRuntimeDependencySpecs: makeBundledSpecs(),
+        distDir,
+      });
+
+      expect([...mirrors.keys()]).toEqual([]);
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
   });
 
   it("does not compare root mirror versions for plugin manifest deps", () => {
@@ -308,10 +371,24 @@ describe("collectForbiddenPackPaths", () => {
     ]);
   });
 
-  it("blocks private qa lab and suite paths from npm pack output", () => {
+  it("blocks legacy runtime dependency stamps from npm pack output", () => {
     expect(
       collectForbiddenPackPaths([
         "dist/index.js",
+        "dist/extensions/codex/.openclaw-runtime-deps-backup-node_modules-old/zod/index.js",
+        "dist/extensions/discord/.openclaw-runtime-deps-stamp.json",
+      ]),
+    ).toEqual([
+      "dist/extensions/codex/.openclaw-runtime-deps-backup-node_modules-old/zod/index.js",
+      "dist/extensions/discord/.openclaw-runtime-deps-stamp.json",
+    ]);
+  });
+
+  it("blocks private qa channel, qa lab, and suite paths from npm pack output", () => {
+    expect(
+      collectForbiddenPackPaths([
+        "dist/index.js",
+        "dist/extensions/qa-channel/runtime-api.js",
         "dist/extensions/qa-lab/runtime-api.js",
         "dist/plugin-sdk/extensions/qa-lab/cli.d.ts",
         "dist/plugin-sdk/qa-lab.js",
@@ -320,6 +397,8 @@ describe("collectForbiddenPackPaths", () => {
         "qa/scenarios/index.md",
       ]),
     ).toEqual([
+      "dist/extensions/qa-channel/runtime-api.js",
+      "dist/extensions/qa-lab/runtime-api.js",
       "dist/plugin-sdk/extensions/qa-lab/cli.d.ts",
       "dist/plugin-sdk/qa-lab.js",
       "dist/plugin-sdk/qa-runtime.js",
@@ -408,8 +487,6 @@ describe("collectMissingPackPaths", () => {
         "dist/index.js",
         "dist/entry.js",
         "dist/control-ui/index.html",
-        "dist/extensions/qa-channel/runtime-api.js",
-        "dist/extensions/qa-lab/runtime-api.js",
         "dist/extensions/acpx/mcp-proxy.mjs",
         bundledDistPluginFile("diffs", "assets/viewer-runtime.js"),
         ...requiredBundledPluginPackPaths,
@@ -467,11 +544,10 @@ describe("collectPackUnpackedSizeErrors", () => {
 });
 
 describe("createPackedBundledPluginPostinstallEnv", () => {
-  it("enables eager bundled dependency repair for packed channel entry smoke", () => {
+  it("keeps packed postinstall on the lazy bundled dependency path", () => {
     expect(createPackedBundledPluginPostinstallEnv({ PATH: "/usr/bin" })).toEqual({
       PATH: "/usr/bin",
       OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK: "1",
-      OPENCLAW_EAGER_BUNDLED_PLUGIN_DEPS: "1",
     });
   });
 });

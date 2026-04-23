@@ -9,7 +9,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       rawConfig: {
         providers: {
           openai: {
-            model: "gpt-realtime",
+            model: "gpt-realtime-1.5",
             voice: "verse",
             temperature: 0.6,
             silenceDurationMs: 850,
@@ -20,7 +20,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     });
 
     expect(resolved).toEqual({
-      model: "gpt-realtime",
+      model: "gpt-realtime-1.5",
       voice: "verse",
       temperature: 0.6,
       silenceDurationMs: 850,

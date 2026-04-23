@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { ImageGenerationProvider } from "openclaw/plugin-sdk/image-generation";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
@@ -5,10 +6,11 @@ import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runt
 import {
   assertOkOrThrowHttpError,
   postJsonRequest,
+  postMultipartRequest,
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
 import { OPENAI_DEFAULT_IMAGE_MODEL as DEFAULT_OPENAI_IMAGE_MODEL } from "./default-models.js";
-import { resolveConfiguredOpenAIBaseUrl, toOpenAIDataUrl } from "./shared.js";
+import { resolveConfiguredOpenAIBaseUrl } from "./shared.js";
 
 const DEFAULT_OPENAI_IMAGE_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_OUTPUT_MIME = "image/png";
@@ -24,6 +26,43 @@ const OPENAI_SUPPORTED_SIZES = [
 ] as const;
 const OPENAI_MAX_INPUT_IMAGES = 5;
 const MOCK_OPENAI_PROVIDER_ID = "mock-openai";
+
+const AZURE_HOSTNAME_SUFFIXES = [
+  ".openai.azure.com",
+  ".services.ai.azure.com",
+  ".cognitiveservices.azure.com",
+] as const;
+
+const DEFAULT_AZURE_OPENAI_API_VERSION = "2024-12-01-preview";
+
+function isAzureOpenAIBaseUrl(baseUrl?: string): boolean {
+  const trimmed = baseUrl?.trim();
+  if (!trimmed) {
+    return false;
+  }
+  try {
+    const hostname = new URL(trimmed).hostname.toLowerCase();
+    return AZURE_HOSTNAME_SUFFIXES.some((suffix) => hostname.endsWith(suffix));
+  } catch {
+    return false;
+  }
+}
+
+function resolveAzureApiVersion(): string {
+  return process.env.AZURE_OPENAI_API_VERSION?.trim() || DEFAULT_AZURE_OPENAI_API_VERSION;
+}
+
+function buildAzureImageUrl(
+  rawBaseUrl: string,
+  model: string,
+  action: "generations" | "edits",
+): string {
+  const cleanBase = rawBaseUrl
+    .replace(/\/+$/, "")
+    .replace(/\/openai\/v1$/, "")
+    .replace(/\/v1$/, "");
+  return `${cleanBase}/openai/deployments/${model}/images/${action}?api-version=${resolveAzureApiVersion()}`;
+}
 
 function shouldAllowPrivateImageEndpoint(req: {
   provider: string;
@@ -45,6 +84,20 @@ type OpenAIImageApiResponse = {
     revised_prompt?: string;
   }>;
 };
+
+function inferImageUploadFileName(params: {
+  fileName?: string;
+  mimeType?: string;
+  index: number;
+}): string {
+  const fileName = params.fileName?.trim();
+  if (fileName) {
+    return path.basename(fileName);
+  }
+  const mimeType = params.mimeType?.trim().toLowerCase() || DEFAULT_OUTPUT_MIME;
+  const ext = mimeType === "image/jpeg" ? "jpg" : mimeType.replace(/^image\//, "") || "png";
+  return `image-${params.index + 1}.${ext}`;
+}
 
 export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
   return {
@@ -88,14 +141,17 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
       if (!auth.apiKey) {
         throw new Error("OpenAI API key missing");
       }
+      const rawBaseUrl = resolveConfiguredOpenAIBaseUrl(req.cfg);
+      const isAzure = isAzureOpenAIBaseUrl(rawBaseUrl);
+
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
         resolveProviderHttpRequestConfig({
-          baseUrl: resolveConfiguredOpenAIBaseUrl(req.cfg),
+          baseUrl: rawBaseUrl,
           defaultBaseUrl: DEFAULT_OPENAI_IMAGE_BASE_URL,
           allowPrivateNetwork: shouldAllowPrivateImageEndpoint(req),
-          defaultHeaders: {
-            Authorization: `Bearer ${auth.apiKey}`,
-          },
+          defaultHeaders: isAzure
+            ? { "api-key": auth.apiKey }
+            : { Authorization: `Bearer ${auth.apiKey}` },
           provider: "openai",
           capability: "image",
           transport: "http",
@@ -104,25 +160,35 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
       const model = req.model || DEFAULT_OPENAI_IMAGE_MODEL;
       const count = req.count ?? 1;
       const size = req.size ?? DEFAULT_SIZE;
+      const url = isAzure
+        ? buildAzureImageUrl(rawBaseUrl, model, isEdit ? "edits" : "generations")
+        : `${baseUrl}/images/${isEdit ? "edits" : "generations"}`;
       const requestResult = isEdit
         ? await (() => {
-            const jsonHeaders = new Headers(headers);
-            jsonHeaders.set("Content-Type", "application/json");
-            return postJsonRequest({
-              url: `${baseUrl}/images/edits`,
-              headers: jsonHeaders,
-              body: {
-                model,
-                prompt: req.prompt,
-                n: count,
-                size,
-                images: inputImages.map((image) => ({
-                  image_url: toOpenAIDataUrl(
-                    image.buffer,
-                    image.mimeType?.trim() || DEFAULT_OUTPUT_MIME,
-                  ),
-                })),
-              },
+            const form = new FormData();
+            form.set("model", model);
+            form.set("prompt", req.prompt);
+            form.set("n", String(count));
+            form.set("size", size);
+            for (const [index, image] of inputImages.entries()) {
+              const mimeType = image.mimeType?.trim() || DEFAULT_OUTPUT_MIME;
+              form.append(
+                "image[]",
+                new Blob([new Uint8Array(image.buffer)], { type: mimeType }),
+                inferImageUploadFileName({
+                  fileName: image.fileName,
+                  mimeType,
+                  index,
+                }),
+              );
+            }
+
+            const multipartHeaders = new Headers(headers);
+            multipartHeaders.delete("Content-Type");
+            return postMultipartRequest({
+              url,
+              headers: multipartHeaders,
+              body: form,
               timeoutMs: req.timeoutMs,
               fetchFn: fetch,
               allowPrivateNetwork,
@@ -133,7 +199,7 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
             const jsonHeaders = new Headers(headers);
             jsonHeaders.set("Content-Type", "application/json");
             return postJsonRequest({
-              url: `${baseUrl}/images/generations`,
+              url,
               headers: jsonHeaders,
               body: {
                 model,

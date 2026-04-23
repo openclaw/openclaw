@@ -4,10 +4,8 @@ read_when:
   - You want to understand how OpenClaw assembles model context
   - You are switching between the legacy engine and a plugin engine
   - You are building a context engine plugin
-title: "Context Engine"
+title: "Context engine"
 ---
-
-# Context Engine
 
 A **context engine** controls how OpenClaw builds model context for each run.
 It decides which messages to include, how to summarize older history, and how
