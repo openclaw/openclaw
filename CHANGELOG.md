@@ -46,6 +46,7 @@ Docs: https://docs.openclaw.ai
   `tools.deny: ["bundle-mcp"]` opt-out behavior. Fixes #68875 and #68818.
 - Plugins/startup: tolerate transient bundled-channel catalog/metadata drift while auto-enabling configured plugins, so CLI and gateway startup no longer crash when a channel id is known but its display metadata is unavailable.
 - CLI/Claude: report CLI-backed reply runs as streaming while Claude/Codex CLI turns are still in flight, so WebChat keeps visible response state until the backend finishes. Fixes #70125.
+- Slack/streaming: fall back to normal Slack replies for Slack Connect streams rejected before the SDK flushes its local buffer, so short replies no longer disappear or report success before Slack acknowledges delivery. Fixes #70295. (#70370) Thanks @mvanhorn.
 - Codex harness: rotate the shared app-server websocket client when the configured bearer token changes, so auth-token refreshes reconnect with the new `Authorization` header instead of reusing a stale socket. (#70328) Thanks @Lucenx9.
 - Channels/sandbox: derive runtime policy keys for external direct messages that share the main conversation, so sandbox/tool policy no longer treats channel-originated DMs as local main-session runs.
 - Config/models: merge provider-scoped model allowlist updates and protect model/provider map writes from accidental full replacement, adding `config set --merge` for additive updates and `--replace` for intentional clobbers. Fixes #65920, #68392, and #68653.

@@ -4,7 +4,9 @@ import {
   appendSlackStream,
   extractSlackErrorCode,
   isBenignSlackFinalizeError,
+  markSlackStreamFallbackDelivered,
   SlackStreamNotDeliveredError,
+  startSlackStream,
   stopSlackStream,
   type SlackStreamSession,
 } from "./streaming.js";
@@ -81,6 +83,55 @@ describe("stopSlackStream finalize error handling", () => {
     expect((thrown as SlackStreamNotDeliveredError).pendingText).toBe("hello world");
   });
 
+  it("clears pendingText after an append flush is acknowledged by Slack", async () => {
+    const session = makeSession({
+      appendImpl: async () => ({ ts: "1700000000.100203" }),
+    });
+
+    await appendSlackStream({ session, text: "flushed text" });
+
+    expect(session.delivered).toBe(true);
+    expect(session.pendingText).toBe("");
+  });
+
+  it("throws SlackStreamNotDeliveredError with buffered text when append flush fails", async () => {
+    const session = makeSession({
+      appendImpl: vi
+        .fn()
+        .mockResolvedValueOnce(null)
+        .mockRejectedValueOnce(slackApiError("user_not_found")),
+    });
+
+    await appendSlackStream({ session, text: "first buffered" });
+    const thrown = await appendSlackStream({ session, text: "\nsecond flushes" }).catch(
+      (err: unknown) => err,
+    );
+
+    expect(thrown).toBeInstanceOf(SlackStreamNotDeliveredError);
+    expect((thrown as SlackStreamNotDeliveredError).pendingText).toBe(
+      "first buffered\nsecond flushes",
+    );
+  });
+
+  it("falls back only still-pending tail text after a prior flush succeeded", async () => {
+    const session = makeSession({
+      appendImpl: vi
+        .fn()
+        .mockResolvedValueOnce({ ts: "1700000000.100204" })
+        .mockResolvedValue(null),
+      stopImpl: async () => {
+        throw slackApiError("team_not_found");
+      },
+    });
+
+    await appendSlackStream({ session, text: "already visible" });
+    await appendSlackStream({ session, text: "\npending tail" });
+    const thrown = await stopSlackStream({ session }).catch((err: unknown) => err);
+
+    expect(thrown).toBeInstanceOf(SlackStreamNotDeliveredError);
+    expect((thrown as SlackStreamNotDeliveredError).pendingText).toBe("\npending tail");
+  });
+
   it("swallows missing_recipient_user_id when delivered", async () => {
     const session = makeSession({
       appendImpl: async () => ({ ts: "1700000000.100201" }),
@@ -139,6 +190,45 @@ describe("stopSlackStream finalize error handling", () => {
     expect(session.delivered).toBe(false);
     await stopSlackStream({ session });
     expect(session.delivered).toBe(true);
+    expect(session.pendingText).toBe("");
+  });
+
+  it("converts a start-time flush rejection into a pending-text fallback error", async () => {
+    const client = {
+      chatStream: () => ({
+        append: async () => {
+          throw slackApiError("user_not_found");
+        },
+        stop: async () => {},
+      }),
+    };
+
+    const thrown = await startSlackStream({
+      client: client as never,
+      channel: "C123",
+      threadTs: "1700000000.000100",
+      text: "initial chunk that flushes immediately",
+    }).catch((err: unknown) => err);
+
+    expect(thrown).toBeInstanceOf(SlackStreamNotDeliveredError);
+    expect((thrown as SlackStreamNotDeliveredError).pendingText).toBe(
+      "initial chunk that flushes immediately",
+    );
+  });
+
+  it("marks fallback-delivered sessions stopped only when no native stream exists", () => {
+    const neverDelivered = makeSession({});
+    markSlackStreamFallbackDelivered(neverDelivered);
+    expect(neverDelivered.delivered).toBe(true);
+    expect(neverDelivered.pendingText).toBe("");
+    expect(neverDelivered.stopped).toBe(true);
+
+    const alreadyDelivered = makeSession({});
+    alreadyDelivered.delivered = true;
+    markSlackStreamFallbackDelivered(alreadyDelivered);
+    expect(alreadyDelivered.delivered).toBe(true);
+    expect(alreadyDelivered.pendingText).toBe("");
+    expect(alreadyDelivered.stopped).toBe(false);
   });
 });
 

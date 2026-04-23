@@ -35,11 +35,7 @@ export type SlackStreamSession = {
    * call. Until `delivered` flips, nothing has actually reached Slack.
    */
   delivered: boolean;
-  /**
-   * Concatenation of every `text` passed to the session. Used by the
-   * caller to fall back to a normal `chat.postMessage` when finalize fails
-   * before any append flushed the buffer.
-   */
+  /** Text accepted by the SDK but not yet acknowledged by Slack. */
   pendingText: string;
 };
 
@@ -75,11 +71,10 @@ export type StopSlackStreamParams = {
 };
 
 /**
- * Thrown by {@link stopSlackStream} when Slack's `chat.stopStream` rejects
- * with a recipient-resolution error (see
- * {@link BENIGN_SLACK_FINALIZE_ERROR_CODES}) and no prior `append` had
- * flushed the buffer, so no text ever reached Slack. Carries the pending
- * text so the caller can deliver it via a normal `chat.postMessage`.
+ * Thrown when Slack rejects a stream flush/finalize with a recipient-resolution
+ * error (see {@link BENIGN_SLACK_FINALIZE_ERROR_CODES}) while text is still
+ * only buffered locally by the Slack SDK. Carries the pending text so the
+ * caller can deliver it via a normal `chat.postMessage`.
  */
 export class SlackStreamNotDeliveredError extends Error {
   readonly pendingText: string;
@@ -134,16 +129,27 @@ export async function startSlackStream(
 
   if (text) {
     session.pendingText += text;
-    // `append` returns the Slack response when it actually hits the network,
-    // null when the buffer is still under `buffer_size` (see chat-stream.js).
-    // Flip `delivered` only when Slack acknowledged.
-    const result = await streamer.append({ markdown_text: text });
-    if (result) {
-      session.delivered = true;
+    // Slack SDK ChatStreamer keeps short markdown_text chunks in a local buffer
+    // and returns null until buffer_size is reached. Only a non-null response
+    // means Slack acknowledged startStream/appendStream.
+    try {
+      const result = await streamer.append({ markdown_text: text });
+      if (result) {
+        session.delivered = true;
+        session.pendingText = "";
+      }
+      logVerbose(
+        `slack-stream: appended initial text (${text.length} chars, ${result ? "flushed" : "buffered"})`,
+      );
+    } catch (err) {
+      if (isBenignSlackFinalizeError(err) && session.pendingText) {
+        throw new SlackStreamNotDeliveredError(
+          session.pendingText,
+          extractSlackErrorCode(err) ?? "unknown",
+        );
+      }
+      throw err;
     }
-    logVerbose(
-      `slack-stream: appended initial text (${text.length} chars, ${result ? "flushed" : "buffered"})`,
-    );
   }
 
   return session;
@@ -165,11 +171,24 @@ export async function appendSlackStream(params: AppendSlackStreamParams): Promis
   }
 
   session.pendingText += text;
-  const result = await session.streamer.append({ markdown_text: text });
-  if (result) {
-    session.delivered = true;
+  try {
+    // Same SDK contract as startSlackStream: null means local-only buffer,
+    // non-null means Slack accepted the pending buffer and it is visible.
+    const result = await session.streamer.append({ markdown_text: text });
+    if (result) {
+      session.delivered = true;
+      session.pendingText = "";
+    }
+    logVerbose(`slack-stream: appended ${text.length} chars (${result ? "flushed" : "buffered"})`);
+  } catch (err) {
+    if (isBenignSlackFinalizeError(err) && session.pendingText) {
+      throw new SlackStreamNotDeliveredError(
+        session.pendingText,
+        extractSlackErrorCode(err) ?? "unknown",
+      );
+    }
+    throw err;
   }
-  logVerbose(`slack-stream: appended ${text.length} chars (${result ? "flushed" : "buffered"})`);
 }
 
 /**
@@ -183,10 +202,10 @@ export async function appendSlackStream(params: AppendSlackStreamParams): Promis
  * has already landed on Slack, the error is swallowed and the session is
  * marked stopped - the already-delivered text stays visible.
  *
- * If the same benign error fires before any append flushed (e.g. short
- * replies that never exceeded the SDK's buffer_size), this function throws
- * a {@link SlackStreamNotDeliveredError} carrying the pending text so the
- * caller can deliver it via `chat.postMessage`.
+ * If the same benign error fires while text is still only buffered locally
+ * (e.g. short replies that never exceeded the SDK's buffer_size), this
+ * function throws a {@link SlackStreamNotDeliveredError} carrying that pending
+ * text so the caller can deliver it via `chat.postMessage`.
  *
  * All other errors propagate unchanged.
  */
@@ -212,19 +231,21 @@ export async function stopSlackStream(params: StopSlackStreamParams): Promise<vo
   try {
     await session.streamer.stop(text ? { markdown_text: text } : undefined);
     session.delivered = true;
+    session.pendingText = "";
   } catch (err) {
     if (isBenignSlackFinalizeError(err)) {
       const code = extractSlackErrorCode(err) ?? "unknown";
+      if (session.pendingText) {
+        // stop() can be the first network call for short replies. If Slack
+        // Connect rejects it, the user has not seen the SDK-buffered text yet.
+        throw new SlackStreamNotDeliveredError(session.pendingText, code);
+      }
       if (session.delivered) {
         logVerbose(
           `slack-stream: finalize rejected by Slack (${code}); prior appends delivered, treating stream as stopped`,
         );
         return;
       }
-      // No append ever flushed; the ChatStreamer's stop() runs chat.startStream
-      // internally and that call failed. Surface the pending text so the
-      // caller can post a normal message via chat.postMessage.
-      throw new SlackStreamNotDeliveredError(session.pendingText, code);
     }
     throw err;
   }
@@ -275,4 +296,13 @@ export function extractSlackErrorCode(err: unknown): string | undefined {
   const message = typeof record.message === "string" ? record.message : "";
   const match = message.match(/An API error occurred:\s*([a-z_][a-z0-9_]*)/i);
   return match?.[1];
+}
+
+export function markSlackStreamFallbackDelivered(session: SlackStreamSession): void {
+  const hadNativeDelivery = session.delivered;
+  session.pendingText = "";
+  session.delivered = true;
+  if (!hadNativeDelivery) {
+    session.stopped = true;
+  }
 }
