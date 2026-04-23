@@ -79,8 +79,8 @@ async function disposeSession(session: BundleMcpSession) {
   if (session.transportType === "streamable-http") {
     await (session.transport as StreamableHTTPClientTransport).terminateSession().catch(() => {});
   }
-  await session.client.close().catch(() => {});
   await session.transport.close().catch(() => {});
+  await session.client.close().catch(() => {});
 }
 
 function createCatalogFingerprint(servers: Record<string, unknown>): string {
@@ -452,6 +452,23 @@ export async function retireSessionMcpRuntime(params: {
     params.onError?.(error, sessionId, params.reason);
     return false;
   }
+}
+
+export async function retireSessionMcpRuntimeForSessionKey(params: {
+  sessionKey?: string | null;
+  reason: string;
+  onError?: (error: unknown, sessionId: string, reason: string) => void;
+}): Promise<boolean> {
+  const sessionKey = normalizeOptionalString(params.sessionKey);
+  if (!sessionKey) {
+    return false;
+  }
+  const sessionId = getSessionMcpRuntimeManager().resolveSessionId(sessionKey);
+  return await retireSessionMcpRuntime({
+    sessionId,
+    reason: params.reason,
+    onError: params.onError,
+  });
 }
 
 export async function disposeAllSessionMcpRuntimes(): Promise<void> {

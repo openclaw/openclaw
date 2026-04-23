@@ -1,6 +1,7 @@
 export const EXPECTED_CODEX_MODELS_COMMAND_TEXT = [
   "Codex models:",
   "Available Codex models",
+  "Available models, local cache:",
   "Available agent target:",
   "Available agent targets:",
   "opened an interactive trust prompt",

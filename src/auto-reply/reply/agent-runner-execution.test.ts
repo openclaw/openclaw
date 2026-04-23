@@ -762,6 +762,7 @@ describe("runAgentTurnWithFallback", () => {
       command: undefined,
       host: undefined,
       reason: undefined,
+      scope: undefined,
       message: undefined,
     });
     expect(onCommandOutput).toHaveBeenCalledWith({

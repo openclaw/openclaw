@@ -369,6 +369,9 @@ Important behavior:
   reachable right now
 - runtime adapters decide which transport shapes they actually support at
   execution time
+- embedded Pi exposes configured MCP tools in normal `coding` and `messaging`
+  tool profiles; `minimal` still hides them, and `tools.deny: ["bundle-mcp"]`
+  disables them explicitly
 
 ## Saved MCP server definitions
 

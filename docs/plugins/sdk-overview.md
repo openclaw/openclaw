@@ -137,7 +137,7 @@ explicitly promotes one as public.
     | `plugin-sdk/provider-auth` | `createProviderApiKeyAuthMethod`, `ensureApiKeyFromOptionEnvOrPrompt`, `upsertAuthProfile`, `upsertApiKeyProfile`, `writeOAuthCredentials` |
     | `plugin-sdk/provider-model-shared` | `ProviderReplayFamily`, `buildProviderReplayFamilyHooks`, `normalizeModelCompat`, shared replay-policy builders, provider-endpoint helpers, and model-id normalization helpers such as `normalizeNativeXaiModelId` |
     | `plugin-sdk/provider-catalog-shared` | `findCatalogTemplate`, `buildSingleProviderApiKeyCatalog`, `supportsNativeStreamingUsageCompat`, `applyProviderNativeStreamingUsageCompat` |
-    | `plugin-sdk/provider-http` | Generic provider HTTP/endpoint capability helpers |
+    | `plugin-sdk/provider-http` | Generic provider HTTP/endpoint capability helpers, including audio transcription multipart form helpers |
     | `plugin-sdk/provider-web-fetch-contract` | Narrow web-fetch config/selection contract helpers such as `enablePluginInConfig` and `WebFetchProviderPlugin` |
     | `plugin-sdk/provider-web-fetch` | Web-fetch provider registration/cache helpers |
     | `plugin-sdk/provider-web-search-config-contract` | Narrow web-search config/credential helpers for providers that do not need plugin-enable wiring |
@@ -258,7 +258,7 @@ explicitly promotes one as public.
     | `plugin-sdk/text-chunking` | Outbound text chunking helper |
     | `plugin-sdk/speech` | Speech provider types plus provider-facing directive, registry, and validation helpers |
     | `plugin-sdk/speech-core` | Shared speech provider types, registry, directive, and normalization helpers |
-    | `plugin-sdk/realtime-transcription` | Realtime transcription provider types and registry helpers |
+    | `plugin-sdk/realtime-transcription` | Realtime transcription provider types, registry helpers, and shared WebSocket session helper |
     | `plugin-sdk/realtime-voice` | Realtime voice provider types and registry helpers |
     | `plugin-sdk/image-generation` | Image generation provider types |
     | `plugin-sdk/image-generation-core` | Shared image-generation types, failover, auth, and registry helpers |

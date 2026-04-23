@@ -575,14 +575,21 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     ]);
     expect(installRoot).toContain(stageDir);
     expect(installRoot).not.toBe(pluginRoot);
+    expect(
+      JSON.parse(fs.readFileSync(path.join(installRoot, ".openclaw-runtime-deps.json"), "utf8")),
+    ).toEqual({ specs: ["tokenjuice@0.6.1"] });
   });
 
-  it("keeps source-checkout bundled runtime deps in the plugin root by default", () => {
+  it("keeps source-checkout bundled runtime deps in the plugin root without manifest churn", () => {
     const packageRoot = makeTempDir();
     fs.mkdirSync(path.join(packageRoot, ".git"), { recursive: true });
     fs.mkdirSync(path.join(packageRoot, "src"), { recursive: true });
     const pluginRoot = path.join(packageRoot, "extensions", "tokenjuice");
     fs.mkdirSync(pluginRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginRoot, ".openclaw-runtime-deps.json"),
+      JSON.stringify({ specs: ["stale@9.9.9"] }),
+    );
     fs.writeFileSync(
       path.join(pluginRoot, "package.json"),
       JSON.stringify({
@@ -617,6 +624,43 @@ describe("ensureBundledPluginRuntimeDeps", () => {
       },
     ]);
     expect(resolveBundledRuntimeDependencyInstallRoot(pluginRoot, { env: {} })).toBe(pluginRoot);
+    expect(fs.existsSync(path.join(pluginRoot, ".openclaw-runtime-deps.json"))).toBe(false);
+  });
+
+  it("removes stale source-checkout manifests even when runtime deps are present", () => {
+    const packageRoot = makeTempDir();
+    fs.mkdirSync(path.join(packageRoot, ".git"), { recursive: true });
+    fs.mkdirSync(path.join(packageRoot, "src"), { recursive: true });
+    const pluginRoot = path.join(packageRoot, "extensions", "tokenjuice");
+    fs.mkdirSync(path.join(pluginRoot, "node_modules", "tokenjuice"), { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginRoot, "package.json"),
+      JSON.stringify({
+        dependencies: {
+          tokenjuice: "0.6.1",
+        },
+      }),
+    );
+    fs.writeFileSync(
+      path.join(pluginRoot, "node_modules", "tokenjuice", "package.json"),
+      JSON.stringify({ name: "tokenjuice", version: "0.6.1" }),
+    );
+    fs.writeFileSync(
+      path.join(pluginRoot, ".openclaw-runtime-deps.json"),
+      JSON.stringify({ specs: ["stale@9.9.9"] }),
+    );
+
+    const result = ensureBundledPluginRuntimeDeps({
+      env: {},
+      installDeps: () => {
+        throw new Error("present source-checkout runtime deps should not reinstall");
+      },
+      pluginId: "tokenjuice",
+      pluginRoot,
+    });
+
+    expect(result).toEqual({ installedSpecs: [], retainSpecs: [] });
+    expect(fs.existsSync(path.join(pluginRoot, ".openclaw-runtime-deps.json"))).toBe(false);
   });
 
   it("treats Docker build source trees without .git as source checkouts", () => {

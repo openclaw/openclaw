@@ -96,7 +96,8 @@ function piAiWouldInjectCachePoints(modelId: string): boolean {
  * System-defined profiles (us., eu., global.) and base model IDs always
  * contain the model name and are handled by pi-ai natively.
  */
-const BEDROCK_APP_INFERENCE_PROFILE_RE = /^arn:aws(-cn|-us-gov)?:bedrock:.*:application-inference-profile\//i;
+const BEDROCK_APP_INFERENCE_PROFILE_RE =
+  /^arn:aws(-cn|-us-gov)?:bedrock:.*:application-inference-profile\//i;
 
 function isBedrockAppInferenceProfile(modelId: string): boolean {
   return BEDROCK_APP_INFERENCE_PROFILE_RE.test(modelId);
@@ -172,9 +173,7 @@ async function resolveAppProfileCacheEligible(
     const models = resp.models ?? [];
     const eligible =
       models.length > 0 &&
-      models.every((m: { modelArn?: string }) =>
-      resolvedModelSupportsCaching(m.modelArn ?? ""),
-    );
+      models.every((m: { modelArn?: string }) => resolvedModelSupportsCaching(m.modelArn ?? ""));
     appProfileCacheEligibleCache.set(modelId, eligible);
     return eligible;
   } catch {
@@ -374,9 +373,8 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
         // to also teach resolveAnthropicCacheRetentionFamily about opaque profiles
         // (tracked separately). In practice, users with app inference profiles
         // want caching enabled, so defaulting to "short" is the safer behavior.
-        const cacheRetention = typeof merged.cacheRetention === "string"
-          ? merged.cacheRetention
-          : "short";
+        const cacheRetention =
+          typeof merged.cacheRetention === "string" ? merged.cacheRetention : "short";
 
         if (heuristicMatch) {
           // Fast path: ARN heuristic already identified this as Claude.

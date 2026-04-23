@@ -34,6 +34,11 @@ const recoverConfigFromJsonRootSuffix = vi.fn<(snapshot?: unknown) => Promise<bo
 const writeRestartSentinel = vi.fn<(payload?: unknown) => Promise<string>>(
   async (_payload?: unknown) => "/tmp/restart-sentinel.json",
 );
+const writeDiagnosticStabilityBundleForFailureSync = vi.fn((_reason: string, _error: unknown) => ({
+  status: "written" as const,
+  message: "wrote stability bundle: /tmp/openclaw-stability.json",
+  path: "/tmp/openclaw-stability.json",
+}));
 const controlUiState = vi.hoisted(() => ({
   root: "/tmp/openclaw-control-ui" as string | null,
 }));
@@ -110,6 +115,11 @@ vi.mock("../../logging/console.js", () => ({
   setConsoleTimestampPrefix: () => undefined,
 }));
 
+vi.mock("../../logging/diagnostic-stability-bundle.js", () => ({
+  writeDiagnosticStabilityBundleForFailureSync: (reason: string, error: unknown) =>
+    writeDiagnosticStabilityBundleForFailureSync(reason, error),
+}));
+
 vi.mock("../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({
     info: (message: string) => {
@@ -167,6 +177,7 @@ describe("gateway run option collisions", () => {
     recoverConfigFromJsonRootSuffix.mockResolvedValue(false);
     writeRestartSentinel.mockReset();
     writeRestartSentinel.mockResolvedValue("/tmp/restart-sentinel.json");
+    writeDiagnosticStabilityBundleForFailureSync.mockClear();
     startGatewayServer.mockClear();
     setGatewayWsLogStyle.mockClear();
     setVerbose.mockClear();
@@ -251,6 +262,19 @@ describe("gateway run option collisions", () => {
     expect(gatewayLogMessages).toContain(
       "Control UI assets are missing; first startup may spend a few seconds building them before the gateway binds. `pnpm gateway:watch` does not rebuild Control UI assets, so rerun `pnpm ui:build` after UI changes or use `pnpm ui:dev` while developing the Control UI. For a full local dist, run `pnpm build && pnpm ui:build`.",
     );
+  });
+
+  it("does not write startup failure bundles for expected gateway lock conflicts", async () => {
+    const err = Object.assign(new Error("gateway already running on port 18789"), {
+      name: "GatewayLockError",
+    });
+    startGatewayServer.mockRejectedValueOnce(err);
+
+    await expect(runGatewayCli(["gateway", "run", "--allow-unconfigured"])).rejects.toThrow(
+      "__exit__:0",
+    );
+
+    expect(writeDiagnosticStabilityBundleForFailureSync).not.toHaveBeenCalled();
   });
 
   it("blocks startup when the observed snapshot loses gateway.mode even if loadConfig still says local", async () => {
