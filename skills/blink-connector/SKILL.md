@@ -114,11 +114,15 @@ A missing provider means it's not linked — ask the user to connect it in the A
 ### Notion
 
 ```bash
+# Note: Notion's integration must be manually added to each page/database via
+# "Connections" in the Notion UI. If a specific DB returns "object_not_found",
+# the user hasn't shared it with the integration yet — ask them to connect it.
+
 # Search all pages and databases
 blink connector exec notion search POST '{"query":"meeting notes","page_size":10}'
 
-# List all databases
-blink connector exec notion databases GET
+# List all databases (use search with filter — the `/databases GET` endpoint is deprecated)
+blink connector exec notion search POST '{"filter":{"property":"object","value":"database"},"page_size":20}'
 
 # Query a database
 blink connector exec notion databases/DATABASE_ID/query POST '{"page_size":10}'
@@ -808,15 +812,20 @@ blink connector exec loom videos/VIDEO_ID GET
 
 ### Etsy
 
+Etsy's API does **not** accept `me` as a user_id placeholder — pass the numeric `user_id` / `shop_id` returned by `/users/me`. If `/users/me` returns `"Could not find a shop for User with user_id = ..."`, the account has no Etsy shop and shop-scoped endpoints will always fail until the user creates one on etsy.com.
+
 ```bash
-# Get user info
+# Get user info (returns user_id + shop_id for shop owners)
 blink connector exec etsy application/users/me GET
 
-# List shops
-blink connector exec etsy application/users/me/shops GET
+# Get shop info (use shop_id from /users/me)
+blink connector exec etsy application/shops/SHOP_ID GET
 
 # List shop listings
-blink connector exec etsy application/shops/SHOP_ID/listings GET '{"limit":"25"}'
+blink connector exec etsy application/shops/SHOP_ID/listings/active GET '{"limit":"25"}'
+
+# Search shops by name (no auth needed on top of the linked account)
+blink connector exec etsy application/shops GET '{"shop_name":"example","limit":"5"}'
 ```
 
 ### Composio Connectors
@@ -984,3 +993,25 @@ blink connector tool-execute composio_twitter TWITTER_CREATION_OF_A_POST \
 Tool slugs follow the pattern `<TOOLKIT>_<ACTION>`. Browse the full catalog
 at [docs.composio.dev/toolkits](https://docs.composio.dev/toolkits.md) — each
 toolkit page lists every tool with its input schema.
+
+### Known-good Composio tool slugs (reference)
+
+If `tool-execute` returns `"Unable to retrieve tool with slug <SLUG>"`, the
+slug is wrong — this is **not** a scope or API-version problem. Check the
+Composio toolkit page or use one of these verified slugs:
+
+```
+composio_zoom      → ZOOM_GET_USER {"userId":"me"},
+                     ZOOM_LIST_MEETINGS {"userId":"me","type":"upcoming"},
+                     ZOOM_CREATE_MEETING, ZOOM_DELETE_MEETING,
+                     ZOOM_LIST_RECORDINGS {"userId":"me"}
+composio_youtube   → YOUTUBE_SEARCH_YOU_TUBE {"q":"..."},
+                     YOUTUBE_LIST_USER_PLAYLISTS,
+                     YOUTUBE_LIST_USER_SUBSCRIPTIONS
+composio_figma     → FIGMA_GET_FILE, FIGMA_GET_FILE_NODES, FIGMA_GET_IMAGES
+composio_reddit    → REDDIT_GET_CURRENT_USER_INFO, REDDIT_SEARCH_ACROSS_SUBREDDITS,
+                     REDDIT_SUBMIT_POST_TO_SUBREDDIT
+```
+
+For a quick cross-check of reads, prefer the `blink connector exec` HTTP path —
+it hits the upstream API directly and isn't gated by Composio's tool catalog.
