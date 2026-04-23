@@ -301,7 +301,6 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
-      resetSessionAfterCompactionFailure: async () => false,
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -346,7 +345,6 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks,
-      resetSessionAfterCompactionFailure: async () => false,
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -393,7 +391,6 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks,
-      resetSessionAfterCompactionFailure: async () => false,
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -440,7 +437,6 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks,
-      resetSessionAfterCompactionFailure: async () => false,
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -486,7 +482,6 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks,
-      resetSessionAfterCompactionFailure: async () => false,
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -539,7 +534,6 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks,
-      resetSessionAfterCompactionFailure: async () => false,
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -602,7 +596,6 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
-      resetSessionAfterCompactionFailure: async () => false,
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -657,7 +650,6 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
-      resetSessionAfterCompactionFailure: async () => false,
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -745,7 +737,6 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks,
-      resetSessionAfterCompactionFailure: async () => false,
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -824,7 +815,6 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
-      resetSessionAfterCompactionFailure: async () => false,
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -870,7 +860,6 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
-      resetSessionAfterCompactionFailure: async () => false,
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -919,7 +908,6 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
-      resetSessionAfterCompactionFailure: async () => false,
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -978,7 +966,6 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
-      resetSessionAfterCompactionFailure: async () => false,
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -1047,7 +1034,6 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
-      resetSessionAfterCompactionFailure: async () => false,
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -1107,7 +1093,6 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
-      resetSessionAfterCompactionFailure: async () => false,
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -1166,7 +1151,6 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
-      resetSessionAfterCompactionFailure: async () => false,
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -1225,7 +1209,6 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
-      resetSessionAfterCompactionFailure: async () => false,
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -1274,7 +1257,6 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
-      resetSessionAfterCompactionFailure: async () => false,
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -1326,7 +1308,6 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
-      resetSessionAfterCompactionFailure: async () => false,
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -1374,7 +1355,6 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
-      resetSessionAfterCompactionFailure: async () => false,
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -1413,7 +1393,6 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
-      resetSessionAfterCompactionFailure: async () => false,
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -1453,7 +1432,6 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
-      resetSessionAfterCompactionFailure: async () => false,
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -1493,7 +1471,6 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
-      resetSessionAfterCompactionFailure: async () => false,
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -1531,7 +1508,6 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
-      resetSessionAfterCompactionFailure: async () => false,
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -1558,7 +1534,6 @@ describe("runAgentTurnWithFallback", () => {
       },
     });
 
-    const resetSessionAfterCompactionFailure = vi.fn(async () => false);
     const { replyOperation, failMock } = createMockReplyOperation();
     const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
     const result = await runAgentTurnWithFallback({
@@ -1578,7 +1553,6 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
-      resetSessionAfterCompactionFailure,
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "agent:main:main",
@@ -1586,7 +1560,6 @@ describe("runAgentTurnWithFallback", () => {
       resolvedVerboseLevel: "off",
     });
 
-    expect(resetSessionAfterCompactionFailure).not.toHaveBeenCalled();
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toBe(
@@ -1607,7 +1580,6 @@ describe("runAgentTurnWithFallback", () => {
       new Error("Auto-compaction failed: nothing to compact"),
     );
 
-    const resetSessionAfterCompactionFailure = vi.fn(async () => false);
     const { replyOperation, failMock } = createMockReplyOperation();
     const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
     const result = await runAgentTurnWithFallback({
@@ -1627,7 +1599,6 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
-      resetSessionAfterCompactionFailure,
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "agent:main:main",
@@ -1635,7 +1606,6 @@ describe("runAgentTurnWithFallback", () => {
       resolvedVerboseLevel: "off",
     });
 
-    expect(resetSessionAfterCompactionFailure).not.toHaveBeenCalled();
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toBe(
@@ -1672,7 +1642,6 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
-      resetSessionAfterCompactionFailure: async () => false,
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -1712,7 +1681,6 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
-      resetSessionAfterCompactionFailure: async () => false,
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -1752,7 +1720,6 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
-      resetSessionAfterCompactionFailure: async () => false,
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -1819,7 +1786,6 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
-      resetSessionAfterCompactionFailure: async () => false,
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -1874,7 +1840,6 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
-      resetSessionAfterCompactionFailure: async () => false,
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -1959,7 +1924,6 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
-      resetSessionAfterCompactionFailure: async () => false,
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -2017,7 +1981,6 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
-      resetSessionAfterCompactionFailure: async () => false,
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -2080,7 +2043,6 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
-      resetSessionAfterCompactionFailure: async () => false,
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -2157,7 +2119,6 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
-      resetSessionAfterCompactionFailure: async () => false,
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
@@ -2223,7 +2184,6 @@ describe("runAgentTurnWithFallback", () => {
       shouldEmitToolResult: () => true,
       shouldEmitToolOutput: () => false,
       pendingToolTasks: new Set(),
-      resetSessionAfterCompactionFailure: async () => false,
       resetSessionAfterRoleOrderingConflict: async () => false,
       isHeartbeat: false,
       sessionKey: "main",
