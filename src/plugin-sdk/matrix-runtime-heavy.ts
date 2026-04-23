@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "./config-runtime.js";
-import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-runtime.js";
+import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-loader.js";
 
 type MatrixLegacyLog = {
   info?: (message: string) => void;
@@ -19,6 +19,7 @@ type MatrixLegacyCryptoPlan = {
 };
 
 type MatrixLegacyCryptoDetection = {
+  inspectorAvailable: boolean;
   plans: MatrixLegacyCryptoPlan[];
   warnings: string[];
 };

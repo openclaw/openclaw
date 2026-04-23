@@ -1,5 +1,6 @@
 import { t } from "../i18n/index.ts";
 import type { IconName } from "./icons.js";
+import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
 
 export const TAB_GROUPS = [
   { label: "chat", tabs: ["chat"] },
@@ -122,7 +123,7 @@ export function tabFromPath(pathname: string, basePath = ""): Tab | null {
       path = path.slice(base.length);
     }
   }
-  let normalized = normalizePath(path).toLowerCase();
+  let normalized = normalizeLowercaseStringOrEmpty(normalizePath(path));
   if (normalized.endsWith("/index.html")) {
     normalized = "/";
   }
@@ -145,7 +146,7 @@ export function inferBasePathFromPathname(pathname: string): string {
     return "";
   }
   for (let i = 0; i < segments.length; i++) {
-    const candidate = `/${segments.slice(i).join("/")}`.toLowerCase();
+    const candidate = normalizeLowercaseStringOrEmpty(`/${segments.slice(i).join("/")}`);
     if (PATH_TO_TAB.has(candidate)) {
       const prefix = segments.slice(0, i);
       return prefix.length ? `/${prefix.join("/")}` : "";

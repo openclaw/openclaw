@@ -1,8 +1,12 @@
+import { readStringValue } from "../shared/string-coerce.js";
+import { supportsOpenAIReasoningEffort } from "./openai-reasoning-effort.js";
+import { isOpenAIResponsesApi } from "./provider-attribution.js";
 import { resolveProviderRequestPolicyConfig } from "./provider-request-config.js";
 
 type OpenAIResponsesPayloadModel = {
   api?: unknown;
   baseUrl?: unknown;
+  id?: unknown;
   provider?: unknown;
   contextWindow?: unknown;
   compat?: { supportsStore?: boolean };
@@ -24,12 +28,6 @@ export type OpenAIResponsesPayloadPolicy = {
   shouldStripStore: boolean;
   useServerCompaction: boolean;
 };
-
-const OPENAI_RESPONSES_APIS = new Set([
-  "openai-responses",
-  "azure-openai-responses",
-  "openai-codex-responses",
-]);
 
 function parsePositiveInteger(value: unknown): number | undefined {
   if (typeof value === "number" && Number.isFinite(value) && value > 0) {
@@ -80,8 +78,8 @@ function stripDisabledOpenAIReasoningPayload(payloadObj: Record<string, unknown>
     return;
   }
 
-  // Proxy/OpenAI-compat routes can reject `reasoning.effort: "none"`. Treat the
-  // disabled effort as "reasoning omitted" instead of forwarding an unsupported value.
+  // Some Responses models and OpenAI-compatible proxies reject
+  // `reasoning.effort: "none"`. Treat unsupported disabled effort as omitted.
   const reasoningObj = reasoning as Record<string, unknown>;
   if (reasoningObj.effort === "none") {
     delete payloadObj.reasoning;
@@ -93,9 +91,9 @@ export function resolveOpenAIResponsesPayloadPolicy(
   options: OpenAIResponsesPayloadPolicyOptions = {},
 ): OpenAIResponsesPayloadPolicy {
   const capabilities = resolveProviderRequestPolicyConfig({
-    provider: typeof model.provider === "string" ? model.provider : undefined,
-    api: typeof model.api === "string" ? model.api : undefined,
-    baseUrl: typeof model.baseUrl === "string" ? model.baseUrl : undefined,
+    provider: readStringValue(model.provider),
+    api: readStringValue(model.api),
+    baseUrl: readStringValue(model.baseUrl),
     compat: model.compat,
     capability: "llm",
     transport: "stream",
@@ -111,7 +109,10 @@ export function resolveOpenAIResponsesPayloadPolicy(
         : capabilities.allowsResponsesStore
           ? true
           : undefined;
-  const isResponsesApi = typeof model.api === "string" && OPENAI_RESPONSES_APIS.has(model.api);
+  const isResponsesApi = isOpenAIResponsesApi(readStringValue(model.api));
+  const shouldStripDisabledReasoningPayload =
+    isResponsesApi &&
+    (!capabilities.usesKnownNativeOpenAIRoute || !supportsOpenAIReasoningEffort(model, "none"));
 
   return {
     allowsServiceTier: capabilities.allowsOpenAIServiceTier,
@@ -119,7 +120,7 @@ export function resolveOpenAIResponsesPayloadPolicy(
       parsePositiveInteger(options.extraParams?.responsesCompactThreshold) ??
       resolveOpenAIResponsesCompactThreshold(model),
     explicitStore,
-    shouldStripDisabledReasoningPayload: isResponsesApi && !capabilities.usesKnownNativeOpenAIRoute,
+    shouldStripDisabledReasoningPayload,
     shouldStripPromptCache:
       options.enablePromptCacheStripping === true && capabilities.shouldStripResponsesPromptCache,
     shouldStripStore:

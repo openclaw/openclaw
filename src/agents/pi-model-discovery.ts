@@ -6,7 +6,6 @@ import type {
   AuthStorage as PiAuthStorage,
   ModelRegistry as PiModelRegistry,
 } from "@mariozechner/pi-coding-agent";
-import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { normalizeModelCompat } from "../plugins/provider-model-compat.js";
 import {
   applyProviderResolvedModelCompatWithPlugins,
@@ -14,16 +13,30 @@ import {
   normalizeProviderResolvedModelWithPlugin,
   resolveProviderSyntheticAuthWithPlugin,
 } from "../plugins/provider-runtime.js";
-import type { ProviderRuntimeModel } from "../plugins/types.js";
-import { ensureAuthProfileStore } from "./auth-profiles.js";
+import { resolveRuntimeSyntheticAuthProviderRefs } from "../plugins/synthetic-auth.runtime.js";
+import { isRecord } from "../utils.js";
+import { ensureAuthProfileStore } from "./auth-profiles/store.js";
 import { resolveProviderEnvApiKeyCandidates } from "./model-auth-env-vars.js";
 import { resolveEnvApiKey } from "./model-auth-env.js";
 import { resolvePiCredentialMapFromStore, type PiCredentialMap } from "./pi-auth-credentials.js";
+import { normalizeProviderId } from "./provider-id.js";
 
 const PiAuthStorageClass = PiCodingAgent.AuthStorage;
 const PiModelRegistryClass = PiCodingAgent.ModelRegistry;
 
 export { PiAuthStorageClass as AuthStorage, PiModelRegistryClass as ModelRegistry };
+
+type ProviderRuntimeModelLike = Model<Api> & {
+  contextTokens?: number;
+};
+
+type DiscoveredProviderRuntimeModelLike = Omit<ProviderRuntimeModelLike, "api"> & {
+  api?: string | null;
+};
+
+type DiscoverModelsOptions = {
+  providerFilter?: string;
+};
 
 type InMemoryAuthStorageBackendLike = {
   withLock<T>(
@@ -54,30 +67,25 @@ function createInMemoryAuthStorageBackend(
   };
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function normalizeRegistryModel<T>(value: T, agentDir: string): T {
+export function normalizeDiscoveredPiModel<T>(value: T, agentDir: string): T {
   if (!isRecord(value)) {
     return value;
   }
   if (
     typeof value.id !== "string" ||
     typeof value.name !== "string" ||
-    typeof value.provider !== "string" ||
-    typeof value.api !== "string"
+    typeof value.provider !== "string"
   ) {
     return value;
   }
-  const model = value as unknown as ProviderRuntimeModel;
+  const model = value as unknown as DiscoveredProviderRuntimeModelLike;
   const pluginNormalized =
     normalizeProviderResolvedModelWithPlugin({
       provider: model.provider,
       context: {
         provider: model.provider,
         modelId: model.id,
-        model,
+        model: model as unknown as ProviderRuntimeModelLike,
         agentDir,
       },
     }) ?? model;
@@ -87,7 +95,7 @@ function normalizeRegistryModel<T>(value: T, agentDir: string): T {
       context: {
         provider: model.provider,
         modelId: model.id,
-        model: pluginNormalized,
+        model: pluginNormalized as unknown as ProviderRuntimeModelLike,
         agentDir,
       },
     }) ?? pluginNormalized;
@@ -97,10 +105,19 @@ function normalizeRegistryModel<T>(value: T, agentDir: string): T {
       context: {
         provider: model.provider,
         modelId: model.id,
-        model: compatNormalized,
+        model: compatNormalized as unknown as ProviderRuntimeModelLike,
         agentDir,
       },
     }) ?? compatNormalized;
+  if (
+    !isRecord(transportNormalized) ||
+    typeof transportNormalized.id !== "string" ||
+    typeof transportNormalized.name !== "string" ||
+    typeof transportNormalized.provider !== "string" ||
+    typeof transportNormalized.api !== "string"
+  ) {
+    return value;
+  }
   return normalizeModelCompat(transportNormalized as Model<Api>) as T;
 }
 
@@ -124,23 +141,31 @@ function createOpenClawModelRegistry(
   authStorage: PiAuthStorage,
   modelsJsonPath: string,
   agentDir: string,
+  options?: DiscoverModelsOptions,
 ): PiModelRegistry {
   const registry = instantiatePiModelRegistry(authStorage, modelsJsonPath);
   const getAll = registry.getAll.bind(registry);
   const getAvailable = registry.getAvailable.bind(registry);
   const find = registry.find.bind(registry);
+  const providerFilter = options?.providerFilter ? normalizeProviderId(options.providerFilter) : "";
+  const matchesProviderFilter = (entry: Model<Api>) =>
+    !providerFilter || normalizeProviderId(entry.provider) === providerFilter;
 
   registry.getAll = () =>
-    getAll().map((entry: Model<Api>) => normalizeRegistryModel(entry, agentDir));
+    getAll()
+      .filter((entry: Model<Api>) => matchesProviderFilter(entry))
+      .map((entry: Model<Api>) => normalizeDiscoveredPiModel(entry, agentDir));
   registry.getAvailable = () =>
-    getAvailable().map((entry: Model<Api>) => normalizeRegistryModel(entry, agentDir));
+    getAvailable()
+      .filter((entry: Model<Api>) => matchesProviderFilter(entry))
+      .map((entry: Model<Api>) => normalizeDiscoveredPiModel(entry, agentDir));
   registry.find = (provider: string, modelId: string) =>
-    normalizeRegistryModel(find(provider, modelId), agentDir);
+    normalizeDiscoveredPiModel(find(provider, modelId), agentDir);
 
   return registry;
 }
 
-function scrubLegacyStaticAuthJsonEntries(pathname: string): void {
+export function scrubLegacyStaticAuthJsonEntriesForDiscovery(pathname: string): void {
   if (process.env.OPENCLAW_AUTH_STORE_READONLY === "1") {
     return;
   }
@@ -228,35 +253,34 @@ function createAuthStorage(AuthStorageLike: unknown, path: string, creds: PiCred
   return withRuntimeOverride;
 }
 
-function resolvePiCredentials(agentDir: string): PiCredentialMap {
-  const store = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
-  const credentials = resolvePiCredentialMapFromStore(store);
+export function addEnvBackedPiCredentials(
+  credentials: PiCredentialMap,
+  env: NodeJS.ProcessEnv = process.env,
+): PiCredentialMap {
+  const next = { ...credentials };
   // pi-coding-agent hides providers from its registry when auth storage lacks
   // a matching credential entry. Mirror env-backed provider auth here so
   // live/model discovery sees the same providers runtime auth can use.
-  for (const provider of Object.keys(resolveProviderEnvApiKeyCandidates())) {
-    if (credentials[provider]) {
+  for (const provider of Object.keys(resolveProviderEnvApiKeyCandidates({ env }))) {
+    if (next[provider]) {
       continue;
     }
-    const resolved = resolveEnvApiKey(provider);
+    const resolved = resolveEnvApiKey(provider, env);
     if (!resolved?.apiKey) {
       continue;
     }
-    credentials[provider] = {
+    next[provider] = {
       type: "api_key",
       key: resolved.apiKey,
     };
   }
-  const syntheticProviders = new Set<string>();
-  for (const plugin of loadPluginManifestRegistry().plugins) {
-    for (const provider of plugin.providers) {
-      syntheticProviders.add(provider);
-    }
-    for (const backend of plugin.cliBackends) {
-      syntheticProviders.add(backend);
-    }
-  }
-  for (const provider of syntheticProviders) {
+  return next;
+}
+
+export function resolvePiCredentialsForDiscovery(agentDir: string): PiCredentialMap {
+  const store = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
+  const credentials = addEnvBackedPiCredentials(resolvePiCredentialMapFromStore(store));
+  for (const provider of resolveRuntimeSyntheticAuthProviderRefs()) {
     if (credentials[provider]) {
       continue;
     }
@@ -282,12 +306,21 @@ function resolvePiCredentials(agentDir: string): PiCredentialMap {
 
 // Compatibility helpers for pi-coding-agent 0.50+ (discover* helpers removed).
 export function discoverAuthStorage(agentDir: string): PiAuthStorage {
-  const credentials = resolvePiCredentials(agentDir);
+  const credentials = resolvePiCredentialsForDiscovery(agentDir);
   const authPath = path.join(agentDir, "auth.json");
-  scrubLegacyStaticAuthJsonEntries(authPath);
+  scrubLegacyStaticAuthJsonEntriesForDiscovery(authPath);
   return createAuthStorage(PiAuthStorageClass, authPath, credentials);
 }
 
-export function discoverModels(authStorage: PiAuthStorage, agentDir: string): PiModelRegistry {
-  return createOpenClawModelRegistry(authStorage, path.join(agentDir, "models.json"), agentDir);
+export function discoverModels(
+  authStorage: PiAuthStorage,
+  agentDir: string,
+  options?: DiscoverModelsOptions,
+): PiModelRegistry {
+  return createOpenClawModelRegistry(
+    authStorage,
+    path.join(agentDir, "models.json"),
+    agentDir,
+    options,
+  );
 }

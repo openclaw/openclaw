@@ -1,5 +1,6 @@
 import type * as Lark from "@larksuiteoapi/node-sdk";
-import { Type } from "@sinclair/typebox";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { Type, type TSchema } from "typebox";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { listEnabledFeishuAccounts } from "./accounts.js";
 import { createFeishuToolClient } from "./tool-account.js";
@@ -557,11 +558,14 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
   const getClient = (params: AccountAwareParams | undefined, defaultAccountId?: string) =>
     createFeishuToolClient({ api, executeParams: params, defaultAccountId });
 
-  const registerBitableTool = <TParams extends AccountAwareParams>(params: {
+  const registerBitableTool = <
+    // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Tool params bind each schema-specific executor to its registered tool.
+    TParams extends AccountAwareParams,
+  >(params: {
     name: string;
     label: string;
     description: string;
-    parameters: unknown;
+    parameters: TSchema;
     execute: (args: { params: TParams; defaultAccountId?: string }) => Promise<unknown>;
   }) => {
     api.registerTool(
@@ -579,7 +583,7 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
               }),
             );
           } catch (err) {
-            return json({ error: err instanceof Error ? err.message : String(err) });
+            return json({ error: formatErrorMessage(err) });
           }
         },
       }),
@@ -729,5 +733,5 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
     },
   });
 
-  api.logger.info?.("feishu_bitable: Registered bitable tools");
+  api.logger.debug?.("feishu_bitable: Registered bitable tools");
 }

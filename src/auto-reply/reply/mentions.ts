@@ -1,21 +1,35 @@
 import { resolveAgentConfig } from "../../agents/agent-scope.js";
-import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
-import type { ChannelId } from "../../channels/plugins/types.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { ChannelId } from "../../channels/plugins/channel-id.types.js";
+import { getLoadedChannelPluginById } from "../../channels/plugins/registry-loaded.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import { normalizeAnyChannelId } from "../../channels/registry.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { compileConfigRegexes, type ConfigRegexRejectReason } from "../../security/config-regex.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { escapeRegExp } from "../../utils.js";
 import type { MsgContext } from "../templating.js";
+import type { ExplicitMentionSignal } from "./mentions.types.js";
+export type {
+  BuildMentionRegexes,
+  ExplicitMentionSignal,
+  MatchesMentionPatterns,
+  MatchesMentionWithExplicit,
+} from "./mentions.types.js";
 
 function deriveMentionPatterns(identity?: { name?: string; emoji?: string }) {
   const patterns: string[] = [];
-  const name = identity?.name?.trim();
+  const name = normalizeOptionalString(identity?.name);
   if (name) {
     const parts = name.split(/\s+/).filter(Boolean).map(escapeRegExp);
     const re = parts.length ? parts.join(String.raw`\s+`) : escapeRegExp(name);
     patterns.push(String.raw`\b@?${re}\b`);
   }
-  const emoji = identity?.emoji?.trim();
+  const emoji = normalizeOptionalString(identity?.emoji);
   if (emoji) {
     patterns.push(escapeRegExp(emoji));
   }
@@ -129,7 +143,9 @@ export function buildMentionRegexes(cfg: OpenClawConfig | undefined, agentId?: s
 }
 
 export function normalizeMentionText(text: string): string {
-  return (text ?? "").replace(/[\u200b-\u200f\u202a-\u202e\u2060-\u206f]/g, "").toLowerCase();
+  return normalizeLowercaseStringOrEmpty(
+    (text ?? "").replace(/[\u200b-\u200f\u202a-\u202e\u2060-\u206f]/g, ""),
+  );
 }
 
 export function matchesMentionPatterns(text: string, mentionRegexes: RegExp[]): boolean {
@@ -142,12 +158,6 @@ export function matchesMentionPatterns(text: string, mentionRegexes: RegExp[]): 
   }
   return mentionRegexes.some((re) => re.test(cleaned));
 }
-
-export type ExplicitMentionSignal = {
-  hasAnyMention: boolean;
-  isExplicitlyMentioned: boolean;
-  canResolveExplicit: boolean;
-};
 
 export function matchesMentionWithExplicit(params: {
   text: string;
@@ -199,10 +209,12 @@ export function stripMentions(
 ): string {
   let result = text;
   const providerId =
-    (ctx.Provider ? normalizeChannelId(ctx.Provider) : null) ??
-    (ctx.Provider?.trim().toLowerCase() as ChannelId | undefined) ??
+    (ctx.Provider ? normalizeAnyChannelId(ctx.Provider) : null) ??
+    (normalizeOptionalLowercaseString(ctx.Provider) as ChannelId | undefined) ??
     null;
-  const providerMentions = providerId ? getChannelPlugin(providerId)?.mentions : undefined;
+  const providerMentions = providerId
+    ? (getLoadedChannelPluginById(providerId) as ChannelPlugin | undefined)?.mentions
+    : undefined;
   const configRegexes = compileMentionPatternsCached({
     patterns: normalizeMentionPatterns(resolveMentionPatterns(cfg, agentId)),
     flags: "gi",

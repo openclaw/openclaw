@@ -1,22 +1,19 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   resolveConfiguredBindingRoute,
+  resolveRuntimeConversationBindingRoute,
   type ConfiguredBindingRouteResult,
 } from "openclaw/plugin-sdk/conversation-runtime";
-import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
-import { isPluginOwnedSessionBindingRecord } from "openclaw/plugin-sdk/conversation-runtime";
 import {
   buildAgentSessionKey,
   deriveLastRoutePolicy,
+  normalizeAccountId,
   resolveAgentRoute,
 } from "openclaw/plugin-sdk/routing";
-import {
-  buildAgentMainSessionKey,
-  DEFAULT_ACCOUNT_ID,
-  resolveAgentIdFromSessionKey,
-  sanitizeAgentId,
-} from "openclaw/plugin-sdk/routing";
+import { buildAgentMainSessionKey, sanitizeAgentId } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { resolveDefaultTelegramAccountId } from "./accounts.js";
 import {
   buildTelegramGroupPeerId,
   buildTelegramParentPeer,
@@ -64,32 +61,29 @@ export function resolveTelegramConversationRoute(params: {
     // Preserve the configured topic agent ID so topic-bound sessions stay stable
     // even when that agent is not present in the current config snapshot.
     const topicAgentId = sanitizeAgentId(rawTopicAgentId);
-    route = {
-      ...route,
-      agentId: topicAgentId,
-      sessionKey: buildAgentSessionKey({
+    const sessionKey = normalizeLowercaseStringOrEmpty(
+      buildAgentSessionKey({
         agentId: topicAgentId,
         channel: "telegram",
         accountId: params.accountId,
         peer: { kind: params.isGroup ? "group" : "direct", id: peerId },
         dmScope: params.cfg.session?.dmScope,
         identityLinks: params.cfg.session?.identityLinks,
-      }).toLowerCase(),
-      mainSessionKey: buildAgentMainSessionKey({
+      }),
+    );
+    const mainSessionKey = normalizeLowercaseStringOrEmpty(
+      buildAgentMainSessionKey({
         agentId: topicAgentId,
-      }).toLowerCase(),
+      }),
+    );
+    route = {
+      ...route,
+      agentId: topicAgentId,
+      sessionKey,
+      mainSessionKey,
       lastRoutePolicy: deriveLastRoutePolicy({
-        sessionKey: buildAgentSessionKey({
-          agentId: topicAgentId,
-          channel: "telegram",
-          accountId: params.accountId,
-          peer: { kind: params.isGroup ? "group" : "direct", id: peerId },
-          dmScope: params.cfg.session?.dmScope,
-          identityLinks: params.cfg.session?.identityLinks,
-        }).toLowerCase(),
-        mainSessionKey: buildAgentMainSessionKey({
-          agentId: topicAgentId,
-        }).toLowerCase(),
+        sessionKey,
+        mainSessionKey,
       }),
     };
     logVerbose(
@@ -118,32 +112,22 @@ export function resolveTelegramConversationRoute(params: {
         ? String(params.chatId)
         : undefined;
   if (threadBindingConversationId) {
-    const threadBinding = getSessionBindingService().resolveByConversation({
-      channel: "telegram",
-      accountId: params.accountId,
-      conversationId: threadBindingConversationId,
+    const runtimeRoute = resolveRuntimeConversationBindingRoute({
+      route,
+      conversation: {
+        channel: "telegram",
+        accountId: params.accountId,
+        conversationId: threadBindingConversationId,
+      },
     });
-    const boundSessionKey = threadBinding?.targetSessionKey?.trim();
-    if (threadBinding && boundSessionKey) {
-      if (!isPluginOwnedSessionBindingRecord(threadBinding)) {
-        route = {
-          ...route,
-          sessionKey: boundSessionKey,
-          agentId: resolveAgentIdFromSessionKey(boundSessionKey),
-          lastRoutePolicy: deriveLastRoutePolicy({
-            sessionKey: boundSessionKey,
-            mainSessionKey: route.mainSessionKey,
-          }),
-          matchedBy: "binding.channel",
-        };
-      }
+    route = runtimeRoute.route;
+    if (runtimeRoute.bindingRecord) {
       configuredBinding = null;
       configuredBindingSessionKey = "";
-      getSessionBindingService().touch(threadBinding.bindingId);
       logVerbose(
-        isPluginOwnedSessionBindingRecord(threadBinding)
-          ? `telegram: plugin-bound conversation ${threadBindingConversationId}`
-          : `telegram: routed via bound conversation ${threadBindingConversationId} -> ${boundSessionKey}`,
+        runtimeRoute.boundSessionKey
+          ? `telegram: routed via bound conversation ${threadBindingConversationId} -> ${runtimeRoute.boundSessionKey}`
+          : `telegram: plugin-bound conversation ${threadBindingConversationId}`,
       );
     }
   }
@@ -165,23 +149,27 @@ export function resolveTelegramConversationBaseSessionKey(params: {
   isGroup: boolean;
   senderId?: string | number | null;
 }): string {
+  const routeAccountId = normalizeAccountId(params.route.accountId);
+  const defaultAccountId = normalizeAccountId(resolveDefaultTelegramAccountId(params.cfg));
   const isNamedAccountFallback =
-    params.route.accountId !== DEFAULT_ACCOUNT_ID && params.route.matchedBy === "default";
+    routeAccountId !== defaultAccountId && params.route.matchedBy === "default";
   if (!isNamedAccountFallback || params.isGroup) {
     return params.route.sessionKey;
   }
-  return buildAgentSessionKey({
-    agentId: params.route.agentId,
-    channel: "telegram",
-    accountId: params.route.accountId,
-    peer: {
-      kind: "direct",
-      id: resolveTelegramDirectPeerId({
-        chatId: params.chatId,
-        senderId: params.senderId,
-      }),
-    },
-    dmScope: "per-account-channel-peer",
-    identityLinks: params.cfg.session?.identityLinks,
-  }).toLowerCase();
+  return normalizeLowercaseStringOrEmpty(
+    buildAgentSessionKey({
+      agentId: params.route.agentId,
+      channel: "telegram",
+      accountId: params.route.accountId,
+      peer: {
+        kind: "direct",
+        id: resolveTelegramDirectPeerId({
+          chatId: params.chatId,
+          senderId: params.senderId,
+        }),
+      },
+      dmScope: "per-account-channel-peer",
+      identityLinks: params.cfg.session?.identityLinks,
+    }),
+  );
 }

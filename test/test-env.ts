@@ -1,14 +1,29 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import JSON5 from "json5";
-import { migrateLegacyConfig } from "../src/commands/doctor/shared/legacy-config-migrate.js";
 
 type RestoreEntry = { key: string; value: string | undefined };
 
-const LIVE_EXTERNAL_AUTH_DIRS = [".claude", ".codex", ".minimax"] as const;
-const LIVE_EXTERNAL_AUTH_FILES = [".claude.json"] as const;
+const LIVE_EXTERNAL_AUTH_DIRS = [".claude/backups", ".gemini", ".minimax"] as const;
+const LIVE_EXTERNAL_AUTH_FILES = [
+  ".claude.json",
+  ".claude/.credentials.json",
+  ".claude/settings.json",
+  ".claude/settings.local.json",
+  ".codex/auth.json",
+  ".codex/config.toml",
+] as const;
+const requireFromHere = createRequire(import.meta.url);
+
+type LegacyConfigCompatApi =
+  typeof import("../src/commands/doctor/shared/legacy-config-migrate.js");
+type ConfigValidationApi = typeof import("../src/config/validation.js");
+
+let cachedLegacyConfigCompatApi: LegacyConfigCompatApi | undefined;
+let cachedConfigValidationApi: ConfigValidationApi | undefined;
 
 function isTruthyEnvValue(value: string | undefined): boolean {
   if (!value) {
@@ -34,6 +49,20 @@ function restoreEnv(entries: RestoreEntry[]): void {
       process.env[key] = value;
     }
   }
+}
+
+function loadLegacyConfigCompatApi(): LegacyConfigCompatApi {
+  cachedLegacyConfigCompatApi ??= requireFromHere(
+    "../src/commands/doctor/shared/legacy-config-migrate.js",
+  ) as LegacyConfigCompatApi;
+  return cachedLegacyConfigCompatApi;
+}
+
+function loadConfigValidationApi(): ConfigValidationApi {
+  cachedConfigValidationApi ??= requireFromHere(
+    "../src/config/validation.js",
+  ) as ConfigValidationApi;
+  return cachedConfigValidationApi;
 }
 
 function resolveHomeRelativePath(input: string, homeDir: string): string {
@@ -126,6 +155,10 @@ function resolveRestoreEntries(): RestoreEntry[] {
     {
       key: "OPENCLAW_ALLOW_SLOW_REPLY_TESTS",
       value: process.env.OPENCLAW_ALLOW_SLOW_REPLY_TESTS,
+    },
+    {
+      key: "OPENCLAW_LIVE_TEST_NORMALIZE_CONFIG",
+      value: process.env.OPENCLAW_LIVE_TEST_NORMALIZE_CONFIG,
     },
     { key: "HOME", value: process.env.HOME },
     { key: "USERPROFILE", value: process.env.USERPROFILE },
@@ -233,6 +266,15 @@ function copyFileIfExists(sourcePath: string, targetPath: string): void {
   if (!fs.existsSync(sourcePath)) {
     return;
   }
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(sourcePath);
+  } catch {
+    return;
+  }
+  if (!stat.isFile()) {
+    return;
+  }
   ensureParentDir(targetPath);
   fs.copyFileSync(sourcePath, targetPath);
 }
@@ -287,8 +329,19 @@ function sanitizeLiveConfig(raw: string): string {
       });
     }
 
-    const migrated = migrateLegacyConfig(parsed);
-    return `${JSON.stringify(migrated.config ?? parsed, null, 2)}\n`;
+    if (!isTruthyEnvValue(process.env.OPENCLAW_LIVE_TEST_NORMALIZE_CONFIG)) {
+      return `${JSON.stringify(parsed, null, 2)}\n`;
+    }
+
+    const { applyLegacyDoctorMigrations } = loadLegacyConfigCompatApi();
+    const migrated = applyLegacyDoctorMigrations(parsed);
+    if (!migrated.next) {
+      return `${JSON.stringify(parsed, null, 2)}\n`;
+    }
+
+    const { validateConfigObjectWithPlugins } = loadConfigValidationApi();
+    const validated = validateConfigObjectWithPlugins(migrated.next);
+    return `${JSON.stringify(validated.ok ? validated.config : migrated.next, null, 2)}\n`;
   } catch {
     return raw;
   }
@@ -330,6 +383,7 @@ function stageLiveTestState(params: {
   }
   const tempStateDir = path.join(params.tempHome, ".openclaw");
   fs.mkdirSync(tempStateDir, { recursive: true });
+  fs.mkdirSync(path.join(params.tempHome, ".gemini"), { recursive: true });
 
   const realConfigPath = params.env.OPENCLAW_CONFIG_PATH?.trim()
     ? resolveHomeRelativePath(params.env.OPENCLAW_CONFIG_PATH, params.realHome)
@@ -344,6 +398,10 @@ function stageLiveTestState(params: {
   }
 
   copyDirIfExists(path.join(realStateDir, "credentials"), path.join(tempStateDir, "credentials"));
+  copyDirIfExists(
+    path.join(realStateDir, "external-plugins"),
+    path.join(tempStateDir, "external-plugins"),
+  );
   copyLiveAuthProfiles(realStateDir, tempStateDir);
 
   for (const authDir of LIVE_EXTERNAL_AUTH_DIRS) {

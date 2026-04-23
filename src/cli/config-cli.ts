@@ -1,12 +1,12 @@
 import type { Command } from "commander";
 import JSON5 from "json5";
-import type { OpenClawConfig } from "../config/config.js";
 import { readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
 import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-format.js";
 import { CONFIG_PATH } from "../config/paths.js";
 import { isBlockedObjectKey } from "../config/prototype-keys.js";
 import { redactConfigObject } from "../config/redact-snapshot.js";
 import { readBestEffortRuntimeConfigSchema } from "../config/runtime-schema.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   coerceSecretRef,
   isValidEnvSecretRefId,
@@ -36,6 +36,7 @@ import {
   discoverConfigSecretTargets,
   resolveConfigSecretTargetByPath,
 } from "../secrets/target-registry.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
 import { shortenHomePath } from "../utils.js";
@@ -66,6 +67,7 @@ type ConfigSetOperation = {
   requestedPath: PathSegment[];
   setPath: PathSegment[];
   value: unknown;
+  schemaValidated?: boolean;
   touchedSecretTargetPath?: string;
   touchedProviderAlias?: string;
   assignedRef?: SecretRef;
@@ -104,6 +106,25 @@ class ConfigSetDryRunValidationError extends Error {
 
 function isIndexSegment(raw: string): boolean {
   return /^[0-9]+$/.test(raw);
+}
+
+function parseBracketPathSegment(raw: string, fullPath: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    throw new Error(`Invalid path (empty "[]"): ${fullPath}`);
+  }
+  if (trimmed.startsWith('"') || trimmed.startsWith("'")) {
+    try {
+      const parsed = JSON5.parse(trimmed) as unknown;
+      if (typeof parsed === "string" && parsed.trim()) {
+        return parsed;
+      }
+    } catch (err) {
+      throw new Error(`Invalid path bracket string (${trimmed}): ${fullPath}`, { cause: err });
+    }
+    throw new Error(`Invalid path bracket string (${trimmed}): ${fullPath}`);
+  }
+  return trimmed;
 }
 
 function parsePath(raw: string): PathSegment[] {
@@ -145,7 +166,7 @@ function parsePath(raw: string): PathSegment[] {
       if (!inside) {
         throw new Error(`Invalid path (empty "[]"): ${raw}`);
       }
-      parts.push(inside);
+      parts.push(parseBracketPathSegment(inside, raw));
       i = close + 1;
       continue;
     }
@@ -177,6 +198,10 @@ function parseValue(raw: string, opts: ConfigSetParseOpts): unknown {
 
 function hasOwnPathKey(value: Record<string, unknown>, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(value, key);
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function formatDoctorHint(message: string): string {
@@ -270,6 +295,149 @@ function setAtPath(root: Record<string, unknown>, path: PathSegment[], value: un
     throw new Error(`Cannot set "${last}" (parent is not an object)`);
   }
   (current as Record<string, unknown>)[last] = value;
+}
+
+function modelArrayIds(value: unknown): Set<string> | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const ids = new Set<string>();
+  for (const entry of value) {
+    if (!isPlainRecord(entry) || typeof entry.id !== "string" || !entry.id.trim()) {
+      return null;
+    }
+    ids.add(entry.id.trim());
+  }
+  return ids;
+}
+
+function mergeModelArrays(existing: unknown[], patch: unknown[]): unknown[] {
+  const merged = [...existing];
+  const indexById = new Map<string, number>();
+  for (const [index, entry] of merged.entries()) {
+    if (isPlainRecord(entry) && typeof entry.id === "string" && entry.id.trim()) {
+      indexById.set(entry.id.trim(), index);
+    }
+  }
+  for (const entry of patch) {
+    if (!isPlainRecord(entry) || typeof entry.id !== "string" || !entry.id.trim()) {
+      merged.push(entry);
+      continue;
+    }
+    const id = entry.id.trim();
+    const existingIndex = indexById.get(id);
+    if (existingIndex === undefined) {
+      indexById.set(id, merged.length);
+      merged.push(entry);
+      continue;
+    }
+    const existingEntry = merged[existingIndex];
+    merged[existingIndex] = isPlainRecord(existingEntry) ? { ...existingEntry, ...entry } : entry;
+  }
+  return merged;
+}
+
+function mergeConfigValue(existing: unknown, patch: unknown, path: PathSegment[]): unknown {
+  if (isProviderModelListPath(path) && Array.isArray(existing) && Array.isArray(patch)) {
+    return mergeModelArrays(existing, patch);
+  }
+  if (isPlainRecord(existing) && isPlainRecord(patch)) {
+    const next: Record<string, unknown> = { ...existing };
+    for (const [key, value] of Object.entries(patch)) {
+      next[key] =
+        hasOwnPathKey(next, key) && isPlainRecord(next[key]) && isPlainRecord(value)
+          ? mergeConfigValue(next[key], value, [...path, key])
+          : value;
+    }
+    return next;
+  }
+  throw new Error(`Cannot merge ${toDotPath(path)}; use --replace to replace intentionally.`);
+}
+
+function mergeAtPath(root: Record<string, unknown>, path: PathSegment[], value: unknown): void {
+  const existing = getAtPath(root, path);
+  if (!existing.found) {
+    setAtPath(root, path, value);
+    return;
+  }
+  setAtPath(root, path, mergeConfigValue(existing.value, value, path));
+}
+
+function isProviderModelListPath(path: PathSegment[]): boolean {
+  return (
+    path.length === 4 && path[0] === "models" && path[1] === "providers" && path[3] === "models"
+  );
+}
+
+function isProtectedMapReplacementPath(path: PathSegment[]): boolean {
+  if (path.join(".") === "agents.defaults.models") {
+    return true;
+  }
+  if (path.join(".") === "models.providers") {
+    return true;
+  }
+  if (path.length === 3 && path[0] === "models" && path[1] === "providers") {
+    return true;
+  }
+  if (path.join(".") === "plugins.entries") {
+    return true;
+  }
+  if (path.join(".") === "auth.profiles") {
+    return true;
+  }
+  return false;
+}
+
+function isProtectedArrayReplacementPath(path: PathSegment[]): boolean {
+  return isProviderModelListPath(path) || path.join(".") === "agents.list";
+}
+
+function formatRemovedEntries(entries: string[]): string {
+  const visible = entries.slice(0, 6);
+  const suffix =
+    entries.length > visible.length ? `, ... ${entries.length - visible.length} more` : "";
+  return `${visible.join(", ")}${suffix}`;
+}
+
+function assertNonDestructiveReplacement(params: {
+  root: Record<string, unknown>;
+  path: PathSegment[];
+  value: unknown;
+  allowReplace?: boolean;
+}): void {
+  if (params.allowReplace) {
+    return;
+  }
+  const existing = getAtPath(params.root, params.path);
+  if (!existing.found) {
+    return;
+  }
+  const pathLabel = toDotPath(params.path);
+  if (isProtectedMapReplacementPath(params.path) && isPlainRecord(existing.value)) {
+    if (!isPlainRecord(params.value)) {
+      return;
+    }
+    const nextKeys = new Set(Object.keys(params.value));
+    const removed = Object.keys(existing.value).filter((key) => !nextKeys.has(key));
+    if (removed.length > 0) {
+      throw new Error(
+        `Refusing to replace ${pathLabel}; it would remove existing entries: ${formatRemovedEntries(removed)}. Use --merge to merge object values or --replace to replace intentionally.`,
+      );
+    }
+  }
+  if (isProtectedArrayReplacementPath(params.path)) {
+    const existingIds = modelArrayIds(existing.value);
+    const nextIds = modelArrayIds(params.value);
+    if (!existingIds || !nextIds) {
+      return;
+    }
+    const removed = [...existingIds].filter((id) => !nextIds.has(id));
+    if (removed.length > 0) {
+      throw new Error(
+        `Refusing to replace ${pathLabel}; it would remove existing entries: ${formatRemovedEntries(removed)}. Use --merge to merge by id or --replace to replace intentionally.`,
+      );
+    }
+  }
 }
 
 function unsetAtPath(root: Record<string, unknown>, path: PathSegment[]): boolean {
@@ -370,7 +538,7 @@ function pruneInactiveGatewayAuthCredentials(params: {
     return [];
   }
   const auth = authRaw as Record<string, unknown>;
-  const mode = typeof auth.mode === "string" ? auth.mode.trim() : "";
+  const mode = normalizeOptionalString(auth.mode) ?? "";
 
   const removedPaths: string[] = [];
   const remove = (key: "token" | "password") => {
@@ -544,6 +712,7 @@ function buildProviderFromBuilder(opts: ConfigSetOptions): SecretProviderConfig 
       ...(mode ? { mode } : {}),
       ...(timeoutMs !== undefined ? { timeoutMs } : {}),
       ...(maxBytes !== undefined ? { maxBytes } : {}),
+      ...(opts.providerAllowInsecurePath ? { allowInsecurePath: true } : {}),
     };
   } else {
     const command = opts.providerCommand?.trim();
@@ -614,6 +783,7 @@ function buildRefAssignmentOperation(params: {
       requestedPath: params.requestedPath,
       setPath: resolved.refPathSegments,
       value: params.ref,
+      schemaValidated: true,
       touchedSecretTargetPath: toDotPath(resolved.pathSegments),
       assignedRef: params.ref,
       ...(resolved.providerId ? { touchedProviderAlias: resolved.providerId } : {}),
@@ -624,6 +794,7 @@ function buildRefAssignmentOperation(params: {
     requestedPath: params.requestedPath,
     setPath: params.requestedPath,
     value: params.ref,
+    schemaValidated: true,
     touchedSecretTargetPath: resolved
       ? toDotPath(resolved.pathSegments)
       : toDotPath(params.requestedPath),
@@ -692,6 +863,7 @@ function parseBatchOperations(entries: ConfigSetBatchEntry[]): ConfigSetOperatio
         requestedPath: path,
         setPath: path,
         value: validated.data,
+        schemaValidated: true,
         touchedProviderAlias: alias,
       });
       continue;
@@ -771,6 +943,7 @@ function buildSingleSetOperations(params: {
         requestedPath: parsedPath,
         setPath: parsedPath,
         value: provider,
+        schemaValidated: true,
         touchedProviderAlias: alias,
       },
     ];
@@ -915,8 +1088,13 @@ function selectDryRunRefsForResolution(params: { refs: SecretRef[]; allowExecInD
   return { refsToResolve, skippedExecRefs };
 }
 
-function collectDryRunSchemaErrors(config: OpenClawConfig): ConfigSetDryRunError[] {
-  const validated = validateConfigObjectRaw(config);
+function collectDryRunSchemaErrors(params: {
+  config: OpenClawConfig;
+  operations: ReadonlyArray<ConfigSetOperation>;
+}): ConfigSetDryRunError[] {
+  const validated = validateConfigObjectRaw(params.config, {
+    touchedPaths: params.operations.map((operation) => operation.setPath),
+  });
   if (validated.ok) {
     return [];
   }
@@ -997,6 +1175,9 @@ export async function runConfigSet(opts: {
     if (opts.cliOptions.allowExec && !opts.cliOptions.dryRun) {
       throw modeError("--allow-exec requires --dry-run.");
     }
+    if (opts.cliOptions.merge && opts.cliOptions.replace) {
+      throw modeError("choose either --merge or --replace, not both.");
+    }
 
     const batchEntries = parseBatchSource(opts.cliOptions);
     if (batchEntries) {
@@ -1017,7 +1198,17 @@ export async function runConfigSet(opts: {
     // This prevents runtime defaults from leaking into the written config file (issue #6070)
     const next = structuredClone(snapshot.resolved) as Record<string, unknown>;
     for (const operation of operations) {
-      setAtPath(next, operation.setPath, operation.value);
+      if (opts.cliOptions.merge) {
+        mergeAtPath(next, operation.setPath, operation.value);
+      } else {
+        assertNonDestructiveReplacement({
+          root: next,
+          path: operation.setPath,
+          value: operation.value,
+          allowReplace: opts.cliOptions.replace,
+        });
+        setAtPath(next, operation.setPath, operation.value);
+      }
     }
     const removedGatewayAuthPaths = pruneInactiveGatewayAuthCredentials({
       root: next,
@@ -1032,6 +1223,9 @@ export async function runConfigSet(opts: {
     if (opts.cliOptions.dryRun) {
       const hasJsonMode = operations.some((operation) => operation.inputMode === "json");
       const hasBuilderMode = operations.some((operation) => operation.inputMode === "builder");
+      const requiresFullSchemaValidation = operations.some(
+        (operation) => operation.inputMode === "json" && operation.schemaValidated !== true,
+      );
       const refs =
         hasJsonMode || hasBuilderMode
           ? collectDryRunRefs({
@@ -1044,7 +1238,7 @@ export async function runConfigSet(opts: {
         allowExecInDryRun: Boolean(opts.cliOptions.allowExec),
       });
       const errors: ConfigSetDryRunError[] = [];
-      if (!hasJsonMode && policyIssueLines.length > 0) {
+      if ((!hasJsonMode || !requiresFullSchemaValidation) && policyIssueLines.length > 0) {
         errors.push(
           ...policyIssueLines.map((message) => ({
             kind: "schema" as const,
@@ -1052,8 +1246,13 @@ export async function runConfigSet(opts: {
           })),
         );
       }
-      if (hasJsonMode) {
-        errors.push(...collectDryRunSchemaErrors(nextConfig));
+      if (requiresFullSchemaValidation) {
+        errors.push(
+          ...collectDryRunSchemaErrors({
+            config: nextConfig,
+            operations,
+          }),
+        );
       }
       if (hasJsonMode || hasBuilderMode) {
         errors.push(
@@ -1076,7 +1275,7 @@ export async function runConfigSet(opts: {
         configPath: shortenHomePath(snapshot.path),
         inputModes: [...new Set(operations.map((operation) => operation.inputMode))],
         checks: {
-          schema: hasJsonMode || policyIssueLines.length > 0,
+          schema: requiresFullSchemaValidation || policyIssueLines.length > 0,
           resolvability: hasJsonMode || hasBuilderMode,
           resolvabilityComplete:
             (hasJsonMode || hasBuilderMode) && selectedDryRunRefs.skippedExecRefs.length === 0,
@@ -1132,7 +1331,7 @@ export async function runConfigSet(opts: {
     if (removedGatewayAuthPaths.length > 0) {
       runtime.log(
         info(
-          `Removed inactive ${removedGatewayAuthPaths.join(", ")} for gateway.auth.mode=${String(nextConfig.gateway?.auth?.mode ?? "<unset>")}.`,
+          `Removed inactive ${removedGatewayAuthPaths.join(", ")} for gateway.auth.mode=${nextConfig.gateway?.auth?.mode ?? "<unset>"}.`,
         ),
       );
     }
@@ -1351,6 +1550,12 @@ export function registerConfigCli(program: Command) {
       "Dry-run only: allow exec SecretRef resolvability checks (may execute provider commands)",
       false,
     )
+    .option("--merge", "Merge object/map values instead of replacing the target path", false)
+    .option(
+      "--replace",
+      "Allow full replacement of protected map/list paths such as agents.defaults.models",
+      false,
+    )
     .option("--ref-provider <alias>", "SecretRef builder: provider alias")
     .option("--ref-source <source>", "SecretRef builder: source (env|file|exec)")
     .option("--ref-id <id>", "SecretRef builder: ref id")
@@ -1395,7 +1600,7 @@ export function registerConfigCli(program: Command) {
     )
     .option(
       "--provider-allow-insecure-path",
-      "Provider builder (exec): bypass strict path permission checks",
+      "Provider builder (file|exec): bypass strict path permission checks",
       false,
     )
     .option(

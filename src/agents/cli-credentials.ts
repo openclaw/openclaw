@@ -2,6 +2,7 @@ import { execFileSync, execSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { formatErrorMessage } from "../infra/errors.js";
 import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveUserPath } from "../utils.js";
@@ -55,6 +56,7 @@ export type CodexCliCredential = {
   refresh: string;
   expires: number;
   accountId?: string;
+  idToken?: string;
 };
 
 export type MiniMaxCliCredential = {
@@ -288,6 +290,7 @@ function readCodexKeychainCredentials(options?: {
       : Date.now() + 60 * 60 * 1000;
     const expires = decodeJwtExpiryMs(accessToken) ?? fallbackExpiry;
     const accountId = typeof tokens?.account_id === "string" ? tokens.account_id : undefined;
+    const idToken = typeof tokens?.id_token === "string" ? tokens.id_token : undefined;
 
     log.info("read codex credentials from keychain", {
       source: "keychain",
@@ -301,6 +304,7 @@ function readCodexKeychainCredentials(options?: {
       refresh: refreshToken,
       expires,
       accountId,
+      idToken,
     };
   } catch {
     return null;
@@ -461,7 +465,7 @@ export function writeClaudeCliKeychainCredentials(
     return true;
   } catch (error) {
     log.warn("failed to write credentials to claude cli keychain", {
-      error: error instanceof Error ? error.message : String(error),
+      error: formatErrorMessage(error),
     });
     return false;
   }
@@ -503,7 +507,7 @@ export function writeClaudeCliFileCredentials(
     return true;
   } catch (error) {
     log.warn("failed to write credentials to claude cli file", {
-      error: error instanceof Error ? error.message : String(error),
+      error: formatErrorMessage(error),
     });
     return false;
   }
@@ -541,6 +545,9 @@ function buildUpdatedCodexAuthRecord(
     ...existingTokens,
     access_token: newCredentials.access,
     refresh_token: newCredentials.refresh,
+    ...(typeof newCredentials.idToken === "string" && newCredentials.idToken.trim().length > 0
+      ? { id_token: newCredentials.idToken }
+      : {}),
     ...(typeof newCredentials.accountId === "string" && newCredentials.accountId.trim().length > 0
       ? { account_id: newCredentials.accountId }
       : {}),
@@ -584,7 +591,7 @@ export function writeCodexCliKeychainCredentials(
     return true;
   } catch (error) {
     log.warn("failed to write credentials to codex cli keychain", {
-      error: error instanceof Error ? error.message : String(error),
+      error: formatErrorMessage(error),
     });
     return false;
   }
@@ -614,7 +621,7 @@ export function writeCodexCliFileCredentials(
     return true;
   } catch (error) {
     log.warn("failed to write credentials to codex cli file", {
-      error: error instanceof Error ? error.message : String(error),
+      error: formatErrorMessage(error),
     });
     return false;
   }
@@ -697,6 +704,7 @@ export function readCodexCliCredentials(options?: {
     refresh: refreshToken,
     expires,
     accountId: typeof tokens.account_id === "string" ? tokens.account_id : undefined,
+    idToken: typeof tokens.id_token === "string" ? tokens.id_token : undefined,
   };
 }
 

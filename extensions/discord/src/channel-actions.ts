@@ -1,4 +1,3 @@
-import { Type } from "@sinclair/typebox";
 import {
   createUnionActionGate,
   listTokenSourcedAccounts,
@@ -9,12 +8,13 @@ import type {
   ChannelMessageToolDiscovery,
 } from "openclaw/plugin-sdk/channel-contract";
 import type { DiscordActionConfig } from "openclaw/plugin-sdk/config-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
 import {
   createDiscordActionGate,
   listEnabledDiscordAccounts,
   resolveDiscordAccount,
 } from "./accounts.js";
-import { createDiscordMessageToolComponentsSchema } from "./message-tool-schema.js";
 
 let discordChannelActionsRuntimePromise:
   | Promise<typeof import("./channel-actions.runtime.js")>
@@ -155,25 +155,19 @@ function describeDiscordMessageTool({
   }
   return {
     actions: Array.from(actions),
-    capabilities: ["interactive", "components"],
-    schema: {
-      properties: {
-        components: Type.Optional(createDiscordMessageToolComponentsSchema()),
-      },
-    },
+    capabilities: ["presentation"],
   };
 }
 
 export const discordMessageActions: ChannelMessageActionAdapter = {
   describeMessageTool: describeDiscordMessageTool,
   extractToolSend: ({ args }) => {
-    const action = typeof args.action === "string" ? args.action.trim() : "";
+    const action = normalizeOptionalString(args.action) ?? "";
     if (action === "sendMessage") {
-      const to = typeof args.to === "string" ? args.to : undefined;
-      return to ? { to } : null;
+      return extractToolSend(args, "sendMessage");
     }
     if (action === "threadReply") {
-      const channelId = typeof args.channelId === "string" ? args.channelId.trim() : "";
+      const channelId = normalizeOptionalString(args.channelId) ?? "";
       return channelId ? { to: `channel:${channelId}` } : null;
     }
     return null;

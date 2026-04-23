@@ -6,6 +6,10 @@ export {
   expectChannelInboundContextContract,
   primeChannelOutboundSendMock,
 } from "../channels/plugins/contracts/test-helpers.js";
+export {
+  installChannelOutboundPayloadContractSuite,
+  type OutboundPayloadHarnessParams,
+} from "../channels/plugins/contracts/outbound-payload-testkit.js";
 export { buildDispatchInboundCaptureMock } from "../channels/plugins/contracts/inbound-testkit.js";
 export {
   createCliRuntimeCapture,
@@ -16,7 +20,8 @@ export {
 } from "../cli/test-runtime-capture.js";
 export type { CliMockOutputRuntime, CliRuntimeCapture } from "../cli/test-runtime-capture.js";
 export { setDefaultChannelPluginRegistryForTests } from "../commands/channel-test-registry.js";
-export type { ChannelAccountSnapshot, ChannelGatewayContext } from "../channels/plugins/types.js";
+export type { ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
+export type { ChannelGatewayContext } from "../channels/plugins/types.adapters.js";
 export type { OpenClawConfig } from "../config/config.js";
 export { callGateway } from "../gateway/call.js";
 export { createEmptyPluginRegistry } from "../plugins/registry.js";
@@ -51,11 +56,6 @@ export { installCommonResolveTargetErrorCases } from "../test-helpers/resolve-ta
 export { sanitizeTerminalText } from "../terminal/safe-text.js";
 export { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 export { countLines, hasBalancedFences } from "../test-utils/chunk-test-helpers.js";
-export {
-  loadBundledPluginPublicSurfaceSync,
-  loadBundledPluginTestApiSync,
-  resolveRelativeBundledPluginPublicModuleId,
-} from "../test-utils/bundled-plugin-public-surface.js";
 export { expectGeneratedTokenPersistedToGatewayAuth } from "../test-utils/auth-token-assertions.js";
 export { captureEnv, withEnv, withEnvAsync } from "../test-utils/env.js";
 export { withFetchPreconnect, type FetchMock } from "../test-utils/fetch-mock.js";

@@ -2,6 +2,7 @@ import {
   createResolvedApproverActionAuthAdapter,
   resolveApprovalApprovers,
 } from "openclaw/plugin-sdk/approval-auth-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { resolveGoogleChatAccount } from "./accounts.js";
 import { isGoogleChatUserTarget, normalizeGoogleChatTarget } from "./targets.js";
 
@@ -10,7 +11,7 @@ function normalizeGoogleChatApproverId(value: string | number): string | undefin
   if (!normalized || !isGoogleChatUserTarget(normalized)) {
     return undefined;
   }
-  const suffix = normalized.slice("users/".length).trim().toLowerCase();
+  const suffix = normalizeLowercaseStringOrEmpty(normalized.slice("users/".length));
   if (!suffix || suffix.includes("@")) {
     return undefined;
   }

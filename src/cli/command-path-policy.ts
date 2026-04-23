@@ -1,3 +1,4 @@
+import { isGatewayConfigBypassCommandPath } from "../gateway/explicit-connection-policy.js";
 import { cliCommandCatalog, type CliCommandPathPolicy } from "./command-catalog.js";
 import { matchesCommandPath } from "./command-path-matches.js";
 
@@ -18,10 +19,10 @@ export function resolveCliCommandPathPolicy(commandPath: string[]): CliCommandPa
     if (!matchesCommandPath(commandPath, entry.commandPath, { exact: entry.exact })) {
       continue;
     }
-    resolvedPolicy = {
-      ...resolvedPolicy,
-      ...entry.policy,
-    };
+    Object.assign(resolvedPolicy, entry.policy);
+  }
+  if (isGatewayConfigBypassCommandPath(commandPath)) {
+    resolvedPolicy.bypassConfigGuard = true;
   }
   return resolvedPolicy;
 }

@@ -4,9 +4,15 @@ const { resolveProviderReasoningOutputModeWithPluginMock } = vi.hoisted(() => ({
   resolveProviderReasoningOutputModeWithPluginMock: vi.fn(),
 }));
 
-vi.mock("../plugins/provider-runtime.js", () => ({
-  resolveProviderReasoningOutputModeWithPlugin: resolveProviderReasoningOutputModeWithPluginMock,
-}));
+vi.mock("../plugins/provider-runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("../plugins/provider-runtime.js")>(
+    "../plugins/provider-runtime.js",
+  );
+  return {
+    ...actual,
+    resolveProviderReasoningOutputModeWithPlugin: resolveProviderReasoningOutputModeWithPluginMock,
+  };
+});
 
 import { isReasoningTagProvider, resolveReasoningOutputMode } from "./provider-utils.js";
 

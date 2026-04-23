@@ -1,3 +1,5 @@
+import { isRecord } from "./attachments/shared.js";
+
 export function formatUnknownError(err: unknown): string {
   if (err instanceof Error) {
     return err.message;
@@ -25,10 +27,6 @@ export function formatUnknownError(err: unknown): string {
   } catch {
     return "unknown error";
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function extractStatusCode(err: unknown): number | null {

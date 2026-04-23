@@ -3,11 +3,13 @@ import type {
   ChannelDirectoryEntry,
   ChannelDirectoryEntryKind,
   ChannelId,
-} from "../../channels/plugins/types.js";
-import type { OpenClawConfig } from "../../config/config.js";
+} from "../../channels/plugins/types.public.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { buildDirectoryCacheKey, DirectoryCache } from "./directory-cache.js";
 import { ambiguousTargetError, unknownTargetError } from "./target-errors.js";
+import { maybeResolveIdLikeTarget, type ResolvedIdLikeTarget } from "./target-id-resolution.js";
 import {
   buildTargetResolverSignature,
   looksLikeTargetId,
@@ -33,10 +35,12 @@ export type ResolveMessagingTargetResult =
   | { ok: false; error: Error; candidates?: ChannelDirectoryEntry[] };
 
 function asResolvedMessagingTarget(
-  target: Awaited<ReturnType<typeof maybeResolvePluginMessagingTarget>>,
+  target: Awaited<ReturnType<typeof maybeResolvePluginMessagingTarget>> | ResolvedIdLikeTarget,
 ): ResolvedMessagingTarget | undefined {
   return target;
 }
+
+export { maybeResolveIdLikeTarget } from "./target-id-resolution.js";
 
 export async function resolveChannelTarget(params: {
   cfg: OpenClawConfig;
@@ -47,21 +51,6 @@ export async function resolveChannelTarget(params: {
   runtime?: RuntimeEnv;
 }): Promise<ResolveMessagingTargetResult> {
   return resolveMessagingTarget(params);
-}
-
-export async function maybeResolveIdLikeTarget(params: {
-  cfg: OpenClawConfig;
-  channel: ChannelId;
-  input: string;
-  accountId?: string | null;
-  preferredKind?: TargetResolveKind;
-}): Promise<ResolvedMessagingTarget | undefined> {
-  return asResolvedMessagingTarget(
-    await maybeResolvePluginMessagingTarget({
-      ...params,
-      requireIdLike: true,
-    }),
-  );
 }
 
 const CACHE_TTL_MS = 30 * 60 * 1000;
@@ -86,7 +75,7 @@ export function resetDirectoryCache(params?: { channel?: ChannelId; accountId?: 
 }
 
 function normalizeQuery(value: string): string {
-  return value.trim().toLowerCase();
+  return normalizeLowercaseStringOrEmpty(value);
 }
 
 function stripTargetPrefixes(value: string): string {
@@ -112,7 +101,7 @@ export function formatTargetDisplay(params: {
   }
 
   const trimmedTarget = params.target.trim();
-  const lowered = trimmedTarget.toLowerCase();
+  const lowered = normalizeLowercaseStringOrEmpty(trimmedTarget);
   const display = params.display?.trim();
   const kind =
     params.kind ??
@@ -139,7 +128,7 @@ export function formatTargetDisplay(params: {
   }
 
   const channelPrefix = `${params.channel}:`;
-  const withoutProvider = trimmedTarget.toLowerCase().startsWith(channelPrefix)
+  const withoutProvider = lowered.startsWith(channelPrefix)
     ? trimmedTarget.slice(channelPrefix.length)
     : trimmedTarget;
 

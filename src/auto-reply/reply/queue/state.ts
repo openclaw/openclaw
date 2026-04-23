@@ -1,4 +1,5 @@
 import { resolveGlobalMap } from "../../../shared/global-singleton.js";
+import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 import { applyQueueRuntimeSettings } from "../../../utils/queue-helpers.js";
 import type { FollowupRun, QueueDropPolicy, QueueMode, QueueSettings } from "./types.js";
 
@@ -123,8 +124,9 @@ export function refreshQueuedFollowupSession(params: {
     }
     if (shouldRewriteSession && run.sessionId === params.previousSessionId) {
       run.sessionId = params.nextSessionId!;
-      if (params.nextSessionFile?.trim()) {
-        run.sessionFile = params.nextSessionFile;
+      const nextSessionFile = normalizeOptionalString(params.nextSessionFile);
+      if (nextSessionFile) {
+        run.sessionFile = nextSessionFile;
       }
     }
     if (shouldRewriteSelection) {
@@ -135,7 +137,7 @@ export function refreshQueuedFollowupSession(params: {
         run.model = params.nextModel;
       }
       if (Object.hasOwn(params, "nextAuthProfileId")) {
-        run.authProfileId = params.nextAuthProfileId?.trim() || undefined;
+        run.authProfileId = normalizeOptionalString(params.nextAuthProfileId);
       }
       if (Object.hasOwn(params, "nextAuthProfileIdSource")) {
         run.authProfileIdSource = run.authProfileId ? params.nextAuthProfileIdSource : undefined;

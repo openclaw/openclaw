@@ -1,5 +1,6 @@
 import { defineCommandDescriptorCatalog } from "./command-descriptor-utils.js";
 import type { NamedCommandDescriptor } from "./command-group-descriptors.js";
+import { isPrivateQaCliEnabled } from "./private-qa-cli.js";
 
 export type SubCliDescriptor = NamedCommandDescriptor;
 
@@ -23,8 +24,23 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
     hasSubcommands: true,
   },
   {
+    name: "infer",
+    description: "Run provider-backed inference commands",
+    hasSubcommands: true,
+  },
+  {
+    name: "capability",
+    description: "Run provider-backed inference commands (fallback alias: infer)",
+    hasSubcommands: true,
+  },
+  {
     name: "approvals",
     description: "Manage exec approvals (gateway or node host)",
+    hasSubcommands: true,
+  },
+  {
+    name: "exec-policy",
+    description: "Show or synchronize requested exec policy with host approvals",
     hasSubcommands: true,
   },
   {
@@ -53,6 +69,16 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
     hasSubcommands: false,
   },
   {
+    name: "terminal",
+    description: "Open a local terminal UI (alias for tui --local)",
+    hasSubcommands: false,
+  },
+  {
+    name: "chat",
+    description: "Open a local terminal UI (alias for tui --local)",
+    hasSubcommands: false,
+  },
+  {
     name: "cron",
     description: "Manage cron jobs via the Gateway scheduler",
     hasSubcommands: true,
@@ -70,6 +96,11 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
   {
     name: "qa",
     description: "Run QA scenarios and launch the private QA debugger UI",
+    hasSubcommands: true,
+  },
+  {
+    name: "proxy",
+    description: "Run the OpenClaw debug proxy and inspect captured traffic",
     hasSubcommands: true,
   },
   {
@@ -99,7 +130,7 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
   },
   {
     name: "plugins",
-    description: "Manage OpenClaw plugins and extensions",
+    description: "Manage OpenClaw plugins",
     hasSubcommands: true,
   },
   {
@@ -142,9 +173,17 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
 export const SUB_CLI_DESCRIPTORS = subCliCommandCatalog.descriptors;
 
 export function getSubCliEntries(): ReadonlyArray<SubCliDescriptor> {
-  return subCliCommandCatalog.getDescriptors();
+  const descriptors = subCliCommandCatalog.getDescriptors();
+  if (isPrivateQaCliEnabled()) {
+    return descriptors;
+  }
+  return descriptors.filter((descriptor) => descriptor.name !== "qa");
 }
 
 export function getSubCliCommandsWithSubcommands(): string[] {
-  return subCliCommandCatalog.getCommandsWithSubcommands();
+  const commands = subCliCommandCatalog.getCommandsWithSubcommands();
+  if (isPrivateQaCliEnabled()) {
+    return commands;
+  }
+  return commands.filter((command) => command !== "qa");
 }

@@ -1,61 +1,14 @@
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
-import { resolveProviderRequestCapabilities } from "openclaw/plugin-sdk/provider-http";
-import { applyMistralModelCompat, MISTRAL_MODEL_COMPAT_PATCH } from "./api.js";
+import { applyMistralModelCompat, MISTRAL_SMALL_LATEST_ID } from "./api.js";
 import { mistralMediaUnderstandingProvider } from "./media-understanding-provider.js";
+import { mistralMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
 import { applyMistralConfig, MISTRAL_DEFAULT_MODEL_REF } from "./onboard.js";
 import { buildMistralProvider } from "./provider-catalog.js";
+import { contributeMistralResolvedModelCompat } from "./provider-compat.js";
+import { buildMistralRealtimeTranscriptionProvider } from "./realtime-transcription-provider.js";
 
 const PROVIDER_ID = "mistral";
-const MISTRAL_MODEL_HINTS = [
-  "mistral",
-  "mistralai",
-  "mixtral",
-  "codestral",
-  "pixtral",
-  "devstral",
-  "ministral",
-] as const;
-
-function isMistralModelHint(modelId: string): boolean {
-  const normalized = modelId.trim().toLowerCase();
-  return MISTRAL_MODEL_HINTS.some(
-    (hint) =>
-      normalized === hint ||
-      normalized.startsWith(`${hint}/`) ||
-      normalized.startsWith(`${hint}-`) ||
-      normalized.startsWith(`${hint}:`),
-  );
-}
-
-function shouldContributeMistralCompat(params: {
-  modelId: string;
-  model: { api?: unknown; baseUrl?: unknown; provider?: unknown; compat?: unknown };
-}): boolean {
-  if (params.model.api !== "openai-completions") {
-    return false;
-  }
-
-  const capabilities = resolveProviderRequestCapabilities({
-    provider: typeof params.model.provider === "string" ? params.model.provider : undefined,
-    api: "openai-completions",
-    baseUrl: typeof params.model.baseUrl === "string" ? params.model.baseUrl : undefined,
-    capability: "llm",
-    transport: "stream",
-    modelId: params.modelId,
-    compat:
-      params.model.compat && typeof params.model.compat === "object"
-        ? (params.model.compat as { supportsStore?: boolean })
-        : undefined,
-  });
-
-  return (
-    capabilities.knownProviderFamily === "mistral" ||
-    capabilities.endpointClass === "mistral-public" ||
-    isMistralModelHint(params.modelId)
-  );
-}
-
-function buildMistralReplayPolicy() {
+export function buildMistralReplayPolicy() {
   return {
     sanitizeToolCallIds: true,
     toolCallIdMode: "strict9" as const,
@@ -93,10 +46,16 @@ export default defineSingleProviderPluginEntry({
       /\bmistral\b.*(?:input.*too long|token limit.*exceeded)/i.test(errorMessage),
     normalizeResolvedModel: ({ model }) => applyMistralModelCompat(model),
     contributeResolvedModelCompat: ({ modelId, model }) =>
-      shouldContributeMistralCompat({ modelId, model }) ? MISTRAL_MODEL_COMPAT_PATCH : undefined,
+      contributeMistralResolvedModelCompat({ modelId, model }),
+    resolveThinkingProfile: ({ modelId }) =>
+      modelId === MISTRAL_SMALL_LATEST_ID
+        ? { levels: [{ id: "off" }, { id: "high" }], defaultLevel: "off" }
+        : undefined,
     buildReplayPolicy: () => buildMistralReplayPolicy(),
   },
   register(api) {
+    api.registerMemoryEmbeddingProvider(mistralMemoryEmbeddingProviderAdapter);
     api.registerMediaUnderstandingProvider(mistralMediaUnderstandingProvider);
+    api.registerRealtimeTranscriptionProvider(buildMistralRealtimeTranscriptionProvider());
   },
 });

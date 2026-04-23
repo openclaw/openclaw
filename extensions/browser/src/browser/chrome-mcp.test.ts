@@ -1,8 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  clickChromeMcpElement,
   buildChromeMcpArgs,
   evaluateChromeMcpScript,
   listChromeMcpTabs,
+  navigateChromeMcpPage,
   openChromeMcpTab,
   resetChromeMcpSessionsForTest,
   setChromeMcpSessionFactoryForTest,
@@ -20,22 +22,33 @@ type ChromeMcpSessionFactory = Exclude<
 type ChromeMcpSession = Awaited<ReturnType<ChromeMcpSessionFactory>>;
 
 function createFakeSession(): ChromeMcpSession {
-  const callTool = vi.fn(async ({ name }: ToolCall) => {
+  let currentUrl =
+    "https://developer.chrome.com/blog/chrome-devtools-mcp-debug-your-browser-session";
+  let createdPageOpen = false;
+  const readUrlArg = (value: unknown, fallback: string) =>
+    typeof value === "string" && value.trim() ? value : fallback;
+  const callTool = vi.fn(async ({ name, arguments: args }: ToolCall) => {
     if (name === "list_pages") {
+      const pageLines = [
+        "## Pages",
+        `1: ${currentUrl} [selected]`,
+        "2: https://github.com/openclaw/openclaw/pull/45318",
+      ];
+      if (createdPageOpen) {
+        pageLines.push(`3: ${currentUrl}`);
+      }
       return {
         content: [
           {
             type: "text",
-            text: [
-              "## Pages",
-              "1: https://developer.chrome.com/blog/chrome-devtools-mcp-debug-your-browser-session [selected]",
-              "2: https://github.com/openclaw/openclaw/pull/45318",
-            ].join("\n"),
+            text: pageLines.join("\n"),
           },
         ],
       };
     }
     if (name === "new_page") {
+      currentUrl = readUrlArg(args?.url, "about:blank");
+      createdPageOpen = true;
       return {
         content: [
           {
@@ -44,11 +57,15 @@ function createFakeSession(): ChromeMcpSession {
               "## Pages",
               "1: https://developer.chrome.com/blog/chrome-devtools-mcp-debug-your-browser-session",
               "2: https://github.com/openclaw/openclaw/pull/45318",
-              "3: https://example.com/ [selected]",
+              `3: ${currentUrl} [selected]`,
             ].join("\n"),
           },
         ],
       };
+    }
+    if (name === "navigate_page") {
+      currentUrl = readUrlArg(args?.url, currentUrl);
+      return { content: [{ type: "text", text: "navigated" }] };
     }
     if (name === "evaluate_script") {
       return {
@@ -80,6 +97,10 @@ function createFakeSession(): ChromeMcpSession {
 describe("chrome MCP page parsing", () => {
   beforeEach(async () => {
     await resetChromeMcpSessionsForTest();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("parses list_pages text responses when structuredContent is missing", async () => {
@@ -128,6 +149,28 @@ describe("chrome MCP page parsing", () => {
       url: "https://example.com/",
       type: "page",
     });
+  });
+
+  it("opens about:blank directly without an extra navigate", async () => {
+    const session = createFakeSession();
+    const factory: ChromeMcpSessionFactory = async () => session;
+    setChromeMcpSessionFactoryForTest(factory);
+
+    const tab = await openChromeMcpTab("chrome-live", "about:blank");
+
+    expect(tab).toEqual({
+      targetId: "3",
+      title: "",
+      url: "about:blank",
+      type: "page",
+    });
+    expect(session.client.callTool).toHaveBeenCalledWith({
+      name: "new_page",
+      arguments: { url: "about:blank", timeout: 5000 },
+    });
+    expect(session.client.callTool).not.toHaveBeenCalledWith(
+      expect.objectContaining({ name: "navigate_page" }),
+    );
   });
 
   it("parses evaluate_script text responses when structuredContent is missing", async () => {
@@ -263,6 +306,63 @@ describe("chrome MCP page parsing", () => {
     expect(tabs).toHaveLength(2);
   });
 
+  it("times out a stuck click and recovers on the next call", async () => {
+    let factoryCalls = 0;
+    const factory: ChromeMcpSessionFactory = async () => {
+      factoryCalls += 1;
+      const session = createFakeSession();
+      const callTool = vi.fn(async ({ name }: ToolCall) => {
+        if (name === "click") {
+          return await new Promise(() => {});
+        }
+        if (name === "list_pages") {
+          return {
+            content: [{ type: "text", text: "## Pages\n1: https://example.com [selected]" }],
+          };
+        }
+        throw new Error(`unexpected tool ${name}`);
+      });
+      session.client.callTool = callTool as typeof session.client.callTool;
+      return session;
+    };
+    setChromeMcpSessionFactoryForTest(factory);
+
+    await expect(
+      clickChromeMcpElement({
+        profileName: "chrome-live",
+        targetId: "1",
+        uid: "btn-1",
+        timeoutMs: 25,
+      }),
+    ).rejects.toThrow(/timed out/i);
+
+    const tabs = await listChromeMcpTabs("chrome-live");
+    expect(factoryCalls).toBe(2);
+    expect(tabs).toHaveLength(1);
+  });
+
+  it("does not dispatch a click when the signal is already aborted", async () => {
+    const session = createFakeSession();
+    const callTool = vi.fn(async (_call: ToolCall) => {
+      throw new Error("callTool should not run");
+    });
+    session.client.callTool = callTool as typeof session.client.callTool;
+    setChromeMcpSessionFactoryForTest(async () => session);
+    const ctrl = new AbortController();
+    ctrl.abort(new Error("aborted before click"));
+
+    await expect(
+      clickChromeMcpElement({
+        profileName: "chrome-live",
+        targetId: "1",
+        uid: "btn-1",
+        signal: ctrl.signal,
+      }),
+    ).rejects.toThrow(/aborted before click/i);
+
+    expect(callTool).not.toHaveBeenCalled();
+  });
+
   it("creates a fresh session when userDataDir changes for the same profile", async () => {
     const createdSessions: ChromeMcpSession[] = [];
     const closeMocks: Array<ReturnType<typeof vi.fn>> = [];
@@ -303,6 +403,66 @@ describe("chrome MCP page parsing", () => {
 
     await expect(listChromeMcpTabs("chrome-live")).rejects.toThrow(/attach failed/);
 
+    const tabs = await listChromeMcpTabs("chrome-live");
+    expect(factoryCalls).toBe(2);
+    expect(tabs).toHaveLength(2);
+  });
+
+  it("always passes a default timeout to navigate_page when none is specified", async () => {
+    const session = createFakeSession();
+    setChromeMcpSessionFactoryForTest(async () => session);
+
+    await navigateChromeMcpPage({
+      profileName: "chrome-live",
+      targetId: "1",
+      url: "https://example.com",
+      // intentionally no timeoutMs
+    });
+
+    expect(session.client.callTool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "navigate_page",
+        arguments: expect.objectContaining({ timeout: 20_000 }),
+      }),
+    );
+  });
+
+  it("resets the Chrome MCP session when a navigate_page call hangs past the safety-net timeout", async () => {
+    vi.useFakeTimers();
+    let factoryCalls = 0;
+    const factory: ChromeMcpSessionFactory = async () => {
+      factoryCalls += 1;
+      const session = createFakeSession();
+      if (factoryCalls === 1) {
+        // First session: all tool calls hang — simulates a Chrome MCP subprocess that is
+        // completely blocked (e.g., stuck waiting for a slow navigation to complete).
+        session.client.callTool = vi.fn(
+          async () => new Promise<never>(() => {}),
+        ) as typeof session.client.callTool;
+      }
+      return session;
+    };
+    setChromeMcpSessionFactoryForTest(factory);
+
+    // Start navigation — will hang.
+    const navPromise = navigateChromeMcpPage({
+      profileName: "chrome-live",
+      targetId: "1",
+      url: "https://slow-site.example",
+    });
+    // Suppress unhandled-rejection detection: navPromise rejects during timer
+    // advancement, before the expect below attaches its handler.
+    void navPromise.catch(() => {});
+
+    // Advance past the 25 s safety-net (CHROME_MCP_NAVIGATE_TIMEOUT_MS 20 s + 5 s buffer).
+    await vi.advanceTimersByTimeAsync(25_001);
+
+    await expect(navPromise).rejects.toThrow(/Chrome MCP "navigate_page".*timed out/);
+
+    // Switch back to real timers before testing reconnect behaviour.
+    vi.useRealTimers();
+
+    // Next call must use a fresh session — factory is called a second time.
     const tabs = await listChromeMcpTabs("chrome-live");
     expect(factoryCalls).toBe(2);
     expect(tabs).toHaveLength(2);

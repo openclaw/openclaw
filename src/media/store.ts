@@ -7,6 +7,7 @@ import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { retainSafeHeadersForCrossOriginRedirect } from "../infra/net/redirect-headers.js";
 import { resolvePinnedHostname } from "../infra/net/ssrf.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveConfigDir } from "../utils.js";
 import { detectMime, extensionForMime } from "./mime.js";
 import { isSafeOpenError, readLocalFileSafely, type SafeOpenLikeError } from "./store.runtime.js";
@@ -28,6 +29,10 @@ type ResolvePinnedHostnameImpl = typeof resolvePinnedHostname;
 const defaultHttpRequestImpl: RequestImpl = httpRequest;
 const defaultHttpsRequestImpl: RequestImpl = httpsRequest;
 const defaultResolvePinnedHostnameImpl: ResolvePinnedHostnameImpl = resolvePinnedHostname;
+
+function formatMediaLimitMb(maxBytes: number): string {
+  return `${(maxBytes / (1024 * 1024)).toFixed(0)}MB`;
+}
 
 let httpRequestImpl: RequestImpl = defaultHttpRequestImpl;
 let httpsRequestImpl: RequestImpl = defaultHttpsRequestImpl;
@@ -183,6 +188,7 @@ async function downloadToFile(
   dest: string,
   headers?: Record<string, string>,
   maxRedirects = 5,
+  maxBytes = MAX_BYTES,
 ): Promise<{ headerMime?: string; sniffBuffer: Buffer; size: number }> {
   return await new Promise((resolve, reject) => {
     let parsedUrl: URL;
@@ -200,7 +206,6 @@ async function downloadToFile(
     resolvePinnedHostnameImpl(parsedUrl.hostname)
       .then((pinned) => {
         const req = requestImpl(parsedUrl, { headers, lookup: pinned.lookup }, (res) => {
-          // Follow redirects
           if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400) {
             const location = res.headers.location;
             if (!location || maxRedirects <= 0) {
@@ -212,7 +217,7 @@ async function downloadToFile(
               new URL(redirectUrl).origin === parsedUrl.origin
                 ? headers
                 : retainSafeHeadersForCrossOriginRedirect(headers);
-            resolve(downloadToFile(redirectUrl, dest, redirectHeaders, maxRedirects - 1));
+            resolve(downloadToFile(redirectUrl, dest, redirectHeaders, maxRedirects - 1, maxBytes));
             return;
           }
           if (!res.statusCode || res.statusCode >= 400) {
@@ -229,8 +234,8 @@ async function downloadToFile(
               sniffChunks.push(chunk);
               sniffLen += chunk.length;
             }
-            if (total > MAX_BYTES) {
-              req.destroy(new Error("Media exceeds 5MB limit"));
+            if (total > maxBytes) {
+              req.destroy(new Error(`Media exceeds ${formatMediaLimitMb(maxBytes)} limit`));
             }
           });
           pipeline(res, out)
@@ -322,7 +327,10 @@ export class SaveMediaSourceError extends Error {
   }
 }
 
-function toSaveMediaSourceError(err: SafeOpenLikeError): SaveMediaSourceError {
+function toSaveMediaSourceError(
+  err: SafeOpenLikeError,
+  maxBytes = MAX_BYTES,
+): SaveMediaSourceError {
   switch (err.code) {
     case "symlink":
       return new SaveMediaSourceError("invalid-path", "Media path must not be a symlink", {
@@ -335,7 +343,11 @@ function toSaveMediaSourceError(err: SafeOpenLikeError): SaveMediaSourceError {
         cause: err,
       });
     case "too-large":
-      return new SaveMediaSourceError("too-large", "Media exceeds 5MB limit", { cause: err });
+      return new SaveMediaSourceError(
+        "too-large",
+        `Media exceeds ${formatMediaLimitMb(maxBytes)} limit`,
+        { cause: err },
+      );
     case "not-found":
       return new SaveMediaSourceError("not-found", "Media path does not exist", { cause: err });
     case "outside-workspace":
@@ -354,6 +366,7 @@ export async function saveMediaSource(
   source: string,
   headers?: Record<string, string>,
   subdir = "",
+  maxBytes = MAX_BYTES,
 ): Promise<SavedMedia> {
   const baseDir = resolveMediaDir();
   const dir = subdir ? path.join(baseDir, subdir) : baseDir;
@@ -363,7 +376,7 @@ export async function saveMediaSource(
   if (looksLikeUrl(source)) {
     const tempDest = path.join(dir, `${baseId}.tmp`);
     const { headerMime, sniffBuffer, size } = await retryAfterRecreatingDir(dir, () =>
-      downloadToFile(source, tempDest, headers),
+      downloadToFile(source, tempDest, headers, 5, maxBytes),
     );
     const mime = await detectMime({
       buffer: sniffBuffer,
@@ -376,9 +389,8 @@ export async function saveMediaSource(
     await fs.rename(tempDest, finalDest);
     return buildSavedMediaResult({ dir, id, size, contentType: mime });
   }
-  // local path
   try {
-    const { buffer, stat } = await readLocalFileSafely({ filePath: source, maxBytes: MAX_BYTES });
+    const { buffer, stat } = await readLocalFileSafely({ filePath: source, maxBytes });
     const mime = await detectMime({ buffer, filePath: source });
     const ext = extensionForMime(mime) ?? path.extname(source);
     const id = buildSavedMediaId({ baseId, ext });
@@ -386,7 +398,7 @@ export async function saveMediaSource(
     return buildSavedMediaResult({ dir, id, size: stat.size, contentType: mime });
   } catch (err) {
     if (isSafeOpenError(err)) {
-      throw toSaveMediaSourceError(err);
+      throw toSaveMediaSourceError(err, maxBytes);
     }
     throw err;
   }
@@ -400,12 +412,12 @@ export async function saveMediaBuffer(
   originalFilename?: string,
 ): Promise<SavedMedia> {
   if (buffer.byteLength > maxBytes) {
-    throw new Error(`Media exceeds ${(maxBytes / (1024 * 1024)).toFixed(0)}MB limit`);
+    throw new Error(`Media exceeds ${formatMediaLimitMb(maxBytes)} limit`);
   }
   const dir = path.join(resolveMediaDir(), subdir);
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
   const uuid = crypto.randomUUID();
-  const headerExt = extensionForMime(contentType?.split(";")[0]?.trim() ?? undefined);
+  const headerExt = extensionForMime(normalizeOptionalString(contentType?.split(";")[0]));
   const mime = await detectMime({ buffer, headerMime: contentType });
   const ext = headerExt ?? extensionForMime(mime) ?? "";
   const id = buildSavedMediaId({ baseId: uuid, ext, originalFilename });

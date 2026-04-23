@@ -1,6 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../auto-reply/templating.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.js";
 import {
   withBundledPluginAllowlistCompat,
   withBundledPluginEnablementCompat,
@@ -24,6 +24,24 @@ const baseCatalog = [
 let catalog = [...baseCatalog];
 
 const loadModelCatalog = vi.hoisted(() => vi.fn(async () => catalog));
+
+vi.mock("../agents/model-auth.js", async () => {
+  const { createAvailableModelAuthMockModule } = await import("./runner.test-mocks.js");
+  return createAvailableModelAuthMockModule();
+});
+
+vi.mock("../plugins/capability-provider-runtime.js", async () => {
+  const runtime =
+    await vi.importActual<typeof import("../plugins/runtime.js")>("../plugins/runtime.js");
+  return {
+    resolvePluginCapabilityProviders: ({ key }: { key: string }) =>
+      key === "mediaUnderstandingProviders"
+        ? (runtime
+            .getActivePluginRegistry()
+            ?.mediaUnderstandingProviders.map((entry) => entry.provider) ?? [])
+        : [],
+  };
+});
 
 vi.mock("../agents/model-catalog.js", async () => {
   const actual = await vi.importActual<typeof import("../agents/model-catalog.js")>(

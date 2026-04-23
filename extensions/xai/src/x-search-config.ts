@@ -1,10 +1,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { isRecord } from "./tool-config-shared.js";
 
 type JsonRecord = Record<string, unknown>;
-
-function isRecord(value: unknown): value is JsonRecord {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function cloneRecord<T extends JsonRecord | undefined>(value: T): T {
   if (!value) {

@@ -64,6 +64,10 @@ function isCodeFile(fileName) {
   return /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/.test(fileName);
 }
 
+function isBoundaryCanaryFile(fileName) {
+  return fileName.includes("__rootdir_boundary_canary__");
+}
+
 async function collectExtensionSourceFiles(rootDir) {
   const out = [];
   async function walk(dir) {
@@ -77,7 +81,7 @@ async function collectExtensionSourceFiles(rootDir) {
         await walk(fullPath);
         continue;
       }
-      if (!entry.isFile() || !isCodeFile(entry.name)) {
+      if (!entry.isFile() || !isCodeFile(entry.name) || isBoundaryCanaryFile(entry.name)) {
         continue;
       }
       const relativePath = normalizeRepoPath(repoRoot, fullPath);

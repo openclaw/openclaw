@@ -9,6 +9,7 @@ import type {
   SpeechProviderOverrides,
   SpeechProviderPlugin,
 } from "openclaw/plugin-sdk/speech-core";
+import { asObject } from "openclaw/plugin-sdk/speech-core";
 import {
   DEFAULT_VYDRA_BASE_URL,
   DEFAULT_VYDRA_SPEECH_MODEL,
@@ -32,12 +33,6 @@ const VYDRA_SPEECH_VOICES = [
     name: "Rachel",
   },
 ] as const;
-
-function asObject(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
 
 function normalizeVydraSpeechConfig(rawConfig: Record<string, unknown>): VydraSpeechConfig {
   const providers = asObject(rawConfig.providers);
@@ -91,7 +86,7 @@ export function buildVydraSpeechProvider(): SpeechProviderPlugin {
     models: [DEFAULT_VYDRA_SPEECH_MODEL],
     voices: VYDRA_SPEECH_VOICES.map((voice) => voice.id),
     resolveConfig: ({ rawConfig }) => normalizeVydraSpeechConfig(rawConfig),
-    listVoices: async () => VYDRA_SPEECH_VOICES.map((voice) => ({ ...voice })),
+    listVoices: async () => VYDRA_SPEECH_VOICES.map((voice) => Object.assign({}, voice)),
     isConfigured: ({ providerConfig }) =>
       Boolean(readVydraSpeechConfig(providerConfig).apiKey || process.env.VYDRA_API_KEY),
     synthesize: async (req) => {

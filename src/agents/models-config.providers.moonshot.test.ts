@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import { applyProviderNativeStreamingUsageCompat } from "../plugin-sdk/provider-catalog-shared.js";
-import { resolveMissingProviderApiKey } from "./models-config.providers.secrets.js";
+import { resolveMissingProviderApiKey } from "./models-config.providers.secret-helpers.js";
 
 const MOONSHOT_BASE_URL = "https://api.moonshot.ai/v1";
 const MOONSHOT_CN_BASE_URL = "https://api.moonshot.cn/v1";
@@ -12,8 +12,8 @@ function buildMoonshotProvider(): ModelProviderConfig {
     api: "openai-completions",
     models: [
       {
-        id: "kimi-k2.5",
-        name: "Kimi K2.5",
+        id: "kimi-k2.6",
+        name: "Kimi K2.6",
         reasoning: false,
         input: ["text", "image"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },

@@ -1,4 +1,5 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   groupPluginDiscoveryProvidersByOrder,
@@ -322,7 +323,7 @@ async function runProviderCatalogWithTimeout(
       }),
     ]);
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = formatErrorMessage(error);
     if (message.includes("provider catalog timed out after")) {
       log.warn(`${message}; skipping provider discovery`);
       return undefined;
@@ -340,15 +341,19 @@ export async function resolveImplicitProviders(
 ): Promise<NonNullable<OpenClawConfig["models"]>["providers"]> {
   const providers: Record<string, ProviderConfig> = {};
   const env = params.env ?? process.env;
-  const authStore = ensureAuthProfileStore(params.agentDir, {
-    allowKeychainPrompt: false,
-  });
+  let authStore: ReturnType<typeof ensureAuthProfileStore> | undefined;
+  const getAuthStore = () =>
+    (authStore ??= ensureAuthProfileStore(params.agentDir, {
+      allowKeychainPrompt: false,
+    }));
   const context: ImplicitProviderContext = {
     ...params,
-    authStore,
+    get authStore() {
+      return getAuthStore();
+    },
     env,
-    resolveProviderApiKey: createProviderApiKeyResolver(env, authStore, params.config),
-    resolveProviderAuth: createProviderAuthResolver(env, authStore, params.config),
+    resolveProviderApiKey: createProviderApiKeyResolver(env, getAuthStore, params.config),
+    resolveProviderAuth: createProviderAuthResolver(env, getAuthStore, params.config),
   };
   const discoveryProviders = await resolvePluginDiscoveryProviders({
     config: params.config,

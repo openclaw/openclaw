@@ -2,6 +2,7 @@ import { vi, type Mock } from "vitest";
 import { resolveFastModeState as resolveFastModeStateImpl } from "../../agents/fast-mode.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
 type CronSessionEntry = {
   sessionId: string;
@@ -27,15 +28,14 @@ function createMock(): Mock {
 }
 
 function normalizeModelSelectionForTest(value: unknown): string | undefined {
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    return trimmed || undefined;
+  const direct = normalizeOptionalString(value);
+  if (direct) {
+    return direct;
   }
   if (!value || typeof value !== "object") {
     return undefined;
   }
-  const primary = (value as { primary?: unknown }).primary;
-  return typeof primary === "string" && primary.trim() ? primary.trim() : undefined;
+  return normalizeOptionalString((value as { primary?: unknown }).primary);
 }
 
 export const buildWorkspaceSkillSnapshotMock = createMock();
@@ -63,8 +63,13 @@ export const pickLastNonEmptyTextFromPayloadsMock = createMock();
 export const resolveCronPayloadOutcomeMock = createMock();
 export const resolveCronDeliveryPlanMock = createMock();
 export const resolveDeliveryTargetMock = createMock();
+export const dispatchCronDeliveryMock = createMock();
+export const isHeartbeatOnlyResponseMock = createMock();
+export const resolveHeartbeatAckMaxCharsMock = createMock();
 export const resolveSessionAuthProfileOverrideMock = createMock();
 export const resolveFastModeStateMock = createMock();
+export const getChannelPluginMock = createMock();
+export const retireSessionMcpRuntimeMock = createMock();
 
 const resolveBootstrapWarningSignaturesSeenMock = createMock();
 const resolveCronStyleNowMock = createMock();
@@ -75,6 +80,8 @@ const hasNonzeroUsageMock = createMock();
 const ensureAgentWorkspaceMock = createMock();
 const normalizeThinkLevelMock = createMock();
 const normalizeVerboseLevelMock = createMock();
+const isThinkingLevelSupportedMock = createMock();
+const resolveSupportedThinkingLevelMock = createMock();
 const supportsXHighThinkingMock = createMock();
 const resolveSessionTranscriptPathMock = createMock();
 const setSessionRuntimeModelMock = createMock();
@@ -94,20 +101,9 @@ vi.mock("./run.runtime.js", () => ({
   resolveAgentModelFallbacksOverride: resolveAgentModelFallbacksOverrideMock,
   resolveAgentWorkspaceDir: vi.fn().mockReturnValue("/tmp/workspace"),
   resolveDefaultAgentId: vi.fn().mockReturnValue("default"),
-  resolveAgentSkillsFilter: resolveAgentSkillsFilterMock,
-  resolveSessionAuthProfileOverride: resolveSessionAuthProfileOverrideMock,
-  lookupContextTokens: lookupContextTokensMock,
   resolveCronStyleNow: resolveCronStyleNowMock,
   DEFAULT_CONTEXT_TOKENS: 128000,
-  DEFAULT_MODEL: "gpt-4",
-  DEFAULT_PROVIDER: "openai",
-  loadModelCatalog: loadModelCatalogMock,
-  getModelRefStatus: getModelRefStatusMock,
   isCliProvider: isCliProviderMock,
-  normalizeModelSelection: normalizeModelSelectionForTest,
-  resolveAllowedModelRef: resolveAllowedModelRefMock,
-  resolveConfiguredModelRef: resolveConfiguredModelRefMock,
-  resolveHooksGmailModel: resolveHooksGmailModelMock,
   resolveThinkingDefault: resolveThinkingDefaultMock,
   buildWorkspaceSkillSnapshot: buildWorkspaceSkillSnapshotMock,
   getSkillsSnapshotVersion: getSkillsSnapshotVersionMock,
@@ -117,17 +113,50 @@ vi.mock("./run.runtime.js", () => ({
   DEFAULT_IDENTITY_FILENAME: "IDENTITY.md",
   ensureAgentWorkspace: ensureAgentWorkspaceMock,
   normalizeThinkLevel: normalizeThinkLevelMock,
+  isThinkingLevelSupported: isThinkingLevelSupportedMock,
+  resolveSupportedThinkingLevel: resolveSupportedThinkingLevelMock,
   supportsXHighThinking: supportsXHighThinkingMock,
+  resolveSessionTranscriptPath: resolveSessionTranscriptPathMock,
   setSessionRuntimeModel: setSessionRuntimeModelMock,
   setCliSessionId: vi.fn(),
   logWarn: (...args: unknown[]) => logWarnMock(...args),
   normalizeAgentId: vi.fn((id: string) => id),
-  buildSafeExternalPrompt: buildSafeExternalPromptMock,
-  detectSuspiciousPatterns: detectSuspiciousPatternsMock,
   mapHookExternalContentSource: mapHookExternalContentSourceMock,
   isExternalHookSession: isExternalHookSessionMock,
   resolveHookExternalContentSource: resolveHookExternalContentSourceMock,
   getRemoteSkillEligibility: getRemoteSkillEligibilityMock,
+}));
+
+vi.mock("./run-external-content.runtime.js", () => ({
+  buildSafeExternalPrompt: buildSafeExternalPromptMock,
+  detectSuspiciousPatterns: detectSuspiciousPatternsMock,
+}));
+
+vi.mock("./run-context.runtime.js", () => ({
+  lookupContextTokens: lookupContextTokensMock,
+}));
+
+vi.mock("./run-model-catalog.runtime.js", () => ({
+  loadModelCatalog: loadModelCatalogMock,
+}));
+
+vi.mock("./skills-snapshot.runtime.js", () => ({
+  buildWorkspaceSkillSnapshot: buildWorkspaceSkillSnapshotMock,
+  canExecRequestNode: vi.fn(() => false),
+  getRemoteSkillEligibility: getRemoteSkillEligibilityMock,
+  getSkillsSnapshotVersion: getSkillsSnapshotVersionMock,
+  resolveAgentSkillsFilter: resolveAgentSkillsFilterMock,
+}));
+
+vi.mock("./run-model-selection.runtime.js", () => ({
+  DEFAULT_MODEL: "gpt-5.4",
+  DEFAULT_PROVIDER: "openai",
+  loadModelCatalog: loadModelCatalogMock,
+  getModelRefStatus: getModelRefStatusMock,
+  normalizeModelSelection: normalizeModelSelectionForTest,
+  resolveAllowedModelRef: resolveAllowedModelRefMock,
+  resolveConfiguredModelRef: resolveConfiguredModelRefMock,
+  resolveHooksGmailModel: resolveHooksGmailModelMock,
 }));
 
 vi.mock("./run-execution.runtime.js", () => ({
@@ -149,8 +178,27 @@ vi.mock("./run-execution.runtime.js", () => ({
   logWarn: (...args: unknown[]) => logWarnMock(...args),
 }));
 
+vi.mock("./run-auth-profile.runtime.js", () => ({
+  resolveSessionAuthProfileOverride: resolveSessionAuthProfileOverrideMock,
+}));
+
+vi.mock("./run-embedded.runtime.js", () => ({
+  resolveFastModeState: resolveFastModeStateMock,
+  resolveNestedAgentLane: resolveNestedAgentLaneMock,
+  runEmbeddedPiAgent: runEmbeddedPiAgentMock,
+}));
+
+vi.mock("./run-subagent-registry.runtime.js", () => ({
+  countActiveDescendantRuns: countActiveDescendantRunsMock,
+  listDescendantRunsForRequester: listDescendantRunsForRequesterMock,
+}));
+
 vi.mock("../../agents/cli-runner.runtime.js", () => ({
   setCliSessionId: vi.fn(),
+}));
+
+vi.mock("../../agents/pi-bundle-mcp-tools.js", () => ({
+  retireSessionMcpRuntime: retireSessionMcpRuntimeMock,
 }));
 
 vi.mock("../../config/sessions/store.runtime.js", () => ({
@@ -161,18 +209,29 @@ vi.mock("../delivery-plan.js", () => ({
   resolveCronDeliveryPlan: resolveCronDeliveryPlanMock,
 }));
 
-vi.mock("./delivery-target.js", () => ({
-  resolveDeliveryTarget: resolveDeliveryTargetMock,
-}));
+vi.mock("./run-delivery.runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("./run-delivery.runtime.js")>(
+    "./run-delivery.runtime.js",
+  );
+  return {
+    ...actual,
+    resolveDeliveryTarget: resolveDeliveryTargetMock,
+    dispatchCronDelivery: dispatchCronDeliveryMock,
+  };
+});
 
 vi.mock("./helpers.js", () => ({
-  isHeartbeatOnlyResponse: vi.fn().mockReturnValue(false),
+  isHeartbeatOnlyResponse: isHeartbeatOnlyResponseMock,
   pickLastDeliverablePayload: vi.fn().mockReturnValue(undefined),
   pickLastNonEmptyTextFromPayloads: pickLastNonEmptyTextFromPayloadsMock,
   pickSummaryFromOutput: vi.fn().mockReturnValue("summary"),
   pickSummaryFromPayloads: vi.fn().mockReturnValue("summary"),
   resolveCronPayloadOutcome: resolveCronPayloadOutcomeMock,
-  resolveHeartbeatAckMaxChars: vi.fn().mockReturnValue(100),
+  resolveHeartbeatAckMaxChars: resolveHeartbeatAckMaxCharsMock,
+}));
+
+vi.mock("../../channels/plugins/index.js", () => ({
+  getChannelPlugin: getChannelPluginMock,
 }));
 
 vi.mock("./session.js", () => ({
@@ -207,7 +266,7 @@ function makeDefaultModelFallbackResult() {
       meta: { agentMeta: { usage: { input: 10, output: 20 } } },
     },
     provider: "openai",
-    model: "gpt-4",
+    model: "gpt-5.4",
   };
 }
 
@@ -247,8 +306,8 @@ function resetRunConfigMocks(): void {
   );
   resolveAgentModelFallbacksOverrideMock.mockReturnValue(undefined);
   resolveAgentSkillsFilterMock.mockReturnValue(undefined);
-  resolveConfiguredModelRefMock.mockReturnValue({ provider: "openai", model: "gpt-4" });
-  resolveAllowedModelRefMock.mockReturnValue({ ref: { provider: "openai", model: "gpt-4" } });
+  resolveConfiguredModelRefMock.mockReturnValue({ provider: "openai", model: "gpt-5.4" });
+  resolveAllowedModelRefMock.mockReturnValue({ ref: { provider: "openai", model: "gpt-5.4" } });
   resolveHooksGmailModelMock.mockReturnValue(null);
   resolveThinkingDefaultMock.mockReturnValue("off");
   getModelRefStatusMock.mockReturnValue({ allowed: false });
@@ -261,6 +320,8 @@ function resetRunConfigMocks(): void {
   hasNonzeroUsageMock.mockReturnValue(true);
   ensureAgentWorkspaceMock.mockResolvedValue({ dir: "/tmp/workspace" });
   normalizeThinkLevelMock.mockImplementation((value: unknown) => value);
+  isThinkingLevelSupportedMock.mockReturnValue(true);
+  resolveSupportedThinkingLevelMock.mockImplementation(({ level }: { level?: unknown }) => level);
   supportsXHighThinkingMock.mockReturnValue(false);
   buildSafeExternalPromptMock.mockImplementation(
     ({ message }: { message?: string }) => message ?? "",
@@ -270,7 +331,7 @@ function resetRunConfigMocks(): void {
   isExternalHookSessionMock.mockReturnValue(false);
   resolveHookExternalContentSourceMock.mockReturnValue(undefined);
   getSkillsSnapshotVersionMock.mockReturnValue(42);
-  loadModelCatalogMock.mockResolvedValue({ models: [] });
+  loadModelCatalogMock.mockResolvedValue([]);
   getRemoteSkillEligibilityMock.mockResolvedValue({ remoteSkillsEnabled: false });
 }
 
@@ -323,11 +384,51 @@ function resetRunOutcomeMocks(): void {
   resolveCronDeliveryPlanMock.mockReturnValue({ requested: false, mode: "none" });
   resolveDeliveryTargetMock.mockReset();
   resolveDeliveryTargetMock.mockResolvedValue({
-    channel: "discord",
-    to: undefined,
+    ok: true,
+    channel: "messagechat",
+    to: "test-target",
     accountId: undefined,
+    threadId: undefined,
+    mode: "explicit",
     error: undefined,
   });
+  dispatchCronDeliveryMock.mockReset();
+  dispatchCronDeliveryMock.mockImplementation(
+    ({
+      deliveryPayloads,
+      summary,
+      outputText,
+      synthesizedText,
+      deliveryRequested,
+      skipHeartbeatDelivery,
+      skipMessagingToolDelivery,
+      resolvedDelivery,
+    }) => ({
+      result: undefined,
+      delivered: Boolean(
+        skipMessagingToolDelivery ||
+        (deliveryRequested &&
+          !skipHeartbeatDelivery &&
+          !skipMessagingToolDelivery &&
+          resolvedDelivery.ok),
+      ),
+      deliveryAttempted: Boolean(
+        skipMessagingToolDelivery ||
+        (deliveryRequested &&
+          !skipHeartbeatDelivery &&
+          !skipMessagingToolDelivery &&
+          resolvedDelivery.ok),
+      ),
+      summary,
+      outputText,
+      synthesizedText,
+      deliveryPayloads,
+    }),
+  );
+  isHeartbeatOnlyResponseMock.mockReset();
+  isHeartbeatOnlyResponseMock.mockReturnValue(false);
+  resolveHeartbeatAckMaxCharsMock.mockReset();
+  resolveHeartbeatAckMaxCharsMock.mockReturnValue(100);
   resolveSessionAuthProfileOverrideMock.mockReset();
   resolveSessionAuthProfileOverrideMock.mockResolvedValue(undefined);
 }
@@ -337,6 +438,8 @@ function resetRunSessionMocks(): void {
   updateSessionStoreMock.mockResolvedValue(undefined);
   resolveCronSessionMock.mockReset();
   resolveCronSessionMock.mockReturnValue(makeCronSession());
+  retireSessionMcpRuntimeMock.mockReset();
+  retireSessionMcpRuntimeMock.mockResolvedValue(true);
 }
 
 export function resetRunCronIsolatedAgentTurnHarness(): void {

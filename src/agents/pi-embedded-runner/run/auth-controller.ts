@@ -1,5 +1,6 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
+import { formatErrorMessage } from "../../../infra/errors.js";
 import { prepareProviderRuntimeAuth } from "../../../plugins/provider-runtime.js";
 import {
   type AuthProfileStore,
@@ -19,7 +20,6 @@ import {
   sanitizeRuntimeProviderRequestOverrides,
 } from "../../provider-request-config.js";
 import { clampRuntimeAuthRefreshDelayMs } from "../../runtime-auth-refresh.js";
-import { describeUnknownError } from "../utils.js";
 import {
   RUNTIME_AUTH_REFRESH_MARGIN_MS,
   RUNTIME_AUTH_REFRESH_MIN_DELAY_MS,
@@ -113,6 +113,33 @@ export function createEmbeddedRunAuthController(params: {
   const hasRefreshableRuntimeAuth = () =>
     Boolean(params.getRuntimeAuthState()?.sourceApiKey.trim());
 
+  const nextRuntimeAuthGeneration = () => (params.getRuntimeAuthState()?.generation ?? 0) + 1;
+
+  const prepareRuntimeAuthForModel = async (prepareParams: {
+    runtimeModel: Model<Api>;
+    apiKey: string;
+    authMode: string;
+    profileId?: string;
+  }) =>
+    prepareProviderRuntimeAuth({
+      provider: prepareParams.runtimeModel.provider,
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env: process.env,
+      context: {
+        config: params.config,
+        agentDir: params.agentDir,
+        workspaceDir: params.workspaceDir,
+        env: process.env,
+        provider: prepareParams.runtimeModel.provider,
+        modelId: params.getModelId(),
+        model: prepareParams.runtimeModel,
+        apiKey: prepareParams.apiKey,
+        authMode: prepareParams.authMode,
+        profileId: prepareParams.profileId,
+      },
+    });
+
   const clearRuntimeAuthRefreshTimer = () => {
     const runtimeAuthState = params.getRuntimeAuthState();
     if (!runtimeAuthState?.refreshTimer) {
@@ -139,7 +166,10 @@ export function createEmbeddedRunAuthController(params: {
       await runtimeAuthState.refreshInFlight;
       return;
     }
-    runtimeAuthState.refreshInFlight = (async () => {
+    const refreshGeneration = runtimeAuthState.generation;
+    const refreshProfileId = runtimeAuthState.profileId;
+    let refreshPromise: Promise<void>;
+    refreshPromise = (async () => {
       const currentRuntimeAuthState = params.getRuntimeAuthState();
       const sourceApiKey = currentRuntimeAuthState?.sourceApiKey.trim() ?? "";
       if (!sourceApiKey) {
@@ -147,33 +177,33 @@ export function createEmbeddedRunAuthController(params: {
       }
       const runtimeModel = params.getRuntimeModel();
       params.log.debug(`Refreshing runtime auth for ${runtimeModel.provider} (${reason})...`);
-      const preparedAuth = await prepareProviderRuntimeAuth({
-        provider: runtimeModel.provider,
-        config: params.config,
-        workspaceDir: params.workspaceDir,
-        env: process.env,
-        context: {
-          config: params.config,
-          agentDir: params.agentDir,
-          workspaceDir: params.workspaceDir,
-          env: process.env,
-          provider: runtimeModel.provider,
-          modelId: params.getModelId(),
-          model: runtimeModel,
-          apiKey: sourceApiKey,
-          authMode: currentRuntimeAuthState?.authMode ?? "unknown",
-          profileId: currentRuntimeAuthState?.profileId,
-        },
+      const preparedAuth = await prepareRuntimeAuthForModel({
+        runtimeModel,
+        apiKey: sourceApiKey,
+        authMode: currentRuntimeAuthState?.authMode ?? "unknown",
+        profileId: currentRuntimeAuthState?.profileId,
       });
       if (!preparedAuth?.apiKey) {
         throw new Error(
           `Provider "${runtimeModel.provider}" does not support runtime auth refresh.`,
         );
       }
+      const activeRuntimeAuthState = params.getRuntimeAuthState();
+      if (
+        !activeRuntimeAuthState ||
+        activeRuntimeAuthState.generation !== refreshGeneration ||
+        activeRuntimeAuthState.profileId !== refreshProfileId ||
+        activeRuntimeAuthState.sourceApiKey.trim() !== sourceApiKey
+      ) {
+        params.log.debug(
+          `Ignoring stale runtime auth refresh for ${runtimeModel.provider}; auth state advanced before ${reason} refresh completed.`,
+        );
+        return;
+      }
       params.authStorage.setRuntimeApiKey(runtimeModel.provider, preparedAuth.apiKey);
       applyPreparedRuntimeRequestOverrides({ runtimeModel, preparedAuth });
       params.setRuntimeAuthState({
-        ...params.getRuntimeAuthState(),
+        ...activeRuntimeAuthState,
         expiresAt: preparedAuth.expiresAt,
       } as RuntimeAuthState);
       if (preparedAuth.expiresAt) {
@@ -186,17 +216,22 @@ export function createEmbeddedRunAuthController(params: {
       .catch((err) => {
         const runtimeModel = params.getRuntimeModel();
         params.log.warn(
-          `Runtime auth refresh failed for ${runtimeModel.provider}: ${describeUnknownError(err)}`,
+          `Runtime auth refresh failed for ${runtimeModel.provider}: ${formatErrorMessage(err)}`,
         );
         throw err;
       })
       .finally(() => {
         const activeState = params.getRuntimeAuthState();
-        if (activeState) {
+        if (
+          activeState &&
+          activeState.generation === refreshGeneration &&
+          activeState.refreshInFlight === refreshPromise
+        ) {
           activeState.refreshInFlight = undefined;
         }
       });
-    await runtimeAuthState.refreshInFlight;
+    runtimeAuthState.refreshInFlight = refreshPromise;
+    await refreshPromise;
   };
 
   const scheduleRuntimeAuthRefresh = (): void => {
@@ -289,7 +324,7 @@ export function createEmbeddedRunAuthController(params: {
     const fallbackMessage = `No available auth profile for ${provider} (all in cooldown or unavailable).`;
     const message =
       failoverParams.message?.trim() ||
-      (failoverParams.error ? describeUnknownError(failoverParams.error).trim() : "") ||
+      (failoverParams.error ? formatErrorMessage(failoverParams.error).trim() : "") ||
       fallbackMessage;
     const reason = resolveAuthProfileFailoverReason({
       allInCooldown: failoverParams.allInCooldown,
@@ -333,33 +368,67 @@ export function createEmbeddedRunAuthController(params: {
           `No API key resolved for provider "${runtimeModel.provider}" (auth mode: ${apiKeyInfo.mode}).`,
         );
       }
+      // AWS SDK auth via IMDS / instance role / ECS task role: no explicit API
+      // key is available but the SDK default credential chain can resolve
+      // credentials at runtime.  We must still call setRuntimeApiKey so that
+      // pi's authStorage considers the provider authenticated.  Try
+      // prepareProviderRuntimeAuth first (it can sign requests and return a
+      // short-lived token); fall back to a sentinel value when the provider
+      // plugin does not implement runtime auth preparation.
+      const runtimeModel = params.getRuntimeModel();
+      const AWS_SDK_AUTH_SENTINEL = "__aws_sdk_auth__";
+      try {
+        const preparedAuth = await prepareRuntimeAuthForModel({
+          runtimeModel,
+          apiKey: AWS_SDK_AUTH_SENTINEL,
+          authMode: apiKeyInfo.mode,
+          profileId: apiKeyInfo.profileId,
+        });
+        applyPreparedRuntimeRequestOverrides({ runtimeModel, preparedAuth: preparedAuth ?? {} });
+        if (preparedAuth?.apiKey) {
+          clearRuntimeAuthRefreshTimer();
+          params.authStorage.setRuntimeApiKey(runtimeModel.provider, preparedAuth.apiKey);
+          params.setRuntimeAuthState({
+            generation: nextRuntimeAuthGeneration(),
+            sourceApiKey: AWS_SDK_AUTH_SENTINEL,
+            authMode: apiKeyInfo.mode,
+            profileId: resolvedProfileId,
+            expiresAt: preparedAuth.expiresAt,
+          });
+          if (preparedAuth.expiresAt) {
+            scheduleRuntimeAuthRefresh();
+          }
+          params.setLastProfileId(resolvedProfileId);
+          return;
+        }
+      } catch (error) {
+        params.log.warn(
+          `prepareProviderRuntimeAuth failed for ${runtimeModel.provider}, falling back to sentinel: ${formatErrorMessage(error)}`,
+        );
+      }
+      // No runtime auth plugin resolved a real credential.  Inject the
+      // sentinel so pi's hasConfiguredAuth() passes and the AWS SDK default
+      // credential chain handles actual request signing.
+      clearRuntimeAuthRefreshTimer();
+      params.authStorage.setRuntimeApiKey(runtimeModel.provider, AWS_SDK_AUTH_SENTINEL);
+      params.setRuntimeAuthState(null);
       params.setLastProfileId(resolvedProfileId);
       return;
     }
     let runtimeAuthHandled = false;
     const runtimeModel = params.getRuntimeModel();
-    const preparedAuth = await prepareProviderRuntimeAuth({
-      provider: runtimeModel.provider,
-      config: params.config,
-      workspaceDir: params.workspaceDir,
-      env: process.env,
-      context: {
-        config: params.config,
-        agentDir: params.agentDir,
-        workspaceDir: params.workspaceDir,
-        env: process.env,
-        provider: runtimeModel.provider,
-        modelId: params.getModelId(),
-        model: runtimeModel,
-        apiKey: apiKeyInfo.apiKey,
-        authMode: apiKeyInfo.mode,
-        profileId: apiKeyInfo.profileId,
-      },
+    const preparedAuth = await prepareRuntimeAuthForModel({
+      runtimeModel,
+      apiKey: apiKeyInfo.apiKey,
+      authMode: apiKeyInfo.mode,
+      profileId: apiKeyInfo.profileId,
     });
     applyPreparedRuntimeRequestOverrides({ runtimeModel, preparedAuth: preparedAuth ?? {} });
     if (preparedAuth?.apiKey) {
+      clearRuntimeAuthRefreshTimer();
       params.authStorage.setRuntimeApiKey(runtimeModel.provider, preparedAuth.apiKey);
       params.setRuntimeAuthState({
+        generation: nextRuntimeAuthGeneration(),
         sourceApiKey: apiKeyInfo.apiKey,
         authMode: apiKeyInfo.mode,
         profileId: apiKeyInfo.profileId,
@@ -371,6 +440,7 @@ export function createEmbeddedRunAuthController(params: {
       runtimeAuthHandled = true;
     }
     if (!runtimeAuthHandled) {
+      clearRuntimeAuthRefreshTimer();
       params.authStorage.setRuntimeApiKey(runtimeModel.provider, apiKeyInfo.apiKey);
       params.setRuntimeAuthState(null);
     }

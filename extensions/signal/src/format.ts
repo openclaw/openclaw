@@ -1,6 +1,7 @@
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import {
   markdownToIR,
+  normalizeLowercaseStringOrEmpty,
   type MarkdownIR,
   type MarkdownStyle,
   renderMarkdownIRChunksWithinLimit,
@@ -35,7 +36,7 @@ type Insertion = {
 };
 
 function normalizeUrlForComparison(url: string): string {
-  let normalized = url.toLowerCase();
+  let normalized = normalizeLowercaseStringOrEmpty(url);
   // Strip protocol
   normalized = normalized.replace(/^https?:\/\//, "");
   // Strip www. prefix

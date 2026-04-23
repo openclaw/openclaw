@@ -1,3 +1,11 @@
+import { resolveComparableTargetForLoadedChannel } from "../channels/plugins/target-parsing-loaded.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+  normalizeOptionalThreadValue,
+} from "../shared/string-coerce.js";
+import { isInternalMessageChannel } from "../utils/message-channel.js";
+
 export type DeliveryContext = {
   channel?: string;
   to?: string;
@@ -19,37 +27,16 @@ type DeliveryContextSource = {
   deliveryContext?: DeliveryContext;
 };
 
-function normalizeChannel(raw?: string): string | undefined {
-  const value = raw?.trim().toLowerCase();
-  return value || undefined;
-}
-
-function normalizeText(raw?: string): string | undefined {
-  const value = raw?.trim();
-  return value || undefined;
-}
-
-function normalizeThreadId(raw?: string | number): string | number | undefined {
-  if (typeof raw === "number" && Number.isFinite(raw)) {
-    return Math.trunc(raw);
-  }
-  if (typeof raw === "string") {
-    const value = raw.trim();
-    return value || undefined;
-  }
-  return undefined;
-}
-
 function normalizeDeliveryContext(context?: DeliveryContext): DeliveryContext | undefined {
   if (!context) {
     return undefined;
   }
   const normalized: DeliveryContext = {
-    channel: normalizeChannel(context.channel),
-    to: normalizeText(context.to),
-    accountId: normalizeText(context.accountId),
+    channel: normalizeOptionalLowercaseString(context.channel),
+    to: normalizeOptionalString(context.to),
+    accountId: normalizeOptionalString(context.accountId),
   };
-  const threadId = normalizeThreadId(context.threadId);
+  const threadId = normalizeOptionalThreadValue(context.threadId);
   if (threadId != null) {
     normalized.threadId = threadId;
   }
@@ -107,24 +94,31 @@ function deliveryContextFromSession(entry?: DeliveryContextSource): DeliveryCont
   });
 }
 
-function isInternalMessageChannel(raw?: string): boolean {
-  return normalizeChannel(raw) === "webchat";
+function stripThreadRouteSuffix(target: string): string {
+  return /^(.*):topic:[^:]+$/u.exec(target)?.[1] ?? target;
 }
 
-function normalizeTelegramAnnounceTarget(target: string | undefined): string | undefined {
-  const trimmed = target?.trim();
-  if (!trimmed) {
+function normalizeAnnounceRouteTarget(context?: DeliveryContext): string | undefined {
+  const rawTo = normalizeOptionalString(context?.to);
+  if (!rawTo) {
     return undefined;
   }
-  if (trimmed.startsWith("group:")) {
-    return `telegram:${trimmed.slice("group:".length)}`;
+  const channel = normalizeOptionalLowercaseString(context?.channel);
+  const parsed = channel
+    ? resolveComparableTargetForLoadedChannel({
+        channel,
+        rawTarget: rawTo,
+        fallbackThreadId: context?.threadId,
+      })
+    : null;
+  let route = stripThreadRouteSuffix(parsed?.to ?? rawTo);
+  if (channel && route.toLowerCase().startsWith(`${channel}:`)) {
+    route = route.slice(channel.length + 1);
   }
-  if (!trimmed.startsWith("telegram:")) {
-    return undefined;
+  if (route.startsWith("group:") || route.startsWith("channel:")) {
+    route = route.slice(route.indexOf(":") + 1);
   }
-  const raw = trimmed.slice("telegram:".length);
-  const topicMatch = /^(.*):topic:[^:]+$/u.exec(raw);
-  return `telegram:${topicMatch?.[1] ?? raw}`;
+  return route || undefined;
 }
 
 function shouldStripThreadFromAnnounceEntry(
@@ -138,13 +132,10 @@ function shouldStripThreadFromAnnounceEntry(
   ) {
     return false;
   }
-  const requesterChannel = normalizeChannel(normalizedRequester.channel);
-  if (requesterChannel === "telegram") {
-    const requesterTarget = normalizeTelegramAnnounceTarget(normalizedRequester.to);
-    const entryTarget = normalizeTelegramAnnounceTarget(normalizedEntry?.to);
-    if (requesterTarget && entryTarget) {
-      return requesterTarget !== entryTarget;
-    }
+  const requesterTarget = normalizeAnnounceRouteTarget(normalizedRequester);
+  const entryTarget = normalizeAnnounceRouteTarget(normalizedEntry);
+  if (requesterTarget && entryTarget) {
+    return requesterTarget !== entryTarget;
   }
   return false;
 }

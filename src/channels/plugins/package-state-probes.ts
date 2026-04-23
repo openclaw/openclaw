@@ -1,9 +1,11 @@
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   listChannelCatalogEntries,
   type PluginChannelCatalogEntry,
 } from "../../plugins/channel-catalog-registry.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
   isJavaScriptModulePath,
   loadChannelPluginModule,
@@ -39,8 +41,8 @@ function resolveChannelPackageStateMetadata(
   if (!metadata || typeof metadata !== "object") {
     return null;
   }
-  const specifier = typeof metadata.specifier === "string" ? metadata.specifier.trim() : "";
-  const exportName = typeof metadata.exportName === "string" ? metadata.exportName.trim() : "";
+  const specifier = normalizeOptionalString(metadata.specifier) ?? "";
+  const exportName = normalizeOptionalString(metadata.exportName) ?? "";
   if (!specifier || !exportName) {
     return null;
   }
@@ -95,7 +97,7 @@ function resolveChannelPackageStateChecker(params: {
     registry.checkerCache.set(params.entry.pluginId, checker);
     return checker;
   } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
+    const detail = formatErrorMessage(error);
     log.warn(
       `[channels] failed to load ${params.metadataKey} checker for ${params.entry.pluginId}: ${detail}`,
     );
@@ -125,5 +127,5 @@ export function hasBundledChannelPackageState(params: {
     entry,
     metadataKey: params.metadataKey,
   });
-  return checker ? Boolean(checker({ cfg: params.cfg, env: params.env })) : false;
+  return checker ? checker({ cfg: params.cfg, env: params.env }) : false;
 }

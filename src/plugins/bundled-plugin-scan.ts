@@ -1,19 +1,26 @@
 import fs from "node:fs";
 import path from "node:path";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { normalizeTrimmedStringList } from "../shared/string-normalization.js";
+import { PUBLIC_SURFACE_SOURCE_EXTENSIONS } from "./public-surface-runtime.js";
 
-const PUBLIC_SURFACE_SOURCE_EXTENSIONS = [".ts", ".mts", ".js", ".mjs", ".cts", ".cjs"] as const;
 const RUNTIME_SIDECAR_ARTIFACTS = new Set([
   "helper-api.js",
   "light-runtime-api.js",
   "runtime-api.js",
+  "runtime-setter-api.js",
   "thread-bindings-runtime.js",
 ]);
 
-function trimString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+export { normalizeOptionalString as trimBundledPluginString };
+
+export function normalizeBundledPluginStringList(value: unknown): string[] {
+  return normalizeTrimmedStringList(value);
 }
 
-function rewriteEntryToBuiltPath(entry: string | undefined): string | undefined {
+export function rewriteBundledPluginEntryToBuiltPath(
+  entry: string | undefined,
+): string | undefined {
   if (!entry) {
     return undefined;
   }
@@ -51,7 +58,7 @@ export function deriveBundledPluginIdHint(params: {
   if (!params.hasMultipleExtensions) {
     return params.manifestId;
   }
-  const packageName = trimString(params.packageName);
+  const packageName = normalizeOptionalString(params.packageName);
   if (!packageName) {
     return `${params.manifestId}/${base}`;
   }
@@ -67,9 +74,9 @@ export function collectBundledPluginPublicSurfaceArtifacts(params: {
   setupEntry?: string;
 }): readonly string[] | undefined {
   const excluded = new Set(
-    [params.sourceEntry, params.setupEntry]
-      .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
-      .map((entry) => path.basename(entry)),
+    normalizeTrimmedStringList([params.sourceEntry, params.setupEntry]).map((entry) =>
+      path.basename(entry),
+    ),
   );
   const artifacts = fs
     .readdirSync(params.pluginDir, { withFileTypes: true })
@@ -77,7 +84,7 @@ export function collectBundledPluginPublicSurfaceArtifacts(params: {
     .map((entry) => entry.name)
     .filter(isTopLevelPublicSurfaceSource)
     .filter((entry) => !excluded.has(entry))
-    .map((entry) => rewriteEntryToBuiltPath(entry))
+    .map((entry) => rewriteBundledPluginEntryToBuiltPath(entry))
     .filter((entry): entry is string => typeof entry === "string" && entry.length > 0)
     .toSorted((left, right) => left.localeCompare(right));
   return artifacts.length > 0 ? artifacts : undefined;

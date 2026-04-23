@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { CliBackendConfig } from "../../config/types.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import {
   CLI_FRESH_WATCHDOG_DEFAULTS,
   CLI_RESUME_WATCHDOG_DEFAULTS,
@@ -75,11 +76,8 @@ export function buildCliSupervisorScopeKey(params: {
   backendId: string;
   cliSessionId?: string;
 }): string | undefined {
-  const commandToken = path
-    .basename(params.backend.command ?? "")
-    .trim()
-    .toLowerCase();
-  const backendToken = params.backendId.trim().toLowerCase();
+  const commandToken = normalizeLowercaseStringOrEmpty(path.basename(params.backend.command ?? ""));
+  const backendToken = normalizeLowercaseStringOrEmpty(params.backendId);
   const sessionToken = params.cliSessionId?.trim();
   if (!sessionToken) {
     return undefined;

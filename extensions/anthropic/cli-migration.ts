@@ -3,6 +3,7 @@ import {
   type OpenClawConfig,
   type ProviderAuthResult,
 } from "openclaw/plugin-sdk/provider-auth";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import {
   readClaudeCliCredentialsForSetup,
   readClaudeCliCredentialsForSetupNonInteractive,
@@ -19,11 +20,11 @@ type ClaudeCliCredential = NonNullable<ReturnType<typeof readClaudeCliCredential
 
 function toClaudeCliModelRef(raw: string): string | null {
   const trimmed = raw.trim();
-  if (!trimmed.toLowerCase().startsWith("anthropic/")) {
+  if (!normalizeLowercaseStringOrEmpty(trimmed).startsWith("anthropic/")) {
     return null;
   }
   const modelId = trimmed.slice("anthropic/".length).trim();
-  if (!modelId.toLowerCase().startsWith("claude-")) {
+  if (!normalizeLowercaseStringOrEmpty(modelId).startsWith("claude-")) {
     return null;
   }
   return `claude-cli/${modelId}`;
@@ -179,6 +180,8 @@ export function buildAnthropicCliMigrationResult(
         },
       },
     },
+    // Rewrites `anthropic/*` -> `claude-cli/*`; merge would keep stale keys.
+    replaceDefaultModels: true,
     defaultModel,
     notes: [
       "Claude CLI auth detected; switched Anthropic model selection to the local Claude CLI backend.",

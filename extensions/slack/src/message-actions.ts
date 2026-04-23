@@ -1,7 +1,7 @@
 import { createActionGate } from "openclaw/plugin-sdk/channel-actions";
 import type { ChannelMessageActionName } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import type { ChannelToolSend } from "openclaw/plugin-sdk/tool-send";
+import { extractToolSend, type ChannelToolSend } from "openclaw/plugin-sdk/tool-send";
 import { listEnabledSlackAccounts, resolveSlackAccount } from "./accounts.js";
 
 export function listSlackMessageActions(
@@ -54,14 +54,5 @@ export function listSlackMessageActions(
 }
 
 export function extractSlackToolSend(args: Record<string, unknown>): ChannelToolSend | null {
-  const action = typeof args.action === "string" ? args.action.trim() : "";
-  if (action !== "sendMessage") {
-    return null;
-  }
-  const to = typeof args.to === "string" ? args.to : undefined;
-  if (!to) {
-    return null;
-  }
-  const accountId = typeof args.accountId === "string" ? args.accountId.trim() : undefined;
-  return { to, accountId };
+  return extractToolSend(args, "sendMessage");
 }

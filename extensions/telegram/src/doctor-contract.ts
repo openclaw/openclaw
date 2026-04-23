@@ -4,27 +4,15 @@ import type {
 } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
+  asObjectRecord,
+  hasLegacyAccountStreamingAliases,
   hasLegacyStreamingAliases,
-  normalizeLegacyStreamingAliases,
+  normalizeLegacyChannelAliases,
 } from "openclaw/plugin-sdk/runtime-doctor";
 import { resolveTelegramPreviewStreamMode } from "./preview-streaming.js";
 
-function asObjectRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
 function hasLegacyTelegramStreamingAliases(value: unknown): boolean {
   return hasLegacyStreamingAliases(value, { includePreviewChunk: true });
-}
-
-function hasLegacyTelegramAccountStreamingAliases(value: unknown): boolean {
-  const accounts = asObjectRecord(value);
-  if (!accounts) {
-    return false;
-  }
-  return Object.values(accounts).some((account) => hasLegacyTelegramStreamingAliases(account));
 }
 
 function resolveCompatibleDefaultGroupEntry(section: Record<string, unknown>): {
@@ -61,7 +49,7 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
     path: ["channels", "telegram", "accounts"],
     message:
       "channels.telegram.accounts.<id>.streamMode, streaming (scalar), chunkMode, blockStreaming, draftChunk, and blockStreamingCoalesce are legacy; use channels.telegram.accounts.<id>.streaming.{mode,chunkMode,preview.chunk,block.enabled,block.coalesce}.",
-    match: hasLegacyTelegramAccountStreamingAliases,
+    match: (value) => hasLegacyAccountStreamingAliases(value, hasLegacyTelegramStreamingAliases),
   },
 ];
 
@@ -105,42 +93,17 @@ export function normalizeCompatibilityConfig({
     }
   }
 
-  const streaming = normalizeLegacyStreamingAliases({
+  const aliases = normalizeLegacyChannelAliases({
     entry: updated,
     pathPrefix: "channels.telegram",
     changes,
-    includePreviewChunk: true,
-    resolvedMode: resolveTelegramPreviewStreamMode(updated),
+    resolveStreamingOptions: (entry) => ({
+      includePreviewChunk: true,
+      resolvedMode: resolveTelegramPreviewStreamMode(entry),
+    }),
   });
-  updated = streaming.entry;
-  changed = changed || streaming.changed;
-
-  const rawAccounts = asObjectRecord(updated.accounts);
-  if (rawAccounts) {
-    let accountsChanged = false;
-    const accounts = { ...rawAccounts };
-    for (const [accountId, rawAccount] of Object.entries(rawAccounts)) {
-      const account = asObjectRecord(rawAccount);
-      if (!account) {
-        continue;
-      }
-      const accountStreaming = normalizeLegacyStreamingAliases({
-        entry: account,
-        pathPrefix: `channels.telegram.accounts.${accountId}`,
-        changes,
-        includePreviewChunk: true,
-        resolvedMode: resolveTelegramPreviewStreamMode(account),
-      });
-      if (accountStreaming.changed) {
-        accounts[accountId] = accountStreaming.entry;
-        accountsChanged = true;
-      }
-    }
-    if (accountsChanged) {
-      updated = { ...updated, accounts };
-      changed = true;
-    }
-  }
+  updated = aliases.entry;
+  changed = changed || aliases.changed;
 
   if (!changed && changes.length === 0) {
     return { config: cfg, changes: [] };

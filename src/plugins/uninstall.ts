@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { resolvePluginInstallDir } from "./install.js";
 import { defaultSlotIdForKey } from "./slots.js";
 
@@ -271,7 +272,7 @@ export async function uninstallPlugin(
       actions.directory = existed;
     } catch (error) {
       warnings.push(
-        `Failed to remove plugin directory ${deleteTarget}: ${error instanceof Error ? error.message : String(error)}`,
+        `Failed to remove plugin directory ${deleteTarget}: ${formatErrorMessage(error)}`,
       );
       // Directory deletion failure is not fatal; config is the source of truth.
     }

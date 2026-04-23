@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { serializePayload, type MessagePayloadObject, type RequestClient } from "@buape/carbon";
 import { ChannelType, Routes } from "discord-api-types/v10";
-import { loadConfig, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { requireRuntimeConfig, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import { recordChannelActivity } from "openclaw/plugin-sdk/infra-runtime";
 import { maxBytesForKind } from "openclaw/plugin-sdk/media-runtime";
@@ -13,7 +13,7 @@ import type { PollInput } from "openclaw/plugin-sdk/media-runtime";
 import { resolveChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import type { RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
+import { convertMarkdownTables, normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { loadWebMediaRaw } from "openclaw/plugin-sdk/web-media";
 import { resolveDiscordAccount } from "./accounts.js";
 import { resolveDiscordClientAccountContext } from "./client.js";
@@ -45,7 +45,7 @@ import {
 } from "./voice-message.js";
 
 type DiscordSendOpts = {
-  cfg?: OpenClawConfig;
+  cfg: OpenClawConfig;
   token?: string;
   accountId?: string;
   mediaUrl?: string;
@@ -105,10 +105,7 @@ const DISCORD_THREAD_NAME_LIMIT = 100;
 /** Derive a thread title from the first non-empty line of the message text. */
 function deriveForumThreadName(text: string): string {
   const firstLine =
-    text
-      .split("\n")
-      .find((l) => l.trim())
-      ?.trim() ?? "";
+    normalizeOptionalString(text.split("\n").find((line) => normalizeOptionalString(line))) ?? "";
   return firstLine.slice(0, DISCORD_THREAD_NAME_LIMIT) || new Date().toISOString().slice(0, 16);
 }
 
@@ -122,8 +119,8 @@ function toDiscordSendResult(
   fallbackChannelId: string,
 ): DiscordSendResult {
   return {
-    messageId: result.id ? String(result.id) : "unknown",
-    channelId: String(result.channel_id ?? fallbackChannelId),
+    messageId: result.id || "unknown",
+    channelId: result.channel_id ?? fallbackChannelId,
   };
 }
 
@@ -131,7 +128,7 @@ async function resolveDiscordSendTarget(
   to: string,
   opts: DiscordSendOpts,
 ): Promise<{ rest: RequestClient; request: DiscordClientRequest; channelId: string }> {
-  const cfg = opts.cfg ?? loadConfig();
+  const cfg = requireRuntimeConfig(opts.cfg, "Discord send target resolution");
   const { rest, request } = createDiscordClient(opts, cfg);
   const recipient = await parseAndResolveRecipient(to, opts.accountId, cfg);
   const { channelId } = await resolveChannelId(rest, recipient, request);
@@ -141,9 +138,9 @@ async function resolveDiscordSendTarget(
 export async function sendMessageDiscord(
   to: string,
   text: string,
-  opts: DiscordSendOpts = {},
+  opts: DiscordSendOpts,
 ): Promise<DiscordSendResult> {
-  const cfg = opts.cfg ?? loadConfig();
+  const cfg = requireRuntimeConfig(opts.cfg, "Discord send");
   const accountInfo = resolveDiscordAccount({
     cfg,
     accountId: opts.accountId,
@@ -204,6 +201,7 @@ export async function sendMessageDiscord(
     } catch (err) {
       throw await buildDiscordSendError(err, {
         channelId,
+        cfg,
         rest,
         token,
         hasMedia: Boolean(opts.mediaUrl),
@@ -258,6 +256,7 @@ export async function sendMessageDiscord(
     } catch (err) {
       throw await buildDiscordSendError(err, {
         channelId: threadId,
+        cfg,
         rest,
         token,
         hasMedia: Boolean(opts.mediaUrl),
@@ -315,6 +314,7 @@ export async function sendMessageDiscord(
   } catch (err) {
     throw await buildDiscordSendError(err, {
       channelId,
+      cfg,
       rest,
       token,
       hasMedia: Boolean(opts.mediaUrl),
@@ -330,7 +330,7 @@ export async function sendMessageDiscord(
 }
 
 type DiscordWebhookSendOpts = {
-  cfg?: OpenClawConfig;
+  cfg: OpenClawConfig;
   webhookId: string;
   webhookToken: string;
   accountId?: string;
@@ -361,13 +361,13 @@ export async function sendWebhookMessageDiscord(
   text: string,
   opts: DiscordWebhookSendOpts,
 ): Promise<DiscordSendResult> {
-  const webhookId = opts.webhookId.trim();
-  const webhookToken = opts.webhookToken.trim();
+  const webhookId = normalizeOptionalString(opts.webhookId) ?? "";
+  const webhookToken = normalizeOptionalString(opts.webhookToken) ?? "";
   if (!webhookId || !webhookToken) {
     throw new Error("Discord webhook id/token are required");
   }
 
-  const replyTo = typeof opts.replyTo === "string" ? opts.replyTo.trim() : "";
+  const replyTo = normalizeOptionalString(opts.replyTo) ?? "";
   const messageReference = replyTo ? { message_id: replyTo, fail_if_not_exists: false } : undefined;
   const { account, proxyFetch } = resolveDiscordClientAccountContext({
     cfg: opts.cfg,
@@ -391,8 +391,8 @@ export async function sendWebhookMessageDiscord(
       },
       body: JSON.stringify({
         content: rewrittenText,
-        username: opts.username?.trim() || undefined,
-        avatar_url: opts.avatarUrl?.trim() || undefined,
+        username: normalizeOptionalString(opts.username),
+        avatar_url: normalizeOptionalString(opts.avatarUrl),
         ...(messageReference ? { message_reference: messageReference } : {}),
       }),
     },
@@ -418,19 +418,15 @@ export async function sendWebhookMessageDiscord(
     // Best-effort telemetry only.
   }
   return {
-    messageId: payload.id ? String(payload.id) : "unknown",
-    channelId: payload.channel_id
-      ? String(payload.channel_id)
-      : opts.threadId
-        ? String(opts.threadId)
-        : "",
+    messageId: payload.id || "unknown",
+    channelId: payload.channel_id ? payload.channel_id : opts.threadId ? String(opts.threadId) : "",
   };
 }
 
 export async function sendStickerDiscord(
   to: string,
   stickerIds: string[],
-  opts: DiscordSendOpts & { content?: string } = {},
+  opts: DiscordSendOpts & { content?: string },
 ): Promise<DiscordSendResult> {
   const { rest, request, channelId, rewrittenContent } = await resolveDiscordStructuredSendContext(
     to,
@@ -453,7 +449,7 @@ export async function sendStickerDiscord(
 export async function sendPollDiscord(
   to: string,
   poll: PollInput,
-  opts: DiscordSendOpts & { content?: string } = {},
+  opts: DiscordSendOpts & { content?: string },
 ): Promise<DiscordSendResult> {
   const { rest, request, channelId, rewrittenContent } = await resolveDiscordStructuredSendContext(
     to,
@@ -487,7 +483,7 @@ async function resolveDiscordStructuredSendContext(
   channelId: string;
   rewrittenContent?: string;
 }> {
-  const cfg = opts.cfg ?? loadConfig();
+  const cfg = requireRuntimeConfig(opts.cfg, "Discord structured send");
   const accountInfo = resolveDiscordAccount({
     cfg,
     accountId: opts.accountId,
@@ -503,7 +499,7 @@ async function resolveDiscordStructuredSendContext(
 }
 
 type VoiceMessageOpts = {
-  cfg?: OpenClawConfig;
+  cfg: OpenClawConfig;
   token?: string;
   accountId?: string;
   verbose?: boolean;
@@ -539,7 +535,7 @@ async function materializeVoiceMessageInput(mediaUrl: string): Promise<{ filePat
 export async function sendVoiceMessageDiscord(
   to: string,
   audioPath: string,
-  opts: VoiceMessageOpts = {},
+  opts: VoiceMessageOpts,
 ): Promise<DiscordSendResult> {
   const { filePath: localInputPath } = await materializeVoiceMessageInput(audioPath);
   let oggPath: string | null = null;
@@ -547,9 +543,10 @@ export async function sendVoiceMessageDiscord(
   let token: string | undefined;
   let rest: RequestClient | undefined;
   let channelId: string | undefined;
+  let cfg: OpenClawConfig | undefined;
 
   try {
-    const cfg = opts.cfg ?? loadConfig();
+    cfg = requireRuntimeConfig(opts.cfg, "Discord voice send");
     const accountInfo = resolveDiscordAccount({
       cfg,
       accountId: opts.accountId,
@@ -592,9 +589,10 @@ export async function sendVoiceMessageDiscord(
 
     return toDiscordSendResult(result, channelId);
   } catch (err) {
-    if (channelId && rest && token) {
+    if (channelId && rest && token && cfg) {
       throw await buildDiscordSendError(err, {
         channelId,
+        cfg,
         rest,
         token,
         hasMedia: true,

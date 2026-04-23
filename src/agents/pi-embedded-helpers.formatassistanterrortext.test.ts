@@ -70,6 +70,12 @@ describe("formatAssistantErrorText", () => {
     expect(result).toContain("Session history looks corrupted");
     expect(result).toContain("/new");
   });
+  it("returns a recovery hint for replay-invalid connection mismatch errors", () => {
+    const msg = makeAssistantError("401 input item ID does not belong to this connection");
+    const result = formatAssistantErrorText(msg);
+    expect(result).toContain("Session history or replay state is invalid");
+    expect(result).toContain("/new");
+  });
   it("handles JSON-wrapped role errors", () => {
     const msg = makeAssistantError('{"error":{"message":"400 Incorrect role information"}}');
     const result = formatAssistantErrorText(msg);
@@ -161,21 +167,38 @@ describe("formatAssistantErrorText", () => {
     expect(result).toBe("⚠️ Your quota has been exhausted, try again in 24 hours");
   });
 
-  it("falls back to generic copy for HTML quota pages", () => {
+  it("returns upstream HTML copy for HTML quota pages", () => {
     const msg = makeAssistantError(
       "429 <!DOCTYPE html><html><body>Your quota is exhausted</body></html>",
     );
     expect(formatAssistantErrorText(msg)).toBe(
-      "⚠️ API rate limit reached. Please try again later.",
+      "The provider returned an HTML error page instead of an API response. This usually means a CDN or gateway (e.g. Cloudflare) blocked the request. Retry in a moment or check provider status.",
     );
   });
 
-  it("falls back to generic copy for prefixed HTML rate-limit pages", () => {
+  it("returns upstream HTML copy for prefixed 521 HTML rate-limit pages", () => {
     const msg = makeAssistantError(
       "Error: 521 <!DOCTYPE html><html><body>rate limit</body></html>",
     );
     expect(formatAssistantErrorText(msg)).toBe(
-      "⚠️ API rate limit reached. Please try again later.",
+      "The provider returned an HTML error page instead of an API response. This usually means a CDN or gateway (e.g. Cloudflare) blocked the request. Retry in a moment or check provider status.",
+    );
+  });
+
+  it("does not misdiagnose standalone Cloudflare challenge HTML as DNS", () => {
+    const msg = makeAssistantError(`<!DOCTYPE html>
+<html>
+  <head>
+    <title>Just a moment...</title>
+    <link rel="dns-prefetch" href="//chatgpt.com">
+  </head>
+  <body>
+    <span id="challenge-error-text">Enable JavaScript and cookies to continue</span>
+    <script src="/cdn-cgi/challenge-platform/h/g/orchestrate/chl_page/v1"></script>
+  </body>
+</html>`);
+    expect(formatAssistantErrorText(msg)).toBe(
+      "The provider returned an HTML error page instead of an API response. This usually means a CDN or gateway (e.g. Cloudflare) blocked the request. Retry in a moment or check provider status.",
     );
   });
 
@@ -212,6 +235,93 @@ describe("formatAssistantErrorText", () => {
     const msg = makeAssistantError("socket hang up");
     expect(formatAssistantErrorText(msg)).toBe(
       "LLM request failed: network connection was interrupted.",
+    );
+  });
+
+  it("returns an explicit re-authentication message for OAuth refresh failures", () => {
+    const msg = makeAssistantError(
+      "OAuth token refresh failed for openai-codex: invalid_grant. Please try again or re-authenticate.",
+    );
+    expect(formatAssistantErrorText(msg)).toBe(
+      "Authentication refresh failed. Re-authenticate this provider and try again.",
+    );
+  });
+
+  it("returns a contention-specific message for OAuth refresh lock timeouts", () => {
+    const msg = makeAssistantError("file lock timeout for /tmp/openclaw-oauth-refresh.lock");
+    expect(formatAssistantErrorText(msg)).toBe(
+      "Authentication refresh is already in progress elsewhere and this attempt timed out waiting for it. Retry in a moment.",
+    );
+  });
+
+  it("returns a timeout-specific message for OAuth refresh hard timeouts", () => {
+    const msg = makeAssistantError(
+      'OAuth refresh call "refreshProviderOAuthCredentialWithPlugin(openai-codex)" exceeded hard timeout (120000ms)',
+    );
+    expect(formatAssistantErrorText(msg)).toBe(
+      "Authentication refresh timed out before the provider completed. Retry in a moment; re-authenticate only if it keeps failing.",
+    );
+  });
+
+  it("returns a missing-scope message for OpenAI Codex scope failures", () => {
+    const msg = makeAssistantError(
+      '401 {"type":"error","error":{"type":"permission_error","message":"Missing scopes: api.responses.write model.request"}}',
+    );
+    expect(formatAssistantErrorText(msg, { provider: "openai-codex" })).toBe(
+      "Authentication is missing the required OpenAI Codex scopes. Re-run OpenAI/Codex login and try again.",
+    );
+  });
+
+  it("returns a missing-scope message for raw OpenAI Codex scope payloads without an HTTP prefix", () => {
+    const msg = makeAssistantError(
+      '{"type":"error","error":{"type":"permission_error","message":"Missing scopes: api.responses.write model.request"},"code":401}',
+    );
+    expect(formatAssistantErrorText(msg, { provider: "openai-codex" })).toBe(
+      "Authentication is missing the required OpenAI Codex scopes. Re-run OpenAI/Codex login and try again.",
+    );
+  });
+
+  it("does not misdiagnose non-Codex permission errors as missing-scope failures", () => {
+    const msg = makeAssistantError(
+      '401 {"type":"error","error":{"type":"permission_error","message":"Missing scopes: api.responses.write model.request"}}',
+    );
+    expect(formatAssistantErrorText(msg, { provider: "openai" })).not.toContain(
+      "required OpenAI Codex scopes",
+    );
+  });
+
+  it("does not misdiagnose generic Codex permission failures as missing-scope failures", () => {
+    const msg = makeAssistantError(
+      '403 {"type":"error","error":{"type":"permission_error","message":"Insufficient permissions for this organization"}}',
+    );
+    expect(formatAssistantErrorText(msg, { provider: "openai-codex" })).not.toContain(
+      "required OpenAI Codex scopes",
+    );
+  });
+
+  it("returns an HTML-403 auth message for HTML provider auth failures", () => {
+    const msg = makeAssistantError("403 <!DOCTYPE html><html><body>Access denied</body></html>");
+    expect(formatAssistantErrorText(msg)).toBe(
+      "Authentication failed with an HTML 403 response from the provider. Re-authenticate and verify your provider account access.",
+    );
+  });
+
+  it("returns a proxy-specific message for proxy misroutes", () => {
+    const msg = makeAssistantError("407 Proxy Authentication Required");
+    expect(formatAssistantErrorText(msg)).toBe(
+      "LLM request failed: proxy or tunnel configuration blocked the provider request.",
+    );
+  });
+
+  it("keeps non-transport config errors that mention proxy settings actionable", () => {
+    const msg = makeAssistantError(
+      'Model-provider request.proxy/request.tls is not yet supported for api "ollama"',
+    );
+    expect(formatAssistantErrorText(msg)).toContain(
+      'Model-provider request.proxy/request.tls is not yet supported for api "ollama"',
+    );
+    expect(formatAssistantErrorText(msg)).not.toBe(
+      "LLM request failed: proxy or tunnel configuration blocked the provider request.",
     );
   });
 
@@ -260,6 +370,21 @@ describe("formatRawAssistantErrorForUi", () => {
 
     expect(formatRawAssistantErrorForUi(htmlError)).toBe(
       "The AI service is temporarily unavailable (HTTP 521). Please try again in a moment.",
+    );
+  });
+
+  it("formats standalone Cloudflare challenge HTML into a clean provider error", () => {
+    const htmlError = `<!DOCTYPE html>
+<html lang="en-US">
+  <head><title>Just a moment...</title></head>
+  <body>
+    <span id="challenge-error-text">Enable JavaScript and cookies to continue</span>
+    <script src="/cdn-cgi/challenge-platform/h/g/orchestrate/chl_page/v1"></script>
+  </body>
+</html>`;
+
+    expect(formatRawAssistantErrorForUi(htmlError)).toBe(
+      "The provider returned an HTML error page instead of an API response. This usually means a CDN or gateway (e.g. Cloudflare) blocked the request. Retry in a moment or check provider status.",
     );
   });
 });

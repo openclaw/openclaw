@@ -1,309 +1,67 @@
-import { spawn } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { resolveCliBackendConfig, resolveCliBackendLiveTest } from "../agents/cli-backends.js";
 import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
 import { parseModelRef } from "../agents/model-selection.js";
 import { clearRuntimeConfigSnapshot, type OpenClawConfig } from "../config/config.js";
 import { isTruthyEnvValue } from "../infra/env.js";
-import { getFreePortBlockWithPermissionFallback } from "../test-utils/ports.js";
-import { GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
-import { GatewayClient } from "./client.js";
-import { renderCatNoncePngBase64 } from "./live-image-probe.js";
+import {
+  applyCliBackendLiveEnv,
+  createBootstrapWorkspace,
+  ensurePairedTestGatewayClientIdentity,
+  getFreeGatewayPort,
+  matchesCliBackendReply,
+  parseImageMode,
+  resolveCliModelSwitchProbeTarget,
+  resolveCliBackendLiveArgs,
+  parseJsonStringArray,
+  restoreCliBackendLiveEnv,
+  shouldRunCliImageProbe,
+  shouldRunCliModelSwitchProbe,
+  shouldRunCliMcpProbe,
+  snapshotCliBackendLiveEnv,
+  type SystemPromptReport,
+  withClaudeMcpConfigOverrides,
+  connectTestGatewayClient,
+} from "./gateway-cli-backend.live-helpers.js";
+import {
+  verifyCliBackendImageProbe,
+  verifyCliCronMcpLoopbackPreflight,
+  verifyCliCronMcpProbe,
+} from "./gateway-cli-backend.live-probe-helpers.js";
 import { startGatewayServer } from "./server.js";
 import { extractPayloadText } from "./test-helpers.agent-results.js";
 
 const LIVE = isLiveTestEnabled();
 const CLI_LIVE = isTruthyEnvValue(process.env.OPENCLAW_LIVE_CLI_BACKEND);
-const CLI_IMAGE = isTruthyEnvValue(process.env.OPENCLAW_LIVE_CLI_BACKEND_IMAGE_PROBE);
 const CLI_RESUME = isTruthyEnvValue(process.env.OPENCLAW_LIVE_CLI_BACKEND_RESUME_PROBE);
+const CLI_DEBUG = isTruthyEnvValue(process.env.OPENCLAW_LIVE_CLI_BACKEND_DEBUG);
+const CLI_CI_SAFE_CODEX_CONFIG = isTruthyEnvValue(
+  process.env.OPENCLAW_LIVE_CLI_BACKEND_USE_CI_SAFE_CODEX_CONFIG,
+);
 const describeLive = LIVE && CLI_LIVE ? describe : describe.skip;
 
-const DEFAULT_MODEL = "claude-cli/claude-sonnet-4-6";
-const CLI_BACKEND_LIVE_TIMEOUT_MS = 180_000;
-const CLI_BOOTSTRAP_LIVE_TIMEOUT_MS = 300_000;
-const CLI_GATEWAY_CONNECT_TIMEOUT_MS = 30_000;
-const BOOTSTRAP_LIVE_MODEL = process.env.OPENCLAW_LIVE_CLI_BACKEND_MODEL ?? DEFAULT_MODEL;
-const describeClaudeBootstrapLive =
-  LIVE && CLI_LIVE && BOOTSTRAP_LIVE_MODEL.startsWith("claude-cli/") ? describe : describe.skip;
-const DEFAULT_CLAUDE_ARGS = [
-  "-p",
-  "--output-format",
-  "stream-json",
-  "--include-partial-messages",
-  "--verbose",
-  "--setting-sources",
-  "user",
-  "--permission-mode",
-  "bypassPermissions",
-];
-const DEFAULT_CODEX_ARGS = [
-  "exec",
-  "--json",
-  "--color",
-  "never",
-  "--sandbox",
-  "read-only",
-  "--skip-git-repo-check",
-];
-const DEFAULT_CLEAR_ENV = [
-  "ANTHROPIC_API_KEY",
-  "ANTHROPIC_API_KEY_OLD",
-  "ANTHROPIC_AUTH_TOKEN",
-  "ANTHROPIC_BASE_URL",
-  "ANTHROPIC_UNIX_SOCKET",
-  "CLAUDE_CONFIG_DIR",
-  "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR",
-  "CLAUDE_CODE_ENTRYPOINT",
-  "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
-  "CLAUDE_CODE_OAUTH_SCOPES",
-  "CLAUDE_CODE_OAUTH_TOKEN",
-  "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR",
-  "CLAUDE_CODE_PLUGIN_CACHE_DIR",
-  "CLAUDE_CODE_PLUGIN_SEED_DIR",
-  "CLAUDE_CODE_REMOTE",
-  "CLAUDE_CODE_USE_COWORK_PLUGINS",
-  "CLAUDE_CODE_USE_BEDROCK",
-  "CLAUDE_CODE_USE_FOUNDRY",
-  "CLAUDE_CODE_USE_VERTEX",
-];
+const DEFAULT_PROVIDER = "claude-cli";
+const DEFAULT_MODEL =
+  resolveCliBackendLiveTest(DEFAULT_PROVIDER)?.defaultModelRef ?? "claude-cli/claude-sonnet-4-6";
+// The cron/MCP live probe now tolerates more cancelled tool-call retries in CI,
+// so the outer test budget needs enough headroom to finish those retries.
+const CLI_BACKEND_LIVE_TIMEOUT_MS = 720_000;
+const CLI_BACKEND_REQUEST_TIMEOUT_MS = 240_000;
+const CLI_BACKEND_AGENT_TIMEOUT_SECONDS = Math.max(
+  1,
+  Math.ceil(CLI_BACKEND_REQUEST_TIMEOUT_MS / 1000) - 10,
+);
 
-function randomImageProbeCode(len = 6): string {
-  // Chosen to avoid common OCR confusions in our 5x7 bitmap font.
-  // Notably: 0↔8, B↔8, 6↔9, 3↔B, D↔0.
-  // Must stay within the glyph set in `src/gateway/live-image-probe.ts`.
-  const alphabet = "24567ACEF";
-  const bytes = randomBytes(len);
-  let out = "";
-  for (let i = 0; i < len; i += 1) {
-    out += alphabet[bytes[i] % alphabet.length];
+function logCliBackendLiveStep(step: string, details?: Record<string, unknown>): void {
+  if (!CLI_DEBUG) {
+    return;
   }
-  return out;
-}
-
-function editDistance(a: string, b: string): number {
-  if (a === b) {
-    return 0;
-  }
-  const aLen = a.length;
-  const bLen = b.length;
-  if (aLen === 0) {
-    return bLen;
-  }
-  if (bLen === 0) {
-    return aLen;
-  }
-
-  let prev = Array.from({ length: bLen + 1 }, (_v, idx) => idx);
-  let curr = Array.from({ length: bLen + 1 }, () => 0);
-
-  for (let i = 1; i <= aLen; i += 1) {
-    curr[0] = i;
-    const aCh = a.charCodeAt(i - 1);
-    for (let j = 1; j <= bLen; j += 1) {
-      const cost = aCh === b.charCodeAt(j - 1) ? 0 : 1;
-      curr[j] = Math.min(
-        prev[j] + 1, // delete
-        curr[j - 1] + 1, // insert
-        prev[j - 1] + cost, // substitute
-      );
-    }
-    [prev, curr] = [curr, prev];
-  }
-
-  return prev[bLen] ?? Number.POSITIVE_INFINITY;
-}
-
-function parseJsonStringArray(name: string, raw?: string): string[] | undefined {
-  const trimmed = raw?.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  const parsed = JSON.parse(trimmed);
-  if (!Array.isArray(parsed) || !parsed.every((entry) => typeof entry === "string")) {
-    throw new Error(`${name} must be a JSON array of strings.`);
-  }
-  return parsed;
-}
-
-function parseImageMode(raw?: string): "list" | "repeat" | undefined {
-  const trimmed = raw?.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  if (trimmed === "list" || trimmed === "repeat") {
-    return trimmed;
-  }
-  throw new Error("OPENCLAW_LIVE_CLI_BACKEND_IMAGE_MODE must be 'list' or 'repeat'.");
-}
-
-function withMcpConfigOverrides(args: string[], mcpConfigPath: string): string[] {
-  const next = [...args];
-  if (!next.includes("--strict-mcp-config")) {
-    next.push("--strict-mcp-config");
-  }
-  if (!next.includes("--mcp-config")) {
-    next.push("--mcp-config", mcpConfigPath);
-  }
-  return next;
-}
-
-async function getFreeGatewayPort(): Promise<number> {
-  return await getFreePortBlockWithPermissionFallback({
-    offsets: [0, 1, 2, 4],
-    fallbackBase: 40_000,
-  });
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function connectClient(params: { url: string; token: string }) {
-  const startedAt = Date.now();
-  let attempt = 0;
-  let lastError: Error | null = null;
-
-  while (Date.now() - startedAt < CLI_GATEWAY_CONNECT_TIMEOUT_MS) {
-    attempt += 1;
-    const remainingMs = CLI_GATEWAY_CONNECT_TIMEOUT_MS - (Date.now() - startedAt);
-    if (remainingMs <= 0) {
-      break;
-    }
-    try {
-      return await connectClientOnce({
-        ...params,
-        timeoutMs: Math.min(remainingMs, 10_000),
-      });
-    } catch (error) {
-      lastError = error instanceof Error ? error : new Error(String(error));
-      if (!isRetryableGatewayConnectError(lastError) || remainingMs <= 2_000) {
-        throw lastError;
-      }
-      await sleep(Math.min(500 * attempt, 2_000));
-    }
-  }
-
-  throw lastError ?? new Error("gateway connect timeout");
-}
-
-async function connectClientOnce(params: { url: string; token: string; timeoutMs: number }) {
-  return await new Promise<GatewayClient>((resolve, reject) => {
-    let done = false;
-    let client: GatewayClient | undefined;
-    const finish = (result: { client?: GatewayClient; error?: Error }) => {
-      if (done) {
-        return;
-      }
-      done = true;
-      clearTimeout(connectTimeout);
-      if (result.error) {
-        if (client) {
-          void client.stopAndWait({ timeoutMs: 1_000 }).catch(() => {});
-        }
-        reject(result.error);
-        return;
-      }
-      resolve(result.client as GatewayClient);
-    };
-
-    const failWithClose = (code: number, reason: string) =>
-      finish({ error: new Error(`gateway closed during connect (${code}): ${reason}`) });
-
-    client = new GatewayClient({
-      url: params.url,
-      token: params.token,
-      clientName: GATEWAY_CLIENT_NAMES.TEST,
-      clientVersion: "dev",
-      mode: "test",
-      requestTimeoutMs: params.timeoutMs,
-      connectChallengeTimeoutMs: params.timeoutMs,
-      onHelloOk: () => finish({ client }),
-      onConnectError: (error) => finish({ error }),
-      onClose: failWithClose,
-    });
-
-    const connectTimeout = setTimeout(
-      () => finish({ error: new Error("gateway connect timeout") }),
-      params.timeoutMs,
-    );
-    connectTimeout.unref();
-    client.start();
-  });
-}
-
-function isRetryableGatewayConnectError(error: Error): boolean {
-  const message = error.message.toLowerCase();
-  return (
-    message.includes("gateway closed during connect (1000)") ||
-    message.includes("gateway connect timeout") ||
-    message.includes("gateway connect challenge timeout")
-  );
-}
-
-async function runGatewayCliBootstrapLiveProbe(): Promise<{
-  ok: boolean;
-  text: string;
-  expectedText: string;
-  systemPromptReport: {
-    injectedWorkspaceFiles?: Array<{ name?: string }>;
-  } | null;
-}> {
-  return await new Promise((resolve, reject) => {
-    const env = { ...process.env };
-    delete env.VITEST;
-    const child = spawn(
-      "pnpm",
-      ["exec", "tsx", path.join("scripts", "gateway-cli-bootstrap-live-probe.ts")],
-      {
-        cwd: process.cwd(),
-        env,
-        stdio: ["ignore", "pipe", "pipe"],
-      },
-    );
-    let stdout = "";
-    let stderr = "";
-    const timeout = setTimeout(() => {
-      child.kill("SIGTERM");
-      reject(new Error(`bootstrap probe timed out\nstdout:\n${stdout}\nstderr:\n${stderr}`));
-    }, CLI_BOOTSTRAP_LIVE_TIMEOUT_MS);
-    timeout.unref();
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => {
-      stdout += chunk;
-    });
-    child.stderr.on("data", (chunk: string) => {
-      stderr += chunk;
-    });
-    child.on("error", (error) => {
-      clearTimeout(timeout);
-      reject(error);
-    });
-    child.on("close", (code) => {
-      clearTimeout(timeout);
-      if (code !== 0) {
-        reject(
-          new Error(`bootstrap probe exit=${String(code)}\nstdout:\n${stdout}\nstderr:\n${stderr}`),
-        );
-        return;
-      }
-      const line = stdout
-        .trim()
-        .split(/\r?\n/)
-        .map((entry) => entry.trim())
-        .findLast((entry) => entry.startsWith("{") && entry.endsWith("}"));
-      if (!line) {
-        reject(
-          new Error(`bootstrap probe missing JSON result\nstdout:\n${stdout}\nstderr:\n${stderr}`),
-        );
-        return;
-      }
-      resolve(JSON.parse(line) as Awaited<ReturnType<typeof runGatewayCliBootstrapLiveProbe>>);
-    });
-  });
+  const suffix = details && Object.keys(details).length > 0 ? ` ${JSON.stringify(details)}` : "";
+  console.error(`[gateway-cli-live] ${step}${suffix}`);
 }
 
 describeLive("gateway live (cli backend)", () => {
@@ -316,32 +74,15 @@ describeLive("gateway live (cli backend)", () => {
           process.env.OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV,
         ) ?? [],
       );
+      const previousEnv = snapshotCliBackendLiveEnv();
 
       clearRuntimeConfigSnapshot();
-      const previous = {
-        configPath: process.env.OPENCLAW_CONFIG_PATH,
-        token: process.env.OPENCLAW_GATEWAY_TOKEN,
-        skipChannels: process.env.OPENCLAW_SKIP_CHANNELS,
-        skipGmail: process.env.OPENCLAW_SKIP_GMAIL_WATCHER,
-        skipCron: process.env.OPENCLAW_SKIP_CRON,
-        skipCanvas: process.env.OPENCLAW_SKIP_CANVAS_HOST,
-        anthropicApiKey: process.env.ANTHROPIC_API_KEY,
-        anthropicApiKeyOld: process.env.ANTHROPIC_API_KEY_OLD,
-      };
-
-      process.env.OPENCLAW_SKIP_CHANNELS = "1";
-      process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
-      process.env.OPENCLAW_SKIP_CRON = "1";
-      process.env.OPENCLAW_SKIP_CANVAS_HOST = "1";
-      if (!preservedEnv.has("ANTHROPIC_API_KEY")) {
-        delete process.env.ANTHROPIC_API_KEY;
-      }
-      if (!preservedEnv.has("ANTHROPIC_API_KEY_OLD")) {
-        delete process.env.ANTHROPIC_API_KEY_OLD;
-      }
+      applyCliBackendLiveEnv(preservedEnv);
 
       const token = `test-${randomUUID()}`;
       process.env.OPENCLAW_GATEWAY_TOKEN = token;
+      const port = await getFreeGatewayPort();
+      logCliBackendLiveStep("env-ready", { port });
 
       const rawModel = process.env.OPENCLAW_LIVE_CLI_BACKEND_MODEL ?? DEFAULT_MODEL;
       const parsed = parseModelRef(rawModel, "claude-cli");
@@ -350,15 +91,25 @@ describeLive("gateway live (cli backend)", () => {
           `OPENCLAW_LIVE_CLI_BACKEND_MODEL must resolve to a CLI backend model. Got: ${rawModel}`,
         );
       }
+
       const providerId = parsed.provider;
       const modelKey = `${providerId}/${parsed.model}`;
-
-      const providerDefaults =
-        providerId === "claude-cli"
-          ? { command: "claude", args: DEFAULT_CLAUDE_ARGS }
-          : providerId === "codex-cli"
-            ? { command: "codex", args: DEFAULT_CODEX_ARGS }
-            : null;
+      const backendResolved = resolveCliBackendConfig(providerId);
+      const enableCliImageProbe = shouldRunCliImageProbe(providerId);
+      const enableCliMcpProbe = shouldRunCliMcpProbe(providerId);
+      const enableCliModelSwitchProbe = shouldRunCliModelSwitchProbe(providerId, modelKey);
+      const modelSwitchTarget = enableCliModelSwitchProbe
+        ? resolveCliModelSwitchProbeTarget(providerId, modelKey)
+        : undefined;
+      logCliBackendLiveStep("model-selected", {
+        providerId,
+        modelKey,
+        enableCliImageProbe,
+        enableCliMcpProbe,
+        enableCliModelSwitchProbe,
+        modelSwitchTarget,
+      });
+      const providerDefaults = backendResolved?.config;
 
       const cliCommand = process.env.OPENCLAW_LIVE_CLI_BACKEND_COMMAND ?? providerDefaults?.command;
       if (!cliCommand) {
@@ -366,28 +117,31 @@ describeLive("gateway live (cli backend)", () => {
           `OPENCLAW_LIVE_CLI_BACKEND_COMMAND is required for provider "${providerId}".`,
         );
       }
-      const baseCliArgs =
-        parseJsonStringArray(
-          "OPENCLAW_LIVE_CLI_BACKEND_ARGS",
-          process.env.OPENCLAW_LIVE_CLI_BACKEND_ARGS,
-        ) ?? providerDefaults?.args;
-      if (!baseCliArgs || baseCliArgs.length === 0) {
-        throw new Error(`OPENCLAW_LIVE_CLI_BACKEND_ARGS is required for provider "${providerId}".`);
-      }
+
+      const { args: baseCliArgs, resumeArgs: baseCliResumeArgs } = resolveCliBackendLiveArgs({
+        providerId,
+        defaultArgs: providerDefaults?.args,
+        defaultResumeArgs: providerDefaults?.resumeArgs,
+      });
+
       const cliClearEnv =
         parseJsonStringArray(
           "OPENCLAW_LIVE_CLI_BACKEND_CLEAR_ENV",
           process.env.OPENCLAW_LIVE_CLI_BACKEND_CLEAR_ENV,
-        ) ?? (providerId === "claude-cli" ? DEFAULT_CLEAR_ENV : []);
+        ) ??
+        providerDefaults?.clearEnv ??
+        [];
       const filteredCliClearEnv = cliClearEnv.filter((name) => !preservedEnv.has(name));
       const preservedCliEnv = Object.fromEntries(
         [...preservedEnv]
           .map((name) => [name, process.env[name]])
           .filter((entry): entry is [string, string] => typeof entry[1] === "string"),
       );
-      const cliImageArg = process.env.OPENCLAW_LIVE_CLI_BACKEND_IMAGE_ARG?.trim() || undefined;
-      const cliImageMode = parseImageMode(process.env.OPENCLAW_LIVE_CLI_BACKEND_IMAGE_MODE);
-
+      const cliImageArg =
+        process.env.OPENCLAW_LIVE_CLI_BACKEND_IMAGE_ARG?.trim() || providerDefaults?.imageArg;
+      const cliImageMode =
+        parseImageMode(process.env.OPENCLAW_LIVE_CLI_BACKEND_IMAGE_MODE) ??
+        providerDefaults?.imageMode;
       if (cliImageMode && !cliImageArg) {
         throw new Error(
           "OPENCLAW_LIVE_CLI_BACKEND_IMAGE_MODE requires OPENCLAW_LIVE_CLI_BACKEND_IMAGE_ARG.",
@@ -395,12 +149,24 @@ describeLive("gateway live (cli backend)", () => {
       }
 
       const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-live-cli-"));
+      const stateDir = path.join(tempDir, "state");
+      await fs.mkdir(stateDir, { recursive: true });
+      process.env.OPENCLAW_STATE_DIR = stateDir;
+      const bundleMcp = backendResolved?.bundleMcp === true;
+      const bootstrapWorkspace =
+        backendResolved?.bundleMcpMode === "claude-config-file"
+          ? await createBootstrapWorkspace(tempDir)
+          : null;
       const disableMcpConfig = process.env.OPENCLAW_LIVE_CLI_BACKEND_DISABLE_MCP_CONFIG !== "0";
       let cliArgs = baseCliArgs;
-      if (providerId === "claude-cli" && disableMcpConfig) {
+      if (
+        bundleMcp &&
+        disableMcpConfig &&
+        backendResolved?.bundleMcpMode === "claude-config-file"
+      ) {
         const mcpConfigPath = path.join(tempDir, "claude-mcp.json");
         await fs.writeFile(mcpConfigPath, `${JSON.stringify({ mcpServers: {} }, null, 2)}\n`);
-        cliArgs = withMcpConfigOverrides(baseCliArgs, mcpConfigPath);
+        cliArgs = withClaudeMcpConfigOverrides(baseCliArgs, mcpConfigPath);
       }
 
       const cfg: OpenClawConfig = {};
@@ -414,23 +180,38 @@ describeLive("gateway live (cli backend)", () => {
       const existingBackends = cfgWithCliBackends.agents?.defaults?.cliBackends ?? {};
       const nextCfg = {
         ...cfg,
+        gateway: {
+          mode: "local",
+          ...cfg.gateway,
+          port,
+          auth: { mode: "token", token },
+        },
         agents: {
           ...cfg.agents,
           defaults: {
             ...cfg.agents?.defaults,
+            ...(bootstrapWorkspace ? { workspace: bootstrapWorkspace.workspaceRootDir } : {}),
             model: { primary: modelKey },
             models: {
               [modelKey]: {},
+              ...(modelSwitchTarget ? { [modelSwitchTarget]: {} } : {}),
             },
             cliBackends: {
               ...existingBackends,
               [providerId]: {
                 command: cliCommand,
                 args: cliArgs,
+                resumeArgs: baseCliResumeArgs,
                 clearEnv: filteredCliClearEnv.length > 0 ? filteredCliClearEnv : undefined,
                 env: Object.keys(preservedCliEnv).length > 0 ? preservedCliEnv : undefined,
-                systemPromptWhen: "never",
-                ...(cliImageArg ? { imageArg: cliImageArg, imageMode: cliImageMode } : {}),
+                systemPromptWhen: providerDefaults?.systemPromptWhen ?? "never",
+                ...(cliImageArg
+                  ? {
+                      imageArg: cliImageArg,
+                      imageMode: cliImageMode,
+                      imagePathScope: providerDefaults?.imagePathScope,
+                    }
+                  : {}),
               },
             },
             sandbox: { mode: "off" },
@@ -440,180 +221,201 @@ describeLive("gateway live (cli backend)", () => {
       const tempConfigPath = path.join(tempDir, "openclaw.json");
       await fs.writeFile(tempConfigPath, `${JSON.stringify(nextCfg, null, 2)}\n`);
       process.env.OPENCLAW_CONFIG_PATH = tempConfigPath;
+      const deviceIdentity = await ensurePairedTestGatewayClientIdentity();
+      logCliBackendLiveStep("config-written", {
+        tempConfigPath,
+        stateDir,
+        cliCommand,
+        cliArgs,
+      });
 
-      const port = await getFreeGatewayPort();
       const server = await startGatewayServer(port, {
         bind: "loopback",
         auth: { mode: "token", token },
         controlUiEnabled: false,
       });
-
-      const client = await connectClient({
+      logCliBackendLiveStep("server-started");
+      const client = await connectTestGatewayClient({
         url: `ws://127.0.0.1:${port}`,
         token,
+        deviceIdentity,
       });
+      logCliBackendLiveStep("client-connected");
 
       try {
         const sessionKey = "agent:dev:live-cli-backend";
-        const runId = randomUUID();
         const nonce = randomBytes(3).toString("hex").toUpperCase();
-        const message =
-          providerId === "codex-cli"
-            ? `Please include the token CLI-BACKEND-${nonce} in your reply.`
-            : `Reply with exactly: CLI backend OK ${nonce}.`;
+        const memoryNonce = randomBytes(3).toString("hex").toUpperCase();
+        const memoryToken = `CLI-MEM-${memoryNonce}`;
+        logCliBackendLiveStep("agent-request:start", { sessionKey, nonce });
         const payload = await client.request(
           "agent",
           {
             sessionKey,
-            idempotencyKey: `idem-${runId}`,
-            message,
+            idempotencyKey: `idem-${randomUUID()}`,
+            message:
+              providerId === "codex-cli"
+                ? `Please include the token CLI-BACKEND-${nonce} in your reply.`
+                : enableCliModelSwitchProbe
+                  ? `Reply with exactly: CLI backend OK ${nonce}.` +
+                    ` Also remember this session note for later: ${memoryToken}.` +
+                    " Do not include the note in your reply."
+                  : `Reply with exactly: CLI backend OK ${nonce}.`,
             deliver: false,
+            timeout: CLI_BACKEND_AGENT_TIMEOUT_SECONDS,
           },
-          { expectFinal: true },
+          { expectFinal: true, timeoutMs: CLI_BACKEND_REQUEST_TIMEOUT_MS },
         );
         if (payload?.status !== "ok") {
           throw new Error(`agent status=${String(payload?.status)}`);
         }
+        logCliBackendLiveStep("agent-request:done", { status: payload?.status });
+
         const text = extractPayloadText(payload?.result);
         if (providerId === "codex-cli") {
           expect(text).toContain(`CLI-BACKEND-${nonce}`);
         } else {
-          expect(text).toContain(`CLI backend OK ${nonce}.`);
+          const resultWithMeta = payload?.result as {
+            meta?: { systemPromptReport?: SystemPromptReport };
+          };
+          expect(matchesCliBackendReply(text, `CLI backend OK ${nonce}.`)).toBe(true);
+          expect(
+            resultWithMeta.meta?.systemPromptReport?.injectedWorkspaceFiles?.map(
+              (entry) => entry.name,
+            ) ?? [],
+          ).toEqual(expect.arrayContaining(bootstrapWorkspace?.expectedInjectedFiles ?? []));
         }
 
-        if (CLI_RESUME) {
-          const runIdResume = randomUUID();
+        if (modelSwitchTarget) {
+          const switchNonce = randomBytes(3).toString("hex").toUpperCase();
+          logCliBackendLiveStep("agent-switch:start", {
+            sessionKey,
+            fromModel: modelKey,
+            toModel: modelSwitchTarget,
+            switchNonce,
+            memoryToken,
+          });
+          const patchPayload = await client.request("sessions.patch", {
+            key: sessionKey,
+            model: modelSwitchTarget,
+          });
+          if (!patchPayload || typeof patchPayload !== "object" || !("ok" in patchPayload)) {
+            throw new Error(
+              `sessions.patch failed for model switch: ${JSON.stringify(patchPayload)}`,
+            );
+          }
+          const switchPayload = await client.request(
+            "agent",
+            {
+              sessionKey,
+              idempotencyKey: `idem-${randomUUID()}`,
+              message:
+                "We just switched from Claude Sonnet to Claude Opus in the same session. " +
+                `What session note did I ask you to remember earlier? ` +
+                `Reply with exactly: CLI backend SWITCH OK ${switchNonce} <remembered-note>.`,
+              deliver: false,
+              timeout: CLI_BACKEND_AGENT_TIMEOUT_SECONDS,
+            },
+            { expectFinal: true, timeoutMs: CLI_BACKEND_REQUEST_TIMEOUT_MS },
+          );
+          if (switchPayload?.status !== "ok") {
+            throw new Error(`switch status=${String(switchPayload?.status)}`);
+          }
+          logCliBackendLiveStep("agent-switch:done", { status: switchPayload?.status });
+          const switchText = extractPayloadText(switchPayload?.result);
+          expect(
+            matchesCliBackendReply(
+              switchText,
+              `CLI backend SWITCH OK ${switchNonce} ${memoryToken}.`,
+            ),
+          ).toBe(true);
+        } else if (CLI_RESUME) {
           const resumeNonce = randomBytes(3).toString("hex").toUpperCase();
-          const resumeMessage =
-            providerId === "codex-cli"
-              ? `Please include the token CLI-RESUME-${resumeNonce} in your reply.`
-              : `Reply with exactly: CLI backend RESUME OK ${resumeNonce}.`;
+          logCliBackendLiveStep("agent-resume:start", { sessionKey, resumeNonce });
           const resumePayload = await client.request(
             "agent",
             {
               sessionKey,
-              idempotencyKey: `idem-${runIdResume}`,
-              message: resumeMessage,
+              idempotencyKey: `idem-${randomUUID()}`,
+              message:
+                providerId === "codex-cli"
+                  ? `Please include the token CLI-RESUME-${resumeNonce} in your reply.`
+                  : `Reply with exactly: CLI backend RESUME OK ${resumeNonce}.`,
               deliver: false,
+              timeout: CLI_BACKEND_AGENT_TIMEOUT_SECONDS,
             },
-            { expectFinal: true },
+            { expectFinal: true, timeoutMs: CLI_BACKEND_REQUEST_TIMEOUT_MS },
           );
           if (resumePayload?.status !== "ok") {
             throw new Error(`resume status=${String(resumePayload?.status)}`);
           }
+          logCliBackendLiveStep("agent-resume:done", { status: resumePayload?.status });
           const resumeText = extractPayloadText(resumePayload?.result);
           if (providerId === "codex-cli") {
             expect(resumeText).toContain(`CLI-RESUME-${resumeNonce}`);
           } else {
-            expect(resumeText).toContain(`CLI backend RESUME OK ${resumeNonce}.`);
+            expect(
+              matchesCliBackendReply(resumeText, `CLI backend RESUME OK ${resumeNonce}.`),
+            ).toBe(true);
           }
         }
 
-        if (CLI_IMAGE) {
-          // Shorter code => less OCR flake across providers, still tests image attachments end-to-end.
-          const imageCode = randomImageProbeCode();
-          const imageBase64 = renderCatNoncePngBase64(imageCode);
-          const runIdImage = randomUUID();
+        if (enableCliImageProbe) {
+          const imageSessionKey =
+            providerId === "codex-cli"
+              ? `agent:dev:live-cli-backend-image:${randomUUID()}`
+              : sessionKey;
+          logCliBackendLiveStep("image-probe:start", { sessionKey: imageSessionKey });
+          await verifyCliBackendImageProbe({
+            client,
+            providerId,
+            sessionKey: imageSessionKey,
+            tempDir,
+            bootstrapWorkspace,
+          });
+          logCliBackendLiveStep("image-probe:done");
+        }
 
-          const imageProbe = await client.request(
-            "agent",
-            {
+        if (enableCliMcpProbe) {
+          logCliBackendLiveStep("cron-mcp-loopback-preflight:start", {
+            sessionKey,
+            senderIsOwner: true,
+          });
+          await verifyCliCronMcpLoopbackPreflight({
+            sessionKey,
+            port,
+            token,
+            env: process.env,
+            senderIsOwner: true,
+          });
+          logCliBackendLiveStep("cron-mcp-loopback-preflight:done");
+          if (providerId === "codex-cli" && CLI_CI_SAFE_CODEX_CONFIG) {
+            logCliBackendLiveStep("cron-mcp-probe:skipped", {
+              providerId,
+              reason: "ci-safe-codex-config",
+            });
+          } else {
+            logCliBackendLiveStep("cron-mcp-probe:start", { sessionKey });
+            await verifyCliCronMcpProbe({
+              client,
+              providerId,
               sessionKey,
-              idempotencyKey: `idem-${runIdImage}-image`,
-              message:
-                "Look at the attached image. Reply with exactly two tokens separated by a single space: " +
-                "(1) the animal shown or written in the image, lowercase; " +
-                "(2) the code printed in the image, uppercase. No extra text.",
-              attachments: [
-                {
-                  mimeType: "image/png",
-                  fileName: `probe-${runIdImage}.png`,
-                  content: imageBase64,
-                },
-              ],
-              deliver: false,
-            },
-            { expectFinal: true },
-          );
-          if (imageProbe?.status !== "ok") {
-            throw new Error(`image probe failed: status=${String(imageProbe?.status)}`);
-          }
-          const imageText = extractPayloadText(imageProbe?.result);
-          if (!/\bcat\b/i.test(imageText)) {
-            throw new Error(`image probe missing 'cat': ${imageText}`);
-          }
-          const candidates = imageText.toUpperCase().match(/[A-Z0-9]{6,20}/g) ?? [];
-          const bestDistance = candidates.reduce((best, cand) => {
-            if (Math.abs(cand.length - imageCode.length) > 2) {
-              return best;
-            }
-            return Math.min(best, editDistance(cand, imageCode));
-          }, Number.POSITIVE_INFINITY);
-          if (!(bestDistance <= 5)) {
-            throw new Error(`image probe missing code (${imageCode}): ${imageText}`);
+              port,
+              token,
+              env: process.env,
+            });
+            logCliBackendLiveStep("cron-mcp-probe:done");
           }
         }
       } finally {
+        logCliBackendLiveStep("cleanup:start");
         clearRuntimeConfigSnapshot();
         await client.stopAndWait();
         await server.close();
         await fs.rm(tempDir, { recursive: true, force: true });
-        if (previous.configPath === undefined) {
-          delete process.env.OPENCLAW_CONFIG_PATH;
-        } else {
-          process.env.OPENCLAW_CONFIG_PATH = previous.configPath;
-        }
-        if (previous.token === undefined) {
-          delete process.env.OPENCLAW_GATEWAY_TOKEN;
-        } else {
-          process.env.OPENCLAW_GATEWAY_TOKEN = previous.token;
-        }
-        if (previous.skipChannels === undefined) {
-          delete process.env.OPENCLAW_SKIP_CHANNELS;
-        } else {
-          process.env.OPENCLAW_SKIP_CHANNELS = previous.skipChannels;
-        }
-        if (previous.skipGmail === undefined) {
-          delete process.env.OPENCLAW_SKIP_GMAIL_WATCHER;
-        } else {
-          process.env.OPENCLAW_SKIP_GMAIL_WATCHER = previous.skipGmail;
-        }
-        if (previous.skipCron === undefined) {
-          delete process.env.OPENCLAW_SKIP_CRON;
-        } else {
-          process.env.OPENCLAW_SKIP_CRON = previous.skipCron;
-        }
-        if (previous.skipCanvas === undefined) {
-          delete process.env.OPENCLAW_SKIP_CANVAS_HOST;
-        } else {
-          process.env.OPENCLAW_SKIP_CANVAS_HOST = previous.skipCanvas;
-        }
-        if (previous.anthropicApiKey === undefined) {
-          delete process.env.ANTHROPIC_API_KEY;
-        } else {
-          process.env.ANTHROPIC_API_KEY = previous.anthropicApiKey;
-        }
-        if (previous.anthropicApiKeyOld === undefined) {
-          delete process.env.ANTHROPIC_API_KEY_OLD;
-        } else {
-          process.env.ANTHROPIC_API_KEY_OLD = previous.anthropicApiKeyOld;
-        }
+        restoreCliBackendLiveEnv(previousEnv);
+        logCliBackendLiveStep("cleanup:done");
       }
-    },
-    CLI_BOOTSTRAP_LIVE_TIMEOUT_MS,
-  );
-});
-
-describeClaudeBootstrapLive("gateway live (claude-cli bootstrap context)", () => {
-  it(
-    "injects AGENTS, SOUL, IDENTITY, and USER files into the first Claude CLI turn",
-    async () => {
-      const result = await runGatewayCliBootstrapLiveProbe();
-      expect(result.ok).toBe(true);
-      expect(result.text).toBe(result.expectedText);
-      expect(
-        result.systemPromptReport?.injectedWorkspaceFiles?.map((entry) => entry.name) ?? [],
-      ).toEqual(expect.arrayContaining(["AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md"]));
     },
     CLI_BACKEND_LIVE_TIMEOUT_MS,
   );

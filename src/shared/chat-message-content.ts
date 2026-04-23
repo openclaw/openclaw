@@ -1,10 +1,13 @@
+import { readStringValue } from "./string-coerce.js";
+
 export function extractFirstTextBlock(message: unknown): string | undefined {
   if (!message || typeof message !== "object") {
     return undefined;
   }
   const content = (message as { content?: unknown }).content;
-  if (typeof content === "string") {
-    return content;
+  const inline = readStringValue(content);
+  if (inline !== undefined) {
+    return inline;
   }
   if (!Array.isArray(content) || content.length === 0) {
     return undefined;
@@ -13,8 +16,7 @@ export function extractFirstTextBlock(message: unknown): string | undefined {
   if (!first || typeof first !== "object") {
     return undefined;
   }
-  const text = (first as { text?: unknown }).text;
-  return typeof text === "string" ? text : undefined;
+  return readStringValue((first as { text?: unknown }).text);
 }
 
 export type AssistantPhase = "commentary" | "final_answer";

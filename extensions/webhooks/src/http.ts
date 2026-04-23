@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { safeEqualSecret } from "openclaw/plugin-sdk/browser-security-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { z } from "zod";
 import type { PluginRuntime } from "../api.js";
 import {
@@ -7,13 +8,15 @@ import {
   createWebhookInFlightLimiter,
   readJsonWebhookBodyOrReject,
   resolveRequestClientIp,
-  resolveWebhookTargetWithAuthOrRejectSync,
+  resolveConfiguredSecretInputString,
+  resolveWebhookTargetWithAuthOrReject,
   withResolvedWebhookRequestPipeline,
   WEBHOOK_IN_FLIGHT_DEFAULTS,
   WEBHOOK_RATE_LIMIT_DEFAULTS,
   type OpenClawConfig,
   type WebhookInFlightLimiter,
 } from "../runtime-api.js";
+import type { WebhookSecretInput } from "./config.js";
 
 type BoundTaskFlowRuntime = ReturnType<PluginRuntime["taskFlow"]["bindSession"]>;
 
@@ -173,7 +176,8 @@ type WebhookAction = z.infer<typeof webhookActionSchema>;
 export type TaskFlowWebhookTarget = {
   routeId: string;
   path: string;
-  secret: string;
+  secretInput: WebhookSecretInput;
+  secretConfigPath: string;
   defaultControllerId: string;
   taskFlow: BoundTaskFlowRuntime;
 };
@@ -223,100 +227,79 @@ type TaskView = {
   terminalOutcome?: string;
 };
 
-function optionalField<TKey extends string, TValue>(
-  key: TKey,
-  value: TValue | undefined,
-): Partial<Record<TKey, TValue>> {
-  return value !== undefined ? ({ [key]: value } as Record<TKey, TValue>) : {};
+function pickOptionalFields<T extends object, TKey extends keyof T & string>(
+  source: T,
+  keys: readonly TKey[],
+): Partial<Pick<T, TKey>> {
+  const result: Partial<Pick<T, TKey>> = {};
+  for (const key of keys) {
+    const value = source[key];
+    if (value !== undefined) {
+      result[key] = value;
+    }
+  }
+  return result;
 }
 
-function toFlowView(flow: {
-  flowId: string;
-  syncMode: "task_mirrored" | "managed";
-  controllerId?: string;
-  revision: number;
-  status: string;
-  notifyPolicy: string;
-  goal: string;
-  currentStep?: string;
-  blockedTaskId?: string;
-  blockedSummary?: string;
-  stateJson?: JsonValue;
-  waitJson?: JsonValue;
-  cancelRequestedAt?: number;
-  createdAt: number;
-  updatedAt: number;
-  endedAt?: number;
-}): FlowView {
+function pickOptionalTruthyStringFields<T extends object, TKey extends keyof T & string>(
+  source: T,
+  keys: readonly TKey[],
+): Partial<Pick<T, TKey>> {
+  const result: Partial<Pick<T, TKey>> = {};
+  for (const key of keys) {
+    const value = source[key];
+    if (typeof value === "string" && value) {
+      result[key] = value as T[TKey];
+    }
+  }
+  return result;
+}
+
+function toFlowView(flow: FlowView): FlowView {
   return {
     flowId: flow.flowId,
     syncMode: flow.syncMode,
-    ...(flow.controllerId ? { controllerId: flow.controllerId } : {}),
+    ...pickOptionalTruthyStringFields(flow, [
+      "controllerId",
+      "currentStep",
+      "blockedTaskId",
+      "blockedSummary",
+    ]),
     revision: flow.revision,
     status: flow.status,
     notifyPolicy: flow.notifyPolicy,
     goal: flow.goal,
-    ...(flow.currentStep ? { currentStep: flow.currentStep } : {}),
-    ...(flow.blockedTaskId ? { blockedTaskId: flow.blockedTaskId } : {}),
-    ...(flow.blockedSummary ? { blockedSummary: flow.blockedSummary } : {}),
-    ...optionalField("stateJson", flow.stateJson),
-    ...optionalField("waitJson", flow.waitJson),
-    ...optionalField("cancelRequestedAt", flow.cancelRequestedAt),
+    ...pickOptionalFields(flow, ["stateJson", "waitJson", "cancelRequestedAt"]),
     createdAt: flow.createdAt,
     updatedAt: flow.updatedAt,
-    ...optionalField("endedAt", flow.endedAt),
+    ...pickOptionalFields(flow, ["endedAt"]),
   };
 }
 
-function toTaskView(task: {
-  taskId: string;
-  runtime: string;
-  sourceId?: string;
-  scopeKind: string;
-  childSessionKey?: string;
-  parentFlowId?: string;
-  parentTaskId?: string;
-  agentId?: string;
-  runId?: string;
-  label?: string;
-  task: string;
-  status: string;
-  deliveryStatus: string;
-  notifyPolicy: string;
-  createdAt: number;
-  startedAt?: number;
-  endedAt?: number;
-  lastEventAt?: number;
-  cleanupAfter?: number;
-  error?: string;
-  progressSummary?: string;
-  terminalSummary?: string;
-  terminalOutcome?: string;
-}): TaskView {
+function toTaskView(task: TaskView): TaskView {
   return {
     taskId: task.taskId,
     runtime: task.runtime,
-    ...(task.sourceId ? { sourceId: task.sourceId } : {}),
+    ...pickOptionalTruthyStringFields(task, [
+      "sourceId",
+      "childSessionKey",
+      "parentFlowId",
+      "parentTaskId",
+      "agentId",
+      "runId",
+      "label",
+      "error",
+      "progressSummary",
+      "terminalSummary",
+      "terminalOutcome",
+    ]),
     scopeKind: task.scopeKind,
-    ...(task.childSessionKey ? { childSessionKey: task.childSessionKey } : {}),
-    ...(task.parentFlowId ? { parentFlowId: task.parentFlowId } : {}),
-    ...(task.parentTaskId ? { parentTaskId: task.parentTaskId } : {}),
-    ...(task.agentId ? { agentId: task.agentId } : {}),
-    ...(task.runId ? { runId: task.runId } : {}),
-    ...(task.label ? { label: task.label } : {}),
     task: task.task,
     status: task.status,
     deliveryStatus: task.deliveryStatus,
     notifyPolicy: task.notifyPolicy,
     createdAt: task.createdAt,
-    ...optionalField("startedAt", task.startedAt),
-    ...optionalField("endedAt", task.endedAt),
-    ...optionalField("lastEventAt", task.lastEventAt),
-    ...optionalField("cleanupAfter", task.cleanupAfter),
-    ...(task.error ? { error: task.error } : {}),
-    ...(task.progressSummary ? { progressSummary: task.progressSummary } : {}),
-    ...(task.terminalSummary ? { terminalSummary: task.terminalSummary } : {}),
-    ...(task.terminalOutcome ? { terminalOutcome: task.terminalOutcome } : {}),
+    ...pickOptionalFields(task, ["startedAt", "endedAt", "lastEventAt", "cleanupAfter"]),
   };
 }
 
@@ -328,15 +311,13 @@ function writeJson(res: ServerResponse, statusCode: number, body: unknown): void
 
 function extractSharedSecret(req: IncomingMessage): string {
   const authHeader = Array.isArray(req.headers.authorization)
-    ? String(req.headers.authorization[0] ?? "")
-    : String(req.headers.authorization ?? "");
-  if (authHeader.toLowerCase().startsWith("bearer ")) {
+    ? (req.headers.authorization[0] ?? "")
+    : (req.headers.authorization ?? "");
+  if (normalizeLowercaseStringOrEmpty(authHeader).startsWith("bearer ")) {
     return authHeader.slice("bearer ".length).trim();
   }
   const sharedHeader = req.headers["x-openclaw-webhook-secret"];
-  return Array.isArray(sharedHeader)
-    ? String(sharedHeader[0] ?? "").trim()
-    : String(sharedHeader ?? "").trim();
+  return Array.isArray(sharedHeader) ? (sharedHeader[0] ?? "").trim() : (sharedHeader ?? "").trim();
 }
 
 function timingSafeEquals(left: string, right: string): boolean {
@@ -366,6 +347,29 @@ function mapMutationResult(
       },
 ): unknown {
   return result;
+}
+
+function mapFlowMutationResult(
+  result:
+    | {
+        applied: true;
+        flow: Parameters<typeof toFlowView>[0];
+      }
+    | {
+        applied: false;
+        code: string;
+        current?: Parameters<typeof toFlowView>[0];
+      },
+): unknown {
+  return mapMutationResult(
+    result.applied
+      ? { applied: true, flow: toFlowView(result.flow) }
+      : {
+          applied: false,
+          code: result.code,
+          ...(result.current ? { current: toFlowView(result.current) } : {}),
+        },
+  );
 }
 
 function mapMutationStatus(result: {
@@ -572,15 +576,7 @@ async function executeWebhookAction(params: {
         blockedTaskId: action.blockedTaskId,
         blockedSummary: action.blockedSummary,
       });
-      return mapMutationResult(
-        result.applied
-          ? { applied: true, flow: toFlowView(result.flow) }
-          : {
-              applied: false,
-              code: result.code,
-              ...(result.current ? { current: toFlowView(result.current) } : {}),
-            },
-      );
+      return mapFlowMutationResult(result);
     }
     case "resume_flow": {
       const result = target.taskFlow.resume({
@@ -590,15 +586,7 @@ async function executeWebhookAction(params: {
         currentStep: action.currentStep,
         stateJson: action.stateJson,
       });
-      return mapMutationResult(
-        result.applied
-          ? { applied: true, flow: toFlowView(result.flow) }
-          : {
-              applied: false,
-              code: result.code,
-              ...(result.current ? { current: toFlowView(result.current) } : {}),
-            },
-      );
+      return mapFlowMutationResult(result);
     }
     case "finish_flow": {
       const result = target.taskFlow.finish({
@@ -606,15 +594,7 @@ async function executeWebhookAction(params: {
         expectedRevision: action.expectedRevision,
         stateJson: action.stateJson,
       });
-      return mapMutationResult(
-        result.applied
-          ? { applied: true, flow: toFlowView(result.flow) }
-          : {
-              applied: false,
-              code: result.code,
-              ...(result.current ? { current: toFlowView(result.current) } : {}),
-            },
-      );
+      return mapFlowMutationResult(result);
     }
     case "fail_flow": {
       const result = target.taskFlow.fail({
@@ -624,30 +604,14 @@ async function executeWebhookAction(params: {
         blockedTaskId: action.blockedTaskId,
         blockedSummary: action.blockedSummary,
       });
-      return mapMutationResult(
-        result.applied
-          ? { applied: true, flow: toFlowView(result.flow) }
-          : {
-              applied: false,
-              code: result.code,
-              ...(result.current ? { current: toFlowView(result.current) } : {}),
-            },
-      );
+      return mapFlowMutationResult(result);
     }
     case "request_cancel": {
       const result = target.taskFlow.requestCancel({
         flowId: action.flowId,
         expectedRevision: action.expectedRevision,
       });
-      return mapMutationResult(
-        result.applied
-          ? { applied: true, flow: toFlowView(result.flow) }
-          : {
-              applied: false,
-              code: result.code,
-              ...(result.current ? { current: toFlowView(result.current) } : {}),
-            },
-      );
+      return mapFlowMutationResult(result);
     }
     case "cancel_flow": {
       const result = await target.taskFlow.cancel({
@@ -695,6 +659,7 @@ async function executeWebhookAction(params: {
       };
     }
   }
+  throw new Error("Unsupported webhook action");
 }
 
 export function createTaskFlowWebhookRequestHandler(params: {
@@ -702,6 +667,7 @@ export function createTaskFlowWebhookRequestHandler(params: {
   targetsByPath: Map<string, TaskFlowWebhookTarget[]>;
   inFlightLimiter?: WebhookInFlightLimiter;
 }): (req: IncomingMessage, res: ServerResponse) => Promise<boolean> {
+  const secretByTarget = new WeakMap<TaskFlowWebhookTarget, Promise<string | undefined>>();
   const rateLimiter = createFixedWindowRateLimiter({
     windowMs: WEBHOOK_RATE_LIMIT_DEFAULTS.windowMs,
     maxRequests: WEBHOOK_RATE_LIMIT_DEFAULTS.maxRequests,
@@ -713,6 +679,20 @@ export function createTaskFlowWebhookRequestHandler(params: {
       maxInFlightPerKey: WEBHOOK_IN_FLIGHT_DEFAULTS.maxInFlightPerKey,
       maxTrackedKeys: WEBHOOK_IN_FLIGHT_DEFAULTS.maxTrackedKeys,
     });
+  const resolveTargetSecret = (target: TaskFlowWebhookTarget): Promise<string | undefined> => {
+    const cached = secretByTarget.get(target);
+    if (cached) {
+      return cached;
+    }
+    const pending = resolveConfiguredSecretInputString({
+      config: params.cfg,
+      env: process.env,
+      value: target.secretInput,
+      path: target.secretConfigPath,
+    }).then((resolved) => resolved.value);
+    secretByTarget.set(target, pending);
+    return pending;
+  };
 
   return async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {
     return await withResolvedWebhookRequestPipeline({
@@ -736,11 +716,16 @@ export function createTaskFlowWebhookRequestHandler(params: {
       inFlightLimiter,
       handle: async ({ targets }) => {
         const presentedSecret = extractSharedSecret(req);
-        const target = resolveWebhookTargetWithAuthOrRejectSync({
+        const target = await resolveWebhookTargetWithAuthOrReject({
           targets,
           res,
-          isMatch: (candidate) =>
-            presentedSecret.length > 0 && timingSafeEquals(candidate.secret, presentedSecret),
+          isMatch: async (candidate) => {
+            if (presentedSecret.length === 0) {
+              return false;
+            }
+            const resolvedSecret = await resolveTargetSecret(candidate);
+            return Boolean(resolvedSecret && timingSafeEquals(resolvedSecret, presentedSecret));
+          },
         });
         if (!target) {
           return true;

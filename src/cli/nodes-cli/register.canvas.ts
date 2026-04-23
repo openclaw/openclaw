@@ -1,6 +1,10 @@
 import fs from "node:fs/promises";
 import type { Command } from "commander";
 import { defaultRuntime } from "../../runtime.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { shortenHomePath } from "../../utils.js";
 import { writeBase64ToFile } from "../nodes-camera.js";
 import { canvasSnapshotTempPath, parseCanvasSnapshotPayload } from "../nodes-canvas.js";
@@ -11,7 +15,7 @@ import { buildNodeInvokeParams, callGatewayCli, nodesCallOpts, resolveNodeId } f
 import type { NodesRpcOpts } from "./types.js";
 
 async function invokeCanvas(opts: NodesRpcOpts, command: string, params?: Record<string, unknown>) {
-  const nodeId = await resolveNodeId(opts, String(opts.node ?? ""));
+  const nodeId = await resolveNodeId(opts, normalizeOptionalString(opts.node) ?? "");
   const timeoutMs = parseTimeoutMs(opts.invokeTimeout);
   return await callGatewayCli(
     "node.invoke",
@@ -41,17 +45,17 @@ export function registerNodesCanvasCommands(nodes: Command) {
       .option("--invoke-timeout <ms>", "Node invoke timeout in ms (default 20000)", "20000")
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("canvas snapshot", async () => {
-          const formatOpt = String(opts.format ?? "jpg")
-            .trim()
-            .toLowerCase();
+          const formatOpt = normalizeLowercaseStringOrEmpty(
+            normalizeOptionalString(opts.format) ?? "jpg",
+          );
           const formatForParams =
             formatOpt === "jpg" ? "jpeg" : formatOpt === "jpeg" ? "jpeg" : "png";
           if (formatForParams !== "png" && formatForParams !== "jpeg") {
             throw new Error(`invalid format: ${String(opts.format)} (expected png|jpg|jpeg)`);
           }
 
-          const maxWidth = opts.maxWidth ? Number.parseInt(String(opts.maxWidth), 10) : undefined;
-          const quality = opts.quality ? Number.parseFloat(String(opts.quality)) : undefined;
+          const maxWidth = opts.maxWidth ? Number.parseInt(opts.maxWidth, 10) : undefined;
+          const quality = opts.quality ? Number.parseFloat(opts.quality) : undefined;
           const raw = await invokeCanvas(opts, "canvas.snapshot", {
             format: formatForParams,
             maxWidth: Number.isFinite(maxWidth) ? maxWidth : undefined,
@@ -95,7 +99,7 @@ export function registerNodesCanvasCommands(nodes: Command) {
           };
           const params: Record<string, unknown> = {};
           if (opts.target) {
-            params.url = String(opts.target);
+            params.url = opts.target;
           }
           if (
             Number.isFinite(placement.x) ||
@@ -203,7 +207,7 @@ export function registerNodesCanvasCommands(nodes: Command) {
           }
 
           const jsonl = hasText
-            ? buildA2UITextJsonl(String(opts.text ?? ""))
+            ? buildA2UITextJsonl(opts.text ?? "")
             : await fs.readFile(String(opts.jsonl), "utf8");
           const { version, messageCount } = validateA2UIJsonl(jsonl);
           if (version === "v0.9") {

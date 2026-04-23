@@ -7,6 +7,7 @@ import type {
   SlackChannelStreamingConfig,
   TextChunkMode,
 } from "../config/types.base.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 
 export type {
   ChannelDeliveryStreamingConfig,
@@ -47,7 +48,7 @@ function normalizeStreamingMode(value: unknown): string | null {
   if (typeof value !== "string") {
     return null;
   }
-  const normalized = value.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(value);
   return normalized || null;
 }
 
@@ -113,6 +114,14 @@ export function resolveChannelStreamingPreviewChunk(
     asBlockStreamingChunkConfig(config?.preview?.chunk) ??
     asBlockStreamingChunkConfig(entry?.draftChunk)
   );
+}
+
+export function resolveChannelStreamingPreviewToolProgress(
+  entry: StreamingCompatEntry | null | undefined,
+  defaultValue = true,
+): boolean {
+  const config = getChannelStreamingConfigObject(entry);
+  return asBoolean(config?.preview?.toolProgress) ?? defaultValue;
 }
 
 export function resolveChannelStreamingNativeTransport(

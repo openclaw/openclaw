@@ -17,6 +17,11 @@ const listProfilesForProvider = vi.fn().mockReturnValue([]);
 const resolveEnvApiKey = vi.fn().mockReturnValue(undefined);
 const resolveAwsSdkEnvVarName = vi.fn().mockReturnValue(undefined);
 const hasUsableCustomProviderApiKey = vi.fn().mockReturnValue(false);
+const loadModelCatalog = vi.fn(async () => []);
+const loadProviderCatalogModelsForList = vi.fn<() => Promise<Array<Record<string, unknown>>>>(
+  async () => [],
+);
+const shouldSuppressBuiltInModel = vi.fn().mockReturnValue(false);
 const modelRegistryState = {
   models: [] as Array<Record<string, unknown>>,
   available: [] as Array<Record<string, unknown>>,
@@ -25,15 +30,17 @@ const modelRegistryState = {
 };
 let previousExitCode: typeof process.exitCode;
 
-vi.mock("./models/load-config.runtime.js", () => ({
-  getRuntimeConfig,
-  readSourceConfigSnapshotForWrite: readConfigFileSnapshotForWrite,
-  setRuntimeConfigSnapshot,
-  getModelsCommandSecretTargetIds: vi.fn().mockReturnValue([]),
-  resolveCommandSecretRefsViaGateway: vi.fn(async ({ config }: { config: unknown }) => ({
-    resolvedConfig: config,
-    diagnostics: [],
-  })),
+vi.mock("./models/load-config.js", () => ({
+  loadModelsConfigWithSource: vi.fn(async () => {
+    const resolvedConfig = getRuntimeConfig();
+    const sourceConfig = await loadSourceConfigSnapshotForTest(resolvedConfig);
+    setRuntimeConfigSnapshot(resolvedConfig, sourceConfig);
+    return {
+      sourceConfig,
+      resolvedConfig,
+      diagnostics: [],
+    };
+  }),
 }));
 
 vi.mock("./models/list.runtime.js", () => {
@@ -68,7 +75,8 @@ vi.mock("./models/list.runtime.js", () => {
     resolveEnvApiKey,
     resolveAwsSdkEnvVarName,
     hasUsableCustomProviderApiKey,
-    loadModelCatalog: vi.fn(async () => []),
+    loadModelCatalog,
+    loadProviderCatalogModelsForList,
     discoverAuthStorage: () => ({}) as unknown,
     discoverModels: () => new MockModelRegistry() as unknown,
     resolveModelWithRegistry: ({
@@ -84,6 +92,10 @@ vi.mock("./models/list.runtime.js", () => {
     },
   };
 });
+
+vi.mock("../agents/model-suppression.js", () => ({
+  shouldSuppressBuiltInModel,
+}));
 
 function makeRuntime() {
   return {
@@ -104,6 +116,18 @@ function expectModelRegistryUnavailable(
   expect(process.exitCode).toBe(1);
 }
 
+async function loadSourceConfigSnapshotForTest(fallback: unknown): Promise<unknown> {
+  try {
+    const { snapshot } = await readConfigFileSnapshotForWrite();
+    if (snapshot.valid) {
+      return snapshot.sourceConfig;
+    }
+  } catch {
+    // Match load-config: source snapshot is a best-effort write-preservation input.
+  }
+  return fallback;
+}
+
 beforeEach(() => {
   previousExitCode = process.exitCode;
   process.exitCode = undefined;
@@ -113,6 +137,12 @@ beforeEach(() => {
   getRuntimeConfig.mockReturnValue({});
   listProfilesForProvider.mockReturnValue([]);
   ensureOpenClawModelsJson.mockClear();
+  loadModelCatalog.mockClear();
+  loadModelCatalog.mockResolvedValue([]);
+  loadProviderCatalogModelsForList.mockReset();
+  loadProviderCatalogModelsForList.mockResolvedValue([]);
+  shouldSuppressBuiltInModel.mockReset();
+  shouldSuppressBuiltInModel.mockReturnValue(false);
   readConfigFileSnapshotForWrite.mockClear();
   readConfigFileSnapshotForWrite.mockResolvedValue({
     snapshot: { valid: false, resolved: {} },
@@ -157,6 +187,14 @@ describe("models list/status", () => {
     input: ["text"],
     baseUrl: "https://chatgpt.com/backend-api",
     contextWindow: 128000,
+  };
+  const MOONSHOT_MODEL = {
+    provider: "moonshot",
+    id: "kimi-k2.6",
+    name: "Kimi K2.6",
+    input: ["text", "image"],
+    baseUrl: "https://api.moonshot.ai/v1",
+    contextWindow: 262144,
   };
   const AZURE_OPENAI_SPARK_MODEL = {
     provider: "azure-openai-responses",
@@ -316,6 +354,50 @@ describe("models list/status", () => {
     expect(payload.models[0]?.available).toBe(false);
   });
 
+  it("models list all includes unauthenticated provider catalog rows", async () => {
+    setDefaultZaiRegistry({ available: false });
+    loadProviderCatalogModelsForList.mockResolvedValueOnce([MOONSHOT_MODEL]);
+    const runtime = makeRuntime();
+
+    await modelsListCommand({ all: true, provider: "moonshot", json: true }, runtime);
+
+    const payload = parseJsonLog(runtime);
+    expect(loadModelCatalog).toHaveBeenCalledTimes(1);
+    expect(payload.models).toEqual([
+      expect.objectContaining({
+        key: "moonshot/kimi-k2.6",
+        name: "Kimi K2.6",
+        available: false,
+        missing: false,
+      }),
+    ]);
+  });
+
+  it("models list rejects provider display labels", async () => {
+    setDefaultZaiRegistry({ available: false });
+    const runtime = makeRuntime();
+
+    await modelsListCommand({ all: true, provider: "Moonshot AI", json: true }, runtime);
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      'Invalid provider filter "Moonshot AI". Use a provider id such as "moonshot", not a display label.',
+    );
+    expect(runtime.log).not.toHaveBeenCalled();
+    expect(loadModelCatalog).not.toHaveBeenCalled();
+    expect(loadProviderCatalogModelsForList).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("models list all local skips unauthenticated provider catalog rows", async () => {
+    setDefaultZaiRegistry({ available: false });
+    loadProviderCatalogModelsForList.mockResolvedValueOnce([MOONSHOT_MODEL]);
+    const runtime = makeRuntime();
+
+    await modelsListCommand({ all: true, local: true, json: true }, runtime);
+
+    expect(loadProviderCatalogModelsForList).not.toHaveBeenCalled();
+  });
+
   it("models list does not treat availability-unavailable code as discovery fallback", async () => {
     configureGoogleAntigravityModel("claude-opus-4-6-thinking");
     modelRegistryState.getAllError = Object.assign(new Error("model discovery failed"), {
@@ -367,6 +449,11 @@ describe("models list/status", () => {
   });
 
   it("filters stale direct OpenAI spark rows from models list and registry views", async () => {
+    shouldSuppressBuiltInModel.mockImplementation(
+      ({ provider, id }: { provider?: string | null; id?: string | null }) =>
+        id === "gpt-5.3-codex-spark" &&
+        (provider === "openai" || provider === "azure-openai-responses"),
+    );
     setDefaultModel("openai-codex/gpt-5.3-codex-spark");
     modelRegistryState.models = [
       OPENAI_SPARK_MODEL,

@@ -4,6 +4,11 @@ import {
   replaceManagedMarkdownBlock,
   withTrailingNewline,
 } from "openclaw/plugin-sdk/memory-host-markdown";
+import {
+  assessPageFreshness,
+  buildClaimContradictionClusters,
+  collectWikiClaimHealth,
+} from "./claim-health.js";
 import { compileMemoryWikiVault } from "./compile.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { appendMemoryWikiLog } from "./log.js";
@@ -22,8 +27,13 @@ export type MemoryWikiLintIssue = {
     | "missing-import-provenance"
     | "broken-wikilink"
     | "contradiction-present"
+    | "claim-conflict"
     | "open-question"
-    | "low-confidence";
+    | "low-confidence"
+    | "claim-low-confidence"
+    | "claim-missing-evidence"
+    | "stale-page"
+    | "stale-claim";
   path: string;
   message: string;
 };
@@ -68,6 +78,7 @@ function collectBrokenLinkIssues(pages: WikiPageSummary[]): MemoryWikiLintIssue[
 function collectPageIssues(pages: WikiPageSummary[]): MemoryWikiLintIssue[] {
   const issues: MemoryWikiLintIssue[] = [];
   const pagesById = new Map<string, WikiPageSummary[]>();
+  const claimHealth = collectWikiClaimHealth(pages);
 
   for (const page of pages) {
     if (!page.id) {
@@ -177,6 +188,59 @@ function collectPageIssues(pages: WikiPageSummary[]): MemoryWikiLintIssue[] {
         code: "low-confidence",
         path: page.relativePath,
         message: `Page confidence is low (${page.confidence.toFixed(2)}).`,
+      });
+    }
+
+    const freshness = assessPageFreshness(page);
+    if (page.kind !== "report" && (freshness.level === "stale" || freshness.level === "unknown")) {
+      issues.push({
+        severity: "warning",
+        category: "quality",
+        code: "stale-page",
+        path: page.relativePath,
+        message: `Page freshness needs review (${freshness.reason}).`,
+      });
+    }
+  }
+
+  for (const claim of claimHealth) {
+    if (claim.missingEvidence) {
+      issues.push({
+        severity: "warning",
+        category: "provenance",
+        code: "claim-missing-evidence",
+        path: claim.pagePath,
+        message: `Claim ${claim.claimId ? `\`${claim.claimId}\`` : `\`${claim.text}\``} is missing structured evidence.`,
+      });
+    }
+    if (typeof claim.confidence === "number" && claim.confidence < 0.5) {
+      issues.push({
+        severity: "warning",
+        category: "quality",
+        code: "claim-low-confidence",
+        path: claim.pagePath,
+        message: `Claim ${claim.claimId ? `\`${claim.claimId}\`` : `\`${claim.text}\``} has low confidence (${claim.confidence.toFixed(2)}).`,
+      });
+    }
+    if (claim.freshness.level === "stale" || claim.freshness.level === "unknown") {
+      issues.push({
+        severity: "warning",
+        category: "quality",
+        code: "stale-claim",
+        path: claim.pagePath,
+        message: `Claim ${claim.claimId ? `\`${claim.claimId}\`` : `\`${claim.text}\``} freshness needs review (${claim.freshness.reason}).`,
+      });
+    }
+  }
+
+  for (const cluster of buildClaimContradictionClusters({ pages })) {
+    for (const entry of cluster.entries) {
+      issues.push({
+        severity: "warning",
+        category: "contradictions",
+        code: "claim-conflict",
+        path: entry.pagePath,
+        message: `Claim cluster \`${cluster.label}\` has competing variants across ${cluster.entries.length} pages.`,
       });
     }
   }

@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { resolveDefaultSlackAccountId, resolveSlackAccount } from "./accounts.js";
 
 const SLACK_BUTTON_MAX_ITEMS = 5;
@@ -36,10 +37,7 @@ function parseChoice(raw: string, options?: { allowStyle?: boolean }): SlackChoi
   if (options?.allowStyle) {
     const styleDelimiter = value.lastIndexOf(":");
     if (styleDelimiter !== -1) {
-      const maybeStyle = value
-        .slice(styleDelimiter + 1)
-        .trim()
-        .toLowerCase();
+      const maybeStyle = normalizeLowercaseStringOrEmpty(value.slice(styleDelimiter + 1));
       if (
         maybeStyle === "primary" ||
         maybeStyle === "secondary" ||
@@ -88,11 +86,12 @@ function buildButtonsBlock(
   }
   return {
     type: "buttons",
-    buttons: choices.map((choice) => ({
-      label: choice.label,
-      value: choice.value,
-      ...(choice.style ? { style: choice.style } : {}),
-    })),
+    buttons: choices.map((choice) =>
+      Object.assign(
+        { label: choice.label, value: choice.value },
+        choice.style ? { style: choice.style } : {},
+      ),
+    ),
   };
 }
 
@@ -138,7 +137,7 @@ function parseSimpleSlackOptions(raw: string): SlackChoice[] | null {
   if (!entries.every((entry) => SLACK_SIMPLE_OPTION_RE.test(entry))) {
     return null;
   }
-  const deduped = new Set(entries.map((entry) => entry.toLowerCase()));
+  const deduped = new Set(entries.map((entry) => normalizeLowercaseStringOrEmpty(entry)));
   if (deduped.size !== entries.length) {
     return null;
   }
@@ -154,7 +153,7 @@ function resolveInteractiveRepliesFromCapabilities(capabilities: unknown): boole
   }
   if (Array.isArray(capabilities)) {
     return capabilities.some(
-      (entry) => String(entry).trim().toLowerCase() === "interactivereplies",
+      (entry) => normalizeLowercaseStringOrEmpty(String(entry)) === "interactivereplies",
     );
   }
   if (typeof capabilities === "object") {
@@ -200,7 +199,7 @@ export function compileSlackInteractiveReplies(payload: ReplyPayload): ReplyPayl
       generatedBlocks.push(section);
     }
     const block =
-      directiveType.toLowerCase() === "slack_buttons"
+      normalizeLowercaseStringOrEmpty(directiveType) === "slack_buttons"
         ? buildButtonsBlock(body)
         : buildSelectBlock(body);
     if (block) {

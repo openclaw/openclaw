@@ -3,6 +3,7 @@ import {
   createStandardChannelSetupStatus,
   mergeAllowFromEntries,
 } from "openclaw/plugin-sdk/setup";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { resolveDefaultLineAccountId } from "./accounts.js";
 import {
   isLineConfigured,
@@ -119,15 +120,17 @@ export const lineSetupWizard: ChannelSetupWizard = {
         const resolved = resolveLineAccount({ cfg, accountId });
         return {
           accountConfigured: Boolean(
-            resolved.channelAccessToken.trim() && resolved.channelSecret.trim(),
+            normalizeOptionalString(resolved.channelAccessToken) &&
+            normalizeOptionalString(resolved.channelSecret),
           ),
           hasConfiguredValue: Boolean(
-            resolved.config.channelAccessToken?.trim() || resolved.config.tokenFile?.trim(),
+            normalizeOptionalString(resolved.config.channelAccessToken) ??
+            normalizeOptionalString(resolved.config.tokenFile),
           ),
-          resolvedValue: resolved.channelAccessToken.trim() || undefined,
+          resolvedValue: normalizeOptionalString(resolved.channelAccessToken),
           envValue:
             accountId === DEFAULT_ACCOUNT_ID
-              ? process.env.LINE_CHANNEL_ACCESS_TOKEN?.trim() || undefined
+              ? normalizeOptionalString(process.env.LINE_CHANNEL_ACCESS_TOKEN)
               : undefined,
         };
       },
@@ -163,15 +166,17 @@ export const lineSetupWizard: ChannelSetupWizard = {
         const resolved = resolveLineAccount({ cfg, accountId });
         return {
           accountConfigured: Boolean(
-            resolved.channelAccessToken.trim() && resolved.channelSecret.trim(),
+            normalizeOptionalString(resolved.channelAccessToken) &&
+            normalizeOptionalString(resolved.channelSecret),
           ),
           hasConfiguredValue: Boolean(
-            resolved.config.channelSecret?.trim() || resolved.config.secretFile?.trim(),
+            normalizeOptionalString(resolved.config.channelSecret) ??
+            normalizeOptionalString(resolved.config.secretFile),
           ),
-          resolvedValue: resolved.channelSecret.trim() || undefined,
+          resolvedValue: normalizeOptionalString(resolved.channelSecret),
           envValue:
             accountId === DEFAULT_ACCOUNT_ID
-              ? process.env.LINE_CHANNEL_SECRET?.trim() || undefined
+              ? normalizeOptionalString(process.env.LINE_CHANNEL_SECRET)
               : undefined,
         };
       },

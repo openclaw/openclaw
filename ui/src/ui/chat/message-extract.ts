@@ -2,12 +2,13 @@ import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inb
 import { stripEnvelope } from "../../../../src/shared/chat-envelope.js";
 import { extractAssistantVisibleText as extractSharedAssistantVisibleText } from "../../../../src/shared/chat-message-content.js";
 import { stripThinkingTags } from "../format.ts";
+import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 
 const textCache = new WeakMap<object, string | null>();
 const thinkingCache = new WeakMap<object, string | null>();
 
 function processMessageText(text: string, role: string): string {
-  const shouldStripInboundMetadata = role.toLowerCase() === "user";
+  const shouldStripInboundMetadata = normalizeLowercaseStringOrEmpty(role) === "user";
   if (role === "assistant") {
     return stripThinkingTags(text);
   }

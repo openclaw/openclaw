@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { ssrfPolicyFromPrivateNetworkOptIn } from "openclaw/plugin-sdk/ssrf-runtime";
 import { fetchWithSsrFGuard, type RuntimeEnv } from "../runtime-api.js";
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
@@ -139,7 +140,7 @@ export async function resolveNextcloudTalkRoomKind(params: {
   } catch (err) {
     roomCache.set(key, {
       fetchedAt: Date.now(),
-      error: err instanceof Error ? err.message : String(err),
+      error: formatErrorMessage(err),
     });
     runtime?.error?.(`nextcloud-talk: room lookup error: ${String(err)}`);
     return undefined;

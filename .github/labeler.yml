@@ -241,6 +241,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/open-prose/**"
+"extensions: tokenjuice":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/tokenjuice/**"
 "extensions: webhooks":
   - changed-files:
       - any-glob-to-any-file:
@@ -257,6 +261,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/acpx/**"
+"extensions: arcee":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/arcee/**"
 "extensions: byteplus":
   - changed-files:
       - any-glob-to-any-file:
@@ -265,6 +273,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/deepseek/**"
+"extensions: tencent":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/tencent/**"
 "extensions: stepfun":
   - changed-files:
       - any-glob-to-any-file:
@@ -289,10 +301,18 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/kilocode/**"
+"extensions: lmstudio":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/lmstudio/**"
 "extensions: openai":
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/openai/**"
+"extensions: codex":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/codex/**"
 "extensions: kimi-coding":
   - changed-files:
       - any-glob-to-any-file:

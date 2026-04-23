@@ -170,6 +170,7 @@ describe("runCommandWithTimeout", () => {
       });
 
       await vi.advanceTimersByTimeAsync(250);
+      await vi.runAllTimersAsync();
       const result = await resultPromise;
       expect(result.termination).toBe("no-output-timeout");
       expect(result.noOutputTimedOut).toBe(true);
@@ -190,6 +191,7 @@ describe("runCommandWithTimeout", () => {
       });
 
       await vi.advanceTimersByTimeAsync(250);
+      await vi.runAllTimersAsync();
       const result = await resultPromise;
       expect(result.termination).toBe("timeout");
       expect(result.noOutputTimedOut).toBe(false);

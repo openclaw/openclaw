@@ -1,3 +1,8 @@
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
+
 type ToolResultCounts = {
   total: number;
   errors: number;
@@ -7,17 +12,16 @@ const TOOL_CALL_TYPES = new Set(["tool_use", "toolcall", "tool_call"]);
 const TOOL_RESULT_TYPES = new Set(["tool_result", "tool_result_error"]);
 
 const normalizeType = (value: unknown): string => {
-  if (typeof value !== "string") {
-    return "";
-  }
-  return value.trim().toLowerCase();
+  return typeof value === "string" ? (normalizeOptionalLowercaseString(value) ?? "") : "";
 };
 
 export const extractToolCallNames = (message: Record<string, unknown>): string[] => {
   const names = new Set<string>();
   const toolNameRaw = message.toolName ?? message.tool_name;
-  if (typeof toolNameRaw === "string" && toolNameRaw.trim()) {
-    names.add(toolNameRaw.trim());
+  const toolName =
+    typeof toolNameRaw === "string" ? normalizeOptionalString(toolNameRaw) : undefined;
+  if (toolName) {
+    names.add(toolName);
   }
 
   const content = message.content;
@@ -34,9 +38,9 @@ export const extractToolCallNames = (message: Record<string, unknown>): string[]
     if (!TOOL_CALL_TYPES.has(type)) {
       continue;
     }
-    const name = block.name;
-    if (typeof name === "string" && name.trim()) {
-      names.add(name.trim());
+    const name = typeof block.name === "string" ? normalizeOptionalString(block.name) : undefined;
+    if (name) {
+      names.add(name);
     }
   }
 

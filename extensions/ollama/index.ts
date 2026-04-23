@@ -1,4 +1,8 @@
 import {
+  resolvePluginConfigObject,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/config-runtime";
+import {
   definePluginEntry,
   type OpenClawPluginApi,
   type ProviderAuthContext,
@@ -6,52 +10,48 @@ import {
   type ProviderAuthResult,
   type ProviderDiscoveryContext,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
+import { buildApiKeyCredential } from "openclaw/plugin-sdk/provider-auth";
+import { OPENAI_COMPATIBLE_REPLAY_HOOKS } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   buildOllamaProvider,
   configureOllamaNonInteractive,
   ensureOllamaModelPulled,
   promptAndConfigureOllama,
 } from "./api.js";
-import { OLLAMA_DEFAULT_BASE_URL } from "./src/defaults.js";
+import {
+  OLLAMA_DEFAULT_API_KEY,
+  OLLAMA_PROVIDER_ID,
+  hasMeaningfulExplicitOllamaConfig,
+  resolveOllamaDiscoveryResult,
+  type OllamaPluginConfig,
+} from "./src/discovery-shared.js";
 import {
   DEFAULT_OLLAMA_EMBEDDING_MODEL,
   createOllamaEmbeddingProvider,
 } from "./src/embedding-provider.js";
+import { ollamaMediaUnderstandingProvider } from "./src/media-understanding-provider.js";
 import { ollamaMemoryEmbeddingProviderAdapter } from "./src/memory-embedding-adapter.js";
-import { resolveOllamaApiBase } from "./src/provider-models.js";
 import {
   createConfiguredOllamaCompatStreamWrapper,
   createConfiguredOllamaStreamFn,
+  isOllamaCompatProvider,
   resolveConfiguredOllamaProviderConfig,
 } from "./src/stream.js";
 import { createOllamaWebSearchProvider } from "./src/web-search-provider.js";
 
-const PROVIDER_ID = "ollama";
-const DEFAULT_API_KEY = "ollama-local";
-const OPENAI_COMPATIBLE_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
-  family: "openai-compatible",
-});
-
-type OllamaPluginConfig = {
-  discovery?: {
-    enabled?: boolean;
-  };
-};
-
-function resolveOllamaDiscoveryApiKey(params: {
-  env: NodeJS.ProcessEnv;
-  explicitApiKey?: string;
-  resolvedApiKey?: string;
-}): string {
-  const envApiKey = params.env.OLLAMA_API_KEY?.trim() ? "OLLAMA_API_KEY" : undefined;
-  const explicitApiKey = params.explicitApiKey?.trim() || undefined;
-  const resolvedApiKey = params.resolvedApiKey?.trim() || undefined;
-  return envApiKey ?? explicitApiKey ?? resolvedApiKey ?? DEFAULT_API_KEY;
-}
-
-function shouldSkipAmbientOllamaDiscovery(env: NodeJS.ProcessEnv): boolean {
-  return Boolean(env.VITEST) || env.NODE_ENV === "test";
+function usesOllamaOpenAICompatTransport(model: {
+  api?: unknown;
+  provider?: unknown;
+  baseUrl?: unknown;
+}): boolean {
+  return (
+    model.api === "openai-completions" &&
+    isOllamaCompatProvider({
+      provider: typeof model.provider === "string" ? model.provider : undefined,
+      baseUrl: typeof model.baseUrl === "string" ? model.baseUrl : undefined,
+      api: "openai-completions",
+    })
+  );
 }
 
 export default definePluginEntry({
@@ -60,10 +60,18 @@ export default definePluginEntry({
   description: "Bundled Ollama provider plugin",
   register(api: OpenClawPluginApi) {
     api.registerMemoryEmbeddingProvider(ollamaMemoryEmbeddingProviderAdapter);
-    const pluginConfig = (api.pluginConfig ?? {}) as OllamaPluginConfig;
+    api.registerMediaUnderstandingProvider(ollamaMediaUnderstandingProvider);
+    const startupPluginConfig = (api.pluginConfig ?? {}) as OllamaPluginConfig;
+    const resolveCurrentPluginConfig = (config?: OpenClawConfig): OllamaPluginConfig => {
+      const runtimePluginConfig = resolvePluginConfigObject(config, "ollama");
+      if (runtimePluginConfig) {
+        return runtimePluginConfig as OllamaPluginConfig;
+      }
+      return config ? {} : startupPluginConfig;
+    };
     api.registerWebSearchProvider(createOllamaWebSearchProvider());
     api.registerProvider({
-      id: PROVIDER_ID,
+      id: OLLAMA_PROVIDER_ID,
       label: "Ollama",
       docsPath: "/providers/ollama",
       envVars: ["OLLAMA_API_KEY"],
@@ -76,19 +84,27 @@ export default definePluginEntry({
           run: async (ctx: ProviderAuthContext): Promise<ProviderAuthResult> => {
             const result = await promptAndConfigureOllama({
               cfg: ctx.config,
+              env: ctx.env,
+              opts: ctx.opts as Record<string, unknown> | undefined,
               prompter: ctx.prompter,
-              isRemote: ctx.isRemote,
-              openUrl: ctx.openUrl,
+              secretInputMode: ctx.secretInputMode,
+              allowSecretRefPrompt: ctx.allowSecretRefPrompt,
             });
             return {
               profiles: [
                 {
                   profileId: "ollama:default",
-                  credential: {
-                    type: "api_key",
-                    provider: PROVIDER_ID,
-                    key: DEFAULT_API_KEY,
-                  },
+                  credential: buildApiKeyCredential(
+                    OLLAMA_PROVIDER_ID,
+                    result.credential,
+                    undefined,
+                    result.credentialMode
+                      ? {
+                          secretInputMode: result.credentialMode,
+                          config: ctx.config,
+                        }
+                      : undefined,
+                  ),
                 },
               ],
               configPatch: result.config,
@@ -109,54 +125,12 @@ export default definePluginEntry({
       ],
       discovery: {
         order: "late",
-        run: async (ctx: ProviderDiscoveryContext) => {
-          const explicit = ctx.config.models?.providers?.ollama;
-          const hasExplicitModels = Array.isArray(explicit?.models) && explicit.models.length > 0;
-          const discoveryEnabled =
-            pluginConfig.discovery?.enabled ?? ctx.config.models?.ollamaDiscovery?.enabled;
-          if (!hasExplicitModels && discoveryEnabled === false) {
-            return null;
-          }
-          const ollamaKey = ctx.resolveProviderApiKey(PROVIDER_ID).apiKey;
-          const explicitApiKey = typeof explicit?.apiKey === "string" ? explicit.apiKey : undefined;
-          if (hasExplicitModels && explicit) {
-            return {
-              provider: {
-                ...explicit,
-                baseUrl:
-                  typeof explicit.baseUrl === "string" && explicit.baseUrl.trim()
-                    ? resolveOllamaApiBase(explicit.baseUrl)
-                    : OLLAMA_DEFAULT_BASE_URL,
-                api: explicit.api ?? "ollama",
-                apiKey: resolveOllamaDiscoveryApiKey({
-                  env: ctx.env,
-                  explicitApiKey,
-                  resolvedApiKey: ollamaKey,
-                }),
-              },
-            };
-          }
-          if (!ollamaKey && !explicit && shouldSkipAmbientOllamaDiscovery(ctx.env)) {
-            return null;
-          }
-
-          const provider = await buildOllamaProvider(explicit?.baseUrl, {
-            quiet: !ollamaKey && !explicit,
-          });
-          if (provider.models.length === 0 && !ollamaKey && !explicit?.apiKey) {
-            return null;
-          }
-          return {
-            provider: {
-              ...provider,
-              apiKey: resolveOllamaDiscoveryApiKey({
-                env: ctx.env,
-                explicitApiKey,
-                resolvedApiKey: ollamaKey,
-              }),
-            },
-          };
-        },
+        run: async (ctx: ProviderDiscoveryContext) =>
+          await resolveOllamaDiscoveryResult({
+            ctx,
+            pluginConfig: resolveCurrentPluginConfig(ctx.config),
+            buildProvider: buildOllamaProvider,
+          }),
       },
       wizard: {
         setup: {
@@ -192,6 +166,8 @@ export default definePluginEntry({
         });
       },
       ...OPENAI_COMPATIBLE_REPLAY_HOOKS,
+      contributeResolvedModelCompat: ({ model }) =>
+        usesOllamaOpenAICompatTransport(model) ? { supportsUsageInStreaming: true } : undefined,
       resolveReasoningOutputMode: () => "native",
       wrapStreamFn: createConfiguredOllamaCompatStreamWrapper,
       createEmbeddingProvider: async ({ config, model, remote }) => {
@@ -209,21 +185,17 @@ export default definePluginEntry({
         /\bollama\b.*(?:context length|too many tokens|context window)/i.test(errorMessage) ||
         /\btruncating input\b.*\btoo long\b/i.test(errorMessage),
       resolveSyntheticAuth: ({ providerConfig }) => {
-        const hasApiConfig =
-          Boolean(providerConfig?.api?.trim()) ||
-          Boolean(providerConfig?.baseUrl?.trim()) ||
-          (Array.isArray(providerConfig?.models) && providerConfig.models.length > 0);
-        if (!hasApiConfig) {
+        if (!hasMeaningfulExplicitOllamaConfig(providerConfig)) {
           return undefined;
         }
         return {
-          apiKey: DEFAULT_API_KEY,
+          apiKey: OLLAMA_DEFAULT_API_KEY,
           source: "models.providers.ollama (synthetic local key)",
           mode: "api-key",
         };
       },
       shouldDeferSyntheticProfileAuth: ({ resolvedApiKey }) =>
-        resolvedApiKey?.trim() === DEFAULT_API_KEY,
+        resolvedApiKey?.trim() === OLLAMA_DEFAULT_API_KEY,
       buildUnknownModelHint: () =>
         "Ollama requires authentication to be registered as a provider. " +
         'Set OLLAMA_API_KEY="ollama-local" (any value works) or run "openclaw configure". ' +

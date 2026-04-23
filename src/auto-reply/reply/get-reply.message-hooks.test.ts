@@ -1,6 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../templating.js";
 import { withFastReplyConfig } from "./get-reply-fast-path.js";
+import {
+  buildGetReplyGroupCtx,
+  createGetReplySessionState,
+  registerGetReplyRuntimeOverrides,
+} from "./get-reply.test-fixtures.js";
+import { loadGetReplyModuleForTest } from "./get-reply.test-loader.js";
 import { registerGetReplyCommonMocks } from "./get-reply.test-mocks.js";
 
 const mocks = vi.hoisted(() => ({
@@ -36,49 +42,31 @@ vi.mock("../../media-understanding/apply.runtime.js", () => ({
 vi.mock("./commands-core.js", () => ({
   emitResetCommandHooks: vi.fn(async () => undefined),
 }));
-vi.mock("./get-reply-directives.js", () => ({
-  resolveReplyDirectives: mocks.resolveReplyDirectives,
-}));
-vi.mock("./get-reply-inline-actions.js", () => ({
-  handleInlineActions: vi.fn(async () => ({ kind: "reply", reply: { text: "ok" } })),
-}));
-vi.mock("./session.js", () => ({
-  initSessionState: mocks.initSessionState,
-}));
+registerGetReplyRuntimeOverrides(mocks);
 
 let getReplyFromConfig: typeof import("./get-reply.js").getReplyFromConfig;
 
-async function loadFreshGetReplyModuleForTest() {
-  vi.resetModules();
-  ({ getReplyFromConfig } = await import("./get-reply.js"));
+async function loadGetReplyRuntimeForTest() {
+  ({ getReplyFromConfig } = await loadGetReplyModuleForTest({ cacheKey: import.meta.url }));
 }
 
 function buildCtx(overrides: Partial<MsgContext> = {}): MsgContext {
-  return {
-    Provider: "telegram",
-    Surface: "telegram",
-    OriginatingChannel: "telegram",
-    OriginatingTo: "telegram:-100123",
-    ChatType: "group",
+  return buildGetReplyGroupCtx({
     Body: "<media:audio>",
     BodyForAgent: "<media:audio>",
     RawBody: "<media:audio>",
     CommandBody: "<media:audio>",
-    SessionKey: "agent:main:telegram:-100123",
-    From: "telegram:user:42",
-    To: "telegram:-100123",
     GroupChannel: "ops",
-    Timestamp: 1710000000000,
     MediaPath: "/tmp/voice.ogg",
     MediaUrl: "https://example.test/voice.ogg",
     MediaType: "audio/ogg",
     ...overrides,
-  };
+  });
 }
 
 describe("getReplyFromConfig message hooks", () => {
   beforeEach(async () => {
-    await loadFreshGetReplyModuleForTest();
+    await loadGetReplyRuntimeForTest();
     delete process.env.OPENCLAW_TEST_FAST;
     mocks.applyMediaUnderstanding.mockReset();
     mocks.applyLinkUnderstanding.mockReset();
@@ -106,24 +94,13 @@ describe("getReplyFromConfig message hooks", () => {
     );
     mocks.triggerInternalHook.mockResolvedValue(undefined);
     mocks.resolveReplyDirectives.mockResolvedValue({ kind: "reply", reply: { text: "ok" } });
-    mocks.initSessionState.mockResolvedValue({
-      sessionCtx: {},
-      sessionEntry: {},
-      previousSessionEntry: {},
-      sessionStore: {},
-      sessionKey: "agent:main:telegram:-100123",
-      sessionId: "session-1",
-      isNewSession: false,
-      resetTriggered: false,
-      systemSent: false,
-      abortedLastRun: false,
-      storePath: "/tmp/sessions.json",
-      sessionScope: "per-chat",
-      groupResolution: undefined,
-      isGroup: true,
-      triggerBodyNormalized: "",
-      bodyStripped: "",
-    });
+    mocks.initSessionState.mockResolvedValue(
+      createGetReplySessionState({
+        sessionKey: "agent:main:telegram:-100123",
+        sessionScope: "per-chat",
+        isGroup: true,
+      }),
+    );
   });
 
   it("emits transcribed + preprocessed hooks with enriched context", async () => {

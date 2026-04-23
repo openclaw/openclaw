@@ -11,6 +11,8 @@ import {
   renderWikiMarkdown,
   slugifyWikiSegment,
   normalizeSourceIds,
+  normalizeWikiClaims,
+  type WikiClaim,
 } from "./markdown.js";
 import {
   readQueryableWikiPages,
@@ -29,6 +31,7 @@ export type CreateSynthesisMemoryWikiMutation = {
   title: string;
   body: string;
   sourceIds: string[];
+  claims?: WikiClaim[];
   contradictions?: string[];
   questions?: string[];
   confidence?: number;
@@ -39,6 +42,7 @@ export type UpdateMetadataMemoryWikiMutation = {
   op: "update_metadata";
   lookup: string;
   sourceIds?: string[];
+  claims?: WikiClaim[];
   contradictions?: string[];
   questions?: string[];
   confidence?: number | null;
@@ -64,6 +68,7 @@ export function normalizeMemoryWikiMutationInput(rawParams: unknown): ApplyMemor
     body?: string;
     lookup?: string;
     sourceIds?: string[];
+    claims?: WikiClaim[];
     contradictions?: string[];
     questions?: string[];
     confidence?: number | null;
@@ -84,6 +89,7 @@ export function normalizeMemoryWikiMutationInput(rawParams: unknown): ApplyMemor
       title: params.title,
       body: params.body,
       sourceIds: params.sourceIds,
+      ...(Array.isArray(params.claims) ? { claims: normalizeWikiClaims(params.claims) } : {}),
       ...(params.contradictions ? { contradictions: params.contradictions } : {}),
       ...(params.questions ? { questions: params.questions } : {}),
       ...(typeof params.confidence === "number" ? { confidence: params.confidence } : {}),
@@ -97,6 +103,7 @@ export function normalizeMemoryWikiMutationInput(rawParams: unknown): ApplyMemor
     op: "update_metadata",
     lookup: params.lookup,
     ...(params.sourceIds ? { sourceIds: params.sourceIds } : {}),
+    ...(Array.isArray(params.claims) ? { claims: normalizeWikiClaims(params.claims) } : {}),
     ...(params.contradictions ? { contradictions: params.contradictions } : {}),
     ...(params.questions ? { questions: params.questions } : {}),
     ...(params.confidence !== undefined ? { confidence: params.confidence } : {}),
@@ -190,6 +197,7 @@ async function applyCreateSynthesisMutation(params: {
       id: pageId,
       title: params.mutation.title,
       sourceIds: normalizeSourceIds(params.mutation.sourceIds),
+      ...(params.mutation.claims ? { claims: normalizeWikiClaims(params.mutation.claims) } : {}),
       ...(normalizeUniqueStrings(params.mutation.contradictions)
         ? { contradictions: normalizeUniqueStrings(params.mutation.contradictions) }
         : {}),
@@ -221,6 +229,14 @@ function buildUpdatedFrontmatter(params: {
   };
   if (params.mutation.sourceIds) {
     frontmatter.sourceIds = normalizeSourceIds(params.mutation.sourceIds);
+  }
+  if (params.mutation.claims) {
+    const claims = normalizeWikiClaims(params.mutation.claims);
+    if (claims.length > 0) {
+      frontmatter.claims = claims;
+    } else {
+      delete frontmatter.claims;
+    }
   }
   if (params.mutation.contradictions) {
     const contradictions = normalizeUniqueStrings(params.mutation.contradictions) ?? [];

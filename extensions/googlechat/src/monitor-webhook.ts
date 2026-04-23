@@ -1,10 +1,11 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import type { WebhookInFlightLimiter } from "openclaw/plugin-sdk/webhook-request-guards";
+import { readJsonWebhookBodyOrReject } from "openclaw/plugin-sdk/webhook-request-guards";
 import {
-  readJsonWebhookBodyOrReject,
   resolveWebhookTargetWithAuthOrReject,
   withResolvedWebhookRequestPipeline,
-  type WebhookInFlightLimiter,
-} from "../runtime-api.js";
+} from "openclaw/plugin-sdk/webhook-targets";
 import { verifyGoogleChatRequest } from "./auth.js";
 import type { WebhookTarget } from "./monitor-types.js";
 import type {
@@ -22,7 +23,7 @@ function extractBearerToken(header: unknown): string {
     : typeof header === "string"
       ? header
       : "";
-  return authHeader.toLowerCase().startsWith("bearer ")
+  return normalizeLowercaseStringOrEmpty(authHeader).startsWith("bearer ")
     ? authHeader.slice("bearer ".length).trim()
     : "";
 }
@@ -100,6 +101,19 @@ function parseGoogleChatInboundPayload(
   return { ok: true, event, addOnBearerToken };
 }
 
+async function isAuthorizedGoogleChatTarget(
+  target: WebhookTarget,
+  bearer: string,
+): Promise<boolean> {
+  const verification = await verifyGoogleChatRequest({
+    bearer,
+    audienceType: target.audienceType,
+    audience: target.audience,
+    expectedAddOnPrincipal: target.account.config.appPrincipal,
+  });
+  return verification.ok;
+}
+
 export function createGoogleChatWebhookRequestHandler(params: {
   webhookTargets: Map<string, WebhookTarget[]>;
   webhookInFlightLimiter: WebhookInFlightLimiter;
@@ -145,15 +159,7 @@ export function createGoogleChatWebhookRequestHandler(params: {
           selectedTarget = await resolveWebhookTargetWithAuthOrReject({
             targets,
             res,
-            isMatch: async (target) => {
-              const verification = await verifyGoogleChatRequest({
-                bearer: headerBearer,
-                audienceType: target.audienceType,
-                audience: target.audience,
-                expectedAddOnPrincipal: target.account.config.appPrincipal,
-              });
-              return verification.ok;
-            },
+            isMatch: (target) => isAuthorizedGoogleChatTarget(target, headerBearer),
           });
           if (!selectedTarget) {
             return true;
@@ -180,15 +186,7 @@ export function createGoogleChatWebhookRequestHandler(params: {
           selectedTarget = await resolveWebhookTargetWithAuthOrReject({
             targets,
             res,
-            isMatch: async (target) => {
-              const verification = await verifyGoogleChatRequest({
-                bearer: parsed.addOnBearerToken,
-                audienceType: target.audienceType,
-                audience: target.audience,
-                expectedAddOnPrincipal: target.account.config.appPrincipal,
-              });
-              return verification.ok;
-            },
+            isMatch: (target) => isAuthorizedGoogleChatTarget(target, parsed.addOnBearerToken),
           });
           if (!selectedTarget) {
             return true;

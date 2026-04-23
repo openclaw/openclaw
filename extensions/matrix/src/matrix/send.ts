@@ -1,3 +1,4 @@
+import { requireRuntimeConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import type { PollInput } from "../runtime-api.js";
 import { getMatrixRuntime } from "../runtime.js";
@@ -31,6 +32,7 @@ import {
 import { normalizeThreadId, resolveMatrixRoomId } from "./send/targets.js";
 import {
   EventType,
+  MSC4357_LIVE_KEY,
   MsgType,
   RelationType,
   type MatrixExtraContentFields,
@@ -134,13 +136,13 @@ async function resolvePreviousEditMentions(params: {
 export function prepareMatrixSingleText(
   text: string,
   opts: {
-    cfg?: CoreConfig;
+    cfg: CoreConfig;
     accountId?: string;
     tableMode?: MarkdownTableMode;
-  } = {},
+  },
 ): MatrixPreparedSingleText {
   const trimmedText = text.trim();
-  const cfg = opts.cfg ?? getCore().config.loadConfig();
+  const cfg = requireRuntimeConfig(opts.cfg, "Matrix text preparation") as CoreConfig;
   const tableMode =
     opts.tableMode ??
     getCore().channel.text.resolveMarkdownTableMode({
@@ -164,13 +166,13 @@ export function prepareMatrixSingleText(
 export function chunkMatrixText(
   text: string,
   opts: {
-    cfg?: CoreConfig;
+    cfg: CoreConfig;
     accountId?: string;
     tableMode?: MarkdownTableMode;
-  } = {},
+  },
 ): MatrixPreparedChunkedText {
   const preparedText = prepareMatrixSingleText(text, opts);
-  const cfg = opts.cfg ?? getCore().config.loadConfig();
+  const cfg = requireRuntimeConfig(opts.cfg, "Matrix text chunking") as CoreConfig;
   const chunkMode = getCore().channel.text.resolveChunkMode(cfg, "matrix", opts.accountId);
   return {
     ...preparedText,
@@ -185,7 +187,7 @@ export function chunkMatrixText(
 export async function sendMessageMatrix(
   to: string,
   message: string | undefined,
-  opts: MatrixSendOpts = {},
+  opts: MatrixSendOpts,
 ): Promise<MatrixSendResult> {
   const trimmedMessage = message?.trim() ?? "";
   if (!trimmedMessage && !opts.mediaUrl) {
@@ -200,7 +202,7 @@ export async function sendMessageMatrix(
     },
     async (client) => {
       const roomId = await resolveMatrixRoomId(client, to);
-      const cfg = opts.cfg ?? getCore().config.loadConfig();
+      const cfg = requireRuntimeConfig(opts.cfg, "Matrix send") as CoreConfig;
       const { chunks } = chunkMatrixText(trimmedMessage, {
         cfg,
         accountId: opts.accountId,
@@ -329,7 +331,7 @@ export async function sendMessageMatrix(
 export async function sendPollMatrix(
   to: string,
   poll: PollInput,
-  opts: MatrixSendOpts = {},
+  opts: MatrixSendOpts,
 ): Promise<{ eventId: string; roomId: string }> {
   if (!poll.question?.trim()) {
     throw new Error("Matrix poll requires a question");
@@ -371,17 +373,26 @@ export async function sendPollMatrix(
 export async function sendTypingMatrix(
   roomId: string,
   typing: boolean,
-  timeoutMs?: number,
+  optsOrTimeoutMs?: number | MatrixClientResolveOpts,
   client?: MatrixClient,
 ): Promise<void> {
+  const opts =
+    typeof optsOrTimeoutMs === "number"
+      ? { timeoutMs: optsOrTimeoutMs, ...(client ? { client } : {}) }
+      : {
+          ...normalizeMatrixClientResolveOpts(optsOrTimeoutMs),
+          ...(client ? { client } : {}),
+        };
   await withResolvedMatrixControlClient(
     {
-      client,
-      timeoutMs,
+      client: opts.client,
+      cfg: opts.cfg,
+      timeoutMs: opts.timeoutMs,
+      accountId: opts.accountId,
     },
     async (resolved) => {
       const resolvedRoom = await resolveMatrixRoomId(resolved, roomId);
-      const resolvedTimeoutMs = typeof timeoutMs === "number" ? timeoutMs : 30_000;
+      const resolvedTimeoutMs = typeof opts.timeoutMs === "number" ? opts.timeoutMs : 30_000;
       await resolved.setTyping(resolvedRoom, typing, resolvedTimeoutMs);
     },
   );
@@ -406,14 +417,16 @@ export async function sendSingleTextMessageMatrix(
   text: string,
   opts: {
     client?: MatrixClient;
-    cfg?: CoreConfig;
+    cfg: CoreConfig;
     replyToId?: string;
     threadId?: string;
     accountId?: string;
     msgtype?: MatrixTextMsgType;
     includeMentions?: boolean;
     extraContent?: MatrixExtraContentFields;
-  } = {},
+    /** When true, marks the message as a live/streaming update (MSC4357). */
+    live?: boolean;
+  },
 ): Promise<MatrixSendResult> {
   const { trimmedText, convertedText, singleEventLimit, fitsInSingleEvent } =
     prepareMatrixSingleText(text, {
@@ -452,6 +465,11 @@ export async function sendSingleTextMessageMatrix(
         markdown: convertedText,
         includeMentions: opts.includeMentions,
       });
+      // MSC4357: mark the initial message as live so supporting clients start
+      // rendering a streaming animation immediately.
+      if (opts.live) {
+        (content as Record<string, unknown>)[MSC4357_LIVE_KEY] = {};
+      }
       const eventId = await client.sendMessage(resolvedRoom, content);
       return {
         messageId: eventId ?? "unknown",
@@ -485,14 +503,16 @@ export async function editMessageMatrix(
   newText: string,
   opts: {
     client?: MatrixClient;
-    cfg?: CoreConfig;
+    cfg: CoreConfig;
     threadId?: string;
     accountId?: string;
     timeoutMs?: number;
     msgtype?: MatrixTextMsgType;
     includeMentions?: boolean;
     extraContent?: MatrixExtraContentFields;
-  } = {},
+    /** When true, marks the edit as a live/streaming update (MSC4357). */
+    live?: boolean;
+  },
 ): Promise<string> {
   return await withResolvedMatrixSendClient(
     {
@@ -503,7 +523,7 @@ export async function editMessageMatrix(
     },
     async (client) => {
       const resolvedRoom = await resolveMatrixRoomId(client, roomId);
-      const cfg = opts.cfg ?? getCore().config.loadConfig();
+      const cfg = requireRuntimeConfig(opts.cfg, "Matrix message edit") as CoreConfig;
       const tableMode = getCore().channel.text.resolveMarkdownTableMode({
         cfg,
         channel: "matrix",
@@ -559,6 +579,15 @@ export async function editMessageMatrix(
       };
       if (replaceMentions !== undefined) {
         content["m.mentions"] = replaceMentions;
+      }
+
+      // MSC4357: mark in-progress edits so supporting clients can render a
+      // streaming animation. The marker is placed in both the outer content
+      // (for unencrypted rooms / server-side aggregation) and inside
+      // m.new_content (for E2EE rooms where only decrypted content is read).
+      if (opts.live) {
+        content[MSC4357_LIVE_KEY] = {};
+        (content["m.new_content"] as Record<string, unknown>)[MSC4357_LIVE_KEY] = {};
       }
 
       const eventId = await client.sendMessage(resolvedRoom, content);

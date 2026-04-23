@@ -1,15 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { describe } from "vitest";
+import { assertBundledChannelEntries } from "../../test/helpers/bundled-channel-entry.ts";
 import entry from "./index.js";
 import setupEntry from "./setup-entry.js";
 
 describe("slack bundled entries", () => {
-  it("loads the channel plugin without importing the broad api barrel", () => {
-    const plugin = entry.loadChannelPlugin();
-    expect(plugin.id).toBe("slack");
-  });
-
-  it("loads the setup plugin without importing the broad api barrel", () => {
-    const plugin = setupEntry.loadSetupPlugin();
-    expect(plugin.id).toBe("slack");
+  assertBundledChannelEntries({
+    entry,
+    expectedId: "slack",
+    expectedName: "Slack",
+    setupEntry,
   });
 });

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createWebSendApi } from "./send-api.js";
 
 const recordChannelActivity = vi.hoisted(() => vi.fn());
-let createWebSendApi: typeof import("./send-api.js").createWebSendApi;
 
 vi.mock("openclaw/plugin-sdk/infra-runtime", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/infra-runtime")>(
@@ -18,10 +18,8 @@ describe("createWebSendApi", () => {
   const sendPresenceUpdate = vi.fn(async () => {});
   let api: ReturnType<typeof createWebSendApi>;
 
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeEach(() => {
     vi.clearAllMocks();
-    ({ createWebSendApi } = await import("./send-api.js"));
     api = createWebSendApi({
       sock: { sendMessage, sendPresenceUpdate },
       defaultAccountId: "main",
@@ -160,6 +158,42 @@ describe("createWebSendApi", () => {
     );
   });
 
+  it("keeps direct-chat reactions without a participant key", async () => {
+    await api.sendReaction("+1555", "msg-2", "👍", false);
+    expect(sendMessage).toHaveBeenCalledWith(
+      "1555@s.whatsapp.net",
+      expect.objectContaining({
+        react: {
+          text: "👍",
+          key: expect.objectContaining({
+            remoteJid: "1555@s.whatsapp.net",
+            id: "msg-2",
+            fromMe: false,
+            participant: undefined,
+          }),
+        },
+      }),
+    );
+  });
+
+  it("preserves LID participants in reaction keys", async () => {
+    await api.sendReaction("12345@g.us", "msg-2", "👍", false, "123@lid");
+    expect(sendMessage).toHaveBeenCalledWith(
+      "12345@g.us",
+      expect.objectContaining({
+        react: {
+          text: "👍",
+          key: expect.objectContaining({
+            remoteJid: "12345@g.us",
+            id: "msg-2",
+            fromMe: false,
+            participant: "123@lid",
+          }),
+        },
+      }),
+    );
+  });
+
   it("sends composing presence updates to the recipient JID", async () => {
     await api.sendComposingTo("+1555");
     expect(sendPresenceUpdate).toHaveBeenCalledWith("composing", "1555@s.whatsapp.net");
@@ -183,5 +217,30 @@ describe("createWebSendApi", () => {
     await api.sendMessage("123", "hello");
 
     expect(sendMessage).toHaveBeenCalledWith("123@s.whatsapp.net", { text: "hello" });
+  });
+
+  it("preserves the quoted remoteJid provided by the outbound adapter", async () => {
+    await api.sendMessage("+1555", "hello", undefined, undefined, {
+      quotedMessageKey: {
+        id: "quoted-1",
+        remoteJid: "277038292303944@lid",
+        fromMe: false,
+        participant: "1234@s.whatsapp.net",
+        messageText: "quoted body",
+      },
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      "1555@s.whatsapp.net",
+      { text: "hello" },
+      expect.objectContaining({
+        quoted: expect.objectContaining({
+          key: expect.objectContaining({
+            remoteJid: "277038292303944@lid",
+            id: "quoted-1",
+          }),
+        }),
+      }),
+    );
   });
 });

@@ -1,4 +1,9 @@
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { resolveExecDetail } from "./tool-display-exec.js";
+import { asRecord } from "./tool-display-record.js";
 
 export type ToolDisplayActionSpec = {
   label?: string;
@@ -20,12 +25,6 @@ export type CoerceDisplayValueOptions = {
   maxArrayEntries?: number;
 };
 
-type ArgsRecord = Record<string, unknown>;
-
-function asRecord(args: unknown): ArgsRecord | undefined {
-  return args && typeof args === "object" ? (args as ArgsRecord) : undefined;
-}
-
 export function normalizeToolName(name?: string): string {
   return (name ?? "tool").trim();
 }
@@ -46,7 +45,7 @@ export function defaultTitle(name: string): string {
 }
 
 export function normalizeVerb(value?: string): string | undefined {
-  const trimmed = value?.trim();
+  const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
     return undefined;
   }
@@ -61,7 +60,7 @@ export function resolveActionArg(args: unknown): string | undefined {
   if (typeof actionRaw !== "string") {
     return undefined;
   }
-  const action = actionRaw.trim();
+  const action = normalizeOptionalString(actionRaw);
   return action || undefined;
 }
 
@@ -105,7 +104,7 @@ export function coerceDisplayValue(
     if (!trimmed) {
       return undefined;
     }
-    const firstLine = trimmed.split(/\r?\n/)[0]?.trim() ?? "";
+    const firstLine = normalizeOptionalString(trimmed.split(/\r?\n/)[0]) ?? "";
     if (!firstLine) {
       return undefined;
     }
@@ -169,7 +168,7 @@ export function formatDetailKey(raw: string, overrides: Record<string, string> =
   }
   const cleaned = last.replace(/_/g, " ").replace(/-/g, " ");
   const spaced = cleaned.replace(/([a-z0-9])([A-Z])/g, "$1 $2");
-  return spaced.trim().toLowerCase() || last.toLowerCase();
+  return normalizeLowercaseStringOrEmpty(spaced) || normalizeLowercaseStringOrEmpty(last);
 }
 
 export function resolvePathArg(args: unknown): string | undefined {
@@ -232,8 +231,7 @@ export function resolveWriteDetail(toolKey: string, args: unknown): string | und
     return undefined;
   }
 
-  const path =
-    resolvePathArg(record) ?? (typeof record.url === "string" ? record.url.trim() : undefined);
+  const path = resolvePathArg(record) ?? normalizeOptionalString(record.url);
   if (!path) {
     return undefined;
   }
@@ -265,7 +263,7 @@ export function resolveWebSearchDetail(args: unknown): string | undefined {
     return undefined;
   }
 
-  const query = typeof record.query === "string" ? record.query.trim() : undefined;
+  const query = normalizeOptionalString(record.query);
   const count =
     typeof record.count === "number" && Number.isFinite(record.count) && record.count > 0
       ? Math.floor(record.count)
@@ -284,12 +282,12 @@ export function resolveWebFetchDetail(args: unknown): string | undefined {
     return undefined;
   }
 
-  const url = typeof record.url === "string" ? record.url.trim() : undefined;
+  const url = normalizeOptionalString(record.url);
   if (!url) {
     return undefined;
   }
 
-  const mode = typeof record.extractMode === "string" ? record.extractMode.trim() : undefined;
+  const mode = normalizeOptionalString(record.extractMode);
   const maxChars =
     typeof record.maxChars === "number" && Number.isFinite(record.maxChars) && record.maxChars > 0
       ? Math.floor(record.maxChars)

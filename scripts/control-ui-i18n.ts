@@ -6,6 +6,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { formatErrorMessage } from "../src/infra/errors.ts";
 
 interface TranslationMap {
   [key: string]: string | TranslationMap;
@@ -95,6 +96,7 @@ const LOCALE_ENTRIES: readonly LocaleEntry[] = [
   { locale: "uk", fileName: "uk.ts", exportName: "uk", languageKey: "uk" },
   { locale: "id", fileName: "id.ts", exportName: "id", languageKey: "id" },
   { locale: "pl", fileName: "pl.ts", exportName: "pl", languageKey: "pl" },
+  { locale: "th", fileName: "th.ts", exportName: "th", languageKey: "th" },
 ];
 
 const DEFAULT_GLOSSARY: readonly GlossaryEntry[] = [
@@ -185,6 +187,8 @@ function prettyLanguageLabel(locale: string): string {
       return "Indonesian";
     case "pl":
       return "Polish";
+    case "th":
+      return "Thai";
     case "de":
       return "German";
     case "es":
@@ -1317,6 +1321,6 @@ async function main() {
 }
 
 await main().catch((error) => {
-  console.error(error instanceof Error ? error.message : String(error));
+  console.error(formatErrorMessage(error));
   process.exit(1);
 });

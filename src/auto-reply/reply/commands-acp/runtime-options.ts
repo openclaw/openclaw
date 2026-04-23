@@ -8,6 +8,7 @@ import {
   validateRuntimePermissionProfileInput,
 } from "../../../acp/control-plane/runtime-options.js";
 import { resolveAcpSessionIdentifierLinesFromIdentity } from "../../../acp/runtime/session-identifiers.js";
+import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
 import { findLatestTaskForRelatedSessionKeyForOwner } from "../../../tasks/task-owner-access.js";
 import { sanitizeTaskStatusText } from "../../../tasks/task-status.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "../commands-types.js";
@@ -230,7 +231,7 @@ export async function handleAcpSetAction(
 
   return await withAcpCommandErrorBoundary({
     run: async () => {
-      const lowerKey = key.toLowerCase();
+      const lowerKey = normalizeLowercaseStringOrEmpty(key);
       if (lowerKey === "cwd") {
         const cwd = validateRuntimeCwdInput(value);
         const options = await getAcpSessionManager().updateSessionRuntimeOptions({

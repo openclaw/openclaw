@@ -15,7 +15,7 @@ vi.mock("./heartbeat-recipients.runtime.js", () => ({
     return trimmed ? (trimmed as "whatsapp") : null;
   },
   normalizeE164: (value?: string | null) => {
-    const digits = `${value ?? ""}`.replace(/[^\d+]/g, "");
+    const digits = (value ?? "").replace(/[^\d+]/g, "");
     if (!digits) {
       return "";
     }

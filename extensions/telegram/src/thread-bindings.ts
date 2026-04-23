@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import { readAcpSessionEntry } from "openclaw/plugin-sdk/acp-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   formatThreadBindingDurationLabel,
   registerSessionBindingAdapter,
@@ -12,17 +13,25 @@ import {
   type SessionBindingAdapter,
   type SessionBindingRecord,
 } from "openclaw/plugin-sdk/conversation-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
-import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
+import { normalizeAccountId, isAcpSessionKey } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
-import { createForumTopicTelegram } from "./send.js";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { resolveTelegramToken } from "./token.js";
 
 const DEFAULT_THREAD_BINDING_IDLE_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_THREAD_BINDING_MAX_AGE_MS = 0;
 const THREAD_BINDINGS_SWEEP_INTERVAL_MS = 60_000;
 const STORE_VERSION = 1;
+
+let telegramSendModulePromise: Promise<typeof import("./send.js")> | undefined;
+
+async function loadTelegramSendModule() {
+  telegramSendModulePromise ??= import("./send.js");
+  return await telegramSendModulePromise;
+}
 
 type TelegramBindingTargetKind = "subagent" | "acp";
 
@@ -101,14 +110,6 @@ function normalizeDurationMs(raw: unknown, fallback: number): number {
     return fallback;
   }
   return Math.max(0, Math.floor(raw));
-}
-
-function normalizeConversationId(raw: unknown): string | undefined {
-  if (typeof raw !== "string") {
-    return undefined;
-  }
-  const trimmed = raw.trim();
-  return trimmed || undefined;
 }
 
 function resolveBindingKey(params: { accountId: string; conversationId: string }): string {
@@ -252,9 +253,8 @@ function loadBindingsFromDisk(accountId: string): TelegramThreadBindingRecord[] 
     }
     const bindings: TelegramThreadBindingRecord[] = [];
     for (const entry of parsed.bindings) {
-      const conversationId = normalizeConversationId(entry?.conversationId);
-      const targetSessionKey =
-        typeof entry?.targetSessionKey === "string" ? entry.targetSessionKey.trim() : "";
+      const conversationId = normalizeOptionalString(entry?.conversationId);
+      const targetSessionKey = normalizeOptionalString(entry?.targetSessionKey) ?? "";
       const targetKind = entry?.targetKind === "subagent" ? "subagent" : "acp";
       if (!conversationId || !targetSessionKey) {
         continue;
@@ -346,11 +346,12 @@ function enqueuePersistBindings(params: {
       await persistBindingsToDisk(params);
     });
   getThreadBindingsState().persistQueueByAccountId.set(params.accountId, next);
-  void next.finally(() => {
+  const cleanup = () => {
     if (getThreadBindingsState().persistQueueByAccountId.get(params.accountId) === next) {
       getThreadBindingsState().persistQueueByAccountId.delete(params.accountId);
     }
-  });
+  };
+  next.then(cleanup, cleanup);
   return next;
 }
 
@@ -406,15 +407,14 @@ function shouldExpireByMaxAge(params: {
   return params.now >= params.record.boundAt + maxAgeMs;
 }
 
-export function createTelegramThreadBindingManager(
-  params: {
-    accountId?: string;
-    persist?: boolean;
-    idleTimeoutMs?: number;
-    maxAgeMs?: number;
-    enableSweeper?: boolean;
-  } = {},
-): TelegramThreadBindingManager {
+export function createTelegramThreadBindingManager(params: {
+  cfg: OpenClawConfig;
+  accountId?: string;
+  persist?: boolean;
+  idleTimeoutMs?: number;
+  maxAgeMs?: number;
+  enableSweeper?: boolean;
+}): TelegramThreadBindingManager {
   const accountId = normalizeAccountId(params.accountId);
   const existing = getThreadBindingsState().managersByAccountId.get(accountId);
   if (existing) {
@@ -440,6 +440,58 @@ export function createTelegramThreadBindingManager(
     });
   }
 
+  const acpSessionKeys = new Set<string>();
+  for (const binding of getThreadBindingsState().bindingsByAccountConversation.values()) {
+    if (binding.targetKind !== "acp" || !isAcpSessionKey(binding.targetSessionKey)) {
+      continue;
+    }
+    acpSessionKeys.add(binding.targetSessionKey);
+  }
+
+  const staleSessionKeys = new Set<string>();
+  for (const targetSessionKey of acpSessionKeys) {
+    const sessionEntry = readAcpSessionEntry({ sessionKey: targetSessionKey });
+    if (!sessionEntry || sessionEntry.storeReadFailed) {
+      continue;
+    }
+    const isStale =
+      !sessionEntry.entry ||
+      sessionEntry.entry.status === "failed" ||
+      sessionEntry.entry.status === "killed" ||
+      sessionEntry.entry.status === "timeout" ||
+      sessionEntry.entry.acp?.state === "error";
+    if (isStale) {
+      staleSessionKeys.add(targetSessionKey);
+    }
+  }
+
+  let needsPersist = false;
+  for (const sessionKey of staleSessionKeys) {
+    const bindingsToRemove = listBindingsForAccount(accountId).filter(
+      (b) => b.targetSessionKey === sessionKey,
+    );
+    for (const binding of bindingsToRemove) {
+      getThreadBindingsState().bindingsByAccountConversation.delete(
+        resolveBindingKey({ accountId, conversationId: binding.conversationId }),
+      );
+    }
+    if (bindingsToRemove.length > 0) {
+      needsPersist = true;
+      logVerbose(
+        `telegram thread binding: cleaned up ${bindingsToRemove.length} stale binding(s) for session ${sessionKey}`,
+      );
+    }
+  }
+
+  if (needsPersist && persist) {
+    persistBindingsSafely({
+      accountId,
+      persist: true,
+      bindings: listBindingsForAccount(accountId),
+      reason: "cleanup-stale",
+    });
+  }
+
   let sweepTimer: NodeJS.Timeout | null = null;
 
   const manager: TelegramThreadBindingManager = {
@@ -448,7 +500,7 @@ export function createTelegramThreadBindingManager(
     getIdleTimeoutMs: () => idleTimeoutMs,
     getMaxAgeMs: () => maxAgeMs,
     getByConversationId: (conversationIdRaw) => {
-      const conversationId = normalizeConversationId(conversationIdRaw);
+      const conversationId = normalizeOptionalString(conversationIdRaw);
       if (!conversationId) {
         return undefined;
       }
@@ -470,7 +522,7 @@ export function createTelegramThreadBindingManager(
     },
     listBindings: () => listBindingsForAccount(accountId),
     touchConversation: (conversationIdRaw, at) => {
-      const conversationId = normalizeConversationId(conversationIdRaw);
+      const conversationId = normalizeOptionalString(conversationIdRaw);
       if (!conversationId) {
         return null;
       }
@@ -493,7 +545,7 @@ export function createTelegramThreadBindingManager(
       return nextRecord;
     },
     unbindConversation: (unbindParams) => {
-      const conversationId = normalizeConversationId(unbindParams.conversationId);
+      const conversationId = normalizeOptionalString(unbindParams.conversationId);
       if (!conversationId) {
         return null;
       }
@@ -576,7 +628,6 @@ export function createTelegramThreadBindingManager(
       if (placement === "child") {
         const rawConversationId = input.conversation.conversationId?.trim() ?? "";
         const rawParent = input.conversation.parentConversationId?.trim() ?? "";
-        const cfg = loadConfig();
         let chatId = rawParent || rawConversationId;
         if (!chatId) {
           logVerbose(
@@ -591,28 +642,29 @@ export function createTelegramThreadBindingManager(
           return null;
         }
         const threadName =
-          (typeof metadata.threadName === "string" ? metadata.threadName.trim() : "") ||
-          (typeof metadata.label === "string" ? metadata.label.trim() : "") ||
+          (normalizeOptionalString(metadata.threadName) ?? "") ||
+          (normalizeOptionalString(metadata.label) ?? "") ||
           `Agent: ${targetSessionKey.split(":").pop()}`;
         try {
-          const tokenResolution = resolveTelegramToken(cfg, { accountId });
+          const tokenResolution = resolveTelegramToken(params.cfg, { accountId });
           if (!tokenResolution.token) {
             return null;
           }
+          const { createForumTopicTelegram } = await loadTelegramSendModule();
           const result = await createForumTopicTelegram(chatId, threadName, {
-            cfg,
+            cfg: params.cfg,
             token: tokenResolution.token,
             accountId,
           });
           conversationId = `${result.chatId}:topic:${result.topicId}`;
         } catch (err) {
           logVerbose(
-            `telegram: child thread-binding failed for ${chatId}: ${err instanceof Error ? err.message : String(err)}`,
+            `telegram: child thread-binding failed for ${chatId}: ${formatErrorMessage(err)}`,
           );
           return null;
         }
       } else {
-        conversationId = normalizeConversationId(input.conversation.conversationId);
+        conversationId = normalizeOptionalString(input.conversation.conversationId);
       }
 
       if (!conversationId) {
@@ -666,7 +718,7 @@ export function createTelegramThreadBindingManager(
       if (ref.channel !== "telegram") {
         return null;
       }
-      const conversationId = normalizeConversationId(ref.conversationId);
+      const conversationId = normalizeOptionalString(ref.conversationId);
       if (!conversationId) {
         return null;
       }
@@ -856,7 +908,10 @@ export async function resetTelegramThreadBindingsForTests() {
   for (const manager of getThreadBindingsState().managersByAccountId.values()) {
     manager.stop();
   }
-  await Promise.allSettled(getThreadBindingsState().persistQueueByAccountId.values());
+  const pendingPersists = [...getThreadBindingsState().persistQueueByAccountId.values()];
+  if (pendingPersists.length > 0) {
+    await Promise.allSettled(pendingPersists);
+  }
   getThreadBindingsState().persistQueueByAccountId.clear();
   getThreadBindingsState().managersByAccountId.clear();
   getThreadBindingsState().bindingsByAccountConversation.clear();

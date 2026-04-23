@@ -1,5 +1,26 @@
 import type { Api, Context, Model } from "@mariozechner/pi-ai";
 
+type PendingToolCall = { id: string; name: string };
+
+function appendMissingToolResults(
+  result: Context["messages"],
+  pendingToolCalls: PendingToolCall[],
+  existingToolResultIds: ReadonlySet<string>,
+): void {
+  for (const toolCall of pendingToolCalls) {
+    if (!existingToolResultIds.has(toolCall.id)) {
+      result.push({
+        role: "toolResult",
+        toolCallId: toolCall.id,
+        toolName: toolCall.name,
+        content: [{ type: "text", text: "No result provided" }],
+        isError: true,
+        timestamp: Date.now(),
+      });
+    }
+  }
+}
+
 export function transformTransportMessages(
   messages: Context["messages"],
   model: Model<Api>,
@@ -70,23 +91,12 @@ export function transformTransportMessages(
   });
 
   const result: Context["messages"] = [];
-  let pendingToolCalls: Array<{ id: string; name: string }> = [];
+  let pendingToolCalls: PendingToolCall[] = [];
   let existingToolResultIds = new Set<string>();
   for (const msg of transformed) {
     if (msg.role === "assistant") {
       if (pendingToolCalls.length > 0) {
-        for (const toolCall of pendingToolCalls) {
-          if (!existingToolResultIds.has(toolCall.id)) {
-            result.push({
-              role: "toolResult",
-              toolCallId: toolCall.id,
-              toolName: toolCall.name,
-              content: [{ type: "text", text: "No result provided" }],
-              isError: true,
-              timestamp: Date.now(),
-            });
-          }
-        }
+        appendMissingToolResults(result, pendingToolCalls, existingToolResultIds);
         pendingToolCalls = [];
         existingToolResultIds = new Set();
       }
@@ -110,18 +120,7 @@ export function transformTransportMessages(
       continue;
     }
     if (pendingToolCalls.length > 0) {
-      for (const toolCall of pendingToolCalls) {
-        if (!existingToolResultIds.has(toolCall.id)) {
-          result.push({
-            role: "toolResult",
-            toolCallId: toolCall.id,
-            toolName: toolCall.name,
-            content: [{ type: "text", text: "No result provided" }],
-            isError: true,
-            timestamp: Date.now(),
-          });
-        }
-      }
+      appendMissingToolResults(result, pendingToolCalls, existingToolResultIds);
       pendingToolCalls = [];
       existingToolResultIds = new Set();
     }

@@ -5,6 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 import { resolveStateDir as resolvePluginStateDir } from "openclaw/plugin-sdk/state-paths";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import { normalizeZaloReactionIcon } from "./reaction.js";
 import type {
   ZaloAuthStatus,
@@ -92,7 +97,7 @@ function resolveCredentialsDir(env: NodeJS.ProcessEnv = process.env): string {
 }
 
 function credentialsFilename(profile: string): string {
-  const trimmed = profile.trim().toLowerCase();
+  const trimmed = normalizeLowercaseStringOrEmpty(profile);
   if (!trimmed || trimmed === "default") {
     return "credentials.json";
   }
@@ -494,13 +499,13 @@ function resolveUploadedVoiceAsset(
     if (!item || typeof item !== "object") {
       continue;
     }
-    const fileType = item.fileType?.toLowerCase();
+    const fileType = normalizeOptionalLowercaseString(item.fileType);
     const fileUrl = item.fileUrl?.trim();
     if (!fileUrl) {
       continue;
     }
     if (fileType === "others" || fileType === "video") {
-      return { fileUrl, fileName: item.fileName?.trim() || undefined };
+      return { fileUrl, fileName: normalizeOptionalString(item.fileName) };
     }
   }
   return undefined;
@@ -514,8 +519,8 @@ function buildZaloVoicePlaybackUrl(asset: { fileUrl: string; fileName?: string }
 
 function mapFriend(friend: User): ZcaFriend {
   return {
-    userId: String(friend.userId),
-    displayName: friend.displayName || friend.zaloName || friend.username || String(friend.userId),
+    userId: friend.userId,
+    displayName: friend.displayName || friend.zaloName || friend.username || friend.userId,
     avatar: friend.avatar || undefined,
   };
 }
@@ -526,8 +531,8 @@ function mapGroup(groupId: string, group: GroupInfo & Record<string, unknown>): 
       ? group.totalMember
       : undefined;
   return {
-    groupId: String(groupId),
-    name: group.name?.trim() || String(groupId),
+    groupId,
+    name: group.name?.trim() || groupId,
     memberCount: totalMember,
   };
 }
@@ -861,8 +866,8 @@ export async function getZaloUserInfo(profileInput?: string | null): Promise<Zca
     return null;
   }
   return {
-    userId: String(user.userId),
-    displayName: user.displayName || user.zaloName || String(user.userId),
+    userId: user.userId,
+    displayName: user.displayName || user.zaloName || user.userId,
     avatar: user.avatar || undefined,
   };
 }
@@ -879,14 +884,14 @@ export async function listZaloFriendsMatching(
   query?: string | null,
 ): Promise<ZcaFriend[]> {
   const friends = await listZaloFriends(profileInput);
-  const q = query?.trim().toLowerCase();
+  const q = normalizeOptionalLowercaseString(query);
   if (!q) {
     return friends;
   }
   const scored = friends
     .map((friend) => {
-      const id = friend.userId.toLowerCase();
-      const name = friend.displayName.toLowerCase();
+      const id = normalizeLowercaseStringOrEmpty(friend.userId);
+      const name = normalizeLowercaseStringOrEmpty(friend.displayName);
       const exact = id === q || name === q;
       const includes = id.includes(q) || name.includes(q);
       return { friend, exact, includes };
@@ -922,13 +927,13 @@ export async function listZaloGroupsMatching(
   query?: string | null,
 ): Promise<ZaloGroup[]> {
   const groups = await listZaloGroups(profileInput);
-  const q = query?.trim().toLowerCase();
+  const q = normalizeOptionalLowercaseString(query);
   if (!q) {
     return groups;
   }
   return groups.filter((group) => {
-    const id = group.groupId.toLowerCase();
-    const name = group.name.toLowerCase();
+    const id = normalizeLowercaseStringOrEmpty(group.groupId);
+    const name = normalizeLowercaseStringOrEmpty(group.name);
     return id.includes(q) || name.includes(q);
   });
 }
@@ -963,7 +968,8 @@ export async function listZaloGroupMembers(
       continue;
     }
     currentById.set(id, {
-      displayName: member.dName?.trim() || member.zaloName?.trim() || undefined,
+      displayName:
+        normalizeOptionalString(member.dName) ?? normalizeOptionalString(member.zaloName),
       avatar: member.avatar || undefined,
     });
   }
@@ -990,7 +996,9 @@ export async function listZaloGroupMembers(
         continue;
       }
       profileMap.set(id, {
-        displayName: profileValue.displayName?.trim() || profileValue.zaloName?.trim() || undefined,
+        displayName:
+          normalizeOptionalString(profileValue.displayName) ??
+          normalizeOptionalString(profileValue.zaloName),
         avatar: profileValue.avatar || undefined,
       });
     }
@@ -1024,7 +1032,7 @@ export async function resolveZaloGroupContext(
     | undefined;
   const context: ZaloGroupContext = {
     groupId: normalizedGroupId,
-    name: groupInfo?.name?.trim() || undefined,
+    name: normalizeOptionalString(groupInfo?.name),
     members: extractGroupMembersFromInfo(groupInfo),
   };
   writeCachedGroupContext(profile, context);
@@ -1625,7 +1633,7 @@ export async function resolveZaloGroupsByEntries(params: {
   const groups = await listZaloGroups(params.profile);
   const byName = new Map<string, ZaloGroup[]>();
   for (const group of groups) {
-    const key = group.name.trim().toLowerCase();
+    const key = normalizeOptionalLowercaseString(group.name);
     if (!key) {
       continue;
     }
@@ -1642,7 +1650,7 @@ export async function resolveZaloGroupsByEntries(params: {
     if (/^\d+$/.test(trimmed)) {
       return { input, resolved: true, id: trimmed };
     }
-    const candidates = byName.get(trimmed.toLowerCase()) ?? [];
+    const candidates = byName.get(normalizeLowercaseStringOrEmpty(trimmed)) ?? [];
     const match = candidates[0];
     return match ? { input, resolved: true, id: match.groupId } : { input, resolved: false };
   });
@@ -1655,7 +1663,7 @@ export async function resolveZaloAllowFromEntries(params: {
   const friends = await listZaloFriends(params.profile);
   const byName = new Map<string, ZcaFriend[]>();
   for (const friend of friends) {
-    const key = friend.displayName.trim().toLowerCase();
+    const key = normalizeOptionalLowercaseString(friend.displayName);
     if (!key) {
       continue;
     }
@@ -1672,7 +1680,7 @@ export async function resolveZaloAllowFromEntries(params: {
     if (/^\d+$/.test(trimmed)) {
       return { input, resolved: true, id: trimmed };
     }
-    const matches = byName.get(trimmed.toLowerCase()) ?? [];
+    const matches = byName.get(normalizeLowercaseStringOrEmpty(trimmed)) ?? [];
     const match = matches[0];
     if (!match) {
       return { input, resolved: false };

@@ -10,7 +10,7 @@ import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 
 vi.mock("../agents/auth-profiles.js", () => {
   const normalizeProvider = (provider?: string | null): string =>
-    String(provider ?? "")
+    (provider ?? "")
       .trim()
       .toLowerCase()
       .replace(/^z-ai$/, "zai");
@@ -122,6 +122,8 @@ vi.mock("../agents/auth-profiles.js", () => {
   return {
     clearRuntimeAuthProfileStoreSnapshots: () => {},
     ensureAuthProfileStore: (agentDir?: string) => readStore(agentDir),
+    hasAnyAuthProfileStoreSource: (agentDir?: string) =>
+      Boolean(agentDir && nodeFs.existsSync(path.join(agentDir, "auth-profiles.json"))),
     dedupeProfileIds,
     listProfilesForProvider,
     resolveApiKeyForProfile,
@@ -153,6 +155,80 @@ const providerRuntimeMocks = vi.hoisted(() => ({
     resolveProviderRuntimePlugin: vi.fn(() => undefined),
     resolveProviderStreamFn: vi.fn(() => undefined),
     resolveProviderSyntheticAuthWithPlugin: vi.fn(() => undefined),
+    resolveProviderUsageAuthWithPlugin: vi.fn(async (params) => {
+      const resolveToken = (options?: {
+        providerIds?: string[];
+        envDirect?: Array<string | undefined>;
+      }) => params.context.resolveApiKeyFromConfigAndStore(options);
+      const resolveLegacyZaiToken = (): string | null => {
+        const home = params.context.env?.HOME ?? params.context.env?.USERPROFILE;
+        if (!home) {
+          return null;
+        }
+        try {
+          const parsed = JSON.parse(
+            nodeFs.readFileSync(path.join(home, ".pi", "agent", "auth.json"), "utf8"),
+          ) as {
+            "z-ai"?: { access?: string };
+          };
+          return parsed["z-ai"]?.access ?? null;
+        } catch {
+          return null;
+        }
+      };
+
+      if (params.provider === "zai") {
+        const token = resolveToken({
+          providerIds: ["zai", "z-ai"],
+          envDirect: [params.context.env?.ZAI_API_KEY, params.context.env?.Z_AI_API_KEY],
+        });
+        return token
+          ? { token }
+          : resolveLegacyZaiToken()
+            ? { token: resolveLegacyZaiToken()! }
+            : null;
+      }
+
+      if (params.provider === "minimax") {
+        const token = resolveToken({
+          providerIds: ["minimax"],
+          envDirect: [
+            params.context.env?.MINIMAX_CODE_PLAN_KEY,
+            params.context.env?.MINIMAX_CODING_API_KEY,
+            params.context.env?.MINIMAX_API_KEY,
+          ],
+        });
+        return token ? { token } : null;
+      }
+
+      if (params.provider === "xiaomi") {
+        const token = resolveToken({
+          providerIds: ["xiaomi"],
+          envDirect: [params.context.env?.XIAOMI_API_KEY],
+        });
+        return token ? { token } : null;
+      }
+
+      if (params.provider === "google-gemini-cli") {
+        const resolved = await params.context.resolveOAuthToken({
+          provider: "google-gemini-cli",
+        });
+        if (!resolved?.token) {
+          return null;
+        }
+        try {
+          const parsed = JSON.parse(resolved.token) as { token?: string };
+          const token = parsed.token ?? resolved.token;
+          return resolved.accountId ? { token, accountId: resolved.accountId } : { token };
+        } catch {
+          return resolved.accountId
+            ? { token: resolved.token, accountId: resolved.accountId }
+            : { token: resolved.token };
+        }
+      }
+
+      return null;
+    }),
     resolveProviderXHighThinking: vi.fn(() => undefined),
     runProviderDynamicModel: vi.fn(() => undefined),
     wrapProviderStreamFn: vi.fn(() => undefined),

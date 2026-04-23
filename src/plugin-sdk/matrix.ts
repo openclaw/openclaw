@@ -2,9 +2,16 @@
 // Keep this list additive and scoped to the bundled Matrix surface.
 
 import { createOptionalChannelSetupSurface } from "./channel-setup.js";
-import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-runtime.js";
+import {
+  createLazyFacadeArrayValue,
+  loadBundledPluginPublicSurfaceModuleSync,
+} from "./facade-loader.js";
 
-type MatrixFacadeModule = typeof import("@openclaw/matrix/contract-api.js");
+type MatrixFacadeModule = {
+  singleAccountKeysToMove: readonly string[];
+  namedAccountPromotionKeys: readonly string[];
+  resolveSingleAccountPromotionTarget: (params: { channel: Record<string, unknown> }) => string;
+};
 
 function loadMatrixFacadeModule(): MatrixFacadeModule {
   return loadBundledPluginPublicSurfaceModuleSync<MatrixFacadeModule>({
@@ -21,7 +28,8 @@ export {
   readStringArrayParam,
   readStringParam,
 } from "../agents/tools/common.js";
-export type { BlockReplyContext, ReplyPayload } from "../auto-reply/types.js";
+export type { BlockReplyContext } from "../auto-reply/get-reply-options.types.js";
+export type { ReplyPayload } from "./reply-payload.js";
 export { resolveAckReaction } from "../agents/identity.js";
 export {
   compileAllowlist,
@@ -84,7 +92,7 @@ export type {
   ChannelResolveResult,
   ChannelSetupInput,
   ChannelToolSend,
-} from "../channels/plugins/types.js";
+} from "../channels/plugins/types.public.js";
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export { createReplyPrefixOptions } from "../channels/reply-prefix.js";
 export { resolveThreadBindingFarewellText } from "../channels/thread-bindings-messages.js";
@@ -190,10 +198,10 @@ export {
 export { setMatrixRuntime } from "./matrix-runtime-surface.js";
 
 export const singleAccountKeysToMove: MatrixFacadeModule["singleAccountKeysToMove"] =
-  loadMatrixFacadeModule().singleAccountKeysToMove;
+  createLazyFacadeArrayValue(() => loadMatrixFacadeModule().singleAccountKeysToMove);
 
 export const namedAccountPromotionKeys: MatrixFacadeModule["namedAccountPromotionKeys"] =
-  loadMatrixFacadeModule().namedAccountPromotionKeys;
+  createLazyFacadeArrayValue(() => loadMatrixFacadeModule().namedAccountPromotionKeys);
 
 export const resolveSingleAccountPromotionTarget: MatrixFacadeModule["resolveSingleAccountPromotionTarget"] =
   ((...args) =>

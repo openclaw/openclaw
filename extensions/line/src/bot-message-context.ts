@@ -8,23 +8,20 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   ensureConfiguredBindingRouteReady,
-  getSessionBindingService,
   recordInboundSession,
   resolvePinnedMainDmOwnerFromAllowlist,
   resolveConfiguredBindingRoute,
+  resolveRuntimeConversationBindingRoute,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { recordChannelActivity } from "openclaw/plugin-sdk/infra-runtime";
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
-import {
-  deriveLastRoutePolicy,
-  resolveAgentIdFromSessionKey,
-  resolveAgentRoute,
-} from "openclaw/plugin-sdk/routing";
+import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { normalizeAllowFrom } from "./bot-access.js";
-import { resolveLineGroupConfigEntry, resolveLineGroupHistoryKey } from "./group-keys.js";
-import type { LineGroupConfig, ResolvedLineAccount } from "./types.js";
+import { resolveLineGroupConfigEntry } from "./group-keys.js";
+import type { ResolvedLineAccount } from "./types.js";
 
 type EventSource = webhook.Source | undefined;
 type MessageEvent = webhook.MessageEvent;
@@ -76,10 +73,9 @@ function buildPeerId(source: EventSource): string {
   if (!source) {
     return "unknown";
   }
-  const groupKey = resolveLineGroupHistoryKey({
-    groupId: source.type === "group" ? source.groupId : undefined,
-    roomId: source.type === "room" ? source.roomId : undefined,
-  });
+  const groupKey =
+    normalizeOptionalString(source.type === "group" ? source.groupId : undefined) ??
+    normalizeOptionalString(source.type === "room" ? source.roomId : undefined);
   if (groupKey) {
     return groupKey;
   }
@@ -132,26 +128,22 @@ async function resolveLineInboundRoute(params: {
   const configuredBindingSessionKey = configuredRoute.boundSessionKey ?? "";
   route = configuredRoute.route;
 
-  const boundConversation = getSessionBindingService().resolveByConversation({
-    channel: "line",
-    accountId: params.account.accountId,
-    conversationId: peerId,
+  const runtimeRoute = resolveRuntimeConversationBindingRoute({
+    route,
+    conversation: {
+      channel: "line",
+      accountId: params.account.accountId,
+      conversationId: peerId,
+    },
   });
-  const boundSessionKey = boundConversation?.targetSessionKey?.trim();
-  if (boundConversation && boundSessionKey) {
-    route = {
-      ...route,
-      sessionKey: boundSessionKey,
-      agentId: resolveAgentIdFromSessionKey(boundSessionKey) || route.agentId,
-      lastRoutePolicy: deriveLastRoutePolicy({
-        sessionKey: boundSessionKey,
-        mainSessionKey: route.mainSessionKey,
-      }),
-      matchedBy: "binding.channel",
-    };
+  route = runtimeRoute.route;
+  if (runtimeRoute.bindingRecord) {
     configuredBinding = null;
-    getSessionBindingService().touch(boundConversation.bindingId);
-    logVerbose(`line: routed via bound conversation ${peerId} -> ${boundSessionKey}`);
+    logVerbose(
+      runtimeRoute.boundSessionKey
+        ? `line: routed via bound conversation ${peerId} -> ${runtimeRoute.boundSessionKey}`
+        : `line: plugin-bound conversation ${peerId}`,
+    );
   }
 
   if (configuredBinding) {
@@ -283,17 +275,6 @@ function resolveLineAddresses(params: {
   return { fromAddress, toAddress, originatingTo };
 }
 
-function resolveLineGroupSystemPrompt(
-  groups: Record<string, LineGroupConfig | undefined> | undefined,
-  source: LineSourceInfoWithPeerId,
-): string | undefined {
-  const entry = resolveLineGroupConfigEntry(groups, {
-    groupId: source.groupId,
-    roomId: source.roomId,
-  });
-  return entry?.systemPrompt?.trim() || undefined;
-}
-
 async function finalizeLineInboundContext(params: {
   cfg: OpenClawConfig;
   account: ResolvedLineAccount;
@@ -380,7 +361,12 @@ async function finalizeLineInboundContext(params: {
     OriginatingChannel: "line" as const,
     OriginatingTo: originatingTo,
     GroupSystemPrompt: params.source.isGroup
-      ? resolveLineGroupSystemPrompt(params.account.config.groups, params.source)
+      ? normalizeOptionalString(
+          resolveLineGroupConfigEntry(params.account.config.groups, {
+            groupId: params.source.groupId,
+            roomId: params.source.roomId,
+          })?.systemPrompt,
+        )
       : undefined,
     InboundHistory: params.inboundHistory,
   });

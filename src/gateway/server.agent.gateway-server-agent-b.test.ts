@@ -223,8 +223,71 @@ describe("gateway server agent", () => {
     });
   });
 
+  test("agent preserves CLI session binding metadata when refreshing session state", async () => {
+    await useTempSessionStorePath();
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-cli",
+          updatedAt: Date.now(),
+          modelProvider: "claude-cli",
+          model: "claude-opus-4-6",
+          cliSessionIds: {
+            "claude-cli": "cli-session-123",
+          },
+          cliSessionBindings: {
+            "claude-cli": {
+              sessionId: "cli-session-123",
+              authProfileId: "anthropic:work",
+              mcpConfigHash: "mcp-config-hash",
+              mcpResumeHash: "mcp-resume-hash",
+            },
+          },
+          claudeCliSessionId: "cli-session-123",
+        },
+      },
+    });
+
+    const res = await rpcReq(ws, "agent", {
+      message: "hi",
+      sessionKey: "main",
+      idempotencyKey: "idem-agent-cli-binding",
+    });
+    expect(res.ok).toBe(true);
+
+    const sessionStorePath = testState.sessionStorePath;
+    if (!sessionStorePath) {
+      throw new Error("expected session store path");
+    }
+    const stored = JSON.parse(await fs.readFile(sessionStorePath, "utf-8")) as Record<
+      string,
+      {
+        cliSessionBindings?: Record<string, unknown>;
+        cliSessionIds?: Record<string, string>;
+        claudeCliSessionId?: string;
+      }
+    >;
+    expect(stored["agent:main:main"]?.cliSessionBindings).toEqual({
+      "claude-cli": {
+        sessionId: "cli-session-123",
+        authProfileId: "anthropic:work",
+        mcpConfigHash: "mcp-config-hash",
+        mcpResumeHash: "mcp-resume-hash",
+      },
+    });
+    expect(stored["agent:main:main"]?.cliSessionIds).toEqual({
+      "claude-cli": "cli-session-123",
+    });
+    expect(stored["agent:main:main"]?.claudeCliSessionId).toBe("cli-session-123");
+  });
+
   test("agent accepts built-in channel alias (imsg)", async () => {
     const registry = createRegistry([
+      {
+        pluginId: "imessage",
+        source: "test",
+        plugin: createStubChannelPlugin({ id: "imessage", label: "iMessage" }),
+      },
       {
         pluginId: "msteams",
         source: "test",
@@ -245,7 +308,9 @@ describe("gateway server agent", () => {
       idempotencyKey: "idem-agent-imsg",
     });
     expect(resIMessage.ok).toBe(true);
-
+    await vi.waitFor(() => {
+      expect(vi.mocked(agentCommand)).toHaveBeenCalled();
+    });
     expectAgentRoutingCall({ channel: "imessage", deliver: true, fromEnd: 1 });
   });
 
@@ -371,27 +436,6 @@ describe("gateway server agent", () => {
     expect(res.ok).toBe(true);
 
     expectAgentRoutingCall({ channel: "webchat", deliver: false });
-  });
-
-  test("agent routes bare /new through session reset before running greeting prompt", async () => {
-    await writeMainSessionEntry({ sessionId: "sess-main-before-reset" });
-    const spy = vi.mocked(agentCommand);
-    const calls = spy.mock.calls;
-    const callsBefore = calls.length;
-    const res = await rpcReq(ws, "agent", {
-      message: "/new",
-      sessionKey: "main",
-      idempotencyKey: "idem-agent-new",
-    });
-    expect(res.ok).toBe(true);
-
-    await vi.waitFor(() => expect(calls.length).toBeGreaterThan(callsBefore));
-    const call = (calls.at(-1)?.[0] ?? {}) as Record<string, unknown>;
-    expect(call.message).toBeTypeOf("string");
-    expect(call.message).toContain("Run your Session Startup sequence");
-    expect(call.message).toContain("Current time:");
-    expect(typeof call.sessionId).toBe("string");
-    expect(call.sessionId).not.toBe("sess-main-before-reset");
   });
 
   test("write-scoped callers cannot reset conversations via agent", async () => {

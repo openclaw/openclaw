@@ -1,24 +1,91 @@
-import { Type } from "@sinclair/typebox";
-import { isRestartEnabled } from "../../config/commands.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import { isDeepStrictEqual } from "node:util";
+import { Type } from "typebox";
+import { isRestartEnabled } from "../../config/commands.flags.js";
 import { parseConfigJson5, resolveConfigSnapshotHash } from "../../config/io.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
+  buildRestartSuccessContinuation,
   formatDoctorNonInteractiveHint,
+  removeRestartSentinelFile,
   type RestartSentinelPayload,
   writeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
 import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { collectEnabledInsecureOrDangerousFlags } from "../../security/dangerous-config-flags.js";
+import { normalizeOptionalString, readStringValue } from "../../shared/string-coerce.js";
 import { stringEnum } from "../schema/typebox.js";
 import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
 import { callGatewayTool, readGatewayCallOptions } from "./gateway.js";
+import { isOpenClawOwnerOnlyCoreToolName } from "./owner-only-tools.js";
 
 const log = createSubsystemLogger("gateway-tool");
 
 const DEFAULT_UPDATE_TIMEOUT_MS = 20 * 60_000;
-const PROTECTED_GATEWAY_CONFIG_PATHS = ["tools.exec.ask", "tools.exec.security"] as const;
+// Security: the agent-facing `gateway` tool is owner-only, but per SECURITY.md the model/agent
+// itself is not a trusted principal. `assertGatewayConfigMutationAllowed` is the explicit
+// model -> operator trust-boundary control on `config.apply`/`config.patch`. Any operator-trusted
+// path listed here must not be changed by agent-driven mutations, including descendant keys
+// reached via deep merge or `mergeObjectArraysById` in-place edits.
+const PROTECTED_GATEWAY_CONFIG_PATHS = [
+  // Exec consent / allowlist.
+  "tools.exec.ask",
+  "tools.exec.security",
+  "tools.exec.safeBins",
+  "tools.exec.safeBinProfiles",
+  "tools.exec.safeBinTrustedDirs",
+  "tools.exec.strictInlineEval",
+  // Filesystem boundary.
+  "tools.fs",
+  // Sandbox isolation and per-agent sandbox overrides.
+  "agents.defaults.sandbox",
+  "agents.sandbox",
+  "sandbox",
+  "agents.list[].sandbox",
+  // Per-agent tool/runtime execution policy.
+  "agents.list[].tools",
+  "agents.list[].embeddedPi",
+  "tools.subagents",
+  // Plugin trust boundary.
+  "plugins.enabled",
+  "plugins.allow",
+  "plugins.deny",
+  "plugins.entries",
+  "plugins.installs",
+  "plugins.load",
+  "plugins.slots",
+  // Gateway auth / TLS / HTTP tool exposure.
+  "gateway.auth",
+  "gateway.tls",
+  "gateway.tools.allow",
+  "gateway.tools.deny",
+  // Hook auth/routing and extra trusted code loading.
+  "hooks.token",
+  "hooks.allowRequestSessionKey",
+  "hooks.defaultSessionKey",
+  "hooks.allowedSessionKeyPrefixes",
+  "hooks.internal.load.extraDirs",
+  "hooks.transformsDir",
+  "hooks.mappings",
+  // SSRF and MCP transport reach.
+  "browser.ssrfPolicy",
+  "tools.web.fetch.ssrfPolicy",
+  "mcp.servers",
+] as const;
+
+/** @internal Exposed for regression tests only; do not import from runtime code. */
+export const PROTECTED_GATEWAY_CONFIG_PATHS_FOR_TEST = PROTECTED_GATEWAY_CONFIG_PATHS;
+
+/** @internal Exposed for regression tests only; do not import from runtime code. */
+export function assertGatewayConfigMutationAllowedForTest(params: {
+  action: "config.apply" | "config.patch";
+  currentConfig: Record<string, unknown>;
+  raw: string;
+}): void {
+  assertGatewayConfigMutationAllowed(params);
+}
 
 function resolveBaseHashFromSnapshot(snapshot: unknown): string | undefined {
   if (!snapshot || typeof snapshot !== "object") {
@@ -27,8 +94,8 @@ function resolveBaseHashFromSnapshot(snapshot: unknown): string | undefined {
   const hashValue = (snapshot as { hash?: unknown }).hash;
   const rawValue = (snapshot as { raw?: unknown }).raw;
   const hash = resolveConfigSnapshotHash({
-    hash: typeof hashValue === "string" ? hashValue : undefined,
-    raw: typeof rawValue === "string" ? rawValue : undefined,
+    hash: readStringValue(hashValue),
+    raw: readStringValue(rawValue),
   });
   return hash ?? undefined;
 }
@@ -84,6 +151,94 @@ function getValueAtPath(config: Record<string, unknown>, path: string): unknown 
   return getValueAtCanonicalPath(config, path.replace(/^tools\.exec\./, "tools.bash."));
 }
 
+function isProtectedPathEqual(
+  currentConfig: Record<string, unknown>,
+  nextConfig: Record<string, unknown>,
+  path: string,
+): boolean {
+  const bracketIdx = path.indexOf("[]");
+  if (bracketIdx === -1) {
+    return isDeepStrictEqual(getValueAtPath(currentConfig, path), getValueAtPath(nextConfig, path));
+  }
+
+  const arrayPath = path.slice(0, bracketIdx);
+  const subPath = path.slice(bracketIdx + "[]".length).replace(/^\./, "");
+  const currentList = getValueAtCanonicalPath(currentConfig, arrayPath);
+  const nextList = getValueAtCanonicalPath(nextConfig, arrayPath);
+  if (!Array.isArray(currentList) && !Array.isArray(nextList)) {
+    return true;
+  }
+
+  const readProjectedEntries = (
+    list: unknown,
+  ): {
+    duplicateIds: boolean;
+    hasUnkeyedProtectedValue: boolean;
+    keyedValues: Map<string, unknown>;
+  } => {
+    if (!Array.isArray(list)) {
+      return {
+        duplicateIds: false,
+        hasUnkeyedProtectedValue: false,
+        keyedValues: new Map<string, unknown>(),
+      };
+    }
+    let duplicateIds = false;
+    let hasUnkeyedProtectedValue = false;
+    const keyedValues = new Map<string, unknown>();
+    for (const entry of list) {
+      const id =
+        entry &&
+        typeof entry === "object" &&
+        !Array.isArray(entry) &&
+        typeof (entry as { id?: unknown }).id === "string" &&
+        (entry as { id: string }).id.length > 0
+          ? (entry as { id: string }).id
+          : undefined;
+      const value =
+        !subPath || !entry || typeof entry !== "object" || Array.isArray(entry)
+          ? entry
+          : getValueAtCanonicalPath(entry as Record<string, unknown>, subPath);
+      if (!id) {
+        hasUnkeyedProtectedValue ||= value !== undefined;
+        continue;
+      }
+      if (keyedValues.has(id)) {
+        duplicateIds = true;
+        continue;
+      }
+      keyedValues.set(id, value);
+    }
+    return { duplicateIds, hasUnkeyedProtectedValue, keyedValues };
+  };
+
+  const currentProjected = readProjectedEntries(currentList);
+  const nextProjected = readProjectedEntries(nextList);
+  if (nextProjected.duplicateIds || nextProjected.hasUnkeyedProtectedValue) {
+    return false;
+  }
+  for (const [id, currentValue] of currentProjected.keyedValues) {
+    if (!nextProjected.keyedValues.has(id)) {
+      // Dropping an entry that currently carries an operator-set protected
+      // subfield value strips that operator state — treat as a protected
+      // change so per-agent overrides cannot be removed via config.apply.
+      if (currentValue !== undefined) {
+        return false;
+      }
+      continue;
+    }
+    if (!isDeepStrictEqual(currentValue, nextProjected.keyedValues.get(id))) {
+      return false;
+    }
+  }
+  for (const [id, nextValue] of nextProjected.keyedValues) {
+    if (!currentProjected.keyedValues.has(id) && nextValue !== undefined) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function assertGatewayConfigMutationAllowed(params: {
   action: "config.apply" | "config.patch";
   currentConfig: Record<string, unknown>;
@@ -97,14 +252,26 @@ function assertGatewayConfigMutationAllowed(params: {
           mergeObjectArraysById: true,
         }) as Record<string, unknown>);
   const changedProtectedPaths = PROTECTED_GATEWAY_CONFIG_PATHS.filter(
-    (path) => getValueAtPath(params.currentConfig, path) !== getValueAtPath(nextConfig, path),
+    (path) => !isProtectedPathEqual(params.currentConfig, nextConfig, path),
   );
-  if (changedProtectedPaths.length === 0) {
-    return;
+  if (changedProtectedPaths.length > 0) {
+    throw new Error(
+      `gateway ${params.action} cannot change protected config paths: ${changedProtectedPaths.join(", ")}`,
+    );
   }
-  throw new Error(
-    `gateway ${params.action} cannot change protected config paths: ${changedProtectedPaths.join(", ")}`,
+
+  // Block writes that newly enable any dangerous config flag.
+  // Uses the same flag enumeration as `openclaw security audit`.
+  const currentFlags = new Set(
+    collectEnabledInsecureOrDangerousFlags(params.currentConfig as OpenClawConfig),
   );
+  const nextFlags = collectEnabledInsecureOrDangerousFlags(nextConfig as OpenClawConfig);
+  const newlyEnabled = nextFlags.filter((f) => !currentFlags.has(f));
+  if (newlyEnabled.length > 0) {
+    throw new Error(
+      `gateway ${params.action} cannot enable dangerous config flags: ${newlyEnabled.join(", ")}`,
+    );
+  }
 }
 
 const GATEWAY_ACTIONS = [
@@ -124,6 +291,7 @@ const GatewayToolSchema = Type.Object({
   // restart
   delayMs: Type.Optional(Type.Number()),
   reason: Type.Optional(Type.String()),
+  continuationMessage: Type.Optional(Type.String()),
   // config.get, config.schema.lookup, config.apply, update.run
   gatewayUrl: Type.Optional(Type.String()),
   gatewayToken: Type.Optional(Type.String()),
@@ -150,9 +318,9 @@ export function createGatewayTool(opts?: {
   return {
     label: "Gateway",
     name: "gateway",
-    ownerOnly: true,
+    ownerOnly: isOpenClawOwnerOnlyCoreToolName("gateway"),
     description:
-      "Restart, inspect a specific config schema path, apply config, or update the gateway in-place (SIGUSR1). Use config.schema.lookup with a targeted dot path before config edits. Use config.patch for safe partial config updates (merges with existing). Use config.apply only when replacing entire config. Both trigger restart after writing. Always pass a human-readable completion message via the `note` parameter so the system can deliver it to the user after restart.",
+      "Restart, inspect a specific config schema path, apply config, or update the gateway in-place (SIGUSR1). Use config.schema.lookup with a targeted dot path before config edits. Use config.patch for safe partial config updates (merges with existing). Use config.apply only when replacing entire config. Config writes hot-reload when possible and restart when required. Always pass a human-readable completion message via the `note` parameter so the system can deliver it to the user after restart. If restarting during a user task and you still owe the user a reply, pass a specific one-shot `continuationMessage` for what to verify or report after boot; do not write restart sentinel files directly.",
     parameters: GatewayToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -162,19 +330,15 @@ export function createGatewayTool(opts?: {
           throw new Error("Gateway restart is disabled (commands.restart=false).");
         }
         const sessionKey =
-          typeof params.sessionKey === "string" && params.sessionKey.trim()
-            ? params.sessionKey.trim()
-            : opts?.agentSessionKey?.trim() || undefined;
+          normalizeOptionalString(params.sessionKey) ??
+          normalizeOptionalString(opts?.agentSessionKey);
         const delayMs =
           typeof params.delayMs === "number" && Number.isFinite(params.delayMs)
             ? Math.floor(params.delayMs)
             : undefined;
-        const reason =
-          typeof params.reason === "string" && params.reason.trim()
-            ? params.reason.trim().slice(0, 200)
-            : undefined;
-        const note =
-          typeof params.note === "string" && params.note.trim() ? params.note.trim() : undefined;
+        const reason = normalizeOptionalString(params.reason)?.slice(0, 200);
+        const note = normalizeOptionalString(params.note);
+        const continuationMessage = normalizeOptionalString(params.continuationMessage);
         // Extract channel + threadId for routing after restart.
         // Uses generic :thread: parsing plus plugin-owned session grammars.
         const { deliveryContext, threadId } = extractDeliveryInfo(sessionKey);
@@ -186,23 +350,31 @@ export function createGatewayTool(opts?: {
           deliveryContext,
           threadId,
           message: note ?? reason ?? null,
+          continuation: buildRestartSuccessContinuation({
+            sessionKey,
+            continuationMessage,
+          }),
           doctorHint: formatDoctorNonInteractiveHint(),
           stats: {
             mode: "gateway.restart",
             reason,
           },
         };
-        try {
-          await writeRestartSentinel(payload);
-        } catch {
-          // ignore: sentinel is best-effort
-        }
         log.info(
           `gateway tool: restart requested (delayMs=${delayMs ?? "default"}, reason=${reason ?? "none"})`,
         );
+        let sentinelPath: string | null = null;
         const scheduled = scheduleGatewaySigusr1Restart({
           delayMs,
           reason,
+          emitHooks: {
+            beforeEmit: async () => {
+              sentinelPath = await writeRestartSentinel(payload);
+            },
+            afterEmitRejected: async () => {
+              await removeRestartSentinelFile(sentinelPath);
+            },
+          },
         });
         return jsonResult(scheduled);
       }
@@ -215,11 +387,9 @@ export function createGatewayTool(opts?: {
         restartDelayMs: number | undefined;
       } => {
         const sessionKey =
-          typeof params.sessionKey === "string" && params.sessionKey.trim()
-            ? params.sessionKey.trim()
-            : opts?.agentSessionKey?.trim() || undefined;
-        const note =
-          typeof params.note === "string" && params.note.trim() ? params.note.trim() : undefined;
+          normalizeOptionalString(params.sessionKey) ??
+          normalizeOptionalString(opts?.agentSessionKey);
+        const note = normalizeOptionalString(params.note);
         const restartDelayMs =
           typeof params.restartDelayMs === "number" && Number.isFinite(params.restartDelayMs)
             ? Math.floor(params.restartDelayMs)

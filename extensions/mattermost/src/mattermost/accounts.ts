@@ -6,6 +6,7 @@ import {
   resolveChannelStreamingBlockEnabled,
   resolveChannelStreamingChunkMode,
 } from "openclaw/plugin-sdk/channel-streaming";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { normalizeResolvedSecretInputString, normalizeSecretInputString } from "../secret-input.js";
 import type {
   MattermostAccountConfig,
@@ -108,7 +109,7 @@ export function resolveMattermostAccount(params: {
   return {
     accountId,
     enabled,
-    name: merged.name?.trim() || undefined,
+    name: normalizeOptionalString(merged.name),
     botToken,
     baseUrl,
     botTokenSource,

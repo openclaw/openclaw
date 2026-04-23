@@ -186,7 +186,7 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount, ZaloProbeResult> =
             },
           }),
       },
-      auth: zaloApprovalAuth,
+      approvalCapability: zaloApprovalAuth,
       secrets: {
         secretTargetRegistryEntries,
         collectRuntimeConfigAssignments,

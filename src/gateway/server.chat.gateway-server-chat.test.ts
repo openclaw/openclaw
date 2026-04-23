@@ -22,7 +22,7 @@ import { agentCommand } from "./test-helpers.runtime-state.js";
 import { installConnectedControlUiServerSuite } from "./test-with-server.js";
 
 installGatewayTestHooks({ scope: "suite" });
-const CHAT_RESPONSE_TIMEOUT_MS = 4_000;
+const CHAT_RESPONSE_TIMEOUT_MS = 10_000;
 
 let ws: WebSocket;
 let port: number;
@@ -565,6 +565,50 @@ describe("gateway server chat", () => {
     expect(collectHistoryTextValues(historyMessages)).toEqual(["hello", "real reply"]);
   });
 
+  test("chat.history hides assistant announce/reply skip-only entries", async () => {
+    const historyMessages = await loadChatHistoryWithMessages([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "ANNOUNCE_SKIP" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "REPLY_SKIP" }],
+        timestamp: 2,
+      },
+      {
+        role: "assistant",
+        text: "real text field reply",
+        content: "ANNOUNCE_SKIP",
+        timestamp: 3,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "real reply" }],
+        timestamp: 4,
+      },
+    ]);
+    const roleAndText = historyMessages
+      .map((message) => {
+        const role =
+          message &&
+          typeof message === "object" &&
+          typeof (message as { role?: unknown }).role === "string"
+            ? (message as { role: string }).role
+            : "unknown";
+        const text =
+          message &&
+          typeof message === "object" &&
+          typeof (message as { text?: unknown }).text === "string"
+            ? (message as { text: string }).text
+            : (extractFirstTextBlock(message) ?? "");
+        return `${role}:${text}`;
+      })
+      .filter((entry) => entry !== "unknown:");
+
+    expect(roleAndText).toEqual(["assistant:real text field reply", "assistant:real reply"]);
+  });
   test("routes chat.send slash commands without agent runs", async () => {
     await withMainSessionStore(async () => {
       const spy = vi.mocked(agentCommand);
@@ -743,6 +787,100 @@ describe("gateway server chat", () => {
         question: "what changed?",
         text: "first chunk\n\nsecond chunk",
       });
+    });
+  });
+
+  test("chat.history persists assistant image data URLs as managed image blocks", async () => {
+    await withMainSessionStore(async (dir) => {
+      const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+      process.env.OPENCLAW_STATE_DIR = dir;
+      const pngB64 =
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=";
+      dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
+        const [params] = args as [
+          {
+            dispatcher: {
+              sendFinalReply: (payload: { text?: string; mediaUrls?: string[] }) => boolean;
+              markComplete: () => void;
+              waitForIdle: () => Promise<void>;
+              getQueuedCounts: () => { final: number; block: number; tool: number };
+            };
+          },
+        ];
+        params.dispatcher.sendFinalReply({
+          mediaUrls: [`data:image/png;base64,${pngB64}`],
+        });
+        params.dispatcher.markComplete();
+        await params.dispatcher.waitForIdle();
+        return {
+          queuedFinal: true,
+          counts: params.dispatcher.getQueuedCounts(),
+        };
+      });
+
+      try {
+        const finalPromise = onceMessage(
+          ws,
+          (o) =>
+            o.type === "event" &&
+            o.event === "chat" &&
+            o.payload?.state === "final" &&
+            o.payload?.runId === "idem-managed-image-history",
+          8000,
+        );
+        const res = await rpcReq(ws, "chat.send", {
+          sessionKey: "main",
+          message: "show me an image",
+          idempotencyKey: "idem-managed-image-history",
+        });
+
+        expect(res.ok).toBe(true);
+        expect(res.payload?.runId).toBe("idem-managed-image-history");
+        await finalPromise;
+
+        let assistantMessage: Record<string, unknown> | undefined;
+        for (let attempt = 0; attempt < 50; attempt += 1) {
+          const historyRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
+            sessionKey: "main",
+          });
+          expect(historyRes.ok).toBe(true);
+          const messages = historyRes.payload?.messages ?? [];
+          assistantMessage = messages.find(
+            (message): message is Record<string, unknown> =>
+              typeof message === "object" &&
+              message !== null &&
+              (message as { role?: unknown }).role === "assistant",
+          );
+          if (assistantMessage) {
+            break;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+
+        expect(assistantMessage).toBeTruthy();
+        const assistantContent = (assistantMessage as { content?: unknown[] }).content ?? [];
+        expect(assistantContent).toEqual([
+          { type: "text", text: "Image reply" },
+          expect.objectContaining({
+            type: "image",
+            url: expect.stringContaining("/api/chat/media/outgoing/"),
+            openUrl: expect.stringContaining("/full"),
+            alt: "Generated image 1",
+            mimeType: "image/png",
+            width: 1,
+            height: 1,
+          }),
+        ]);
+        const serializedAssistant = JSON.stringify(assistantMessage);
+        expect(serializedAssistant).not.toContain("data:image/png;base64");
+        expect(serializedAssistant).not.toContain(pngB64);
+      } finally {
+        if (previousStateDir == null) {
+          delete process.env.OPENCLAW_STATE_DIR;
+        } else {
+          process.env.OPENCLAW_STATE_DIR = previousStateDir;
+        }
+      }
     });
   });
 

@@ -3,14 +3,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { SessionEntry as PiSessionEntry, SessionHeader } from "@mariozechner/pi-coding-agent";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
-import {
-  resolveDefaultSessionStorePath,
-  resolveSessionFilePath,
-  resolveSessionFilePathOptions,
-} from "../../config/sessions/paths.js";
-import { loadSessionStore } from "../../config/sessions/store.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
 import type { ReplyPayload } from "../types.js";
+import {
+  isReplyPayload,
+  parseExportCommandOutputPath,
+  resolveExportCommandSessionTarget,
+} from "./commands-export-common.js";
 import { resolveCommandsSystemPromptBundle } from "./commands-system-prompt.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
@@ -98,45 +96,16 @@ function generateHtml(sessionData: SessionData): string {
     .replace("{{HIGHLIGHT_JS}}", hljsJs);
 }
 
-function parseExportArgs(commandBodyNormalized: string): { outputPath?: string } {
-  const normalized = commandBodyNormalized.trim();
-  if (normalized === "/export-session" || normalized === "/export") {
-    return {};
-  }
-  const args = normalized.replace(/^\/(export-session|export)\s*/, "").trim();
-  // First non-flag argument is the output path
-  const outputPath = args.split(/\s+/).find((part) => !part.startsWith("-"));
-  return { outputPath };
-}
-
 export async function buildExportSessionReply(params: HandleCommandsParams): Promise<ReplyPayload> {
-  const args = parseExportArgs(params.command.commandBodyNormalized);
-
-  // 1. Resolve session file
-  const sessionEntry = params.sessionEntry;
-  if (!sessionEntry?.sessionId) {
-    return { text: "❌ No active session found." };
+  const args = parseExportCommandOutputPath(params.command.commandBodyNormalized, [
+    "export-session",
+    "export",
+  ]);
+  const sessionTarget = resolveExportCommandSessionTarget(params);
+  if (isReplyPayload(sessionTarget)) {
+    return sessionTarget;
   }
-
-  const storePath = resolveDefaultSessionStorePath(params.agentId);
-  const store = loadSessionStore(storePath, { skipCache: true });
-  const entry = store[params.sessionKey] as SessionEntry | undefined;
-  if (!entry?.sessionId) {
-    return { text: `❌ Session not found: ${params.sessionKey}` };
-  }
-
-  let sessionFile: string;
-  try {
-    sessionFile = resolveSessionFilePath(
-      entry.sessionId,
-      entry,
-      resolveSessionFilePathOptions({ agentId: params.agentId, storePath }),
-    );
-  } catch (err) {
-    return {
-      text: `❌ Failed to resolve session file: ${err instanceof Error ? err.message : String(err)}`,
-    };
-  }
+  const { entry, sessionFile } = sessionTarget;
 
   if (!fs.existsSync(sessionFile)) {
     return { text: `❌ Session file not found: ${sessionFile}` };
@@ -149,7 +118,10 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
   const leafId = sessionManager.getLeafId();
 
   // 3. Build full system prompt
-  const { systemPrompt, tools } = await resolveCommandsSystemPromptBundle(params);
+  const { systemPrompt, tools } = await resolveCommandsSystemPromptBundle({
+    ...params,
+    sessionEntry: entry as HandleCommandsParams["sessionEntry"],
+  });
 
   // 4. Prepare session data
   const sessionData: SessionData = {

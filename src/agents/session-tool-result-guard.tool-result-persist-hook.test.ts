@@ -12,6 +12,7 @@ import { loadOpenClawPlugins } from "../plugins/loader.js";
 import { guardSessionManager } from "./session-tool-result-guard-wrapper.js";
 
 const EMPTY_PLUGIN_SCHEMA = { type: "object", additionalProperties: false, properties: {} };
+const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 
 function writeTempPlugin(params: { dir: string; id: string; body: string }): string {
   const pluginDir = path.join(params.dir, params.id);
@@ -58,8 +59,42 @@ function getPersistedToolResult(sm: ReturnType<typeof SessionManager.inMemory>) 
   return messages.find((m) => (m as any).role === "toolResult") as any;
 }
 
+function initializeTempPlugin(params: { tmpPrefix: string; id: string; body: string }) {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), params.tmpPrefix));
+  process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+  const plugin = writeTempPlugin({
+    dir: tmp,
+    id: params.id,
+    body: params.body,
+  });
+  const registry = loadOpenClawPlugins({
+    cache: false,
+    workspaceDir: tmp,
+    config: {
+      plugins: {
+        load: { paths: [plugin] },
+        allow: [params.id],
+      },
+    },
+  });
+  initializeGlobalHookRunner(registry);
+}
+
+function expectPersistedToolResultTextCapped(sm: ReturnType<typeof SessionManager.inMemory>) {
+  const toolResult = getPersistedToolResult(sm);
+  const text = toolResult.content.find((block: { type: string }) => block.type === "text")?.text;
+  expect(typeof text).toBe("string");
+  expect(text.length).toBeLessThanOrEqual(120);
+  expect(text).toContain("truncated");
+}
+
 afterEach(() => {
   resetGlobalHookRunner();
+  if (originalBundledPluginsDir === undefined) {
+    delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+  } else {
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = originalBundledPluginsDir;
+  }
 });
 
 describe("tool_result_persist hook", () => {
@@ -128,34 +163,45 @@ describe("tool_result_persist hook", () => {
     expect(toolResult.toolCallId).toBe("call_1");
     expect(Array.isArray(toolResult.content)).toBe(true);
   });
+
+  it("reapplies the cap after tool_result_persist expands a tool result", () => {
+    initializeTempPlugin({
+      tmpPrefix: "openclaw-toolpersist-expand-",
+      id: "persist-expand",
+      body: `export default { id: "persist-expand", register(api) {
+  api.on("tool_result_persist", (event) => {
+    return {
+      message: {
+        ...event.message,
+        content: [{ type: "text", text: "y".repeat(5000) }],
+      },
+    };
+	  }, { priority: 10 });
+	} };`,
+    });
+
+    const sm = guardSessionManager(SessionManager.inMemory(), {
+      agentId: "main",
+      sessionKey: "main",
+      contextWindowTokens: 100,
+    });
+
+    appendToolCallAndResult(sm);
+    expectPersistedToolResultTextCapped(sm);
+  });
 });
 
 describe("before_message_write hook", () => {
   it("continues persistence when a before_message_write hook throws", () => {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-before-write-"));
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
-
-    const plugin = writeTempPlugin({
-      dir: tmp,
+    initializeTempPlugin({
+      tmpPrefix: "openclaw-before-write-",
       id: "before-write-throws",
       body: `export default { id: "before-write-throws", register(api) {
   api.on("before_message_write", () => {
     throw new Error("boom");
-  }, { priority: 10 });
-} };`,
+	  }, { priority: 10 });
+	} };`,
     });
-
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      workspaceDir: tmp,
-      config: {
-        plugins: {
-          load: { paths: [plugin] },
-          allow: ["before-write-throws"],
-        },
-      },
-    });
-    initializeGlobalHookRunner(registry);
 
     const sm = guardSessionManager(SessionManager.inMemory(), {
       agentId: "main",
@@ -175,5 +221,32 @@ describe("before_message_write hook", () => {
 
     expect(messages).toHaveLength(1);
     expect(messages[0]?.role).toBe("user");
+  });
+
+  it("reapplies the cap after before_message_write expands a tool result", () => {
+    initializeTempPlugin({
+      tmpPrefix: "openclaw-before-write-expand-",
+      id: "before-write-expand",
+      body: `export default { id: "before-write-expand", register(api) {
+  api.on("before_message_write", (event) => {
+    if (event.message?.role !== "toolResult") return;
+    return {
+      message: {
+        ...event.message,
+        content: [{ type: "text", text: "z".repeat(5000) }],
+      },
+    };
+	  }, { priority: 10 });
+	} };`,
+    });
+
+    const sm = guardSessionManager(SessionManager.inMemory(), {
+      agentId: "main",
+      sessionKey: "main",
+      contextWindowTokens: 100,
+    });
+
+    appendToolCallAndResult(sm);
+    expectPersistedToolResultTextCapped(sm);
   });
 });

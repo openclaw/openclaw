@@ -3,11 +3,15 @@ import {
   _resetMemoryPluginState,
   buildMemoryPromptSection,
   clearMemoryPluginState,
+  getMemoryCapabilityRegistration,
   getMemoryFlushPlanResolver,
   getMemoryPromptSectionBuilder,
   getMemoryRuntime,
+  hasMemoryRuntime,
   listMemoryCorpusSupplements,
   listMemoryPromptSupplements,
+  listActiveMemoryPublicArtifacts,
+  registerMemoryCapability,
   registerMemoryCorpusSupplement,
   registerMemoryFlushPlanResolver,
   registerMemoryPromptSupplement,
@@ -48,6 +52,7 @@ function expectClearedMemoryState() {
 
 function createMemoryStateSnapshot() {
   return {
+    capability: getMemoryCapabilityRegistration(),
     corpusSupplements: listMemoryCorpusSupplements(),
     promptBuilder: getMemoryPromptSectionBuilder(),
     promptSupplements: listMemoryPromptSupplements(),
@@ -94,6 +99,85 @@ describe("memory plugin state", () => {
       "## Custom Memory",
       "Use custom memory tools.",
       "",
+    ]);
+  });
+
+  it("prefers the registered memory capability over legacy split state", async () => {
+    const runtime = createMemoryRuntime();
+
+    registerMemoryPromptSection(() => ["legacy prompt"]);
+    registerMemoryFlushPlanResolver(() => createMemoryFlushPlan("memory/legacy.md"));
+    registerMemoryRuntime({
+      async getMemorySearchManager() {
+        return { manager: null, error: "legacy" };
+      },
+      resolveMemoryBackendConfig() {
+        return { backend: "builtin" as const };
+      },
+    });
+    registerMemoryCapability("memory-core", {
+      promptBuilder: () => ["capability prompt"],
+      flushPlanResolver: () => createMemoryFlushPlan("memory/capability.md"),
+      runtime,
+    });
+
+    expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual(["capability prompt"]);
+    expect(resolveMemoryFlushPlan({})?.relativePath).toBe("memory/capability.md");
+    await expect(
+      getMemoryRuntime()?.getMemorySearchManager({
+        cfg: {} as never,
+        agentId: "main",
+      }),
+    ).resolves.toEqual({ manager: null, error: "missing" });
+    expect(hasMemoryRuntime()).toBe(true);
+    expect(getMemoryCapabilityRegistration()).toMatchObject({
+      pluginId: "memory-core",
+    });
+  });
+
+  it("lists active public memory artifacts in deterministic order", async () => {
+    registerMemoryCapability("memory-core", {
+      publicArtifacts: {
+        async listArtifacts() {
+          return [
+            {
+              kind: "daily-note",
+              workspaceDir: "/tmp/workspace-b",
+              relativePath: "memory/2026-04-06.md",
+              absolutePath: "/tmp/workspace-b/memory/2026-04-06.md",
+              agentIds: ["beta"],
+              contentType: "markdown" as const,
+            },
+            {
+              kind: "memory-root",
+              workspaceDir: "/tmp/workspace-a",
+              relativePath: "MEMORY.md",
+              absolutePath: "/tmp/workspace-a/MEMORY.md",
+              agentIds: ["main"],
+              contentType: "markdown" as const,
+            },
+          ];
+        },
+      },
+    });
+
+    await expect(listActiveMemoryPublicArtifacts({ cfg: {} as never })).resolves.toEqual([
+      {
+        kind: "memory-root",
+        workspaceDir: "/tmp/workspace-a",
+        relativePath: "MEMORY.md",
+        absolutePath: "/tmp/workspace-a/MEMORY.md",
+        agentIds: ["main"],
+        contentType: "markdown",
+      },
+      {
+        kind: "daily-note",
+        workspaceDir: "/tmp/workspace-b",
+        relativePath: "memory/2026-04-06.md",
+        absolutePath: "/tmp/workspace-b/memory/2026-04-06.md",
+        agentIds: ["beta"],
+        contentType: "markdown",
+      },
     ]);
   });
 

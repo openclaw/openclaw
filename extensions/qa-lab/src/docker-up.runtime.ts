@@ -1,8 +1,16 @@
-import { execFile } from "node:child_process";
-import { createServer } from "node:net";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { writeQaDockerHarnessFiles } from "./docker-harness.js";
+import {
+  execCommand,
+  fetchHealthUrl,
+  resolveComposeServiceUrl,
+  resolveHostPort,
+  waitForDockerServiceHealth,
+  waitForHealth,
+  type FetchLike,
+  type RunCommand,
+} from "./docker-runtime.js";
 
 type QaDockerUpResult = {
   outputDir: string;
@@ -12,133 +20,8 @@ type QaDockerUpResult = {
   stopCommand: string;
 };
 
-type RunCommand = (
-  command: string,
-  args: string[],
-  cwd: string,
-) => Promise<{ stdout: string; stderr: string }>;
-
-type FetchLike = (input: string) => Promise<{ ok: boolean }>;
-
-const DEFAULT_QA_DOCKER_DIR = path.resolve(process.cwd(), ".artifacts/qa-docker");
-
-function describeError(error: unknown) {
-  if (error instanceof Error) {
-    return error.message;
-  }
-  if (typeof error === "string") {
-    return error;
-  }
-  return JSON.stringify(error);
-}
-
-async function isPortFree(port: number) {
-  return await new Promise<boolean>((resolve) => {
-    const server = createServer();
-    server.once("error", () => resolve(false));
-    server.listen(port, () => {
-      server.close(() => resolve(true));
-    });
-  });
-}
-
-async function findFreePort() {
-  return await new Promise<number>((resolve, reject) => {
-    const server = createServer();
-    server.once("error", reject);
-    server.listen(0, () => {
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        server.close();
-        reject(new Error("failed to find free port"));
-        return;
-      }
-      server.close((error) => {
-        if (error) {
-          reject(error);
-          return;
-        }
-        resolve(address.port);
-      });
-    });
-  });
-}
-
-async function resolveHostPort(preferredPort: number, pinned: boolean) {
-  if (pinned || (await isPortFree(preferredPort))) {
-    return preferredPort;
-  }
-  return await findFreePort();
-}
-
-function trimCommandOutput(output: string) {
-  const trimmed = output.trim();
-  if (!trimmed) {
-    return "";
-  }
-  const lines = trimmed.split("\n");
-  return lines.length <= 120 ? trimmed : lines.slice(-120).join("\n");
-}
-
-async function execCommand(command: string, args: string[], cwd: string) {
-  return await new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
-    execFile(
-      command,
-      args,
-      { cwd, encoding: "utf8", maxBuffer: 10 * 1024 * 1024 },
-      (error, stdout, stderr) => {
-        if (error) {
-          const renderedStdout = trimCommandOutput(stdout);
-          const renderedStderr = trimCommandOutput(stderr);
-          reject(
-            new Error(
-              [
-                `Command failed: ${[command, ...args].join(" ")}`,
-                renderedStderr ? `stderr:\n${renderedStderr}` : "",
-                renderedStdout ? `stdout:\n${renderedStdout}` : "",
-              ]
-                .filter(Boolean)
-                .join("\n\n"),
-            ),
-          );
-          return;
-        }
-        resolve({ stdout, stderr });
-      },
-    );
-  });
-}
-
-async function waitForHealth(
-  url: string,
-  deps: {
-    fetchImpl: FetchLike;
-    sleepImpl: (ms: number) => Promise<unknown>;
-    timeoutMs?: number;
-    pollMs?: number;
-  },
-) {
-  const timeoutMs = deps.timeoutMs ?? 120_000;
-  const pollMs = deps.pollMs ?? 1_000;
-  const deadline = Date.now() + timeoutMs;
-  let lastError: unknown = null;
-
-  while (Date.now() < deadline) {
-    try {
-      const response = await deps.fetchImpl(url);
-      if (response.ok) {
-        return;
-      }
-      lastError = new Error(`Health check returned non-OK for ${url}`);
-    } catch (error) {
-      lastError = error;
-    }
-    await deps.sleepImpl(pollMs);
-  }
-
-  throw new Error(
-    `Timed out waiting for ${url}${lastError ? `: ${describeError(lastError)}` : ""}`,
-  );
+function resolveDefaultQaDockerDir(repoRoot: string) {
+  return path.resolve(repoRoot, ".artifacts/qa-docker");
 }
 
 export async function runQaDockerUp(
@@ -150,27 +33,26 @@ export async function runQaDockerUp(
     providerBaseUrl?: string;
     image?: string;
     usePrebuiltImage?: boolean;
+    bindUiDist?: boolean;
     skipUiBuild?: boolean;
   },
   deps?: {
     runCommand?: RunCommand;
     fetchImpl?: FetchLike;
     sleepImpl?: (ms: number) => Promise<unknown>;
+    resolveHostPortImpl?: typeof resolveHostPort;
   },
 ): Promise<QaDockerUpResult> {
   const repoRoot = path.resolve(params.repoRoot ?? process.cwd());
-  const outputDir = path.resolve(params.outputDir ?? DEFAULT_QA_DOCKER_DIR);
-  const gatewayPort = await resolveHostPort(
+  const resolveHostPortImpl = deps?.resolveHostPortImpl ?? resolveHostPort;
+  const outputDir = path.resolve(params.outputDir ?? resolveDefaultQaDockerDir(repoRoot));
+  const gatewayPort = await resolveHostPortImpl(
     params.gatewayPort ?? 18789,
     params.gatewayPort != null,
   );
-  const qaLabPort = await resolveHostPort(params.qaLabPort ?? 43124, params.qaLabPort != null);
+  const qaLabPort = await resolveHostPortImpl(params.qaLabPort ?? 43124, params.qaLabPort != null);
   const runCommand = deps?.runCommand ?? execCommand;
-  const fetchImpl =
-    deps?.fetchImpl ??
-    (async (input: string) => {
-      return await fetch(input);
-    });
+  const fetchImpl = deps?.fetchImpl ?? fetchHealthUrl;
   const sleepImpl = deps?.sleepImpl ?? sleep;
 
   if (!params.skipUiBuild) {
@@ -185,6 +67,7 @@ export async function runQaDockerUp(
     providerBaseUrl: params.providerBaseUrl,
     imageName: params.image,
     usePrebuiltImage: params.usePrebuiltImage,
+    bindUiDist: params.bindUiDist,
     includeQaLabUi: true,
   });
 
@@ -210,11 +93,43 @@ export async function runQaDockerUp(
 
   await runCommand("docker", composeArgs, repoRoot);
 
-  const qaLabUrl = `http://127.0.0.1:${qaLabPort}`;
-  const gatewayUrl = `http://127.0.0.1:${gatewayPort}/`;
+  // Brief settle delay so Docker Desktop finishes port-forwarding setup.
+  await sleepImpl(3_000);
 
-  await waitForHealth(`${qaLabUrl}/healthz`, { fetchImpl, sleepImpl });
-  await waitForHealth(`${gatewayUrl}healthz`, { fetchImpl, sleepImpl });
+  const qaLabUrl = `http://127.0.0.1:${qaLabPort}`;
+  const hostGatewayUrl = `http://127.0.0.1:${gatewayPort}/`;
+
+  await waitForHealth(`${qaLabUrl}/healthz`, {
+    label: "QA Lab",
+    fetchImpl,
+    sleepImpl,
+    composeFile,
+  });
+  await waitForDockerServiceHealth(
+    "openclaw-qa-gateway",
+    composeFile,
+    repoRoot,
+    runCommand,
+    sleepImpl,
+  );
+  let gatewayUrl = hostGatewayUrl;
+  if (
+    !(await fetchImpl(`${hostGatewayUrl}healthz`)
+      .then((response) => response.ok)
+      .catch(() => false))
+  ) {
+    const containerGatewayUrl = await resolveComposeServiceUrl(
+      "openclaw-qa-gateway",
+      18789,
+      composeFile,
+      repoRoot,
+      runCommand,
+      fetchImpl,
+    );
+    if (containerGatewayUrl) {
+      gatewayUrl = containerGatewayUrl;
+    }
+  }
 
   return {
     outputDir,

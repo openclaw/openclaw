@@ -113,6 +113,7 @@ const baseParams = () => ({
   app: { client: {} } as App,
   runtime: {} as RuntimeEnv,
   botUserId: "B1",
+  botId: "B1",
   teamId: "T1",
   apiAppId: "A1",
   historyLimit: 0,
@@ -142,6 +143,7 @@ const baseParams = () => ({
   mediaMaxBytes: 1,
   threadHistoryScope: "thread" as const,
   threadInheritParent: false,
+  threadRequireExplicitMention: false,
   removeAckAfterReply: false,
 });
 

@@ -5,6 +5,9 @@
   "providerAuthEnvVars": {
     "byteplus": ["BYTEPLUS_API_KEY"]
   },
+  "providerAuthAliases": {
+    "byteplus-plan": "byteplus"
+  },
   "providerAuthChoices": [
     {
       "provider": "byteplus",

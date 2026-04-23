@@ -1,7 +1,9 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emptyPluginConfigSchema } from "../plugins/config-schema.js";
+import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import type {
   AnyAgentTool,
+  AgentHarness,
   MediaUnderstandingProviderPlugin,
   OpenClawPluginApi,
   OpenClawPluginCommandDefinition,
@@ -61,7 +63,7 @@ import type {
   ProviderTransportTurnState,
   ProviderToolSchemaDiagnostic,
   ProviderResolveUsageAuthContext,
-  ProviderRuntimeModel,
+  ProviderThinkingProfile,
   ProviderThinkingPolicyContext,
   ProviderValidateReplayTurnsContext,
   ProviderWebSocketSessionPolicy,
@@ -73,6 +75,7 @@ import { createCachedLazyValueGetter } from "./lazy-value.js";
 
 export type {
   AnyAgentTool,
+  AgentHarness,
   MediaUnderstandingProviderPlugin,
   OpenClawPluginApi,
   OpenClawPluginNodeHostCommand,
@@ -117,11 +120,11 @@ export type {
   ProviderPrepareRuntimeAuthContext,
   ProviderSanitizeReplayHistoryContext,
   ProviderResolveUsageAuthContext,
+  ProviderThinkingProfile,
   ProviderResolveDynamicModelContext,
   ProviderResolveTransportTurnStateContext,
   ProviderResolveWebSocketSessionPolicyContext,
   ProviderNormalizeResolvedModelContext,
-  ProviderRuntimeModel,
   RealtimeTranscriptionProviderPlugin,
   ProviderTransportTurnState,
   SpeechProviderPlugin,
@@ -140,9 +143,10 @@ export type {
   OpenClawPluginDefinition,
   PluginLogger,
 };
+export type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 export type { OpenClawConfig };
 
-export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
+export { buildPluginConfigSchema, emptyPluginConfigSchema } from "../plugins/config-schema.js";
 
 /** Options for a plugin entry that registers providers, tools, commands, or services. */
 type DefinePluginEntryOptions = {

@@ -7,7 +7,7 @@ export default defineBundledChannelSetupEntry({
     exportName: "bluebubblesSetupPlugin",
   },
   secrets: {
-    specifier: "./src/secret-contract.js",
+    specifier: "./secret-contract-api.js",
     exportName: "channelSecrets",
   },
 });

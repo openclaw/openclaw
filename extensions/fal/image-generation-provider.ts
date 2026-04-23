@@ -11,9 +11,14 @@ import {
 import {
   buildHostnameAllowlistPolicyFromSuffixAllowlist,
   fetchWithSsrFGuard,
+  mergeSsrFPolicies,
   type SsrFPolicy,
   ssrfPolicyFromDangerouslyAllowPrivateNetwork,
 } from "openclaw/plugin-sdk/ssrf-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "openclaw/plugin-sdk/text-runtime";
 
 const DEFAULT_FAL_BASE_URL = "https://fal.run";
 const DEFAULT_FAL_IMAGE_MODEL = "fal-ai/flux/dev";
@@ -51,38 +56,9 @@ export function _setFalFetchGuardForTesting(impl: typeof fetchWithSsrFGuard | nu
   falFetchGuard = impl ?? fetchWithSsrFGuard;
 }
 
-function mergeSsrFPolicies(...policies: Array<SsrFPolicy | undefined>): SsrFPolicy | undefined {
-  const merged: SsrFPolicy = {};
-  for (const policy of policies) {
-    if (!policy) {
-      continue;
-    }
-    if (policy.allowPrivateNetwork) {
-      merged.allowPrivateNetwork = true;
-    }
-    if (policy.dangerouslyAllowPrivateNetwork) {
-      merged.dangerouslyAllowPrivateNetwork = true;
-    }
-    if (policy.allowRfc2544BenchmarkRange) {
-      merged.allowRfc2544BenchmarkRange = true;
-    }
-    if (policy.allowedHostnames?.length) {
-      merged.allowedHostnames = Array.from(
-        new Set([...(merged.allowedHostnames ?? []), ...policy.allowedHostnames]),
-      );
-    }
-    if (policy.hostnameAllowlist?.length) {
-      merged.hostnameAllowlist = Array.from(
-        new Set([...(merged.hostnameAllowlist ?? []), ...policy.hostnameAllowlist]),
-      );
-    }
-  }
-  return Object.keys(merged).length > 0 ? merged : undefined;
-}
-
 function matchesTrustedHostSuffix(hostname: string, trustedSuffix: string): boolean {
-  const normalizedHost = hostname.trim().toLowerCase();
-  const normalizedSuffix = trustedSuffix.trim().toLowerCase();
+  const normalizedHost = normalizeLowercaseStringOrEmpty(hostname);
+  const normalizedSuffix = normalizeLowercaseStringOrEmpty(trustedSuffix);
   return normalizedHost === normalizedSuffix || normalizedHost.endsWith(`.${normalizedSuffix}`);
 }
 
@@ -97,7 +73,7 @@ function resolveFalNetworkPolicy(params: {
     return {};
   }
 
-  const hostSuffix = parsedBaseUrl.hostname.trim().toLowerCase();
+  const hostSuffix = normalizeLowercaseStringOrEmpty(parsedBaseUrl.hostname);
   if (!hostSuffix || !params.allowPrivateNetwork) {
     return {};
   }
@@ -241,7 +217,7 @@ function toDataUri(buffer: Buffer, mimeType: string): string {
 }
 
 function fileExtensionForMimeType(mimeType: string | undefined): string {
-  const normalized = mimeType?.toLowerCase().trim();
+  const normalized = normalizeOptionalLowercaseString(mimeType);
   if (!normalized) {
     return "png";
   }

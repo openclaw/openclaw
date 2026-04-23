@@ -1,5 +1,6 @@
 import { createTypingKeepaliveLoop } from "../../channels/typing-lifecycle.js";
 import { createTypingStartGuard } from "../../channels/typing-start-guard.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { isSilentReplyPrefixText, isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 
 export type TypingController = {
@@ -181,7 +182,7 @@ export function createTypingController(params: {
     if (sealed) {
       return;
     }
-    const trimmed = text?.trim();
+    const trimmed = normalizeOptionalString(text);
     if (!trimmed) {
       return;
     }

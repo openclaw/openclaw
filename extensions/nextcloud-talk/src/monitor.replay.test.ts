@@ -1,9 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import { createMockIncomingRequest } from "../../../test/helpers/mock-incoming-request.js";
-import { WEBHOOK_RATE_LIMIT_DEFAULTS } from "../runtime-api.js";
-import { readNextcloudTalkWebhookBody } from "./monitor.js";
+import {
+  NextcloudTalkRetryableWebhookError,
+  processNextcloudTalkReplayGuardedMessage,
+  readNextcloudTalkWebhookBody,
+} from "./monitor.js";
 import { createSignedCreateMessageRequest } from "./monitor.test-fixtures.js";
 import { startWebhookServer } from "./monitor.test-harness.js";
+import { createNextcloudTalkReplayGuard } from "./replay-guard.js";
 import { generateNextcloudTalkSignature } from "./signature.js";
 import type { NextcloudTalkInboundMessage } from "./types.js";
 
@@ -71,6 +75,38 @@ describe("createNextcloudTalkWebhookServer backend allowlist", () => {
 });
 
 describe("createNextcloudTalkWebhookServer replay handling", () => {
+  function createReplayGuardedProcess(params: {
+    stateDir?: string;
+    accountId?: string;
+    handleMessage: () => Promise<void>;
+  }) {
+    const replayGuard = createNextcloudTalkReplayGuard(
+      params.stateDir ? { stateDir: params.stateDir } : {},
+    );
+
+    return (message: NextcloudTalkInboundMessage) =>
+      processNextcloudTalkReplayGuardedMessage({
+        replayGuard,
+        accountId: params.accountId ?? "acct",
+        message,
+        handleMessage: params.handleMessage,
+      });
+  }
+
+  function buildInboundMessage(): NextcloudTalkInboundMessage {
+    return {
+      messageId: "msg-1",
+      roomToken: "room-token",
+      roomName: "Room 1",
+      senderId: "alice",
+      senderName: "Alice",
+      text: "hello",
+      mediaType: "text/plain",
+      timestamp: 1_700_000_000_000,
+      isGroupChat: true,
+    };
+  }
+
   it("acknowledges replayed requests and skips onMessage side effects", async () => {
     const seen = new Set<string>();
     const onMessage = vi.fn(async () => {});
@@ -104,6 +140,43 @@ describe("createNextcloudTalkWebhookServer replay handling", () => {
     expect(second.status).toBe(200);
     expect(shouldProcessMessage).toHaveBeenCalledTimes(2);
     expect(onMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("allows a retry after replay-guarded processing fails before commit", async () => {
+    let attempts = 0;
+    const handleMessage = vi.fn(async () => {
+      attempts += 1;
+      if (attempts === 1) {
+        throw new NextcloudTalkRetryableWebhookError("transient nextcloud failure");
+      }
+    });
+    const processMessage = createReplayGuardedProcess({
+      handleMessage,
+    });
+    const message = buildInboundMessage();
+
+    await expect(processMessage(message)).rejects.toThrow("transient nextcloud failure");
+    await expect(processMessage(message)).resolves.toBe("processed");
+
+    expect(handleMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps replay committed after a non-retryable replay-guarded processing failure", async () => {
+    const visibleSideEffect = vi.fn();
+    const handleMessage = vi.fn(async () => {
+      visibleSideEffect();
+      throw new Error("post-send failure");
+    });
+    const processMessage = createReplayGuardedProcess({
+      handleMessage,
+    });
+    const message = buildInboundMessage();
+
+    await expect(processMessage(message)).rejects.toThrow("post-send failure");
+    await expect(processMessage(message)).resolves.toBe("duplicate");
+
+    expect(handleMessage).toHaveBeenCalledTimes(1);
+    expect(visibleSideEffect).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -149,8 +222,10 @@ describe("createNextcloudTalkWebhookServer payload validation", () => {
 
 describe("createNextcloudTalkWebhookServer auth rate limiting", () => {
   it("rate limits repeated invalid signature attempts from the same source", async () => {
+    const maxRequests = 1;
     const harness = await startWebhookServer({
       path: "/nextcloud-auth-rate-limit",
+      authRateLimit: { maxRequests },
       onMessage: vi.fn(),
     });
     const { body, headers } = createSignedCreateMessageRequest();
@@ -161,7 +236,7 @@ describe("createNextcloudTalkWebhookServer auth rate limiting", () => {
 
     let firstResponse: Response | undefined;
     let lastResponse: Response | undefined;
-    for (let attempt = 0; attempt <= WEBHOOK_RATE_LIMIT_DEFAULTS.maxRequests; attempt += 1) {
+    for (let attempt = 0; attempt <= maxRequests; attempt += 1) {
       const response = await fetch(harness.webhookUrl, {
         method: "POST",
         headers: invalidHeaders,
@@ -181,14 +256,16 @@ describe("createNextcloudTalkWebhookServer auth rate limiting", () => {
   });
 
   it("does not rate limit valid signed webhook bursts from the same source", async () => {
+    const maxRequests = 1;
     const harness = await startWebhookServer({
       path: "/nextcloud-auth-rate-limit-valid",
+      authRateLimit: { maxRequests },
       onMessage: vi.fn(),
     });
     const { body, headers } = createSignedCreateMessageRequest();
 
     let lastResponse: Response | undefined;
-    for (let attempt = 0; attempt <= WEBHOOK_RATE_LIMIT_DEFAULTS.maxRequests; attempt += 1) {
+    for (let attempt = 0; attempt <= maxRequests; attempt += 1) {
       lastResponse = await fetch(harness.webhookUrl, {
         method: "POST",
         headers,

@@ -1,4 +1,5 @@
 import type * as Lark from "@larksuiteoapi/node-sdk";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { listEnabledFeishuAccounts } from "./accounts.js";
 import { FeishuChatSchema, type FeishuChatParams } from "./chat-schema.js";
@@ -181,12 +182,12 @@ export function registerFeishuChatTools(api: OpenClawPluginApi) {
               return json({ error: `Unknown action: ${String(p.action)}` });
           }
         } catch (err) {
-          return json({ error: err instanceof Error ? err.message : String(err) });
+          return json({ error: formatErrorMessage(err) });
         }
       },
     },
     { name: "feishu_chat" },
   );
 
-  api.logger.info?.("feishu_chat: Registered feishu_chat tool");
+  api.logger.debug?.("feishu_chat: Registered feishu_chat tool");
 }

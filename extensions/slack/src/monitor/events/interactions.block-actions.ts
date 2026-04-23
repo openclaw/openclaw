@@ -1,6 +1,7 @@
 import type { SlackActionMiddlewareArgs } from "@slack/bolt";
 import type { Block, KnownBlock } from "@slack/web-api";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/infra-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { SLACK_REPLY_BUTTON_ACTION_ID, SLACK_REPLY_SELECT_ACTION_ID } from "../../blocks-render.js";
 import { dispatchSlackPluginInteractiveHandler } from "../../interactive-dispatch.js";
 import { authorizeSlackSystemEventSender } from "../auth.js";
@@ -326,7 +327,8 @@ function formatInteractionConfirmationText(params: {
   selectedLabel: string;
   userId?: string;
 }): string {
-  const actor = params.userId?.trim() ? ` by <@${params.userId.trim()}>` : "";
+  const userId = normalizeOptionalString(params.userId);
+  const actor = userId ? ` by <@${userId}>` : "";
   return `:white_check_mark: *${escapeSlackMrkdwn(params.selectedLabel)}* selected${actor}`;
 }
 
@@ -334,13 +336,13 @@ function buildSlackPluginInteractionData(params: {
   actionId: string;
   summary: SlackActionSummary;
 }): string | null {
-  const actionId = params.actionId.trim();
+  const actionId = normalizeOptionalString(params.actionId) ?? "";
   if (!actionId) {
     return null;
   }
   const payload =
-    params.summary.value?.trim() ||
-    params.summary.selectedValues?.map((value) => value.trim()).find(Boolean) ||
+    normalizeOptionalString(params.summary.value) ||
+    params.summary.selectedValues?.map((value) => normalizeOptionalString(value)).find(Boolean) ||
     "";
   if (
     actionId === SLACK_REPLY_BUTTON_ACTION_ID ||
@@ -371,15 +373,15 @@ function buildSlackPluginInteractionId(params: {
   summary: SlackActionSummary;
 }): string {
   const primaryValue =
-    params.summary.value?.trim() ||
-    params.summary.selectedValues?.map((value) => value.trim()).find(Boolean) ||
+    normalizeOptionalString(params.summary.value) ||
+    params.summary.selectedValues?.map((value) => normalizeOptionalString(value)).find(Boolean) ||
     "";
   return [
-    params.userId?.trim() || "",
-    params.channelId?.trim() || "",
-    params.messageTs?.trim() || "",
-    params.triggerId?.trim() || "",
-    params.actionId.trim(),
+    normalizeOptionalString(params.userId) ?? "",
+    normalizeOptionalString(params.channelId) ?? "",
+    normalizeOptionalString(params.messageTs) ?? "",
+    normalizeOptionalString(params.triggerId) ?? "",
+    normalizeOptionalString(params.actionId) ?? "",
     primaryValue,
   ].join(":");
 }
@@ -470,6 +472,11 @@ async function authorizeSlackBlockAction(params: {
     ctx: params.ctx,
     senderId: params.parsed.userId,
     channelId: params.parsed.channelId,
+    // Block action sender identity is verified by Slack's request signing.
+    // Pass the Slack-verified userId as expectedSenderId to satisfy the
+    // mandatory actor-binding requirement for interactive events.
+    expectedSenderId: params.parsed.userId,
+    interactiveEvent: true,
   });
   if (auth.allowed) {
     return auth;
@@ -713,6 +720,7 @@ async function updateSlackLegacyBlockAction(params: {
 
 async function handleSlackBlockAction(params: {
   ctx: SlackMonitorContext;
+  trackEvent?: () => void;
   args: SlackActionMiddlewareArgs;
   formatSystemEvent: (payload: Record<string, unknown>) => string;
 }): Promise<void> {
@@ -730,6 +738,7 @@ async function handleSlackBlockAction(params: {
   if (!parsed) {
     return;
   }
+  params.trackEvent?.();
   const auth = await authorizeSlackBlockAction({
     ctx: params.ctx,
     parsed,
@@ -781,6 +790,7 @@ async function handleSlackBlockAction(params: {
 
 export function registerSlackBlockActionHandler(params: {
   ctx: SlackMonitorContext;
+  trackEvent?: () => void;
   formatSystemEvent: (payload: Record<string, unknown>) => string;
 }): void {
   if (typeof params.ctx.app.action !== "function") {
@@ -789,6 +799,7 @@ export function registerSlackBlockActionHandler(params: {
   params.ctx.app.action(/.+/, async (args: SlackActionMiddlewareArgs) => {
     await handleSlackBlockAction({
       ctx: params.ctx,
+      trackEvent: params.trackEvent,
       args,
       formatSystemEvent: params.formatSystemEvent,
     });

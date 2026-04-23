@@ -1,3 +1,4 @@
+import { isRecord } from "../utils.js";
 import { readSourceConfigSnapshot } from "./io.js";
 import { replaceConfigFile } from "./mutate.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
@@ -24,10 +25,6 @@ type ConfigMcpWriteResult =
       removed?: boolean;
     }
   | { ok: false; path: string; error: string };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
 
 export function normalizeConfiguredMcpServers(value: unknown): ConfigMcpServers {
   if (!isRecord(value)) {

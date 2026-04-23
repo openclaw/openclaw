@@ -22,6 +22,7 @@ export class DiscordSendError extends Error {
 
 export const DISCORD_MAX_EMOJI_BYTES = 256 * 1024;
 export const DISCORD_MAX_STICKER_BYTES = 512 * 1024;
+export const DISCORD_MAX_EVENT_COVER_BYTES = 8 * 1024 * 1024;
 
 export type DiscordSendResult = {
   messageId: string;

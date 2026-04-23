@@ -1,4 +1,5 @@
 import { spawnSubagentDirect } from "../../../agents/subagent-spawn.js";
+import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 import type { CommandHandlerResult } from "../commands-types.js";
 import { type SubagentsCommandContext, stopWithText } from "./shared.js";
 
@@ -6,6 +7,7 @@ export async function handleSubagentsSpawnAction(
   ctx: SubagentsCommandContext,
 ): Promise<CommandHandlerResult> {
   const { params, requesterKey, restTokens } = ctx;
+  const requesterSessionEntry = params.sessionStore?.[requesterKey] ?? params.sessionEntry;
   const agentId = restTokens[0];
 
   const taskParts: string[] = [];
@@ -29,10 +31,9 @@ export async function handleSubagentsSpawnAction(
     );
   }
 
-  const commandTo = typeof params.command.to === "string" ? params.command.to.trim() : "";
-  const originatingTo =
-    typeof params.ctx.OriginatingTo === "string" ? params.ctx.OriginatingTo.trim() : "";
-  const fallbackTo = typeof params.ctx.To === "string" ? params.ctx.To.trim() : "";
+  const commandTo = normalizeOptionalString(params.command.to) ?? "";
+  const originatingTo = normalizeOptionalString(params.ctx.OriginatingTo) ?? "";
+  const fallbackTo = normalizeOptionalString(params.ctx.To) ?? "";
   const normalizedTo = originatingTo || commandTo || fallbackTo || undefined;
 
   const result = await spawnSubagentDirect(
@@ -51,9 +52,9 @@ export async function handleSubagentsSpawnAction(
       agentAccountId: params.ctx.AccountId,
       agentTo: normalizedTo,
       agentThreadId: params.ctx.MessageThreadId,
-      agentGroupId: params.sessionEntry?.groupId ?? null,
-      agentGroupChannel: params.sessionEntry?.groupChannel ?? null,
-      agentGroupSpace: params.sessionEntry?.space ?? null,
+      agentGroupId: requesterSessionEntry?.groupId ?? null,
+      agentGroupChannel: requesterSessionEntry?.groupChannel ?? null,
+      agentGroupSpace: requesterSessionEntry?.space ?? null,
     },
   );
   if (result.status === "accepted") {

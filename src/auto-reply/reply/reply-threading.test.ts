@@ -1,5 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import {
   resolveConfiguredReplyToMode,
   resolveReplyToMode,
@@ -9,6 +11,14 @@ import {
 const emptyCfg = {} as OpenClawConfig;
 
 describe("resolveReplyToMode", () => {
+  beforeEach(() => {
+    setActivePluginRegistry(createTestRegistry());
+  });
+
+  afterEach(() => {
+    setActivePluginRegistry(createTestRegistry());
+  });
+
   it("falls back to configured channel defaults when channel threading plugins are unavailable", () => {
     const configuredCfg = {
       channels: {
@@ -91,9 +101,50 @@ describe("resolveReplyToMode", () => {
       ),
     ).toBe("first");
   });
+
+  it("uses registered channel threading adapters for runtime reply-mode resolution", () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "whatsapp",
+          source: "test",
+          plugin: {
+            id: "whatsapp",
+            meta: {
+              id: "whatsapp",
+              label: "WhatsApp",
+              selectionLabel: "WhatsApp",
+              docsPath: "/channels/whatsapp",
+              blurb: "test stub.",
+            },
+            capabilities: { chatTypes: ["direct", "group"] },
+            config: {
+              listAccountIds: () => ["default"],
+              resolveAccount: () => ({}),
+            },
+            threading: {
+              resolveReplyToMode: ({ accountId }: { accountId?: string | null }) =>
+                accountId === "work" ? "first" : "all",
+            },
+          },
+        },
+      ]),
+    );
+
+    expect(resolveReplyToMode({} as OpenClawConfig, "whatsapp", "work", "group")).toBe("first");
+    expect(resolveReplyToMode({} as OpenClawConfig, "whatsapp", "default", "group")).toBe("all");
+  });
 });
 
 describe("resolveConfiguredReplyToMode", () => {
+  beforeEach(() => {
+    setActivePluginRegistry(createTestRegistry());
+  });
+
+  afterEach(() => {
+    setActivePluginRegistry(createTestRegistry());
+  });
+
   it("handles top-level, chat-type, and legacy DM fallback without plugin registry access", () => {
     const cfg = {
       channels: {

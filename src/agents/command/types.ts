@@ -1,9 +1,9 @@
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
-import type { ClientToolDefinition } from "../../agents/pi-embedded-runner/run/params.js";
 import type { SpawnedRunMetadata } from "../../agents/spawned-context.js";
-import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.js";
+import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
+import type { AgentStreamParams, ClientToolDefinition } from "./shared-types.js";
 
 /** Image content block for Claude API multimodal messages. */
 export type ImageContent = {
@@ -11,14 +11,7 @@ export type ImageContent = {
   data: string;
   mimeType: string;
 };
-
-export type AgentStreamParams = {
-  /** Provider stream params override (best-effort). */
-  temperature?: number;
-  maxTokens?: number;
-  /** Provider fast-mode override (best-effort). */
-  fastMode?: boolean;
-};
+export type { AgentStreamParams } from "./shared-types.js";
 
 export type AgentRunContext = {
   messageChannel?: string;
@@ -63,10 +56,11 @@ export type AgentCommandOpts = {
   replyAccountId?: string;
   /** Override delivery thread/topic id (separate from session routing). */
   threadId?: string | number;
-  /** Message channel context (webchat|voicewake|whatsapp|...). */
+  /** Message channel context. */
   messageChannel?: string;
-  channel?: string; // delivery channel (whatsapp|telegram|...)
-  /** Account ID for multi-account channel routing (e.g., WhatsApp account). */
+  /** Delivery channel. */
+  channel?: string;
+  /** Account ID for multi-account channel routing. */
   accountId?: string;
   /** Context for embedded run routing (channel/account/thread). */
   runContext?: AgentRunContext;
@@ -85,6 +79,10 @@ export type AgentCommandOpts = {
   lane?: string;
   runId?: string;
   extraSystemPrompt?: string;
+  /** Bootstrap workspace context injection mode for this run. */
+  bootstrapContextMode?: "full" | "lightweight";
+  /** Run kind hint for bootstrap context behavior. */
+  bootstrapContextRunKind?: "default" | "heartbeat" | "cron";
   internalEvents?: AgentInternalEvent[];
   inputProvenance?: InputProvenance;
   /** Per-call stream param overrides (best-effort). */

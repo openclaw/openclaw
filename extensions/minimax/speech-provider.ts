@@ -5,6 +5,7 @@ import type {
   SpeechProviderOverrides,
   SpeechProviderPlugin,
 } from "openclaw/plugin-sdk/speech-core";
+import { asFiniteNumber, asObject, trimToUndefined } from "openclaw/plugin-sdk/speech-core";
 import {
   DEFAULT_MINIMAX_TTS_BASE_URL,
   MINIMAX_TTS_MODELS,
@@ -31,20 +32,6 @@ type MinimaxTtsProviderOverrides = {
   pitch?: number;
 };
 
-function trimToUndefined(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function asNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-function asObject(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
 function normalizeMinimaxProviderConfig(
   rawConfig: Record<string, unknown>,
 ): MinimaxTtsProviderConfig {
@@ -68,9 +55,9 @@ function normalizeMinimaxProviderConfig(
       trimToUndefined(raw?.voiceId) ??
       trimToUndefined(process.env.MINIMAX_TTS_VOICE_ID) ??
       "English_expressive_narrator",
-    speed: asNumber(raw?.speed),
-    vol: asNumber(raw?.vol),
-    pitch: asNumber(raw?.pitch),
+    speed: asFiniteNumber(raw?.speed),
+    vol: asFiniteNumber(raw?.vol),
+    pitch: asFiniteNumber(raw?.pitch),
   };
 }
 
@@ -81,9 +68,9 @@ function readMinimaxProviderConfig(config: SpeechProviderConfig): MinimaxTtsProv
     baseUrl: trimToUndefined(config.baseUrl) ?? normalized.baseUrl,
     model: trimToUndefined(config.model) ?? normalized.model,
     voiceId: trimToUndefined(config.voiceId) ?? normalized.voiceId,
-    speed: asNumber(config.speed) ?? normalized.speed,
-    vol: asNumber(config.vol) ?? normalized.vol,
-    pitch: asNumber(config.pitch) ?? normalized.pitch,
+    speed: asFiniteNumber(config.speed) ?? normalized.speed,
+    vol: asFiniteNumber(config.vol) ?? normalized.vol,
+    pitch: asFiniteNumber(config.pitch) ?? normalized.pitch,
   };
 }
 
@@ -96,9 +83,9 @@ function readMinimaxOverrides(
   return {
     model: trimToUndefined(overrides.model),
     voiceId: trimToUndefined(overrides.voiceId),
-    speed: asNumber(overrides.speed),
-    vol: asNumber(overrides.vol),
-    pitch: asNumber(overrides.pitch),
+    speed: asFiniteNumber(overrides.speed),
+    vol: asFiniteNumber(overrides.vol),
+    pitch: asFiniteNumber(overrides.pitch),
   };
 }
 
@@ -193,15 +180,15 @@ export function buildMinimaxSpeechProvider(): SpeechProviderPlugin {
         ...(trimToUndefined(talkProviderConfig.voiceId) == null
           ? {}
           : { voiceId: trimToUndefined(talkProviderConfig.voiceId) }),
-        ...(asNumber(talkProviderConfig.speed) == null
+        ...(asFiniteNumber(talkProviderConfig.speed) == null
           ? {}
-          : { speed: asNumber(talkProviderConfig.speed) }),
-        ...(asNumber(talkProviderConfig.vol) == null
+          : { speed: asFiniteNumber(talkProviderConfig.speed) }),
+        ...(asFiniteNumber(talkProviderConfig.vol) == null
           ? {}
-          : { vol: asNumber(talkProviderConfig.vol) }),
-        ...(asNumber(talkProviderConfig.pitch) == null
+          : { vol: asFiniteNumber(talkProviderConfig.vol) }),
+        ...(asFiniteNumber(talkProviderConfig.pitch) == null
           ? {}
-          : { pitch: asNumber(talkProviderConfig.pitch) }),
+          : { pitch: asFiniteNumber(talkProviderConfig.pitch) }),
       };
     },
     resolveTalkOverrides: ({ params }) => ({
@@ -211,9 +198,9 @@ export function buildMinimaxSpeechProvider(): SpeechProviderPlugin {
       ...(trimToUndefined(params.modelId) == null
         ? {}
         : { model: trimToUndefined(params.modelId) }),
-      ...(asNumber(params.speed) == null ? {} : { speed: asNumber(params.speed) }),
-      ...(asNumber(params.vol) == null ? {} : { vol: asNumber(params.vol) }),
-      ...(asNumber(params.pitch) == null ? {} : { pitch: asNumber(params.pitch) }),
+      ...(asFiniteNumber(params.speed) == null ? {} : { speed: asFiniteNumber(params.speed) }),
+      ...(asFiniteNumber(params.vol) == null ? {} : { vol: asFiniteNumber(params.vol) }),
+      ...(asFiniteNumber(params.pitch) == null ? {} : { pitch: asFiniteNumber(params.pitch) }),
     }),
     listVoices: async () => MINIMAX_TTS_VOICES.map((voice) => ({ id: voice, name: voice })),
     isConfigured: ({ providerConfig }) =>

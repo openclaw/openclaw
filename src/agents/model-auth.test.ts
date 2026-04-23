@@ -1,110 +1,120 @@
 import { streamSimpleOpenAICompletions, type Model } from "@mariozechner/pi-ai";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelProviderConfig } from "../config/config.js";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
-import * as cliCredentials from "./cli-credentials.js";
 import {
   CUSTOM_LOCAL_AUTH_MARKER,
   GCP_VERTEX_CREDENTIALS_MARKER,
   NON_ENV_SECRETREF_MARKER,
 } from "./model-auth-markers.js";
-import {
-  applyAuthHeaderOverride,
-  applyLocalNoAuthHeaderOverride,
-  hasUsableCustomProviderApiKey,
-  requireApiKey,
-  resolveApiKeyForProvider,
-  resolveAwsSdkEnvVarName,
-  resolveModelAuthMode,
-  resolveUsableCustomProviderApiKey,
-} from "./model-auth.js";
 
-vi.mock("../plugins/provider-runtime.js", () => ({
-  buildProviderMissingAuthMessageWithPlugin: () => undefined,
-  resolveExternalAuthProfilesWithPlugins: () => [],
-  shouldDeferProviderSyntheticProfileAuthWithPlugin: (params: {
-    provider: string;
-    context: { resolvedApiKey?: string };
-  }) => params.provider === "ollama" && params.context.resolvedApiKey?.trim() === "ollama-local",
-  resolveProviderSyntheticAuthWithPlugin: (params: {
-    provider: string;
-    config?: {
-      plugins?: {
-        enabled?: boolean;
-        entries?: {
-          xai?: {
-            enabled?: boolean;
-            config?: {
-              webSearch?: {
+vi.mock("../plugins/provider-runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("../plugins/provider-runtime.js")>(
+    "../plugins/provider-runtime.js",
+  );
+  return {
+    ...actual,
+    buildProviderMissingAuthMessageWithPlugin: () => undefined,
+    resolveExternalAuthProfilesWithPlugins: () => [],
+    shouldDeferProviderSyntheticProfileAuthWithPlugin: () => false,
+    resolveProviderSyntheticAuthWithPlugin: (params: {
+      provider: string;
+      config?: {
+        plugins?: {
+          enabled?: boolean;
+          entries?: Record<
+            string,
+            {
+              enabled?: boolean;
+              config?: {
+                webSearch?: {
+                  apiKey?: unknown;
+                };
+              };
+            }
+          >;
+        };
+        tools?: {
+          web?: {
+            search?: {
+              grok?: {
                 apiKey?: unknown;
               };
             };
           };
         };
       };
-      tools?: {
-        web?: {
-          search?: {
-            grok?: {
-              apiKey?: unknown;
-            };
+      context: { providerConfig?: { api?: string; baseUrl?: string; models?: unknown[] } };
+    }) => {
+      if (params.provider === "plugin-web") {
+        if (
+          params.config?.plugins?.enabled === false ||
+          params.config?.plugins?.entries?.["plugin-web"]?.enabled === false
+        ) {
+          return undefined;
+        }
+        const pluginApiKey =
+          params.config?.plugins?.entries?.["plugin-web"]?.config?.webSearch?.apiKey;
+        if (typeof pluginApiKey === "string" && pluginApiKey.trim()) {
+          return {
+            apiKey: pluginApiKey.trim(),
+            source: "plugins.entries.plugin-web.config.webSearch.apiKey",
+            mode: "api-key" as const,
           };
-        };
-      };
-    };
-    context: { providerConfig?: { api?: string; baseUrl?: string; models?: unknown[] } };
-  }) => {
-    if (params.provider === "xai") {
-      if (
-        params.config?.plugins?.enabled === false ||
-        params.config?.plugins?.entries?.xai?.enabled === false
-      ) {
+        }
+        if (pluginApiKey && typeof pluginApiKey === "object") {
+          return {
+            apiKey: NON_ENV_SECRETREF_MARKER,
+            source: "plugins.entries.plugin-web.config.webSearch.apiKey",
+            mode: "api-key" as const,
+          };
+        }
         return undefined;
       }
-      const pluginApiKey = params.config?.plugins?.entries?.xai?.config?.webSearch?.apiKey;
-      if (typeof pluginApiKey === "string" && pluginApiKey.trim()) {
+      if (params.provider === "native-cli") {
         return {
-          apiKey: pluginApiKey.trim(),
-          source: "plugins.entries.xai.config.webSearch.apiKey",
-          mode: "api-key" as const,
-        };
-      }
-      if (pluginApiKey && typeof pluginApiKey === "object") {
-        return {
-          apiKey: NON_ENV_SECRETREF_MARKER,
-          source: "plugins.entries.xai.config.webSearch.apiKey",
-          mode: "api-key" as const,
+          apiKey: "native-cli-access-token",
+          source: "Native CLI auth",
+          mode: "oauth" as const,
         };
       }
       return undefined;
-    }
-    if (params.provider === "claude-cli") {
-      return {
-        apiKey: "claude-cli-access-token",
-        source: "Claude CLI native auth",
-        mode: "oauth" as const,
-      };
-    }
-    if (params.provider !== "ollama") {
-      return undefined;
-    }
-    const providerConfig = params.context.providerConfig;
-    const hasApiConfig =
-      Boolean(providerConfig?.api?.trim()) ||
-      Boolean(providerConfig?.baseUrl?.trim()) ||
-      (Array.isArray(providerConfig?.models) && providerConfig.models.length > 0);
-    if (!hasApiConfig) {
-      return undefined;
-    }
-    return {
-      apiKey: "ollama-local",
-      source: "models.providers.ollama (synthetic local key)",
-      mode: "api-key" as const,
-    };
-  },
-}));
+    },
+  };
+});
+
+let applyAuthHeaderOverride: typeof import("./model-auth.js").applyAuthHeaderOverride;
+let applyLocalNoAuthHeaderOverride: typeof import("./model-auth.js").applyLocalNoAuthHeaderOverride;
+let hasUsableCustomProviderApiKey: typeof import("./model-auth.js").hasUsableCustomProviderApiKey;
+let requireApiKey: typeof import("./model-auth.js").requireApiKey;
+let resolveApiKeyForProvider: typeof import("./model-auth.js").resolveApiKeyForProvider;
+let resolveAwsSdkEnvVarName: typeof import("./model-auth.js").resolveAwsSdkEnvVarName;
+let resolveModelAuthMode: typeof import("./model-auth.js").resolveModelAuthMode;
+let resolveUsableCustomProviderApiKey: typeof import("./model-auth.js").resolveUsableCustomProviderApiKey;
+let cliCredentials: typeof import("./cli-credentials.js");
+let clearRuntimeConfigSnapshot: typeof import("../config/config.js").clearRuntimeConfigSnapshot;
+let setRuntimeConfigSnapshot: typeof import("../config/config.js").setRuntimeConfigSnapshot;
+
+beforeAll(async () => {
+  vi.resetModules();
+  ({ clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } = await import("../config/config.js"));
+  cliCredentials = await import("./cli-credentials.js");
+  ({
+    applyAuthHeaderOverride,
+    applyLocalNoAuthHeaderOverride,
+    hasUsableCustomProviderApiKey,
+    requireApiKey,
+    resolveApiKeyForProvider,
+    resolveAwsSdkEnvVarName,
+    resolveModelAuthMode,
+    resolveUsableCustomProviderApiKey,
+  } = await import("./model-auth.js"));
+});
+
+beforeEach(() => {
+  clearRuntimeConfigSnapshot();
+});
 
 afterEach(() => {
   clearRuntimeConfigSnapshot();
@@ -336,7 +346,7 @@ describe("resolveUsableCustomProviderApiKey", () => {
     expect(resolved).toBeNull();
   });
 
-  it("does not treat the Vertex ADC marker as a usable models.json credential", () => {
+  it("treats the Vertex ADC marker as a non-secret models.json credential marker", () => {
     const resolved = resolveUsableCustomProviderApiKey({
       cfg: {
         models: {
@@ -351,7 +361,10 @@ describe("resolveUsableCustomProviderApiKey", () => {
       },
       provider: "anthropic-vertex",
     });
-    expect(resolved).toBeNull();
+    expect(resolved).toEqual({
+      apiKey: GCP_VERTEX_CREDENTIALS_MARKER,
+      source: "models.json",
+    });
   });
 
   it("resolves known env marker names from process env for custom providers", () => {
@@ -381,6 +394,207 @@ describe("resolveUsableCustomProviderApiKey", () => {
         process.env.OPENAI_API_KEY = previous;
       }
     }
+  });
+
+  it("resolves env SecretRefs from process env for custom providers", () => {
+    const previous = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = "sk-secretref-env"; // pragma: allowlist secret
+    try {
+      const resolved = resolveUsableCustomProviderApiKey({
+        cfg: {
+          models: {
+            providers: {
+              custom: {
+                baseUrl: "https://example.com/v1",
+                apiKey: {
+                  source: "env",
+                  provider: "default",
+                  id: "OPENAI_API_KEY",
+                },
+                models: [],
+              },
+            },
+          },
+        },
+        provider: "custom",
+      });
+      expect(resolved?.apiKey).toBe("sk-secretref-env");
+      expect(resolved?.source).toContain("OPENAI_API_KEY");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = previous;
+      }
+    }
+  });
+
+  it("resolves env SecretRefs with unknown env IDs from process env for custom providers", () => {
+    const previous = process.env.MY_CUSTOM_KEY;
+    process.env.MY_CUSTOM_KEY = "sk-custom-secretref-env"; // pragma: allowlist secret
+    try {
+      const resolved = resolveUsableCustomProviderApiKey({
+        cfg: {
+          models: {
+            providers: {
+              custom: {
+                baseUrl: "https://example.com/v1",
+                apiKey: {
+                  source: "env",
+                  provider: "default",
+                  id: "MY_CUSTOM_KEY",
+                },
+                models: [],
+              },
+            },
+          },
+        },
+        provider: "custom",
+      });
+      expect(resolved?.apiKey).toBe("sk-custom-secretref-env");
+      expect(resolved?.source).toContain("MY_CUSTOM_KEY");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.MY_CUSTOM_KEY;
+      } else {
+        process.env.MY_CUSTOM_KEY = previous;
+      }
+    }
+  });
+
+  it("does not resolve env SecretRefs when provider allowlist excludes the env id", () => {
+    const previous = process.env.MY_CUSTOM_KEY;
+    process.env.MY_CUSTOM_KEY = "sk-custom-secretref-env"; // pragma: allowlist secret
+    try {
+      const resolved = resolveUsableCustomProviderApiKey({
+        cfg: {
+          secrets: {
+            providers: {
+              "custom-env": {
+                source: "env",
+                allowlist: ["OPENAI_API_KEY"],
+              },
+            },
+          },
+          models: {
+            providers: {
+              custom: {
+                baseUrl: "https://example.com/v1",
+                apiKey: {
+                  source: "env",
+                  provider: "custom-env",
+                  id: "MY_CUSTOM_KEY",
+                },
+                models: [],
+              },
+            },
+          },
+        },
+        provider: "custom",
+      });
+      expect(resolved).toBeNull();
+    } finally {
+      if (previous === undefined) {
+        delete process.env.MY_CUSTOM_KEY;
+      } else {
+        process.env.MY_CUSTOM_KEY = previous;
+      }
+    }
+  });
+
+  it("does not resolve env SecretRefs when provider source is not env", () => {
+    const previous = process.env.MY_CUSTOM_KEY;
+    process.env.MY_CUSTOM_KEY = "sk-custom-secretref-env"; // pragma: allowlist secret
+    try {
+      const resolved = resolveUsableCustomProviderApiKey({
+        cfg: {
+          secrets: {
+            providers: {
+              "custom-env": {
+                source: "file",
+                path: "/tmp/secrets.json",
+              },
+            },
+          },
+          models: {
+            providers: {
+              custom: {
+                baseUrl: "https://example.com/v1",
+                apiKey: {
+                  source: "env",
+                  provider: "custom-env",
+                  id: "MY_CUSTOM_KEY",
+                },
+                models: [],
+              },
+            },
+          },
+        },
+        provider: "custom",
+      });
+      expect(resolved).toBeNull();
+    } finally {
+      if (previous === undefined) {
+        delete process.env.MY_CUSTOM_KEY;
+      } else {
+        process.env.MY_CUSTOM_KEY = previous;
+      }
+    }
+  });
+
+  it("does not treat env SecretRefs with missing unknown env IDs as usable", () => {
+    const previous = process.env.MY_CUSTOM_KEY;
+    delete process.env.MY_CUSTOM_KEY;
+    try {
+      expect(
+        hasUsableCustomProviderApiKey(
+          {
+            models: {
+              providers: {
+                custom: {
+                  baseUrl: "https://example.com/v1",
+                  apiKey: {
+                    source: "env",
+                    provider: "default",
+                    id: "MY_CUSTOM_KEY",
+                  },
+                  models: [],
+                },
+              },
+            },
+          },
+          "custom",
+        ),
+      ).toBe(false);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.MY_CUSTOM_KEY;
+      } else {
+        process.env.MY_CUSTOM_KEY = previous;
+      }
+    }
+  });
+
+  it("does not treat non-env SecretRefs as usable models.json credentials", () => {
+    const resolved = resolveUsableCustomProviderApiKey({
+      cfg: {
+        models: {
+          providers: {
+            custom: {
+              baseUrl: "https://example.com/v1",
+              apiKey: {
+                source: "file",
+                provider: "vault",
+                id: "custom-provider-key",
+              },
+              models: [],
+            },
+          },
+        },
+      },
+      provider: "custom",
+    });
+    expect(resolved).toBeNull();
   });
 
   it("does not treat known env marker names as usable when env value is missing", () => {
@@ -414,17 +628,17 @@ describe("resolveUsableCustomProviderApiKey", () => {
 });
 
 describe("resolveApiKeyForProvider", () => {
-  it("reuses the xai plugin web search key without models.providers.xai", async () => {
-    const resolved = await withoutEnv("XAI_API_KEY", () =>
+  it("reuses plugin fallback auth without a models.providers entry", async () => {
+    const resolved = await withoutEnv("PLUGIN_WEB_API_KEY", () =>
       resolveApiKeyForProvider({
-        provider: "xai",
+        provider: "plugin-web",
         cfg: {
           plugins: {
             entries: {
-              xai: {
+              "plugin-web": {
                 config: {
                   webSearch: {
-                    apiKey: "xai-plugin-fallback-key", // pragma: allowlist secret
+                    apiKey: "plugin-web-fallback-key", // pragma: allowlist secret
                   },
                 },
               },
@@ -436,20 +650,20 @@ describe("resolveApiKeyForProvider", () => {
     );
 
     expect(resolved).toMatchObject({
-      apiKey: "xai-plugin-fallback-key",
-      source: "plugins.entries.xai.config.webSearch.apiKey",
+      apiKey: "plugin-web-fallback-key",
+      source: "plugins.entries.plugin-web.config.webSearch.apiKey",
       mode: "api-key",
     });
   });
 
-  it("prefers the active runtime snapshot for SecretRef-backed xai fallback auth", async () => {
+  it("prefers the active runtime snapshot for SecretRef-backed plugin fallback auth", async () => {
     const sourceConfig = {
       plugins: {
         entries: {
-          xai: {
+          "plugin-web": {
             config: {
               webSearch: {
-                apiKey: { source: "file", provider: "vault", id: "/xai/api-key" },
+                apiKey: { source: "file", provider: "vault", id: "/plugin-web/api-key" },
               },
             },
           },
@@ -459,10 +673,10 @@ describe("resolveApiKeyForProvider", () => {
     const runtimeConfig = {
       plugins: {
         entries: {
-          xai: {
+          "plugin-web": {
             config: {
               webSearch: {
-                apiKey: "xai-runtime-key", // pragma: allowlist secret
+                apiKey: "plugin-web-runtime-key", // pragma: allowlist secret
               },
             },
           },
@@ -471,34 +685,34 @@ describe("resolveApiKeyForProvider", () => {
     };
     setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
 
-    const resolved = await withoutEnv("XAI_API_KEY", () =>
+    const resolved = await withoutEnv("PLUGIN_WEB_API_KEY", () =>
       resolveApiKeyForProvider({
-        provider: "xai",
+        provider: "plugin-web",
         cfg: sourceConfig,
         store: { version: 1, profiles: {} },
       }),
     );
 
     expect(resolved).toMatchObject({
-      apiKey: "xai-runtime-key",
-      source: "plugins.entries.xai.config.webSearch.apiKey",
+      apiKey: "plugin-web-runtime-key",
+      source: "plugins.entries.plugin-web.config.webSearch.apiKey",
       mode: "api-key",
     });
   });
 
-  it("does not reuse xai fallback auth when the xai plugin is disabled", async () => {
+  it("does not reuse plugin fallback auth when the plugin is disabled", async () => {
     await expect(
-      withoutEnv("XAI_API_KEY", () =>
+      withoutEnv("PLUGIN_WEB_API_KEY", () =>
         resolveApiKeyForProvider({
-          provider: "xai",
+          provider: "plugin-web",
           cfg: {
             plugins: {
               entries: {
-                xai: {
+                "plugin-web": {
                   enabled: false,
                   config: {
                     webSearch: {
-                      apiKey: "xai-plugin-fallback-key", // pragma: allowlist secret
+                      apiKey: "plugin-web-fallback-key", // pragma: allowlist secret
                     },
                   },
                 },
@@ -508,17 +722,17 @@ describe("resolveApiKeyForProvider", () => {
           store: { version: 1, profiles: {} },
         }),
       ),
-    ).rejects.toThrow('No API key found for provider "xai"');
+    ).rejects.toThrow('No API key found for provider "plugin-web"');
   });
 
-  it("reuses native Claude CLI auth for the claude-cli provider", async () => {
+  it("reuses plugin-owned native CLI auth", async () => {
     const resolved = await resolveApiKeyForProvider({
-      provider: "claude-cli",
+      provider: "native-cli",
       cfg: {
         agents: {
           defaults: {
             model: {
-              primary: "claude-cli/claude-sonnet-4-6",
+              primary: "native-cli/demo-model",
             },
           },
         },
@@ -527,8 +741,8 @@ describe("resolveApiKeyForProvider", () => {
     });
 
     expect(resolved).toEqual({
-      apiKey: "claude-cli-access-token",
-      source: "Claude CLI native auth",
+      apiKey: "native-cli-access-token",
+      source: "Native CLI auth",
       mode: "oauth",
     });
   });

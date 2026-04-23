@@ -1,8 +1,13 @@
-import { resolveNativeSkillsEnabled } from "openclaw/plugin-sdk/config-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { readChannelAllowFromStore } from "openclaw/plugin-sdk/conversation-runtime";
+import { resolveNativeSkillsEnabled } from "openclaw/plugin-sdk/native-command-config-runtime";
+import type { OpenClawConfig } from "../runtime-api.js";
 import type { ResolvedTelegramAccount } from "./accounts.js";
-import { isNumericTelegramUserId, normalizeTelegramAllowFromEntry } from "./allow-from.js";
+import { isNumericTelegramSenderUserId, normalizeTelegramAllowFromEntry } from "./allow-from.js";
+
+function normalizeOptionalString(value: string | null | undefined): string | undefined {
+  const normalized = value?.trim();
+  return normalized ? normalized : undefined;
+}
 
 function collectInvalidTelegramAllowFromEntries(params: { entries: unknown; target: Set<string> }) {
   if (!Array.isArray(params.entries)) {
@@ -13,7 +18,7 @@ function collectInvalidTelegramAllowFromEntries(params: { entries: unknown; targ
     if (!normalized || normalized === "*") {
       continue;
     }
-    if (!isNumericTelegramUserId(normalized)) {
+    if (!isNumericTelegramSenderUserId(normalized)) {
       params.target.add(normalized);
     }
   }
@@ -36,7 +41,8 @@ export async function collectTelegramSecurityAuditFindings(params: {
   }
 
   const telegramCfg = params.account.config ?? {};
-  const accountId = params.accountId?.trim() || params.account.accountId || "default";
+  const accountId =
+    normalizeOptionalString(params.accountId) ?? params.account.accountId ?? "default";
   const defaultGroupPolicy = params.cfg.channels?.defaults?.groupPolicy;
   const groupPolicy =
     (telegramCfg.groupPolicy as string | undefined) ?? defaultGroupPolicy ?? "allowlist";
@@ -51,7 +57,9 @@ export async function collectTelegramSecurityAuditFindings(params: {
   const storeAllowFrom = await readChannelAllowFromStore("telegram", process.env, accountId).catch(
     () => [],
   );
-  const storeHasWildcard = storeAllowFrom.some((value) => String(value).trim() === "*");
+  const storeHasWildcard = storeAllowFrom.some(
+    (value) => (normalizeOptionalString(value) ?? "") === "*",
+  );
   const invalidTelegramAllowFromEntries = new Set<string>();
   collectInvalidTelegramAllowFromEntries({
     entries: storeAllowFrom,
@@ -60,7 +68,9 @@ export async function collectTelegramSecurityAuditFindings(params: {
   const groupAllowFrom = Array.isArray(telegramCfg.groupAllowFrom)
     ? telegramCfg.groupAllowFrom
     : [];
-  const groupAllowFromHasWildcard = groupAllowFrom.some((value) => String(value).trim() === "*");
+  const groupAllowFromHasWildcard = groupAllowFrom.some(
+    (value) => (normalizeOptionalString(String(value)) ?? "") === "*",
+  );
   collectInvalidTelegramAllowFromEntries({
     entries: groupAllowFrom,
     target: invalidTelegramAllowFromEntries,

@@ -1,8 +1,19 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
-import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
-import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS } from "./cli-shared.js";
+import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS } from "./cli-constants.js";
 
 const ANTHROPIC_PROVIDER_API = "anthropic-messages";
+
+function normalizeLowercaseStringOrEmpty(value: unknown): string {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+
+function normalizeProviderId(provider: string): string {
+  const normalized = normalizeLowercaseStringOrEmpty(provider);
+  if (normalized === "bedrock" || normalized === "aws-bedrock") {
+    return "amazon-bedrock";
+  }
+  return normalized;
+}
 
 function resolveAnthropicDefaultAuthMode(
   config: OpenClawConfig,
@@ -84,9 +95,9 @@ function resolveAnthropicPrimaryModelRef(raw?: string): string | null {
   if (!trimmed) {
     return null;
   }
-  const aliasKey = trimmed.toLowerCase();
+  const aliasKey = normalizeLowercaseStringOrEmpty(trimmed);
   if (aliasKey === "opus") {
-    return "anthropic/claude-opus-4-6";
+    return "anthropic/claude-opus-4-7";
   }
   if (aliasKey === "sonnet") {
     return "anthropic/claude-sonnet-4-6";
@@ -124,7 +135,7 @@ function isAnthropicCacheRetentionTarget(
     parsed &&
     (parsed.provider === "anthropic" ||
       (parsed.provider === "amazon-bedrock" &&
-        parsed.model.toLowerCase().includes("anthropic.claude"))),
+        normalizeLowercaseStringOrEmpty(parsed.model).includes("anthropic.claude"))),
   );
 }
 
@@ -156,6 +167,16 @@ export function normalizeAnthropicProviderConfig<T extends { api?: string; model
     return providerConfig;
   }
   return { ...providerConfig, api: ANTHROPIC_PROVIDER_API };
+}
+
+export function normalizeAnthropicProviderConfigForProvider<
+  T extends { api?: string; models?: unknown[] },
+>(params: { provider: string; providerConfig: T }): T {
+  const provider = normalizeProviderId(params.provider);
+  if (provider !== "anthropic" && provider !== CLAUDE_CLI_BACKEND_ID) {
+    return params.providerConfig;
+  }
+  return normalizeAnthropicProviderConfig(params.providerConfig);
 }
 
 export function applyAnthropicConfigDefaults(params: {

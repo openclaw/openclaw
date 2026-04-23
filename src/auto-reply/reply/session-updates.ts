@@ -6,22 +6,23 @@ import { canExecRequestNode } from "../../agents/exec-defaults.js";
 import { buildWorkspaceSkillSnapshot } from "../../agents/skills.js";
 import { matchesSkillFilter } from "../../agents/skills/filter.js";
 import {
-  ensureSkillsWatcher,
   getSkillsSnapshotVersion,
   shouldRefreshSnapshotForVersion,
-} from "../../agents/skills/refresh.js";
-import type { OpenClawConfig } from "../../config/config.js";
+} from "../../agents/skills/refresh-state.js";
+import { ensureSkillsWatcher } from "../../agents/skills/refresh.js";
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveStableSessionEndTranscript } from "../../gateway/session-transcript-files.fs.js";
 import { logVerbose } from "../../globals.js";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { buildSessionEndHookPayload, buildSessionStartHookPayload } from "./session-hooks.js";
 export { drainFormattedSystemEvents } from "./session-system-events.js";
 
@@ -316,11 +317,19 @@ function resolveCompactionSessionFile(params: {
 
 function canonicalizeAbsoluteSessionFilePath(filePath: string): string {
   const resolved = path.resolve(filePath);
-  try {
-    const parentDir = fs.realpathSync(path.dirname(resolved));
-    return path.join(parentDir, path.basename(resolved));
-  } catch {
-    return resolved;
+  const missingSegments: string[] = [];
+  let cursor = resolved;
+  while (true) {
+    try {
+      return path.join(fs.realpathSync(cursor), ...missingSegments.toReversed());
+    } catch {
+      const parent = path.dirname(cursor);
+      if (parent === cursor) {
+        return resolved;
+      }
+      missingSegments.push(path.basename(cursor));
+      cursor = parent;
+    }
   }
 }
 
@@ -329,7 +338,7 @@ function rewriteSessionFileForNewSessionId(params: {
   previousSessionId: string;
   nextSessionId: string;
 }): string | undefined {
-  const trimmed = params.sessionFile?.trim();
+  const trimmed = normalizeOptionalString(params.sessionFile);
   if (!trimmed) {
     return undefined;
   }

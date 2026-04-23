@@ -151,11 +151,22 @@ function resolveRequiredTelegramTransport(transport?: TelegramTransport): Telegr
   return {
     fetch: resolvedFetch,
     sourceFetch: resolvedFetch,
+    // Caller-owned transport constructed from the globalThis fetch — it owns
+    // no dispatcher lifecycle of its own, so close() is a no-op.
+    close: async () => {},
   };
 }
 
 /** Default idle timeout for Telegram media downloads (30 seconds). */
 const TELEGRAM_DOWNLOAD_IDLE_TIMEOUT_MS = 30_000;
+
+function usesTrustedTelegramExplicitProxy(transport: TelegramTransport): boolean {
+  return (
+    transport.dispatcherAttempts?.some(
+      (attempt) => attempt.dispatcherPolicy?.mode === "explicit-proxy",
+    ) ?? false
+  );
+}
 
 function resolveTrustedLocalTelegramRoot(
   filePath: string,
@@ -225,6 +236,7 @@ async function downloadAndSaveTelegramFile(params: {
     url,
     fetchImpl: transport.sourceFetch,
     dispatcherAttempts: transport.dispatcherAttempts,
+    trustExplicitProxyDns: usesTrustedTelegramExplicitProxy(transport),
     shouldRetryFetchError: shouldRetryTelegramTransportFallback,
     filePathHint: params.filePath,
     maxBytes: params.maxBytes,

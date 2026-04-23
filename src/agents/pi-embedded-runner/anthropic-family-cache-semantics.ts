@@ -1,17 +1,22 @@
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../../shared/string-coerce.js";
+
 type AnthropicCacheRetentionFamily =
   | "anthropic-direct"
   | "anthropic-bedrock"
   | "custom-anthropic-api";
 
 export function isAnthropicModelRef(modelId: string): boolean {
-  return modelId.trim().toLowerCase().startsWith("anthropic/");
+  return normalizeLowercaseStringOrEmpty(modelId).startsWith("anthropic/");
 }
 
 /** Matches Application Inference Profile ARNs across all AWS partitions with Bedrock. */
 const BEDROCK_APP_INFERENCE_PROFILE_ARN_RE = /^arn:aws(-cn|-us-gov)?:bedrock:/;
 
 export function isAnthropicBedrockModel(modelId: string): boolean {
-  const normalized = modelId.trim().toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(modelId);
 
   // Direct Anthropic Claude model IDs and regional inference profiles
   // e.g. "anthropic.claude-sonnet-4-6", "us.anthropic.claude-sonnet-4-6", "global.anthropic.claude-opus-4-6-v1"
@@ -41,7 +46,9 @@ export function isAnthropicBedrockModel(modelId: string): boolean {
 }
 
 export function isOpenRouterAnthropicModelRef(provider: string, modelId: string): boolean {
-  return provider.trim().toLowerCase() === "openrouter" && isAnthropicModelRef(modelId);
+  return (
+    normalizeOptionalLowercaseString(provider) === "openrouter" && isAnthropicModelRef(modelId)
+  );
 }
 
 export function isAnthropicFamilyCacheTtlEligible(params: {
@@ -49,7 +56,7 @@ export function isAnthropicFamilyCacheTtlEligible(params: {
   modelApi?: string;
   modelId: string;
 }): boolean {
-  const normalizedProvider = params.provider.trim().toLowerCase();
+  const normalizedProvider = normalizeOptionalLowercaseString(params.provider);
   if (normalizedProvider === "anthropic" || normalizedProvider === "anthropic-vertex") {
     return true;
   }
@@ -65,17 +72,28 @@ export function resolveAnthropicCacheRetentionFamily(params: {
   modelId?: string;
   hasExplicitCacheConfig: boolean;
 }): AnthropicCacheRetentionFamily | undefined {
-  const normalizedProvider = params.provider.trim().toLowerCase();
+  const normalizedProvider = normalizeOptionalLowercaseString(params.provider);
   if (normalizedProvider === "anthropic" || normalizedProvider === "anthropic-vertex") {
     return "anthropic-direct";
   }
   if (
     normalizedProvider === "amazon-bedrock" &&
     params.hasExplicitCacheConfig &&
-    typeof params.modelId === "string" &&
-    isAnthropicBedrockModel(params.modelId)
+    typeof params.modelId === "string"
   ) {
-    return "anthropic-bedrock";
+    if (isAnthropicBedrockModel(params.modelId)) {
+      return "anthropic-bedrock";
+    }
+    // Application inference profiles with opaque IDs (e.g. z27qyso459da) can't
+    // be identified as Claude from the ARN alone. When the user explicitly sets
+    // cacheRetention, honor it — the extension's GetInferenceProfile resolution
+    // handles the actual model detection at runtime.
+    if (
+      BEDROCK_APP_INFERENCE_PROFILE_ARN_RE.test(normalizeLowercaseStringOrEmpty(params.modelId)) &&
+      normalizeLowercaseStringOrEmpty(params.modelId).includes(":application-inference-profile/")
+    ) {
+      return "anthropic-bedrock";
+    }
   }
   if (
     normalizedProvider !== "amazon-bedrock" &&

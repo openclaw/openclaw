@@ -10,6 +10,10 @@ import {
 } from "openclaw/plugin-sdk/config-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
+import {
   normalizeTelegramChatId,
   normalizeTelegramLookupTarget,
   parseTelegramTarget,
@@ -30,7 +34,7 @@ function normalizeTelegramLookupTargetForMatch(raw: string): string | undefined 
   if (!normalized) {
     return undefined;
   }
-  return normalized.startsWith("@") ? normalized.toLowerCase() : normalized;
+  return normalized.startsWith("@") ? normalizeLowercaseStringOrEmpty(normalized) : normalized;
 }
 
 function normalizeTelegramTargetForMatch(raw: string): string | undefined {
@@ -88,7 +92,7 @@ function rewriteTargetIfMatch(params: {
   if (typeof params.rawValue !== "string" && typeof params.rawValue !== "number") {
     return null;
   }
-  const value = String(params.rawValue).trim();
+  const value = normalizeOptionalString(String(params.rawValue)) ?? "";
   if (!value) {
     return null;
   }

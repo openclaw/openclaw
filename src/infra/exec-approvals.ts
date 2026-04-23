@@ -2,12 +2,20 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+  readStringValue,
+} from "../shared/string-coerce.js";
 import { resolveAllowAlwaysPatternEntries } from "./exec-approvals-allowlist.js";
 import type { ExecCommandSegment } from "./exec-approvals-analysis.js";
-import { expandHomePrefix } from "./home-dir.js";
+import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
+import { expandHomePrefix, resolveRequiredHomeDir } from "./home-dir.js";
 import { requestJsonlSocket } from "./jsonl-socket.js";
 export * from "./exec-approvals-analysis.js";
 export * from "./exec-approvals-allowlist.js";
+export type { ExecAllowlistEntry } from "./exec-approvals.types.js";
 
 export type ExecHost = "sandbox" | "gateway" | "node";
 export type ExecTarget = "auto" | ExecHost;
@@ -15,7 +23,7 @@ export type ExecSecurity = "deny" | "allowlist" | "full";
 export type ExecAsk = "off" | "on-miss" | "always";
 
 export function normalizeExecHost(value?: string | null): ExecHost | null {
-  const normalized = value?.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(value);
   if (normalized === "sandbox" || normalized === "gateway" || normalized === "node") {
     return normalized;
   }
@@ -23,7 +31,7 @@ export function normalizeExecHost(value?: string | null): ExecHost | null {
 }
 
 export function normalizeExecTarget(value?: string | null): ExecTarget | null {
-  const normalized = value?.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(value);
   if (normalized === "auto") {
     return normalized;
   }
@@ -31,12 +39,10 @@ export function normalizeExecTarget(value?: string | null): ExecTarget | null {
 }
 
 /** Coerce a raw JSON field to string, returning undefined for non-string types. */
-function toStringOrUndefined(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
-}
+const toStringOrUndefined = readStringValue;
 
 export function normalizeExecSecurity(value?: string | null): ExecSecurity | null {
-  const normalized = value?.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(value);
   if (normalized === "deny" || normalized === "allowlist" || normalized === "full") {
     return normalized;
   }
@@ -44,7 +50,7 @@ export function normalizeExecSecurity(value?: string | null): ExecSecurity | nul
 }
 
 export function normalizeExecAsk(value?: string | null): ExecAsk | null {
-  const normalized = value?.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(value);
   if (normalized === "off" || normalized === "on-miss" || normalized === "always") {
     return normalized;
   }
@@ -120,17 +126,6 @@ export type ExecApprovalsDefaults = {
   autoAllowSkills?: boolean;
 };
 
-export type ExecAllowlistEntry = {
-  id?: string;
-  pattern: string;
-  source?: "allow-always";
-  commandText?: string;
-  argPattern?: string;
-  lastUsedAt?: number;
-  lastUsedCommand?: string;
-  lastResolvedPath?: string;
-};
-
 export type ExecApprovalsAgent = ExecApprovalsDefaults & {
   allowlist?: ExecAllowlistEntry[];
 };
@@ -194,8 +189,8 @@ export function resolveExecApprovalsSocketPath(): string {
 }
 
 function normalizeAllowlistPattern(value: string | undefined): string | null {
-  const trimmed = value?.trim() ?? "";
-  return trimmed ? trimmed.toLowerCase() : null;
+  const trimmed = normalizeOptionalString(value) ?? "";
+  return trimmed ? normalizeLowercaseStringOrEmpty(trimmed) : null;
 }
 
 function mergeLegacyAgent(
@@ -234,7 +229,53 @@ function mergeLegacyAgent(
 
 function ensureDir(filePath: string) {
   const dir = path.dirname(filePath);
+  assertNoSymlinkPathComponents(dir, resolveRequiredHomeDir());
   fs.mkdirSync(dir, { recursive: true });
+  const dirStat = fs.lstatSync(dir);
+  if (!dirStat.isDirectory() || dirStat.isSymbolicLink()) {
+    throw new Error(`Refusing to use unsafe exec approvals directory: ${dir}`);
+  }
+  return dir;
+}
+
+function assertNoSymlinkPathComponents(targetPath: string, trustedRoot: string): void {
+  const resolvedTarget = path.resolve(targetPath);
+  const resolvedRoot = path.resolve(trustedRoot);
+  if (resolvedTarget !== resolvedRoot && !resolvedTarget.startsWith(`${resolvedRoot}${path.sep}`)) {
+    return;
+  }
+
+  const relative = path.relative(resolvedRoot, resolvedTarget);
+  const segments = relative && relative !== "." ? relative.split(path.sep) : [];
+  let current = resolvedRoot;
+  for (const segment of [".", ...segments]) {
+    if (segment !== ".") {
+      current = path.join(current, segment);
+    }
+    try {
+      const stat = fs.lstatSync(current);
+      if (stat.isSymbolicLink()) {
+        throw new Error(`Refusing to traverse symlink in exec approvals path: ${current}`);
+      }
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw err;
+      }
+    }
+  }
+}
+
+function assertSafeExecApprovalsDestination(filePath: string): void {
+  try {
+    const stat = fs.lstatSync(filePath);
+    if (stat.isSymbolicLink()) {
+      throw new Error(`Refusing to write exec approvals via symlink: ${filePath}`);
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw err;
+    }
+  }
 }
 
 // Coerce legacy/corrupted allowlists into `ExecAllowlistEntry[]` before we spread
@@ -439,13 +480,41 @@ export function loadExecApprovals(): ExecApprovalsFile {
 
 export function saveExecApprovals(file: ExecApprovalsFile) {
   const filePath = resolveExecApprovalsPath();
-  ensureDir(filePath);
-  fs.writeFileSync(filePath, `${JSON.stringify(file, null, 2)}\n`, { mode: 0o600 });
+  const raw = `${JSON.stringify(file, null, 2)}\n`;
+  writeExecApprovalsRaw(filePath, raw);
+}
+
+function writeExecApprovalsRaw(filePath: string, raw: string) {
+  const dir = ensureDir(filePath);
+  assertSafeExecApprovalsDestination(filePath);
+  const tempPath = path.join(dir, `.exec-approvals.${process.pid}.${crypto.randomUUID()}.tmp`);
+  let tempWritten = false;
+  try {
+    fs.writeFileSync(tempPath, raw, { mode: 0o600, flag: "wx" });
+    tempWritten = true;
+    fs.renameSync(tempPath, filePath);
+  } finally {
+    if (tempWritten && fs.existsSync(tempPath)) {
+      fs.rmSync(tempPath, { force: true });
+    }
+  }
   try {
     fs.chmodSync(filePath, 0o600);
   } catch {
     // best-effort on platforms without chmod
   }
+}
+
+export function restoreExecApprovalsSnapshot(snapshot: ExecApprovalsSnapshot): void {
+  if (!snapshot.exists) {
+    fs.rmSync(snapshot.path, { force: true });
+    return;
+  }
+  if (snapshot.raw !== null) {
+    writeExecApprovalsRaw(snapshot.path, snapshot.raw);
+    return;
+  }
+  saveExecApprovals(snapshot.file);
 }
 
 export function ensureExecApprovals(): ExecApprovalsFile {
@@ -640,7 +709,7 @@ export function resolveExecApprovalsFromFile(params: {
       defaults.askFallback ?? fallbackAskFallback,
       fallbackAskFallback,
     ),
-    autoAllowSkills: Boolean(defaults.autoAllowSkills ?? fallbackAutoAllowSkills),
+    autoAllowSkills: defaults.autoAllowSkills ?? fallbackAutoAllowSkills,
   };
   const resolvedAgentSecurity = resolveAgentSecurityField({
     field: "security",
@@ -675,9 +744,8 @@ export function resolveExecApprovalsFromFile(params: {
     security: resolvedAgentSecurity.value,
     ask: resolvedAgentAsk.value,
     askFallback: resolvedAgentAskFallback.value,
-    autoAllowSkills: Boolean(
+    autoAllowSkills:
       agent.autoAllowSkills ?? wildcard.autoAllowSkills ?? resolvedDefaults.autoAllowSkills,
-    ),
   };
   const allowlist = [
     ...(Array.isArray(wildcard.allowlist) ? wildcard.allowlist : []),
@@ -786,13 +854,12 @@ export function recordAllowlistUse(
   const nextAllowlist = allowlist.map((item) =>
     item.pattern === entry.pattern &&
     (item.argPattern ?? undefined) === (entry.argPattern ?? undefined)
-      ? {
-          ...item,
+      ? Object.assign({}, item, {
           id: item.id ?? crypto.randomUUID(),
           lastUsedAt: Date.now(),
           lastUsedCommand: command,
           lastResolvedPath: resolvedPath,
-        }
+        })
       : item,
   );
   agents[target] = { ...existing, allowlist: nextAllowlist };
@@ -853,7 +920,7 @@ export function addAllowlistEntry(
   if (!trimmed) {
     return;
   }
-  const trimmedArgPattern = options?.argPattern?.trim() || undefined;
+  const trimmedArgPattern = normalizeOptionalString(options?.argPattern);
   const existingEntry = allowlist.find(
     (entry) => entry.pattern === trimmed && (entry.argPattern ?? undefined) === trimmedArgPattern,
   );

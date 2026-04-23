@@ -6,11 +6,16 @@ import {
   generateSecMsGecToken,
 } from "node-edge-tts/dist/drm.js";
 import { isVoiceCompatibleAudio } from "openclaw/plugin-sdk/media-runtime";
+import {
+  captureHttpExchange,
+  isDebugProxyGlobalFetchPatchInstalled,
+} from "openclaw/plugin-sdk/proxy-capture";
 import type {
   SpeechProviderConfig,
   SpeechProviderPlugin,
   SpeechVoiceOption,
 } from "openclaw/plugin-sdk/speech";
+import { asBoolean, asFiniteNumber, asObject, trimToUndefined } from "openclaw/plugin-sdk/speech";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { edgeTTS, inferEdgeExtension } from "./tts.js";
 
@@ -43,24 +48,6 @@ type MicrosoftVoiceListEntry = {
   };
 };
 
-function trimToUndefined(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function asBoolean(value: unknown): boolean | undefined {
-  return typeof value === "boolean" ? value : undefined;
-}
-
-function asNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-function asObject(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
 function normalizeMicrosoftProviderConfig(
   rawConfig: Record<string, unknown>,
 ): MicrosoftProviderConfig {
@@ -81,7 +68,7 @@ function normalizeMicrosoftProviderConfig(
     volume: trimToUndefined(raw.volume),
     saveSubtitles: asBoolean(raw.saveSubtitles) ?? false,
     proxy: trimToUndefined(raw.proxy),
-    timeoutMs: asNumber(raw.timeoutMs),
+    timeoutMs: asFiniteNumber(raw.timeoutMs),
   };
 }
 
@@ -99,7 +86,7 @@ function readMicrosoftProviderConfig(config: SpeechProviderConfig): MicrosoftPro
     volume: trimToUndefined(config.volume) ?? defaults.volume,
     saveSubtitles: asBoolean(config.saveSubtitles) ?? defaults.saveSubtitles,
     proxy: trimToUndefined(config.proxy) ?? defaults.proxy,
-    timeoutMs: asNumber(config.timeoutMs) ?? defaults.timeoutMs,
+    timeoutMs: asFiniteNumber(config.timeoutMs) ?? defaults.timeoutMs,
   };
 }
 
@@ -146,13 +133,26 @@ const DEFAULT_CHINESE_EDGE_VOICE = "zh-CN-XiaoxiaoNeural";
 const DEFAULT_CHINESE_EDGE_LANG = "zh-CN";
 
 export async function listMicrosoftVoices(): Promise<SpeechVoiceOption[]> {
-  const response = await fetch(
+  const url =
     "https://speech.platform.bing.com/consumer/speech/synthesize/readaloud/voices/list" +
-      `?trustedclienttoken=${TRUSTED_CLIENT_TOKEN}`,
-    {
-      headers: buildMicrosoftVoiceHeaders(),
-    },
-  );
+    `?trustedclienttoken=${TRUSTED_CLIENT_TOKEN}`;
+  const headers = buildMicrosoftVoiceHeaders();
+  const response = await fetch(url, {
+    headers,
+  });
+  if (!isDebugProxyGlobalFetchPatchInstalled()) {
+    captureHttpExchange({
+      url,
+      method: "GET",
+      requestHeaders: headers,
+      response,
+      transport: "http",
+      meta: {
+        provider: "microsoft",
+        capability: "speech-voices",
+      },
+    });
+  }
   if (!response.ok) {
     throw new Error(`Microsoft voices API error (${response.status})`);
   }
@@ -161,11 +161,11 @@ export async function listMicrosoftVoices(): Promise<SpeechVoiceOption[]> {
     ? voices
         .map((voice) => ({
           id: voice.ShortName?.trim() ?? "",
-          name: voice.FriendlyName?.trim() || voice.ShortName?.trim() || undefined,
+          name: trimToUndefined(voice.FriendlyName) ?? trimToUndefined(voice.ShortName),
           category: voice.VoiceTag?.ContentCategories?.find((value) => value.trim().length > 0),
           description: formatMicrosoftVoiceDescription(voice),
-          locale: voice.Locale?.trim() || undefined,
-          gender: voice.Gender?.trim() || undefined,
+          locale: trimToUndefined(voice.Locale),
+          gender: trimToUndefined(voice.Gender),
           personalities: voice.VoiceTag?.VoicePersonalities?.filter(
             (value): value is string => value.trim().length > 0,
           ),
@@ -207,9 +207,9 @@ export function buildMicrosoftSpeechProvider(): SpeechProviderPlugin {
         ...(trimToUndefined(talkProviderConfig.proxy) == null
           ? {}
           : { proxy: trimToUndefined(talkProviderConfig.proxy) }),
-        ...(asNumber(talkProviderConfig.timeoutMs) == null
+        ...(asFiniteNumber(talkProviderConfig.timeoutMs) == null
           ? {}
-          : { timeoutMs: asNumber(talkProviderConfig.timeoutMs) }),
+          : { timeoutMs: asFiniteNumber(talkProviderConfig.timeoutMs) }),
       };
     },
     resolveTalkOverrides: ({ params }) => ({

@@ -244,6 +244,7 @@ vi.mock("./monitor/conversation.runtime.js", async () => {
     ...actual,
     readChannelAllowFromStore: (...args: unknown[]) =>
       slackTestState.readAllowFromStoreMock(...args),
+    recordInboundSession: vi.fn().mockResolvedValue(undefined),
     upsertChannelPairingRequest: (...args: unknown[]) =>
       slackTestState.upsertPairingRequestMock(...args),
   };
@@ -253,6 +254,11 @@ vi.mock("@slack/bolt", () => {
   const { handlers, client: slackClient } = ensureSlackTestRuntime();
   class App {
     client = slackClient;
+    receiver: unknown;
+
+    constructor(args?: { receiver?: unknown }) {
+      this.receiver = args?.receiver;
+    }
     event(name: string, handler: SlackHandler) {
       handlers.set(name, handler);
     }
@@ -265,5 +271,17 @@ vi.mock("@slack/bolt", () => {
   class HTTPReceiver {
     requestListener = vi.fn();
   }
-  return { App, HTTPReceiver, default: { App, HTTPReceiver } };
+  class SocketModeReceiver {
+    client = {
+      ...slackClient,
+      on: vi.fn(),
+      off: vi.fn(),
+    };
+  }
+  return {
+    App,
+    HTTPReceiver,
+    SocketModeReceiver,
+    default: { App, HTTPReceiver, SocketModeReceiver },
+  };
 });

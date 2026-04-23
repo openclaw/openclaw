@@ -1,12 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { Type } from "@sinclair/typebox";
 import Ajv from "ajv";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { Type } from "typebox";
 import {
-  formatXHighModelHint,
+  formatThinkingLevels,
+  isThinkingLevelSupported,
   normalizeThinkLevel,
   resolvePreferredOpenClawTmpDir,
-  supportsXHighThinking,
 } from "../api.js";
 import type { OpenClawPluginApi } from "../api.js";
 
@@ -60,7 +61,7 @@ type LlmTaskParams = {
 };
 
 const INVALID_THINKING_LEVELS_HINT =
-  "off, minimal, low, medium, high, adaptive, and xhigh where supported";
+  "off, minimal, low, medium, high, adaptive, xhigh where supported, and max where supported";
 
 export function createLlmTaskTool(api: OpenClawPluginApi) {
   return {
@@ -96,8 +97,8 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
       const defaultsModel = api.config?.agents?.defaults?.model;
       const primary =
         typeof defaultsModel === "string"
-          ? defaultsModel.trim()
-          : (defaultsModel?.primary?.trim() ?? undefined);
+          ? normalizeOptionalString(defaultsModel)
+          : normalizeOptionalString(defaultsModel?.primary);
       const primaryProvider = typeof primary === "string" ? primary.split("/")[0] : undefined;
       const primaryModel =
         typeof primary === "string" ? primary.split("/").slice(1).join("/") : undefined;
@@ -123,7 +124,7 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
       const modelKey = toModelKey(provider, model);
       if (!provider || !model || !modelKey) {
         throw new Error(
-          `provider/model could not be resolved (provider=${String(provider ?? "")}, model=${String(model ?? "")})`,
+          `provider/model could not be resolved (provider=${provider ?? ""}, model=${model ?? ""})`,
         );
       }
 
@@ -142,8 +143,18 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
           `Invalid thinking level "${thinkingRaw}". Use one of: ${INVALID_THINKING_LEVELS_HINT}.`,
         );
       }
-      if (thinkLevel === "xhigh" && !supportsXHighThinking(provider, model)) {
-        throw new Error(`Thinking level "xhigh" is only supported for ${formatXHighModelHint()}.`);
+      let resolvedThinkLevel = thinkLevel;
+      if (
+        thinkLevel &&
+        !isThinkingLevelSupported({
+          provider,
+          model,
+          level: thinkLevel,
+        })
+      ) {
+        throw new Error(
+          `Thinking level "${thinkLevel}" is not supported for ${provider}/${model}. Use one of: ${formatThinkingLevels(provider, model)}.`,
+        );
       }
 
       const timeoutMs =
@@ -203,7 +214,7 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
           model,
           authProfileId,
           authProfileIdSource: authProfileId ? "user" : "auto",
-          thinkLevel,
+          thinkLevel: resolvedThinkLevel,
           streamParams,
           disableTools: true,
         });

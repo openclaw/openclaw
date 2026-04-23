@@ -11,6 +11,7 @@ import {
   type LegacyConfigRule,
 } from "../../../config/legacy.shared.js";
 import { DEFAULT_GATEWAY_PORT } from "../../../config/paths.js";
+import { normalizeOptionalLowercaseString } from "../../../shared/string-coerce.js";
 
 const GATEWAY_BIND_RULE: LegacyConfigRule = {
   path: ["gateway", "bind"],
@@ -21,10 +22,7 @@ const GATEWAY_BIND_RULE: LegacyConfigRule = {
 };
 
 function isLegacyGatewayBindHostAlias(value: unknown): boolean {
-  if (typeof value !== "string") {
-    return false;
-  }
-  const normalized = value.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(value);
   if (!normalized) {
     return false;
   }
@@ -86,7 +84,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY: LegacyConfigMigrationSpec
       gateway.controlUi = { ...controlUi, allowedOrigins: origins };
       raw.gateway = gateway;
       changes.push(
-        `Seeded gateway.controlUi.allowedOrigins ${JSON.stringify(origins)} for bind=${String(bind)}. ` +
+        `Seeded gateway.controlUi.allowedOrigins ${JSON.stringify(origins)} for bind=${bind}. ` +
           "Required since v2026.2.26. Add other machine origins to gateway.controlUi.allowedOrigins if needed.",
       );
     },
@@ -105,7 +103,10 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY: LegacyConfigMigrationSpec
         return;
       }
 
-      const normalized = bindRaw.trim().toLowerCase();
+      const normalized = normalizeOptionalLowercaseString(bindRaw);
+      if (!normalized) {
+        return;
+      }
       let mapped: "lan" | "loopback" | undefined;
       if (
         normalized === "0.0.0.0" ||

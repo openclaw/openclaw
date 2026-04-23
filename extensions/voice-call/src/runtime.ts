@@ -1,4 +1,5 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type {
   RealtimeVoiceProviderConfig,
   RealtimeVoiceProviderPlugin,
@@ -37,6 +38,50 @@ type ResolvedRealtimeProvider = {
   provider: RealtimeVoiceProviderPlugin;
   providerConfig: RealtimeVoiceProviderConfig;
 };
+
+type TelnyxProviderModule = typeof import("./providers/telnyx.js");
+type TwilioProviderModule = typeof import("./providers/twilio.js");
+type PlivoProviderModule = typeof import("./providers/plivo.js");
+type MockProviderModule = typeof import("./providers/mock.js");
+type RealtimeVoiceRuntimeModule = typeof import("./realtime-voice.runtime.js");
+type RealtimeHandlerModule = typeof import("./webhook/realtime-handler.js");
+
+let telnyxProviderPromise: Promise<TelnyxProviderModule> | undefined;
+let twilioProviderPromise: Promise<TwilioProviderModule> | undefined;
+let plivoProviderPromise: Promise<PlivoProviderModule> | undefined;
+let mockProviderPromise: Promise<MockProviderModule> | undefined;
+let realtimeVoiceRuntimePromise: Promise<RealtimeVoiceRuntimeModule> | undefined;
+let realtimeHandlerPromise: Promise<RealtimeHandlerModule> | undefined;
+
+function loadTelnyxProvider(): Promise<TelnyxProviderModule> {
+  telnyxProviderPromise ??= import("./providers/telnyx.js");
+  return telnyxProviderPromise;
+}
+
+function loadTwilioProvider(): Promise<TwilioProviderModule> {
+  twilioProviderPromise ??= import("./providers/twilio.js");
+  return twilioProviderPromise;
+}
+
+function loadPlivoProvider(): Promise<PlivoProviderModule> {
+  plivoProviderPromise ??= import("./providers/plivo.js");
+  return plivoProviderPromise;
+}
+
+function loadMockProvider(): Promise<MockProviderModule> {
+  mockProviderPromise ??= import("./providers/mock.js");
+  return mockProviderPromise;
+}
+
+function loadRealtimeVoiceRuntime(): Promise<RealtimeVoiceRuntimeModule> {
+  realtimeVoiceRuntimePromise ??= import("./realtime-voice.runtime.js");
+  return realtimeVoiceRuntimePromise;
+}
+
+function loadRealtimeHandler(): Promise<RealtimeHandlerModule> {
+  realtimeHandlerPromise ??= import("./webhook/realtime-handler.js");
+  return realtimeHandlerPromise;
+}
 
 function createRuntimeResourceLifecycle(params: {
   config: VoiceCallConfig;
@@ -96,7 +141,7 @@ async function resolveProvider(config: VoiceCallConfig): Promise<VoiceCallProvid
 
   switch (config.provider) {
     case "telnyx": {
-      const { TelnyxProvider } = await import("./providers/telnyx.js");
+      const { TelnyxProvider } = await loadTelnyxProvider();
       return new TelnyxProvider(
         {
           apiKey: config.telnyx?.apiKey,
@@ -109,7 +154,7 @@ async function resolveProvider(config: VoiceCallConfig): Promise<VoiceCallProvid
       );
     }
     case "twilio": {
-      const { TwilioProvider } = await import("./providers/twilio.js");
+      const { TwilioProvider } = await loadTwilioProvider();
       return new TwilioProvider(
         {
           accountSid: config.twilio?.accountSid,
@@ -125,7 +170,7 @@ async function resolveProvider(config: VoiceCallConfig): Promise<VoiceCallProvid
       );
     }
     case "plivo": {
-      const { PlivoProvider } = await import("./providers/plivo.js");
+      const { PlivoProvider } = await loadPlivoProvider();
       return new PlivoProvider(
         {
           authId: config.plivo?.authId,
@@ -140,7 +185,7 @@ async function resolveProvider(config: VoiceCallConfig): Promise<VoiceCallProvid
       );
     }
     case "mock": {
-      const { MockProvider } = await import("./providers/mock.js");
+      const { MockProvider } = await loadMockProvider();
       return new MockProvider();
     }
     default:
@@ -152,8 +197,7 @@ async function resolveRealtimeProvider(params: {
   config: VoiceCallConfig;
   fullConfig: OpenClawConfig;
 }): Promise<ResolvedRealtimeProvider> {
-  const { getRealtimeVoiceProvider, listRealtimeVoiceProviders } =
-    await import("./realtime-voice.runtime.js");
+  const { getRealtimeVoiceProvider, listRealtimeVoiceProviders } = await loadRealtimeVoiceRuntime();
   const resolution = resolveConfiguredCapabilityProvider({
     configuredProviderId: params.config.realtime.provider,
     providerConfigs: params.config.realtime.providers,
@@ -235,7 +279,7 @@ export async function createVoiceCallRuntime(params: {
     agentRuntime,
   );
   if (realtimeProvider) {
-    const { RealtimeCallHandler } = await import("./webhook/realtime-handler.js");
+    const { RealtimeCallHandler } = await loadRealtimeHandler();
     webhookServer.setRealtimeHandler(
       new RealtimeCallHandler(
         config.realtime,
@@ -271,9 +315,7 @@ export async function createVoiceCallRuntime(params: {
         lifecycle.setTunnelResult(nextTunnelResult);
         publicUrl = nextTunnelResult?.publicUrl ?? null;
       } catch (err) {
-        log.error(
-          `[voice-call] Tunnel setup failed: ${err instanceof Error ? err.message : String(err)}`,
-        );
+        log.error(`[voice-call] Tunnel setup failed: ${formatErrorMessage(err)}`);
       }
     }
 
@@ -303,11 +345,7 @@ export async function createVoiceCallRuntime(params: {
           twilioProvider.setTTSProvider(ttsProvider);
           log.info("[voice-call] Telephony TTS provider configured");
         } catch (err) {
-          log.warn(
-            `[voice-call] Failed to initialize telephony TTS: ${
-              err instanceof Error ? err.message : String(err)
-            }`,
-          );
+          log.warn(`[voice-call] Failed to initialize telephony TTS: ${formatErrorMessage(err)}`);
         }
       } else {
         log.warn("[voice-call] Telephony TTS unavailable; streaming TTS disabled");

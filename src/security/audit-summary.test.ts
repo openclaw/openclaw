@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { collectAttackSurfaceSummaryFindings } from "./audit-extra.sync.js";
+import { collectAttackSurfaceSummaryFindings } from "./audit-extra.summary.js";
 
 describe("security audit attack surface summary", () => {
   it("includes an attack surface summary (info)", () => {

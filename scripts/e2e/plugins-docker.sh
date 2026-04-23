@@ -2,10 +2,10 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-IMAGE_NAME="openclaw-plugins-e2e"
+source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
+IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-plugins-e2e" OPENCLAW_PLUGINS_E2E_IMAGE)"
 
-echo "Building Docker image..."
-docker build -t "$IMAGE_NAME" -f "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR"
+docker_e2e_build_or_reuse "$IMAGE_NAME" plugins
 
 DOCKER_ENV_ARGS=(-e COREPACK_ENABLE_DOWNLOAD_PROMPT=0)
 if [[ -n "${OPENAI_API_KEY:-}" && "${OPENAI_API_KEY:-}" != "undefined" && "${OPENAI_API_KEY:-}" != "null" ]]; then
@@ -16,7 +16,8 @@ if [[ -n "${OPENAI_BASE_URL:-}" && "${OPENAI_BASE_URL:-}" != "undefined" && "${O
 fi
 
 echo "Running plugins Docker E2E..."
-docker run --rm "${DOCKER_ENV_ARGS[@]}" -i "$IMAGE_NAME" bash -s <<'EOF'
+RUN_LOG="$(mktemp "${TMPDIR:-/tmp}/openclaw-plugins-run.XXXXXX")"
+if ! docker run --rm "${DOCKER_ENV_ARGS[@]}" -i "$IMAGE_NAME" bash -s >"$RUN_LOG" 2>&1 <<'EOF'
 set -euo pipefail
 
 if [ -f dist/index.mjs ]; then
@@ -54,6 +55,47 @@ BUNDLED_PLUGIN_ROOT_DIR="extensions"
 OPENCLAW_PLUGIN_HOME="$HOME/.openclaw/$BUNDLED_PLUGIN_ROOT_DIR"
 
 gateway_pid=""
+
+record_fixture_plugin_trust() {
+  local plugin_id="$1"
+  local plugin_root="$2"
+  local enabled="$3"
+  node - <<'NODE' "$plugin_id" "$plugin_root" "$enabled"
+const fs = require("node:fs");
+const path = require("node:path");
+
+const pluginId = process.argv[2];
+const pluginRoot = process.argv[3];
+const enabled = process.argv[4] === "1";
+const configPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
+const config = fs.existsSync(configPath)
+  ? JSON.parse(fs.readFileSync(configPath, "utf8"))
+  : {};
+const plugins = (config.plugins ??= {});
+const entries = (plugins.entries ??= {});
+entries[pluginId] = { ...(entries[pluginId] ?? {}), enabled };
+const installs = (plugins.installs ??= {});
+installs[pluginId] = {
+  ...(installs[pluginId] ?? {}),
+  source: "path",
+  installPath: pluginRoot,
+  sourcePath: pluginRoot,
+};
+plugins.allow = Array.from(new Set([...(plugins.allow ?? []), pluginId])).sort();
+fs.mkdirSync(path.dirname(configPath), { recursive: true });
+fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+NODE
+}
+
+run_logged() {
+  local label="$1"
+  shift
+  local log_file="/tmp/openclaw-plugins-e2e-${label}.log"
+  if ! "$@" >"$log_file" 2>&1; then
+    cat "$log_file"
+    exit 1
+  fi
+}
 
 seed_openai_provider_config() {
   local openai_api_key="$1"
@@ -142,14 +184,22 @@ run_gateway_chat_json() {
   local session_key="$1"
   local message="$2"
   local output_file="$3"
-  local timeout_ms="${4:-15000}"
+  local timeout_ms="${4:-45000}"
   node - <<'NODE' "$OPENCLAW_ENTRY" "$session_key" "$message" "$output_file" "$timeout_ms"
 const { execFileSync } = require("node:child_process");
 const fs = require("node:fs");
 const { randomUUID } = require("node:crypto");
 
 const [, , entry, sessionKey, message, outputFile, timeoutRaw] = process.argv;
-const timeoutMs = Number(timeoutRaw) > 0 ? Number(timeoutRaw) : 15000;
+const timeoutMs = Number(timeoutRaw) > 0 ? Number(timeoutRaw) : 45000;
+// Plugin install/enable can intentionally restart the gateway mid-request.
+// Keep the underlying gateway call budget aligned with the scenario timeout
+// instead of clamping too aggressively, or normal restarts look like failures.
+const gatewayCallTimeoutMs = Math.max(15000, Math.min(timeoutMs, 90000));
+const retryableGatewayErrorPattern =
+  /gateway ws open timeout|gateway connect timeout|gateway closed|ECONNREFUSED|socket hang up|gateway timeout after/i;
+const formatErrorMessage = (error) =>
+  error instanceof Error ? error.message || error.name || "Error" : String(error);
 const gatewayArgs = [
   entry,
   "gateway",
@@ -159,17 +209,18 @@ const gatewayArgs = [
   "--token",
   "plugin-e2e-token",
   "--timeout",
-  "10000",
+  String(gatewayCallTimeoutMs),
   "--json",
 ];
 
-const callGateway = (method, params) => {
+const callGatewayOnce = (method, params) => {
   try {
     return {
       ok: true,
       value: JSON.parse(
         execFileSync("node", [...gatewayArgs, method, "--params", JSON.stringify(params)], {
           encoding: "utf8",
+          stdio: ["ignore", "pipe", "pipe"],
         }),
       ),
     };
@@ -180,6 +231,9 @@ const callGateway = (method, params) => {
     return { ok: false, error: new Error(message) };
   }
 };
+
+const isRetryableGatewayError = (error) =>
+  retryableGatewayErrorPattern.test(formatErrorMessage(error));
 
 const extractText = (messageLike) => {
   if (!messageLike || typeof messageLike !== "object") {
@@ -220,6 +274,22 @@ const findLatestAssistantText = (history) => {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+const callGateway = async (method, params, deadline = Date.now() + gatewayCallTimeoutMs) => {
+  let lastFailure = null;
+  while (Date.now() < deadline) {
+    const result = callGatewayOnce(method, params);
+    if (result.ok) {
+      return result;
+    }
+    lastFailure = result;
+    if (!isRetryableGatewayError(result.error)) {
+      return result;
+    }
+    await sleep(250);
+  }
+  return lastFailure ?? callGatewayOnce(method, params);
+};
+
 async function main() {
   const runId = `plugin-e2e-${randomUUID()}`;
   const sendParams = {
@@ -227,18 +297,25 @@ async function main() {
     message,
     idempotencyKey: runId,
   };
-  const sendResult = callGateway("chat.send", sendParams);
+  let lastGatewayError = null;
+  const sendResult = await callGateway(
+    "chat.send",
+    sendParams,
+    Date.now() + gatewayCallTimeoutMs,
+  );
   if (!sendResult.ok) {
     throw sendResult.error;
   }
 
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const historyResult = callGateway("chat.history", { sessionKey });
+    const historyResult = await callGateway("chat.history", { sessionKey }, Date.now() + 5000);
     if (!historyResult.ok) {
+      lastGatewayError = String(historyResult.error);
       await sleep(150);
       continue;
     }
+    lastGatewayError = null;
     const history = historyResult.value;
     const latestAssistant = findLatestAssistantText(history);
     if (latestAssistant) {
@@ -259,22 +336,10 @@ async function main() {
       );
       return;
     }
-    const statusResult = callGateway("chat.send", sendParams);
-    if (statusResult.ok) {
-      const status = statusResult.value;
-      if (status?.status === "error") {
-        const summary =
-          typeof status.summary === "string" && status.summary.trim()
-            ? status.summary.trim()
-            : JSON.stringify(status);
-        throw new Error(`gateway run failed for ${sessionKey}: ${summary}`);
-      }
-    }
     await sleep(100);
   }
 
-  const finalHistory = callGateway("chat.history", { sessionKey });
-  const finalStatus = callGateway("chat.send", sendParams);
+  const finalHistory = await callGateway("chat.history", { sessionKey }, Date.now() + 3000);
   fs.writeFileSync(
     outputFile,
     `${JSON.stringify(
@@ -284,19 +349,19 @@ async function main() {
         error: "timeout",
         history: finalHistory.ok ? finalHistory.value : null,
         historyError: finalHistory.ok ? null : String(finalHistory.error),
-        status: finalStatus.ok ? finalStatus.value : null,
-        statusError: finalStatus.ok ? null : String(finalStatus.error),
+        lastGatewayError,
       },
       null,
       2,
     )}\n`,
     "utf8",
   );
-  throw new Error(`timed out waiting for assistant reply for ${sessionKey}`);
+  const retrySummary = lastGatewayError ? `; last gateway error: ${lastGatewayError}` : "";
+  throw new Error(`timed out waiting for assistant reply for ${sessionKey}${retrySummary}`);
 }
 
 main().catch((error) => {
-  console.error(error instanceof Error ? error.message : String(error));
+  console.error(formatErrorMessage(error));
   process.exit(1);
 });
 NODE
@@ -373,6 +438,7 @@ cat > "$demo_plugin_root/openclaw.plugin.json" <<'JSON'
   }
 }
 JSON
+record_fixture_plugin_trust "$demo_plugin_id" "$demo_plugin_root" 1
 
 node "$OPENCLAW_ENTRY" plugins list --json > /tmp/plugins.json
 node "$OPENCLAW_ENTRY" plugins inspect demo-plugin --json > /tmp/plugins-inspect.json
@@ -440,7 +506,7 @@ cat > "$pack_dir/package/openclaw.plugin.json" <<'JSON'
 JSON
 tar -czf /tmp/demo-plugin-tgz.tgz -C "$pack_dir" package
 
-node "$OPENCLAW_ENTRY" plugins install /tmp/demo-plugin-tgz.tgz
+run_logged install-tgz node "$OPENCLAW_ENTRY" plugins install /tmp/demo-plugin-tgz.tgz
 node "$OPENCLAW_ENTRY" plugins list --json > /tmp/plugins2.json
 node "$OPENCLAW_ENTRY" plugins inspect demo-plugin-tgz --json > /tmp/plugins2-inspect.json
 
@@ -488,7 +554,7 @@ cat > "$dir_plugin/openclaw.plugin.json" <<'JSON'
 }
 JSON
 
-node "$OPENCLAW_ENTRY" plugins install "$dir_plugin"
+run_logged install-dir node "$OPENCLAW_ENTRY" plugins install "$dir_plugin"
 node "$OPENCLAW_ENTRY" plugins list --json > /tmp/plugins3.json
 node "$OPENCLAW_ENTRY" plugins inspect demo-plugin-dir --json > /tmp/plugins3-inspect.json
 
@@ -537,7 +603,7 @@ cat > "$file_pack_dir/package/openclaw.plugin.json" <<'JSON'
 }
 JSON
 
-node "$OPENCLAW_ENTRY" plugins install "file:$file_pack_dir/package"
+run_logged install-file node "$OPENCLAW_ENTRY" plugins install "file:$file_pack_dir/package"
 node "$OPENCLAW_ENTRY" plugins list --json > /tmp/plugins4.json
 node "$OPENCLAW_ENTRY" plugins inspect demo-plugin-file --json > /tmp/plugins4-inspect.json
 
@@ -575,6 +641,7 @@ Act as an engineering advisor.
 Focus on:
 $ARGUMENTS
 MD
+record_fixture_plugin_trust "$bundle_plugin_id" "$bundle_root" 0
 
 node - <<'NODE'
 const fs = require("node:fs");
@@ -613,6 +680,29 @@ NODE
 if [ -n "${OPENAI_API_KEY:-}" ]; then
   seed_openai_provider_config "$OPENAI_API_KEY" "${OPENAI_BASE_URL:-}"
 fi
+
+workspace_dir="$HOME/.openclaw/workspace"
+mkdir -p "$workspace_dir/.openclaw"
+cat > "$workspace_dir/IDENTITY.md" <<'MD'
+# Identity
+
+- Name: Plugin E2E
+- Nature: Test assistant
+- Vibe: Concise
+- Emoji: claw
+MD
+cat > "$workspace_dir/USER.md" <<'MD'
+# User
+
+- Name: OpenClaw test harness
+- Timezone: UTC
+MD
+cat > "$workspace_dir/.openclaw/workspace-state.json" <<'JSON'
+{
+  "version": 1,
+  "setupCompletedAt": "2026-01-01T00:00:00.000Z"
+}
+JSON
 
 gateway_log="/tmp/openclaw-plugin-command-e2e.log"
 start_gateway "$gateway_log"
@@ -696,7 +786,11 @@ if (!text.includes("[disabled]")) {
 console.log("ok");
 NODE
 
-run_gateway_chat_json "plugin-e2e-enable" "/plugin enable claude-bundle-e2e" /tmp/plugin-command-enable.json
+run_gateway_chat_json \
+  "plugin-e2e-enable" \
+  "/plugin enable claude-bundle-e2e" \
+  /tmp/plugin-command-enable.json \
+  60000
 node - <<'NODE'
 const fs = require("node:fs");
 const payload = JSON.parse(fs.readFileSync("/tmp/plugin-command-enable.json", "utf8"));
@@ -817,8 +911,8 @@ if (!names.includes("marketplace-shortcut") || !names.includes("marketplace-dire
 console.log("ok");
 NODE
 
-node "$OPENCLAW_ENTRY" plugins install marketplace-shortcut@claude-fixtures
-node "$OPENCLAW_ENTRY" plugins install marketplace-direct --marketplace claude-fixtures
+run_logged install-marketplace-shortcut node "$OPENCLAW_ENTRY" plugins install marketplace-shortcut@claude-fixtures
+run_logged install-marketplace-direct node "$OPENCLAW_ENTRY" plugins install marketplace-direct --marketplace claude-fixtures
 node "$OPENCLAW_ENTRY" plugins list --json > /tmp/plugins-marketplace.json
 node "$OPENCLAW_ENTRY" plugins inspect marketplace-shortcut --json > /tmp/plugins-marketplace-shortcut-inspect.json
 node "$OPENCLAW_ENTRY" plugins inspect marketplace-direct --json > /tmp/plugins-marketplace-direct-inspect.json
@@ -887,8 +981,8 @@ write_fixture_plugin \
   "0.0.2" \
   "demo.marketplace.shortcut.v2" \
   "Marketplace Shortcut"
-node "$OPENCLAW_ENTRY" plugins update marketplace-shortcut --dry-run
-node "$OPENCLAW_ENTRY" plugins update marketplace-shortcut
+run_logged update-marketplace-shortcut-dry-run node "$OPENCLAW_ENTRY" plugins update marketplace-shortcut --dry-run
+run_logged update-marketplace-shortcut node "$OPENCLAW_ENTRY" plugins update marketplace-shortcut
 node "$OPENCLAW_ENTRY" plugins list --json > /tmp/plugins-marketplace-updated.json
 node "$OPENCLAW_ENTRY" plugins inspect marketplace-shortcut --json > /tmp/plugins-marketplace-updated-inspect.json
 
@@ -909,7 +1003,13 @@ console.log("ok");
 NODE
 
 echo "Running bundle MCP CLI-agent e2e..."
-pnpm exec vitest run --config vitest.e2e.config.ts src/agents/cli-runner.bundle-mcp.e2e.test.ts
+node scripts/run-vitest.mjs run --config test/vitest/vitest.e2e.config.ts src/agents/cli-runner.bundle-mcp.e2e.test.ts
 EOF
+then
+  cat "$RUN_LOG"
+  rm -f "$RUN_LOG"
+  exit 1
+fi
+rm -f "$RUN_LOG"
 
 echo "OK"

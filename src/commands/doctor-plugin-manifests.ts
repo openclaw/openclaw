@@ -2,6 +2,8 @@ import fs from "node:fs";
 import { z } from "zod";
 import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { normalizeTrimmedStringList } from "../shared/string-normalization.js";
 import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
 import { safeParseJsonWithSchema, safeParseWithSchema } from "../utils/zod-parse.js";
@@ -21,13 +23,6 @@ type LegacyManifestContractMigration = {
 };
 
 const JsonRecordSchema = z.record(z.string(), z.unknown());
-
-function normalizeStringList(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value.map((entry) => (typeof entry === "string" ? entry.trim() : "")).filter(Boolean);
-}
 
 function readManifestJson(manifestPath: string): Record<string, unknown> | null {
   try {
@@ -50,8 +45,8 @@ function buildLegacyManifestContractMigration(params: {
     if (!(key in params.raw)) {
       continue;
     }
-    const legacyValues = normalizeStringList(params.raw[key]);
-    const contractValues = normalizeStringList(nextContracts[key]);
+    const legacyValues = normalizeTrimmedStringList(params.raw[key]);
+    const contractValues = normalizeTrimmedStringList(nextContracts[key]);
     if (legacyValues.length > 0 && contractValues.length === 0) {
       nextContracts[key] = legacyValues;
       changeLines.push(
@@ -75,7 +70,7 @@ function buildLegacyManifestContractMigration(params: {
     delete nextRaw.contracts;
   }
 
-  const pluginId = typeof params.raw.id === "string" ? params.raw.id.trim() : params.manifestPath;
+  const pluginId = normalizeOptionalString(params.raw.id) ?? params.manifestPath;
   return {
     manifestPath: params.manifestPath,
     pluginId,
@@ -118,6 +113,7 @@ export async function maybeRepairLegacyPluginManifestContracts(params: {
   env?: NodeJS.ProcessEnv;
   runtime: RuntimeEnv;
   prompter: DoctorPrompter;
+  note?: typeof note;
 }): Promise<void> {
   const migrations = collectLegacyPluginManifestContractMigrations(
     params.env ? { env: params.env } : undefined,
@@ -126,7 +122,8 @@ export async function maybeRepairLegacyPluginManifestContracts(params: {
     return;
   }
 
-  note(
+  const emitNote = params.note ?? note;
+  emitNote(
     [
       "Legacy plugin manifest capability keys detected.",
       ...migrations.flatMap((migration) => migration.changeLines),
@@ -161,6 +158,6 @@ export async function maybeRepairLegacyPluginManifestContracts(params: {
   }
 
   if (applied.length > 0) {
-    note(applied.join("\n"), "Doctor changes");
+    emitNote(applied.join("\n"), "Doctor changes");
   }
 }

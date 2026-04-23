@@ -1,5 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createPerSenderSessionConfig } from "./test-helpers/session-config.js";
+import { createAgentsListTool } from "./tools/agents-list-tool.js";
 
 let configOverride: ReturnType<(typeof import("../config/config.js"))["loadConfig"]> = {
   session: createPerSenderSessionConfig(),
@@ -14,10 +15,6 @@ vi.mock("../config/config.js", async () => {
   };
 });
 
-import "./test-helpers/fast-core-tools.js";
-
-let createOpenClawTools: typeof import("./openclaw-tools.js").createOpenClawTools;
-
 describe("agents_list", () => {
   type AgentConfig = NonNullable<NonNullable<typeof configOverride.agents>["list"]>[number];
 
@@ -30,14 +27,10 @@ describe("agents_list", () => {
     };
   }
 
-  function requireAgentsListTool() {
-    const tool = createOpenClawTools({
+  function createTool() {
+    return createAgentsListTool({
       agentSessionKey: "main",
-    }).find((candidate) => candidate.name === "agents_list");
-    if (!tool) {
-      throw new Error("missing agents_list tool");
-    }
-    return tool;
+    });
   }
 
   function readAgentList(result: unknown) {
@@ -45,17 +38,11 @@ describe("agents_list", () => {
       .details?.agents;
   }
 
-  beforeEach(async () => {
-    vi.resetModules();
+  it("defaults to the requester agent only", async () => {
     configOverride = {
       session: createPerSenderSessionConfig(),
     };
-    await import("./test-helpers/fast-core-tools.js");
-    ({ createOpenClawTools } = await import("./openclaw-tools.js"));
-  });
-
-  it("defaults to the requester agent only", async () => {
-    const tool = requireAgentsListTool();
+    const tool = createTool();
     const result = await tool.execute("call1", {});
     expect(result.details).toMatchObject({
       requester: "main",
@@ -80,7 +67,7 @@ describe("agents_list", () => {
       },
     ]);
 
-    const tool = requireAgentsListTool();
+    const tool = createTool();
     const result = await tool.execute("call2", {});
     const agents = readAgentList(result);
     expect(agents?.map((agent) => agent.id)).toEqual(["main", "research"]);
@@ -108,7 +95,7 @@ describe("agents_list", () => {
       },
     };
 
-    const tool = requireAgentsListTool();
+    const tool = createTool();
     const result = await tool.execute("call2b", {});
     const agents = readAgentList(result);
     expect(agents?.map((agent) => agent.id)).toEqual(["main", "research"]);
@@ -132,7 +119,7 @@ describe("agents_list", () => {
       },
     ]);
 
-    const tool = requireAgentsListTool();
+    const tool = createTool();
     const result = await tool.execute("call3", {});
     expect(result.details).toMatchObject({
       allowAny: true,
@@ -151,7 +138,7 @@ describe("agents_list", () => {
       },
     ]);
 
-    const tool = requireAgentsListTool();
+    const tool = createTool();
     const result = await tool.execute("call4", {});
     const agents = readAgentList(result);
     expect(agents?.map((agent) => agent.id)).toEqual(["main", "research"]);

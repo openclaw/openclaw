@@ -1,64 +1,16 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
+import {
+  createHtmlEntityToolCallArgumentDecodingWrapper,
+  decodeHtmlEntitiesInObject,
+} from "../../../plugin-sdk/provider-stream-shared.js";
+import { extractBalancedJsonPrefix } from "../../../shared/balanced-json.js";
 import { normalizeProviderId } from "../../model-selection.js";
 import { log } from "../logger.js";
+import { wrapStreamObjectEvents } from "./stream-wrapper.js";
 
 function isToolCallBlockType(type: unknown): boolean {
   return type === "toolCall" || type === "toolUse" || type === "functionCall";
-}
-
-type BalancedJsonPrefix = {
-  json: string;
-  startIndex: number;
-};
-
-function extractBalancedJsonPrefix(raw: string): BalancedJsonPrefix | null {
-  let start = 0;
-  while (start < raw.length) {
-    const char = raw[start];
-    if (char === "{" || char === "[") {
-      break;
-    }
-    start += 1;
-  }
-  if (start >= raw.length) {
-    return null;
-  }
-
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-  for (let i = start; i < raw.length; i += 1) {
-    const char = raw[i];
-    if (char === undefined) {
-      break;
-    }
-    if (inString) {
-      if (escaped) {
-        escaped = false;
-      } else if (char === "\\") {
-        escaped = true;
-      } else if (char === '"') {
-        inString = false;
-      }
-      continue;
-    }
-    if (char === '"') {
-      inString = true;
-      continue;
-    }
-    if (char === "{" || char === "[") {
-      depth += 1;
-      continue;
-    }
-    if (char === "}" || char === "]") {
-      depth -= 1;
-      if (depth === 0) {
-        return { json: raw.slice(start, i + 1), startIndex: start };
-      }
-    }
-  }
-  return null;
 }
 
 const MAX_TOOLCALL_REPAIR_BUFFER_CHARS = 64_000;
@@ -250,111 +202,82 @@ function wrapStreamRepairMalformedToolCallArguments(
     return message;
   };
 
-  const originalAsyncIterator = stream[Symbol.asyncIterator].bind(stream);
-  (stream as { [Symbol.asyncIterator]: typeof originalAsyncIterator })[Symbol.asyncIterator] =
-    function () {
-      const iterator = originalAsyncIterator();
-      return {
-        async next() {
-          const result = await iterator.next();
-          if (!result.done && result.value && typeof result.value === "object") {
-            const event = result.value as {
-              type?: unknown;
-              contentIndex?: unknown;
-              delta?: unknown;
-              partial?: unknown;
-              message?: unknown;
-              toolCall?: unknown;
-            };
-            if (
-              typeof event.contentIndex === "number" &&
-              Number.isInteger(event.contentIndex) &&
-              event.type === "toolcall_delta" &&
-              typeof event.delta === "string"
-            ) {
-              if (disabledIndices.has(event.contentIndex)) {
-                return result;
-              }
-              const nextPartialJson =
-                (partialJsonByIndex.get(event.contentIndex) ?? "") + event.delta;
-              if (nextPartialJson.length > MAX_TOOLCALL_REPAIR_BUFFER_CHARS) {
-                partialJsonByIndex.delete(event.contentIndex);
-                repairedArgsByIndex.delete(event.contentIndex);
-                disabledIndices.add(event.contentIndex);
-                return result;
-              }
-              partialJsonByIndex.set(event.contentIndex, nextPartialJson);
-              const shouldReevaluateRepair =
-                shouldAttemptMalformedToolCallRepair(nextPartialJson, event.delta) ||
-                repairedArgsByIndex.has(event.contentIndex);
-              if (shouldReevaluateRepair) {
-                const hadRepairState = repairedArgsByIndex.has(event.contentIndex);
-                const repair = tryExtractUsableToolCallArguments(nextPartialJson);
-                if (repair) {
-                  if (
-                    !hadRepairState &&
-                    (hasMeaningfulToolCallArgumentsInMessage(event.partial, event.contentIndex) ||
-                      hasMeaningfulToolCallArgumentsInMessage(event.message, event.contentIndex))
-                  ) {
-                    hadPreexistingArgsByIndex.add(event.contentIndex);
-                  }
-                  repairedArgsByIndex.set(event.contentIndex, repair.args);
-                  repairToolCallArgumentsInMessage(event.partial, event.contentIndex, repair.args);
-                  repairToolCallArgumentsInMessage(event.message, event.contentIndex, repair.args);
-                  if (!loggedRepairIndices.has(event.contentIndex) && repair.kind === "repaired") {
-                    loggedRepairIndices.add(event.contentIndex);
-                    log.warn(
-                      `repairing Kimi tool call arguments with ${repair.leadingPrefix.length} leading chars and ${repair.trailingSuffix.length} trailing chars`,
-                    );
-                  }
-                } else {
-                  repairedArgsByIndex.delete(event.contentIndex);
-                  // Keep args that were already present on the streamed message, but
-                  // clear repair-only state so stale repaired args do not get replayed.
-                  const hadPreexistingArgs =
-                    hadPreexistingArgsByIndex.has(event.contentIndex) ||
-                    (!hadRepairState &&
-                      (hasMeaningfulToolCallArgumentsInMessage(event.partial, event.contentIndex) ||
-                        hasMeaningfulToolCallArgumentsInMessage(
-                          event.message,
-                          event.contentIndex,
-                        )));
-                  if (!hadPreexistingArgs) {
-                    clearToolCallArgumentsInMessage(event.partial, event.contentIndex);
-                    clearToolCallArgumentsInMessage(event.message, event.contentIndex);
-                  }
-                }
-              }
-            }
-            if (
-              typeof event.contentIndex === "number" &&
-              Number.isInteger(event.contentIndex) &&
-              event.type === "toolcall_end"
-            ) {
-              const repairedArgs = repairedArgsByIndex.get(event.contentIndex);
-              if (repairedArgs) {
-                if (event.toolCall && typeof event.toolCall === "object") {
-                  (event.toolCall as { arguments?: unknown }).arguments = repairedArgs;
-                }
-                repairToolCallArgumentsInMessage(event.partial, event.contentIndex, repairedArgs);
-                repairToolCallArgumentsInMessage(event.message, event.contentIndex, repairedArgs);
-              }
-              partialJsonByIndex.delete(event.contentIndex);
-              hadPreexistingArgsByIndex.delete(event.contentIndex);
-              disabledIndices.delete(event.contentIndex);
-              loggedRepairIndices.delete(event.contentIndex);
-            }
+  wrapStreamObjectEvents(stream, (event) => {
+    if (
+      typeof event.contentIndex === "number" &&
+      Number.isInteger(event.contentIndex) &&
+      event.type === "toolcall_delta" &&
+      typeof event.delta === "string"
+    ) {
+      if (disabledIndices.has(event.contentIndex)) {
+        return;
+      }
+      const nextPartialJson = (partialJsonByIndex.get(event.contentIndex) ?? "") + event.delta;
+      if (nextPartialJson.length > MAX_TOOLCALL_REPAIR_BUFFER_CHARS) {
+        partialJsonByIndex.delete(event.contentIndex);
+        repairedArgsByIndex.delete(event.contentIndex);
+        disabledIndices.add(event.contentIndex);
+        return;
+      }
+      partialJsonByIndex.set(event.contentIndex, nextPartialJson);
+      const shouldReevaluateRepair =
+        shouldAttemptMalformedToolCallRepair(nextPartialJson, event.delta) ||
+        repairedArgsByIndex.has(event.contentIndex);
+      if (shouldReevaluateRepair) {
+        const hadRepairState = repairedArgsByIndex.has(event.contentIndex);
+        const repair = tryExtractUsableToolCallArguments(nextPartialJson);
+        if (repair) {
+          if (
+            !hadRepairState &&
+            (hasMeaningfulToolCallArgumentsInMessage(event.partial, event.contentIndex) ||
+              hasMeaningfulToolCallArgumentsInMessage(event.message, event.contentIndex))
+          ) {
+            hadPreexistingArgsByIndex.add(event.contentIndex);
           }
-          return result;
-        },
-        async return(value?: unknown) {
-          return iterator.return?.(value) ?? { done: true as const, value: undefined };
-        },
-        async throw(error?: unknown) {
-          return iterator.throw?.(error) ?? { done: true as const, value: undefined };
-        },
-      };
-    };
+          repairedArgsByIndex.set(event.contentIndex, repair.args);
+          repairToolCallArgumentsInMessage(event.partial, event.contentIndex, repair.args);
+          repairToolCallArgumentsInMessage(event.message, event.contentIndex, repair.args);
+          if (!loggedRepairIndices.has(event.contentIndex) && repair.kind === "repaired") {
+            loggedRepairIndices.add(event.contentIndex);
+            log.warn(
+              `repairing malformed tool call arguments with ${repair.leadingPrefix.length} leading chars and ${repair.trailingSuffix.length} trailing chars`,
+            );
+          }
+        } else {
+          repairedArgsByIndex.delete(event.contentIndex);
+          // Keep args that were already present on the streamed message, but
+          // clear repair-only state so stale repaired args do not get replayed.
+          const hadPreexistingArgs =
+            hadPreexistingArgsByIndex.has(event.contentIndex) ||
+            (!hadRepairState &&
+              (hasMeaningfulToolCallArgumentsInMessage(event.partial, event.contentIndex) ||
+                hasMeaningfulToolCallArgumentsInMessage(event.message, event.contentIndex)));
+          if (!hadPreexistingArgs) {
+            clearToolCallArgumentsInMessage(event.partial, event.contentIndex);
+            clearToolCallArgumentsInMessage(event.message, event.contentIndex);
+          }
+        }
+      }
+    }
+    if (
+      typeof event.contentIndex === "number" &&
+      Number.isInteger(event.contentIndex) &&
+      event.type === "toolcall_end"
+    ) {
+      const repairedArgs = repairedArgsByIndex.get(event.contentIndex);
+      if (repairedArgs) {
+        if (event.toolCall && typeof event.toolCall === "object") {
+          (event.toolCall as { arguments?: unknown }).arguments = repairedArgs;
+        }
+        repairToolCallArgumentsInMessage(event.partial, event.contentIndex, repairedArgs);
+        repairToolCallArgumentsInMessage(event.message, event.contentIndex, repairedArgs);
+      }
+      partialJsonByIndex.delete(event.contentIndex);
+      hadPreexistingArgsByIndex.delete(event.contentIndex);
+      disabledIndices.delete(event.contentIndex);
+      loggedRepairIndices.delete(event.contentIndex);
+    }
+  });
 
   return stream;
 }
@@ -371,106 +294,19 @@ export function wrapStreamFnRepairMalformedToolCallArguments(baseFn: StreamFn): 
   };
 }
 
-export function shouldRepairMalformedAnthropicToolCallArguments(provider?: string): boolean {
-  return normalizeProviderId(provider ?? "") === "kimi";
-}
-
-const HTML_ENTITY_RE = /&(?:amp|lt|gt|quot|apos|#39|#x[0-9a-f]+|#\d+);/i;
-
-function decodeHtmlEntities(value: string): string {
-  return value
-    .replace(/&amp;/gi, "&")
-    .replace(/&quot;/gi, '"')
-    .replace(/&#39;/gi, "'")
-    .replace(/&apos;/gi, "'")
-    .replace(/&lt;/gi, "<")
-    .replace(/&gt;/gi, ">")
-    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCodePoint(Number.parseInt(hex, 16)))
-    .replace(/&#(\d+);/gi, (_, dec) => String.fromCodePoint(Number.parseInt(dec, 10)));
-}
-
-export function decodeHtmlEntitiesInObject(obj: unknown): unknown {
-  if (typeof obj === "string") {
-    return HTML_ENTITY_RE.test(obj) ? decodeHtmlEntities(obj) : obj;
-  }
-  if (Array.isArray(obj)) {
-    return obj.map(decodeHtmlEntitiesInObject);
-  }
-  if (obj && typeof obj === "object") {
-    const result: Record<string, unknown> = {};
-    for (const [key, val] of Object.entries(obj as Record<string, unknown>)) {
-      result[key] = decodeHtmlEntitiesInObject(val);
-    }
-    return result;
-  }
-  return obj;
-}
-
-function decodeXaiToolCallArgumentsInMessage(message: unknown): void {
-  if (!message || typeof message !== "object") {
-    return;
-  }
-  const content = (message as { content?: unknown }).content;
-  if (!Array.isArray(content)) {
-    return;
-  }
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
-    const typedBlock = block as { type?: unknown; arguments?: unknown };
-    if (typedBlock.type !== "toolCall" || !typedBlock.arguments) {
-      continue;
-    }
-    if (typeof typedBlock.arguments === "object") {
-      typedBlock.arguments = decodeHtmlEntitiesInObject(typedBlock.arguments);
-    }
-  }
-}
-
-function wrapStreamDecodeXaiToolCallArguments(
-  stream: ReturnType<typeof streamSimple>,
-): ReturnType<typeof streamSimple> {
-  const originalResult = stream.result.bind(stream);
-  stream.result = async () => {
-    const message = await originalResult();
-    decodeXaiToolCallArgumentsInMessage(message);
-    return message;
-  };
-
-  const originalAsyncIterator = stream[Symbol.asyncIterator].bind(stream);
-  (stream as { [Symbol.asyncIterator]: typeof originalAsyncIterator })[Symbol.asyncIterator] =
-    function () {
-      const iterator = originalAsyncIterator();
-      return {
-        async next() {
-          const result = await iterator.next();
-          if (!result.done && result.value && typeof result.value === "object") {
-            const event = result.value as { partial?: unknown; message?: unknown };
-            decodeXaiToolCallArgumentsInMessage(event.partial);
-            decodeXaiToolCallArgumentsInMessage(event.message);
-          }
-          return result;
-        },
-        async return(value?: unknown) {
-          return iterator.return?.(value) ?? { done: true as const, value: undefined };
-        },
-        async throw(error?: unknown) {
-          return iterator.throw?.(error) ?? { done: true as const, value: undefined };
-        },
-      };
-    };
-  return stream;
+export function shouldRepairMalformedToolCallArguments(params: {
+  provider?: string;
+  modelApi?: string | null;
+}): boolean {
+  return (
+    (normalizeProviderId(params.provider ?? "") === "kimi" &&
+      params.modelApi === "anthropic-messages") ||
+    params.modelApi === "openai-completions"
+  );
 }
 
 export function wrapStreamFnDecodeXaiToolCallArguments(baseFn: StreamFn): StreamFn {
-  return (model, context, options) => {
-    const maybeStream = baseFn(model, context, options);
-    if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
-      return Promise.resolve(maybeStream).then((stream) =>
-        wrapStreamDecodeXaiToolCallArguments(stream),
-      );
-    }
-    return wrapStreamDecodeXaiToolCallArguments(maybeStream);
-  };
+  return createHtmlEntityToolCallArgumentDecodingWrapper(baseFn);
 }
+
+export { decodeHtmlEntitiesInObject };

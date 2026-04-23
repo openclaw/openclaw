@@ -1,3 +1,5 @@
+import { formatErrorMessage } from "../../infra/errors.js";
+
 type BatchOutputErrorLike = {
   error?: { message?: string };
   response?: {
@@ -26,6 +28,6 @@ export function extractBatchErrorMessage(lines: BatchOutputErrorLike[]): string 
 }
 
 export function formatUnavailableBatchError(err: unknown): string | undefined {
-  const message = err instanceof Error ? err.message : String(err);
+  const message = formatErrorMessage(err);
   return message ? `error file unavailable: ${message}` : undefined;
 }

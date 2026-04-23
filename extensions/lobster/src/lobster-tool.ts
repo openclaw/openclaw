@@ -1,4 +1,4 @@
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import {
   createEmbeddedLobsterRunner,
@@ -6,7 +6,11 @@ import {
   type LobsterRunner,
   type LobsterRunnerParams,
 } from "./lobster-runner.js";
-import { resumeManagedLobsterFlow, runManagedLobsterFlow } from "./lobster-taskflow.js";
+import {
+  type ManagedLobsterFlowResult,
+  resumeManagedLobsterFlow,
+  runManagedLobsterFlow,
+} from "./lobster-taskflow.js";
 
 type BoundTaskFlow = ReturnType<
   NonNullable<OpenClawPluginApi["runtime"]>["taskFlow"]["bindSession"]
@@ -40,6 +44,13 @@ type ManagedFlowResumeParams = {
   expectedRevision: number;
   currentStep?: string;
   waitingStep?: string;
+};
+
+type ManagedFlowSuccessResult = {
+  ok: true;
+  envelope: unknown;
+  flow: unknown;
+  mutation: unknown;
 };
 
 function readOptionalTrimmedString(value: unknown, fieldName: string): string | undefined {
@@ -130,6 +141,7 @@ function parseResumeFlowParams(params: Record<string, unknown>): ManagedFlowResu
   const currentStep = readOptionalTrimmedString(params.flowCurrentStep, "flowCurrentStep");
   const waitingStep = readOptionalTrimmedString(params.flowWaitingStep, "flowWaitingStep");
   const token = readOptionalTrimmedString(params.token, "token");
+  const approvalId = readOptionalTrimmedString(params.approvalId, "approvalId");
   const approve = readOptionalBoolean(params.approve, "approve");
   const runControllerId = readOptionalTrimmedString(params.flowControllerId, "flowControllerId");
   const runGoal = readOptionalTrimmedString(params.flowGoal, "flowGoal");
@@ -153,8 +165,8 @@ function parseResumeFlowParams(params: Record<string, unknown>): ManagedFlowResu
   if (expectedRevision === undefined) {
     throw new Error("flowExpectedRevision required when using managed TaskFlow resume mode");
   }
-  if (!token) {
-    throw new Error("token required when using managed TaskFlow resume mode");
+  if (!token && !approvalId) {
+    throw new Error("token or approvalId required when using managed TaskFlow resume mode");
   }
   if (approve === undefined) {
     throw new Error("approve required when using managed TaskFlow resume mode");
@@ -165,6 +177,36 @@ function parseResumeFlowParams(params: Record<string, unknown>): ManagedFlowResu
     ...(currentStep ? { currentStep } : {}),
     ...(waitingStep ? { waitingStep } : {}),
   };
+}
+
+function formatManagedFlowResult(result: ManagedFlowSuccessResult) {
+  const envelope =
+    result.envelope && typeof result.envelope === "object" && !Array.isArray(result.envelope)
+      ? result.envelope
+      : { envelope: result.envelope };
+  const details = {
+    ...envelope,
+    flow: result.flow,
+    mutation: result.mutation,
+  };
+  return {
+    content: [{ type: "text", text: JSON.stringify(details, null, 2) }],
+    details,
+  };
+}
+
+function requireTaskFlowRuntime(taskFlow: BoundTaskFlow | undefined, action: "run" | "resume") {
+  if (!taskFlow) {
+    throw new Error(`Managed TaskFlow ${action} mode requires a bound taskFlow runtime`);
+  }
+  return taskFlow;
+}
+
+function resolveManagedFlowToolResult(result: ManagedLobsterFlowResult) {
+  if (!result.ok) {
+    throw result.error;
+  }
+  return formatManagedFlowResult(result);
 }
 
 export function createLobsterTool(api: OpenClawPluginApi, options?: LobsterToolOptions) {
@@ -180,6 +222,7 @@ export function createLobsterTool(api: OpenClawPluginApi, options?: LobsterToolO
       pipeline: Type.Optional(Type.String()),
       argsJson: Type.Optional(Type.String()),
       token: Type.Optional(Type.String()),
+      approvalId: Type.Optional(Type.String()),
       approve: Type.Optional(Type.Boolean()),
       cwd: Type.Optional(
         Type.String({
@@ -220,6 +263,7 @@ export function createLobsterTool(api: OpenClawPluginApi, options?: LobsterToolO
         ...(typeof params.pipeline === "string" ? { pipeline: params.pipeline } : {}),
         ...(typeof params.argsJson === "string" ? { argsJson: params.argsJson } : {}),
         ...(typeof params.token === "string" ? { token: params.token } : {}),
+        ...(typeof params.approvalId === "string" ? { approvalId: params.approvalId } : {}),
         ...(typeof params.approve === "boolean" ? { approve: params.approve } : {}),
         cwd,
         timeoutMs,
@@ -230,63 +274,36 @@ export function createLobsterTool(api: OpenClawPluginApi, options?: LobsterToolO
       if (action === "run") {
         const flowParams = parseRunFlowParams(params);
         if (flowParams) {
-          if (!taskFlow) {
-            throw new Error("Managed TaskFlow run mode requires a bound taskFlow runtime");
-          }
-          const result = await runManagedLobsterFlow({
-            taskFlow,
-            runner,
-            runnerParams,
-            controllerId: flowParams.controllerId,
-            goal: flowParams.goal,
-            ...(flowParams.stateJson !== undefined ? { stateJson: flowParams.stateJson } : {}),
-            ...(flowParams.currentStep ? { currentStep: flowParams.currentStep } : {}),
-            ...(flowParams.waitingStep ? { waitingStep: flowParams.waitingStep } : {}),
-          });
-          if (!result.ok) {
-            throw result.error;
-          }
-          const details = {
-            ...result.envelope,
-            flow: result.flow,
-            mutation: result.mutation,
-          };
-          return {
-            content: [{ type: "text", text: JSON.stringify(details, null, 2) }],
-            details,
-          };
+          return resolveManagedFlowToolResult(
+            await runManagedLobsterFlow({
+              taskFlow: requireTaskFlowRuntime(taskFlow, "run"),
+              runner,
+              runnerParams,
+              controllerId: flowParams.controllerId,
+              goal: flowParams.goal,
+              ...(flowParams.stateJson !== undefined ? { stateJson: flowParams.stateJson } : {}),
+              ...(flowParams.currentStep ? { currentStep: flowParams.currentStep } : {}),
+              ...(flowParams.waitingStep ? { waitingStep: flowParams.waitingStep } : {}),
+            }),
+          );
         }
       } else {
         const flowParams = parseResumeFlowParams(params);
         if (flowParams) {
-          if (!taskFlow) {
-            throw new Error("Managed TaskFlow resume mode requires a bound taskFlow runtime");
-          }
-          const result = await resumeManagedLobsterFlow({
-            taskFlow,
-            runner,
-            runnerParams: runnerParams as LobsterRunnerParams & {
-              action: "resume";
-              token: string;
-              approve: boolean;
-            },
-            flowId: flowParams.flowId,
-            expectedRevision: flowParams.expectedRevision,
-            ...(flowParams.currentStep ? { currentStep: flowParams.currentStep } : {}),
-            ...(flowParams.waitingStep ? { waitingStep: flowParams.waitingStep } : {}),
-          });
-          if (!result.ok) {
-            throw result.error;
-          }
-          const details = {
-            ...result.envelope,
-            flow: result.flow,
-            mutation: result.mutation,
-          };
-          return {
-            content: [{ type: "text", text: JSON.stringify(details, null, 2) }],
-            details,
-          };
+          return resolveManagedFlowToolResult(
+            await resumeManagedLobsterFlow({
+              taskFlow: requireTaskFlowRuntime(taskFlow, "resume"),
+              runner,
+              runnerParams: runnerParams as LobsterRunnerParams & {
+                action: "resume";
+                approve: boolean;
+              } & ({ token: string } | { approvalId: string }),
+              flowId: flowParams.flowId,
+              expectedRevision: flowParams.expectedRevision,
+              ...(flowParams.currentStep ? { currentStep: flowParams.currentStep } : {}),
+              ...(flowParams.waitingStep ? { waitingStep: flowParams.waitingStep } : {}),
+            }),
+          );
         }
       }
 

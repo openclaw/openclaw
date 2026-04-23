@@ -624,11 +624,31 @@ public actor GatewayChannelActor {
             let detailCode = details?["code"]?.value as? String
             let canRetryWithDeviceToken = details?["canRetryWithDeviceToken"]?.value as? Bool ?? false
             let recommendedNextStep = details?["recommendedNextStep"]?.value as? String
+            let requestId = details?["requestId"]?.value as? String
+            let reason = details?["reason"]?.value as? String
+            let owner = details?["owner"]?.value as? String
+            let title = details?["title"]?.value as? String
+            let userMessage = details?["userMessage"]?.value as? String
+            let actionLabel = details?["actionLabel"]?.value as? String
+            let actionCommand = details?["actionCommand"]?.value as? String
+            let docsURLString = details?["docsUrl"]?.value as? String
+            let retryableOverride = details?["retryable"]?.value as? Bool
+            let pauseReconnectOverride = details?["pauseReconnect"]?.value as? Bool
             throw GatewayConnectAuthError(
                 message: msg,
                 detailCodeRaw: detailCode,
                 canRetryWithDeviceToken: canRetryWithDeviceToken,
-                recommendedNextStepRaw: recommendedNextStep)
+                recommendedNextStepRaw: recommendedNextStep,
+                requestId: requestId,
+                detailsReason: reason,
+                ownerRaw: owner,
+                titleOverride: title,
+                userMessageOverride: userMessage,
+                actionLabel: actionLabel,
+                actionCommand: actionCommand,
+                docsURLString: docsURLString,
+                retryableOverride: retryableOverride,
+                pauseReconnectOverride: pauseReconnectOverride)
         }
         guard let payload = res.payload else {
             throw NSError(

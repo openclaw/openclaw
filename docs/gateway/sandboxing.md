@@ -58,7 +58,7 @@ Not sandboxed:
 
 `agents.defaults.sandbox.backend` controls **which runtime** provides the sandbox:
 
-- `"docker"` (default): local Docker-backed sandbox runtime.
+- `"docker"` (default when sandboxing is enabled): local Docker-backed sandbox runtime.
 - `"ssh"`: generic SSH-backed remote sandbox runtime.
 - `"openshell"`: OpenShell-backed sandbox runtime.
 
@@ -76,6 +76,21 @@ OpenShell-specific config lives under `plugins.entries.openshell.config`.
 | **Browser sandbox** | Supported                        | Not supported                  | Not supported yet                                   |
 | **Bind mounts**     | `docker.binds`                   | N/A                            | N/A                                                 |
 | **Best for**        | Local dev, full isolation        | Offloading to a remote machine | Managed remote sandboxes with optional two-way sync |
+
+### Docker backend
+
+Sandboxing is off by default. If you enable sandboxing and do not choose a
+backend, OpenClaw uses the Docker backend. It executes tools and sandbox browsers
+locally via the Docker daemon socket (`/var/run/docker.sock`). Sandbox container
+isolation is determined by Docker namespaces.
+
+**Docker-out-of-Docker (DooD) Constraints**:
+If you deploy the OpenClaw Gateway itself as a Docker container, it orchestrates sibling sandbox containers using the host's Docker socket (DooD). This introduces a specific path mapping constraint:
+
+- **Config Requires Host Paths**: The `openclaw.json` `workspace` configuration MUST contain the **Host's absolute path** (e.g. `/home/user/.openclaw/workspaces`), not the internal Gateway container path. When OpenClaw asks the Docker daemon to spawn a sandbox, the daemon evaluates paths relative to the Host OS namespace, not the Gateway namespace.
+- **FS Bridge Parity (Identical Volume Map)**: The OpenClaw Gateway native process also writes heartbeat and bridge files to the `workspace` directory. Because the Gateway evaluates the exact same string (the host path) from within its own containerized environment, the Gateway deployment MUST include an identical volume map linking the host namespace natively (`-v /home/user/.openclaw:/home/user/.openclaw`).
+
+If you map paths internally without absolute host parity, OpenClaw natively throws an `EACCES` permission error attempting to write its heartbeat inside the container environment because the fully qualified path string doesn't exist natively.
 
 ### SSH backend
 

@@ -4,7 +4,10 @@ import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { CLAUDE_CLI_PROFILE_ID } from "../agents/auth-profiles/constants.js";
 import { resolveAuthStorePathForDisplay } from "../agents/auth-profiles/paths.js";
-import { ensureAuthProfileStore } from "../agents/auth-profiles/store.js";
+import {
+  ensureAuthProfileStore,
+  hasAnyAuthProfileStoreSource,
+} from "../agents/auth-profiles/store.js";
 import type {
   AuthProfileStore,
   OAuthCredential,
@@ -12,8 +15,13 @@ import type {
 } from "../agents/auth-profiles/types.js";
 import { readClaudeCliCredentialsCached } from "../agents/cli-credentials.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveExecutablePath } from "../infra/executable-path.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+  resolvePrimaryStringValue,
+} from "../shared/string-coerce.js";
 import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
 
@@ -27,33 +35,15 @@ type ClaudeCliReadableCredential =
 
 type ClaudeCliDirHealth = "present" | "missing" | "not_directory" | "unreadable" | "readonly";
 
-function resolveConfiguredPrimaryModelRef(
-  value: string | { primary?: string; fallbacks?: string[] } | undefined,
-): string | undefined {
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    return trimmed || undefined;
-  }
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  const primary = value.primary;
-  if (typeof primary !== "string") {
-    return undefined;
-  }
-  const trimmed = primary.trim();
-  return trimmed || undefined;
-}
-
 function usesClaudeCliModelSelection(cfg: OpenClawConfig): boolean {
-  const primary = resolveConfiguredPrimaryModelRef(
+  const primary = resolvePrimaryStringValue(
     cfg.agents?.defaults?.model as string | { primary?: string; fallbacks?: string[] } | undefined,
   );
-  if (primary?.trim().toLowerCase().startsWith(`${CLAUDE_CLI_PROVIDER}/`)) {
+  if (normalizeOptionalLowercaseString(primary)?.startsWith(`${CLAUDE_CLI_PROVIDER}/`)) {
     return true;
   }
   return Object.keys(cfg.agents?.defaults?.models ?? {}).some((key) =>
-    key.trim().toLowerCase().startsWith(`${CLAUDE_CLI_PROVIDER}/`),
+    normalizeOptionalLowercaseString(key)?.startsWith(`${CLAUDE_CLI_PROVIDER}/`),
   );
 }
 
@@ -62,7 +52,11 @@ function hasClaudeCliConfigSignals(cfg: OpenClawConfig): boolean {
     return true;
   }
   const backendConfig = cfg.agents?.defaults?.cliBackends ?? {};
-  if (Object.keys(backendConfig).some((key) => key.trim().toLowerCase() === CLAUDE_CLI_PROVIDER)) {
+  if (
+    Object.keys(backendConfig).some(
+      (key) => normalizeOptionalLowercaseString(key) === CLAUDE_CLI_PROVIDER,
+    )
+  ) {
     return true;
   }
   return Object.values(cfg.auth?.profiles ?? {}).some(
@@ -80,10 +74,10 @@ function hasClaudeCliStoreSignals(store: AuthProfileStore): boolean {
 function resolveClaudeCliCommand(cfg: OpenClawConfig): string {
   const configured = cfg.agents?.defaults?.cliBackends ?? {};
   for (const [key, entry] of Object.entries(configured)) {
-    if (key.trim().toLowerCase() !== CLAUDE_CLI_PROVIDER) {
+    if (normalizeOptionalLowercaseString(key) !== CLAUDE_CLI_PROVIDER) {
       continue;
     }
-    const command = entry?.command?.trim();
+    const command = normalizeOptionalString(entry?.command);
     if (command) {
       return command;
     }
@@ -120,7 +114,7 @@ export function resolveClaudeCliProjectDirForWorkspace(params: {
   workspaceDir: string;
   homeDir?: string;
 }): string {
-  const homeDir = params.homeDir?.trim() || process.env.HOME || os.homedir();
+  const homeDir = normalizeOptionalString(params.homeDir) || process.env.HOME || os.homedir();
   const canonicalWorkspaceDir = canonicalizeWorkspaceDir(params.workspaceDir);
   return path.join(
     homeDir,
@@ -204,13 +198,18 @@ export function noteClaudeCliHealth(
     workspaceDir?: string;
   },
 ) {
-  const store = deps?.store ?? ensureAuthProfileStore(undefined, { allowKeychainPrompt: false });
+  const hasConfigSignals = hasClaudeCliConfigSignals(cfg);
+  const store =
+    deps?.store ??
+    (hasConfigSignals || hasAnyAuthProfileStoreSource()
+      ? ensureAuthProfileStore(undefined, { allowKeychainPrompt: false })
+      : ({ version: 1, profiles: {} } as AuthProfileStore));
   const readClaudeCliCredentials =
     deps?.readClaudeCliCredentials ??
     (() => readClaudeCliCredentialsCached({ allowKeychainPrompt: false }));
   const credential = readClaudeCliCredentials();
 
-  if (!hasClaudeCliConfigSignals(cfg) && !hasClaudeCliStoreSignals(store) && !credential) {
+  if (!hasConfigSignals && !hasClaudeCliStoreSignals(store) && !credential) {
     return;
   }
 

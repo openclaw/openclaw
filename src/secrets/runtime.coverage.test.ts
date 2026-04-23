@@ -38,30 +38,51 @@ function loadCoverageRegistryEntries(): SecretRegistryEntry[] {
     "secretref-user-supplied-credentials-matrix.json",
   );
   const matrix = JSON.parse(fs.readFileSync(matrixPath, "utf8")) as SecretRefCredentialMatrix;
-  return matrix.entries.map((entry) => ({
-    id: entry.id,
-    configFile: entry.configFile,
-    pathPattern: entry.path,
-    ...(entry.refPath ? { refPathPattern: entry.refPath } : {}),
-    secretShape: entry.secretShape,
-    expectedResolvedValue: "string",
-    ...(entry.when?.type ? { authProfileType: entry.when.type } : {}),
-  }));
+  return matrix.entries.map((entry) =>
+    Object.assign(
+      { id: entry.id, configFile: entry.configFile, pathPattern: entry.path },
+      entry.refPath ? { refPathPattern: entry.refPath } : {},
+      { secretShape: entry.secretShape, expectedResolvedValue: "string" as const },
+      entry.when?.type ? { authProfileType: entry.when.type } : {},
+    ),
+  );
 }
 
 const COVERAGE_REGISTRY_ENTRIES = loadCoverageRegistryEntries();
 const DEBUG_COVERAGE_BATCHES = process.env.OPENCLAW_DEBUG_RUNTIME_COVERAGE === "1";
+const COVERAGE_LOADABLE_PLUGIN_ORIGINS =
+  buildCoverageLoadablePluginOrigins(COVERAGE_REGISTRY_ENTRIES);
+const PLUGIN_OWNED_OPENCLAW_COVERAGE_EXCLUSIONS = new Set([
+  "channels.googlechat.accounts.*.serviceAccount",
+  // Doctor migrates legacy web search config into plugin-owned webSearch config.
+  "tools.web.search.apiKey",
+  "tools.web.fetch.firecrawl.apiKey",
+]);
 
 let applyResolvedAssignments: typeof import("./runtime-shared.js").applyResolvedAssignments;
-let clearBootstrapChannelPluginCache: typeof import("../channels/plugins/bootstrap-registry.js").clearBootstrapChannelPluginCache;
-let clearBundledPluginMetadataCache: typeof import("../plugins/bundled-plugin-metadata.js").clearBundledPluginMetadataCache;
-let clearPluginManifestRegistryCache: typeof import("../plugins/manifest-registry.js").clearPluginManifestRegistryCache;
 let collectAuthStoreAssignments: typeof import("./runtime-auth-collectors.js").collectAuthStoreAssignments;
 let collectConfigAssignments: typeof import("./runtime-config-collectors.js").collectConfigAssignments;
 let createResolverContext: typeof import("./runtime-shared.js").createResolverContext;
-let resetFacadeRuntimeStateForTest: typeof import("../plugin-sdk/facade-runtime.js").resetFacadeRuntimeStateForTest;
 let resolveSecretRefValues: typeof import("./resolve.js").resolveSecretRefValues;
 let resolveRuntimeWebTools: typeof import("./runtime-web-tools.js").resolveRuntimeWebTools;
+
+async function ensureConfigCoverageRuntimeLoaded(): Promise<void> {
+  if (!collectConfigAssignments) {
+    ({ collectConfigAssignments } = await import("./runtime-config-collectors.js"));
+  }
+}
+
+async function ensureAuthCoverageRuntimeLoaded(): Promise<void> {
+  if (!collectAuthStoreAssignments) {
+    ({ collectAuthStoreAssignments } = await import("./runtime-auth-collectors.js"));
+  }
+}
+
+async function ensureRuntimeWebToolsLoaded(): Promise<void> {
+  if (!resolveRuntimeWebTools) {
+    ({ resolveRuntimeWebTools } = await import("./runtime-web-tools.js"));
+  }
+}
 
 function toConcretePathSegments(pathPattern: string, wildcardToken = "sample"): string[] {
   const segments = pathPattern.split(".").filter(Boolean);
@@ -190,6 +211,27 @@ function logCoverageBatch(label: string, batch: readonly SecretRegistryEntry[]):
   }
   process.stderr.write(
     `[runtime.coverage] ${label} batch (${batch.length}): ${batch.map((entry) => entry.id).join(", ")}\n`,
+  );
+}
+
+function batchNeedsRuntimeWebTools(batch: readonly SecretRegistryEntry[]): boolean {
+  return batch.some(
+    (entry) =>
+      entry.id.startsWith("tools.web.") ||
+      (entry.id.startsWith("plugins.entries.") &&
+        (entry.id.includes(".config.webSearch.") || entry.id.includes(".config.webFetch."))),
+  );
+}
+
+function batchUsesRuntimeWebToolsOnly(batch: readonly SecretRegistryEntry[]): boolean {
+  return (
+    batch.length > 0 &&
+    batch.every(
+      (entry) =>
+        entry.id.startsWith("tools.web.") ||
+        (entry.id.startsWith("plugins.entries.") &&
+          (entry.id.includes(".config.webSearch.") || entry.id.includes(".config.webFetch."))),
+    )
   );
 }
 
@@ -367,24 +409,70 @@ function applyAuthStoreTarget(
   });
 }
 
-async function prepareCoverageSnapshot(params: {
+async function prepareConfigCoverageSnapshot(params: {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
-  agentDirs: string[];
-  loadAuthStore: (agentDir?: string) => AuthProfileStore;
   loadablePluginOrigins?: ReadonlyMap<string, PluginOrigin>;
+  includeRuntimeWebTools?: boolean;
+  skipConfigCollectors?: boolean;
 }) {
-  const sourceConfig = structuredClone(params.config);
+  await ensureConfigCoverageRuntimeLoaded();
+  const sourceConfig = params.config;
   const resolvedConfig = structuredClone(params.config);
   const context = createResolverContext({
     sourceConfig,
     env: params.env,
   });
 
-  collectConfigAssignments({
+  if (!params.skipConfigCollectors) {
+    collectConfigAssignments({
+      config: resolvedConfig,
+      context,
+      loadablePluginOrigins: params.loadablePluginOrigins,
+    });
+  }
+
+  if (context.assignments.length > 0) {
+    const resolved = await resolveSecretRefValues(
+      context.assignments.map((assignment) => assignment.ref),
+      {
+        config: sourceConfig,
+        env: context.env,
+        cache: context.cache,
+      },
+    );
+    applyResolvedAssignments({
+      assignments: context.assignments,
+      resolved,
+    });
+  }
+
+  if (params.includeRuntimeWebTools) {
+    await ensureRuntimeWebToolsLoaded();
+    await resolveRuntimeWebTools({
+      sourceConfig,
+      resolvedConfig,
+      context,
+    });
+  }
+
+  return {
     config: resolvedConfig,
-    context,
-    loadablePluginOrigins: params.loadablePluginOrigins,
+    warnings: context.warnings,
+  };
+}
+
+async function prepareAuthCoverageSnapshot(params: {
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  agentDirs: string[];
+  loadAuthStore: (agentDir?: string) => AuthProfileStore;
+}) {
+  await ensureAuthCoverageRuntimeLoaded();
+  const sourceConfig = params.config;
+  const context = createResolverContext({
+    sourceConfig,
+    env: params.env,
   });
 
   const authStores = params.agentDirs.map((agentDir) => {
@@ -412,14 +500,7 @@ async function prepareCoverageSnapshot(params: {
     });
   }
 
-  await resolveRuntimeWebTools({
-    sourceConfig,
-    resolvedConfig,
-    context,
-  });
-
   return {
-    config: resolvedConfig,
     authStores,
     warnings: context.warnings,
   };
@@ -427,47 +508,21 @@ async function prepareCoverageSnapshot(params: {
 
 describe("secrets runtime target coverage", () => {
   beforeAll(async () => {
-    const [
-      bootstrapRegistry,
-      facadeRuntime,
-      bundledPluginMetadata,
-      manifestRegistry,
-      sharedRuntime,
-      authCollectors,
-      configCollectors,
-      resolver,
-      webTools,
-    ] = await Promise.all([
-      import("../channels/plugins/bootstrap-registry.js"),
-      import("../plugin-sdk/facade-runtime.js"),
-      import("../plugins/bundled-plugin-metadata.js"),
-      import("../plugins/manifest-registry.js"),
+    const [sharedRuntime, resolver] = await Promise.all([
       import("./runtime-shared.js"),
-      import("./runtime-auth-collectors.js"),
-      import("./runtime-config-collectors.js"),
       import("./resolve.js"),
-      import("./runtime-web-tools.js"),
     ]);
-    ({ clearBootstrapChannelPluginCache } = bootstrapRegistry);
-    ({ resetFacadeRuntimeStateForTest } = facadeRuntime);
-    ({ clearBundledPluginMetadataCache } = bundledPluginMetadata);
-    ({ clearPluginManifestRegistryCache } = manifestRegistry);
     ({ applyResolvedAssignments, createResolverContext } = sharedRuntime);
-    ({ collectAuthStoreAssignments } = authCollectors);
-    ({ collectConfigAssignments } = configCollectors);
     ({ resolveSecretRefValues } = resolver);
-    ({ resolveRuntimeWebTools } = webTools);
   });
 
   it("handles every openclaw.json registry target when configured as active", async () => {
     const entries = COVERAGE_REGISTRY_ENTRIES.filter(
-      (entry) => entry.configFile === "openclaw.json",
+      (entry) =>
+        entry.configFile === "openclaw.json" &&
+        !PLUGIN_OWNED_OPENCLAW_COVERAGE_EXCLUSIONS.has(entry.id),
     );
     for (const batch of buildCoverageBatches(entries)) {
-      clearBootstrapChannelPluginCache();
-      clearBundledPluginMetadataCache();
-      clearPluginManifestRegistryCache();
-      resetFacadeRuntimeStateForTest();
       logCoverageBatch("openclaw.json", batch);
       const config = {} as OpenClawConfig;
       const env: Record<string, string> = {};
@@ -479,12 +534,12 @@ describe("secrets runtime target coverage", () => {
         env[runtimeEnvId] = expectedValue;
         applyConfigForOpenClawTarget(config, entry, envId, wildcardToken);
       }
-      const snapshot = await prepareCoverageSnapshot({
+      const snapshot = await prepareConfigCoverageSnapshot({
         config,
         env,
-        agentDirs: ["/tmp/openclaw-agent-main"],
-        loadAuthStore: () => ({ version: 1, profiles: {} }),
-        loadablePluginOrigins: buildCoverageLoadablePluginOrigins(batch),
+        loadablePluginOrigins: COVERAGE_LOADABLE_PLUGIN_ORIGINS,
+        includeRuntimeWebTools: batchNeedsRuntimeWebTools(batch),
+        skipConfigCollectors: batchUsesRuntimeWebToolsOnly(batch),
       });
       for (const [index, entry] of batch.entries()) {
         const resolved = getPath(
@@ -512,7 +567,7 @@ describe("secrets runtime target coverage", () => {
         env[envId] = `resolved-${entry.id}`;
         applyAuthStoreTarget(authStore, entry, envId, resolveCoverageWildcardToken(index));
       }
-      const snapshot = await prepareCoverageSnapshot({
+      const snapshot = await prepareAuthCoverageSnapshot({
         config: {} as OpenClawConfig,
         env,
         agentDirs: ["/tmp/openclaw-agent-main"],

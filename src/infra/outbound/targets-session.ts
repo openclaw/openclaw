@@ -1,19 +1,19 @@
 import {
   comparableChannelTargetsShareRoute,
-  parseExplicitTargetForChannel,
-  resolveComparableTargetForChannel,
-} from "../../channels/plugins/target-parsing.js";
-import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.js";
+  parseExplicitTargetForLoadedChannel,
+  resolveComparableTargetForLoadedChannel,
+} from "../../channels/plugins/target-parsing-loaded.js";
+import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { deliveryContextFromSession } from "../../utils/delivery-context.js";
-import type {
-  DeliverableMessageChannel,
-  GatewayMessageChannel,
-} from "../../utils/message-channel.js";
+import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
 import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
-} from "../../utils/message-channel.js";
+} from "../../utils/message-channel-core.js";
+import type {
+  DeliverableMessageChannel,
+  GatewayMessageChannel,
+} from "../../utils/message-channel-normalize.js";
 
 export type SessionDeliveryTarget = {
   channel?: DeliverableMessageChannel;
@@ -42,7 +42,7 @@ function parseExplicitTargetWithPlugin(params: {
   if (!provider) {
     return null;
   }
-  return parseExplicitTargetForChannel(provider, raw);
+  return parseExplicitTargetForLoadedChannel(provider, raw);
 }
 
 export function resolveSessionDeliveryTarget(params: {
@@ -68,7 +68,7 @@ export function resolveSessionDeliveryTarget(params: {
   const sessionLastChannel =
     context?.channel && isDeliverableMessageChannel(context.channel) ? context.channel : undefined;
   const parsedSessionTarget = sessionLastChannel
-    ? resolveComparableTargetForChannel({
+    ? resolveComparableTargetForLoadedChannel({
         channel: sessionLastChannel,
         rawTarget: context?.to,
         fallbackThreadId: context?.threadId,
@@ -78,7 +78,7 @@ export function resolveSessionDeliveryTarget(params: {
   const hasTurnSourceChannel = params.turnSourceChannel != null;
   const parsedTurnSourceTarget =
     hasTurnSourceChannel && params.turnSourceChannel
-      ? resolveComparableTargetForChannel({
+      ? resolveComparableTargetForLoadedChannel({
           channel: params.turnSourceChannel,
           rawTarget: params.turnSourceTo,
           fallbackThreadId: params.turnSourceThreadId,

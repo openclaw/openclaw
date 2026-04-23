@@ -1,3 +1,5 @@
+import { normalizeOptionalString } from "../shared/string-coerce.js";
+
 const SSH_TOKEN = /^[A-Za-z0-9._-]+$/;
 const BRACKETED_IPV6 = /^\[[0-9A-Fa-f:.%]+\]$/;
 const WHITESPACE = /\s/;
@@ -14,10 +16,7 @@ function hasControlOrWhitespace(value: string): boolean {
 }
 
 export function normalizeScpRemoteHost(value: string | null | undefined): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
+  const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
     return undefined;
   }
@@ -63,10 +62,7 @@ export function isSafeScpRemoteHost(value: string | null | undefined): boolean {
 }
 
 export function normalizeScpRemotePath(value: string | null | undefined): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
+  const trimmed = normalizeOptionalString(value);
   if (!trimmed || !trimmed.startsWith("/")) {
     return undefined;
   }

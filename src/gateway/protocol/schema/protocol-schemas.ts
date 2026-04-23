@@ -1,10 +1,11 @@
-import type { TSchema } from "@sinclair/typebox";
+import type { TSchema } from "typebox";
 import {
   AgentEventSchema,
   AgentIdentityParamsSchema,
   AgentIdentityResultSchema,
   AgentParamsSchema,
   AgentWaitParamsSchema,
+  MessageActionParamsSchema,
   PollParamsSchema,
   SendParamsSchema,
   WakeParamsSchema,
@@ -49,6 +50,7 @@ import {
   ToolsEffectiveResultSchema,
 } from "./agents-models-skills.js";
 import {
+  ChannelsStartParamsSchema,
   ChannelsLogoutParamsSchema,
   TalkConfigParamsSchema,
   TalkConfigResultSchema,
@@ -60,6 +62,11 @@ import {
   WebLoginStartParamsSchema,
   WebLoginWaitParamsSchema,
 } from "./channels.js";
+import {
+  CommandEntrySchema,
+  CommandsListParamsSchema,
+  CommandsListResultSchema,
+} from "./commands.js";
 import {
   ConfigApplyParamsSchema,
   ConfigGetParamsSchema,
@@ -155,6 +162,15 @@ import {
 import {
   SessionsAbortParamsSchema,
   SessionsCompactParamsSchema,
+  SessionsCompactionBranchParamsSchema,
+  SessionsCompactionBranchResultSchema,
+  SessionsCompactionGetParamsSchema,
+  SessionsCompactionGetResultSchema,
+  SessionsCompactionListParamsSchema,
+  SessionsCompactionListResultSchema,
+  SessionsCompactionRestoreParamsSchema,
+  SessionsCompactionRestoreResultSchema,
+  SessionCompactionCheckpointSchema,
   SessionsCreateParamsSchema,
   SessionsDeleteParamsSchema,
   SessionsListParamsSchema,
@@ -191,6 +207,7 @@ export const ProtocolSchemas = {
   Snapshot: SnapshotSchema,
   ErrorShape: ErrorShapeSchema,
   AgentEvent: AgentEventSchema,
+  MessageActionParams: MessageActionParamsSchema,
   SendParams: SendParamsSchema,
   PollParams: PollParamsSchema,
   AgentParams: AgentParamsSchema,
@@ -224,6 +241,15 @@ export const ProtocolSchemas = {
   SessionsListParams: SessionsListParamsSchema,
   SessionsPreviewParams: SessionsPreviewParamsSchema,
   SessionsResolveParams: SessionsResolveParamsSchema,
+  SessionCompactionCheckpoint: SessionCompactionCheckpointSchema,
+  SessionsCompactionListParams: SessionsCompactionListParamsSchema,
+  SessionsCompactionGetParams: SessionsCompactionGetParamsSchema,
+  SessionsCompactionBranchParams: SessionsCompactionBranchParamsSchema,
+  SessionsCompactionRestoreParams: SessionsCompactionRestoreParamsSchema,
+  SessionsCompactionListResult: SessionsCompactionListResultSchema,
+  SessionsCompactionGetResult: SessionsCompactionGetResultSchema,
+  SessionsCompactionBranchResult: SessionsCompactionBranchResultSchema,
+  SessionsCompactionRestoreResult: SessionsCompactionRestoreResultSchema,
   SessionsCreateParams: SessionsCreateParamsSchema,
   SessionsSendParams: SessionsSendParamsSchema,
   SessionsMessagesSubscribeParams: SessionsMessagesSubscribeParamsSchema,
@@ -257,6 +283,7 @@ export const ProtocolSchemas = {
   TalkSpeakResult: TalkSpeakResultSchema,
   ChannelsStatusParams: ChannelsStatusParamsSchema,
   ChannelsStatusResult: ChannelsStatusResultSchema,
+  ChannelsStartParams: ChannelsStartParamsSchema,
   ChannelsLogoutParams: ChannelsLogoutParamsSchema,
   WebLoginStartParams: WebLoginStartParamsSchema,
   WebLoginWaitParams: WebLoginWaitParamsSchema,
@@ -279,6 +306,9 @@ export const ProtocolSchemas = {
   ModelChoice: ModelChoiceSchema,
   ModelsListParams: ModelsListParamsSchema,
   ModelsListResult: ModelsListResultSchema,
+  CommandEntry: CommandEntrySchema,
+  CommandsListParams: CommandsListParamsSchema,
+  CommandsListResult: CommandsListResultSchema,
   SkillsStatusParams: SkillsStatusParamsSchema,
   ToolsCatalogParams: ToolsCatalogParamsSchema,
   ToolCatalogProfile: ToolCatalogProfileSchema,

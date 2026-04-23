@@ -1,7 +1,8 @@
 import crypto from "node:crypto";
 import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import {
@@ -9,7 +10,7 @@ import {
   createRunningTaskRun,
   failTaskRunByRunId,
   recordTaskRunProgressByRunId,
-} from "../../tasks/task-executor.js";
+} from "../../tasks/detached-task-runtime.js";
 import { sendMessage } from "../../tasks/task-registry-delivery-runtime.js";
 import type { DeliveryContext } from "../../utils/delivery-context.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
@@ -24,6 +25,42 @@ export type MediaGenerationTaskHandle = {
   requesterSessionKey: string;
   requesterOrigin?: DeliveryContext;
   taskLabel: string;
+};
+
+type CreateMediaGenerationTaskRunParams = {
+  sessionKey?: string;
+  requesterOrigin?: DeliveryContext;
+  prompt: string;
+  providerId?: string;
+};
+
+type RecordMediaGenerationTaskProgressParams = {
+  handle: MediaGenerationTaskHandle | null;
+  progressSummary: string;
+  eventSummary?: string;
+};
+
+type CompleteMediaGenerationTaskRunParams = {
+  handle: MediaGenerationTaskHandle | null;
+  provider: string;
+  model: string;
+  count: number;
+  paths: string[];
+};
+
+type FailMediaGenerationTaskRunParams = {
+  handle: MediaGenerationTaskHandle | null;
+  error: unknown;
+};
+
+type WakeMediaGenerationTaskCompletionParams = {
+  config?: OpenClawConfig;
+  handle: MediaGenerationTaskHandle | null;
+  status: "ok" | "error";
+  statusLabel: string;
+  result: string;
+  mediaUrls?: string[];
+  statsLine?: string;
 };
 
 export function createMediaGenerationTaskRun(params: {
@@ -129,7 +166,7 @@ export function failMediaGenerationTaskRun(params: {
     return;
   }
   const endedAt = Date.now();
-  const errorText = params.error instanceof Error ? params.error.message : String(params.error);
+  const errorText = formatErrorMessage(params.error);
   failTaskRunByRunId({
     runId: params.handle.runId,
     runtime: "cli",
@@ -290,4 +327,56 @@ export async function wakeMediaGenerationTaskCompletion(params: {
       error: delivery.error,
     });
   }
+}
+
+export function createMediaGenerationTaskLifecycle(params: {
+  toolName: string;
+  taskKind: string;
+  label: string;
+  queuedProgressSummary: string;
+  generatedLabel: string;
+  failureProgressSummary: string;
+  eventSource: AgentInternalEvent["source"];
+  announceType: string;
+  completionLabel: string;
+}) {
+  return {
+    createTaskRun(runParams: CreateMediaGenerationTaskRunParams): MediaGenerationTaskHandle | null {
+      return createMediaGenerationTaskRun({
+        ...runParams,
+        toolName: params.toolName,
+        taskKind: params.taskKind,
+        label: params.label,
+        queuedProgressSummary: params.queuedProgressSummary,
+      });
+    },
+
+    recordTaskProgress(progressParams: RecordMediaGenerationTaskProgressParams) {
+      recordMediaGenerationTaskProgress(progressParams);
+    },
+
+    completeTaskRun(completionParams: CompleteMediaGenerationTaskRunParams) {
+      completeMediaGenerationTaskRun({
+        ...completionParams,
+        generatedLabel: params.generatedLabel,
+      });
+    },
+
+    failTaskRun(failureParams: FailMediaGenerationTaskRunParams) {
+      failMediaGenerationTaskRun({
+        ...failureParams,
+        progressSummary: params.failureProgressSummary,
+      });
+    },
+
+    async wakeTaskCompletion(completionParams: WakeMediaGenerationTaskCompletionParams) {
+      await wakeMediaGenerationTaskCompletion({
+        ...completionParams,
+        eventSource: params.eventSource,
+        announceType: params.announceType,
+        toolName: params.toolName,
+        completionLabel: params.completionLabel,
+      });
+    },
+  };
 }

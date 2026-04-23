@@ -1,6 +1,7 @@
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS } from "../../auto-reply/heartbeat.js";
-import type { ReplyPayload } from "../../auto-reply/types.js";
+import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { shouldSkipHeartbeatOnlyDelivery } from "../heartbeat-policy.js";
 
@@ -80,6 +81,18 @@ function isDeliverablePayload(payload: DeliveryPayload | null | undefined): bool
   return hasOutboundReplyContent(payload, { trimText: true }) || hasInteractive || hasChannelData;
 }
 
+function payloadHasStructuredDeliveryContent(payload: DeliveryPayload | null | undefined): boolean {
+  if (!payload) {
+    return false;
+  }
+  return (
+    payload.mediaUrl !== undefined ||
+    (payload.mediaUrls?.length ?? 0) > 0 ||
+    (payload.interactive?.blocks?.length ?? 0) > 0 ||
+    Object.keys(payload.channelData ?? {}).length > 0
+  );
+}
+
 export function pickLastDeliverablePayload(payloads: DeliveryPayload[]) {
   for (let i = payloads.length - 1; i >= 0; i--) {
     if (payloads[i]?.isError) {
@@ -124,24 +137,16 @@ export function resolveHeartbeatAckMaxChars(agentCfg?: { heartbeat?: { ackMaxCha
 export function resolveCronPayloadOutcome(params: {
   payloads: DeliveryPayload[];
   runLevelError?: unknown;
+  finalAssistantVisibleText?: string;
+  preferFinalAssistantVisibleText?: boolean;
 }): CronPayloadOutcome {
   const firstText = params.payloads[0]?.text ?? "";
-  const summary = pickSummaryFromPayloads(params.payloads) ?? pickSummaryFromOutput(firstText);
-  const outputText = pickLastNonEmptyTextFromPayloads(params.payloads);
-  const synthesizedText = outputText?.trim() || summary?.trim() || undefined;
+  const fallbackSummary =
+    pickSummaryFromPayloads(params.payloads) ?? pickSummaryFromOutput(firstText);
+  const fallbackOutputText = pickLastNonEmptyTextFromPayloads(params.payloads);
   const deliveryPayload = pickLastDeliverablePayload(params.payloads);
   const selectedDeliveryPayloads = pickDeliverablePayloads(params.payloads);
-  const resolvedDeliveryPayloads =
-    selectedDeliveryPayloads.length > 0
-      ? selectedDeliveryPayloads
-      : synthesizedText
-        ? [{ text: synthesizedText }]
-        : [];
-  const deliveryPayloadHasStructuredContent =
-    deliveryPayload?.mediaUrl !== undefined ||
-    (deliveryPayload?.mediaUrls?.length ?? 0) > 0 ||
-    (deliveryPayload?.interactive?.blocks?.length ?? 0) > 0 ||
-    Object.keys(deliveryPayload?.channelData ?? {}).length > 0;
+  const deliveryPayloadHasStructuredContent = payloadHasStructuredDeliveryContent(deliveryPayload);
   const hasErrorPayload = params.payloads.some((payload) => payload?.isError === true);
   const lastErrorPayloadIndex = params.payloads.findLastIndex(
     (payload) => payload?.isError === true,
@@ -153,6 +158,33 @@ export function resolveCronPayloadOutcome(params: {
       .slice(lastErrorPayloadIndex + 1)
       .some((payload) => payload?.isError !== true && Boolean(payload?.text?.trim()));
   const hasFatalErrorPayload = hasErrorPayload && !hasSuccessfulPayloadAfterLastError;
+  const normalizedFinalAssistantVisibleText = normalizeOptionalString(
+    params.finalAssistantVisibleText,
+  );
+  const hasStructuredDeliveryPayloads = selectedDeliveryPayloads.some((payload) =>
+    payloadHasStructuredDeliveryContent(payload),
+  );
+  // Keep structured/media announce payloads intact. Only collapse purely textual
+  // cron announce output to the final assistant-visible answer.
+  const shouldUseFinalAssistantVisibleText =
+    params.preferFinalAssistantVisibleText === true &&
+    normalizedFinalAssistantVisibleText !== undefined &&
+    !hasFatalErrorPayload &&
+    !hasStructuredDeliveryPayloads;
+  const summary = shouldUseFinalAssistantVisibleText
+    ? (pickSummaryFromOutput(normalizedFinalAssistantVisibleText) ?? fallbackSummary)
+    : fallbackSummary;
+  const outputText = shouldUseFinalAssistantVisibleText
+    ? normalizedFinalAssistantVisibleText
+    : fallbackOutputText;
+  const synthesizedText = normalizeOptionalString(outputText) ?? normalizeOptionalString(summary);
+  const resolvedDeliveryPayloads = shouldUseFinalAssistantVisibleText
+    ? [{ text: normalizedFinalAssistantVisibleText }]
+    : selectedDeliveryPayloads.length > 0
+      ? selectedDeliveryPayloads
+      : synthesizedText
+        ? [{ text: synthesizedText }]
+        : [];
   const lastErrorPayloadText = [...params.payloads]
     .toReversed()
     .find((payload) => payload?.isError === true && Boolean(payload?.text?.trim()))

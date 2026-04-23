@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { ImageGenerationProvider } from "openclaw/plugin-sdk/image-generation";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
@@ -7,12 +8,70 @@ import {
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
 import { OPENAI_DEFAULT_IMAGE_MODEL as DEFAULT_OPENAI_IMAGE_MODEL } from "./default-models.js";
+import { resolveConfiguredOpenAIBaseUrl, toOpenAIDataUrl } from "./shared.js";
 
 const DEFAULT_OPENAI_IMAGE_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_OUTPUT_MIME = "image/png";
 const DEFAULT_SIZE = "1024x1024";
-const OPENAI_SUPPORTED_SIZES = ["1024x1024", "1024x1536", "1536x1024"] as const;
+const OPENAI_SUPPORTED_SIZES = [
+  "1024x1024",
+  "1536x1024",
+  "1024x1536",
+  "2048x2048",
+  "2048x1152",
+  "3840x2160",
+  "2160x3840",
+] as const;
 const OPENAI_MAX_INPUT_IMAGES = 5;
+const MOCK_OPENAI_PROVIDER_ID = "mock-openai";
+
+const AZURE_HOSTNAME_SUFFIXES = [
+  ".openai.azure.com",
+  ".services.ai.azure.com",
+  ".cognitiveservices.azure.com",
+] as const;
+
+const DEFAULT_AZURE_OPENAI_API_VERSION = "2024-12-01-preview";
+
+function isAzureOpenAIBaseUrl(baseUrl?: string): boolean {
+  const trimmed = baseUrl?.trim();
+  if (!trimmed) {
+    return false;
+  }
+  try {
+    const hostname = new URL(trimmed).hostname.toLowerCase();
+    return AZURE_HOSTNAME_SUFFIXES.some((suffix) => hostname.endsWith(suffix));
+  } catch {
+    return false;
+  }
+}
+
+function resolveAzureApiVersion(): string {
+  return process.env.AZURE_OPENAI_API_VERSION?.trim() || DEFAULT_AZURE_OPENAI_API_VERSION;
+}
+
+function buildAzureImageUrl(
+  rawBaseUrl: string,
+  model: string,
+  action: "generations" | "edits",
+): string {
+  const cleanBase = rawBaseUrl.replace(/\/+$/, "").replace(/\/openai\/v1$/, "").replace(/\/v1$/, "");
+  return `${cleanBase}/openai/deployments/${model}/images/${action}?api-version=${resolveAzureApiVersion()}`;
+}
+
+function shouldAllowPrivateImageEndpoint(req: {
+  provider: string;
+  cfg: OpenClawConfig | undefined;
+}) {
+  if (req.provider === MOCK_OPENAI_PROVIDER_ID) {
+    return true;
+  }
+  const baseUrl = resolveConfiguredOpenAIBaseUrl(req.cfg);
+  if (!baseUrl.startsWith("http://127.0.0.1:") && !baseUrl.startsWith("http://localhost:")) {
+    return false;
+  }
+  return process.env.OPENCLAW_QA_ALLOW_LOCAL_IMAGE_PROVIDER === "1";
+}
 
 type OpenAIImageApiResponse = {
   data?: Array<{
@@ -20,15 +79,6 @@ type OpenAIImageApiResponse = {
     revised_prompt?: string;
   }>;
 };
-
-function resolveOpenAIBaseUrl(cfg: Parameters<typeof resolveApiKeyForProvider>[0]["cfg"]): string {
-  const direct = cfg?.models?.providers?.openai?.baseUrl?.trim();
-  return direct || DEFAULT_OPENAI_IMAGE_BASE_URL;
-}
-
-function toDataUrl(buffer: Buffer, mimeType: string): string {
-  return `data:${mimeType};base64,${buffer.toString("base64")}`;
-}
 
 export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
   return {
@@ -72,13 +122,17 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
       if (!auth.apiKey) {
         throw new Error("OpenAI API key missing");
       }
+      const rawBaseUrl = resolveConfiguredOpenAIBaseUrl(req.cfg);
+      const isAzure = isAzureOpenAIBaseUrl(rawBaseUrl);
+
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
         resolveProviderHttpRequestConfig({
-          baseUrl: resolveOpenAIBaseUrl(req.cfg),
+          baseUrl: rawBaseUrl,
           defaultBaseUrl: DEFAULT_OPENAI_IMAGE_BASE_URL,
-          defaultHeaders: {
-            Authorization: `Bearer ${auth.apiKey}`,
-          },
+          allowPrivateNetwork: shouldAllowPrivateImageEndpoint(req),
+          defaultHeaders: isAzure
+            ? { "api-key": auth.apiKey }
+            : { Authorization: `Bearer ${auth.apiKey}` },
           provider: "openai",
           capability: "image",
           transport: "http",
@@ -87,12 +141,15 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
       const model = req.model || DEFAULT_OPENAI_IMAGE_MODEL;
       const count = req.count ?? 1;
       const size = req.size ?? DEFAULT_SIZE;
+      const url = isAzure
+        ? buildAzureImageUrl(rawBaseUrl, model, isEdit ? "edits" : "generations")
+        : `${baseUrl}/images/${isEdit ? "edits" : "generations"}`;
       const requestResult = isEdit
         ? await (() => {
             const jsonHeaders = new Headers(headers);
             jsonHeaders.set("Content-Type", "application/json");
             return postJsonRequest({
-              url: `${baseUrl}/images/edits`,
+              url,
               headers: jsonHeaders,
               body: {
                 model,
@@ -100,7 +157,10 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
                 n: count,
                 size,
                 images: inputImages.map((image) => ({
-                  image_url: toDataUrl(image.buffer, image.mimeType?.trim() || DEFAULT_OUTPUT_MIME),
+                  image_url: toOpenAIDataUrl(
+                    image.buffer,
+                    image.mimeType?.trim() || DEFAULT_OUTPUT_MIME,
+                  ),
                 })),
               },
               timeoutMs: req.timeoutMs,
@@ -113,7 +173,7 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
             const jsonHeaders = new Headers(headers);
             jsonHeaders.set("Content-Type", "application/json");
             return postJsonRequest({
-              url: `${baseUrl}/images/generations`,
+              url,
               headers: jsonHeaders,
               body: {
                 model,
@@ -140,12 +200,14 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
             if (!entry.b64_json) {
               return null;
             }
-            return {
-              buffer: Buffer.from(entry.b64_json, "base64"),
-              mimeType: DEFAULT_OUTPUT_MIME,
-              fileName: `image-${index + 1}.png`,
-              ...(entry.revised_prompt ? { revisedPrompt: entry.revised_prompt } : {}),
-            };
+            return Object.assign(
+              {
+                buffer: Buffer.from(entry.b64_json, `base64`),
+                mimeType: DEFAULT_OUTPUT_MIME,
+                fileName: `image-${index + 1}.png`,
+              },
+              entry.revised_prompt ? { revisedPrompt: entry.revised_prompt } : {},
+            );
           })
           .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
 

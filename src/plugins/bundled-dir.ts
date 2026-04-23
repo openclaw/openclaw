@@ -3,12 +3,13 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { resolveUserPath } from "../utils.js";
 
 const DISABLED_BUNDLED_PLUGINS_DIR = path.join(os.tmpdir(), "openclaw-empty-bundled-plugins");
 
 function bundledPluginsDisabled(env: NodeJS.ProcessEnv): boolean {
-  const raw = env.OPENCLAW_DISABLE_BUNDLED_PLUGINS?.trim().toLowerCase();
+  const raw = normalizeOptionalLowercaseString(env.OPENCLAW_DISABLE_BUNDLED_PLUGINS);
   return raw === "1" || raw === "true";
 }
 
@@ -43,6 +44,36 @@ function hasUsableBundledPluginTree(pluginsDir: string): boolean {
   } catch {
     return false;
   }
+}
+
+function runningSourceTypeScriptProcess(): boolean {
+  const argv1 = process.argv[1]?.toLowerCase();
+  if (
+    argv1?.endsWith(".ts") ||
+    argv1?.endsWith(".tsx") ||
+    argv1?.endsWith(".mts") ||
+    argv1?.endsWith(".cts")
+  ) {
+    return true;
+  }
+
+  for (let index = 0; index < process.execArgv.length; index += 1) {
+    const arg = process.execArgv[index]?.toLowerCase();
+    if (!arg) {
+      continue;
+    }
+    if (arg === "tsx" || arg.includes("tsx/register")) {
+      return true;
+    }
+    if ((arg === "--import" || arg === "--loader") && process.execArgv[index + 1]) {
+      const next = process.execArgv[index + 1].toLowerCase();
+      if (next === "tsx" || next.includes("tsx/")) {
+        return true;
+      }
+    }
+  }
+
+  return false;
 }
 
 function resolveBundledDirFromPackageRoot(
@@ -105,7 +136,7 @@ export function resolveBundledPluginsDir(env: NodeJS.ProcessEnv = process.env): 
     return resolvedOverride;
   }
 
-  const preferSourceCheckout = Boolean(env.VITEST);
+  const preferSourceCheckout = Boolean(env.VITEST) || runningSourceTypeScriptProcess();
 
   try {
     const packageRoots = [

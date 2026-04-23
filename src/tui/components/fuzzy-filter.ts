@@ -2,6 +2,8 @@
  * Shared fuzzy filtering utilities for select list components.
  */
 
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+
 /**
  * Word boundary characters for matching.
  */
@@ -22,8 +24,8 @@ export function findWordBoundaryIndex(text: string, query: string): number | nul
   if (!query) {
     return null;
   }
-  const textLower = text.toLowerCase();
-  const queryLower = query.toLowerCase();
+  const textLower = normalizeLowercaseStringOrEmpty(text);
+  const queryLower = normalizeLowercaseStringOrEmpty(query);
   const maxIndex = textLower.length - queryLower.length;
   if (maxIndex < 0) {
     return null;
@@ -133,6 +135,6 @@ export function prepareSearchItems<
     if (item.searchText) {
       parts.push(item.searchText);
     }
-    return { ...item, searchTextLower: parts.join(" ").toLowerCase() };
+    return { ...item, searchTextLower: normalizeLowercaseStringOrEmpty(parts.join(" ")) };
   });
 }

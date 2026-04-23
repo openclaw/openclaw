@@ -1,11 +1,15 @@
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
+  asToolParamsRecord,
   jsonResult,
   readNumberParam,
   readStringParam,
-  type AnyAgentTool,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
-import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
+import type {
+  MemorySearchResult,
+  MemorySearchRuntimeDebug,
+} from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import {
   resolveMemoryCorePluginConfig,
   resolveMemoryDeepDreamingConfig,
@@ -70,6 +74,40 @@ function queueShortTermRecallTracking(params: {
   });
 }
 
+function normalizeActiveMemoryQmdSearchMode(
+  value: unknown,
+): "inherit" | "search" | "vsearch" | "query" {
+  return value === "inherit" || value === "search" || value === "vsearch" || value === "query"
+    ? value
+    : "search";
+}
+
+function isActiveMemorySessionKey(sessionKey?: string): boolean {
+  return typeof sessionKey === "string" && sessionKey.includes(":active-memory:");
+}
+
+function resolveActiveMemoryQmdSearchModeOverride(
+  cfg: OpenClawConfig,
+  sessionKey?: string,
+): "search" | "vsearch" | "query" | undefined {
+  if (!isActiveMemorySessionKey(sessionKey)) {
+    return undefined;
+  }
+  const entry = cfg.plugins?.entries?.["active-memory"];
+  const entryRecord =
+    entry && typeof entry === "object" && !Array.isArray(entry)
+      ? (entry as { config?: unknown })
+      : undefined;
+  const pluginConfig =
+    entryRecord?.config &&
+    typeof entryRecord.config === "object" &&
+    !Array.isArray(entryRecord.config)
+      ? (entryRecord.config as { qmd?: { searchMode?: unknown } })
+      : undefined;
+  const searchMode = normalizeActiveMemoryQmdSearchMode(pluginConfig?.qmd?.searchMode);
+  return searchMode === "inherit" ? undefined : searchMode;
+}
+
 async function getSupplementMemoryReadResult(params: {
   relPath: string;
   from?: number;
@@ -94,10 +132,56 @@ async function getSupplementMemoryReadResult(params: {
   };
 }
 
+async function resolveMemoryReadFailureResult(params: {
+  error: unknown;
+  requestedCorpus?: "memory" | "wiki" | "all";
+  relPath: string;
+  from?: number;
+  lines?: number;
+  agentSessionKey?: string;
+}) {
+  if (params.requestedCorpus === "all") {
+    const supplement = await getSupplementMemoryReadResult({
+      relPath: params.relPath,
+      from: params.from,
+      lines: params.lines,
+      agentSessionKey: params.agentSessionKey,
+      corpus: params.requestedCorpus,
+    });
+    if (supplement) {
+      return jsonResult(supplement);
+    }
+  }
+  const message = formatErrorMessage(params.error);
+  return jsonResult({ path: params.relPath, text: "", disabled: true, error: message });
+}
+
+async function executeMemoryReadResult<T>(params: {
+  read: () => Promise<T>;
+  requestedCorpus?: "memory" | "wiki" | "all";
+  relPath: string;
+  from?: number;
+  lines?: number;
+  agentSessionKey?: string;
+}) {
+  try {
+    return jsonResult(await params.read());
+  } catch (error) {
+    return await resolveMemoryReadFailureResult({
+      error,
+      requestedCorpus: params.requestedCorpus,
+      relPath: params.relPath,
+      from: params.from,
+      lines: params.lines,
+      agentSessionKey: params.agentSessionKey,
+    });
+  }
+}
+
 export function createMemorySearchTool(options: {
   config?: OpenClawConfig;
   agentSessionKey?: string;
-}): AnyAgentTool | null {
+}) {
   return createMemoryTool({
     options,
     label: "Memory Search",
@@ -108,10 +192,11 @@ export function createMemorySearchTool(options: {
     execute:
       ({ cfg, agentId }) =>
       async (_toolCallId, params) => {
-        const query = readStringParam(params, "query", { required: true });
-        const maxResults = readNumberParam(params, "maxResults");
-        const minScore = readNumberParam(params, "minScore");
-        const requestedCorpus = readStringParam(params, "corpus") as
+        const rawParams = asToolParamsRecord(params);
+        const query = readStringParam(rawParams, "query", { required: true });
+        const maxResults = readNumberParam(rawParams, "maxResults");
+        const minScore = readNumberParam(rawParams, "minScore");
+        const requestedCorpus = readStringParam(rawParams, "corpus") as
           | "memory"
           | "wiki"
           | "all"
@@ -129,17 +214,39 @@ export function createMemorySearchTool(options: {
             mode: citationsMode,
             sessionKey: options.agentSessionKey,
           });
+          const searchStartedAt = Date.now();
           let rawResults: MemorySearchResult[] = [];
-          let surfacedMemoryResults: Array<MemorySearchResult & { corpus: "memory" }> = [];
+          let surfacedMemoryResults: Array<
+            Record<string, unknown> & { corpus: "memory"; score: number; path: string }
+          > = [];
           let provider: string | undefined;
           let model: string | undefined;
           let fallback: unknown;
           let searchMode: string | undefined;
+          let searchDebug:
+            | {
+                backend: string;
+                configuredMode?: string;
+                effectiveMode?: string;
+                fallback?: string;
+                searchMs: number;
+                hits: number;
+              }
+            | undefined;
           if (shouldQueryMemory && memory && !("error" in memory)) {
+            const runtimeDebug: MemorySearchRuntimeDebug[] = [];
+            const qmdSearchModeOverride = resolveActiveMemoryQmdSearchModeOverride(
+              cfg,
+              options.agentSessionKey,
+            );
             rawResults = await memory.manager.search(query, {
               maxResults,
               minScore,
               sessionKey: options.agentSessionKey,
+              qmdSearchModeOverride,
+              onDebug: (debug) => {
+                runtimeDebug.push(debug);
+              },
             });
             const status = memory.manager.status();
             const decorated = decorateCitations(rawResults, includeCitations);
@@ -166,7 +273,19 @@ export function createMemorySearchTool(options: {
             provider = status.provider;
             model = status.model;
             fallback = status.fallback;
-            searchMode = (status.custom as { searchMode?: string } | undefined)?.searchMode;
+            const latestDebug = runtimeDebug.at(-1);
+            searchMode = latestDebug?.effectiveMode;
+            searchDebug = {
+              backend: status.backend,
+              configuredMode: latestDebug?.configuredMode,
+              effectiveMode:
+                status.backend === "qmd"
+                  ? (latestDebug?.effectiveMode ?? latestDebug?.configuredMode)
+                  : "n/a",
+              fallback: latestDebug?.fallback,
+              searchMs: Math.max(0, Date.now() - searchStartedAt),
+              hits: rawResults.length,
+            };
           }
           const supplementResults = shouldQuerySupplements
             ? await searchMemoryCorpusSupplements({
@@ -191,9 +310,10 @@ export function createMemorySearchTool(options: {
             fallback,
             citations: citationsMode,
             mode: searchMode,
+            debug: searchDebug,
           });
         } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
+          const message = formatErrorMessage(err);
           return jsonResult(buildMemorySearchUnavailableResult(message));
         }
       },
@@ -203,21 +323,22 @@ export function createMemorySearchTool(options: {
 export function createMemoryGetTool(options: {
   config?: OpenClawConfig;
   agentSessionKey?: string;
-}): AnyAgentTool | null {
+}) {
   return createMemoryTool({
     options,
     label: "Memory Get",
     name: "memory_get",
     description:
-      "Safe snippet read from MEMORY.md or memory/*.md with optional from/lines; `corpus=wiki` reads from registered compiled-wiki supplements. Use after search to pull only the needed lines and keep context small.",
+      "Safe exact excerpt read from MEMORY.md or memory/*.md. Defaults to a bounded excerpt when lines are omitted, includes truncation/continuation info when more content exists, and `corpus=wiki` reads from registered compiled-wiki supplements.",
     parameters: MemoryGetSchema,
     execute:
       ({ cfg, agentId }) =>
       async (_toolCallId, params) => {
-        const relPath = readStringParam(params, "path", { required: true });
-        const from = readNumberParam(params, "from", { integer: true });
-        const lines = readNumberParam(params, "lines", { integer: true });
-        const requestedCorpus = readStringParam(params, "corpus") as
+        const rawParams = asToolParamsRecord(params);
+        const relPath = readStringParam(rawParams, "path", { required: true });
+        const from = readNumberParam(rawParams, "from", { integer: true });
+        const lines = readNumberParam(rawParams, "lines", { integer: true });
+        const requestedCorpus = readStringParam(rawParams, "corpus") as
           | "memory"
           | "wiki"
           | "all"
@@ -242,31 +363,21 @@ export function createMemoryGetTool(options: {
         }
         const resolved = resolveMemoryBackendConfig({ cfg, agentId });
         if (resolved.backend === "builtin") {
-          try {
-            const result = await readAgentMemoryFile({
-              cfg,
-              agentId,
-              relPath,
-              from: from ?? undefined,
-              lines: lines ?? undefined,
-            });
-            return jsonResult(result);
-          } catch (err) {
-            if (requestedCorpus === "all") {
-              const supplement = await getSupplementMemoryReadResult({
+          return await executeMemoryReadResult({
+            read: async () =>
+              await readAgentMemoryFile({
+                cfg,
+                agentId,
                 relPath,
                 from: from ?? undefined,
                 lines: lines ?? undefined,
-                agentSessionKey: options.agentSessionKey,
-                corpus: requestedCorpus,
-              });
-              if (supplement) {
-                return jsonResult(supplement);
-              }
-            }
-            const message = err instanceof Error ? err.message : String(err);
-            return jsonResult({ path: relPath, text: "", disabled: true, error: message });
-          }
+              }),
+            requestedCorpus,
+            relPath,
+            from: from ?? undefined,
+            lines: lines ?? undefined,
+            agentSessionKey: options.agentSessionKey,
+          });
         }
         const memory = await getMemoryManagerContextWithPurpose({
           cfg,
@@ -276,29 +387,19 @@ export function createMemoryGetTool(options: {
         if ("error" in memory) {
           return jsonResult({ path: relPath, text: "", disabled: true, error: memory.error });
         }
-        try {
-          const result = await memory.manager.readFile({
-            relPath,
-            from: from ?? undefined,
-            lines: lines ?? undefined,
-          });
-          return jsonResult(result);
-        } catch (err) {
-          if (requestedCorpus === "all") {
-            const supplement = await getSupplementMemoryReadResult({
+        return await executeMemoryReadResult({
+          read: async () =>
+            await memory.manager.readFile({
               relPath,
               from: from ?? undefined,
               lines: lines ?? undefined,
-              agentSessionKey: options.agentSessionKey,
-              corpus: requestedCorpus,
-            });
-            if (supplement) {
-              return jsonResult(supplement);
-            }
-          }
-          const message = err instanceof Error ? err.message : String(err);
-          return jsonResult({ path: relPath, text: "", disabled: true, error: message });
-        }
+            }),
+          requestedCorpus,
+          relPath,
+          from: from ?? undefined,
+          lines: lines ?? undefined,
+          agentSessionKey: options.agentSessionKey,
+        });
       },
   });
 }

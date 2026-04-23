@@ -22,7 +22,12 @@ export function forwardSignalToVitestProcessGroup(params) {
     params.kill(target, params.signal);
     return true;
   } catch (error) {
-    if (error && typeof error === "object" && "code" in error && error.code === "ESRCH") {
+    if (
+      error &&
+      typeof error === "object" &&
+      "code" in error &&
+      (error.code === "ESRCH" || error.code === "EPERM")
+    ) {
       return false;
     }
     throw error;

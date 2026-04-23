@@ -332,11 +332,20 @@ describe("resolveMedia getFile retry", () => {
   it("uses caller-provided fetch impl for file downloads", async () => {
     const getFile = vi.fn().mockResolvedValue({ file_path: "documents/file_42.pdf" });
     const callerFetch = vi.fn() as unknown as typeof fetch;
-    const dispatcherAttempts = [{ dispatcherPolicy: { mode: "direct" as const } }];
+    const dispatcherAttempts = [
+      {
+        dispatcherPolicy: {
+          mode: "explicit-proxy" as const,
+          proxyUrl: "http://localhost:6152",
+          allowPrivateProxy: true,
+        },
+      },
+    ];
     const callerTransport = {
       fetch: callerFetch,
       sourceFetch: callerFetch,
       dispatcherAttempts,
+      close: async () => {},
     };
     fetchRemoteMedia.mockResolvedValueOnce({
       buffer: Buffer.from("pdf-data"),
@@ -357,6 +366,7 @@ describe("resolveMedia getFile retry", () => {
       expect.objectContaining({
         fetchImpl: callerFetch,
         dispatcherAttempts,
+        trustExplicitProxyDns: true,
         shouldRetryFetchError: expect.any(Function),
         readIdleTimeoutMs: 30_000,
         ssrfPolicy: {
@@ -370,7 +380,7 @@ describe("resolveMedia getFile retry", () => {
   it("uses caller-provided fetch impl for sticker downloads", async () => {
     const getFile = vi.fn().mockResolvedValue({ file_path: "stickers/file_0.webp" });
     const callerFetch = vi.fn() as unknown as typeof fetch;
-    const callerTransport = { fetch: callerFetch, sourceFetch: callerFetch };
+    const callerTransport = { fetch: callerFetch, sourceFetch: callerFetch, close: async () => {} };
     fetchRemoteMedia.mockResolvedValueOnce({
       buffer: Buffer.from("sticker-data"),
       contentType: "image/webp",

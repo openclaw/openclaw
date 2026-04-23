@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { GroupPolicy } from "./types.base.js";
 
 export type RuntimeGroupPolicyResolution = {
@@ -103,7 +104,7 @@ export function warnMissingProviderGroupPolicyFallbackOnce(params: {
     return false;
   }
   warnedMissingProviderGroupPolicy.add(key);
-  const blockedLabel = params.blockedLabel?.trim() || "group messages";
+  const blockedLabel = normalizeOptionalString(params.blockedLabel) || "group messages";
   params.log(
     `${params.providerKey}: channels.${params.providerKey} is missing; defaulting groupPolicy to "allowlist" (${blockedLabel} blocked until explicitly configured).`,
   );

@@ -1,16 +1,16 @@
 // Keep provider onboarding helpers dependency-light so bundled provider plugins
 // do not pull heavyweight runtime graphs at activation time.
 
-import { DEFAULT_PROVIDER } from "../agents/defaults.js";
-import { resolveStaticAllowlistModelKey } from "../agents/model-ref-shared.js";
+import { ensureStaticModelAllowlistEntry } from "../agents/model-allowlist-entry.js";
 import { findNormalizedProviderKey } from "../agents/provider-id.js";
-import type { OpenClawConfig } from "../config/config.js";
 import type { AgentModelEntryConfig } from "../config/types.agent-defaults.js";
 import type {
   ModelApi,
   ModelDefinitionConfig,
   ModelProviderConfig,
 } from "../config/types.models.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolvePrimaryStringValue } from "../shared/string-coerce.js";
 
 export type { OpenClawConfig, ModelApi, ModelDefinitionConfig, ModelProviderConfig };
 export {
@@ -56,20 +56,6 @@ function normalizeAgentModelAliasEntry(entry: AgentModelAliasEntry): {
     return { modelRef: entry };
   }
   return entry;
-}
-
-function resolveCurrentPrimaryModel(model: unknown): string | undefined {
-  if (typeof model === "string") {
-    return model.trim() || undefined;
-  }
-  if (
-    model &&
-    typeof model === "object" &&
-    typeof (model as { primary?: unknown }).primary === "string"
-  ) {
-    return ((model as { primary: string }).primary || "").trim() || undefined;
-  }
-  return undefined;
 }
 
 type ProviderModelMergeState = {
@@ -196,13 +182,17 @@ export function applyOnboardAuthAgentModelsAndProviders(
     providers: Record<string, ModelProviderConfig>;
   },
 ): OpenClawConfig {
+  const mergedAgentModels = {
+    ...cfg.agents?.defaults?.models,
+    ...params.agentModels,
+  };
   return {
     ...cfg,
     agents: {
       ...cfg.agents,
       defaults: {
         ...cfg.agents?.defaults,
-        models: params.agentModels,
+        models: mergedAgentModels,
       },
     },
     models: {
@@ -236,7 +226,7 @@ export function applyOpencodeZenModelDefault(cfg: OpenClawConfig): {
   next: OpenClawConfig;
   changed: boolean;
 } {
-  const current = resolveCurrentPrimaryModel(cfg.agents?.defaults?.model);
+  const current = resolvePrimaryStringValue(cfg.agents?.defaults?.model);
   const normalizedCurrent =
     current && LEGACY_OPENCODE_ZEN_DEFAULT_MODELS.has(current)
       ? OPENCODE_ZEN_DEFAULT_MODEL
@@ -466,35 +456,5 @@ export function ensureModelAllowlistEntry(params: {
   modelRef: string;
   defaultProvider?: string;
 }): OpenClawConfig {
-  const rawModelRef = params.modelRef.trim();
-  if (!rawModelRef) {
-    return params.cfg;
-  }
-
-  const models = { ...params.cfg.agents?.defaults?.models };
-  const keySet = new Set<string>([rawModelRef]);
-  const canonicalKey = resolveStaticAllowlistModelKey(
-    rawModelRef,
-    params.defaultProvider ?? DEFAULT_PROVIDER,
-  );
-  if (canonicalKey) {
-    keySet.add(canonicalKey);
-  }
-
-  for (const key of keySet) {
-    models[key] = {
-      ...models[key],
-    };
-  }
-
-  return {
-    ...params.cfg,
-    agents: {
-      ...params.cfg.agents,
-      defaults: {
-        ...params.cfg.agents?.defaults,
-        models,
-      },
-    },
-  };
+  return ensureStaticModelAllowlistEntry(params);
 }

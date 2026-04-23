@@ -1,6 +1,6 @@
 package ai.openclaw.app.ui
 
-import ai.openclaw.app.gateway.isPrivateLanGatewayHost
+import ai.openclaw.app.gateway.isLoopbackGatewayHost
 import java.util.Base64
 import java.util.Locale
 import java.net.URI
@@ -56,9 +56,9 @@ internal data class GatewayScannedSetupCodeResult(
 
 private val gatewaySetupJson = Json { ignoreUnknownKeys = true }
 private const val remoteGatewaySecurityRule =
-  "Tailscale and public mobile nodes require wss:// or Tailscale Serve. ws:// is allowed for private LAN, localhost, and the Android emulator."
+  "Tailscale and public mobile nodes require wss:// or Tailscale Serve. ws:// is allowed only for localhost and the Android emulator."
 private const val remoteGatewaySecurityFix =
-  "Use a private LAN host/address, or enable Tailscale Serve / expose a wss:// gateway URL."
+  "Use localhost/the Android emulator, or enable Tailscale Serve / expose a wss:// gateway URL."
 
 internal fun resolveGatewayConnectConfig(
   useSetupCode: Boolean,
@@ -143,7 +143,7 @@ internal fun parseGatewayEndpoint(rawInput: String): GatewayEndpointConfig? {
       "wss", "https" -> true
       else -> true
     }
-  if (!tls && !isPrivateLanGatewayHost(host)) {
+  if (!tls && !isLoopbackGatewayHost(host)) {
     return GatewayEndpointParseResult(error = GatewayEndpointValidationError.INSECURE_REMOTE_URL)
   }
   val defaultPort =
@@ -235,15 +235,21 @@ internal fun gatewayEndpointValidationMessage(
       when (source) {
         GatewayEndpointInputSource.SETUP_CODE -> "Setup code has invalid gateway URL."
         GatewayEndpointInputSource.QR_SCAN -> "QR code did not contain a valid setup code."
-        GatewayEndpointInputSource.MANUAL -> "Enter a valid manual host and port to connect."
+        GatewayEndpointInputSource.MANUAL -> "Enter a valid manual endpoint to connect."
       }
   }
 }
 
 internal fun composeGatewayManualUrl(hostInput: String, portInput: String, tls: Boolean): String? {
   val host = hostInput.trim()
-  val port = portInput.trim().toIntOrNull() ?: return null
-  if (host.isEmpty() || port !in 1..65535) return null
+  if (host.isEmpty()) return null
+  val portTrimmed = portInput.trim()
+  val port = if (portTrimmed.isEmpty()) {
+    if (tls) 443 else return null
+  } else {
+    portTrimmed.toIntOrNull() ?: return null
+  }
+  if (port !in 1..65535) return null
   val scheme = if (tls) "https" else "http"
   return "$scheme://$host:$port"
 }

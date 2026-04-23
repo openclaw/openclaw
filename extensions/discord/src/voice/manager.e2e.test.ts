@@ -1,5 +1,7 @@
 import { ChannelType } from "@buape/carbon";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createVoiceCaptureState } from "./capture-state.js";
+import { createVoiceReceiveRecoveryState } from "./receive-recovery.js";
 
 const {
   createConnectionMock,
@@ -263,13 +265,8 @@ describe("DiscordVoiceManager", () => {
         player: createAudioPlayerMock(),
         playbackQueue: Promise.resolve(),
         processingQueue: Promise.resolve(),
-        activeSpeakers: new Set<string>(),
-        activeCaptureStreams: new Map(),
-        captureFinalizeTimers: new Map(),
-        captureGenerations: new Map(),
-        decryptFailureCount: 0,
-        lastDecryptFailureAt: 0,
-        decryptRecoveryInFlight: false,
+        capture: createVoiceCaptureState(),
+        receiveRecovery: createVoiceReceiveRecoveryState(),
       },
       wavPath: "/tmp/test.wav",
       userId,
@@ -383,7 +380,9 @@ describe("DiscordVoiceManager", () => {
 
   it("re-arms passthrough but still rejoin-recovers after repeated decrypt failures", async () => {
     const connection = createConnectionMock();
-    joinVoiceChannelMock.mockReturnValueOnce(connection).mockReturnValueOnce(createConnectionMock());
+    joinVoiceChannelMock
+      .mockReturnValueOnce(connection)
+      .mockReturnValueOnce(createConnectionMock());
     const manager = createManager();
 
     await manager.join({ guildId: "g1", channelId: "1001" });
@@ -408,22 +407,29 @@ describe("DiscordVoiceManager", () => {
 
       await manager.join({ guildId: "g1", channelId: "1001" });
 
-      const entry = (manager as unknown as { sessions: Map<string, unknown> }).sessions.get("g1") as
+      const entry = (manager as unknown as { sessions: Map<string, unknown> }).sessions.get(
+        "g1",
+      ) as
         | {
             guildId: string;
             channelId: string;
-            activeSpeakers: Set<string>;
-            activeCaptureStreams: Map<string, { generation: number; stream: { destroy: () => void } }>;
-            captureFinalizeTimers: Map<string, unknown>;
-            captureGenerations: Map<string, number>;
+            capture: {
+              activeSpeakers: Set<string>;
+              activeCaptureStreams: Map<
+                string,
+                { generation: number; stream: { destroy: () => void } }
+              >;
+              captureFinalizeTimers: Map<string, unknown>;
+              captureGenerations: Map<string, number>;
+            };
           }
         | undefined;
       expect(entry).toBeDefined();
 
       const firstStream = { destroy: vi.fn() };
-      entry?.activeSpeakers.add("u1");
-      entry?.captureGenerations.set("u1", 1);
-      entry?.activeCaptureStreams.set("u1", { generation: 1, stream: firstStream });
+      entry?.capture.activeSpeakers.add("u1");
+      entry?.capture.captureGenerations.set("u1", 1);
+      entry?.capture.activeCaptureStreams.set("u1", { generation: 1, stream: firstStream });
 
       (
         manager as unknown as {
@@ -434,7 +440,7 @@ describe("DiscordVoiceManager", () => {
       await vi.advanceTimersByTimeAsync(1_200);
 
       expect(firstStream.destroy).toHaveBeenCalledTimes(1);
-      expect(entry?.activeSpeakers.has("u1")).toBe(false);
+      expect(entry?.capture.activeSpeakers.has("u1")).toBe(false);
 
       const secondStream = {
         on: vi.fn(),

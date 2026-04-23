@@ -1,9 +1,10 @@
+import fs from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
-import { seedSessionStore, withTempHeartbeatSandbox } from "./heartbeat-runner.test-utils.js";
+import { withTempHeartbeatSandbox } from "./heartbeat-runner.test-utils.js";
 
 installHeartbeatRunnerTestRuntime();
 
@@ -29,20 +30,25 @@ describe("runHeartbeatOnce", () => {
       };
 
       const mainSessionKey = resolveMainSessionKey(cfg);
-      await seedSessionStore(storePath, mainSessionKey, {
-        sessionId: "sid-main",
-        updatedAt: Date.now(),
-        lastChannel: "whatsapp",
-        lastProvider: "whatsapp",
-        lastTo: "120363401234567890@g.us",
-      });
-      await seedSessionStore(storePath, "agent:main:subagent:demo", {
-        sessionId: "sid-subagent",
-        updatedAt: Date.now(),
-        lastChannel: "whatsapp",
-        lastProvider: "whatsapp",
-        lastTo: "120363409999999999@g.us",
-      });
+      await fs.writeFile(
+        storePath,
+        JSON.stringify({
+          [mainSessionKey]: {
+            sessionId: "sid-main",
+            updatedAt: Date.now(),
+            lastChannel: "whatsapp",
+            lastProvider: "whatsapp",
+            lastTo: "120363401234567890@g.us",
+          },
+          "agent:main:subagent:demo": {
+            sessionId: "sid-subagent",
+            updatedAt: Date.now(),
+            lastChannel: "whatsapp",
+            lastProvider: "whatsapp",
+            lastTo: "120363409999999999@g.us",
+          },
+        }),
+      );
 
       replySpy.mockResolvedValue({ text: "Final alert" });
       const sendWhatsApp = vi.fn().mockResolvedValue({
@@ -61,11 +67,15 @@ describe("runHeartbeatOnce", () => {
         },
       });
 
-      expect(sendWhatsApp).toHaveBeenCalledTimes(1);
-      expect(sendWhatsApp).toHaveBeenCalledWith(
-        "120363401234567890@g.us",
-        "Final alert",
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      expect(replySpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          SessionKey: mainSessionKey,
+          OriginatingChannel: undefined,
+          OriginatingTo: undefined,
+        }),
         expect.anything(),
+        cfg,
       );
     });
   });

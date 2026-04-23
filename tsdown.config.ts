@@ -2,8 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { defineConfig, type UserConfig } from "tsdown";
 import {
-  listBundledPluginBuildEntries,
+  collectBundledPluginBuildEntries,
   listBundledPluginRuntimeDependencies,
+  NON_PACKAGED_BUNDLED_PLUGIN_DIRS,
 } from "./scripts/lib/bundled-plugin-build-entries.mjs";
 import { buildPluginSdkEntrySources } from "./scripts/lib/plugin-sdk-entries.mjs";
 
@@ -34,6 +35,10 @@ const SUPPRESSED_EVAL_WARNING_PATHS = [
   "bottleneck/lib/RedisConnection.js",
 ] as const;
 
+function normalizedLogHaystack(log: { message?: string; id?: string; importer?: string }): string {
+  return [log.message, log.id, log.importer].filter(Boolean).join("\n").replaceAll("\\", "/");
+}
+
 function buildInputOptions(options: InputOptionsArg): InputOptionsReturn {
   if (process.env.OPENCLAW_BUILD_VERBOSE === "1") {
     return undefined;
@@ -50,10 +55,13 @@ function buildInputOptions(options: InputOptionsArg): InputOptionsReturn {
     if (log.code === "PLUGIN_TIMINGS") {
       return true;
     }
+    if (log.code === "UNRESOLVED_IMPORT") {
+      return normalizedLogHaystack(log).includes("extensions/");
+    }
     if (log.code !== "EVAL") {
       return false;
     }
-    const haystack = [log.message, log.id, log.importer].filter(Boolean).join("\n");
+    const haystack = normalizedLogHaystack(log);
     return SUPPRESSED_EVAL_WARNING_PATHS.some((path) => haystack.includes(path));
   }
 
@@ -83,8 +91,9 @@ function nodeBuildConfig(config: UserConfig): UserConfig {
   };
 }
 
-const bundledPluginBuildEntries = listBundledPluginBuildEntries();
+const bundledPluginBuildEntries = collectBundledPluginBuildEntries();
 const bundledPluginRuntimeDependencies = listBundledPluginRuntimeDependencies();
+const shouldBuildPrivateQaEntries = process.env.OPENCLAW_BUILD_PRIVATE_QA === "1";
 
 function buildBundledHookEntries(): Record<string, string> {
   const hooksRoot = path.join(process.cwd(), "src", "hooks", "bundled");
@@ -115,6 +124,82 @@ const bundledHookEntries = buildBundledHookEntries();
 const bundledPluginRoot = (pluginId: string) => ["extensions", pluginId].join("/");
 const bundledPluginFile = (pluginId: string, relativePath: string) =>
   `${bundledPluginRoot(pluginId)}/${relativePath}`;
+const explicitNeverBundleDependencies = [
+  "@lancedb/lancedb",
+  "@matrix-org/matrix-sdk-crypto-nodejs",
+  "matrix-js-sdk",
+  ...bundledPluginRuntimeDependencies,
+].toSorted((left, right) => left.localeCompare(right));
+
+function shouldNeverBundleDependency(id: string): boolean {
+  return explicitNeverBundleDependencies.some((dependency) => {
+    return id === dependency || id.startsWith(`${dependency}/`);
+  });
+}
+
+function shouldStageBundledPluginRuntimeDependencies(packageJson: unknown): boolean {
+  return (
+    typeof packageJson === "object" &&
+    packageJson !== null &&
+    (packageJson as { openclaw?: { bundle?: { stageRuntimeDependencies?: boolean } } }).openclaw
+      ?.bundle?.stageRuntimeDependencies === true
+  );
+}
+
+function listBundledPluginEntrySources(
+  entries: Array<{
+    id: string;
+    packageJson: unknown;
+    sourceEntries: string[];
+  }>,
+): Record<string, string> {
+  return Object.fromEntries(
+    entries.flatMap(({ id, sourceEntries }) =>
+      sourceEntries.map((entry) => {
+        const normalizedEntry = entry.replace(/^\.\//u, "");
+        const entryKey = bundledPluginFile(id, normalizedEntry.replace(/\.[^.]+$/u, ""));
+        return [
+          entryKey,
+          normalizedEntry ? `extensions/${id}/${normalizedEntry}` : `extensions/${id}`,
+        ];
+      }),
+    ),
+  );
+}
+
+function normalizeBundledPluginOutEntry(entry: string): string {
+  return entry.replace(/^\.\//u, "").replace(/\.[^.]+$/u, "");
+}
+
+function isPluginSdkSelfReference(id: string): boolean {
+  return (
+    id === "openclaw/plugin-sdk" ||
+    id.startsWith("openclaw/plugin-sdk/") ||
+    id === "@openclaw/plugin-sdk" ||
+    id.startsWith("@openclaw/plugin-sdk/")
+  );
+}
+
+function buildBundledPluginNeverBundlePredicate(packageJson: {
+  dependencies?: Record<string, string>;
+  optionalDependencies?: Record<string, string>;
+}) {
+  const runtimeDependencies = shouldStageBundledPluginRuntimeDependencies(packageJson)
+    ? [
+        ...Object.keys(packageJson.dependencies ?? {}),
+        ...Object.keys(packageJson.optionalDependencies ?? {}),
+      ].toSorted((left, right) => left.localeCompare(right))
+    : [];
+
+  return (id: string): boolean => {
+    if (isPluginSdkSelfReference(id)) {
+      return true;
+    }
+    return runtimeDependencies.some((dependency) => {
+      return id === dependency || id.startsWith(`${dependency}/`);
+    });
+  };
+}
 
 function buildCoreDistEntries(): Record<string, string> {
   return {
@@ -127,10 +212,15 @@ function buildCoreDistEntries(): Record<string, string> {
     "agents/auth-profiles.runtime": "src/agents/auth-profiles.runtime.ts",
     "agents/model-catalog.runtime": "src/agents/model-catalog.runtime.ts",
     "agents/models-config.runtime": "src/agents/models-config.runtime.ts",
+    "subagent-registry.runtime": "src/agents/subagent-registry.runtime.ts",
     "agents/pi-model-discovery-runtime": "src/agents/pi-model-discovery-runtime.ts",
     "commands/status.summary.runtime": "src/commands/status.summary.runtime.ts",
+    "infra/boundary-file-read": "src/infra/boundary-file-read.ts",
     "plugins/provider-discovery.runtime": "src/plugins/provider-discovery.runtime.ts",
     "plugins/provider-runtime.runtime": "src/plugins/provider-runtime.runtime.ts",
+    "plugins/public-surface-runtime": "src/plugins/public-surface-runtime.ts",
+    "plugins/sdk-alias": "src/plugins/sdk-alias.ts",
+    "facade-activation-check.runtime": "src/plugin-sdk/facade-activation-check.runtime.ts",
     extensionAPI: "src/extensionAPI.ts",
     "infra/warning-filter": "src/infra/warning-filter.ts",
     "telegram/audit": bundledPluginFile("telegram", "src/audit.ts"),
@@ -143,6 +233,14 @@ function buildCoreDistEntries(): Record<string, string> {
 }
 
 const coreDistEntries = buildCoreDistEntries();
+const stagedBundledPluginBuildEntries = bundledPluginBuildEntries.filter(({ packageJson }) =>
+  shouldStageBundledPluginRuntimeDependencies(packageJson),
+);
+const rootBundledPluginBuildEntries = bundledPluginBuildEntries.filter(
+  ({ id, packageJson }) =>
+    !shouldStageBundledPluginRuntimeDependencies(packageJson) &&
+    (shouldBuildPrivateQaEntries || !NON_PACKAGED_BUNDLED_PLUGIN_DIRS.has(id)),
+);
 
 function buildUnifiedDistEntries(): Record<string, string> {
   return {
@@ -155,23 +253,49 @@ function buildUnifiedDistEntries(): Record<string, string> {
         source,
       ]),
     ),
-    ...bundledPluginBuildEntries,
+    ...(shouldBuildPrivateQaEntries
+      ? {
+          "plugin-sdk/qa-lab": "src/plugin-sdk/qa-lab.ts",
+          "plugin-sdk/qa-runtime": "src/plugin-sdk/qa-runtime.ts",
+        }
+      : {}),
+    ...listBundledPluginEntrySources(rootBundledPluginBuildEntries),
     ...bundledHookEntries,
   };
+}
+
+function buildBundledPluginConfigs(): UserConfig[] {
+  return stagedBundledPluginBuildEntries.map(({ id, packageJson, sourceEntries }) =>
+    nodeBuildConfig({
+      clean: false,
+      entry: Object.fromEntries(
+        sourceEntries.map((entry) => [
+          normalizeBundledPluginOutEntry(entry),
+          `extensions/${id}/${entry.replace(/^\.\//u, "")}`,
+        ]),
+      ),
+      outDir: `dist/extensions/${id}`,
+      deps: {
+        neverBundle: buildBundledPluginNeverBundlePredicate(
+          (packageJson ?? {}) as {
+            dependencies?: Record<string, string>;
+            optionalDependencies?: Record<string, string>;
+          },
+        ),
+      },
+    }),
+  );
 }
 
 export default defineConfig([
   nodeBuildConfig({
     // Build core entrypoints, plugin-sdk subpaths, bundled plugin entrypoints,
     // and bundled hooks in one graph so runtime singletons are emitted once.
+    clean: true,
     entry: buildUnifiedDistEntries(),
     deps: {
-      neverBundle: [
-        "@lancedb/lancedb",
-        "@matrix-org/matrix-sdk-crypto-nodejs",
-        "matrix-js-sdk",
-        ...bundledPluginRuntimeDependencies,
-      ],
+      neverBundle: shouldNeverBundleDependency,
     },
   }),
+  ...buildBundledPluginConfigs(),
 ]);

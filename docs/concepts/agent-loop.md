@@ -2,6 +2,7 @@
 summary: "Agent loop lifecycle, streams, and wait semantics"
 read_when:
   - You need an exact walkthrough of the agent loop or lifecycle events
+  - You are changing session queueing, transcript writes, or session write lock behavior
 title: "Agent Loop"
 ---
 
@@ -24,7 +25,7 @@ wired end-to-end.
 
 1. `agent` RPC validates params, resolves session (sessionKey/sessionId), persists session metadata, returns `{ runId, acceptedAt }` immediately.
 2. `agentCommand` runs the agent:
-   - resolves model + thinking/verbose defaults
+   - resolves model + thinking/verbose/trace defaults
    - loads skills snapshot
    - calls `runEmbeddedPiAgent` (pi-agent-core runtime)
    - emits **lifecycle end/error** if the embedded loop does not emit one
@@ -48,13 +49,21 @@ wired end-to-end.
 - This prevents tool/session races and keeps session history consistent.
 - Messaging channels can choose queue modes (collect/steer/followup) that feed this lane system.
   See [Command Queue](/concepts/queue).
+- Transcript writes are also protected by a session write lock on the session file. The lock is
+  process-aware and file-based, so it catches writers that bypass the in-process queue or come from
+  another process.
+- Session write locks are non-reentrant by default. If a helper intentionally nests acquisition of
+  the same lock while preserving one logical writer, it must opt in explicitly with
+  `allowReentrant: true`.
 
 ## Session + workspace preparation
 
 - Workspace is resolved and created; sandboxed runs may redirect to a sandbox workspace root.
 - Skills are loaded (or reused from a snapshot) and injected into env and prompt.
 - Bootstrap/context files are resolved and injected into the system prompt report.
-- A session write lock is acquired; `SessionManager` is opened and prepared before streaming.
+- A session write lock is acquired; `SessionManager` is opened and prepared before streaming. Any
+  later transcript rewrite, compaction, or truncation path must take the same lock before opening or
+  mutating the transcript file.
 
 ## Prompt assembly + system prompt
 
@@ -151,6 +160,7 @@ See [Plugin hooks](/plugins/architecture#provider-runtime-hooks) for the hook AP
 
 - `agent.wait` default: 30s (just the wait). `timeoutMs` param overrides.
 - Agent runtime: `agents.defaults.timeoutSeconds` default 172800s (48 hours); enforced in `runEmbeddedPiAgent` abort timer.
+- LLM idle timeout: `agents.defaults.llm.idleTimeoutSeconds` aborts a model request when no response chunks arrive before the idle window. Set it explicitly for slow local models or reasoning/tool-call providers; set it to 0 to disable. If it is not set, OpenClaw uses `agents.defaults.timeoutSeconds` when configured, otherwise 120s. Cron-triggered runs with no explicit LLM or agent timeout disable the idle watchdog and rely on the cron outer timeout.
 
 ## Where things can end early
 

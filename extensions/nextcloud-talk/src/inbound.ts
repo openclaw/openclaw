@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import {
   GROUP_POLICY_BLOCKED_LABEL,
   createChannelPairingController,
@@ -30,16 +31,18 @@ import type { CoreConfig, NextcloudTalkInboundMessage } from "./types.js";
 const CHANNEL_ID = "nextcloud-talk" as const;
 
 async function deliverNextcloudTalkReply(params: {
+  cfg: CoreConfig;
   payload: OutboundReplyPayload;
   roomToken: string;
   accountId: string;
   statusSink?: (patch: { lastOutboundAt?: number }) => void;
 }): Promise<void> {
-  const { payload, roomToken, accountId, statusSink } = params;
+  const { cfg, payload, roomToken, accountId, statusSink } = params;
   await deliverFormattedTextWithAttachments({
     payload,
     send: async ({ text, replyToId }) => {
       await sendMessageNextcloudTalk(roomToken, text, {
+        cfg,
         accountId,
         replyTo: replyToId,
       });
@@ -176,7 +179,10 @@ export async function handleNextcloudTalkInbound(params: {
           senderIdLine: `Your Nextcloud user id: ${senderId}`,
           meta: { name: senderName || undefined },
           sendPairingReply: async (text) => {
-            await sendMessageNextcloudTalk(roomToken, text, { accountId: account.accountId });
+            await sendMessageNextcloudTalk(roomToken, text, {
+              cfg: config,
+              accountId: account.accountId,
+            });
             statusSink?.({ lastOutboundAt: Date.now() });
           },
           onReplyError: (err) => {
@@ -253,7 +259,7 @@ export async function handleNextcloudTalkInbound(params: {
     body: rawBody,
   });
 
-  const groupSystemPrompt = roomConfig?.systemPrompt?.trim() || undefined;
+  const groupSystemPrompt = normalizeOptionalString(roomConfig?.systemPrompt);
 
   const ctxPayload = core.channel.reply.finalizeInboundContext({
     Body: body,
@@ -290,6 +296,7 @@ export async function handleNextcloudTalkInbound(params: {
     core,
     deliver: async (payload) => {
       await deliverNextcloudTalkReply({
+        cfg: config,
         payload,
         roomToken,
         accountId: account.accountId,

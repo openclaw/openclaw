@@ -1,6 +1,10 @@
 import fs from "node:fs/promises";
-import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
-import type { TSchema } from "@sinclair/typebox";
+import type {
+  AgentTool,
+  AgentToolResult,
+  AgentToolUpdateCallback,
+} from "@mariozechner/pi-agent-core";
+import type { TSchema } from "typebox";
 import { detectMime } from "../../media/mime.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
 import type { ImageSanitizationLimits } from "../image-sanitization.js";
@@ -14,8 +18,27 @@ export type AgentToolWithMeta<TParameters extends TSchema, TResult> = AgentTool<
   displaySummary?: string;
 };
 
-// oxlint-disable-next-line typescript/no-explicit-any
-export type AnyAgentTool = AgentToolWithMeta<any, unknown>;
+type ErasedAgentToolExecute = {
+  execute(
+    this: void,
+    toolCallId: string,
+    params: unknown,
+    signal?: AbortSignal,
+    onUpdate?: AgentToolUpdateCallback<unknown>,
+  ): Promise<AgentToolResult<unknown>>;
+};
+
+export type AnyAgentTool = Omit<AgentTool<TSchema, unknown>, "execute"> &
+  ErasedAgentToolExecute & {
+    ownerOnly?: boolean;
+    displaySummary?: string;
+  };
+
+export function asToolParamsRecord(params: unknown): Record<string, unknown> {
+  return params && typeof params === "object" && !Array.isArray(params)
+    ? (params as Record<string, unknown>)
+    : {};
+}
 
 export type StringParamOptions = {
   required?: boolean;
@@ -360,15 +383,18 @@ export function parseAvailableTags(raw: unknown): AvailableTag[] | undefined {
       (t): t is Record<string, unknown> =>
         typeof t === "object" && t !== null && typeof t.name === "string",
     )
-    .map((t) => ({
-      ...(t.id !== undefined && typeof t.id === "string" ? { id: t.id } : {}),
-      name: t.name as string,
-      ...(typeof t.moderated === "boolean" ? { moderated: t.moderated } : {}),
-      ...(t.emoji_id === null || typeof t.emoji_id === "string" ? { emoji_id: t.emoji_id } : {}),
-      ...(t.emoji_name === null || typeof t.emoji_name === "string"
-        ? { emoji_name: t.emoji_name }
-        : {}),
-    }));
+    .map((t) =>
+      Object.assign(
+        {},
+        t.id !== undefined && typeof t.id === `string` ? { id: t.id } : {},
+        { name: t.name as string },
+        typeof t.moderated === `boolean` ? { moderated: t.moderated } : {},
+        t.emoji_id === null || typeof t.emoji_id === `string` ? { emoji_id: t.emoji_id } : {},
+        t.emoji_name === null || typeof t.emoji_name === `string`
+          ? { emoji_name: t.emoji_name }
+          : {},
+      ),
+    );
   // Return undefined instead of empty array to avoid accidentally clearing all tags
   return result.length ? result : undefined;
 }

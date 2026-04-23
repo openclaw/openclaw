@@ -1,6 +1,6 @@
-import { loadConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  clearActiveMcpLoopbackRuntime,
+  clearActiveMcpLoopbackRuntimeByOwnerToken,
   createMcpLoopbackServerConfig,
   getActiveMcpLoopbackRuntime,
   setActiveMcpLoopbackRuntime,
@@ -18,7 +18,7 @@ const NATIVE_TOOL_EXCLUDE = new Set(["read", "write", "edit", "apply_patch", "ex
 type CachedScopedTools = {
   tools: McpLoopbackTool[];
   toolSchema: McpToolSchemaEntry[];
-  configRef: ReturnType<typeof loadConfig>;
+  configRef: OpenClawConfig;
   time: number;
 };
 
@@ -26,14 +26,18 @@ export class McpLoopbackToolCache {
   #entries = new Map<string, CachedScopedTools>();
 
   resolve(params: {
-    cfg: ReturnType<typeof loadConfig>;
+    cfg: OpenClawConfig;
     sessionKey: string;
     messageProvider: string | undefined;
     accountId: string | undefined;
+    senderIsOwner: boolean | undefined;
   }): CachedScopedTools {
-    const cacheKey = [params.sessionKey, params.messageProvider ?? "", params.accountId ?? ""].join(
-      "\u0000",
-    );
+    const cacheKey = [
+      params.sessionKey,
+      params.messageProvider ?? "",
+      params.accountId ?? "",
+      params.senderIsOwner === true ? "owner" : params.senderIsOwner === false ? "non-owner" : "",
+    ].join("\u0000");
     const now = Date.now();
     const cached = this.#entries.get(cacheKey);
     if (cached && cached.configRef === params.cfg && now - cached.time < TOOL_CACHE_TTL_MS) {
@@ -45,6 +49,8 @@ export class McpLoopbackToolCache {
       sessionKey: params.sessionKey,
       messageProvider: params.messageProvider,
       accountId: params.accountId,
+      senderIsOwner: params.senderIsOwner,
+      surface: "loopback",
       excludeToolNames: NATIVE_TOOL_EXCLUDE,
     });
     const nextEntry: CachedScopedTools = {
@@ -64,7 +70,7 @@ export class McpLoopbackToolCache {
 }
 
 export {
-  clearActiveMcpLoopbackRuntime,
+  clearActiveMcpLoopbackRuntimeByOwnerToken,
   createMcpLoopbackServerConfig,
   getActiveMcpLoopbackRuntime,
   setActiveMcpLoopbackRuntime,

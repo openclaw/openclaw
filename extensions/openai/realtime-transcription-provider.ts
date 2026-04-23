@@ -1,22 +1,33 @@
-import type {
-  RealtimeTranscriptionProviderConfig,
-  RealtimeTranscriptionProviderPlugin,
-  RealtimeTranscriptionSession,
-  RealtimeTranscriptionSessionCreateRequest,
+import {
+  createRealtimeTranscriptionWebSocketSession,
+  type RealtimeTranscriptionProviderConfig,
+  type RealtimeTranscriptionProviderPlugin,
+  type RealtimeTranscriptionSession,
+  type RealtimeTranscriptionSessionCreateRequest,
+  type RealtimeTranscriptionWebSocketTransport,
 } from "openclaw/plugin-sdk/realtime-transcription";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
-import WebSocket from "ws";
+import {
+  asFiniteNumber,
+  readRealtimeErrorDetail,
+  resolveOpenAIProviderConfigRecord,
+  trimToUndefined,
+} from "./realtime-provider-shared.js";
 
 type OpenAIRealtimeTranscriptionProviderConfig = {
   apiKey?: string;
+  language?: string;
   model?: string;
+  prompt?: string;
   silenceDurationMs?: number;
   vadThreshold?: number;
 };
 
 type OpenAIRealtimeTranscriptionSessionConfig = RealtimeTranscriptionSessionCreateRequest & {
   apiKey: string;
+  language?: string;
   model: string;
+  prompt?: string;
   silenceDurationMs: number;
   vadThreshold: number;
 };
@@ -28,36 +39,15 @@ type RealtimeEvent = {
   error?: unknown;
 };
 
-function trimToUndefined(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function asNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-function asObject(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
-function readRealtimeErrorDetail(error: unknown): string {
-  if (typeof error === "string" && error) {
-    return error;
-  }
-  const message = asObject(error)?.message;
-  if (typeof message === "string" && message) {
-    return message;
-  }
-  return "Unknown error";
-}
+const OPENAI_REALTIME_TRANSCRIPTION_URL = "wss://api.openai.com/v1/realtime?intent=transcription";
+const OPENAI_REALTIME_TRANSCRIPTION_CONNECT_TIMEOUT_MS = 10_000;
+const OPENAI_REALTIME_TRANSCRIPTION_MAX_RECONNECT_ATTEMPTS = 5;
+const OPENAI_REALTIME_TRANSCRIPTION_RECONNECT_DELAY_MS = 1000;
 
 function normalizeProviderConfig(
   config: RealtimeTranscriptionProviderConfig,
 ): OpenAIRealtimeTranscriptionProviderConfig {
-  const providers = asObject(config.providers);
-  const raw = asObject(providers?.openai) ?? asObject(config.openai) ?? asObject(config);
+  const raw = resolveOpenAIProviderConfigRecord(config);
   return {
     apiKey:
       normalizeResolvedSecretInputString({
@@ -68,182 +58,92 @@ function normalizeProviderConfig(
         value: raw?.openaiApiKey,
         path: "plugins.entries.voice-call.config.streaming.openaiApiKey",
       }),
+    language: trimToUndefined(raw?.language),
     model: trimToUndefined(raw?.model) ?? trimToUndefined(raw?.sttModel),
-    silenceDurationMs: asNumber(raw?.silenceDurationMs),
-    vadThreshold: asNumber(raw?.vadThreshold),
+    prompt: trimToUndefined(raw?.prompt),
+    silenceDurationMs: asFiniteNumber(raw?.silenceDurationMs),
+    vadThreshold: asFiniteNumber(raw?.vadThreshold),
   };
 }
 
-function readProviderConfig(
-  providerConfig: RealtimeTranscriptionProviderConfig,
-): OpenAIRealtimeTranscriptionProviderConfig {
-  return normalizeProviderConfig(providerConfig);
-}
+function createOpenAIRealtimeTranscriptionSession(
+  config: OpenAIRealtimeTranscriptionSessionConfig,
+): RealtimeTranscriptionSession {
+  let pendingTranscript = "";
 
-class OpenAIRealtimeTranscriptionSession implements RealtimeTranscriptionSession {
-  private static readonly MAX_RECONNECT_ATTEMPTS = 5;
-  private static readonly RECONNECT_DELAY_MS = 1000;
-  private static readonly CONNECT_TIMEOUT_MS = 10_000;
-
-  private ws: WebSocket | null = null;
-  private connected = false;
-  private closed = false;
-  private reconnectAttempts = 0;
-  private pendingTranscript = "";
-
-  constructor(private readonly config: OpenAIRealtimeTranscriptionSessionConfig) {}
-
-  async connect(): Promise<void> {
-    this.closed = false;
-    this.reconnectAttempts = 0;
-    await this.doConnect();
-  }
-
-  sendAudio(audio: Buffer): void {
-    if (this.ws?.readyState !== WebSocket.OPEN) {
-      return;
-    }
-    this.sendEvent({
-      type: "input_audio_buffer.append",
-      audio: audio.toString("base64"),
-    });
-  }
-
-  close(): void {
-    this.closed = true;
-    this.connected = false;
-    if (this.ws) {
-      this.ws.close(1000, "Transcription session closed");
-      this.ws = null;
-    }
-  }
-
-  isConnected(): boolean {
-    return this.connected;
-  }
-
-  private async doConnect(): Promise<void> {
-    await new Promise<void>((resolve, reject) => {
-      this.ws = new WebSocket("wss://api.openai.com/v1/realtime?intent=transcription", {
-        headers: {
-          Authorization: `Bearer ${this.config.apiKey}`,
-          "OpenAI-Beta": "realtime=v1",
-        },
-      });
-
-      const connectTimeout = setTimeout(() => {
-        reject(new Error("OpenAI realtime transcription connection timeout"));
-      }, OpenAIRealtimeTranscriptionSession.CONNECT_TIMEOUT_MS);
-
-      this.ws.on("open", () => {
-        clearTimeout(connectTimeout);
-        this.connected = true;
-        this.reconnectAttempts = 0;
-        this.sendEvent({
-          type: "transcription_session.update",
-          session: {
-            input_audio_format: "g711_ulaw",
-            input_audio_transcription: {
-              model: this.config.model,
-            },
-            turn_detection: {
-              type: "server_vad",
-              threshold: this.config.vadThreshold,
-              prefix_padding_ms: 300,
-              silence_duration_ms: this.config.silenceDurationMs,
-            },
-          },
-        });
-        resolve();
-      });
-
-      this.ws.on("message", (data: Buffer) => {
-        try {
-          this.handleEvent(JSON.parse(data.toString()) as RealtimeEvent);
-        } catch (error) {
-          this.config.onError?.(error instanceof Error ? error : new Error(String(error)));
-        }
-      });
-
-      this.ws.on("error", (error) => {
-        if (!this.connected) {
-          clearTimeout(connectTimeout);
-          reject(error);
-          return;
-        }
-        this.config.onError?.(error instanceof Error ? error : new Error(String(error)));
-      });
-
-      this.ws.on("close", () => {
-        this.connected = false;
-        if (this.closed) {
-          return;
-        }
-        void this.attemptReconnect();
-      });
-    });
-  }
-
-  private async attemptReconnect(): Promise<void> {
-    if (this.closed) {
-      return;
-    }
-    if (this.reconnectAttempts >= OpenAIRealtimeTranscriptionSession.MAX_RECONNECT_ATTEMPTS) {
-      this.config.onError?.(new Error("OpenAI realtime transcription reconnect limit reached"));
-      return;
-    }
-    this.reconnectAttempts += 1;
-    const delay =
-      OpenAIRealtimeTranscriptionSession.RECONNECT_DELAY_MS * 2 ** (this.reconnectAttempts - 1);
-    await new Promise((resolve) => setTimeout(resolve, delay));
-    if (this.closed) {
-      return;
-    }
-    try {
-      await this.doConnect();
-    } catch (error) {
-      this.config.onError?.(error instanceof Error ? error : new Error(String(error)));
-      await this.attemptReconnect();
-    }
-  }
-
-  private handleEvent(event: RealtimeEvent): void {
+  const handleEvent = (event: RealtimeEvent) => {
     switch (event.type) {
       case "conversation.item.input_audio_transcription.delta":
         if (event.delta) {
-          this.pendingTranscript += event.delta;
-          this.config.onPartial?.(this.pendingTranscript);
+          pendingTranscript += event.delta;
+          config.onPartial?.(pendingTranscript);
         }
         return;
 
       case "conversation.item.input_audio_transcription.completed":
         if (event.transcript) {
-          this.config.onTranscript?.(event.transcript);
+          config.onTranscript?.(event.transcript);
         }
-        this.pendingTranscript = "";
+        pendingTranscript = "";
         return;
 
       case "input_audio_buffer.speech_started":
-        this.pendingTranscript = "";
-        this.config.onSpeechStart?.();
+        pendingTranscript = "";
+        config.onSpeechStart?.();
         return;
 
       case "error": {
         const detail = readRealtimeErrorDetail(event.error);
-        this.config.onError?.(new Error(detail));
+        config.onError?.(new Error(detail));
         return;
       }
 
       default:
         return;
     }
-  }
+  };
 
-  private sendEvent(event: unknown): void {
-    if (this.ws?.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify(event));
-    }
-  }
+  return createRealtimeTranscriptionWebSocketSession<RealtimeEvent>({
+    providerId: "openai",
+    callbacks: config,
+    url: OPENAI_REALTIME_TRANSCRIPTION_URL,
+    headers: {
+      Authorization: `Bearer ${config.apiKey}`,
+      "OpenAI-Beta": "realtime=v1",
+    },
+    readyOnOpen: true,
+    connectTimeoutMs: OPENAI_REALTIME_TRANSCRIPTION_CONNECT_TIMEOUT_MS,
+    maxReconnectAttempts: OPENAI_REALTIME_TRANSCRIPTION_MAX_RECONNECT_ATTEMPTS,
+    reconnectDelayMs: OPENAI_REALTIME_TRANSCRIPTION_RECONNECT_DELAY_MS,
+    connectTimeoutMessage: "OpenAI realtime transcription connection timeout",
+    reconnectLimitMessage: "OpenAI realtime transcription reconnect limit reached",
+    sendAudio: (audio, transport) => {
+      transport.sendJson({
+        type: "input_audio_buffer.append",
+        audio: audio.toString("base64"),
+      });
+    },
+    onOpen: (transport: RealtimeTranscriptionWebSocketTransport) => {
+      transport.sendJson({
+        type: "transcription_session.update",
+        session: {
+          input_audio_format: "g711_ulaw",
+          input_audio_transcription: {
+            model: config.model,
+            ...(config.language ? { language: config.language } : {}),
+            ...(config.prompt ? { prompt: config.prompt } : {}),
+          },
+          turn_detection: {
+            type: "server_vad",
+            threshold: config.vadThreshold,
+            prefix_padding_ms: 300,
+            silence_duration_ms: config.silenceDurationMs,
+          },
+        },
+      });
+    },
+    onMessage: handleEvent,
+  });
 }
 
 export function buildOpenAIRealtimeTranscriptionProvider(): RealtimeTranscriptionProviderPlugin {
@@ -254,17 +154,19 @@ export function buildOpenAIRealtimeTranscriptionProvider(): RealtimeTranscriptio
     autoSelectOrder: 10,
     resolveConfig: ({ rawConfig }) => normalizeProviderConfig(rawConfig),
     isConfigured: ({ providerConfig }) =>
-      Boolean(readProviderConfig(providerConfig).apiKey || process.env.OPENAI_API_KEY),
+      Boolean(normalizeProviderConfig(providerConfig).apiKey || process.env.OPENAI_API_KEY),
     createSession: (req) => {
-      const config = readProviderConfig(req.providerConfig);
+      const config = normalizeProviderConfig(req.providerConfig);
       const apiKey = config.apiKey || process.env.OPENAI_API_KEY;
       if (!apiKey) {
         throw new Error("OpenAI API key missing");
       }
-      return new OpenAIRealtimeTranscriptionSession({
+      return createOpenAIRealtimeTranscriptionSession({
         ...req,
         apiKey,
+        language: config.language,
         model: config.model ?? "gpt-4o-transcribe",
+        prompt: config.prompt,
         silenceDurationMs: config.silenceDurationMs ?? 800,
         vadThreshold: config.vadThreshold ?? 0.5,
       });

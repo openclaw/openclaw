@@ -1,24 +1,24 @@
 {
   "name": "@openclaw/discord",
-  "version": "2026.4.6",
+  "version": "2026.4.20",
   "description": "OpenClaw Discord channel plugin",
   "type": "module",
   "dependencies": {
-    "@buape/carbon": "0.0.0-beta-20260406003433",
+    "@buape/carbon": "0.16.0",
     "@discordjs/voice": "^0.19.2",
-    "@snazzah/davey": "^0.1.11",
-    "discord-api-types": "^0.38.44",
+    "discord-api-types": "^0.38.47",
     "https-proxy-agent": "^9.0.0",
-    "opusscript": "^0.1.1"
-  },
-  "optionalDependencies": {
-    "@discordjs/opus": "^0.10.0"
+    "opusscript": "^0.0.8",
+    "typebox": "1.1.28",
+    "undici": "8.1.0",
+    "ws": "^8.20.0"
   },
   "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.4.6"
+    "openclaw": ">=2026.4.20"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -48,13 +48,13 @@
     "install": {
       "npmSpec": "@openclaw/discord",
       "defaultChoice": "npm",
-      "minHostVersion": ">=2026.4.6"
+      "minHostVersion": ">=2026.4.10"
     },
     "compat": {
-      "pluginApi": ">=2026.4.6"
+      "pluginApi": ">=2026.4.20"
     },
     "build": {
-      "openclawVersion": "2026.4.6"
+      "openclawVersion": "2026.4.20"
     },
     "bundle": {
       "stageRuntimeDependencies": true

@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.js";
 import { logVerbose } from "../globals.js";
 import type {
   PluginWebFetchProviderEntry,
@@ -8,6 +8,7 @@ import { resolvePluginWebFetchProviders } from "../plugins/web-fetch-providers.r
 import { sortWebFetchProvidersForAutoDetect } from "../plugins/web-fetch-providers.shared.js";
 import { getActiveRuntimeWebToolsMetadata } from "../secrets/runtime-web-tools-state.js";
 import type { RuntimeWebFetchMetadata } from "../secrets/runtime-web-tools.types.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
   hasWebProviderEntryCredential,
   providerRequiresCredential,
@@ -30,10 +31,6 @@ export type ResolveWebFetchDefinitionParams = {
   preferRuntimeProviders?: boolean;
 };
 
-function resolveFetchConfig(cfg?: OpenClawConfig): WebFetchConfig {
-  return resolveWebProviderConfig<"fetch", NonNullable<WebFetchConfig>>(cfg, "fetch");
-}
-
 export function resolveWebFetchEnabled(params: {
   fetch?: WebFetchConfig;
   sandboxed?: boolean;
@@ -42,6 +39,10 @@ export function resolveWebFetchEnabled(params: {
     return params.fetch.enabled;
   }
   return true;
+}
+
+function resolveFetchConfig(config: OpenClawConfig | undefined): WebFetchConfig | undefined {
+  return resolveWebProviderConfig(config, "fetch") as NonNullable<WebFetchConfig> | undefined;
 }
 
 function hasEntryCredential(
@@ -62,6 +63,16 @@ function hasEntryCredential(
     resolveEnvValue: ({ provider: currentProvider }) =>
       readWebProviderEnvValue(currentProvider.envVars),
   });
+}
+
+export function isWebFetchProviderConfigured(params: {
+  provider: Pick<
+    PluginWebFetchProviderEntry,
+    "envVars" | "getConfiguredCredentialValue" | "getCredentialValue" | "requiresCredential"
+  >;
+  config?: OpenClawConfig;
+}): boolean {
+  return hasEntryCredential(params.provider, params.config, resolveFetchConfig(params.config));
 }
 
 export function listWebFetchProviders(params?: {
@@ -97,8 +108,8 @@ export function resolveWebFetchProviderId(params: {
       }),
   );
   const raw =
-    params.fetch && "provider" in params.fetch && typeof params.fetch.provider === "string"
-      ? params.fetch.provider.trim().toLowerCase()
+    params.fetch && "provider" in params.fetch
+      ? normalizeLowercaseStringOrEmpty(params.fetch.provider)
       : "";
 
   if (raw) {
@@ -130,7 +141,9 @@ export function resolveWebFetchProviderId(params: {
 export function resolveWebFetchDefinition(
   options?: ResolveWebFetchDefinitionParams,
 ): { provider: PluginWebFetchProviderEntry; definition: WebFetchProviderToolDefinition } | null {
-  const fetch = resolveFetchConfig(options?.config);
+  const fetch = resolveWebProviderConfig(options?.config, "fetch") as
+    | NonNullable<WebFetchConfig>
+    | undefined;
   const runtimeWebFetch = options?.runtimeWebFetch ?? getActiveRuntimeWebToolsMetadata()?.fetch;
   const providers = sortWebFetchProvidersForAutoDetect(
     resolvePluginWebFetchProviders({

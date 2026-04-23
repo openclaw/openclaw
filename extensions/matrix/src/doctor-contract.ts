@@ -7,10 +7,7 @@ import {
   hasLegacyFlatAllowPrivateNetworkAlias,
   migrateLegacyFlatAllowPrivateNetworkAlias,
 } from "openclaw/plugin-sdk/ssrf-runtime";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
+import { isRecord } from "./record-shared.js";
 
 function hasLegacyMatrixRoomAllowAlias(value: unknown): boolean {
   const room = isRecord(value) ? value : null;
@@ -46,6 +43,53 @@ function hasLegacyMatrixAccountPrivateNetworkAliases(value: unknown): boolean {
   return Object.values(accounts).some((account) =>
     hasLegacyFlatAllowPrivateNetworkAlias(isRecord(account) ? account : {}),
   );
+}
+
+function hasLegacyTrustedDmPolicy(value: unknown): boolean {
+  const root = isRecord(value) ? value : null;
+  if (!root) {
+    return false;
+  }
+  const dm = isRecord(root.dm) ? root.dm : null;
+  return dm?.policy === "trusted";
+}
+
+function hasLegacyMatrixAccountTrustedDmPolicies(value: unknown): boolean {
+  const accounts = isRecord(value) ? value : null;
+  if (!accounts) {
+    return false;
+  }
+  return Object.values(accounts).some((account) => hasLegacyTrustedDmPolicy(account));
+}
+
+function migrateLegacyTrustedDmPolicy(params: {
+  entry: Record<string, unknown>;
+  pathPrefix: string;
+  changes: string[];
+}): { entry: Record<string, unknown>; changed: boolean } {
+  const dm = isRecord(params.entry.dm) ? params.entry.dm : null;
+  if (!dm || dm.policy !== "trusted") {
+    return { entry: params.entry, changed: false };
+  }
+  const allowFromRaw = dm.allowFrom;
+  // Trim before counting: downstream allowlist normalization drops whitespace-only
+  // entries, so a config like ["   "] must still fall back to "pairing"
+  // instead of becoming an effectively empty allowlist.
+  const allowFromEntries = Array.isArray(allowFromRaw)
+    ? allowFromRaw.filter(
+        (entry): entry is string => typeof entry === "string" && entry.trim().length > 0,
+      ).length
+    : 0;
+  // Preserve the operator's existing trust boundary when an explicit allowFrom
+  // list is present; only fall back to pairing when the effective allowlist is
+  // empty.
+  const nextPolicy: "allowlist" | "pairing" = allowFromEntries > 0 ? "allowlist" : "pairing";
+  const nextDm = { ...dm, policy: nextPolicy };
+  params.changes.push(
+    `Migrated ${params.pathPrefix}.dm.policy "trusted" → "${nextPolicy}" (legacy alias removed; ` +
+      `${allowFromEntries > 0 ? `preserved ${allowFromEntries} ${params.pathPrefix}.dm.allowFrom ${allowFromEntries === 1 ? "entry" : "entries"}` : "no allowFrom entries present, defaulting to pairing for safety"}).`,
+  );
+  return { entry: { ...params.entry, dm: nextDm }, changed: true };
 }
 
 function normalizeMatrixRoomAllowAliases(params: {
@@ -105,6 +149,18 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
       'channels.matrix.accounts.<id>.{groups,rooms}.<room>.allow is legacy; use channels.matrix.accounts.<id>.{groups,rooms}.<room>.enabled instead. Run "openclaw doctor --fix".',
     match: hasLegacyMatrixAccountRoomAllowAliases,
   },
+  {
+    path: ["channels", "matrix"],
+    message:
+      'channels.matrix.dm.policy "trusted" is legacy; use "allowlist" (with allowFrom entries) or "pairing" instead. Run "openclaw doctor --fix".',
+    match: hasLegacyTrustedDmPolicy,
+  },
+  {
+    path: ["channels", "matrix", "accounts"],
+    message:
+      'channels.matrix.accounts.<id>.dm.policy "trusted" is legacy; use "allowlist" (with allowFrom entries) or "pairing" instead. Run "openclaw doctor --fix".',
+    match: hasLegacyMatrixAccountTrustedDmPolicies,
+  },
 ];
 
 export function normalizeCompatibilityConfig({
@@ -129,6 +185,14 @@ export function normalizeCompatibilityConfig({
   });
   updatedMatrix = topLevelPrivateNetwork.entry;
   changed = changed || topLevelPrivateNetwork.changed;
+
+  const topLevelTrustedDmPolicy = migrateLegacyTrustedDmPolicy({
+    entry: updatedMatrix,
+    pathPrefix: "channels.matrix",
+    changes,
+  });
+  updatedMatrix = topLevelTrustedDmPolicy.entry;
+  changed = changed || topLevelTrustedDmPolicy.changed;
 
   const normalizeTopLevelRoomScope = (key: "groups" | "rooms") => {
     const rooms = isRecord(updatedMatrix[key]) ? updatedMatrix[key] : null;
@@ -168,6 +232,16 @@ export function normalizeCompatibilityConfig({
       });
       if (privateNetworkMigration.changed) {
         nextAccount = privateNetworkMigration.entry;
+        accountChanged = true;
+      }
+
+      const accountTrustedDmPolicy = migrateLegacyTrustedDmPolicy({
+        entry: nextAccount,
+        pathPrefix: `channels.matrix.accounts.${accountId}`,
+        changes,
+      });
+      if (accountTrustedDmPolicy.changed) {
+        nextAccount = accountTrustedDmPolicy.entry;
         accountChanged = true;
       }
 

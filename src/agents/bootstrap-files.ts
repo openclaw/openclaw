@@ -1,8 +1,11 @@
 import fs from "node:fs/promises";
-import type { OpenClawConfig } from "../config/config.js";
 import type { AgentContextInjection } from "../config/types.agent-defaults.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { resolveSessionAgentIds } from "./agent-scope.js";
 import { getOrLoadBootstrapFiles } from "./bootstrap-cache.js";
 import { applyBootstrapHookOverrides } from "./bootstrap-hooks.js";
+import { shouldIncludeHeartbeatGuidanceForSystemPrompt } from "./heartbeat-system-prompt.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
 import {
   buildBootstrapContextFiles,
@@ -10,7 +13,9 @@ import {
   resolveBootstrapTotalMaxChars,
 } from "./pi-embedded-helpers.js";
 import {
+  DEFAULT_HEARTBEAT_FILENAME,
   filterBootstrapFilesForSession,
+  isWorkspaceBootstrapPending,
   loadWorkspaceBootstrapFiles,
   type WorkspaceBootstrapFile,
 } from "./workspace.js";
@@ -21,6 +26,29 @@ export type BootstrapContextRunKind = "default" | "heartbeat" | "cron";
 const CONTINUATION_SCAN_MAX_TAIL_BYTES = 256 * 1024;
 const CONTINUATION_SCAN_MAX_RECORDS = 500;
 export const FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE = "openclaw:bootstrap-context:full";
+const BOOTSTRAP_WARNING_DEDUPE_LIMIT = 1024;
+const seenBootstrapWarnings = new Set<string>();
+const bootstrapWarningOrder: string[] = [];
+
+function rememberBootstrapWarning(key: string): boolean {
+  if (seenBootstrapWarnings.has(key)) {
+    return false;
+  }
+  if (seenBootstrapWarnings.size >= BOOTSTRAP_WARNING_DEDUPE_LIMIT) {
+    const oldest = bootstrapWarningOrder.shift();
+    if (oldest) {
+      seenBootstrapWarnings.delete(oldest);
+    }
+  }
+  seenBootstrapWarnings.add(key);
+  bootstrapWarningOrder.push(key);
+  return true;
+}
+
+export function _resetBootstrapWarningCacheForTest(): void {
+  seenBootstrapWarnings.clear();
+  bootstrapWarningOrder.length = 0;
+}
 
 export function resolveContextInjectionMode(config?: OpenClawConfig): AgentContextInjection {
   return config?.agents?.defaults?.contextInjection ?? "always";
@@ -99,12 +127,21 @@ export async function hasCompletedBootstrapTurn(sessionFile: string): Promise<bo
 
 export function makeBootstrapWarn(params: {
   sessionLabel: string;
+  workspaceDir?: string;
   warn?: (message: string) => void;
 }): ((message: string) => void) | undefined {
-  if (!params.warn) {
+  const warn = params.warn;
+  if (!warn) {
     return undefined;
   }
-  return (message: string) => params.warn?.(`${message} (sessionKey=${params.sessionLabel})`);
+  const workspacePrefix = params.workspaceDir ?? "";
+  return (message: string) => {
+    const key = `${workspacePrefix}\u0000${params.sessionLabel}\u0000${message}`;
+    if (!rememberBootstrapWarning(key)) {
+      return;
+    }
+    warn(`${message} (sessionKey=${params.sessionLabel})`);
+  };
 }
 
 function sanitizeBootstrapFiles(
@@ -113,7 +150,7 @@ function sanitizeBootstrapFiles(
 ): WorkspaceBootstrapFile[] {
   const sanitized: WorkspaceBootstrapFile[] = [];
   for (const file of files) {
-    const pathValue = typeof file.path === "string" ? file.path.trim() : "";
+    const pathValue = normalizeOptionalString(file.path) ?? "";
     if (!pathValue) {
       warn?.(
         `skipping bootstrap file "${file.name}" — missing or invalid "path" field (hook may have used "filePath" instead)`,
@@ -142,6 +179,41 @@ function applyContextModeFilter(params: {
   return [];
 }
 
+function shouldExcludeHeartbeatBootstrapFile(params: {
+  config?: OpenClawConfig;
+  sessionKey?: string;
+  sessionId?: string;
+  agentId?: string;
+  runKind?: BootstrapContextRunKind;
+}): boolean {
+  if (!params.config || params.runKind === "heartbeat") {
+    return false;
+  }
+  const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
+    sessionKey: params.sessionKey ?? params.sessionId,
+    config: params.config,
+    agentId: params.agentId,
+  });
+  if (sessionAgentId !== defaultAgentId) {
+    return false;
+  }
+  return !shouldIncludeHeartbeatGuidanceForSystemPrompt({
+    config: params.config,
+    agentId: sessionAgentId,
+    defaultAgentId,
+  });
+}
+
+function filterHeartbeatBootstrapFile(
+  files: WorkspaceBootstrapFile[],
+  excludeHeartbeatBootstrapFile: boolean,
+): WorkspaceBootstrapFile[] {
+  if (!excludeHeartbeatBootstrapFile) {
+    return files;
+  }
+  return files.filter((file) => file.name !== DEFAULT_HEARTBEAT_FILENAME);
+}
+
 export async function resolveBootstrapFilesForRun(params: {
   workspaceDir: string;
   config?: OpenClawConfig;
@@ -152,6 +224,7 @@ export async function resolveBootstrapFilesForRun(params: {
   contextMode?: BootstrapContextMode;
   runKind?: BootstrapContextRunKind;
 }): Promise<WorkspaceBootstrapFile[]> {
+  const excludeHeartbeatBootstrapFile = shouldExcludeHeartbeatBootstrapFile(params);
   const sessionKey = params.sessionKey ?? params.sessionId;
   const rawFiles = params.sessionKey
     ? await getOrLoadBootstrapFiles({
@@ -173,7 +246,10 @@ export async function resolveBootstrapFilesForRun(params: {
     sessionId: params.sessionId,
     agentId: params.agentId,
   });
-  return sanitizeBootstrapFiles(updated, params.warn);
+  return sanitizeBootstrapFiles(
+    filterHeartbeatBootstrapFile(updated, excludeHeartbeatBootstrapFile),
+    params.warn,
+  );
 }
 
 export async function resolveBootstrapContextForRun(params: {
@@ -197,3 +273,5 @@ export async function resolveBootstrapContextForRun(params: {
   });
   return { bootstrapFiles, contextFiles };
 }
+
+export { isWorkspaceBootstrapPending };

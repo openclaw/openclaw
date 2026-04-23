@@ -1,5 +1,18 @@
 {
   "id": "voice-call",
+  "channelEnvVars": {
+    "voice-call": [
+      "TELNYX_API_KEY",
+      "TELNYX_CONNECTION_ID",
+      "TELNYX_PUBLIC_KEY",
+      "TWILIO_ACCOUNT_SID",
+      "TWILIO_AUTH_TOKEN",
+      "PLIVO_AUTH_ID",
+      "PLIVO_AUTH_TOKEN",
+      "NGROK_AUTHTOKEN",
+      "NGROK_DOMAIN"
+    ]
+  },
   "uiHints": {
     "provider": {
       "label": "Provider",
@@ -698,5 +711,8 @@
         "minimum": 1
       }
     }
+  },
+  "configContracts": {
+    "compatibilityMigrationPaths": ["plugins.entries.voice-call.config"]
   }
 }

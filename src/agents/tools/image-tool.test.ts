@@ -107,6 +107,12 @@ vi.mock("../auth-profiles.js", () => ({
       return { version: 1, profiles: {} };
     }
   },
+  hasAnyAuthProfileStoreSource: (agentDir?: string) => {
+    if (!agentDir) {
+      return false;
+    }
+    return fsSync.existsSync(path.join(agentDir, "auth-profiles.json"));
+  },
   listProfilesForProvider: (
     store: { profiles?: Record<string, { provider?: string }> },
     provider: string,
@@ -702,6 +708,35 @@ describe("image tool implicit imageModel config", () => {
     });
   });
 
+  it("does not double-prefix custom provider model IDs that already include the provider", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      await writeAuthProfiles(agentDir, {
+        version: 1,
+        profiles: {
+          "kimchi:default": { type: "api_key", provider: "kimchi", key: "sk-test" },
+        },
+      });
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { model: { primary: "kimchi/text-1" } } },
+        models: {
+          providers: {
+            kimchi: {
+              baseUrl: "https://example.com",
+              models: [
+                makeModelDefinition("kimchi/text-1", ["text"]),
+                makeModelDefinition("kimchi/vision-1", ["text", "image"]),
+              ],
+            },
+          },
+        },
+      };
+
+      expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
+        primary: "kimchi/vision-1",
+      });
+    });
+  });
+
   it("pairs a provider when config uses an alias key", async () => {
     await withTempAgentDir(async (agentDir) => {
       await writeAuthProfiles(agentDir, {
@@ -1218,6 +1253,19 @@ describe("image tool data URL support", () => {
       /Unsupported data URL type/i,
     );
   });
+
+  it("rejects oversized data URLs before decoding", () => {
+    const oversizedBase64 = "A".repeat(16);
+    const dataUrl = `data:image/png;base64,${oversizedBase64}`;
+    const bufferFromSpy = vi.spyOn(Buffer, "from");
+
+    try {
+      expect(() => __testing.decodeDataUrl(dataUrl, { maxBytes: 4 })).toThrow(/size limit/i);
+      expect(bufferFromSpy).not.toHaveBeenCalledWith(oversizedBase64, "base64");
+    } finally {
+      bufferFromSpy.mockRestore();
+    }
+  });
 });
 
 describe("image tool MiniMax VLM routing", () => {
@@ -1262,9 +1310,7 @@ describe("image tool MiniMax VLM routing", () => {
     const [url, init] = fetch.mock.calls[0];
     expect(String(url)).toBe("https://api.minimax.io/v1/coding_plan/vlm");
     expect(init?.method).toBe("POST");
-    expect(String((init?.headers as Record<string, string>)?.Authorization)).toBe(
-      "Bearer minimax-test",
-    );
+    expect((init?.headers as Record<string, string>)?.Authorization).toBe("Bearer minimax-test");
     expect(String(init?.body)).toContain('"prompt":"Describe the image."');
     expect(String(init?.body)).toContain('"image_url":"data:image/png;base64,');
 
@@ -1421,5 +1467,115 @@ describe("image tool response validation", () => {
       } as never,
     });
     expect(text).toBe("hello");
+  });
+
+  it.each(["reasoning_content", "reasoning", "reasoning_details", "reasoning_text"])(
+    "detects %s as a retryable image reasoning-only response",
+    (thinkingSignature) => {
+      const message = createAssistantMessage({
+        content: [
+          {
+            type: "thinking",
+            thinking: "  <think>private</think> maybe a cat  ",
+            thinkingSignature,
+          },
+        ],
+      });
+      expect(__testing.hasImageReasoningOnlyResponse(message as never)).toBe(true);
+      expect(() =>
+        __testing.coerceImageAssistantText({
+          provider: "openai",
+          model: "gpt-5.4-mini",
+          message: message as never,
+        }),
+      ).toThrow(/returned no text/i);
+    },
+  );
+
+  it.each([
+    JSON.stringify({ id: "rs_123", type: "reasoning" }),
+    { id: "rs_456", type: "reasoning.encrypted" },
+  ])(
+    "detects Responses reasoning signature as a retryable image reasoning-only response",
+    (thinkingSignature) => {
+      const message = createAssistantMessage({
+        content: [
+          {
+            type: "thinking",
+            thinking: "  <think>private</think> maybe a cat  ",
+            thinkingSignature,
+          },
+        ],
+      });
+      expect(__testing.hasImageReasoningOnlyResponse(message as never)).toBe(true);
+      expect(() =>
+        __testing.coerceImageAssistantText({
+          provider: "openai",
+          model: "gpt-5.4-mini",
+          message: message as never,
+        }),
+      ).toThrow(/returned no text/i);
+    },
+  );
+
+  it("detects oversized JSON reasoning signatures without parsing the whole payload", () => {
+    const message = createAssistantMessage({
+      content: [
+        {
+          type: "thinking",
+          thinking: "retryable",
+          thinkingSignature: JSON.stringify({
+            id: "rs_123",
+            summary: [{ text: "x".repeat(2_100) }],
+            type: "reasoning",
+          }),
+        },
+      ],
+    });
+
+    expect(__testing.hasImageReasoningOnlyResponse(message as never)).toBe(true);
+  });
+
+  it("ignores oversized JSON signatures without Responses reasoning markers", () => {
+    const message = createAssistantMessage({
+      content: [
+        {
+          type: "thinking",
+          thinking: "retryable",
+          thinkingSignature: `{"id":"not-reasoning","summary":"${"x".repeat(2_100)}"}`,
+        },
+      ],
+    });
+
+    expect(__testing.hasImageReasoningOnlyResponse(message as never)).toBe(false);
+  });
+
+  it("detects signed reasoning-only responses with empty summary text", () => {
+    const message = createAssistantMessage({
+      content: [
+        {
+          type: "thinking",
+          thinking: "",
+          thinkingSignature: "reasoning_content",
+        },
+      ],
+    });
+
+    expect(__testing.hasImageReasoningOnlyResponse(message as never)).toBe(true);
+  });
+
+  it("bounds reasoning-only detection before scanning every block", () => {
+    const message = createAssistantMessage({
+      content: [
+        ...Array.from({ length: 50 }, () => ({ type: "thinking", thinking: "untagged" })),
+        {
+          type: "thinking",
+          thinking: "retryable",
+          thinkingSignature: "reasoning_content",
+        },
+      ],
+    });
+
+    expect(__testing.hasImageReasoningOnlyResponse(message as never)).toBe(false);
   });
 });

@@ -28,8 +28,8 @@ Good output in one line:
 
 - `openclaw status` → shows configured channels and no obvious auth errors.
 - `openclaw status --all` → full report is present and shareable.
-- `openclaw gateway probe` → expected gateway target is reachable (`Reachable: yes`). `RPC: limited - missing scope: operator.read` is degraded diagnostics, not a connect failure.
-- `openclaw gateway status` → `Runtime: running` and `RPC probe: ok`.
+- `openclaw gateway probe` → expected gateway target is reachable (`Reachable: yes`). `Capability: ...` tells you what auth level the probe could prove, and `Read probe: limited - missing scope: operator.read` is degraded diagnostics, not a connect failure.
+- `openclaw gateway status` → `Runtime: running`, `Connectivity probe: ok`, and a plausible `Capability: ...` line. Use `--require-rpc` if you need read-scope RPC proof too.
 - `openclaw doctor` → no blocking config/service errors.
 - `openclaw channels status --probe` → reachable gateway returns live per-account
   transport state plus probe/audit results such as `works` or `audit ok`; if the
@@ -41,6 +41,21 @@ Good output in one line:
 If you see:
 `HTTP 429: rate_limit_error: Extra usage is required for long context requests`,
 go to [/gateway/troubleshooting#anthropic-429-extra-usage-required-for-long-context](/gateway/troubleshooting#anthropic-429-extra-usage-required-for-long-context).
+
+## Local OpenAI-compatible backend works directly but fails in OpenClaw
+
+If your local or self-hosted `/v1` backend answers small direct
+`/v1/chat/completions` probes but fails on `openclaw infer model run` or normal
+agent turns:
+
+1. If the error mentions `messages[].content` expecting a string, set
+   `models.providers.<provider>.models[].compat.requiresStringContent: true`.
+2. If the backend still fails only on OpenClaw agent turns, set
+   `models.providers.<provider>.models[].compat.supportsTools: false` and retry.
+3. If tiny direct calls still work but larger OpenClaw prompts crash the
+   backend, treat the remaining issue as an upstream model/server limitation and
+   continue in the deep runbook:
+   [/gateway/troubleshooting#local-openai-compatible-backend-passes-direct-probes-but-agent-runs-fail](/gateway/troubleshooting#local-openai-compatible-backend-passes-direct-probes-but-agent-runs-fail)
 
 ## Plugin install fails with missing openclaw extensions
 
@@ -102,7 +117,8 @@ flowchart TD
     Good output looks like:
 
     - `Runtime: running`
-    - `RPC probe: ok`
+    - `Connectivity probe: ok`
+    - `Capability: read-only`, `write-capable`, or `admin-capable`
     - Your channel shows transport connected and, where supported, `works` or `audit ok` in `channels status --probe`
     - Sender appears approved (or DM policy is open/allowlist)
 
@@ -132,7 +148,8 @@ flowchart TD
     Good output looks like:
 
     - `Dashboard: http://...` is shown in `openclaw gateway status`
-    - `RPC probe: ok`
+    - `Connectivity probe: ok`
+    - `Capability: read-only`, `write-capable`, or `admin-capable`
     - No auth loop in logs
 
     Common log signatures:
@@ -174,7 +191,8 @@ flowchart TD
 
     - `Service: ... (loaded)`
     - `Runtime: running`
-    - `RPC probe: ok`
+    - `Connectivity probe: ok`
+    - `Capability: read-only`, `write-capable`, or `admin-capable`
 
     Common log signatures:
 
@@ -236,132 +254,134 @@ flowchart TD
 
     Common log signatures:
 
-- `cron: scheduler disabled; jobs will not run automatically` → cron is disabled.
-- `heartbeat skipped` with `reason=quiet-hours` → outside configured active hours.
-- `heartbeat skipped` with `reason=empty-heartbeat-file` → `HEARTBEAT.md` exists but only contains blank/header-only scaffolding.
-- `heartbeat skipped` with `reason=no-tasks-due` → `HEARTBEAT.md` task mode is active but none of the task intervals are due yet.
-- `heartbeat skipped` with `reason=alerts-disabled` → all heartbeat visibility is disabled (`showOk`, `showAlerts`, and `useIndicator` are all off).
-- `requests-in-flight` → main lane busy; heartbeat wake was deferred. - `unknown accountId` → heartbeat delivery target account does not exist.
+    - `cron: scheduler disabled; jobs will not run automatically` → cron is disabled.
+    - `heartbeat skipped` with `reason=quiet-hours` → outside configured active hours.
+    - `heartbeat skipped` with `reason=empty-heartbeat-file` → `HEARTBEAT.md` exists but only contains blank/header-only scaffolding.
+    - `heartbeat skipped` with `reason=no-tasks-due` → `HEARTBEAT.md` task mode is active but none of the task intervals are due yet.
+    - `heartbeat skipped` with `reason=alerts-disabled` → all heartbeat visibility is disabled (`showOk`, `showAlerts`, and `useIndicator` are all off).
+    - `requests-in-flight` → main lane busy; heartbeat wake was deferred.
+    - `unknown accountId` → heartbeat delivery target account does not exist.
 
-      Deep pages:
+    Deep pages:
 
-      - [/gateway/troubleshooting#cron-and-heartbeat-delivery](/gateway/troubleshooting#cron-and-heartbeat-delivery)
-      - [/automation/cron-jobs#troubleshooting](/automation/cron-jobs#troubleshooting)
-      - [/gateway/heartbeat](/gateway/heartbeat)
+    - [/gateway/troubleshooting#cron-and-heartbeat-delivery](/gateway/troubleshooting#cron-and-heartbeat-delivery)
+    - [/automation/cron-jobs#troubleshooting](/automation/cron-jobs#troubleshooting)
+    - [/gateway/heartbeat](/gateway/heartbeat)
 
-    </Accordion>
+  </Accordion>
 
-    <Accordion title="Node is paired but tool fails camera canvas screen exec">
-      ```bash
-      openclaw status
-      openclaw gateway status
-      openclaw nodes status
-      openclaw nodes describe --node <idOrNameOrIp>
-      openclaw logs --follow
-      ```
+  <Accordion title="Node is paired but tool fails camera canvas screen exec">
+    ```bash
+    openclaw status
+    openclaw gateway status
+    openclaw nodes status
+    openclaw nodes describe --node <idOrNameOrIp>
+    openclaw logs --follow
+    ```
 
-      Good output looks like:
+    Good output looks like:
 
-      - Node is listed as connected and paired for role `node`.
-      - Capability exists for the command you are invoking.
-      - Permission state is granted for the tool.
+    - Node is listed as connected and paired for role `node`.
+    - Capability exists for the command you are invoking.
+    - Permission state is granted for the tool.
 
-      Common log signatures:
+    Common log signatures:
 
-      - `NODE_BACKGROUND_UNAVAILABLE` → bring node app to foreground.
-      - `*_PERMISSION_REQUIRED` → OS permission was denied/missing.
-      - `SYSTEM_RUN_DENIED: approval required` → exec approval is pending.
-      - `SYSTEM_RUN_DENIED: allowlist miss` → command not on exec allowlist.
+    - `NODE_BACKGROUND_UNAVAILABLE` → bring node app to foreground.
+    - `*_PERMISSION_REQUIRED` → OS permission was denied/missing.
+    - `SYSTEM_RUN_DENIED: approval required` → exec approval is pending.
+    - `SYSTEM_RUN_DENIED: allowlist miss` → command not on exec allowlist.
 
-      Deep pages:
+    Deep pages:
 
-      - [/gateway/troubleshooting#node-paired-tool-fails](/gateway/troubleshooting#node-paired-tool-fails)
-      - [/nodes/troubleshooting](/nodes/troubleshooting)
-      - [/tools/exec-approvals](/tools/exec-approvals)
+    - [/gateway/troubleshooting#node-paired-tool-fails](/gateway/troubleshooting#node-paired-tool-fails)
+    - [/nodes/troubleshooting](/nodes/troubleshooting)
+    - [/tools/exec-approvals](/tools/exec-approvals)
 
-    </Accordion>
+  </Accordion>
 
-    <Accordion title="Exec suddenly asks for approval">
-      ```bash
-      openclaw config get tools.exec.host
-      openclaw config get tools.exec.security
-      openclaw config get tools.exec.ask
-      openclaw gateway restart
-      ```
+  <Accordion title="Exec suddenly asks for approval">
+    ```bash
+    openclaw config get tools.exec.host
+    openclaw config get tools.exec.security
+    openclaw config get tools.exec.ask
+    openclaw gateway restart
+    ```
 
-      What changed:
+    What changed:
 
-      - If `tools.exec.host` is unset, the default is `auto`.
-      - `host=auto` resolves to `sandbox` when a sandbox runtime is active, `gateway` otherwise.
-      - `host=auto` is routing only; the no-prompt "YOLO" behavior comes from `security=full` plus `ask=off` on gateway/node.
-      - On `gateway` and `node`, unset `tools.exec.security` defaults to `full`.
-      - Unset `tools.exec.ask` defaults to `off`.
-      - Result: if you are seeing approvals, some host-local or per-session policy tightened exec away from the current defaults.
+    - If `tools.exec.host` is unset, the default is `auto`.
+    - `host=auto` resolves to `sandbox` when a sandbox runtime is active, `gateway` otherwise.
+    - `host=auto` is routing only; the no-prompt "YOLO" behavior comes from `security=full` plus `ask=off` on gateway/node.
+    - On `gateway` and `node`, unset `tools.exec.security` defaults to `full`.
+    - Unset `tools.exec.ask` defaults to `off`.
+    - Result: if you are seeing approvals, some host-local or per-session policy tightened exec away from the current defaults.
 
-      Restore current default no-approval behavior:
+    Restore current default no-approval behavior:
 
-      ```bash
-      openclaw config set tools.exec.host gateway
-      openclaw config set tools.exec.security full
-      openclaw config set tools.exec.ask off
-      openclaw gateway restart
-      ```
+    ```bash
+    openclaw config set tools.exec.host gateway
+    openclaw config set tools.exec.security full
+    openclaw config set tools.exec.ask off
+    openclaw gateway restart
+    ```
 
-      Safer alternatives:
+    Safer alternatives:
 
-      - Set only `tools.exec.host=gateway` if you just want stable host routing.
-      - Use `security=allowlist` with `ask=on-miss` if you want host exec but still want review on allowlist misses.
-      - Enable sandbox mode if you want `host=auto` to resolve back to `sandbox`.
+    - Set only `tools.exec.host=gateway` if you just want stable host routing.
+    - Use `security=allowlist` with `ask=on-miss` if you want host exec but still want review on allowlist misses.
+    - Enable sandbox mode if you want `host=auto` to resolve back to `sandbox`.
 
-      Common log signatures:
+    Common log signatures:
 
-      - `Approval required.` → command is waiting on `/approve ...`.
-      - `SYSTEM_RUN_DENIED: approval required` → node-host exec approval is pending.
-      - `exec host=sandbox requires a sandbox runtime for this session` → implicit/explicit sandbox selection but sandbox mode is off.
+    - `Approval required.` → command is waiting on `/approve ...`.
+    - `SYSTEM_RUN_DENIED: approval required` → node-host exec approval is pending.
+    - `exec host=sandbox requires a sandbox runtime for this session` → implicit/explicit sandbox selection but sandbox mode is off.
 
-      Deep pages:
+    Deep pages:
 
-      - [/tools/exec](/tools/exec)
-      - [/tools/exec-approvals](/tools/exec-approvals)
-      - [/gateway/security#runtime-expectation-drift](/gateway/security#runtime-expectation-drift)
+    - [/tools/exec](/tools/exec)
+    - [/tools/exec-approvals](/tools/exec-approvals)
+    - [/gateway/security#what-the-audit-checks-high-level](/gateway/security#what-the-audit-checks-high-level)
 
-    </Accordion>
+  </Accordion>
 
-    <Accordion title="Browser tool fails">
-      ```bash
-      openclaw status
-      openclaw gateway status
-      openclaw browser status
-      openclaw logs --follow
-      openclaw doctor
-      ```
+  <Accordion title="Browser tool fails">
+    ```bash
+    openclaw status
+    openclaw gateway status
+    openclaw browser status
+    openclaw logs --follow
+    openclaw doctor
+    ```
 
-      Good output looks like:
+    Good output looks like:
 
-      - Browser status shows `running: true` and a chosen browser/profile.
-      - `openclaw` starts, or `user` can see local Chrome tabs.
+    - Browser status shows `running: true` and a chosen browser/profile.
+    - `openclaw` starts, or `user` can see local Chrome tabs.
 
-      Common log signatures:
+    Common log signatures:
 
-      - `unknown command "browser"` or `unknown command 'browser'` → `plugins.allow` is set and does not include `browser`.
-      - `Failed to start Chrome CDP on port` → local browser launch failed.
-      - `browser.executablePath not found` → configured binary path is wrong.
-      - `browser.cdpUrl must be http(s) or ws(s)` → the configured CDP URL uses an unsupported scheme.
-      - `browser.cdpUrl has invalid port` → the configured CDP URL has a bad or out-of-range port.
-      - `No Chrome tabs found for profile="user"` → the Chrome MCP attach profile has no open local Chrome tabs.
-      - `Remote CDP for profile "<name>" is not reachable` → the configured remote CDP endpoint is not reachable from this host.
-      - `Browser attachOnly is enabled ... not reachable` or `Browser attachOnly is enabled and CDP websocket ... is not reachable` → attach-only profile has no live CDP target.
-      - stale viewport / dark-mode / locale / offline overrides on attach-only or remote CDP profiles → run `openclaw browser stop --browser-profile <name>` to close the active control session and release emulation state without restarting the gateway.
+    - `unknown command "browser"` or `unknown command 'browser'` → `plugins.allow` is set and does not include `browser`.
+    - `Failed to start Chrome CDP on port` → local browser launch failed.
+    - `browser.executablePath not found` → configured binary path is wrong.
+    - `browser.cdpUrl must be http(s) or ws(s)` → the configured CDP URL uses an unsupported scheme.
+    - `browser.cdpUrl has invalid port` → the configured CDP URL has a bad or out-of-range port.
+    - `No Chrome tabs found for profile="user"` → the Chrome MCP attach profile has no open local Chrome tabs.
+    - `Remote CDP for profile "<name>" is not reachable` → the configured remote CDP endpoint is not reachable from this host.
+    - `Browser attachOnly is enabled ... not reachable` or `Browser attachOnly is enabled and CDP websocket ... is not reachable` → attach-only profile has no live CDP target.
+    - stale viewport / dark-mode / locale / offline overrides on attach-only or remote CDP profiles → run `openclaw browser stop --browser-profile <name>` to close the active control session and release emulation state without restarting the gateway.
 
-      Deep pages:
+    Deep pages:
 
-      - [/gateway/troubleshooting#browser-tool-fails](/gateway/troubleshooting#browser-tool-fails)
-      - [/tools/browser#missing-browser-command-or-tool](/tools/browser#missing-browser-command-or-tool)
-      - [/tools/browser-linux-troubleshooting](/tools/browser-linux-troubleshooting)
-      - [/tools/browser-wsl2-windows-remote-cdp-troubleshooting](/tools/browser-wsl2-windows-remote-cdp-troubleshooting)
+    - [/gateway/troubleshooting#browser-tool-fails](/gateway/troubleshooting#browser-tool-fails)
+    - [/tools/browser#missing-browser-command-or-tool](/tools/browser#missing-browser-command-or-tool)
+    - [/tools/browser-linux-troubleshooting](/tools/browser-linux-troubleshooting)
+    - [/tools/browser-wsl2-windows-remote-cdp-troubleshooting](/tools/browser-wsl2-windows-remote-cdp-troubleshooting)
 
-    </Accordion>
-  </AccordionGroup>
+  </Accordion>
+
+</AccordionGroup>
 
 ## Related
 

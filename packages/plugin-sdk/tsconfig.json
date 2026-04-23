@@ -5,15 +5,24 @@
     "declarationMap": false,
     "emitDeclarationOnly": true,
     "ignoreDeprecations": "6.0",
+    "incremental": true,
     "noEmit": false,
     "noEmitOnError": false,
     "outDir": "dist",
-    "rootDir": "../.."
+    "rootDir": "../..",
+    "tsBuildInfoFile": "dist/.tsbuildinfo"
   },
   "include": [
-    "src/**/*.ts",
-    "../../src/types/**/*.d.ts",
-    "../../packages/memory-host-sdk/src/**/*.ts"
+    "../../src/plugin-sdk/**/*.ts",
+    "../../src/video-generation/dashscope-compatible.ts",
+    "../../src/video-generation/types.ts",
+    "../../src/types/**/*.d.ts"
   ],
-  "exclude": ["node_modules", "dist", "../../src/**/*.test.ts"]
+  "exclude": [
+    "node_modules",
+    "dist",
+    "../../src/**/*.test.ts",
+    "../../src/plugin-sdk/AGENTS.md",
+    "../../src/plugin-sdk/CLAUDE.md"
+  ]
 }

@@ -104,4 +104,26 @@ describe("openai transport policy", () => {
       degradeCooldownMs: 60_000,
     });
   });
+
+  it("treats ChatGPT Codex backend routes as native OpenAI-family transports", () => {
+    expect(
+      resolveOpenAIWebSocketSessionPolicy({
+        provider: "openai-codex",
+        modelId: "gpt-5.4",
+        model: {
+          ...nativeModel,
+          provider: "openai-codex",
+          api: "openai-codex-responses",
+          baseUrl: "https://chatgpt.com/backend-api",
+        },
+        sessionId: "session-123",
+      }),
+    ).toMatchObject({
+      headers: {
+        "x-client-request-id": "session-123",
+        "x-openclaw-session-id": "session-123",
+      },
+      degradeCooldownMs: 60_000,
+    });
+  });
 });

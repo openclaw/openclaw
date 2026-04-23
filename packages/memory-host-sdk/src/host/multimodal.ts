@@ -1,3 +1,5 @@
+import { normalizeLowercaseStringOrEmpty } from "../../../../src/shared/string-coerce.js";
+
 const MEMORY_MULTIMODAL_SPECS = {
   image: {
     labelPrefix: "Image file",
@@ -73,7 +75,7 @@ export function buildMemoryMultimodalLabel(
 }
 
 export function buildCaseInsensitiveExtensionGlob(extension: string): string {
-  const normalized = extension.trim().replace(/^\./, "").toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(extension).replace(/^\./, "");
   if (!normalized) {
     return "*";
   }
@@ -88,7 +90,7 @@ export function classifyMemoryMultimodalPath(
   if (!isMemoryMultimodalEnabled(settings)) {
     return null;
   }
-  const lower = filePath.trim().toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(filePath);
   for (const modality of settings.modalities) {
     for (const extension of getMemoryMultimodalExtensions(modality)) {
       if (lower.endsWith(extension)) {
@@ -97,22 +99,4 @@ export function classifyMemoryMultimodalPath(
     }
   }
   return null;
-}
-
-export function normalizeGeminiEmbeddingModelForMemory(model: string): string {
-  const trimmed = model.trim();
-  if (!trimmed) {
-    return "";
-  }
-  return trimmed.replace(/^models\//, "").replace(/^(gemini|google)\//, "");
-}
-
-export function supportsMemoryMultimodalEmbeddings(params: {
-  provider: string;
-  model: string;
-}): boolean {
-  if (params.provider !== "gemini") {
-    return false;
-  }
-  return normalizeGeminiEmbeddingModelForMemory(params.model) === "gemini-embedding-2-preview";
 }

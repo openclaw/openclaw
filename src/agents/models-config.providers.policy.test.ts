@@ -1,10 +1,13 @@
-import { describe, expect, it, vi } from "vitest";
-import {
-  normalizeProviderSpecificConfig,
-  resolveProviderConfigApiKeyResolver,
-} from "./models-config.providers.policy.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+type NormalizeProviderSpecificConfig =
+  typeof import("./models-config.providers.policy.js").normalizeProviderSpecificConfig;
+type ResolveProviderConfigApiKeyResolver =
+  typeof import("./models-config.providers.policy.js").resolveProviderConfigApiKeyResolver;
 
 const GOOGLE_BASE_URL = "https://generativelanguage.googleapis.com";
+let normalizeProviderSpecificConfig: NormalizeProviderSpecificConfig;
+let resolveProviderConfigApiKeyResolver: ResolveProviderConfigApiKeyResolver;
 
 vi.mock("../plugins/provider-runtime.js", () => ({
   applyProviderNativeStreamingUsageCompatWithPlugin: () => undefined,
@@ -42,6 +45,12 @@ vi.mock("../plugins/provider-runtime.js", () => ({
     return undefined;
   },
 }));
+
+beforeEach(async () => {
+  vi.resetModules();
+  ({ normalizeProviderSpecificConfig, resolveProviderConfigApiKeyResolver } =
+    await import("./models-config.providers.policy.js"));
+});
 
 describe("models-config.providers.policy", () => {
   it("resolves config apiKey markers through provider plugin hooks", async () => {

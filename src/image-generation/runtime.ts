@@ -1,46 +1,23 @@
-import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import { describeFailoverError, isFailoverError } from "../agents/failover-error.js";
 import type { FallbackAttempt } from "../agents/model-fallback.types.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
+  buildMediaGenerationNormalizationMetadata,
   buildNoCapabilityModelConfiguredMessage,
   resolveCapabilityModelCandidates,
   throwCapabilityGenerationFailure,
 } from "../media-generation/runtime-shared.js";
 import { parseImageGenerationModelRef } from "./model-ref.js";
+import { resolveImageGenerationOverrides } from "./normalization.js";
 import { getImageGenerationProvider, listImageGenerationProviders } from "./provider-registry.js";
-import type {
-  GeneratedImageAsset,
-  ImageGenerationIgnoredOverride,
-  ImageGenerationResolution,
-  ImageGenerationResult,
-  ImageGenerationSourceImage,
-} from "./types.js";
+import type { GenerateImageParams, GenerateImageRuntimeResult } from "./runtime-types.js";
+import type { ImageGenerationResult } from "./types.js";
 
 const log = createSubsystemLogger("image-generation");
 
-export type GenerateImageParams = {
-  cfg: OpenClawConfig;
-  prompt: string;
-  agentDir?: string;
-  authStore?: AuthProfileStore;
-  modelOverride?: string;
-  count?: number;
-  size?: string;
-  aspectRatio?: string;
-  resolution?: ImageGenerationResolution;
-  inputImages?: ImageGenerationSourceImage[];
-};
-
-export type GenerateImageRuntimeResult = {
-  images: GeneratedImageAsset[];
-  provider: string;
-  model: string;
-  attempts: FallbackAttempt[];
-  metadata?: Record<string, unknown>;
-  ignoredOverrides: ImageGenerationIgnoredOverride[];
-};
+export type { GenerateImageParams, GenerateImageRuntimeResult } from "./runtime-types.js";
 
 function buildNoImageGenerationModelConfiguredMessage(cfg: OpenClawConfig): string {
   return buildNoCapabilityModelConfiguredMessage({
@@ -54,58 +31,6 @@ export function listRuntimeImageGenerationProviders(params?: { config?: OpenClaw
   return listImageGenerationProviders(params?.config);
 }
 
-function resolveProviderImageGenerationOverrides(params: {
-  provider: NonNullable<ReturnType<typeof getImageGenerationProvider>>;
-  size?: string;
-  aspectRatio?: string;
-  resolution?: ImageGenerationResolution;
-  inputImages?: ImageGenerationSourceImage[];
-}) {
-  const hasInputImages = (params.inputImages?.length ?? 0) > 0;
-  const modeCaps = hasInputImages
-    ? params.provider.capabilities.edit
-    : params.provider.capabilities.generate;
-  const geometry = params.provider.capabilities.geometry;
-  const ignoredOverrides: ImageGenerationIgnoredOverride[] = [];
-  let size = params.size;
-  let aspectRatio = params.aspectRatio;
-  let resolution = params.resolution;
-
-  if (
-    size &&
-    (!modeCaps.supportsSize ||
-      ((geometry?.sizes?.length ?? 0) > 0 && !geometry?.sizes?.includes(size)))
-  ) {
-    ignoredOverrides.push({ key: "size", value: size });
-    size = undefined;
-  }
-
-  if (
-    aspectRatio &&
-    (!modeCaps.supportsAspectRatio ||
-      ((geometry?.aspectRatios?.length ?? 0) > 0 && !geometry?.aspectRatios?.includes(aspectRatio)))
-  ) {
-    ignoredOverrides.push({ key: "aspectRatio", value: aspectRatio });
-    aspectRatio = undefined;
-  }
-
-  if (
-    resolution &&
-    (!modeCaps.supportsResolution ||
-      ((geometry?.resolutions?.length ?? 0) > 0 && !geometry?.resolutions?.includes(resolution)))
-  ) {
-    ignoredOverrides.push({ key: "resolution", value: resolution });
-    resolution = undefined;
-  }
-
-  return {
-    size,
-    aspectRatio,
-    resolution,
-    ignoredOverrides,
-  };
-}
-
 export async function generateImage(
   params: GenerateImageParams,
 ): Promise<GenerateImageRuntimeResult> {
@@ -114,6 +39,8 @@ export async function generateImage(
     modelConfig: params.cfg.agents?.defaults?.imageGenerationModel,
     modelOverride: params.modelOverride,
     parseModelRef: parseImageGenerationModelRef,
+    agentDir: params.agentDir,
+    listProviders: listImageGenerationProviders,
   });
   if (candidates.length === 0) {
     throw new Error(buildNoImageGenerationModelConfiguredMessage(params.cfg));
@@ -132,11 +59,14 @@ export async function generateImage(
         error,
       });
       lastError = new Error(error);
+      log.warn(
+        `image-generation candidate failed: ${candidate.provider}/${candidate.model}: ${error}`,
+      );
       continue;
     }
 
     try {
-      const sanitized = resolveProviderImageGenerationOverrides({
+      const sanitized = resolveImageGenerationOverrides({
         provider,
         size: params.size,
         aspectRatio: params.aspectRatio,
@@ -164,7 +94,14 @@ export async function generateImage(
         provider: candidate.provider,
         model: result.model ?? candidate.model,
         attempts,
-        metadata: result.metadata,
+        normalization: sanitized.normalization,
+        metadata: {
+          ...result.metadata,
+          ...buildMediaGenerationNormalizationMetadata({
+            normalization: sanitized.normalization,
+            requestedSizeForDerivedAspectRatio: params.size,
+          }),
+        },
         ignoredOverrides: sanitized.ignoredOverrides,
       };
     } catch (err) {
@@ -173,16 +110,20 @@ export async function generateImage(
       attempts.push({
         provider: candidate.provider,
         model: candidate.model,
-        error: described?.message ?? (err instanceof Error ? err.message : String(err)),
+        error: described?.message ?? formatErrorMessage(err),
         reason: described?.reason,
         status: described?.status,
         code: described?.code,
       });
-      log.debug(`image-generation candidate failed: ${candidate.provider}/${candidate.model}`);
+      log.warn(
+        `image-generation candidate failed: ${candidate.provider}/${candidate.model}: ${
+          described?.message ?? formatErrorMessage(err)
+        }`,
+      );
     }
   }
 
-  throwCapabilityGenerationFailure({
+  return throwCapabilityGenerationFailure({
     capabilityLabel: "image generation",
     attempts,
     lastError,

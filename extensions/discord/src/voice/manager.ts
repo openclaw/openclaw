@@ -5,9 +5,14 @@ import path from "node:path";
 import type { Readable } from "node:stream";
 import { ChannelType, type Client, ReadyListener } from "@buape/carbon";
 import type { VoicePlugin } from "@buape/carbon/voice";
-import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
-import { agentCommandFromIngress } from "openclaw/plugin-sdk/agent-runtime";
-import { resolveTtsConfig, type ResolvedTtsConfig } from "openclaw/plugin-sdk/agent-runtime";
+import {
+  agentCommandFromIngress,
+  getTtsProvider,
+  resolveAgentDir,
+  resolveTtsConfig,
+  resolveTtsPrefsPath,
+  type ResolvedTtsConfig,
+} from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { DiscordAccountConfig, TtsConfig } from "openclaw/plugin-sdk/config-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
@@ -17,12 +22,35 @@ import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { parseTtsDirectives } from "openclaw/plugin-sdk/speech";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { formatMention } from "../mentions.js";
 import { normalizeDiscordSlug, resolveDiscordOwnerAccess } from "../monitor/allow-list.js";
 import { formatDiscordUserTag } from "../monitor/format.js";
 import { getDiscordRuntime } from "../runtime.js";
 import { authorizeDiscordVoiceIngress } from "./access.js";
+import {
+  beginVoiceCapture,
+  clearVoiceCaptureFinalizeTimer,
+  createVoiceCaptureState,
+  finishVoiceCapture,
+  getActiveVoiceCapture,
+  isVoiceCaptureActive,
+  scheduleVoiceCaptureFinalize,
+  stopVoiceCaptureState,
+  type VoiceCaptureState,
+} from "./capture-state.js";
 import { formatVoiceIngressPrompt } from "./prompt.js";
+import {
+  analyzeVoiceReceiveError,
+  createVoiceReceiveRecoveryState,
+  DAVE_RECEIVE_PASSTHROUGH_INITIAL_EXPIRY_SECONDS,
+  DAVE_RECEIVE_PASSTHROUGH_REARM_EXPIRY_SECONDS,
+  enableDaveReceivePassthrough as tryEnableDaveReceivePassthrough,
+  finishVoiceDecryptRecovery,
+  noteVoiceDecryptFailure,
+  resetVoiceReceiveRecoveryState,
+  type VoiceReceiveRecoveryState,
+} from "./receive-recovery.js";
 import { sanitizeVoiceReplyTextForSpeech } from "./sanitize.js";
 import { loadDiscordVoiceSdk } from "./sdk-runtime.js";
 
@@ -36,12 +64,6 @@ const CAPTURE_FINALIZE_GRACE_MS = 1_200;
 const VOICE_CONNECT_READY_TIMEOUT_MS = 15_000;
 const PLAYBACK_READY_TIMEOUT_MS = 60_000;
 const SPEAKING_READY_TIMEOUT_MS = 60_000;
-const DECRYPT_FAILURE_WINDOW_MS = 30_000;
-const DECRYPT_FAILURE_RECONNECT_THRESHOLD = 3;
-const DECRYPT_FAILURE_PATTERN = /DecryptionFailed\(/;
-const DAVE_PASSTHROUGH_DISABLED_PATTERN = /UnencryptedWhenPassthroughDisabled/;
-const DAVE_RECEIVE_PASSTHROUGH_INITIAL_EXPIRY_SECONDS = 30;
-const DAVE_RECEIVE_PASSTHROUGH_REARM_EXPIRY_SECONDS = 15;
 const SPEAKER_CONTEXT_CACHE_TTL_MS = 60_000;
 
 const logger = createSubsystemLogger("discord/voice");
@@ -57,16 +79,6 @@ type VoiceOperationResult = {
   guildId?: string;
 };
 
-type VoiceCaptureEntry = {
-  generation: number;
-  stream: Readable;
-};
-
-type VoiceCaptureFinalizeTimer = {
-  generation: number;
-  timer: ReturnType<typeof setTimeout>;
-};
-
 type VoiceSessionEntry = {
   guildId: string;
   guildName?: string;
@@ -78,13 +90,8 @@ type VoiceSessionEntry = {
   player: import("@discordjs/voice").AudioPlayer;
   playbackQueue: Promise<void>;
   processingQueue: Promise<void>;
-  activeSpeakers: Set<string>;
-  activeCaptureStreams: Map<string, VoiceCaptureEntry>;
-  captureFinalizeTimers: Map<string, VoiceCaptureFinalizeTimer>;
-  captureGenerations: Map<string, number>;
-  decryptFailureCount: number;
-  lastDecryptFailureAt: number;
-  decryptRecoveryInFlight: boolean;
+  capture: VoiceCaptureState;
+  receiveRecovery: VoiceReceiveRecoveryState;
   stop: () => void;
 };
 
@@ -171,25 +178,6 @@ type OpusDecoderFactory = {
 
 let warnedOpusMissing = false;
 let cachedOpusDecoderFactory: OpusDecoderFactory | null | "unresolved" = "unresolved";
-
-function isAbortLikeError(err: unknown): boolean {
-  if (!err || typeof err !== "object") {
-    return false;
-  }
-  const name =
-    "name" in err && typeof (err as { name?: unknown }).name === "string"
-      ? (err as { name: string }).name
-      : "";
-  const message =
-    "message" in err && typeof (err as { message?: unknown }).message === "string"
-      ? (err as { message: string }).message
-      : "";
-  return (
-    name === "AbortError" ||
-    message.includes("The operation was aborted") ||
-    message.includes("aborted")
-  );
-}
 
 function resolveOpusDecoderFactory(): OpusDecoderFactory | null {
   const factories: OpusDecoderFactory[] = [
@@ -318,7 +306,7 @@ async function transcribeAudio(params: {
     agentDir: resolveAgentDir(params.cfg, params.agentId),
     mime: "audio/wav",
   });
-  return result.text?.trim() || undefined;
+  return normalizeOptionalString(result.text);
 }
 
 export class DiscordVoiceManager {
@@ -534,13 +522,8 @@ export class DiscordVoiceManager {
       player,
       playbackQueue: Promise.resolve(),
       processingQueue: Promise.resolve(),
-      activeSpeakers: new Set(),
-      activeCaptureStreams: new Map(),
-      captureFinalizeTimers: new Map(),
-      captureGenerations: new Map(),
-      decryptFailureCount: 0,
-      lastDecryptFailureAt: 0,
-      decryptRecoveryInFlight: false,
+      capture: createVoiceCaptureState(),
+      receiveRecovery: createVoiceReceiveRecoveryState(),
       stop: () => {
         if (speakingHandler) {
           connection.receiver.speaking.off("start", speakingHandler);
@@ -548,16 +531,7 @@ export class DiscordVoiceManager {
         if (speakingEndHandler) {
           connection.receiver.speaking.off("end", speakingEndHandler);
         }
-        for (const { timer } of entry.captureFinalizeTimers.values()) {
-          clearTimeout(timer);
-        }
-        entry.captureFinalizeTimers.clear();
-        for (const { stream } of entry.activeCaptureStreams.values()) {
-          stream.destroy();
-        }
-        entry.activeCaptureStreams.clear();
-        entry.captureGenerations.clear();
-        entry.activeSpeakers.clear();
+        stopVoiceCaptureState(entry.capture);
         if (disconnectedHandler) {
           connection.off(voiceSdk.VoiceConnectionStatus.Disconnected, disconnectedHandler);
         }
@@ -660,35 +634,20 @@ export class DiscordVoiceManager {
   }
 
   private clearCaptureFinalizeTimer(entry: VoiceSessionEntry, userId: string, generation?: number) {
-    const scheduled = entry.captureFinalizeTimers.get(userId);
-    if (!scheduled || (generation !== undefined && scheduled.generation !== generation)) {
-      return false;
-    }
-    clearTimeout(scheduled.timer);
-    entry.captureFinalizeTimers.delete(userId);
-    return true;
+    return clearVoiceCaptureFinalizeTimer(entry.capture, userId, generation);
   }
 
   private scheduleCaptureFinalize(entry: VoiceSessionEntry, userId: string, reason: string) {
-    const capture = entry.activeCaptureStreams.get(userId);
-    if (!capture) {
-      return;
-    }
-    this.clearCaptureFinalizeTimer(entry, userId, capture.generation);
-    const timer = setTimeout(() => {
-      const activeCapture = entry.activeCaptureStreams.get(userId);
-      if (!activeCapture || activeCapture.generation !== capture.generation) {
-        return;
-      }
-      entry.captureFinalizeTimers.delete(userId);
-      entry.activeCaptureStreams.delete(userId);
-      entry.activeSpeakers.delete(userId);
-      logVoiceVerbose(
-        `capture finalize: guild ${entry.guildId} channel ${entry.channelId} user ${userId} reason=${reason} grace=${CAPTURE_FINALIZE_GRACE_MS}ms`,
-      );
-      activeCapture.stream.destroy();
-    }, CAPTURE_FINALIZE_GRACE_MS);
-    entry.captureFinalizeTimers.set(userId, { generation: capture.generation, timer });
+    scheduleVoiceCaptureFinalize({
+      state: entry.capture,
+      userId,
+      delayMs: CAPTURE_FINALIZE_GRACE_MS,
+      onFinalize: () => {
+        logVoiceVerbose(
+          `capture finalize: guild ${entry.guildId} channel ${entry.channelId} user ${userId} reason=${reason} grace=${CAPTURE_FINALIZE_GRACE_MS}ms`,
+        );
+      },
+    });
   }
 
   private async handleSpeakingStart(entry: VoiceSessionEntry, userId: string) {
@@ -698,8 +657,8 @@ export class DiscordVoiceManager {
     if (this.botUserId && userId === this.botUserId) {
       return;
     }
-    if (entry.activeSpeakers.has(userId)) {
-      const activeCapture = entry.activeCaptureStreams.get(userId);
+    if (isVoiceCaptureActive(entry.capture, userId)) {
+      const activeCapture = getActiveVoiceCapture(entry.capture, userId);
       const extended = activeCapture
         ? this.clearCaptureFinalizeTimer(entry, userId, activeCapture.generation)
         : false;
@@ -709,7 +668,6 @@ export class DiscordVoiceManager {
       return;
     }
 
-    entry.activeSpeakers.add(userId);
     logVoiceVerbose(
       `capture start: guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
     );
@@ -723,18 +681,15 @@ export class DiscordVoiceManager {
       entry.player.stop(true);
     }
 
-    const generation = (entry.captureGenerations.get(userId) ?? 0) + 1;
-    entry.captureGenerations.set(userId, generation);
     const stream = entry.connection.receiver.subscribe(userId, {
       end: {
         behavior: voiceSdk.EndBehaviorType.Manual,
       },
     });
-    entry.activeCaptureStreams.set(userId, { generation, stream });
-    this.clearCaptureFinalizeTimer(entry, userId, generation);
+    const generation = beginVoiceCapture(entry.capture, userId, stream);
     let streamAborted = false;
     stream.on("error", (err) => {
-      streamAborted = isAbortLikeError(err);
+      streamAborted = analyzeVoiceReceiveError(err).isAbortLike;
       this.handleReceiveError(entry, err);
     });
 
@@ -762,12 +717,7 @@ export class DiscordVoiceManager {
         await this.processSegment({ entry, wavPath, userId, durationSeconds });
       });
     } finally {
-      this.clearCaptureFinalizeTimer(entry, userId, generation);
-      const activeCapture = entry.activeCaptureStreams.get(userId);
-      if (activeCapture?.generation === generation) {
-        entry.activeCaptureStreams.delete(userId);
-        entry.activeSpeakers.delete(userId);
-      }
+      finishVoiceCapture(entry.capture, userId, generation);
     }
   }
 
@@ -864,6 +814,7 @@ export class DiscordVoiceManager {
     const directive = parseTtsDirectives(replyText, ttsConfig.modelOverrides, {
       cfg: ttsCfg,
       providerConfigs: ttsConfig.providerConfigs,
+      preferredProviderId: getTtsProvider(ttsConfig, resolveTtsPrefsPath(ttsConfig)),
     });
     const rawSpeakText = directive.overrides.ttsText ?? directive.cleanedText.trim();
     const speakText = sanitizeVoiceReplyTextForSpeech(rawSpeakText, speaker.label);
@@ -907,44 +858,33 @@ export class DiscordVoiceManager {
   }
 
   private handleReceiveError(entry: VoiceSessionEntry, err: unknown) {
-    const message = formatErrorMessage(err);
-    logger.warn(`discord voice: receive error: ${message}`);
-    const sawPassthroughDisabled = DAVE_PASSTHROUGH_DISABLED_PATTERN.test(message);
-    if (sawPassthroughDisabled) {
+    const analysis = analyzeVoiceReceiveError(err);
+    logger.warn(`discord voice: receive error: ${analysis.message}`);
+    if (analysis.shouldAttemptPassthrough) {
       this.enableDaveReceivePassthrough(
         entry,
         "receive decrypt error",
         DAVE_RECEIVE_PASSTHROUGH_REARM_EXPIRY_SECONDS,
       );
     }
-    if (!DECRYPT_FAILURE_PATTERN.test(message) && !sawPassthroughDisabled) {
+    if (!analysis.countsAsDecryptFailure) {
       return;
     }
-    const now = Date.now();
-    if (now - entry.lastDecryptFailureAt > DECRYPT_FAILURE_WINDOW_MS) {
-      entry.decryptFailureCount = 0;
-    }
-    entry.lastDecryptFailureAt = now;
-    entry.decryptFailureCount += 1;
-    if (entry.decryptFailureCount === 1) {
+    const decryptFailure = noteVoiceDecryptFailure(entry.receiveRecovery);
+    if (decryptFailure.firstFailure) {
       logger.warn(
         "discord voice: DAVE decrypt failures detected; voice receive may be unstable (upstream: discordjs/discord.js#11419)",
       );
     }
-    if (
-      entry.decryptFailureCount < DECRYPT_FAILURE_RECONNECT_THRESHOLD ||
-      entry.decryptRecoveryInFlight
-    ) {
+    if (!decryptFailure.shouldRecover) {
       return;
     }
-    entry.decryptRecoveryInFlight = true;
-    this.resetDecryptFailureState(entry);
     void this.recoverFromDecryptFailures(entry)
       .catch((recoverErr) =>
         logger.warn(`discord voice: decrypt recovery failed: ${formatErrorMessage(recoverErr)}`),
       )
       .finally(() => {
-        entry.decryptRecoveryInFlight = false;
+        finishVoiceDecryptRecovery(entry.receiveRecovery);
       });
   }
 
@@ -954,51 +894,44 @@ export class DiscordVoiceManager {
     expirySeconds: number,
   ): boolean {
     const voiceSdk = loadDiscordVoiceSdk();
-    const state = entry.connection.state as {
-      status: unknown;
-      networking?: {
-        state?: {
-          code?: unknown;
-          dave?: {
-            session?: {
-              setPassthroughMode: (passthrough: boolean, expiry: number) => void;
+    return tryEnableDaveReceivePassthrough({
+      target: {
+        guildId: entry.guildId,
+        channelId: entry.channelId,
+        connection: entry.connection as {
+          state: {
+            status: unknown;
+            networking?: {
+              state?: {
+                code?: unknown;
+                dave?: {
+                  session?: {
+                    setPassthroughMode: (passthrough: boolean, expirySeconds: number) => void;
+                  };
+                };
+              };
             };
           };
-        };
-      };
-    };
-    if (state.status !== voiceSdk.VoiceConnectionStatus.Ready) {
-      return false;
-    }
-    const networkingState = state.networking?.state;
-    if (
-      !networkingState ||
-      (networkingState.code !== voiceSdk.NetworkingStatusCode.Ready &&
-        networkingState.code !== voiceSdk.NetworkingStatusCode.Resuming)
-    ) {
-      return false;
-    }
-    const daveSession = networkingState.dave?.session;
-    if (!daveSession) {
-      return false;
-    }
-    try {
-      daveSession.setPassthroughMode(true, expirySeconds);
-      logVoiceVerbose(
-        `enabled DAVE receive passthrough: guild ${entry.guildId} channel ${entry.channelId} expiry=${expirySeconds}s reason=${reason}`,
-      );
-      return true;
-    } catch (passthroughErr) {
-      logger.warn(
-        `discord voice: failed to enable DAVE passthrough guild=${entry.guildId} channel=${entry.channelId} reason=${reason}: ${formatErrorMessage(passthroughErr)}`,
-      );
-      return false;
-    }
+        },
+      },
+      sdk: {
+        VoiceConnectionStatus: {
+          Ready: voiceSdk.VoiceConnectionStatus.Ready,
+        },
+        NetworkingStatusCode: {
+          Ready: voiceSdk.NetworkingStatusCode.Ready,
+          Resuming: voiceSdk.NetworkingStatusCode.Resuming,
+        },
+      },
+      reason,
+      expirySeconds,
+      onVerbose: logVoiceVerbose,
+      onWarn: (message) => logger.warn(message),
+    });
   }
 
   private resetDecryptFailureState(entry: VoiceSessionEntry) {
-    entry.decryptFailureCount = 0;
-    entry.lastDecryptFailureAt = 0;
+    resetVoiceReceiveRecoveryState(entry.receiveRecovery);
   }
 
   private async recoverFromDecryptFailures(entry: VoiceSessionEntry) {

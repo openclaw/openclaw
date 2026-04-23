@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
   ConfiguredBindingResolution,
   StatefulBindingTargetDescriptor,
@@ -31,6 +31,7 @@ export type StatefulBindingTargetDriver = {
     sessionKey: string;
     bindingTarget: StatefulBindingTargetDescriptor;
     reason: "new" | "reset";
+    commandSource?: string;
   }) => Promise<StatefulBindingTargetResetResult>;
 };
 

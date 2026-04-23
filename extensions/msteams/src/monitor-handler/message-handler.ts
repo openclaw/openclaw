@@ -1,3 +1,5 @@
+import { resolveInboundMentionDecision } from "openclaw/plugin-sdk/channel-inbound";
+import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import {
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
@@ -9,7 +11,6 @@ import {
   recordPendingHistoryEntryIfEnabled,
   resolveChannelContextVisibilityMode,
   resolveDualTextControlCommandGate,
-  resolveMentionGating,
   resolveInboundSessionEnvelopeContext,
   shouldIncludeSupplementalContext,
   formatAllowlistMatchMeta,
@@ -21,14 +22,16 @@ import {
   type MSTeamsAttachmentLike,
   summarizeMSTeamsHtmlAttachments,
 } from "../attachments.js";
+import { isRecord } from "../attachments/shared.js";
 import type { StoredConversationReference } from "../conversation-store.js";
 import { formatUnknownError } from "../errors.js";
 import {
-  fetchChannelMessage,
   fetchThreadReplies,
   formatThreadContext,
   resolveTeamGroupId,
+  type GraphThreadMessage,
 } from "../graph-thread.js";
+import { resolveGraphChatId } from "../graph-upload.js";
 import {
   extractMSTeamsConversationMessageId,
   extractMSTeamsQuoteInfo,
@@ -38,10 +41,14 @@ import {
   translateMSTeamsDmConversationIdForGraph,
   wasMSTeamsBotMentioned,
 } from "../inbound.js";
+import {
+  fetchParentMessageCached,
+  formatParentContextEvent,
+  markParentContextInjected,
+  shouldInjectParentContext,
+  summarizeParentMessage,
+} from "../thread-parent-context.js";
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
 function extractTextFromHtmlAttachments(attachments: MSTeamsAttachmentLike[]): string {
   for (const attachment of attachments) {
     if (attachment.contentType !== "text/html") {
@@ -75,7 +82,7 @@ function extractTextFromHtmlAttachments(attachments: MSTeamsAttachmentLike[]): s
   }
   return "";
 }
-import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.js";
+import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.types.js";
 import {
   isMSTeamsGroupAllowed,
   resolveMSTeamsAllowlistMatch,
@@ -94,14 +101,23 @@ function buildStoredConversationReference(params: {
   conversationId: string;
   conversationType: string;
   teamId?: string;
+  /** Thread root message ID for channel thread messages. */
+  threadId?: string;
 }): StoredConversationReference {
-  const { activity, conversationId, conversationType, teamId } = params;
+  const { activity, conversationId, conversationType, teamId, threadId } = params;
   const from = activity.from;
   const conversation = activity.conversation;
   const agent = activity.recipient;
   const clientInfo = activity.entities?.find((e) => e.type === "clientInfo") as
     | { timezone?: string }
     | undefined;
+  // Bot Framework requires `tenantId` on outbound proactive activities so the
+  // connector can route them to the correct Azure AD tenant; missing it causes
+  // HTTP 403. Channel activities often leave `conversation.tenantId` unset, so
+  // prefer the canonical `channelData.tenant.id` source when available.
+  const channelDataTenantId = activity.channelData?.tenant?.id;
+  const tenantId = channelDataTenantId ?? conversation?.tenantId;
+  const aadObjectId = from?.aadObjectId;
   return {
     activityId: activity.id,
     user: from ? { id: from.id, name: from.name, aadObjectId: from.aadObjectId } : undefined,
@@ -110,13 +126,16 @@ function buildStoredConversationReference(params: {
     conversation: {
       id: conversationId,
       conversationType,
-      tenantId: conversation?.tenantId,
+      tenantId,
     },
+    ...(tenantId ? { tenantId } : {}),
+    ...(aadObjectId ? { aadObjectId } : {}),
     teamId,
     channelId: activity.channelId,
     serviceUrl: activity.serviceUrl,
     locale: activity.locale,
     ...(clientInfo?.timezone ? { timezone: clientInfo.timezone } : {}),
+    ...(threadId ? { threadId } : {}),
   };
 }
 
@@ -162,7 +181,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     text: string;
     attachments: MSTeamsAttachmentLike[];
     wasMentioned: boolean;
-    implicitMention: boolean;
+    implicitMentionKinds: Array<"reply_to_bot">;
   };
 
   const handleTeamsMessageNow = async (params: MSTeamsDebounceEntry) => {
@@ -171,7 +190,10 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const rawText = params.rawText;
     const text = params.text;
     const attachments = params.attachments;
-    const attachmentPlaceholder = buildMSTeamsAttachmentPlaceholder(attachments);
+    const attachmentPlaceholder = buildMSTeamsAttachmentPlaceholder(attachments, {
+      maxInlineBytes: mediaMaxBytes,
+      maxInlineTotalBytes: mediaMaxBytes,
+    });
     const rawBody = text || attachmentPlaceholder;
     const quoteInfo = extractMSTeamsQuoteInfo(attachments);
     let quoteSenderId: string | undefined;
@@ -208,11 +230,19 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const conversationMessageId = extractMSTeamsConversationMessageId(rawConversationId);
     const conversationType = conversation?.conversationType ?? "personal";
     const teamId = activity.channelData?.team?.id;
+    // For channel thread messages, resolve the thread root message ID so outbound
+    // replies land in the correct thread. The root ID comes from the `messageid=`
+    // portion of conversation.id (preferred) or from activity.replyToId.
+    const threadId =
+      conversationType === "channel"
+        ? (conversationMessageId ?? activity.replyToId ?? undefined)
+        : undefined;
     const conversationRef = buildStoredConversationReference({
       activity,
       conversationId,
       conversationType,
       teamId,
+      threadId,
     });
 
     const {
@@ -441,6 +471,21 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       },
     });
 
+    // Isolate channel thread sessions: each thread gets its own session key so
+    // context does not bleed across threads. Prefer conversationMessageId (the
+    // ;messageid= portion of conversation.id, i.e. the thread root) over
+    // activity.replyToId (which may point to a non-root parent in deep threads).
+    // DMs and group chats are unaffected — only channel thread replies fork.
+    const channelThreadId = isChannel
+      ? (conversationMessageId ?? activity.replyToId ?? undefined)
+      : undefined;
+    const threadKeys = resolveThreadSessionKeys({
+      baseSessionKey: route.sessionKey,
+      threadId: channelThreadId,
+      parentSessionKey: channelThreadId ? route.sessionKey : undefined,
+    });
+    route.sessionKey = threadKeys.sessionKey;
+
     const preview = rawBody.replace(/\s+/g, " ").slice(0, 160);
     const inboundLabel = isDirectMessage
       ? `Teams DM from ${senderName}`
@@ -460,17 +505,24 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       channelConfig,
     });
     const timestamp = parseMSTeamsActivityTimestamp(activity.timestamp);
-
-    if (!isDirectMessage) {
-      const mentionGate = resolveMentionGating({
-        requireMention: Boolean(requireMention),
+    const mentionDecision = resolveInboundMentionDecision({
+      facts: {
         canDetectMention: true,
         wasMentioned: params.wasMentioned,
-        implicitMention: params.implicitMention,
-        shouldBypassMention: false,
-      });
-      const mentioned = mentionGate.effectiveWasMentioned;
-      if (requireMention && mentionGate.shouldSkip) {
+        implicitMentionKinds: params.implicitMentionKinds,
+      },
+      policy: {
+        isGroup: !isDirectMessage,
+        requireMention,
+        allowTextCommands: false,
+        hasControlCommand: false,
+        commandAuthorized: false,
+      },
+    });
+
+    if (!isDirectMessage) {
+      const mentioned = mentionDecision.effectiveWasMentioned;
+      if (requireMention && mentionDecision.shouldSkip) {
         log.debug?.("skipping message (mention required)", {
           teamId,
           channelId,
@@ -491,12 +543,41 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         return;
       }
     }
-    const graphConversationId = translateMSTeamsDmConversationIdForGraph({
+    let graphConversationId = translateMSTeamsDmConversationIdForGraph({
       isDirectMessage,
       conversationId,
       aadObjectId: from.aadObjectId,
       appId,
     });
+
+    // For personal DMs the Bot Framework conversation ID (`a:...`) and the
+    // synthetic `19:{userId}_{appId}@unq.gbl.spaces` format produced by
+    // translateMSTeamsDmConversationIdForGraph are not always accepted by the
+    // Graph `/chats/{chatId}/messages` endpoint. Resolve the real Graph chat
+    // ID via the API (with conversation store caching) so the Graph media
+    // download fallback works when the direct Bot Framework download fails.
+    if (isDirectMessage && conversationId.startsWith("a:")) {
+      const cached = await conversationStore.get(conversationId);
+      if (cached?.graphChatId) {
+        graphConversationId = cached.graphChatId;
+      } else {
+        try {
+          const resolved = await resolveGraphChatId({
+            botFrameworkConversationId: conversationId,
+            userAadObjectId: from.aadObjectId ?? undefined,
+            tokenProvider,
+          });
+          if (resolved) {
+            graphConversationId = resolved;
+            conversationStore
+              .upsert(conversationId, { ...conversationRef, graphChatId: resolved })
+              .catch(() => {});
+          }
+        } catch {
+          log.debug?.("failed to resolve Graph chat ID for inbound media", { conversationId });
+        }
+      }
+    }
 
     const mediaList = await resolveMSTeamsInboundMedia({
       attachments,
@@ -508,6 +589,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       conversationType,
       conversationId: graphConversationId,
       conversationMessageId: conversationMessageId ?? undefined,
+      serviceUrl: activity.serviceUrl,
       activity: {
         id: activity.id,
         replyToId: activity.replyToId,
@@ -522,15 +604,64 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
 
     // Fetch thread history when the message is a reply inside a Teams channel thread.
     // This is a best-effort enhancement; errors are logged and do not block the reply.
+    //
+    // We also enqueue a compact `Replying to @sender: …` system event when the parent
+    // is resolvable. On brand-new thread sessions (see PR #62713), this gives the agent
+    // immediate parent context even before the fuller `[Thread history]` block is assembled.
+    // Parent fetches are cached (5 min LRU, 100 entries) and per-session deduped so
+    // consecutive replies in the same thread do not re-inject identical context.
     let threadContext: string | undefined;
     if (activity.replyToId && isChannel && teamId) {
       try {
         const graphToken = await tokenProvider.getAccessToken("https://graph.microsoft.com");
         const groupId = await resolveTeamGroupId(graphToken, teamId);
-        const [parentMsg, replies] = await Promise.all([
-          fetchChannelMessage(graphToken, groupId, conversationId, activity.replyToId),
+        // Use allSettled so a failure in one fetch does not discard the other.
+        // For example, reply-fetch 403 should not throw away a successful parent fetch.
+        const [parentResult, repliesResult] = await Promise.allSettled([
+          fetchParentMessageCached(graphToken, groupId, conversationId, activity.replyToId),
           fetchThreadReplies(graphToken, groupId, conversationId, activity.replyToId),
         ]);
+        const parentMsg = parentResult.status === "fulfilled" ? parentResult.value : undefined;
+        const replies = repliesResult.status === "fulfilled" ? repliesResult.value : [];
+        if (parentResult.status === "rejected") {
+          log.debug?.("failed to fetch parent message", {
+            error: formatUnknownError(parentResult.reason),
+          });
+        }
+        if (repliesResult.status === "rejected") {
+          log.debug?.("failed to fetch thread replies", {
+            error: formatUnknownError(repliesResult.reason),
+          });
+        }
+        const isThreadSenderAllowed = (msg: GraphThreadMessage) =>
+          groupPolicy === "allowlist"
+            ? resolveMSTeamsAllowlistMatch({
+                allowFrom: effectiveGroupAllowFrom,
+                senderId: msg.from?.user?.id ?? "",
+                senderName: msg.from?.user?.displayName,
+                allowNameMatching,
+              }).allowed
+            : true;
+        const parentSummary = summarizeParentMessage(parentMsg);
+        const visibleParentMessages = parentMsg
+          ? filterSupplementalContextItems({
+              items: [parentMsg],
+              mode: contextVisibilityMode,
+              kind: "thread",
+              isSenderAllowed: isThreadSenderAllowed,
+            }).items
+          : [];
+        if (
+          parentSummary &&
+          visibleParentMessages.length > 0 &&
+          shouldInjectParentContext(route.sessionKey, activity.replyToId)
+        ) {
+          core.system.enqueueSystemEvent(formatParentContextEvent(parentSummary), {
+            sessionKey: route.sessionKey,
+            contextKey: `msteams:thread-parent:${conversationId}:${activity.replyToId}`,
+          });
+          markParentContextInjected(route.sessionKey, activity.replyToId);
+        }
         const allMessages = parentMsg ? [parentMsg, ...replies] : replies;
         quoteSenderId = parentMsg?.from?.user?.id ?? parentMsg?.from?.application?.id ?? undefined;
         quoteSenderName =
@@ -541,15 +672,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
           items: allMessages,
           mode: contextVisibilityMode,
           kind: "thread",
-          isSenderAllowed: (msg) =>
-            groupPolicy === "allowlist"
-              ? resolveMSTeamsAllowlistMatch({
-                  allowFrom: effectiveGroupAllowFrom,
-                  senderId: msg.from?.user?.id ?? "",
-                  senderName: msg.from?.user?.displayName,
-                  allowNameMatching,
-                }).allowed
-              : true,
+          isSenderAllowed: isThreadSenderAllowed,
         });
         const formatted = formatThreadContext(threadMessages, activity.id);
         if (formatted) {
@@ -629,6 +752,13 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       ? `[Thread history]\n${threadContext}\n[/Thread history]\n\n${rawBody}`
       : rawBody;
 
+    // For Teams *channel* messages (not group chats / DMs), preserve the
+    // `teamId/channelId` pair on NativeChannelId so downstream action handlers
+    // can route through `/teams/{teamId}/channels/{channelId}` via Graph API.
+    // The bare conversation id (`19:...@thread.tacv2`) is insufficient on its
+    // own because channel Graph endpoints require the owning team id too.
+    const nativeChannelId = isChannel && teamId ? `${teamId}/${conversationId}` : undefined;
+
     const ctxPayload = core.channel.reply.finalizeInboundContext({
       Body: combinedBody,
       BodyForAgent: bodyForAgent,
@@ -643,16 +773,18 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       ChatType: isDirectMessage ? "direct" : isChannel ? "channel" : "group",
       ConversationLabel: envelopeFrom,
       GroupSubject: !isDirectMessage ? conversationType : undefined,
+      GroupSpace: teamId,
       SenderName: senderName,
       SenderId: senderId,
       Provider: "msteams" as const,
       Surface: "msteams" as const,
       MessageSid: activity.id,
       Timestamp: timestamp?.getTime() ?? Date.now(),
-      WasMentioned: isDirectMessage || params.wasMentioned || params.implicitMention,
+      WasMentioned: isDirectMessage || mentionDecision.effectiveWasMentioned,
       CommandAuthorized: commandAuthorized,
       OriginatingChannel: "msteams" as const,
       OriginatingTo: teamsTo,
+      NativeChannelId: nativeChannelId,
       ReplyToId: activity.replyToId ?? undefined,
       ReplyToBody: includeQuoteContext ? quoteInfo?.body : undefined,
       ReplyToSender: includeQuoteContext ? quoteInfo?.sender : undefined,
@@ -798,14 +930,14 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         .filter(Boolean)
         .join("\n");
       const wasMentioned = entries.some((entry) => entry.wasMentioned);
-      const implicitMention = entries.some((entry) => entry.implicitMention);
+      const implicitMentionKinds = entries.flatMap((entry) => entry.implicitMentionKinds);
       await handleTeamsMessageNow({
         context: last.context,
         rawText: combinedRawText,
         text: combinedText,
         attachments: [],
         wasMentioned,
-        implicitMention,
+        implicitMentionKinds,
       });
     },
     onError: (err) => {
@@ -824,9 +956,10 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const wasMentioned = wasMSTeamsBotMentioned(activity);
     const conversationId = normalizeMSTeamsConversationId(activity.conversation?.id ?? "");
     const replyToId = activity.replyToId ?? undefined;
-    const implicitMention = Boolean(
-      conversationId && replyToId && wasMSTeamsMessageSent(conversationId, replyToId),
-    );
+    const implicitMentionKinds: Array<"reply_to_bot"> =
+      conversationId && replyToId && wasMSTeamsMessageSent(conversationId, replyToId)
+        ? ["reply_to_bot"]
+        : [];
 
     await inboundDebouncer.enqueue({
       context,
@@ -834,7 +967,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       text,
       attachments,
       wasMentioned,
-      implicitMention,
+      implicitMentionKinds,
     });
   };
 }

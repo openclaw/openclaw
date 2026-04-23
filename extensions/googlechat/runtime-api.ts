@@ -47,7 +47,7 @@ export {
   type GoogleChatConfig,
 } from "openclaw/plugin-sdk/googlechat-runtime-shared";
 export { extractToolSend } from "openclaw/plugin-sdk/tool-send";
-export { resolveMentionGatingWithBypass } from "openclaw/plugin-sdk/channel-inbound";
+export { resolveInboundMentionDecision } from "openclaw/plugin-sdk/channel-inbound";
 export { resolveInboundRouteEnvelopeBuilderWithRuntime } from "openclaw/plugin-sdk/inbound-envelope";
 export { resolveWebhookPath } from "openclaw/plugin-sdk/webhook-path";
 export {

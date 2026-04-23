@@ -101,4 +101,31 @@ describe("resolvePreferredProviderForAuthChoice", () => {
     );
     expect(resolvePluginProviders).not.toHaveBeenCalled();
   });
+
+  it("passes untrusted-workspace filtering through setup-provider fallback lookup", async () => {
+    resolvePluginProviders.mockReturnValue([
+      {
+        id: "demo-provider",
+        label: "Demo Provider",
+        auth: [{ id: "api-key", label: "API key", kind: "api_key" }],
+      },
+    ] as never);
+    resolveProviderPluginChoice.mockReturnValue({
+      provider: { id: "demo-provider" },
+      method: { id: "api-key" },
+    });
+
+    await expect(
+      resolvePreferredProviderForAuthChoice({
+        choice: "demo-provider",
+        includeUntrustedWorkspacePlugins: false,
+      }),
+    ).resolves.toBe("demo-provider");
+    expect(resolvePluginProviders).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mode: "setup",
+        includeUntrustedWorkspacePlugins: false,
+      }),
+    );
+  });
 });

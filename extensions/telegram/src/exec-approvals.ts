@@ -11,12 +11,16 @@ import type { TelegramExecApprovalConfig } from "openclaw/plugin-sdk/config-runt
 import type { ExecApprovalRequest, PluginApprovalRequest } from "openclaw/plugin-sdk/infra-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import { listTelegramAccountIds, resolveTelegramAccount } from "./accounts.js";
 import { resolveTelegramInlineButtonsConfigScope } from "./inline-buttons.js";
 import { normalizeTelegramChatId, resolveTelegramTargetChatType } from "./targets.js";
 
 function normalizeApproverId(value: string | number): string {
-  return String(value).trim();
+  return normalizeOptionalString(String(value)) ?? "";
 }
 
 function normalizeTelegramDirectApproverId(value: string | number): string | undefined {
@@ -107,7 +111,9 @@ function matchesTelegramRequestAccount(params: {
   accountId?: string | null;
   request: ExecApprovalRequest | PluginApprovalRequest;
 }): boolean {
-  const turnSourceChannel = params.request.request.turnSourceChannel?.trim().toLowerCase() || "";
+  const turnSourceChannel = normalizeLowercaseStringOrEmpty(
+    params.request.request.turnSourceChannel,
+  );
   const boundAccountId = resolveApprovalRequestChannelAccountId({
     cfg: params.cfg,
     request: params.request,

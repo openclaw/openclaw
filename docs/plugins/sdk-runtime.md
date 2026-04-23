@@ -50,9 +50,9 @@ const timeoutMs = api.runtime.agent.resolveAgentTimeoutMs(cfg);
 // Ensure workspace exists
 await api.runtime.agent.ensureAgentWorkspace(cfg);
 
-// Run an embedded Pi agent
+// Run an embedded agent turn
 const agentDir = api.runtime.agent.resolveAgentDir(cfg);
-const result = await api.runtime.agent.runEmbeddedPiAgent({
+const result = await api.runtime.agent.runEmbeddedAgent({
   sessionId: "my-plugin:task-1",
   runId: crypto.randomUUID(),
   sessionFile: path.join(agentDir, "sessions", "my-plugin-task-1.jsonl"),
@@ -61,6 +61,12 @@ const result = await api.runtime.agent.runEmbeddedPiAgent({
   timeoutMs: api.runtime.agent.resolveAgentTimeoutMs(cfg),
 });
 ```
+
+`runEmbeddedAgent(...)` is the neutral helper for starting a normal OpenClaw
+agent turn from plugin code. It uses the same provider/model resolution and
+agent-harness selection as channel-triggered replies.
+
+`runEmbeddedPiAgent(...)` remains as a compatibility alias.
 
 **Session store helpers** are under `api.runtime.agent.session`:
 
@@ -330,6 +336,46 @@ api.runtime.tools.registerMemoryCli(/* ... */);
 
 Channel-specific runtime helpers (available when a channel plugin is loaded).
 
+`api.runtime.channel.mentions` is the shared inbound mention-policy surface for
+bundled channel plugins that use runtime injection:
+
+```typescript
+const mentionMatch = api.runtime.channel.mentions.matchesMentionWithExplicit(text, {
+  mentionRegexes,
+  mentionPatterns,
+});
+
+const decision = api.runtime.channel.mentions.resolveInboundMentionDecision({
+  facts: {
+    canDetectMention: true,
+    wasMentioned: mentionMatch.matched,
+    implicitMentionKinds: api.runtime.channel.mentions.implicitMentionKindWhen(
+      "reply_to_bot",
+      isReplyToBot,
+    ),
+  },
+  policy: {
+    isGroup,
+    requireMention,
+    allowTextCommands,
+    hasControlCommand,
+    commandAuthorized,
+  },
+});
+```
+
+Available mention helpers:
+
+- `buildMentionRegexes`
+- `matchesMentionPatterns`
+- `matchesMentionWithExplicit`
+- `implicitMentionKindWhen`
+- `resolveInboundMentionDecision`
+
+`api.runtime.channel.mentions` intentionally does not expose the older
+`resolveMentionGating*` compatibility helpers. Prefer the normalized
+`{ facts, policy }` path.
+
 ## Storing runtime references
 
 Use `createPluginRuntimeStore` to store the runtime reference for use outside
@@ -339,7 +385,10 @@ the `register` callback:
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 
-const store = createPluginRuntimeStore<PluginRuntime>("my-plugin runtime not initialized");
+const store = createPluginRuntimeStore<PluginRuntime>({
+  pluginId: "my-plugin",
+  errorMessage: "my-plugin runtime not initialized",
+});
 
 // In your entry point
 export default defineChannelPluginEntry({
@@ -359,6 +408,10 @@ export function tryGetRuntime() {
   return store.tryGetRuntime(); // returns null if not initialized
 }
 ```
+
+Prefer `pluginId` for the runtime-store identity. The lower-level `key` form is
+for uncommon cases where one plugin intentionally needs more than one runtime
+slot.
 
 ## Other top-level `api` fields
 

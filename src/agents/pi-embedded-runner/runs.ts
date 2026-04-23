@@ -15,6 +15,7 @@ import {
   logSessionStateChange,
 } from "../../logging/diagnostic.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
 export type EmbeddedPiQueueHandle = {
   kind?: "embedded";
@@ -56,11 +57,21 @@ const embeddedRunState = resolveGlobalSingleton(EMBEDDED_RUN_STATE_KEY, () => ({
   waiters: new Map<string, Set<EmbeddedRunWaiter>>(),
   modelSwitchRequests: new Map<string, EmbeddedRunModelSwitchRequest>(),
 }));
-const ACTIVE_EMBEDDED_RUNS = embeddedRunState.activeRuns;
-const ACTIVE_EMBEDDED_RUN_SNAPSHOTS = embeddedRunState.snapshots;
-const ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY = embeddedRunState.sessionIdsByKey;
-const EMBEDDED_RUN_WAITERS = embeddedRunState.waiters;
-const EMBEDDED_RUN_MODEL_SWITCH_REQUESTS = embeddedRunState.modelSwitchRequests;
+const ACTIVE_EMBEDDED_RUNS =
+  embeddedRunState.activeRuns ??
+  (embeddedRunState.activeRuns = new Map<string, EmbeddedPiQueueHandle>());
+const ACTIVE_EMBEDDED_RUN_SNAPSHOTS =
+  embeddedRunState.snapshots ??
+  (embeddedRunState.snapshots = new Map<string, ActiveEmbeddedRunSnapshot>());
+const ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY =
+  embeddedRunState.sessionIdsByKey ??
+  (embeddedRunState.sessionIdsByKey = new Map<string, string>());
+const EMBEDDED_RUN_WAITERS =
+  embeddedRunState.waiters ??
+  (embeddedRunState.waiters = new Map<string, Set<EmbeddedRunWaiter>>());
+const EMBEDDED_RUN_MODEL_SWITCH_REQUESTS =
+  embeddedRunState.modelSwitchRequests ??
+  (embeddedRunState.modelSwitchRequests = new Map<string, EmbeddedRunModelSwitchRequest>());
 
 function setActiveRunSessionKey(sessionKey: string | undefined, sessionId: string): void {
   const normalizedSessionKey = sessionKey?.trim();
@@ -234,8 +245,10 @@ export function requestEmbeddedRunModelSwitch(
   EMBEDDED_RUN_MODEL_SWITCH_REQUESTS.set(normalizedSessionId, {
     provider,
     model,
-    authProfileId: request.authProfileId?.trim() || undefined,
-    authProfileIdSource: request.authProfileId?.trim() ? request.authProfileIdSource : undefined,
+    authProfileId: normalizeOptionalString(request.authProfileId),
+    authProfileIdSource: normalizeOptionalString(request.authProfileId)
+      ? request.authProfileIdSource
+      : undefined,
   });
   diag.debug(
     `model switch requested: sessionId=${normalizedSessionId} provider=${provider} model=${model}`,

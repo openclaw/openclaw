@@ -1,7 +1,6 @@
 import type { Mock } from "vitest";
 import { vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
-import { mergeMockedModule } from "../test-utils/vitest-module-mocks.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 type ReplaceConfigFileResult = Awaited<
@@ -24,25 +23,36 @@ export const replaceConfigFileMock: Mock<(...args: unknown[]) => Promise<unknown
   },
 ) as Mock<(...args: unknown[]) => Promise<unknown>>;
 
-vi.mock("../config/config.js", async () => {
-  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
-  return await mergeMockedModule(actual, () => ({
-    readConfigFileSnapshot: (...args: Parameters<typeof actual.readConfigFileSnapshot>) =>
-      readConfigFileSnapshotMock(...args) as ReturnType<typeof actual.readConfigFileSnapshot>,
-    writeConfigFile: (...args: Parameters<typeof actual.writeConfigFile>) =>
-      writeConfigFileMock(...args) as ReturnType<typeof actual.writeConfigFile>,
-    replaceConfigFile: (...args: Parameters<typeof actual.replaceConfigFile>) =>
-      replaceConfigFileMock(...args) as ReturnType<typeof actual.replaceConfigFile>,
-  }));
-});
+vi.mock("../config/config.js", () => ({
+  readConfigFileSnapshot: (...args: unknown[]) => readConfigFileSnapshotMock(...args),
+  writeConfigFile: (...args: unknown[]) => writeConfigFileMock(...args),
+  replaceConfigFile: (...args: unknown[]) => replaceConfigFileMock(...args),
+}));
+
+vi.mock("./agents.command-shared.js", () => ({
+  createQuietRuntime: <T>(runtime: T) => runtime,
+  requireValidConfig: async () => {
+    const snapshot = (await readConfigFileSnapshotMock()) as
+      | { config?: OpenClawConfig; sourceConfig?: OpenClawConfig }
+      | undefined;
+    return snapshot?.sourceConfig ?? snapshot?.config ?? null;
+  },
+  requireValidConfigFileSnapshot: async () => readConfigFileSnapshotMock(),
+}));
 
 export const runtime = createTestRuntime();
 
 let agentsCommandModulePromise: Promise<typeof import("./agents.js")> | undefined;
+let agentsBindCommandModulePromise: Promise<typeof import("./agents.commands.bind.js")> | undefined;
 
 export async function loadFreshAgentsCommandModuleForTest() {
   agentsCommandModulePromise ??= import("./agents.js");
   return await agentsCommandModulePromise;
+}
+
+export async function loadFreshAgentsBindCommandModuleForTest() {
+  agentsBindCommandModulePromise ??= import("./agents.commands.bind.js");
+  return await agentsBindCommandModulePromise;
 }
 
 export function resetAgentsBindTestHarness(): void {

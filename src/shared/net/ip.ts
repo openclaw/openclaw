@@ -1,4 +1,5 @@
 import ipaddr from "ipaddr.js";
+import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../string-coerce.js";
 
 export type ParsedIpAddress = ipaddr.IPv4 | ipaddr.IPv6;
 type Ipv4Range = ReturnType<ipaddr.IPv4["range"]>;
@@ -134,7 +135,7 @@ function normalizeIpv4MappedAddress(address: ParsedIpAddress): ParsedIpAddress {
 }
 
 function normalizeIpParseInput(raw: string | undefined): string | undefined {
-  const trimmed = raw?.trim();
+  const trimmed = normalizeOptionalString(raw);
   if (!trimmed) {
     return undefined;
   }
@@ -175,11 +176,11 @@ export function normalizeIpAddress(raw: string | undefined): string | undefined 
     return undefined;
   }
   const normalized = normalizeIpv4MappedAddress(parsed);
-  return normalized.toString().toLowerCase();
+  return normalizeLowercaseStringOrEmpty(normalized.toString());
 }
 
 export function isCanonicalDottedDecimalIPv4(raw: string | undefined): boolean {
-  const trimmed = raw?.trim();
+  const trimmed = normalizeOptionalString(raw);
   if (!trimmed) {
     return false;
   }
@@ -191,7 +192,7 @@ export function isCanonicalDottedDecimalIPv4(raw: string | undefined): boolean {
 }
 
 export function isLegacyIpv4Literal(raw: string | undefined): boolean {
-  const trimmed = raw?.trim();
+  const trimmed = normalizeOptionalString(raw);
   if (!trimmed) {
     return false;
   }

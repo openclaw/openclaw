@@ -10,6 +10,7 @@
  */
 
 import { createDraftStreamLoop, type DraftStreamLoop } from "openclaw/plugin-sdk/channel-lifecycle";
+import { readStringValue } from "openclaw/plugin-sdk/text-runtime";
 
 /** Default throttle interval between stream updates (ms).
  * Teams docs recommend buffering tokens for 1.5-2s; limit is 1 req/s. */
@@ -45,8 +46,7 @@ import { formatUnknownError } from "./errors.js";
 
 function extractId(response: unknown): string | undefined {
   if (response && typeof response === "object" && "id" in response) {
-    const id = (response as { id?: unknown }).id;
-    return typeof id === "string" ? id : undefined;
+    return readStringValue((response as { id?: unknown }).id);
   }
   return undefined;
 }

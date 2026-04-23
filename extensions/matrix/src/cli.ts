@@ -1,6 +1,8 @@
 import type { Command } from "commander";
+import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import { formatZonedTimestamp } from "openclaw/plugin-sdk/matrix-runtime-shared";
+import type { ChannelSetupInput } from "openclaw/plugin-sdk/setup";
 import { resolveMatrixAccount, resolveMatrixAccountConfig } from "./matrix/accounts.js";
-import { withResolvedActionClient, withStartedActionClient } from "./matrix/actions/client.js";
 import { listMatrixOwnDevices, pruneMatrixStaleGatewayDevices } from "./matrix/actions/devices.js";
 import { updateMatrixOwnProfile } from "./matrix/actions/profile.js";
 import {
@@ -16,18 +18,29 @@ import { resolveMatrixAuthContext } from "./matrix/client.js";
 import { setMatrixSdkConsoleLogging, setMatrixSdkLogMode } from "./matrix/client/logging.js";
 import { resolveMatrixConfigPath, updateMatrixAccountConfig } from "./matrix/config-update.js";
 import { isOpenClawManagedMatrixDevice } from "./matrix/device-health.js";
-import {
-  inspectMatrixDirectRooms,
-  repairMatrixDirectRooms,
-  type MatrixDirectRoomCandidate,
-} from "./matrix/direct-management.js";
+import type { MatrixDirectRoomCandidate } from "./matrix/direct-management.js";
+import { formatMatrixErrorMessage } from "./matrix/errors.js";
 import { applyMatrixProfileUpdate, type MatrixProfileUpdateResult } from "./profile-update.js";
-import { formatZonedTimestamp, normalizeAccountId, type ChannelSetupInput } from "./runtime-api.js";
 import { getMatrixRuntime } from "./runtime.js";
 import { matrixSetupAdapter } from "./setup-core.js";
 import type { CoreConfig } from "./types.js";
 
 let matrixCliExitScheduled = false;
+type MatrixActionClientModule = typeof import("./matrix/actions/client.js");
+type MatrixDirectManagementModule = typeof import("./matrix/direct-management.js");
+
+let matrixActionClientModulePromise: Promise<MatrixActionClientModule> | undefined;
+let matrixDirectManagementModulePromise: Promise<MatrixDirectManagementModule> | undefined;
+
+function loadMatrixActionClientModule(): Promise<MatrixActionClientModule> {
+  matrixActionClientModulePromise ??= import("./matrix/actions/client.js");
+  return matrixActionClientModulePromise;
+}
+
+function loadMatrixDirectManagementModule(): Promise<MatrixDirectManagementModule> {
+  matrixDirectManagementModulePromise ??= import("./matrix/direct-management.js");
+  return matrixDirectManagementModulePromise;
+}
 
 export function resetMatrixCliStateForTests(): void {
   matrixCliExitScheduled = false;
@@ -49,7 +62,7 @@ function markCliFailure(): void {
 }
 
 function toErrorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
+  return formatMatrixErrorMessage(err);
 }
 
 function printJson(payload: unknown): void {
@@ -333,6 +346,10 @@ async function inspectMatrixDirectRoom(params: {
   accountId: string;
   userId: string;
 }): Promise<MatrixCliDirectRoomInspection> {
+  const [{ withResolvedActionClient }, { inspectMatrixDirectRooms }] = await Promise.all([
+    loadMatrixActionClientModule(),
+    loadMatrixDirectManagementModule(),
+  ]);
   return await withResolvedActionClient(
     { accountId: params.accountId },
     async (client) => {
@@ -360,6 +377,10 @@ async function repairMatrixDirectRoom(params: {
 }): Promise<MatrixCliDirectRoomRepair> {
   const cfg = getMatrixRuntime().config.loadConfig() as CoreConfig;
   const account = resolveMatrixAccount({ cfg, accountId: params.accountId });
+  const [{ withStartedActionClient }, { repairMatrixDirectRooms }] = await Promise.all([
+    loadMatrixActionClientModule(),
+    loadMatrixDirectManagementModule(),
+  ]);
   return await withStartedActionClient({ accountId: params.accountId }, async (client) => {
     const repaired = await repairMatrixDirectRooms({
       client,

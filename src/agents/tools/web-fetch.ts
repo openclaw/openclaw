@@ -1,11 +1,17 @@
-import { Type } from "@sinclair/typebox";
-import type { OpenClawConfig } from "../../config/config.js";
+import { Type } from "typebox";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { SsrFBlockedError, type LookupFn } from "../../infra/net/ssrf.js";
 import { logDebug } from "../../logger.js";
 import type { RuntimeWebFetchMetadata } from "../../secrets/runtime-web-tools.types.js";
 import { wrapExternalContent, wrapWebContent } from "../../security/external-content.js";
-import { resolveWebFetchDefinition } from "../../web-fetch/runtime.js";
-import { stringEnum } from "../schema/typebox.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
+import { isRecord } from "../../utils.js";
+import { resolveWebProviderConfig } from "../../web/provider-runtime-shared.js";
+import { stringEnum } from "../schema/string-enum.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
 import {
@@ -16,7 +22,6 @@ import {
   truncateText,
   type ExtractMode,
 } from "./web-fetch-utils.js";
-import { fetchWithWebToolsNetworkGuard } from "./web-guarded-fetch.js";
 import {
   CacheEntry,
   DEFAULT_CACHE_TTL_MINUTES,
@@ -33,8 +38,8 @@ export { extractReadableContent } from "./web-fetch-utils.js";
 
 const EXTRACT_MODES = ["markdown", "text"] as const;
 
-const DEFAULT_FETCH_MAX_CHARS = 50_000;
-const DEFAULT_FETCH_MAX_RESPONSE_BYTES = 2_000_000;
+const DEFAULT_FETCH_MAX_CHARS = 20_000;
+const DEFAULT_FETCH_MAX_RESPONSE_BYTES = 750_000;
 const FETCH_MAX_RESPONSE_BYTES_MIN = 32_000;
 const FETCH_MAX_RESPONSE_BYTES_MAX = 10_000_000;
 const DEFAULT_FETCH_MAX_REDIRECTS = 3;
@@ -66,13 +71,35 @@ type WebFetchConfig = NonNullable<OpenClawConfig["tools"]>["web"] extends infer 
     ? Fetch
     : undefined
   : undefined;
+type ResolveWebFetchDefinition =
+  (typeof import("../../web-fetch/runtime.js"))["resolveWebFetchDefinition"];
+type WebFetchProviderFallback = ReturnType<ResolveWebFetchDefinition>;
+type WebFetchRuntimeModule = Pick<
+  typeof import("../../web-fetch/runtime.js"),
+  "resolveWebFetchDefinition"
+>;
+type WebGuardedFetchModule = Pick<
+  typeof import("./web-guarded-fetch.js"),
+  "fetchWithWebToolsNetworkGuard"
+>;
+
+let webFetchRuntimePromise: Promise<WebFetchRuntimeModule> | null = null;
+let webGuardedFetchPromise: Promise<WebGuardedFetchModule> | null = null;
+
+async function loadWebFetchRuntime(): Promise<WebFetchRuntimeModule> {
+  webFetchRuntimePromise ??= import("../../web-fetch/runtime.js");
+  return await webFetchRuntimePromise;
+}
+
+async function loadWebGuardedFetch(): Promise<
+  WebGuardedFetchModule["fetchWithWebToolsNetworkGuard"]
+> {
+  webGuardedFetchPromise ??= import("./web-guarded-fetch.js");
+  return (await webGuardedFetchPromise).fetchWithWebToolsNetworkGuard;
+}
 
 function resolveFetchConfig(cfg?: OpenClawConfig): WebFetchConfig {
-  const fetch = cfg?.tools?.web?.fetch;
-  if (!fetch || typeof fetch !== "object") {
-    return undefined;
-  }
-  return fetch as WebFetchConfig;
+  return resolveWebProviderConfig(cfg, "fetch") as NonNullable<WebFetchConfig> | undefined;
 }
 
 function resolveFetchEnabled(params: { fetch?: WebFetchConfig; sandboxed?: boolean }): boolean {
@@ -128,7 +155,7 @@ function looksLikeHtml(value: string): boolean {
   if (!trimmed) {
     return false;
   }
-  const head = trimmed.slice(0, 256).toLowerCase();
+  const head = normalizeLowercaseStringOrEmpty(trimmed.slice(0, 256));
   return head.startsWith("<!doctype html") || head.startsWith("<html");
 }
 
@@ -142,7 +169,7 @@ function formatWebFetchErrorDetail(params: {
     return "";
   }
   let text = detail;
-  const contentTypeLower = contentType?.toLowerCase();
+  const contentTypeLower = normalizeOptionalLowercaseString(contentType);
   if (contentTypeLower?.includes("text/html") || looksLikeHtml(detail)) {
     const rendered = htmlToMarkdown(detail);
     const withTitle = rendered.title ? `${rendered.title}\n${rendered.text}` : rendered.text;
@@ -244,19 +271,15 @@ type WebFetchRuntimeParams = {
   cacheTtlMs: number;
   userAgent: string;
   readabilityEnabled: boolean;
+  ssrfPolicy?: {
+    allowRfc2544BenchmarkRange?: boolean;
+  };
   lookupFn?: LookupFn;
-  resolveProviderFallback: () => ReturnType<typeof resolveWebFetchDefinition>;
+  resolveProviderFallback: () => Promise<WebFetchProviderFallback>;
 };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function normalizeProviderFinalUrl(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
+  const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
     return undefined;
   }
@@ -342,7 +365,7 @@ async function maybeFetchProviderWebFetchPayload(
     tookMs: number;
   },
 ): Promise<Record<string, unknown> | null> {
-  const providerFallback = params.resolveProviderFallback();
+  const providerFallback = await params.resolveProviderFallback();
   if (!providerFallback) {
     return null;
   }
@@ -364,8 +387,9 @@ async function maybeFetchProviderWebFetchPayload(
 }
 
 async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string, unknown>> {
+  const allowRfc2544BenchmarkRange = params.ssrfPolicy?.allowRfc2544BenchmarkRange === true;
   const cacheKey = normalizeCacheKey(
-    `fetch:${params.url}:${params.extractMode}:${params.maxChars}`,
+    `fetch:${params.url}:${params.extractMode}:${params.maxChars}${allowRfc2544BenchmarkRange ? ":allow-rfc2544" : ""}`,
   );
   const cached = readCache(FETCH_CACHE, cacheKey);
   if (cached) {
@@ -387,11 +411,13 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
   let release: (() => Promise<void>) | null = null;
   let finalUrl = params.url;
   try {
+    const fetchWithWebToolsNetworkGuard = await loadWebGuardedFetch();
     const result = await fetchWithWebToolsNetworkGuard({
       url: params.url,
       maxRedirects: params.maxRedirects,
       timeoutSeconds: params.timeoutSeconds,
       lookupFn: params.lookupFn,
+      policy: allowRfc2544BenchmarkRange ? { allowRfc2544BenchmarkRange } : undefined,
       init: {
         headers: {
           Accept: "text/markdown, text/html;q=0.9, */*;q=0.1",
@@ -502,7 +528,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
             extractor = "raw-html";
           } else {
             const providerLabel =
-              params.resolveProviderFallback()?.provider.label ?? "provider fallback";
+              (await params.resolveProviderFallback())?.provider.label ?? "provider fallback";
             throw new Error(
               `Web fetch extraction failed: Readability, ${providerLabel}, and basic HTML cleanup returned no content.`,
             );
@@ -582,9 +608,10 @@ export function createWebFetchTool(options?: {
     DEFAULT_FETCH_USER_AGENT;
   const maxResponseBytes = resolveFetchMaxResponseBytes(fetch);
   let providerFallbackResolved = false;
-  let providerFallbackCache: ReturnType<typeof resolveWebFetchDefinition>;
-  const resolveProviderFallback = () => {
+  let providerFallbackCache: WebFetchProviderFallback;
+  const resolveProviderFallback = async () => {
     if (!providerFallbackResolved) {
+      const { resolveWebFetchDefinition } = await loadWebFetchRuntime();
       providerFallbackCache = resolveWebFetchDefinition({
         config: options?.config,
         sandboxed: options?.sandboxed,
@@ -621,6 +648,7 @@ export function createWebFetchTool(options?: {
         cacheTtlMs: resolveCacheTtlMs(fetch?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
         userAgent,
         readabilityEnabled,
+        ssrfPolicy: fetch?.ssrfPolicy,
         lookupFn: options?.lookupFn,
         resolveProviderFallback,
       });

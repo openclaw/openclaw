@@ -70,7 +70,10 @@ export interface ChannelsConfig {
   defaults?: ChannelDefaultsConfig;
   /** Map provider -> channel id -> model override. */
   modelByChannel?: ChannelModelByChannelConfig;
-  /** Channel sections are plugin-owned; concrete channel files augment this interface. */
+  /**
+   * Channel sections are plugin-owned and keyed by arbitrary channel ids.
+   * Keep the lookup permissive so augmented channel configs remain ergonomic at call sites.
+   */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   [key: string]: any;
 }

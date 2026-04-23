@@ -15,6 +15,7 @@ export {
   addRoleDiscord,
   banMemberDiscord,
   createScheduledEventDiscord,
+  resolveEventCoverImage,
   fetchChannelInfoDiscord,
   fetchMemberInfoDiscord,
   fetchRoleInfoDiscord,

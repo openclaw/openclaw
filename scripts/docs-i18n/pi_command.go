@@ -16,6 +16,7 @@ const (
 	envDocsPiExecutable     = "OPENCLAW_DOCS_I18N_PI_EXECUTABLE"
 	envDocsPiArgs           = "OPENCLAW_DOCS_I18N_PI_ARGS"
 	envDocsPiPackageVersion = "OPENCLAW_DOCS_I18N_PI_PACKAGE_VERSION"
+	envDocsPiOmitProvider   = "OPENCLAW_DOCS_I18N_PI_OMIT_PROVIDER"
 	defaultPiPackageVersion = "0.58.3"
 )
 
@@ -117,4 +118,13 @@ func getMaterializedPiPackageVersion() string {
 		return version
 	}
 	return defaultPiPackageVersion
+}
+
+func docsPiOmitProvider() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(envDocsPiOmitProvider))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }

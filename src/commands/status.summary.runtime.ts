@@ -5,6 +5,11 @@ import { normalizeProviderId } from "../agents/provider-id.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+  normalizeOptionalLowercaseString,
+} from "../shared/string-coerce.js";
 
 function resolveStatusModelRefFromRaw(params: {
   cfg: OpenClawConfig;
@@ -17,11 +22,11 @@ function resolveStatusModelRefFromRaw(params: {
   }
   const configuredModels = params.cfg.agents?.defaults?.models ?? {};
   if (!trimmed.includes("/")) {
-    const aliasKey = trimmed.toLowerCase();
+    const aliasKey = normalizeLowercaseStringOrEmpty(trimmed);
     for (const [modelKey, entry] of Object.entries(configuredModels)) {
       const aliasValue = (entry as { alias?: unknown } | undefined)?.alias;
-      const alias = typeof aliasValue === "string" ? aliasValue.trim() : "";
-      if (!alias || alias.toLowerCase() !== aliasKey) {
+      const alias = normalizeOptionalString(aliasValue) ?? "";
+      if (!alias || normalizeOptionalLowercaseString(alias) !== aliasKey) {
         continue;
       }
       const parsed = parseModelRef(modelKey, params.defaultProvider, {
@@ -153,6 +158,7 @@ function resolveSessionModelRef(
       runtimeModel: entry?.model,
       overrideProvider: entry?.providerOverride,
       overrideModel: entry?.modelOverride,
+      allowPluginNormalization: false,
     }) ?? resolved
   );
 }
