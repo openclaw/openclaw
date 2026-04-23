@@ -470,6 +470,7 @@ export async function runPreparedReply(
         sessionKey,
         isMainSession,
         isNewSession,
+        latestSessionUpdatedAt: sessionEntry?.updatedAt,
       });
       if (eventsBlock) {
         drainedSystemEventBlocks.push(eventsBlock);

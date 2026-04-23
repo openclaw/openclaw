@@ -19,6 +19,7 @@ export type SystemEvent = {
   contextKey?: string | null;
   deliveryContext?: DeliveryContext;
   trusted?: boolean;
+  stalePolicy?: "drop-on-session-advance";
 };
 
 const MAX_EVENTS = 20;
@@ -38,6 +39,7 @@ type SystemEventOptions = {
   contextKey?: string | null;
   deliveryContext?: DeliveryContext;
   trusted?: boolean;
+  stalePolicy?: SystemEvent["stalePolicy"];
 };
 
 function requireSessionKey(key?: string | null): string {
@@ -107,6 +109,7 @@ export function enqueueSystemEvent(text: string, options: SystemEventOptions) {
     contextKey: normalizedContextKey,
     deliveryContext: normalizedDeliveryContext,
     trusted: options.trusted !== false,
+    stalePolicy: options.stalePolicy,
   });
   if (entry.queue.length > MAX_EVENTS) {
     entry.queue.shift();
@@ -148,8 +151,59 @@ function areSystemEventsEqual(left: SystemEvent, right: SystemEvent): boolean {
     left.ts === right.ts &&
     (left.contextKey ?? null) === (right.contextKey ?? null) &&
     (left.trusted ?? true) === (right.trusted ?? true) &&
+    (left.stalePolicy ?? null) === (right.stalePolicy ?? null) &&
     areDeliveryContextsEqual(left.deliveryContext, right.deliveryContext)
   );
+}
+
+function shouldDropSystemEventOnSessionAdvance(
+  event: SystemEvent,
+  latestSessionActivityAt?: number,
+): boolean {
+  return (
+    event.stalePolicy === "drop-on-session-advance" &&
+    typeof latestSessionActivityAt === "number" &&
+    Number.isFinite(latestSessionActivityAt) &&
+    latestSessionActivityAt > event.ts
+  );
+}
+
+function syncSessionQueueState(key: string, entry: SessionQueue) {
+  if (entry.queue.length === 0) {
+    entry.lastText = null;
+    entry.lastContextKey = null;
+    queues.delete(key);
+    return;
+  }
+  const newest = entry.queue[entry.queue.length - 1];
+  entry.lastText = newest.text;
+  entry.lastContextKey = newest.contextKey ?? null;
+}
+
+export function discardStaleSystemEventEntries(
+  sessionKey: string,
+  latestSessionActivityAt?: number,
+): SystemEvent[] {
+  const key = requireSessionKey(sessionKey);
+  const entry = getSessionQueue(key);
+  if (!entry || entry.queue.length === 0) {
+    return [];
+  }
+  const kept: SystemEvent[] = [];
+  const removed: SystemEvent[] = [];
+  for (const event of entry.queue) {
+    if (shouldDropSystemEventOnSessionAdvance(event, latestSessionActivityAt)) {
+      removed.push(cloneSystemEvent(event));
+      continue;
+    }
+    kept.push(event);
+  }
+  if (removed.length === 0) {
+    return [];
+  }
+  entry.queue = kept;
+  syncSessionQueueState(key, entry);
+  return removed;
 }
 
 export function consumeSystemEventEntries(
@@ -168,15 +222,7 @@ export function consumeSystemEventEntries(
     return [];
   }
   const removed = entry.queue.splice(0, consumedEntries.length).map(cloneSystemEvent);
-  if (entry.queue.length === 0) {
-    entry.lastText = null;
-    entry.lastContextKey = null;
-    queues.delete(key);
-  } else {
-    const newest = entry.queue[entry.queue.length - 1];
-    entry.lastText = newest.text;
-    entry.lastContextKey = newest.contextKey ?? null;
-  }
+  syncSessionQueueState(key, entry);
   return removed;
 }
 

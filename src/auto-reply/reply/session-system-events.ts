@@ -6,7 +6,10 @@ import {
   formatZonedTimestamp,
   resolveTimezone,
 } from "../../infra/format-time/format-datetime.ts";
-import { drainSystemEventEntries } from "../../infra/system-events.js";
+import {
+  discardStaleSystemEventEntries,
+  drainSystemEventEntries,
+} from "../../infra/system-events.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -18,6 +21,7 @@ export async function drainFormattedSystemEvents(params: {
   sessionKey: string;
   isMainSession: boolean;
   isNewSession: boolean;
+  latestSessionUpdatedAt?: number;
 }): Promise<string | undefined> {
   const compactSystemEvent = (line: string): string | null => {
     const trimmed = line.trim();
@@ -83,6 +87,7 @@ export async function drainFormattedSystemEvents(params: {
   };
 
   const systemLines: string[] = [];
+  discardStaleSystemEventEntries(params.sessionKey, params.latestSessionUpdatedAt);
   const queued = drainSystemEventEntries(params.sessionKey);
   systemLines.push(
     ...queued.flatMap((event) => {

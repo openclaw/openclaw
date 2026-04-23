@@ -301,6 +301,7 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
     sessionKey,
     deliveryContext: session.notifyDeliveryContext,
     trusted: false,
+    stalePolicy: status === "completed" ? "drop-on-session-advance" : undefined,
   });
   requestHeartbeatNow(
     scopedHeartbeatWakeOptions(sessionKey, { reason: "exec-event", coalesceMs: 0 }),

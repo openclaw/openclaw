@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-updates.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
@@ -216,6 +216,48 @@ describe("system events (session routing)", () => {
 
     const result = await drainFormattedEvents(key);
     expect(result).toMatch(/^System \(untrusted\): \[[^\]]+\] Notification posted:/);
+  });
+
+  it("drops transient async notices after the session has already advanced", async () => {
+    vi.useFakeTimers();
+    try {
+      const key = "agent:main:test-stale-async";
+      vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+      enqueueSystemEvent("Background task done: ACP background task (run run-1234).", {
+        sessionKey: key,
+        stalePolicy: "drop-on-session-advance",
+      });
+
+      vi.setSystemTime(new Date("2026-01-01T00:00:05.000Z"));
+      const result = await drainFormattedEvents(key, {
+        latestSessionUpdatedAt: Date.now(),
+      });
+
+      expect(result).toBeUndefined();
+      expect(peekSystemEvents(key)).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps durable failures even after later session activity", async () => {
+    vi.useFakeTimers();
+    try {
+      const key = "agent:main:test-durable-failure";
+      vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+      enqueueSystemEvent("Background task failed: ACP background task (run run-1234). Boom.", {
+        sessionKey: key,
+      });
+
+      vi.setSystemTime(new Date("2026-01-01T00:00:05.000Z"));
+      const result = await drainFormattedEvents(key, {
+        latestSessionUpdatedAt: Date.now(),
+      });
+
+      expect(result).toContain("Background task failed: ACP background task");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("scrubs node last-input suffix", async () => {
