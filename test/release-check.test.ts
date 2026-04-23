@@ -87,6 +87,7 @@ describe("packed CLI smoke", () => {
           : `${dirname(process.execPath)}:/usr/bin:/bin`,
       HOME: "/tmp/smoke-home",
       USERPROFILE: "/tmp/smoke-home",
+      ComSpec: "C:\\Windows/System32/cmd.exe",
       APPDATA: "/tmp/smoke-home/AppData/Roaming",
       LOCALAPPDATA: "/tmp/smoke-home/AppData/Local",
       AWS_EC2_METADATA_DISABLED: "true",

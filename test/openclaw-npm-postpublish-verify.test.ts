@@ -504,6 +504,31 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
     }
   });
 
+  it("ignores import-like text inside string literals", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      writePackageFile(packageRoot, "package.json", {
+        version: "2026.4.22",
+        dependencies: {},
+      });
+      mkdirSync(join(packageRoot, "dist"), { recursive: true });
+      writeFileSync(
+        join(packageRoot, "dist", "string-only.js"),
+        [
+          'export const help = "run import(\'fake-package\') after setup";',
+          'export const note = "from \\"fake-package-two\\"";',
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([]);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
   it("returns a structured error when installed package.json is invalid", () => {
     const packageRoot = makeInstalledPackageRoot();
 

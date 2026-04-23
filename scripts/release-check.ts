@@ -38,6 +38,7 @@ import {
 import { discoverBundledPluginRuntimeDeps } from "./postinstall-bundled-plugins.mjs";
 import { listStaticExtensionAssetOutputs } from "./runtime-postbuild.mjs";
 import { sparkleBuildFloorsFromShortVersion, type SparkleBuildFloors } from "./sparkle-build.ts";
+import { buildCmdExeCommandLine } from "./windows-cmd-helpers.mjs";
 
 export { collectBundledExtensionManifestErrors } from "./lib/bundled-extension-manifest.ts";
 export {
@@ -247,6 +248,7 @@ export function createPackedCliSmokeEnv(
   ] as const;
   const windowsRoot = env.SystemRoot ?? env.WINDIR ?? "C:\\Windows";
   const nodeBinDir = dirname(process.execPath);
+  const trustedCmdPath = join(windowsRoot, "System32", "cmd.exe");
   const safePath =
     process.platform === "win32"
       ? `${nodeBinDir};${windowsRoot}\\System32;${windowsRoot}`
@@ -263,6 +265,7 @@ export function createPackedCliSmokeEnv(
     PATH: safePath,
     HOME: homeDir,
     USERPROFILE: homeDir,
+    ComSpec: trustedCmdPath,
     APPDATA: homeDir ? join(homeDir, "AppData", "Roaming") : undefined,
     LOCALAPPDATA: homeDir ? join(homeDir, "AppData", "Local") : undefined,
     AWS_EC2_METADATA_DISABLED: "true",
@@ -447,13 +450,25 @@ function runPackedCliSmoke(params: {
     OPENCLAW_STATE_DIR: params.stateDir,
     OPENAI_API_KEY: "sk-openclaw-release-check",
   });
+  const windowsRoot = env.SystemRoot ?? env.WINDIR ?? "C:\\Windows";
+  const trustedCmdPath = join(windowsRoot, "System32", "cmd.exe");
 
   for (const args of PACKED_CLI_SMOKE_COMMANDS) {
+    if (process.platform === "win32") {
+      execFileSync(trustedCmdPath, ["/d", "/s", "/c", buildCmdExeCommandLine(binaryPath, [...args])], {
+        cwd: params.cwd,
+        stdio: "inherit",
+        env,
+        shell: false,
+        windowsVerbatimArguments: true,
+      });
+      continue;
+    }
     execFileSync(binaryPath, [...args], {
       cwd: params.cwd,
       stdio: "inherit",
       env,
-      shell: process.platform === "win32",
+      shell: false,
     });
   }
 }
