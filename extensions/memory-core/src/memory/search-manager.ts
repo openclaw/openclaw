@@ -44,13 +44,27 @@ type MemorySearchManagerCacheStore = {
 
 function getMemorySearchManagerCacheStore(): MemorySearchManagerCacheStore {
   // Keep caches reachable across `vi.resetModules()` so later cleanup can close older instances.
-  return resolveGlobalSingleton<MemorySearchManagerCacheStore>(
+  const existing = resolveGlobalSingleton<MemorySearchManagerCacheStore>(
     MEMORY_SEARCH_MANAGER_CACHE_KEY,
     () => ({
       qmdManagerCache: new Map<string, CachedQmdManagerEntry>(),
       pendingQmdManagerCreates: new Map<string, PendingQmdManagerCreate>(),
     }),
   );
+  if (
+    existing.qmdManagerCache instanceof Map &&
+    existing.pendingQmdManagerCreates instanceof Map
+  ) {
+    return existing;
+  }
+  const repaired: MemorySearchManagerCacheStore = {
+    ...(existing && typeof existing === "object" ? existing : {}),
+    qmdManagerCache: new Map<string, CachedQmdManagerEntry>(),
+    pendingQmdManagerCreates: new Map<string, PendingQmdManagerCreate>(),
+  };
+  log.warn("memory search manager cache had invalid shape; rebuilding shared store");
+  (globalThis as Record<symbol, unknown>)[MEMORY_SEARCH_MANAGER_CACHE_KEY] = repaired;
+  return repaired;
 }
 
 const log = createSubsystemLogger("memory");
