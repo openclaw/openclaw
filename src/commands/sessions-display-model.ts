@@ -1,4 +1,5 @@
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { normalizeProviderId } from "../agents/model-selection.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
@@ -50,7 +51,7 @@ function normalizeStoredOverrideModel(params: {
     return { providerOverride, modelOverride };
   }
 
-  if (providerOverride.toLowerCase() === "nvidia") {
+  if (normalizeProviderId(providerOverride) === "nvidia") {
     return { providerOverride, modelOverride };
   }
 
