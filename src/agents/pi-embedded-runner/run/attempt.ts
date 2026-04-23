@@ -169,6 +169,7 @@ import {
   resolveEmbeddedAgentBaseStreamFn,
   resolveEmbeddedAgentStreamFn,
 } from "../stream-resolution.js";
+import { wrapStreamFnWithSplitModelRouting } from "../split-model-stream.js";
 import {
   applySystemPromptOverrideToSession,
   buildEmbeddedSystemPrompt,
@@ -1555,6 +1556,20 @@ export async function runEmbeddedAttempt(
       activeSession.agent.streamFn = wrapStreamFnHandleSensitiveStopReason(
         activeSession.agent.streamFn,
       );
+
+      // ── Split model routing ────────────────────────────────────────
+      // When a tool model is configured, wrap the streamFn so that
+      // tool-continuation turns (where the last message is a tool result)
+      // are routed to the tool model instead of the primary model.
+      if (params.toolModel && params.toolModelProvider) {
+        activeSession.agent.streamFn = wrapStreamFnWithSplitModelRouting({
+          innerStreamFn: activeSession.agent.streamFn,
+          toolModel: params.toolModel,
+          primaryProvider: params.provider,
+          toolProvider: params.toolModelProvider,
+        });
+      }
+      // ──────────────────────────────────────────────────────────────
 
       let idleTimeoutTrigger: ((error: Error) => void) | undefined;
 

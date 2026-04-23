@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { resolveAgentModelFallbackValues } from "../config/model-input.js";
+import { resolveAgentModelFallbackValues, resolveAgentModelToolValue } from "../config/model-input.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.js";
 import {
@@ -111,6 +111,44 @@ export function resolveAgentEffectiveModelPrimary(
 // Backward-compatible alias. Prefer explicit/effective helpers at new call sites.
 export function resolveAgentModelPrimary(cfg: OpenClawConfig, agentId: string): string | undefined {
   return resolveAgentExplicitModelPrimary(cfg, agentId);
+}
+
+export function resolveAgentExplicitModelTool(
+  cfg: OpenClawConfig,
+  agentId: string,
+): string | undefined {
+  const raw = resolveAgentConfig(cfg, agentId)?.model;
+  return resolveAgentModelToolValue(raw);
+}
+
+export function resolveAgentEffectiveModelTool(
+  cfg: OpenClawConfig,
+  agentId: string,
+): string | undefined {
+  return (
+    resolveAgentExplicitModelTool(cfg, agentId) ??
+    resolveAgentModelToolValue(cfg.agents?.defaults?.model)
+  );
+}
+
+/**
+ * Check whether split model routing is configured for the given agent.
+ * Returns the tool model reference string (e.g. "anthropic/claude-sonnet-4-20250514")
+ * or undefined when not configured.
+ */
+export function resolveConfiguredToolModel(params: {
+  cfg: OpenClawConfig | undefined;
+  agentId?: string | null;
+  sessionKey?: string | null;
+}): string | undefined {
+  if (!params.cfg) {
+    return undefined;
+  }
+  const agentId = resolveFallbackAgentId({
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+  });
+  return resolveAgentEffectiveModelTool(params.cfg, agentId);
 }
 
 export function resolveAgentModelFallbacksOverride(

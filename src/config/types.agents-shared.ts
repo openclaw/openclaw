@@ -10,6 +10,10 @@ export type AgentModelConfig =
   | {
       /** Primary model (provider/model). */
       primary?: string;
+      /** Model used for tool-call turns (provider/model). When set, the agent loop
+       *  swaps to this model whenever the assistant response triggers tool use,
+       *  then returns to the primary model for subsequent chat turns. */
+      tool?: string;
       /** Per-agent model fallbacks (provider/model). */
       fallbacks?: string[];
     };
