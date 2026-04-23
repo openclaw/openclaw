@@ -32,6 +32,7 @@ describe("sendMessageSignal", () => {
 
   it("sends quote-author for group replies when quoteAuthor is available", async () => {
     await sendMessageSignal("group:test-group", "hello", {
+      cfg: {} as never,
       textMode: "plain",
       replyTo: "1700000000000",
       quoteAuthor: "uuid:sender-1",
@@ -46,6 +47,7 @@ describe("sendMessageSignal", () => {
 
   it("sends quote-timestamp for direct replies without quoteAuthor", async () => {
     await sendMessageSignal("+15551230000", "hello", {
+      cfg: {} as never,
       textMode: "plain",
       replyTo: "1700000000000",
     });
@@ -57,6 +59,7 @@ describe("sendMessageSignal", () => {
 
   it("ignores replyTo values with trailing non-numeric characters", async () => {
     await sendMessageSignal("+15551230000", "hello", {
+      cfg: {} as never,
       textMode: "plain",
       replyTo: "1700000000000abc",
       quoteAuthor: "uuid:sender-1",
@@ -69,6 +72,7 @@ describe("sendMessageSignal", () => {
 
   it("skips group quote metadata when quoteAuthor is unavailable", async () => {
     await sendMessageSignal("group:test-group", "hello", {
+      cfg: {} as never,
       textMode: "plain",
       replyTo: "1700000000000",
     });

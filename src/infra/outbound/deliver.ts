@@ -263,13 +263,24 @@ function createPluginHandler(
           })
       : undefined,
     sendPayload: outbound.sendPayload
-      ? async (payload, overrides) =>
-          outbound.sendPayload!({
+      ? async (payload, overrides) => {
+          const payloadForSend =
+            overrides && "replyToId" in overrides
+              ? overrides.replyToId === undefined
+                ? payload.replyToId === undefined
+                  ? payload
+                  : { ...payload, replyToId: undefined }
+                : payload.replyToId === overrides.replyToId
+                  ? payload
+                  : { ...payload, replyToId: overrides.replyToId }
+              : payload;
+          return await outbound.sendPayload!({
             ...resolveCtx(overrides),
-            text: payload.text ?? "",
-            mediaUrl: payload.mediaUrl,
-            payload,
-          })
+            text: payloadForSend.text ?? "",
+            mediaUrl: payloadForSend.mediaUrl,
+            payload: payloadForSend,
+          });
+        }
       : undefined,
     sendFormattedText: outbound.sendFormattedText
       ? async (text, overrides) =>
