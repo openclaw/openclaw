@@ -250,7 +250,7 @@ describe("runReplyAgent media path normalization", () => {
       text: undefined,
       mediaUrl: "/tmp/outbound-media/1-chart.png",
       mediaUrls: ["/tmp/outbound-media/1-chart.png"],
-      replyToCurrent: false,
+      replyToCurrent: undefined,
       replyToId: "msg-1",
       replyToTag: false,
       audioAsVoice: false,

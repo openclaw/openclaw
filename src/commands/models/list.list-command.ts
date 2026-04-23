@@ -8,12 +8,15 @@ import {
   appendCatalogSupplementRows,
   appendConfiguredRows,
   appendDiscoveredRows,
+  appendProviderCatalogRows,
   loadListModelRegistry,
 } from "./list.rows.js";
 import { printModelTable } from "./list.table.js";
 import type { ModelRow } from "./list.types.js";
 import { loadModelsConfigWithSource } from "./load-config.js";
 import { DEFAULT_PROVIDER, ensureFlagCompatibility } from "./shared.js";
+
+const DISPLAY_MODEL_PARSE_OPTIONS = { allowPluginNormalization: false } as const;
 
 export async function modelsListCommand(
   opts: {
@@ -39,7 +42,7 @@ export async function modelsListCommand(
     if (!raw) {
       return undefined;
     }
-    const parsed = parseModelRef(`${raw}/_`, DEFAULT_PROVIDER);
+    const parsed = parseModelRef(`${raw}/_`, DEFAULT_PROVIDER, DISPLAY_MODEL_PARSE_OPTIONS);
     return parsed?.provider ?? normalizeLowercaseStringOrEmpty(raw);
   })();
 
@@ -47,15 +50,18 @@ export async function modelsListCommand(
   let discoveredKeys = new Set<string>();
   let availableKeys: Set<string> | undefined;
   let availabilityErrorMessage: string | undefined;
+  const useProviderCatalogFastPath = Boolean(opts.all && providerFilter === "codex");
   try {
     // Keep command behavior explicit: sync models.json from the source config
     // before building the read-only model registry view.
-    await ensureOpenClawModelsJson(sourceConfig ?? cfg);
-    const loaded = await loadListModelRegistry(cfg, { sourceConfig });
-    modelRegistry = loaded.registry;
-    discoveredKeys = loaded.discoveredKeys;
-    availableKeys = loaded.availableKeys;
-    availabilityErrorMessage = loaded.availabilityErrorMessage;
+    if (!useProviderCatalogFastPath) {
+      await ensureOpenClawModelsJson(sourceConfig ?? cfg);
+      const loaded = await loadListModelRegistry(cfg, { sourceConfig });
+      modelRegistry = loaded.registry;
+      discoveredKeys = loaded.discoveredKeys;
+      availableKeys = loaded.availableKeys;
+      availabilityErrorMessage = loaded.availabilityErrorMessage;
+    }
   } catch (err) {
     runtime.error(`Model registry unavailable:\n${formatErrorWithStack(err)}`);
     process.exitCode = 1;
@@ -81,6 +87,7 @@ export async function modelsListCommand(
       provider: providerFilter,
       local: opts.local,
     },
+    skipRuntimeModelSuppression: useProviderCatalogFastPath,
   };
 
   if (opts.all) {
@@ -94,6 +101,12 @@ export async function modelsListCommand(
       await appendCatalogSupplementRows({
         rows,
         modelRegistry,
+        context: rowContext,
+        seenKeys,
+      });
+    } else if (useProviderCatalogFastPath) {
+      await appendProviderCatalogRows({
+        rows,
         context: rowContext,
         seenKeys,
       });
