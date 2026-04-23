@@ -29,7 +29,11 @@ import {
 } from "./reply-dispatcher-runtime-api.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { sendMessageFeishu, sendStructuredCardFeishu, type CardHeaderConfig } from "./send.js";
-import { FeishuStreamingSession, mergeStreamingText } from "./streaming-card.js";
+import {
+  FeishuStreamingSession,
+  mergeStreamingText,
+  type StreamingCardResumeToken,
+} from "./streaming-card.js";
 import { resolveReceiveIdType } from "./targets.js";
 import { addTypingIndicator, removeTypingIndicator, type TypingIndicatorState } from "./typing.js";
 
@@ -162,6 +166,7 @@ export type CreateFeishuReplyDispatcherParams = {
   allowReasoningPreview?: boolean;
   /** Force a generic thinking preview as soon as reply processing starts. */
   forceThinkingPreviewOnReplyStart?: boolean;
+  adoptStreamingCardToken?: StreamingCardResumeToken;
   replyToMessageId?: string;
   /** When true, preserve typing indicator on reply target but send messages without reply metadata */
   skipReplyToInMessages?: boolean;
@@ -446,6 +451,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let forcePendingThinkingPreview = false;
   let thinkingPanelVisibleLogged = false;
   let typingIdlePending = false;
+  let adoptStreamingCardToken = params.adoptStreamingCardToken;
 
   const resetReplyCycleState = () => {
     replyCycleInitialized = true;
@@ -1098,17 +1104,22 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         params.runtime.log?.(`feishu[${account.accountId}] ${message}`),
       );
       try {
-        const cardHeader = showCardHeader ? resolveCardHeader(agentId, identity) : undefined;
-        const cardNote = showCardNote
-          ? resolveCardNote(agentId, identity, prefixContext.prefixContext)
-          : undefined;
-        await streaming.start(chatId, resolveReceiveIdType(chatId), {
-          replyToMessageId,
-          replyInThread: effectiveReplyInThread,
-          rootId,
-          header: cardHeader,
-          note: cardNote,
-        });
+        if (adoptStreamingCardToken) {
+          await streaming.adoptExisting(adoptStreamingCardToken);
+          adoptStreamingCardToken = undefined;
+        } else {
+          const cardHeader = showCardHeader ? resolveCardHeader(agentId, identity) : undefined;
+          const cardNote = showCardNote
+            ? resolveCardNote(agentId, identity, prefixContext.prefixContext)
+            : undefined;
+          await streaming.start(chatId, resolveReceiveIdType(chatId), {
+            replyToMessageId,
+            replyInThread: effectiveReplyInThread,
+            rootId,
+            header: cardHeader,
+            note: cardNote,
+          });
+        }
         const streamMessageId = streaming.getMessageId() ?? undefined;
         logDispatcher(`startStreaming active messageId=${streamMessageId ?? "unknown"}`);
         await emitVisibleOutputStarted(streamMessageId);
@@ -1735,8 +1746,12 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       }
       await partialUpdateQueue;
       const messageId = streaming?.getMessageId();
+      const resumeToken = await streaming?.releaseForAdoption();
+      streaming = null;
+      streamingStartPromise = null;
+      preservePendingThinkingCardOnIdle = false;
       logDispatcher(`showPendingThinkingCard ready messageId=${messageId ?? "none"}`);
-      return { messageId };
+      return { messageId, resumeToken };
     },
   };
 }

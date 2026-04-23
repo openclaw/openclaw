@@ -2,7 +2,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 type StreamingSessionStub = {
   active: boolean;
+  cardId: string;
   start: ReturnType<typeof vi.fn>;
+  adoptExisting: ReturnType<typeof vi.fn>;
+  releaseForAdoption: ReturnType<typeof vi.fn>;
   update: ReturnType<typeof vi.fn>;
   updateThinking: ReturnType<typeof vi.fn>;
   close: ReturnType<typeof vi.fn>;
@@ -74,9 +77,34 @@ vi.mock("./streaming-card.js", () => {
     mergeStreamingText,
     FeishuStreamingSession: class {
       active = false;
+      cardId = "stream-card-id";
       messageId = "stream-message-id";
       start = vi.fn(async () => {
         this.active = true;
+      });
+      adoptExisting = vi.fn(async (token?: { messageId?: string; cardId?: string }) => {
+        this.active = true;
+        if (token?.messageId) {
+          this.messageId = token.messageId;
+        }
+        if (token?.cardId) {
+          this.cardId = token.cardId;
+        }
+      });
+      releaseForAdoption = vi.fn(async () => {
+        this.active = false;
+        return {
+          cardId: this.cardId,
+          messageId: this.messageId,
+          sequence: 2,
+          currentText: "",
+          hasNote: false,
+          noteText: "",
+          thinkingTitle: "💭 Thinking",
+          thinkingText: "⏳ Thinking...",
+          thinkingExpanded: true,
+          thinkingPanelRendered: true,
+        };
       });
       update = vi.fn(async () => {});
       updateThinking = vi.fn(async () => {});
@@ -88,6 +116,18 @@ vi.mock("./streaming-card.js", () => {
       });
       isActive = vi.fn(() => this.active);
       getMessageId = vi.fn(() => this.messageId);
+      getResumeToken = vi.fn(() => ({
+        cardId: this.cardId,
+        messageId: this.messageId,
+        sequence: 2,
+        currentText: "",
+        hasNote: false,
+        noteText: "",
+        thinkingTitle: "💭 Thinking",
+        thinkingText: "⏳ Thinking...",
+        thinkingExpanded: true,
+        thinkingPanelRendered: true,
+      }));
 
       constructor() {
         streamingInstances.push(this);
@@ -862,13 +902,57 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     const pending = await result.showPendingThinkingCard?.();
     await flushAsyncTasks();
 
-    expect(pending).toEqual({ messageId: "stream-message-id" });
+    expect(pending).toEqual(
+      expect.objectContaining({
+        messageId: "stream-message-id",
+        resumeToken: expect.objectContaining({
+          cardId: "stream-card-id",
+          messageId: "stream-message-id",
+        }),
+      }),
+    );
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].releaseForAdoption).toHaveBeenCalledTimes(1);
     expect(runtime.log).toHaveBeenCalledWith(
       expect.stringContaining("showPendingThinkingCard requested"),
     );
     expect(runtime.log).toHaveBeenCalledWith(
       expect.stringContaining("showPendingThinkingCard ready messageId=stream-message-id"),
     );
+  });
+
+  it("adopts an existing pending streaming card instead of creating a new one", async () => {
+    const { result, options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+      forceThinkingPreviewOnReplyStart: true,
+      adoptStreamingCardToken: {
+        cardId: "pending-card-id",
+        messageId: "pending-message-id",
+        sequence: 3,
+        currentText: "",
+        hasNote: false,
+        noteText: "",
+        thinkingTitle: "💭 Thinking",
+        thinkingText: "⏳ Thinking...",
+        thinkingExpanded: true,
+        thinkingPanelRendered: true,
+      },
+    });
+
+    await options.onReplyStart?.();
+    await flushAsyncTasks();
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].start).not.toHaveBeenCalled();
+    expect(streamingInstances[0].adoptExisting).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cardId: "pending-card-id",
+        messageId: "pending-message-id",
+      }),
+    );
+    await result.replyOptions.onPartialReply?.({ text: "hello" });
+    await flushAsyncTasks();
+    expect(streamingInstances[0].update).toHaveBeenCalled();
   });
 
   it("starts the live thinking card as soon as claude-cli model selection is known", async () => {

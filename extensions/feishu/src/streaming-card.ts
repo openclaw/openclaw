@@ -22,6 +22,8 @@ type CardState = {
   thinkingPanelRendered: boolean;
 };
 
+export type StreamingCardResumeToken = CardState;
+
 /** Options for customising the initial streaming card appearance. */
 export type StreamingCardOptions = {
   /** Optional header with title and color template. */
@@ -303,6 +305,22 @@ export class FeishuStreamingSession {
     this.lastStreamingModeRenewAt = Date.now();
     this.startRenewTimer();
     this.log?.(`Started streaming: cardId=${cardId}, messageId=${sendRes.data.message_id}`);
+  }
+
+  async adoptExisting(token: StreamingCardResumeToken): Promise<void> {
+    if (this.state) {
+      return;
+    }
+    this.state = { ...token };
+    this.closed = false;
+    this.pendingText = null;
+    this.requiresFullCardSync = false;
+    this.lastStreamingModeRenewAt = Date.now();
+    this.startRenewTimer();
+    await this.setStreamingModeEnabled({ force: true, reason: "reopen" }).catch((error) => {
+      this.log?.(`Adopt existing streaming card reopen failed: ${String(error)}`);
+    });
+    this.log?.(`Adopted streaming: cardId=${token.cardId}, messageId=${token.messageId}`);
   }
 
   /** Proactive timer -- renews streaming_mode even when no content updates are flowing. */
@@ -813,6 +831,30 @@ export class FeishuStreamingSession {
 
   getMessageId(): string | undefined {
     return this.state?.messageId;
+  }
+
+  getResumeToken(): StreamingCardResumeToken | undefined {
+    return this.state ? { ...this.state } : undefined;
+  }
+
+  async releaseForAdoption(): Promise<StreamingCardResumeToken | undefined> {
+    if (!this.state) {
+      return undefined;
+    }
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = null;
+    }
+    await this.queue;
+    const token = { ...this.state };
+    this.stopRenewTimer();
+    this.state = null;
+    this.pendingText = null;
+    this.closed = true;
+    this.log?.(
+      `Released streaming for adoption: cardId=${token.cardId}, messageId=${token.messageId}`,
+    );
+    return token;
   }
 
   isActive(): boolean {
