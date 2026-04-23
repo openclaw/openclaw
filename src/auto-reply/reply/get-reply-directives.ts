@@ -432,6 +432,7 @@ export async function resolveReplyDirectives(params: {
     directives.reasoningLevel ??
     (targetSessionEntry?.reasoningLevel as ReasoningLevel | undefined) ??
     (agentEntry?.reasoningDefault as ReasoningLevel | undefined) ??
+    (agentCfg?.reasoningDefault as ReasoningLevel | undefined) ??
     "off";
   const resolvedElevatedLevel = elevatedAllowed
     ? (directives.elevatedLevel ??
@@ -511,7 +512,8 @@ export async function resolveReplyDirectives(params: {
   // (e.g. OpenRouter with reasoning: true). Skip model default when thinking is active
   // or when thinking was explicitly disabled.
   const hasAgentReasoningDefault =
-    agentEntry?.reasoningDefault !== undefined && agentEntry?.reasoningDefault !== null;
+    (agentEntry?.reasoningDefault !== undefined && agentEntry?.reasoningDefault !== null) ||
+    (agentCfg?.reasoningDefault !== undefined && agentCfg?.reasoningDefault !== null);
   const reasoningExplicitlySet =
     directives.reasoningLevel !== undefined ||
     (targetSessionEntry?.reasoningLevel !== undefined &&

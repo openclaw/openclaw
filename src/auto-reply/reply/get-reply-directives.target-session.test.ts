@@ -90,6 +90,7 @@ async function resolveHelloWithModelDefaults(params: {
   defaultThinking: "off" | "low";
   defaultReasoning: "on";
   sessionEntry?: SessionEntry;
+  agentCfg?: { reasoningDefault?: "off" | "on" | "stream" };
 }) {
   const resolveDefaultThinkingLevel = vi.fn(async () => params.defaultThinking);
   const resolveDefaultReasoningLevel = vi.fn(async () => params.defaultReasoning);
@@ -112,7 +113,7 @@ async function resolveHelloWithModelDefaults(params: {
     agentId: "main",
     agentDir: "/tmp/main-agent",
     workspaceDir: "/tmp",
-    agentCfg: {},
+    agentCfg: params.agentCfg ?? {},
     sessionCtx: {
       Body: "hello",
       BodyStripped: "hello",
@@ -459,6 +460,23 @@ describe("resolveReplyDirectives", () => {
       kind: "continue",
       result: expect.objectContaining({
         resolvedThinkLevel: "low",
+        resolvedReasoningLevel: "off",
+      }),
+    });
+    expect(resolveDefaultReasoningLevel).not.toHaveBeenCalled();
+  });
+
+  it("does not re-enable model reasoning when agentCfg reasoningDefault is explicitly off", async () => {
+    const { result, resolveDefaultReasoningLevel } = await resolveHelloWithModelDefaults({
+      defaultThinking: "off",
+      defaultReasoning: "on",
+      agentCfg: { reasoningDefault: "off" },
+    });
+
+    expect(result).toEqual({
+      kind: "continue",
+      result: expect.objectContaining({
+        resolvedThinkLevel: "off",
         resolvedReasoningLevel: "off",
       }),
     });
