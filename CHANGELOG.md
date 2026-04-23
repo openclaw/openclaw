@@ -87,7 +87,7 @@ Docs: https://docs.openclaw.ai
 - Slack/files: resolve `downloadFile` bot tokens from the runtime config when callers provide `cfg` without an explicit token or prebuilt client, preserving cfg-only file downloads outside the action runtime path. (#70160) Thanks @martingarramon.
 - Slack/HTTP: dispatch registered Request URL webhooks through the same handler registry used by Slack monitor setup, so HTTP-mode Slack events no longer 404 after successful route registration. (#70275) Thanks @FroeMic.
 - Slack/runtime bindings: route focused Slack thread replies through their bound ACP session instead of preparing replies against the default agent shell. Fixes #67739. Thanks @Frankla20.
-- CLI/Claude: keep stored Claude CLI sessions through OAuth refresh-token rotation by keying auth epochs on stable account identity instead of mutable OAuth token material.
+- CLI/Claude: keep stored Claude CLI sessions through OAuth refresh-token rotation by keying auth epochs on stable account identity instead of mutable OAuth token material. (#70452) Thanks @obviyus.
 - CLI/Claude: verify stored Claude CLI session ids have a readable project transcript before resuming, clearing phantom bindings with `reason=transcript-missing` instead of silently starting fresh under `--resume`. Fixes #70177.
 - CLI sessions: persist CLI session clearing through the atomic session-store merge path, so expired Claude/Codex CLI bindings are actually removed before retrying without the stale session id. (#70298) Thanks @HFConsultant.
 - ACP/sessions_spawn: honor explicit `model` overrides for ACP child sessions instead of silently falling back to the target agent default model. (#70210) Thanks @felix-miao.
