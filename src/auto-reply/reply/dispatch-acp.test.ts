@@ -545,6 +545,41 @@ describe("tryDispatchAcpReply", () => {
     }
   });
 
+  it("forwards URL-only image attachments into ACP turns", async () => {
+    setReadyAcpResolution();
+    const fetchSpy = vi.fn(
+      async () =>
+        new Response(Buffer.from("remote-image"), {
+          headers: {
+            "content-type": "image/png",
+          },
+        }),
+    );
+    globalThis.fetch = withFetchPreconnect(fetchSpy as typeof fetch);
+    managerMocks.runTurn.mockResolvedValue(undefined);
+
+    await runDispatch({
+      bodyForAgent: "   ",
+      ctxOverrides: {
+        MediaUrl: "https://example.com/inbound.png",
+        MediaType: "image/png",
+      },
+    });
+
+    expect(fetchSpy).toHaveBeenCalled();
+    expect(managerMocks.runTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "",
+        attachments: [
+          {
+            mediaType: "image/png",
+            data: Buffer.from("remote-image").toString("base64"),
+          },
+        ],
+      }),
+    );
+  });
+
   it("skips ACP attachments outside allowed inbound roots", async () => {
     setReadyAcpResolution();
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "dispatch-acp-"));
