@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildMultimodalChunkForIndexing,
   buildFileEntry,
@@ -87,6 +87,30 @@ describe("listMemoryFiles", () => {
     const files = await listMemoryFiles(tmpDir, [singleFile]);
     expect(files).toHaveLength(2);
     expect(files.some((file) => file.endsWith("standalone.md"))).toBe(true);
+  });
+
+  it("prefers canonical MEMORY.md over legacy root memory.md when both are present", async () => {
+    const tmpDir = getTmpDir();
+    const canonicalPath = path.join(tmpDir, "MEMORY.md");
+    const legacyPath = path.join(tmpDir, "memory.md");
+    const actualLstat = fs.lstat.bind(fs);
+    const lstatSpy = vi.spyOn(fs, "lstat").mockImplementation(async (target) => {
+      if (target === canonicalPath || target === legacyPath) {
+        return {
+          isSymbolicLink: () => false,
+          isFile: () => true,
+          isDirectory: () => false,
+        } as Awaited<ReturnType<typeof fs.lstat>>;
+      }
+      return actualLstat(target);
+    });
+
+    try {
+      const files = await listMemoryFiles(tmpDir);
+      expect(files).toEqual([canonicalPath]);
+    } finally {
+      lstatSpy.mockRestore();
+    }
   });
 
   it("handles relative paths in additional paths", async () => {

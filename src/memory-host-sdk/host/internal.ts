@@ -137,7 +137,9 @@ export async function listMemoryFiles(
   };
 
   await addMarkdownFile(memoryFile);
-  await addMarkdownFile(altMemoryFile);
+  if (!result.includes(memoryFile)) {
+    await addMarkdownFile(altMemoryFile);
+  }
   try {
     const dirStat = await fs.lstat(memoryDir);
     if (!dirStat.isSymbolicLink() && dirStat.isDirectory()) {

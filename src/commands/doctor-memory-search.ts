@@ -34,6 +34,11 @@ import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { note } from "../terminal/note.js";
 import { resolveUserPath } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
+import {
+  detectRootMemoryFiles,
+  formatRootMemoryFilesWarning,
+  migrateLegacyRootMemoryFile,
+} from "./doctor-workspace.js";
 import { isRecord } from "./doctor/shared/legacy-config-record-shared.js";
 
 type RuntimeMemoryAuditContext = {
@@ -225,6 +230,35 @@ export async function maybeRepairMemoryRecallHealth(params: {
   prompter: DoctorPrompter;
 }): Promise<void> {
   try {
+    const agentId = resolveDefaultAgentId(params.cfg);
+    const configuredWorkspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId);
+    const rootMemoryFiles = await detectRootMemoryFiles(configuredWorkspaceDir);
+    if (rootMemoryFiles.legacyExists) {
+      const approvedLegacyMigration = await params.prompter.confirmRuntimeRepair({
+        message: rootMemoryFiles.canonicalExists
+          ? "Merge legacy root memory.md into canonical MEMORY.md and remove the shadowed file?"
+          : "Migrate legacy root memory.md to canonical MEMORY.md?",
+        initialValue: true,
+      });
+      if (approvedLegacyMigration) {
+        const migration = await migrateLegacyRootMemoryFile(configuredWorkspaceDir);
+        if (migration.changed) {
+          const lines = [
+            migration.mergedLegacy
+              ? "Workspace memory root merged:"
+              : "Workspace memory root migrated:",
+            `- canonical: ${migration.canonicalPath}`,
+            migration.archivedLegacyPath ? `- backup: ${migration.archivedLegacyPath}` : null,
+            migration.mergedLegacy ? `- merged legacy content from: ${migration.legacyPath}` : null,
+            migration.removedLegacy
+              ? `- removed legacy file: ${migration.legacyPath}`
+              : `- legacy file still present: ${migration.legacyPath}`,
+          ].filter(Boolean);
+          note(lines.join("\n"), "Doctor changes");
+        }
+      }
+    }
+
     const context = await resolveRuntimeMemoryAuditContext(params.cfg);
     const workspaceDir = context?.workspaceDir?.trim();
     if (!workspaceDir) {
@@ -314,6 +348,11 @@ export async function noteMemorySearchHealth(
 ): Promise<void> {
   const agentId = resolveDefaultAgentId(cfg);
   const agentDir = resolveAgentDir(cfg, agentId);
+  const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+  const rootMemoryWarning = formatRootMemoryFilesWarning(await detectRootMemoryFiles(workspaceDir));
+  if (rootMemoryWarning) {
+    note(rootMemoryWarning, "Workspace memory");
+  }
   const resolved = resolveMemorySearchConfig(cfg, agentId);
   const hasRemoteApiKey = hasConfiguredMemorySecretInput(resolved?.remote?.apiKey);
 
