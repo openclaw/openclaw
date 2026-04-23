@@ -43,6 +43,7 @@ import { createSlackMonitorContext } from "./context.js";
 import { registerSlackMonitorEvents } from "./events.js";
 import { createSlackMessageHandler } from "./message-handler.js";
 import {
+  disconnectSocketModeClient,
   formatUnknownError,
   getSocketEmitter,
   isNonRecoverableSlackAuthError,
@@ -279,6 +280,7 @@ async function gracefulStopSlackApp(app: { stop: () => unknown }) {
   if (socketClient) {
     socketClient.shuttingDown = true;
   }
+  await disconnectSocketModeClient(app).catch(() => undefined);
   await Promise.resolve(app.stop()).catch(() => undefined);
 }
 
