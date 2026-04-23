@@ -4,6 +4,7 @@ import type { ChannelOutboundAdapter } from "../../channels/plugins/types.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import type { RuntimeEnv } from "../../runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { deliverAgentCommandResult, normalizeAgentCommandReplyPayloads } from "./delivery.js";
 import type { AgentCommandOpts } from "./types.js";
@@ -88,15 +89,15 @@ async function deliverMediaReplyForTest(outboundSession: DeliverParams["outbound
   });
 }
 
+beforeEach(() => {
+  setActivePluginRegistry(slackRegistry);
+});
+
+afterEach(() => {
+  setActivePluginRegistry(emptyRegistry);
+});
+
 describe("normalizeAgentCommandReplyPayloads", () => {
-  beforeEach(() => {
-    setActivePluginRegistry(slackRegistry);
-  });
-
-  afterEach(() => {
-    setActivePluginRegistry(emptyRegistry);
-  });
-
   it("keeps Slack directives in text for direct agent deliveries", () => {
     const normalized = normalizeAgentCommandReplyPayloads({
       cfg: {
@@ -149,7 +150,9 @@ describe("normalizeAgentCommandReplyPayloads", () => {
       },
     ]);
   });
+});
 
+describe("deliverAgentCommandResult", () => {
   it("keeps Slack options text intact for local preview when delivery is disabled", async () => {
     const runtime = {
       log: vi.fn(),
@@ -178,6 +181,47 @@ describe("normalizeAgentCommandReplyPayloads", () => {
     expect(runtime.log).toHaveBeenCalledTimes(1);
     expect(runtime.log).toHaveBeenCalledWith("Options: on, off.");
     expect(delivered.payloads).toMatchObject([{ text: "Options: on, off." }]);
+  });
+
+  it("writes JSON envelopes to runtime.writeJson when available", async () => {
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+      writeStdout: vi.fn(),
+      writeJson: vi.fn(),
+    } as unknown as RuntimeEnv & {
+      writeJson: ReturnType<typeof vi.fn>;
+      writeStdout: ReturnType<typeof vi.fn>;
+      log: ReturnType<typeof vi.fn>;
+    };
+
+    await deliverAgentCommandResult({
+      cfg: {} as OpenClawConfig,
+      deps: {} as CliDeps,
+      runtime,
+      opts: {
+        message: "test",
+        json: true,
+      } as AgentCommandOpts,
+      outboundSession: undefined,
+      sessionEntry: undefined,
+      payloads: [{ text: "pong" }],
+      result: createResult({
+        meta: {
+          durationMs: 1,
+        },
+      }),
+    });
+
+    expect(runtime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payloads: [expect.objectContaining({ text: "pong" })],
+        meta: { durationMs: 1 },
+      }),
+      2,
+    );
+    expect(runtime.log).not.toHaveBeenCalled();
   });
 
   it("normalizes reply-media paths before outbound delivery", async () => {
