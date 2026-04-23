@@ -130,6 +130,12 @@ export function setSseHeaders(res: ServerResponse) {
  * emits `drain`. This prevents unbounded per-connection buffering that could
  * be amplified into a DoS by many concurrent slow readers (CWE-400).
  *
+ * Race-safe: even with writableEnded/destroyed guards, a client disconnect
+ * can land between the check and the write. Wraps `res.write()` in try/catch
+ * and attaches an `error` listener so transient socket races cannot turn
+ * into an uncaught exception / unhandled error event that would crash the
+ * process (CWE-248).
+ *
  * The returned stop function clears the interval. The helper also auto-stops
  * on `close`/`finish` so callers that already end the response through
  * existing paths do not need to track cleanup manually.
@@ -142,34 +148,53 @@ export function startSseHeartbeat(
   let stopped = false;
   let waitingForDrain = false;
 
+  const onError = () => {
+    stop();
+  };
+
   const tick = () => {
     if (stopped || waitingForDrain || res.writableEnded || res.destroyed) {
       return;
     }
-    const flushed = res.write(": ping\n\n");
-    if (!flushed) {
-      // Slow client or congested proxy: pause heartbeats until the socket
-      // drains so we do not pile up buffered comments in memory. The real
-      // event writes (deltas, completion) use the same res.write() and will
-      // experience the same backpressure through Node's internal buffering,
-      // but the heartbeat should not contribute additional pressure.
-      waitingForDrain = true;
-      res.once("drain", () => {
-        waitingForDrain = false;
-      });
+    try {
+      const flushed = res.write(": ping\n\n");
+      if (!flushed) {
+        // Slow client or congested proxy: pause heartbeats until the socket
+        // drains so we do not pile up buffered comments in memory. The real
+        // event writes (deltas, completion) use the same res.write() and will
+        // experience the same backpressure through Node's internal buffering,
+        // but the heartbeat should not contribute additional pressure.
+        waitingForDrain = true;
+        res.once("drain", () => {
+          waitingForDrain = false;
+        });
+      }
+    } catch {
+      // Disconnect can race with the tick: between our writableEnded check
+      // and res.write(), the underlying socket may close. Swallow the
+      // synchronous throw and stop the heartbeat; the caller's own cleanup
+      // paths (close/finish listeners) will fire independently.
+      stop();
     }
   };
 
   const timer = setInterval(tick, intervalMs);
   timer.unref?.();
 
-  const stop = () => {
+  function stop() {
     if (stopped) {
       return;
     }
     stopped = true;
     clearInterval(timer);
-  };
+    res.off("error", onError);
+  }
+
+  // `res.on("error")` prevents Node from escalating a socket-level error into
+  // an unhandled 'error' event on the response, which would crash the process
+  // by default. Clients that disconnect at specific moments could otherwise
+  // trigger this as a remote DoS.
+  res.on("error", onError);
   res.once("close", stop);
   res.once("finish", stop);
   return stop;

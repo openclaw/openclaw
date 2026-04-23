@@ -420,6 +420,49 @@ describe("startSseHeartbeat", () => {
     expect(write).toHaveBeenCalledTimes(3);
     stop();
   });
+
+  it("stops gracefully when res.write() throws synchronously", () => {
+    const { res } = makeMockHttpResponse();
+    // Simulate the write-after-end race: the underlying socket closes
+    // between the writableEnded check and the actual write, causing Node to
+    // throw ERR_STREAM_WRITE_AFTER_END synchronously.
+    const write = vi.spyOn(res, "write").mockImplementation(() => {
+      throw new Error("write after end");
+    });
+    startSseHeartbeat(res, { intervalMs: 1000 });
+
+    // First tick triggers the throw — must not escape the interval callback.
+    expect(() => vi.advanceTimersByTime(1000)).not.toThrow();
+    expect(write).toHaveBeenCalledTimes(1);
+
+    // Subsequent ticks must not attempt another write (helper has stopped).
+    vi.advanceTimersByTime(10_000);
+    expect(write).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops gracefully when res emits an async error event", () => {
+    const { res } = makeMockHttpResponse();
+    const write = vi.spyOn(res, "write");
+    startSseHeartbeat(res, { intervalMs: 1000 });
+
+    vi.advanceTimersByTime(1000);
+    expect(write).toHaveBeenCalledTimes(1);
+
+    // Simulate an async socket failure: Node emits 'error' on the response.
+    // Without a listener, this would crash the process; the helper registers
+    // one that stops the heartbeat.
+    expect(() => res.emit("error", new Error("ECONNRESET"))).not.toThrow();
+    vi.advanceTimersByTime(10_000);
+    expect(write).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not leak the error listener after stop()", () => {
+    const { res } = makeMockHttpResponse();
+    const stop = startSseHeartbeat(res, { intervalMs: 1000 });
+    expect(res.listenerCount("error")).toBe(1);
+    stop();
+    expect(res.listenerCount("error")).toBe(0);
+  });
 });
 
 describe("watchClientDisconnect", () => {
