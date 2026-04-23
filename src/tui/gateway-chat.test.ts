@@ -110,6 +110,8 @@ describe("resolveGatewayConnection", () => {
       "OPENCLAW_GATEWAY_URL",
       "OPENCLAW_GATEWAY_TOKEN",
       "OPENCLAW_GATEWAY_PASSWORD",
+      "OPENCLAW_TUI_LAUNCH_GATEWAY_TOKEN",
+      "OPENCLAW_TUI_LAUNCH_GATEWAY_PASSWORD",
       "OPENCLAW_TUI_SETUP_AUTH_SOURCE",
     ]);
     loadConfig.mockReset();
@@ -127,6 +129,8 @@ describe("resolveGatewayConnection", () => {
     delete process.env.OPENCLAW_GATEWAY_URL;
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
     delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+    delete process.env.OPENCLAW_TUI_LAUNCH_GATEWAY_TOKEN;
+    delete process.env.OPENCLAW_TUI_LAUNCH_GATEWAY_PASSWORD;
     delete process.env.OPENCLAW_TUI_SETUP_AUTH_SOURCE;
   });
 
@@ -166,6 +170,35 @@ describe("resolveGatewayConnection", () => {
       url: "wss://override.example/ws",
       ...expected,
       allowInsecureLocalOperatorUi: false,
+    });
+  });
+
+  it.each([
+    {
+      label: "token",
+      env: { OPENCLAW_TUI_LAUNCH_GATEWAY_TOKEN: "launch-token" },
+      expected: { token: "launch-token", password: undefined },
+    },
+    {
+      label: "password",
+      env: { OPENCLAW_TUI_LAUNCH_GATEWAY_PASSWORD: "launch-password" },
+      expected: { token: undefined, password: "launch-password" },
+    },
+  ])("uses setup launch $label env as explicit auth for url override", async ({ env, expected }) => {
+    loadConfig.mockReturnValue({ gateway: { mode: "local" } });
+
+    await withEnvAsync(env, async () => {
+      const result = await resolveGatewayConnection({
+        url: "wss://override.example/ws",
+      });
+
+      expect(result).toEqual({
+        url: "wss://override.example/ws",
+        ...expected,
+        allowInsecureLocalOperatorUi: false,
+      });
+      expect(process.env.OPENCLAW_TUI_LAUNCH_GATEWAY_TOKEN).toBeUndefined();
+      expect(process.env.OPENCLAW_TUI_LAUNCH_GATEWAY_PASSWORD).toBeUndefined();
     });
   });
   it("uses config auth token for local mode when both config and env tokens are set", async () => {

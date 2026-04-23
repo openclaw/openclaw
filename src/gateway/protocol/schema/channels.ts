@@ -106,6 +106,7 @@ export const TalkSpeakResultSchema = Type.Object(
 export const ChannelsStatusParamsSchema = Type.Object(
   {
     probe: Type.Optional(Type.Boolean()),
+    includeAccounts: Type.Optional(Type.Boolean()),
     timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
   },
   { additionalProperties: false },

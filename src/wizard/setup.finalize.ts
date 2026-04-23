@@ -13,7 +13,6 @@ import {
 } from "../commands/daemon-runtime.js";
 import { resolveGatewayInstallToken } from "../commands/gateway-install-token.js";
 import { formatHealthCheckFailure } from "../commands/health-format.js";
-import { healthCommand } from "../commands/health.js";
 import {
   detectBrowserOpenSupport,
   formatControlUiSshHint,
@@ -63,6 +62,7 @@ export async function finalizeSetupWizard(
 ): Promise<{ launchedTui: boolean }> {
   const { flow, opts, baseConfig, nextConfig, settings, prompter, runtime } = options;
   let gatewayProbe: { ok: boolean; detail?: string } = { ok: true };
+  let resolvedGatewayPassword = "";
 
   const withWizardProgress = async <T>(
     label: string,
@@ -79,36 +79,11 @@ export async function finalizeSetupWizard(
     }
   };
 
-  const systemdAvailable =
-    process.platform === "linux" ? await isSystemdUserServiceAvailable() : true;
-  if (process.platform === "linux" && !systemdAvailable) {
-    await prompter.note(
-      "Systemd user services are unavailable. Skipping lingering checks and service install.",
-      "Systemd",
-    );
-  }
-
-  if (process.platform === "linux" && systemdAvailable) {
-    const { ensureSystemdUserLingerInteractive } = await import("../commands/systemd-linger.js");
-    await ensureSystemdUserLingerInteractive({
-      runtime,
-      prompter: {
-        confirm: prompter.confirm,
-        note: prompter.note,
-      },
-      reason:
-        "Linux installs use a systemd user service by default. Without lingering, systemd stops the user session on logout/idle and kills the Gateway.",
-      requireConfirm: false,
-    });
-  }
-
   const explicitInstallDaemon =
     typeof opts.installDaemon === "boolean" ? opts.installDaemon : undefined;
   let installDaemon: boolean;
   if (explicitInstallDaemon !== undefined) {
     installDaemon = explicitInstallDaemon;
-  } else if (process.platform === "linux" && !systemdAvailable) {
-    installDaemon = false;
   } else if (flow === "quickstart") {
     installDaemon = true;
   } else {
@@ -118,12 +93,31 @@ export async function finalizeSetupWizard(
     });
   }
 
-  if (process.platform === "linux" && !systemdAvailable && installDaemon) {
-    await prompter.note(
-      "Systemd user services are unavailable; skipping service install. Use your container supervisor or `docker compose up -d`.",
-      "Gateway service",
-    );
-    installDaemon = false;
+  if (process.platform === "linux" && installDaemon) {
+    const systemdAvailable = await isSystemdUserServiceAvailable();
+    if (!systemdAvailable) {
+      await prompter.note(
+        "Systemd user services are unavailable. Skipping lingering checks and service install.",
+        "Systemd",
+      );
+      await prompter.note(
+        "Systemd user services are unavailable; skipping service install. Use your container supervisor or `docker compose up -d`.",
+        "Gateway service",
+      );
+      installDaemon = false;
+    } else {
+      const { ensureSystemdUserLingerInteractive } = await import("../commands/systemd-linger.js");
+      await ensureSystemdUserLingerInteractive({
+        runtime,
+        prompter: {
+          confirm: prompter.confirm,
+          note: prompter.note,
+        },
+        reason:
+          "Linux installs use a systemd user service by default. Without lingering, systemd stops the user session on logout/idle and kills the Gateway.",
+        requireConfirm: false,
+      });
+    }
   }
 
   if (installDaemon) {
@@ -236,39 +230,58 @@ export async function finalizeSetupWizard(
     }
   }
 
+  const controlUiBasePath =
+    nextConfig.gateway?.controlUi?.basePath ?? baseConfig.gateway?.controlUi?.basePath;
+  const links = resolveControlUiLinks({
+    bind: settings.bind,
+    port: settings.port,
+    customBindHost: settings.customBindHost,
+    basePath: controlUiBasePath,
+  });
+  const authedUrl =
+    settings.authMode === "token" && settings.gatewayToken
+      ? `${links.httpUrl}#token=${encodeURIComponent(settings.gatewayToken)}`
+      : links.httpUrl;
+  if (settings.authMode === "password") {
+    try {
+      resolvedGatewayPassword =
+        (await resolveSetupSecretInputString({
+          config: nextConfig,
+          value: nextConfig.gateway?.auth?.password,
+          path: "gateway.auth.password",
+          env: process.env,
+        })) ?? "";
+    } catch (error) {
+      await prompter.note(
+        [
+          "Could not resolve gateway.auth.password SecretRef for setup auth.",
+          formatErrorMessage(error),
+        ].join("\n"),
+        "Gateway auth",
+      );
+    }
+  }
+
+  const probeAuth = {
+    token: settings.authMode === "token" ? settings.gatewayToken : undefined,
+    password: settings.authMode === "password" ? resolvedGatewayPassword : "",
+  };
+
   if (!opts.skipHealth) {
-    const probeLinks = resolveControlUiLinks({
-      bind: nextConfig.gateway?.bind ?? "loopback",
-      port: settings.port,
-      customBindHost: nextConfig.gateway?.customBindHost,
-      basePath: undefined,
-    });
-    // Daemon install/restart can briefly flap the WS; wait a bit so health check doesn't false-fail.
-    gatewayProbe = await waitForGatewayReachable({
-      url: probeLinks.wsUrl,
-      token: settings.gatewayToken,
-      deadlineMs: 15_000,
-    });
-    if (gatewayProbe.ok) {
-      try {
-        await healthCommand({ json: false, timeoutMs: 10_000 }, runtime);
-      } catch (err) {
-        runtime.error(formatHealthCheckFailure(err));
-        await prompter.note(
-          [
-            "Docs:",
-            "https://docs.openclaw.ai/gateway/health",
-            "https://docs.openclaw.ai/gateway/troubleshooting",
-          ].join("\n"),
-          "Health check help",
-        );
-      }
-    } else if (installDaemon) {
+    gatewayProbe = installDaemon
+      ? await waitForGatewayReachable({
+          url: links.wsUrl,
+          ...probeAuth,
+          deadlineMs: 15_000,
+        })
+      : await probeGatewayReachable({
+          url: links.wsUrl,
+          ...probeAuth,
+        });
+    if (!gatewayProbe.ok && installDaemon) {
       runtime.error(
         formatHealthCheckFailure(
-          new Error(
-            gatewayProbe.detail ?? `gateway did not become reachable at ${probeLinks.wsUrl}`,
-          ),
+          new Error(gatewayProbe.detail ?? `gateway did not become reachable at ${links.wsUrl}`),
         ),
       );
       await prompter.note(
@@ -291,6 +304,11 @@ export async function finalizeSetupWizard(
         "Gateway",
       );
     }
+  } else {
+    gatewayProbe = await probeGatewayReachable({
+      url: links.wsUrl,
+      ...probeAuth,
+    });
   }
 
   const controlUiEnabled =
@@ -312,46 +330,6 @@ export async function finalizeSetupWizard(
     "Optional apps",
   );
 
-  const controlUiBasePath =
-    nextConfig.gateway?.controlUi?.basePath ?? baseConfig.gateway?.controlUi?.basePath;
-  const links = resolveControlUiLinks({
-    bind: settings.bind,
-    port: settings.port,
-    customBindHost: settings.customBindHost,
-    basePath: controlUiBasePath,
-  });
-  const authedUrl =
-    settings.authMode === "token" && settings.gatewayToken
-      ? `${links.httpUrl}#token=${encodeURIComponent(settings.gatewayToken)}`
-      : links.httpUrl;
-  let resolvedGatewayPassword = "";
-  if (settings.authMode === "password") {
-    try {
-      resolvedGatewayPassword =
-        (await resolveSetupSecretInputString({
-          config: nextConfig,
-          value: nextConfig.gateway?.auth?.password,
-          path: "gateway.auth.password",
-          env: process.env,
-        })) ?? "";
-    } catch (error) {
-      await prompter.note(
-        [
-          "Could not resolve gateway.auth.password SecretRef for setup auth.",
-          formatErrorMessage(error),
-        ].join("\n"),
-        "Gateway auth",
-      );
-    }
-  }
-
-  if (opts.skipHealth || !gatewayProbe.ok) {
-    gatewayProbe = await probeGatewayReachable({
-      url: links.wsUrl,
-      token: settings.authMode === "token" ? settings.gatewayToken : undefined,
-      password: settings.authMode === "password" ? resolvedGatewayPassword : "",
-    });
-  }
   const gatewayStatusLine = gatewayProbe.ok
     ? "Gateway: reachable"
     : `Gateway: not detected${gatewayProbe.detail ? ` (${gatewayProbe.detail})` : ""}`;
@@ -429,14 +407,21 @@ export async function finalizeSetupWizard(
       restoreTerminalState("pre-setup tui", { resumeStdinIfPaused: true });
       try {
         await launchTuiCli({
-          local: true,
+          ...(gatewayProbe.ok
+            ? {
+                url: links.wsUrl,
+                token: settings.authMode === "token" ? settings.gatewayToken : undefined,
+                password: settings.authMode === "password" ? resolvedGatewayPassword : "",
+              }
+            : { local: true }),
+          // Safety: setup TUI should not auto-deliver to lastProvider/lastTo.
           deliver: false,
           message: hasBootstrap ? "Wake up, my friend!" : undefined,
         });
+        launchedTui = true;
       } finally {
         restoreTerminalState("post-setup tui", { resumeStdinIfPaused: true });
       }
-      launchedTui = true;
     } else if (hatchChoice === "web") {
       const browserSupport = await detectBrowserOpenSupport();
       if (browserSupport.ok) {

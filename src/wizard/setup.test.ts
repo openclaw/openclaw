@@ -79,6 +79,7 @@ const finalizeSetupWizard = vi.hoisted(() =>
 const listChannelPlugins = vi.hoisted(() => vi.fn(() => []));
 const logConfigUpdated = vi.hoisted(() => vi.fn(() => {}));
 const setupInternalHooks = vi.hoisted(() => vi.fn(async (cfg) => cfg));
+const setupPluginConfig = vi.hoisted(() => vi.fn(async ({ config }) => config));
 
 const setupChannels = vi.hoisted(() => vi.fn(async (cfg) => cfg));
 const setupSkills = vi.hoisted(() => vi.fn(async (cfg) => cfg));
@@ -230,6 +231,10 @@ vi.mock("../infra/control-ui-assets.js", () => ({
 vi.mock("../plugins/status.js", () => ({
   buildPluginCompatibilityNotices,
   formatPluginCompatibilityNotice,
+}));
+
+vi.mock("./setup.plugin-config.js", () => ({
+  setupPluginConfig,
 }));
 
 vi.mock("../channels/plugins/index.js", () => ({
@@ -833,6 +838,35 @@ describe("runSetupWizard", () => {
     expect(configureGatewayForSetup).toHaveBeenCalledWith(
       expect.objectContaining({
         secretInputMode: "ref", // pragma: allowlist secret
+      }),
+    );
+  });
+
+  it("runs the quickstart plugin-config surface during quickstart onboarding", async () => {
+    setupPluginConfig.mockClear();
+    const prompter = buildWizardPrompter({});
+    const runtime = createRuntime();
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        mode: "local",
+        authChoice: "skip",
+        installDaemon: false,
+        skipProviders: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+      },
+      runtime,
+      prompter,
+    );
+
+    expect(setupPluginConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        surface: "quickstart",
       }),
     );
   });

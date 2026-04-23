@@ -455,6 +455,7 @@ describe("modelsAuthLoginCommand", () => {
       note,
       select: vi.fn(),
     });
+    mocks.openUrl.mockResolvedValue(true);
     const runApiKeyAuth = vi.fn();
     const runClaudeCliMigration = vi.fn().mockImplementation(async (ctx) => {
       expect(ctx.config).toEqual(currentConfig);
@@ -466,6 +467,7 @@ describe("modelsAuthLoginCommand", () => {
       expect(ctx.allowSecretRefPrompt).toBe(false);
       expect(ctx.isRemote).toBe(false);
       expect(ctx.openUrl).toEqual(expect.any(Function));
+      await expect(ctx.openUrl("https://example.test/oauth")).resolves.toBe(true);
       expect(ctx.oauth).toMatchObject({
         createVpsAwareHandlers: expect.any(Function),
       });
@@ -577,6 +579,7 @@ describe("modelsAuthLoginCommand", () => {
       "Provider notes",
     );
     expect(runtime.log).toHaveBeenCalledWith("Default model set to claude-cli/claude-sonnet-4-6");
+    expect(mocks.openUrl).toHaveBeenCalledWith("https://example.test/oauth");
   });
 
   it("preserves other providers' allowlist entries on an openai-codex OAuth login", async () => {

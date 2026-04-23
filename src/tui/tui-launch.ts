@@ -2,7 +2,12 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 import { formatErrorMessage } from "../infra/errors.js";
 import { attachChildProcessBridge } from "../process/child-process-bridge.js";
-import { TUI_SETUP_AUTH_SOURCE_CONFIG, TUI_SETUP_AUTH_SOURCE_ENV } from "./setup-launch-env.js";
+import {
+  TUI_LAUNCH_GATEWAY_PASSWORD_ENV,
+  TUI_LAUNCH_GATEWAY_TOKEN_ENV,
+  TUI_SETUP_AUTH_SOURCE_CONFIG,
+  TUI_SETUP_AUTH_SOURCE_ENV,
+} from "./setup-launch-env.js";
 import type { TuiOptions } from "./tui.js";
 
 type TuiLaunchOptions = {
@@ -64,8 +69,6 @@ function buildTuiCliArgs(opts: TuiOptions): string[] {
     args.push("--local");
   }
   appendOption(args, "--url", opts.url);
-  appendOption(args, "--token", opts.token);
-  appendOption(args, "--password", opts.password);
   appendOption(args, "--session", opts.session);
   appendOption(args, "--thinking", opts.thinking);
   appendOption(args, "--message", opts.message);
@@ -82,16 +85,15 @@ export async function launchTuiCli(
   launchOptions: TuiLaunchOptions = {},
 ): Promise<void> {
   const args = buildTuiCliArgs(opts);
-  const env =
-    launchOptions.gatewayUrl || launchOptions.authSource
-      ? {
-          ...process.env,
-          ...(launchOptions.gatewayUrl ? { OPENCLAW_GATEWAY_URL: launchOptions.gatewayUrl } : {}),
-          ...(launchOptions.authSource === "config"
-            ? { [TUI_SETUP_AUTH_SOURCE_ENV]: TUI_SETUP_AUTH_SOURCE_CONFIG }
-            : {}),
-        }
-      : process.env;
+  const env = {
+    ...process.env,
+    ...(launchOptions.gatewayUrl ? { OPENCLAW_GATEWAY_URL: launchOptions.gatewayUrl } : {}),
+    ...(launchOptions.authSource === "config"
+      ? { [TUI_SETUP_AUTH_SOURCE_ENV]: TUI_SETUP_AUTH_SOURCE_CONFIG }
+      : {}),
+    ...(opts.token ? { [TUI_LAUNCH_GATEWAY_TOKEN_ENV]: opts.token } : {}),
+    ...(opts.password ? { [TUI_LAUNCH_GATEWAY_PASSWORD_ENV]: opts.password } : {}),
+  };
   const stdinWasPaused =
     typeof process.stdin.isPaused === "function" ? process.stdin.isPaused() : false;
 

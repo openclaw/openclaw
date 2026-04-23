@@ -457,13 +457,15 @@ function injectCommandResult(host: ChatHost, content: string) {
 export async function refreshChat(host: ChatHost, opts?: { scheduleScroll?: boolean }) {
   await Promise.all([
     loadChatHistory(host as unknown as ChatState),
+    refreshChatAvatar(host),
+  ]);
+  void Promise.allSettled([
     loadSessions(host as unknown as SessionsState, {
       activeMinutes: 0,
       limit: 0,
       includeGlobal: true,
       includeUnknown: true,
     }),
-    refreshChatAvatar(host),
     refreshChatModels(host),
     refreshChatCommands(host),
   ]);

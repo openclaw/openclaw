@@ -304,7 +304,7 @@ async function runProviderAuthMethod(params: {
     isRemote: isRemoteEnvironment(),
     openUrl: async (url) => {
       const { openUrl } = await import("../onboard-helpers.js");
-      await openUrl(url);
+      return await openUrl(url);
     },
     oauth: {
       createVpsAwareHandlers: (runtimeParams) => createVpsAwareOAuthHandlers(runtimeParams),

@@ -54,7 +54,7 @@ vi.mock("../plugins/provider-auth-helpers.js", () => ({
 }));
 
 const isRemoteEnvironment = vi.hoisted(() => vi.fn(() => false));
-const openUrl = vi.hoisted(() => vi.fn(async () => {}));
+const openUrl = vi.hoisted(() => vi.fn<(url: string) => Promise<boolean>>(async () => true));
 vi.mock("../plugins/setup-browser.js", () => ({
   isRemoteEnvironment,
   openUrl,
@@ -462,6 +462,34 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
       "Detected local provider runtime.\nPulled model metadata.",
       "Provider notes",
     );
+  });
+
+  it("preserves browser-open boolean results for provider auth methods", async () => {
+    openUrl.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    const method: ProviderAuthMethod = {
+      id: "local",
+      label: "Local",
+      kind: "custom",
+      run: async (ctx) => {
+        await expect(ctx.openUrl("https://example.test/fail")).resolves.toBe(false);
+        await expect(ctx.openUrl("https://example.test/success")).resolves.toBe(true);
+        return {
+          profiles: [],
+        };
+      },
+    };
+
+    await runProviderPluginAuthMethod({
+      config: {},
+      runtime: {} as ApplyAuthChoiceParams["runtime"],
+      prompter: {
+        note: vi.fn(async () => {}),
+      } as unknown as ApplyAuthChoiceParams["prompter"],
+      method,
+    });
+
+    expect(openUrl).toHaveBeenNthCalledWith(1, "https://example.test/fail");
+    expect(openUrl).toHaveBeenNthCalledWith(2, "https://example.test/success");
   });
 
   it("replaces provider-owned default model maps during auth migrations", async () => {

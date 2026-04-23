@@ -16,6 +16,8 @@ export type ConfigurablePlugin = {
   jsonSchema?: JsonSchemaObject;
 };
 
+export type PluginConfigPromptSurface = "onboard" | "quickstart";
+
 type ManifestRegistryModule = typeof import("../plugins/manifest-registry.js");
 
 let manifestRegistryModulePromise: Promise<ManifestRegistryModule> | undefined;
@@ -79,6 +81,20 @@ function formatCurrentValue(value: unknown): string {
   return JSON.stringify(value);
 }
 
+function isPluginPromptEligible(
+  config: OpenClawConfig,
+  plugin: {
+    id: string;
+    enabledByDefault?: boolean;
+  },
+): boolean {
+  if (config.plugins?.deny?.includes(plugin.id)) {
+    return false;
+  }
+  const entry = config.plugins?.entries?.[plugin.id];
+  return plugin.enabledByDefault === true || entry?.enabled === true;
+}
+
 /**
  * Discover plugins that have non-advanced uiHints fields.
  * Returns only plugins that have at least one promptable field.
@@ -91,7 +107,9 @@ export function discoverConfigurablePlugins(params: {
     configSchema?: Record<string, unknown>;
     enabled?: boolean;
   }>;
+  surface?: PluginConfigPromptSurface;
 }): ConfigurablePlugin[] {
+  const surface = params.surface ?? "onboard";
   const result: ConfigurablePlugin[] = [];
   for (const plugin of params.manifestPlugins) {
     if (!plugin.configUiHints) {
@@ -100,9 +118,13 @@ export function discoverConfigurablePlugins(params: {
     // Only include non-advanced fields
     const promptableHints: Record<string, PluginConfigUiHint> = {};
     for (const [key, hint] of Object.entries(plugin.configUiHints)) {
-      if (!hint.advanced) {
-        promptableHints[key] = hint;
+      if (hint.advanced) {
+        continue;
       }
+      if (surface === "quickstart" && hint.quickstart !== true) {
+        continue;
+      }
+      promptableHints[key] = hint;
     }
     if (Object.keys(promptableHints).length === 0) {
       continue;
@@ -130,6 +152,7 @@ export function discoverUnconfiguredPlugins(params: {
     enabled?: boolean;
   }>;
   config: OpenClawConfig;
+  surface?: PluginConfigPromptSurface;
 }): ConfigurablePlugin[] {
   const all = discoverConfigurablePlugins(params);
   return all.filter((plugin) => {
@@ -298,21 +321,19 @@ export async function setupPluginConfig(params: {
   config: OpenClawConfig;
   prompter: WizardPrompter;
   workspaceDir?: string;
+  surface?: PluginConfigPromptSurface;
 }): Promise<OpenClawConfig> {
   const { loadPluginManifestRegistry } = await loadManifestRegistryModule();
   const registry = loadPluginManifestRegistry({
     config: params.config,
     workspaceDir: params.workspaceDir,
   });
+  const surface = params.surface ?? "onboard";
 
   const unconfigured = discoverUnconfiguredPlugins({
-    manifestPlugins: registry.plugins.filter((p) => {
-      // Only show enabled plugins
-      const entry = params.config.plugins?.entries?.[p.id];
-      // Plugin is discoverable if it's enabled or enabledByDefault and not denied
-      return p.enabledByDefault || entry?.enabled === true;
-    }),
+    manifestPlugins: registry.plugins.filter((p) => isPluginPromptEligible(params.config, p)),
     config: params.config,
+    surface,
   });
 
   if (unconfigured.length === 0) {
@@ -320,12 +341,18 @@ export async function setupPluginConfig(params: {
   }
 
   const selected = await params.prompter.multiselect({
-    message: "Configure plugins (select to set up now, or skip)",
+    message:
+      surface === "quickstart"
+        ? "Personalize plugins now (optional)"
+        : "Configure plugins (select to set up now, or skip)",
     options: [
       {
         value: "__skip__",
-        label: "Skip for now",
-        hint: "Continue without configuring plugins",
+        label: surface === "quickstart" ? "Use defaults for now" : "Skip for now",
+        hint:
+          surface === "quickstart"
+            ? "Continue with plugin defaults"
+            : "Continue without configuring plugins",
       },
       ...unconfigured.map((p) => ({
         value: p.id,
@@ -368,10 +395,7 @@ export async function configurePluginConfig(params: {
   });
 
   const configurable = discoverConfigurablePlugins({
-    manifestPlugins: registry.plugins.filter((p) => {
-      const entry = params.config.plugins?.entries?.[p.id];
-      return p.enabledByDefault || entry?.enabled === true;
-    }),
+    manifestPlugins: registry.plugins.filter((p) => isPluginPromptEligible(params.config, p)),
   });
 
   if (configurable.length === 0) {

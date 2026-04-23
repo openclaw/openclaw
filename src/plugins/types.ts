@@ -283,7 +283,7 @@ export type ProviderAuthContext = {
    */
   allowSecretRefPrompt?: boolean;
   isRemote: boolean;
-  openUrl: (url: string) => Promise<void>;
+  openUrl: (url: string) => Promise<unknown>;
   oauth: {
     createVpsAwareHandlers: typeof createVpsAwareOAuthHandlers;
   };

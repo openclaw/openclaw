@@ -80,6 +80,26 @@ function resolveChannelGatewayAccountId(params: {
   );
 }
 
+function resolveEffectiveDefaultAccountId(params: {
+  accountIds: string[];
+  defaultAccountId: string;
+}): string {
+  return params.accountIds.includes(params.defaultAccountId)
+    ? params.defaultAccountId
+    : params.accountIds[0] ?? params.defaultAccountId;
+}
+
+async function resolveAccountConfigured(params: {
+  plugin: ChannelPlugin;
+  account: unknown;
+  cfg: OpenClawConfig;
+}): Promise<boolean> {
+  if (!params.plugin.config.isConfigured) {
+    return true;
+  }
+  return await params.plugin.config.isConfigured(params.account, params.cfg);
+}
+
 export async function logoutChannelAccount(params: {
   channelId: ChannelId;
   accountId?: string | null;
@@ -152,6 +172,7 @@ export const channelsHandlers: GatewayRequestHandlers = {
       return;
     }
     const probe = (params as { probe?: boolean }).probe === true;
+    const includeAccounts = (params as { includeAccounts?: boolean }).includeAccounts !== false;
     const timeoutMsRaw = (params as { timeoutMs?: unknown }).timeoutMs;
     const timeoutMs = resolveChannelsStatusTimeoutMs({ probe, timeoutMsRaw });
     const cfg = applyPluginAutoEnable({
@@ -261,10 +282,14 @@ export const channelsHandlers: GatewayRequestHandlers = {
         };
       }
       const accountIds = plugin.config.listAccountIds(cfg);
-      const defaultAccountId = resolveChannelDefaultAccountId({
+      const configuredDefaultAccountId = resolveChannelDefaultAccountId({
         plugin,
         cfg,
         accountIds,
+      });
+      const defaultAccountId = resolveEffectiveDefaultAccountId({
+        accountIds,
+        defaultAccountId: configuredDefaultAccountId,
       });
       const resolvedAccounts: Record<string, unknown> = {};
       const { results } = await runTasksWithConcurrency({
@@ -286,6 +311,63 @@ export const channelsHandlers: GatewayRequestHandlers = {
       return { accounts, defaultAccountId, defaultAccount, resolvedAccounts };
     };
 
+    const buildChannelSummaryOnly = async (plugin: ChannelPlugin) => {
+      const accountIds = plugin.config.listAccountIds(cfg);
+      const configuredDefaultAccountId = resolveChannelDefaultAccountId({
+        plugin,
+        cfg,
+        accountIds,
+      });
+      const defaultAccountId = resolveEffectiveDefaultAccountId({
+        accountIds,
+        defaultAccountId: configuredDefaultAccountId,
+      });
+      const account = plugin.config.resolveAccount(cfg, defaultAccountId);
+      const enabled = isAccountEnabled(plugin, account);
+      const configured =
+        probe && enabled ? await resolveAccountConfigured({ plugin, account, cfg }) : true;
+      let probeResult: unknown;
+      let auditResult: unknown;
+      if (probe && enabled && configured && plugin.status?.probeAccount) {
+        probeResult = await plugin.status.probeAccount({
+          account,
+          timeoutMs,
+          cfg,
+        });
+      }
+      if (probe && enabled && configured && plugin.status?.auditAccount) {
+        auditResult = await plugin.status.auditAccount({
+          account,
+          timeoutMs,
+          cfg,
+          probe: probeResult,
+        });
+      }
+      const runtimeSnapshot = resolveRuntimeSnapshot(plugin.id, defaultAccountId, defaultAccountId);
+      const defaultAccount = await buildChannelAccountSnapshot({
+        plugin,
+        cfg,
+        accountId: defaultAccountId,
+        runtime: runtimeSnapshot,
+        probe: probeResult,
+        audit: auditResult,
+      });
+      const summary = plugin.status?.buildChannelSummary
+        ? await plugin.status.buildChannelSummary({
+            account,
+            cfg,
+            defaultAccountId,
+            snapshot: defaultAccount,
+          })
+        : {
+            configured: defaultAccount.configured ?? false,
+          };
+      return {
+        summary,
+        defaultAccountId,
+      };
+    };
+
     const uiCatalog = buildChannelUiCatalog(plugins);
     const payload: Record<string, unknown> = {
       ts: Date.now(),
@@ -303,6 +385,15 @@ export const channelsHandlers: GatewayRequestHandlers = {
     const defaultAccountIdMap = payload.channelDefaultAccountId as Record<string, unknown>;
     const { results: channelResults } = await runTasksWithConcurrency({
       tasks: plugins.map((plugin) => async () => {
+        if (!includeAccounts) {
+          const { summary, defaultAccountId } = await buildChannelSummaryOnly(plugin);
+          return {
+            pluginId: plugin.id,
+            summary,
+            accounts: [] as ChannelAccountSnapshot[],
+            defaultAccountId,
+          };
+        }
         const { accounts, defaultAccountId, defaultAccount, resolvedAccounts } =
           await buildChannelAccounts(plugin.id);
         const fallbackAccount =

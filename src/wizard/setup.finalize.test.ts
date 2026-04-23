@@ -5,7 +5,6 @@ import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 
 const launchTuiCli = vi.hoisted(() => vi.fn(async () => {}));
-const restoreTerminalState = vi.hoisted(() => vi.fn());
 const probeGatewayReachable = vi.hoisted(() =>
   vi.fn<() => Promise<{ ok: boolean; detail?: string }>>(async () => ({ ok: true })),
 );
@@ -20,6 +19,7 @@ const buildGatewayInstallPlan = vi.hoisted(() =>
     environment: {},
   })),
 );
+const healthCommand = vi.hoisted(() => vi.fn(async () => {}));
 const gatewayServiceInstall = vi.hoisted(() => vi.fn(async () => {}));
 const gatewayServiceRestart = vi.hoisted(() =>
   vi.fn<() => Promise<{ outcome: "completed" } | { outcome: "scheduled" }>>(async () => ({
@@ -35,6 +35,7 @@ const resolveGatewayInstallToken = vi.hoisted(() =>
     warnings: [],
   })),
 );
+const ensureSystemdUserLingerInteractive = vi.hoisted(() => vi.fn(async () => {}));
 const isSystemdUserServiceAvailable = vi.hoisted(() => vi.fn(async () => true));
 const readSystemdUserLingerStatus = vi.hoisted(() =>
   vi.fn(async () => ({ user: "test-user", linger: "yes" as const })),
@@ -42,6 +43,7 @@ const readSystemdUserLingerStatus = vi.hoisted(() =>
 const resolveSetupSecretInputString = vi.hoisted(() =>
   vi.fn<() => Promise<string | undefined>>(async () => undefined),
 );
+const restoreTerminalState = vi.hoisted(() => vi.fn());
 const resolveExistingKey = vi.hoisted(() =>
   vi.fn<(config: OpenClawConfig, provider: string) => string | undefined>(() => undefined),
 );
@@ -86,7 +88,7 @@ vi.mock("../commands/health-format.js", () => ({
 }));
 
 vi.mock("../commands/health.js", () => ({
-  healthCommand: vi.fn(async () => {}),
+  healthCommand,
 }));
 
 vi.mock("../commands/onboard-search.js", () => ({
@@ -128,6 +130,10 @@ vi.mock("../daemon/service.js", () => ({
 vi.mock("../daemon/systemd.js", () => ({
   isSystemdUserServiceAvailable,
   readSystemdUserLingerStatus,
+}));
+
+vi.mock("../commands/systemd-linger.js", () => ({
+  ensureSystemdUserLingerInteractive,
 }));
 
 vi.mock("../infra/control-ui-assets.js", () => ({
@@ -238,10 +244,10 @@ function createAdvancedFinalizeArgs(params: AdvancedFinalizeArgs = {}) {
 describe("finalizeSetupWizard", () => {
   beforeEach(() => {
     launchTuiCli.mockClear();
-    restoreTerminalState.mockClear();
     probeGatewayReachable.mockClear();
     waitForGatewayReachable.mockReset();
     waitForGatewayReachable.mockResolvedValue({ ok: true });
+    healthCommand.mockClear();
     setupWizardShellCompletion.mockClear();
     buildGatewayInstallPlan.mockClear();
     gatewayServiceInstall.mockClear();
@@ -251,12 +257,14 @@ describe("finalizeSetupWizard", () => {
     gatewayServiceRestart.mockResolvedValue({ outcome: "completed" });
     gatewayServiceUninstall.mockReset();
     resolveGatewayInstallToken.mockClear();
+    ensureSystemdUserLingerInteractive.mockReset();
     isSystemdUserServiceAvailable.mockReset();
     isSystemdUserServiceAvailable.mockResolvedValue(true);
     readSystemdUserLingerStatus.mockReset();
     readSystemdUserLingerStatus.mockResolvedValue({ user: "test-user", linger: "yes" });
     resolveSetupSecretInputString.mockReset();
     resolveSetupSecretInputString.mockResolvedValue(undefined);
+    restoreTerminalState.mockReset();
     resolveExistingKey.mockReset();
     resolveExistingKey.mockReturnValue(undefined);
     hasExistingKey.mockReset();
@@ -267,7 +275,7 @@ describe("finalizeSetupWizard", () => {
     listConfiguredWebSearchProviders.mockReturnValue([]);
   });
 
-  it("resolves gateway password SecretRef for probe but omits auth from TUI hatch", async () => {
+  it("resolves gateway password SecretRef for probe and TUI", async () => {
     const previous = process.env.OPENCLAW_GATEWAY_PASSWORD;
     process.env.OPENCLAW_GATEWAY_PASSWORD = "resolved-gateway-password"; // pragma: allowlist secret
     resolveSetupSecretInputString.mockResolvedValueOnce("resolved-gateway-password");
@@ -339,55 +347,28 @@ describe("finalizeSetupWizard", () => {
         password: "resolved-gateway-password", // pragma: allowlist secret
       }),
     );
-    expect(launchTuiCli).toHaveBeenCalledWith({
-      local: true,
-      deliver: false,
-      message: undefined,
+    expect(launchTuiCli).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "ws://127.0.0.1:18789",
+        password: "resolved-gateway-password", // pragma: allowlist secret
+      }),
+    );
+    expect(setupWizardShellCompletion).toHaveBeenCalledWith({
+      flow: "quickstart",
+      prompter,
     });
   });
 
-  it("restores terminal state after failed TUI hatch", async () => {
-    launchTuiCli.mockRejectedValueOnce(new Error("TUI exited with code 1"));
-    const select = vi.fn(async (params: { message: string }) => {
-      if (params.message === "How do you want to hatch your bot?") {
-        return "tui";
-      }
-      return "later";
-    });
-    const prompter = buildWizardPrompter({ select: select as never });
+  it("skips systemd linger checks when daemon install is disabled", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    try {
+      await finalizeSetupWizard(createAdvancedFinalizeArgs({ installDaemon: false }));
+    } finally {
+      platformSpy.mockRestore();
+    }
 
-    await expect(
-      finalizeSetupWizard({
-        flow: "advanced",
-        opts: {
-          acceptRisk: true,
-          authChoice: "skip",
-          installDaemon: false,
-          skipHealth: true,
-          skipUi: false,
-        },
-        baseConfig: {},
-        nextConfig: {},
-        workspaceDir: "/tmp",
-        settings: {
-          port: 18789,
-          bind: "loopback",
-          authMode: "token",
-          gatewayToken: "test-token",
-          tailscaleMode: "off",
-          tailscaleResetOnExit: false,
-        },
-        prompter,
-        runtime: createRuntime(),
-      }),
-    ).rejects.toThrow("TUI exited with code 1");
-
-    expect(restoreTerminalState).toHaveBeenCalledWith("pre-setup tui", {
-      resumeStdinIfPaused: true,
-    });
-    expect(restoreTerminalState).toHaveBeenCalledWith("post-setup tui", {
-      resumeStdinIfPaused: true,
-    });
+    expect(isSystemdUserServiceAvailable).not.toHaveBeenCalled();
+    expect(ensureSystemdUserLingerInteractive).not.toHaveBeenCalled();
   });
 
   it("does not persist resolved SecretRef token in daemon install plan", async () => {
@@ -558,11 +539,108 @@ describe("finalizeSetupWizard", () => {
     );
   });
 
-  it("shows actionable gateway guidance instead of a hard error in no-daemon onboarding", async () => {
-    waitForGatewayReachable.mockResolvedValue({
-      ok: false,
-      detail: "gateway closed (1006 abnormal closure (no close frame)): no close reason",
+  it("restores terminal state after failed TUI hatch", async () => {
+    launchTuiCli.mockRejectedValueOnce(new Error("TUI exited with code 1"));
+    const select = vi.fn(async (params: { message: string }) => {
+      if (params.message === "How do you want to hatch your bot?") {
+        return "tui";
+      }
+      return "later";
     });
+    const prompter = buildWizardPrompter({
+      select: select as never,
+      confirm: vi.fn(async () => false),
+    });
+
+    await expect(
+      finalizeSetupWizard({
+        flow: "quickstart",
+        opts: {
+          acceptRisk: true,
+          authChoice: "skip",
+          installDaemon: false,
+          skipHealth: true,
+          skipUi: false,
+        },
+        baseConfig: {},
+        nextConfig: {},
+        workspaceDir: "/tmp",
+        settings: {
+          port: 18789,
+          bind: "loopback",
+          authMode: "token",
+          gatewayToken: undefined,
+          tailscaleMode: "off",
+          tailscaleResetOnExit: false,
+        },
+        prompter,
+        runtime: createRuntime(),
+      }),
+    ).rejects.toThrow("TUI exited with code 1");
+
+    expect(restoreTerminalState).toHaveBeenNthCalledWith(1, "pre-setup tui", {
+      resumeStdinIfPaused: true,
+    });
+    expect(restoreTerminalState).toHaveBeenNthCalledWith(2, "post-setup tui", {
+      resumeStdinIfPaused: true,
+    });
+  });
+
+  it("keeps terminal hatch local when the gateway is unavailable", async () => {
+    probeGatewayReachable.mockResolvedValueOnce({ ok: false, detail: "offline" });
+    const select = vi.fn(async (params: { message: string }) => {
+      if (params.message === "How do you want to hatch your bot?") {
+        return "tui";
+      }
+      return "later";
+    });
+    const prompter = buildWizardPrompter({
+      select: select as never,
+      confirm: vi.fn(async () => false),
+    });
+
+    await finalizeSetupWizard({
+      flow: "quickstart",
+      opts: {
+        acceptRisk: true,
+        authChoice: "skip",
+        installDaemon: false,
+        skipHealth: false,
+        skipUi: false,
+      },
+      baseConfig: {},
+      nextConfig: {},
+      workspaceDir: "/tmp",
+      settings: {
+        port: 18789,
+        bind: "loopback",
+        authMode: "token",
+        gatewayToken: "session-token",
+        tailscaleMode: "off",
+        tailscaleResetOnExit: false,
+      },
+      prompter,
+      runtime: createRuntime(),
+    });
+
+    expect(launchTuiCli).toHaveBeenCalledWith(
+      expect.objectContaining({
+        local: true,
+        deliver: false,
+      }),
+    );
+    expect(launchTuiCli).not.toHaveBeenCalledWith(
+      expect.objectContaining({ url: expect.anything() }),
+    );
+    expect(launchTuiCli).not.toHaveBeenCalledWith(
+      expect.objectContaining({ token: expect.anything() }),
+    );
+    expect(launchTuiCli).not.toHaveBeenCalledWith(
+      expect.objectContaining({ password: expect.anything() }),
+    );
+  });
+
+  it("shows actionable gateway guidance instead of a hard error in no-daemon onboarding", async () => {
     probeGatewayReachable.mockResolvedValue({
       ok: false,
       detail: "gateway closed (1006 abnormal closure (no close frame)): no close reason",
@@ -595,11 +673,94 @@ describe("finalizeSetupWizard", () => {
     });
 
     expect(runtime.error).not.toHaveBeenCalledWith("health failed");
+    expect(waitForGatewayReachable).not.toHaveBeenCalled();
+    expect(probeGatewayReachable).toHaveBeenCalledTimes(1);
     expect(prompter.note).toHaveBeenCalledWith(
       expect.stringContaining("Setup was run without Gateway service install"),
       "Gateway",
     );
     expect(prompter.note).not.toHaveBeenCalledWith(expect.any(String), "Dashboard ready");
+  });
+
+  it("does not block successful daemon onboarding on a full health command", async () => {
+    const prompter = createLaterPrompter();
+
+    await finalizeSetupWizard({
+      flow: "quickstart",
+      opts: {
+        acceptRisk: true,
+        authChoice: "skip",
+        installDaemon: true,
+        skipHealth: false,
+        skipUi: true,
+      },
+      baseConfig: {},
+      nextConfig: {},
+      workspaceDir: "/tmp",
+      settings: {
+        port: 18789,
+        bind: "loopback",
+        authMode: "token",
+        gatewayToken: "test-token",
+        tailscaleMode: "off",
+        tailscaleResetOnExit: false,
+      },
+      prompter,
+      runtime: createRuntime(),
+    });
+
+    expect(waitForGatewayReachable).toHaveBeenCalled();
+    expect(healthCommand).not.toHaveBeenCalled();
+  });
+
+  it("uses resolved gateway passwords for daemon health checks", async () => {
+    resolveSetupSecretInputString.mockResolvedValueOnce("resolved-health-password");
+    const prompter = createLaterPrompter();
+
+    await finalizeSetupWizard({
+      flow: "quickstart",
+      opts: {
+        acceptRisk: true,
+        authChoice: "skip",
+        installDaemon: true,
+        skipHealth: false,
+        skipUi: true,
+      },
+      baseConfig: {},
+      nextConfig: {
+        gateway: {
+          auth: {
+            mode: "password",
+            password: {
+              source: "env",
+              provider: "default",
+              id: "OPENCLAW_GATEWAY_PASSWORD",
+            },
+          },
+        },
+      },
+      workspaceDir: "/tmp",
+      settings: {
+        port: 18789,
+        bind: "loopback",
+        authMode: "password",
+        gatewayToken: undefined,
+        tailscaleMode: "off",
+        tailscaleResetOnExit: false,
+      },
+      prompter,
+      runtime: createRuntime(),
+    });
+
+    expect(waitForGatewayReachable).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "ws://127.0.0.1:18789",
+        password: "resolved-health-password",
+        token: undefined,
+        deadlineMs: 15_000,
+      }),
+    );
+    expect(probeGatewayReachable).not.toHaveBeenCalled();
   });
 
   it("does not show a Codex native search summary when web search is globally disabled", async () => {
