@@ -233,4 +233,214 @@ describe("openai image generation provider", () => {
     );
     expect(result.images).toHaveLength(1);
   });
+
+  describe("azure openai support", () => {
+    it("uses api-key header and deployment-scoped URL for Azure .openai.azure.com hosts", async () => {
+      mockGeneratedPngResponse();
+
+      const provider = buildOpenAIImageGenerationProvider();
+      await provider.generateImage({
+        provider: "openai",
+        model: "gpt-image-2",
+        prompt: "Azure cat",
+        cfg: {
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "https://myresource.openai.azure.com",
+                models: [],
+              },
+            },
+          },
+        },
+      });
+
+      expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          defaultHeaders: { "api-key": "openai-key" },
+        }),
+      );
+      expect(postJsonRequestMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          url: "https://myresource.openai.azure.com/openai/deployments/gpt-image-2/images/generations?api-version=2024-12-01-preview",
+        }),
+      );
+    });
+
+    it("uses api-key header and deployment-scoped URL for .cognitiveservices.azure.com hosts", async () => {
+      mockGeneratedPngResponse();
+
+      const provider = buildOpenAIImageGenerationProvider();
+      await provider.generateImage({
+        provider: "openai",
+        model: "gpt-image-2",
+        prompt: "Azure cat",
+        cfg: {
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "https://myresource.cognitiveservices.azure.com",
+                models: [],
+              },
+            },
+          },
+        },
+      });
+
+      expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          defaultHeaders: { "api-key": "openai-key" },
+        }),
+      );
+      expect(postJsonRequestMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          url: "https://myresource.cognitiveservices.azure.com/openai/deployments/gpt-image-2/images/generations?api-version=2024-12-01-preview",
+        }),
+      );
+    });
+
+    it("uses api-key header and deployment-scoped URL for .services.ai.azure.com hosts", async () => {
+      mockGeneratedPngResponse();
+
+      const provider = buildOpenAIImageGenerationProvider();
+      await provider.generateImage({
+        provider: "openai",
+        model: "gpt-image-2",
+        prompt: "Azure cat",
+        cfg: {
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "https://my-resource.services.ai.azure.com",
+                models: [],
+              },
+            },
+          },
+        },
+      });
+
+      expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          defaultHeaders: { "api-key": "openai-key" },
+        }),
+      );
+      expect(postJsonRequestMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          url: "https://my-resource.services.ai.azure.com/openai/deployments/gpt-image-2/images/generations?api-version=2024-12-01-preview",
+        }),
+      );
+    });
+
+    it("respects AZURE_OPENAI_API_VERSION env override", async () => {
+      mockGeneratedPngResponse();
+      vi.stubEnv("AZURE_OPENAI_API_VERSION", "2025-01-01");
+
+      const provider = buildOpenAIImageGenerationProvider();
+      await provider.generateImage({
+        provider: "openai",
+        model: "gpt-image-2",
+        prompt: "Azure cat",
+        cfg: {
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "https://myresource.openai.azure.com",
+                models: [],
+              },
+            },
+          },
+        },
+      });
+
+      expect(postJsonRequestMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          url: "https://myresource.openai.azure.com/openai/deployments/gpt-image-2/images/generations?api-version=2025-01-01",
+        }),
+      );
+    });
+
+    it("builds Azure edit URL with deployment and api-version", async () => {
+      mockGeneratedPngResponse();
+
+      const provider = buildOpenAIImageGenerationProvider();
+      await provider.generateImage({
+        provider: "openai",
+        model: "gpt-image-2",
+        prompt: "Change background",
+        cfg: {
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "https://myresource.openai.azure.com",
+                models: [],
+              },
+            },
+          },
+        },
+        inputImages: [
+          {
+            buffer: Buffer.from("png-bytes"),
+            mimeType: "image/png",
+            fileName: "reference.png",
+          },
+        ],
+      });
+
+      expect(postJsonRequestMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          url: "https://myresource.openai.azure.com/openai/deployments/gpt-image-2/images/edits?api-version=2024-12-01-preview",
+        }),
+      );
+    });
+
+    it("strips trailing /v1 from Azure base URL", async () => {
+      mockGeneratedPngResponse();
+
+      const provider = buildOpenAIImageGenerationProvider();
+      await provider.generateImage({
+        provider: "openai",
+        model: "gpt-image-2",
+        prompt: "Azure cat",
+        cfg: {
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "https://myresource.openai.azure.com/v1",
+                models: [],
+              },
+            },
+          },
+        },
+      });
+
+      expect(postJsonRequestMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          url: "https://myresource.openai.azure.com/openai/deployments/gpt-image-2/images/generations?api-version=2024-12-01-preview",
+        }),
+      );
+    });
+
+    it("still uses Bearer auth for public OpenAI hosts", async () => {
+      mockGeneratedPngResponse();
+
+      const provider = buildOpenAIImageGenerationProvider();
+      await provider.generateImage({
+        provider: "openai",
+        model: "gpt-image-2",
+        prompt: "Public cat",
+        cfg: {},
+      });
+
+      expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          defaultHeaders: { Authorization: "Bearer openai-key" },
+        }),
+      );
+      expect(postJsonRequestMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          url: "https://api.openai.com/v1/images/generations",
+        }),
+      );
+    });
+  });
 });
