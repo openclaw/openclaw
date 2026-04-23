@@ -76,7 +76,7 @@ before ingestion.
 ## Dream Diary
 
 Dreaming also keeps a narrative **Dream Diary** in `DREAMS.md`.
-After each phase has enough material, `memory-core` runs a best-effort background
+After a full sweep has enough material, `memory-core` runs a best-effort background
 subagent turn (using the default runtime model) and appends a short diary entry.
 
 This diary is for human reading in the Dreams UI, not a promotion source.

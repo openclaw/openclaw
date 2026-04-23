@@ -1,7 +1,5 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { RequestScopedSubagentRuntimeError } from "openclaw/plugin-sdk/error-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core";
 import {
@@ -189,7 +187,7 @@ async function readCandidateSnippets(workspaceDir: string, nowIso: string): Prom
 }
 
 describe("memory-core dreaming phases", () => {
-  it("uses the hashed narrative session key for sweep-level fallback cleanup", async () => {
+  it("does not append Dream Diary entries during light-only sweep phases", async () => {
     const workspaceDir = await createDreamingWorkspace();
     await writeDailyNote(workspaceDir, [
       `# ${DREAMING_TEST_DAY}`,
@@ -237,8 +235,6 @@ describe("memory-core dreaming phases", () => {
       error: vi.fn(),
     };
     const nowMs = Date.parse("2026-04-05T10:05:00.000Z");
-    const workspaceHash = createHash("sha1").update(workspaceDir).digest("hex").slice(0, 12);
-    const expectedSessionKey = `dreaming-narrative-light-${workspaceHash}-${nowMs}`;
 
     await runDreamingSweepPhases({
       workspaceDir,
@@ -249,79 +245,12 @@ describe("memory-core dreaming phases", () => {
       nowMs,
     });
 
-    expect(subagent.deleteSession).toHaveBeenCalledTimes(2);
-    expect(subagent.deleteSession).toHaveBeenNthCalledWith(1, { sessionKey: expectedSessionKey });
-    expect(subagent.deleteSession).toHaveBeenNthCalledWith(2, { sessionKey: expectedSessionKey });
-  });
-
-  it("swallows synchronous request-scoped cleanup failures after narrative fallback", async () => {
-    const workspaceDir = await createDreamingWorkspace();
-    await writeDailyNote(workspaceDir, [
-      `# ${DREAMING_TEST_DAY}`,
-      "",
-      "- Move backups to S3 Glacier.",
-      "- Keep retention at 365 days.",
-    ]);
-    const testConfig: OpenClawConfig = {
-      ...LIGHT_DREAMING_TEST_CONFIG,
-      agents: {
-        defaults: {
-          workspace: workspaceDir,
-          userTimezone: "UTC",
-        },
-      },
-      plugins: {
-        entries: {
-          "memory-core": {
-            config: {
-              dreaming: {
-                enabled: true,
-                timezone: "UTC",
-                phases: {
-                  light: {
-                    enabled: true,
-                    limit: 20,
-                    lookbackDays: 2,
-                  },
-                  rem: {
-                    enabled: false,
-                    limit: 0,
-                    lookbackDays: 2,
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-    };
-    const subagent = createMockNarrativeSubagent();
-    subagent.run.mockRejectedValue(new RequestScopedSubagentRuntimeError());
-    subagent.deleteSession.mockImplementation(() => {
-      throw new RequestScopedSubagentRuntimeError();
+    expect(subagent.run).not.toHaveBeenCalled();
+    expect(subagent.deleteSession).not.toHaveBeenCalled();
+    await expect(fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8")).rejects.toMatchObject({
+      code: "ENOENT",
     });
-    const logger = {
-      info: vi.fn(),
-      warn: vi.fn(),
-      error: vi.fn(),
-    };
-
-    await expect(
-      runDreamingSweepPhases({
-        workspaceDir,
-        cfg: testConfig,
-        pluginConfig: resolveMemoryCorePluginConfig(testConfig),
-        logger,
-        subagent,
-        nowMs: Date.parse("2026-04-05T10:05:00.000Z"),
-      }),
-    ).resolves.toBeUndefined();
-
-    const dreams = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
-    expect(dreams).toContain("Move backups to S3 Glacier.");
-    expect(logger.error).not.toHaveBeenCalled();
   });
-
   it("does not re-ingest managed light dreaming blocks from daily notes", async () => {
     const workspaceDir = await createDreamingWorkspace();
     await withDreamingTestClock(async () => {
@@ -1827,7 +1756,7 @@ describe("memory-core dreaming phases", () => {
     });
   });
 
-  it("passes staged light-dreaming snippets into the narrative pipeline", async () => {
+  it("does not append Dream Diary entries during standalone light dreaming", async () => {
     const workspaceDir = await createDreamingWorkspace();
     const subagent = createMockNarrativeSubagent("The backup plan glowed like cold storage.");
     const { beforeAgentReply } = createHarness(LIGHT_DREAMING_TEST_CONFIG, workspaceDir, subagent);
@@ -1843,16 +1772,13 @@ describe("memory-core dreaming phases", () => {
       await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
     });
 
-    expect(subagent.run).toHaveBeenCalledTimes(1);
-    const firstRun = subagent.run.mock.calls[0]?.[0];
-    expect(firstRun?.message).toContain("Move backups to S3 Glacier.");
-    expect(firstRun?.message).toContain("Keep retention at 365 days.");
-    await expect(fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8")).resolves.toContain(
-      "The backup plan glowed like cold storage.",
-    );
+    expect(subagent.run).not.toHaveBeenCalled();
+    await expect(fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 
-  it("passes rem-dreaming snippets into the narrative pipeline", async () => {
+  it("does not append Dream Diary entries during standalone rem dreaming", async () => {
     const workspaceDir = await createDreamingWorkspace();
     const subagent = createMockNarrativeSubagent("The traces braided themselves into a map.");
     const { beforeAgentReply } = createHarness(
@@ -1897,13 +1823,10 @@ describe("memory-core dreaming phases", () => {
       );
     });
 
-    expect(subagent.run).toHaveBeenCalledTimes(1);
-    const firstRun = subagent.run.mock.calls[0]?.[0];
-    expect(firstRun?.message).toContain("Move backups to S3 Glacier.");
-    expect(firstRun?.message).toContain("Keep retention at 365 days.");
-    await expect(fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8")).resolves.toContain(
-      "The traces braided themselves into a map.",
-    );
+    expect(subagent.run).not.toHaveBeenCalled();
+    await expect(fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 
   it("increments dailyCount when the same daily file is re-ingested on a later day", async () => {

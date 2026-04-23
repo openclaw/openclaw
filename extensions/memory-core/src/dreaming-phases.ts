@@ -19,11 +19,7 @@ import {
   resolveMemoryRemDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import { writeDailyDreamingPhaseBlock } from "./dreaming-markdown.js";
-import {
-  buildNarrativeSessionKey,
-  generateAndAppendDreamNarrative,
-  type NarrativePhaseData,
-} from "./dreaming-narrative.js";
+import { generateAndAppendDreamNarrative } from "./dreaming-narrative.js";
 import { asRecord, formatErrorMessage, normalizeTrimmedString } from "./dreaming-shared.js";
 import {
   readShortTermRecallEntries,
@@ -1545,23 +1541,6 @@ async function runLightDreaming(params: {
       `memory-core: light dreaming staged ${Math.min(entries.length, params.config.limit)} candidate(s) [workspace=${params.workspaceDir}].`,
     );
   }
-  // Generate dream diary narrative from the staged entries.
-  if (params.subagent && capped.length > 0) {
-    const themes = [...new Set(capped.flatMap((e) => e.conceptTags).filter(Boolean))];
-    const data: NarrativePhaseData = {
-      phase: "light",
-      snippets: capped.map((e) => e.snippet).filter(Boolean),
-      ...(themes.length > 0 ? { themes } : {}),
-    };
-    await generateAndAppendDreamNarrative({
-      subagent: params.subagent,
-      workspaceDir: params.workspaceDir,
-      data,
-      nowMs,
-      timezone: params.config.timezone,
-      logger: params.logger,
-    });
-  }
 }
 
 async function runRemDreaming(params: {
@@ -1615,43 +1594,6 @@ async function runRemDreaming(params: {
       `memory-core: REM dreaming wrote reflections from ${entries.length} recent memory trace(s) [workspace=${params.workspaceDir}].`,
     );
   }
-  // Generate dream diary narrative from REM reflections.
-  if (params.subagent && entries.length > 0) {
-    const snippets = preview.candidateTruths.map((t) => t.snippet).filter(Boolean);
-    const themes = preview.reflections.filter(
-      (r) => !r.startsWith("- No strong") && !r.startsWith("  -"),
-    );
-    const data: NarrativePhaseData = {
-      phase: "rem",
-      snippets:
-        snippets.length > 0
-          ? snippets
-          : entries
-              .slice(0, 8)
-              .map((e) => e.snippet)
-              .filter(Boolean),
-      ...(themes.length > 0 ? { themes } : {}),
-    };
-    await generateAndAppendDreamNarrative({
-      subagent: params.subagent,
-      workspaceDir: params.workspaceDir,
-      data,
-      nowMs,
-      timezone: params.config.timezone,
-      logger: params.logger,
-    });
-  }
-}
-
-async function deleteNarrativeSessionBestEffort(
-  subagent: Parameters<typeof generateAndAppendDreamNarrative>[0]["subagent"],
-  sessionKey: string,
-): Promise<void> {
-  try {
-    await subagent.deleteSession({ sessionKey });
-  } catch {
-    // Cleanup is best-effort; request-scoped runtimes can throw synchronously.
-  }
 }
 
 export async function runDreamingSweepPhases(params: {
@@ -1678,16 +1620,6 @@ export async function runDreamingSweepPhases(params: {
       subagent: params.subagent,
       nowMs: sweepNowMs,
     });
-    // Defensive cleanup: ensure the light-phase narrative session is deleted even if
-    // generateAndAppendDreamNarrative's primary cleanup was skipped due to an error.
-    if (params.subagent) {
-      const lightSessionKey = buildNarrativeSessionKey({
-        workspaceDir: params.workspaceDir,
-        phase: "light",
-        nowMs: sweepNowMs,
-      });
-      await deleteNarrativeSessionBestEffort(params.subagent, lightSessionKey);
-    }
   }
 
   const rem = resolveMemoryRemDreamingConfig({
@@ -1703,15 +1635,6 @@ export async function runDreamingSweepPhases(params: {
       subagent: params.subagent,
       nowMs: sweepNowMs,
     });
-    // Defensive cleanup: ensure the REM-phase narrative session is deleted.
-    if (params.subagent) {
-      const remSessionKey = buildNarrativeSessionKey({
-        workspaceDir: params.workspaceDir,
-        phase: "rem",
-        nowMs: sweepNowMs,
-      });
-      await deleteNarrativeSessionBestEffort(params.subagent, remSessionKey);
-    }
   }
 }
 
