@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, beforeEach, vi } from "vitest";
@@ -3142,9 +3142,14 @@ describe("matrix live qa scenarios", () => {
       expect(deleteOwnDevices).not.toHaveBeenCalled();
       const [cliRunDir] = await readdir(path.join(outputDir, "cli-self-verification"));
       const cliArtifactDir = path.join(outputDir, "cli-self-verification", cliRunDir ?? "");
+      await expect(stat(cliArtifactDir)).resolves.toMatchObject({ mode: expect.any(Number) });
+      expect((await stat(cliArtifactDir)).mode & 0o777).toBe(0o700);
       await expect(
         readFile(path.join(cliArtifactDir, "verify-backup-restore.stdout.txt"), "utf8"),
       ).resolves.toContain('"success":true');
+      expect(
+        (await stat(path.join(cliArtifactDir, "verify-backup-restore.stdout.txt"))).mode & 0o777,
+      ).toBe(0o600);
       await expect(
         readFile(path.join(cliArtifactDir, "verify-self.stdout.txt"), "utf8"),
       ).resolves.toContain("Device verified by owner: yes");

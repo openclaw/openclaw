@@ -450,6 +450,40 @@ describe("matrix CLI verification commands", () => {
     expect(consoleLogMock).toHaveBeenCalledWith("Verification error: Remote cancelledforged");
   });
 
+  it("sanitizes remote Matrix status metadata before printing diagnostics", async () => {
+    getMatrixVerificationStatusMock.mockResolvedValue({
+      encryptionEnabled: true,
+      verified: false,
+      localVerified: false,
+      crossSigningVerified: false,
+      signedByOwner: false,
+      userId: "@bot\u001B[2J:example.org",
+      deviceId: "PHONE\r\u009B2J123",
+      backupVersion: "1\u001B[31m",
+      backup: {
+        serverVersion: "2\u001B[31m",
+        activeVersion: "1\u009B2J",
+        trusted: false,
+        matchesDecryptionKey: false,
+        decryptionKeyCached: false,
+        keyLoadAttempted: true,
+        keyLoadError: "Remote\n\u009B31mforged",
+      },
+      recoveryKeyStored: false,
+      recoveryKeyCreatedAt: null,
+      pendingVerifications: 0,
+    });
+    const program = buildProgram();
+
+    await program.parseAsync(["matrix", "verify", "status", "--verbose"], { from: "user" });
+
+    expect(consoleLogMock).toHaveBeenCalledWith("User: @bot:example.org");
+    expect(consoleLogMock).toHaveBeenCalledWith("Device: PHONE123");
+    expect(consoleLogMock).toHaveBeenCalledWith("Backup server version: 2");
+    expect(consoleLogMock).toHaveBeenCalledWith("Backup active on this device: 1");
+    expect(consoleLogMock).toHaveBeenCalledWith("Backup key load error: Remoteforged");
+  });
+
   it("shell-quotes Matrix verification ids in follow-up command guidance", async () => {
     requestMatrixVerificationMock.mockResolvedValue(
       mockMatrixVerificationSummary({
@@ -701,9 +735,9 @@ describe("matrix CLI verification commands", () => {
   it("lists matrix devices", async () => {
     listMatrixOwnDevicesMock.mockResolvedValue([
       {
-        deviceId: "A7hWrQ70ea",
-        displayName: "OpenClaw Gateway",
-        lastSeenIp: "127.0.0.1",
+        deviceId: "A7hWr\u001B[31mQ70ea",
+        displayName: "OpenClaw\u001B[2J Gateway",
+        lastSeenIp: "127.0.0.1\u009B2J",
         lastSeenTs: 1_741_507_200_000,
         current: true,
       },
@@ -894,7 +928,7 @@ describe("matrix CLI verification commands", () => {
     );
     expect(console.log).toHaveBeenCalledWith("Backup version: 7");
     expect(console.log).toHaveBeenCalledWith(
-      "Matrix device hygiene warning: stale OpenClaw devices detected (BritdXC6iL). Run 'openclaw matrix devices prune-stale --account ops'.",
+      "Matrix device hygiene warning: stale OpenClaw devices detected (BritdXC6iL). Run openclaw matrix devices prune-stale --account ops.",
     );
   });
 

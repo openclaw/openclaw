@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -301,6 +301,8 @@ async function writeMatrixQaCliOutputArtifacts(params: {
   result: MatrixQaCliRunResult;
   rootDir: string;
 }) {
+  await mkdir(params.rootDir, { mode: 0o700, recursive: true });
+  await chmod(params.rootDir, 0o700).catch(() => undefined);
   const prefix = params.label.replace(/[^A-Za-z0-9_-]/g, "-");
   const stdoutPath = path.join(params.rootDir, `${prefix}.stdout.txt`);
   const stderrPath = path.join(params.rootDir, `${prefix}.stderr.txt`);
@@ -385,8 +387,11 @@ async function createMatrixQaCliSelfVerificationRuntime(params: {
   );
   const stateDir = path.join(rootDir, "state");
   const configPath = path.join(rootDir, "config.json");
-  await mkdir(artifactDir, { recursive: true });
-  await mkdir(stateDir, { recursive: true });
+  await chmod(rootDir, 0o700).catch(() => undefined);
+  await mkdir(artifactDir, { mode: 0o700, recursive: true });
+  await chmod(artifactDir, 0o700).catch(() => undefined);
+  await mkdir(stateDir, { mode: 0o700, recursive: true });
+  await chmod(stateDir, 0o700).catch(() => undefined);
   await writeFile(
     configPath,
     `${JSON.stringify(

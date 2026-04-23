@@ -96,12 +96,12 @@ function formatLocalTimestamp(value: string | null | undefined): string | null {
 function printTimestamp(label: string, value: string | null | undefined): void {
   const formatted = formatLocalTimestamp(value);
   if (formatted) {
-    console.log(`${label}: ${formatted}`);
+    console.log(`${label}: ${formatMatrixCliText(formatted)}`);
   }
 }
 
 function printAccountLabel(accountId?: string): void {
-  console.log(`Account: ${normalizeAccountId(accountId)}`);
+  console.log(`Account: ${formatMatrixCliText(normalizeAccountId(accountId))}`);
 }
 
 function resolveMatrixCliAccountId(accountId?: string): string {
@@ -139,6 +139,10 @@ function formatMatrixCliShellArg(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
+function formatMatrixCliText(value: string | null | undefined, fallback = "unknown"): string {
+  return sanitizeMatrixCliText(value ?? fallback);
+}
+
 function printMatrixOwnDevices(
   devices: Array<{
     deviceId: string;
@@ -153,13 +157,17 @@ function printMatrixOwnDevices(
     return;
   }
   for (const device of devices) {
-    const labels = [device.current ? "current" : null, device.displayName].filter(Boolean);
-    console.log(`- ${device.deviceId}${labels.length ? ` (${labels.join(", ")})` : ""}`);
+    const labels = [device.current ? "current" : null, device.displayName]
+      .filter((label): label is string => Boolean(label))
+      .map((label) => formatMatrixCliText(label));
+    console.log(
+      `- ${formatMatrixCliText(device.deviceId)}${labels.length ? ` (${labels.join(", ")})` : ""}`,
+    );
     if (device.lastSeenTs) {
       printTimestamp("  Last seen", new Date(device.lastSeenTs).toISOString());
     }
     if (device.lastSeenIp) {
-      console.log(`  Last IP: ${device.lastSeenIp}`);
+      console.log(`  Last IP: ${formatMatrixCliText(device.lastSeenIp)}`);
     }
   }
 }
@@ -354,22 +362,34 @@ async function addMatrixAccount(params: {
 
 function printDirectRoomCandidate(room: MatrixCliDirectRoomCandidate): void {
   const members =
-    room.joinedMembers === null ? "unavailable" : room.joinedMembers.join(", ") || "none";
+    room.joinedMembers === null
+      ? "unavailable"
+      : room.joinedMembers.map((member) => formatMatrixCliText(member)).join(", ") || "none";
   console.log(
-    `- ${room.roomId} [${room.source}] strict=${room.strict ? "yes" : "no"} joined=${members}`,
+    `- ${formatMatrixCliText(room.roomId)} [${room.source}] strict=${
+      room.strict ? "yes" : "no"
+    } joined=${members}`,
   );
 }
 
 function printDirectRoomInspection(result: MatrixCliDirectRoomInspection): void {
   printAccountLabel(result.accountId);
-  console.log(`Peer: ${result.remoteUserId}`);
-  console.log(`Self: ${result.selfUserId ?? "unknown"}`);
-  console.log(`Active direct room: ${result.activeRoomId ?? "none"}`);
+  console.log(`Peer: ${formatMatrixCliText(result.remoteUserId)}`);
+  console.log(`Self: ${formatMatrixCliText(result.selfUserId)}`);
+  console.log(`Active direct room: ${formatMatrixCliText(result.activeRoomId, "none")}`);
   console.log(
-    `Mapped rooms: ${result.mappedRoomIds.length ? result.mappedRoomIds.join(", ") : "none"}`,
+    `Mapped rooms: ${
+      result.mappedRoomIds.length
+        ? result.mappedRoomIds.map((roomId) => formatMatrixCliText(roomId)).join(", ")
+        : "none"
+    }`,
   );
   console.log(
-    `Discovered strict rooms: ${result.discoveredStrictRoomIds.length ? result.discoveredStrictRoomIds.join(", ") : "none"}`,
+    `Discovered strict rooms: ${
+      result.discoveredStrictRoomIds.length
+        ? result.discoveredStrictRoomIds.map((roomId) => formatMatrixCliText(roomId)).join(", ")
+        : "none"
+    }`,
   );
   if (result.mappedRooms.length > 0) {
     console.log("Mapped room details:");
@@ -486,7 +506,7 @@ async function runMatrixCliCommand<TResult>(
     if (config.json) {
       printJson(config.onJsonError ? config.onJsonError(message) : { error: message });
     } else {
-      console.error(`${config.errorPrefix}: ${message}`);
+      console.error(`${config.errorPrefix}: ${formatMatrixCliText(message)}`);
     }
     markCliFailure();
   } finally {
@@ -616,14 +636,14 @@ function yesNoUnknown(value: boolean | null): string {
 }
 
 function printBackupStatus(backup: MatrixCliBackupStatus): void {
-  console.log(`Backup server version: ${backup.serverVersion ?? "none"}`);
-  console.log(`Backup active on this device: ${backup.activeVersion ?? "no"}`);
+  console.log(`Backup server version: ${formatMatrixCliText(backup.serverVersion, "none")}`);
+  console.log(`Backup active on this device: ${formatMatrixCliText(backup.activeVersion, "no")}`);
   console.log(`Backup trusted by this device: ${yesNoUnknown(backup.trusted)}`);
   console.log(`Backup matches local decryption key: ${yesNoUnknown(backup.matchesDecryptionKey)}`);
   console.log(`Backup key cached locally: ${yesNoUnknown(backup.decryptionKeyCached)}`);
   console.log(`Backup key load attempted: ${yesNoUnknown(backup.keyLoadAttempted)}`);
   if (backup.keyLoadError) {
-    console.log(`Backup key load error: ${backup.keyLoadError}`);
+    console.log(`Backup key load error: ${formatMatrixCliText(backup.keyLoadError)}`);
   }
 }
 
@@ -631,8 +651,8 @@ function printVerificationIdentity(status: {
   userId: string | null;
   deviceId: string | null;
 }): void {
-  console.log(`User: ${status.userId ?? "unknown"}`);
-  console.log(`Device: ${status.deviceId ?? "unknown"}`);
+  console.log(`User: ${formatMatrixCliText(status.userId)}`);
+  console.log(`Device: ${formatMatrixCliText(status.deviceId)}`);
 }
 
 function printVerificationBackupSummary(status: {
@@ -923,7 +943,7 @@ function printBackupSummary(backup: MatrixCliBackupStatus): void {
   const issue = resolveMatrixRoomKeyBackupIssue(backup);
   console.log(`Backup: ${issue.summary}`);
   if (backup.serverVersion) {
-    console.log(`Backup version: ${backup.serverVersion}`);
+    console.log(`Backup version: ${formatMatrixCliText(backup.serverVersion)}`);
   }
 }
 
@@ -1094,8 +1114,8 @@ export function registerMatrixCli(params: { program: Command }): void {
               useEnv: options.useEnv === true,
             }),
           onText: (result) => {
-            console.log(`Saved matrix account: ${result.accountId}`);
-            console.log(`Config path: ${result.configPath}`);
+            console.log(`Saved matrix account: ${formatMatrixCliText(result.accountId)}`);
+            console.log(`Config path: ${formatMatrixCliText(result.configPath)}`);
             console.log(
               `Credentials source: ${result.useEnv ? "MATRIX_* / MATRIX_<ACCOUNT_ID>_* env vars" : "inline config"}`,
             );
@@ -1107,30 +1127,39 @@ export function registerMatrixCli(params: { program: Command }): void {
                   result.verificationBootstrap.recoveryKeyCreatedAt,
                 );
                 if (result.verificationBootstrap.backupVersion) {
-                  console.log(`Backup version: ${result.verificationBootstrap.backupVersion}`);
+                  console.log(
+                    `Backup version: ${formatMatrixCliText(result.verificationBootstrap.backupVersion)}`,
+                  );
                 }
               } else {
                 console.error(
-                  `Matrix verification bootstrap warning: ${result.verificationBootstrap.error}`,
+                  `Matrix verification bootstrap warning: ${formatMatrixCliText(result.verificationBootstrap.error)}`,
                 );
               }
             }
             if (result.deviceHealth.error) {
-              console.error(`Matrix device health warning: ${result.deviceHealth.error}`);
+              console.error(
+                `Matrix device health warning: ${formatMatrixCliText(result.deviceHealth.error)}`,
+              );
             } else if (result.deviceHealth.staleOpenClawDeviceIds.length > 0) {
+              const staleDeviceIds = result.deviceHealth.staleOpenClawDeviceIds
+                .map((deviceId) => formatMatrixCliText(deviceId))
+                .join(", ");
               console.log(
-                `Matrix device hygiene warning: stale OpenClaw devices detected (${result.deviceHealth.staleOpenClawDeviceIds.join(", ")}). Run 'openclaw matrix devices prune-stale --account ${result.accountId}'.`,
+                `Matrix device hygiene warning: stale OpenClaw devices detected (${staleDeviceIds}). Run ${formatMatrixCliCommand("devices prune-stale", result.accountId)}.`,
               );
             }
             if (result.profile.attempted) {
               if (result.profile.error) {
-                console.error(`Profile sync warning: ${result.profile.error}`);
+                console.error(`Profile sync warning: ${formatMatrixCliText(result.profile.error)}`);
               } else {
                 console.log(
                   `Profile sync: name ${result.profile.displayNameUpdated ? "updated" : "unchanged"}, avatar ${result.profile.avatarUpdated ? "updated" : "unchanged"}`,
                 );
                 if (result.profile.convertedAvatarFromHttp && result.profile.resolvedAvatarUrl) {
-                  console.log(`Avatar converted and saved as: ${result.profile.resolvedAvatarUrl}`);
+                  console.log(
+                    `Avatar converted and saved as: ${formatMatrixCliText(result.profile.resolvedAvatarUrl)}`,
+                  );
                 }
               }
             }
@@ -1176,7 +1205,9 @@ export function registerMatrixCli(params: { program: Command }): void {
               `Profile update: name ${result.profile.displayNameUpdated ? "updated" : "unchanged"}, avatar ${result.profile.avatarUpdated ? "updated" : "unchanged"}`,
             );
             if (result.profile.convertedAvatarFromHttp && result.avatarUrl) {
-              console.log(`Avatar converted and saved as: ${result.avatarUrl}`);
+              console.log(
+                `Avatar converted and saved as: ${formatMatrixCliText(result.avatarUrl)}`,
+              );
             }
           },
           errorPrefix: "Profile update failed",
@@ -1233,14 +1264,14 @@ export function registerMatrixCli(params: { program: Command }): void {
           onText: (result, verbose) => {
             printDirectRoomInspection(result);
             console.log(`Encrypted room creation: ${result.encrypted ? "enabled" : "disabled"}`);
-            console.log(`Created room: ${result.createdRoomId ?? "none"}`);
+            console.log(`Created room: ${formatMatrixCliText(result.createdRoomId, "none")}`);
             console.log(`m.direct updated: ${result.changed ? "yes" : "no"}`);
             if (verbose) {
               console.log(
-                `m.direct before: ${JSON.stringify(result.directContentBefore[result.remoteUserId] ?? [])}`,
+                `m.direct before: ${formatMatrixCliText(JSON.stringify(result.directContentBefore[result.remoteUserId] ?? []))}`,
               );
               console.log(
-                `m.direct after: ${JSON.stringify(result.directContentAfter[result.remoteUserId] ?? [])}`,
+                `m.direct after: ${formatMatrixCliText(JSON.stringify(result.directContentAfter[result.remoteUserId] ?? []))}`,
               );
             }
           },
@@ -1386,7 +1417,7 @@ export function registerMatrixCli(params: { program: Command }): void {
         run: async () => await getMatrixVerificationSas(id, { accountId, cfg }),
         onText: (sas) => {
           printAccountLabel(accountId);
-          console.log(`Verification id: ${id}`);
+          console.log(`Verification id: ${formatMatrixCliText(id)}`);
           printMatrixVerificationSas(sas);
           printMatrixVerificationSasGuidance(id, accountId);
         },
@@ -1535,11 +1566,17 @@ export function registerMatrixCli(params: { program: Command }): void {
             printAccountLabel(accountId);
             console.log(`Reset success: ${result.success ? "yes" : "no"}`);
             if (result.error) {
-              console.log(`Error: ${result.error}`);
+              console.log(`Error: ${formatMatrixCliText(result.error)}`);
             }
-            console.log(`Previous backup version: ${result.previousVersion ?? "none"}`);
-            console.log(`Deleted backup version: ${result.deletedVersion ?? "none"}`);
-            console.log(`Current backup version: ${result.createdVersion ?? "none"}`);
+            console.log(
+              `Previous backup version: ${formatMatrixCliText(result.previousVersion, "none")}`,
+            );
+            console.log(
+              `Deleted backup version: ${formatMatrixCliText(result.deletedVersion, "none")}`,
+            );
+            console.log(
+              `Current backup version: ${formatMatrixCliText(result.createdVersion, "none")}`,
+            );
             printBackupSummary(result.backup);
             if (verbose) {
               printTimestamp("Reset at", result.resetAt);
@@ -1581,9 +1618,9 @@ export function registerMatrixCli(params: { program: Command }): void {
             printAccountLabel(accountId);
             console.log(`Restore success: ${result.success ? "yes" : "no"}`);
             if (result.error) {
-              console.log(`Error: ${result.error}`);
+              console.log(`Error: ${formatMatrixCliText(result.error)}`);
             }
-            console.log(`Backup version: ${result.backupVersion ?? "none"}`);
+            console.log(`Backup version: ${formatMatrixCliText(result.backupVersion, "none")}`);
             console.log(`Imported keys: ${result.imported}/${result.total}`);
             printBackupSummary(result.backup);
             if (verbose) {
@@ -1632,7 +1669,7 @@ export function registerMatrixCli(params: { program: Command }): void {
             printAccountLabel(accountId);
             console.log(`Bootstrap success: ${result.success ? "yes" : "no"}`);
             if (result.error) {
-              console.log(`Error: ${result.error}`);
+              console.log(`Error: ${formatMatrixCliText(result.error)}`);
             }
             console.log(`Verified by owner: ${result.verification.verified ? "yes" : "no"}`);
             printVerificationIdentity(result.verification);
@@ -1681,7 +1718,7 @@ export function registerMatrixCli(params: { program: Command }): void {
           onText: (result, verbose) => {
             printAccountLabel(accountId);
             if (!result.success) {
-              console.error(`Verification failed: ${result.error ?? "unknown error"}`);
+              console.error(`Verification failed: ${formatMatrixCliText(result.error)}`);
               printVerificationIdentity(result);
               console.log(`Recovery key accepted: ${result.recoveryKeyAccepted ? "yes" : "no"}`);
               console.log(`Backup usable: ${result.backupUsable ? "yes" : "no"}`);
@@ -1765,9 +1802,15 @@ export function registerMatrixCli(params: { program: Command }): void {
         onText: (result, verbose) => {
           printAccountLabel(accountId);
           console.log(
-            `Deleted stale OpenClaw devices: ${result.deletedDeviceIds.length ? result.deletedDeviceIds.join(", ") : "none"}`,
+            `Deleted stale OpenClaw devices: ${
+              result.deletedDeviceIds.length
+                ? result.deletedDeviceIds
+                    .map((deviceId) => formatMatrixCliText(deviceId))
+                    .join(", ")
+                : "none"
+            }`,
           );
-          console.log(`Current device: ${result.currentDeviceId ?? "unknown"}`);
+          console.log(`Current device: ${formatMatrixCliText(result.currentDeviceId)}`);
           console.log(`Remaining devices: ${result.remainingDevices.length}`);
           if (verbose) {
             console.log("Devices before cleanup:");
