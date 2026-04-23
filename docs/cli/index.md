@@ -47,7 +47,7 @@ This page describes the current CLI behavior. If commands change, update this do
 - [`tui`](/cli/tui)
 - [`browser`](/cli/browser)
 - [`cron`](/cli/cron)
-- [`tasks`](/cli/index#tasks)
+- [`tasks`](/cli/tasks)
 - [`flows`](/cli/flows)
 - [`dns`](/cli/dns)
 - [`docs`](/cli/docs)
@@ -431,7 +431,7 @@ Notes:
 
 ## Plugins
 
-Manage extensions and their config:
+Manage plugins and their config:
 
 - `openclaw plugins list` — discover plugins (use `--json` for machine output).
 - `openclaw plugins inspect <id>` — show details for a plugin (`info` is an alias).

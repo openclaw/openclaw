@@ -10,6 +10,7 @@ import {
   type ProviderPlugin,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { OPENAI_API_KEY_LABEL, OPENAI_WIZARD_GROUP } from "./auth-choice-copy.js";
 import { isOpenAIApiBaseUrl } from "./base-url.js";
 import { applyOpenAIConfig, OPENAI_DEFAULT_MODEL } from "./default-models.js";
 import {
@@ -185,8 +186,8 @@ export function buildOpenAIProvider(): ProviderPlugin {
       createProviderApiKeyAuthMethod({
         providerId: PROVIDER_ID,
         methodId: "api-key",
-        label: "OpenAI API key",
-        hint: "Direct OpenAI API key",
+        label: OPENAI_API_KEY_LABEL,
+        hint: "Use your OpenAI API key directly",
         optionKey: "openaiApiKey",
         flagName: "--openai-api-key",
         envVar: "OPENAI_API_KEY",
@@ -196,10 +197,8 @@ export function buildOpenAIProvider(): ProviderPlugin {
         applyConfig: (cfg) => applyOpenAIConfig(cfg),
         wizard: {
           choiceId: "openai-api-key",
-          choiceLabel: "OpenAI API key",
-          groupId: "openai",
-          groupLabel: "OpenAI",
-          groupHint: "Codex OAuth + API key",
+          choiceLabel: OPENAI_API_KEY_LABEL,
+          ...OPENAI_WIZARD_GROUP,
         },
       }),
     ],

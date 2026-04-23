@@ -76,6 +76,10 @@
     "target": "BytePlus（国际版）"
   },
   {
+    "source": "Amazon Bedrock Mantle",
+    "target": "Amazon Bedrock Mantle"
+  },
+  {
     "source": "Anthropic (API + Claude CLI)",
     "target": "Anthropic（API + Claude CLI）"
   },
@@ -194,6 +198,10 @@
   {
     "source": "Doctor",
     "target": "Doctor"
+  },
+  {
+    "source": "Config",
+    "target": "配置"
   },
   {
     "source": "Memory Wiki",

@@ -209,6 +209,7 @@ async function sendLinePairingReply(params: {
       if (replyToken) {
         try {
           await replyMessageLine(replyToken, [{ type: "text", text }], {
+            cfg: context.cfg,
             accountId: context.account.accountId,
             channelAccessToken: context.account.channelAccessToken,
           });
@@ -219,6 +220,7 @@ async function sendLinePairingReply(params: {
       }
       try {
         await pushMessageLine(`line:${senderId}`, text, {
+          cfg: context.cfg,
           accountId: context.account.accountId,
           channelAccessToken: context.account.channelAccessToken,
         });
@@ -279,7 +281,7 @@ async function shouldProcessLineEvent(
       logVerbose(`Blocked line group ${groupId ?? roomId ?? "unknown"} (group disabled)`);
       return denied;
     }
-    if (typeof groupAllowOverride !== "undefined") {
+    if (groupAllowOverride !== undefined) {
       if (!senderId) {
         logVerbose("Blocked line group message (group allowFrom override, no sender ID)");
         return denied;

@@ -1226,6 +1226,7 @@
                   "tools/pdf",
                   "tools/reactions",
                   "tools/thinking",
+                  "tools/tokenjuice",
                   "tools/video-generation"
                 ]
               },
@@ -1265,6 +1266,7 @@
                   "providers/comfy",
                   "providers/deepgram",
                   "providers/deepseek",
+                  "providers/elevenlabs",
                   "providers/fal",
                   "providers/fireworks",
                   "providers/github-copilot",
@@ -1292,6 +1294,7 @@
                   "providers/sglang",
                   "providers/stepfun",
                   "providers/synthetic",
+                  "providers/tencent",
                   "providers/together",
                   "providers/venice",
                   "providers/vercel-ai-gateway",
@@ -1481,7 +1484,8 @@
                       "cli/message",
                       "cli/models",
                       "cli/sessions",
-                      "cli/system"
+                      "cli/system",
+                      "cli/tasks"
                     ]
                   },
                   {

@@ -8,13 +8,28 @@ import {
 vi.mock("node:fs", async () => {
   const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
   const existsSync = vi.fn();
+  const realpathSync = vi.fn(actual.realpathSync);
+  const statSync = vi.fn(actual.statSync);
   return {
     ...actual,
     existsSync,
+    realpathSync,
+    statSync,
     default: {
       ...actual,
       existsSync,
+      realpathSync,
+      statSync,
     },
+  };
+});
+
+const execFileSync = vi.fn();
+vi.mock("node:child_process", async () => {
+  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+  return {
+    ...actual,
+    execFileSync: (...args: unknown[]) => execFileSync(...args),
   };
 });
 
@@ -110,7 +125,8 @@ const baseEntry: ChannelPluginCatalogEntry = {
     blurb: "Test",
   },
   install: {
-    npmSpec: "@openclaw/bundled-chat",
+    npmSpec: "@openclaw/bundled-chat@1.2.3",
+    expectedIntegrity: "sha512-bundled-chat",
     localPath: bundledPluginRoot("bundled-chat"),
   },
 };
@@ -123,7 +139,7 @@ function mockBundledChatSource() {
         {
           pluginId: "bundled-chat",
           localPath: bundledPluginRootAt("/opt/openclaw", "bundled-chat"),
-          npmSpec: "@openclaw/bundled-chat",
+          npmSpec: "@openclaw/bundled-chat@1.2.3",
         },
       ],
     ]),
@@ -180,6 +196,9 @@ function expectSetupSnapshotDoesNotScopeToPlugin(params: {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  execFileSync.mockImplementation(() => {
+    throw new Error("not a git worktree");
+  });
   applyPluginAutoEnable.mockImplementation((params: { config: unknown }) => ({
     config: params.config,
     changes: [],
@@ -193,10 +212,46 @@ beforeEach(() => {
 });
 
 function mockRepoLocalPathExists() {
+  execFileSync.mockImplementation((command: string, args: string[]) => {
+    expect(command).toBe("git");
+    expect(args[1]).toBe(process.cwd());
+    expect(args[2]).toBe("rev-parse");
+    const request = args.slice(3).join(" ");
+    if (request === "--is-inside-work-tree") {
+      return "true\n";
+    }
+    if (request === "--path-format=absolute --show-toplevel") {
+      return `${process.cwd()}\n`;
+    }
+    if (request === "--path-format=absolute --git-common-dir") {
+      return `${process.cwd()}\n`;
+    }
+    throw new Error(`unexpected git args: ${request}`);
+  });
+  vi.mocked(fs.realpathSync).mockImplementation(((value: fs.PathLike) => {
+    const raw = String(value);
+    if (raw.endsWith(`${path.sep}extensions${path.sep}bundled-chat`)) {
+      return path.resolve(process.cwd(), bundledPluginRoot("bundled-chat"));
+    }
+    return raw;
+  }) as typeof fs.realpathSync);
+  vi.mocked(fs.statSync).mockImplementation(((value: fs.PathLike) => {
+    const raw = String(value);
+    if (raw.endsWith(`${path.sep}extensions${path.sep}bundled-chat`)) {
+      return {
+        isDirectory: () => true,
+      } as ReturnType<typeof fs.statSync>;
+    }
+    return {
+      isDirectory: () => true,
+    } as ReturnType<typeof fs.statSync>;
+  }) as typeof fs.statSync);
   vi.mocked(fs.existsSync).mockImplementation((value) => {
     const raw = String(value);
     return (
-      raw.endsWith(`${path.sep}.git`) ||
+      raw.endsWith(`${path.sep}.git${path.sep}HEAD`) ||
+      raw.endsWith(`${path.sep}.git${path.sep}objects`) ||
+      raw.endsWith(`${path.sep}.git${path.sep}refs`) ||
       raw.endsWith(`${path.sep}extensions${path.sep}bundled-chat`)
     );
   });
@@ -234,7 +289,7 @@ describe("ensureChannelSetupPluginInstalled", () => {
     const prompter = makePrompter({
       select: vi.fn(async () => "npm") as WizardPrompter["select"],
     });
-    const cfg: OpenClawConfig = { plugins: { allow: ["other"] } };
+    const cfg: OpenClawConfig = { plugins: { allow: ["bundled-chat"] } };
     vi.mocked(fs.existsSync).mockReturnValue(false);
     installPluginFromNpmSpec.mockResolvedValue({
       ok: true,
@@ -254,10 +309,12 @@ describe("ensureChannelSetupPluginInstalled", () => {
     expect(result.cfg.plugins?.entries?.["bundled-chat"]?.enabled).toBe(true);
     expect(result.cfg.plugins?.allow).toContain("bundled-chat");
     expect(result.cfg.plugins?.installs?.["bundled-chat"]?.source).toBe("npm");
-    expect(result.cfg.plugins?.installs?.["bundled-chat"]?.spec).toBe("@openclaw/bundled-chat");
+    expect(result.cfg.plugins?.installs?.["bundled-chat"]?.spec).toBe(
+      "@openclaw/bundled-chat@1.2.3",
+    );
     expect(result.cfg.plugins?.installs?.["bundled-chat"]?.installPath).toBe("/tmp/bundled-chat");
     expect(installPluginFromNpmSpec).toHaveBeenCalledWith(
-      expect.objectContaining({ spec: "@openclaw/bundled-chat" }),
+      expect.objectContaining({ spec: "@openclaw/bundled-chat@1.2.3" }),
     );
   });
 
@@ -358,7 +415,8 @@ describe("ensureChannelSetupPluginInstalled", () => {
           blurb: "Test",
         },
         install: {
-          npmSpec: "@vendor/bundled-chat-fork",
+          npmSpec: "@vendor/bundled-chat-fork@1.2.3",
+          expectedIntegrity: "sha512-vendor-bundled-chat-fork",
         },
       },
       prompter,
@@ -371,7 +429,7 @@ describe("ensureChannelSetupPluginInstalled", () => {
         options: [
           expect.objectContaining({
             value: "npm",
-            label: "Download from npm (@vendor/bundled-chat-fork)",
+            label: "Download from npm (@vendor/bundled-chat-fork@1.2.3)",
           }),
           expect.objectContaining({
             value: "skip",

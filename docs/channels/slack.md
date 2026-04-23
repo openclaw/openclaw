@@ -361,8 +361,8 @@ Surface different features that extend the above defaults.
       },
       {
         "command": "/models",
-        "description": "List providers or models for a provider",
-        "usage_hint": "[provider] [page] [limit=<n>|size=<n>|all]"
+        "description": "List providers/models or add a model",
+        "usage_hint": "[provider] [page] [limit=<n>|size=<n>|all] | add <provider> <modelId>"
       },
       {
         "command": "/help",

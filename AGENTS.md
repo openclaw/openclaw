@@ -65,6 +65,7 @@ Scoped guides:
 - Normal full prod sweep: `pnpm check` (prod typecheck/lint/guards, no tests)
 - Full tests: `pnpm test`
 - Changed tests only: `pnpm test:changed`
+- Local serial loop: `pnpm test:serial`
 - Extension tests: `pnpm test:extensions` or `pnpm test extensions` = all extension shards; `pnpm test extensions/<id>` = one extension lane. Heavy channels/OpenAI have dedicated shards.
 - Shard timing artifact: `.artifacts/vitest-shard-timings.json`; auto-used for balanced shard ordering. Disable with `OPENCLAW_TEST_PROJECTS_TIMINGS=0`.
 - Targeted tests: `pnpm test <path-or-filter> [vitest args...]`; do not call raw `vitest`.
@@ -84,10 +85,11 @@ Scoped guides:
   - `pnpm lint:apps`: Swift/app surface, separate from TS lint
   - `pnpm lint:all`: legacy comparison lane
 - Local heavy-check behavior: `OPENCLAW_LOCAL_CHECK=1` default; `OPENCLAW_LOCAL_CHECK_MODE=throttled|full`; `OPENCLAW_LOCAL_CHECK=0` for CI/shared runs.
+- Local validation is local-first. Do not default to Blacksmith/Testbox for routine OpenClaw iteration; it burns warm caches and startup time. Use repo `pnpm` lanes first, then reach for remote CI/Testbox only for parity-only failures, secrets/services, or when explicitly requested.
 
 ## Gates
 
-- Pre-commit hook: staged format/lint, then `pnpm check:changed --staged`; docs/markdown-only skips changed-scope check; `FAST_COMMIT=1` skips changed-scope check only.
+- Pre-commit hook: staged format/lint, then `pnpm check:changed --staged`; docs/markdown-only skips changed-scope check; `FAST_COMMIT=1` / `scripts/committer --fast` skips changed-scope check only.
 - Changed lanes:
   - core prod => core prod typecheck + core tests
   - core tests => core test typecheck/tests only
@@ -99,6 +101,7 @@ Scoped guides:
 - Landing on `main`: verify touched surface near landing; default bar is `pnpm check` + `pnpm test` when feasible.
 - Hard build gate: run/pass `pnpm build` before push if build output, packaging, lazy/module boundaries, or published surfaces can change.
 - Do not land related failing format/lint/type/build/tests. If failures are unrelated on latest `origin/main`, say so and give scoped proof.
+- Fast commit escape hatch: use `scripts/committer --fast "<msg>" <file...>` only after the exact staged change set was already validated with equal-or-stronger gates, or after rerunning an isolated flaky failure with proof. State the gates/proof in handoff.
 - CI architecture gate: `check-additional`; local equivalent `pnpm check:architecture`.
 - Config docs drift: `pnpm config:docs:gen/check`
 - Plugin SDK API drift: `pnpm plugin-sdk:api:gen/check`
@@ -149,7 +152,7 @@ Scoped guides:
 
 ## Git
 
-- Use `scripts/committer "<msg>" <file...>`; stage only intended files.
+- Use `scripts/committer "<msg>" <file...>`; stage only intended files. Use `--fast` only under the Gates escape-hatch rule above.
 - Commits: conventional-ish, concise/action-oriented. Group related changes.
 - No manual stash/autostash unless explicitly requested. No branch/worktree changes unless requested.
 - No merge commits on `main`; rebase on latest `origin/main` before push.
