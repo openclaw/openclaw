@@ -847,7 +847,7 @@ export function applyModelFallbacksFromSelection(
         ...defaults,
         model: {
           ...(typeof existingModel === "object" ? existingModel : undefined),
-          primary: existingPrimary ?? resolvedKey,
+          ...(existingPrimary != null ? { primary: existingPrimary } : {}),
           fallbacks,
         },
       },
