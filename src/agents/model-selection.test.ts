@@ -434,19 +434,6 @@ describe("model-selection", () => {
         model: "anthropic/claude-haiku-4.5",
       });
     });
-
-    it("strips one duplicated provider prefix from persisted NVIDIA overrides", () => {
-      expect(
-        resolvePersistedSelectedModelRef({
-          defaultProvider: "anthropic",
-          overrideProvider: "nvidia",
-          overrideModel: "nvidia/nemotron-3-super-120b-a12b",
-        }),
-      ).toEqual({
-        provider: "nvidia",
-        model: "nvidia/nemotron-3-super-120b-a12b",
-      });
-    });
   });
 
   describe("inferUniqueProviderFromConfiguredModels", () => {

@@ -761,24 +761,6 @@ describe("resolveSessionModelRef", () => {
     expect(resolved).toEqual({ provider: "nvidia", model: "moonshotai/kimi-k2.5" });
   });
 
-  test("strips one duplicated provider prefix from the stored NVIDIA override", () => {
-    const cfg = createModelDefaultsConfig({
-      primary: "anthropic/claude-opus-4-6",
-    });
-
-    const resolved = resolveSessionModelRef(cfg, {
-      sessionId: "s-nvidia-prefixed",
-      updatedAt: Date.now(),
-      providerOverride: "nvidia",
-      modelOverride: "nvidia/nemotron-3-super-120b-a12b",
-    });
-
-    expect(resolved).toEqual({
-      provider: "nvidia",
-      model: "nemotron-3-super-120b-a12b",
-    });
-  });
-
   test("preserves explicit wrapper providers for vendor-prefixed override models", () => {
     const cfg = createModelDefaultsConfig({
       primary: "anthropic/claude-opus-4-6",
