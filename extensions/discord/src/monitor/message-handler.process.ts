@@ -113,7 +113,7 @@ function persistDiscordPrompt(prompt: string): void {
 
   try {
     const child = spawn(
-      "python",
+      process.env.OPENCLAW_MEMORY_CORE_PYTHON_BIN || "python3",
       [
         "-m",
         "openclaw_memory_core.integration.agent_run_cli",
