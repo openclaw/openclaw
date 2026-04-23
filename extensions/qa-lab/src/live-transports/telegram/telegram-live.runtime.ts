@@ -595,6 +595,7 @@ async function waitForObservedMessage(params: {
       },
       timeoutSeconds * 1000 + 5_000,
     );
+    const batchObservedAtMs = Date.now();
     if (updates.length === 0) {
       continue;
     }
@@ -613,7 +614,7 @@ async function waitForObservedMessage(params: {
       };
       params.observedMessages.push(observedMessage);
       if (matchedScenario) {
-        return { message: observedMessage, nextOffset: offset, observedAtMs: Date.now() };
+        return { message: observedMessage, nextOffset: offset, observedAtMs: batchObservedAtMs };
       }
     }
   }
