@@ -161,7 +161,7 @@ type FallbackRunnerParams = {
     model: string;
     attempt: number;
     total: number;
-  }) => unknown | Promise<unknown>;
+  }) => Promise<unknown>;
 };
 
 type EmbeddedAgentParams = {

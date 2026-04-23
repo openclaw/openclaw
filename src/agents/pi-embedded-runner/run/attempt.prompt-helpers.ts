@@ -182,8 +182,8 @@ function stringifyStructuredContentPart(part: unknown): string | undefined {
   }
   if (record.type === "image" || record.type === "input_image") {
     return (
-      summarizeStructuredMediaRef(String(record.type), record.url) ??
-      summarizeStructuredMediaRef(String(record.type), record.source)
+      summarizeStructuredMediaRef(record.type, record.url) ??
+      summarizeStructuredMediaRef(record.type, record.source)
     );
   }
   if (typeof record.type === "string") {

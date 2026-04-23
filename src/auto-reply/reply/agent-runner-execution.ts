@@ -695,7 +695,7 @@ export async function runAgentTurnWithFallback(params: {
         rollback: () => Promise<void>;
       }
     | undefined;
-  const clearPendingFallbackRollback = (rollback?: (() => Promise<void>) | undefined) => {
+  const clearPendingFallbackRollback = (rollback?: () => Promise<void>) => {
     if (!rollback || pendingFallbackCandidateRollback?.rollback === rollback) {
       pendingFallbackCandidateRollback = undefined;
     }
