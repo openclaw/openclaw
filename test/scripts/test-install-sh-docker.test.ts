@@ -148,8 +148,11 @@ describe("bun global install smoke", () => {
       "OPENCLAW_BUN_GLOBAL_SMOKE_DIST_IMAGE: openclaw-dockerfile-smoke:local",
     );
     expect(workflow).toContain("format('{0}-manual-{1}', github.workflow, github.run_id)");
-    expect(workflow).toContain("OPENCLAW_CI_FORCE_INSTALL_SMOKE");
-    expect(workflow).toContain('if [ "$force_install_smoke" = "true" ]; then');
+    expect(workflow).toContain("OPENCLAW_CI_FORCE_FULL_INSTALL_SMOKE");
+    expect(workflow).toContain('if [ "$force_full_install_smoke" = "true" ]; then');
+    expect(workflow).toContain("install-smoke-fast:");
+    expect(workflow).toContain("run_fast_install_smoke");
+    expect(workflow).toContain("run_full_install_smoke");
     expect(workflow).toContain('OPENCLAW_INSTALL_SMOKE_SKIP_NPM_GLOBAL: "1"');
   });
 });
