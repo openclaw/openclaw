@@ -109,9 +109,10 @@ export function resolveRequesterOriginForChild(params: {
   const rawPeerIdAlias = params.requesterTo?.trim();
   // Same-agent spawns must keep the caller's active inbound account, not
   // re-resolve via bindings that may select a different account for the same
-  // agent/channel.
+  // agent/channel. Cross-agent spawns must preserve the parent's accountId
+  // and never re-resolve (child bindings are irrelevant to parent's routing).
   const boundAccountId =
-    params.requesterChannel && params.targetAgentId !== params.requesterAgentId
+    params.requesterChannel && params.targetAgentId === params.requesterAgentId
       ? resolveFirstBoundAccountId({
           cfg: params.cfg,
           channelId: params.requesterChannel,

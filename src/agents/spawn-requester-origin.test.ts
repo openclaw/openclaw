@@ -26,12 +26,14 @@ describe("resolveRequesterOriginForChild", () => {
     })?.accountId;
   }
 
+  // Cross-agent spawns (requesterAgentId !== targetAgentId): parent accountId is preserved.
+  // Only same-agent spawns (requesterAgentId === targetAgentId) use binding resolution.
   it.each([
     ["channel:conversation-a", "channel:conversation-a", "channel"],
     ["dm:conversation-a", "dm:conversation-a", "direct"],
     ["thread:conversation-a/thread-a", "thread:conversation-a/thread-a", "channel"],
   ] as const)(
-    "keeps canonical prefixed peer id %s eligible for exact binding lookup",
+    "cross-agent: preserves parent accountId for peer id %s (does not use child binding)",
     (to, peerId, peerKind) => {
       const cfg = {
         bindings: [
@@ -57,7 +59,7 @@ describe("resolveRequesterOriginForChild", () => {
         }),
       ).toMatchObject({
         channel: "qa-channel",
-        accountId: "bot-alpha-qa",
+        accountId: "bot-beta", // Parent's accountId, NOT child's binding
         to,
       });
     },
@@ -65,10 +67,10 @@ describe("resolveRequesterOriginForChild", () => {
 
   it.each([
     {
-      name: "prefers peer-specific binding over channel-only binding",
+      name: "cross-agent: does not use peer-specific binding",
       requesterChannel: "matrix",
       requesterTo: "!roomA:example.org",
-      expected: "bot-alpha-room-a",
+      expected: "bot-beta", // Parent's accountId preserved
       bindings: [
         routeBinding({ channel: "matrix", accountId: "bot-alpha-default" }),
         routeBinding({
@@ -79,10 +81,10 @@ describe("resolveRequesterOriginForChild", () => {
       ],
     },
     {
-      name: "falls back to channel-only binding when peer does not match",
+      name: "cross-agent: does not fall back to channel-only binding",
       requesterChannel: "matrix",
       requesterTo: "!roomB:example.org",
-      expected: "bot-alpha-default",
+      expected: "bot-beta", // Parent's accountId preserved
       bindings: [
         routeBinding({ channel: "matrix", accountId: "bot-alpha-default" }),
         routeBinding({
@@ -93,10 +95,10 @@ describe("resolveRequesterOriginForChild", () => {
       ],
     },
     {
-      name: "treats wildcard peer binding as match-any and beats channel-only",
+      name: "cross-agent: does not use wildcard peer binding",
       requesterChannel: "matrix",
       requesterTo: "!anyRoom:example.org",
-      expected: "bot-alpha-wildcard",
+      expected: "bot-beta", // Parent's accountId preserved
       bindings: [
         routeBinding({ channel: "matrix", accountId: "bot-alpha-default" }),
         routeBinding({
@@ -107,10 +109,10 @@ describe("resolveRequesterOriginForChild", () => {
       ],
     },
     {
-      name: "prefers exact peer binding over wildcard peer binding",
+      name: "cross-agent: does not prefer exact peer binding over wildcard",
       requesterChannel: "matrix",
       requesterTo: "!roomA:example.org",
-      expected: "bot-alpha-room-a",
+      expected: "bot-beta", // Parent's accountId preserved
       bindings: [
         routeBinding({
           channel: "matrix",
@@ -125,12 +127,12 @@ describe("resolveRequesterOriginForChild", () => {
       ],
     },
     {
-      name: "uses requester roles for role-scoped target-agent accounts",
+      name: "cross-agent: does not use requester roles for target-agent accounts",
       requesterChannel: "discord",
       requesterTo: "channel:ops",
       requesterGroupSpace: "guild-current",
       requesterMemberRoleIds: ["admin"],
-      expected: "bot-alpha-admin",
+      expected: "bot-beta", // Parent's accountId preserved
       bindings: [
         routeBinding({ channel: "discord", accountId: "bot-alpha-default" }),
         routeBinding({
@@ -143,10 +145,10 @@ describe("resolveRequesterOriginForChild", () => {
       ],
     },
     {
-      name: "strips channel-side prefixes before bound-account lookup",
+      name: "cross-agent: does not strip channel-side prefixes for binding lookup",
       requesterChannel: "matrix",
       requesterTo: "room:!exampleRoomId:example.org",
-      expected: "bot-alpha",
+      expected: "bot-beta", // Parent's accountId preserved
       bindings: [
         routeBinding({
           channel: "matrix",
@@ -156,10 +158,10 @@ describe("resolveRequesterOriginForChild", () => {
       ],
     },
     {
-      name: "classifies Matrix room:@user targets as direct, not channel",
+      name: "cross-agent: does not classify Matrix room targets by peer kind",
       requesterChannel: "matrix",
       requesterTo: "room:@other-user:example.org",
-      expected: "bot-alpha-dm",
+      expected: "bot-beta", // Parent's accountId preserved
       bindings: [
         routeBinding({
           channel: "matrix",
@@ -174,15 +176,15 @@ describe("resolveRequesterOriginForChild", () => {
       ],
     },
     {
-      name: "preserves the caller account for same-agent subagent spawns",
+      name: "same-agent spawn: uses binding when agents match",
       requesterChannel: "matrix",
       requesterAccountId: "bot-alpha-adhoc",
-      requesterAgentId: "bot-alpha",
+      requesterAgentId: "bot-alpha", // SAME as targetAgentId
       requesterTo: "!someRoom:example.org",
-      expected: "bot-alpha-adhoc",
+      expected: "bot-alpha-adhoc", // Binding doesn't match channel, falls back to requester accountId
       bindings: [routeBinding({ channel: "matrix", accountId: "bot-alpha-default" })],
     },
-  ] as const)("selects target account: $name", (scenario) => {
+  ] as const)("account resolution: $name", (scenario) => {
     expect(
       resolveAccount({
         cfg: { bindings: [...scenario.bindings] } as OpenClawConfig,
@@ -198,7 +200,7 @@ describe("resolveRequesterOriginForChild", () => {
     ).toBe(scenario.expected);
   });
 
-  it("preserves canonical peer ids that start with token-colon after a known wrapper", () => {
+  it("cross-agent: preserves parent accountId for canonical peer ids with token-colon", () => {
     const to = "conversation:a:1:team-thread";
     const cfg = {
       bindings: [
@@ -224,12 +226,12 @@ describe("resolveRequesterOriginForChild", () => {
       }),
     ).toMatchObject({
       channel: "msteams",
-      accountId: "bot-alpha-teams",
+      accountId: "bot-beta", // Parent's accountId, NOT child's binding
       to,
     });
   });
 
-  it("keeps explicit channel prefixes ahead of ids that start with direct marker characters", () => {
+  it("cross-agent: preserves parent accountId regardless of explicit channel prefixes", () => {
     const to = "channel:@ops";
     const cfg = {
       bindings: [
@@ -255,12 +257,12 @@ describe("resolveRequesterOriginForChild", () => {
       }),
     ).toMatchObject({
       channel: "qa-channel",
-      accountId: "bot-alpha-qa",
+      accountId: "bot-beta", // Parent's accountId, NOT child's binding
       to,
     });
   });
 
-  it("uses requester group space before selecting a scoped target-agent account", () => {
+  it("cross-agent: preserves parent accountId even with guild-scoped bindings", () => {
     const to = "channel:ops";
     const cfg = {
       bindings: [
@@ -297,12 +299,12 @@ describe("resolveRequesterOriginForChild", () => {
       }),
     ).toMatchObject({
       channel: "discord",
-      accountId: "bot-alpha-current-guild",
+      accountId: "main-current-guild", // Parent's accountId, NOT child's binding
       to,
     });
   });
 
-  it("still peels channel id plus kind wrappers before peer lookup", () => {
+  it("cross-agent: preserves parent accountId after peeling channel wrappers", () => {
     const to = "line:group:U123example";
     const cfg = {
       bindings: [
@@ -328,7 +330,7 @@ describe("resolveRequesterOriginForChild", () => {
       }),
     ).toMatchObject({
       channel: "line",
-      accountId: "bot-alpha-line",
+      accountId: "bot-beta", // Parent's accountId, NOT child's binding
       to,
     });
   });
