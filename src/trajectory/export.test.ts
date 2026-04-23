@@ -5,6 +5,7 @@ import type { Message, Usage } from "@mariozechner/pi-ai";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
 import { exportTrajectoryBundle, resolveDefaultTrajectoryExportDir } from "./export.js";
+import { resolveTrajectoryPointerFilePath } from "./runtime.js";
 import type { TrajectoryEvent } from "./types.js";
 
 const tempDirs: string[] = [];
@@ -186,7 +187,7 @@ describe("exportTrajectoryBundle", () => {
     const sessionFile = path.join(tmpDir, "session.jsonl");
     const runtimeFile = path.join(tmpDir, "session.trajectory.jsonl");
     const outputDir = path.join(tmpDir, "bundle");
-    SessionManager.open(sessionFile).appendMessage(userMessage("hello"));
+    writeSimpleSessionFile(sessionFile);
     fs.closeSync(fs.openSync(runtimeFile, "w"));
     fs.truncateSync(runtimeFile, 50 * 1024 * 1024 + 1);
 
@@ -199,6 +200,127 @@ describe("exportTrajectoryBundle", () => {
         runtimeFile,
       }),
     ).toThrow(/too large/u);
+  });
+
+  it("rejects oversized session transcript files before export", () => {
+    const tmpDir = makeTempDir();
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    const outputDir = path.join(tmpDir, "bundle");
+    fs.closeSync(fs.openSync(sessionFile, "w"));
+    fs.truncateSync(sessionFile, 50 * 1024 * 1024 + 1);
+
+    expect(() =>
+      exportTrajectoryBundle({
+        outputDir,
+        sessionFile,
+        sessionId: "session-1",
+        workspaceDir: tmpDir,
+      }),
+    ).toThrow(/session file is too large/u);
+  });
+
+  it("skips malformed-but-valid runtime json rows before sorting", () => {
+    const tmpDir = makeTempDir();
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    const runtimeFile = path.join(tmpDir, "session.trajectory.jsonl");
+    const outputDir = path.join(tmpDir, "bundle");
+    writeSimpleSessionFile(sessionFile);
+    fs.writeFileSync(
+      runtimeFile,
+      `${JSON.stringify({})}\n${JSON.stringify({
+        traceSchema: "openclaw-trajectory",
+        schemaVersion: 1,
+        traceId: "session-1",
+        source: "runtime",
+        type: "session.started",
+        ts: "2026-04-22T08:00:00.000Z",
+        seq: 1,
+        sourceSeq: 1,
+        sessionId: "session-1",
+      })}\n`,
+      "utf8",
+    );
+
+    const bundle = exportTrajectoryBundle({
+      outputDir,
+      sessionFile,
+      sessionId: "session-1",
+      workspaceDir: tmpDir,
+    });
+
+    expect(bundle.manifest.runtimeEventCount).toBe(1);
+    expect(bundle.events.some((event) => event.type === "session.started")).toBe(true);
+  });
+
+  it("uses the recorded runtime pointer before current environment overrides", () => {
+    const tmpDir = makeTempDir();
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    const recordedRuntimeFile = path.join(tmpDir, "recorded", "session-1.jsonl");
+    const envRuntimeDir = path.join(tmpDir, "current-env");
+    const outputDir = path.join(tmpDir, "bundle");
+    writeSimpleSessionFile(sessionFile);
+    fs.mkdirSync(path.dirname(recordedRuntimeFile), { recursive: true });
+    fs.mkdirSync(envRuntimeDir);
+    fs.writeFileSync(
+      resolveTrajectoryPointerFilePath(sessionFile),
+      `${JSON.stringify({
+        traceSchema: "openclaw-trajectory-pointer",
+        schemaVersion: 1,
+        sessionId: "session-1",
+        runtimeFile: recordedRuntimeFile,
+      })}\n`,
+      "utf8",
+    );
+    fs.writeFileSync(
+      recordedRuntimeFile,
+      `${JSON.stringify({
+        traceSchema: "openclaw-trajectory",
+        schemaVersion: 1,
+        traceId: "session-1",
+        source: "runtime",
+        type: "recorded-runtime",
+        ts: "2026-04-22T08:00:00.000Z",
+        seq: 1,
+        sourceSeq: 1,
+        sessionId: "session-1",
+      })}\n`,
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(envRuntimeDir, "session-1.jsonl"),
+      `${JSON.stringify({
+        traceSchema: "openclaw-trajectory",
+        schemaVersion: 1,
+        traceId: "session-1",
+        source: "runtime",
+        type: "env-runtime",
+        ts: "2026-04-22T08:00:00.000Z",
+        seq: 1,
+        sourceSeq: 1,
+        sessionId: "session-1",
+      })}\n`,
+      "utf8",
+    );
+    const previous = process.env.OPENCLAW_TRAJECTORY_DIR;
+    process.env.OPENCLAW_TRAJECTORY_DIR = envRuntimeDir;
+    try {
+      const bundle = exportTrajectoryBundle({
+        outputDir,
+        sessionFile,
+        sessionId: "session-1",
+        workspaceDir: tmpDir,
+      });
+
+      expect(bundle.runtimeFile).toBe(recordedRuntimeFile);
+      expect(bundle.events.some((event) => event.type === "recorded-runtime")).toBe(true);
+      expect(bundle.events.some((event) => event.type === "env-runtime")).toBe(false);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_TRAJECTORY_DIR;
+      } else {
+        process.env.OPENCLAW_TRAJECTORY_DIR = previous;
+      }
+    }
   });
 
   it("exports merged runtime and transcript events plus convenience files", () => {

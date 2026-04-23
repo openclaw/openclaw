@@ -44,4 +44,30 @@ describe("getQueuedFileWriter", () => {
 
     expect(fs.readFileSync(targetPath, "utf8")).toBe("before\n");
   });
+
+  it("refuses to append through a symlinked parent directory", async () => {
+    const tmpDir = makeTempDir();
+    const targetDir = path.join(tmpDir, "target");
+    const linkDir = path.join(tmpDir, "link");
+    fs.mkdirSync(targetDir);
+    fs.symlinkSync(targetDir, linkDir);
+    const writer = getQueuedFileWriter(new Map(), path.join(linkDir, "trace.jsonl"));
+
+    writer.write("after\n");
+    await writer.flush();
+
+    expect(fs.existsSync(path.join(targetDir, "trace.jsonl"))).toBe(false);
+  });
+
+  it("stops appending when the configured file cap is reached", async () => {
+    const tmpDir = makeTempDir();
+    const filePath = path.join(tmpDir, "trace.jsonl");
+    const writer = getQueuedFileWriter(new Map(), filePath, { maxFileBytes: 6 });
+
+    writer.write("12345\n");
+    writer.write("after\n");
+    await writer.flush();
+
+    expect(fs.readFileSync(filePath, "utf8")).toBe("12345\n");
+  });
 });

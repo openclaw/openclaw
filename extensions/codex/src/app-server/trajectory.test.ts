@@ -51,6 +51,7 @@ describe("Codex trajectory recorder", () => {
     expect(content).not.toContain("sk-test-secret-token");
     expect(content).not.toContain("sk-other-secret-token");
     expect(fs.statSync(filePath).mode & 0o777).toBe(0o600);
+    expect(fs.existsSync(path.join(tmpDir, "session.trajectory-path.json"))).toBe(true);
   });
 
   it("sanitizes session ids when resolving an override directory", async () => {
@@ -84,5 +85,55 @@ describe("Codex trajectory recorder", () => {
     });
 
     expect(recorder).toBeNull();
+  });
+
+  it("refuses to append through a symlinked parent directory", async () => {
+    const tmpDir = makeTempDir();
+    const targetDir = path.join(tmpDir, "target");
+    const linkDir = path.join(tmpDir, "link");
+    fs.mkdirSync(targetDir);
+    fs.symlinkSync(targetDir, linkDir);
+    const recorder = createCodexTrajectoryRecorder({
+      cwd: tmpDir,
+      attempt: {
+        sessionFile: path.join(linkDir, "session.jsonl"),
+        sessionId: "session-1",
+        model: { api: "responses" },
+      } as never,
+      env: {},
+    });
+
+    recorder?.recordEvent("session.started");
+    await recorder?.flush();
+
+    expect(fs.existsSync(path.join(targetDir, "session.trajectory.jsonl"))).toBe(false);
+  });
+
+  it("truncates events that exceed the runtime event byte limit", async () => {
+    const tmpDir = makeTempDir();
+    const recorder = createCodexTrajectoryRecorder({
+      cwd: tmpDir,
+      attempt: {
+        sessionFile: path.join(tmpDir, "session.jsonl"),
+        sessionId: "session-1",
+        model: { api: "responses" },
+      } as never,
+      env: {},
+    });
+
+    recorder?.recordEvent("context.compiled", {
+      fields: Object.fromEntries(
+        Array.from({ length: 100 }, (_, index) => [`field-${index}`, "x".repeat(3_000)]),
+      ),
+    });
+    await recorder?.flush();
+
+    const parsed = JSON.parse(
+      fs.readFileSync(path.join(tmpDir, "session.trajectory.jsonl"), "utf8"),
+    ) as { data?: { truncated?: boolean; reason?: string } };
+    expect(parsed.data).toMatchObject({
+      truncated: true,
+      reason: "trajectory-event-size-limit",
+    });
   });
 });

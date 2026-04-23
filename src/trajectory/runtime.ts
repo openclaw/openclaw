@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { sanitizeDiagnosticPayload } from "../agents/payload-redaction.js";
 import { getQueuedFileWriter, type QueuedFileWriter } from "../agents/queued-file-writer.js";
@@ -29,6 +30,9 @@ type TrajectoryRuntimeRecorder = {
 };
 
 const writers = new Map<string, QueuedFileWriter>();
+export const TRAJECTORY_RUNTIME_FILE_MAX_BYTES = 50 * 1024 * 1024;
+export const TRAJECTORY_RUNTIME_EVENT_MAX_BYTES = 256 * 1024;
+const MAX_TRAJECTORY_WRITERS = 100;
 
 export function safeTrajectorySessionFileName(sessionId: string): string {
   const safe = sessionId.replaceAll(/[^A-Za-z0-9_-]/g, "_").slice(0, 120);
@@ -69,6 +73,101 @@ export function resolveTrajectoryFilePath(params: {
     : `${params.sessionFile}.trajectory.jsonl`;
 }
 
+export function resolveTrajectoryPointerFilePath(sessionFile: string): string {
+  return sessionFile.endsWith(".jsonl")
+    ? `${sessionFile.slice(0, -".jsonl".length)}.trajectory-path.json`
+    : `${sessionFile}.trajectory-path.json`;
+}
+
+function writeTrajectoryPointerBestEffort(params: {
+  filePath: string;
+  sessionFile?: string;
+  sessionId: string;
+}): void {
+  if (!params.sessionFile) {
+    return;
+  }
+  const pointerPath = resolveTrajectoryPointerFilePath(params.sessionFile);
+  const noFollow = fs.constants.O_NOFOLLOW;
+  if (typeof noFollow !== "number") {
+    return;
+  }
+  try {
+    const pointerDir = path.resolve(path.dirname(pointerPath));
+    if (fs.lstatSync(pointerDir).isSymbolicLink()) {
+      return;
+    }
+    try {
+      if (fs.lstatSync(pointerPath).isSymbolicLink()) {
+        return;
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        return;
+      }
+    }
+    const fd = fs.openSync(
+      pointerPath,
+      fs.constants.O_CREAT | fs.constants.O_TRUNC | fs.constants.O_WRONLY | noFollow,
+      0o600,
+    );
+    try {
+      fs.writeFileSync(
+        fd,
+        `${JSON.stringify(
+          {
+            traceSchema: "openclaw-trajectory-pointer",
+            schemaVersion: 1,
+            sessionId: params.sessionId,
+            runtimeFile: params.filePath,
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+      fs.fchmodSync(fd, 0o600);
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    // Pointer files are best-effort; the runtime sidecar itself is authoritative.
+  }
+}
+
+function trimTrajectoryWriterCache(): void {
+  while (writers.size >= MAX_TRAJECTORY_WRITERS) {
+    const oldestKey = writers.keys().next().value;
+    if (!oldestKey) {
+      return;
+    }
+    writers.delete(oldestKey);
+  }
+}
+
+function truncateOversizedTrajectoryEvent(
+  event: TrajectoryEvent,
+  line: string,
+): string | undefined {
+  const bytes = Buffer.byteLength(line, "utf8");
+  if (bytes <= TRAJECTORY_RUNTIME_EVENT_MAX_BYTES) {
+    return line;
+  }
+  const truncated = safeJsonStringify({
+    ...event,
+    data: {
+      truncated: true,
+      originalBytes: bytes,
+      limitBytes: TRAJECTORY_RUNTIME_EVENT_MAX_BYTES,
+      reason: "trajectory-event-size-limit",
+    },
+  });
+  if (truncated && Buffer.byteLength(truncated, "utf8") <= TRAJECTORY_RUNTIME_EVENT_MAX_BYTES) {
+    return truncated;
+  }
+  return undefined;
+}
+
 export function toTrajectoryToolDefinitions(
   tools: ReadonlyArray<{ name?: string; description?: string; parameters?: unknown }>,
 ): TrajectoryToolDefinition[] {
@@ -105,7 +204,19 @@ export function createTrajectoryRuntimeRecorder(
     sessionFile: params.sessionFile,
     sessionId: params.sessionId,
   });
-  const writer = params.writer ?? getQueuedFileWriter(writers, filePath);
+  if (!params.writer) {
+    trimTrajectoryWriterCache();
+  }
+  const writer =
+    params.writer ??
+    getQueuedFileWriter(writers, filePath, {
+      maxFileBytes: TRAJECTORY_RUNTIME_FILE_MAX_BYTES,
+    });
+  writeTrajectoryPointerBestEffort({
+    filePath,
+    sessionFile: params.sessionFile,
+    sessionId: params.sessionId,
+  });
   let seq = 0;
   const traceId = params.sessionId;
 
@@ -135,10 +246,17 @@ export function createTrajectoryRuntimeRecorder(
       if (!line) {
         return;
       }
-      writer.write(`${line}\n`);
+      const boundedLine = truncateOversizedTrajectoryEvent(event, line);
+      if (!boundedLine) {
+        return;
+      }
+      writer.write(`${boundedLine}\n`);
     },
     flush: async () => {
       await writer.flush();
+      if (!params.writer) {
+        writers.delete(filePath);
+      }
     },
   };
 }

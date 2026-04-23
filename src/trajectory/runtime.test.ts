@@ -1,9 +1,28 @@
-import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import {
+  TRAJECTORY_RUNTIME_EVENT_MAX_BYTES,
   createTrajectoryRuntimeRecorder,
+  resolveTrajectoryPointerFilePath,
   resolveTrajectoryFilePath,
   toTrajectoryToolDefinitions,
 } from "./runtime.js";
+
+const tempDirs: string[] = [];
+
+function makeTempDir(): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-trajectory-runtime-"));
+  tempDirs.push(dir);
+  return dir;
+}
+
+afterEach(() => {
+  for (const dir of tempDirs.splice(0)) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 describe("trajectory runtime", () => {
   it("resolves a session-adjacent trajectory file by default", () => {
@@ -66,6 +85,57 @@ describe("trajectory runtime", () => {
     ]);
     expect(JSON.stringify(parsed.data)).not.toContain("sk-test-secret-token");
     expect(JSON.stringify(parsed.data)).not.toContain("sk-other-secret-token");
+  });
+
+  it("truncates events that exceed the runtime event byte limit", () => {
+    const writes: string[] = [];
+    const recorder = createTrajectoryRuntimeRecorder({
+      sessionId: "session-1",
+      sessionFile: "/tmp/session.jsonl",
+      writer: {
+        filePath: "/tmp/session.trajectory.jsonl",
+        write: (line) => {
+          writes.push(line);
+        },
+        flush: async () => undefined,
+      },
+    });
+
+    recorder?.recordEvent("context.compiled", {
+      prompt: "x".repeat(TRAJECTORY_RUNTIME_EVENT_MAX_BYTES + 1),
+    });
+
+    expect(writes).toHaveLength(1);
+    const parsed = JSON.parse(writes[0]);
+    expect(parsed.data).toMatchObject({
+      truncated: true,
+      reason: "trajectory-event-size-limit",
+    });
+    expect(Buffer.byteLength(writes[0], "utf8")).toBeLessThanOrEqual(
+      TRAJECTORY_RUNTIME_EVENT_MAX_BYTES + 1,
+    );
+  });
+
+  it("writes a session-adjacent pointer when using an override directory", () => {
+    const tmpDir = makeTempDir();
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    const trajectoryDir = path.join(tmpDir, "traces");
+    const recorder = createTrajectoryRuntimeRecorder({
+      env: { OPENCLAW_TRAJECTORY_DIR: trajectoryDir },
+      sessionId: "session-1",
+      sessionFile,
+      writer: {
+        filePath: path.join(trajectoryDir, "session-1.jsonl"),
+        write: () => undefined,
+        flush: async () => undefined,
+      },
+    });
+
+    expect(recorder).not.toBeNull();
+    const pointer = JSON.parse(
+      fs.readFileSync(resolveTrajectoryPointerFilePath(sessionFile), "utf8"),
+    ) as { runtimeFile?: string };
+    expect(pointer.runtimeFile).toBe(path.join(trajectoryDir, "session-1.jsonl"));
   });
 
   it("does not record runtime events when explicitly disabled", () => {

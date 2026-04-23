@@ -8,20 +8,81 @@ export type QueuedFileWriter = {
   flush: () => Promise<void>;
 };
 
-async function safeAppendFile(filePath: string, line: string): Promise<void> {
+export type QueuedFileWriterOptions = {
+  maxFileBytes?: number;
+};
+
+async function assertNoSymlinkParents(filePath: string): Promise<void> {
+  const resolvedDir = path.resolve(path.dirname(filePath));
+  const parsed = path.parse(resolvedDir);
+  const relativeParts = path.relative(parsed.root, resolvedDir).split(path.sep).filter(Boolean);
+  let current = parsed.root;
+  for (const part of relativeParts) {
+    current = path.join(current, part);
+    const stat = await fs.lstat(current);
+    if (stat.isSymbolicLink()) {
+      if (path.dirname(current) === parsed.root) {
+        continue;
+      }
+      throw new Error(`Refusing to write queued log under symlinked directory: ${current}`);
+    }
+    if (!stat.isDirectory()) {
+      throw new Error(`Refusing to write queued log under non-directory: ${current}`);
+    }
+  }
+}
+
+function verifyStableOpenedFile(params: {
+  preOpenStat?: nodeFs.Stats;
+  postOpenStat: nodeFs.Stats;
+  filePath: string;
+}): void {
+  if (!params.postOpenStat.isFile()) {
+    throw new Error(`Refusing to write queued log to non-file: ${params.filePath}`);
+  }
+  if (params.postOpenStat.nlink > 1) {
+    throw new Error(`Refusing to write queued log to hardlinked file: ${params.filePath}`);
+  }
+  const pre = params.preOpenStat;
+  if (pre && (pre.dev !== params.postOpenStat.dev || pre.ino !== params.postOpenStat.ino)) {
+    throw new Error(`Refusing to write queued log after file changed: ${params.filePath}`);
+  }
+}
+
+async function safeAppendFile(
+  filePath: string,
+  line: string,
+  options: QueuedFileWriterOptions,
+): Promise<void> {
+  const noFollow = nodeFs.constants.O_NOFOLLOW;
+  if (typeof noFollow !== "number") {
+    throw new Error("O_NOFOLLOW is unavailable; refusing to write queued log");
+  }
+  await assertNoSymlinkParents(filePath);
+
+  let preOpenStat: nodeFs.Stats | undefined;
   try {
     const stat = await fs.lstat(filePath);
     if (stat.isSymbolicLink()) {
       throw new Error(`Refusing to write queued log through symlink: ${filePath}`);
     }
+    if (!stat.isFile()) {
+      throw new Error(`Refusing to write queued log to non-file: ${filePath}`);
+    }
+    preOpenStat = stat;
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
       throw err;
     }
   }
+  const lineBytes = Buffer.byteLength(line, "utf8");
+  if (
+    options.maxFileBytes !== undefined &&
+    (preOpenStat?.size ?? 0) + lineBytes > options.maxFileBytes
+  ) {
+    return;
+  }
 
-  const noFollow =
-    typeof nodeFs.constants.O_NOFOLLOW === "number" ? nodeFs.constants.O_NOFOLLOW : 0;
   const handle = await fs.open(
     filePath,
     nodeFs.constants.O_CREAT | nodeFs.constants.O_APPEND | nodeFs.constants.O_WRONLY | noFollow,
@@ -29,8 +90,9 @@ async function safeAppendFile(filePath: string, line: string): Promise<void> {
   );
   try {
     const stat = await handle.stat();
-    if (!stat.isFile()) {
-      throw new Error(`Refusing to write queued log to non-file: ${filePath}`);
+    verifyStableOpenedFile({ preOpenStat, postOpenStat: stat, filePath });
+    if (options.maxFileBytes !== undefined && stat.size + lineBytes > options.maxFileBytes) {
+      return;
     }
     await handle.chmod(0o600);
     await handle.appendFile(line, "utf8");
@@ -42,6 +104,7 @@ async function safeAppendFile(filePath: string, line: string): Promise<void> {
 export function getQueuedFileWriter(
   writers: Map<string, QueuedFileWriter>,
   filePath: string,
+  options: QueuedFileWriterOptions = {},
 ): QueuedFileWriter {
   const existing = writers.get(filePath);
   if (existing) {
@@ -57,7 +120,7 @@ export function getQueuedFileWriter(
     write: (line: string) => {
       queue = queue
         .then(() => ready)
-        .then(() => safeAppendFile(filePath, line))
+        .then(() => safeAppendFile(filePath, line, options))
         .catch(() => undefined);
     },
     flush: async () => {

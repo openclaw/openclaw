@@ -27,21 +27,73 @@ const PRIVATE_PAYLOAD_FIELD_RE = /(?:image|screenshot|attachment|fileData|dataUr
 const AUTHORIZATION_VALUE_RE = /\b(Bearer|Basic)\s+[A-Za-z0-9+/._~=-]{8,}/giu;
 const JWT_VALUE_RE = /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/gu;
 const COOKIE_PAIR_RE = /\b([A-Za-z][A-Za-z0-9_.-]{1,64})=([A-Za-z0-9+/._~%=-]{16,})(?=;|\s|$)/gu;
+const TRAJECTORY_RUNTIME_FILE_MAX_BYTES = 50 * 1024 * 1024;
+const TRAJECTORY_RUNTIME_EVENT_MAX_BYTES = 256 * 1024;
+
+async function assertNoSymlinkParents(filePath: string): Promise<void> {
+  const resolvedDir = path.resolve(path.dirname(filePath));
+  const parsed = path.parse(resolvedDir);
+  const relativeParts = path.relative(parsed.root, resolvedDir).split(path.sep).filter(Boolean);
+  let current = parsed.root;
+  for (const part of relativeParts) {
+    current = path.join(current, part);
+    const stat = await fs.lstat(current);
+    if (stat.isSymbolicLink()) {
+      if (path.dirname(current) === parsed.root) {
+        continue;
+      }
+      throw new Error(`Refusing to write trajectory under symlinked directory: ${current}`);
+    }
+    if (!stat.isDirectory()) {
+      throw new Error(`Refusing to write trajectory under non-directory: ${current}`);
+    }
+  }
+}
+
+function verifyStableOpenedTrajectoryFile(params: {
+  preOpenStat?: nodeFs.Stats;
+  postOpenStat: nodeFs.Stats;
+  filePath: string;
+}): void {
+  if (!params.postOpenStat.isFile()) {
+    throw new Error(`Refusing to write trajectory to non-file: ${params.filePath}`);
+  }
+  if (params.postOpenStat.nlink > 1) {
+    throw new Error(`Refusing to write trajectory to hardlinked file: ${params.filePath}`);
+  }
+  const pre = params.preOpenStat;
+  if (pre && (pre.dev !== params.postOpenStat.dev || pre.ino !== params.postOpenStat.ino)) {
+    throw new Error(`Refusing to write trajectory after file changed: ${params.filePath}`);
+  }
+}
 
 async function safeAppendTrajectoryFile(filePath: string, line: string): Promise<void> {
+  const noFollow = nodeFs.constants.O_NOFOLLOW;
+  if (typeof noFollow !== "number") {
+    throw new Error("O_NOFOLLOW is unavailable; refusing to write trajectory");
+  }
+  await assertNoSymlinkParents(filePath);
+
+  let preOpenStat: nodeFs.Stats | undefined;
   try {
     const stat = await fs.lstat(filePath);
     if (stat.isSymbolicLink()) {
       throw new Error(`Refusing to write trajectory through symlink: ${filePath}`);
     }
+    if (!stat.isFile()) {
+      throw new Error(`Refusing to write trajectory to non-file: ${filePath}`);
+    }
+    preOpenStat = stat;
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
       throw err;
     }
   }
+  const lineBytes = Buffer.byteLength(line, "utf8");
+  if ((preOpenStat?.size ?? 0) + lineBytes > TRAJECTORY_RUNTIME_FILE_MAX_BYTES) {
+    return;
+  }
 
-  const noFollow =
-    typeof nodeFs.constants.O_NOFOLLOW === "number" ? nodeFs.constants.O_NOFOLLOW : 0;
   const handle = await fs.open(
     filePath,
     nodeFs.constants.O_CREAT | nodeFs.constants.O_APPEND | nodeFs.constants.O_WRONLY | noFollow,
@@ -49,13 +101,94 @@ async function safeAppendTrajectoryFile(filePath: string, line: string): Promise
   );
   try {
     const stat = await handle.stat();
-    if (!stat.isFile()) {
-      throw new Error(`Refusing to write trajectory to non-file: ${filePath}`);
+    verifyStableOpenedTrajectoryFile({ preOpenStat, postOpenStat: stat, filePath });
+    if (stat.size + lineBytes > TRAJECTORY_RUNTIME_FILE_MAX_BYTES) {
+      return;
     }
     await handle.chmod(0o600);
     await handle.appendFile(line, "utf8");
   } finally {
     await handle.close();
+  }
+}
+
+function boundedTrajectoryLine(event: Record<string, unknown>): string | undefined {
+  const line = JSON.stringify(event);
+  const bytes = Buffer.byteLength(line, "utf8");
+  if (bytes <= TRAJECTORY_RUNTIME_EVENT_MAX_BYTES) {
+    return `${line}\n`;
+  }
+  const truncated = JSON.stringify({
+    ...event,
+    data: {
+      truncated: true,
+      originalBytes: bytes,
+      limitBytes: TRAJECTORY_RUNTIME_EVENT_MAX_BYTES,
+      reason: "trajectory-event-size-limit",
+    },
+  });
+  if (Buffer.byteLength(truncated, "utf8") <= TRAJECTORY_RUNTIME_EVENT_MAX_BYTES) {
+    return `${truncated}\n`;
+  }
+  return undefined;
+}
+
+function resolveTrajectoryPointerFilePath(sessionFile: string): string {
+  return sessionFile.endsWith(".jsonl")
+    ? `${sessionFile.slice(0, -".jsonl".length)}.trajectory-path.json`
+    : `${sessionFile}.trajectory-path.json`;
+}
+
+function writeTrajectoryPointerBestEffort(params: {
+  filePath: string;
+  sessionFile: string;
+  sessionId: string;
+}): void {
+  const noFollow = nodeFs.constants.O_NOFOLLOW;
+  if (typeof noFollow !== "number") {
+    return;
+  }
+  const pointerPath = resolveTrajectoryPointerFilePath(params.sessionFile);
+  try {
+    const pointerDir = path.resolve(path.dirname(pointerPath));
+    if (nodeFs.lstatSync(pointerDir).isSymbolicLink()) {
+      return;
+    }
+    try {
+      if (nodeFs.lstatSync(pointerPath).isSymbolicLink()) {
+        return;
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        return;
+      }
+    }
+    const fd = nodeFs.openSync(
+      pointerPath,
+      nodeFs.constants.O_CREAT | nodeFs.constants.O_TRUNC | nodeFs.constants.O_WRONLY | noFollow,
+      0o600,
+    );
+    try {
+      nodeFs.writeFileSync(
+        fd,
+        `${JSON.stringify(
+          {
+            traceSchema: "openclaw-trajectory-pointer",
+            schemaVersion: 1,
+            sessionId: params.sessionId,
+            runtimeFile: params.filePath,
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+      nodeFs.fchmodSync(fd, 0o600);
+    } finally {
+      nodeFs.closeSync(fd);
+    }
+  } catch {
+    // Pointer files are best-effort; the runtime sidecar itself is authoritative.
   }
 }
 
@@ -76,6 +209,11 @@ export function createCodexTrajectoryRecorder(
   const ready = fs
     .mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 })
     .catch(() => undefined);
+  writeTrajectoryPointerBestEffort({
+    filePath,
+    sessionFile: params.attempt.sessionFile,
+    sessionId: params.attempt.sessionId,
+  });
   let queue = Promise.resolve();
   let seq = 0;
 
@@ -100,7 +238,10 @@ export function createCodexTrajectoryRecorder(
         modelApi: params.attempt.model.api,
         data: data ? sanitizeValue(data) : undefined,
       };
-      const line = `${JSON.stringify(event)}\n`;
+      const line = boundedTrajectoryLine(event);
+      if (!line) {
+        return;
+      }
       queue = queue
         .then(() => ready)
         .then(() => safeAppendTrajectoryFile(filePath, line))

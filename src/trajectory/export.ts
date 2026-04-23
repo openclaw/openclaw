@@ -20,7 +20,12 @@ import {
   type SupportRedactionContext,
 } from "../logging/diagnostic-support-redaction.js";
 import { safeJsonStringify } from "../utils/safe-json.js";
-import { resolveTrajectoryFilePath, safeTrajectorySessionFileName } from "./runtime.js";
+import {
+  TRAJECTORY_RUNTIME_FILE_MAX_BYTES,
+  resolveTrajectoryFilePath,
+  resolveTrajectoryPointerFilePath,
+  safeTrajectorySessionFileName,
+} from "./runtime.js";
 import type {
   TrajectoryBundleManifest,
   TrajectoryEvent,
@@ -48,18 +53,25 @@ type TrajectoryExportRedaction = SupportRedactionContext & {
   workspaceDir: string;
 };
 
-const MAX_TRAJECTORY_RUNTIME_FILE_BYTES = 50 * 1024 * 1024;
 const MAX_TRAJECTORY_RUNTIME_EVENTS = 200_000;
 const MAX_TRAJECTORY_TOTAL_EVENTS = 250_000;
+const MAX_TRAJECTORY_SESSION_FILE_BYTES = 50 * 1024 * 1024;
 
-function parseJsonlFile<T>(filePath: string): T[] {
+function parseJsonlFile<T>(
+  filePath: string,
+  params: {
+    maxBytes: number;
+    maxEvents: number;
+    validate?: (value: unknown) => value is T;
+  },
+): T[] {
   if (!fs.existsSync(filePath)) {
     return [];
   }
   const stat = fs.statSync(filePath);
-  if (stat.size > MAX_TRAJECTORY_RUNTIME_FILE_BYTES) {
+  if (stat.size > params.maxBytes) {
     throw new Error(
-      `Trajectory runtime file is too large to export (${stat.size} bytes; limit ${MAX_TRAJECTORY_RUNTIME_FILE_BYTES})`,
+      `Trajectory runtime file is too large to export (${stat.size} bytes; limit ${params.maxBytes})`,
     );
   }
   const content = fs.readFileSync(filePath, "utf8");
@@ -69,18 +81,88 @@ function parseJsonlFile<T>(filePath: string): T[] {
     .filter(Boolean);
   const parsed: T[] = [];
   for (const row of rows) {
-    if (parsed.length >= MAX_TRAJECTORY_RUNTIME_EVENTS) {
+    if (parsed.length >= params.maxEvents) {
       throw new Error(
-        `Trajectory runtime file has too many events to export (limit ${MAX_TRAJECTORY_RUNTIME_EVENTS})`,
+        `Trajectory runtime file has too many events to export (limit ${params.maxEvents})`,
       );
     }
     try {
-      parsed.push(JSON.parse(row) as T);
+      const value = JSON.parse(row) as unknown;
+      if (!params.validate || params.validate(value)) {
+        parsed.push(value as T);
+      }
     } catch {
       // Keep exports resilient even if a single debug line is malformed.
     }
   }
   return parsed;
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function isRuntimeTrajectoryEvent(value: unknown): value is TrajectoryEvent {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return (
+    value.traceSchema === "openclaw-trajectory" &&
+    value.schemaVersion === 1 &&
+    value.source === "runtime" &&
+    typeof value.type === "string" &&
+    typeof value.ts === "string" &&
+    !Number.isNaN(Date.parse(value.ts)) &&
+    isFiniteNumber(value.seq) &&
+    typeof value.sessionId === "string" &&
+    (!("data" in value) || value.data === undefined || isRecord(value.data))
+  );
+}
+
+function readRuntimePointerFile(sessionFile: string, sessionId: string): string | undefined {
+  const pointerPath = resolveTrajectoryPointerFilePath(sessionFile);
+  if (!fs.existsSync(pointerPath)) {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(fs.readFileSync(pointerPath, "utf8")) as unknown;
+    if (!isRecord(parsed)) {
+      return undefined;
+    }
+    if (parsed.sessionId !== sessionId || typeof parsed.runtimeFile !== "string") {
+      return undefined;
+    }
+    return parsed.runtimeFile;
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveTrajectoryRuntimeFile(params: {
+  runtimeFile?: string;
+  sessionFile: string;
+  sessionId: string;
+}): string {
+  if (params.runtimeFile) {
+    return params.runtimeFile;
+  }
+  const candidates = [
+    readRuntimePointerFile(params.sessionFile, params.sessionId),
+    resolveTrajectoryFilePath({
+      env: {},
+      sessionFile: params.sessionFile,
+      sessionId: params.sessionId,
+    }),
+    resolveTrajectoryFilePath({
+      sessionFile: params.sessionFile,
+      sessionId: params.sessionId,
+    }),
+  ].filter((candidate): candidate is string => Boolean(candidate));
+  return candidates.find((candidate) => fs.existsSync(candidate)) ?? candidates[0];
 }
 
 function normalizeTimestamp(value: unknown): string {
@@ -628,17 +710,26 @@ export function exportTrajectoryBundle(params: BuildTrajectoryBundleParams): {
   const redaction = buildTrajectoryExportRedaction({
     workspaceDir: params.workspaceDir,
   });
+  const sessionStat = fs.statSync(params.sessionFile);
+  if (sessionStat.size > MAX_TRAJECTORY_SESSION_FILE_BYTES) {
+    throw new Error(
+      `Trajectory session file is too large to export (${sessionStat.size} bytes; limit ${MAX_TRAJECTORY_SESSION_FILE_BYTES})`,
+    );
+  }
   const sessionManager = SessionManager.open(params.sessionFile);
   const header = sessionManager.getHeader();
   const leafId = sessionManager.getLeafId();
   const branchEntries = sessionManager.getBranch(leafId ?? undefined);
-  const runtimeFile =
-    params.runtimeFile ??
-    resolveTrajectoryFilePath({
-      sessionFile: params.sessionFile,
-      sessionId: params.sessionId,
-    });
-  const runtimeEvents = parseJsonlFile<TrajectoryEvent>(runtimeFile);
+  const runtimeFile = resolveTrajectoryRuntimeFile({
+    runtimeFile: params.runtimeFile,
+    sessionFile: params.sessionFile,
+    sessionId: params.sessionId,
+  });
+  const runtimeEvents = parseJsonlFile<TrajectoryEvent>(runtimeFile, {
+    maxBytes: TRAJECTORY_RUNTIME_FILE_MAX_BYTES,
+    maxEvents: MAX_TRAJECTORY_RUNTIME_EVENTS,
+    validate: isRuntimeTrajectoryEvent,
+  });
   if (runtimeEvents.length + branchEntries.length > MAX_TRAJECTORY_TOTAL_EVENTS) {
     throw new Error(
       `Trajectory export has too many events (${runtimeEvents.length + branchEntries.length}; limit ${MAX_TRAJECTORY_TOTAL_EVENTS})`,
@@ -734,7 +825,7 @@ export function exportTrajectoryBundle(params: BuildTrajectoryBundleParams): {
     {
       path: "session.jsonl",
       mediaType: "application/x-ndjson",
-      bytes: fs.statSync(params.sessionFile).size,
+      bytes: sessionStat.size,
     },
   ];
   if (fs.existsSync(runtimeFile)) {
