@@ -8,6 +8,7 @@ vi.mock("../plugins/provider-hook-runtime.js", () => ({
     buildHookProviderCacheKey: () => "test-provider-hook-cache-key",
   },
   prepareProviderExtraParams: () => undefined,
+  resolveProviderExtraParamsForTransport: () => undefined,
   resetProviderRuntimeHookCacheForTest: () => {},
   wrapProviderStreamFn: (params: { context: { streamFn?: StreamFn } }) => params.context.streamFn,
 }));
@@ -1907,6 +1908,48 @@ describe("applyExtraParamsToAgent", () => {
     });
 
     expect(effectiveExtraParams.transport).toBe("auto");
+  });
+
+  it("composes transport extra-param hooks after provider preparation", () => {
+    const resolveProviderExtraParamsForTransport = vi.fn((_params) => ({
+      patch: {
+        hookApplied: true,
+      },
+    }));
+    extraParamsTesting.setProviderRuntimeDepsForTest({
+      prepareProviderExtraParams: (params) => ({
+        ...params.context.extraParams,
+        transport: "websocket",
+      }),
+      resolveProviderExtraParamsForTransport,
+      wrapProviderStreamFn: (params) => params.context.streamFn,
+    });
+
+    const model = {
+      api: "openai-responses",
+      provider: "openai",
+      id: "gpt-5",
+    } as Model<"openai-responses">;
+    const effectiveExtraParams = resolvePreparedExtraParams({
+      cfg: undefined,
+      provider: "openai",
+      modelId: "gpt-5",
+      model,
+    });
+
+    expect(effectiveExtraParams).toMatchObject({
+      transport: "websocket",
+      hookApplied: true,
+    });
+    expect(resolveProviderExtraParamsForTransport).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai",
+        context: expect.objectContaining({
+          model,
+          transport: "websocket",
+        }),
+      }),
+    );
   });
 
   it("uses prepared transport when session settings did not explicitly set one", () => {

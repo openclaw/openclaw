@@ -6,9 +6,11 @@ import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   prepareProviderExtraParams as prepareProviderExtraParamsRuntime,
+  resolveProviderExtraParamsForTransport as resolveProviderExtraParamsForTransportRuntime,
   wrapProviderStreamFn as wrapProviderStreamFnRuntime,
 } from "../../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
+import { isGptResponsesFamily } from "../provider-api-families.js";
 import { createGoogleThinkingPayloadWrapper } from "./google-stream-wrappers.js";
 import { log } from "./logger.js";
 import { createMinimaxThinkingDisabledWrapper } from "./minimax-stream-wrappers.js";
@@ -26,6 +28,7 @@ import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 
 const defaultProviderRuntimeDeps = {
   prepareProviderExtraParams: prepareProviderExtraParamsRuntime,
+  resolveProviderExtraParamsForTransport: resolveProviderExtraParamsForTransportRuntime,
   wrapProviderStreamFn: wrapProviderStreamFnRuntime,
 };
 
@@ -39,12 +42,17 @@ export const __testing = {
   ): void {
     providerRuntimeDeps.prepareProviderExtraParams =
       deps?.prepareProviderExtraParams ?? defaultProviderRuntimeDeps.prepareProviderExtraParams;
+    providerRuntimeDeps.resolveProviderExtraParamsForTransport =
+      deps?.resolveProviderExtraParamsForTransport ??
+      defaultProviderRuntimeDeps.resolveProviderExtraParamsForTransport;
     providerRuntimeDeps.wrapProviderStreamFn =
       deps?.wrapProviderStreamFn ?? defaultProviderRuntimeDeps.wrapProviderStreamFn;
   },
   resetProviderRuntimeDepsForTest(): void {
     providerRuntimeDeps.prepareProviderExtraParams =
       defaultProviderRuntimeDeps.prepareProviderExtraParams;
+    providerRuntimeDeps.resolveProviderExtraParamsForTransport =
+      defaultProviderRuntimeDeps.resolveProviderExtraParamsForTransport;
     providerRuntimeDeps.wrapProviderStreamFn = defaultProviderRuntimeDeps.wrapProviderStreamFn;
   },
 };
@@ -129,6 +137,7 @@ export function resolvePreparedExtraParams(params: {
   thinkingLevel?: ThinkLevel;
   agentId?: string;
   resolvedExtraParams?: Record<string, unknown>;
+  model?: ProviderRuntimeModel;
 }): Record<string, unknown> {
   const resolvedExtraParams =
     params.resolvedExtraParams ??
@@ -159,7 +168,7 @@ export function resolvePreparedExtraParams(params: {
     merged.cachedContent = resolvedCachedContent;
     delete merged.cached_content;
   }
-  return (
+  const prepared =
     providerRuntimeDeps.prepareProviderExtraParams({
       provider: params.provider,
       config: params.cfg,
@@ -170,8 +179,21 @@ export function resolvePreparedExtraParams(params: {
         extraParams: merged,
         thinkingLevel: params.thinkingLevel,
       },
-    }) ?? merged
-  );
+    }) ?? merged;
+  const transportPatch = providerRuntimeDeps.resolveProviderExtraParamsForTransport({
+    provider: params.provider,
+    config: params.cfg,
+    context: {
+      config: params.cfg,
+      provider: params.provider,
+      modelId: params.modelId,
+      extraParams: prepared,
+      thinkingLevel: params.thinkingLevel,
+      model: params.model,
+      transport: resolveSupportedTransport(prepared.transport),
+    },
+  })?.patch;
+  return transportPatch ? { ...prepared, ...transportPatch } : prepared;
 }
 
 function sanitizeExtraParamsRecord(
@@ -331,12 +353,7 @@ function createParallelToolCallsWrapper(
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
-    if (
-      model.api !== "openai-completions" &&
-      model.api !== "openai-responses" &&
-      model.api !== "openai-codex-responses" &&
-      model.api !== "azure-openai-responses"
-    ) {
+    if (!isGptResponsesFamily(model.api)) {
       return underlying(model, context, options);
     }
     log.debug(
@@ -473,6 +490,7 @@ export function applyExtraParamsToAgent(
     thinkingLevel,
     agentId,
     resolvedExtraParams,
+    model,
   });
   const wrapperContext: ApplyExtraParamsContext = {
     agent,

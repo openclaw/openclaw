@@ -27,12 +27,18 @@ export type AgentHarnessResetParams = {
   reason?: "new" | "reset" | "idle" | "daily" | "compaction" | "deleted" | "unknown";
 };
 
+export type AgentHarnessResultClassification = "ok" | "empty" | "reasoning-only" | "planning-only";
+
 export type AgentHarness = {
   id: string;
   label: string;
   pluginId?: string;
   supports(ctx: AgentHarnessSupportContext): AgentHarnessSupport;
   runAttempt(params: AgentHarnessAttemptParams): Promise<AgentHarnessAttemptResult>;
+  classify?(
+    result: AgentHarnessAttemptResult,
+    ctx: AgentHarnessAttemptParams,
+  ): AgentHarnessResultClassification | undefined;
   compact?(params: AgentHarnessCompactParams): Promise<AgentHarnessCompactResult | undefined>;
   reset?(params: AgentHarnessResetParams): Promise<void> | void;
   dispose?(): Promise<void> | void;
