@@ -151,6 +151,37 @@ describe("models set + fallbacks", () => {
     });
   });
 
+  it("keeps NVIDIA fallback adds idempotent when preserving expanded refs", async () => {
+    mockConfigSnapshot({
+      agents: {
+        defaults: {
+          model: {
+            fallbacks: ["nvidia/nvidia/nemotron-3-super-120b-a12b"],
+          },
+          models: {
+            "nvidia/nvidia/nemotron-3-super-120b-a12b": {},
+          },
+        },
+      },
+    });
+    const runtime = makeRuntime();
+
+    await modelsFallbacksAddCommand("nvidia/nvidia/nemotron-3-super-120b-a12b", runtime);
+
+    expect(mocks.writtenConfig).toBeDefined();
+    const written = getWrittenConfig();
+    expect(written.agents).toEqual({
+      defaults: {
+        model: {
+          fallbacks: ["nvidia/nvidia/nemotron-3-super-120b-a12b"],
+        },
+        models: {
+          "nvidia/nvidia/nemotron-3-super-120b-a12b": {},
+        },
+      },
+    });
+  });
+
   it("migrates legacy duplicated OpenRouter keys on write", async () => {
     mockConfigSnapshot({
       agents: {
