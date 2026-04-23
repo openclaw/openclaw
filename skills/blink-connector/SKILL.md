@@ -112,13 +112,13 @@ A missing provider means it's not linked — ask the user to connect it in the A
 | Twitter / X | `composio_twitter` | `https://api.twitter.com/2/` |
 | QuickBooks | `composio_quickbooks` | `https://quickbooks.api.intuit.com/` (path: `v3/company/{realmId}/...`) |
 | Brex | `composio_brex` | `https://platform.brexapis.com/v2/` |
-| Google Ads | `composio_googleads` | `https://googleads.googleapis.com/` (path: `v18/customers/...`) |
+| Google Ads | `composio_googleads` | `https://googleads.googleapis.com/` (path: `v21/customers/...`, v18 sunset) |
 | Intercom | `composio_intercom` | `https://api.intercom.io/` |
 | ZoomInfo | `composio_zoominfo` | `https://api.zoominfo.com/` |
 | Gong | `composio_gong` | `https://api.gong.io/v2/` |
 | DocuSign | `composio_docusign` | `https://account.docusign.com/restapi/` (path: `v2.1/accounts/{accountId}/...`) |
 | Box | `composio_box` | `https://api.box.com/2.0/` |
-| Todoist | `composio_todoist` | `https://api.todoist.com/rest/v2/` |
+| Todoist | `composio_todoist` | `https://api.todoist.com/api/v1/` |
 | Ashby | `composio_ashby` | `https://api.ashbyhq.com/` |
 | Basecamp | `composio_basecamp` | `https://3.basecampapi.com/` (path: `{accountId}/projects.json`) |
 
@@ -977,10 +977,10 @@ auth config). All paths must include the API version:
 
 ```bash
 # List accessible customers
-blink connector exec composio_googleads v18/customers:listAccessibleCustomers GET
+blink connector exec composio_googleads v21/customers:listAccessibleCustomers GET
 
 # Run a Google Ads Query Language (GAQL) report
-blink connector exec composio_googleads v18/customers/CUSTOMER_ID/googleAds:search POST '{"query":"SELECT campaign.id, campaign.name FROM campaign LIMIT 10"}'
+blink connector exec composio_googleads v21/customers/CUSTOMER_ID/googleAds:search POST '{"query":"SELECT campaign.id, campaign.name FROM campaign LIMIT 10"}'
 ```
 
 ### Intercom
