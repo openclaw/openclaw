@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   enqueueSessionDelivery,
+  failSessionDelivery,
+  isSessionDeliveryEligibleForRetry,
   loadPendingSessionDeliveries,
   recoverPendingSessionDeliveries,
 } from "./session-delivery-queue.js";
@@ -111,6 +113,37 @@ describe("session-delivery queue recovery", () => {
       if (pending[0]?.kind === "systemEvent") {
         expect(pending[0].text).toBe("leave fresh entry queued");
       }
+    });
+
+    vi.useRealTimers();
+  });
+
+  it("uses the persisted retryCount for the first backoff tier", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-23T00:00:00.000Z"));
+
+    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+      const id = await enqueueSessionDelivery(
+        {
+          kind: "systemEvent",
+          sessionKey: "agent:main:main",
+          text: "retry me",
+        },
+        tempDir,
+      );
+      await failSessionDelivery(id, "transient failure", tempDir);
+
+      const [failedEntry] = await loadPendingSessionDeliveries(tempDir);
+      expect(failedEntry).toBeDefined();
+      expect(failedEntry?.retryCount).toBe(1);
+      expect(failedEntry?.lastAttemptAt).toBeDefined();
+
+      const lastAttemptAt = failedEntry?.lastAttemptAt ?? 0;
+      const notReady = isSessionDeliveryEligibleForRetry(failedEntry, lastAttemptAt + 4_999);
+      expect(notReady).toEqual({ eligible: false, remainingBackoffMs: 1 });
+
+      const ready = isSessionDeliveryEligibleForRetry(failedEntry, lastAttemptAt + 5_000);
+      expect(ready).toEqual({ eligible: true });
     });
 
     vi.useRealTimers();

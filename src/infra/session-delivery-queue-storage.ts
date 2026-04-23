@@ -7,6 +7,7 @@ import { generateSecureUuid } from "./secure-random.js";
 
 const QUEUE_DIRNAME = "session-delivery-queue";
 const FAILED_DIRNAME = "failed";
+const TMP_SWEEP_MAX_AGE_MS = 5_000;
 
 export type SessionDeliveryContext = {
   channel?: string;
@@ -68,6 +69,23 @@ async function unlinkBestEffort(filePath: string): Promise<void> {
     await fs.promises.unlink(filePath);
   } catch {
     // Best-effort cleanup.
+  }
+}
+
+async function unlinkStaleTmpBestEffort(filePath: string, now: number): Promise<void> {
+  try {
+    const stat = await fs.promises.stat(filePath);
+    if (!stat.isFile()) {
+      return;
+    }
+    if (now - stat.mtimeMs < TMP_SWEEP_MAX_AGE_MS) {
+      return;
+    }
+    await unlinkBestEffort(filePath);
+  } catch (err) {
+    if (getErrnoCode(err) !== "ENOENT") {
+      throw err;
+    }
   }
 }
 
@@ -205,9 +223,12 @@ export async function loadPendingSessionDeliveries(
     throw err;
   }
 
+  const now = Date.now();
   for (const file of files) {
-    if (file.endsWith(".delivered") || file.endsWith(".tmp")) {
+    if (file.endsWith(".delivered")) {
       await unlinkBestEffort(path.join(queueDir, file));
+    } else if (file.endsWith(".tmp")) {
+      await unlinkStaleTmpBestEffort(path.join(queueDir, file), now);
     }
   }
 

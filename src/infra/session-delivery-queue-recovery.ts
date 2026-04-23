@@ -72,7 +72,7 @@ export function isSessionDeliveryEligibleForRetry(
   entry: QueuedSessionDelivery,
   now: number,
 ): { eligible: true } | { eligible: false; remainingBackoffMs: number } {
-  const backoff = computeSessionDeliveryBackoffMs(entry.retryCount + 1);
+  const backoff = computeSessionDeliveryBackoffMs(entry.retryCount);
   if (backoff <= 0) {
     return { eligible: true };
   }
