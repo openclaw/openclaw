@@ -15,11 +15,11 @@ OpenAI, Anthropic, Gemini, Mistral, Bedrock, Ollama, and more — with built-in
 secrets management, fallback/retry, traffic splitting, and budget tracking, all
 configured through the MLflow UI.
 
-| Property | Value                                          |
-| -------- | ---------------------------------------------- |
+| Property | Value                                            |
+| -------- | ------------------------------------------------ |
 | Provider | `openai` (via `models.providers.openai.baseUrl`) |
-| Auth     | Managed by the gateway                         |
-| API      | OpenAI-compatible                              |
+| Auth     | Managed by the gateway                           |
+| API      | OpenAI-compatible                                |
 
 ## Getting started
 
@@ -37,6 +37,7 @@ configured through the MLflow UI.
 
     See the [MLflow AI Gateway documentation](https://mlflow.org/docs/latest/genai/governance/ai-gateway/endpoints/)
     for details on endpoint configuration.
+
   </Step>
   <Step title="Configure OpenClaw">
     Point the OpenAI provider's base URL to the gateway and set your gateway
@@ -48,7 +49,7 @@ configured through the MLflow UI.
         providers: {
           openai: {
             baseUrl: "http://localhost:5000/gateway/openai/v1",
-            apiKey: "",  // provider keys are managed by the gateway
+            apiKey: "<any-non-empty-value>",  // provider keys are managed by the gateway; OpenClaw requires a non-empty value here
           },
         },
       },
@@ -73,7 +74,7 @@ configured through the MLflow UI.
         providers: {
           openai: {
             baseUrl: "http://localhost:5000/gateway/openai/v1",
-            apiKey: "",
+            apiKey: "<any-non-empty-value>",
           },
         },
       },
@@ -88,6 +89,7 @@ configured through the MLflow UI.
       },
     }
     ```
+
   </Step>
 </Steps>
 
@@ -97,12 +99,12 @@ MLflow AI Gateway exposes **provider-specific passthrough endpoints** in
 addition to its unified API. The path you use depends on the SDK/format your
 client speaks:
 
-| Path                                    | Format                     | Used by              |
-| --------------------------------------- | -------------------------- | -------------------- |
-| `/gateway/mlflow/v1/chat/completions`   | MLflow unified (OpenAI-compatible) | Any OpenAI SDK client |
-| `/gateway/openai/v1/chat/completions`   | OpenAI passthrough         | OpenAI SDK (native)  |
-| `/gateway/anthropic/v1/messages`        | Anthropic passthrough      | Anthropic SDK        |
-| `/gateway/gemini/v1beta/models/...`     | Gemini passthrough         | Google GenAI SDK     |
+| Path                                  | Format                             | Used by               |
+| ------------------------------------- | ---------------------------------- | --------------------- |
+| `/gateway/mlflow/v1/chat/completions` | MLflow unified (OpenAI-compatible) | Any OpenAI SDK client |
+| `/gateway/openai/v1/chat/completions` | OpenAI passthrough                 | OpenAI SDK (native)   |
+| `/gateway/anthropic/v1/messages`      | Anthropic passthrough              | Anthropic SDK         |
+| `/gateway/gemini/v1beta/models/...`   | Gemini passthrough                 | Google GenAI SDK      |
 
 Since OpenClaw uses the OpenAI provider format, either
 `/gateway/openai/v1` or `/gateway/mlflow/v1` works — use
