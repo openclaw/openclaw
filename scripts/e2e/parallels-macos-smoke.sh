@@ -1561,7 +1561,7 @@ print(
             os.environ["DISCORD_GUILD_ID"]: {
                 "channels": {
                     os.environ["DISCORD_CHANNEL_ID"]: {
-                        "allow": True,
+                        "enabled": True,
                         "requireMention": False,
                     }
                 }
@@ -1617,14 +1617,23 @@ PY
 
 wait_for_discord_host_visibility() {
   local nonce="$1"
+  local message_id="${2:-}"
   local response
   local deadline=$((SECONDS + TIMEOUT_DISCORD_S))
   while (( SECONDS < deadline )); do
     set +e
+    if [[ -n "$message_id" ]]; then
+      response="$(discord_api_request GET "/channels/$DISCORD_CHANNEL_ID/messages/$message_id")"
+      local direct_rc=$?
+      if [[ $direct_rc -eq 0 ]] && [[ -n "$response" ]] && { [[ "$response" == *"$nonce"* ]] || printf '%s' "$response" | json_contains_string "$nonce"; }; then
+        set -e
+        return 0
+      fi
+    fi
     response="$(discord_api_request GET "/channels/$DISCORD_CHANNEL_ID/messages?limit=20")"
     local rc=$?
     set -e
-    if [[ $rc -eq 0 ]] && [[ -n "$response" ]] && printf '%s' "$response" | json_contains_string "$nonce"; then
+    if [[ $rc -eq 0 ]] && [[ -n "$response" ]] && { [[ "$response" == *"$nonce"* ]] || printf '%s' "$response" | json_contains_string "$nonce"; }; then
       return 0
     fi
     sleep 2
@@ -1687,7 +1696,7 @@ wait_for_guest_discord_readback() {
     if [[ -n "$response" ]]; then
       printf '%s' "$response" >"$last_response_path"
     fi
-    if [[ $rc -eq 0 ]] && [[ -n "$response" ]] && printf '%s' "$response" | json_contains_string "$nonce"; then
+    if [[ $rc -eq 0 ]] && [[ -n "$response" ]] && { [[ "$response" == *"$nonce"* ]] || printf '%s' "$response" | json_contains_string "$nonce"; }; then
       return 0
     fi
     sleep 3
@@ -1697,7 +1706,7 @@ wait_for_guest_discord_readback() {
 
 run_discord_roundtrip_smoke() {
   local phase="$1"
-  local nonce outbound_nonce inbound_nonce outbound_message outbound_log sent_id_file host_id_file
+  local nonce outbound_nonce inbound_nonce outbound_message outbound_log sent_id_file host_id_file sent_message_id
   nonce="$(date +%s)-$RANDOM"
   outbound_nonce="$phase-out-$nonce"
   inbound_nonce="$phase-in-$nonce"
@@ -1706,6 +1715,7 @@ run_discord_roundtrip_smoke() {
   sent_id_file="$RUN_DIR/$phase.discord-sent-message-id"
   host_id_file="$RUN_DIR/$phase.discord-host-message-id"
 
+  printf 'discord: guest-send\n'
   guest_current_user_exec \
     "$GUEST_OPENCLAW_BIN" \
     message send \
@@ -1715,9 +1725,13 @@ run_discord_roundtrip_smoke() {
     --silent \
     --json >"$outbound_log"
 
-  discord_message_id_from_send_log "$outbound_log" >"$sent_id_file"
-  wait_for_discord_host_visibility "$outbound_nonce"
+  sent_message_id="$(discord_message_id_from_send_log "$outbound_log")"
+  printf '%s\n' "$sent_message_id" >"$sent_id_file"
+  printf 'discord: host-visibility %s\n' "$sent_message_id"
+  wait_for_discord_host_visibility "$outbound_nonce" "$sent_message_id"
+  printf 'discord: host-reply\n'
   post_host_discord_message "$inbound_nonce" "$host_id_file"
+  printf 'discord: guest-readback\n'
   wait_for_guest_discord_readback "$inbound_nonce"
 }
 

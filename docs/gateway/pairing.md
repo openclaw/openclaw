@@ -131,9 +131,10 @@ auto-approval — they stay as explicit re-approval requests.
 ## QR pairing helpers
 
 `/pair qr` renders the pairing payload as structured media so mobile and
-browser clients can scan it directly. Device deletion now also sweeps stale
-pending pairing requests for the same device id, so `nodes pending` no longer
-shows orphaned rows after a revoke.
+browser clients can scan it directly.
+
+Deleting a device also sweeps any stale pending pairing requests for that
+device id, so `nodes pending` does not show orphaned rows after a revoke.
 
 ## Locality and forwarded headers
 

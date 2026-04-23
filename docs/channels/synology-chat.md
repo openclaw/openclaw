@@ -89,13 +89,7 @@ For the default account, you can use env vars:
 
 Config values override env vars.
 
-<Note>
-`SYNOLOGY_CHAT_INCOMING_URL` is on the endpoint-block list and cannot be set
-from a workspace `.env` file. It must come from shell environment or the
-gateway process environment so that untrusted workspaces cannot redirect
-Synology Chat traffic to a different webhook. See
-[Workspace `.env` files](/gateway/security) for the full list.
-</Note>
+`SYNOLOGY_CHAT_INCOMING_URL` cannot be set from a workspace `.env`; see [Workspace `.env` files](/gateway/security).
 
 ## DM policy and access control
 

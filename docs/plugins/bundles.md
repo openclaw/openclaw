@@ -261,10 +261,6 @@ dual-format packages from being partially installed as bundles.
   plugins; the release pipeline is responsible for shipping a complete bundled
   dependency payload (see the postpublish verification rule in
   [Releasing](/reference/RELEASING)).
-- Sub-agent runs that launch bundled MCP servers dispose those MCP clients
-  through the shared runtime-cleanup path when the sub-agent exits, so
-  sub-agent lifecycles do not leak stdio child processes or long-lived MCP
-  connections across turns.
 
 ## Security
 

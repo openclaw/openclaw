@@ -53,7 +53,7 @@ function resolvePluginManifest(
   return manifest.ok ? manifest : null;
 }
 
-function resolveTrustedPinnedNpmSpec(params: {
+function resolveTrustedNpmSpec(params: {
   origin: PluginOrigin;
   install?: PluginPackageInstall;
 }): string | undefined {
@@ -61,12 +61,11 @@ function resolveTrustedPinnedNpmSpec(params: {
     return undefined;
   }
   const npmSpec = params.install?.npmSpec?.trim();
-  const expectedIntegrity = params.install?.expectedIntegrity?.trim();
-  if (!npmSpec || !expectedIntegrity) {
+  if (!npmSpec) {
     return undefined;
   }
   const parsed = parseRegistryNpmSpec(npmSpec);
-  return parsed?.selectorKind === "exact-version" ? npmSpec : undefined;
+  return parsed ? npmSpec : undefined;
 }
 
 function resolveInstallInfo(params: {
@@ -75,7 +74,7 @@ function resolveInstallInfo(params: {
   packageDir?: string;
   workspaceDir?: string;
 }): PluginPackageInstall | null {
-  const npmSpec = resolveTrustedPinnedNpmSpec({
+  const npmSpec = resolveTrustedNpmSpec({
     origin: params.origin,
     install: params.install,
   });

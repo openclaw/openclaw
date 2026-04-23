@@ -68,12 +68,7 @@ openclaw plugins install <plugin> --marketplace https://github.com/<owner>/<repo
 Bare package names are checked against ClawHub first, then npm. Security note:
 treat plugin installs like running code. Prefer pinned versions.
 
-If your `plugins` section is backed by a single-file `$include`, `plugins install`,
-`plugins update`, `plugins enable`, `plugins disable`, and `plugins uninstall`
-write through to that included file and leave `openclaw.json` untouched. Root
-includes, include arrays, and includes with sibling overrides fail closed
-instead of flattening. See [Config includes](/gateway/configuration) for the
-supported shapes.
+If your `plugins` section is backed by a single-file `$include`, `plugins install/update/enable/disable/uninstall` write through to that included file and leave `openclaw.json` untouched. Root includes, include arrays, and includes with sibling overrides fail closed instead of flattening. See [Config includes](/gateway/configuration) for the supported shapes.
 
 If config is invalid, `plugins install` normally fails closed and tells you to
 run `openclaw doctor --fix` first. The only documented exception is a narrow

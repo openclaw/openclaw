@@ -1111,7 +1111,10 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: needs.preflight.outputs.run_checks_node_core_nondist == 'true'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    # Keep core shards on GitHub-hosted runners. The Blacksmith pool is already
+    # occupied by build and extension shards; queueing these shards there hides
+    # actual test-speed improvements behind runner wait time.
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -1180,6 +1183,7 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=6144
           OPENCLAW_NODE_TEST_CONFIGS_JSON: ${{ toJson(matrix.configs) }}
           OPENCLAW_NODE_TEST_INCLUDE_PATTERNS_JSON: ${{ toJson(matrix.includePatterns) }}
+          OPENCLAW_TEST_PROJECTS_PARALLEL: "2"
         shell: bash
         run: |
           set -euo pipefail
@@ -1187,7 +1191,6 @@ jobs:
           import { spawnSync } from "node:child_process";
           import { writeFileSync } from "node:fs";
           import { join } from "node:path";
-          import { resolveVitestCliEntry, resolveVitestNodeArgs } from "./scripts/run-vitest.mjs";
 
           const configs = JSON.parse(process.env.OPENCLAW_NODE_TEST_CONFIGS_JSON ?? "[]");
           if (!Array.isArray(configs) || configs.length === 0) {
@@ -1205,27 +1208,12 @@ jobs:
             childEnv.OPENCLAW_VITEST_INCLUDE_FILE = includeFile;
           }
 
-          for (const config of configs) {
-            console.error(`[test] starting ${config}`);
-            const result = spawnSync(
-              "pnpm",
-              [
-                "exec",
-                "node",
-                ...resolveVitestNodeArgs(process.env),
-                resolveVitestCliEntry(),
-                "run",
-                "--config",
-                config,
-              ],
-              {
-                env: childEnv,
-                stdio: "inherit",
-              },
-            );
-            if ((result.status ?? 1) !== 0) {
-              process.exit(result.status ?? 1);
-            }
+          const result = spawnSync("pnpm", ["exec", "node", "scripts/test-projects.mjs", ...configs], {
+            env: childEnv,
+            stdio: "inherit",
+          });
+          if ((result.status ?? 1) !== 0) {
+            process.exit(result.status ?? 1);
           }
           EOF
 
@@ -1377,7 +1365,7 @@ jobs:
             runner: ubuntu-24.04
           - check_name: check-lint
             task: lint
-            runner: blacksmith-16vcpu-ubuntu-2404
+            runner: ubuntu-24.04
           - check_name: check-policy-guards
             task: policy-guards
             runner: ubuntu-24.04

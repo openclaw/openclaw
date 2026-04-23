@@ -39,6 +39,16 @@ When debugging real providers/models (requires real creds):
 
 - Live suite (models + gateway tool/image probes): `pnpm test:live`
 - Target one live file quietly: `pnpm test:live -- src/agents/models.profiles.live.test.ts`
+- Docker live model sweep: `pnpm test:docker:live-models`
+  - CI coverage: daily `OpenClaw Scheduled Live And E2E Checks` and manual
+    `OpenClaw Release Checks` both call the reusable live/E2E workflow with
+    `include_live_suites: true`, which includes separate Docker live model
+    matrix jobs sharded by provider.
+  - For focused CI reruns, dispatch `OpenClaw Live And E2E Checks (Reusable)`
+    with `include_live_suites: true` and `live_models_only: true`.
+  - Add new high-signal provider secrets to `scripts/ci-hydrate-live-auth.sh`
+    plus `.github/workflows/openclaw-live-and-e2e-checks-reusable.yml` and its
+    scheduled/release callers.
 - Moonshot/Kimi cost smoke: with `MOONSHOT_API_KEY` set, run
   `openclaw models list --provider moonshot --json`, then run an isolated
   `openclaw agent --local --session-id live-kimi-cost --message 'Reply exactly: KIMI_LIVE_OK' --thinking off --json`

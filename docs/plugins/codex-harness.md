@@ -29,8 +29,7 @@ aligned with the PI harness:
 - `agent_end`
 
 Bundled plugins can also register a Codex app-server extension factory to add
-async `tool_result` middleware, and mirrored Codex transcript writes route
-through `before_message_write`.
+async `tool_result` middleware.
 
 The harness is off by default. It is selected only when the `codex` plugin is
 enabled and the resolved model is a `codex/*` model, or when you explicitly

@@ -78,18 +78,12 @@ you revoke it with `openclaw devices revoke --device <id> --role <role>`. See
 
 ## Personal identity (browser-local)
 
-The Control UI supports a per-browser personal identity — a display name and
-avatar that are attached to outgoing messages for attribution in shared
-sessions. This identity lives in browser storage, is scoped to the current
-browser profile, and does not leave the gateway host unless you explicitly
-submit it with a request.
-
-- Identity is **browser-local only**. It is not synced to other devices and is
-  not part of the gateway config file.
-- Clearing site data or switching browsers resets the identity to empty; the
-  Control UI does not try to reconstruct one from server state.
-- Nothing about the personal identity is persisted server-side beyond the
-  normal transcript authorship metadata on messages you actually send.
+The Control UI supports a per-browser personal identity (display name and
+avatar) attached to outgoing messages for attribution in shared sessions. It
+lives in browser storage, is scoped to the current browser profile, and is not
+synced to other devices or persisted server-side beyond the normal transcript
+authorship metadata on messages you actually send. Clearing site data or
+switching browsers resets it to empty.
 
 ## Runtime config endpoint
 
@@ -97,9 +91,7 @@ The Control UI fetches its runtime settings from
 `/__openclaw/control-ui-config.json`. That endpoint is gated by the same
 gateway auth as the rest of the HTTP surface: unauthenticated browsers cannot
 fetch it, and a successful fetch requires either an already valid gateway
-token/password, Tailscale Serve identity, or a trusted-proxy identity. This
-keeps Control UI feature flags and endpoint metadata from leaking to
-unauthenticated scanners on shared hosts.
+token/password, Tailscale Serve identity, or a trusted-proxy identity.
 
 ## Language support
 

@@ -237,13 +237,7 @@ Default account supports:
 - `IRC_NICKSERV_PASSWORD`
 - `IRC_NICKSERV_REGISTER_EMAIL`
 
-<Note>
-`IRC_HOST` is on the endpoint-block list and cannot be set from a workspace
-`.env` file. It must come from shell environment or the gateway process
-environment so that untrusted workspaces cannot redirect IRC traffic to a
-different server. See [Workspace `.env` files](/gateway/security) for the full
-list.
-</Note>
+`IRC_HOST` cannot be set from a workspace `.env`; see [Workspace `.env` files](/gateway/security).
 
 ## Troubleshooting
 
