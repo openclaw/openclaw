@@ -221,7 +221,7 @@ describe("telegram exec approvals", () => {
     ).toBe(true);
   });
 
-  it("scopes non-telegram turn sources to the stored telegram account", () => {
+  it("does not route non-telegram turn sources through a stored telegram account", () => {
     const tmpDir = createTempDir();
     const storePath = path.join(tmpDir, "sessions.json");
     fs.writeFileSync(
@@ -260,7 +260,7 @@ describe("telegram exec approvals", () => {
         accountId: "ops",
         request,
       }),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("rejects unbound foreign-channel approvals in multi-account telegram configs", () => {

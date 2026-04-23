@@ -346,7 +346,7 @@ describe("exec approval session target", () => {
     ).toBe(false);
   });
 
-  it("falls back to the stored session binding when turn source uses another channel", () => {
+  it("does not fall back to a stored cross-channel binding when turn source uses another channel", () => {
     withTempDirSync({ prefix: "openclaw-exec-approval-session-target-" }, (tmpDir) => {
       const storePath = path.join(tmpDir, "sessions.json");
       const cfg = writeStoreFile(storePath, {
@@ -370,9 +370,9 @@ describe("exec approval session target", () => {
       });
 
       expect(resolveApprovalRequestAccountId({ cfg, request, channel: "matrix" })).toBeNull();
-      expect(resolveApprovalRequestChannelAccountId({ cfg, request, channel: "matrix" })).toBe(
-        "ops",
-      );
+      expect(
+        resolveApprovalRequestChannelAccountId({ cfg, request, channel: "matrix" }),
+      ).toBeNull();
     });
   });
 
