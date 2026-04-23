@@ -143,7 +143,6 @@ describe("loadChannels", () => {
     expect(state.channelsSnapshot).toEqual(summarySnapshot);
     expect(state.channelsError).toBe("Error: full refresh failed");
   });
-<<<<<<< HEAD
 
   it("omits default includeAccounts=true for compatibility with older gateways", async () => {
     const requestCalls: Array<Record<string, unknown>> = [];
