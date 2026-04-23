@@ -9,6 +9,8 @@ import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { FailoverError } from "./failover-error.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 import { runWithImageModelFallback, runWithModelFallback } from "./model-fallback.js";
+import { classifyEmbeddedPiRunResultForModelFallback } from "./pi-embedded-runner/result-fallback-classifier.js";
+import type { EmbeddedPiRunResult } from "./pi-embedded-runner/types.js";
 import { makeModelFallbackCfg } from "./test-helpers/model-fallback-config-fixture.js";
 
 vi.mock("../infra/file-lock.js", () => ({
@@ -518,6 +520,27 @@ describe("runWithModelFallback", () => {
     expect(result.result).toEqual({ payloads: [{ text: "ok" }] });
     expect(run).toHaveBeenCalledTimes(1);
     expect(result.attempts).toEqual([]);
+  });
+
+  it("keeps tool-executing empty GPT-5 runs out of fallback", () => {
+    const runResult: EmbeddedPiRunResult = {
+      payloads: [],
+      meta: {
+        durationMs: 1,
+        toolSummary: {
+          calls: 1,
+          tools: ["mcp_write"],
+        },
+      },
+    };
+
+    expect(
+      classifyEmbeddedPiRunResultForModelFallback({
+        provider: "openai-codex",
+        model: "gpt-5.4",
+        result: runResult,
+      }),
+    ).toBeNull();
   });
 
   it("passes original unknown errors to onError during fallback", async () => {

@@ -35,7 +35,8 @@ function hasOutboundSideEffects(result: EmbeddedPiRunResult): boolean {
     (result.messagingToolSentTexts?.length ?? 0) > 0 ||
     (result.messagingToolSentMediaUrls?.length ?? 0) > 0 ||
     (result.messagingToolSentTargets?.length ?? 0) > 0 ||
-    (result.successfulCronAdds ?? 0) > 0
+    (result.successfulCronAdds ?? 0) > 0 ||
+    (result.meta.toolSummary?.calls ?? 0) > 0
   );
 }
 
