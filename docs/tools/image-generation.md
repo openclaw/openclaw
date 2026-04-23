@@ -160,6 +160,10 @@ Edit with multiple references:
 /tool image_generate action=generate model=openai/gpt-image-2 prompt="Combine the character identity from the first image with the color palette from the second" images='["/path/to/character.png","/path/to/palette.jpg"]' size=1536x1024
 ```
 
+To route OpenAI image generation through an Azure OpenAI deployment instead
+of `api.openai.com`, see [Azure OpenAI endpoints](/providers/openai#azure-openai-endpoints)
+in the OpenAI provider docs.
+
 MiniMax image generation is available through both bundled MiniMax auth paths:
 
 - `minimax/image-01` for API-key setups
