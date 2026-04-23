@@ -262,6 +262,10 @@ export function runAgentAttempt(params: {
   );
   const bootstrapPromptWarningSignature =
     bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1];
+  const sessionPinnedAgentHarnessId =
+    params.sessionEntry?.sessionId === params.sessionId
+      ? (params.sessionEntry.agentHarnessId ?? (params.sessionHasHistory ? "pi" : undefined))
+      : undefined;
   const authProfileId =
     params.providerOverride === params.authProfileProvider
       ? params.sessionEntry?.authProfileOverride
@@ -407,6 +411,7 @@ export function runAgentAttempt(params: {
     sessionFile: params.sessionFile,
     workspaceDir: params.workspaceDir,
     config: params.cfg,
+    agentHarnessId: sessionPinnedAgentHarnessId,
     skillsSnapshot: params.skillsSnapshot,
     prompt: effectivePrompt,
     images: params.isFallbackRetry ? undefined : params.opts.images,

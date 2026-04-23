@@ -1367,6 +1367,7 @@
                       "gateway/secrets-plan-contract",
                       "gateway/trusted-proxy-auth",
                       "gateway/health",
+                      "gateway/diagnostics",
                       "gateway/heartbeat",
                       "gateway/doctor",
                       "gateway/logging",

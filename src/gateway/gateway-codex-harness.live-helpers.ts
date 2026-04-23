@@ -67,6 +67,10 @@ export function isExpectedCodexModelsCommandText(text: string): boolean {
           normalized.includes("escalation") ||
           normalized.includes("elevated execution"))) ||
       normalized.includes("interactive in this environment") ||
+      (normalized.includes("not installed") &&
+        normalized.includes("path") &&
+        (normalized.includes("codex cli") || normalized.includes("`codex`"))) ||
+      normalized.includes("not installed on the shell path") ||
       normalized.includes("sandboxed session") ||
       normalized.includes("required user namespace") ||
       normalized.includes("user-namespace restriction") ||

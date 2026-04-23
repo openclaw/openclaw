@@ -166,7 +166,7 @@ env:
 
 jobs:
   validate_selected_ref:
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     outputs:
       selected_sha: ${{ steps.validate.outputs.selected_sha }}
       trusted_reason: ${{ steps.validate.outputs.trusted_reason }}
@@ -640,7 +640,7 @@ jobs:
     name: Docker live models (${{ matrix.provider_label }})
     needs: validate_selected_ref
     if: inputs.include_live_suites
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 75
     strategy:
       fail-fast: false

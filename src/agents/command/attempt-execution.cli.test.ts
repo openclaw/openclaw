@@ -5,10 +5,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { FailoverError } from "../failover-error.js";
-import type { EmbeddedPiRunResult } from "../pi-embedded.js";
+import { runEmbeddedPiAgent, type EmbeddedPiRunResult } from "../pi-embedded.js";
 import { persistCliTurnTranscript, runAgentAttempt } from "./attempt-execution.js";
 
 const runCliAgentMock = vi.hoisted(() => vi.fn());
+const runEmbeddedPiAgentMock = vi.hoisted(() => vi.fn());
 const ORIGINAL_HOME = process.env.HOME;
 
 vi.mock("../cli-runner.js", () => ({
@@ -21,7 +22,7 @@ vi.mock("../model-selection.js", () => ({
 }));
 
 vi.mock("../pi-embedded.js", () => ({
-  runEmbeddedPiAgent: vi.fn(),
+  runEmbeddedPiAgent: runEmbeddedPiAgentMock,
 }));
 
 function makeCliResult(text: string): EmbeddedPiRunResult {
@@ -73,6 +74,7 @@ describe("CLI attempt execution", () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-attempt-"));
     storePath = path.join(tmpDir, "sessions.json");
     runCliAgentMock.mockReset();
+    runEmbeddedPiAgentMock.mockReset();
   });
 
   afterEach(async () => {
@@ -382,6 +384,105 @@ describe("CLI attempt execution", () => {
         trigger: "user",
         messageChannel: "telegram",
         messageProvider: "telegram",
+      }),
+    );
+  });
+});
+
+describe("embedded attempt harness pinning", () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-embedded-attempt-"));
+    runEmbeddedPiAgentMock.mockReset();
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("treats legacy sessions with history as PI-pinned", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "legacy-session",
+      updatedAt: Date.now(),
+    };
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      meta: { durationMs: 1 },
+    } satisfies EmbeddedPiRunResult);
+
+    await runAgentAttempt({
+      providerOverride: "openai",
+      modelOverride: "gpt-5.4",
+      cfg: {} as OpenClawConfig,
+      sessionEntry,
+      sessionId: sessionEntry.sessionId,
+      sessionKey: "agent:main:main",
+      sessionAgentId: "main",
+      sessionFile: path.join(tmpDir, "session.jsonl"),
+      workspaceDir: tmpDir,
+      body: "continue",
+      isFallbackRetry: false,
+      resolvedThinkLevel: "medium",
+      timeoutMs: 1_000,
+      runId: "run-legacy-pi-pin",
+      opts: { senderIsOwner: false } as Parameters<typeof runAgentAttempt>[0]["opts"],
+      runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
+      spawnedBy: undefined,
+      messageChannel: undefined,
+      skillsSnapshot: undefined,
+      resolvedVerboseLevel: undefined,
+      agentDir: tmpDir,
+      onAgentEvent: vi.fn(),
+      authProfileProvider: "openai",
+      sessionHasHistory: true,
+    });
+
+    expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentHarnessId: "pi",
+      }),
+    );
+  });
+
+  it("leaves a fresh unpinned session on config-selected harness resolution", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "fresh-session",
+      updatedAt: Date.now(),
+    };
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      meta: { durationMs: 1 },
+    } satisfies EmbeddedPiRunResult);
+
+    await runAgentAttempt({
+      providerOverride: "openai",
+      modelOverride: "gpt-5.4",
+      cfg: {} as OpenClawConfig,
+      sessionEntry,
+      sessionId: sessionEntry.sessionId,
+      sessionKey: "agent:main:main",
+      sessionAgentId: "main",
+      sessionFile: path.join(tmpDir, "session.jsonl"),
+      workspaceDir: tmpDir,
+      body: "start",
+      isFallbackRetry: false,
+      resolvedThinkLevel: "medium",
+      timeoutMs: 1_000,
+      runId: "run-fresh-no-pin",
+      opts: { senderIsOwner: false } as Parameters<typeof runAgentAttempt>[0]["opts"],
+      runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
+      spawnedBy: undefined,
+      messageChannel: undefined,
+      skillsSnapshot: undefined,
+      resolvedVerboseLevel: undefined,
+      agentDir: tmpDir,
+      onAgentEvent: vi.fn(),
+      authProfileProvider: "openai",
+      sessionHasHistory: false,
+    });
+
+    expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentHarnessId: undefined,
       }),
     );
   });

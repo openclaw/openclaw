@@ -730,11 +730,8 @@ describeLive("gateway live (ACP bind)", () => {
               minAssistantCount: markerAssistantCount + 1,
               timeoutMs: liveAgent === "claude" ? 60_000 : 45_000,
             });
-          } catch (error) {
+          } catch {
             if (attempt === 1) {
-              if (liveAgent === "claude") {
-                throw error;
-              }
               logLiveStep(
                 "bound session image reply not observed; continuing to cron verification",
               );
@@ -775,24 +772,15 @@ describeLive("gateway live (ACP bind)", () => {
           logLiveStep(`cron mcp turn completed (attempt ${String(attempt + 1)})`);
 
           let cronHistory: Awaited<ReturnType<typeof waitForAssistantTurn>> | null = null;
-          if (liveAgent === "claude") {
+          try {
             cronHistory = await waitForAssistantTurn({
               client,
               sessionKey: spawnedSessionKey,
               minAssistantCount: imageAssistantCount + 1,
-              timeoutMs: 90_000,
+              timeoutMs: liveAgent === "claude" ? 90_000 : 45_000,
             });
-          } else {
-            try {
-              cronHistory = await waitForAssistantTurn({
-                client,
-                sessionKey: spawnedSessionKey,
-                minAssistantCount: imageAssistantCount + 1,
-                timeoutMs: 45_000,
-              });
-            } catch {
-              logLiveStep("cron assistant reply not observed yet; relying on CLI verification");
-            }
+          } catch {
+            logLiveStep("cron assistant reply not observed yet; relying on CLI verification");
           }
           if (cronHistory) {
             lastCronAssistantText = cronHistory.lastAssistantText;

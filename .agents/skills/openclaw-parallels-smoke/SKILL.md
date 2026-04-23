@@ -45,6 +45,9 @@ Use this skill for Parallels guest workflows and smoke interpretation. Do not lo
 ## npm install then update
 
 - Preferred entrypoint: `pnpm test:parallels:npm-update`
+- For a macOS-only published release update check, use:
+  - `timeout --foreground 75m pnpm test:parallels:npm-update -- --platform macos --package-spec openclaw@<old-version> --update-target <target-version-or-tag> --json`
+    This keeps the same-guest `openclaw update --tag ...` coverage and uses the shared macOS current-user/sudo fallback without starting Windows/Linux lanes.
 - Required coverage: every release/update regression run must include both lanes:
   - fresh snapshot -> install requested package/baseline -> smoke
   - same guest baseline -> run the guest's installed `openclaw update ...` command -> smoke again
@@ -75,6 +78,7 @@ Use this skill for Parallels guest workflows and smoke interpretation. Do not lo
 ## macOS flow
 
 - Preferred entrypoint: `pnpm test:parallels:macos`
+- `parallels-macos-smoke.sh --mode fresh --target-package-spec openclaw@<version>` is an install smoke only. For published old-version -> new-version update coverage on macOS, prefer the npm-update wrapper with `--platform macos`; `parallels-macos-smoke.sh --mode upgrade --target-package-spec ...` installs the target package and does not exercise the baseline CLI's updater.
 - Default upgrade coverage on macOS should now include: fresh snapshot -> site installer pinned to the latest stable tag -> `openclaw update --channel dev` on the guest. Treat this as part of the default Tahoe regression plan, not an optional side quest.
 - `parallels-macos-smoke.sh --mode upgrade` should run that release-to-dev lane by default. Keep the older host-tgz upgrade path only when the caller explicitly passes `--target-package-spec`.
 - Because the default upgrade lane no longer needs a host tgz, skip `npm pack` + host HTTP server startup for `--mode upgrade` unless `--target-package-spec` is set. Keep the pack/server path for `fresh` and `both`.

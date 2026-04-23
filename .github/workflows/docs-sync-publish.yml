@@ -32,9 +32,19 @@ jobs:
           OPENCLAW_DOCS_SYNC_TOKEN: ${{ secrets.OPENCLAW_DOCS_SYNC_TOKEN }}
         run: |
           set -euo pipefail
-          git clone \
-            "https://x-access-token:${OPENCLAW_DOCS_SYNC_TOKEN}@github.com/openclaw/docs.git" \
-            publish
+          for attempt in 1 2 3 4 5; do
+            rm -rf publish
+            if git clone \
+              "https://x-access-token:${OPENCLAW_DOCS_SYNC_TOKEN}@github.com/openclaw/docs.git" \
+              publish; then
+              exit 0
+            fi
+            echo "Clone attempt ${attempt} failed; retrying."
+            sleep $((attempt * 2))
+          done
+
+          echo "Failed to clone publish repo after retries." >&2
+          exit 1
 
       - name: Sync docs into publish repo
         run: |
@@ -63,12 +73,11 @@ jobs:
           git add docs .openclaw-sync
           git commit -m "chore(sync): mirror docs from $GITHUB_REPOSITORY@$GITHUB_SHA"
           for attempt in 1 2 3 4 5; do
-            git fetch origin main
-            git rebase origin/main
-            if git push origin HEAD:main; then
+            if git fetch origin main && git rebase origin/main && git push origin HEAD:main; then
               exit 0
             fi
-            echo "Push attempt ${attempt} failed; retrying."
+            git rebase --abort >/dev/null 2>&1 || true
+            echo "Publish sync attempt ${attempt} failed; retrying."
             sleep $((attempt * 2))
           done
 

@@ -87,6 +87,7 @@ export type StatusArgs = {
   groupActivation?: "mention" | "always";
   resolvedThink?: ThinkLevel;
   resolvedFast?: boolean;
+  resolvedHarness?: string;
   resolvedVerbose?: VerboseLevel;
   resolvedReasoning?: ReasoningLevel;
   resolvedElevated?: ElevatedLevel;
@@ -267,6 +268,14 @@ const formatFastModeLabel = (enabled: boolean) => {
     return null;
   }
   return "Fast";
+};
+
+const formatHarnessLabel = (harnessId: string | undefined) => {
+  const normalized = normalizeOptionalLowercaseString(harnessId);
+  if (!normalized || normalized === "pi" || normalized === "auto") {
+    return null;
+  }
+  return normalized;
 };
 
 const readUsageFromSessionLog = (
@@ -744,6 +753,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     `Runner: ${runnerLabel}`,
     `Think: ${thinkLevel}`,
     formatFastModeLabel(fastMode),
+    formatHarnessLabel(args.resolvedHarness),
     textVerbosity ? `Text: ${textVerbosity}` : null,
     verboseLabel,
     traceLabel,
