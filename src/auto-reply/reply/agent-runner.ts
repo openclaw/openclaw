@@ -1437,7 +1437,6 @@ export async function runReplyAgent(params: {
           activeIsNewSession = true;
         },
       });
-    const resetSessionAfterCompactionFailure = async (_reason: string): Promise<boolean> => false;
     const resetSessionAfterRoleOrderingConflict = async (reason: string): Promise<boolean> =>
       resetSession({
         failureLabel: "role ordering conflict",
@@ -1466,7 +1465,6 @@ export async function runReplyAgent(params: {
         shouldEmitToolResult,
         shouldEmitToolOutput,
         pendingToolTasks,
-        resetSessionAfterCompactionFailure,
         resetSessionAfterRoleOrderingConflict,
         isHeartbeat,
         sessionKey,
