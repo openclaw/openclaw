@@ -111,7 +111,15 @@ const REACTION_EMOJIS = new Map<string, string>([
   ["?", "question"],
 ]);
 
-export function normalizeBlueBubblesReactionInput(emoji: string, remove?: boolean): string {
+const UNSUPPORTED_REACTION_ERROR = "UnsupportedBlueBubblesReaction";
+
+/**
+ * Strict normalizer: throws when the input does not map to a supported
+ * BlueBubbles reaction type. Use this for validator-style callers that
+ * need to detect unsupported input (e.g. config sanity checks) rather
+ * than gracefully substituting a fallback.
+ */
+export function normalizeBlueBubblesReactionInputStrict(emoji: string, remove?: boolean): string {
   const trimmed = emoji.trim();
   if (!trimmed) {
     throw new Error("BlueBubbles reaction requires an emoji or name.");
@@ -123,9 +131,36 @@ export function normalizeBlueBubblesReactionInput(emoji: string, remove?: boolea
   const aliased = REACTION_ALIASES.get(raw) ?? raw;
   const mapped = REACTION_EMOJIS.get(trimmed) ?? REACTION_EMOJIS.get(raw) ?? aliased;
   if (!REACTION_TYPES.has(mapped)) {
-    throw new Error(`Unsupported BlueBubbles reaction: ${trimmed}`);
+    const error = new Error(`Unsupported BlueBubbles reaction: ${trimmed}`);
+    error.name = UNSUPPORTED_REACTION_ERROR;
+    throw error;
   }
   return remove ? `-${mapped}` : mapped;
+}
+
+/**
+ * Lenient normalizer: when the input does not map to a supported
+ * BlueBubbles reaction type (iMessage tapback only supports
+ * love/like/dislike/laugh/emphasize/question), fall back to `love`
+ * so agents that react with a wider emoji vocabulary (e.g. 👀 to
+ * ack "seen, working on it") still produce a visible tapback instead
+ * of failing the whole reaction request.
+ *
+ * Contract errors (empty input) continue to bubble up so callers
+ * still catch misuse.
+ *
+ * Use this for model-facing paths. Callers that need to detect
+ * unsupported input should use {@link normalizeBlueBubblesReactionInputStrict}.
+ */
+export function normalizeBlueBubblesReactionInput(emoji: string, remove?: boolean): string {
+  try {
+    return normalizeBlueBubblesReactionInputStrict(emoji, remove);
+  } catch (error) {
+    if (error instanceof Error && error.name === UNSUPPORTED_REACTION_ERROR) {
+      return remove ? "-love" : "love";
+    }
+    throw error;
+  }
 }
 
 export async function sendBlueBubblesReaction(params: {

@@ -35,6 +35,8 @@ export const createTestRegistry = (channels: TestChannelRegistration[] = []): Pl
   musicGenerationProviders: [],
   webFetchProviders: [],
   webSearchProviders: [],
+  embeddedExtensionFactories: [],
+  codexAppServerExtensionFactories: [],
   memoryEmbeddingProviders: [],
   textTransforms: [],
   agentHarnesses: [],

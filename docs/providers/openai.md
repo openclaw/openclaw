@@ -16,6 +16,21 @@ OpenAI provides developer APIs for GPT models. OpenClaw supports two auth routes
 
 OpenAI explicitly supports subscription OAuth usage in external tools and workflows like OpenClaw.
 
+## OpenClaw feature coverage
+
+| OpenAI capability         | OpenClaw surface                          | Status                                                 |
+| ------------------------- | ----------------------------------------- | ------------------------------------------------------ |
+| Chat / Responses          | `openai/<model>` model provider           | Yes                                                    |
+| Codex subscription models | `openai-codex/<model>` model provider     | Yes                                                    |
+| Server-side web search    | Native OpenAI Responses tool              | Yes, when web search is enabled and no provider pinned |
+| Images                    | `image_generate`                          | Yes                                                    |
+| Videos                    | `video_generate`                          | Yes                                                    |
+| Text-to-speech            | `messages.tts.provider: "openai"` / `tts` | Yes                                                    |
+| Batch speech-to-text      | `tools.media.audio` / media understanding | Yes                                                    |
+| Streaming speech-to-text  | Voice Call `streaming.provider: "openai"` | Yes                                                    |
+| Realtime voice            | Voice Call `realtime.provider: "openai"`  | Yes                                                    |
+| Embeddings                | memory embedding provider                 | Yes                                                    |
+
 ## Getting started
 
 Choose your preferred auth method and follow the setup steps.
@@ -86,6 +101,12 @@ Choose your preferred auth method and follow the setup steps.
         ```bash
         openclaw models auth login --provider openai-codex
         ```
+
+        For headless or callback-hostile setups, add `--device-code` to sign in with a ChatGPT device-code flow instead of the localhost browser callback:
+
+        ```bash
+        openclaw models auth login --provider openai-codex --device-code
+        ```
       </Step>
       <Step title="Set the default model">
         ```bash
@@ -118,9 +139,9 @@ Choose your preferred auth method and follow the setup steps.
     }
     ```
 
-    <Tip>
-    If onboarding reuses an existing Codex CLI login, those credentials stay managed by Codex CLI. On expiry, OpenClaw re-reads the external Codex source first and writes the refreshed credential back to Codex storage.
-    </Tip>
+    <Note>
+    Onboarding no longer imports OAuth material from `~/.codex`. Sign in with browser OAuth (default) or the device-code flow above — OpenClaw manages the resulting credentials in its own agent auth store.
+    </Note>
 
     ### Context window cap
 
@@ -158,17 +179,17 @@ The bundled `openai` plugin registers image generation through the `image_genera
 
 | Capability                | Value                              |
 | ------------------------- | ---------------------------------- |
-| Default model             | `openai/gpt-image-1`               |
+| Default model             | `openai/gpt-image-2`               |
 | Max images per request    | 4                                  |
 | Edit mode                 | Enabled (up to 5 reference images) |
-| Size overrides            | Supported                          |
+| Size overrides            | Supported, including 2K/4K sizes   |
 | Aspect ratio / resolution | Not forwarded to OpenAI Images API |
 
 ```json5
 {
   agents: {
     defaults: {
-      imageGenerationModel: { primary: "openai/gpt-image-1" },
+      imageGenerationModel: { primary: "openai/gpt-image-2" },
     },
   },
 }
@@ -177,6 +198,22 @@ The bundled `openai` plugin registers image generation through the `image_genera
 <Note>
 See [Image Generation](/tools/image-generation) for shared tool parameters, provider selection, and failover behavior.
 </Note>
+
+`gpt-image-2` is the default for both OpenAI text-to-image generation and image
+editing. `gpt-image-1` remains usable as an explicit model override, but new
+OpenAI image workflows should use `openai/gpt-image-2`.
+
+Generate:
+
+```
+/tool image_generate model=openai/gpt-image-2 prompt="A polished launch poster for OpenClaw on macOS" size=3840x2160 count=1
+```
+
+Edit:
+
+```
+/tool image_generate model=openai/gpt-image-2 prompt="Preserve the object shape, change the material to translucent glass" image=/path/to/reference.png size=1024x1536
+```
 
 ## Video generation
 
@@ -204,23 +241,29 @@ The bundled `openai` plugin registers video generation through the `video_genera
 See [Video Generation](/tools/video-generation) for shared tool parameters, provider selection, and failover behavior.
 </Note>
 
-## Personality overlay
+## GPT-5 prompt contribution
 
-OpenClaw adds a small OpenAI-specific prompt overlay for `openai/*` and `openai-codex/*` runs. The overlay keeps the assistant warm, collaborative, concise, and a little more emotionally expressive without replacing the base system prompt.
+OpenClaw adds a shared GPT-5 prompt contribution for GPT-5-family runs across providers. It applies by model id, so `openai/gpt-5.4`, `openai-codex/gpt-5.4`, `openrouter/openai/gpt-5.4`, `opencode/gpt-5.4`, and other compatible GPT-5 refs receive the same overlay. Older GPT-4.x models do not.
 
-| Value                  | Effect                             |
-| ---------------------- | ---------------------------------- |
-| `"friendly"` (default) | Enable the OpenAI-specific overlay |
-| `"on"`                 | Alias for `"friendly"`             |
-| `"off"`                | Use base OpenClaw prompt only      |
+The bundled native Codex harness provider (`codex/*`) uses the same GPT-5 behavior and heartbeat overlay through Codex app-server developer instructions, so `codex/gpt-5.x` sessions keep the same follow-through and proactive heartbeat guidance even though Codex owns the rest of the harness prompt.
+
+The GPT-5 contribution adds a tagged behavior contract for persona persistence, execution safety, tool discipline, output shape, completion checks, and verification. Channel-specific reply and silent-message behavior stays in the shared OpenClaw system prompt and outbound delivery policy. The GPT-5 guidance is always enabled for matching models. The friendly interaction-style layer is separate and configurable.
+
+| Value                  | Effect                                      |
+| ---------------------- | ------------------------------------------- |
+| `"friendly"` (default) | Enable the friendly interaction-style layer |
+| `"on"`                 | Alias for `"friendly"`                      |
+| `"off"`                | Disable only the friendly style layer       |
 
 <Tabs>
   <Tab title="Config">
     ```json5
     {
-      plugins: {
-        entries: {
-          openai: { config: { personality: "friendly" } },
+      agents: {
+        defaults: {
+          promptOverlays: {
+            gpt5: { personality: "friendly" },
+          },
         },
       },
     }
@@ -228,14 +271,18 @@ OpenClaw adds a small OpenAI-specific prompt overlay for `openai/*` and `openai-
   </Tab>
   <Tab title="CLI">
     ```bash
-    openclaw config set plugins.entries.openai.config.personality off
+    openclaw config set agents.defaults.promptOverlays.gpt5.personality off
     ```
   </Tab>
 </Tabs>
 
 <Tip>
-Values are case-insensitive at runtime, so `"Off"` and `"off"` both disable the overlay.
+Values are case-insensitive at runtime, so `"Off"` and `"off"` both disable the friendly style layer.
 </Tip>
+
+<Note>
+Legacy `plugins.entries.openai.config.personality` is still read as a compatibility fallback when the shared `agents.defaults.promptOverlays.gpt5.personality` setting is not set.
+</Note>
 
 ## Voice and speech
 
@@ -273,18 +320,56 @@ Values are case-insensitive at runtime, so `"Off"` and `"off"` both disable the 
 
   </Accordion>
 
+  <Accordion title="Speech-to-text">
+    The bundled `openai` plugin registers batch speech-to-text through
+    OpenClaw's media-understanding transcription surface.
+
+    - Default model: `gpt-4o-transcribe`
+    - Endpoint: OpenAI REST `/v1/audio/transcriptions`
+    - Input path: multipart audio file upload
+    - Supported by OpenClaw wherever inbound audio transcription uses
+      `tools.media.audio`, including Discord voice-channel segments and channel
+      audio attachments
+
+    To force OpenAI for inbound audio transcription:
+
+    ```json5
+    {
+      tools: {
+        media: {
+          audio: {
+            models: [
+              {
+                type: "provider",
+                provider: "openai",
+                model: "gpt-4o-transcribe",
+              },
+            ],
+          },
+        },
+      },
+    }
+    ```
+
+    Language and prompt hints are forwarded to OpenAI when supplied by the
+    shared audio media config or per-call transcription request.
+
+  </Accordion>
+
   <Accordion title="Realtime transcription">
     The bundled `openai` plugin registers realtime transcription for the Voice Call plugin.
 
     | Setting | Config path | Default |
     |---------|------------|---------|
     | Model | `plugins.entries.voice-call.config.streaming.providers.openai.model` | `gpt-4o-transcribe` |
+    | Language | `...openai.language` | (unset) |
+    | Prompt | `...openai.prompt` | (unset) |
     | Silence duration | `...openai.silenceDurationMs` | `800` |
     | VAD threshold | `...openai.vadThreshold` | `0.5` |
     | API key | `...openai.apiKey` | Falls back to `OPENAI_API_KEY` |
 
     <Note>
-    Uses a WebSocket connection to `wss://api.openai.com/v1/realtime` with G.711 u-law audio.
+    Uses a WebSocket connection to `wss://api.openai.com/v1/realtime` with G.711 u-law (`g711_ulaw` / `audio/pcmu`) audio. This streaming provider is for Voice Call's realtime transcription path; Discord voice currently records short segments and uses the batch `tools.media.audio` transcription path instead.
     </Note>
 
   </Accordion>
@@ -307,6 +392,125 @@ Values are case-insensitive at runtime, so `"Off"` and `"off"` both disable the 
 
   </Accordion>
 </AccordionGroup>
+
+## Azure OpenAI endpoints
+
+The bundled `openai` provider can target an Azure OpenAI resource for image
+generation by overriding the base URL. On the image-generation path, OpenClaw
+detects Azure hostnames on `models.providers.openai.baseUrl` and switches to
+Azure's request shape automatically.
+
+<Note>
+Realtime voice uses a separate configuration path
+(`plugins.entries.voice-call.config.realtime.providers.openai.azureEndpoint`)
+and is not affected by `models.providers.openai.baseUrl`. See the **Realtime
+voice** accordion under [Voice and speech](#voice-and-speech) for its Azure
+settings.
+</Note>
+
+Use Azure OpenAI when:
+
+- You already have an Azure OpenAI subscription, quota, or enterprise agreement
+- You need regional data residency or compliance controls Azure provides
+- You want to keep traffic inside an existing Azure tenancy
+
+### Configuration
+
+For Azure image generation through the bundled `openai` provider, point
+`models.providers.openai.baseUrl` at your Azure resource and set `apiKey` to
+the Azure OpenAI key (not an OpenAI Platform key):
+
+```json5
+{
+  models: {
+    providers: {
+      openai: {
+        baseUrl: "https://<your-resource>.openai.azure.com",
+        apiKey: "<azure-openai-api-key>",
+      },
+    },
+  },
+}
+```
+
+OpenClaw recognizes these Azure host suffixes for the Azure image-generation
+route:
+
+- `*.openai.azure.com`
+- `*.services.ai.azure.com`
+- `*.cognitiveservices.azure.com`
+
+For image-generation requests on a recognized Azure host, OpenClaw:
+
+- Sends the `api-key` header instead of `Authorization: Bearer`
+- Uses deployment-scoped paths (`/openai/deployments/{deployment}/...`)
+- Appends `?api-version=...` to each request
+
+Other base URLs (public OpenAI, OpenAI-compatible proxies) keep the standard
+OpenAI image request shape.
+
+<Note>
+Azure routing for the `openai` provider's image-generation path requires
+OpenClaw 2026.4.22 or later. Earlier versions treat any custom
+`openai.baseUrl` like the public OpenAI endpoint and will fail against Azure
+image deployments.
+</Note>
+
+### API version
+
+Set `AZURE_OPENAI_API_VERSION` to pin a specific Azure preview or GA version
+for the Azure image-generation path:
+
+```bash
+export AZURE_OPENAI_API_VERSION="2024-12-01-preview"
+```
+
+The default is `2024-12-01-preview` when the variable is unset.
+
+### Model names are deployment names
+
+Azure OpenAI binds models to deployments. For Azure image-generation requests
+routed through the bundled `openai` provider, the `model` field in OpenClaw
+must be the **Azure deployment name** you configured in the Azure portal, not
+the public OpenAI model id.
+
+If you create a deployment called `gpt-image-2-prod` that serves `gpt-image-2`:
+
+```
+/tool image_generate model=openai/gpt-image-2-prod prompt="A clean poster" size=1024x1024 count=1
+```
+
+The same deployment-name rule applies to image-generation calls routed through
+the bundled `openai` provider.
+
+### Regional availability
+
+Azure image generation is currently available only in a subset of regions
+(for example `eastus2`, `swedencentral`, `polandcentral`, `westus3`,
+`uaenorth`). Check Microsoft's current region list before creating a
+deployment, and confirm the specific model is offered in your region.
+
+### Parameter differences
+
+Azure OpenAI and public OpenAI do not always accept the same image parameters.
+Azure may reject options that public OpenAI allows (for example certain
+`background` values on `gpt-image-2`) or expose them only on specific model
+versions. These differences come from Azure and the underlying model, not
+OpenClaw. If an Azure request fails with a validation error, check the
+parameter set supported by your specific deployment and API version in the
+Azure portal.
+
+<Note>
+Azure OpenAI uses native transport and compat behavior but does not receive
+OpenClaw's hidden attribution headers — see the **Native vs OpenAI-compatible
+routes** accordion under [Advanced configuration](#advanced-configuration).
+
+For chat or Responses traffic on Azure (beyond image generation), use the
+onboarding flow or a dedicated Azure provider config — `openai.baseUrl` alone
+does not pick up the Azure API/auth shape. A separate
+`azure-openai-responses/*` provider exists; see
+the Server-side compaction accordion below.
+</Note>
 
 ## Advanced configuration
 
@@ -512,7 +716,8 @@ Values are case-insensitive at runtime, so `"Off"` and `"off"` both disable the 
     OpenClaw treats direct OpenAI, Codex, and Azure OpenAI endpoints differently from generic OpenAI-compatible `/v1` proxies:
 
     **Native routes** (`openai/*`, `openai-codex/*`, Azure OpenAI):
-    - Keep `reasoning: { effort: "none" }` intact when reasoning is explicitly disabled
+    - Keep `reasoning: { effort: "none" }` only for models that support the OpenAI `none` effort
+    - Omit disabled reasoning for models or proxies that reject `reasoning.effort: "none"`
     - Default tool schemas to strict mode
     - Attach hidden attribution headers on verified native hosts only
     - Keep OpenAI-only request shaping (`service_tier`, `store`, reasoning-compat, prompt-cache hints)

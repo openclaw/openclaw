@@ -69,6 +69,26 @@ function labelsForSessionOptions(params: {
   return groups.flatMap((group) => group.options.map((option) => option.label));
 }
 
+function createSettings(): AppViewState["settings"] {
+  return {
+    gatewayUrl: "",
+    token: "",
+    locale: "en",
+    sessionKey: "main",
+    lastActiveSessionKey: "main",
+    theme: "claw",
+    themeMode: "dark",
+    splitRatio: 0.6,
+    navWidth: 280,
+    navCollapsed: false,
+    navGroupsCollapsed: {},
+    borderRadius: 50,
+    chatFocusMode: false,
+    chatShowThinking: false,
+    chatShowToolCalls: true,
+  };
+}
+
 /* ================================================================
  *  parseSessionKey – low-level key → type / fallback mapping
  * ================================================================ */
@@ -158,9 +178,20 @@ describe("parseSessionKey", () => {
 });
 
 describe("resolveAssistantAttachmentAuthToken", () => {
+  it("prefers the paired device token when present", () => {
+    expect(
+      resolveAssistantAttachmentAuthToken({
+        hello: { auth: { deviceToken: "device-token" } } as AppViewState["hello"],
+        settings: { token: "session-token" } as AppViewState["settings"],
+        password: "shared-password",
+      }),
+    ).toBe("device-token");
+  });
+
   it("prefers the explicit gateway token when present", () => {
     expect(
       resolveAssistantAttachmentAuthToken({
+        hello: null,
         settings: { token: "session-token" } as AppViewState["settings"],
         password: "shared-password",
       }),
@@ -170,6 +201,7 @@ describe("resolveAssistantAttachmentAuthToken", () => {
   it("falls back to the shared password when token is blank", () => {
     expect(
       resolveAssistantAttachmentAuthToken({
+        hello: null,
         settings: { token: "   " } as AppViewState["settings"],
         password: "shared-password",
       }),
@@ -179,6 +211,7 @@ describe("resolveAssistantAttachmentAuthToken", () => {
   it("returns null when neither auth secret is available", () => {
     expect(
       resolveAssistantAttachmentAuthToken({
+        hello: null,
         settings: { token: "" } as AppViewState["settings"],
         password: "   ",
       }),
@@ -461,23 +494,7 @@ describe("resolveSessionOptionGroups", () => {
 
 describe("switchChatSession", () => {
   it("refreshes the chat avatar after clearing session-scoped state", async () => {
-    const settings: AppViewState["settings"] = {
-      gatewayUrl: "",
-      token: "",
-      locale: "en",
-      sessionKey: "main",
-      lastActiveSessionKey: "main",
-      theme: "claw",
-      themeMode: "dark",
-      splitRatio: 0.6,
-      navWidth: 280,
-      navCollapsed: false,
-      navGroupsCollapsed: {},
-      borderRadius: 50,
-      chatFocusMode: false,
-      chatShowThinking: false,
-      chatShowToolCalls: true,
-    };
+    const settings = createSettings();
     const state = {
       sessionKey: "main",
       chatMessage: "draft",
@@ -538,23 +555,7 @@ describe("switchChatSession", () => {
   });
 
   it("does not force agentId=main for plain session keys", async () => {
-    const settings: AppViewState["settings"] = {
-      gatewayUrl: "",
-      token: "",
-      locale: "en",
-      sessionKey: "main",
-      lastActiveSessionKey: "main",
-      theme: "claw",
-      themeMode: "dark",
-      splitRatio: 0.6,
-      navWidth: 280,
-      navCollapsed: false,
-      navGroupsCollapsed: {},
-      borderRadius: 50,
-      chatFocusMode: false,
-      chatShowThinking: false,
-      chatShowToolCalls: true,
-    };
+    const settings = createSettings();
     const state = {
       sessionKey: "main",
       chatMessage: "",

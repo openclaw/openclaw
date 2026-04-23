@@ -1,5 +1,6 @@
 import type { AgentEmbeddedHarnessConfig } from "../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { listAgentEntries, resolveSessionAgentIds } from "../agent-scope.js";
@@ -48,8 +49,10 @@ export function selectAgentHarness(params: {
   config?: OpenClawConfig;
   agentId?: string;
   sessionKey?: string;
+  agentHarnessId?: string;
 }): AgentHarness {
-  const policy = resolveAgentHarnessPolicy(params);
+  const policy =
+    resolvePinnedAgentHarnessPolicy(params.agentHarnessId) ?? resolveAgentHarnessPolicy(params);
   // PI is intentionally not part of the plugin candidate list. It is the legacy
   // fallback path, so `fallback: "none"` can prove that only plugin harnesses run.
   const pluginHarnesses = listPluginAgentHarnesses();
@@ -108,33 +111,41 @@ export function selectAgentHarness(params: {
 export async function runAgentHarnessAttemptWithFallback(
   params: EmbeddedRunAttemptParams,
 ): Promise<EmbeddedRunAttemptResult> {
-  const policy = resolveAgentHarnessPolicy({
-    provider: params.provider,
-    modelId: params.modelId,
-    config: params.config,
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-  });
   const harness = selectAgentHarness({
     provider: params.provider,
     modelId: params.modelId,
     config: params.config,
     agentId: params.agentId,
     sessionKey: params.sessionKey,
+    agentHarnessId: params.agentHarnessId,
   });
   if (harness.id === "pi") {
-    return harness.runAttempt(params);
+    const result = await harness.runAttempt(params);
+    return { ...result, agentHarnessId: harness.id };
   }
 
   try {
-    return await harness.runAttempt(params);
+    const result = await harness.runAttempt(params);
+    return { ...result, agentHarnessId: harness.id };
   } catch (error) {
-    if (policy.runtime !== "auto" || policy.fallback === "none") {
-      throw error;
-    }
-    log.warn(`${harness.label} failed; falling back to embedded PI backend`, { error });
-    return createPiAgentHarness().runAttempt(params);
+    log.warn(`${harness.label} failed; not falling back to embedded PI backend`, {
+      harnessId: harness.id,
+      provider: params.provider,
+      modelId: params.modelId,
+      error: formatErrorMessage(error),
+    });
+    throw error;
   }
+}
+
+function resolvePinnedAgentHarnessPolicy(
+  agentHarnessId: string | undefined,
+): AgentHarnessPolicy | undefined {
+  const runtime = normalizeEmbeddedAgentRuntime(agentHarnessId);
+  if (runtime === "auto") {
+    return undefined;
+  }
+  return { runtime, fallback: "none" };
 }
 
 export async function maybeCompactAgentHarnessSession(
@@ -145,8 +156,16 @@ export async function maybeCompactAgentHarnessSession(
     modelId: params.model,
     config: params.config,
     sessionKey: params.sessionKey,
+    agentHarnessId: params.agentHarnessId,
   });
   if (!harness.compact) {
+    if (harness.id !== "pi") {
+      return {
+        ok: false,
+        compacted: false,
+        reason: `Agent harness "${harness.id}" does not support compaction.`,
+      };
+    }
     return undefined;
   }
   return harness.compact(params);

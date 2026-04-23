@@ -12,7 +12,7 @@ import {
 } from "../agents/agent-scope.js";
 import { appendCronStyleCurrentTimeLine } from "../agents/current-time.js";
 import { resolveEffectiveMessagesConfig } from "../agents/identity.js";
-import { resolveEmbeddedSessionLane } from "../agents/pi-embedded-runner.js";
+import { resolveEmbeddedSessionLane } from "../agents/pi-embedded-runner/lanes.js";
 import { DEFAULT_HEARTBEAT_FILENAME } from "../agents/workspace.js";
 import { resolveHeartbeatReplyPayload } from "../auto-reply/heartbeat-reply-payload.js";
 import {
@@ -27,7 +27,11 @@ import {
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { getChannelPlugin } from "../channels/plugins/index.js";
-import type { ChannelHeartbeatDeps } from "../channels/plugins/types.public.js";
+import type {
+  ChannelHeartbeatDeps,
+  ChannelId,
+  ChannelPlugin,
+} from "../channels/plugins/types.public.js";
 import { loadConfig } from "../config/config.js";
 import {
   canonicalizeMainSessionAlias,
@@ -44,6 +48,7 @@ import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveCronSession } from "../cron/isolated-agent/session.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { getActivePluginChannelRegistry } from "../plugins/runtime.js";
 import { getQueueSize } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
 import {
@@ -81,6 +86,7 @@ import {
   resolveHeartbeatSummaryForAgent,
   type HeartbeatSummary,
 } from "./heartbeat-summary.js";
+import { createHeartbeatTypingCallbacks } from "./heartbeat-typing.js";
 import { resolveHeartbeatVisibility } from "./heartbeat-visibility.js";
 import {
   areHeartbeatsEnabled,
@@ -119,6 +125,13 @@ let heartbeatRunnerRuntimePromise: Promise<typeof import("./heartbeat-runner.run
 function loadHeartbeatRunnerRuntime() {
   heartbeatRunnerRuntimePromise ??= import("./heartbeat-runner.runtime.js");
   return heartbeatRunnerRuntimePromise;
+}
+
+function resolveHeartbeatChannelPlugin(channel: string): ChannelPlugin | undefined {
+  const activePlugin = getActivePluginChannelRegistry()?.channels.find(
+    (entry) => entry.plugin.id === channel,
+  )?.plugin;
+  return activePlugin ?? getChannelPlugin(channel as ChannelId);
 }
 
 export { areHeartbeatsEnabled, setHeartbeatsEnabled };
@@ -212,6 +225,21 @@ function resolveHeartbeatAckMaxChars(cfg: OpenClawConfig, heartbeat?: HeartbeatC
       cfg.agents?.defaults?.heartbeat?.ackMaxChars ??
       DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
   );
+}
+
+function isHeartbeatTypingEnabled(params: { cfg: OpenClawConfig; hasChatDelivery: boolean }) {
+  if (!params.hasChatDelivery) {
+    return false;
+  }
+  const agentCfg = params.cfg.agents?.defaults;
+  const typingMode = params.cfg.session?.typingMode ?? agentCfg?.typingMode;
+  return typingMode !== "never";
+}
+
+function resolveHeartbeatTypingIntervalSeconds(cfg: OpenClawConfig) {
+  const agentCfg = cfg.agents?.defaults;
+  const configured = agentCfg?.typingIntervalSeconds ?? cfg.session?.typingIntervalSeconds;
+  return typeof configured === "number" && configured > 0 ? configured : undefined;
 }
 
 function resolveHeartbeatSession(
@@ -975,11 +1003,39 @@ export async function runHeartbeatOnce(opts: {
   const canAttemptHeartbeatOk = Boolean(
     visibility.showOk && delivery.channel !== "none" && delivery.to,
   );
+  const hasChatDelivery = Boolean(
+    delivery.channel !== "none" && delivery.to && (visibility.showAlerts || visibility.showOk),
+  );
+  const heartbeatTypingIntervalSeconds = resolveHeartbeatTypingIntervalSeconds(cfg);
+  const heartbeatChannelPlugin =
+    delivery.channel !== "none" ? resolveHeartbeatChannelPlugin(delivery.channel) : undefined;
+  const heartbeatTyping =
+    delivery.channel !== "none" &&
+    isHeartbeatTypingEnabled({
+      cfg,
+      hasChatDelivery,
+    })
+      ? createHeartbeatTypingCallbacks({
+          cfg,
+          target: {
+            channel: delivery.channel,
+            ...(delivery.to !== undefined ? { to: delivery.to } : {}),
+            ...(delivery.accountId !== undefined ? { accountId: delivery.accountId } : {}),
+            ...(delivery.threadId !== undefined ? { threadId: delivery.threadId } : {}),
+          },
+          ...(heartbeatChannelPlugin ? { plugin: heartbeatChannelPlugin } : {}),
+          ...(opts.deps ? { deps: opts.deps } : {}),
+          ...(heartbeatTypingIntervalSeconds !== undefined
+            ? { typingIntervalSeconds: heartbeatTypingIntervalSeconds }
+            : {}),
+          log,
+        })
+      : undefined;
   const maybeSendHeartbeatOk = async () => {
     if (!canAttemptHeartbeatOk || delivery.channel === "none" || !delivery.to) {
       return false;
     }
-    const heartbeatPlugin = getChannelPlugin(delivery.channel);
+    const heartbeatPlugin = resolveHeartbeatChannelPlugin(delivery.channel);
     if (heartbeatPlugin?.heartbeat?.checkReady) {
       const readiness = await heartbeatPlugin.heartbeat.checkReady({
         cfg,
@@ -1004,6 +1060,7 @@ export async function runHeartbeatOnce(opts: {
   };
 
   try {
+    await heartbeatTyping?.onReplyStart();
     const heartbeatModelOverride = normalizeOptionalString(heartbeat?.model);
     const suppressToolErrorWarnings = heartbeat?.suppressToolErrorWarnings === true;
     const timeoutOverrideSeconds =
@@ -1167,7 +1224,7 @@ export async function runHeartbeatOnce(opts: {
     }
 
     const deliveryAccountId = delivery.accountId;
-    const heartbeatPlugin = getChannelPlugin(delivery.channel);
+    const heartbeatPlugin = resolveHeartbeatChannelPlugin(delivery.channel);
     if (heartbeatPlugin?.heartbeat?.checkReady) {
       const readiness = await heartbeatPlugin.heartbeat.checkReady({
         cfg,
@@ -1252,6 +1309,8 @@ export async function runHeartbeatOnce(opts: {
     });
     log.error(`heartbeat failed: ${reason}`, { error: reason });
     return { status: "failed", reason };
+  } finally {
+    heartbeatTyping?.onCleanup?.();
   }
 }
 

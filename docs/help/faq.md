@@ -767,7 +767,7 @@ for usage/billing and raise limits as needed.
   <Accordion title="Telegram: what goes in allowFrom?">
     `channels.telegram.allowFrom` is **the human sender's Telegram user ID** (numeric). It is not the bot username.
 
-    Onboarding accepts `@username` input and resolves it to a numeric ID, but OpenClaw authorization uses numeric IDs only.
+    Setup asks for numeric user IDs only. If you already have legacy `@username` entries in config, `openclaw doctor --fix` can try to resolve them.
 
     Safer (no third-party bot):
 
@@ -1094,15 +1094,14 @@ for usage/billing and raise limits as needed.
   <Accordion title="Cron fired, but nothing was sent to the channel. Why?">
     Check the delivery mode first:
 
-    - `--no-deliver` / `delivery.mode: "none"` means no external message is expected.
+    - `--no-deliver` / `delivery.mode: "none"` means no runner fallback send is expected.
     - Missing or invalid announce target (`channel` / `to`) means the runner skipped outbound delivery.
     - Channel auth failures (`unauthorized`, `Forbidden`) mean the runner tried to deliver but credentials blocked it.
     - A silent isolated result (`NO_REPLY` / `no_reply` only) is treated as intentionally non-deliverable, so the runner also suppresses queued fallback delivery.
 
-    For isolated cron jobs, the runner owns final delivery. The agent is expected
-    to return a plain-text summary for the runner to send. `--no-deliver` keeps
-    that result internal; it does not let the agent send directly with the
-    message tool instead.
+    For isolated cron jobs, the agent can still send directly with the `message`
+    tool when a chat route is available. `--announce` only controls the runner
+    fallback path for final text that the agent did not already send.
 
     Debug:
 
@@ -1293,7 +1292,7 @@ for usage/billing and raise limits as needed.
   <Accordion title="Can I keep DMs personal but make groups public/sandboxed with one agent?">
     Yes - if your private traffic is **DMs** and your public traffic is **groups**.
 
-    Use `agents.defaults.sandbox.mode: "non-main"` so group/channel sessions (non-main keys) run in Docker, while the main DM session stays on-host. Then restrict what tools are available in sandboxed sessions via `tools.sandbox.tools`.
+    Use `agents.defaults.sandbox.mode: "non-main"` so group/channel sessions (non-main keys) run in the configured sandbox backend, while the main DM session stays on-host. Docker is the default backend if you do not choose one. Then restrict what tools are available in sandboxed sessions via `tools.sandbox.tools`.
 
     Setup walkthrough + example config: [Groups: personal DMs + public groups](/channels/groups#pattern-personal-dms-public-groups-single-agent)
 
@@ -1411,8 +1410,9 @@ for usage/billing and raise limits as needed.
     These files live in the **agent workspace**, not `~/.openclaw`.
 
     - **Workspace (per agent)**: `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`,
-      `MEMORY.md` (or legacy fallback `memory.md` when `MEMORY.md` is absent),
-      `memory/YYYY-MM-DD.md`, optional `HEARTBEAT.md`.
+      `MEMORY.md`, `memory/YYYY-MM-DD.md`, optional `HEARTBEAT.md`.
+      Lowercase root `memory.md` is legacy repair input only; `openclaw doctor --fix`
+      can merge it into `MEMORY.md` when both files exist.
     - **State dir (`~/.openclaw`)**: config, channel/provider state, auth profiles, sessions, logs,
       and shared skills (`~/.openclaw/skills`).
 
@@ -1629,10 +1629,20 @@ for usage/billing and raise limits as needed.
     `config.apply` replaces the **entire config**. If you send a partial object, everything
     else is removed.
 
+    Current OpenClaw protects many accidental clobbers:
+
+    - OpenClaw-owned config writes validate the full post-change config before writing.
+    - Invalid or destructive OpenClaw-owned writes are rejected and saved as `openclaw.json.rejected.*`.
+    - If a direct edit breaks startup or hot reload, the Gateway restores the last-known-good config and saves the rejected file as `openclaw.json.clobbered.*`.
+    - The main agent receives a boot warning after recovery so it does not blindly write the bad config again.
+
     Recover:
 
-    - Restore from backup (git or a copied `~/.openclaw/openclaw.json`).
-    - If you have no backup, re-run `openclaw doctor` and reconfigure channels/models.
+    - Check `openclaw logs --follow` for `Config auto-restored from last-known-good`, `Config write rejected:`, or `config reload restored last-known-good config`.
+    - Inspect the newest `openclaw.json.clobbered.*` or `openclaw.json.rejected.*` beside the active config.
+    - Keep the active restored config if it works, then copy only the intended keys back with `openclaw config set` or `config.patch`.
+    - Run `openclaw config validate` and `openclaw doctor`.
+    - If you have no last-known-good or rejected payload, restore from backup, or re-run `openclaw doctor` and reconfigure channels/models.
     - If this was unexpected, file a bug and include your last known config or any backup.
     - A local coding agent can often reconstruct a working config from logs or history.
 
@@ -1644,7 +1654,7 @@ for usage/billing and raise limits as needed.
     - Use `config.patch` for partial RPC edits; keep `config.apply` for full-config replacement only.
     - If you are using the owner-only `gateway` tool from an agent run, it will still reject writes to `tools.exec.ask` / `tools.exec.security` (including legacy `tools.bash.*` aliases that normalize to the same protected exec paths).
 
-    Docs: [Config](/cli/config), [Configure](/cli/configure), [Doctor](/gateway/doctor).
+    Docs: [Config](/cli/config), [Configure](/cli/configure), [Gateway troubleshooting](/gateway/troubleshooting#gateway-restored-last-known-good-config), [Doctor](/gateway/doctor).
 
   </Accordion>
 
@@ -2728,8 +2738,8 @@ Related: [/concepts/oauth](/concepts/oauth) (OAuth flows, token storage, multi-a
 
   </Accordion>
 
-  <Accordion title='Why does openclaw gateway status say "Runtime: running" but "RPC probe: failed"?'>
-    Because "running" is the **supervisor's** view (launchd/systemd/schtasks). The RPC probe is the CLI actually connecting to the gateway WebSocket and calling `status`.
+  <Accordion title='Why does openclaw gateway status say "Runtime: running" but "Connectivity probe: failed"?'>
+    Because "running" is the **supervisor's** view (launchd/systemd/schtasks). The connectivity probe is the CLI actually connecting to the gateway WebSocket.
 
     Use `openclaw gateway status` and trust these lines:
 

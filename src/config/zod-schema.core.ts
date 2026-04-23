@@ -308,6 +308,7 @@ export const ModelDefinitionSchema = z
     id: z.string().min(1),
     name: z.string().min(1),
     api: ModelApiSchema.optional(),
+    baseUrl: z.string().min(1).optional(),
     reasoning: z.boolean().optional(),
     input: z.array(z.union([z.literal("text"), z.literal("image")])).optional(),
     cost: z
@@ -316,6 +317,19 @@ export const ModelDefinitionSchema = z
         output: z.number().optional(),
         cacheRead: z.number().optional(),
         cacheWrite: z.number().optional(),
+        tieredPricing: z
+          .array(
+            z
+              .object({
+                input: z.number(),
+                output: z.number(),
+                cacheRead: z.number(),
+                cacheWrite: z.number(),
+                range: z.union([z.tuple([z.number(), z.number()]), z.tuple([z.number()])]),
+              })
+              .strict(),
+          )
+          .optional(),
       })
       .strict()
       .optional(),
@@ -533,6 +547,7 @@ export const CliBackendSchema = z
     output: z.union([z.literal("json"), z.literal("text"), z.literal("jsonl")]).optional(),
     resumeOutput: z.union([z.literal("json"), z.literal("text"), z.literal("jsonl")]).optional(),
     jsonlDialect: z.literal("claude-stream-json").optional(),
+    liveSession: z.literal("claude-stdio").optional(),
     input: z.union([z.literal("arg"), z.literal("stdin")]).optional(),
     maxPromptArgChars: z.number().int().positive().optional(),
     env: z.record(z.string(), z.string()).optional(),

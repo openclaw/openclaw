@@ -70,7 +70,7 @@ describe("install-sh smoke runner", () => {
       'HEARTBEAT_INTERVAL="${OPENCLAW_INSTALL_SMOKE_HEARTBEAT_INTERVAL:-60}"',
     );
     expect(script).toContain(
-      'INSTALL_COMMAND_TIMEOUT="${OPENCLAW_INSTALL_SMOKE_COMMAND_TIMEOUT:-300}"',
+      'INSTALL_COMMAND_TIMEOUT="${OPENCLAW_INSTALL_SMOKE_COMMAND_TIMEOUT:-900}"',
     );
     expect(script).toContain("run_with_heartbeat");
     expect(script).toContain("npm_install_global");
@@ -79,6 +79,8 @@ describe("install-sh smoke runner", () => {
     expect(script).toContain("print_install_audit");
     expect(script).toContain('install -g "$@"');
     expect(script).toContain("openclaw update --tag");
+    expect(script).toContain("parseFirstJsonObject");
+    expect(script).toContain("unterminated update JSON object");
   });
 
   it("covers plain npm global installs and npm-driven updates", () => {

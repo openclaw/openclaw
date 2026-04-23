@@ -1,5 +1,5 @@
 import { type Api, completeSimple, type Model } from "@mariozechner/pi-ai";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { loadConfig } from "../config/config.js";
 import { parseLiveCsvFilter } from "../media-generation/live-test-helpers.js";
@@ -16,6 +16,22 @@ import {
   selectHighSignalLiveItems,
   shouldExcludeProviderFromDefaultHighSignalLiveSweep,
 } from "./live-model-filter.js";
+import {
+  buildLiveModelFileProbeContext,
+  buildLiveModelFileProbeRetryContext,
+  buildLiveModelImageProbeContext,
+  extractAssistantText,
+  fileProbeTextMatches,
+  imageProbeTextMatches,
+  isLiveModelProbeEnabled,
+  LIVE_MODEL_FILE_PROBE_ENV,
+  LIVE_MODEL_FILE_PROBE_TOKEN,
+  LIVE_MODEL_IMAGE_PROBE_ENV,
+  modelSupportsImageInput,
+  shouldSkipLiveModelExtraProbes,
+  shouldSkipLiveModelFileProbe,
+  shouldSkipLiveModelImageProbe,
+} from "./live-model-turn-probes.js";
 import { createLiveTargetMatcher } from "./live-target-matcher.js";
 import { isLiveProfileKeyModeEnabled, isLiveTestEnabled } from "./live-test-helpers.js";
 import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
@@ -36,6 +52,9 @@ const LIVE_SETUP_TIMEOUT_MS = Math.max(
   1_000,
   toInt(process.env.OPENCLAW_LIVE_SETUP_TIMEOUT_MS, 45_000),
 );
+const LIVE_MODELS_JSON_TIMEOUT_MS = resolveLiveModelsJsonTimeoutMs();
+const LIVE_FILE_PROBE_ENABLED = isLiveModelProbeEnabled(process.env, LIVE_MODEL_FILE_PROBE_ENV);
+const LIVE_IMAGE_PROBE_ENABLED = isLiveModelProbeEnabled(process.env, LIVE_MODEL_IMAGE_PROBE_ENV);
 
 const describeLive = LIVE ? describe : describe.skip;
 
@@ -270,6 +289,23 @@ function toInt(value: string | undefined, fallback: number): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function resolveLiveModelsJsonTimeoutMs(
+  modelsJsonTimeoutRaw = process.env.OPENCLAW_LIVE_MODELS_JSON_TIMEOUT_MS,
+  setupTimeoutMs = LIVE_SETUP_TIMEOUT_MS,
+): number {
+  return Math.max(setupTimeoutMs, toInt(modelsJsonTimeoutRaw, 120_000));
+}
+
+describe("resolveLiveModelsJsonTimeoutMs", () => {
+  it("defaults models.json preparation to a longer setup timeout", () => {
+    expect(resolveLiveModelsJsonTimeoutMs(undefined, 45_000)).toBe(120_000);
+  });
+
+  it("never goes below the shared live setup timeout", () => {
+    expect(resolveLiveModelsJsonTimeoutMs("30000", 45_000)).toBe(45_000);
+  });
+});
+
 function resolveTestReasoning(
   model: Model<Api>,
 ): "minimal" | "low" | "medium" | "high" | "xhigh" | undefined {
@@ -414,6 +450,88 @@ async function completeOkWithRetry(params: {
   return await runOnce(256);
 }
 
+async function runExtraTurnProbes(params: {
+  model: Model<Api>;
+  apiKey: string;
+  timeoutMs: number;
+  progressLabel: string;
+}) {
+  if (shouldSkipLiveModelExtraProbes(params.model)) {
+    logProgress(`${params.progressLabel}: extra probes skipped (known empty route)`);
+    return;
+  }
+  const options = {
+    apiKey: params.apiKey,
+    reasoning: resolveTestReasoning(params.model),
+    maxTokens: 128,
+  };
+  if (LIVE_FILE_PROBE_ENABLED && !shouldSkipLiveModelFileProbe(params.model)) {
+    logProgress(`${params.progressLabel}: file-read probe`);
+    const file = await completeSimpleWithTimeout(
+      params.model,
+      buildLiveModelFileProbeContext({ systemPrompt: resolveLiveSystemPrompt(params.model) }),
+      options,
+      params.timeoutMs,
+      `${params.progressLabel}: file-read probe`,
+    );
+    if (file.stopReason === "error") {
+      throw new Error(file.errorMessage || "file-read probe returned error with no message");
+    }
+    let fileText = extractAssistantText(file);
+    if (!fileProbeTextMatches(fileText)) {
+      logProgress(`${params.progressLabel}: file-read probe retry`);
+      const retry = await completeSimpleWithTimeout(
+        params.model,
+        buildLiveModelFileProbeRetryContext({
+          systemPrompt: resolveLiveSystemPrompt(params.model),
+        }),
+        options,
+        params.timeoutMs,
+        `${params.progressLabel}: file-read probe retry`,
+      );
+      if (retry.stopReason === "error") {
+        throw new Error(
+          retry.errorMessage || "file-read probe retry returned error with no message",
+        );
+      }
+      fileText = extractAssistantText(retry);
+    }
+    if (!fileProbeTextMatches(fileText)) {
+      throw new Error(`file-read probe did not return ${LIVE_MODEL_FILE_PROBE_TOKEN}: ${fileText}`);
+    }
+  } else if (LIVE_FILE_PROBE_ENABLED) {
+    logProgress(`${params.progressLabel}: file-read probe skipped (known empty route)`);
+  }
+
+  if (!LIVE_IMAGE_PROBE_ENABLED) {
+    return;
+  }
+  if (!modelSupportsImageInput(params.model)) {
+    logProgress(`${params.progressLabel}: image probe skipped (no image input)`);
+    return;
+  }
+  if (shouldSkipLiveModelImageProbe(params.model)) {
+    logProgress(`${params.progressLabel}: image probe skipped (known empty route)`);
+    return;
+  }
+
+  logProgress(`${params.progressLabel}: image probe`);
+  const image = await completeSimpleWithTimeout(
+    params.model,
+    buildLiveModelImageProbeContext({ systemPrompt: resolveLiveSystemPrompt(params.model) }),
+    options,
+    params.timeoutMs,
+    `${params.progressLabel}: image probe`,
+  );
+  if (image.stopReason === "error") {
+    throw new Error(image.errorMessage || "image probe returned error with no message");
+  }
+  const imageText = extractAssistantText(image);
+  if (!imageProbeTextMatches(imageText)) {
+    throw new Error(`image probe did not return ok: ${imageText}`);
+  }
+}
+
 describeLive("live models (profile keys)", () => {
   it(
     "completes across selected models",
@@ -427,6 +545,7 @@ describeLive("live models (profile keys)", () => {
       await withLiveStageTimeout(
         ensureOpenClawModelsJson(cfg),
         "[live-models] prepare models.json",
+        LIVE_MODELS_JSON_TIMEOUT_MS,
       );
       if (!DIRECT_ENABLED) {
         logProgress(
@@ -669,6 +788,12 @@ describeLive("live models (profile keys)", () => {
                 .map((b) => b.text.trim())
                 .join(" ");
               expect(secondText.length).toBeGreaterThan(0);
+              await runExtraTurnProbes({
+                model,
+                apiKey,
+                timeoutMs: perModelTimeoutMs,
+                progressLabel,
+              });
               logProgress(`${progressLabel}: done`);
               break;
             }
@@ -742,6 +867,12 @@ describeLive("live models (profile keys)", () => {
               break;
             }
             expect(ok.text.length).toBeGreaterThan(0);
+            await runExtraTurnProbes({
+              model,
+              apiKey,
+              timeoutMs: perModelTimeoutMs,
+              progressLabel,
+            });
             logProgress(`${progressLabel}: done`);
             break;
           } catch (err) {

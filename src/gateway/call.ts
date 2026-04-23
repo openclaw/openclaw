@@ -92,6 +92,14 @@ const gatewayCallDeps = {
   ...defaultGatewayCallDeps,
 };
 
+async function stopGatewayClient(client: GatewayClient): Promise<void> {
+  try {
+    await client.stopAndWait({ timeoutMs: 1_000 });
+  } catch {
+    client.stop();
+  }
+}
+
 function resolveGatewayClientDisplayName(opts: CallGatewayBaseOptions): string | undefined {
   if (opts.clientDisplayName) {
     return opts.clientDisplayName;
@@ -406,7 +414,17 @@ function formatGatewayCloseError(
   const hint =
     code === 1006 ? "abnormal closure (no close frame)" : code === 1000 ? "normal closure" : "";
   const suffix = hint ? ` ${hint}` : "";
-  return `gateway closed (${code}${suffix}): ${reasonText}\n${connectionDetails.message}`;
+  let message = `gateway closed (${code}${suffix}): ${reasonText}\n${connectionDetails.message}`;
+  // Add troubleshooting hints for common issues
+  if (code === 1006) {
+    message +=
+      "\n\nPossible causes:" +
+      "\n- Gateway not yet ready to accept connections (retry after a moment)" +
+      "\n- TLS mismatch (connecting with ws:// to a wss:// gateway, or vice versa)" +
+      "\n- Gateway crashed or was terminated unexpectedly" +
+      "\nRun `openclaw doctor` for diagnostics.";
+  }
+  return message;
 }
 
 function formatGatewayTimeoutError(
@@ -510,11 +528,11 @@ async function executeGatewayRequestWithScopes<T>(params: {
             timeoutMs: opts.timeoutMs,
           });
           ignoreClose = true;
+          await stopGatewayClient(client);
           stop(undefined, result);
-          client.stop();
         } catch (err) {
           ignoreClose = true;
-          client.stop();
+          await stopGatewayClient(client);
           stop(err as Error);
         }
       },
@@ -523,15 +541,17 @@ async function executeGatewayRequestWithScopes<T>(params: {
           return;
         }
         ignoreClose = true;
-        client.stop();
-        stop(new Error(formatGatewayCloseError(code, reason, params.connectionDetails)));
+        void stopGatewayClient(client).finally(() => {
+          stop(new Error(formatGatewayCloseError(code, reason, params.connectionDetails)));
+        });
       },
     });
 
     const timer = setTimeout(() => {
       ignoreClose = true;
-      client.stop();
-      stop(new Error(formatGatewayTimeoutError(timeoutMs, params.connectionDetails)));
+      void stopGatewayClient(client).finally(() => {
+        stop(new Error(formatGatewayTimeoutError(timeoutMs, params.connectionDetails)));
+      });
     }, safeTimerTimeoutMs);
 
     client.start();

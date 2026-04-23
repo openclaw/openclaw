@@ -90,12 +90,12 @@ explicitly promotes one as public.
     | `plugin-sdk/telegram-command-config` | Telegram custom-command normalization/validation helpers with bundled-contract fallback |
     | `plugin-sdk/command-gating` | Narrow command authorization gate helpers |
     | `plugin-sdk/channel-policy` | `resolveChannelGroupRequireMention` |
-    | `plugin-sdk/channel-lifecycle` | `createAccountStatusSink` |
+    | `plugin-sdk/channel-lifecycle` | `createAccountStatusSink`, draft stream lifecycle/finalization helpers |
     | `plugin-sdk/inbound-envelope` | Shared inbound route + envelope builder helpers |
     | `plugin-sdk/inbound-reply-dispatch` | Shared inbound record-and-dispatch helpers |
     | `plugin-sdk/messaging-targets` | Target parsing/matching helpers |
     | `plugin-sdk/outbound-media` | Shared outbound media loading helpers |
-    | `plugin-sdk/outbound-runtime` | Outbound identity/send delegate helpers |
+    | `plugin-sdk/outbound-runtime` | Outbound identity, send delegate, and payload planning helpers |
     | `plugin-sdk/poll-runtime` | Narrow poll normalization helpers |
     | `plugin-sdk/thread-bindings-runtime` | Thread-binding lifecycle and adapter helpers |
     | `plugin-sdk/agent-media-payload` | Legacy agent media payload builder |
@@ -109,13 +109,13 @@ explicitly promotes one as public.
     | `plugin-sdk/allowlist-config-edit` | Allowlist config edit/read helpers |
     | `plugin-sdk/group-access` | Shared group-access decision helpers |
     | `plugin-sdk/direct-dm` | Shared direct-DM auth/guard helpers |
-    | `plugin-sdk/interactive-runtime` | Interactive reply payload normalization/reduction helpers |
+    | `plugin-sdk/interactive-runtime` | Semantic message presentation, delivery, and legacy interactive reply helpers. See [Message Presentation](/plugins/message-presentation) |
     | `plugin-sdk/channel-inbound` | Compatibility barrel for inbound debounce, mention matching, mention-policy helpers, and envelope helpers |
     | `plugin-sdk/channel-mention-gating` | Narrow mention-policy helpers without the broader inbound runtime surface |
     | `plugin-sdk/channel-location` | Channel location context and formatting helpers |
     | `plugin-sdk/channel-logging` | Channel logging helpers for inbound drops and typing/ack failures |
     | `plugin-sdk/channel-send-result` | Reply result types |
-    | `plugin-sdk/channel-actions` | `createMessageToolButtonsSchema`, `createMessageToolCardSchema` |
+    | `plugin-sdk/channel-actions` | Channel message-action helpers, plus deprecated native schema helpers kept for plugin compatibility |
     | `plugin-sdk/channel-targets` | Target parsing/matching helpers |
     | `plugin-sdk/channel-contract` | Channel contract types |
     | `plugin-sdk/channel-feedback` | Feedback/reaction wiring |
@@ -137,7 +137,7 @@ explicitly promotes one as public.
     | `plugin-sdk/provider-auth` | `createProviderApiKeyAuthMethod`, `ensureApiKeyFromOptionEnvOrPrompt`, `upsertAuthProfile`, `upsertApiKeyProfile`, `writeOAuthCredentials` |
     | `plugin-sdk/provider-model-shared` | `ProviderReplayFamily`, `buildProviderReplayFamilyHooks`, `normalizeModelCompat`, shared replay-policy builders, provider-endpoint helpers, and model-id normalization helpers such as `normalizeNativeXaiModelId` |
     | `plugin-sdk/provider-catalog-shared` | `findCatalogTemplate`, `buildSingleProviderApiKeyCatalog`, `supportsNativeStreamingUsageCompat`, `applyProviderNativeStreamingUsageCompat` |
-    | `plugin-sdk/provider-http` | Generic provider HTTP/endpoint capability helpers |
+    | `plugin-sdk/provider-http` | Generic provider HTTP/endpoint capability helpers, including audio transcription multipart form helpers |
     | `plugin-sdk/provider-web-fetch-contract` | Narrow web-fetch config/selection contract helpers such as `enablePluginInConfig` and `WebFetchProviderPlugin` |
     | `plugin-sdk/provider-web-fetch` | Web-fetch provider registration/cache helpers |
     | `plugin-sdk/provider-web-search-config-contract` | Narrow web-search config/credential helpers for providers that do not need plugin-enable wiring |
@@ -192,7 +192,7 @@ explicitly promotes one as public.
     | `plugin-sdk/process-runtime` | Process exec helpers |
     | `plugin-sdk/cli-runtime` | CLI formatting, wait, and version helpers |
     | `plugin-sdk/gateway-runtime` | Gateway client and channel-status patch helpers |
-    | `plugin-sdk/config-runtime` | Config load/write helpers |
+    | `plugin-sdk/config-runtime` | Config load/write helpers and plugin-config lookup helpers |
     | `plugin-sdk/telegram-command-config` | Telegram command-name/description normalization and duplicate/conflict checks, even when the bundled Telegram contract surface is unavailable |
     | `plugin-sdk/text-autolink-runtime` | File-reference autolink detection without the broad text-runtime barrel |
     | `plugin-sdk/approval-runtime` | Exec/plugin approval helpers, approval-capability builders, auth/profile helpers, native routing/runtime helpers |
@@ -258,7 +258,7 @@ explicitly promotes one as public.
     | `plugin-sdk/text-chunking` | Outbound text chunking helper |
     | `plugin-sdk/speech` | Speech provider types plus provider-facing directive, registry, and validation helpers |
     | `plugin-sdk/speech-core` | Shared speech provider types, registry, directive, and normalization helpers |
-    | `plugin-sdk/realtime-transcription` | Realtime transcription provider types and registry helpers |
+    | `plugin-sdk/realtime-transcription` | Realtime transcription provider types, registry helpers, and shared WebSocket session helper |
     | `plugin-sdk/realtime-voice` | Realtime voice provider types and registry helpers |
     | `plugin-sdk/image-generation` | Image generation provider types |
     | `plugin-sdk/image-generation-core` | Shared image-generation types, failover, auth, and registry helpers |
@@ -343,21 +343,30 @@ methods:
 
 ### Infrastructure
 
-| Method                                         | What it registers                       |
-| ---------------------------------------------- | --------------------------------------- |
-| `api.registerHook(events, handler, opts?)`     | Event hook                              |
-| `api.registerHttpRoute(params)`                | Gateway HTTP endpoint                   |
-| `api.registerGatewayMethod(name, handler)`     | Gateway RPC method                      |
-| `api.registerCli(registrar, opts?)`            | CLI subcommand                          |
-| `api.registerService(service)`                 | Background service                      |
-| `api.registerInteractiveHandler(registration)` | Interactive handler                     |
-| `api.registerMemoryPromptSupplement(builder)`  | Additive memory-adjacent prompt section |
-| `api.registerMemoryCorpusSupplement(adapter)`  | Additive memory search/read corpus      |
+| Method                                          | What it registers                       |
+| ----------------------------------------------- | --------------------------------------- |
+| `api.registerHook(events, handler, opts?)`      | Event hook                              |
+| `api.registerHttpRoute(params)`                 | Gateway HTTP endpoint                   |
+| `api.registerGatewayMethod(name, handler)`      | Gateway RPC method                      |
+| `api.registerCli(registrar, opts?)`             | CLI subcommand                          |
+| `api.registerService(service)`                  | Background service                      |
+| `api.registerInteractiveHandler(registration)`  | Interactive handler                     |
+| `api.registerEmbeddedExtensionFactory(factory)` | Pi embedded-runner extension factory    |
+| `api.registerMemoryPromptSupplement(builder)`   | Additive memory-adjacent prompt section |
+| `api.registerMemoryCorpusSupplement(adapter)`   | Additive memory search/read corpus      |
 
 Reserved core admin namespaces (`config.*`, `exec.approvals.*`, `wizard.*`,
 `update.*`) always stay `operator.admin`, even if a plugin tries to assign a
 narrower gateway method scope. Prefer plugin-specific prefixes for
 plugin-owned methods.
+
+Use `api.registerEmbeddedExtensionFactory(...)` when a plugin needs Pi-native
+event timing during OpenClaw embedded runs, for example async `tool_result`
+rewrites that must happen before the final tool-result message is emitted.
+This is a bundled-plugin seam today: only bundled plugins may register one, and
+they must declare `contracts.embeddedExtensionFactories: ["pi"]` in
+`openclaw.plugin.json`. Keep normal OpenClaw plugin hooks for everything that
+does not require that lower-level seam.
 
 ### CLI registration metadata
 
@@ -451,6 +460,9 @@ AI CLI backend such as `codex-cli`.
 - `reply_dispatch`: returning `{ handled: true, ... }` is terminal. Once any handler claims dispatch, lower-priority handlers and the default model dispatch path are skipped.
 - `message_sending`: returning `{ cancel: true }` is terminal. Once any handler sets it, lower-priority handlers are skipped.
 - `message_sending`: returning `{ cancel: false }` is treated as no decision (same as omitting `cancel`), not as an override.
+- `message_received`: use the typed `threadId` field when you need inbound thread/topic routing. Keep `metadata` for channel-specific extras.
+- `message_sending`: use typed `replyToId` / `threadId` routing fields before falling back to channel-specific `metadata`.
+- `gateway_start`: use `ctx.config`, `ctx.workspaceDir`, and `ctx.getCron?.()` for gateway-owned startup state instead of relying on internal `gateway:startup` hooks.
 
 ### API object fields
 

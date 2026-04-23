@@ -4,66 +4,13 @@ import {
   createHtmlEntityToolCallArgumentDecodingWrapper,
   decodeHtmlEntitiesInObject,
 } from "../../../plugin-sdk/provider-stream-shared.js";
+import { extractBalancedJsonPrefix } from "../../../shared/balanced-json.js";
 import { normalizeProviderId } from "../../model-selection.js";
 import { log } from "../logger.js";
 import { wrapStreamObjectEvents } from "./stream-wrapper.js";
 
 function isToolCallBlockType(type: unknown): boolean {
   return type === "toolCall" || type === "toolUse" || type === "functionCall";
-}
-
-type BalancedJsonPrefix = {
-  json: string;
-  startIndex: number;
-};
-
-function extractBalancedJsonPrefix(raw: string): BalancedJsonPrefix | null {
-  let start = 0;
-  while (start < raw.length) {
-    const char = raw[start];
-    if (char === "{" || char === "[") {
-      break;
-    }
-    start += 1;
-  }
-  if (start >= raw.length) {
-    return null;
-  }
-
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-  for (let i = start; i < raw.length; i += 1) {
-    const char = raw[i];
-    if (char === undefined) {
-      break;
-    }
-    if (inString) {
-      if (escaped) {
-        escaped = false;
-      } else if (char === "\\") {
-        escaped = true;
-      } else if (char === '"') {
-        inString = false;
-      }
-      continue;
-    }
-    if (char === '"') {
-      inString = true;
-      continue;
-    }
-    if (char === "{" || char === "[") {
-      depth += 1;
-      continue;
-    }
-    if (char === "}" || char === "]") {
-      depth -= 1;
-      if (depth === 0) {
-        return { json: raw.slice(start, i + 1), startIndex: start };
-      }
-    }
-  }
-  return null;
 }
 
 const MAX_TOOLCALL_REPAIR_BUFFER_CHARS = 64_000;
@@ -293,7 +240,7 @@ function wrapStreamRepairMalformedToolCallArguments(
           if (!loggedRepairIndices.has(event.contentIndex) && repair.kind === "repaired") {
             loggedRepairIndices.add(event.contentIndex);
             log.warn(
-              `repairing Kimi tool call arguments with ${repair.leadingPrefix.length} leading chars and ${repair.trailingSuffix.length} trailing chars`,
+              `repairing malformed tool call arguments with ${repair.leadingPrefix.length} leading chars and ${repair.trailingSuffix.length} trailing chars`,
             );
           }
         } else {
@@ -347,8 +294,15 @@ export function wrapStreamFnRepairMalformedToolCallArguments(baseFn: StreamFn): 
   };
 }
 
-export function shouldRepairMalformedAnthropicToolCallArguments(provider?: string): boolean {
-  return normalizeProviderId(provider ?? "") === "kimi";
+export function shouldRepairMalformedToolCallArguments(params: {
+  provider?: string;
+  modelApi?: string | null;
+}): boolean {
+  return (
+    (normalizeProviderId(params.provider ?? "") === "kimi" &&
+      params.modelApi === "anthropic-messages") ||
+    params.modelApi === "openai-completions"
+  );
 }
 
 export function wrapStreamFnDecodeXaiToolCallArguments(baseFn: StreamFn): StreamFn {

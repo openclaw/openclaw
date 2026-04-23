@@ -63,6 +63,11 @@ Notes:
 - `--raw-stream`: log raw model stream events to jsonl.
 - `--raw-stream-path <path>`: raw stream jsonl path.
 
+Startup profiling:
+
+- Set `OPENCLAW_GATEWAY_STARTUP_TRACE=1` to log phase timings during Gateway startup.
+- Run `pnpm test:startup:gateway -- --runs 5 --warmup 1` to benchmark Gateway startup. The benchmark records first process output, `/healthz`, `/readyz`, and startup trace timings.
+
 ## Query a running Gateway
 
 All query commands use WebSocket RPC.
@@ -90,6 +95,8 @@ Pass `--token` or `--password` explicitly. Missing explicit credentials is an er
 openclaw gateway health --url ws://127.0.0.1:18789
 ```
 
+The HTTP `/healthz` endpoint is a liveness probe: it returns once the server can answer HTTP. The HTTP `/readyz` endpoint is stricter and stays red while startup sidecars, channels, or configured hooks are still settling.
+
 ### `gateway usage-cost`
 
 Fetch usage-cost summaries from session logs.
@@ -104,9 +111,62 @@ Options:
 
 - `--days <days>`: number of days to include (default `30`).
 
+### `gateway stability`
+
+Fetch the recent diagnostic stability recorder from a running Gateway.
+
+```bash
+openclaw gateway stability
+openclaw gateway stability --type payload.large
+openclaw gateway stability --bundle latest
+openclaw gateway stability --bundle latest --export
+openclaw gateway stability --json
+```
+
+Options:
+
+- `--limit <limit>`: maximum number of recent events to include (default `25`, max `1000`).
+- `--type <type>`: filter by diagnostic event type, such as `payload.large` or `diagnostic.memory.pressure`.
+- `--since-seq <seq>`: include only events after a diagnostic sequence number.
+- `--bundle [path]`: read a persisted stability bundle instead of calling the running Gateway. Use `--bundle latest` (or just `--bundle`) for the newest bundle under the state directory, or pass a bundle JSON path directly.
+- `--export`: write a shareable support diagnostics zip instead of printing stability details.
+- `--output <path>`: output path for `--export`.
+
+Notes:
+
+- Records keep operational metadata: event names, counts, byte sizes, memory readings, queue/session state, channel/plugin names, and redacted session summaries. They do not keep chat text, webhook bodies, tool outputs, raw request or response bodies, tokens, cookies, secret values, hostnames, or raw session ids. Set `diagnostics.enabled: false` to disable the recorder entirely.
+- On fatal Gateway exits, shutdown timeouts, and restart startup failures, OpenClaw writes the same diagnostic snapshot to `~/.openclaw/logs/stability/openclaw-stability-*.json` when the recorder has events. Inspect the newest bundle with `openclaw gateway stability --bundle latest`; `--limit`, `--type`, and `--since-seq` also apply to bundle output.
+
+### `gateway diagnostics export`
+
+Write a local diagnostics zip that is designed to attach to bug reports.
+For the privacy model and bundle contents, see [Diagnostics Export](/gateway/diagnostics).
+
+```bash
+openclaw gateway diagnostics export
+openclaw gateway diagnostics export --output openclaw-diagnostics.zip
+openclaw gateway diagnostics export --json
+```
+
+Options:
+
+- `--output <path>`: output zip path. Defaults to a support export under the state directory.
+- `--log-lines <count>`: maximum sanitized log lines to include (default `5000`).
+- `--log-bytes <bytes>`: maximum log bytes to inspect (default `1000000`).
+- `--url <url>`: Gateway WebSocket URL for the health snapshot.
+- `--token <token>`: Gateway token for the health snapshot.
+- `--password <password>`: Gateway password for the health snapshot.
+- `--timeout <ms>`: status/health snapshot timeout (default `3000`).
+- `--no-stability-bundle`: skip persisted stability bundle lookup.
+- `--json`: print the written path, size, and manifest as JSON.
+
+The export contains a manifest, a Markdown summary, config shape, sanitized config details, sanitized log summaries, sanitized Gateway status/health snapshots, and the newest stability bundle when one exists.
+
+It is meant to be shared. It keeps operational details that help debugging, such as safe OpenClaw log fields, subsystem names, status codes, durations, configured modes, ports, plugin ids, provider ids, non-secret feature settings, and redacted operational log messages. It omits or redacts chat text, webhook bodies, tool outputs, credentials, cookies, account/message identifiers, prompt/instruction text, hostnames, and secret values. When a LogTape-style message looks like user/chat/tool payload text, the export keeps only that a message was omitted plus its byte count.
+
 ### `gateway status`
 
-`gateway status` shows the Gateway service (launchd/systemd/schtasks) plus an optional RPC probe.
+`gateway status` shows the Gateway service (launchd/systemd/schtasks) plus an optional probe of connectivity/auth capability.
 
 ```bash
 openclaw gateway status
@@ -120,17 +180,18 @@ Options:
 - `--token <token>`: token auth for the probe.
 - `--password <password>`: password auth for the probe.
 - `--timeout <ms>`: probe timeout (default `10000`).
-- `--no-probe`: skip the RPC probe (service-only view).
+- `--no-probe`: skip the connectivity probe (service-only view).
 - `--deep`: scan system-level services too.
-- `--require-rpc`: exit non-zero when the RPC probe fails. Cannot be combined with `--no-probe`.
+- `--require-rpc`: upgrade the default connectivity probe to a read probe and exit non-zero when that read probe fails. Cannot be combined with `--no-probe`.
 
 Notes:
 
 - `gateway status` stays available for diagnostics even when the local CLI config is missing or invalid.
+- Default `gateway status` proves service state, WebSocket connect, and the auth capability visible at handshake time. It does not prove read/write/admin operations.
 - `gateway status` resolves configured auth SecretRefs for probe auth when possible.
 - If a required auth SecretRef is unresolved in this command path, `gateway status --json` reports `rpc.authWarning` when probe connectivity/auth fails; pass `--token`/`--password` explicitly or resolve the secret source first.
 - If the probe succeeds, unresolved auth-ref warnings are suppressed to avoid false positives.
-- Use `--require-rpc` in scripts and automation when a listening service is not enough and you need the Gateway RPC itself to be healthy.
+- Use `--require-rpc` in scripts and automation when a listening service is not enough and you need read-scope RPC calls to be healthy too.
 - `--deep` adds a best-effort scan for extra launchd/systemd/schtasks installs. When multiple gateway-like services are detected, human output prints cleanup hints and warns that most setups should run one gateway per machine.
 - Human output includes the resolved file log path plus the CLI-vs-service config paths/validity snapshot to help diagnose profile or state-dir drift.
 - On Linux systemd installs, service auth drift checks read both `Environment=` and `EnvironmentFile=` values from the unit (including `%h`, quoted paths, multiple files, and optional `-` files).
@@ -161,8 +222,9 @@ openclaw gateway probe --json
 Interpretation:
 
 - `Reachable: yes` means at least one target accepted a WebSocket connect.
-- `RPC: ok` means detail RPC calls (`health`/`status`/`system-presence`/`config.get`) also succeeded.
-- `RPC: limited - missing scope: operator.read` means connect succeeded but detail RPC is scope-limited. This is reported as **degraded** reachability, not full failure.
+- `Capability: read-only|write-capable|admin-capable|pairing-pending|connect-only` reports what the probe could prove about auth. It is separate from reachability.
+- `Read probe: ok` means read-scope detail RPC calls (`health`/`status`/`system-presence`/`config.get`) also succeeded.
+- `Read probe: limited - missing scope: operator.read` means connect succeeded but read-scope RPC is limited. This is reported as **degraded** reachability, not full failure.
 - Exit code is non-zero only when no probed target is reachable.
 
 JSON notes (`--json`):
@@ -170,6 +232,7 @@ JSON notes (`--json`):
 - Top level:
   - `ok`: at least one target is reachable.
   - `degraded`: at least one target had scope-limited detail RPC.
+  - `capability`: best capability seen across reachable targets (`read_only`, `write_capable`, `admin_capable`, `pairing_pending`, `connected_no_operator_scope`, or `unknown`).
   - `primaryTargetId`: best target to treat as the active winner in this order: explicit URL, SSH tunnel, configured remote, then local loopback.
   - `warnings[]`: best-effort warning records with `code`, `message`, and optional `targetIds`.
   - `network`: local loopback/tailnet URL hints derived from current config and host networking.
@@ -178,13 +241,17 @@ JSON notes (`--json`):
   - `ok`: reachability after connect + degraded classification.
   - `rpcOk`: full detail RPC success.
   - `scopeLimited`: detail RPC failed due to missing operator scope.
+- Per target (`targets[].auth`):
+  - `role`: auth role reported in `hello-ok` when available.
+  - `scopes`: granted scopes reported in `hello-ok` when available.
+  - `capability`: the surfaced auth capability classification for that target.
 
 Common warning codes:
 
 - `ssh_tunnel_failed`: SSH tunnel setup failed; the command fell back to direct probes.
 - `multiple_gateways`: more than one target was reachable; this is unusual unless you intentionally run isolated profiles, such as a rescue bot.
 - `auth_secretref_unresolved`: a configured auth SecretRef could not be resolved for a failed target.
-- `probe_scope_limited`: WebSocket connect succeeded, but detail RPC was limited by missing `operator.read`.
+- `probe_scope_limited`: WebSocket connect succeeded, but the read probe was limited by missing `operator.read`.
 
 #### Remote over SSH (Mac app parity)
 
