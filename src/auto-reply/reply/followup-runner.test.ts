@@ -1280,12 +1280,12 @@ describe("createFollowupRunner messaging tool dedupe", () => {
   });
 
   it("does not send cross-channel payload content to dispatcher when origin routing fails", async () => {
-    routeReplyMock.mockResolvedValueOnce({
+    routeReplyMock.mockResolvedValue({
       ok: false,
       error: "forced route failure",
     });
     const { onBlockReply } = await runMessagingCase({
-      agentResult: { payloads: [{ text: "hello world!" }] },
+      agentResult: { payloads: [{ text: "hello world!" }, { text: "second payload" }] },
       queued: {
         ...baseQueuedRun("webchat"),
         originatingChannel: "discord",
@@ -1293,7 +1293,7 @@ describe("createFollowupRunner messaging tool dedupe", () => {
       } as FollowupRun,
     });
 
-    expect(routeReplyMock).toHaveBeenCalled();
+    expect(routeReplyMock).toHaveBeenCalledTimes(2);
     expect(onBlockReply).toHaveBeenCalledTimes(1);
     expect(onBlockReply).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1303,6 +1303,9 @@ describe("createFollowupRunner messaging tool dedupe", () => {
     );
     expect(onBlockReply).not.toHaveBeenCalledWith(
       expect.objectContaining({ text: "hello world!" }),
+    );
+    expect(onBlockReply).not.toHaveBeenCalledWith(
+      expect.objectContaining({ text: "second payload" }),
     );
   });
 

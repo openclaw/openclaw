@@ -87,6 +87,7 @@ export function createFollowupRunner(params: {
       return;
     }
 
+    let crossChannelRouteFailureNoticeSent = false;
     for (const payload of payloads) {
       if (!payload || !hasOutboundReplyContent(payload)) {
         continue;
@@ -126,7 +127,8 @@ export function createFollowupRunner(params: {
           if (opts?.onBlockReply) {
             if (origin && origin === provider) {
               await opts.onBlockReply(payload);
-            } else {
+            } else if (!crossChannelRouteFailureNoticeSent) {
+              crossChannelRouteFailureNoticeSent = true;
               await opts.onBlockReply({
                 text:
                   "Follow-up completed, but OpenClaw could not deliver it to the originating " +
