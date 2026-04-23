@@ -5,6 +5,8 @@ const mocks = vi.hoisted(() => ({
   resolveOutboundTarget: vi.fn(),
   deliverOutboundPayloads: vi.fn(),
   resolveRuntimePluginRegistry: vi.fn(),
+  callGatewayLeastPrivilege: vi.fn(),
+  randomIdempotencyKey: vi.fn(() => "idem-gateway"),
 }));
 
 vi.mock("../../channels/plugins/index.js", () => ({
@@ -45,6 +47,11 @@ vi.mock("./deliver.js", () => ({
   deliverOutboundPayloads: mocks.deliverOutboundPayloads,
 }));
 
+vi.mock("./message.gateway.runtime.js", () => ({
+  callGatewayLeastPrivilege: mocks.callGatewayLeastPrivilege,
+  randomIdempotencyKey: mocks.randomIdempotencyKey,
+}));
+
 vi.mock("../../utils/message-channel.js", async () => {
   const actual = await vi.importActual<typeof import("../../utils/message-channel.js")>(
     "../../utils/message-channel.js",
@@ -79,6 +86,8 @@ describe("sendMessage", () => {
     mocks.resolveOutboundTarget.mockClear();
     mocks.deliverOutboundPayloads.mockClear();
     mocks.resolveRuntimePluginRegistry.mockClear();
+    mocks.callGatewayLeastPrivilege.mockClear();
+    mocks.randomIdempotencyKey.mockClear();
 
     mocks.getChannelPlugin.mockReturnValue({
       outbound: { deliveryMode: "direct" },
@@ -199,6 +208,78 @@ describe("sendMessage", () => {
           sessionKey: "agent:main:forum:dm:123456",
           text: "hi",
           idempotencyKey: "idem-send-1",
+        }),
+      }),
+    );
+  });
+
+  it("forwards Hermes arbiter metadata through gateway send mode", async () => {
+    mocks.getChannelPlugin.mockReturnValue({
+      outbound: { deliveryMode: "gateway" },
+    });
+    mocks.callGatewayLeastPrivilege.mockResolvedValue({ messageId: "gw-1" });
+
+    await sendMessage({
+      cfg: {},
+      channel: "forum",
+      to: "123456",
+      content: "hi",
+      hermesArbiter: {
+        arbiter_topic: "dev-iox",
+        arbiter_bot_name: "AHC_A8_bot",
+        arbiter_trace_id: "openclaw:1745365200123:a1b2c",
+        arbiter_action: {
+          type: "message",
+          payload: "hi",
+        },
+      },
+    });
+
+    expect(mocks.callGatewayLeastPrivilege).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "send",
+        params: expect.objectContaining({
+          metadata: expect.objectContaining({
+            arbiter_topic: "dev-iox",
+            arbiter_bot_name: "AHC_A8_bot",
+            arbiter_trace_id: "openclaw:1745365200123:a1b2c",
+            arbiter_action: expect.objectContaining({
+              type: "message",
+              payload: "hi",
+            }),
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("forwards Hermes arbiter metadata through direct delivery mode", async () => {
+    await sendMessage({
+      cfg: {},
+      channel: "forum",
+      to: "123456",
+      content: "hi",
+      hermesArbiter: {
+        arbiter_topic: "dev-iox",
+        arbiter_bot_name: "AHC_A8_bot",
+        arbiter_trace_id: "openclaw:1745365200123:a1b2c",
+        arbiter_action: {
+          type: "status",
+          payload: "hi",
+        },
+      },
+    });
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          arbiter_topic: "dev-iox",
+          arbiter_bot_name: "AHC_A8_bot",
+          arbiter_trace_id: "openclaw:1745365200123:a1b2c",
+          arbiter_action: expect.objectContaining({
+            type: "status",
+            payload: "hi",
+          }),
         }),
       }),
     );

@@ -31,6 +31,8 @@ export type QueuedDeliveryPayload = {
   session?: OutboundSessionContext;
   /** Gateway caller scopes at enqueue time, preserved for recovery replay. */
   gatewayClientScopes?: readonly string[];
+  /** Opaque outbound metadata preserved for recovery replay. */
+  metadata?: Record<string, unknown>;
 };
 
 export interface QueuedDelivery extends QueuedDeliveryPayload {
@@ -149,6 +151,7 @@ export async function enqueueDelivery(
     mirror: params.mirror,
     session: params.session,
     gatewayClientScopes: params.gatewayClientScopes,
+    metadata: params.metadata,
     retryCount: 0,
   });
   return id;

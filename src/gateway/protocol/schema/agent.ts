@@ -101,6 +101,7 @@ export const SendParamsSchema = Type.Object(
     threadId: Type.Optional(Type.String()),
     /** Optional session key for mirroring delivered output back into the transcript. */
     sessionKey: Type.Optional(Type.String()),
+    metadata: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
     idempotencyKey: NonEmptyString,
   },
   { additionalProperties: false },

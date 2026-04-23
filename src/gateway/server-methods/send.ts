@@ -396,6 +396,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       replyToId?: string;
       threadId?: string;
       sessionKey?: string;
+      metadata?: Record<string, unknown>;
       idempotencyKey: string;
     };
     const idem = request.idempotencyKey;
@@ -538,6 +539,7 @@ export const sendHandlers: GatewayRequestHandlers = {
           gifPlayback: request.gifPlayback,
           threadId: outboundRoute?.threadId ?? threadId ?? null,
           deps: outboundDeps,
+          metadata: request.metadata,
           gatewayClientScopes: client?.connect?.scopes ?? [],
           mirror: outboundSessionKey
             ? {

@@ -244,6 +244,50 @@ describe("gateway send mirroring", () => {
     );
   });
 
+  it("passes Hermes arbiter metadata through gateway send validation", async () => {
+    mockDeliverySuccess("m-send-meta");
+
+    const { respond } = await runSend({
+      to: "channel:C1",
+      message: "hello",
+      channel: "slack",
+      idempotencyKey: "idem-send-meta",
+      metadata: {
+        arbiter_topic: "dev-iox",
+        arbiter_bot_name: "AHC_A8_bot",
+        arbiter_trace_id: "openclaw:1745365200123:a1b2c",
+        arbiter_action: {
+          type: "message",
+          payload: "hello",
+        },
+      },
+    });
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          arbiter_topic: "dev-iox",
+          arbiter_bot_name: "AHC_A8_bot",
+          arbiter_trace_id: "openclaw:1745365200123:a1b2c",
+          arbiter_action: expect.objectContaining({
+            type: "message",
+            payload: "hello",
+          }),
+        }),
+      }),
+    );
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        messageId: "m-send-meta",
+        channel: "slack",
+        runId: "idem-send-meta",
+      }),
+      undefined,
+      expect.objectContaining({ channel: "slack" }),
+    );
+  });
+
   it("passes outbound session context for gateway media sends", async () => {
     mockDeliverySuccess("m-whatsapp-media");
 

@@ -155,6 +155,7 @@ type ChannelHandlerParams = {
   silent?: boolean;
   mediaAccess?: OutboundMediaAccess;
   gatewayClientScopes?: readonly string[];
+  metadata?: Record<string, unknown>;
 };
 
 // Channel docking: outbound delivery delegates to plugin.outbound adapters.
@@ -319,6 +320,7 @@ function createChannelOutboundContextBase(
     mediaLocalRoots: params.mediaAccess?.localRoots,
     mediaReadFile: params.mediaAccess?.readFile,
     gatewayClientScopes: params.gatewayClientScopes,
+    metadata: params.metadata,
   };
 }
 
@@ -338,6 +340,7 @@ type DeliverOutboundPayloadsCoreParams = {
   forceDocument?: boolean;
   abortSignal?: AbortSignal;
   bestEffort?: boolean;
+  metadata?: Record<string, unknown>;
   onError?: (err: unknown, payload: NormalizedOutboundPayload) => void;
   onPayload?: (payload: NormalizedOutboundPayload) => void;
   /** Session/agent context used for hooks and media local-root scoping. */
@@ -662,6 +665,7 @@ export async function deliverOutboundPayloads(
         silent: params.silent,
         mirror: params.mirror,
         session: params.session,
+        metadata: params.metadata,
         gatewayClientScopes: params.gatewayClientScopes,
       }).catch(() => null); // Best-effort — don't block delivery if queue write fails.
 
