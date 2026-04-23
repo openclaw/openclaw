@@ -237,6 +237,11 @@ export type GatewayHttpChatCompletionsConfig = {
   maxTotalImageBytes?: number;
   /** Image input controls for `image_url` parts. */
   images?: GatewayHttpChatCompletionsImagesConfig;
+  /**
+   * Runtime-only override injected by the gateway so compat HTTP requests use
+   * the active agent timeout instead of falling back to a stale process snapshot.
+   */
+  agentTimeoutSeconds?: number;
 };
 
 export type GatewayHttpChatCompletionsImagesConfig = {

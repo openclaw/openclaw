@@ -167,7 +167,11 @@ export async function resolveGatewayRuntimeConfig(params: {
     controlUiEnabled,
     openAiChatCompletionsEnabled,
     openAiChatCompletionsConfig: openAiChatCompletionsConfig
-      ? { ...openAiChatCompletionsConfig, enabled: openAiChatCompletionsEnabled }
+      ? {
+          ...openAiChatCompletionsConfig,
+          enabled: openAiChatCompletionsEnabled,
+          agentTimeoutSeconds: params.cfg.agents?.defaults?.timeoutSeconds,
+        }
       : undefined,
     openResponsesEnabled,
     openResponsesConfig: openResponsesConfig

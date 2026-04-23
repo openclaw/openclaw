@@ -119,6 +119,7 @@ function buildAgentCommandInput(params: {
   runId: string;
   messageChannel: string;
   senderIsOwner: boolean;
+  timeoutSeconds?: number;
   abortSignal?: AbortSignal;
 }) {
   return {
@@ -133,6 +134,9 @@ function buildAgentCommandInput(params: {
     bestEffortDeliver: false as const,
     senderIsOwner: params.senderIsOwner,
     allowModelOverride: true as const,
+    ...(typeof params.timeoutSeconds === "number" && Number.isFinite(params.timeoutSeconds)
+      ? { timeout: String(Math.max(0, Math.floor(params.timeoutSeconds))) }
+      : {}),
     abortSignal: params.abortSignal,
   };
 }
@@ -369,6 +373,7 @@ async function resolveImagesForRequest(
 export const __testOnlyOpenAiHttp = {
   resolveImagesForRequest,
   resolveOpenAiChatCompletionsLimits,
+  buildAgentCommandInput,
 };
 
 function buildAgentPrompt(
@@ -590,6 +595,7 @@ export async function handleOpenAiHttpRequest(
     messageChannel,
     abortSignal: abortController.signal,
     senderIsOwner,
+    timeoutSeconds: opts.config?.agentTimeoutSeconds,
   });
 
   if (!stream) {
