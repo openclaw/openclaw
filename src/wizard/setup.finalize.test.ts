@@ -43,6 +43,7 @@ const readSystemdUserLingerStatus = vi.hoisted(() =>
 const resolveSetupSecretInputString = vi.hoisted(() =>
   vi.fn<() => Promise<string | undefined>>(async () => undefined),
 );
+const restoreTerminalState = vi.hoisted(() => vi.fn());
 const resolveExistingKey = vi.hoisted(() =>
   vi.fn<(config: OpenClawConfig, provider: string) => string | undefined>(() => undefined),
 );
@@ -140,7 +141,7 @@ vi.mock("../infra/control-ui-assets.js", () => ({
 }));
 
 vi.mock("../terminal/restore.js", () => ({
-  restoreTerminalState: vi.fn(),
+  restoreTerminalState,
 }));
 
 vi.mock("../tui/tui-launch.js", () => ({
@@ -263,6 +264,7 @@ describe("finalizeSetupWizard", () => {
     readSystemdUserLingerStatus.mockResolvedValue({ user: "test-user", linger: "yes" });
     resolveSetupSecretInputString.mockReset();
     resolveSetupSecretInputString.mockResolvedValue(undefined);
+    restoreTerminalState.mockReset();
     resolveExistingKey.mockReset();
     resolveExistingKey.mockReturnValue(undefined);
     hasExistingKey.mockReset();
@@ -534,6 +536,107 @@ describe("finalizeSetupWizard", () => {
         "Web search is enabled, so your agent can look things up online when needed.",
       ),
       "Web search",
+    );
+  });
+
+  it("restores terminal state after failed TUI hatch", async () => {
+    launchTuiCli.mockRejectedValueOnce(new Error("TUI exited with code 1"));
+    const select = vi.fn(async (params: { message: string }) => {
+      if (params.message === "How do you want to hatch your bot?") {
+        return "tui";
+      }
+      return "later";
+    });
+    const prompter = buildWizardPrompter({
+      select: select as never,
+      confirm: vi.fn(async () => false),
+    });
+
+    await expect(
+      finalizeSetupWizard({
+        flow: "quickstart",
+        opts: {
+          acceptRisk: true,
+          authChoice: "skip",
+          installDaemon: false,
+          skipHealth: true,
+          skipUi: false,
+        },
+        baseConfig: {},
+        nextConfig: {},
+        workspaceDir: "/tmp",
+        settings: {
+          port: 18789,
+          bind: "loopback",
+          authMode: "token",
+          gatewayToken: undefined,
+          tailscaleMode: "off",
+          tailscaleResetOnExit: false,
+        },
+        prompter,
+        runtime: createRuntime(),
+      }),
+    ).rejects.toThrow("TUI exited with code 1");
+
+    expect(restoreTerminalState).toHaveBeenNthCalledWith(1, "pre-setup tui", {
+      resumeStdinIfPaused: true,
+    });
+    expect(restoreTerminalState).toHaveBeenNthCalledWith(2, "post-setup tui", {
+      resumeStdinIfPaused: true,
+    });
+  });
+
+  it("keeps terminal hatch local when the gateway is unavailable", async () => {
+    probeGatewayReachable.mockResolvedValueOnce({ ok: false, detail: "offline" });
+    const select = vi.fn(async (params: { message: string }) => {
+      if (params.message === "How do you want to hatch your bot?") {
+        return "tui";
+      }
+      return "later";
+    });
+    const prompter = buildWizardPrompter({
+      select: select as never,
+      confirm: vi.fn(async () => false),
+    });
+
+    await finalizeSetupWizard({
+      flow: "quickstart",
+      opts: {
+        acceptRisk: true,
+        authChoice: "skip",
+        installDaemon: false,
+        skipHealth: false,
+        skipUi: false,
+      },
+      baseConfig: {},
+      nextConfig: {},
+      workspaceDir: "/tmp",
+      settings: {
+        port: 18789,
+        bind: "loopback",
+        authMode: "token",
+        gatewayToken: "session-token",
+        tailscaleMode: "off",
+        tailscaleResetOnExit: false,
+      },
+      prompter,
+      runtime: createRuntime(),
+    });
+
+    expect(launchTuiCli).toHaveBeenCalledWith(
+      expect.objectContaining({
+        local: true,
+        deliver: false,
+      }),
+    );
+    expect(launchTuiCli).not.toHaveBeenCalledWith(
+      expect.objectContaining({ url: expect.anything() }),
+    );
+    expect(launchTuiCli).not.toHaveBeenCalledWith(
+      expect.objectContaining({ token: expect.anything() }),
+    );
+    expect(launchTuiCli).not.toHaveBeenCalledWith(
+      expect.objectContaining({ password: expect.anything() }),
     );
   });
 
