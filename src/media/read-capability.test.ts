@@ -1,3 +1,4 @@
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import {
@@ -169,6 +170,24 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
     });
 
     expect(result.readFile).toBeTypeOf("function");
+  });
+
+  it("keeps host root-scoped reads enabled when workspaceOnly and roots are both set", () => {
+    const result = resolveAgentScopedOutboundMediaAccess({
+      cfg: {
+        tools: {
+          profile: "messaging",
+          fs: {
+            workspaceOnly: true,
+            roots: [{ path: "/packs/shared", kind: "dir", access: "ro" }],
+          },
+        },
+      } as OpenClawConfig,
+      mediaSources: ["/Users/peter/Pictures/photo.png"],
+    });
+
+    expect(result.readFile).toBeTypeOf("function");
+    expect(result.localRoots).toEqual([path.resolve("/packs/shared")]);
   });
 
   it("keeps host reads enabled for DM sender when no group context exists", () => {

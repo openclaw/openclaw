@@ -102,6 +102,16 @@ const pinnedPathHelper = vi.hoisted(() => {
         return { dev: stat.dev, ino: stat.ino };
       },
     ),
+    runPinnedUnlinkHelper: vi.fn(
+      async (params: { rootPath: string; relativeParentPath: string; basename: string }) => {
+        const parentPath = await resolvePinnedParent({
+          rootPath: params.rootPath,
+          relativeParentPath: params.relativeParentPath,
+          mkdir: false,
+        });
+        await fs.unlink(path.join(parentPath, params.basename));
+      },
+    ),
   };
 });
 
@@ -112,6 +122,7 @@ vi.mock("../infra/fs-pinned-path-helper.js", () => ({
 
 vi.mock("../infra/fs-pinned-write-helper.js", () => ({
   runPinnedWriteHelper: pinnedPathHelper.runPinnedWriteHelper,
+  runPinnedUnlinkHelper: pinnedPathHelper.runPinnedUnlinkHelper,
 }));
 import { resolveRoots } from "./pi-tools.fs-roots.js";
 
@@ -522,7 +533,7 @@ describe("applyPatch", () => {
   );
 
   it.runIf(process.platform !== "win32")(
-    "rejects deleting a symlink alias when a canonical read-only file root is stricter",
+    "allows deleting a symlink alias without mutating a canonical read-only file root",
     async () => {
       await withTempDir(async (dir) => {
         const allowedDir = await fs.mkdtemp(path.join(path.dirname(dir), "openclaw-patch-roots-"));
@@ -536,17 +547,16 @@ describe("applyPatch", () => {
 *** End Patch`;
 
         try {
-          await expect(
-            applyPatch(patch, {
-              cwd: dir,
-              workspaceOnly: false,
-              roots: resolveRoots([
-                { path: allowedDir, kind: "dir", access: "rw" },
-                { path: secretFile, kind: "file", access: "ro" },
-              ]),
-            }),
-          ).rejects.toThrow(/read-only file root/i);
-          await expect(fs.lstat(linkPath)).resolves.toBeDefined();
+          const result = await applyPatch(patch, {
+            cwd: dir,
+            workspaceOnly: false,
+            roots: resolveRoots([
+              { path: allowedDir, kind: "dir", access: "rw" },
+              { path: secretFile, kind: "file", access: "ro" },
+            ]),
+          });
+          expect(result.summary.deleted).toEqual([linkPath]);
+          await expect(fs.lstat(linkPath)).rejects.toBeDefined();
           expect(await fs.readFile(secretFile, "utf8")).toBe("keep\n");
         } finally {
           await fs.rm(allowedDir, { recursive: true, force: true });

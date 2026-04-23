@@ -12,7 +12,7 @@ describe("resolveMediaToolLocalRoots", () => {
     vi.unstubAllEnvs();
   });
 
-  it("widens default local roots to concrete media parents without widening to filesystem root", () => {
+  it("does not widen default local roots from media sources", () => {
     const stateDir = path.join("/tmp", "openclaw-media-tool-roots-state");
     const picturesDir =
       process.platform === "win32" ? "C:\\Users\\peter\\Pictures" : "/Users/peter/Pictures";
@@ -32,8 +32,8 @@ describe("resolveMediaToolLocalRoots", () => {
     );
     expect(normalizedRoots).toContain(normalizeHostPath(path.join(stateDir, "workspace-agent")));
     expect(normalizedRoots).toContain(normalizeHostPath(path.join(stateDir, "workspace")));
-    expect(normalizedRoots).toContain(normalizeHostPath(picturesDir));
-    expect(normalizedRoots).toContain(normalizeHostPath(moviesDir));
+    expect(normalizedRoots).not.toContain(normalizeHostPath(picturesDir));
+    expect(normalizedRoots).not.toContain(normalizeHostPath(moviesDir));
     expect(normalizedRoots).not.toContain(normalizeHostPath("/"));
   });
 });

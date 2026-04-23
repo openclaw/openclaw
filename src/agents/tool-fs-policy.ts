@@ -75,7 +75,9 @@ export function resolveEffectiveToolFsRootExpansionAllowed(params: {
   const profileAlsoAllow = new Set(agentTools?.alsoAllow ?? globalTools?.alsoAllow ?? []);
   const fsConfig = resolveToolFsConfig(params);
   const hasExplicitFsConfig = agentTools?.fs !== undefined || globalTools?.fs !== undefined;
-  if (fsConfig.workspaceOnly === true) {
+  // Preserve workspaceOnly for sandbox-sensitive callers, but when roots are
+  // configured they take precedence for host-scoped media reads.
+  if (fsConfig.workspaceOnly === true && fsConfig.roots === undefined) {
     return false;
   }
   if (hasExplicitFsConfig) {

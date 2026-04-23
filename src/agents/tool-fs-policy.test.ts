@@ -200,6 +200,20 @@ describe("resolveEffectiveToolFsRootExpansionAllowed", () => {
     expect(resolveEffectiveToolFsRootExpansionAllowed({ cfg, agentId: "main" })).toBe(false);
   });
 
+  it("keeps root expansion enabled when roots are configured alongside workspaceOnly", () => {
+    const cfg: OpenClawConfig = {
+      tools: {
+        profile: "messaging",
+        fs: {
+          workspaceOnly: true,
+          roots: [{ path: "/packs/shared", kind: "dir", access: "ro" }],
+        },
+      },
+    };
+
+    expect(resolveEffectiveToolFsRootExpansionAllowed({ cfg, agentId: "main" })).toBe(true);
+  });
+
   it("prefers agent profile overrides over the global profile in both directions", () => {
     const cfg: OpenClawConfig = {
       tools: { profile: "messaging" },

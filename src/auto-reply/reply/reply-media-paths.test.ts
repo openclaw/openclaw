@@ -405,10 +405,14 @@ describe("createReplyMediaPathNormalizer", () => {
       workspaceDir: "/tmp/agent-workspace",
     });
 
-    await expect(
-      normalize({
-        mediaUrls: ["/Users/peter/.openclaw/media/inbound/photo.png"],
-      }),
-    ).rejects.toThrow(/sandbox root|outside|escapes/i);
+    const result = await normalize({
+      mediaUrls: ["/Users/peter/.openclaw/media/inbound/photo.png"],
+    });
+
+    expect(result).toMatchObject({
+      mediaUrl: undefined,
+      mediaUrls: undefined,
+    });
+    expect(resolveOutboundAttachmentFromUrl).not.toHaveBeenCalled();
   });
 });
