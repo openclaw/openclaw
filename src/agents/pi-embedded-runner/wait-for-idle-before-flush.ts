@@ -9,13 +9,18 @@ type ToolResultFlushManager = {
 
 export const DEFAULT_WAIT_FOR_IDLE_TIMEOUT_MS = 30_000;
 
+type AgentIdleWaitState = {
+  timedOut: boolean;
+  resolved: boolean;
+};
+
 async function waitForAgentIdleBestEffort(
   agent: IdleAwareAgent | null | undefined,
   timeoutMs: number,
-): Promise<boolean> {
+): Promise<AgentIdleWaitState> {
   const waitForIdle = agent?.waitForIdle;
   if (typeof waitForIdle !== "function") {
-    return false;
+    return { timedOut: false, resolved: false };
   }
 
   const idleResolved = Symbol("idle");
@@ -29,10 +34,13 @@ async function waitForAgentIdleBestEffort(
         timeoutHandle.unref?.();
       }),
     ]);
-    return outcome === idleTimedOut;
+    return {
+      timedOut: outcome === idleTimedOut,
+      resolved: outcome === idleResolved,
+    };
   } catch {
     // Best-effort during cleanup.
-    return false;
+    return { timedOut: false, resolved: false };
   } finally {
     if (timeoutHandle) {
       clearTimeout(timeoutHandle);
