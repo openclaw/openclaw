@@ -19,8 +19,12 @@ export type { ToolProfileId } from "./tool-policy-shared.js";
 export type OwnerOnlyToolApprovalClass = "control_plane" | "exec_capable" | "interactive";
 
 // Keep tool-policy browser-safe: do not import tools/common at runtime.
-function wrapOwnerOnlyToolExecution(tool: AnyAgentTool, senderIsOwner: boolean): AnyAgentTool {
-  if (tool.ownerOnly !== true || senderIsOwner || !tool.execute) {
+function wrapOwnerOnlyToolExecution(
+  tool: AnyAgentTool,
+  senderIsOwner: boolean,
+  forceWrap?: boolean,
+): AnyAgentTool {
+  if (!forceWrap && (senderIsOwner || !tool.execute)) {
     return tool;
   }
   return {
@@ -61,7 +65,8 @@ export function applyOwnerOnlyToolPolicy(
     if (!isOwnerOnlyTool(tool)) {
       return tool;
     }
-    return wrapOwnerOnlyToolExecution(tool, senderIsOwner);
+    const nameIdentified = !tool.ownerOnly && isOwnerOnlyToolName(tool.name);
+    return wrapOwnerOnlyToolExecution(tool, senderIsOwner, keepOwnerTools && nameIdentified);
   });
   if (senderIsOwner || keepOwnerTools) {
     return withGuard;
