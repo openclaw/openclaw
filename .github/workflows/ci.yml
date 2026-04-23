@@ -616,7 +616,7 @@ jobs:
           fi
 
           if [ "$RUN_GATEWAY_WATCH" = "true" ]; then
-            start_check "gateway-watch" node scripts/check-gateway-watch-regression.mjs --skip-build
+            start_check "gateway-watch" node scripts/check-gateway-watch-regression.mjs --skip-build --ready-timeout-ms 5000
           fi
 
           for index in "${!pids[@]}"; do
