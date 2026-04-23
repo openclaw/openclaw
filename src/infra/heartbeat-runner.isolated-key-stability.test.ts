@@ -201,7 +201,7 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
     });
   });
 
-  it("ignores forced live-session keys for isolated heartbeats and stays on the configured base session", async () => {
+  it("uses a forced live session as the isolated heartbeat base instead of reverting to the configured base session", async () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
       const cfg = makeNamedIsolatedHeartbeatConfig(tmpDir, storePath, "main");
       const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
@@ -224,7 +224,43 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
       });
 
       expect(replySpy).toHaveBeenCalledTimes(1);
-      expect(replySpy.mock.calls[0]?.[0]?.SessionKey).toBe("agent:main:main:heartbeat");
+      expect(replySpy.mock.calls[0]?.[0]?.SessionKey).toBe("agent:main:cloud-codex:heartbeat");
+    });
+  });
+
+  it("consumes forced-session cron events from the forced base session while running on its isolated sibling", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
+      const cfg = makeNamedIsolatedHeartbeatConfig(tmpDir, storePath, "main");
+      const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+      replySpy.mockResolvedValue({ text: "Relay the forced-session cron update now" });
+
+      const liveSessionKey = "agent:main:cloud-codex";
+      await seedSessionStore(storePath, liveSessionKey, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: "telegram:170703438",
+      });
+      enqueueSystemEvent("Cron: forced live-session update", {
+        sessionKey: liveSessionKey,
+        contextKey: "cron:forced-live-session-update",
+      });
+
+      await runHeartbeatOnce({
+        cfg,
+        sessionKey: liveSessionKey,
+        reason: "cron:forced-live-session-update",
+        deps: {
+          getQueueSize: () => 0,
+          nowMs: () => Date.now(),
+        },
+      });
+
+      expect(peekSystemEventEntries(liveSessionKey)).toEqual([]);
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      expect(replySpy.mock.calls[0]?.[0]).toMatchObject({
+        SessionKey: "agent:main:cloud-codex:heartbeat",
+        Provider: "cron-event",
+      });
     });
   });
 

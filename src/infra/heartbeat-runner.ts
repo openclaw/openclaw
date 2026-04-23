@@ -572,10 +572,17 @@ async function resolveHeartbeatPreflight(params: {
     forcedSession !== undefined &&
     /:heartbeat(?:[:][Hh]eartbeat)*$/i.test(forcedSession.sessionKey) &&
     !forcedIsConfiguredIsolatedLane;
+  const forcedTargetsDistinctSession =
+    forcedSession !== undefined && forcedSession.sessionKey !== configuredSession.sessionKey;
   const session =
     params.heartbeat?.isolatedSession === true
-      ? forcedIsRealHeartbeatSession && forcedSession
-        ? forcedSession
+      ? forcedTargetsDistinctSession
+        ? {
+            ...forcedSession,
+            suppressOriginatingContext:
+              forcedSession.suppressOriginatingContext ||
+              configuredSession.suppressOriginatingContext,
+          }
         : {
             ...configuredSession,
             suppressOriginatingContext:
@@ -584,9 +591,11 @@ async function resolveHeartbeatPreflight(params: {
           }
       : (forcedSession ?? configuredSession);
   const inspectionSession =
-    (forcedIsConfiguredIsolatedLane || forcedIsRealHeartbeatSession) && forcedSession
+    params.heartbeat?.isolatedSession === true && forcedTargetsDistinctSession
       ? forcedSession
-      : session;
+      : (forcedIsConfiguredIsolatedLane || forcedIsRealHeartbeatSession) && forcedSession
+        ? forcedSession
+        : session;
   const inspectionSessionKey = inspectionSession.sessionKey;
   const inspectionSessionEntry = inspectionSession.entry;
   const isolationSourceSessionKey = inspectionSessionKey;
