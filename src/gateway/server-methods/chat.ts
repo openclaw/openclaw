@@ -14,7 +14,8 @@ import { extractCanvasFromText } from "../../chat/canvas-render.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { logLargePayload } from "../../logging/diagnostic-payload.js";
-import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
+import type { LocalMediaRoot } from "../../media/local-media-access.js";
+import { getAgentScopedMediaLocalRootEntries } from "../../media/local-roots.js";
 import { isAudioFileName } from "../../media/mime.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import { type SavedMedia, saveMediaBuffer } from "../../media/store.js";
@@ -128,7 +129,7 @@ function isMediaBearingPayload(payload: ReplyPayload): boolean {
 async function buildWebchatAssistantMediaMessage(
   payloads: ReplyPayload[],
   options?: {
-    localRoots?: readonly string[];
+    localRoots?: readonly LocalMediaRoot[];
     onLocalAudioAccessDenied?: (message: string) => void;
   },
 ): Promise<{ content: Array<Record<string, unknown>>; transcriptText: string } | null> {
@@ -2127,7 +2128,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           return;
         }
         const mediaMessage = await buildWebchatAssistantMediaMessage([payload], {
-          localRoots: getAgentScopedMediaLocalRoots(cfg, agentId),
+          localRoots: getAgentScopedMediaLocalRootEntries(cfg, agentId),
           onLocalAudioAccessDenied: (message) => {
             context.logGateway.warn(`webchat audio embedding denied local path: ${message}`);
           },
@@ -2260,7 +2261,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                 .map((entry) => entry.payload);
               const combinedReply = buildTranscriptReplyText(finalPayloads);
               const mediaMessage = await buildWebchatAssistantMediaMessage(finalPayloads, {
-                localRoots: getAgentScopedMediaLocalRoots(cfg, agentId),
+                localRoots: getAgentScopedMediaLocalRootEntries(cfg, agentId),
                 onLocalAudioAccessDenied: (message) => {
                   context.logGateway.warn(`webchat audio embedding denied local path: ${message}`);
                 },

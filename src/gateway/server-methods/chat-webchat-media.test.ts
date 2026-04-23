@@ -137,6 +137,21 @@ describe("buildWebchatAudioContentBlocksFromReplyPayloads", () => {
     expect(onLocalAudioAccessDenied).toHaveBeenCalledOnce();
   });
 
+  it("does not treat file-kind localRoots as directory prefixes", async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-webchat-audio-"));
+    const audioPath = path.join(tmpDir, "clip.mp3");
+    fs.writeFileSync(audioPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+
+    const blocks = await buildWebchatAudioContentBlocksFromReplyPayloads(
+      [{ mediaUrl: audioPath, trustedLocalMedia: true }],
+      {
+        localRoots: [{ path: tmpDir, kind: "file", access: "ro" }],
+      },
+    );
+
+    expect(blocks).toHaveLength(0);
+  });
+
   it("falls back to default localRoots when explicit roots are omitted", async () => {
     const [defaultRoot] = getDefaultLocalRoots();
     expect(defaultRoot).toBeTruthy();

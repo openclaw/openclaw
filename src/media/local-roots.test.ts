@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   appendLocalMediaParentRoots,
   buildMediaLocalRoots,
+  getAgentScopedMediaLocalRootEntries,
   getAgentScopedMediaLocalRoots,
   getAgentScopedMediaLocalRootsForSources,
   getDefaultMediaLocalRoots,
@@ -114,6 +115,23 @@ describe("local media roots", () => {
     );
 
     expect(roots).toEqual([normalizeHostPath("/packs/shared/manual.pdf")]);
+  });
+
+  it("preserves configured fs root metadata for direct agent-scoped media root entries", () => {
+    const roots = getAgentScopedMediaLocalRootEntries(
+      {
+        tools: {
+          fs: {
+            roots: [{ path: "/packs/shared/manual.pdf", kind: "file", access: "ro" }],
+          },
+        },
+      },
+      "ops",
+    );
+
+    expect(roots).toEqual([
+      { path: normalizeHostPath("/packs/shared/manual.pdf"), kind: "file", access: "ro" },
+    ]);
   });
 
   it("preserves empty configured fs roots as direct deny-all media roots", () => {
