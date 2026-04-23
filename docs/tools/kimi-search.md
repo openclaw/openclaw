@@ -6,8 +6,6 @@ read_when:
 title: "Kimi Search"
 ---
 
-# Kimi Search
-
 OpenClaw supports Kimi as a `web_search` provider, using Moonshot web search
 to produce AI-synthesized answers with citations.
 

@@ -8,8 +8,6 @@ read_when:
   - You are adding a new channel, provider, tool, or other capability to OpenClaw
 ---
 
-# Building Plugins
-
 Plugins extend OpenClaw with new capabilities: channels, model providers,
 speech, realtime transcription, realtime voice, media understanding, image
 generation, video generation, web fetch, web search, agent tools, or any

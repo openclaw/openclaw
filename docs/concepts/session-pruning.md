@@ -6,8 +6,6 @@ read_when:
   - You want to understand Anthropic prompt cache optimization
 ---
 
-# Session Pruning
-
 Session pruning trims **old tool results** from the context before each LLM
 call. It reduces context bloat from accumulated tool outputs (exec results, file
 reads, search results) without rewriting normal conversation text.

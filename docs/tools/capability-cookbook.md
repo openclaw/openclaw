@@ -8,8 +8,6 @@ title: "Adding Capabilities (Contributor Guide)"
 sidebarTitle: "Adding Capabilities"
 ---
 
-# Adding Capabilities
-
 <Info>
   This is a **contributor guide** for OpenClaw core developers. If you are
   building an external plugin, see [Building Plugins](/plugins/building-plugins)

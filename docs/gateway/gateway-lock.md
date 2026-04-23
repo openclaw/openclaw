@@ -6,8 +6,6 @@ read_when:
 title: "Gateway Lock"
 ---
 
-# Gateway lock
-
 ## Why
 
 - Ensure only one gateway instance runs per base port on the same host; additional gateways must use isolated profiles and unique ports.

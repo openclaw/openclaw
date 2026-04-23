@@ -6,8 +6,6 @@ read_when:
 title: "Exec Tool"
 ---
 
-# Exec tool
-
 Run shell commands in the workspace. Supports foreground + background execution via `process`.
 If `process` is disallowed, `exec` runs synchronously and ignores `yieldMs`/`background`.
 Background sessions are scoped per agent; `process` only sees sessions from the same agent.

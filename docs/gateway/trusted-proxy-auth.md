@@ -8,8 +8,6 @@ read_when:
   - Deciding where to set HSTS and other HTTP hardening headers
 ---
 
-# Trusted Proxy Auth
-
 > ⚠️ **Security-sensitive feature.** This mode delegates authentication entirely to your reverse proxy. Misconfiguration can expose your Gateway to unauthorized access. Read this page carefully before enabling.
 
 ## When to Use

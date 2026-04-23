@@ -6,8 +6,6 @@ read_when:
 title: "Qianfan"
 ---
 
-# Qianfan
-
 Qianfan is Baidu's MaaS platform, providing a **unified API** that routes requests to many models behind a single
 endpoint and API key. It is OpenAI-compatible, so most OpenAI SDKs work by switching the base URL.
 

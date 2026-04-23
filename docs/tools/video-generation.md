@@ -7,8 +7,6 @@ read_when:
 title: "Video Generation"
 ---
 
-# Video Generation
-
 OpenClaw agents can generate videos from text prompts, reference images, or existing videos. Fourteen provider backends are supported, each with different model options, input modes, and feature sets. The agent picks the right provider automatically based on your configuration and available API keys.
 
 <Note>

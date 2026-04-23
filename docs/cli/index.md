@@ -6,8 +6,6 @@ read_when:
 title: "CLI Reference"
 ---
 
-# CLI reference
-
 `openclaw` is the main CLI entry point. Each core command has either a
 dedicated reference page or is documented with the command it aliases; this
 index lists the commands, the global flags, and the output styling rules that

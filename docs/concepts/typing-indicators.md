@@ -5,8 +5,6 @@ read_when:
 title: "Typing Indicators"
 ---
 
-# Typing indicators
-
 Typing indicators are sent to the chat channel while a run is active. Use
 `agents.defaults.typingMode` to control **when** typing starts and `typingIntervalSeconds`
 to control **how often** it refreshes.

@@ -7,8 +7,6 @@ read_when:
 title: "Image Generation"
 ---
 
-# Image Generation
-
 The `image_generate` tool lets the agent create and edit images using your configured providers. Generated images are delivered automatically as media attachments in the agent's reply.
 
 <Note>

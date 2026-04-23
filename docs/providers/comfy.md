@@ -7,8 +7,6 @@ read_when:
   - You need the bundled comfy plugin config keys
 ---
 
-# ComfyUI
-
 OpenClaw ships a bundled `comfy` plugin for workflow-driven ComfyUI runs. The plugin is entirely workflow-driven, so OpenClaw does not try to map generic `size`, `aspectRatio`, `resolution`, `durationSeconds`, or TTS-style controls onto your graph.
 
 | Property        | Detail                                                                           |

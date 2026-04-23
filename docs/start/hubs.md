@@ -5,8 +5,6 @@ read_when:
 title: "Docs Hubs"
 ---
 
-# Docs hubs
-
 <Note>
 If you are new to OpenClaw, start with [Getting Started](/start/getting-started).
 </Note>

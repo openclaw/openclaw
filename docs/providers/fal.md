@@ -7,8 +7,6 @@ read_when:
   - You want fal defaults for image_generate or video_generate
 ---
 
-# fal
-
 OpenClaw ships a bundled `fal` provider for hosted image and video generation.
 
 | Property | Value                                                         |

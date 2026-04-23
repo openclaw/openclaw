@@ -6,8 +6,6 @@ read_when:
 title: "Node Troubleshooting"
 ---
 
-# Node troubleshooting
-
 Use this page when a node is visible in status but node tools fail.
 
 ## Command ladder

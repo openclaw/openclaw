@@ -6,8 +6,6 @@ read_when:
 title: "Async Exec Duplicate Completion Investigation"
 ---
 
-# Async Exec Duplicate Completion Investigation
-
 ## Scope
 
 - Session: `agent:main:telegram:group:-1003774691294:topic:1`

@@ -7,8 +7,6 @@ read_when:
 title: "Tools and Plugins"
 ---
 
-# Tools and Plugins
-
 Everything the agent does beyond generating text happens through **tools**.
 Tools are how the agent reads files, runs commands, browses the web, sends
 messages, and interacts with devices.

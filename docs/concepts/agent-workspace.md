@@ -6,8 +6,6 @@ read_when:
 title: "Agent Workspace"
 ---
 
-# Agent workspace
-
 The workspace is the agent's home. It is the only working directory used for
 file tools and for workspace context. Keep it private and treat it as memory.
 

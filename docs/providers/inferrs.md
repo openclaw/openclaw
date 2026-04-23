@@ -7,8 +7,6 @@ read_when:
 title: "inferrs"
 ---
 
-# inferrs
-
 [inferrs](https://github.com/ericcurtin/inferrs) can serve local models behind an
 OpenAI-compatible `/v1` API. OpenClaw works with `inferrs` through the generic
 `openai-completions` path.

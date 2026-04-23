@@ -5,8 +5,6 @@ read_when: "You hit 'sandbox jail' or see a tool/elevated refusal and want the e
 status: active
 ---
 
-# Sandbox vs Tool Policy vs Elevated
-
 OpenClaw has three related (but different) controls:
 
 1. **Sandbox** (`agents.defaults.sandbox.*` / `agents.list[].sandbox.*`) decides **where tools run** (sandbox backend vs host).

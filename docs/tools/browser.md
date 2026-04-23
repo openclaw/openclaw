@@ -7,8 +7,6 @@ read_when:
 title: "Browser (OpenClaw-managed)"
 ---
 
-# Browser (openclaw-managed)
-
 OpenClaw can run a **dedicated Chrome/Brave/Edge/Chromium profile** that the agent controls.
 It is isolated from your personal browser and is managed through a small local
 control service inside the Gateway (loopback only).

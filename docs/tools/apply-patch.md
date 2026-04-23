@@ -6,8 +6,6 @@ read_when:
 title: "apply_patch Tool"
 ---
 
-# apply_patch tool
-
 Apply file changes using a structured patch format. This is ideal for multi-file
 or multi-hunk edits where a single `edit` call would be brittle.
 

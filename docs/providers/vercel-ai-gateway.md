@@ -6,8 +6,6 @@ read_when:
   - You need the API key env var or CLI auth choice
 ---
 
-# Vercel AI Gateway
-
 The [Vercel AI Gateway](https://vercel.com/ai-gateway) provides a unified API to
 access hundreds of models through a single endpoint.
 

@@ -6,8 +6,6 @@ read_when:
 title: "OpenCode"
 ---
 
-# OpenCode
-
 OpenCode exposes two hosted catalogs in OpenClaw:
 
 | Catalog | Prefix            | Runtime provider |

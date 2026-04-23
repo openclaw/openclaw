@@ -7,8 +7,6 @@ read_when:
 title: "OpenAI"
 ---
 
-# OpenAI
-
 OpenAI provides developer APIs for GPT models. OpenClaw supports two auth routes behind the same canonical OpenAI model refs:
 
 - **API key** — direct OpenAI Platform access with usage-based billing (`openai/*` models)

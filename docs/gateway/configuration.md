@@ -7,8 +7,6 @@ read_when:
 title: "Configuration"
 ---
 
-# Configuration
-
 OpenClaw reads an optional <Tooltip tip="JSON5 supports comments and trailing commas">**JSON5**</Tooltip> config from `~/.openclaw/openclaw.json`.
 The active config path must be a regular file. Symlinked `openclaw.json`
 layouts are unsupported for OpenClaw-owned writes; an atomic write may replace

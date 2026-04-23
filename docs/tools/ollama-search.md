@@ -7,8 +7,6 @@ read_when:
 title: "Ollama Web Search"
 ---
 
-# Ollama Web Search
-
 OpenClaw supports **Ollama Web Search** as a bundled `web_search` provider.
 It uses Ollama's experimental web-search API and returns structured results
 with titles, URLs, and snippets.

@@ -6,8 +6,6 @@ read_when:
   - You want advanced memory features like reranking or extra indexed paths
 ---
 
-# QMD Memory Engine
-
 [QMD](https://github.com/tobi/qmd) is a local-first search sidecar that runs
 alongside OpenClaw. It combines BM25, vector search, and reranking in a single
 binary, and can index content beyond your workspace memory files.

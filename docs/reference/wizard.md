@@ -8,8 +8,6 @@ title: "Onboarding Reference"
 sidebarTitle: "Onboarding Reference"
 ---
 
-# Onboarding Reference
-
 This is the full reference for `openclaw onboard`.
 For a high-level overview, see [Onboarding (CLI)](/start/wizard).
 

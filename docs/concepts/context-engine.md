@@ -7,8 +7,6 @@ read_when:
 title: "Context Engine"
 ---
 
-# Context Engine
-
 A **context engine** controls how OpenClaw builds model context for each run.
 It decides which messages to include, how to summarize older history, and how
 to manage context across subagent boundaries.

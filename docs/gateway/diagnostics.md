@@ -7,8 +7,6 @@ read_when:
   - Reviewing what diagnostics data is recorded or redacted
 ---
 
-# Diagnostics Export
-
 OpenClaw can create a local diagnostics zip that is safe to attach to bug
 reports. It combines sanitized Gateway status, health, logs, config shape, and
 recent payload-free stability events.

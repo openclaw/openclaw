@@ -8,8 +8,6 @@ read_when:
   - You want to enable multimodal memory indexing
 ---
 
-# Memory configuration reference
-
 This page lists every configuration knob for OpenClaw memory search. For
 conceptual overviews, see:
 

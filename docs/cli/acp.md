@@ -6,8 +6,6 @@ read_when:
 title: "acp"
 ---
 
-# acp
-
 Run the [Agent Client Protocol (ACP)](https://agentclientprotocol.com/) bridge that talks to an OpenClaw Gateway.
 
 This command speaks ACP over stdio for IDEs and forwards prompts to the Gateway

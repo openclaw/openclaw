@@ -5,8 +5,6 @@ read_when:
 title: "Tests"
 ---
 
-# Tests
-
 - Full testing kit (suites, live, Docker): [Testing](/help/testing)
 
 - `pnpm test:force`: Kills any lingering gateway process holding the default control port, then runs the full Vitest suite with an isolated gateway port so server tests don’t collide with a running instance. Use this when a prior gateway run left port 18789 occupied.

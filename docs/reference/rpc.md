@@ -6,8 +6,6 @@ read_when:
 title: "RPC Adapters"
 ---
 
-# RPC adapters
-
 OpenClaw integrates external CLIs via JSON-RPC. Two patterns are used today.
 
 ## Pattern A: HTTP daemon (signal-cli)

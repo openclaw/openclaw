@@ -6,8 +6,6 @@ read_when:
 title: "Diagnostics Flags"
 ---
 
-# Diagnostics Flags
-
 Diagnostics flags let you enable targeted debug logs without turning on verbose logging everywhere. Flags are opt-in and have no effect unless a subsystem checks them.
 
 ## How it works

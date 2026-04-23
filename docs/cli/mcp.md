@@ -7,8 +7,6 @@ read_when:
 title: "mcp"
 ---
 
-# mcp
-
 `openclaw mcp` has two jobs:
 
 - run OpenClaw as an MCP server with `openclaw mcp serve`

@@ -5,8 +5,6 @@ read_when: "You are managing sandbox runtimes or debugging sandbox/tool-policy b
 status: active
 ---
 
-# Sandbox CLI
-
 Manage sandbox runtimes for isolated agent execution.
 
 ## Overview

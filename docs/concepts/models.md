@@ -7,8 +7,6 @@ read_when:
 title: "Models CLI"
 ---
 
-# Models CLI
-
 See [/concepts/model-failover](/concepts/model-failover) for auth profile
 rotation, cooldowns, and how that interacts with fallbacks.
 Quick provider overview + examples: [/concepts/model-providers](/concepts/model-providers).

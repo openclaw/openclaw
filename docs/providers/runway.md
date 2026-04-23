@@ -7,8 +7,6 @@ read_when:
   - You want to make Runway the default video provider
 ---
 
-# Runway
-
 OpenClaw ships a bundled `runway` provider for hosted video generation.
 
 | Property    | Value                                                             |

@@ -7,8 +7,6 @@ title: "CLI Setup Reference"
 sidebarTitle: "CLI reference"
 ---
 
-# CLI Setup Reference
-
 This page is the full reference for `openclaw onboard`.
 For the short guide, see [Onboarding (CLI)](/start/wizard).
 

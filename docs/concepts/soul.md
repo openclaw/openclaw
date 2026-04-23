@@ -7,8 +7,6 @@ read_when:
 title: "SOUL.md Personality Guide"
 ---
 
-# SOUL.md Personality Guide
-
 `SOUL.md` is where your agent's voice lives.
 
 OpenClaw injects it on normal sessions, so it has real weight. If your agent

@@ -7,8 +7,6 @@ read_when:
   - You want to disable PI fallback for Codex-only deployments
 ---
 
-# Codex Harness
-
 The bundled `codex` plugin lets OpenClaw run embedded agent turns through the
 Codex app-server instead of the built-in PI harness.
 

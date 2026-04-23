@@ -6,8 +6,6 @@ read_when:
   - Maintaining the six-contract agentic architecture behind the parity program
 ---
 
-# GPT-5.4 / Codex Parity Maintainer Notes
-
 This note explains how to review the GPT-5.4 / Codex parity program as four merge units without losing the original six-contract architecture.
 
 ## Merge units

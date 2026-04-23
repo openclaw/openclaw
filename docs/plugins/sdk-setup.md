@@ -8,8 +8,6 @@ read_when:
   - You are defining plugin config schemas or package.json openclaw metadata
 ---
 
-# Plugin Setup and Config
-
 Reference for plugin packaging (`package.json` metadata), manifests
 (`openclaw.plugin.json`), setup entries, and config schemas.
 

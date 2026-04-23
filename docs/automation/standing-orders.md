@@ -7,8 +7,6 @@ read_when:
 title: "Standing Orders"
 ---
 
-# Standing Orders
-
 Standing orders grant your agent **permanent operating authority** for defined programs. Instead of giving individual task instructions each time, you define programs with clear scope, triggers, and escalation rules — and the agent executes autonomously within those boundaries.
 
 This is the difference between telling your assistant "send the weekly report" every Friday vs. granting standing authority: "You own the weekly report. Compile it every Friday, send it, and only escalate if something looks wrong."

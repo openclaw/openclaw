@@ -6,8 +6,6 @@ read_when:
 title: "Retry Policy"
 ---
 
-# Retry policy
-
 ## Goals
 
 - Retry per HTTP request, not per multi-step flow.

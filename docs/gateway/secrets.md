@@ -7,8 +7,6 @@ read_when:
 title: "Secrets Management"
 ---
 
-# Secrets management
-
 OpenClaw supports additive SecretRefs so supported credentials do not need to be stored as plaintext in configuration.
 
 Plaintext still works. SecretRefs are opt-in per credential.

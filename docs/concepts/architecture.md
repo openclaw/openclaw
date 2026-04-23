@@ -5,8 +5,6 @@ read_when:
 title: "Gateway Architecture"
 ---
 
-# Gateway architecture
-
 ## Overview
 
 - A single long‑lived **Gateway** owns all messaging surfaces (WhatsApp via

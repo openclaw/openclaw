@@ -6,8 +6,6 @@ read_when:
 title: "Qwen"
 ---
 
-# Qwen
-
 <Warning>
 
 **Qwen OAuth has been removed.** The free-tier OAuth integration

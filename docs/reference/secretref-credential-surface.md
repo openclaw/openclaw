@@ -7,8 +7,6 @@ read_when:
 title: "SecretRef Credential Surface"
 ---
 
-# SecretRef credential surface
-
 This page defines the canonical SecretRef credential surface.
 
 Scope intent:

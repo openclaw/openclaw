@@ -7,8 +7,6 @@ read_when:
   - You want to tune search quality
 ---
 
-# Memory Search
-
 `memory_search` finds relevant notes from your memory files, even when the
 wording differs from the original text. It works by indexing memory into small
 chunks and searching them using embeddings, keywords, or both.

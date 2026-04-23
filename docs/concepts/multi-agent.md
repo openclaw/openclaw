@@ -5,8 +5,6 @@ read_when: "You want multiple isolated agents (workspaces + auth) in one gateway
 status: active
 ---
 
-# Multi-Agent Routing
-
 Goal: multiple _isolated_ agents (separate workspace + `agentDir` + sessions), plus multiple channel accounts (e.g. two WhatsApps) in one running Gateway. Inbound is routed to an agent via bindings.
 
 ## What is "one agent"?

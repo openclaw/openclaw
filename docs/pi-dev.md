@@ -6,8 +6,6 @@ read_when:
   - Running Pi-specific lint, typecheck, and live test flows
 ---
 
-# Pi Development Workflow
-
 This guide summarizes a sane workflow for working on the pi integration in OpenClaw.
 
 ## Type Checking and Linting

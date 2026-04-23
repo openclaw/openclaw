@@ -6,8 +6,6 @@ read_when:
   - You are debugging failing GitHub Actions checks
 ---
 
-# CI Pipeline
-
 The CI runs on every push to `main` and every pull request. It uses smart scoping to skip expensive jobs when only unrelated areas changed.
 
 QA Lab has dedicated CI lanes outside the main smart-scoped workflow. The

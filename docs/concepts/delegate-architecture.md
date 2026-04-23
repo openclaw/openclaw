@@ -5,8 +5,6 @@ read_when: "You want an agent with its own identity that acts on behalf of human
 status: active
 ---
 
-# Delegate Architecture
-
 Goal: run OpenClaw as a **named delegate** — an agent with its own identity that acts "on behalf of" people in an organization. The agent never impersonates a human. It sends, reads, and schedules under its own account with explicit delegation permissions.
 
 This extends [Multi-Agent Routing](/concepts/multi-agent) from personal use into organizational deployments.

@@ -7,8 +7,6 @@ title: "CLI Automation"
 sidebarTitle: "CLI automation"
 ---
 
-# CLI Automation
-
 Use `--non-interactive` to automate `openclaw onboard`.
 
 <Note>

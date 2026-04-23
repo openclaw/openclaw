@@ -8,8 +8,6 @@ read_when:
   - You want to understand contract tests for bundled plugins
 ---
 
-# Plugin Testing
-
 Reference for test utilities, patterns, and lint enforcement for OpenClaw
 plugins.
 

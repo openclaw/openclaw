@@ -7,8 +7,6 @@ read_when:
   - You are tuning heartbeat and cache-ttl pruning together
 ---
 
-# Prompt caching
-
 Prompt caching means the model provider can reuse unchanged prompt prefixes (usually system/developer instructions and other stable context) across turns instead of re-processing them every time. OpenClaw normalizes provider usage into `cacheRead` and `cacheWrite` where the upstream API exposes those counters directly.
 
 Status surfaces can also recover cache counters from the most recent transcript

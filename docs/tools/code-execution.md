@@ -7,8 +7,6 @@ read_when:
 title: "Code Execution"
 ---
 
-# Code Execution
-
 `code_execution` runs sandboxed remote Python analysis on xAI's Responses API.
 This is different from local [`exec`](/tools/exec):
 

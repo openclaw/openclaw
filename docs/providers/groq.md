@@ -6,8 +6,6 @@ read_when:
   - You need the API key env var or CLI auth choice
 ---
 
-# Groq
-
 [Groq](https://groq.com) provides ultra-fast inference on open-source models
 (Llama, Gemma, Mistral, and more) using custom LPU hardware. OpenClaw connects
 to Groq through its OpenAI-compatible API.

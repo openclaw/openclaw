@@ -7,8 +7,6 @@ read_when:
   - You want the default model, aliases, or discovery behavior
 ---
 
-# Chutes
-
 [Chutes](https://chutes.ai) exposes open-source model catalogs through an
 OpenAI-compatible API. OpenClaw supports both browser OAuth and direct API-key
 auth for the bundled `chutes` provider.

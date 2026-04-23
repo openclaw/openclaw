@@ -10,8 +10,6 @@ read_when:
 title: "ACP agents"
 ---
 
-# ACP agents
-
 [Agent Client Protocol (ACP)](https://agentclientprotocol.com/) sessions let OpenClaw run external coding harnesses (for example Pi, Claude Code, Codex, Cursor, Copilot, OpenClaw ACP, OpenCode, Gemini CLI, and other supported ACPX harnesses) through an ACP backend plugin.
 
 If you ask OpenClaw in plain language to "run this in Codex" or "start Claude Code in a thread", OpenClaw should route that request to the ACP runtime (not the native sub-agent runtime). Each ACP session spawn is tracked as a [background task](/automation/tasks).

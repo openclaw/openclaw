@@ -6,8 +6,6 @@ read_when:
 title: "Session Management"
 ---
 
-# Session Management
-
 OpenClaw organizes conversations into **sessions**. Each message is routed to a
 session based on where it came from -- DMs, group chats, cron jobs, etc.
 

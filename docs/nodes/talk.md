@@ -6,8 +6,6 @@ read_when:
 title: "Talk Mode"
 ---
 
-# Talk Mode
-
 Talk mode is a continuous voice conversation loop:
 
 1. Listen for speech

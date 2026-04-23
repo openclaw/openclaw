@@ -6,8 +6,6 @@ read_when:
   - You need the API key env var or CLI auth choice
 ---
 
-# Together AI
-
 [Together AI](https://together.ai) provides access to leading open-source
 models including Llama, DeepSeek, Kimi, and more through a unified API.
 

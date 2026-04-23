@@ -8,8 +8,6 @@ read_when:
   - You are deciding whether to enable automatic skill creation
 ---
 
-# Skill Workshop plugin
-
 Skill Workshop is **experimental**. It is disabled by default, its capture
 heuristics and reviewer prompts may change between releases, and automatic
 writes should be used only in trusted workspaces after reviewing pending-mode

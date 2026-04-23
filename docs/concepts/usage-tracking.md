@@ -6,8 +6,6 @@ read_when:
 title: "Usage Tracking"
 ---
 
-# Usage tracking
-
 ## What it is
 
 - Pulls provider usage/quota directly from their usage endpoints.

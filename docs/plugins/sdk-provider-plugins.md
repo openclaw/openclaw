@@ -8,8 +8,6 @@ read_when:
   - You need to understand provider auth, catalogs, and runtime hooks
 ---
 
-# Building provider plugins
-
 This guide walks through building a provider plugin that adds a model provider
 (LLM) to OpenClaw. By the end you will have a provider with a model catalog,
 API key auth, and dynamic model resolution.

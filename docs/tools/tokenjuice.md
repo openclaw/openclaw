@@ -7,8 +7,6 @@ read_when:
   - You need to understand what tokenjuice changes and what it leaves raw
 ---
 
-# Tokenjuice
-
 `tokenjuice` is an optional bundled plugin that compacts noisy `exec` and `bash`
 tool results after the command has already run.
 

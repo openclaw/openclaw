@@ -7,8 +7,6 @@ read_when:
   - Debugging Discord Carbon import fanout or channel plugin runtime laziness
 ---
 
-# Channel Presentation Refactor Plan
-
 ## Status
 
 Implemented for the shared agent, CLI, plugin capability, and outbound delivery surfaces:

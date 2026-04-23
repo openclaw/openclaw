@@ -7,8 +7,6 @@ read_when:
   - You want to tune active memory behavior without enabling it everywhere
 ---
 
-# Active Memory
-
 Active memory is an optional plugin-owned blocking memory sub-agent that runs
 before the main reply for eligible conversational sessions.
 

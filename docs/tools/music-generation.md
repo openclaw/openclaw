@@ -7,8 +7,6 @@ read_when:
 title: "Music Generation"
 ---
 
-# Music Generation
-
 The `music_generate` tool lets the agent create music or audio through the
 shared music-generation capability with configured providers such as Google,
 MiniMax, and workflow-configured ComfyUI.

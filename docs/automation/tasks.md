@@ -7,8 +7,6 @@ read_when:
 title: "Background Tasks"
 ---
 
-# Background Tasks
-
 > **Looking for scheduling?** See [Automation & Tasks](/automation) for choosing the right mechanism. This page covers **tracking** background work, not scheduling it.
 
 Background tasks track work that runs **outside your main conversation session**:

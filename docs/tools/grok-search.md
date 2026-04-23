@@ -6,8 +6,6 @@ read_when:
 title: "Grok Search"
 ---
 
-# Grok Search
-
 OpenClaw supports Grok as a `web_search` provider, using xAI web-grounded
 responses to produce AI-synthesized answers backed by live search results
 with citations.

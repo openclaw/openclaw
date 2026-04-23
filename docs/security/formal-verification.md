@@ -7,8 +7,6 @@ read_when:
 permalink: /security/formal-verification/
 ---
 
-# Formal Verification (Security Models)
-
 This page tracks OpenClaw’s **formal security models** (TLA+/TLC today; more as needed).
 
 > Note: some older links may refer to the previous project name.

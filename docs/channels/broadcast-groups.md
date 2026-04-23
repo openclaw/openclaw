@@ -7,8 +7,6 @@ status: experimental
 title: "Broadcast Groups"
 ---
 
-# Broadcast Groups
-
 **Status:** Experimental  
 **Version:** Added in 2026.1.9
 

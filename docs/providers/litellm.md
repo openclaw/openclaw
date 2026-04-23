@@ -6,8 +6,6 @@ read_when:
   - You need cost tracking, logging, or model routing through LiteLLM
 ---
 
-# LiteLLM
-
 [LiteLLM](https://litellm.ai) is an open-source LLM gateway that provides a unified API to 100+ model providers. Route OpenClaw through LiteLLM to get centralized cost tracking, logging, and the flexibility to switch backends without changing your OpenClaw config.
 
 <Tip>

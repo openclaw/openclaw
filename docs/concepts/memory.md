@@ -6,8 +6,6 @@ read_when:
   - You want to know what memory files to write
 ---
 
-# Memory Overview
-
 OpenClaw remembers things by writing **plain Markdown files** in your agent's
 workspace. The model only "remembers" what gets saved to disk -- there is no
 hidden state.

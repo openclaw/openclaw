@@ -6,8 +6,6 @@ read_when:
 title: "Xiaomi MiMo"
 ---
 
-# Xiaomi MiMo
-
 Xiaomi MiMo is the API platform for **MiMo** models. OpenClaw uses the Xiaomi
 OpenAI-compatible endpoint with API-key authentication.
 

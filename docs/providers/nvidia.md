@@ -6,8 +6,6 @@ read_when:
 title: "NVIDIA"
 ---
 
-# NVIDIA
-
 NVIDIA provides an OpenAI-compatible API at `https://integrate.api.nvidia.com/v1` for
 open models for free. Authenticate with an API key from
 [build.nvidia.com](https://build.nvidia.com/settings/api-keys).

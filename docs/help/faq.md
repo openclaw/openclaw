@@ -6,8 +6,6 @@ read_when:
 title: "FAQ"
 ---
 
-# FAQ
-
 Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS, multi-agent, OAuth/API keys, model failover). For runtime diagnostics, see [Troubleshooting](/gateway/troubleshooting). For the full config reference, see [Configuration](/gateway/configuration).
 
 ## First 60 seconds if something is broken

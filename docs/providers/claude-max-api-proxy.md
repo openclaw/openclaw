@@ -7,8 +7,6 @@ read_when:
 title: "Claude Max API Proxy"
 ---
 
-# Claude Max API Proxy
-
 **claude-max-api-proxy** is a community tool that exposes your Claude Max/Pro subscription as an OpenAI-compatible API endpoint. This allows you to use your subscription with any tool that supports the OpenAI API format.
 
 <Warning>

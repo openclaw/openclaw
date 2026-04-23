@@ -6,8 +6,6 @@ read_when:
 title: "LLM Task"
 ---
 
-# LLM Task
-
 `llm-task` is an **optional plugin tool** that runs a JSON-only LLM task and
 returns structured output (optionally validated against JSON Schema).
 

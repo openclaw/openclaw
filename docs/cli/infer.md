@@ -6,8 +6,6 @@ read_when:
 title: "Inference CLI"
 ---
 
-# Inference CLI
-
 `openclaw infer` is the canonical headless surface for provider-backed inference workflows.
 
 It intentionally exposes capability families, not raw gateway RPC names and not raw agent tool ids.

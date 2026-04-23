@@ -6,8 +6,6 @@ read_when:
 title: "Docker VM Runtime"
 ---
 
-# Docker VM Runtime
-
 Shared runtime steps for VM-based Docker installs such as GCP, Hetzner, and similar VPS providers.
 
 ## Bake required binaries into the image

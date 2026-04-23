@@ -6,8 +6,6 @@ read_when:
 title: "BTW Side Questions"
 ---
 
-# BTW Side Questions
-
 `/btw` lets you ask a quick side question about the **current session** without
 turning that question into normal conversation history.
 

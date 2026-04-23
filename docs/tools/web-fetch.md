@@ -8,8 +8,6 @@ title: "Web Fetch"
 sidebarTitle: "Web Fetch"
 ---
 
-# Web Fetch
-
 The `web_fetch` tool does a plain HTTP GET and extracts readable content
 (HTML to markdown or text). It does **not** execute JavaScript.
 

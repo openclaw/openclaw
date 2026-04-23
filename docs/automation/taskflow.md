@@ -7,8 +7,6 @@ read_when:
 title: "Task Flow"
 ---
 
-# Task Flow
-
 Task Flow is the flow orchestration substrate that sits above [background tasks](/automation/tasks). It manages durable multi-step flows with their own state, revision tracking, and sync semantics while individual tasks remain the unit of detached work.
 
 ## When to use Task Flow

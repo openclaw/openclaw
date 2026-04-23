@@ -6,8 +6,6 @@ read_when:
 title: "Bun (Experimental)"
 ---
 
-# Bun (Experimental)
-
 <Warning>
 Bun is **not recommended for gateway runtime** (known issues with WhatsApp and Telegram). Use Node for production.
 </Warning>

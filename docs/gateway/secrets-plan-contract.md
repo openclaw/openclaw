@@ -7,8 +7,6 @@ read_when:
 title: "Secrets Apply Plan Contract"
 ---
 
-# Secrets apply plan contract
-
 This page defines the strict contract enforced by `openclaw secrets apply`.
 
 If a target does not match these rules, apply fails before mutating configuration.

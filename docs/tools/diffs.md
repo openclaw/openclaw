@@ -7,8 +7,6 @@ read_when:
   - You need controlled, temporary diff artifacts with secure defaults
 ---
 
-# Diffs
-
 `diffs` is an optional plugin tool with short built-in system guidance and a companion skill that turns change content into a read-only diff artifact for agents.
 
 It accepts either:

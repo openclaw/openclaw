@@ -9,8 +9,6 @@ read_when:
   - You maintain an external OpenClaw plugin
 ---
 
-# Plugin SDK Migration
-
 OpenClaw has moved from a broad backwards-compatibility layer to a modern plugin
 architecture with focused, documented imports. If your plugin was built before
 the new architecture, this guide helps you migrate.

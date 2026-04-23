@@ -6,8 +6,6 @@ read_when:
   - You need the Volcengine API key setup
 ---
 
-# Volcengine (Doubao)
-
 The Volcengine provider gives access to Doubao models and third-party models
 hosted on Volcano Engine, with separate endpoints for general and coding
 workloads.

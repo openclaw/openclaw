@@ -6,8 +6,6 @@ read_when:
 title: "Agent Send"
 ---
 
-# Agent Send
-
 `openclaw agent` runs a single agent turn from the command line without needing
 an inbound chat message. Use it for scripted workflows, testing, and
 programmatic delivery.

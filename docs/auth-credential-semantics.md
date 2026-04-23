@@ -6,8 +6,6 @@ read_when:
   - Debugging model auth failures or profile order
 ---
 
-# Auth Credential Semantics
-
 This document defines the canonical credential eligibility and resolution semantics used across:
 
 - `resolveAuthProfileOrder`

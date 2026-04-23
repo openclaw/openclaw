@@ -7,8 +7,6 @@ title: "Onboarding (macOS App)"
 sidebarTitle: "Onboarding: macOS App"
 ---
 
-# Onboarding (macOS App)
-
 This doc describes the **current** first‑run setup flow. The goal is a
 smooth “day 0” experience: pick where the Gateway runs, connect auth, run the
 wizard, and let the agent bootstrap itself.

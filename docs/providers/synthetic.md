@@ -6,8 +6,6 @@ read_when:
 title: "Synthetic"
 ---
 
-# Synthetic
-
 [Synthetic](https://synthetic.new) exposes Anthropic-compatible endpoints.
 OpenClaw registers it as the `synthetic` provider and uses the Anthropic
 Messages API.

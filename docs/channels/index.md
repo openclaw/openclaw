@@ -6,8 +6,6 @@ read_when:
 title: "Chat Channels"
 ---
 
-# Chat Channels
-
 OpenClaw can talk to you on any chat app you already use. Each channel connects via the Gateway.
 Text is supported everywhere; media and reactions vary by channel.
 

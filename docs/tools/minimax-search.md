@@ -7,8 +7,6 @@ read_when:
 title: "MiniMax Search"
 ---
 
-# MiniMax Search
-
 OpenClaw supports MiniMax as a `web_search` provider through the MiniMax
 Coding Plan search API. It returns structured search results with titles, URLs,
 snippets, and related queries.

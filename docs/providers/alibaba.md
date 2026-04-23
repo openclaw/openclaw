@@ -6,8 +6,6 @@ read_when:
   - You need Model Studio or DashScope API key setup for video generation
 ---
 
-# Alibaba Model Studio
-
 OpenClaw ships a bundled `alibaba` video-generation provider for Wan models on
 Alibaba Model Studio / DashScope.
 

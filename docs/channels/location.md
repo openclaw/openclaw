@@ -6,8 +6,6 @@ read_when:
 title: "Channel Location Parsing"
 ---
 
-# Channel location parsing
-
 OpenClaw normalizes shared locations from chat channels into:
 
 - terse coordinate text appended to the inbound body, and

@@ -7,8 +7,6 @@ read_when:
   - You want one place to find the currently documented experimental flags
 ---
 
-# Experimental features
-
 Experimental features in OpenClaw are **opt-in preview surfaces**. They are
 behind explicit flags because they still need real-world mileage before they
 deserve a stable default or a long-lived public contract.

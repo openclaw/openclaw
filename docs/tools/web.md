@@ -9,8 +9,6 @@ read_when:
   - You want to understand auto-detection and provider fallback
 ---
 
-# Web Search
-
 The `web_search` tool searches the web using your configured provider and
 returns results. Results are cached by query for 15 minutes (configurable).
 

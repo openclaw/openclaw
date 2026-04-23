@@ -6,8 +6,6 @@ read_when:
   - You need the account ID, gateway ID, or API key env var
 ---
 
-# Cloudflare AI Gateway
-
 Cloudflare AI Gateway sits in front of provider APIs and lets you add analytics, caching, and controls. For Anthropic, OpenClaw uses the Anthropic Messages API through your Gateway endpoint.
 
 | Property      | Value                                                                                    |

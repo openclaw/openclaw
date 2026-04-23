@@ -6,8 +6,6 @@ read_when:
 title: "Channel Troubleshooting"
 ---
 
-# Channel troubleshooting
-
 Use this page when a channel connects but behavior is wrong.
 
 ## Command ladder

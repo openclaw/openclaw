@@ -7,8 +7,6 @@ read_when:
 title: "Exa Search"
 ---
 
-# Exa Search
-
 OpenClaw supports [Exa AI](https://exa.ai/) as a `web_search` provider. Exa
 offers neural, keyword, and hybrid search modes with built-in content
 extraction (highlights, text, summaries).

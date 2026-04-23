@@ -8,8 +8,6 @@ read_when:
   - You need to understand the ChannelPlugin adapter surface
 ---
 
-# Building Channel Plugins
-
 This guide walks through building a channel plugin that connects OpenClaw to a
 messaging platform. By the end you will have a working channel with DM security,
 pairing, reply threading, and outbound messaging.

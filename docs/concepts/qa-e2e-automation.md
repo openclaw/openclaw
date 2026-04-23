@@ -7,8 +7,6 @@ read_when:
 title: "QA E2E Automation"
 ---
 
-# QA E2E Automation
-
 The private QA stack is meant to exercise OpenClaw in a more realistic,
 channel-shaped way than a single unit test can.
 

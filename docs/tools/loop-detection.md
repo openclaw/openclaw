@@ -7,8 +7,6 @@ read_when:
   - You are editing agent tool/runtime policies
 ---
 
-# Tool-loop detection
-
 OpenClaw can keep agents from getting stuck in repeated tool-call patterns.
 The guard is **disabled by default**.
 

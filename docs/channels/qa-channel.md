@@ -7,8 +7,6 @@ read_when:
   - You are iterating on end-to-end QA automation
 ---
 
-# QA Channel
-
 `qa-channel` is a bundled synthetic message transport for automated OpenClaw QA.
 
 It is not a production channel. It exists to exercise the same channel plugin

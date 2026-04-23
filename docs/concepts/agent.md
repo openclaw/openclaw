@@ -5,8 +5,6 @@ read_when:
 title: "Agent Runtime"
 ---
 
-# Agent Runtime
-
 OpenClaw runs a single embedded agent runtime.
 
 ## Workspace (required)

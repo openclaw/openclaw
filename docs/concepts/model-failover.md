@@ -7,8 +7,6 @@ read_when:
 title: "Model Failover"
 ---
 
-# Model failover
-
 OpenClaw handles failures in two stages:
 
 1. **Auth profile rotation** within the current provider.

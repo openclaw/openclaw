@@ -7,8 +7,6 @@ read_when:
 title: QQ Bot
 ---
 
-# QQ Bot
-
 QQ Bot connects to OpenClaw via the official QQ Bot API (WebSocket gateway). The
 plugin supports C2C private chat, group @messages, and guild channel messages with
 rich media (images, voice, video, files).

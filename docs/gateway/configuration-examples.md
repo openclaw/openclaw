@@ -7,8 +7,6 @@ read_when:
 title: "Configuration Examples"
 ---
 
-# Configuration Examples
-
 Examples below are aligned with the current config schema. For the exhaustive reference and per-field notes, see [Configuration](/gateway/configuration).
 
 ## Quick start

@@ -6,8 +6,6 @@ read_when:
   - You need the API key env var or CLI auth choice
 ---
 
-# DeepSeek
-
 [DeepSeek](https://www.deepseek.com) provides powerful AI models with an OpenAI-compatible API.
 
 | Property | Value                      |

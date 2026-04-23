@@ -7,8 +7,6 @@ read_when:
 title: "Environment Variables"
 ---
 
-# Environment variables
-
 OpenClaw pulls environment variables from multiple sources. The rule is **never override existing values**.
 
 ## Precedence (highest → lowest)

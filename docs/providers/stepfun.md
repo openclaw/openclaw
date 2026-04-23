@@ -6,8 +6,6 @@ read_when:
 title: "StepFun"
 ---
 
-# StepFun
-
 OpenClaw includes a bundled StepFun provider plugin with two provider ids:
 
 - `stepfun` for the standard endpoint

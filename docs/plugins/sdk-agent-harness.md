@@ -8,8 +8,6 @@ read_when:
   - You need to understand how the Codex plugin relates to model providers
 ---
 
-# Agent Harness Plugins
-
 An **agent harness** is the low level executor for one prepared OpenClaw agent
 turn. It is not a model provider, not a channel, and not a tool registry.
 

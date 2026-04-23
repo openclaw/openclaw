@@ -6,8 +6,6 @@ read_when:
   - You want AI-powered recall and user modeling
 ---
 
-# Honcho Memory
-
 [Honcho](https://honcho.dev) adds AI-native memory to OpenClaw. It persists
 conversations to a dedicated service and builds user and agent models over time,
 giving your agent cross-session context that goes beyond workspace Markdown

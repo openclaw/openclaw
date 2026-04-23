@@ -7,8 +7,6 @@ read_when:
 title: "Plugin Bundles"
 ---
 
-# Plugin Bundles
-
 OpenClaw can install plugins from three external ecosystems: **Codex**, **Claude**,
 and **Cursor**. These are called **bundles** — content and metadata packs that
 OpenClaw maps into native features like skills, hooks, and MCP tools.

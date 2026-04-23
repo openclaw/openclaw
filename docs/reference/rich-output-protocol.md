@@ -6,8 +6,6 @@ read_when:
 title: "Rich Output Protocol"
 ---
 
-# Rich Output Protocol
-
 Assistant output can carry a small set of delivery/render directives:
 
 - `MEDIA:` for attachment delivery

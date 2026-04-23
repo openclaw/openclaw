@@ -6,8 +6,6 @@ read_when:
 title: "QA Refactor"
 ---
 
-# QA Refactor
-
 Status: foundational migration landed.
 
 ## Goal

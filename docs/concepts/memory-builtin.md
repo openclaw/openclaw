@@ -6,8 +6,6 @@ read_when:
   - You want to configure embedding providers or hybrid search
 ---
 
-# Builtin Memory Engine
-
 The builtin engine is the default memory backend. It stores your memory index in
 a per-agent SQLite database and needs no extra dependencies to get started.
 

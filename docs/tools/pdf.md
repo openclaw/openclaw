@@ -7,8 +7,6 @@ read_when:
   - You are debugging native PDF mode vs extraction fallback
 ---
 
-# PDF tool
-
 `pdf` analyzes one or more PDF documents and returns text.
 
 Quick behavior:

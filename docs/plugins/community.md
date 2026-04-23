@@ -6,8 +6,6 @@ read_when:
 title: "Community Plugins"
 ---
 
-# Community Plugins
-
 Community plugins are third-party packages that extend OpenClaw with new
 channels, tools, providers, or other capabilities. They are built and maintained
 by the community, published on [ClawHub](/tools/clawhub) or npm, and

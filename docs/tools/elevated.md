@@ -6,8 +6,6 @@ read_when:
 title: "Elevated Mode"
 ---
 
-# Elevated Mode
-
 When an agent runs inside a sandbox, its `exec` commands are confined to the
 sandbox environment. **Elevated mode** lets the agent break out and run commands
 outside the sandbox instead, with configurable approval gates.

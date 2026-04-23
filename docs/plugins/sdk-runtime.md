@@ -8,8 +8,6 @@ read_when:
   - You are accessing config, agent, or media helpers from plugin code
 ---
 
-# Plugin Runtime Helpers
-
 Reference for the `api.runtime` object injected into every plugin during
 registration. Use these helpers instead of importing host internals directly.
 

@@ -7,8 +7,6 @@ read_when:
 title: "Installer Internals"
 ---
 
-# Installer internals
-
 OpenClaw ships three installer scripts, served from `openclaw.ai`.
 
 | Script                             | Platform             | What it does                                                                                                   |

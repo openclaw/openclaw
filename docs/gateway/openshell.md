@@ -7,8 +7,6 @@ read_when:
   - You need to choose between mirror and remote workspace modes
 ---
 
-# OpenShell
-
 OpenShell is a managed sandbox backend for OpenClaw. Instead of running Docker
 containers locally, OpenClaw delegates sandbox lifecycle to the `openshell` CLI,
 which provisions remote environments with SSH-based command execution.

@@ -7,8 +7,6 @@ read_when:
 title: "Automation & Tasks"
 ---
 
-# Automation & Tasks
-
 OpenClaw runs work in the background through tasks, scheduled jobs, event hooks, and standing instructions. This page helps you choose the right mechanism and understand how they fit together.
 
 ## Quick decision guide

@@ -6,8 +6,6 @@ read_when:
   - You need the API key env var or CLI auth choice
 ---
 
-# Arcee AI
-
 [Arcee AI](https://arcee.ai) provides access to the Trinity family of mixture-of-experts models through an OpenAI-compatible API. All Trinity models are Apache 2.0 licensed.
 
 Arcee AI models can be accessed directly via the Arcee platform or through [OpenRouter](/providers/openrouter).

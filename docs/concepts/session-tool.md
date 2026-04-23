@@ -7,8 +7,6 @@ read_when:
 title: "Session Tools"
 ---
 
-# Session Tools
-
 OpenClaw gives agents tools to work across sessions, inspect status, and
 orchestrate sub-agents.
 

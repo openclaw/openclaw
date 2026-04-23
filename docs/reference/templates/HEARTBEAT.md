@@ -5,8 +5,6 @@ read_when:
   - Bootstrapping a workspace manually
 ---
 
-# HEARTBEAT.md Template
-
 ```markdown
 # Keep this file empty (or with only comments) to skip heartbeat API calls.
 

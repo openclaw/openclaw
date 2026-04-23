@@ -6,8 +6,6 @@ read_when:
   - Looking for version naming and cadence
 ---
 
-# Release Policy
-
 OpenClaw has three public release lanes:
 
 - stable: tagged releases that publish to npm `beta` by default, or to npm `latest` when explicitly requested

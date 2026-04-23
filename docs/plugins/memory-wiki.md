@@ -7,8 +7,6 @@ read_when:
 title: "Memory Wiki"
 ---
 
-# Memory Wiki
-
 `memory-wiki` is a bundled plugin that turns durable memory into a compiled
 knowledge vault.
 

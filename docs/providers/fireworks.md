@@ -6,8 +6,6 @@ read_when:
   - You need the Fireworks API key env var or default model id
 ---
 
-# Fireworks
-
 [Fireworks](https://fireworks.ai) exposes open-weight and routed models through an OpenAI-compatible API. OpenClaw includes a bundled Fireworks provider plugin.
 
 | Property      | Value                                                  |
