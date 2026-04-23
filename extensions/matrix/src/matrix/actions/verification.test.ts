@@ -422,10 +422,11 @@ describe("matrix verification actions", () => {
       requestVerification: vi.fn(async () => requested),
       startVerification: vi.fn(async () => sas),
     };
-    const getOwnDeviceVerificationStatus = vi
+    const getOwnDeviceIdentityVerificationStatus = vi
       .fn()
       .mockResolvedValueOnce(mockUnverifiedOwnerStatus())
       .mockResolvedValueOnce(mockVerifiedOwnerStatus());
+    const getOwnDeviceVerificationStatus = vi.fn(async () => mockVerifiedOwnerStatus());
     const getOwnCrossSigningPublicationStatus = vi.fn(async () =>
       mockCrossSigningPublicationStatus(),
     );
@@ -440,6 +441,7 @@ describe("matrix verification actions", () => {
         bootstrapOwnDeviceVerification,
         crypto,
         getOwnCrossSigningPublicationStatus,
+        getOwnDeviceIdentityVerificationStatus,
         getOwnDeviceVerificationStatus,
         trustOwnIdentityAfterSelfVerification,
       });
@@ -455,7 +457,8 @@ describe("matrix verification actions", () => {
       },
     });
 
-    expect(getOwnDeviceVerificationStatus).toHaveBeenCalledTimes(2);
+    expect(getOwnDeviceIdentityVerificationStatus).toHaveBeenCalledTimes(2);
+    expect(getOwnDeviceVerificationStatus).toHaveBeenCalledTimes(1);
     expect(getOwnCrossSigningPublicationStatus).toHaveBeenCalledTimes(2);
     expect(trustOwnIdentityAfterSelfVerification).toHaveBeenCalledTimes(1);
   });
@@ -487,6 +490,7 @@ describe("matrix verification actions", () => {
       requestVerification: vi.fn(async () => requested),
       startVerification: vi.fn(async () => sas),
     };
+    const getOwnDeviceIdentityVerificationStatus = vi.fn(async () => mockVerifiedOwnerStatus());
     const getOwnDeviceVerificationStatus = vi.fn(async () => mockVerifiedOwnerStatus());
     const getOwnCrossSigningPublicationStatus = vi
       .fn()
@@ -503,6 +507,7 @@ describe("matrix verification actions", () => {
         bootstrapOwnDeviceVerification,
         crypto,
         getOwnCrossSigningPublicationStatus,
+        getOwnDeviceIdentityVerificationStatus,
         getOwnDeviceVerificationStatus,
         trustOwnIdentityAfterSelfVerification,
       });
@@ -518,7 +523,8 @@ describe("matrix verification actions", () => {
       },
     });
 
-    expect(getOwnDeviceVerificationStatus).toHaveBeenCalledTimes(2);
+    expect(getOwnDeviceIdentityVerificationStatus).toHaveBeenCalledTimes(2);
+    expect(getOwnDeviceVerificationStatus).toHaveBeenCalledTimes(1);
     expect(getOwnCrossSigningPublicationStatus).toHaveBeenCalledTimes(2);
     expect(trustOwnIdentityAfterSelfVerification).not.toHaveBeenCalled();
   });
@@ -749,6 +755,7 @@ describe("matrix verification actions", () => {
         getOwnCrossSigningPublicationStatus: vi.fn(async () =>
           mockCrossSigningPublicationStatus(false),
         ),
+        getOwnDeviceIdentityVerificationStatus: vi.fn(async () => mockUnverifiedOwnerStatus()),
         getOwnDeviceVerificationStatus: vi.fn(async () => mockUnverifiedOwnerStatus()),
       });
     });

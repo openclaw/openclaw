@@ -196,7 +196,8 @@ describe("MatrixCryptoBootstrapper", () => {
       userHasCrossSigningKeys: vi
         .fn<() => Promise<boolean>>()
         .mockResolvedValueOnce(false)
-        .mockResolvedValueOnce(true),
+        .mockResolvedValueOnce(true)
+        .mockResolvedValue(true),
       getDeviceVerificationStatus: vi.fn(async () => ({
         isVerified: () => true,
       })),

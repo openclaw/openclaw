@@ -1,3 +1,4 @@
+import { setTimeout as sleep } from "node:timers/promises";
 import { CryptoEvent } from "matrix-js-sdk/lib/crypto-api/CryptoEvent.js";
 import type { MatrixDecryptBridge } from "./decrypt-bridge.js";
 import { LogService } from "./logger.js";
@@ -36,6 +37,8 @@ export type MatrixCryptoBootstrapResult = {
   crossSigningPublished: boolean;
   ownDeviceVerified: boolean | null;
 };
+
+const CROSS_SIGNING_PUBLICATION_WAIT_MS = 5_000;
 
 export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
   private verificationHandlerRegistered = false;
@@ -167,7 +170,9 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
 
     const finalize = async (): Promise<{ ready: boolean; published: boolean }> => {
       const ready = await isCrossSigningReady();
-      const published = await hasPublishedCrossSigningKeys();
+      const published = ready
+        ? await waitForPublishedCrossSigningKeys()
+        : await hasPublishedCrossSigningKeys();
       if (ready && published) {
         LogService.info("MatrixClientLite", "Cross-signing bootstrap complete");
         return { ready, published };
@@ -178,6 +183,17 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
         throw new Error(message);
       }
       return { ready, published };
+    };
+
+    const waitForPublishedCrossSigningKeys = async (): Promise<boolean> => {
+      const startedAt = Date.now();
+      do {
+        if (await hasPublishedCrossSigningKeys()) {
+          return true;
+        }
+        await sleep(250);
+      } while (Date.now() - startedAt < CROSS_SIGNING_PUBLICATION_WAIT_MS);
+      return false;
     };
 
     if (options.forceResetCrossSigning) {

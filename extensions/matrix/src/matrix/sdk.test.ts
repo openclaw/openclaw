@@ -33,17 +33,18 @@ function stubRuntimeFetch(fetchImpl: typeof fetch): void {
   };
 }
 
-async function consumeMatrixSecretStorageKey(keyId = "SSSSKEY"): Promise<void> {
+async function consumeMatrixSecretStorageKey(keyId = "SSSSKEY"): Promise<boolean> {
   const callbacks = (lastCreateClientOpts?.cryptoCallbacks ?? null) as {
     getSecretStorageKey?: (
       params: { keys: Record<string, unknown> },
       name: string,
     ) => Promise<[string, Uint8Array] | null>;
   } | null;
-  await callbacks?.getSecretStorageKey?.(
+  const result = await callbacks?.getSecretStorageKey?.(
     { keys: { [keyId]: { algorithm: "m.secret_storage.v1.aes-hmac-sha2" } } },
     "m.cross_signing.master",
   );
+  return Boolean(result);
 }
 
 class FakeMatrixEvent extends EventEmitter {
@@ -1245,6 +1246,25 @@ describe("MatrixClient crypto bootstrapping", () => {
     expect(freeOwnIdentity).toHaveBeenCalledTimes(1);
   });
 
+  it("does not fail self-verification cleanup when own identity verify is unavailable", async () => {
+    const freeOwnIdentity = vi.fn();
+    matrixJsClient.getCrypto = vi.fn(() => ({
+      on: vi.fn(),
+      getOwnIdentity: vi.fn(async () => ({
+        free: freeOwnIdentity,
+        isVerified: () => false,
+      })),
+      requestOwnUserVerification: vi.fn(async () => null),
+    }));
+
+    const client = new MatrixClient("https://matrix.example.org", "token", {
+      encryption: true,
+    });
+
+    await expect(client.trustOwnIdentityAfterSelfVerification()).resolves.toBeUndefined();
+    expect(freeOwnIdentity).toHaveBeenCalledTimes(1);
+  });
+
   it("retries bootstrap with forced reset when initial publish/verification is incomplete", async () => {
     matrixJsClient.getCrypto = vi.fn(() => ({ on: vi.fn() }));
     const client = new MatrixClient("https://matrix.example.org", "token", {
@@ -1640,10 +1660,12 @@ describe("MatrixClient crypto bootstrapping", () => {
   });
 
   it("accepts a staged recovery key when it establishes identity trust and backup usability", async () => {
-    const encoded = encodeRecoveryKey(new Uint8Array(Array.from({ length: 32 }, (_, i) => i + 1)));
+    const privateKey = new Uint8Array(Array.from({ length: 32 }, (_, i) => i + 1));
+    const encoded = encodeRecoveryKey(privateKey);
 
     matrixJsClient.getUserId = vi.fn(() => "@bot:example.org");
     matrixJsClient.getDeviceId = vi.fn(() => "DEVICE123");
+    let backupKeyLoaded = false;
     matrixJsClient.getCrypto = vi.fn(() => ({
       on: vi.fn(),
       bootstrapCrossSigning: vi.fn(async () => {}),
@@ -1661,8 +1683,11 @@ describe("MatrixClient crypto bootstrapping", () => {
         signedByOwner: true,
       })),
       checkKeyBackupAndEnable: vi.fn(async () => {}),
-      getActiveSessionBackupVersion: vi.fn(async () => "11"),
-      getSessionBackupPrivateKey: vi.fn(async () => new Uint8Array([1])),
+      loadSessionBackupPrivateKeyFromSecretStorage: vi.fn(async () => {
+        backupKeyLoaded = await consumeMatrixSecretStorageKey();
+      }),
+      getActiveSessionBackupVersion: vi.fn(async () => (backupKeyLoaded ? "11" : null)),
+      getSessionBackupPrivateKey: vi.fn(async () => (backupKeyLoaded ? privateKey : null)),
       getKeyBackupInfo: vi.fn(async () => ({
         algorithm: "m.megolm_backup.v1.curve25519-aes-sha2",
         auth_data: {},
@@ -1731,10 +1756,12 @@ describe("MatrixClient crypto bootstrapping", () => {
   });
 
   it("keeps a usable recovery key distinct from owner device verification", async () => {
-    const encoded = encodeRecoveryKey(new Uint8Array(Array.from({ length: 32 }, (_, i) => i + 1)));
+    const privateKey = new Uint8Array(Array.from({ length: 32 }, (_, i) => i + 1));
+    const encoded = encodeRecoveryKey(privateKey);
 
     matrixJsClient.getUserId = vi.fn(() => "@bot:example.org");
     matrixJsClient.getDeviceId = vi.fn(() => "DEVICE123");
+    let backupKeyLoaded = false;
     matrixJsClient.getCrypto = vi.fn(() => ({
       on: vi.fn(),
       bootstrapCrossSigning: vi.fn(async () => {}),
@@ -1752,8 +1779,11 @@ describe("MatrixClient crypto bootstrapping", () => {
         signedByOwner: false,
       })),
       checkKeyBackupAndEnable: vi.fn(async () => {}),
-      getActiveSessionBackupVersion: vi.fn(async () => "11"),
-      getSessionBackupPrivateKey: vi.fn(async () => new Uint8Array([1])),
+      loadSessionBackupPrivateKeyFromSecretStorage: vi.fn(async () => {
+        backupKeyLoaded = await consumeMatrixSecretStorageKey();
+      }),
+      getActiveSessionBackupVersion: vi.fn(async () => (backupKeyLoaded ? "11" : null)),
+      getSessionBackupPrivateKey: vi.fn(async () => (backupKeyLoaded ? privateKey : null)),
       getKeyBackupInfo: vi.fn(async () => ({
         algorithm: "m.megolm_backup.v1.curve25519-aes-sha2",
         auth_data: {},

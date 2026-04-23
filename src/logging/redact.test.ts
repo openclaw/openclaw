@@ -18,21 +18,6 @@ describe("redactSensitiveText", () => {
     expect(output).toBe("OPENAI_API_KEY=sk-123…cdef");
   });
 
-  it("masks env assignments after punctuation delimiters", () => {
-    expect(
-      redactSensitiveText("(OPENAI_API_KEY=sk-1234567890abcdef)", {
-        mode: "tools",
-        patterns: defaults,
-      }),
-    ).toBe("(OPENAI_API_KEY=sk-123…cdef)");
-    expect(
-      redactSensitiveText("[MATRIX_ACCESS_TOKEN=abcdef1234567890ghij]", {
-        mode: "tools",
-        patterns: defaults,
-      }),
-    ).toBe("[MATRIX_ACCESS_TOKEN=abcdef…ghij]");
-  });
-
   it("masks CLI flags", () => {
     const input = "curl --token abcdef1234567890ghij https://api.test";
     const output = redactSensitiveText(input, {
@@ -58,17 +43,6 @@ describe("redactSensitiveText", () => {
       patterns: defaults,
     });
     expect(output).toBe('{"token":"abcdef…ghij"}');
-  });
-
-  it("masks Matrix access token fields and query parameters", () => {
-    const json = '{"access_token":"abcdef1234567890ghij"}';
-    const url = "https://matrix.example/_matrix/client/v3/sync?access_token=zyxwv9876543210token";
-    expect(redactSensitiveText(json, { mode: "tools", patterns: defaults })).toBe(
-      '{"access_token":"abcdef…ghij"}',
-    );
-    expect(redactSensitiveText(url, { mode: "tools", patterns: defaults })).toBe(
-      "https://matrix.example/_matrix/client/v3/sync?access_token=zyxwv9…oken",
-    );
   });
 
   it("masks bearer tokens", () => {

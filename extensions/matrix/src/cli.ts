@@ -127,7 +127,12 @@ function formatMatrixCliCommandParts(parts: string[], accountId?: string): strin
   const normalizedAccountId = normalizeAccountId(accountId);
   const command = ["openclaw", "matrix", ...parts];
   if (normalizedAccountId !== "default") {
-    command.push("--account", normalizedAccountId);
+    const optionTerminatorIndex = command.indexOf("--");
+    if (optionTerminatorIndex >= 0) {
+      command.splice(optionTerminatorIndex, 0, "--account", normalizedAccountId);
+    } else {
+      command.push("--account", normalizedAccountId);
+    }
   }
   return command.map(formatMatrixCliShellArg).join(" ");
 }
@@ -910,7 +915,7 @@ function formatMatrixVerificationFollowupCommand(params: {
   dmParts?: string[];
 }): string {
   return formatMatrixCliCommandParts(
-    ["verify", params.action, params.requestId, ...(params.dmParts ?? [])],
+    ["verify", params.action, ...(params.dmParts ?? []), "--", params.requestId],
     params.accountId,
   );
 }

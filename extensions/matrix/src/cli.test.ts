@@ -378,13 +378,13 @@ describe("matrix CLI verification commands", () => {
       "- Accept the verification request in another Matrix client for this account.",
     );
     expect(consoleLogMock).toHaveBeenCalledWith(
-      "- Then run openclaw matrix verify start txn-1 --account ops to start SAS verification.",
+      "- Then run openclaw matrix verify start --account ops -- txn-1 to start SAS verification.",
     );
     expect(consoleLogMock).toHaveBeenCalledWith(
-      "- Run openclaw matrix verify sas txn-1 --account ops to display the SAS emoji or decimals.",
+      "- Run openclaw matrix verify sas --account ops -- txn-1 to display the SAS emoji or decimals.",
     );
     expect(consoleLogMock).toHaveBeenCalledWith(
-      "- When the SAS matches, run openclaw matrix verify confirm-sas txn-1 --account ops.",
+      "- When the SAS matches, run openclaw matrix verify confirm-sas --account ops -- txn-1.",
     );
   });
 
@@ -425,13 +425,39 @@ describe("matrix CLI verification commands", () => {
     });
     expect(consoleLogMock).toHaveBeenCalledWith("Room id: !room-'$(x):example.org");
     expect(consoleLogMock).toHaveBeenCalledWith(
-      "- Then run openclaw matrix verify start txn-dm --user-id @alice:example.org --room-id '!room-'\\''$(x):example.org' to start SAS verification.",
+      "- Then run openclaw matrix verify start --user-id @alice:example.org --room-id '!room-'\\''$(x):example.org' -- txn-dm to start SAS verification.",
     );
     expect(consoleLogMock).toHaveBeenCalledWith(
-      "- Run openclaw matrix verify sas txn-dm --user-id @alice:example.org --room-id '!room-'\\''$(x):example.org' to display the SAS emoji or decimals.",
+      "- Run openclaw matrix verify sas --user-id @alice:example.org --room-id '!room-'\\''$(x):example.org' -- txn-dm to display the SAS emoji or decimals.",
     );
     expect(consoleLogMock).toHaveBeenCalledWith(
-      "- When the SAS matches, run openclaw matrix verify confirm-sas txn-dm --user-id @alice:example.org --room-id '!room-'\\''$(x):example.org'.",
+      "- When the SAS matches, run openclaw matrix verify confirm-sas --user-id @alice:example.org --room-id '!room-'\\''$(x):example.org' -- txn-dm.",
+    );
+  });
+
+  it("terminates options before remote Matrix verification ids in follow-up commands", async () => {
+    requestMatrixVerificationMock.mockResolvedValue(
+      mockMatrixVerificationSummary({
+        id: "local-id",
+        transactionId: "--account=evil",
+        hasSas: false,
+        sas: undefined,
+      }),
+    );
+    const program = buildProgram();
+
+    await program.parseAsync(["matrix", "verify", "request", "--own-user", "--account", "ops"], {
+      from: "user",
+    });
+
+    expect(consoleLogMock).toHaveBeenCalledWith(
+      "- Then run openclaw matrix verify start --account ops -- --account=evil to start SAS verification.",
+    );
+    expect(consoleLogMock).toHaveBeenCalledWith(
+      "- Run openclaw matrix verify sas --account ops -- --account=evil to display the SAS emoji or decimals.",
+    );
+    expect(consoleLogMock).toHaveBeenCalledWith(
+      "- When the SAS matches, run openclaw matrix verify confirm-sas --account ops -- --account=evil.",
     );
   });
 
@@ -545,13 +571,13 @@ describe("matrix CLI verification commands", () => {
     });
 
     expect(consoleLogMock).toHaveBeenCalledWith(
-      "- Then run openclaw matrix verify start 'txn-'\\''$(touch /tmp/pwn)' to start SAS verification.",
+      "- Then run openclaw matrix verify start -- 'txn-'\\''$(touch /tmp/pwn)' to start SAS verification.",
     );
     expect(consoleLogMock).toHaveBeenCalledWith(
-      "- Run openclaw matrix verify sas 'txn-'\\''$(touch /tmp/pwn)' to display the SAS emoji or decimals.",
+      "- Run openclaw matrix verify sas -- 'txn-'\\''$(touch /tmp/pwn)' to display the SAS emoji or decimals.",
     );
     expect(consoleLogMock).toHaveBeenCalledWith(
-      "- When the SAS matches, run openclaw matrix verify confirm-sas 'txn-'\\''$(touch /tmp/pwn)'.",
+      "- When the SAS matches, run openclaw matrix verify confirm-sas -- 'txn-'\\''$(touch /tmp/pwn)'.",
     );
   });
 
@@ -569,10 +595,10 @@ describe("matrix CLI verification commands", () => {
     });
     expect(consoleLogMock).toHaveBeenCalledWith("SAS decimals: 1234 5678 9012");
     expect(consoleLogMock).toHaveBeenCalledWith(
-      "- If they match, run openclaw matrix verify confirm-sas self-1.",
+      "- If they match, run openclaw matrix verify confirm-sas -- self-1.",
     );
     expect(consoleLogMock).toHaveBeenCalledWith(
-      "- If they do not match, run openclaw matrix verify mismatch-sas self-1.",
+      "- If they do not match, run openclaw matrix verify mismatch-sas -- self-1.",
     );
   });
 
@@ -611,7 +637,7 @@ describe("matrix CLI verification commands", () => {
       verificationDmRoomId: "!dm:example.org",
     });
     expect(consoleLogMock).toHaveBeenCalledWith(
-      "- If they match, run openclaw matrix verify confirm-sas txn-dm --user-id @alice:example.org --room-id '!dm:example.org' --account ops.",
+      "- If they match, run openclaw matrix verify confirm-sas --user-id @alice:example.org --room-id '!dm:example.org' --account ops -- txn-dm.",
     );
   });
 
@@ -627,7 +653,7 @@ describe("matrix CLI verification commands", () => {
     await program.parseAsync(["matrix", "verify", "accept", "verification-1"], { from: "user" });
 
     expect(consoleLogMock).toHaveBeenCalledWith(
-      "- Run openclaw matrix verify start txn-stable to start SAS verification.",
+      "- Run openclaw matrix verify start -- txn-stable to start SAS verification.",
     );
   });
 

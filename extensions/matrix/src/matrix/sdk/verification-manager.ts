@@ -504,7 +504,7 @@ export class MatrixVerificationManager {
         return;
       }
       session.sasAutoConfirmStarted = true;
-      void this.confirmSasForSession(session, callbacks)
+      void this.confirmSasForSession(session, callbacks, { trustOwnDevice: false })
         .then(() => {
           this.touchVerificationSession(session);
         })
@@ -518,9 +518,12 @@ export class MatrixVerificationManager {
   private async confirmSasForSession(
     session: MatrixVerificationSession,
     callbacks: MatrixShowSasCallbacks,
+    opts: { trustOwnDevice: boolean } = { trustOwnDevice: true },
   ): Promise<void> {
     await callbacks.confirm();
-    await this.trustOwnDeviceAfterConfirmedSas(session);
+    if (opts.trustOwnDevice) {
+      await this.trustOwnDeviceAfterConfirmedSas(session);
+    }
   }
 
   private ensureVerificationStarted(session: MatrixVerificationSession): void {

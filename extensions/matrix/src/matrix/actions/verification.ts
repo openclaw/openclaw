@@ -3,7 +3,7 @@ import { requireRuntimeConfig } from "openclaw/plugin-sdk/config-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CoreConfig } from "../../types.js";
 import { formatMatrixEncryptionUnavailableError } from "../encryption-guidance.js";
-import type { MatrixOwnDeviceVerificationStatus } from "../sdk.js";
+import type { MatrixDeviceVerificationStatus, MatrixOwnDeviceVerificationStatus } from "../sdk.js";
 import type { MatrixVerificationSummary } from "../sdk/verification-manager.js";
 import { withResolvedActionClient, withStartedActionClient } from "./client.js";
 import type { MatrixActionClientOpts } from "./types.js";
@@ -158,7 +158,7 @@ async function waitForMatrixVerificationSummary(params: {
 }
 
 function formatMatrixOwnerVerificationDiagnostics(
-  status: MatrixOwnDeviceVerificationStatus | undefined,
+  status: MatrixDeviceVerificationStatus | MatrixOwnDeviceVerificationStatus | undefined,
 ): string {
   if (!status) {
     return "Matrix identity trust status was unavailable";
@@ -173,17 +173,17 @@ async function waitForMatrixSelfVerificationTrustStatus(params: {
   timeoutMs: number;
 }): Promise<MatrixOwnDeviceVerificationStatus> {
   const startedAt = Date.now();
-  let last: MatrixOwnDeviceVerificationStatus | undefined;
+  let last: MatrixDeviceVerificationStatus | undefined;
   let crossSigningPublished = false;
   while (Date.now() - startedAt < params.timeoutMs) {
     const [status, crossSigning] = await Promise.all([
-      params.client.getOwnDeviceVerificationStatus(),
+      params.client.getOwnDeviceIdentityVerificationStatus(),
       params.client.getOwnCrossSigningPublicationStatus(),
     ]);
     last = status;
     crossSigningPublished = crossSigning.published;
     if (last.verified && crossSigningPublished) {
-      return last;
+      return await params.client.getOwnDeviceVerificationStatus();
     }
     await sleep(Math.min(250, Math.max(25, params.timeoutMs - (Date.now() - startedAt))));
   }

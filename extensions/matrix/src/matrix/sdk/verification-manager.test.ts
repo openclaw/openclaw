@@ -520,7 +520,7 @@ describe("MatrixVerificationManager", () => {
     }
   });
 
-  it("cross-signs the other own device after auto-confirmed self-verification SAS", async () => {
+  it("does not cross-sign the other own device after auto-confirmed self-verification SAS", async () => {
     vi.useFakeTimers();
     const { confirm, verifier } = createSasVerifierFixture({
       decimal: [6158, 1986, 3513],
@@ -541,7 +541,7 @@ describe("MatrixVerificationManager", () => {
       await vi.advanceTimersByTimeAsync(30_100);
 
       expect(confirm).toHaveBeenCalledTimes(1);
-      expect(trustOwnDeviceAfterSas).toHaveBeenCalledWith("OTHERDEVICE");
+      expect(trustOwnDeviceAfterSas).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }

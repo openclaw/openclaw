@@ -1136,6 +1136,16 @@ export class MatrixClient {
     };
   }
 
+  async getOwnDeviceIdentityVerificationStatus(): Promise<MatrixDeviceVerificationStatus> {
+    const userId = this.client.getUserId() ?? this.selfUserId ?? null;
+    const deviceId = this.client.getDeviceId()?.trim() || null;
+    const deviceVerification = await this.getDeviceVerificationStatus(userId, deviceId);
+    return {
+      ...deviceVerification,
+      verified: deviceVerification.crossSigningVerified,
+    };
+  }
+
   async trustOwnIdentityAfterSelfVerification(): Promise<void> {
     if (!this.encryptionEnabled) {
       return;
@@ -1157,7 +1167,7 @@ export class MatrixClient {
         return;
       }
       if (typeof ownIdentity.verify !== "function") {
-        throw new Error("Matrix crypto backend does not support trusting own identity");
+        return;
       }
       await ownIdentity.verify();
     } finally {
@@ -1199,6 +1209,10 @@ export class MatrixClient {
       return await fail("Matrix crypto is not available (start client with encryption enabled)");
     }
 
+    const backupUsableBeforeStagedRecovery =
+      resolveMatrixRoomKeyBackupReadinessError(await this.getRoomKeyBackupStatus(), {
+        requireServerBackup: true,
+      }) === null;
     const trimmedRecoveryKey = rawRecoveryKey.trim();
     if (!trimmedRecoveryKey) {
       return await fail("Matrix recovery key is required");
@@ -1240,9 +1254,18 @@ export class MatrixClient {
       const stagedRecoveryKeyConfirmedBySecretStorage =
         Boolean(stagedKeyId) &&
         secretStorageStatus?.secretStorageKeyValidityMap?.[stagedKeyId ?? ""] === true;
+      const stagedRecoveryKeyRejectedBySecretStorage =
+        Boolean(stagedKeyId) &&
+        secretStorageStatus?.secretStorageKeyValidityMap?.[stagedKeyId ?? ""] === false;
+      const stagedRecoveryKeyUnlockedBackup =
+        stagedRecoveryKeyUsed &&
+        !stagedRecoveryKeyRejectedBySecretStorage &&
+        !stagedRecoveryKeyConfirmedBySecretStorage &&
+        !backupUsableBeforeStagedRecovery &&
+        backupUsable;
       const stagedRecoveryKeyValidated =
         stagedRecoveryKeyUsed &&
-        (stagedRecoveryKeyConfirmedBySecretStorage || (status.verified && backupUsable));
+        (stagedRecoveryKeyConfirmedBySecretStorage || stagedRecoveryKeyUnlockedBackup);
       const recoveryKeyAccepted = stagedRecoveryKeyValidated && (status.verified || backupUsable);
       if (!status.verified) {
         if (backupUsable && stagedRecoveryKeyValidated) {
