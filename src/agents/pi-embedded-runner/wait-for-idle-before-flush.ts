@@ -46,12 +46,14 @@ export async function flushPendingToolResultsAfterIdle(opts: {
   timeoutMs?: number;
   clearPendingOnTimeout?: boolean;
 }): Promise<void> {
-  const timedOut = await waitForAgentIdleBestEffort(
+  const idleState = await waitForAgentIdleBestEffort(
     opts.agent,
     opts.timeoutMs ?? DEFAULT_WAIT_FOR_IDLE_TIMEOUT_MS,
   );
-  if (timedOut && opts.clearPendingOnTimeout && opts.sessionManager?.clearPendingToolResults) {
-    opts.sessionManager.clearPendingToolResults();
+  if (idleState.timedOut) {
+    if (opts.clearPendingOnTimeout && opts.sessionManager?.clearPendingToolResults) {
+      opts.sessionManager.clearPendingToolResults();
+    }
     return;
   }
   opts.sessionManager?.flushPendingToolResults?.();
