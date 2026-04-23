@@ -6,6 +6,7 @@ import { resolveConfiguredEntries } from "./list.configured.js";
 import { formatErrorWithStack } from "./list.errors.js";
 import {
   appendCatalogSupplementRows,
+  appendConfiguredProviderRows,
   appendConfiguredRows,
   appendDiscoveredRows,
   appendProviderCatalogRows,
@@ -47,9 +48,8 @@ export async function modelsListCommand(
   if (providerFilter === null) {
     return;
   }
-  const { ensureAuthProfileStore, ensureOpenClawModelsJson, resolveOpenClawAgentDir } =
-    await import("./list.runtime.js");
-  const { sourceConfig, resolvedConfig: cfg } = await loadModelsConfigWithSource({
+  const { ensureAuthProfileStore, resolveOpenClawAgentDir } = await import("./list.runtime.js");
+  const { resolvedConfig: cfg } = await loadModelsConfigWithSource({
     commandName: "models list",
     runtime,
   });
@@ -62,11 +62,8 @@ export async function modelsListCommand(
   let availabilityErrorMessage: string | undefined;
   const useProviderCatalogFastPath = Boolean(opts.all && providerFilter === "codex");
   try {
-    // Keep command behavior explicit: sync models.json from the source config
-    // before building the read-only model registry view.
     if (!useProviderCatalogFastPath) {
-      await ensureOpenClawModelsJson(sourceConfig ?? cfg);
-      const loaded = await loadListModelRegistry(cfg, { sourceConfig, providerFilter });
+      const loaded = await loadListModelRegistry(cfg, { providerFilter });
       modelRegistry = loaded.registry;
       discoveredKeys = loaded.discoveredKeys;
       availableKeys = loaded.availableKeys;
@@ -106,6 +103,14 @@ export async function modelsListCommand(
       models: modelRegistry?.getAll() ?? [],
       context: rowContext,
     });
+
+    if (providerFilter) {
+      appendConfiguredProviderRows({
+        rows,
+        context: rowContext,
+        seenKeys,
+      });
+    }
 
     if (modelRegistry) {
       await appendCatalogSupplementRows({
