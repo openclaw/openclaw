@@ -110,11 +110,13 @@ function loadAvailableModels(registry: ModelRegistry, cfg: OpenClawConfig): Mode
 
 export async function loadModelRegistry(
   cfg: OpenClawConfig,
-  _opts?: { sourceConfig?: OpenClawConfig },
+  opts?: { sourceConfig?: OpenClawConfig; providerFilter?: string },
 ) {
   const agentDir = resolveOpenClawAgentDir();
   const authStorage = discoverAuthStorage(agentDir);
-  const registry = discoverModels(authStorage, agentDir);
+  const registry = discoverModels(authStorage, agentDir, {
+    providerFilter: opts?.providerFilter,
+  });
   const models = registry.getAll().filter(
     (model) =>
       !shouldSuppressBuiltInModel({

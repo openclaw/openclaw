@@ -29,6 +29,24 @@ export async function modelsListCommand(
   runtime: RuntimeEnv,
 ) {
   ensureFlagCompatibility(opts);
+  const providerFilter = (() => {
+    const raw = opts.provider?.trim();
+    if (!raw) {
+      return undefined;
+    }
+    if (/\s/u.test(raw)) {
+      runtime.error(
+        `Invalid provider filter "${raw}". Use a provider id such as "moonshot", not a display label.`,
+      );
+      process.exitCode = 1;
+      return null;
+    }
+    const parsed = parseModelRef(`${raw}/_`, DEFAULT_PROVIDER, DISPLAY_MODEL_PARSE_OPTIONS);
+    return parsed?.provider ?? normalizeLowercaseStringOrEmpty(raw);
+  })();
+  if (providerFilter === null) {
+    return;
+  }
   const { ensureAuthProfileStore, ensureOpenClawModelsJson, resolveOpenClawAgentDir } =
     await import("./list.runtime.js");
   const { sourceConfig, resolvedConfig: cfg } = await loadModelsConfigWithSource({
@@ -37,14 +55,6 @@ export async function modelsListCommand(
   });
   const authStore = ensureAuthProfileStore();
   const agentDir = resolveOpenClawAgentDir();
-  const providerFilter = (() => {
-    const raw = opts.provider?.trim();
-    if (!raw) {
-      return undefined;
-    }
-    const parsed = parseModelRef(`${raw}/_`, DEFAULT_PROVIDER, DISPLAY_MODEL_PARSE_OPTIONS);
-    return parsed?.provider ?? normalizeLowercaseStringOrEmpty(raw);
-  })();
 
   let modelRegistry: ModelRegistry | undefined;
   let discoveredKeys = new Set<string>();
@@ -56,7 +66,7 @@ export async function modelsListCommand(
     // before building the read-only model registry view.
     if (!useProviderCatalogFastPath) {
       await ensureOpenClawModelsJson(sourceConfig ?? cfg);
-      const loaded = await loadListModelRegistry(cfg, { sourceConfig });
+      const loaded = await loadListModelRegistry(cfg, { sourceConfig, providerFilter });
       modelRegistry = loaded.registry;
       discoveredKeys = loaded.discoveredKeys;
       availableKeys = loaded.availableKeys;
