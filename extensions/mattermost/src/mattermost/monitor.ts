@@ -1628,6 +1628,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           warn: logVerboseMessage,
         });
         let lastPartialText = "";
+        let hasStreamedMessage = false;
         const previewState: MattermostDraftPreviewState = {
           finalizedViaPreviewPost: false,
         };
@@ -1684,6 +1685,15 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           }
           lastPartialText = cleaned;
           draftStream.update(cleaned);
+          hasStreamedMessage = true;
+        };
+
+        const onDraftBoundary = () => {
+          if (hasStreamedMessage) {
+            draftStream.forceNewMessage();
+            hasStreamedMessage = false;
+          }
+          lastPartialText = "";
         };
 
         const { dispatcher, replyOptions, markDispatchIdle, markRunComplete } =
@@ -1744,18 +1754,15 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                   onPartialReply: (payload) => {
                     updateDraftFromPartial(payload.text);
                   },
-                  onAssistantMessageStart: () => {
-                    lastPartialText = "";
-                  },
-                  onReasoningEnd: () => {
-                    lastPartialText = "";
-                  },
+                  onAssistantMessageStart: onDraftBoundary,
+                  onReasoningEnd: onDraftBoundary,
                   onReasoningStream: async () => {
                     if (!lastPartialText) {
                       draftStream.update("Thinking…");
                     }
                   },
                   onToolStart: async (payload) => {
+                    onDraftBoundary();
                     draftStream.update(buildMattermostToolStatusText(payload));
                   },
                 },
