@@ -44,13 +44,14 @@ describe("Discord Session Key Continuity", () => {
 
     expect(missingIdKey).toContain("unknown");
     expect(missingIdKey).not.toBe("agent:main:main");
+    expect(missingIdKey).not.toBe("agent:main:dm");
   }
 
   it.each([
     {
       name: "keeps main-scoped DMs distinct from channel sessions",
       dmScope: "main" as const,
-      expectedDmKey: "agent:main:main",
+      expectedDmKey: "agent:main:dm",
     },
     {
       name: "keeps per-peer DMs distinct from channel sessions",

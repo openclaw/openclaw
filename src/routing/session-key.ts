@@ -165,10 +165,13 @@ export function buildAgentPeerSessionKey(params: {
     if (dmScope === "per-peer" && peerId) {
       return `agent:${normalizeAgentId(params.agentId)}:direct:${peerId}`;
     }
-    return buildAgentMainSessionKey({
-      agentId: params.agentId,
-      mainKey: params.mainKey,
-    });
+    // Use a dedicated DM bucket so Telegram (and other direct-chat) sessions always get
+    // their own sandbox context distinct from the agent main session. Without this, DMs
+    // with dmScope="main" resolve to the same session key as the main session, causing
+    // shouldSandboxSession to return false for mode="non-main" and losing sandbox
+    // isolation for mode="all" when the Telegram DM session key matches mainSessionKey
+    // after canonicalization. See GitHub issue #70342.
+    return `agent:${normalizeAgentId(params.agentId)}:dm`;
   }
   const channel = normalizeLowercaseStringOrEmpty(params.channel) || "unknown";
   const peerId = normalizeLowercaseStringOrEmpty(params.peerId) || "unknown";

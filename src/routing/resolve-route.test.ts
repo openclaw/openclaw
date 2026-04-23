@@ -109,8 +109,8 @@ describe("resolveAgentRoute", () => {
     expectResolvedRoute(route, {
       agentId: "main",
       accountId: "default",
-      sessionKey: "agent:main:main",
-      lastRoutePolicy: "main",
+      sessionKey: "agent:main:dm",
+      lastRoutePolicy: "session",
       matchedBy: "default",
     });
   });
@@ -237,7 +237,7 @@ describe("resolveAgentRoute", () => {
       },
       expected: {
         agentId: "a",
-        sessionKey: "agent:a:main",
+        sessionKey: "agent:a:dm",
         matchedBy: "binding.peer",
       },
     },
@@ -526,7 +526,7 @@ describe("resolveAgentRoute", () => {
       expected: {
         agentId: "home",
         matchedBy: "default",
-        sessionKey: "agent:home:main",
+        sessionKey: "agent:home:dm",
       },
     },
   ] as const)("$name", ({ cfg, channel, accountId, peer, expected }) => {
