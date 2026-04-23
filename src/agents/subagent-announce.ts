@@ -461,8 +461,8 @@ export async function runSubagentAnnounceFlow(params: {
         : undefined;
     })();
     const settleTimeoutMs = Math.min(Math.max(params.timeoutMs, 1), 120_000);
-    let reply = params.roundOneReply;
     let outcome: SubagentRunOutcome | undefined = params.outcome;
+    let reply = outcome?.status === "error" ? undefined : params.roundOneReply;
     if (childSessionId && isEmbeddedPiRunActive(childSessionId)) {
       const settled = await waitForEmbeddedPiRunEnd(childSessionId, settleTimeoutMs);
       if (!settled && isEmbeddedPiRunActive(childSessionId)) {
@@ -567,14 +567,17 @@ export async function runSubagentAnnounceFlow(params: {
     }
 
     if (!childCompletionFindings) {
-      const fallbackReply = sanitizeAnnounceReply(params.fallbackReply);
+      const terminalErrorOutcome = outcome?.status === "error";
+      const fallbackReply = terminalErrorOutcome
+        ? undefined
+        : sanitizeAnnounceReply(params.fallbackReply);
       const fallbackIsSilent = !fallbackReply;
 
-      if (!reply) {
+      if (!terminalErrorOutcome && !reply) {
         reply = await readSubagentOutput(params.childSessionKey, outcome);
       }
 
-      if (!reply?.trim()) {
+      if (!terminalErrorOutcome && !reply?.trim()) {
         reply = await readLatestSubagentOutputWithRetry({
           sessionKey: params.childSessionKey,
           maxWaitMs: params.timeoutMs,
@@ -582,7 +585,7 @@ export async function runSubagentAnnounceFlow(params: {
         });
       }
 
-      if (!reply?.trim() && fallbackReply && !fallbackIsSilent) {
+      if (!terminalErrorOutcome && !reply?.trim() && fallbackReply && !fallbackIsSilent) {
         reply = fallbackReply;
       }
 
@@ -612,7 +615,7 @@ export async function runSubagentAnnounceFlow(params: {
       if (!reply) {
         if (fallbackReply && !fallbackIsSilent) {
           reply = fallbackReply;
-        } else {
+        } else if (!terminalErrorOutcome) {
           return true;
         }
       }
