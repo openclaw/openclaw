@@ -82,6 +82,8 @@ None - all features are additive.
   
 ## Some Screenshots
 
+<img width="1462" height="948" alt="Screenshot 2026-04-23 112822" src="https://github.com/user-attachments/assets/68e66bfa-8539-4dbb-af2a-f38d147da05b" />
+
 <img width="1446" height="953" alt="Rocky-Mountaineer-screenshot-small" src="https://github.com/user-attachments/assets/7f49f842-af5b-45fd-8fd3-30e6c79c2bb4" /><br>
   
 <img width="1449" height="956" alt="Rocky-Mountaineer-screenshot" src="https://github.com/user-attachments/assets/f6ab3c5b-5d13-4ac8-81c5-a160cf589c2a" /><br>
