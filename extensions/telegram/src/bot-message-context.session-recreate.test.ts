@@ -10,8 +10,8 @@ import {
   updateSessionStore,
 } from "openclaw/plugin-sdk/config-runtime";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { createSuiteTempRootTracker } from "../../../src/test-helpers/temp-dir.js";
 import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
+import { createSuiteTempRootTracker } from "./temp-dir.test-helpers.js";
 
 const TELEGRAM_DIRECT_KEY = "agent:main:telegram:direct:7463849194";
 
