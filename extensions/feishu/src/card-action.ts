@@ -2,13 +2,13 @@ import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { handleFeishuMessage, type FeishuMessageEvent } from "./bot.js";
 import { decodeFeishuCardAction, buildFeishuCardActionTextFallback } from "./card-interaction.js";
-import { createFeishuClient } from "./client.js";
 import {
   createApprovalCard,
   FEISHU_APPROVAL_CANCEL_ACTION,
   FEISHU_APPROVAL_CONFIRM_ACTION,
   FEISHU_APPROVAL_REQUEST_ACTION,
 } from "./card-ux-approval.js";
+import { createFeishuClient } from "./client.js";
 import { sendCardFeishu, sendMessageFeishu } from "./send.js";
 
 export type FeishuCardActionEvent = {
@@ -234,7 +234,10 @@ async function resolveCardActionChatType(params: {
         normalizeResolvedCardActionChatType(response.data?.chat_mode) ??
         normalizeResolvedCardActionChatType(response.data?.chat_type);
       if (resolvedChatType) {
-        resolvedChatTypeCache.set(cacheKey, { value: resolvedChatType, expiresAt: now + CHAT_TYPE_CACHE_TTL_MS });
+        resolvedChatTypeCache.set(cacheKey, {
+          value: resolvedChatType,
+          expiresAt: now + CHAT_TYPE_CACHE_TTL_MS,
+        });
         return resolvedChatType;
       }
       params.log(

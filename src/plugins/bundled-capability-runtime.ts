@@ -69,8 +69,8 @@ function applyVitestCapabilityAliasOverrides(params: {
   }
 
   const {
-    ["openclaw/plugin-sdk"]: _ignoredLegacyRootAlias,
-    ["@openclaw/plugin-sdk"]: _ignoredScopedRootAlias,
+    "openclaw/plugin-sdk": _ignoredLegacyRootAlias,
+    "@openclaw/plugin-sdk": _ignoredScopedRootAlias,
     ...scopedAliasMap
   } = params.aliasMap;
   return {
@@ -80,6 +80,13 @@ function applyVitestCapabilityAliasOverrides(params: {
     // bundle that also drags Matrix/WhatsApp code into these tests.
     ...buildVitestCapabilityShimAliasMap(),
   };
+}
+
+function shouldApplyVitestCapabilityAliasOverrides(params: {
+  pluginSdkResolution?: PluginSdkResolutionPreference;
+  env?: PluginLoadOptions["env"];
+}): boolean {
+  return Boolean(params.env?.VITEST && params.pluginSdkResolution === "dist");
 }
 
 export function buildBundledCapabilityRuntimeConfig(
@@ -193,22 +200,28 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
   const getJiti = (modulePath: string) => {
     const tryNative =
       shouldPreferNativeJiti(modulePath) && !(env?.VITEST && params.pluginSdkResolution === "dist");
-    const aliasMap = applyVitestCapabilityAliasOverrides({
-      aliasMap: buildPluginLoaderAliasMap(
-        modulePath,
-        process.argv[1],
-        import.meta.url,
-        params.pluginSdkResolution,
-      ),
+    const aliasMap = shouldApplyVitestCapabilityAliasOverrides({
       pluginSdkResolution: params.pluginSdkResolution,
       env,
-    });
+    })
+      ? applyVitestCapabilityAliasOverrides({
+          aliasMap: buildPluginLoaderAliasMap(
+            modulePath,
+            process.argv[1],
+            import.meta.url,
+            params.pluginSdkResolution,
+          ),
+          pluginSdkResolution: params.pluginSdkResolution,
+          env,
+        })
+      : undefined;
     return getCachedPluginJitiLoader({
       cache: jitiLoaders,
       modulePath,
       importerUrl: import.meta.url,
       jitiFilename: import.meta.url,
-      aliasMap,
+      ...(aliasMap ? { aliasMap } : {}),
+      pluginSdkResolution: params.pluginSdkResolution,
       tryNative,
     });
   };

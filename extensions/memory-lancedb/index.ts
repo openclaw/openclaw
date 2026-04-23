@@ -40,8 +40,6 @@ type MemorySearchResult = {
   score: number;
 };
 
-type LegacyBeforeAgentStartContext = { prependContext: string } | undefined;
-
 // ============================================================================
 // LanceDB Provider
 // ============================================================================
@@ -541,9 +539,9 @@ export default definePluginEntry({
     // Lifecycle Hooks
     // ========================================================================
 
-    // Auto-recall: inject relevant memories before agent starts
+    // Auto-recall: inject relevant memories during prompt build
     if (cfg.autoRecall) {
-      api.on("before_agent_start", async (event): Promise<LegacyBeforeAgentStartContext> => {
+      api.on("before_prompt_build", async (event) => {
         if (!event.prompt || event.prompt.length < 5) {
           return undefined;
         }

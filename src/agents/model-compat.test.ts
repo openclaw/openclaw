@@ -5,12 +5,8 @@ const providerRuntimeMocks = vi.hoisted(() => ({
   resolveProviderModernModelRef: vi.fn(),
 }));
 
-vi.mock("../plugins/provider-runtime.js", async () => {
-  const actual = await vi.importActual<typeof import("../plugins/provider-runtime.js")>(
-    "../plugins/provider-runtime.js",
-  );
+vi.mock("../plugins/provider-runtime.js", () => {
   return {
-    ...actual,
     resolveProviderModernModelRef: providerRuntimeMocks.resolveProviderModernModelRef,
   };
 });
@@ -68,6 +64,15 @@ function expectSupportsStrictModeForcedOff(overrides?: Partial<Model<Api>>): voi
   const model = { ...baseModel(), ...overrides };
   delete (model as { compat?: unknown }).compat;
   const normalized = normalizeModelCompat(model as Model<Api>);
+  expect(supportsStrictMode(normalized)).toBe(false);
+}
+
+function expectNativeStreamingSupported(overrides: Partial<Model<Api>>): void {
+  const model = { ...baseModel(), ...overrides };
+  delete (model as { compat?: unknown }).compat;
+  const normalized = normalizeModelCompat(model as Model<Api>);
+  expect(supportsDeveloperRole(normalized)).toBe(false);
+  expect(supportsUsageInStreaming(normalized)).toBe(true);
   expect(supportsStrictMode(normalized)).toBe(false);
 }
 
@@ -169,42 +174,24 @@ describe("normalizeModelCompat", () => {
   });
 
   it("keeps supportsUsageInStreaming on for native Qwen endpoints", () => {
-    const model = {
-      ...baseModel(),
+    expectNativeStreamingSupported({
       provider: "qwen",
       baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
-    };
-    delete (model as { compat?: unknown }).compat;
-    const normalized = normalizeModelCompat(model);
-    expect(supportsDeveloperRole(normalized)).toBe(false);
-    expect(supportsUsageInStreaming(normalized)).toBe(true);
-    expect(supportsStrictMode(normalized)).toBe(false);
+    });
   });
 
   it("keeps supportsUsageInStreaming on for DashScope-compatible endpoints regardless of provider id", () => {
-    const model = {
-      ...baseModel(),
+    expectNativeStreamingSupported({
       provider: "custom-qwen",
       baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
-    };
-    delete (model as { compat?: unknown }).compat;
-    const normalized = normalizeModelCompat(model);
-    expect(supportsDeveloperRole(normalized)).toBe(false);
-    expect(supportsUsageInStreaming(normalized)).toBe(true);
-    expect(supportsStrictMode(normalized)).toBe(false);
+    });
   });
 
   it("keeps supportsUsageInStreaming on for Moonshot-native endpoints regardless of provider id", () => {
-    const model = {
-      ...baseModel(),
+    expectNativeStreamingSupported({
       provider: "custom-kimi",
       baseUrl: "https://api.moonshot.ai/v1",
-    };
-    delete (model as { compat?: unknown }).compat;
-    const normalized = normalizeModelCompat(model);
-    expect(supportsDeveloperRole(normalized)).toBe(false);
-    expect(supportsUsageInStreaming(normalized)).toBe(true);
-    expect(supportsStrictMode(normalized)).toBe(false);
+    });
   });
 
   it("leaves native api.openai.com model untouched", () => {

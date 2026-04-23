@@ -336,6 +336,34 @@ If dry-run fails:
 - `Dry run note: skipped <n> exec SecretRef resolvability check(s)`: dry-run skipped exec refs; rerun with `--allow-exec` if you need exec resolvability validation.
 - For batch mode, fix failing entries and rerun `--dry-run` before writing.
 
+## Write safety
+
+`openclaw config set` and other OpenClaw-owned config writers validate the full
+post-change config before committing it to disk. If the new payload fails schema
+validation or looks like a destructive clobber, the active config is left alone
+and the rejected payload is saved beside it as `openclaw.json.rejected.*`.
+
+Prefer CLI writes for small edits:
+
+```bash
+openclaw config set gateway.reload.mode hybrid --dry-run
+openclaw config set gateway.reload.mode hybrid
+openclaw config validate
+```
+
+If a write is rejected, inspect the saved payload and fix the full config shape:
+
+```bash
+CONFIG="$(openclaw config file)"
+ls -lt "$CONFIG".rejected.* 2>/dev/null | head
+openclaw config validate
+```
+
+Direct editor writes are still allowed, but the running Gateway treats them as
+untrusted until they validate. Invalid direct edits can be restored from the
+last-known-good backup during startup or hot reload. See
+[Gateway troubleshooting](/gateway/troubleshooting#gateway-restored-last-known-good-config).
+
 ## Subcommands
 
 - `config file`: Print the active config file path (resolved from `OPENCLAW_CONFIG_PATH` or default location).
@@ -351,3 +379,31 @@ gateway.
 openclaw config validate
 openclaw config validate --json
 ```
+
+After `openclaw config validate` is passing, you can use the local TUI to have
+an embedded agent compare the active config against the docs while you validate
+each change from the same terminal:
+
+If validation is already failing, start with `openclaw configure` or
+`openclaw doctor --fix`. `openclaw chat` does not bypass the invalid-config
+guard.
+
+```bash
+openclaw chat
+```
+
+Then inside the TUI:
+
+```text
+!openclaw config file
+!openclaw docs gateway auth token secretref
+!openclaw config validate
+!openclaw doctor
+```
+
+Typical repair loop:
+
+- Ask the agent to compare your current config with the relevant docs page and suggest the smallest fix.
+- Apply targeted edits with `openclaw config set` or `openclaw configure`.
+- Rerun `openclaw config validate` after each change.
+- If validation passes but the runtime is still unhealthy, run `openclaw doctor` or `openclaw doctor --fix` for migration and repair help.

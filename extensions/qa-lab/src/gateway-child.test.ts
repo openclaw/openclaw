@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -268,38 +268,41 @@ describe("buildQaRuntimeEnv", () => {
     expect(env.CODEX_HOME).toBe("/custom/codex-home");
   });
 
-  it("scrubs direct and live provider keys in mock mode", () => {
-    const env = buildQaRuntimeEnv({
-      ...createParams({
-        ANTHROPIC_API_KEY: "anthropic-live",
-        ANTHROPIC_OAUTH_TOKEN: "anthropic-oauth",
-        GEMINI_API_KEY: "gemini-live",
-        GEMINI_API_KEYS: "gemini-a gemini-b",
-        GOOGLE_API_KEY: "google-live",
-        OPENAI_API_KEY: "openai-live",
-        OPENAI_API_KEYS: "openai-a,openai-b",
-        CODEX_HOME: "/host/.codex",
-        OPENCLAW_LIVE_ANTHROPIC_KEY: "anthropic-live",
-        OPENCLAW_LIVE_ANTHROPIC_KEYS: "anthropic-a,anthropic-b",
-        OPENCLAW_LIVE_GEMINI_KEY: "gemini-live",
-        OPENCLAW_LIVE_OPENAI_KEY: "openai-live",
-      }),
-      providerMode: "mock-openai",
-    });
+  it.each(["mock-openai", "aimock"] as const)(
+    "scrubs direct and live provider keys in %s mode",
+    (providerMode) => {
+      const env = buildQaRuntimeEnv({
+        ...createParams({
+          ANTHROPIC_API_KEY: "anthropic-live",
+          ANTHROPIC_OAUTH_TOKEN: "anthropic-oauth",
+          GEMINI_API_KEY: "gemini-live",
+          GEMINI_API_KEYS: "gemini-a gemini-b",
+          GOOGLE_API_KEY: "google-live",
+          OPENAI_API_KEY: "openai-live",
+          OPENAI_API_KEYS: "openai-a,openai-b",
+          CODEX_HOME: "/host/.codex",
+          OPENCLAW_LIVE_ANTHROPIC_KEY: "anthropic-live",
+          OPENCLAW_LIVE_ANTHROPIC_KEYS: "anthropic-a,anthropic-b",
+          OPENCLAW_LIVE_GEMINI_KEY: "gemini-live",
+          OPENCLAW_LIVE_OPENAI_KEY: "openai-live",
+        }),
+        providerMode,
+      });
 
-    expect(env.OPENAI_API_KEY).toBeUndefined();
-    expect(env.OPENAI_API_KEYS).toBeUndefined();
-    expect(env.CODEX_HOME).toBeUndefined();
-    expect(env.ANTHROPIC_API_KEY).toBeUndefined();
-    expect(env.ANTHROPIC_OAUTH_TOKEN).toBeUndefined();
-    expect(env.GEMINI_API_KEY).toBeUndefined();
-    expect(env.GEMINI_API_KEYS).toBeUndefined();
-    expect(env.GOOGLE_API_KEY).toBeUndefined();
-    expect(env.OPENCLAW_LIVE_OPENAI_KEY).toBeUndefined();
-    expect(env.OPENCLAW_LIVE_ANTHROPIC_KEY).toBeUndefined();
-    expect(env.OPENCLAW_LIVE_ANTHROPIC_KEYS).toBeUndefined();
-    expect(env.OPENCLAW_LIVE_GEMINI_KEY).toBeUndefined();
-  });
+      expect(env.OPENAI_API_KEY).toBeUndefined();
+      expect(env.OPENAI_API_KEYS).toBeUndefined();
+      expect(env.CODEX_HOME).toBeUndefined();
+      expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+      expect(env.ANTHROPIC_OAUTH_TOKEN).toBeUndefined();
+      expect(env.GEMINI_API_KEY).toBeUndefined();
+      expect(env.GEMINI_API_KEYS).toBeUndefined();
+      expect(env.GOOGLE_API_KEY).toBeUndefined();
+      expect(env.OPENCLAW_LIVE_OPENAI_KEY).toBeUndefined();
+      expect(env.OPENCLAW_LIVE_ANTHROPIC_KEY).toBeUndefined();
+      expect(env.OPENCLAW_LIVE_ANTHROPIC_KEYS).toBeUndefined();
+      expect(env.OPENCLAW_LIVE_GEMINI_KEY).toBeUndefined();
+    },
+  );
 
   it("treats restart socket closures as retryable gateway call errors", () => {
     expect(__testing.isRetryableGatewayCallError("gateway closed (1006 abnormal closure)")).toBe(
@@ -453,45 +456,41 @@ describe("buildQaRuntimeEnv", () => {
   });
 
   it("force-stops gateway children that ignore the graceful signal", async () => {
-    const child = spawn(
-      process.execPath,
-      [
-        "-e",
-        [
-          "process.on('SIGTERM', () => {});",
-          "process.stdout.write('ready\\n');",
-          "setInterval(() => {}, 1000);",
-        ].join(""),
-      ],
+    const child = Object.assign(new EventEmitter(), {
+      pid: 12345,
+      exitCode: null as number | null,
+      signalCode: null as string | null,
+      kill: vi.fn((signal?: "SIGTERM" | "SIGKILL" | number) => {
+        if (signal === "SIGKILL") {
+          child.signalCode = "SIGKILL";
+          queueMicrotask(() => child.emit("exit"));
+        }
+        return true;
+      }),
+    });
+    const processKill = vi.spyOn(process, "kill").mockImplementation((_pid, signal) => {
+      if (signal === "SIGKILL") {
+        child.signalCode = "SIGKILL";
+        queueMicrotask(() => child.emit("exit"));
+      }
+      return true;
+    });
+
+    await __testing.stopQaGatewayChildProcessTree(
+      child as unknown as Parameters<typeof __testing.stopQaGatewayChildProcessTree>[0],
       {
-        detached: process.platform !== "win32",
-        stdio: ["ignore", "pipe", "ignore"],
+        gracefulTimeoutMs: 1,
+        forceTimeoutMs: 10,
       },
     );
-    cleanups.push(async () => {
-      if (child.exitCode === null && child.signalCode === null) {
-        try {
-          if (process.platform === "win32") {
-            child.kill("SIGKILL");
-          } else if (child.pid) {
-            process.kill(-child.pid, "SIGKILL");
-          }
-        } catch {
-          // The child already exited.
-        }
-      }
-    });
 
-    await new Promise<void>((resolve, reject) => {
-      child.once("error", reject);
-      child.stdout?.once("data", () => resolve());
-    });
-
-    await __testing.stopQaGatewayChildProcessTree(child, {
-      gracefulTimeoutMs: 50,
-      forceTimeoutMs: 1_000,
-    });
-
+    if (process.platform === "win32") {
+      expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+      expect(child.kill).toHaveBeenCalledWith("SIGKILL");
+    } else {
+      expect(processKill).toHaveBeenCalledWith(-12345, "SIGTERM");
+      expect(processKill).toHaveBeenCalledWith(-12345, "SIGKILL");
+    }
     expect(child.exitCode !== null || child.signalCode !== null).toBe(true);
   });
 

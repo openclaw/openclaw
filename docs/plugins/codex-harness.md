@@ -263,7 +263,12 @@ By default, the plugin starts Codex locally with:
 codex app-server --listen stdio://
 ```
 
-You can keep that default and only tune Codex native policy:
+By default, OpenClaw starts local Codex harness sessions fully unchained:
+`approvalPolicy: "never"` and `sandbox: "danger-full-access"`. That matches the
+trusted local operator posture used by the Codex CLI and lets autonomous
+heartbeats use network and shell tools without waiting on an invisible native
+approval path. You can tighten that policy, for example by routing reviews
+through the guardian:
 
 ```json5
 {
@@ -273,7 +278,8 @@ You can keep that default and only tune Codex native policy:
         enabled: true,
         config: {
           appServer: {
-            approvalPolicy: "on-request",
+            approvalPolicy: "untrusted",
+            approvalsReviewer: "guardian_subagent",
             sandbox: "workspace-write",
             serviceTier: "priority",
           },
@@ -318,7 +324,7 @@ Supported `appServer` fields:
 | `headers`           | `{}`                                     | Extra WebSocket headers.                                                 |
 | `requestTimeoutMs`  | `60000`                                  | Timeout for app-server control-plane calls.                              |
 | `approvalPolicy`    | `"never"`                                | Native Codex approval policy sent to thread start/resume/turn.           |
-| `sandbox`           | `"workspace-write"`                      | Native Codex sandbox mode sent to thread start/resume.                   |
+| `sandbox`           | `"danger-full-access"`                   | Native Codex sandbox mode sent to thread start/resume.                   |
 | `approvalsReviewer` | `"user"`                                 | Use `"guardian_subagent"` to let Codex guardian review native approvals. |
 | `serviceTier`       | unset                                    | Optional Codex service tier, for example `"priority"`.                   |
 
@@ -466,8 +472,12 @@ understanding continue to use the matching provider/model settings such as
 **Codex does not appear in `/model`:** enable `plugins.entries.codex.enabled`,
 set a `codex/*` model ref, or check whether `plugins.allow` excludes `codex`.
 
-**OpenClaw falls back to PI:** set `embeddedHarness.fallback: "none"` or
-`OPENCLAW_AGENT_HARNESS_FALLBACK=none` while testing.
+**OpenClaw uses PI instead of Codex:** if no Codex harness claims the run,
+OpenClaw may use PI as the compatibility backend. Set
+`embeddedHarness.runtime: "codex"` to force Codex selection while testing, or
+`embeddedHarness.fallback: "none"` to fail when no plugin harness matches. Once
+Codex app-server is selected, its failures surface directly without extra
+fallback config.
 
 **The app-server is rejected:** upgrade Codex so the app-server handshake
 reports version `0.118.0` or newer.

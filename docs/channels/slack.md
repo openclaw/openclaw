@@ -327,7 +327,7 @@ Surface different features that extend the above defaults.
       {
         "command": "/think",
         "description": "Set the thinking level",
-        "usage_hint": "<off|minimal|low|medium|high|xhigh>"
+        "usage_hint": "<level>"
       },
       {
         "command": "/verbose",
@@ -361,8 +361,8 @@ Surface different features that extend the above defaults.
       },
       {
         "command": "/models",
-        "description": "List providers or models for a provider",
-        "usage_hint": "[provider] [page] [limit=<n>|size=<n>|all]"
+        "description": "List providers/models or add a model",
+        "usage_hint": "[provider] [page] [limit=<n>|size=<n>|all] | add <provider> <modelId>"
       },
       {
         "command": "/help",
@@ -448,7 +448,7 @@ Surface different features that extend the above defaults.
       {
         "command": "/think",
         "description": "Set the thinking level",
-        "usage_hint": "<off|minimal|low|medium|high|xhigh>",
+        "usage_hint": "<level>",
         "url": "https://gateway-host.example.com/slack/events"
       },
       {
@@ -734,6 +734,7 @@ Notes:
 - `partial` (default): replace preview text with the latest partial output.
 - `block`: append chunked preview updates.
 - `progress`: show progress status text while generating, then send final text.
+- `streaming.preview.toolProgress`: when draft preview is active, route tool/progress updates into the same edited preview message (default: `true`). Set `false` to keep separate tool/progress messages.
 
 `channels.slack.streaming.nativeTransport` controls Slack native text streaming when `channels.slack.streaming.mode` is `partial` (default: `true`).
 
@@ -741,6 +742,7 @@ Notes:
 - Channel and group-chat roots can still use the normal draft preview when native streaming is unavailable.
 - Top-level Slack DMs stay off-thread by default, so they do not show the thread-style preview; use thread replies or `typingReaction` if you want visible progress there.
 - Media and non-text payloads fall back to normal delivery.
+- Media/error finals cancel pending preview edits without flushing a temporary draft; eligible text/block finals flush only when they can edit the preview in place.
 - If streaming fails mid-reply, OpenClaw falls back to normal delivery for remaining payloads.
 
 Use draft preview instead of Slack native text streaming:
@@ -971,7 +973,7 @@ Primary reference:
   - compatibility toggle: `dangerouslyAllowNameMatching` (break-glass; keep off unless needed)
   - channel access: `groupPolicy`, `channels.*`, `channels.*.users`, `channels.*.requireMention`
   - threading/history: `replyToMode`, `replyToModeByChatType`, `thread.*`, `historyLimit`, `dmHistoryLimit`, `dms.*.historyLimit`
-  - delivery: `textChunkLimit`, `chunkMode`, `mediaMaxMb`, `streaming`, `streaming.nativeTransport`
+  - delivery: `textChunkLimit`, `chunkMode`, `mediaMaxMb`, `streaming`, `streaming.nativeTransport`, `streaming.preview.toolProgress`
   - ops/features: `configWrites`, `commands.native`, `slashCommand.*`, `actions.*`, `userToken`, `userTokenReadOnly`
 
 ## Troubleshooting
