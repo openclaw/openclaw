@@ -65,6 +65,9 @@ export function isPrimarySessionTranscriptFileName(fileName: string): boolean {
   if (isCompactionCheckpointTranscriptFileName(fileName)) {
     return false;
   }
+  if (fileName.endsWith(".trajectory.jsonl")) {
+    return false;
+  }
   return !isSessionArchiveArtifactName(fileName);
 }
 
