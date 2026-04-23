@@ -132,6 +132,29 @@ describe("model-rules hook behavior", () => {
     expect(result!.appendSystemContext).not.toContain("openrouter/openrouter");
   });
 
+  it("preserves cross-provider modelIds that contain a different provider prefix", async () => {
+    // OpenRouter routes other providers' models using the original provider's
+    // prefix (e.g., "moonshotai/kimi-k2.6" via openrouter). The raw modelId
+    // must be used as-is so that a valid `## MODEL: moonshotai/kimi-k2.6`
+    // section is matched rather than a wrongly-nested
+    // `## MODEL: openrouter/moonshotai/kimi-k2.6`.
+    await fs.writeFile(
+      path.join(tmpDir, "MODELS.md"),
+      "## MODEL: moonshotai/kimi-k2.6\n\nKimi rules.\n",
+    );
+    const hook = await registerAndGetHook();
+    const result = await hook(
+      {},
+      {
+        workspaceDir: tmpDir,
+        modelId: "moonshotai/kimi-k2.6",
+        modelProviderId: "openrouter",
+      },
+    );
+    expect(result).toBeDefined();
+    expect(result!.appendSystemContext).toContain("Kimi rules.");
+  });
+
   it("disabledModels skips bare model id", async () => {
     await fs.writeFile(path.join(tmpDir, "MODELS.md"), "## MODEL: gpt-5.4\n\nRules.\n");
     const hook = await registerAndGetHook({ disabledModels: ["gpt-5.4"] });

@@ -46,12 +46,13 @@ export default definePluginEntry({
           }
         }
 
-        // Skip the provider prefix when modelId already starts with it.
-        // Some providers (e.g., OpenRouter) emit pre-qualified IDs like
-        // "openrouter/hunter-alpha"; concatenating the provider again would
-        // produce "openrouter/openrouter/hunter-alpha" and break full-ref matches.
+        // Only add a provider prefix when modelId is a bare ID (no "/").
+        // Provider-qualified IDs like "openrouter/hunter-alpha" OR cross-provider
+        // IDs like "moonshotai/kimi-k2.6" (routed through OpenRouter) must be
+        // preserved raw so findModelSection can match `## MODEL: moonshotai/kimi-k2.6`
+        // instead of a wrongly-nested `## MODEL: openrouter/moonshotai/kimi-k2.6`.
         const modelRef =
-          ctx.modelProviderId && !modelId.startsWith(`${ctx.modelProviderId}/`)
+          ctx.modelProviderId && !modelId.includes("/")
             ? `${ctx.modelProviderId}/${modelId}`
             : modelId;
 
