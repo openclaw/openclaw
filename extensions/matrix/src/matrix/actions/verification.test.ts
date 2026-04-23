@@ -420,6 +420,45 @@ describe("matrix verification actions", () => {
     expect(crypto.startVerification).not.toHaveBeenCalled();
   });
 
+  it("finalizes completed non-SAS self-verification without waiting for SAS", async () => {
+    const completed = {
+      completed: true,
+      hasSas: false,
+      id: "verification-1",
+      phaseName: "done",
+      transactionId: "tx-self",
+    };
+    const crypto = {
+      confirmVerificationSas: vi.fn(),
+      listVerifications: vi.fn(async () => []),
+      requestVerification: vi.fn(async () => completed),
+      startVerification: vi.fn(),
+    };
+    const confirmSas = vi.fn(async () => true);
+    const bootstrapOwnDeviceVerification = vi.fn(async () => ({
+      success: true,
+      verification: mockVerifiedOwnerStatus(),
+    }));
+    withStartedActionClientMock.mockImplementation(async (_opts, run) => {
+      return await run({
+        bootstrapOwnDeviceVerification,
+        crypto,
+        getOwnDeviceVerificationStatus: vi.fn(async () => mockVerifiedOwnerStatus()),
+      });
+    });
+
+    await expect(runMatrixSelfVerification({ confirmSas, timeoutMs: 500 })).resolves.toMatchObject({
+      completed: true,
+      deviceOwnerVerified: true,
+      id: "verification-1",
+    });
+
+    expect(crypto.listVerifications).not.toHaveBeenCalled();
+    expect(crypto.startVerification).not.toHaveBeenCalled();
+    expect(crypto.confirmVerificationSas).not.toHaveBeenCalled();
+    expect(confirmSas).not.toHaveBeenCalled();
+  });
+
   it("allows completed self-verification when only backup health remains degraded", async () => {
     const requested = {
       completed: false,
@@ -538,6 +577,73 @@ describe("matrix verification actions", () => {
     await expect(
       runMatrixSelfVerification({ confirmSas: vi.fn(async () => true), timeoutMs: 30 }),
     ).rejects.toThrow("Timed out waiting for Matrix self-verification to be accepted");
+
+    expect(crypto.cancelVerification).toHaveBeenCalledWith("verification-1", {
+      code: "m.user",
+      reason: "OpenClaw self-verification did not complete",
+    });
+  });
+
+  it("fails immediately when the self-verification request is cancelled while waiting", async () => {
+    const requested = {
+      completed: false,
+      hasSas: false,
+      id: "verification-1",
+      phaseName: "requested",
+      transactionId: "tx-self",
+    };
+    const cancelled = {
+      ...requested,
+      error: "Remote cancelled",
+      pending: false,
+      phaseName: "cancelled",
+    };
+    const crypto = {
+      cancelVerification: vi.fn(async () => cancelled),
+      listVerifications: vi.fn(async () => [cancelled]),
+      requestVerification: vi.fn(async () => requested),
+    };
+    withStartedActionClientMock.mockImplementation(async (_opts, run) => {
+      return await run({ crypto });
+    });
+
+    await expect(
+      runMatrixSelfVerification({ confirmSas: vi.fn(async () => true), timeoutMs: 500 }),
+    ).rejects.toThrow("Matrix self-verification was cancelled: Remote cancelled");
+
+    expect(crypto.listVerifications).toHaveBeenCalledTimes(1);
+    expect(crypto.cancelVerification).toHaveBeenCalledWith("verification-1", {
+      code: "m.user",
+      reason: "OpenClaw self-verification did not complete",
+    });
+  });
+
+  it("cancels the request when SAS mismatch submission fails", async () => {
+    const sas = {
+      completed: false,
+      hasSas: true,
+      id: "verification-1",
+      phaseName: "started",
+      sas: {
+        decimal: [1, 2, 3],
+      },
+      transactionId: "tx-self",
+    };
+    const crypto = {
+      cancelVerification: vi.fn(async () => sas),
+      listVerifications: vi.fn(async () => [sas]),
+      mismatchVerificationSas: vi.fn(async () => {
+        throw new Error("failed to send SAS mismatch");
+      }),
+      requestVerification: vi.fn(async () => sas),
+    };
+    withStartedActionClientMock.mockImplementation(async (_opts, run) => {
+      return await run({ crypto });
+    });
+
+    await expect(
+      runMatrixSelfVerification({ confirmSas: vi.fn(async () => false), timeoutMs: 500 }),
+    ).rejects.toThrow("failed to send SAS mismatch");
 
     expect(crypto.cancelVerification).toHaveBeenCalledWith("verification-1", {
       code: "m.user",

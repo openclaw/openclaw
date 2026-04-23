@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn as startOpenClawCliProcess } from "node:child_process";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -69,7 +69,7 @@ export function startMatrixQaOpenClawCli(params: {
       }
     | undefined;
 
-  const child = spawn(process.execPath, [distEntryPath, ...params.args], {
+  const child = startOpenClawCliProcess(process.execPath, [distEntryPath, ...params.args], {
     cwd,
     env: params.env,
     stdio: ["pipe", "pipe", "pipe"],

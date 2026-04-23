@@ -65,6 +65,10 @@ function shouldStartMatrixSasVerification(summary: MatrixVerificationSummary): b
   return !summary.hasSas && summary.phaseName !== "started" && !summary.completed;
 }
 
+function isMatrixVerificationCancelled(summary: MatrixVerificationSummary): boolean {
+  return summary.phaseName === "cancelled";
+}
+
 async function waitForMatrixVerificationSummary(params: {
   crypto: MatrixCryptoActionFacade;
   label: string;
@@ -81,6 +85,13 @@ async function waitForMatrixVerificationSummary(params: {
       last = found;
       if (params.predicate(found)) {
         return found;
+      }
+      if (isMatrixVerificationCancelled(found)) {
+        throw new Error(
+          `Matrix self-verification was cancelled${
+            found.error ? `: ${found.error}` : ` while waiting to ${params.label}`
+          }`,
+        );
       }
     }
     await sleep(Math.min(250, Math.max(25, params.timeoutMs - (Date.now() - startedAt))));
@@ -138,6 +149,33 @@ async function cancelMatrixSelfVerificationOnFailure(params: {
     .catch(() => undefined);
 }
 
+async function completeMatrixSelfVerification(params: {
+  client: MatrixActionClient;
+  completed: MatrixVerificationSummary;
+  timeoutMs: number;
+}): Promise<MatrixSelfVerificationResult> {
+  const bootstrap = await params.client.bootstrapOwnDeviceVerification({
+    allowAutomaticCrossSigningReset: false,
+    verifyOwnIdentity: true,
+  });
+  if (!bootstrap.verification.verified) {
+    throw new Error(
+      `Matrix self-verification completed, but full Matrix identity trust is still incomplete: ${
+        bootstrap.error ?? formatMatrixOwnerVerificationDiagnostics(bootstrap.verification)
+      }`,
+    );
+  }
+  const ownerVerification = await waitForMatrixOwnerVerificationStatus({
+    client: params.client,
+    timeoutMs: params.timeoutMs,
+  });
+  return {
+    ...params.completed,
+    deviceOwnerVerified: ownerVerification.verified,
+    ownerVerification,
+  };
+}
+
 export async function listMatrixVerifications(opts: MatrixActionClientOpts = {}) {
   return await withStartedActionClient(opts, async (client) => {
     const crypto = requireCrypto(client, opts);
@@ -187,17 +225,21 @@ export async function runMatrixSelfVerification(
       requested = await crypto.requestVerification({ ownUser: true });
       await params.onRequested?.(requested);
 
-      let ready = requested;
-      if (!ready.hasSas) {
-        ready = await waitForMatrixVerificationSummary({
-          crypto,
-          label: "be accepted in another Matrix client",
-          request: requested,
-          timeoutMs,
-          predicate: isMatrixVerificationReadyForSas,
-        });
-      }
+      const ready = isMatrixVerificationReadyForSas(requested)
+        ? requested
+        : await waitForMatrixVerificationSummary({
+            crypto,
+            label: "be accepted in another Matrix client",
+            request: requested,
+            timeoutMs,
+            predicate: isMatrixVerificationReadyForSas,
+          });
       await params.onReady?.(ready);
+
+      if (ready.completed) {
+        requestCompleted = true;
+        return await completeMatrixSelfVerification({ client, completed: ready, timeoutMs });
+      }
 
       const started = shouldStartMatrixSasVerification(ready)
         ? await crypto.startVerification(ready.id, "sas")
@@ -219,8 +261,8 @@ export async function runMatrixSelfVerification(
 
       const matched = await params.confirmSas(sasSummary.sas, sasSummary);
       if (!matched) {
-        handledByMismatch = true;
         await crypto.mismatchVerificationSas(sasSummary.id);
+        handledByMismatch = true;
         throw new Error("Matrix SAS verification was not confirmed.");
       }
 
@@ -235,23 +277,7 @@ export async function runMatrixSelfVerification(
             predicate: (summary) => summary.completed,
           });
       requestCompleted = true;
-      const bootstrap = await client.bootstrapOwnDeviceVerification({
-        allowAutomaticCrossSigningReset: false,
-        verifyOwnIdentity: true,
-      });
-      if (!bootstrap.verification.verified) {
-        throw new Error(
-          `Matrix self-verification completed, but full Matrix identity trust is still incomplete: ${
-            bootstrap.error ?? formatMatrixOwnerVerificationDiagnostics(bootstrap.verification)
-          }`,
-        );
-      }
-      const ownerVerification = await waitForMatrixOwnerVerificationStatus({ client, timeoutMs });
-      return {
-        ...completed,
-        deviceOwnerVerified: ownerVerification.verified,
-        ownerVerification,
-      };
+      return await completeMatrixSelfVerification({ client, completed, timeoutMs });
     } catch (error) {
       if (!requestCompleted && !handledByMismatch) {
         await cancelMatrixSelfVerificationOnFailure({ crypto, request: requested });
