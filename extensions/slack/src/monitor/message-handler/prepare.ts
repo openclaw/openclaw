@@ -1,5 +1,5 @@
-import { resolveAckReaction } from "openclaw/plugin-sdk/agent-runtime";
 import {
+  resolveAckReaction,
   shouldAckReaction as shouldAckReactionGate,
   type AckReactionScope,
 } from "openclaw/plugin-sdk/channel-feedback";
