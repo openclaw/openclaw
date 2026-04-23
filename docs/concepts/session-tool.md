@@ -30,7 +30,9 @@ orchestrate sub-agents.
 token counts, and timestamps. Filter by kind (`main`, `group`, `cron`, `hook`,
 `node`), exact `label`, exact `agentId`, search text, or recency
 (`activeMinutes`). When you need mailbox-style triage, it can also ask for
-derived titles, last-message previews, or bounded recent messages.
+derived titles, last-message previews, or bounded recent messages. Preview
+transcript reads are scoped to sessions visible under the configured session
+tool visibility policy.
 
 `sessions_history` fetches the conversation transcript for a specific session.
 By default, tool results are excluded -- pass `includeTools: true` to see them.
