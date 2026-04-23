@@ -22,6 +22,7 @@ export function resolveSingletonManagedCache<T>(cacheKey: symbol): ManagedCache<
     cache: new Map<string, T>(),
     pending: new Map<string, Promise<T>>(),
   };
+  console.warn("[memory-core] managed cache had invalid shape; rebuilding shared store");
   (globalThis as Record<symbol, unknown>)[cacheKey] = repaired;
   return repaired;
 }
