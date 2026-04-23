@@ -220,10 +220,11 @@ describe("discord live qa runtime", () => {
     ).toBe(false);
   });
 
-  it("includes the two Discord live scenarios", () => {
+  it("includes the Discord live scenarios", () => {
     expect(__testing.findScenario().map((scenario) => scenario.id)).toEqual([
       "discord-canary",
       "discord-mention-gating",
+      "discord-native-help-command-registration",
     ]);
   });
 
@@ -304,6 +305,85 @@ describe("discord live qa runtime", () => {
         expectedStandardScenarioIds: LIVE_TRANSPORT_BASELINE_STANDARD_SCENARIO_IDS,
       }),
     ).toEqual(["allowlist-block", "top-level-reply-shape", "restart-resume"]);
+  });
+
+  it("lists Discord application commands through the REST API", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_input: string | URL | globalThis.Request, init?: RequestInit) => {
+        expect(init?.headers).toBeInstanceOf(Headers);
+        expect((init?.headers as Headers).get("authorization")).toBe("Bot token");
+        return new Response(
+          JSON.stringify([
+            { id: "623456789012345678", name: "help" },
+            { id: "623456789012345679", name: "commands" },
+          ]),
+          {
+            status: 200,
+            headers: {
+              "content-type": "application/json",
+            },
+          },
+        );
+      }),
+    );
+
+    await expect(
+      __testing.listApplicationCommands({
+        token: "token",
+        applicationId: "323456789012345678",
+      }),
+    ).resolves.toEqual([
+      { id: "623456789012345678", name: "help" },
+      { id: "623456789012345679", name: "commands" },
+    ]);
+  });
+
+  it("waits for required Discord application commands to be registered", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.stubGlobal(
+        "fetch",
+        vi
+          .fn()
+          .mockResolvedValueOnce(
+            new Response(JSON.stringify([{ id: "623456789012345679", name: "commands" }]), {
+              status: 200,
+              headers: {
+                "content-type": "application/json",
+              },
+            }),
+          )
+          .mockResolvedValueOnce(
+            new Response(
+              JSON.stringify([
+                { id: "623456789012345679", name: "commands" },
+                { id: "623456789012345678", name: "help" },
+              ]),
+              {
+                status: 200,
+                headers: {
+                  "content-type": "application/json",
+                },
+              },
+            ),
+          ),
+      );
+
+      const registeredPromise = __testing.assertDiscordApplicationCommandsRegistered({
+        token: "token",
+        applicationId: "323456789012345678",
+        expectedCommandNames: ["help"],
+        timeoutMs: 5_000,
+      });
+      await vi.advanceTimersByTimeAsync(1_100);
+
+      await expect(registeredPromise).resolves.toEqual({
+        commandNames: ["commands", "help"],
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("adds an abort deadline to Discord API requests", async () => {

@@ -33,14 +33,23 @@ type DiscordQaRuntimeEnv = {
   sutApplicationId: string;
 };
 
-type DiscordQaScenarioId = "discord-canary" | "discord-mention-gating";
+type DiscordQaScenarioId =
+  | "discord-canary"
+  | "discord-mention-gating"
+  | "discord-native-help-command-registration";
 
-type DiscordQaScenarioRun = {
-  expectReply: boolean;
-  input: string;
-  expectedTextIncludes?: string[];
-  matchText?: string;
-};
+type DiscordQaScenarioRun =
+  | {
+      kind: "channel-message";
+      expectReply: boolean;
+      input: string;
+      expectedTextIncludes?: string[];
+      matchText?: string;
+    }
+  | {
+      kind: "application-command-registration";
+      expectedCommandNames: string[];
+    };
 
 type DiscordQaScenarioDefinition = LiveTransportScenarioDefinition<DiscordQaScenarioId> & {
   buildRun: (sutApplicationId: string) => DiscordQaScenarioRun;
@@ -60,6 +69,11 @@ type DiscordMessage = {
   timestamp?: string;
   author?: DiscordUser;
   referenced_message?: { id?: string } | null;
+};
+
+type DiscordApplicationCommand = {
+  id: string;
+  name?: string;
 };
 
 type DiscordObservedMessage = {
@@ -149,6 +163,7 @@ const DISCORD_QA_SCENARIOS: DiscordQaScenarioDefinition[] = [
     buildRun: (sutApplicationId) => {
       const token = `DISCORD_QA_ECHO_${randomUUID().slice(0, 8).toUpperCase()}`;
       return {
+        kind: "channel-message",
         expectReply: true,
         input: `<@${sutApplicationId}> reply with only this exact marker: ${token}`,
         expectedTextIncludes: [token],
@@ -164,11 +179,21 @@ const DISCORD_QA_SCENARIOS: DiscordQaScenarioDefinition[] = [
     buildRun: () => {
       const token = `DISCORD_QA_NOMENTION_${randomUUID().slice(0, 8).toUpperCase()}`;
       return {
+        kind: "channel-message",
         expectReply: false,
         input: `reply with only this exact marker: ${token}`,
         matchText: token,
       };
     },
+  },
+  {
+    id: "discord-native-help-command-registration",
+    title: "Discord native help command is registered",
+    timeoutMs: 45_000,
+    buildRun: () => ({
+      kind: "application-command-registration",
+      expectedCommandNames: ["help"],
+    }),
   },
 ];
 
@@ -369,6 +394,13 @@ async function listChannelMessagesAfter(params: {
   return await callDiscordApi<DiscordMessage[]>({
     token: params.token,
     path: `/channels/${params.channelId}/messages?${query.toString()}`,
+  });
+}
+
+async function listApplicationCommands(params: { token: string; applicationId: string }) {
+  return await callDiscordApi<DiscordApplicationCommand[]>({
+    token: params.token,
+    path: `/applications/${params.applicationId}/commands`,
   });
 }
 
@@ -624,6 +656,37 @@ function assertDiscordScenarioReply(params: {
   }
 }
 
+async function assertDiscordApplicationCommandsRegistered(params: {
+  applicationId: string;
+  expectedCommandNames: string[];
+  timeoutMs: number;
+  token: string;
+}) {
+  const startedAt = Date.now();
+  let lastNames: string[] = [];
+  while (Date.now() - startedAt < params.timeoutMs) {
+    const commands = await listApplicationCommands({
+      token: params.token,
+      applicationId: params.applicationId,
+    });
+    lastNames = commands
+      .map((command) => command.name ?? "")
+      .filter(Boolean)
+      .toSorted();
+    const nameSet = new Set(lastNames);
+    const missing = params.expectedCommandNames.filter((name) => !nameSet.has(name));
+    if (missing.length === 0) {
+      return { commandNames: lastNames };
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+  }
+  throw new Error(
+    `missing Discord native command(s): ${params.expectedCommandNames
+      .filter((name) => !lastNames.includes(name))
+      .join(", ")} (registered: ${lastNames.join(", ") || "none"})`,
+  );
+}
+
 export async function runDiscordQaLive(params: {
   repoRoot?: string;
   outputDir?: string;
@@ -713,6 +776,23 @@ export async function runDiscordQaLive(params: {
         assertLeaseHealthy();
         const scenarioRun = scenario.buildRun(runtimeEnv.sutApplicationId);
         try {
+          if (scenarioRun.kind === "application-command-registration") {
+            const registered = await assertDiscordApplicationCommandsRegistered({
+              token: runtimeEnv.sutBotToken,
+              applicationId: runtimeEnv.sutApplicationId,
+              expectedCommandNames: scenarioRun.expectedCommandNames,
+              timeoutMs: scenario.timeoutMs,
+            });
+            scenarioResults.push({
+              id: scenario.id,
+              title: scenario.title,
+              status: "pass",
+              details: redactPublicMetadata
+                ? "native command registered"
+                : `native command registered (${registered.commandNames.join(", ")})`,
+            });
+            continue;
+          }
           const sent = await sendChannelMessage(
             runtimeEnv.driverBotToken,
             runtimeEnv.channelId,
@@ -750,7 +830,7 @@ export async function runDiscordQaLive(params: {
               : `reply message ${matched.message.messageId} matched`,
           });
         } catch (error) {
-          if (!scenarioRun.expectReply) {
+          if (scenarioRun.kind === "channel-message" && !scenarioRun.expectReply) {
             const details = formatErrorMessage(error);
             if (details === `timed out after ${scenario.timeoutMs}ms waiting for Discord message`) {
               scenarioResults.push({
@@ -884,10 +964,12 @@ export const __testing = {
   DISCORD_QA_SCENARIOS,
   DISCORD_QA_STANDARD_SCENARIO_IDS,
   assertDiscordScenarioReply,
+  assertDiscordApplicationCommandsRegistered,
   buildDiscordQaConfig,
   buildObservedMessagesArtifact,
   callDiscordApi,
   findScenario,
+  listApplicationCommands,
   matchesDiscordScenarioReply,
   normalizeDiscordObservedMessage,
   parseDiscordQaCredentialPayload,
