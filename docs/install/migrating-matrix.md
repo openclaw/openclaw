@@ -304,7 +304,7 @@ new backup key can load correctly after restart.
 - Meaning: the provided key could not be parsed or did not match the expected format.
 - What to do: retry with the exact recovery key from your Matrix client or recovery-key file.
 
-`Matrix recovery key was applied, but this device still lacks full Matrix identity trust. ...`
+`Matrix recovery key was applied, but this device still lacks full Matrix identity trust.`
 
 - Meaning: OpenClaw could apply the recovery key, but Matrix still has not
   established full cross-signing identity trust for this device. Check the

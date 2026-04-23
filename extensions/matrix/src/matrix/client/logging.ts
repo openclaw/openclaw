@@ -17,7 +17,7 @@ type MatrixJsSdkLogger = {
 };
 
 type MatrixJsSdkLoglevelLogger = MatrixJsSdkLogger & {
-  levels?: { DEBUG?: number };
+  levels?: { DEBUG?: number; ERROR?: number; INFO?: number };
   methodFactory?: (
     methodName: string,
     logLevel: number,
@@ -129,8 +129,18 @@ function applyMatrixJsSdkLogger(): void {
       writeMatrixSdkLog(method, module, messageOrObject);
     };
   };
-  logger.setLevel?.(logger.levels?.DEBUG ?? "debug", false);
+  logger.setLevel?.(resolveMatrixJsSdkLogLevel(logger), false);
   logger.rebuild?.();
+}
+
+function resolveMatrixJsSdkLogLevel(logger: MatrixJsSdkLoglevelLogger): number | string {
+  if (matrixSdkLogMode === "quiet") {
+    return logger.levels?.ERROR ?? "error";
+  }
+  if (process.env.OPENCLAW_MATRIX_SDK_DEBUG === "1" || process.env.MATRIX_SDK_DEBUG === "1") {
+    return logger.levels?.DEBUG ?? "debug";
+  }
+  return logger.levels?.INFO ?? "info";
 }
 
 function createMatrixJsSdkLoggerInstance(prefix: string): MatrixJsSdkLogger {

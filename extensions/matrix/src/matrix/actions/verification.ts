@@ -61,6 +61,10 @@ function isMatrixVerificationReadyForSas(summary: MatrixVerificationSummary): bo
   );
 }
 
+function shouldStartMatrixSasVerification(summary: MatrixVerificationSummary): boolean {
+  return !summary.hasSas && summary.phaseName !== "started" && !summary.completed;
+}
+
 async function waitForMatrixVerificationSummary(params: {
   crypto: MatrixCryptoActionFacade;
   label: string;
@@ -195,7 +199,9 @@ export async function runMatrixSelfVerification(
       }
       await params.onReady?.(ready);
 
-      const started = ready.hasSas ? ready : await crypto.startVerification(ready.id, "sas");
+      const started = shouldStartMatrixSasVerification(ready)
+        ? await crypto.startVerification(ready.id, "sas")
+        : ready;
       let sasSummary = started;
       if (!sasSummary.hasSas) {
         sasSummary = await waitForMatrixVerificationSummary({

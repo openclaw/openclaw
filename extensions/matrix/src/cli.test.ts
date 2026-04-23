@@ -415,6 +415,40 @@ describe("matrix CLI verification commands", () => {
     expect(consoleLogMock).toHaveBeenCalledWith("Initiated by OpenClaw: no");
   });
 
+  it("sanitizes remote Matrix verification metadata before printing it", async () => {
+    listMatrixVerificationsMock.mockResolvedValue([
+      mockMatrixVerificationSummary({
+        id: "self-\u001B[31m1",
+        transactionId: "txn-\n1",
+        otherUserId: "@bot\u001B[2J:example.org",
+        otherDeviceId: "PHONE\r123",
+        phaseName: "started\u001B[0m",
+        methods: ["m.sas.v1\nspoof"],
+        chosenMethod: "m.sas.v1\u001B[1m",
+        sas: {
+          emoji: [
+            ["🐶", "Dog\u001B[31m"],
+            ["🐱", "Cat\nspoof"],
+          ],
+        },
+        error: "Remote\u001B[31m cancelled\nforged",
+      }),
+    ]);
+    const program = buildProgram();
+
+    await program.parseAsync(["matrix", "verify", "list"], { from: "user" });
+
+    expect(consoleLogMock).toHaveBeenCalledWith("Verification id: self-1");
+    expect(consoleLogMock).toHaveBeenCalledWith("Transaction id: txn-1");
+    expect(consoleLogMock).toHaveBeenCalledWith("Other user: @bot:example.org");
+    expect(consoleLogMock).toHaveBeenCalledWith("Other device: PHONE123");
+    expect(consoleLogMock).toHaveBeenCalledWith("Phase: started");
+    expect(consoleLogMock).toHaveBeenCalledWith("Methods: m.sas.v1spoof");
+    expect(consoleLogMock).toHaveBeenCalledWith("Chosen method: m.sas.v1");
+    expect(consoleLogMock).toHaveBeenCalledWith("SAS emoji: 🐶 Dog | 🐱 Catspoof");
+    expect(consoleLogMock).toHaveBeenCalledWith("Verification error: Remote cancelledforged");
+  });
+
   it("shows Matrix SAS diagnostics and confirm/mismatch guidance", async () => {
     getMatrixVerificationSasMock.mockResolvedValue({
       decimal: [1234, 5678, 9012],

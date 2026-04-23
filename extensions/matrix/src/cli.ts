@@ -645,31 +645,91 @@ function printVerificationTrustDiagnostics(status: {
   console.log(`Signed by owner: ${status.signedByOwner ? "yes" : "no"}`);
 }
 
-function printMatrixVerificationSummary(summary: MatrixCliVerificationSummary): void {
-  console.log(`Verification id: ${summary.id}`);
-  if (summary.transactionId) {
-    console.log(`Transaction id: ${summary.transactionId}`);
+function sanitizeMatrixCliText(value: string): string {
+  let withoutAnsi = "";
+  for (let index = 0; index < value.length; index++) {
+    const code = value.charCodeAt(index);
+    if (code !== 0x1b) {
+      withoutAnsi += value[index];
+      continue;
+    }
+
+    const marker = value[index + 1];
+    if (marker === "[") {
+      index += 2;
+      while (index < value.length && !isAnsiFinalByte(value.charCodeAt(index))) {
+        index++;
+      }
+      continue;
+    }
+    if (marker === "]") {
+      index += 2;
+      while (index < value.length) {
+        const current = value.charCodeAt(index);
+        if (current === 0x07) {
+          break;
+        }
+        if (current === 0x1b && value[index + 1] === "\\") {
+          index++;
+          break;
+        }
+        index++;
+      }
+      continue;
+    }
+    index++;
   }
-  console.log(`Other user: ${summary.otherUserId}`);
-  console.log(`Other device: ${summary.otherDeviceId ?? "unknown"}`);
+
+  let sanitized = "";
+  for (const character of withoutAnsi) {
+    const code = character.charCodeAt(0);
+    if ((code >= 0x20 && code !== 0x7f) || code > 0x7f) {
+      sanitized += character;
+    }
+  }
+  return sanitized;
+}
+
+function isAnsiFinalByte(code: number): boolean {
+  return code >= 0x40 && code <= 0x7e;
+}
+
+function formatMatrixCliSasEmoji(emoji: NonNullable<MatrixCliVerificationSas["emoji"]>): string {
+  return emoji
+    .map(
+      ([emojiValue, label]) =>
+        `${sanitizeMatrixCliText(emojiValue)} ${sanitizeMatrixCliText(label)}`,
+    )
+    .join(" | ");
+}
+
+function printMatrixVerificationSummary(summary: MatrixCliVerificationSummary): void {
+  console.log(`Verification id: ${sanitizeMatrixCliText(summary.id)}`);
+  if (summary.transactionId) {
+    console.log(`Transaction id: ${sanitizeMatrixCliText(summary.transactionId)}`);
+  }
+  console.log(`Other user: ${sanitizeMatrixCliText(summary.otherUserId)}`);
+  console.log(`Other device: ${sanitizeMatrixCliText(summary.otherDeviceId ?? "unknown")}`);
   console.log(`Self-verification: ${summary.isSelfVerification ? "yes" : "no"}`);
   console.log(`Initiated by OpenClaw: ${summary.initiatedByMe ? "yes" : "no"}`);
-  console.log(`Phase: ${summary.phaseName}`);
+  console.log(`Phase: ${sanitizeMatrixCliText(summary.phaseName)}`);
   console.log(`Pending: ${summary.pending ? "yes" : "no"}`);
   console.log(`Completed: ${summary.completed ? "yes" : "no"}`);
-  console.log(`Methods: ${summary.methods.length ? summary.methods.join(", ") : "none"}`);
+  console.log(
+    `Methods: ${
+      summary.methods.length ? summary.methods.map(sanitizeMatrixCliText).join(", ") : "none"
+    }`,
+  );
   if (summary.chosenMethod) {
-    console.log(`Chosen method: ${summary.chosenMethod}`);
+    console.log(`Chosen method: ${sanitizeMatrixCliText(summary.chosenMethod)}`);
   }
   if (summary.hasSas && summary.sas?.emoji?.length) {
-    console.log(
-      `SAS emoji: ${summary.sas.emoji.map(([emoji, label]) => `${emoji} ${label}`).join(" | ")}`,
-    );
+    console.log(`SAS emoji: ${formatMatrixCliSasEmoji(summary.sas.emoji)}`);
   } else if (summary.hasSas && summary.sas?.decimal) {
     console.log(`SAS decimals: ${summary.sas.decimal.join(" ")}`);
   }
   if (summary.error) {
-    console.log(`Verification error: ${summary.error}`);
+    console.log(`Verification error: ${sanitizeMatrixCliText(summary.error)}`);
   }
 }
 
@@ -688,7 +748,7 @@ function printMatrixVerificationSummaries(summaries: MatrixCliVerificationSummar
 
 function printMatrixVerificationSas(sas: MatrixCliVerificationSas): void {
   if (sas.emoji?.length) {
-    console.log(`SAS emoji: ${sas.emoji.map(([emoji, label]) => `${emoji} ${label}`).join(" | ")}`);
+    console.log(`SAS emoji: ${formatMatrixCliSasEmoji(sas.emoji)}`);
   } else if (sas.decimal) {
     console.log(`SAS decimals: ${sas.decimal.join(" ")}`);
   } else {

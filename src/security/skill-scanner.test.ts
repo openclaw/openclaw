@@ -241,15 +241,30 @@ const options: ExecOptions = { timeout: 5000 };
     expect(findings.some((f) => f.ruleId === "dangerous-exec")).toBe(false);
   });
 
-  it("does not flag argv-only self-reexec as shell command execution", () => {
+  it("does not flag the qa-matrix argv-only self-reexec as shell command execution", () => {
     const source = `
 import { spawn } from "node:child_process";
-const child = spawn(process.execPath, [distEntryPath, ...args], {
+const child = spawn(process.execPath, [distEntryPath, ...params.args], {
   stdio: ["pipe", "pipe", "pipe"],
 });
 `;
-    const findings = scanSource(source, "plugin.ts");
+    const findings = scanSource(
+      source,
+      path.resolve(
+        process.cwd(),
+        "extensions/qa-matrix/src/runners/contract/scenario-runtime-cli.ts",
+      ),
+    );
     expect(findings.some((f) => f.ruleId === "dangerous-exec")).toBe(false);
+  });
+
+  it("still flags plugin self-reexec as shell command execution", () => {
+    const source = `
+import { spawn } from "node:child_process";
+const child = spawn(process.execPath, userControlledArgs, { shell: true });
+`;
+    const findings = scanSource(source, "plugin.ts");
+    expect(findings.some((f) => f.ruleId === "dangerous-exec")).toBe(true);
   });
 
   it("returns empty array for clean plugin code", () => {

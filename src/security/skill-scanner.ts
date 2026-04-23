@@ -216,10 +216,26 @@ function truncateEvidence(evidence: string, maxLen = 120): string {
   return `${evidence.slice(0, maxLen)}…`;
 }
 
-function isAllowedNodeSelfReexec(line: string): boolean {
+function isAllowedNodeSelfReexec(filePath: string, line: string): boolean {
+  if (
+    path.resolve(filePath) !==
+    path.resolve(
+      process.cwd(),
+      "extensions",
+      "qa-matrix",
+      "src",
+      "runners",
+      "contract",
+      "scenario-runtime-cli.ts",
+    )
+  ) {
+    return false;
+  }
   // Spawning the current Node executable with an argv array is not shell
   // execution. Keep direct shell/process launches blocked below.
-  return /\bspawn\s*\(\s*process\.execPath\s*,/.test(line);
+  return /\bspawn\s*\(\s*process\.execPath\s*,\s*\[\s*distEntryPath\s*,\s*\.{3}params\.args\s*\]/.test(
+    line,
+  );
 }
 
 export function scanSource(source: string, filePath: string): SkillScanFinding[] {
@@ -244,7 +260,7 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
       if (!match) {
         continue;
       }
-      if (rule.ruleId === "dangerous-exec" && isAllowedNodeSelfReexec(line)) {
+      if (rule.ruleId === "dangerous-exec" && isAllowedNodeSelfReexec(filePath, line)) {
         continue;
       }
 
