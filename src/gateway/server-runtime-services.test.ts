@@ -11,6 +11,7 @@ const hoisted = vi.hoisted(() => {
     startChannelHealthMonitor: vi.fn(() => ({ stop: vi.fn() })),
     startGatewayModelPricingRefresh: vi.fn(() => vi.fn()),
     recoverPendingDeliveries: vi.fn(async () => undefined),
+    recoverPendingRestartContinuationDeliveries: vi.fn(async () => undefined),
     deliverOutboundPayloads: vi.fn(),
   };
 });
@@ -25,6 +26,10 @@ vi.mock("../infra/outbound/deliver.js", () => ({
 
 vi.mock("../infra/outbound/delivery-queue.js", () => ({
   recoverPendingDeliveries: hoisted.recoverPendingDeliveries,
+}));
+
+vi.mock("./server-restart-sentinel.js", () => ({
+  recoverPendingRestartContinuationDeliveries: hoisted.recoverPendingRestartContinuationDeliveries,
 }));
 
 vi.mock("./channel-health-monitor.js", () => ({
@@ -47,6 +52,7 @@ describe("server-runtime-services", () => {
     hoisted.startChannelHealthMonitor.mockClear();
     hoisted.startGatewayModelPricingRefresh.mockClear();
     hoisted.recoverPendingDeliveries.mockClear();
+    hoisted.recoverPendingRestartContinuationDeliveries.mockClear();
     hoisted.deliverOutboundPayloads.mockClear();
   });
 
@@ -71,12 +77,14 @@ describe("server-runtime-services", () => {
   });
 
   it("activates heartbeat, cron, and delivery recovery after sidecars are ready", async () => {
+    vi.useFakeTimers();
     const cron = { start: vi.fn(async () => undefined) };
     const log = createLog();
 
     const services = activateGatewayScheduledServices({
       minimalTestGateway: false,
       cfgAtStart: {} as never,
+      deps: {} as never,
       cron,
       logCron: { error: vi.fn() },
       log,
@@ -85,11 +93,17 @@ describe("server-runtime-services", () => {
     expect(hoisted.startHeartbeatRunner).toHaveBeenCalledTimes(1);
     expect(cron.start).toHaveBeenCalledTimes(1);
     expect(services.heartbeatRunner).toBe(hoisted.heartbeatRunner);
+    await vi.advanceTimersByTimeAsync(1_250);
     await vi.dynamicImportSettled();
     expect(hoisted.recoverPendingDeliveries).toHaveBeenCalledWith(
       expect.objectContaining({
         deliver: hoisted.deliverOutboundPayloads,
         cfg: {},
+      }),
+    );
+    expect(hoisted.recoverPendingRestartContinuationDeliveries).toHaveBeenCalledWith(
+      expect.objectContaining({
+        deps: {},
       }),
     );
   });
@@ -100,6 +114,7 @@ describe("server-runtime-services", () => {
     const services = activateGatewayScheduledServices({
       minimalTestGateway: true,
       cfgAtStart: {} as never,
+      deps: {} as never,
       cron,
       logCron: { error: vi.fn() },
       log: createLog(),
@@ -108,6 +123,7 @@ describe("server-runtime-services", () => {
     expect(hoisted.startHeartbeatRunner).not.toHaveBeenCalled();
     expect(cron.start).not.toHaveBeenCalled();
     expect(hoisted.recoverPendingDeliveries).not.toHaveBeenCalled();
+    expect(hoisted.recoverPendingRestartContinuationDeliveries).not.toHaveBeenCalled();
 
     services.heartbeatRunner.stop();
     expect(hoisted.heartbeatRunner.stop).not.toHaveBeenCalled();
