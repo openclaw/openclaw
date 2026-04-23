@@ -10,6 +10,34 @@ const dispatchPluginInteractiveHandlerMock = vi.hoisted(() =>
 );
 const resolvePluginConversationBindingApprovalMock = vi.hoisted(() => vi.fn());
 const buildPluginBindingResolvedTextMock = vi.hoisted(() => vi.fn(() => "Binding updated."));
+const dispatchReplyWithDispatcherMock = vi.hoisted(() =>
+  vi.fn(async (_opts: Record<string, unknown>) => ({ counts: { final: 1, tool: 0, block: 0 } })),
+);
+const resolveAgentRouteMock = vi.hoisted(() =>
+  vi.fn(() => ({ agentId: "test", sessionKey: "test:session", accountId: "default" })),
+);
+const createChannelReplyPipelineMock = vi.hoisted(() =>
+  vi.fn(() => ({ onModelSelected: vi.fn() })),
+);
+const finalizeInboundContextMock = vi.hoisted(() => vi.fn((ctx: unknown) => ctx));
+
+vi.mock("openclaw/plugin-sdk/reply-runtime", () => ({
+  dispatchReplyWithDispatcher: dispatchReplyWithDispatcherMock,
+  finalizeInboundContext: finalizeInboundContextMock,
+}));
+vi.mock("openclaw/plugin-sdk/routing", () => ({
+  resolveAgentRoute: resolveAgentRouteMock,
+  resolveThreadSessionKeys: vi.fn(({ baseSessionKey, threadId, parentSessionKey }: { baseSessionKey: string; threadId?: string; parentSessionKey?: string }) => ({
+    sessionKey: threadId ? `${baseSessionKey}:thread:${threadId}` : baseSessionKey,
+    parentSessionKey: threadId ? parentSessionKey : undefined,
+  })),
+}));
+vi.mock("openclaw/plugin-sdk/channel-reply-pipeline", () => ({
+  createChannelReplyPipeline: createChannelReplyPipelineMock,
+}));
+vi.mock("../replies.js", () => ({
+  deliverReplies: vi.fn(async () => {}),
+}));
 
 let registerSlackInteractionEvents: typeof import("./interactions.js").registerSlackInteractionEvents;
 
@@ -103,6 +131,7 @@ vi.mock("../conversation.runtime.js", () => {
   };
 });
 
+
 type RegisteredHandler = (args: {
   ack: () => Promise<void>;
   body: {
@@ -161,6 +190,7 @@ function createContext(overrides?: {
   allowFrom?: string[];
   allowNameMatching?: boolean;
   channelsConfig?: Record<string, { users?: string[] }>;
+  threadInheritParent?: boolean;
   shouldDropMismatchedSlackEvent?: (body: unknown) => boolean;
   isChannelAllowed?: (params: {
     channelId?: string;
@@ -221,6 +251,11 @@ function createContext(overrides?: {
   const ctx = {
     app,
     accountId: "default",
+    cfg: {} as never,
+    botToken: "xoxb-test",
+    teamId: "T9",
+    replyToMode: "all" as const,
+    textLimit: 4000,
     runtime: { log: runtimeLog },
     dmEnabled: overrides?.dmEnabled ?? true,
     dmPolicy: overrides?.dmPolicy ?? ("open" as const),
@@ -229,6 +264,7 @@ function createContext(overrides?: {
     channelsConfig: overrides?.channelsConfig ?? {},
     channelsConfigKeys: Object.keys(overrides?.channelsConfig ?? {}),
     defaultRequireMention: true,
+    threadInheritParent: overrides?.threadInheritParent ?? false,
     shouldDropMismatchedSlackEvent: (body: unknown) =>
       overrides?.shouldDropMismatchedSlackEvent?.(body) ?? false,
     isChannelAllowed,
@@ -268,6 +304,14 @@ describe("registerSlackInteractionEvents", () => {
       handled: false,
       duplicate: false,
     });
+    dispatchReplyWithDispatcherMock.mockClear();
+    dispatchReplyWithDispatcherMock.mockResolvedValue({ counts: { final: 1, tool: 0, block: 0 } });
+    resolveAgentRouteMock.mockClear();
+    resolveAgentRouteMock.mockReturnValue({ agentId: "test", sessionKey: "test:session", accountId: "default" });
+    createChannelReplyPipelineMock.mockClear();
+    createChannelReplyPipelineMock.mockReturnValue({ onModelSelected: vi.fn() });
+    finalizeInboundContextMock.mockClear();
+    finalizeInboundContextMock.mockImplementation((ctx: unknown) => ctx);
   });
 
   it("enqueues structured events and updates button rows", async () => {
@@ -2081,6 +2125,439 @@ describe("registerSlackInteractionEvents", () => {
     expect(payload.payloadTruncated).toBe(true);
     expect(Array.isArray(payload.inputs) ? payload.inputs.length : 0).toBeLessThanOrEqual(3);
     expect((payload.inputsOmitted ?? 0) >= 1).toBe(true);
+  });
+
+  it("wakes agent session when reply button is clicked", async () => {
+    const { ctx, getHandler } = createContext();
+    registerSlackInteractionEvents({ ctx: ctx as never });
+
+    const handler = getHandler();
+    expect(handler).toBeTruthy();
+
+    const ack = vi.fn().mockResolvedValue(undefined);
+    await handler!({
+      ack,
+      body: {
+        user: { id: "U123" },
+        channel: { id: "C1" },
+        container: { channel_id: "C1", message_ts: "100.200", thread_ts: "100.100" },
+        message: {
+          ts: "100.200",
+          text: "fallback",
+          blocks: [
+            {
+              type: "actions",
+              block_id: "reply_actions",
+              elements: [{ type: "button", action_id: "openclaw:reply_button" }],
+            },
+          ],
+        },
+      },
+      action: {
+        type: "button",
+        action_id: "openclaw:reply_button",
+        block_id: "reply_actions",
+        value: "Yes please",
+        text: { type: "plain_text", text: "Yes please" },
+      },
+    });
+
+    // Enqueue still happens (existing behavior preserved)
+    expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
+
+    // Wait for the fire-and-forget wake dispatch to complete
+    await vi.waitFor(() => {
+      expect(dispatchReplyWithDispatcherMock).toHaveBeenCalledTimes(1);
+    });
+    expect(resolveAgentRouteMock).toHaveBeenCalledTimes(1);
+    expect(finalizeInboundContextMock).toHaveBeenCalledTimes(1);
+    const ctxArg = finalizeInboundContextMock.mock.calls[0]?.[0] as { Body?: string } | undefined;
+    expect(ctxArg?.Body).toBe("Yes please");
+  });
+
+  it("does not wake agent session for non-reply actions", async () => {
+    const { ctx, getHandler } = createContext();
+    registerSlackInteractionEvents({ ctx: ctx as never });
+
+    const handler = getHandler();
+    expect(handler).toBeTruthy();
+
+    const ack = vi.fn().mockResolvedValue(undefined);
+    await handler!({
+      ack,
+      body: {
+        user: { id: "U123" },
+        channel: { id: "C1" },
+        message: {
+          ts: "111.222",
+          blocks: [{ type: "actions", block_id: "verify_block", elements: [] }],
+        },
+      },
+      action: {
+        type: "button",
+        action_id: "openclaw:verify",
+        block_id: "verify_block",
+        value: "approved",
+      },
+    });
+
+    expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
+    // Give microtasks time to settle
+    await new Promise((r) => setTimeout(r, 50));
+    expect(dispatchReplyWithDispatcherMock).not.toHaveBeenCalled();
+  });
+
+  it("uses channel-based OriginatingTo for channel reply button wakes", async () => {
+    const { ctx, getHandler } = createContext({
+      resolveChannelName: async () => ({ name: "general", type: "channel" }),
+    });
+    registerSlackInteractionEvents({ ctx: ctx as never });
+
+    const handler = getHandler();
+    const ack = vi.fn().mockResolvedValue(undefined);
+    await handler!({
+      ack,
+      body: {
+        user: { id: "U123" },
+        channel: { id: "C1" },
+        container: { channel_id: "C1", message_ts: "100.200", thread_ts: "100.100" },
+        message: {
+          ts: "100.200",
+          text: "fallback",
+          blocks: [
+            {
+              type: "actions",
+              block_id: "reply_actions",
+              elements: [{ type: "button", action_id: "openclaw:reply_button" }],
+            },
+          ],
+        },
+      },
+      action: {
+        type: "button",
+        action_id: "openclaw:reply_button",
+        block_id: "reply_actions",
+        value: "Yes",
+        text: { type: "plain_text", text: "Yes" },
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(finalizeInboundContextMock).toHaveBeenCalledTimes(1);
+    });
+    const ctxArg = finalizeInboundContextMock.mock.calls[0]?.[0] as {
+      OriginatingTo?: string;
+    } | undefined;
+    // Channel interactions must use channel:<id>, not user:<id>
+    expect(ctxArg?.OriginatingTo).toBe("channel:C1");
+  });
+
+  it("stays in-thread for thread button clicks even when replyToMode is off", async () => {
+    const { ctx, getHandler } = createContext({
+      resolveChannelName: async () => ({ name: "general", type: "channel" }),
+    });
+    // Override replyToMode to "off"
+    (ctx as { replyToMode: string }).replyToMode = "off";
+    registerSlackInteractionEvents({ ctx: ctx as never });
+
+    const handler = getHandler();
+    const ack = vi.fn().mockResolvedValue(undefined);
+    await handler!({
+      ack,
+      body: {
+        user: { id: "U123" },
+        channel: { id: "C1" },
+        container: { channel_id: "C1", message_ts: "100.200", thread_ts: "100.100" },
+        message: {
+          ts: "100.200",
+          text: "fallback",
+          blocks: [
+            {
+              type: "actions",
+              block_id: "reply_actions",
+              elements: [{ type: "button", action_id: "openclaw:reply_button" }],
+            },
+          ],
+        },
+      },
+      action: {
+        type: "button",
+        action_id: "openclaw:reply_button",
+        block_id: "reply_actions",
+        value: "Sure",
+        text: { type: "plain_text", text: "Sure" },
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(dispatchReplyWithDispatcherMock).toHaveBeenCalledTimes(1);
+    });
+    // Extract the deliver callback and verify it receives the thread ts
+    const dispatchCall = dispatchReplyWithDispatcherMock.mock.calls[0]?.[0] as {
+      dispatcherOptions?: { deliver?: (payload: unknown) => Promise<void> };
+    } | undefined;
+    const deliverRepliesMod = await import("../replies.js");
+    const deliverMock = vi.mocked(deliverRepliesMod.deliverReplies);
+    // Trigger deliver to capture args
+    await dispatchCall?.dispatcherOptions?.deliver?.({ text: "test" });
+    const deliverArgs = deliverMock.mock.calls[0]?.[0] as {
+      replyThreadTs?: string;
+    } | undefined;
+    // Even with replyToMode "off", thread interactions must stay in-thread
+    expect(deliverArgs?.replyThreadTs).toBe("100.100");
+  });
+
+  it("derives DM auto-thread session key from messageTs when threadTs is absent", async () => {
+    const { ctx, getHandler } = createContext({
+      resolveChannelName: async () => ({ name: "dm", type: "im" }),
+    });
+    registerSlackInteractionEvents({ ctx: ctx as never });
+
+    const handler = getHandler();
+    const ack = vi.fn().mockResolvedValue(undefined);
+    // DM button click without thread_ts (top-level DM message)
+    await handler!({
+      ack,
+      body: {
+        user: { id: "U123" },
+        channel: { id: "D1" },
+        container: { channel_id: "D1", message_ts: "200.300" },
+        message: {
+          ts: "200.300",
+          text: "fallback",
+          blocks: [
+            {
+              type: "actions",
+              block_id: "reply_actions",
+              elements: [{ type: "button", action_id: "openclaw:reply_button" }],
+            },
+          ],
+        },
+      },
+      action: {
+        type: "button",
+        action_id: "openclaw:reply_button",
+        block_id: "reply_actions",
+        value: "OK",
+        text: { type: "plain_text", text: "OK" },
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(finalizeInboundContextMock).toHaveBeenCalledTimes(1);
+    });
+    const ctxArg = finalizeInboundContextMock.mock.calls[0]?.[0] as {
+      SessionKey?: string;
+    } | undefined;
+    // DM without threadTs should use messageTs as threadId for auto-threading
+    expect(ctxArg?.SessionKey).toContain(":thread:200.300");
+  });
+
+  it("carries parentSessionKey into interaction context for thread inheritance", async () => {
+    const { ctx, getHandler } = createContext({
+      resolveChannelName: async () => ({ name: "general", type: "channel" }),
+      threadInheritParent: true,
+    });
+    registerSlackInteractionEvents({ ctx: ctx as never });
+
+    const handler = getHandler();
+    const ack = vi.fn().mockResolvedValue(undefined);
+    // Channel button click FROM a thread (thread_ts present)
+    await handler!({
+      ack,
+      body: {
+        user: { id: "U123" },
+        channel: { id: "C1" },
+        container: { channel_id: "C1", message_ts: "100.200", thread_ts: "100.100" },
+        message: {
+          ts: "100.200",
+          text: "fallback",
+          blocks: [
+            {
+              type: "actions",
+              block_id: "reply_actions",
+              elements: [{ type: "button", action_id: "openclaw:reply_button" }],
+            },
+          ],
+        },
+      },
+      action: {
+        type: "button",
+        action_id: "openclaw:reply_button",
+        block_id: "reply_actions",
+        value: "Sure",
+        text: { type: "plain_text", text: "Sure" },
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(finalizeInboundContextMock).toHaveBeenCalledTimes(1);
+    });
+    const ctxArg = finalizeInboundContextMock.mock.calls[0]?.[0] as {
+      ParentSessionKey?: string;
+    } | undefined;
+    // Thread interactions must carry parentSessionKey for thread.inheritParent
+    expect(ctxArg?.ParentSessionKey).toBe("test:session");
+  });
+
+  it("skips DM auto-thread when replyToMode is off", async () => {
+    const { ctx, getHandler } = createContext({
+      resolveChannelName: async () => ({ name: "dm", type: "im" }),
+    });
+    (ctx as { replyToMode: string }).replyToMode = "off";
+    registerSlackInteractionEvents({ ctx: ctx as never });
+
+    const handler = getHandler();
+    const ack = vi.fn().mockResolvedValue(undefined);
+    await handler!({
+      ack,
+      body: {
+        user: { id: "U123" },
+        channel: { id: "D1" },
+        container: { channel_id: "D1", message_ts: "200.300" },
+        message: {
+          ts: "200.300",
+          text: "fallback",
+          blocks: [
+            {
+              type: "actions",
+              block_id: "reply_actions",
+              elements: [{ type: "button", action_id: "openclaw:reply_button" }],
+            },
+          ],
+        },
+      },
+      action: {
+        type: "button",
+        action_id: "openclaw:reply_button",
+        block_id: "reply_actions",
+        value: "OK",
+        text: { type: "plain_text", text: "OK" },
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(finalizeInboundContextMock).toHaveBeenCalledTimes(1);
+    });
+    const ctxArg = finalizeInboundContextMock.mock.calls[0]?.[0] as {
+      SessionKey?: string;
+    } | undefined;
+    // DM with replyToMode "off" should NOT auto-thread from messageTs
+    expect(ctxArg?.SessionKey).not.toContain(":thread:");
+  });
+
+  it("strips synthetic replyToId so deliverReplies uses real Slack thread_ts", async () => {
+    const { ctx, getHandler } = createContext({
+      resolveChannelName: async () => ({ name: "general", type: "channel" }),
+    });
+    registerSlackInteractionEvents({ ctx: ctx as never });
+
+    const handler = getHandler();
+    const ack = vi.fn().mockResolvedValue(undefined);
+    await handler!({
+      ack,
+      body: {
+        user: { id: "U123" },
+        channel: { id: "C1" },
+        container: { channel_id: "C1", message_ts: "100.200", thread_ts: "100.100" },
+        message: {
+          ts: "100.200",
+          text: "fallback",
+          blocks: [
+            {
+              type: "actions",
+              block_id: "reply_actions",
+              elements: [{ type: "button", action_id: "openclaw:reply_button" }],
+            },
+          ],
+        },
+      },
+      action: {
+        type: "button",
+        action_id: "openclaw:reply_button",
+        block_id: "reply_actions",
+        value: "Sure",
+        text: { type: "plain_text", text: "Sure" },
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(dispatchReplyWithDispatcherMock).toHaveBeenCalledTimes(1);
+    });
+    const dispatchCall = dispatchReplyWithDispatcherMock.mock.calls[0]?.[0] as {
+      dispatcherOptions?: { deliver?: (payload: { replyToId?: string; text?: string }) => Promise<void> };
+    } | undefined;
+    const deliverRepliesMod = await import("../replies.js");
+    const deliverMock = vi.mocked(deliverRepliesMod.deliverReplies);
+    // Simulate the agent runner setting a synthetic replyToId from MessageSid
+    await dispatchCall?.dispatcherOptions?.deliver?.({
+      text: "test reply",
+      replyToId: "interaction:100.200:1713400000000",
+    });
+    const deliverArgs = deliverMock.mock.calls[0]?.[0] as {
+      replies?: { replyToId?: string }[];
+      replyThreadTs?: string;
+    } | undefined;
+    // replyToId must be stripped so Slack uses the real thread_ts
+    expect(deliverArgs?.replies?.[0]?.replyToId).toBeUndefined();
+    // replyThreadTs should carry the real Slack timestamp
+    expect(deliverArgs?.replyThreadTs).toBe("100.100");
+  });
+
+  it("preserves legitimate replyToId values in interaction wake delivery", async () => {
+    const { ctx, getHandler } = createContext({
+      resolveChannelName: async () => ({ name: "general", type: "channel" }),
+    });
+    registerSlackInteractionEvents({ ctx: ctx as never });
+
+    const handler = getHandler();
+    const ack = vi.fn().mockResolvedValue(undefined);
+    await handler!({
+      ack,
+      body: {
+        user: { id: "U123" },
+        channel: { id: "C1" },
+        container: { channel_id: "C1", message_ts: "100.200", thread_ts: "100.100" },
+        message: {
+          ts: "100.200",
+          text: "fallback",
+          blocks: [
+            {
+              type: "actions",
+              block_id: "reply_actions",
+              elements: [{ type: "button", action_id: "openclaw:reply_button" }],
+            },
+          ],
+        },
+      },
+      action: {
+        type: "button",
+        action_id: "openclaw:reply_button",
+        block_id: "reply_actions",
+        value: "Sure",
+        text: { type: "plain_text", text: "Sure" },
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(dispatchReplyWithDispatcherMock).toHaveBeenCalledTimes(1);
+    });
+    const dispatchCall = dispatchReplyWithDispatcherMock.mock.calls[0]?.[0] as {
+      dispatcherOptions?: { deliver?: (payload: { replyToId?: string; text?: string }) => Promise<void> };
+    } | undefined;
+    const deliverRepliesMod = await import("../replies.js");
+    const deliverMock = vi.mocked(deliverRepliesMod.deliverReplies);
+    deliverMock.mockClear();
+    // Simulate a legitimate directive-provided replyToId (real Slack ts)
+    await dispatchCall?.dispatcherOptions?.deliver?.({
+      text: "test reply",
+      replyToId: "100.100",
+    });
+    const deliverArgs = deliverMock.mock.calls[0]?.[0] as {
+      replies?: { replyToId?: string }[];
+    } | undefined;
+    // Legitimate replyToId must be preserved
+    expect(deliverArgs?.replies?.[0]?.replyToId).toBe("100.100");
   });
 });
 const selectedDateTimeEpoch = 1_771_632_300;

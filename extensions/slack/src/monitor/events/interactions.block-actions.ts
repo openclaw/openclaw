@@ -641,6 +641,137 @@ function enqueueSlackBlockActionEvent(params: {
   });
 }
 
+async function wakeSlackReplySession(params: {
+  ctx: SlackMonitorContext;
+  parsed: ParsedSlackBlockAction;
+  auth: { channelType?: "im" | "mpim" | "channel" | "group" };
+  replyText: string;
+}): Promise<void> {
+  const { ctx, parsed, auth, replyText } = params;
+  if (!parsed.channelId || !replyText) {
+    return;
+  }
+  const channelType = auth.channelType;
+  const isDirectMessage = channelType === "im";
+  const isRoom = channelType === "channel" || channelType === "group";
+  const from = isDirectMessage
+    ? `slack:${parsed.userId}`
+    : isRoom
+      ? `slack:channel:${parsed.channelId}`
+      : `slack:group:${parsed.channelId}`;
+
+  const [
+    { resolveAgentRoute, resolveThreadSessionKeys },
+    { finalizeInboundContext, dispatchReplyWithDispatcher },
+    { createChannelReplyPipeline },
+    { deliverReplies },
+  ] = await Promise.all([
+    import("openclaw/plugin-sdk/routing"),
+    import("openclaw/plugin-sdk/reply-runtime"),
+    import("openclaw/plugin-sdk/channel-reply-pipeline"),
+    import("../replies.js"),
+  ]);
+
+  const route = resolveAgentRoute({
+    cfg: ctx.cfg,
+    channel: "slack",
+    accountId: ctx.accountId,
+    teamId: ctx.teamId || undefined,
+    peer: {
+      kind: isDirectMessage ? "direct" : isRoom ? "channel" : "group",
+      id: isDirectMessage ? parsed.userId : parsed.channelId,
+    },
+  });
+
+  // Derive thread-scoped session key when the interaction came from a thread,
+  // consistent with prepareSlackMessage's resolveThreadSessionKeys usage.
+  // For DMs, fall back to messageTs only when replyToMode is "all" (matches
+  // resolveSlackThreadContext: auto-threading is skipped for off/first/batched).
+  const dmAutoThread = isDirectMessage && ctx.replyToMode === "all";
+  const threadId = parsed.threadTs ?? (dmAutoThread ? parsed.messageTs : undefined);
+  const threadKeys = resolveThreadSessionKeys({
+    baseSessionKey: route.sessionKey,
+    threadId,
+    parentSessionKey: threadId && ctx.threadInheritParent ? route.sessionKey : undefined,
+  });
+  const sessionKey = threadKeys.sessionKey;
+  const parentSessionKey = threadKeys.parentSessionKey;
+
+  const ctxPayload = finalizeInboundContext({
+    Body: replyText,
+    BodyForAgent: replyText,
+    RawBody: replyText,
+    From: from,
+    To: `interaction:${parsed.userId}`,
+    ChatType: isDirectMessage ? "direct" : "channel",
+    ConversationLabel: isDirectMessage ? parsed.userId : `#${parsed.channelId}`,
+    SenderName: parsed.userId,
+    SenderId: parsed.userId,
+    Provider: "slack" as const,
+    Surface: "slack" as const,
+    WasMentioned: true,
+    MessageSid: `interaction:${parsed.messageTs ?? "unknown"}:${parsed.typedBody.trigger_id ?? String(Date.now())}`,
+    Timestamp: Date.now(),
+    SessionKey: sessionKey,
+    AccountId: route.accountId,
+    OriginatingChannel: "slack" as const,
+    OriginatingTo: isDirectMessage ? `user:${parsed.userId}` : `channel:${parsed.channelId}`,
+    ...(parentSessionKey ? { ParentSessionKey: parentSessionKey } : {}),
+  });
+
+  const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
+    cfg: ctx.cfg,
+    agentId: route.agentId,
+    channel: "slack",
+    accountId: route.accountId,
+  });
+
+  // Always stay in-thread when the interaction originates from a thread.
+  // For top-level messages, respect replyToMode to avoid forcing threads
+  // when the workspace is configured for top-level responses.
+  const replyThreadTs = parsed.threadTs
+    ?? (ctx.replyToMode !== "off" ? parsed.messageTs : undefined);
+
+  await dispatchReplyWithDispatcher({
+    ctx: ctxPayload,
+    cfg: ctx.cfg,
+    dispatcherOptions: {
+      ...replyPipeline,
+      deliver: async (payload) => {
+        // Only strip synthetic replyToId values derived from the
+        // interaction MessageSid (format: "interaction:<ts>:<epoch>").
+        // Legitimate explicit reply targets (e.g. directive/tool-
+        // provided thread IDs) must be preserved so deliverReplies
+        // can honor them over the computed replyThreadTs.
+        const isSyntheticReplyId =
+          typeof payload.replyToId === "string" &&
+          payload.replyToId.startsWith("interaction:");
+        const safePayload = isSyntheticReplyId
+          ? { ...payload, replyToId: undefined }
+          : payload;
+        await deliverReplies({
+          replies: [safePayload],
+          target: parsed.channelId!,
+          token: ctx.botToken,
+          accountId: ctx.accountId,
+          runtime: ctx.runtime,
+          textLimit: ctx.textLimit,
+          replyThreadTs,
+          replyToMode: ctx.replyToMode,
+        });
+      },
+      onError: (err: unknown, info: { kind: string }) => {
+        ctx.runtime.log?.(
+          `slack:interaction wake ${info.kind} reply failed: ${String(err)}`,
+        );
+      },
+    },
+    replyOptions: {
+      onModelSelected,
+    },
+  });
+}
+
 function buildSlackConfirmationBlocks(params: {
   parsed: ParsedSlackBlockAction;
   originalBlocks: unknown[];
@@ -786,6 +917,18 @@ async function handleSlackBlockAction(params: {
     parsed,
     respond,
   });
+  if (isSlackReplyActionId(parsed.actionId) && pluginInteractionData) {
+    wakeSlackReplySession({
+      ctx: params.ctx,
+      parsed,
+      auth,
+      replyText: pluginInteractionData,
+    }).catch((err) => {
+      params.ctx.runtime.log?.(
+        `slack:interaction wake failed for reply action: ${String(err)}`,
+      );
+    });
+  }
 }
 
 export function registerSlackBlockActionHandler(params: {
