@@ -659,9 +659,6 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           conversationKey,
         }) ?? undefined)
       : undefined;
-    const hasBodyContent =
-      Boolean(messageText || quoteTarget?.body) ||
-      Boolean(!reaction && dataMessage?.attachments?.length);
     const senderDisplay = formatSignalSenderDisplay(sender);
     const { resolveAccessDecision, dmAccess, effectiveDmAllow, effectiveGroupAllow } =
       await resolveSignalAccessState({
