@@ -23,6 +23,15 @@ listed PRs when `apply=true`. Before mutating GitHub, it verifies that the
 landed PR is merged and that each duplicate has either a shared referenced issue
 or overlapping changed hunks.
 
+The `Docs Agent` workflow is an event-driven Codex maintenance lane for keeping
+existing docs aligned with recently landed changes. It has no pure schedule: a
+successful non-bot push CI run on `main` can trigger it, and manual dispatch can
+run it directly. Workflow-run invocations skip when `main` has moved on or when
+another non-skipped Docs Agent run was created in the last hour. When it runs, it
+reviews the commit range from the previous non-skipped Docs Agent source SHA to
+current `main`, so one hourly run can cover all main changes accumulated since
+the last docs pass.
+
 The `Test Performance Agent` workflow is an event-driven Codex maintenance lane
 for slow tests. It has no pure schedule: a successful non-bot push CI run on
 `main` can trigger it, but it skips if another workflow-run invocation already
