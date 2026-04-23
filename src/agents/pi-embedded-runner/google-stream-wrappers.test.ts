@@ -214,4 +214,53 @@ describe("sanitizeGoogleThinkingPayload \u2014 inject thinkingBudget=0 on thinki
     });
     expect(payload.config).not.toHaveProperty("thinkingConfig");
   });
+
+  it("creates generationConfig.thinkingConfig.thinkingBudget=0 when payload has NEITHER config nor generationConfig", () => {
+    // Covers the outer-level fallback: without this, an upstream caller that
+    // builds a payload without either container would silently pay Google's
+    // default thinking budget even though thinkingLevel was "off".
+    const payload: Record<string, unknown> = {};
+    sanitizeGoogleThinkingPayload({
+      payload,
+      modelId: "gemini-2.5-flash",
+      thinkingLevel: "off",
+    });
+    expect(payload).toEqual({
+      generationConfig: { thinkingConfig: { thinkingBudget: 0 } },
+    });
+  });
+
+  it("does NOT create a container when thinkingLevel is not off (NEITHER-container fallback is gated on off)", () => {
+    const payload: Record<string, unknown> = {};
+    sanitizeGoogleThinkingPayload({
+      payload,
+      modelId: "gemini-2.5-flash",
+      thinkingLevel: "medium",
+    });
+    expect(payload).toEqual({});
+  });
+
+  it("does NOT create a container for thinking-required models even when both containers are absent", () => {
+    const payload: Record<string, unknown> = {};
+    sanitizeGoogleThinkingPayload({
+      payload,
+      modelId: "gemini-2.5-pro",
+      thinkingLevel: "off",
+    });
+    expect(payload).toEqual({});
+  });
+
+  it("leaves an existing empty config container alone (commit-1 branch handles it, fallback skips)", () => {
+    // When config is present (even empty), the fallback should NOT fire —
+    // commit-1's in-container branch handles seeding thinkingConfig.
+    const payload: { config: Record<string, unknown> } = { config: {} };
+    sanitizeGoogleThinkingPayload({
+      payload,
+      modelId: "gemini-2.5-flash",
+      thinkingLevel: "off",
+    });
+    // generationConfig should NOT be created — only config gets thinkingConfig.
+    expect(payload).not.toHaveProperty("generationConfig");
+    expect(payload.config).toEqual({ thinkingConfig: { thinkingBudget: 0 } });
+  });
 });
