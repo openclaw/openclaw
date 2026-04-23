@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
@@ -17,6 +18,7 @@ const OPENCLAW_PACKAGE_ROOT =
     moduleUrl: import.meta.url,
   }) ?? fileURLToPath(new URL("../..", import.meta.url));
 const loadedPublicSurfaceModules = new Map<string, unknown>();
+const sourceArtifactRequire = createRequire(import.meta.url);
 const publicSurfaceLocations = new Map<
   string,
   {
@@ -84,11 +86,50 @@ function getJiti(modulePath: string) {
   return loader;
 }
 
+function isSourceArtifactPath(modulePath: string): boolean {
+  switch (path.extname(modulePath).toLowerCase()) {
+    case ".ts":
+    case ".tsx":
+    case ".mts":
+    case ".cts":
+    case ".mtsx":
+    case ".ctsx":
+      return true;
+    default:
+      return false;
+  }
+}
+
+function canUseSourceArtifactRequire(params: { modulePath: string; tryNative: boolean }): boolean {
+  return (
+    !params.tryNative &&
+    isSourceArtifactPath(params.modulePath) &&
+    typeof sourceArtifactRequire.extensions?.[".ts"] === "function"
+  );
+}
+
+function shouldFallbackSourceArtifactRequireToJiti(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  return error.name === "SyntaxError" || error.name === "TypeError" || (error as NodeJS.ErrnoException).code === "ERR_MODULE_NOT_FOUND";
+}
+
 function loadPublicSurfaceModule(modulePath: string): unknown {
-  // Source public artifacts routinely keep emitted-style `.js` relative import
-  // specifiers. Jiti resolves those against sibling `.ts` sources in the repo,
-  // while plain require() expects the compiled `.js` files to already exist and
-  // blows up in source-tree test/runtime paths.
+  const tryNative = resolvePluginLoaderJitiTryNative(modulePath, { preferBuiltDist: true });
+  if (canUseSourceArtifactRequire({ modulePath, tryNative })) {
+    try {
+      return sourceArtifactRequire(modulePath);
+    } catch (error) {
+      // Some source public artifacts keep emitted-style `.js` relative import
+      // specifiers. Plain require() then looks for compiled sibling `.js` files
+      // that do not exist in source-tree runs, while jiti resolves the `.ts`
+      // sources correctly.
+      if (!shouldFallbackSourceArtifactRequireToJiti(error)) {
+        throw error;
+      }
+    }
+  }
   return getJiti(modulePath)(modulePath);
 }
 
