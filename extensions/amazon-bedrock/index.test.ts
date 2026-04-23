@@ -210,6 +210,35 @@ describe("amazon-bedrock provider plugin", () => {
     });
   });
 
+  it("exposes xhigh thinking for Claude Opus 4.7 Bedrock models", async () => {
+    const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
+
+    expect(
+      provider.resolveThinkingProfile?.({
+        provider: "amazon-bedrock",
+        modelId: "eu.anthropic.claude-opus-4-7",
+      } as never),
+    ).toMatchObject({
+      levels: expect.arrayContaining([{ id: "xhigh" }]),
+    });
+    expect(
+      provider.resolveThinkingProfile?.({
+        provider: "amazon-bedrock",
+        modelId: "us.anthropic.claude-opus-4-6-v1",
+      } as never),
+    ).toMatchObject({
+      levels: expect.not.arrayContaining([{ id: "xhigh" }]),
+    });
+    expect(
+      provider.resolveThinkingProfile?.({
+        provider: "amazon-bedrock",
+        modelId: "anthropic.claude-sonnet-4-6",
+      } as never),
+    ).toMatchObject({
+      levels: expect.not.arrayContaining([{ id: "xhigh" }]),
+    });
+  });
+
   it("owns Anthropic-style replay policy for Claude Bedrock models", async () => {
     const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
 

@@ -241,6 +241,7 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
   // initialization during test bootstrap cannot trip TDZ reads.
   const providerId = "amazon-bedrock";
   const claude46ModelRe = /claude-(?:opus|sonnet)-4(?:\.|-)6(?:$|[-.])/i;
+  const claude47OpusModelRe = /claude-opus-4(?:\.|-)7(?:$|[-.])/i;
   // Match region from bedrock-runtime (Converse API) URLs.
   // e.g. https://bedrock-runtime.us-east-1.amazonaws.com
   const bedrockRegionRe = /bedrock-runtime\.([a-z0-9-]+)\.amazonaws\./;
@@ -428,6 +429,7 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
         { id: "low" },
         { id: "medium" },
         { id: "high" },
+        ...(claude47OpusModelRe.test(modelId.trim()) ? [{ id: "xhigh" as const }] : []),
         ...(claude46ModelRe.test(modelId.trim()) ? [{ id: "adaptive" as const }] : []),
       ],
       defaultLevel: claude46ModelRe.test(modelId.trim()) ? "adaptive" : undefined,
