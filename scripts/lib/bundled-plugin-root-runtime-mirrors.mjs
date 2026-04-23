@@ -151,6 +151,10 @@ function extractModuleSpecifiers(source) {
   return specifiers;
 }
 
+function isPluginOwnedDistImporter(relativePath, pluginIds) {
+  return pluginIds.some((pluginId) => relativePath.startsWith(`extensions/${pluginId}/`));
+}
+
 export function collectRootDistBundledRuntimeMirrors(params) {
   const distDir = params.distDir;
   const bundledSpecs = params.bundledRuntimeDependencySpecs;
@@ -177,6 +181,9 @@ export function collectRootDistBundledRuntimeMirrors(params) {
         continue;
       }
       const bundledSpec = bundledSpecs.get(dependencyName);
+      if (isPluginOwnedDistImporter(relativePath, bundledSpec.pluginIds)) {
+        continue;
+      }
       const existing = mirrors.get(dependencyName);
       if (existing) {
         existing.importers.add(relativePath);
@@ -195,6 +202,7 @@ export function collectRootDistBundledRuntimeMirrors(params) {
 
 export function collectBundledPluginRootRuntimeMirrorErrors(params) {
   const errors = [];
+  const declaredRootRuntimeDeps = collectRuntimeDependencySpecs(params.rootPackageJson);
 
   for (const [dependencyName, record] of params.bundledRuntimeDependencySpecs) {
     for (const conflict of record.conflicts) {
@@ -204,5 +212,17 @@ export function collectBundledPluginRootRuntimeMirrorErrors(params) {
     }
   }
 
-  return errors;
+  for (const [dependencyName, record] of params.requiredRootMirrors) {
+    if (declaredRootRuntimeDeps.has(dependencyName)) {
+      continue;
+    }
+    const importerList = Array.from(record.importers)
+      .toSorted((left, right) => left.localeCompare(right))
+      .join(", ");
+    errors.push(
+      `installed package root is missing mirrored bundled runtime dependency '${dependencyName}' for dist importers: ${importerList}. Add it to package.json dependencies/optionalDependencies or keep imports under dist/extensions/${record.pluginIds[0]}/.`,
+    );
+  }
+
+  return errors.toSorted((left, right) => left.localeCompare(right));
 }

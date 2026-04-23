@@ -166,28 +166,49 @@ describe("collectInstalledMirroredRootDependencyManifestErrors", () => {
     writeFileSync(fullPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
   }
 
-  function writeSlackWebApiProbePackage(
-    root: string,
-    dependencies: Record<string, string> = {},
-  ): void {
-    writePackageFile(root, "package.json", {
+  function writeSlackWebApiProbePackage(params: {
+    root: string;
+    importerPath?: string;
+    rootDependencies?: Record<string, string>;
+    rootOptionalDependencies?: Record<string, string>;
+  }): void {
+    writePackageFile(params.root, "package.json", {
       version: "2026.4.10",
-      dependencies,
+      dependencies: params.rootDependencies,
+      optionalDependencies: params.rootOptionalDependencies,
     });
-    writePackageFile(root, "dist/extensions/slack/package.json", {
+    writePackageFile(params.root, "dist/extensions/slack/package.json", {
       dependencies: {
         "@slack/web-api": "^7.15.0",
       },
     });
-    mkdirSync(join(root, "dist"), { recursive: true });
-    writeFileSync(join(root, "dist", "probe-Cz2PiFtC.js"), 'import("@slack/web-api");\n', "utf8");
+    const importerPath = params.importerPath ?? "dist/probe-Cz2PiFtC.js";
+    mkdirSync(join(params.root, "dist"), { recursive: true });
+    writeFileSync(join(params.root, importerPath), 'import("@slack/web-api");\n', "utf8");
   }
 
-  it("does not require root mirrors for bundled plugin deps imported by root dist", () => {
+  it("flags bundled plugin deps imported by root dist when root mirrors are missing", () => {
     const packageRoot = makeInstalledPackageRoot();
 
     try {
-      writeSlackWebApiProbePackage(packageRoot);
+      writeSlackWebApiProbePackage({ root: packageRoot });
+
+      expect(collectInstalledMirroredRootDependencyManifestErrors(packageRoot)).toEqual([
+        "installed package root is missing mirrored bundled runtime dependency '@slack/web-api' for dist importers: probe-Cz2PiFtC.js. Add it to package.json dependencies/optionalDependencies or keep imports under dist/extensions/slack/.",
+      ]);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("allows bundled plugin deps imported from their own extension dist without root mirrors", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      writeSlackWebApiProbePackage({
+        root: packageRoot,
+        importerPath: "dist/extensions/slack/client-Cz2PiFtC.js",
+      });
 
       expect(collectInstalledMirroredRootDependencyManifestErrors(packageRoot)).toEqual([]);
     } finally {
@@ -227,8 +248,11 @@ describe("collectInstalledMirroredRootDependencyManifestErrors", () => {
     const packageRoot = makeInstalledPackageRoot();
 
     try {
-      writeSlackWebApiProbePackage(packageRoot, {
-        "@slack/web-api": "^7.16.0",
+      writeSlackWebApiProbePackage({
+        root: packageRoot,
+        rootDependencies: {
+          "@slack/web-api": "^7.16.0",
+        },
       });
 
       expect(collectInstalledMirroredRootDependencyManifestErrors(packageRoot)).toEqual([]);
