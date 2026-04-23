@@ -330,26 +330,22 @@ export async function readVaultOAuthCredential(
     return credentialCache.credential;
   }
 
-  // Read strategy: vault-agent proxy at 8212 uses its own dev auto-auth token
-  // (use_auto_auth_token=true), so we send no token header and it injects its
-  // own. Fall back to direct Vault with AppRole token if the proxy is down.
-  type ReadTarget = { base: string; headers: Record<string, string | number> };
-  const buildReadTargets = async (): Promise<ReadTarget[]> => {
-    const targets: ReadTarget[] = [{ base: VAULT_AGENT_READ_ADDR, headers: {} }];
-    const appRoleToken = await getVaultToken().catch(() => null);
-    if (appRoleToken) {
-      targets.push({ base: VAULT_ADDR, headers: { "X-Vault-Token": appRoleToken } });
-    }
-    return targets;
-  };
-  const readTargets = await buildReadTargets();
+  const token = await getVaultToken().catch((err: unknown) => {
+    log.warn("vault-oauth: cannot get Vault token for read", { err: String(err) });
+    return null;
+  });
+  if (!token) {
+    return null;
+  }
 
-  for (const { base, headers } of readTargets) {
+  // Try the caching vault-agent proxy first; fall back to direct Vault on failure.
+  const readTargets = [VAULT_AGENT_READ_ADDR, VAULT_ADDR];
+  for (const base of readTargets) {
     try {
       const resp = (await httpsRequest(base, {
         path: VAULT_KV_API_PATH,
         method: "GET",
-        headers,
+        headers: { "X-Vault-Token": token },
       })) as { data?: { data?: VaultKvData } };
 
       const data = resp?.data?.data;
