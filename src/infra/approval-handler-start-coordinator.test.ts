@@ -327,6 +327,65 @@ describe("createApprovalHandlerStartCoordinator", () => {
     thirdRelease();
   });
 
+  it("skips canceled waiters when dequeuing so stale generations do not consume FIFO turns", async () => {
+    const coordinator = createApprovalHandlerStartCoordinator({
+      jitterMs: 0,
+      maxConcurrentStarts: 1,
+    });
+
+    const holder = await coordinator.acquireStartSlot(notCanceled);
+
+    // Two waiters queued while the slot is held. Waiter B gets canceled
+    // after enqueueing — its isCanceled returns true only on re-evaluation
+    // at dequeue time, which is the scenario the hand-off logic must cover.
+    let bCanceled = false;
+    let bResolvedAt: number | undefined;
+    let cResolvedAt: number | undefined;
+    const bPromise = coordinator
+      .acquireStartSlot(() => bCanceled)
+      .then((release) => {
+        bResolvedAt = Date.now();
+        return release;
+      });
+    const cPromise = coordinator.acquireStartSlot(notCanceled).then((release) => {
+      cResolvedAt = Date.now();
+      return release;
+    });
+
+    // Both pending; no resolution yet.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(bResolvedAt).toBeUndefined();
+    expect(cResolvedAt).toBeUndefined();
+
+    // Cancel B mid-queue, then release the holder. releaseSlot must skip B
+    // and hand the slot directly to C rather than burning a FIFO turn on B.
+    bCanceled = true;
+    holder();
+
+    const bRelease = await bPromise;
+    const cRelease = await cPromise;
+    expect(bResolvedAt).toBeDefined();
+    expect(cResolvedAt).toBeDefined();
+
+    // C must have acquired the live slot (not queued behind B's
+    // no-op-and-release churn). Queue a fourth acquirer: it should be queued
+    // because C is still holding the one slot.
+    let dResolvedAt: number | undefined;
+    const dPromise = coordinator.acquireStartSlot(notCanceled).then((release) => {
+      dResolvedAt = Date.now();
+      return release;
+    });
+    await Promise.resolve();
+    expect(dResolvedAt).toBeUndefined();
+
+    cRelease();
+    const dRelease = await dPromise;
+    expect(dResolvedAt).toBeDefined();
+    dRelease();
+    bRelease(); // no-op; verifies B's canceled release doesn't corrupt state.
+  });
+
   it("hands back a no-op release and does not consume a slot when canceled up front", async () => {
     const coordinator = createApprovalHandlerStartCoordinator({
       jitterMs: 0,

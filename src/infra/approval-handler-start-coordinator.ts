@@ -114,13 +114,35 @@ export function createApprovalHandlerStartCoordinator(
   );
   const random = options.random ?? Math.random;
 
-  let active = 0;
-  const waiters: Array<(release: () => void) => void> = [];
+  type Waiter = {
+    isCanceled: () => boolean;
+    // Called when this waiter is handed a live slot; argument is the release
+    // callback to give back to the caller.
+    proceed: (release: () => void) => void;
+    // Called when this waiter is skipped because it was canceled while queued;
+    // the waiter resolves with a no-op release and does not consume a slot.
+    skip: () => void;
+  };
 
+  let active = 0;
+  const waiters: Waiter[] = [];
+
+  // Pick the next non-canceled waiter, skipping any that have been canceled
+  // while queued (e.g. a bootstrap whose generation advanced mid-queue).
+  // Skipped waiters resolve with a no-op release so their caller doesn't
+  // hang, and we keep the slot count unchanged until someone can actually
+  // use it — or release it entirely if the queue is empty.
   const releaseSlot = () => {
-    const next = waiters.shift();
-    if (next) {
-      next(releaseSlot);
+    while (waiters.length > 0) {
+      const next = waiters.shift();
+      if (!next) {
+        break;
+      }
+      if (next.isCanceled()) {
+        next.skip();
+        continue;
+      }
+      next.proceed(releaseSlot);
       return;
     }
     active -= 1;
@@ -181,8 +203,14 @@ export function createApprovalHandlerStartCoordinator(
       return Promise.resolve(wrapWithHoldTimeout(releaseSlot));
     }
     return new Promise<() => void>((resolve) => {
-      waiters.push((release) => {
-        resolve(wrapWithHoldTimeout(release));
+      waiters.push({
+        isCanceled,
+        proceed: (release) => {
+          resolve(wrapWithHoldTimeout(release));
+        },
+        skip: () => {
+          resolve(() => {});
+        },
       });
     });
   };
