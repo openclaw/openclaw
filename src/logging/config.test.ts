@@ -1,31 +1,33 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+const readBestEffortLoggingConfigMock = vi.hoisted(() => vi.fn());
+
+vi.mock("./config-loader.js", () => ({
+  readBestEffortLoggingConfig: readBestEffortLoggingConfigMock,
+}));
+
 import { readLoggingConfig } from "./config.js";
-
-const loadConfigMock = vi.hoisted(() => vi.fn());
-
-vi.mock("../config/config.js", async () => {
-  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
-  return {
-    ...actual,
-    loadConfig: () => loadConfigMock(),
-  };
-});
 
 const originalArgv = process.argv;
 
 describe("readLoggingConfig", () => {
   afterEach(() => {
     process.argv = originalArgv;
-    loadConfigMock.mockReset();
+    readBestEffortLoggingConfigMock.mockReset();
   });
 
   it("skips mutating config loads for config schema", async () => {
     process.argv = ["node", "openclaw", "config", "schema"];
-    loadConfigMock.mockImplementation(() => {
-      throw new Error("loadConfig should not be called");
-    });
 
     expect(readLoggingConfig()).toBeUndefined();
-    expect(loadConfigMock).not.toHaveBeenCalled();
+    expect(readBestEffortLoggingConfigMock).not.toHaveBeenCalled();
+  });
+
+  it("delegates to the best-effort loader for regular commands", async () => {
+    process.argv = ["node", "openclaw", "gateway", "run"];
+    readBestEffortLoggingConfigMock.mockReturnValue({ level: "debug" });
+
+    expect(readLoggingConfig()).toEqual({ level: "debug" });
+    expect(readBestEffortLoggingConfigMock).toHaveBeenCalledTimes(1);
   });
 });

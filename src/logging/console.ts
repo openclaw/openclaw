@@ -1,12 +1,12 @@
 import util from "node:util";
-import type { OpenClawConfig } from "../config/types.js";
+import type { LoggingConfig } from "../config/types.base.js";
 import { isVerbose } from "../global-state.js";
 import { stripAnsi } from "../terminal/ansi.js";
+import { readBestEffortLoggingConfig } from "./config-loader.js";
 import { readLoggingConfig, shouldSkipMutatingLoggingConfigRead } from "./config.js";
 import { resolveEnvLogLevelOverride } from "./env-log-level.js";
 import { type LogLevel, normalizeLogLevel } from "./levels.js";
 import { getLogger } from "./logger.js";
-import { resolveNodeRequireFromMeta } from "./node-require.js";
 import { loggingState } from "./state.js";
 import { formatLocalIsoWithOffset, formatTimestamp } from "./timestamps.js";
 import type { ConsoleStyle, LoggerSettings } from "./types.js";
@@ -17,21 +17,8 @@ type ConsoleSettings = {
   style: ConsoleStyle;
 };
 export type ConsoleLoggerSettings = ConsoleSettings;
-
-const requireConfig = resolveNodeRequireFromMeta(import.meta.url);
-type ConsoleConfigLoader = () => OpenClawConfig["logging"] | undefined;
-const loadConfigFallbackDefault: ConsoleConfigLoader = () => {
-  try {
-    const loaded = requireConfig?.("../config/config.js") as
-      | {
-          loadConfig?: () => OpenClawConfig;
-        }
-      | undefined;
-    return loaded?.loadConfig?.().logging;
-  } catch {
-    return undefined;
-  }
-};
+type ConsoleConfigLoader = () => LoggingConfig | undefined;
+const loadConfigFallbackDefault: ConsoleConfigLoader = () => readBestEffortLoggingConfig();
 let loadConfigFallback: ConsoleConfigLoader = loadConfigFallbackDefault;
 
 export function setConsoleConfigLoaderForTests(loader?: ConsoleConfigLoader): void {
@@ -72,7 +59,7 @@ function resolveConsoleSettings(): ConsoleSettings {
     return { level: "silent", style: normalizeConsoleStyle(undefined) };
   }
 
-  let cfg: OpenClawConfig["logging"] | undefined =
+  let cfg: LoggingConfig | undefined =
     (loggingState.overrideSettings as LoggerSettings | null) ?? readLoggingConfig();
   if (!cfg && !shouldSkipMutatingLoggingConfigRead()) {
     if (loggingState.resolvingConsoleSettings) {
