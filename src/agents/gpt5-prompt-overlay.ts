@@ -3,6 +3,12 @@ import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import type { ProviderSystemPromptContribution } from "./system-prompt-contribution.js";
 
 const GPT5_MODEL_ID_PATTERN = /(?:^|[/:])gpt-5(?:[.-]|$)/i;
+const OPENAI_FAMILY_GPT5_PROMPT_OVERLAY_PROVIDERS = new Set([
+  "codex",
+  "codex-cli",
+  "openai",
+  "openai-codex",
+]);
 
 export const GPT5_FRIENDLY_PROMPT_OVERLAY = `## Interaction Style
 
@@ -100,10 +106,16 @@ export function normalizeGpt5PromptOverlayMode(value: unknown): Gpt5PromptOverla
 export function resolveGpt5PromptOverlayMode(
   config?: OpenClawConfig,
   legacyPluginConfig?: Record<string, unknown>,
+  params?: { providerId?: string },
 ): Gpt5PromptOverlayMode {
+  const providerId = normalizeOptionalLowercaseString(params?.providerId);
+  const canUseOpenAiPluginFallback =
+    !providerId || OPENAI_FAMILY_GPT5_PROMPT_OVERLAY_PROVIDERS.has(providerId);
   return (
     normalizeGpt5PromptOverlayMode(config?.agents?.defaults?.promptOverlays?.gpt5?.personality) ??
-    normalizeGpt5PromptOverlayMode(config?.plugins?.entries?.openai?.config?.personality) ??
+    (canUseOpenAiPluginFallback
+      ? normalizeGpt5PromptOverlayMode(config?.plugins?.entries?.openai?.config?.personality)
+      : undefined) ??
     normalizeGpt5PromptOverlayMode(legacyPluginConfig?.personality) ??
     "friendly"
   );
@@ -116,6 +128,7 @@ export function isGpt5ModelId(modelId?: string): boolean {
 
 export function resolveGpt5SystemPromptContribution(params: {
   config?: OpenClawConfig;
+  providerId?: string;
   modelId?: string;
   legacyPluginConfig?: Record<string, unknown>;
   enabled?: boolean;
@@ -123,7 +136,9 @@ export function resolveGpt5SystemPromptContribution(params: {
   if (params.enabled === false || !isGpt5ModelId(params.modelId)) {
     return undefined;
   }
-  const mode = resolveGpt5PromptOverlayMode(params.config, params.legacyPluginConfig);
+  const mode = resolveGpt5PromptOverlayMode(params.config, params.legacyPluginConfig, {
+    providerId: params.providerId,
+  });
   return {
     stablePrefix: GPT5_BEHAVIOR_CONTRACT,
     sectionOverrides:
@@ -133,6 +148,7 @@ export function resolveGpt5SystemPromptContribution(params: {
 
 export function renderGpt5PromptOverlay(params: {
   config?: OpenClawConfig;
+  providerId?: string;
   modelId?: string;
   legacyPluginConfig?: Record<string, unknown>;
   enabled?: boolean;

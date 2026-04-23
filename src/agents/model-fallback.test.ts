@@ -416,6 +416,70 @@ describe("runWithModelFallback", () => {
     });
   });
 
+  it("uses optional result classification to continue to configured fallbacks", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai-codex/gpt-5.4",
+            fallbacks: ["anthropic/claude-haiku-3-5"],
+          },
+        },
+      },
+    });
+    const run = vi
+      .fn()
+      .mockResolvedValueOnce({ payloads: [] })
+      .mockResolvedValueOnce({
+        payloads: [{ text: "fallback ok" }],
+      });
+    const classifyResult = vi.fn(({ result }) =>
+      Array.isArray(result.payloads) && result.payloads.length === 0
+        ? {
+            message: "terminal result contained no visible assistant reply",
+            reason: "format" as const,
+            code: "empty_result",
+          }
+        : null,
+    );
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai-codex",
+      model: "gpt-5.4",
+      run,
+      classifyResult,
+    });
+
+    expect(result.result).toEqual({ payloads: [{ text: "fallback ok" }] });
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(run.mock.calls[1]).toEqual(["anthropic", "claude-haiku-3-5"]);
+    expect(result.attempts[0]).toMatchObject({
+      provider: "openai-codex",
+      model: "gpt-5.4",
+      reason: "format",
+      code: "empty_result",
+    });
+  });
+
+  it("does not classify successful results when the optional classifier returns null", async () => {
+    const cfg = makeProviderFallbackCfg("openai-codex");
+    const run = vi.fn().mockResolvedValueOnce({ payloads: [{ text: "ok" }] });
+    const classifyResult = vi.fn(() => null);
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai-codex",
+      model: "m1",
+      run,
+      classifyResult,
+    });
+
+    expect(result.result).toEqual({ payloads: [{ text: "ok" }] });
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(result.attempts).toEqual([]);
+  });
+
   it("passes original unknown errors to onError during fallback", async () => {
     const cfg = makeCfg();
     const unknownError = new Error("provider misbehaved");

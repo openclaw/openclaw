@@ -139,6 +139,7 @@ export function resolveProviderSystemPromptContribution(params: {
   return mergeProviderSystemPromptContributions(
     resolveGpt5SystemPromptContribution({
       config: params.context.config ?? params.config,
+      providerId: params.context.provider ?? params.provider,
       modelId: params.context.modelId,
     }),
     resolveProviderRuntimePlugin(params)?.resolveSystemPromptContribution?.(params.context) ??

@@ -17,8 +17,14 @@ vi.mock("../cli-runner.js", () => ({
 }));
 
 vi.mock("../model-selection.js", () => ({
-  isCliProvider: (provider: string) => provider.trim().toLowerCase() === "claude-cli",
+  isCliProvider: (provider: string) =>
+    provider.trim().toLowerCase() === "claude-cli" || provider.trim().toLowerCase() === "codex-cli",
   normalizeProviderId: (provider: string) => provider.trim().toLowerCase(),
+}));
+
+vi.mock("../provider-auth-aliases.js", () => ({
+  resolveProviderIdForAuth: (provider: string) =>
+    provider.trim().toLowerCase() === "codex-cli" ? "openai-codex" : provider.trim().toLowerCase(),
 }));
 
 vi.mock("../pi-embedded.js", () => ({
@@ -294,6 +300,51 @@ describe("CLI attempt execution", () => {
     });
     expect(sessionStore[sessionKey]?.cliSessionIds?.["claude-cli"]).toBe(cliSessionId);
     expect(sessionStore[sessionKey]?.claudeCliSessionId).toBe(cliSessionId);
+  });
+
+  it("passes session-bound OpenAI Codex auth profile to codex-cli aliases", async () => {
+    const sessionKey = "agent:main:direct:codex-cli-auth-alias";
+    const sessionEntry: SessionEntry = {
+      sessionId: "openclaw-session-codex",
+      updatedAt: Date.now(),
+      authProfileOverride: "openai-codex:work",
+      authProfileOverrideSource: "user",
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+    runCliAgentMock.mockResolvedValueOnce(makeCliResult("codex cli response"));
+
+    await runAgentAttempt({
+      providerOverride: "codex-cli",
+      modelOverride: "gpt-5.4",
+      cfg: {} as OpenClawConfig,
+      sessionEntry,
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionAgentId: "main",
+      sessionFile: path.join(tmpDir, "session.jsonl"),
+      workspaceDir: tmpDir,
+      body: "continue",
+      isFallbackRetry: false,
+      resolvedThinkLevel: "medium",
+      timeoutMs: 1_000,
+      runId: "run-codex-cli-auth-alias",
+      opts: { senderIsOwner: false } as Parameters<typeof runAgentAttempt>[0]["opts"],
+      runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
+      spawnedBy: undefined,
+      messageChannel: undefined,
+      skillsSnapshot: undefined,
+      resolvedVerboseLevel: undefined,
+      agentDir: tmpDir,
+      onAgentEvent: vi.fn(),
+      authProfileProvider: "openai-codex",
+      sessionStore,
+      storePath,
+      sessionHasHistory: false,
+    });
+
+    expect(runCliAgentMock).toHaveBeenCalledTimes(1);
+    expect(runCliAgentMock.mock.calls[0]?.[0]?.authProfileId).toBe("openai-codex:work");
   });
 
   it("persists CLI replies into the session transcript", async () => {

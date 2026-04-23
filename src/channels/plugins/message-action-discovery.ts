@@ -231,6 +231,32 @@ export function listChannelMessageActions(cfg: OpenClawConfig): ChannelMessageAc
   return Array.from(actions);
 }
 
+export function listCrossChannelSchemaSupportedMessageActions(
+  params: ChannelMessageActionDiscoveryParams & {
+    channel?: string;
+  },
+): ChannelMessageActionName[] {
+  const channelId = resolveMessageActionDiscoveryChannelId(params.channel);
+  if (!channelId) {
+    return [];
+  }
+  const pluginActions = resolveCurrentChannelMessageToolDiscoveryAdapter(channelId);
+  if (!pluginActions?.actions) {
+    return [];
+  }
+  const resolved = resolveMessageActionDiscoveryForPlugin({
+    pluginId: pluginActions.pluginId,
+    actions: pluginActions.actions,
+    context: createMessageActionDiscoveryContext(params),
+    includeActions: true,
+    includeSchema: true,
+  });
+  const hasCurrentChannelOnlySchema = resolved.schemaContributions.some(
+    (contribution) => (contribution.visibility ?? "current-channel") === "current-channel",
+  );
+  return hasCurrentChannelOnlySchema ? [] : resolved.actions;
+}
+
 export function listChannelMessageCapabilities(cfg: OpenClawConfig): ChannelMessageCapability[] {
   const capabilities = new Set<ChannelMessageCapability>();
   for (const plugin of listChannelPlugins()) {

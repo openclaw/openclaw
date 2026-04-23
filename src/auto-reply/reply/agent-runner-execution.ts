@@ -12,7 +12,10 @@ import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-bu
 import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionBinding } from "../../agents/cli-session.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
-import { runWithModelFallback, isFallbackSummaryError } from "../../agents/model-fallback.js";
+import {
+  runWithModelFallback,
+  isFallbackSummaryError,
+} from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
@@ -27,6 +30,7 @@ import {
 } from "../../agents/pi-embedded-helpers.js";
 import { sanitizeUserFacingText } from "../../agents/pi-embedded-helpers/sanitize-user-facing-text.js";
 import { isLikelyExecutionAckPrompt } from "../../agents/pi-embedded-runner/run/incomplete-turn.js";
+import { classifyEmbeddedPiRunResultForModelFallback } from "../../agents/pi-embedded-runner/result-fallback-classifier.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import {
   resolveGroupSessionKey,
@@ -115,6 +119,8 @@ export type AgentRunLoopResult =
       directlySentBlockKeys?: Set<string>;
     }
   | { kind: "final"; payload: ReplyPayload };
+
+type EmbeddedAgentRunResult = Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
 
 type FallbackSelectionState = Pick<
   SessionEntry,
@@ -856,9 +862,18 @@ export async function runAgentTurnWithFallback(params: {
           })
         : undefined;
       const onToolResult = params.opts?.onToolResult;
-      const fallbackResult = await runWithModelFallback({
+      const fallbackResult = await runWithModelFallback<EmbeddedAgentRunResult>({
         ...resolveModelFallbackOptions(params.followupRun.run),
         runId,
+        classifyResult: ({ result, provider, model, attempt, total }) =>
+          attempt >= total
+            ? null
+            : classifyEmbeddedPiRunResultForModelFallback({
+                result,
+                provider,
+                model,
+                hasDirectlySentBlockReply: directlySentBlockKeys.size > 0,
+              }),
         run: async (provider, model, runOptions) => {
           // Notify that model selection is complete (including after fallback).
           // This allows responsePrefix template interpolation with the actual model.
@@ -894,10 +909,9 @@ export async function runAgentTurnWithFallback(params: {
               params.getActiveSessionEntry(),
               provider,
             );
-            const authProfileId =
-              provider === params.followupRun.run.provider
-                ? params.followupRun.run.authProfileId
-                : undefined;
+            const authProfile = resolveRunAuthProfile(params.followupRun.run, provider, {
+              config: runtimeConfig,
+            });
             const hookMessageProvider = resolveOriginMessageProvider({
               originatingChannel: params.followupRun.originatingChannel,
               provider: params.sessionCtx.Provider,
@@ -924,7 +938,7 @@ export async function runAgentTurnWithFallback(params: {
                   ownerNumbers: params.followupRun.run.ownerNumbers,
                   cliSessionId: cliSessionBinding?.sessionId,
                   cliSessionBinding,
-                  authProfileId,
+                  authProfileId: authProfile.authProfileId,
                   bootstrapPromptWarningSignaturesSeen,
                   bootstrapPromptWarningSignature:
                     bootstrapPromptWarningSignaturesSeen[

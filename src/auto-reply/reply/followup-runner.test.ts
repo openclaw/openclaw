@@ -1279,7 +1279,7 @@ describe("createFollowupRunner messaging tool dedupe", () => {
     persistSpy.mockRestore();
   });
 
-  it("does not fall back to dispatcher when cross-channel origin routing fails", async () => {
+  it("falls back to dispatcher when cross-channel origin routing fails", async () => {
     routeReplyMock.mockResolvedValueOnce({
       ok: false,
       error: "forced route failure",
@@ -1294,7 +1294,23 @@ describe("createFollowupRunner messaging tool dedupe", () => {
     });
 
     expect(routeReplyMock).toHaveBeenCalled();
-    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    expect(onBlockReply).toHaveBeenCalledWith(expect.objectContaining({ text: "hello world!" }));
+  });
+
+  it("uses dispatcher when origin routing metadata is incomplete", async () => {
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: { payloads: [{ text: "hello world!" }] },
+      queued: {
+        ...baseQueuedRun("webchat"),
+        originatingChannel: "discord",
+        originatingTo: undefined,
+      } as FollowupRun,
+    });
+
+    expect(routeReplyMock).not.toHaveBeenCalled();
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    expect(onBlockReply).toHaveBeenCalledWith(expect.objectContaining({ text: "hello world!" }));
   });
 
   it("falls back to dispatcher when same-channel origin routing fails", async () => {

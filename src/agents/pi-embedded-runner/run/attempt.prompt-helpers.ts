@@ -122,7 +122,44 @@ export function shouldWarnOnOrphanedUserRepair(
   return trigger === "user" || trigger === "manual";
 }
 
-function extractUserMessagePlainText(content: unknown): string | undefined {
+function stringifyStructuredContentPart(part: unknown): string | undefined {
+  if (!part || typeof part !== "object") {
+    return undefined;
+  }
+  const record = part as Record<string, unknown>;
+  if (record.type === "text") {
+    const text = typeof record.text === "string" ? record.text.trim() : "";
+    return text || undefined;
+  }
+  if (record.type === "image_url") {
+    const imageUrl = record.image_url;
+    const url =
+      typeof imageUrl === "string"
+        ? imageUrl
+        : imageUrl && typeof imageUrl === "object"
+          ? (imageUrl as { url?: unknown }).url
+          : undefined;
+    return typeof url === "string" && url.trim() ? `[image_url] ${url.trim()}` : undefined;
+  }
+  if (record.type === "image" || record.type === "input_image") {
+    const url = typeof record.url === "string" ? record.url : undefined;
+    const source = typeof record.source === "string" ? record.source : undefined;
+    if (url?.trim()) {
+      return `[${record.type}] ${url.trim()}`;
+    }
+    if (source?.trim()) {
+      return `[${record.type}] ${source.trim()}`;
+    }
+  }
+  try {
+    const serialized = JSON.stringify(part);
+    return serialized && serialized !== "{}" ? serialized : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function extractUserMessagePromptText(content: unknown): string | undefined {
   if (typeof content === "string") {
     const trimmed = content.trim();
     return trimmed || undefined;
@@ -131,11 +168,10 @@ function extractUserMessagePlainText(content: unknown): string | undefined {
     return undefined;
   }
   const text = content
-    .flatMap((part) =>
-      part && typeof part === "object" && "type" in part && part.type === "text"
-        ? [typeof part.text === "string" ? part.text : ""]
-        : [],
-    )
+    .flatMap((part) => {
+      const text = stringifyStructuredContentPart(part);
+      return text ? [text] : [];
+    })
     .join("\n")
     .trim();
   return text || undefined;
@@ -145,14 +181,17 @@ export function mergeOrphanedTrailingUserPrompt(params: {
   prompt: string;
   trigger: EmbeddedRunAttemptParams["trigger"];
   leafMessage: { content?: unknown };
-}): { prompt: string; merged: boolean } {
+}): { prompt: string; merged: boolean; removeLeaf: boolean } {
   if (!shouldWarnOnOrphanedUserRepair(params.trigger)) {
-    return { prompt: params.prompt, merged: false };
+    return { prompt: params.prompt, merged: false, removeLeaf: false };
   }
 
-  const orphanText = extractUserMessagePlainText(params.leafMessage.content);
-  if (!orphanText || orphanText.length < 4 || params.prompt.includes(orphanText)) {
-    return { prompt: params.prompt, merged: false };
+  const orphanText = extractUserMessagePromptText(params.leafMessage.content);
+  if (!orphanText || orphanText.length < 4) {
+    return { prompt: params.prompt, merged: false, removeLeaf: false };
+  }
+  if (params.prompt.includes(orphanText)) {
+    return { prompt: params.prompt, merged: false, removeLeaf: true };
   }
 
   return {
@@ -163,6 +202,7 @@ export function mergeOrphanedTrailingUserPrompt(params: {
       params.prompt,
     ].join("\n"),
     merged: true,
+    removeLeaf: true,
   };
 }
 

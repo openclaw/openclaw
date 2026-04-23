@@ -317,6 +317,7 @@ describe("mergeOrphanedTrailingUserPrompt", () => {
       }),
     ).toEqual({
       merged: true,
+      removeLeaf: true,
       prompt:
         "[Queued user message that arrived while the previous turn was still active]\n" +
         "older active-turn message\n\nnewest inbound message",
@@ -334,7 +335,49 @@ describe("mergeOrphanedTrailingUserPrompt", () => {
       }),
     ).toEqual({
       merged: false,
+      removeLeaf: true,
       prompt: "summary\nolder active-turn message\nnewest inbound message",
+    });
+  });
+
+  it("preserves structured orphaned user content before removing the leaf", () => {
+    expect(
+      mergeOrphanedTrailingUserPrompt({
+        prompt: "newest inbound message",
+        trigger: "user",
+        leafMessage: {
+          content: [
+            { type: "text", text: "please inspect this" },
+            { type: "image_url", image_url: { url: "https://example.test/cat.png" } },
+            { type: "input_audio", audio_url: "https://example.test/cat.wav" },
+          ],
+        } as never,
+      }),
+    ).toEqual({
+      merged: true,
+      removeLeaf: true,
+      prompt:
+        "[Queued user message that arrived while the previous turn was still active]\n" +
+        "please inspect this\n" +
+        "[image_url] https://example.test/cat.png\n" +
+        '{"type":"input_audio","audio_url":"https://example.test/cat.wav"}\n\n' +
+        "newest inbound message",
+    });
+  });
+
+  it("does not remove an orphaned user leaf when it cannot preserve the payload", () => {
+    expect(
+      mergeOrphanedTrailingUserPrompt({
+        prompt: "newest inbound message",
+        trigger: "user",
+        leafMessage: {
+          content: [],
+        } as never,
+      }),
+    ).toEqual({
+      merged: false,
+      removeLeaf: false,
+      prompt: "newest inbound message",
     });
   });
 
@@ -349,6 +392,7 @@ describe("mergeOrphanedTrailingUserPrompt", () => {
       }),
     ).toEqual({
       merged: false,
+      removeLeaf: false,
       prompt: "HEARTBEAT_OK",
     });
   });

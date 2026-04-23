@@ -9,6 +9,7 @@ import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
+import { classifyEmbeddedPiRunResultForModelFallback } from "../../agents/pi-embedded-runner/result-fallback-classifier.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
@@ -34,6 +35,8 @@ import { isRoutableChannel, routeReply } from "./route-reply.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
+
+type EmbeddedAgentRunResult = Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
 
 export function createFollowupRunner(params: {
   opts?: GetReplyOptions;
@@ -78,7 +81,9 @@ export function createFollowupRunner(params: {
     const shouldRouteToOriginating = isRoutableChannel(originatingChannel) && originatingTo;
 
     if (!shouldRouteToOriginating && !opts?.onBlockReply) {
-      logVerbose("followup queue: no onBlockReply handler; dropping payloads");
+      defaultRuntime.error?.(
+        "followup queue: completed with payloads but no origin route or visible dispatcher is available",
+      );
       return;
     }
 
@@ -112,20 +117,13 @@ export function createFollowupRunner(params: {
         if (!result.ok) {
           const errorMsg = result.error ?? "unknown error";
           logVerbose(`followup queue: route-reply failed: ${errorMsg}`);
-          // Fall back to the caller-provided dispatcher only when the
-          // originating channel matches the session's message provider.
-          // In that case onBlockReply was created by the same channel's
-          // handler and delivers to the correct destination.  For true
-          // cross-channel routing (origin !== provider), falling back
-          // would send to the wrong channel, so we drop the payload.
-          const provider = resolveOriginMessageProvider({
-            provider: queued.run.messageProvider,
-          });
-          const origin = resolveOriginMessageProvider({
-            originatingChannel,
-          });
-          if (opts?.onBlockReply && origin && origin === provider) {
+          // Do not silently drop successful completions.  The dispatcher may
+          // not be the perfect origin route, but it is the last visible reply
+          // path available to the caller.
+          if (opts?.onBlockReply) {
             await opts.onBlockReply(payload);
+          } else {
+            defaultRuntime.error?.(`followup queue: route-reply failed: ${errorMsg}`);
           }
         }
       } else if (opts?.onBlockReply) {
@@ -195,7 +193,7 @@ export function createFollowupRunner(params: {
       );
       replyOperation.setPhase("running");
       try {
-        const fallbackResult = await runWithModelFallback({
+        const fallbackResult = await runWithModelFallback<EmbeddedAgentRunResult>({
           cfg: runtimeConfig,
           provider: run.provider,
           model: run.model,
@@ -206,8 +204,12 @@ export function createFollowupRunner(params: {
             agentId: run.agentId,
             sessionKey: run.sessionKey,
           }),
+          classifyResult: ({ result, provider, model, attempt, total }) =>
+            attempt >= total
+              ? null
+              : classifyEmbeddedPiRunResultForModelFallback({ result, provider, model }),
           run: async (provider, model, runOptions) => {
-            const authProfile = resolveRunAuthProfile(run, provider);
+            const authProfile = resolveRunAuthProfile(run, provider, { config: runtimeConfig });
             let attemptCompactionCount = 0;
             try {
               const result = await runEmbeddedPiAgent({

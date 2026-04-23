@@ -18,6 +18,7 @@ import { resolveAgentHarnessPolicy } from "../harness/selection.js";
 import { isCliProvider } from "../model-selection.js";
 import { prepareSessionManagerForRun } from "../pi-embedded-runner/session-manager-init.js";
 import { runEmbeddedPiAgent, type EmbeddedPiRunResult } from "../pi-embedded.js";
+import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import { buildWorkspaceSkillSnapshot } from "../skills.js";
 import { buildUsageWithNoCost } from "../stream-message-shared.js";
 import {
@@ -271,8 +272,16 @@ export function runAgentAttempt(params: {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey ?? params.sessionId,
   });
+  const providerAuthKey = resolveProviderIdForAuth(params.providerOverride, {
+    config: params.cfg,
+    workspaceDir: params.workspaceDir,
+  });
+  const authProfileProviderKey = resolveProviderIdForAuth(params.authProfileProvider, {
+    config: params.cfg,
+    workspaceDir: params.workspaceDir,
+  });
   const authProfileId =
-    params.providerOverride === params.authProfileProvider
+    providerAuthKey === authProfileProviderKey
       ? params.sessionEntry?.authProfileOverride
       : undefined;
   if (isCliProvider(params.providerOverride, params.cfg)) {

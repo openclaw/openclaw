@@ -334,6 +334,7 @@ function createParallelToolCallsWrapper(
     if (
       model.api !== "openai-completions" &&
       model.api !== "openai-responses" &&
+      model.api !== "openai-codex-responses" &&
       model.api !== "azure-openai-responses"
     ) {
       return underlying(model, context, options);
