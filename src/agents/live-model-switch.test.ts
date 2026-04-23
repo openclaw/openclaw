@@ -283,7 +283,7 @@ describe("live model switch", () => {
     });
   });
 
-  it("does not strip NVIDIA-prefixed ids from persisted overrides", async () => {
+  it("strips one duplicated provider prefix from persisted NVIDIA overrides", async () => {
     state.loadSessionStoreMock.mockReturnValue({
       main: {
         providerOverride: "nvidia",
@@ -303,7 +303,7 @@ describe("live model switch", () => {
       }),
     ).toEqual({
       provider: "nvidia",
-      model: "nvidia/nemotron-3-super-120b-a12b",
+      model: "nemotron-3-super-120b-a12b",
       authProfileId: undefined,
       authProfileIdSource: undefined,
     });

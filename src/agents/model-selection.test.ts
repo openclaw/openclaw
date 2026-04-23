@@ -435,7 +435,7 @@ describe("model-selection", () => {
       });
     });
 
-    it("preserves NVIDIA provider-prefixed override ids without stripping the namespace", () => {
+    it("strips one duplicated provider prefix from persisted NVIDIA overrides", () => {
       expect(
         resolvePersistedSelectedModelRef({
           defaultProvider: "anthropic",
