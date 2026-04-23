@@ -70,9 +70,27 @@ function buildMultiAccountTelegramConfig(params: {
   opsExecApprovals?: TelegramExecApprovalConfig;
   defaultOverrides?: Partial<TelegramAccountConfig>;
   opsOverrides?: Partial<TelegramAccountConfig>;
+  approvalTargets?: Array<{
+    channel: string;
+    to: string;
+    accountId?: string;
+    threadId?: string | number;
+  }>;
+  approvalMode?: "session" | "targets" | "both";
 }): OpenClawConfig {
   return {
     ...(params.sessionStorePath ? { session: { store: params.sessionStorePath } } : {}),
+    ...(params.approvalTargets
+      ? {
+          approvals: {
+            exec: {
+              enabled: true,
+              mode: params.approvalMode ?? "targets",
+              targets: params.approvalTargets,
+            },
+          },
+        }
+      : {}),
     channels: {
       telegram: {
         accounts: {
@@ -401,6 +419,50 @@ describe("telegram exec approvals", () => {
         request,
       }),
     ).toBe(true);
+  });
+
+  it("limits targets-mode native handling to the explicitly targeted telegram account", () => {
+    const cfg = buildMultiAccountTelegramConfig({
+      approvalTargets: [{ channel: "telegram", to: "123", accountId: "ops" }],
+    });
+    const request = makeForeignChannelApprovalRequest({ id: "req-10" });
+
+    expect(
+      shouldHandleTelegramExecApprovalRequest({
+        cfg,
+        accountId: "default",
+        request,
+      }),
+    ).toBe(false);
+    expect(
+      shouldHandleTelegramExecApprovalRequest({
+        cfg,
+        accountId: "ops",
+        request,
+      }),
+    ).toBe(true);
+  });
+
+  it("skips native handling in targets mode when no telegram target is configured", () => {
+    const cfg = buildMultiAccountTelegramConfig({
+      approvalTargets: [{ channel: "discord", to: "123", accountId: "ops" }],
+    });
+    const request = makeForeignChannelApprovalRequest({ id: "req-11" });
+
+    expect(
+      shouldHandleTelegramExecApprovalRequest({
+        cfg,
+        accountId: "default",
+        request,
+      }),
+    ).toBe(false);
+    expect(
+      shouldHandleTelegramExecApprovalRequest({
+        cfg,
+        accountId: "ops",
+        request,
+      }),
+    ).toBe(false);
   });
 
   it("only injects approval buttons on eligible telegram targets", () => {

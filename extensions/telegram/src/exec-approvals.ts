@@ -78,11 +78,38 @@ export function isTelegramExecApprovalTargetRecipient(params: {
   });
 }
 
+function matchesTelegramExplicitTargetAccount(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+}): boolean {
+  const execApprovals = params.cfg.approvals?.exec;
+  if (
+    !execApprovals?.enabled ||
+    (execApprovals.mode !== "targets" && execApprovals.mode !== "both")
+  ) {
+    return true;
+  }
+  const telegramTargets = (execApprovals.targets ?? []).filter(
+    (target) => normalizeLowercaseStringOrEmpty(target.channel) === "telegram",
+  );
+  if (telegramTargets.length === 0) {
+    return false;
+  }
+  const normalizedAccountId = params.accountId ? normalizeAccountId(params.accountId) : undefined;
+  return telegramTargets.some((target) => {
+    const targetAccountId = target.accountId ? normalizeAccountId(target.accountId) : undefined;
+    return !targetAccountId || !normalizedAccountId || targetAccountId === normalizedAccountId;
+  });
+}
+
 function countTelegramExecApprovalEligibleAccounts(params: {
   cfg: OpenClawConfig;
   request: ExecApprovalRequest | PluginApprovalRequest;
 }): number {
   return listTelegramAccountIds(params.cfg).filter((accountId) => {
+    if (!matchesTelegramExplicitTargetAccount({ cfg: params.cfg, accountId })) {
+      return false;
+    }
     const account = resolveTelegramAccount({ cfg: params.cfg, accountId });
     if (!account.enabled || account.tokenSource === "none") {
       return false;
@@ -111,6 +138,9 @@ function matchesTelegramRequestAccount(params: {
   accountId?: string | null;
   request: ExecApprovalRequest | PluginApprovalRequest;
 }): boolean {
+  if (!matchesTelegramExplicitTargetAccount(params)) {
+    return false;
+  }
   const turnSourceChannel = normalizeLowercaseStringOrEmpty(
     params.request.request.turnSourceChannel,
   );
