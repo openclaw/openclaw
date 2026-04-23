@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { buildGatewayHttpHeaders, resolveGatewayHttpAuthHeader } from "../gateway-http-auth.js";
+import {
+  buildGatewayHttpHeaders,
+  resolveGatewayHttpAuthHeader,
+  resolveGatewayHttpAuthHeaders,
+} from "../gateway-http-auth.js";
 
 describe("resolveGatewayHttpAuthHeader", () => {
   it("prefers the configured gateway token over the paired device token for HTTP requests", () => {
@@ -36,6 +40,28 @@ describe("resolveGatewayHttpAuthHeader", () => {
         hello: { auth: { deviceToken: "   " } },
       }),
     ).toBeNull();
+  });
+});
+
+describe("resolveGatewayHttpAuthHeaders", () => {
+  it("returns all usable credentials in fallback order without duplicates", () => {
+    expect(
+      resolveGatewayHttpAuthHeaders({
+        settings: { token: " gateway-token " },
+        password: "gateway-password",
+        hello: { auth: { deviceToken: "gateway-password" } },
+      }),
+    ).toEqual(["Bearer gateway-token", "Bearer gateway-password"]);
+  });
+
+  it("returns an empty list when no credentials are available", () => {
+    expect(
+      resolveGatewayHttpAuthHeaders({
+        settings: { token: "   " },
+        password: " ",
+        hello: { auth: { deviceToken: "   " } },
+      }),
+    ).toEqual([]);
   });
 });
 

@@ -10,20 +10,16 @@ export type GatewayHttpAuthSource = {
   } | null;
 };
 
+export function resolveGatewayHttpAuthHeaders(source: GatewayHttpAuthSource): string[] {
+  const candidates = [source.settings?.token, source.password, source.hello?.auth?.deviceToken]
+    .map((value) => value?.trim())
+    .filter((value): value is string => Boolean(value))
+    .map((value) => `Bearer ${value}`);
+  return [...new Set(candidates)];
+}
+
 export function resolveGatewayHttpAuthHeader(source: GatewayHttpAuthSource): string | null {
-  const token = source.settings?.token?.trim();
-  if (token) {
-    return `Bearer ${token}`;
-  }
-  const password = source.password?.trim();
-  if (password) {
-    return `Bearer ${password}`;
-  }
-  const deviceToken = source.hello?.auth?.deviceToken?.trim();
-  if (deviceToken) {
-    return `Bearer ${deviceToken}`;
-  }
-  return null;
+  return resolveGatewayHttpAuthHeaders(source)[0] ?? null;
 }
 
 export function buildGatewayHttpHeaders(

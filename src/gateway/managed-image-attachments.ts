@@ -1013,7 +1013,13 @@ export async function handleManagedOutgoingImageHttpRequest(
     sendStatus(res, 404, "not found");
     return true;
   }
-  const sessionKey = decodeURIComponent(encodedSessionKey);
+  let sessionKey: string;
+  try {
+    sessionKey = decodeURIComponent(encodedSessionKey);
+  } catch {
+    sendStatus(res, 404, "not found");
+    return true;
+  }
   const record = await readManagedImageRecord(attachmentId, opts.stateDir);
   if (!record || record.sessionKey !== sessionKey) {
     sendStatus(res, 404, "not found");

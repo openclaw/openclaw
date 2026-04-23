@@ -288,6 +288,18 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     expect(result.statusCode).toBe(405);
   });
 
+  it("rejects malformed encoded session keys", async () => {
+    const { attachmentId } = await createFixture(stateDir);
+
+    const { result } = await requestManagedImage({
+      stateDir,
+      pathName: `/api/chat/media/outgoing/%E0%A4%A/${attachmentId}/full`,
+      authResponse: { authMethod: "device-token" },
+    });
+
+    expect(result.statusCode).toBe(404);
+  });
+
   it("reuses the session attachment index across requests until the transcript changes", async () => {
     const { attachmentId, sessionKey } = await createFixture(stateDir);
     const sessionFile = path.join(stateDir, "sessions", "sess-main.jsonl");
@@ -593,7 +605,6 @@ describe("createManagedOutgoingImageBlocks", () => {
     expect(blocks[0]?.type).toBe("image");
     expect(blocks[1]).toMatchObject({ type: "text" });
   });
-
 
   it("skips broken attachments when continueOnPrepareError is enabled", async () => {
     const onPrepareError = vi.fn();

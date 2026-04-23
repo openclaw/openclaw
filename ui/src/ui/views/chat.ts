@@ -113,6 +113,7 @@ export type ChatProps = {
   onMediaLoad?: () => void;
   basePath?: string;
   authHeader?: string;
+  authHeaders?: string[];
 };
 
 // Persistent instances keyed by session
@@ -915,6 +916,7 @@ export function renderChat(props: ChatProps) {
                 embedSandboxMode: props.embedSandboxMode ?? "scripts",
                 allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,
                 authHeader: props.authHeader,
+                authHeaders: props.authHeaders,
                 requesterSessionKey: activeSession?.key ?? undefined,
                 onMediaLoad: props.onMediaLoad,
                 contextWindow:

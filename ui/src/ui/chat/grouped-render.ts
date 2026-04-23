@@ -46,6 +46,12 @@ const ASSISTANT_ATTACHMENT_UNAVAILABLE_RETRY_MS = 5_000;
 
 export function resetAssistantAttachmentAvailabilityCacheForTest() {
   assistantAttachmentAvailabilityCache.clear();
+  for (const blobUrl of managedImageBlobUrlResolvedCache.values()) {
+    URL.revokeObjectURL(blobUrl);
+  }
+  managedImageBlobUrlCache.clear();
+  managedImageBlobUrlResolvedCache.clear();
+  managedImageBlobUrlMissCache.clear();
 }
 
 type ImageBlock = {
@@ -376,6 +382,7 @@ export function renderMessageGroup(
     embedSandboxMode?: EmbedSandboxMode;
     allowExternalEmbedUrls?: boolean;
     authHeader?: string;
+    authHeaders?: readonly string[];
     requesterSessionKey?: string;
     onMediaLoad?: () => void;
     contextWindow?: number | null;
@@ -441,6 +448,7 @@ export function renderMessageGroup(
               assistantAttachmentAuthToken: opts.assistantAttachmentAuthToken,
               embedSandboxMode: opts.embedSandboxMode,
               authHeader: opts.authHeader,
+              authHeaders: opts.authHeaders,
               requesterSessionKey: opts.requesterSessionKey,
               onMediaLoad: opts.onMediaLoad,
             },
@@ -814,10 +822,25 @@ const MANAGED_IMAGE_PREVIEW_SELECTOR = ".chat-message-image";
 
 function buildManagedImageFetchCacheKey(
   url: string,
-  authHeader?: string,
+  authHeaderOrHeaders?: string | readonly string[],
   requesterSessionKey?: string,
 ) {
-  return JSON.stringify([url, authHeader ?? null, requesterSessionKey ?? null]);
+  const authHeaders = Array.isArray(authHeaderOrHeaders)
+    ? authHeaderOrHeaders
+    : authHeaderOrHeaders
+      ? [authHeaderOrHeaders]
+      : [];
+  return JSON.stringify([url, authHeaders, requesterSessionKey ?? null]);
+}
+
+function resolveManagedImageAuthHeaders(
+  authHeader?: string,
+  authHeaders?: readonly string[],
+): string[] {
+  const combined = [authHeader, ...(authHeaders ?? [])]
+    .map((value) => value?.trim())
+    .filter((value): value is string => Boolean(value));
+  return [...new Set(combined)];
 }
 
 function sleep(ms: number): Promise<void> {
@@ -884,9 +907,14 @@ function resolveManagedImageUrl(
 async function fetchManagedImageBlob(
   url: string,
   authHeader?: string,
-  opts?: { bypassMissCache?: boolean; requesterSessionKey?: string },
+  opts?: {
+    authHeaders?: readonly string[];
+    bypassMissCache?: boolean;
+    requesterSessionKey?: string;
+  },
 ): Promise<Blob | null> {
-  const cacheKey = buildManagedImageFetchCacheKey(url, authHeader, opts?.requesterSessionKey);
+  const authCandidates = resolveManagedImageAuthHeaders(authHeader, opts?.authHeaders);
+  const cacheKey = buildManagedImageFetchCacheKey(url, authCandidates, opts?.requesterSessionKey);
   const bypassMissCache = opts?.bypassMissCache === true;
   if (!bypassMissCache) {
     const missUntil = managedImageBlobUrlMissCache.get(cacheKey);
@@ -900,29 +928,39 @@ async function fetchManagedImageBlob(
     if (delayMs > 0) {
       await sleep(delayMs);
     }
-    try {
-      const headers: Record<string, string> = {};
-      if (authHeader) {
-        headers.Authorization = authHeader;
-      }
-      if (opts?.requesterSessionKey) {
-        headers["x-openclaw-requester-session-key"] = opts.requesterSessionKey;
-      }
-      const response = await fetch(url, {
-        credentials: "same-origin",
-        ...(Object.keys(headers).length > 0 ? { headers } : {}),
-      });
-      if (response.ok) {
-        managedImageBlobUrlMissCache.delete(cacheKey);
-        return await response.blob();
-      }
-      if (response.status !== 404) {
+    for (let authIndex = 0; authIndex < Math.max(authCandidates.length, 1); authIndex += 1) {
+      const resolvedAuthHeader = authCandidates[authIndex];
+      try {
+        const headers: Record<string, string> = {};
+        if (resolvedAuthHeader) {
+          headers.Authorization = resolvedAuthHeader;
+        }
+        if (opts?.requesterSessionKey) {
+          headers["x-openclaw-requester-session-key"] = opts.requesterSessionKey;
+        }
+        const response = await fetch(url, {
+          credentials: "same-origin",
+          ...(Object.keys(headers).length > 0 ? { headers } : {}),
+        });
+        if (response.ok) {
+          managedImageBlobUrlMissCache.delete(cacheKey);
+          return await response.blob();
+        }
+        if (response.status === 404) {
+          break;
+        }
+        const canRetryAuth =
+          (response.status === 401 || response.status === 403) &&
+          authIndex < authCandidates.length - 1;
+        if (canRetryAuth) {
+          continue;
+        }
+        managedImageBlobUrlMissCache.set(cacheKey, Date.now() + MANAGED_IMAGE_FETCH_MISS_TTL_MS);
+        return null;
+      } catch {
         managedImageBlobUrlMissCache.set(cacheKey, Date.now() + MANAGED_IMAGE_FETCH_MISS_TTL_MS);
         return null;
       }
-    } catch {
-      managedImageBlobUrlMissCache.set(cacheKey, Date.now() + MANAGED_IMAGE_FETCH_MISS_TTL_MS);
-      return null;
     }
   }
   managedImageBlobUrlMissCache.set(cacheKey, Date.now() + MANAGED_IMAGE_FETCH_MISS_TTL_MS);
@@ -932,9 +970,14 @@ async function fetchManagedImageBlob(
 async function fetchManagedImageBlobUrl(
   url: string,
   authHeader?: string,
-  opts?: { bypassMissCache?: boolean; requesterSessionKey?: string },
+  opts?: {
+    authHeaders?: readonly string[];
+    bypassMissCache?: boolean;
+    requesterSessionKey?: string;
+  },
 ): Promise<string | null> {
-  const cacheKey = buildManagedImageFetchCacheKey(url, authHeader, opts?.requesterSessionKey);
+  const authCandidates = resolveManagedImageAuthHeaders(authHeader, opts?.authHeaders);
+  const cacheKey = buildManagedImageFetchCacheKey(url, authCandidates, opts?.requesterSessionKey);
   const resolved = managedImageBlobUrlResolvedCache.get(cacheKey);
   if (typeof resolved === "string" && resolved.length > 0) {
     return resolved;
@@ -977,6 +1020,7 @@ async function fetchImageBlob(
   opts: {
     basePath?: string;
     authHeader?: string;
+    authHeaders?: readonly string[];
     requesterSessionKey?: string;
     assistantAttachmentAuthToken?: string | null;
   },
@@ -988,6 +1032,7 @@ async function fetchImageBlob(
   });
   if (managedUrl) {
     return fetchManagedImageBlob(managedUrl, opts.authHeader, {
+      authHeaders: opts.authHeaders,
       bypassMissCache: true,
       requesterSessionKey: opts.requesterSessionKey,
     });
@@ -1083,6 +1128,7 @@ async function copyImageUrl(
   opts: {
     basePath?: string;
     authHeader?: string;
+    authHeaders?: readonly string[];
     requesterSessionKey?: string;
     assistantAttachmentAuthToken?: string | null;
   },
@@ -1135,6 +1181,7 @@ async function fetchManagedPreviewBlobUrl(
   opts: {
     basePath?: string;
     authHeader?: string;
+    authHeaders?: readonly string[];
     requesterSessionKey?: string;
     fallbackRawUrl?: string;
     assistantAttachmentAuthToken?: string | null;
@@ -1150,6 +1197,7 @@ async function fetchManagedPreviewBlobUrl(
   });
   if (managedUrl) {
     const primary = await fetchManagedImageBlobUrl(managedUrl, opts.authHeader, {
+      authHeaders: opts.authHeaders,
       requesterSessionKey: opts.requesterSessionKey,
     });
     if (primary) {
@@ -1163,6 +1211,7 @@ async function fetchManagedPreviewBlobUrl(
       });
       if (fallbackManagedUrl && fallbackManagedUrl !== managedUrl) {
         const fallback = await fetchManagedImageBlobUrl(fallbackManagedUrl, opts.authHeader, {
+          authHeaders: opts.authHeaders,
           requesterSessionKey: opts.requesterSessionKey,
         });
         if (fallback) {
@@ -1183,6 +1232,7 @@ function resolveManagedPreviewSource(
   opts: {
     basePath?: string;
     authHeader?: string;
+    authHeaders?: readonly string[];
     requesterSessionKey?: string;
     fallbackRawUrl?: string;
     assistantAttachmentAuthToken?: string | null;
@@ -1203,8 +1253,9 @@ function resolveManagedPreviewSource(
     });
   }
 
+  const authCacheKey = resolveManagedImageAuthHeaders(opts.authHeader, opts.authHeaders);
   const resolvedPrimary = managedImageBlobUrlResolvedCache.get(
-    buildManagedImageFetchCacheKey(managedUrl, opts.authHeader, opts.requesterSessionKey),
+    buildManagedImageFetchCacheKey(managedUrl, authCacheKey, opts.requesterSessionKey),
   );
   if (typeof resolvedPrimary === "string" && resolvedPrimary.length > 0) {
     return resolvedPrimary;
@@ -1218,11 +1269,7 @@ function resolveManagedPreviewSource(
     });
     if (fallbackManagedUrl && fallbackManagedUrl !== managedUrl) {
       const resolvedFallback = managedImageBlobUrlResolvedCache.get(
-        buildManagedImageFetchCacheKey(
-          fallbackManagedUrl,
-          opts.authHeader,
-          opts.requesterSessionKey,
-        ),
+        buildManagedImageFetchCacheKey(fallbackManagedUrl, authCacheKey, opts.requesterSessionKey),
       );
       if (typeof resolvedFallback === "string" && resolvedFallback.length > 0) {
         return resolvedFallback;
@@ -1238,6 +1285,7 @@ async function openImageUrl(
   opts: {
     basePath?: string;
     authHeader?: string;
+    authHeaders?: readonly string[];
     requesterSessionKey?: string;
     assistantAttachmentAuthToken?: string | null;
   },
@@ -1249,6 +1297,7 @@ async function openImageUrl(
   });
   if (managedUrl) {
     const blobUrl = await fetchManagedImageBlobUrl(managedUrl, opts.authHeader, {
+      authHeaders: opts.authHeaders,
       bypassMissCache: true,
       requesterSessionKey: opts.requesterSessionKey,
     });
@@ -1307,6 +1356,7 @@ function renderMessageImages(
   opts: {
     basePath?: string;
     authHeader?: string;
+    authHeaders?: readonly string[];
     requesterSessionKey?: string;
     assistantAttachmentAuthToken?: string | null;
     onMediaLoad?: () => void;
@@ -1320,6 +1370,7 @@ function renderMessageImages(
     void openImageUrl(img.openUrl ?? img.url, {
       basePath: opts.basePath,
       authHeader: opts.authHeader,
+      authHeaders: opts.authHeaders,
       requesterSessionKey: opts.requesterSessionKey,
       assistantAttachmentAuthToken: opts.assistantAttachmentAuthToken,
     });
@@ -1332,6 +1383,7 @@ function renderMessageImages(
     void copyImageUrl(copySource, {
       basePath: opts.basePath,
       authHeader: opts.authHeader,
+      authHeaders: opts.authHeaders,
       requesterSessionKey: opts.requesterSessionKey,
       assistantAttachmentAuthToken: opts.assistantAttachmentAuthToken,
     })
@@ -1394,6 +1446,7 @@ function renderMessageImages(
         const previewSrc = resolveManagedPreviewSource(img.previewUrl, {
           basePath: opts.basePath,
           authHeader: opts.authHeader,
+          authHeaders: opts.authHeaders,
           requesterSessionKey: opts.requesterSessionKey,
           fallbackRawUrl: img.openUrl ?? img.url,
           assistantAttachmentAuthToken: opts.assistantAttachmentAuthToken,
@@ -1438,7 +1491,10 @@ function renderReplyPill(replyTarget: NormalizedMessage["replyTarget"]) {
 
 function isLocalAssistantAttachmentSource(source: string): boolean {
   const trimmed = source.trim();
-  if (/^\/(?:__openclaw__|media)\//.test(trimmed)) {
+  if (
+    /^\/(?:__openclaw__|media)\//.test(trimmed) ||
+    /(?:^|\/)api\/chat\/media\/outgoing\//.test(trimmed)
+  ) {
     return false;
   }
   return (
@@ -1871,6 +1927,7 @@ function renderGroupedMessage(
     embedSandboxMode?: EmbedSandboxMode;
     allowExternalEmbedUrls?: boolean;
     authHeader?: string;
+    authHeaders?: readonly string[];
     requesterSessionKey?: string;
     onMediaLoad?: () => void;
   },
@@ -1993,6 +2050,7 @@ function renderGroupedMessage(
   const renderedImages = renderMessageImages(renderableImages, {
     basePath: opts.basePath,
     authHeader: opts.authHeader,
+    authHeaders: opts.authHeaders,
     requesterSessionKey: opts.requesterSessionKey,
     assistantAttachmentAuthToken: opts.assistantAttachmentAuthToken,
     onMediaLoad: opts.onMediaLoad,

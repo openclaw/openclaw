@@ -119,7 +119,10 @@ import {
   updateSkillEnabled,
 } from "./controllers/skills.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "./external-link.ts";
-import { resolveGatewayHttpAuthHeader } from "./gateway-http-auth.ts";
+import {
+  resolveGatewayHttpAuthHeader,
+  resolveGatewayHttpAuthHeaders,
+} from "./gateway-http-auth.ts";
 import { icons } from "./icons.ts";
 import "./components/dashboard-header.ts";
 import { normalizeBasePath, TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
@@ -1158,6 +1161,10 @@ export function renderApp(state: AppViewState) {
       case "tools":
         void loadToolsCatalog(state, agentId);
         void refreshVisibleToolsEffectiveForCurrentSession(state);
+        return;
+      case "overview":
+      case "channels":
+      case "cron":
         return;
     }
   };
@@ -2312,6 +2319,11 @@ export function renderApp(state: AppViewState) {
                   settings: state.settings,
                   hello: state.hello,
                 }) ?? undefined,
+              authHeaders: resolveGatewayHttpAuthHeaders({
+                password: state.password,
+                settings: state.settings,
+                hello: state.hello,
+              }),
             })
           : nothing}
         ${renderConfigTabForActiveTab()}

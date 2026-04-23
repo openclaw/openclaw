@@ -3,6 +3,7 @@
 import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getSafeLocalStorage } from "../../local-storage.ts";
+import * as openExternalUrlModule from "../open-external-url.ts";
 import type { MessageGroup } from "../types/chat-types.ts";
 import { buildChatItems, type BuildChatItemsProps } from "./build-chat-items.ts";
 import {
@@ -140,6 +141,7 @@ async function flushAssistantAttachmentAvailabilityChecks() {
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
@@ -1157,5 +1159,155 @@ describe("grouped chat rendering", () => {
         kind: "markdown",
       }),
     );
+  });
+
+  it("retries managed image previews with fallback gateway auth headers", async () => {
+    resetAssistantAttachmentAvailabilityCacheForTest();
+    const createObjectURLMock = vi.fn(() => "blob:preview-fallback");
+    const revokeObjectURLMock = vi.fn();
+    vi.stubGlobal(
+      "URL",
+      Object.assign(URL, {
+        createObjectURL: createObjectURLMock,
+        revokeObjectURL: revokeObjectURLMock,
+      }),
+    );
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 403,
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        blob: async () => new Blob(["preview"], { type: "image/png" }),
+      } as Response);
+    vi.stubGlobal("fetch", fetchMock);
+
+    const container = document.createElement("div");
+    renderAssistantMessage(
+      container,
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "image",
+            url: "/api/chat/media/outgoing/agent%3Amain%3Amain/11111111-1111-4111-8111-111111111111/full",
+            alt: "Fallback preview",
+          },
+        ],
+      },
+      {
+        authHeader: "Bearer stale-token",
+        authHeaders: ["Bearer stale-token", "Bearer device-token"],
+      },
+    );
+
+    await flushAssistantAttachmentAvailabilityChecks();
+    await flushAssistantAttachmentAvailabilityChecks();
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[0]?.[1]).toEqual(
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: "Bearer stale-token" }),
+      }),
+    );
+    expect(fetchMock.mock.calls[1]?.[1]).toEqual(
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: "Bearer device-token" }),
+      }),
+    );
+    expect(
+      container.querySelector<HTMLImageElement>(".chat-message-image")?.getAttribute("src"),
+    ).toBe("blob:preview-fallback");
+  });
+
+  it("retries managed image opens with fallback gateway auth headers", async () => {
+    resetAssistantAttachmentAvailabilityCacheForTest();
+    const createObjectURLMock = vi
+      .fn<(blob: Blob) => string>()
+      .mockReturnValueOnce("blob:preview-open")
+      .mockReturnValueOnce("blob:open");
+    vi.stubGlobal(
+      "URL",
+      Object.assign(URL, {
+        createObjectURL: createObjectURLMock,
+        revokeObjectURL: vi.fn(),
+      }),
+    );
+    const openExternalUrlSafeSpy = vi
+      .spyOn(openExternalUrlModule, "openExternalUrlSafe")
+      .mockReturnValue(window);
+    const toRequestUrl = (input: RequestInfo | URL): string => {
+      if (typeof input === "string") {
+        return input;
+      }
+      if (input instanceof URL) {
+        return input.href;
+      }
+      return input.url;
+    };
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+      const url = toRequestUrl(input);
+      const auth = init?.headers as Record<string, string> | undefined;
+      if (url.endsWith("/preview")) {
+        return {
+          ok: true,
+          status: 200,
+          blob: async () => new Blob(["preview"], { type: "image/png" }),
+        } as Response;
+      }
+      if (auth?.Authorization === "Bearer stale-token") {
+        return {
+          ok: false,
+          status: 401,
+        } as Response;
+      }
+      return {
+        ok: true,
+        status: 200,
+        blob: async () => new Blob(["open"], { type: "image/png" }),
+      } as Response;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const container = document.createElement("div");
+    renderAssistantMessage(
+      container,
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "image",
+            url: "/api/chat/media/outgoing/agent%3Amain%3Amain/11111111-1111-4111-8111-111111111111/preview",
+            openUrl:
+              "/api/chat/media/outgoing/agent%3Amain%3Amain/11111111-1111-4111-8111-111111111111/full",
+            alt: "Fallback open",
+          },
+        ],
+      },
+      {
+        authHeader: "Bearer stale-token",
+        authHeaders: ["Bearer stale-token", "Bearer device-token"],
+      },
+    );
+
+    await flushAssistantAttachmentAvailabilityChecks();
+
+    const openButton = container.querySelector<HTMLButtonElement>(".chat-message-image-open");
+    expect(openButton).toBeTruthy();
+    openButton?.click();
+    await flushAssistantAttachmentAvailabilityChecks();
+    await flushAssistantAttachmentAvailabilityChecks();
+
+    const authCalls = fetchMock.mock.calls
+      .filter(([input]) => toRequestUrl(input).endsWith("/full"))
+      .map(([, init]) => init?.headers as Record<string, string> | undefined);
+    expect(authCalls).toEqual([
+      expect.objectContaining({ Authorization: "Bearer stale-token" }),
+      expect.objectContaining({ Authorization: "Bearer device-token" }),
+    ]);
+    expect(openExternalUrlSafeSpy).toHaveBeenCalledWith("blob:open");
   });
 });
