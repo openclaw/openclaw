@@ -120,9 +120,23 @@ function resolveMatrixCliAccountContext(accountId?: string): {
 }
 
 function formatMatrixCliCommand(command: string, accountId?: string): string {
+  return formatMatrixCliCommandParts(command.split(" "), accountId);
+}
+
+function formatMatrixCliCommandParts(parts: string[], accountId?: string): string {
   const normalizedAccountId = normalizeAccountId(accountId);
-  const suffix = normalizedAccountId === "default" ? "" : ` --account ${normalizedAccountId}`;
-  return `openclaw matrix ${command}${suffix}`;
+  const command = ["openclaw", "matrix", ...parts];
+  if (normalizedAccountId !== "default") {
+    command.push("--account", normalizedAccountId);
+  }
+  return command.map(formatMatrixCliShellArg).join(" ");
+}
+
+function formatMatrixCliShellArg(value: string): string {
+  if (/^[A-Za-z0-9_./:=@%+-]+$/.test(value)) {
+    return value;
+  }
+  return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
 function printMatrixOwnDevices(
@@ -649,6 +663,43 @@ function sanitizeMatrixCliText(value: string): string {
   let withoutAnsi = "";
   for (let index = 0; index < value.length; index++) {
     const code = value.charCodeAt(index);
+    if (code === 0x9b) {
+      index++;
+      while (index < value.length && !isAnsiFinalByte(value.charCodeAt(index))) {
+        index++;
+      }
+      continue;
+    }
+    if (code === 0x9d) {
+      index++;
+      while (index < value.length) {
+        const current = value.charCodeAt(index);
+        if (current === 0x07 || current === 0x9c) {
+          break;
+        }
+        if (current === 0x1b && value[index + 1] === "\\") {
+          index++;
+          break;
+        }
+        index++;
+      }
+      continue;
+    }
+    if (code === 0x90 || code === 0x9e || code === 0x9f) {
+      index++;
+      while (index < value.length) {
+        const current = value.charCodeAt(index);
+        if (current === 0x07 || current === 0x9c) {
+          break;
+        }
+        if (current === 0x1b && value[index + 1] === "\\") {
+          index++;
+          break;
+        }
+        index++;
+      }
+      continue;
+    }
     if (code !== 0x1b) {
       withoutAnsi += value[index];
       continue;
@@ -683,11 +734,21 @@ function sanitizeMatrixCliText(value: string): string {
   let sanitized = "";
   for (const character of withoutAnsi) {
     const code = character.charCodeAt(0);
-    if ((code >= 0x20 && code !== 0x7f) || code > 0x7f) {
+    if (!isUnsafeMatrixCliTerminalCode(code)) {
       sanitized += character;
     }
   }
   return sanitized;
+}
+
+function isUnsafeMatrixCliTerminalCode(code: number): boolean {
+  return (
+    code < 0x20 ||
+    code === 0x7f ||
+    (code >= 0x80 && code <= 0x9f) ||
+    (code >= 0x202a && code <= 0x202e) ||
+    (code >= 0x2066 && code <= 0x2069)
+  );
 }
 
 function isAnsiFinalByte(code: number): boolean {
@@ -759,8 +820,8 @@ function printMatrixVerificationSas(sas: MatrixCliVerificationSas): void {
 function printMatrixVerificationSasGuidance(requestId: string, accountId?: string): void {
   printGuidance([
     `Compare the emoji or decimals with the other Matrix client.`,
-    `If they match, run '${formatMatrixCliCommand(`verify confirm-sas ${requestId}`, accountId)}'.`,
-    `If they do not match, run '${formatMatrixCliCommand(`verify mismatch-sas ${requestId}`, accountId)}'.`,
+    `If they match, run ${formatMatrixCliCommandParts(["verify", "confirm-sas", requestId], accountId)}.`,
+    `If they do not match, run ${formatMatrixCliCommandParts(["verify", "mismatch-sas", requestId], accountId)}.`,
   ]);
 }
 
@@ -785,9 +846,9 @@ async function promptMatrixVerificationSasMatch(): Promise<boolean> {
 function printMatrixVerificationRequestGuidance(requestId: string, accountId?: string): void {
   printGuidance([
     `Accept the verification request in another Matrix client for this account.`,
-    `Then run '${formatMatrixCliCommand(`verify start ${requestId}`, accountId)}' to start SAS verification.`,
-    `Run '${formatMatrixCliCommand(`verify sas ${requestId}`, accountId)}' to display the SAS emoji or decimals.`,
-    `When the SAS matches, run '${formatMatrixCliCommand(`verify confirm-sas ${requestId}`, accountId)}'.`,
+    `Then run ${formatMatrixCliCommandParts(["verify", "start", requestId], accountId)} to start SAS verification.`,
+    `Run ${formatMatrixCliCommandParts(["verify", "sas", requestId], accountId)} to display the SAS emoji or decimals.`,
+    `When the SAS matches, run ${formatMatrixCliCommandParts(["verify", "confirm-sas", requestId], accountId)}.`,
   ]);
 }
 
@@ -876,20 +937,20 @@ function buildVerificationGuidance(
   if (!status.verified) {
     if (status.recoveryKeyAccepted === true && status.backupUsable === true) {
       nextSteps.add(
-        `Recovery key can unlock the room-key backup, but full Matrix identity trust is still incomplete. Run '${formatMatrixCliCommand("verify self", accountId)}' and follow the prompts from another Matrix client.`,
+        `Recovery key can unlock the room-key backup, but full Matrix identity trust is still incomplete. Run ${formatMatrixCliCommand("verify self", accountId)} and follow the prompts from another Matrix client.`,
       );
       nextSteps.add(
-        `If you intend to replace the current cross-signing identity, run '${formatMatrixCliCommand("verify bootstrap --recovery-key <key> --force-reset-cross-signing", accountId)}'.`,
+        `If you intend to replace the current cross-signing identity, run ${formatMatrixCliCommand("verify bootstrap --recovery-key <key> --force-reset-cross-signing", accountId)}.`,
       );
     } else {
       nextSteps.add(
-        `Run '${formatMatrixCliCommand("verify device <key>", accountId)}' to verify this device.`,
+        `Run ${formatMatrixCliCommand("verify device <key>", accountId)} to verify this device.`,
       );
     }
   }
   if (backupIssue.code === "missing-server-backup") {
     nextSteps.add(
-      `Run '${formatMatrixCliCommand("verify bootstrap", accountId)}' to create a room key backup.`,
+      `Run ${formatMatrixCliCommand("verify bootstrap", accountId)} to create a room key backup.`,
     );
   } else if (
     backupIssue.code === "key-load-failed" ||
@@ -898,30 +959,30 @@ function buildVerificationGuidance(
   ) {
     if (status.recoveryKeyStored) {
       nextSteps.add(
-        `Backup key is not loaded on this device. Run '${formatMatrixCliCommand("verify backup restore", accountId)}' to load it and restore old room keys.`,
+        `Backup key is not loaded on this device. Run ${formatMatrixCliCommand("verify backup restore", accountId)} to load it and restore old room keys.`,
       );
     } else {
       nextSteps.add(
-        `Store a recovery key with '${formatMatrixCliCommand("verify device <key>", accountId)}', then run '${formatMatrixCliCommand("verify backup restore", accountId)}'.`,
+        `Store a recovery key with ${formatMatrixCliCommand("verify device <key>", accountId)}, then run ${formatMatrixCliCommand("verify backup restore", accountId)}.`,
       );
     }
   } else if (backupIssue.code === "key-mismatch") {
     nextSteps.add(
-      `Backup key mismatch on this device. Re-run '${formatMatrixCliCommand("verify device <key>", accountId)}' with the matching recovery key.`,
+      `Backup key mismatch on this device. Re-run ${formatMatrixCliCommand("verify device <key>", accountId)} with the matching recovery key.`,
     );
     nextSteps.add(
-      `If you want a fresh backup baseline and accept losing unrecoverable history, run '${formatMatrixCliCommand("verify backup reset --yes", accountId)}'. This may also repair secret storage so the new backup key can be loaded after restart.`,
+      `If you want a fresh backup baseline and accept losing unrecoverable history, run ${formatMatrixCliCommand("verify backup reset --yes", accountId)}. This may also repair secret storage so the new backup key can be loaded after restart.`,
     );
   } else if (backupIssue.code === "untrusted-signature") {
     nextSteps.add(
-      `Backup trust chain is not verified on this device. Re-run '${formatMatrixCliCommand("verify device <key>", accountId)}' if you have the correct recovery key.`,
+      `Backup trust chain is not verified on this device. Re-run ${formatMatrixCliCommand("verify device <key>", accountId)} if you have the correct recovery key.`,
     );
     nextSteps.add(
-      `If you want a fresh backup baseline and accept losing unrecoverable history, run '${formatMatrixCliCommand("verify backup reset --yes", accountId)}'. This may also repair secret storage so the new backup key can be loaded after restart.`,
+      `If you want a fresh backup baseline and accept losing unrecoverable history, run ${formatMatrixCliCommand("verify backup reset --yes", accountId)}. This may also repair secret storage so the new backup key can be loaded after restart.`,
     );
   } else if (backupIssue.code === "indeterminate") {
     nextSteps.add(
-      `Run '${formatMatrixCliCommand("verify status --verbose", accountId)}' to inspect backup trust diagnostics.`,
+      `Run ${formatMatrixCliCommand("verify status --verbose", accountId)} to inspect backup trust diagnostics.`,
     );
   }
   if (status.pendingVerifications > 0) {
@@ -1287,7 +1348,7 @@ export function registerMatrixCli(params: { program: Command }): void {
         run: async (accountId, cfg) => await acceptMatrixVerification(id, { accountId, cfg }),
         afterText: (summary, accountId) => {
           printGuidance([
-            `Run '${formatMatrixCliCommand(`verify start ${formatMatrixVerificationCommandId(summary)}`, accountId)}' to start SAS verification.`,
+            `Run ${formatMatrixCliCommandParts(["verify", "start", formatMatrixVerificationCommandId(summary)], accountId)} to start SAS verification.`,
           ]);
         },
         errorPrefix: "Verification accept failed",

@@ -288,10 +288,10 @@ describe("matrix CLI verification commands", () => {
     expect(consoleLogMock).toHaveBeenCalledWith("Device verified by owner: no");
     expect(consoleLogMock).toHaveBeenCalledWith("Backup: active and trusted on this device");
     expect(consoleLogMock).toHaveBeenCalledWith(
-      "- Recovery key can unlock the room-key backup, but full Matrix identity trust is still incomplete. Run 'openclaw matrix verify self' and follow the prompts from another Matrix client.",
+      "- Recovery key can unlock the room-key backup, but full Matrix identity trust is still incomplete. Run openclaw matrix verify self and follow the prompts from another Matrix client.",
     );
     expect(consoleLogMock).toHaveBeenCalledWith(
-      "- If you intend to replace the current cross-signing identity, run 'openclaw matrix verify bootstrap --recovery-key <key> --force-reset-cross-signing'.",
+      "- If you intend to replace the current cross-signing identity, run openclaw matrix verify bootstrap --recovery-key '<key>' --force-reset-cross-signing.",
     );
   });
 
@@ -378,13 +378,13 @@ describe("matrix CLI verification commands", () => {
       "- Accept the verification request in another Matrix client for this account.",
     );
     expect(consoleLogMock).toHaveBeenCalledWith(
-      "- Then run 'openclaw matrix verify start txn-1 --account ops' to start SAS verification.",
+      "- Then run openclaw matrix verify start txn-1 --account ops to start SAS verification.",
     );
     expect(consoleLogMock).toHaveBeenCalledWith(
-      "- Run 'openclaw matrix verify sas txn-1 --account ops' to display the SAS emoji or decimals.",
+      "- Run openclaw matrix verify sas txn-1 --account ops to display the SAS emoji or decimals.",
     );
     expect(consoleLogMock).toHaveBeenCalledWith(
-      "- When the SAS matches, run 'openclaw matrix verify confirm-sas txn-1 --account ops'.",
+      "- When the SAS matches, run openclaw matrix verify confirm-sas txn-1 --account ops.",
     );
   });
 
@@ -420,19 +420,19 @@ describe("matrix CLI verification commands", () => {
     listMatrixVerificationsMock.mockResolvedValue([
       mockMatrixVerificationSummary({
         id: "self-\u001B[31m1",
-        transactionId: "txn-\n1",
-        otherUserId: "@bot\u001B[2J:example.org",
-        otherDeviceId: "PHONE\r123",
+        transactionId: "txn-\n\u009B31m1",
+        otherUserId: "@bot\u001B[2J\u009Dspoof\u0007:example.org",
+        otherDeviceId: "PHONE\r\u009B2J123",
         phaseName: "started\u001B[0m",
-        methods: ["m.sas.v1\nspoof"],
+        methods: ["m.sas.v1\n\u009B31mspoof"],
         chosenMethod: "m.sas.v1\u001B[1m",
         sas: {
           emoji: [
-            ["🐶", "Dog\u001B[31m"],
-            ["🐱", "Cat\nspoof"],
+            ["🐶", "Dog\u001B[31m\u009B2J"],
+            ["🐱", "Cat\n\u009B31mspoof"],
           ],
         },
-        error: "Remote\u001B[31m cancelled\nforged",
+        error: "Remote\u001B[31m cancelled\n\u009B31mforged",
       }),
     ]);
     const program = buildProgram();
@@ -450,6 +450,30 @@ describe("matrix CLI verification commands", () => {
     expect(consoleLogMock).toHaveBeenCalledWith("Verification error: Remote cancelledforged");
   });
 
+  it("shell-quotes Matrix verification ids in follow-up command guidance", async () => {
+    requestMatrixVerificationMock.mockResolvedValue(
+      mockMatrixVerificationSummary({
+        id: "self-verify-1",
+        transactionId: "txn-'$(touch /tmp/pwn)",
+      }),
+    );
+    const program = buildProgram();
+
+    await program.parseAsync(["matrix", "verify", "request", "--own-user"], {
+      from: "user",
+    });
+
+    expect(consoleLogMock).toHaveBeenCalledWith(
+      "- Then run openclaw matrix verify start 'txn-'\\''$(touch /tmp/pwn)' to start SAS verification.",
+    );
+    expect(consoleLogMock).toHaveBeenCalledWith(
+      "- Run openclaw matrix verify sas 'txn-'\\''$(touch /tmp/pwn)' to display the SAS emoji or decimals.",
+    );
+    expect(consoleLogMock).toHaveBeenCalledWith(
+      "- When the SAS matches, run openclaw matrix verify confirm-sas 'txn-'\\''$(touch /tmp/pwn)'.",
+    );
+  });
+
   it("shows Matrix SAS diagnostics and confirm/mismatch guidance", async () => {
     getMatrixVerificationSasMock.mockResolvedValue({
       decimal: [1234, 5678, 9012],
@@ -464,10 +488,10 @@ describe("matrix CLI verification commands", () => {
     });
     expect(consoleLogMock).toHaveBeenCalledWith("SAS decimals: 1234 5678 9012");
     expect(consoleLogMock).toHaveBeenCalledWith(
-      "- If they match, run 'openclaw matrix verify confirm-sas self-1'.",
+      "- If they match, run openclaw matrix verify confirm-sas self-1.",
     );
     expect(consoleLogMock).toHaveBeenCalledWith(
-      "- If they do not match, run 'openclaw matrix verify mismatch-sas self-1'.",
+      "- If they do not match, run openclaw matrix verify mismatch-sas self-1.",
     );
   });
 
@@ -483,7 +507,7 @@ describe("matrix CLI verification commands", () => {
     await program.parseAsync(["matrix", "verify", "accept", "verification-1"], { from: "user" });
 
     expect(consoleLogMock).toHaveBeenCalledWith(
-      "- Run 'openclaw matrix verify start txn-stable' to start SAS verification.",
+      "- Run openclaw matrix verify start txn-stable to start SAS verification.",
     );
   });
 
@@ -1261,7 +1285,7 @@ describe("matrix CLI verification commands", () => {
       "Backup issue: backup decryption key is not loaded on this device (secret storage did not return a key)",
     );
     expect(console.log).toHaveBeenCalledWith(
-      "- Backup key is not loaded on this device. Run 'openclaw matrix verify backup restore' to load it and restore old room keys.",
+      "- Backup key is not loaded on this device. Run openclaw matrix verify backup restore to load it and restore old room keys.",
     );
     expect(console.log).not.toHaveBeenCalledWith(
       "- Backup is present but not trusted for this device. Re-run 'openclaw matrix verify device <key>'.",
@@ -1328,7 +1352,7 @@ describe("matrix CLI verification commands", () => {
     await program.parseAsync(["matrix", "verify", "status"], { from: "user" });
 
     expect(console.log).toHaveBeenCalledWith(
-      "- If you want a fresh backup baseline and accept losing unrecoverable history, run 'openclaw matrix verify backup reset --yes'. This may also repair secret storage so the new backup key can be loaded after restart.",
+      "- If you want a fresh backup baseline and accept losing unrecoverable history, run openclaw matrix verify backup reset --yes. This may also repair secret storage so the new backup key can be loaded after restart.",
     );
   });
 
@@ -1406,10 +1430,10 @@ describe("matrix CLI verification commands", () => {
     });
     expect(console.log).toHaveBeenCalledWith("Account: assistant");
     expect(console.log).toHaveBeenCalledWith(
-      "- Run 'openclaw matrix verify device <key> --account assistant' to verify this device.",
+      "- Run openclaw matrix verify device '<key>' --account assistant to verify this device.",
     );
     expect(console.log).toHaveBeenCalledWith(
-      "- Run 'openclaw matrix verify bootstrap --account assistant' to create a room key backup.",
+      "- Run openclaw matrix verify bootstrap --account assistant to create a room key backup.",
     );
   });
 

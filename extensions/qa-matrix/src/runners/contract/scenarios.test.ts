@@ -3013,7 +3013,20 @@ describe("matrix live qa scenarios", () => {
         waitForOutput,
         writeStdin,
       });
-      runMatrixQaOpenClawCli.mockImplementation(async ({ args }) => {
+      let cliAccountConfigDuringRun: Record<string, unknown> | null = null;
+      runMatrixQaOpenClawCli.mockImplementation(async ({ args, env }) => {
+        if (!cliAccountConfigDuringRun && env.OPENCLAW_CONFIG_PATH) {
+          const cliConfig = JSON.parse(
+            await readFile(String(env.OPENCLAW_CONFIG_PATH), "utf8"),
+          ) as {
+            channels?: {
+              matrix?: {
+                accounts?: Record<string, Record<string, unknown>>;
+              };
+            };
+          };
+          cliAccountConfigDuringRun = cliConfig.channels?.matrix?.accounts?.cli ?? null;
+        }
         const joined = args.join(" ");
         if (joined === "matrix verify status --account cli --json") {
           return {
@@ -3111,17 +3124,10 @@ describe("matrix live qa scenarios", () => {
         ["matrix", "verify", "status", "--account", "cli", "--json"],
       ]);
       const cliEnv = startMatrixQaOpenClawCli.mock.calls[0]?.[0].env;
-      expect(cliEnv?.OPENCLAW_STATE_DIR).toContain("cli-self-verification");
-      expect(cliEnv?.OPENCLAW_CONFIG_PATH).toContain("cli-self-verification");
+      expect(cliEnv?.OPENCLAW_STATE_DIR).toContain("openclaw-matrix-cli-qa-");
+      expect(cliEnv?.OPENCLAW_CONFIG_PATH).toContain("openclaw-matrix-cli-qa-");
       const configPath = String(cliEnv?.OPENCLAW_CONFIG_PATH);
-      const cliConfig = JSON.parse(await readFile(configPath, "utf8")) as {
-        channels?: {
-          matrix?: {
-            accounts?: Record<string, Record<string, unknown>>;
-          };
-        };
-      };
-      expect(cliConfig.channels?.matrix?.accounts?.cli).toMatchObject({
+      expect(cliAccountConfigDuringRun).toMatchObject({
         accessToken: "cli-token",
         deviceId: "CLIDEVICE",
         encryption: true,
@@ -3129,6 +3135,8 @@ describe("matrix live qa scenarios", () => {
         startupVerification: "off",
         userId: "@driver:matrix-qa.test",
       });
+      await expect(readFile(configPath, "utf8")).rejects.toThrow();
+      await expect(readdir(String(cliEnv?.OPENCLAW_STATE_DIR))).rejects.toThrow();
       expect(acceptVerification).toHaveBeenCalledWith("owner-request");
       expect(confirmVerificationSas).toHaveBeenCalledWith("owner-request");
       expect(deleteOwnDevices).not.toHaveBeenCalled();
