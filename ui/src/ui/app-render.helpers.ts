@@ -12,11 +12,11 @@ import {
   resolveSessionOptionGroups,
 } from "./chat/session-controls.ts";
 import { refreshSlashCommands } from "./chat/slash-commands.ts";
-import { resolveControlUiAuthToken } from "./control-ui-auth.ts";
 import { ChatState, loadChatHistory } from "./controllers/chat.ts";
 import { loadSessions } from "./controllers/sessions.ts";
 import { icons } from "./icons.ts";
 import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
+import { resolvePreferredGatewayAccessToken } from "./gateway-bootstrap-token.ts";
 import { parseAgentSessionKey } from "./session-key.ts";
 import { normalizeOptionalString } from "./string-coerce.ts";
 import type { ThemeMode } from "./theme.ts";
@@ -46,8 +46,20 @@ type ChatRefreshHost = AppViewState & {
 
 export function resolveAssistantAttachmentAuthToken(
   state: Pick<AppViewState, "hello" | "settings" | "password">,
+  state: Pick<AppViewState, "hello" | "settings" | "password" | "bootstrapGatewayToken">,
+  options?: { pageUrl?: string },
 ) {
-  return resolveControlUiAuthToken(state);
+  return (
+    normalizeOptionalString(state.hello?.auth?.deviceToken) ??
+    resolvePreferredGatewayAccessToken({
+      gatewayUrl: state.settings.gatewayUrl,
+      bootstrapGatewayToken: state.bootstrapGatewayToken,
+      storedToken: state.settings.token,
+      pageUrl: options?.pageUrl,
+    }) ??
+    normalizeOptionalString(state.password) ??
+    null
+  );
 }
 
 function resolveSidebarChatSessionKey(state: AppViewState): string {
@@ -75,6 +87,12 @@ function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string)
   state.chatStreamSegments = [];
   state.chatThinkingLevel = null;
   state.chatStream = null;
+  state.chatActiveToolCallCount = 0;
+  state.chatLastActivityAt = null;
+  state.chatLastToolActivityAt = null;
+  state.chatLastTerminalAt = null;
+  state.chatLastTerminalKind = null;
+  state.chatReconnectPendingAt = null;
   state.chatSideResult = null;
   state.lastError = null;
   state.compactionStatus = null;

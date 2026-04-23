@@ -19,7 +19,11 @@ import { resolveUserPath } from "../utils.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import { DEFAULT_ASSISTANT_IDENTITY, resolveAssistantIdentity } from "./assistant-identity.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
-import { authorizeHttpGatewayConnect, type ResolvedGatewayAuth } from "./auth.js";
+import {
+  authorizeHttpGatewayConnect,
+  isLocalDirectRequest,
+  type ResolvedGatewayAuth,
+} from "./auth.js";
 import {
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
   type ControlUiBootstrapConfig,
@@ -54,6 +58,7 @@ export type ControlUiRequestOptions = {
   basePath?: string;
   config?: OpenClawConfig;
   agentId?: string;
+  auth?: ResolvedGatewayAuth;
   root?: ControlUiRootState;
   auth?: ResolvedGatewayAuth;
   trustedProxies?: string[];
@@ -675,6 +680,13 @@ export async function handleControlUiHttpRequest(
     const identity = config
       ? resolveAssistantIdentity({ cfg: config, agentId: opts?.agentId })
       : DEFAULT_ASSISTANT_IDENTITY;
+    const gatewayToken =
+      opts?.auth?.mode === "token" &&
+      typeof opts.auth.token === "string" &&
+      opts.auth.token.trim().length > 0 &&
+      isLocalDirectRequest(req)
+        ? opts.auth.token.trim()
+        : undefined;
     const avatarValue = resolveAssistantAvatarUrl({
       avatar: identity.avatar,
       agentId: identity.agentId,
@@ -692,6 +704,7 @@ export async function handleControlUiHttpRequest(
       assistantName: identity.name,
       assistantAvatar: avatarValue ?? identity.avatar,
       assistantAgentId: identity.agentId,
+      ...(gatewayToken ? { gatewayToken } : {}),
       serverVersion: resolveRuntimeServiceVersion(process.env),
       localMediaPreviewRoots: [...getAgentScopedMediaLocalRoots(config ?? {}, identity.agentId)],
       embedSandbox:

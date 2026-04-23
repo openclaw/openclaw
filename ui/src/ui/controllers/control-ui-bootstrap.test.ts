@@ -26,6 +26,7 @@ describe("loadControlUiBootstrapConfig", () => {
       assistantName: "Assistant",
       assistantAvatar: null,
       assistantAgentId: null,
+      bootstrapGatewayToken: null,
       localMediaPreviewRoots: [],
       embedSandboxMode: "scripts" as const,
       allowExternalEmbedUrls: false,
@@ -41,6 +42,7 @@ describe("loadControlUiBootstrapConfig", () => {
     expect(state.assistantName).toBe("Ops");
     expect(state.assistantAvatar).toBe("O");
     expect(state.assistantAgentId).toBe("main");
+    expect(state.bootstrapGatewayToken).toBeNull();
     expect(state.serverVersion).toBe("2026.3.7");
     expect(state.localMediaPreviewRoots).toEqual(["/tmp/openclaw"]);
     expect(state.embedSandboxMode).toBe("scripts");
@@ -58,6 +60,7 @@ describe("loadControlUiBootstrapConfig", () => {
       assistantName: "Assistant",
       assistantAvatar: null,
       assistantAgentId: null,
+      bootstrapGatewayToken: null,
       localMediaPreviewRoots: [],
       embedSandboxMode: "scripts" as const,
       allowExternalEmbedUrls: false,
@@ -86,6 +89,7 @@ describe("loadControlUiBootstrapConfig", () => {
       assistantName: "Assistant",
       assistantAvatar: null,
       assistantAgentId: null,
+      bootstrapGatewayToken: null,
       localMediaPreviewRoots: [],
       embedSandboxMode: "scripts" as const,
       allowExternalEmbedUrls: false,
@@ -151,6 +155,18 @@ describe("loadControlUiBootstrapConfig", () => {
           allowExternalEmbedUrls: false,
         }),
       });
+
+  it("loads a bootstrap gateway token when the local UI provides one", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        basePath: "",
+        assistantName: "Ops",
+        assistantAvatar: null,
+        assistantAgentId: "main",
+        gatewayToken: "loopback-token",
+      }),
+    });
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
     const state = {
@@ -158,6 +174,7 @@ describe("loadControlUiBootstrapConfig", () => {
       assistantName: "Assistant",
       assistantAvatar: null,
       assistantAgentId: null,
+      bootstrapGatewayToken: null,
       localMediaPreviewRoots: [],
       embedSandboxMode: "scripts" as const,
       allowExternalEmbedUrls: false,
@@ -179,6 +196,7 @@ describe("loadControlUiBootstrapConfig", () => {
     );
     expect(state.assistantName).toBe("Ops");
     expect(state.serverVersion).toBe("2026.4.22");
+    expect(state.bootstrapGatewayToken).toBe("loopback-token");
 
     vi.unstubAllGlobals();
   });
@@ -192,6 +210,7 @@ describe("loadControlUiBootstrapConfig", () => {
       assistantName: "Assistant",
       assistantAvatar: null,
       assistantAgentId: null,
+      bootstrapGatewayToken: null,
       localMediaPreviewRoots: [],
       embedSandboxMode: "scripts" as const,
       allowExternalEmbedUrls: false,
@@ -217,6 +236,7 @@ describe("loadControlUiBootstrapConfig", () => {
       assistantName: "Assistant",
       assistantAvatar: null,
       assistantAgentId: null,
+      bootstrapGatewayToken: null,
       localMediaPreviewRoots: [],
       embedSandboxMode: "scripts" as const,
       allowExternalEmbedUrls: false,

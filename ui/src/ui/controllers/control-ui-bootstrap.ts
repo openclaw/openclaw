@@ -12,6 +12,7 @@ export type ControlUiBootstrapState = {
   assistantName: string;
   assistantAvatar: string | null;
   assistantAgentId: string | null;
+  bootstrapGatewayToken: string | null;
   serverVersion: string | null;
   localMediaPreviewRoots: string[];
   embedSandboxMode: ControlUiEmbedSandboxMode;
@@ -70,6 +71,10 @@ export async function loadControlUiBootstrapConfig(state: ControlUiBootstrapStat
     state.assistantName = normalized.name;
     state.assistantAvatar = normalized.avatar;
     state.assistantAgentId = normalized.agentId ?? null;
+    state.bootstrapGatewayToken =
+      typeof parsed.gatewayToken === "string" && parsed.gatewayToken.trim().length > 0
+        ? parsed.gatewayToken.trim()
+        : null;
     state.serverVersion = parsed.serverVersion ?? null;
     state.localMediaPreviewRoots = Array.isArray(parsed.localMediaPreviewRoots)
       ? parsed.localMediaPreviewRoots.filter((value): value is string => typeof value === "string")

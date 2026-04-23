@@ -1098,6 +1098,7 @@ export function createGatewayHttpServer(opts: {
               basePath: controlUiBasePath,
               config: configSnapshot,
               agentId: resolveAssistantIdentity({ cfg: configSnapshot }).agentId,
+              auth: resolvedAuth,
               root: controlUiRoot,
               auth: resolvedAuth,
               trustedProxies,
@@ -1149,8 +1150,6 @@ export function attachGatewayUpgradeHandler(opts: {
   getResolvedAuth?: () => ResolvedGatewayAuth;
   /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;
-  /** Optional logger for error diagnostics. */
-  log?: { warn: (msg: string) => void };
 }) {
   const {
     httpServer,
@@ -1160,7 +1159,6 @@ export function attachGatewayUpgradeHandler(opts: {
     preauthConnectionBudget,
     resolvedAuth,
     rateLimiter,
-    log,
   } = opts;
   const getResolvedAuth = opts.getResolvedAuth ?? (() => resolvedAuth);
   httpServer.on("upgrade", (req, socket, head) => {
@@ -1263,10 +1261,7 @@ export function attachGatewayUpgradeHandler(opts: {
         releaseUpgradeBudget();
         throw new Error("gateway websocket upgrade failed");
       }
-    })().catch((err) => {
-      const remoteAddress = (socket as { remoteAddress?: string }).remoteAddress ?? "unknown";
-      const errorMessage = err instanceof Error ? err.message : String(err);
-      log?.warn(`ws upgrade error from ${remoteAddress}: ${errorMessage}`);
+    })().catch(() => {
       socket.destroy();
     });
   });
