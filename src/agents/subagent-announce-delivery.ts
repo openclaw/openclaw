@@ -146,7 +146,7 @@ const PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
   /outbound not configured for channel/i,
 ];
 
-function isTransientAnnounceDeliveryError(error: unknown): boolean {
+export function isTransientAnnounceDeliveryError(error: unknown): boolean {
   const message = summarizeDeliveryError(error);
   if (!message) {
     return false;

@@ -278,7 +278,7 @@ describe("subagent announce seam flow", () => {
         deleteTranscript: true,
         emitLifecycleHooks: false,
       },
-      timeoutMs: 10_000,
+      timeoutMs: 20_000,
     });
   });
 
@@ -309,7 +309,7 @@ describe("subagent announce seam flow", () => {
         deleteTranscript: true,
         emitLifecycleHooks: true,
       },
-      timeoutMs: 10_000,
+      timeoutMs: 20_000,
     });
   });
 

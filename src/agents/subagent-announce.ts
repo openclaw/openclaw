@@ -18,6 +18,7 @@ import { formatAgentInternalEventsForPrompt, type AgentInternalEvent } from "./i
 import {
   deliverSubagentAnnouncement,
   loadRequesterSessionEntry,
+  isTransientAnnounceDeliveryError,
   loadSessionEntryByKey,
   runAnnounceDeliveryWithRetry,
   resolveSubagentAnnounceTimeoutMs,
@@ -156,22 +157,6 @@ function stripAndClassifyReply(text: string): string | null {
 
 const SUBAGENT_ANNOUNCE_SESSION_FINALIZE_TIMEOUT_MS = 20_000;
 
-function isGatewayLifecycleRetryableError(error: unknown): boolean {
-  const message = normalizeOptionalString(
-    error instanceof Error ? error.message : typeof error === "string" ? error : undefined,
-  )?.toLowerCase();
-  if (!message) {
-    return false;
-  }
-  return (
-    message.includes("gateway timeout") ||
-    message.includes("gateway closed") ||
-    message.includes("handshake timeout") ||
-    message.includes("closed before connect") ||
-    message.includes("not yet ready to accept connections")
-  );
-}
-
 async function callGatewayForAnnounceFinalize(params: {
   method: "sessions.patch" | "sessions.delete";
   params: Record<string, unknown>;
@@ -185,7 +170,7 @@ async function callGatewayForAnnounceFinalize(params: {
     });
     return;
   } catch (error) {
-    if (!isGatewayLifecycleRetryableError(error)) {
+    if (!isTransientAnnounceDeliveryError(error)) {
       throw error;
     }
     await runAnnounceDeliveryWithRetry({

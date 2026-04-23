@@ -507,14 +507,6 @@ export async function spawnSubagentDirect(
     ctx.requesterAgentIdOverride ?? parseAgentSessionKey(requesterInternalKey)?.agentId,
   );
 
-  try {
-    await ensureGatewayReadyForSubagentSpawn();
-  } catch (err) {
-    return {
-      status: "error",
-      error: summarizeError(err),
-    };
-  }
   const requireAgentId =
     resolveAgentConfig(cfg, requesterAgentId)?.subagents?.requireAgentId ??
     cfg.agents?.defaults?.subagents?.requireAgentId ??
@@ -580,6 +572,14 @@ export async function spawnSubagentDirect(
       status: "forbidden",
       error:
         'sessions_spawn sandbox="require" needs a sandboxed target runtime. Pick a sandboxed agentId or use sandbox="inherit".',
+    };
+  }
+  try {
+    await ensureGatewayReadyForSubagentSpawn();
+  } catch (err) {
+    return {
+      status: "error",
+      error: summarizeError(err),
     };
   }
   const childDepth = callerDepth + 1;
