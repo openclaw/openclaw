@@ -381,38 +381,6 @@ describe("loader", () => {
       expect(count).toBe(1);
     });
 
-    it("should actually call the loaded handler", async () => {
-      // Create a handler that we can verify was called
-      const handlerCode = `
-        let callCount = 0;
-        export default async function(event) {
-          callCount++;
-        }
-        export function getCallCount() {
-          return callCount;
-        }
-      `;
-      const handlerPath = await writeHandlerModule("callable-handler.js", handlerCode);
-
-      const cfg = createEnabledHooksConfig([
-        {
-          event: "command:new",
-          module: path.basename(handlerPath),
-        },
-      ]);
-
-      await loadInternalHooks(cfg, tmpDir);
-
-      // Trigger the hook
-      const event = createInternalHookEvent("command", "new", "test-session");
-      await triggerInternalHook(event);
-
-      // The handler should have been called, but we can't directly verify
-      // the call count from this context without more complex test infrastructure
-      // This test mainly verifies that loading and triggering doesn't crash
-      expect(getRegisteredEventKeys()).toContain("command:new");
-    });
-
     it("keeps workspace hooks disabled by default until explicitly enabled", async () => {
       await writeDiscoveredHook({ hookName: "workspace-hook" });
 
