@@ -948,6 +948,86 @@ describe("grouped chat rendering", () => {
     vi.unstubAllGlobals();
   });
 
+  it("evicts stale local assistant attachment blob URLs and refetches on demand", async () => {
+    resetAssistantAttachmentAvailabilityCacheForTest();
+    vi.useFakeTimers();
+    const createObjectURL = vi
+      .fn<(blob: Blob) => string>()
+      .mockReturnValueOnce("blob:first-image")
+      .mockReturnValueOnce("blob:second-image");
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal(
+      "URL",
+      class URL extends globalThis.URL {
+        static createObjectURL = createObjectURL;
+        static revokeObjectURL = revokeObjectURL;
+      },
+    );
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes("meta=1")) {
+        return {
+          ok: true,
+          json: async () => ({ available: true }),
+        };
+      }
+      return {
+        ok: true,
+        blob: async () => new Blob(["ok"], { type: "image/png" }),
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const container = document.createElement("div");
+    const renderMessage = () =>
+      renderAssistantMessage(
+        container,
+        {
+          id: "assistant-local-media-blob-eviction",
+          role: "assistant",
+          content: "Local image\nMEDIA:/tmp/openclaw/test image.png",
+          timestamp: Date.now(),
+        },
+        {
+          showToolCalls: false,
+          basePath: "/openclaw",
+          assistantAttachmentAuthToken: "session-token",
+          localMediaPreviewRoots: ["/tmp/openclaw"],
+          onRequestUpdate: renderMessage,
+        },
+      );
+
+    renderMessage();
+    await flushAssistantAttachmentAvailabilityChecks();
+    await flushAssistantAttachmentAvailabilityChecks();
+    expect(
+      container.querySelector<HTMLImageElement>(".chat-message-image")?.getAttribute("src"),
+    ).toBe("blob:first-image");
+
+    vi.advanceTimersByTime(5 * 60_000 + 1);
+    renderMessage();
+    await flushAssistantAttachmentAvailabilityChecks();
+    await flushAssistantAttachmentAvailabilityChecks();
+
+    expect(
+      container.querySelector<HTMLImageElement>(".chat-message-image")?.getAttribute("src"),
+    ).toBe("blob:second-image");
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:first-image");
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Ftest+image.png",
+      expect.objectContaining({
+        credentials: "same-origin",
+        method: "GET",
+        headers: {
+          Accept: "application/octet-stream",
+          Authorization: "Bearer session-token",
+        },
+      }),
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
   it("rechecks local assistant attachment availability when the auth token changes", async () => {
     resetAssistantAttachmentAvailabilityCacheForTest();
     const createObjectURL = vi.fn(() => "blob:fresh-token-image");

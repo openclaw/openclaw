@@ -43,12 +43,14 @@ import {
 
 type AssistantAttachmentAvailability =
   | { status: "checking" }
-  | { status: "available"; url?: string }
+  | { status: "available"; url?: string; lastAccessedAt?: number }
   | { status: "unavailable"; reason: string; checkedAt: number };
 
 const assistantAttachmentAvailabilityCache = new Map<string, AssistantAttachmentAvailability>();
 const assistantAttachmentBlobFetchInFlight = new Set<string>();
 const ASSISTANT_ATTACHMENT_UNAVAILABLE_RETRY_MS = 5_000;
+const ASSISTANT_ATTACHMENT_BLOB_URL_MAX_ENTRIES = 24;
+const ASSISTANT_ATTACHMENT_BLOB_URL_TTL_MS = 5 * 60_000;
 
 export function resetAssistantAttachmentAvailabilityCacheForTest() {
   for (const entry of assistantAttachmentAvailabilityCache.values()) {
@@ -57,6 +59,7 @@ export function resetAssistantAttachmentAvailabilityCacheForTest() {
     }
   }
   assistantAttachmentAvailabilityCache.clear();
+  assistantAttachmentBlobFetchInFlight.clear();
   for (const blobUrl of managedImageBlobUrlResolvedCache.values()) {
     URL.revokeObjectURL(blobUrl);
   }
@@ -1041,6 +1044,51 @@ function buildAssistantAttachmentCacheKey(
   return `${basePath ?? ""}::${normalizedAuthToken}::${source}`;
 }
 
+function revokeAssistantAttachmentBlobUrl(entry: AssistantAttachmentAvailability) {
+  if (entry.status === "available" && entry.url?.startsWith("blob:")) {
+    URL.revokeObjectURL(entry.url);
+  }
+}
+
+function clearAssistantAttachmentBlobUrl(
+  cacheKey: string,
+  entry?: AssistantAttachmentAvailability,
+) {
+  const current = entry ?? assistantAttachmentAvailabilityCache.get(cacheKey);
+  if (!current || current.status !== "available" || !current.url) {
+    return;
+  }
+  revokeAssistantAttachmentBlobUrl(current);
+  assistantAttachmentAvailabilityCache.set(cacheKey, { status: "available" });
+}
+
+function pruneAssistantAttachmentBlobUrls(now: number) {
+  const blobEntries = [...assistantAttachmentAvailabilityCache.entries()].filter(
+    (entry): entry is [string, Extract<AssistantAttachmentAvailability, { status: "available" }>] =>
+      entry[1].status === "available" && Boolean(entry[1].url),
+  );
+  for (const [cacheKey, entry] of blobEntries) {
+    if (now - (entry.lastAccessedAt ?? 0) >= ASSISTANT_ATTACHMENT_BLOB_URL_TTL_MS) {
+      clearAssistantAttachmentBlobUrl(cacheKey, entry);
+    }
+  }
+  const remainingBlobEntries = [...assistantAttachmentAvailabilityCache.entries()]
+    .filter(
+      (
+        entry,
+      ): entry is [string, Extract<AssistantAttachmentAvailability, { status: "available" }>] =>
+        entry[1].status === "available" && Boolean(entry[1].url),
+    )
+    .toSorted((left, right) => (left[1].lastAccessedAt ?? 0) - (right[1].lastAccessedAt ?? 0));
+  while (remainingBlobEntries.length > ASSISTANT_ATTACHMENT_BLOB_URL_MAX_ENTRIES) {
+    const oldest = remainingBlobEntries.shift();
+    if (!oldest) {
+      break;
+    }
+    clearAssistantAttachmentBlobUrl(oldest[0], oldest[1]);
+  }
+}
+
 function setAssistantAttachmentAvailabilityCache(
   cacheKey: string,
   next: AssistantAttachmentAvailability,
@@ -1051,7 +1099,7 @@ function setAssistantAttachmentAvailabilityCache(
     previous.url?.startsWith("blob:") &&
     previous.url !== (next.status === "available" ? next.url : undefined)
   ) {
-    URL.revokeObjectURL(previous.url);
+    revokeAssistantAttachmentBlobUrl(previous);
   }
   assistantAttachmentAvailabilityCache.set(cacheKey, next);
 }
@@ -1062,12 +1110,19 @@ function ensureAssistantAttachmentBlobUrl(
   authToken: string | null | undefined,
   onRequestUpdate: (() => void) | undefined,
 ): string | null {
+  const now = Date.now();
+  pruneAssistantAttachmentBlobUrls(now);
   const cacheKey = buildAssistantAttachmentCacheKey(source, basePath, authToken);
   const cached = assistantAttachmentAvailabilityCache.get(cacheKey);
   if (cached?.status !== "available") {
     return null;
   }
   if (cached.url) {
+    setAssistantAttachmentAvailabilityCache(cacheKey, {
+      status: "available",
+      url: cached.url,
+      lastAccessedAt: now,
+    });
     return cached.url;
   }
   if (assistantAttachmentBlobFetchInFlight.has(cacheKey) || typeof fetch !== "function") {
@@ -1087,7 +1142,9 @@ function ensureAssistantAttachmentBlobUrl(
       setAssistantAttachmentAvailabilityCache(cacheKey, {
         status: "available",
         url: objectUrl,
+        lastAccessedAt: Date.now(),
       });
+      pruneAssistantAttachmentBlobUrls(Date.now());
     })
     .catch(() => {
       setAssistantAttachmentAvailabilityCache(cacheKey, {
@@ -1116,6 +1173,7 @@ function resolveAssistantAttachmentAvailability(
   if (!isLocalAttachmentPreviewAllowed(source, localMediaPreviewRoots)) {
     return { status: "unavailable", reason: "Outside allowed folders", checkedAt: Date.now() };
   }
+  pruneAssistantAttachmentBlobUrls(Date.now());
   const cacheKey = buildAssistantAttachmentCacheKey(source, basePath, authToken);
   const cached = assistantAttachmentAvailabilityCache.get(cacheKey);
   if (cached) {
