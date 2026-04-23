@@ -239,7 +239,7 @@ export async function runMatrixSelfVerification(
         allowAutomaticCrossSigningReset: false,
         verifyOwnIdentity: true,
       });
-      if (!bootstrap.success) {
+      if (!bootstrap.verification.verified) {
         throw new Error(
           `Matrix self-verification completed, but full Matrix identity trust is still incomplete: ${
             bootstrap.error ?? formatMatrixOwnerVerificationDiagnostics(bootstrap.verification)

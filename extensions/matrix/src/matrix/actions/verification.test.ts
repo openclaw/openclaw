@@ -420,6 +420,54 @@ describe("matrix verification actions", () => {
     expect(crypto.startVerification).not.toHaveBeenCalled();
   });
 
+  it("allows completed self-verification when only backup health remains degraded", async () => {
+    const requested = {
+      completed: false,
+      hasSas: false,
+      id: "verification-1",
+      phaseName: "requested",
+      transactionId: "tx-self",
+    };
+    const sas = {
+      ...requested,
+      hasSas: true,
+      phaseName: "started",
+      sas: {
+        decimal: [1, 2, 3],
+      },
+    };
+    const completed = {
+      ...sas,
+      completed: true,
+      phaseName: "done",
+    };
+    const crypto = {
+      confirmVerificationSas: vi.fn(async () => completed),
+      listVerifications: vi.fn(async () => [sas]),
+      requestVerification: vi.fn(async () => requested),
+      startVerification: vi.fn(async () => sas),
+    };
+    const bootstrapOwnDeviceVerification = vi.fn(async () => ({
+      success: false,
+      error: "Matrix room key backup is not trusted by this device",
+      verification: mockVerifiedOwnerStatus(),
+    }));
+    withStartedActionClientMock.mockImplementation(async (_opts, run) => {
+      return await run({
+        bootstrapOwnDeviceVerification,
+        crypto,
+        getOwnDeviceVerificationStatus: vi.fn(async () => mockVerifiedOwnerStatus()),
+      });
+    });
+
+    await expect(
+      runMatrixSelfVerification({ confirmSas: vi.fn(async () => true), timeoutMs: 500 }),
+    ).resolves.toMatchObject({
+      completed: true,
+      deviceOwnerVerified: true,
+    });
+  });
+
   it("fails self-verification if SAS completes but full identity trust cannot be established", async () => {
     const requested = {
       completed: false,

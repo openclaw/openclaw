@@ -373,17 +373,18 @@ describe("matrix CLI verification commands", () => {
       roomId: undefined,
     });
     expect(consoleLogMock).toHaveBeenCalledWith("Verification id: self-verify-1");
+    expect(consoleLogMock).toHaveBeenCalledWith("Transaction id: txn-1");
     expect(consoleLogMock).toHaveBeenCalledWith(
       "- Accept the verification request in another Matrix client for this account.",
     );
     expect(consoleLogMock).toHaveBeenCalledWith(
-      "- Then run 'openclaw matrix verify start self-verify-1 --account ops' to start SAS verification.",
+      "- Then run 'openclaw matrix verify start txn-1 --account ops' to start SAS verification.",
     );
     expect(consoleLogMock).toHaveBeenCalledWith(
-      "- Run 'openclaw matrix verify sas self-verify-1 --account ops' to display the SAS emoji or decimals.",
+      "- Run 'openclaw matrix verify sas txn-1 --account ops' to display the SAS emoji or decimals.",
     );
     expect(consoleLogMock).toHaveBeenCalledWith(
-      "- When the SAS matches, run 'openclaw matrix verify confirm-sas self-verify-1 --account ops'.",
+      "- When the SAS matches, run 'openclaw matrix verify confirm-sas txn-1 --account ops'.",
     );
   });
 
@@ -467,6 +468,22 @@ describe("matrix CLI verification commands", () => {
     );
     expect(consoleLogMock).toHaveBeenCalledWith(
       "- If they do not match, run 'openclaw matrix verify mismatch-sas self-1'.",
+    );
+  });
+
+  it("prints stable transaction ids in follow-up commands after accepting verification", async () => {
+    acceptMatrixVerificationMock.mockResolvedValue(
+      mockMatrixVerificationSummary({
+        id: "verification-1",
+        transactionId: "txn-stable",
+      }),
+    );
+    const program = buildProgram();
+
+    await program.parseAsync(["matrix", "verify", "accept", "verification-1"], { from: "user" });
+
+    expect(consoleLogMock).toHaveBeenCalledWith(
+      "- Run 'openclaw matrix verify start txn-stable' to start SAS verification.",
     );
   });
 
