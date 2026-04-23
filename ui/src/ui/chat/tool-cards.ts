@@ -124,8 +124,12 @@ ${text}
 \`\`\``;
 }
 
-function findLatestCard(cards: ToolCard[], id: string, name: string): ToolCard | undefined {
-  for (let i = cards.length - 1; i >= 0; i--) {
+function findFirstUnmatchedCard(cards: ToolCard[], id: string, name: string): ToolCard | undefined {
+  // Iterate forward (oldest first) so that when multiple tool calls share the same
+  // name, each result pairs with the earliest unmatched call. This ensures sequential
+  // calls like read→read→read pair with their results in order: result#1→call#1,
+  // result#2→call#2, result#3→call#3.
+  for (let i = 0; i < cards.length; i++) {
     const card = cards[i];
     if (!card) {
       continue;
@@ -163,7 +167,7 @@ export function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] 
     if (kind === "toolresult" || kind === "tool_result") {
       const name = typeof item.name === "string" ? item.name : "tool";
       const cardId = resolveToolCardId(item, m, index, prefix);
-      const existing = findLatestCard(cards, cardId, name);
+      const existing = findFirstUnmatchedCard(cards, cardId, name);
       const text = extractToolText(item);
       const preview = extractToolPreview(text, name);
       if (existing) {
