@@ -8,6 +8,7 @@ import {
   unscopedPackageName,
 } from "../infra/install-safe-path.js";
 import { type NpmIntegrityDrift, type NpmSpecResolution } from "../infra/install-source-utils.js";
+import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import type { InstallSecurityScanResult } from "./install-security-scan.js";
@@ -31,6 +32,7 @@ type PluginInstallLogger = {
 
 type PackageManifest = PluginPackageManifest & {
   dependencies?: Record<string, string>;
+  peerDependencies?: Record<string, string>;
 };
 
 const MISSING_EXTENSIONS_ERROR =
@@ -608,6 +610,71 @@ async function detectNativePackageInstallSource(packageDir: string): Promise<boo
   }
 }
 
+/**
+ * After npm install completes, symlink any peerDependencies that name the host
+ * openclaw package into the plugin's node_modules/ directory.  npm never
+ * materialises peerDependencies automatically, so plugins that moved openclaw
+ * from dependencies → peerDependencies would fail at runtime without this.
+ */
+async function linkOpenClawPeerDependencies(params: {
+  installedDir: string;
+  peerDependencies: Record<string, string>;
+  logger: PluginInstallLogger;
+}): Promise<void> {
+  const OPENCLAW_PEER_NAMES = new Set(["openclaw"]);
+  const peers = Object.keys(params.peerDependencies).filter((name) =>
+    OPENCLAW_PEER_NAMES.has(name),
+  );
+  if (peers.length === 0) {
+    return;
+  }
+
+  const hostRoot = resolveOpenClawPackageRootSync({
+    argv1: process.argv[1],
+    moduleUrl: import.meta.url,
+    cwd: process.cwd(),
+  });
+  if (!hostRoot) {
+    params.logger.warn?.(
+      "Could not locate openclaw package root to symlink peerDependencies; plugin may fail to resolve openclaw at runtime.",
+    );
+    return;
+  }
+
+  const nodeModulesDir = path.join(params.installedDir, "node_modules");
+  await fs.mkdir(nodeModulesDir, { recursive: true });
+
+  for (const peerName of peers) {
+    const linkPath = path.join(nodeModulesDir, peerName);
+    // Resolve the actual source for scoped packages (e.g. @scope/name).
+    const linkTarget = path.join(hostRoot, "node_modules", peerName);
+    // Check whether the package exists at the expected location inside the
+    // host root's node_modules.  If it does not (e.g. openclaw IS the root
+    // package), fall back to the host root itself.
+    let resolvedTarget: string;
+    try {
+      await fs.access(path.join(linkTarget, "package.json"));
+      resolvedTarget = linkTarget;
+    } catch {
+      resolvedTarget = hostRoot;
+    }
+
+    try {
+      // Remove any existing entry (broken link or stale directory) before
+      // creating the new symlink so re-installs are idempotent.
+      await fs.rm(linkPath, { recursive: true, force: true });
+      await fs.symlink(resolvedTarget, linkPath, "junction");
+      params.logger.info?.(
+        `Linked peerDependency "${peerName}" → ${resolvedTarget}`,
+      );
+    } catch (err) {
+      params.logger.warn?.(
+        `Failed to symlink peerDependency "${peerName}": ${String(err)}`,
+      );
+    }
+  }
+}
+
 async function installPluginFromPackageDir(
   params: {
     packageDir: string;
@@ -742,6 +809,7 @@ async function installPluginFromPackageDir(
   }
 
   const deps = manifest.dependencies ?? {};
+  const peerDeps = manifest.peerDependencies ?? {};
   return await installPluginDirectoryIntoExtensions({
     sourceDir: params.packageDir,
     pluginId,
@@ -755,7 +823,7 @@ async function installPluginFromPackageDir(
     mode: targetResult.target.effectiveMode,
     dryRun,
     copyErrorPrefix: "failed to copy plugin",
-    hasDeps: Object.keys(deps).length > 0,
+    hasDeps: Object.keys(deps).length > 0 || Object.keys(peerDeps).length > 0,
     depsLogMessage: "Installing plugin dependencies…",
     nameEncoder: encodePluginInstallDirName,
     afterCopy: async (installedDir) => {
@@ -770,8 +838,16 @@ async function installPluginFromPackageDir(
         }
       }
     },
-    afterInstall: async (installedDir) =>
-      await runInstallSourceScan({
+    afterInstall: async (installedDir) => {
+      // Symlink any openclaw peerDependencies into the plugin's node_modules/
+      // so that plugins declaring openclaw as a peerDependency (rather than a
+      // regular dependency) can resolve it at runtime.
+      await linkOpenClawPeerDependencies({
+        installedDir,
+        peerDependencies: peerDeps,
+        logger,
+      });
+      return await runInstallSourceScan({
         subject: `Plugin "${pluginId}"`,
         scan: async () =>
           await runtime.scanInstalledPackageDependencyTree({
@@ -779,7 +855,8 @@ async function installPluginFromPackageDir(
             packageDir: installedDir,
             pluginId,
           }),
-      }),
+      });
+    },
   });
 }
 
