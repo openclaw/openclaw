@@ -7,6 +7,7 @@ import { ensureOwnerDisplaySecret } from "../agents/owner-display.js";
 import { applyRuntimeLegacyConfigMigrations } from "../commands/doctor/shared/runtime-compat-api.js";
 import { loadDotEnv } from "../infra/dotenv.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { withFileLock } from "../infra/file-lock.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import {
   loadShellEnvFallback,
@@ -1137,6 +1138,24 @@ async function finalizeReadConfigSnapshotInternalResult(
   return result;
 }
 
+/**
+ * Advisory lock options for config file writes.
+ * Retries with exponential back-off for up to ~10 s so that concurrent
+ * `openclaw doctor` / gateway start-up races are serialised rather than
+ * producing concatenated JSON.  The stale window is generous (30 s) so a
+ * crashed writer's lock is always reclaimed before the next writer times out.
+ */
+const CONFIG_WRITE_LOCK_OPTIONS = {
+  retries: {
+    retries: 20,
+    factor: 1.5,
+    minTimeout: 50,
+    maxTimeout: 1_000,
+    randomize: true,
+  },
+  stale: 30_000,
+} as const;
+
 export function createConfigIO(overrides: ConfigIoDeps = {}) {
   const deps = normalizeDeps(overrides);
   const configPath = resolveConfigPathForDeps(deps);
@@ -1601,6 +1620,24 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
   }
 
   async function writeConfigFile(
+    cfg: OpenClawConfig,
+    options: ConfigWriteOptions = {},
+  ): Promise<{ persistedHash: string; persistedConfig: OpenClawConfig }> {
+    // Serialise concurrent writers with an advisory lock on the config file.
+    // Without this, two processes (e.g. `openclaw doctor` and the gateway) can
+    // both read the current config, each write a temp file, and then rename in
+    // quick succession — resulting in the second rename silently clobbering the
+    // first writer's changes (or, on Windows copy-fallback, in two concatenated
+    // JSON objects).  The lock is re-entrant within a single process (no-op on
+    // second acquisition) so recursive writes from the same process are safe.
+    // We lock on the config file path itself; the lock mechanism creates a
+    // `<configPath>.lock` sidecar and removes it on release.
+    return await withFileLock(configPath, CONFIG_WRITE_LOCK_OPTIONS, () =>
+      writeConfigFileLocked(cfg, options),
+    );
+  }
+
+  async function writeConfigFileLocked(
     cfg: OpenClawConfig,
     options: ConfigWriteOptions = {},
   ): Promise<{ persistedHash: string; persistedConfig: OpenClawConfig }> {
