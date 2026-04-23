@@ -273,12 +273,16 @@ function replaceMergedProfileReferences(params: {
   }
 
   const profiles = { ...store.profiles };
-  for (const legacyProfileId of replacements.keys()) {
+  for (const [legacyProfileId, replacementProfileId] of replacements) {
     const baseCredential = base.profiles[legacyProfileId];
     if (baseCredential) {
       profiles[legacyProfileId] = baseCredential;
     } else {
       delete profiles[legacyProfileId];
+    }
+    const replacementBaseCredential = base.profiles[replacementProfileId];
+    if (replacementBaseCredential) {
+      profiles[replacementProfileId] = replacementBaseCredential;
     }
   }
 

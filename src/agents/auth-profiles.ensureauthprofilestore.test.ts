@@ -273,6 +273,14 @@ describe("ensureAuthProfileStore", () => {
         {
           version: AUTH_STORE_VERSION,
           profiles: {
+            [freshProfileId]: {
+              type: "oauth",
+              provider: "openai-codex",
+              access: "stale-identity-access",
+              refresh: "stale-identity-refresh",
+              expires: Date.now() - 30 * 60 * 1000,
+              email: "user@example.com",
+            },
             [staleProfileId]: {
               type: "oauth",
               provider: "openai-codex",
