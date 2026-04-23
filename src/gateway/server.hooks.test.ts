@@ -383,6 +383,73 @@ describe("gateway server hooks", () => {
     });
   });
 
+  test("allows mapped wake agent routing when the computed session prefix is whitelisted", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: HOOK_TOKEN,
+      defaultSessionKey: "hook:ingress",
+      allowedSessionKeyPrefixes: ["hook:", "agent:hooks:"],
+      mappings: [
+        {
+          match: { path: "mapped-wake-agent-allowed" },
+          action: "wake",
+          agentId: "hooks",
+          textTemplate: "Mapped agent wake: {{payload.subject}}",
+        },
+      ],
+    };
+    setMainAndHooksAgents();
+
+    await withGatewayServer(async ({ port }) => {
+      const mappedCanonicalKey = loadSessionEntry("agent:hooks:main").canonicalKey;
+      const allowed = await postHook(port, "/hooks/mapped-wake-agent-allowed", {
+        subject: "Email",
+      });
+      expect(allowed.status).toBe(200);
+      await expect
+        .poll(() => peekSystemEventEntries(mappedCanonicalKey), {
+          timeout: 5_000,
+          interval: 10,
+        })
+        .toEqual([
+          expect.objectContaining({
+            text: "Mapped agent wake: Email",
+            trusted: false,
+          }),
+        ]);
+      expect(peekSystemEventEntries(resolveMainKey())).toEqual([]);
+      drainSystemEvents(mappedCanonicalKey);
+    });
+  });
+
+  test("rejects mapped wake agent routing when the computed session prefix is disallowed", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: HOOK_TOKEN,
+      allowRequestSessionKey: true,
+      allowedSessionKeyPrefixes: ["hook:", "agent:main:"],
+      mappings: [
+        {
+          match: { path: "mapped-wake-agent-denied" },
+          action: "wake",
+          agentId: "hooks",
+          textTemplate: "Mapped agent wake: {{payload.subject}}",
+        },
+      ],
+    };
+    setMainAndHooksAgents();
+
+    await withGatewayServer(async ({ port }) => {
+      const denied = await postHook(port, "/hooks/mapped-wake-agent-denied", {
+        subject: "Email",
+      });
+      expect(denied.status).toBe(400);
+      const body = (await denied.json()) as { error?: string };
+      expect(body.error).toContain("sessionKey must start with one of");
+      expect(peekSystemEventEntries(resolveMainKey())).toEqual([]);
+    });
+  });
+
   test("rejects request sessionKey unless hooks.allowRequestSessionKey is enabled", async () => {
     testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
     await withGatewayServer(async ({ port }) => {

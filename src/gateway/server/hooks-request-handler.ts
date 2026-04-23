@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { loadConfig } from "../../config/config.js";
+import { resolveMainSessionKeyFromConfig } from "../../config/sessions.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveHookExternalContentSource as resolveHookExternalContentSourceFromSession } from "../../security/external-content.js";
 import { safeEqualSecret } from "../../security/secret-equal.js";
@@ -37,6 +39,14 @@ type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 const HOOK_AUTH_FAILURE_LIMIT = 20;
 const HOOK_AUTH_FAILURE_WINDOW_MS = 60_000;
 
+function isGlobalSessionScope(): boolean {
+  return loadConfig().session?.scope === "global";
+}
+
+function getGlobalWakeSessionKeyError(): string {
+  return "wake hook sessionKey must be `global` or omitted when session.scope=global";
+}
+
 export type HookClientIpConfig = Readonly<{
   trustedProxies?: string[];
   allowRealIpFallback?: boolean;
@@ -45,7 +55,11 @@ export type HookClientIpConfig = Readonly<{
 export type HooksRequestHandler = (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
 
 type HookDispatchers = {
-  dispatchWakeHook: (value: { text: string; mode: "now" | "next-heartbeat" }) => void;
+  dispatchWakeHook: (value: {
+    text: string;
+    mode: "now" | "next-heartbeat";
+    sessionKey?: string;
+  }) => void;
   dispatchAgentHook: (value: HookAgentDispatchPayload) => string;
 };
 
@@ -256,7 +270,27 @@ export function createHooksRequestHandler(
         sendJson(res, 400, { ok: false, error: normalized.error });
         return true;
       }
-      dispatchWakeHook(normalized.value);
+      let normalizedWakeSessionKey: string | undefined;
+      if (normalized.value.sessionKey) {
+        const wakeSessionKey = resolveHookSessionKey({
+          hooksConfig,
+          source: "request",
+          sessionKey: normalized.value.sessionKey,
+        });
+        if (!wakeSessionKey.ok) {
+          sendJson(res, 400, { ok: false, error: wakeSessionKey.error });
+          return true;
+        }
+        normalizedWakeSessionKey = wakeSessionKey.value;
+        if (isGlobalSessionScope() && normalizedWakeSessionKey !== "global") {
+          sendJson(res, 400, { ok: false, error: getGlobalWakeSessionKeyError() });
+          return true;
+        }
+      }
+      dispatchWakeHook({
+        ...normalized.value,
+        sessionKey: normalizedWakeSessionKey,
+      });
       sendJson(res, 200, { ok: true, mode: normalized.value.mode });
       return true;
     }
@@ -348,9 +382,67 @@ export function createHooksRequestHandler(
             return true;
           }
           if (mapped.action.kind === "wake") {
+            if (!isHookAgentAllowed(hooksConfig, mapped.action.agentId)) {
+              sendJson(res, 400, { ok: false, error: getHookAgentPolicyError() });
+              return true;
+            }
+            const targetAgentId = resolveHookTargetAgentId(hooksConfig, mapped.action.agentId);
+            let normalizedWakeSessionKey: string | undefined;
+            if (mapped.action.sessionKey) {
+              const wakeSessionKey = resolveHookSessionKey({
+                hooksConfig,
+                source:
+                  mapped.action.sessionKeySource === "static"
+                    ? "mapping-static"
+                    : "mapping-templated",
+                sessionKey: mapped.action.sessionKey,
+              });
+              if (!wakeSessionKey.ok) {
+                sendJson(res, 400, { ok: false, error: wakeSessionKey.error });
+                return true;
+              }
+              normalizedWakeSessionKey = normalizeHookDispatchSessionKey({
+                sessionKey: wakeSessionKey.value,
+                targetAgentId,
+              });
+              if (isGlobalSessionScope() && normalizedWakeSessionKey !== "global") {
+                sendJson(res, 400, { ok: false, error: getGlobalWakeSessionKeyError() });
+                return true;
+              }
+              const allowedPrefixes = hooksConfig.sessionPolicy.allowedSessionKeyPrefixes;
+              if (
+                allowedPrefixes &&
+                !isSessionKeyAllowedByPrefix(normalizedWakeSessionKey, allowedPrefixes)
+              ) {
+                sendJson(res, 400, {
+                  ok: false,
+                  error: getHookSessionKeyPrefixError(allowedPrefixes),
+                });
+                return true;
+              }
+            } else if (targetAgentId) {
+              normalizedWakeSessionKey = isGlobalSessionScope()
+                ? "global"
+                : normalizeHookDispatchSessionKey({
+                    sessionKey: resolveMainSessionKeyFromConfig(),
+                    targetAgentId,
+                  });
+              const allowedPrefixes = hooksConfig.sessionPolicy.allowedSessionKeyPrefixes;
+              if (
+                allowedPrefixes &&
+                !isSessionKeyAllowedByPrefix(normalizedWakeSessionKey, allowedPrefixes)
+              ) {
+                sendJson(res, 400, {
+                  ok: false,
+                  error: getHookSessionKeyPrefixError(allowedPrefixes),
+                });
+                return true;
+              }
+            }
             dispatchWakeHook({
               text: mapped.action.text,
               mode: mapped.action.mode,
+              sessionKey: normalizedWakeSessionKey,
             });
             sendJson(res, 200, { ok: true, mode: mapped.action.mode });
             return true;
