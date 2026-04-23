@@ -232,12 +232,19 @@ const telegramMessageActions: ChannelMessageActionAdapter = {
 
 function normalizeTelegramAcpConversationId(conversationId: string) {
   const parsed = parseTelegramTopicConversation({ conversationId });
-  if (!parsed || !parsed.chatId.startsWith("-")) {
+  if (parsed) {
+    return {
+      conversationId: parsed.canonicalConversationId,
+      parentConversationId: parsed.chatId,
+    };
+  }
+  const normalizedConversationId = normalizeOptionalString(conversationId);
+  if (!normalizedConversationId || normalizedConversationId.startsWith("-")) {
     return null;
   }
   return {
-    conversationId: parsed.canonicalConversationId,
-    parentConversationId: parsed.chatId,
+    conversationId: normalizedConversationId,
+    parentConversationId: normalizedConversationId,
   };
 }
 
@@ -250,11 +257,29 @@ function matchTelegramAcpConversation(params: {
   if (!binding) {
     return null;
   }
+  const normalizedConversationId = normalizeOptionalString(params.conversationId);
+  const normalizedParentConversationId =
+    normalizeOptionalString(params.parentConversationId) ?? normalizedConversationId;
+  if (!binding.conversationId.includes(":topic:")) {
+    if (
+      !normalizedConversationId ||
+      normalizedConversationId.startsWith("-") ||
+      binding.conversationId !== normalizedConversationId ||
+      normalizedParentConversationId !== normalizedConversationId
+    ) {
+      return null;
+    }
+    return {
+      conversationId: normalizedConversationId,
+      parentConversationId: normalizedParentConversationId,
+      matchPriority: 2,
+    };
+  }
   const incoming = parseTelegramTopicConversation({
     conversationId: params.conversationId,
     parentConversationId: params.parentConversationId,
   });
-  if (!incoming || !incoming.chatId.startsWith("-")) {
+  if (!incoming) {
     return null;
   }
   if (binding.conversationId !== incoming.canonicalConversationId) {
@@ -266,6 +291,25 @@ function matchTelegramAcpConversation(params: {
     matchPriority: 2,
   };
 }
+
+export const telegramBindingsAdapter = {
+  selfParentConversationByDefault: true,
+  compileConfiguredBinding: ({ conversationId }) =>
+    normalizeTelegramAcpConversationId(conversationId),
+  matchInboundConversation: ({ compiledBinding, conversationId, parentConversationId }) =>
+    matchTelegramAcpConversation({
+      bindingConversationId: compiledBinding.conversationId,
+      conversationId,
+      parentConversationId,
+    }),
+  resolveCommandConversation: ({ threadId, originatingTo, commandTo, fallbackTo }) =>
+    resolveTelegramCommandConversation({
+      threadId,
+      originatingTo,
+      commandTo,
+      fallbackTo,
+    }),
+} as const;
 
 function shouldTreatTelegramDeliveredTextAsVisible(params: {
   kind: "tool" | "block" | "final";
@@ -599,24 +643,7 @@ export const telegramPlugin = createChatChannelPlugin({
       resolveGroupPolicy: (account) => account.config.groupPolicy,
       resolveGroupOverrides: resolveTelegramAllowlistGroupOverrides,
     }),
-    bindings: {
-      selfParentConversationByDefault: true,
-      compileConfiguredBinding: ({ conversationId }) =>
-        normalizeTelegramAcpConversationId(conversationId),
-      matchInboundConversation: ({ compiledBinding, conversationId, parentConversationId }) =>
-        matchTelegramAcpConversation({
-          bindingConversationId: compiledBinding.conversationId,
-          conversationId,
-          parentConversationId,
-        }),
-      resolveCommandConversation: ({ threadId, originatingTo, commandTo, fallbackTo }) =>
-        resolveTelegramCommandConversation({
-          threadId,
-          originatingTo,
-          commandTo,
-          fallbackTo,
-        }),
-    },
+    bindings: telegramBindingsAdapter,
     conversationBindings: {
       supportsCurrentConversationBinding: true,
       defaultTopLevelPlacement: "current",
