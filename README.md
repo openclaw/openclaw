@@ -84,9 +84,9 @@ None - all features are additive.
 
 <img width="1462" height="948" alt="Screenshot 2026-04-23 112822" src="https://github.com/user-attachments/assets/68e66bfa-8539-4dbb-af2a-f38d147da05b" /><br>
 
-<img width="1464" height="948" alt="Screenshot 2026-04-23 164707" src="https://github.com/user-attachments/assets/479bb1a0-ba4a-478b-a31d-16cec27f5589" />
+<img width="1464" height="948" alt="Screenshot 2026-04-23 164707" src="https://github.com/user-attachments/assets/479bb1a0-ba4a-478b-a31d-16cec27f5589" /><br>
 
-<img width="1462" height="949" alt="Screenshot 2026-04-23 164739" src="https://github.com/user-attachments/assets/e645089d-b1fb-43df-8e93-d9fbab41e318" />
+<img width="1462" height="949" alt="Screenshot 2026-04-23 164739" src="https://github.com/user-attachments/assets/e645089d-b1fb-43df-8e93-d9fbab41e318" /><br>
   
 <img width="1627" height="1078" alt="media-server" src="https://github.com/user-attachments/assets/42f464e9-2b48-4e89-a3fd-e743b01124fa" /><br>  
   
