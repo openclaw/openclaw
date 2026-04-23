@@ -165,40 +165,34 @@ function getSelfAndAncestorPidsSync(): Set<number> {
 }
 
 /**
- * Parse openclaw gateway PIDs from lsof -Fpc stdout, excluding the current
- * process and its ancestors (see `getSelfAndAncestorPidsSync` for the full
- * rationale). On Linux the ancestor lookup reads up to
+ * Parse PIDs listening on the gateway port from lsof -Fpc stdout, excluding
+ * the current process and its ancestors (see `getSelfAndAncestorPidsSync` for
+ * the full rationale). On Linux the ancestor lookup reads up to
  * `MAX_ANCESTOR_WALK_DEPTH` entries from `/proc/<pid>/status`; each read is
  * a virtual-filesystem access (no disk I/O, no external process), wrapped
  * in try/catch and degrades silently. On macOS/Windows the lookup is
  * in-memory via `process.ppid` only.
+ *
+ * NOTE: this parser returns every listening PID; gateway-vs-other
+ * classification is deferred to `verifyGatewayPidByArgvSync` at the
+ * `findGatewayPidsOnPortSync` call site. Previously this function filtered
+ * by the lsof `c` (command-name) field containing "openclaw", but on macOS
+ * the `c` field is the kernel `p_comm` / `BSD_COMM` — the basename of the
+ * exec'd binary (`"node"`) — NOT the rewritten argv[0] (`"openclaw-gateway"`)
+ * that `ps` shows. That filter silently dropped every real gateway PID on
+ * macOS, causing `cleanStaleGatewayProcessesSync` to no-op and
+ * `pollPortOnceUnix` to report busy ports as `{free: true}`, sustaining
+ * launchd EADDRINUSE respawn loops. See issue #70664.
  */
 function parsePidsFromLsofOutput(stdout: string): number[] {
   const pids: number[] = [];
-  let currentPid: number | undefined;
-  let currentCmd: string | undefined;
   for (const line of stdout.split(/\r?\n/).filter(Boolean)) {
     if (line.startsWith("p")) {
-      if (
-        currentPid != null &&
-        currentCmd &&
-        normalizeLowercaseStringOrEmpty(currentCmd).includes("openclaw")
-      ) {
-        pids.push(currentPid);
-      }
       const parsed = Number.parseInt(line.slice(1), 10);
-      currentPid = Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
-      currentCmd = undefined;
-    } else if (line.startsWith("c")) {
-      currentCmd = line.slice(1);
+      if (Number.isFinite(parsed) && parsed > 0) {
+        pids.push(parsed);
+      }
     }
-  }
-  if (
-    currentPid != null &&
-    currentCmd &&
-    normalizeLowercaseStringOrEmpty(currentCmd).includes("openclaw")
-  ) {
-    pids.push(currentPid);
   }
   // Deduplicate: dual-stack listeners (IPv4 + IPv6) cause lsof to emit the
   // same PID twice. Return each PID at most once to avoid double-killing.
@@ -206,6 +200,57 @@ function parsePidsFromLsofOutput(stdout: string): number[] {
   // caller via the supervisor, recreating the #68451 restart loop.
   const excluded = getSelfAndAncestorPidsSync();
   return [...new Set(pids)].filter((pid) => !excluded.has(pid));
+}
+
+/**
+ * Verify a listening PID is an openclaw gateway by inspecting its argv via
+ * `ps`. On macOS the gateway rewrites argv[0] to "openclaw-gateway" after
+ * exec but the kernel `p_comm` stays "node", so lsof-level classification
+ * is unreliable. `ps` reads the rewritten argv[0], so it sees
+ * "openclaw-gateway" for live gateways. Matches either the argv[0] rewrite
+ * or a recognizable openclaw entry-file pattern (for non-rewritten dev-mode
+ * invocations like `node dist/index.js gateway ...`).
+ *
+ * Returns false on any ps failure so we never mis-attribute a non-gateway
+ * process as a gateway (the cost of a false-negative is at worst one extra
+ * EADDRINUSE retry; the cost of a false-positive is SIGTERM'ing an
+ * unrelated user process).
+ *
+ * Symmetric with the Windows path's `filterVerifiedWindowsGatewayPids` +
+ * `isGatewayArgv`; see also issue #70664.
+ */
+let verifyGatewayPidByArgvOverride: ((pid: number) => boolean) | null = null;
+
+function verifyGatewayPidByArgvSync(pid: number, spawnTimeoutMs = SPAWN_TIMEOUT_MS): boolean {
+  if (verifyGatewayPidByArgvOverride) {
+    return verifyGatewayPidByArgvOverride(pid);
+  }
+  const res = spawnSync("ps", ["-ww", "-p", String(pid), "-o", "command="], {
+    encoding: "utf8",
+    timeout: spawnTimeoutMs,
+  });
+  if (res.error || res.status !== 0) {
+    return false;
+  }
+  const cmd = (res.stdout ?? "").trim();
+  if (!cmd) {
+    return false;
+  }
+  const normalized = normalizeLowercaseStringOrEmpty(cmd);
+  if (normalized.includes("openclaw-gateway")) {
+    return true;
+  }
+  // Dev-mode invocations where argv[0] wasn't rewritten (node
+  // dist/index.js gateway, openclaw.mjs gateway, etc.).
+  if (
+    normalized.includes("gateway") &&
+    (normalized.includes("/openclaw/dist/index.js") ||
+      normalized.includes("/openclaw.mjs") ||
+      /(^|\s|\/)openclaw(\s|$)/.test(normalized))
+  ) {
+    return true;
+  }
+  return false;
 }
 
 /**
@@ -297,7 +342,15 @@ export function findGatewayPidsOnPortSync(
     );
     return [];
   }
-  return parsePidsFromLsofOutput(res.stdout);
+  // lsof returns every listening PID on the port (with self + ancestors
+  // already excluded by parsePidsFromLsofOutput). Filter down to PIDs whose
+  // argv identifies them as openclaw gateways — lsof's p_comm is unreliable
+  // on macOS (see verifyGatewayPidByArgvSync). Symmetric with the Windows
+  // path above that runs `filterVerifiedWindowsGatewayPids` on the raw list.
+  // See issue #70664.
+  return parsePidsFromLsofOutput(res.stdout).filter((pid) =>
+    verifyGatewayPidByArgvSync(pid, spawnTimeoutMs),
+  );
 }
 
 /**
@@ -344,7 +397,15 @@ function pollPortOnce(port: number): PollResult {
       // user namespaces), lsof can exit 1 AND still emit some output for the
       // processes it could read. Parse stdout when non-empty to avoid false-free.
       if (res.stdout) {
-        const pids = parsePidsFromLsofOutput(res.stdout);
+        // Only count openclaw-gateway listeners as "busy" — a non-gateway
+        // process (caddy, nginx, etc.) holding the port is not something we
+        // can wait out, and treating it as busy would loop forever. The
+        // subsequent bind will fail with a more informative error. See
+        // verifyGatewayPidByArgvSync for why ps-argv verification is required
+        // instead of the lsof `c` field on macOS.
+        const pids = parsePidsFromLsofOutput(res.stdout).filter((pid) =>
+          verifyGatewayPidByArgvSync(pid),
+        );
         return pids.length === 0 ? { free: true } : { free: false };
       }
       return { free: true };
@@ -356,8 +417,11 @@ function pollPortOnce(port: number): PollResult {
       return { free: null, permanent: false };
     }
     // status === 0: lsof found listeners. Parse pids from the stdout we
-    // already hold — no second lsof spawn, no new failure surface.
-    const pids = parsePidsFromLsofOutput(res.stdout);
+    // already hold — no second lsof spawn, no new failure surface. Same
+    // gateway-only semantics as the status-1-with-stdout branch above.
+    const pids = parsePidsFromLsofOutput(res.stdout).filter((pid) =>
+      verifyGatewayPidByArgvSync(pid),
+    );
     return pids.length === 0 ? { free: true } : { free: false };
   } catch {
     return { free: null, permanent: false };
@@ -560,6 +624,15 @@ export const __testing = {
   },
   setParentPidOverride(fn: (() => number) | null) {
     parentPidOverride = fn;
+  },
+  /**
+   * Override the ps-based gateway-argv verifier used inside
+   * findGatewayPidsOnPortSync. Tests typically provide a single mockSpawnSync
+   * fake that can't distinguish lsof from ps invocations; this override lets
+   * them drive the Unix gateway-vs-other classification directly.
+   */
+  setVerifyGatewayPidByArgvOverride(fn: ((pid: number) => boolean) | null) {
+    verifyGatewayPidByArgvOverride = fn;
   },
   /** Invoke sleepSync directly (bypasses the override) for unit-testing the real Atomics path. */
   callSleepSyncRaw: sleepSync,

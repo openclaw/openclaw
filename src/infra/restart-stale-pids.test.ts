@@ -180,12 +180,19 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
     mockReadWindowsProcessArgs.mockReturnValue(null);
     mockReadWindowsProcessArgsResult.mockReturnValue({ ok: true, args: null });
     __testing.setSleepSyncOverride(() => {});
+    // Default: bypass the ps-based gateway-argv verifier. Most tests drive
+    // classification via the lsof `c` (command-name) field they inject into
+    // the mock stdout; the real ps call would land on the same mockSpawnSync
+    // mock that's shaped for lsof and would spuriously mis-verify. Tests that
+    // want to exercise verifyGatewayPidByArgvSync specifically override this.
+    __testing.setVerifyGatewayPidByArgvOverride(() => true);
   });
 
   afterEach(() => {
     __testing.setSleepSyncOverride(null);
     __testing.setDateNowOverride(null);
     __testing.setParentPidOverride(null);
+    __testing.setVerifyGatewayPidByArgvOverride(null);
     vi.restoreAllMocks();
   });
 
@@ -383,7 +390,12 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
       },
     );
 
-    it("excludes pids whose command does not include 'openclaw'", () => {
+    it("excludes pids whose argv does not identify them as an openclaw gateway", () => {
+      // The classification is done by verifyGatewayPidByArgvSync, not by the
+      // lsof `c` field (which on macOS reports the kernel p_comm — always
+      // "node" for a node-based gateway — even when argv[0] has been rewritten
+      // to "openclaw-gateway"). Simulate the verifier seeing a non-gateway
+      // argv and correctly excluding the pid.
       const otherPid = process.pid + 2;
       mockSpawnSync.mockReturnValue({
         error: null,
@@ -391,6 +403,7 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
         stdout: lsofOutput([{ pid: otherPid, cmd: "nginx" }]),
         stderr: "",
       });
+      __testing.setVerifyGatewayPidByArgvOverride(() => false);
       expect(findGatewayPidsOnPortSync(18789)).toEqual([]);
     });
 
@@ -503,9 +516,10 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
       expect(result).toContain(pid2);
     });
 
-    it("returns [] when status 0 but only non-openclaw pids present", () => {
-      // Port may be bound by an unrelated process. findGatewayPidsOnPortSync
-      // only tracks openclaw processes — non-openclaw listeners are ignored.
+    it("returns [] when status 0 but only non-gateway pids present", () => {
+      // Port may be bound by an unrelated process (caddy, nginx, etc.).
+      // findGatewayPidsOnPortSync only tracks openclaw gateway processes,
+      // classified by verifyGatewayPidByArgvSync.
       const otherPid = process.pid + 50;
       mockSpawnSync.mockReturnValue({
         error: null,
@@ -513,6 +527,7 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
         stdout: lsofOutput([{ pid: otherPid, cmd: "caddy" }]),
         stderr: "",
       });
+      __testing.setVerifyGatewayPidByArgvOverride(() => false);
       expect(findGatewayPidsOnPortSync(18789)).toEqual([]);
     });
   });
@@ -1087,17 +1102,22 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
   // parsePidsFromLsofOutput — branch-coverage for mid-loop && short-circuits
   // -------------------------------------------------------------------------
   describe("parsePidsFromLsofOutput — branch coverage (lines 67-69)", () => {
-    it("skips a mid-loop entry when the command does not include 'openclaw'", () => {
-      // Exercises the false branch of currentCmd.toLowerCase().includes("openclaw")
-      // inside the mid-loop flush: a non-openclaw cmd between two entries must not
-      // be pushed, but the following openclaw entry still must be.
+    it("filters non-gateway listeners via the ps-argv verifier, keeps gateway PIDs", () => {
+      // On macOS the gateway rewrites argv[0] to "openclaw-gateway" after exec,
+      // but lsof's `c` field reports the kernel `p_comm` (the exec'd binary —
+      // "node"), so it cannot be used to classify gateway vs non-gateway.
+      // Classification is delegated to verifyGatewayPidByArgvSync, which ps's
+      // the target pid and matches argv[0] / openclaw entry-file patterns.
+      const nonGatewayPid = process.pid + 699;
       const stalePid = process.pid + 700;
-      // Mixed output: non-openclaw entry first, then openclaw entry
-      const stdout = `p${process.pid + 699}\ncnginx\np${stalePid}\ncopenclaw-gateway\n`;
+      const stdout = `p${nonGatewayPid}\ncnode\np${stalePid}\ncnode\n`;
       mockSpawnSync.mockReturnValue({ error: null, status: 0, stdout, stderr: "" });
+      // Drive the verifier directly: only stalePid is a gateway; the other
+      // listener (nonGatewayPid) is some other "node"-based process.
+      __testing.setVerifyGatewayPidByArgvOverride((pid) => pid === stalePid);
       const result = findGatewayPidsOnPortSync(18789);
       expect(result).toContain(stalePid);
-      expect(result).not.toContain(process.pid + 699);
+      expect(result).not.toContain(nonGatewayPid);
     });
 
     it("skips a mid-loop entry when currentCmd is missing (two consecutive p-lines)", () => {
@@ -1143,20 +1163,27 @@ describe.skipIf(isWindows)("restart-stale-pids", () => {
   // pollPortOnce branch — status 1 + non-empty stdout with zero openclaw pids
   // -------------------------------------------------------------------------
   describe("pollPortOnce — status 1 + non-empty non-openclaw stdout (line 145)", () => {
-    it("treats status 1 + non-openclaw stdout as port-free (not an openclaw process)", () => {
-      // status 1 + non-empty stdout where no openclaw pids are present:
-      // the port may be held by an unrelated process. From our perspective
-      // (we only kill openclaw pids) it is effectively free.
+    it("treats status 1 + non-gateway stdout as port-free (not an openclaw process)", () => {
+      // status 1 + non-empty stdout where no openclaw gateway pids are
+      // present: the port is held by an unrelated process. From our
+      // perspective (we only kill openclaw gateway pids) it is effectively
+      // free — pollPortOnce should NOT keep waiting for an unrelated caddy
+      // process to exit.
       const stalePid = process.pid + 800;
+      const unrelatedPid = process.pid + 801;
       const getCallCount = installInitialBusyPoll(stalePid, () => {
-        // status 1 + non-openclaw output — should be treated as free:true for our purposes
+        // status 1 + non-gateway output — should be treated as free:true for our purposes
         return createLsofResult({
           status: 1,
-          stdout: lsofOutput([{ pid: process.pid + 801, cmd: "caddy" }]),
+          stdout: lsofOutput([{ pid: unrelatedPid, cmd: "caddy" }]),
         });
       });
       vi.spyOn(process, "kill").mockReturnValue(true);
-      // Should complete cleanly — no openclaw pids in status-1 output → free
+      // Initial find sees stalePid (gateway); the post-kill polls see
+      // unrelatedPid (caddy, non-gateway). Verifier distinguishes them so
+      // the poll correctly reports the port as free of our-interest listeners.
+      __testing.setVerifyGatewayPidByArgvOverride((pid) => pid === stalePid);
+      // Should complete cleanly — no openclaw gateway pids in status-1 output → free
       expect(() => cleanStaleGatewayProcessesSync()).not.toThrow();
       // Completed in exactly 2 calls (initial find + 1 free poll)
       expect(getCallCount()).toBe(2);

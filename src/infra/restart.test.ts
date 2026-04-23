@@ -45,11 +45,16 @@ beforeEach(() => {
     currentTimeMs += ms;
   });
   __testing.setDateNowOverride(() => currentTimeMs);
+  // Default: bypass the ps-based gateway-argv verifier so tests drive
+  // classification via the lsof `c` field (legacy semantics). Tests that
+  // need to exercise verifyGatewayPidByArgvSync override this.
+  __testing.setVerifyGatewayPidByArgvOverride(() => true);
 });
 
 afterEach(() => {
   __testing.setSleepSyncOverride(null);
   __testing.setDateNowOverride(null);
+  __testing.setVerifyGatewayPidByArgvOverride(null);
   vi.restoreAllMocks();
 });
 
@@ -72,6 +77,12 @@ describe.runIf(process.platform !== "win32")("findGatewayPidsOnPortSync", () => 
         "cOpenClaw",
       ].join("\n"),
     });
+    // Simulate the ps-argv verifier seeing openclaw-gateway argv on gatewayPidA/B
+    // and a non-gateway argv on foreignPid. (On real macOS, lsof reports "node"
+    // for both gatewayPidA and foreignPid — classification requires ps.)
+    __testing.setVerifyGatewayPidByArgvOverride(
+      (pid) => pid === gatewayPidA || pid === gatewayPidB,
+    );
 
     const pids = findGatewayPidsOnPortSync(18789);
 
