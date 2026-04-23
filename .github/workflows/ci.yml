@@ -616,7 +616,7 @@ jobs:
           fi
 
           if [ "$RUN_GATEWAY_WATCH" = "true" ]; then
-            start_check "gateway-watch" node scripts/check-gateway-watch-regression.mjs --skip-build
+            start_check "gateway-watch" node scripts/check-gateway-watch-regression.mjs --skip-build --ready-timeout-ms 5000
           fi
 
           for index in "${!pids[@]}"; do
@@ -1458,7 +1458,8 @@ jobs:
               pnpm check:test-types
               ;;
             strict-smoke)
-              pnpm build:strict-smoke
+              # build-artifacts already runs the tsdown/runtime build for the same Node-relevant changes.
+              pnpm build:plugin-sdk:strict-smoke
               ;;
             *)
               echo "Unsupported check task: $TASK" >&2
