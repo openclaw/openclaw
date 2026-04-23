@@ -47,18 +47,34 @@ describe("heartbeat event prompts", () => {
   it.each([
     {
       name: "builds user-relay exec prompt by default",
+      events: ["Exec completed (abc12345, code 0) :: test output"],
       opts: undefined,
-      expected: ["Please relay the command output to the user", "If it failed"],
-      unexpected: ["Handle the result internally"],
+      expected: [
+        "Exec completed (abc12345, code 0) :: test output",
+        "Please relay the command output to the user",
+        "If it failed",
+      ],
+      unexpected: ["Handle the result internally", "shown in the system messages above"],
     },
     {
       name: "builds internal-only exec prompt when delivery is disabled",
+      events: ["Exec failed (abc12345, signal SIGTERM) :: stderr tail"],
       opts: { deliverToUser: false },
-      expected: ["Handle the result internally"],
+      expected: [
+        "Exec failed (abc12345, signal SIGTERM) :: stderr tail",
+        "Handle the result internally",
+      ],
       unexpected: ["Please relay the command output to the user"],
     },
-  ])("$name", ({ opts, expected, unexpected }) => {
-    const prompt = buildExecEventPrompt(opts);
+    {
+      name: "falls back to heartbeat ok when exec event content is empty",
+      events: ["", "   "],
+      opts: undefined,
+      expected: ["Reply HEARTBEAT_OK."],
+      unexpected: ["Please relay the command output to the user"],
+    },
+  ])("$name", ({ events, opts, expected, unexpected }) => {
+    const prompt = buildExecEventPrompt(events, opts);
     for (const part of expected) {
       expect(prompt).toContain(part);
     }

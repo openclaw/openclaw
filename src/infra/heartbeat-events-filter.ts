@@ -38,16 +38,36 @@ export function buildCronEventPrompt(
   );
 }
 
-export function buildExecEventPrompt(opts?: { deliverToUser?: boolean }): string {
+export function buildExecEventPrompt(
+  pendingEvents: string[],
+  opts?: { deliverToUser?: boolean },
+): string {
   const deliverToUser = opts?.deliverToUser ?? true;
+  const eventText = pendingEvents.join("\n").trim();
+  if (!eventText) {
+    if (!deliverToUser) {
+      return (
+        "An async command you ran earlier has completed, but no event content was found. " +
+        "Handle the result internally. Do not relay it to the user unless explicitly requested."
+      );
+    }
+    return (
+      "An async command you ran earlier has completed, but no event content was found. " +
+      "Reply HEARTBEAT_OK."
+    );
+  }
   if (!deliverToUser) {
     return (
-      "An async command you ran earlier has completed. The result is shown in the system messages above. " +
+      "An async command you ran earlier has completed. The event details are:\n\n" +
+      eventText +
+      "\n\n" +
       "Handle the result internally. Do not relay it to the user unless explicitly requested."
     );
   }
   return (
-    "An async command you ran earlier has completed. The result is shown in the system messages above. " +
+    "An async command you ran earlier has completed. The event details are:\n\n" +
+    eventText +
+    "\n\n" +
     "Please relay the command output to the user in a helpful way. If the command succeeded, share the relevant output. " +
     "If it failed, explain what went wrong."
   );
