@@ -26,18 +26,33 @@ export function saveJsonFile(pathname: string, data: unknown) {
   // case and we would fall back to renaming over the link itself. lstat
   // tells us whether `pathname` is a symlink without touching its target,
   // and readlink gives us the target path we should be renaming onto.
+  // Follow the full symlink chain one hop at a time. `realpathSync` would
+  // resolve the chain for us but throws when any link in the chain points
+  // at a missing file — which is exactly the case on a fresh boot where
+  // the first save is the *creating* write. Manual lstat+readlink keeps
+  // working in that case and also handles multi-hop chains (A -> B ->
+  // real.json) so we rename onto `real.json` rather than silently
+  // clobbering `B` with a regular file.
   let target = pathname;
-  let isSymlink = false;
-  try {
-    isSymlink = fs.lstatSync(pathname).isSymbolicLink();
-  } catch {
-    /* path does not exist at all — fresh write, use pathname */
-  }
-  if (isSymlink) {
-    const linkTarget = fs.readlinkSync(pathname);
-    target = path.isAbsolute(linkTarget)
-      ? linkTarget
-      : path.resolve(path.dirname(pathname), linkTarget);
+  const visited = new Set<string>();
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    if (visited.has(target)) {
+      throw new Error(`saveJsonFile: symlink cycle detected at ${target}`);
+    }
+    visited.add(target);
+    let st: fs.Stats;
+    try {
+      st = fs.lstatSync(target);
+    } catch {
+      /* path does not exist yet — break out and write to target */
+      break;
+    }
+    if (!st.isSymbolicLink()) {
+      break;
+    }
+    const hop = fs.readlinkSync(target);
+    target = path.isAbsolute(hop) ? hop : path.resolve(path.dirname(target), hop);
   }
   const dir = path.dirname(target);
   if (!fs.existsSync(dir)) {

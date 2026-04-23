@@ -101,6 +101,40 @@ describe("json-file helpers", () => {
   );
 
   it.skipIf(process.platform === "win32")(
+    "follows a multi-hop symlink chain (A -> B -> real)",
+    async () => {
+      await withTempDir({ prefix: "openclaw-json-file-" }, async (root) => {
+        const realTarget = path.join(root, "real.json");
+        fs.writeFileSync(realTarget, '{"seed":true}\n', "utf8");
+        const hopB = path.join(root, "B.json");
+        const hopA = path.join(root, "A.json");
+        fs.symlinkSync(realTarget, hopB);
+        fs.symlinkSync(hopB, hopA);
+
+        saveJsonFile(hopA, { v: 7 });
+
+        // A and B stay symlinks, real.json carries the new content.
+        expect(fs.lstatSync(hopA).isSymbolicLink()).toBe(true);
+        expect(fs.lstatSync(hopB).isSymbolicLink()).toBe(true);
+        expect(JSON.parse(fs.readFileSync(realTarget, "utf8"))).toEqual({ v: 7 });
+      });
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "detects symlink cycles",
+    async () => {
+      await withTempDir({ prefix: "openclaw-json-file-" }, async (root) => {
+        const a = path.join(root, "a.json");
+        const b = path.join(root, "b.json");
+        fs.symlinkSync(b, a);
+        fs.symlinkSync(a, b);
+        expect(() => saveJsonFile(a, { v: 1 })).toThrow(/symlink cycle/);
+      });
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
     "follows symlinks on save so the link is preserved, target is updated",
     async () => {
       await withTempDir({ prefix: "openclaw-json-file-" }, async (root) => {
