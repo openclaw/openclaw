@@ -73,3 +73,91 @@ Then:
 ```bash
 openclaw gateway call health --url ws://127.0.0.1:18999 --timeout 3000
 ```
+
+## Optional: add a system-level recovery watchdog
+
+`launchd` already restarts the Gateway when the process exits. That is usually
+enough. If you run OpenClaw as an always-on local service and want an extra
+recovery layer for "process is alive but unhealthy" cases, add a small
+**separate** watchdog LaunchAgent.
+
+Use this only if you understand the trade-offs:
+
+- this is for **local macOS LaunchAgent** deployments, not containers or Linux services
+- keep it **local-only** (`gateway.bind: "loopback"` is the safest default)
+- probe health sparingly (for example every 30-60 seconds)
+- prefer `openclaw doctor` first, then `openclaw doctor --fix`, then
+  `openclaw gateway restart`
+- avoid tight restart loops; let `launchd` handle ordinary crash restarts
+
+For other environments, prefer the platform-native supervisor that OpenClaw
+already documents:
+
+- **Docker / containers**: use the built-in `HEALTHCHECK` + container restart policy
+- **Linux systemd**: use `Restart=` policies on the user service
+
+Example watchdog script:
+
+```bash
+#!/bin/zsh
+set -euo pipefail
+
+# launchd uses a minimal PATH. Replace this if your install lives elsewhere
+# (for example nvm, pnpm, Homebrew on Apple Silicon, or a custom prefix).
+OPENCLAW_BIN="${OPENCLAW_BIN:-/opt/homebrew/bin/openclaw}"
+
+if "$OPENCLAW_BIN" health --json >/dev/null 2>&1; then
+  exit 0
+fi
+
+"$OPENCLAW_BIN" doctor >/dev/null 2>&1 || true
+"$OPENCLAW_BIN" doctor --fix >/dev/null 2>&1 || true
+"$OPENCLAW_BIN" gateway restart >/dev/null 2>&1 || true
+```
+
+Before loading the watchdog, verify the binary path with `which openclaw` and
+update `OPENCLAW_BIN` if needed.
+
+Example LaunchAgent (`~/Library/LaunchAgents/ai.openclaw.gateway-watchdog.plist`):
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <key>Label</key>
+    <string>ai.openclaw.gateway-watchdog</string>
+    <key>ProgramArguments</key>
+    <array>
+      <string>/bin/zsh</string>
+      <string>/Users/YOU/.openclaw/bin/gateway-watchdog.sh</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+      <key>PATH</key>
+      <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+    <key>StartInterval</key>
+    <integer>60</integer>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/tmp/openclaw/gateway-watchdog.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/openclaw/gateway-watchdog.log</string>
+  </dict>
+</plist>
+```
+
+Load it with:
+
+```bash
+launchctl bootout gui/$UID ~/Library/LaunchAgents/ai.openclaw.gateway-watchdog.plist 2>/dev/null || true
+launchctl bootstrap gui/$UID ~/Library/LaunchAgents/ai.openclaw.gateway-watchdog.plist
+launchctl kickstart -k gui/$UID/ai.openclaw.gateway-watchdog
+```
+
+This is intentionally documented as an **operator-managed** safeguard rather
+than a built-in feature. If you need productized watchdog behavior, open an
+issue or discussion first so the recovery policy, thresholds, and platform
+scope can be designed deliberately.

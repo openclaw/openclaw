@@ -127,6 +127,11 @@ openclaw health
 
 ## Rollback
 
+If your Gateway runs as a service, `openclaw gateway restart` is preferred over killing PIDs.
+
+If the service manager is healthy but you need an extra operator-managed
+"unhealthy but still running" recovery layer on macOS, see [Gateway on macOS](/platforms/mac/bundled-gateway#optional-add-a-system-level-recovery-watchdog).
+
 ### Pin a version (npm)
 
 ```bash
