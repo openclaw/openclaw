@@ -60,6 +60,7 @@ type SettingsHost = {
   basePath: string;
   themeMedia: MediaQueryList | null;
   themeMediaHandler: ((event: MediaQueryListEvent) => void) | null;
+  nodesPollInterval: number | null;
   logsPollInterval: number | null;
   debugPollInterval: number | null;
   pendingGatewayUrl?: string | null;
@@ -157,6 +158,7 @@ const createHost = (tab: Tab): SettingsHost => ({
   basePath: "",
   themeMedia: null,
   themeMediaHandler: null,
+  nodesPollInterval: null,
   logsPollInterval: null,
   debugPollInterval: null,
   pendingGatewayUrl: null,
@@ -199,6 +201,16 @@ describe("setTabFromRoute", () => {
 
     setTabFromRoute(host, "chat");
     expect(host.logsPollInterval).toBeNull();
+  });
+
+  it("starts and stops node polling based on the tab", () => {
+    const host = createHost("chat");
+
+    setTabFromRoute(host, "nodes");
+    expect(host.nodesPollInterval).not.toBeNull();
+
+    setTabFromRoute(host, "chat");
+    expect(host.nodesPollInterval).toBeNull();
   });
 
   it("starts and stops debug polling based on the tab", () => {

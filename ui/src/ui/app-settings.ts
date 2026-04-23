@@ -4,6 +4,8 @@ import { refreshChat } from "./app-chat.ts";
 import {
   startLogsPolling,
   stopLogsPolling,
+  startNodesPolling,
+  stopNodesPolling,
   startDebugPolling,
   stopDebugPolling,
 } from "./app-polling.ts";
@@ -538,6 +540,9 @@ function applyTabSelection(
   if (next === "chat") {
     host.chatHasAutoScrolled = false;
   }
+  (next === "nodes" ? startNodesPolling : stopNodesPolling)(
+    host as unknown as Parameters<typeof startNodesPolling>[0],
+  );
   (next === "logs" ? startLogsPolling : stopLogsPolling)(
     host as unknown as Parameters<typeof startLogsPolling>[0],
   );
@@ -587,20 +592,23 @@ export function syncUrlWithSessionKey(host: SettingsHost, sessionKey: string, re
 export async function loadOverview(host: SettingsHost, opts?: { refresh?: boolean }) {
   const app = host as SettingsAppHost;
   await Promise.allSettled([
-    loadChannels(app, false),
     loadPresence(app),
     loadSessions(app),
     loadCronStatus(app),
+  ]);
+  buildAttentionItems(app);
+  void Promise.allSettled([
+    loadChannels(app, false, { includeAccounts: false }),
     loadCronJobsPage(app),
-    loadDebug(app),
     loadSkills(app),
     loadUsage(app),
     loadOverviewLogs(app),
     // `refresh: true` bypasses the gateway's 60s auth-status cache so a
     // user-initiated refresh surfaces post-re-auth state immediately.
     loadModelAuthStatusState(app, { refresh: opts?.refresh }),
-  ]);
-  buildAttentionItems(app);
+  ]).finally(() => {
+    buildAttentionItems(app);
+  });
 }
 
 export function hasOperatorReadAccess(

@@ -2,22 +2,62 @@
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatHost } from "./app-chat.ts";
-import type { GatewaySessionRow, SessionsListResult } from "./types.ts";
 
 const { setLastActiveSessionKeyMock } = vi.hoisted(() => ({
   setLastActiveSessionKeyMock: vi.fn(),
 }));
 
+const loadChatHistoryMock = vi.hoisted(() => vi.fn(async () => undefined));
+const loadSessionsMock = vi.hoisted(() => vi.fn(async () => undefined));
+const loadModelsMock = vi.hoisted(() => vi.fn(async () => []));
+const refreshSlashCommandsMock = vi.hoisted(() => vi.fn(async () => undefined));
+
 vi.mock("./app-last-active-session.ts", () => ({
   setLastActiveSessionKey: (...args: unknown[]) => setLastActiveSessionKeyMock(...args),
 }));
 
+vi.mock("./controllers/chat.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./controllers/chat.ts")>();
+  return {
+    ...actual,
+    loadChatHistory: loadChatHistoryMock,
+  };
+});
+
+vi.mock("./controllers/sessions.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./controllers/sessions.ts")>();
+  return {
+    ...actual,
+    loadSessions: loadSessionsMock,
+  };
+});
+
+vi.mock("./controllers/models.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./controllers/models.ts")>();
+  return {
+    ...actual,
+    loadModels: loadModelsMock,
+  };
+});
+
+vi.mock("./chat/slash-commands.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./chat/slash-commands.ts")>();
+  return {
+    ...actual,
+    refreshSlashCommands: refreshSlashCommandsMock,
+  };
+});
+
 let handleSendChat: typeof import("./app-chat.ts").handleSendChat;
+let refreshChat: typeof import("./app-chat.ts").refreshChat;
 let refreshChatAvatar: typeof import("./app-chat.ts").refreshChatAvatar;
 let clearPendingQueueItemsForRun: typeof import("./app-chat.ts").clearPendingQueueItemsForRun;
 
-async function loadChatHelpers(): Promise<void> {
-  ({ handleSendChat, refreshChatAvatar, clearPendingQueueItemsForRun } =
+async function loadChatHelpers(params?: { reload?: boolean }): Promise<void> {
+  if (params?.reload) {
+    vi.resetModules();
+  }
+  ({ handleSendChat, refreshChat, refreshChatAvatar, clearPendingQueueItemsForRun } =
     await import("./app-chat.ts"));
 }
 
@@ -58,25 +98,6 @@ function makeHost(overrides?: Partial<ChatHost>): ChatHost {
   };
 }
 
-function createSessionsResult(sessions: GatewaySessionRow[]): SessionsListResult {
-  return {
-    ts: 0,
-    path: "",
-    count: sessions.length,
-    defaults: { modelProvider: null, model: null, contextTokens: null },
-    sessions,
-  };
-}
-
-function row(key: string, overrides?: Partial<GatewaySessionRow>): GatewaySessionRow {
-  return {
-    key,
-    kind: "direct",
-    updatedAt: null,
-    ...overrides,
-  };
-}
-
 function createDeferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (reason?: unknown) => void;
@@ -94,6 +115,10 @@ describe("refreshChatAvatar", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    loadChatHistoryMock.mockReset();
+    loadSessionsMock.mockReset();
+    loadModelsMock.mockReset();
+    refreshSlashCommandsMock.mockReset();
   });
 
   it("uses a route-relative avatar endpoint before basePath bootstrap finishes", async () => {
@@ -299,6 +324,57 @@ describe("refreshChatAvatar", () => {
       expect.objectContaining({ method: "GET" }),
     );
   });
+
+  it("resolves refreshChat before secondary background loaders finish", async () => {
+    const historyDeferred = createDeferred<void>();
+    const sessionsDeferred = createDeferred<void>();
+    const modelsDeferred = createDeferred<void>();
+    const commandsDeferred = createDeferred<void>();
+    loadChatHistoryMock.mockImplementation(async () => {
+      await historyDeferred.promise;
+    });
+    loadSessionsMock.mockImplementation(async () => {
+      await sessionsDeferred.promise;
+    });
+    loadModelsMock.mockImplementation(async () => {
+      await modelsDeferred.promise;
+      return [];
+    });
+    refreshSlashCommandsMock.mockImplementation(async () => {
+      await commandsDeferred.promise;
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ avatarUrl: "/avatar/main" }),
+      }) as unknown as typeof fetch,
+    );
+
+    const host = makeHost({
+      client: { request: vi.fn() } as unknown as ChatHost["client"],
+    });
+
+    let resolved = false;
+    const refreshPromise = refreshChat(host).then(() => {
+      resolved = true;
+    });
+
+    await Promise.resolve();
+    expect(resolved).toBe(false);
+
+    historyDeferred.resolve();
+    await refreshPromise;
+
+    expect(resolved).toBe(true);
+    expect(loadSessionsMock).toHaveBeenCalledOnce();
+    expect(loadModelsMock).toHaveBeenCalledOnce();
+    expect(refreshSlashCommandsMock).toHaveBeenCalledOnce();
+
+    sessionsDeferred.resolve();
+    modelsDeferred.resolve();
+    commandsDeferred.resolve();
+  });
 });
 
 describe("handleSendChat", () => {
@@ -312,6 +388,7 @@ describe("handleSendChat", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.doUnmock("./chat/slash-command-executor.ts");
   });
 
   it("keeps slash-command model changes in sync with the chat header cache", async () => {
@@ -493,19 +570,24 @@ describe("handleSendChat", () => {
   });
 
   it("shows a visible pending item for /steer on the active run", async () => {
+    vi.doMock("./chat/slash-command-executor.ts", async () => {
+      const actual = await vi.importActual<typeof import("./chat/slash-command-executor.ts")>(
+        "./chat/slash-command-executor.ts",
+      );
+      return {
+        ...actual,
+        executeSlashCommand: vi.fn(async () => ({
+          content: "Steered.",
+          pendingCurrentRun: true,
+        })),
+      };
+    });
+    await loadChatHelpers({ reload: true });
+
     const host = makeHost({
-      client: {
-        request: vi.fn(async (method: string) => {
-          if (method === "chat.send") {
-            return { status: "started", runId: "run-1", messageSeq: 2 };
-          }
-          throw new Error(`Unexpected request: ${method}`);
-        }),
-      } as unknown as ChatHost["client"],
+      client: { request: vi.fn() } as unknown as ChatHost["client"],
       chatRunId: "run-1",
       chatMessage: "/steer tighten the plan",
-      sessionKey: "agent:main:main",
-      sessionsResult: createSessionsResult([row("agent:main:main", { status: "running" })]),
     });
 
     await handleSendChat(host);
