@@ -462,6 +462,46 @@ describe("runWithModelFallback", () => {
     });
   });
 
+  it("surfaces classified terminal results when no fallback remains", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai-codex/gpt-5.4",
+            fallbacks: [],
+          },
+        },
+      },
+    });
+    const run = vi.fn().mockResolvedValueOnce({ payloads: [] });
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openai-codex",
+        model: "gpt-5.4",
+        run,
+        classifyResult: ({ result }) => {
+          const payloads = (result as { payloads?: unknown[] }).payloads;
+          return Array.isArray(payloads) && payloads.length === 0
+            ? {
+                message: "terminal result contained no visible assistant reply",
+                reason: "format",
+                code: "empty_result",
+              }
+            : null;
+        },
+      }),
+    ).rejects.toMatchObject({
+      name: "FailoverError",
+      reason: "format",
+      provider: "openai-codex",
+      model: "gpt-5.4",
+      code: "empty_result",
+    });
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
   it("does not classify successful results when the optional classifier returns null", async () => {
     const cfg = makeProviderFallbackCfg("openai-codex");
     const run = vi.fn().mockResolvedValueOnce({ payloads: [{ text: "ok" }] });

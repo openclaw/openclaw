@@ -688,6 +688,32 @@ export async function runAgentTurnWithFallback(params: {
   let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
     params.getActiveSessionEntry()?.systemPromptReport,
   );
+  let pendingFallbackCandidateRollback:
+    | {
+        provider: string;
+        model: string;
+        rollback: () => Promise<void>;
+      }
+    | undefined;
+  const clearPendingFallbackRollback = (rollback?: (() => Promise<void>) | undefined) => {
+    if (!rollback || pendingFallbackCandidateRollback?.rollback === rollback) {
+      pendingFallbackCandidateRollback = undefined;
+    }
+  };
+  const rollbackClassifiedFallbackCandidateSelection = async (provider: string, model: string) => {
+    const pending = pendingFallbackCandidateRollback;
+    if (!pending || pending.provider !== provider || pending.model !== model) {
+      return;
+    }
+    pendingFallbackCandidateRollback = undefined;
+    try {
+      await pending.rollback();
+    } catch (rollbackError) {
+      logVerbose(
+        `failed to roll back classified fallback candidate selection (non-fatal): ${String(rollbackError)}`,
+      );
+    }
+  };
   const persistFallbackCandidateSelection = async (
     provider: string,
     model: string,
@@ -862,15 +888,21 @@ export async function runAgentTurnWithFallback(params: {
       const fallbackResult = await runWithModelFallback<EmbeddedAgentRunResult>({
         ...resolveModelFallbackOptions(params.followupRun.run),
         runId,
-        classifyResult: ({ result, provider, model, attempt, total }) =>
-          attempt >= total
-            ? null
-            : classifyEmbeddedPiRunResultForModelFallback({
-                result,
-                provider,
-                model,
-                hasDirectlySentBlockReply: directlySentBlockKeys.size > 0,
-              }),
+        classifyResult: async ({ result, provider, model }) => {
+          const classification = classifyEmbeddedPiRunResultForModelFallback({
+            result,
+            provider,
+            model,
+            hasDirectlySentBlockReply: directlySentBlockKeys.size > 0,
+            hasBlockReplyPipelineOutput: Boolean(
+              blockReplyPipeline?.hasBuffered() || blockReplyPipeline?.didStream(),
+            ),
+          });
+          if (classification) {
+            await rollbackClassifiedFallbackCandidateSelection(provider, model);
+          }
+          return classification;
+        },
         run: async (provider, model, runOptions) => {
           // Notify that model selection is complete (including after fallback).
           // This allows responsePrefix template interpolation with the actual model.
@@ -885,6 +917,13 @@ export async function runAgentTurnWithFallback(params: {
               provider,
               model,
             );
+            if (rollbackFallbackCandidateSelection) {
+              pendingFallbackCandidateRollback = {
+                provider,
+                model,
+                rollback: rollbackFallbackCandidateSelection,
+              };
+            }
           } catch (error) {
             logVerbose(
               `failed to persist fallback candidate selection (non-fatal): ${String(error)}`,
@@ -983,6 +1022,7 @@ export async function runAgentTurnWithFallback(params: {
                 if (rollbackFallbackCandidateSelection) {
                   try {
                     await rollbackFallbackCandidateSelection();
+                    clearPendingFallbackRollback(rollbackFallbackCandidateSelection);
                   } catch (rollbackError) {
                     logVerbose(
                       `failed to roll back fallback candidate selection (non-fatal): ${String(rollbackError)}`,
@@ -1297,6 +1337,7 @@ export async function runAgentTurnWithFallback(params: {
               if (rollbackFallbackCandidateSelection) {
                 try {
                   await rollbackFallbackCandidateSelection();
+                  clearPendingFallbackRollback(rollbackFallbackCandidateSelection);
                 } catch (rollbackError) {
                   logVerbose(
                     `failed to roll back fallback candidate selection (non-fatal): ${String(rollbackError)}`,

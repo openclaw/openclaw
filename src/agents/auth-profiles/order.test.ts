@@ -69,6 +69,35 @@ describe("resolveAuthProfileOrder", () => {
     expect(order).toEqual(["fixture-provider:default"]);
   });
 
+  it("uses canonical provider auth order for alias providers", async () => {
+    const { resolveAuthProfileOrder } = await importAuthProfileModulesWithAliasRegistry();
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "fixture-provider:primary": {
+          type: "api_key",
+          provider: "fixture-provider",
+          key: "sk-primary",
+        },
+        "fixture-provider:secondary": {
+          type: "api_key",
+          provider: "fixture-provider",
+          key: "sk-secondary",
+        },
+      },
+      order: {
+        "fixture-provider": ["fixture-provider:secondary", "fixture-provider:primary"],
+      },
+    };
+
+    const order = resolveAuthProfileOrder({
+      store,
+      provider: "fixture-provider-plan",
+    });
+
+    expect(order).toEqual(["fixture-provider:secondary", "fixture-provider:primary"]);
+  });
+
   it("marks aliased provider profiles good under the canonical auth provider", async () => {
     const { markAuthProfileGood } = await importAuthProfileModulesWithAliasRegistry();
     const agentDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-auth-profile-alias-"));

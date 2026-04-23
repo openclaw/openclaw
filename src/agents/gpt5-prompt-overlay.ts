@@ -7,6 +7,8 @@ const OPENAI_FAMILY_GPT5_PROMPT_OVERLAY_PROVIDERS = new Set([
   "codex",
   "codex-cli",
   "openai",
+  "azure-openai",
+  "azure-openai-responses",
   "openai-codex",
 ]);
 

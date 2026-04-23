@@ -204,10 +204,8 @@ export function createFollowupRunner(params: {
             agentId: run.agentId,
             sessionKey: run.sessionKey,
           }),
-          classifyResult: ({ result, provider, model, attempt, total }) =>
-            attempt >= total
-              ? null
-              : classifyEmbeddedPiRunResultForModelFallback({ result, provider, model }),
+          classifyResult: ({ result, provider, model }) =>
+            classifyEmbeddedPiRunResultForModelFallback({ result, provider, model }),
           run: async (provider, model, runOptions) => {
             const authProfile = resolveRunAuthProfile(run, provider, { config: runtimeConfig });
             let attemptCompactionCount = 0;

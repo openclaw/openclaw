@@ -611,6 +611,27 @@ describe("provider-runtime", () => {
     expect(contribution?.sectionOverrides).toEqual({});
   });
 
+  it("keeps OpenAI plugin personality fallback for Azure OpenAI GPT-5 providers", () => {
+    const contribution = resolveProviderSystemPromptContribution({
+      provider: "azure-openai-responses",
+      config: {
+        plugins: {
+          entries: {
+            openai: { config: { personality: "off" } },
+          },
+        },
+      },
+      context: {
+        provider: "azure-openai-responses",
+        modelId: "gpt-5.4",
+        promptMode: "full",
+      } as never,
+    });
+
+    expect(contribution?.stablePrefix).toContain("<persona_latch>");
+    expect(contribution?.sectionOverrides).toEqual({});
+  });
+
   it("does not apply the shared GPT-5 prompt overlay to non-GPT-5 models", () => {
     expect(
       resolveProviderSystemPromptContribution({

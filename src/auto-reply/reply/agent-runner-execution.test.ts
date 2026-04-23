@@ -161,7 +161,7 @@ type FallbackRunnerParams = {
     model: string;
     attempt: number;
     total: number;
-  }) => unknown;
+  }) => unknown | Promise<unknown>;
 };
 
 type EmbeddedAgentParams = {
@@ -571,7 +571,7 @@ describe("runAgentTurnWithFallback", () => {
         payloads?: Array<{ text?: string; isError?: boolean; isReasoning?: boolean }>;
       };
       expect(
-        params.classifyResult?.({
+        await params.classifyResult?.({
           result: first,
           provider: "openai-codex",
           model: "gpt-5.4",
@@ -612,7 +612,7 @@ describe("runAgentTurnWithFallback", () => {
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
       const result = { payloads: [{ text: "NO_REPLY" }], meta: {} };
       expect(
-        params.classifyResult?.({
+        await params.classifyResult?.({
           result,
           provider: "openai-codex",
           model: "gpt-5.4",
@@ -652,7 +652,7 @@ describe("runAgentTurnWithFallback", () => {
         payloads?: Array<{ text?: string; isError?: boolean; isReasoning?: boolean }>;
       };
       expect(
-        params.classifyResult?.({
+        await params.classifyResult?.({
           result,
           provider: "openai-codex",
           model: "gpt-5.4",
@@ -677,6 +677,127 @@ describe("runAgentTurnWithFallback", () => {
     );
 
     expect(result.kind).toBe("success");
+  });
+
+  it("does not classify empty final payloads while block replies are buffered", async () => {
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "openai-codex";
+    followupRun.run.model = "gpt-5.4";
+    const blockReplyPipeline = {
+      enqueue: vi.fn(),
+      flush: vi.fn(async () => {}),
+      stop: vi.fn(),
+      hasBuffered: vi.fn(() => true),
+      didStream: vi.fn(() => false),
+      isAborted: vi.fn(() => false),
+      hasSentPayload: vi.fn(() => false),
+    };
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
+      const result = { payloads: [], meta: {} };
+      expect(
+        await params.classifyResult?.({
+          result,
+          provider: "openai-codex",
+          model: "gpt-5.4",
+          attempt: 1,
+          total: 2,
+        }),
+      ).toBeNull();
+      return {
+        result,
+        provider: "openai-codex",
+        model: "gpt-5.4",
+        attempts: [],
+      };
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams({ followupRun }),
+      blockReplyPipeline,
+      blockStreamingEnabled: true,
+      opts: { onBlockReply: vi.fn() } satisfies GetReplyOptions,
+    });
+
+    expect(result.kind).toBe("success");
+  });
+
+  it("classifies final GPT-5 terminal-empty results instead of silently succeeding", async () => {
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
+      const result = { payloads: [], meta: {} };
+      expect(
+        await params.classifyResult?.({
+          result,
+          provider: "openai-codex",
+          model: "gpt-5.4",
+          attempt: 1,
+          total: 1,
+        }),
+      ).toMatchObject({
+        reason: "format",
+        code: "empty_result",
+      });
+      return {
+        result,
+        provider: "openai-codex",
+        model: "gpt-5.4",
+        attempts: [],
+      };
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+
+    expect(result.kind).toBe("success");
+  });
+
+  it("rolls back persisted fallback selection when result classification rejects a candidate", async () => {
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "anthropic";
+    followupRun.run.model = "claude";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 1,
+      compactionCount: 0,
+    };
+    const activeSessionStore = { main: sessionEntry };
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
+      const failedResult = await params.run("openai-codex", "gpt-5.4");
+      expect(sessionEntry.providerOverride).toBe("openai-codex");
+      expect(sessionEntry.modelOverride).toBe("gpt-5.4");
+      expect(
+        await params.classifyResult?.({
+          result: failedResult as { payloads?: [] },
+          provider: "openai-codex",
+          model: "gpt-5.4",
+          attempt: 1,
+          total: 2,
+        }),
+      ).toMatchObject({
+        code: "empty_result",
+      });
+      expect(sessionEntry.providerOverride).toBeUndefined();
+      expect(sessionEntry.modelOverride).toBeUndefined();
+      return {
+        result: { payloads: [{ text: "fallback ok" }], meta: {} },
+        provider: "anthropic",
+        model: "claude",
+        attempts: [],
+      };
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams({ followupRun }),
+      activeSessionStore,
+      getActiveSessionEntry: () => sessionEntry,
+    });
+
+    expect(result.kind).toBe("success");
+    expect(sessionEntry.providerOverride).toBeUndefined();
+    expect(sessionEntry.modelOverride).toBeUndefined();
   });
 
   it("strips a glued leading NO_REPLY token from streamed tool results", async () => {

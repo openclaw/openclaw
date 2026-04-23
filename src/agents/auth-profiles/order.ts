@@ -78,8 +78,12 @@ export function resolveAuthProfileOrder(params: {
   // get a fresh error count and are not immediately re-penalized on the
   // next transient failure. See #3604.
   clearExpiredCooldowns(store, now);
-  const storedOrder = findNormalizedProviderValue(store.order, providerKey);
-  const configuredOrder = findNormalizedProviderValue(cfg?.auth?.order, providerKey);
+  const storedOrder =
+    findNormalizedProviderValue(store.order, providerAuthKey) ??
+    findNormalizedProviderValue(store.order, providerKey);
+  const configuredOrder =
+    findNormalizedProviderValue(cfg?.auth?.order, providerAuthKey) ??
+    findNormalizedProviderValue(cfg?.auth?.order, providerKey);
   const explicitOrder = storedOrder ?? configuredOrder;
   const explicitProfiles = cfg?.auth?.profiles
     ? Object.entries(cfg.auth.profiles)

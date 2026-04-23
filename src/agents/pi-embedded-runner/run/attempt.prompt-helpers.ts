@@ -122,6 +122,45 @@ export function shouldWarnOnOrphanedUserRepair(
   return trigger === "user" || trigger === "manual";
 }
 
+const MAX_STRUCTURED_MEDIA_REF_CHARS = 300;
+
+function summarizeStructuredMediaRef(label: string, value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const dataUriMatch = trimmed.match(/^data:([^;,]+)?(?:;[^,]*)?,/i);
+  if (dataUriMatch) {
+    const mimeType = dataUriMatch[1]?.trim() || "unknown";
+    return `[${label}] inline data URI (${mimeType}, ${trimmed.length} chars)`;
+  }
+  if (trimmed.length > MAX_STRUCTURED_MEDIA_REF_CHARS) {
+    return `[${label}] ${trimmed.slice(0, MAX_STRUCTURED_MEDIA_REF_CHARS)}... (${trimmed.length} chars)`;
+  }
+  return `[${label}] ${trimmed}`;
+}
+
+function stringifyStructuredJsonFallback(part: unknown): string | undefined {
+  try {
+    const serialized = JSON.stringify(part);
+    if (!serialized || serialized === "{}") {
+      return undefined;
+    }
+    const withoutInlineData = serialized.replace(
+      /data:[^"'\\\s]+/gi,
+      (match) => `[inline data URI: ${match.length} chars]`,
+    );
+    return withoutInlineData.length > 1_000
+      ? `${withoutInlineData.slice(0, 1_000)}... (${withoutInlineData.length} chars)`
+      : withoutInlineData;
+  } catch {
+    return undefined;
+  }
+}
+
 function stringifyStructuredContentPart(part: unknown): string | undefined {
   if (!part || typeof part !== "object") {
     return undefined;
@@ -139,24 +178,25 @@ function stringifyStructuredContentPart(part: unknown): string | undefined {
         : imageUrl && typeof imageUrl === "object"
           ? (imageUrl as { url?: unknown }).url
           : undefined;
-    return typeof url === "string" && url.trim() ? `[image_url] ${url.trim()}` : undefined;
+    return summarizeStructuredMediaRef("image_url", url);
   }
   if (record.type === "image" || record.type === "input_image") {
-    const url = typeof record.url === "string" ? record.url : undefined;
-    const source = typeof record.source === "string" ? record.source : undefined;
-    if (url?.trim()) {
-      return `[${record.type}] ${url.trim()}`;
-    }
-    if (source?.trim()) {
-      return `[${record.type}] ${source.trim()}`;
+    return (
+      summarizeStructuredMediaRef(String(record.type), record.url) ??
+      summarizeStructuredMediaRef(String(record.type), record.source)
+    );
+  }
+  if (typeof record.type === "string") {
+    const typedRef =
+      summarizeStructuredMediaRef(record.type, record.audio_url) ??
+      summarizeStructuredMediaRef(record.type, record.media_url) ??
+      summarizeStructuredMediaRef(record.type, record.url) ??
+      summarizeStructuredMediaRef(record.type, record.source);
+    if (typedRef) {
+      return typedRef;
     }
   }
-  try {
-    const serialized = JSON.stringify(part);
-    return serialized && serialized !== "{}" ? serialized : undefined;
-  } catch {
-    return undefined;
-  }
+  return stringifyStructuredJsonFallback(part);
 }
 
 function extractUserMessagePromptText(content: unknown): string | undefined {

@@ -44,6 +44,7 @@ export function classifyEmbeddedPiRunResultForModelFallback(params: {
   model: string;
   result: unknown;
   hasDirectlySentBlockReply?: boolean;
+  hasBlockReplyPipelineOutput?: boolean;
 }): ModelFallbackResultClassification {
   if (!isGpt5ModelId(params.model) || !isEmbeddedPiRunResult(params.result)) {
     return null;
@@ -51,6 +52,7 @@ export function classifyEmbeddedPiRunResultForModelFallback(params: {
   if (
     params.result.meta.aborted ||
     params.hasDirectlySentBlockReply === true ||
+    params.hasBlockReplyPipelineOutput === true ||
     hasVisibleNonErrorPayload(params.result)
   ) {
     return null;
