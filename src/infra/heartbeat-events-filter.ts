@@ -48,7 +48,7 @@ export function buildExecEventPrompt(
     if (!deliverToUser) {
       return (
         "An async command you ran earlier has completed, but no event content was found. " +
-        "Handle the result internally. Do not relay it to the user unless explicitly requested."
+        "Handle the result internally. Reply HEARTBEAT_OK when nothing needs user-facing follow-up."
       );
     }
     return (

@@ -359,6 +359,24 @@ describe("Ghost reminder bug (issue #13317)", () => {
     expect(sendTelegram).not.toHaveBeenCalled();
   });
 
+  it("does not mix cron reminders into exec-event prompts", async () => {
+    const { result, calledCtx } = await runHeartbeatCase({
+      tmpPrefix: "openclaw-exec-filtered-",
+      replyText: "Handled internally",
+      reason: "exec-event",
+      target: "none",
+      enqueue: (sessionKey) => {
+        enqueueSystemEvent("Reminder: Rotate API keys", { sessionKey });
+        enqueueSystemEvent("exec finished: deploy succeeded", { sessionKey });
+      },
+    });
+
+    expect(result.status).toBe("ran");
+    expect(calledCtx?.Provider).toBe("exec-event");
+    expect(calledCtx?.Body).toContain("exec finished: deploy succeeded");
+    expect(calledCtx?.Body).not.toContain("Reminder: Rotate API keys");
+  });
+
   it("classifies hook:wake exec completions as exec-event prompts", async () => {
     const { result, sendTelegram, calledCtx } = await runHeartbeatCase({
       tmpPrefix: "openclaw-hook-exec-",

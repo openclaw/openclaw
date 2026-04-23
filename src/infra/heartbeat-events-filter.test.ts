@@ -73,6 +73,16 @@ describe("heartbeat event prompts", () => {
       expected: ["Reply HEARTBEAT_OK."],
       unexpected: ["Please relay the command output to the user"],
     },
+    {
+      name: "uses heartbeat ok wording for empty internal exec events",
+      events: ["", "   "],
+      opts: { deliverToUser: false },
+      expected: [
+        "Handle the result internally",
+        "Reply HEARTBEAT_OK when nothing needs user-facing follow-up",
+      ],
+      unexpected: ["Please relay the command output to the user"],
+    },
   ])("$name", ({ events, opts, expected, unexpected }) => {
     const prompt = buildExecEventPrompt(events, opts);
     for (const part of expected) {

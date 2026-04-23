@@ -677,6 +677,7 @@ function resolveHeartbeatRunPrompt(params: {
         isCronSystemEvent(event.text),
     )
     .map((event) => event.text);
+  const execEvents = pendingEvents.filter(isExecCompletionEvent);
   const hasExecCompletion = pendingEvents.some(isExecCompletionEvent);
   const hasCronEvents = cronEvents.length > 0;
 
@@ -716,7 +717,7 @@ After completing all due tasks, reply HEARTBEAT_OK.`;
 
   // Fallback to original behavior
   const basePrompt = hasExecCompletion
-    ? buildExecEventPrompt(pendingEvents, { deliverToUser: params.canRelayToUser })
+    ? buildExecEventPrompt(execEvents, { deliverToUser: params.canRelayToUser })
     : hasCronEvents
       ? buildCronEventPrompt(cronEvents, { deliverToUser: params.canRelayToUser })
       : resolveHeartbeatPrompt(params.cfg, params.heartbeat);
