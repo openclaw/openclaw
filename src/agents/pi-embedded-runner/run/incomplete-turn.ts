@@ -180,11 +180,15 @@ export function resolveIncompleteTurnPayloadText(params: {
   }
 
   // If the assistant already delivered user-visible content via a messaging
-  // tool during this turn, suppress any incomplete-turn warning. The user has
-  // received the reply; a follow-up "couldn't generate a response" bubble is
-  // always a false positive regardless of how the turn ended. Tool-error cases
-  // are already handled by the lastToolError early return above.
-  if (params.attempt.didSendViaMessagingTool) {
+  // tool during this turn, suppress the incomplete-turn warning unless a real
+  // provider error occurred (stopReason=error). The user has received the reply;
+  // a follow-up "couldn't generate a response" bubble is always a false positive
+  // in that case. Provider errors must still surface so the auth profile gets
+  // marked failed and enters cooldown (run.ts error-path handling).
+  if (
+    params.attempt.didSendViaMessagingTool &&
+    params.attempt.lastAssistant?.stopReason !== "error"
+  ) {
     return null;
   }
   const incompleteTerminalAssistant = isIncompleteTerminalAssistantTurn({
