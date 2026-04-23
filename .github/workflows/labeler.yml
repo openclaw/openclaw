@@ -23,6 +23,9 @@ permissions: {}
 
 jobs:
   label:
+    # Skip on the mctlhq fork — Blacksmith runners are not provisioned
+    # there, so without this guard the job sits QUEUED and blocks PR merges.
+    if: github.repository == 'openclaw/openclaw'
     permissions:
       contents: read
       pull-requests: write
@@ -378,7 +381,7 @@ jobs:
             }
 
   backfill-pr-labels:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'openclaw/openclaw'
     permissions:
       contents: read
       pull-requests: write
@@ -628,6 +631,8 @@ jobs:
             core.info(`Processed ${processed} pull requests.`);
 
   label-issues:
+    # Skip on the mctlhq fork — Blacksmith runners aren't provisioned there.
+    if: github.repository == 'openclaw/openclaw'
     permissions:
       issues: write
     runs-on: blacksmith-16vcpu-ubuntu-2404

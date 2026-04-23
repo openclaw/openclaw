@@ -15,6 +15,12 @@ env:
 
 jobs:
   gate-sync-merge:
+    # The upstream CI pins every job to Blacksmith runners, which are not
+    # provisioned for the mctlhq fork. Without this guard every PR check
+    # sits QUEUED forever and blocks merges. The fork has its own gate in
+    # mctl-ci.yml covering the MCTL overlay surface; leave the full upstream
+    # pipeline to run only where its runners live.
+    if: github.repository == 'openclaw/openclaw'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     outputs:
       skip_push_sync: ${{ steps.gate.outputs.skip_push_sync }}
@@ -516,7 +522,10 @@ jobs:
         run: python -m pytest -q skills
 
   secrets:
-    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    # `secrets` does not depend on gate-sync-merge, so the fork guard on
+    # gate-sync-merge doesn't cascade here. Add it explicitly so the job
+    # skips on the mctlhq fork instead of sitting QUEUED on Blacksmith.
+    if: (github.event_name != 'pull_request' || !github.event.pull_request.draft) && github.repository == 'openclaw/openclaw'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
       - name: Checkout

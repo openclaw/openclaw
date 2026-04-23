@@ -1,0 +1,124 @@
+name: MCTL CI
+
+# Lightweight CI for MCTL-overlay changes so feature branches can reach a
+# green status check without depending on the upstream Blacksmith runner
+# fleet (which is not available on the mctlhq fork and leaves every PR
+# check QUEUED indefinitely).
+#
+# Scope: only runs when files that exist solely in the MCTL overlay are
+# touched. Anything that reaches into upstream openclaw code still needs
+# the full CI workflow; this one stays intentionally narrow.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/mctl-skills/**'
+      - 'src/mctl-identity/**'
+      - 'Dockerfile'
+      - '.github/workflows/mctl-ci.yml'
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+    paths:
+      - 'src/mctl-skills/**'
+      - 'src/mctl-identity/**'
+      - 'Dockerfile'
+      - '.github/workflows/mctl-ci.yml'
+
+concurrency:
+  group: mctl-ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  mctl-overlay:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate skill frontmatter
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          fail=0
+          for f in src/mctl-skills/*/SKILL.md; do
+            # Every SKILL.md must start with a YAML frontmatter block.
+            first=$(head -n1 "$f")
+            if [ "$first" != "---" ]; then
+              echo "::error file=$f::SKILL.md must start with a --- frontmatter block"
+              fail=1
+              continue
+            fi
+            # Frontmatter must declare a non-empty `name:` key.
+            if ! awk '/^---$/{c++; next} c==1' "$f" | grep -Eq '^name:[[:space:]]*[^[:space:]]+'; then
+              echo "::error file=$f::SKILL.md frontmatter must set a non-empty name:"
+              fail=1
+            fi
+          done
+          exit $fail
+
+      - name: Validate identity file allowlist
+        run: |
+          set -euo pipefail
+          allowed="AGENTS.md SOUL.md IDENTITY.md USER.md TOOLS.md CLAUDE.md"
+          fail=0
+          # Enumerate every entry under src/mctl-identity — files, symlinks,
+          # AND nested directories. Dotfiles must be included (a bare glob
+          # would skip .env / .token); nested subdirs must be rejected (the
+          # Dockerfile COPY is recursive, so a hidden folder with non-*.md
+          # credential files would slip past the secret scan and ship to
+          # every tenant image).
+          while IFS= read -r -d '' f; do
+            base=$(basename "$f")
+            if [ -d "$f" ]; then
+              echo "::error file=$f::nested directories are not allowed in src/mctl-identity/"
+              fail=1
+              continue
+            fi
+            # Every filename — including symlinks — must be in the allowlist,
+            # so e.g. `notes.md -> AGENTS.md` can't sneak in under a
+            # target-only check.
+            case " $allowed " in
+              *" $base "*) : ;;
+              *)
+                echo "::error file=$f::unexpected file in src/mctl-identity/ — must be one of $allowed"
+                fail=1
+                continue
+                ;;
+            esac
+            if [ -L "$f" ]; then
+              target=$(readlink "$f")
+              case "$target" in
+                AGENTS.md) : ;;
+                *)
+                  echo "::error file=$f::symlink must point to AGENTS.md, got $target"
+                  fail=1
+                  ;;
+              esac
+            fi
+          done < <(find src/mctl-identity -mindepth 1 -maxdepth 1 -print0)
+          # Each identity workspace must ship AGENTS.md + the CLAUDE.md symlink
+          # (repo-level rule in the top-level AGENTS.md).
+          [ -f src/mctl-identity/AGENTS.md ] || { echo "::error::src/mctl-identity/AGENTS.md missing"; fail=1; }
+          if [ ! -L src/mctl-identity/CLAUDE.md ]; then
+            echo "::error::src/mctl-identity/CLAUDE.md must be a symlink to AGENTS.md"
+            fail=1
+          fi
+          exit $fail
+
+      - name: Scan overlay for leaked secrets
+        run: |
+          set -euo pipefail
+          # Reject common credential patterns — the platform copies these
+          # files verbatim into every tenant image, so anything here ships
+          # to every customer. Scan every file (not just *.md) because the
+          # Dockerfile COPY is recursive and a stray .env / .pem / .json
+          # under mctl-skills could carry credentials into the image.
+          pattern='ghp_[A-Za-z0-9]{36}|gho_[A-Za-z0-9]{36}|ghu_[A-Za-z0-9]{36}|ghs_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9]{22}_[A-Za-z0-9]{59}|AKIA[0-9A-Z]{16}|xox[bpoa]-[A-Za-z0-9-]{10,}|-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----'
+          if grep -REnI "$pattern" src/mctl-skills src/mctl-identity; then
+            echo "::error::potential secret detected in overlay content"
+            exit 1
+          fi

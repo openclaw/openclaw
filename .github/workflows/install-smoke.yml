@@ -16,6 +16,9 @@ env:
 
 jobs:
   gate-sync-merge:
+    # Skip on the mctlhq fork — Blacksmith runners are not provisioned
+    # there, so without this guard the job sits QUEUED and blocks PR merges.
+    if: github.repository == 'openclaw/openclaw'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     outputs:
       skip_push_sync: ${{ steps.gate.outputs.skip_push_sync }}
