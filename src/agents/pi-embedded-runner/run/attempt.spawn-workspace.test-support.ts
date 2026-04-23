@@ -603,7 +603,6 @@ vi.mock("../tool-name-allowlist.js", () => ({
 
 vi.mock("../tool-split.js", () => ({
   splitSdkTools: ({ tools }: { tools: unknown[] }) => ({
-    builtInTools: [],
     customTools: tools,
   }),
 }));

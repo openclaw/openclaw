@@ -389,7 +389,7 @@ export async function loadCompactHooksHarness(): Promise<{
   }));
 
   vi.doMock("./tool-split.js", () => ({
-    splitSdkTools: vi.fn(() => ({ builtInTools: [], customTools: [] })),
+    splitSdkTools: vi.fn(() => ({ customTools: [] })),
   }));
 
   vi.doMock("./compaction-safety-timeout.js", () => ({
