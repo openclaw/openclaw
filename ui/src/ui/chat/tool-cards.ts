@@ -238,17 +238,21 @@ export function formatCollapsedToolPreviewText(value: string | undefined): strin
   return normalized.slice(0, 120);
 }
 
-function findLatestCard(cards: ToolCard[], id: string, name: string): ToolCard | undefined {
-  for (let i = cards.length - 1; i >= 0; i--) {
+function findFirstUnmatchedCard(cards: ToolCard[], id: string, name: string): ToolCard | undefined {
+  let nameOnlyCandidate: ToolCard | undefined;
+  for (let i = 0; i < cards.length; i++) {
     const card = cards[i];
     if (!card) {
       continue;
     }
-    if (card.id === id || (card.name === name && !card.outputText)) {
+    if (card.id === id) {
       return card;
     }
+    if (!nameOnlyCandidate && card.name === name && !card.outputText) {
+      nameOnlyCandidate = card;
+    }
   }
-  return undefined;
+  return nameOnlyCandidate;
 }
 
 export function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] {
@@ -280,7 +284,7 @@ export function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] 
     if (kind === "toolresult" || kind === "tool_result") {
       const name = typeof item.name === "string" ? item.name : "tool";
       const cardId = resolveToolCardId(item, m, index, prefix);
-      const existing = findLatestCard(cards, cardId, name);
+      const existing = findFirstUnmatchedCard(cards, cardId, name);
       const text = extractToolText(item);
       const preview = extractToolPreview(text, name);
       const isError = readToolErrorFlag(item) ?? messageIsError;
