@@ -1,6 +1,9 @@
-import { normalizeSlackMessagingTarget } from "openclaw/plugin-sdk/slack";
 import { describe, expect, it } from "vitest";
-import { parseSlackTarget, resolveSlackChannelId } from "./targets.js";
+import {
+  normalizeSlackMessagingTarget,
+  parseSlackTarget,
+  resolveSlackChannelId,
+} from "./targets.js";
 
 describe("parseSlackTarget", () => {
   it("parses user mentions and prefixes", () => {

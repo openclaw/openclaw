@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { importFreshModule } from "../../test/helpers/import-fresh.js";
 import { CommandLane } from "./lanes.js";
 
@@ -12,7 +12,7 @@ const diagnosticMocks = vi.hoisted(() => ({
   },
 }));
 
-vi.mock("../logging/diagnostic.js", () => ({
+vi.mock("../logging/diagnostic-runtime.js", () => ({
   logLaneEnqueue: diagnosticMocks.logLaneEnqueue,
   logLaneDequeue: diagnosticMocks.logLaneDequeue,
   diagnosticLogger: diagnosticMocks.diag,
@@ -56,8 +56,7 @@ function enqueueBlockedMainTask<T = void>(
 }
 
 describe("command queue", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     ({
       clearCommandLane,
       CommandLaneClearedError,
@@ -72,6 +71,10 @@ describe("command queue", () => {
       setCommandLaneConcurrency,
       waitForActiveTasks,
     } = await import("./command-queue.js"));
+  });
+
+  beforeEach(() => {
+    vi.useRealTimers();
     resetCommandQueueStateForTest();
     // Queue state is global across module instances, so reset main lane
     // concurrency explicitly to avoid cross-file leakage.
@@ -81,6 +84,10 @@ describe("command queue", () => {
     diagnosticMocks.diag.debug.mockClear();
     diagnosticMocks.diag.warn.mockClear();
     diagnosticMocks.diag.error.mockClear();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("resetAllLanes is safe when no lanes have been created", () => {
@@ -250,9 +257,7 @@ describe("command queue", () => {
       await blocker;
     });
 
-    await vi.waitFor(() => {
-      expect(getActiveTaskCount()).toBeGreaterThanOrEqual(1);
-    });
+    expect(getActiveTaskCount()).toBeGreaterThanOrEqual(1);
 
     // Enqueue another task — it should be stuck behind the blocker
     let task2Ran = false;
@@ -260,9 +265,7 @@ describe("command queue", () => {
       task2Ran = true;
     });
 
-    await vi.waitFor(() => {
-      expect(getQueueSize(lane)).toBeGreaterThanOrEqual(2);
-    });
+    expect(getQueueSize(lane)).toBeGreaterThanOrEqual(2);
     expect(task2Ran).toBe(false);
 
     // Simulate SIGUSR1: reset all lanes. Queued work (task2) should be
@@ -291,10 +294,13 @@ describe("command queue", () => {
     const blocker2 = new Promise<void>((r) => {
       resolve2 = r;
     });
+    const firstStarted = createDeferred();
 
     const first = enqueueCommandInLane(lane, async () => {
+      firstStarted.resolve();
       await blocker1;
     });
+    await firstStarted.promise;
     const drainPromise = waitForActiveTasks(2000);
 
     // Starts after waitForActiveTasks snapshot and should not block drain completion.
@@ -372,6 +378,42 @@ describe("command queue", () => {
     await expect(enqueueCommand(async () => "ok")).resolves.toBe("ok");
   });
 
+  it("migrates legacy queue state missing activeTaskWaiters without crashing", async () => {
+    // Simulate a SIGUSR1 in-process restart where the globalThis singleton was
+    // created by an older code version (e.g. v2026.4.2) that did not include
+    // the `activeTaskWaiters` field.  The schema migration in getQueueState()
+    // must patch the missing field so resetAllLanes() and
+    // notifyActiveTaskWaiters() do not throw.
+    const key = Symbol.for("openclaw.commandQueueState");
+    const globalStore = globalThis as Record<PropertyKey, unknown>;
+    const original = globalStore[key];
+
+    try {
+      // Plant a legacy-shaped state object (no activeTaskWaiters).
+      globalStore[key] = {
+        gatewayDraining: false,
+        lanes: new Map(),
+        nextTaskId: 1,
+      };
+
+      // resetAllLanes calls notifyActiveTaskWaiters → Array.from(state.activeTaskWaiters).
+      // Without the migration this would throw:
+      //   TypeError: undefined is not iterable
+      expect(() => resetAllLanes()).not.toThrow();
+
+      // waitForActiveTasks also accesses activeTaskWaiters.
+      await expect(waitForActiveTasks(0)).resolves.toEqual({ drained: true });
+    } finally {
+      // Restore original state so subsequent tests are not affected.
+      if (original !== undefined) {
+        globalStore[key] = original;
+      } else {
+        delete globalStore[key];
+      }
+      resetCommandQueueStateForTest();
+    }
+  });
+
   it("shares lane state across distinct module instances", async () => {
     const commandQueueA = await importFreshModule<typeof import("./command-queue.js")>(
       import.meta.url,
@@ -396,10 +438,8 @@ describe("command queue", () => {
         return "done";
       });
 
-      await vi.waitFor(() => {
-        expect(commandQueueB.getQueueSize(lane)).toBe(1);
-        expect(commandQueueB.getActiveTaskCount()).toBe(1);
-      });
+      expect(commandQueueB.getQueueSize(lane)).toBe(1);
+      expect(commandQueueB.getActiveTaskCount()).toBe(1);
 
       release();
       await expect(task).resolves.toBe("done");

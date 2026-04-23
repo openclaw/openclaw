@@ -24,7 +24,7 @@ wired end-to-end.
 
 1. `agent` RPC validates params, resolves session (sessionKey/sessionId), persists session metadata, returns `{ runId, acceptedAt }` immediately.
 2. `agentCommand` runs the agent:
-   - resolves model + thinking/verbose defaults
+   - resolves model + thinking/verbose/trace defaults
    - loads skills snapshot
    - calls `runEmbeddedPiAgent` (pi-agent-core runtime)
    - emits **lifecycle end/error** if the embedded loop does not emit one
@@ -38,7 +38,7 @@ wired end-to-end.
    - tool events => `stream: "tool"`
    - assistant deltas => `stream: "assistant"`
    - lifecycle events => `stream: "lifecycle"` (`phase: "start" | "end" | "error"`)
-5. `agent.wait` uses `waitForAgentJob`:
+5. `agent.wait` uses `waitForAgentRun`:
    - waits for **lifecycle end/error** for `runId`
    - returns `{ status: ok|error|timeout, startedAt, endedAt, error? }`
 
@@ -84,6 +84,7 @@ These run inside the agent loop or gateway pipeline:
 - **`before_model_resolve`**: runs pre-session (no `messages`) to deterministically override provider/model before model resolution.
 - **`before_prompt_build`**: runs after session load (with `messages`) to inject `prependContext`, `systemPrompt`, `prependSystemContext`, or `appendSystemContext` before prompt submission. Use `prependContext` for per-turn dynamic text and system-context fields for stable guidance that should sit in system prompt space.
 - **`before_agent_start`**: legacy compatibility hook that may run in either phase; prefer the explicit hooks above.
+- **`before_agent_reply`**: runs after inline actions and before the LLM call, letting a plugin claim the turn and return a synthetic reply or silence the turn entirely.
 - **`agent_end`**: inspect the final message list and run metadata after completion.
 - **`before_compaction` / `after_compaction`**: observe or annotate compaction cycles.
 - **`before_tool_call` / `after_tool_call`**: intercept tool params/results.
@@ -123,7 +124,8 @@ See [Plugin hooks](/plugins/architecture#provider-runtime-hooks) for the hook AP
   - assistant text (and optional reasoning)
   - inline tool summaries (when verbose + allowed)
   - assistant error text when the model errors
-- `NO_REPLY` is treated as a silent token and filtered from outgoing payloads.
+- The exact silent token `NO_REPLY` / `no_reply` is filtered from outgoing
+  payloads.
 - Messaging tool duplicates are removed from the final payload list.
 - If no renderable payloads remain and a tool errored, a fallback tool error reply is emitted
   (unless a messaging tool already sent a user-visible reply).
@@ -149,6 +151,7 @@ See [Plugin hooks](/plugins/architecture#provider-runtime-hooks) for the hook AP
 
 - `agent.wait` default: 30s (just the wait). `timeoutMs` param overrides.
 - Agent runtime: `agents.defaults.timeoutSeconds` default 172800s (48 hours); enforced in `runEmbeddedPiAgent` abort timer.
+- LLM idle timeout: `agents.defaults.llm.idleTimeoutSeconds` aborts a model request when no response chunks arrive before the idle window. Set it explicitly for slow local models or reasoning/tool-call providers; set it to 0 to disable. If it is not set, OpenClaw uses `agents.defaults.timeoutSeconds` when configured, otherwise 120s. Cron-triggered runs with no explicit LLM or agent timeout disable the idle watchdog and rely on the cron outer timeout.
 
 ## Where things can end early
 
@@ -156,3 +159,11 @@ See [Plugin hooks](/plugins/architecture#provider-runtime-hooks) for the hook AP
 - AbortSignal (cancel)
 - Gateway disconnect or RPC timeout
 - `agent.wait` timeout (wait-only, does not stop agent)
+
+## Related
+
+- [Tools](/tools) — available agent tools
+- [Hooks](/automation/hooks) — event-driven scripts triggered by agent lifecycle events
+- [Compaction](/concepts/compaction) — how long conversations are summarized
+- [Exec Approvals](/tools/exec-approvals) — approval gates for shell commands
+- [Thinking](/tools/thinking) — thinking/reasoning level configuration

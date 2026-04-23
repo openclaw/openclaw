@@ -1,7 +1,4 @@
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
-import type { OpenClawConfig } from "../../config/config.js";
-import { loadConfig } from "../../config/config.js";
-import { callGatewayLeastPrivilege, randomIdempotencyKey } from "../../gateway/call.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PollInput } from "../../polls.js";
 import { normalizePollInput } from "../../polls.js";
 import {
@@ -18,9 +15,28 @@ import {
   type OutboundSendDeps,
 } from "./deliver.js";
 import type { OutboundMirror } from "./mirror.js";
-import { normalizeReplyPayloadsForDelivery } from "./payloads.js";
+import {
+  createOutboundPayloadPlan,
+  projectOutboundPayloadPlanForDelivery,
+  projectOutboundPayloadPlanForMirror,
+} from "./payloads.js";
 import { buildOutboundSessionContext } from "./session-context.js";
 import { resolveOutboundTarget } from "./targets.js";
+
+let messageConfigRuntimePromise: Promise<typeof import("./message.config.runtime.js")> | null =
+  null;
+let messageGatewayRuntimePromise: Promise<typeof import("./message.gateway.runtime.js")> | null =
+  null;
+
+function loadMessageConfigRuntime() {
+  messageConfigRuntimePromise ??= import("./message.config.runtime.js");
+  return messageConfigRuntimePromise;
+}
+
+function loadMessageGatewayRuntime() {
+  messageGatewayRuntimePromise ??= import("./message.gateway.runtime.js");
+  return messageGatewayRuntimePromise;
+}
 
 export type MessageGatewayOptions = {
   url?: string;
@@ -36,6 +52,18 @@ type MessageSendParams = {
   content: string;
   /** Active agent id for per-agent outbound media root scoping. */
   agentId?: string;
+  /** Originating session key used for requester-scoped outbound media policy. */
+  requesterSessionKey?: string;
+  /** Originating account id used for requester-scoped outbound media policy. */
+  requesterAccountId?: string;
+  /** Originating sender id used for sender-scoped outbound media policy. */
+  requesterSenderId?: string;
+  /** Originating sender display name for name-keyed sender policy matching. */
+  requesterSenderName?: string;
+  /** Originating sender username for username-keyed sender policy matching. */
+  requesterSenderUsername?: string;
+  /** Originating sender E.164 phone number for e164-keyed sender policy matching. */
+  requesterSenderE164?: string;
   channel?: string;
   mediaUrl?: string;
   mediaUrls?: string[];
@@ -174,6 +202,7 @@ async function callMessageGateway<T>(params: {
   method: string;
   params: Record<string, unknown>;
 }): Promise<T> {
+  const { callGatewayLeastPrivilege } = await loadMessageGatewayRuntime();
   const gateway = resolveGatewayOptions(params.gateway);
   return await callGatewayLeastPrivilege<T>({
     url: gateway.url,
@@ -187,25 +216,38 @@ async function callMessageGateway<T>(params: {
   });
 }
 
+async function resolveMessageConfig(cfg?: OpenClawConfig): Promise<OpenClawConfig> {
+  if (cfg) {
+    return cfg;
+  }
+  const { loadConfig } = await loadMessageConfigRuntime();
+  return loadConfig();
+}
+
+async function resolveGatewayIdempotencyKey(idempotencyKey?: string): Promise<string> {
+  if (idempotencyKey) {
+    return idempotencyKey;
+  }
+  const { randomIdempotencyKey } = await loadMessageGatewayRuntime();
+  return randomIdempotencyKey();
+}
+
 export async function sendMessage(params: MessageSendParams): Promise<MessageSendResult> {
-  const cfg = params.cfg ?? loadConfig();
+  const cfg = await resolveMessageConfig(params.cfg);
   const channel = await resolveRequiredChannel({ cfg, channel: params.channel });
   const plugin = resolveRequiredPlugin(channel, cfg);
   const deliveryMode = plugin.outbound?.deliveryMode ?? "direct";
-  const normalizedPayloads = normalizeReplyPayloadsForDelivery([
+  const outboundPlan = createOutboundPayloadPlan([
     {
       text: params.content,
       mediaUrl: params.mediaUrl,
       mediaUrls: params.mediaUrls,
     },
   ]);
-  const mirrorText = normalizedPayloads
-    .map((payload) => payload.text)
-    .filter(Boolean)
-    .join("\n");
-  const mirrorMediaUrls = normalizedPayloads.flatMap(
-    (payload) => resolveSendableOutboundReplyParts(payload).mediaUrls,
-  );
+  const normalizedPayloads = projectOutboundPayloadPlanForDelivery(outboundPlan);
+  const mirrorProjection = projectOutboundPayloadPlanForMirror(outboundPlan);
+  const mirrorText = mirrorProjection.text;
+  const mirrorMediaUrls = mirrorProjection.mediaUrls;
   const primaryMediaUrl = mirrorMediaUrls[0] ?? params.mediaUrl ?? null;
 
   if (params.dryRun) {
@@ -235,7 +277,12 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
     const outboundSession = buildOutboundSessionContext({
       cfg,
       agentId: params.agentId,
-      sessionKey: params.mirror?.sessionKey,
+      sessionKey: params.requesterSessionKey ?? params.mirror?.sessionKey,
+      requesterAccountId: params.requesterAccountId ?? params.accountId,
+      requesterSenderId: params.requesterSenderId,
+      requesterSenderName: params.requesterSenderName,
+      requesterSenderUsername: params.requesterSenderUsername,
+      requesterSenderE164: params.requesterSenderE164,
     });
     const results = await deliverOutboundPayloads({
       cfg,
@@ -285,7 +332,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       agentId: params.agentId,
       channel,
       sessionKey: params.mirror?.sessionKey,
-      idempotencyKey: params.idempotencyKey ?? randomIdempotencyKey(),
+      idempotencyKey: await resolveGatewayIdempotencyKey(params.idempotencyKey),
     },
   });
 
@@ -300,7 +347,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
 }
 
 export async function sendPoll(params: MessagePollParams): Promise<MessagePollResult> {
-  const cfg = params.cfg ?? loadConfig();
+  const cfg = await resolveMessageConfig(params.cfg);
   const channel = await resolveRequiredChannel({ cfg, channel: params.channel });
 
   const pollInput: PollInput = {
@@ -349,7 +396,7 @@ export async function sendPoll(params: MessagePollParams): Promise<MessagePollRe
       isAnonymous: params.isAnonymous,
       channel,
       accountId: params.accountId,
-      idempotencyKey: params.idempotencyKey ?? randomIdempotencyKey(),
+      idempotencyKey: await resolveGatewayIdempotencyKey(params.idempotencyKey),
     },
   });
 

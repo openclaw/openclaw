@@ -14,31 +14,10 @@ import {
   createHybridChannelConfigBase,
   mapAllowFromEntries,
   resolveChannelConfigWrites,
-  resolveIMessageConfigAllowFrom,
-  resolveIMessageConfigDefaultTo,
   resolveOptionalConfigString,
-  resolveWhatsAppConfigAllowFrom,
-  resolveWhatsAppConfigDefaultTo,
 } from "./channel-config-helpers.js";
 
 const resolveDefaultAccountId = () => DEFAULT_ACCOUNT_ID;
-
-function createMergedReaderCfg(
-  channelId: "whatsapp" | "imessage",
-  accountConfig: { allowFrom: string[]; defaultTo: string },
-) {
-  return {
-    channels: {
-      [channelId]: {
-        allowFrom: ["root"],
-        defaultTo: " root:chat ",
-        accounts: {
-          alt: accountConfig,
-        },
-      },
-    },
-  };
-}
 
 function createConfigWritesCfg() {
   return {
@@ -73,6 +52,27 @@ function expectAdapterAllowFromAndDefaultTo(adapter: unknown) {
       enabled: true,
     })?.channels?.demo,
   ).toEqual({ enabled: true });
+}
+
+type DemoDmAccount = {
+  accountId?: string | null;
+  dmPolicy?: string;
+  allowFrom?: string[];
+};
+
+function createDemoDmSecurityResolver(
+  params: {
+    inheritSharedDefaultsFromDefaultAccount?: boolean;
+  } = {},
+) {
+  return createScopedDmSecurityResolver<DemoDmAccount>({
+    channelKey: "demo",
+    resolvePolicy: (account) => account.dmPolicy,
+    resolveAllowFrom: (account) => account.allowFrom,
+    policyPathSuffix: "dmPolicy",
+    normalizeEntry: (raw) => raw.toLowerCase(),
+    ...params,
+  });
 }
 
 describe("mapAllowFromEntries", () => {
@@ -116,34 +116,6 @@ describe("resolveOptionalConfigString", () => {
     },
   ])("$name", ({ input, expected }) => {
     expect(resolveOptionalConfigString(input)).toBe(expected);
-  });
-});
-
-describe("provider config readers", () => {
-  it.each([
-    {
-      name: "reads merged WhatsApp allowFrom/defaultTo without the channel registry",
-      cfg: createMergedReaderCfg("whatsapp", {
-        allowFrom: ["49123", "42"],
-        defaultTo: " alt:chat ",
-      }),
-      resolveAllowFrom: resolveWhatsAppConfigAllowFrom,
-      resolveDefaultTo: resolveWhatsAppConfigDefaultTo,
-      expectedAllowFrom: ["49123", "42"],
-    },
-    {
-      name: "reads merged iMessage allowFrom/defaultTo without the channel registry",
-      cfg: createMergedReaderCfg("imessage", {
-        allowFrom: ["chat_id:9", "user@example.com"],
-        defaultTo: " alt:chat ",
-      }),
-      resolveAllowFrom: resolveIMessageConfigAllowFrom,
-      resolveDefaultTo: resolveIMessageConfigDefaultTo,
-      expectedAllowFrom: ["chat_id:9", "user@example.com"],
-    },
-  ])("$name", ({ cfg, resolveAllowFrom, resolveDefaultTo, expectedAllowFrom }) => {
-    expect(resolveAllowFrom({ cfg, accountId: "alt" })).toEqual(expectedAllowFrom);
-    expect(resolveDefaultTo({ cfg, accountId: "alt" })).toBe("alt:chat");
   });
 });
 
@@ -360,17 +332,7 @@ describe("createScopedChannelConfigAdapter", () => {
 
 describe("createScopedDmSecurityResolver", () => {
   it("builds account-aware DM policy payloads", () => {
-    const resolveDmPolicy = createScopedDmSecurityResolver<{
-      accountId?: string | null;
-      dmPolicy?: string;
-      allowFrom?: string[];
-    }>({
-      channelKey: "demo",
-      resolvePolicy: (account) => account.dmPolicy,
-      resolveAllowFrom: (account) => account.allowFrom,
-      policyPathSuffix: "dmPolicy",
-      normalizeEntry: (raw) => raw.toLowerCase(),
-    });
+    const resolveDmPolicy = createDemoDmSecurityResolver();
 
     expect(
       resolveDmPolicy({
@@ -395,6 +357,80 @@ describe("createScopedDmSecurityResolver", () => {
       allowFrom: ["Owner"],
       policyPath: "channels.demo.accounts.alt.dmPolicy",
       allowFromPath: "channels.demo.accounts.alt.",
+      approveHint: formatPairingApproveHint("demo"),
+      normalizeEntry: expect.any(Function),
+    });
+  });
+
+  it("uses accounts.default paths when named accounts inherit shared defaults", () => {
+    const resolveDmPolicy = createDemoDmSecurityResolver({
+      inheritSharedDefaultsFromDefaultAccount: true,
+    });
+
+    expect(
+      resolveDmPolicy({
+        cfg: {
+          channels: {
+            demo: {
+              accounts: {
+                default: {
+                  dmPolicy: "allowlist",
+                  allowFrom: ["Owner"],
+                },
+                alt: {},
+              },
+            },
+          },
+        },
+        accountId: "alt",
+        account: {
+          accountId: "alt",
+          dmPolicy: "allowlist",
+          allowFrom: ["Owner"],
+        },
+      }),
+    ).toEqual({
+      policy: "allowlist",
+      allowFrom: ["Owner"],
+      policyPath: "channels.demo.accounts.default.dmPolicy",
+      allowFromPath: "channels.demo.accounts.default.",
+      approveHint: formatPairingApproveHint("demo"),
+      normalizeEntry: expect.any(Function),
+    });
+  });
+
+  it("ignores accounts.default paths unless the channel opts into shared default-account inheritance", () => {
+    const resolveDmPolicy = createDemoDmSecurityResolver();
+
+    expect(
+      resolveDmPolicy({
+        cfg: {
+          channels: {
+            demo: {
+              dmPolicy: "pairing",
+              allowFrom: ["*"],
+              accounts: {
+                default: {
+                  dmPolicy: "allowlist",
+                  allowFrom: ["Owner"],
+                },
+                alt: {},
+              },
+            },
+          },
+        },
+        accountId: "alt",
+        account: {
+          accountId: "alt",
+          dmPolicy: "pairing",
+          allowFrom: ["*"],
+        },
+      }),
+    ).toEqual({
+      policy: "pairing",
+      allowFrom: ["*"],
+      policyPath: "channels.demo.dmPolicy",
+      allowFromPath: "channels.demo.",
       approveHint: formatPairingApproveHint("demo"),
       normalizeEntry: expect.any(Function),
     });

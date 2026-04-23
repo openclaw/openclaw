@@ -13,7 +13,7 @@ RUN --mount=type=cache,id=openclaw-install-sh-e2e-apt-cache,target=/var/cache/ap
     git
 
 COPY install-sh-common/version-parse.sh /usr/local/install-sh-common/version-parse.sh
-COPY --chmod=755 run.sh /usr/local/bin/openclaw-install-e2e
+COPY --chmod=755 install-sh-e2e/run.sh /usr/local/bin/openclaw-install-e2e
 
 RUN useradd --create-home --shell /bin/bash appuser
 USER appuser

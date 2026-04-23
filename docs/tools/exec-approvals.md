@@ -14,9 +14,25 @@ commands on a real host (`gateway` or `node`). Think of it like a safety interlo
 commands are allowed only when policy + allowlist + (optional) user approval all agree.
 Exec approvals are **in addition** to tool policy and elevated gating (unless elevated is set to `full`, which skips approvals).
 Effective policy is the **stricter** of `tools.exec.*` and approvals defaults; if an approvals field is omitted, the `tools.exec` value is used.
+Host exec also uses the local approvals state on that machine. A host-local
+`ask: "always"` in `~/.openclaw/exec-approvals.json` keeps prompting even if
+session or config defaults request `ask: "on-miss"`.
+Use `openclaw approvals get`, `openclaw approvals get --gateway`, or
+`openclaw approvals get --node <id|name|ip>` to inspect the requested policy,
+host policy sources, and the effective result.
+For the local machine, `openclaw exec-policy show` exposes the same merged view and
+`openclaw exec-policy set|preset` can synchronize the local requested policy with the
+local host approvals file in one step. When a local scope requests `host=node`,
+`openclaw exec-policy show` reports that scope as node-managed at runtime instead of
+pretending the local approvals file is the effective source of truth.
 
 If the companion app UI is **not available**, any request that requires a prompt is
 resolved by the **ask fallback** (default: deny).
+
+Native chat approval clients can also expose channel-specific affordances on the
+pending approval message. For example, Matrix can seed reaction shortcuts on the
+approval prompt (`✅` allow once, `❌` deny, and `♾️` allow always when available)
+while still leaving the `/approve ...` commands in the message as a fallback.
 
 ## Where it applies
 
@@ -85,6 +101,96 @@ Example schema:
 }
 ```
 
+## No-approval "YOLO" mode
+
+If you want host exec to run without approval prompts, you must open **both** policy layers:
+
+- requested exec policy in OpenClaw config (`tools.exec.*`)
+- host-local approvals policy in `~/.openclaw/exec-approvals.json`
+
+This is now the default host behavior unless you tighten it explicitly:
+
+- `tools.exec.security`: `full` on `gateway`/`node`
+- `tools.exec.ask`: `off`
+- host `askFallback`: `full`
+
+Important distinction:
+
+- `tools.exec.host=auto` chooses where exec runs: sandbox when available, otherwise gateway.
+- YOLO chooses how host exec is approved: `security=full` plus `ask=off`.
+- In YOLO mode, OpenClaw does not add a separate heuristic command-obfuscation approval gate or script-preflight rejection layer on top of the configured host exec policy.
+- `auto` does not make gateway routing a free override from a sandboxed session. A per-call `host=node` request is allowed from `auto`, and `host=gateway` is only allowed from `auto` when no sandbox runtime is active. If you want a stable non-auto default, set `tools.exec.host` or use `/exec host=...` explicitly.
+
+If you want a more conservative setup, tighten either layer back to `allowlist` / `on-miss`
+or `deny`.
+
+Persistent gateway-host "never prompt" setup:
+
+```bash
+openclaw config set tools.exec.host gateway
+openclaw config set tools.exec.security full
+openclaw config set tools.exec.ask off
+openclaw gateway restart
+```
+
+Then set the host approvals file to match:
+
+```bash
+openclaw approvals set --stdin <<'EOF'
+{
+  version: 1,
+  defaults: {
+    security: "full",
+    ask: "off",
+    askFallback: "full"
+  }
+}
+EOF
+```
+
+Local shortcut for the same gateway-host policy on the current machine:
+
+```bash
+openclaw exec-policy preset yolo
+```
+
+That local shortcut updates both:
+
+- local `tools.exec.host/security/ask`
+- local `~/.openclaw/exec-approvals.json` defaults
+
+It is intentionally local-only. If you need to change gateway-host or node-host approvals
+remotely, continue using `openclaw approvals set --gateway` or
+`openclaw approvals set --node <id|name|ip>`.
+
+For a node host, apply the same approvals file on that node instead:
+
+```bash
+openclaw approvals set --node <id|name|ip> --stdin <<'EOF'
+{
+  version: 1,
+  defaults: {
+    security: "full",
+    ask: "off",
+    askFallback: "full"
+  }
+}
+EOF
+```
+
+Important local-only limitation:
+
+- `openclaw exec-policy` does not synchronize node approvals
+- `openclaw exec-policy set --host node` is rejected
+- node exec approvals are fetched from the node at runtime, so node-targeted updates must use `openclaw approvals --node ...`
+
+Session-only shortcut:
+
+- `/exec security=full ask=off` changes only the current session.
+- `/elevated full` is a break-glass shortcut that also skips exec approvals for that session.
+
+If the host approvals file stays stricter than config, the stricter host policy still wins.
+
 ## Policy knobs
 
 ### Security (`exec.security`)
@@ -98,6 +204,7 @@ Example schema:
 - **off**: never prompt.
 - **on-miss**: prompt only when allowlist does not match.
 - **always**: prompt on every command.
+- `allow-always` durable trust does not suppress prompts when effective ask mode is `always`
 
 ### Ask fallback (`askFallback`)
 
@@ -132,6 +239,7 @@ Allowlists are **per agent**. If multiple agents exist, switch which agent you�
 editing in the macOS app. Patterns are **case-insensitive glob matches**.
 Patterns should resolve to **binary paths** (basename-only entries are ignored).
 Legacy `agents.default` entries are migrated to `agents.main` on load.
+Shell chains such as `echo ok && pwd` still need every top-level segment to satisfy allowlist rules.
 
 Examples:
 
@@ -213,7 +321,7 @@ For allow-always decisions in allowlist mode, known dispatch wrappers
 paths. Shell multiplexers (`busybox`, `toybox`) are also unwrapped for shell applets (`sh`, `ash`,
 etc.) so inner executables are persisted instead of multiplexer binaries. If a wrapper or
 multiplexer cannot be safely unwrapped, no allowlist entry is persisted automatically.
-If you allowlist interpreters like `python3` or `node`, prefer `tools.exec.strictInlineEval=true` so inline eval still requires an explicit approval.
+If you allowlist interpreters like `python3` or `node`, prefer `tools.exec.strictInlineEval=true` so inline eval still requires an explicit approval. In strict mode, `allow-always` can still persist benign interpreter/script invocations, but inline-eval carriers are not persisted automatically.
 
 Default safe bins:
 
@@ -295,6 +403,16 @@ For `host=node`, approval requests include a canonical `systemRunPlan` payload. 
 that plan as the authoritative command/cwd/session context when forwarding approved `system.run`
 requests.
 
+That matters for async approval latency:
+
+- the node exec path prepares one canonical plan up front
+- the approval record stores that plan and its binding metadata
+- once approved, the final forwarded `system.run` call reuses the stored plan
+  instead of trusting later caller edits
+- if the caller changes `command`, `rawCommand`, `cwd`, `agentId`, or
+  `sessionKey` after the approval request was created, the gateway rejects the
+  forwarded run as an approval mismatch
+
 ## Interpreter/runtime commands
 
 Approval-backed interpreter/runtime runs are intentionally conservative:
@@ -370,7 +488,7 @@ Reply in chat:
 /approve <id> deny
 ```
 
-The `/approve` command handles both exec approvals and plugin approvals. If the ID does not match a pending exec approval, it automatically checks plugin approvals.
+The `/approve` command handles both exec approvals and plugin approvals. If the ID does not match a pending exec approval, it automatically checks plugin approvals instead.
 
 ### Plugin approval forwarding
 
@@ -413,25 +531,66 @@ separate native delivery adapter just to stay pending.
 Discord and Telegram also support same-chat `/approve`, but those channels still use their
 resolved approver list for authorization even when native approval delivery is disabled.
 
+For Telegram and other native approval clients that call the Gateway directly,
+this fallback is intentionally bounded to "approval not found" failures. A real
+exec approval denial/error does not silently retry as a plugin approval.
+
 ### Native approval delivery
 
-Discord and Telegram can also act as native approval-delivery adapters with channel-specific config.
+Some channels can also act as native approval clients. Native clients add approver DMs, origin-chat
+fanout, and channel-specific interactive approval UX on top of the shared same-chat `/approve`
+flow.
+
+When native approval cards/buttons are available, that native UI is the primary
+agent-facing path. The agent should not also echo a duplicate plain chat
+`/approve` command unless the tool result says chat approvals are unavailable or
+manual approval is the only remaining path.
+
+Generic model:
+
+- host exec policy still decides whether exec approval is required
+- `approvals.exec` controls forwarding approval prompts to other chat destinations
+- `channels.<channel>.execApprovals` controls whether that channel acts as a native approval client
+
+Native approval clients auto-enable DM-first delivery when all of these are true:
+
+- the channel supports native approval delivery
+- approvers can be resolved from explicit `execApprovals.approvers` or that
+  channel's documented fallback sources
+- `channels.<channel>.execApprovals.enabled` is unset or `"auto"`
+
+Set `enabled: false` to disable a native approval client explicitly. Set `enabled: true` to force
+it on when approvers resolve. Public origin-chat delivery stays explicit through
+`channels.<channel>.execApprovals.target`.
+
+FAQ: [Why are there two exec approval configs for chat approvals?](/help/faq#why-are-there-two-exec-approval-configs-for-chat-approvals)
 
 - Discord: `channels.discord.execApprovals.*`
+- Slack: `channels.slack.execApprovals.*`
 - Telegram: `channels.telegram.execApprovals.*`
 
-These native delivery adapters are opt-in. They add DM routing and channel fanout on top of the
-shared same-chat `/approve` flow and the shared approval buttons.
+These native approval clients add DM routing and optional channel fanout on top of the shared
+same-chat `/approve` flow and shared approval buttons.
 
 Shared behavior:
 
 - Slack, Matrix, Microsoft Teams, and similar deliverable chats use the normal channel auth model
   for same-chat `/approve`
+- when a native approval client auto-enables, the default native delivery target is approver DMs
 - for Discord and Telegram, only resolved approvers can approve or deny
-- Discord and Telegram approvers can be explicit (`execApprovals.approvers`) or inferred from existing owner config (`allowFrom`, plus direct-message `defaultTo` where supported)
+- Discord approvers can be explicit (`execApprovals.approvers`) or inferred from `commands.ownerAllowFrom`
+- Telegram approvers can be explicit (`execApprovals.approvers`) or inferred from existing owner config (`allowFrom`, plus direct-message `defaultTo` where supported)
+- Slack approvers can be explicit (`execApprovals.approvers`) or inferred from `commands.ownerAllowFrom`
+- Slack native buttons preserve approval id kind, so `plugin:` ids can resolve plugin approvals
+  without a second Slack-local fallback layer
+- Matrix native DM/channel routing and reaction shortcuts handle both exec and plugin approvals;
+  plugin authorization still comes from `channels.matrix.dm.allowFrom`
 - the requester does not need to be an approver
 - the originating chat can approve directly with `/approve` when that chat already supports commands and replies
-- when channel delivery is enabled, approval prompts include the command text
+- native Discord approval buttons route by approval id kind: `plugin:` ids go
+  straight to plugin approvals, everything else goes to exec approvals
+- native Telegram approval buttons follow the same bounded exec-to-plugin fallback as `/approve`
+- when native `target` enables origin-chat delivery, approval prompts include the command text
 - pending exec approvals expire after 30 minutes by default
 - if no operator UI or configured approval client can accept the request, the prompt falls back to `askFallback`
 
@@ -493,3 +652,10 @@ Related:
 - [Exec tool](/tools/exec)
 - [Elevated mode](/tools/elevated)
 - [Skills](/tools/skills)
+
+## Related
+
+- [Exec](/tools/exec) — shell command execution tool
+- [Sandboxing](/gateway/sandboxing) — sandbox modes and workspace access
+- [Security](/gateway/security) — security model and hardening
+- [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) — when to use each

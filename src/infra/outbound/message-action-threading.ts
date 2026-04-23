@@ -3,8 +3,8 @@ import type {
   ChannelId,
   ChannelThreadingAdapter,
   ChannelThreadingToolContext,
-} from "../../channels/plugins/types.js";
-import type { OpenClawConfig } from "../../config/config.js";
+} from "../../channels/plugins/types.public.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
   OutboundSessionRoute,
   ResolveOutboundSessionRouteParams,
@@ -47,6 +47,7 @@ export async function prepareOutboundMirrorRoute(params: {
   accountId?: string | null;
   toolContext?: ChannelThreadingToolContext;
   agentId?: string;
+  currentSessionKey?: string;
   dryRun?: boolean;
   resolvedTarget?: ResolvedMessagingTarget;
   resolveAutoThreadId?: ResolveAutoThreadId;
@@ -55,7 +56,6 @@ export async function prepareOutboundMirrorRoute(params: {
   ) => Promise<OutboundSessionRoute | null>;
   ensureOutboundSessionEntry: (params: {
     cfg: OpenClawConfig;
-    agentId: string;
     channel: ChannelId;
     accountId?: string | null;
     route: OutboundSessionRoute;
@@ -80,6 +80,7 @@ export async function prepareOutboundMirrorRoute(params: {
           agentId: params.agentId,
           accountId: params.accountId,
           target: params.to,
+          currentSessionKey: params.currentSessionKey,
           resolvedTarget: params.resolvedTarget,
           replyToId,
           threadId: resolvedThreadId,
@@ -88,7 +89,6 @@ export async function prepareOutboundMirrorRoute(params: {
   if (outboundRoute && params.agentId && !params.dryRun) {
     await params.ensureOutboundSessionEntry({
       cfg: params.cfg,
-      agentId: params.agentId,
       channel: params.channel,
       accountId: params.accountId,
       route: outboundRoute,

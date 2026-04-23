@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { t } from "../../i18n/index.ts";
 import type {
   AgentIdentityResult,
   AgentsFilesListResult,
@@ -14,7 +15,7 @@ import {
   resolveModelLabel,
   resolveModelPrimary,
 } from "./agents-utils.ts";
-import type { AgentsPanel } from "./agents.ts";
+import type { AgentsPanel } from "./agents.types.ts";
 
 export function renderAgentOverview(params: {
   agent: AgentsListResult["agents"][number];
@@ -205,7 +206,7 @@ export function renderAgentOverview(params: {
             ?disabled=${configLoading}
             @click=${onConfigReload}
           >
-            Reload Config
+            ${t("common.reloadConfig")}
           </button>
           <button
             type="button"

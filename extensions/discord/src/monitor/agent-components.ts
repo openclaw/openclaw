@@ -23,50 +23,29 @@ import {
   formatInboundEnvelope,
   resolveEnvelopeFormatOptions,
 } from "openclaw/plugin-sdk/channel-inbound";
-import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/channel-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/config-runtime";
-import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
-import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/config-runtime";
-import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/config-runtime";
-import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-runtime";
-import {
-  buildPluginBindingResolvedText,
-  parsePluginBindingApprovalCustomId,
-  resolvePluginConversationBindingApproval,
-} from "openclaw/plugin-sdk/conversation-runtime";
-import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
+import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
-import {
-  dispatchPluginInteractiveHandler,
-  type PluginInteractiveDiscordHandlerContext,
-} from "openclaw/plugin-sdk/plugin-runtime";
-import { resolveChunkMode, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
-import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
-import { dispatchReplyWithBufferedBlockDispatcher } from "openclaw/plugin-sdk/reply-runtime";
-import { createReplyReferencePlanner } from "openclaw/plugin-sdk/reply-runtime";
-import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { createNonExitingRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { createNonExitingRuntime, logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 import { logDebug, logError } from "openclaw/plugin-sdk/text-runtime";
 import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
-import { resolveDiscordComponentEntry, resolveDiscordModalEntry } from "../components-registry.js";
+import { createDiscordRestClient } from "../client.js";
 import {
-  createDiscordFormModal,
-  formatDiscordComponentEventText,
   parseDiscordComponentCustomIdForCarbon,
   parseDiscordModalCustomIdForCarbon,
-  type DiscordComponentEntry,
-  type DiscordModalEntry,
-} from "../components.js";
+} from "../component-custom-id.js";
+import { resolveDiscordComponentEntry, resolveDiscordModalEntry } from "../components-registry.js";
+import { resolveDiscordConversationIdentity } from "../conversation-identity.js";
+import {
+  dispatchDiscordPluginInteractiveHandler,
+  type DiscordInteractiveHandlerContext,
+} from "../interactive-dispatch.js";
 import { editDiscordComponentMessage } from "../send.components.js";
 import {
   AGENT_BUTTON_KEY,
   AGENT_SELECT_KEY,
   ackComponentInteraction,
-  buildAgentButtonCustomId,
-  buildAgentSelectCustomId,
   type AgentComponentContext,
   type AgentComponentInteraction,
   type AgentComponentMessageInteraction,
@@ -80,30 +59,64 @@ import {
   parseDiscordModalId,
   resolveAgentComponentRoute,
   resolveComponentCommandAuthorized,
-  type ComponentInteractionContext,
   resolveDiscordChannelContext,
-  type DiscordChannelContext,
   resolveDiscordInteractionId,
   resolveInteractionContextWithDmAuth,
   resolveInteractionCustomId,
   resolveModalFieldValues,
   resolvePinnedMainDmOwnerFromAllowlist,
-  type DiscordUser,
+  type ComponentInteractionContext,
+  type DiscordChannelContext,
 } from "./agent-components-helpers.js";
 import {
-  type DiscordGuildEntryResolved,
+  enqueueSystemEvent,
+  readSessionUpdatedAt,
+  resolveStorePath,
+} from "./agent-components.deps.runtime.js";
+import {
   normalizeDiscordAllowList,
   resolveDiscordChannelConfigWithFallback,
   resolveDiscordGuildEntry,
 } from "./allow-list.js";
 import { formatDiscordUserTag } from "./format.js";
 import {
-  buildDiscordInboundAccessContext,
   buildDiscordGroupSystemPrompt,
+  buildDiscordInboundAccessContext,
 } from "./inbound-context.js";
 import { buildDirectLabel, buildGuildLabel } from "./reply-context.js";
 import { deliverDiscordReply } from "./reply-delivery.js";
-import { sendTyping } from "./typing.js";
+
+let conversationRuntimePromise: Promise<typeof import("./agent-components.runtime.js")> | undefined;
+let componentsRuntimePromise: Promise<typeof import("../components.js")> | undefined;
+let replyRuntimePromise: Promise<typeof import("openclaw/plugin-sdk/reply-runtime")> | undefined;
+let replyPipelineRuntimePromise:
+  | Promise<typeof import("openclaw/plugin-sdk/channel-reply-pipeline")>
+  | undefined;
+let typingRuntimePromise: Promise<typeof import("./typing.js")> | undefined;
+
+async function loadConversationRuntime() {
+  conversationRuntimePromise ??= import("./agent-components.runtime.js");
+  return await conversationRuntimePromise;
+}
+
+async function loadComponentsRuntime() {
+  componentsRuntimePromise ??= import("../components.js");
+  return await componentsRuntimePromise;
+}
+
+async function _loadReplyRuntime() {
+  replyRuntimePromise ??= import("openclaw/plugin-sdk/reply-runtime");
+  return await replyRuntimePromise;
+}
+async function loadReplyPipelineRuntime() {
+  replyPipelineRuntimePromise ??= import("openclaw/plugin-sdk/channel-reply-pipeline");
+  return await replyPipelineRuntimePromise;
+}
+
+async function loadTypingRuntime() {
+  typingRuntimePromise ??= import("./typing.js");
+  return await typingRuntimePromise;
+}
 
 function resolveComponentGroupPolicy(
   ctx: AgentComponentContext,
@@ -113,6 +126,44 @@ function resolveComponentGroupPolicy(
     groupPolicy: ctx.discordConfig?.groupPolicy,
     defaultGroupPolicy: ctx.cfg.channels?.defaults?.groupPolicy,
   }).groupPolicy;
+}
+
+function buildDiscordComponentConversationLabel(params: {
+  interactionCtx: ComponentInteractionContext;
+  interaction: AgentComponentInteraction;
+  channelCtx: DiscordChannelContext;
+}) {
+  if (params.interactionCtx.isDirectMessage) {
+    return buildDirectLabel(params.interactionCtx.user);
+  }
+  if (params.interactionCtx.isGroupDm) {
+    return `Group DM #${params.channelCtx.channelName ?? params.interactionCtx.channelId} channel id:${params.interactionCtx.channelId}`;
+  }
+  return buildGuildLabel({
+    guild: params.interaction.guild ?? undefined,
+    channelName: params.channelCtx.channelName ?? params.interactionCtx.channelId,
+    channelId: params.interactionCtx.channelId,
+  });
+}
+
+function resolveDiscordComponentChatType(interactionCtx: ComponentInteractionContext) {
+  if (interactionCtx.isDirectMessage) {
+    return "direct";
+  }
+  if (interactionCtx.isGroupDm) {
+    return "group";
+  }
+  return "channel";
+}
+
+export function resolveDiscordComponentOriginatingTo(
+  interactionCtx: Pick<ComponentInteractionContext, "isDirectMessage" | "userId" | "channelId">,
+) {
+  return resolveDiscordConversationIdentity({
+    isDirectMessage: interactionCtx.isDirectMessage,
+    userId: interactionCtx.userId,
+    channelId: interactionCtx.channelId,
+  });
 }
 
 async function dispatchPluginDiscordInteractiveEvent(params: {
@@ -152,7 +203,7 @@ async function dispatchPluginDiscordInteractiveEvent(params: {
     }
     await params.interaction.update(payload);
   };
-  const respond: PluginInteractiveDiscordHandlerContext["respond"] = {
+  const respond: DiscordInteractiveHandlerContext["respond"] = {
     acknowledge: async () => {
       if (responded) {
         return;
@@ -175,7 +226,9 @@ async function dispatchPluginDiscordInteractiveEvent(params: {
         ephemeral,
       });
     },
-    editMessage: async (input) => {
+    editMessage: async (
+      input: Parameters<DiscordInteractiveHandlerContext["respond"]["editMessage"]>[0],
+    ) => {
       const { text, components } = input;
       responded = true;
       await updateOriginalMessage({
@@ -191,8 +244,14 @@ async function dispatchPluginDiscordInteractiveEvent(params: {
       });
     },
   };
-  const pluginBindingApproval = parsePluginBindingApprovalCustomId(params.data);
+  const conversationRuntime = await loadConversationRuntime();
+  const pluginBindingApproval = conversationRuntime.parsePluginBindingApprovalCustomId(params.data);
   if (pluginBindingApproval) {
+    const { buildPluginBindingResolvedText, resolvePluginConversationBindingApproval } =
+      conversationRuntime;
+    if (!pluginBindingApproval) {
+      return "unmatched";
+    }
     try {
       await respond.acknowledge();
     } catch {
@@ -213,6 +272,7 @@ async function dispatchPluginDiscordInteractiveEvent(params: {
             text: buildPluginBindingResolvedText(resolved),
           },
           {
+            cfg: params.ctx.cfg,
             accountId: params.ctx.accountId,
           },
         );
@@ -232,8 +292,7 @@ async function dispatchPluginDiscordInteractiveEvent(params: {
     }
     return "handled";
   }
-  const dispatched = await dispatchPluginInteractiveHandler({
-    channel: "discord",
+  const dispatched = await dispatchDiscordPluginInteractiveHandler({
     data: params.data,
     interactionId: resolveDiscordInteractionId(params.interaction),
     ctx: {
@@ -289,29 +348,25 @@ async function dispatchDiscordComponentEvent(params: {
 }): Promise<void> {
   const { ctx, interaction, interactionCtx, channelCtx, guildInfo, eventText } = params;
   const runtime = ctx.runtime ?? createNonExitingRuntime();
-  const route = resolveAgentRoute({
-    cfg: ctx.cfg,
-    channel: "discord",
-    accountId: ctx.accountId,
-    guildId: interactionCtx.rawGuildId,
+  const route = resolveAgentComponentRoute({
+    ctx,
+    rawGuildId: interactionCtx.rawGuildId,
     memberRoleIds: interactionCtx.memberRoleIds,
-    peer: {
-      kind: interactionCtx.isDirectMessage ? "direct" : "channel",
-      id: interactionCtx.isDirectMessage ? interactionCtx.userId : interactionCtx.channelId,
-    },
-    parentPeer: channelCtx.parentId ? { kind: "channel", id: channelCtx.parentId } : undefined,
+    isDirectMessage: interactionCtx.isDirectMessage,
+    isGroupDm: interactionCtx.isGroupDm,
+    userId: interactionCtx.userId,
+    channelId: interactionCtx.channelId,
+    parentId: channelCtx.parentId,
   });
   const sessionKey = params.routeOverrides?.sessionKey ?? route.sessionKey;
   const agentId = params.routeOverrides?.agentId ?? route.agentId;
   const accountId = params.routeOverrides?.accountId ?? route.accountId;
-
-  const fromLabel = interactionCtx.isDirectMessage
-    ? buildDirectLabel(interactionCtx.user)
-    : buildGuildLabel({
-        guild: interaction.guild ?? undefined,
-        channelName: channelCtx.channelName ?? interactionCtx.channelId,
-        channelId: interactionCtx.channelId,
-      });
+  const fromLabel = buildDiscordComponentConversationLabel({
+    interactionCtx,
+    interaction,
+    channelCtx,
+  });
+  const chatType = resolveDiscordComponentChatType(interactionCtx);
   const senderName = interactionCtx.user.globalName ?? interactionCtx.user.username;
   const senderUsername = interactionCtx.user.username;
   const senderTag = formatDiscordUserTag(interactionCtx.user);
@@ -369,11 +424,25 @@ async function dispatchDiscordComponentEvent(params: {
     from: fromLabel,
     timestamp,
     body: eventText,
-    chatType: interactionCtx.isDirectMessage ? "direct" : "channel",
+    chatType,
     senderLabel: senderName,
     previousTimestamp,
     envelope: envelopeOptions,
   });
+
+  const {
+    createReplyReferencePlanner,
+    dispatchReplyWithBufferedBlockDispatcher,
+    finalizeInboundContext,
+    resolveChunkMode,
+    resolveTextChunkLimit,
+    recordInboundSession,
+  } = await (async () => {
+    const conversationRuntime = await loadConversationRuntime();
+    return {
+      ...conversationRuntime,
+    };
+  })();
 
   const ctxPayload = finalizeInboundContext({
     Body: combinedBody,
@@ -382,11 +451,13 @@ async function dispatchDiscordComponentEvent(params: {
     CommandBody: eventText,
     From: interactionCtx.isDirectMessage
       ? `discord:${interactionCtx.userId}`
-      : `discord:channel:${interactionCtx.channelId}`,
+      : interactionCtx.isGroupDm
+        ? `discord:group:${interactionCtx.channelId}`
+        : `discord:channel:${interactionCtx.channelId}`,
     To: `channel:${interactionCtx.channelId}`,
     SessionKey: sessionKey,
     AccountId: accountId,
-    ChatType: interactionCtx.isDirectMessage ? "direct" : "channel",
+    ChatType: chatType,
     ConversationLabel: fromLabel,
     SenderName: senderName,
     SenderId: interactionCtx.userId,
@@ -394,6 +465,7 @@ async function dispatchDiscordComponentEvent(params: {
     SenderTag: senderTag,
     GroupSubject: groupSubject,
     GroupChannel: groupChannel,
+    MemberRoleIds: interactionCtx.memberRoleIds,
     GroupSystemPrompt: interactionCtx.isDirectMessage ? undefined : groupSystemPrompt,
     GroupSpace: guildInfo?.id ?? guildInfo?.slug ?? interactionCtx.rawGuildId ?? undefined,
     OwnerAllowFrom: ownerAllowFrom,
@@ -405,7 +477,8 @@ async function dispatchDiscordComponentEvent(params: {
     MessageSid: interaction.rawData.id,
     Timestamp: timestamp,
     OriginatingChannel: "discord" as const,
-    OriginatingTo: `channel:${interactionCtx.channelId}`,
+    OriginatingTo:
+      resolveDiscordComponentOriginatingTo(interactionCtx) ?? `channel:${interactionCtx.channelId}`,
   });
 
   await recordInboundSession({
@@ -416,7 +489,8 @@ async function dispatchDiscordComponentEvent(params: {
       ? {
           sessionKey: route.mainSessionKey,
           channel: "discord",
-          to: `user:${interactionCtx.userId}`,
+          to:
+            resolveDiscordComponentOriginatingTo(interactionCtx) ?? `user:${interactionCtx.userId}`,
           accountId,
           mainDmOwnerPin: pinnedMainDmOwner
             ? {
@@ -438,6 +512,7 @@ async function dispatchDiscordComponentEvent(params: {
 
   const deliverTarget = `channel:${interactionCtx.channelId}`;
   const typingChannelId = interactionCtx.channelId;
+  const { createChannelReplyPipeline } = await loadReplyPipelineRuntime();
   const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
     cfg: ctx.cfg,
     agentId,
@@ -453,6 +528,11 @@ async function dispatchDiscordComponentEvent(params: {
     fallbackLimit: 2000,
   });
   const token = ctx.token ?? "";
+  const feedbackRest = createDiscordRestClient({
+    cfg: ctx.cfg,
+    token,
+    accountId,
+  }).rest;
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(ctx.cfg, agentId);
   const replyToMode =
     ctx.discordConfig?.replyToMode ?? ctx.cfg.channels?.discord?.replyToMode ?? "off";
@@ -494,7 +574,8 @@ async function dispatchDiscordComponentEvent(params: {
       },
       onReplyStart: async () => {
         try {
-          await sendTyping({ client: interaction.client, channelId: typingChannelId });
+          const { sendTyping } = await loadTypingRuntime();
+          await sendTyping({ rest: feedbackRest, channelId: typingChannelId });
         } catch (err) {
           logVerbose(`discord: typing failed for component reply: ${String(err)}`);
         }
@@ -661,7 +742,7 @@ async function handleDiscordComponentEvent(params: {
   // fallbacks still need their chosen values in the synthesized event text.
   const eventText =
     (consumed.kind === "button" ? consumed.callbackData?.trim() : undefined) ||
-    formatDiscordComponentEventText({
+    (await loadComponentsRuntime()).formatDiscordComponentEventText({
       kind: consumed.kind === "select" ? "select" : "button",
       label: consumed.label,
       values,
@@ -694,6 +775,7 @@ async function handleDiscordModalTrigger(params: {
   interaction: ButtonInteraction;
   data: ComponentData;
   label: string;
+  interactionCtx?: ComponentInteractionContext;
 }): Promise<void> {
   const parsed = parseDiscordComponentData(
     params.data,
@@ -737,13 +819,15 @@ async function handleDiscordModalTrigger(params: {
     return;
   }
 
-  const interactionCtx = await resolveInteractionContextWithDmAuth({
-    ctx: params.ctx,
-    interaction: params.interaction,
-    label: params.label,
-    componentLabel: "form",
-    defer: false,
-  });
+  const interactionCtx =
+    params.interactionCtx ??
+    (await resolveInteractionContextWithDmAuth({
+      ctx: params.ctx,
+      interaction: params.interaction,
+      label: params.label,
+      componentLabel: "form",
+      defer: false,
+    }));
   if (!interactionCtx) {
     return;
   }
@@ -817,7 +901,9 @@ async function handleDiscordModalTrigger(params: {
   }
 
   try {
-    await params.interaction.showModal(createDiscordFormModal(modalEntry));
+    await params.interaction.showModal(
+      (await loadComponentsRuntime()).createDiscordFormModal(modalEntry),
+    );
   } catch (err) {
     logError(`${params.label}: failed to show modal: ${String(err)}`);
   }
@@ -870,6 +956,7 @@ export class AgentComponentButton extends Button {
       replyOpts,
       rawGuildId,
       isDirectMessage,
+      isGroupDm,
       memberRoleIds,
     } = interactionCtx;
 
@@ -896,6 +983,7 @@ export class AgentComponentButton extends Button {
       rawGuildId,
       memberRoleIds,
       isDirectMessage,
+      isGroupDm,
       userId,
       channelId,
       parentId,
@@ -960,6 +1048,7 @@ export class AgentSelectMenu extends StringSelectMenu {
       replyOpts,
       rawGuildId,
       isDirectMessage,
+      isGroupDm,
       memberRoleIds,
     } = interactionCtx;
 
@@ -989,6 +1078,7 @@ export class AgentSelectMenu extends StringSelectMenu {
       rawGuildId,
       memberRoleIds,
       isDirectMessage,
+      isGroupDm,
       userId,
       channelId,
       parentId,
@@ -1022,11 +1112,22 @@ class DiscordComponentButton extends Button {
   async run(interaction: ButtonInteraction, data: ComponentData): Promise<void> {
     const parsed = parseDiscordComponentData(data, resolveInteractionCustomId(interaction));
     if (parsed?.modalId) {
+      const interactionCtx = await resolveInteractionContextWithDmAuth({
+        ctx: this.ctx,
+        interaction,
+        label: "discord component button",
+        componentLabel: "form",
+        defer: false,
+      });
+      if (!interactionCtx) {
+        return;
+      }
       await handleDiscordModalTrigger({
         ctx: this.ctx,
         interaction,
         data,
         label: "discord component modal",
+        interactionCtx,
       });
       return;
     }

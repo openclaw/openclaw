@@ -1,17 +1,24 @@
-import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
-import {
-  loadSessionStore,
-  resolveAllAgentSessionStoreTargets,
-  resolveStorePath,
-  updateSessionStore,
-} from "../../config/sessions.js";
+import { resolveStorePath } from "../../config/sessions/paths.js";
+import { loadSessionStore } from "../../config/sessions/store-load.js";
+import { resolveAllAgentSessionStoreTargets } from "../../config/sessions/targets.js";
 import {
   mergeSessionEntry,
   type SessionAcpMeta,
   type SessionEntry,
 } from "../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+
+let sessionStoreRuntimePromise:
+  | Promise<typeof import("../../config/sessions/store.runtime.js")>
+  | undefined;
+
+function loadSessionStoreRuntime() {
+  sessionStoreRuntimePromise ??= import("../../config/sessions/store.runtime.js");
+  return sessionStoreRuntimePromise;
+}
 
 export type AcpSessionStoreEntry = {
   cfg: OpenClawConfig;
@@ -31,12 +38,12 @@ function resolveStoreSessionKey(store: Record<string, SessionEntry>, sessionKey:
   if (store[normalized]) {
     return normalized;
   }
-  const lower = normalized.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(normalized);
   if (store[lower]) {
     return lower;
   }
   for (const key of Object.keys(store)) {
-    if (key.toLowerCase() === lower) {
+    if (normalizeLowercaseStringOrEmpty(key) === lower) {
       return key;
     }
   }
@@ -141,6 +148,7 @@ export async function upsertAcpSessionMeta(params: {
     sessionKey,
     cfg: params.cfg,
   });
+  const { updateSessionStore } = await loadSessionStoreRuntime();
   return await updateSessionStore(
     storePath,
     (store) => {
@@ -164,7 +172,7 @@ export async function upsertAcpSessionMeta(params: {
       return nextEntry;
     },
     {
-      activeSessionKey: sessionKey.toLowerCase(),
+      activeSessionKey: normalizeLowercaseStringOrEmpty(sessionKey),
       allowDropAcpMetaSessionKeys: [sessionKey],
     },
   );

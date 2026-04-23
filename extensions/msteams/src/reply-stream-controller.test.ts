@@ -5,6 +5,8 @@ const streamInstances = vi.hoisted(
     [] as Array<{
       hasContent: boolean;
       isFinalized: boolean;
+      isFailed: boolean;
+      streamedLength: number;
       sendInformativeUpdate: ReturnType<typeof vi.fn>;
       update: ReturnType<typeof vi.fn>;
       finalize: ReturnType<typeof vi.fn>;
@@ -15,9 +17,15 @@ vi.mock("./streaming-message.js", () => ({
   TeamsHttpStream: class {
     hasContent = false;
     isFinalized = false;
+    isFailed = false;
+    streamedLength = 0;
     sendInformativeUpdate = vi.fn(async () => {});
-    update = vi.fn(function (this: { hasContent: boolean }) {
+    update = vi.fn(function (
+      this: { hasContent: boolean; streamedLength: number },
+      payloadText?: string,
+    ) {
       this.hasContent = true;
+      this.streamedLength = payloadText?.length ?? 0;
     });
     finalize = vi.fn(async function (this: { isFinalized: boolean }) {
       this.isFinalized = true;
@@ -48,6 +56,34 @@ describe("createTeamsReplyStreamController", () => {
 
     const result = ctrl.preparePayload({ text: "Hello world" });
     expect(result).toBeUndefined();
+  });
+
+  it("when stream fails after partial delivery, fallback sends only remaining text", () => {
+    const ctrl = createController();
+    const fullText = "a".repeat(4000) + "b".repeat(200);
+
+    ctrl.onPartialReply({ text: fullText });
+    streamInstances[0].hasContent = false;
+    streamInstances[0].isFailed = true;
+    streamInstances[0].isFinalized = true;
+    streamInstances[0].streamedLength = 4000;
+
+    const result = ctrl.preparePayload({ text: fullText });
+    expect(result).toEqual({ text: "b".repeat(200) });
+  });
+
+  it("when stream fails before sending content, fallback sends full text", () => {
+    const ctrl = createController();
+    const fullText = "Failure at first chunk";
+
+    ctrl.onPartialReply({ text: fullText });
+    streamInstances[0].hasContent = false;
+    streamInstances[0].isFailed = true;
+    streamInstances[0].isFinalized = true;
+    streamInstances[0].streamedLength = 0;
+
+    const result = ctrl.preparePayload({ text: fullText });
+    expect(result).toEqual({ text: fullText });
   });
 
   it("allows fallback delivery for second text segment after tool calls", () => {
@@ -141,6 +177,59 @@ describe("createTeamsReplyStreamController", () => {
     expect(result).toEqual({
       text: undefined,
       mediaUrl: "https://example.com/image.png",
+    });
+  });
+
+  describe("isStreamActive", () => {
+    it("returns false before any tokens arrive so typing keepalive can warm up", () => {
+      const ctrl = createController();
+      expect(ctrl.isStreamActive()).toBe(false);
+    });
+
+    it("returns false after the informative update but before tokens arrive", async () => {
+      const ctrl = createController();
+      await ctrl.onReplyStart();
+      expect(ctrl.isStreamActive()).toBe(false);
+    });
+
+    it("returns true while the stream is actively receiving tokens", () => {
+      const ctrl = createController();
+      ctrl.onPartialReply({ text: "Streaming tokens" });
+      expect(ctrl.isStreamActive()).toBe(true);
+    });
+
+    it("returns false after the stream is finalized between tool rounds", () => {
+      const ctrl = createController();
+
+      ctrl.onPartialReply({ text: "First segment" });
+      expect(ctrl.isStreamActive()).toBe(true);
+
+      // First segment complete: stream is finalized so the typing keepalive
+      // can resume during the tool chain that follows.
+      ctrl.preparePayload({ text: "First segment" });
+      expect(ctrl.isStreamActive()).toBe(false);
+    });
+
+    it("returns false when the stream has failed", () => {
+      const ctrl = createController();
+
+      ctrl.onPartialReply({ text: "First segment" });
+      expect(ctrl.isStreamActive()).toBe(true);
+
+      streamInstances[0].isFailed = true;
+      expect(ctrl.isStreamActive()).toBe(false);
+    });
+
+    it("returns false when conversationType is not personal", () => {
+      streamInstances.length = 0;
+      const ctrl = createTeamsReplyStreamController({
+        conversationType: "channel",
+        context: { sendActivity: vi.fn() } as never,
+        feedbackLoopEnabled: false,
+        log: { debug: vi.fn() } as never,
+      });
+      ctrl.onPartialReply({ text: "anything" });
+      expect(ctrl.isStreamActive()).toBe(false);
     });
   });
 });

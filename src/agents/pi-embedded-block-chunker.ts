@@ -95,6 +95,15 @@ function findSafeNewlineBreakIndex(params: {
   return -1;
 }
 
+function findFenceCloseLineStart(buffer: string, fence: FenceSpan, offset = 0): number {
+  const relativeFenceEnd = Math.min(buffer.length, Math.max(0, fence.end - offset));
+  if (relativeFenceEnd <= 0) {
+    return -1;
+  }
+  const lastNewline = buffer.lastIndexOf("\n", relativeFenceEnd - 1);
+  return lastNewline >= 0 ? lastNewline + 1 : -1;
+}
+
 export class EmbeddedBlockChunker {
   #buffer = "";
   readonly #chunking: BlockReplyChunking;
@@ -363,6 +372,17 @@ export class EmbeddedBlockChunker {
       }
       const fence = findFenceSpanAt(fenceSpans, offset + maxChars);
       if (fence) {
+        const closeFenceStart = findFenceCloseLineStart(buffer, fence, offset);
+        if (closeFenceStart >= minChars && closeFenceStart < maxChars) {
+          return {
+            index: closeFenceStart,
+            fenceSplit: {
+              closeFenceLine: `${fence.indent}${fence.marker}`,
+              reopenFenceLine: fence.openLine,
+              fence,
+            },
+          };
+        }
         return {
           index: maxChars,
           fenceSplit: {

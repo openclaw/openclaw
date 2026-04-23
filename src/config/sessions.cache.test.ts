@@ -1,7 +1,7 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import {
   clearSessionStoreCacheForTest,
   loadSessionStore,
@@ -26,24 +26,20 @@ function createSingleSessionStore(
 }
 
 describe("Session Store Cache", () => {
-  let fixtureRoot = "";
-  let caseId = 0;
+  const suiteRootTracker = createSuiteTempRootTracker({ prefix: "session-cache-test-" });
   let testDir: string;
   let storePath: string;
 
-  beforeAll(() => {
-    fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "session-cache-test-"));
+  beforeAll(async () => {
+    await suiteRootTracker.setup();
   });
 
-  afterAll(() => {
-    if (fixtureRoot) {
-      fs.rmSync(fixtureRoot, { recursive: true, force: true });
-    }
+  afterAll(async () => {
+    await suiteRootTracker.cleanup();
   });
 
-  beforeEach(() => {
-    testDir = path.join(fixtureRoot, `case-${caseId++}`);
-    fs.mkdirSync(testDir, { recursive: true });
+  beforeEach(async () => {
+    testDir = await suiteRootTracker.make("case");
     storePath = path.join(testDir, "sessions.json");
 
     // Clear cache before each test
@@ -90,7 +86,7 @@ describe("Session Store Cache", () => {
   it("should not allow cached session mutations to leak across loads", async () => {
     const testStore = createSingleSessionStore(
       createSessionEntry({
-        cliSessionIds: { openai: "sess-1" },
+        origin: { provider: "openai" },
         skillsSnapshot: {
           prompt: "skills",
           skills: [{ name: "alpha" }],
@@ -101,13 +97,13 @@ describe("Session Store Cache", () => {
     await saveSessionStore(storePath, testStore);
 
     const loaded1 = loadSessionStore(storePath);
-    loaded1["session:1"].cliSessionIds = { openai: "mutated" };
+    loaded1["session:1"].origin = { provider: "mutated" };
     if (loaded1["session:1"].skillsSnapshot?.skills?.length) {
       loaded1["session:1"].skillsSnapshot.skills[0].name = "mutated";
     }
 
     const loaded2 = loadSessionStore(storePath);
-    expect(loaded2["session:1"].cliSessionIds?.openai).toBe("sess-1");
+    expect(loaded2["session:1"].origin?.provider).toBe("openai");
     expect(loaded2["session:1"].skillsSnapshot?.skills?.[0]?.name).toBe("alpha");
   });
 

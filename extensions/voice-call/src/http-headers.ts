@@ -1,10 +1,13 @@
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+
 export type HttpHeaderMap = Record<string, string | string[] | undefined>;
 
 export function getHeader(headers: HttpHeaderMap, name: string): string | undefined {
-  const target = name.toLowerCase();
+  const target = normalizeLowercaseStringOrEmpty(name);
   const direct = headers[target];
   const value =
-    direct ?? Object.entries(headers).find(([key]) => key.toLowerCase() === target)?.[1];
+    direct ??
+    Object.entries(headers).find(([key]) => normalizeLowercaseStringOrEmpty(key) === target)?.[1];
   if (Array.isArray(value)) {
     return value[0];
   }

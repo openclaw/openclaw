@@ -38,4 +38,18 @@ describe("model-selection plugin runtime normalization", () => {
       },
     });
   });
+
+  it("keeps static normalization while skipping plugin runtime hooks when disabled", async () => {
+    const { parseModelRef } = await import("./model-selection.js");
+
+    expect(
+      parseModelRef("gemini-3.1-pro", "google", {
+        allowPluginNormalization: false,
+      }),
+    ).toEqual({
+      provider: "google",
+      model: "gemini-3.1-pro-preview",
+    });
+    expect(normalizeProviderModelIdWithPluginMock).not.toHaveBeenCalled();
+  });
 });

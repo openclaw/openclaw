@@ -1,3 +1,4 @@
+import { normalizeOptionalString, resolvePrimaryStringValue } from "../shared/string-coerce.js";
 import type { AgentModelConfig } from "./types.agents-shared.js";
 
 type AgentModelListLike = {
@@ -6,15 +7,7 @@ type AgentModelListLike = {
 };
 
 export function resolveAgentModelPrimaryValue(model?: AgentModelConfig): string | undefined {
-  if (typeof model === "string") {
-    const trimmed = model.trim();
-    return trimmed || undefined;
-  }
-  if (!model || typeof model !== "object") {
-    return undefined;
-  }
-  const primary = model.primary?.trim();
-  return primary || undefined;
+  return resolvePrimaryStringValue(model);
 }
 
 export function resolveAgentModelFallbackValues(model?: AgentModelConfig): string[] {
@@ -26,7 +19,7 @@ export function resolveAgentModelFallbackValues(model?: AgentModelConfig): strin
 
 export function toAgentModelListLike(model?: AgentModelConfig): AgentModelListLike | undefined {
   if (typeof model === "string") {
-    const primary = model.trim();
+    const primary = normalizeOptionalString(model);
     return primary ? { primary } : undefined;
   }
   if (!model || typeof model !== "object") {

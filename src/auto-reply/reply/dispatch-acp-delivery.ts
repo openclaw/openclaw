@@ -1,13 +1,46 @@
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
-import { runMessageAction } from "../../infra/outbound/message-action-runner.js";
-import { maybeApplyTtsToPayload } from "../../tts/tts.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
+import { resolveStatusTtsSnapshot } from "../../tts/status-config.js";
+import { resolveConfiguredTtsMode } from "../../tts/tts-config.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
-import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
-import { routeReply } from "./route-reply.js";
+import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
+
+let routeReplyRuntimePromise: Promise<typeof import("./route-reply.runtime.js")> | null = null;
+let dispatchAcpTtsRuntimePromise: Promise<typeof import("./dispatch-acp-tts.runtime.js")> | null =
+  null;
+let channelPluginRuntimePromise: Promise<typeof import("../../channels/plugins/index.js")> | null =
+  null;
+let messageActionRuntimePromise: Promise<
+  typeof import("../../infra/outbound/message-action-runner.js")
+> | null = null;
+
+function loadRouteReplyRuntime() {
+  routeReplyRuntimePromise ??= import("./route-reply.runtime.js");
+  return routeReplyRuntimePromise;
+}
+
+function loadDispatchAcpTtsRuntime() {
+  dispatchAcpTtsRuntimePromise ??= import("./dispatch-acp-tts.runtime.js");
+  return dispatchAcpTtsRuntimePromise;
+}
+
+function loadChannelPluginRuntime() {
+  channelPluginRuntimePromise ??= import("../../channels/plugins/index.js");
+  return channelPluginRuntimePromise;
+}
+
+function loadMessageActionRuntime() {
+  messageActionRuntimePromise ??= import("../../infra/outbound/message-action-runner.js");
+  return messageActionRuntimePromise;
+}
 
 export type AcpDispatchDeliveryMeta = {
   toolCallId?: string;
@@ -23,23 +56,69 @@ type ToolMessageHandle = {
   messageId: string;
 };
 
-function normalizeDeliveryChannel(value: string | undefined): string | undefined {
-  const normalized = value?.trim().toLowerCase();
-  return normalized || undefined;
-}
-
-function shouldTreatDeliveredTextAsVisible(params: {
+async function shouldTreatDeliveredTextAsVisible(params: {
   channel: string | undefined;
   kind: ReplyDispatchKind;
   text: string | undefined;
-}): boolean {
-  if (!params.text?.trim()) {
+  routed: boolean;
+}): Promise<boolean> {
+  if (!normalizeOptionalString(params.text)) {
     return false;
   }
   if (params.kind === "final") {
     return true;
   }
-  return normalizeDeliveryChannel(params.channel) === "telegram";
+  const channelId = normalizeOptionalLowercaseString(params.channel);
+  if (!channelId) {
+    return false;
+  }
+  const { getChannelPlugin } = await loadChannelPluginRuntime();
+  const outbound = getChannelPlugin(channelId)?.outbound;
+  const visibilityOverride =
+    outbound?.shouldTreatDeliveredTextAsVisible ?? outbound?.shouldTreatRoutedTextAsVisible;
+  if (visibilityOverride) {
+    return visibilityOverride({
+      kind: params.kind,
+      text: params.text,
+    });
+  }
+  return false;
+}
+
+async function maybeApplyAcpTts(params: {
+  payload: ReplyPayload;
+  cfg: OpenClawConfig;
+  channel?: string;
+  kind: ReplyDispatchKind;
+  inboundAudio: boolean;
+  ttsAuto?: TtsAutoMode;
+  skipTts?: boolean;
+}): Promise<ReplyPayload> {
+  if (params.skipTts) {
+    return params.payload;
+  }
+  const ttsStatus = resolveStatusTtsSnapshot({
+    cfg: params.cfg,
+    sessionAuto: params.ttsAuto,
+  });
+  if (!ttsStatus) {
+    return params.payload;
+  }
+  if (ttsStatus.autoMode === "inbound" && !params.inboundAudio) {
+    return params.payload;
+  }
+  if (params.kind !== "final" && resolveConfiguredTtsMode(params.cfg) === "final") {
+    return params.payload;
+  }
+  const { maybeApplyTtsToPayload } = await loadDispatchAcpTtsRuntime();
+  return await maybeApplyTtsToPayload({
+    payload: params.payload,
+    cfg: params.cfg,
+    channel: params.channel,
+    kind: params.kind,
+    inboundAudio: params.inboundAudio,
+    ttsAuto: params.ttsAuto,
+  });
 }
 
 type AcpDispatchDeliveryState = {
@@ -101,8 +180,16 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     },
     toolMessageByCallId: new Map(),
   };
-  const directChannel = normalizeDeliveryChannel(params.ctx.Provider ?? params.ctx.Surface);
-  const routedChannel = normalizeDeliveryChannel(params.originatingChannel);
+  const directChannel = normalizeOptionalLowercaseString(params.ctx.Provider ?? params.ctx.Surface);
+  const routedChannel = normalizeOptionalLowercaseString(params.originatingChannel);
+  const explicitAccountId = normalizeOptionalString(params.ctx.AccountId);
+  const resolvedAccountId =
+    explicitAccountId ??
+    normalizeOptionalString(
+      (
+        params.cfg.channels as Record<string, { defaultAccount?: unknown } | undefined> | undefined
+      )?.[routedChannel ?? directChannel ?? ""]?.defaultAccount,
+    );
 
   const settleDirectVisibleText = async () => {
     if (state.settledDirectVisibleText || state.queuedDirectVisibleTextDeliveries === 0) {
@@ -125,7 +212,18 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       return;
     }
     state.startedReplyLifecycle = true;
-    await params.onReplyStart?.();
+    // When delivery is suppressed (e.g. sendPolicy: "deny"), do not fire the
+    // onReplyStart callback — channels wire it to typing indicators / lifecycle
+    // notifications that should not leak outbound events while the session is
+    // under a deny policy. See #53328.
+    if (params.suppressUserDelivery) {
+      return;
+    }
+    void Promise.resolve(params.onReplyStart?.()).catch((error) => {
+      logVerbose(
+        `dispatch-acp: reply lifecycle start failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    });
   };
 
   const tryEditToolMessage = async (
@@ -139,12 +237,13 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     if (!handle?.messageId) {
       return false;
     }
-    const message = payload.text?.trim();
+    const message = normalizeOptionalString(payload.text);
     if (!message) {
       return false;
     }
 
     try {
+      const { runMessageAction } = await loadMessageActionRuntime();
       await runMessageAction({
         cfg: params.cfg,
         action: "edit",
@@ -157,12 +256,13 @@ export function createAcpDispatchDeliveryCoordinator(params: {
           message,
         },
         sessionKey: params.ctx.SessionKey,
+        requesterAccountId: params.ctx.AccountId,
       });
       state.routedCounts.tool += 1;
       return true;
     } catch (error) {
       logVerbose(
-        `dispatch-acp: tool message edit failed for ${toolCallId}: ${error instanceof Error ? error.message : String(error)}`,
+        `dispatch-acp: tool message edit failed for ${toolCallId}: ${formatErrorMessage(error)}`,
       );
       return false;
     }
@@ -173,7 +273,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     payload: ReplyPayload,
     meta?: AcpDispatchDeliveryMeta,
   ): Promise<boolean> => {
-    if (kind === "block" && payload.text?.trim()) {
+    if (kind === "block" && normalizeOptionalString(payload.text)) {
       if (state.accumulatedBlockText.length > 0) {
         state.accumulatedBlockText += "\n";
       }
@@ -189,19 +289,18 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       return false;
     }
 
-    const ttsPayload = meta?.skipTts
-      ? payload
-      : await maybeApplyTtsToPayload({
-          payload,
-          cfg: params.cfg,
-          channel: params.ttsChannel,
-          kind,
-          inboundAudio: params.inboundAudio,
-          ttsAuto: params.sessionTtsAuto,
-        });
+    const ttsPayload = await maybeApplyAcpTts({
+      payload,
+      cfg: params.cfg,
+      channel: params.ttsChannel,
+      kind,
+      inboundAudio: params.inboundAudio,
+      ttsAuto: params.sessionTtsAuto,
+      skipTts: meta?.skipTts,
+    });
 
     if (params.shouldRouteToOriginating && params.originatingChannel && params.originatingTo) {
-      const toolCallId = meta?.toolCallId?.trim();
+      const toolCallId = normalizeOptionalString(meta?.toolCallId);
       if (kind === "tool" && meta?.allowEdit === true && toolCallId) {
         const edited = await tryEditToolMessage(ttsPayload, toolCallId);
         if (edited) {
@@ -209,17 +308,23 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         }
       }
 
-      const tracksVisibleText = shouldTreatDeliveredTextAsVisible({
+      const tracksVisibleText = await shouldTreatDeliveredTextAsVisible({
         channel: routedChannel,
         kind,
         text: ttsPayload.text,
+        routed: true,
       });
+      const { routeReply } = await loadRouteReplyRuntime();
       const result = await routeReply({
         payload: ttsPayload,
         channel: params.originatingChannel,
         to: params.originatingTo,
         sessionKey: params.ctx.SessionKey,
-        accountId: params.ctx.AccountId,
+        accountId: resolvedAccountId,
+        requesterSenderId: params.ctx.SenderId,
+        requesterSenderName: params.ctx.SenderName,
+        requesterSenderUsername: params.ctx.SenderUsername,
+        requesterSenderE164: params.ctx.SenderE164,
         threadId: params.ctx.MessageThreadId,
         cfg: params.cfg,
       });
@@ -235,7 +340,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       if (kind === "tool" && meta?.toolCallId && result.messageId) {
         state.toolMessageByCallId.set(meta.toolCallId, {
           channel: params.originatingChannel,
-          accountId: params.ctx.AccountId,
+          accountId: resolvedAccountId,
           to: params.originatingTo,
           ...(params.ctx.MessageThreadId != null ? { threadId: params.ctx.MessageThreadId } : {}),
           messageId: result.messageId,
@@ -251,10 +356,11 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       return true;
     }
 
-    const tracksVisibleText = shouldTreatDeliveredTextAsVisible({
+    const tracksVisibleText = await shouldTreatDeliveredTextAsVisible({
       channel: directChannel,
       kind,
       text: ttsPayload.text,
+      routed: false,
     });
     const delivered =
       kind === "tool"

@@ -1,5 +1,7 @@
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+
 function isGenericCompactionCancelledReason(reason: string): boolean {
-  const normalized = reason.trim().toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(reason);
   return normalized === "compaction cancelled" || normalized === "error: compaction cancelled";
 }
 
@@ -14,7 +16,7 @@ export function resolveCompactionFailureReason(params: {
 }
 
 export function classifyCompactionReason(reason?: string): string {
-  const text = (reason ?? "").trim().toLowerCase();
+  const text = normalizeLowercaseStringOrEmpty(reason);
   if (!text) {
     return "unknown";
   }

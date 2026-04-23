@@ -3,6 +3,24 @@ import path from "node:path";
 import type { RequestPermissionRequest } from "@agentclientprotocol/sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
+
+vi.mock("../secrets/provider-env-vars.js", () => ({
+  listKnownProviderAuthEnvVarNames: () => ["OPENAI_API_KEY", "GITHUB_TOKEN", "HF_TOKEN"],
+  omitEnvKeysCaseInsensitive: (
+    baseEnv: NodeJS.ProcessEnv,
+    keys: Iterable<string>,
+  ): NodeJS.ProcessEnv => {
+    const denied = new Set([...keys].map((key) => key.trim().toUpperCase()).filter(Boolean));
+    const env = { ...baseEnv };
+    for (const key of Object.keys(env)) {
+      if (denied.has(key.toUpperCase())) {
+        delete env[key];
+      }
+    }
+    return env;
+  },
+}));
+
 import {
   buildAcpClientStripKeys,
   resolveAcpClientSpawnEnv,
@@ -272,26 +290,21 @@ describe("resolveAcpClientSpawnInvocation", () => {
     expect(resolved.windowsHide).toBe(true);
   });
 
-  it("falls back to shell mode for unresolved wrappers on windows", async () => {
+  it("fails closed for unresolved wrappers on windows", async () => {
     const dir = await createTempDir();
     const shimPath = path.join(dir, "openclaw.cmd");
     await writeFile(shimPath, "@ECHO off\r\necho wrapper\r\n", "utf8");
 
-    const resolved = resolveAcpClientSpawnInvocation(
-      { serverCommand: shimPath, serverArgs: ["acp"] },
-      {
-        platform: "win32",
-        env: { PATH: dir, PATHEXT: ".CMD;.EXE;.BAT" },
-        execPath: "C:\\node\\node.exe",
-      },
-    );
-
-    expect(resolved).toEqual({
-      command: shimPath,
-      args: ["acp"],
-      shell: true,
-      windowsHide: undefined,
-    });
+    expect(() =>
+      resolveAcpClientSpawnInvocation(
+        { serverCommand: shimPath, serverArgs: ["acp"] },
+        {
+          platform: "win32",
+          env: { PATH: dir, PATHEXT: ".CMD;.EXE;.BAT" },
+          execPath: "C:\\node\\node.exe",
+        },
+      ),
+    ).toThrow(/without shell execution/);
   });
 });
 
@@ -357,6 +370,86 @@ describe("resolvePermissionRequest", () => {
     expect(prompt).toHaveBeenCalledWith("write", "write: /tmp/pwn");
     expect(res).toEqual({ outcome: { outcome: "selected", optionId: "allow" } });
   });
+
+  it("prompts for exec-capable tools even when the action looks readonly", async () => {
+    const prompt = vi.fn(async () => true);
+    const res = await resolvePermissionRequest(
+      makePermissionRequest({
+        toolCall: {
+          toolCallId: "tool-process-list",
+          title: "process: list",
+          status: "pending",
+          rawInput: {
+            name: "process",
+            action: "list",
+          },
+        },
+      }),
+      { prompt, log: () => {} },
+    );
+    expect(prompt).toHaveBeenCalledTimes(1);
+    expect(prompt).toHaveBeenCalledWith("process", "process: list");
+    expect(res).toEqual({ outcome: { outcome: "selected", optionId: "allow" } });
+  });
+
+  it("prompts for control-plane tools even on readonly-like actions", async () => {
+    const prompt = vi.fn(async () => true);
+    const res = await resolvePermissionRequest(
+      makePermissionRequest({
+        toolCall: {
+          toolCallId: "tool-gateway-status",
+          title: "gateway: status",
+          status: "pending",
+          rawInput: {
+            name: "gateway",
+            action: "status",
+          },
+        },
+      }),
+      { prompt, log: () => {} },
+    );
+    expect(prompt).toHaveBeenCalledTimes(1);
+    expect(prompt).toHaveBeenCalledWith("gateway", "gateway: status");
+    expect(res).toEqual({ outcome: { outcome: "selected", optionId: "allow" } });
+  });
+
+  it.each([
+    {
+      toolName: "cron",
+      title: "cron: status",
+      rawInput: {
+        name: "cron",
+        action: "status",
+      },
+    },
+    {
+      toolName: "nodes",
+      title: "nodes: list",
+      rawInput: {
+        name: "nodes",
+        action: "list",
+      },
+    },
+  ] as const)(
+    "prompts for shared owner-only backstop tools: $toolName",
+    async ({ toolName, title, rawInput }) => {
+      const prompt = vi.fn(async () => true);
+      const res = await resolvePermissionRequest(
+        makePermissionRequest({
+          toolCall: {
+            toolCallId: `tool-${toolName}`,
+            title,
+            status: "pending",
+            rawInput,
+          },
+        }),
+        { prompt, log: () => {} },
+      );
+      expect(prompt).toHaveBeenCalledTimes(1);
+      expect(prompt).toHaveBeenCalledWith(toolName, title);
+      expect(res).toEqual({ outcome: { outcome: "selected", optionId: "allow" } });
+    },
+  );
 
   it("auto-approves search without prompting", async () => {
     const prompt = vi.fn(async () => true);
@@ -646,7 +739,7 @@ describe("resolvePermissionRequest", () => {
 
     expect(prompt).toHaveBeenCalledWith("exec", 'exec: [permission] Allow "safe"? (y/N) \\nnext');
     expect(log).toHaveBeenCalledWith(
-      '\n[permission requested] exec: [permission] Allow "safe"? (y/N) \\nnext (exec) [other]',
+      '\n[permission requested] exec: [permission] Allow "safe"? (y/N) \\nnext (exec) [exec_capable]',
     );
     expect(res).toEqual({ outcome: { outcome: "selected", optionId: "reject" } });
   });

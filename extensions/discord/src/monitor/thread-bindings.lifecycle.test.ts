@@ -41,8 +41,8 @@ const hoisted = vi.hoisted(() => {
   };
 });
 
-vi.mock("../send.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../send.js")>();
+vi.mock("../send.js", async () => {
+  const actual = await vi.importActual<typeof import("../send.js")>("../send.js");
   return {
     ...actual,
     addRoleDiscord: vi.fn(),
@@ -259,6 +259,7 @@ describe("thread binding lifecycle", () => {
     try {
       const manager = createThreadBindingManager({
         accountId: "default",
+        cfg: {} as OpenClawConfig,
         persist: false,
         enableSweeper: false,
         idleTimeoutMs: 60_000,
@@ -298,6 +299,7 @@ describe("thread binding lifecycle", () => {
     try {
       const manager = createThreadBindingManager({
         accountId: "default",
+        cfg: {} as OpenClawConfig,
         persist: false,
         enableSweeper: false,
         idleTimeoutMs: 0,
@@ -453,6 +455,62 @@ describe("thread binding lifecycle", () => {
           defaultMaxAgeMs: manager.getMaxAgeMs(),
         }),
       ).toBe(new Date("2026-02-20T13:30:00.000Z").getTime());
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("preserves explicit lifecycle windows when rebinding the same thread", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-02-20T10:00:00.000Z"));
+      const manager = createThreadBindingManager({
+        accountId: "default",
+        persist: false,
+        enableSweeper: false,
+        idleTimeoutMs: 24 * 60 * 60 * 1000,
+        maxAgeMs: 0,
+      });
+
+      await manager.bindTarget({
+        threadId: "thread-1",
+        channelId: "parent-1",
+        targetKind: "subagent",
+        targetSessionKey: "agent:main:subagent:child",
+        agentId: "main",
+        webhookId: "wh-1",
+        webhookToken: "tok-1",
+      });
+
+      setThreadBindingIdleTimeoutBySessionKey({
+        accountId: "default",
+        targetSessionKey: "agent:main:subagent:child",
+        idleTimeoutMs: 2 * 60 * 60 * 1000,
+      });
+      setThreadBindingMaxAgeBySessionKey({
+        accountId: "default",
+        targetSessionKey: "agent:main:subagent:child",
+        maxAgeMs: 3 * 60 * 60 * 1000,
+      });
+
+      vi.setSystemTime(new Date("2026-02-20T10:30:00.000Z"));
+      const rebound = await manager.bindTarget({
+        threadId: "thread-1",
+        channelId: "parent-1",
+        targetKind: "subagent",
+        targetSessionKey: "agent:main:subagent:child",
+        webhookId: "wh-1",
+        webhookToken: "tok-1",
+      });
+
+      expect(rebound).toMatchObject({
+        idleTimeoutMs: 2 * 60 * 60 * 1000,
+        maxAgeMs: 3 * 60 * 60 * 1000,
+      });
+      expect(requireBinding(manager, "thread-1")).toMatchObject({
+        idleTimeoutMs: 2 * 60 * 60 * 1000,
+        maxAgeMs: 3 * 60 * 60 * 1000,
+      });
     } finally {
       vi.useRealTimers();
     }
@@ -926,6 +984,105 @@ describe("thread binding lifecycle", () => {
     expect(usedTokenNew).toBe(true);
   });
 
+  it("normalizes prefixed parentConversationId before creating child thread bindings", async () => {
+    createThreadBindingManager({
+      accountId: "default",
+      persist: false,
+      enableSweeper: false,
+      idleTimeoutMs: 24 * 60 * 60 * 1000,
+      maxAgeMs: 0,
+    });
+
+    hoisted.restGet.mockClear();
+    hoisted.createThreadDiscord.mockClear();
+    hoisted.createThreadDiscord.mockResolvedValueOnce({ id: "thread-created-parent-normalized" });
+
+    const bound = await getSessionBindingService().bind({
+      targetSessionKey: "agent:codex:acp:test-parent-normalized",
+      targetKind: "session",
+      conversation: {
+        channel: "discord",
+        accountId: "default",
+        conversationId: "channel:1491611525914558668",
+        parentConversationId: "channel:1491611525914558667",
+      },
+      placement: "child",
+      metadata: {
+        agentId: "codex",
+        label: "Codex ACP bind test",
+        threadName: "Codex ACP bind test",
+      },
+    });
+
+    expect(bound).toMatchObject({
+      conversation: {
+        channel: "discord",
+        accountId: "default",
+        conversationId: "thread-created-parent-normalized",
+      },
+    });
+    expect(hoisted.createThreadDiscord).toHaveBeenCalledWith(
+      "1491611525914558667",
+      expect.objectContaining({ autoArchiveMinutes: 60 }),
+      expect.objectContaining({ accountId: "default" }),
+    );
+    expect(hoisted.restGet).not.toHaveBeenCalled();
+  });
+
+  it("preserves prefixed current channel conversation ids as binding keys", async () => {
+    createThreadBindingManager({
+      accountId: "default",
+      persist: false,
+      enableSweeper: false,
+      idleTimeoutMs: 24 * 60 * 60 * 1000,
+      maxAgeMs: 0,
+    });
+
+    hoisted.restGet.mockClear();
+    hoisted.restPost.mockClear();
+
+    const service = getSessionBindingService();
+    const bound = await service.bind({
+      targetSessionKey: "agent:codex:acp:current-channel",
+      targetKind: "session",
+      conversation: {
+        channel: "discord",
+        accountId: "default",
+        conversationId: "channel:1491611525914558667",
+      },
+      placement: "current",
+      metadata: {
+        agentId: "codex",
+      },
+    });
+
+    expect(bound).toMatchObject({
+      conversation: {
+        channel: "discord",
+        accountId: "default",
+        conversationId: "channel:1491611525914558667",
+      },
+    });
+    expect(
+      service.resolveByConversation({
+        channel: "discord",
+        accountId: "default",
+        conversationId: "channel:1491611525914558667",
+      }),
+    ).toMatchObject({
+      targetSessionKey: "agent:codex:acp:current-channel",
+    });
+    expect(
+      service.resolveByConversation({
+        channel: "discord",
+        accountId: "default",
+        conversationId: "1491611525914558667",
+      }),
+    ).toBeNull();
+    expect(hoisted.restGet).not.toHaveBeenCalled();
+    expect(hoisted.restPost).not.toHaveBeenCalled();
+  });
+
   it("binds current Discord DMs as direct conversation bindings", async () => {
     createThreadBindingManager({
       accountId: "default",
@@ -972,6 +1129,67 @@ describe("thread binding lifecycle", () => {
       conversation: {
         conversationId: "user:1177378744822943744",
       },
+    });
+    expect(hoisted.restGet).not.toHaveBeenCalled();
+    expect(hoisted.restPost).not.toHaveBeenCalled();
+  });
+
+  it("preserves direct-binding metadata when rebinding the same conversation", async () => {
+    createThreadBindingManager({
+      accountId: "default",
+      persist: false,
+      enableSweeper: false,
+      idleTimeoutMs: 24 * 60 * 60 * 1000,
+      maxAgeMs: 0,
+    });
+
+    await getSessionBindingService().bind({
+      targetSessionKey: "plugin-binding:openclaw-codex-app-server:dm",
+      targetKind: "session",
+      conversation: {
+        channel: "discord",
+        accountId: "default",
+        conversationId: "user:1177378744822943744",
+      },
+      placement: "current",
+      metadata: {
+        pluginBindingOwner: "plugin",
+        pluginId: "openclaw-codex-app-server",
+        pluginRoot: "/Users/huntharo/github/openclaw-app-server",
+        agentId: "codex",
+        boundBy: "system",
+      },
+    });
+
+    await getSessionBindingService().bind({
+      targetSessionKey: "plugin-binding:openclaw-codex-app-server:dm",
+      targetKind: "session",
+      conversation: {
+        channel: "discord",
+        accountId: "default",
+        conversationId: "user:1177378744822943744",
+      },
+      placement: "current",
+      metadata: {
+        label: "codex-dm",
+      },
+    });
+
+    expect(
+      getSessionBindingService().resolveByConversation({
+        channel: "discord",
+        accountId: "default",
+        conversationId: "user:1177378744822943744",
+      }),
+    ).toMatchObject({
+      metadata: expect.objectContaining({
+        pluginBindingOwner: "plugin",
+        pluginId: "openclaw-codex-app-server",
+        pluginRoot: "/Users/huntharo/github/openclaw-app-server",
+        agentId: "codex",
+        boundBy: "system",
+        label: "codex-dm",
+      }),
     });
     expect(hoisted.restGet).not.toHaveBeenCalled();
     expect(hoisted.restPost).not.toHaveBeenCalled();
@@ -1566,7 +1784,7 @@ describe("thread binding lifecycle", () => {
       ).toBeUndefined();
       expect(
         resolveThreadBindingInactivityExpiresAt({
-          record: disabled!,
+          record: disabled,
           defaultIdleTimeoutMs: manager.getIdleTimeoutMs(),
         }),
       ).toBeUndefined();

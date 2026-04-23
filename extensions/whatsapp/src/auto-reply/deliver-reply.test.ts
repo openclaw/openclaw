@@ -1,11 +1,13 @@
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { sleep } from "openclaw/plugin-sdk/text-runtime";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { loadWebMedia } from "../media.js";
 import type { WebInboundMsg } from "./types.js";
 
-vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
+vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/runtime-env")>(
+    "openclaw/plugin-sdk/runtime-env",
+  );
   return {
     ...actual,
     shouldLogVerbose: vi.fn(() => true),
@@ -13,8 +15,10 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/text-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/text-runtime")>();
+vi.mock("openclaw/plugin-sdk/text-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/text-runtime")>(
+    "openclaw/plugin-sdk/text-runtime",
+  );
   return {
     ...actual,
     sleep: vi.fn(async () => {}),
@@ -86,7 +90,6 @@ async function expectReplySuppressed(replyResult: { text: string; isReasoning?: 
 
 describe("deliverWebReply", () => {
   beforeAll(async () => {
-    vi.resetModules();
     ({ deliverWebReply } = await import("./deliver-reply.js"));
   });
 
@@ -96,6 +99,10 @@ describe("deliverWebReply", () => {
 
   it("suppresses payloads that start with reasoning prefix text", async () => {
     await expectReplySuppressed({ text: "   \n Reasoning:\n_hidden_" });
+  });
+
+  it("suppresses payloads that start with a quoted reasoning prefix", async () => {
+    await expectReplySuppressed({ text: " > Reasoning:\n> _hidden_" });
   });
 
   it("does not suppress messages that mention Reasoning: mid-text", async () => {

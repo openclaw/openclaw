@@ -54,7 +54,7 @@ vi.mock("./runtime-api.js", () => {
     isRequestBodyLimitError: vi.fn(() => false),
     logTypingFailure: vi.fn(),
     formatInboundFromLabel: vi.fn(() => ""),
-    rawDataToString: vi.fn((value: unknown) => String(value ?? "")),
+    rawDataToString: vi.fn((value: unknown) => (typeof value === "string" ? value : "")),
     readRequestBodyWithLimit: mockState.readRequestBodyWithLimit,
     resolveThreadSessionKeys: vi.fn((params: { baseSessionKey: string }) => ({
       sessionKey: params.baseSessionKey,
@@ -86,8 +86,8 @@ vi.mock("../runtime.js", () => ({
   }),
 }));
 
-vi.mock("./client.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./client.js")>();
+vi.mock("./client.js", async () => {
+  const actual = await vi.importActual<typeof import("./client.js")>("./client.js");
   return {
     ...actual,
     createMattermostClient: mockState.createMattermostClient,
@@ -235,5 +235,30 @@ describe("slash-http cfg threading", () => {
         accountId: "default",
       }),
     );
+  });
+
+  it("does not rely on Set.has for command token validation", async () => {
+    const commandTokens = new Set(["valid-token"]);
+    const hasSpy = vi.fn(() => {
+      throw new Error("Set.has should not be used for slash token validation");
+    });
+    Object.defineProperty(commandTokens, "has", {
+      value: hasSpy,
+      configurable: true,
+    });
+
+    const handler = createSlashCommandHttpHandler({
+      account: accountFixture,
+      cfg: {} as OpenClawConfig,
+      runtime: {} as RuntimeEnv,
+      commandTokens,
+    });
+    const response = createResponse();
+
+    await handler(createRequest(), response.res);
+
+    expect(response.res.statusCode).toBe(200);
+    expect(response.getBody()).toContain("Processing");
+    expect(hasSpy).not.toHaveBeenCalled();
   });
 });

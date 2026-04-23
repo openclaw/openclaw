@@ -369,6 +369,9 @@ Important behavior:
   reachable right now
 - runtime adapters decide which transport shapes they actually support at
   execution time
+- embedded Pi exposes configured MCP tools in normal `coding` and `messaging`
+  tool profiles; `minimal` still hides them, and `tools.deny: ["bundle-mcp"]`
+  disables them explicitly
 
 ## Saved MCP server definitions
 
@@ -381,6 +384,13 @@ Commands:
 - `openclaw mcp show [name]`
 - `openclaw mcp set <name> <json>`
 - `openclaw mcp unset <name>`
+
+Notes:
+
+- `list` sorts server names.
+- `show` without a name prints the full configured MCP server object.
+- `set` expects one JSON object value on the command line.
+- `unset` fails if the named server does not exist.
 
 Examples:
 
@@ -421,14 +431,21 @@ Launches a local child process and communicates over stdin/stdout.
 | `env`                      | Extra environment variables       |
 | `cwd` / `workingDirectory` | Working directory for the process |
 
+#### Stdio env safety filter
+
+OpenClaw rejects interpreter-startup env keys that can alter how a stdio MCP server starts up before the first RPC, even if they appear in a server's `env` block. Blocked keys include `NODE_OPTIONS`, `PYTHONSTARTUP`, `PYTHONPATH`, `PERL5OPT`, `RUBYOPT`, `SHELLOPTS`, `PS4`, and similar runtime-control variables. Startup rejects these with a configuration error so they cannot inject an implicit prelude, swap the interpreter, or enable a debugger against the stdio process. Ordinary credential, proxy, and server-specific env vars (`GITHUB_TOKEN`, `HTTP_PROXY`, custom `*_API_KEY`, etc.) are unaffected.
+
+If your MCP server genuinely needs one of the blocked variables, set it on the gateway host process instead of under the stdio server's `env`.
+
 ### SSE / HTTP transport
 
 Connects to a remote MCP server over HTTP Server-Sent Events.
 
-| Field     | Description                                                      |
-| --------- | ---------------------------------------------------------------- |
-| `url`     | HTTP or HTTPS URL of the remote server (required)                |
-| `headers` | Optional key-value map of HTTP headers (for example auth tokens) |
+| Field                 | Description                                                      |
+| --------------------- | ---------------------------------------------------------------- |
+| `url`                 | HTTP or HTTPS URL of the remote server (required)                |
+| `headers`             | Optional key-value map of HTTP headers (for example auth tokens) |
+| `connectionTimeoutMs` | Per-server connection timeout in ms (optional)                   |
 
 Example:
 
@@ -450,6 +467,36 @@ Example:
 Sensitive values in `url` (userinfo) and `headers` are redacted in logs and
 status output.
 
+### Streamable HTTP transport
+
+`streamable-http` is an additional transport option alongside `sse` and `stdio`. It uses HTTP streaming for bidirectional communication with remote MCP servers.
+
+| Field                 | Description                                                                            |
+| --------------------- | -------------------------------------------------------------------------------------- |
+| `url`                 | HTTP or HTTPS URL of the remote server (required)                                      |
+| `transport`           | Set to `"streamable-http"` to select this transport; when omitted, OpenClaw uses `sse` |
+| `headers`             | Optional key-value map of HTTP headers (for example auth tokens)                       |
+| `connectionTimeoutMs` | Per-server connection timeout in ms (optional)                                         |
+
+Example:
+
+```json
+{
+  "mcp": {
+    "servers": {
+      "streaming-tools": {
+        "url": "https://mcp.example.com/stream",
+        "transport": "streamable-http",
+        "connectionTimeoutMs": 10000,
+        "headers": {
+          "Authorization": "Bearer <token>"
+        }
+      }
+    }
+  }
+}
+```
+
 These commands manage saved config only. They do not start the channel bridge,
 open a live MCP client session, or prove the target server is reachable.
 
@@ -462,6 +509,6 @@ Current limits:
 - conversation discovery depends on existing Gateway session route metadata
 - no generic push protocol beyond the Claude-specific adapter
 - no message edit or react tools yet
-- HTTP/SSE transport connects to a single remote server; no multiplexed upstream yet
+- HTTP/SSE/streamable-http transport connects to a single remote server; no multiplexed upstream yet
 - `permissions_list_open` only includes approvals observed while the bridge is
   connected

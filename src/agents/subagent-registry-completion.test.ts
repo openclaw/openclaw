@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { SUBAGENT_ENDED_REASON_COMPLETE } from "./subagent-lifecycle-events.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
@@ -40,11 +40,46 @@ describe("emitSubagentEndedHookOnce", () => {
     };
   };
 
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
+    mod = await import("./subagent-registry-completion.js");
+  });
+
+  beforeEach(() => {
     lifecycleMocks.getGlobalHookRunner.mockClear();
     lifecycleMocks.runSubagentEnded.mockClear();
-    mod = await import("./subagent-registry-completion.js");
+  });
+
+  it("treats timing differences as different only after both outcomes have timing", () => {
+    expect(
+      mod.runOutcomesEqual(
+        { status: "timeout", startedAt: 1_000, endedAt: 2_000, elapsedMs: 1_000 },
+        { status: "timeout", startedAt: 1_000, endedAt: 2_500, elapsedMs: 1_500 },
+      ),
+    ).toBe(false);
+    expect(
+      mod.runOutcomesEqual(
+        { status: "error", error: "boom", startedAt: 1_000, endedAt: 2_000, elapsedMs: 1_000 },
+        { status: "error", error: "boom", startedAt: 1_000, endedAt: 2_000, elapsedMs: 1_000 },
+      ),
+    ).toBe(true);
+    expect(
+      mod.runOutcomesEqual(
+        { status: "ok", startedAt: 1_000, endedAt: 2_000, elapsedMs: 1_000 },
+        { status: "ok" },
+      ),
+    ).toBe(true);
+    expect(
+      mod.shouldUpdateRunOutcome(
+        { status: "ok" },
+        { status: "ok", startedAt: 1_000, endedAt: 2_000, elapsedMs: 1_000 },
+      ),
+    ).toBe(true);
+    expect(
+      mod.shouldUpdateRunOutcome(
+        { status: "ok", startedAt: 1_000, endedAt: 2_000, elapsedMs: 1_000 },
+        { status: "ok" },
+      ),
+    ).toBe(false);
   });
 
   it("records ended hook marker even when no subagent_ended hooks are registered", async () => {

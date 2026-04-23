@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 
 const hoisted = vi.hoisted(() => {
@@ -10,20 +10,23 @@ const hoisted = vi.hoisted(() => {
   };
 });
 
-vi.mock("../../config/sessions.js", () => ({
+vi.mock("../../config/sessions/store-load.js", () => ({
   loadSessionStore: (storePath: string) => hoisted.loadSessionStoreMock(storePath),
+}));
+
+vi.mock("../../config/sessions/targets.js", () => ({
   resolveAllAgentSessionStoreTargets: (cfg: OpenClawConfig, opts: unknown) =>
     hoisted.resolveAllAgentSessionStoreTargetsMock(cfg, opts),
-  resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
-  updateSessionStore: vi.fn(),
 }));
 let listAcpSessionEntries: typeof import("./session-meta.js").listAcpSessionEntries;
 
 describe("listAcpSessionEntries", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    vi.clearAllMocks();
+  beforeAll(async () => {
     ({ listAcpSessionEntries } = await import("./session-meta.js"));
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
   });
 
   it("reads ACP sessions from resolved configured store targets", async () => {

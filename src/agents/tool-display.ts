@@ -1,5 +1,5 @@
-import SHARED_TOOL_DISPLAY_JSON from "../../apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json" with { type: "json" };
 import { redactToolDetail } from "../logging/redact.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { shortenHomeInString } from "../utils.js";
 import {
   defaultTitle,
@@ -7,19 +7,8 @@ import {
   formatDetailKey,
   normalizeToolName,
   resolveToolVerbAndDetailForArgs,
-  type ToolDisplaySpec as ToolDisplaySpecBase,
 } from "./tool-display-common.js";
-import TOOL_DISPLAY_OVERRIDES_JSON from "./tool-display-overrides.json" with { type: "json" };
-
-type ToolDisplaySpec = ToolDisplaySpecBase & {
-  emoji?: string;
-};
-
-type ToolDisplayConfig = {
-  version?: number;
-  fallback?: ToolDisplaySpec;
-  tools?: Record<string, ToolDisplaySpec>;
-};
+import { TOOL_DISPLAY_CONFIG } from "./tool-display-config.js";
 
 export type ToolDisplay = {
   name: string;
@@ -30,11 +19,8 @@ export type ToolDisplay = {
   detail?: string;
 };
 
-const SHARED_TOOL_DISPLAY_CONFIG = SHARED_TOOL_DISPLAY_JSON as ToolDisplayConfig;
-const TOOL_DISPLAY_OVERRIDES = TOOL_DISPLAY_OVERRIDES_JSON as ToolDisplayConfig;
-const FALLBACK = TOOL_DISPLAY_OVERRIDES.fallback ??
-  SHARED_TOOL_DISPLAY_CONFIG.fallback ?? { emoji: "🧩" };
-const TOOL_MAP = Object.assign({}, SHARED_TOOL_DISPLAY_CONFIG.tools, TOOL_DISPLAY_OVERRIDES.tools);
+const FALLBACK = TOOL_DISPLAY_CONFIG.fallback ?? { emoji: "🧩" };
+const TOOL_MAP = TOOL_DISPLAY_CONFIG.tools ?? {};
 const DETAIL_LABEL_OVERRIDES: Record<string, string> = {
   agentId: "agent",
   sessionKey: "session",
@@ -61,7 +47,7 @@ export function resolveToolDisplay(params: {
   meta?: string;
 }): ToolDisplay {
   const name = normalizeToolName(params.name);
-  const key = name.toLowerCase();
+  const key = normalizeLowercaseStringOrEmpty(name);
   const spec = TOOL_MAP[key];
   const emoji = spec?.emoji ?? FALLBACK.emoji ?? "🧩";
   const title = spec?.title ?? defaultTitle(name);

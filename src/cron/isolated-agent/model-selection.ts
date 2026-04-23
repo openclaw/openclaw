@@ -1,14 +1,15 @@
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
-import { loadModelCatalog } from "../../agents/model-catalog.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { CronJob } from "../types.js";
 import {
+  DEFAULT_MODEL,
+  DEFAULT_PROVIDER,
   getModelRefStatus,
+  loadModelCatalog,
   normalizeModelSelection,
   resolveAllowedModelRef,
   resolveConfiguredModelRef,
   resolveHooksGmailModel,
-} from "../../agents/model-selection.js";
-import type { OpenClawConfig } from "../../config/config.js";
-import type { CronJob } from "../types.js";
+} from "./run-model-selection.runtime.js";
 
 type CronSessionModelOverrides = {
   modelOverride?: string;
@@ -19,6 +20,7 @@ export type ResolveCronModelSelectionParams = {
   cfg: OpenClawConfig;
   cfgWithAgentDefaults: OpenClawConfig;
   agentConfigOverride?: {
+    model?: unknown;
     subagents?: {
       model?: unknown;
     };
@@ -61,6 +63,7 @@ export async function resolveCronModelSelection(
 
   const subagentModelRaw =
     normalizeModelSelection(params.agentConfigOverride?.subagents?.model) ??
+    normalizeModelSelection(params.agentConfigOverride?.model) ??
     normalizeModelSelection(params.cfg.agents?.defaults?.subagents?.model);
   if (subagentModelRaw) {
     const resolvedSubagent = resolveAllowedModelRef({

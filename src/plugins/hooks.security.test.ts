@@ -7,7 +7,7 @@ import type { PluginHookBeforeToolCallResult, PluginHookMessageSendingResult } f
 const toolEvent = { toolName: "bash", params: { command: "echo hello" } };
 const toolCtx = { toolName: "bash" };
 const messageEvent = { to: "user-1", content: "hello" };
-const messageCtx = { channelId: "telegram" };
+const messageCtx = { channelId: "forum" };
 
 async function runBeforeToolCallWithHooks(
   registry: PluginRegistry,
@@ -162,6 +162,32 @@ describe("before_tool_call terminal block semantics", () => {
 
     expect(result?.block).toBe(true);
     expect(low).not.toHaveBeenCalled();
+  });
+
+  it("throws for before_tool_call when configured as fail-closed", async () => {
+    addStaticTestHooks(registry, {
+      hookName: "before_tool_call",
+      hooks: [
+        {
+          pluginId: "failing",
+          result: {},
+          priority: 100,
+          handler: () => {
+            throw new Error("boom");
+          },
+        },
+      ],
+    });
+    const runner = createHookRunner(registry, {
+      catchErrors: true,
+      failurePolicyByHook: {
+        before_tool_call: "fail-closed",
+      },
+    });
+
+    await expect(runner.runBeforeToolCall(toolEvent, toolCtx)).rejects.toThrow(
+      "before_tool_call handler from failing failed: Error: boom",
+    );
   });
 });
 

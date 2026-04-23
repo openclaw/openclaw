@@ -15,7 +15,7 @@ This is the easiest "no terminal on the server" path: Railway runs the Gateway f
 2. Add a **Volume** mounted at `/data`.
 3. Set the required **Variables** (at least `OPENCLAW_GATEWAY_PORT` and `OPENCLAW_GATEWAY_TOKEN`).
 4. Enable **HTTP Proxy** on port `8080`.
-5. Open `https://<your-railway-domain>/openclaw` and connect using your `OPENCLAW_GATEWAY_TOKEN`.
+5. Open `https://<your-railway-domain>/openclaw` and connect using the configured shared secret. This template uses `OPENCLAW_GATEWAY_TOKEN` by default; if you replace it with password auth, use that password instead.
 
 ## One-click deploy
 
@@ -37,7 +37,9 @@ Then open:
 ## What you get
 
 - Hosted OpenClaw Gateway + Control UI
-- Persistent storage via Railway Volume (`/data`) so config/credentials/workspace survive redeploys
+- Persistent storage via Railway Volume (`/data`) so `openclaw.json`,
+  per-agent `auth-profiles.json`, channel/provider state, sessions, and
+  workspace survive redeploys
 
 ## Required Railway settings
 
@@ -72,13 +74,14 @@ Use the Control UI at `/openclaw` or run `openclaw onboard` via Railway's shell 
 
 ## Backups & migration
 
-Export your configuration and workspace:
+Export your state, config, auth profiles, and workspace:
 
 ```bash
 openclaw backup create
 ```
 
-This creates a portable backup archive you can restore on any OpenClaw host. See [Backup](/cli/backup) for details.
+This creates a portable backup archive with OpenClaw state plus any configured
+workspace. See [Backup](/cli/backup) for details.
 
 ## Next steps
 

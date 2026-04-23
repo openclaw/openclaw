@@ -254,6 +254,6 @@ export async function createZalo(
   options?: ConstructorParameters<ZaloCtor>[0],
 ): Promise<InstanceType<ZaloCtor>> {
   const zcaJs = await loadZcaJsRuntime();
-  const Zalo = zcaJs.Zalo as unknown as ZaloCtor;
+  const Zalo = zcaJs.Zalo as ZaloCtor;
   return new Zalo(options);
 }

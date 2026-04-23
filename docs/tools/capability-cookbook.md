@@ -56,7 +56,7 @@ Core:
 - request/response types
 - provider registry + resolution
 - fallback behavior
-- config schema and labels/help
+- config schema plus propagated `title` / `description` docs metadata on nested object, wildcard, array-item, and composition nodes
 - runtime helper surface
 
 Vendor plugin:
@@ -95,7 +95,7 @@ Image generation follows the standard shape:
 1. core defines `ImageGenerationProvider`
 2. core exposes `registerImageGenerationProvider(...)`
 3. core exposes `runtime.imageGeneration.generate(...)`
-4. the `openai` and `google` plugins register vendor-backed implementations
+4. the `openai`, `google`, `fal`, and `minimax` plugins register vendor-backed implementations
 5. future vendors can register the same contract without changing channels/tools
 
 The config key is separate from vision-analysis routing:

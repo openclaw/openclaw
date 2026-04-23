@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 const DEFAULT_SYSTEM_ROOT = "C:\\Windows";
 const DEFAULT_PROGRAM_FILES = "C:\\Program Files";
@@ -102,7 +103,7 @@ function getWindowsRegExeCandidates(env: Record<string, string | undefined>): re
     if (!root) {
       continue;
     }
-    const key = root.toLowerCase();
+    const key = normalizeLowercaseStringOrEmpty(root);
     if (seen.has(key)) {
       continue;
     }
@@ -239,7 +240,7 @@ export function getWindowsProgramFilesRoots(
     if (!value) {
       continue;
     }
-    const key = value.toLowerCase();
+    const key = normalizeLowercaseStringOrEmpty(value);
     if (seen.has(key)) {
       continue;
     }

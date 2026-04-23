@@ -31,19 +31,36 @@ export type PendingPairingRequestResult<TPending> = {
   created: boolean;
 };
 
-export async function upsertPendingPairingRequest<TPending extends { requestId: string }>(params: {
+export async function reconcilePendingPairingRequests<
+  TPending extends { requestId: string },
+  TIncoming,
+>(params: {
   pendingById: Record<string, TPending>;
-  isExisting: (pending: TPending) => boolean;
-  createRequest: (isRepair: boolean) => TPending;
-  isRepair: boolean;
+  existing: readonly TPending[];
+  incoming: TIncoming;
+  canRefreshSingle: (existing: TPending, incoming: TIncoming) => boolean;
+  refreshSingle: (existing: TPending, incoming: TIncoming) => TPending;
+  buildReplacement: (params: { existing: readonly TPending[]; incoming: TIncoming }) => TPending;
   persist: () => Promise<void>;
 }): Promise<PendingPairingRequestResult<TPending>> {
-  const existing = Object.values(params.pendingById).find(params.isExisting);
-  if (existing) {
-    return { status: "pending", request: existing, created: false };
+  if (
+    params.existing.length === 1 &&
+    params.canRefreshSingle(params.existing[0], params.incoming)
+  ) {
+    const refreshed = params.refreshSingle(params.existing[0], params.incoming);
+    params.pendingById[refreshed.requestId] = refreshed;
+    await params.persist();
+    return { status: "pending", request: refreshed, created: false };
   }
 
-  const request = params.createRequest(params.isRepair);
+  for (const existing of params.existing) {
+    delete params.pendingById[existing.requestId];
+  }
+
+  const request = params.buildReplacement({
+    existing: params.existing,
+    incoming: params.incoming,
+  });
   params.pendingById[request.requestId] = request;
   await params.persist();
   return { status: "pending", request, created: true };

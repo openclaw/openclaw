@@ -11,8 +11,10 @@ import {
 let monitorWebInbox: typeof import("./inbound.js").monitorWebInbox;
 const inboundLoggerInfoMock = vi.hoisted(() => vi.fn());
 
-vi.mock("openclaw/plugin-sdk/text-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/text-runtime")>();
+vi.mock("openclaw/plugin-sdk/text-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/text-runtime")>(
+    "openclaw/plugin-sdk/text-runtime",
+  );
   return {
     ...actual,
     getChildLogger: () => ({
@@ -34,6 +36,7 @@ describe("web monitor inbox", () => {
 
   async function openMonitor(onMessage = vi.fn()) {
     return await monitorWebInbox({
+      cfg: mockLoadConfig() as never,
       verbose: false,
       accountId: DEFAULT_ACCOUNT_ID,
       authDir: getAuthDir(),
@@ -83,7 +86,7 @@ describe("web monitor inbox", () => {
         fromMe: false,
       },
     ]);
-    expect(sock.sendPresenceUpdate).toHaveBeenCalledWith("available");
+    expect(sock.sendPresenceUpdate).toHaveBeenNthCalledWith(1, "available");
     await listener.close();
   });
 

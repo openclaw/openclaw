@@ -22,6 +22,13 @@ type DiscordChannelLogEntry = {
   channelName?: string;
   note?: string;
 };
+type DiscordChannelResolvedGroup = {
+  target: string;
+  aliases: string[];
+  guildName?: string;
+  channelName?: string;
+  note?: string;
+};
 type DiscordUserLogEntry = {
   input: string;
   id?: string;
@@ -37,13 +44,31 @@ function formatResolutionLogDetails(base: string, details: Array<string | undefi
   return nonEmpty.length > 0 ? `${base} (${nonEmpty.join("; ")})` : base;
 }
 
-function formatDiscordChannelResolved(entry: DiscordChannelLogEntry): string {
-  const target = entry.channelId ? `${entry.guildId}/${entry.channelId}` : entry.guildId;
-  const base = `${entry.input}→${target}`;
-  return formatResolutionLogDetails(base, [
+function formatResolvedBase(input: string, target: string | undefined): string {
+  if (!target) {
+    return input;
+  }
+  return input === target ? input : `${input}→${target}`;
+}
+
+function formatAliasSummary(aliases: string[]): string | undefined {
+  if (aliases.length === 0) {
+    return undefined;
+  }
+  const preview = aliases.slice(0, 3).join(", ");
+  if (aliases.length <= 3) {
+    return preview;
+  }
+  return `${preview}, +${aliases.length - 3} more`;
+}
+
+function formatDiscordChannelResolvedGroup(entry: DiscordChannelResolvedGroup): string {
+  const aliasSummary = formatAliasSummary(entry.aliases);
+  return formatResolutionLogDetails(entry.target, [
     entry.guildName ? `guild:${entry.guildName}` : undefined,
     entry.channelName ? `channel:${entry.channelName}` : undefined,
     entry.note,
+    aliasSummary ? `aliases:${aliasSummary}` : undefined,
   ]);
 }
 
@@ -66,7 +91,7 @@ function formatDiscordChannelUnresolved(entry: DiscordChannelLogEntry): string {
 function formatDiscordUserResolved(entry: DiscordUserLogEntry): string {
   const displayName = entry.name?.trim();
   const target = displayName || entry.id;
-  const base = `${entry.input}→${target}`;
+  const base = formatResolvedBase(entry.input, target);
   return formatResolutionLogDetails(base, [
     displayName && entry.id ? `id:${entry.id}` : undefined,
     entry.guildName ? `guild:${entry.guildName}` : undefined,
@@ -100,7 +125,7 @@ function toAllowlistEntries(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) {
     return undefined;
   }
-  return value.map((entry) => String(entry).trim()).filter((entry) => Boolean(entry));
+  return normalizeStringEntries(value);
 }
 
 function hasGuildEntries(value: GuildEntries): boolean {
@@ -149,7 +174,7 @@ async function resolveGuildEntriesByChannelAllowlist(params: {
     });
     const sourceByInput = new Map(entries.map((entry) => [entry.input, entry]));
     const nextGuilds = { ...params.guildEntries };
-    const mapping: string[] = [];
+    const mappingByTarget = new Map<string, DiscordChannelResolvedGroup>();
     const unresolved: string[] = [];
     for (const entry of resolved) {
       const source = sourceByInput.get(entry.input);
@@ -161,7 +186,29 @@ async function resolveGuildEntriesByChannelAllowlist(params: {
         unresolved.push(formatDiscordChannelUnresolved(entry));
         continue;
       }
-      mapping.push(formatDiscordChannelResolved(entry));
+      const target = entry.channelId ? `${entry.guildId}/${entry.channelId}` : entry.guildId;
+      const existingGroup =
+        mappingByTarget.get(target) ??
+        ({
+          target,
+          aliases: [],
+          guildName: entry.guildName,
+          channelName: entry.channelName,
+          note: entry.note,
+        } satisfies DiscordChannelResolvedGroup);
+      if (entry.input !== target && !existingGroup.aliases.includes(entry.input)) {
+        existingGroup.aliases.push(entry.input);
+      }
+      if (!existingGroup.guildName && entry.guildName) {
+        existingGroup.guildName = entry.guildName;
+      }
+      if (!existingGroup.channelName && entry.channelName) {
+        existingGroup.channelName = entry.channelName;
+      }
+      if (!existingGroup.note && entry.note) {
+        existingGroup.note = entry.note;
+      }
+      mappingByTarget.set(target, existingGroup);
       const existing = nextGuilds[entry.guildId] ?? {};
       const mergedChannels = {
         ...sourceGuild.channels,
@@ -190,6 +237,9 @@ async function resolveGuildEntriesByChannelAllowlist(params: {
         }
       }
     }
+    const mapping = [...mappingByTarget.values()].map((group) =>
+      formatDiscordChannelResolvedGroup(group),
+    );
     summarizeMapping("discord channels", mapping, unresolved, params.runtime);
     return nextGuilds;
   } catch (err) {

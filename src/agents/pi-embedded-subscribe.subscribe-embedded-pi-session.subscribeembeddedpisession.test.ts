@@ -12,6 +12,11 @@ import {
 import { subscribeEmbeddedPiSession } from "./pi-embedded-subscribe.js";
 
 describe("subscribeEmbeddedPiSession", () => {
+  async function flushBlockReplyCallbacks(): Promise<void> {
+    await Promise.resolve();
+    await Promise.resolve();
+  }
+
   function createAgentEventHarness(options?: { runId?: string; sessionKey?: string }) {
     const { session, emit } = createStubSessionHarness();
     const onAgentEvent = vi.fn();
@@ -132,10 +137,9 @@ describe("subscribeEmbeddedPiSession", () => {
       } as AssistantMessage;
 
       emit({ type: "message_end", message: assistantMessage });
+      await flushBlockReplyCallbacks();
 
-      await vi.waitFor(() => {
-        expect(onBlockReply).toHaveBeenCalledTimes(1);
-      });
+      expect(onBlockReply).toHaveBeenCalledTimes(1);
       expect(onBlockReply.mock.calls[0][0].text).toBe("Final answer");
 
       const streamTexts = onReasoningStream.mock.calls
@@ -149,6 +153,136 @@ describe("subscribeEmbeddedPiSession", () => {
       ]);
     },
   );
+
+  it("suppresses assistant streaming while deterministic exec approval delivery is pending", async () => {
+    let resolveToolResult: (() => void) | undefined;
+    const onToolResult = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveToolResult = resolve;
+        }),
+    );
+    const onPartialReply = vi.fn();
+
+    const { emit } = createSubscribedHarness({
+      runId: "run",
+      onToolResult,
+      onPartialReply,
+    });
+
+    emit({
+      type: "tool_execution_start",
+      toolName: "exec",
+      toolCallId: "tool-1",
+      args: { command: "echo hi" },
+    });
+    emit({
+      type: "tool_execution_end",
+      toolName: "exec",
+      toolCallId: "tool-1",
+      isError: false,
+      result: {
+        details: {
+          status: "approval-pending",
+          approvalId: "12345678-1234-1234-1234-123456789012",
+          approvalSlug: "12345678",
+          host: "gateway",
+          command: "echo hi",
+        },
+      },
+    });
+
+    emit({
+      type: "message_start",
+      message: { role: "assistant" },
+    });
+    emitAssistantTextDelta(emit, "After tool");
+
+    await vi.waitFor(() => {
+      expect(onToolResult).toHaveBeenCalledTimes(1);
+    });
+    expect(onPartialReply).not.toHaveBeenCalled();
+
+    expect(resolveToolResult).toBeTypeOf("function");
+    resolveToolResult?.();
+    await Promise.resolve();
+    expect(onPartialReply).not.toHaveBeenCalled();
+  });
+
+  it("blocks local MEDIA urls from case-variant tool names in verbose output", async () => {
+    const onToolResult = vi.fn();
+    const { emit } = createSubscribedHarness({
+      runId: "run",
+      onToolResult,
+      verboseLevel: "full",
+      builtinToolNames: new Set(["web_search"]),
+    });
+
+    emitToolRun({
+      emit,
+      toolName: "Web_Search",
+      toolCallId: "tool-1",
+      isError: false,
+      result: {
+        content: [{ type: "text", text: "Fetched page\nMEDIA:/tmp/secret.png" }],
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(onToolResult).toHaveBeenCalled();
+    });
+    const payload = onToolResult.mock.calls.at(-1)?.[0] as
+      | { text?: string; mediaUrls?: string[] }
+      | undefined;
+    expect(payload?.text ?? "").toContain("Fetched page");
+    expect(payload?.mediaUrls).toBeUndefined();
+  });
+
+  it("attaches media from internal completion events even when assistant omits MEDIA lines", async () => {
+    const onBlockReply = vi.fn();
+    const { emit } = createSubscribedHarness({
+      runId: "run",
+      onBlockReply,
+      blockReplyBreak: "message_end",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "music_generation",
+          childSessionKey: "music_generate:task-123",
+          announceType: "music generation task",
+          taskLabel: "lobster boss theme",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "Generated 1 track.\nMEDIA:/tmp/lobster-boss.mp3",
+          mediaUrls: ["/tmp/lobster-boss.mp3"],
+          replyInstruction: "Reply normally.",
+        },
+      ],
+    });
+
+    emit({
+      type: "message_start",
+      message: { role: "assistant" },
+    });
+    emitAssistantTextDelta(emit, "Here it is.");
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Here it is." }],
+      },
+    });
+    emit({ type: "agent_end" });
+    await flushBlockReplyCallbacks();
+
+    expect(onBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "Here it is.",
+        mediaUrls: ["/tmp/lobster-boss.mp3"],
+      }),
+    );
+  });
+
   it.each(THINKING_TAG_CASES)(
     "suppresses <%s> blocks across chunk boundaries",
     async ({ open, close }) => {
@@ -176,10 +310,9 @@ describe("subscribeEmbeddedPiSession", () => {
         message: { role: "assistant" },
         assistantMessageEvent: { type: "text_end" },
       });
+      await flushBlockReplyCallbacks();
 
-      await vi.waitFor(() => {
-        expect(onBlockReply.mock.calls.length).toBeGreaterThan(0);
-      });
+      expect(onBlockReply.mock.calls.length).toBeGreaterThan(0);
       const payloadTexts = onBlockReply.mock.calls
         .map((call) => call[0]?.text)
         .filter((value): value is string => typeof value === "string");
@@ -313,7 +446,7 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(payloads).toHaveLength(1);
   });
 
-  it("skips agent events when cleaned text rewinds mid-stream", () => {
+  it("emits one cleaned media snapshot when a streamed MEDIA line resolves to caption text", () => {
     const { emit, onAgentEvent } = createAgentEventHarness();
 
     emit({ type: "message_start", message: { role: "assistant" } });
@@ -322,14 +455,25 @@ describe("subscribeEmbeddedPiSession", () => {
 
     const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
     expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.text).toBe("MEDIA:");
+    expect(payloads[0]?.text).toBe("Caption");
+    expect(payloads[0]?.delta).toBe("Caption");
+    expect(payloads[0]?.replace).toBeUndefined();
+    expect(payloads[0]?.mediaUrls).toEqual(["https://example.com/a.png"]);
   });
 
-  it("emits agent events when media arrives without text", () => {
+  it("emits agent events when media-only text is finalized", () => {
     const { emit, onAgentEvent } = createAgentEventHarness();
 
     emit({ type: "message_start", message: { role: "assistant" } });
     emitAssistantTextDelta(emit, "MEDIA: https://example.com/a.png");
+    emit({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: {
+        type: "text_end",
+        content: "MEDIA: https://example.com/a.png",
+      },
+    });
 
     const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
     expect(payloads).toHaveLength(1);
@@ -439,5 +583,77 @@ describe("subscribeEmbeddedPiSession", () => {
 
     expect(lifecycleError).toBeDefined();
     expect(lifecycleError?.data?.error).toContain("API rate limit reached");
+  });
+
+  it("preserves replay-invalid lifecycle truth across compaction retries after mutating tools", () => {
+    const { session, emit } = createStubSessionHarness();
+    const onAgentEvent = vi.fn();
+
+    const subscription = subscribeEmbeddedPiSession({
+      session,
+      runId: "run-replay-invalid-compaction",
+      onAgentEvent,
+      sessionKey: "test-session",
+    });
+
+    emitToolRun({
+      emit,
+      toolName: "edit",
+      toolCallId: "edit-1",
+      args: {
+        file_path: "/tmp/demo.txt",
+        old_string: "before",
+        new_string: "after",
+      },
+      isError: false,
+      result: { ok: true },
+    });
+    emit({ type: "compaction_end", willRetry: true, result: { summary: "compacted" } });
+    emit({ type: "agent_end" });
+
+    expect(subscription.getReplayState()).toEqual({
+      replayInvalid: true,
+      hadPotentialSideEffects: true,
+    });
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads).toContainEqual(
+      expect.objectContaining({
+        phase: "end",
+        livenessState: "abandoned",
+        replayInvalid: true,
+      }),
+    );
+  });
+
+  it("preserves deterministic side-effect liveness across compaction retries", () => {
+    const { session, emit } = createStubSessionHarness();
+    const onAgentEvent = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session,
+      runId: "run-cron-side-effect-compaction",
+      onAgentEvent,
+      sessionKey: "test-session",
+    });
+
+    emitToolRun({
+      emit,
+      toolName: "cron",
+      toolCallId: "cron-1",
+      args: { action: "add", job: { name: "reminder" } },
+      isError: false,
+      result: { details: { status: "ok" } },
+    });
+    emit({ type: "compaction_end", willRetry: true, result: { summary: "compacted" } });
+    emit({ type: "agent_end" });
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads).toContainEqual(
+      expect.objectContaining({
+        phase: "end",
+        livenessState: "working",
+        replayInvalid: true,
+      }),
+    );
   });
 });

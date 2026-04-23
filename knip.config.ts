@@ -17,6 +17,15 @@ const rootEntries = [
   "src/plugin-sdk/*.ts!",
 ] as const;
 
+const bundledPluginEntries = [
+  "index.ts!",
+  "setup-entry.ts!",
+  "{api,contract-api,helper-api,runtime-api,light-runtime-api,update-offset-runtime-api,channel-plugin-api,provider-plugin-api,setup-api}.ts!",
+  "subagent-hooks-api.ts!",
+  "src/{api,runtime-api,light-runtime-api,update-offset-runtime-api,channel-plugin-api,provider-plugin-api,doctor-contract,setup-surface}.ts!",
+  "src/subagent-hooks-api.ts!",
+] as const;
+
 const config = {
   ignoreFiles: [
     "scripts/**",
@@ -24,18 +33,24 @@ const config = {
     "src/test-utils/**",
     "**/test-helpers/**",
     "**/test-fixtures/**",
+    "**/test-support/**",
     "**/live-*.ts",
     "**/test-*.ts",
+    "**/vitest*.{ts,mjs}",
     "**/*test-helpers.ts",
     "**/*test-fixtures.ts",
     "**/*test-harness.ts",
     "**/*test-utils.ts",
+    "**/*test-support.ts",
+    "**/*test-shared.ts",
     "**/*mocks.ts",
     "**/*.e2e-mocks.ts",
     "**/*.e2e-*.ts",
+    "**/*.fixture-test-support.ts",
     "**/*.harness.ts",
     "**/*.job-fixtures.ts",
     "**/*.mock-harness.ts",
+    "**/*.menu-test-support.ts",
     "**/*.suite-helpers.ts",
     "**/*.test-setup.ts",
     "**/job-fixtures.ts",
@@ -48,6 +63,7 @@ const config = {
     "**/*.fixtures.ts",
     "**/*.mocks.ts",
     "**/*.mocks.shared.ts",
+    "**/*.route-test-support.ts",
     "**/*.shared-test.ts",
     "**/*.suite.ts",
     "**/*.test-runtime.ts",
@@ -77,6 +93,7 @@ const config = {
   workspaces: {
     ".": {
       entry: rootEntries,
+      ignoreDependencies: ["@openclaw/*"],
       project: [
         "src/**/*.ts!",
         "scripts/**/*.{js,mjs,cjs,ts,mts,cts}!",
@@ -93,7 +110,9 @@ const config = {
       project: ["index.js!", "scripts/**/*.js!"],
     },
     [`${BUNDLED_PLUGIN_ROOT_DIR}/*`]: {
-      entry: ["index.ts!"],
+      // Bundled plugins often load their public surface via string specifiers in
+      // `index.ts` contracts, so Knip needs these convention-based entry files.
+      entry: bundledPluginEntries,
       project: ["index.ts!", "src/**/*.ts!"],
       ignoreDependencies: ["openclaw"],
     },

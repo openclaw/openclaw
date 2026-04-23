@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../format.ts";
 import type { IMessageStatus } from "../types.ts";
 import { renderChannelConfigSection } from "./channels.config.ts";
@@ -22,26 +23,31 @@ export function renderIMessageCard(params: {
     subtitle: "macOS bridge status and channel configuration.",
     accountCountLabel,
     statusRows: [
-      { label: "Configured", value: formatNullableBoolean(configured) },
-      { label: "Running", value: imessage?.running ? "Yes" : "No" },
+      { label: t("common.configured"), value: formatNullableBoolean(configured) },
+      { label: t("common.running"), value: imessage?.running ? t("common.yes") : t("common.no") },
       {
-        label: "Last start",
-        value: imessage?.lastStartAt ? formatRelativeTimestamp(imessage.lastStartAt) : "n/a",
+        label: t("common.lastStart"),
+        value: imessage?.lastStartAt
+          ? formatRelativeTimestamp(imessage.lastStartAt)
+          : t("common.na"),
       },
       {
-        label: "Last probe",
-        value: imessage?.lastProbeAt ? formatRelativeTimestamp(imessage.lastProbeAt) : "n/a",
+        label: t("common.lastProbe"),
+        value: imessage?.lastProbeAt
+          ? formatRelativeTimestamp(imessage.lastProbeAt)
+          : t("common.na"),
       },
     ],
     lastError: imessage?.lastError,
     secondaryCallout: imessage?.probe
       ? html`<div class="callout" style="margin-top: 12px;">
-          Probe ${imessage.probe.ok ? "ok" : "failed"} · ${imessage.probe.error ?? ""}
+          ${imessage.probe.ok ? t("common.probeOk") : t("common.probeFailed")} ·
+          ${imessage.probe.error ?? ""}
         </div>`
       : nothing,
     configSection: renderChannelConfigSection({ channelId: "imessage", props }),
     footer: html`<div class="row" style="margin-top: 12px;">
-      <button class="btn" @click=${() => props.onRefresh(true)}>Probe</button>
+      <button class="btn" @click=${() => props.onRefresh(true)}>${t("common.probe")}</button>
     </div>`,
   });
 }

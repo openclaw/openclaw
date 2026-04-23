@@ -1,10 +1,13 @@
 import type { ImageContent } from "@mariozechner/pi-ai";
+import type { ReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import type { CliSessionBinding } from "../../config/sessions.js";
 import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
 import type { CliBackendConfig } from "../../config/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { ResolvedCliBackend } from "../cli-backends.js";
+import type { SkillSnapshot } from "../skills.js";
 
 export type RunCliAgentParams = {
   sessionId: string;
@@ -20,6 +23,8 @@ export type RunCliAgentParams = {
   timeoutMs: number;
   runId: string;
   extraSystemPrompt?: string;
+  /** Static portion of extraSystemPrompt (excluding per-message inbound metadata) for session reuse hashing. */
+  extraSystemPromptStatic?: string;
   streamParams?: import("../command/types.js").AgentStreamParams;
   ownerNumbers?: string[];
   cliSessionId?: string;
@@ -28,21 +33,31 @@ export type RunCliAgentParams = {
   bootstrapPromptWarningSignaturesSeen?: string[];
   bootstrapPromptWarningSignature?: string;
   images?: ImageContent[];
+  imageOrder?: PromptImageOrderEntry[];
+  skillsSnapshot?: SkillSnapshot;
+  messageProvider?: string;
+  agentAccountId?: string;
+  senderIsOwner?: boolean;
+  abortSignal?: AbortSignal;
+  replyOperation?: ReplyOperation;
 };
 
 export type CliPreparedBackend = {
   backend: CliBackendConfig;
   cleanup?: () => Promise<void>;
   mcpConfigHash?: string;
+  mcpResumeHash?: string;
+  env?: Record<string, string>;
 };
 
 export type CliReusableSession = {
   sessionId?: string;
-  invalidatedReason?: "auth-profile" | "system-prompt" | "mcp";
+  invalidatedReason?: "auth-profile" | "auth-epoch" | "system-prompt" | "mcp";
 };
 
 export type PreparedCliRunContext = {
   params: RunCliAgentParams;
+  effectiveAuthProfileId?: string;
   started: number;
   workspaceDir: string;
   backendResolved: ResolvedCliBackend;
@@ -54,5 +69,7 @@ export type PreparedCliRunContext = {
   systemPromptReport: SessionSystemPromptReport;
   bootstrapPromptWarningLines: string[];
   heartbeatPrompt?: string;
+  authEpoch?: string;
+  authEpochVersion: number;
   extraSystemPromptHash?: string;
 };

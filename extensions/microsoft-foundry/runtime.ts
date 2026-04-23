@@ -1,5 +1,7 @@
 import type { ProviderPrepareRuntimeAuthContext } from "openclaw/plugin-sdk/core";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { ensureAuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { getAccessTokenResultAsync } from "./cli.js";
 import {
   type CachedTokenEntry,
@@ -44,11 +46,9 @@ export async function prepareFoundryRuntimeAuth(ctx: ProviderPrepareRuntimeAuthC
     const credential = ctx.profileId ? authStore.profiles[ctx.profileId] : undefined;
     const metadata = credential?.type === "api_key" ? credential.metadata : undefined;
     const modelId =
-      typeof ctx.modelId === "string" && ctx.modelId.trim().length > 0
-        ? ctx.modelId.trim()
-        : typeof metadata?.modelId === "string" && metadata.modelId.trim().length > 0
-          ? metadata.modelId.trim()
-          : ctx.modelId;
+      normalizeOptionalString(ctx.modelId) ??
+      normalizeOptionalString(metadata?.modelId) ??
+      ctx.modelId;
     const activeModelNameHint = ctx.modelId === metadata?.modelId ? metadata?.modelName : undefined;
     const modelNameHint = resolveConfiguredModelNameHint(
       modelId,
@@ -61,9 +61,8 @@ export async function prepareFoundryRuntimeAuth(ctx: ProviderPrepareRuntimeAuthC
           ? ctx.model.api
           : undefined;
     const endpoint =
-      typeof metadata?.endpoint === "string" && metadata.endpoint.trim().length > 0
-        ? metadata.endpoint.trim()
-        : extractFoundryEndpoint(ctx.model.baseUrl ?? "");
+      normalizeOptionalString(metadata?.endpoint) ??
+      extractFoundryEndpoint(ctx.model.baseUrl ?? "");
     const baseUrl = endpoint
       ? buildFoundryProviderBaseUrl(endpoint, modelId, modelNameHint, configuredApi)
       : undefined;
@@ -95,7 +94,9 @@ export async function prepareFoundryRuntimeAuth(ctx: ProviderPrepareRuntimeAuthC
       ...(baseUrl ? { baseUrl } : {}),
     };
   } catch (err) {
-    const details = err instanceof Error ? err.message : String(err);
-    throw new Error(`Failed to refresh Azure Entra ID token via az CLI: ${details}`);
+    const details = formatErrorMessage(err);
+    throw new Error(`Failed to refresh Azure Entra ID token via az CLI: ${details}`, {
+      cause: err,
+    });
   }
 }

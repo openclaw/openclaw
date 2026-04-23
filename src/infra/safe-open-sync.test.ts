@@ -1,23 +1,14 @@
 import fs from "node:fs";
 import fsp from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { withTempDir } from "../test-helpers/temp-dir.js";
 import { openVerifiedFileSync } from "./safe-open-sync.js";
 
 type SafeOpenSyncFs = NonNullable<Parameters<typeof openVerifiedFileSync>[0]["ioFs"]>;
 type SafeOpenSyncLstatSync = SafeOpenSyncFs["lstatSync"];
 type SafeOpenSyncRealpathSync = SafeOpenSyncFs["realpathSync"];
 type SafeOpenSyncFstatSync = SafeOpenSyncFs["fstatSync"];
-
-async function withTempDir<T>(prefix: string, run: (dir: string) => Promise<T>): Promise<T> {
-  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), prefix));
-  try {
-    return await run(dir);
-  } finally {
-    await fsp.rm(dir, { recursive: true, force: true });
-  }
-}
 
 function mockStat(params: {
   isFile?: boolean;
@@ -56,7 +47,7 @@ async function expectOpenFailure(params: {
   setup: (root: string) => Promise<Parameters<typeof openVerifiedFileSync>[0]>;
   expectedReason: "path" | "validation" | "io";
 }): Promise<void> {
-  await withTempDir("openclaw-safe-open-", async (root) => {
+  await withTempDir({ prefix: "openclaw-safe-open-" }, async (root) => {
     const opened = openVerifiedFileSync(await params.setup(root));
     expect(opened.ok).toBe(false);
     if (!opened.ok) {
@@ -123,7 +114,7 @@ describe("openVerifiedFileSync", () => {
   });
 
   it("accepts directories when allowedType is directory", async () => {
-    await withTempDir("openclaw-safe-open-", async (root) => {
+    await withTempDir({ prefix: "openclaw-safe-open-" }, async (root) => {
       const targetDir = path.join(root, "nested");
       await fsp.mkdir(targetDir, { recursive: true });
 

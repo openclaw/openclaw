@@ -61,15 +61,18 @@ You will need to create a new application with a bot, add the bot to your server
     - `bot`
     - `applications.commands`
 
-    A **Bot Permissions** section will appear below. Enable:
+    A **Bot Permissions** section will appear below. Enable at least:
 
-    - View Channels
-    - Send Messages
-    - Read Message History
-    - Embed Links
-    - Attach Files
-    - Add Reactions (optional)
+    **General Permissions**
+      - View Channels
+    **Text Permissions**
+      - Send Messages
+      - Read Message History
+      - Embed Links
+      - Attach Files
+      - Add Reactions (optional)
 
+    This is the baseline set for normal text channels. If you plan to post in Discord threads, including forum or media channel workflows that create or continue a thread, also enable **Send Messages in Threads**.
     Copy the generated URL at the bottom, paste it into your browser, select your server, and click **Continue** to connect. You should now see your bot in the Discord server.
 
   </Step>
@@ -304,7 +307,7 @@ By default, components are single use. Set `components.reusable=true` to allow b
 
 To restrict who can click a button, set `allowedUsers` on that button (Discord user IDs, tags, or `*`). When configured, unmatched users receive an ephemeral denial.
 
-The `/model` and `/models` slash commands open an interactive model picker with provider and model dropdowns plus a Submit step. The picker reply is ephemeral and only the invoking user can use it.
+The `/model` and `/models` slash commands open an interactive model picker with provider and model dropdowns plus a Submit step. Unless `commands.modelsWrite=false`, `/models add` also supports adding a new provider/model entry from chat, and newly added models show up without restarting the gateway. The picker reply is ephemeral and only the invoking user can use it.
 
 File attachments:
 
@@ -520,13 +523,16 @@ Use `bindings[].match.roles` to route Discord guild members to different agents 
 
     Typical baseline permissions:
 
-    - View Channels
-    - Send Messages
-    - Read Message History
-    - Embed Links
-    - Attach Files
-    - Add Reactions (optional)
+    **General Permissions**
+      - View Channels
+    **Text Permissions**
+      - Send Messages
+      - Read Message History
+      - Embed Links
+      - Attach Files
+      - Add Reactions (optional)
 
+    This is the baseline set for normal text channels. If you plan to post in Discord threads, including forum or media channel workflows that create or continue a thread, also enable **Send Messages in Threads**.
     Avoid `Administrator` unless explicitly needed.
 
   </Accordion>
@@ -571,8 +577,14 @@ Default slash command settings:
     - `off` (default)
     - `first`
     - `all`
+    - `batched`
 
     Note: `off` disables implicit reply threading. Explicit `[[reply_to_*]]` tags are still honored.
+    `first` always attaches the implicit native reply reference to the first outbound Discord message for the turn.
+    `batched` only attaches Discord's implicit native reply reference when the
+    inbound turn was a debounced batch of multiple messages. This is useful
+    when you want native replies mainly for ambiguous bursty chats, not every
+    single-message turn.
 
     Message IDs are surfaced in context/history so agents can target specific messages.
 
@@ -587,6 +599,8 @@ Default slash command settings:
     - `channels.discord.streamMode` is a legacy alias and is auto-migrated.
     - `partial` edits a single preview message as tokens arrive.
     - `block` emits draft-sized chunks (use `draftChunk` to tune size and breakpoints).
+    - Media, error, and explicit-reply finals cancel pending preview edits without flushing a temporary draft before normal delivery.
+    - `streaming.preview.toolProgress` controls whether tool/progress updates reuse the same draft preview message (default: `true`). Set `false` to keep separate tool/progress messages.
 
     Example:
 
@@ -643,6 +657,8 @@ Default slash command settings:
     - thread config inherits parent channel config unless a thread-specific entry exists
 
     Channel topics are injected as **untrusted** context (not as system prompt).
+    Reply and quoted-message context currently stays as received.
+    Discord allowlists primarily gate who can trigger the agent, not a full supplemental-context redaction boundary.
 
   </Accordion>
 
@@ -942,21 +958,24 @@ Default slash command settings:
 
   </Accordion>
 
-  <Accordion title="Exec approvals in Discord">
-    Discord supports button-based exec approvals in DMs and can optionally post approval prompts in the originating channel.
+  <Accordion title="Approvals in Discord">
+    Discord supports button-based approval handling in DMs and can optionally post approval prompts in the originating channel.
 
     Config path:
 
     - `channels.discord.execApprovals.enabled`
-    - `channels.discord.execApprovals.approvers` (optional; falls back to owner IDs inferred from `allowFrom` and explicit DM `defaultTo` when possible)
+    - `channels.discord.execApprovals.approvers` (optional; falls back to `commands.ownerAllowFrom` when possible)
     - `channels.discord.execApprovals.target` (`dm` | `channel` | `both`, default: `dm`)
     - `agentFilter`, `sessionFilter`, `cleanupAfterResolve`
 
-    Discord becomes an approval client when `enabled: true` and at least one approver can be resolved, either from `execApprovals.approvers` or from the account's existing owner config (`allowFrom`, legacy `dm.allowFrom`, or explicit DM `defaultTo`).
+    Discord auto-enables native exec approvals when `enabled` is unset or `"auto"` and at least one approver can be resolved, either from `execApprovals.approvers` or from `commands.ownerAllowFrom`. Discord does not infer exec approvers from channel `allowFrom`, legacy `dm.allowFrom`, or direct-message `defaultTo`. Set `enabled: false` to disable Discord as a native approval client explicitly.
 
     When `target` is `channel` or `both`, the approval prompt is visible in the channel. Only resolved approvers can use the buttons; other users receive an ephemeral denial. Approval prompts include the command text, so only enable channel delivery in trusted channels. If the channel ID cannot be derived from the session key, OpenClaw falls back to DM delivery.
 
     Discord also renders the shared approval buttons used by other chat channels. The native Discord adapter mainly adds approver DM routing and channel fanout.
+    When those buttons are present, they are the primary approval UX; OpenClaw
+    should only include a manual `/approve` command when the tool result says
+    chat approvals are unavailable or manual approval is the only path.
 
     Gateway auth for this handler uses the same shared credential resolution contract as other Gateway clients:
 
@@ -965,7 +984,16 @@ Default slash command settings:
     - remote-mode support via `gateway.remote.*` when applicable
     - URL overrides are override-safe: CLI overrides do not reuse implicit credentials, and env overrides use env credentials only
 
-    Exec approvals expire after 30 minutes by default. If approvals fail with unknown approval IDs, verify approver resolution and feature enablement.
+    Approval resolution behavior:
+
+    - IDs prefixed with `plugin:` resolve through `plugin.approval.resolve`.
+    - Other IDs resolve through `exec.approval.resolve`.
+    - Discord does not do an extra exec-to-plugin fallback hop here; the id
+      prefix decides which gateway method it calls.
+
+    Exec approvals expire after 30 minutes by default. If approvals fail with
+    unknown approval IDs, verify approver resolution, feature enablement, and
+    that the delivered approval id kind matches the pending request.
 
     Related docs: [Exec approvals](/tools/exec-approvals)
 
@@ -982,6 +1010,8 @@ Core examples:
 - reactions: `react`, `reactions`, `emojiList`
 - moderation: `timeout`, `kick`, `ban`
 - presence: `setPresence`
+
+The `event-create` action accepts an optional `image` parameter (URL or local file path) to set the scheduled event cover image.
 
 Action gates live under `channels.discord.actions.*`.
 
@@ -1215,9 +1245,9 @@ High-signal Discord fields:
 - inbound worker: `inboundWorker.runTimeoutMs`
 - reply/history: `replyToMode`, `historyLimit`, `dmHistoryLimit`, `dms.*.historyLimit`
 - delivery: `textChunkLimit`, `chunkMode`, `maxLinesPerMessage`
-- streaming: `streaming` (legacy alias: `streamMode`), `draftChunk`, `blockStreaming`, `blockStreamingCoalesce`
+- streaming: `streaming` (legacy alias: `streamMode`), `streaming.preview.toolProgress`, `draftChunk`, `blockStreaming`, `blockStreamingCoalesce`
 - media/retry: `mediaMaxMb`, `retry`
-  - `mediaMaxMb` caps outbound Discord uploads (default: `8MB`)
+  - `mediaMaxMb` caps outbound Discord uploads (default: `100MB`)
 - actions: `actions.*`
 - presence: `activity`, `status`, `activityType`, `activityUrl`
 - UI: `ui.components.accentColor`
@@ -1232,7 +1262,9 @@ High-signal Discord fields:
 ## Related
 
 - [Pairing](/channels/pairing)
+- [Groups](/channels/groups)
 - [Channel routing](/channels/channel-routing)
+- [Security](/gateway/security)
 - [Multi-agent routing](/concepts/multi-agent)
 - [Troubleshooting](/channels/troubleshooting)
 - [Slash commands](/tools/slash-commands)

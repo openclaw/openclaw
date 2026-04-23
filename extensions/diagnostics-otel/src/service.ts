@@ -141,7 +141,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         });
 
         try {
-          await sdk.start();
+          sdk.start();
         } catch (err) {
           ctx.logger.error(`diagnostics-otel: failed to start SDK: ${formatError(err)}`);
           throw err;

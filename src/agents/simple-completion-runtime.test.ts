@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => ({
   resolveModelMock: vi.fn(),
@@ -6,6 +6,7 @@ const hoisted = vi.hoisted(() => ({
   applyLocalNoAuthHeaderOverrideMock: vi.fn(),
   setRuntimeApiKeyMock: vi.fn(),
   resolveCopilotApiTokenMock: vi.fn(),
+  prepareProviderRuntimeAuthMock: vi.fn(),
 }));
 
 vi.mock("./pi-embedded-runner/model.js", () => ({
@@ -21,15 +22,23 @@ vi.mock("./github-copilot-token.js", () => ({
   resolveCopilotApiToken: hoisted.resolveCopilotApiTokenMock,
 }));
 
+vi.mock("../plugins/provider-runtime.runtime.js", () => ({
+  prepareProviderRuntimeAuth: hoisted.prepareProviderRuntimeAuthMock,
+}));
+
 let prepareSimpleCompletionModel: typeof import("./simple-completion-runtime.js").prepareSimpleCompletionModel;
 
-beforeEach(async () => {
-  vi.resetModules();
+beforeAll(async () => {
+  ({ prepareSimpleCompletionModel } = await import("./simple-completion-runtime.js"));
+});
+
+beforeEach(() => {
   hoisted.resolveModelMock.mockReset();
   hoisted.getApiKeyForModelMock.mockReset();
   hoisted.applyLocalNoAuthHeaderOverrideMock.mockReset();
   hoisted.setRuntimeApiKeyMock.mockReset();
   hoisted.resolveCopilotApiTokenMock.mockReset();
+  hoisted.prepareProviderRuntimeAuthMock.mockReset();
 
   hoisted.applyLocalNoAuthHeaderOverrideMock.mockImplementation((model: unknown) => model);
 
@@ -54,7 +63,7 @@ beforeEach(async () => {
     source: "cache:/tmp/copilot-token.json",
     baseUrl: "https://api.individual.githubcopilot.com",
   });
-  ({ prepareSimpleCompletionModel } = await import("./simple-completion-runtime.js"));
+  hoisted.prepareProviderRuntimeAuthMock.mockResolvedValue(undefined);
 });
 
 describe("prepareSimpleCompletionModel", () => {
@@ -134,7 +143,7 @@ describe("prepareSimpleCompletionModel", () => {
     hoisted.resolveModelMock.mockReturnValueOnce({
       model: {
         provider: "amazon-bedrock",
-        id: "anthropic.claude-sonnet-4-5",
+        id: "anthropic.claude-sonnet-4-6",
       },
       authStorage: {
         setRuntimeApiKey: hoisted.setRuntimeApiKeyMock,
@@ -149,7 +158,7 @@ describe("prepareSimpleCompletionModel", () => {
     const result = await prepareSimpleCompletionModel({
       cfg: undefined,
       provider: "amazon-bedrock",
-      modelId: "anthropic.claude-sonnet-4-5",
+      modelId: "anthropic.claude-sonnet-4-6",
       allowMissingApiKeyModes: ["aws-sdk"],
     });
 
@@ -157,7 +166,7 @@ describe("prepareSimpleCompletionModel", () => {
       expect.objectContaining({
         model: expect.objectContaining({
           provider: "amazon-bedrock",
-          id: "anthropic.claude-sonnet-4-5",
+          id: "anthropic.claude-sonnet-4-6",
         }),
         auth: {
           source: "aws-sdk default chain",
@@ -334,6 +343,64 @@ describe("prepareSimpleCompletionModel", () => {
       expect.objectContaining({
         model: expect.objectContaining({
           headers: expect.objectContaining({ Authorization: null }),
+        }),
+      }),
+    );
+  });
+
+  it("applies provider runtime auth before storing simple-completion credentials", async () => {
+    hoisted.resolveModelMock.mockReturnValueOnce({
+      model: {
+        provider: "amazon-bedrock-mantle",
+        id: "anthropic.claude-opus-4-7",
+        baseUrl: "https://bedrock-mantle.us-east-1.api.aws/anthropic",
+      },
+      authStorage: {
+        setRuntimeApiKey: hoisted.setRuntimeApiKeyMock,
+      },
+      modelRegistry: {},
+    });
+    hoisted.getApiKeyForModelMock.mockResolvedValueOnce({
+      apiKey: "__amazon_bedrock_mantle_iam__",
+      source: "models.providers.amazon-bedrock-mantle.apiKey",
+      mode: "api-key",
+      profileId: "mantle",
+    });
+    hoisted.prepareProviderRuntimeAuthMock.mockResolvedValueOnce({
+      apiKey: "bedrock-runtime-token",
+      baseUrl: "https://bedrock-mantle.us-east-1.api.aws/anthropic",
+    });
+
+    const result = await prepareSimpleCompletionModel({
+      cfg: undefined,
+      provider: "amazon-bedrock-mantle",
+      modelId: "anthropic.claude-opus-4-7",
+      agentDir: "/tmp/openclaw-agent",
+    });
+
+    expect(hoisted.prepareProviderRuntimeAuthMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "amazon-bedrock-mantle",
+        workspaceDir: "/tmp/openclaw-agent",
+        context: expect.objectContaining({
+          apiKey: "__amazon_bedrock_mantle_iam__",
+          authMode: "api-key",
+          modelId: "anthropic.claude-opus-4-7",
+          profileId: "mantle",
+        }),
+      }),
+    );
+    expect(hoisted.setRuntimeApiKeyMock).toHaveBeenCalledWith(
+      "amazon-bedrock-mantle",
+      "bedrock-runtime-token",
+    );
+    expect(result).toEqual(
+      expect.objectContaining({
+        model: expect.objectContaining({
+          baseUrl: "https://bedrock-mantle.us-east-1.api.aws/anthropic",
+        }),
+        auth: expect.objectContaining({
+          apiKey: "bedrock-runtime-token",
         }),
       }),
     );

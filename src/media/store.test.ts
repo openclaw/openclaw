@@ -3,6 +3,7 @@ import path from "node:path";
 import JSZip from "jszip";
 import sharp from "sharp";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { importFreshModule } from "../../test/helpers/import-fresh.ts";
 import { isPathWithinBase } from "../../test/helpers/paths.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 
@@ -254,6 +255,37 @@ describe("media store", () => {
         await withTempStore(async (store) => {
           const huge = Buffer.alloc(5 * 1024 * 1024 + 1);
           await expect(store.saveMediaBuffer(huge)).rejects.toThrow("Media exceeds 5MB limit");
+        });
+      },
+    },
+    {
+      name: "allows callers to override the default source size limit",
+      run: async () => {
+        await withTempStore(async (store, home) => {
+          const sourcePath = path.join(home, "large-source.bin");
+          await fs.writeFile(sourcePath, Buffer.alloc(6 * 1024 * 1024, 0x41));
+
+          const saved = await store.saveMediaSource(
+            sourcePath,
+            undefined,
+            "outbound",
+            8 * 1024 * 1024,
+          );
+
+          expect(saved.size).toBe(6 * 1024 * 1024);
+        });
+      },
+    },
+    {
+      name: "reports the effective source size limit in too-large errors",
+      run: async () => {
+        await withTempStore(async (store, home) => {
+          const sourcePath = path.join(home, "too-large-source.bin");
+          await fs.writeFile(sourcePath, Buffer.alloc(7 * 1024 * 1024, 0x41));
+
+          await expect(
+            store.saveMediaSource(sourcePath, undefined, "outbound", 6 * 1024 * 1024),
+          ).rejects.toThrow("Media exceeds 6MB limit");
         });
       },
     },
@@ -537,7 +569,6 @@ describe("media store", () => {
 
   it("prefers header mime extension when sniffed mime lacks mapping", async () => {
     await withTempStore(async (_store, home) => {
-      vi.resetModules();
       vi.doMock("./mime.js", async () => {
         const actual = await vi.importActual<typeof import("./mime.js")>("./mime.js");
         return {
@@ -547,7 +578,10 @@ describe("media store", () => {
       });
 
       try {
-        const storeWithMock = await import("./store.js");
+        const storeWithMock = await importFreshModule<typeof import("./store.js")>(
+          import.meta.url,
+          "./store.js?scope=sniffed-mime-header-extension",
+        );
         const saved = await storeWithMock.saveMediaBuffer(
           Buffer.from("fake-audio"),
           "audio/ogg; codecs=opus",

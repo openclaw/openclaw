@@ -48,8 +48,7 @@ function resolveProviderChoiceModelAllowlist(params: {
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
-    bundledProviderAllowlistCompat: true,
-    bundledProviderVitestCompat: true,
+    mode: "setup",
   });
   return resolveProviderPluginChoice({
     providers,
@@ -164,7 +163,9 @@ export async function promptAuthConfig(
       preferredProvider,
     });
     if (allowlistSelection.models) {
-      next = applyModelAllowlist(next, allowlistSelection.models);
+      next = applyModelAllowlist(next, allowlistSelection.models, {
+        scopeKeys: allowlistSelection.scopeKeys,
+      });
       next = applyModelFallbacksFromSelection(next, allowlistSelection.models);
     }
   }

@@ -1,5 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
+import { buildMarkdownCard } from "./send.js";
 
 const {
   mockConvertMarkdownTables,
@@ -27,9 +28,13 @@ vi.mock("openclaw/plugin-sdk/config-runtime", () => ({
   resolveMarkdownTableMode: mockResolveMarkdownTableMode,
 }));
 
-vi.mock("openclaw/plugin-sdk/text-runtime", () => ({
-  convertMarkdownTables: mockConvertMarkdownTables,
-}));
+vi.mock("openclaw/plugin-sdk/text-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/text-runtime")>();
+  return {
+    ...actual,
+    convertMarkdownTables: mockConvertMarkdownTables,
+  };
+});
 
 vi.mock("./client.js", () => ({
   createFeishuClient: mockCreateFeishuClient,
@@ -59,8 +64,7 @@ let resolveFeishuCardTemplate: typeof import("./send.js").resolveFeishuCardTempl
 let sendMessageFeishu: typeof import("./send.js").sendMessageFeishu;
 
 describe("getMessageFeishu", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     ({
       buildStructuredCard,
       editMessageFeishu,
@@ -69,6 +73,9 @@ describe("getMessageFeishu", () => {
       resolveFeishuCardTemplate,
       sendMessageFeishu,
     } = await import("./send.js"));
+  });
+
+  beforeEach(() => {
     vi.clearAllMocks();
     mockResolveMarkdownTableMode.mockReturnValue("preserve");
     mockConvertMarkdownTables.mockImplementation((text: string) => text);
@@ -404,6 +411,20 @@ describe("resolveFeishuCardTemplate", () => {
 });
 
 describe("buildStructuredCard", () => {
+  it("uses schema-2.0 width config instead of legacy wide screen mode", () => {
+    const card = buildStructuredCard("hello") as {
+      config: {
+        width_mode?: string;
+        enable_forward?: boolean;
+        wide_screen_mode?: boolean;
+      };
+    };
+
+    expect(card.config.width_mode).toBe("fill");
+    expect(card.config.enable_forward).toBeUndefined();
+    expect(card.config.wide_screen_mode).toBeUndefined();
+  });
+
   it("falls back to blue when the header template is unsupported", () => {
     const card = buildStructuredCard("hello", {
       header: {
@@ -420,5 +441,21 @@ describe("buildStructuredCard", () => {
         },
       }),
     );
+  });
+});
+
+describe("buildMarkdownCard", () => {
+  it("uses schema-2.0 width config instead of legacy wide screen mode", () => {
+    const card = buildMarkdownCard("hello") as {
+      config: {
+        width_mode?: string;
+        enable_forward?: boolean;
+        wide_screen_mode?: boolean;
+      };
+    };
+
+    expect(card.config.width_mode).toBe("fill");
+    expect(card.config.enable_forward).toBeUndefined();
+    expect(card.config.wide_screen_mode).toBeUndefined();
   });
 });

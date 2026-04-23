@@ -1,4 +1,13 @@
-import { defineSetupPluginEntry } from "openclaw/plugin-sdk/core";
-import { msteamsPlugin } from "./src/channel.js";
+import { defineBundledChannelSetupEntry } from "openclaw/plugin-sdk/channel-entry-contract";
 
-export default defineSetupPluginEntry(msteamsPlugin);
+export default defineBundledChannelSetupEntry({
+  importMetaUrl: import.meta.url,
+  plugin: {
+    specifier: "./api.js",
+    exportName: "msteamsPlugin",
+  },
+  secrets: {
+    specifier: "./secret-contract-api.js",
+    exportName: "channelSecrets",
+  },
+});

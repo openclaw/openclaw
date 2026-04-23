@@ -21,7 +21,7 @@ export function createApprovalCard(params: {
   return {
     schema: "2.0",
     config: {
-      wide_screen_mode: true,
+      width_mode: "fill",
     },
     header: {
       title: {

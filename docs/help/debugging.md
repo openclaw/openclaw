@@ -29,6 +29,23 @@ Examples:
 
 `/debug reset` clears all overrides and returns to the on-disk config.
 
+## Session trace output
+
+Use `/trace` when you want to see plugin-owned trace/debug lines in one session
+without turning on full verbose mode.
+
+Examples:
+
+```text
+/trace
+/trace on
+/trace off
+```
+
+Use `/trace` for plugin diagnostics such as Active Memory debug summaries.
+Keep using `/verbose` for normal verbose status/tool output, and keep using
+`/debug` for runtime-only config overrides.
+
 ## Gateway watch mode
 
 For fast iteration, run the gateway under the file watcher:
@@ -50,7 +67,8 @@ gateway without forcing a `tsdown` rebuild; source and config changes still
 rebuild `dist` first.
 
 Add any gateway CLI flags after `gateway:watch` and they will be passed through on
-each restart.
+each restart. Re-running the same watch command for the same repo/flag set now
+replaces the older watcher instead of leaving duplicate watcher parents behind.
 
 ## Dev profile + dev gateway (--dev)
 

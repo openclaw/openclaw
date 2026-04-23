@@ -1,6 +1,16 @@
-import { writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { installDebugProxyTestResetHooks } from "../test-support/debug-proxy-env-test-helpers.js";
+
+vi.mock("node-edge-tts", () => ({
+  EdgeTTS: class {
+    async ttsPromise(): Promise<void> {}
+  },
+}));
+
 import {
   buildMicrosoftSpeechProvider,
   isCjkDominant,
@@ -11,12 +21,7 @@ import * as ttsModule from "./tts.js";
 const TEST_CFG = {} as OpenClawConfig;
 
 describe("listMicrosoftVoices", () => {
-  const originalFetch = globalThis.fetch;
-
-  afterEach(() => {
-    globalThis.fetch = originalFetch;
-    vi.restoreAllMocks();
-  });
+  const proxyReset = installDebugProxyTestResetHooks();
 
   it("maps Microsoft voice metadata into speech voice options", async () => {
     globalThis.fetch = vi.fn().mockResolvedValue(
@@ -60,6 +65,95 @@ describe("listMicrosoftVoices", () => {
       ) as unknown as typeof globalThis.fetch;
 
     await expect(listMicrosoftVoices()).rejects.toThrow("Microsoft voices API error (503)");
+  });
+
+  it("records voice discovery exchanges in debug proxy capture mode", async () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "microsoft-voices-capture-"));
+    proxyReset.captureProxyEnv();
+    process.env.OPENCLAW_DEBUG_PROXY_ENABLED = "1";
+    process.env.OPENCLAW_DEBUG_PROXY_DB_PATH = path.join(tempDir, "capture.sqlite");
+    process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR = path.join(tempDir, "blobs");
+    process.env.OPENCLAW_DEBUG_PROXY_SESSION_ID = "ms-voices-session";
+
+    globalThis.fetch = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(JSON.stringify([{ ShortName: "en-US-AvaNeural" }]), { status: 200 }),
+      ) as unknown as typeof globalThis.fetch;
+
+    const { getDebugProxyCaptureStore } = await import("../../src/proxy-capture/store.sqlite.js");
+    const store = getDebugProxyCaptureStore(
+      process.env.OPENCLAW_DEBUG_PROXY_DB_PATH,
+      process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR,
+    );
+    store.upsertSession({
+      id: "ms-voices-session",
+      startedAt: Date.now(),
+      mode: "test",
+      sourceScope: "openclaw",
+      sourceProcess: "openclaw",
+      dbPath: process.env.OPENCLAW_DEBUG_PROXY_DB_PATH,
+      blobDir: process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR,
+    });
+
+    await listMicrosoftVoices();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const events = store.getSessionEvents("ms-voices-session", 10);
+    expect(
+      events.some((event) => event.kind === "request" && event.host === "speech.platform.bing.com"),
+    ).toBe(true);
+    expect(
+      events.some(
+        (event) => event.kind === "response" && event.host === "speech.platform.bing.com",
+      ),
+    ).toBe(true);
+  });
+
+  it("does not double-capture voice discovery when the global fetch patch is installed", async () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "microsoft-voices-global-"));
+    proxyReset.captureProxyEnv();
+    process.env.OPENCLAW_DEBUG_PROXY_ENABLED = "1";
+    process.env.OPENCLAW_DEBUG_PROXY_DB_PATH = path.join(tempDir, "capture.sqlite");
+    process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR = path.join(tempDir, "blobs");
+    process.env.OPENCLAW_DEBUG_PROXY_SESSION_ID = "ms-voices-global-session";
+
+    globalThis.fetch = vi.fn(
+      async () => new Response(JSON.stringify([{ ShortName: "en-US-AvaNeural" }]), { status: 200 }),
+    ) as unknown as typeof globalThis.fetch;
+
+    const { getDebugProxyCaptureStore } = await import("../../src/proxy-capture/store.sqlite.js");
+    const { finalizeDebugProxyCapture, initializeDebugProxyCapture } =
+      await import("../../src/proxy-capture/runtime.js");
+    const store = getDebugProxyCaptureStore(
+      process.env.OPENCLAW_DEBUG_PROXY_DB_PATH,
+      process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR,
+    );
+    store.upsertSession({
+      id: "ms-voices-global-session",
+      startedAt: Date.now(),
+      mode: "test",
+      sourceScope: "openclaw",
+      sourceProcess: "openclaw",
+      dbPath: process.env.OPENCLAW_DEBUG_PROXY_DB_PATH,
+      blobDir: process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR,
+    });
+    initializeDebugProxyCapture("test");
+
+    try {
+      await listMicrosoftVoices();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      const events = store
+        .getSessionEvents("ms-voices-global-session", 10)
+        .filter((event) => event.host === "speech.platform.bing.com");
+      expect(events).toHaveLength(2);
+      const kinds = events.map((event) => String(event.kind)).toSorted();
+      expect(kinds).toEqual(["request", "response"]);
+    } finally {
+      globalThis.fetch = proxyReset.originalFetch;
+      finalizeDebugProxyCapture();
+    }
   });
 });
 

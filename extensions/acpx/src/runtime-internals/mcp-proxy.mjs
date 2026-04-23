@@ -1,63 +1,11 @@
 #!/usr/bin/env node
 
 import { spawn } from "node:child_process";
+import path from "node:path";
 import { createInterface } from "node:readline";
-
-function splitCommandLine(value) {
-  const parts = [];
-  let current = "";
-  let quote = null;
-  let escaping = false;
-
-  for (const ch of value) {
-    if (escaping) {
-      current += ch;
-      escaping = false;
-      continue;
-    }
-    if (ch === "\\" && quote !== "'") {
-      escaping = true;
-      continue;
-    }
-    if (quote) {
-      if (ch === quote) {
-        quote = null;
-      } else {
-        current += ch;
-      }
-      continue;
-    }
-    if (ch === "'" || ch === '"') {
-      quote = ch;
-      continue;
-    }
-    if (/\s/.test(ch)) {
-      if (current.length > 0) {
-        parts.push(current);
-        current = "";
-      }
-      continue;
-    }
-    current += ch;
-  }
-
-  if (escaping) {
-    current += "\\";
-  }
-  if (quote) {
-    throw new Error("Invalid agent command: unterminated quote");
-  }
-  if (current.length > 0) {
-    parts.push(current);
-  }
-  if (parts.length === 0) {
-    throw new Error("Invalid agent command: empty command");
-  }
-  return {
-    command: parts[0],
-    args: parts.slice(1),
-  };
-}
+import { pathToFileURL } from "node:url";
+import { formatErrorMessage } from "./error-format.mjs";
+import { splitCommandLine } from "./mcp-command-line.mjs";
 
 function decodePayload(argv) {
   const payloadIndex = argv.indexOf("--payload");
@@ -116,36 +64,50 @@ function rewriteLine(line, mcpServers) {
   }
 }
 
-const { targetCommand, mcpServers } = decodePayload(process.argv.slice(2));
-const target = splitCommandLine(targetCommand);
-const child = spawn(target.command, target.args, {
-  stdio: ["pipe", "pipe", "inherit"],
-  env: process.env,
-});
-
-if (!child.stdin || !child.stdout) {
-  throw new Error("Failed to create MCP proxy stdio pipes");
+function isMainModule() {
+  const mainPath = process.argv[1];
+  if (!mainPath) {
+    return false;
+  }
+  return import.meta.url === pathToFileURL(path.resolve(mainPath)).href;
 }
 
-const input = createInterface({ input: process.stdin });
-input.on("line", (line) => {
-  child.stdin.write(`${rewriteLine(line, mcpServers)}\n`);
-});
-input.on("close", () => {
-  child.stdin.end();
-});
+function main() {
+  const { targetCommand, mcpServers } = decodePayload(process.argv.slice(2));
+  const target = splitCommandLine(targetCommand);
+  const child = spawn(target.command, target.args, {
+    stdio: ["pipe", "pipe", "inherit"],
+    env: process.env,
+  });
 
-child.stdout.pipe(process.stdout);
-
-child.on("error", (error) => {
-  process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-  process.exit(1);
-});
-
-child.on("close", (code, signal) => {
-  if (signal) {
-    process.kill(process.pid, signal);
-    return;
+  if (!child.stdin || !child.stdout) {
+    throw new Error("Failed to create MCP proxy stdio pipes");
   }
-  process.exit(code ?? 0);
-});
+
+  const input = createInterface({ input: process.stdin });
+  input.on("line", (line) => {
+    child.stdin.write(`${rewriteLine(line, mcpServers)}\n`);
+  });
+  input.on("close", () => {
+    child.stdin.end();
+  });
+
+  child.stdout.pipe(process.stdout);
+
+  child.on("error", (error) => {
+    process.stderr.write(`${formatErrorMessage(error)}\n`);
+    process.exit(1);
+  });
+
+  child.on("close", (code, signal) => {
+    if (signal) {
+      process.kill(process.pid, signal);
+      return;
+    }
+    process.exit(code ?? 0);
+  });
+}
+
+if (isMainModule()) {
+  main();
+}

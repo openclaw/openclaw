@@ -7,19 +7,23 @@ read_when:
 title: LINE
 ---
 
-# LINE (plugin)
+# LINE
 
 LINE connects to OpenClaw via the LINE Messaging API. The plugin runs as a webhook
 receiver on the gateway and uses your channel access token + channel secret for
 authentication.
 
-Status: supported via plugin. Direct messages, group chats, media, locations, Flex
+Status: bundled plugin. Direct messages, group chats, media, locations, Flex
 messages, template messages, and quick replies are supported. Reactions and threads
 are not supported.
 
-## Plugin required
+## Bundled plugin
 
-Install the LINE plugin:
+LINE ships as a bundled plugin in current OpenClaw releases, so normal
+packaged builds do not need a separate install.
+
+If you are on an older build or a custom install that excludes LINE, install it
+manually:
 
 ```bash
 openclaw plugins install @openclaw/line
@@ -201,6 +205,8 @@ The LINE plugin supports sending images, videos, and audio files through the age
 - **Videos**: sent with explicit preview and content-type handling.
 - **Audio**: sent as LINE audio messages.
 
+Outbound media URLs must be public HTTPS URLs. OpenClaw validates the target hostname before handing the URL to LINE and rejects loopback, link-local, and private-network targets.
+
 Generic media sends fall back to the existing image-only route when a LINE-specific path is not available.
 
 ## Troubleshooting
@@ -211,3 +217,11 @@ Generic media sends fall back to the existing image-only route when a LINE-speci
   and that the gateway is reachable from LINE.
 - **Media download errors:** raise `channels.line.mediaMaxMb` if media exceeds the
   default limit.
+
+## Related
+
+- [Channels Overview](/channels) — all supported channels
+- [Pairing](/channels/pairing) — DM authentication and pairing flow
+- [Groups](/channels/groups) — group chat behavior and mention gating
+- [Channel Routing](/channels/channel-routing) — session routing for messages
+- [Security](/gateway/security) — access model and hardening

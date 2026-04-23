@@ -1,4 +1,5 @@
 import type { OpenAICompletionsCompat } from "@mariozechner/pi-ai";
+import type { ConfiguredModelProviderRequest } from "./types.provider-request.js";
 import type { SecretInput } from "./types.secrets.js";
 
 export const MODEL_APIS = [
@@ -10,6 +11,7 @@ export const MODEL_APIS = [
   "github-copilot",
   "bedrock-converse-stream",
   "ollama",
+  "azure-openai-responses",
 ] as const;
 
 export type ModelApi = (typeof MODEL_APIS)[number];
@@ -34,7 +36,10 @@ type SupportedThinkingFormat =
 
 export type ModelCompatConfig = SupportedOpenAICompatFields & {
   thinkingFormat?: SupportedThinkingFormat;
+  visibleReasoningDetailTypes?: string[];
   supportsTools?: boolean;
+  supportsPromptCacheKey?: boolean;
+  requiresStringContent?: boolean;
   toolSchemaProfile?: string;
   unsupportedToolSchemaKeywords?: string[];
   nativeWebSearchTool?: boolean;
@@ -49,6 +54,7 @@ export type ModelDefinitionConfig = {
   id: string;
   name: string;
   api?: ModelApi;
+  baseUrl?: string;
   reasoning: boolean;
   input: Array<"text" | "image">;
   cost: {
@@ -56,8 +62,26 @@ export type ModelDefinitionConfig = {
     output: number;
     cacheRead: number;
     cacheWrite: number;
+    /** Optional tiered pricing.  When present, cost calculation uses
+     *  per-tier rates instead of the flat rates above.  Prices are
+     *  USD / million tokens; ranges are half-open `[start, end)` on the
+     *  input-token axis. */
+    tieredPricing?: Array<{
+      input: number;
+      output: number;
+      cacheRead: number;
+      cacheWrite: number;
+      /** Bounded tier: `[start, end)`. Open-ended top tier: `[start]` (normalized to `[start, Infinity]` at load time). */
+      range: [number, number] | [number];
+    }>;
   };
   contextWindow: number;
+  /**
+   * Optional effective runtime cap used for compaction/session budgeting.
+   * Keeps provider/native contextWindow metadata intact while letting configs
+   * prefer a smaller practical window.
+   */
+  contextTokens?: number;
   maxTokens: number;
   headers?: Record<string, string>;
   compat?: ModelCompatConfig;
@@ -71,6 +95,7 @@ export type ModelProviderConfig = {
   injectNumCtxForOpenAICompat?: boolean;
   headers?: Record<string, SecretInput>;
   authHeader?: boolean;
+  request?: ConfiguredModelProviderRequest;
   models: ModelDefinitionConfig[];
 };
 
@@ -83,8 +108,17 @@ export type BedrockDiscoveryConfig = {
   defaultMaxTokens?: number;
 };
 
+export type DiscoveryToggleConfig = {
+  enabled?: boolean;
+};
+
 export type ModelsConfig = {
   mode?: "merge" | "replace";
   providers?: Record<string, ModelProviderConfig>;
+  // Deprecated legacy compat aliases. Kept in the runtime type surface so
+  // doctor/runtime fallbacks can read older configs until migration completes.
   bedrockDiscovery?: BedrockDiscoveryConfig;
+  copilotDiscovery?: DiscoveryToggleConfig;
+  huggingfaceDiscovery?: DiscoveryToggleConfig;
+  ollamaDiscovery?: DiscoveryToggleConfig;
 };

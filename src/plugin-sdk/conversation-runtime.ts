@@ -13,6 +13,8 @@ export {
   ensureConfiguredBindingRouteReady,
   resolveConfiguredBindingRoute,
   type ConfiguredBindingRouteResult,
+  resolveRuntimeConversationBindingRoute,
+  type RuntimeConversationBindingRouteResult,
 } from "../channels/plugins/binding-routing.js";
 export {
   primeConfiguredBindingRegistry,
@@ -42,8 +44,6 @@ export {
   resolveThreadBindingThreadName,
 } from "../channels/thread-bindings-messages.js";
 export {
-  DISCORD_THREAD_BINDING_CHANNEL,
-  MATRIX_THREAD_BINDING_CHANNEL,
   formatThreadBindingDisabledError,
   resolveThreadBindingEffectiveExpiresAt,
   resolveThreadBindingIdleTimeoutMs,

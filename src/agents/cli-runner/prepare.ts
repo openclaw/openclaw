@@ -1,5 +1,16 @@
-import { resolveHeartbeatPrompt } from "../../auto-reply/heartbeat.js";
+import { ensureMcpLoopbackServer } from "../../gateway/mcp-http.js";
+import {
+  createMcpLoopbackServerConfig,
+  getActiveMcpLoopbackRuntime,
+} from "../../gateway/mcp-http.loopback-runtime.js";
+import type {
+  CliBackendAuthEpochMode,
+  CliBackendPreparedExecution,
+} from "../../plugins/cli-backend.types.js";
+import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
+import { loadAuthProfileStoreForRuntime } from "../auth-profiles/store.js";
+import type { AuthProfileCredential } from "../auth-profiles/types.js";
 import {
   buildBootstrapInjectionStats,
   buildBootstrapPromptWarning,
@@ -10,14 +21,18 @@ import {
   makeBootstrapWarn as makeBootstrapWarnImpl,
   resolveBootstrapContextForRun as resolveBootstrapContextForRunImpl,
 } from "../bootstrap-files.js";
+import { CLI_AUTH_EPOCH_VERSION, resolveCliAuthEpoch } from "../cli-auth-epoch.js";
 import { resolveCliBackendConfig } from "../cli-backends.js";
 import { hashCliSessionText, resolveCliSessionReuse } from "../cli-session.js";
-import { resolveOpenClawDocsPath } from "../docs-path.js";
+import { resolveHeartbeatPromptForSystemPrompt } from "../heartbeat-system-prompt.js";
 import {
   resolveBootstrapMaxChars,
   resolveBootstrapPromptTruncationWarningMode,
   resolveBootstrapTotalMaxChars,
 } from "../pi-embedded-helpers.js";
+import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
+import { resolveSkillsPromptForRun } from "../skills.js";
+import { resolveSystemPromptOverride } from "../system-prompt-override.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
@@ -28,10 +43,30 @@ import type { PreparedCliRunContext, RunCliAgentParams } from "./types.js";
 const prepareDeps = {
   makeBootstrapWarn: makeBootstrapWarnImpl,
   resolveBootstrapContextForRun: resolveBootstrapContextForRunImpl,
+  getActiveMcpLoopbackRuntime,
+  ensureMcpLoopbackServer,
+  createMcpLoopbackServerConfig,
+  resolveOpenClawDocsPath: async (
+    params: Parameters<typeof import("../docs-path.js").resolveOpenClawDocsPath>[0],
+  ) => (await import("../docs-path.js")).resolveOpenClawDocsPath(params),
 };
 
 export function setCliRunnerPrepareTestDeps(overrides: Partial<typeof prepareDeps>): void {
   Object.assign(prepareDeps, overrides);
+}
+
+export function shouldSkipLocalCliCredentialEpoch(params: {
+  authEpochMode?: CliBackendAuthEpochMode;
+  authProfileId?: string;
+  authCredential?: AuthProfileCredential;
+  preparedExecution?: CliBackendPreparedExecution | null;
+}): boolean {
+  return Boolean(
+    params.authEpochMode === "profile-only" &&
+    params.authProfileId &&
+    params.authCredential &&
+    params.preparedExecution,
+  );
 }
 
 export async function prepareCliRunContext(
@@ -59,30 +94,28 @@ export async function prepareCliRunContext(
   if (!backendResolved) {
     throw new Error(`Unknown CLI backend: ${params.provider}`);
   }
-  const preparedBackend = await prepareCliBundleMcpConfig({
-    enabled: backendResolved.bundleMcp,
-    backend: backendResolved.config,
-    workspaceDir,
-    config: params.config,
-    warn: (message) => cliBackendLog.warn(message),
-  });
-  const extraSystemPrompt = params.extraSystemPrompt?.trim() ?? "";
-  const extraSystemPromptHash = hashCliSessionText(extraSystemPrompt);
-  const reusableCliSession = resolveCliSessionReuse({
-    binding:
-      params.cliSessionBinding ??
-      (params.cliSessionId ? { sessionId: params.cliSessionId } : undefined),
-    authProfileId: params.authProfileId,
-    extraSystemPromptHash,
-    mcpConfigHash: preparedBackend.mcpConfigHash,
-  });
-  if (reusableCliSession.invalidatedReason) {
-    cliBackendLog.info(
-      `cli session reset: provider=${params.provider} reason=${reusableCliSession.invalidatedReason}`,
-    );
+  const agentDir = resolveOpenClawAgentDir();
+  const requestedAuthProfileId = params.authProfileId?.trim() || undefined;
+  const effectiveAuthProfileId =
+    requestedAuthProfileId ?? backendResolved.defaultAuthProfileId?.trim() ?? undefined;
+  let authCredential: AuthProfileCredential | undefined;
+  if (effectiveAuthProfileId) {
+    const authStore = loadAuthProfileStoreForRuntime(agentDir, {
+      readOnly: true,
+      allowKeychainPrompt: false,
+    });
+    authCredential = authStore.profiles[effectiveAuthProfileId];
   }
+  const extraSystemPrompt = params.extraSystemPrompt?.trim() ?? "";
+  // Use the static portion (excluding per-message inbound metadata) for session reuse hashing.
+  // Per-message metadata (timestamps, message IDs) changes every turn and must not trigger session resets.
+  const extraSystemPromptHash =
+    params.extraSystemPromptStatic !== undefined
+      ? hashCliSessionText(params.extraSystemPromptStatic.trim() || undefined)
+      : hashCliSessionText(extraSystemPrompt);
+
   const modelId = (params.model ?? "default").trim() || "default";
-  const normalizedModel = normalizeCliModel(modelId, preparedBackend.backend);
+  const normalizedModel = normalizeCliModel(modelId, backendResolved.config);
   const modelDisplay = `${params.provider}/${modelId}`;
 
   const sessionLabel = params.sessionKey ?? params.sessionId;
@@ -93,6 +126,7 @@ export async function prepareCliRunContext(
     sessionId: params.sessionId,
     warn: prepareDeps.makeBootstrapWarn({
       sessionLabel,
+      workspaceDir,
       warn: (message) => cliBackendLog.warn(message),
     }),
   });
@@ -118,29 +152,156 @@ export async function prepareCliRunContext(
     config: params.config,
     agentId: params.agentId,
   });
-  const heartbeatPrompt =
-    sessionAgentId === defaultAgentId
-      ? resolveHeartbeatPrompt(params.config?.agents?.defaults?.heartbeat?.prompt)
+  let mcpLoopbackRuntime = backendResolved.bundleMcp
+    ? prepareDeps.getActiveMcpLoopbackRuntime()
+    : undefined;
+  if (backendResolved.bundleMcp && !mcpLoopbackRuntime) {
+    try {
+      await prepareDeps.ensureMcpLoopbackServer();
+    } catch (error) {
+      cliBackendLog.warn(`mcp loopback server failed to start: ${String(error)}`);
+    }
+    mcpLoopbackRuntime = prepareDeps.getActiveMcpLoopbackRuntime();
+  }
+  const preparedBackend = await prepareCliBundleMcpConfig({
+    enabled: backendResolved.bundleMcp,
+    mode: backendResolved.bundleMcpMode,
+    backend: backendResolved.config,
+    workspaceDir,
+    config: params.config,
+    additionalConfig: mcpLoopbackRuntime
+      ? prepareDeps.createMcpLoopbackServerConfig(mcpLoopbackRuntime.port)
+      : undefined,
+    env: mcpLoopbackRuntime
+      ? {
+          OPENCLAW_MCP_TOKEN:
+            params.senderIsOwner === true
+              ? mcpLoopbackRuntime.ownerToken
+              : mcpLoopbackRuntime.nonOwnerToken,
+          OPENCLAW_MCP_AGENT_ID: sessionAgentId ?? "",
+          OPENCLAW_MCP_ACCOUNT_ID: params.agentAccountId ?? "",
+          OPENCLAW_MCP_SESSION_KEY: params.sessionKey ?? "",
+          OPENCLAW_MCP_MESSAGE_CHANNEL: params.messageProvider ?? "",
+        }
+      : undefined,
+    warn: (message) => cliBackendLog.warn(message),
+  });
+  const preparedExecution = await backendResolved.prepareExecution?.({
+    config: params.config,
+    workspaceDir,
+    agentDir,
+    provider: params.provider,
+    modelId,
+    authProfileId: effectiveAuthProfileId,
+  });
+  const skipLocalCredentialEpoch = shouldSkipLocalCliCredentialEpoch({
+    authEpochMode: backendResolved.authEpochMode,
+    authProfileId: effectiveAuthProfileId,
+    authCredential,
+    preparedExecution,
+  });
+  const authEpoch = await resolveCliAuthEpoch({
+    provider: params.provider,
+    authProfileId: effectiveAuthProfileId,
+    skipLocalCredential: skipLocalCredentialEpoch,
+  });
+  const preparedBackendEnv =
+    preparedExecution?.env && Object.keys(preparedExecution.env).length > 0
+      ? { ...preparedBackend.env, ...preparedExecution.env }
+      : preparedBackend.env;
+  const preparedBackendCleanup =
+    preparedBackend.cleanup || preparedExecution?.cleanup
+      ? async () => {
+          try {
+            await preparedExecution?.cleanup?.();
+          } finally {
+            await preparedBackend.cleanup?.();
+          }
+        }
       : undefined;
-  const docsPath = await resolveOpenClawDocsPath({
+  const preparedBackendClearEnv = [
+    ...(preparedBackend.backend.clearEnv ?? []),
+    ...(preparedExecution?.clearEnv ?? []),
+  ];
+  const preparedBackendFinal = {
+    ...preparedBackend,
+    backend: {
+      ...preparedBackend.backend,
+      ...(preparedBackendClearEnv.length > 0
+        ? { clearEnv: Array.from(new Set(preparedBackendClearEnv)) }
+        : {}),
+    },
+    ...(preparedBackendEnv ? { env: preparedBackendEnv } : {}),
+    ...(preparedBackendCleanup ? { cleanup: preparedBackendCleanup } : {}),
+  };
+  const reusableCliSession = params.cliSessionBinding
+    ? resolveCliSessionReuse({
+        binding: params.cliSessionBinding,
+        authProfileId: effectiveAuthProfileId,
+        authEpoch,
+        authEpochVersion: CLI_AUTH_EPOCH_VERSION,
+        extraSystemPromptHash,
+        mcpConfigHash: preparedBackendFinal.mcpConfigHash,
+        mcpResumeHash: preparedBackendFinal.mcpResumeHash,
+      })
+    : params.cliSessionId
+      ? { sessionId: params.cliSessionId }
+      : {};
+  if (reusableCliSession.invalidatedReason) {
+    cliBackendLog.info(
+      `cli session reset: provider=${params.provider} reason=${reusableCliSession.invalidatedReason}`,
+    );
+  }
+  const heartbeatPrompt = resolveHeartbeatPromptForSystemPrompt({
+    config: params.config,
+    agentId: sessionAgentId,
+    defaultAgentId,
+  });
+  const docsPath = await prepareDeps.resolveOpenClawDocsPath({
     workspaceDir,
     argv1: process.argv[1],
     cwd: process.cwd(),
     moduleUrl: import.meta.url,
   });
-  const systemPrompt = buildSystemPrompt({
+  const skillsPrompt = resolveSkillsPromptForRun({
+    skillsSnapshot: params.skillsSnapshot,
     workspaceDir,
     config: params.config,
-    defaultThinkLevel: params.thinkLevel,
-    extraSystemPrompt,
-    ownerNumbers: params.ownerNumbers,
-    heartbeatPrompt,
-    docsPath: docsPath ?? undefined,
-    tools: [],
-    contextFiles,
-    modelDisplay,
     agentId: sessionAgentId,
   });
+  const builtSystemPrompt =
+    resolveSystemPromptOverride({
+      config: params.config,
+      agentId: sessionAgentId,
+    }) ??
+    buildSystemPrompt({
+      workspaceDir,
+      config: params.config,
+      defaultThinkLevel: params.thinkLevel,
+      extraSystemPrompt,
+      ownerNumbers: params.ownerNumbers,
+      heartbeatPrompt,
+      docsPath: docsPath ?? undefined,
+      skillsPrompt,
+      tools: [],
+      contextFiles,
+      modelDisplay,
+      agentId: sessionAgentId,
+    });
+  const transformedSystemPrompt =
+    backendResolved.transformSystemPrompt?.({
+      config: params.config,
+      workspaceDir,
+      provider: params.provider,
+      modelId,
+      modelDisplay,
+      agentId: sessionAgentId,
+      systemPrompt: builtSystemPrompt,
+    }) ?? builtSystemPrompt;
+  const systemPrompt = applyPluginTextReplacements(
+    transformedSystemPrompt,
+    backendResolved.textTransforms?.input,
+  );
   const systemPromptReport = buildSystemPromptReport({
     source: "run",
     generatedAt: Date.now(),
@@ -160,16 +321,17 @@ export async function prepareCliRunContext(
     systemPrompt,
     bootstrapFiles,
     injectedFiles: contextFiles,
-    skillsPrompt: "",
+    skillsPrompt,
     tools: [],
   });
 
   return {
     params,
+    effectiveAuthProfileId,
     started,
     workspaceDir,
     backendResolved,
-    preparedBackend,
+    preparedBackend: preparedBackendFinal,
     reusableCliSession,
     modelId,
     normalizedModel,
@@ -177,6 +339,8 @@ export async function prepareCliRunContext(
     systemPromptReport,
     bootstrapPromptWarningLines: bootstrapPromptWarning.lines,
     heartbeatPrompt,
+    authEpoch,
+    authEpochVersion: CLI_AUTH_EPOCH_VERSION,
     extraSystemPromptHash,
   };
 }

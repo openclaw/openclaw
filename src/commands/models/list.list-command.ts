@@ -1,6 +1,7 @@
 import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
 import { parseModelRef } from "../../agents/model-selection.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { resolveConfiguredEntries } from "./list.configured.js";
 import { formatErrorWithStack } from "./list.errors.js";
 import {
@@ -25,20 +26,21 @@ export async function modelsListCommand(
   runtime: RuntimeEnv,
 ) {
   ensureFlagCompatibility(opts);
-  const { ensureAuthProfileStore } = await import("../../agents/auth-profiles.runtime.js");
-  const { ensureOpenClawModelsJson } = await import("../../agents/models-config.js");
+  const { ensureAuthProfileStore, ensureOpenClawModelsJson, resolveOpenClawAgentDir } =
+    await import("./list.runtime.js");
   const { sourceConfig, resolvedConfig: cfg } = await loadModelsConfigWithSource({
     commandName: "models list",
     runtime,
   });
   const authStore = ensureAuthProfileStore();
+  const agentDir = resolveOpenClawAgentDir();
   const providerFilter = (() => {
     const raw = opts.provider?.trim();
     if (!raw) {
       return undefined;
     }
     const parsed = parseModelRef(`${raw}/_`, DEFAULT_PROVIDER);
-    return parsed?.provider ?? raw.toLowerCase();
+    return parsed?.provider ?? normalizeLowercaseStringOrEmpty(raw);
   })();
 
   let modelRegistry: ModelRegistry | undefined;
@@ -70,6 +72,7 @@ export async function modelsListCommand(
   const rows: ModelRow[] = [];
   const rowContext = {
     cfg,
+    agentDir,
     authStore,
     availableKeys,
     configuredByKey,

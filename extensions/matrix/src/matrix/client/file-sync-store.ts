@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
+import path from "node:path";
 import {
   Category,
   MemoryStore,
@@ -9,9 +10,11 @@ import {
   type ISyncResponse,
   type IStoredClientOpts,
 } from "matrix-js-sdk/lib/matrix.js";
-import { writeJsonFileAtomically } from "../../runtime-api.js";
+import { writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
+import { isRecord } from "../../record-shared.js";
 import { createAsyncLock } from "../async-lock.js";
 import { LogService } from "../sdk/logger.js";
+import { claimCurrentTokenStorageState } from "./storage.js";
 
 const STORE_VERSION = 1;
 const PERSIST_DEBOUNCE_MS = 250;
@@ -22,10 +25,6 @@ type PersistedMatrixSyncStore = {
   clientOptions?: IStoredClientOpts;
   cleanShutdown?: boolean;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
 
 function normalizeRoomsData(value: unknown): IRooms | null {
   if (!isRecord(value)) {
@@ -272,12 +271,15 @@ export class FileBackedMatrixSyncStore extends MemoryStore {
     const payload: PersistedMatrixSyncStore = {
       version: STORE_VERSION,
       savedSync: this.savedSync ? cloneJson(this.savedSync) : null,
-      cleanShutdown: this.cleanShutdown === true,
+      cleanShutdown: this.cleanShutdown,
       ...(this.savedClientOptions ? { clientOptions: cloneJson(this.savedClientOptions) } : {}),
     };
     try {
       await this.persistLock(async () => {
         await writeJsonFileAtomically(this.storagePath, payload);
+        claimCurrentTokenStorageState({
+          rootDir: path.dirname(this.storagePath),
+        });
       });
     } catch (err) {
       this.dirty = true;

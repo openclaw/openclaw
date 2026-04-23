@@ -1,4 +1,7 @@
 import crypto from "node:crypto";
+import { safeEqualSecret } from "openclaw/plugin-sdk/browser-security-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { getHeader } from "./http-headers.js";
 import type { WebhookContext } from "./types.js";
 
@@ -120,16 +123,7 @@ function buildCanonicalTwilioParamString(params: URLSearchParams): string {
  * Timing-safe string comparison to prevent timing attacks.
  */
 function timingSafeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) {
-    // Still do comparison to maintain constant time
-    const dummy = Buffer.from(a);
-    crypto.timingSafeEqual(dummy, dummy);
-    return false;
-  }
-
-  const bufA = Buffer.from(a);
-  const bufB = Buffer.from(b);
-  return crypto.timingSafeEqual(bufA, bufB);
+  return safeEqualSecret(a, b);
 }
 
 /**
@@ -197,7 +191,7 @@ function extractHostname(hostHeader: string): string | null {
       return null; // Malformed IPv6
     }
     hostname = hostHeader.substring(1, endBracket);
-    return hostname.toLowerCase();
+    return normalizeLowercaseStringOrEmpty(hostname);
   }
 
   // Handle IPv4/domain with optional port
@@ -213,7 +207,7 @@ function extractHostname(hostHeader: string): string | null {
     return null;
   }
 
-  return hostname.toLowerCase();
+  return normalizeLowercaseStringOrEmpty(hostname);
 }
 
 function extractHostnameFromHeader(headerValue: string): string | null {
@@ -534,6 +528,8 @@ export function verifyTelnyxWebhook(
   try {
     const signedPayload = `${timestamp}|${ctx.rawBody}`;
     const signatureBuffer = decodeBase64OrBase64Url(signature);
+    // Canonicalize equivalent Base64/Base64URL encodings before replay hashing.
+    const canonicalSignature = signatureBuffer.toString("base64");
     const key = importEd25519PublicKey(publicKey);
 
     const isValid = crypto.verify(null, Buffer.from(signedPayload), key, signatureBuffer);
@@ -548,13 +544,13 @@ export function verifyTelnyxWebhook(
       return { ok: false, reason: "Timestamp too old" };
     }
 
-    const replayKey = `telnyx:${sha256Hex(`${timestamp}\n${signature}\n${ctx.rawBody}`)}`;
+    const replayKey = `telnyx:${sha256Hex(`${timestamp}\n${canonicalSignature}\n${ctx.rawBody}`)}`;
     const isReplay = markReplay(telnyxReplayCache, replayKey);
     return { ok: true, isReplay, verifiedRequestKey: replayKey };
   } catch (err) {
     return {
       ok: false,
-      reason: `Verification error: ${err instanceof Error ? err.message : String(err)}`,
+      reason: `Verification error: ${formatErrorMessage(err)}`,
     };
   }
 }
@@ -743,12 +739,7 @@ function createPlivoV3ReplayKey(params: {
 }
 
 function timingSafeEqualString(a: string, b: string): boolean {
-  if (a.length !== b.length) {
-    const dummy = Buffer.from(a);
-    crypto.timingSafeEqual(dummy, dummy);
-    return false;
-  }
-  return crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
+  return safeEqualSecret(a, b);
 }
 
 function validatePlivoV2Signature(params: {

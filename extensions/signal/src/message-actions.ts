@@ -1,9 +1,10 @@
-import { createActionGate, jsonResult, readStringParam } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveReactionMessageId } from "openclaw/plugin-sdk/channel-actions";
+import { createActionGate, jsonResult, readStringParam } from "openclaw/plugin-sdk/channel-actions";
 import type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
 } from "openclaw/plugin-sdk/channel-contract";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { removeReactionSignal, sendReactionSignal } from "../reaction-runtime-api.js";
 import { listEnabledSignalAccounts, resolveSignalAccount } from "./accounts.js";
 import { resolveSignalReactionLevel } from "./reaction-level.js";
@@ -20,7 +21,7 @@ function normalizeSignalReactionRecipient(raw: string): string {
   if (!withoutSignal) {
     return withoutSignal;
   }
-  if (withoutSignal.toLowerCase().startsWith("uuid:")) {
+  if (normalizeLowercaseStringOrEmpty(withoutSignal).startsWith("uuid:")) {
     return withoutSignal.slice("uuid:".length).trim();
   }
   return withoutSignal;
@@ -35,7 +36,7 @@ function resolveSignalReactionTarget(raw: string): { recipient?: string; groupId
   if (!withoutSignal) {
     return {};
   }
-  if (withoutSignal.toLowerCase().startsWith(GROUP_PREFIX)) {
+  if (normalizeLowercaseStringOrEmpty(withoutSignal).startsWith(GROUP_PREFIX)) {
     const groupId = withoutSignal.slice(GROUP_PREFIX.length).trim();
     return groupId ? { groupId } : {};
   }
@@ -73,18 +74,17 @@ async function mutateSignalReaction(params: {
 }
 
 export const signalMessageActions: ChannelMessageActionAdapter = {
-  describeMessageTool: ({ cfg }) => {
-    const accounts = listEnabledSignalAccounts(cfg);
-    if (accounts.length === 0) {
-      return null;
-    }
-    const configuredAccounts = accounts.filter((account) => account.configured);
+  describeMessageTool: ({ cfg, accountId }) => {
+    const configuredAccounts = accountId
+      ? [resolveSignalAccount({ cfg, accountId })].filter(
+          (account) => account.enabled && account.configured,
+        )
+      : listEnabledSignalAccounts(cfg).filter((account) => account.configured);
     if (configuredAccounts.length === 0) {
       return null;
     }
 
     const actions = new Set<ChannelMessageActionName>(["send"]);
-
     const reactionsEnabled = configuredAccounts.some((account) =>
       createActionGate(account.config.actions)("reactions"),
     );

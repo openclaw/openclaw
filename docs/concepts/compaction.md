@@ -18,6 +18,11 @@ into a summary so the chat can continue.
 2. The summary is saved in the session transcript.
 3. Recent messages are kept intact.
 
+When OpenClaw splits history into compaction chunks, it keeps assistant tool
+calls paired with their matching `toolResult` entries. If a split point lands
+inside a tool block, OpenClaw moves the boundary so the pair stays together and
+the current unsummarized tail is preserved.
+
 The full conversation history stays on disk. Compaction only changes what the
 model sees on the next turn.
 
@@ -25,12 +30,81 @@ model sees on the next turn.
 
 Auto-compaction is on by default. It runs when the session nears the context
 limit, or when the model returns a context-overflow error (in which case
-OpenClaw compacts and retries).
+OpenClaw compacts and retries). Typical overflow signatures include
+`request_too_large`, `context length exceeded`, `input exceeds the maximum
+number of tokens`, `input token count exceeds the maximum number of input
+tokens`, `input is too long for the model`, and `ollama error: context length
+exceeded`.
 
 <Info>
 Before compacting, OpenClaw automatically reminds the agent to save important
 notes to [memory](/concepts/memory) files. This prevents context loss.
 </Info>
+
+Use the `agents.defaults.compaction` setting in your `openclaw.json` to configure compaction behavior (mode, target tokens, etc.).
+Compaction summarization preserves opaque identifiers by default (`identifierPolicy: "strict"`). You can override this with `identifierPolicy: "off"` or provide custom text with `identifierPolicy: "custom"` and `identifierInstructions`.
+
+You can optionally specify a different model for compaction summarization via `agents.defaults.compaction.model`. This is useful when your primary model is a local or small model and you want compaction summaries produced by a more capable model. The override accepts any `provider/model-id` string:
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "compaction": {
+        "model": "openrouter/anthropic/claude-sonnet-4-6"
+      }
+    }
+  }
+}
+```
+
+This also works with local models, for example a second Ollama model dedicated to summarization or a fine-tuned compaction specialist:
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "compaction": {
+        "model": "ollama/llama3.1:8b"
+      }
+    }
+  }
+}
+```
+
+When unset, compaction uses the agent’s primary model.
+
+## Pluggable compaction providers
+
+Plugins can register a custom compaction provider via `registerCompactionProvider()` on the plugin API. When a provider is registered and configured, OpenClaw delegates summarization to it instead of the built-in LLM pipeline.
+
+To use a registered provider, set the provider id in your config:
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "compaction": {
+        "provider": "my-provider"
+      }
+    }
+  }
+}
+```
+
+Setting a `provider` automatically forces `mode: "safeguard"`. Providers receive the same compaction instructions and identifier-preservation policy as the built-in path, and OpenClaw still preserves recent-turn and split-turn suffix context after provider output. If the provider fails or returns an empty result, OpenClaw falls back to built-in LLM summarization.
+
+## Auto-compaction (default on)
+
+When a session nears or exceeds the model’s context window, OpenClaw triggers auto-compaction and may retry the original request using the compacted context.
+
+You’ll see:
+
+- `🧹 Auto-compaction complete` in verbose mode
+- `/status` showing `🧹 Compactions: <count>`
+
+Before compaction, OpenClaw can run a **silent memory flush** turn to store
+durable notes to disk. See [Memory](/concepts/memory) for details and config.
 
 ## Manual compaction
 
@@ -58,6 +132,26 @@ capable model for better summaries:
 }
 ```
 
+## Compaction notices
+
+By default, compaction runs silently. To show brief notices when compaction
+starts and when it completes, enable `notifyUser`:
+
+```json5
+{
+  agents: {
+    defaults: {
+      compaction: {
+        notifyUser: true,
+      },
+    },
+  },
+}
+```
+
+When enabled, the user sees short status messages around each compaction run
+(for example, "Compacting context..." and "Compaction complete").
+
 ## Compaction vs pruning
 
 |                  | Compaction                    | Pruning                          |
@@ -84,3 +178,10 @@ survive.
 For advanced configuration (reserve tokens, identifier preservation, custom
 context engines, OpenAI server-side compaction), see the
 [Session Management Deep Dive](/reference/session-management-compaction).
+
+## Related
+
+- [Session](/concepts/session) — session management and lifecycle
+- [Session Pruning](/concepts/session-pruning) — trimming tool results
+- [Context](/concepts/context) — how context is built for agent turns
+- [Hooks](/automation/hooks) — compaction lifecycle hooks (before_compaction, after_compaction)

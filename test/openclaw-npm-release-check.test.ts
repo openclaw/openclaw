@@ -1,16 +1,31 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { WORKSPACE_TEMPLATE_PACK_PATHS } from "../scripts/lib/workspace-bootstrap-smoke.mjs";
 import {
   compareReleaseVersions,
   collectControlUiPackErrors,
+  collectForbiddenPackedContentErrors,
+  collectForbiddenPackedPathErrors,
+  collectPackedTestCargoErrors,
   collectReleasePackageMetadataErrors,
   collectReleaseTagErrors,
   parseNpmPackJsonOutput,
   parseReleaseTagVersion,
   parseReleaseVersion,
+  resolveNpmDistTagMirrorAuth,
   resolveNpmPublishPlan,
   resolveNpmCommandInvocation,
+  shouldSkipPackedTarballValidation,
   utcCalendarDayDistance,
 } from "../scripts/openclaw-npm-release-check.ts";
+import { PACKAGE_DIST_INVENTORY_RELATIVE_PATH } from "../src/infra/package-dist-inventory.ts";
+
+const REQUIRED_PACKED_PATHS = [
+  PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
+  ...WORKSPACE_TEMPLATE_PACK_PATHS,
+] as const;
 
 describe("parseReleaseVersion", () => {
   it("parses stable CalVer releases", () => {
@@ -83,36 +98,102 @@ describe("resolveNpmPublishPlan", () => {
     });
   });
 
-  it("publishes stable releases to latest and mirrors beta", () => {
+  it("publishes stable releases to beta first", () => {
     expect(resolveNpmPublishPlan("2026.3.29")).toEqual({
       channel: "stable",
-      publishTag: "latest",
-      mirrorDistTags: ["beta"],
+      publishTag: "beta",
+      mirrorDistTags: [],
     });
   });
 
-  it("mirrors beta for stable correction releases too", () => {
+  it("publishes stable correction releases to beta first too", () => {
     expect(resolveNpmPublishPlan("2026.3.29-2")).toEqual({
       channel: "stable",
-      publishTag: "latest",
-      mirrorDistTags: ["beta"],
+      publishTag: "beta",
+      mirrorDistTags: [],
     });
   });
 
-  it("does not mirror beta when beta already points at a newer prerelease", () => {
-    expect(resolveNpmPublishPlan("2026.3.29", "2026.3.30-beta.1")).toEqual({
+  it("can publish stable releases directly to latest when requested", () => {
+    expect(resolveNpmPublishPlan("2026.3.29", undefined, "latest")).toEqual({
       channel: "stable",
       publishTag: "latest",
       mirrorDistTags: [],
     });
   });
 
-  it("still mirrors beta when beta points at the same release line", () => {
-    expect(resolveNpmPublishPlan("2026.3.29", "2026.3.29-beta.2")).toEqual({
+  it("ignores current beta dist-tag state for stable publishes", () => {
+    expect(resolveNpmPublishPlan("2026.3.29", "2026.4.1-beta.1")).toEqual({
       channel: "stable",
-      publishTag: "latest",
-      mirrorDistTags: ["beta"],
+      publishTag: "beta",
+      mirrorDistTags: [],
     });
+  });
+
+  it("rejects publishing beta prereleases to latest", () => {
+    expect(() => resolveNpmPublishPlan("2026.3.29-beta.2", undefined, "latest")).toThrow(
+      "Beta prereleases must publish to the beta dist-tag.",
+    );
+  });
+});
+
+describe("resolveNpmDistTagMirrorAuth", () => {
+  it("prefers NODE_AUTH_TOKEN when both auth env vars exist", () => {
+    expect(
+      resolveNpmDistTagMirrorAuth({
+        nodeAuthToken: "node-token",
+        npmToken: "npm-token",
+      }),
+    ).toEqual({
+      hasAuth: true,
+      source: "node-auth-token",
+    });
+  });
+
+  it("falls back to NPM_TOKEN when NODE_AUTH_TOKEN is missing", () => {
+    expect(
+      resolveNpmDistTagMirrorAuth({
+        nodeAuthToken: "  ",
+        npmToken: "npm-token",
+      }),
+    ).toEqual({
+      hasAuth: true,
+      source: "npm-token",
+    });
+  });
+
+  it("reports missing auth when neither token exists", () => {
+    expect(
+      resolveNpmDistTagMirrorAuth({
+        nodeAuthToken: "",
+        npmToken: undefined,
+      }),
+    ).toEqual({
+      hasAuth: false,
+      source: "none",
+    });
+  });
+});
+
+describe("shouldSkipPackedTarballValidation", () => {
+  it("defaults to full pack validation", () => {
+    expect(shouldSkipPackedTarballValidation({})).toBe(false);
+  });
+
+  it("accepts truthy values for metadata-only validation", () => {
+    expect(
+      shouldSkipPackedTarballValidation({
+        OPENCLAW_NPM_RELEASE_SKIP_PACK_CHECK: "1",
+      }),
+    ).toBe(true);
+  });
+
+  it("treats false-like values as disabled", () => {
+    expect(
+      shouldSkipPackedTarballValidation({
+        OPENCLAW_NPM_RELEASE_SKIP_PACK_CHECK: "false",
+      }),
+    ).toBe(false);
   });
 });
 
@@ -122,7 +203,7 @@ describe("compareReleaseVersions", () => {
   });
 
   it("treats a newer beta day as newer than an older stable day", () => {
-    expect(compareReleaseVersions("2026.3.30-beta.1", "2026.3.29")).toBe(1);
+    expect(compareReleaseVersions("2026.4.1-beta.1", "2026.3.29")).toBe(1);
   });
 
   it("orders stable correction releases after the base stable release", () => {
@@ -211,6 +292,10 @@ describe("parseNpmPackJsonOutput", () => {
 describe("collectControlUiPackErrors", () => {
   it("rejects packs that ship the dashboard HTML without the asset payload", () => {
     expect(collectControlUiPackErrors(["dist/control-ui/index.html"])).toEqual([
+      ...REQUIRED_PACKED_PATHS.map(
+        (requiredPath) =>
+          `npm package is missing required path "${requiredPath}". Ensure UI assets are built and included before publish.`,
+      ),
       'npm package is missing Control UI asset payload under "dist/control-ui/assets/". Refuse release when the dashboard tarball would be empty.',
     ]);
   });
@@ -219,10 +304,157 @@ describe("collectControlUiPackErrors", () => {
     expect(
       collectControlUiPackErrors([
         "dist/control-ui/index.html",
+        ...REQUIRED_PACKED_PATHS,
         "dist/control-ui/assets/index-Bu8rSoJV.js",
         "dist/control-ui/assets/index-BK0yXA_h.css",
       ]),
     ).toEqual([]);
+  });
+});
+
+describe("collectForbiddenPackedPathErrors", () => {
+  it("rejects generated docs artifacts in npm pack output", () => {
+    expect(
+      collectForbiddenPackedPathErrors([
+        "dist/index.js",
+        "docs/.generated/config-baseline.json",
+        "docs/.generated/config-baseline.plugin.json",
+      ]),
+    ).toEqual([
+      'npm package must not include generated docs artifact "docs/.generated/config-baseline.json".',
+      'npm package must not include generated docs artifact "docs/.generated/config-baseline.plugin.json".',
+    ]);
+  });
+
+  it("rejects private qa artifacts in npm pack output", () => {
+    expect(
+      collectForbiddenPackedPathErrors([
+        "dist/extensions/qa-channel/runtime-api.js",
+        "dist/extensions/qa-channel/package.json",
+        "dist/extensions/qa-lab/runtime-api.js",
+        "dist/extensions/qa-lab/src/cli.js",
+        "dist/plugin-sdk/extensions/qa-lab/cli.d.ts",
+        "dist/qa-runtime-B9LDtssJ.js",
+        "qa/scenarios/index.md",
+      ]),
+    ).toEqual([
+      'npm package must not include private QA channel artifact "dist/extensions/qa-channel/package.json".',
+      'npm package must not include private QA channel artifact "dist/extensions/qa-channel/runtime-api.js".',
+      'npm package must not include private QA lab artifact "dist/extensions/qa-lab/runtime-api.js".',
+      'npm package must not include private QA lab artifact "dist/extensions/qa-lab/src/cli.js".',
+      'npm package must not include private QA lab type artifact "dist/plugin-sdk/extensions/qa-lab/cli.d.ts".',
+      'npm package must not include private QA runtime chunk "dist/qa-runtime-B9LDtssJ.js".',
+      'npm package must not include private QA suite artifact "qa/scenarios/index.md".',
+    ]);
+  });
+
+  it("rejects legacy update verifier QA runtime sidecars", () => {
+    expect(
+      collectForbiddenPackedPathErrors([
+        "dist/extensions/qa-channel/runtime-api.js",
+        "dist/extensions/qa-lab/runtime-api.js",
+      ]),
+    ).toEqual([
+      'npm package must not include private QA channel artifact "dist/extensions/qa-channel/runtime-api.js".',
+      'npm package must not include private QA lab artifact "dist/extensions/qa-lab/runtime-api.js".',
+    ]);
+  });
+
+  it("rejects root dist chunks that still reference the private qa lab", () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "openclaw-pack-private-qa-"));
+
+    try {
+      mkdirSync(join(rootDir, "dist"), { recursive: true });
+      writeFileSync(
+        join(rootDir, "dist", "entry.js"),
+        "//#region extensions/qa-lab/src/cli.ts\n",
+        "utf8",
+      );
+      writeFileSync(join(rootDir, "README.md"), "developer docs mention extensions/qa-lab/\n");
+
+      expect(collectForbiddenPackedContentErrors(["dist/entry.js", "README.md"], rootDir)).toEqual([
+        'npm package must not include private QA lab marker "//#region extensions/qa-lab/" in "dist/entry.js".',
+      ]);
+    } finally {
+      rmSync(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  it("allows legacy QA compatibility paths in the generated dist inventory", () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "openclaw-pack-inventory-"));
+
+    try {
+      mkdirSync(join(rootDir, "dist"), { recursive: true });
+      writeFileSync(
+        join(rootDir, PACKAGE_DIST_INVENTORY_RELATIVE_PATH),
+        JSON.stringify(["dist/extensions/qa-lab/runtime-api.js"]),
+        "utf8",
+      );
+
+      expect(
+        collectForbiddenPackedContentErrors([PACKAGE_DIST_INVENTORY_RELATIVE_PATH], rootDir),
+      ).toEqual([]);
+    } finally {
+      rmSync(rootDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("collectPackedTestCargoErrors", () => {
+  it("rejects packed test files and test directories", () => {
+    expect(
+      collectPackedTestCargoErrors([
+        "dist/extensions/webhooks/node_modules/zod/src/v3/tests/all-errors.test.ts",
+        "dist/extensions/whatsapp/node_modules/pino/test/basic.test.js",
+        "dist/extensions/whatsapp/node_modules/@jimp/plugin-crop/src/__snapshots__/crop.test.ts.snap",
+        "dist/index.js",
+      ]),
+    ).toEqual([
+      'npm package must not include test cargo "dist/extensions/webhooks/node_modules/zod/src/v3/tests/all-errors.test.ts".',
+      'npm package must not include test cargo "dist/extensions/whatsapp/node_modules/@jimp/plugin-crop/src/__snapshots__/crop.test.ts.snap".',
+      'npm package must not include test cargo "dist/extensions/whatsapp/node_modules/pino/test/basic.test.js".',
+    ]);
+  });
+
+  it("allows normal runtime files", () => {
+    expect(
+      collectPackedTestCargoErrors([
+        "dist/index.js",
+        "dist/extensions/whatsapp/node_modules/pino/lib/proto.js",
+        "dist/extensions/webhooks/node_modules/zod/v4/core/api.js",
+      ]),
+    ).toEqual([]);
+  });
+
+  it("allows legitimate package roots named test under node_modules", () => {
+    expect(
+      collectPackedTestCargoErrors([
+        "dist/extensions/fixture-plugin/node_modules/direct/node_modules/test/index.js",
+        "dist/extensions/fixture-plugin/node_modules/direct/node_modules/@scope/tests/index.js",
+      ]),
+    ).toEqual([]);
+  });
+
+  it("allows leaf runtime filenames named test or tests", () => {
+    expect(
+      collectPackedTestCargoErrors([
+        "dist/extensions/fixture-plugin/node_modules/direct/bin/test",
+        "dist/extensions/fixture-plugin/node_modules/direct/bin/tests",
+      ]),
+    ).toEqual([]);
+  });
+
+  it("normalizes Windows or mixed separators before classifying test cargo", () => {
+    expect(
+      collectPackedTestCargoErrors([
+        String.raw`dist\extensions\fixture-plugin\node_modules\direct\__tests__\index.js`,
+        String.raw`dist/extensions/fixture-plugin\node_modules/direct/src/runtime.spec.ts`,
+        String.raw`dist\extensions\fixture-plugin\node_modules\direct\node_modules\test\index.js`,
+      ]),
+    ).toEqual([
+      `npm package must not include test cargo "${String.raw`dist/extensions/fixture-plugin\node_modules/direct/src/runtime.spec.ts`}".`,
+      `npm package must not include test cargo "${String.raw`dist\extensions\fixture-plugin\node_modules\direct\__tests__\index.js`}".`,
+    ]);
   });
 });
 

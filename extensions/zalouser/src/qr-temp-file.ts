@@ -1,6 +1,6 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { resolvePreferredOpenClawTmpDir } from "../runtime-api.js";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/browser-security-runtime";
 
 export async function writeQrDataUrlToTempFile(
   qrDataUrl: string,

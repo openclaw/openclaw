@@ -58,6 +58,17 @@ function candidateBinDirs(opts: EnsureOpenClawPathOpts): { prepend: string[]; ap
   const prepend: string[] = [];
   const append: string[] = [];
 
+  // Keep the active runtime directory ahead of PATH hardening so shebang-based
+  // subprocesses keep using the same Node/Bun the current OpenClaw process is on.
+  try {
+    const execDir = path.dirname(execPath);
+    if (isExecutable(execPath)) {
+      prepend.push(execDir);
+    }
+  } catch {
+    // ignore
+  }
+
   // Bundled macOS app: `openclaw` lives next to the executable (process.execPath).
   try {
     const execDir = path.dirname(execPath);

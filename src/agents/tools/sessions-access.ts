@@ -1,5 +1,9 @@
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isSubagentSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import {
   listSpawnedSessionKeys,
   resolveInternalSessionKey,
@@ -23,7 +27,7 @@ export type SessionAccessResult =
 export function resolveSessionToolsVisibility(cfg: OpenClawConfig): SessionToolsVisibility {
   const raw = (cfg.tools as { sessions?: { visibility?: unknown } } | undefined)?.sessions
     ?.visibility;
-  const value = typeof raw === "string" ? raw.trim().toLowerCase() : "";
+  const value = normalizeLowercaseStringOrEmpty(raw);
   if (value === "self" || value === "tree" || value === "agent" || value === "all") {
     return value;
   }
@@ -63,14 +67,14 @@ export function resolveSandboxedSessionToolContext(params: {
 } {
   const { mainKey, alias } = resolveMainSessionAlias(params.cfg);
   const visibility = resolveSandboxSessionToolsVisibility(params.cfg);
-  const requesterInternalKey =
-    typeof params.agentSessionKey === "string" && params.agentSessionKey.trim()
-      ? resolveInternalSessionKey({
-          key: params.agentSessionKey,
-          alias,
-          mainKey,
-        })
-      : undefined;
+  const requesterSessionKey = normalizeOptionalString(params.agentSessionKey);
+  const requesterInternalKey = requesterSessionKey
+    ? resolveInternalSessionKey({
+        key: requesterSessionKey,
+        alias,
+        mainKey,
+      })
+    : undefined;
   const effectiveRequesterKey = requesterInternalKey ?? alias;
   const restrictToSpawned =
     params.sandboxed === true &&
@@ -96,7 +100,9 @@ export function createAgentToAgentPolicy(cfg: OpenClawConfig): AgentToAgentPolic
       return true;
     }
     return allowPatterns.some((pattern) => {
-      const raw = String(pattern ?? "").trim();
+      const raw =
+        normalizeOptionalString(typeof pattern === "string" ? pattern : String(pattern ?? "")) ??
+        "";
       if (!raw) {
         return false;
       }

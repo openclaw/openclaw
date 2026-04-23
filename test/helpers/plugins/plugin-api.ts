@@ -1,14 +1,15 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-runtime";
 
-type TestPluginApiInput = Omit<
-  Partial<OpenClawPluginApi>,
-  "id" | "name" | "source" | "config" | "runtime"
-> &
-  Pick<OpenClawPluginApi, "id" | "name" | "source" | "config" | "runtime">;
+type TestPluginApiInput = Partial<OpenClawPluginApi>;
 
-export function createTestPluginApi(api: TestPluginApiInput): OpenClawPluginApi {
+export function createTestPluginApi(api: TestPluginApiInput = {}): OpenClawPluginApi {
   return {
+    id: "test-plugin",
+    name: "test-plugin",
+    source: "test",
     registrationMode: "full",
+    config: {},
+    runtime: {} as OpenClawPluginApi["runtime"],
     logger: { info() {}, warn() {}, error() {}, debug() {} },
     registerTool() {},
     registerHook() {},
@@ -16,18 +17,37 @@ export function createTestPluginApi(api: TestPluginApiInput): OpenClawPluginApi 
     registerChannel() {},
     registerGatewayMethod() {},
     registerCli() {},
-    registerService() {},
     registerCliBackend() {},
+    registerTextTransforms() {},
+    registerService() {},
+    registerReload() {},
+    registerNodeHostCommand() {},
+    registerSecurityAuditCollector() {},
+    registerConfigMigration() {},
+    registerAutoEnableProbe() {},
     registerProvider() {},
     registerSpeechProvider() {},
+    registerRealtimeTranscriptionProvider() {},
+    registerRealtimeVoiceProvider() {},
     registerMediaUnderstandingProvider() {},
     registerImageGenerationProvider() {},
+    registerMusicGenerationProvider() {},
+    registerVideoGenerationProvider() {},
+    registerWebFetchProvider() {},
     registerWebSearchProvider() {},
     registerInteractiveHandler() {},
     onConversationBindingResolved() {},
     registerCommand() {},
     registerContextEngine() {},
+    registerCompactionProvider() {},
+    registerAgentHarness() {},
+    registerEmbeddedExtensionFactory() {},
+    registerCodexAppServerExtensionFactory() {},
+    registerDetachedTaskRuntime() {},
+    registerMemoryCapability() {},
     registerMemoryPromptSection() {},
+    registerMemoryPromptSupplement() {},
+    registerMemoryCorpusSupplement() {},
     registerMemoryFlushPlan() {},
     registerMemoryRuntime() {},
     registerMemoryEmbeddingProvider() {},

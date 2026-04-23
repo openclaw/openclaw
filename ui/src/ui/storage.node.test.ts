@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStorageMock } from "../test-helpers/storage.ts";
+import {
+  loadLocalUserIdentity,
+  loadSettings,
+  saveLocalUserIdentity,
+  saveSettings,
+} from "./storage.ts";
 
 function setTestLocation(params: { protocol: string; host: string; pathname: string }) {
   vi.stubGlobal("location", {
@@ -38,7 +44,6 @@ function expectedGatewayUrl(basePath: string): string {
 
 describe("loadSettings default gateway URL derivation", () => {
   beforeEach(() => {
-    vi.resetModules();
     vi.stubGlobal("localStorage", createStorageMock());
     vi.stubGlobal("sessionStorage", createStorageMock());
     vi.stubGlobal("navigator", { language: "en-US" } as Navigator);
@@ -61,7 +66,6 @@ describe("loadSettings default gateway URL derivation", () => {
     });
     setControlUiBasePath(" /openclaw/ ");
 
-    const { loadSettings } = await import("./storage.ts");
     expect(loadSettings().gatewayUrl).toBe(expectedGatewayUrl("/openclaw"));
   });
 
@@ -72,12 +76,10 @@ describe("loadSettings default gateway URL derivation", () => {
       pathname: "/apps/openclaw/chat",
     });
 
-    const { loadSettings } = await import("./storage.ts");
     expect(loadSettings().gatewayUrl).toBe(expectedGatewayUrl("/apps/openclaw"));
   });
 
   it("skips node sessionStorage accessors that warn without a storage file", async () => {
-    vi.resetModules();
     vi.unstubAllGlobals();
     vi.stubGlobal("localStorage", createStorageMock());
     vi.stubGlobal("navigator", { language: "en-US" } as Navigator);
@@ -88,8 +90,6 @@ describe("loadSettings default gateway URL derivation", () => {
     });
     setControlUiBasePath(undefined);
     const warningSpy = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
-
-    const { loadSettings } = await import("./storage.ts");
 
     expect(loadSettings()).toMatchObject({
       gatewayUrl: expectedGatewayUrl(""),
@@ -118,7 +118,6 @@ describe("loadSettings default gateway URL derivation", () => {
       }),
     );
 
-    const { loadSettings } = await import("./storage.ts");
     expect(loadSettings()).toMatchObject({
       gatewayUrl: "wss://gateway.example:8443/openclaw",
       token: "",
@@ -155,7 +154,6 @@ describe("loadSettings default gateway URL derivation", () => {
     });
 
     const gwUrl = expectedGatewayUrl("");
-    const { loadSettings, saveSettings } = await import("./storage.ts");
     saveSettings({
       gatewayUrl: gwUrl,
       token: "session-token",
@@ -188,7 +186,6 @@ describe("loadSettings default gateway URL derivation", () => {
 
     const gwUrl = expectedGatewayUrl("");
     const otherUrl = "wss://other-gateway.example:8443";
-    const { loadSettings, saveSettings } = await import("./storage.ts");
     saveSettings({
       gatewayUrl: gwUrl,
       token: "gateway-a-token",
@@ -237,7 +234,6 @@ describe("loadSettings default gateway URL derivation", () => {
     });
 
     const gwUrl = expectedGatewayUrl("");
-    const { loadSettings, saveSettings } = await import("./storage.ts");
     saveSettings({
       gatewayUrl: gwUrl,
       token: "memory-only-token",
@@ -290,7 +286,6 @@ describe("loadSettings default gateway URL derivation", () => {
     });
 
     const gwUrl = expectedGatewayUrl("");
-    const { loadSettings, saveSettings } = await import("./storage.ts");
     saveSettings({
       gatewayUrl: gwUrl,
       token: "stale-token",
@@ -336,7 +331,6 @@ describe("loadSettings default gateway URL derivation", () => {
     });
 
     const gwUrl = expectedGatewayUrl("");
-    const { saveSettings } = await import("./storage.ts");
     saveSettings({
       gatewayUrl: gwUrl,
       token: "",
@@ -370,8 +364,6 @@ describe("loadSettings default gateway URL derivation", () => {
     });
 
     const gwUrl = expectedGatewayUrl("");
-    const { loadSettings, saveSettings } = await import("./storage.ts");
-
     saveSettings({
       gatewayUrl: gwUrl,
       token: "",
@@ -403,7 +395,6 @@ describe("loadSettings default gateway URL derivation", () => {
       pathname: "/",
     });
 
-    const { saveSettings } = await import("./storage.ts");
     const gwUrl = expectedGatewayUrl("");
     const scopedKey = `openclaw.control.settings.v1:wss://gateway.example:8443`;
 
@@ -450,5 +441,50 @@ describe("loadSettings default gateway URL derivation", () => {
       sessionKey: "agent:current:main",
       lastActiveSessionKey: "agent:current:main",
     });
+  });
+
+  it("persists local user identity separately from gateway settings", async () => {
+    setTestLocation({
+      protocol: "https:",
+      host: "gateway.example:8443",
+      pathname: "/",
+    });
+
+    saveLocalUserIdentity({ name: "Buns", avatar: "🦞" });
+
+    expect(loadLocalUserIdentity()).toEqual({
+      name: "Buns",
+      avatar: "🦞",
+    });
+    expect(JSON.parse(localStorage.getItem("openclaw.control.user.v1") ?? "{}")).toEqual({
+      name: "Buns",
+      avatar: "🦞",
+    });
+  });
+
+  it("normalizes invalid local user identity values on load", async () => {
+    localStorage.setItem(
+      "openclaw.control.user.v1",
+      JSON.stringify({
+        name: "  ",
+        avatar: "https://example.com/avatar.png",
+      }),
+    );
+
+    expect(loadLocalUserIdentity()).toEqual({
+      name: null,
+      avatar: null,
+    });
+  });
+
+  it("removes the persisted local user identity when cleared", async () => {
+    saveLocalUserIdentity({ name: "Buns", avatar: "data:image/png;base64,AAA" });
+    saveLocalUserIdentity({ name: null, avatar: null });
+
+    expect(loadLocalUserIdentity()).toEqual({
+      name: null,
+      avatar: null,
+    });
+    expect(localStorage.getItem("openclaw.control.user.v1")).toBeNull();
   });
 });

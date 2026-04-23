@@ -10,7 +10,9 @@ import { randomUUID } from "node:crypto";
 import type * as LanceDB from "@lancedb/lancedb";
 import { Type } from "@sinclair/typebox";
 import OpenAI from "openai";
+import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/config-runtime";
 import { ensureGlobalUndiciEnvProxyDispatcher } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { definePluginEntry, type OpenClawPluginApi } from "./api.js";
 import {
   DEFAULT_CAPTURE_MAX_CHARS,
@@ -39,6 +41,12 @@ type MemorySearchResult = {
   score: number;
 };
 
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
 // ============================================================================
 // LanceDB Provider
 // ============================================================================
@@ -53,6 +61,7 @@ class MemoryDB {
   constructor(
     private readonly dbPath: string,
     private readonly vectorDim: number,
+    private readonly storageOptions?: Record<string, string>,
   ) {}
 
   private async ensureInitialized(): Promise<void> {
@@ -63,13 +72,19 @@ class MemoryDB {
       return this.initPromise;
     }
 
-    this.initPromise = this.doInitialize();
+    this.initPromise = this.doInitialize().catch((error) => {
+      this.initPromise = null;
+      throw error;
+    });
     return this.initPromise;
   }
 
   private async doInitialize(): Promise<void> {
     const lancedb = await loadLanceDbModule();
-    this.db = await lancedb.connect(this.dbPath);
+    const connectionOptions: LanceDB.ConnectionOptions = this.storageOptions
+      ? { storageOptions: this.storageOptions }
+      : {};
+    this.db = await lancedb.connect(this.dbPath, connectionOptions);
     const tables = await this.db.tableNames();
 
     if (tables.includes(TABLE_NAME)) {
@@ -259,7 +274,7 @@ export function shouldCapture(text: string, options?: { maxChars?: number }): bo
 }
 
 export function detectCategory(text: string): MemoryCategory {
-  const lower = text.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(text);
   if (/prefer|radši|like|love|hate|want/i.test(lower)) {
     return "preference";
   }
@@ -288,12 +303,42 @@ export default definePluginEntry({
 
   register(api: OpenClawPluginApi) {
     const cfg = memoryConfigSchema.parse(api.pluginConfig);
-    const resolvedDbPath = api.resolvePath(cfg.dbPath!);
+    const dbPath = cfg.dbPath!;
+    const resolvedDbPath = dbPath.includes("://") ? dbPath : api.resolvePath(dbPath);
     const { model, dimensions, apiKey, baseUrl } = cfg.embedding;
+    const disabledHookCfg = { ...cfg, autoCapture: false, autoRecall: false };
 
     const vectorDim = dimensions ?? vectorDimsForModel(model);
-    const db = new MemoryDB(resolvedDbPath, vectorDim);
+    const db = new MemoryDB(resolvedDbPath, vectorDim, cfg.storageOptions);
     const embeddings = new Embeddings(apiKey, model, baseUrl, dimensions);
+    const resolveCurrentHookConfig = () => {
+      const runtimePluginConfig = resolveLivePluginConfigObject(
+        api.runtime.config?.loadConfig,
+        "memory-lancedb",
+        api.pluginConfig as Record<string, unknown>,
+      );
+      if (!runtimePluginConfig) {
+        return disabledHookCfg;
+      }
+      return memoryConfigSchema.parse({
+        embedding: {
+          apiKey: cfg.embedding.apiKey,
+          model: cfg.embedding.model,
+          ...(cfg.embedding.baseUrl ? { baseUrl: cfg.embedding.baseUrl } : {}),
+          ...(typeof cfg.embedding.dimensions === "number"
+            ? { dimensions: cfg.embedding.dimensions }
+            : {}),
+          ...asRecord(asRecord(runtimePluginConfig)?.embedding),
+        },
+        ...(cfg.dreaming ? { dreaming: cfg.dreaming } : {}),
+        dbPath: cfg.dbPath,
+        autoCapture: cfg.autoCapture,
+        autoRecall: cfg.autoRecall,
+        captureMaxChars: cfg.captureMaxChars,
+        ...(cfg.storageOptions ? { storageOptions: cfg.storageOptions } : {}),
+        ...asRecord(runtimePluginConfig),
+      });
+    };
 
     api.logger.info(`memory-lancedb: plugin registered (db: ${resolvedDbPath}, lazy init)`);
 
@@ -533,11 +578,15 @@ export default definePluginEntry({
     // Lifecycle Hooks
     // ========================================================================
 
-    // Auto-recall: inject relevant memories before agent starts
+    // Auto-recall: inject relevant memories during prompt build
     if (cfg.autoRecall) {
-      api.on("before_agent_start", async (event) => {
+      api.on("before_prompt_build", async (event) => {
+        const currentCfg = resolveCurrentHookConfig();
+        if (!currentCfg.autoRecall) {
+          return undefined;
+        }
         if (!event.prompt || event.prompt.length < 5) {
-          return;
+          return undefined;
         }
 
         try {
@@ -545,7 +594,7 @@ export default definePluginEntry({
           const results = await db.search(vector, 3, 0.3);
 
           if (results.length === 0) {
-            return;
+            return undefined;
           }
 
           api.logger.info?.(`memory-lancedb: injecting ${results.length} memories into context`);
@@ -558,12 +607,17 @@ export default definePluginEntry({
         } catch (err) {
           api.logger.warn(`memory-lancedb: recall failed: ${String(err)}`);
         }
+        return undefined;
       });
     }
 
     // Auto-capture: analyze and store important information after agent ends
     if (cfg.autoCapture) {
       api.on("agent_end", async (event) => {
+        const currentCfg = resolveCurrentHookConfig();
+        if (!currentCfg.autoCapture) {
+          return;
+        }
         if (!event.success || !event.messages || event.messages.length === 0) {
           return;
         }
@@ -611,7 +665,7 @@ export default definePluginEntry({
 
           // Filter for capturable content
           const toCapture = texts.filter(
-            (text) => text && shouldCapture(text, { maxChars: cfg.captureMaxChars }),
+            (text) => text && shouldCapture(text, { maxChars: currentCfg.captureMaxChars }),
           );
           if (toCapture.length === 0) {
             return;

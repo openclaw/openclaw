@@ -11,9 +11,6 @@ let hookCacheCleared = false;
 const clearProviderRuntimeHookCacheMock = vi.fn<() => void>(() => {
   hookCacheCleared = true;
 });
-const resolveProviderRuntimePluginMock = vi.fn<(params: unknown) => unknown>(() =>
-  hookCacheCleared ? { id: "openai", label: "OpenAI", auth: [] } : undefined,
-);
 const prepareProviderDynamicModelMock = vi.fn<(params: unknown) => Promise<void>>(async () => {});
 const runProviderDynamicModelMock = vi.fn<(params: unknown) => unknown>(() =>
   hookCacheCleared
@@ -37,24 +34,34 @@ vi.mock("../pi-model-discovery.js", () => ({
   discoverModels: discoverModelsMock,
 }));
 
-vi.mock("../../plugins/provider-runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../plugins/provider-runtime.js")>();
-  return {
-    ...actual,
-    applyProviderResolvedModelCompatWithPlugins: () => undefined,
-    clearProviderRuntimeHookCache: clearProviderRuntimeHookCacheMock,
-    normalizeProviderResolvedModelWithPlugin: () => undefined,
-    prepareProviderDynamicModel: (params: unknown) => prepareProviderDynamicModelMock(params),
-    resolveProviderRuntimePlugin: (params: unknown) => resolveProviderRuntimePluginMock(params),
-    runProviderDynamicModel: (params: unknown) => runProviderDynamicModelMock(params),
-  };
-});
+vi.mock("../../plugins/provider-runtime.js", () => ({
+  applyProviderResolvedModelCompatWithPlugins: () => undefined,
+  applyProviderResolvedTransportWithPlugin: () => undefined,
+  buildProviderUnknownModelHintWithPlugin: () => undefined,
+  clearProviderRuntimeHookCache: () => {},
+  normalizeProviderResolvedModelWithPlugin: () => undefined,
+  normalizeProviderTransportWithPlugin: () => undefined,
+  prepareProviderDynamicModel: async () => {},
+  resolveProviderBuiltInModelSuppression: () => undefined,
+  runProviderDynamicModel: () => undefined,
+  shouldPreferProviderRuntimeResolvedModel: () => false,
+}));
 
 describe("resolveModelAsync startup retry", () => {
+  const runtimeHooks = {
+    applyProviderResolvedModelCompatWithPlugins: () => undefined,
+    buildProviderUnknownModelHintWithPlugin: () => undefined,
+    clearProviderRuntimeHookCache: clearProviderRuntimeHookCacheMock,
+    normalizeProviderResolvedModelWithPlugin: () => undefined,
+    normalizeProviderTransportWithPlugin: () => undefined,
+    prepareProviderDynamicModel: (params: unknown) => prepareProviderDynamicModelMock(params),
+    runProviderDynamicModel: (params: unknown) => runProviderDynamicModelMock(params),
+    applyProviderResolvedTransportWithPlugin: () => undefined,
+  };
+
   beforeEach(() => {
     hookCacheCleared = false;
     clearProviderRuntimeHookCacheMock.mockClear();
-    resolveProviderRuntimePluginMock.mockClear();
     prepareProviderDynamicModelMock.mockClear();
     runProviderDynamicModelMock.mockClear();
     discoverAuthStorageMock.mockClear();
@@ -71,6 +78,7 @@ describe("resolveModelAsync startup retry", () => {
       {},
       {
         retryTransientProviderRuntimeMiss: true,
+        runtimeHooks,
       },
     );
 
@@ -81,19 +89,25 @@ describe("resolveModelAsync startup retry", () => {
       api: "openai-codex-responses",
     });
     expect(clearProviderRuntimeHookCacheMock).toHaveBeenCalledTimes(1);
-    expect(resolveProviderRuntimePluginMock).toHaveBeenCalledTimes(2);
+    expect(prepareProviderDynamicModelMock).toHaveBeenCalledTimes(2);
     expect(runProviderDynamicModelMock).toHaveBeenCalledTimes(2);
   });
 
   it("does not clear the hook cache during steady-state misses", async () => {
     const { resolveModelAsync } = await import("./model.js");
 
-    const result = await resolveModelAsync("openai-codex", "gpt-5.4", "/tmp/agent", {});
+    const result = await resolveModelAsync(
+      "openai-codex",
+      "gpt-5.4",
+      "/tmp/agent",
+      {},
+      { runtimeHooks },
+    );
 
     expect(result.model).toBeUndefined();
     expect(result.error).toBe("Unknown model: openai-codex/gpt-5.4");
     expect(clearProviderRuntimeHookCacheMock).not.toHaveBeenCalled();
-    expect(resolveProviderRuntimePluginMock).toHaveBeenCalledTimes(1);
+    expect(prepareProviderDynamicModelMock).toHaveBeenCalledTimes(1);
     expect(runProviderDynamicModelMock).toHaveBeenCalledTimes(1);
   });
 });

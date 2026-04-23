@@ -1,15 +1,17 @@
 import crypto from "node:crypto";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
+import { setPluginToolMeta } from "../plugins/tools.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
   buildSafeToolName,
   normalizeReservedToolNames,
   TOOL_NAME_SEPARATOR,
 } from "./pi-bundle-mcp-names.js";
-import { createSessionMcpRuntime } from "./pi-bundle-mcp-runtime.js";
 import type { BundleMcpToolRuntime, SessionMcpRuntime } from "./pi-bundle-mcp-types.js";
+import type { AnyAgentTool } from "./tools/common.js";
 
 function toAgentToolResult(params: {
   serverName: string;
@@ -62,13 +64,25 @@ function toAgentToolResult(params: {
 export async function materializeBundleMcpToolsForRun(params: {
   runtime: SessionMcpRuntime;
   reservedToolNames?: Iterable<string>;
+  disposeRuntime?: () => Promise<void>;
 }): Promise<BundleMcpToolRuntime> {
   params.runtime.markUsed();
   const catalog = await params.runtime.getCatalog();
   const reservedNames = normalizeReservedToolNames(params.reservedToolNames);
   const tools: BundleMcpToolRuntime["tools"] = [];
+  const sortedCatalogTools = [...catalog.tools].toSorted((a, b) => {
+    const serverOrder = a.safeServerName.localeCompare(b.safeServerName);
+    if (serverOrder !== 0) {
+      return serverOrder;
+    }
+    const toolOrder = a.toolName.localeCompare(b.toolName);
+    if (toolOrder !== 0) {
+      return toolOrder;
+    }
+    return a.serverName.localeCompare(b.serverName);
+  });
 
-  for (const tool of catalog.tools) {
+  for (const tool of sortedCatalogTools) {
     const originalName = tool.toolName.trim();
     if (!originalName) {
       continue;
@@ -83,8 +97,8 @@ export async function materializeBundleMcpToolsForRun(params: {
         `bundle-mcp: tool "${tool.toolName}" from server "${tool.serverName}" registered as "${safeToolName}" to keep the tool name provider-safe.`,
       );
     }
-    reservedNames.add(safeToolName.toLowerCase());
-    tools.push({
+    reservedNames.add(normalizeLowercaseStringOrEmpty(safeToolName));
+    const agentTool: AnyAgentTool = {
       name: safeToolName,
       label: tool.title ?? tool.toolName,
       description: tool.description || tool.fallbackDescription,
@@ -97,12 +111,24 @@ export async function materializeBundleMcpToolsForRun(params: {
           result,
         });
       },
+    };
+    setPluginToolMeta(agentTool, {
+      pluginId: "bundle-mcp",
+      optional: false,
     });
+    tools.push(agentTool);
   }
+
+  // Sort tools deterministically by name so the tools block in API requests is stable across
+  // turns (defensive — listTools() order is usually stable but not guaranteed).
+  // Cannot fix name collisions: collision suffixes above are order-dependent.
+  tools.sort((a, b) => a.name.localeCompare(b.name));
 
   return {
     tools,
-    dispose: async () => {},
+    dispose: async () => {
+      await params.disposeRuntime?.();
+    },
   };
 }
 
@@ -110,8 +136,15 @@ export async function createBundleMcpToolRuntime(params: {
   workspaceDir: string;
   cfg?: OpenClawConfig;
   reservedToolNames?: Iterable<string>;
+  createRuntime?: (params: {
+    sessionId: string;
+    workspaceDir: string;
+    cfg?: OpenClawConfig;
+  }) => SessionMcpRuntime;
 }): Promise<BundleMcpToolRuntime> {
-  const runtime = createSessionMcpRuntime({
+  const createRuntime =
+    params.createRuntime ?? (await import("./pi-bundle-mcp-runtime.js")).createSessionMcpRuntime;
+  const runtime = createRuntime({
     sessionId: `bundle-mcp:${crypto.randomUUID()}`,
     workspaceDir: params.workspaceDir,
     cfg: params.cfg,
@@ -119,11 +152,9 @@ export async function createBundleMcpToolRuntime(params: {
   const materialized = await materializeBundleMcpToolsForRun({
     runtime,
     reservedToolNames: params.reservedToolNames,
-  });
-  return {
-    tools: materialized.tools,
-    dispose: async () => {
+    disposeRuntime: async () => {
       await runtime.dispose();
     },
-  };
+  });
+  return materialized;
 }

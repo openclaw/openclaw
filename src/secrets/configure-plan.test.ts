@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
+  TALK_TEST_PROVIDER_API_KEY_PATH,
+  TALK_TEST_PROVIDER_ID,
+} from "../test-utils/talk-test-provider.js";
+import {
   buildConfigureCandidates,
   buildConfigureCandidatesForScope,
   buildSecretsConfigurePlan,
@@ -12,7 +16,11 @@ describe("secrets configure plan helpers", () => {
   it("builds configure candidates from supported configure targets", () => {
     const config = {
       talk: {
-        apiKey: "plain", // pragma: allowlist secret
+        providers: {
+          [TALK_TEST_PROVIDER_ID]: {
+            apiKey: "plain", // pragma: allowlist secret
+          },
+        },
       },
       channels: {
         telegram: {
@@ -23,7 +31,7 @@ describe("secrets configure plan helpers", () => {
 
     const candidates = buildConfigureCandidates(config);
     const paths = candidates.map((entry) => entry.path);
-    expect(paths).toContain("talk.apiKey");
+    expect(paths).toContain(TALK_TEST_PROVIDER_API_KEY_PATH);
     expect(paths).toContain("channels.telegram.botToken");
   });
 
@@ -84,10 +92,14 @@ describe("secrets configure plan helpers", () => {
     const candidates = buildConfigureCandidatesForScope({
       config: {
         talk: {
-          apiKey: {
-            source: "env",
-            provider: "default",
-            id: "TALK_API_KEY",
+          providers: {
+            [TALK_TEST_PROVIDER_ID]: {
+              apiKey: {
+                source: "env",
+                provider: "default",
+                id: "TALK_API_KEY",
+              },
+            },
           },
         },
       } as OpenClawConfig,
@@ -113,7 +125,7 @@ describe("secrets configure plan helpers", () => {
     expect(candidates).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          path: "talk.apiKey",
+          path: TALK_TEST_PROVIDER_API_KEY_PATH,
           existingRef: {
             source: "env",
             provider: "default",
@@ -136,9 +148,9 @@ describe("secrets configure plan helpers", () => {
     const candidates = buildConfigureCandidatesForScope({
       config: {
         talk: {
-          provider: "elevenlabs",
+          provider: TALK_TEST_PROVIDER_ID,
           providers: {
-            elevenlabs: {
+            [TALK_TEST_PROVIDER_ID]: {
               apiKey: "demo-talk-key", // pragma: allowlist secret
             },
           },
@@ -152,25 +164,22 @@ describe("secrets configure plan helpers", () => {
       } as OpenClawConfig,
     });
 
-    const legacy = candidates.find((entry) => entry.path === "talk.apiKey");
-    const normalized = candidates.find(
-      (entry) => entry.path === "talk.providers.elevenlabs.apiKey",
-    );
-    expect(legacy?.isDerived).not.toBe(true);
+    const normalized = candidates.find((entry) => entry.path === TALK_TEST_PROVIDER_API_KEY_PATH);
     expect(normalized?.isDerived).toBe(true);
   });
 
   it("reports configure change presence and builds deterministic plan shape", () => {
     const selected = new Map([
       [
-        "talk.apiKey",
+        TALK_TEST_PROVIDER_API_KEY_PATH,
         {
-          type: "talk.apiKey",
-          path: "talk.apiKey",
-          pathSegments: ["talk", "apiKey"],
-          label: "talk.apiKey",
+          type: "talk.providers.*.apiKey",
+          path: TALK_TEST_PROVIDER_API_KEY_PATH,
+          pathSegments: ["talk", "providers", TALK_TEST_PROVIDER_ID, "apiKey"],
+          label: TALK_TEST_PROVIDER_API_KEY_PATH,
           configFile: "openclaw.json" as const,
           expectedResolvedValue: "string" as const,
+          providerId: TALK_TEST_PROVIDER_ID,
           ref: {
             source: "env" as const,
             provider: "default",
@@ -198,7 +207,7 @@ describe("secrets configure plan helpers", () => {
       generatedAt: "2026-02-28T00:00:00.000Z",
     });
     expect(plan.targets).toHaveLength(1);
-    expect(plan.targets[0]?.path).toBe("talk.apiKey");
+    expect(plan.targets[0]?.path).toBe(TALK_TEST_PROVIDER_API_KEY_PATH);
     expect(plan.providerUpserts).toBeDefined();
     expect(plan.options).toEqual({
       scrubEnv: true,

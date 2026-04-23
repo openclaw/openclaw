@@ -5,6 +5,7 @@ import type { Api, Model } from "@mariozechner/pi-ai";
 import type { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import type { AnyAgentTool } from "../../pi-tools.types.js";
+import { buildEmbeddedAttemptToolRunContext } from "./attempt.tool-run-context.js";
 
 const MEMORY_RELATIVE_PATH = "memory/2026-03-24.md";
 
@@ -36,36 +37,14 @@ function createAttemptParams(workspaceDir: string) {
 
 describe("runEmbeddedAttempt memory flush tool forwarding", () => {
   it("forwards memory trigger metadata into tool creation so append-only guards activate", async () => {
-    vi.resetModules();
-
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-attempt-memory-flush-"));
-    const stop = new Error("stop after tool creation");
-    const capturedOptions: Array<Record<string, unknown> | undefined> = [];
 
     try {
-      vi.doMock("../../pi-tools.js", async () => {
-        const actual =
-          await vi.importActual<typeof import("../../pi-tools.js")>("../../pi-tools.js");
-        return {
-          ...actual,
-          createOpenClawCodingTools: vi.fn((options) => {
-            capturedOptions.push(options as Record<string, unknown> | undefined);
-            throw stop;
-          }),
-        };
-      });
-
-      const { runEmbeddedAttempt } = await import("./attempt.js");
-
-      await expect(runEmbeddedAttempt(createAttemptParams(workspaceDir))).rejects.toBe(stop);
-
-      expect(capturedOptions).toHaveLength(1);
-      expect(capturedOptions[0]).toMatchObject({
+      expect(buildEmbeddedAttemptToolRunContext(createAttemptParams(workspaceDir))).toMatchObject({
         trigger: "memory",
         memoryFlushWritePath: MEMORY_RELATIVE_PATH,
       });
     } finally {
-      vi.doUnmock("../../pi-tools.js");
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
   });

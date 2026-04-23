@@ -25,12 +25,18 @@ async function createHandler(cfg: Config) {
 function createOpenGuildConfig(
   channels: Record<string, { allow: boolean; includeThreadStarter?: boolean }>,
   extra: Partial<Config> = {},
+  discordOverrides: Partial<NonNullable<Config["channels"]>["discord"]> = {},
 ): Config {
-  return {
-    ...createMentionRequiredGuildConfig(),
+  const base = createMentionRequiredGuildConfig();
+  const cfg: Config = {
+    ...base,
     ...extra,
     channels: {
+      ...base.channels,
+      ...extra.channels,
       discord: {
+        ...base.channels?.discord,
+        ...extra.channels?.discord,
         dm: { enabled: true, policy: "open" },
         groupPolicy: "open",
         guilds: {
@@ -39,9 +45,11 @@ function createOpenGuildConfig(
             channels,
           },
         },
+        ...discordOverrides,
       },
     },
-  } as Config;
+  };
+  return cfg;
 }
 
 describe("discord tool result dispatch", () => {
@@ -94,7 +102,7 @@ describe("discord tool result dispatch", () => {
     expect(getCapturedCtx()?.WasMentioned).toBe(true);
   });
 
-  it("forks thread sessions and injects starter context", async () => {
+  it("isolates thread sessions by default and injects starter context", async () => {
     const getCapturedCtx = captureNextDispatchCtx<{
       SessionKey?: string;
       ParentSessionKey?: string;
@@ -116,7 +124,7 @@ describe("discord tool result dispatch", () => {
     await vi.waitFor(() => expect(dispatchMock).toHaveBeenCalledTimes(1));
     const capturedCtx = getCapturedCtx();
     expect(capturedCtx?.SessionKey).toBe("agent:main:discord:channel:t1");
-    expect(capturedCtx?.ParentSessionKey).toBe("agent:main:discord:channel:p1");
+    expect(capturedCtx?.ParentSessionKey).toBeUndefined();
     expect(capturedCtx?.ThreadStarterBody).toContain("starter message");
     expect(capturedCtx?.ThreadLabel).toContain("Discord thread #general");
   });
@@ -171,12 +179,12 @@ describe("discord tool result dispatch", () => {
     await vi.waitFor(() => expect(dispatchMock).toHaveBeenCalledTimes(1));
     const capturedCtx = getCapturedCtx();
     expect(capturedCtx?.SessionKey).toBe("agent:main:discord:channel:t1");
-    expect(capturedCtx?.ParentSessionKey).toBe("agent:main:discord:channel:forum-1");
+    expect(capturedCtx?.ParentSessionKey).toBeUndefined();
     expect(capturedCtx?.ThreadStarterBody).toContain("starter message");
     expect(capturedCtx?.ThreadLabel).toContain("Discord thread #support");
   });
 
-  it("scopes thread sessions to the routed agent", async () => {
+  it("scopes isolated thread sessions to the routed agent", async () => {
     const getCapturedCtx = captureNextDispatchCtx<{
       SessionKey?: string;
       ParentSessionKey?: string;
@@ -194,6 +202,28 @@ describe("discord tool result dispatch", () => {
     await vi.waitFor(() => expect(dispatchMock).toHaveBeenCalledTimes(1));
     const capturedCtx = getCapturedCtx();
     expect(capturedCtx?.SessionKey).toBe("agent:support:discord:channel:t1");
-    expect(capturedCtx?.ParentSessionKey).toBe("agent:support:discord:channel:p1");
+    expect(capturedCtx?.ParentSessionKey).toBeUndefined();
+  });
+
+  it("inherits parent thread sessions when thread.inheritParent is enabled", async () => {
+    const getCapturedCtx = captureNextDispatchCtx<{
+      SessionKey?: string;
+      ParentSessionKey?: string;
+    }>();
+    const cfg = createOpenGuildConfig(
+      { p1: { allow: true } },
+      {},
+      { thread: { inheritParent: true } },
+    );
+
+    const handler = await createHandler(cfg);
+    const client = createThreadClient();
+
+    await handler(createThreadEvent("m8"), client);
+
+    await vi.waitFor(() => expect(dispatchMock).toHaveBeenCalledTimes(1));
+    const capturedCtx = getCapturedCtx();
+    expect(capturedCtx?.SessionKey).toBe("agent:main:discord:channel:t1");
+    expect(capturedCtx?.ParentSessionKey).toBe("agent:main:discord:channel:p1");
   });
 });

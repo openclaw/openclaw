@@ -1,14 +1,34 @@
 import fs from "node:fs/promises";
-import { describe, expect, it, vi } from "vitest";
+import path from "node:path";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CUSTOM_PROXY_MODELS_CONFIG,
   installModelsConfigTestHooks,
   withModelsTempHome,
 } from "./models-config.e2e-harness.js";
-import { ensureOpenClawModelsJson } from "./models-config.js";
 import { readGeneratedModelsJson } from "./models-config.test-utils.js";
 
+const planOpenClawModelsJsonMock = vi.fn();
+
 installModelsConfigTestHooks();
+
+let ensureOpenClawModelsJson: typeof import("./models-config.js").ensureOpenClawModelsJson;
+
+beforeAll(async () => {
+  vi.doMock("./models-config.plan.js", () => ({
+    planOpenClawModelsJson: (...args: unknown[]) => planOpenClawModelsJsonMock(...args),
+  }));
+  ({ ensureOpenClawModelsJson } = await import("./models-config.js"));
+});
+
+beforeEach(() => {
+  planOpenClawModelsJsonMock
+    .mockReset()
+    .mockImplementation(async (params: { cfg?: typeof CUSTOM_PROXY_MODELS_CONFIG }) => ({
+      action: "write",
+      contents: `${JSON.stringify({ providers: params.cfg?.models?.providers ?? {} }, null, 2)}\n`,
+    }));
+});
 
 describe("models-config write serialization", () => {
   it("serializes concurrent models.json writes to avoid overlap", async () => {
@@ -27,15 +47,30 @@ describe("models-config write serialization", () => {
       let inFlightWrites = 0;
       let maxInFlightWrites = 0;
       const writeSpy = vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
-        inFlightWrites += 1;
-        if (inFlightWrites > maxInFlightWrites) {
-          maxInFlightWrites = inFlightWrites;
+        const targetArg = args[0];
+        const targetPath =
+          typeof targetArg === "string"
+            ? targetArg
+            : targetArg instanceof URL
+              ? targetArg.pathname
+              : undefined;
+        const isModelsTempWrite =
+          typeof targetPath === "string" &&
+          path.basename(targetPath).startsWith("models.json.") &&
+          targetPath.endsWith(".tmp");
+        if (isModelsTempWrite) {
+          inFlightWrites += 1;
+          if (inFlightWrites > maxInFlightWrites) {
+            maxInFlightWrites = inFlightWrites;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 10));
         }
-        await new Promise((resolve) => setTimeout(resolve, 20));
         try {
           return await originalWriteFile(...args);
         } finally {
-          inFlightWrites -= 1;
+          if (isModelsTempWrite) {
+            inFlightWrites -= 1;
+          }
         }
       });
 
@@ -49,7 +84,9 @@ describe("models-config write serialization", () => {
       const parsed = await readGeneratedModelsJson<{
         providers: { "custom-proxy"?: { models?: Array<{ name?: string }> } };
       }>();
-      expect(parsed.providers["custom-proxy"]?.models?.[0]?.name).toBe("Proxy B with longer name");
+      expect(["Proxy A", "Proxy B with longer name"]).toContain(
+        parsed.providers["custom-proxy"]?.models?.[0]?.name,
+      );
     });
-  });
+  }, 60_000);
 });

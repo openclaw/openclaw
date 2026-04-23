@@ -1,4 +1,4 @@
-const CONTROL_CHARS_RE = /[\u0000-\u001f\u007f]/;
+const CONTROL_CHARS_RE = /\p{Cc}/u;
 const MAX_EXTERNAL_KEY_LENGTH = 512;
 
 export function normalizeFeishuExternalKey(value: unknown): string | undefined {

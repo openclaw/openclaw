@@ -9,6 +9,8 @@ import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handler
 function createMockContext(overrides?: {
   shouldEmitToolOutput?: boolean;
   onToolResult?: ReturnType<typeof vi.fn>;
+  toolResultFormat?: "markdown" | "plain";
+  builtinToolNames?: ReadonlySet<string>;
 }): EmbeddedPiSubscribeContext {
   const onToolResult = overrides?.onToolResult ?? vi.fn();
   return {
@@ -16,11 +18,15 @@ function createMockContext(overrides?: {
       runId: "test-run",
       onToolResult,
       onAgentEvent: vi.fn(),
+      toolResultFormat: overrides?.toolResultFormat,
     },
     state: {
       toolMetaById: new Map(),
       toolMetas: [],
       toolSummaryById: new Set(),
+      itemActiveIds: new Set(),
+      itemStartedCount: 0,
+      itemCompletedCount: 0,
       pendingMessagingTexts: new Map(),
       pendingMessagingTargets: new Map(),
       pendingMessagingMediaUrls: new Map(),
@@ -30,9 +36,11 @@ function createMockContext(overrides?: {
       messagingToolSentTextsNormalized: [],
       messagingToolSentMediaUrls: [],
       messagingToolSentTargets: [],
+      deterministicApprovalPromptPending: false,
       deterministicApprovalPromptSent: false,
     },
     log: { debug: vi.fn(), warn: vi.fn() },
+    builtinToolNames: overrides?.builtinToolNames,
     shouldEmitToolResult: vi.fn(() => false),
     shouldEmitToolOutput: vi.fn(() => overrides?.shouldEmitToolOutput ?? false),
     emitToolSummary: vi.fn(),
@@ -113,6 +121,26 @@ async function emitMcpMediaToolResult(ctx: EmbeddedPiSubscribeContext, mediaPath
   });
 }
 
+async function handleCaseVariantBuiltinMedia(mediaPathOrUrl: string) {
+  const ctx = createMockContext({
+    shouldEmitToolOutput: false,
+    onToolResult: vi.fn(),
+    builtinToolNames: new Set(["web_search"]),
+  });
+
+  await handleToolExecutionEnd(ctx, {
+    type: "tool_execution_end",
+    toolName: "Web_Search",
+    toolCallId: "tc-1",
+    isError: false,
+    result: {
+      content: [{ type: "text", text: `MEDIA:${mediaPathOrUrl}` }],
+    },
+  });
+
+  return ctx;
+}
+
 describe("handleToolExecutionEnd media emission", () => {
   it("does not warn for read tool when path is provided via file_path alias", async () => {
     const ctx = createMockContext();
@@ -167,6 +195,18 @@ describe("handleToolExecutionEnd media emission", () => {
     expect(ctx.state.pendingToolMediaUrls).toEqual([]);
   });
 
+  it("does NOT emit local media for case-variant collisions with trusted built-ins", async () => {
+    const ctx = await handleCaseVariantBuiltinMedia("/tmp/secret.png");
+
+    expect(ctx.state.pendingToolMediaUrls).toEqual([]);
+  });
+
+  it("still emits remote media for case-variant collisions with trusted built-ins", async () => {
+    const ctx = await handleCaseVariantBuiltinMedia("https://example.com/file.png");
+
+    expect(ctx.state.pendingToolMediaUrls).toEqual(["https://example.com/file.png"]);
+  });
+
   it("emits remote media for MCP-provenance results", async () => {
     const onToolResult = vi.fn();
     const ctx = createMockContext({ shouldEmitToolOutput: false, onToolResult });
@@ -191,7 +231,11 @@ describe("handleToolExecutionEnd media emission", () => {
   });
 
   it("still queues structured media when verbose is full", async () => {
-    const ctx = createMockContext({ shouldEmitToolOutput: true, onToolResult: vi.fn() });
+    const ctx = createMockContext({
+      shouldEmitToolOutput: true,
+      onToolResult: vi.fn(),
+      toolResultFormat: "plain",
+    });
 
     await handleToolExecutionEnd(ctx, {
       type: "tool_execution_end",
@@ -212,6 +256,125 @@ describe("handleToolExecutionEnd media emission", () => {
     expect(ctx.emitToolOutput).toHaveBeenCalled();
     expect(ctx.state.pendingToolMediaUrls).toEqual(["/tmp/reply.opus"]);
     expect(ctx.state.pendingToolAudioAsVoice).toBe(true);
+  });
+
+  it("does not queue a duplicate voice copy when emitted tool output already sent the same audio", async () => {
+    const ctx = createMockContext({
+      shouldEmitToolOutput: true,
+      onToolResult: vi.fn(),
+      toolResultFormat: "plain",
+    });
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "tts",
+      toolCallId: "tc-1",
+      isError: false,
+      result: {
+        content: [{ type: "text", text: "Generated audio reply.\nMEDIA:/tmp/reply.opus" }],
+        details: {
+          media: {
+            mediaUrl: "/tmp/reply.opus",
+            audioAsVoice: true,
+          },
+        },
+      },
+    });
+
+    expect(ctx.emitToolOutput).toHaveBeenCalled();
+    expect(ctx.state.pendingToolMediaUrls).toEqual([]);
+    expect(ctx.state.pendingToolAudioAsVoice).toBe(false);
+  });
+
+  async function handleVerboseGeneratedImage(toolResultFormat: "plain" | "markdown") {
+    const ctx = createMockContext({
+      shouldEmitToolOutput: true,
+      onToolResult: vi.fn(),
+      toolResultFormat,
+    });
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "image_generate",
+      toolCallId: "tc-1",
+      isError: false,
+      result: {
+        content: [
+          {
+            type: "text",
+            text: "Generated 1 image with google/gemini-3.1-flash-image-preview.\nMEDIA:/tmp/generated.png",
+          },
+        ],
+        details: {
+          media: {
+            mediaUrls: ["/tmp/generated.png"],
+          },
+        },
+      },
+    });
+
+    return ctx;
+  }
+
+  it("does not queue structured media already emitted in plain verbose output", async () => {
+    const ctx = await handleVerboseGeneratedImage("plain");
+
+    expect(ctx.emitToolOutput).toHaveBeenCalled();
+    expect(ctx.state.pendingToolMediaUrls).toEqual([]);
+  });
+
+  it("still queues structured media for markdown verbose output", async () => {
+    const ctx = await handleVerboseGeneratedImage("markdown");
+
+    expect(ctx.emitToolOutput).toHaveBeenCalled();
+    expect(ctx.state.pendingToolMediaUrls).toEqual(["/tmp/generated.png"]);
+  });
+
+  it("emits provider inventory output for compact video_generate list results", async () => {
+    const ctx = createMockContext({
+      shouldEmitToolOutput: false,
+      onToolResult: vi.fn(),
+      toolResultFormat: "plain",
+    });
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "video_generate",
+      toolCallId: "tc-1",
+      isError: false,
+      result: {
+        content: [
+          {
+            type: "text",
+            text: [
+              "openai: default=sora-2 | models=sora-2",
+              "google: default=veo-3.1-fast-generate-preview | models=veo-3.1-fast-generate-preview",
+            ].join("\n"),
+          },
+        ],
+        details: {
+          providers: [
+            { id: "openai", defaultModel: "sora-2", models: ["sora-2"] },
+            {
+              id: "google",
+              defaultModel: "veo-3.1-fast-generate-preview",
+              models: ["veo-3.1-fast-generate-preview"],
+            },
+          ],
+        },
+      },
+    });
+
+    expect(ctx.emitToolOutput).toHaveBeenCalledWith(
+      "video_generate",
+      undefined,
+      [
+        "openai: default=sora-2 | models=sora-2",
+        "google: default=veo-3.1-fast-generate-preview | models=veo-3.1-fast-generate-preview",
+      ].join("\n"),
+      expect.any(Object),
+    );
+    expect(ctx.state.pendingToolMediaUrls).toEqual([]);
   });
 
   it("does NOT emit media for error results", async () => {

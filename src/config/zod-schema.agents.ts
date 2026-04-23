@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { AgentDefaultsSchema } from "./zod-schema.agent-defaults.js";
 import { AgentEntrySchema } from "./zod-schema.agent-runtime.js";
 import { TranscribeAudioSchema } from "./zod-schema.core.js";
@@ -61,7 +62,7 @@ const AcpBindingSchema = z
   })
   .strict()
   .superRefine((value, ctx) => {
-    const peerId = value.match.peer?.id?.trim() ?? "";
+    const peerId = normalizeOptionalString(value.match.peer?.id) ?? "";
     if (!peerId) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -69,42 +70,6 @@ const AcpBindingSchema = z
         message: "ACP bindings require match.peer.id to target a concrete conversation.",
       });
       return;
-    }
-    const channel = value.match.channel.trim().toLowerCase();
-    if (channel !== "discord" && channel !== "telegram" && channel !== "feishu") {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["match", "channel"],
-        message:
-          'ACP bindings currently support only "discord", "telegram", and "feishu" channels.',
-      });
-      return;
-    }
-    if (channel === "telegram" && !/^-\d+:topic:\d+$/.test(peerId)) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["match", "peer", "id"],
-        message:
-          "Telegram ACP bindings require canonical topic IDs in the form -1001234567890:topic:42.",
-      });
-    }
-    if (channel === "feishu") {
-      const peerKind = value.match.peer?.kind;
-      const isDirectId =
-        (peerKind === "direct" || peerKind === "dm") &&
-        /^[^:]+$/.test(peerId) &&
-        !peerId.startsWith("oc_") &&
-        !peerId.startsWith("on_");
-      const isTopicId =
-        peerKind === "group" && /^oc_[^:]+:topic:[^:]+(?::sender:ou_[^:]+)?$/.test(peerId);
-      if (!isDirectId && !isTopicId) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["match", "peer", "id"],
-          message:
-            "Feishu ACP bindings require direct peer IDs for DMs or topic IDs in the form oc_group:topic:om_root[:sender:ou_xxx].",
-        });
-      }
     }
   });
 

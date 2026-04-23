@@ -1,7 +1,7 @@
 import type { ExecToolDefaults } from "../../../agents/bash-tools.js";
 import type { SkillSnapshot } from "../../../agents/skills.js";
-import type { OpenClawConfig } from "../../../config/config.js";
 import type { SessionEntry } from "../../../config/sessions.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { InputProvenance } from "../../../sessions/input-provenance.js";
 import type { OriginatingChannelType } from "../../templating.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../directives.js";
@@ -47,6 +47,7 @@ export type FollowupRun = {
     agentDir: string;
     sessionId: string;
     sessionKey?: string;
+    runtimePolicySessionKey?: string;
     messageProvider?: string;
     agentAccountId?: string;
     groupId?: string;
@@ -57,6 +58,7 @@ export type FollowupRun = {
     senderUsername?: string;
     senderE164?: string;
     senderIsOwner?: boolean;
+    traceAuthorized?: boolean;
     sessionFile: string;
     workspaceDir: string;
     config: OpenClawConfig;
@@ -80,7 +82,9 @@ export type FollowupRun = {
     ownerNumbers?: string[];
     inputProvenance?: InputProvenance;
     extraSystemPrompt?: string;
+    extraSystemPromptStatic?: string;
     enforceFinalTag?: boolean;
+    skipProviderRuntimeHints?: boolean;
     silentExpected?: boolean;
   };
 };
@@ -91,4 +95,5 @@ export type ResolveQueueSettingsParams = {
   sessionEntry?: SessionEntry;
   inlineMode?: QueueMode;
   inlineOptions?: Partial<QueueSettings>;
+  pluginDebounceMs?: number;
 };

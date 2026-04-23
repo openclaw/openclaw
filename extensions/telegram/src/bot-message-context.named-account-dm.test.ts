@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   getRecordedUpdateLastRoute,
   loadTelegramMessageContextRouteHarness,
@@ -18,7 +18,6 @@ describe("buildTelegramMessageContext named-account DM fallback", () => {
 
   afterEach(() => {
     clearRuntimeConfigSnapshot();
-    recordInboundSessionMock.mockClear();
   });
 
   beforeAll(async () => {
@@ -141,7 +140,7 @@ describe("buildTelegramMessageContext named-account DM fallback", () => {
     expect(ctx).toBeNull();
   });
 
-  it("does not change the default-account DM session key", async () => {
+  it("uses the main session key for default-account DMs", async () => {
     setRuntimeConfigSnapshot(baseCfg);
 
     const ctx = await buildTelegramMessageContextForTest({
@@ -156,5 +155,6 @@ describe("buildTelegramMessageContext named-account DM fallback", () => {
     });
 
     expect(ctx?.ctxPayload?.SessionKey).toBe("agent:main:main");
+    expect(getLastUpdateLastRoute()?.sessionKey).toBe("agent:main:main");
   });
 });

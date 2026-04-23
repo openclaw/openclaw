@@ -1,9 +1,14 @@
 import { logVerbose } from "../globals.js";
 import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../shared/string-coerce.js";
+import {
   clearPluginCommands,
   clearPluginCommandsForPlugin,
   getPluginCommandSpecs,
   isPluginCommandRegistryLocked,
+  listProviderPluginCommandSpecs,
   pluginCommands,
   type RegisteredPluginCommand,
 } from "./command-registry-state.js";
@@ -17,7 +22,6 @@ import type { OpenClawPluginCommandDefinition } from "./types.js";
  * output chunk, so any module-level const/let would be uninitialized when
  * first accessed during plugin registration.
  */
-// eslint-disable-next-line no-var -- var avoids TDZ when bundler reorders module bodies in a chunk
 var reservedCommands: Set<string> | undefined;
 
 export type CommandRegistrationResult = {
@@ -26,7 +30,7 @@ export type CommandRegistrationResult = {
 };
 
 export function validateCommandName(name: string): string | null {
-  const trimmed = name.trim().toLowerCase();
+  const trimmed = normalizeOptionalLowercaseString(name) ?? "";
 
   if (!trimmed) {
     return "Command name cannot be empty";
@@ -112,13 +116,21 @@ export function validatePluginCommandDefinition(
       return `Native command alias "${label}" invalid: ${aliasError}`;
     }
   }
+  for (const [label, message] of Object.entries(command.nativeProgressMessages ?? {})) {
+    if (typeof message !== "string") {
+      return `Native progress message "${label}" must be a string`;
+    }
+    if (!message.trim()) {
+      return `Native progress message "${label}" cannot be empty`;
+    }
+  }
   return null;
 }
 
 export function listPluginInvocationKeys(command: OpenClawPluginCommandDefinition): string[] {
   const keys = new Set<string>();
   const push = (value: string | undefined) => {
-    const normalized = value?.trim().toLowerCase();
+    const normalized = normalizeOptionalLowercaseString(value);
     if (!normalized) {
       return;
     }
@@ -126,9 +138,11 @@ export function listPluginInvocationKeys(command: OpenClawPluginCommandDefinitio
   };
 
   push(command.name);
-  push(command.nativeNames?.default);
-  push(command.nativeNames?.telegram);
-  push(command.nativeNames?.discord);
+  for (const alias of Object.values(command.nativeNames ?? {})) {
+    if (typeof alias === "string") {
+      push(alias);
+    }
+  }
 
   return [...keys];
 }
@@ -156,7 +170,7 @@ export function registerPluginCommand(
     description,
   };
   const invocationKeys = listPluginInvocationKeys(normalizedCommand);
-  const key = `/${name.toLowerCase()}`;
+  const key = `/${normalizeLowercaseStringOrEmpty(name)}`;
 
   // Check for duplicate registration
   for (const invocationKey of invocationKeys) {
@@ -183,5 +197,10 @@ export function registerPluginCommand(
   return { ok: true };
 }
 
-export { clearPluginCommands, clearPluginCommandsForPlugin, getPluginCommandSpecs };
+export {
+  clearPluginCommands,
+  clearPluginCommandsForPlugin,
+  getPluginCommandSpecs,
+  listProviderPluginCommandSpecs,
+};
 export type { RegisteredPluginCommand };

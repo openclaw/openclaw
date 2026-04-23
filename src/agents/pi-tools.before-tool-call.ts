@@ -24,6 +24,8 @@ type HookOutcome = { blocked: true; reason: string } | { blocked: false; params:
 
 const log = createSubsystemLogger("agents/tools");
 const BEFORE_TOOL_CALL_WRAPPED = Symbol("beforeToolCallWrapped");
+const BEFORE_TOOL_CALL_HOOK_FAILURE_REASON =
+  "Tool call blocked because before_tool_call hook failed";
 const adjustedParamsByToolCallId = new Map<string, unknown>();
 const MAX_TRACKED_ADJUSTED_PARAMS = 1024;
 const LOOP_WARNING_BUCKET_SIZE = 10;
@@ -65,6 +67,13 @@ function isAbortSignalCancellation(err: unknown, signal?: AbortSignal): boolean 
     return true;
   }
   return false;
+}
+
+function unwrapErrorCause(err: unknown): unknown {
+  if (err instanceof Error && err.cause !== undefined) {
+    return err.cause;
+  }
+  return err;
 }
 
 function shouldEmitLoopWarning(state: SessionState, warningKey: string, count: number): boolean {
@@ -224,11 +233,11 @@ export async function runBeforeToolCallHook(args: {
         }
       };
       try {
-        const requestResult = await callGatewayTool<{
+        const requestResult: {
           id?: string;
           status?: string;
           decision?: string | null;
-        }>(
+        } = await callGatewayTool(
           "plugin.approval.request",
           // Buffer beyond the approval timeout so the gateway can clean up
           // and respond before the client-side RPC timeout fires.
@@ -272,10 +281,10 @@ export async function runBeforeToolCallHook(args: {
         } else {
           // Wait for the decision, but abort early if the agent run is cancelled
           // so the user isn't blocked for the full approval timeout.
-          const waitPromise = callGatewayTool<{
+          const waitPromise: Promise<{
             id?: string;
             decision?: string | null;
-          }>(
+          }> = callGatewayTool(
             "plugin.approval.waitDecision",
             // Buffer beyond the approval timeout so the gateway can clean up
             // and respond before the client-side RPC timeout fires.
@@ -341,7 +350,7 @@ export async function runBeforeToolCallHook(args: {
             reason: "Approval cancelled (run aborted)",
           };
         }
-        log.warn(`plugin approval gateway request failed, falling back to block: ${String(err)}`);
+        log.warn(`plugin approval gateway request failed; blocking tool call: ${String(err)}`);
         return {
           blocked: true,
           reason: "Plugin approval required (gateway unavailable)",
@@ -357,7 +366,12 @@ export async function runBeforeToolCallHook(args: {
     }
   } catch (err) {
     const toolCallId = args.toolCallId ? ` toolCallId=${args.toolCallId}` : "";
-    log.warn(`before_tool_call hook failed: tool=${toolName}${toolCallId} error=${String(err)}`);
+    const cause = unwrapErrorCause(err);
+    log.error(`before_tool_call hook failed: tool=${toolName}${toolCallId} error=${String(cause)}`);
+    return {
+      blocked: true,
+      reason: BEFORE_TOOL_CALL_HOOK_FAILURE_REASON,
+    };
   }
 
   return { blocked: false, params };

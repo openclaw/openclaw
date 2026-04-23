@@ -23,12 +23,25 @@ Auth profiles are **per-agent**. Each agent reads from its own:
 ~/.openclaw/agents/<agentId>/agent/auth-profiles.json
 ```
 
+`sessions_history` is the safer cross-session recall path here too: it returns
+a bounded, sanitized view, not a raw transcript dump. Assistant recall strips
+thinking tags, `<relevant-memories>` scaffolding, plain-text tool-call XML
+payloads (including `<tool_call>...</tool_call>`,
+`<function_call>...</function_call>`, `<tool_calls>...</tool_calls>`,
+`<function_calls>...</function_calls>`, and truncated tool-call blocks),
+downgraded tool-call scaffolding, leaked ASCII/full-width model control
+tokens, and malformed MiniMax tool-call XML before redaction/truncation.
+
 Main agent credentials are **not** shared automatically. Never reuse `agentDir`
 across agents (it causes auth/session collisions). If you want to share creds,
 copy `auth-profiles.json` into the other agent's `agentDir`.
 
-Skills are per-agent via each workspace’s `skills/` folder, with shared skills
-available from `~/.openclaw/skills`. See [Skills: per-agent vs shared](/tools/skills#per-agent-vs-shared-skills).
+Skills are loaded from each agent workspace plus shared roots such as
+`~/.openclaw/skills`, then filtered by the effective agent skill allowlist when
+configured. Use `agents.defaults.skills` for a shared baseline and
+`agents.list[].skills` for per-agent replacement. See
+[Skills: per-agent vs shared](/tools/skills#per-agent-vs-shared-skills) and
+[Skills: agent skill allowlists](/tools/skills#agent-skill-allowlists).
 
 The Gateway can host **one agent** (default) or **many agents** side-by-side.
 
@@ -128,6 +141,48 @@ With **multiple agents**, each `agentId` becomes a **fully isolated persona**:
 - **Separate auth + sessions** (no cross-talk unless explicitly enabled).
 
 This lets **multiple people** share one Gateway server while keeping their AI “brains” and data isolated.
+
+## Cross-agent QMD memory search
+
+If one agent should search another agent's QMD session transcripts, add
+extra collections under `agents.list[].memorySearch.qmd.extraCollections`.
+Use `agents.defaults.memorySearch.qmd.extraCollections` only when every agent
+should inherit the same shared transcript collections.
+
+```json5
+{
+  agents: {
+    defaults: {
+      workspace: "~/workspaces/main",
+      memorySearch: {
+        qmd: {
+          extraCollections: [{ path: "~/agents/family/sessions", name: "family-sessions" }],
+        },
+      },
+    },
+    list: [
+      {
+        id: "main",
+        workspace: "~/workspaces/main",
+        memorySearch: {
+          qmd: {
+            extraCollections: [{ path: "notes" }], // resolves inside workspace -> collection named "notes-main"
+          },
+        },
+      },
+      { id: "family", workspace: "~/workspaces/family" },
+    ],
+  },
+  memory: {
+    backend: "qmd",
+    qmd: { includeDefaultMemory: false },
+  },
+}
+```
+
+The extra collection path can be shared across agents, but the collection name
+stays explicit when the path is outside the agent workspace. Paths inside the
+workspace remain agent-scoped so each agent keeps its own transcript search set.
 
 ## One WhatsApp number, multiple people (DM split)
 
@@ -550,3 +605,11 @@ If you need per-agent boundaries, use `agents.list[].tools` to deny `exec`.
 For group targeting, use `agents.list[].groupChat.mentionPatterns` so @mentions map cleanly to the intended agent.
 
 See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for detailed examples.
+
+## Related
+
+- [Channel Routing](/channels/channel-routing) — how messages route to agents
+- [Sub-Agents](/tools/subagents) — spawning background agent runs
+- [ACP Agents](/tools/acp-agents) — running external coding harnesses
+- [Presence](/concepts/presence) — agent presence and availability
+- [Session](/concepts/session) — session isolation and routing

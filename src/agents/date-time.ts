@@ -186,7 +186,7 @@ export function formatUserTime(
     const timePart = use24Hour
       ? `${map.hour}:${map.minute}`
       : `${map.hour}:${map.minute} ${map.dayPeriod ?? ""}`.trim();
-    return `${map.weekday}, ${map.month} ${dayNum}${suffix}, ${map.year} — ${timePart}`;
+    return `${map.weekday}, ${map.month} ${dayNum}${suffix}, ${map.year} - ${timePart}`;
   } catch {
     return undefined;
   }

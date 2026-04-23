@@ -9,20 +9,23 @@ title: "Zalo"
 
 Status: experimental. DMs are supported. The [Capabilities](#capabilities) section below reflects current Marketplace-bot behavior.
 
-## Plugin required
+## Bundled plugin
 
-Zalo ships as a plugin and is not bundled with the core install.
+Zalo ships as a bundled plugin in current OpenClaw releases, so normal packaged
+builds do not need a separate install.
+
+If you are on an older build or a custom install that excludes Zalo, install it
+manually:
 
 - Install via CLI: `openclaw plugins install @openclaw/zalo`
-- Or select **Zalo** during setup and confirm the install prompt
+- Or from a source checkout: `openclaw plugins install ./path/to/local/zalo-plugin`
 - Details: [Plugins](/tools/plugin)
 
 ## Quick setup (beginner)
 
-1. Install the Zalo plugin:
-   - From a source checkout: `openclaw plugins install ./path/to/local/zalo-plugin`
-   - From npm (if published): `openclaw plugins install @openclaw/zalo`
-   - Or pick **Zalo** in setup and confirm the install prompt
+1. Ensure the Zalo plugin is available.
+   - Current packaged OpenClaw releases already bundle it.
+   - Older/custom installs can add it manually with the commands above.
 2. Set the token:
    - Env: `ZALO_BOT_TOKEN=...`
    - Or config: `channels.zalo.accounts.default.botToken: "..."`.
@@ -241,3 +244,11 @@ Multi-account options:
 - `channels.zalo.accounts.<id>.webhookSecret`: per-account webhook secret.
 - `channels.zalo.accounts.<id>.webhookPath`: per-account webhook path.
 - `channels.zalo.accounts.<id>.proxy`: per-account proxy URL.
+
+## Related
+
+- [Channels Overview](/channels) — all supported channels
+- [Pairing](/channels/pairing) — DM authentication and pairing flow
+- [Groups](/channels/groups) — group chat behavior and mention gating
+- [Channel Routing](/channels/channel-routing) — session routing for messages
+- [Security](/gateway/security) — access model and hardening

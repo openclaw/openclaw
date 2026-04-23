@@ -1,6 +1,5 @@
 import { serializePayload } from "@buape/carbon";
 import { ComponentType } from "discord-api-types/v10";
-import * as modelsCommandModule from "openclaw/plugin-sdk/command-auth";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -21,6 +20,12 @@ import {
 } from "./model-picker.js";
 import { createModelsProviderData } from "./model-picker.test-utils.js";
 
+const buildModelsProviderDataMock = vi.hoisted(() => vi.fn());
+
+vi.mock("openclaw/plugin-sdk/models-provider-runtime", () => ({
+  buildModelsProviderData: buildModelsProviderDataMock,
+}));
+
 type SerializedComponent = {
   type: number;
   custom_id?: string;
@@ -28,15 +33,20 @@ type SerializedComponent = {
   components?: SerializedComponent[];
 };
 
+const DISCORD_CONTAINER_COMPONENT_TYPE: SerializedComponent["type"] = ComponentType.Container;
+const DISCORD_ACTION_ROW_COMPONENT_TYPE: SerializedComponent["type"] = ComponentType.ActionRow;
+const DISCORD_STRING_SELECT_COMPONENT_TYPE: SerializedComponent["type"] =
+  ComponentType.StringSelect;
+
 function extractContainerRows(components?: SerializedComponent[]): SerializedComponent[] {
   const container = components?.find(
-    (component) => component.type === Number(ComponentType.Container),
+    (component) => component.type === DISCORD_CONTAINER_COMPONENT_TYPE,
   );
   if (!container) {
     return [];
   }
   return (container.components ?? []).filter(
-    (component) => component.type === Number(ComponentType.ActionRow),
+    (component) => component.type === DISCORD_ACTION_ROW_COMPONENT_TYPE,
   );
 }
 
@@ -71,14 +81,12 @@ describe("loadDiscordModelPickerData", () => {
   it("reuses buildModelsProviderData as source of truth with agent scope", async () => {
     const expected = createModelsProviderData({ openai: ["gpt-4o"] });
     const cfg = {} as OpenClawConfig;
-    const spy = vi
-      .spyOn(modelsCommandModule, "buildModelsProviderData")
-      .mockResolvedValue(expected);
+    buildModelsProviderDataMock.mockResolvedValue(expected);
 
     const result = await loadDiscordModelPickerData(cfg, "support");
 
-    expect(spy).toHaveBeenCalledTimes(1);
-    expect(spy).toHaveBeenCalledWith(cfg, "support");
+    expect(buildModelsProviderDataMock).toHaveBeenCalledTimes(1);
+    expect(buildModelsProviderDataMock).toHaveBeenCalledWith(cfg, "support");
     expect(result).toBe(expected);
   });
 });
@@ -481,7 +489,7 @@ describe("Discord model picker rendering", () => {
     expect(rows).toHaveLength(3);
 
     const providerSelect = rows[0]?.components?.find(
-      (component) => component.type === Number(ComponentType.StringSelect),
+      (component) => component.type === DISCORD_STRING_SELECT_COMPONENT_TYPE,
     );
     if (!providerSelect) {
       throw new Error("models view did not render a provider select");
@@ -492,7 +500,7 @@ describe("Discord model picker rendering", () => {
     expect(parsedProviderState?.action).toBe("provider");
 
     const modelSelect = rows[1]?.components?.find(
-      (component) => component.type === Number(ComponentType.StringSelect),
+      (component) => component.type === DISCORD_STRING_SELECT_COMPONENT_TYPE,
     );
     if (!modelSelect) {
       throw new Error("models view did not render a model select");

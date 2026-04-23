@@ -1,11 +1,18 @@
 import fs from "node:fs/promises";
 import { Static, Type } from "@sinclair/typebox";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { AnyAgentTool, OpenClawPluginApi, OpenClawPluginToolContext } from "../api.js";
 import { PlaywrightDiffScreenshotter, type DiffScreenshotter } from "./browser.js";
 import { resolveDiffImageRenderOptions } from "./config.js";
 import { renderDiffDocument } from "./render.js";
 import type { DiffArtifactStore } from "./store.js";
-import type { DiffArtifactContext, DiffRenderOptions, DiffToolDefaults } from "./types.js";
+import type {
+  DiffArtifactContext,
+  DiffRenderOptions,
+  DiffRenderTarget,
+  DiffToolDefaults,
+} from "./types.js";
 import {
   DIFF_IMAGE_QUALITY_PRESETS,
   DIFF_LAYOUTS,
@@ -120,7 +127,7 @@ const DiffsToolSchema = Type.Object(
     baseUrl: Type.Optional(
       Type.String({
         description:
-          "Optional gateway base URL override used when building the viewer URL, for example https://gateway.example.com.",
+          "Optional gateway base URL override used when building the viewer URL. Overrides configured viewerBaseUrl, for example https://gateway.example.com.",
       }),
     ),
   },
@@ -137,6 +144,7 @@ export function createDiffsTool(params: {
   api: OpenClawPluginApi;
   store: DiffArtifactStore;
   defaults: DiffToolDefaults;
+  viewerBaseUrl?: string;
   screenshotter?: DiffScreenshotter;
   context?: OpenClawPluginToolContext;
 }): AnyAgentTool {
@@ -164,16 +172,21 @@ export function createDiffsTool(params: {
         fileScale: toolParams.fileScale ?? toolParams.imageScale,
         fileMaxWidth: toolParams.fileMaxWidth ?? toolParams.imageMaxWidth,
       });
+      const renderTarget = resolveRenderTarget(mode);
 
-      const rendered = await renderDiffDocument(input, {
-        presentation: {
-          ...params.defaults,
-          layout,
-          theme,
+      const rendered = await renderDiffDocument(
+        input,
+        {
+          presentation: {
+            ...params.defaults,
+            layout,
+            theme,
+          },
+          image,
+          expandUnchanged,
         },
-        image,
-        expandUnchanged,
-      });
+        renderTarget,
+      );
 
       const screenshotter =
         params.screenshotter ?? new PlaywrightDiffScreenshotter({ config: params.api.config });
@@ -182,7 +195,7 @@ export function createDiffsTool(params: {
         const artifactFile = await renderDiffArtifactFile({
           screenshotter,
           store: params.store,
-          html: rendered.imageHtml,
+          html: requireRenderedHtml(rendered.imageHtml, "image"),
           theme,
           image,
           ttlMs,
@@ -216,7 +229,7 @@ export function createDiffsTool(params: {
       }
 
       const artifact = await params.store.createArtifact({
-        html: rendered.html,
+        html: requireRenderedHtml(rendered.html, "viewer"),
         title: rendered.title,
         inputKind: rendered.inputKind,
         fileCount: rendered.fileCount,
@@ -227,7 +240,7 @@ export function createDiffsTool(params: {
       const viewerUrl = buildViewerUrl({
         config: params.api.config,
         viewerPath: artifact.viewerPath,
-        baseUrl: normalizeBaseUrl(toolParams.baseUrl),
+        baseUrl: normalizeBaseUrl(toolParams.baseUrl) ?? params.viewerBaseUrl,
       });
 
       const baseDetails = {
@@ -259,7 +272,7 @@ export function createDiffsTool(params: {
           screenshotter,
           store: params.store,
           artifactId: artifact.id,
-          html: rendered.imageHtml,
+          html: requireRenderedHtml(rendered.imageHtml, "image"),
           theme,
           image,
         });
@@ -284,19 +297,18 @@ export function createDiffsTool(params: {
         };
       } catch (error) {
         if (mode === "both") {
+          const errorMessage = formatErrorMessage(error);
           return {
             content: [
               {
                 type: "text",
-                text:
-                  `Diff viewer ready.\n${viewerUrl}\n` +
-                  `File rendering failed: ${error instanceof Error ? error.message : String(error)}`,
+                text: `Diff viewer ready.\n${viewerUrl}\nFile rendering failed: ${errorMessage}`,
               },
             ],
             details: {
               ...baseDetails,
-              fileError: error instanceof Error ? error.message : String(error),
-              imageError: error instanceof Error ? error.message : String(error),
+              fileError: errorMessage,
+              imageError: errorMessage,
             },
           };
         }
@@ -318,6 +330,23 @@ function normalizeOutputFormat(format: DiffOutputFormat | undefined): DiffOutput
 
 function isArtifactOnlyMode(mode: DiffMode): mode is "image" | "file" {
   return mode === "image" || mode === "file";
+}
+
+function resolveRenderTarget(mode: DiffMode): DiffRenderTarget {
+  if (mode === "view") {
+    return "viewer";
+  }
+  if (isArtifactOnlyMode(mode)) {
+    return "image";
+  }
+  return "both";
+}
+
+function requireRenderedHtml(html: string | undefined, target: DiffRenderTarget): string {
+  if (html !== undefined) {
+    return html;
+  }
+  throw new Error(`Missing ${target} render output.`);
 }
 
 function buildArtifactDetails(params: {
@@ -399,20 +428,15 @@ function buildArtifactContext(
   }
 
   const artifactContext = {
-    agentId: normalizeContextString(context.agentId),
-    sessionId: normalizeContextString(context.sessionId),
-    messageChannel: normalizeContextString(context.messageChannel),
-    agentAccountId: normalizeContextString(context.agentAccountId),
+    agentId: normalizeOptionalString(context.agentId),
+    sessionId: normalizeOptionalString(context.sessionId),
+    messageChannel: normalizeOptionalString(context.messageChannel),
+    agentAccountId: normalizeOptionalString(context.agentAccountId),
   };
 
   return Object.values(artifactContext).some((value) => value !== undefined)
     ? artifactContext
     : undefined;
-}
-
-function normalizeContextString(value: string | undefined): string | undefined {
-  const normalized = value?.trim();
-  return normalized ? normalized : undefined;
 }
 
 function normalizeDiffInput(params: DiffsToolParams): DiffInput {
@@ -441,9 +465,9 @@ function normalizeDiffInput(params: DiffsToolParams): DiffInput {
   }
   assertMaxBytes(before, "before", MAX_BEFORE_AFTER_BYTES);
   assertMaxBytes(after, "after", MAX_BEFORE_AFTER_BYTES);
-  const path = params.path?.trim() || undefined;
-  const lang = params.lang?.trim() || undefined;
-  const title = params.title?.trim() || undefined;
+  const path = normalizeOptionalString(params.path);
+  const lang = normalizeOptionalString(params.lang);
+  const title = normalizeOptionalString(params.title);
   if (path) {
     assertMaxBytes(path, "path", MAX_PATH_BYTES);
   }

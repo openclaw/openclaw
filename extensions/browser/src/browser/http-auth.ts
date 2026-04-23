@@ -1,4 +1,5 @@
 import type { IncomingMessage } from "node:http";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { safeEqualSecret } from "../security/secret-equal.js";
 
 function firstHeaderValue(value: string | string[] | undefined): string {
@@ -6,7 +7,7 @@ function firstHeaderValue(value: string | string[] | undefined): string {
 }
 
 function parseBearerToken(authorization: string): string | undefined {
-  if (!authorization || !authorization.toLowerCase().startsWith("bearer ")) {
+  if (!normalizeLowercaseStringOrEmpty(authorization).startsWith("bearer ")) {
     return undefined;
   }
   const token = authorization.slice(7).trim();
@@ -14,7 +15,7 @@ function parseBearerToken(authorization: string): string | undefined {
 }
 
 function parseBasicPassword(authorization: string): string | undefined {
-  if (!authorization || !authorization.toLowerCase().startsWith("basic ")) {
+  if (!normalizeLowercaseStringOrEmpty(authorization).startsWith("basic ")) {
     return undefined;
   }
   const encoded = authorization.slice(6).trim();

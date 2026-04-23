@@ -1,4 +1,5 @@
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
+import { resolveCopilotTransportApi } from "./models.js";
 
 const DEFAULT_CONTEXT_WINDOW = 128_000;
 const DEFAULT_MAX_TOKENS = 8192;
@@ -7,6 +8,7 @@ const DEFAULT_MAX_TOKENS = 8192;
 // We keep this list intentionally broad; if a model isn't available Copilot will
 // return an error and users can remove it from their config.
 const DEFAULT_MODEL_IDS = [
+  "claude-opus-4.7",
   "claude-sonnet-4.6",
   "claude-sonnet-4.5",
   "gpt-4o",
@@ -30,10 +32,7 @@ export function buildCopilotModelDefinition(modelId: string): ModelDefinitionCon
   return {
     id,
     name: id,
-    // pi-coding-agent's registry schema doesn't know about a "github-copilot" API.
-    // We use OpenAI-compatible responses API, while keeping the provider id as
-    // "github-copilot" (pi-ai uses that to attach Copilot-specific headers).
-    api: "openai-responses",
+    api: resolveCopilotTransportApi(id),
     reasoning: false,
     input: ["text", "image"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },

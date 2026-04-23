@@ -1,8 +1,8 @@
 import { buildModelAliasIndex, resolveModelRefFromString } from "../../agents/model-selection.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import { resolveAgentModelFallbackValues, toAgentModelListLike } from "../../config/model-input.js";
 import type { AgentModelEntryConfig } from "../../config/types.agent-defaults.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { loadModelsConfig } from "./load-config.js";
 import {
@@ -122,7 +122,7 @@ export async function removeFallbackCommand(
     const existing = getFallbacks(cfg, params.key);
     const filtered = existing.filter((entry) => {
       const resolvedEntry = resolveModelRefFromString({
-        raw: String(entry ?? ""),
+        raw: entry ?? "",
         defaultProvider: DEFAULT_PROVIDER,
         aliasIndex,
       });

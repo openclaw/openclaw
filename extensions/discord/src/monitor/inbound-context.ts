@@ -3,10 +3,40 @@ import {
   wrapExternalContent,
 } from "openclaw/plugin-sdk/security-runtime";
 import {
+  resolveDiscordMemberAllowed,
   resolveDiscordOwnerAllowFrom,
   type DiscordChannelConfigResolved,
   type DiscordGuildEntryResolved,
 } from "./allow-list.js";
+
+export type DiscordSupplementalContextSender = {
+  id?: string;
+  name?: string;
+  tag?: string;
+  memberRoleIds?: string[];
+};
+
+export function createDiscordSupplementalContextAccessChecker(params: {
+  channelConfig?: DiscordChannelConfigResolved | null;
+  guildInfo?: DiscordGuildEntryResolved | null;
+  allowNameMatching?: boolean;
+  isGuild: boolean;
+}) {
+  return (sender: DiscordSupplementalContextSender): boolean => {
+    if (!params.isGuild) {
+      return true;
+    }
+    return resolveDiscordMemberAllowed({
+      userAllowList: params.channelConfig?.users ?? params.guildInfo?.users,
+      roleAllowList: params.channelConfig?.roles ?? params.guildInfo?.roles,
+      memberRoleIds: sender.memberRoleIds ?? [],
+      userId: sender.id ?? "",
+      userName: sender.name,
+      userTag: sender.tag,
+      allowNameMatching: params.allowNameMatching,
+    });
+  };
+}
 
 export function buildDiscordGroupSystemPrompt(
   channelConfig?: DiscordChannelConfigResolved | null,

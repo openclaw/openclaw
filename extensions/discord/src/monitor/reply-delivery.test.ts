@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   __testing as threadBindingTesting,
   createThreadBindingManager,
@@ -36,8 +36,8 @@ const retryAsyncMock = vi.hoisted(() =>
   ),
 );
 
-vi.mock("../send.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../send.js")>();
+vi.mock("../send.js", async () => {
+  const actual = await vi.importActual<typeof import("../send.js")>("../send.js");
   return {
     ...actual,
     sendMessageDiscord: (...args: unknown[]) => sendMessageDiscordMock(...args),
@@ -50,8 +50,10 @@ vi.mock("../send.shared.js", () => ({
   sendDiscordText: (...args: unknown[]) => sendDiscordTextMock(...args),
 }));
 
-vi.mock("openclaw/plugin-sdk/retry-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/retry-runtime")>();
+vi.mock("openclaw/plugin-sdk/retry-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/retry-runtime")>(
+    "openclaw/plugin-sdk/retry-runtime",
+  );
   return {
     ...actual,
     retryAsync: retryAsyncMock,
@@ -112,9 +114,11 @@ describe("deliverDiscordReply", () => {
     return threadBindings;
   };
 
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     ({ deliverDiscordReply } = await import("./reply-delivery.js"));
+  });
+
+  beforeEach(() => {
     sendMessageDiscordMock.mockClear().mockResolvedValue({
       messageId: "msg-1",
       channelId: "channel-1",
@@ -238,6 +242,44 @@ describe("deliverDiscordReply", () => {
     );
   });
 
+  it("sends text first and videos as a separate media-only follow-up", async () => {
+    await deliverDiscordReply({
+      replies: [
+        {
+          text: "done — i kicked off a 5s Molty clip",
+          mediaUrls: ["/tmp/molty.mp4"],
+        },
+      ],
+      target: "channel:654",
+      token: "token",
+      runtime,
+      cfg,
+      textLimit: 2000,
+      replyToId: "reply-1",
+    });
+
+    expect(sendMessageDiscordMock).toHaveBeenCalledTimes(2);
+    expect(sendMessageDiscordMock).toHaveBeenNthCalledWith(
+      1,
+      "channel:654",
+      "done — i kicked off a 5s Molty clip",
+      expect.objectContaining({
+        token: "token",
+        replyTo: "reply-1",
+      }),
+    );
+    expect(sendMessageDiscordMock).toHaveBeenNthCalledWith(
+      2,
+      "channel:654",
+      "",
+      expect.objectContaining({
+        token: "token",
+        mediaUrl: "/tmp/molty.mp4",
+        replyTo: "reply-1",
+      }),
+    );
+  });
+
   it("forwards cfg to Discord send helpers", async () => {
     await deliverDiscordReply({
       replies: [{ text: "cfg path" }],
@@ -255,36 +297,64 @@ describe("deliverDiscordReply", () => {
     );
   });
 
-  it("uses replyToId only for the first chunk when replyToMode is first", async () => {
+  it("honors payload reply targets even when replyToMode is off", async () => {
     await deliverDiscordReply({
       replies: [
         {
-          text: "1234567890",
+          text: "explicit reply",
+          replyToId: "reply-explicit-1",
+          replyToTag: true,
+          replyToCurrent: true,
         },
       ],
-      target: "channel:789",
+      target: "channel:202",
       token: "token",
       runtime,
       cfg,
-      textLimit: 5,
-      replyToId: "reply-1",
-      replyToMode: "first",
+      textLimit: 2000,
+      replyToMode: "off",
     });
 
-    expect(sendMessageDiscordMock).toHaveBeenCalledTimes(2);
-    expect(sendMessageDiscordMock.mock.calls).toEqual([
-      expect.arrayContaining([
-        "channel:789",
-        "12345",
-        expect.objectContaining({ replyTo: "reply-1" }),
-      ]),
-      expect.arrayContaining([
-        "channel:789",
-        "67890",
-        expect.not.objectContaining({ replyTo: expect.anything() }),
-      ]),
-    ]);
+    expect(sendMessageDiscordMock).toHaveBeenCalledWith(
+      "channel:202",
+      "explicit reply",
+      expect.objectContaining({ replyTo: "reply-explicit-1" }),
+    );
   });
+
+  it.each(["first", "batched"] as const)(
+    "uses replyToId only for the first chunk when replyToMode is %s",
+    async (replyToMode) => {
+      await deliverDiscordReply({
+        replies: [
+          {
+            text: "1234567890",
+          },
+        ],
+        target: "channel:789",
+        token: "token",
+        runtime,
+        cfg,
+        textLimit: 5,
+        replyToId: "reply-1",
+        replyToMode,
+      });
+
+      expect(sendMessageDiscordMock).toHaveBeenCalledTimes(2);
+      expect(sendMessageDiscordMock.mock.calls).toEqual([
+        expect.arrayContaining([
+          "channel:789",
+          "12345",
+          expect.objectContaining({ replyTo: "reply-1" }),
+        ]),
+        expect.arrayContaining([
+          "channel:789",
+          "67890",
+          expect.not.objectContaining({ replyTo: expect.anything() }),
+        ]),
+      ]);
+    },
+  );
 
   it("does not consume replyToId for replyToMode=first on whitespace-only payloads", async () => {
     await deliverDiscordReply({

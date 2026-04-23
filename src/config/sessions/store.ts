@@ -12,82 +12,60 @@ import {
   mergeDeliveryContext,
   normalizeDeliveryContext,
   normalizeSessionDeliveryFields,
-  type DeliveryContext,
-} from "../../utils/delivery-context.js";
+} from "../../utils/delivery-context.shared.js";
+import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { getFileStatSnapshot } from "../cache-utils.js";
 import { enforceSessionDiskBudget, type SessionDiskBudgetSweepResult } from "./disk-budget.js";
 import { deriveSessionMetaPatch } from "./metadata.js";
 import {
-  clearSessionStoreCaches,
   dropSessionStoreObjectCache,
   getSerializedSessionStore,
   isSessionStoreCacheEnabled,
-  readSessionStoreCache,
   setSerializedSessionStore,
   writeSessionStoreCache,
 } from "./store-cache.js";
+import { normalizeStoreSessionKey, resolveSessionStoreEntry } from "./store-entry.js";
+import { loadSessionStore, normalizeSessionStore } from "./store-load.js";
+import {
+  clearSessionStoreCacheForTest,
+  drainSessionStoreLockQueuesForTest,
+  getSessionStoreLockQueueSizeForTest,
+  LOCK_QUEUES,
+  type SessionStoreLockQueue,
+  type SessionStoreLockTask,
+} from "./store-lock-state.js";
+import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
   capEntryCount,
   getActiveSessionMaintenanceWarning,
   pruneStaleEntries,
-  resolveMaintenanceConfig,
   rotateSessionFile,
   type ResolvedSessionMaintenanceConfig,
   type SessionMaintenanceWarning,
 } from "./store-maintenance.js";
-import { applySessionStoreMigrations } from "./store-migrations.js";
 import {
   mergeSessionEntry,
   mergeSessionEntryPreserveActivity,
-  normalizeSessionRuntimeModelFields,
   type SessionEntry,
 } from "./types.js";
+
+export {
+  clearSessionStoreCacheForTest,
+  drainSessionStoreLockQueuesForTest,
+  getSessionStoreLockQueueSizeForTest,
+} from "./store-lock-state.js";
+export { loadSessionStore } from "./store-load.js";
+export { normalizeStoreSessionKey, resolveSessionStoreEntry } from "./store-entry.js";
 
 const log = createSubsystemLogger("sessions/store");
 let sessionArchiveRuntimePromise: Promise<
   typeof import("../../gateway/session-archive.runtime.js")
 > | null = null;
+let sessionWriteLockAcquirerForTests: typeof acquireSessionWriteLock | null = null;
 
 function loadSessionArchiveRuntime() {
   sessionArchiveRuntimePromise ??= import("../../gateway/session-archive.runtime.js");
   return sessionArchiveRuntimePromise;
-}
-
-function isSessionStoreRecord(value: unknown): value is Record<string, SessionEntry> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
-
-function normalizeSessionEntryDelivery(entry: SessionEntry): SessionEntry {
-  const normalized = normalizeSessionDeliveryFields({
-    channel: entry.channel,
-    lastChannel: entry.lastChannel,
-    lastTo: entry.lastTo,
-    lastAccountId: entry.lastAccountId,
-    lastThreadId: entry.lastThreadId ?? entry.deliveryContext?.threadId ?? entry.origin?.threadId,
-    deliveryContext: entry.deliveryContext,
-  });
-  const nextDelivery = normalized.deliveryContext;
-  const sameDelivery =
-    (entry.deliveryContext?.channel ?? undefined) === nextDelivery?.channel &&
-    (entry.deliveryContext?.to ?? undefined) === nextDelivery?.to &&
-    (entry.deliveryContext?.accountId ?? undefined) === nextDelivery?.accountId &&
-    (entry.deliveryContext?.threadId ?? undefined) === nextDelivery?.threadId;
-  const sameLast =
-    entry.lastChannel === normalized.lastChannel &&
-    entry.lastTo === normalized.lastTo &&
-    entry.lastAccountId === normalized.lastAccountId &&
-    entry.lastThreadId === normalized.lastThreadId;
-  if (sameDelivery && sameLast) {
-    return entry;
-  }
-  return {
-    ...entry,
-    deliveryContext: nextDelivery,
-    lastChannel: normalized.lastChannel,
-    lastTo: normalized.lastTo,
-    lastAccountId: normalized.lastAccountId,
-    lastThreadId: normalized.lastThreadId,
-  };
 }
 
 function removeThreadFromDeliveryContext(context?: DeliveryContext): DeliveryContext | undefined {
@@ -99,96 +77,14 @@ function removeThreadFromDeliveryContext(context?: DeliveryContext): DeliveryCon
   return next;
 }
 
-export function normalizeStoreSessionKey(sessionKey: string): string {
-  return sessionKey.trim().toLowerCase();
+export function setSessionWriteLockAcquirerForTests(
+  acquirer: typeof acquireSessionWriteLock | null,
+): void {
+  sessionWriteLockAcquirerForTests = acquirer;
 }
 
-export function resolveSessionStoreEntry(params: {
-  store: Record<string, SessionEntry>;
-  sessionKey: string;
-}): {
-  normalizedKey: string;
-  existing: SessionEntry | undefined;
-  legacyKeys: string[];
-} {
-  const trimmedKey = params.sessionKey.trim();
-  const normalizedKey = normalizeStoreSessionKey(trimmedKey);
-  const legacyKeySet = new Set<string>();
-  if (
-    trimmedKey !== normalizedKey &&
-    Object.prototype.hasOwnProperty.call(params.store, trimmedKey)
-  ) {
-    legacyKeySet.add(trimmedKey);
-  }
-  let existing =
-    params.store[normalizedKey] ?? (legacyKeySet.size > 0 ? params.store[trimmedKey] : undefined);
-  let existingUpdatedAt = existing?.updatedAt ?? 0;
-  for (const [candidateKey, candidateEntry] of Object.entries(params.store)) {
-    if (candidateKey === normalizedKey) {
-      continue;
-    }
-    if (candidateKey.toLowerCase() !== normalizedKey) {
-      continue;
-    }
-    legacyKeySet.add(candidateKey);
-    const candidateUpdatedAt = candidateEntry?.updatedAt ?? 0;
-    if (!existing || candidateUpdatedAt > existingUpdatedAt) {
-      existing = candidateEntry;
-      existingUpdatedAt = candidateUpdatedAt;
-    }
-  }
-  return {
-    normalizedKey,
-    existing,
-    legacyKeys: [...legacyKeySet],
-  };
-}
-
-function normalizeSessionStore(store: Record<string, SessionEntry>): void {
-  for (const [key, entry] of Object.entries(store)) {
-    if (!entry) {
-      continue;
-    }
-    const normalized = normalizeSessionEntryDelivery(normalizeSessionRuntimeModelFields(entry));
-    if (normalized !== entry) {
-      store[key] = normalized;
-    }
-  }
-}
-
-export function clearSessionStoreCacheForTest(): void {
-  clearSessionStoreCaches();
-  for (const queue of LOCK_QUEUES.values()) {
-    for (const task of queue.pending) {
-      task.reject(new Error("session store queue cleared for test"));
-    }
-  }
-  LOCK_QUEUES.clear();
-}
-
-export async function drainSessionStoreLockQueuesForTest(): Promise<void> {
-  while (LOCK_QUEUES.size > 0) {
-    const queues = [...LOCK_QUEUES.values()];
-    for (const queue of queues) {
-      for (const task of queue.pending) {
-        task.reject(new Error("session store queue cleared for test"));
-      }
-      queue.pending.length = 0;
-    }
-    const activeDrains = queues.flatMap((queue) =>
-      queue.drainPromise ? [queue.drainPromise] : [],
-    );
-    if (activeDrains.length === 0) {
-      LOCK_QUEUES.clear();
-      return;
-    }
-    await Promise.allSettled(activeDrains);
-  }
-}
-
-/** Expose lock queue size for tests. */
-export function getSessionStoreLockQueueSizeForTest(): number {
-  return LOCK_QUEUES.size;
+export function resetSessionStoreLockRuntimeForTests(): void {
+  sessionWriteLockAcquirerForTests = null;
 }
 
 export async function withSessionStoreLockForTest<T>(
@@ -197,86 +93,6 @@ export async function withSessionStoreLockForTest<T>(
   opts: SessionStoreLockOptions = {},
 ): Promise<T> {
   return await withSessionStoreLock(storePath, fn, opts);
-}
-
-type LoadSessionStoreOptions = {
-  skipCache?: boolean;
-};
-
-export function loadSessionStore(
-  storePath: string,
-  opts: LoadSessionStoreOptions = {},
-): Record<string, SessionEntry> {
-  // Check cache first if enabled
-  if (!opts.skipCache && isSessionStoreCacheEnabled()) {
-    const currentFileStat = getFileStatSnapshot(storePath);
-    const cached = readSessionStoreCache({
-      storePath,
-      mtimeMs: currentFileStat?.mtimeMs,
-      sizeBytes: currentFileStat?.sizeBytes,
-    });
-    if (cached) {
-      return cached;
-    }
-  }
-
-  // Cache miss or disabled - load from disk.
-  // Retry up to 3 times when the file is empty or unparseable.  On Windows the
-  // temp-file + rename write is not fully atomic: a concurrent reader can briefly
-  // observe a 0-byte file (between truncate and write) or a stale/locked state.
-  // A short synchronous backoff (50 ms via `Atomics.wait`) is enough for the
-  // writer to finish.
-  let store: Record<string, SessionEntry> = {};
-  let fileStat = getFileStatSnapshot(storePath);
-  let mtimeMs = fileStat?.mtimeMs;
-  let serializedFromDisk: string | undefined;
-  const maxReadAttempts = process.platform === "win32" ? 3 : 1;
-  const retryBuf = maxReadAttempts > 1 ? new Int32Array(new SharedArrayBuffer(4)) : undefined;
-  for (let attempt = 0; attempt < maxReadAttempts; attempt++) {
-    try {
-      const raw = fs.readFileSync(storePath, "utf-8");
-      if (raw.length === 0 && attempt < maxReadAttempts - 1) {
-        // File is empty — likely caught mid-write; retry after a brief pause.
-        Atomics.wait(retryBuf!, 0, 0, 50);
-        continue;
-      }
-      const parsed = JSON.parse(raw);
-      if (isSessionStoreRecord(parsed)) {
-        store = parsed;
-        serializedFromDisk = raw;
-      }
-      fileStat = getFileStatSnapshot(storePath) ?? fileStat;
-      mtimeMs = fileStat?.mtimeMs;
-      break;
-    } catch {
-      // File missing, locked, or transiently corrupt — retry on Windows.
-      if (attempt < maxReadAttempts - 1) {
-        Atomics.wait(retryBuf!, 0, 0, 50);
-        continue;
-      }
-      // Final attempt failed; proceed with an empty store.
-    }
-  }
-  if (serializedFromDisk !== undefined) {
-    setSerializedSessionStore(storePath, serializedFromDisk);
-  } else {
-    setSerializedSessionStore(storePath, undefined);
-  }
-
-  applySessionStoreMigrations(store);
-
-  // Cache the result if caching is enabled
-  if (!opts.skipCache && isSessionStoreCacheEnabled()) {
-    writeSessionStoreCache({
-      storePath,
-      store,
-      mtimeMs,
-      sizeBytes: fileStat?.sizeBytes,
-      serialized: serializedFromDisk,
-    });
-  }
-
-  return structuredClone(store);
 }
 
 export function readSessionUpdatedAt(params: {
@@ -331,6 +147,8 @@ type SaveSessionStoreOptions = {
   onMaintenanceApplied?: (report: SessionMaintenanceApplyReport) => void | Promise<void>;
   /** Optional overrides used by maintenance commands. */
   maintenanceOverride?: Partial<ResolvedSessionMaintenanceConfig>;
+  /** Fully resolved maintenance settings when the caller already has config loaded. */
+  maintenanceConfig?: ResolvedSessionMaintenanceConfig;
 };
 
 function updateSessionStoreWriteCaches(params: {
@@ -420,7 +238,9 @@ async function saveSessionStoreUnlocked(
 
   if (!opts?.skipMaintenance) {
     // Resolve maintenance config once (avoids repeated loadConfig() calls).
-    const maintenance = { ...resolveMaintenanceConfig(), ...opts?.maintenanceOverride };
+    const maintenance = opts?.maintenanceConfig
+      ? { ...opts.maintenanceConfig, ...opts?.maintenanceOverride }
+      : { ...resolveMaintenanceConfig(), ...opts?.maintenanceOverride };
     const shouldWarnOnly = maintenance.mode === "warn";
     const beforeCount = Object.keys(store).length;
 
@@ -622,22 +442,6 @@ type SessionStoreLockOptions = {
 const SESSION_STORE_LOCK_MIN_HOLD_MS = 5_000;
 const SESSION_STORE_LOCK_TIMEOUT_GRACE_MS = 5_000;
 
-type SessionStoreLockTask = {
-  fn: () => Promise<unknown>;
-  resolve: (value: unknown) => void;
-  reject: (reason: unknown) => void;
-  timeoutMs?: number;
-  staleMs: number;
-};
-
-type SessionStoreLockQueue = {
-  running: boolean;
-  pending: SessionStoreLockTask[];
-  drainPromise: Promise<void> | null;
-};
-
-const LOCK_QUEUES = new Map<string, SessionStoreLockQueue>();
-
 function getErrorCode(error: unknown): string | null {
   if (!error || typeof error !== "object" || !("code" in error)) {
     return null;
@@ -764,7 +568,7 @@ async function drainSessionStoreLockQueue(storePath: string): Promise<void> {
         let failed: unknown;
         let hasFailure = false;
         try {
-          lock = await acquireSessionWriteLock({
+          lock = await (sessionWriteLockAcquirerForTests ?? acquireSessionWriteLock)({
             sessionFile: storePath,
             timeoutMs: remainingTimeoutMs,
             staleMs: task.staleMs,

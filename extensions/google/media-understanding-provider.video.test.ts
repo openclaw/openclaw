@@ -1,41 +1,15 @@
-import * as ssrf from "openclaw/plugin-sdk/infra-runtime";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { withFetchPreconnect } from "../../test/helpers/plugins/fetch-mock.js";
-import { createRequestCaptureJsonFetch } from "../../test/helpers/plugins/media-understanding.js";
+import { withFetchPreconnect } from "openclaw/plugin-sdk/testing";
+import { describe, expect, it } from "vitest";
+import {
+  createRequestCaptureJsonFetch,
+  installPinnedHostnameTestHooks,
+} from "../../src/media-understanding/audio.test-helpers.js";
 import { describeGeminiVideo } from "./media-understanding-provider.js";
+import { resolveGoogleGenerativeAiHttpRequestConfig } from "./runtime-api.js";
 
-const TEST_NET_IP = "203.0.113.10";
-
-function stubPinnedHostname(hostname: string) {
-  const normalized = hostname.trim().toLowerCase().replace(/\.$/, "");
-  const addresses = [TEST_NET_IP];
-  return {
-    hostname: normalized,
-    addresses,
-    lookup: ssrf.createPinnedLookup({ hostname: normalized, addresses }),
-  };
-}
+installPinnedHostnameTestHooks();
 
 describe("describeGeminiVideo", () => {
-  let resolvePinnedHostnameWithPolicySpy: ReturnType<typeof vi.spyOn>;
-  let resolvePinnedHostnameSpy: ReturnType<typeof vi.spyOn>;
-
-  beforeEach(() => {
-    resolvePinnedHostnameWithPolicySpy = vi
-      .spyOn(ssrf, "resolvePinnedHostnameWithPolicy")
-      .mockImplementation(async (hostname) => stubPinnedHostname(hostname));
-    resolvePinnedHostnameSpy = vi
-      .spyOn(ssrf, "resolvePinnedHostname")
-      .mockImplementation(async (hostname) => stubPinnedHostname(hostname));
-  });
-
-  afterEach(() => {
-    resolvePinnedHostnameWithPolicySpy?.mockRestore();
-    resolvePinnedHostnameSpy?.mockRestore();
-    resolvePinnedHostnameWithPolicySpy = undefined;
-    resolvePinnedHostnameSpy = undefined;
-  });
-
   it("respects case-insensitive x-goog-api-key overrides", async () => {
     let seenKey: string | null = null;
     const fetchFn = withFetchPreconnect(async (_input: RequestInfo | URL, init?: RequestInit) => {
@@ -62,6 +36,33 @@ describe("describeGeminiVideo", () => {
     expect(result.text).toBe("video ok");
   });
 
+  it("keeps private-network disabled for the default Google media endpoint", async () => {
+    expect(
+      resolveGoogleGenerativeAiHttpRequestConfig({
+        apiKey: "test-key",
+        capability: "video",
+        transport: "media-understanding",
+      }).allowPrivateNetwork,
+    ).toBe(false);
+
+    const fetchFn = withFetchPreconnect(async () => {
+      return new Response(
+        JSON.stringify({
+          candidates: [{ content: { parts: [{ text: "video ok" }] } }],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    });
+
+    await describeGeminiVideo({
+      buffer: Buffer.from("video"),
+      fileName: "clip.mp4",
+      apiKey: "test-key",
+      timeoutMs: 1000,
+      fetchFn,
+    });
+  });
+
   it("builds the expected request payload", async () => {
     const { fetchFn, getRequest } = createRequestCaptureJsonFetch({
       candidates: [
@@ -78,7 +79,7 @@ describe("describeGeminiVideo", () => {
       fileName: "clip.mp4",
       apiKey: "test-key",
       timeoutMs: 1500,
-      baseUrl: "https://example.com/v1beta/",
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta/",
       model: "gemini-3-pro",
       headers: { "X-Other": "1" },
       fetchFn,
@@ -87,7 +88,9 @@ describe("describeGeminiVideo", () => {
 
     expect(result.model).toBe("gemini-3-pro-preview");
     expect(result.text).toBe("first\nsecond");
-    expect(seenUrl).toBe("https://example.com/v1beta/models/gemini-3-pro-preview:generateContent");
+    expect(seenUrl).toBe(
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-preview:generateContent",
+    );
     expect(seenInit?.method).toBe("POST");
     expect(seenInit?.signal).toBeInstanceOf(AbortSignal);
 
@@ -107,6 +110,23 @@ describe("describeGeminiVideo", () => {
     expect(body.contents?.[0]?.parts?.[1]?.inline_data?.mime_type).toBe("video/mp4");
     expect(body.contents?.[0]?.parts?.[1]?.inline_data?.data).toBe(
       Buffer.from("video-bytes").toString("base64"),
+    );
+  });
+
+  it("rejects non-Google video base URLs before sending authenticated requests", async () => {
+    await expect(
+      describeGeminiVideo({
+        buffer: Buffer.from("video-bytes"),
+        fileName: "clip.mp4",
+        apiKey: "test-key",
+        timeoutMs: 1500,
+        baseUrl: "https://example.com/v1beta/",
+        fetchFn: async () => {
+          throw new Error("fetch should not run");
+        },
+      }),
+    ).rejects.toThrow(
+      "Google Generative AI baseUrl must use https://generativelanguage.googleapis.com",
     );
   });
 });

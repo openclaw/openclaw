@@ -1,4 +1,3 @@
-import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 export {
   ANTHROPIC_VERTEX_DEFAULT_MODEL_ID,
   buildAnthropicVertexProvider,
@@ -16,9 +15,9 @@ import { buildAnthropicVertexProvider } from "./provider-catalog.js";
 import { hasAnthropicVertexAvailableAuth } from "./region.js";
 
 export function mergeImplicitAnthropicVertexProvider(params: {
-  existing: ModelProviderConfig | undefined;
-  implicit: ModelProviderConfig;
-}): ModelProviderConfig {
+  existing?: ReturnType<typeof buildAnthropicVertexProvider>;
+  implicit: ReturnType<typeof buildAnthropicVertexProvider>;
+}) {
   const { existing, implicit } = params;
   if (!existing) {
     return implicit;
@@ -33,9 +32,7 @@ export function mergeImplicitAnthropicVertexProvider(params: {
   };
 }
 
-export function resolveImplicitAnthropicVertexProvider(params?: {
-  env?: NodeJS.ProcessEnv;
-}): ModelProviderConfig | null {
+export function resolveImplicitAnthropicVertexProvider(params?: { env?: NodeJS.ProcessEnv }) {
   const env = params?.env ?? process.env;
   if (!hasAnthropicVertexAvailableAuth(env)) {
     return null;

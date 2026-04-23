@@ -6,7 +6,6 @@ import {
   applyMessageDefaults,
   applyModelDefaults,
   applySessionDefaults,
-  applyTalkApiKey,
   applyTalkConfigNormalization,
 } from "./defaults.js";
 import { normalizeExecSafeBinProfilesInConfig } from "./normalize-exec-safe-bin.js";
@@ -16,7 +15,6 @@ import type { OpenClawConfig, ResolvedSourceConfig, RuntimeConfig } from "./type
 export type ConfigMaterializationMode = "load" | "missing" | "snapshot";
 
 type MaterializationProfile = {
-  includeTalkApiKey: boolean;
   includeCompactionDefaults: boolean;
   includeContextPruningDefaults: boolean;
   includeLoggingDefaults: boolean;
@@ -25,21 +23,18 @@ type MaterializationProfile = {
 
 const MATERIALIZATION_PROFILES: Record<ConfigMaterializationMode, MaterializationProfile> = {
   load: {
-    includeTalkApiKey: false,
     includeCompactionDefaults: true,
     includeContextPruningDefaults: true,
     includeLoggingDefaults: true,
     normalizePaths: true,
   },
   missing: {
-    includeTalkApiKey: true,
     includeCompactionDefaults: true,
     includeContextPruningDefaults: true,
     includeLoggingDefaults: false,
     normalizePaths: false,
   },
   snapshot: {
-    includeTalkApiKey: true,
     includeCompactionDefaults: false,
     includeContextPruningDefaults: false,
     includeLoggingDefaults: true,
@@ -74,9 +69,6 @@ export function materializeRuntimeConfig(
   }
   next = applyModelDefaults(next);
   next = applyTalkConfigNormalization(next);
-  if (profile.includeTalkApiKey) {
-    next = applyTalkApiKey(next);
-  }
   if (profile.normalizePaths) {
     normalizeConfigPaths(next);
   }

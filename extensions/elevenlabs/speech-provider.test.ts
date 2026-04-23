@@ -6,7 +6,7 @@ describe("elevenlabs speech provider", () => {
     const cases = [
       { value: "pMsXgVXv3BLzUgSXRplE", expected: true },
       { value: "21m00Tcm4TlvDq8ikWAM", expected: true },
-      { value: "EXAVITQu4vr4xnSDxMaL", expected: true },
+      { value: "VoiceAlias1234567890", expected: true },
       { value: "a1b2c3d4e5", expected: true },
       { value: "a".repeat(40), expected: true },
       { value: "", expected: false },

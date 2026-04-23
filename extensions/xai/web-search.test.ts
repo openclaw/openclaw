@@ -1,13 +1,13 @@
 import { NON_ENV_SECRETREF_MARKER } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { createNonExitingRuntime } from "openclaw/plugin-sdk/runtime-env";
-import { capturePluginRegistration } from "openclaw/plugin-sdk/testing";
+import { withEnv, withEnvAsync } from "openclaw/plugin-sdk/testing";
 import { describe, expect, it, vi } from "vitest";
-import { withEnv } from "../../test/helpers/plugins/env.js";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
-import xaiPlugin from "./index.js";
 import { resolveXaiCatalogEntry } from "./model-definitions.js";
 import { isModernXaiModel, resolveXaiForwardCompatModel } from "./provider-models.js";
-import { __testing, createXaiWebSearchProvider } from "./web-search.js";
+import { resolveFallbackXaiAuth } from "./src/tool-auth-shared.js";
+import { __testing } from "./test-api.js";
+import { createXaiWebSearchProvider } from "./web-search.js";
 
 const {
   extractXaiWebSearchContent,
@@ -78,8 +78,8 @@ describe("xai web search config resolution", () => {
     expect(resolveXaiWebSearchModel(searchConfig)).toBe("grok-4-fast");
   });
 
-  it("treats unresolved non-env SecretRefs as missing credentials instead of throwing", async () => {
-    await withEnv({ XAI_API_KEY: undefined }, async () => {
+  it("treats unresolved non-env SecretRefs as missing credentials instead of using env fallback", async () => {
+    await withEnvAsync({ XAI_API_KEY: "ambient-xai-test-key" }, async () => {
       const provider = createXaiWebSearchProvider();
       const maybeTool = provider.createTool({
         config: {
@@ -112,7 +112,7 @@ describe("xai web search config resolution", () => {
     });
   });
 
-  it("offers plugin-owned x_search setup after Grok is selected", async () => {
+  it("offers plugin-owned xSearch setup after Grok is selected", async () => {
     const provider = createXaiWebSearchProvider();
     const select = vi.fn().mockResolvedValueOnce("yes").mockResolvedValueOnce("grok-4-1-fast");
     const prompter = createWizardPrompter({
@@ -146,23 +146,31 @@ describe("xai web search config resolution", () => {
       prompter,
     });
 
-    expect(next?.tools?.web?.x_search).toMatchObject({
+    expect(next?.plugins?.entries?.xai?.config?.xSearch).toMatchObject({
       enabled: true,
       model: "grok-4-1-fast",
     });
   });
 
-  it("keeps explicit x_search disablement untouched during provider-owned setup", async () => {
+  it("keeps explicit xSearch disablement untouched during provider-owned setup", async () => {
     const provider = createXaiWebSearchProvider();
     const config = {
+      plugins: {
+        entries: {
+          xai: {
+            config: {
+              xSearch: {
+                enabled: false,
+              },
+            },
+          },
+        },
+      },
       tools: {
         web: {
           search: {
             provider: "grok",
             enabled: true,
-          },
-          x_search: {
-            enabled: false,
           },
         },
       },
@@ -180,84 +188,63 @@ describe("xai web search config resolution", () => {
   });
 
   it("reuses the plugin web search api key for provider auth fallback", () => {
-    const captured = capturePluginRegistration(xaiPlugin);
-    const provider = captured.providers[0];
     expect(
-      provider?.resolveSyntheticAuth?.({
-        config: {
-          plugins: {
-            entries: {
-              xai: {
-                config: {
-                  webSearch: {
-                    apiKey: "xai-provider-fallback", // pragma: allowlist secret
-                  },
+      resolveFallbackXaiAuth({
+        plugins: {
+          entries: {
+            xai: {
+              config: {
+                webSearch: {
+                  apiKey: "xai-provider-fallback", // pragma: allowlist secret
                 },
               },
             },
           },
         },
-        provider: "xai",
-        providerConfig: undefined,
-      }),
+      } as never),
     ).toEqual({
       apiKey: "xai-provider-fallback",
       source: "plugins.entries.xai.config.webSearch.apiKey",
-      mode: "api-key",
     });
   });
 
   it("reuses the legacy grok web search api key for provider auth fallback", () => {
-    const captured = capturePluginRegistration(xaiPlugin);
-    const provider = captured.providers[0];
     expect(
-      provider?.resolveSyntheticAuth?.({
-        config: {
-          tools: {
-            web: {
-              search: {
-                grok: {
-                  apiKey: "xai-legacy-fallback", // pragma: allowlist secret
-                },
+      resolveFallbackXaiAuth({
+        tools: {
+          web: {
+            search: {
+              grok: {
+                apiKey: "xai-legacy-fallback", // pragma: allowlist secret
               },
             },
           },
         },
-        provider: "xai",
-        providerConfig: undefined,
-      }),
+      } as never),
     ).toEqual({
       apiKey: "xai-legacy-fallback",
       source: "tools.web.search.grok.apiKey",
-      mode: "api-key",
     });
   });
 
   it("returns a managed marker for SecretRef-backed plugin auth fallback", () => {
-    const captured = capturePluginRegistration(xaiPlugin);
-    const provider = captured.providers[0];
     expect(
-      provider?.resolveSyntheticAuth?.({
-        config: {
-          plugins: {
-            entries: {
-              xai: {
-                config: {
-                  webSearch: {
-                    apiKey: { source: "file", provider: "vault", id: "/xai/api-key" },
-                  },
+      resolveFallbackXaiAuth({
+        plugins: {
+          entries: {
+            xai: {
+              config: {
+                webSearch: {
+                  apiKey: { source: "file", provider: "vault", id: "/xai/api-key" },
                 },
               },
             },
           },
         },
-        provider: "xai",
-        providerConfig: undefined,
-      }),
+      } as never),
     ).toEqual({
       apiKey: NON_ENV_SECRETREF_MARKER,
       source: "plugins.entries.xai.config.webSearch.apiKey",
-      mode: "api-key",
     });
   });
 

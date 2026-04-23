@@ -40,6 +40,8 @@ Choose this when:
 - OpenClaw and Chrome are on the same machine
 - you want the local signed-in browser state
 - you do not need cross-host browser transport
+- you do not need advanced managed/raw-CDP-only routes like `responsebody`, PDF
+  export, download interception, or batch actions
 
 For WSL2 Gateway + Windows Chrome, prefer raw remote CDP. Chrome MCP is host-local, not a WSL2-to-Windows bridge.
 
@@ -142,6 +144,9 @@ Notes:
 
 - use the WSL2-reachable address, not whatever only works on Windows
 - keep `attachOnly: true` for externally managed browsers
+- `cdpUrl` can be `http://`, `https://`, `ws://`, or `wss://`
+- use HTTP(S) when you want OpenClaw to discover `/json/version`
+- use WS(S) only when the browser provider gives you a direct DevTools socket URL
 - test the same URL with `curl` before expecting OpenClaw to succeed
 
 ### Layer 4: Verify the Control UI layer separately
@@ -187,6 +192,11 @@ Treat each message as a layer-specific clue:
   - device approval problem
 - `Remote CDP for profile "remote" is not reachable`
   - WSL2 cannot reach the configured `cdpUrl`
+- `Browser attachOnly is enabled and CDP websocket for profile "remote" is not reachable`
+  - the HTTP endpoint answered, but the DevTools WebSocket still could not be opened
+- stale viewport / dark-mode / locale / offline overrides after a remote session
+  - run `openclaw browser stop --browser-profile remote`
+  - this closes the active control session and releases Playwright/CDP emulation state without restarting the gateway or the external browser
 - `gateway timeout after 1500ms`
   - often still CDP reachability or a slow/unreachable remote endpoint
 - `No Chrome tabs found for profile="user"`

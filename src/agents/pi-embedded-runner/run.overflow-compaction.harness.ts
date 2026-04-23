@@ -1,11 +1,13 @@
 import { type Mock, vi } from "vitest";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import type {
   PluginHookAgentContext,
   PluginHookBeforeAgentStartResult,
   PluginHookBeforeModelResolveResult,
   PluginHookBeforePromptBuildResult,
 } from "../../plugins/types.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import type { FailoverReason } from "../pi-embedded-helpers/types.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
@@ -70,6 +72,12 @@ export const mockedRunEmbeddedAttempt =
   vi.fn<(params: unknown) => Promise<EmbeddedRunAttemptResult>>();
 export const mockedRunContextEngineMaintenance = vi.fn(async () => undefined);
 export const mockedSessionLikelyHasOversizedToolResults = vi.fn(() => false);
+export const mockedResolveLiveToolResultMaxChars = vi.fn(() => 32_000);
+type MockTruncateOversizedToolResultsResult = {
+  truncated: boolean;
+  truncatedCount: number;
+  reason?: string;
+};
 export const mockedTruncateOversizedToolResultsInSession = vi.fn<
   () => Promise<MockTruncateOversizedToolResultsResult>
 >(async () => ({
@@ -91,12 +99,6 @@ type MockCoerceToFailoverError = (
 ) => unknown;
 type MockDescribeFailoverError = (err: unknown) => MockFailoverErrorDescription;
 type MockResolveFailoverStatus = (reason: string) => number | undefined;
-type MockTruncateOversizedToolResultsResult = {
-  truncated: boolean;
-  truncatedCount: number;
-  reason?: string;
-};
-
 export class MockedFailoverError extends Error {
   constructor(message: string) {
     super(message);
@@ -107,7 +109,7 @@ export class MockedFailoverError extends Error {
 export const mockedCoerceToFailoverError = vi.fn<MockCoerceToFailoverError>();
 export const mockedDescribeFailoverError = vi.fn<MockDescribeFailoverError>(
   (err: unknown): MockFailoverErrorDescription => ({
-    message: err instanceof Error ? err.message : String(err),
+    message: formatErrorMessage(err),
     reason: undefined,
     status: undefined,
     code: undefined,
@@ -144,7 +146,7 @@ export const mockedIsCompactionFailureError = vi.fn(() => false);
 export const mockedIsFailoverAssistantError = vi.fn(() => false);
 export const mockedIsFailoverErrorMessage = vi.fn(() => false);
 export const mockedIsLikelyContextOverflowError = vi.fn((msg?: string) => {
-  const lower = (msg ?? "").toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(msg ?? "");
   return (
     lower.includes("request_too_large") ||
     lower.includes("context window exceeded") ||
@@ -168,6 +170,14 @@ export const mockedResolveContextWindowInfo = vi.fn(() => ({
   tokens: 200000,
   source: "model",
 }));
+export const mockedFormatContextWindowWarningMessage = vi.fn(
+  (params: { provider: string; modelId: string; guard: { tokens: number; source: string } }) =>
+    `low context window: ${params.provider}/${params.modelId} ctx=${params.guard.tokens} source=${params.guard.source}`,
+);
+export const mockedFormatContextWindowBlockMessage = vi.fn(
+  (params: { guard: { tokens: number; source: string } }) =>
+    `Model context window too small (${params.guard.tokens} tokens; source=${params.guard.source}). Minimum is 1000.`,
+);
 export const mockedGetApiKeyForModel = vi.fn(
   async ({ profileId }: { profileId?: string } = {}) => ({
     apiKey: "test-key",
@@ -177,6 +187,7 @@ export const mockedGetApiKeyForModel = vi.fn(
   }),
 );
 export const mockedResolveAuthProfileOrder = vi.fn(() => [] as string[]);
+export const mockedShouldPreferExplicitConfigApiKeyAuth = vi.fn(() => false);
 
 export const overflowBaseRunParams = {
   sessionId: "test-session",
@@ -218,6 +229,8 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
   mockedRunContextEngineMaintenance.mockResolvedValue(undefined);
   mockedSessionLikelyHasOversizedToolResults.mockReset();
   mockedSessionLikelyHasOversizedToolResults.mockReturnValue(false);
+  mockedResolveLiveToolResultMaxChars.mockReset();
+  mockedResolveLiveToolResultMaxChars.mockReturnValue(32_000);
   mockedTruncateOversizedToolResultsInSession.mockReset();
   mockedTruncateOversizedToolResultsInSession.mockResolvedValue({
     truncated: false,
@@ -230,7 +243,7 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
   mockedDescribeFailoverError.mockReset();
   mockedDescribeFailoverError.mockImplementation(
     (err: unknown): MockFailoverErrorDescription => ({
-      message: err instanceof Error ? err.message : String(err),
+      message: formatErrorMessage(err),
       reason: undefined,
       status: undefined,
       code: undefined,
@@ -269,7 +282,7 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
   mockedIsFailoverErrorMessage.mockReturnValue(false);
   mockedIsLikelyContextOverflowError.mockReset();
   mockedIsLikelyContextOverflowError.mockImplementation((msg?: string) => {
-    const lower = (msg ?? "").toLowerCase();
+    const lower = normalizeLowercaseStringOrEmpty(msg ?? "");
     return (
       lower.includes("request_too_large") ||
       lower.includes("context window exceeded") ||
@@ -298,6 +311,16 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
     tokens: 200000,
     source: "model",
   });
+  mockedFormatContextWindowWarningMessage.mockReset();
+  mockedFormatContextWindowWarningMessage.mockImplementation(
+    (params: { provider: string; modelId: string; guard: { tokens: number; source: string } }) =>
+      `low context window: ${params.provider}/${params.modelId} ctx=${params.guard.tokens} source=${params.guard.source}`,
+  );
+  mockedFormatContextWindowBlockMessage.mockReset();
+  mockedFormatContextWindowBlockMessage.mockImplementation(
+    (params: { guard: { tokens: number; source: string } }) =>
+      `Model context window too small (${params.guard.tokens} tokens; source=${params.guard.source}). Minimum is 1000.`,
+  );
   mockedGetApiKeyForModel.mockReset();
   mockedGetApiKeyForModel.mockImplementation(
     async ({ profileId }: { profileId?: string } = {}) => ({
@@ -309,6 +332,8 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
   );
   mockedResolveAuthProfileOrder.mockReset();
   mockedResolveAuthProfileOrder.mockReturnValue([]);
+  mockedShouldPreferExplicitConfigApiKeyAuth.mockReset();
+  mockedShouldPreferExplicitConfigApiKeyAuth.mockReturnValue(false);
   mockedRunPostCompactionSideEffects.mockReset();
   mockedRunPostCompactionSideEffects.mockResolvedValue(undefined);
 }
@@ -323,8 +348,10 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     getGlobalHookRunner: vi.fn(() => mockedGlobalHookRunner),
   }));
 
-  vi.doMock("../../context-engine/index.js", () => ({
+  vi.doMock("../../context-engine/init.js", () => ({
     ensureContextEnginesInitialized: vi.fn(),
+  }));
+  vi.doMock("../../context-engine/registry.js", () => ({
     resolveContextEngine: vi.fn(async () => mockedContextEngine),
   }));
 
@@ -334,6 +361,9 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
 
   vi.doMock("../../plugins/provider-runtime.js", () => ({
     prepareProviderRuntimeAuth: mockedPrepareProviderRuntimeAuth,
+    resolveProviderCapabilitiesWithPlugin: vi.fn(() => ({})),
+    prepareProviderExtraParams: vi.fn(async () => ({})),
+    wrapProviderStreamFn: vi.fn((_cfg: unknown, _model: unknown, fn: unknown) => fn),
   }));
 
   vi.doMock("../auth-profiles.js", () => ({
@@ -385,10 +415,17 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     isRateLimitAssistantError: mockedIsRateLimitAssistantError,
     isTimeoutErrorMessage: mockedIsTimeoutErrorMessage,
     pickFallbackThinkingLevel: mockedPickFallbackThinkingLevel,
+    sanitizeUserFacingText: vi.fn((text: unknown) => (typeof text === "string" ? text : "")),
   }));
 
   vi.doMock("./run/attempt.js", () => ({
     runEmbeddedAttempt: mockedRunEmbeddedAttempt,
+  }));
+
+  vi.doMock("./tool-result-truncation.js", () => ({
+    resolveLiveToolResultMaxChars: mockedResolveLiveToolResultMaxChars,
+    sessionLikelyHasOversizedToolResults: mockedSessionLikelyHasOversizedToolResults,
+    truncateOversizedToolResultsInSession: mockedTruncateOversizedToolResultsInSession,
   }));
 
   vi.doMock("./context-engine-maintenance.js", () => ({
@@ -412,10 +449,12 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
   }));
 
   vi.doMock("../model-auth.js", () => ({
+    applyAuthHeaderOverride: vi.fn((model: unknown) => model),
     applyLocalNoAuthHeaderOverride: vi.fn((model: unknown) => model),
     ensureAuthProfileStore: vi.fn(() => ({})),
     getApiKeyForModel: mockedGetApiKeyForModel,
     resolveAuthProfileOrder: mockedResolveAuthProfileOrder,
+    shouldPreferExplicitConfigApiKeyAuth: mockedShouldPreferExplicitConfigApiKeyAuth,
   }));
 
   vi.doMock("../models-config.js", () => ({
@@ -426,6 +465,8 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     CONTEXT_WINDOW_HARD_MIN_TOKENS: 1000,
     CONTEXT_WINDOW_WARN_BELOW_TOKENS: 5000,
     evaluateContextWindowGuard: mockedEvaluateContextWindowGuard,
+    formatContextWindowBlockMessage: mockedFormatContextWindowBlockMessage,
+    formatContextWindowWarningMessage: mockedFormatContextWindowWarningMessage,
     resolveContextWindowInfo: mockedResolveContextWindowInfo,
   }));
 
@@ -467,12 +508,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     buildEmbeddedRunPayloads: vi.fn(() => []),
   }));
 
-  vi.doMock("./tool-result-truncation.js", () => ({
-    truncateOversizedToolResultsInSession: mockedTruncateOversizedToolResultsInSession,
-    sessionLikelyHasOversizedToolResults: mockedSessionLikelyHasOversizedToolResults,
-  }));
-
-  vi.doMock("./compact.js", () => ({
+  vi.doMock("./compaction-hooks.js", () => ({
     runPostCompactionSideEffects: mockedRunPostCompactionSideEffects,
   }));
 

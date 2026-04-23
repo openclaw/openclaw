@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 const FAKE_STARTTIME = 12345;
 let __testing: typeof import("./session-write-lock.js").__testing;
@@ -10,25 +10,15 @@ let cleanStaleLockFiles: typeof import("./session-write-lock.js").cleanStaleLock
 let resetSessionWriteLockStateForTest: typeof import("./session-write-lock.js").resetSessionWriteLockStateForTest;
 let resolveSessionLockMaxHoldFromTimeout: typeof import("./session-write-lock.js").resolveSessionLockMaxHoldFromTimeout;
 
-async function loadFreshSessionWriteLockModuleForTest() {
-  vi.resetModules();
-  // Mock getProcessStartTime so PID-recycling detection works on non-Linux
-  // (macOS, CI runners). isPidAlive is left unmocked.
-  vi.doMock("../shared/pid-alive.js", async (importOriginal) => {
-    const original = await importOriginal<typeof import("../shared/pid-alive.js")>();
-    return {
-      ...original,
-      getProcessStartTime: (pid: number) => (pid === process.pid ? FAKE_STARTTIME : null),
-    };
-  });
-  ({
-    __testing,
-    acquireSessionWriteLock,
-    cleanStaleLockFiles,
-    resetSessionWriteLockStateForTest,
-    resolveSessionLockMaxHoldFromTimeout,
-  } = await import("./session-write-lock.js"));
-}
+vi.mock("../shared/pid-alive.js", async () => {
+  const original =
+    await vi.importActual<typeof import("../shared/pid-alive.js")>("../shared/pid-alive.js");
+  return {
+    ...original,
+    // Keep liveness checks real; only pin process start time for PID recycle coverage.
+    getProcessStartTime: (pid: number) => (pid === process.pid ? FAKE_STARTTIME : null),
+  };
+});
 
 async function expectLockRemovedOnlyAfterFinalRelease(params: {
   lockPath: string;
@@ -95,7 +85,7 @@ async function expectActiveInProcessLockIsNotReclaimed(params?: {
     await expect(
       acquireSessionWriteLock({
         sessionFile,
-        timeoutMs: 50,
+        timeoutMs: 5,
         allowReentrant: false,
       }),
     ).rejects.toThrow(/session file locked/);
@@ -104,8 +94,14 @@ async function expectActiveInProcessLockIsNotReclaimed(params?: {
 }
 
 describe("acquireSessionWriteLock", () => {
-  beforeEach(async () => {
-    await loadFreshSessionWriteLockModuleForTest();
+  beforeAll(async () => {
+    ({
+      __testing,
+      acquireSessionWriteLock,
+      cleanStaleLockFiles,
+      resetSessionWriteLockStateForTest,
+      resolveSessionLockMaxHoldFromTimeout,
+    } = await import("./session-write-lock.js"));
   });
 
   afterEach(() => {
@@ -169,7 +165,7 @@ describe("acquireSessionWriteLock", () => {
       const lockPath = `${sessionFile}.lock`;
       await fs.writeFile(
         lockPath,
-        JSON.stringify({ pid: 123456, createdAt: new Date(Date.now() - 60_000).toISOString() }),
+        JSON.stringify({ pid: 2 ** 30, createdAt: new Date(Date.now() - 60_000).toISOString() }),
         "utf8",
       );
 
@@ -187,7 +183,7 @@ describe("acquireSessionWriteLock", () => {
       await fs.writeFile(lockPath, "{}", "utf8");
 
       await expect(
-        acquireSessionWriteLock({ sessionFile, timeoutMs: 50, staleMs: 60_000 }),
+        acquireSessionWriteLock({ sessionFile, timeoutMs: 5, staleMs: 60_000 }),
       ).rejects.toThrow(/session file locked/);
       await expect(fs.access(lockPath)).resolves.toBeUndefined();
     } finally {
@@ -209,7 +205,7 @@ describe("acquireSessionWriteLock", () => {
 
   it("watchdog releases stale in-process locks", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-"));
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     try {
       const sessionFile = path.join(root, "session.jsonl");
       const lockPath = `${sessionFile}.lock`;
@@ -233,7 +229,7 @@ describe("acquireSessionWriteLock", () => {
         secondLock: lockB,
       });
     } finally {
-      warnSpy.mockRestore();
+      stderrSpy.mockRestore();
       await fs.rm(root, { recursive: true, force: true });
     }
   });
@@ -409,10 +405,10 @@ describe("acquireSessionWriteLock", () => {
       const lockPath = `${sessionFile}.lock`;
       await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });
 
-      process.emit("SIGINT");
+      __testing.handleTerminationSignal("SIGINT");
 
       await expect(fs.access(lockPath)).rejects.toThrow();
-      expect(otherHandlerCalled).toBe(true);
+      expect(otherHandlerCalled).toBe(false);
       expect(killCalls).toEqual([]);
     } finally {
       process.off("SIGINT", otherHandler);
@@ -430,13 +426,32 @@ describe("acquireSessionWriteLock", () => {
       await expect(fs.access(lockPath)).rejects.toThrow();
     });
   });
+
+  it("does not accumulate exit listeners across reset cycles", async () => {
+    const baselineExitListeners = process.listenerCount("exit");
+
+    await withTempSessionLockFile(async ({ sessionFile }) => {
+      for (let i = 0; i < 3; i += 1) {
+        const lock = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });
+        await lock.release();
+        resetSessionWriteLockStateForTest();
+        expect(process.listenerCount("exit")).toBe(baselineExitListeners);
+      }
+    });
+  });
+
   it("keeps other signal listeners registered", () => {
     const keepAlive = () => {};
+    const originalKill = process.kill.bind(process);
+    process.kill = ((_pid: number, _signal?: NodeJS.Signals) => true) as typeof process.kill;
     process.on("SIGINT", keepAlive);
 
-    __testing.handleTerminationSignal("SIGINT");
-
-    expect(process.listeners("SIGINT")).toContain(keepAlive);
-    process.off("SIGINT", keepAlive);
+    try {
+      __testing.handleTerminationSignal("SIGINT");
+      expect(process.listeners("SIGINT")).toContain(keepAlive);
+    } finally {
+      process.off("SIGINT", keepAlive);
+      process.kill = originalKill;
+    }
   });
 });

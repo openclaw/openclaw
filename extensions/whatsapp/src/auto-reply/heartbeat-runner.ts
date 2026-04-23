@@ -1,42 +1,38 @@
-import { appendCronStyleCurrentTimeLine } from "openclaw/plugin-sdk/agent-runtime";
-import {
-  emitHeartbeatEvent,
-  resolveHeartbeatVisibility,
-  resolveIndicatorType,
-} from "openclaw/plugin-sdk/channel-runtime";
-import { canonicalizeMainSessionAlias, loadConfig } from "openclaw/plugin-sdk/config-runtime";
-import {
-  loadSessionStore,
-  resolveSessionKey,
-  resolveStorePath,
-  updateSessionStore,
-} from "openclaw/plugin-sdk/config-runtime";
-import {
-  hasOutboundReplyContent,
-  resolveSendableOutboundReplyParts,
-} from "openclaw/plugin-sdk/reply-payload";
-import { resolveHeartbeatReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
+import { newConnectionId } from "../reconnect.js";
 import {
   DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
+  HEARTBEAT_TOKEN,
+  appendCronStyleCurrentTimeLine,
+  canonicalizeMainSessionAlias,
+  emitHeartbeatEvent,
+  formatError,
+  getChildLogger,
+  getReplyFromConfig,
+  hasOutboundReplyContent,
+  loadConfig,
+  loadSessionStore,
+  normalizeMainKey,
+  redactIdentifier,
   resolveHeartbeatPrompt,
+  resolveHeartbeatReplyPayload,
+  resolveHeartbeatVisibility,
+  resolveIndicatorType,
+  resolveSendableOutboundReplyParts,
+  resolveSessionKey,
+  resolveStorePath,
+  resolveWhatsAppHeartbeatRecipients,
+  sendMessageWhatsApp,
   stripHeartbeatToken,
-} from "openclaw/plugin-sdk/reply-runtime";
-import { getReplyFromConfig } from "openclaw/plugin-sdk/reply-runtime";
-import { HEARTBEAT_TOKEN } from "openclaw/plugin-sdk/reply-runtime";
-import { normalizeMainKey } from "openclaw/plugin-sdk/routing";
-import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
-import { redactIdentifier } from "openclaw/plugin-sdk/text-runtime";
-import { newConnectionId } from "../reconnect.js";
-import { resolveWhatsAppHeartbeatRecipients } from "../runtime-api.js";
-import { sendMessageWhatsApp } from "../send.js";
-import { formatError } from "../session.js";
-import { whatsappHeartbeatLog } from "./loggers.js";
+  updateSessionStore,
+  whatsappHeartbeatLog,
+} from "./heartbeat-runner.runtime.js";
 import { getSessionSnapshot } from "./session-snapshot.js";
 
 function resolveDefaultAgentIdFromConfig(cfg: ReturnType<typeof loadConfig>): string {
   const agents = cfg.agents?.list ?? [];
   const chosen = agents.find((agent) => agent?.default)?.id ?? agents[0]?.id ?? "main";
-  return chosen.trim().toLowerCase() || "main";
+  return normalizeOptionalLowercaseString(chosen) ?? "main";
 }
 
 export async function runWebHeartbeatOnce(opts: {
@@ -74,7 +70,7 @@ export async function runWebHeartbeatOnce(opts: {
       whatsappHeartbeatLog.info(`[dry-run] heartbeat ok -> ${redactedTo}`);
       return false;
     }
-    const sendResult = await sender(to, heartbeatOkText, { verbose });
+    const sendResult = await sender(to, heartbeatOkText, { verbose, cfg });
     heartbeatLogger.info(
       {
         to: redactedTo,
@@ -146,7 +142,7 @@ export async function runWebHeartbeatOnce(opts: {
         );
         return;
       }
-      const sendResult = await sender(to, overrideBody, { verbose });
+      const sendResult = await sender(to, overrideBody, { verbose, cfg });
       emitHeartbeatEvent({
         status: "sent",
         to,
@@ -293,7 +289,7 @@ export async function runWebHeartbeatOnce(opts: {
       return;
     }
 
-    const sendResult = await sender(to, finalText, { verbose });
+    const sendResult = await sender(to, finalText, { verbose, cfg });
     emitHeartbeatEvent({
       status: "sent",
       to,
@@ -328,7 +324,7 @@ export async function runWebHeartbeatOnce(opts: {
 
 export function resolveHeartbeatRecipients(
   cfg: ReturnType<typeof loadConfig>,
-  opts: { to?: string; all?: boolean } = {},
+  opts: { to?: string; all?: boolean; accountId?: string } = {},
 ) {
   return resolveWhatsAppHeartbeatRecipients(cfg, opts);
 }

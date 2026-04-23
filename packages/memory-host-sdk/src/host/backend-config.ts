@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { resolveAgentWorkspaceDir } from "../../../../src/agents/agent-scope.js";
 import { parseDurationMs } from "../../../../src/cli/parse-duration.js";
@@ -12,6 +13,7 @@ import type {
   MemoryQmdSearchMode,
 } from "../../../../src/config/types.memory.js";
 import { normalizeAgentId } from "../../../../src/routing/session-key.js";
+import { normalizeLowercaseStringOrEmpty } from "../../../../src/shared/string-coerce.js";
 import { resolveUserPath } from "../../../../src/utils.js";
 import { splitShellArgs } from "../../../../src/utils/shell-argv.js";
 
@@ -84,9 +86,9 @@ const DEFAULT_QMD_COMMAND_TIMEOUT_MS = 30_000;
 const DEFAULT_QMD_UPDATE_TIMEOUT_MS = 120_000;
 const DEFAULT_QMD_EMBED_TIMEOUT_MS = 120_000;
 const DEFAULT_QMD_LIMITS: ResolvedQmdLimitsConfig = {
-  maxResults: 6,
-  maxSnippetChars: 700,
-  maxInjectedChars: 4_000,
+  maxResults: 4,
+  maxSnippetChars: 450,
+  maxInjectedChars: 2_200,
   timeoutMs: DEFAULT_QMD_TIMEOUT_MS,
 };
 const DEFAULT_QMD_MCPORTER: ResolvedQmdMcporterConfig = {
@@ -106,13 +108,40 @@ const DEFAULT_QMD_SCOPE: SessionSendPolicyConfig = {
 };
 
 function sanitizeName(input: string): string {
-  const lower = input.toLowerCase().replace(/[^a-z0-9-]+/g, "-");
+  const lower = normalizeLowercaseStringOrEmpty(input).replace(/[^a-z0-9-]+/g, "-");
   const trimmed = lower.replace(/^-+|-+$/g, "");
   return trimmed || "collection";
 }
 
 function scopeCollectionBase(base: string, agentId: string): string {
   return `${base}-${sanitizeName(agentId)}`;
+}
+
+function canonicalizePathForContainment(rawPath: string): string {
+  const resolved = path.resolve(rawPath);
+  let current = resolved;
+  const suffix: string[] = [];
+  while (true) {
+    try {
+      const canonical = path.normalize(fs.realpathSync.native(current));
+      return path.normalize(path.join(canonical, ...suffix));
+    } catch {
+      const parent = path.dirname(current);
+      if (parent === current) {
+        return path.normalize(resolved);
+      }
+      suffix.unshift(path.basename(current));
+      current = parent;
+    }
+  }
+}
+
+function isPathInsideRoot(candidatePath: string, rootPath: string): boolean {
+  const relative = path.relative(
+    canonicalizePathForContainment(rootPath),
+    canonicalizePathForContainment(candidatePath),
+  );
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
 function ensureUniqueName(base: string, existing: Set<string>): string {
@@ -252,7 +281,11 @@ function resolveCustomPaths(
       return;
     }
     seenRoots.add(dedupeKey);
-    const baseName = scopeCollectionBase(entry.name?.trim() || `custom-${index + 1}`, agentId);
+    const explicitName = entry.name?.trim();
+    const baseName =
+      explicitName && !isPathInsideRoot(resolved, workspaceDir)
+        ? explicitName
+        : scopeCollectionBase(explicitName || `custom-${index + 1}`, agentId);
     const name = ensureUniqueName(baseName, existing);
     collections.push({
       name,
@@ -285,6 +318,34 @@ function resolveMcporterConfig(raw?: MemoryQmdMcporterConfig): ResolvedQmdMcport
   return parsed;
 }
 
+function isRegularDefaultMemoryEntry(
+  entry: Pick<fs.Dirent, "name" | "isFile" | "isSymbolicLink">,
+  expectedName: string,
+): boolean {
+  return entry.name === expectedName && entry.isFile() && !entry.isSymbolicLink();
+}
+
+function findDefaultMemoryRootPattern(workspaceDir: string): string | null {
+  try {
+    let sawLegacyFallback = false;
+    for (const entry of fs.readdirSync(workspaceDir, { withFileTypes: true })) {
+      if (isRegularDefaultMemoryEntry(entry, "MEMORY.md")) {
+        return "MEMORY.md";
+      }
+      if (isRegularDefaultMemoryEntry(entry, "memory.md")) {
+        sawLegacyFallback = true;
+      }
+    }
+    return sawLegacyFallback ? "memory.md" : null;
+  } catch {
+    return null;
+  }
+}
+
+function resolveDefaultMemoryRootPattern(workspaceDir: string): string {
+  return findDefaultMemoryRootPattern(workspaceDir) ?? "MEMORY.md";
+}
+
 function resolveDefaultCollections(
   include: boolean,
   workspaceDir: string,
@@ -295,8 +356,13 @@ function resolveDefaultCollections(
     return [];
   }
   const entries: Array<{ path: string; pattern: string; base: string }> = [
-    { path: workspaceDir, pattern: "MEMORY.md", base: "memory-root" },
-    { path: workspaceDir, pattern: "memory.md", base: "memory-alt" },
+    // The root memory slot is singular: prefer MEMORY.md, but keep lowercase
+    // memory.md as a legacy fallback when the canonical file is absent.
+    {
+      path: workspaceDir,
+      pattern: resolveDefaultMemoryRootPattern(workspaceDir),
+      base: "memory-root",
+    },
     { path: path.join(workspaceDir, "memory"), pattern: "**/*.md", base: "memory-dir" },
   ];
   return entries.map((entry) => ({
@@ -336,9 +402,20 @@ export function resolveMemoryBackendConfig(params: {
   const searchExtraPaths = dedupedExtraPaths.map(
     (pathValue): { path: string; pattern?: string; name?: string } => ({ path: pathValue }),
   );
+  const mergedExtraCollections = [
+    ...(params.cfg.agents?.defaults?.memorySearch?.qmd?.extraCollections ?? []),
+    ...(agentEntry?.memorySearch?.qmd?.extraCollections ?? []),
+  ].filter(
+    (value): value is MemoryQmdIndexPath =>
+      value !== null && typeof value === "object" && typeof value.path === "string",
+  );
 
-  // Combine QMD-specific paths with memorySearch extraPaths
-  const allQmdPaths: MemoryQmdIndexPath[] = [...(qmdCfg?.paths ?? []), ...searchExtraPaths];
+  // Combine QMD-specific paths with extraPaths and per-agent cross-agent collections.
+  const allQmdPaths: MemoryQmdIndexPath[] = [
+    ...(qmdCfg?.paths ?? []),
+    ...searchExtraPaths,
+    ...mergedExtraCollections,
+  ];
 
   const collections = [
     ...resolveDefaultCollections(includeDefaultMemory, workspaceDir, nameSet, normalizedAgentId),

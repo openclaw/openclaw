@@ -3,40 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { installProcessWarningFilter } from "./process-warning-filter.mjs";
 import { stageBundledPluginRuntime } from "./stage-bundled-plugin-runtime.mjs";
-
-const warningFilterKey = Symbol.for("openclaw.warning-filter");
-
-function installProcessWarningFilter() {
-  if (globalThis[warningFilterKey]?.installed) {
-    return;
-  }
-
-  const originalEmitWarning = process.emitWarning.bind(process);
-  process.emitWarning = (...args) => {
-    const [warningArg, secondArg, thirdArg] = args;
-    const warning =
-      warningArg instanceof Error
-        ? {
-            name: warningArg.name,
-            message: warningArg.message,
-            code: warningArg.code,
-          }
-        : {
-            name: typeof secondArg === "string" ? secondArg : secondArg?.type,
-            message: typeof warningArg === "string" ? warningArg : undefined,
-            code: typeof thirdArg === "string" ? thirdArg : secondArg?.code,
-          };
-
-    if (warning.code === "DEP0040" && warning.message?.includes("punycode")) {
-      return;
-    }
-
-    return Reflect.apply(originalEmitWarning, process, args);
-  };
-
-  globalThis[warningFilterKey] = { installed: true };
-}
 
 installProcessWarningFilter();
 
@@ -165,7 +133,7 @@ const record = registry.plugins.find((entry) => entry.id === pluginId);
 assert.ok(record, "smoke plugin missing from registry");
 assert.equal(record.status, "loaded", record.error ?? "smoke plugin failed to load");
 
-assert.deepEqual(getPluginCommandSpecs("telegram"), [
+assert.deepEqual(getPluginCommandSpecs(), [
   { name: "pair", description: "Pair a device", acceptsArgs: true },
 ]);
 

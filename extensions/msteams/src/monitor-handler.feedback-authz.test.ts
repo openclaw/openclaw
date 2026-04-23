@@ -12,7 +12,6 @@ import {
   createActivityHandler,
   createMSTeamsMessageHandlerDeps,
 } from "./monitor-handler.test-helpers.js";
-import type { MSTeamsPollStore } from "./polls.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 

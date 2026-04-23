@@ -1,4 +1,5 @@
 import { deriveSessionTotalTokens, type NormalizedUsage } from "../../agents/usage.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { incrementCompactionCount } from "./session-updates.js";
 import { persistSessionUsageUpdate } from "./session-usage.js";
 
@@ -9,6 +10,7 @@ type IncrementRunCompactionCountParams = Omit<
   "tokensAfter"
 > & {
   amount?: number;
+  cfg?: OpenClawConfig;
   lastCallUsage?: NormalizedUsage;
   contextTokensUsed?: number;
   newSessionId?: string;
@@ -32,6 +34,7 @@ export async function incrementRunCompactionCount(
     sessionStore: params.sessionStore,
     sessionKey: params.sessionKey,
     storePath: params.storePath,
+    cfg: params.cfg,
     amount: params.amount,
     tokensAfter: tokensAfterCompaction,
     newSessionId: params.newSessionId,

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelDirectoryEntry } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 type TargetResolverModule = typeof import("./target-resolver.js");
@@ -17,8 +17,28 @@ const mocks = vi.hoisted(() => ({
   getActivePluginChannelRegistryVersion: vi.fn(() => 1),
 }));
 
-beforeEach(async () => {
-  vi.resetModules();
+vi.mock("../../channels/plugins/index.js", () => ({
+  getLoadedChannelPlugin: (...args: unknown[]) => mocks.getChannelPlugin(...args),
+  getChannelPlugin: (...args: unknown[]) => mocks.getChannelPlugin(...args),
+  normalizeChannelId: (value: string) => value,
+}));
+
+vi.mock("../../channels/plugins/registry-loaded-read.js", () => ({
+  getLoadedChannelPluginForRead: (...args: unknown[]) => mocks.getChannelPlugin(...args),
+}));
+
+vi.mock("../../plugins/runtime.js", () => ({
+  getActivePluginChannelRegistry: () => null,
+  getActivePluginRegistry: () => null,
+  getActivePluginChannelRegistryVersion: () => mocks.getActivePluginChannelRegistryVersion(),
+}));
+
+beforeAll(async () => {
+  ({ resetDirectoryCache, resolveMessagingTarget, formatTargetDisplay } =
+    await import("./target-resolver.js"));
+});
+
+beforeEach(() => {
   mocks.listPeers.mockReset();
   mocks.listPeersLive.mockReset();
   mocks.listGroups.mockReset();
@@ -27,15 +47,7 @@ beforeEach(async () => {
   mocks.getChannelPlugin.mockReset();
   mocks.getActivePluginChannelRegistryVersion.mockReset();
   mocks.getActivePluginChannelRegistryVersion.mockReturnValue(1);
-  vi.doMock("../../channels/plugins/index.js", () => ({
-    getChannelPlugin: (...args: unknown[]) => mocks.getChannelPlugin(...args),
-    normalizeChannelId: (value: string) => value,
-  }));
-  vi.doMock("../../plugins/runtime.js", () => ({
-    getActivePluginChannelRegistryVersion: () => mocks.getActivePluginChannelRegistryVersion(),
-  }));
-  ({ resetDirectoryCache, resolveMessagingTarget, formatTargetDisplay } =
-    await import("./target-resolver.js"));
+  resetDirectoryCache();
 });
 
 async function expectOkResolution(
@@ -76,7 +88,7 @@ describe("resolveMessagingTarget (directory fallback)", () => {
 
     const first = await expectOkResolution({
       cfg,
-      channel: "discord",
+      channel: "richchat",
       input: "support",
     });
     expect(first.target.source).toBe("directory");
@@ -86,7 +98,7 @@ describe("resolveMessagingTarget (directory fallback)", () => {
 
     const second = await expectOkResolution({
       cfg,
-      channel: "discord",
+      channel: "richchat",
       input: "support",
     });
     expect(second.target.to).toBe("123456789");
@@ -97,7 +109,7 @@ describe("resolveMessagingTarget (directory fallback)", () => {
   it("skips directory lookup for direct ids", async () => {
     const result = await expectOkResolution({
       cfg,
-      channel: "discord",
+      channel: "richchat",
       input: "123456789",
     });
     expect(result.target.source).toBe("normalized");
@@ -123,7 +135,7 @@ describe("resolveMessagingTarget (directory fallback)", () => {
 
     const result = await expectOkResolution({
       cfg,
-      channel: "mattermost",
+      channel: "workspace",
       input: "dthcxgoxhifn3pwh65cut3ud3w",
     });
     expect(result.target).toEqual({
@@ -165,7 +177,7 @@ describe("resolveMessagingTarget (directory fallback)", () => {
 
     const result = await expectOkResolution({
       cfg,
-      channel: "imessage",
+      channel: "localchat",
       input: "+15551234567",
     });
     expect(result.target).toEqual({
@@ -201,7 +213,7 @@ describe("resolveMessagingTarget (directory fallback)", () => {
 
     const result = await expectOkResolution({
       cfg,
-      channel: "slack",
+      channel: "workspace",
       input: "#C123ABC",
     });
     expect(result.target.to).toBe("channel:C123ABC");
@@ -211,10 +223,10 @@ describe("resolveMessagingTarget (directory fallback)", () => {
   it("defers target display formatting to the plugin when available", () => {
     mocks.getChannelPlugin.mockReturnValue({
       messaging: {
-        formatTargetDisplay: ({ target }: { target: string }) => target.replace(/^telegram:/i, ""),
+        formatTargetDisplay: ({ target }: { target: string }) => target.replace(/^forum:/i, ""),
       },
     });
 
-    expect(formatTargetDisplay({ channel: "telegram", target: "telegram:12345" })).toBe("12345");
+    expect(formatTargetDisplay({ channel: "forum", target: "forum:12345" })).toBe("12345");
   });
 });

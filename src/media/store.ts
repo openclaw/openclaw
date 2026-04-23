@@ -5,10 +5,12 @@ import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
-import { SafeOpenError, readLocalFileSafely } from "../infra/fs-safe.js";
+import { retainSafeHeadersForCrossOriginRedirect } from "../infra/net/redirect-headers.js";
 import { resolvePinnedHostname } from "../infra/net/ssrf.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveConfigDir } from "../utils.js";
 import { detectMime, extensionForMime } from "./mime.js";
+import { isSafeOpenError, readLocalFileSafely, type SafeOpenLikeError } from "./store.runtime.js";
 
 const resolveMediaDir = () => path.join(resolveConfigDir(), "media");
 export const MEDIA_MAX_BYTES = 5 * 1024 * 1024; // 5MB default
@@ -27,6 +29,10 @@ type ResolvePinnedHostnameImpl = typeof resolvePinnedHostname;
 const defaultHttpRequestImpl: RequestImpl = httpRequest;
 const defaultHttpsRequestImpl: RequestImpl = httpsRequest;
 const defaultResolvePinnedHostnameImpl: ResolvePinnedHostnameImpl = resolvePinnedHostname;
+
+function formatMediaLimitMb(maxBytes: number): string {
+  return `${(maxBytes / (1024 * 1024)).toFixed(0)}MB`;
+}
 
 let httpRequestImpl: RequestImpl = defaultHttpRequestImpl;
 let httpsRequestImpl: RequestImpl = defaultHttpsRequestImpl;
@@ -182,6 +188,7 @@ async function downloadToFile(
   dest: string,
   headers?: Record<string, string>,
   maxRedirects = 5,
+  maxBytes = MAX_BYTES,
 ): Promise<{ headerMime?: string; sniffBuffer: Buffer; size: number }> {
   return await new Promise((resolve, reject) => {
     let parsedUrl: URL;
@@ -199,7 +206,6 @@ async function downloadToFile(
     resolvePinnedHostnameImpl(parsedUrl.hostname)
       .then((pinned) => {
         const req = requestImpl(parsedUrl, { headers, lookup: pinned.lookup }, (res) => {
-          // Follow redirects
           if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400) {
             const location = res.headers.location;
             if (!location || maxRedirects <= 0) {
@@ -207,7 +213,11 @@ async function downloadToFile(
               return;
             }
             const redirectUrl = new URL(location, url).href;
-            resolve(downloadToFile(redirectUrl, dest, headers, maxRedirects - 1));
+            const redirectHeaders =
+              new URL(redirectUrl).origin === parsedUrl.origin
+                ? headers
+                : retainSafeHeadersForCrossOriginRedirect(headers);
+            resolve(downloadToFile(redirectUrl, dest, redirectHeaders, maxRedirects - 1, maxBytes));
             return;
           }
           if (!res.statusCode || res.statusCode >= 400) {
@@ -224,8 +234,8 @@ async function downloadToFile(
               sniffChunks.push(chunk);
               sniffLen += chunk.length;
             }
-            if (total > MAX_BYTES) {
-              req.destroy(new Error("Media exceeds 5MB limit"));
+            if (total > maxBytes) {
+              req.destroy(new Error(`Media exceeds ${formatMediaLimitMb(maxBytes)} limit`));
             }
           });
           pipeline(res, out)
@@ -317,7 +327,10 @@ export class SaveMediaSourceError extends Error {
   }
 }
 
-function toSaveMediaSourceError(err: SafeOpenError): SaveMediaSourceError {
+function toSaveMediaSourceError(
+  err: SafeOpenLikeError,
+  maxBytes = MAX_BYTES,
+): SaveMediaSourceError {
   switch (err.code) {
     case "symlink":
       return new SaveMediaSourceError("invalid-path", "Media path must not be a symlink", {
@@ -330,7 +343,11 @@ function toSaveMediaSourceError(err: SafeOpenError): SaveMediaSourceError {
         cause: err,
       });
     case "too-large":
-      return new SaveMediaSourceError("too-large", "Media exceeds 5MB limit", { cause: err });
+      return new SaveMediaSourceError(
+        "too-large",
+        `Media exceeds ${formatMediaLimitMb(maxBytes)} limit`,
+        { cause: err },
+      );
     case "not-found":
       return new SaveMediaSourceError("not-found", "Media path does not exist", { cause: err });
     case "outside-workspace":
@@ -349,6 +366,7 @@ export async function saveMediaSource(
   source: string,
   headers?: Record<string, string>,
   subdir = "",
+  maxBytes = MAX_BYTES,
 ): Promise<SavedMedia> {
   const baseDir = resolveMediaDir();
   const dir = subdir ? path.join(baseDir, subdir) : baseDir;
@@ -358,7 +376,7 @@ export async function saveMediaSource(
   if (looksLikeUrl(source)) {
     const tempDest = path.join(dir, `${baseId}.tmp`);
     const { headerMime, sniffBuffer, size } = await retryAfterRecreatingDir(dir, () =>
-      downloadToFile(source, tempDest, headers),
+      downloadToFile(source, tempDest, headers, 5, maxBytes),
     );
     const mime = await detectMime({
       buffer: sniffBuffer,
@@ -371,17 +389,16 @@ export async function saveMediaSource(
     await fs.rename(tempDest, finalDest);
     return buildSavedMediaResult({ dir, id, size, contentType: mime });
   }
-  // local path
   try {
-    const { buffer, stat } = await readLocalFileSafely({ filePath: source, maxBytes: MAX_BYTES });
+    const { buffer, stat } = await readLocalFileSafely({ filePath: source, maxBytes });
     const mime = await detectMime({ buffer, filePath: source });
     const ext = extensionForMime(mime) ?? path.extname(source);
     const id = buildSavedMediaId({ baseId, ext });
     await writeSavedMediaBuffer({ dir, id, buffer });
     return buildSavedMediaResult({ dir, id, size: stat.size, contentType: mime });
   } catch (err) {
-    if (err instanceof SafeOpenError) {
-      throw toSaveMediaSourceError(err);
+    if (isSafeOpenError(err)) {
+      throw toSaveMediaSourceError(err, maxBytes);
     }
     throw err;
   }
@@ -395,15 +412,108 @@ export async function saveMediaBuffer(
   originalFilename?: string,
 ): Promise<SavedMedia> {
   if (buffer.byteLength > maxBytes) {
-    throw new Error(`Media exceeds ${(maxBytes / (1024 * 1024)).toFixed(0)}MB limit`);
+    throw new Error(`Media exceeds ${formatMediaLimitMb(maxBytes)} limit`);
   }
   const dir = path.join(resolveMediaDir(), subdir);
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
   const uuid = crypto.randomUUID();
-  const headerExt = extensionForMime(contentType?.split(";")[0]?.trim() ?? undefined);
+  const headerExt = extensionForMime(normalizeOptionalString(contentType?.split(";")[0]));
   const mime = await detectMime({ buffer, headerMime: contentType });
   const ext = headerExt ?? extensionForMime(mime) ?? "";
   const id = buildSavedMediaId({ baseId: uuid, ext, originalFilename });
   await writeSavedMediaBuffer({ dir, id, buffer });
   return buildSavedMediaResult({ dir, id, size: buffer.byteLength, contentType: mime });
+}
+
+/**
+ * Resolves a media ID saved by saveMediaBuffer to its absolute physical path.
+ *
+ * This is the read-side counterpart to saveMediaBuffer and is used by the
+ * agent runner to hydrate opaque `media://inbound/<id>` URIs written by the
+ * Gateway's claim-check offload path.
+ *
+ * Security:
+ * - Rejects IDs containing path separators, "..", or null bytes to prevent
+ *   directory traversal and path injection outside the resolved subdir.
+ * - Verifies the resolved path is a regular file (not a symlink or directory)
+ *   before returning it, matching the write-side MEDIA_FILE_MODE policy.
+ *
+ * @param id      The media ID as returned by SavedMedia.id (may include
+ *                extension and original-filename prefix,
+ *                e.g. "photo---<uuid>.png" or "图片---<uuid>.png").
+ * @param subdir  The subdirectory the file was saved into (default "inbound").
+ * @returns       Absolute path to the file on disk.
+ * @throws        If the ID is unsafe, the file does not exist, or is not a
+ *                regular file.
+ */
+export async function resolveMediaBufferPath(
+  id: string,
+  subdir: "inbound" = "inbound",
+): Promise<string> {
+  // Guard against path traversal and null-byte injection.
+  //
+  // - Separator checks: reject any ID containing "/" or "\" (covers all
+  //   relative traversal sequences such as "../foo" or "..\\foo").
+  // - Exact ".." check: reject the bare traversal operator in case a caller
+  //   strips separators but keeps the dots.
+  // - Null-byte check: reject "\0" which can truncate paths on some platforms
+  //   and cause the OS to open a different file than intended.
+  //
+  // We allow consecutive dots in legitimate filenames (e.g. "report..draft.png"),
+  // so we only reject the exact two-character string "..".
+  //
+  // JSON.stringify is used in the error message so that control characters
+  // (including \0) are rendered visibly in logs rather than silently dropped.
+  if (!id || id.includes("/") || id.includes("\\") || id.includes("\0") || id === "..") {
+    throw new Error(`resolveMediaBufferPath: unsafe media ID: ${JSON.stringify(id)}`);
+  }
+
+  const dir = path.join(resolveMediaDir(), subdir);
+  const resolved = path.join(dir, id);
+
+  // Double-check that path.join didn't escape the intended directory.
+  // This should be unreachable after the separator check above, but be
+  // explicit about the invariant.
+  if (!resolved.startsWith(dir + path.sep) && resolved !== dir) {
+    throw new Error(`resolveMediaBufferPath: path escapes media directory: ${JSON.stringify(id)}`);
+  }
+
+  // lstat (not stat) so we see symlinks rather than following them.
+  const stat = await fs.lstat(resolved);
+
+  if (stat.isSymbolicLink()) {
+    throw new Error(
+      `resolveMediaBufferPath: refusing to follow symlink for media ID: ${JSON.stringify(id)}`,
+    );
+  }
+  if (!stat.isFile()) {
+    throw new Error(
+      `resolveMediaBufferPath: media ID does not resolve to a file: ${JSON.stringify(id)}`,
+    );
+  }
+
+  return resolved;
+}
+
+/**
+ * Deletes a file previously saved by saveMediaBuffer.
+ *
+ * This is used by parseMessageWithAttachments to clean up files that were
+ * successfully offloaded earlier in the same request when a later attachment
+ * fails validation and the entire parse is aborted, preventing orphaned files
+ * from accumulating on disk ahead of the periodic TTL sweep.
+ *
+ * Uses resolveMediaBufferPath to apply the same path-safety guards as the
+ * read path (separator checks, symlink rejection, etc.) before unlinking.
+ *
+ * Errors are intentionally not suppressed — callers that want best-effort
+ * cleanup should catch and discard exceptions themselves (e.g. via
+ * Promise.allSettled).
+ *
+ * @param id     The media ID as returned by SavedMedia.id.
+ * @param subdir The subdirectory the file was saved into (default "inbound").
+ */
+export async function deleteMediaBuffer(id: string, subdir: "inbound" = "inbound"): Promise<void> {
+  const physicalPath = await resolveMediaBufferPath(id, subdir);
+  await fs.unlink(physicalPath);
 }

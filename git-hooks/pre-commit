@@ -38,6 +38,18 @@ while IFS= read -r -d '' file; do
   format_files+=("$file")
 done < <(node "$FILTER_FILES" format -- "${files[@]}")
 
+docs_only=true
+for file in "${files[@]}"; do
+  case "$file" in
+    docs/*|*.md|*.mdx)
+      ;;
+    *)
+      docs_only=false
+      break
+      ;;
+  esac
+done
+
 if [ "${#lint_files[@]}" -gt 0 ]; then
   "$RUN_NODE_TOOL" oxlint --type-aware --fix -- "${lint_files[@]}"
 fi
@@ -55,10 +67,14 @@ if [[ -f "$ROOT_DIR/package.json" ]] && [[ -f "$ROOT_DIR/pnpm-lock.yaml" ]]; the
   cd "$ROOT_DIR"
   case "${FAST_COMMIT:-}" in
     1|true|TRUE|yes|YES|on|ON)
-      echo "FAST_COMMIT enabled: skipping pnpm check in pre-commit hook."
+      echo "FAST_COMMIT enabled: skipping changed-scope check in pre-commit hook."
       ;;
     *)
-      pnpm check
+      if [[ "$docs_only" == true ]]; then
+        echo "Docs-only staged changes detected: skipping pnpm check in pre-commit hook."
+      else
+        pnpm check:changed --staged
+      fi
       ;;
   esac
 fi

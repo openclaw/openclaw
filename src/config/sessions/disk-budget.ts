@@ -1,5 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../../shared/string-coerce.js";
 import { isPrimarySessionTranscriptFileName, isSessionArchiveArtifactName } from "./artifacts.js";
 import { resolveSessionFilePath } from "./paths.js";
 import type { SessionEntry } from "./types.js";
@@ -278,7 +282,7 @@ export async function enforceSessionDiskBudget(params: {
   }
 
   if (total > highWaterBytes) {
-    const activeSessionKey = params.activeSessionKey?.trim().toLowerCase();
+    const activeSessionKey = normalizeOptionalLowercaseString(params.activeSessionKey);
     const sessionIdRefCounts = buildSessionIdRefCounts(params.store);
     const entryChunkBytesByKey = buildStoreEntryChunkSizeMap(params.store);
     const keys = Object.keys(params.store).toSorted((a, b) => {
@@ -290,7 +294,7 @@ export async function enforceSessionDiskBudget(params: {
       if (total <= highWaterBytes) {
         break;
       }
-      if (activeSessionKey && key.trim().toLowerCase() === activeSessionKey) {
+      if (activeSessionKey && normalizeLowercaseStringOrEmpty(key) === activeSessionKey) {
         continue;
       }
       const entry = params.store[key];

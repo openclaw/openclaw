@@ -1,32 +1,38 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedBlueBubblesAccount } from "./accounts.js";
 import { fetchBlueBubblesHistory } from "./history.js";
-import { handleBlueBubblesWebhookRequest, resolveBlueBubblesMessageId } from "./monitor.js";
 import {
-  LOOPBACK_REMOTE_ADDRESSES_FOR_TEST,
-  createWebhookDispatchForTest,
-  createMockAccount,
   createHangingWebhookRequestForTest,
   createLoopbackWebhookRequestParamsForTest,
+  createMockAccount,
   createPasswordQueryRequestParamsForTest,
   createProtectedWebhookAccountForTest,
   createRemoteWebhookRequestParamsForTest,
   createTimestampedNewMessagePayloadForTest,
+  createWebhookDispatchForTest,
   dispatchWebhookPayloadForTest,
   expectWebhookRequestStatusForTest,
   expectWebhookStatusForTest,
+  LOOPBACK_REMOTE_ADDRESSES_FOR_TEST,
   setupWebhookTargetForTest,
   setupWebhookTargetsForTest,
   trackWebhookRegistrationForTest,
   type WebhookRequestParams,
 } from "./monitor.webhook.test-helpers.js";
 import type { OpenClawConfig, PluginRuntime } from "./runtime-api.js";
+import { createBlueBubblesFetchGuardPassthroughInstaller } from "./test-harness.js";
 import {
   createBlueBubblesMonitorTestRuntime,
   EMPTY_DISPATCH_RESULT,
   resetBlueBubblesMonitorTestState,
   type DispatchReplyParams,
 } from "./test-support/monitor-test-support.js";
+import { _setFetchGuardForTesting } from "./types.js";
+
+const { TEST_WEBHOOK_RATE_LIMIT_MAX_REQUESTS } = vi.hoisted(() => ({
+  TEST_WEBHOOK_RATE_LIMIT_MAX_REQUESTS: 3,
+}));
+const TEST_WEBHOOK_BODY_TIMEOUT_MS = 1;
 
 // Mock dependencies
 vi.mock("./send.js", () => ({
@@ -46,31 +52,51 @@ vi.mock("./attachments.js", () => ({
   }),
 }));
 
-vi.mock("./reactions.js", async () => {
-  const actual = await vi.importActual<typeof import("./reactions.js")>("./reactions.js");
-  return {
-    ...actual,
-    sendBlueBubblesReaction: vi.fn().mockResolvedValue(undefined),
-  };
-});
+vi.mock("./reactions.js", () => ({
+  normalizeBlueBubblesReactionInput: vi.fn((emoji: string, remove?: boolean) =>
+    remove ? `-${emoji}` : emoji,
+  ),
+  sendBlueBubblesReaction: vi.fn().mockResolvedValue(undefined),
+}));
 
 vi.mock("./history.js", () => ({
   fetchBlueBubblesHistory: vi.fn().mockResolvedValue({ entries: [], resolved: true }),
 }));
+
+vi.mock("./webhook-ingress.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("./webhook-ingress.js")>("./webhook-ingress.js");
+  return {
+    ...actual,
+    WEBHOOK_RATE_LIMIT_DEFAULTS: {
+      ...actual.WEBHOOK_RATE_LIMIT_DEFAULTS,
+      maxRequests: TEST_WEBHOOK_RATE_LIMIT_MAX_REQUESTS,
+    },
+    readWebhookBodyOrReject: (params: Parameters<typeof actual.readWebhookBodyOrReject>[0]) =>
+      actual.readWebhookBodyOrReject({
+        ...params,
+        timeoutMs: TEST_WEBHOOK_BODY_TIMEOUT_MS,
+      }),
+  };
+});
 
 // Mock runtime
 const mockEnqueueSystemEvent = vi.fn();
 const mockBuildPairingReply = vi.fn(() => "Pairing code: TESTCODE");
 const mockReadAllowFromStore = vi.fn().mockResolvedValue([]);
 const mockUpsertPairingRequest = vi.fn().mockResolvedValue({ code: "TESTCODE", created: true });
-const mockResolveAgentRoute = vi.fn(() => ({
+const DEFAULT_RESOLVED_AGENT_ROUTE: ReturnType<
+  PluginRuntime["channel"]["routing"]["resolveAgentRoute"]
+> = {
   agentId: "main",
   channel: "bluebubbles",
   accountId: "default",
   sessionKey: "agent:main:bluebubbles:dm:+15551234567",
   mainSessionKey: "agent:main:main",
+  lastRoutePolicy: "main",
   matchedBy: "default",
-}));
+};
+const mockResolveAgentRoute = vi.fn(() => DEFAULT_RESOLVED_AGENT_ROUTE);
 const mockBuildMentionRegexes = vi.fn(() => [/\bbert\b/i]);
 const mockMatchesMentionPatterns = vi.fn((text: string, regexes: RegExp[]) =>
   regexes.some((r) => r.test(text)),
@@ -84,7 +110,10 @@ const mockMatchesMentionWithExplicit = vi.fn(
   },
 );
 const mockResolveRequireMention = vi.fn(() => false);
-const mockResolveGroupPolicy = vi.fn(() => "open" as const);
+const mockResolveGroupPolicy = vi.fn(() => ({
+  allowlistEnabled: false,
+  allowed: true,
+}));
 const mockDispatchReplyWithBufferedBlockDispatcher = vi.fn(
   async (_params: DispatchReplyParams) => EMPTY_DISPATCH_RESULT,
 );
@@ -141,9 +170,13 @@ function createMockRuntime(): PluginRuntime {
 
 describe("BlueBubbles webhook monitor", () => {
   let unregister: () => void;
+  const installFetchGuardPassthrough = createBlueBubblesFetchGuardPassthroughInstaller();
 
   beforeEach(() => {
     vi.stubGlobal("fetch", mockFetch);
+    // See monitor.test.ts for rationale — BlueBubblesClient routes every BB
+    // API call through the SSRF guard now. (#34749, #59722)
+    installFetchGuardPassthrough();
     mockFetch.mockReset();
     mockFetch.mockResolvedValue({
       ok: true,
@@ -164,6 +197,7 @@ describe("BlueBubbles webhook monitor", () => {
   afterEach(() => {
     unregister?.();
     vi.unstubAllGlobals();
+    _setFetchGuardForTesting(null);
   });
 
   function setupWebhookTarget(params?: {
@@ -353,25 +387,17 @@ describe("BlueBubbles webhook monitor", () => {
     });
 
     it("returns 408 when request body times out (Slow-Loris protection)", async () => {
-      vi.useFakeTimers();
-      try {
-        setupWebhookTarget();
+      setupWebhookTarget();
 
-        // Create a request that never sends data or ends (simulates slow-loris)
-        const { req, destroyMock } = createHangingWebhookRequestForTest();
+      // Create a request that never sends data or ends (simulates slow-loris).
+      const { req, destroyMock } = createHangingWebhookRequestForTest();
 
-        const { res, handledPromise } = createWebhookDispatchForTest(req);
+      const { res, handledPromise } = createWebhookDispatchForTest(req);
 
-        // Advance past the 30s timeout
-        await vi.advanceTimersByTimeAsync(31_000);
-
-        const handled = await handledPromise;
-        expect(handled).toBe(true);
-        expect(res.statusCode).toBe(408);
-        expect(destroyMock).toHaveBeenCalled();
-      } finally {
-        vi.useRealTimers();
-      }
+      const handled = await handledPromise;
+      expect(handled).toBe(true);
+      expect(res.statusCode).toBe(408);
+      expect(destroyMock).toHaveBeenCalled();
     });
 
     it("rejects unauthorized requests before reading the body", async () => {
@@ -414,8 +440,7 @@ describe("BlueBubbles webhook monitor", () => {
       });
 
       let saw429 = false;
-      // Default webhook fixed-window budget is 120 requests/minute, so loop past it.
-      for (let i = 0; i < 130; i += 1) {
+      for (let i = 0; i < TEST_WEBHOOK_RATE_LIMIT_MAX_REQUESTS + 4; i += 1) {
         const candidate = String(i).padStart(8, "0");
         const { res } = await dispatchWebhookPayloadForTest(
           createPasswordQueryRequestParamsForTest({
@@ -453,7 +478,7 @@ describe("BlueBubbles webhook monitor", () => {
       });
 
       let saw429 = false;
-      for (let i = 0; i < 130; i += 1) {
+      for (let i = 0; i < TEST_WEBHOOK_RATE_LIMIT_MAX_REQUESTS + 4; i += 1) {
         const candidate = String(i).padStart(8, "0");
         const { res } = await dispatchWebhookPayloadForTest(
           createPasswordQueryRequestParamsForTest({
@@ -515,7 +540,7 @@ describe("BlueBubbles webhook monitor", () => {
       });
 
       let saw429 = false;
-      for (let i = 0; i < 130; i += 1) {
+      for (let i = 0; i < TEST_WEBHOOK_RATE_LIMIT_MAX_REQUESTS + 4; i += 1) {
         const candidate = String(i).padStart(8, "0");
         const { res } = await dispatchWebhookPayloadForTest(
           createPasswordQueryRequestParamsForTest({

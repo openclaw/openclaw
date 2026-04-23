@@ -54,6 +54,9 @@ Account scoping behavior:
 
 Treat these as sensitive (they gate access to your assistant).
 
+Important: this store is for DM access. Group authorization is separate.
+Approving a DM pairing code does not automatically allow that sender to run group commands or control the bot in groups. For group access, configure the channel's explicit group allowlists (for example `groupAllowFrom`, `groups`, or per-group/per-topic overrides depending on the channel).
+
 ## 2) Node device pairing (iOS/Android/macOS/headless nodes)
 
 Nodes connect to the Gateway as **devices** with `role: node`. The Gateway
@@ -74,6 +77,15 @@ The setup code is a base64-encoded JSON payload that contains:
 - `url`: the Gateway WebSocket URL (`ws://...` or `wss://...`)
 - `bootstrapToken`: a short-lived single-device bootstrap token used for the initial pairing handshake
 
+That bootstrap token carries the built-in pairing bootstrap profile:
+
+- primary handed-off `node` token stays `scopes: []`
+- any handed-off `operator` token stays bounded to the bootstrap allowlist:
+  `operator.approvals`, `operator.read`, `operator.talk.secrets`, `operator.write`
+- bootstrap scope checks are role-prefixed, not one flat scope pool:
+  operator scope entries only satisfy operator requests, and non-operator roles
+  must still request scopes under their own role prefix
+
 Treat the setup code like a password while it is valid.
 
 ### Approve a node device
@@ -88,6 +100,12 @@ If the same device retries with different auth details (for example different
 role/scopes/public key), the previous pending request is superseded and a new
 `requestId` is created.
 
+Important: an already paired device does not get broader access silently. If it
+reconnects asking for more scopes or a broader role, OpenClaw keeps the
+existing approval as-is and creates a fresh pending upgrade request. Use
+`openclaw devices list` to compare the currently approved access with the newly
+requested access before you approve.
+
 ### Node pairing state storage
 
 Stored under `~/.openclaw/devices/`:
@@ -97,8 +115,11 @@ Stored under `~/.openclaw/devices/`:
 
 ### Notes
 
-- The legacy `node.pair.*` API (CLI: `openclaw nodes pending/approve`) is a
+- The legacy `node.pair.*` API (CLI: `openclaw nodes pending|approve|reject|rename`) is a
   separate gateway-owned pairing store. WS nodes still require device pairing.
+- The pairing record is the durable source of truth for approved roles. Active
+  device tokens stay bounded to that approved role set; a stray token entry
+  outside the approved roles does not create new access.
 
 ## Related docs
 

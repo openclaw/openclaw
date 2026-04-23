@@ -1,17 +1,18 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { stageBundledPluginRuntime } from "../../scripts/stage-bundled-plugin-runtime.mjs";
 import { bundledDistPluginFile } from "../../test/helpers/bundled-plugin-paths.js";
+import type { PluginJitiLoaderCache } from "./jiti-loader-cache.js";
 import { loadPluginBoundaryModuleWithJiti } from "./runtime/runtime-plugin-boundary.js";
+import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 type LightModule = {
   getActiveWebListener: (accountId?: string | null) => unknown;
 };
 
 type HeavyModule = {
-  setActiveWebListener: (
+  registerControllerForTest: (
     accountId: string | null | undefined,
     listener: { sendMessage: () => Promise<{ messageId: string }> } | null,
   ) => void;
@@ -25,8 +26,7 @@ function writeRuntimeFixtureText(rootDir: string, relativePath: string, value: s
 }
 
 function createBundledWhatsAppRuntimeFixture() {
-  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-whatsapp-boundary-"));
-  tempDirs.push(rootDir);
+  const rootDir = makeTrackedTempDir("openclaw-whatsapp-boundary", tempDirs);
   for (const [relativePath, value] of Object.entries({
     "package.json": JSON.stringify(
       {
@@ -49,23 +49,35 @@ function createBundledWhatsAppRuntimeFixture() {
     [bundledDistPluginFile("whatsapp", "light-runtime-api.js")]:
       'export { getActiveWebListener } from "../../active-listener.js";\n',
     [bundledDistPluginFile("whatsapp", "runtime-api.js")]:
-      'export { getActiveWebListener, setActiveWebListener } from "../../active-listener.js";\n',
-    "dist/active-listener.js": [
-      'const key = Symbol.for("openclaw.whatsapp.activeListenerState");',
+      'export { registerControllerForTest } from "../../connection-controller-registry.js";\n',
+    "dist/connection-controller-registry.js": [
+      'const key = Symbol.for("openclaw.whatsapp.connectionControllerRegistry");',
       "const g = globalThis;",
       "if (!g[key]) {",
-      "  g[key] = { listeners: new Map(), current: null };",
+      "  g[key] = { controllers: new Map() };",
       "}",
       "const state = g[key];",
-      "export function setActiveWebListener(accountIdOrListener, maybeListener) {",
-      '  const accountId = typeof accountIdOrListener === "string" ? accountIdOrListener : "default";',
-      '  const listener = typeof accountIdOrListener === "string" ? (maybeListener ?? null) : (accountIdOrListener ?? null);',
-      "  if (!listener) state.listeners.delete(accountId);",
-      "  else state.listeners.set(accountId, listener);",
-      '  if (accountId === "default") state.current = listener;',
+      "export function getRegisteredWhatsAppConnectionController(accountId) {",
+      "  return state.controllers.get(accountId) ?? null;",
       "}",
+      "export function registerControllerForTest(accountId, listener) {",
+      '  const id = accountId ?? "default";',
+      "  if (!listener) {",
+      "    state.controllers.delete(id);",
+      "    return;",
+      "  }",
+      "  state.controllers.set(id, {",
+      "    getActiveListener() {",
+      "      return listener;",
+      "    },",
+      "  });",
+      "}",
+      "",
+    ].join("\n"),
+    "dist/active-listener.js": [
+      'import { getRegisteredWhatsAppConnectionController } from "./connection-controller-registry.js";',
       "export function getActiveWebListener(accountId) {",
-      '  return state.listeners.get(accountId ?? "default") ?? null;',
+      '  return getRegisteredWhatsAppConnectionController(accountId ?? "default")?.getActiveListener() ?? null;',
       "}",
       "",
     ].join("\n"),
@@ -78,7 +90,7 @@ function createBundledWhatsAppRuntimeFixture() {
 }
 
 function loadWhatsAppBoundaryModules(runtimePluginDir: string) {
-  const loaders = new Map<boolean, ReturnType<typeof import("jiti").createJiti>>();
+  const loaders: PluginJitiLoaderCache = new Map();
   return {
     light: loadPluginBoundaryModuleWithJiti<LightModule>(
       path.join(runtimePluginDir, "light-runtime-api.js"),
@@ -101,15 +113,13 @@ function expectSharedWhatsAppListenerState(runtimePluginDir: string, accountId: 
   const { light, heavy } = loadWhatsAppBoundaryModules(runtimePluginDir);
   const listener = createListener();
 
-  heavy.setActiveWebListener(accountId, listener);
+  heavy.registerControllerForTest(accountId, listener);
   expect(light.getActiveWebListener(accountId)).toBe(listener);
-  heavy.setActiveWebListener(accountId, null);
+  heavy.registerControllerForTest(accountId, null);
 }
 
 afterEach(() => {
-  for (const dir of tempDirs.splice(0, tempDirs.length)) {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
+  cleanupTrackedTempDirs(tempDirs);
 });
 
 describe("runtime plugin boundary whatsapp seam", () => {

@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
@@ -37,11 +38,15 @@ export async function listFeishuDirectoryPeersLive(params: {
       throw new Error(response.msg || `code ${response.code}`);
     }
 
+    const q = normalizeLowercaseStringOrEmpty(params.query);
     for (const user of response.data?.items ?? []) {
       if (user.open_id) {
-        const q = params.query?.trim().toLowerCase() || "";
         const name = user.name || "";
-        if (!q || user.open_id.toLowerCase().includes(q) || name.toLowerCase().includes(q)) {
+        if (
+          !q ||
+          normalizeLowercaseStringOrEmpty(user.open_id).includes(q) ||
+          normalizeLowercaseStringOrEmpty(name).includes(q)
+        ) {
           peers.push({
             kind: "user",
             id: user.open_id,
@@ -90,11 +95,15 @@ export async function listFeishuDirectoryGroupsLive(params: {
       throw new Error(response.msg || `code ${response.code}`);
     }
 
+    const q = normalizeLowercaseStringOrEmpty(params.query);
     for (const chat of response.data?.items ?? []) {
       if (chat.chat_id) {
-        const q = params.query?.trim().toLowerCase() || "";
         const name = chat.name || "";
-        if (!q || chat.chat_id.toLowerCase().includes(q) || name.toLowerCase().includes(q)) {
+        if (
+          !q ||
+          normalizeLowercaseStringOrEmpty(chat.chat_id).includes(q) ||
+          normalizeLowercaseStringOrEmpty(name).includes(q)
+        ) {
           groups.push({
             kind: "group",
             id: chat.chat_id,

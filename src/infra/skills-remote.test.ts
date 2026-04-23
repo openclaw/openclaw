@@ -113,4 +113,25 @@ describe("skills-remote", () => {
       removeRemoteNodeInfo(nodeB);
     }
   });
+
+  it("suppresses the exec host=node note when routing is not allowed", () => {
+    const nodeId = `node-${randomUUID()}`;
+    const bin = `bin-${randomUUID()}`;
+    try {
+      recordRemoteNodeInfo({
+        nodeId,
+        displayName: "Mac Studio",
+        platform: "darwin",
+        commands: ["system.run"],
+      });
+      recordRemoteNodeBins(nodeId, [bin]);
+
+      const eligibility = getRemoteSkillEligibility({ advertiseExecNode: false });
+
+      expect(eligibility?.hasBin(bin)).toBe(true);
+      expect(eligibility?.note).toBeUndefined();
+    } finally {
+      removeRemoteNodeInfo(nodeId);
+    }
+  });
 });

@@ -6,6 +6,10 @@ import { AcpRuntimeError } from "../../acp/runtime/errors.js";
 import type { AcpSessionStoreEntry } from "../../acp/runtime/session-meta.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
+import type { MediaUnderstandingSkipError } from "../../media-understanding/errors.js";
+import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
+import { resolveAcpAttachments } from "./dispatch-acp-attachments.js";
+import { tryDispatchAcpReply } from "./dispatch-acp.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
 import { createAcpSessionMeta, createAcpTestConfig } from "./test-fixtures/acp-runtime.js";
@@ -28,6 +32,25 @@ const policyMocks = vi.hoisted(() => ({
 
 const routeMocks = vi.hoisted(() => ({
   routeReply: vi.fn(async (_params: unknown) => ({ ok: true, messageId: "mock" })),
+}));
+
+const channelPluginMocks = vi.hoisted(() => ({
+  getChannelPlugin: vi.fn((channelId: string) => {
+    if (channelId !== "discord" && channelId !== "slack" && channelId !== "telegram") {
+      return undefined;
+    }
+    return {
+      outbound: {
+        shouldTreatDeliveredTextAsVisible: ({
+          kind,
+          text,
+        }: {
+          kind: "tool" | "block" | "final";
+          text?: string;
+        }) => kind === "block" && typeof text === "string" && text.trim().length > 0,
+      },
+    };
+  }),
 }));
 
 const messageActionMocks = vi.hoisted(() => ({
@@ -57,9 +80,88 @@ const bindingServiceMocks = vi.hoisted(() => ({
   unbind: vi.fn<(input: unknown) => Promise<SessionBindingRecord[]>>(async () => []),
 }));
 
+vi.mock("./dispatch-acp-manager.runtime.js", () => ({
+  getAcpSessionManager: () => managerMocks,
+  getSessionBindingService: () => ({
+    listBySession: (targetSessionKey: string) =>
+      bindingServiceMocks.listBySession(targetSessionKey),
+    unbind: (input: unknown) => bindingServiceMocks.unbind(input),
+  }),
+}));
+
+vi.mock("../../acp/policy.js", () => ({
+  resolveAcpDispatchPolicyError: (cfg: OpenClawConfig) =>
+    policyMocks.resolveAcpDispatchPolicyError(cfg),
+  resolveAcpAgentPolicyError: (cfg: OpenClawConfig, agent: string) =>
+    policyMocks.resolveAcpAgentPolicyError(cfg, agent),
+}));
+
+vi.mock("./route-reply.runtime.js", () => ({
+  routeReply: (params: unknown) => routeMocks.routeReply(params),
+}));
+
+vi.mock("../../channels/plugins/index.js", () => ({
+  getChannelPlugin: (channelId: string) => channelPluginMocks.getChannelPlugin(channelId),
+  getLoadedChannelPlugin: (channelId: string) => channelPluginMocks.getChannelPlugin(channelId),
+  normalizeChannelId: (channelId?: string | null) => channelId?.trim().toLowerCase() || null,
+}));
+
+vi.mock("../../infra/outbound/message-action-runner.js", () => ({
+  runMessageAction: (params: unknown) => messageActionMocks.runMessageAction(params),
+}));
+
+vi.mock("./dispatch-acp-tts.runtime.js", () => ({
+  maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
+}));
+
+vi.mock("../../tts/status-config.js", () => ({
+  resolveStatusTtsSnapshot: () => ({
+    autoMode: "always",
+    provider: "auto",
+    maxLength: 1500,
+    summarize: true,
+  }),
+}));
+
+vi.mock("./dispatch-acp-media.runtime.js", () => ({
+  applyMediaUnderstanding: (params: unknown) =>
+    mediaUnderstandingMocks.applyMediaUnderstanding(params),
+  isMediaUnderstandingSkipError: (error: unknown): error is MediaUnderstandingSkipError =>
+    error instanceof Error && error.name === "MediaUnderstandingSkipError",
+  normalizeAttachments: (ctx: { MediaPath?: string; MediaType?: string }) =>
+    ctx.MediaPath
+      ? [
+          {
+            path: ctx.MediaPath,
+            mime: ctx.MediaType,
+            index: 0,
+          },
+        ]
+      : [],
+  resolveMediaAttachmentLocalRoots: (params: {
+    cfg: { channels?: Record<string, { attachmentRoots?: string[] } | undefined> };
+    ctx: { Provider?: string; Surface?: string };
+  }) => {
+    const channel = params.ctx.Provider ?? params.ctx.Surface ?? "";
+    return params.cfg.channels?.[channel]?.attachmentRoots ?? [];
+  },
+  MediaAttachmentCache: class {
+    async getBuffer(): Promise<never> {
+      const error = new Error("outside allowed roots");
+      error.name = "MediaUnderstandingSkipError";
+      throw error;
+    }
+  },
+}));
+
+vi.mock("./dispatch-acp-session.runtime.js", () => ({
+  readAcpSessionEntry: (params: { sessionKey: string; cfg?: OpenClawConfig }) =>
+    sessionMetaMocks.readAcpSessionEntry(params),
+}));
+
 const sessionKey = "agent:codex-acp:session-1";
+const originalFetch = globalThis.fetch;
 type MockTtsReply = Awaited<ReturnType<typeof ttsMocks.maybeApplyTtsToPayload>>;
-let tryDispatchAcpReply: typeof import("./dispatch-acp.js").tryDispatchAcpReply;
 
 function createDispatcher(): {
   dispatcher: ReplyDispatcher;
@@ -105,6 +207,8 @@ async function runDispatch(params: {
   cfg?: OpenClawConfig;
   dispatcher?: ReplyDispatcher;
   shouldRouteToOriginating?: boolean;
+  originatingChannel?: string;
+  originatingTo?: string;
   onReplyStart?: () => void;
   ctxOverrides?: Record<string, unknown>;
   sessionKeyOverride?: string;
@@ -124,7 +228,10 @@ async function runDispatch(params: {
     inboundAudio: false,
     shouldRouteToOriginating: params.shouldRouteToOriginating ?? false,
     ...(params.shouldRouteToOriginating
-      ? { originatingChannel: "telegram", originatingTo: "telegram:thread-1" }
+      ? {
+          originatingChannel: params.originatingChannel ?? "telegram",
+          originatingTo: params.originatingTo ?? "telegram:thread-1",
+        }
       : {}),
     shouldSendToolSummaries: true,
     bypassForCommand: false,
@@ -208,9 +315,9 @@ async function runRoutedAcpTextTurn(text: string) {
   return { result };
 }
 
-function expectSecondRoutedPayload(payload: Partial<MockTtsReply>) {
+function expectRoutedPayload(callIndex: number, payload: Partial<MockTtsReply>) {
   expect(routeMocks.routeReply).toHaveBeenNthCalledWith(
-    2,
+    callIndex,
     expect.objectContaining({
       payload: expect.objectContaining(payload),
     }),
@@ -218,45 +325,14 @@ function expectSecondRoutedPayload(payload: Partial<MockTtsReply>) {
 }
 
 describe("tryDispatchAcpReply", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    vi.doMock("../../acp/control-plane/manager.js", () => ({
-      getAcpSessionManager: () => managerMocks,
-    }));
-    vi.doMock("../../acp/policy.js", () => ({
-      resolveAcpDispatchPolicyError: (cfg: OpenClawConfig) =>
-        policyMocks.resolveAcpDispatchPolicyError(cfg),
-      resolveAcpAgentPolicyError: (cfg: OpenClawConfig, agent: string) =>
-        policyMocks.resolveAcpAgentPolicyError(cfg, agent),
-    }));
-    vi.doMock("./route-reply.js", () => ({
-      routeReply: (params: unknown) => routeMocks.routeReply(params),
-    }));
-    vi.doMock("../../infra/outbound/message-action-runner.js", () => ({
-      runMessageAction: (params: unknown) => messageActionMocks.runMessageAction(params),
-    }));
-    vi.doMock("../../tts/tts.js", () => ({
-      maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
-      resolveTtsConfig: (cfg: OpenClawConfig) => ttsMocks.resolveTtsConfig(cfg),
-    }));
-    vi.doMock("../../media-understanding/apply.js", () => ({
-      applyMediaUnderstanding: (params: unknown) =>
-        mediaUnderstandingMocks.applyMediaUnderstanding(params),
-    }));
-    vi.doMock("../../acp/runtime/session-meta.js", () => ({
-      readAcpSessionEntry: (params: { sessionKey: string; cfg?: OpenClawConfig }) =>
-        sessionMetaMocks.readAcpSessionEntry(params),
-    }));
-    vi.doMock("../../infra/outbound/session-binding-service.js", () => ({
-      getSessionBindingService: () => ({
-        listBySession: (targetSessionKey: string) =>
-          bindingServiceMocks.listBySession(targetSessionKey),
-        unbind: (input: unknown) => bindingServiceMocks.unbind(input),
-      }),
-    }));
-    ({ tryDispatchAcpReply } = await import("./dispatch-acp.js"));
+  beforeEach(() => {
     managerMocks.resolveSession.mockReset();
     managerMocks.runTurn.mockReset();
+    managerMocks.runTurn.mockImplementation(
+      async ({ onEvent }: { onEvent?: (event: unknown) => Promise<void> }) => {
+        await onEvent?.({ type: "done" });
+      },
+    );
     managerMocks.getObservabilitySnapshot.mockReset();
     managerMocks.getObservabilitySnapshot.mockReturnValue({
       turns: { queueDepth: 0 },
@@ -268,6 +344,7 @@ describe("tryDispatchAcpReply", () => {
     policyMocks.resolveAcpAgentPolicyError.mockReturnValue(null);
     routeMocks.routeReply.mockReset();
     routeMocks.routeReply.mockResolvedValue({ ok: true, messageId: "mock" });
+    channelPluginMocks.getChannelPlugin.mockClear();
     messageActionMocks.runMessageAction.mockReset();
     messageActionMocks.runMessageAction.mockResolvedValue({ ok: true as const });
     ttsMocks.maybeApplyTtsToPayload.mockClear();
@@ -281,6 +358,7 @@ describe("tryDispatchAcpReply", () => {
     bindingServiceMocks.listBySession.mockReturnValue([]);
     bindingServiceMocks.unbind.mockReset();
     bindingServiceMocks.unbind.mockResolvedValue([]);
+    globalThis.fetch = originalFetch;
   });
 
   it("routes ACP block output to originating channel", async () => {
@@ -402,10 +480,75 @@ describe("tryDispatchAcpReply", () => {
     expect(onReplyStart).not.toHaveBeenCalled();
   });
 
-  it("forwards normalized image attachments into ACP turns", async () => {
+  it("skips media understanding for text-only ACP turns", async () => {
     setReadyAcpResolution();
+    mockVisibleTextTurn("text only");
+
+    await runDispatch({
+      bodyForAgent: "plain text prompt",
+    });
+
+    expect(mediaUnderstandingMocks.applyMediaUnderstanding).not.toHaveBeenCalled();
+  });
+
+  it("forwards normalized image attachments into ACP turns", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "dispatch-acp-"));
     const imagePath = path.join(tempDir, "inbound.png");
+    try {
+      await fs.writeFile(imagePath, "image-bytes");
+      const attachments = await resolveAcpAttachments({
+        cfg: createAcpTestConfig({
+          channels: {
+            imessage: {
+              attachmentRoots: [tempDir],
+            },
+          },
+        }),
+        ctx: buildTestCtx({
+          Provider: "imessage",
+          Surface: "imessage",
+          MediaPath: imagePath,
+          MediaType: "image/png",
+        }),
+        runtime: {
+          MediaAttachmentCache: class {
+            async getBuffer() {
+              return {
+                buffer: Buffer.from("image-bytes"),
+                mime: "image/png",
+                fileName: "inbound.png",
+                size: "image-bytes".length,
+              };
+            }
+          } as unknown as typeof import("./dispatch-acp-media.runtime.js").MediaAttachmentCache,
+          isMediaUnderstandingSkipError: (_error: unknown): _error is MediaUnderstandingSkipError =>
+            false,
+          normalizeAttachments: (ctx) => [
+            {
+              path: ctx.MediaPath,
+              mime: ctx.MediaType,
+              index: 0,
+            },
+          ],
+          resolveMediaAttachmentLocalRoots: () => [tempDir],
+        },
+      });
+
+      expect(attachments).toEqual([
+        {
+          mediaType: "image/png",
+          data: Buffer.from("image-bytes").toString("base64"),
+        },
+      ]);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("skips ACP attachments outside allowed inbound roots", async () => {
+    setReadyAcpResolution();
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "dispatch-acp-"));
+    const imagePath = path.join(tempDir, "outside-root.png");
     try {
       await fs.writeFile(imagePath, "image-bytes");
       managerMocks.runTurn.mockResolvedValue(undefined);
@@ -418,17 +561,84 @@ describe("tryDispatchAcpReply", () => {
         },
       });
 
-      expect(managerMocks.runTurn).toHaveBeenCalledWith(
-        expect.objectContaining({
-          text: "",
-          attachments: [
-            {
-              mediaType: "image/png",
-              data: Buffer.from("image-bytes").toString("base64"),
-            },
-          ],
+      expect(managerMocks.runTurn).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("skips file URL ACP attachments outside allowed inbound roots", async () => {
+    setReadyAcpResolution();
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "dispatch-acp-"));
+    const imagePath = path.join(tempDir, "outside-root.png");
+    try {
+      await fs.writeFile(imagePath, "image-bytes");
+      managerMocks.runTurn.mockResolvedValue(undefined);
+
+      await runDispatch({
+        bodyForAgent: "   ",
+        ctxOverrides: {
+          MediaPath: `file://${imagePath}`,
+          MediaType: "image/png",
+        },
+      });
+
+      expect(managerMocks.runTurn).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("skips relative ACP attachment paths that resolve outside allowed inbound roots", async () => {
+    setReadyAcpResolution();
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "dispatch-acp-"));
+    const imagePath = path.join(tempDir, "outside-root.png");
+    try {
+      await fs.writeFile(imagePath, "image-bytes");
+      managerMocks.runTurn.mockResolvedValue(undefined);
+
+      await runDispatch({
+        bodyForAgent: "   ",
+        ctxOverrides: {
+          MediaPath: path.relative(process.cwd(), imagePath),
+          MediaType: "image/png",
+        },
+      });
+
+      expect(managerMocks.runTurn).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not fall back to remote URLs when ACP local attachment paths are blocked", async () => {
+    setReadyAcpResolution();
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "dispatch-acp-"));
+    const imagePath = path.join(tempDir, "outside-root.png");
+    const fetchSpy = vi.fn(
+      async () =>
+        new Response(Buffer.from("remote-image"), {
+          headers: {
+            "content-type": "image/png",
+          },
         }),
-      );
+    );
+    globalThis.fetch = withFetchPreconnect(fetchSpy as typeof fetch);
+    try {
+      await fs.writeFile(imagePath, "image-bytes");
+      managerMocks.runTurn.mockResolvedValue(undefined);
+
+      await runDispatch({
+        bodyForAgent: "   ",
+        ctxOverrides: {
+          MediaPath: imagePath,
+          MediaUrl: "https://example.com/image.png",
+          MediaType: "image/png",
+        },
+      });
+
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(managerMocks.runTurn).not.toHaveBeenCalled();
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
@@ -555,12 +765,8 @@ describe("tryDispatchAcpReply", () => {
   it("does not unbind valid bindings on generic ACP runTurn init failure", async () => {
     setReadyAcpResolution();
     // Match the post-reset module instance so dispatch-acp preserves the ACP error code.
-    const { AcpRuntimeError: FreshAcpRuntimeError } = await import("../../acp/runtime/errors.js");
     managerMocks.runTurn.mockRejectedValueOnce(
-      new FreshAcpRuntimeError(
-        "ACP_SESSION_INIT_FAILED",
-        "Could not initialize ACP session runtime.",
-      ),
+      new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "Could not initialize ACP session runtime."),
     );
     const { dispatcher } = createDispatcher();
 
@@ -586,9 +792,8 @@ describe("tryDispatchAcpReply", () => {
       sessionKey: canonicalSessionKey,
       meta: createAcpSessionMeta(),
     });
-    const { AcpRuntimeError: FreshAcpRuntimeError } = await import("../../acp/runtime/errors.js");
     managerMocks.runTurn.mockRejectedValueOnce(
-      new FreshAcpRuntimeError(
+      new AcpRuntimeError(
         "ACP_SESSION_INIT_FAILED",
         `ACP metadata is missing for ${canonicalSessionKey}. Recreate this ACP session with /acp spawn and rebind the thread.`,
       ),
@@ -702,6 +907,90 @@ describe("tryDispatchAcpReply", () => {
     );
   });
 
+  it("honors the configured default account when checking bound-session identity notices", async () => {
+    const canonicalSessionKey = "agent:main:main";
+    managerMocks.resolveSession.mockReturnValue({
+      kind: "ready",
+      sessionKey: canonicalSessionKey,
+      meta: createAcpSessionMeta({
+        identity: {
+          state: "pending",
+          source: "ensure",
+          lastUpdatedAt: Date.now(),
+          acpxRecordId: "rec-work",
+        },
+      }),
+    });
+    bindingServiceMocks.listBySession.mockImplementation((targetSessionKey: string) =>
+      targetSessionKey === canonicalSessionKey
+        ? [
+            {
+              bindingId: "discord:work:thread-1",
+              targetSessionKey: canonicalSessionKey,
+              targetKind: "session",
+              conversation: {
+                channel: "discord",
+                accountId: "work",
+                conversationId: "thread-1",
+              },
+              status: "active",
+              boundAt: 0,
+            },
+          ]
+        : [],
+    );
+    sessionMetaMocks.readAcpSessionEntry.mockImplementation(
+      (params: { sessionKey: string; cfg?: OpenClawConfig }) =>
+        params.sessionKey === canonicalSessionKey
+          ? {
+              cfg: params.cfg ?? createAcpTestConfig(),
+              storePath: "/tmp/openclaw-session-store.json",
+              sessionKey: canonicalSessionKey,
+              storeSessionKey: canonicalSessionKey,
+              acp: createAcpSessionMeta({
+                identity: {
+                  state: "resolved",
+                  source: "status",
+                  lastUpdatedAt: Date.now(),
+                  acpxSessionId: "acpx-work",
+                },
+              }),
+            }
+          : null,
+    );
+    managerMocks.runTurn.mockResolvedValue(undefined);
+    const { dispatcher } = createDispatcher();
+
+    await runDispatch({
+      bodyForAgent: "test",
+      dispatcher,
+      cfg: createAcpTestConfig({
+        channels: {
+          discord: {
+            defaultAccount: "work",
+          },
+        },
+      }),
+      ctxOverrides: {
+        Provider: "discord",
+        Surface: "discord",
+      },
+      sessionKeyOverride: canonicalSessionKey,
+    });
+
+    expect(bindingServiceMocks.listBySession).toHaveBeenCalledWith(canonicalSessionKey);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: expect.stringContaining("Session ids resolved."),
+      }),
+    );
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: expect.stringContaining("acpx session id: acpx-work"),
+      }),
+    );
+  });
+
   it("does not deliver final fallback text when routed block text was already visible", async () => {
     setReadyAcpResolution();
     ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
@@ -711,6 +1000,66 @@ describe("tryDispatchAcpReply", () => {
     expect(result?.counts.block).toBe(1);
     expect(result?.counts.final).toBe(0);
     expect(routeMocks.routeReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not deliver final fallback text when routed discord block text was already visible", async () => {
+    setReadyAcpResolution();
+    ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
+    queueTtsReplies(
+      { text: "Received your test message." },
+      {} as ReturnType<typeof ttsMocks.maybeApplyTtsToPayload>,
+    );
+    mockRoutedTextTurn("Received your test message.");
+
+    const { dispatcher } = createDispatcher();
+    const result = await runDispatch({
+      bodyForAgent: "run acp",
+      dispatcher,
+      shouldRouteToOriginating: true,
+      originatingChannel: "discord",
+      originatingTo: "channel:1478836151241412759",
+    });
+
+    expect(result?.counts.block).toBe(1);
+    expect(result?.counts.final).toBe(0);
+    expect(routeMocks.routeReply).toHaveBeenCalledTimes(1);
+    expect(routeMocks.routeReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "discord",
+        to: "channel:1478836151241412759",
+        payload: expect.objectContaining({ text: "Received your test message." }),
+      }),
+    );
+  });
+
+  it("does not deliver final fallback text when routed Slack block text was already visible", async () => {
+    setReadyAcpResolution();
+    ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
+    queueTtsReplies(
+      { text: "Shared update." },
+      {} as ReturnType<typeof ttsMocks.maybeApplyTtsToPayload>,
+    );
+    mockRoutedTextTurn("Shared update.");
+
+    const { dispatcher } = createDispatcher();
+    const result = await runDispatch({
+      bodyForAgent: "run acp",
+      dispatcher,
+      shouldRouteToOriginating: true,
+      originatingChannel: "slack",
+      originatingTo: "channel:C123",
+    });
+
+    expect(result?.counts.block).toBe(1);
+    expect(result?.counts.final).toBe(0);
+    expect(routeMocks.routeReply).toHaveBeenCalledTimes(1);
+    expect(routeMocks.routeReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "slack",
+        to: "channel:C123",
+        payload: expect.objectContaining({ text: "Shared update." }),
+      }),
+    );
   });
 
   it("does not deliver final fallback text when direct block text was already visible", async () => {
@@ -739,6 +1088,64 @@ describe("tryDispatchAcpReply", () => {
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
+  it("does not deliver final fallback text when direct discord block text was already visible", async () => {
+    setReadyAcpResolution();
+    ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
+    queueTtsReplies(
+      { text: "Received." },
+      {} as ReturnType<typeof ttsMocks.maybeApplyTtsToPayload>,
+    );
+    mockVisibleTextTurn("Received.");
+
+    const { dispatcher, counts } = createDispatcher();
+    const result = await runDispatch({
+      bodyForAgent: "reply",
+      dispatcher,
+      ctxOverrides: {
+        Provider: "discord",
+        Surface: "discord",
+      },
+    });
+
+    expect(result?.counts.block).toBe(0);
+    expect(result?.counts.final).toBe(0);
+    expect(counts.block).toBe(0);
+    expect(counts.final).toBe(0);
+    expect(dispatcher.sendBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "Received." }),
+    );
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
+  it("does not deliver final fallback text when direct Slack block text was already visible", async () => {
+    setReadyAcpResolution();
+    ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
+    queueTtsReplies(
+      { text: "Slack says hi." },
+      {} as ReturnType<typeof ttsMocks.maybeApplyTtsToPayload>,
+    );
+    mockVisibleTextTurn("Slack says hi.");
+
+    const { dispatcher, counts } = createDispatcher();
+    const result = await runDispatch({
+      bodyForAgent: "reply",
+      dispatcher,
+      ctxOverrides: {
+        Provider: "slack",
+        Surface: "slack",
+      },
+    });
+
+    expect(result?.counts.block).toBe(0);
+    expect(result?.counts.final).toBe(0);
+    expect(counts.block).toBe(0);
+    expect(counts.final).toBe(0);
+    expect(dispatcher.sendBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "Slack says hi." }),
+    );
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
   it("treats visible telegram ACP block delivery as a successful final response", async () => {
     setReadyAcpResolution();
     ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
@@ -762,7 +1169,7 @@ describe("tryDispatchAcpReply", () => {
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
-  it("preserves final fallback when direct block text is filtered by non-telegram channels", async () => {
+  it("preserves final fallback when direct block text is filtered by channels without a visibility override", async () => {
     setReadyAcpResolution();
     ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
     queueTtsReplies({ text: "CODEX_OK" }, {} as ReturnType<typeof ttsMocks.maybeApplyTtsToPayload>);
@@ -772,6 +1179,10 @@ describe("tryDispatchAcpReply", () => {
     const result = await runDispatch({
       bodyForAgent: "reply",
       dispatcher,
+      ctxOverrides: {
+        Provider: "whatsapp",
+        Surface: "whatsapp",
+      },
     });
 
     expect(result?.counts.block).toBe(0);
@@ -840,7 +1251,49 @@ describe("tryDispatchAcpReply", () => {
     expect(result?.queuedFinal).toBe(true);
   });
 
-  it("does not add text fallback when final TTS already delivered audio", async () => {
+  it("honors the configured default account for ACP projector chunking when AccountId is omitted", async () => {
+    setReadyAcpResolution();
+    const cfg = createAcpTestConfig({
+      channels: {
+        discord: {
+          defaultAccount: "work",
+          accounts: {
+            work: {
+              textChunkLimit: 5,
+            },
+          },
+        },
+      },
+    });
+    managerMocks.runTurn.mockImplementation(
+      async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
+        await onEvent({ type: "text_delta", text: "abcdef", tag: "agent_message_chunk" });
+        await onEvent({ type: "done" });
+      },
+    );
+
+    const { dispatcher } = createDispatcher();
+    await runDispatch({
+      bodyForAgent: "reply",
+      cfg,
+      dispatcher,
+      ctxOverrides: {
+        Provider: "discord",
+        Surface: "discord",
+      },
+    });
+
+    expect(dispatcher.sendBlockReply).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ text: "abcde" }),
+    );
+    expect(dispatcher.sendBlockReply).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ text: "f" }),
+    );
+  });
+
+  it("does not add a second routed payload when routed block text was already visible", async () => {
     setReadyAcpResolution();
     ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
     queueTtsReplies({ text: "Task completed" }, {
@@ -850,11 +1303,10 @@ describe("tryDispatchAcpReply", () => {
     const { result } = await runRoutedAcpTextTurn("Task completed");
 
     expect(result?.counts.block).toBe(1);
-    expect(result?.counts.final).toBe(1);
-    expect(routeMocks.routeReply).toHaveBeenCalledTimes(2);
-    expectSecondRoutedPayload({
-      mediaUrl: "https://example.com/final.mp3",
-      audioAsVoice: true,
+    expect(result?.counts.final).toBe(0);
+    expect(routeMocks.routeReply).toHaveBeenCalledTimes(1);
+    expectRoutedPayload(1, {
+      text: "Task completed",
     });
   });
 

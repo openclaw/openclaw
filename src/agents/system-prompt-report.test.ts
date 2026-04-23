@@ -82,6 +82,17 @@ describe("buildSystemPromptReport", () => {
     expect(report.bootstrapTotalMaxChars).toBe(22_222);
   });
 
+  it("reports zero in-band tool list chars when tool info stays structured", () => {
+    const file = makeBootstrapFile({ path: "/tmp/workspace/policies/AGENTS.md" });
+    const report = makeReport({
+      file,
+      injectedPath: "AGENTS.md",
+      injectedContent: "trimmed",
+    });
+
+    expect(report.tools.listChars).toBe(0);
+  });
+
   it("reports injectedChars=0 when injected file does not match by path or basename", () => {
     const file = makeBootstrapFile({ path: "/tmp/workspace/policies/AGENTS.md" });
     const report = makeReport({

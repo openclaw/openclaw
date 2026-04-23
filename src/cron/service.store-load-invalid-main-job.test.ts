@@ -71,7 +71,7 @@ describe("CronService store load", () => {
 
     const jobs = await cron.list({ includeDisabled: true });
     expect(jobs[0]?.state.lastStatus).toBe("skipped");
-    expect(jobs[0]?.state.lastError).toMatch(/main job requires/i);
+    expect(jobs[0]?.state.lastError).toMatch(/main cron jobs require payload\.kind/i);
 
     cron.stop();
   });

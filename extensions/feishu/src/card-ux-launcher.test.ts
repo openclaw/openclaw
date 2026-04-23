@@ -2,6 +2,10 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { createRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
 import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
 import {
+  expectFirstSentCardUsesFillWidthOnly,
+  expectSentCardHasP2pAction,
+} from "./card-test-helpers.js";
+import {
   createQuickActionLauncherCard,
   isFeishuQuickActionMenuEventKey,
   maybeHandleFeishuQuickActionMenu,
@@ -32,6 +36,11 @@ describe("feishu quick-action launcher", () => {
       expiresAt: 123,
       sessionKey: "agent:codex:feishu:chat:chat1",
     }) as {
+      config: {
+        width_mode?: string;
+        enable_forward?: boolean;
+        wide_screen_mode?: boolean;
+      };
       body: {
         elements: Array<{
           tag: string;
@@ -40,6 +49,9 @@ describe("feishu quick-action launcher", () => {
       };
     };
 
+    expect(card.config.width_mode).toBe("fill");
+    expect(card.config.enable_forward).toBeUndefined();
+    expect(card.config.wide_screen_mode).toBeUndefined();
     const actionBlock = card.body.elements.find((entry) => entry.tag === "action");
     expect(actionBlock?.actions).toHaveLength(3);
     expect(actionBlock?.actions?.[0]?.value?.oc).toBe("ocf1");
@@ -63,26 +75,10 @@ describe("feishu quick-action launcher", () => {
       expect.objectContaining({
         to: "user:u123",
         accountId: "main",
-        card: expect.objectContaining({
-          body: expect.objectContaining({
-            elements: expect.arrayContaining([
-              expect.objectContaining({
-                tag: "action",
-                actions: expect.arrayContaining([
-                  expect.objectContaining({
-                    value: expect.objectContaining({
-                      c: expect.objectContaining({
-                        t: "p2p",
-                      }),
-                    }),
-                  }),
-                ]),
-              }),
-            ]),
-          }),
-        }),
       }),
     );
+    expectSentCardHasP2pAction(sendCardFeishuMock);
+    expectFirstSentCardUsesFillWidthOnly(sendCardFeishuMock);
   });
 
   it("falls back to legacy menu handling when launcher send fails", async () => {

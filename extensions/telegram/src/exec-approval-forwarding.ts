@@ -1,9 +1,10 @@
 import {
   buildExecApprovalPendingReplyPayload,
+  resolveExecApprovalRequestAllowedDecisions,
   resolveExecApprovalCommandDisplay,
-  type ExecApprovalRequest,
-} from "openclaw/plugin-sdk/approval-runtime";
+} from "openclaw/plugin-sdk/approval-reply-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { ExecApprovalRequest } from "openclaw/plugin-sdk/infra-runtime";
 import { normalizeMessageChannel } from "openclaw/plugin-sdk/routing";
 import { isTelegramExecApprovalClientEnabled } from "./exec-approvals.js";
 
@@ -37,6 +38,7 @@ export function buildTelegramExecApprovalPendingPayload(params: {
     cwd: params.request.request.cwd ?? undefined,
     host: params.request.request.host === "node" ? "node" : "gateway",
     nodeId: params.request.request.nodeId ?? undefined,
+    allowedDecisions: resolveExecApprovalRequestAllowedDecisions(params.request.request),
     expiresAtMs: params.request.expiresAtMs,
     nowMs: params.nowMs,
   });

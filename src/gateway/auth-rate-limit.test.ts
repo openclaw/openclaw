@@ -154,6 +154,13 @@ describe("auth rate limiter", () => {
     },
   );
 
+  it("tracks synthetic browser-origin limiter keys independently", () => {
+    limiter = createAuthRateLimiter({ maxAttempts: 1, windowMs: 60_000, lockoutMs: 60_000 });
+    limiter.recordFailure("browser-origin:http://127.0.0.1:18789");
+    expect(limiter.check("browser-origin:http://127.0.0.1:18789").allowed).toBe(false);
+    expect(limiter.check("browser-origin:http://localhost:5173").allowed).toBe(true);
+  });
+
   // ---------- loopback exemption ----------
 
   it.each(["127.0.0.1", "::1"])("exempts loopback address %s by default", (ip) => {

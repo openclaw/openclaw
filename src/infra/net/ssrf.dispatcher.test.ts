@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { TEST_UNDICI_RUNTIME_DEPS_KEY } from "./undici-runtime.js";
 
 const { agentCtor, envHttpProxyAgentCtor, proxyAgentCtor } = vi.hoisted(() => ({
@@ -20,8 +20,11 @@ import type { PinnedHostname } from "./ssrf.js";
 
 let createPinnedDispatcher: typeof import("./ssrf.js").createPinnedDispatcher;
 
-beforeEach(async () => {
-  vi.resetModules();
+beforeAll(async () => {
+  ({ createPinnedDispatcher } = await import("./ssrf.js"));
+});
+
+beforeEach(() => {
   agentCtor.mockClear();
   envHttpProxyAgentCtor.mockClear();
   proxyAgentCtor.mockClear();
@@ -29,8 +32,8 @@ beforeEach(async () => {
     Agent: agentCtor,
     EnvHttpProxyAgent: envHttpProxyAgentCtor,
     ProxyAgent: proxyAgentCtor,
+    fetch: vi.fn(),
   };
-  ({ createPinnedDispatcher } = await import("./ssrf.js"));
 });
 
 afterEach(() => {
@@ -74,6 +77,7 @@ describe("createPinnedDispatcher", () => {
       connect: {
         lookup,
       },
+      allowH2: false,
     });
     const firstCallArg = agentCtor.mock.calls[0]?.[0] as
       | { connect?: Record<string, unknown> }
@@ -105,6 +109,7 @@ describe("createPinnedDispatcher", () => {
         autoSelectFamilyAttemptTimeout: 300,
         lookup,
       },
+      allowH2: false,
     });
   });
 
@@ -180,6 +185,7 @@ describe("createPinnedDispatcher", () => {
         autoSelectFamily: true,
         lookup,
       },
+      allowH2: false,
       proxyTls: {
         autoSelectFamily: true,
       },
@@ -204,6 +210,7 @@ describe("createPinnedDispatcher", () => {
 
     expect(proxyAgentCtor).toHaveBeenCalledWith({
       uri: "http://127.0.0.1:7890",
+      allowH2: false,
       requestTls: {
         autoSelectFamily: false,
         lookup,

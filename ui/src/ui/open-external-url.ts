@@ -1,9 +1,11 @@
+import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
+
 const DATA_URL_PREFIX = "data:";
 const ALLOWED_EXTERNAL_PROTOCOLS = new Set(["http:", "https:", "blob:"]);
 const BLOCKED_DATA_IMAGE_MIME_TYPES = new Set(["image/svg+xml"]);
 
 function isAllowedDataImageUrl(url: string): boolean {
-  if (!url.toLowerCase().startsWith(DATA_URL_PREFIX)) {
+  if (!normalizeLowercaseStringOrEmpty(url).startsWith(DATA_URL_PREFIX)) {
     return false;
   }
 
@@ -13,7 +15,7 @@ function isAllowedDataImageUrl(url: string): boolean {
   }
 
   const metadata = url.slice(DATA_URL_PREFIX.length, commaIndex);
-  const mimeType = metadata.split(";")[0]?.trim().toLowerCase() ?? "";
+  const mimeType = normalizeLowercaseStringOrEmpty(metadata.split(";")[0]);
   if (!mimeType.startsWith("image/")) {
     return false;
   }
@@ -39,13 +41,15 @@ export function resolveSafeExternalUrl(
     return candidate;
   }
 
-  if (candidate.toLowerCase().startsWith(DATA_URL_PREFIX)) {
+  if (normalizeLowercaseStringOrEmpty(candidate).startsWith(DATA_URL_PREFIX)) {
     return null;
   }
 
   try {
     const parsed = new URL(candidate, baseHref);
-    return ALLOWED_EXTERNAL_PROTOCOLS.has(parsed.protocol.toLowerCase()) ? parsed.toString() : null;
+    return ALLOWED_EXTERNAL_PROTOCOLS.has(normalizeLowercaseStringOrEmpty(parsed.protocol))
+      ? parsed.toString()
+      : null;
   } catch {
     return null;
   }

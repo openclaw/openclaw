@@ -1,24 +1,25 @@
 import {
   createResolvedApproverActionAuthAdapter,
   resolveApprovalApprovers,
-} from "openclaw/plugin-sdk/approval-runtime";
+} from "openclaw/plugin-sdk/approval-auth-runtime";
+import { normalizeMatrixApproverId } from "./approval-ids.js";
 import { resolveMatrixAccount } from "./matrix/accounts.js";
-import { normalizeMatrixUserId } from "./matrix/monitor/allowlist.js";
 import type { CoreConfig } from "./types.js";
 
-function normalizeMatrixApproverId(value: string | number): string | undefined {
-  const normalized = normalizeMatrixUserId(String(value));
-  return normalized || undefined;
+export function getMatrixApprovalAuthApprovers(params: {
+  cfg: CoreConfig;
+  accountId?: string | null;
+}): string[] {
+  const account = resolveMatrixAccount(params);
+  return resolveApprovalApprovers({
+    allowFrom: account.config.dm?.allowFrom,
+    normalizeApprover: normalizeMatrixApproverId,
+  });
 }
 
 export const matrixApprovalAuth = createResolvedApproverActionAuthAdapter({
   channelLabel: "Matrix",
-  resolveApprovers: ({ cfg, accountId }) => {
-    const account = resolveMatrixAccount({ cfg: cfg as CoreConfig, accountId });
-    return resolveApprovalApprovers({
-      allowFrom: account.config.dm?.allowFrom,
-      normalizeApprover: normalizeMatrixApproverId,
-    });
-  },
+  resolveApprovers: ({ cfg, accountId }) =>
+    getMatrixApprovalAuthApprovers({ cfg: cfg as CoreConfig, accountId }),
   normalizeSenderId: (value) => normalizeMatrixApproverId(value),
 });

@@ -1,6 +1,11 @@
+import { installChannelOutboundPayloadContractSuite } from "openclaw/plugin-sdk/testing";
 import { describe } from "vitest";
-import { installSlackOutboundPayloadContractSuite } from "../../../test/helpers/channels/outbound-payload-contract.js";
+import { createSlackOutboundPayloadHarness } from "./outbound-payload.test-harness.js";
 
-describe("slack outbound payload contract", () => {
-  installSlackOutboundPayloadContractSuite();
+describe("Slack outbound payload contract", () => {
+  installChannelOutboundPayloadContractSuite({
+    channel: "slack",
+    chunking: { mode: "passthrough", longTextLength: 5000 },
+    createHarness: createSlackOutboundPayloadHarness,
+  });
 });

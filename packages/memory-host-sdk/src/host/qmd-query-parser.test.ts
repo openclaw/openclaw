@@ -24,6 +24,22 @@ complete`,
     expect(results).toEqual([{ docid: "abc", score: 0.5 }]);
   });
 
+  it("preserves explicit qmd line metadata when present", () => {
+    const results = parseQmdQueryJson(
+      '[{"docid":"abc","score":0.5,"start_line":4,"end_line":6,"snippet":"@@ -10,1\\nignored"}]',
+      "",
+    );
+    expect(results).toEqual([
+      {
+        docid: "abc",
+        score: 0.5,
+        snippet: "@@ -10,1\nignored",
+        startLine: 4,
+        endLine: 6,
+      },
+    ]);
+  });
+
   it("treats plain-text no-results from stderr as an empty result set", () => {
     const results = parseQmdQueryJson("", "No results found\n");
     expect(results).toEqual([]);

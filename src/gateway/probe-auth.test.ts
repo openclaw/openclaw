@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveGatewayProbeAuthSafe,
   resolveGatewayProbeAuthSafeWithSecretInputs,
+  resolveGatewayProbeTarget,
   resolveGatewayProbeAuthWithSecretInputs,
 } from "./probe-auth.js";
 
@@ -104,6 +105,39 @@ describe("resolveGatewayProbeAuthSafe", () => {
         token: undefined,
         password: undefined,
       },
+    });
+  });
+});
+
+describe("resolveGatewayProbeTarget", () => {
+  it("falls back to local probe mode when remote mode is configured without remote url", () => {
+    expect(
+      resolveGatewayProbeTarget({
+        gateway: {
+          mode: "remote",
+        },
+      } as OpenClawConfig),
+    ).toEqual({
+      gatewayMode: "remote",
+      mode: "local",
+      remoteUrlMissing: true,
+    });
+  });
+
+  it("keeps remote probe mode when remote url is configured", () => {
+    expect(
+      resolveGatewayProbeTarget({
+        gateway: {
+          mode: "remote",
+          remote: {
+            url: "wss://gateway.example",
+          },
+        },
+      } as OpenClawConfig),
+    ).toEqual({
+      gatewayMode: "remote",
+      mode: "remote",
+      remoteUrlMissing: false,
     });
   });
 });

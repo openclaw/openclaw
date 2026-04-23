@@ -1,28 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { validateConfigObject } from "./config.js";
+import { validateConfigObject } from "./validation.js";
 
 describe("config schema regressions", () => {
-  it("accepts nested telegram groupPolicy overrides", () => {
-    const res = validateConfigObject({
-      channels: {
-        telegram: {
-          groups: {
-            "-1001234567890": {
-              groupPolicy: "open",
-              topics: {
-                "42": {
-                  groupPolicy: "disabled",
-                },
-              },
-            },
-          },
-        },
-      },
-    });
-
-    expect(res.ok).toBe(true);
-  });
-
   it('accepts memorySearch fallback "voyage"', () => {
     const res = validateConfigObject({
       agents: {
@@ -51,11 +30,13 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
-  it("accepts safe iMessage remoteHost", () => {
+  it('accepts memorySearch provider "bedrock"', () => {
     const res = validateConfigObject({
-      channels: {
-        imessage: {
-          remoteHost: "bot@gateway-host",
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "bedrock",
+          },
         },
       },
     });
@@ -63,11 +44,17 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
-  it("accepts channels.whatsapp.enabled", () => {
+  it("accepts memorySearch.qmd.extraCollections", () => {
     const res = validateConfigObject({
-      channels: {
-        whatsapp: {
-          enabled: true,
+      agents: {
+        defaults: {
+          memorySearch: {
+            qmd: {
+              extraCollections: [
+                { path: "/shared/team-notes", name: "team-notes", pattern: "**/*.md" },
+              ],
+            },
+          },
         },
       },
     });
@@ -75,34 +62,102 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
-  it("rejects unsafe iMessage remoteHost", () => {
+  it("accepts agents.list[].memorySearch.qmd.extraCollections", () => {
     const res = validateConfigObject({
-      channels: {
-        imessage: {
-          remoteHost: "bot@gateway-host -oProxyCommand=whoami",
+      agents: {
+        list: [
+          {
+            id: "main",
+            memorySearch: {
+              qmd: {
+                extraCollections: [
+                  { path: "/shared/team-notes", name: "team-notes", pattern: "**/*.md" },
+                ],
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts agents.defaults.startupContext overrides", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          startupContext: {
+            enabled: true,
+            applyOn: ["new"],
+            dailyMemoryDays: 3,
+            maxFileBytes: 8192,
+            maxFileChars: 1000,
+            maxTotalChars: 2500,
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects oversized agents.defaults.startupContext overrides", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          startupContext: {
+            dailyMemoryDays: 99,
+            maxFileBytes: 999_999,
+          },
         },
       },
     });
 
     expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(res.issues[0]?.path).toBe("channels.imessage.remoteHost");
-    }
   });
 
-  it("accepts iMessage attachment root patterns", () => {
+  it("accepts agents.defaults and agents.list contextLimits overrides", () => {
     const res = validateConfigObject({
-      channels: {
-        imessage: {
-          attachmentRoots: ["/Users/*/Library/Messages/Attachments"],
-          remoteAttachmentRoots: ["/Volumes/relay/attachments"],
+      agents: {
+        defaults: {
+          contextLimits: {
+            memoryGetMaxChars: 20_000,
+            memoryGetDefaultLines: 180,
+            toolResultMaxChars: 24_000,
+            postCompactionMaxChars: 4_000,
+          },
         },
+        list: [
+          {
+            id: "writer",
+            skillsLimits: {
+              maxSkillsPromptChars: 30_000,
+            },
+            contextLimits: {
+              memoryGetMaxChars: 24_000,
+            },
+          },
+        ],
       },
     });
 
     expect(res.ok).toBe(true);
   });
 
+  it("accepts agents.defaults.compaction.truncateAfterCompaction", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          compaction: {
+            truncateAfterCompaction: true,
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
   it("accepts string values for agents defaults model inputs", () => {
     const res = validateConfigObject({
       agents: {
@@ -122,7 +177,7 @@ describe("config schema regressions", () => {
         defaults: {
           pdfModel: {
             primary: "anthropic/claude-opus-4-6",
-            fallbacks: ["openai/gpt-5-mini"],
+            fallbacks: ["openai/gpt-5.4-mini"],
           },
           pdfMaxBytesMb: 12,
           pdfMaxPages: 25,
@@ -137,7 +192,7 @@ describe("config schema regressions", () => {
     const res = validateConfigObject({
       agents: {
         defaults: {
-          pdfModel: { primary: "openai/gpt-5-mini" },
+          pdfModel: { primary: "openai/gpt-5.4-mini" },
           pdfMaxBytesMb: 0,
           pdfMaxPages: 0,
         },
@@ -147,21 +202,6 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(false);
     if (!res.ok) {
       expect(res.issues.some((issue) => issue.path.includes("agents.defaults.pdfMax"))).toBe(true);
-    }
-  });
-
-  it("rejects relative iMessage attachment roots", () => {
-    const res = validateConfigObject({
-      channels: {
-        imessage: {
-          attachmentRoots: ["./attachments"],
-        },
-      },
-    });
-
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(res.issues[0]?.path).toBe("channels.imessage.attachmentRoots.0");
     }
   });
 
@@ -185,25 +225,12 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(false);
   });
 
-  it("accepts signal accountUuid for loop protection", () => {
+  it("accepts tools.media.asyncCompletion.directSend", () => {
     const res = validateConfigObject({
-      channels: {
-        signal: {
-          accountUuid: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-        },
-      },
-    });
-
-    expect(res.ok).toBe(true);
-  });
-
-  it("accepts telegram actions editMessage and createForumTopic", () => {
-    const res = validateConfigObject({
-      channels: {
-        telegram: {
-          actions: {
-            editMessage: true,
-            createForumTopic: false,
+      tools: {
+        media: {
+          asyncCompletion: {
+            directSend: true,
           },
         },
       },
@@ -211,7 +238,6 @@ describe("config schema regressions", () => {
 
     expect(res.ok).toBe(true);
   });
-
   it("accepts discovery.wideArea.domain for unicast DNS-SD", () => {
     const res = validateConfigObject({
       discovery: {

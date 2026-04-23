@@ -16,19 +16,37 @@ const mocks = vi.hoisted(() => ({
   deliverOutboundPayloads: vi.fn(),
 }));
 
-vi.mock("../../infra/outbound/deliver-runtime.js", async () => {
-  const actual = await vi.importActual<typeof import("../../infra/outbound/deliver-runtime.js")>(
-    "../../infra/outbound/deliver-runtime.js",
-  );
-  return {
-    ...actual,
-    deliverOutboundPayloads: mocks.deliverOutboundPayloads,
-  };
-});
+vi.mock("../../infra/outbound/deliver-runtime.js", () => ({
+  deliverOutboundPayloads: mocks.deliverOutboundPayloads,
+}));
 
 const { routeReply } = await import("./route-reply.js");
 
+function compileSlackInteractiveRepliesForTest(
+  payload: Parameters<NonNullable<ChannelMessagingAdapter["transformReplyPayload"]>>[0]["payload"],
+) {
+  const text = payload.text ?? "";
+  if (!text.includes("[[slack_select:") && !text.includes("[[slack_buttons:")) {
+    return payload;
+  }
+  return {
+    ...payload,
+    channelData: {
+      ...payload.channelData,
+      slack: {
+        ...(payload.channelData?.slack as Record<string, unknown> | undefined),
+        blocks: [{ type: "section", text }],
+      },
+    },
+  };
+}
+
 const slackMessaging: ChannelMessagingAdapter = {
+  transformReplyPayload: ({ payload, cfg }) =>
+    (cfg.channels?.slack as { capabilities?: { interactiveReplies?: boolean } } | undefined)
+      ?.capabilities?.interactiveReplies === true
+      ? compileSlackInteractiveRepliesForTest(payload)
+      : payload,
   enableInteractiveReplies: ({ cfg }) =>
     (cfg.channels?.slack as { capabilities?: { interactiveReplies?: boolean } } | undefined)
       ?.capabilities?.interactiveReplies === true,
@@ -45,6 +63,13 @@ const slackThreading: ChannelThreadingAdapter = {
   resolveReplyTransport: ({ threadId, replyToId }) => ({
     replyToId: replyToId ?? (threadId != null && threadId !== "" ? String(threadId) : undefined),
     threadId: null,
+  }),
+};
+
+const mattermostThreading: ChannelThreadingAdapter = {
+  resolveReplyTransport: ({ threadId, replyToId }) => ({
+    replyToId: replyToId ?? (threadId != null && threadId !== "" ? String(threadId) : undefined),
+    threadId,
   }),
 };
 
@@ -135,7 +160,10 @@ describe("routeReply", () => {
         },
         {
           pluginId: "mattermost",
-          plugin: createChannelPlugin("mattermost", { label: "Mattermost" }),
+          plugin: createChannelPlugin("mattermost", {
+            label: "Mattermost",
+            threading: mattermostThreading,
+          }),
           source: "test",
         },
       ]),
@@ -194,6 +222,41 @@ describe("routeReply", () => {
     });
   });
 
+  it("passes policySessionKey through to outbound delivery targets", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          silentReply: {
+            direct: "disallow",
+            group: "allow",
+            internal: "allow",
+          },
+          silentReplyRewrite: {
+            direct: true,
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const res = await routeReply({
+      payload: { text: "native command response" },
+      channel: "slack",
+      to: "channel:C123",
+      cfg,
+      sessionKey: "agent:main:main",
+      policySessionKey: "agent:main:direct:U123",
+    });
+
+    expect(res.ok).toBe(true);
+    expectLastDelivery({
+      payloads: [expect.objectContaining({ text: "native command response" })],
+      session: expect.objectContaining({
+        key: "agent:main:main",
+        policyKey: "agent:main:direct:U123",
+      }),
+    });
+  });
+
   it("applies responsePrefix when routing", async () => {
     const cfg = {
       messages: { responsePrefix: "[openclaw]" },
@@ -226,15 +289,7 @@ describe("routeReply", () => {
     expectLastDelivery({
       payloads: [
         expect.objectContaining({
-          text: undefined,
-          interactive: {
-            blocks: [
-              expect.objectContaining({
-                type: "select",
-                placeholder: "Choose one",
-              }),
-            ],
-          },
+          text: "[[slack_select: Choose one | Alpha:alpha]]",
         }),
       ],
     });
