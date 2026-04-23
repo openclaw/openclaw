@@ -502,7 +502,11 @@ async function pruneHeartbeatTranscript(params: {
   transcriptPath?: string;
   preReplySize?: number;
 }) {
-  if (!params.transcriptPath || typeof params.preReplySize !== "number" || params.preReplySize < 0) {
+  if (
+    !params.transcriptPath ||
+    typeof params.preReplySize !== "number" ||
+    params.preReplySize < 0
+  ) {
     return;
   }
   try {
@@ -1128,6 +1132,9 @@ export async function runHeartbeatOnce(opts: {
       : [];
 
     if (!replyPayload || !hasOutboundReplyContent(replyPayload)) {
+      if (hasExecCompletion && !canRelayToUser) {
+        await pruneHeartbeatTranscript(transcriptState);
+      }
       await restoreHeartbeatUpdatedAt({
         storePath,
         sessionKey,
