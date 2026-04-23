@@ -14,7 +14,7 @@ import { ChatState, loadChatHistory } from "./controllers/chat.ts";
 import { loadSessions } from "./controllers/sessions.ts";
 import { icons } from "./icons.ts";
 import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
-import { parseAgentSessionKey } from "./session-key.ts";
+import { parseAgentSessionKey, type ParsedAgentSessionKey } from "./session-key.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "./string-coerce.ts";
 import type { ThemeMode } from "./theme.ts";
 import {
@@ -967,7 +967,8 @@ export function resolveSessionOptionGroups(
     }
     seenKeys.add(key);
     const row = byKey.get(key);
-    const parsed = parseAgentSessionKey(key);
+    const parsed =
+      parseAgentSessionKey(key) ?? tryParseChannelAgentKey(key, state.agentsList?.agents ?? []);
     const group = parsed
       ? ensureGroup(
           `agent:${normalizeLowercaseStringOrEmpty(parsed.agentId)}`,
@@ -1081,6 +1082,46 @@ function countHiddenCronSessions(sessionKey: string, sessions: SessionsListResul
   }
   // Don't count the currently active session even if it's a cron.
   return sessions.sessions.filter((s) => isCronSessionKey(s.key) && s.key !== sessionKey).length;
+}
+
+/**
+ * Attempt to decode a legacy channel-prefixed session key of the form
+ * `{channel}:g-agent-{agentId}-{mainKey}` into an agent identity.
+ *
+ * Channel plugins (webchat, bluebubbles, etc.) may store sessions under a
+ * channel-local group key before normalization.  When such a key appears in
+ * the session switcher we want to route it to the correct agent group and
+ * show the configured display name instead of the raw key.
+ *
+ * Resolution uses the known agents list (longest agentId first) to avoid
+ * prefix collisions (e.g. agents "foo" and "foo-bar" both present).
+ */
+function tryParseChannelAgentKey(
+  key: string,
+  agents: Array<{ id?: string | null }>,
+): ParsedAgentSessionKey | null {
+  // Require the form: {anything}:g-agent-{suffix}
+  const match = key.match(/^[^:]+:g-agent-(.+)$/);
+  if (!match) {
+    return null;
+  }
+  const suffix = match[1]; // e.g. "lottery-main" or "main-main"
+
+  // Sort by descending length so a longer agentId wins over its own prefix.
+  const knownIds = agents
+    .map((a) => normalizeLowercaseStringOrEmpty(a.id))
+    .filter(Boolean)
+    .toSorted((a, b) => b.length - a.length);
+
+  for (const agentId of knownIds) {
+    if (suffix === agentId) {
+      return { agentId, rest: "main" };
+    }
+    if (suffix.startsWith(`${agentId}-`)) {
+      return { agentId, rest: suffix.slice(agentId.length + 1) };
+    }
+  }
+  return null;
 }
 
 function resolveAgentGroupLabel(state: AppViewState, agentIdRaw: string): string {

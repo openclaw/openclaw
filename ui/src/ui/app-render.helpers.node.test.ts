@@ -25,6 +25,7 @@ import {
   parseSessionKey,
   resolveAssistantAttachmentAuthToken,
   resolveSessionDisplayName,
+  resolveSessionOptionGroups,
   switchChatSession,
 } from "./app-render.helpers.ts";
 import type { AppViewState } from "./app-view-state.ts";
@@ -409,5 +410,109 @@ describe("switchChatSession", () => {
       includeGlobal: true,
       includeUnknown: true,
     });
+  });
+});
+
+describe("resolveSessionOptionGroups — channel agent key fallback (#70610)", () => {
+  function makeState(agentsList: Array<{ id: string; identity?: { name: string } }>): AppViewState {
+    return {
+      agentsList: {
+        defaultId: "main",
+        mainKey: "main",
+        scope: "local",
+        agents: agentsList,
+      },
+      sessionsResult: null,
+      sessionsHideCron: true,
+    } as unknown as AppViewState;
+  }
+
+  it("routes webchat:g-agent-{id}-{rest} key to the correct agent group", () => {
+    const state = makeState([{ id: "lottery", identity: { name: "旺财" } }]);
+    state.sessionsResult = {
+      ts: 0,
+      path: "",
+      count: 1,
+      defaults: {} as any,
+      sessions: [
+        {
+          key: "webchat:g-agent-lottery-main",
+          kind: "global",
+          updatedAt: null,
+        } as any,
+      ],
+    };
+
+    const groups = resolveSessionOptionGroups(
+      state,
+      "webchat:g-agent-lottery-main",
+      state.sessionsResult,
+    );
+
+    // Should NOT fall into "other" group with the raw key as label
+    const otherGroup = groups.find((g) => g.id === "other");
+    expect(otherGroup).toBeUndefined();
+
+    // Should be in the lottery agent group
+    const agentGroup = groups.find((g) => g.id === "agent:lottery");
+    expect(agentGroup).toBeDefined();
+    expect(agentGroup!.label).toBe("旺财 (lottery)");
+
+    // The option label should be the rest segment, not the raw key
+    const option = agentGroup!.options[0];
+    expect(option).toBeDefined();
+    expect(option.label).not.toBe("webchat:g-agent-lottery-main");
+    expect(option.key).toBe("webchat:g-agent-lottery-main");
+  });
+
+  it("leaves unmatched channel keys in Other Sessions", () => {
+    const state = makeState([{ id: "lottery" }]);
+    state.sessionsResult = {
+      ts: 0,
+      path: "",
+      count: 1,
+      defaults: {} as any,
+      sessions: [
+        {
+          key: "webchat:g-agent-unknown-agent-main",
+          kind: "global",
+          updatedAt: null,
+        } as any,
+      ],
+    };
+
+    const groups = resolveSessionOptionGroups(
+      state,
+      "webchat:g-agent-unknown-agent-main",
+      state.sessionsResult,
+    );
+
+    const otherGroup = groups.find((g) => g.id === "other");
+    expect(otherGroup).toBeDefined();
+    expect(otherGroup!.options[0].key).toBe("webchat:g-agent-unknown-agent-main");
+  });
+
+  it("prefers canonical agent: key over fallback parsing", () => {
+    const state = makeState([{ id: "lottery", identity: { name: "旺财" } }]);
+    state.sessionsResult = {
+      ts: 0,
+      path: "",
+      count: 1,
+      defaults: {} as any,
+      sessions: [
+        {
+          key: "agent:lottery:main",
+          kind: "direct",
+          updatedAt: null,
+        } as any,
+      ],
+    };
+
+    const groups = resolveSessionOptionGroups(state, "agent:lottery:main", state.sessionsResult);
+
+    const agentGroup = groups.find((g) => g.id === "agent:lottery");
+    expect(agentGroup).toBeDefined();
+    expect(agentGroup!.label).toBe("旺财 (lottery)");
+    expect(agentGroup!.options[0].key).toBe("agent:lottery:main");
   });
 });
