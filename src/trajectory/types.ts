@@ -43,5 +43,10 @@ export type TrajectoryBundleManifest = {
     session: string;
     runtime?: string;
   };
+  contents?: Array<{
+    path: string;
+    mediaType: string;
+    bytes: number;
+  }>;
   supplementalFiles?: string[];
 };

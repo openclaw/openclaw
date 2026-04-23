@@ -349,12 +349,25 @@ describe("exportTrajectoryBundle", () => {
     expect(exportedEvents.some((event) => event.type === "context.compiled")).toBe(true);
 
     const manifest = JSON.parse(fs.readFileSync(path.join(outputDir, "manifest.json"), "utf8")) as {
+      contents?: Array<{ path: string; mediaType: string; bytes: number }>;
       sourceFiles?: { session?: string; runtime?: string };
       workspaceDir?: string;
     };
     expect(manifest.workspaceDir).toBe("$WORKSPACE_DIR");
     expect(manifest.sourceFiles?.session).toBe("$WORKSPACE_DIR/session.jsonl");
     expect(manifest.sourceFiles?.runtime).toBe("$WORKSPACE_DIR/session.trajectory.jsonl");
+    expect(manifest.contents?.map((entry) => entry.path).toSorted()).toEqual([
+      "artifacts.json",
+      "events.jsonl",
+      "metadata.json",
+      "prompts.json",
+      "runtime.jsonl",
+      "session-branch.json",
+      "session.jsonl",
+      "system-prompt.txt",
+      "tools.json",
+    ]);
+    expect(manifest.contents?.every((entry) => entry.bytes > 0)).toBe(true);
 
     const metadata = JSON.parse(fs.readFileSync(path.join(outputDir, "metadata.json"), "utf8")) as {
       skills?: { entries?: Array<{ id?: string; invoked?: boolean }> };

@@ -6,6 +6,16 @@ import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { sanitizeDiagnosticPayload } from "../agents/payload-redaction.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
+  copySupportBundleFile,
+  jsonSupportBundleFile,
+  jsonlSupportBundleFile,
+  supportBundleContents,
+  textSupportBundleFile,
+  writeSupportBundleDirectory,
+  type DiagnosticSupportBundleContent,
+  type DiagnosticSupportBundleFile,
+} from "../logging/diagnostic-support-bundle.js";
+import {
   redactPathForSupport,
   type SupportRedactionContext,
 } from "../logging/diagnostic-support-redaction.js";
@@ -262,28 +272,14 @@ function sortTrajectoryEvents(events: TrajectoryEvent[]): TrajectoryEvent[] {
   return sorted;
 }
 
-function prepareOutputDir(outputDir: string): void {
-  fs.mkdirSync(path.dirname(outputDir), { recursive: true, mode: 0o700 });
-  fs.mkdirSync(outputDir, { mode: 0o700 });
-}
-
-function writeJsonFile(filePath: string, value: unknown): void {
-  fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, {
-    encoding: "utf8",
-    flag: "wx",
-    mode: 0o600,
-  });
-}
-
-function writeJsonlFile(filePath: string, events: TrajectoryEvent[]): void {
+function trajectoryJsonlFile(
+  pathName: string,
+  events: TrajectoryEvent[],
+): DiagnosticSupportBundleFile {
   const lines = events
     .map((event) => safeJsonStringify(event))
     .filter((line): line is string => Boolean(line));
-  fs.writeFileSync(filePath, `${lines.join("\n")}\n`, {
-    encoding: "utf8",
-    flag: "wx",
-    mode: 0o600,
-  });
+  return jsonlSupportBundleFile(pathName, lines);
 }
 
 function buildTrajectoryExportRedaction(params: {
@@ -629,8 +625,6 @@ export function exportTrajectoryBundle(params: BuildTrajectoryBundleParams): {
   runtimeFile?: string;
   supplementalFiles: string[];
 } {
-  prepareOutputDir(params.outputDir);
-
   const redaction = buildTrajectoryExportRedaction({
     workspaceDir: params.workspaceDir,
   });
@@ -680,6 +674,7 @@ export function exportTrajectoryBundle(params: BuildTrajectoryBundleParams): {
   };
 
   const bundleRuntimeContext = resolveRuntimeContext(runtimeEvents);
+  const files: DiagnosticSupportBundleFile[] = [];
   const supplementalFiles: string[] = [];
   const metadataCapture = buildMetadataCapture({
     manifest,
@@ -696,62 +691,76 @@ export function exportTrajectoryBundle(params: BuildTrajectoryBundleParams): {
     runtimeContext: bundleRuntimeContext,
   });
   if (metadataCapture) {
-    writeJsonFile(
-      path.join(params.outputDir, "metadata.json"),
-      redactLocalPathValues(metadataCapture, redaction),
+    files.push(
+      jsonSupportBundleFile("metadata.json", redactLocalPathValues(metadataCapture, redaction)),
     );
     supplementalFiles.push("metadata.json");
   }
   if (artifactsCapture) {
-    writeJsonFile(path.join(params.outputDir, "artifacts.json"), artifactsCapture);
+    files.push(jsonSupportBundleFile("artifacts.json", artifactsCapture));
     supplementalFiles.push("artifacts.json");
   }
   if (promptsCapture) {
-    writeJsonFile(path.join(params.outputDir, "prompts.json"), promptsCapture);
+    files.push(jsonSupportBundleFile("prompts.json", promptsCapture));
     supplementalFiles.push("prompts.json");
   }
   if (supplementalFiles.length > 0) {
     manifest.supplementalFiles = supplementalFiles;
   }
 
-  writeJsonFile(path.join(params.outputDir, "manifest.json"), manifest);
-  writeJsonlFile(path.join(params.outputDir, "events.jsonl"), events);
-  writeJsonFile(
-    path.join(params.outputDir, "session-branch.json"),
-    redactLocalPathValues(
-      sanitizeDiagnosticPayload({
-        header,
-        leafId,
-        entries: branchEntries,
-      }),
-      redaction,
+  files.push(trajectoryJsonlFile("events.jsonl", events));
+  files.push(
+    jsonSupportBundleFile(
+      "session-branch.json",
+      redactLocalPathValues(
+        sanitizeDiagnosticPayload({
+          header,
+          leafId,
+          entries: branchEntries,
+        }),
+        redaction,
+      ),
     ),
   );
-  fs.copyFileSync(
-    params.sessionFile,
-    path.join(params.outputDir, "session.jsonl"),
-    fs.constants.COPYFILE_EXCL,
-  );
-  if (fs.existsSync(runtimeFile)) {
-    fs.copyFileSync(
-      runtimeFile,
-      path.join(params.outputDir, "runtime.jsonl"),
-      fs.constants.COPYFILE_EXCL,
-    );
-  }
   if (bundleRuntimeContext.systemPrompt) {
-    fs.writeFileSync(
-      path.join(params.outputDir, "system-prompt.txt"),
-      bundleRuntimeContext.systemPrompt,
-      {
-        encoding: "utf8",
-        flag: "wx",
-        mode: 0o600,
-      },
-    );
+    files.push(textSupportBundleFile("system-prompt.txt", bundleRuntimeContext.systemPrompt));
   }
   if (bundleRuntimeContext.tools) {
-    writeJsonFile(path.join(params.outputDir, "tools.json"), bundleRuntimeContext.tools);
+    files.push(jsonSupportBundleFile("tools.json", bundleRuntimeContext.tools));
+  }
+
+  const contents: DiagnosticSupportBundleContent[] = [
+    ...supportBundleContents(files),
+    {
+      path: "session.jsonl",
+      mediaType: "application/x-ndjson",
+      bytes: fs.statSync(params.sessionFile).size,
+    },
+  ];
+  if (fs.existsSync(runtimeFile)) {
+    contents.push({
+      path: "runtime.jsonl",
+      mediaType: "application/x-ndjson",
+      bytes: fs.statSync(runtimeFile).size,
+    });
+  }
+  manifest.contents = contents;
+
+  writeSupportBundleDirectory({
+    outputDir: params.outputDir,
+    files: [jsonSupportBundleFile("manifest.json", manifest), ...files],
+  });
+  copySupportBundleFile({
+    outputDir: params.outputDir,
+    sourceFile: params.sessionFile,
+    path: "session.jsonl",
+  });
+  if (fs.existsSync(runtimeFile)) {
+    copySupportBundleFile({
+      outputDir: params.outputDir,
+      sourceFile: runtimeFile,
+      path: "runtime.jsonl",
+    });
   }
 
   return {
