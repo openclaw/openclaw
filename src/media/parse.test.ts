@@ -288,7 +288,8 @@ describe("splitMediaFromOutput", () => {
   // ====================================================================
 
   it("does not extract MEDIA: from 4-space indented code block", () => {
-    const input = "\u4F7F\u7528\u793A\u4F8B\uFF1A\n\n    MEDIA: /tmp/screenshot.png\n\n\u4EE5\u4E0A\u4E3A\u7528\u6CD5\u3002";
+    const input =
+      "\u4F7F\u7528\u793A\u4F8B\uFF1A\n\n    MEDIA: /tmp/screenshot.png\n\n\u4EE5\u4E0A\u4E3A\u7528\u6CD5\u3002";
     const result = splitMediaFromOutput(input);
     expect(result.mediaUrls).toBeUndefined();
     expect(result.text).toBe(input);
@@ -302,14 +303,16 @@ describe("splitMediaFromOutput", () => {
   });
 
   it("does not extract MEDIA: from multi-line indented code block", () => {
-    const input = "\u4EE3\u7801\uFF1A\n\n    line1\n    MEDIA: /tmp/test.png\n    line3\n\n\u7ED3\u675F\u3002";
+    const input =
+      "\u4EE3\u7801\uFF1A\n\n    line1\n    MEDIA: /tmp/test.png\n    line3\n\n\u7ED3\u675F\u3002";
     const result = splitMediaFromOutput(input);
     expect(result.mediaUrls).toBeUndefined();
     expect(result.text).toBe(input);
   });
 
   it("does not extract MEDIA: from indented code block with blank lines within", () => {
-    const input = "\u4EE3\u7801\uFF1A\n\n    block1\n\n    MEDIA: /tmp/file.png\n\n\u7ED3\u675F\u3002";
+    const input =
+      "\u4EE3\u7801\uFF1A\n\n    block1\n\n    MEDIA: /tmp/file.png\n\n\u7ED3\u675F\u3002";
     const result = splitMediaFromOutput(input);
     expect(result.mediaUrls).toBeUndefined();
     expect(result.text).toBe(input);
@@ -323,7 +326,8 @@ describe("splitMediaFromOutput", () => {
   });
 
   it("does not extract MEDIA: from indented code block immediately after fenced block", () => {
-    const input = "```\nfenced content\n```\n    MEDIA: /tmp/indented-after-fence.png\n\n\u7ED3\u675F\u3002";
+    const input =
+      "```\nfenced content\n```\n    MEDIA: /tmp/indented-after-fence.png\n\n\u7ED3\u675F\u3002";
     const result = splitMediaFromOutput(input);
     expect(result.mediaUrls).toBeUndefined();
     expect(result.text).toBe(input);
@@ -343,8 +347,7 @@ describe("splitMediaFromOutput", () => {
   });
 
   it("preserves fenced code block content when real MEDIA: is extracted", () => {
-    const input =
-      "MEDIA: /tmp/photo.png\n```\n    indented inside fence\n```\nafter";
+    const input = "MEDIA: /tmp/photo.png\n```\n    indented inside fence\n```\nafter";
     const result = splitMediaFromOutput(input);
     expect(result.mediaUrls).toEqual(["/tmp/photo.png"]);
     expect(result.text).toContain("    indented inside fence");
@@ -359,8 +362,7 @@ describe("splitMediaFromOutput", () => {
   });
 
   it("collapses blank lines within indented code block when MEDIA is extracted (known limitation)", () => {
-    const input =
-      "MEDIA: /tmp/real.png\n\n    block1\n\n    block2";
+    const input = "MEDIA: /tmp/real.png\n\n    block1\n\n    block2";
     const result = splitMediaFromOutput(input);
     expect(result.mediaUrls).toEqual(["/tmp/real.png"]);
     expect(result.text).toContain("    block1");
@@ -453,5 +455,17 @@ describe("splitMediaFromOutput", () => {
     expect(result.audioAsVoice).toBe(true);
     expect(result.mediaUrls).toBeUndefined();
     expect(result.text).toContain("    MEDIA: /tmp/code-example.png");
+  });
+
+  it("trims leading whitespace from non-code prose after MEDIA removal", () => {
+    const result = splitMediaFromOutput("MEDIA:/tmp/a\n  hello");
+    expect(result.text).toBe("hello");
+    expect(result.mediaUrls).toEqual(["/tmp/a"]);
+  });
+
+  it("preserves 4-space code indentation on first line after MEDIA removal", () => {
+    const result = splitMediaFromOutput("MEDIA:/tmp/a\n\n    code line");
+    expect(result.text).toBe("    code line");
+    expect(result.mediaUrls).toEqual(["/tmp/a"]);
   });
 });

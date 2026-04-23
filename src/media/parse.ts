@@ -488,7 +488,7 @@ function isInsideFence(fenceSpans: Array<{ start: number; end: number }>, offset
  * line) over false negatives (extract MEDIA from a code line).
  */
 function isIndentedCodeLine(line: string, prevLineBlankOrCode: boolean): boolean {
-  return prevLineBlankOrCode && /^(?:    |\t)/.test(line);
+  return prevLineBlankOrCode && /^(?: {4}|\t)/.test(line);
 }
 
 export function splitMediaFromOutput(
@@ -723,20 +723,21 @@ export function splitMediaFromOutput(
 
   let cleanedText = keptLines
     .map((line, i) =>
-      keptLineIsCode[i]
-        ? line
-        : line.replace(/[ \t]+$/, "").replace(/[ \t]{2,}/g, " "),
+      keptLineIsCode[i] ? line : line.replace(/[ \t]+$/, "").replace(/[ \t]{2,}/g, " "),
     )
     .join("\n")
     .replace(/\n{2,}/g, "\n")
-    .replace(/^(?:[ \t]*\n)+/, "")
+    .replace(/^(?:[ \t]*\n)*(?:[ ]{0,3}(?=\S))?/, "")
     .trimEnd();
 
   // Detect and strip [[audio_as_voice]] tag
   const audioTagResult = parseAudioTag(cleanedText);
   const hasAudioAsVoice = audioTagResult.audioAsVoice;
   if (audioTagResult.hadTag) {
-    cleanedText = audioTagResult.text.replace(/\n{2,}/g, "\n").replace(/^(?:[ \t]*\n)+/, "").trimEnd();
+    cleanedText = audioTagResult.text
+      .replace(/\n{2,}/g, "\n")
+      .replace(/^(?:[ \t]*\n)*(?:[ ]{0,3}(?=\S))?/, "")
+      .trimEnd();
   }
 
   if (media.length === 0) {
