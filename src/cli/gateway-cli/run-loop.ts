@@ -125,7 +125,6 @@ export async function runGatewayLoop(params: {
     exitProcess(0);
   };
 
-  const DRAIN_TIMEOUT_MS = 90_000;
   const FOLLOWUP_DRAIN_TIMEOUT_MS = 5_000;
   const INBOUND_DEBOUNCE_FLUSH_TIMEOUT_MS = 10_000;
   const SUPERVISOR_STOP_TIMEOUT_MS = 30_000;
@@ -196,9 +195,10 @@ export async function runGatewayLoop(params: {
           }
 
           // Start the restart watchdog budget after the pre-shutdown debounce
-          // flush so slow flush handlers do not steal time from active drain.
+          // flush so slow flush handlers do not steal time from the configured
+          // restart drain window.
           armForceExitTimer(
-            Date.now() + SHUTDOWN_TIMEOUT_MS + DRAIN_TIMEOUT_MS + FOLLOWUP_DRAIN_TIMEOUT_MS,
+            Date.now() + SHUTDOWN_TIMEOUT_MS + restartDrainTimeoutMs + FOLLOWUP_DRAIN_TIMEOUT_MS,
           );
 
           const activeTasks = getActiveTaskCount();

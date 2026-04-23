@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBonjourBeacon } from "../../infra/bonjour-discovery.js";
 import { pickBeaconHost, pickGatewayPort } from "./discover.js";
 
@@ -230,6 +230,16 @@ async function createSignaledLoopHarness(exitCallOrder?: string[]) {
 }
 
 describe("runGatewayLoop", () => {
+  beforeEach(() => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        reload: {
+          deferralTimeoutMs: 90_000,
+        },
+      },
+    });
+  });
+
   it("exits 0 on SIGTERM after graceful close", async () => {
     vi.clearAllMocks();
 
@@ -449,6 +459,47 @@ describe("runGatewayLoop", () => {
           .filter((delay): delay is number => typeof delay === "number" && delay >= 115_000);
         expect(forceExitCalls).toContain(115_000);
         expect(forceExitCalls).toContain(120_000);
+
+        sigterm();
+        await expect(exited).resolves.toBe(0);
+      } finally {
+        setTimeoutSpy.mockRestore();
+      }
+    });
+  });
+
+  it("re-arms the watchdog with the configured restart drain timeout", async () => {
+    vi.clearAllMocks();
+    loadConfig.mockReturnValue({
+      gateway: {
+        reload: {
+          deferralTimeoutMs: 300_000,
+        },
+      },
+    });
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      flushAllInboundDebouncers.mockResolvedValueOnce(0);
+      waitForFollowupQueueDrain.mockResolvedValueOnce({
+        drained: true,
+        remaining: 0,
+      });
+
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      try {
+        const { exited } = await createSignaledLoopHarness();
+        const sigusr1 = captureSignal("SIGUSR1");
+        const sigterm = captureSignal("SIGTERM");
+
+        sigusr1();
+
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        await new Promise<void>((resolve) => setImmediate(resolve));
+
+        const forceExitCalls = setTimeoutSpy.mock.calls
+          .map((call) => call[1])
+          .filter((delay): delay is number => typeof delay === "number" && delay >= 325_000);
+        expect(forceExitCalls).toEqual([325_000, 330_000]);
 
         sigterm();
         await expect(exited).resolves.toBe(0);
