@@ -1781,16 +1781,18 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                   onItemEvent: async (payload) => {
                     if (payload.kind !== "tool" && payload.kind !== "command") return;
                     if (payload.phase && payload.phase !== "start" && payload.phase !== "update") return;
-                    // Always boundary on a *new* item (different itemId AND name).
-                    // First item of a tool also opens a fresh post so we don't
-                    // overwrite preceding assistant text in the current draft.
-                    const itemChanged = payload.itemId && payload.itemId !== lastToolItemId;
-                    const nameChanged = payload.name && payload.name !== lastToolItemName;
-                    if (itemChanged && nameChanged) {
+                    // Strip the kind prefix (tool: / command:) to get the underlying call id.
+                    // Runtime emits two layered events for one logical tool call (kind=tool
+                    // wrapper + kind=command inner) with the same name and same suffix.
+                    const callId = payload.itemId?.replace(/^(?:tool|command):/, "");
+                    const callChanged = callId && callId !== lastToolItemId;
+                    if (callChanged) {
                       await onDraftBoundary();
+                      lastToolItemId = callId;
                     }
-                    if (payload.itemId) lastToolItemId = payload.itemId;
                     if (payload.name) lastToolItemName = payload.name;
+                    // Prefer the inner (kind=command) event's richer title when available.
+                    // It usually arrives second; overwrite to surface the better description.
                     draftStream.update(buildMattermostToolStatusText({
                       name: payload.name,
                       title: payload.title,
