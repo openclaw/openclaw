@@ -463,6 +463,12 @@ describe("splitMediaFromOutput", () => {
     expect(result.mediaUrls).toEqual(["/tmp/a"]);
   });
 
+  it("trims leading tab from non-code prose after MEDIA removal", () => {
+    const result = splitMediaFromOutput("MEDIA:/tmp/a\n\thello");
+    expect(result.text).toBe("hello");
+    expect(result.mediaUrls).toEqual(["/tmp/a"]);
+  });
+
   it("preserves 4-space code indentation on first line after MEDIA removal", () => {
     const result = splitMediaFromOutput("MEDIA:/tmp/a\n\n    code line");
     expect(result.text).toBe("    code line");

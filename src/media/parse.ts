@@ -727,7 +727,7 @@ export function splitMediaFromOutput(
     )
     .join("\n")
     .replace(/\n{2,}/g, "\n")
-    .replace(/^(?:[ \t]*\n)*(?:[ ]{0,3}(?=\S))?/, "")
+    .replace(/^(?:[ \t]*\n)*(?:[ \t]{0,3}(?=\S))?/, "")
     .trimEnd();
 
   // Detect and strip [[audio_as_voice]] tag
@@ -736,7 +736,7 @@ export function splitMediaFromOutput(
   if (audioTagResult.hadTag) {
     cleanedText = audioTagResult.text
       .replace(/\n{2,}/g, "\n")
-      .replace(/^(?:[ \t]*\n)*(?:[ ]{0,3}(?=\S))?/, "")
+      .replace(/^(?:[ \t]*\n)*(?:[ \t]{0,3}(?=\S))?/, "")
       .trimEnd();
   }
 
