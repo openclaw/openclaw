@@ -531,7 +531,11 @@ describe("short-term dreaming cron reconciliation", () => {
       logger,
     });
 
-    expect(result).toEqual({ status: "invalid", removed: 0 });
+    expect(result).toMatchObject({
+      status: "invalid",
+      removed: 0,
+      hasPreservedManagedSchedule: true,
+    });
     expect(harness.addCalls).toHaveLength(0);
     expect(harness.updateCalls).toHaveLength(0);
     expect(harness.jobs).toEqual([managedJob]);
@@ -564,7 +568,11 @@ describe("short-term dreaming cron reconciliation", () => {
       logger,
     });
 
-    expect(result).toEqual({ status: "invalid", removed: 0 });
+    expect(result).toMatchObject({
+      status: "invalid",
+      removed: 0,
+      hasPreservedManagedSchedule: false,
+    });
     expect(harness.addCalls).toHaveLength(0);
     expect(harness.updateCalls).toHaveLength(0);
     expect(logger.error).toHaveBeenCalledWith(
@@ -600,7 +608,11 @@ describe("short-term dreaming cron reconciliation", () => {
       logger,
     });
 
-    expect(result).toEqual({ status: "invalid", removed: 0 });
+    expect(result).toMatchObject({
+      status: "invalid",
+      removed: 0,
+      hasPreservedManagedSchedule: false,
+    });
     expect(harness.addCalls).toHaveLength(0);
     expect(logger.error).toHaveBeenCalledWith(
       expect.not.stringContaining("Timezone must be set via dreaming.timezone"),
@@ -625,7 +637,7 @@ describe("short-term dreaming cron reconciliation", () => {
       name: constants.MANAGED_DREAMING_CRON_NAME,
       description: `${constants.MANAGED_DREAMING_CRON_TAG} test`,
       enabled: true,
-      schedule: { kind: "cron", expr: "0 3 * * *" },
+      schedule: { kind: "cron", expr: "0 3 * * *", tz: "UTC" },
       sessionTarget: "main",
       wakeMode: "now",
       payload: { kind: "systemEvent", text: constants.DREAMING_SYSTEM_EVENT_TEXT },
@@ -666,7 +678,12 @@ describe("short-term dreaming cron reconciliation", () => {
       logger,
     });
 
-    expect(result).toEqual({ status: "invalid", removed: 0 });
+    expect(result).toEqual({
+      status: "invalid",
+      removed: 0,
+      hasPreservedManagedSchedule: true,
+      preservedScheduleTimezone: "UTC",
+    });
     expect(harness.removeCalls).toEqual([]);
     expect(harness.addCalls).toHaveLength(0);
     expect(harness.updateCalls).toHaveLength(0);
@@ -1691,6 +1708,8 @@ describe("short-term dreaming trigger", () => {
         recencyHalfLifeDays: constants.DEFAULT_DREAMING_RECENCY_HALF_LIFE_DAYS,
         verboseLogging: false,
       },
+      preservedScheduleKnown: true,
+      preservedScheduleTimezone: "UTC",
       logger,
     });
 
@@ -1700,6 +1719,38 @@ describe("short-term dreaming trigger", () => {
     );
     const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
     expect(memoryText).toContain("Move backups to S3 Glacier.");
+  });
+
+  it("skips dreaming promotion when parse-only frequency errors hide a timezone change", async () => {
+    const logger = createLogger();
+
+    const result = await runShortTermDreamingPromotionIfTriggered({
+      cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT,
+      trigger: "heartbeat",
+      workspaceDir: ".",
+      config: {
+        enabled: true,
+        cron: "not a cron",
+        timezone: "America/New_York",
+        limit: 10,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        recencyHalfLifeDays: constants.DEFAULT_DREAMING_RECENCY_HALF_LIFE_DAYS,
+        verboseLogging: false,
+      },
+      preservedScheduleKnown: true,
+      preservedScheduleTimezone: "UTC",
+      logger,
+    });
+
+    expect(result).toEqual({
+      handled: true,
+      reason: "memory-core: short-term dreaming invalid config",
+    });
+    expect(logger.warn).toHaveBeenCalledWith(
+      "memory-core: dreaming promotion skipped because dreaming.timezone does not match the preserved schedule timezone.",
+    );
   });
 
   it("skips dreaming promotion cleanly when limit is zero", async () => {
