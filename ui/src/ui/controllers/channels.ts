@@ -13,11 +13,27 @@ type ChannelsRequestStrength = {
   includeAccounts: boolean;
 };
 
-type ChannelsPrivateState = ChannelsState & {
-  __channelsRequestSeq?: number;
-  __channelsInFlight?: (ChannelsRequestStrength & { seq: number }) | null;
-  __channelsPending?: ChannelsRequestStrength | null;
+type ChannelsPrivateFields = {
+  requestSeq: number;
+  inFlight: (ChannelsRequestStrength & { seq: number }) | null;
+  pending: ChannelsRequestStrength | null;
 };
+
+const channelsPrivateFields = new WeakMap<ChannelsState, ChannelsPrivateFields>();
+
+function getChannelsPrivateFields(state: ChannelsState): ChannelsPrivateFields {
+  const existing = channelsPrivateFields.get(state);
+  if (existing) {
+    return existing;
+  }
+  const created: ChannelsPrivateFields = {
+    requestSeq: 0,
+    inFlight: null,
+    pending: null,
+  };
+  channelsPrivateFields.set(state, created);
+  return created;
+}
 
 function normalizeChannelsRequestStrength(params: {
   probe: boolean;
@@ -109,7 +125,7 @@ export async function loadChannels(
   probe: boolean,
   opts?: { includeAccounts?: boolean },
 ) {
-  const privateState = state as ChannelsPrivateState;
+  const privateState = getChannelsPrivateFields(state);
   const request = normalizeChannelsRequestStrength({
     probe,
     includeAccounts: opts?.includeAccounts,
@@ -118,28 +134,28 @@ export async function loadChannels(
     return;
   }
   if (state.channelsLoading) {
-    if (isStrongerChannelsRequest(request, privateState.__channelsInFlight)) {
-      privateState.__channelsPending = mergeChannelsRequestStrength(
-        privateState.__channelsPending,
+    if (isStrongerChannelsRequest(request, privateState.inFlight)) {
+      privateState.pending = mergeChannelsRequestStrength(
+        privateState.pending,
         request,
       );
     }
     return;
   }
-  const seq = (privateState.__channelsRequestSeq ?? 0) + 1;
-  privateState.__channelsRequestSeq = seq;
-  privateState.__channelsInFlight = { ...request, seq };
+  const seq = privateState.requestSeq + 1;
+  privateState.requestSeq = seq;
+  privateState.inFlight = { ...request, seq };
   state.channelsLoading = true;
   state.channelsError = null;
   try {
     const res = await requestChannelsStatus(state, request);
-    if (privateState.__channelsRequestSeq === seq) {
+    if (privateState.requestSeq === seq) {
       state.channelsSnapshot = res;
       state.channelsLastSuccess = Date.now();
     }
   } catch (err) {
-    const pendingStronger = isStrongerChannelsRequest(privateState.__channelsPending, request);
-    if (privateState.__channelsRequestSeq === seq && !pendingStronger) {
+    const pendingStronger = isStrongerChannelsRequest(privateState.pending, request);
+    if (privateState.requestSeq === seq && !pendingStronger) {
       if (isMissingOperatorReadScopeError(err)) {
         state.channelsSnapshot = null;
         state.channelsError = formatMissingOperatorReadScopeMessage("channel status");
@@ -148,19 +164,19 @@ export async function loadChannels(
       }
     }
   } finally {
-    if (privateState.__channelsInFlight?.seq === seq) {
-      privateState.__channelsInFlight = null;
+    if (privateState.inFlight?.seq === seq) {
+      privateState.inFlight = null;
       state.channelsLoading = false;
     }
-    const pending = privateState.__channelsPending;
+    const pending = privateState.pending;
     if (
       pending &&
-      privateState.__channelsRequestSeq === seq &&
-      !privateState.__channelsInFlight &&
+      privateState.requestSeq === seq &&
+      !privateState.inFlight &&
       state.connected &&
       state.client
     ) {
-      privateState.__channelsPending = null;
+      privateState.pending = null;
       void loadChannels(state, pending.probe, {
         includeAccounts: pending.includeAccounts,
       });

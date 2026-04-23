@@ -89,6 +89,17 @@ function resolveEffectiveDefaultAccountId(params: {
     : params.accountIds[0] ?? params.defaultAccountId;
 }
 
+async function resolveAccountConfigured(params: {
+  plugin: ChannelPlugin;
+  account: unknown;
+  cfg: OpenClawConfig;
+}): Promise<boolean> {
+  if (!params.plugin.config.isConfigured) {
+    return true;
+  }
+  return await params.plugin.config.isConfigured(params.account, params.cfg);
+}
+
 export async function logoutChannelAccount(params: {
   channelId: ChannelId;
   accountId?: string | null;
@@ -312,34 +323,25 @@ export const channelsHandlers: GatewayRequestHandlers = {
         defaultAccountId: configuredDefaultAccountId,
       });
       const account = plugin.config.resolveAccount(cfg, defaultAccountId);
+      const enabled = isAccountEnabled(plugin, account);
+      const configured =
+        probe && enabled ? await resolveAccountConfigured({ plugin, account, cfg }) : true;
       let probeResult: unknown;
       let auditResult: unknown;
-      if (probe && isAccountEnabled(plugin, account) && plugin.status?.probeAccount) {
-        let configured = true;
-        if (plugin.config.isConfigured) {
-          configured = await plugin.config.isConfigured(account, cfg);
-        }
-        if (configured) {
-          probeResult = await plugin.status.probeAccount({
-            account,
-            timeoutMs,
-            cfg,
-          });
-        }
+      if (probe && enabled && configured && plugin.status?.probeAccount) {
+        probeResult = await plugin.status.probeAccount({
+          account,
+          timeoutMs,
+          cfg,
+        });
       }
-      if (probe && isAccountEnabled(plugin, account) && plugin.status?.auditAccount) {
-        let configured = true;
-        if (plugin.config.isConfigured) {
-          configured = await plugin.config.isConfigured(account, cfg);
-        }
-        if (configured) {
-          auditResult = await plugin.status.auditAccount({
-            account,
-            timeoutMs,
-            cfg,
-            probe: probeResult,
-          });
-        }
+      if (probe && enabled && configured && plugin.status?.auditAccount) {
+        auditResult = await plugin.status.auditAccount({
+          account,
+          timeoutMs,
+          cfg,
+          probe: probeResult,
+        });
       }
       const runtimeSnapshot = resolveRuntimeSnapshot(plugin.id, defaultAccountId, defaultAccountId);
       const defaultAccount = await buildChannelAccountSnapshot({

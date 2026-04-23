@@ -212,4 +212,39 @@ describe("channelsHandlers channels.status", () => {
       undefined,
     );
   });
+
+  it("only checks account configuration once for summary-only probe+audit snapshots", async () => {
+    const isConfigured = vi.fn(async () => true);
+    const probeAccount = vi.fn(async () => ({ ok: true }));
+    const auditAccount = vi.fn(async () => ({ ok: true }));
+    mocks.listChannelPlugins.mockReturnValue([
+      {
+        id: "whatsapp",
+        config: {
+          listAccountIds: () => ["live"],
+          defaultAccountId: () => "live",
+          resolveAccount: (_cfg: unknown, accountId: string) => ({ accountId }),
+          isEnabled: () => true,
+          isConfigured,
+        },
+        status: {
+          probeAccount,
+          auditAccount,
+        },
+      },
+    ]);
+
+    await channelsHandlers["channels.status"](
+      createOptions(
+        { probe: true, includeAccounts: false },
+        {
+          respond: vi.fn(),
+        },
+      ),
+    );
+
+    expect(isConfigured).toHaveBeenCalledTimes(1);
+    expect(probeAccount).toHaveBeenCalledTimes(1);
+    expect(auditAccount).toHaveBeenCalledTimes(1);
+  });
 });
