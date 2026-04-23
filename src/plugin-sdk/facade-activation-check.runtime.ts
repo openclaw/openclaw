@@ -210,11 +210,7 @@ function readBundledPluginManifestRecordFromDir(params: {
     return null;
   }
   try {
-    const raw = JSON5.parse(fs.readFileSync(manifestPath, "utf8")) as {
-      id?: unknown;
-      enabledByDefault?: unknown;
-      channels?: unknown;
-    };
+    const raw = JSON5.parse(fs.readFileSync(manifestPath, "utf8"));
     if (typeof raw.id !== "string" || raw.id.trim().length === 0) {
       return null;
     }

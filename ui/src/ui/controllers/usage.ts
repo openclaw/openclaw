@@ -271,7 +271,7 @@ export async function loadSessionLogs(state: UsageState, sessionKey: string) {
     const payload = (await client.request("sessions.usage.logs", {
       key: sessionKey,
       limit: 1000,
-    })) as { logs?: unknown } | null;
+    }));
     const logs = payload?.logs;
     state.usageSessionLogs = Array.isArray(logs) ? (logs as SessionLogEntry[]) : null;
   });

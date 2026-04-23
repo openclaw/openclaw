@@ -699,14 +699,7 @@ export function renderApp(state: AppViewState) {
       lookup,
       fromLine: 1,
       lineCount: 5000,
-    })) as {
-      title?: unknown;
-      path?: unknown;
-      content?: unknown;
-      updatedAt?: unknown;
-      totalLines?: unknown;
-      truncated?: unknown;
-    } | null;
+    }));
     const title =
       typeof payload?.title === "string" && payload.title.trim() ? payload.title.trim() : lookup;
     const path =
