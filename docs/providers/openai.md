@@ -387,6 +387,107 @@ Legacy `plugins.entries.openai.config.personality` is still read as a compatibil
   </Accordion>
 </AccordionGroup>
 
+## Azure OpenAI endpoints
+
+The bundled `openai` provider can target an Azure OpenAI resource instead of
+`api.openai.com` by overriding the base URL. OpenClaw detects Azure hostnames
+and switches to Azure's request shape automatically for chat, image generation,
+and voice.
+
+Use Azure OpenAI when:
+
+- You already have an Azure OpenAI subscription, quota, or enterprise agreement
+- You need regional data residency or compliance controls Azure provides
+- You want to keep traffic inside an existing Azure tenancy
+
+### Configuration
+
+Point `models.providers.openai.baseUrl` at your Azure resource and set
+`apiKey` to the Azure OpenAI key (not an OpenAI Platform key):
+
+```json5
+{
+  models: {
+    providers: {
+      openai: {
+        baseUrl: "https://<your-resource>.openai.azure.com",
+        apiKey: "<azure-openai-api-key>",
+      },
+    },
+  },
+}
+```
+
+OpenClaw recognizes these Azure host suffixes and routes accordingly:
+
+- `*.openai.azure.com`
+- `*.services.ai.azure.com`
+- `*.cognitiveservices.azure.com`
+
+On a recognized Azure host, OpenClaw:
+
+- Sends the `api-key` header instead of `Authorization: Bearer`
+- Uses deployment-scoped paths (`/openai/deployments/{deployment}/...`)
+- Appends `?api-version=...` to each request
+
+Other base URLs (public OpenAI, OpenAI-compatible proxies) keep the standard
+OpenAI request shape.
+
+### API version
+
+Set `AZURE_OPENAI_API_VERSION` to pin a specific Azure preview or GA version:
+
+```bash
+export AZURE_OPENAI_API_VERSION="2024-12-01-preview"
+```
+
+The default is `2024-12-01-preview` when the variable is unset.
+
+### Model names are deployment names
+
+Azure OpenAI binds models to deployments. The `model` field in OpenClaw
+requests must be the **Azure deployment name** you configured in the Azure
+portal, not the public OpenAI model id.
+
+If you create a deployment called `gpt-image-2-prod` that serves `gpt-image-2`:
+
+```
+/tool image_generate model=openai/gpt-image-2-prod prompt="A clean poster" size=1024x1024 count=1
+```
+
+The same deployment-name rule applies to chat, Responses, and other image or
+video calls routed through the `openai` provider.
+
+### Regional availability
+
+Azure image generation is currently available only in a subset of regions
+(for example `eastus2`, `swedencentral`, `polandcentral`, `westus3`,
+`uaenorth`). Check Microsoft's current region list before creating a
+deployment, and confirm the specific model is offered in your region.
+
+### Parameter differences
+
+Azure OpenAI and public OpenAI do not always accept the same image parameters.
+Azure may reject options that public OpenAI allows (for example certain
+`background` values on `gpt-image-2`) or expose them only on specific model
+versions. These differences come from Azure and the underlying model, not
+OpenClaw. If an Azure request fails with a validation error, check the
+[Azure OpenAI image generation docs](https://learn.microsoft.com/azure/ai-foundry/openai/how-to/dall-e)
+for the parameter set supported by your deployment.
+
+<Note>
+Azure OpenAI uses native transport and compat behavior but does not receive
+OpenClaw's hidden attribution headers. See the **Native vs OpenAI-compatible
+routes** accordion under [Advanced configuration](#advanced-configuration)
+for details.
+</Note>
+
+<Tip>
+For a separate Azure OpenAI Responses provider (distinct from the `openai`
+provider), see the `azure-openai-responses/*` model refs in the
+[Server-side compaction](#server-side-compaction-responses-api) accordion.
+</Tip>
+
 ## Advanced configuration
 
 <AccordionGroup>
