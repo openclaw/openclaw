@@ -26,8 +26,6 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
         "--verbose",
         "--setting-sources",
         "user",
-        "--permission-mode",
-        "bypassPermissions",
       ],
       resumeArgs: [
         "-p",
@@ -37,8 +35,6 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
         "--verbose",
         "--setting-sources",
         "user",
-        "--permission-mode",
-        "bypassPermissions",
         "--resume",
         "{sessionId}",
       ],

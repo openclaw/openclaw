@@ -38,8 +38,6 @@ beforeEach(() => {
           "--verbose",
           "--setting-sources",
           "user",
-          "--permission-mode",
-          "bypassPermissions",
         ],
         resumeArgs: [
           "stream-json",
@@ -47,8 +45,6 @@ beforeEach(() => {
           "--verbose",
           "--setting-sources",
           "user",
-          "--permission-mode",
-          "bypassPermissions",
           "--resume",
           "{sessionId}",
         ],
@@ -198,7 +194,7 @@ describe("resolveCliBackendConfig reliability merge", () => {
 });
 
 describe("resolveCliBackendConfig claude-cli defaults", () => {
-  it("uses non-interactive permission-mode defaults for fresh and resume args", () => {
+  it("uses hardened claude-cli defaults for fresh and resume args", () => {
     const resolved = resolveCliBackendConfig("claude-cli");
 
     expect(resolved).not.toBeNull();
@@ -208,8 +204,7 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
     expect(resolved?.config.args).toContain("--verbose");
     expect(resolved?.config.args).toContain("--setting-sources");
     expect(resolved?.config.args).toContain("user");
-    expect(resolved?.config.args).toContain("--permission-mode");
-    expect(resolved?.config.args).toContain("bypassPermissions");
+    expect(resolved?.config.args).not.toContain("--permission-mode");
     expect(resolved?.config.args).not.toContain("--dangerously-skip-permissions");
     expect(resolved?.config.input).toBe("stdin");
     expect(resolved?.config.resumeArgs).toContain("stream-json");
@@ -217,8 +212,7 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
     expect(resolved?.config.resumeArgs).toContain("--verbose");
     expect(resolved?.config.resumeArgs).toContain("--setting-sources");
     expect(resolved?.config.resumeArgs).toContain("user");
-    expect(resolved?.config.resumeArgs).toContain("--permission-mode");
-    expect(resolved?.config.resumeArgs).toContain("bypassPermissions");
+    expect(resolved?.config.resumeArgs).not.toContain("--permission-mode");
     expect(resolved?.config.resumeArgs).not.toContain("--dangerously-skip-permissions");
   });
 
@@ -241,12 +235,10 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
     expect(resolved?.config.command).toBe("/usr/local/bin/claude");
     expect(resolved?.config.args).toContain("--setting-sources");
     expect(resolved?.config.args).toContain("user");
-    expect(resolved?.config.args).toContain("--permission-mode");
-    expect(resolved?.config.args).toContain("bypassPermissions");
+    expect(resolved?.config.args).not.toContain("--permission-mode");
     expect(resolved?.config.resumeArgs).toContain("--setting-sources");
     expect(resolved?.config.resumeArgs).toContain("user");
-    expect(resolved?.config.resumeArgs).toContain("--permission-mode");
-    expect(resolved?.config.resumeArgs).toContain("bypassPermissions");
+    expect(resolved?.config.resumeArgs).not.toContain("--permission-mode");
     expect(resolved?.config.env).toEqual({ CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: "1" });
     expect(resolved?.config.clearEnv).toContain("ANTHROPIC_BASE_URL");
     expect(resolved?.config.clearEnv).toContain("CLAUDE_CONFIG_DIR");
@@ -257,7 +249,7 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
     expect(resolved?.config.clearEnv).toContain("CLAUDE_CODE_USE_COWORK_PLUGINS");
   });
 
-  it("normalizes legacy skip-permissions overrides to permission-mode bypassPermissions", () => {
+  it("normalizes legacy skip-permissions overrides by removing the legacy flag", () => {
     const cfg = {
       agents: {
         defaults: {
@@ -283,11 +275,9 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
 
     expect(resolved).not.toBeNull();
     expect(resolved?.config.args).not.toContain("--dangerously-skip-permissions");
-    expect(resolved?.config.args).toContain("--permission-mode");
-    expect(resolved?.config.args).toContain("bypassPermissions");
+    expect(resolved?.config.args).not.toContain("--permission-mode");
     expect(resolved?.config.resumeArgs).not.toContain("--dangerously-skip-permissions");
-    expect(resolved?.config.resumeArgs).toContain("--permission-mode");
-    expect(resolved?.config.resumeArgs).toContain("bypassPermissions");
+    expect(resolved?.config.resumeArgs).not.toContain("--permission-mode");
   });
 
   it("keeps explicit permission-mode overrides while removing legacy skip flag", () => {
@@ -399,8 +389,6 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
       "stream-json",
       "--setting-sources",
       "user",
-      "--permission-mode",
-      "bypassPermissions",
     ]);
     expect(resolved?.config.resumeArgs).toEqual([
       "-p",
@@ -408,12 +396,10 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
       "{sessionId}",
       "--setting-sources",
       "user",
-      "--permission-mode",
-      "bypassPermissions",
     ]);
   });
 
-  it("falls back to bypassPermissions when a custom override leaves permission-mode without a value", () => {
+  it("drops malformed permission-mode values while keeping setting-source hardening", () => {
     const cfg = {
       agents: {
         defaults: {
@@ -437,8 +423,6 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
       "stream-json",
       "--setting-sources",
       "user",
-      "--permission-mode",
-      "bypassPermissions",
     ]);
     expect(resolved?.config.resumeArgs).toEqual([
       "-p",
@@ -446,12 +430,10 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
       "{sessionId}",
       "--setting-sources",
       "user",
-      "--permission-mode",
-      "bypassPermissions",
     ]);
   });
 
-  it("injects bypassPermissions when custom args omit any permission flag", () => {
+  it("does not inject permission-mode when custom args omit permission flags", () => {
     const cfg = {
       agents: {
         defaults: {
@@ -478,12 +460,10 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
     expect(resolved).not.toBeNull();
     expect(resolved?.config.args).toContain("--setting-sources");
     expect(resolved?.config.args).toContain("user");
-    expect(resolved?.config.args).toContain("--permission-mode");
-    expect(resolved?.config.args).toContain("bypassPermissions");
+    expect(resolved?.config.args).not.toContain("--permission-mode");
     expect(resolved?.config.resumeArgs).toContain("--setting-sources");
     expect(resolved?.config.resumeArgs).toContain("user");
-    expect(resolved?.config.resumeArgs).toContain("--permission-mode");
-    expect(resolved?.config.resumeArgs).toContain("bypassPermissions");
+    expect(resolved?.config.resumeArgs).not.toContain("--permission-mode");
   });
 
   it("keeps hardened clearEnv defaults when custom claude env overrides are merged", () => {
@@ -548,8 +528,6 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
       "json",
       "--setting-sources",
       "user",
-      "--permission-mode",
-      "bypassPermissions",
     ]);
     expect(resolved?.config.resumeArgs).toEqual([
       "-p",
@@ -559,8 +537,6 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
       "{sessionId}",
       "--setting-sources",
       "user",
-      "--permission-mode",
-      "bypassPermissions",
     ]);
     expect(resolved?.config.systemPromptArg).toBe("--append-system-prompt");
     expect(resolved?.config.systemPromptWhen).toBe("first");

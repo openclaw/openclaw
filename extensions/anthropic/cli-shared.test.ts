@@ -9,23 +9,16 @@ import {
 } from "./cli-shared.js";
 
 describe("normalizeClaudePermissionArgs", () => {
-  it("injects bypassPermissions when args omit permission flags", () => {
+  it("does not inject permission-mode when args omit permission flags", () => {
     expect(
       normalizeClaudePermissionArgs(["-p", "--output-format", "stream-json", "--verbose"]),
-    ).toEqual([
-      "-p",
-      "--output-format",
-      "stream-json",
-      "--verbose",
-      "--permission-mode",
-      "bypassPermissions",
-    ]);
+    ).toEqual(["-p", "--output-format", "stream-json", "--verbose"]);
   });
 
-  it("removes legacy skip-permissions and injects bypassPermissions", () => {
+  it("removes legacy skip-permissions", () => {
     expect(
       normalizeClaudePermissionArgs(["-p", "--dangerously-skip-permissions", "--verbose"]),
-    ).toEqual(["-p", "--verbose", "--permission-mode", "bypassPermissions"]);
+    ).toEqual(["-p", "--verbose"]);
   });
 
   it("keeps explicit permission-mode overrides", () => {
@@ -40,10 +33,10 @@ describe("normalizeClaudePermissionArgs", () => {
     ]);
   });
 
-  it("treats a bare permission-mode flag as malformed and falls back to bypassPermissions", () => {
+  it("treats a bare permission-mode flag as malformed and drops it", () => {
     expect(
       normalizeClaudePermissionArgs(["-p", "--permission-mode", "--output-format", "stream-json"]),
-    ).toEqual(["-p", "--output-format", "stream-json", "--permission-mode", "bypassPermissions"]);
+    ).toEqual(["-p", "--output-format", "stream-json"]);
   });
 });
 
@@ -93,8 +86,6 @@ describe("normalizeClaudeBackendConfig", () => {
       "--verbose",
       "--setting-sources",
       "user",
-      "--permission-mode",
-      "bypassPermissions",
     ]);
     expect(normalized.resumeArgs).toEqual([
       "-p",
@@ -105,8 +96,6 @@ describe("normalizeClaudeBackendConfig", () => {
       "{sessionId}",
       "--setting-sources",
       "user",
-      "--permission-mode",
-      "bypassPermissions",
     ]);
   });
 
@@ -122,12 +111,8 @@ describe("normalizeClaudeBackendConfig", () => {
       resumeArgs: ["-p", "--output-format", "stream-json", "--verbose", "--resume", "{sessionId}"],
     });
 
-    expect(normalized?.args).toContain("--permission-mode");
-    expect(normalized?.args).toContain("bypassPermissions");
     expect(normalized?.args).toContain("--setting-sources");
     expect(normalized?.args).toContain("user");
-    expect(normalized?.resumeArgs).toContain("--permission-mode");
-    expect(normalized?.resumeArgs).toContain("bypassPermissions");
     expect(normalized?.resumeArgs).toContain("--setting-sources");
     expect(normalized?.resumeArgs).toContain("user");
   });
