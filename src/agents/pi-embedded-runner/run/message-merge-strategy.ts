@@ -10,6 +10,11 @@ export type OrphanedTrailingUserPromptMergeParams = {
 export type OrphanedTrailingUserPromptMergeResult = {
   prompt: string;
   merged: boolean;
+  /**
+   * When false, the active session leaf is preserved. Use this only when the
+   * caller intentionally accepts that the next appended prompt may follow an
+   * existing user leaf; most providers reject consecutive user turns.
+   */
   removeLeaf: boolean;
 };
 
