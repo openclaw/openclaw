@@ -72,6 +72,7 @@ function recoverPendingSessionDeliveries(params: {
   deps: import("../cli/deps.types.js").CliDeps;
   log: GatewayRuntimeServiceLogger;
 }): void {
+  const maxEnqueuedAt = Date.now();
   const timer = setTimeout(() => {
     void (async () => {
       const { recoverPendingRestartContinuationDeliveries } =
@@ -80,6 +81,7 @@ function recoverPendingSessionDeliveries(params: {
       await recoverPendingRestartContinuationDeliveries({
         deps: params.deps,
         log: logRecovery,
+        maxEnqueuedAt,
       });
     })().catch((err) => params.log.error(`Session delivery recovery failed: ${String(err)}`));
   }, 1_250);
