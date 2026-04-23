@@ -110,6 +110,28 @@ describe("model-rules hook behavior", () => {
     expect(result!.appendSystemContext).toContain("Full ref rules.");
   });
 
+  it("does not double the provider prefix when modelId is already provider-qualified", async () => {
+    // Some providers (OpenRouter) pass pre-qualified IDs like
+    // "openrouter/hunter-alpha". Naive concatenation would produce
+    // "openrouter/openrouter/hunter-alpha" and miss the real section.
+    await fs.writeFile(
+      path.join(tmpDir, "MODELS.md"),
+      "## MODEL: openrouter/hunter-alpha\n\nHunter rules.\n",
+    );
+    const hook = await registerAndGetHook();
+    const result = await hook(
+      {},
+      {
+        workspaceDir: tmpDir,
+        modelId: "openrouter/hunter-alpha",
+        modelProviderId: "openrouter",
+      },
+    );
+    expect(result).toBeDefined();
+    expect(result!.appendSystemContext).toContain("Hunter rules.");
+    expect(result!.appendSystemContext).not.toContain("openrouter/openrouter");
+  });
+
   it("disabledModels skips bare model id", async () => {
     await fs.writeFile(path.join(tmpDir, "MODELS.md"), "## MODEL: gpt-5.4\n\nRules.\n");
     const hook = await registerAndGetHook({ disabledModels: ["gpt-5.4"] });

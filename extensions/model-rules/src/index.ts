@@ -46,7 +46,14 @@ export default definePluginEntry({
           }
         }
 
-        const modelRef = ctx.modelProviderId ? `${ctx.modelProviderId}/${modelId}` : modelId;
+        // Skip the provider prefix when modelId already starts with it.
+        // Some providers (e.g., OpenRouter) emit pre-qualified IDs like
+        // "openrouter/hunter-alpha"; concatenating the provider again would
+        // produce "openrouter/openrouter/hunter-alpha" and break full-ref matches.
+        const modelRef =
+          ctx.modelProviderId && !modelId.startsWith(`${ctx.modelProviderId}/`)
+            ? `${ctx.modelProviderId}/${modelId}`
+            : modelId;
 
         const { bareId } = parseModelRef(modelRef);
         if (disabledModels.has(bareId.toLowerCase())) {

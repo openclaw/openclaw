@@ -235,7 +235,7 @@ export async function ensureDefaultModelsFile(
   try {
     const realWorkspace = await realpath(workspaceDir);
     const realParent = await realpath(dirname(filePath));
-    const realBoundary = realWorkspace + sep;
+    const realBoundary = realWorkspace.endsWith(sep) ? realWorkspace : realWorkspace + sep;
     if (!realParent.startsWith(realBoundary) && realParent !== realWorkspace) {
       return false;
     }

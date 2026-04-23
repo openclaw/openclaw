@@ -35,7 +35,7 @@ export async function readModelsFile(
     // the real target is still inside the real workspace root.
     const realFile = await realpath(filePath);
     const realWorkspace = await realpath(workspaceDir);
-    const realBoundary = realWorkspace + sep;
+    const realBoundary = realWorkspace.endsWith(sep) ? realWorkspace : realWorkspace + sep;
     if (!realFile.startsWith(realBoundary)) {
       return null;
     }
