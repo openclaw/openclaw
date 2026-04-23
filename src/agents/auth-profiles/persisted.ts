@@ -3,7 +3,13 @@ import { coerceSecretRef } from "../../config/types.secrets.js";
 import { loadJsonFile } from "../../infra/json-file.js";
 import { normalizeProviderId } from "../provider-id.js";
 import { AUTH_STORE_VERSION, log } from "./constants.js";
-import { hasUsableOAuthCredential, isSafeToAdoptMainStoreOAuthIdentity } from "./oauth-shared.js";
+import {
+  hasOAuthIdentity,
+  hasUsableOAuthCredential,
+  isSafeToAdoptMainStoreOAuthIdentity,
+  normalizeAuthEmailToken,
+  normalizeAuthIdentityToken,
+} from "./oauth-shared.js";
 import { resolveAuthStorePath, resolveLegacyAuthStorePath } from "./paths.js";
 import {
   coerceAuthProfileState,
@@ -166,27 +172,12 @@ function dedupeMergedProfileOrder(profileIds: string[]): string[] {
   return Array.from(new Set(profileIds));
 }
 
-function normalizeOAuthIdentityToken(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
-}
-
-function normalizeOAuthEmailToken(value: string | undefined): string | undefined {
-  return normalizeOAuthIdentityToken(value)?.toLowerCase();
-}
-
-function hasOAuthIdentity(credential: OAuthCredential): boolean {
-  return Boolean(
-    normalizeOAuthIdentityToken(credential.accountId) ?? normalizeOAuthEmailToken(credential.email),
-  );
-}
-
 function hasComparableOAuthIdentityConflict(
   existing: OAuthCredential,
   candidate: OAuthCredential,
 ): boolean {
-  const existingAccountId = normalizeOAuthIdentityToken(existing.accountId);
-  const candidateAccountId = normalizeOAuthIdentityToken(candidate.accountId);
+  const existingAccountId = normalizeAuthIdentityToken(existing.accountId);
+  const candidateAccountId = normalizeAuthIdentityToken(candidate.accountId);
   if (
     existingAccountId !== undefined &&
     candidateAccountId !== undefined &&
@@ -195,8 +186,8 @@ function hasComparableOAuthIdentityConflict(
     return true;
   }
 
-  const existingEmail = normalizeOAuthEmailToken(existing.email);
-  const candidateEmail = normalizeOAuthEmailToken(candidate.email);
+  const existingEmail = normalizeAuthEmailToken(existing.email);
+  const candidateEmail = normalizeAuthEmailToken(candidate.email);
   return (
     existingEmail !== undefined && candidateEmail !== undefined && existingEmail !== candidateEmail
   );
@@ -271,17 +262,24 @@ function findMainStoreOAuthReplacement(params: {
   return fallbackCandidates[0]?.[0];
 }
 
-function replaceMergedProfileReferences(
-  store: AuthProfileStore,
-  replacements: Map<string, string>,
-): AuthProfileStore {
+function replaceMergedProfileReferences(params: {
+  store: AuthProfileStore;
+  base: AuthProfileStore;
+  replacements: Map<string, string>;
+}): AuthProfileStore {
+  const { store, base, replacements } = params;
   if (replacements.size === 0) {
     return store;
   }
 
   const profiles = { ...store.profiles };
   for (const legacyProfileId of replacements.keys()) {
-    delete profiles[legacyProfileId];
+    const baseCredential = base.profiles[legacyProfileId];
+    if (baseCredential) {
+      profiles[legacyProfileId] = baseCredential;
+    } else {
+      delete profiles[legacyProfileId];
+    }
   }
 
   const order = store.order
@@ -304,11 +302,17 @@ function replaceMergedProfileReferences(
       )
     : undefined;
 
-  const usageStats = store.usageStats
-    ? Object.fromEntries(
-        Object.entries(store.usageStats).filter(([profileId]) => !replacements.has(profileId)),
-      )
-    : undefined;
+  const usageStats = store.usageStats ? { ...store.usageStats } : undefined;
+  if (usageStats) {
+    for (const legacyProfileId of replacements.keys()) {
+      const baseStats = base.usageStats?.[legacyProfileId];
+      if (baseStats) {
+        usageStats[legacyProfileId] = baseStats;
+      } else {
+        delete usageStats[legacyProfileId];
+      }
+    }
+  }
 
   return {
     ...store,
@@ -340,7 +344,11 @@ function reconcileMainStoreOAuthProfileDrift(params: {
       replacements.set(profileId, replacementProfileId);
     }
   }
-  return replaceMergedProfileReferences(params.merged, replacements);
+  return replaceMergedProfileReferences({
+    store: params.merged,
+    base: params.base,
+    replacements,
+  });
 }
 
 export function mergeAuthProfileStores(

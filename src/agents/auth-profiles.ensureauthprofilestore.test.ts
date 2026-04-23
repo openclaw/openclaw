@@ -322,6 +322,95 @@ describe("ensureAuthProfileStore", () => {
     }
   });
 
+  it("preserves a valid main default OAuth profile while replacing a stale agent override", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-drift-base-default-"));
+    const previousAgentDir = process.env.OPENCLAW_AGENT_DIR;
+    const previousPiAgentDir = process.env.PI_CODING_AGENT_DIR;
+    try {
+      const mainDir = path.join(root, "main-agent");
+      const agentDir = path.join(root, "agent-x");
+      fs.mkdirSync(mainDir, { recursive: true });
+      fs.mkdirSync(agentDir, { recursive: true });
+
+      process.env.OPENCLAW_AGENT_DIR = mainDir;
+      process.env.PI_CODING_AGENT_DIR = mainDir;
+
+      const freshProfileId = "openai-codex:user@example.com";
+      const defaultProfileId = "openai-codex:default";
+      saveAuthProfileStore(
+        {
+          version: AUTH_STORE_VERSION,
+          profiles: {
+            [freshProfileId]: {
+              type: "oauth",
+              provider: "openai-codex",
+              access: "main-access",
+              refresh: "main-refresh",
+              expires: Date.now() + 60 * 60 * 1000,
+              email: "user@example.com",
+            },
+            [defaultProfileId]: {
+              type: "oauth",
+              provider: "openai-codex",
+              access: "main-default-access",
+              refresh: "main-default-refresh",
+              expires: Date.now() + 45 * 60 * 1000,
+            },
+          },
+          order: {
+            "openai-codex": [freshProfileId, defaultProfileId],
+          },
+          usageStats: {
+            [defaultProfileId]: {
+              lastUsed: 123,
+            },
+          },
+        },
+        mainDir,
+      );
+      saveAuthProfileStore(
+        {
+          version: AUTH_STORE_VERSION,
+          profiles: {
+            [defaultProfileId]: {
+              type: "oauth",
+              provider: "openai-codex",
+              access: "stale-agent-default-access",
+              refresh: "stale-agent-default-refresh",
+              expires: Date.now() - 60 * 60 * 1000,
+            },
+          },
+          order: {
+            "openai-codex": [defaultProfileId],
+          },
+          usageStats: {
+            [defaultProfileId]: {
+              lastUsed: 999,
+              errorCount: 2,
+            },
+          },
+        },
+        agentDir,
+      );
+      clearRuntimeAuthProfileStoreSnapshots();
+
+      const store = loadAuthProfileStoreForRuntime(agentDir, { readOnly: true });
+
+      expect(store.order?.["openai-codex"]).toEqual([freshProfileId]);
+      expect(store.profiles[defaultProfileId]).toMatchObject({
+        type: "oauth",
+        provider: "openai-codex",
+        access: "main-default-access",
+      });
+      expect(store.usageStats?.[defaultProfileId]).toMatchObject({
+        lastUsed: 123,
+      });
+    } finally {
+      restoreAgentDirEnv({ previousAgentDir, previousPiAgentDir });
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("keeps a stale default OAuth profile when the main profile belongs to a different identity", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-drift-mismatch-"));
     const previousAgentDir = process.env.OPENCLAW_AGENT_DIR;
