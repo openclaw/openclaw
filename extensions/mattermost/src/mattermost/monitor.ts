@@ -1700,6 +1700,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             hasStreamedMessage = false;
           }
           lastPartialText = "";
+          lastToolItemId = undefined;
         };
 
         const { dispatcher, replyOptions, markDispatchIdle, markRunComplete } =
@@ -1768,21 +1769,22 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                     }
                   },
                   onToolStart: async (payload) => {
-                    // Each tool start opens a new draft post; reset itemId tracker.
+                    // Defer to onItemEvent if the runtime emitted a richer item event
+                    // for this tool call. Tracked via lastToolItemId set by onItemEvent.
+                    if (lastToolItemId !== undefined) return;
                     await onDraftBoundary();
-                    lastToolItemId = undefined;
                     draftStream.update(buildMattermostToolStatusText(payload));
                     hasStreamedMessage = true;
                   },
                   onItemEvent: async (payload) => {
                     if (payload.kind !== "tool" && payload.kind !== "command") return;
                     if (payload.phase && payload.phase !== "start" && payload.phase !== "update") return;
-                    // If a new item arrives without a preceding tool event, open a new post.
                     if (payload.itemId && payload.itemId !== lastToolItemId) {
+                      // First item of this run uses the boundary already created by
+                      // onAssistantMessageStart. Subsequent items open their own post.
                       if (lastToolItemId !== undefined) await onDraftBoundary();
                       lastToolItemId = payload.itemId;
                     }
-                    // Otherwise overwrite the current draft post with richer text.
                     draftStream.update(buildMattermostToolStatusText({
                       name: payload.name,
                       title: payload.title,
