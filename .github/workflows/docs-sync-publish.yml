@@ -63,12 +63,11 @@ jobs:
           git add docs .openclaw-sync
           git commit -m "chore(sync): mirror docs from $GITHUB_REPOSITORY@$GITHUB_SHA"
           for attempt in 1 2 3 4 5; do
-            git fetch origin main
-            git rebase origin/main
-            if git push origin HEAD:main; then
+            if git fetch origin main && git rebase origin/main && git push origin HEAD:main; then
               exit 0
             fi
-            echo "Push attempt ${attempt} failed; retrying."
+            git rebase --abort >/dev/null 2>&1 || true
+            echo "Publish sync attempt ${attempt} failed; retrying."
             sleep $((attempt * 2))
           done
 
