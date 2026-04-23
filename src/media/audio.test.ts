@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  isVoiceMessageCompatibleAudio,
   isVoiceCompatibleAudio,
   isWhatsAppVoiceCompatibleAudio,
   TELEGRAM_VOICE_AUDIO_EXTENSIONS,
   TELEGRAM_VOICE_MIME_TYPES,
+  VOICE_MESSAGE_AUDIO_EXTENSIONS,
+  VOICE_MESSAGE_MIME_TYPES,
   WHATSAPP_VOICE_AUDIO_EXTENSIONS,
   WHATSAPP_VOICE_MIME_TYPES,
 } from "./audio.js";
@@ -103,5 +106,18 @@ describe("isWhatsAppVoiceCompatibleAudio", () => {
 
   it.each([".mp3", ".m4a", ".wav", ".webm"])("returns false for extension %s", (ext) => {
     expect(isWhatsAppVoiceCompatibleAudio({ fileName: `audio${ext}` })).toBe(false);
+  });
+});
+
+describe("legacy voice-message aliases", () => {
+  it("keeps legacy voice-message constant exports mapped to the Telegram set", () => {
+    expect(VOICE_MESSAGE_AUDIO_EXTENSIONS).toBe(TELEGRAM_VOICE_AUDIO_EXTENSIONS);
+    expect(VOICE_MESSAGE_MIME_TYPES).toBe(TELEGRAM_VOICE_MIME_TYPES);
+  });
+
+  it("keeps isVoiceMessageCompatibleAudio aligned with Telegram-compatible voice checks", () => {
+    expect(isVoiceMessageCompatibleAudio({ contentType: "audio/mpeg" })).toBe(true);
+    expect(isVoiceMessageCompatibleAudio({ contentType: "audio/webm" })).toBe(false);
+    expect(isVoiceMessageCompatibleAudio({ fileName: "voice.m4a" })).toBe(true);
   });
 });
