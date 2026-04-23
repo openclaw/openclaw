@@ -116,4 +116,17 @@ describe("agent defaults schema", () => {
     expect(() => AgentDefaultsSchema.parse({ heartbeat: { timeoutSeconds: 0 } })).toThrow();
     expect(() => AgentEntrySchema.parse({ id: "ops", heartbeat: { timeoutSeconds: 0 } })).toThrow();
   });
+
+  it("accepts heartbeat allowSkills on defaults and agent entries", () => {
+    const defaults = AgentDefaultsSchema.parse({
+      heartbeat: { allowSkills: ["healthcheck", "web-access"] },
+    })!;
+    const agent = AgentEntrySchema.parse({
+      id: "ops",
+      heartbeat: { allowSkills: ["healthcheck", "web-access"] },
+    });
+
+    expect(defaults.heartbeat?.allowSkills).toEqual(["healthcheck", "web-access"]);
+    expect(agent.heartbeat?.allowSkills).toEqual(["healthcheck", "web-access"]);
+  });
 });

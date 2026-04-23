@@ -80,6 +80,7 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
 
   async function runDefaultsHeartbeat(params: {
     model?: string;
+    allowSkills?: string[];
     suppressToolErrorWarnings?: boolean;
     timeoutSeconds?: number;
     lightContext?: boolean;
@@ -94,6 +95,7 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
               every: "5m",
               target: "whatsapp",
               model: params.model,
+              allowSkills: params.allowSkills,
               suppressToolErrorWarnings: params.suppressToolErrorWarnings,
               timeoutSeconds: params.timeoutSeconds,
               lightContext: params.lightContext,
@@ -182,6 +184,26 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
       expect.objectContaining({
         isHeartbeat: true,
         suppressToolErrorWarnings: true,
+      }),
+    );
+  });
+
+  it("passes heartbeat skillFilter when allowSkills is configured", async () => {
+    const replyOpts = await runDefaultsHeartbeat({ allowSkills: ["healthcheck", "web-access"] });
+    expect(replyOpts).toEqual(
+      expect.objectContaining({
+        isHeartbeat: true,
+        skillFilter: ["healthcheck", "web-access"],
+      }),
+    );
+  });
+
+  it("passes an empty heartbeat skillFilter when allowSkills disables all skills", async () => {
+    const replyOpts = await runDefaultsHeartbeat({ allowSkills: [] });
+    expect(replyOpts).toEqual(
+      expect.objectContaining({
+        isHeartbeat: true,
+        skillFilter: [],
       }),
     );
   });

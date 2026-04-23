@@ -5080,6 +5080,15 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   prompt: {
                     type: "string",
                   },
+                  allowSkills: {
+                    type: "array",
+                    items: {
+                      type: "string",
+                    },
+                    title: "Heartbeat Allow Skills",
+                    description:
+                      "Restricts heartbeat runs to this skill allowlist. Leave unset to keep the agent's normal skill behavior; set [] to disable all skills during heartbeat turns.",
+                  },
                   includeSystemPromptSection: {
                     type: "boolean",
                     title: "Heartbeat Include System Prompt Section",
@@ -6390,6 +6399,15 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     },
                     prompt: {
                       type: "string",
+                    },
+                    allowSkills: {
+                      type: "array",
+                      items: {
+                        type: "string",
+                      },
+                      title: "Heartbeat Allow Skills",
+                      description:
+                        "Per-agent override for the heartbeat skill allowlist. Leave unset to keep the agent's normal skill behavior; set [] to disable all skills during heartbeat turns for that agent.",
                     },
                     includeSystemPromptSection: {
                       type: "boolean",
@@ -26012,6 +26030,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Embedded Pi Execution Contract",
       help: 'Embedded Pi execution contract: "default" keeps the standard runner behavior, while "strict-agentic" keeps OpenAI/OpenAI Codex GPT-5-family runs acting until they hit a real blocker instead of stopping at plans or filler.',
       tags: ["advanced"],
+    },
+    "agents.defaults.heartbeat.allowSkills": {
+      label: "Heartbeat Allow Skills",
+      help: "Restricts heartbeat runs to this skill allowlist. Leave unset to keep the agent's normal skill behavior; set [] to disable all skills during heartbeat turns.",
+      tags: ["access", "automation"],
+    },
+    "agents.list.*.heartbeat.allowSkills": {
+      label: "Heartbeat Allow Skills",
+      help: "Per-agent override for the heartbeat skill allowlist. Leave unset to keep the agent's normal skill behavior; set [] to disable all skills during heartbeat turns for that agent.",
+      tags: ["access", "automation"],
     },
     "agents.defaults.heartbeat.includeSystemPromptSection": {
       label: "Heartbeat Include System Prompt Section",

@@ -40,6 +40,18 @@ export const HEARTBEAT_CONFIG_HONOR_INVENTORY: ConfigHonorInventoryRow[] = [
     testPaths: ["src/infra/heartbeat-runner.returns-default-unset.test.ts"],
   },
   {
+    key: "allowSkills",
+    schemaPaths: ["agents.defaults.heartbeat.allowSkills", "agents.list.*.heartbeat.allowSkills"],
+    typePaths: ["src/config/types.agent-defaults.ts", "src/config/zod-schema.agent-runtime.ts"],
+    mergePaths: ["src/infra/heartbeat-runner.ts"],
+    consumerPaths: ["src/infra/heartbeat-runner.ts", "src/auto-reply/reply/get-reply.ts"],
+    reloadPaths: ["src/gateway/config-reload-plan.ts"],
+    testPaths: [
+      "src/config/zod-schema.agent-defaults.test.ts",
+      "src/infra/heartbeat-runner.model-override.test.ts",
+    ],
+  },
+  {
     key: "includeSystemPromptSection",
     schemaPaths: [
       "agents.defaults.heartbeat.includeSystemPromptSection",

@@ -1062,6 +1062,8 @@ export async function runHeartbeatOnce(opts: {
   try {
     await heartbeatTyping?.onReplyStart();
     const heartbeatModelOverride = normalizeOptionalString(heartbeat?.model);
+    const heartbeatSkillFilter =
+      Array.isArray(heartbeat?.allowSkills) ? heartbeat.allowSkills : undefined;
     const suppressToolErrorWarnings = heartbeat?.suppressToolErrorWarnings === true;
     const timeoutOverrideSeconds =
       typeof heartbeat?.timeoutSeconds === "number" ? heartbeat.timeoutSeconds : undefined;
@@ -1070,6 +1072,7 @@ export async function runHeartbeatOnce(opts: {
     const replyOpts = {
       isHeartbeat: true,
       ...(heartbeatModelOverride ? { heartbeatModelOverride } : {}),
+      ...(heartbeatSkillFilter !== undefined ? { skillFilter: heartbeatSkillFilter } : {}),
       suppressToolErrorWarnings,
       // Heartbeat timeout is a per-run override so user turns keep the global default.
       timeoutOverrideSeconds,

@@ -12,6 +12,7 @@ const EXPECTED_HEARTBEAT_KEYS = [
   "every",
   "model",
   "prompt",
+  "allowSkills",
   "includeSystemPromptSection",
   "ackMaxChars",
   "suppressToolErrorWarnings",
