@@ -1,5 +1,8 @@
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+
 const GOOGLE_MEET_API_BASE_URL = "https://meet.googleapis.com/v2";
 const GOOGLE_MEET_URL_HOST = "meet.google.com";
+const GOOGLE_MEET_API_HOST = "meet.googleapis.com";
 
 export type GoogleMeetSpace = {
   name: string;
@@ -58,21 +61,30 @@ export async function fetchGoogleMeetSpace(params: {
   meeting: string;
 }): Promise<GoogleMeetSpace> {
   const name = normalizeGoogleMeetSpaceName(params.meeting);
-  const response = await fetch(`${GOOGLE_MEET_API_BASE_URL}/${encodeSpaceNameForPath(name)}`, {
-    headers: {
-      Authorization: `Bearer ${params.accessToken}`,
-      Accept: "application/json",
+  const { response, release } = await fetchWithSsrFGuard({
+    url: `${GOOGLE_MEET_API_BASE_URL}/${encodeSpaceNameForPath(name)}`,
+    init: {
+      headers: {
+        Authorization: `Bearer ${params.accessToken}`,
+        Accept: "application/json",
+      },
     },
+    policy: { allowedHostnames: [GOOGLE_MEET_API_HOST] },
+    auditContext: "google-meet.spaces.get",
   });
-  if (!response.ok) {
-    const detail = await response.text();
-    throw new Error(`Google Meet spaces.get failed (${response.status}): ${detail}`);
+  try {
+    if (!response.ok) {
+      const detail = await response.text();
+      throw new Error(`Google Meet spaces.get failed (${response.status}): ${detail}`);
+    }
+    const payload = (await response.json()) as GoogleMeetSpace;
+    if (!payload.name?.trim()) {
+      throw new Error("Google Meet spaces.get response was missing name");
+    }
+    return payload;
+  } finally {
+    await release();
   }
-  const payload = (await response.json()) as GoogleMeetSpace;
-  if (!payload.name?.trim()) {
-    throw new Error("Google Meet spaces.get response was missing name");
-  }
-  return payload;
 }
 
 export function buildGoogleMeetPreflightReport(params: {
