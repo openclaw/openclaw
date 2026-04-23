@@ -1629,6 +1629,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         });
         let lastPartialText = "";
         let hasStreamedMessage = false;
+        let lastToolItemId: string | undefined;
         const previewState: MattermostDraftPreviewState = {
           finalizedViaPreviewPost: false,
         };
@@ -1767,21 +1768,26 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                     }
                   },
                   onToolStart: async (payload) => {
+                    // Each tool start opens a new draft post; reset itemId tracker.
                     await onDraftBoundary();
+                    lastToolItemId = undefined;
                     draftStream.update(buildMattermostToolStatusText(payload));
                     hasStreamedMessage = true;
                   },
                   onItemEvent: async (payload) => {
-                    // Runtime emits richer item events (e.g. with a human-readable title).
-                    // Use them to upgrade the current tool status post in-place.
                     if (payload.kind !== "tool" && payload.kind !== "command") return;
                     if (payload.phase && payload.phase !== "start" && payload.phase !== "update") return;
-                    const text = buildMattermostToolStatusText({
+                    // If a new item arrives without a preceding tool event, open a new post.
+                    if (payload.itemId && payload.itemId !== lastToolItemId) {
+                      if (lastToolItemId !== undefined) await onDraftBoundary();
+                      lastToolItemId = payload.itemId;
+                    }
+                    // Otherwise overwrite the current draft post with richer text.
+                    draftStream.update(buildMattermostToolStatusText({
                       name: payload.name,
                       title: payload.title,
                       phase: payload.phase,
-                    });
-                    draftStream.update(text);
+                    }));
                     hasStreamedMessage = true;
                   },
                 },
