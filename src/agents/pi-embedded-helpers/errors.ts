@@ -208,14 +208,35 @@ export function isCompactionFailureError(errorMessage?: string): boolean {
 }
 
 const OBSERVED_OVERFLOW_TOKEN_PATTERNS = [
-  /prompt is too long:\s*([\d,]+)\s+tokens\s*>\s*[\d,]+\s+maximum/i,
+  /prompt is too long:\s*([\d,]+)(?:\s+tokens)?(?:\s*>\s*[\d,]+\s+maximum|\s*,\s*model maximum context length\s*:\s*[\d,]+)?/i,
   /requested\s+([\d,]+)\s+tokens/i,
+  /you requested\s+([\d,]+)\s+tokens/i,
+  /requested\s*:\s*([\d,]+)/i,
   /resulted in\s+([\d,]+)\s+tokens/i,
+  /request exceeded model token limit\s*:\s*[\d,]+\s*\(requested\s*:\s*([\d,]+)\)/i,
+];
+
+const OBSERVED_OVERFLOW_TOKEN_SUM_PATTERNS = [
+  /input length(?:\s+and\s+max_tokens)?\s+exceed\s+context(?:\s+limit|\s+window)?\s*\(i\.e\s*([\d,]+)\s*\+\s*([\d,]+)\s*>\s*[\d,]+\)/i,
 ];
 
 export function extractObservedOverflowTokenCount(errorMessage?: string): number | undefined {
   if (!errorMessage) {
     return undefined;
+  }
+
+  for (const pattern of OBSERVED_OVERFLOW_TOKEN_SUM_PATTERNS) {
+    const match = errorMessage.match(pattern);
+    const lhs = match?.[1]?.replaceAll(",", "");
+    const rhs = match?.[2]?.replaceAll(",", "");
+    if (!lhs || !rhs) {
+      continue;
+    }
+    const left = Number(lhs);
+    const right = Number(rhs);
+    if (Number.isFinite(left) && left > 0 && Number.isFinite(right) && right >= 0) {
+      return Math.floor(left + right);
+    }
   }
 
   for (const pattern of OBSERVED_OVERFLOW_TOKEN_PATTERNS) {
