@@ -168,7 +168,10 @@ function buildPluginsFromManifest(params: {
   };
 }
 
-function buildSkillsCapture(skillsSnapshot?: SkillSnapshot) {
+function buildSkillsCapture(
+  skillsSnapshot: SkillSnapshot | undefined,
+  redaction: SupportRedactionContext,
+) {
   if (!skillsSnapshot) {
     return undefined;
   }
@@ -178,10 +181,10 @@ function buildSkillsCapture(skillsSnapshot?: SkillSnapshot) {
           id: skill.name,
           name: skill.name,
           description: skill.description,
-          filePath: skill.filePath,
-          baseDir: skill.baseDir,
+          filePath: redactPathForSupport(skill.filePath, redaction),
+          baseDir: redactPathForSupport(skill.baseDir, redaction),
           source: skill.source,
-          sourceInfo: skill.sourceInfo,
+          sourceInfo: sanitizeSupportSnapshotValue(skill.sourceInfo, redaction),
           disableModelInvocation: skill.disableModelInvocation,
           available: true,
         }))
@@ -258,7 +261,7 @@ export function buildTrajectoryRunMetadata(
       },
     },
     plugins,
-    skills: buildSkillsCapture(params.skillsSnapshot),
+    skills: buildSkillsCapture(params.skillsSnapshot, redaction),
     prompting: {
       skillsPrompt: params.skillsSnapshot?.prompt,
       userPromptPrefixText: params.userPromptPrefixText,

@@ -15,6 +15,15 @@ describe("trajectory runtime", () => {
     ).toBe("/tmp/session.trajectory.jsonl");
   });
 
+  it("sanitizes session ids when resolving an override directory", () => {
+    expect(
+      resolveTrajectoryFilePath({
+        env: { OPENCLAW_TRAJECTORY_DIR: "/tmp/traces" },
+        sessionId: "../evil/session",
+      }),
+    ).toBe("/tmp/traces/___evil_session.jsonl");
+  });
+
   it("records sanitized runtime events by default", () => {
     const writes: string[] = [];
     const recorder = createTrajectoryRuntimeRecorder({
@@ -37,6 +46,8 @@ describe("trajectory runtime", () => {
     expect(recorder).not.toBeNull();
     recorder?.recordEvent("context.compiled", {
       systemPrompt: "system prompt",
+      headers: [{ name: "Authorization", value: "Bearer sk-test-secret-token" }],
+      command: "curl -H 'Authorization: Bearer sk-other-secret-token'",
       tools: toTrajectoryToolDefinitions([
         { name: "z-tool", parameters: { z: 1 } },
         { name: "a-tool", description: "alpha", parameters: { a: 1 } },
@@ -53,6 +64,8 @@ describe("trajectory runtime", () => {
       { name: "a-tool", description: "alpha", parameters: { a: 1 } },
       { name: "z-tool", parameters: { z: 1 } },
     ]);
+    expect(JSON.stringify(parsed.data)).not.toContain("sk-test-secret-token");
+    expect(JSON.stringify(parsed.data)).not.toContain("sk-other-secret-token");
   });
 
   it("does not record runtime events when explicitly disabled", () => {

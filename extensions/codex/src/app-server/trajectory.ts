@@ -1,3 +1,4 @@
+import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type {
@@ -16,12 +17,47 @@ type CodexTrajectoryInit = {
   attempt: EmbeddedRunAttemptParams;
   cwd: string;
   developerInstructions?: string;
+  prompt?: string;
   tools?: Array<{ name?: string; description?: string; inputSchema?: unknown }>;
   env?: NodeJS.ProcessEnv;
 };
 
 const SENSITIVE_FIELD_RE = /(?:authorization|cookie|credential|key|password|passwd|secret|token)/iu;
 const PRIVATE_PAYLOAD_FIELD_RE = /(?:image|screenshot|attachment|fileData|dataUri)/iu;
+const AUTHORIZATION_VALUE_RE = /\b(Bearer|Basic)\s+[A-Za-z0-9+/._~=-]{8,}/giu;
+const JWT_VALUE_RE = /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/gu;
+const COOKIE_PAIR_RE = /\b([A-Za-z][A-Za-z0-9_.-]{1,64})=([A-Za-z0-9+/._~%=-]{16,})(?=;|\s|$)/gu;
+
+async function safeAppendTrajectoryFile(filePath: string, line: string): Promise<void> {
+  try {
+    const stat = await fs.lstat(filePath);
+    if (stat.isSymbolicLink()) {
+      throw new Error(`Refusing to write trajectory through symlink: ${filePath}`);
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw err;
+    }
+  }
+
+  const noFollow =
+    typeof nodeFs.constants.O_NOFOLLOW === "number" ? nodeFs.constants.O_NOFOLLOW : 0;
+  const handle = await fs.open(
+    filePath,
+    nodeFs.constants.O_CREAT | nodeFs.constants.O_APPEND | nodeFs.constants.O_WRONLY | noFollow,
+    0o600,
+  );
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile()) {
+      throw new Error(`Refusing to write trajectory to non-file: ${filePath}`);
+    }
+    await handle.chmod(0o600);
+    await handle.appendFile(line, "utf8");
+  } finally {
+    await handle.close();
+  }
+}
 
 export function createCodexTrajectoryRecorder(
   params: CodexTrajectoryInit,
@@ -37,7 +73,9 @@ export function createCodexTrajectoryRecorder(
     sessionFile: params.attempt.sessionFile,
     sessionId: params.attempt.sessionId,
   });
-  const ready = fs.mkdir(path.dirname(filePath), { recursive: true }).catch(() => undefined);
+  const ready = fs
+    .mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 })
+    .catch(() => undefined);
   let queue = Promise.resolve();
   let seq = 0;
 
@@ -65,7 +103,7 @@ export function createCodexTrajectoryRecorder(
       const line = `${JSON.stringify(event)}\n`;
       queue = queue
         .then(() => ready)
-        .then(() => fs.appendFile(filePath, line, "utf8"))
+        .then(() => safeAppendTrajectoryFile(filePath, line))
         .catch(() => undefined);
     },
     flush: async () => {
@@ -83,7 +121,7 @@ export function recordCodexTrajectoryContext(
   }
   recorder.recordEvent("context.compiled", {
     systemPrompt: params.developerInstructions,
-    prompt: params.attempt.prompt,
+    prompt: params.prompt ?? params.attempt.prompt,
     imagesCount: params.attempt.images?.length ?? 0,
     tools: toTrajectoryToolDefinitions(params.tools),
   });
@@ -134,11 +172,29 @@ function resolveTrajectoryFilePath(params: {
 }): string {
   const dirOverride = params.env.OPENCLAW_TRAJECTORY_DIR?.trim();
   if (dirOverride) {
-    return path.join(resolveUserPath(dirOverride), `${params.sessionId}.jsonl`);
+    return resolveContainedPath(
+      resolveUserPath(dirOverride),
+      `${safeTrajectorySessionFileName(params.sessionId)}.jsonl`,
+    );
   }
   return params.sessionFile.endsWith(".jsonl")
     ? `${params.sessionFile.slice(0, -".jsonl".length)}.trajectory.jsonl`
     : `${params.sessionFile}.trajectory.jsonl`;
+}
+
+function safeTrajectorySessionFileName(sessionId: string): string {
+  const safe = sessionId.replaceAll(/[^A-Za-z0-9_-]/g, "_").slice(0, 120);
+  return /[A-Za-z0-9]/u.test(safe) ? safe : "session";
+}
+
+function resolveContainedPath(baseDir: string, fileName: string): string {
+  const resolvedBase = path.resolve(baseDir);
+  const resolvedFile = path.resolve(resolvedBase, fileName);
+  const relative = path.relative(resolvedBase, resolvedFile);
+  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw new Error("Trajectory file path escaped its configured directory");
+  }
+  return resolvedFile;
 }
 
 function toTrajectoryToolDefinitions(
@@ -178,7 +234,8 @@ function sanitizeValue(value: unknown, depth = 0, key = ""): unknown {
     if (PRIVATE_PAYLOAD_FIELD_RE.test(key) && value.length > 256) {
       return "<redacted payload>";
     }
-    return value.length > 20_000 ? `${value.slice(0, 20_000)}…` : value;
+    const redacted = redactSensitiveString(value);
+    return redacted.length > 20_000 ? `${redacted.slice(0, 20_000)}…` : redacted;
   }
   if (depth >= 6) {
     return "<truncated>";
@@ -194,6 +251,13 @@ function sanitizeValue(value: unknown, depth = 0, key = ""): unknown {
     return next;
   }
   return JSON.stringify(value);
+}
+
+function redactSensitiveString(value: string): string {
+  return value
+    .replace(AUTHORIZATION_VALUE_RE, "$1 <redacted>")
+    .replace(JWT_VALUE_RE, "<redacted-jwt>")
+    .replace(COOKIE_PAIR_RE, "$1=<redacted>");
 }
 
 export function normalizeCodexTrajectoryError(value: unknown): string | null {

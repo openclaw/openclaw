@@ -8,15 +8,12 @@ import {
 import { loadSessionStore } from "../../config/sessions/store.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { resolveHomeRelativePath } from "../../infra/home-dir.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import {
   exportTrajectoryBundle,
   resolveDefaultTrajectoryExportDir,
 } from "../../trajectory/export.js";
-import { toTrajectoryToolDefinitions } from "../../trajectory/runtime.js";
 import type { ReplyPayload } from "../types.js";
-import { resolveCommandsSystemPromptBundle } from "./commands-system-prompt.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
 function parseExportTrajectoryArgs(commandBodyNormalized: string): { outputPath?: string } {
@@ -32,7 +29,6 @@ function parseExportTrajectoryArgs(commandBodyNormalized: string): { outputPath?
 function resolveTrajectoryCommandOutputDir(params: {
   outputPath?: string;
   workspaceDir: string;
-  env?: NodeJS.ProcessEnv;
   sessionId: string;
 }): string {
   const raw = params.outputPath?.trim();
@@ -42,9 +38,17 @@ function resolveTrajectoryCommandOutputDir(params: {
       sessionId: params.sessionId,
     });
   }
-  return path.isAbsolute(raw) || raw.startsWith("~")
-    ? resolveHomeRelativePath(raw, { env: params.env })
-    : path.resolve(params.workspaceDir, raw);
+  if (path.isAbsolute(raw) || raw.startsWith("~")) {
+    throw new Error("Output path must be relative to the workspace trajectory exports directory");
+  }
+  const baseDir = path.join(params.workspaceDir, ".openclaw", "trajectory-exports");
+  const resolvedBase = path.resolve(baseDir);
+  const outputDir = path.resolve(resolvedBase, raw);
+  const relative = path.relative(resolvedBase, outputDir);
+  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw new Error("Output path must stay inside the workspace trajectory exports directory");
+  }
+  return outputDir;
 }
 
 export async function buildExportTrajectoryReply(
@@ -75,18 +79,12 @@ export async function buildExportTrajectoryReply(
     return { text: `❌ Session file not found: ${sessionFile}` };
   }
 
-  const { systemPrompt, tools } = await resolveCommandsSystemPromptBundle({
-    ...params,
-    sessionEntry: entry as HandleCommandsParams["sessionEntry"],
-  });
-
   let outputDir: string;
   try {
     outputDir = resolveTrajectoryCommandOutputDir({
       outputPath: args.outputPath,
       workspaceDir: params.workspaceDir,
       sessionId: entry.sessionId,
-      env: process.env,
     });
   } catch (err) {
     return {
@@ -102,8 +100,6 @@ export async function buildExportTrajectoryReply(
       sessionId: entry.sessionId,
       sessionKey: params.sessionKey,
       workspaceDir: params.workspaceDir,
-      systemPrompt,
-      tools: toTrajectoryToolDefinitions(tools),
     });
   } catch (err) {
     return {

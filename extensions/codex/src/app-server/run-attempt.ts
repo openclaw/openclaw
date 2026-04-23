@@ -96,7 +96,6 @@ export async function runCodexAppServerAttempt(
   let yieldDetected = false;
   const startupBinding = await readCodexAppServerBinding(params.sessionFile);
   const startupAuthProfileId = params.authProfileId ?? startupBinding?.authProfileId;
-  const developerInstructions = buildDeveloperInstructions(params);
   const tools = await buildDynamicTools({
     params,
     resolvedWorkspace,
@@ -139,7 +138,8 @@ export async function runCodexAppServerAttempt(
   const trajectoryRecorder = createCodexTrajectoryRecorder({
     attempt: params,
     cwd: effectiveWorkspace,
-    developerInstructions,
+    developerInstructions: promptBuild.developerInstructions,
+    prompt: promptBuild.prompt,
     tools: toolBridge.specs,
   });
   let client: CodexAppServerClient;
@@ -178,7 +178,8 @@ export async function runCodexAppServerAttempt(
   recordCodexTrajectoryContext(trajectoryRecorder, {
     attempt: params,
     cwd: effectiveWorkspace,
-    developerInstructions,
+    developerInstructions: promptBuild.developerInstructions,
+    prompt: promptBuild.prompt,
     tools: toolBridge.specs,
   });
 
@@ -311,6 +312,14 @@ export async function runCodexAppServerAttempt(
       { timeoutMs: params.timeoutMs, signal: runAbortController.signal },
     );
   } catch (error) {
+    trajectoryRecorder?.recordEvent("session.ended", {
+      status: "error",
+      threadId: thread.threadId,
+      timedOut,
+      aborted: runAbortController.signal.aborted,
+      promptError: normalizeCodexTrajectoryError(error),
+    });
+    trajectoryEndRecorded = true;
     runAgentHarnessLlmOutputHook({
       event: {
         runId: params.runId,
@@ -332,6 +341,7 @@ export async function runCodexAppServerAttempt(
     });
     notificationCleanup();
     requestCleanup();
+    await trajectoryRecorder?.flush();
     params.abortSignal?.removeEventListener("abort", abortFromUpstream);
     throw error;
   }
@@ -339,7 +349,7 @@ export async function runCodexAppServerAttempt(
   trajectoryRecorder?.recordEvent("prompt.submitted", {
     threadId: thread.threadId,
     turnId,
-    prompt: params.prompt,
+    prompt: promptBuild.prompt,
     imagesCount: params.images?.length ?? 0,
   });
   projector = new CodexAppServerEventProjector(params, thread.threadId, turnId);

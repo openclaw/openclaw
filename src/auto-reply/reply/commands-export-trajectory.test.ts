@@ -13,16 +13,8 @@ const hoisted = vi.hoisted(() => ({
       updatedAt: 1,
     },
   })),
-  resolveCommandsSystemPromptBundleMock: vi.fn(async () => ({
-    systemPrompt: "system prompt",
-    tools: [{ name: "read", parameters: { type: "object" } }],
-    skillsPrompt: "",
-    bootstrapFiles: [],
-    injectedFiles: [],
-    sandboxRuntime: { sandboxed: false, mode: "off" },
-  })),
   exportTrajectoryBundleMock: vi.fn(() => ({
-    outputDir: "/tmp/workspace/openclaw-trajectory-session",
+    outputDir: "/tmp/workspace/.openclaw/trajectory-exports/openclaw-trajectory-session",
     manifest: {
       eventCount: 7,
       runtimeEventCount: 3,
@@ -32,7 +24,9 @@ const hoisted = vi.hoisted(() => ({
     runtimeFile: "/tmp/target-store/session.trajectory.jsonl",
     supplementalFiles: ["metadata.json", "artifacts.json", "prompts.json"],
   })),
-  resolveDefaultTrajectoryExportDirMock: vi.fn(() => "/tmp/workspace/openclaw-trajectory-session"),
+  resolveDefaultTrajectoryExportDirMock: vi.fn(
+    () => "/tmp/workspace/.openclaw/trajectory-exports/openclaw-trajectory-session",
+  ),
   existsSyncMock: vi.fn(() => true),
 }));
 
@@ -44,10 +38,6 @@ vi.mock("../../config/sessions/paths.js", () => ({
 
 vi.mock("../../config/sessions/store.js", () => ({
   loadSessionStore: hoisted.loadSessionStoreMock,
-}));
-
-vi.mock("./commands-system-prompt.js", () => ({
-  resolveCommandsSystemPromptBundle: hoisted.resolveCommandsSystemPromptBundleMock,
 }));
 
 vi.mock("../../trajectory/export.js", () => ({
@@ -124,27 +114,28 @@ describe("buildExportTrajectoryReply", () => {
     );
   });
 
-  it("expands home-relative output paths without falling back to cwd", async () => {
-    const originalHome = process.env.HOME;
-    process.env.HOME = "/tmp/openclaw-home";
-    try {
-      const { buildExportTrajectoryReply } = await import("./commands-export-trajectory.js");
-      const params = makeParams();
-      params.command.commandBodyNormalized = "/export-trajectory ~/trajectory-bundle";
+  it("keeps user-named output paths inside the workspace trajectory export directory", async () => {
+    const { buildExportTrajectoryReply } = await import("./commands-export-trajectory.js");
+    const params = makeParams();
+    params.command.commandBodyNormalized = "/export-trajectory my-bundle";
 
-      await buildExportTrajectoryReply(params);
+    await buildExportTrajectoryReply(params);
 
-      expect(hoisted.exportTrajectoryBundleMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          outputDir: "/tmp/openclaw-home/trajectory-bundle",
-        }),
-      );
-    } finally {
-      if (originalHome === undefined) {
-        delete process.env.HOME;
-      } else {
-        process.env.HOME = originalHome;
-      }
-    }
+    expect(hoisted.exportTrajectoryBundleMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        outputDir: "/tmp/workspace/.openclaw/trajectory-exports/my-bundle",
+      }),
+    );
+  });
+
+  it("rejects absolute output paths", async () => {
+    const { buildExportTrajectoryReply } = await import("./commands-export-trajectory.js");
+    const params = makeParams();
+    params.command.commandBodyNormalized = "/export-trajectory /tmp/outside";
+
+    const reply = await buildExportTrajectoryReply(params);
+
+    expect(reply.text).toContain("Failed to resolve output path");
+    expect(hoisted.exportTrajectoryBundleMock).not.toHaveBeenCalled();
   });
 });

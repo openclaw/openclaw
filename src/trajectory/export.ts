@@ -4,8 +4,13 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { SessionEntry, SessionHeader } from "@mariozechner/pi-coding-agent";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { sanitizeDiagnosticPayload } from "../agents/payload-redaction.js";
+import { resolveStateDir } from "../config/paths.js";
+import {
+  redactPathForSupport,
+  type SupportRedactionContext,
+} from "../logging/diagnostic-support-redaction.js";
 import { safeJsonStringify } from "../utils/safe-json.js";
-import { resolveTrajectoryFilePath } from "./runtime.js";
+import { resolveTrajectoryFilePath, safeTrajectorySessionFileName } from "./runtime.js";
 import type {
   TrajectoryBundleManifest,
   TrajectoryEvent,
@@ -29,10 +34,23 @@ type RuntimeTrajectoryContext = {
 };
 
 type JsonRecord = Record<string, unknown>;
+type TrajectoryExportRedaction = SupportRedactionContext & {
+  workspaceDir: string;
+};
+
+const MAX_TRAJECTORY_RUNTIME_FILE_BYTES = 50 * 1024 * 1024;
+const MAX_TRAJECTORY_RUNTIME_EVENTS = 200_000;
+const MAX_TRAJECTORY_TOTAL_EVENTS = 250_000;
 
 function parseJsonlFile<T>(filePath: string): T[] {
   if (!fs.existsSync(filePath)) {
     return [];
+  }
+  const stat = fs.statSync(filePath);
+  if (stat.size > MAX_TRAJECTORY_RUNTIME_FILE_BYTES) {
+    throw new Error(
+      `Trajectory runtime file is too large to export (${stat.size} bytes; limit ${MAX_TRAJECTORY_RUNTIME_FILE_BYTES})`,
+    );
   }
   const content = fs.readFileSync(filePath, "utf8");
   const rows = content
@@ -41,6 +59,11 @@ function parseJsonlFile<T>(filePath: string): T[] {
     .filter(Boolean);
   const parsed: T[] = [];
   for (const row of rows) {
+    if (parsed.length >= MAX_TRAJECTORY_RUNTIME_EVENTS) {
+      throw new Error(
+        `Trajectory runtime file has too many events to export (limit ${MAX_TRAJECTORY_RUNTIME_EVENTS})`,
+      );
+    }
     try {
       parsed.push(JSON.parse(row) as T);
     } catch {
@@ -51,6 +74,12 @@ function parseJsonlFile<T>(filePath: string): T[] {
 }
 
 function normalizeTimestamp(value: unknown): string {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    const parsed = new Date(value);
+    if (!Number.isNaN(parsed.getTime())) {
+      return parsed.toISOString();
+    }
+  }
   if (typeof value === "string") {
     const parsed = new Date(value);
     if (!Number.isNaN(parsed.getTime())) {
@@ -257,10 +286,78 @@ function writeJsonlFile(filePath: string, events: TrajectoryEvent[]): void {
   });
 }
 
-function resolveRuntimeContext(
-  runtimeEvents: TrajectoryEvent[],
-  fallback: Pick<BuildTrajectoryBundleParams, "systemPrompt" | "tools">,
-): RuntimeTrajectoryContext {
+function buildTrajectoryExportRedaction(params: {
+  workspaceDir: string;
+}): TrajectoryExportRedaction {
+  const env = process.env;
+  return {
+    env,
+    stateDir: resolveStateDir(env),
+    workspaceDir: path.resolve(params.workspaceDir),
+  };
+}
+
+function redactWorkspacePathString(value: string, redaction: TrajectoryExportRedaction): string {
+  const workspaceDir = redaction.workspaceDir;
+  if (!workspaceDir) {
+    return value;
+  }
+  const normalizedWorkspaceDir = workspaceDir.replaceAll("\\", "/");
+  return value
+    .replaceAll(workspaceDir, "$WORKSPACE_DIR")
+    .replaceAll(normalizedWorkspaceDir, "$WORKSPACE_DIR");
+}
+
+function maybeRedactPathString(value: string, redaction: TrajectoryExportRedaction): string {
+  const workspaceRedacted = redactWorkspacePathString(value, redaction);
+  if (workspaceRedacted !== value) {
+    return workspaceRedacted;
+  }
+  if (
+    path.isAbsolute(value) ||
+    value.includes(redaction.stateDir) ||
+    (redaction.env.HOME ? value.includes(redaction.env.HOME) : false) ||
+    (redaction.env.USERPROFILE ? value.includes(redaction.env.USERPROFILE) : false)
+  ) {
+    return redactPathForSupport(value, redaction);
+  }
+  return value;
+}
+
+function redactLocalPathValues(value: unknown, redaction: TrajectoryExportRedaction): unknown {
+  if (typeof value === "string") {
+    return maybeRedactPathString(value, redaction);
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => redactLocalPathValues(entry, redaction));
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  const record = value as Record<string, unknown>;
+  const next: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(record)) {
+    next[key] = redactLocalPathValues(entry, redaction);
+  }
+  return next;
+}
+
+function redactEventForExport(
+  event: TrajectoryEvent,
+  redaction: TrajectoryExportRedaction,
+): TrajectoryEvent {
+  return {
+    ...event,
+    workspaceDir: event.workspaceDir
+      ? maybeRedactPathString(event.workspaceDir, redaction)
+      : undefined,
+    data: event.data
+      ? (redactLocalPathValues(event.data, redaction) as Record<string, unknown>)
+      : undefined,
+  };
+}
+
+function resolveRuntimeContext(runtimeEvents: TrajectoryEvent[]): RuntimeTrajectoryContext {
   const latestContext = runtimeEvents
     .slice()
     .toReversed()
@@ -268,12 +365,10 @@ function resolveRuntimeContext(
   const runtimeData = latestContext?.data;
   const toolsValue = Array.isArray(runtimeData?.tools)
     ? (runtimeData.tools as TrajectoryToolDefinition[])
-    : fallback.tools;
+    : undefined;
   return {
     systemPrompt:
-      typeof runtimeData?.systemPrompt === "string"
-        ? runtimeData.systemPrompt
-        : fallback.systemPrompt,
+      typeof runtimeData?.systemPrompt === "string" ? runtimeData.systemPrompt : undefined,
     tools: toolsValue,
   };
 }
@@ -517,9 +612,12 @@ export function resolveDefaultTrajectoryExportDir(params: {
   now?: Date;
 }): string {
   const timestamp = (params.now ?? new Date()).toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const sessionFileName = safeTrajectorySessionFileName(params.sessionId);
   return path.join(
     params.workspaceDir,
-    `openclaw-trajectory-${params.sessionId.slice(0, 8)}-${timestamp}`,
+    ".openclaw",
+    "trajectory-exports",
+    `openclaw-trajectory-${sessionFileName.slice(0, 8)}-${timestamp}`,
   );
 }
 
@@ -533,6 +631,9 @@ export function exportTrajectoryBundle(params: BuildTrajectoryBundleParams): {
 } {
   prepareOutputDir(params.outputDir);
 
+  const redaction = buildTrajectoryExportRedaction({
+    workspaceDir: params.workspaceDir,
+  });
   const sessionManager = SessionManager.open(params.sessionFile);
   const header = sessionManager.getHeader();
   const leafId = sessionManager.getLeafId();
@@ -544,6 +645,11 @@ export function exportTrajectoryBundle(params: BuildTrajectoryBundleParams): {
       sessionId: params.sessionId,
     });
   const runtimeEvents = parseJsonlFile<TrajectoryEvent>(runtimeFile);
+  if (runtimeEvents.length + branchEntries.length > MAX_TRAJECTORY_TOTAL_EVENTS) {
+    throw new Error(
+      `Trajectory export has too many events (${runtimeEvents.length + branchEntries.length}; limit ${MAX_TRAJECTORY_TOTAL_EVENTS})`,
+    );
+  }
   const transcriptEvents = buildTranscriptEvents({
     entries: branchEntries,
     sessionId: params.sessionId,
@@ -551,7 +657,8 @@ export function exportTrajectoryBundle(params: BuildTrajectoryBundleParams): {
     workspaceDir: params.workspaceDir,
     traceId: params.sessionId,
   });
-  const events = sortTrajectoryEvents([...runtimeEvents, ...transcriptEvents]);
+  const rawEvents = sortTrajectoryEvents([...runtimeEvents, ...transcriptEvents]);
+  const events = rawEvents.map((event) => redactEventForExport(event, redaction));
   const manifest: TrajectoryBundleManifest = {
     traceSchema: "openclaw-trajectory",
     schemaVersion: 1,
@@ -559,26 +666,25 @@ export function exportTrajectoryBundle(params: BuildTrajectoryBundleParams): {
     traceId: params.sessionId,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
-    workspaceDir: params.workspaceDir,
+    workspaceDir: maybeRedactPathString(params.workspaceDir, redaction),
     leafId,
     eventCount: events.length,
     runtimeEventCount: runtimeEvents.length,
     transcriptEventCount: transcriptEvents.length,
     sourceFiles: {
-      session: params.sessionFile,
-      runtime: fs.existsSync(runtimeFile) ? runtimeFile : undefined,
+      session: maybeRedactPathString(params.sessionFile, redaction),
+      runtime: fs.existsSync(runtimeFile)
+        ? maybeRedactPathString(runtimeFile, redaction)
+        : undefined,
     },
   };
 
-  const bundleRuntimeContext = resolveRuntimeContext(runtimeEvents, {
-    systemPrompt: params.systemPrompt,
-    tools: params.tools,
-  });
+  const bundleRuntimeContext = resolveRuntimeContext(runtimeEvents);
   const supplementalFiles: string[] = [];
   const metadataCapture = buildMetadataCapture({
     manifest,
     runtimeEvents,
-    events,
+    events: rawEvents,
   });
   const artifactsCapture = buildArtifactsCapture({
     manifest,
@@ -590,7 +696,10 @@ export function exportTrajectoryBundle(params: BuildTrajectoryBundleParams): {
     runtimeContext: bundleRuntimeContext,
   });
   if (metadataCapture) {
-    writeJsonFile(path.join(params.outputDir, "metadata.json"), metadataCapture);
+    writeJsonFile(
+      path.join(params.outputDir, "metadata.json"),
+      redactLocalPathValues(metadataCapture, redaction),
+    );
     supplementalFiles.push("metadata.json");
   }
   if (artifactsCapture) {
@@ -609,11 +718,14 @@ export function exportTrajectoryBundle(params: BuildTrajectoryBundleParams): {
   writeJsonlFile(path.join(params.outputDir, "events.jsonl"), events);
   writeJsonFile(
     path.join(params.outputDir, "session-branch.json"),
-    sanitizeDiagnosticPayload({
-      header,
-      leafId,
-      entries: branchEntries,
-    }),
+    redactLocalPathValues(
+      sanitizeDiagnosticPayload({
+        header,
+        leafId,
+        entries: branchEntries,
+      }),
+      redaction,
+    ),
   );
   fs.copyFileSync(
     params.sessionFile,

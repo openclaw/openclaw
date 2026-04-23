@@ -30,6 +30,21 @@ type TrajectoryRuntimeRecorder = {
 
 const writers = new Map<string, QueuedFileWriter>();
 
+export function safeTrajectorySessionFileName(sessionId: string): string {
+  const safe = sessionId.replaceAll(/[^A-Za-z0-9_-]/g, "_").slice(0, 120);
+  return /[A-Za-z0-9]/u.test(safe) ? safe : "session";
+}
+
+function resolveContainedPath(baseDir: string, fileName: string): string {
+  const resolvedBase = path.resolve(baseDir);
+  const resolvedFile = path.resolve(resolvedBase, fileName);
+  const relative = path.relative(resolvedBase, resolvedFile);
+  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw new Error("Trajectory file path escaped its configured directory");
+  }
+  return resolvedFile;
+}
+
 export function resolveTrajectoryFilePath(params: {
   env?: NodeJS.ProcessEnv;
   sessionFile?: string;
@@ -38,10 +53,16 @@ export function resolveTrajectoryFilePath(params: {
   const env = params.env ?? process.env;
   const dirOverride = env.OPENCLAW_TRAJECTORY_DIR?.trim();
   if (dirOverride) {
-    return path.join(resolveUserPath(dirOverride), `${params.sessionId}.jsonl`);
+    return resolveContainedPath(
+      resolveUserPath(dirOverride),
+      `${safeTrajectorySessionFileName(params.sessionId)}.jsonl`,
+    );
   }
   if (!params.sessionFile) {
-    return path.join(process.cwd(), `${params.sessionId}.trajectory.jsonl`);
+    return path.join(
+      process.cwd(),
+      `${safeTrajectorySessionFileName(params.sessionId)}.trajectory.jsonl`,
+    );
   }
   return params.sessionFile.endsWith(".jsonl")
     ? `${params.sessionFile.slice(0, -".jsonl".length)}.trajectory.jsonl`

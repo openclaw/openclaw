@@ -274,7 +274,7 @@ describeLive("gateway live trajectory export", () => {
       logLiveStep("runtime-traces", { trajectoryDir, files: trajectoryFiles });
       expect(trajectoryFiles.length).toBeGreaterThan(0);
 
-      const bundleDir = path.join(tempDir, "bundle");
+      const bundleDir = path.join(workspaceDir, ".openclaw", "trajectory-exports", "bundle");
       const beforeExport = new Set(await listDirectoryNames(tempDir));
       const exportRunId = `chat-export-${randomUUID()}`;
       logLiveStep("export:start", { bundleDir, exportRunId });
@@ -282,7 +282,7 @@ describeLive("gateway live trajectory export", () => {
         "chat.send",
         {
           sessionKey,
-          message: `/export-trajectory ${bundleDir}`,
+          message: "/export-trajectory bundle",
           idempotencyKey: exportRunId,
         },
         { timeoutMs: 60_000 },
