@@ -1128,4 +1128,67 @@ describe("resolveGatewayModelSupportsImages", () => {
       }),
     ).resolves.toBe(true);
   });
+
+  test("cross-provider fallback: returns true when another provider declares image support for the same model", async () => {
+    await expect(
+      resolveGatewayModelSupportsImages({
+        model: "qwen3.6-plus",
+        provider: "provider-a",
+        loadGatewayModelCatalog: async () => [
+          {
+            id: "qwen3.6-plus",
+            name: "Qwen 3.6 Plus",
+            provider: "provider-a",
+            input: ["text"],
+          },
+          {
+            id: "qwen3.6-plus",
+            name: "Qwen 3.6 Plus",
+            provider: "provider-b",
+            input: ["text", "image"],
+          },
+        ],
+      }),
+    ).resolves.toBe(true);
+  });
+
+  test("cross-provider fallback: returns true when specified provider has no catalog entry but another does", async () => {
+    await expect(
+      resolveGatewayModelSupportsImages({
+        model: "qwen3.6-plus",
+        provider: "provider-a",
+        loadGatewayModelCatalog: async () => [
+          {
+            id: "qwen3.6-plus",
+            name: "Qwen 3.6 Plus",
+            provider: "provider-b",
+            input: ["text", "image"],
+          },
+        ],
+      }),
+    ).resolves.toBe(true);
+  });
+
+  test("cross-provider fallback: returns false when no provider has image support", async () => {
+    await expect(
+      resolveGatewayModelSupportsImages({
+        model: "qwen3.6-plus",
+        provider: "provider-a",
+        loadGatewayModelCatalog: async () => [
+          {
+            id: "qwen3.6-plus",
+            name: "Qwen 3.6 Plus",
+            provider: "provider-a",
+            input: ["text"],
+          },
+          {
+            id: "qwen3.6-plus",
+            name: "Qwen 3.6 Plus",
+            provider: "provider-b",
+            input: ["text"],
+          },
+        ],
+      }),
+    ).resolves.toBe(false);
+  });
 });

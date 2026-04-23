@@ -1163,6 +1163,14 @@ export async function resolveGatewayModelSupportsImages(params: {
       ) {
         return true;
       }
+      // Cross-provider fallback: in merge mode another provider's catalog
+      // entry for the same model may declare image capability.
+      if (
+        params.provider &&
+        catalog.some((entry) => entry.id === params.model && entry.input?.includes("image"))
+      ) {
+        return true;
+      }
       return false;
     }
     if (
@@ -1174,6 +1182,13 @@ export async function resolveGatewayModelSupportsImages(params: {
           candidate === "haiku" ||
           candidate.startsWith("claude-"),
       )
+    ) {
+      return true;
+    }
+    // Cross-provider fallback for the no-entry path.
+    if (
+      params.provider &&
+      catalog.some((entry) => entry.id === params.model && entry.input?.includes("image"))
     ) {
       return true;
     }
