@@ -179,15 +179,12 @@ export function resolveIncompleteTurnPayloadText(params: {
     return null;
   }
 
-  const stopReason = params.attempt.lastAssistant?.stopReason;
   // If the assistant already delivered user-visible content via a messaging
-  // tool during this turn and ended cleanly (stopReason=stop), do not surface
-  // an incomplete-turn warning. The user has received the reply; a follow-up
-  // "couldn't generate a response" bubble is a false positive. Provider-side
-  // failures (stopReason=error, toolUse interruption) still fall through to
-  // the normal incomplete-turn paths below; tool-error cases are already
-  // handled by the lastToolError early return above.
-  if (params.attempt.didSendViaMessagingTool && stopReason === "stop") {
+  // tool during this turn, suppress any incomplete-turn warning. The user has
+  // received the reply; a follow-up "couldn't generate a response" bubble is
+  // always a false positive regardless of how the turn ended. Tool-error cases
+  // are already handled by the lastToolError early return above.
+  if (params.attempt.didSendViaMessagingTool) {
     return null;
   }
   const incompleteTerminalAssistant = isIncompleteTerminalAssistantTurn({
