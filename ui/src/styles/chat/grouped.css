@@ -23,7 +23,7 @@
   flex-direction: column;
   gap: 2px;
   flex: 1 1 auto;
-  max-width: min(1024px, 100%);
+  max-width: min(1280px, 100%);
   align-items: flex-start;
 }
 
@@ -337,12 +337,12 @@ img.chat-avatar {
   flex-direction: column;
   align-items: flex-start;
   gap: 4px;
-  max-width: 1024px;
+  max-width: 1280px;
 }
 
 .chat-message-images .chat-message-image {
-  max-width: min(1024px, 100%);
-  max-height: 540px;
+  max-width: min(1280px, 100%);
+  max-height: 720px;
   width: auto;
   height: auto;
   object-fit: contain;
@@ -372,8 +372,8 @@ img.chat-avatar {
 }
 
 .chat-message-images .chat-message-image[data-orientation="landscape"] {
-  max-width: 1024px;
-  max-height: 576px;
+  max-width: 1280px;
+  max-height: 720px;
 }
 
 /* Media wrapper for native video tags */
@@ -390,7 +390,7 @@ img.chat-avatar {
   flex-direction: column;
   align-items: center;
   width: auto;
-  max-width: 1024px;
+  max-width: 1280px;
   margin: 8px 0;
 }
 
@@ -399,7 +399,7 @@ img.chat-avatar {
   width: auto;
   max-width: 100%;
   height: auto;
-  max-height: 540px;
+  max-height: 720px;
   border-radius: 6px;
   object-fit: contain;
 }
@@ -416,7 +416,7 @@ img.chat-avatar {
 .video-embed-container {
   position: relative;
   width: 100%;
-  max-width: 1024px;
+  max-width: 1280px;
   margin: 12px 0;
   box-sizing: border-box;
 }
@@ -667,13 +667,13 @@ img.chat-avatar {
 
 .chat-bubble:has(video),
 .chat-bubble:has(.chat-message-video) {
-  max-width: min(1024px, 100%) !important;
+  max-width: min(1280px, 100%) !important;
 }
 
 .chat-bubble:has(video) video,
 .chat-bubble:has(.chat-message-video) video {
   width: 100%;
   height: auto;
-  max-width: 1024px;
+  max-width: 1280px;
   display: block;
 }

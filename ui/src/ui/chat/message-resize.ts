@@ -25,7 +25,7 @@ export function storeMessageSize(messageId: string, size: ResizeState) {
     sizes[messageId] = size;
     storage.setItem(RESIZE_STORAGE_KEY, JSON.stringify(sizes));
   } catch (e) {
-    console.error('Failed to store size:', e); // Add this
+    console.error('Failed to store size:', e);
   }
 }
 
@@ -114,13 +114,14 @@ handleRight.style.border = '1px solid white';
     }
     
     const minWidth = 200;
-    const maxWidth = Math.min(900, window.innerWidth - 100);
+    const maxWidth = 1024;
     const minHeight = 100;
     
     newWidth = Math.min(Math.max(newWidth, minWidth), maxWidth);
     newHeight = Math.max(newHeight, minHeight);
     
     container.style.width = `${newWidth}px`;
+    // Removed: container.style.height = `${newHeight}px`;
     
     if (onResize) {
       onResize(newWidth, newHeight);
@@ -140,10 +141,10 @@ function onMouseUp() {
     container.style.height = 'auto';
     storeMessageSize(messageId, {
       width: newWidth,
-      height: null
+      height: null  // Keep height as null (original behavior)
     });
   } else {
-    console.log('No container.style.width found'); // Add this
+    console.log('No container.style.width found');
   }
   
   if (!container.matches(':hover')) {
