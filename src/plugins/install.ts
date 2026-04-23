@@ -611,10 +611,8 @@ async function detectNativePackageInstallSource(packageDir: string): Promise<boo
 }
 
 /**
- * After npm install completes, symlink any peerDependencies that name the host
- * openclaw package into the plugin's node_modules/ directory.  npm never
- * materialises peerDependencies automatically, so plugins that moved openclaw
- * from dependencies → peerDependencies would fail at runtime without this.
+ * After the staged plugin tree has been scanned, symlink the host openclaw
+ * package for plugins that declare it as a peer dependency.
  */
 async function linkOpenClawPeerDependencies(params: {
   installedDir: string;
@@ -643,31 +641,15 @@ async function linkOpenClawPeerDependencies(params: {
 
   for (const peerName of peers) {
     const linkPath = path.join(nodeModulesDir, peerName);
-    // Resolve the actual source for scoped packages (e.g. @scope/name).
-    const linkTarget = path.join(hostRoot, "node_modules", peerName);
-    // Check whether the package exists at the expected location inside the
-    // host root's node_modules.  If it does not (e.g. openclaw IS the root
-    // package), fall back to the host root itself.
-    let resolvedTarget: string;
-    try {
-      await fs.access(path.join(linkTarget, "package.json"));
-      resolvedTarget = linkTarget;
-    } catch {
-      resolvedTarget = hostRoot;
-    }
 
     try {
       // Remove any existing entry (broken link or stale directory) before
       // creating the new symlink so re-installs are idempotent.
       await fs.rm(linkPath, { recursive: true, force: true });
-      await fs.symlink(resolvedTarget, linkPath, "junction");
-      params.logger.info?.(
-        `Linked peerDependency "${peerName}" → ${resolvedTarget}`,
-      );
+      await fs.symlink(hostRoot, linkPath, "junction");
+      params.logger.info?.(`Linked peerDependency "${peerName}" -> ${hostRoot}`);
     } catch (err) {
-      params.logger.warn?.(
-        `Failed to symlink peerDependency "${peerName}": ${String(err)}`,
-      );
+      params.logger.warn?.(`Failed to symlink peerDependency "${peerName}": ${String(err)}`);
     }
   }
 }
@@ -820,7 +802,7 @@ async function installPluginFromPackageDir(
     mode: targetResult.target.effectiveMode,
     dryRun,
     copyErrorPrefix: "failed to copy plugin",
-    hasDeps: Object.keys(deps).length > 0 || Object.keys(peerDeps).length > 0,
+    hasDeps: Object.keys(deps).length > 0,
     depsLogMessage: "Installing plugin dependencies…",
     nameEncoder: encodePluginInstallDirName,
     afterCopy: async (installedDir) => {

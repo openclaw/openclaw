@@ -3,13 +3,13 @@ import path from "node:path";
 import * as tar from "tar";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { safePathSegmentHashed } from "../infra/install-safe-path.js";
+import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { expectSingleNpmInstallIgnoreScriptsCall } from "../test-utils/exec-assertions.js";
 import { expectInstallUsesIgnoreScripts } from "../test-utils/npm-spec-install-test-helpers.js";
 import { initializeGlobalHookRunner, resetGlobalHookRunner } from "./hook-runner-global.js";
 import { createMockPluginRegistry } from "./hooks.test-helpers.js";
 import * as installSecurityScan from "./install-security-scan.js";
-import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import {
   installPluginFromArchive,
   installPluginFromDir,
@@ -2380,6 +2380,7 @@ describe("linkOpenClawPeerDependencies (via installPluginFromDir)", () => {
   it("creates a node_modules/openclaw symlink when peerDependencies declares openclaw", async () => {
     const { pluginDir, extensionsDir } = setupPluginInstallDirs();
     const fakeHostRoot = suiteTempRootTracker.makeTempDir();
+    const run = vi.mocked(runCommandWithTimeout);
     resolveRootMock.mockReturnValue(fakeHostRoot);
 
     writePluginWithPeerDeps(pluginDir, { openclaw: "*" });
@@ -2395,6 +2396,7 @@ describe("linkOpenClawPeerDependencies (via installPluginFromDir)", () => {
     const stat = fs.lstatSync(symlinkPath);
     expect(stat.isSymbolicLink()).toBe(true);
     expect(fs.realpathSync(symlinkPath)).toBe(fs.realpathSync(fakeHostRoot));
+    expect(run).not.toHaveBeenCalled();
   });
 
   it("does not create a symlink when peerDependencies is empty", async () => {
@@ -2415,7 +2417,7 @@ describe("linkOpenClawPeerDependencies (via installPluginFromDir)", () => {
     expect(fs.existsSync(symlinkPath)).toBe(false);
   });
 
-  it("is idempotent — re-installing replaces an existing symlink without error", async () => {
+  it("is idempotent - re-installing replaces an existing symlink without error", async () => {
     const { pluginDir, extensionsDir } = setupPluginInstallDirs();
     const fakeHostRoot = suiteTempRootTracker.makeTempDir();
     resolveRootMock.mockReturnValue(fakeHostRoot);
@@ -2426,7 +2428,7 @@ describe("linkOpenClawPeerDependencies (via installPluginFromDir)", () => {
     const { result: first } = await installFromDirWithWarnings({ pluginDir, extensionsDir });
     expect(first.ok).toBe(true);
 
-    // Second install (update mode) — should replace symlink, not throw
+    // Second install (update mode) should replace symlink, not throw.
     const { result: second, warnings } = await installFromDirWithWarnings({
       pluginDir,
       extensionsDir,
