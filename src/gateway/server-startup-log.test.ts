@@ -72,31 +72,4 @@ describe("gateway startup log", () => {
       .filter((message) => message.startsWith("ready ("));
     expect(readyMessages).toEqual(["ready (3 plugins: alpha, beta, delta; 16.0s)"]);
   });
-
-  it("logs NVIDIA startup model refs using the resolved provider and model", () => {
-    const info = vi.fn();
-    const warn = vi.fn();
-
-    logGatewayStartup({
-      cfg: {
-        agents: {
-          defaults: {
-            model: { primary: "nvidia/nvidia/nemotron-3-super-120b-a12b" },
-          },
-        },
-      },
-      bindHost: "127.0.0.1",
-      loadedPluginIds: [],
-      port: 18789,
-      log: { info, warn },
-      isNixMode: false,
-    });
-
-    expect(info).toHaveBeenCalledWith(
-      "agent model: nvidia/nvidia/nemotron-3-super-120b-a12b",
-      expect.objectContaining({
-        consoleMessage: expect.stringContaining("nvidia/nvidia/nemotron-3-super-120b-a12b"),
-      }),
-    );
-  });
 });

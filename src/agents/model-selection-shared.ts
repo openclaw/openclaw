@@ -181,13 +181,6 @@ export function parseModelRefWithCompatAlias(params: {
   defaultProvider: string;
   allowPluginNormalization?: boolean;
 }): ModelRef | null {
-  const trimmed = params.raw.trim();
-  if (normalizeLowercaseStringOrEmpty(trimmed).startsWith("nvidia/nvidia/")) {
-    return {
-      provider: "nvidia",
-      model: trimmed.slice("nvidia/".length).trim(),
-    };
-  }
   return (
     resolveConfiguredOpenRouterCompatAlias(params) ??
     parseModelRef(params.raw, params.defaultProvider, {
