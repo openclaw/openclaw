@@ -10,7 +10,9 @@ import {
 
 type ProviderAuth = ProviderUsageAuth<typeof loadProviderUsageSummary>;
 const googleGeminiCliProvider = "google-gemini-cli" as unknown as ProviderAuth["provider"];
-const resolveProviderUsageSnapshotWithPluginMock = vi.fn(async () => null);
+const resolveProviderUsageSnapshotWithPluginMock = vi.fn(
+  async (..._args: any[]): Promise<any> => null,
+);
 
 vi.mock("../config/config.js", () => ({
   loadConfig: () => ({}),

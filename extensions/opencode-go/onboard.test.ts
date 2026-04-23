@@ -9,7 +9,7 @@ import {
 } from "../../test/helpers/plugins/onboard-config.js";
 import { applyOpencodeGoConfig, applyOpencodeGoProviderConfig } from "./onboard.js";
 
-const MODEL_REF = "opencode-go/kimi-k2.5";
+const MODEL_REF = "opencode-go/kimi-k2.6";
 
 describe("opencode-go onboard", () => {
   it("adds allowlist entry and preserves alias", () => {

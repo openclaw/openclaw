@@ -4,10 +4,10 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-onboard";
 
-export const OPENCODE_GO_DEFAULT_MODEL_REF = "opencode-go/kimi-k2.5";
+export const OPENCODE_GO_DEFAULT_MODEL_REF = "opencode-go/kimi-k2.6";
 
 const OPENCODE_GO_ALIAS_DEFAULTS: Record<string, string> = {
-  "opencode-go/kimi-k2.5": "Kimi",
+  "opencode-go/kimi-k2.6": "Kimi",
   "opencode-go/glm-5": "GLM",
   "opencode-go/minimax-m2.5": "MiniMax",
 };

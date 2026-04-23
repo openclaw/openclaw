@@ -1,14 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createProviderUsageFetch } from "../test-utils/provider-usage-fetch.js";
 import {
   formatUsageReportLines,
   formatUsageSummaryLine,
   loadProviderUsageSummary,
   type UsageSummary,
 } from "./provider-usage.js";
-import { createProviderUsageFetch } from "../test-utils/provider-usage-fetch.js";
 import { loadUsageWithAuth } from "./provider-usage.test-support.js";
 
-const resolveProviderUsageSnapshotWithPluginMock = vi.fn(async () => null);
+const resolveProviderUsageSnapshotWithPluginMock = vi.fn(
+  async (..._args: any[]): Promise<any> => null,
+);
 
 vi.mock("../config/config.js", () => ({
   loadConfig: () => ({}),

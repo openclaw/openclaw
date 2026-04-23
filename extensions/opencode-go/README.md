@@ -25,13 +25,13 @@ Get your API key at: https://opencode.ai/auth
 
 ## Default Model
 
-- `opencode-go/kimi-k2.5` (aliased as "Kimi")
+- `opencode-go/kimi-k2.6` (aliased as "Kimi")
 
 ## Model Aliases
 
 The Go provider registers friendly aliases for coding models:
 
-- `Kimi` → `opencode-go/kimi-k2.5`
+- `Kimi` → `opencode-go/kimi-k2.6`
 - `GLM` → `opencode-go/glm-5`
 - `MiniMax` → `opencode-go/minimax-m2.5`
 
