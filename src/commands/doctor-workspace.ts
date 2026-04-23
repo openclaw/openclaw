@@ -13,12 +13,13 @@ export const MEMORY_SYSTEM_PROMPT = [
 ].join("\n");
 
 export async function shouldSuggestMemorySystem(workspaceDir: string): Promise<boolean> {
-  const memoryPaths = [path.join(workspaceDir, "MEMORY.md"), path.join(workspaceDir, "memory.md")];
-
-  for (const memoryPath of memoryPaths) {
+  const entries = await listWorkspaceEntries(workspaceDir);
+  if (entries.has("MEMORY.md")) {
     try {
-      await fs.promises.access(memoryPath);
-      return false;
+      const stat = await fs.promises.stat(path.join(workspaceDir, "MEMORY.md"));
+      if (stat.isFile()) {
+        return false;
+      }
     } catch {
       // keep scanning
     }
@@ -27,7 +28,7 @@ export async function shouldSuggestMemorySystem(workspaceDir: string): Promise<b
   const agentsPath = path.join(workspaceDir, DEFAULT_AGENTS_FILENAME);
   try {
     const content = await fs.promises.readFile(agentsPath, "utf-8");
-    if (/memory\.md/i.test(content)) {
+    if (/\bMEMORY\.md\b/.test(content)) {
       return false;
     }
   } catch {
@@ -136,17 +137,9 @@ export function formatRootMemoryFilesWarning(detection: RootMemoryFilesDetection
       "Split root durable memory files detected:",
       `- canonical: ${shortenHomePath(detection.canonicalPath)} (${formatBytes(detection.canonicalBytes)})`,
       `- legacy: ${shortenHomePath(detection.legacyPath)} (${formatBytes(detection.legacyBytes)})`,
-      "OpenClaw reads MEMORY.md first and only falls back to memory.md when MEMORY.md is absent.",
-      "Dreaming writes durable promotions to MEMORY.md, so older facts in memory.md can be silently shadowed.",
+      "OpenClaw uses MEMORY.md as the canonical durable memory file.",
+      "Dreaming writes durable promotions to MEMORY.md, so older facts in memory.md can be shadowed.",
       'Run "openclaw doctor --fix" to merge the legacy file into MEMORY.md with a backup.',
-    ].join("\n");
-  }
-  if (!detection.canonicalExists && detection.legacyExists) {
-    return [
-      "Legacy root durable memory file detected:",
-      `- ${shortenHomePath(detection.legacyPath)} (${formatBytes(detection.legacyBytes)})`,
-      "OpenClaw now uses MEMORY.md as the canonical durable memory file.",
-      'Run "openclaw doctor --fix" to migrate the legacy file.',
     ].join("\n");
   }
   return null;
@@ -210,7 +203,7 @@ export async function migrateLegacyRootMemoryFile(
   workspaceDir: string,
 ): Promise<RootMemoryMigrationResult> {
   const detection = await detectRootMemoryFiles(workspaceDir);
-  if (!detection.legacyExists) {
+  if (!detection.canonicalExists || !detection.legacyExists) {
     return {
       changed: false,
       canonicalPath: detection.canonicalPath,
@@ -219,49 +212,28 @@ export async function migrateLegacyRootMemoryFile(
       mergedLegacy: false,
     };
   }
-  if (detection.canonicalExists) {
-    const archivedLegacyPath = await moveLegacyRootMemoryFileToArchive({
-      workspaceDir: detection.workspaceDir,
-      legacyPath: detection.legacyPath,
-    });
-    const [canonicalText, legacyText] = await Promise.all([
-      fs.promises.readFile(detection.canonicalPath, "utf-8"),
-      fs.promises.readFile(archivedLegacyPath, "utf-8"),
-    ]);
-    if (canonicalText !== legacyText) {
-      const merged = `${canonicalText.trimEnd()}\n${buildMergedLegacyRootMemorySection({
-        legacyText,
-        archivedLegacyPath: shortenHomePath(archivedLegacyPath),
-      })}`;
-      await fs.promises.writeFile(detection.canonicalPath, merged, "utf-8");
-    }
-    return {
-      changed: true,
-      canonicalPath: detection.canonicalPath,
-      legacyPath: detection.legacyPath,
-      removedLegacy: true,
-      mergedLegacy: canonicalText !== legacyText,
-      archivedLegacyPath,
-      ...(typeof detection.legacyBytes === "number" ? { copiedBytes: detection.legacyBytes } : {}),
-    };
-  }
-  const tempPath = path.join(
-    detection.workspaceDir,
-    `.openclaw-memory-migrate-${process.pid}-${Date.now()}.tmp`,
-  );
-  await fs.promises.rename(detection.legacyPath, tempPath);
-  try {
-    await fs.promises.rename(tempPath, detection.canonicalPath);
-  } catch (err) {
-    await fs.promises.rename(tempPath, detection.legacyPath).catch(() => undefined);
-    throw err;
+  const archivedLegacyPath = await moveLegacyRootMemoryFileToArchive({
+    workspaceDir: detection.workspaceDir,
+    legacyPath: detection.legacyPath,
+  });
+  const [canonicalText, legacyText] = await Promise.all([
+    fs.promises.readFile(detection.canonicalPath, "utf-8"),
+    fs.promises.readFile(archivedLegacyPath, "utf-8"),
+  ]);
+  if (canonicalText !== legacyText) {
+    const merged = `${canonicalText.trimEnd()}\n${buildMergedLegacyRootMemorySection({
+      legacyText,
+      archivedLegacyPath: shortenHomePath(archivedLegacyPath),
+    })}`;
+    await fs.promises.writeFile(detection.canonicalPath, merged, "utf-8");
   }
   return {
     changed: true,
     canonicalPath: detection.canonicalPath,
     legacyPath: detection.legacyPath,
     removedLegacy: true,
-    mergedLegacy: false,
+    mergedLegacy: canonicalText !== legacyText,
+    archivedLegacyPath,
     ...(typeof detection.legacyBytes === "number" ? { copiedBytes: detection.legacyBytes } : {}),
   };
 }

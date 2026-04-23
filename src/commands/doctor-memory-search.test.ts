@@ -562,7 +562,7 @@ describe("noteMemorySearchHealth", () => {
     expect(message).toContain("OPENAI_API_KEY");
   });
 
-  it("warns when only legacy memory.md exists", async () => {
+  it("does not warn when only lowercase memory.md exists", async () => {
     resolveAgentWorkspaceDir.mockReturnValue("/tmp/agent-default/workspace");
     resolveMemorySearchConfig.mockReturnValue({
       provider: "auto",
@@ -581,9 +581,7 @@ describe("noteMemorySearchHealth", () => {
     await noteMemorySearchHealth(cfg);
 
     const workspaceNote = note.mock.calls.find(([, title]) => title === "Workspace memory");
-    expect(workspaceNote).toBeDefined();
-    expect(String(workspaceNote?.[0] ?? "")).toContain("Legacy root durable memory file detected");
-    expect(String(workspaceNote?.[0] ?? "")).toContain("doctor --fix");
+    expect(workspaceNote).toBeUndefined();
   });
 });
 
@@ -735,7 +733,7 @@ describe("memory recall doctor integration", () => {
     expect(message).toContain("archived session-ingestion state");
   });
 
-  it("migrates lowercase-only root memory during doctor --fix", async () => {
+  it("does not migrate lowercase-only root memory during doctor --fix", async () => {
     resolveAgentWorkspaceDir.mockReturnValue("/tmp/agent-default/workspace");
     detectRootMemoryFiles.mockResolvedValueOnce({
       workspaceDir: "/tmp/agent-default/workspace",
@@ -745,26 +743,12 @@ describe("memory recall doctor integration", () => {
       legacyExists: true,
       legacyBytes: 24,
     });
-    migrateLegacyRootMemoryFile.mockResolvedValueOnce({
-      changed: true,
-      canonicalPath: "/tmp/agent-default/workspace/MEMORY.md",
-      legacyPath: "/tmp/agent-default/workspace/memory.md",
-      removedLegacy: true,
-      mergedLegacy: false,
-      copiedBytes: 24,
-    });
     const prompter = createPrompter();
 
     await maybeRepairMemoryRecallHealth({ cfg, prompter });
 
-    expect(prompter.confirmRuntimeRepair).toHaveBeenCalledWith({
-      message: "Migrate legacy root memory.md to canonical MEMORY.md?",
-      initialValue: true,
-    });
-    expect(migrateLegacyRootMemoryFile).toHaveBeenCalledWith("/tmp/agent-default/workspace");
-    const message = String(note.mock.calls[0]?.[0] ?? "");
-    expect(message).toContain("Workspace memory root migrated:");
-    expect(message).toContain("removed legacy file");
+    expect(migrateLegacyRootMemoryFile).not.toHaveBeenCalled();
+    expect(note).not.toHaveBeenCalled();
   });
 
   it("merges split-brain root memory during doctor --fix", async () => {

@@ -77,7 +77,7 @@ export function isMemoryPath(relPath: string): boolean {
   if (!normalized) {
     return false;
   }
-  if (normalized === "MEMORY.md" || normalized === "memory.md" || normalized === "DREAMS.md") {
+  if (normalized === "MEMORY.md" || normalized === "DREAMS.md") {
     return true;
   }
   return normalized.startsWith("memory/");
@@ -124,14 +124,24 @@ async function walkDir(
   }
 }
 
+async function resolveCanonicalMemoryRootFile(workspaceDir: string): Promise<string | null> {
+  try {
+    const entries = await fs.readdir(workspaceDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.name === "MEMORY.md" && entry.isFile() && !entry.isSymbolicLink()) {
+        return path.join(workspaceDir, entry.name);
+      }
+    }
+  } catch {}
+  return null;
+}
+
 export async function listMemoryFiles(
   workspaceDir: string,
   extraPaths?: string[],
   multimodal?: MemoryMultimodalSettings,
 ): Promise<string[]> {
   const result: string[] = [];
-  const memoryFile = path.join(workspaceDir, "MEMORY.md");
-  const altMemoryFile = path.join(workspaceDir, "memory.md");
   const memoryDir = path.join(workspaceDir, "memory");
 
   const shouldSkipWorkspaceMemoryPath = (absPath: string): boolean => {
@@ -143,7 +153,7 @@ export async function listMemoryFiles(
     if (!normalized) {
       return false;
     }
-    if (normalized === "memory.md" && result.includes(memoryFile)) {
+    if (normalized === "memory.md") {
       return true;
     }
     return (
@@ -165,9 +175,9 @@ export async function listMemoryFiles(
     } catch {}
   };
 
-  await addMarkdownFile(memoryFile);
-  if (!result.includes(memoryFile)) {
-    await addMarkdownFile(altMemoryFile);
+  const memoryFile = await resolveCanonicalMemoryRootFile(workspaceDir);
+  if (memoryFile) {
+    await addMarkdownFile(memoryFile);
   }
   try {
     const dirStat = await fs.lstat(memoryDir);

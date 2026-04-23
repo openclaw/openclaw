@@ -89,6 +89,15 @@ describe("listMemoryFiles", () => {
     expect(files.some((file) => file.endsWith("standalone.md"))).toBe(true);
   });
 
+  it("ignores lowercase root memory.md when canonical MEMORY.md is absent", async () => {
+    const tmpDir = getTmpDir();
+    await fs.writeFile(path.join(tmpDir, "memory.md"), "# Legacy memory");
+
+    const files = await listMemoryFiles(tmpDir, [path.join(tmpDir, "memory.md")]);
+
+    expect(files).toEqual([]);
+  });
+
   it("prefers canonical MEMORY.md over legacy root memory.md even through extra paths", async () => {
     const tmpDir = getTmpDir();
     const canonicalPath = path.join(tmpDir, "MEMORY.md");
@@ -105,8 +114,17 @@ describe("listMemoryFiles", () => {
       }
       return actualLstat(target);
     });
-    const readdirSpy = vi.spyOn(fs, "readdir").mockImplementation(async (target, options) => {
-      if (target === tmpDir && typeof options === "object" && options?.withFileTypes) {
+    const readdirSpy = vi.spyOn(fs, "readdir").mockImplementation((async (
+      target: unknown,
+      options: unknown,
+    ) => {
+      if (
+        target === tmpDir &&
+        typeof options === "object" &&
+        options !== null &&
+        "withFileTypes" in options &&
+        options.withFileTypes
+      ) {
         return [
           {
             name: "MEMORY.md",
@@ -120,10 +138,10 @@ describe("listMemoryFiles", () => {
             isDirectory: () => false,
             isFile: () => true,
           },
-        ] as Awaited<ReturnType<typeof fs.readdir>>;
+        ] as unknown as Awaited<ReturnType<typeof fs.readdir>>;
       }
-      return actualReaddir(target, options as never);
-    });
+      return actualReaddir(target as never, options as never);
+    }) as never);
 
     try {
       const files = await listMemoryFiles(tmpDir, [legacyPath, path.join(tmpDir, ".")]);

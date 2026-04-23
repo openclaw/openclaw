@@ -233,20 +233,17 @@ export async function maybeRepairMemoryRecallHealth(params: {
     const agentId = resolveDefaultAgentId(params.cfg);
     const configuredWorkspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId);
     const rootMemoryFiles = await detectRootMemoryFiles(configuredWorkspaceDir);
-    if (rootMemoryFiles.legacyExists) {
+    if (rootMemoryFiles.canonicalExists && rootMemoryFiles.legacyExists) {
       const approvedLegacyMigration = await params.prompter.confirmRuntimeRepair({
-        message: rootMemoryFiles.canonicalExists
-          ? "Merge legacy root memory.md into canonical MEMORY.md and remove the shadowed file?"
-          : "Migrate legacy root memory.md to canonical MEMORY.md?",
+        message:
+          "Merge legacy root memory.md into canonical MEMORY.md and remove the shadowed file?",
         initialValue: true,
       });
       if (approvedLegacyMigration) {
         const migration = await migrateLegacyRootMemoryFile(configuredWorkspaceDir);
         if (migration.changed) {
           const lines = [
-            migration.mergedLegacy
-              ? "Workspace memory root merged:"
-              : "Workspace memory root migrated:",
+            "Workspace memory root merged:",
             `- canonical: ${migration.canonicalPath}`,
             migration.archivedLegacyPath ? `- backup: ${migration.archivedLegacyPath}` : null,
             migration.mergedLegacy ? `- merged legacy content from: ${migration.legacyPath}` : null,
@@ -258,7 +255,11 @@ export async function maybeRepairMemoryRecallHealth(params: {
         }
       }
     }
+  } catch (err) {
+    note(`Workspace memory repair could not be completed: ${formatErrorMessage(err)}`, "Doctor");
+  }
 
+  try {
     const context = await resolveRuntimeMemoryAuditContext(params.cfg);
     const workspaceDir = context?.workspaceDir?.trim();
     if (!workspaceDir) {
