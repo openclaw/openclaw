@@ -71,7 +71,17 @@ function sanitizeContextFileContentForPrompt(content: string): string {
   // Claude Code subscription mode rejects this exact prompt-policy quote when it
   // appears in system context. The live heartbeat user turn still carries the
   // actual instruction, and the generated heartbeat section below covers behavior.
-  return content.replaceAll(DEFAULT_HEARTBEAT_PROMPT_CONTEXT_BLOCK, "").replace(/\n{3,}/g, "\n\n");
+  let result = content.replaceAll(DEFAULT_HEARTBEAT_PROMPT_CONTEXT_BLOCK, "");
+
+  // Remove deprecated/struck-through text entirely — strikethrough in bootstrap
+  // files signals content that has been removed, so it must not be forwarded to
+  // the model (it wastes tokens and can confuse the model with stale instructions).
+  result = result.replace(/~~[\s\S]+?~~/g, "");
+  result = result.replace(/<s>[\s\S]+?<\/s>/gi, "");
+  result = result.replace(/<del>[\s\S]+?<\/del>/gi, "");
+  result = result.replace(/<strike>[\s\S]+?<\/strike>/gi, "");
+
+  return result.replace(/\n{3,}/g, "\n\n");
 }
 
 function sortContextFilesForPrompt(contextFiles: EmbeddedContextFile[]): EmbeddedContextFile[] {

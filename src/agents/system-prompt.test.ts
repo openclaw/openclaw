@@ -628,6 +628,44 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("# Project Context");
   });
 
+  it("strips markdown and HTML strikethrough from context file content", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      contextFiles: [
+        {
+          path: "AGENTS.md",
+          content:
+            "Active instruction\n~~deprecated inline~~\nKeep this\n<s>old html strike</s>\n<del>removed del</del>\n<strike>removed strike tag</strike>",
+        },
+      ],
+    });
+
+    expect(prompt).toContain("Active instruction");
+    expect(prompt).toContain("Keep this");
+    expect(prompt).not.toContain("~~");
+    expect(prompt).not.toContain("deprecated inline");
+    expect(prompt).not.toContain("old html strike");
+    expect(prompt).not.toContain("removed del");
+    expect(prompt).not.toContain("removed strike tag");
+  });
+
+  it("strips multiline markdown strikethrough from context file content", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      contextFiles: [
+        {
+          path: "SOUL.md",
+          content: "Keep this\n~~\nMulti\nLine\nDeprecated\n~~\nAnd this",
+        },
+      ],
+    });
+
+    expect(prompt).toContain("Keep this");
+    expect(prompt).toContain("And this");
+    expect(prompt).not.toContain("Multi");
+    expect(prompt).not.toContain("Deprecated");
+  });
+
   it("summarizes the message tool when available", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
