@@ -94,11 +94,14 @@ function isBtwCommand(text: string) {
 }
 
 export async function handleAbortChat(host: ChatHost) {
-  if (!host.connected) {
-    return;
-  }
   host.chatMessage = "";
-  await abortChatRun(host as unknown as ChatState);
+  if (host.connected) {
+    await abortChatRun(host as unknown as ChatState);
+  } else if (host.chatRunId) {
+    host.chatRunId = null;
+    (host as unknown as { chatStream: string | null }).chatStream = null;
+    host.lastError = "Aborted (gateway offline)";
+  }
 }
 
 function enqueueChatMessage(
