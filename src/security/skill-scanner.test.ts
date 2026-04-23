@@ -241,6 +241,17 @@ const options: ExecOptions = { timeout: 5000 };
     expect(findings.some((f) => f.ruleId === "dangerous-exec")).toBe(false);
   });
 
+  it("does not flag argv-only self-reexec as shell command execution", () => {
+    const source = `
+import { spawn } from "node:child_process";
+const child = spawn(process.execPath, [distEntryPath, ...args], {
+  stdio: ["pipe", "pipe", "pipe"],
+});
+`;
+    const findings = scanSource(source, "plugin.ts");
+    expect(findings.some((f) => f.ruleId === "dangerous-exec")).toBe(false);
+  });
+
   it("returns empty array for clean plugin code", () => {
     const source = `
 export function greet(name: string): string {
