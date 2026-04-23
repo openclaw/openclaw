@@ -117,8 +117,9 @@ export async function writeDailyDreamingPhaseBlock(params: {
             startMarker: markers.start,
             endMarker: markers.end,
           });
-    if (updated !== original) {
-      await fs.writeFile(inlinePath, updated, "utf-8");
+    const finalContent = inlineBody.length > 0 ? withTrailingNewline(updated) : updated;
+    if (finalContent !== original) {
+      await fs.writeFile(inlinePath, finalContent, "utf-8");
     }
   }
 

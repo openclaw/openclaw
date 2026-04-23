@@ -29,6 +29,7 @@ describe("dreaming markdown storage", () => {
     const content = await fs.readFile(result.inlinePath!, "utf-8");
     expect(content).toContain("## Light Sleep");
     expect(content).toContain("- Candidate: remember the API key is fake");
+    expect(content.endsWith("\n")).toBe(true);
   });
 
   it("keeps multiple inline phases in the shared daily memory file", async () => {
