@@ -9,6 +9,16 @@ const PROBE_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAALUlEQVR4nO3OIQEAAAwCMPrnod8fAzMxv7S9pQgICAgICAgICAgICAgICKwDD+yWbLXSniMNAAAAAElFTkSuQmCC";
 
 const KNOWN_EMPTY_EXTRA_PROBE_MODELS = new Set(["openrouter/amazon/nova-2-lite-v1"]);
+const KNOWN_EMPTY_FILE_PROBE_MODELS = new Set(["opencode-go/glm-5", "opencode-go/glm-5.1"]);
+const KNOWN_EMPTY_IMAGE_PROBE_MODELS = new Set([
+  "fireworks/accounts/fireworks/models/kimi-k2p6",
+  "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
+  "opencode-go/kimi-k2.6",
+]);
+
+function modelKey(model: Pick<Model<Api>, "id" | "provider">): string {
+  return `${model.provider}/${model.id}`;
+}
 
 export function isLiveModelProbeEnabled(
   env: Record<string, string | undefined>,
@@ -36,7 +46,15 @@ export function modelSupportsImageInput(model: Pick<Model<Api>, "input">): boole
 export function shouldSkipLiveModelExtraProbes(
   model: Pick<Model<Api>, "id" | "provider">,
 ): boolean {
-  return KNOWN_EMPTY_EXTRA_PROBE_MODELS.has(`${model.provider}/${model.id}`);
+  return KNOWN_EMPTY_EXTRA_PROBE_MODELS.has(modelKey(model));
+}
+
+export function shouldSkipLiveModelFileProbe(model: Pick<Model<Api>, "id" | "provider">): boolean {
+  return KNOWN_EMPTY_FILE_PROBE_MODELS.has(modelKey(model));
+}
+
+export function shouldSkipLiveModelImageProbe(model: Pick<Model<Api>, "id" | "provider">): boolean {
+  return KNOWN_EMPTY_IMAGE_PROBE_MODELS.has(modelKey(model));
 }
 
 export function buildLiveModelFileProbeContext(params: { systemPrompt?: string }): Context {

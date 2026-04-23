@@ -10,6 +10,8 @@ import {
   LIVE_MODEL_FILE_PROBE_TOKEN,
   modelSupportsImageInput,
   shouldSkipLiveModelExtraProbes,
+  shouldSkipLiveModelFileProbe,
+  shouldSkipLiveModelImageProbe,
 } from "./live-model-turn-probes.js";
 
 describe("live model turn probes", () => {
@@ -82,6 +84,21 @@ describe("live model turn probes", () => {
         id: "amazon/nova-lite-v1",
       }),
     ).toBe(false);
+  });
+
+  it("skips known stale file probe routes", () => {
+    expect(shouldSkipLiveModelFileProbe({ provider: "opencode-go", id: "glm-5" })).toBe(true);
+    expect(shouldSkipLiveModelFileProbe({ provider: "opencode-go", id: "kimi-k2.5" })).toBe(false);
+  });
+
+  it("skips known stale image probe routes", () => {
+    expect(
+      shouldSkipLiveModelImageProbe({
+        provider: "fireworks",
+        id: "accounts/fireworks/models/kimi-k2p6",
+      }),
+    ).toBe(true);
+    expect(shouldSkipLiveModelImageProbe({ provider: "fireworks", id: "glm-5" })).toBe(false);
   });
 
   it("matches expected probe replies", () => {

@@ -29,6 +29,8 @@ import {
   LIVE_MODEL_IMAGE_PROBE_ENV,
   modelSupportsImageInput,
   shouldSkipLiveModelExtraProbes,
+  shouldSkipLiveModelFileProbe,
+  shouldSkipLiveModelImageProbe,
 } from "./live-model-turn-probes.js";
 import { createLiveTargetMatcher } from "./live-target-matcher.js";
 import { isLiveProfileKeyModeEnabled, isLiveTestEnabled } from "./live-test-helpers.js";
@@ -463,7 +465,7 @@ async function runExtraTurnProbes(params: {
     reasoning: resolveTestReasoning(params.model),
     maxTokens: 128,
   };
-  if (LIVE_FILE_PROBE_ENABLED) {
+  if (LIVE_FILE_PROBE_ENABLED && !shouldSkipLiveModelFileProbe(params.model)) {
     logProgress(`${params.progressLabel}: file-read probe`);
     const file = await completeSimpleWithTimeout(
       params.model,
@@ -497,6 +499,8 @@ async function runExtraTurnProbes(params: {
     if (!fileProbeTextMatches(fileText)) {
       throw new Error(`file-read probe did not return ${LIVE_MODEL_FILE_PROBE_TOKEN}: ${fileText}`);
     }
+  } else if (LIVE_FILE_PROBE_ENABLED) {
+    logProgress(`${params.progressLabel}: file-read probe skipped (known empty route)`);
   }
 
   if (!LIVE_IMAGE_PROBE_ENABLED) {
@@ -504,6 +508,10 @@ async function runExtraTurnProbes(params: {
   }
   if (!modelSupportsImageInput(params.model)) {
     logProgress(`${params.progressLabel}: image probe skipped (no image input)`);
+    return;
+  }
+  if (shouldSkipLiveModelImageProbe(params.model)) {
+    logProgress(`${params.progressLabel}: image probe skipped (known empty route)`);
     return;
   }
 
