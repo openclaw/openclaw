@@ -44,50 +44,9 @@ Created automatically on first use:
 |---------|-----------|-------------|--------|-------|
 ```
 
----
-
 ## Templates
 
-### Full Template (multi-day projects)
-
-```markdown
-# {Project Name}
-> Last updated: {Date}
-
-## 🎯 Core Goal
-[One sentence]
-
-## 📍 Current State
-[What just happened]
-
-## 📋 Todo
-- [x] Done
-- [ ] Next thing
-
-## 🔑 Key Context / Decisions
-- Decision: why
-- Constraint: explicit requirement
-- Link: relevant URL/path
-
-## 🛑 Blocked / Open Questions
-[What's paused or needs clarification]
-```
-
-### Light Template (single tasks)
-
-```markdown
-# {Project Name}
-> Last updated: {Date}
-
-## 📍 Current State
-[One sentence]
-
-## 🔑 Decision (if any)
-[Why you chose this approach]
-
-## 📋 Next Step
-- [ ] What comes next
-```
+For STATUS.md templates (Full and Light variants), see `references/templates.md`.
 
 ---
 
@@ -125,9 +84,11 @@ If project not found in index → search `projects/` directory for folder name m
 - ❌ Thinking through options without deciding
 - ❌ Trying different approaches but reverting to original
 
-### Concurrent Safety
+### Write Safety
 
-Before writing STATUS.md: **read the file first**, then merge changes, then write. Prevents overwrites from multiple concurrent sessions.
+Before writing STATUS.md: **read the file first**, then merge changes, then write. This reduces accidental overwrites within a session when the file was modified out-of-band.
+
+> **Note**: True concurrent access from multiple parallel sessions requires file locking or atomic operations at the OS level. This pattern handles single-session safety only.
 
 ---
 
