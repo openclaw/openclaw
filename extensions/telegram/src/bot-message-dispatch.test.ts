@@ -322,6 +322,17 @@ describe("dispatchTelegramMessage draft streaming", () => {
     };
   }
 
+  function observeDeliveredReply(text: string): Promise<void> {
+    return new Promise((resolve) => {
+      deliverReplies.mockImplementation(async (params: { replies?: Array<{ text?: string }> }) => {
+        if (params.replies?.some((reply) => reply.text === text)) {
+          resolve();
+        }
+        return { delivered: true };
+      });
+    });
+  }
+
   function createBot(): Bot {
     return {
       api: {
@@ -2900,7 +2911,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
         await dispatcherOptions.deliver({ text: "⚙️ Agent was aborted." }, { kind: "final" });
         return { queuedFinal: true };
       });
-    deliverReplies.mockResolvedValue({ delivered: true });
+    const abortReplyDelivered = observeDeliveredReply("⚙️ Agent was aborted.");
     editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "1001" });
 
     const firstPromise = dispatchWithContext({
@@ -2927,13 +2938,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       }),
     });
 
-    await vi.waitFor(() => {
-      expect(deliverReplies).toHaveBeenCalledWith(
-        expect.objectContaining({
-          replies: [{ text: "⚙️ Agent was aborted." }],
-        }),
-      );
-    });
+    await abortReplyDelivered;
 
     releaseFirstFinal();
     await Promise.all([firstPromise, abortPromise]);
@@ -2985,7 +2990,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
         await dispatcherOptions.deliver({ text: "⚙️ Agent was aborted." }, { kind: "final" });
         return { queuedFinal: true };
       });
-    deliverReplies.mockResolvedValue({ delivered: true });
+    const abortReplyDelivered = observeDeliveredReply("⚙️ Agent was aborted.");
 
     const firstPromise = dispatchWithContext({
       context: createContext({
@@ -3011,13 +3016,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       }),
     });
 
-    await vi.waitFor(() => {
-      expect(deliverReplies).toHaveBeenCalledWith(
-        expect.objectContaining({
-          replies: [{ text: "⚙️ Agent was aborted." }],
-        }),
-      );
-    });
+    await abortReplyDelivered;
 
     releaseFirstCleanup();
     await Promise.all([firstPromise, abortPromise]);
@@ -3051,7 +3050,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
         return { queuedFinal: true };
       },
     );
-    deliverReplies.mockResolvedValue({ delivered: true });
+    const abortReplyDelivered = observeDeliveredReply("⚙️ Agent was aborted.");
 
     const firstPromise = dispatchWithContext({
       context: createContext({
@@ -3082,13 +3081,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       }),
     });
 
-    await vi.waitFor(() => {
-      expect(deliverReplies).toHaveBeenCalledWith(
-        expect.objectContaining({
-          replies: [{ text: "⚙️ Agent was aborted." }],
-        }),
-      );
-    });
+    await abortReplyDelivered;
 
     releaseCatalogLoad();
     await Promise.all([firstPromise, abortPromise]);
@@ -3160,7 +3153,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
         await dispatcherOptions.deliver({ text: "⚙️ Agent was aborted." }, { kind: "final" });
         return { queuedFinal: true };
       });
-    deliverReplies.mockResolvedValue({ delivered: true });
+    const abortReplyDelivered = observeDeliveredReply("⚙️ Agent was aborted.");
     editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "1001" });
 
     const firstPromise = dispatchWithContext({
@@ -3188,13 +3181,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       }),
     });
 
-    await vi.waitFor(() => {
-      expect(deliverReplies).toHaveBeenCalledWith(
-        expect.objectContaining({
-          replies: [{ text: "⚙️ Agent was aborted." }],
-        }),
-      );
-    });
+    await abortReplyDelivered;
 
     releaseFirstFinal();
     await Promise.all([firstPromise, abortPromise]);
@@ -3246,7 +3233,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
         await dispatcherOptions.deliver({ text: "⚙️ Agent was aborted." }, { kind: "final" });
         return { queuedFinal: true };
       });
-    deliverReplies.mockResolvedValue({ delivered: true });
+    const abortReplyDelivered = observeDeliveredReply("⚙️ Agent was aborted.");
     editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "1001" });
 
     const firstPromise = dispatchWithContext({
@@ -3285,13 +3272,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       }),
     });
 
-    await vi.waitFor(() => {
-      expect(deliverReplies).toHaveBeenCalledWith(
-        expect.objectContaining({
-          replies: [{ text: "⚙️ Agent was aborted." }],
-        }),
-      );
-    });
+    await abortReplyDelivered;
 
     vi.useFakeTimers();
     try {
@@ -3359,7 +3340,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
         await dispatcherOptions.deliver({ text: "⚙️ Agent was aborted." }, { kind: "final" });
         return { queuedFinal: true };
       });
-    deliverReplies.mockResolvedValue({ delivered: true });
+    const abortReplyDelivered = observeDeliveredReply("⚙️ Agent was aborted.");
 
     const firstPromise = dispatchWithContext({
       context: createContext({
@@ -3388,13 +3369,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       bot,
     });
 
-    await vi.waitFor(() => {
-      expect(deliverReplies).toHaveBeenCalledWith(
-        expect.objectContaining({
-          replies: [{ text: "⚙️ Agent was aborted." }],
-        }),
-      );
-    });
+    await abortReplyDelivered;
 
     releaseMaterialize();
     await Promise.all([firstPromise, abortPromise]);
@@ -3440,7 +3415,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
         await dispatcherOptions.deliver({ text: "⚙️ Agent was aborted." }, { kind: "final" });
         return { queuedFinal: true };
       });
-    deliverReplies.mockResolvedValue({ delivered: true });
+    const abortReplyDelivered = observeDeliveredReply("⚙️ Agent was aborted.");
     editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "1001" });
 
     const firstPromise = dispatchWithContext({
@@ -3468,13 +3443,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       }),
     });
 
-    await vi.waitFor(() => {
-      expect(deliverReplies).toHaveBeenCalledWith(
-        expect.objectContaining({
-          replies: [{ text: "⚙️ Agent was aborted." }],
-        }),
-      );
-    });
+    await abortReplyDelivered;
 
     releaseFirstFinal();
     await Promise.all([firstPromise, abortPromise]);
@@ -3641,7 +3610,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
         await dispatcherOptions.deliver({ text: "Unauthorized stop" }, { kind: "final" });
         return { queuedFinal: true };
       });
-    deliverReplies.mockResolvedValue({ delivered: true });
+    const unauthorizedReplyDelivered = observeDeliveredReply("Unauthorized stop");
     editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "1001" });
 
     const firstPromise = dispatchWithContext({
@@ -3668,13 +3637,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       }),
     });
 
-    await vi.waitFor(() => {
-      expect(deliverReplies).toHaveBeenCalledWith(
-        expect.objectContaining({
-          replies: [{ text: "Unauthorized stop" }],
-        }),
-      );
-    });
+    await unauthorizedReplyDelivered;
 
     releaseFirstFinal();
     await Promise.all([firstPromise, unauthorizedPromise]);
