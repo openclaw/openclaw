@@ -97,7 +97,7 @@ export function resolveEmbeddedAgentStreamFn(params: {
             request: getModelProviderRequestTransport(params.model),
           },
         })
-      : currentStreamFn;
+      : wrapStreamFnStripEmptyTools(currentStreamFn);
   }
 
   if (params.model.provider === "anthropic-vertex") {
