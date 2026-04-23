@@ -413,4 +413,88 @@ describe("anthropic transport stream", () => {
       output_config: { effort: "xhigh" },
     });
   });
+
+  it("preserves signed thinking bytes on replay without mutating text (#69579)", async () => {
+    const model = makeAnthropicTransportModel();
+    // `sanitizeTransportPayloadText` removes lone UTF-16 surrogates; doing that to signed
+    // thinking would change bytes vs Anthropic's signature and reject the next request.
+    const thinkingWithLoneSurrogate = "a\uD800b";
+    await runTransportStream(
+      model,
+      {
+        messages: [
+          { role: "user", content: "first" },
+          {
+            role: "assistant",
+            api: "anthropic-messages",
+            provider: "anthropic",
+            model: "claude-sonnet-4-6",
+            content: [
+              {
+                type: "thinking",
+                thinking: thinkingWithLoneSurrogate,
+                thinkingSignature: "sig_replay_1",
+              },
+              { type: "text", text: "Visible reply" },
+            ],
+          },
+          { role: "user", content: "second turn" },
+        ],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+      } as AnthropicStreamOptions,
+    );
+
+    const { payload } = latestAnthropicRequest();
+    const requestMessages = payload.messages as Array<{
+      role: string;
+      content: Array<{ type: string; thinking?: string; signature?: string; text?: string }>;
+    }>;
+    const assistantEntry = requestMessages.find((m) => m.role === "assistant");
+    const thinkingBlock = assistantEntry?.content.find((b) => b.type === "thinking");
+    expect(thinkingBlock?.thinking).toBe(thinkingWithLoneSurrogate);
+    expect(thinkingBlock).toMatchObject({ signature: "sig_replay_1" });
+  });
+
+  it("preserves signed thinking on replay when only `signature` is stored (no thinkingSignature) (#69579)", async () => {
+    const model = makeAnthropicTransportModel();
+    const thinkingWithLoneSurrogate = "a\uD800b";
+    await runTransportStream(
+      model,
+      {
+        messages: [
+          { role: "user", content: "first" },
+          {
+            role: "assistant",
+            api: "anthropic-messages",
+            provider: "anthropic",
+            model: "claude-sonnet-4-6",
+            content: [
+              {
+                type: "thinking",
+                thinking: thinkingWithLoneSurrogate,
+                signature: "sig_replay_2",
+              },
+              { type: "text", text: "Visible reply" },
+            ],
+          },
+          { role: "user", content: "second turn" },
+        ],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+      } as AnthropicStreamOptions,
+    );
+
+    const { payload } = latestAnthropicRequest();
+    const requestMessages = payload.messages as Array<{
+      role: string;
+      content: Array<{ type: string; thinking?: string; signature?: string; text?: string }>;
+    }>;
+    const assistantEntry = requestMessages.find((m) => m.role === "assistant");
+    const thinkingBlock = assistantEntry?.content.find((b) => b.type === "thinking");
+    expect(thinkingBlock?.thinking).toBe(thinkingWithLoneSurrogate);
+    expect(thinkingBlock).toMatchObject({ signature: "sig_replay_2" });
+  });
 });

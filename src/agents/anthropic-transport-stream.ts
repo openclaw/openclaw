@@ -9,6 +9,7 @@ import {
   type SimpleStreamOptions,
   type ThinkingLevel,
 } from "@mariozechner/pi-ai";
+import { resolveAnthropicStoredThinkingSignature } from "./anthropic-stored-thinking-signature.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
   applyAnthropicPayloadPolicyToParams,
@@ -316,26 +317,29 @@ function convertAnthropicMessages(
           continue;
         }
         if (block.type === "thinking") {
+          const thinkingSig = resolveAnthropicStoredThinkingSignature(block);
           if (block.redacted) {
             blocks.push({
               type: "redacted_thinking",
-              data: block.thinkingSignature,
+              data: thinkingSig ?? "",
             });
             continue;
           }
           if (block.thinking.trim().length === 0) {
             continue;
           }
-          if (!block.thinkingSignature || block.thinkingSignature.trim().length === 0) {
+          if (!thinkingSig) {
             blocks.push({
               type: "text",
               text: sanitizeTransportPayloadText(block.thinking),
             });
           } else {
+            // Anthropic cryptographically signs exact thinking bytes; do not run
+            // sanitizeTransportPayloadText (surrogate cleanup, etc.) on replay (#69579).
             blocks.push({
               type: "thinking",
-              thinking: sanitizeTransportPayloadText(block.thinking),
-              signature: block.thinkingSignature,
+              thinking: block.thinking,
+              signature: thinkingSig,
             });
           }
           continue;

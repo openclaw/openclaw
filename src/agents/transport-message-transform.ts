@@ -1,4 +1,5 @@
 import type { Api, Context, Model } from "@mariozechner/pi-ai";
+import { resolveAnthropicStoredThinkingSignature } from "./anthropic-stored-thinking-signature.js";
 
 const SYNTHETIC_TOOL_RESULT_APIS = new Set<string>([
   "anthropic-messages",
@@ -68,7 +69,8 @@ export function transformTransportMessages(
           }
           continue;
         }
-        if (isSameModel && block.thinkingSignature) {
+        const replaySig = resolveAnthropicStoredThinkingSignature(block);
+        if (isSameModel && replaySig) {
           content.push(block);
           continue;
         }
