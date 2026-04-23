@@ -69,10 +69,19 @@ function removeManagedMarkdownBlock(params: {
     `${params.heading ? `${escapeRegex(params.heading)}\\n` : ""}${escapeRegex(params.startMarker)}[\\s\\S]*?${escapeRegex(params.endMarker)}(?:\\n)?`,
     "m",
   );
-  if (!existingPattern.test(params.original)) {
+  const match = existingPattern.exec(params.original);
+  if (!match || match.index === undefined) {
     return params.original;
   }
-  return params.original.replace(existingPattern, "");
+  let before = params.original.slice(0, match.index);
+  let after = params.original.slice(match.index + match[0].length);
+
+  if (before.endsWith("\n\n") && after.startsWith("\n\n")) {
+    before = before.slice(0, -1);
+    after = after.slice(1);
+  }
+
+  return `${before}${after}`;
 }
 
 export async function writeDailyDreamingPhaseBlock(params: {
