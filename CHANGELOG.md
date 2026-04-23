@@ -15,6 +15,7 @@ Docs: https://docs.openclaw.ai
 - Providers/OpenAI: stop advertising the removed `gpt-5.3-codex-spark` Codex model through fallback catalogs, and suppress stale rows with a GPT-5.5 recovery hint.
 - Plugins/QR: replace legacy `qrcode-terminal` QR rendering with bounded `qrcode-tui` helpers for plugin login/setup flows. (#65969) Thanks @vincentkoc.
 - ACPX/Codex: stop the embedded Codex ACP auth bridge from falling back to raw `~/.codex` file copies; ACPX now only uses OpenClaw's canonical Codex OAuth bridge.
+- Voice-call/realtime: wait for OpenAI session configuration before greeting or forwarding buffered audio, and reject non-allowlisted Twilio callers before stream setup. (#43501) Thanks @forrestblount.
 - Auto-reply/system events: route async exec-event completion replies through the persisted session delivery context, so long-running command results return to the originating channel instead of being dropped when live origin metadata is missing. (#70258) Thanks @wzfukui.
 - OpenAI/image generation: send reference-image edits as guarded multipart uploads instead of JSON data URLs, restoring complex multi-reference `gpt-image-2` edits. Fixes #70642. Thanks @dashhuang.
 - QA channel/security: reject non-HTTP(S) inbound attachment URLs before media fetch, and log rejected schemes so suspicious or misconfigured payloads are visible during debugging. (#70708) Thanks @vincentkoc.
