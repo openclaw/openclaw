@@ -755,6 +755,8 @@ async function observeConfigSnapshot(
       clobberedPath,
       restoredFromBackup: false,
       restoredBackupPath: null,
+      restoreErrorCode: null,
+      restoreErrorMessage: null,
     },
   });
 
@@ -885,6 +887,8 @@ function observeConfigSnapshotSync(
       clobberedPath,
       restoredFromBackup: false,
       restoredBackupPath: null,
+      restoreErrorCode: null,
+      restoreErrorMessage: null,
     },
   });
 
