@@ -1309,6 +1309,30 @@ describe("createFollowupRunner messaging tool dedupe", () => {
     );
   });
 
+  it("does not emit cross-channel route-failure notice when a later payload routes", async () => {
+    routeReplyMock
+      .mockResolvedValueOnce({
+        ok: false,
+        error: "transient route failure",
+      })
+      .mockResolvedValueOnce({ ok: true });
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: { payloads: [{ text: "hello world!" }, { text: "second payload" }] },
+      queued: {
+        ...baseQueuedRun("webchat"),
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+      } as FollowupRun,
+    });
+
+    expect(routeReplyMock).toHaveBeenCalledTimes(2);
+    expect(onBlockReply).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: expect.stringContaining("could not deliver it to the originating channel"),
+      }),
+    );
+  });
+
   it("uses dispatcher when origin routing metadata is incomplete", async () => {
     const { onBlockReply } = await runMessagingCase({
       agentResult: { payloads: [{ text: "hello world!" }] },

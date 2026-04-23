@@ -87,7 +87,8 @@ export function createFollowupRunner(params: {
       return;
     }
 
-    let crossChannelRouteFailureNoticeSent = false;
+    let crossChannelRouteFailureNeedsNotice = false;
+    let routedAnyCrossChannelPayloadToOrigin = false;
     for (const payload of payloads) {
       if (!payload || !hasOutboundReplyContent(payload)) {
         continue;
@@ -127,23 +128,39 @@ export function createFollowupRunner(params: {
           if (opts?.onBlockReply) {
             if (origin && origin === provider) {
               await opts.onBlockReply(payload);
-            } else if (!crossChannelRouteFailureNoticeSent) {
-              crossChannelRouteFailureNoticeSent = true;
-              await opts.onBlockReply({
-                text:
-                  "Follow-up completed, but OpenClaw could not deliver it to the originating " +
-                  "channel. The reply content was not forwarded to this channel to avoid " +
-                  "cross-channel misdelivery.",
-                isError: true,
-              });
+            } else {
+              crossChannelRouteFailureNeedsNotice = true;
             }
           } else {
             defaultRuntime.error?.(`followup queue: route-reply failed: ${errorMsg}`);
+          }
+        } else {
+          const provider = resolveOriginMessageProvider({
+            provider: queued.run.messageProvider,
+          });
+          const origin = resolveOriginMessageProvider({
+            originatingChannel,
+          });
+          if (origin && provider && origin !== provider) {
+            routedAnyCrossChannelPayloadToOrigin = true;
           }
         }
       } else if (opts?.onBlockReply) {
         await opts.onBlockReply(payload);
       }
+    }
+    if (
+      crossChannelRouteFailureNeedsNotice &&
+      !routedAnyCrossChannelPayloadToOrigin &&
+      opts?.onBlockReply
+    ) {
+      await opts.onBlockReply({
+        text:
+          "Follow-up completed, but OpenClaw could not deliver it to the originating " +
+          "channel. The reply content was not forwarded to this channel to avoid " +
+          "cross-channel misdelivery.",
+        isError: true,
+      });
     }
   };
 

@@ -122,7 +122,13 @@ export function shouldWarnOnOrphanedUserRepair(
   return trigger === "user" || trigger === "manual";
 }
 
+const QUEUED_USER_MESSAGE_MARKER =
+  "[Queued user message that arrived while the previous turn was still active]";
 const MAX_STRUCTURED_MEDIA_REF_CHARS = 300;
+const MAX_STRUCTURED_JSON_STRING_CHARS = 300;
+const MAX_STRUCTURED_JSON_DEPTH = 4;
+const MAX_STRUCTURED_JSON_ARRAY_ITEMS = 16;
+const MAX_STRUCTURED_JSON_OBJECT_KEYS = 32;
 
 function summarizeStructuredMediaRef(label: string, value: unknown): string | undefined {
   if (typeof value !== "string") {
@@ -143,9 +149,74 @@ function summarizeStructuredMediaRef(label: string, value: unknown): string | un
   return `[${label}] ${trimmed}`;
 }
 
+function summarizeStructuredJsonString(value: string): string {
+  const mediaSummary = summarizeStructuredMediaRef("value", value);
+  if (mediaSummary?.includes("inline data URI")) {
+    return mediaSummary;
+  }
+  const trimmed = value.trim();
+  if (trimmed.length > MAX_STRUCTURED_JSON_STRING_CHARS) {
+    return `${trimmed.slice(0, MAX_STRUCTURED_JSON_STRING_CHARS)}... (${trimmed.length} chars)`;
+  }
+  return value;
+}
+
+function sanitizeStructuredJsonValue(
+  value: unknown,
+  depth = 0,
+  seen: WeakSet<object> = new WeakSet(),
+): unknown {
+  if (typeof value === "string") {
+    return summarizeStructuredJsonString(value);
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  if (seen.has(value)) {
+    return "[circular]";
+  }
+  if (depth >= MAX_STRUCTURED_JSON_DEPTH) {
+    return "[max depth]";
+  }
+  seen.add(value);
+  if (Array.isArray(value)) {
+    const limited = value
+      .slice(0, MAX_STRUCTURED_JSON_ARRAY_ITEMS)
+      .map((item) => sanitizeStructuredJsonValue(item, depth + 1, seen));
+    if (value.length > MAX_STRUCTURED_JSON_ARRAY_ITEMS) {
+      limited.push(`[${value.length - MAX_STRUCTURED_JSON_ARRAY_ITEMS} more items]`);
+    }
+    seen.delete(value);
+    return limited;
+  }
+  const output: Record<string, unknown> = {};
+  let copied = 0;
+  let skipped = 0;
+  for (const key in value as Record<string, unknown>) {
+    if (!Object.hasOwn(value, key)) {
+      continue;
+    }
+    if (copied >= MAX_STRUCTURED_JSON_OBJECT_KEYS) {
+      skipped += 1;
+      continue;
+    }
+    output[key] = sanitizeStructuredJsonValue(
+      (value as Record<string, unknown>)[key],
+      depth + 1,
+      seen,
+    );
+    copied += 1;
+  }
+  if (skipped > 0) {
+    output.__truncated = `${skipped} more keys`;
+  }
+  seen.delete(value);
+  return output;
+}
+
 function stringifyStructuredJsonFallback(part: unknown): string | undefined {
   try {
-    const serialized = JSON.stringify(part);
+    const serialized = JSON.stringify(sanitizeStructuredJsonValue(part));
     if (!serialized || serialized === "{}") {
       return undefined;
     }
@@ -217,6 +288,21 @@ function extractUserMessagePromptText(content: unknown): string | undefined {
   return text || undefined;
 }
 
+function promptAlreadyIncludesQueuedUserMessage(prompt: string, orphanText: string): boolean {
+  const normalizedPrompt = prompt.replace(/\r\n/g, "\n");
+  const normalizedOrphanText = orphanText.replace(/\r\n/g, "\n").trim();
+  if (!normalizedOrphanText) {
+    return false;
+  }
+  const queuedBlockPrefix = `${QUEUED_USER_MESSAGE_MARKER}\n${normalizedOrphanText}`;
+  return (
+    normalizedPrompt === queuedBlockPrefix ||
+    normalizedPrompt.startsWith(`${queuedBlockPrefix}\n`) ||
+    normalizedPrompt.includes(`\n${queuedBlockPrefix}\n`) ||
+    `\n${normalizedPrompt}\n`.includes(`\n${normalizedOrphanText}\n`)
+  );
+}
+
 export function mergeOrphanedTrailingUserPrompt(params: {
   prompt: string;
   trigger: EmbeddedRunAttemptParams["trigger"];
@@ -226,17 +312,12 @@ export function mergeOrphanedTrailingUserPrompt(params: {
   if (!orphanText) {
     return { prompt: params.prompt, merged: false, removeLeaf: true };
   }
-  if (params.prompt.includes(orphanText)) {
+  if (promptAlreadyIncludesQueuedUserMessage(params.prompt, orphanText)) {
     return { prompt: params.prompt, merged: false, removeLeaf: true };
   }
 
   return {
-    prompt: [
-      "[Queued user message that arrived while the previous turn was still active]",
-      orphanText,
-      "",
-      params.prompt,
-    ].join("\n"),
+    prompt: [QUEUED_USER_MESSAGE_MARKER, orphanText, "", params.prompt].join("\n"),
     merged: true,
     removeLeaf: true,
   };
