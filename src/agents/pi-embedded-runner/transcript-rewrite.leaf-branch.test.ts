@@ -9,6 +9,7 @@ import {
   makeAgentToolResultMessage,
   makeAgentUserMessage,
 } from "../test-helpers/agent-message-fixtures.js";
+import { repro69486LineageFromProduction } from "./fixtures/repro-69486-lineage-from-production.js";
 import { rewriteTranscriptEntriesInSessionFile } from "./transcript-rewrite.js";
 
 type RawEntry = Record<string, unknown>;
@@ -543,6 +544,55 @@ describe("rewriteTranscriptEntriesInSessionFile — leaf-branch compaction", () 
       expect(userMid, "shared-ancestor user turn must be preserved").toBeDefined();
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("production-derived fixture preserves shared ancestor while cleaning the rewrite-abandoned child (#69486)", async () => {
+    writeSession(sessionFile, repro69486LineageFromProduction);
+
+    const preIds = new Set(readEntries(sessionFile).map((e) => e.id as string));
+    expect(preIds.has("msg-assistant-parent")).toBe(true);
+    expect(preIds.has("msg-toolresult-1a")).toBe(true);
+    expect(preIds.has("msg-toolresult-1b")).toBe(true);
+
+    const result = await rewriteTranscriptEntriesInSessionFile({
+      sessionFile,
+      request: {
+        replacements: [
+          {
+            entryId: "msg-assistant-parent",
+            message: makeAgentAssistantMessage({
+              content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
+              timestamp: 0,
+            }) as AgentMessage,
+          },
+        ],
+      },
+    });
+
+    expect(result.changed).toBe(true);
+    expect(result.rewrittenEntries).toBe(1);
+
+    const after = readEntries(sessionFile);
+    const afterIds = new Set(after.map((e) => e.id as string));
+
+    expect(afterIds.has("msg-assistant-parent")).toBe(true);
+    expect(afterIds.has("msg-toolresult-1a")).toBe(true);
+    expect(afterIds.has("msg-toolresult-1b")).toBe(false);
+
+    const toolResultsForParent = after.filter(
+      (e) =>
+        (e as { parentId?: string }).parentId === "msg-assistant-parent" &&
+        (e as { type?: string }).type === "message" &&
+        ((e as { message?: { role?: string } }).message?.role ?? "") === "toolResult",
+    );
+    expect(toolResultsForParent.length).toBeLessThanOrEqual(1);
+
+    for (const e of after) {
+      const pid = (e as { parentId?: string | null }).parentId;
+      if (pid && pid !== null) {
+        expect(afterIds.has(pid)).toBe(true);
+      }
     }
   });
 });
