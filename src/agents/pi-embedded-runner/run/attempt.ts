@@ -2772,6 +2772,7 @@ export async function runEmbeddedAttempt(
         bootstrapPromptWarningSignature: bootstrapPromptWarning.signature,
         systemPromptReport,
         finalPromptText,
+        prePromptMessageCount,
         messagesSnapshot,
         assistantTexts,
         toolMetas: toolMetasNormalized,

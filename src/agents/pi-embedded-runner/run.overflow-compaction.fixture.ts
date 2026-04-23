@@ -44,6 +44,7 @@ export function makeAttemptResult(
     assistantTexts: ["Hello!"],
     toolMetas,
     lastAssistant: undefined,
+    prePromptMessageCount: 0,
     messagesSnapshot: [],
     replayMetadata:
       overrides.replayMetadata ??

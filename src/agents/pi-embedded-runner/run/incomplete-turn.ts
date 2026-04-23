@@ -23,6 +23,7 @@ type IncompleteTurnAttempt = Pick<
   | "didSendViaMessagingTool"
   | "lastToolError"
   | "lastAssistant"
+  | "prePromptMessageCount"
   | "messagesSnapshot"
   | "replayMetadata"
   | "promptErrorSource"
@@ -179,7 +180,12 @@ export function resolveIncompleteTurnPayloadText(params: {
   if (hasOnlySilentAssistantReply(params.attempt.assistantTexts)) {
     return null;
   }
-  if (hasLatestSilentToolResult(params.attempt.messagesSnapshot)) {
+  if (
+    hasLatestSilentToolResult(
+      params.attempt.messagesSnapshot,
+      params.attempt.prePromptMessageCount ?? 0,
+    )
+  ) {
     return null;
   }
 
@@ -227,9 +233,13 @@ function hasOnlySilentAssistantReply(assistantTexts: readonly string[]): boolean
   );
 }
 
-function hasLatestSilentToolResult(messagesSnapshot: readonly AgentMessage[]): boolean {
-  for (let index = messagesSnapshot.length - 1; index >= 0; index -= 1) {
-    const message = messagesSnapshot[index] as
+function hasLatestSilentToolResult(
+  messagesSnapshot: readonly AgentMessage[],
+  prePromptMessageCount: number,
+): boolean {
+  const currentAttemptMessages = messagesSnapshot.slice(Math.max(0, prePromptMessageCount));
+  for (let index = currentAttemptMessages.length - 1; index >= 0; index -= 1) {
+    const message = currentAttemptMessages[index] as
       | {
           role?: string;
           content?: unknown;
