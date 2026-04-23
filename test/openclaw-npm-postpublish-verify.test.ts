@@ -7,6 +7,7 @@ import {
   buildPublishedInstallCommandArgs,
   buildPublishedInstallScenarios,
   collectInstalledContextEngineRuntimeErrors,
+  collectInstalledRootDependencyManifestErrors,
   collectInstalledMirroredRootDependencyManifestErrors,
   collectInstalledPackageErrors,
   normalizeInstalledBinaryVersion,
@@ -416,6 +417,67 @@ describe("collectInstalledMirroredRootDependencyManifestErrors", () => {
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
       rmSync(outsideManifestRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("collectInstalledRootDependencyManifestErrors", () => {
+  function makeInstalledPackageRoot(): string {
+    return mkdtempSync(join(tmpdir(), "openclaw-postpublish-root-deps-"));
+  }
+
+  function writePackageFile(root: string, relativePath: string, value: unknown): void {
+    const fullPath = join(root, relativePath);
+    mkdirSync(dirname(fullPath), { recursive: true });
+    writeFileSync(fullPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  }
+
+  it("flags root dist imports whose declared runtime package name is missing", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      writePackageFile(packageRoot, "package.json", {
+        version: "2026.4.22",
+        dependencies: {
+          typebox: "1.1.28",
+        },
+      });
+      mkdirSync(join(packageRoot, "dist"), { recursive: true });
+      writeFileSync(
+        join(packageRoot, "dist", "typebox-CXXonh2u.js"),
+        'import { Type } from "@sinclair/typebox";\nexport { Type };\n',
+        "utf8",
+      );
+
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([
+        "installed package root is missing declared runtime dependency '@sinclair/typebox' for dist importers: typebox-CXXonh2u.js. Add it to package.json dependencies/optionalDependencies.",
+      ]);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts root dist imports when the runtime package name is declared", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      writePackageFile(packageRoot, "package.json", {
+        version: "2026.4.22",
+        dependencies: {
+          "@sinclair/typebox": "npm:typebox@1.1.28",
+          typebox: "1.1.28",
+        },
+      });
+      mkdirSync(join(packageRoot, "dist"), { recursive: true });
+      writeFileSync(
+        join(packageRoot, "dist", "typebox-CXXonh2u.js"),
+        'import { Type } from "@sinclair/typebox";\nexport { Type };\n',
+        "utf8",
+      );
+
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([]);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
     }
   });
 });

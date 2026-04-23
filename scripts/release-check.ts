@@ -92,6 +92,12 @@ const forbiddenPrivateQaContentScanPrefixes = ["dist/"] as const;
 const appcastPath = resolve("appcast.xml");
 const laneBuildMin = 1_000_000_000;
 const laneFloorAdoptionDateKey = 20260227;
+export const PACKED_CLI_SMOKE_COMMANDS = [
+  ["--help"],
+  ["status", "--json", "--timeout", "1"],
+  ["config", "schema"],
+  ["models", "list", "amazon-bedrock"],
+] as const;
 
 function collectBundledExtensions(): BundledExtension[] {
   const extensionsDir = resolve("extensions");
@@ -209,12 +215,31 @@ function resolveGlobalRoot(prefixDir: string, cwd: string): string {
   }).trim();
 }
 
+function resolveInstalledBinaryPath(prefixDir: string): string {
+  return process.platform === "win32"
+    ? join(prefixDir, "openclaw.cmd")
+    : join(prefixDir, "bin", "openclaw");
+}
+
 export function createPackedBundledPluginPostinstallEnv(
   env: NodeJS.ProcessEnv = process.env,
 ): NodeJS.ProcessEnv {
   return {
     ...env,
     OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK: "1",
+  };
+}
+
+export function createPackedCliSmokeEnv(
+  env: NodeJS.ProcessEnv = process.env,
+  overrides: NodeJS.ProcessEnv = {},
+): NodeJS.ProcessEnv {
+  return {
+    ...env,
+    OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK: "1",
+    OPENCLAW_NO_ONBOARD: "1",
+    OPENCLAW_SUPPRESS_NOTES: "1",
+    ...overrides,
   };
 }
 
@@ -378,6 +403,28 @@ function runPackedBundledPluginActivationSmoke(packageRoot: string, tmpRoot: str
   }
 }
 
+function runPackedCliSmoke(params: {
+  prefixDir: string;
+  cwd: string;
+  homeDir: string;
+  stateDir: string;
+}): void {
+  const binaryPath = resolveInstalledBinaryPath(params.prefixDir);
+  const env = createPackedCliSmokeEnv(process.env, {
+    HOME: params.homeDir,
+    OPENCLAW_STATE_DIR: params.stateDir,
+    OPENAI_API_KEY: "sk-openclaw-release-check",
+  });
+
+  for (const args of PACKED_CLI_SMOKE_COMMANDS) {
+    execFileSync(binaryPath, [...args], {
+      cwd: params.cwd,
+      stdio: "inherit",
+      env,
+    });
+  }
+}
+
 function runPackedBundledChannelEntrySmoke(): void {
   const tmpRoot = mkdtempSync(join(tmpdir(), "openclaw-release-pack-smoke-"));
   try {
@@ -390,6 +437,15 @@ function runPackedBundledChannelEntrySmoke(): void {
     installPackedTarball(prefixDir, tarballPath, tmpRoot);
 
     const packageRoot = join(resolveGlobalRoot(prefixDir, tmpRoot), "openclaw");
+    const homeDir = join(tmpRoot, "home");
+    const stateDir = join(tmpRoot, "state");
+    mkdirSync(homeDir, { recursive: true });
+    runPackedCliSmoke({
+      prefixDir,
+      cwd: packageRoot,
+      homeDir,
+      stateDir,
+    });
     runPackedBundledPluginPostinstall(packageRoot);
     runPackedBundledPluginActivationSmoke(packageRoot, tmpRoot);
     execFileSync(
@@ -408,9 +464,6 @@ function runPackedBundledChannelEntrySmoke(): void {
       },
     );
 
-    const homeDir = join(tmpRoot, "home");
-    const stateDir = join(tmpRoot, "state");
-    mkdirSync(homeDir, { recursive: true });
     execFileSync(
       process.execPath,
       [join(packageRoot, "openclaw.mjs"), "completion", "--write-state"],

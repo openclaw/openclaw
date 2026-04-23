@@ -10,6 +10,7 @@ import {
   realpathSync,
   rmSync,
 } from "node:fs";
+import { builtinModules } from "node:module";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -20,6 +21,7 @@ import {
   collectBundledPluginRootRuntimeMirrorErrors,
   collectRootDistBundledRuntimeMirrors,
   collectRuntimeDependencySpecs,
+  packageNameFromSpecifier,
 } from "./lib/bundled-plugin-root-runtime-mirrors.mjs";
 import { runInstalledWorkspaceBootstrapSmoke } from "./lib/workspace-bootstrap-smoke.mjs";
 import { parseReleaseVersion, resolveNpmCommandInvocation } from "./openclaw-npm-release-check.ts";
@@ -47,6 +49,10 @@ const LEGACY_CONTEXT_ENGINE_UNRESOLVED_RUNTIME_MARKER =
 const PUBLISHED_BUNDLED_RUNTIME_SIDECAR_PATHS = BUNDLED_RUNTIME_SIDECAR_PATHS.filter(
   (relativePath) => listBundledPluginPackArtifacts().includes(relativePath),
 );
+const NODE_BUILTIN_MODULES = new Set([
+  ...builtinModules,
+  ...builtinModules.map((name) => name.replace(/^node:/u, "")),
+]);
 
 export type PublishedInstallScenario = {
   name: string;
@@ -101,6 +107,7 @@ export function collectInstalledPackageErrors(params: {
   }
 
   errors.push(...collectInstalledContextEngineRuntimeErrors(params.packageRoot));
+  errors.push(...collectInstalledRootDependencyManifestErrors(params.packageRoot));
   errors.push(...collectInstalledMirroredRootDependencyManifestErrors(params.packageRoot));
 
   return errors;
@@ -152,6 +159,94 @@ export function collectInstalledContextEngineRuntimeErrors(packageRoot: string):
     }
   }
   return errors;
+}
+
+function listInstalledRootDistJavaScriptFiles(packageRoot: string): string[] {
+  const distDir = join(packageRoot, "dist");
+  if (!existsSync(distDir)) {
+    return [];
+  }
+
+  const pending = [distDir];
+  const files: string[] = [];
+  while (pending.length > 0) {
+    const currentDir = pending.pop();
+    if (!currentDir) {
+      continue;
+    }
+    for (const entry of readdirSync(currentDir, { withFileTypes: true })) {
+      const entryPath = join(currentDir, entry.name);
+      const relativePath = relative(distDir, entryPath).replaceAll("\\", "/");
+      if (relativePath.startsWith("extensions/")) {
+        continue;
+      }
+      if (entry.isDirectory()) {
+        pending.push(entryPath);
+        continue;
+      }
+      if (entry.isFile() && entry.name.endsWith(".js")) {
+        files.push(entryPath);
+      }
+    }
+  }
+
+  return files;
+}
+
+function extractJavaScriptImportSpecifiers(source: string): Set<string> {
+  const specifiers = new Set<string>();
+  const patterns = [
+    /\bfrom\s*["']([^"']+)["']/g,
+    /\bimport\s*["']([^"']+)["']/g,
+    /\bimport\s*\(\s*["']([^"']+)["']\s*\)/g,
+    /\brequire\s*\(\s*["']([^"']+)["']\s*\)/g,
+  ];
+  for (const pattern of patterns) {
+    for (const match of source.matchAll(pattern)) {
+      if (match[1]) {
+        specifiers.add(match[1]);
+      }
+    }
+  }
+  return specifiers;
+}
+
+export function collectInstalledRootDependencyManifestErrors(packageRoot: string): string[] {
+  const packageJsonPath = join(packageRoot, "package.json");
+  if (!existsSync(packageJsonPath)) {
+    return ["installed package is missing package.json."];
+  }
+  const rootPackageJson = JSON.parse(readFileSync(packageJsonPath, "utf8")) as InstalledPackageJson;
+  const declaredRuntimeDeps = new Set([
+    ...Object.keys(rootPackageJson.dependencies ?? {}),
+    ...Object.keys(rootPackageJson.optionalDependencies ?? {}),
+  ]);
+  const missingImporters = new Map<string, Set<string>>();
+
+  for (const filePath of listInstalledRootDistJavaScriptFiles(packageRoot)) {
+    const source = readFileSync(filePath, "utf8");
+    const relativePath = relative(join(packageRoot, "dist"), filePath).replaceAll("\\", "/");
+    for (const specifier of extractJavaScriptImportSpecifiers(source)) {
+      const dependencyName = packageNameFromSpecifier(specifier);
+      if (
+        !dependencyName ||
+        NODE_BUILTIN_MODULES.has(dependencyName) ||
+        declaredRuntimeDeps.has(dependencyName)
+      ) {
+        continue;
+      }
+      const importers = missingImporters.get(dependencyName) ?? new Set<string>();
+      importers.add(relativePath);
+      missingImporters.set(dependencyName, importers);
+    }
+  }
+
+  return [...missingImporters.entries()]
+    .map(([dependencyName, importers]) => {
+      const importerList = [...importers].toSorted((left, right) => left.localeCompare(right));
+      return `installed package root is missing declared runtime dependency '${dependencyName}' for dist importers: ${importerList.join(", ")}. Add it to package.json dependencies/optionalDependencies.`;
+    })
+    .toSorted((left, right) => left.localeCompare(right));
 }
 
 export function resolveInstalledBinaryPath(prefixDir: string, platform = process.platform): string {

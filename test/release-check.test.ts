@@ -15,7 +15,9 @@ import {
   collectForbiddenPackPaths,
   collectMissingPackPaths,
   collectPackUnpackedSizeErrors,
+  createPackedCliSmokeEnv,
   createPackedBundledPluginPostinstallEnv,
+  PACKED_CLI_SMOKE_COMMANDS,
   packageNameFromSpecifier,
 } from "../scripts/release-check.ts";
 import { PACKAGE_DIST_INVENTORY_RELATIVE_PATH } from "../src/infra/package-dist-inventory.ts";
@@ -51,6 +53,33 @@ describe("collectAppcastSparkleVersionErrors", () => {
     const xml = `<rss><channel>${makeItem("2026.3.1", "2026030190")}</channel></rss>`;
 
     expect(collectAppcastSparkleVersionErrors(xml)).toEqual([]);
+  });
+});
+
+describe("packed CLI smoke", () => {
+  it("keeps the expected packaged CLI smoke command list", () => {
+    expect(PACKED_CLI_SMOKE_COMMANDS).toEqual([
+      ["--help"],
+      ["status", "--json", "--timeout", "1"],
+      ["config", "schema"],
+      ["models", "list", "amazon-bedrock"],
+    ]);
+  });
+
+  it("builds a packed CLI smoke env with packaged-install guardrails", () => {
+    expect(
+      createPackedCliSmokeEnv(
+        { PATH: "/usr/bin", HOME: "/tmp/original-home" },
+        { HOME: "/tmp/smoke-home", OPENCLAW_STATE_DIR: "/tmp/smoke-state" },
+      ),
+    ).toEqual({
+      PATH: "/usr/bin",
+      HOME: "/tmp/smoke-home",
+      OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK: "1",
+      OPENCLAW_NO_ONBOARD: "1",
+      OPENCLAW_SUPPRESS_NOTES: "1",
+      OPENCLAW_STATE_DIR: "/tmp/smoke-state",
+    });
   });
 });
 

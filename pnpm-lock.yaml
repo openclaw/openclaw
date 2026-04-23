@@ -75,6 +75,9 @@ importers:
       '@napi-rs/canvas':
         specifier: ^0.1.89
         version: 0.1.92
+      '@sinclair/typebox':
+        specifier: npm:typebox@1.1.28
+        version: typebox@1.1.28
       ajv:
         specifier: ^8.18.0
         version: 8.18.0
