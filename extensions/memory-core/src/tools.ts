@@ -14,6 +14,7 @@ import {
   resolveMemoryCorePluginConfig,
   resolveMemoryDeepDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
+import { addMemoryBlock } from "./memory/add-memory-block.js";
 import { recordShortTermRecalls } from "./short-term-promotion.js";
 import {
   clampResultsByInjectedChars,
@@ -28,6 +29,7 @@ import {
   getMemoryManagerContext,
   getMemoryManagerContextWithPurpose,
   loadMemoryToolRuntime,
+  MemoryAddSchema,
   MemoryGetSchema,
   MemorySearchSchema,
   searchMemoryCorpusSupplements,
@@ -316,6 +318,48 @@ export function createMemorySearchTool(options: {
           const message = formatErrorMessage(err);
           return jsonResult(buildMemorySearchUnavailableResult(message));
         }
+      },
+  });
+}
+
+export function createMemoryAddTool(options: {
+  config?: OpenClawConfig;
+  agentSessionKey?: string;
+}) {
+  return createMemoryTool({
+    options,
+    label: "Memory Add",
+    name: "memory_add",
+    description:
+      "Add one durable semantic memory block to memory/YYYY-MM-DD.md. Does not return a memoryId.",
+    parameters: MemoryAddSchema,
+    execute:
+      ({ cfg, agentId }) =>
+      async (_toolCallId, params) => {
+        const rawParams = asToolParamsRecord(params);
+        const text = readStringParam(rawParams, "text") ?? "";
+        if (!text.trim()) {
+          return jsonResult({ action: "failed", error: "text_required" });
+        }
+        const memory = await getMemoryManagerContext({ cfg, agentId });
+        if ("error" in memory) {
+          return jsonResult({ action: "failed", error: "write_failed", message: memory.error });
+        }
+        const workspaceDir = memory.manager.status().workspaceDir;
+        if (!workspaceDir) {
+          return jsonResult({
+            action: "failed",
+            error: "write_failed",
+            message: "memory workspace unavailable",
+          });
+        }
+        return jsonResult(
+          await addMemoryBlock({
+            workspaceDir,
+            text,
+            cfg,
+          }),
+        );
       },
   });
 }

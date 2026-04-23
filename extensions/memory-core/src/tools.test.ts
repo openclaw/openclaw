@@ -1,13 +1,70 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   resetMemoryToolMockState,
   setMemoryBackend,
   setMemorySearchImpl,
+  setMemoryWorkspaceDir,
 } from "./memory-tool-manager-mock.js";
 import {
+  createMemoryAddToolOrThrow,
   createMemorySearchToolOrThrow,
   expectUnavailableMemorySearchDetails,
 } from "./tools.test-helpers.js";
+
+describe("memory_add", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  beforeEach(() => {
+    resetMemoryToolMockState({ searchImpl: async () => [] });
+  });
+
+  async function createWorkspace() {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-add-"));
+    setMemoryWorkspaceDir(dir);
+    return dir;
+  }
+
+  it("writes daily markdown memory blocks", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T16:30:00.000Z"));
+    const workspaceDir = await createWorkspace();
+    setMemorySearchImpl(async () => {
+      throw new Error("search should not be called");
+    });
+    const tool = createMemoryAddToolOrThrow({
+      config: {
+        agents: {
+          defaults: { userTimezone: "Asia/Tokyo" },
+          list: [{ id: "main", default: true }],
+        },
+      },
+    });
+
+    const result = await tool.execute("add", { text: "alpha\n----\nbeta" });
+
+    expect(result.details).toEqual({
+      action: "created",
+      path: "memory/2026-01-02.md",
+      text: "alpha\n---\nbeta",
+    });
+    expect(JSON.stringify(result)).not.toContain("memoryId");
+    await expect(
+      fs.readFile(path.join(workspaceDir, "memory/2026-01-02.md"), "utf-8"),
+    ).resolves.toBe("alpha\n---\nbeta\n\n----\n");
+
+    await expect(tool.execute("empty", { text: "   " })).resolves.toMatchObject({
+      details: {
+        action: "failed",
+        error: "text_required",
+      },
+    });
+  });
+});
 
 describe("memory_search unavailable payloads", () => {
   beforeEach(() => {

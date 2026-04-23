@@ -31,6 +31,10 @@ export const MemorySearchSchema = Type.Object({
   ),
 });
 
+export const MemoryAddSchema = Type.Object({
+  text: Type.String(),
+});
+
 export const MemoryGetSchema = Type.Object({
   path: Type.String(),
   from: Type.Optional(Type.Number()),
@@ -101,7 +105,7 @@ export function createMemoryTool(params: {
   label: string;
   name: string;
   description: string;
-  parameters: typeof MemorySearchSchema | typeof MemoryGetSchema;
+  parameters: typeof MemorySearchSchema | typeof MemoryAddSchema | typeof MemoryGetSchema;
   execute: (ctx: { cfg: OpenClawConfig; agentId: string }) => AnyAgentTool["execute"];
 }): AnyAgentTool | null {
   const ctx = resolveMemoryToolContext(params.options);

@@ -330,6 +330,48 @@ describe("memory index", () => {
     }
   });
 
+  it("indexes daily memory blocks as separate searchable chunks", async () => {
+    await fs.writeFile(
+      path.join(memoryDir, "2026-01-12.md"),
+      [
+        "Beta raw evergreen note.",
+        "",
+        "----",
+        "",
+        "Alpha block body for this workspace.",
+        "",
+        "----",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const cfg = createCfg({
+      storePath: path.join(workspaceDir, "index-memory-blocks.sqlite"),
+      minScore: 0,
+      hybrid: { enabled: false },
+    });
+    const manager = await getPersistentManager(cfg);
+    await manager.sync({ reason: "test", force: true });
+
+    const blockResults = await manager.search("alpha", {
+      maxResults: 3,
+      minScore: 0,
+    });
+    const blockHit = blockResults.find((result) => result.snippet.includes("Alpha block body"));
+    expect(blockHit).toBeDefined();
+    expect(blockHit?.startLine).toBe(5);
+    expect(blockHit?.endLine).toBe(5);
+    expect(blockResults.every((result) => !result.snippet.includes("----"))).toBe(true);
+
+    const rawResults = await manager.search("beta", {
+      maxResults: 3,
+      minScore: 0,
+    });
+    const rawHit = rawResults.find((result) => result.snippet.includes("Beta raw evergreen note."));
+    expect(rawHit).toBeDefined();
+    expect(rawHit?.snippet).not.toContain("Alpha block body");
+  });
+
   it("indexes multimodal image and audio files from extra paths with Gemini structured inputs", async () => {
     const mediaDir = path.join(workspaceDir, "media-memory");
     await fs.mkdir(mediaDir, { recursive: true });
