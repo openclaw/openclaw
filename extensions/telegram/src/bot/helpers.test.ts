@@ -74,6 +74,20 @@ describe("resolveTelegramForumFlag", () => {
     expect(getChat).toHaveBeenCalledTimes(1);
   });
 
+  it("refreshes cached forum metadata from explicit Telegram updates", async () => {
+    const getChat = vi.fn(async () => ({ is_forum: true }));
+    const params = {
+      chatId: -100654,
+      chatType: "supergroup" as const,
+      isGroup: true,
+      getChat,
+    };
+    await expect(resolveTelegramForumFlag(params)).resolves.toBe(true);
+    await expect(resolveTelegramForumFlag({ ...params, isForum: false })).resolves.toBe(false);
+    await expect(resolveTelegramForumFlag(params)).resolves.toBe(false);
+    expect(getChat).toHaveBeenCalledTimes(1);
+  });
+
   it("returns false when forum lookup is unavailable", async () => {
     const getChat = vi.fn(async () => {
       throw new Error("lookup failed");
