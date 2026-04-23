@@ -369,10 +369,11 @@ export type AgentDefaultsConfig = {
      */
     lightContext?: boolean;
     /**
-     * If true, run heartbeat turns in an isolated session with no prior
-     * conversation history. The heartbeat only sees its bootstrap context
-     * (HEARTBEAT.md when lightContext is also enabled). Dramatically reduces
-     * per-heartbeat token cost by avoiding the full session transcript.
+     * Defaults to true. Run heartbeat turns in an isolated session with no
+     * prior conversation history. Set false to share the main transcript.
+     * The heartbeat only sees its bootstrap context (HEARTBEAT.md when
+     * lightContext is also enabled). Dramatically reduces per-heartbeat token
+     * cost by avoiding the full session transcript.
      */
     isolatedSession?: boolean;
     /**

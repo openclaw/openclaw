@@ -10,10 +10,11 @@ title: "Heartbeat"
 
 > **Heartbeat vs Cron?** See [Automation & Tasks](/automation) for guidance on when to use each.
 
-Heartbeat runs **periodic agent turns** in the main session so the model can
-surface anything that needs attention without spamming you.
+Heartbeat runs **periodic agent turns** so the model can surface anything that
+needs attention without spamming you. By default, the run uses a fresh
+heartbeat session while delivery routing still reads the main session context.
 
-Heartbeat is a scheduled main-session turn — it does **not** create [background task](/automation/tasks) records.
+Heartbeat is a scheduled agent turn — it does **not** create [background task](/automation/tasks) records.
 Task records are for detached work (ACP runs, subagents, isolated cron jobs).
 
 Troubleshooting: [Scheduled Tasks](/automation/cron-jobs#troubleshooting)
@@ -25,7 +26,7 @@ Troubleshooting: [Scheduled Tasks](/automation/cron-jobs#troubleshooting)
 3. Decide where heartbeat messages should go (`target: "none"` is the default; set `target: "last"` to route to the last contact).
 4. Optional: enable heartbeat reasoning delivery for transparency.
 5. Optional: use lightweight bootstrap context if heartbeat runs only need `HEARTBEAT.md`.
-6. Optional: enable isolated sessions to avoid sending full conversation history each heartbeat.
+6. Optional: set `isolatedSession: false` if you want heartbeat runs to share the main transcript.
 7. Optional: restrict heartbeats to active hours (local time).
 
 Example config:
@@ -39,7 +40,7 @@ Example config:
         target: "last", // explicit delivery to last contact (default is "none")
         directPolicy: "allow", // default: allow direct/DM targets; set "block" to suppress
         lightContext: true, // optional: only inject HEARTBEAT.md from bootstrap files
-        isolatedSession: true, // optional: fresh session each run (no conversation history)
+        // isolatedSession: false, // optional: share the main transcript instead of the default fresh heartbeat session
         // activeHours: { start: "08:00", end: "24:00" },
         // includeReasoning: true, // optional: send separate `Reasoning:` message too
       },
@@ -101,7 +102,7 @@ and logged; a message that is only `HEARTBEAT_OK` is dropped.
         model: "anthropic/claude-opus-4-6",
         includeReasoning: false, // default: false (deliver separate Reasoning: message when available)
         lightContext: false, // default: false; true keeps only HEARTBEAT.md from workspace bootstrap files
-        isolatedSession: false, // default: false; true runs each heartbeat in a fresh session (no conversation history)
+        isolatedSession: true, // default: true; set false to share the main transcript
         target: "last", // default: none | options: last | none | <channel id> (core or plugin, e.g. "bluebubbles")
         to: "+15551234567", // optional channel-specific override
         accountId: "ops-bot", // optional multi-account channel id
@@ -224,7 +225,7 @@ Use `accountId` to target a specific account on multi-account channels like Tele
 - `model`: optional model override for heartbeat runs (`provider/model`).
 - `includeReasoning`: when enabled, also deliver the separate `Reasoning:` message when available (same shape as `/reasoning on`).
 - `lightContext`: when true, heartbeat runs use lightweight bootstrap context and keep only `HEARTBEAT.md` from workspace bootstrap files.
-- `isolatedSession`: when true, each heartbeat runs in a fresh session with no prior conversation history. Uses the same isolation pattern as cron `sessionTarget: "isolated"`. Dramatically reduces per-heartbeat token cost. Combine with `lightContext: true` for maximum savings. Delivery routing still uses the main session context.
+- `isolatedSession`: defaults to `true`, so each heartbeat runs in a fresh session with no prior conversation history. Uses the same isolation pattern as cron `sessionTarget: "isolated"`. Set `false` to opt back into the main transcript. Combine with `lightContext: true` for maximum savings. Delivery routing still uses the main session context.
 - `session`: optional session key for heartbeat runs.
   - `main` (default): agent main session.
   - Explicit session key (copy from `openclaw sessions --json` or the [sessions CLI](/cli/sessions)).
@@ -441,7 +442,7 @@ off in group chats.
 
 Heartbeats run full agent turns. Shorter intervals burn more tokens. To reduce cost:
 
-- Use `isolatedSession: true` to avoid sending full conversation history (~100K tokens down to ~2-5K per run).
+- Keep the default `isolatedSession: true` to avoid sending full conversation history (~100K tokens down to ~2-5K per run).
 - Use `lightContext: true` to limit bootstrap files to just `HEARTBEAT.md`.
 - Set a cheaper `model` (e.g. `ollama/llama3.2:1b`).
 - Keep `HEARTBEAT.md` small.
