@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
+import { isNestedAgentLane } from "../../agents/lanes.js";
 import {
   normalizeSpawnedRunMetadata,
   resolveIngressWorkspaceOverrideForSpawnedRun,
@@ -958,6 +959,10 @@ export const agentHandlers: GatewayRequestHandlers = {
         }),
         senderIsOwner,
         allowModelOverride,
+        // Nested lane runs are ephemeral: they spawn their own MCP cohort and
+        // must tear it down when done. Top-level gateway sessions keep MCP
+        // processes warm across turns, so cleanup is skipped for those.
+        cleanupBundleMcpOnRunEnd: isNestedAgentLane(request.lane),
       },
       runId,
       idempotencyKey: idem,

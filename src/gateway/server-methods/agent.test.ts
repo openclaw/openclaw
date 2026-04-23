@@ -1436,4 +1436,34 @@ describe("gateway agent handler", () => {
       }),
     );
   });
+
+  it("sets cleanupBundleMcpOnRunEnd=true for nested lane runs, false for regular runs", async () => {
+    primeMainAgentRun();
+    await invokeAgent(
+      {
+        message: "hi nested",
+        sessionKey: "agent:main:main",
+        lane: "nested",
+        idempotencyKey: "test-nested-mcp-cleanup",
+      },
+      { reqId: "mcp-cleanup-nested" },
+    );
+    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    const nestedCall = mocks.agentCommand.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expect(nestedCall?.cleanupBundleMcpOnRunEnd).toBe(true);
+
+    mocks.agentCommand.mockClear();
+    primeMainAgentRun();
+    await invokeAgent(
+      {
+        message: "hi regular",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "test-regular-mcp-cleanup",
+      },
+      { reqId: "mcp-cleanup-regular" },
+    );
+    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    const regularCall = mocks.agentCommand.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expect(regularCall?.cleanupBundleMcpOnRunEnd).toBe(false);
+  });
 });
