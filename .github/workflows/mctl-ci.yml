@@ -61,11 +61,24 @@ jobs:
       - name: Validate identity file allowlist
         run: |
           set -euo pipefail
-          shopt -s nullglob
           allowed="AGENTS.md SOUL.md IDENTITY.md USER.md TOOLS.md CLAUDE.md"
           fail=0
-          for f in src/mctl-identity/*; do
+          # Enumerate via `find` so dotfiles (.env, .token, …) are also checked
+          # — a bare glob excludes them and would let hidden credential files
+          # slip past validation and get copied into every built image.
+          while IFS= read -r -d '' f; do
             base=$(basename "$f")
+            # Every filename — including symlinks — must be in the allowlist,
+            # so e.g. `notes.md -> AGENTS.md` can't sneak in under a
+            # target-only check.
+            case " $allowed " in
+              *" $base "*) : ;;
+              *)
+                echo "::error file=$f::unexpected file in src/mctl-identity/ — must be one of $allowed"
+                fail=1
+                continue
+                ;;
+            esac
             if [ -L "$f" ]; then
               target=$(readlink "$f")
               case "$target" in
@@ -75,16 +88,8 @@ jobs:
                   fail=1
                   ;;
               esac
-              continue
             fi
-            case " $allowed " in
-              *" $base "*) : ;;
-              *)
-                echo "::error file=$f::unexpected file in src/mctl-identity/ — must be one of $allowed"
-                fail=1
-                ;;
-            esac
-          done
+          done < <(find src/mctl-identity -mindepth 1 -maxdepth 1 \( -type f -o -type l \) -print0)
           # Each identity workspace must ship AGENTS.md + the CLAUDE.md symlink
           # (repo-level rule in the top-level AGENTS.md).
           [ -f src/mctl-identity/AGENTS.md ] || { echo "::error::src/mctl-identity/AGENTS.md missing"; fail=1; }
