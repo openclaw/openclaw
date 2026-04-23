@@ -310,7 +310,7 @@ afterEach(() => {
 });
 
 describe("loadPluginManifestRegistry", () => {
-  it("emits duplicate warning for truly distinct plugins with same id", () => {
+  it("keeps only the higher-precedence plugin for truly distinct duplicates", () => {
     const dirA = makeTempDir();
     const dirB = makeTempDir();
     const manifest = { id: "test-plugin", configSchema: { type: "object" } };
@@ -330,7 +330,42 @@ describe("loadPluginManifestRegistry", () => {
       }),
     ];
 
-    expect(countDuplicateWarnings(loadRegistry(candidates))).toBe(1);
+    const registry = loadRegistry(candidates);
+    expect(countDuplicateWarnings(registry)).toBe(1);
+    expect(registry.plugins).toHaveLength(1);
+    expect(registry.plugins[0]?.origin).toBe("bundled");
+    expectRegistryDiagnosticContains(
+      registry,
+      "global plugin will be overridden by bundled plugin",
+    );
+  });
+
+  it("lets config-loaded plugins replace bundled duplicates", () => {
+    const bundledDir = makeTempDir();
+    const configDir = makeTempDir();
+    const manifest = { id: "config-shadow", configSchema: { type: "object" } };
+    writeManifest(bundledDir, manifest);
+    writeManifest(configDir, manifest);
+
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "config-shadow",
+        rootDir: bundledDir,
+        origin: "bundled",
+      }),
+      createPluginCandidate({
+        idHint: "config-shadow",
+        rootDir: configDir,
+        origin: "config",
+      }),
+    ]);
+
+    expect(countDuplicateWarnings(registry)).toBe(1);
+    expect(registry.plugins).toHaveLength(1);
+    expect(registry.plugins[0]?.origin).toBe("config");
+    const warning = registry.diagnostics.find((diag) => diag.pluginId === "config-shadow");
+    expect(warning?.source).toBe(path.join(bundledDir, "index.ts"));
+    expect(warning?.message).toContain(path.join(configDir, "index.ts"));
   });
 
   it("reports explicit installed globals as the effective duplicate winner", () => {
@@ -371,6 +406,8 @@ describe("loadPluginManifestRegistry", () => {
         diag.message.includes("bundled plugin will be overridden by global plugin"),
       ),
     ).toBe(true);
+    expect(registry.plugins).toHaveLength(1);
+    expect(registry.plugins[0]?.origin).toBe("global");
   });
 
   it("preserves provider auth env metadata from plugin manifests", () => {
@@ -492,6 +529,76 @@ describe("loadPluginManifestRegistry", () => {
       cliBackends: ["openai-cli"],
       configMigrations: ["legacy-openai-auth"],
       requiresRuntime: false,
+    });
+  });
+
+  it("preserves media-understanding provider metadata from plugin manifests", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "openai",
+      contracts: {
+        mediaUnderstandingProviders: ["openai"],
+      },
+      mediaUnderstandingProviderMetadata: {
+        openai: {
+          capabilities: ["image", "audio", "unknown"],
+          defaultModels: {
+            image: "gpt-5.4-mini",
+            audio: "gpt-4o-transcribe",
+            unknown: "ignored",
+          },
+          autoPriority: {
+            image: 10,
+            audio: 20,
+            video: "ignored",
+          },
+          nativeDocumentInputs: ["pdf", "docx"],
+        },
+      },
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "openai",
+      rootDir: dir,
+      origin: "bundled",
+    });
+
+    expect(registry.plugins[0]?.mediaUnderstandingProviderMetadata).toEqual({
+      openai: {
+        capabilities: ["image", "audio"],
+        defaultModels: {
+          image: "gpt-5.4-mini",
+          audio: "gpt-4o-transcribe",
+        },
+        autoPriority: {
+          image: 10,
+          audio: 20,
+        },
+        nativeDocumentInputs: ["pdf"],
+      },
+    });
+  });
+
+  it("preserves external auth provider contracts from plugin manifests", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "acme-ai",
+      providers: ["acme-ai"],
+      contracts: {
+        externalAuthProviders: ["acme-ai"],
+      },
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "acme-ai",
+      rootDir: dir,
+      origin: "bundled",
+    });
+
+    expect(registry.plugins[0]?.contracts).toEqual({
+      externalAuthProviders: ["acme-ai"],
     });
   });
 
@@ -787,6 +894,8 @@ describe("loadPluginManifestRegistry", () => {
   ] as const)("$name", ({ registry: buildRegistry, expectedMessage }) => {
     const registry = buildRegistry();
     expectRegistryDiagnosticContains(registry, expectedMessage);
+    expect(registry.plugins).toHaveLength(1);
+    expect(registry.plugins[0]?.origin).toBe("bundled");
   });
 
   it("suppresses duplicate warning when candidates share the same physical directory via symlink", () => {

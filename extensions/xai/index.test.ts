@@ -1,8 +1,15 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import type { Context, Model } from "@mariozechner/pi-ai";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { describe, expect, it } from "vitest";
+import { createTestPluginApi } from "../../test/helpers/plugins/plugin-api.js";
 import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-registration.js";
+import { registerProviderPlugin } from "../../test/helpers/plugins/provider-registration.js";
 import plugin from "./index.js";
+import setupPlugin from "./setup-api.js";
+import {
+  createXaiPayloadCaptureStream,
+  expectXaiFastToolStreamShaping,
+  runXaiGrok4ResponseStream,
+} from "./test-helpers.js";
 
 function createProviderModel(overrides: {
   id: string;
@@ -24,7 +31,72 @@ function createProviderModel(overrides: {
   };
 }
 
+type XaiAutoEnableProbe = Parameters<OpenClawPluginApi["registerAutoEnableProbe"]>[0];
+
+function registerXaiAutoEnableProbe(): XaiAutoEnableProbe {
+  const probes: XaiAutoEnableProbe[] = [];
+  setupPlugin.register(
+    createTestPluginApi({
+      registerAutoEnableProbe(probe) {
+        probes.push(probe);
+      },
+    }),
+  );
+  const probe = probes[0];
+  if (!probe) {
+    throw new Error("expected xAI setup plugin to register an auto-enable probe");
+  }
+  return probe;
+}
+
 describe("xai provider plugin", () => {
+  it("registers xAI speech providers for batch and streaming STT", async () => {
+    const { mediaProviders, realtimeTranscriptionProviders } = await registerProviderPlugin({
+      plugin,
+      id: "xai",
+      name: "xAI Provider",
+    });
+
+    expect(mediaProviders).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "xai",
+          capabilities: ["audio"],
+          defaultModels: { audio: "grok-stt" },
+        }),
+      ]),
+    );
+    expect(realtimeTranscriptionProviders).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "xai",
+          label: "xAI Realtime Transcription",
+          aliases: expect.arrayContaining(["xai-realtime"]),
+        }),
+      ]),
+    );
+  });
+
+  it("declares setup auto-enable reasons for plugin-owned tool config", () => {
+    const probe = registerXaiAutoEnableProbe();
+
+    expect(
+      probe({
+        config: { plugins: { entries: { xai: { config: { xSearch: { enabled: true } } } } } },
+        env: {},
+      }),
+    ).toBe("xai tool configured");
+    expect(
+      probe({
+        config: {
+          plugins: { entries: { xai: { config: { codeExecution: { enabled: true } } } } },
+        },
+        env: {},
+      }),
+    ).toBe("xai tool configured");
+    expect(probe({ config: {}, env: {} })).toBeNull();
+  });
+
   it("owns replay policy for xAI OpenAI-compatible transports", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
 
@@ -59,54 +131,17 @@ describe("xai provider plugin", () => {
 
   it("wires provider stream shaping for fast mode and tool-stream defaults", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
-    let capturedModelId = "";
-    let capturedPayload: Record<string, unknown> | undefined;
-    const baseStreamFn: StreamFn = (model, _context, options) => {
-      capturedModelId = model.id;
-      const payload: Record<string, unknown> = {
-        reasoning: { effort: "high" },
-        tools: [
-          {
-            type: "function",
-            function: {
-              name: "write",
-              parameters: { type: "object", properties: {} },
-              strict: true,
-            },
-          },
-        ],
-      };
-      options?.onPayload?.(payload as never, model as never);
-      capturedPayload = payload;
-      return {
-        result: async () => ({}) as never,
-        async *[Symbol.asyncIterator]() {},
-      } as unknown as ReturnType<StreamFn>;
-    };
+    const capture = createXaiPayloadCaptureStream();
 
     const wrapped = provider.wrapStreamFn?.({
       provider: "xai",
       modelId: "grok-4",
       extraParams: { fastMode: true },
-      streamFn: baseStreamFn,
+      streamFn: capture.streamFn,
     } as never);
 
-    void wrapped?.(
-      {
-        api: "openai-responses",
-        provider: "xai",
-        id: "grok-4",
-      } as Model<"openai-responses">,
-      { messages: [] } as Context,
-      {},
-    );
-
-    expect(capturedModelId).toBe("grok-4-fast");
-    expect(capturedPayload).toMatchObject({ tool_stream: true });
-    expect(capturedPayload).not.toHaveProperty("reasoning");
-    expect(
-      (capturedPayload?.tools as Array<{ function?: Record<string, unknown> }>)[0]?.function,
-    ).not.toHaveProperty("strict");
+    runXaiGrok4ResponseStream(wrapped);
+    expectXaiFastToolStreamShaping(capture);
   });
 
   it("defaults tool_stream extra params but preserves explicit values", async () => {

@@ -1,9 +1,13 @@
 {
   "name": "@openclaw/ollama-provider",
-  "version": "2026.4.19-beta.1",
+  "version": "2026.4.20",
   "private": true,
   "description": "OpenClaw Ollama provider plugin",
   "type": "module",
+  "dependencies": {
+    "@mariozechner/pi-ai": "0.69.0",
+    "typebox": "1.1.28"
+  },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
   },

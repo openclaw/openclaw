@@ -1,3 +1,4 @@
+import path from "node:path";
 import type {
   ProviderRequestCapability,
   ProviderRequestTransport,
@@ -13,13 +14,49 @@ import type { GuardedFetchMode, GuardedFetchResult } from "../infra/net/fetch-gu
 import { fetchWithSsrFGuard, GUARDED_FETCH_MODE } from "../infra/net/fetch-guard.js";
 import { hasEnvHttpProxyConfigured, matchesNoProxy } from "../infra/net/proxy-env.js";
 import type { LookupFn, PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
-export { fetchWithTimeout } from "../utils/fetch-timeout.js";
+import { fetchWithTimeout } from "../utils/fetch-timeout.js";
+export { fetchWithTimeout };
 export { normalizeBaseUrl } from "../agents/provider-request-config.js";
 
 const MAX_ERROR_CHARS = 300;
 const MAX_ERROR_RESPONSE_BYTES = 4096;
 const DEFAULT_GUARDED_HTTP_TIMEOUT_MS = 60_000;
 const MAX_AUDIT_CONTEXT_CHARS = 80;
+
+export function resolveAudioTranscriptionUploadFileName(fileName?: string, mime?: string): string {
+  const trimmed = fileName?.trim();
+  const baseName = trimmed ? path.basename(trimmed) : "audio";
+  const lowerMime = mime?.trim().toLowerCase();
+
+  if (/\.aac$/i.test(baseName)) {
+    return `${baseName.slice(0, -4) || "audio"}.m4a`;
+  }
+  if (!path.extname(baseName) && lowerMime === "audio/aac") {
+    return `${baseName || "audio"}.m4a`;
+  }
+  return baseName;
+}
+
+export function buildAudioTranscriptionFormData(params: {
+  buffer: Buffer;
+  fileName?: string;
+  mime?: string;
+  fields?: Record<string, string | number | boolean | undefined>;
+}): FormData {
+  const form = new FormData();
+  const bytes = new Uint8Array(params.buffer);
+  const blob = new Blob([bytes], {
+    type: params.mime ?? "application/octet-stream",
+  });
+  form.append("file", blob, resolveAudioTranscriptionUploadFileName(params.fileName, params.mime));
+  for (const [name, value] of Object.entries(params.fields ?? {})) {
+    const text = typeof value === "string" ? value.trim() : value == null ? "" : String(value);
+    if (text) {
+      form.append(name, text);
+    }
+  }
+  return form;
+}
 
 export type ProviderOperationDeadline = {
   deadlineAtMs?: number;
@@ -75,6 +112,49 @@ export async function waitProviderOperationPollInterval(params: {
     throw new Error(`${params.deadline.label} timed out after ${params.deadline.timeoutMs}ms`);
   }
   await new Promise((resolve) => setTimeout(resolve, Math.min(params.pollIntervalMs, remainingMs)));
+}
+
+export async function pollProviderOperationJson<TPayload>(params: {
+  url: string;
+  headers: Headers;
+  deadline: ProviderOperationDeadline;
+  defaultTimeoutMs: number;
+  fetchFn: typeof fetch;
+  maxAttempts: number;
+  pollIntervalMs: number;
+  requestFailedMessage: string;
+  timeoutMessage: string;
+  isComplete: (payload: TPayload) => boolean;
+  getFailureMessage?: (payload: TPayload) => string | undefined;
+}): Promise<TPayload> {
+  for (let attempt = 0; attempt < params.maxAttempts; attempt += 1) {
+    const response = await fetchWithTimeout(
+      params.url,
+      {
+        method: "GET",
+        headers: params.headers,
+      },
+      resolveProviderOperationTimeoutMs({
+        deadline: params.deadline,
+        defaultTimeoutMs: params.defaultTimeoutMs,
+      }),
+      params.fetchFn,
+    );
+    await assertOkOrThrowHttpError(response, params.requestFailedMessage);
+    const payload = (await response.json()) as TPayload;
+    if (params.isComplete(payload)) {
+      return payload;
+    }
+    const failureMessage = params.getFailureMessage?.(payload);
+    if (failureMessage) {
+      throw new Error(failureMessage);
+    }
+    await waitProviderOperationPollInterval({
+      deadline: params.deadline,
+      pollIntervalMs: params.pollIntervalMs,
+    });
+  }
+  throw new Error(params.timeoutMessage);
 }
 
 function resolveGuardedHttpTimeoutMs(timeoutMs: number | undefined): number {

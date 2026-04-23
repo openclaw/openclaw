@@ -1,4 +1,4 @@
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { NonEmptyString, SecretInputSchema } from "./primitives.js";
 
 export const TalkModeParamsSchema = Type.Object(
@@ -130,6 +130,7 @@ export const ChannelAccountSnapshotSchema = Type.Object(
     lastStopAt: Type.Optional(Type.Integer({ minimum: 0 })),
     lastInboundAt: Type.Optional(Type.Integer({ minimum: 0 })),
     lastOutboundAt: Type.Optional(Type.Integer({ minimum: 0 })),
+    lastTransportActivityAt: Type.Optional(Type.Integer({ minimum: 0 })),
     busy: Type.Optional(Type.Boolean()),
     activeRuns: Type.Optional(Type.Integer({ minimum: 0 })),
     lastRunActivityAt: Type.Optional(Type.Integer({ minimum: 0 })),
@@ -178,6 +179,14 @@ export const ChannelsStatusResultSchema = Type.Object(
 );
 
 export const ChannelsLogoutParamsSchema = Type.Object(
+  {
+    channel: NonEmptyString,
+    accountId: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
+export const ChannelsStartParamsSchema = Type.Object(
   {
     channel: NonEmptyString,
     accountId: Type.Optional(Type.String()),
