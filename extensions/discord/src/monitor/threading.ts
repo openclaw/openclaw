@@ -438,6 +438,10 @@ type MaybeCreateDiscordAutoThreadParams = {
   combinedBody: string;
   cfg?: OpenClawConfig;
   agentId?: string;
+  /** Guild ID for fetching active threads. */
+  guildId?: string;
+  /** Author user ID to add as thread member after creation. */
+  authorId?: string;
 };
 
 export async function resolveDiscordAutoThreadReplyPlan(
@@ -467,6 +471,8 @@ export async function resolveDiscordAutoThreadReplyPlan(
     combinedBody: params.combinedBody,
     cfg: params.cfg,
     agentId: params.agentId,
+    guildId: params.guildId,
+    authorId: params.authorId,
   });
   const deliveryPlan = resolveDiscordReplyDeliveryPlan({
     replyTarget: originalReplyTarget,
@@ -484,6 +490,146 @@ export async function resolveDiscordAutoThreadReplyPlan(
       })
     : null;
   return { ...deliveryPlan, createdThreadId, autoThreadContext };
+}
+
+/**
+ * Find an existing active thread in the guild whose name is relevant to the
+ * current message content. Returns the thread ID if a match is found.
+ *
+ * Matching strategy: tokenize the message into significant words and check
+ * whether any active thread name shares enough keywords to be considered
+ * topically related. This avoids LLM calls on every message while still
+ * routing related content into existing threads.
+ */
+async function findRelevantExistingThread(params: {
+  client: Client;
+  guildId: string;
+  parentChannelId: string;
+  messageText: string;
+}): Promise<string | undefined> {
+  try {
+    const result = (await params.client.rest.get(Routes.guildActiveThreads(params.guildId))) as {
+      threads?: Array<{ id?: string; name?: string; parent_id?: string; archived?: boolean }>;
+    };
+    const threads = result?.threads;
+    if (!Array.isArray(threads) || threads.length === 0) {
+      return undefined;
+    }
+    // Only consider threads parented to the same channel.
+    const channelThreads = threads.filter(
+      (t) => t.parent_id === params.parentChannelId && !t.archived && t.name && t.id,
+    );
+    if (channelThreads.length === 0) {
+      return undefined;
+    }
+    // Tokenize message into significant lowercase words (3+ chars).
+    const stopWords = new Set([
+      "the",
+      "and",
+      "for",
+      "are",
+      "but",
+      "not",
+      "you",
+      "all",
+      "can",
+      "had",
+      "her",
+      "was",
+      "one",
+      "our",
+      "out",
+      "has",
+      "this",
+      "that",
+      "with",
+      "from",
+      "they",
+      "been",
+      "have",
+      "will",
+      "what",
+      "when",
+      "make",
+      "like",
+      "just",
+      "over",
+      "such",
+      "take",
+      "than",
+      "them",
+      "very",
+      "some",
+      "could",
+      "would",
+      "into",
+      "about",
+      "which",
+      "their",
+      "there",
+      "these",
+      "other",
+    ]);
+    const tokenize = (text: string): Set<string> => {
+      const words = text
+        .toLowerCase()
+        .replace(/[^a-z0-9\s]/g, " ")
+        .split(/\s+/);
+      return new Set(words.filter((w) => w.length >= 3 && !stopWords.has(w)));
+    };
+    const messageTokens = tokenize(params.messageText);
+    if (messageTokens.size === 0) {
+      return undefined;
+    }
+    let bestThread: { id: string; score: number } | undefined;
+    for (const thread of channelThreads) {
+      const threadTokens = tokenize(thread.name!);
+      if (threadTokens.size === 0) {
+        continue;
+      }
+      let overlap = 0;
+      for (const token of threadTokens) {
+        if (messageTokens.has(token)) {
+          overlap++;
+        }
+      }
+      // Require at least 2 overlapping tokens, or 1 if thread name is short (1-2 tokens).
+      const minOverlap = threadTokens.size <= 2 ? 1 : 2;
+      // Score by proportion of thread name tokens matched.
+      const score = overlap / threadTokens.size;
+      if (overlap >= minOverlap && score >= 0.5 && (!bestThread || score > bestThread.score)) {
+        bestThread = { id: String(thread.id), score };
+      }
+    }
+    if (bestThread) {
+      logVerbose(
+        `discord: autoThread found relevant existing thread ${bestThread.id} (score=${bestThread.score.toFixed(2)})`,
+      );
+    }
+    return bestThread?.id;
+  } catch (err) {
+    logVerbose(`discord: autoThread active thread lookup failed: ${String(err)}`);
+    return undefined;
+  }
+}
+
+/**
+ * Add a user as a member of a thread so they receive notifications.
+ * Fire-and-forget; failures are logged but do not block the thread flow.
+ */
+async function addThreadMember(params: {
+  client: Client;
+  threadId: string;
+  userId: string;
+}): Promise<void> {
+  try {
+    await params.client.rest.put(`/channels/${params.threadId}/thread-members/${params.userId}`);
+    logVerbose(`discord: added thread member ${params.userId} to thread ${params.threadId}`);
+  } catch (err) {
+    logVerbose(
+      `discord: failed to add thread member ${params.userId} to ${params.threadId}: ${String(err)}`,
+    );
+  }
 }
 
 export async function maybeCreateDiscordAutoThread(
@@ -512,6 +658,29 @@ export async function maybeCreateDiscordAutoThread(
   if (!messageChannelId) {
     return undefined;
   }
+
+  // Before creating a new thread, check if an existing active thread is
+  // relevant to this message's topic. If so, reuse it.
+  if (params.guildId) {
+    const existingThreadId = await findRelevantExistingThread({
+      client: params.client,
+      guildId: params.guildId,
+      parentChannelId: messageChannelId,
+      messageText: params.baseText || params.combinedBody || "",
+    });
+    if (existingThreadId) {
+      // Invite the author to the existing thread so they see the conversation.
+      if (params.authorId) {
+        void addThreadMember({
+          client: params.client,
+          threadId: existingThreadId,
+          userId: params.authorId,
+        });
+      }
+      return existingThreadId;
+    }
+  }
+
   try {
     const rawThreadSource = params.baseText || params.combinedBody || "Thread";
     const threadName = sanitizeDiscordThreadName(rawThreadSource, params.message.id);
@@ -531,6 +700,16 @@ export async function maybeCreateDiscordAutoThread(
       },
     )) as { id?: string };
     const createdId = created?.id ? String(created.id) : "";
+
+    // Invite the message author to the newly created thread.
+    if (createdId && params.authorId) {
+      void addThreadMember({
+        client: params.client,
+        threadId: createdId,
+        userId: params.authorId,
+      });
+    }
+
     if (
       createdId &&
       params.channelConfig?.autoThreadName === "generated" &&
@@ -574,6 +753,14 @@ export async function maybeCreateDiscordAutoThread(
         logVerbose(
           `discord: autoThread reusing existing thread ${existingThreadId} on ${messageChannelId}/${params.message.id}`,
         );
+        // Invite author to the race-condition thread too.
+        if (params.authorId) {
+          void addThreadMember({
+            client: params.client,
+            threadId: existingThreadId,
+            userId: params.authorId,
+          });
+        }
         return existingThreadId;
       }
     } catch {

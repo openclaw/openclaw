@@ -72,6 +72,8 @@ type ActionTargetAliasSpec = {
 };
 
 const ACTION_TARGET_ALIASES: Partial<Record<ChannelMessageActionName, ActionTargetAliasSpec>> = {
+  // thread-reply accepts threadId as the target (Discord plugin uses it as channelId directly)
+  "thread-reply": { aliases: ["threadId"] },
   unsend: { aliases: ["messageId"] },
   edit: { aliases: ["messageId"] },
   react: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },

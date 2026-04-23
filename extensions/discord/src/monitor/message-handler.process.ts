@@ -429,6 +429,8 @@ export async function processDiscordMessage(
     agentId: route.agentId,
     channel: route.channel,
     cfg,
+    guildId: guildInfo?.id ?? undefined,
+    authorId: author.id,
   });
   const deliverTarget = replyPlan.deliverTarget;
   const replyTarget = replyPlan.replyTarget;

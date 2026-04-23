@@ -156,14 +156,23 @@ export function buildGatewayCronService(params: {
     const runtimeConfig = loadConfig();
     const normalized =
       typeof requested === "string" && requested.trim() ? normalizeAgentId(requested) : undefined;
-    const hasAgent =
-      normalized !== undefined &&
-      Array.isArray(runtimeConfig.agents?.list) &&
-      runtimeConfig.agents.list.some(
-        (entry) =>
-          entry && typeof entry.id === "string" && normalizeAgentId(entry.id) === normalized,
-      );
-    const agentId = hasAgent ? normalized : resolveDefaultAgentId(runtimeConfig);
+    if (normalized !== undefined) {
+      const hasAgent =
+        Array.isArray(runtimeConfig.agents?.list) &&
+        runtimeConfig.agents.list.some(
+          (entry) =>
+            entry && typeof entry.id === "string" && normalizeAgentId(entry.id) === normalized,
+        );
+      if (!hasAgent) {
+        cronLogger.warn(
+          { requested, normalized },
+          "cron agent %s not found in agents.list; using requested id (workspace convention)",
+          normalized,
+        );
+      }
+      return { agentId: normalized, cfg: runtimeConfig };
+    }
+    const agentId = resolveDefaultAgentId(runtimeConfig);
     return { agentId, cfg: runtimeConfig };
   };
 
