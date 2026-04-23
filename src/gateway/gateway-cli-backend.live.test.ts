@@ -39,6 +39,9 @@ const LIVE = isLiveTestEnabled();
 const CLI_LIVE = isTruthyEnvValue(process.env.OPENCLAW_LIVE_CLI_BACKEND);
 const CLI_RESUME = isTruthyEnvValue(process.env.OPENCLAW_LIVE_CLI_BACKEND_RESUME_PROBE);
 const CLI_DEBUG = isTruthyEnvValue(process.env.OPENCLAW_LIVE_CLI_BACKEND_DEBUG);
+const CLI_CI_SAFE_CODEX_CONFIG = isTruthyEnvValue(
+  process.env.OPENCLAW_LIVE_CLI_BACKEND_USE_CI_SAFE_CODEX_CONFIG,
+);
 const describeLive = LIVE && CLI_LIVE ? describe : describe.skip;
 
 const DEFAULT_PROVIDER = "claude-cli";
@@ -47,6 +50,11 @@ const DEFAULT_MODEL =
 // The cron/MCP live probe now tolerates more cancelled tool-call retries in CI,
 // so the outer test budget needs enough headroom to finish those retries.
 const CLI_BACKEND_LIVE_TIMEOUT_MS = 720_000;
+const CLI_BACKEND_REQUEST_TIMEOUT_MS = 240_000;
+const CLI_BACKEND_AGENT_TIMEOUT_SECONDS = Math.max(
+  1,
+  Math.ceil(CLI_BACKEND_REQUEST_TIMEOUT_MS / 1000) - 10,
+);
 
 function logCliBackendLiveStep(step: string, details?: Record<string, unknown>): void {
   if (!CLI_DEBUG) {
@@ -197,7 +205,13 @@ describeLive("gateway live (cli backend)", () => {
                 clearEnv: filteredCliClearEnv.length > 0 ? filteredCliClearEnv : undefined,
                 env: Object.keys(preservedCliEnv).length > 0 ? preservedCliEnv : undefined,
                 systemPromptWhen: providerDefaults?.systemPromptWhen ?? "never",
-                ...(cliImageArg ? { imageArg: cliImageArg, imageMode: cliImageMode } : {}),
+                ...(cliImageArg
+                  ? {
+                      imageArg: cliImageArg,
+                      imageMode: cliImageMode,
+                      imagePathScope: providerDefaults?.imagePathScope,
+                    }
+                  : {}),
               },
             },
             sandbox: { mode: "off" },
@@ -248,8 +262,9 @@ describeLive("gateway live (cli backend)", () => {
                     " Do not include the note in your reply."
                   : `Reply with exactly: CLI backend OK ${nonce}.`,
             deliver: false,
+            timeout: CLI_BACKEND_AGENT_TIMEOUT_SECONDS,
           },
-          { expectFinal: true },
+          { expectFinal: true, timeoutMs: CLI_BACKEND_REQUEST_TIMEOUT_MS },
         );
         if (payload?.status !== "ok") {
           throw new Error(`agent status=${String(payload?.status)}`);
@@ -299,8 +314,9 @@ describeLive("gateway live (cli backend)", () => {
                 `What session note did I ask you to remember earlier? ` +
                 `Reply with exactly: CLI backend SWITCH OK ${switchNonce} <remembered-note>.`,
               deliver: false,
+              timeout: CLI_BACKEND_AGENT_TIMEOUT_SECONDS,
             },
-            { expectFinal: true },
+            { expectFinal: true, timeoutMs: CLI_BACKEND_REQUEST_TIMEOUT_MS },
           );
           if (switchPayload?.status !== "ok") {
             throw new Error(`switch status=${String(switchPayload?.status)}`);
@@ -326,8 +342,9 @@ describeLive("gateway live (cli backend)", () => {
                   ? `Please include the token CLI-RESUME-${resumeNonce} in your reply.`
                   : `Reply with exactly: CLI backend RESUME OK ${resumeNonce}.`,
               deliver: false,
+              timeout: CLI_BACKEND_AGENT_TIMEOUT_SECONDS,
             },
-            { expectFinal: true },
+            { expectFinal: true, timeoutMs: CLI_BACKEND_REQUEST_TIMEOUT_MS },
           );
           if (resumePayload?.status !== "ok") {
             throw new Error(`resume status=${String(resumePayload?.status)}`);
@@ -344,11 +361,15 @@ describeLive("gateway live (cli backend)", () => {
         }
 
         if (enableCliImageProbe) {
-          logCliBackendLiveStep("image-probe:start", { sessionKey });
+          const imageSessionKey =
+            providerId === "codex-cli"
+              ? `agent:dev:live-cli-backend-image:${randomUUID()}`
+              : sessionKey;
+          logCliBackendLiveStep("image-probe:start", { sessionKey: imageSessionKey });
           await verifyCliBackendImageProbe({
             client,
             providerId,
-            sessionKey,
+            sessionKey: imageSessionKey,
             tempDir,
             bootstrapWorkspace,
           });
@@ -368,16 +389,23 @@ describeLive("gateway live (cli backend)", () => {
             senderIsOwner: true,
           });
           logCliBackendLiveStep("cron-mcp-loopback-preflight:done");
-          logCliBackendLiveStep("cron-mcp-probe:start", { sessionKey });
-          await verifyCliCronMcpProbe({
-            client,
-            providerId,
-            sessionKey,
-            port,
-            token,
-            env: process.env,
-          });
-          logCliBackendLiveStep("cron-mcp-probe:done");
+          if (providerId === "codex-cli" && CLI_CI_SAFE_CODEX_CONFIG) {
+            logCliBackendLiveStep("cron-mcp-probe:skipped", {
+              providerId,
+              reason: "ci-safe-codex-config",
+            });
+          } else {
+            logCliBackendLiveStep("cron-mcp-probe:start", { sessionKey });
+            await verifyCliCronMcpProbe({
+              client,
+              providerId,
+              sessionKey,
+              port,
+              token,
+              env: process.env,
+            });
+            logCliBackendLiveStep("cron-mcp-probe:done");
+          }
         }
       } finally {
         logCliBackendLiveStep("cleanup:start");

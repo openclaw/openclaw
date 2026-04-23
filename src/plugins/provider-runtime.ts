@@ -7,7 +7,9 @@ import {
 import type { ProviderSystemPromptContribution } from "../agents/system-prompt-contribution.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { sanitizeForLog } from "../terminal/ansi.js";
 import {
   __testing as providerHookRuntimeTesting,
   clearProviderRuntimeHookCache,
@@ -18,10 +20,15 @@ import {
   resolveProviderRuntimePlugin,
   wrapProviderStreamFn,
 } from "./provider-hook-runtime.js";
+import { resolvePluginDiscoveryProvidersRuntime } from "./provider-discovery.runtime.js";
 import { resolveBundledProviderPolicySurface } from "./provider-public-artifacts.js";
 import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
 import type { ProviderThinkingProfile } from "./provider-thinking.types.js";
-import { resolveCatalogHookProviderPluginIds } from "./providers.js";
+import {
+  resolveCatalogHookProviderPluginIds,
+  resolveExternalAuthProfileCompatFallbackPluginIds,
+  resolveExternalAuthProfileProviderPluginIds,
+} from "./providers.js";
 import { getActivePluginRegistryWorkspaceDirFromState } from "./runtime-state.js";
 import { resolveRuntimeTextTransforms } from "./text-transforms.runtime.js";
 import type {
@@ -70,6 +77,14 @@ import type {
   ProviderWebSocketSessionPolicy,
   PluginTextTransforms,
 } from "./types.js";
+
+const log = createSubsystemLogger("plugins/provider-runtime");
+const warnedExternalAuthFallbackPluginIds = new Set<string>();
+
+function resetExternalAuthFallbackWarningCacheForTest(): void {
+  warnedExternalAuthFallbackPluginIds.clear();
+}
+
 export {
   clearProviderRuntimeHookCache,
   prepareProviderExtraParams,
@@ -80,6 +95,7 @@ export {
 
 export const __testing = {
   ...providerHookRuntimeTesting,
+  resetExternalAuthFallbackWarningCacheForTest,
 } as const;
 
 function resolveProviderPluginsForCatalogHooks(params: {
@@ -746,7 +762,15 @@ export function resolveProviderSyntheticAuthWithPlugin(params: {
   env?: NodeJS.ProcessEnv;
   context: ProviderResolveSyntheticAuthContext;
 }) {
-  return resolveProviderRuntimePlugin(params)?.resolveSyntheticAuth?.(params.context) ?? undefined;
+  const runtimeResolved = resolveProviderRuntimePlugin(params)?.resolveSyntheticAuth?.(params.context);
+  if (runtimeResolved) {
+    return runtimeResolved;
+  }
+  return resolvePluginDiscoveryProvidersRuntime({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  }).find((provider) => provider.id === params.provider)?.resolveSyntheticAuth?.(params.context);
 }
 
 export function resolveExternalAuthProfilesWithPlugins(params: {
@@ -755,13 +779,48 @@ export function resolveExternalAuthProfilesWithPlugins(params: {
   env?: NodeJS.ProcessEnv;
   context: ProviderResolveExternalAuthProfilesContext;
 }): ProviderExternalAuthProfile[] {
+  const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
+  const env = params.env ?? process.env;
+  const externalAuthPluginIds = resolveExternalAuthProfileProviderPluginIds({
+    config: params.config,
+    workspaceDir,
+    env,
+  });
+  const declaredPluginIds = new Set(externalAuthPluginIds);
+  const fallbackPluginIds = resolveExternalAuthProfileCompatFallbackPluginIds({
+    config: params.config,
+    workspaceDir,
+    env,
+    declaredPluginIds,
+  });
+  const pluginIds = [...new Set([...externalAuthPluginIds, ...fallbackPluginIds])].toSorted(
+    (left, right) => left.localeCompare(right),
+  );
+  if (pluginIds.length === 0) {
+    return [];
+  }
   const matches: ProviderExternalAuthProfile[] = [];
-  for (const plugin of resolveProviderPluginsForHooks(params)) {
+  for (const plugin of resolveProviderPluginsForHooks({
+    ...params,
+    workspaceDir,
+    env,
+    onlyPluginIds: pluginIds,
+  })) {
     const profiles =
       plugin.resolveExternalAuthProfiles?.(params.context) ??
       plugin.resolveExternalOAuthProfiles?.(params.context);
     if (!profiles || profiles.length === 0) {
       continue;
+    }
+    const pluginId = plugin.pluginId ?? plugin.id;
+    if (!declaredPluginIds.has(pluginId) && !warnedExternalAuthFallbackPluginIds.has(pluginId)) {
+      warnedExternalAuthFallbackPluginIds.add(pluginId);
+      // Deprecated compatibility path for plugins that still implement
+      // resolveExternalOAuthProfiles or omit contracts.externalAuthProviders.
+      // Remove this warning with the fallback resolver after the migration window.
+      log.warn(
+        `Provider plugin "${sanitizeForLog(pluginId)}" uses external auth hooks without declaring contracts.externalAuthProviders. This compatibility fallback is deprecated and will be removed in a future release.`,
+      );
     }
     matches.push(...profiles);
   }

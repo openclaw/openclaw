@@ -630,12 +630,16 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 
   </Accordion>
 
+</AccordionGroup>
+
 <a id="why-am-i-seeing-http-429-ratelimiterror-from-anthropic"></a>
-<Accordion title="Why am I seeing HTTP 429 rate_limit_error from Anthropic?">
-That means your **Anthropic quota/rate limit** is exhausted for the current window. If you
-use **Claude CLI**, wait for the window to reset or upgrade your plan. If you
-use an **Anthropic API key**, check the Anthropic Console
-for usage/billing and raise limits as needed.
+
+<AccordionGroup>
+  <Accordion title="Why am I seeing HTTP 429 rate_limit_error from Anthropic?">
+    That means your **Anthropic quota/rate limit** is exhausted for the current window. If you
+    use **Claude CLI**, wait for the window to reset or upgrade your plan. If you
+    use an **Anthropic API key**, check the Anthropic Console
+    for usage/billing and raise limits as needed.
 
     If the message is specifically:
     `Extra usage is required for long context requests`, the request is trying to use
@@ -1410,8 +1414,9 @@ for usage/billing and raise limits as needed.
     These files live in the **agent workspace**, not `~/.openclaw`.
 
     - **Workspace (per agent)**: `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`,
-      `MEMORY.md` (or legacy fallback `memory.md` when `MEMORY.md` is absent),
-      `memory/YYYY-MM-DD.md`, optional `HEARTBEAT.md`.
+      `MEMORY.md`, `memory/YYYY-MM-DD.md`, optional `HEARTBEAT.md`.
+      Lowercase root `memory.md` is legacy repair input only; `openclaw doctor --fix`
+      can merge it into `MEMORY.md` when both files exist.
     - **State dir (`~/.openclaw`)**: config, channel/provider state, auth profiles, sessions, logs,
       and shared skills (`~/.openclaw/skills`).
 

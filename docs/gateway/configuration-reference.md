@@ -1271,6 +1271,7 @@ Codex app-server harness.
 - `fallback`: `"pi"` or `"none"`. `"pi"` keeps the built-in PI harness as the compatibility fallback when no plugin harness is selected. `"none"` makes missing or unsupported plugin harness selection fail instead of silently using PI. Selected plugin harness failures always surface directly.
 - Environment overrides: `OPENCLAW_AGENT_RUNTIME=<id|auto|pi>` overrides `runtime`; `OPENCLAW_AGENT_HARNESS_FALLBACK=none` disables PI fallback for that process.
 - For Codex-only deployments, set `model: "codex/gpt-5.4"`, `embeddedHarness.runtime: "codex"`, and `embeddedHarness.fallback: "none"`.
+- Harness choice is pinned per session id after the first embedded run. Config/env changes affect new or reset sessions, not an existing transcript. Legacy sessions with transcript history but no recorded pin are treated as PI-pinned. `/status` shows non-PI harness ids such as `codex` next to `Fast`.
 - This only controls the embedded chat harness. Media generation, vision, PDF, music, video, and TTS still use their provider/model settings.
 
 **Built-in alias shorthands** (only apply when the model is in `agents.defaults.models`):
@@ -2493,6 +2494,8 @@ Notes:
 - File permissions are `0700` for directories and `0600` for files.
 - Cleanup follows the `cleanup` policy: `delete` always removes attachments; `keep` retains them only when `retainOnSessionKeep: true`.
 
+<a id="toolsexperimental"></a>
+
 ### `tools.experimental`
 
 Experimental built-in tool flags. Default off unless a strict-agentic GPT-5 auto-enable rule applies.
@@ -2891,7 +2894,7 @@ See [Local Models](/gateway/local-models). TL;DR: run a large local model via LM
     allow: ["voice-call"],
     deny: [],
     load: {
-      paths: ["~/Projects/oss/voice-call-extension"],
+      paths: ["~/Projects/oss/voice-call-plugin"],
     },
     entries: {
       "voice-call": {
@@ -3470,6 +3473,7 @@ Validation:
 Notes:
 
 - `file` provider supports `mode: "json"` and `mode: "singleValue"` (`id` must be `"value"` in singleValue mode).
+- File and exec provider paths fail closed when Windows ACL verification is unavailable. Set `allowInsecurePath: true` only for trusted paths that cannot be verified.
 - `exec` provider requires an absolute `command` path and uses protocol payloads on stdin/stdout.
 - By default, symlink command paths are rejected. Set `allowSymlinkCommand: true` to allow symlink paths while validating the resolved target path.
 - If `trustedDirs` is configured, the trusted-dir check applies to the resolved target path.

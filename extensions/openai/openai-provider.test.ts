@@ -400,6 +400,33 @@ describe("buildOpenAIProvider", () => {
     ]);
   });
 
+  it("raises minimal reasoning when native OpenAI web search is injected", () => {
+    const provider = buildOpenAIProvider();
+    const wrap = provider.wrapStreamFn;
+    expect(wrap).toBeTypeOf("function");
+    if (!wrap) {
+      throw new Error("expected OpenAI wrapper");
+    }
+
+    const result = runWrappedPayloadCase({
+      wrap,
+      provider: "openai",
+      modelId: "gpt-5.4",
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+        baseUrl: "https://api.openai.com/v1",
+      } as Model<"openai-responses">,
+      payload: {
+        reasoning: { effort: "minimal", summary: "auto" },
+      },
+    });
+
+    expect(result.payload.reasoning).toEqual({ effort: "low", summary: "auto" });
+    expect(result.payload.tools).toEqual([{ type: "web_search" }]);
+  });
+
   it("does not inject native OpenAI web search when disabled or proxied", () => {
     const provider = buildOpenAIProvider();
     const wrap = provider.wrapStreamFn;

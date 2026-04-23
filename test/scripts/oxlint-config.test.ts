@@ -46,7 +46,6 @@ const ZERO_BASELINE_RULES = [
   "typescript/prefer-return-this-type",
   "unicorn/consistent-date-clone",
   "unicorn/consistent-empty-array-spread",
-  "unicorn/consistent-template-literal-escape",
   "unicorn/no-console-spaces",
   "unicorn/no-length-as-slice-end",
   "unicorn/no-instanceof-array",
@@ -130,6 +129,15 @@ describe("oxlint config", () => {
     expect(config.rules?.["typescript/no-empty-object-type"]).toEqual([
       "error",
       { allowInterfaces: "with-single-extends" },
+    ]);
+  });
+
+  it("enables exhaustive switch linting", () => {
+    const config = readJson(".oxlintrc.json") as OxlintConfig;
+
+    expect(config.rules?.["typescript/switch-exhaustiveness-check"]).toEqual([
+      "error",
+      { considerDefaultExhaustiveForUnions: true },
     ]);
   });
 

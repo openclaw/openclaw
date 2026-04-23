@@ -13,6 +13,7 @@ import type { MsgContext } from "../../auto-reply/templating.js";
 import { extractCanvasFromText } from "../../chat/canvas-render.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
+import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { logLargePayload } from "../../logging/diagnostic-payload.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { isAudioFileName } from "../../media/mime.js";
@@ -368,6 +369,26 @@ function resolveChatSendOriginatingRoute(params: {
     messageThreadId: routeThreadIdCandidate,
     explicitDeliverRoute: true,
   };
+}
+
+function isAcpSessionKey(sessionKey: string | undefined): boolean {
+  return Boolean(sessionKey?.split(":").includes("acp"));
+}
+
+function explicitOriginTargetsAcpSession(origin: ChatSendExplicitOrigin | undefined): boolean {
+  if (!origin?.originatingChannel || !origin.originatingTo || !origin.accountId) {
+    return false;
+  }
+  const channel = normalizeMessageChannel(origin.originatingChannel);
+  if (!channel || channel === INTERNAL_MESSAGE_CHANNEL) {
+    return false;
+  }
+  const binding = getSessionBindingService().resolveByConversation({
+    channel,
+    accountId: origin.accountId,
+    conversationId: origin.originatingTo,
+  });
+  return isAcpSessionKey(binding?.targetSessionKey);
 }
 
 function stripDisallowedChatControlChars(message: string): string {
@@ -1949,11 +1970,13 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
     if (normalizedAttachments.length > 0) {
       const modelRef = resolveSessionModelRef(cfg, entry, agentId);
-      const supportsImages = await resolveGatewayModelSupportsImages({
+      const supportsSessionModelImages = await resolveGatewayModelSupportsImages({
         loadGatewayModelCatalog: context.loadGatewayModelCatalog,
         provider: modelRef.provider,
         model: modelRef.model,
       });
+      const supportsImages =
+        supportsSessionModelImages || explicitOriginTargetsAcpSession(explicitOriginResult.value);
       try {
         const parsed = await parseMessageWithAttachments(inboundMessage, normalizedAttachments, {
           maxBytes: 5_000_000,

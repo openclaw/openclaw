@@ -240,6 +240,12 @@ export type ProviderAuthResult = {
   configPatch?: Partial<OpenClawConfig>;
   defaultModel?: string;
   notes?: string[];
+  /**
+   * Opt in to replace `agents.defaults.models` wholesale with the patch map.
+   * Default behavior merges the map so other providers' entries survive.
+   * Set only from migrations that intentionally rename/remove model keys.
+   */
+  replaceDefaultModels?: boolean;
 };
 
 /** Interactive auth context passed to provider login/setup methods. */
@@ -1577,9 +1583,9 @@ export type ProviderPlugin = {
     | null
     | undefined;
   /**
-   * @deprecated Use `resolveExternalAuthProfiles`.
-   *
-   * Kept for compatibility with existing provider plugins.
+   * @deprecated Declare `contracts.externalAuthProviders` in the plugin manifest
+   * and implement `resolveExternalAuthProfiles` instead. This compatibility hook
+   * is loaded through a slower fallback path and will be removed in a future release.
    */
   resolveExternalOAuthProfiles?: (
     ctx: ProviderResolveExternalOAuthProfilesContext,

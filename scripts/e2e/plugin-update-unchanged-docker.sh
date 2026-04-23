@@ -2,17 +2,12 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
+source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 
-IMAGE_NAME="${OPENCLAW_PLUGIN_UPDATE_E2E_IMAGE:-openclaw-plugin-update-e2e}"
+IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-plugin-update-e2e" OPENCLAW_PLUGIN_UPDATE_E2E_IMAGE)"
 SKIP_BUILD="${OPENCLAW_PLUGIN_UPDATE_E2E_SKIP_BUILD:-0}"
 
-if [ "$SKIP_BUILD" = "1" ]; then
-  echo "Reusing Docker image: $IMAGE_NAME"
-else
-  echo "Building Docker image..."
-  run_logged plugin-update-build docker build -t "$IMAGE_NAME" -f "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR"
-fi
+docker_e2e_build_or_reuse "$IMAGE_NAME" plugin-update "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "" "$SKIP_BUILD"
 
 echo "Running unchanged plugin update smoke..."
 docker run --rm \

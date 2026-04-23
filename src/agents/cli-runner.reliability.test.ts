@@ -1,9 +1,14 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   __testing as replyRunTesting,
   createReplyOperation,
   replyRunRegistry,
 } from "../auto-reply/reply/reply-run-registry.js";
+import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { runPreparedCliAgent } from "./cli-runner.js";
 import {
   createManagedRun,
@@ -14,6 +19,43 @@ import {
 import { executePreparedCliRun } from "./cli-runner/execute.js";
 import { resolveCliNoOutputTimeoutMs } from "./cli-runner/helpers.js";
 import type { PreparedCliRunContext } from "./cli-runner/types.js";
+
+vi.mock("../plugins/hook-runner-global.js", async () => {
+  const actual = await vi.importActual<typeof import("../plugins/hook-runner-global.js")>(
+    "../plugins/hook-runner-global.js",
+  );
+  return {
+    ...actual,
+    getGlobalHookRunner: vi.fn(() => null),
+  };
+});
+
+const mockGetGlobalHookRunner = vi.mocked(getGlobalHookRunner);
+
+function createSessionFile(params?: { history?: Array<{ role: "user"; content: string }> }) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-hooks-"));
+  const sessionFile = path.join(dir, "session.jsonl");
+  fs.writeFileSync(
+    sessionFile,
+    `${JSON.stringify({
+      type: "session",
+      version: CURRENT_SESSION_VERSION,
+      id: "session-test",
+      timestamp: new Date(0).toISOString(),
+      cwd: dir,
+    })}\n`,
+    "utf-8",
+  );
+  const sessionManager = SessionManager.open(sessionFile);
+  for (const entry of params?.history ?? []) {
+    sessionManager.appendMessage({
+      role: entry.role,
+      content: entry.content,
+      timestamp: Date.now(),
+    });
+  }
+  return { dir, sessionFile };
+}
 
 function buildPreparedContext(params?: {
   sessionKey?: string;
@@ -67,6 +109,7 @@ function buildPreparedContext(params?: {
 describe("runCliAgent reliability", () => {
   afterEach(() => {
     replyRunTesting.resetReplyRunRegistry();
+    mockGetGlobalHookRunner.mockReset();
   });
 
   it("fails with timeout when no-output watchdog trips", async () => {
@@ -311,6 +354,150 @@ describe("runCliAgent reliability", () => {
     expect(result.payloads).toEqual([{ text: "goodbye from cli" }]);
     expect(result.meta.finalAssistantVisibleText).toBe("goodbye from cli");
     expect(result.meta.finalAssistantRawText).toBe("hello from cli");
+  });
+
+  it("emits llm_input, llm_output, and agent_end hooks for successful CLI runs", async () => {
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) =>
+        ["llm_input", "llm_output", "agent_end"].includes(hookName),
+      ),
+      runLlmInput: vi.fn(async () => undefined),
+      runLlmOutput: vi.fn(async () => undefined),
+      runAgentEnd: vi.fn(async () => undefined),
+    };
+    mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
+    const { dir, sessionFile } = createSessionFile();
+
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "hello from cli",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    try {
+      await runPreparedCliAgent({
+        ...buildPreparedContext(),
+        params: {
+          ...buildPreparedContext().params,
+          sessionFile,
+          workspaceDir: dir,
+          sessionKey: "agent:main:main",
+          agentId: "main",
+          messageProvider: "acp",
+          messageChannel: "telegram",
+          trigger: "user",
+        },
+      });
+
+      await vi.waitFor(() => {
+        expect(hookRunner.runLlmInput).toHaveBeenCalledTimes(1);
+        expect(hookRunner.runLlmOutput).toHaveBeenCalledTimes(1);
+        expect(hookRunner.runAgentEnd).toHaveBeenCalledTimes(1);
+      });
+
+      expect(hookRunner.runLlmInput).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runId: "run-2",
+          sessionId: "s1",
+          provider: "codex-cli",
+          model: "gpt-5.4",
+          prompt: "hi",
+          systemPrompt: "You are a helpful assistant.",
+          historyMessages: expect.any(Array),
+          imagesCount: 0,
+        }),
+        expect.objectContaining({
+          runId: "run-2",
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          sessionId: "s1",
+          workspaceDir: dir,
+          messageProvider: "acp",
+          trigger: "user",
+          channelId: "telegram",
+        }),
+      );
+      expect(hookRunner.runLlmOutput).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runId: "run-2",
+          sessionId: "s1",
+          provider: "codex-cli",
+          model: "gpt-5.4",
+          assistantTexts: ["hello from cli"],
+          lastAssistant: expect.objectContaining({
+            role: "assistant",
+            content: [{ type: "text", text: "hello from cli" }],
+            provider: "codex-cli",
+            model: "gpt-5.4",
+          }),
+        }),
+        expect.any(Object),
+      );
+      expect(hookRunner.runAgentEnd).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: true,
+          messages: [
+            { role: "user", content: "hi", timestamp: expect.any(Number) },
+            expect.objectContaining({
+              role: "assistant",
+              content: [{ type: "text", text: "hello from cli" }],
+            }),
+          ],
+        }),
+        expect.any(Object),
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("emits agent_end with failure details when the CLI run fails", async () => {
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => ["llm_input", "agent_end"].includes(hookName)),
+      runLlmInput: vi.fn(async () => undefined),
+      runLlmOutput: vi.fn(async () => undefined),
+      runAgentEnd: vi.fn(async () => undefined),
+    };
+    mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
+
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 1,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "",
+        stderr: "rate limit exceeded",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    await expect(runPreparedCliAgent(buildPreparedContext())).rejects.toThrow(
+      "rate limit exceeded",
+    );
+
+    await vi.waitFor(() => {
+      expect(hookRunner.runLlmInput).toHaveBeenCalledTimes(1);
+      expect(hookRunner.runLlmOutput).not.toHaveBeenCalled();
+      expect(hookRunner.runAgentEnd).toHaveBeenCalledTimes(1);
+    });
+
+    expect(hookRunner.runAgentEnd).toHaveBeenCalledWith(
+      expect.objectContaining({
+        success: false,
+        error: "rate limit exceeded",
+        messages: [{ role: "user", content: "hi", timestamp: expect.any(Number) }],
+      }),
+      expect.any(Object),
+    );
   });
 });
 

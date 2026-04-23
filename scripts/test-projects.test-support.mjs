@@ -46,7 +46,10 @@ import { resolveVitestCliEntry, resolveVitestNodeArgs } from "./run-vitest.mjs";
 const DEFAULT_VITEST_CONFIG = "test/vitest/vitest.unit.config.ts";
 const AGENTS_VITEST_CONFIG = "test/vitest/vitest.agents.config.ts";
 const ACP_VITEST_CONFIG = "test/vitest/vitest.acp.config.ts";
+const AUTO_REPLY_CORE_VITEST_CONFIG = "test/vitest/vitest.auto-reply-core.config.ts";
 const AUTO_REPLY_VITEST_CONFIG = "test/vitest/vitest.auto-reply.config.ts";
+const AUTO_REPLY_REPLY_VITEST_CONFIG = "test/vitest/vitest.auto-reply-reply.config.ts";
+const AUTO_REPLY_TOP_LEVEL_VITEST_CONFIG = "test/vitest/vitest.auto-reply-top-level.config.ts";
 const BOUNDARY_VITEST_CONFIG = "test/vitest/vitest.boundary.config.ts";
 const BUNDLED_VITEST_CONFIG = "test/vitest/vitest.bundled.config.ts";
 const CHANNEL_VITEST_CONFIG = "test/vitest/vitest.channels.config.ts";
@@ -93,6 +96,10 @@ const EXTENSION_WHATSAPP_VITEST_CONFIG = "test/vitest/vitest.extension-whatsapp.
 const EXTENSION_ZALO_VITEST_CONFIG = "test/vitest/vitest.extension-zalo.config.ts";
 const EXTENSIONS_VITEST_CONFIG = "test/vitest/vitest.extensions.config.ts";
 const FULL_EXTENSIONS_VITEST_CONFIG = "test/vitest/vitest.full-extensions.config.ts";
+const GATEWAY_CLIENT_VITEST_CONFIG = "test/vitest/vitest.gateway-client.config.ts";
+const GATEWAY_CORE_VITEST_CONFIG = "test/vitest/vitest.gateway-core.config.ts";
+const GATEWAY_METHODS_VITEST_CONFIG = "test/vitest/vitest.gateway-methods.config.ts";
+const GATEWAY_SERVER_VITEST_CONFIG = "test/vitest/vitest.gateway-server.config.ts";
 const GATEWAY_VITEST_CONFIG = "test/vitest/vitest.gateway.config.ts";
 const HOOKS_VITEST_CONFIG = "test/vitest/vitest.hooks.config.ts";
 const INFRA_VITEST_CONFIG = "test/vitest/vitest.infra.config.ts";
@@ -103,6 +110,10 @@ const PLUGIN_SDK_LIGHT_VITEST_CONFIG = "test/vitest/vitest.plugin-sdk-light.conf
 const PLUGIN_SDK_VITEST_CONFIG = "test/vitest/vitest.plugin-sdk.config.ts";
 const PLUGINS_VITEST_CONFIG = "test/vitest/vitest.plugins.config.ts";
 const UNIT_FAST_VITEST_CONFIG = "test/vitest/vitest.unit-fast.config.ts";
+const UNIT_SECURITY_VITEST_CONFIG = "test/vitest/vitest.unit-security.config.ts";
+const UNIT_SRC_VITEST_CONFIG = "test/vitest/vitest.unit-src.config.ts";
+const UNIT_SUPPORT_VITEST_CONFIG = "test/vitest/vitest.unit-support.config.ts";
+const UNIT_UI_VITEST_CONFIG = "test/vitest/vitest.unit-ui.config.ts";
 const PROCESS_VITEST_CONFIG = "test/vitest/vitest.process.config.ts";
 const RUNTIME_CONFIG_VITEST_CONFIG = "test/vitest/vitest.runtime-config.config.ts";
 const SECRETS_VITEST_CONFIG = "test/vitest/vitest.secrets.config.ts";
@@ -119,6 +130,9 @@ const CHANGED_ARGS_PATTERN = /^--changed(?:=(.+))?$/u;
 const VITEST_CONFIG_BY_KIND = {
   acp: ACP_VITEST_CONFIG,
   agent: AGENTS_VITEST_CONFIG,
+  autoReplyCore: AUTO_REPLY_CORE_VITEST_CONFIG,
+  autoReplyReply: AUTO_REPLY_REPLY_VITEST_CONFIG,
+  autoReplyTopLevel: AUTO_REPLY_TOP_LEVEL_VITEST_CONFIG,
   autoReply: AUTO_REPLY_VITEST_CONFIG,
   boundary: BOUNDARY_VITEST_CONFIG,
   bundled: BUNDLED_VITEST_CONFIG,
@@ -161,6 +175,10 @@ const VITEST_CONFIG_BY_KIND = {
   extensionVoiceCall: EXTENSION_VOICE_CALL_VITEST_CONFIG,
   extensionWhatsApp: EXTENSION_WHATSAPP_VITEST_CONFIG,
   extensionZalo: EXTENSION_ZALO_VITEST_CONFIG,
+  gatewayClient: GATEWAY_CLIENT_VITEST_CONFIG,
+  gatewayCore: GATEWAY_CORE_VITEST_CONFIG,
+  gatewayMethods: GATEWAY_METHODS_VITEST_CONFIG,
+  gatewayServer: GATEWAY_SERVER_VITEST_CONFIG,
   gateway: GATEWAY_VITEST_CONFIG,
   hooks: HOOKS_VITEST_CONFIG,
   infra: INFRA_VITEST_CONFIG,
@@ -172,6 +190,10 @@ const VITEST_CONFIG_BY_KIND = {
   pluginSdkLight: PLUGIN_SDK_LIGHT_VITEST_CONFIG,
   process: PROCESS_VITEST_CONFIG,
   unitFast: UNIT_FAST_VITEST_CONFIG,
+  unitSecurity: UNIT_SECURITY_VITEST_CONFIG,
+  unitSrc: UNIT_SRC_VITEST_CONFIG,
+  unitSupport: UNIT_SUPPORT_VITEST_CONFIG,
+  unitUi: UNIT_UI_VITEST_CONFIG,
   runtimeConfig: RUNTIME_CONFIG_VITEST_CONFIG,
   secrets: SECRETS_VITEST_CONFIG,
   sharedCore: SHARED_CORE_VITEST_CONFIG,
@@ -213,10 +235,16 @@ const TOOLING_TEST_TARGETS = new Map([
     ["test/scripts/vitest-local-scheduling.test.ts"],
   ],
 ]);
+const SOURCE_TEST_TARGETS = new Map([
+  ["src/agents/live-model-turn-probes.ts", ["src/agents/live-model-turn-probes.test.ts"]],
+]);
 const GENERATED_CHANGED_TEST_TARGETS = new Set([
   "src/canvas-host/a2ui/.bundle.hash",
   "src/canvas-host/a2ui/a2ui.bundle.js",
 ]);
+const VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS";
+const VITEST_NO_OUTPUT_RETRY_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_RETRY";
+export const DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS = "180000";
 const VITEST_CONFIG_TARGET_KIND_BY_PATH = new Map(
   Object.entries(VITEST_CONFIG_BY_KIND).map(([kind, config]) => [config, kind]),
 );
@@ -487,7 +515,13 @@ export function resolveChangedTestTargetPlan(changedPaths) {
   if (changedLanes.lanes.all) {
     return { mode: "broad", targets: [] };
   }
-  const targets = changedPaths.filter(isRoutableChangedTarget);
+  const targets = changedPaths.flatMap((changedPath) => {
+    const mappedTargets = SOURCE_TEST_TARGETS.get(changedPath);
+    if (mappedTargets) {
+      return mappedTargets;
+    }
+    return isRoutableChangedTarget(changedPath) ? [changedPath] : [];
+  });
   if (changedLanes.extensionImpactFromCore) {
     targets.push("extensions");
   }
@@ -812,6 +846,10 @@ export function buildVitestRunPlans(
     "contractsPlugin",
     "bundled",
     "gateway",
+    "gatewayCore",
+    "gatewayClient",
+    "gatewayMethods",
+    "gatewayServer",
     "hooks",
     "infra",
     "runtimeConfig",
@@ -832,9 +870,16 @@ export function buildVitestRunPlans(
     "commandLight",
     "command",
     "autoReply",
+    "autoReplyCore",
+    "autoReplyReply",
+    "autoReplyTopLevel",
     "agent",
     "plugin",
     "ui",
+    "unitSrc",
+    "unitSecurity",
+    "unitSupport",
+    "unitUi",
     "utils",
     "wizard",
     "e2e",
@@ -1026,6 +1071,37 @@ export function applyParallelVitestCachePaths(specs, params = {}) {
       },
     };
   });
+}
+
+export function applyDefaultMultiSpecVitestCachePaths(specs, params = {}) {
+  if (specs.length <= 1 || specs.some((spec) => spec.watchMode)) {
+    return specs;
+  }
+  return applyParallelVitestCachePaths(specs, params);
+}
+
+export function applyDefaultVitestNoOutputTimeout(specs, params = {}) {
+  const baseEnv = params.env ?? process.env;
+  if (Object.hasOwn(baseEnv, VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY)) {
+    return specs;
+  }
+  return specs.map((spec) => {
+    if (spec.watchMode || Object.hasOwn(spec.env ?? {}, VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY)) {
+      return spec;
+    }
+    return {
+      ...spec,
+      env: {
+        ...spec.env,
+        [VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY]: DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS,
+      },
+    };
+  });
+}
+
+export function shouldRetryVitestNoOutputTimeout(env = process.env) {
+  const value = env[VITEST_NO_OUTPUT_RETRY_ENV_KEY]?.trim().toLowerCase();
+  return !["0", "false", "no", "off"].includes(value ?? "");
 }
 
 export function createVitestRunSpecs(args, params = {}) {

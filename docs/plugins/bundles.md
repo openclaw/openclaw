@@ -254,6 +254,14 @@ OpenClaw checks for native plugin format first:
 If a directory contains both, OpenClaw uses the native path. This prevents
 dual-format packages from being partially installed as bundles.
 
+## Runtime dependencies and cleanup
+
+- Bundled plugin runtime dependencies ship inside the OpenClaw package under
+  `dist/*`. OpenClaw does **not** run `npm install` at startup for bundled
+  plugins; the release pipeline is responsible for shipping a complete bundled
+  dependency payload (see the postpublish verification rule in
+  [Releasing](/reference/RELEASING)).
+
 ## Security
 
 Bundles have a narrower trust boundary than native plugins:

@@ -55,6 +55,7 @@ export function buildOpenAICodexCliBackend(): CliBackendPlugin {
       systemPromptWhen: "first",
       imageArg: "--image",
       imageMode: "repeat",
+      imagePathScope: "workspace",
       reliability: {
         watchdog: {
           fresh: { ...CLI_FRESH_WATCHDOG_DEFAULTS },

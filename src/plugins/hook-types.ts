@@ -249,6 +249,7 @@ export type PluginHookReplyDispatchEvent = {
   ctx: FinalizedMsgContext;
   runId?: string;
   sessionKey?: string;
+  images?: Array<{ data: string; mimeType: string }>;
   inboundAudio: boolean;
   sessionTtsAuto?: TtsAutoMode;
   ttsChannel?: string;
