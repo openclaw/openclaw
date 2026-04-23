@@ -43,13 +43,18 @@ import {
 
 type AssistantAttachmentAvailability =
   | { status: "checking" }
-  | { status: "available" }
+  | { status: "available"; url?: string }
   | { status: "unavailable"; reason: string; checkedAt: number };
 
 const assistantAttachmentAvailabilityCache = new Map<string, AssistantAttachmentAvailability>();
 const ASSISTANT_ATTACHMENT_UNAVAILABLE_RETRY_MS = 5_000;
 
 export function resetAssistantAttachmentAvailabilityCacheForTest() {
+  for (const entry of assistantAttachmentAvailabilityCache.values()) {
+    if (entry.status === "available" && entry.url?.startsWith("blob:")) {
+      URL.revokeObjectURL(entry.url);
+    }
+  }
   assistantAttachmentAvailabilityCache.clear();
   for (const blobUrl of managedImageBlobUrlResolvedCache.values()) {
     URL.revokeObjectURL(blobUrl);
@@ -1012,6 +1017,34 @@ function buildAssistantAttachmentMetaUrl(
   return `${attachmentUrl}${attachmentUrl.includes("?") ? "&" : "?"}meta=1`;
 }
 
+function buildAssistantAttachmentFetchHeaders(
+  authToken: string | null | undefined,
+): Record<string, string> {
+  const headers: Record<string, string> = {
+    Accept: "application/octet-stream",
+  };
+  const normalizedAuthToken = authToken?.trim();
+  if (normalizedAuthToken) {
+    headers.Authorization = `Bearer ${normalizedAuthToken}`;
+  }
+  return headers;
+}
+
+function setAssistantAttachmentAvailabilityCache(
+  cacheKey: string,
+  next: AssistantAttachmentAvailability,
+) {
+  const previous = assistantAttachmentAvailabilityCache.get(cacheKey);
+  if (
+    previous?.status === "available" &&
+    previous.url?.startsWith("blob:") &&
+    previous.url !== (next.status === "available" ? next.url : undefined)
+  ) {
+    URL.revokeObjectURL(previous.url);
+  }
+  assistantAttachmentAvailabilityCache.set(cacheKey, next);
+}
+
 function resolveAssistantAttachmentAvailability(
   source: string,
   localMediaPreviewRoots: readonly string[],
@@ -1040,28 +1073,23 @@ function resolveAssistantAttachmentAvailability(
   }
   assistantAttachmentAvailabilityCache.set(cacheKey, { status: "checking" });
   if (typeof fetch === "function") {
-    void fetch(buildAssistantAttachmentMetaUrl(source, basePath, authToken), {
+    void fetch(buildAssistantAttachmentUrl(source, basePath), {
       method: "GET",
-      headers: { Accept: "application/json" },
+      headers: buildAssistantAttachmentFetchHeaders(authToken),
       credentials: "same-origin",
     })
       .then(async (res) => {
-        const payload = (await res.json().catch(() => null)) as {
-          available?: boolean;
-          reason?: string;
-        } | null;
-        if (payload?.available === true) {
-          assistantAttachmentAvailabilityCache.set(cacheKey, { status: "available" });
-        } else {
-          assistantAttachmentAvailabilityCache.set(cacheKey, {
-            status: "unavailable",
-            reason: payload?.reason?.trim() || "Attachment unavailable",
-            checkedAt: Date.now(),
-          });
+        if (!res.ok || typeof URL.createObjectURL !== "function") {
+          throw new Error(`assistant attachment fetch failed: ${res.status}`);
         }
+        const objectUrl = URL.createObjectURL(await res.blob());
+        setAssistantAttachmentAvailabilityCache(cacheKey, {
+          status: "available",
+          url: objectUrl,
+        });
       })
       .catch(() => {
-        assistantAttachmentAvailabilityCache.set(cacheKey, {
+        setAssistantAttachmentAvailabilityCache(cacheKey, {
           status: "unavailable",
           reason: "Attachment unavailable",
           checkedAt: Date.now(),
@@ -1125,9 +1153,7 @@ function renderAssistantAttachments(
           onRequestUpdate,
         );
         const attachmentUrl =
-          availability.status === "available"
-            ? buildAssistantAttachmentUrl(attachment.url, basePath, authToken)
-            : null;
+          availability.status === "available" ? (availability.url ?? attachment.url) : null;
         if (attachment.kind === "image") {
           if (!attachmentUrl) {
             return renderAssistantAttachmentStatusCard({

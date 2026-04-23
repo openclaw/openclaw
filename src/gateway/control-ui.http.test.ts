@@ -3,7 +3,8 @@ import fs from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { approveDevicePairing, requestDevicePairing } from "../infra/device-pairing.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "./control-ui-contract.js";
@@ -368,6 +369,50 @@ describe("handleControlUiHttpRequest", () => {
         expect(String(end.mock.calls[0]?.[0] ?? "")).toContain("Unauthorized");
       },
     });
+  });
+
+  it("accepts paired operator device tokens on assistant media requests", async () => {
+    const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-media-device-token-"));
+    vi.stubEnv("OPENCLAW_HOME", tempHome);
+    try {
+      const deviceId = "control-ui-device";
+      const requested = await requestDevicePairing({
+        deviceId,
+        publicKey: "test-public-key",
+        role: "operator",
+        scopes: ["operator.read"],
+        clientId: "openclaw-control-ui",
+        clientMode: "webchat",
+      });
+      const approved = await approveDevicePairing(requested.request.requestId, {
+        callerScopes: ["operator.read"],
+      });
+      expect(approved?.status).toBe("approved");
+      const operatorToken =
+        approved?.status === "approved" ? approved.device.tokens?.operator?.token : undefined;
+      expect(typeof operatorToken).toBe("string");
+
+      await withAllowedAssistantMediaRoot({
+        prefix: "ui-media-device-token-",
+        fn: async (tmpRoot) => {
+          const filePath = path.join(tmpRoot, "photo.png");
+          await fs.writeFile(filePath, Buffer.from("not-a-real-png"));
+          const { res, handled } = await runAssistantMediaRequest({
+            url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}`,
+            method: "GET",
+            auth: { mode: "token", token: "shared-token", allowTailscale: false },
+            headers: {
+              authorization: `Bearer ${operatorToken}`,
+            },
+          });
+          expect(handled).toBe(true);
+          expect(res.statusCode).toBe(200);
+        },
+      });
+    } finally {
+      vi.unstubAllEnvs();
+      await fs.rm(tempHome, { recursive: true, force: true });
+    }
   });
 
   it("rejects trusted-proxy assistant media requests from disallowed browser origins", async () => {
