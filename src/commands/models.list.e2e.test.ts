@@ -17,6 +17,10 @@ const listProfilesForProvider = vi.fn().mockReturnValue([]);
 const resolveEnvApiKey = vi.fn().mockReturnValue(undefined);
 const resolveAwsSdkEnvVarName = vi.fn().mockReturnValue(undefined);
 const hasUsableCustomProviderApiKey = vi.fn().mockReturnValue(false);
+const loadModelCatalog = vi.fn(async () => []);
+const loadProviderCatalogModelsForList = vi.fn<() => Promise<Array<Record<string, unknown>>>>(
+  async () => [],
+);
 const shouldSuppressBuiltInModel = vi.fn().mockReturnValue(false);
 const modelRegistryState = {
   models: [] as Array<Record<string, unknown>>,
@@ -71,7 +75,8 @@ vi.mock("./models/list.runtime.js", () => {
     resolveEnvApiKey,
     resolveAwsSdkEnvVarName,
     hasUsableCustomProviderApiKey,
-    loadModelCatalog: vi.fn(async () => []),
+    loadModelCatalog,
+    loadProviderCatalogModelsForList,
     discoverAuthStorage: () => ({}) as unknown,
     discoverModels: () => new MockModelRegistry() as unknown,
     resolveModelWithRegistry: ({
@@ -132,6 +137,10 @@ beforeEach(() => {
   getRuntimeConfig.mockReturnValue({});
   listProfilesForProvider.mockReturnValue([]);
   ensureOpenClawModelsJson.mockClear();
+  loadModelCatalog.mockClear();
+  loadModelCatalog.mockResolvedValue([]);
+  loadProviderCatalogModelsForList.mockReset();
+  loadProviderCatalogModelsForList.mockResolvedValue([]);
   shouldSuppressBuiltInModel.mockReset();
   shouldSuppressBuiltInModel.mockReturnValue(false);
   readConfigFileSnapshotForWrite.mockClear();
@@ -178,6 +187,14 @@ describe("models list/status", () => {
     input: ["text"],
     baseUrl: "https://chatgpt.com/backend-api",
     contextWindow: 128000,
+  };
+  const MOONSHOT_MODEL = {
+    provider: "moonshot",
+    id: "kimi-k2.6",
+    name: "Kimi K2.6",
+    input: ["text", "image"],
+    baseUrl: "https://api.moonshot.ai/v1",
+    contextWindow: 262144,
   };
   const AZURE_OPENAI_SPARK_MODEL = {
     provider: "azure-openai-responses",
@@ -335,6 +352,50 @@ describe("models list/status", () => {
 
     const payload = parseJsonLog(runtime);
     expect(payload.models[0]?.available).toBe(false);
+  });
+
+  it("models list all includes unauthenticated provider catalog rows", async () => {
+    setDefaultZaiRegistry({ available: false });
+    loadProviderCatalogModelsForList.mockResolvedValueOnce([MOONSHOT_MODEL]);
+    const runtime = makeRuntime();
+
+    await modelsListCommand({ all: true, provider: "moonshot", json: true }, runtime);
+
+    const payload = parseJsonLog(runtime);
+    expect(loadModelCatalog).toHaveBeenCalledTimes(1);
+    expect(payload.models).toEqual([
+      expect.objectContaining({
+        key: "moonshot/kimi-k2.6",
+        name: "Kimi K2.6",
+        available: false,
+        missing: false,
+      }),
+    ]);
+  });
+
+  it("models list rejects provider display labels", async () => {
+    setDefaultZaiRegistry({ available: false });
+    const runtime = makeRuntime();
+
+    await modelsListCommand({ all: true, provider: "Moonshot AI", json: true }, runtime);
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      'Invalid provider filter "Moonshot AI". Use a provider id such as "moonshot", not a display label.',
+    );
+    expect(runtime.log).not.toHaveBeenCalled();
+    expect(loadModelCatalog).not.toHaveBeenCalled();
+    expect(loadProviderCatalogModelsForList).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("models list all local skips unauthenticated provider catalog rows", async () => {
+    setDefaultZaiRegistry({ available: false });
+    loadProviderCatalogModelsForList.mockResolvedValueOnce([MOONSHOT_MODEL]);
+    const runtime = makeRuntime();
+
+    await modelsListCommand({ all: true, local: true, json: true }, runtime);
+
+    expect(loadProviderCatalogModelsForList).not.toHaveBeenCalled();
   });
 
   it("models list does not treat availability-unavailable code as discovery fallback", async () => {

@@ -402,6 +402,36 @@ describe("deliverReplies", () => {
     );
   });
 
+  it("passes shared routing fields to message_sending hooks", async () => {
+    messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sending");
+
+    const runtime = createRuntime(false);
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 3, chat: { id: "123" } });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      replies: [{ text: "caption", replyToId: "500" }],
+      runtime,
+      bot,
+      replyToMode: "all",
+      thread: { id: 42, scope: "forum" },
+    });
+
+    expect(messageHookRunner.runMessageSending).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "123",
+        content: "caption",
+        replyToId: 500,
+        threadId: 42,
+        metadata: expect.objectContaining({
+          channel: "telegram",
+          threadId: 42,
+        }),
+      }),
+      expect.objectContaining({ channelId: "telegram", conversationId: "123" }),
+    );
+  });
+
   it("invokes onVoiceRecording before sending a voice note", async () => {
     const events: string[] = [];
     const runtime = createRuntime(false);
@@ -936,7 +966,7 @@ describe("deliverReplies", () => {
     const bot = createBot({ sendMessage, pinChatMessage });
 
     await deliverReplies({
-      replies: [{ text: "chunk-one\n\nchunk-two", channelData: { telegram: { pin: true } } }],
+      replies: [{ text: "chunk-one\n\nchunk-two", delivery: { pin: true } }],
       chatId: "123",
       token: "tok",
       runtime,
@@ -949,6 +979,25 @@ describe("deliverReplies", () => {
     expect(pinChatMessage).toHaveBeenCalledWith("123", 101, { disable_notification: true });
   });
 
+  it("honors notify on reply delivery pins", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 101, chat: { id: "123" } });
+    const pinChatMessage = vi.fn().mockResolvedValue(true);
+    const bot = createBot({ sendMessage, pinChatMessage });
+
+    await deliverReplies({
+      replies: [{ text: "hello", delivery: { pin: { enabled: true, notify: true } } }],
+      chatId: "123",
+      token: "tok",
+      runtime,
+      bot,
+      replyToMode: "off",
+      textLimit: 4096,
+    });
+
+    expect(pinChatMessage).toHaveBeenCalledWith("123", 101, { disable_notification: false });
+  });
+
   it("continues when pinning fails", async () => {
     const runtime = createRuntime();
     const sendMessage = vi.fn().mockResolvedValue({ message_id: 201, chat: { id: "123" } });
@@ -956,7 +1005,7 @@ describe("deliverReplies", () => {
     const bot = createBot({ sendMessage, pinChatMessage });
 
     await deliverWith({
-      replies: [{ text: "hello", channelData: { telegram: { pin: true } } }],
+      replies: [{ text: "hello", delivery: { pin: true } }],
       runtime,
       bot,
     });

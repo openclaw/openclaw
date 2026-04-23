@@ -179,6 +179,8 @@ For example, `-` becomes `_X2D_`, so `ops-prod` maps to `MATRIX_OPS_X2D_PROD_*`.
 
 The interactive wizard only offers the env-var shortcut when those auth env vars are already present and the selected account does not already have Matrix auth saved in config.
 
+`MATRIX_HOMESERVER` cannot be set from a workspace `.env`; see [Workspace `.env` files](/gateway/security).
+
 ## Configuration example
 
 This is a practical baseline config with DM pairing, room allowlist, and E2EE enabled:
@@ -883,6 +885,12 @@ Per-account override:
 - `channels.matrix.accounts.<account>.execApprovals`
 
 Related docs: [Exec approvals](/tools/exec-approvals)
+
+## Slash commands
+
+Matrix slash commands (for example `/new`, `/reset`, `/model`) work directly in DMs. In rooms, OpenClaw also recognizes slash commands that are prefixed with the bot's own Matrix mention, so `@bot:server /new` triggers the command path without needing a custom mention regex. This keeps the bot responsive to room-style `@mention /command` posts that Element and similar clients emit when a user tab-completes the bot before typing the command.
+
+Authorization rules still apply: command senders must satisfy DM or room allowlist/owner policies just like plain messages.
 
 ## Multi-account
 
