@@ -95,10 +95,60 @@ describe("buildStatusMessage", () => {
     expect(normalized).toContain("Session: agent:main:main");
     expect(normalized).toContain("updated 10m ago");
     expect(normalized).toContain("Runtime: direct");
+    expect(normalized).toContain("Runner: pi (embedded)");
     expect(normalized).toContain("Think: medium");
     expect(normalized).not.toContain("verbose");
     expect(normalized).toContain("elevated");
     expect(normalized).toContain("Queue: collect");
+  });
+
+  it("shows the CLI runner for CLI-backed providers", () => {
+    const text = buildStatusMessage({
+      config: {
+        models: {
+          providers: {
+            "claude-cli": {},
+          },
+        },
+      } as unknown as OpenClawConfig,
+      agent: {
+        model: "claude-cli/opus",
+      },
+      sessionEntry: {
+        sessionId: "cli",
+        updatedAt: 0,
+        modelProvider: "claude-cli",
+        model: "opus",
+      },
+      sessionKey: "agent:main:main",
+      queue: { mode: "collect", depth: 0 },
+    });
+
+    expect(normalizeTestText(text)).toContain("Runner: claude-cli (cli)");
+  });
+
+  it("shows the ACP harness agent and backend when ACP owns the session", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "anthropic/claude-opus-4-6",
+      },
+      sessionEntry: {
+        sessionId: "acp",
+        updatedAt: 0,
+        acp: {
+          backend: "acpx",
+          agent: "gemini",
+          runtimeSessionName: "status-test",
+          mode: "persistent",
+          state: "idle",
+          lastActivityAt: 0,
+        },
+      },
+      sessionKey: "agent:main:main",
+      queue: { mode: "collect", depth: 0 },
+    });
+
+    expect(normalizeTestText(text)).toContain("Runner: gemini (acp/acpx)");
   });
 
   it("falls back to sessionEntry levels when resolved levels are not passed", () => {

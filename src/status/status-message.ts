@@ -4,6 +4,7 @@ import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agen
 import { resolveModelAuthMode } from "../agents/model-auth.js";
 import {
   buildModelAliasIndex,
+  isCliProvider,
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "../agents/model-selection.js";
@@ -191,6 +192,23 @@ function resolveRuntimeLabel(
   })();
   const runtime = sandboxed ? "docker" : sessionKey ? "direct" : "unknown";
   return `${runtime}/${sandboxMode}`;
+}
+
+function resolveRunnerLabel(args: Pick<StatusArgs, "config" | "sessionEntry">): string {
+  const acpAgent = normalizeOptionalString(args.sessionEntry?.acp?.agent);
+  if (acpAgent) {
+    const backend = normalizeOptionalString(args.sessionEntry?.acp?.backend);
+    return backend ? `${acpAgent} (acp/${backend})` : `${acpAgent} (acp)`;
+  }
+
+  const provider =
+    normalizeOptionalString(args.sessionEntry?.modelProvider) ??
+    normalizeOptionalString(args.sessionEntry?.providerOverride);
+  if (provider && isCliProvider(provider, args.config)) {
+    return `${provider} (cli)`;
+  }
+
+  return "pi (embedded)";
 }
 
 const formatTokens = (total: number | null | undefined, contextTokens: number | null) => {
@@ -651,6 +669,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     "on";
 
   const runtime = { label: resolveRuntimeLabel(args) };
+  const runnerLabel = resolveRunnerLabel(args);
 
   const updatedAt = entry?.updatedAt;
   const sessionLine = [
@@ -704,6 +723,7 @@ export function buildStatusMessage(args: StatusArgs): string {
   });
   const optionParts = [
     `Runtime: ${runtime.label}`,
+    `Runner: ${runnerLabel}`,
     `Think: ${thinkLevel}`,
     fastMode ? "Fast: on" : null,
     textVerbosity ? `Text: ${textVerbosity}` : null,
