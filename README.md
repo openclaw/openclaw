@@ -112,6 +112,10 @@ See openclaw-EXAMPLE.json
 
 I recommend you install globally and then have your config in a user folder like /home/openclaw
 
+To build and install globally (Skipping all the below steps), simply run from root folder: ./global 
+
+OR
+
 ```bash
 git clone https://github.com/jdc4429/openclaw.git
 cd openclaw
@@ -131,9 +135,10 @@ pnpm build
 
 `pnpm openclaw setup` writes the local config/workspace needed for `pnpm gateway:watch`. It is safe to re-run, but you normally only need it on first setup or after resetting local state. `pnpm gateway:watch` does not rebuild `dist/control-ui`, so rerun `pnpm ui:build` after `ui/` changes or use `pnpm ui:dev` when iterating on the Control UI. If you want this checkout to run onboarding directly, use `pnpm openclaw onboard --install-daemon`.
 
-Note: `pnpm openclaw ...` runs TypeScript directly (via `tsx`). `pnpm build` produces `dist/` for running via Node / the packaged `openclaw` binary, while `pnpm gateway:watch` rebuilds the runtime on demand during the dev loop.
+Note: You still need to install the configuration portion in a user folder ie. /home/openclaw
 
-
+I created a copy with an example config you can simple download and 'tar xzvf file.tgz ~/' to extract to your current user folder.
+Edit popenclaw.json config to add your API keys, change root folders, and run setup for some extra plugins.
 
 
 
