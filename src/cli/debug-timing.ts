@@ -14,15 +14,16 @@ type TimingPayload = {
 } & Record<string, string | number | boolean | null>;
 
 type TimingWriter = (line: string) => void;
+type NonPromise<T> = T extends PromiseLike<unknown> ? never : T;
 
 export type CliDebugTiming = {
   enabled: boolean;
   mark: (phase: string, details?: TimingDetails) => void;
   time: <T>(
     phase: string,
-    fn: () => T,
-    details?: TimingDetails | ((result: T) => TimingDetails),
-  ) => T;
+    fn: () => NonPromise<T>,
+    details?: TimingDetails | ((result: NonPromise<T>) => TimingDetails),
+  ) => NonPromise<T>;
   timeAsync: <T>(
     phase: string,
     fn: () => Promise<T>,
@@ -94,6 +95,19 @@ function formatPrettyDetailValue(value: string | number | boolean | null): strin
   return String(value);
 }
 
+function formatPrettyLabel(value: string): string {
+  return JSON.stringify(value);
+}
+
+function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "then" in value &&
+    typeof (value as { then?: unknown }).then === "function"
+  );
+}
+
 function formatPrettyTimingLine(payload: TimingPayload): string {
   const details = Object.entries(payload)
     .filter(
@@ -108,7 +122,7 @@ function formatPrettyTimingLine(payload: TimingPayload): string {
   const duration =
     typeof payload.durationMs === "number" ? ` duration=${formatDuration(payload.durationMs)}` : "";
   const suffix = details.length > 0 ? ` ${details.join(" ")}` : "";
-  return `${formatDuration(payload.elapsedMs).padStart(8)} ${`+${formatDuration(payload.deltaMs)}`.padStart(8)} ${payload.phase}${duration}${suffix}`;
+  return `${formatDuration(payload.elapsedMs).padStart(8)} ${`+${formatDuration(payload.deltaMs)}`.padStart(8)} ${formatPrettyLabel(payload.phase)}${duration}${suffix}`;
 }
 
 export function createCliDebugTiming(params: {
@@ -143,7 +157,7 @@ export function createCliDebugTiming(params: {
       return;
     }
     if (!wrotePrettyHeader) {
-      writer(`OpenClaw CLI debug timing: ${params.command}`);
+      writer(`OpenClaw CLI debug timing: ${formatPrettyLabel(params.command)}`);
       wrotePrettyHeader = true;
     }
     writer(formatPrettyTimingLine(payload));
@@ -154,12 +168,16 @@ export function createCliDebugTiming(params: {
     mark,
     time<T>(
       phase: string,
-      fn: () => T,
-      details?: TimingDetails | ((result: T) => TimingDetails),
-    ): T {
+      fn: () => NonPromise<T>,
+      details?: TimingDetails | ((result: NonPromise<T>) => TimingDetails),
+    ): NonPromise<T> {
       const started = enabled ? performance.now() : 0;
       try {
         const result = fn();
+        if (isPromiseLike(result)) {
+          void Promise.resolve(result).catch(() => undefined);
+          throw new Error("CLI debug timing time() received a Promise; use timeAsync() instead.");
+        }
         if (enabled) {
           mark(phase, {
             durationMs: Math.round(performance.now() - started),

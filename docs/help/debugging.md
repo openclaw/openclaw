@@ -86,6 +86,7 @@ Guidelines:
 - Add only a few spans around suspected slow sections.
 - Prefer broad phases such as `registry`, `auth_store`, or `rows` over helper
   names.
+- Use `time()` for synchronous work and `timeAsync()` for promises.
 - Keep stdout clean. The helper writes to stderr, so command JSON output stays
   parseable.
 - Remove temporary imports and spans before opening the final fix PR.
@@ -171,12 +172,15 @@ Each stderr line is one JSON object:
 Before opening the final PR:
 
 ```bash
-rg "createCliDebugTiming|debug:" src
+rg 'createCliDebugTiming|debug:[a-z0-9_-]+:' src/commands src/cli \
+  --glob '!src/cli/debug-timing.*' \
+  --glob '!*.test.ts'
 ```
 
-The command should return no production call sites unless the PR is explicitly
-adding a permanent diagnostics surface. For normal performance fixes, keep only
-the behavior change, tests, and a short note with the timing evidence.
+The command should return no temporary instrumentation call sites unless the PR
+is explicitly adding a permanent diagnostics surface. For normal performance
+fixes, keep only the behavior change, tests, and a short note with the timing
+evidence.
 
 For deeper CPU hotspots, use Node profiling (`--cpu-prof`) or an external
 profiler instead of adding more timing wrappers.
