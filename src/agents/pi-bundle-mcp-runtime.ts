@@ -79,8 +79,15 @@ async function disposeSession(session: BundleMcpSession) {
   if (session.transportType === "streamable-http") {
     await (session.transport as StreamableHTTPClientTransport).terminateSession().catch(() => {});
   }
-  await session.client.close().catch(() => {});
+  // Close the transport before the client for stdio transports. Closing
+  // client first leaves the stdio child process unreclaimed in practice —
+  // under repeated subagent runs this accumulates minimax-mcp /
+  // minimax-coding-plan-mcp / codex mcp-server children and feeds OOM
+  // pressure. Transport.close() closes its end of the child's stdio pipes,
+  // which lets the child exit cleanly; the client.close() then tears down
+  // the MCP protocol state on a transport that's already dead. (#70389)
   await session.transport.close().catch(() => {});
+  await session.client.close().catch(() => {});
 }
 
 function createCatalogFingerprint(servers: Record<string, unknown>): string {
