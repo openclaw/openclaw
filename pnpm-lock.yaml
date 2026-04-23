@@ -1101,6 +1101,10 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/serper:
+    dependencies:
+      typebox:
+        specifier: 1.1.28
+        version: 1.1.28
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*

@@ -4,6 +4,9 @@
   "private": true,
   "description": "OpenClaw Serper (Google Search) plugin",
   "type": "module",
+  "dependencies": {
+    "typebox": "1.1.28"
+  },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
   },

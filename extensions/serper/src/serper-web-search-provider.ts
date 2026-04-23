@@ -1,4 +1,3 @@
-import { Type } from "@sinclair/typebox";
 import {
   buildSearchCacheKey,
   buildUnsupportedSearchFilterResponse,
@@ -27,6 +26,7 @@ import {
   wrapWebContent,
   writeCachedSearchPayload,
 } from "openclaw/plugin-sdk/provider-web-search";
+import { Type } from "typebox";
 
 const SERPER_SEARCH_ENDPOINT = "https://google.serper.dev/search";
 
