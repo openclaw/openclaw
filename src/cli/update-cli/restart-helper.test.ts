@@ -134,6 +134,20 @@ exit 0
       await cleanupScript(scriptPath);
     });
 
+    // Legacy `clawdbot-gateway.service` units expose CLAWDBOT_SYSTEMD_UNIT but
+    // not the canonical OPENCLAW_SYSTEMD_UNIT. Restart scripts must hit the
+    // unit that actually exists on the host instead of the canonical name.
+    it("falls back to CLAWDBOT_SYSTEMD_UNIT when OPENCLAW_SYSTEMD_UNIT is unset", async () => {
+      Object.defineProperty(process, "platform", { value: "linux" });
+      const { scriptPath, content } = await prepareAndReadScript({
+        OPENCLAW_PROFILE: "default",
+        CLAWDBOT_SYSTEMD_UNIT: "clawdbot-gateway.service",
+      });
+      expect(content).toContain("systemctl --user restart 'clawdbot-gateway.service'");
+      expect(content).not.toContain("openclaw-gateway.service");
+      await cleanupScript(scriptPath);
+    });
+
     it("creates a launchd restart script on macOS", async () => {
       Object.defineProperty(process, "platform", { value: "darwin" });
       process.getuid = () => 501;

@@ -3,6 +3,7 @@ import { formatAcpRuntimeErrorText } from "../../../acp/runtime/error-text.js";
 import { toAcpRuntimeError } from "../../../acp/runtime/errors.js";
 import { getAcpRuntimeBackend, requireAcpRuntimeBackend } from "../../../acp/runtime/registry.js";
 import { resolveSessionStorePathForAcp } from "../../../acp/runtime/session-meta.js";
+import { readRecentHarnessSelectionDiagnostics } from "../../../agents/harness/selection.js";
 import { loadSessionStore } from "../../../config/sessions.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
@@ -55,6 +56,31 @@ export async function handleAcpDoctorAction(
     lines.push(`registeredBackend: ${registeredBackend.id}`);
   } else {
     lines.push("registeredBackend: (none)");
+  }
+
+  // Surface the most recent agent-harness selections so operators can quickly
+  // confirm whether requested harnesses (e.g. Codex) actually ran or silently
+  // fell back to the embedded PI backend.
+  const recentSelections = readRecentHarnessSelectionDiagnostics();
+  if (recentSelections.length === 0) {
+    lines.push("recentHarnessSelections: (none observed yet)");
+  } else {
+    lines.push(`recentHarnessSelections: ${recentSelections.length}`);
+    const fallbacks = recentSelections.filter((entry) => entry.fallbackUsed);
+    lines.push(`recentHarnessFallbacks: ${fallbacks.length}`);
+    const tail = recentSelections.slice(-5).toReversed();
+    for (const entry of tail) {
+      const ts = new Date(entry.ts).toISOString();
+      const fallback = entry.fallbackUsed
+        ? ` fallback=true reason=${entry.fallbackReason ?? "(unspecified)"}`
+        : " fallback=false";
+      const provider = entry.provider ? ` provider=${entry.provider}` : "";
+      const model = entry.modelId ? ` model=${entry.modelId}` : "";
+      const agent = entry.agentId ? ` agent=${entry.agentId}` : "";
+      lines.push(
+        `  ${ts} requested=${entry.requestedRuntime} selected=${entry.selectedHarnessId}${fallback}${provider}${model}${agent}`,
+      );
+    }
   }
 
   if (registeredBackend?.runtime.doctor) {

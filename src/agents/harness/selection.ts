@@ -28,6 +28,42 @@ type AgentHarnessPolicy = {
   fallback: EmbeddedAgentHarnessFallback;
 };
 
+// Operator-facing record of the most recent harness selections. Used by
+// `/acp doctor` and similar diagnostics to answer "did this actually run in
+// Codex or did it silently fall back to PI?" without parsing logs.
+export type HarnessSelectionDiagnostic = {
+  ts: number;
+  agentId?: string;
+  sessionKey?: string;
+  provider?: string;
+  modelId?: string;
+  requestedRuntime: EmbeddedAgentRuntime;
+  selectedHarnessId: string;
+  fallbackUsed: boolean;
+  fallbackReason?: string;
+};
+
+const HARNESS_SELECTION_DIAGNOSTIC_RING_SIZE = 16;
+const harnessSelectionDiagnostics: HarnessSelectionDiagnostic[] = [];
+
+function recordHarnessSelectionDiagnostic(entry: HarnessSelectionDiagnostic): void {
+  harnessSelectionDiagnostics.push(entry);
+  if (harnessSelectionDiagnostics.length > HARNESS_SELECTION_DIAGNOSTIC_RING_SIZE) {
+    harnessSelectionDiagnostics.splice(
+      0,
+      harnessSelectionDiagnostics.length - HARNESS_SELECTION_DIAGNOSTIC_RING_SIZE,
+    );
+  }
+}
+
+export function readRecentHarnessSelectionDiagnostics(): HarnessSelectionDiagnostic[] {
+  return harnessSelectionDiagnostics.slice();
+}
+
+export function clearHarnessSelectionDiagnosticsForTests(): void {
+  harnessSelectionDiagnostics.length = 0;
+}
+
 function listPluginAgentHarnesses(): AgentHarness[] {
   return listRegisteredAgentHarnesses().map((entry) => entry.harness);
 }
@@ -56,22 +92,41 @@ export function selectAgentHarness(params: {
   const pluginHarnesses = listPluginAgentHarnesses();
   const piHarness = createPiAgentHarness();
   const runtime = policy.runtime;
+  const recordSelection = (selectedHarnessId: string, fallbackReason?: string): void => {
+    recordHarnessSelectionDiagnostic({
+      ts: Date.now(),
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      provider: params.provider,
+      modelId: params.modelId,
+      requestedRuntime: runtime,
+      selectedHarnessId,
+      fallbackUsed: Boolean(fallbackReason),
+      ...(fallbackReason ? { fallbackReason } : {}),
+    });
+  };
   if (runtime === "pi") {
+    recordSelection("pi");
     return piHarness;
   }
   if (runtime !== "auto") {
     const forced = pluginHarnesses.find((entry) => entry.id === runtime);
     if (forced) {
+      recordSelection(forced.id);
       return forced;
     }
     if (policy.fallback === "none") {
+      recordSelection("pi", "requested-not-registered;fallback-disabled");
       throw new Error(
         `Requested agent harness "${runtime}" is not registered and PI fallback is disabled.`,
       );
     }
+    const reason = "requested-not-registered";
     log.warn("requested agent harness is not registered; falling back to embedded PI backend", {
       requestedRuntime: runtime,
+      fallbackReason: reason,
     });
+    recordSelection("pi", reason);
     return piHarness;
   }
 
@@ -96,13 +151,16 @@ export function selectAgentHarness(params: {
 
   const selected = supported[0]?.harness;
   if (selected) {
+    recordSelection(selected.id);
     return selected;
   }
   if (policy.fallback === "none") {
+    recordSelection("pi", "no-supporting-harness;fallback-disabled");
     throw new Error(
       `No registered agent harness supports ${formatProviderModel(params)} and PI fallback is disabled.`,
     );
   }
+  recordSelection("pi", "no-supporting-harness");
   return piHarness;
 }
 

@@ -36,6 +36,14 @@ function resolveSystemdUnit(env: NodeJS.ProcessEnv): string {
   if (override) {
     return override.endsWith(".service") ? override : `${override}.service`;
   }
+  // Match systemd.ts: legacy `clawdbot-gateway.service` units only set
+  // CLAWDBOT_SYSTEMD_UNIT, not the canonical OPENCLAW_SYSTEMD_UNIT. Restart the
+  // unit that is actually running rather than a canonical name that may not
+  // exist on this host.
+  const legacyOverride = normalizeOptionalString(env.CLAWDBOT_SYSTEMD_UNIT);
+  if (legacyOverride) {
+    return legacyOverride.endsWith(".service") ? legacyOverride : `${legacyOverride}.service`;
+  }
   return `${resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE)}.service`;
 }
 
