@@ -198,6 +198,10 @@ describe("openai image generation provider", () => {
     expect(provider.capabilities.geometry?.sizes).toEqual(
       expect.arrayContaining(["2048x2048", "3840x2160", "2160x3840"]),
     );
+    expect(provider.capabilities.output).toEqual({
+      formats: ["png", "jpeg", "webp"],
+      qualities: ["low", "medium", "high", "auto"],
+    });
   });
 
   it("reports configured when either OpenAI API key auth or Codex OAuth auth is available", () => {
@@ -339,6 +343,50 @@ describe("openai image generation provider", () => {
     expect(result.images).toHaveLength(1);
   });
 
+  it("forwards output and OpenAI-only options on direct generations", async () => {
+    mockGeneratedPngResponse();
+
+    const provider = buildOpenAIImageGenerationProvider();
+    const result = await provider.generateImage({
+      provider: "openai",
+      model: "gpt-image-2",
+      prompt: "Cheap JPEG preview",
+      cfg: {},
+      quality: "low",
+      outputFormat: "jpeg",
+      providerOptions: {
+        openai: {
+          background: "opaque",
+          moderation: "low",
+          outputCompression: 60,
+          user: "end-user-42",
+        },
+      },
+    });
+
+    expect(postJsonRequestMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://api.openai.com/v1/images/generations",
+        body: {
+          model: "gpt-image-2",
+          prompt: "Cheap JPEG preview",
+          n: 1,
+          size: "1024x1024",
+          quality: "low",
+          output_format: "jpeg",
+          background: "opaque",
+          moderation: "low",
+          output_compression: 60,
+          user: "end-user-42",
+        },
+      }),
+    );
+    expect(result.images[0]).toMatchObject({
+      mimeType: "image/jpeg",
+      fileName: "image-1.jpg",
+    });
+  });
+
   it("allows loopback image requests for the synthetic mock-openai provider", async () => {
     mockGeneratedPngResponse();
 
@@ -463,6 +511,44 @@ describe("openai image generation provider", () => {
     expect(result.images).toHaveLength(1);
   });
 
+  it("forwards output and OpenAI-only options on multipart edits", async () => {
+    mockGeneratedPngResponse();
+
+    const provider = buildOpenAIImageGenerationProvider();
+    const result = await provider.generateImage({
+      provider: "openai",
+      model: "gpt-image-2",
+      prompt: "Edit as WebP",
+      cfg: {},
+      inputImages: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
+      quality: "high",
+      outputFormat: "webp",
+      providerOptions: {
+        openai: {
+          background: "transparent",
+          moderation: "auto",
+          outputCompression: 75,
+          user: "end-user-99",
+        },
+      },
+    });
+
+    const editCallArgs = postMultipartRequestMock.mock.calls[0]?.[0] as {
+      body: FormData;
+    };
+    const form = editCallArgs.body;
+    expect(form.get("quality")).toBe("high");
+    expect(form.get("output_format")).toBe("webp");
+    expect(form.get("background")).toBe("transparent");
+    expect(form.get("moderation")).toBe("auto");
+    expect(form.get("output_compression")).toBe("75");
+    expect(form.get("user")).toBe("end-user-99");
+    expect(result.images[0]).toMatchObject({
+      mimeType: "image/webp",
+      fileName: "image-1.webp",
+    });
+  });
+
   it("falls back to Codex OAuth image generation through Responses streaming", async () => {
     mockCodexAuthOnly();
     mockCodexImageStream({ imageData: "codex-image", revisedPrompt: "revised codex prompt" });
@@ -477,6 +563,14 @@ describe("openai image generation provider", () => {
       authStore,
       count: 1,
       size: "1024x1536",
+      quality: "low",
+      outputFormat: "jpeg",
+      providerOptions: {
+        openai: {
+          background: "opaque",
+          outputCompression: 55,
+        },
+      },
     });
 
     expect(resolveApiKeyForProviderMock).toHaveBeenCalledWith(
@@ -517,6 +611,10 @@ describe("openai image generation provider", () => {
               type: "image_generation",
               model: "gpt-image-2",
               size: "1024x1536",
+              quality: "low",
+              output_format: "jpeg",
+              background: "opaque",
+              output_compression: 55,
             },
           ],
           tool_choice: { type: "image_generation" },
@@ -530,8 +628,8 @@ describe("openai image generation provider", () => {
     expect(result.images).toEqual([
       {
         buffer: Buffer.from("codex-image"),
-        mimeType: "image/png",
-        fileName: "image-1.png",
+        mimeType: "image/jpeg",
+        fileName: "image-1.jpg",
         revisedPrompt: "revised codex prompt",
       },
     ]);

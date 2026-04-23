@@ -1,6 +1,7 @@
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type {
+  ImageGenerationOutputFormat,
   ImageGenerationProvider,
   ImageGenerationResult,
   ImageGenerationSourceImage,
@@ -28,6 +29,7 @@ const DEFAULT_OPENAI_CODEX_IMAGE_BASE_URL = "https://chatgpt.com/backend-api/cod
 const OPENAI_CODEX_IMAGE_INSTRUCTIONS = "You are an image generation assistant.";
 const DEFAULT_OPENAI_IMAGE_TIMEOUT_MS = 180_000;
 const DEFAULT_OUTPUT_MIME = "image/png";
+const DEFAULT_OUTPUT_EXTENSION = "png";
 const DEFAULT_SIZE = "1024x1024";
 const OPENAI_SUPPORTED_SIZES = [
   "1024x1024",
@@ -45,6 +47,8 @@ const MAX_CODEX_IMAGE_SSE_EVENTS = 512;
 const MAX_CODEX_IMAGE_BASE64_CHARS = 64 * 1024 * 1024;
 const LOG_VALUE_MAX_CHARS = 256;
 const MOCK_OPENAI_PROVIDER_ID = "mock-openai";
+const OPENAI_OUTPUT_FORMATS = ["png", "jpeg", "webp"] as const;
+const OPENAI_QUALITIES = ["low", "medium", "high", "auto"] as const;
 const log = createSubsystemLogger("image-generation/openai");
 
 const AZURE_HOSTNAME_SUFFIXES = [
@@ -137,6 +141,46 @@ function buildAzureImageUrl(
     .replace(/\/openai\/v1$/, "")
     .replace(/\/v1$/, "");
   return `${cleanBase}/openai/deployments/${model}/images/${action}?api-version=${resolveAzureApiVersion()}`;
+}
+
+function resolveOutputMime(outputFormat?: ImageGenerationOutputFormat): {
+  mimeType: string;
+  extension: string;
+} {
+  switch (outputFormat) {
+    case "jpeg":
+      return { mimeType: "image/jpeg", extension: "jpg" };
+    case "webp":
+      return { mimeType: "image/webp", extension: "webp" };
+    case "png":
+    case undefined:
+      return { mimeType: DEFAULT_OUTPUT_MIME, extension: DEFAULT_OUTPUT_EXTENSION };
+  }
+  return { mimeType: DEFAULT_OUTPUT_MIME, extension: DEFAULT_OUTPUT_EXTENSION };
+}
+
+function appendOpenAIImageOptions(
+  target: Record<string, unknown> | FormData,
+  req: Parameters<ImageGenerationProvider["generateImage"]>[0],
+): void {
+  const openai = req.providerOptions?.openai;
+  const entries: Record<string, unknown> = {
+    ...(req.quality !== undefined ? { quality: req.quality } : {}),
+    ...(req.outputFormat !== undefined ? { output_format: req.outputFormat } : {}),
+    ...(openai?.background !== undefined ? { background: openai.background } : {}),
+    ...(openai?.moderation !== undefined ? { moderation: openai.moderation } : {}),
+    ...(openai?.outputCompression !== undefined
+      ? { output_compression: openai.outputCompression }
+      : {}),
+    ...(openai?.user !== undefined ? { user: openai.user } : {}),
+  };
+  for (const [key, value] of Object.entries(entries)) {
+    if (target instanceof FormData) {
+      target.set(key, String(value));
+    } else {
+      target[key] = value;
+    }
+  }
 }
 
 function shouldAllowPrivateImageEndpoint(req: {
@@ -341,15 +385,17 @@ function decodeCodexImagePayload(payload: string): Buffer {
 function toCodexImage(
   entry: { result?: string; revised_prompt?: string },
   index: number,
+  outputFormat?: ImageGenerationOutputFormat,
 ): ImageGenerationResult["images"][number] | null {
   if (typeof entry.result !== "string" || entry.result.length === 0) {
     return null;
   }
+  const output = resolveOutputMime(outputFormat);
   return Object.assign(
     {
       buffer: decodeCodexImagePayload(entry.result),
-      mimeType: DEFAULT_OUTPUT_MIME,
-      fileName: `image-${index + 1}.png`,
+      mimeType: output.mimeType,
+      fileName: `image-${index + 1}.${output.extension}`,
     },
     entry.revised_prompt ? { revisedPrompt: entry.revised_prompt } : {},
   );
@@ -358,6 +404,7 @@ function toCodexImage(
 function extractCodexImageGenerationResult(params: {
   body: string;
   model: string;
+  outputFormat?: ImageGenerationOutputFormat;
 }): ImageGenerationResult {
   const events = parseCodexImageGenerationEvents(params.body);
   const failure = events.find(
@@ -380,12 +427,14 @@ function extractCodexImageGenerationResult(params: {
         event.item.result.length > 0,
     )
     .slice(0, OPENAI_MAX_IMAGE_RESULTS)
-    .map((event, index) => (event.item ? toCodexImage(event.item, index) : null))
+    .map((event, index) =>
+      event.item ? toCodexImage(event.item, index, params.outputFormat) : null,
+    )
     .filter((image): image is NonNullable<typeof image> => image !== null);
   const completedOutputImages = (completedResponse?.response?.output ?? [])
     .filter((entry) => entry.type === "image_generation_call")
     .slice(0, OPENAI_MAX_IMAGE_RESULTS)
-    .map((entry, index) => toCodexImage(entry, index))
+    .map((entry, index) => toCodexImage(entry, index, params.outputFormat))
     .filter((image): image is NonNullable<typeof image> => image !== null);
   const images = outputItemImages.length > 0 ? outputItemImages : completedOutputImages;
 
@@ -432,6 +481,10 @@ function createOpenAIImageGenerationProviderBase(params: {
       },
       geometry: {
         sizes: [...OPENAI_SUPPORTED_SIZES],
+      },
+      output: {
+        formats: [...OPENAI_OUTPUT_FORMATS],
+        qualities: [...OPENAI_QUALITIES],
       },
     },
     generateImage: params.generateImage,
@@ -494,6 +547,7 @@ async function generateOpenAICodexImage(params: {
   const count = resolveOpenAIImageCount(req.count);
   const size = req.size ?? DEFAULT_SIZE;
   const timeoutMs = resolveOpenAIImageTimeoutMs(req.timeoutMs);
+  const openai = req.providerOptions?.openai;
   headers.set("Content-Type", "application/json");
   const content: Array<Record<string, unknown>> = [
     { type: "input_text", text: req.prompt },
@@ -522,6 +576,12 @@ async function generateOpenAICodexImage(params: {
             type: "image_generation",
             model,
             size,
+            ...(req.quality !== undefined ? { quality: req.quality } : {}),
+            ...(req.outputFormat !== undefined ? { output_format: req.outputFormat } : {}),
+            ...(openai?.background !== undefined ? { background: openai.background } : {}),
+            ...(openai?.outputCompression !== undefined
+              ? { output_compression: openai.outputCompression }
+              : {}),
           },
         ],
         tool_choice: { type: "image_generation" },
@@ -540,6 +600,7 @@ async function generateOpenAICodexImage(params: {
         extractCodexImageGenerationResult({
           body: await readResponseBodyText(response),
           model,
+          outputFormat: req.outputFormat,
         }),
       );
     } finally {
@@ -547,10 +608,11 @@ async function generateOpenAICodexImage(params: {
     }
   }
   const images = results.flatMap((result) => result.images);
+  const output = resolveOutputMime(req.outputFormat);
   return {
     images: images.map((image, index) =>
       Object.assign({}, image, {
-        fileName: `image-${index + 1}.png`,
+        fileName: `image-${index + 1}.${output.extension}`,
       }),
     ),
     model,
@@ -657,6 +719,7 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
             form.set("prompt", req.prompt);
             form.set("n", String(count));
             form.set("size", size);
+            appendOpenAIImageOptions(form, req);
             for (const [index, image] of inputImages.entries()) {
               const mimeType = image.mimeType?.trim() || DEFAULT_OUTPUT_MIME;
               form.append(
@@ -685,15 +748,17 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
         : await (() => {
             const jsonHeaders = new Headers(headers);
             jsonHeaders.set("Content-Type", "application/json");
+            const body: Record<string, unknown> = {
+              model,
+              prompt: req.prompt,
+              n: count,
+              size,
+            };
+            appendOpenAIImageOptions(body, req);
             return postJsonRequest({
               url,
               headers: jsonHeaders,
-              body: {
-                model,
-                prompt: req.prompt,
-                n: count,
-                size,
-              },
+              body,
               timeoutMs,
               fetchFn: fetch,
               allowPrivateNetwork,
@@ -708,6 +773,7 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
         );
 
         const data = (await response.json()) as OpenAIImageApiResponse;
+        const output = resolveOutputMime(req.outputFormat);
         const images = (data.data ?? [])
           .map((entry, index) => {
             if (!entry.b64_json) {
@@ -716,8 +782,8 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
             return Object.assign(
               {
                 buffer: Buffer.from(entry.b64_json, `base64`),
-                mimeType: DEFAULT_OUTPUT_MIME,
-                fileName: `image-${index + 1}.png`,
+                mimeType: output.mimeType,
+                fileName: `image-${index + 1}.${output.extension}`,
               },
               entry.revised_prompt ? { revisedPrompt: entry.revised_prompt } : {},
             );

@@ -8,7 +8,13 @@ import {
 } from "../../image-generation/runtime.js";
 import type {
   ImageGenerationIgnoredOverride,
+  ImageGenerationOpenAIBackground,
+  ImageGenerationOpenAIModeration,
+  ImageGenerationOpenAIOptions,
+  ImageGenerationOutputFormat,
   ImageGenerationProvider,
+  ImageGenerationProviderOptions,
+  ImageGenerationQuality,
   ImageGenerationResolution,
   ImageGenerationSourceImage,
 } from "../../image-generation/types.js";
@@ -18,6 +24,7 @@ import { saveMediaBuffer } from "../../media/store.js";
 import { loadWebMedia } from "../../media/web-media.js";
 import { getProviderEnvVars } from "../../secrets/provider-env-vars.js";
 import { resolveUserPath } from "../../utils.js";
+import { optionalStringEnum } from "../schema/string-enum.js";
 import { ToolInputError, readNumberParam, readStringParam } from "./common.js";
 import { decodeDataUrl } from "./image-tool.helpers.js";
 import {
@@ -44,6 +51,10 @@ const DEFAULT_COUNT = 1;
 const MAX_COUNT = 4;
 const MAX_INPUT_IMAGES = 5;
 const DEFAULT_RESOLUTION: ImageGenerationResolution = "1K";
+const SUPPORTED_QUALITIES = ["low", "medium", "high", "auto"] as const;
+const SUPPORTED_OUTPUT_FORMATS = ["png", "jpeg", "webp"] as const;
+const SUPPORTED_OPENAI_BACKGROUNDS = ["transparent", "opaque", "auto"] as const;
+const SUPPORTED_OPENAI_MODERATIONS = ["low", "auto"] as const;
 const SUPPORTED_ASPECT_RATIOS = new Set([
   "1:1",
   "2:3",
@@ -100,6 +111,34 @@ const ImageGenerateToolSchema = Type.Object({
     Type.String({
       description:
         "Optional resolution hint: 1K, 2K, or 4K. Useful for Google edit/generation flows.",
+    }),
+  ),
+  quality: optionalStringEnum(SUPPORTED_QUALITIES, {
+    description: "Optional quality hint: low, medium, high, or auto when the provider supports it.",
+  }),
+  outputFormat: optionalStringEnum(SUPPORTED_OUTPUT_FORMATS, {
+    description: "Optional output format hint: png, jpeg, or webp when the provider supports it.",
+  }),
+  openai: Type.Optional(
+    Type.Object({
+      background: optionalStringEnum(SUPPORTED_OPENAI_BACKGROUNDS, {
+        description: "OpenAI-only background hint: transparent, opaque, or auto.",
+      }),
+      moderation: optionalStringEnum(SUPPORTED_OPENAI_MODERATIONS, {
+        description: "OpenAI-only moderation hint: low or auto.",
+      }),
+      outputCompression: Type.Optional(
+        Type.Number({
+          description: "OpenAI-only compression level for jpeg/webp outputFormat, 0-100.",
+          minimum: 0,
+          maximum: 100,
+        }),
+      ),
+      user: Type.Optional(
+        Type.String({
+          description: "OpenAI-only stable end-user identifier for abuse monitoring.",
+        }),
+      ),
     }),
   ),
   count: Type.Optional(
@@ -174,6 +213,85 @@ function normalizeAspectRatio(raw: string | undefined): string | undefined {
   throw new ToolInputError(
     "aspectRatio must be one of 1:1, 2:3, 3:2, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, or 21:9",
   );
+}
+
+function normalizeQuality(raw: string | undefined): ImageGenerationQuality | undefined {
+  const normalized = raw?.trim().toLowerCase();
+  if (!normalized) {
+    return undefined;
+  }
+  if ((SUPPORTED_QUALITIES as readonly string[]).includes(normalized)) {
+    return normalized as ImageGenerationQuality;
+  }
+  throw new ToolInputError("quality must be one of low, medium, high, or auto");
+}
+
+function normalizeOutputFormat(raw: string | undefined): ImageGenerationOutputFormat | undefined {
+  const normalized = raw?.trim().toLowerCase();
+  if (!normalized) {
+    return undefined;
+  }
+  if ((SUPPORTED_OUTPUT_FORMATS as readonly string[]).includes(normalized)) {
+    return normalized as ImageGenerationOutputFormat;
+  }
+  throw new ToolInputError("outputFormat must be one of png, jpeg, or webp");
+}
+
+function normalizeOpenAIBackground(
+  raw: string | undefined,
+): ImageGenerationOpenAIBackground | undefined {
+  const normalized = raw?.trim().toLowerCase();
+  if (!normalized) {
+    return undefined;
+  }
+  if ((SUPPORTED_OPENAI_BACKGROUNDS as readonly string[]).includes(normalized)) {
+    return normalized as ImageGenerationOpenAIBackground;
+  }
+  throw new ToolInputError("openai.background must be one of transparent, opaque, or auto");
+}
+
+function normalizeOpenAIModeration(
+  raw: string | undefined,
+): ImageGenerationOpenAIModeration | undefined {
+  const normalized = raw?.trim().toLowerCase();
+  if (!normalized) {
+    return undefined;
+  }
+  if ((SUPPORTED_OPENAI_MODERATIONS as readonly string[]).includes(normalized)) {
+    return normalized as ImageGenerationOpenAIModeration;
+  }
+  throw new ToolInputError("openai.moderation must be one of low or auto");
+}
+
+function readRecordParam(params: Record<string, unknown>, key: string): Record<string, unknown> {
+  const raw = params[key];
+  return raw && typeof raw === "object" && !Array.isArray(raw)
+    ? (raw as Record<string, unknown>)
+    : {};
+}
+
+function normalizeOpenAIOptions(args: Record<string, unknown>): ImageGenerationOpenAIOptions {
+  const raw = readRecordParam(args, "openai");
+  const background = normalizeOpenAIBackground(readStringParam(raw, "background"));
+  const moderation = normalizeOpenAIModeration(readStringParam(raw, "moderation"));
+  const outputCompression = readNumberParam(raw, "outputCompression", { integer: true });
+  const user = readStringParam(raw, "user");
+  if (outputCompression !== undefined && (outputCompression < 0 || outputCompression > 100)) {
+    throw new ToolInputError("openai.outputCompression must be between 0 and 100");
+  }
+  return {
+    ...(background ? { background } : {}),
+    ...(moderation ? { moderation } : {}),
+    ...(outputCompression !== undefined ? { outputCompression } : {}),
+    ...(user ? { user } : {}),
+  };
+}
+
+function normalizeProviderOptions(
+  args: Record<string, unknown>,
+): ImageGenerationProviderOptions | undefined {
+  const openai = normalizeOpenAIOptions(args);
+  return Object.keys(openai).length > 0 ? { openai } : undefined;
 }
 
 function normalizeReferenceImages(args: Record<string, unknown>): string[] {
@@ -498,6 +616,9 @@ export function createImageGenerateTool(options?: {
       const aspectRatio = normalizeAspectRatio(readStringParam(params, "aspectRatio"));
       const explicitResolution = normalizeResolution(readStringParam(params, "resolution"));
       const timeoutMs = readGenerationTimeoutMs(params);
+      const quality = normalizeQuality(readStringParam(params, "quality"));
+      const outputFormat = normalizeOutputFormat(readStringParam(params, "outputFormat"));
+      const providerOptions = normalizeProviderOptions(params);
       const selectedProvider = resolveSelectedImageGenerationProvider({
         config: effectiveCfg,
         imageGenerationModelConfig,
@@ -541,9 +662,12 @@ export function createImageGenerateTool(options?: {
         size,
         aspectRatio,
         resolution,
+        quality,
+        outputFormat,
         count,
         inputImages,
         timeoutMs,
+        providerOptions,
       });
       const ignoredOverrides = result.ignoredOverrides ?? [];
       const displayProvider = sanitizeInlineDirectiveText(result.provider);
@@ -625,6 +749,8 @@ export function createImageGenerateTool(options?: {
           ...(normalizedAspectRatio || aspectRatio
             ? { aspectRatio: normalizedAspectRatio ?? aspectRatio }
             : {}),
+          ...(quality ? { quality } : {}),
+          ...(outputFormat ? { outputFormat } : {}),
           ...(filename ? { filename } : {}),
           ...(timeoutMs !== undefined ? { timeoutMs } : {}),
           attempts: result.attempts,

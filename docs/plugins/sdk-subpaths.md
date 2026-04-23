@@ -14,7 +14,7 @@ detail unless a doc page explicitly promotes them.
 
 For the plugin authoring guide, see [Plugin SDK overview](/plugins/sdk-overview).
 
-### Plugin entry
+## Plugin entry
 
 | Subpath                     | Key exports                                                                                                                            |
 | --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
