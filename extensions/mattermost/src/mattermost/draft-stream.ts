@@ -32,7 +32,7 @@ export function normalizeMattermostDraftText(text: string, maxChars: number): st
 }
 
 const TOOL_STATUS_ICONS: Record<string, string> = {
-  exec: "▶",
+  exec: "⚡",
   read: "📖",
   write: "✏️",
   edit: "✏️",
@@ -63,8 +63,8 @@ export function buildMattermostToolStatusText(params: {
 }): string {
   const name = params.name?.trim();
   const title = params.title?.trim();
-  if (!name) return "▶ tool…";
-  const icon = TOOL_STATUS_ICONS[name] ?? "▶";
+  if (!name) return "⚡ tool…";
+  const icon = TOOL_STATUS_ICONS[name] ?? "⚡";
   // Avoid backticks: Mattermost desktop client hides text after inline code.
   // Use plain text with an emoji prefix so the title is always visible.
   if (title && title !== name) return `${icon} ${name} — ${title}…`;
