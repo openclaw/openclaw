@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { waitForFollowupQueueDrain } from "./drain-all.js";
 import { FOLLOWUP_QUEUES, type FollowupQueueState } from "./state.js";
 
@@ -16,6 +16,10 @@ function createMockQueue(overrides: Partial<FollowupQueueState> = {}): FollowupQ
     ...overrides,
   };
 }
+
+beforeEach(() => {
+  FOLLOWUP_QUEUES.clear();
+});
 
 afterEach(() => {
   FOLLOWUP_QUEUES.clear();
