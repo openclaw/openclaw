@@ -23,6 +23,7 @@ type IncompleteTurnAttempt = Pick<
   | "didSendViaMessagingTool"
   | "lastToolError"
   | "lastAssistant"
+  | "messagesSnapshot"
   | "replayMetadata"
   | "promptErrorSource"
   | "timedOutDuringCompaction"
@@ -178,6 +179,9 @@ export function resolveIncompleteTurnPayloadText(params: {
   if (hasOnlySilentAssistantReply(params.attempt.assistantTexts)) {
     return null;
   }
+  if (hasLatestSilentToolResult(params.attempt.messagesSnapshot)) {
+    return null;
+  }
 
   const stopReason = params.attempt.lastAssistant?.stopReason;
   // If the assistant already delivered user-visible content via a messaging
@@ -221,6 +225,44 @@ function hasOnlySilentAssistantReply(assistantTexts: readonly string[]): boolean
     nonEmptyTexts.length > 0 &&
     nonEmptyTexts.every((text) => isSilentReplyPayloadText(text, SILENT_REPLY_TOKEN))
   );
+}
+
+function hasLatestSilentToolResult(messagesSnapshot: readonly AgentMessage[]): boolean {
+  for (let index = messagesSnapshot.length - 1; index >= 0; index -= 1) {
+    const message = messagesSnapshot[index] as
+      | {
+          role?: string;
+          content?: unknown;
+          isError?: boolean;
+        }
+      | undefined;
+    if (!message || (message.role !== "toolResult" && message.role !== "tool")) {
+      continue;
+    }
+    if (message.isError === true) {
+      return false;
+    }
+    const text = extractMessageText(message.content).trim();
+    return Boolean(text) && isSilentReplyPayloadText(text, SILENT_REPLY_TOKEN);
+  }
+  return false;
+}
+
+function extractMessageText(content: unknown): string {
+  if (typeof content === "string") {
+    return content;
+  }
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  return content
+    .flatMap((part) =>
+      part && typeof part === "object" && (part as { type?: unknown }).type === "text"
+        ? [(part as { text?: unknown }).text]
+        : [],
+    )
+    .filter((value): value is string => typeof value === "string")
+    .join("\n\n");
 }
 
 export function resolveReplayInvalidFlag(params: {
