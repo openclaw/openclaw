@@ -1786,9 +1786,13 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                     const callId = payload.itemId?.replace(/^(?:tool|command):/, "");
                     const callChanged = callId && callId !== lastToolItemId;
                     if (callChanged) {
-                      await onDraftBoundary();
+                      // Set lastToolItemId BEFORE awaiting so a racing onToolStart
+                      // (which checks lastToolItemId === undefined to decide whether
+                      // to write its no-title placeholder) cannot run between the
+                      // boundary await and the assignment.
                       lastToolItemId = callId;
                       lastToolItemTitle = undefined;
+                      await onDraftBoundary();
                     }
                     if (payload.name) lastToolItemName = payload.name;
                     // Same call may emit multiple item events (kind=tool wrapper +
