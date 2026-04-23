@@ -206,12 +206,6 @@ export async function processDiscordMessage(
     return;
   }
 
-  const text = messageText;
-  if (!text) {
-    logVerbose("discord: drop message " + message.id + " (empty content)");
-    return;
-  }
-
   persistDiscordPrompt(text);
   
   const ssrfPolicy = cfg.browser?.ssrfPolicy;
