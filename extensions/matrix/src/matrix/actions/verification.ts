@@ -210,18 +210,17 @@ async function completeMatrixSelfVerification(params: {
 }): Promise<MatrixSelfVerificationResult> {
   const bootstrap = await params.client.bootstrapOwnDeviceVerification({
     allowAutomaticCrossSigningReset: false,
+    strict: false,
   });
   if (!bootstrap.verification.verified) {
-    throw new Error(
-      `Matrix self-verification completed, but full Matrix identity trust is still incomplete: ${
-        bootstrap.error ?? formatMatrixOwnerVerificationDiagnostics(bootstrap.verification)
-      }`,
-    );
+    await params.client.trustOwnIdentityAfterSelfVerification?.();
   }
-  const ownerVerification = await waitForMatrixOwnerVerificationStatus({
-    client: params.client,
-    timeoutMs: params.timeoutMs,
-  });
+  const ownerVerification = bootstrap.verification.verified
+    ? bootstrap.verification
+    : await waitForMatrixOwnerVerificationStatus({
+        client: params.client,
+        timeoutMs: params.timeoutMs,
+      });
   return {
     ...params.completed,
     deviceOwnerVerified: ownerVerification.verified,

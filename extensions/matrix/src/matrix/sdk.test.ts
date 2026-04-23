@@ -1222,6 +1222,29 @@ describe("MatrixClient crypto bootstrapping", () => {
     );
   });
 
+  it("trusts the own Matrix identity after completed self-verification", async () => {
+    const verifyOwnIdentity = vi.fn(async () => ({}));
+    const freeOwnIdentity = vi.fn();
+    matrixJsClient.getCrypto = vi.fn(() => ({
+      on: vi.fn(),
+      getOwnIdentity: vi.fn(async () => ({
+        free: freeOwnIdentity,
+        isVerified: () => false,
+        verify: verifyOwnIdentity,
+      })),
+      requestOwnUserVerification: vi.fn(async () => null),
+    }));
+
+    const client = new MatrixClient("https://matrix.example.org", "token", {
+      encryption: true,
+    });
+
+    await client.trustOwnIdentityAfterSelfVerification();
+
+    expect(verifyOwnIdentity).toHaveBeenCalledTimes(1);
+    expect(freeOwnIdentity).toHaveBeenCalledTimes(1);
+  });
+
   it("retries bootstrap with forced reset when initial publish/verification is incomplete", async () => {
     matrixJsClient.getCrypto = vi.fn(() => ({ on: vi.fn() }));
     const client = new MatrixClient("https://matrix.example.org", "token", {

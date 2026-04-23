@@ -165,12 +165,13 @@ const MATRIX_AUTOMATIC_REPAIR_BOOTSTRAP_OPTIONS = {
 function createMatrixExplicitBootstrapOptions(params?: {
   allowAutomaticCrossSigningReset?: boolean;
   forceResetCrossSigning?: boolean;
+  strict?: boolean;
 }): MatrixCryptoBootstrapOptions {
   return {
     forceResetCrossSigning: params?.forceResetCrossSigning === true,
     allowAutomaticCrossSigningReset: params?.allowAutomaticCrossSigningReset !== false,
     allowSecretStorageRecreateWithoutRecoveryKey: true,
-    strict: true,
+    strict: params?.strict !== false,
   };
 }
 
@@ -367,7 +368,15 @@ export class MatrixClient {
       return;
     }
 
-    this.verificationManager ??= new runtime.MatrixVerificationManager();
+    this.verificationManager ??= new runtime.MatrixVerificationManager({
+      trustOwnDeviceAfterSas: async (deviceId: string) => {
+        const crypto = this.client.getCrypto() as MatrixCryptoBootstrapApi | undefined;
+        if (typeof crypto?.crossSignDevice !== "function") {
+          throw new Error("Matrix crypto backend does not support cross-signing devices");
+        }
+        await crypto.crossSignDevice(deviceId);
+      },
+    });
     this.cryptoBootstrapper ??= new runtime.MatrixCryptoBootstrapper<MatrixRawEvent>({
       getUserId: () => this.getUserId(),
       getPassword: () => this.password,
@@ -1127,6 +1136,35 @@ export class MatrixClient {
     };
   }
 
+  async trustOwnIdentityAfterSelfVerification(): Promise<void> {
+    if (!this.encryptionEnabled) {
+      return;
+    }
+
+    await this.ensureStartedForCryptoControlPlane();
+    await this.ensureCryptoSupportInitialized();
+    const crypto = this.client.getCrypto() as MatrixCryptoBootstrapApi | undefined;
+    const ownIdentity =
+      crypto && typeof crypto.getOwnIdentity === "function"
+        ? await crypto.getOwnIdentity().catch(() => undefined)
+        : undefined;
+    if (!ownIdentity) {
+      return;
+    }
+
+    try {
+      if (typeof ownIdentity.isVerified === "function" && ownIdentity.isVerified()) {
+        return;
+      }
+      if (typeof ownIdentity.verify !== "function") {
+        throw new Error("Matrix crypto backend does not support trusting own identity");
+      }
+      await ownIdentity.verify();
+    } finally {
+      ownIdentity.free?.();
+    }
+  }
+
   async verifyWithRecoveryKey(
     rawRecoveryKey: string,
   ): Promise<MatrixRecoveryKeyVerificationResult> {
@@ -1486,6 +1524,7 @@ export class MatrixClient {
     allowAutomaticCrossSigningReset?: boolean;
     recoveryKey?: string;
     forceResetCrossSigning?: boolean;
+    strict?: boolean;
   }): Promise<MatrixVerificationBootstrapResult> {
     const pendingVerifications = async (): Promise<number> =>
       this.crypto ? (await this.crypto.listVerifications()).length : 0;

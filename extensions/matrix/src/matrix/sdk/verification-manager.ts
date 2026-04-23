@@ -52,6 +52,7 @@ export type MatrixVerificationSummary = {
 };
 
 type MatrixVerificationSummaryListener = (summary: MatrixVerificationSummary) => void;
+type MatrixVerificationOwnerTrustCallback = (deviceId: string) => Promise<void>;
 
 export type MatrixShowSasCallbacks = {
   sas: {
@@ -152,6 +153,12 @@ export class MatrixVerificationManager {
   private readonly trackedVerificationRequests = new WeakSet<object>();
   private readonly trackedVerificationVerifiers = new WeakSet<object>();
   private readonly summaryListeners = new Set<MatrixVerificationSummaryListener>();
+
+  constructor(
+    private readonly opts: {
+      trustOwnDeviceAfterSas?: MatrixVerificationOwnerTrustCallback;
+    } = {},
+  ) {}
 
   private readRequestValue<T>(
     request: MatrixVerificationRequestLike,
@@ -493,8 +500,7 @@ export class MatrixVerificationManager {
         return;
       }
       session.sasAutoConfirmStarted = true;
-      void callbacks
-        .confirm()
+      void this.confirmSasForSession(session, callbacks)
         .then(() => {
           this.touchVerificationSession(session);
         })
@@ -503,6 +509,14 @@ export class MatrixVerificationManager {
           this.touchVerificationSession(session);
         });
     }, SAS_AUTO_CONFIRM_DELAY_MS);
+  }
+
+  private async confirmSasForSession(
+    session: MatrixVerificationSession,
+    callbacks: MatrixShowSasCallbacks,
+  ): Promise<void> {
+    await callbacks.confirm();
+    await this.trustOwnDeviceAfterConfirmedSas(session);
   }
 
   private ensureVerificationStarted(session: MatrixVerificationSession): void {
@@ -520,6 +534,21 @@ export class MatrixVerificationManager {
         session.error = formatMatrixErrorMessage(err);
         this.touchVerificationSession(session);
       });
+  }
+
+  private async trustOwnDeviceAfterConfirmedSas(session: MatrixVerificationSession): Promise<void> {
+    if (!this.readRequestValue(session.request, () => session.request.isSelfVerification, false)) {
+      return;
+    }
+    const deviceId = this.readRequestValue(
+      session.request,
+      () => session.request.otherDeviceId?.trim(),
+      "",
+    );
+    if (!deviceId || !this.opts.trustOwnDeviceAfterSas) {
+      return;
+    }
+    await this.opts.trustOwnDeviceAfterSas(deviceId);
   }
 
   onSummaryChanged(listener: MatrixVerificationSummaryListener): () => void {
@@ -695,7 +724,7 @@ export class MatrixVerificationManager {
     this.clearSasAutoConfirmTimer(session);
     session.sasCallbacks = callbacks;
     session.sasAutoConfirmStarted = true;
-    await callbacks.confirm();
+    await this.confirmSasForSession(session, callbacks);
     this.touchVerificationSession(session);
     return this.buildVerificationSummary(session);
   }

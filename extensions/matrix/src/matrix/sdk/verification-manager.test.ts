@@ -259,6 +259,49 @@ describe("MatrixVerificationManager", () => {
     expect(mismatch).toHaveBeenCalledTimes(1);
   });
 
+  it("cross-signs the other own device after confirmed self-verification SAS", async () => {
+    const { confirm, verifier } = createSasVerifierFixture({
+      decimal: [111, 222, 333],
+      emoji: [["cat", "cat"]],
+    });
+    const trustOwnDeviceAfterSas = vi.fn(async () => {});
+    const request = new MockVerificationRequest({
+      isSelfVerification: true,
+      otherDeviceId: "OTHERDEVICE",
+      transactionId: "txn-self-sas",
+      verifier,
+    });
+    const manager = new MatrixVerificationManager({ trustOwnDeviceAfterSas });
+    const tracked = manager.trackVerificationRequest(request);
+
+    await manager.startVerification(tracked.id, "sas");
+    await manager.confirmVerificationSas(tracked.id);
+
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(trustOwnDeviceAfterSas).toHaveBeenCalledWith("OTHERDEVICE");
+  });
+
+  it("does not cross-sign non-self SAS verifications", async () => {
+    const { verifier } = createSasVerifierFixture({
+      decimal: [111, 222, 333],
+      emoji: [["cat", "cat"]],
+    });
+    const trustOwnDeviceAfterSas = vi.fn(async () => {});
+    const request = new MockVerificationRequest({
+      isSelfVerification: false,
+      otherDeviceId: "OTHERDEVICE",
+      transactionId: "txn-remote-sas",
+      verifier,
+    });
+    const manager = new MatrixVerificationManager({ trustOwnDeviceAfterSas });
+    const tracked = manager.trackVerificationRequest(request);
+
+    await manager.startVerification(tracked.id, "sas");
+    await manager.confirmVerificationSas(tracked.id);
+
+    expect(trustOwnDeviceAfterSas).not.toHaveBeenCalled();
+  });
+
   it("auto-starts an incoming verifier exposed via request change events", async () => {
     const { verifier, verify } = createSasVerifierFixture({
       decimal: [6158, 1986, 3513],
@@ -433,6 +476,33 @@ describe("MatrixVerificationManager", () => {
 
       await vi.advanceTimersByTimeAsync(1_100);
       expect(confirm).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cross-signs the other own device after auto-confirmed self-verification SAS", async () => {
+    vi.useFakeTimers();
+    const { confirm, verifier } = createSasVerifierFixture({
+      decimal: [6158, 1986, 3513],
+      emoji: [["gift", "Gift"]],
+    });
+    const trustOwnDeviceAfterSas = vi.fn(async () => {});
+    const request = new MockVerificationRequest({
+      isSelfVerification: true,
+      otherDeviceId: "OTHERDEVICE",
+      transactionId: "txn-auto-confirm-self",
+      initiatedByMe: false,
+      verifier,
+    });
+    try {
+      const manager = new MatrixVerificationManager({ trustOwnDeviceAfterSas });
+      manager.trackVerificationRequest(request);
+
+      await vi.advanceTimersByTimeAsync(30_100);
+
+      expect(confirm).toHaveBeenCalledTimes(1);
+      expect(trustOwnDeviceAfterSas).toHaveBeenCalledWith("OTHERDEVICE");
     } finally {
       vi.useRealTimers();
     }

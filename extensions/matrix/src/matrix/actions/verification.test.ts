@@ -370,8 +370,9 @@ describe("matrix verification actions", () => {
     expect(crypto.confirmVerificationSas).toHaveBeenCalledWith("verification-1");
     expect(bootstrapOwnDeviceVerification).toHaveBeenCalledWith({
       allowAutomaticCrossSigningReset: false,
+      strict: false,
     });
-    expect(getOwnDeviceVerificationStatus).toHaveBeenCalled();
+    expect(getOwnDeviceVerificationStatus).not.toHaveBeenCalled();
   });
 
   it("does not complete self-verification until the OpenClaw device has full Matrix identity trust", async () => {
@@ -407,10 +408,16 @@ describe("matrix verification actions", () => {
       .mockResolvedValueOnce(mockVerifiedOwnerStatus());
     const bootstrapOwnDeviceVerification = vi.fn(async () => ({
       success: true,
-      verification: mockVerifiedOwnerStatus(),
+      verification: mockUnverifiedOwnerStatus(),
     }));
+    const trustOwnIdentityAfterSelfVerification = vi.fn(async () => {});
     withStartedActionClientMock.mockImplementation(async (_opts, run) => {
-      return await run({ bootstrapOwnDeviceVerification, crypto, getOwnDeviceVerificationStatus });
+      return await run({
+        bootstrapOwnDeviceVerification,
+        crypto,
+        getOwnDeviceVerificationStatus,
+        trustOwnIdentityAfterSelfVerification,
+      });
     });
 
     await expect(
@@ -424,6 +431,7 @@ describe("matrix verification actions", () => {
     });
 
     expect(getOwnDeviceVerificationStatus).toHaveBeenCalledTimes(2);
+    expect(trustOwnIdentityAfterSelfVerification).toHaveBeenCalledTimes(1);
   });
 
   it("waits for SAS data without restarting an already-started self-verification", async () => {
@@ -650,10 +658,14 @@ describe("matrix verification actions", () => {
     await expect(
       runMatrixSelfVerification({ confirmSas: vi.fn(async () => true), timeoutMs: 30 }),
     ).rejects.toThrow(
-      "Matrix self-verification completed, but full Matrix identity trust is still incomplete",
+      "Timed out waiting for Matrix self-verification to establish full Matrix identity trust",
     );
 
     expect(crypto.cancelVerification).not.toHaveBeenCalled();
+    expect(bootstrapOwnDeviceVerification).toHaveBeenCalledWith({
+      allowAutomaticCrossSigningReset: false,
+      strict: false,
+    });
   });
 
   it("cancels the pending self-verification request when acceptance times out", async () => {
