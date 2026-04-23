@@ -3,6 +3,7 @@ import type { Writable } from "node:stream";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
+import { resolveConfiguredCapabilityProvider } from "openclaw/plugin-sdk/provider-selection-runtime";
 import {
   getRealtimeVoiceProvider,
   listRealtimeVoiceProviders,
@@ -59,21 +60,6 @@ function splitCommand(argv: string[]): { command: string; args: string[] } {
   return { command, args };
 }
 
-function rawProviderConfig(params: {
-  config: GoogleMeetConfig;
-  providerId: string;
-  configuredProviderId?: string;
-}): Record<string, unknown> {
-  const raw =
-    params.config.realtime.providers[params.configuredProviderId ?? ""] ??
-    params.config.realtime.providers[params.providerId] ??
-    {};
-  if (params.config.realtime.model && raw.model === undefined) {
-    return { ...raw, model: params.config.realtime.model };
-  }
-  return raw;
-}
-
 export function resolveGoogleMeetRealtimeProvider(params: {
   config: GoogleMeetConfig;
   fullConfig: OpenClawConfig;
@@ -81,47 +67,42 @@ export function resolveGoogleMeetRealtimeProvider(params: {
 }): ResolvedRealtimeProvider {
   const configuredProviderId = params.config.realtime.provider;
   const providers = params.providers ?? listRealtimeVoiceProviders(params.fullConfig);
-  const provider = configuredProviderId
-    ? (params.providers?.find((entry) => entry.id === configuredProviderId) ??
-      getRealtimeVoiceProvider(configuredProviderId, params.fullConfig))
-    : providers
-        .toSorted((left, right) => (left.autoSelectOrder ?? 1000) - (right.autoSelectOrder ?? 1000))
-        .find((entry) => {
-          const rawConfig = rawProviderConfig({
-            config: params.config,
-            providerId: entry.id,
-          });
-          const providerConfig =
-            entry.resolveConfig?.({
-              cfg: params.fullConfig,
-              rawConfig,
-            }) ?? rawConfig;
-          return entry.isConfigured({ cfg: params.fullConfig, providerConfig });
-        });
+  const resolution = resolveConfiguredCapabilityProvider({
+    configuredProviderId,
+    providerConfigs: params.config.realtime.providers,
+    cfg: params.fullConfig,
+    cfgForResolve: params.fullConfig,
+    getConfiguredProvider: (providerId) =>
+      params.providers?.find((entry) => entry.id === providerId) ??
+      getRealtimeVoiceProvider(providerId, params.fullConfig),
+    listProviders: () => providers,
+    resolveProviderConfig: ({ provider, cfg, rawConfig }) => {
+      const withModel =
+        params.config.realtime.model && rawConfig.model === undefined
+          ? { ...rawConfig, model: params.config.realtime.model }
+          : rawConfig;
+      return provider.resolveConfig?.({ cfg, rawConfig: withModel }) ?? withModel;
+    },
+    isProviderConfigured: ({ provider, cfg, providerConfig }) =>
+      provider.isConfigured({ cfg, providerConfig }),
+  });
 
-  if (!provider) {
+  if (!resolution.ok && resolution.code === "missing-configured-provider") {
     throw new Error(
-      configuredProviderId
-        ? `Realtime voice provider "${configuredProviderId}" is not registered`
-        : "No configured realtime voice provider registered",
+      `Realtime voice provider "${resolution.configuredProviderId}" is not registered`,
     );
   }
-
-  const rawConfig = rawProviderConfig({
-    config: params.config,
-    providerId: provider.id,
-    configuredProviderId,
-  });
-  const providerConfig =
-    provider.resolveConfig?.({
-      cfg: params.fullConfig,
-      rawConfig,
-    }) ?? rawConfig;
-  if (!provider.isConfigured({ cfg: params.fullConfig, providerConfig })) {
-    throw new Error(`Realtime voice provider "${provider.id}" is not configured`);
+  if (!resolution.ok && resolution.code === "no-registered-provider") {
+    throw new Error("No configured realtime voice provider registered");
+  }
+  if (!resolution.ok) {
+    throw new Error(`Realtime voice provider "${resolution.provider?.id}" is not configured`);
   }
 
-  return { provider, providerConfig };
+  return {
+    provider: resolution.provider,
+    providerConfig: resolution.providerConfig,
+  };
 }
 
 export async function startCommandRealtimeAudioBridge(params: {
