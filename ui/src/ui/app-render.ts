@@ -2307,6 +2307,7 @@ export function renderApp(state: AppViewState) {
               onCloseSidebar: () => state.handleCloseSidebar(),
               onSplitRatioChange: (ratio: number) => state.handleSplitRatioChange(ratio),
               assistantName: state.assistantName,
+              userName: state.userName ?? null,
               assistantAvatar: state.assistantAvatar,
               localMediaPreviewRoots: state.localMediaPreviewRoots,
               embedSandboxMode: state.embedSandboxMode,

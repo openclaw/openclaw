@@ -226,6 +226,23 @@ describe("grouped chat rendering", () => {
     expect(avatar?.getAttribute("src")).toBe("/openclaw-logo.svg");
   });
 
+  it("uses the configured local user name when a user message has no sender label", () => {
+    const container = document.createElement("div");
+
+    renderGroupedMessage(
+      container,
+      {
+        role: "user",
+        content: "hello",
+        timestamp: 1000,
+      },
+      "user",
+      { userName: "Daein" },
+    );
+
+    expect(container.querySelector(".chat-sender-name")?.textContent).toBe("Daein");
+  });
+
   it("keeps inline tool cards collapsed by default and renders expanded state", () => {
     const container = document.createElement("div");
     const message = {

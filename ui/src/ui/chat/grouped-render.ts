@@ -374,6 +374,7 @@ export function renderMessageGroup(
     onToggleToolExpanded?: (toolCardId: string) => void;
     onRequestUpdate?: () => void;
     assistantName?: string;
+    userName?: string | null;
     assistantAvatar?: string | null;
     basePath?: string;
     localMediaPreviewRoots?: readonly string[];
@@ -392,9 +393,10 @@ export function renderMessageGroup(
   const normalizedRole = normalizeRoleForGrouping(group.role);
   const assistantName = opts.assistantName ?? "Assistant";
   const userLabel = group.senderLabel?.trim();
+  const fallbackUserName = opts.userName?.trim() || "You";
   const who =
     normalizedRole === "user"
-      ? (userLabel ?? "You")
+      ? (userLabel ?? fallbackUserName)
       : normalizedRole === "assistant"
         ? assistantName
         : normalizedRole === "tool"

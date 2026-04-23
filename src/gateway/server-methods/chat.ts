@@ -2518,10 +2518,10 @@ export const chatHandlers: GatewayRequestHandlers = {
                   createIfMissing: true,
                 });
                 if (appended.ok) {
-                  if (appended.messageId && persistedAssistantContent?.length) {
+                  if (appended.messageId && assistantContent?.length) {
                     await attachManagedOutgoingImagesToMessage({
                       messageId: appended.messageId,
-                      blocks: persistedAssistantContent,
+                      blocks: assistantContent,
                     });
                   }
                   if (appended.message) {

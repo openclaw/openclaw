@@ -79,6 +79,7 @@ export type ChatProps = {
   embedSandboxMode?: EmbedSandboxMode;
   allowExternalEmbedUrls?: boolean;
   assistantName: string;
+  userName?: string | null;
   assistantAvatar: string | null;
   localMediaPreviewRoots?: string[];
   assistantAttachmentAuthToken?: string | null;
@@ -908,6 +909,7 @@ export function renderChat(props: ChatProps) {
                 onToggleToolExpanded: toggleToolCardExpanded,
                 onRequestUpdate: requestUpdate,
                 assistantName: props.assistantName,
+                userName: props.userName,
                 assistantAvatar: assistantIdentity.avatar,
                 basePath: props.basePath,
                 localMediaPreviewRoots: props.localMediaPreviewRoots ?? [],

@@ -2116,50 +2116,80 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
   it("does not persist sensitive image media into transcript updates", async () => {
     createTranscriptFixture("openclaw-chat-send-sensitive-media-final-");
-    mockState.finalPayload = {
-      text: "Scan this QR code with the OpenClaw iOS app:",
-      mediaUrl: TEST_PNG_DATA_URL,
-      sensitiveMedia: true,
-    };
-    const respond = vi.fn();
-    const context = createChatContext();
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sensitive-image-state-"));
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    try {
+      mockState.finalPayload = {
+        text: "Scan this QR code with the OpenClaw iOS app:",
+        mediaUrl: TEST_PNG_DATA_URL,
+        sensitiveMedia: true,
+      };
+      const respond = vi.fn();
+      const context = createChatContext();
 
-    const payload = await runNonStreamingChatSend({
-      context,
-      respond,
-      idempotencyKey: "idem-sensitive-media-final",
-    });
+      const payload = await runNonStreamingChatSend({
+        context,
+        respond,
+        idempotencyKey: "idem-sensitive-media-final",
+      });
 
-    const content = extractContentBlocks(payload);
-    expect(content[0]).toEqual({
-      type: "text",
-      text: "Scan this QR code with the OpenClaw iOS app:",
-    });
-    expect(content[1]).toEqual(
-      expect.objectContaining({
-        type: "image",
-        url: expect.stringContaining("/api/chat/media/outgoing/"),
-        openUrl: expect.stringContaining("/full"),
-        alt: "Generated image 1",
-        mimeType: "image/png",
-        width: 1,
-        height: 1,
-      }),
-    );
-    const transcriptUpdate = mockState.emittedTranscriptUpdates.find(
-      (update) =>
-        typeof update.message === "object" &&
-        update.message !== null &&
-        (update.message as { role?: unknown }).role === "assistant",
-    );
-    expect(transcriptUpdate).toMatchObject({
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "Scan this QR code with the OpenClaw iOS app:" }],
-      },
-    });
-    expect(JSON.stringify(transcriptUpdate)).not.toContain("/api/chat/media/outgoing/");
-    expect(JSON.stringify(transcriptUpdate)).not.toContain(TEST_PNG_DATA_URL);
+      const content = extractContentBlocks(payload);
+      expect(content[0]).toEqual({
+        type: "text",
+        text: "Scan this QR code with the OpenClaw iOS app:",
+      });
+      expect(content[1]).toEqual(
+        expect.objectContaining({
+          type: "image",
+          url: expect.stringContaining("/api/chat/media/outgoing/"),
+          openUrl: expect.stringContaining("/full"),
+          alt: "Generated image 1",
+          mimeType: "image/png",
+          width: 1,
+          height: 1,
+        }),
+      );
+      const imageUrl = typeof content[1]?.url === "string" ? content[1].url : "";
+      const attachmentId = imageUrl.match(
+        /\/api\/chat\/media\/outgoing\/[^/]+\/([0-9a-f-]{36})\/full$/i,
+      )?.[1];
+      expect(attachmentId).toBeTruthy();
+      const recordPath = path.join(
+        stateDir,
+        "media",
+        "outgoing",
+        "records",
+        `${attachmentId}.json`,
+      );
+      const record = JSON.parse(fs.readFileSync(recordPath, "utf-8")) as {
+        messageId: string | null;
+        retentionClass?: string;
+      };
+      expect(record.messageId).toBeTruthy();
+      expect(record.retentionClass).toBe("history");
+      const transcriptUpdate = mockState.emittedTranscriptUpdates.find(
+        (update) =>
+          typeof update.message === "object" &&
+          update.message !== null &&
+          (update.message as { role?: unknown }).role === "assistant",
+      );
+      expect(transcriptUpdate).toMatchObject({
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Scan this QR code with the OpenClaw iOS app:" }],
+        },
+      });
+      expect(JSON.stringify(transcriptUpdate)).not.toContain("/api/chat/media/outgoing/");
+      expect(JSON.stringify(transcriptUpdate)).not.toContain(TEST_PNG_DATA_URL);
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
   });
 
   it("does not persist sensitive audio media into transcript updates", async () => {
