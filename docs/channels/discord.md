@@ -307,7 +307,7 @@ By default, components are single use. Set `components.reusable=true` to allow b
 
 To restrict who can click a button, set `allowedUsers` on that button (Discord user IDs, tags, or `*`). When configured, unmatched users receive an ephemeral denial.
 
-The `/model` and `/models` slash commands open an interactive model picker with provider and model dropdowns plus a Submit step. The picker reply is ephemeral and only the invoking user can use it.
+The `/model` and `/models` slash commands open an interactive model picker with provider and model dropdowns plus a Submit step. Unless `commands.modelsWrite=false`, `/models add` also supports adding a new provider/model entry from chat, and newly added models show up without restarting the gateway. The picker reply is ephemeral and only the invoking user can use it.
 
 File attachments:
 
@@ -655,6 +655,10 @@ Default slash command settings:
     - Discord threads are routed as channel sessions
     - parent thread metadata can be used for parent-session linkage
     - thread config inherits parent channel config unless a thread-specific entry exists
+    - parent transcript inheritance into newly created auto-threads is opt-in via `channels.discord.thread.inheritParent` (default `false`). When `false`, newly created Discord thread sessions start isolated from the parent channel transcript; when `true`, the parent channel history seeds the new thread session
+    - per-account overrides live under `channels.discord.accounts.<id>.thread.inheritParent`
+    - message-tool reactions can resolve `user:<id>` DM targets in addition to channel targets
+    - `channels.discord.guilds.<guild>.channels.<channel>.requireMention: false` is preserved during reply-stage activation fallback, so configured always-on channels stay always-on even when reply-stage fallback runs
 
     Channel topics are injected as **untrusted** context (not as system prompt).
     Reply and quoted-message context currently stays as received.

@@ -160,6 +160,28 @@ describe("cli-session helpers", () => {
     ).toEqual({ sessionId: "cli-session-1" });
   });
 
+  it("accepts older auth epoch versions for binding upgrades", () => {
+    const binding = {
+      sessionId: "cli-session-1",
+      authProfileId: "anthropic:work",
+      authEpoch: "refresh-token-auth-epoch",
+      authEpochVersion: 2,
+      extraSystemPromptHash: "prompt-a",
+      mcpConfigHash: "mcp-a",
+    };
+
+    expect(
+      resolveCliSessionReuse({
+        binding,
+        authProfileId: "anthropic:work",
+        authEpoch: "identity-auth-epoch",
+        authEpochVersion: 3,
+        extraSystemPromptHash: "prompt-a",
+        mcpConfigHash: "mcp-a",
+      }),
+    ).toEqual({ sessionId: "cli-session-1" });
+  });
+
   it("does not treat model changes as a session mismatch", () => {
     const binding = {
       sessionId: "cli-session-1",
