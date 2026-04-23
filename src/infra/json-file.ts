@@ -51,7 +51,12 @@ export function saveJsonFile(pathname: string, data: unknown) {
   const tmp = `${target}.tmp.${process.pid}.${Date.now()}`;
   const fd = fs.openSync(tmp, "w", 0o600);
   try {
-    fs.writeSync(fd, `${JSON.stringify(data, null, 2)}\n`, 0, "utf8");
+    // fs.writeFileSync on an fd loops internally until every byte has
+    // landed, so a short write under file-size / quota / low-disk
+    // conditions surfaces as an actual ENOSPC instead of silently
+    // truncating the payload. fsync then makes it durable before the
+    // rename swaps the entry.
+    fs.writeFileSync(fd, `${JSON.stringify(data, null, 2)}\n`, "utf8");
     fs.fsyncSync(fd);
   } finally {
     fs.closeSync(fd);
