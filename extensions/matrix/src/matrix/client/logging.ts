@@ -5,6 +5,8 @@ let matrixSdkLoggingConfigured = false;
 let matrixSdkLogMode: "default" | "quiet" = "default";
 const matrixSdkBaseLogger = new ConsoleLogger();
 
+type MatrixLogMethod = "trace" | "debug" | "info" | "warn" | "error";
+
 type MatrixJsSdkLogger = {
   trace: (...messageOrObject: unknown[]) => void;
   debug: (...messageOrObject: unknown[]) => void;
@@ -23,6 +25,14 @@ type MatrixJsSdkLoglevelLogger = MatrixJsSdkLogger & {
   ) => (...args: unknown[]) => void;
   rebuild?: () => void;
   setLevel?: (level: number | string, persist?: boolean) => void;
+};
+
+const quietMatrixSdkLogger = {
+  trace: () => {},
+  debug: () => {},
+  info: () => {},
+  warn: () => {},
+  error: () => {},
 };
 
 export function ensureMatrixSdkLoggingConfigured(): void {
@@ -60,35 +70,37 @@ function shouldSuppressMatrixHttpNotFound(module: string, messageOrObject: unkno
   });
 }
 
+function writeMatrixSdkLog(
+  method: MatrixLogMethod,
+  module: string,
+  messageOrObject: unknown[],
+): void {
+  matrixSdkBaseLogger[method](module, ...messageOrObject);
+}
+
 function applyMatrixSdkLogger(): void {
   if (matrixSdkLogMode === "quiet") {
-    LogService.setLogger({
-      trace: () => {},
-      debug: () => {},
-      info: () => {},
-      warn: () => {},
-      error: () => {},
-    });
+    LogService.setLogger(quietMatrixSdkLogger);
     applyMatrixJsSdkLogger();
     return;
   }
 
   LogService.setLogger({
-    trace: (module, ...messageOrObject) => matrixSdkBaseLogger.trace(module, ...messageOrObject),
-    debug: (module, ...messageOrObject) => matrixSdkBaseLogger.debug(module, ...messageOrObject),
-    info: (module, ...messageOrObject) => matrixSdkBaseLogger.info(module, ...messageOrObject),
-    warn: (module, ...messageOrObject) => matrixSdkBaseLogger.warn(module, ...messageOrObject),
+    trace: (module, ...messageOrObject) => writeMatrixSdkLog("trace", module, messageOrObject),
+    debug: (module, ...messageOrObject) => writeMatrixSdkLog("debug", module, messageOrObject),
+    info: (module, ...messageOrObject) => writeMatrixSdkLog("info", module, messageOrObject),
+    warn: (module, ...messageOrObject) => writeMatrixSdkLog("warn", module, messageOrObject),
     error: (module, ...messageOrObject) => {
       if (shouldSuppressMatrixHttpNotFound(module, messageOrObject)) {
         return;
       }
-      matrixSdkBaseLogger.error(module, ...messageOrObject);
+      writeMatrixSdkLog("error", module, messageOrObject);
     },
   });
   applyMatrixJsSdkLogger();
 }
 
-function normalizeMatrixJsSdkLogMethod(methodName: string): keyof ConsoleLogger {
+function normalizeMatrixJsSdkLogMethod(methodName: string): MatrixLogMethod {
   if (methodName === "trace" || methodName === "debug" || methodName === "info") {
     return methodName;
   }
@@ -114,10 +126,7 @@ function applyMatrixJsSdkLogger(): void {
       if (method === "error" && shouldSuppressMatrixHttpNotFound(module, messageOrObject)) {
         return;
       }
-      (matrixSdkBaseLogger[method] as (module: string, ...args: unknown[]) => void)(
-        module,
-        ...messageOrObject,
-      );
+      writeMatrixSdkLog(method, module, messageOrObject);
     };
   };
   logger.setLevel?.(logger.levels?.DEBUG ?? "debug", false);
@@ -125,14 +134,11 @@ function applyMatrixJsSdkLogger(): void {
 }
 
 function createMatrixJsSdkLoggerInstance(prefix: string): MatrixJsSdkLogger {
-  const log = (method: keyof ConsoleLogger, ...messageOrObject: unknown[]): void => {
+  const log = (method: MatrixLogMethod, ...messageOrObject: unknown[]): void => {
     if (matrixSdkLogMode === "quiet") {
       return;
     }
-    (matrixSdkBaseLogger[method] as (module: string, ...args: unknown[]) => void)(
-      prefix,
-      ...messageOrObject,
-    );
+    writeMatrixSdkLog(method, prefix, messageOrObject);
   };
 
   return {

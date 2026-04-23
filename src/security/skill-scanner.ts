@@ -216,10 +216,7 @@ function truncateEvidence(evidence: string, maxLen = 120): string {
   return `${evidence.slice(0, maxLen)}…`;
 }
 
-function isAllowedDangerousExecEvidence(rule: LineRule, line: string): boolean {
-  if (rule.ruleId !== "dangerous-exec") {
-    return false;
-  }
+function isAllowedNodeSelfReexec(line: string): boolean {
   // Spawning the current Node executable with an argv array is not shell
   // execution. Keep direct shell/process launches blocked below.
   return /\bspawn\s*\(\s*process\.execPath\s*,/.test(line);
@@ -247,7 +244,7 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
       if (!match) {
         continue;
       }
-      if (isAllowedDangerousExecEvidence(rule, line)) {
+      if (rule.ruleId === "dangerous-exec" && isAllowedNodeSelfReexec(line)) {
         continue;
       }
 
