@@ -176,13 +176,17 @@ export function createWebOnMessageHandler(params: {
 
     // Preflight audio transcription: run once here, before broadcast fan-out, so
     // all agents share the same transcript instead of each making a separate STT call.
+    // For DMs, only do this on the real inbound path after access-control/pairing
+    // checks have already passed in inbound/monitor.ts. That keeps external STT and
+    // early ack feedback behind the same auth-first gate as the rest of DM handling.
     // null = preflight was attempted but produced no transcript (failed / disabled / no audio);
     // undefined = preflight was not attempted (non-audio message).
     let preflightAudioTranscript: string | null | undefined;
     const hasAudioBody =
       msg.mediaType?.startsWith("audio/") === true && msg.body === "<media:audio>";
+    const canRunEarlyDmPreflight = msg.chatType === "group" || msg.accessControlPassed === true;
     let ackAlreadySent = false;
-    if (hasAudioBody && msg.mediaPath) {
+    if (canRunEarlyDmPreflight && hasAudioBody && msg.mediaPath) {
       await maybeSendAckReaction({
         cfg: params.cfg,
         msg,

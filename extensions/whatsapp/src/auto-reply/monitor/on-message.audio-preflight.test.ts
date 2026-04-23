@@ -74,6 +74,7 @@ function makeAudioMsg(): WebInboundMsg {
     id: "msg-1",
     from: "+15550000002",
     to: "+15550000001",
+    accessControlPassed: true,
     body: "<media:audio>",
     chatType: "direct",
     mediaType: "audio/ogg; codecs=opus",
@@ -142,6 +143,47 @@ describe("createWebOnMessageHandler audio preflight", () => {
     expect(processMessageMock).toHaveBeenCalledWith(
       expect.objectContaining({
         preflightAudioTranscript: "transcribed voice note",
+        ackAlreadySent: true,
+      }),
+    );
+  });
+
+  it("skips early DM ack/preflight when access-control was not explicitly passed through", async () => {
+    const handler = createWebOnMessageHandler({
+      cfg: {
+        channels: {
+          whatsapp: {
+            ackReaction: { enabled: true },
+          },
+        },
+      } as never,
+      verbose: false,
+      connectionId: "conn-1",
+      maxMediaBytes: 1024 * 1024,
+      groupHistoryLimit: 20,
+      groupHistories: new Map(),
+      groupMemberNames: new Map(),
+      echoTracker: makeEchoTracker() as never,
+      backgroundTasks: new Set(),
+      replyResolver: vi.fn() as never,
+      replyLogger: {
+        info: () => {},
+        warn: () => {},
+        debug: () => {},
+        error: () => {},
+      } as never,
+      baseMentionConfig: {} as never,
+      account: { authDir: "/tmp/auth", accountId: "default" },
+    });
+
+    await handler({ ...makeAudioMsg(), accessControlPassed: undefined });
+
+    expect(events).toEqual([]);
+    expect(transcribeFirstAudioMock).not.toHaveBeenCalled();
+    expect(maybeSendAckReactionMock).not.toHaveBeenCalled();
+    expect(processMessageMock).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        preflightAudioTranscript: expect.anything(),
         ackAlreadySent: true,
       }),
     );
