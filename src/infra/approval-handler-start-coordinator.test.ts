@@ -3,6 +3,7 @@ import {
   createApprovalHandlerStartCoordinator,
   resolveApprovalHandlerMaxConcurrentStarts,
   resolveApprovalHandlerStartJitterMs,
+  resolveApprovalHandlerStartSlotMaxHoldMs,
 } from "./approval-handler-start-coordinator.js";
 
 describe("resolveApprovalHandlerStartJitterMs", () => {
@@ -89,7 +90,7 @@ describe("resolveApprovalHandlerMaxConcurrentStarts", () => {
     ).toBe(3);
   });
 
-  it("rejects partial-number env values like '7x' and '2.5'", () => {
+  it("rejects partial-number env values like '7x' and '2.5' for max-concurrent-starts", () => {
     expect(
       resolveApprovalHandlerMaxConcurrentStarts({
         OPENCLAW_APPROVAL_HANDLER_MAX_CONCURRENT_STARTS: "7x",
@@ -100,6 +101,38 @@ describe("resolveApprovalHandlerMaxConcurrentStarts", () => {
         OPENCLAW_APPROVAL_HANDLER_MAX_CONCURRENT_STARTS: "2.5",
       } as NodeJS.ProcessEnv),
     ).toBe(3);
+  });
+});
+
+describe("resolveApprovalHandlerStartSlotMaxHoldMs", () => {
+  it("falls back to the default when the env var is unset", () => {
+    expect(resolveApprovalHandlerStartSlotMaxHoldMs({})).toBe(30_000);
+  });
+
+  it("honors a valid positive integer env override", () => {
+    expect(
+      resolveApprovalHandlerStartSlotMaxHoldMs({
+        OPENCLAW_APPROVAL_HANDLER_START_SLOT_MAX_HOLD_MS: "5000",
+      } as NodeJS.ProcessEnv),
+    ).toBe(5_000);
+  });
+
+  it("ignores zero, negative, non-numeric, and partial-number env values", () => {
+    expect(
+      resolveApprovalHandlerStartSlotMaxHoldMs({
+        OPENCLAW_APPROVAL_HANDLER_START_SLOT_MAX_HOLD_MS: "0",
+      } as NodeJS.ProcessEnv),
+    ).toBe(30_000);
+    expect(
+      resolveApprovalHandlerStartSlotMaxHoldMs({
+        OPENCLAW_APPROVAL_HANDLER_START_SLOT_MAX_HOLD_MS: "-1000",
+      } as NodeJS.ProcessEnv),
+    ).toBe(30_000);
+    expect(
+      resolveApprovalHandlerStartSlotMaxHoldMs({
+        OPENCLAW_APPROVAL_HANDLER_START_SLOT_MAX_HOLD_MS: "5000ms",
+      } as NodeJS.ProcessEnv),
+    ).toBe(30_000);
   });
 });
 
@@ -227,6 +260,71 @@ describe("createApprovalHandlerStartCoordinator", () => {
     // The semaphore is not wedged; a fresh acquire resolves immediately.
     const second = await coordinator.acquireStartSlot(notCanceled);
     second();
+  });
+
+  it("force-releases a start slot after the configured hold timeout so one hung start cannot starve others", async () => {
+    vi.useFakeTimers();
+    const coordinator = createApprovalHandlerStartCoordinator({
+      jitterMs: 0,
+      maxConcurrentStarts: 1,
+      startSlotMaxHoldMs: 500,
+    });
+
+    // Acquire a slot and DO NOT release it, simulating a `handler.start()`
+    // that hangs on pending-approval replay or some other unbounded work.
+    await coordinator.acquireStartSlot(notCanceled);
+
+    let secondResolved = false;
+    const secondPromise = coordinator.acquireStartSlot(notCanceled).then((release) => {
+      secondResolved = true;
+      return release;
+    });
+
+    await vi.advanceTimersByTimeAsync(499);
+    await Promise.resolve();
+    expect(secondResolved).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    const secondRelease = await secondPromise;
+    expect(secondResolved).toBe(true);
+
+    secondRelease();
+  });
+
+  it("cancels the hold-timeout watchdog when the caller releases normally", async () => {
+    vi.useFakeTimers();
+    const coordinator = createApprovalHandlerStartCoordinator({
+      jitterMs: 0,
+      maxConcurrentStarts: 1,
+      startSlotMaxHoldMs: 1_000,
+    });
+
+    // Acquire slot 1 and release it immediately. Its hold-timeout watchdog
+    // is still scheduled on the event loop; the contract says the explicit
+    // release must have canceled it.
+    const first = await coordinator.acquireStartSlot(notCanceled);
+    first();
+
+    // Advance the clock past what WOULD have been slot 1's hold deadline.
+    // If the watchdog fired after the explicit release we'd see a double
+    // release: releaseSlot() runs twice, driving `active` negative. That
+    // corruption surfaces in the FIFO check below — a broken watchdog would
+    // let slot 3 acquire immediately even though slot 2 is still holding.
+    await vi.advanceTimersByTimeAsync(1_500);
+
+    const second = await coordinator.acquireStartSlot(notCanceled);
+    let thirdResolved = false;
+    const thirdPromise = coordinator.acquireStartSlot(notCanceled).then((release) => {
+      thirdResolved = true;
+      return release;
+    });
+    await Promise.resolve();
+    expect(thirdResolved).toBe(false); // correctly queued — slot 2 is still holding
+
+    second();
+    const thirdRelease = await thirdPromise;
+    expect(thirdResolved).toBe(true);
+    thirdRelease();
   });
 
   it("hands back a no-op release and does not consume a slot when canceled up front", async () => {

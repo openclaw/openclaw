@@ -30,8 +30,18 @@
 
 const DEFAULT_START_JITTER_MS = 2_000;
 const DEFAULT_MAX_CONCURRENT_STARTS = 3;
+// Hard ceiling on how long a single handler-start may hold its concurrency
+// slot. A well-behaved `handler.start()` only needs the slot for the preauth
+// handshake critical section (single-digit seconds at most), but a handler
+// whose `start()` blocks on unbounded application work — e.g. replaying
+// pending approvals through `exec-approval-channel-runtime` — would otherwise
+// pin the slot and starve every other channel/account waiting for a slot.
+// After this cap the slot is force-released; the original `start()` continues
+// to run in the background but no longer blocks unrelated bootstraps.
+const DEFAULT_START_SLOT_MAX_HOLD_MS = 30_000;
 const START_JITTER_ENV_VAR = "OPENCLAW_APPROVAL_HANDLER_START_JITTER_MS";
 const MAX_CONCURRENT_STARTS_ENV_VAR = "OPENCLAW_APPROVAL_HANDLER_MAX_CONCURRENT_STARTS";
+const START_SLOT_MAX_HOLD_ENV_VAR = "OPENCLAW_APPROVAL_HANDLER_START_SLOT_MAX_HOLD_MS";
 
 export type ApprovalHandlerStartCoordinator = {
   waitJitter: (isCanceled: () => boolean) => Promise<void>;
@@ -41,6 +51,7 @@ export type ApprovalHandlerStartCoordinator = {
 export type ApprovalHandlerStartCoordinatorOptions = {
   jitterMs?: number;
   maxConcurrentStarts?: number;
+  startSlotMaxHoldMs?: number;
   random?: () => number;
 };
 
@@ -80,6 +91,12 @@ export function resolveApprovalHandlerMaxConcurrentStarts(
   return readPositiveIntEnv(MAX_CONCURRENT_STARTS_ENV_VAR, env) ?? DEFAULT_MAX_CONCURRENT_STARTS;
 }
 
+export function resolveApprovalHandlerStartSlotMaxHoldMs(
+  env: NodeJS.ProcessEnv = process.env,
+): number {
+  return readPositiveIntEnv(START_SLOT_MAX_HOLD_ENV_VAR, env) ?? DEFAULT_START_SLOT_MAX_HOLD_MS;
+}
+
 export function createApprovalHandlerStartCoordinator(
   options: ApprovalHandlerStartCoordinatorOptions = {},
 ): ApprovalHandlerStartCoordinator {
@@ -90,6 +107,10 @@ export function createApprovalHandlerStartCoordinator(
   const maxConcurrent = Math.max(
     1,
     Math.trunc(options.maxConcurrentStarts ?? resolveApprovalHandlerMaxConcurrentStarts()),
+  );
+  const startSlotMaxHoldMs = Math.max(
+    1,
+    Math.trunc(options.startSlotMaxHoldMs ?? resolveApprovalHandlerStartSlotMaxHoldMs()),
   );
   const random = options.random ?? Math.random;
 
@@ -103,6 +124,16 @@ export function createApprovalHandlerStartCoordinator(
       return;
     }
     active -= 1;
+  };
+
+  // Schedule a force-release after `startSlotMaxHoldMs`. If the caller's
+  // explicit release fires first, the timer just no-ops. If `handler.start()`
+  // is hung or doing unbounded post-handshake work, the timer releases the
+  // slot so unrelated bootstraps can proceed.
+  const scheduleHoldTimeout = (forceRelease: () => void): (() => void) => {
+    const timer = setTimeout(forceRelease, startSlotMaxHoldMs);
+    timer.unref?.();
+    return () => clearTimeout(timer);
   };
 
   const waitJitter = (isCanceled: () => boolean): Promise<void> => {
@@ -125,6 +156,20 @@ export function createApprovalHandlerStartCoordinator(
     });
   };
 
+  const wrapWithHoldTimeout = (rawRelease: () => void): (() => void) => {
+    let released = false;
+    const safeRelease = () => {
+      if (released) {
+        return;
+      }
+      released = true;
+      cancelHoldTimer();
+      rawRelease();
+    };
+    const cancelHoldTimer = scheduleHoldTimeout(safeRelease);
+    return safeRelease;
+  };
+
   const acquireStartSlot = (isCanceled: () => boolean): Promise<() => void> => {
     if (isCanceled()) {
       // Canceled callers never actually entered the critical section, so hand
@@ -133,25 +178,11 @@ export function createApprovalHandlerStartCoordinator(
     }
     if (active < maxConcurrent) {
       active += 1;
-      let released = false;
-      return Promise.resolve(() => {
-        if (released) {
-          return;
-        }
-        released = true;
-        releaseSlot();
-      });
+      return Promise.resolve(wrapWithHoldTimeout(releaseSlot));
     }
     return new Promise<() => void>((resolve) => {
       waiters.push((release) => {
-        let released = false;
-        resolve(() => {
-          if (released) {
-            return;
-          }
-          released = true;
-          release();
-        });
+        resolve(wrapWithHoldTimeout(release));
       });
     });
   };

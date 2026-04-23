@@ -23,11 +23,14 @@ vi.mock("./approval-handler-runtime.js", async () => {
 });
 
 // Existing tests rely on synchronous handler start; use an instantly-scheduling
-// coordinator unless the test specifically exercises jitter/concurrency.
+// coordinator unless the test specifically exercises jitter/concurrency. The
+// very large hold timeout keeps the slot's force-release watchdog inert
+// unless the test explicitly drives timers past it.
 const createImmediateStartCoordinator = (): ApprovalHandlerStartCoordinator =>
   createApprovalHandlerStartCoordinator({
     jitterMs: 0,
     maxConcurrentStarts: 1_000,
+    startSlotMaxHoldMs: 10 * 60_000,
   });
 
 describe("startChannelApprovalHandlerBootstrap", () => {
@@ -506,6 +509,59 @@ describe("startChannelApprovalHandlerBootstrap", () => {
     expect(startSecond).toHaveBeenCalledTimes(1);
 
     await cleanup();
+  });
+
+  it("force-releases the concurrency slot when handler.start hangs, so queued bootstraps are not starved", async () => {
+    vi.useFakeTimers();
+    const channelRuntime = createRuntimeChannel();
+
+    // First handler: start() never resolves. This simulates the cross-account
+    // deadlock case codex flagged — a handler.start() that blocks on unbounded
+    // post-handshake work (e.g. replaying pending approvals) holding the
+    // semaphore slot and starving every queued bootstrap.
+    const firstStart = vi.fn().mockImplementation(() => new Promise<void>(() => {}));
+    const firstStop = vi.fn().mockResolvedValue(undefined);
+    const secondStart = vi.fn().mockResolvedValue(undefined);
+    const secondStop = vi.fn().mockResolvedValue(undefined);
+
+    createChannelApprovalHandlerFromCapability
+      .mockResolvedValueOnce({ start: firstStart, stop: firstStop })
+      .mockResolvedValueOnce({ start: secondStart, stop: secondStop });
+
+    const startCoordinator = createApprovalHandlerStartCoordinator({
+      jitterMs: 0,
+      maxConcurrentStarts: 1,
+      startSlotMaxHoldMs: 500,
+    });
+
+    const firstCleanup = await startTestBootstrap({
+      channelRuntime,
+      startCoordinator,
+      accountId: "alpha",
+    });
+    const secondCleanup = await startTestBootstrap({
+      channelRuntime,
+      startCoordinator,
+      accountId: "beta",
+    });
+
+    registerApprovalContext(channelRuntime, { ok: "alpha" }, "alpha");
+    registerApprovalContext(channelRuntime, { ok: "beta" }, "beta");
+
+    await flushTransitions();
+    expect(firstStart).toHaveBeenCalledTimes(1);
+    expect(secondStart).not.toHaveBeenCalled();
+
+    // Advance past the hold-timeout. The first start is still hung, but the
+    // watchdog releases its slot and the second bootstrap's slot acquisition
+    // resolves.
+    await vi.advanceTimersByTimeAsync(500);
+    await flushTransitions();
+
+    expect(secondStart).toHaveBeenCalledTimes(1);
+
+    await firstCleanup();
+    await secondCleanup();
   });
 
   it("does not apply startup jitter to retry-after-failure attempts", async () => {
