@@ -16,7 +16,12 @@ export type SessionsState = {
   sessionsFilterLimit: string;
   sessionsIncludeGlobal: boolean;
   sessionsIncludeUnknown: boolean;
+  sessionsLastFetchAt?: number | null;
 };
+
+function isUiVisible() {
+  return typeof document === "undefined" || !document.hidden;
+}
 
 export async function subscribeSessions(state: SessionsState) {
   if (!state.client || !state.connected) {
@@ -36,8 +41,18 @@ export async function loadSessions(
     limit?: number;
     includeGlobal?: boolean;
     includeUnknown?: boolean;
+    force?: boolean;
   },
 ) {
+  if (!isUiVisible() && !overrides?.force) {
+    return;
+  }
+  if (!overrides?.force && typeof state.sessionsLastFetchAt === "number") {
+    const minGapMs = 10_000;
+    if (Date.now() - state.sessionsLastFetchAt < minGapMs) {
+      return;
+    }
+  }
   if (!state.client || !state.connected) {
     return;
   }
@@ -65,6 +80,7 @@ export async function loadSessions(
     if (res) {
       state.sessionsResult = res;
     }
+    state.sessionsLastFetchAt = Date.now();
   } catch (err) {
     if (isMissingOperatorReadScopeError(err)) {
       state.sessionsResult = null;
@@ -109,7 +125,7 @@ export async function patchSession(
   }
   try {
     await state.client.request("sessions.patch", params);
-    await loadSessions(state);
+    await loadSessions(state, { force: true });
   } catch (err) {
     state.sessionsError = String(err);
   }

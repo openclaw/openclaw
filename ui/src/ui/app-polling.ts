@@ -10,14 +10,23 @@ type PollingHost = {
   tab: string;
 };
 
+function isUiVisible() {
+  return typeof document === "undefined" || !document.hidden;
+}
+
 export function startNodesPolling(host: PollingHost) {
   if (host.nodesPollInterval != null) {
     return;
   }
-  host.nodesPollInterval = window.setInterval(
-    () => void loadNodes(host as unknown as OpenClawApp, { quiet: true }),
-    5000,
-  );
+  host.nodesPollInterval = window.setInterval(() => {
+    if (!isUiVisible()) {
+      return;
+    }
+    if (host.tab !== "overview" && host.tab !== "nodes") {
+      return;
+    }
+    void loadNodes(host as unknown as OpenClawApp, { quiet: true });
+  }, 30000);
 }
 
 export function stopNodesPolling(host: PollingHost) {
@@ -33,11 +42,11 @@ export function startLogsPolling(host: PollingHost) {
     return;
   }
   host.logsPollInterval = window.setInterval(() => {
-    if (host.tab !== "logs") {
+    if (!isUiVisible() || host.tab !== "logs") {
       return;
     }
     void loadLogs(host as unknown as OpenClawApp, { quiet: true });
-  }, 2000);
+  }, 5000);
 }
 
 export function stopLogsPolling(host: PollingHost) {
@@ -53,11 +62,11 @@ export function startDebugPolling(host: PollingHost) {
     return;
   }
   host.debugPollInterval = window.setInterval(() => {
-    if (host.tab !== "debug") {
+    if (!isUiVisible() || host.tab !== "debug") {
       return;
     }
     void loadDebug(host as unknown as OpenClawApp);
-  }, 3000);
+  }, 15000);
 }
 
 export function stopDebugPolling(host: PollingHost) {

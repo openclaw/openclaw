@@ -100,7 +100,12 @@ type SessionDefaultsSnapshot = {
 type GatewayHostWithShutdownMessage = GatewayHost & {
   pendingShutdownMessage?: string | null;
   resumeChatQueueAfterReconnect?: boolean;
+  sessionsRefreshTimer?: number | null;
 };
+
+function isUiVisible() {
+  return typeof document === "undefined" || !document.hidden;
+}
 
 type ConnectGatewayOptions = {
   reason?: "initial" | "seq-gap";
@@ -249,7 +254,9 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
       void loadAssistantIdentity(host as unknown as OpenClawApp);
       void loadAgents(host as unknown as OpenClawApp);
       void loadHealthState(host as unknown as OpenClawApp);
-      void loadNodes(host as unknown as OpenClawApp, { quiet: true });
+      if (isUiVisible() && (host.tab === "overview" || host.tab === "nodes")) {
+        void loadNodes(host as unknown as OpenClawApp, { quiet: true });
+      }
       void loadDevices(host as unknown as OpenClawApp, { quiet: true });
       void refreshActiveTab(host as unknown as Parameters<typeof refreshActiveTab>[0]);
     },
@@ -332,6 +339,7 @@ function handleTerminalChatEvent(
     if (state === "final") {
       void loadSessions(host as unknown as OpenClawApp, {
         activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES,
+        force: true,
       });
     }
   }
@@ -410,7 +418,16 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
   }
 
   if (evt.event === "sessions.changed") {
-    void loadSessions(host as unknown as OpenClawApp);
+    if (!isUiVisible()) {
+      return;
+    }
+    const refreshHost = host as GatewayHostWithShutdownMessage;
+    if (refreshHost.sessionsRefreshTimer == null) {
+      refreshHost.sessionsRefreshTimer = window.setTimeout(() => {
+        refreshHost.sessionsRefreshTimer = null;
+        void loadSessions(host as unknown as OpenClawApp);
+      }, 1500);
+    }
     return;
   }
 

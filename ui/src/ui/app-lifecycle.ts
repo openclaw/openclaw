@@ -17,6 +17,10 @@ import {
   syncThemeWithSettings,
 } from "./app-settings.ts";
 import { loadControlUiBootstrapConfig } from "./controllers/control-ui-bootstrap.ts";
+import { loadDebug } from "./controllers/debug.ts";
+import { loadLogs } from "./controllers/logs.ts";
+import { loadNodes } from "./controllers/nodes.ts";
+import { loadSessions } from "./controllers/sessions.ts";
 import type { Tab } from "./navigation.ts";
 
 type LifecycleHost = {
@@ -40,7 +44,12 @@ type LifecycleHost = {
   logsEntries: unknown[];
   popStateHandler: () => void;
   topbarObserver: ResizeObserver | null;
+  visibilityHandler?: (() => void) | null;
 };
+
+function isUiVisible() {
+  return typeof document === "undefined" || !document.hidden;
+}
 
 export function handleConnected(host: LifecycleHost) {
   const connectGeneration = ++host.connectGeneration;
@@ -57,12 +66,39 @@ export function handleConnected(host: LifecycleHost) {
     }
     connectGateway(host as unknown as Parameters<typeof connectGateway>[0]);
   });
-  startNodesPolling(host as unknown as Parameters<typeof startNodesPolling>[0]);
-  if (host.tab === "logs") {
-    startLogsPolling(host as unknown as Parameters<typeof startLogsPolling>[0]);
-  }
-  if (host.tab === "debug") {
-    startDebugPolling(host as unknown as Parameters<typeof startDebugPolling>[0]);
+  host.visibilityHandler ??= () => {
+    if (!isUiVisible()) {
+      stopNodesPolling(host as unknown as Parameters<typeof stopNodesPolling>[0]);
+      stopLogsPolling(host as unknown as Parameters<typeof stopLogsPolling>[0]);
+      stopDebugPolling(host as unknown as Parameters<typeof stopDebugPolling>[0]);
+      return;
+    }
+    startNodesPolling(host as unknown as Parameters<typeof startNodesPolling>[0]);
+    if (host.tab === "logs") {
+      startLogsPolling(host as unknown as Parameters<typeof startLogsPolling>[0]);
+      void loadLogs(host as unknown as Parameters<typeof loadLogs>[0], {
+        quiet: true,
+        reset: true,
+      });
+    }
+    if (host.tab === "debug") {
+      startDebugPolling(host as unknown as Parameters<typeof startDebugPolling>[0]);
+      void loadDebug(host as unknown as Parameters<typeof loadDebug>[0]);
+    }
+    if (host.tab === "overview" || host.tab === "nodes") {
+      void loadNodes(host as unknown as Parameters<typeof loadNodes>[0], { quiet: true });
+    }
+    void loadSessions(host as unknown as Parameters<typeof loadSessions>[0], { force: true });
+  };
+  window.addEventListener("visibilitychange", host.visibilityHandler);
+  if (isUiVisible()) {
+    startNodesPolling(host as unknown as Parameters<typeof startNodesPolling>[0]);
+    if (host.tab === "logs") {
+      startLogsPolling(host as unknown as Parameters<typeof startLogsPolling>[0]);
+    }
+    if (host.tab === "debug") {
+      startDebugPolling(host as unknown as Parameters<typeof startDebugPolling>[0]);
+    }
   }
 }
 
@@ -73,6 +109,9 @@ export function handleFirstUpdated(host: LifecycleHost) {
 export function handleDisconnected(host: LifecycleHost) {
   host.connectGeneration += 1;
   window.removeEventListener("popstate", host.popStateHandler);
+  if (host.visibilityHandler) {
+    window.removeEventListener("visibilitychange", host.visibilityHandler);
+  }
   stopNodesPolling(host as unknown as Parameters<typeof stopNodesPolling>[0]);
   stopLogsPolling(host as unknown as Parameters<typeof stopLogsPolling>[0]);
   stopDebugPolling(host as unknown as Parameters<typeof stopDebugPolling>[0]);
