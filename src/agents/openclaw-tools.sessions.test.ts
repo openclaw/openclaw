@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelMessagingAdapter } from "../channels/plugins/types.js";
@@ -297,9 +299,7 @@ describe("sessions tools", () => {
       params: {
         activeMinutes: undefined,
         agentId: "main",
-        includeDerivedTitles: true,
         includeGlobal: true,
-        includeLastMessage: true,
         includeUnknown: true,
         label: "mailbox",
         limit: undefined,
@@ -354,6 +354,93 @@ describe("sessions tools", () => {
     };
     expect(cronDetails.sessions).toHaveLength(1);
     expect(cronDetails.sessions?.[0]?.kind).toBe("cron");
+  });
+
+  it("derives mailbox previews only after agent visibility filtering", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sessions-list-preview-"));
+    const storePath = path.join(tmpDir, "sessions.json");
+    try {
+      fs.writeFileSync(
+        path.join(tmpDir, "visible.jsonl"),
+        [
+          JSON.stringify({ type: "session", id: "visible" }),
+          JSON.stringify({ message: { role: "user", content: "Visible project kickoff" } }),
+          JSON.stringify({ message: { role: "assistant", content: "Visible latest reply" } }),
+        ].join("\n"),
+        "utf-8",
+      );
+      fs.writeFileSync(
+        path.join(tmpDir, "hidden.jsonl"),
+        [
+          JSON.stringify({ type: "session", id: "hidden" }),
+          JSON.stringify({ message: { role: "user", content: "Hidden cross-agent topic" } }),
+          JSON.stringify({ message: { role: "assistant", content: "Hidden latest reply" } }),
+        ].join("\n"),
+        "utf-8",
+      );
+
+      callGatewayMock.mockImplementation(async (opts: unknown) => {
+        const request = opts as { method?: string; params?: Record<string, unknown> };
+        if (request.method === "sessions.list") {
+          expect(request.params?.includeDerivedTitles).toBeUndefined();
+          expect(request.params?.includeLastMessage).toBeUndefined();
+          return {
+            path: storePath,
+            sessions: [
+              {
+                key: "agent:main:main",
+                kind: "direct",
+                sessionId: "visible",
+                updatedAt: 20,
+              },
+              {
+                key: "agent:other:main",
+                kind: "direct",
+                sessionId: "hidden",
+                updatedAt: 21,
+              },
+            ],
+          };
+        }
+        return {};
+      });
+
+      const tool = createOpenClawTools({
+        agentSessionKey: "agent:main:main",
+        config: {
+          ...TEST_CONFIG,
+          tools: {
+            sessions: { visibility: "agent" },
+            agentToAgent: { enabled: false },
+          },
+        } as OpenClawConfig,
+      }).find((candidate) => candidate.name === "sessions_list");
+      expect(tool).toBeDefined();
+      if (!tool) {
+        throw new Error("missing sessions_list tool");
+      }
+
+      const result = await tool.execute("call-preview", {
+        includeDerivedTitles: true,
+        includeLastMessage: true,
+      });
+      const details = result.details as {
+        sessions?: Array<{
+          key?: string;
+          derivedTitle?: string;
+          lastMessagePreview?: string;
+        }>;
+      };
+      expect(details.sessions).toHaveLength(1);
+      expect(details.sessions?.[0]).toMatchObject({
+        key: "agent:main:main",
+        derivedTitle: "Visible project kickoff",
+        lastMessagePreview: "Visible latest reply",
+      });
+      expect(JSON.stringify(details.sessions)).not.toContain("Hidden");
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 
   it("sessions_list resolves transcriptPath from agent state dir for multi-store listings", async () => {
