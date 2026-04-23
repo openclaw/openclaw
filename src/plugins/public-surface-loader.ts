@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
@@ -18,7 +17,6 @@ const OPENCLAW_PACKAGE_ROOT =
     moduleUrl: import.meta.url,
   }) ?? fileURLToPath(new URL("../..", import.meta.url));
 const loadedPublicSurfaceModules = new Map<string, unknown>();
-const sourceArtifactRequire = createRequire(import.meta.url);
 const publicSurfaceLocations = new Map<
   string,
   {
@@ -28,28 +26,6 @@ const publicSurfaceLocations = new Map<
 >();
 const jitiLoaders: PluginJitiLoaderCache = new Map();
 const sharedBundledPublicSurfaceJitiLoaders: PluginJitiLoaderCache = new Map();
-
-function isSourceArtifactPath(modulePath: string): boolean {
-  switch (path.extname(modulePath).toLowerCase()) {
-    case ".ts":
-    case ".tsx":
-    case ".mts":
-    case ".cts":
-    case ".mtsx":
-    case ".ctsx":
-      return true;
-    default:
-      return false;
-  }
-}
-
-function canUseSourceArtifactRequire(params: { modulePath: string; tryNative: boolean }): boolean {
-  return (
-    !params.tryNative &&
-    isSourceArtifactPath(params.modulePath) &&
-    typeof sourceArtifactRequire.extensions?.[".ts"] === "function"
-  );
-}
 
 function createResolutionKey(params: { dirName: string; artifactBasename: string }): string {
   const bundledPluginsDir = resolveBundledPluginsDir();
@@ -109,10 +85,10 @@ function getJiti(modulePath: string) {
 }
 
 function loadPublicSurfaceModule(modulePath: string): unknown {
-  const tryNative = resolvePluginLoaderJitiTryNative(modulePath, { preferBuiltDist: true });
-  if (canUseSourceArtifactRequire({ modulePath, tryNative })) {
-    return sourceArtifactRequire(modulePath);
-  }
+  // Source public artifacts routinely keep emitted-style `.js` relative import
+  // specifiers. Jiti resolves those against sibling `.ts` sources in the repo,
+  // while plain require() expects the compiled `.js` files to already exist and
+  // blows up in source-tree test/runtime paths.
   return getJiti(modulePath)(modulePath);
 }
 
