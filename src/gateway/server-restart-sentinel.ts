@@ -213,14 +213,15 @@ async function deliverQueuedSessionDelivery(params: {
   entry: QueuedSessionDelivery;
 }) {
   const { cfg, storePath, canonicalKey } = loadSessionEntry(params.entry.sessionKey);
+  const queuedDeliveryContext = resolveQueuedSessionDeliveryContext(params.entry);
 
   if (params.entry.kind === "systemEvent") {
     enqueueSystemEvent(params.entry.text, {
       sessionKey: canonicalKey,
-      ...(resolveQueuedSessionDeliveryContext(params.entry)
+      ...(queuedDeliveryContext
         ? {
             deliveryContext: {
-              ...resolveQueuedSessionDeliveryContext(params.entry),
+              ...queuedDeliveryContext,
             },
           }
         : {}),
@@ -232,10 +233,10 @@ async function deliverQueuedSessionDelivery(params: {
   if (!params.entry.route) {
     enqueueSystemEvent(params.entry.message, {
       sessionKey: canonicalKey,
-      ...(resolveQueuedSessionDeliveryContext(params.entry)
+      ...(queuedDeliveryContext
         ? {
             deliveryContext: {
-              ...resolveQueuedSessionDeliveryContext(params.entry),
+              ...queuedDeliveryContext,
             },
           }
         : {}),
@@ -383,10 +384,12 @@ async function drainRestartContinuationQueue(params: {
 export async function recoverPendingRestartContinuationDeliveries(params: {
   deps: CliDeps;
   log?: SessionDeliveryRecoveryLogger;
+  maxEnqueuedAt?: number;
 }) {
   await recoverPendingSessionDeliveries({
     deliver: (entry) => deliverQueuedSessionDelivery({ deps: params.deps, entry }),
     log: params.log ?? log,
+    maxEnqueuedAt: params.maxEnqueuedAt,
   });
 }
 

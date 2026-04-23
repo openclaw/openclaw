@@ -206,7 +206,7 @@ export async function loadPendingSessionDeliveries(
   }
 
   for (const file of files) {
-    if (file.endsWith(".delivered")) {
+    if (file.endsWith(".delivered") || file.endsWith(".tmp")) {
       await unlinkBestEffort(path.join(queueDir, file));
     }
   }
