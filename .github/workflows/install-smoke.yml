@@ -219,3 +219,29 @@ jobs:
           OPENCLAW_INSTALL_SMOKE_UPDATE_DIST_IMAGE: openclaw-dockerfile-smoke:local
           OPENCLAW_INSTALL_SMOKE_UPDATE_SKIP_LOCAL_BUILD: "1"
         run: bash scripts/test-install-sh-docker.sh
+
+  docker-e2e-fast:
+    needs: [preflight]
+    if: needs.preflight.outputs.run_install_smoke == 'true'
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 8
+    env:
+      DOCKER_BUILD_SUMMARY: "false"
+      DOCKER_BUILD_RECORD_UPLOAD: "false"
+    steps:
+      - name: Checkout CLI
+        uses: actions/checkout@v6
+
+      - name: Set up Blacksmith Docker Builder
+        uses: useblacksmith/setup-docker-builder@ac083cc84672d01c60d5e8561d0a939b697de542 # v1
+
+      - name: Setup Node environment for package smoke
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          install-deps: "true"
+
+      - name: Run fast bundled plugin Docker E2E
+        env:
+          OPENCLAW_BUNDLED_CHANNEL_DEPS_E2E_IMAGE: openclaw-bundled-channel-fast:local
+        run: timeout 120s pnpm test:docker:bundled-channel-deps:fast

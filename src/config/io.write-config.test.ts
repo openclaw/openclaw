@@ -1,9 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
-import { createConfigIO } from "./io.js";
+import {
+  createConfigIO,
+  resetConfigRuntimeState,
+  setRuntimeConfigSnapshot,
+  writeConfigFile,
+} from "./io.js";
 import type { ConfigFileSnapshot } from "./types.openclaw.js";
 
 // Mock the plugin manifest registry so we can register a fake channel whose
@@ -66,7 +71,12 @@ describe("config io write", () => {
     } satisfies PluginManifestRegistry);
   });
 
+  afterEach(() => {
+    resetConfigRuntimeState();
+  });
+
   afterAll(async () => {
+    resetConfigRuntimeState();
     await suiteRootTracker.cleanup();
   });
 
@@ -420,12 +430,106 @@ describe("config io write", () => {
             },
           },
         }),
-      ).resolves.toEqual({ persistedHash: expect.any(String) });
+      ).resolves.toMatchObject({ persistedHash: expect.any(String) });
     });
 
     mockLoadPluginManifestRegistry.mockReturnValue({
       diagnostics: [],
       plugins: [],
     } satisfies PluginManifestRegistry);
+  });
+
+  it("writes runtime-derived edits back to source SecretRef markers", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+      process.env.OPENCLAW_CONFIG_PATH = configPath;
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        `${JSON.stringify(
+          {
+            gateway: { mode: "local" },
+            models: {
+              providers: {
+                openai: {
+                  baseUrl: "https://api.openai.com/v1",
+                  apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+                  models: [],
+                },
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf-8",
+      );
+
+      try {
+        setRuntimeConfigSnapshot(
+          {
+            gateway: { mode: "local" },
+            models: {
+              providers: {
+                openai: {
+                  baseUrl: "https://api.openai.com/v1",
+                  apiKey: "sk-runtime-resolved",
+                  models: [],
+                },
+              },
+            },
+          },
+          {
+            gateway: { mode: "local" },
+            models: {
+              providers: {
+                openai: {
+                  baseUrl: "https://api.openai.com/v1",
+                  apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+                  models: [],
+                },
+              },
+            },
+          },
+        );
+
+        await writeConfigFile({
+          gateway: { mode: "local", port: 18789 },
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "https://api.openai.com/v1",
+                apiKey: "sk-runtime-resolved",
+                models: [],
+              },
+            },
+          },
+        });
+
+        expect(JSON.parse(await fs.readFile(configPath, "utf-8"))).toEqual({
+          gateway: { mode: "local", port: 18789 },
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "https://api.openai.com/v1",
+                apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+                models: [],
+              },
+            },
+          },
+          meta: {
+            lastTouchedAt: expect.any(String),
+            lastTouchedVersion: expect.any(String),
+          },
+        });
+      } finally {
+        if (previousConfigPath === undefined) {
+          delete process.env.OPENCLAW_CONFIG_PATH;
+        } else {
+          process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
+        }
+      }
+    });
   });
 });

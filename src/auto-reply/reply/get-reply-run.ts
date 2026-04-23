@@ -50,6 +50,7 @@ import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { buildReplyPromptBodies } from "./prompt-prelude.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import { resolveQueueSettings } from "./queue/settings-runtime.js";
+import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 import { resolveBareSessionResetPromptState } from "./session-reset-prompt.js";
 import { resolveBareResetBootstrapFileAccess } from "./session-reset-prompt.js";
 import { drainFormattedSystemEvents } from "./session-system-events.js";
@@ -233,6 +234,11 @@ export async function runPreparedReply(
     workspaceDir,
     sessionStore,
   } = params;
+  const runtimePolicySessionKey = resolveRuntimePolicySessionKey({
+    cfg,
+    ctx,
+    sessionKey,
+  });
   let {
     sessionEntry,
     resolvedThinkLevel,
@@ -689,6 +695,7 @@ export async function runPreparedReply(
       agentDir,
       sessionId: preparedSessionState.sessionId,
       sessionKey,
+      runtimePolicySessionKey,
       messageProvider: resolveOriginMessageProvider({
         originatingChannel: ctx.OriginatingChannel ?? sessionCtx.OriginatingChannel,
         // Prefer Provider over Surface for fallback channel identity.
@@ -759,6 +766,14 @@ export async function runPreparedReply(
     },
   };
 
+  const replyThreadingOverride =
+    isBareSessionReset && sessionCtx.ReplyThreading?.implicitCurrentMessage !== "deny"
+      ? {
+          ...sessionCtx.ReplyThreading,
+          implicitCurrentMessage: "deny" as const,
+        }
+      : undefined;
+
   return runReplyAgent({
     commandBody: prefixedCommandBody,
     followupRun,
@@ -779,6 +794,7 @@ export async function runPreparedReply(
     sessionEntry: preparedSessionState.sessionEntry,
     sessionStore,
     sessionKey,
+    runtimePolicySessionKey,
     storePath,
     defaultModel,
     agentCfgContextTokens: agentCfg?.contextTokens,
@@ -791,5 +807,6 @@ export async function runPreparedReply(
     shouldInjectGroupIntro,
     typingMode,
     resetTriggered: effectiveResetTriggered,
+    replyThreadingOverride,
   });
 }

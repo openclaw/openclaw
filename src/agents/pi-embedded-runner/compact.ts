@@ -412,7 +412,8 @@ export async function compactEmbeddedPiSessionDirect(
   }
 
   await fs.mkdir(resolvedWorkspace, { recursive: true });
-  const sandboxSessionKey = params.sessionKey?.trim() || params.sessionId;
+  const sandboxSessionKey =
+    params.sandboxSessionKey?.trim() || params.sessionKey?.trim() || params.sessionId;
   const sandbox = await resolveSandboxContext({
     config: params.config,
     sessionKey: sandboxSessionKey,
@@ -843,13 +844,12 @@ export async function compactEmbeddedPiSessionDirect(
         contextTokenBudget: ctxInfo.tokens,
       });
 
-      const { builtInTools, customTools } = splitSdkTools({
+      const { customTools } = splitSdkTools({
         tools: effectiveTools,
         sandboxEnabled: !!sandbox?.enabled,
       });
-      // Pi only accepts built-in Tool[] at session creation time. After the
-      // session registers custom tools, narrow the active tool names against
-      // the exact OpenClaw-managed registrations.
+      // Pi treats `tools` as a name allowlist during session creation. Pass the
+      // exact OpenClaw-managed registrations so custom tools survive startup.
       const sessionToolAllowlist = toSessionToolAllowlist(collectRegisteredToolNames(customTools));
 
       const providerStreamFn = resolveCompactionProviderStream({
@@ -888,7 +888,7 @@ export async function compactEmbeddedPiSessionDirect(
             modelRegistry,
             model: effectiveModel,
             thinkingLevel: mapThinkingLevel(thinkLevel),
-            tools: builtInTools,
+            tools: sessionToolAllowlist,
             customTools,
             sessionManager,
             settingsManager,

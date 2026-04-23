@@ -85,6 +85,10 @@ const GPT_CHAT_BREVITY_ACK_MAX_SENTENCES = 3;
 const GPT_CHAT_BREVITY_SOFT_MAX_CHARS = 900;
 const GPT_CHAT_BREVITY_SOFT_MAX_SENTENCES = 6;
 
+function readApprovalScopeValue(value: unknown): "turn" | "session" | undefined {
+  return value === "turn" || value === "session" ? value : undefined;
+}
+
 export type RuntimeFallbackAttempt = {
   provider: string;
   model: string;
@@ -561,6 +565,7 @@ export async function runAgentTurnWithFallback(params: {
   commandBody: string;
   followupRun: FollowupRun;
   sessionCtx: TemplateContext;
+  replyThreading?: TemplateContext["ReplyThreading"];
   replyOperation?: ReplyOperation;
   opts?: GetReplyOptions;
   typingSignals: TypingSignaler;
@@ -581,6 +586,7 @@ export async function runAgentTurnWithFallback(params: {
   resetSessionAfterRoleOrderingConflict: (reason: string) => Promise<boolean>;
   isHeartbeat: boolean;
   sessionKey?: string;
+  runtimePolicySessionKey?: string;
   getActiveSessionEntry: () => SessionEntry | undefined;
   activeSessionStore?: Record<string, SessionEntry>;
   storePath?: string;
@@ -836,6 +842,7 @@ export async function runAgentTurnWithFallback(params: {
         ? createBlockReplyDeliveryHandler({
             onBlockReply: params.opts.onBlockReply,
             currentMessageId: params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid,
+            replyThreading: params.replyThreading,
             normalizeStreamingText,
             applyReplyToMode: params.applyReplyToMode,
             normalizeMediaPaths: replyMediaContext.normalizePayload,
@@ -1043,6 +1050,7 @@ export async function runAgentTurnWithFallback(params: {
                 ...(params.followupRun.run.agentAccountId != null && {
                   agentAccountId: params.followupRun.run.agentAccountId,
                 }),
+                sandboxSessionKey: params.runtimePolicySessionKey,
                 prompt: params.commandBody,
                 extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
                 toolResultFormat: (() => {
@@ -1147,6 +1155,7 @@ export async function runAgentTurnWithFallback(params: {
                       command: readStringValue(evt.data.command),
                       host: readStringValue(evt.data.host),
                       reason: readStringValue(evt.data.reason),
+                      scope: readApprovalScopeValue(evt.data.scope),
                       message: readStringValue(evt.data.message),
                     });
                   }
