@@ -143,6 +143,40 @@ describe("session binding service", () => {
     expect(result.conversation.conversationId).toBe("thread-created");
   });
 
+  it("preserves explicit self-parent refs for child placement adapters", async () => {
+    const bind = vi.fn(async (input: SessionBindingBindInput) => createRecord(input));
+    registerSessionBindingAdapter({
+      channel: "demo-binding",
+      accountId: "default",
+      capabilities: { placements: ["child"] },
+      bind,
+      listBySession: () => [],
+      resolveByConversation: () => null,
+    });
+
+    await getSessionBindingService().bind({
+      targetSessionKey: "agent:codex:acp:1",
+      targetKind: "session",
+      conversation: {
+        channel: "demo-binding",
+        accountId: "default",
+        conversationId: "channel-parent",
+        parentConversationId: "channel-parent",
+      },
+      placement: "child",
+    });
+
+    expect(bind).toHaveBeenCalledWith(
+      expect.objectContaining({
+        placement: "child",
+        conversation: expect.objectContaining({
+          conversationId: "channel-parent",
+          parentConversationId: "channel-parent",
+        }),
+      }),
+    );
+  });
+
   it("returns structured errors when adapter is unavailable", async () => {
     await expect(
       getSessionBindingService().bind({

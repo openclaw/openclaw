@@ -16,6 +16,7 @@ import {
   resolveChannelDefaultBindingPlacement,
   resolveInboundConversationResolution,
 } from "../channels/conversation-resolution.js";
+import { getChannelPlugin, getLoadedChannelPlugin } from "../channels/plugins/index.js";
 import {
   resolveThreadBindingIntroText,
   resolveThreadBindingThreadName,
@@ -546,7 +547,14 @@ function resolveAcpSpawnChannelAccountId(params: {
   }
   const channels = params.cfg.channels as Record<string, { defaultAccount?: unknown } | undefined>;
   const configuredDefaultAccountId = channels?.[channel]?.defaultAccount;
-  return normalizeOptionalString(configuredDefaultAccountId) ?? "default";
+  return (
+    normalizeOptionalString(configuredDefaultAccountId) ??
+    normalizeOptionalString(
+      getLoadedChannelPlugin(channel)?.config.defaultAccountId?.(params.cfg),
+    ) ??
+    normalizeOptionalString(getChannelPlugin(channel)?.config.defaultAccountId?.(params.cfg)) ??
+    "default"
+  );
 }
 
 function prepareAcpThreadBinding(params: {
@@ -633,6 +641,11 @@ function prepareAcpThreadBinding(params: {
       error: `Could not resolve a ${policy.channel} conversation for ACP thread spawn.`,
     };
   }
+  const parentConversationId =
+    conversationRef.parentConversationId ??
+    (policy.channel === "discord" && placementToUse === "child" && params.threadId == null
+      ? conversationRef.conversationId
+      : undefined);
 
   return {
     ok: true,
@@ -641,9 +654,7 @@ function prepareAcpThreadBinding(params: {
       accountId: policy.accountId,
       placement: placementToUse,
       conversationId: conversationRef.conversationId,
-      ...(conversationRef.parentConversationId
-        ? { parentConversationId: conversationRef.parentConversationId }
-        : {}),
+      ...(parentConversationId ? { parentConversationId } : {}),
     },
   };
 }

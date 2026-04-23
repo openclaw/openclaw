@@ -1,4 +1,5 @@
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
   __testing as genericCurrentConversationBindingTesting,
   bindGenericCurrentConversation,
@@ -300,9 +301,19 @@ function createDefaultSessionBindingService(): SessionBindingService {
           },
         );
       }
+      const requestedParentConversationId = normalizeOptionalString(
+        input.conversation.parentConversationId,
+      );
+      const conversationForAdapter =
+        placement === "child" && requestedParentConversationId
+          ? {
+              ...normalizedConversation,
+              parentConversationId: requestedParentConversationId,
+            }
+          : normalizedConversation;
       const bound = await adapter.bind({
         ...input,
-        conversation: normalizedConversation,
+        conversation: conversationForAdapter,
         placement,
       });
       if (!bound) {

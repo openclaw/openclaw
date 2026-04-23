@@ -718,6 +718,108 @@ describe("spawnAcpDirect", () => {
     expect(transcriptCalls[1]?.threadId).toBe("child-thread");
   });
 
+  it("uses the top-level Discord channel as the parent for child ACP thread spawns", async () => {
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+        mode: "session",
+        thread: true,
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "discord",
+        agentAccountId: "default",
+        agentTo: "channel:parent-channel",
+      },
+    );
+
+    expectAcceptedSpawn(result);
+    const bindCall = hoisted.sessionBindingBindMock.mock.calls.at(-1)?.[0] as
+      | {
+          placement?: string;
+          conversation?: { conversationId?: string; parentConversationId?: string };
+        }
+      | undefined;
+    expect(bindCall?.placement).toBe("child");
+    expect(bindCall?.conversation?.conversationId).toBeTruthy();
+    expect(bindCall?.conversation?.parentConversationId).toBe(
+      bindCall?.conversation?.conversationId,
+    );
+  });
+
+  it("uses the Discord plugin default account for ACP thread bindings", async () => {
+    replaceSpawnConfig({
+      ...hoisted.state.cfg,
+      channels: {
+        ...hoisted.state.cfg.channels,
+        discord: {
+          threadBindings: {
+            enabled: true,
+            spawnAcpSessions: true,
+          },
+          accounts: {
+            finn: {
+              threadBindings: {
+                enabled: true,
+                spawnAcpSessions: true,
+              },
+            },
+          },
+        },
+      },
+    });
+    const discordPlugin = {
+      config: {
+        defaultAccountId: () => "finn",
+      },
+      conversationBindings: {
+        defaultTopLevelPlacement: "child" as const,
+      },
+    };
+    hoisted.getLoadedChannelPluginMock.mockImplementation((channelId: string) =>
+      channelId === "discord" ? discordPlugin : undefined,
+    );
+    hoisted.getChannelPluginMock.mockImplementation((channelId: string) =>
+      channelId === "discord" ? discordPlugin : undefined,
+    );
+    registerSessionBindingAdapter({
+      channel: "discord",
+      accountId: "finn",
+      capabilities: createSessionBindingCapabilities(),
+      bind: async (input) => await hoisted.sessionBindingBindMock(input),
+      listBySession: (targetSessionKey) =>
+        hoisted.sessionBindingListBySessionMock(targetSessionKey),
+      resolveByConversation: (ref) => hoisted.sessionBindingResolveByConversationMock(ref),
+      unbind: async (input) => await hoisted.sessionBindingUnbindMock(input),
+    });
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+        mode: "session",
+        thread: true,
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "discord",
+        agentTo: "channel:parent-channel",
+      },
+    );
+
+    expectAcceptedSpawn(result);
+    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversation: expect.objectContaining({
+          channel: "discord",
+          accountId: "finn",
+        }),
+      }),
+    );
+    expect(findAgentGatewayCall()?.params?.accountId).toBe("finn");
+  });
+
   it("passes model override into ACP session initialization", async () => {
     const result = await spawnAcpDirect(
       {
