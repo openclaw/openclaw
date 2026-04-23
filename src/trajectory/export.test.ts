@@ -356,7 +356,11 @@ describe("exportTrajectoryBundle", () => {
         seq: 1,
         sourceSeq: 1,
         sessionId: "session-1",
-        data: { trigger: "user" },
+        data: {
+          trigger: "user",
+          workspacePath: path.join(tmpDir, "inside.txt"),
+          prefixOnlyPath: `${tmpDir}2/outside.txt`,
+        },
       },
       {
         traceSchema: "openclaw-trajectory",
@@ -469,6 +473,8 @@ describe("exportTrajectoryBundle", () => {
     expect(exportedEvents.some((event) => event.type === "tool.call")).toBe(true);
     expect(exportedEvents.some((event) => event.type === "tool.result")).toBe(true);
     expect(exportedEvents.some((event) => event.type === "context.compiled")).toBe(true);
+    expect(JSON.stringify(exportedEvents)).toContain("$WORKSPACE_DIR/inside.txt");
+    expect(JSON.stringify(exportedEvents)).not.toContain("$WORKSPACE_DIR2");
 
     const manifest = JSON.parse(fs.readFileSync(path.join(outputDir, "manifest.json"), "utf8")) as {
       contents?: Array<{ path: string; mediaType: string; bytes: number }>;

@@ -42,11 +42,35 @@ function resolveTrajectoryCommandOutputDir(params: {
     throw new Error("Output path must be relative to the workspace trajectory exports directory");
   }
   const baseDir = path.join(params.workspaceDir, ".openclaw", "trajectory-exports");
+  fs.mkdirSync(baseDir, { recursive: true, mode: 0o700 });
   const resolvedBase = path.resolve(baseDir);
+  const realBase = fs.realpathSync(resolvedBase);
+  const realWorkspace = fs.realpathSync(path.resolve(params.workspaceDir));
+  const baseRelativeToWorkspace = path.relative(realWorkspace, realBase);
+  if (
+    !baseRelativeToWorkspace ||
+    baseRelativeToWorkspace.startsWith("..") ||
+    path.isAbsolute(baseRelativeToWorkspace)
+  ) {
+    throw new Error("Trajectory exports directory must stay inside the workspace");
+  }
   const outputDir = path.resolve(resolvedBase, raw);
   const relative = path.relative(resolvedBase, outputDir);
   if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
     throw new Error("Output path must stay inside the workspace trajectory exports directory");
+  }
+  let existingParent = outputDir;
+  while (!fs.existsSync(existingParent)) {
+    const next = path.dirname(existingParent);
+    if (next === existingParent) {
+      break;
+    }
+    existingParent = next;
+  }
+  const realExistingParent = fs.realpathSync(existingParent);
+  const realRelative = path.relative(realBase, realExistingParent);
+  if (realRelative.startsWith("..") || path.isAbsolute(realRelative)) {
+    throw new Error("Output path must stay inside the real trajectory exports directory");
   }
   return outputDir;
 }

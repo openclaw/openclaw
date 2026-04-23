@@ -381,9 +381,15 @@ function redactWorkspacePathString(value: string, redaction: TrajectoryExportRed
     return value;
   }
   const normalizedWorkspaceDir = workspaceDir.replaceAll("\\", "/");
-  return value
-    .replaceAll(workspaceDir, "$WORKSPACE_DIR")
-    .replaceAll(normalizedWorkspaceDir, "$WORKSPACE_DIR");
+  let next = value;
+  for (const candidate of new Set([workspaceDir, normalizedWorkspaceDir])) {
+    if (!candidate) {
+      continue;
+    }
+    const escaped = candidate.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+    next = next.replace(new RegExp(`${escaped}(?=$|[\\\\/])`, "gu"), "$WORKSPACE_DIR");
+  }
+  return next;
 }
 
 function maybeRedactPathString(value: string, redaction: TrajectoryExportRedaction): string {
