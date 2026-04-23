@@ -6,8 +6,8 @@ import { parseFrontmatter } from "./skills/frontmatter.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
-describe("bundled taskflow skill frontmatter", () => {
-  it("keeps the taskflow skills parseable from their shipped files", async () => {
+describe("bundled skill frontmatter", () => {
+  it("keeps the bundled skills parseable from their shipped files", async () => {
     const skillPaths = [
       "skills/agent-audit/SKILL.md",
       "skills/taskflow/SKILL.md",
