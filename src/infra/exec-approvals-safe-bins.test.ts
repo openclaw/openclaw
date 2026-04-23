@@ -418,6 +418,70 @@ describe("exec approvals safe bins", () => {
     expect(deny).toBe(false);
   });
 
+  it("allows compound safeBins entries like 'gh pr list'", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const ok = isSafeBinUsage({
+      argv: ["gh", "pr", "list"],
+      resolution: {
+        rawExecutable: "gh",
+        resolvedPath: "/usr/bin/gh",
+        executableName: "gh",
+      },
+      safeBins: normalizeSafeBins(["gh pr list"]),
+    });
+    expect(ok).toBe(true);
+  });
+
+  it("allows compound safeBins entries like 'curl -s'", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const ok = isSafeBinUsage({
+      argv: ["curl", "-s"],
+      resolution: {
+        rawExecutable: "curl",
+        resolvedPath: "/usr/bin/curl",
+        executableName: "curl",
+      },
+      safeBins: normalizeSafeBins(["curl -s"]),
+    });
+    expect(ok).toBe(true);
+  });
+
+  it("denies commands not matching compound safeBins entries", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const ok = isSafeBinUsage({
+      argv: ["rm", "-rf", "/"],
+      resolution: {
+        rawExecutable: "rm",
+        resolvedPath: "/usr/bin/rm",
+        executableName: "rm",
+      },
+      safeBins: normalizeSafeBins(["gh pr list"]),
+    });
+    expect(ok).toBe(false);
+  });
+
+  it("denies compound safeBins from untrusted paths", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const ok = isSafeBinUsage({
+      argv: ["gh", "pr", "list"],
+      resolution: {
+        rawExecutable: "gh",
+        resolvedPath: "/tmp/evil/gh",
+        executableName: "gh",
+      },
+      safeBins: normalizeSafeBins(["gh pr list"]),
+    });
+    expect(ok).toBe(false);
+  });
+
   it("blocks sort output flags independent of file existence", () => {
     if (process.platform === "win32") {
       return;

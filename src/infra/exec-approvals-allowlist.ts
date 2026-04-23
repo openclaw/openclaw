@@ -64,6 +64,19 @@ export function resolveSafeBins(entries?: readonly string[] | null): Set<string>
   return normalizeSafeBins(entries ?? []);
 }
 
+function matchCompoundSafeBin(argv: string[], safeBins: Set<string>): boolean {
+  const normalized = argv
+    .map((token) => normalizeLowercaseStringOrEmpty(token))
+    .filter((token) => token.length > 0);
+  for (let length = normalized.length; length >= 2; length -= 1) {
+    const candidate = normalized.slice(0, length).join(" ");
+    if (safeBins.has(candidate)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function isSafeBinUsage(params: {
   argv: string[];
   resolution: ExecutableResolution | null;
@@ -86,6 +99,21 @@ export function isSafeBinUsage(params: {
   if (!execName) {
     return false;
   }
+
+  // Check for compound safeBins entries (e.g. "gh pr list", "curl -s").
+  // When the full argv prefix matches a multi-word safeBins entry, trust
+  // it if the executable resolves to a trusted path.
+  if (!params.safeBins.has(execName) && matchCompoundSafeBin(params.argv, params.safeBins)) {
+    if (!resolution?.resolvedPath) {
+      return false;
+    }
+    const isTrustedPath = params.isTrustedSafeBinPathFn ?? isTrustedSafeBinPath;
+    return isTrustedPath({
+      resolvedPath: resolution.resolvedPath,
+      trustedDirs: params.trustedSafeBinDirs,
+    });
+  }
+
   const matchesSafeBin = params.safeBins.has(execName);
   if (!matchesSafeBin) {
     return false;
