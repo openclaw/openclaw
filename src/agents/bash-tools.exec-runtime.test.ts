@@ -323,6 +323,7 @@ describe("emitExecSystemEvent", () => {
     });
     expect(requestHeartbeatNowMock).toHaveBeenCalledWith(
       expect.objectContaining({
+        coalesceMs: 0,
         reason: "exec-event",
         sessionKey: "agent:ops:main",
       }),
@@ -341,6 +342,7 @@ describe("emitExecSystemEvent", () => {
     });
     expect(requestHeartbeatNowMock).toHaveBeenCalledWith(
       expect.objectContaining({
+        coalesceMs: 0,
         reason: "exec-event",
       }),
     );

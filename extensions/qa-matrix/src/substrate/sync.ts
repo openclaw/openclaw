@@ -1,5 +1,9 @@
-import type { MatrixQaObservedEvent } from "./events.js";
-import { normalizeMatrixQaObservedEvent, type MatrixQaRoomEvent } from "./events.js";
+import {
+  findMatrixQaObservedEventMatch,
+  normalizeMatrixQaObservedEvent,
+  type MatrixQaObservedEvent,
+  type MatrixQaRoomEvent,
+} from "./events.js";
 import { requestMatrixJson, type MatrixQaFetchLike } from "./request.js";
 
 type MatrixQaSyncResponse = {
@@ -116,27 +120,6 @@ async function pollMatrixQaRoomObserver(
   }
 }
 
-function findObservedEventMatch(params: {
-  cursorIndex: number;
-  events: MatrixQaObservedEvent[];
-  predicate: (event: MatrixQaObservedEvent) => boolean;
-  roomId: string;
-}) {
-  for (let index = params.cursorIndex; index < params.events.length; index += 1) {
-    const event = params.events[index];
-    if (event?.roomId !== params.roomId) {
-      continue;
-    }
-    if (params.predicate(event)) {
-      return {
-        event,
-        nextCursorIndex: index + 1,
-      };
-    }
-  }
-  return undefined;
-}
-
 export function createMatrixQaRoomObserver(
   params: MatrixQaSyncParams & {
     observedEvents: MatrixQaObservedEvent[];
@@ -161,8 +144,9 @@ export function createMatrixQaRoomObserver(
       const startSince = await this.prime();
       const startedAt = Date.now();
       let cursorIndex = roomObserver.cursorIndex;
-      while (Date.now() - startedAt < waitParams.timeoutMs) {
-        const matched = findObservedEventMatch({
+      let didPoll = false;
+      while (true) {
+        const matched = findMatrixQaObservedEventMatch({
           cursorIndex,
           events: roomObserver.events,
           predicate: waitParams.predicate,
@@ -177,20 +161,25 @@ export function createMatrixQaRoomObserver(
           };
         }
 
+        const elapsedMs = Date.now() - startedAt;
+        if (elapsedMs >= waitParams.timeoutMs && (didPoll || waitParams.timeoutMs <= 0)) {
+          roomObserver.cursorIndex = Math.max(roomObserver.cursorIndex, cursorIndex);
+          return {
+            matched: false,
+            since: roomObserver.since ?? startSince,
+          };
+        }
+
         cursorIndex = roomObserver.events.length;
-        const remainingMs = Math.max(1_000, waitParams.timeoutMs - (Date.now() - startedAt));
+        const remainingMs = Math.max(1_000, waitParams.timeoutMs - elapsedMs);
         await pollMatrixQaRoomObserver({
           ...params,
           observedEvents: params.observedEvents,
           roomObserver,
           timeoutMs: remainingMs,
         });
+        didPoll = true;
       }
-      roomObserver.cursorIndex = Math.max(roomObserver.cursorIndex, cursorIndex);
-      return {
-        matched: false,
-        since: roomObserver.since ?? startSince,
-      };
     },
     async waitForRoomEvent(waitParams) {
       const result = await this.waitForOptionalRoomEvent(waitParams);

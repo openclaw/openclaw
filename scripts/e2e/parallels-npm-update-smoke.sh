@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/e2e/lib/parallels-macos-common.sh"
+source "$ROOT_DIR/scripts/e2e/lib/parallels-package-common.sh"
 
 MACOS_VM="macOS Tahoe"
 WINDOWS_VM="Windows 11"
@@ -19,6 +20,7 @@ JSON_OUTPUT=0
 RUN_DIR="$(mktemp -d /tmp/openclaw-parallels-npm-update.XXXXXX)"
 MAIN_TGZ_DIR="$(mktemp -d)"
 MAIN_TGZ_PATH=""
+BUILD_LOCK_DIR="${TMPDIR:-/tmp}/openclaw-parallels-build.lock"
 WINDOWS_UPDATE_SCRIPT_PATH=""
 SERVER_PID=""
 HOST_IP=""
@@ -31,7 +33,7 @@ UPDATE_EXPECTED_NEEDLE=""
 API_KEY_VALUE=""
 PROGRESS_INTERVAL_S=15
 PROGRESS_STALE_S=60
-TIMEOUT_UPDATE_S="${OPENCLAW_PARALLELS_NPM_UPDATE_TIMEOUT_S:-900}"
+TIMEOUT_UPDATE_S="${OPENCLAW_PARALLELS_NPM_UPDATE_TIMEOUT_S:-1200}"
 TIMEOUT_UPDATE_POLL_GRACE_S=60
 
 child_job_running() {
@@ -196,13 +198,14 @@ import json
 import os
 import re
 import sys
+from typing import Optional
 
 payload = json.loads(os.environ["PRL_VM_JSON"])
 requested = os.environ["REQUESTED_VM_NAME"].strip()
 requested_lower = requested.lower()
 names = [str(item.get("name", "")).strip() for item in payload if str(item.get("name", "")).strip()]
 
-def parse_ubuntu_version(name: str) -> tuple[int, ...] | None:
+def parse_ubuntu_version(name: str) -> Optional[tuple[int, ...]]:
     match = re.search(r"ubuntu\s+(\d+(?:\.\d+)*)", name, re.IGNORECASE)
     if not match:
         return None
@@ -327,20 +330,53 @@ sock.close()
 PY
 }
 
+current_build_commit() {
+  parallels_package_current_build_commit
+}
+
+source_tree_dirty_for_build() {
+  [[ -n "$(git status --porcelain -- src ui packages extensions package.json pnpm-lock.yaml 'tsconfig*.json' 2>/dev/null)" ]]
+}
+
 ensure_current_build() {
+  local build_commit head rc
+  head="$(git rev-parse HEAD)"
+  build_commit="$(current_build_commit)"
+  if [[ "$build_commit" == "$head" ]] && ! source_tree_dirty_for_build; then
+    return 0
+  fi
   say "Build dist for current head"
   pnpm build
+  rc=$?
+  if [[ $rc -eq 0 ]]; then
+    parallels_package_assert_no_generated_drift
+    rc=$?
+  fi
+  return "$rc"
+}
+
+write_package_dist_inventory() {
+  parallels_package_write_dist_inventory
 }
 
 pack_main_tgz() {
-  local pkg
+  local pkg rc
   CURRENT_HEAD="$(git rev-parse HEAD)"
   CURRENT_HEAD_SHORT="$(git rev-parse --short=7 HEAD)"
-  ensure_current_build
-  pkg="$(
-    npm pack --ignore-scripts --json --pack-destination "$MAIN_TGZ_DIR" \
-      | "$PYTHON_BIN" -c 'import json, sys; data = json.load(sys.stdin); print(data[-1]["filename"])'
-  )"
+  parallels_package_acquire_build_lock "$BUILD_LOCK_DIR"
+  set +e
+  {
+    ensure_current_build &&
+      write_package_dist_inventory &&
+      pkg="$(
+        npm pack --ignore-scripts --json --pack-destination "$MAIN_TGZ_DIR" \
+          | "$PYTHON_BIN" -c 'import json, sys; data = json.load(sys.stdin); print(data[-1]["filename"])'
+      )"
+  }
+  rc=$?
+  set -e
+  parallels_package_release_build_lock "$BUILD_LOCK_DIR"
+  [[ $rc -eq 0 ]] || return "$rc"
   MAIN_TGZ_PATH="$MAIN_TGZ_DIR/openclaw-main-$CURRENT_HEAD_SHORT.tgz"
   cp "$MAIN_TGZ_DIR/$pkg" "$MAIN_TGZ_PATH"
 }
@@ -457,20 +493,36 @@ function Wait-GatewayRpcReady {
   for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
     Write-ProgressLog "update.gateway-status.attempt-$attempt"
     try {
-      Invoke-Logged 'openclaw gateway status' { & $OpenClawPath gateway status --deep --require-rpc }
-      return
+      $statusOutput = Invoke-CaptureLogged 'openclaw gateway status' { & $OpenClawPath gateway status --deep --require-rpc }
+      if ($statusOutput -match 'Read probe:\s*failed') {
+        throw 'gateway status returned without RPC read readiness'
+      }
+      return $true
     } catch {
       if ($attempt -ge $Attempts) {
-        throw
+        return $false
       }
       Write-ProgressLog "update.gateway-status.retry-$attempt"
       Start-Sleep -Seconds $SleepSeconds
     }
   }
+  return $false
+}
+
+function Stop-GatewayScheduledTaskIfPresent {
+  $previousNativeErrorPreference = $PSNativeCommandUseErrorActionPreference
+  try {
+    $PSNativeCommandUseErrorActionPreference = $false
+    schtasks /End /TN 'OpenClaw Gateway' 2>$null | Out-Null
+  } catch {
+  } finally {
+    $PSNativeCommandUseErrorActionPreference = $previousNativeErrorPreference
+  }
 }
 
 function Stop-OpenClawGatewayProcesses {
   Write-ProgressLog 'update.stop-old-gateway'
+  Stop-GatewayScheduledTaskIfPresent
   $patterns = @(
     'openclaw-gateway',
     'openclaw.*gateway --port 18789',
@@ -501,7 +553,134 @@ function Stop-OpenClawGatewayProcesses {
     ForEach-Object {
       Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue
     }
-  Start-Sleep -Seconds 2
+  for ($attempt = 1; $attempt -le 20; $attempt++) {
+    $listeners = Get-NetTCPConnection -LocalPort 18789 -State Listen -ErrorAction SilentlyContinue
+    if (-not $listeners) {
+      return
+    }
+    $listeners |
+      ForEach-Object {
+        Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue
+      }
+    Start-Sleep -Seconds 1
+  }
+  $remaining = Get-NetTCPConnection -LocalPort 18789 -State Listen -ErrorAction SilentlyContinue
+  if ($remaining) {
+    $pids = ($remaining | Select-Object -ExpandProperty OwningProcess -Unique) -join ', '
+    throw "gateway listener still active on port 18789 after stop attempts: $pids"
+  }
+}
+
+function Stop-OpenClawUpdateProcesses {
+  Write-ProgressLog 'update.stop-stale-update'
+  $patterns = @(
+    'openclaw.* update --tag ',
+    'openclaw.* completion --write-state'
+  )
+  Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+    Where-Object {
+      $commandLine = $_.CommandLine
+      if (-not $commandLine) {
+        $false
+      } else {
+        $matched = $false
+        foreach ($pattern in $patterns) {
+          if ($commandLine -match $pattern) {
+            $matched = $true
+            break
+          }
+        }
+        $matched
+      }
+    } |
+    Sort-Object ParentProcessId -Descending |
+    ForEach-Object {
+      Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Invoke-OpenClawUpdateWithTimeout {
+  param(
+    [Parameter(Mandatory = $true)][string]$OpenClawPath,
+    [Parameter(Mandatory = $true)][string]$UpdateTarget,
+    [int]$TimeoutSeconds = 600
+  )
+
+  $updateJob = Start-Job -ScriptBlock {
+    param([string]$Path, [string]$Target)
+    $output = & $Path update --tag $Target --yes --json *>&1
+    [pscustomobject]@{
+      ExitCode = $LASTEXITCODE
+      Output = ($output | Out-String).Trim()
+    }
+  } -ArgumentList $OpenClawPath, $UpdateTarget
+
+  $completed = Wait-Job $updateJob -Timeout $TimeoutSeconds
+  if ($null -ne $completed) {
+    $result = Receive-Job $updateJob
+    if ($null -ne $result.Output -and $result.Output.Length -gt 0) {
+      $result.Output | Tee-Object -FilePath $LogPath -Append | Out-Null
+    }
+    Remove-Job $updateJob -Force -ErrorAction SilentlyContinue
+    if ($result.ExitCode -ne 0) {
+      throw "openclaw update failed with exit code $($result.ExitCode)"
+    }
+    return
+  }
+
+  Stop-Job $updateJob -ErrorAction SilentlyContinue
+  Remove-Job $updateJob -Force -ErrorAction SilentlyContinue
+  Write-ProgressLog 'update.openclaw-update.timeout'
+  'openclaw update timed out after package install window; killing stale update/completion processes and verifying installed version' | Tee-Object -FilePath $LogPath -Append | Out-Null
+  Stop-OpenClawUpdateProcesses
+}
+
+function Start-GatewayRunFallback {
+  param(
+    [Parameter(Mandatory = $true)][string]$OpenClawPath
+  )
+
+  Write-ProgressLog 'update.gateway-run-fallback'
+  Stop-OpenClawGatewayProcesses
+  $entry = Join-Path $env:APPDATA 'npm\node_modules\openclaw\dist\index.js'
+  if (-not (Test-Path $entry)) {
+    throw "openclaw dist entry missing: $entry"
+  }
+  $node = (Get-Command node.exe -ErrorAction Stop).Source
+  $stdout = Join-Path $env:TEMP 'openclaw-parallels-npm-update-gateway.log'
+  $stderr = Join-Path $env:TEMP 'openclaw-parallels-npm-update-gateway.err.log'
+  Start-Process -FilePath $node -ArgumentList @($entry, 'gateway', 'run', '--bind', 'loopback', '--port', '18789', '--force') -WindowStyle Hidden -RedirectStandardOutput $stdout -RedirectStandardError $stderr | Out-Null
+  if (-not (Wait-GatewayRpcReady -OpenClawPath $OpenClawPath -Attempts 20 -SleepSeconds 3)) {
+    if (Test-Path $stdout) {
+      Get-Content $stdout -Tail 80 | Tee-Object -FilePath $LogPath -Append | Out-Null
+    }
+    if (Test-Path $stderr) {
+      Get-Content $stderr -Tail 80 | Tee-Object -FilePath $LogPath -Append | Out-Null
+    }
+    throw 'gateway did not become RPC-ready after run fallback'
+  }
+}
+
+function Complete-WorkspaceSetup {
+  $workspace = $env:OPENCLAW_WORKSPACE_DIR
+  if (-not $workspace) {
+    $workspace = Join-Path $env:USERPROFILE '.openclaw\workspace'
+  }
+  $stateDir = Join-Path $workspace '.openclaw'
+  New-Item -ItemType Directory -Path $stateDir -Force | Out-Null
+  @'
+# Identity
+
+- Name: OpenClaw
+- Purpose: Parallels npm update smoke test assistant.
+'@ | Set-Content -Path (Join-Path $workspace 'IDENTITY.md') -Encoding UTF8
+  @'
+{
+  "version": 1,
+  "setupCompletedAt": "2026-01-01T00:00:00.000Z"
+}
+'@ | Set-Content -Path (Join-Path $stateDir 'workspace-state.json') -Encoding UTF8
+  Remove-Item (Join-Path $workspace 'BOOTSTRAP.md') -Force -ErrorAction SilentlyContinue
 }
 
 function Restart-GatewayWithRecovery {
@@ -539,17 +718,15 @@ function Restart-GatewayWithRecovery {
   Remove-Job $restartJob -Force -ErrorAction SilentlyContinue
 
   Write-ProgressLog 'update.gateway-status'
-  try {
-    Wait-GatewayRpcReady -OpenClawPath $OpenClawPath
+  if (Wait-GatewayRpcReady -OpenClawPath $OpenClawPath) {
     return
-  } catch {
-    if (-not $restartFailed) {
-      throw
-    }
-    Write-ProgressLog 'update.gateway-start-recover'
-    Invoke-Logged 'openclaw gateway start' { & $OpenClawPath gateway start }
-    Write-ProgressLog 'update.gateway-status-recover'
-    Wait-GatewayRpcReady -OpenClawPath $OpenClawPath
+  }
+  Write-ProgressLog 'update.gateway-start-recover'
+  Stop-OpenClawGatewayProcesses
+  Invoke-Logged 'openclaw gateway start' { & $OpenClawPath gateway start }
+  Write-ProgressLog 'update.gateway-status-recover'
+  if (-not (Wait-GatewayRpcReady -OpenClawPath $OpenClawPath)) {
+    Start-GatewayRunFallback -OpenClawPath $OpenClawPath
   }
 }
 
@@ -568,7 +745,7 @@ try {
   $openclaw = Join-Path $env:APPDATA 'npm\openclaw.cmd'
   Stop-OpenClawGatewayProcesses
   Write-ProgressLog 'update.openclaw-update'
-  Invoke-Logged 'openclaw update' { & $openclaw update --tag $UpdateTarget --yes --json }
+  Invoke-OpenClawUpdateWithTimeout -OpenClawPath $openclaw -UpdateTarget $UpdateTarget
   Write-ProgressLog 'update.verify-version'
   $version = Invoke-CaptureLogged 'openclaw --version' { & $openclaw --version }
   if ($ExpectedNeedle -and $version -notmatch [regex]::Escape($ExpectedNeedle)) {
@@ -586,8 +763,9 @@ try {
   # an explicit start only if the RPC endpoint never returns.
   Write-ProgressLog 'update.restart-gateway'
   Restart-GatewayWithRecovery -OpenClawPath $openclaw
+  Complete-WorkspaceSetup
   Write-ProgressLog 'update.agent-turn'
-  Invoke-CaptureLogged 'openclaw agent' { & $openclaw agent --agent main --session-id $SessionId --message 'Reply with exact ASCII text OK only.' --json } | Out-Null
+  Invoke-CaptureLogged 'openclaw agent' { & $openclaw agent --local --agent main --session-id $SessionId --message 'Reply with exact ASCII text OK only.' --json } | Out-Null
   $exitCode = $LASTEXITCODE
   if ($null -eq $exitCode) {
     $exitCode = 0
@@ -709,6 +887,21 @@ if [ "\$gateway_ready" != "1" ]; then
   echo "gateway did not become RPC-ready after transport recovery" >&2
   exit 1
 fi
+workspace="\${OPENCLAW_WORKSPACE_DIR:-\$HOME/.openclaw/workspace}"
+mkdir -p "\$workspace/.openclaw"
+cat > "\$workspace/IDENTITY.md" <<'IDENTITY_EOF'
+# Identity
+
+- Name: OpenClaw
+- Purpose: Parallels npm update smoke test assistant.
+IDENTITY_EOF
+cat > "\$workspace/.openclaw/workspace-state.json" <<'STATE_EOF'
+{
+  "version": 1,
+  "setupCompletedAt": "2026-01-01T00:00:00.000Z"
+}
+STATE_EOF
+rm -f "\$workspace/BOOTSTRAP.md"
 /opt/homebrew/bin/openclaw models set "$MODEL_ID"
 /opt/homebrew/bin/openclaw agent --agent main --session-id "parallels-npm-update-macos-transport-recovery-$expected_needle" --message "Reply with exact ASCII text OK only." --json
 EOF
@@ -746,20 +939,62 @@ Write-Output \$version
 if ('$expected_needle' -and \$version -notmatch [regex]::Escape('$expected_needle')) {
   throw "version mismatch after transport loss: expected substring $expected_needle"
 }
+function Test-GatewayWritable {
+  param([string]\$Path)
+  \$statusOutput = & \$Path gateway status --deep --require-rpc *>&1
+  if (\$null -ne \$statusOutput) {
+    \$statusOutput | Write-Output
+  }
+  if (\$LASTEXITCODE -ne 0) {
+    return \$false
+  }
+  \$statusText = (\$statusOutput | Out-String)
+  return (\$statusText -notmatch 'Read probe:\s*failed')
+}
+function Stop-GatewayListeners {
+  \$previousNativeErrorPreference = \$PSNativeCommandUseErrorActionPreference
+  try {
+    \$PSNativeCommandUseErrorActionPreference = \$false
+    schtasks /End /TN 'OpenClaw Gateway' 2>\$null | Out-Null
+  } catch {
+  } finally {
+    \$PSNativeCommandUseErrorActionPreference = \$previousNativeErrorPreference
+  }
+  Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+    Where-Object {
+      \$_.CommandLine -and (
+        \$_.CommandLine -match 'openclaw.*gateway --port 18789' -or
+        \$_.CommandLine -match 'openclaw.*gateway run' -or
+        \$_.CommandLine -match 'dist\\\\index\\.js gateway --port 18789'
+      )
+    } |
+    ForEach-Object {
+      Stop-Process -Id \$_.ProcessId -Force -ErrorAction SilentlyContinue
+    }
+  for (\$i = 0; \$i -lt 20; \$i++) {
+    \$listeners = Get-NetTCPConnection -LocalPort 18789 -State Listen -ErrorAction SilentlyContinue
+    if (-not \$listeners) {
+      return
+    }
+    \$listeners | ForEach-Object {
+      Stop-Process -Id \$_.OwningProcess -Force -ErrorAction SilentlyContinue
+    }
+    Start-Sleep -Seconds 1
+  }
+}
 \$gatewayReady = \$false
 for (\$i = 0; \$i -lt 6; \$i++) {
-  & \$openclaw gateway status --deep --require-rpc
-  if (\$LASTEXITCODE -eq 0) {
+  if (Test-GatewayWritable \$openclaw) {
     \$gatewayReady = \$true
     break
   }
   Start-Sleep -Seconds 2
 }
 if (-not \$gatewayReady) {
+  Stop-GatewayListeners
   & \$openclaw gateway restart
   for (\$i = 0; \$i -lt 6; \$i++) {
-    & \$openclaw gateway status --deep --require-rpc
-    if (\$LASTEXITCODE -eq 0) {
+    if (Test-GatewayWritable \$openclaw) {
       \$gatewayReady = \$true
       break
     }
@@ -767,10 +1002,25 @@ if (-not \$gatewayReady) {
   }
 }
 if (-not \$gatewayReady) {
+  Stop-GatewayListeners
   & \$openclaw gateway start
   for (\$i = 0; \$i -lt 6; \$i++) {
-    & \$openclaw gateway status --deep --require-rpc
-    if (\$LASTEXITCODE -eq 0) {
+    if (Test-GatewayWritable \$openclaw) {
+      \$gatewayReady = \$true
+      break
+    }
+    Start-Sleep -Seconds 2
+  }
+}
+if (-not \$gatewayReady) {
+  Stop-GatewayListeners
+  \$entry = Join-Path \$env:APPDATA 'npm\\node_modules\\openclaw\\dist\\index.js'
+  \$node = (Get-Command node.exe -ErrorAction Stop).Source
+  \$stdout = Join-Path \$env:TEMP 'openclaw-parallels-npm-update-recover-gateway.log'
+  \$stderr = Join-Path \$env:TEMP 'openclaw-parallels-npm-update-recover-gateway.err.log'
+  Start-Process -FilePath \$node -ArgumentList @(\$entry, 'gateway', 'run', '--bind', 'loopback', '--port', '18789', '--force') -WindowStyle Hidden -RedirectStandardOutput \$stdout -RedirectStandardError \$stderr | Out-Null
+  for (\$i = 0; \$i -lt 20; \$i++) {
+    if (Test-GatewayWritable \$openclaw) {
       \$gatewayReady = \$true
       break
     }
@@ -784,7 +1034,26 @@ if (-not \$gatewayReady) {
 \$providerValue = [Text.Encoding]::UTF8.GetString(\$providerBytes)
 Set-Item -Path ('Env:' + '$API_KEY_ENV') -Value \$providerValue
 & \$openclaw models set '$MODEL_ID'
-& \$openclaw agent --agent main --session-id 'parallels-npm-update-windows-transport-recovery-$expected_needle' --message 'Reply with exact ASCII text OK only.' --json
+\$workspace = \$env:OPENCLAW_WORKSPACE_DIR
+if (-not \$workspace) {
+  \$workspace = Join-Path \$env:USERPROFILE '.openclaw\\workspace'
+}
+\$stateDir = Join-Path \$workspace '.openclaw'
+New-Item -ItemType Directory -Path \$stateDir -Force | Out-Null
+@'
+# Identity
+
+- Name: OpenClaw
+- Purpose: Parallels npm update smoke test assistant.
+'@ | Set-Content -Path (Join-Path \$workspace 'IDENTITY.md') -Encoding UTF8
+@'
+{
+  "version": 1,
+  "setupCompletedAt": "2026-01-01T00:00:00.000Z"
+}
+'@ | Set-Content -Path (Join-Path \$stateDir 'workspace-state.json') -Encoding UTF8
+Remove-Item (Join-Path \$workspace 'BOOTSTRAP.md') -Force -ErrorAction SilentlyContinue
+& \$openclaw agent --local --agent main --session-id 'parallels-npm-update-windows-transport-recovery-$expected_needle' --message 'Reply with exact ASCII text OK only.' --json
 EOF
   )"
   local rc=$?
@@ -819,37 +1088,6 @@ stop_timeout_guard() {
   wait "$pid" 2>/dev/null || true
 }
 
-extract_log_progress() {
-  local log_path="$1"
-  "$PYTHON_BIN" - "$log_path" <<'PY'
-import pathlib
-import sys
-
-path = pathlib.Path(sys.argv[1])
-if not path.exists():
-    print("")
-    raise SystemExit(0)
-
-text = path.read_text(encoding="utf-8", errors="replace")
-lines = [line.strip() for line in text.splitlines() if line.strip()]
-
-for line in reversed(lines):
-    if line.startswith("==> "):
-        print(line[4:].strip())
-        raise SystemExit(0)
-
-for line in reversed(lines):
-    if line.startswith("warn:") or line.startswith("error:"):
-        print(line)
-        raise SystemExit(0)
-
-if lines:
-    print(lines[-1][:240])
-else:
-    print("")
-PY
-}
-
 dump_log_tail() {
   local label="$1"
   local log_path="$2"
@@ -861,44 +1099,7 @@ dump_log_tail() {
 monitor_jobs_progress() {
   local group="$1"
   shift
-
-  local labels=()
-  local pids=()
-  local logs=()
-  local last_progress=()
-  local last_print=()
-  local i summary now running
-
-  while [[ $# -gt 0 ]]; do
-    labels+=("$1")
-    pids+=("$2")
-    logs+=("$3")
-    last_progress+=("")
-    last_print+=(0)
-    shift 3
-  done
-
-  say "$group progress; run dir: $RUN_DIR"
-
-  while :; do
-    running=0
-    now=$SECONDS
-    for ((i = 0; i < ${#pids[@]}; i++)); do
-      if ! child_job_running "${pids[$i]}"; then
-        continue
-      fi
-      running=1
-      summary="$(extract_log_progress "${logs[$i]}")"
-      [[ -n "$summary" ]] || summary="waiting for first log line"
-      if [[ "${last_progress[i]}" != "$summary" ]] || (( now - last_print[i] >= PROGRESS_STALE_S )); then
-        say "$group ${labels[$i]}: $summary"
-        last_progress[i]="$summary"
-        last_print[i]=$now
-      fi
-    done
-    (( running )) || break
-    sleep "$PROGRESS_INTERVAL_S"
-  done
+  parallels_monitor_jobs_progress "$group" "$PROGRESS_INTERVAL_S" "$PROGRESS_STALE_S" "$PYTHON_BIN" "$$" "$@"
 }
 
 extract_last_version() {
@@ -1189,6 +1390,21 @@ if [ "\$gateway_ready" != "1" ]; then
   tail -n 120 /tmp/openclaw-parallels-npm-update-macos-gateway.log 2>/dev/null || true
 fi
 /opt/homebrew/bin/openclaw gateway status --deep --require-rpc
+workspace="\${OPENCLAW_WORKSPACE_DIR:-\$HOME/.openclaw/workspace}"
+mkdir -p "\$workspace/.openclaw"
+cat > "\$workspace/IDENTITY.md" <<'IDENTITY_EOF'
+# Identity
+
+- Name: OpenClaw
+- Purpose: Parallels npm update smoke test assistant.
+IDENTITY_EOF
+cat > "\$workspace/.openclaw/workspace-state.json" <<'STATE_EOF'
+{
+  "version": 1,
+  "setupCompletedAt": "2026-01-01T00:00:00.000Z"
+}
+STATE_EOF
+rm -f "\$workspace/BOOTSTRAP.md"
 /opt/homebrew/bin/openclaw agent --agent main --session-id parallels-npm-update-macos-$expected_needle --message "Reply with exact ASCII text OK only." --json
 EOF
   macos_desktop_user_exec /bin/bash /tmp/openclaw-main-update.sh
@@ -1249,6 +1465,21 @@ if [ -n "$expected_needle" ]; then
 fi
 openclaw update status --json
 openclaw models set "$MODEL_ID"
+workspace="\${OPENCLAW_WORKSPACE_DIR:-\$HOME/.openclaw/workspace}"
+mkdir -p "\$workspace/.openclaw"
+cat > "\$workspace/IDENTITY.md" <<'IDENTITY_EOF'
+# Identity
+
+- Name: OpenClaw
+- Purpose: Parallels npm update smoke test assistant.
+IDENTITY_EOF
+cat > "\$workspace/.openclaw/workspace-state.json" <<'STATE_EOF'
+{
+  "version": 1,
+  "setupCompletedAt": "2026-01-01T00:00:00.000Z"
+}
+STATE_EOF
+rm -f "\$workspace/BOOTSTRAP.md"
 openclaw agent --local --agent main --session-id parallels-npm-update-linux-$expected_needle --message "Reply with exact ASCII text OK only." --json
 EOF
   prlctl exec "$LINUX_VM" /usr/bin/env "$API_KEY_ENV=$API_KEY_VALUE" /bin/bash /tmp/openclaw-main-update.sh

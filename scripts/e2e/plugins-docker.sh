@@ -2,11 +2,10 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
-IMAGE_NAME="openclaw-plugins-e2e"
+source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
+IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-plugins-e2e" OPENCLAW_PLUGINS_E2E_IMAGE)"
 
-echo "Building Docker image..."
-run_logged plugins-build docker build -t "$IMAGE_NAME" -f "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR"
+docker_e2e_build_or_reuse "$IMAGE_NAME" plugins
 
 DOCKER_ENV_ARGS=(-e COREPACK_ENABLE_DOWNLOAD_PROMPT=0)
 if [[ -n "${OPENAI_API_KEY:-}" && "${OPENAI_API_KEY:-}" != "undefined" && "${OPENAI_API_KEY:-}" != "null" ]]; then
@@ -681,6 +680,29 @@ NODE
 if [ -n "${OPENAI_API_KEY:-}" ]; then
   seed_openai_provider_config "$OPENAI_API_KEY" "${OPENAI_BASE_URL:-}"
 fi
+
+workspace_dir="$HOME/.openclaw/workspace"
+mkdir -p "$workspace_dir/.openclaw"
+cat > "$workspace_dir/IDENTITY.md" <<'MD'
+# Identity
+
+- Name: Plugin E2E
+- Nature: Test assistant
+- Vibe: Concise
+- Emoji: claw
+MD
+cat > "$workspace_dir/USER.md" <<'MD'
+# User
+
+- Name: OpenClaw test harness
+- Timezone: UTC
+MD
+cat > "$workspace_dir/.openclaw/workspace-state.json" <<'JSON'
+{
+  "version": 1,
+  "setupCompletedAt": "2026-01-01T00:00:00.000Z"
+}
+JSON
 
 gateway_log="/tmp/openclaw-plugin-command-e2e.log"
 start_gateway "$gateway_log"

@@ -144,6 +144,7 @@ on:
 
 permissions:
   contents: read
+  packages: write
   pull-requests: read
 
 env:
@@ -222,7 +223,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
-          fetch-depth: 0
+          fetch-depth: 1
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -230,7 +231,6 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
-          use-sticky-disk: "false"
 
       - name: Validate live cache credentials
         run: |
@@ -259,7 +259,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
-          fetch-depth: 0
+          fetch-depth: 1
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -267,7 +267,6 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
-          use-sticky-disk: "false"
 
       - name: Build dist for repo E2E
         run: pnpm build
@@ -305,7 +304,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
-          fetch-depth: 0
+          fetch-depth: 1
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -313,7 +312,6 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
-          use-sticky-disk: "false"
 
       - name: Build dist for special E2E
         if: |
@@ -352,8 +350,8 @@ jobs:
         run: ${{ matrix.command }}
 
   validate_docker_e2e:
-    needs: validate_selected_ref
-    if: inputs.include_release_path_suites || inputs.include_openwebui
+    needs: [validate_selected_ref, prepare_docker_e2e_image]
+    if: inputs.include_release_path_suites
     runs-on: blacksmith-32vcpu-ubuntu-2404
     timeout-minutes: ${{ matrix.timeout_minutes }}
     strategy:
@@ -365,49 +363,66 @@ jobs:
             command: pnpm test:docker:onboard
             timeout_minutes: 60
             release_path: true
-            openwebui_only: false
+          - suite_id: docker-npm-onboard-channel-agent
+            label: Npm Onboard Channel Agent Docker E2E
+            command: pnpm test:docker:npm-onboard-channel-agent
+            timeout_minutes: 90
+            release_path: true
           - suite_id: docker-gateway-network
             label: Gateway Network Docker E2E
             command: pnpm test:docker:gateway-network
             timeout_minutes: 60
             release_path: true
-            openwebui_only: false
           - suite_id: docker-mcp-channels
             label: MCP Channels Docker E2E
             command: pnpm test:docker:mcp-channels
             timeout_minutes: 60
             release_path: true
-            openwebui_only: false
+          - suite_id: docker-pi-bundle-mcp-tools
+            label: Pi Bundle MCP Tools Docker E2E
+            command: pnpm test:docker:pi-bundle-mcp-tools
+            timeout_minutes: 60
+            release_path: true
+          - suite_id: docker-cron-mcp-cleanup
+            label: Cron MCP Cleanup Docker E2E
+            command: pnpm test:docker:cron-mcp-cleanup
+            timeout_minutes: 60
+            release_path: true
           - suite_id: docker-plugins
             label: Plugins Docker E2E
             command: pnpm test:docker:plugins
             timeout_minutes: 75
             release_path: true
-            openwebui_only: false
+          - suite_id: docker-plugin-update
+            label: Plugin Update Docker E2E
+            command: pnpm test:docker:plugin-update
+            timeout_minutes: 60
+            release_path: true
+          - suite_id: docker-config-reload
+            label: Config Reload Docker E2E
+            command: pnpm test:docker:config-reload
+            timeout_minutes: 60
+            release_path: true
+          - suite_id: docker-bundled-channel-deps
+            label: Bundled Channel Runtime Deps Docker E2E
+            command: pnpm test:docker:bundled-channel-deps
+            timeout_minutes: 75
+            release_path: true
           - suite_id: docker-doctor-switch
             label: Doctor Install Switch Docker E2E
             command: pnpm test:docker:doctor-switch
             timeout_minutes: 60
             release_path: true
-            openwebui_only: false
           - suite_id: docker-qr
             label: QR Import Docker E2E
             command: pnpm test:docker:qr
             timeout_minutes: 60
             release_path: true
-            openwebui_only: false
           - suite_id: docker-install-e2e
             label: Installer Docker E2E
             command: pnpm test:install:e2e
             timeout_minutes: 120
             release_path: true
-            openwebui_only: false
-          - suite_id: docker-openwebui
-            label: Open WebUI Docker E2E
-            command: pnpm test:docker:openwebui
-            timeout_minutes: 75
-            release_path: false
-            openwebui_only: true
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
@@ -452,12 +467,21 @@ jobs:
       OPENCLAW_CLAUDE_SETTINGS_JSON: ${{ secrets.OPENCLAW_CLAUDE_SETTINGS_JSON }}
       OPENCLAW_CLAUDE_SETTINGS_LOCAL_JSON: ${{ secrets.OPENCLAW_CLAUDE_SETTINGS_LOCAL_JSON }}
       OPENCLAW_GEMINI_SETTINGS_JSON: ${{ secrets.OPENCLAW_GEMINI_SETTINGS_JSON }}
+      OPENCLAW_DOCKER_E2E_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.image }}
+      OPENCLAW_SKIP_DOCKER_BUILD: "1"
     steps:
       - name: Checkout selected ref
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
-          fetch-depth: 0
+          fetch-depth: 1
+
+      - name: Log in to GHCR for shared Docker E2E image
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -465,7 +489,6 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
-          use-sticky-disk: "false"
 
       - name: Hydrate live auth/profile inputs
         run: bash scripts/ci-hydrate-live-auth.sh
@@ -495,19 +518,105 @@ jobs:
                 exit 1
               fi
               ;;
-            docker-openwebui)
-              [[ -n "${OPENAI_API_KEY:-}" ]] || {
-                echo "OPENAI_API_KEY is required for the Open WebUI Docker smoke." >&2
-                exit 1
-              }
-              ;;
           esac
 
       - name: Run ${{ matrix.label }}
-        if: |
-          (inputs.include_release_path_suites && matrix.release_path) ||
-          (inputs.include_openwebui && matrix.openwebui_only)
         run: ${{ matrix.command }}
+
+  validate_docker_openwebui:
+    needs: [validate_selected_ref, prepare_docker_e2e_image]
+    if: inputs.include_openwebui
+    runs-on: blacksmith-32vcpu-ubuntu-2404
+    timeout-minutes: 75
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+      OPENCLAW_DOCKER_E2E_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.image }}
+      OPENCLAW_SKIP_DOCKER_BUILD: "1"
+    steps:
+      - name: Checkout selected ref
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
+          fetch-depth: 1
+
+      - name: Log in to GHCR for shared Docker E2E image
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          install-bun: "true"
+
+      - name: Validate Open WebUI credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ -n "${OPENAI_API_KEY:-}" ]] || {
+            echo "OPENAI_API_KEY is required for the Open WebUI Docker smoke." >&2
+            exit 1
+          }
+
+      - name: Run Open WebUI Docker E2E
+        run: pnpm test:docker:openwebui
+
+  prepare_docker_e2e_image:
+    needs: validate_selected_ref
+    if: inputs.include_release_path_suites || inputs.include_openwebui
+    runs-on: blacksmith-32vcpu-ubuntu-2404
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.image.outputs.image }}
+    env:
+      DOCKER_BUILD_SUMMARY: "false"
+      DOCKER_BUILD_RECORD_UPLOAD: "false"
+    steps:
+      - name: Checkout selected ref
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
+          fetch-depth: 1
+
+      - name: Resolve shared Docker E2E image tag
+        id: image
+        shell: bash
+        env:
+          SELECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
+        run: |
+          set -euo pipefail
+          repository="${GITHUB_REPOSITORY,,}"
+          image="ghcr.io/${repository}-docker-e2e:${SELECTED_SHA}"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "Shared Docker E2E image: \`$image\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Build and push shared Docker E2E image
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        with:
+          context: .
+          file: ./scripts/e2e/Dockerfile
+          target: build
+          platforms: linux/amd64
+          cache-from: type=gha,scope=docker-e2e
+          cache-to: type=gha,mode=max,scope=docker-e2e
+          tags: ${{ steps.image.outputs.image }}
+          provenance: false
+          push: true
 
   validate_live_provider_suites:
     needs: validate_selected_ref
@@ -600,7 +709,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
-          fetch-depth: 0
+          fetch-depth: 1
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -608,7 +717,6 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
-          use-sticky-disk: "false"
 
       - name: Hydrate live auth/profile inputs
         run: bash scripts/ci-hydrate-live-auth.sh

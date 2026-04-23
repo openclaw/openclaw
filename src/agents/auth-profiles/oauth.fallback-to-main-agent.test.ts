@@ -249,7 +249,7 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
         profileId,
         access: "secondary-stale",
         refresh: "secondary-refresh",
-        expires: NaN,
+        expires: Number.NaN,
       }),
     );
 
@@ -331,5 +331,45 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
     await expect(resolveFromSecondaryAgent(profileId)).rejects.toThrow(
       /OAuth token refresh failed/,
     );
+  });
+
+  it("still falls back to main agent credentials when the refresh-token-reused retry throws", async () => {
+    const profileId = "anthropic:claude-cli";
+    const now = Date.now();
+    const expiredTime = now - 60 * 60 * 1000;
+    const freshTime = now + 60 * 60 * 1000;
+
+    await writeAuthProfilesStore(
+      secondaryAgentDir,
+      createOauthStore({
+        profileId,
+        access: "expired-access-token",
+        refresh: "expired-refresh-token",
+        expires: expiredTime,
+      }),
+    );
+
+    await writeAuthProfilesStore(
+      mainAgentDir,
+      createOauthStore({
+        profileId,
+        access: "fresh-access-token",
+        refresh: "fresh-refresh-token",
+        expires: freshTime,
+      }),
+    );
+
+    getOAuthApiKeyMock
+      .mockImplementationOnce(async () => {
+        throw new Error("refresh_token_reused");
+      })
+      .mockImplementationOnce(async () => {
+        throw new Error("retry also failed");
+      });
+
+    const result = await resolveFromSecondaryAgent(profileId);
+
+    expect(result?.apiKey).toBe("fresh-access-token");
+    expect(result?.provider).toBe("anthropic");
   });
 });

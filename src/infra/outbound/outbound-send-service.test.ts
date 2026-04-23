@@ -87,6 +87,8 @@ vi.mock("../../config/sessions.js", () => ({
 }));
 
 type OutboundSendServiceModule = typeof import("./outbound-send-service.js");
+type ExecuteSendInput = Parameters<OutboundSendServiceModule["executeSendAction"]>[0];
+type ExecuteSendContext = ExecuteSendInput["ctx"];
 
 let executePollAction: OutboundSendServiceModule["executePollAction"];
 let executeSendAction: OutboundSendServiceModule["executeSendAction"];
@@ -142,6 +144,29 @@ describe("executeSendAction", () => {
       to: "channel:123",
       message: "hello",
       mediaUrls: params.mediaUrls,
+    });
+  }
+
+  function createPluginMediaSendContext(
+    overrides: Partial<ExecuteSendContext>,
+  ): ExecuteSendContext {
+    return {
+      cfg: {},
+      channel: "demo-outbound",
+      params: { media: "/tmp/host.png" },
+      sessionKey: "agent:main:directchat:group:ops",
+      dryRun: false,
+      ...overrides,
+    } as ExecuteSendContext;
+  }
+
+  async function executePluginMediaSend(ctx: Partial<ExecuteSendContext>) {
+    mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
+
+    await executeSendAction({
+      ctx: createPluginMediaSendContext(ctx),
+      to: "channel:123",
+      message: "hello",
     });
   }
 
@@ -205,7 +230,7 @@ describe("executeSendAction", () => {
         cfg: {},
         channel: "demo-outbound",
         params: {},
-        sessionKey: "agent:main:whatsapp:group:ops",
+        sessionKey: "agent:main:directchat:group:ops",
         requesterSenderId: "attacker",
         dryRun: false,
       },
@@ -234,7 +259,7 @@ describe("executeSendAction", () => {
         cfg: {},
         channel: "demo-outbound",
         params: {},
-        sessionKey: "agent:main:whatsapp:group:ops",
+        sessionKey: "agent:main:directchat:group:ops",
         requesterSenderName: "Alice",
         requesterSenderUsername: "alice_u",
         requesterSenderE164: "+15551234567",
@@ -267,7 +292,7 @@ describe("executeSendAction", () => {
         cfg: {},
         channel: "demo-outbound",
         params: {},
-        sessionKey: "agent:main:whatsapp:group:ops",
+        sessionKey: "agent:main:directchat:group:ops",
         requesterAccountId: "source-account",
         requesterSenderId: "attacker",
         accountId: "destination-account",
@@ -279,7 +304,7 @@ describe("executeSendAction", () => {
 
     expect(mocks.sendMessage).toHaveBeenCalledWith(
       expect.objectContaining({
-        requesterSessionKey: "agent:main:whatsapp:group:ops",
+        requesterSessionKey: "agent:main:directchat:group:ops",
         requesterAccountId: "source-account",
         requesterSenderId: "attacker",
         accountId: "destination-account",
@@ -288,19 +313,8 @@ describe("executeSendAction", () => {
   });
 
   it("forwards requesterSenderId into outbound media access resolution", async () => {
-    mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
-
-    await executeSendAction({
-      ctx: {
-        cfg: {},
-        channel: "demo-outbound",
-        params: { media: "/tmp/host.png" },
-        sessionKey: "agent:main:whatsapp:group:ops",
-        requesterSenderId: "attacker",
-        dryRun: false,
-      },
-      to: "channel:123",
-      message: "hello",
+    await executePluginMediaSend({
+      requesterSenderId: "attacker",
     });
 
     expect(mocks.resolveAgentScopedOutboundMediaAccess).toHaveBeenCalledWith(
@@ -311,21 +325,10 @@ describe("executeSendAction", () => {
   });
 
   it("forwards non-id requester sender fields into outbound media access resolution", async () => {
-    mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
-
-    await executeSendAction({
-      ctx: {
-        cfg: {},
-        channel: "demo-outbound",
-        params: { media: "/tmp/host.png" },
-        sessionKey: "agent:main:whatsapp:group:ops",
-        requesterSenderName: "Alice",
-        requesterSenderUsername: "alice_u",
-        requesterSenderE164: "+15551234567",
-        dryRun: false,
-      },
-      to: "channel:123",
-      message: "hello",
+    await executePluginMediaSend({
+      requesterSenderName: "Alice",
+      requesterSenderUsername: "alice_u",
+      requesterSenderE164: "+15551234567",
     });
 
     expect(mocks.resolveAgentScopedOutboundMediaAccess).toHaveBeenCalledWith(
@@ -338,75 +341,42 @@ describe("executeSendAction", () => {
   });
 
   it("keeps requester session channel authoritative for media policy", async () => {
-    mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
-
-    await executeSendAction({
-      ctx: {
-        cfg: {},
-        channel: "demo-outbound",
-        params: { media: "/tmp/host.png" },
-        sessionKey: "agent:main:whatsapp:group:ops",
-        requesterSenderId: "attacker",
-        dryRun: false,
-      },
-      to: "channel:123",
-      message: "hello",
+    await executePluginMediaSend({
+      requesterSenderId: "attacker",
     });
 
     expect(mocks.resolveAgentScopedOutboundMediaAccess).toHaveBeenCalledWith(
       expect.objectContaining({
-        sessionKey: "agent:main:whatsapp:group:ops",
+        sessionKey: "agent:main:directchat:group:ops",
         messageProvider: undefined,
       }),
     );
   });
 
   it("uses requester account for media policy when session context is present", async () => {
-    mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
-
-    await executeSendAction({
-      ctx: {
-        cfg: {},
-        channel: "demo-outbound",
-        params: { media: "/tmp/host.png" },
-        sessionKey: "agent:main:whatsapp:group:ops",
-        requesterAccountId: "source-account",
-        requesterSenderId: "attacker",
-        accountId: "destination-account",
-        dryRun: false,
-      },
-      to: "channel:123",
-      message: "hello",
+    await executePluginMediaSend({
+      requesterAccountId: "source-account",
+      requesterSenderId: "attacker",
+      accountId: "destination-account",
     });
 
     expect(mocks.resolveAgentScopedOutboundMediaAccess).toHaveBeenCalledWith(
       expect.objectContaining({
-        sessionKey: "agent:main:whatsapp:group:ops",
+        sessionKey: "agent:main:directchat:group:ops",
         accountId: "source-account",
       }),
     );
   });
 
   it("falls back to destination account for media policy when requester account is missing", async () => {
-    mocks.dispatchChannelMessageAction.mockResolvedValue(pluginActionResult("msg-plugin"));
-
-    await executeSendAction({
-      ctx: {
-        cfg: {},
-        channel: "demo-outbound",
-        params: { media: "/tmp/host.png" },
-        sessionKey: "agent:main:whatsapp:group:ops",
-        requesterSenderId: "attacker",
-        accountId: "destination-account",
-        dryRun: false,
-      },
-      to: "channel:123",
-      message: "hello",
+    await executePluginMediaSend({
+      requesterSenderId: "attacker",
+      accountId: "destination-account",
     });
 
     expect(mocks.resolveAgentScopedOutboundMediaAccess).toHaveBeenCalledWith(
       expect.objectContaining({
-        sessionKey: "agent:main:whatsapp:group:ops",
+        sessionKey: "agent:main:directchat:group:ops",
         accountId: "destination-account",
       }),
     );
@@ -426,7 +396,7 @@ describe("executeSendAction", () => {
         cfg: {},
         channel: "demo-outbound",
         params: {},
-        sessionKey: "agent:main:whatsapp:group:ops",
+        sessionKey: "agent:main:directchat:group:ops",
         requesterSenderId: "attacker",
         accountId: "destination-account",
         dryRun: false,
@@ -437,7 +407,7 @@ describe("executeSendAction", () => {
 
     expect(mocks.sendMessage).toHaveBeenCalledWith(
       expect.objectContaining({
-        requesterSessionKey: "agent:main:whatsapp:group:ops",
+        requesterSessionKey: "agent:main:directchat:group:ops",
         requesterAccountId: "destination-account",
       }),
     );

@@ -1,13 +1,15 @@
 {
   "name": "@openclaw/telegram",
-  "version": "2026.4.18",
+  "version": "2026.4.20",
   "private": true,
   "description": "OpenClaw Telegram channel plugin",
   "type": "module",
   "dependencies": {
     "@grammyjs/runner": "^2.0.3",
     "@grammyjs/transformer-throttler": "^1.2.1",
-    "grammy": "^1.42.0"
+    "grammy": "^1.42.0",
+    "typebox": "1.1.28",
+    "undici": "8.1.0"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
@@ -18,6 +20,7 @@
     ],
     "setupEntry": "./setup-entry.ts",
     "setupFeatures": {
+      "configPromotion": true,
       "legacyStateMigrations": true
     },
     "channel": {

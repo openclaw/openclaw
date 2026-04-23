@@ -899,18 +899,18 @@ export function describeTtsSummarizationContract() {
       expect(resolveModelAsyncMock).toHaveBeenCalledWith("openai", "gpt-4.1-mini", undefined, cfg);
     });
 
-    it("keeps the Ollama api for direct summarization", async () => {
+    it("keeps native completion APIs for direct summarization", async () => {
       vi.mocked(resolveModelAsyncMock).mockResolvedValue({
-        ...createResolvedModel("ollama", "qwen3:8b", "ollama"),
+        ...createResolvedModel("local-summary", "demo-model", "openai-completions"),
         model: {
-          ...createResolvedModel("ollama", "qwen3:8b", "ollama").model,
-          baseUrl: "http://127.0.0.1:11434",
+          ...createResolvedModel("local-summary", "demo-model", "openai-completions").model,
+          baseUrl: "http://127.0.0.1:4000/v1",
         },
       } as never);
 
       await runSummarizeText();
 
-      expect(vi.mocked(completeSimple).mock.calls[0]?.[0]?.api).toBe("ollama");
+      expect(vi.mocked(completeSimple).mock.calls[0]?.[0]?.api).toBe("openai-completions");
       expect(ensureCustomApiRegisteredMock).not.toHaveBeenCalled();
     });
 

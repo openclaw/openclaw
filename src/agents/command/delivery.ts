@@ -25,7 +25,7 @@ import {
 import type { OutboundSessionContext } from "../../infra/outbound/session-context.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
-import { AGENT_LANE_NESTED } from "../lanes.js";
+import { isNestedAgentLane } from "../lanes.js";
 import type { AgentCommandOpts } from "./types.js";
 
 type RunResult = Awaited<ReturnType<(typeof import("../pi-embedded.js"))["runEmbeddedPiAgent"]>>;
@@ -351,7 +351,7 @@ export async function deliverAgentCommandResult(params: {
     if (!output) {
       return;
     }
-    if (opts.lane === AGENT_LANE_NESTED) {
+    if (isNestedAgentLane(opts.lane)) {
       logNestedOutput(runtime, opts, output, effectiveSessionKey);
       return;
     }
