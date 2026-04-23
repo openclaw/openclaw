@@ -31,9 +31,16 @@ shared `message` tool in core. Your plugin owns:
 - **Session grammar** — how provider-specific conversation ids map to base chats, thread ids, and parent fallbacks
 - **Outbound** — sending text, media, and polls to the platform
 - **Threading** — how replies are threaded
+- **Heartbeat typing** — optional typing/busy signals for heartbeat delivery targets
 
 Core owns the shared message tool, prompt wiring, the outer session-key shape,
 generic `:thread:` bookkeeping, and dispatch.
+
+If your channel supports typing indicators outside inbound replies, expose
+`heartbeat.sendTyping(...)` on the channel plugin. Core calls it with the
+resolved heartbeat delivery target before the heartbeat model run starts and
+uses the shared typing keepalive/cleanup lifecycle. Add `heartbeat.clearTyping(...)`
+when the platform needs an explicit stop signal.
 
 If your channel adds message-tool params that carry media sources, expose those
 param names through `describeMessageTool(...).mediaSourceParams`. Core uses
@@ -139,6 +146,14 @@ If your channel supports env-driven setup or auth and generic startup/config
 flows should know those env names before runtime loads, declare them in the
 plugin manifest with `channelEnvVars`. Keep channel runtime `envVars` or local
 constants for operator-facing copy only.
+
+If your channel can appear in `status`, `channels list`, `channels status`, or
+SecretRef scans before the plugin runtime starts, add `openclaw.setupEntry` in
+`package.json`. That entrypoint should be safe to import in read-only command
+paths and should return the channel metadata, setup-safe config adapter, status
+adapter, and channel secret target metadata needed for those summaries. Do not
+start clients, listeners, or transport runtimes from the setup entry.
+
 `createOptionalChannelSetupWizard`, `DEFAULT_ACCOUNT_ID`,
 `createTopLevelChannelDmPolicy`, `setSetupChannelEnabled`, and
 `splitSetupEntries`
@@ -168,6 +183,12 @@ surfaces:
 - `openclaw/plugin-sdk/outbound-media` and
   `openclaw/plugin-sdk/outbound-runtime` for media loading plus outbound
   identity/send delegates and payload planning
+- `buildThreadAwareOutboundSessionRoute(...)` from
+  `openclaw/plugin-sdk/channel-core` when an outbound route should preserve an
+  explicit `replyToId`/`threadId` or recover the current `:thread:` session
+  after the base session key still matches. Provider plugins can override
+  precedence, suffix behavior, and thread id normalization when their platform
+  has native thread delivery semantics.
 - `openclaw/plugin-sdk/thread-bindings-runtime` for thread-binding lifecycle
   and adapter registration
 - `openclaw/plugin-sdk/agent-media-payload` only when a legacy agent/media

@@ -376,7 +376,7 @@ export class UrbitSSEClient {
 
     this.reconnectAttempts += 1;
     const delay = Math.min(
-      this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1),
+      this.reconnectDelay * 2 ** (this.reconnectAttempts - 1),
       this.maxReconnectDelay,
     );
 

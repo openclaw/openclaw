@@ -1,5 +1,5 @@
 ---
-summary: "Generate and edit images using configured providers (OpenAI, Google Gemini, fal, MiniMax, ComfyUI, Vydra)"
+summary: "Generate and edit images using configured providers (OpenAI, Google Gemini, fal, MiniMax, ComfyUI, Vydra, xAI)"
 read_when:
   - Generating images via the agent
   - Configuring image generation providers and models
@@ -25,7 +25,7 @@ The tool only appears when at least one image generation provider is available. 
   agents: {
     defaults: {
       imageGenerationModel: {
-        primary: "openai/gpt-image-1",
+        primary: "openai/gpt-image-2",
       },
     },
   },
@@ -40,12 +40,13 @@ The agent calls `image_generate` automatically. No tool allow-listing needed —
 
 | Provider | Default model                    | Edit support                       | API key                                               |
 | -------- | -------------------------------- | ---------------------------------- | ----------------------------------------------------- |
-| OpenAI   | `gpt-image-1`                    | Yes (up to 5 images)               | `OPENAI_API_KEY`                                      |
+| OpenAI   | `gpt-image-2`                    | Yes (up to 5 images)               | `OPENAI_API_KEY`                                      |
 | Google   | `gemini-3.1-flash-image-preview` | Yes                                | `GEMINI_API_KEY` or `GOOGLE_API_KEY`                  |
 | fal      | `fal-ai/flux/dev`                | Yes                                | `FAL_KEY`                                             |
 | MiniMax  | `image-01`                       | Yes (subject reference)            | `MINIMAX_API_KEY` or MiniMax OAuth (`minimax-portal`) |
 | ComfyUI  | `workflow`                       | Yes (1 image, workflow-configured) | `COMFY_API_KEY` or `COMFY_CLOUD_API_KEY` for cloud    |
 | Vydra    | `grok-imagine`                   | No                                 | `VYDRA_API_KEY`                                       |
+| xAI      | `grok-imagine-image`             | Yes (up to 5 images)               | `XAI_API_KEY`                                         |
 
 Use `action: "list"` to inspect available providers and models at runtime:
 
@@ -59,10 +60,10 @@ Use `action: "list"` to inspect available providers and models at runtime:
 | ------------- | -------- | ------------------------------------------------------------------------------------- |
 | `prompt`      | string   | Image generation prompt (required for `action: "generate"`)                           |
 | `action`      | string   | `"generate"` (default) or `"list"` to inspect providers                               |
-| `model`       | string   | Provider/model override, e.g. `openai/gpt-image-1`                                    |
+| `model`       | string   | Provider/model override, e.g. `openai/gpt-image-2`                                    |
 | `image`       | string   | Single reference image path or URL for edit mode                                      |
 | `images`      | string[] | Multiple reference images for edit mode (up to 5)                                     |
-| `size`        | string   | Size hint: `1024x1024`, `1536x1024`, `1024x1536`, `1024x1792`, `1792x1024`            |
+| `size`        | string   | Size hint: `1024x1024`, `1536x1024`, `1024x1536`, `2048x2048`, `3840x2160`            |
 | `aspectRatio` | string   | Aspect ratio: `1:1`, `2:3`, `3:2`, `3:4`, `4:3`, `4:5`, `5:4`, `9:16`, `16:9`, `21:9` |
 | `resolution`  | string   | Resolution hint: `1K`, `2K`, or `4K`                                                  |
 | `count`       | number   | Number of images to generate (1–4)                                                    |
@@ -81,7 +82,7 @@ Tool results report the applied settings. When OpenClaw remaps geometry during p
   agents: {
     defaults: {
       imageGenerationModel: {
-        primary: "openai/gpt-image-1",
+        primary: "openai/gpt-image-2",
         fallbacks: ["google/gemini-3.1-flash-image-preview", "fal/fal-ai/flux/dev"],
       },
     },
@@ -115,13 +116,49 @@ Notes:
 
 ### Image editing
 
-OpenAI, Google, fal, MiniMax, and ComfyUI support editing reference images. Pass a reference image path or URL:
+OpenAI, Google, fal, MiniMax, ComfyUI, and xAI support editing reference images. Pass a reference image path or URL:
 
 ```
 "Generate a watercolor version of this photo" + image: "/path/to/photo.jpg"
 ```
 
-OpenAI and Google support up to 5 reference images via the `images` parameter. fal, MiniMax, and ComfyUI support 1.
+OpenAI, Google, and xAI support up to 5 reference images via the `images` parameter. fal, MiniMax, and ComfyUI support 1.
+
+### OpenAI `gpt-image-2`
+
+OpenAI image generation defaults to `openai/gpt-image-2`. The older
+`openai/gpt-image-1` model can still be selected explicitly, but new OpenAI
+image-generation and image-editing requests should use `gpt-image-2`.
+
+`gpt-image-2` supports both text-to-image generation and reference-image
+editing through the same `image_generate` tool. OpenClaw forwards `prompt`,
+`count`, `size`, and reference images to OpenAI. OpenAI does not receive
+`aspectRatio` or `resolution` directly; when possible OpenClaw maps those into a
+supported `size`, otherwise the tool reports them as ignored overrides.
+
+Generate one 4K landscape image:
+
+```
+/tool image_generate action=generate model=openai/gpt-image-2 prompt="A clean editorial poster for OpenClaw image generation" size=3840x2160 count=1
+```
+
+Generate two square images:
+
+```
+/tool image_generate action=generate model=openai/gpt-image-2 prompt="Two visual directions for a calm productivity app icon" size=1024x1024 count=2
+```
+
+Edit one local reference image:
+
+```
+/tool image_generate action=generate model=openai/gpt-image-2 prompt="Keep the subject, replace the background with a bright studio setup" image=/path/to/reference.png size=1024x1536
+```
+
+Edit with multiple references:
+
+```
+/tool image_generate action=generate model=openai/gpt-image-2 prompt="Combine the character identity from the first image with the color palette from the second" images='["/path/to/character.png","/path/to/palette.jpg"]' size=1536x1024
+```
 
 MiniMax image generation is available through both bundled MiniMax auth paths:
 
@@ -130,13 +167,29 @@ MiniMax image generation is available through both bundled MiniMax auth paths:
 
 ## Provider capabilities
 
-| Capability            | OpenAI               | Google               | fal                 | MiniMax                    | ComfyUI                            | Vydra   |
-| --------------------- | -------------------- | -------------------- | ------------------- | -------------------------- | ---------------------------------- | ------- |
-| Generate              | Yes (up to 4)        | Yes (up to 4)        | Yes (up to 4)       | Yes (up to 9)              | Yes (workflow-defined outputs)     | Yes (1) |
-| Edit/reference        | Yes (up to 5 images) | Yes (up to 5 images) | Yes (1 image)       | Yes (1 image, subject ref) | Yes (1 image, workflow-configured) | No      |
-| Size control          | Yes                  | Yes                  | Yes                 | No                         | No                                 | No      |
-| Aspect ratio          | No                   | Yes                  | Yes (generate only) | Yes                        | No                                 | No      |
-| Resolution (1K/2K/4K) | No                   | Yes                  | Yes                 | No                         | No                                 | No      |
+| Capability            | OpenAI               | Google               | fal                 | MiniMax                    | ComfyUI                            | Vydra   | xAI                  |
+| --------------------- | -------------------- | -------------------- | ------------------- | -------------------------- | ---------------------------------- | ------- | -------------------- |
+| Generate              | Yes (up to 4)        | Yes (up to 4)        | Yes (up to 4)       | Yes (up to 9)              | Yes (workflow-defined outputs)     | Yes (1) | Yes (up to 4)        |
+| Edit/reference        | Yes (up to 5 images) | Yes (up to 5 images) | Yes (1 image)       | Yes (1 image, subject ref) | Yes (1 image, workflow-configured) | No      | Yes (up to 5 images) |
+| Size control          | Yes (up to 4K)       | Yes                  | Yes                 | No                         | No                                 | No      | No                   |
+| Aspect ratio          | No                   | Yes                  | Yes (generate only) | Yes                        | No                                 | No      | Yes                  |
+| Resolution (1K/2K/4K) | No                   | Yes                  | Yes                 | No                         | No                                 | No      | Yes (1K/2K)          |
+
+### xAI `grok-imagine-image`
+
+The bundled xAI provider uses `/v1/images/generations` for prompt-only requests
+and `/v1/images/edits` when `image` or `images` is present.
+
+- Models: `xai/grok-imagine-image`, `xai/grok-imagine-image-pro`
+- Count: up to 4
+- References: one `image` or up to five `images`
+- Aspect ratios: `1:1`, `16:9`, `9:16`, `4:3`, `3:4`, `2:3`, `3:2`
+- Resolutions: `1K`, `2K`
+- Outputs: returned as OpenClaw-managed image attachments
+
+OpenClaw intentionally does not expose xAI-native `quality`, `mask`, `user`, or
+extra native-only aspect ratios until those controls exist in the shared
+cross-provider `image_generate` contract.
 
 ## Related
 
@@ -147,5 +200,6 @@ MiniMax image generation is available through both bundled MiniMax auth paths:
 - [MiniMax](/providers/minimax) — MiniMax image provider setup
 - [OpenAI](/providers/openai) — OpenAI Images provider setup
 - [Vydra](/providers/vydra) — Vydra image, video, and speech setup
+- [xAI](/providers/xai) — Grok image, video, search, code execution, and TTS setup
 - [Configuration Reference](/gateway/configuration-reference#agent-defaults) — `imageGenerationModel` config
 - [Models](/concepts/models) — model configuration and failover
