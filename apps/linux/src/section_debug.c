@@ -13,7 +13,6 @@
 
 #include <adwaita.h>
 
-#include "diagnostics.h"
 #include "gateway_client.h"
 #include "product_coordinator.h"
 #include "state.h"
@@ -23,6 +22,11 @@ extern void systemd_restart_gateway(void);
 static GtkWidget *dbg_state_label = NULL;
 static GtkWidget *dbg_unit_label = NULL;
 static GtkWidget *dbg_journal_label = NULL;
+
+typedef struct {
+    const gchar *label;
+    GCallback callback;
+} DebugActionSpec;
 
 static void on_dbg_refresh_health(GtkButton *button, gpointer user_data) {
     (void)button;
@@ -56,15 +60,6 @@ static void on_dbg_reveal_config(GtkButton *button, gpointer user_data) {
     }
 }
 
-static void on_dbg_copy_diagnostics(GtkButton *button, gpointer user_data) {
-    (void)button;
-    (void)user_data;
-
-    g_autofree gchar *text = build_diagnostics_text();
-    GdkClipboard *clipboard = gdk_display_get_clipboard(gdk_display_get_default());
-    gdk_clipboard_set_text(clipboard, text);
-}
-
 static void on_dbg_copy_journal_cmd(GtkButton *button, gpointer user_data) {
     (void)button;
     (void)user_data;
@@ -74,6 +69,52 @@ static void on_dbg_copy_journal_cmd(GtkButton *button, gpointer user_data) {
                                             unit ? unit : "openclaw-gateway.service");
     GdkClipboard *clipboard = gdk_display_get_clipboard(gdk_display_get_default());
     gdk_clipboard_set_text(clipboard, cmd);
+}
+
+static const DebugActionSpec debug_row1_actions[] = {
+    { "Trigger Health Refresh", G_CALLBACK(on_dbg_refresh_health) },
+    { "Restart Gateway", G_CALLBACK(on_dbg_restart_gw) },
+};
+
+static const DebugActionSpec debug_row2_actions[] = {
+    { "Reveal Config Folder", G_CALLBACK(on_dbg_reveal_config) },
+};
+
+static const DebugActionSpec debug_standalone_actions[] = {
+    { "Restart Onboarding", G_CALLBACK(on_dbg_rerun_onboarding) },
+};
+
+static GtkWidget* debug_build_action_row(const DebugActionSpec *actions, gsize action_count) {
+    GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    gtk_widget_set_margin_top(row, 4);
+
+    for (gsize i = 0; i < action_count; i++) {
+        GtkWidget *button = gtk_button_new_with_label(actions[i].label);
+        g_signal_connect(button, "clicked", actions[i].callback, NULL);
+        gtk_box_append(GTK_BOX(row), button);
+    }
+
+    return row;
+}
+
+static GtkWidget* debug_build_action_button(const DebugActionSpec *action) {
+    GtkWidget *button = gtk_button_new_with_label(action->label);
+    gtk_widget_set_halign(button, GTK_ALIGN_START);
+    gtk_widget_set_margin_top(button, 4);
+    g_signal_connect(button, "clicked", action->callback, NULL);
+    return button;
+}
+
+static gboolean debug_action_specs_contain(const DebugActionSpec *actions,
+                                            gsize action_count,
+                                            const gchar *label) {
+    for (gsize i = 0; i < action_count; i++) {
+        if (g_strcmp0(actions[i].label, label) == 0) {
+            return TRUE;
+        }
+    }
+
+    return FALSE;
 }
 
 static GtkWidget* debug_build(void) {
@@ -131,34 +172,15 @@ static GtkWidget* debug_build(void) {
     gtk_widget_set_margin_top(actions_heading, 12);
     gtk_box_append(GTK_BOX(page), actions_heading);
 
-    GtkWidget *row1 = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
-    gtk_widget_set_margin_top(row1, 4);
-
-    GtkWidget *refresh_btn = gtk_button_new_with_label("Trigger Health Refresh");
-    g_signal_connect(refresh_btn, "clicked", G_CALLBACK(on_dbg_refresh_health), NULL);
-    gtk_box_append(GTK_BOX(row1), refresh_btn);
-
-    GtkWidget *restart_btn = gtk_button_new_with_label("Restart Gateway");
-    g_signal_connect(restart_btn, "clicked", G_CALLBACK(on_dbg_restart_gw), NULL);
-    gtk_box_append(GTK_BOX(row1), restart_btn);
+    GtkWidget *row1 = debug_build_action_row(debug_row1_actions,
+                                              G_N_ELEMENTS(debug_row1_actions));
     gtk_box_append(GTK_BOX(page), row1);
 
-    GtkWidget *row2 = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
-    gtk_widget_set_margin_top(row2, 4);
-
-    GtkWidget *reveal_btn = gtk_button_new_with_label("Reveal Config Folder");
-    g_signal_connect(reveal_btn, "clicked", G_CALLBACK(on_dbg_reveal_config), NULL);
-    gtk_box_append(GTK_BOX(row2), reveal_btn);
-
-    GtkWidget *copy_diag_btn = gtk_button_new_with_label("Copy Diagnostics Dump");
-    g_signal_connect(copy_diag_btn, "clicked", G_CALLBACK(on_dbg_copy_diagnostics), NULL);
-    gtk_box_append(GTK_BOX(row2), copy_diag_btn);
+    GtkWidget *row2 = debug_build_action_row(debug_row2_actions,
+                                              G_N_ELEMENTS(debug_row2_actions));
     gtk_box_append(GTK_BOX(page), row2);
 
-    GtkWidget *onboard_btn = gtk_button_new_with_label("Restart Onboarding");
-    gtk_widget_set_halign(onboard_btn, GTK_ALIGN_START);
-    gtk_widget_set_margin_top(onboard_btn, 4);
-    g_signal_connect(onboard_btn, "clicked", G_CALLBACK(on_dbg_rerun_onboarding), NULL);
+    GtkWidget *onboard_btn = debug_build_action_button(&debug_standalone_actions[0]);
     gtk_box_append(GTK_BOX(page), onboard_btn);
 
     gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scrolled), page);
@@ -205,4 +227,16 @@ static const SectionController debug_controller = {
 
 const SectionController* section_debug_get(void) {
     return &debug_controller;
+}
+
+gboolean section_debug_test_has_action_label(const gchar *label) {
+    return debug_action_specs_contain(debug_row1_actions,
+                                       G_N_ELEMENTS(debug_row1_actions),
+                                       label)
+        || debug_action_specs_contain(debug_row2_actions,
+                                       G_N_ELEMENTS(debug_row2_actions),
+                                       label)
+        || debug_action_specs_contain(debug_standalone_actions,
+                                       G_N_ELEMENTS(debug_standalone_actions),
+                                       label);
 }
