@@ -117,9 +117,6 @@ function createAppServerHarness(
         },
       });
     },
-    async notify(notification: CodexServerNotification) {
-      await notify(notification);
-    },
   };
 }
 

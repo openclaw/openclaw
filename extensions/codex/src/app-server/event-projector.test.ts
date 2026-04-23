@@ -293,7 +293,7 @@ describe("CodexAppServerEventProjector", () => {
   });
 
   it("ignores notifications that omit top-level thread and turn ids", async () => {
-    const projector = createProjector();
+    const projector = await createProjector();
 
     await projector.handleNotification({
       method: "turn/completed",
