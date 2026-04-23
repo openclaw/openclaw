@@ -46,7 +46,9 @@ type AgentHarnessSelectionDecision = {
     | "forced_pi"
     | "forced_plugin"
     | "forced_plugin_fallback_to_pi"
+    // Auto mode chose a registered plugin harness that supports the provider/model.
     | "auto_plugin"
+    // Auto mode found no supporting plugin harness, so PI handled the run.
     | "auto_pi_fallback";
   candidates: AgentHarnessSelectionCandidate[];
 };
