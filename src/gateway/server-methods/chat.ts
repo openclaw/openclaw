@@ -157,7 +157,9 @@ type AssistantDisplayContentBlock = Record<string, unknown>;
 export const DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS = 8_000;
 export const CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES = 128 * 1024;
 const CHAT_HISTORY_OVERSIZED_PLACEHOLDER = "[chat.history omitted: message too large]";
+const MANAGED_OUTGOING_IMAGE_PATH_PREFIX = "/api/chat/media/outgoing/";
 let chatHistoryPlaceholderEmitCount = 0;
+const chatHistoryManagedImageCleanupState = new Map<string, Promise<void>>();
 const CHANNEL_AGNOSTIC_SESSION_SCOPES = new Set([
   "main",
   "direct",
@@ -1496,6 +1498,7 @@ async function buildAssistantDisplayContentFromReplyPayloads(params: {
         ...(typeof payload.mediaUrl === "string" ? [payload.mediaUrl] : []),
       ]),
     );
+    let managedImagePrepareError: Error | undefined;
     const imageBlocks = await createManagedOutgoingImageBlocks({
       sessionKey: params.sessionKey,
       mediaUrls,
@@ -1503,11 +1506,19 @@ async function buildAssistantDisplayContentFromReplyPayloads(params: {
       localRoots: params.managedImageLocalRoots,
       continueOnPrepareError: true,
       onPrepareError: (error) => {
+        managedImagePrepareError ??= error;
         params.onManagedImagePrepareError?.(error.message);
       },
     });
     if (imageBlocks.length > 0) {
       content.push(...imageBlocks);
+    } else if (
+      managedImagePrepareError &&
+      !text &&
+      audioBlocks.length === 0 &&
+      mediaUrls.length > 0
+    ) {
+      throw managedImagePrepareError;
     }
   }
 
@@ -1560,6 +1571,71 @@ function replaceAssistantContentTextBlocks(
     return [...transcriptTextBlocks.slice(transcriptTextIndex), ...merged];
   }
   return merged;
+}
+
+function isManagedOutgoingImageUrl(value: unknown): boolean {
+  if (typeof value !== "string" || !value.trim()) {
+    return false;
+  }
+  try {
+    const parsed = new URL(value, "http://localhost");
+    return parsed.pathname.startsWith(MANAGED_OUTGOING_IMAGE_PATH_PREFIX);
+  } catch {
+    return false;
+  }
+}
+
+function stripManagedOutgoingAssistantContentBlocks(
+  content: readonly AssistantDisplayContentBlock[] | undefined,
+): AssistantDisplayContentBlock[] | undefined {
+  if (!content || content.length === 0) {
+    return undefined;
+  }
+  const filtered = content.filter((block) => {
+    if (block?.type !== "image") {
+      return true;
+    }
+    return !(isManagedOutgoingImageUrl(block.url) || isManagedOutgoingImageUrl(block.openUrl));
+  });
+  return filtered.length > 0 ? filtered : undefined;
+}
+
+function extractAssistantDisplayText(
+  content: readonly AssistantDisplayContentBlock[] | undefined,
+): string | undefined {
+  if (!content || content.length === 0) {
+    return undefined;
+  }
+  const text = content
+    .map((block) => (block?.type === "text" && typeof block.text === "string" ? block.text : ""))
+    .filter(Boolean)
+    .join("\n\n")
+    .trim();
+  return text || undefined;
+}
+
+function scheduleChatHistoryManagedImageCleanup(params: {
+  sessionKey: string;
+  context: Pick<GatewayRequestContext, "logGateway">;
+}) {
+  if (chatHistoryManagedImageCleanupState.has(params.sessionKey)) {
+    return;
+  }
+  const pending: Promise<void> = cleanupManagedOutgoingImageRecords({
+    sessionKey: params.sessionKey,
+  })
+    .then(() => undefined)
+    .catch((error) => {
+      params.context.logGateway.debug(
+        `chat.history managed image cleanup skipped sessionKey=${JSON.stringify(params.sessionKey)} error=${formatForLog(error)}`,
+      );
+    })
+    .finally(() => {
+      if (chatHistoryManagedImageCleanupState.get(params.sessionKey) === pending) {
+        chatHistoryManagedImageCleanupState.delete(params.sessionKey);
+      }
+    });
+  chatHistoryManagedImageCleanupState.set(params.sessionKey, pending);
 }
 
 function normalizeExplicitChatSendOrigin(
@@ -1796,13 +1872,10 @@ export const chatHandlers: GatewayRequestHandlers = {
     };
     const { cfg, storePath, entry, canonicalKey } = loadSessionEntry(sessionKey);
     const cleanupSessionKey = canonicalKey || sessionKey;
-    try {
-      await cleanupManagedOutgoingImageRecords({ sessionKey: cleanupSessionKey });
-    } catch (error) {
-      context.logGateway.debug(
-        `chat.history managed image cleanup skipped sessionKey=${JSON.stringify(cleanupSessionKey)} error=${formatForLog(error)}`,
-      );
-    }
+    scheduleChatHistoryManagedImageCleanup({
+      sessionKey: cleanupSessionKey,
+      context,
+    });
 
     const sessionId = entry?.sessionId;
     const sessionAgentId = resolveSessionAgentId({ sessionKey, config: cfg });
@@ -2533,15 +2606,20 @@ export const chatHandlers: GatewayRequestHandlers = {
                   context.logGateway.warn(
                     `webchat transcript append failed: ${appended.error ?? "unknown error"}`,
                   );
+                  const fallbackAssistantContent =
+                    stripManagedOutgoingAssistantContentBlocks(persistedAssistantContent) ??
+                    stripManagedOutgoingAssistantContentBlocks(assistantContent);
+                  const fallbackText =
+                    extractAssistantDisplayText(fallbackAssistantContent) ?? combinedReply;
                   const now = Date.now();
                   message = {
                     role: "assistant",
-                    ...(assistantContent?.length
-                      ? { content: assistantContent }
-                      : combinedReply
-                        ? { content: [{ type: "text", text: combinedReply }] }
+                    ...(fallbackAssistantContent?.length
+                      ? { content: fallbackAssistantContent }
+                      : fallbackText
+                        ? { content: [{ type: "text", text: fallbackText }] }
                         : {}),
-                    ...(combinedReply ? { text: combinedReply } : {}),
+                    ...(fallbackText ? { text: fallbackText } : {}),
                     timestamp: now,
                     // Keep this compatible with Pi stopReason enums even though this message isn't
                     // persisted to the transcript due to the append failure.

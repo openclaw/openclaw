@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import { emitAgentEvent, registerAgentRunContext } from "../infra/agent-events.js";
@@ -975,8 +976,105 @@ describe("gateway server chat", () => {
         });
         expect(historyRes.ok).toBe(true);
 
-        await expect(fs.access(recordPath)).rejects.toThrow();
+        let recordDeleted = false;
+        for (let attempt = 0; attempt < 50; attempt += 1) {
+          try {
+            await fs.access(recordPath);
+          } catch {
+            recordDeleted = true;
+            break;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+        expect(recordDeleted).toBe(true);
       } finally {
+        if (previousStateDir == null) {
+          delete process.env.OPENCLAW_STATE_DIR;
+        } else {
+          process.env.OPENCLAW_STATE_DIR = previousStateDir;
+        }
+      }
+    });
+  });
+
+  test("chat.send fallback final payload omits managed image URLs when transcript append fails", async () => {
+    await withMainSessionStore(async (dir) => {
+      const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+      process.env.OPENCLAW_STATE_DIR = dir;
+      const pngB64 =
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=";
+      const originalOpen = SessionManager.open.bind(SessionManager);
+      let failAssistantAppend = true;
+      const openSpy = vi.spyOn(SessionManager, "open").mockImplementation((...args) => {
+        const manager = originalOpen(...args);
+        const originalAppendMessage = manager.appendMessage.bind(manager);
+        const wrappedManager = Object.assign(
+          Object.create(Object.getPrototypeOf(manager)) as SessionManager,
+          manager,
+        );
+        wrappedManager.appendMessage = (message: Parameters<typeof manager.appendMessage>[0]) => {
+          if (
+            failAssistantAppend &&
+            message &&
+            typeof message === "object" &&
+            (message as { role?: unknown }).role === "assistant"
+          ) {
+            failAssistantAppend = false;
+            throw new Error("simulated transcript append failure");
+          }
+          return originalAppendMessage(message);
+        };
+        return wrappedManager;
+      });
+      dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
+        const [params] = args as [
+          {
+            dispatcher: {
+              sendFinalReply: (payload: { text?: string; mediaUrls?: string[] }) => boolean;
+              markComplete: () => void;
+              waitForIdle: () => Promise<void>;
+              getQueuedCounts: () => { final: number; block: number; tool: number };
+            };
+          },
+        ];
+        params.dispatcher.sendFinalReply({
+          mediaUrls: [`data:image/png;base64,${pngB64}`],
+        });
+        params.dispatcher.markComplete();
+        await params.dispatcher.waitForIdle();
+        return {
+          queuedFinal: true,
+          counts: params.dispatcher.getQueuedCounts(),
+        };
+      });
+
+      try {
+        const finalEventPromise = onceMessage(
+          ws,
+          (o) =>
+            o.type === "event" &&
+            o.event === "chat" &&
+            o.payload?.state === "final" &&
+            o.payload?.runId === "idem-managed-image-append-fallback",
+          8000,
+        );
+        const res = await rpcReq(ws, "chat.send", {
+          sessionKey: "main",
+          message: "show me an image",
+          idempotencyKey: "idem-managed-image-append-fallback",
+        });
+
+        expect(res.ok).toBe(true);
+
+        const finalEvent = await finalEventPromise;
+        const finalMessage = finalEvent.payload?.message as
+          | { content?: Array<Record<string, unknown>>; text?: string }
+          | undefined;
+        expect(finalMessage?.text).toBe("Image reply");
+        expect(finalMessage?.content).toEqual([{ type: "text", text: "Image reply" }]);
+        expect(JSON.stringify(finalMessage ?? {})).not.toContain("/api/chat/media/outgoing/");
+      } finally {
+        openSpy.mockRestore();
         if (previousStateDir == null) {
           delete process.env.OPENCLAW_STATE_DIR;
         } else {
