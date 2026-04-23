@@ -1771,6 +1771,19 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                     draftStream.update(buildMattermostToolStatusText(payload));
                     hasStreamedMessage = true;
                   },
+                  onItemEvent: async (payload) => {
+                    // Runtime emits richer item events (e.g. with a human-readable title).
+                    // Use them to upgrade the current tool status post in-place.
+                    if (payload.kind !== "tool" && payload.kind !== "command") return;
+                    if (payload.phase && payload.phase !== "start" && payload.phase !== "update") return;
+                    const text = buildMattermostToolStatusText({
+                      name: payload.name,
+                      title: payload.title,
+                      phase: payload.phase,
+                    });
+                    draftStream.update(text);
+                    hasStreamedMessage = true;
+                  },
                 },
               }),
           });
