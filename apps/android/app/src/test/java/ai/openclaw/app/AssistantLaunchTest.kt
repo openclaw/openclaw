@@ -33,7 +33,7 @@ class AssistantLaunchTest {
     requireNotNull(parsed)
     assertEquals("app_action", parsed.source)
     assertEquals("summarize my unread texts", parsed.prompt)
-    assertTrue(parsed.autoSend)
+    assertFalse(parsed.autoSend)
   }
 
   @Test
