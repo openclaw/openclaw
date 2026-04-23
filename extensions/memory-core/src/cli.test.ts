@@ -674,6 +674,44 @@ describe("memory cli", () => {
     expect(close).toHaveBeenCalled();
   });
 
+  it("shows default dreaming schedule with timezone when frequency is omitted", async () => {
+    loadConfig.mockReturnValue({
+      plugins: {
+        entries: {
+          "memory-core": {
+            enabled: true,
+            config: {
+              dreaming: {
+                enabled: true,
+                timezone: "Asia/Shanghai",
+                phases: {
+                  light: { enabled: true },
+                  deep: { enabled: true },
+                  rem: { enabled: false },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const close = vi.fn(async () => {});
+    mockManager({
+      probeVectorAvailability: vi.fn(async () => true),
+      status: () => makeMemoryStatus(),
+      close,
+    });
+
+    const log = spyRuntimeLogs(defaultRuntime);
+    await runMemoryCli(["status"]);
+
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining("Dreaming: 0 3 * * * (Asia/Shanghai) · light on · deep on · rem off"),
+    );
+    expect(close).toHaveBeenCalled();
+  });
+
   it("omits timezone suffix when dreaming timezone is blank", async () => {
     loadConfig.mockReturnValue({
       plugins: {
