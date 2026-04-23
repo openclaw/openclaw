@@ -25,9 +25,17 @@ const defaultCliBackendsDeps: CliBackendsDeps = {
 
 let cliBackendsDeps: CliBackendsDeps = defaultCliBackendsDeps;
 
+// Once a backend has been resolved, `command` is guaranteed to be a non-empty
+// string — `resolveCliBackendConfig` returns null otherwise. Narrowing the
+// type here lets downstream consumers (e.g. the CLI runner spawning argv[0])
+// treat it as required without null-asserting.
+export type ResolvedCliBackendConfig = Omit<CliBackendConfig, "command"> & {
+  command: string;
+};
+
 export type ResolvedCliBackend = {
   id: string;
-  config: CliBackendConfig;
+  config: ResolvedCliBackendConfig;
   bundleMcp: boolean;
   bundleMcpMode?: CliBundleMcpMode;
   pluginId?: string;

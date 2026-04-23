@@ -91,8 +91,14 @@ export type AgentContextLimitsConfig = {
 };
 
 export type CliBackendConfig = {
-  /** CLI command to execute (absolute path or on PATH). */
-  command: string;
+  /**
+   * CLI command to execute (absolute path or on PATH). Optional so that
+   * `agents.defaults.cliBackends.<backendId>` entries can be partial
+   * overrides — e.g. a `modelAliases`-only block that inherits the base
+   * command. Runtime resolution (`resolveCliBackendConfig`) guards on
+   * `config.command?.trim()` and returns null when unresolvable.
+   */
+  command?: string;
   /** Base args applied to every invocation. */
   args?: string[];
   /** Output parsing mode (default: json). */

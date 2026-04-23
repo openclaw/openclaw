@@ -477,6 +477,31 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
     expect(resolved?.config.clearEnv).toContain("CLAUDE_CODE_USE_COWORK_PLUGINS");
   });
 
+  it("accepts partial modelAliases override without a command field and inherits base command", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "claude-cli": {
+              modelAliases: {
+                "claude-opus-4-7": "claude-opus-4-7",
+              },
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const resolved = resolveCliBackendConfig("claude-cli", cfg);
+
+    expect(resolved).not.toBeNull();
+    // Base command carries through when the override omits it — the point of
+    // making `command` optional at the schema level.
+    expect(resolved?.config.command?.trim()).toBeTruthy();
+    // User alias takes effect (was absent or mapped to "opus" in the base).
+    expect(resolved?.config.modelAliases?.["claude-opus-4-7"]).toBe("claude-opus-4-7");
+  });
+
   it("normalizes legacy skip-permissions overrides to permission-mode bypassPermissions", () => {
     const cfg = {
       agents: {

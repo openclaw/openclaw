@@ -540,9 +540,16 @@ const CliBackendWatchdogModeSchema = z
   .strict()
   .optional();
 
+// `command` is optional at the schema level so that users can supply partial
+// overrides in `agents.defaults.cliBackends.<backendId>` — e.g. just a
+// `modelAliases` block — while inheriting every other field (including the
+// executable name) from the base backend config. Runtime resolution
+// (`resolveCliBackendConfig`) already guards on `config.command?.trim()` and
+// skips backends without a resolvable command, so relaxing validation here
+// does not change runtime behavior for existing full overrides.
 export const CliBackendSchema = z
   .object({
-    command: z.string(),
+    command: z.string().optional(),
     args: z.array(z.string()).optional(),
     output: z.union([z.literal("json"), z.literal("text"), z.literal("jsonl")]).optional(),
     resumeOutput: z.union([z.literal("json"), z.literal("text"), z.literal("jsonl")]).optional(),
