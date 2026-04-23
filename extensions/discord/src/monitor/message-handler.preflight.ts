@@ -32,7 +32,6 @@ import {
   resolveDiscordShouldRequireMention,
   resolveGroupDmAllow,
 } from "./allow-list.js";
-import { resolveDiscordChannelNameSafe } from "./channel-access.js";
 import { resolveDiscordDmCommandAccess } from "./dm-command-auth.js";
 import { handleDiscordDmCommandDecision } from "./dm-command-decision.js";
 import {
@@ -576,7 +575,9 @@ export async function preflightDiscordMessage(
   // Resolve thread parent early for binding inheritance
   const channelName =
     channelInfo?.name ??
-    (isGuildMessage || isGroupDm ? resolveDiscordChannelNameSafe(message.channel) : undefined);
+    ((isGuildMessage || isGroupDm) && message.channel && "name" in message.channel
+      ? message.channel.name
+      : undefined);
   const { resolveDiscordThreadChannel, resolveDiscordThreadParentInfo } =
     await loadDiscordThreadingRuntime();
   const earlyThreadChannel = resolveDiscordThreadChannel({
@@ -965,7 +966,6 @@ export async function preflightDiscordMessage(
       allowTextCommands,
       hasControlCommand: hasControlCommandInMessage,
       commandAuthorized,
-      suppressIfOtherAgentMentioned: true,
     },
   });
   const effectiveWasMentioned = mentionDecision.effectiveWasMentioned;
@@ -991,14 +991,6 @@ export async function preflightDiscordMessage(
       });
       return null;
     }
-  }
-
-  if (isGuildMessage && mentionDecision.suppressedByOtherAgentMention) {
-    logDebug(`[discord-preflight] drop: suppressed-by-other-agent-mention`);
-    logVerbose(
-      `discord: drop guild message (suppressed, other agent mentioned, channel=${messageChannelId})`,
-    );
-    return null;
   }
 
   if (author.bot && !sender.isPluralKit && allowBotsMode === "mentions") {
@@ -1091,7 +1083,6 @@ export async function preflightDiscordMessage(
     messageChannelId,
     author,
     sender,
-    memberRoleIds,
     channelInfo,
     channelName,
     isGuildMessage,
