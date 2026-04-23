@@ -23,7 +23,10 @@ vi.mock("../plugins/install.js", () => ({
 }));
 
 const enablePluginInConfig = vi.hoisted(() =>
-  vi.fn((cfg: OpenClawConfig): PluginEnableResult => ({ config: cfg, enabled: true })),
+  vi.fn<(cfg: OpenClawConfig, pluginId: string) => PluginEnableResult>((cfg) => ({
+    config: cfg,
+    enabled: true,
+  })),
 );
 vi.mock("../plugins/enable.js", () => ({
   enablePluginInConfig,
@@ -49,7 +52,7 @@ describe("ensureOnboardingPluginInstalled", () => {
     withTimeout.mockImplementation(async <T>(promise: Promise<T>) => await promise);
   });
 
-  it("passes pinned npm specs and expected integrity to npm installs with progress", async () => {
+  it("passes npm specs and optional expected integrity to npm installs with progress", async () => {
     installPluginFromNpmSpec.mockImplementation(async (params) => {
       params.logger?.info?.("Downloading demo-plugin…");
       return {
@@ -134,7 +137,7 @@ describe("ensureOnboardingPluginInstalled", () => {
     );
   });
 
-  it("does not offer npm installs without an exact version and integrity pin", async () => {
+  it("offers registry npm specs without requiring an exact version or integrity pin", async () => {
     let captured:
       | {
           options: Array<{ value: "npm" | "local" | "skip"; label: string; hint?: string }>;
@@ -160,8 +163,11 @@ describe("ensureOnboardingPluginInstalled", () => {
       runtime: {} as never,
     });
 
-    expect(captured?.options).toEqual([{ value: "skip", label: "Skip for now" }]);
-    expect(captured?.initialValue).toBe("skip");
+    expect(captured?.options).toEqual([
+      { value: "npm", label: "Download from npm (@demo/plugin)" },
+      { value: "skip", label: "Skip for now" },
+    ]);
+    expect(captured?.initialValue).toBe("npm");
     expect(installPluginFromNpmSpec).not.toHaveBeenCalled();
   });
 

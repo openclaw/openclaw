@@ -66,6 +66,42 @@ const BUNDLED_LIVE_CONFIG_HOOK_GUARDS = {
     "api.runtime.config?.loadConfig?.() ?? api.config",
   ],
 } as const satisfies Record<string, readonly string[]>;
+const BUNDLED_LIVE_CONFIG_PROVIDER_GUARDS = {
+  "extensions/amazon-bedrock/register.sync.runtime.ts": [
+    "resolvePluginConfigObject(",
+    "const startupPluginConfig = (api.pluginConfig ?? {})",
+    "const currentPluginConfig = resolveCurrentPluginConfig(ctx.config);",
+    "const currentGuardrail = resolveCurrentPluginConfig(config)?.guardrail;",
+  ],
+  "extensions/codex/provider.ts": [
+    "resolvePluginConfigObject(",
+    "const runtimePluginConfig = resolvePluginConfigObject(ctx.config, CODEX_PROVIDER_ID);",
+    "const pluginConfig = runtimePluginConfig ?? (ctx.config ? undefined : options.pluginConfig);",
+  ],
+  "extensions/github-copilot/index.ts": [
+    "resolvePluginConfigObject(",
+    'const runtimePluginConfig = resolvePluginConfigObject(config, "github-copilot");',
+    "return config ? {} : startupPluginConfig;",
+  ],
+  "extensions/ollama/index.ts": [
+    "resolvePluginConfigObject(",
+    'const runtimePluginConfig = resolvePluginConfigObject(config, "ollama");',
+    "return config ? {} : startupPluginConfig;",
+  ],
+  "extensions/openai/index.ts": [
+    "resolvePluginConfigObject(",
+    'const runtimePluginConfig = resolvePluginConfigObject(ctx.config, "openai");',
+    "runtimePluginConfig ??",
+    "ctx.config ? undefined : (api.pluginConfig as Record<string, unknown>)",
+  ],
+} as const satisfies Record<string, readonly string[]>;
+const BUNDLED_STARTUP_GATED_HOOK_FORBIDDEN_SNIPPETS = {
+  "extensions/memory-lancedb/index.ts": ["if (cfg.autoRecall)", "if (cfg.autoCapture)"],
+  "extensions/skill-workshop/index.ts": [
+    "if (!startupConfig.enabled)",
+    'if (startupConfig.autoCapture && startupConfig.reviewMode !== "off")',
+  ],
+} as const satisfies Record<string, readonly string[]>;
 
 type FileFilter = {
   excludeTests?: boolean;
@@ -247,5 +283,29 @@ describe("plugin contract boundary invariants", () => {
       },
     );
     expect(missingGuards).toEqual([]);
+  });
+
+  it("keeps live provider config surfaces on runtime config lookups", () => {
+    const missingGuards = Object.entries(BUNDLED_LIVE_CONFIG_PROVIDER_GUARDS).flatMap(
+      ([file, requiredSnippets]) => {
+        const source = readRepoSource(file);
+        return requiredSnippets
+          .filter((snippet) => !source.includes(snippet))
+          .map((snippet) => `${file}: ${snippet}`);
+      },
+    );
+    expect(missingGuards).toEqual([]);
+  });
+
+  it("keeps long-lived bundled hook handlers off startup-only registration gates", () => {
+    const offenders = Object.entries(BUNDLED_STARTUP_GATED_HOOK_FORBIDDEN_SNIPPETS).flatMap(
+      ([file, forbiddenSnippets]) => {
+        const source = readRepoSource(file);
+        return forbiddenSnippets
+          .filter((snippet) => source.includes(snippet))
+          .map((snippet) => `${file}: ${snippet}`);
+      },
+    );
+    expect(offenders).toEqual([]);
   });
 });

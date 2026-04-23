@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
-import JSZip from "jszip";
 import { parseConfigJson5 } from "../config/io.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { redactConfigObject } from "../config/redact-snapshot.js";
@@ -12,6 +11,15 @@ import {
   readLatestDiagnosticStabilityBundleSync,
   type ReadDiagnosticStabilityBundleResult,
 } from "./diagnostic-stability-bundle.js";
+import {
+  jsonSupportBundleFile,
+  jsonlSupportBundleFile,
+  supportBundleContents,
+  textSupportBundleFile,
+  writeSupportBundleZip,
+  type DiagnosticSupportBundleContent,
+  type DiagnosticSupportBundleFile,
+} from "./diagnostic-support-bundle.js";
 import { sanitizeSupportLogRecord } from "./diagnostic-support-log-redaction.js";
 import {
   redactPathForSupport,
@@ -54,11 +62,7 @@ export type DiagnosticSupportExportManifest = {
   arch: string;
   node: string;
   stateDir: string;
-  contents: Array<{
-    path: string;
-    mediaType: string;
-    bytes: number;
-  }>;
+  contents: DiagnosticSupportBundleContent[];
   privacy: {
     payloadFree: true;
     rawLogsIncluded: false;
@@ -66,11 +70,7 @@ export type DiagnosticSupportExportManifest = {
   };
 };
 
-export type DiagnosticSupportExportFile = {
-  path: string;
-  mediaType: string;
-  content: string;
-};
+export type DiagnosticSupportExportFile = DiagnosticSupportBundleFile;
 
 export type DiagnosticSupportExportArtifact = {
   manifest: DiagnosticSupportExportManifest;
@@ -155,26 +155,6 @@ type CollectedSupportSnapshot = {
 
 function formatExportTimestamp(now: Date): string {
   return now.toISOString().replace(/[:.]/g, "-");
-}
-
-function byteLength(content: string): number {
-  return Buffer.byteLength(content, "utf8");
-}
-
-function jsonFile(pathName: string, value: unknown): DiagnosticSupportExportFile {
-  return {
-    path: pathName,
-    mediaType: "application/json",
-    content: `${JSON.stringify(value, null, 2)}\n`,
-  };
-}
-
-function textFile(pathName: string, content: string): DiagnosticSupportExportFile {
-  return {
-    path: pathName,
-    mediaType: "text/plain; charset=utf-8",
-    content: content.endsWith("\n") ? content : `${content}\n`,
-  };
 }
 
 function normalizePositiveInteger(value: unknown, fallback: number): number {
@@ -354,7 +334,7 @@ async function collectSupportSnapshot(params: {
         status: "included",
         path: params.path,
       },
-      file: jsonFile(params.path, {
+      file: jsonSupportBundleFile(params.path, {
         status: "ok",
         capturedAt: params.generatedAt,
         data: sanitizeSupportSnapshotValue(data, params.redaction),
@@ -368,7 +348,7 @@ async function collectSupportSnapshot(params: {
         path: params.path,
         error: redactedError,
       },
-      file: jsonFile(params.path, {
+      file: jsonSupportBundleFile(params.path, {
         status: "failed",
         capturedAt: params.generatedAt,
         error: redactedError,
@@ -626,14 +606,13 @@ export async function buildDiagnosticSupportExport(
     health: healthSnapshot.summary,
   };
   const files: DiagnosticSupportExportFile[] = [
-    jsonFile("diagnostics.json", diagnostics),
-    jsonFile("config/shape.json", config.shape),
-    jsonFile("config/sanitized.json", config.sanitized ?? null),
-    {
-      path: "logs/openclaw-sanitized.jsonl",
-      mediaType: "application/x-ndjson",
-      content: logTail.lines.map((line) => JSON.stringify(line)).join("\n") + "\n",
-    },
+    jsonSupportBundleFile("diagnostics.json", diagnostics),
+    jsonSupportBundleFile("config/shape.json", config.shape),
+    jsonSupportBundleFile("config/sanitized.json", config.sanitized ?? null),
+    jsonlSupportBundleFile(
+      "logs/openclaw-sanitized.jsonl",
+      logTail.lines.map((line) => JSON.stringify(line)),
+    ),
   ];
   for (const snapshot of [statusSnapshot, healthSnapshot]) {
     if (snapshot.file) {
@@ -642,11 +621,11 @@ export async function buildDiagnosticSupportExport(
   }
 
   if (stability.status === "found") {
-    files.push(jsonFile("stability/latest.json", stability.bundle));
+    files.push(jsonSupportBundleFile("stability/latest.json", stability.bundle));
   }
 
   files.push(
-    textFile(
+    textSupportBundleFile(
       "summary.md",
       renderSummary({
         generatedAt,
@@ -667,11 +646,7 @@ export async function buildDiagnosticSupportExport(
     arch: process.arch,
     node: process.versions.node,
     stateDir: redactPathForSupport(stateDir, redaction),
-    contents: files.map((file) => ({
-      path: file.path,
-      mediaType: file.mediaType,
-      bytes: byteLength(file.content),
-    })),
+    contents: supportBundleContents(files),
     privacy: {
       payloadFree: true,
       rawLogsIncluded: false,
@@ -686,7 +661,7 @@ export async function buildDiagnosticSupportExport(
 
   return {
     manifest,
-    files: [jsonFile("manifest.json", manifest), ...files],
+    files: [jsonSupportBundleFile("manifest.json", manifest), ...files],
   };
 }
 
@@ -704,20 +679,14 @@ export async function writeDiagnosticSupportExport(
     now,
   });
   const artifact = await buildDiagnosticSupportExport({ ...options, env, stateDir, now });
-  const zip = new JSZip();
-  for (const file of artifact.files) {
-    zip.file(file.path, file.content);
-  }
-  const buffer = await zip.generateAsync({
-    type: "nodebuffer",
-    compression: "DEFLATE",
-    compressionOptions: { level: 6 },
+  const bytes = await writeSupportBundleZip({
+    outputPath,
+    files: artifact.files,
+    compressionLevel: 6,
   });
-  fs.mkdirSync(path.dirname(outputPath), { recursive: true, mode: 0o700 });
-  fs.writeFileSync(outputPath, buffer, { mode: 0o600 });
   return {
     path: outputPath,
-    bytes: buffer.length,
+    bytes,
     manifest: artifact.manifest,
   };
 }

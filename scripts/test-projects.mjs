@@ -372,7 +372,12 @@ async function main() {
     targetArgs.length === 0 &&
     changedTargetArgs === null &&
     !runSpecs.some((spec) => spec.watchMode);
-  const isParallelShardRun = isFullSuiteRun || isFullExtensionsProjectRun(runSpecs);
+  const isExplicitParallelMultiConfigRun =
+    Boolean(process.env.OPENCLAW_TEST_PROJECTS_PARALLEL) &&
+    runSpecs.length > 1 &&
+    !runSpecs.some((spec) => spec.watchMode);
+  const isParallelShardRun =
+    isFullSuiteRun || isFullExtensionsProjectRun(runSpecs) || isExplicitParallelMultiConfigRun;
   if (isParallelShardRun) {
     const concurrency = resolveParallelFullSuiteConcurrency(runSpecs.length, process.env);
     if (concurrency > 1) {

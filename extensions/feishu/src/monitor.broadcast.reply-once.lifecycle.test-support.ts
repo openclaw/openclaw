@@ -3,7 +3,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createNonExitingRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
 import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
 import { FeishuConfigSchema } from "./config-schema.js";
-import { getFeishuLifecycleTestMocks } from "./lifecycle.test-support.js";
+import {
+  getFeishuLifecycleTestMocks,
+  resetFeishuLifecycleTestMocks,
+} from "./lifecycle.test-support.js";
 import {
   createFeishuTextMessageEvent,
   createFeishuLifecycleReplyDispatcher,
@@ -132,7 +135,7 @@ async function setupLifecycleMonitor(accountId: "account-A" | "account-B") {
 describe("Feishu broadcast reply-once lifecycle", () => {
   beforeEach(() => {
     vi.useRealTimers();
-    vi.clearAllMocks();
+    resetFeishuLifecycleTestMocks();
     handlersByAccount = new Map();
     runtimesByAccount = new Map();
     setFeishuLifecycleStateDir("openclaw-feishu-broadcast");

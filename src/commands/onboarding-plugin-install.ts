@@ -191,14 +191,13 @@ function resolveBundledLocalPath(params: {
   );
 }
 
-function resolvePinnedNpmSpecForOnboarding(install: PluginPackageInstall): string | null {
+function resolveNpmSpecForOnboarding(install: PluginPackageInstall): string | null {
   const npmSpec = install.npmSpec?.trim();
-  const expectedIntegrity = install.expectedIntegrity?.trim();
-  if (!npmSpec || !expectedIntegrity) {
+  if (!npmSpec) {
     return null;
   }
   const parsed = parseRegistryNpmSpec(npmSpec);
-  return parsed?.selectorKind === "exact-version" ? npmSpec : null;
+  return parsed ? npmSpec : null;
 }
 
 function resolveInstallDefaultChoice(params: {
@@ -241,7 +240,7 @@ async function promptInstallChoice(params: {
   defaultChoice: InstallChoice;
   prompter: WizardPrompter;
 }): Promise<InstallChoice> {
-  const npmSpec = resolvePinnedNpmSpecForOnboarding(params.entry.install);
+  const npmSpec = resolveNpmSpecForOnboarding(params.entry.install);
   const safeLabel = sanitizeTerminalText(params.entry.label);
   const safeNpmSpec = npmSpec ? sanitizeTerminalText(npmSpec) : null;
   const safeLocalPath = params.localPath ? sanitizeTerminalText(params.localPath) : null;
@@ -399,7 +398,7 @@ export async function ensureOnboardingPluginInstalled(params: {
       workspaceDir,
       allowLocal,
     });
-  const npmSpec = resolvePinnedNpmSpecForOnboarding(entry.install);
+  const npmSpec = resolveNpmSpecForOnboarding(entry.install);
   const defaultChoice = resolveInstallDefaultChoice({
     cfg: next,
     entry,

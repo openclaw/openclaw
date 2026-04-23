@@ -9,11 +9,39 @@ import {
   loadSessionStore,
   updateSessionStore,
 } from "openclaw/plugin-sdk/config-runtime";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { createSuiteTempRootTracker } from "../../../src/test-helpers/temp-dir.js";
 import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
 
 const TELEGRAM_DIRECT_KEY = "agent:main:telegram:direct:7463849194";
+
+function createSuiteTempRootTracker(params: { prefix: string }) {
+  let root: string | undefined;
+  const children: string[] = [];
+  return {
+    async setup() {
+      root = await fs.mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), params.prefix));
+    },
+    async make(name: string) {
+      if (!root) {
+        throw new Error("temp root not initialized");
+      }
+      const child = path.join(root, name);
+      await fs.mkdir(child, { recursive: true });
+      children.push(child);
+      return child;
+    },
+    async cleanup() {
+      await Promise.all(
+        children.splice(0).map((child) => fs.rm(child, { force: true, recursive: true })),
+      );
+      if (root) {
+        await fs.rm(root, { force: true, recursive: true });
+        root = undefined;
+      }
+    },
+  };
+}
 
 describe("Telegram direct session recreation after delete", () => {
   const suiteRootTracker = createSuiteTempRootTracker({

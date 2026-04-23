@@ -64,6 +64,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [SGLang (local models)](/providers/sglang)
 - [StepFun](/providers/stepfun)
 - [Synthetic](/providers/synthetic)
+- [Tencent Cloud (TokenHub)](/providers/tencent)
 - [Together AI](/providers/together)
 - [Venice (Venice AI, privacy-focused)](/providers/venice)
 - [Vercel AI Gateway](/providers/vercel-ai-gateway)

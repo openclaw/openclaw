@@ -22,12 +22,21 @@ type IsPluginProvidersLoadInFlight =
   typeof import("./providers.runtime.js").isPluginProvidersLoadInFlight;
 type ResolveCatalogHookProviderPluginIds =
   typeof import("./providers.js").resolveCatalogHookProviderPluginIds;
+type ResolveExternalAuthProfileCompatFallbackPluginIds =
+  typeof import("./providers.js").resolveExternalAuthProfileCompatFallbackPluginIds;
+type ResolveExternalAuthProfileProviderPluginIds =
+  typeof import("./providers.js").resolveExternalAuthProfileProviderPluginIds;
 
 const resolvePluginProvidersMock = vi.fn<ResolvePluginProviders>((_) => [] as ProviderPlugin[]);
 const isPluginProvidersLoadInFlightMock = vi.fn<IsPluginProvidersLoadInFlight>((_) => false);
 const resolveCatalogHookProviderPluginIdsMock = vi.fn<ResolveCatalogHookProviderPluginIds>(
   (_) => [] as string[],
 );
+const resolveExternalAuthProfileCompatFallbackPluginIdsMock =
+  vi.fn<ResolveExternalAuthProfileCompatFallbackPluginIds>((_) => [] as string[]);
+const resolveExternalAuthProfileProviderPluginIdsMock =
+  vi.fn<ResolveExternalAuthProfileProviderPluginIds>((_) => [] as string[]);
+const providerRuntimeWarnMock = vi.fn();
 
 let augmentModelCatalogWithProviderPlugins: typeof import("./provider-runtime.js").augmentModelCatalogWithProviderPlugins;
 let buildProviderAuthDoctorHintWithPlugin: typeof import("./provider-runtime.js").buildProviderAuthDoctorHintWithPlugin;
@@ -238,11 +247,23 @@ describe("provider-runtime", () => {
     vi.doMock("./providers.js", () => ({
       resolveCatalogHookProviderPluginIds: (params: unknown) =>
         resolveCatalogHookProviderPluginIdsMock(params as never),
+      resolveExternalAuthProfileCompatFallbackPluginIds: (params: unknown) =>
+        resolveExternalAuthProfileCompatFallbackPluginIdsMock(params as never),
+      resolveExternalAuthProfileProviderPluginIds: (params: unknown) =>
+        resolveExternalAuthProfileProviderPluginIdsMock(params as never),
     }));
     vi.doMock("./providers.runtime.js", () => ({
       resolvePluginProviders: (params: unknown) => resolvePluginProvidersMock(params as never),
       isPluginProvidersLoadInFlight: (params: unknown) =>
         isPluginProvidersLoadInFlightMock(params as never),
+    }));
+    vi.doMock("../logging/subsystem.js", () => ({
+      createSubsystemLogger: () => ({
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: providerRuntimeWarnMock,
+        error: vi.fn(),
+      }),
     }));
     ({
       augmentModelCatalogWithProviderPlugins,
@@ -295,12 +316,18 @@ describe("provider-runtime", () => {
 
   beforeEach(() => {
     resetProviderRuntimeHookCacheForTest();
+    providerRuntimeTesting.resetExternalAuthFallbackWarningCacheForTest();
     resolvePluginProvidersMock.mockReset();
     resolvePluginProvidersMock.mockReturnValue([]);
     isPluginProvidersLoadInFlightMock.mockReset();
     isPluginProvidersLoadInFlightMock.mockReturnValue(false);
     resolveCatalogHookProviderPluginIdsMock.mockReset();
     resolveCatalogHookProviderPluginIdsMock.mockReturnValue([]);
+    resolveExternalAuthProfileCompatFallbackPluginIdsMock.mockReset();
+    resolveExternalAuthProfileCompatFallbackPluginIdsMock.mockReturnValue([]);
+    resolveExternalAuthProfileProviderPluginIdsMock.mockReset();
+    resolveExternalAuthProfileProviderPluginIdsMock.mockReturnValue([]);
+    providerRuntimeWarnMock.mockReset();
   });
 
   it("matches providers by alias for runtime hook lookup", () => {
@@ -353,6 +380,104 @@ describe("provider-runtime", () => {
         onlyPluginIds: ["alpha", "beta"],
       }),
     );
+  });
+
+  it("skips provider runtime loading when no plugin declares external auth hooks", () => {
+    expect(
+      resolveExternalAuthProfilesWithPlugins({
+        env: process.env,
+        context: {
+          env: process.env,
+          store: { version: 1, profiles: {} },
+        },
+      }),
+    ).toEqual([]);
+    expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
+  });
+
+  it("warns once with a log-safe plugin id for undeclared external auth fallback plugins", () => {
+    const unsafePluginId = "legacy-provider\nWARN forged";
+    resolveExternalAuthProfileCompatFallbackPluginIdsMock.mockReturnValue([unsafePluginId]);
+    resolvePluginProvidersMock.mockReturnValue([
+      {
+        id: "legacy-provider",
+        pluginId: unsafePluginId,
+        label: "Legacy Provider",
+        auth: [],
+        resolveExternalOAuthProfiles: () => [
+          {
+            profileId: "legacy-provider:external",
+            credential: {
+              type: "oauth",
+              provider: "legacy-provider",
+              access: "access",
+              refresh: "refresh",
+              expires: Date.now() + 60_000,
+            },
+          },
+        ],
+      },
+    ]);
+
+    for (let i = 0; i < 2; i += 1) {
+      expect(
+        resolveExternalAuthProfilesWithPlugins({
+          env: process.env,
+          context: {
+            env: process.env,
+            store: { version: 1, profiles: {} },
+          },
+        }),
+      ).toEqual([
+        expect.objectContaining({
+          profileId: "legacy-provider:external",
+        }),
+      ]);
+    }
+
+    expect(providerRuntimeWarnMock).toHaveBeenCalledTimes(1);
+    const warning = String(providerRuntimeWarnMock.mock.calls[0]?.[0] ?? "");
+    expect(warning).toContain('Provider plugin "legacy-providerWARN forged"');
+    expect(warning).not.toContain("\n");
+  });
+
+  it("does not warn for declared external auth plugins with different provider ids", () => {
+    resolveExternalAuthProfileProviderPluginIdsMock.mockReturnValue(["demo-plugin"]);
+    resolvePluginProvidersMock.mockReturnValue([
+      {
+        id: "demo-provider",
+        pluginId: "demo-plugin",
+        label: "Demo Provider",
+        auth: [],
+        resolveExternalAuthProfiles: () => [
+          {
+            profileId: "demo-provider:external",
+            credential: {
+              type: "oauth",
+              provider: "demo-provider",
+              access: "access",
+              refresh: "refresh",
+              expires: Date.now() + 60_000,
+            },
+          },
+        ],
+      },
+    ]);
+
+    expect(
+      resolveExternalAuthProfilesWithPlugins({
+        env: process.env,
+        context: {
+          env: process.env,
+          store: { version: 1, profiles: {} },
+        },
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        profileId: "demo-provider:external",
+      }),
+    ]);
+    expect(providerRuntimeWarnMock).not.toHaveBeenCalled();
   });
 
   it("returns provider-prepared runtime auth for the matched provider", async () => {
@@ -679,6 +804,7 @@ describe("provider-runtime", () => {
 
   it("dispatches runtime hooks for the matched provider", async () => {
     resolveCatalogHookProviderPluginIdsMock.mockReturnValue(["openai"]);
+    resolveExternalAuthProfileProviderPluginIdsMock.mockReturnValue(["demo"]);
     const prepareDynamicModel = vi.fn(async () => undefined);
     const createStreamFn = vi.fn(() => vi.fn());
     const createEmbeddingProvider = vi.fn(async () => ({
