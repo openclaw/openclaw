@@ -477,12 +477,63 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
     expect(fs.existsSync(fullMarker)).toBe(false);
   });
 
+  it("does not promote disabled external channels from manifest env", () => {
+    const { pluginDir, fullMarker, setupMarker } = writeExternalSetupChannelPlugin({
+      pluginId: "external-chat-plugin",
+      channelId: "external-chat",
+    });
+    const plugins = listReadOnlyChannelPluginsForConfig(
+      {
+        channels: {
+          "external-chat": { enabled: false },
+        },
+        plugins: {
+          load: { paths: [pluginDir] },
+          allow: ["external-chat-plugin"],
+        },
+      } as never,
+      {
+        env: { ...process.env, EXTERNAL_CHAT_TOKEN: "configured" },
+        includePersistedAuthState: false,
+      },
+    );
+
+    expect(plugins.some((entry) => entry.id === "external-chat")).toBe(false);
+    expect(fs.existsSync(setupMarker)).toBe(false);
+    expect(fs.existsSync(fullMarker)).toBe(false);
+  });
+
   it("does not promote disabled bundled channels from ambient env", () => {
     const { channelId, envVar, fullMarker, setupMarker } = writeBundledSetupChannelPlugin();
     const plugins = listReadOnlyChannelPluginsForConfig(
       {
         plugins: {
           allow: ["memory-core"],
+        },
+      } as never,
+      {
+        env: { ...process.env, [envVar]: "configured" },
+        includePersistedAuthState: false,
+      },
+    );
+
+    expect(plugins.some((entry) => entry.id === channelId)).toBe(false);
+    expect(fs.existsSync(setupMarker)).toBe(false);
+    expect(fs.existsSync(fullMarker)).toBe(false);
+  });
+
+  it("does not promote explicitly disabled bundled channels from ambient env", () => {
+    const { channelId, envVar, fullMarker, pluginId, setupMarker } =
+      writeBundledSetupChannelPlugin();
+    const plugins = listReadOnlyChannelPluginsForConfig(
+      {
+        channels: {
+          [channelId]: { enabled: false },
+        },
+        plugins: {
+          entries: {
+            [pluginId]: { enabled: true },
+          },
         },
       } as never,
       {

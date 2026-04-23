@@ -18,6 +18,16 @@ import type { MemorySearchConfig } from "./types.tools.js";
 export type AgentContextInjection = "always" | "continuation-skip";
 export type EmbeddedPiExecutionContract = "default" | "strict-agentic";
 
+export type Gpt5PromptOverlayConfig = {
+  /** Friendly interaction-style layer for GPT-5-family models (default: friendly). */
+  personality?: "friendly" | "on" | "off";
+};
+
+export type PromptOverlaysConfig = {
+  /** Shared GPT-5-family prompt overlay used across providers. */
+  gpt5?: Gpt5PromptOverlayConfig;
+};
+
 export type AgentModelEntryConfig = {
   alias?: string;
   /** Provider-specific API parameters (e.g., GLM-4.7 thinking mode). */
@@ -91,6 +101,8 @@ export type CliBackendConfig = {
   resumeOutput?: "json" | "text" | "jsonl";
   /** JSONL event dialect for CLIs with provider-specific stream formats. */
   jsonlDialect?: "claude-stream-json";
+  /** Long-lived CLI process mode. */
+  liveSession?: "claude-stdio";
   /** Prompt input mode (default: arg). */
   input?: "arg" | "stdin";
   /** Max prompt length for arg mode (if exceeded, stdin is used). */
@@ -203,6 +215,8 @@ export type AgentDefaultsConfig = {
   repoRoot?: string;
   /** Optional full system prompt replacement. Primarily for prompt debugging and controlled experiments. */
   systemPromptOverride?: string;
+  /** Provider-independent prompt overlays applied by model family. */
+  promptOverlays?: PromptOverlaysConfig;
   /** Skip bootstrap (BOOTSTRAP.md creation, etc.) for pre-configured deployments. */
   skipBootstrap?: boolean;
   /**

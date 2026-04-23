@@ -109,7 +109,7 @@ export type {
 export type { OpenClawConfig } from "../config/config.js";
 export type { OutboundIdentity } from "../infra/outbound/identity.js";
 export type { HistoryEntry } from "../auto-reply/reply/history.js";
-export type { ReplyPayload } from "../auto-reply/reply-payload.js";
+export type { ReplyPayload } from "./reply-payload.js";
 export type { AllowlistMatch } from "../channels/allowlist-match.js";
 export type {
   BaseProbeResult,
@@ -243,7 +243,7 @@ export type ChannelOutboundSessionRouteParams = Parameters<
   NonNullable<ChannelMessagingAdapter["resolveOutboundSessionRoute"]>
 >[0];
 
-var cachedSdkChatChannelMeta:
+let cachedSdkChatChannelMeta:
   | {
       cacheKey: string;
       metaById: ReturnType<typeof buildChatChannelMetaById>;

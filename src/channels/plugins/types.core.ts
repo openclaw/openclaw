@@ -1,5 +1,5 @@
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
-import type { TSchema } from "@sinclair/typebox";
+import type { TSchema } from "typebox";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { MarkdownTableMode } from "../../config/types.base.js";
@@ -199,6 +199,7 @@ export type ChannelAccountSnapshot = {
     | null;
   lastMessageAt?: number | null;
   lastEventAt?: number | null;
+  lastTransportActivityAt?: number | null;
   lastError?: string | null;
   healthState?: string;
   lastStartAt?: number | null;
@@ -384,6 +385,10 @@ export type ChannelThreadingAdapter = {
     to: string;
     toolContext?: ChannelThreadingToolContext;
     replyToId?: string | null;
+  }) => string | undefined;
+  resolveCurrentChannelId?: (params: {
+    to: string;
+    threadId?: string | number | null;
   }) => string | undefined;
   resolveReplyTransport?: (params: {
     cfg: OpenClawConfig;

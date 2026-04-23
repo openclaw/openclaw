@@ -76,7 +76,7 @@ import {
   type FollowupRun,
   type QueueSettings,
 } from "./queue.js";
-import { createReplyMediaPathNormalizer } from "./reply-media-paths.js";
+import { createReplyMediaContext } from "./reply-media-paths.js";
 import {
   createReplyOperation,
   ReplyRunAlreadyActiveError,
@@ -885,6 +885,7 @@ export async function runReplyAgent(params: {
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
+  runtimePolicySessionKey?: string;
   storePath?: string;
   defaultModel: string;
   agentCfgContextTokens?: number;
@@ -902,6 +903,7 @@ export async function runReplyAgent(params: {
   shouldInjectGroupIntro: boolean;
   typingMode: TypingMode;
   resetTriggered?: boolean;
+  replyThreadingOverride?: TemplateContext["ReplyThreading"];
   replyOperation?: ReplyOperation;
 }): Promise<ReplyPayload | ReplyPayload[] | undefined> {
   const {
@@ -919,6 +921,7 @@ export async function runReplyAgent(params: {
     sessionEntry,
     sessionStore,
     sessionKey,
+    runtimePolicySessionKey,
     storePath,
     defaultModel,
     agentCfgContextTokens,
@@ -931,6 +934,7 @@ export async function runReplyAgent(params: {
     shouldInjectGroupIntro,
     typingMode,
     resetTriggered,
+    replyThreadingOverride,
     replyOperation: providedReplyOperation,
   } = params;
 
@@ -1049,7 +1053,7 @@ export async function runReplyAgent(params: {
   );
   const applyReplyToMode = createReplyToModeFilterForChannel(replyToMode, replyToChannel);
   const cfg = followupRun.run.config;
-  const normalizeReplyMediaPaths = createReplyMediaPathNormalizer({
+  const replyMediaContext = createReplyMediaContext({
     cfg,
     sessionKey,
     workspaceDir: followupRun.run.workspaceDir,
@@ -1118,6 +1122,7 @@ export async function runReplyAgent(params: {
       sessionEntry: activeSessionEntry,
       sessionStore: activeSessionStore,
       sessionKey,
+      runtimePolicySessionKey,
       storePath,
       isHeartbeat,
       replyOperation,
@@ -1137,6 +1142,7 @@ export async function runReplyAgent(params: {
       sessionEntry: activeSessionEntry,
       sessionStore: activeSessionStore,
       sessionKey,
+      runtimePolicySessionKey,
       storePath,
       isHeartbeat,
       replyOperation,
@@ -1206,6 +1212,7 @@ export async function runReplyAgent(params: {
       commandBody,
       followupRun,
       sessionCtx,
+      replyThreading: replyThreadingOverride ?? sessionCtx.ReplyThreading,
       replyOperation,
       opts,
       typingSignals,
@@ -1221,10 +1228,12 @@ export async function runReplyAgent(params: {
       resetSessionAfterRoleOrderingConflict,
       isHeartbeat,
       sessionKey,
+      runtimePolicySessionKey,
       getActiveSessionEntry: () => activeSessionEntry,
       activeSessionStore,
       storePath,
       resolvedVerboseLevel,
+      replyMediaContext,
     });
 
     if (runOutcome.kind === "final") {
@@ -1357,6 +1366,7 @@ export async function runReplyAgent(params: {
       return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
     }
 
+    const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
     const payloadResult = await buildReplyPayloads({
       payloads: payloadArray,
       isHeartbeat,
@@ -1367,8 +1377,8 @@ export async function runReplyAgent(params: {
       directlySentBlockKeys,
       replyToMode,
       replyToChannel,
-      currentMessageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
-      replyThreading: sessionCtx.ReplyThreading,
+      currentMessageId,
+      replyThreading: replyThreadingOverride ?? sessionCtx.ReplyThreading,
       messageProvider: followupRun.run.messageProvider,
       messagingToolSentTexts: runResult.messagingToolSentTexts,
       messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
@@ -1379,7 +1389,7 @@ export async function runReplyAgent(params: {
         to: sessionCtx.To,
       }),
       accountId: sessionCtx.AccountId,
-      normalizeMediaPaths: normalizeReplyMediaPaths,
+      normalizeMediaPaths: replyMediaContext.normalizePayload,
     });
     const { replyPayloads } = payloadResult;
     didLogHeartbeatStrip = payloadResult.didLogHeartbeatStrip;

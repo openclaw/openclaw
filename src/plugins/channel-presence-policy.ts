@@ -322,6 +322,24 @@ function addPolicySignal(
   sources.add(source);
 }
 
+function listDisabledChannelIdsForConfig(config: OpenClawConfig): string[] {
+  const channels = config.channels;
+  if (!channels || typeof channels !== "object" || Array.isArray(channels)) {
+    return [];
+  }
+  return Object.entries(channels)
+    .filter(([, value]) => {
+      return (
+        value &&
+        typeof value === "object" &&
+        !Array.isArray(value) &&
+        (value as { enabled?: unknown }).enabled === false
+      );
+    })
+    .map(([channelId]) => normalizeOptionalLowercaseString(channelId))
+    .filter((channelId): channelId is string => Boolean(channelId));
+}
+
 export function resolveConfiguredChannelPresencePolicy(params: {
   config: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
@@ -344,6 +362,7 @@ export function resolveConfiguredChannelPresencePolicy(params: {
       cache: params.cache,
     }).plugins;
 
+  const disabledChannelIds = new Set(listDisabledChannelIdsForConfig(params.config));
   const entrySources = new Map<string, Set<ConfiguredChannelPresenceSource>>();
   for (const channelId of listExplicitConfiguredChannelIdsForConfig(params.config)) {
     addPolicySignal(entrySources, channelId, "explicit-config");
@@ -363,6 +382,9 @@ export function resolveConfiguredChannelPresencePolicy(params: {
     env,
   })) {
     addPolicySignal(entrySources, signal.channelId, signal.source);
+  }
+  for (const channelId of disabledChannelIds) {
+    entrySources.delete(channelId);
   }
 
   const activationSource = createPluginActivationSource({
@@ -428,22 +450,7 @@ export function listConfiguredAnnounceChannelIdsForConfig(params: {
   env?: NodeJS.ProcessEnv;
   cache?: boolean;
 }): string[] {
-  const channels = params.config.channels;
-  const disabledChannelIds = new Set(
-    channels && typeof channels === "object" && !Array.isArray(channels)
-      ? Object.entries(channels)
-          .filter(([, value]) => {
-            return (
-              value &&
-              typeof value === "object" &&
-              !Array.isArray(value) &&
-              (value as { enabled?: unknown }).enabled === false
-            );
-          })
-          .map(([channelId]) => normalizeOptionalLowercaseString(channelId))
-          .filter((channelId): channelId is string => Boolean(channelId))
-      : [],
-  );
+  const disabledChannelIds = new Set(listDisabledChannelIdsForConfig(params.config));
   return normalizeChannelIds([
     ...listExplicitConfiguredChannelIdsForConfig(params.config),
     ...listConfiguredChannelIdsForReadOnlyScope({

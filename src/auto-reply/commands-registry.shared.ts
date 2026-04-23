@@ -831,7 +831,7 @@ export function buildBuiltinChatCommands(): ChatCommandDefinition[] {
     defineChatCommand({
       key: "models",
       nativeName: "models",
-      description: "List model providers or provider models.",
+      description: "List model providers/models or add a model.",
       textAlias: "/models",
       tier: "standard",
       argsParsing: "none",

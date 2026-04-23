@@ -1,7 +1,4 @@
-import {
-  resolveWhatsAppDirectSystemPrompt,
-  resolveWhatsAppGroupSystemPrompt,
-} from "../../system-prompt.js";
+import { resolveBatchedReplyThreadingPolicy } from "openclaw/plugin-sdk/reply-reference";
 import { getPrimaryIdentityId, getSelfIdentity, getSenderIdentity } from "../../identity.js";
 import {
   resolveWhatsAppCommandAuthorized,
@@ -10,6 +7,10 @@ import {
 } from "../../inbound-policy.js";
 import { newConnectionId } from "../../reconnect.js";
 import { formatError } from "../../session.js";
+import {
+  resolveWhatsAppDirectSystemPrompt,
+  resolveWhatsAppGroupSystemPrompt,
+} from "../../system-prompt.js";
 import { deliverWebReply } from "../deliver-reply.js";
 import { whatsappInboundLog } from "../loggers.js";
 import type { WebInboundMsg } from "../types.js";
@@ -230,6 +231,10 @@ export async function processMessage(params: {
     isSelfChat: params.msg.chatType !== "group" && inboundPolicy.isSelfChat,
     pipelineResponsePrefix: replyPipeline.responsePrefix,
   });
+  const replyThreading = resolveBatchedReplyThreadingPolicy(
+    account.replyToMode ?? "off",
+    params.msg.isBatched === true,
+  );
 
   // Resolve combined conversation system prompt using the group or direct surface.
   const conversationSystemPrompt =
@@ -257,6 +262,7 @@ export async function processMessage(params: {
       name: sender.name ?? undefined,
       e164: sender.e164 ?? undefined,
     },
+    replyThreading,
     visibleReplyTo: visibleReplyTo ?? undefined,
   });
 

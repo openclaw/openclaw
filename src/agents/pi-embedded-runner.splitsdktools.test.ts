@@ -12,11 +12,10 @@ describe("splitSdkTools", () => {
   ];
 
   it("routes all tools to customTools when sandboxed", () => {
-    const { builtInTools, customTools } = splitSdkTools({
+    const { customTools } = splitSdkTools({
       tools,
       sandboxEnabled: true,
     });
-    expect(builtInTools).toEqual([]);
     expect(customTools.map((tool) => tool.name)).toEqual([
       "read",
       "exec",
@@ -27,11 +26,10 @@ describe("splitSdkTools", () => {
   });
 
   it("routes all tools to customTools even when not sandboxed", () => {
-    const { builtInTools, customTools } = splitSdkTools({
+    const { customTools } = splitSdkTools({
       tools,
       sandboxEnabled: false,
     });
-    expect(builtInTools).toEqual([]);
     expect(customTools.map((tool) => tool.name)).toEqual([
       "read",
       "exec",

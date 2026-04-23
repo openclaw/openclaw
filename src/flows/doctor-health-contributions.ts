@@ -123,7 +123,15 @@ async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void>
     authConfig: ctx.cfg.gateway?.auth,
     tailscaleMode: ctx.cfg.gateway?.tailscale?.mode ?? "off",
   });
-  const needsToken = auth.mode !== "password" && (auth.mode !== "token" || !auth.token);
+  // Modes that don't need a token: password, none, trusted-proxy.
+  // This aligns with hasExplicitGatewayInstallAuthMode() in auth-install-policy.ts.
+  // Previously, only "password" and "token" (with a token present) were excluded,
+  // causing doctor --fix to overwrite trusted-proxy/none configs with token mode.
+  const needsToken =
+    auth.mode !== "password" &&
+    auth.mode !== "none" &&
+    auth.mode !== "trusted-proxy" &&
+    (auth.mode !== "token" || !auth.token);
   if (!needsToken) {
     return;
   }
@@ -222,6 +230,7 @@ async function runBundledPluginRuntimeDepsHealth(ctx: DoctorHealthFlowContext): 
     runtime: ctx.runtime,
     prompter: ctx.prompter,
     config: ctx.cfg,
+    includeConfiguredChannels: true,
   });
 }
 
@@ -510,6 +519,11 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       run: runGatewayConfigHealth,
     }),
     createDoctorHealthContribution({
+      id: "doctor:bundled-plugin-runtime-deps",
+      label: "Bundled plugin runtime deps",
+      run: runBundledPluginRuntimeDepsHealth,
+    }),
+    createDoctorHealthContribution({
       id: "doctor:auth-profiles",
       label: "Auth profiles",
       run: runAuthProfileHealth,
@@ -533,11 +547,6 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       id: "doctor:legacy-plugin-manifests",
       label: "Legacy plugin manifests",
       run: runLegacyPluginManifestHealth,
-    }),
-    createDoctorHealthContribution({
-      id: "doctor:bundled-plugin-runtime-deps",
-      label: "Bundled plugin runtime deps",
-      run: runBundledPluginRuntimeDepsHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:state-integrity",

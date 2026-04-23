@@ -310,10 +310,15 @@ async function callTool(
   userDataDir: string | undefined,
   name: string,
   args: Record<string, unknown> = {},
-  timeoutMs?: number,
+  opts?: { timeoutMs?: number; signal?: AbortSignal },
 ): Promise<ChromeMcpToolResult> {
   const cacheKey = buildChromeMcpSessionCacheKey(profileName, userDataDir);
   const session = await getSession(profileName, userDataDir);
+  const timeoutMs = opts?.timeoutMs;
+  const signal = opts?.signal;
+  if (signal?.aborted) {
+    throw signal.reason ?? new Error("aborted");
+  }
 
   const rawCall = session.client.callTool({
     name,
@@ -321,35 +326,39 @@ async function callTool(
   }) as Promise<ChromeMcpToolResult>;
 
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
-  const callPromise: Promise<ChromeMcpToolResult> =
-    timeoutMs !== undefined && timeoutMs > 0
-      ? Promise.race([
-          rawCall,
-          new Promise<never>((_, reject) => {
-            timeoutHandle = setTimeout(() => {
-              // Use transport-identity check so we never delete a freshly-created replacement session.
-              const cur = sessions.get(cacheKey);
-              if (cur?.transport === session.transport) {
-                sessions.delete(cacheKey);
-              }
-              void session.client.close().catch(() => {});
-              reject(
-                new Error(
-                  `Chrome MCP "${name}" timed out after ${timeoutMs}ms. Session reset for reconnect.`,
-                ),
-              );
-            }, timeoutMs);
-          }),
-        ])
-      : rawCall;
+  let abortListener: (() => void) | undefined;
+  const racers: Array<Promise<ChromeMcpToolResult> | Promise<never>> = [rawCall];
+
+  if (timeoutMs !== undefined && timeoutMs > 0) {
+    racers.push(
+      new Promise<never>((_, reject) => {
+        timeoutHandle = setTimeout(() => {
+          reject(
+            new Error(
+              `Chrome MCP "${name}" timed out after ${timeoutMs}ms. Session reset for reconnect.`,
+            ),
+          );
+        }, timeoutMs);
+      }),
+    );
+  }
+
+  if (signal) {
+    racers.push(
+      new Promise<never>((_, reject) => {
+        abortListener = () => reject(signal.reason ?? new Error("aborted"));
+        signal.addEventListener("abort", abortListener, { once: true });
+      }),
+    );
+  }
 
   let result: ChromeMcpToolResult;
   try {
-    result = await callPromise;
+    result = racers.length === 1 ? await rawCall : await Promise.race(racers);
   } catch (err) {
-    // Transport/connection error or safety-net timeout — tear down session so it reconnects.
+    void rawCall.catch(() => {});
+    // Transport/connection error, timeout, or abort: tear down session so it reconnects.
     // Transport-identity check prevents clobbering a replacement session created concurrently.
-    // Only close the client here if the timeout callback hasn't already done so.
     const cur = sessions.get(cacheKey);
     if (cur?.transport === session.transport) {
       sessions.delete(cacheKey);
@@ -359,6 +368,9 @@ async function callTool(
   } finally {
     if (timeoutHandle !== undefined) {
       clearTimeout(timeoutHandle);
+    }
+    if (signal && abortListener) {
+      signal.removeEventListener("abort", abortListener);
     }
   }
   // Tool-level errors (element not found, script error, etc.) don't indicate a
@@ -507,7 +519,7 @@ export async function navigateChromeMcpPage(params: {
       url: params.url,
       timeout: resolvedTimeoutMs,
     },
-    resolvedTimeoutMs + 5_000,
+    { timeoutMs: resolvedTimeoutMs + 5_000 },
   );
   const page = await findPageById(
     params.profileName,
@@ -554,12 +566,23 @@ export async function clickChromeMcpElement(params: {
   targetId: string;
   uid: string;
   doubleClick?: boolean;
+  timeoutMs?: number;
+  signal?: AbortSignal;
 }): Promise<void> {
-  await callTool(params.profileName, params.userDataDir, "click", {
-    pageId: parsePageId(params.targetId),
-    uid: params.uid,
-    ...(params.doubleClick ? { dblClick: true } : {}),
-  });
+  await callTool(
+    params.profileName,
+    params.userDataDir,
+    "click",
+    {
+      pageId: parsePageId(params.targetId),
+      uid: params.uid,
+      ...(params.doubleClick ? { dblClick: true } : {}),
+    },
+    {
+      timeoutMs: params.timeoutMs,
+      signal: params.signal,
+    },
+  );
 }
 
 export async function fillChromeMcpElement(params: {

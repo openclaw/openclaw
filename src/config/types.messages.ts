@@ -182,6 +182,8 @@ export type CommandsConfig = {
   nativeSkills?: NativeCommandsSetting;
   /** Enable text command parsing (default: true). */
   text?: boolean;
+  /** Allow model-management write commands like `/models add` (default: true). */
+  modelsWrite?: boolean;
   /** Allow bash chat command (`!`; `/bash` alias) (default: false). */
   bash?: boolean;
   /** How long bash waits before backgrounding (default: 2000; 0 backgrounds immediately). */
