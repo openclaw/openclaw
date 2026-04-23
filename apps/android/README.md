@@ -256,7 +256,8 @@ Pre-req checklist:
 
 ```bash
 openclaw devices list
-openclaw devices approve --latest
+openclaw devices approve --latest   # preview only — copy the requestId from output
+openclaw devices approve <requestId>
 ```
 
 Run:
@@ -282,7 +283,7 @@ What it does:
 Common failure quick-fixes:
 
 - `pairing required` before tests start:
-  - approve pending device pairing (`openclaw devices approve --latest`) and rerun.
+  - list pending requests (`openclaw devices list`), then approve with the exact ID (`openclaw devices approve <requestId>`) and rerun.
 - `A2UI host not reachable` / `A2UI_HOST_NOT_CONFIGURED`:
   - ensure gateway canvas host is running and reachable, keep the app on the **Screen** tab. The app will auto-refresh canvas capability once; if it still fails, reconnect app and rerun.
 - `NODE_BACKGROUND_UNAVAILABLE: canvas unavailable`:
