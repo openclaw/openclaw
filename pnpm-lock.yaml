@@ -604,6 +604,22 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
+  extensions/google-meet:
+    dependencies:
+      commander:
+        specifier: ^14.0.3
+        version: 14.0.3
+      typebox:
+        specifier: 1.1.28
+        version: 1.1.28
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
   extensions/googlechat:
     dependencies:
       gaxios:
