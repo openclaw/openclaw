@@ -16,7 +16,7 @@ export function buildOpenAICodexCliBackend(): CliBackendPlugin {
       defaultImageProbe: true,
       defaultMcpProbe: true,
       docker: {
-        npmPackage: "@openai/codex",
+        npmPackage: "@openai/codex@0.124.0",
         binaryName: "codex",
       },
     },
@@ -34,6 +34,8 @@ export function buildOpenAICodexCliBackend(): CliBackendPlugin {
         "never",
         "--sandbox",
         "workspace-write",
+        "-c",
+        'service_tier="fast"',
         "--skip-git-repo-check",
       ],
       resumeArgs: [
@@ -42,6 +44,8 @@ export function buildOpenAICodexCliBackend(): CliBackendPlugin {
         "{sessionId}",
         "-c",
         'sandbox_mode="workspace-write"',
+        "-c",
+        'service_tier="fast"',
         "--skip-git-repo-check",
       ],
       output: "jsonl",

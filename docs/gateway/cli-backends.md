@@ -325,7 +325,9 @@ opt into a generated MCP config overlay with `bundleMcp: true`.
 Current bundled behavior:
 
 - `claude-cli`: generated strict MCP config file
-- `codex-cli`: inline config overrides for `mcp_servers`
+- `codex-cli`: inline config overrides for `mcp_servers`; the generated
+  OpenClaw loopback server is marked with Codex's per-server tool approval mode
+  so MCP calls cannot stall on local approval prompts
 - `google-gemini-cli`: generated Gemini system settings file
 
 When bundle MCP is enabled, OpenClaw:
