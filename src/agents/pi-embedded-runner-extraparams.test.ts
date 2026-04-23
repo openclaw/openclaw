@@ -1580,7 +1580,7 @@ describe("applyExtraParamsToAgent", () => {
     expect(calls[0]?.transport).toBe("auto");
   });
 
-  it("defaults OpenAI transport to auto with websocket warm-up", () => {
+  it("defaults OpenAI transport to auto without websocket warm-up", () => {
     const { calls, agent } = createOptionsCaptureAgent();
 
     applyExtraParamsToAgent(agent, undefined, "openai", "gpt-5");
@@ -1595,7 +1595,7 @@ describe("applyExtraParamsToAgent", () => {
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.transport).toBe("auto");
-    expect(calls[0]?.openaiWsWarmup).toBe(true);
+    expect(calls[0]?.openaiWsWarmup).toBe(false);
   });
 
   it("injects GPT-5 default parallel tool calls and low verbosity for OpenAI Responses payloads", () => {

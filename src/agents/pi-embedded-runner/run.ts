@@ -1742,6 +1742,10 @@ export async function runEmbeddedPiAgent(
             toolMediaUrls: attempt.toolMediaUrls,
             toolAudioAsVoice: attempt.toolAudioAsVoice,
           });
+          const attemptToolSummary = buildTraceToolSummary({
+            toolMetas: attempt.toolMetas,
+            hadFailure: Boolean(attempt.lastToolError),
+          });
 
           // Timeout aborts can leave the run without any assistant payloads.
           // Emit an explicit timeout error instead of silently completing, so
@@ -1781,6 +1785,7 @@ export async function runEmbeddedPiAgent(
                 finalAssistantRawText,
                 replayInvalid,
                 livenessState,
+                toolSummary: attemptToolSummary,
               },
               didSendViaMessagingTool: attempt.didSendViaMessagingTool,
               didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
@@ -1941,6 +1946,7 @@ export async function runEmbeddedPiAgent(
                 finalAssistantRawText,
                 replayInvalid,
                 livenessState,
+                toolSummary: attemptToolSummary,
               },
               didSendViaMessagingTool: attempt.didSendViaMessagingTool,
               didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
@@ -1988,6 +1994,7 @@ export async function runEmbeddedPiAgent(
                 finalAssistantRawText,
                 replayInvalid,
                 livenessState,
+                toolSummary: attemptToolSummary,
               },
               didSendViaMessagingTool: attempt.didSendViaMessagingTool,
               didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
@@ -2097,6 +2104,7 @@ export async function runEmbeddedPiAgent(
                 finalAssistantRawText,
                 replayInvalid,
                 livenessState,
+                toolSummary: attemptToolSummary,
               },
               didSendViaMessagingTool: attempt.didSendViaMessagingTool,
               didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
@@ -2195,10 +2203,7 @@ export async function runEmbeddedPiAgent(
                 ...(params.verboseLevel ? { verbose: params.verboseLevel } : {}),
                 ...(params.blockReplyBreak ? { blockStreaming: params.blockReplyBreak } : {}),
               },
-              toolSummary: buildTraceToolSummary({
-                toolMetas: attempt.toolMetas,
-                hadFailure: Boolean(attempt.lastToolError),
-              }),
+              toolSummary: attemptToolSummary,
               completion: {
                 ...(stopReason ? { stopReason } : {}),
                 ...(stopReason ? { finishReason: stopReason } : {}),

@@ -214,7 +214,7 @@ function applyDefaultOpenAIGptRuntimeParams(
     merged.text_verbosity = "low";
   }
   if (!Object.hasOwn(merged, "openaiWsWarmup")) {
-    merged.openaiWsWarmup = true;
+    merged.openaiWsWarmup = false;
   }
 }
 
