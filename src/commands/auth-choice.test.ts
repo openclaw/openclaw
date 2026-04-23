@@ -516,7 +516,7 @@ async function createDefaultProviderPlugins(): Promise<ProviderPlugin[]> {
       envVar: "OPENCODE_API_KEY",
       promptMessage: "Enter OpenCode API key",
       profileIds: ["opencode-go:default", "opencode:default"],
-      defaultModel: "opencode-go/kimi-k2.5",
+      defaultModel: "opencode-go/kimi-k2.6",
       expectedProviders: ["opencode", "opencode-go"],
       noteMessage: "OpenCode uses one API key across the Zen and Go catalogs.",
       noteTitle: "OpenCode",

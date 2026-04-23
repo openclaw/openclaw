@@ -338,7 +338,7 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - Auth: `OPENCODE_API_KEY` (or `OPENCODE_ZEN_API_KEY`)
 - Zen runtime provider: `opencode`
 - Go runtime provider: `opencode-go`
-- Example models: `opencode/claude-opus-4-6`, `opencode-go/kimi-k2.5`
+- Example models: `opencode/claude-opus-4-6`, `opencode-go/kimi-k2.6`
 - CLI: `openclaw onboard --auth-choice opencode-zen` or `openclaw onboard --auth-choice opencode-go`
 
 ```json5
