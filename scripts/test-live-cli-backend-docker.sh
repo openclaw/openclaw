@@ -421,7 +421,7 @@ else
   )
 fi
 
-docker run --rm -t \
+DOCKER_RUN_ARGS=(docker run --rm -t \
   -u "$DOCKER_USER" \
   --entrypoint bash \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
@@ -452,16 +452,19 @@ docker run --rm -t \
   -e OPENCLAW_LIVE_CLI_BACKEND_IMAGE_PROBE="${OPENCLAW_LIVE_CLI_BACKEND_IMAGE_PROBE:-}" \
   -e OPENCLAW_LIVE_CLI_BACKEND_MCP_PROBE="${OPENCLAW_LIVE_CLI_BACKEND_MCP_PROBE:-}" \
   -e OPENCLAW_LIVE_CLI_BACKEND_IMAGE_ARG="${OPENCLAW_LIVE_CLI_BACKEND_IMAGE_ARG:-}" \
-  -e OPENCLAW_LIVE_CLI_BACKEND_IMAGE_MODE="${OPENCLAW_LIVE_CLI_BACKEND_IMAGE_MODE:-}" \
-  "${DOCKER_HOME_MOUNT[@]}" \
-  "${DOCKER_EXTRA_ENV_FILES[@]}" \
+  -e OPENCLAW_LIVE_CLI_BACKEND_IMAGE_MODE="${OPENCLAW_LIVE_CLI_BACKEND_IMAGE_MODE:-}")
+openclaw_live_append_array DOCKER_RUN_ARGS DOCKER_HOME_MOUNT
+openclaw_live_append_array DOCKER_RUN_ARGS DOCKER_EXTRA_ENV_FILES
+DOCKER_RUN_ARGS+=(\
   -v "$CACHE_HOME_DIR":/home/node/.cache \
   -v "$ROOT_DIR":/src:ro \
   -v "$CONFIG_DIR":/home/node/.openclaw \
   -v "$WORKSPACE_DIR":/home/node/.openclaw/workspace \
-  -v "$CLI_TOOLS_DIR":/home/node/.npm-global \
-  "${EXTERNAL_AUTH_MOUNTS[@]}" \
-  "${DOCKER_AUTH_ENV[@]}" \
-  "${PROFILE_MOUNT[@]}" \
+  -v "$CLI_TOOLS_DIR":/home/node/.npm-global)
+openclaw_live_append_array DOCKER_RUN_ARGS EXTERNAL_AUTH_MOUNTS
+openclaw_live_append_array DOCKER_RUN_ARGS DOCKER_AUTH_ENV
+openclaw_live_append_array DOCKER_RUN_ARGS PROFILE_MOUNT
+DOCKER_RUN_ARGS+=(\
   "$LIVE_IMAGE_NAME" \
-  -lc "$LIVE_TEST_CMD"
+  -lc "$LIVE_TEST_CMD")
+"${DOCKER_RUN_ARGS[@]}"

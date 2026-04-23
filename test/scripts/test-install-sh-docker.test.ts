@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 
 const SCRIPT_PATH = "scripts/test-install-sh-docker.sh";
 const SMOKE_RUNNER_PATH = "scripts/docker/install-sh-smoke/run.sh";
+const BUN_GLOBAL_SMOKE_PATH = "scripts/e2e/bun-global-install-smoke.sh";
+const INSTALL_SMOKE_WORKFLOW_PATH = ".github/workflows/install-smoke.yml";
 
 describe("test-install-sh-docker", () => {
   it("defaults local Apple Silicon smoke runs to native arm64 while keeping CI on amd64", () => {
@@ -79,6 +81,8 @@ describe("install-sh smoke runner", () => {
     expect(script).toContain("print_install_audit");
     expect(script).toContain('install -g "$@"');
     expect(script).toContain("openclaw update --tag");
+    expect(script).toContain("parseFirstJsonObject");
+    expect(script).toContain("unterminated update JSON object");
   });
 
   it("covers plain npm global installs and npm-driven updates", () => {
@@ -91,5 +95,28 @@ describe("install-sh smoke runner", () => {
     expect(runner).toContain("run_npm_global_smoke");
     expect(runner).toContain("==> Direct npm global install candidate");
     expect(runner).toContain("==> Direct npm global update candidate");
+  });
+});
+
+describe("bun global install smoke", () => {
+  it("packs the current tree and verifies image-provider discovery through Bun", () => {
+    const script = readFileSync(BUN_GLOBAL_SMOKE_PATH, "utf8");
+
+    expect(script).toContain("npm pack --ignore-scripts --json --pack-destination");
+    expect(script).toContain('"$bun_path" install -g "$PACKAGE_TGZ" --no-progress');
+    expect(script).toContain("infer image providers --json");
+    expect(script).toContain("image providers output is missing bundled provider");
+    expect(script).toContain("OPENCLAW_BUN_GLOBAL_SMOKE_DIST_IMAGE");
+  });
+
+  it("runs from the install-smoke workflow with Bun enabled", () => {
+    const workflow = readFileSync(INSTALL_SMOKE_WORKFLOW_PATH, "utf8");
+
+    expect(workflow).toContain('install-bun: "true"');
+    expect(workflow).toContain("Run Bun global install image-provider smoke");
+    expect(workflow).toContain("bash scripts/e2e/bun-global-install-smoke.sh");
+    expect(workflow).toContain(
+      "OPENCLAW_BUN_GLOBAL_SMOKE_DIST_IMAGE: openclaw-dockerfile-smoke:local",
+    );
   });
 });

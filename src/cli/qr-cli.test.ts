@@ -235,18 +235,18 @@ describe("registerQrCli", () => {
     expect(output).toContain("gateway.tailscale.mode=serve");
   });
 
-  it("allows lan mdns cleartext setup urls", async () => {
+  it("allows private LAN IP cleartext setup urls", async () => {
     loadConfig.mockReturnValue({
       gateway: {
         bind: "custom",
-        customBindHost: "gateway.local",
+        customBindHost: "192.168.1.8",
         auth: { mode: "token", token: "tok" },
       },
     });
 
     await runQr(["--setup-code-only"]);
 
-    expectLoggedSetupCode("ws://gateway.local:18789");
+    expectLoggedSetupCode("ws://192.168.1.8:18789");
   });
 
   it("allows android emulator cleartext override urls", async () => {

@@ -29,7 +29,7 @@ export function registerGroupIntroPromptCases(): void {
           Provider: "discord",
         },
         expected: [
-          `You are in the Discord group chat "Release Squad". Participants: Alice, Bob.`,
+          "You are in a Discord group chat.",
           `Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included). ${groupParticipationNote} Address the specific sender noted in the message context.`,
         ],
       },
@@ -44,7 +44,7 @@ export function registerGroupIntroPromptCases(): void {
           Provider: "whatsapp",
         },
         expected: [
-          `You are in the WhatsApp group chat "Ops". Your replies are automatically sent to this group chat. Do not use the message tool to send to this same group - just reply normally.`,
+          "You are in a WhatsApp group chat. Your replies are automatically sent to this group chat. Do not use the message tool to send to this same group - just reply normally.",
           `Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included). ${groupParticipationNote} Address the specific sender noted in the message context.`,
         ],
       },
@@ -59,7 +59,7 @@ export function registerGroupIntroPromptCases(): void {
           Provider: "telegram",
         },
         expected: [
-          `You are in the Telegram group chat "Dev Chat".`,
+          "You are in a Telegram group chat.",
           `Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included). ${groupParticipationNote} Address the specific sender noted in the message context.`,
         ],
       },
@@ -88,7 +88,7 @@ export function registerGroupIntroPromptCases(): void {
           GroupMembers: "Alice (+1), Bob (+2)",
         },
         expected: [
-          `You are in the WhatsApp group chat "Test Group". Participants: Alice (+1), Bob (+2).`,
+          "You are in a WhatsApp group chat.",
           "Activation: always-on (you receive every group message).",
         ],
         defaultActivation: "always",

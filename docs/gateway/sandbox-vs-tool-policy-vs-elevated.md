@@ -67,7 +67,7 @@ Rules of thumb:
 - If `allow` is non-empty, everything else is treated as blocked.
 - Tool policy is the hard stop: `/exec` cannot override a denied `exec` tool.
 - `/exec` only changes session defaults for authorized senders; it does not grant tool access.
-  Provider tool keys accept either `provider` (e.g. `google-antigravity`) or `provider/model` (e.g. `openai/gpt-5.4`).
+  Provider tool keys accept either `provider` (e.g. `google-antigravity`) or `provider/model` (e.g. `openai/gpt-5.5`).
 
 ### Tool groups (shorthands)
 

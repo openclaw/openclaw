@@ -49,8 +49,10 @@ export function selectAgentHarness(params: {
   config?: OpenClawConfig;
   agentId?: string;
   sessionKey?: string;
+  agentHarnessId?: string;
 }): AgentHarness {
-  const policy = resolveAgentHarnessPolicy(params);
+  const policy =
+    resolvePinnedAgentHarnessPolicy(params.agentHarnessId) ?? resolveAgentHarnessPolicy(params);
   // PI is intentionally not part of the plugin candidate list. It is the legacy
   // fallback path, so `fallback: "none"` can prove that only plugin harnesses run.
   const pluginHarnesses = listPluginAgentHarnesses();
@@ -115,13 +117,16 @@ export async function runAgentHarnessAttemptWithFallback(
     config: params.config,
     agentId: params.agentId,
     sessionKey: params.sessionKey,
+    agentHarnessId: params.agentHarnessId,
   });
   if (harness.id === "pi") {
-    return harness.runAttempt(params);
+    const result = await harness.runAttempt(params);
+    return { ...result, agentHarnessId: harness.id };
   }
 
   try {
-    return await harness.runAttempt(params);
+    const result = await harness.runAttempt(params);
+    return { ...result, agentHarnessId: harness.id };
   } catch (error) {
     log.warn(`${harness.label} failed; not falling back to embedded PI backend`, {
       harnessId: harness.id,
@@ -133,6 +138,16 @@ export async function runAgentHarnessAttemptWithFallback(
   }
 }
 
+function resolvePinnedAgentHarnessPolicy(
+  agentHarnessId: string | undefined,
+): AgentHarnessPolicy | undefined {
+  const runtime = normalizeEmbeddedAgentRuntime(agentHarnessId);
+  if (runtime === "auto") {
+    return undefined;
+  }
+  return { runtime, fallback: "none" };
+}
+
 export async function maybeCompactAgentHarnessSession(
   params: CompactEmbeddedPiSessionParams,
 ): Promise<EmbeddedPiCompactResult | undefined> {
@@ -141,8 +156,16 @@ export async function maybeCompactAgentHarnessSession(
     modelId: params.model,
     config: params.config,
     sessionKey: params.sessionKey,
+    agentHarnessId: params.agentHarnessId,
   });
   if (!harness.compact) {
+    if (harness.id !== "pi") {
+      return {
+        ok: false,
+        compacted: false,
+        reason: `Agent harness "${harness.id}" does not support compaction.`,
+      };
+    }
     return undefined;
   }
   return harness.compact(params);

@@ -192,8 +192,14 @@ jobs:
       - name: Setup Node environment for local pack smoke
         uses: ./.github/actions/setup-node-env
         with:
-          install-bun: "false"
+          install-bun: "true"
           install-deps: "true"
+
+      - name: Run Bun global install image-provider smoke
+        env:
+          OPENCLAW_BUN_GLOBAL_SMOKE_DIST_IMAGE: openclaw-dockerfile-smoke:local
+          OPENCLAW_BUN_GLOBAL_SMOKE_HOST_BUILD: "0"
+        run: bash scripts/e2e/bun-global-install-smoke.sh
 
       - name: Run installer docker tests
         env:

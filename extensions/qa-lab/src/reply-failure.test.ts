@@ -19,7 +19,7 @@ describe("extractQaFailureReplyText", () => {
   it("classifies explicit provider auth guidance as a failure", () => {
     expect(
       extractQaFailureReplyText(
-        '⚠️ No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai-codex/gpt-5.4 (OAuth) or set OPENAI_API_KEY to use openai/gpt-5.4.',
+        '⚠️ No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai-codex/gpt-5.5 (OAuth) or set OPENAI_API_KEY to use openai/gpt-5.5.',
       ),
     ).toContain('No API key found for provider "openai".');
   });
@@ -27,7 +27,7 @@ describe("extractQaFailureReplyText", () => {
   it("classifies curated missing-key guidance as a failure", () => {
     expect(
       extractQaFailureReplyText(
-        "⚠️ Missing API key for OpenAI on the gateway. Use `openai-codex/gpt-5.4` for OAuth, or set `OPENAI_API_KEY`, then try again.",
+        "⚠️ Missing API key for OpenAI on the gateway. Use `openai-codex/gpt-5.5` for OAuth, or set `OPENAI_API_KEY`, then try again.",
       ),
     ).toContain("Missing API key for OpenAI on the gateway.");
   });

@@ -43,13 +43,28 @@ OpenClaw has separate routes for OpenAI and Codex-shaped access:
 
 | Model ref              | Runtime path                                 | Use when                                                                |
 | ---------------------- | -------------------------------------------- | ----------------------------------------------------------------------- |
-| `openai/gpt-5.4`       | OpenAI provider through OpenClaw/PI plumbing | You want direct OpenAI Platform API access with `OPENAI_API_KEY`.       |
-| `openai-codex/gpt-5.4` | OpenAI Codex OAuth provider through PI       | You want ChatGPT/Codex OAuth without the Codex app-server harness.      |
-| `codex/gpt-5.4`        | Bundled Codex provider plus Codex harness    | You want native Codex app-server execution for the embedded agent turn. |
+| `openai/gpt-5.5`       | OpenAI provider through OpenClaw/PI plumbing | You want direct OpenAI Platform API access with `OPENAI_API_KEY`.       |
+| `openai-codex/gpt-5.5` | OpenAI Codex OAuth provider through PI       | You want ChatGPT/Codex OAuth without the Codex app-server harness.      |
+| `codex/gpt-5.5`        | Bundled Codex provider plus Codex harness    | You want native Codex app-server execution for the embedded agent turn. |
 
 The Codex harness only claims `codex/*` model refs. Existing `openai/*`,
 `openai-codex/*`, Anthropic, Gemini, xAI, local, and custom provider refs keep
 their normal paths.
+
+Harness selection is not a live session control. When an embedded turn runs,
+OpenClaw records the selected harness id on that session and keeps using it for
+later turns in the same session id. Change `embeddedHarness` config or
+`OPENCLAW_AGENT_RUNTIME` when you want future sessions to use another harness;
+use `/new` or `/reset` to start a fresh session before switching an existing
+conversation between PI and Codex. This avoids replaying one transcript through
+two incompatible native session systems.
+
+Legacy sessions created before harness pins are treated as PI-pinned once they
+have transcript history. Use `/new` or `/reset` to opt that conversation into
+Codex after changing config.
+
+`/status` shows the effective non-PI harness next to `Fast`, for example
+`Fast · codex`. The default PI harness is omitted.
 
 ## Requirements
 
@@ -67,7 +82,7 @@ uses.
 
 ## Minimal config
 
-Use `codex/gpt-5.4`, enable the bundled plugin, and force the `codex` harness:
+Use `codex/gpt-5.5`, enable the bundled plugin, and force the `codex` harness:
 
 ```json5
 {
@@ -80,7 +95,7 @@ Use `codex/gpt-5.4`, enable the bundled plugin, and force the `codex` harness:
   },
   agents: {
     defaults: {
-      model: "codex/gpt-5.4",
+      model: "codex/gpt-5.5",
       embeddedHarness: {
         runtime: "codex",
         fallback: "none",
@@ -126,13 +141,13 @@ everything else:
   agents: {
     defaults: {
       model: {
-        primary: "codex/gpt-5.4",
-        fallbacks: ["openai/gpt-5.4", "anthropic/claude-opus-4-6"],
+        primary: "codex/gpt-5.5",
+        fallbacks: ["openai/gpt-5.5", "anthropic/claude-opus-4-6"],
       },
       models: {
-        "codex/gpt-5.4": { alias: "codex" },
+        "codex/gpt-5.5": { alias: "codex" },
         "codex/gpt-5.4-mini": { alias: "codex-mini" },
-        "openai/gpt-5.4": { alias: "gpt" },
+        "openai/gpt-5.5": { alias: "gpt" },
         "anthropic/claude-opus-4-6": { alias: "opus" },
       },
       embeddedHarness: {
@@ -146,8 +161,8 @@ everything else:
 
 With this shape:
 
-- `/model codex` or `/model codex/gpt-5.4` uses the Codex app-server harness.
-- `/model gpt` or `/model openai/gpt-5.4` uses the OpenAI provider path.
+- `/model codex` or `/model codex/gpt-5.5` uses the Codex app-server harness.
+- `/model gpt` or `/model openai/gpt-5.5` uses the OpenAI provider path.
 - `/model opus` uses the Anthropic provider path.
 - If a non-Codex model is selected, PI remains the compatibility harness.
 
@@ -160,7 +175,7 @@ the Codex harness:
 {
   agents: {
     defaults: {
-      model: "codex/gpt-5.4",
+      model: "codex/gpt-5.5",
       embeddedHarness: {
         runtime: "codex",
         fallback: "none",
@@ -205,7 +220,7 @@ auto-selection:
       {
         id: "codex",
         name: "Codex",
-        model: "codex/gpt-5.4",
+        model: "codex/gpt-5.5",
         embeddedHarness: {
           runtime: "codex",
           fallback: "none",
@@ -218,14 +233,15 @@ auto-selection:
 
 Use normal session commands to switch agents and models. `/new` creates a fresh
 OpenClaw session and the Codex harness creates or resumes its sidecar app-server
-thread as needed. `/reset` clears the OpenClaw session binding for that thread.
+thread as needed. `/reset` clears the OpenClaw session binding for that thread
+and lets the next turn resolve the harness from current config again.
 
 ## Model discovery
 
 By default, the Codex plugin asks the app-server for available models. If
 discovery fails or times out, it uses the bundled fallback catalog:
 
-- `codex/gpt-5.4`
+- `codex/gpt-5.5`
 - `codex/gpt-5.4-mini`
 - `codex/gpt-5.2`
 
@@ -304,44 +320,9 @@ To opt in to Codex guardian-reviewed approvals, set `appServer.mode:
 }
 ```
 
-Guardian mode expands to:
+Guardian is a native Codex approval reviewer. When Codex asks to leave the sandbox, write outside the workspace, or add permissions like network access, Codex routes that approval request to a reviewer subagent instead of a human prompt. The reviewer applies Codex's risk framework and approves or denies the specific request. Use Guardian when you want more guardrails than YOLO mode but still need unattended agents to make progress.
 
-```json5
-{
-  plugins: {
-    entries: {
-      codex: {
-        enabled: true,
-        config: {
-          appServer: {
-            mode: "guardian",
-            approvalPolicy: "on-request",
-            approvalsReviewer: "guardian_subagent",
-            sandbox: "workspace-write",
-          },
-        },
-      },
-    },
-  },
-}
-```
-
-Guardian is a native Codex approval reviewer. When Codex asks to leave the
-sandbox, write outside the workspace, or add permissions such as network access,
-Codex routes that approval request to a reviewer subagent instead of a human
-prompt. The reviewer gathers context and applies Codex's risk framework, then
-approves or denies the specific request. Guardian is useful when you want more
-guardrails than YOLO mode but still need unattended agents and heartbeats to
-make progress.
-
-The Docker live harness includes a Guardian probe when
-`OPENCLAW_LIVE_CODEX_HARNESS_GUARDIAN_PROBE=1`. It starts the Codex harness in
-Guardian mode, verifies that a benign escalated shell command is approved, and
-verifies that a fake-secret upload to an untrusted external destination is
-denied so the agent asks back for explicit approval.
-
-The individual policy fields still win over `mode`, so advanced deployments can
-mix the preset with explicit choices.
+The `guardian` preset expands to `approvalPolicy: "on-request"`, `approvalsReviewer: "guardian_subagent"`, and `sandbox: "workspace-write"`. Individual policy fields still override `mode`, so advanced deployments can mix the preset with explicit choices.
 
 For an already-running app-server, use WebSocket transport:
 
@@ -478,7 +459,7 @@ Remote app-server with explicit headers:
 Model switching stays OpenClaw-controlled. When an OpenClaw session is attached
 to an existing Codex thread, the next turn sends the currently selected
 `codex/*` model, provider, approval policy, sandbox, and service tier to
-app-server again. Switching from `codex/gpt-5.4` to `codex/gpt-5.2` keeps the
+app-server again. Switching from `codex/gpt-5.5` to `codex/gpt-5.2` keeps the
 thread binding but asks Codex to continue with the newly selected model.
 
 ## Codex command

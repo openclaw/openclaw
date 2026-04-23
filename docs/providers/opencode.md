@@ -97,7 +97,7 @@ as one OpenCode setup.
 | Property         | Value                                                                   |
 | ---------------- | ----------------------------------------------------------------------- |
 | Runtime provider | `opencode`                                                              |
-| Example models   | `opencode/claude-opus-4-6`, `opencode/gpt-5.4`, `opencode/gemini-3-pro` |
+| Example models   | `opencode/claude-opus-4-6`, `opencode/gpt-5.5`, `opencode/gemini-3-pro` |
 
 ### Go
 

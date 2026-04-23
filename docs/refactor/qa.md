@@ -173,7 +173,7 @@ title: Image generation roundtrip
 surface: image
 tags: [media, image, roundtrip]
 models:
-  primary: openai/gpt-5.4
+  primary: openai/gpt-5.5
 requires:
   tools: [image_generate]
   plugins: [openai, qa-channel]
