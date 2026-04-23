@@ -220,8 +220,19 @@ export async function buildReplyPayloads(params: {
   // attachment to be sent twice (e.g. duplicate voice notes on Telegram).
   // This complements the existing content-key dedupe (hasSentPayload) which
   // only matches when text+media match exactly.
+  // Normalize block-pipeline sent URLs through the same path that the final
+  // payloads have already been run through, so the subsequent comparison
+  // happens in a consistent space. Without this, a raw source URL
+  // (`/tmp/aurora-voice-<id>.ogg`) is compared against a normalized outbound
+  // URL (e.g. `/tmp/outbound/<uuid>.ogg`) and never matches — silently
+  // leaving the duplicate delivery bug in place for any deployment that
+  // rewrites media URLs during normalization. This mirrors the messaging-
+  // tool path above.
   const blockSentMediaUrls = params.blockStreamingEnabled
-    ? (params.blockReplyPipeline?.getSentMediaUrls?.() ?? [])
+    ? await normalizeSentMediaUrlsForDedupe({
+        sentMediaUrls: params.blockReplyPipeline?.getSentMediaUrls() ?? [],
+        normalizeMediaPaths: params.normalizeMediaPaths,
+      })
     : [];
   const blockMediaFilteredPayloads =
     blockSentMediaUrls.length > 0

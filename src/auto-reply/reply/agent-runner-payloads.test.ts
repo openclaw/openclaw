@@ -187,6 +187,57 @@ describe("buildReplyPayloads media filter integration", () => {
     await expectSameTargetRepliesSuppressed({ provider: "lark", to: "ou_abc123" });
   });
 
+  it("normalizes block-pipeline sent media URLs before deduping against normalized final payloads (#65468)", async () => {
+    // Regression for the Greptile P1 gap: the block pipeline records a raw
+    // source URL (e.g. `/tmp/voice.ogg`) before the final reply goes through
+    // `normalizeReplyPayloadMedia`, which rewrites the URL to an outbound
+    // path. Without re-normalizing the pipeline's sent URLs through the same
+    // `normalizeMediaPaths`, the comparison happens across two different URL
+    // spaces and the duplicate attachment is never stripped.
+    const normalizeMediaPaths = async (payload: {
+      mediaUrl?: string;
+      mediaUrls?: string[];
+    }) => {
+      const rewrite = (value?: string) =>
+        value === "file:///tmp/voice.ogg" ? "file:///tmp/outbound/abc.ogg" : value;
+      return {
+        ...payload,
+        mediaUrl: rewrite(payload.mediaUrl),
+        mediaUrls: payload.mediaUrls?.map((value) => rewrite(value) ?? value),
+      };
+    };
+
+    const pipeline: Parameters<typeof buildReplyPayloads>[0]["blockReplyPipeline"] = {
+      didStream: () => false,
+      isAborted: () => false,
+      hasSentPayload: () => false,
+      enqueue: () => {},
+      flush: async () => {},
+      stop: () => {},
+      hasBuffered: () => false,
+      // Pipeline records the raw source URL (pre-normalization).
+      getSentMediaUrls: () => ["file:///tmp/voice.ogg"],
+    };
+
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      blockStreamingEnabled: true,
+      blockReplyPipeline: pipeline,
+      normalizeMediaPaths,
+      // Final payload carries the same raw URL; it will be normalized to the
+      // outbound path by `normalizeReplyPayloadMedia` before dedupe runs.
+      payloads: [{ text: "caption", mediaUrl: "file:///tmp/voice.ogg" }],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    // The attachment must be stripped; only the caption text survives.
+    expect(replyPayloads[0]).toMatchObject({
+      text: "caption",
+      mediaUrl: undefined,
+      mediaUrls: undefined,
+    });
+  });
+
   it("drops all final payloads when block pipeline streamed successfully", async () => {
     const pipeline: Parameters<typeof buildReplyPayloads>[0]["blockReplyPipeline"] = {
       didStream: () => true,
