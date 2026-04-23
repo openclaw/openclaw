@@ -11,6 +11,14 @@ function normalizeStreamingMode(value: unknown): string | null {
   return normalized || null;
 }
 
+function resolveStreamingValue(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return value;
+  }
+  const mode = (value as { mode?: unknown }).mode;
+  return mode === undefined ? value : mode;
+}
+
 export function parseStreamingMode(value: unknown): StreamingMode | null {
   const normalized = normalizeStreamingMode(value);
   if (
@@ -68,7 +76,8 @@ export function resolveTelegramPreviewStreamMode(
     streaming?: unknown;
   } = {},
 ): TelegramPreviewStreamMode {
-  const parsedStreaming = parseStreamingMode(params.streaming);
+  const streamingValue = resolveStreamingValue(params.streaming);
+  const parsedStreaming = parseStreamingMode(streamingValue);
   if (parsedStreaming) {
     if (parsedStreaming === "progress") {
       return "partial";
@@ -80,8 +89,8 @@ export function resolveTelegramPreviewStreamMode(
   if (legacy) {
     return legacy;
   }
-  if (typeof params.streaming === "boolean") {
-    return params.streaming ? "partial" : "off";
+  if (typeof streamingValue === "boolean") {
+    return streamingValue ? "partial" : "off";
   }
   return "partial";
 }

@@ -37,6 +37,9 @@ export type TelegramNetworkConfig = {
 
 export type TelegramInlineButtonsScope = "off" | "dm" | "group" | "all" | "allowlist";
 export type TelegramStreamingMode = "off" | "partial" | "block" | "progress";
+export type TelegramStreamingConfig = {
+  mode?: TelegramStreamingMode | boolean;
+};
 
 export type TelegramCapabilitiesConfig =
   | string[]
@@ -115,7 +118,7 @@ export type TelegramAccountConfig = {
    *
    * Legacy boolean values are still accepted and auto-migrated.
    */
-  streaming?: TelegramStreamingMode | boolean;
+  streaming?: TelegramStreamingMode | boolean | TelegramStreamingConfig;
   /** Disable block streaming for this account. */
   blockStreaming?: boolean;
   /**

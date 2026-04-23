@@ -42,6 +42,8 @@ type MediaProviderRequestConfig = {
   baseUrl?: string;
   /** Optional headers merged into provider requests. */
   headers?: Record<string, string>;
+  /** Optional hostname allowlist for SSRF-guarded provider requests. */
+  allowedHostnames?: string[];
 };
 
 export type MediaUnderstandingModelConfig = MediaProviderRequestConfig & {

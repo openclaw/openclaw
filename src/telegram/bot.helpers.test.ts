@@ -21,4 +21,10 @@ describe("resolveTelegramStreamMode", () => {
   it("maps unified progress mode to partial on Telegram", () => {
     expect(resolveTelegramStreamMode({ streaming: "progress" })).toBe("partial");
   });
+
+  it("accepts object-form streaming config", () => {
+    expect(resolveTelegramStreamMode({ streaming: { mode: "off" } })).toBe("off");
+    expect(resolveTelegramStreamMode({ streaming: { mode: "progress" } })).toBe("partial");
+    expect(resolveTelegramStreamMode({ streaming: { mode: true } })).toBe("partial");
+  });
 });

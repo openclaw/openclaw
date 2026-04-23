@@ -344,6 +344,12 @@ export const BlockStreamingChunkSchema = z
   })
   .strict();
 
+export const TelegramStreamingConfigSchema = z
+  .object({
+    mode: z.union([z.boolean(), z.enum(["off", "partial", "block", "progress"])]).optional(),
+  })
+  .strict();
+
 export const MarkdownTableModeSchema = z.enum(["off", "bullets", "code"]);
 
 export const MarkdownConfigSchema = z
@@ -652,6 +658,7 @@ const MediaUnderstandingRuntimeFields = {
   deepgram: DeepgramAudioSchema,
   baseUrl: z.string().optional(),
   headers: z.record(z.string(), z.string()).optional(),
+  allowedHostnames: z.array(z.string()).optional(),
 };
 
 export const MediaUnderstandingModelSchema = z

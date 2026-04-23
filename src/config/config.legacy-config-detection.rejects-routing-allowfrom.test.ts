@@ -532,6 +532,17 @@ describe("legacy config detection", () => {
     }
   });
 
+  it("accepts telegram object-form streaming config", async () => {
+    const res = validateConfigObject({
+      channels: { telegram: { streaming: { mode: "off" } } },
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.channels?.telegram?.streaming).toBe("off");
+      expect(res.config.channels?.telegram?.streamMode).toBeUndefined();
+    }
+  });
+
   it("normalizes discord streaming fields during legacy migration", async () => {
     const cases = [
       {

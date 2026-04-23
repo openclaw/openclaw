@@ -29,6 +29,7 @@ import {
   SecretInputSchema,
   ReplyToModeSchema,
   RetryConfigSchema,
+  TelegramStreamingConfigSchema,
   TtsConfigSchema,
   requireAllowlistAllowFrom,
   requireOpenAllowFrom,
@@ -172,7 +173,13 @@ export const TelegramAccountSchemaBase = z
     direct: z.record(z.string(), TelegramDirectSchema.optional()).optional(),
     textChunkLimit: z.number().int().positive().optional(),
     chunkMode: z.enum(["length", "newline"]).optional(),
-    streaming: z.union([z.boolean(), z.enum(["off", "partial", "block", "progress"])]).optional(),
+    streaming: z
+      .union([
+        z.boolean(),
+        z.enum(["off", "partial", "block", "progress"]),
+        TelegramStreamingConfigSchema,
+      ])
+      .optional(),
     blockStreaming: z.boolean().optional(),
     suppressTextBlockDelivery: z.boolean().optional(),
     draftChunk: BlockStreamingChunkSchema.optional(),
