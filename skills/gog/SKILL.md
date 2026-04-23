@@ -1,6 +1,6 @@
 ---
 name: gog
-description: Google Workspace CLI for Gmail, Calendar, Drive, Contacts, Sheets, and Docs.
+description: Google Workspace CLI for Gmail, Calendar, Drive, Contacts, Sheets, Docs, and Tasks.
 homepage: https://gogcli.sh
 metadata:
   {
@@ -24,12 +24,12 @@ metadata:
 
 # gog
 
-Use `gog` for Gmail/Calendar/Drive/Contacts/Sheets/Docs. Requires OAuth setup.
+Use `gog` for Gmail/Calendar/Drive/Contacts/Sheets/Docs/Tasks. Requires OAuth setup.
 
 Setup (once)
 
 - `gog auth credentials /path/to/client_secret.json`
-- `gog auth add you@gmail.com --services gmail,calendar,drive,contacts,docs,sheets`
+- `gog auth add you@gmail.com --services gmail,calendar,drive,contacts,docs,sheets,tasks`
 - `gog auth list`
 
 Common commands
@@ -108,6 +108,7 @@ Email Formatting
   ```
 
 - Example (HTML list):
+
   ```bash
   gog gmail send --to recipient@example.com \
     --subject "Meeting Follow-up" \
