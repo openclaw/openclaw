@@ -2058,6 +2058,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
     expect(JSON.stringify(transcriptUpdate)).not.toContain("input_image");
     expect(JSON.stringify(transcriptUpdate)).not.toContain("data:image/png;base64,cG5n");
+    expect(JSON.stringify(payload?.message)).not.toContain("/api/chat/media/outgoing/");
   });
 
   it("sanitizes replyToId before emitting inline reply directives", async () => {

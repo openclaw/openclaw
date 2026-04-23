@@ -916,11 +916,18 @@ function buildAssistantAttachmentUrl(
 }
 
 function isManagedOutgoingImageSource(source: string): boolean {
+  const trimmed = source.trim();
+  if (trimmed.startsWith("/api/chat/media/outgoing/")) {
+    return true;
+  }
   try {
-    const parsed = new URL(source, window.location.origin);
-    return parsed.pathname.startsWith("/api/chat/media/outgoing/");
+    const parsed = new URL(trimmed, window.location.origin);
+    return (
+      parsed.origin === window.location.origin &&
+      parsed.pathname.startsWith("/api/chat/media/outgoing/")
+    );
   } catch {
-    return source.startsWith("/api/chat/media/outgoing/");
+    return false;
   }
 }
 

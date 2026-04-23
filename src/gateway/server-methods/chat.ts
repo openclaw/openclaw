@@ -13,8 +13,8 @@ import type { MsgContext } from "../../auto-reply/templating.js";
 import { extractCanvasFromText } from "../../chat/canvas-render.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
-import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { normalizeReplyPayloadsForDelivery } from "../../infra/outbound/payloads.js";
+import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { logLargePayload } from "../../logging/diagnostic-payload.js";
 import {
   appendLocalMediaParentRoots,
@@ -2550,6 +2550,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                 sessionKey,
                 payloads: finalPayloads,
                 managedImageLocalRoots: mediaLocalRoots,
+                includeSensitiveMedia: false,
                 onLocalAudioAccessDenied: (message) => {
                   context.logGateway.warn(`webchat audio embedding denied local path: ${message}`);
                 },

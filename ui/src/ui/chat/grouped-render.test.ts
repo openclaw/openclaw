@@ -739,6 +739,39 @@ describe("grouped chat rendering", () => {
     );
   });
 
+  it("does not send auth to cross-origin managed-image-looking URLs", async () => {
+    const fetchMock = vi.fn(async () => {
+      throw new Error("cross-origin image URL should not be fetched with Control UI auth");
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const container = document.createElement("div");
+    renderAssistantMessage(
+      container,
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "image",
+            url: "https://evil.example/api/chat/media/outgoing/agent%3Amain%3Amain/00000000-0000-4000-8000-000000000000/full",
+            alt: "Untrusted image",
+          },
+        ],
+        timestamp: Date.now(),
+      },
+      {
+        showToolCalls: false,
+        assistantAttachmentAuthToken: "session-token",
+      },
+    );
+
+    const image = container.querySelector<HTMLImageElement>(".chat-message-image");
+    expect(image?.getAttribute("src")).toBe(
+      "https://evil.example/api/chat/media/outgoing/agent%3Amain%3Amain/00000000-0000-4000-8000-000000000000/full",
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("renders canvas-only [embed] shortcodes inside the assistant bubble", () => {
     const container = document.createElement("div");
     renderAssistantMessage(
