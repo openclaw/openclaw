@@ -90,7 +90,7 @@ describe("nextcloud-talk inbound reaction dispatch", () => {
   it("dispatches reaction from allowed actor in allowed room", async () => {
     installReactionRuntime();
     const runtime = createTestRuntimeEnv();
-    const dispatchCalls: unknown[] = [];
+    const _dispatchCalls: unknown[] = [];
 
     // Patch dispatchInboundReplyWithBase via the deliver callback
     // We verify no error logs and log shows dispatch

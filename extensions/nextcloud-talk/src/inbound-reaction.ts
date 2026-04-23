@@ -14,7 +14,7 @@ import {
 } from "./policy.js";
 import { getNextcloudTalkRuntime } from "./runtime.js";
 import { sendMessageNextcloudTalk } from "./send.js";
-import type { CoreConfig, GroupPolicy, NextcloudTalkInboundReaction } from "./types.js";
+import type { CoreConfig, NextcloudTalkInboundReaction } from "./types.js";
 
 const CHANNEL_ID = "nextcloud-talk" as const;
 
@@ -22,14 +22,16 @@ async function deliverNextcloudTalkReply(params: {
   payload: OutboundReplyPayload;
   roomToken: string;
   accountId: string;
+  cfg: CoreConfig;
   statusSink?: (patch: { lastOutboundAt?: number }) => void;
 }): Promise<void> {
-  const { payload, roomToken, accountId, statusSink } = params;
+  const { payload, roomToken, accountId, cfg, statusSink } = params;
   await deliverFormattedTextWithAttachments({
     payload,
     send: async ({ text, replyToId }) => {
       await sendMessageNextcloudTalk(roomToken, text, {
         accountId,
+        cfg,
         replyTo: replyToId,
       });
       statusSink?.({ lastOutboundAt: Date.now() });
@@ -68,7 +70,7 @@ export async function handleNextcloudTalkInboundReaction(params: {
   }
 
   // Treat all rooms as group for allowlist checks (safe default — reactions are rarely in DMs)
-  const groupPolicy = (account.config.groupPolicy ?? "allowlist") as GroupPolicy;
+  const groupPolicy = account.config.groupPolicy ?? "allowlist";
   const configGroupAllowFrom = normalizeNextcloudTalkAllowlist(account.config.groupAllowFrom);
   const roomAllowFrom = normalizeNextcloudTalkAllowlist(roomMatch.roomConfig?.allowFrom);
 
@@ -164,6 +166,7 @@ export async function handleNextcloudTalkInboundReaction(params: {
         payload,
         roomToken,
         accountId: account.accountId,
+        cfg: config,
         statusSink,
       });
     },

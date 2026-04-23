@@ -370,6 +370,7 @@ export async function handleNextcloudTalkInbound(params: {
   if (ackEmoji) {
     sendReactionNextcloudTalk(roomToken, message.messageId, ackEmoji, {
       accountId: account.accountId,
+      cfg: config,
     }).catch((err: unknown) => {
       runtime.log?.(`nextcloud-talk: ack reaction failed: ${String(err)}`);
     });

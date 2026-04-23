@@ -168,20 +168,12 @@ describe("nextcloud-talk inbound ack reaction", () => {
   it("calls sendReactionNextcloudTalk with account-level ackReaction when configured", async () => {
     setupAllowedDmAccess();
 
-    const account = createAccount({
-      config: {
-        dmPolicy: "open",
-        allowFrom: ["user-1"],
-        groupPolicy: "allowlist",
-        groupAllowFrom: [],
-        ackReaction: "👀",
-      },
-    });
-
     await handleNextcloudTalkInbound({
       message: createMessage(),
-      account,
-      config: { channels: { "nextcloud-talk": {} } } as CoreConfig,
+      account: createAccount(),
+      config: {
+        channels: { "nextcloud-talk": { accounts: { default: { ackReaction: "👀" } } } },
+      } as CoreConfig,
       runtime: createRuntimeEnv(),
     });
 
@@ -193,32 +185,18 @@ describe("nextcloud-talk inbound ack reaction", () => {
     );
   });
 
-  it("calls sendReactionNextcloudTalk with room-level ackReaction when configured", async () => {
+  it("calls sendReactionNextcloudTalk with channel-level ackReaction when configured", async () => {
     setupAllowedDmAccess();
-
-    const account = createAccount({
-      config: {
-        dmPolicy: "open",
-        allowFrom: ["user-1"],
-        groupPolicy: "allowlist",
-        groupAllowFrom: [],
-        ackReaction: "👀",
-        rooms: {
-          "room-1": {
-            ackReaction: "✅",
-          },
-        },
-      },
-    });
 
     await handleNextcloudTalkInbound({
       message: createMessage(),
-      account,
-      config: { channels: { "nextcloud-talk": {} } } as CoreConfig,
+      account: createAccount(),
+      config: {
+        channels: { "nextcloud-talk": { ackReaction: "✅" } },
+      } as CoreConfig,
       runtime: createRuntimeEnv(),
     });
 
-    // Room-level takes precedence over account-level
     expect(sendReactionNextcloudTalkMock).toHaveBeenCalledWith(
       "room-1",
       "msg-1",
@@ -227,49 +205,42 @@ describe("nextcloud-talk inbound ack reaction", () => {
     );
   });
 
-  it("does not call sendReactionNextcloudTalk when ackReaction is not configured", async () => {
+  it("does not call sendReactionNextcloudTalk when ackReaction is explicitly disabled", async () => {
     setupAllowedDmAccess();
 
     await handleNextcloudTalkInbound({
       message: createMessage(),
       account: createAccount(),
-      config: { channels: { "nextcloud-talk": {} } } as CoreConfig,
+      config: {
+        channels: { "nextcloud-talk": { ackReaction: "" } },
+      } as CoreConfig,
       runtime: createRuntimeEnv(),
     });
 
     expect(sendReactionNextcloudTalkMock).not.toHaveBeenCalled();
   });
 
-  it("logs error but does not throw when sendReactionNextcloudTalk rejects", async () => {
+  it("logs but does not throw when sendReactionNextcloudTalk rejects", async () => {
     setupAllowedDmAccess();
     sendReactionNextcloudTalkMock.mockRejectedValue(new Error("network error"));
 
     const runtime = createRuntimeEnv();
-    const account = createAccount({
-      config: {
-        dmPolicy: "open",
-        allowFrom: ["user-1"],
-        groupPolicy: "allowlist",
-        groupAllowFrom: [],
-        ackReaction: "👀",
-      },
-    });
 
     // Should not throw
     await expect(
       handleNextcloudTalkInbound({
         message: createMessage(),
-        account,
-        config: { channels: { "nextcloud-talk": {} } } as CoreConfig,
+        account: createAccount(),
+        config: {
+          channels: { "nextcloud-talk": { ackReaction: "👀" } },
+        } as CoreConfig,
         runtime,
       }),
     ).resolves.toBeUndefined();
 
     // Error should be logged (eventually, after microtask queue drains)
     await vi.waitFor(() => {
-      expect(runtime.error).toHaveBeenCalledWith(
-        expect.stringContaining("ack reaction failed for msg-1"),
-      );
+      expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("ack reaction failed"));
     });
   });
 
