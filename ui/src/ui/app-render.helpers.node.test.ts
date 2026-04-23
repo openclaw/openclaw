@@ -69,26 +69,6 @@ function labelsForSessionOptions(params: {
   return groups.flatMap((group) => group.options.map((option) => option.label));
 }
 
-function createSettings(): AppViewState["settings"] {
-  return {
-    gatewayUrl: "",
-    token: "",
-    locale: "en",
-    sessionKey: "main",
-    lastActiveSessionKey: "main",
-    theme: "claw",
-    themeMode: "dark",
-    splitRatio: 0.6,
-    navWidth: 280,
-    navCollapsed: false,
-    navGroupsCollapsed: {},
-    borderRadius: 50,
-    chatFocusMode: false,
-    chatShowThinking: false,
-    chatShowToolCalls: true,
-  };
-}
-
 /* ================================================================
  *  parseSessionKey – low-level key → type / fallback mapping
  * ================================================================ */
@@ -183,36 +163,74 @@ describe("resolveAssistantAttachmentAuthToken", () => {
       resolveAssistantAttachmentAuthToken({
         hello: { auth: { deviceToken: "device-token" } } as AppViewState["hello"],
         settings: { token: "session-token" } as AppViewState["settings"],
+        bootstrapGatewayToken: null,
         password: "shared-password",
       }),
     ).toBe("device-token");
   });
 
-  it("prefers the explicit gateway token when present", () => {
+  it("prefers an explicit stored token over the loopback bootstrap token", () => {
     expect(
       resolveAssistantAttachmentAuthToken({
         hello: null,
-        settings: { token: "session-token" } as AppViewState["settings"],
+        settings: {
+          token: "fresh-token",
+          gatewayUrl: "ws://127.0.0.1:18789",
+        } as AppViewState["settings"],
+        bootstrapGatewayToken: "bootstrap-token",
         password: "shared-password",
-      }),
-    ).toBe("session-token");
+      }, { pageUrl: "http://127.0.0.1:18789/" }),
+    ).toBe("fresh-token");
   });
 
   it("falls back to the shared password when token is blank", () => {
     expect(
       resolveAssistantAttachmentAuthToken({
         hello: null,
-        settings: { token: "   " } as AppViewState["settings"],
+        settings: {
+          token: "   ",
+          gatewayUrl: "ws://127.0.0.1:18789",
+        } as AppViewState["settings"],
+        bootstrapGatewayToken: null,
         password: "shared-password",
       }),
     ).toBe("shared-password");
+  });
+
+  it("falls back to the bootstrap gateway token before password", () => {
+    expect(
+      resolveAssistantAttachmentAuthToken({
+        hello: null,
+        settings: {
+          token: "   ",
+          gatewayUrl: "ws://127.0.0.1:18789",
+        } as AppViewState["settings"],
+        bootstrapGatewayToken: "bootstrap-token",
+        password: "shared-password",
+      }, { pageUrl: "http://127.0.0.1:18789/" }),
+    ).toBe("bootstrap-token");
+  });
+
+  it("falls back to the stored token when bootstrap auth does not apply to this page/gateway pair", () => {
+    expect(
+      resolveAssistantAttachmentAuthToken({
+        hello: null,
+        settings: {
+          token: "session-token",
+          gatewayUrl: "wss://gateway.example/openclaw",
+        } as AppViewState["settings"],
+        bootstrapGatewayToken: "bootstrap-token",
+        password: "shared-password",
+      }, { pageUrl: "https://control.example/openclaw" }),
+    ).toBe("session-token");
   });
 
   it("returns null when neither auth secret is available", () => {
     expect(
       resolveAssistantAttachmentAuthToken({
         hello: null,
-        settings: { token: "" } as AppViewState["settings"],
+        settings: { token: "", gatewayUrl: "ws://127.0.0.1:18789" } as AppViewState["settings"],
+        bootstrapGatewayToken: null,
         password: "   ",
       }),
     ).toBeNull();
@@ -494,7 +512,23 @@ describe("resolveSessionOptionGroups", () => {
 
 describe("switchChatSession", () => {
   it("refreshes the chat avatar after clearing session-scoped state", async () => {
-    const settings = createSettings();
+    const settings: AppViewState["settings"] = {
+      gatewayUrl: "",
+      token: "",
+      locale: "en",
+      sessionKey: "main",
+      lastActiveSessionKey: "main",
+      theme: "claw",
+      themeMode: "dark",
+      splitRatio: 0.6,
+      navWidth: 280,
+      navCollapsed: false,
+      navGroupsCollapsed: {},
+      borderRadius: 50,
+      chatFocusMode: false,
+      chatShowThinking: false,
+      chatShowToolCalls: true,
+    };
     const state = {
       sessionKey: "main",
       chatMessage: "draft",
@@ -555,7 +589,23 @@ describe("switchChatSession", () => {
   });
 
   it("does not force agentId=main for plain session keys", async () => {
-    const settings = createSettings();
+    const settings: AppViewState["settings"] = {
+      gatewayUrl: "",
+      token: "",
+      locale: "en",
+      sessionKey: "main",
+      lastActiveSessionKey: "main",
+      theme: "claw",
+      themeMode: "dark",
+      splitRatio: 0.6,
+      navWidth: 280,
+      navCollapsed: false,
+      navGroupsCollapsed: {},
+      borderRadius: 50,
+      chatFocusMode: false,
+      chatShowThinking: false,
+      chatShowToolCalls: true,
+    };
     const state = {
       sessionKey: "main",
       chatMessage: "",

@@ -14,6 +14,27 @@ type DashboardOptions = {
   noOpen?: boolean;
 };
 
+function isLoopbackDashboardUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.trim().toLowerCase();
+    const octets = host.split(".");
+    const isLoopbackIpv4Literal =
+      octets.length === 4 &&
+      octets.every((octet) => /^\d+$/.test(octet) && Number(octet) >= 0 && Number(octet) <= 255) &&
+      Number(octets[0]) === 127;
+    return (
+      host === "localhost" ||
+      host === "::1" ||
+      host === "[::1]" ||
+      host === "127.0.0.1" ||
+      isLoopbackIpv4Literal
+    );
+  } catch {
+    return false;
+  }
+}
+
 export async function dashboardCommand(
   runtime: RuntimeEnv = defaultRuntime,
   options: DashboardOptions = {},
@@ -49,7 +70,9 @@ export async function dashboardCommand(
   runtime.log(`Dashboard URL: ${dashboardUrl}`);
   if (resolvedToken.secretRefConfigured && token) {
     runtime.log(
-      "Token auto-auth is disabled for SecretRef-managed gateway.auth.token; use your external token source if prompted.",
+      isLoopbackDashboardUrl(links.httpUrl)
+        ? "Local loopback Control UI will auto-connect using bootstrap auth; token is not added to the URL."
+        : "Token auto-auth is disabled for SecretRef-managed gateway.auth.token; use your external token source if prompted.",
     );
   }
   if (resolvedToken.unresolvedRefReason) {

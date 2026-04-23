@@ -19,7 +19,11 @@ import { resolveUserPath } from "../utils.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import { DEFAULT_ASSISTANT_IDENTITY, resolveAssistantIdentity } from "./assistant-identity.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
-import { authorizeHttpGatewayConnect, type ResolvedGatewayAuth } from "./auth.js";
+import {
+  authorizeHttpGatewayConnect,
+  isLocalDirectRequest,
+  type ResolvedGatewayAuth,
+} from "./auth.js";
 import {
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
   type ControlUiBootstrapConfig,
@@ -40,10 +44,13 @@ import {
 import { sendGatewayAuthFailure } from "./http-common.js";
 import {
   getBearerToken,
+  getHeader,
   resolveHttpBrowserOriginPolicy,
   resolveTrustedHttpOperatorScopes,
 } from "./http-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
+import { isLoopbackHost, resolveHostName } from "./net.js";
+import { checkBrowserOrigin } from "./origin-check.js";
 
 const ROOT_PREFIX = "/";
 const CONTROL_UI_ASSISTANT_MEDIA_PREFIX = "/__openclaw__/assistant-media";
@@ -54,8 +61,8 @@ export type ControlUiRequestOptions = {
   basePath?: string;
   config?: OpenClawConfig;
   agentId?: string;
-  root?: ControlUiRootState;
   auth?: ResolvedGatewayAuth;
+  root?: ControlUiRootState;
   trustedProxies?: string[];
   allowRealIpFallback?: boolean;
   rateLimiter?: AuthRateLimiter;
@@ -142,6 +149,25 @@ function sendJson(res: ServerResponse, status: number, body: unknown) {
   res.setHeader("Content-Type", "application/json; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache");
   res.end(JSON.stringify(body));
+}
+
+function hasTrustedLoopbackBootstrapOrigin(req: IncomingMessage): boolean {
+  const secFetchMode = getHeader(req, "sec-fetch-mode")?.trim().toLowerCase();
+  const secFetchDest = getHeader(req, "sec-fetch-dest")?.trim().toLowerCase();
+  if (secFetchMode !== "cors" || secFetchDest !== "empty") {
+    return false;
+  }
+
+  const requestHost = resolveHostName(getHeader(req, "host"));
+  if (!requestHost || !isLoopbackHost(requestHost)) {
+    return false;
+  }
+
+  return checkBrowserOrigin({
+    requestHost,
+    origin: getHeader(req, "origin"),
+    isLocalClient: isLocalDirectRequest(req),
+  }).ok;
 }
 
 function respondControlUiAssetsUnavailable(
@@ -661,7 +687,11 @@ export async function handleControlUiHttpRequest(
     ? `${basePath}${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`
     : CONTROL_UI_BOOTSTRAP_CONFIG_PATH;
   if (pathname === bootstrapConfigPath) {
+    const allowUnauthenticatedLoopbackBootstrap =
+      isLocalDirectRequest(req, opts?.trustedProxies, opts?.allowRealIpFallback) &&
+      hasTrustedLoopbackBootstrapOrigin(req);
     if (
+      !allowUnauthenticatedLoopbackBootstrap &&
       !(await authorizeControlUiReadRequest(req, res, {
         auth: opts?.auth,
         trustedProxies: opts?.trustedProxies,
@@ -675,6 +705,13 @@ export async function handleControlUiHttpRequest(
     const identity = config
       ? resolveAssistantIdentity({ cfg: config, agentId: opts?.agentId })
       : DEFAULT_ASSISTANT_IDENTITY;
+    const gatewayToken =
+      allowUnauthenticatedLoopbackBootstrap &&
+      opts?.auth?.mode === "token" &&
+      typeof opts.auth.token === "string" &&
+      opts.auth.token.trim().length > 0
+        ? opts.auth.token.trim()
+        : undefined;
     const avatarValue = resolveAssistantAvatarUrl({
       avatar: identity.avatar,
       agentId: identity.agentId,
@@ -692,6 +729,7 @@ export async function handleControlUiHttpRequest(
       assistantName: identity.name,
       assistantAvatar: avatarValue ?? identity.avatar,
       assistantAgentId: identity.agentId,
+      ...(gatewayToken ? { gatewayToken } : {}),
       serverVersion: resolveRuntimeServiceVersion(process.env),
       localMediaPreviewRoots: [...getAgentScopedMediaLocalRoots(config ?? {}, identity.agentId)],
       embedSandbox:

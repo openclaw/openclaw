@@ -1,3 +1,4 @@
+import type { ChatTerminalKind } from "../chat-activity.ts";
 import { resetToolStream } from "../app-tool-stream.ts";
 import { extractText } from "../chat/message-extract.ts";
 import { formatConnectError } from "../connect-error.ts";
@@ -111,8 +112,15 @@ export type ChatState = {
   chatMessage: string;
   chatAttachments: ChatAttachment[];
   chatRunId: string | null;
+  chatAbortPendingRunId?: string | null;
   chatStream: string | null;
   chatStreamStartedAt: number | null;
+  chatActiveToolCallCount?: number;
+  chatLastActivityAt?: number | null;
+  chatLastToolActivityAt?: number | null;
+  chatLastTerminalAt?: number | null;
+  chatLastTerminalKind?: ChatTerminalKind | null;
+  chatReconnectPendingAt?: number | null;
   lastError: string | null;
 };
 
@@ -184,6 +192,8 @@ export async function loadChatHistory(state: ChatState) {
     maybeResetToolStream(state);
     state.chatStream = null;
     state.chatStreamStartedAt = null;
+    state.chatActiveToolCallCount = 0;
+    state.chatReconnectPendingAt = null;
   } catch (err) {
     if (!shouldApplyChatHistoryResult(state, requestVersion, sessionKey)) {
       return;
@@ -337,6 +347,10 @@ export async function sendChatMessage(
   state.chatRunId = runId;
   state.chatStream = "";
   state.chatStreamStartedAt = now;
+  state.chatLastActivityAt = now;
+  state.chatLastTerminalAt = null;
+  state.chatLastTerminalKind = null;
+  state.chatReconnectPendingAt = null;
 
   try {
     await requestChatSend(state, { message: msg, attachments, runId });
@@ -391,10 +405,21 @@ export async function abortChatRun(state: ChatState): Promise<boolean> {
   }
   const runId = state.chatRunId;
   try {
-    await state.client.request(
+    const result = await state.client.request<{ aborted?: boolean }>(
       "chat.abort",
       runId ? { sessionKey: state.sessionKey, runId } : { sessionKey: state.sessionKey },
     );
+    if (result?.aborted === false) {
+      return false;
+    }
+    state.chatAbortPendingRunId = runId ?? null;
+    state.chatRunId = null;
+    state.chatStream = null;
+    state.chatStreamStartedAt = null;
+    state.chatActiveToolCallCount = 0;
+    state.chatReconnectPendingAt = null;
+    state.chatLastTerminalAt = Date.now();
+    state.chatLastTerminalKind = "aborted";
     return true;
   } catch (err) {
     state.lastError = formatConnectError(err);
@@ -407,6 +432,18 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     return null;
   }
   if (payload.sessionKey !== state.sessionKey) {
+    return null;
+  }
+
+  if (
+    payload.runId &&
+    state.chatAbortPendingRunId &&
+    payload.runId === state.chatAbortPendingRunId
+  ) {
+    if (payload.state === "final" || payload.state === "aborted" || payload.state === "error") {
+      state.chatAbortPendingRunId = null;
+      return payload.state;
+    }
     return null;
   }
 
@@ -428,6 +465,8 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     const next = extractText(payload.message);
     if (typeof next === "string" && !isSilentReplyStream(next)) {
       state.chatStream = next;
+      state.chatLastActivityAt = Date.now();
+      state.chatReconnectPendingAt = null;
     }
   } else if (payload.state === "final") {
     const finalMessage = normalizeFinalAssistantMessage(payload.message);
@@ -445,7 +484,11 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     }
     state.chatStream = null;
     state.chatRunId = null;
+    state.chatAbortPendingRunId = null;
     state.chatStreamStartedAt = null;
+    state.chatLastTerminalAt = Date.now();
+    state.chatLastTerminalKind = "completed";
+    state.chatReconnectPendingAt = null;
   } else if (payload.state === "aborted") {
     const normalizedMessage = normalizeAbortedAssistantMessage(payload.message);
     if (normalizedMessage && !isAssistantSilentReply(normalizedMessage)) {
@@ -465,12 +508,20 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     }
     state.chatStream = null;
     state.chatRunId = null;
+    state.chatAbortPendingRunId = null;
     state.chatStreamStartedAt = null;
+    state.chatLastTerminalAt = Date.now();
+    state.chatLastTerminalKind = "aborted";
+    state.chatReconnectPendingAt = null;
   } else if (payload.state === "error") {
     state.chatStream = null;
     state.chatRunId = null;
+    state.chatAbortPendingRunId = null;
     state.chatStreamStartedAt = null;
     state.lastError = payload.errorMessage ?? "chat error";
+    state.chatLastTerminalAt = Date.now();
+    state.chatLastTerminalKind = "error";
+    state.chatReconnectPendingAt = null;
   }
   return payload.state;
 }

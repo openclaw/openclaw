@@ -166,7 +166,7 @@ describe("dashboardCommand", () => {
     expect(copyToClipboardMock).toHaveBeenCalledWith("http://127.0.0.1:18789/");
     expect(openUrlMock).toHaveBeenCalledWith("http://127.0.0.1:18789/");
     expect(runtime.log).toHaveBeenCalledWith(
-      expect.stringContaining("Token auto-auth is disabled for SecretRef-managed"),
+      "Local loopback Control UI will auto-connect using bootstrap auth; token is not added to the URL.",
     );
     expect(runtime.log).not.toHaveBeenCalledWith(
       expect.stringContaining("Token auto-auth unavailable"),
@@ -190,6 +190,50 @@ describe("dashboardCommand", () => {
     );
     expect(runtime.log).not.toHaveBeenCalledWith(
       expect.stringContaining("Token auto-auth is disabled for SecretRef-managed"),
+    );
+  });
+
+  it("reports loopback bootstrap auto-auth when a SecretRef-managed gateway token resolves locally", async () => {
+    mockSnapshot({
+      source: "env",
+      provider: "default",
+      id: "OPENCLAW_GATEWAY_TOKEN",
+    });
+    process.env.OPENCLAW_GATEWAY_TOKEN = "loopback-token";
+    copyToClipboardMock.mockResolvedValue(true);
+    detectBrowserOpenSupportMock.mockResolvedValue({ ok: true });
+    openUrlMock.mockResolvedValue(true);
+
+    await dashboardCommand(runtime);
+
+    expect(copyToClipboardMock).toHaveBeenCalledWith("http://127.0.0.1:18789/");
+    expect(runtime.log).toHaveBeenCalledWith(
+      "Local loopback Control UI will auto-connect using bootstrap auth; token is not added to the URL.",
+    );
+  });
+
+  it("does not treat hostnames with a 127. prefix as loopback dashboard urls", async () => {
+    mockSnapshot({
+      source: "env",
+      provider: "default",
+      id: "OPENCLAW_GATEWAY_TOKEN",
+    });
+    process.env.OPENCLAW_GATEWAY_TOKEN = "loopback-token";
+    resolveControlUiLinksMock.mockReturnValue({
+      httpUrl: "http://127.evil.com:18789/",
+      wsUrl: "ws://127.evil.com:18789",
+    });
+    copyToClipboardMock.mockResolvedValue(true);
+    detectBrowserOpenSupportMock.mockResolvedValue({ ok: true });
+    openUrlMock.mockResolvedValue(true);
+
+    await dashboardCommand(runtime);
+
+    expect(runtime.log).toHaveBeenCalledWith(
+      "Token auto-auth is disabled for SecretRef-managed gateway.auth.token; use your external token source if prompted.",
+    );
+    expect(runtime.log).not.toHaveBeenCalledWith(
+      "Local loopback Control UI will auto-connect using bootstrap auth; token is not added to the URL.",
     );
   });
 });

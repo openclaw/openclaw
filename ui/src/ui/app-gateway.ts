@@ -19,7 +19,6 @@ import { handleAgentEvent, resetToolStream, type AgentEventPayload } from "./app
 import { shouldReloadHistoryForFinalEvent } from "./chat-event-reload.ts";
 import { parseChatSideResult, type ChatSideResult } from "./chat/side-result.ts";
 import { formatConnectError } from "./connect-error.ts";
-import { loadAgents, type AgentsState } from "./controllers/agents.ts";
 import {
   loadAssistantIdentity,
   type AssistantIdentityState,
@@ -41,14 +40,13 @@ import {
   pruneExecApprovalQueue,
   removeExecApproval,
 } from "./controllers/exec-approval.ts";
-import { loadHealthState, type HealthState } from "./controllers/health.ts";
-import { loadNodes, type NodesState } from "./controllers/nodes.ts";
 import { loadSessions, subscribeSessions, type SessionsState } from "./controllers/sessions.ts";
 import {
   resolveGatewayErrorDetailCode,
   type GatewayEventFrame,
   type GatewayHelloOk,
 } from "./gateway.ts";
+import { resolvePreferredGatewayAccessToken } from "./gateway-bootstrap-token.ts";
 import { GatewayBrowserClient } from "./gateway.ts";
 import type { Tab } from "./navigation.ts";
 import type { UiSettings } from "./storage.ts";
@@ -67,6 +65,7 @@ function isGenericBrowserFetchFailure(message: string): boolean {
 type GatewayHost = {
   settings: UiSettings;
   password: string;
+  bootstrapGatewayToken: string | null;
   clientInstanceId: string;
   client: GatewayBrowserClient | null;
   connected: boolean;
@@ -93,6 +92,14 @@ type GatewayHost = {
   serverVersion: string | null;
   sessionKey: string;
   chatRunId: string | null;
+  chatStream: string | null;
+  chatStreamStartedAt: number | null;
+  chatActiveToolCallCount: number;
+  chatLastActivityAt: number | null;
+  chatLastToolActivityAt: number | null;
+  chatLastTerminalAt: number | null;
+  chatLastTerminalKind: "completed" | "aborted" | "error" | null;
+  chatReconnectPendingAt: number | null;
   refreshSessionsAfterChat: Set<string>;
   execApprovalQueue: ExecApprovalRequest[];
   execApprovalError: string | null;
@@ -119,25 +126,6 @@ type GatewayHostWithSideResults = GatewayHost & {
   chatSideResult?: ChatSideResult | null;
   chatSideResultTerminalRuns?: Set<string>;
 };
-
-function enqueueApprovalRequest(host: GatewayHost, entry: ExecApprovalRequest | null) {
-  if (!entry) {
-    return;
-  }
-  host.execApprovalQueue = addExecApproval(host.execApprovalQueue, entry);
-  host.execApprovalError = null;
-  const delay = Math.max(0, entry.expiresAtMs - Date.now() + 500);
-  window.setTimeout(() => {
-    host.execApprovalQueue = removeExecApproval(host.execApprovalQueue, entry.id);
-  }, delay);
-}
-
-function removeResolvedApprovalRequest(host: GatewayHost, payload: unknown) {
-  const resolved = parseExecApprovalResolved(payload);
-  if (resolved) {
-    host.execApprovalQueue = removeExecApproval(host.execApprovalQueue, resolved.id);
-  }
-}
 
 function isTerminalChatState(
   state: ChatEventPayload["state"] | ReturnType<typeof handleChatEvent> | null | undefined,
@@ -271,13 +259,18 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
   host.execApprovalError = null;
 
   const previousClient = host.client;
+  const gatewayAccessToken = resolvePreferredGatewayAccessToken({
+    gatewayUrl: host.settings.gatewayUrl,
+    bootstrapGatewayToken: host.bootstrapGatewayToken,
+    storedToken: host.settings.token,
+  });
   const clientVersion = resolveControlUiClientVersion({
     gatewayUrl: host.settings.gatewayUrl,
     serverVersion: host.serverVersion,
   });
   const client = new GatewayBrowserClient({
     url: host.settings.gatewayUrl,
-    token: host.settings.token.trim() ? host.settings.token : undefined,
+    token: gatewayAccessToken,
     password: host.password.trim() ? host.password : undefined,
     clientName: "openclaw-control-ui",
     clientVersion,
@@ -299,8 +292,8 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
       // Reset orphaned chat run state from before disconnect.
       // Any in-flight run's final event was lost during the disconnect window.
       host.chatRunId = null;
-      (host as unknown as { chatStream: string | null }).chatStream = null;
-      (host as unknown as { chatStreamStartedAt: number | null }).chatStreamStartedAt = null;
+      host.chatStream = null;
+      host.chatStreamStartedAt = null;
       (host as GatewayHostWithSideResults).chatSideResultTerminalRuns?.clear();
       resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
       if (shutdownHost.resumeChatQueueAfterReconnect) {
@@ -313,10 +306,6 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
       }
       void subscribeSessions(host as unknown as SessionsState);
       void loadAssistantIdentity(host as unknown as AssistantIdentityState);
-      void loadAgents(host as unknown as AgentsState);
-      void loadHealthState(host as unknown as HealthState);
-      void loadNodes(host as unknown as NodesState, { quiet: true });
-      void loadDevices(host as unknown as DevicesState, { quiet: true });
       void refreshActiveTab(host as unknown as Parameters<typeof refreshActiveTab>[0]);
     },
     onClose: ({ code, reason, error }) => {
@@ -324,6 +313,9 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
         return;
       }
       host.connected = false;
+      if (host.chatRunId || host.chatStream !== null || host.chatActiveToolCallCount > 0) {
+        host.chatReconnectPendingAt = Date.now();
+      }
       // Code 1012 = Service Restart (expected during config saves, don't show as error)
       host.lastErrorCode =
         resolveGatewayErrorDetailCode(error) ??
@@ -565,22 +557,44 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
   }
 
   if (evt.event === "exec.approval.requested") {
-    enqueueApprovalRequest(host, parseExecApprovalRequested(evt.payload));
+    const entry = parseExecApprovalRequested(evt.payload);
+    if (entry) {
+      host.execApprovalQueue = addExecApproval(host.execApprovalQueue, entry);
+      host.execApprovalError = null;
+      const delay = Math.max(0, entry.expiresAtMs - Date.now() + 500);
+      window.setTimeout(() => {
+        host.execApprovalQueue = removeExecApproval(host.execApprovalQueue, entry.id);
+      }, delay);
+    }
     return;
   }
 
   if (evt.event === "exec.approval.resolved") {
-    removeResolvedApprovalRequest(host, evt.payload);
+    const resolved = parseExecApprovalResolved(evt.payload);
+    if (resolved) {
+      host.execApprovalQueue = removeExecApproval(host.execApprovalQueue, resolved.id);
+    }
     return;
   }
 
   if (evt.event === "plugin.approval.requested") {
-    enqueueApprovalRequest(host, parsePluginApprovalRequested(evt.payload));
+    const entry = parsePluginApprovalRequested(evt.payload);
+    if (entry) {
+      host.execApprovalQueue = addExecApproval(host.execApprovalQueue, entry);
+      host.execApprovalError = null;
+      const delay = Math.max(0, entry.expiresAtMs - Date.now() + 500);
+      window.setTimeout(() => {
+        host.execApprovalQueue = removeExecApproval(host.execApprovalQueue, entry.id);
+      }, delay);
+    }
     return;
   }
 
   if (evt.event === "plugin.approval.resolved") {
-    removeResolvedApprovalRequest(host, evt.payload);
+    const resolved = parseExecApprovalResolved(evt.payload);
+    if (resolved) {
+      host.execApprovalQueue = removeExecApproval(host.execApprovalQueue, resolved.id);
+    }
     return;
   }
 
