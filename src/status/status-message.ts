@@ -46,6 +46,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
+import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import { resolveStatusTtsSnapshot } from "../tts/status-config.js";
 import {
   estimateUsageCost,
@@ -194,16 +195,22 @@ function resolveRuntimeLabel(
   return `${runtime}/${sandboxMode}`;
 }
 
-function resolveRunnerLabel(args: Pick<StatusArgs, "config" | "sessionEntry">): string {
-  const acpAgent = normalizeOptionalString(args.sessionEntry?.acp?.agent);
+function resolveRunnerLabel(
+  args: Pick<StatusArgs, "config" | "sessionEntry"> & { fallbackProvider?: string },
+): string {
+  const acpAgentRaw = normalizeOptionalString(args.sessionEntry?.acp?.agent);
+  const acpAgent = acpAgentRaw ? sanitizeTerminalText(acpAgentRaw) : undefined;
   if (acpAgent) {
-    const backend = normalizeOptionalString(args.sessionEntry?.acp?.backend);
+    const backendRaw = normalizeOptionalString(args.sessionEntry?.acp?.backend);
+    const backend = backendRaw ? sanitizeTerminalText(backendRaw) : undefined;
     return backend ? `${acpAgent} (acp/${backend})` : `${acpAgent} (acp)`;
   }
 
-  const provider =
+  const providerRaw =
     normalizeOptionalString(args.sessionEntry?.modelProvider) ??
-    normalizeOptionalString(args.sessionEntry?.providerOverride);
+    normalizeOptionalString(args.sessionEntry?.providerOverride) ??
+    normalizeOptionalString(args.fallbackProvider);
+  const provider = providerRaw ? sanitizeTerminalText(providerRaw) : undefined;
   if (provider && isCliProvider(provider, args.config)) {
     return `${provider} (cli)`;
   }
@@ -669,7 +676,11 @@ export function buildStatusMessage(args: StatusArgs): string {
     "on";
 
   const runtime = { label: resolveRuntimeLabel(args) };
-  const runnerLabel = resolveRunnerLabel(args);
+  const runnerLabel = resolveRunnerLabel({
+    config: args.config,
+    sessionEntry: args.sessionEntry,
+    fallbackProvider: activeProvider,
+  });
 
   const updatedAt = entry?.updatedAt;
   const sessionLine = [

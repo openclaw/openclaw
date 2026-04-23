@@ -105,9 +105,11 @@ describe("buildStatusMessage", () => {
   it("shows the CLI runner for CLI-backed providers", () => {
     const text = buildStatusMessage({
       config: {
-        models: {
-          providers: {
-            "claude-cli": {},
+        agents: {
+          defaults: {
+            cliBackends: {
+              "claude-cli": {},
+            },
           },
         },
       } as unknown as OpenClawConfig,
@@ -119,6 +121,31 @@ describe("buildStatusMessage", () => {
         updatedAt: 0,
         modelProvider: "claude-cli",
         model: "opus",
+      },
+      sessionKey: "agent:main:main",
+      queue: { mode: "collect", depth: 0 },
+    });
+
+    expect(normalizeTestText(text)).toContain("Runner: claude-cli (cli)");
+  });
+
+  it("falls back to the configured CLI provider when session provider fields are empty", () => {
+    const text = buildStatusMessage({
+      config: {
+        agents: {
+          defaults: {
+            cliBackends: {
+              "claude-cli": {},
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      agent: {
+        model: "claude-cli/opus",
+      },
+      sessionEntry: {
+        sessionId: "cli-default",
+        updatedAt: 0,
       },
       sessionKey: "agent:main:main",
       queue: { mode: "collect", depth: 0 },
@@ -149,6 +176,32 @@ describe("buildStatusMessage", () => {
     });
 
     expect(normalizeTestText(text)).toContain("Runner: gemini (acp/acpx)");
+  });
+
+  it("sanitizes runner labels sourced from session metadata", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "anthropic/claude-opus-4-6",
+      },
+      sessionEntry: {
+        sessionId: "acp-sanitized",
+        updatedAt: 0,
+        acp: {
+          backend: "acpx\nrewritten",
+          agent: "gemini\u001b[2K",
+          runtimeSessionName: "status-test",
+          mode: "persistent",
+          state: "idle",
+          lastActivityAt: 0,
+        },
+      },
+      sessionKey: "agent:main:main",
+      queue: { mode: "collect", depth: 0 },
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Runner: gemini (acp/acpx\\nrewritten)");
+    expect(normalized).not.toContain("\u001b");
   });
 
   it("falls back to sessionEntry levels when resolved levels are not passed", () => {
