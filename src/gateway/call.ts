@@ -490,11 +490,13 @@ async function executeGatewayRequestWithScopes<T>(params: {
       }
       settled = true;
       clearTimeout(timer);
-      if (err) {
-        reject(err);
-      } else {
-        resolve(value as T);
-      }
+      void stopGatewayClient(client).finally(() => {
+        if (err) {
+          reject(err);
+        } else {
+          resolve(value as T);
+        }
+      });
     };
 
     const client = gatewayCallDeps.createGatewayClient({
@@ -528,11 +530,9 @@ async function executeGatewayRequestWithScopes<T>(params: {
             timeoutMs: opts.timeoutMs,
           });
           ignoreClose = true;
-          await stopGatewayClient(client);
           stop(undefined, result);
         } catch (err) {
           ignoreClose = true;
-          await stopGatewayClient(client);
           stop(err as Error);
         }
       },
@@ -541,17 +541,13 @@ async function executeGatewayRequestWithScopes<T>(params: {
           return;
         }
         ignoreClose = true;
-        void stopGatewayClient(client).finally(() => {
-          stop(new Error(formatGatewayCloseError(code, reason, params.connectionDetails)));
-        });
+        stop(new Error(formatGatewayCloseError(code, reason, params.connectionDetails)));
       },
     });
 
     const timer = setTimeout(() => {
       ignoreClose = true;
-      void stopGatewayClient(client).finally(() => {
-        stop(new Error(formatGatewayTimeoutError(timeoutMs, params.connectionDetails)));
-      });
+      stop(new Error(formatGatewayTimeoutError(timeoutMs, params.connectionDetails)));
     }, safeTimerTimeoutMs);
 
     client.start();

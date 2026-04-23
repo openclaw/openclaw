@@ -875,6 +875,61 @@ describe("callGateway error details", () => {
     expect(callResolved).toBe(true);
   });
 
+  it("clears the wrapper timeout before awaiting gateway teardown", async () => {
+    setLocalLoopbackGatewayConfig();
+
+    vi.useFakeTimers();
+    let releaseStop!: () => void;
+    let stopStarted = false;
+
+    __testing.setDepsForTests({
+      createGatewayClient: (opts) =>
+        ({
+          async request(
+            method: string,
+            params: unknown,
+            requestOpts?: { expectFinal?: boolean; timeoutMs?: number | null },
+          ) {
+            lastRequestOptions = { method, params, opts: requestOpts };
+            return { ok: true };
+          },
+          start() {
+            opts.onHelloOk?.({
+              features: {
+                methods: helloMethods ?? [],
+                events: [],
+              },
+            } as unknown as Parameters<NonNullable<typeof opts.onHelloOk>>[0]);
+          },
+          stop() {},
+          async stopAndWait() {
+            stopStarted = true;
+            await new Promise<void>((resolve) => {
+              releaseStop = resolve;
+            });
+          },
+        }) as never,
+      loadConfig: loadConfig as unknown as () => OpenClawConfig,
+      loadOrCreateDeviceIdentity: () => deviceIdentityState.value,
+      resolveGatewayPort: resolveGatewayPort as unknown as (
+        cfg?: OpenClawConfig,
+        env?: NodeJS.ProcessEnv,
+      ) => number,
+    });
+
+    const promise = callGateway<{ ok: true }>({ method: "health", timeoutMs: 5 });
+
+    await vi.waitFor(() => {
+      expect(stopStarted).toBe(true);
+    });
+
+    await vi.advanceTimersByTimeAsync(5);
+
+    releaseStop();
+
+    await expect(promise).resolves.toEqual({ ok: true });
+  });
+
   it("fails fast when remote mode is missing remote url", async () => {
     loadConfig.mockReturnValue({
       gateway: { mode: "remote", bind: "loopback", remote: {} },
