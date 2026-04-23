@@ -179,14 +179,20 @@ async function waitForRunnerCatalog(baseUrl: string, timeoutMs = 5_000) {
   throw new Error("runner catalog stayed loading");
 }
 
-async function waitForFileContent(filePath: string, expected: string, timeoutMs = 5_000) {
+async function waitForFileContent(
+  filePath: string,
+  matches: (content: string) => boolean,
+  timeoutMs: number,
+) {
   const startedAt = Date.now();
+  let lastContent = "";
   while (Date.now() - startedAt < timeoutMs) {
     try {
       const content = await readFile(filePath, "utf8");
-      if (content === expected) {
+      if (matches(content)) {
         return content;
       }
+      lastContent = content;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
         throw error;
@@ -194,7 +200,69 @@ async function waitForFileContent(filePath: string, expected: string, timeoutMs 
     }
     await sleep(10);
   }
-  throw new Error(`file did not reach expected content: ${filePath}`);
+  throw new Error(
+    `file content did not match: ${filePath}; lastContent=${JSON.stringify(lastContent)}`,
+  );
+}
+
+async function waitForExactFileContent(
+  filePath: string,
+  expectedContent: string,
+  timeoutMs: number,
+) {
+  return await waitForFileContent(filePath, (content) => content === expectedContent, timeoutMs);
+}
+
+type RunnerCatalogStartedMarker = {
+  discoveryLive: string;
+  pid: number;
+};
+
+function parseRunnerCatalogStartedMarker(content: string): RunnerCatalogStartedMarker | null {
+  try {
+    const parsed = JSON.parse(content) as Partial<RunnerCatalogStartedMarker>;
+    const pid = parsed.pid;
+    if (
+      typeof parsed.discoveryLive !== "string" ||
+      typeof pid !== "number" ||
+      !Number.isInteger(pid)
+    ) {
+      return null;
+    }
+    return {
+      discoveryLive: parsed.discoveryLive,
+      pid,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function isProcessRunning(pid: number) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ESRCH") {
+      return false;
+    }
+    if (code === "EPERM") {
+      return true;
+    }
+    throw error;
+  }
+}
+
+async function waitForProcessExit(pid: number, timeoutMs: number) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    if (!isProcessRunning(pid)) {
+      return;
+    }
+    await sleep(10);
+  }
+  throw new Error(`process did not exit: ${pid}`);
 }
 
 async function createQaLabRepoRootFixture(params?: {
@@ -562,7 +630,10 @@ describe("qa-lab server", () => {
         `  fs.writeFileSync(${JSON.stringify(stoppedPath)}, "terminated", "utf8");`,
         "  process.exit(0);",
         "});",
-        `fs.writeFileSync(${JSON.stringify(markerPath)}, process.env.OPENCLAW_CODEX_DISCOVERY_LIVE || "", "utf8");`,
+        `fs.writeFileSync(${JSON.stringify(markerPath)}, JSON.stringify({`,
+        '  discoveryLive: process.env.OPENCLAW_CODEX_DISCOVERY_LIVE || "",',
+        "  pid: process.pid,",
+        `}), "utf8");`,
         "setInterval(() => {}, 1000);",
       ].join("\n"),
       "utf8",
@@ -587,11 +658,23 @@ describe("qa-lab server", () => {
 
     const bootstrapResponse = await fetchWithRetry(`${lab.baseUrl}/api/bootstrap`);
     expect(bootstrapResponse.status).toBe(200);
-    expect(await waitForFileContent(markerPath, "0")).toBe("0");
+    const markerContent = await waitForFileContent(
+      markerPath,
+      (content) => parseRunnerCatalogStartedMarker(content)?.discoveryLive === "0",
+      5_000,
+    );
+    const marker = parseRunnerCatalogStartedMarker(markerContent);
+    if (!marker) {
+      throw new Error(`invalid runner catalog marker: ${markerContent}`);
+    }
+    expect(marker.discoveryLive).toBe("0");
 
     await lab.stop();
     stopped = true;
-    expect(await waitForFileContent(stoppedPath, "terminated")).toBe("terminated");
+    await waitForProcessExit(marker.pid, 5_000);
+    if (process.platform !== "win32") {
+      expect(await waitForExactFileContent(stoppedPath, "terminated", 5_000)).toBe("terminated");
+    }
   });
 
   it("can disable the embedded echo gateway for real-suite runs", async () => {
