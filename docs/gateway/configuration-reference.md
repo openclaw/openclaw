@@ -2286,6 +2286,7 @@ Controls elevated exec access outside the sandbox:
 {
   tools: {
     exec: {
+      mode: "auto",
       backgroundMs: 10000,
       timeoutSec: 1800,
       cleanupMs: 1800000,

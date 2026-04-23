@@ -5,6 +5,7 @@ import { type ReplyExecOverrides, resolveReplyExecOverrides } from "./get-reply-
 
 const AGENT_EXEC_DEFAULTS = {
   host: "node",
+  mode: "ask",
   security: "allowlist",
   ask: "always",
   node: "worker-alpha",
@@ -32,18 +33,20 @@ describe("reply exec overrides", () => {
   it("prefers inline exec directives, then persisted session overrides, then agent defaults", () => {
     const sessionEntry = createSessionEntry({
       execHost: "gateway",
+      execMode: "auto",
       execSecurity: "deny",
     });
 
     expect(
       resolveReplyExecOverrides({
-        directives: parseInlineDirectives("/exec host=auto security=full"),
+        directives: parseInlineDirectives("/exec host=auto mode=full security=full"),
         sessionEntry,
         agentExecDefaults: AGENT_EXEC_DEFAULTS,
       }),
     ).toEqual({
       ...AGENT_EXEC_DEFAULTS,
       host: "auto",
+      mode: "full",
       security: "full",
     });
 
@@ -56,6 +59,7 @@ describe("reply exec overrides", () => {
     ).toEqual({
       ...AGENT_EXEC_DEFAULTS,
       host: "gateway",
+      mode: "auto",
       security: "deny",
     });
   });

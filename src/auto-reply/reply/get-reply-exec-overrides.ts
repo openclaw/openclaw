@@ -2,7 +2,10 @@ import type { ExecToolDefaults } from "../../agents/bash-tools.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
 
-export type ReplyExecOverrides = Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
+export type ReplyExecOverrides = Pick<
+  ExecToolDefaults,
+  "host" | "mode" | "security" | "ask" | "node"
+>;
 
 export function resolveReplyExecOverrides(params: {
   directives: InlineDirectives;
@@ -17,14 +20,18 @@ export function resolveReplyExecOverrides(params: {
     params.directives.execSecurity ??
     (params.sessionEntry?.execSecurity as ReplyExecOverrides["security"]) ??
     params.agentExecDefaults?.security;
+  const mode =
+    params.directives.execMode ??
+    (params.sessionEntry?.execMode as ReplyExecOverrides["mode"]) ??
+    params.agentExecDefaults?.mode;
   const ask =
     params.directives.execAsk ??
     (params.sessionEntry?.execAsk as ReplyExecOverrides["ask"]) ??
     params.agentExecDefaults?.ask;
   const node =
     params.directives.execNode ?? params.sessionEntry?.execNode ?? params.agentExecDefaults?.node;
-  if (!host && !security && !ask && !node) {
+  if (!host && !mode && !security && !ask && !node) {
     return undefined;
   }
-  return { host, security, ask, node };
+  return { host, mode, security, ask, node };
 }

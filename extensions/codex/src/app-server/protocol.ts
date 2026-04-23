@@ -54,7 +54,7 @@ export type CodexThreadStartParams = {
   modelProvider?: string | null;
   cwd?: string | null;
   approvalPolicy?: "never" | "on-request" | "on-failure" | "untrusted";
-  approvalsReviewer?: "user" | "guardian_subagent";
+  approvalsReviewer?: "user" | "guardian_subagent" | "auto_review";
   sandbox?: "read-only" | "workspace-write" | "danger-full-access";
   serviceTier?: CodexServiceTier | null;
   config?: JsonObject | null;
@@ -72,7 +72,7 @@ export type CodexThreadResumeParams = {
   model?: string | null;
   modelProvider?: string | null;
   approvalPolicy?: "never" | "on-request" | "on-failure" | "untrusted";
-  approvalsReviewer?: "user" | "guardian_subagent";
+  approvalsReviewer?: "user" | "guardian_subagent" | "auto_review";
   sandbox?: "read-only" | "workspace-write" | "danger-full-access";
   serviceTier?: CodexServiceTier | null;
   baseInstructions?: string | null;
@@ -93,7 +93,7 @@ export type CodexTurnStartParams = {
   input: CodexUserInput[];
   cwd?: string | null;
   approvalPolicy?: "never" | "on-request" | "on-failure" | "untrusted";
-  approvalsReviewer?: "user" | "guardian_subagent";
+  approvalsReviewer?: "user" | "guardian_subagent" | "auto_review";
   model?: string | null;
   serviceTier?: CodexServiceTier | null;
   effort?: "minimal" | "low" | "medium" | "high" | "xhigh" | null;

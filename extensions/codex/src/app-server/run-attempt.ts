@@ -28,7 +28,10 @@ import {
   defaultCodexAppServerClientFactory,
 } from "./client-factory.js";
 import { isCodexAppServerApprovalRequest, type CodexAppServerClient } from "./client.js";
-import { resolveCodexAppServerRuntimeOptions } from "./config.js";
+import {
+  resolveCodexAppServerRuntimeOptions,
+  resolveOpenClawExecModeFromConfig,
+} from "./config.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import { handleCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
@@ -62,7 +65,14 @@ export async function runCodexAppServerAttempt(
   options: { pluginConfig?: unknown; startupTimeoutFloorMs?: number } = {},
 ): Promise<EmbeddedRunAttemptResult> {
   const attemptStartedAt = Date.now();
-  const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig: options.pluginConfig });
+  const openClawExecMode = resolveOpenClawExecModeFromConfig({
+    config: params.config,
+    agentId: params.agentId,
+  });
+  const appServer = resolveCodexAppServerRuntimeOptions({
+    pluginConfig: options.pluginConfig,
+    execMode: openClawExecMode,
+  });
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
   await fs.mkdir(resolvedWorkspace, { recursive: true });
   const sandboxSessionKey = params.sessionKey?.trim() || params.sessionId;

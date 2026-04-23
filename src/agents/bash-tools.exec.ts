@@ -8,6 +8,7 @@ import {
   loadExecApprovals,
   maxAsk,
   minSecurity,
+  resolveExecModePolicy,
 } from "../infra/exec-approvals.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import { sanitizeHostExecEnvWithDiagnostics } from "../infra/host-env-security.js";
@@ -1481,15 +1482,21 @@ export function createExecTool(
       const configuredSecurity =
         defaults?.security ?? approvalDefaults?.security ?? (host === "sandbox" ? "deny" : "full");
       const requestedSecurity = normalizeExecSecurity(params.security);
-      let security = minSecurity(configuredSecurity, requestedSecurity ?? configuredSecurity);
+      const modePolicy = resolveExecModePolicy({
+        mode: defaults?.mode,
+        security: configuredSecurity,
+        ask: defaults?.ask ?? approvalDefaults?.ask ?? "off",
+      });
+      let security = minSecurity(modePolicy.security, requestedSecurity ?? modePolicy.security);
       if (elevatedRequested && elevatedMode === "full") {
         security = "full";
       }
       // Keep local exec defaults in sync with exec-approvals.json when tools.exec.* is unset.
-      const configuredAsk = defaults?.ask ?? approvalDefaults?.ask ?? "off";
       const requestedAsk = normalizeExecAsk(params.ask);
-      let ask = maxAsk(configuredAsk, requestedAsk ?? configuredAsk);
       const bypassApprovals = elevatedRequested && elevatedMode === "full";
+      let ask = maxAsk(modePolicy.ask, requestedAsk ?? modePolicy.ask);
+      const autoReview =
+        modePolicy.autoReview && !requestedAsk && !requestedSecurity && !bypassApprovals;
       if (bypassApprovals) {
         ask = "off";
       }
@@ -1621,6 +1628,7 @@ export function createExecTool(
           agentId,
           security,
           ask,
+          autoReview,
           strictInlineEval: defaults?.strictInlineEval,
           trigger: defaults?.trigger,
           timeoutSec: params.timeout,
@@ -1647,6 +1655,7 @@ export function createExecTool(
           defaultTimeoutSec,
           security,
           ask,
+          autoReview,
           safeBins,
           safeBinProfiles,
           strictInlineEval: defaults?.strictInlineEval,

@@ -387,6 +387,7 @@ describe("gateway sessions patch", () => {
         patch: {
           key: MAIN_SESSION_KEY,
           execHost: " AUTO ",
+          execMode: " AUTO ",
           execSecurity: " ALLOWLIST ",
           execAsk: " ON-MISS ",
           execNode: " worker-1 ",
@@ -396,6 +397,7 @@ describe("gateway sessions patch", () => {
       }),
     );
     expect(entry.execHost).toBe("auto");
+    expect(entry.execMode).toBe("auto");
     expect(entry.execSecurity).toBe("allowlist");
     expect(entry.execAsk).toBe("on-miss");
     expect(entry.execNode).toBe("worker-1");

@@ -251,6 +251,11 @@ export async function handleDirectiveOnly(
         text: `Unrecognized exec host "${directives.rawExecHost ?? ""}". Valid hosts: auto, sandbox, gateway, node.`,
       };
     }
+    if (directives.invalidExecMode) {
+      return {
+        text: `Unrecognized exec mode "${directives.rawExecMode ?? ""}". Valid: deny, allowlist, ask, auto, full.`,
+      };
+    }
     if (directives.invalidExecSecurity) {
       return {
         text: `Unrecognized exec security "${directives.rawExecSecurity ?? ""}". Valid: deny, allowlist, full.`,
@@ -276,8 +281,8 @@ export async function handleDirectiveOnly(
       const nodeLabel = execDefaults.node ? `node=${execDefaults.node}` : "node=(unset)";
       return {
         text: withOptions(
-          `Current exec defaults: host=${renderExecTargetLabel(execDefaults.host)}, effective=${execDefaults.effectiveHost}, security=${execDefaults.security}, ask=${execDefaults.ask}, ${nodeLabel}.`,
-          "host=auto|sandbox|gateway|node, security=deny|allowlist|full, ask=off|on-miss|always, node=<id>",
+          `Current exec defaults: host=${renderExecTargetLabel(execDefaults.host)}, effective=${execDefaults.effectiveHost}, mode=${execDefaults.mode}, security=${execDefaults.security}, ask=${execDefaults.ask}, ${nodeLabel}.`,
+          "host=auto|sandbox|gateway|node, mode=deny|allowlist|ask|auto|full, security=deny|allowlist|full, ask=off|on-miss|always, node=<id>",
         ),
       };
     }
@@ -400,6 +405,9 @@ export async function handleDirectiveOnly(
     if (directives.hasExecDirective && directives.hasExecOptions && allowInternalExecPersistence) {
       if (directives.execHost) {
         sessionEntry.execHost = directives.execHost;
+      }
+      if (directives.execMode) {
+        sessionEntry.execMode = directives.execMode;
       }
       if (directives.execSecurity) {
         sessionEntry.execSecurity = directives.execSecurity;
@@ -553,6 +561,9 @@ export async function handleDirectiveOnly(
     const execParts: string[] = [];
     if (directives.execHost) {
       execParts.push(`host=${directives.execHost}`);
+    }
+    if (directives.execMode) {
+      execParts.push(`mode=${directives.execMode}`);
     }
     if (directives.execSecurity) {
       execParts.push(`security=${directives.execSecurity}`);

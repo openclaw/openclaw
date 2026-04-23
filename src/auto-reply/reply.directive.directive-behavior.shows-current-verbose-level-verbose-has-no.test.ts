@@ -128,10 +128,10 @@ describe("directive behavior", () => {
       } as OpenClawConfig,
     });
     expect(execText).toContain(
-      "Current exec defaults: host=gateway, effective=gateway, security=allowlist, ask=always, node=mac-1.",
+      "Current exec defaults: host=gateway, effective=gateway, mode=ask, security=allowlist, ask=always, node=mac-1.",
     );
     expect(execText).toContain(
-      "Options: host=auto|sandbox|gateway|node, security=deny|allowlist|full, ask=off|on-miss|always, node=<id>.",
+      "Options: host=auto|sandbox|gateway|node, mode=deny|allowlist|ask|auto|full, security=deny|allowlist|full, ask=off|on-miss|always, node=<id>.",
     );
     expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
   });

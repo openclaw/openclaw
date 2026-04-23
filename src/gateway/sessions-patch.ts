@@ -19,7 +19,7 @@ import {
 } from "../auto-reply/thinking.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeExecTarget } from "../infra/exec-approvals.js";
+import { normalizeExecMode, normalizeExecTarget } from "../infra/exec-approvals.js";
 import {
   isAcpSessionKey,
   isSubagentSessionKey,
@@ -356,6 +356,19 @@ export async function applySessionsPatchToStore(params: {
         return invalid('invalid execSecurity (use "deny"|"allowlist"|"full")');
       }
       next.execSecurity = normalized;
+    }
+  }
+
+  if ("execMode" in patch) {
+    const raw = patch.execMode;
+    if (raw === null) {
+      delete next.execMode;
+    } else if (raw !== undefined) {
+      const normalized = normalizeExecMode(raw);
+      if (!normalized) {
+        return invalid('invalid execMode (use "deny"|"allowlist"|"ask"|"auto"|"full")');
+      }
+      next.execMode = normalized;
     }
   }
 

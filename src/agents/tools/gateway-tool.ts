@@ -32,6 +32,7 @@ const DEFAULT_UPDATE_TIMEOUT_MS = 20 * 60_000;
 const PROTECTED_GATEWAY_CONFIG_PATHS = [
   // Exec consent / allowlist.
   "tools.exec.ask",
+  "tools.exec.mode",
   "tools.exec.security",
   "tools.exec.safeBins",
   "tools.exec.safeBinProfiles",

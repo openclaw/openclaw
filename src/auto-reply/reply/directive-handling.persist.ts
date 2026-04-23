@@ -161,6 +161,10 @@ export async function persistInlineDirectives(params: {
         sessionEntry.execHost = directives.execHost;
         updated = true;
       }
+      if (directives.execMode) {
+        sessionEntry.execMode = directives.execMode;
+        updated = true;
+      }
       if (directives.execSecurity) {
         sessionEntry.execSecurity = directives.execSecurity;
         updated = true;

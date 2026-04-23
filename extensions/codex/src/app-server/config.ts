@@ -6,7 +6,7 @@ export type CodexAppServerTransportMode = "stdio" | "websocket";
 export type CodexAppServerPolicyMode = "yolo" | "guardian";
 export type CodexAppServerApprovalPolicy = "never" | "on-request" | "on-failure" | "untrusted";
 export type CodexAppServerSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
-export type CodexAppServerApprovalsReviewer = "user" | "guardian_subagent";
+export type CodexAppServerApprovalsReviewer = "user" | "guardian_subagent" | "auto_review";
 
 export type CodexAppServerStartOptions = {
   transport: CodexAppServerTransportMode;
@@ -73,7 +73,7 @@ const codexAppServerApprovalPolicySchema = z.enum([
   "untrusted",
 ]);
 const codexAppServerSandboxSchema = z.enum(["read-only", "workspace-write", "danger-full-access"]);
-const codexAppServerApprovalsReviewerSchema = z.enum(["user", "guardian_subagent"]);
+const codexAppServerApprovalsReviewerSchema = z.enum(["user", "guardian_subagent", "auto_review"]);
 const codexAppServerServiceTierSchema = z.preprocess(
   (value) => (value === null ? null : resolveServiceTier(value)),
   z.enum(["fast", "flex"]).nullable().optional(),
@@ -113,9 +113,36 @@ export function readCodexPluginConfig(value: unknown): CodexPluginConfig {
   return parsed.success ? parsed.data : {};
 }
 
+export function resolveOpenClawExecModeFromConfig(params: {
+  config?: unknown;
+  agentId?: string;
+}): "deny" | "allowlist" | "ask" | "auto" | "full" | undefined {
+  const root = readRecord(params.config);
+  const globalExec = readRecord(readRecord(root?.tools)?.exec);
+  const globalMode = readExecMode(globalExec?.mode);
+  const agentId = params.agentId?.trim();
+  if (!agentId) {
+    return globalMode;
+  }
+  const agents = readRecord(root?.agents);
+  const list = Array.isArray(agents?.list) ? agents.list : [];
+  for (const entry of list) {
+    const agent = readRecord(entry);
+    if (agent?.id !== agentId) {
+      continue;
+    }
+    const agentExec = readRecord(readRecord(agent.tools)?.exec);
+    return (
+      readExecMode(agentExec?.mode) ?? (hasLegacyExecPolicy(agentExec) ? undefined : globalMode)
+    );
+  }
+  return globalMode;
+}
+
 export function resolveCodexAppServerRuntimeOptions(
   params: {
     pluginConfig?: unknown;
+    execMode?: unknown;
     env?: NodeJS.ProcessEnv;
   } = {},
 ): CodexAppServerRuntimeOptions {
@@ -131,6 +158,7 @@ export function resolveCodexAppServerRuntimeOptions(
   const policyMode =
     resolvePolicyMode(config.mode) ??
     resolvePolicyMode(env.OPENCLAW_CODEX_APP_SERVER_MODE) ??
+    (resolveOpenClawExecMode(params.execMode) === "auto" ? "guardian" : undefined) ??
     "yolo";
   const serviceTier = resolveServiceTier(config.serviceTier);
   if (transport === "websocket" && !url) {
@@ -203,7 +231,33 @@ function resolveSandbox(value: unknown): CodexAppServerSandboxMode | undefined {
 }
 
 function resolveApprovalsReviewer(value: unknown): CodexAppServerApprovalsReviewer | undefined {
-  return value === "guardian_subagent" || value === "user" ? value : undefined;
+  return value === "guardian_subagent" || value === "auto_review" || value === "user"
+    ? value
+    : undefined;
+}
+
+function resolveOpenClawExecMode(value: unknown): "auto" | undefined {
+  return value === "auto" ? "auto" : undefined;
+}
+
+function readExecMode(value: unknown): "deny" | "allowlist" | "ask" | "auto" | "full" | undefined {
+  return value === "deny" ||
+    value === "allowlist" ||
+    value === "ask" ||
+    value === "auto" ||
+    value === "full"
+    ? value
+    : undefined;
+}
+
+function readRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function hasLegacyExecPolicy(value: Record<string, unknown> | undefined): boolean {
+  return value?.security !== undefined || value?.ask !== undefined;
 }
 
 function resolveServiceTier(value: unknown): CodexServiceTier | undefined {

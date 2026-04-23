@@ -14,6 +14,7 @@ describe("buildExecOverridePromptHint", () => {
     const result = buildExecOverridePromptHint({
       execOverrides: {
         host: "gateway",
+        mode: "auto",
         security: "full",
         ask: "always",
         node: "worker-1",
@@ -22,7 +23,7 @@ describe("buildExecOverridePromptHint", () => {
     });
 
     expect(result).toContain(
-      "Current session exec defaults: host=gateway security=full ask=always node=worker-1.",
+      "Current session exec defaults: host=gateway mode=auto security=full ask=always node=worker-1.",
     );
     expect(result).toContain("Current elevated level: off.");
     expect(result).toContain("Do not assume a prior denial still applies");

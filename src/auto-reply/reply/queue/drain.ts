@@ -71,6 +71,7 @@ export function resolveFollowupAuthorizationKey(run: FollowupRun["run"]): string
     run.senderE164 ?? "",
     run.senderIsOwner === true,
     run.execOverrides?.host ?? "",
+    run.execOverrides?.mode ?? "",
     run.execOverrides?.security ?? "",
     run.execOverrides?.ask ?? "",
     run.execOverrides?.node ?? "",

@@ -82,7 +82,7 @@
           },
           "approvalsReviewer": {
             "type": "string",
-            "enum": ["user", "guardian_subagent"],
+            "enum": ["user", "guardian_subagent", "auto_review"],
             "default": "user"
           },
           "serviceTier": { "type": ["string", "null"], "enum": ["fast", "flex", null] }
@@ -111,7 +111,7 @@
     },
     "appServer.mode": {
       "label": "Execution Mode",
-      "help": "Use yolo for unchained local execution or guardian for Codex guardian-reviewed approvals.",
+      "help": "Legacy Codex app-server preset. Prefer tools.exec.mode=auto for normalized Guardian-reviewed approvals.",
       "advanced": true
     },
     "appServer.transport": {
@@ -162,7 +162,7 @@
     },
     "appServer.approvalsReviewer": {
       "label": "Approvals Reviewer",
-      "help": "Use user approvals or the Codex guardian subagent for native app-server approvals.",
+      "help": "Use user approvals, Codex Guardian, or Codex auto_review for native app-server approvals.",
       "advanced": true
     },
     "appServer.serviceTier": {

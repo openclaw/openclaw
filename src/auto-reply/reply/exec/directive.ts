@@ -1,7 +1,9 @@
 import {
   type ExecAsk,
+  type ExecMode,
   type ExecSecurity,
   type ExecTarget,
+  normalizeExecMode,
   normalizeExecTarget,
 } from "../../../infra/exec-approvals.js";
 import { normalizeOptionalLowercaseString } from "../../../shared/string-coerce.js";
@@ -11,15 +13,18 @@ type ExecDirectiveParse = {
   cleaned: string;
   hasDirective: boolean;
   execHost?: ExecTarget;
+  execMode?: ExecMode;
   execSecurity?: ExecSecurity;
   execAsk?: ExecAsk;
   execNode?: string;
   rawExecHost?: string;
+  rawExecMode?: string;
   rawExecSecurity?: string;
   rawExecAsk?: string;
   rawExecNode?: string;
   hasExecOptions: boolean;
   invalidHost: boolean;
+  invalidMode: boolean;
   invalidSecurity: boolean;
   invalidAsk: boolean;
   invalidNode: boolean;
@@ -51,15 +56,18 @@ function parseExecDirectiveArgs(raw: string): Omit<
   let i = skipDirectiveArgPrefix(raw);
   let consumed = i;
   let execHost: ExecTarget | undefined;
+  let execMode: ExecMode | undefined;
   let execSecurity: ExecSecurity | undefined;
   let execAsk: ExecAsk | undefined;
   let execNode: string | undefined;
   let rawExecHost: string | undefined;
+  let rawExecMode: string | undefined;
   let rawExecSecurity: string | undefined;
   let rawExecAsk: string | undefined;
   let rawExecNode: string | undefined;
   let hasExecOptions = false;
   let invalidHost = false;
+  let invalidMode = false;
   let invalidSecurity = false;
   let invalidAsk = false;
   let invalidNode = false;
@@ -108,6 +116,16 @@ function parseExecDirectiveArgs(raw: string): Omit<
       consumed = i;
       continue;
     }
+    if (key === "mode") {
+      rawExecMode = value;
+      execMode = normalizeExecMode(value) ?? undefined;
+      if (!execMode) {
+        invalidMode = true;
+      }
+      hasExecOptions = true;
+      consumed = i;
+      continue;
+    }
     if (key === "security") {
       rawExecSecurity = value;
       execSecurity = normalizeExecSecurity(value);
@@ -146,15 +164,18 @@ function parseExecDirectiveArgs(raw: string): Omit<
   return {
     consumed,
     execHost,
+    execMode,
     execSecurity,
     execAsk,
     execNode,
     rawExecHost,
+    rawExecMode,
     rawExecSecurity,
     rawExecAsk,
     rawExecNode,
     hasExecOptions,
     invalidHost,
+    invalidMode,
     invalidSecurity,
     invalidAsk,
     invalidNode,
@@ -168,6 +189,7 @@ export function extractExecDirective(body?: string): ExecDirectiveParse {
       hasDirective: false,
       hasExecOptions: false,
       invalidHost: false,
+      invalidMode: false,
       invalidSecurity: false,
       invalidAsk: false,
       invalidNode: false,
@@ -181,6 +203,7 @@ export function extractExecDirective(body?: string): ExecDirectiveParse {
       hasDirective: false,
       hasExecOptions: false,
       invalidHost: false,
+      invalidMode: false,
       invalidSecurity: false,
       invalidAsk: false,
       invalidNode: false,
@@ -195,15 +218,18 @@ export function extractExecDirective(body?: string): ExecDirectiveParse {
     cleaned,
     hasDirective: true,
     execHost: parsed.execHost,
+    execMode: parsed.execMode,
     execSecurity: parsed.execSecurity,
     execAsk: parsed.execAsk,
     execNode: parsed.execNode,
     rawExecHost: parsed.rawExecHost,
+    rawExecMode: parsed.rawExecMode,
     rawExecSecurity: parsed.rawExecSecurity,
     rawExecAsk: parsed.rawExecAsk,
     rawExecNode: parsed.rawExecNode,
     hasExecOptions: parsed.hasExecOptions,
     invalidHost: parsed.invalidHost,
+    invalidMode: parsed.invalidMode,
     invalidSecurity: parsed.invalidSecurity,
     invalidAsk: parsed.invalidAsk,
     invalidNode: parsed.invalidNode,
