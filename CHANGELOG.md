@@ -9,7 +9,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - CLI/Claude: run the same prompt-build hooks and trigger/channel context on `claude-cli` turns as on direct embedded runs, keeping Claude Code sessions aligned with OpenClaw workspace identity, routing, and hook-driven prompt mutations. (#70625) Thanks @mbelinky.
-- Memory/doctor: warn when a workspace still has both legacy `memory.md` and canonical `MEMORY.md`, let `openclaw doctor --fix` migrate or merge the split safely with a backup, and keep legacy root memory files and repair backups out of search indexing once canonical memory exists. (#70621)
+- Memory/doctor: warn when a workspace still has both legacy `memory.md` and canonical `MEMORY.md`, let `openclaw doctor --fix` migrate or merge the split safely with a backup, and keep legacy root memory files and repair backups out of search indexing once canonical memory exists. (#70621) Thanks @mbelinky.
 
 ## 2026.4.22
 
