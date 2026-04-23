@@ -23,7 +23,10 @@ vi.mock("../plugins/install.js", () => ({
 }));
 
 const enablePluginInConfig = vi.hoisted(() =>
-  vi.fn((cfg: OpenClawConfig): PluginEnableResult => ({ config: cfg, enabled: true })),
+  vi.fn<(cfg: OpenClawConfig, pluginId: string) => PluginEnableResult>((cfg) => ({
+    config: cfg,
+    enabled: true,
+  })),
 );
 vi.mock("../plugins/enable.js", () => ({
   enablePluginInConfig,
