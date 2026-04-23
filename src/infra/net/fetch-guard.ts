@@ -1,4 +1,5 @@
 import type { Dispatcher } from "undici";
+import { getGlobalDispatcher } from "undici";
 import { logWarn } from "../../logger.js";
 import { captureHttpExchange } from "../../proxy-capture/runtime.js";
 import { buildTimeoutAbortSignal } from "../../utils/fetch-timeout.js";
@@ -24,6 +25,24 @@ import {
   createHttp1EnvHttpProxyAgent,
   createHttp1ProxyAgent,
 } from "./undici-runtime.js";
+
+function resolveDispatcherTimeoutMs(fromParams: number | undefined): number | undefined {
+  if (fromParams !== undefined) {
+    return fromParams;
+  }
+  // Fall back to reading the timeout from the global undici dispatcher
+  // (set by ensureGlobalUndiciStreamTimeouts in attempt-http-runtime.ts)
+  try {
+    const globalDispatcher = getGlobalDispatcher();
+    const opts = (globalDispatcher as { options?: Record<string, unknown> }).options;
+    if (opts?.bodyTimeout) {
+      return typeof opts.bodyTimeout === "number" ? opts.bodyTimeout : undefined;
+    }
+  } catch {
+    // Global dispatcher not yet configured — no fallback available
+  }
+  return undefined;
+}
 
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
@@ -125,6 +144,7 @@ function assertExplicitProxySupportsPinnedDns(
 
 function createPolicyDispatcherWithoutPinnedDns(
   dispatcherPolicy?: PinnedDispatcherPolicy,
+  timeoutMs?: number,
 ): Dispatcher | null {
   if (!dispatcherPolicy) {
     return null;
@@ -133,23 +153,28 @@ function createPolicyDispatcherWithoutPinnedDns(
   if (dispatcherPolicy.mode === "direct") {
     return createHttp1Agent(
       dispatcherPolicy.connect ? { connect: { ...dispatcherPolicy.connect } } : undefined,
+      timeoutMs,
     );
   }
 
   if (dispatcherPolicy.mode === "env-proxy") {
-    return createHttp1EnvHttpProxyAgent({
-      ...(dispatcherPolicy.connect ? { connect: { ...dispatcherPolicy.connect } } : {}),
-      ...(dispatcherPolicy.proxyTls ? { proxyTls: { ...dispatcherPolicy.proxyTls } } : {}),
-    });
+    return createHttp1EnvHttpProxyAgent(
+      {
+        ...(dispatcherPolicy.connect ? { connect: { ...dispatcherPolicy.connect } } : {}),
+        ...(dispatcherPolicy.proxyTls ? { proxyTls: { ...dispatcherPolicy.proxyTls } } : {}),
+      },
+      timeoutMs,
+    );
   }
 
   const proxyUrl = dispatcherPolicy.proxyUrl.trim();
-  return dispatcherPolicy.proxyTls
-    ? createHttp1ProxyAgent({
-        uri: proxyUrl,
-        requestTls: { ...dispatcherPolicy.proxyTls },
-      })
-    : createHttp1ProxyAgent({ uri: proxyUrl });
+  if (dispatcherPolicy.proxyTls) {
+    return createHttp1ProxyAgent(
+      { uri: proxyUrl, requestTls: { ...dispatcherPolicy.proxyTls } },
+      timeoutMs,
+    );
+  }
+  return createHttp1ProxyAgent({ uri: proxyUrl }, timeoutMs);
 }
 
 async function assertExplicitProxyAllowed(
@@ -337,25 +362,31 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
       await assertExplicitProxyAllowed(params.dispatcherPolicy, params.lookupFn, params.policy);
       const canUseTrustedEnvProxy =
         mode === GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY && hasProxyEnvConfigured();
+      const timeoutMs = resolveDispatcherTimeoutMs(params.timeoutMs);
       if (canUseTrustedEnvProxy) {
-        dispatcher = createHttp1EnvHttpProxyAgent();
+        dispatcher = createHttp1EnvHttpProxyAgent(undefined, timeoutMs);
       } else if (usesTrustedExplicitProxyMode) {
         // Explicit proxy targets are still checked against the caller's hostname
         // policy, but the proxy does the DNS resolution for the final target.
         assertHostnameAllowedWithPolicy(parsedUrl.hostname, params.policy);
-        dispatcher = createPolicyDispatcherWithoutPinnedDns(params.dispatcherPolicy);
+        dispatcher = createPolicyDispatcherWithoutPinnedDns(params.dispatcherPolicy, timeoutMs);
       } else if (params.pinDns === false) {
         await resolvePinnedHostnameWithPolicy(parsedUrl.hostname, {
           lookupFn: params.lookupFn,
           policy: params.policy,
         });
-        dispatcher = createPolicyDispatcherWithoutPinnedDns(params.dispatcherPolicy);
+        dispatcher = createPolicyDispatcherWithoutPinnedDns(params.dispatcherPolicy, timeoutMs);
       } else {
         const pinned = await resolvePinnedHostnameWithPolicy(parsedUrl.hostname, {
           lookupFn: params.lookupFn,
           policy: params.policy,
         });
-        dispatcher = createPinnedDispatcher(pinned, params.dispatcherPolicy, params.policy);
+        dispatcher = createPinnedDispatcher(
+          pinned,
+          params.dispatcherPolicy,
+          params.policy,
+          timeoutMs,
+        );
       }
 
       const init: DispatcherAwareRequestInit = {
