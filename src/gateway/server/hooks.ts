@@ -43,7 +43,7 @@ export function shouldAnnounceHookResultToMain(params: {
     return result.announceToMain;
   }
 
-  if (value.deliver === false) {
+  if (!value.deliver) {
     return false;
   }
 
