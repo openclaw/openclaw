@@ -295,14 +295,17 @@ describe("modelsListCommand forward-compat", () => {
       expect(codexPro?.tags).not.toContain("missing");
     });
 
-    it("passes source config to model registry loading for persistence safety", async () => {
+    it("loads model registry without source config persistence input", async () => {
       const runtime = createRuntime();
 
       await modelsListCommand({ json: true }, runtime as never);
 
-      expect(mocks.loadModelRegistry).toHaveBeenCalledWith(mocks.resolvedConfig, {
-        sourceConfig: mocks.sourceConfig,
-      });
+      expect(mocks.loadModelRegistry).toHaveBeenCalledWith(
+        mocks.resolvedConfig,
+        expect.not.objectContaining({
+          sourceConfig: expect.anything(),
+        }),
+      );
     });
 
     it("keeps configured local openai gpt-5.4 entries visible in --local output", async () => {
