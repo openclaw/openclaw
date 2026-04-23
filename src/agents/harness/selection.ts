@@ -46,7 +46,7 @@ export type AgentHarnessSelectionDecision = {
     | "pinned"
     | "forced_pi"
     | "forced_plugin"
-    | "forced_plugin_missing_pi_fallback"
+    | "forced_plugin_fallback_to_pi"
     | "auto_plugin"
     | "auto_pi_fallback";
   candidates: AgentHarnessSelectionCandidate[];
@@ -122,7 +122,7 @@ export function resolveAgentHarnessSelection(params: {
     return buildSelectionDecision({
       harness: piHarness,
       policy,
-      selectedReason: "forced_plugin_missing_pi_fallback",
+      selectedReason: "forced_plugin_fallback_to_pi",
       candidates: listHarnessCandidates(pluginHarnesses),
     });
   }
@@ -136,10 +136,6 @@ export function resolveAgentHarnessSelection(params: {
     }),
   }));
   const supported = candidates
-    .map((harness) => ({
-      harness: harness.harness,
-      support: harness.support,
-    }))
     .filter(
       (
         entry,
