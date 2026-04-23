@@ -4374,6 +4374,76 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+  it("aborts sibling qmd subprocesses when one collection's search fails (prevents 2×N overlap on fallback)", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          searchMode: "search",
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [
+            { path: workspaceDir, pattern: "**/*.md", name: "alpha" },
+            { path: path.join(workspaceDir, "b"), pattern: "**/*.md", name: "bravo" },
+            { path: path.join(workspaceDir, "c"), pattern: "**/*.md", name: "charlie" },
+          ],
+        },
+      },
+    } as OpenClawConfig;
+
+    // Track which search-wave children had kill() called. alpha errors
+    // immediately; bravo and charlie spawn but never self-close — without
+    // the AbortController wiring, they'd linger until timeoutMs while the
+    // catch block's query-mode fallback spawns a fresh parallel wave.
+    const killedSearchChildren: string[] = [];
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      const collection = args.includes("alpha-main")
+        ? "alpha-main"
+        : args.includes("bravo-main")
+          ? "bravo-main"
+          : args.includes("charlie-main")
+            ? "charlie-main"
+            : undefined;
+      if (args[0] === "search" && collection) {
+        const child = createMockChild({ autoClose: false });
+        // Replace the no-op kill with a recorder. Then emit close so the
+        // promise rejection resolves promptly (real SIGKILL would trigger
+        // the close event too).
+        child.kill = () => {
+          killedSearchChildren.push(collection);
+          queueMicrotask(() => child.closeWith(null));
+        };
+        if (collection === "alpha-main") {
+          // Immediate unsupported-flag error triggers the rejection that
+          // should abort the siblings.
+          emitAndClose(child, "stderr", "unknown flag: --json", 2);
+        }
+        // bravo/charlie: never self-close; their close arrives via kill().
+        return child;
+      }
+      if (args[0] === "query" && collection) {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(child, "stdout", "[]");
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager();
+
+    // The fallback path should succeed (empty results), and the sibling
+    // search-wave children must have been aborted before it fired.
+    await expect(
+      manager.search("test", { sessionKey: "agent:main:slack:dm:u123" }),
+    ).resolves.toEqual([]);
+
+    // Both non-erroring search-wave children got aborted.
+    expect(killedSearchChildren.toSorted()).toEqual(["bravo-main", "charlie-main"]);
+
+    await manager.close();
+  });
+
   it("errors when qmd output exceeds command output safety cap", async () => {
     const noisyPayload = "x".repeat(240_000);
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {

@@ -105,8 +105,20 @@ export async function runCliCommand(params: {
   timeoutMs?: number;
   maxOutputChars: number;
   discardStdout?: boolean;
+  /**
+   * Optional abort signal. When aborted, the child process receives SIGKILL
+   * and the promise rejects with an abort error. Used to prevent orphaned
+   * sibling subprocesses when one peer in a Promise.all fan-out fails and
+   * the caller wants to tear down the rest immediately.
+   */
+  signal?: AbortSignal;
 }): Promise<{ stdout: string; stderr: string }> {
   return await new Promise((resolve, reject) => {
+    // Short-circuit if the caller already aborted before we spawn.
+    if (params.signal?.aborted) {
+      reject(new Error(`${params.commandSummary} aborted`));
+      return;
+    }
     const child = spawn(params.spawnInvocation.command, params.spawnInvocation.argv, {
       env: params.env,
       cwd: params.cwd,
@@ -124,6 +136,18 @@ export async function runCliCommand(params: {
           reject(new Error(`${params.commandSummary} timed out after ${params.timeoutMs}ms`));
         }, params.timeoutMs)
       : null;
+    const onAbort = () => {
+      child.kill("SIGKILL");
+      reject(new Error(`${params.commandSummary} aborted`));
+    };
+    if (params.signal) {
+      params.signal.addEventListener("abort", onAbort, { once: true });
+    }
+    const cleanupAbortListener = () => {
+      if (params.signal) {
+        params.signal.removeEventListener("abort", onAbort);
+      }
+    };
     child.stdout.on("data", (data) => {
       if (discardStdout) {
         return;
@@ -141,12 +165,14 @@ export async function runCliCommand(params: {
       if (timer) {
         clearTimeout(timer);
       }
+      cleanupAbortListener();
       reject(err);
     });
     child.on("close", (code) => {
       if (timer) {
         clearTimeout(timer);
       }
+      cleanupAbortListener();
       if (!discardStdout && (stdoutTruncated || stderrTruncated)) {
         reject(
           new Error(
