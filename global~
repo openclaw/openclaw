@@ -1,3 +1,4 @@
 npm run ui:build
 npm run build  
 sudo npm install -g .
+
