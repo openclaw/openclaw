@@ -4,10 +4,12 @@ import {
   parseOAuthCallbackInput,
   waitForLocalOAuthCallback,
 } from "openclaw/plugin-sdk/provider-auth-runtime";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 
 export const GOOGLE_MEET_REDIRECT_URI = "http://localhost:8085/oauth2callback";
 export const GOOGLE_MEET_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 export const GOOGLE_MEET_TOKEN_URL = "https://oauth2.googleapis.com/token";
+const GOOGLE_MEET_TOKEN_HOST = "oauth2.googleapis.com";
 export const GOOGLE_MEET_SCOPES = [
   "https://www.googleapis.com/auth/meetings.space.readonly",
   "https://www.googleapis.com/auth/meetings.conference.media.readonly",
@@ -43,40 +45,49 @@ export function buildGoogleMeetAuthUrl(params: {
 }
 
 async function executeGoogleTokenRequest(body: URLSearchParams): Promise<GoogleMeetOAuthTokens> {
-  const response = await fetch(GOOGLE_MEET_TOKEN_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
-      Accept: "application/json",
+  const { response, release } = await fetchWithSsrFGuard({
+    url: GOOGLE_MEET_TOKEN_URL,
+    init: {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+        Accept: "application/json",
+      },
+      body,
     },
-    body,
+    policy: { allowedHostnames: [GOOGLE_MEET_TOKEN_HOST] },
+    auditContext: "google-meet.oauth.token",
   });
-  if (!response.ok) {
-    const detail = await response.text();
-    throw new Error(`Google OAuth token request failed (${response.status}): ${detail}`);
+  try {
+    if (!response.ok) {
+      const detail = await response.text();
+      throw new Error(`Google OAuth token request failed (${response.status}): ${detail}`);
+    }
+    const payload = (await response.json()) as {
+      access_token?: string;
+      expires_in?: number;
+      refresh_token?: string;
+      scope?: string;
+      token_type?: string;
+    };
+    const accessToken = payload.access_token?.trim();
+    if (!accessToken) {
+      throw new Error("Google OAuth token response was missing access_token");
+    }
+    const expiresInSeconds =
+      typeof payload.expires_in === "number" && Number.isFinite(payload.expires_in)
+        ? payload.expires_in
+        : 3600;
+    return {
+      accessToken,
+      expiresAt: Date.now() + expiresInSeconds * 1000,
+      refreshToken: payload.refresh_token?.trim() || undefined,
+      scope: payload.scope?.trim() || undefined,
+      tokenType: payload.token_type?.trim() || undefined,
+    };
+  } finally {
+    await release();
   }
-  const payload = (await response.json()) as {
-    access_token?: string;
-    expires_in?: number;
-    refresh_token?: string;
-    scope?: string;
-    token_type?: string;
-  };
-  const accessToken = payload.access_token?.trim();
-  if (!accessToken) {
-    throw new Error("Google OAuth token response was missing access_token");
-  }
-  const expiresInSeconds =
-    typeof payload.expires_in === "number" && Number.isFinite(payload.expires_in)
-      ? payload.expires_in
-      : 3600;
-  return {
-    accessToken,
-    expiresAt: Date.now() + expiresInSeconds * 1000,
-    refreshToken: payload.refresh_token?.trim() || undefined,
-    scope: payload.scope?.trim() || undefined,
-    tokenType: payload.token_type?.trim() || undefined,
-  };
 }
 
 function tokenRequestBody(values: Record<string, string | undefined>): URLSearchParams {

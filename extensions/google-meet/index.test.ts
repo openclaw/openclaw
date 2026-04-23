@@ -24,6 +24,25 @@ const voiceCallMocks = vi.hoisted(() => ({
   joinMeetViaVoiceCallGateway: vi.fn(async () => ({ callId: "call-1", dtmfSent: true })),
 }));
 
+const fetchGuardMocks = vi.hoisted(() => ({
+  fetchWithSsrFGuard: vi.fn(
+    async (params: {
+      url: string;
+      init?: RequestInit;
+    }): Promise<{
+      response: Response;
+      release: () => Promise<void>;
+    }> => ({
+      response: await fetch(params.url, params.init),
+      release: vi.fn(async () => {}),
+    }),
+  ),
+}));
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
+  fetchWithSsrFGuard: fetchGuardMocks.fetchWithSsrFGuard,
+}));
+
 vi.mock("./src/voice-call-gateway.js", () => ({
   joinMeetViaVoiceCallGateway: voiceCallMocks.joinMeetViaVoiceCallGateway,
 }));
@@ -179,6 +198,16 @@ describe("google-meet plugin", () => {
         meeting: "spaces/abc-defg-hij",
       }),
     ).resolves.toMatchObject({ name: "spaces/abc-defg-hij" });
+    expect(fetchGuardMocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://meet.googleapis.com/v2/spaces/abc-defg-hij",
+        init: expect.objectContaining({
+          headers: expect.objectContaining({ Authorization: "Bearer token" }),
+        }),
+        policy: { allowedHostnames: ["meet.googleapis.com"] },
+        auditContext: "google-meet.spaces.get",
+      }),
+    );
     expect(fetchMock).toHaveBeenCalledWith(
       "https://meet.googleapis.com/v2/spaces/abc-defg-hij",
       expect.objectContaining({
