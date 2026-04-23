@@ -97,31 +97,48 @@ function expectOpenAIPromptContribution(
   });
 }
 
-function mockOpenAIImageApiResponse(params: {
-  finalUrl: string;
-  imageData: string;
-  revisedPrompt?: string;
+function mockOpenAIImageApiResponses(params: {
+  authValue: string;
+  authMode: "api-key" | "oauth";
+  generationFinalUrl: string;
+  editFinalUrl: string;
 }) {
   const resolveApiKeySpy = vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-    apiKey: "sk-test",
+    apiKey: params.authValue,
     source: "env",
-    mode: "api-key",
+    mode: params.authMode,
   });
-  const postJsonRequestSpy = vi.spyOn(providerHttp, "postJsonRequest").mockResolvedValue({
-    finalUrl: params.finalUrl,
-    response: {
-      ok: true,
-      json: async () => ({
-        data: [
-          {
-            b64_json: Buffer.from(params.imageData).toString("base64"),
-            ...(params.revisedPrompt ? { revised_prompt: params.revisedPrompt } : {}),
-          },
-        ],
-      }),
-    } as Response,
-    release: vi.fn(async () => {}),
-  });
+  const postJsonRequestSpy = vi
+    .spyOn(providerHttp, "postJsonRequest")
+    .mockResolvedValueOnce({
+      finalUrl: params.generationFinalUrl,
+      response: {
+        ok: true,
+        json: async () => ({
+          data: [
+            {
+              b64_json: Buffer.from("png-data").toString("base64"),
+              revised_prompt: "revised",
+            },
+          ],
+        }),
+      } as Response,
+      release: vi.fn(async () => {}),
+    })
+    .mockResolvedValueOnce({
+      finalUrl: params.editFinalUrl,
+      response: {
+        ok: true,
+        json: async () => ({
+          data: [
+            {
+              b64_json: Buffer.from("edited-image").toString("base64"),
+            },
+          ],
+        }),
+      } as Response,
+      release: vi.fn(async () => {}),
+    });
   vi.spyOn(providerHttp, "assertOkOrThrowHttpError").mockResolvedValue(undefined);
   return { resolveApiKeySpy, postJsonRequestSpy };
 }
@@ -135,118 +152,140 @@ describe("openai plugin", () => {
     vi.restoreAllMocks();
   });
 
-  it("generates PNG buffers from the OpenAI Images API", async () => {
-    const { resolveApiKeySpy, postJsonRequestSpy } = mockOpenAIImageApiResponse({
-      finalUrl: "https://api.openai.com/v1/images/generations",
-      imageData: "png-data",
-      revisedPrompt: "revised",
-    });
+  it.each<{
+    providerId: "openai" | "openai-codex";
+    authValue: string;
+    authMode: "api-key" | "oauth";
+    generationEndpoint: string;
+    editEndpoint: string;
+  }>([
+    {
+      providerId: "openai",
+      authValue: "sk-test",
+      authMode: "api-key" as const,
+      generationEndpoint: "https://api.openai.com/v1/images/generations",
+      editEndpoint: "https://api.openai.com/v1/images/edits",
+    },
+    {
+      providerId: "openai-codex",
+      authValue: "oauth-token",
+      authMode: "oauth" as const,
+      generationEndpoint: "https://chatgpt.com/backend-api/images/generations",
+      editEndpoint: "https://chatgpt.com/backend-api/images/edits",
+    },
+  ])(
+    "supports image generation and edits for $providerId",
+    async ({ providerId, authValue, authMode, generationEndpoint, editEndpoint }) => {
+      const { resolveApiKeySpy, postJsonRequestSpy } = mockOpenAIImageApiResponses({
+        authValue,
+        authMode,
+        generationFinalUrl: generationEndpoint,
+        editFinalUrl: editEndpoint,
+      });
 
-    const provider = buildOpenAIImageGenerationProvider();
-    const authStore = { version: 1, profiles: {} };
-    const result = await provider.generateImage({
-      provider: "openai",
-      model: "gpt-image-2",
-      prompt: "draw a cat",
-      cfg: {},
-      authStore,
-      count: 2,
-      size: "2048x2048",
-    });
+      const provider = buildOpenAIImageGenerationProvider(providerId);
+      const authStore = { version: 1, profiles: {} };
+      const generated = await provider.generateImage({
+        provider: providerId,
+        model: "gpt-image-2",
+        prompt: "draw a cat",
+        cfg: {},
+        authStore,
+        count: 2,
+        size: "2048x2048",
+      });
 
-    expect(resolveApiKeySpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "openai",
-        store: authStore,
-      }),
+      expect(resolveApiKeySpy).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({
+          provider: providerId,
+          store: authStore,
+        }),
+      );
+      expect(postJsonRequestSpy).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({
+          url: generationEndpoint,
+          body: {
+            model: "gpt-image-2",
+            prompt: "draw a cat",
+            n: 2,
+            size: "2048x2048",
+          },
+        }),
+      );
+      expect(generated).toEqual({
+        images: [
+          {
+            buffer: Buffer.from("png-data"),
+            mimeType: "image/png",
+            fileName: "image-1.png",
+            revisedPrompt: "revised",
+          },
+        ],
+        model: "gpt-image-2",
+      });
+
+      const edited = await provider.generateImage({
+        provider: providerId,
+        model: "gpt-image-2",
+        prompt: "Edit this image",
+        cfg: {},
+        authStore,
+        count: 2,
+        size: "1536x1024",
+        inputImages: [
+          { buffer: Buffer.from("x"), mimeType: "image/png" },
+          { buffer: Buffer.from("y"), mimeType: "image/jpeg", fileName: "ref.jpg" },
+        ],
+      });
+
+      expect(resolveApiKeySpy).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          provider: providerId,
+          store: authStore,
+        }),
+      );
+      expect(postJsonRequestSpy).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          url: editEndpoint,
+          body: {
+            model: "gpt-image-2",
+            prompt: "Edit this image",
+            n: 2,
+            size: "1536x1024",
+            images: [
+              {
+                image_url: "data:image/png;base64,eA==",
+              },
+              {
+                image_url: "data:image/jpeg;base64,eQ==",
+              },
+            ],
+          },
+        }),
+      );
+      expect(edited).toEqual({
+        images: [
+          {
+            buffer: Buffer.from("edited-image"),
+            mimeType: "image/png",
+            fileName: "image-1.png",
+          },
+        ],
+        model: "gpt-image-2",
+      });
+    },
+  );
+
+  it("registers openai-codex as an image generation provider in the plugin runtime", async () => {
+    const providers = await registerOpenAIPlugin();
+
+    expect(providers.imageProviders.map((provider) => provider.id)).toEqual(
+      expect.arrayContaining(["openai", "openai-codex"]),
     );
-    expect(postJsonRequestSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://api.openai.com/v1/images/generations",
-        body: {
-          model: "gpt-image-2",
-          prompt: "draw a cat",
-          n: 2,
-          size: "2048x2048",
-        },
-      }),
-    );
-    expect(postJsonRequestSpy).not.toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://api.openai.com/v1/images/edits",
-      }),
-    );
-    expect(result).toEqual({
-      images: [
-        {
-          buffer: Buffer.from("png-data"),
-          mimeType: "image/png",
-          fileName: "image-1.png",
-          revisedPrompt: "revised",
-        },
-      ],
-      model: "gpt-image-2",
-    });
-  });
-
-  it("submits reference-image edits to the OpenAI Images edits endpoint", async () => {
-    const { resolveApiKeySpy, postJsonRequestSpy } = mockOpenAIImageApiResponse({
-      finalUrl: "https://api.openai.com/v1/images/edits",
-      imageData: "edited-image",
-    });
-
-    const provider = buildOpenAIImageGenerationProvider();
-    const authStore = { version: 1, profiles: {} };
-
-    const result = await provider.generateImage({
-      provider: "openai",
-      model: "gpt-image-2",
-      prompt: "Edit this image",
-      cfg: {},
-      authStore,
-      count: 2,
-      size: "1536x1024",
-      inputImages: [
-        { buffer: Buffer.from("x"), mimeType: "image/png" },
-        { buffer: Buffer.from("y"), mimeType: "image/jpeg", fileName: "ref.jpg" },
-      ],
-    });
-
-    expect(resolveApiKeySpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "openai",
-        store: authStore,
-      }),
-    );
-    expect(postJsonRequestSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://api.openai.com/v1/images/edits",
-        body: {
-          model: "gpt-image-2",
-          prompt: "Edit this image",
-          n: 2,
-          size: "1536x1024",
-          images: [
-            {
-              image_url: "data:image/png;base64,eA==",
-            },
-            {
-              image_url: "data:image/jpeg;base64,eQ==",
-            },
-          ],
-        },
-      }),
-    );
-    expect(result).toEqual({
-      images: [
-        {
-          buffer: Buffer.from("edited-image"),
-          mimeType: "image/png",
-          fileName: "image-1.png",
-        },
-      ],
-      model: "gpt-image-2",
-    });
   });
 
   it("does not allow private-network routing just because a custom base URL is configured", async () => {

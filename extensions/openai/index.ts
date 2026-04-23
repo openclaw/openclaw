@@ -48,7 +48,8 @@ export default definePluginEntry({
     api.registerProvider(buildProviderWithPromptContribution(buildOpenAIProvider()));
     api.registerProvider(buildProviderWithPromptContribution(buildOpenAICodexProviderPlugin()));
     api.registerMemoryEmbeddingProvider(openAiMemoryEmbeddingProviderAdapter);
-    api.registerImageGenerationProvider(buildOpenAIImageGenerationProvider());
+    api.registerImageGenerationProvider(buildOpenAIImageGenerationProvider("openai"));
+    api.registerImageGenerationProvider(buildOpenAIImageGenerationProvider("openai-codex"));
     api.registerRealtimeTranscriptionProvider(buildOpenAIRealtimeTranscriptionProvider());
     api.registerRealtimeVoiceProvider(buildOpenAIRealtimeVoiceProvider());
     api.registerSpeechProvider(buildOpenAISpeechProvider());

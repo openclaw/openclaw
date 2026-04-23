@@ -11,6 +11,7 @@ import { OPENAI_DEFAULT_IMAGE_MODEL as DEFAULT_OPENAI_IMAGE_MODEL } from "./defa
 import { resolveConfiguredOpenAIBaseUrl, toOpenAIDataUrl } from "./shared.js";
 
 const DEFAULT_OPENAI_IMAGE_BASE_URL = "https://api.openai.com/v1";
+const DEFAULT_OPENAI_CODEX_IMAGE_BASE_URL = "https://chatgpt.com/backend-api";
 const DEFAULT_OUTPUT_MIME = "image/png";
 const DEFAULT_SIZE = "1024x1024";
 const OPENAI_SUPPORTED_SIZES = [
@@ -24,6 +25,9 @@ const OPENAI_SUPPORTED_SIZES = [
 ] as const;
 const OPENAI_MAX_INPUT_IMAGES = 5;
 const MOCK_OPENAI_PROVIDER_ID = "mock-openai";
+const OPENAI_IMAGE_PROVIDER_IDS = ["openai", "openai-codex"] as const;
+
+type OpenAIImageProviderId = (typeof OPENAI_IMAGE_PROVIDER_IDS)[number];
 
 const AZURE_HOSTNAME_SUFFIXES = [
   ".openai.azure.com",
@@ -80,17 +84,36 @@ type OpenAIImageApiResponse = {
   }>;
 };
 
-export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
+function getProviderLabel(provider: OpenAIImageProviderId): string {
+  return provider === "openai-codex" ? "OpenAI Codex" : "OpenAI";
+}
+
+function resolveOpenAIImageBaseUrl(
+  provider: OpenAIImageProviderId,
+  cfg: OpenClawConfig | undefined,
+): string {
+  if (provider === "openai") {
+    return resolveConfiguredOpenAIBaseUrl(cfg);
+  }
+  return cfg?.models?.providers?.["openai-codex"]?.baseUrl?.trim() || DEFAULT_OPENAI_CODEX_IMAGE_BASE_URL;
+}
+
+function isConfiguredForProvider(provider: OpenAIImageProviderId, agentDir?: string): boolean {
+  return isProviderApiKeyConfigured({
+    provider,
+    agentDir,
+  });
+}
+
+export function buildOpenAIImageGenerationProvider(
+  provider: OpenAIImageProviderId = "openai",
+): ImageGenerationProvider {
   return {
-    id: "openai",
-    label: "OpenAI",
+    id: provider,
+    label: getProviderLabel(provider),
     defaultModel: DEFAULT_OPENAI_IMAGE_MODEL,
     models: [DEFAULT_OPENAI_IMAGE_MODEL],
-    isConfigured: ({ agentDir }) =>
-      isProviderApiKeyConfigured({
-        provider: "openai",
-        agentDir,
-      }),
+    isConfigured: ({ agentDir }) => isConfiguredForProvider(provider, agentDir),
     capabilities: {
       generate: {
         maxCount: 4,
@@ -114,26 +137,34 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
       const inputImages = req.inputImages ?? [];
       const isEdit = inputImages.length > 0;
       const auth = await resolveApiKeyForProvider({
-        provider: "openai",
+        provider,
         cfg: req.cfg,
         agentDir: req.agentDir,
         store: req.authStore,
       });
       if (!auth.apiKey) {
-        throw new Error("OpenAI API key missing");
+        throw new Error(
+          provider === "openai-codex"
+            ? "OpenAI Codex OAuth token missing"
+            : "OpenAI API key missing",
+        );
       }
-      const rawBaseUrl = resolveConfiguredOpenAIBaseUrl(req.cfg);
-      const isAzure = isAzureOpenAIBaseUrl(rawBaseUrl);
+      const rawBaseUrl = resolveOpenAIImageBaseUrl(provider, req.cfg);
+      const isAzure = provider === "openai" && isAzureOpenAIBaseUrl(rawBaseUrl);
 
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
         resolveProviderHttpRequestConfig({
           baseUrl: rawBaseUrl,
-          defaultBaseUrl: DEFAULT_OPENAI_IMAGE_BASE_URL,
-          allowPrivateNetwork: shouldAllowPrivateImageEndpoint(req),
+          defaultBaseUrl:
+            provider === "openai-codex"
+              ? DEFAULT_OPENAI_CODEX_IMAGE_BASE_URL
+              : DEFAULT_OPENAI_IMAGE_BASE_URL,
+          allowPrivateNetwork:
+            provider === "openai" ? shouldAllowPrivateImageEndpoint(req) : false,
           defaultHeaders: isAzure
             ? { "api-key": auth.apiKey }
             : { Authorization: `Bearer ${auth.apiKey}` },
-          provider: "openai",
+          provider,
           capability: "image",
           transport: "http",
         });
@@ -191,7 +222,9 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
       try {
         await assertOkOrThrowHttpError(
           response,
-          isEdit ? "OpenAI image edit failed" : "OpenAI image generation failed",
+          isEdit
+            ? `${getProviderLabel(provider)} image edit failed`
+            : `${getProviderLabel(provider)} image generation failed`,
         );
 
         const data = (await response.json()) as OpenAIImageApiResponse;
@@ -202,7 +235,7 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
             }
             return Object.assign(
               {
-                buffer: Buffer.from(entry.b64_json, `base64`),
+                buffer: Buffer.from(entry.b64_json, "base64"),
                 mimeType: DEFAULT_OUTPUT_MIME,
                 fileName: `image-${index + 1}.png`,
               },
