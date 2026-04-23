@@ -20,6 +20,13 @@ import {
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { fetchCodexUsage } from "openclaw/plugin-sdk/provider-usage";
 import { normalizeLowercaseStringOrEmpty, readStringValue } from "openclaw/plugin-sdk/text-runtime";
+import {
+  OPENAI_CODEX_DEVICE_PAIRING_HINT,
+  OPENAI_CODEX_DEVICE_PAIRING_LABEL,
+  OPENAI_CODEX_LOGIN_HINT,
+  OPENAI_CODEX_LOGIN_LABEL,
+  OPENAI_WIZARD_GROUP,
+} from "./auth-choice-copy.js";
 import { isOpenAIApiBaseUrl, isOpenAICodexBaseUrl } from "./base-url.js";
 import { OPENAI_CODEX_DEFAULT_MODEL } from "./default-models.js";
 import { resolveCodexAuthIdentity } from "./openai-codex-auth-identity.js";
@@ -35,17 +42,8 @@ import {
 
 const PROVIDER_ID = "openai-codex";
 const OPENAI_CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex";
-const OPENAI_WIZARD_GROUP = {
-  groupId: "openai",
-  groupLabel: "OpenAI",
-  groupHint: "API key + Codex auth",
-} as const;
 const OPENAI_CODEX_LOGIN_ASSISTANT_PRIORITY = -30;
 const OPENAI_CODEX_DEVICE_PAIRING_ASSISTANT_PRIORITY = -10;
-const OPENAI_CODEX_LOGIN_LABEL = "OpenAI Codex Browser Login";
-const OPENAI_CODEX_LOGIN_HINT = "Sign in with OpenAI in your browser";
-const OPENAI_CODEX_DEVICE_PAIRING_LABEL = "OpenAI Codex Device Pairing";
-const OPENAI_CODEX_DEVICE_PAIRING_HINT = "Pair in browser with a device code";
 const OPENAI_CODEX_GPT_54_MODEL_ID = "gpt-5.4";
 const OPENAI_CODEX_GPT_54_LEGACY_MODEL_ID = "gpt-5.4-codex";
 const OPENAI_CODEX_GPT_54_PRO_MODEL_ID = "gpt-5.4-pro";

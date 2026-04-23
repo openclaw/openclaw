@@ -35,7 +35,7 @@ const EXTENSION_TEST_COST_MULTIPLIERS = {
   // suites vary widely, and file count alone leaves long tail shards.
   "test/vitest/vitest.extension-acpx.config.ts": 0.75,
   "test/vitest/vitest.extension-bluebubbles.config.ts": 0.8,
-  "test/vitest/vitest.extension-browser.config.ts": 0.3,
+  "test/vitest/vitest.extension-browser.config.ts": 0.5,
   "test/vitest/vitest.extension-diffs.config.ts": 0.6,
   "test/vitest/vitest.extension-discord.config.ts": 0.62,
   "test/vitest/vitest.extension-feishu.config.ts": 0.18,

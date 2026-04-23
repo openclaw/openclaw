@@ -58,6 +58,37 @@ describe("embedded acpx plugin config", () => {
     });
   });
 
+  it("leaves probeAgent undefined by default so the runtime picks its built-in probe agent", () => {
+    const resolved = resolveAcpxPluginConfig({
+      rawConfig: undefined,
+      workspaceDir: "/tmp/openclaw-acpx",
+    });
+
+    expect(resolved.probeAgent).toBeUndefined();
+  });
+
+  it("carries an explicit probeAgent through to the resolved plugin config, trimmed and lowercased", () => {
+    const resolved = resolveAcpxPluginConfig({
+      rawConfig: {
+        probeAgent: "  OpenCode  ",
+      },
+      workspaceDir: "/tmp/openclaw-acpx",
+    });
+
+    expect(resolved.probeAgent).toBe("opencode");
+  });
+
+  it("rejects an empty probeAgent string", () => {
+    expect(() =>
+      resolveAcpxPluginConfig({
+        rawConfig: {
+          probeAgent: "",
+        },
+        workspaceDir: "/tmp/openclaw-acpx",
+      }),
+    ).toThrow(/probeAgent must be a non-empty string/);
+  });
+
   it("injects the built-in plugin-tools MCP server only when explicitly enabled", () => {
     const resolved = resolveAcpxPluginConfig({
       rawConfig: {

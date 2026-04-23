@@ -1,3 +1,9 @@
+import type {
+  RealtimeTranscriptionProviderConfig,
+  RealtimeTranscriptionProviderPlugin,
+} from "openclaw/plugin-sdk/realtime-transcription";
+import { expect } from "vitest";
+
 const DEFAULT_ELEVENLABS_BASE_URL = "https://api.elevenlabs.io";
 const DEFAULT_ELEVENLABS_VOICE_ID = "pMsXgVXv3BLzUgSXRplE";
 const DEFAULT_ELEVENLABS_TTS_MODEL_ID = "eleven_multilingual_v2";
@@ -74,4 +80,51 @@ export async function streamAudioForLiveTest(params: {
     params.sendAudio(params.audio.subarray(offset, offset + chunkSize));
     await new Promise((resolve) => setTimeout(resolve, delayMs));
   }
+}
+
+export async function runRealtimeSttLiveTest(params: {
+  provider: RealtimeTranscriptionProviderPlugin;
+  providerConfig: RealtimeTranscriptionProviderConfig;
+  audio: Buffer;
+  expectedNormalizedText?: string;
+  timeoutMs?: number;
+  closeBeforeWait?: boolean;
+  chunkSize?: number;
+  delayMs?: number;
+}): Promise<{ transcripts: string[]; partials: string[]; errors: Error[] }> {
+  const transcripts: string[] = [];
+  const partials: string[] = [];
+  const errors: Error[] = [];
+  const expected = params.expectedNormalizedText ?? "openclaw";
+  const session = params.provider.createSession({
+    providerConfig: params.providerConfig,
+    onPartial: (partial) => partials.push(partial),
+    onTranscript: (transcript) => transcripts.push(transcript),
+    onError: (error) => errors.push(error),
+  });
+
+  try {
+    await session.connect();
+    await streamAudioForLiveTest({
+      audio: params.audio,
+      sendAudio: (chunk) => session.sendAudio(chunk),
+      chunkSize: params.chunkSize,
+      delayMs: params.delayMs,
+    });
+    if (params.closeBeforeWait) {
+      session.close();
+    }
+
+    await waitForLiveExpectation(() => {
+      if (errors[0]) {
+        throw errors[0];
+      }
+      expect(normalizeTranscriptForMatch(transcripts.join(" "))).toContain(expected);
+    }, params.timeoutMs ?? 60_000);
+  } finally {
+    session.close();
+  }
+
+  expect(partials.length + transcripts.length).toBeGreaterThan(0);
+  return { transcripts, partials, errors };
 }

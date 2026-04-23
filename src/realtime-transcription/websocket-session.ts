@@ -246,10 +246,11 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
         this.emitError(normalized);
       });
 
-      this.ws.on("close", () => {
+      this.ws.on("close", (code, reasonBuffer) => {
         if (connectTimeout) {
           clearTimeout(connectTimeout);
         }
+        this.captureClose(code, reasonBuffer);
         this.connected = false;
         this.ready = false;
         if (this.closeTimer) {
@@ -391,6 +392,21 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
       flowId: this.flowId,
       errorText: error.message,
       meta: { provider: this.options.providerId, capability: "realtime-transcription" },
+    });
+  }
+
+  private captureClose(code: number, reasonBuffer: Buffer): void {
+    captureWsEvent({
+      url: this.currentUrl,
+      direction: "local",
+      kind: "ws-close",
+      flowId: this.flowId,
+      closeCode: code,
+      meta: {
+        provider: this.options.providerId,
+        capability: "realtime-transcription",
+        reason: reasonBuffer.length > 0 ? reasonBuffer.toString("utf8") : undefined,
+      },
     });
   }
 }

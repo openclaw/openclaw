@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { splitSdkTools } from "./pi-embedded-runner.js";
+import {
+  collectRegisteredToolNames,
+  toSessionToolAllowlist,
+} from "./pi-embedded-runner/tool-name-allowlist.js";
 import { createStubTool } from "./test-helpers/pi-tool-stubs.js";
 
 describe("splitSdkTools", () => {
@@ -37,5 +41,16 @@ describe("splitSdkTools", () => {
       "write",
       "browser",
     ]);
+  });
+
+  it("keeps OpenClaw-managed custom tools in Pi's session allowlist", () => {
+    const { customTools } = splitSdkTools({
+      tools: [createStubTool("read"), createStubTool("sessions_spawn")],
+      sandboxEnabled: true,
+    });
+    const allowlist = toSessionToolAllowlist(collectRegisteredToolNames(customTools));
+
+    expect(customTools.map((tool) => tool.name)).toContain("sessions_spawn");
+    expect(allowlist).toContain("sessions_spawn");
   });
 });

@@ -176,25 +176,14 @@ describe("bundled plugin root runtime mirrors", () => {
 
       expect([...mirrors.keys()].toSorted((left, right) => left.localeCompare(right))).toEqual([
         "@larksuiteoapi/node-sdk",
-        "@matrix-org/matrix-sdk-crypto-nodejs",
-        "@matrix-org/matrix-sdk-crypto-wasm",
       ]);
-      expect([...mirrors.get("@larksuiteoapi/node-sdk")!.importers]).toEqual([
-        "extensions/feishu/index.js",
-        "probe-Cz2PiFtC.js",
-      ]);
-      expect([...mirrors.get("@matrix-org/matrix-sdk-crypto-nodejs")!.importers]).toEqual([
-        "<curated root runtime surface>",
-      ]);
-      expect([...mirrors.get("@matrix-org/matrix-sdk-crypto-wasm")!.importers]).toEqual([
-        "<curated root runtime surface>",
-      ]);
+      expect([...mirrors.get("@larksuiteoapi/node-sdk")!.importers]).toEqual(["probe-Cz2PiFtC.js"]);
     } finally {
       rmSync(tempRoot, { recursive: true, force: true });
     }
   });
 
-  it("does not require root mirrors for plugin deps imported by root dist", () => {
+  it("flags missing root mirrors for plugin deps imported by root dist", () => {
     expect(
       collectBundledPluginRootRuntimeMirrorErrors({
         bundledRuntimeDependencySpecs: makeBundledSpecs(),
@@ -210,7 +199,32 @@ describe("bundled plugin root runtime mirrors", () => {
         ]),
         rootPackageJson: { dependencies: {} },
       }),
-    ).toEqual([]);
+    ).toEqual([
+      "installed package root is missing mirrored bundled runtime dependency '@larksuiteoapi/node-sdk' for dist importers: probe-Cz2PiFtC.js. Add it to package.json dependencies/optionalDependencies or keep imports under dist/extensions/feishu/.",
+    ]);
+  });
+
+  it("does not derive root mirrors for root chunks sourced from the owning plugin", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "openclaw-root-mirror-owned-"));
+
+    try {
+      const distDir = join(tempRoot, "dist");
+      mkdirSync(distDir, { recursive: true });
+      writeFileSync(
+        join(distDir, "probe-Cz2PiFtC.js"),
+        `//#region extensions/feishu/client.ts\nimport("@larksuiteoapi/node-sdk");\n`,
+        "utf8",
+      );
+
+      const mirrors = collectRootDistBundledRuntimeMirrors({
+        bundledRuntimeDependencySpecs: makeBundledSpecs(),
+        distDir,
+      });
+
+      expect([...mirrors.keys()]).toEqual([]);
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
   });
 
   it("does not compare root mirror versions for plugin manifest deps", () => {

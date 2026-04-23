@@ -380,7 +380,7 @@ function parseOptionalNonNegativeInteger(value: unknown, field: string): number 
     return undefined;
   }
   const parsed =
-    typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+    typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
   if (!Number.isInteger(parsed) || parsed < 0) {
     throw new Error(`${field} must be a non-negative integer`);
   }

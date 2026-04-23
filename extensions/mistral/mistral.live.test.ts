@@ -2,9 +2,8 @@ import { describe, expect, it } from "vitest";
 import { isLiveTestEnabled } from "../../src/agents/live-test-helpers.js";
 import {
   normalizeTranscriptForMatch,
-  streamAudioForLiveTest,
+  runRealtimeSttLiveTest,
   synthesizeElevenLabsLiveSpeech,
-  waitForLiveExpectation,
 } from "../../test/helpers/stt-live-audio.js";
 import { mistralMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { buildMistralRealtimeTranscriptionProvider } from "./realtime-transcription-provider.js";
@@ -46,39 +45,17 @@ describeLive("mistral plugin live", () => {
       outputFormat: "ulaw_8000",
       timeoutMs: 30_000,
     });
-    const transcripts: string[] = [];
-    const partials: string[] = [];
-    const errors: Error[] = [];
-    const session = provider.createSession({
+
+    await runRealtimeSttLiveTest({
+      provider,
       providerConfig: {
         apiKey: MISTRAL_KEY,
         sampleRate: 8000,
         encoding: "pcm_mulaw",
         targetStreamingDelayMs: 800,
       },
-      onPartial: (partial) => partials.push(partial),
-      onTranscript: (transcript) => transcripts.push(transcript),
-      onError: (error) => errors.push(error),
+      audio: Buffer.concat([Buffer.alloc(4000, 0xff), speech, Buffer.alloc(8000, 0xff)]),
+      closeBeforeWait: true,
     });
-
-    try {
-      await session.connect();
-      await streamAudioForLiveTest({
-        audio: Buffer.concat([Buffer.alloc(4000, 0xff), speech, Buffer.alloc(8000, 0xff)]),
-        sendAudio: (chunk) => session.sendAudio(chunk),
-      });
-      session.close();
-
-      await waitForLiveExpectation(() => {
-        if (errors[0]) {
-          throw errors[0];
-        }
-        expect(normalizeTranscriptForMatch(transcripts.join(" "))).toContain("openclaw");
-      }, 60_000);
-    } finally {
-      session.close();
-    }
-
-    expect(partials.length + transcripts.length).toBeGreaterThan(0);
   }, 90_000);
 });

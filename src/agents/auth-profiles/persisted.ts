@@ -88,12 +88,12 @@ function warnRejectedCredentialEntries(source: string, rejected: RejectedCredent
   if (rejected.length === 0) {
     return;
   }
-  const reasons = rejected.reduce(
+  const reasons = rejected.reduce<Partial<Record<CredentialRejectReason, number>>>(
     (acc, current) => {
       acc[current.reason] = (acc[current.reason] ?? 0) + 1;
       return acc;
     },
-    {} as Partial<Record<CredentialRejectReason, number>>,
+    {},
   );
   log.warn("ignored invalid auth profile entries during store load", {
     source,

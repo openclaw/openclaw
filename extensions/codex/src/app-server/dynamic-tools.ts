@@ -9,7 +9,7 @@ import {
   runAgentHarnessAfterToolCallHook,
   type AnyAgentTool,
   type MessagingToolSend,
-} from "openclaw/plugin-sdk/agent-harness";
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   type CodexDynamicToolCallOutputContentItem,
   type CodexDynamicToolCallParams,

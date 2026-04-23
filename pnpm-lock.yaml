@@ -21,7 +21,7 @@ overrides:
   path-to-regexp: 8.4.0
   qs: 6.14.2
   node-domexception: npm:@nolyfill/domexception@1.0.28
-  '@sinclair/typebox': 0.34.49
+  typebox: 1.1.28
   tar: 7.5.13
   tough-cookie: 4.1.3
   yauzl: 3.2.1
@@ -75,9 +75,6 @@ importers:
       '@napi-rs/canvas':
         specifier: ^0.1.89
         version: 0.1.92
-      '@sinclair/typebox':
-        specifier: 0.34.49
-        version: 0.34.49
       ajv:
         specifier: ^8.18.0
         version: 8.18.0
@@ -159,6 +156,9 @@ importers:
       tslog:
         specifier: ^4.10.2
         version: 4.10.2
+      typebox:
+        specifier: 1.1.28
+        version: 1.1.28
       undici:
         specifier: 8.1.0
         version: 8.1.0
@@ -320,9 +320,9 @@ importers:
 
   extensions/brave:
     dependencies:
-      '@sinclair/typebox':
-        specifier: 0.34.49
-        version: 0.34.49
+      typebox:
+        specifier: 1.1.28
+        version: 1.1.28
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -333,9 +333,6 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: 1.29.0
         version: 1.29.0(zod@4.3.6)
-      '@sinclair/typebox':
-        specifier: 0.34.49
-        version: 0.34.49
       commander:
         specifier: ^14.0.3
         version: 14.0.3
@@ -345,6 +342,9 @@ importers:
       playwright-core:
         specifier: 1.59.1
         version: 1.59.1
+      typebox:
+        specifier: 1.1.28
+        version: 1.1.28
       undici:
         specifier: 8.1.0
         version: 8.1.0
@@ -466,12 +466,12 @@ importers:
       '@pierre/theme':
         specifier: 0.0.29
         version: 0.0.29
-      '@sinclair/typebox':
-        specifier: 0.34.49
-        version: 0.34.49
       playwright-core:
         specifier: 1.59.1
         version: 1.59.1
+      typebox:
+        specifier: 1.1.28
+        version: 1.1.28
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -485,9 +485,6 @@ importers:
       '@discordjs/voice':
         specifier: ^0.19.2
         version: 0.19.2(@discordjs/opus@0.10.0)(@emnapi/core@1.9.2)(@emnapi/runtime@1.10.0)(opusscript@0.0.8)
-      '@sinclair/typebox':
-        specifier: 0.34.49
-        version: 0.34.49
       discord-api-types:
         specifier: ^0.38.47
         version: 0.38.47
@@ -497,6 +494,9 @@ importers:
       opusscript:
         specifier: ^0.0.8
         version: 0.0.8
+      typebox:
+        specifier: 1.1.28
+        version: 1.1.28
       undici:
         specifier: 8.1.0
         version: 8.1.0
@@ -542,14 +542,14 @@ importers:
   extensions/feishu:
     dependencies:
       '@larksuiteoapi/node-sdk':
-        specifier: ^1.61.0
-        version: 1.61.0
-      '@sinclair/typebox':
-        specifier: 0.34.49
-        version: 0.34.49
+        specifier: ^1.61.1
+        version: 1.61.1
       qrcode-terminal:
         specifier: ^0.12.0
         version: 0.12.0
+      typebox:
+        specifier: 1.1.28
+        version: 1.1.28
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -560,9 +560,9 @@ importers:
 
   extensions/firecrawl:
     dependencies:
-      '@sinclair/typebox':
-        specifier: 0.34.49
-        version: 0.34.49
+      typebox:
+        specifier: 1.1.28
+        version: 1.1.28
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -690,12 +690,12 @@ importers:
 
   extensions/llm-task:
     dependencies:
-      '@sinclair/typebox':
-        specifier: 0.34.49
-        version: 0.34.49
       ajv:
         specifier: ^8.18.0
         version: 8.18.0
+      typebox:
+        specifier: 1.1.28
+        version: 1.1.28
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -712,9 +712,9 @@ importers:
       '@clawdbot/lobster':
         specifier: 2026.4.6
         version: 2026.4.6
-      '@sinclair/typebox':
-        specifier: 0.34.49
-        version: 0.34.49
+      typebox:
+        specifier: 1.1.28
+        version: 1.1.28
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -728,9 +728,6 @@ importers:
       '@matrix-org/matrix-sdk-crypto-wasm':
         specifier: 18.1.0
         version: 18.1.0
-      '@sinclair/typebox':
-        specifier: 0.34.49
-        version: 0.34.49
       fake-indexeddb:
         specifier: ^6.2.5
         version: 6.2.5
@@ -746,6 +743,9 @@ importers:
       music-metadata:
         specifier: ^11.12.3
         version: 11.12.3
+      typebox:
+        specifier: 1.1.28
+        version: 1.1.28
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -775,12 +775,12 @@ importers:
 
   extensions/memory-core:
     dependencies:
-      '@sinclair/typebox':
-        specifier: 0.34.49
-        version: 0.34.49
       chokidar:
         specifier: ^5.0.0
         version: 5.0.0
+      typebox:
+        specifier: 1.1.28
+        version: 1.1.28
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -794,12 +794,12 @@ importers:
       '@lancedb/lancedb':
         specifier: ^0.27.2
         version: 0.27.2(apache-arrow@18.1.0)
-      '@sinclair/typebox':
-        specifier: 0.34.49
-        version: 0.34.49
       openai:
         specifier: ^6.34.0
         version: 6.34.0(ws@8.20.0)(zod@4.3.6)
+      typebox:
+        specifier: 1.1.28
+        version: 1.1.28
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -807,9 +807,9 @@ importers:
 
   extensions/memory-wiki:
     dependencies:
-      '@sinclair/typebox':
-        specifier: 0.34.49
-        version: 0.34.49
+      typebox:
+        specifier: 1.1.28
+        version: 1.1.28
       yaml:
         specifier: ^2.8.3
         version: 2.8.3
@@ -870,9 +870,6 @@ importers:
       '@microsoft/teams.apps':
         specifier: 2.0.8
         version: 2.0.8
-      '@sinclair/typebox':
-        specifier: 0.34.49
-        version: 0.34.49
       express:
         specifier: ^5.2.1
         version: 5.2.1
@@ -882,6 +879,9 @@ importers:
       jwks-rsa:
         specifier: ^4.0.1
         version: 4.0.1
+      typebox:
+        specifier: 1.1.28
+        version: 1.1.28
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -933,9 +933,9 @@ importers:
       '@mariozechner/pi-ai':
         specifier: 0.69.0
         version: 0.69.0(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
-      '@sinclair/typebox':
-        specifier: 0.34.49
-        version: 0.34.49
+      typebox:
+        specifier: 1.1.28
+        version: 1.1.28
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -996,9 +996,9 @@ importers:
 
   extensions/qa-channel:
     dependencies:
-      '@sinclair/typebox':
-        specifier: 0.34.49
-        version: 0.34.49
+      typebox:
+        specifier: 1.1.28
+        version: 1.1.28
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1114,9 +1114,9 @@ importers:
 
   extensions/skill-workshop:
     dependencies:
-      '@sinclair/typebox':
-        specifier: 0.34.49
-        version: 0.34.49
+      typebox:
+        specifier: 1.1.28
+        version: 1.1.28
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1124,9 +1124,6 @@ importers:
 
   extensions/slack:
     dependencies:
-      '@sinclair/typebox':
-        specifier: 0.34.49
-        version: 0.34.49
       '@slack/bolt':
         specifier: ^4.7.0
         version: 4.7.0(@types/express@5.0.6)
@@ -1136,6 +1133,9 @@ importers:
       https-proxy-agent:
         specifier: ^9.0.0
         version: 9.0.0
+      typebox:
+        specifier: 1.1.28
+        version: 1.1.28
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1171,9 +1171,9 @@ importers:
 
   extensions/tavily:
     dependencies:
-      '@sinclair/typebox':
-        specifier: 0.34.49
-        version: 0.34.49
+      typebox:
+        specifier: 1.1.28
+        version: 1.1.28
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1187,12 +1187,12 @@ importers:
       '@grammyjs/transformer-throttler':
         specifier: ^1.2.1
         version: 1.2.1(grammy@1.42.0)
-      '@sinclair/typebox':
-        specifier: 0.34.49
-        version: 0.34.49
       grammy:
         specifier: ^1.42.0
         version: 1.42.0
+      typebox:
+        specifier: 1.1.28
+        version: 1.1.28
       undici:
         specifier: 8.1.0
         version: 8.1.0
@@ -1287,12 +1287,12 @@ importers:
 
   extensions/voice-call:
     dependencies:
-      '@sinclair/typebox':
-        specifier: 0.34.49
-        version: 0.34.49
       commander:
         specifier: ^14.0.3
         version: 14.0.3
+      typebox:
+        specifier: 1.1.28
+        version: 1.1.28
       ws:
         specifier: ^8.20.0
         version: 8.20.0
@@ -1334,9 +1334,6 @@ importers:
 
   extensions/whatsapp:
     dependencies:
-      '@sinclair/typebox':
-        specifier: 0.34.49
-        version: 0.34.49
       '@whiskeysockets/baileys':
         specifier: 7.0.0-rc.9
         version: 7.0.0-rc.9(patch_hash=23ec8efe1484afa57c51b96955ba331d1467521a8e676a18c2690da7e70a6201)(audio-decode@2.2.3)(jimp@1.6.1)(sharp@0.34.5)
@@ -1346,6 +1343,9 @@ importers:
       qrcode-terminal:
         specifier: ^0.12.0
         version: 0.12.0
+      typebox:
+        specifier: 1.1.28
+        version: 1.1.28
       undici:
         specifier: 8.1.0
         version: 8.1.0
@@ -1362,9 +1362,9 @@ importers:
       '@mariozechner/pi-ai':
         specifier: 0.69.0
         version: 0.69.0(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
-      '@sinclair/typebox':
-        specifier: 0.34.49
-        version: 0.34.49
+      typebox:
+        specifier: 1.1.28
+        version: 1.1.28
       ws:
         specifier: ^8.20.0
         version: 8.20.0
@@ -1400,9 +1400,9 @@ importers:
 
   extensions/zalouser:
     dependencies:
-      '@sinclair/typebox':
-        specifier: 0.34.49
-        version: 0.34.49
+      typebox:
+        specifier: 1.1.28
+        version: 1.1.28
       zca-js:
         specifier: 2.1.2
         version: 2.1.2
@@ -2544,8 +2544,8 @@ packages:
     peerDependencies:
       apache-arrow: '>=15.0.0 <=18.1.0'
 
-  '@larksuiteoapi/node-sdk@1.61.0':
-    resolution: {integrity: sha512-90hPo4+srmwdyqFN5xhDI1P0Zyu30TisIRH5AZILKJhgvELos/eyCWKuz4wZ6gg9ugHNjqDTj4VpnNmxmuwKgw==}
+  '@larksuiteoapi/node-sdk@1.61.1':
+    resolution: {integrity: sha512-BxLBCXk/652I0nWduQbiIrTH2TPe/i4ZD6UhW3VCTVFzrOq5Y9SKvAwanBE6z1ZyEPL6iLnXg/TfGvGSzG6MLw==}
 
   '@line/bot-sdk@11.0.0':
     resolution: {integrity: sha512-3NZJjeFm2BikwVRgA8osIVbgKhuL0CzphQOdrB8okXIC40qMRE4RRfHFN3G8/qTb/34RtB95mD4J/KW5MD+b8g==}
@@ -3692,9 +3692,6 @@ packages:
 
   '@silvia-odwyer/photon-node@0.3.4':
     resolution: {integrity: sha512-bnly4BKB3KDTFxrUIcgCLbaeVVS8lrAkri1pEzskpmxu9MdfGQTy8b8EgcD83ywD3RPMsIulY8xJH5Awa+t9fA==}
-
-  '@sinclair/typebox@0.34.49':
-    resolution: {integrity: sha512-brySQQs7Jtn0joV8Xh9ZV/hZb9Ozb0pmazDIASBkYKCjXrXU3mpcFahmK/z4YDhGkQvP9mWJbVyahdtU5wQA+A==}
 
   '@slack/bolt@4.7.0':
     resolution: {integrity: sha512-Xpf+gKegNvkHpft1z4YiuqZdciJ3tUp1bIRQxylW30Ovf+hzjb0M1zTHVtJsRw9jsjPxHTPoyanEXVvG6qVE1g==}
@@ -9150,7 +9147,7 @@ snapshots:
       '@lancedb/lancedb-win32-arm64-msvc': 0.27.2
       '@lancedb/lancedb-win32-x64-msvc': 0.27.2
 
-  '@larksuiteoapi/node-sdk@1.61.0':
+  '@larksuiteoapi/node-sdk@1.61.1':
     dependencies:
       axios: 1.15.0
       lodash.identity: 3.0.0
@@ -10151,8 +10148,6 @@ snapshots:
   '@shikijs/vscode-textmate@10.0.2': {}
 
   '@silvia-odwyer/photon-node@0.3.4': {}
-
-  '@sinclair/typebox@0.34.49': {}
 
   '@slack/bolt@4.7.0(@types/express@5.0.6)':
     dependencies:

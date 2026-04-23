@@ -66,7 +66,7 @@ function parseLspMessages(buffer: string): { messages: unknown[]; remaining: str
       continue;
     }
 
-    const contentLength = parseInt(match[1], 10);
+    const contentLength = Number.parseInt(match[1], 10);
     const bodyStart = headerEnd + 4;
     const bodyEnd = bodyStart + contentLength;
 

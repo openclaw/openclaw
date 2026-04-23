@@ -13,6 +13,7 @@ import {
   registerProviderPlugin,
   requireRegisteredProvider,
 } from "../../test/helpers/plugins/provider-registration.js";
+import { runRealtimeSttLiveTest } from "../../test/helpers/stt-live-audio.js";
 import plugin from "./index.js";
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "";
@@ -138,21 +139,6 @@ function createLiveTtsConfig(): ResolvedTtsConfig {
 
 async function createTempAgentDir(): Promise<string> {
   return await fs.mkdtemp(path.join(os.tmpdir(), "openai-plugin-live-"));
-}
-
-async function waitForLiveExpectation(expectation: () => void, timeoutMs = 30_000) {
-  const started = Date.now();
-  let lastError: unknown;
-  while (Date.now() - started < timeoutMs) {
-    try {
-      expectation();
-      return;
-    } catch (error) {
-      lastError = error;
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-  }
-  throw lastError;
 }
 
 function normalizeTranscriptForMatch(value: string): string {
@@ -339,39 +325,18 @@ describeLive("openai plugin live", () => {
     expect(telephony.outputFormat).toBe("pcm");
     expect(telephony.sampleRate).toBe(24_000);
 
-    const transcripts: string[] = [];
-    const partials: string[] = [];
-    const errors: Error[] = [];
-    const session = realtimeProvider.createSession({
+    const speech = convertPcm24kToMulaw8k(telephony.audioBuffer);
+    const silence = Buffer.alloc(8_000, 0xff);
+    const audio = Buffer.concat([silence.subarray(0, 4_000), speech, silence]);
+    const { transcripts, partials } = await runRealtimeSttLiveTest({
+      provider: realtimeProvider,
       providerConfig: {
         apiKey: OPENAI_API_KEY,
         language: "en",
         silenceDurationMs: 500,
       },
-      onPartial: (partial) => partials.push(partial),
-      onTranscript: (transcript) => transcripts.push(transcript),
-      onError: (error) => errors.push(error),
+      audio,
     });
-
-    try {
-      await session.connect();
-      const speech = convertPcm24kToMulaw8k(telephony.audioBuffer);
-      const silence = Buffer.alloc(8_000, 0xff);
-      const audio = Buffer.concat([silence.subarray(0, 4_000), speech, silence]);
-      for (let offset = 0; offset < audio.byteLength; offset += 160) {
-        session.sendAudio(audio.subarray(offset, offset + 160));
-        await new Promise((resolve) => setTimeout(resolve, 5));
-      }
-
-      await waitForLiveExpectation(() => {
-        if (errors[0]) {
-          throw errors[0];
-        }
-        expect(normalizeTranscriptForMatch(transcripts.join(" "))).toContain("openclaw");
-      }, 60_000);
-    } finally {
-      session.close();
-    }
 
     const normalized = transcripts.join(" ").toLowerCase();
     const compact = normalizeTranscriptForMatch(normalized);

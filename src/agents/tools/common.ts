@@ -4,7 +4,7 @@ import type {
   AgentToolResult,
   AgentToolUpdateCallback,
 } from "@mariozechner/pi-agent-core";
-import type { TSchema } from "@sinclair/typebox";
+import type { TSchema } from "typebox";
 import { detectMime } from "../../media/mime.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
 import type { ImageSanitizationLimits } from "../image-sanitization.js";
@@ -18,30 +18,27 @@ export type AgentToolWithMeta<TParameters extends TSchema, TResult> = AgentTool<
   displaySummary?: string;
 };
 
-// Cross-package tool registration still mixes concrete schema-typed tools with
-// plugin/runtime factories that are effectively existential over params/details.
-// Tightening this alias without a dedicated adapter seam blows up plugin tool
-// factories and embedded-runner tool plumbing.
-type AnyAgentToolExecute = (
-  toolCallId: string,
-  // oxlint-disable-next-line typescript/no-explicit-any
-  params: any,
-  signal?: AbortSignal,
-  onUpdate?: AgentToolUpdateCallback,
-) => Promise<AgentToolResult<unknown>>;
-
-export type AnyAgentTool = {
-  name: string;
-  label: string;
-  description: string;
-  // oxlint-disable-next-line typescript/no-explicit-any
-  parameters: any;
-  prepareArguments?: (args: unknown) => unknown;
-  executionMode?: AgentTool["executionMode"];
-  ownerOnly?: boolean;
-  displaySummary?: string;
-  execute: AnyAgentToolExecute;
+type ErasedAgentToolExecute = {
+  execute(
+    this: void,
+    toolCallId: string,
+    params: unknown,
+    signal?: AbortSignal,
+    onUpdate?: AgentToolUpdateCallback<unknown>,
+  ): Promise<AgentToolResult<unknown>>;
 };
+
+export type AnyAgentTool = Omit<AgentTool<TSchema, unknown>, "execute"> &
+  ErasedAgentToolExecute & {
+    ownerOnly?: boolean;
+    displaySummary?: string;
+  };
+
+export function asToolParamsRecord(params: unknown): Record<string, unknown> {
+  return params && typeof params === "object" && !Array.isArray(params)
+    ? (params as Record<string, unknown>)
+    : {};
+}
 
 export type StringParamOptions = {
   required?: boolean;

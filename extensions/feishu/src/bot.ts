@@ -409,7 +409,7 @@ export async function handleFeishuMessage(params: {
   // instead of the delivery/processing time.  Feishu uses a millisecond
   // epoch string; fall back to Date.now() only when the field is absent.
   const messageCreateTimeMs = event.message.create_time
-    ? parseInt(event.message.create_time, 10)
+    ? Number.parseInt(event.message.create_time, 10)
     : Date.now();
 
   let requireMention = false; // DMs never require mention; groups may override below
@@ -492,7 +492,6 @@ export async function handleFeishuMessage(params: {
       }
       return;
     }
-  } else {
   }
 
   try {
