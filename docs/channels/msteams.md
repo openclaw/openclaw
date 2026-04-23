@@ -53,7 +53,7 @@ Minimal config (client secret):
 }
 ```
 
-For production deployments, consider using [federated authentication](#federated-authentication-certificate--managed-identity) (certificate or managed identity) instead of client secrets.
+For production deployments, consider using [federated authentication](#federated-authentication) (certificate or managed identity) instead of client secrets.
 
 Note: group chats are blocked by default (`channels.msteams.groupPolicy: "allowlist"`). To allow group replies, set `channels.msteams.groupAllowFrom` (or use `groupPolicy: "open"` to allow any member, mention-gated).
 
