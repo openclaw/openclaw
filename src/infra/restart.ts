@@ -37,6 +37,7 @@ let pendingRestartTimer: ReturnType<typeof setTimeout> | null = null;
 let pendingRestartDueAt = 0;
 let pendingRestartReason: string | undefined;
 let pendingRestartEmitHooks: RestartEmitHooks | undefined;
+let pendingRestartPreparing = false;
 const activeDeferralPolls = new Set<ReturnType<typeof setInterval>>();
 
 function hasUnconsumedRestartSignal(): boolean {
@@ -51,6 +52,7 @@ function clearPendingScheduledRestart(): void {
   pendingRestartDueAt = 0;
   pendingRestartReason = undefined;
   pendingRestartEmitHooks = undefined;
+  pendingRestartPreparing = false;
 }
 
 function clearActiveDeferralPolls(): void {
@@ -211,15 +213,34 @@ function updatePendingRestartEmitHooks(hooks?: RestartEmitHooks): void {
 }
 
 async function emitPreparedGatewayRestart(hooks?: RestartEmitHooks): Promise<void> {
-  try {
-    await hooks?.beforeEmit?.();
-  } catch (err) {
-    restartLog.warn(`restart preparation failed; restart will continue without it: ${String(err)}`);
+  let nextHooks = hooks ?? pendingRestartEmitHooks;
+  if (!hooks) {
+    pendingRestartEmitHooks = undefined;
+  }
+  let preparedHooks: RestartEmitHooks | undefined;
+  while (nextHooks) {
+    if (preparedHooks) {
+      await preparedHooks.afterEmitRejected?.().catch(() => undefined);
+      preparedHooks = undefined;
+    }
+    try {
+      await nextHooks.beforeEmit?.();
+      preparedHooks = nextHooks;
+    } catch (err) {
+      restartLog.warn(
+        `restart preparation failed; restart will continue without it: ${String(err)}`,
+      );
+    }
+    if (hooks) {
+      break;
+    }
+    nextHooks = pendingRestartEmitHooks;
+    pendingRestartEmitHooks = undefined;
   }
 
   const emitted = emitGatewayRestart();
   if (!emitted) {
-    await hooks?.afterEmitRejected?.().catch(() => undefined);
+    await preparedHooks?.afterEmitRejected?.().catch(() => undefined);
   }
 }
 
@@ -478,9 +499,9 @@ export function scheduleGatewaySigusr1Restart(opts?: {
     };
   }
 
-  if (pendingRestartTimer) {
-    const remainingMs = Math.max(0, pendingRestartDueAt - nowMs);
-    const shouldPullEarlier = requestedDueAt < pendingRestartDueAt;
+  if (pendingRestartTimer || pendingRestartPreparing) {
+    const remainingMs = pendingRestartPreparing ? 0 : Math.max(0, pendingRestartDueAt - nowMs);
+    const shouldPullEarlier = !pendingRestartPreparing && requestedDueAt < pendingRestartDueAt;
     if (shouldPullEarlier) {
       restartLog.warn(
         `restart request rescheduled earlier reason=${reason ?? "unspecified"} pendingReason=${pendingRestartReason ?? "unspecified"} oldDelayMs=${remainingMs} newDelayMs=${Math.max(0, requestedDueAt - nowMs)} ${formatRestartAudit(opts?.audit)}`,
@@ -512,18 +533,16 @@ export function scheduleGatewaySigusr1Restart(opts?: {
       pendingRestartTimer = null;
       pendingRestartDueAt = 0;
       pendingRestartReason = undefined;
-      const emitHooks = pendingRestartEmitHooks;
-      pendingRestartEmitHooks = undefined;
+      pendingRestartPreparing = true;
       const pendingCheck = preRestartCheck;
       if (!pendingCheck) {
-        void emitPreparedGatewayRestart(emitHooks);
+        void emitPreparedGatewayRestart();
         return;
       }
       const cfg = getRuntimeConfig();
       deferGatewayRestartUntilIdle({
         getPendingCount: pendingCheck,
         maxWaitMs: cfg.gateway?.reload?.deferralTimeoutMs,
-        emitHooks,
       });
     },
     Math.max(0, requestedDueAt - nowMs),

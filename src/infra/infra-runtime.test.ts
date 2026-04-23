@@ -173,6 +173,51 @@ describe("infra runtime", () => {
       }
     });
 
+    it("keeps restart requests coalesced while preparation is in flight", async () => {
+      let releaseFirstPrep: () => void = () => {};
+      const firstRollback = vi.fn(async () => {});
+      const firstBeforeEmit = vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            releaseFirstPrep = resolve;
+          }),
+      );
+      const latestBeforeEmit = vi.fn(async () => {});
+      const emitSpy = vi.spyOn(process, "emit");
+      const handler = () => {};
+      process.on("SIGUSR1", handler);
+      try {
+        scheduleGatewaySigusr1Restart({
+          delayMs: 1_000,
+          reason: "first",
+          emitHooks: {
+            beforeEmit: firstBeforeEmit,
+            afterEmitRejected: firstRollback,
+          },
+        });
+
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(firstBeforeEmit).toHaveBeenCalledTimes(1);
+        expect(emitSpy).not.toHaveBeenCalledWith("SIGUSR1");
+
+        const second = scheduleGatewaySigusr1Restart({
+          delayMs: 1_000,
+          reason: "second",
+          emitHooks: { beforeEmit: latestBeforeEmit },
+        });
+        expect(second.coalesced).toBe(true);
+
+        releaseFirstPrep();
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(firstRollback).toHaveBeenCalledTimes(1);
+        expect(latestBeforeEmit).toHaveBeenCalledTimes(1);
+        expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
+      } finally {
+        process.removeListener("SIGUSR1", handler);
+      }
+    });
+
     it("rolls back prepared restart state when emission is rejected", async () => {
       const beforeEmit = vi.fn(async () => {});
       const afterEmitRejected = vi.fn(async () => {});
