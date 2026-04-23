@@ -18,6 +18,21 @@ describe("redactSensitiveText", () => {
     expect(output).toBe("OPENAI_API_KEY=sk-123…cdef");
   });
 
+  it("masks env assignments after punctuation delimiters", () => {
+    expect(
+      redactSensitiveText("(OPENAI_API_KEY=sk-1234567890abcdef)", {
+        mode: "tools",
+        patterns: defaults,
+      }),
+    ).toBe("(OPENAI_API_KEY=sk-123…cdef)");
+    expect(
+      redactSensitiveText("[MATRIX_ACCESS_TOKEN=abcdef1234567890ghij]", {
+        mode: "tools",
+        patterns: defaults,
+      }),
+    ).toBe("[MATRIX_ACCESS_TOKEN=abcdef…ghij]");
+  });
+
   it("masks CLI flags", () => {
     const input = "curl --token abcdef1234567890ghij https://api.test";
     const output = redactSensitiveText(input, {

@@ -3151,7 +3151,7 @@ describe("matrix live qa scenarios", () => {
       await expect(readdir(String(cliEnv?.OPENCLAW_STATE_DIR))).rejects.toThrow();
       expect(acceptVerification).toHaveBeenCalledWith("owner-request");
       expect(confirmVerificationSas).toHaveBeenCalledWith("owner-request");
-      expect(deleteOwnDevices).not.toHaveBeenCalled();
+      expect(deleteOwnDevices).toHaveBeenCalledWith(["CLIDEVICE"]);
       const [cliRunDir] = await readdir(path.join(outputDir, "cli-self-verification"));
       const cliArtifactDir = path.join(outputDir, "cli-self-verification", cliRunDir ?? "");
       await expect(stat(cliArtifactDir)).resolves.toMatchObject({ mode: expect.any(Number) });

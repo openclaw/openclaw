@@ -1382,7 +1382,11 @@ export async function runMatrixQaE2eeCliSelfVerificationScenario(
           session.kill();
         }
       } finally {
-        await cli.dispose();
+        try {
+          await cli.dispose();
+        } finally {
+          await owner.deleteOwnDevices([cliDevice.deviceId]).catch(() => undefined);
+        }
       }
     },
   );
