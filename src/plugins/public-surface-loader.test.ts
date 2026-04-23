@@ -106,6 +106,54 @@ describe("bundled plugin public surface loader", () => {
     expect(createJiti).not.toHaveBeenCalled();
   });
 
+  it("falls back to jiti when source require hits emitted-style js imports", async () => {
+    const jitiLoader = vi.fn(() => ({ marker: "source-jiti-ok" }));
+    const createJiti = vi.fn(() => jitiLoader);
+    vi.doMock("jiti", () => ({
+      createJiti,
+    }));
+    const requireLoader = Object.assign(
+      vi.fn(() => {
+        const error = new Error(
+          "Cannot find module './config-defaults.js'",
+        ) as NodeJS.ErrnoException;
+        error.code = "ERR_MODULE_NOT_FOUND";
+        throw error;
+      }),
+      {
+        extensions: {
+          ".ts": vi.fn(),
+        },
+      },
+    );
+    vi.doMock("node:module", async () => {
+      const actual = await vi.importActual<typeof import("node:module")>("node:module");
+      return Object.assign({}, actual, {
+        createRequire: vi.fn(() => requireLoader),
+      });
+    });
+
+    const publicSurfaceLoader = await importFreshModule<
+      typeof import("./public-surface-loader.js")
+    >(import.meta.url, "./public-surface-loader.js?scope=source-require-fallback-jiti");
+    const tempRoot = createTempDir();
+    const bundledPluginsDir = path.join(tempRoot, "extensions");
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
+
+    const modulePath = path.join(bundledPluginsDir, "demo", "secret-contract-api.ts");
+    fs.mkdirSync(path.dirname(modulePath), { recursive: true });
+    fs.writeFileSync(modulePath, 'export const marker = "source-jiti-ok";\n', "utf8");
+
+    expect(
+      publicSurfaceLoader.loadBundledPluginPublicArtifactModuleSync<{ marker: string }>({
+        dirName: "demo",
+        artifactBasename: "secret-contract-api.js",
+      }).marker,
+    ).toBe("source-jiti-ok");
+    expect(requireLoader).toHaveBeenCalledWith(pathModule.resolve(modulePath));
+    expect(jitiLoader).toHaveBeenCalledWith(pathModule.resolve(modulePath));
+  });
+
   it("reuses one bundled dist jiti loader across public artifacts with the same native mode", async () => {
     const createJiti = vi.fn(() => vi.fn((modulePath: string) => ({ modulePath })));
     vi.doMock("jiti", () => ({

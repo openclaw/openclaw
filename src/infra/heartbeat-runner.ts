@@ -12,7 +12,7 @@ import {
 } from "../agents/agent-scope.js";
 import { appendCronStyleCurrentTimeLine } from "../agents/current-time.js";
 import { resolveEffectiveMessagesConfig } from "../agents/identity.js";
-import { resolveEmbeddedSessionLane } from "../agents/pi-embedded-runner/lanes.js";
+import { resolveEmbeddedSessionLane } from "../agents/pi-embedded-runner.js";
 import { DEFAULT_HEARTBEAT_FILENAME } from "../agents/workspace.js";
 import { resolveHeartbeatReplyPayload } from "../auto-reply/heartbeat-reply-payload.js";
 import {
@@ -529,6 +529,9 @@ type HeartbeatSkipReason = "empty-heartbeat-file";
 
 type HeartbeatPreflight = HeartbeatReasonFlags & {
   session: ReturnType<typeof resolveHeartbeatSession>;
+  inspectionSessionKey: string;
+  inspectionSessionEntry?: ReturnType<typeof resolveHeartbeatSession>["entry"];
+  isolationSourceSessionKey: string;
   pendingEventEntries: ReturnType<typeof peekSystemEventEntries>;
   turnSourceDeliveryContext: ReturnType<typeof resolveSystemEventDeliveryContext>;
   hasTaggedCronEvents: boolean;
@@ -555,13 +558,39 @@ async function resolveHeartbeatPreflight(params: {
   reason?: string;
 }): Promise<HeartbeatPreflight> {
   const reasonFlags = resolveHeartbeatReasonFlags(params.reason);
-  const session = resolveHeartbeatSession(
-    params.cfg,
-    params.agentId,
-    params.heartbeat,
-    params.forcedSessionKey,
-  );
-  const pendingEventEntries = peekSystemEventEntries(session.sessionKey);
+  const configuredSession = resolveHeartbeatSession(params.cfg, params.agentId, params.heartbeat);
+  const forcedSession = params.forcedSessionKey
+    ? resolveHeartbeatSession(params.cfg, params.agentId, params.heartbeat, params.forcedSessionKey)
+    : undefined;
+  const forcedIsConfiguredIsolatedLane =
+    params.heartbeat?.isolatedSession === true &&
+    forcedSession !== undefined &&
+    forcedSession.sessionKey.startsWith(configuredSession.sessionKey) &&
+    /^(:heartbeat)+$/.test(forcedSession.sessionKey.slice(configuredSession.sessionKey.length));
+  const forcedIsRealHeartbeatSession =
+    params.heartbeat?.isolatedSession === true &&
+    forcedSession !== undefined &&
+    /:heartbeat(?:[:][Hh]eartbeat)*$/i.test(forcedSession.sessionKey) &&
+    !forcedIsConfiguredIsolatedLane;
+  const session =
+    params.heartbeat?.isolatedSession === true
+      ? forcedIsRealHeartbeatSession && forcedSession
+        ? forcedSession
+        : {
+            ...configuredSession,
+            suppressOriginatingContext:
+              configuredSession.suppressOriginatingContext ||
+              forcedSession?.suppressOriginatingContext === true,
+          }
+      : (forcedSession ?? configuredSession);
+  const inspectionSession =
+    (forcedIsConfiguredIsolatedLane || forcedIsRealHeartbeatSession) && forcedSession
+      ? forcedSession
+      : session;
+  const inspectionSessionKey = inspectionSession.sessionKey;
+  const inspectionSessionEntry = inspectionSession.entry;
+  const isolationSourceSessionKey = inspectionSessionKey;
+  const pendingEventEntries = peekSystemEventEntries(inspectionSessionKey);
   const turnSourceDeliveryContext = resolveSystemEventDeliveryContext(pendingEventEntries);
   const hasTaggedCronEvents = pendingEventEntries.some((event) =>
     event.contextKey?.startsWith("cron:"),
@@ -575,13 +604,12 @@ async function resolveHeartbeatPreflight(params: {
     if (params.heartbeat?.isolatedSession !== true) {
       return true;
     }
-    const configuredSession = resolveHeartbeatSession(params.cfg, params.agentId, params.heartbeat);
     const { isolatedSessionKey } = resolveIsolatedHeartbeatSessionKey({
-      sessionKey: session.sessionKey,
+      sessionKey: inspectionSessionKey,
       configuredSessionKey: configuredSession.sessionKey,
-      sessionEntry: session.entry,
+      sessionEntry: inspectionSessionEntry,
     });
-    return isolatedSessionKey === session.sessionKey;
+    return isolatedSessionKey === inspectionSessionKey;
   })();
   const shouldInspectPendingEvents =
     reasonFlags.isExecEventReason ||
@@ -596,6 +624,9 @@ async function resolveHeartbeatPreflight(params: {
   const basePreflight = {
     ...reasonFlags,
     session,
+    inspectionSessionKey,
+    inspectionSessionEntry,
+    isolationSourceSessionKey,
     pendingEventEntries,
     turnSourceDeliveryContext,
     hasTaggedCronEvents,
@@ -778,11 +809,27 @@ export async function runHeartbeatOnce(opts: {
     return { status: "skipped", reason: preflight.skipReason };
   }
   const { entry, sessionKey, storePath, suppressOriginatingContext } = preflight.session;
+  const useIsolatedSession = heartbeat?.isolatedSession === true;
+  const isolatedSessionResolution = useIsolatedSession
+    ? (() => {
+        const configuredSession = resolveHeartbeatSession(cfg, agentId, heartbeat);
+        return {
+          configuredSession,
+          ...resolveIsolatedHeartbeatSessionKey({
+            sessionKey: preflight.isolationSourceSessionKey,
+            configuredSessionKey: configuredSession.sessionKey,
+            sessionEntry: preflight.inspectionSessionEntry,
+          }),
+        };
+      })()
+    : undefined;
 
   // Check the resolved session lane — if it is busy, skip to avoid interrupting
   // an active streaming turn.  The wake-layer retry (heartbeat-wake.ts) will
   // re-schedule this wake automatically.  See #14396 (closed without merge).
-  const sessionLaneKey = resolveEmbeddedSessionLane(sessionKey);
+  const sessionLaneKey = resolveEmbeddedSessionLane(
+    isolatedSessionResolution?.isolatedSessionKey ?? sessionKey,
+  );
   const sessionLaneSize = (opts.deps?.getQueueSize ?? getQueueSize)(sessionLaneKey);
   if (sessionLaneSize > 0) {
     emitHeartbeatEvent({
@@ -800,7 +847,6 @@ export async function runHeartbeatOnce(opts: {
   // a new session ID (empty transcript) each run, avoiding the cost of
   // sending the full conversation history (~100K tokens) to the LLM.
   // Delivery routing still uses the main session entry (lastChannel, lastTo).
-  const useIsolatedSession = heartbeat?.isolatedSession === true;
   const delivery = resolveHeartbeatDeliveryTarget({
     cfg,
     entry,
@@ -859,22 +905,14 @@ export async function runHeartbeatOnce(opts: {
     const shouldConsumeInspectedEvents =
       !preflight.isWakeReason && preflight.shouldInspectPendingEvents;
     if (shouldConsumeInspectedEvents && preflight.pendingEventEntries.length > 0) {
-      consumeSystemEventEntries(sessionKey, preflight.pendingEventEntries);
+      consumeSystemEventEntries(preflight.inspectionSessionKey, preflight.pendingEventEntries);
     }
     return { status: "skipped", reason: "no-tasks-due" };
   }
 
   let runSessionKey = sessionKey;
-  if (useIsolatedSession) {
-    const configuredSession = resolveHeartbeatSession(cfg, agentId, heartbeat);
-    // Collapse only the repeated `:heartbeat` suffixes introduced by wake-triggered
-    // re-entry for heartbeat-created isolated sessions. Real session keys that
-    // happen to end with `:heartbeat` still get a distinct isolated sibling.
-    const { isolatedSessionKey, isolatedBaseSessionKey } = resolveIsolatedHeartbeatSessionKey({
-      sessionKey,
-      configuredSessionKey: configuredSession.sessionKey,
-      sessionEntry: entry,
-    });
+  if (useIsolatedSession && isolatedSessionResolution) {
+    const { isolatedSessionKey, isolatedBaseSessionKey } = isolatedSessionResolution;
     const cronSession = resolveCronSession({
       cfg,
       sessionKey: isolatedSessionKey,
@@ -883,7 +921,7 @@ export async function runHeartbeatOnce(opts: {
       forceNew: true,
     });
     const staleIsolatedSessionKey = resolveStaleHeartbeatIsolatedSessionKey({
-      sessionKey,
+      sessionKey: preflight.isolationSourceSessionKey,
       isolatedSessionKey,
       isolatedBaseSessionKey,
     });
@@ -967,7 +1005,7 @@ export async function runHeartbeatOnce(opts: {
     if (!preflight.shouldInspectPendingEvents || preflight.pendingEventEntries.length === 0) {
       return;
     }
-    consumeSystemEventEntries(sessionKey, preflight.pendingEventEntries);
+    consumeSystemEventEntries(preflight.inspectionSessionKey, preflight.pendingEventEntries);
   };
 
   const ctx = {

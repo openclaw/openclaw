@@ -126,7 +126,7 @@ describe("handshake auth helpers", () => {
       }),
     ).toBe(false);
   });
-  it("rejects silent role-upgrade for remote clients", () => {
+  it("rejects silent role-upgrade and metadata-upgrade for remote clients", () => {
     expect(
       shouldAllowSilentLocalPairing({
         locality: "remote",
@@ -134,6 +134,15 @@ describe("handshake auth helpers", () => {
         isControlUi: false,
         isWebchat: false,
         reason: "role-upgrade",
+      }),
+    ).toBe(false);
+    expect(
+      shouldAllowSilentLocalPairing({
+        locality: "remote",
+        hasBrowserOriginHeader: false,
+        isControlUi: false,
+        isWebchat: false,
+        reason: "metadata-upgrade",
       }),
     ).toBe(false);
   });
