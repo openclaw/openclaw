@@ -152,6 +152,14 @@ test/fixtures/openclaw-vitest-unit-report.json
 analysis/
 .artifacts/qa-e2e/
 extensions/qa-lab/web/dist/
+lint.log
+tsc-tsconfig.core.json.log
+tsc-tsconfig.core.projects.json.log
+tsc-tsconfig.core.test.agents.json.log
+tsc-tsconfig.core.test.json.log
+tsc-tsconfig.core.test.non-agents.json.log
+tsc-tsconfig.extensions.json.log
+tsc.log
 
 # Generated bundled plugin runtime dependency manifests
 extensions/**/.openclaw-runtime-deps.json
