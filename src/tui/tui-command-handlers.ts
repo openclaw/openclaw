@@ -454,21 +454,26 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         }
         break;
       case "usage": {
+        const requestedInheritance = args === "inherit" || args === "default" ? null : undefined;
         const normalized = args ? normalizeUsageDisplay(args) : undefined;
-        if (args && !normalized) {
-          chatLog.addSystem("usage: /usage <off|tokens|full>");
+        if (args && normalized === undefined && requestedInheritance === undefined) {
+          chatLog.addSystem("usage: /usage <off|tokens|full|inherit|default>");
           break;
         }
         const currentRaw = state.sessionInfo.responseUsage;
-        const current = resolveResponseUsageMode(currentRaw);
-        const next =
-          normalized ?? (current === "off" ? "tokens" : current === "tokens" ? "full" : "off");
+        const current = resolveResponseUsageMode(currentRaw, undefined);
+        const nextResponseUsage =
+          requestedInheritance ??
+          normalized ??
+          (current === "off" ? "tokens" : current === "tokens" ? "full" : "off");
         try {
           const result = await client.patchSession({
             key: state.currentSessionKey,
-            responseUsage: next,
+            responseUsage: nextResponseUsage,
           });
-          chatLog.addSystem(`usage footer: ${next}`);
+          chatLog.addSystem(
+            `usage footer: ${nextResponseUsage === null ? "inherit default" : nextResponseUsage}`,
+          );
           applySessionInfoFromPatch(result);
           await refreshSessionInfo();
         } catch (err) {

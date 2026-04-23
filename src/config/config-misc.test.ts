@@ -405,7 +405,6 @@ describe("config identity/materialization regressions", () => {
     }
   });
 
-
   it("preserves empty responsePrefix when identity is present", () => {
     const res = validateConfigObject({
       agents: {
@@ -544,16 +543,20 @@ describe("cron webhook schema", () => {
       enabled: true,
       textChunkLimit: 1111,
     });
-    const messages = {
-      messagePrefix: "[openclaw]",
-      responsePrefix: "🦞",
-    };
+    const configWithLegacyMessagesLimit = OpenClawSchema.safeParse({
+      messages: {
+        messagePrefix: "[openclaw]",
+        responsePrefix: "🦞",
+        textChunkLimit: 9999,
+      },
+    });
 
     expect(whatsapp.success).toBe(true);
     expect(telegram.success).toBe(true);
     expect(discord.success).toBe(true);
     expect(signal.success).toBe(true);
     expect(imessage.success).toBe(true);
+    expect(configWithLegacyMessagesLimit.success).toBe(true);
     if (whatsapp.success) {
       expect(whatsapp.data.textChunkLimit).toBe(4444);
     }
@@ -570,8 +573,14 @@ describe("cron webhook schema", () => {
     if (imessage.success) {
       expect(imessage.data.textChunkLimit).toBe(1111);
     }
-    const legacy = messages as unknown as Record<string, unknown>;
-    expect(legacy.textChunkLimit).toBeUndefined();
+    if (configWithLegacyMessagesLimit.success) {
+      expect(configWithLegacyMessagesLimit.data.messages?.messagePrefix).toBe("[openclaw]");
+      expect(configWithLegacyMessagesLimit.data.messages?.responsePrefix).toBe("🦞");
+      expect(
+        (configWithLegacyMessagesLimit.data.messages as Record<string, unknown> | undefined)
+          ?.textChunkLimit,
+      ).toBeUndefined();
+    }
   });
 });
 

@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import { hasConfiguredModelFallbacks, resolveSessionAgentId } from "../../agents/agent-scope.js";
-import { resolveAgentIdentity } from "../../agents/identity.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
+import { resolveAgentIdentity } from "../../agents/identity.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { queueEmbeddedPiMessage } from "../../agents/pi-embedded-runner/runs.js";
@@ -61,11 +61,6 @@ import {
 import { resolveQueuedReplyExecutionConfig } from "./agent-runner-utils.js";
 import { createAudioAsVoiceBuffer, createBlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveEffectiveBlockStreamingConfig } from "./block-streaming.js";
-import {
-  extractShortModelName,
-  hasUsageTemplateVariables,
-  type ResponseTemplateContext,
-} from "./response-prefix-template.js";
 import { createFollowupRunner } from "./followup-runner.js";
 import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
@@ -84,6 +79,11 @@ import {
   type ReplyOperation,
 } from "./reply-run-registry.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
+import {
+  extractShortModelName,
+  hasUsageTemplateVariables,
+  type ResponseTemplateContext,
+} from "./response-prefix-template.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
@@ -1464,28 +1464,20 @@ export async function runReplyAgent(params: {
       });
     }
 
-    const responseUsageDefaultRaw =
-      cfg.agents?.defaults?.responseUsage ??
-      queuedRunConfig.agents?.defaults?.responseUsage;
+    const responseUsageDefaultRaw = cfg.agents?.defaults?.responseUsage;
     const responseUsageRaw =
       activeSessionEntry?.responseUsage ??
       (sessionKey ? activeSessionStore?.[sessionKey]?.responseUsage : undefined);
     const responseUsageMode = resolveResponseUsageMode(responseUsageRaw, responseUsageDefaultRaw);
 
-    const responseFooterTemplate =
-      normalizeOptionalString(cfg.messages?.responseFooter) ??
-      normalizeOptionalString(queuedRunConfig.messages?.responseFooter);
+    const responseFooterTemplate = normalizeOptionalString(cfg.messages?.responseFooter);
     const shouldResolveFooter = responseFooterTemplate !== undefined;
     const shouldResolveLateTemplateContext =
       shouldResolveFooter ||
       responseUsageMode !== "off" ||
       Boolean(opts?.onResponseTemplateContextResolved);
 
-    if (
-      verboseEnabled ||
-      responseUsageMode === "full" ||
-      shouldResolveLateTemplateContext
-    ) {
+    if (verboseEnabled || responseUsageMode === "full" || shouldResolveLateTemplateContext) {
       activeSessionEntry = refreshSessionEntryFromStore({
         storePath,
         sessionKey,
@@ -1700,16 +1692,15 @@ export async function runReplyAgent(params: {
       traceAuthorized &&
       (activeSessionEntry?.traceLevel === "on" || activeSessionEntry?.traceLevel === "raw");
     const shouldAppendTracePayload = verboseEnabled || traceEnabledForSender;
-    const identityName =
-      normalizeOptionalString(resolveAgentIdentity(cfg, followupRun.run.agentId)?.name) ??
-      normalizeOptionalString(resolveAgentIdentity(queuedRunConfig, followupRun.run.agentId)?.name);
+    const identityName = normalizeOptionalString(
+      resolveAgentIdentity(cfg, followupRun.run.agentId)?.name,
+    );
     let footerBlockToAppend: string | undefined;
     if (shouldResolveLateTemplateContext) {
       const inputTokens = typeof usage?.input === "number" ? usage.input : undefined;
       const outputTokens = typeof usage?.output === "number" ? usage.output : undefined;
       const cacheReadTokens = typeof usage?.cacheRead === "number" ? usage.cacheRead : undefined;
-      const cacheWriteTokens =
-        typeof usage?.cacheWrite === "number" ? usage.cacheWrite : undefined;
+      const cacheWriteTokens = typeof usage?.cacheWrite === "number" ? usage.cacheWrite : undefined;
       const totalTokens =
         typeof usage?.total === "number"
           ? usage.total
@@ -1727,7 +1718,8 @@ export async function runReplyAgent(params: {
           ? promptTokens
           : undefined);
       const contextMaxTokens =
-        typeof activeSessionEntry?.contextTokens === "number" && activeSessionEntry.contextTokens > 0
+        typeof activeSessionEntry?.contextTokens === "number" &&
+        activeSessionEntry.contextTokens > 0
           ? activeSessionEntry.contextTokens
           : contextTokensUsed;
       const contextPercent =
@@ -1759,24 +1751,21 @@ export async function runReplyAgent(params: {
               cost: costConfig,
             })
           : undefined;
-      const templateUsageLine =
-        hasNonzeroUsage(usage)
-          ? formatResponseUsageLine({
-              usage,
-              showCost,
-              costConfig,
-              mode: responseUsageMode === "full" ? "full" : "tokens",
-              modelLabel,
-              contextUsedTokens,
-              contextMaxTokens,
-              contextPercent,
-              sessionKey,
-            }) ?? undefined
-          : undefined;
+      const templateUsageLine = hasNonzeroUsage(usage)
+        ? (formatResponseUsageLine({
+            usage,
+            showCost,
+            costConfig,
+            mode: responseUsageMode === "full" ? "full" : "tokens",
+            modelLabel,
+            contextUsedTokens,
+            contextMaxTokens,
+            contextPercent,
+            sessionKey,
+          }) ?? undefined)
+        : undefined;
       responseUsageLine =
-        responseUsageMode !== "off" && hasNonzeroUsage(usage)
-          ? templateUsageLine
-          : undefined;
+        responseUsageMode !== "off" && hasNonzeroUsage(usage) ? templateUsageLine : undefined;
       const responseTemplateContext: ResponseTemplateContext = {
         model: modelLabel,
         modelFull,
