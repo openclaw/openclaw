@@ -100,18 +100,28 @@ export function createGatewayAuxHandlers(params: {
               "skipping channel reload (OPENCLAW_SKIP_CHANNELS=1 or OPENCLAW_SKIP_PROVIDERS=1)",
             );
           } else {
+            // Isolate per-channel failures so one channel's stop/start error
+            // does not leave later channels unrestarted, but collect them and
+            // surface an error after the loop so the caller knows rotation
+            // was partial and can retry or alert instead of treating a
+            // swallowed failure as a successful rotation.
+            const restartFailures: ChannelKind[] = [];
             for (const channel of plan.restartChannels) {
               params.logChannels.info(`restarting ${channel} channel after secrets reload`);
               try {
                 await params.stopChannel(channel);
                 await params.startChannel(channel);
               } catch (err) {
-                // Isolate per-channel failures so one channel's stop/start
-                // error does not leave other changed channels unrestarted.
                 params.logChannels.info(
                   `failed to restart ${channel} channel after secrets reload: ${String(err)}`,
                 );
+                restartFailures.push(channel);
               }
+            }
+            if (restartFailures.length > 0) {
+              throw new Error(
+                `failed to restart channels after secrets reload: ${restartFailures.join(", ")}`,
+              );
             }
           }
         }

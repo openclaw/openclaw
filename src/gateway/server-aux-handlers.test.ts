@@ -125,8 +125,11 @@ describe("gateway aux handlers", () => {
     await invokeSecretsReload({ handlers: extraHandlers, respond });
 
     expect(activateRuntimeSecrets).toHaveBeenCalledTimes(1);
-    expect(stopChannel.mock.calls).toEqual([["slack"], ["zalo"]]);
-    expect(startChannel.mock.calls).toEqual([["slack"], ["zalo"]]);
+    // Assertion is order-independent: plan.restartChannels iterates in Set
+    // insertion order, which in turn depends on diff/plugin iteration order
+    // that is not a stable contract of this handler.
+    expect(stopChannel.mock.calls.map(([ch]) => ch).toSorted()).toEqual(["slack", "zalo"]);
+    expect(startChannel.mock.calls.map(([ch]) => ch).toSorted()).toEqual(["slack", "zalo"]);
     expect(respond).toHaveBeenCalledWith(true, { ok: true, warningCount: 0 });
   });
 
@@ -206,7 +209,7 @@ describe("gateway aux handlers", () => {
     expect(startChannel.mock.calls).toEqual([["slack"]]);
   });
 
-  it("isolates per-channel restart failures so later channels still restart", async () => {
+  it("isolates per-channel restart failures, then surfaces an error so partial rotation is visible", async () => {
     activateSecretsRuntimeSnapshot(
       createSnapshot(
         asConfig({
@@ -250,14 +253,22 @@ describe("gateway aux handlers", () => {
 
     await invokeSecretsReload({ handlers: extraHandlers, respond });
 
-    expect(stopChannel.mock.calls).toEqual([["slack"], ["zalo"]]);
-    expect(startChannel.mock.calls).toEqual([["slack"], ["zalo"]]);
-    expect(respond).toHaveBeenCalledWith(true, { ok: true, warningCount: 0 });
+    // Both channels were attempted even though slack's startChannel threw,
+    // so zalo still got its rotation applied.
+    expect(stopChannel.mock.calls.map(([ch]) => ch).toSorted()).toEqual(["slack", "zalo"]);
+    expect(startChannel.mock.calls.map(([ch]) => ch).toSorted()).toEqual(["slack", "zalo"]);
     expect(
       logChannelsInfo.mock.calls.some(([msg]) =>
         String(msg).startsWith("failed to restart slack channel after secrets reload"),
       ),
     ).toBe(true);
+    // The handler surfaces the partial-failure so the caller can retry/alert
+    // instead of treating a swallowed restart error as a successful rotation.
+    expect(respond.mock.calls).toHaveLength(1);
+    const [okFlag, successPayload, errorPayload] = respond.mock.calls[0];
+    expect(okFlag).toBe(false);
+    expect(successPayload).toBeUndefined();
+    expect(String(errorPayload?.message ?? "")).toContain("slack");
   });
 
   it("does not restart channels when resolved secrets do not change channel config", async () => {
