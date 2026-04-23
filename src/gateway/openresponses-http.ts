@@ -35,7 +35,13 @@ import { defaultRuntime } from "../runtime.js";
 import { resolveAssistantStreamDeltaText } from "./agent-event-assistant-text.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import { sendJson, setSseHeaders, watchClientDisconnect, writeDone } from "./http-common.js";
+import {
+  sendJson,
+  setSseHeaders,
+  startSseHeartbeat,
+  watchClientDisconnect,
+  writeDone,
+} from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
 import {
   getBearerToken,
@@ -811,6 +817,11 @@ export async function handleOpenResponsesHttpRequest(
   // ─────────────────────────────────────────────────────────────────────────
 
   setSseHeaders(res);
+  // Keep intermediary proxies (e.g. Envoy 4-minute stream idle timeout) from
+  // closing the connection during long reasoning pauses. Comment lines are
+  // ignored by SSE clients but reset proxy idle timers. Auto-stops on
+  // close/finish via the helper, so no manual cleanup is needed here.
+  startSseHeartbeat(res);
 
   let accumulatedText = "";
   let sawAssistantDelta = false;

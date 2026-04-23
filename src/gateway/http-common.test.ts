@@ -18,6 +18,7 @@ import {
   sendUnauthorized,
   setDefaultSecurityHeaders,
   setSseHeaders,
+  startSseHeartbeat,
   watchClientDisconnect,
   writeDone,
 } from "./http-common.js";
@@ -294,6 +295,91 @@ describe("setSseHeaders", () => {
     expect((res as unknown as { flushHeaders?: () => void }).flushHeaders).toBeUndefined();
     expect(() => setSseHeaders(res)).not.toThrow();
     expect(setHeader).toHaveBeenCalledWith("Content-Type", "text/event-stream; charset=utf-8");
+  });
+});
+
+describe("startSseHeartbeat", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  it("writes an SSE comment on each interval tick", () => {
+    const { res } = makeMockHttpResponse();
+    const write = vi.spyOn(res, "write");
+    const stop = startSseHeartbeat(res, { intervalMs: 1000 });
+    expect(write).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1000);
+    expect(write).toHaveBeenCalledWith(": ping\n\n");
+    vi.advanceTimersByTime(2000);
+    expect(write).toHaveBeenCalledTimes(3);
+    stop();
+  });
+
+  it("stops writing after the returned stop() is called", () => {
+    const { res } = makeMockHttpResponse();
+    const write = vi.spyOn(res, "write");
+    const stop = startSseHeartbeat(res, { intervalMs: 1000 });
+    vi.advanceTimersByTime(1000);
+    expect(write).toHaveBeenCalledTimes(1);
+    stop();
+    vi.advanceTimersByTime(5000);
+    expect(write).toHaveBeenCalledTimes(1);
+  });
+
+  it("auto-stops when the response emits finish", () => {
+    const { res } = makeMockHttpResponse();
+    const write = vi.spyOn(res, "write");
+    startSseHeartbeat(res, { intervalMs: 1000 });
+    vi.advanceTimersByTime(1000);
+    expect(write).toHaveBeenCalledTimes(1);
+    res.emit("finish");
+    vi.advanceTimersByTime(5000);
+    expect(write).toHaveBeenCalledTimes(1);
+  });
+
+  it("auto-stops when the response emits close", () => {
+    const { res } = makeMockHttpResponse();
+    const write = vi.spyOn(res, "write");
+    startSseHeartbeat(res, { intervalMs: 1000 });
+    vi.advanceTimersByTime(1000);
+    expect(write).toHaveBeenCalledTimes(1);
+    res.emit("close");
+    vi.advanceTimersByTime(5000);
+    expect(write).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips writing when the response has already ended", () => {
+    const { res } = makeMockHttpResponse();
+    const write = vi.spyOn(res, "write");
+    // Simulate a completed response where the interval tick fires between
+    // res.end() and the `finish` event (the listener removes the interval,
+    // but the check inside the tick guards against write-after-end).
+    Object.defineProperty(res, "writableEnded", { value: true, configurable: true });
+    startSseHeartbeat(res, { intervalMs: 1000 });
+    vi.advanceTimersByTime(5000);
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  it("clamps sub-second intervals to 1000ms", () => {
+    const { res } = makeMockHttpResponse();
+    const write = vi.spyOn(res, "write");
+    const stop = startSseHeartbeat(res, { intervalMs: 10 });
+    vi.advanceTimersByTime(999);
+    expect(write).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(write).toHaveBeenCalledTimes(1);
+    stop();
+  });
+
+  it("uses a 30-second default interval", () => {
+    const { res } = makeMockHttpResponse();
+    const write = vi.spyOn(res, "write");
+    const stop = startSseHeartbeat(res);
+    vi.advanceTimersByTime(29_999);
+    expect(write).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(write).toHaveBeenCalledTimes(1);
+    stop();
   });
 });
 

@@ -118,6 +118,42 @@ export function setSseHeaders(res: ServerResponse) {
   res.flushHeaders?.();
 }
 
+/**
+ * Keep SSE streams alive through idle-timeout proxies (e.g. Envoy's default
+ * 4-minute stream idle timeout, ALB's 60s, Cloudflare's 100s) by periodically
+ * writing an SSE comment line. Comment lines (`: ...\n\n`) are valid SSE per
+ * the spec and are ignored by clients, but any bytes on the wire reset
+ * intermediary idle timers.
+ *
+ * The returned stop function clears the interval. The helper also auto-stops
+ * on `close`/`finish` so callers that already end the response through
+ * existing paths do not need to track cleanup manually.
+ */
+export function startSseHeartbeat(
+  res: ServerResponse,
+  options?: { intervalMs?: number },
+): () => void {
+  const intervalMs = Math.max(1000, options?.intervalMs ?? 30_000);
+  const timer = setInterval(() => {
+    if (res.writableEnded || res.destroyed) {
+      return;
+    }
+    res.write(": ping\n\n");
+  }, intervalMs);
+  timer.unref?.();
+  let stopped = false;
+  const stop = () => {
+    if (stopped) {
+      return;
+    }
+    stopped = true;
+    clearInterval(timer);
+  };
+  res.once("close", stop);
+  res.once("finish", stop);
+  return stop;
+}
+
 export function watchClientDisconnect(
   req: IncomingMessage,
   res: ServerResponse,
