@@ -102,6 +102,41 @@ function generateDetailsId(message: unknown, index: number): string {
   return `tool-${idString}-${index}`;
 }
 
+function getMediaStorageKey(mediaType: 'audio' | 'video', mediaSrc: string, instanceId: string): string {
+  const hash = btoa(mediaSrc).replace(/[^a-zA-Z0-9]/g, '_').slice(0, 50);
+  return `${mediaType}_progress_${hash}_${instanceId}`;
+}
+
+function saveMediaProgress(mediaType: 'audio' | 'video', mediaSrc: string, instanceId: string, currentTime: number) {
+  try {
+    const key = getMediaStorageKey(mediaType, mediaSrc, instanceId);
+    localStorage.setItem(key, JSON.stringify({
+      currentTime,
+      timestamp: Date.now()
+    }));
+  } catch (e) {
+    console.warn(`Failed to save ${mediaType} progress:`, e);
+  }
+}
+
+function getMediaProgress(mediaType: 'audio' | 'video', mediaSrc: string, instanceId: string): number | null {
+  try {
+    const key = getMediaStorageKey(mediaType, mediaSrc, instanceId);
+    const saved = localStorage.getItem(key);
+    if (saved) {
+      const data = JSON.parse(saved);
+      // Expire after 30 days
+      if (Date.now() - data.timestamp < 30 * 24 * 60 * 60 * 1000) {
+        return data.currentTime;
+      }
+      localStorage.removeItem(key);
+    }
+  } catch (e) {
+    console.warn(`Failed to load ${mediaType} progress:`, e);
+  }
+  return null;
+}
+
 // Helper function to check if a path is already a gateway-routed path
 function isGatewayRoutedPath(path: string): boolean {
   return path.startsWith('/__openclaw__/') || 
@@ -839,28 +874,11 @@ function renderMessageImages(images: ImageBlock[]) {
               class="chat-message-image"
               @load=${(e: Event) => {
                 const imgEl = e.target as HTMLImageElement;
-                const naturalWidth = imgEl.naturalWidth;
-                
                 const bubble = imgEl.closest('.chat-bubble') as HTMLElement;
                 if (bubble && !bubble.style.width) {
-                  let targetWidth: number;
-                  
-                  if (naturalWidth >= 3840) {
-                    targetWidth = 400;
-                  } else if (naturalWidth >= 2560) {
-                    targetWidth = 380;
-                  } else if (naturalWidth >= 1920) {
-                    targetWidth = 360;
-                  } else if (naturalWidth >= 1280) {
-                    targetWidth = 340;
-                  } else if (naturalWidth >= 800) {
-                    targetWidth = 320;
-                  } else if (naturalWidth >= 500) {
-                    targetWidth = 300;
-                  } else {
-                    targetWidth = Math.floor(naturalWidth * 0.8);
-                  }
-                  
+                  const naturalWidth = imgEl.naturalWidth;
+                  // Use the smaller of 600px or the image's natural width
+                  const targetWidth = Math.min(naturalWidth, 600);
                   bubble.style.width = `${targetWidth}px`;
                 }
               }}
@@ -883,29 +901,57 @@ function renderMessageImages(images: ImageBlock[]) {
   `;
 }
 
-function renderMessageMedia(audioBlocks: AudioBlock[], videoBlocks: VideoBlock[]) {
+function renderMessageMedia(audioBlocks: AudioBlock[], videoBlocks: VideoBlock[], messageId?: string) {
   const elements = [];
 
   for (let i = 0; i < audioBlocks.length; i++) {
     const audio = audioBlocks[i];
-    // Add error handler to hide the "Unavailable" message
+    const instanceId = messageId ? `${messageId}_audio_${i}` : `audio_${Date.now()}_${i}`;
+    const mediaSrc = audio.data;
+    
     const handleError = (e: Event) => {
       const audioEl = e.target as HTMLAudioElement;
       const wrapper = audioEl.closest('.chat-media-wrapper') as HTMLElement;
       if (wrapper) {
-        // Hide the entire audio player on error
         wrapper.style.display = 'none';
       }
     };
     
     elements.push(html`
       <div class="chat-media-wrapper">
-        <audio controls class="chat-message-audio" @error=${handleError}>
+        <audio 
+          controls 
+          class="chat-message-audio" 
+          @error=${handleError}
+          @loadedmetadata=${(e: Event) => {
+            const audioEl = e.target as HTMLAudioElement;
+            const savedTime = getMediaProgress('audio', mediaSrc, instanceId);
+            if (savedTime && savedTime < audioEl.duration) {
+              audioEl.currentTime = savedTime;
+            }
+          }}
+          @timeupdate=${(e: Event) => {
+            const audioEl = e.target as HTMLAudioElement;
+            const currentTime = Math.floor(audioEl.currentTime);
+            if (currentTime % 5 === 0 && currentTime !== Math.floor((audioEl as any).lastSavedTime || 0)) {
+              saveMediaProgress('audio', mediaSrc, instanceId, audioEl.currentTime);
+              (audioEl as any).lastSavedTime = audioEl.currentTime;
+            }
+          }}
+          @pause=${(e: Event) => {
+            const audioEl = e.target as HTMLAudioElement;
+            saveMediaProgress('audio', mediaSrc, instanceId, audioEl.currentTime);
+          }}
+          @ended=${() => {
+            const key = getMediaStorageKey('audio', mediaSrc, instanceId);
+            localStorage.removeItem(key);
+          }}
+        >
           <source src=${audio.data} type=${audio.mimeType} />
           Your browser does not support the audio element.
         </audio>
         ${audio.filename 
-          ? html`<div class="chat-image-filename" style="display: block; width: 100%;">${audio.filename}</div>`
+          ? html`<div style="display: block; width: 100%;">${audio.filename}</div>`
           : nothing}
       </div>
     `);
@@ -913,6 +959,9 @@ function renderMessageMedia(audioBlocks: AudioBlock[], videoBlocks: VideoBlock[]
 
   for (let i = 0; i < videoBlocks.length; i++) {
     const video = videoBlocks[i];
+    const instanceId = messageId ? `${messageId}_video_${i}` : `video_${Date.now()}_${i}`;
+    const mediaSrc = video.data;
+    
     const handleError = (e: Event) => {
       const videoEl = e.target as HTMLVideoElement;
       const wrapper = videoEl.closest('.chat-media-wrapper') as HTMLElement;
@@ -922,19 +971,50 @@ function renderMessageMedia(audioBlocks: AudioBlock[], videoBlocks: VideoBlock[]
     };
     
     elements.push(html`
-      <div class="chat-media-wrapper" style="width: 100%; max-width: 640px;">
+      <div class="chat-media-wrapper" style="width: 100%; max-width: 1024px;">
         <video
           controls
           class="chat-message-video"
-          style="width: 100%; max-width: 640px; height: auto; max-height: 360px;"
+          style="width: 100%; max-width: 1024px; height: auto; max-height: 576px;"
           playsinline
           @error=${handleError}
+          @loadedmetadata=${(e: Event) => {
+            const videoEl = e.target as HTMLVideoElement;
+            const savedTime = getMediaProgress('video', mediaSrc, instanceId);
+            if (savedTime && savedTime < videoEl.duration) {
+              videoEl.currentTime = savedTime;
+            }
+            
+            const bubble = videoEl.closest('.chat-bubble') as HTMLElement;
+            if (bubble && !bubble.style.width) {
+              const videoWidth = videoEl.videoWidth;
+              // Use the smaller of 600px or the video's natural width
+              const targetWidth = Math.min(videoWidth, 600);
+              bubble.style.width = `${targetWidth}px`;
+            }
+          }}
+          @timeupdate=${(e: Event) => {
+            const videoEl = e.target as HTMLVideoElement;
+            const currentTime = Math.floor(videoEl.currentTime);
+            if (currentTime % 5 === 0 && currentTime !== Math.floor((videoEl as any).lastSavedTime || 0)) {
+              saveMediaProgress('video', mediaSrc, instanceId, videoEl.currentTime);
+              (videoEl as any).lastSavedTime = videoEl.currentTime;
+            }
+          }}
+          @pause=${(e: Event) => {
+            const videoEl = e.target as HTMLVideoElement;
+            saveMediaProgress('video', mediaSrc, instanceId, videoEl.currentTime);
+          }}
+          @ended=${() => {
+            const key = getMediaStorageKey('video', mediaSrc, instanceId);
+            localStorage.removeItem(key);
+          }}
         >
           <source src=${video.data} type=${video.mimeType} />
           Your browser does not support the video element.
         </video>
         ${video.filename 
-          ? html`<div class="chat-image-filename" style="display: block; width: 100%;">${video.filename}</div>`
+          ? html`<div style="display: block; width: 100%;">${video.filename}</div>`
           : nothing}
       </div>
     `);
@@ -1644,7 +1724,7 @@ function renderGroupedMessage(
             </summary>
             <div class="chat-tool-msg-body">
               ${renderMessageImages(images)}
-              ${renderMessageMedia(audioBlocks, videoBlocks)}
+              ${renderMessageMedia(audioBlocks, videoBlocks, messageId)}
               ${renderAssistantAttachments(
                 assistantAttachments,
                 opts.localMediaPreviewRoots ?? [],
@@ -1668,7 +1748,7 @@ function renderGroupedMessage(
               if (details.open) {
                 setTimeout(() => {
                   details.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-                }, 250);
+                }, 150);
               }
             }}
           >
@@ -1747,7 +1827,7 @@ function renderGroupedMessage(
           </div>`
         : nothing}
       ${renderMessageImages(images)}
-      ${renderMessageMedia(audioBlocks, videoBlocks)}
+      ${renderMessageMedia(audioBlocks, videoBlocks, messageId)}
       ${renderAssistantAttachments(
         assistantAttachments,
         opts.localMediaPreviewRoots ?? [],
