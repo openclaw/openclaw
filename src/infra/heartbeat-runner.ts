@@ -106,6 +106,7 @@ import {
 } from "./outbound/targets.js";
 import {
   consumeSystemEventEntries,
+  enqueueSystemEvent,
   peekSystemEventEntries,
   resolveSystemEventDeliveryContext,
 } from "./system-events.js";
@@ -670,6 +671,9 @@ function resolveHeartbeatRunPrompt(params: {
   const pendingEvents = params.preflight.shouldInspectPendingEvents
     ? pendingEventEntries.map((event) => event.text)
     : [];
+  const execPendingEventEntries = pendingEventEntries.filter((event) =>
+    isExecCompletionEvent(event.text),
+  );
   const cronEvents = pendingEventEntries
     .filter(
       (event) =>
@@ -852,6 +856,9 @@ export async function runHeartbeatOnce(opts: {
     startedAt,
     heartbeatFileContent: preflight.heartbeatFileContent,
   });
+  const execPendingEventEntries = preflight.pendingEventEntries.filter((event) =>
+    isExecCompletionEvent(event.text),
+  );
 
   // If no tasks are due, skip heartbeat entirely
   if (prompt === null) {
@@ -968,7 +975,23 @@ export async function runHeartbeatOnce(opts: {
     if (!preflight.shouldInspectPendingEvents || preflight.pendingEventEntries.length === 0) {
       return;
     }
+    if (!hasExecCompletion) {
+      consumeSystemEventEntries(sessionKey, preflight.pendingEventEntries);
+      return;
+    }
+
+    const deferredEntries = preflight.pendingEventEntries.filter(
+      (event) => !isExecCompletionEvent(event.text),
+    );
     consumeSystemEventEntries(sessionKey, preflight.pendingEventEntries);
+    for (const event of deferredEntries) {
+      enqueueSystemEvent(event.text, {
+        sessionKey,
+        contextKey: event.contextKey,
+        deliveryContext: event.deliveryContext,
+        trusted: event.trusted,
+      });
+    }
   };
 
   const ctx = {
