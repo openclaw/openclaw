@@ -542,6 +542,37 @@ describe("gateway server chat", () => {
     expect(textValues).toEqual(["hello", "real reply", "real text field reply", "NO_REPLY"]);
   });
 
+  test("chat.history rewrites transcript image blocks into renderable control ui sources", async () => {
+    const historyMessages = await loadChatHistoryWithMessages([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "see image" },
+          { type: "image", data: "abc123==", mimeType: "image/png" },
+        ],
+        timestamp: 1,
+      },
+    ]);
+
+    const firstMessage = historyMessages[0] as
+      | {
+          content?: Array<{
+            type?: string;
+            data?: string;
+            source?: { type?: string; media_type?: string; data?: string };
+          }>;
+        }
+      | undefined;
+    const imageBlock = firstMessage?.content?.[1];
+    expect(imageBlock?.type).toBe("image");
+    expect(imageBlock).not.toHaveProperty("data");
+    expect(imageBlock?.source).toEqual({
+      type: "base64",
+      media_type: "image/png",
+      data: "abc123==",
+    });
+  });
+
   test("chat.history hides commentary-only assistant entries", async () => {
     const historyMessages = await loadChatHistoryWithMessages([
       {

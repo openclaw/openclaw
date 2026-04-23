@@ -695,10 +695,16 @@ function sanitizeChatHistoryContentBlock(
   }
   const type = typeof entry.type === "string" ? entry.type : "";
   if (type === "image" && typeof entry.data === "string") {
-    const bytes = Buffer.byteLength(entry.data, "utf8");
+    const data = entry.data;
     delete entry.data;
-    entry.omitted = true;
-    entry.bytes = bytes;
+    entry.source = {
+      type: "base64",
+      media_type:
+        typeof entry.mimeType === "string" && entry.mimeType.trim().length > 0
+          ? entry.mimeType
+          : "image/png",
+      data,
+    };
     changed = true;
   }
   if (type === "audio" && entry.source && typeof entry.source === "object") {
