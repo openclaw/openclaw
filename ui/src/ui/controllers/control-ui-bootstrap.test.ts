@@ -155,6 +155,38 @@ describe("loadControlUiBootstrapConfig", () => {
           allowExternalEmbedUrls: false,
         }),
       });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const state = {
+      basePath: "",
+      assistantName: "Assistant",
+      assistantAvatar: null,
+      assistantAgentId: null,
+      bootstrapGatewayToken: null,
+      localMediaPreviewRoots: [],
+      embedSandboxMode: "scripts" as const,
+      allowExternalEmbedUrls: false,
+      serverVersion: null,
+      settings: { token: "stale-token" },
+      password: "fresh-password",
+    };
+
+    await loadControlUiBootstrapConfig(state);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const [, firstInit] = fetchMock.mock.calls[0] ?? [];
+    const [, secondInit] = fetchMock.mock.calls[1] ?? [];
+    expect((firstInit?.headers as Record<string, string> | undefined)?.Authorization).toBe(
+      "Bearer stale-token",
+    );
+    expect((secondInit?.headers as Record<string, string> | undefined)?.Authorization).toBe(
+      "Bearer fresh-password",
+    );
+    expect(state.assistantName).toBe("Ops");
+    expect(state.serverVersion).toBe("2026.4.22");
+
+    vi.unstubAllGlobals();
+  });
 
   it("loads a bootstrap gateway token when the local UI provides one", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
@@ -185,17 +217,7 @@ describe("loadControlUiBootstrapConfig", () => {
 
     await loadControlUiBootstrapConfig(state);
 
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    const [, firstInit] = fetchMock.mock.calls[0] ?? [];
-    const [, secondInit] = fetchMock.mock.calls[1] ?? [];
-    expect((firstInit?.headers as Record<string, string> | undefined)?.Authorization).toBe(
-      "Bearer stale-token",
-    );
-    expect((secondInit?.headers as Record<string, string> | undefined)?.Authorization).toBe(
-      "Bearer fresh-password",
-    );
-    expect(state.assistantName).toBe("Ops");
-    expect(state.serverVersion).toBe("2026.4.22");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(state.bootstrapGatewayToken).toBe("loopback-token");
 
     vi.unstubAllGlobals();

@@ -686,16 +686,6 @@ export async function handleControlUiHttpRequest(
     ? `${basePath}${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`
     : CONTROL_UI_BOOTSTRAP_CONFIG_PATH;
   if (pathname === bootstrapConfigPath) {
-    if (
-      !(await authorizeControlUiReadRequest(req, res, {
-        auth: opts?.auth,
-        trustedProxies: opts?.trustedProxies,
-        allowRealIpFallback: opts?.allowRealIpFallback,
-        rateLimiter: opts?.rateLimiter,
-      }))
-    ) {
-      return true;
-    }
     const config = opts?.config;
     const identity = config
       ? resolveAssistantIdentity({ cfg: config, agentId: opts?.agentId })

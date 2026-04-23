@@ -557,7 +557,7 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
-  it("rejects bootstrap config requests without a valid auth token when auth is enabled", async () => {
+  it("serves bootstrap config requests without requiring an auth token", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
         const { res, handled, end } = await runBootstrapConfigRequest({
@@ -565,8 +565,9 @@ describe("handleControlUiHttpRequest", () => {
           auth: { mode: "token", token: "test-token", allowTailscale: false },
         });
         expect(handled).toBe(true);
-        expect(res.statusCode).toBe(401);
-        expect(String(end.mock.calls[0]?.[0] ?? "")).toContain("Unauthorized");
+        expect(res.statusCode).toBe(200);
+        const parsed = parseBootstrapPayload(end);
+        expect(parsed.assistantAgentId).toBe("main");
       },
     });
   });
@@ -592,7 +593,7 @@ describe("handleControlUiHttpRequest", () => {
   it("includes the gateway token in bootstrap config for direct loopback requests", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
-        const { end, handled } = runControlUiRequest({
+        const { end, handled } = await runControlUiRequest({
           url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
           method: "GET",
           rootPath: tmp,
@@ -612,7 +613,7 @@ describe("handleControlUiHttpRequest", () => {
   it("does not include the gateway token in bootstrap config for non-loopback requests", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
-        const { end, handled } = runControlUiRequest({
+        const { end, handled } = await runControlUiRequest({
           url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
           method: "GET",
           rootPath: tmp,
@@ -629,7 +630,7 @@ describe("handleControlUiHttpRequest", () => {
   it("does not include the gateway token when the host header is not loopback", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
-        const { end, handled } = runControlUiRequest({
+        const { end, handled } = await runControlUiRequest({
           url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
           method: "GET",
           rootPath: tmp,
@@ -648,7 +649,7 @@ describe("handleControlUiHttpRequest", () => {
   it("does not include the gateway token when the origin is not loopback", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
-        const { end, handled } = runControlUiRequest({
+        const { end, handled } = await runControlUiRequest({
           url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
           method: "GET",
           rootPath: tmp,

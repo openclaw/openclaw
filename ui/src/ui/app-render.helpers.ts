@@ -45,7 +45,6 @@ type ChatRefreshHost = AppViewState & {
 };
 
 export function resolveAssistantAttachmentAuthToken(
-  state: Pick<AppViewState, "hello" | "settings" | "password">,
   state: Pick<AppViewState, "hello" | "settings" | "password" | "bootstrapGatewayToken">,
   options?: { pageUrl?: string },
 ) {
