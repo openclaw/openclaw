@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 
 export type CodexAppServerTransportMode = "stdio" | "websocket";
+export type CodexAppServerPolicyMode = "yolo" | "guardian";
 export type CodexAppServerApprovalPolicy = "never" | "on-request" | "on-failure" | "untrusted";
 export type CodexAppServerSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
 export type CodexAppServerApprovalsReviewer = "user" | "guardian_subagent";
@@ -32,6 +33,7 @@ export type CodexPluginConfig = {
     timeoutMs?: number;
   };
   appServer?: {
+    mode?: CodexAppServerPolicyMode;
     transport?: CodexAppServerTransportMode;
     command?: string;
     args?: string[] | string;
@@ -47,6 +49,7 @@ export type CodexPluginConfig = {
 };
 
 export const CODEX_APP_SERVER_CONFIG_KEYS = [
+  "mode",
   "transport",
   "command",
   "args",
@@ -61,6 +64,7 @@ export const CODEX_APP_SERVER_CONFIG_KEYS = [
 ] as const;
 
 const codexAppServerTransportSchema = z.enum(["stdio", "websocket"]);
+const codexAppServerPolicyModeSchema = z.enum(["yolo", "guardian"]);
 const codexAppServerApprovalPolicySchema = z.enum([
   "never",
   "on-request",
@@ -81,6 +85,7 @@ const codexPluginConfigSchema = z
       .optional(),
     appServer: z
       .object({
+        mode: codexAppServerPolicyModeSchema.optional(),
         transport: codexAppServerTransportSchema.optional(),
         command: z.string().optional(),
         args: z.union([z.array(z.string()), z.string()]).optional(),
@@ -118,6 +123,10 @@ export function resolveCodexAppServerRuntimeOptions(
   const headers = normalizeHeaders(config.headers);
   const authToken = readNonEmptyString(config.authToken);
   const url = readNonEmptyString(config.url);
+  const policyMode =
+    resolvePolicyMode(config.mode) ??
+    resolvePolicyMode(env.OPENCLAW_CODEX_APP_SERVER_MODE) ??
+    "yolo";
   if (transport === "websocket" && !url) {
     throw new Error(
       "plugins.entries.codex.config.appServer.url is required when appServer.transport is websocket",
@@ -137,14 +146,14 @@ export function resolveCodexAppServerRuntimeOptions(
     approvalPolicy:
       resolveApprovalPolicy(config.approvalPolicy) ??
       resolveApprovalPolicy(env.OPENCLAW_CODEX_APP_SERVER_APPROVAL_POLICY) ??
-      "never",
+      (policyMode === "guardian" ? "on-request" : "never"),
     sandbox:
       resolveSandbox(config.sandbox) ??
       resolveSandbox(env.OPENCLAW_CODEX_APP_SERVER_SANDBOX) ??
-      "danger-full-access",
+      (policyMode === "guardian" ? "workspace-write" : "danger-full-access"),
     approvalsReviewer:
       resolveApprovalsReviewer(config.approvalsReviewer) ??
-      (env.OPENCLAW_CODEX_APP_SERVER_GUARDIAN === "1" ? "guardian_subagent" : "user"),
+      (policyMode === "guardian" ? "guardian_subagent" : "user"),
     ...(readNonEmptyString(config.serviceTier)
       ? { serviceTier: readNonEmptyString(config.serviceTier) }
       : {}),
@@ -168,6 +177,10 @@ export function codexAppServerStartOptionsKey(options: CodexAppServerStartOption
 
 function resolveTransport(value: unknown): CodexAppServerTransportMode {
   return value === "websocket" ? "websocket" : "stdio";
+}
+
+function resolvePolicyMode(value: unknown): CodexAppServerPolicyMode | undefined {
+  return value === "guardian" || value === "yolo" ? value : undefined;
 }
 
 function resolveApprovalPolicy(value: unknown): CodexAppServerApprovalPolicy | undefined {

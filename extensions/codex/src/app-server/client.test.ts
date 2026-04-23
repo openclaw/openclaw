@@ -6,6 +6,7 @@ import {
   CodexAppServerClient,
   CodexAppServerRpcError,
   MIN_CODEX_APP_SERVER_VERSION,
+  isCodexAppServerApprovalRequest,
   readCodexVersionFromUserAgent,
 } from "./client.js";
 import { resetSharedCodexAppServerClientForTests } from "./shared-client.js";
@@ -243,5 +244,13 @@ describe("CodexAppServerClient", () => {
       id: "approval-1",
       result: { decision: "decline" },
     });
+  });
+
+  it("only treats known Codex app-server approval methods as approvals", () => {
+    expect(isCodexAppServerApprovalRequest("item/commandExecution/requestApproval")).toBe(true);
+    expect(isCodexAppServerApprovalRequest("item/fileChange/requestApproval")).toBe(true);
+    expect(isCodexAppServerApprovalRequest("item/permissions/requestApproval")).toBe(true);
+    expect(isCodexAppServerApprovalRequest("evil/Approval")).toBe(false);
+    expect(isCodexAppServerApprovalRequest("item/tool/requestApproval")).toBe(false);
   });
 });

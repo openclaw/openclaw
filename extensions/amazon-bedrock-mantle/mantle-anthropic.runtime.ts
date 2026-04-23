@@ -4,6 +4,18 @@ import type { Api, Model, SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { streamAnthropic } from "@mariozechner/pi-ai/anthropic";
 
 const MANTLE_ANTHROPIC_BETA = "fine-grained-tool-streaming-2025-05-14";
+type AnthropicOptions = ConstructorParameters<typeof Anthropic>[0];
+
+export function resolveMantleAnthropicBaseUrl(baseUrl: string): string {
+  const trimmed = baseUrl.replace(/\/+$/, "");
+  if (trimmed.endsWith("/anthropic")) {
+    return trimmed;
+  }
+  if (trimmed.endsWith("/v1")) {
+    return `${trimmed.slice(0, -"/v1".length)}/anthropic`;
+  }
+  return `${trimmed}/anthropic`;
+}
 
 function requiresDefaultSampling(modelId: string): boolean {
   return modelId.includes("claude-opus-4-7");
@@ -62,13 +74,18 @@ function adjustMaxTokensForThinking(
   return { maxTokens, thinkingBudget };
 }
 
-export function createMantleAnthropicStreamFn(): StreamFn {
+export function createMantleAnthropicStreamFn(deps?: {
+  createClient?: (options: AnthropicOptions) => Anthropic;
+  stream?: typeof streamAnthropic;
+}): StreamFn {
   return (model, context, options) => {
     const apiKey = options?.apiKey ?? "";
-    const client = new Anthropic({
+    const createClient = deps?.createClient ?? ((clientOptions) => new Anthropic(clientOptions));
+    const stream = deps?.stream ?? streamAnthropic;
+    const client = createClient({
       apiKey: null,
       authToken: apiKey,
-      baseURL: model.baseUrl,
+      baseURL: resolveMantleAnthropicBaseUrl(model.baseUrl),
       dangerouslyAllowBrowser: true,
       defaultHeaders: mergeHeaders(
         {
@@ -82,7 +99,7 @@ export function createMantleAnthropicStreamFn(): StreamFn {
     });
     const base = buildMantleAnthropicBaseOptions(model, options, apiKey);
     if (!options?.reasoning || requiresDefaultSampling(model.id)) {
-      return streamAnthropic(model as Model<"anthropic-messages">, context, {
+      return stream(model as Model<"anthropic-messages">, context, {
         ...base,
         client,
         thinkingEnabled: false,
@@ -95,7 +112,7 @@ export function createMantleAnthropicStreamFn(): StreamFn {
       options.reasoning,
       options.thinkingBudgets,
     );
-    return streamAnthropic(model as Model<"anthropic-messages">, context, {
+    return stream(model as Model<"anthropic-messages">, context, {
       ...base,
       client,
       maxTokens: adjusted.maxTokens,

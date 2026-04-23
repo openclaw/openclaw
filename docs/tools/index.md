@@ -139,6 +139,11 @@ Per-agent override: `agents.list[].tools.profile`.
 | `messaging` | `group:messaging`, `sessions_list`, `sessions_history`, `sessions_send`, `session_status`                                                         |
 | `minimal`   | `session_status` only                                                                                                                             |
 
+The `coding` and `messaging` profiles also allow configured bundle MCP tools
+under the plugin key `bundle-mcp`. Add `tools.deny: ["bundle-mcp"]` when you
+want a profile to keep its normal built-ins but hide all configured MCP tools.
+The `minimal` profile does not include bundle MCP tools.
+
 ### Tool groups
 
 Use `group:*` shorthands in allow/deny lists:

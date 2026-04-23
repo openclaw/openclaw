@@ -430,7 +430,7 @@ describe("config io write", () => {
             },
           },
         }),
-      ).resolves.toEqual({ persistedHash: expect.any(String) });
+      ).resolves.toMatchObject({ persistedHash: expect.any(String) });
     });
 
     mockLoadPluginManifestRegistry.mockReturnValue({

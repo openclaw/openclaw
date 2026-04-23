@@ -6,14 +6,55 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
 
 IMAGE_NAME="${OPENCLAW_BUNDLED_CHANNEL_DEPS_E2E_IMAGE:-openclaw-bundled-channel-deps-e2e}"
 UPDATE_BASELINE_VERSION="${OPENCLAW_BUNDLED_CHANNEL_UPDATE_BASELINE_VERSION:-2026.4.20}"
+DOCKER_TARGET="${OPENCLAW_BUNDLED_CHANNEL_DOCKER_TARGET:-e2e-runner}"
+HOST_BUILD="${OPENCLAW_BUNDLED_CHANNEL_HOST_BUILD:-1}"
+PACKAGE_TGZ="${OPENCLAW_BUNDLED_CHANNEL_PACKAGE_TGZ:-}"
 RUN_CHANNEL_SCENARIOS="${OPENCLAW_BUNDLED_CHANNEL_SCENARIOS:-1}"
 RUN_UPDATE_SCENARIO="${OPENCLAW_BUNDLED_CHANNEL_UPDATE_SCENARIO:-1}"
 RUN_ROOT_OWNED_SCENARIO="${OPENCLAW_BUNDLED_CHANNEL_ROOT_OWNED_SCENARIO:-1}"
 RUN_SETUP_ENTRY_SCENARIO="${OPENCLAW_BUNDLED_CHANNEL_SETUP_ENTRY_SCENARIO:-1}"
 RUN_LOAD_FAILURE_SCENARIO="${OPENCLAW_BUNDLED_CHANNEL_LOAD_FAILURE_SCENARIO:-1}"
 
-echo "Building Docker image..."
-run_logged bundled-channel-deps-build docker build -t "$IMAGE_NAME" -f "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR"
+if [ "${OPENCLAW_SKIP_DOCKER_BUILD:-0}" = "1" ]; then
+  echo "Reusing Docker image: $IMAGE_NAME (OPENCLAW_SKIP_DOCKER_BUILD=1)"
+else
+  echo "Building Docker image target $DOCKER_TARGET..."
+  run_logged bundled-channel-deps-build docker build --target "$DOCKER_TARGET" -t "$IMAGE_NAME" -f "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR"
+fi
+
+prepare_package_tgz() {
+  if [ -n "$PACKAGE_TGZ" ]; then
+    if [ ! -f "$PACKAGE_TGZ" ]; then
+      echo "OPENCLAW_BUNDLED_CHANNEL_PACKAGE_TGZ does not exist: $PACKAGE_TGZ" >&2
+      exit 1
+    fi
+    PACKAGE_TGZ="$(cd "$(dirname "$PACKAGE_TGZ")" && pwd)/$(basename "$PACKAGE_TGZ")"
+    return 0
+  fi
+
+  if [ "$HOST_BUILD" != "0" ]; then
+    echo "Building host package artifacts..."
+    run_logged bundled-channel-deps-host-build pnpm build
+  else
+    echo "Skipping host build (OPENCLAW_BUNDLED_CHANNEL_HOST_BUILD=0)"
+  fi
+
+  echo "Writing package inventory and packing once..."
+  run_logged bundled-channel-deps-inventory node --import tsx --input-type=module -e 'const { writePackageDistInventory } = await import("./src/infra/package-dist-inventory.ts"); await writePackageDistInventory(process.cwd());'
+  local pack_dir
+  pack_dir="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-bundled-channel-pack.XXXXXX")"
+  run_logged bundled-channel-deps-pack npm pack --ignore-scripts --pack-destination "$pack_dir"
+  PACKAGE_TGZ="$(find "$pack_dir" -maxdepth 1 -name 'openclaw-*.tgz' -print -quit)"
+  if [ -z "$PACKAGE_TGZ" ]; then
+    echo "missing packed OpenClaw tarball" >&2
+    exit 1
+  fi
+  PACKAGE_TGZ="$(cd "$(dirname "$PACKAGE_TGZ")" && pwd)/$(basename "$PACKAGE_TGZ")"
+}
+
+prepare_package_tgz
+DOCKER_PACKAGE_TGZ="/tmp/openclaw-current.tgz"
+PACKAGE_DOCKER_ARGS=(-v "$PACKAGE_TGZ:$DOCKER_PACKAGE_TGZ:ro" -e "OPENCLAW_CURRENT_PACKAGE_TGZ=$DOCKER_PACKAGE_TGZ")
 
 run_channel_scenario() {
   local channel="$1"
@@ -26,6 +67,7 @@ run_channel_scenario() {
     -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
     -e OPENCLAW_CHANNEL_UNDER_TEST="$channel" \
     -e OPENCLAW_DEP_SENTINEL="$dep_sentinel" \
+    "${PACKAGE_DOCKER_ARGS[@]}" \
     -i "$IMAGE_NAME" bash -s >"$run_log" 2>&1 <<'EOF'
 set -euo pipefail
 
@@ -49,15 +91,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "Packing and installing current OpenClaw build..."
-pack_dir="$(mktemp -d "/tmp/openclaw-pack.XXXXXX")"
-npm pack --ignore-scripts --pack-destination "$pack_dir" >/tmp/openclaw-pack.log 2>&1
-package_tgz="$(find "$pack_dir" -maxdepth 1 -name 'openclaw-*.tgz' -print -quit)"
-if [ -z "$package_tgz" ]; then
-  cat /tmp/openclaw-pack.log
-  echo "missing packed OpenClaw tarball" >&2
-  exit 1
-fi
+echo "Installing mounted OpenClaw package..."
+package_tgz="${OPENCLAW_CURRENT_PACKAGE_TGZ:?missing OPENCLAW_CURRENT_PACKAGE_TGZ}"
 npm install -g "$package_tgz" --no-fund --no-audit >/tmp/openclaw-install.log 2>&1
 
 command -v openclaw >/dev/null
@@ -361,6 +396,7 @@ run_root_owned_global_scenario() {
   echo "Running bundled channel root-owned global install Docker E2E..."
   if ! docker run --rm --user root \
     -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
+    "${PACKAGE_DOCKER_ARGS[@]}" \
     -i "$IMAGE_NAME" bash -s >"$run_log" 2>&1 <<'EOF'
 set -euo pipefail
 
@@ -387,15 +423,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "Packing and installing current OpenClaw build into root-owned global npm..."
-pack_dir="$(mktemp -d "/tmp/openclaw-root-owned-pack.XXXXXX")"
-npm pack --ignore-scripts --pack-destination "$pack_dir" >/tmp/openclaw-root-owned-pack.log 2>&1
-package_tgz="$(find "$pack_dir" -maxdepth 1 -name 'openclaw-*.tgz' -print -quit)"
-if [ -z "$package_tgz" ]; then
-  cat /tmp/openclaw-root-owned-pack.log
-  echo "missing packed OpenClaw tarball" >&2
-  exit 1
-fi
+echo "Installing mounted OpenClaw package into root-owned global npm..."
+package_tgz="${OPENCLAW_CURRENT_PACKAGE_TGZ:?missing OPENCLAW_CURRENT_PACKAGE_TGZ}"
 npm install -g "$package_tgz" --no-fund --no-audit >/tmp/openclaw-root-owned-install.log 2>&1
 
 root="$(package_root)"
@@ -550,6 +579,7 @@ run_setup_entry_scenario() {
   echo "Running bundled channel setup-entry runtime deps Docker E2E..."
   if ! docker run --rm \
     -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
+    "${PACKAGE_DOCKER_ARGS[@]}" \
     -i "$IMAGE_NAME" bash -s >"$run_log" 2>&1 <<'EOF'
 set -euo pipefail
 
@@ -566,15 +596,8 @@ package_root() {
   printf "%s/openclaw" "$(npm root -g)"
 }
 
-echo "Packing and installing current OpenClaw build..."
-pack_dir="$(mktemp -d "/tmp/openclaw-setup-entry-pack.XXXXXX")"
-npm pack --ignore-scripts --pack-destination "$pack_dir" >/tmp/openclaw-setup-entry-pack.log 2>&1
-package_tgz="$(find "$pack_dir" -maxdepth 1 -name 'openclaw-*.tgz' -print -quit)"
-if [ -z "$package_tgz" ]; then
-  cat /tmp/openclaw-setup-entry-pack.log
-  echo "missing packed OpenClaw tarball" >&2
-  exit 1
-fi
+echo "Installing mounted OpenClaw package..."
+package_tgz="${OPENCLAW_CURRENT_PACKAGE_TGZ:?missing OPENCLAW_CURRENT_PACKAGE_TGZ}"
 npm install -g "$package_tgz" --no-fund --no-audit >/tmp/openclaw-setup-entry-install.log 2>&1
 
 root="$(package_root)"
@@ -660,6 +683,7 @@ run_update_scenario() {
   if ! docker run --rm \
     -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
     -e OPENCLAW_BUNDLED_CHANNEL_UPDATE_BASELINE_VERSION="$UPDATE_BASELINE_VERSION" \
+    "${PACKAGE_DOCKER_ARGS[@]}" \
     -i "$IMAGE_NAME" bash -s >"$run_log" 2>&1 <<'EOF'
 set -euo pipefail
 
@@ -677,20 +701,7 @@ package_root() {
   printf "%s/openclaw" "$(npm root -g)"
 }
 
-pack_current_candidate() {
-  local pack_dir
-  pack_dir="$(mktemp -d "/tmp/openclaw-update-pack.XXXXXX")"
-  node --import tsx --input-type=module -e 'const { writePackageDistInventory } = await import("./src/infra/package-dist-inventory.ts"); await writePackageDistInventory(process.cwd());' >/tmp/openclaw-update-inventory.log 2>&1
-  npm pack --ignore-scripts --pack-destination "$pack_dir" >/tmp/openclaw-update-pack.log 2>&1
-  find "$pack_dir" -maxdepth 1 -name 'openclaw-*.tgz' -print -quit
-}
-
-package_tgz="$(pack_current_candidate)"
-if [ -z "$package_tgz" ]; then
-  cat /tmp/openclaw-update-pack.log
-  echo "missing packed OpenClaw candidate tarball" >&2
-  exit 1
-fi
+package_tgz="${OPENCLAW_CURRENT_PACKAGE_TGZ:?missing OPENCLAW_CURRENT_PACKAGE_TGZ}"
 update_target="file:$package_tgz"
 candidate_version="$(node - <<'NODE' "$package_tgz"
 const { execFileSync } = require("node:child_process");
@@ -1009,6 +1020,7 @@ run_load_failure_scenario() {
   echo "Running bundled channel load-failure isolation Docker E2E..."
   if ! docker run --rm \
     -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
+    "${PACKAGE_DOCKER_ARGS[@]}" \
     -i "$IMAGE_NAME" bash -s >"$run_log" 2>&1 <<'EOF'
 set -euo pipefail
 
@@ -1021,15 +1033,8 @@ package_root() {
   printf "%s/openclaw" "$(npm root -g)"
 }
 
-echo "Packing and installing current OpenClaw build..."
-pack_dir="$(mktemp -d "/tmp/openclaw-load-failure-pack.XXXXXX")"
-npm pack --ignore-scripts --pack-destination "$pack_dir" >/tmp/openclaw-load-failure-pack.log 2>&1
-package_tgz="$(find "$pack_dir" -maxdepth 1 -name 'openclaw-*.tgz' -print -quit)"
-if [ -z "$package_tgz" ]; then
-  cat /tmp/openclaw-load-failure-pack.log
-  echo "missing packed OpenClaw tarball" >&2
-  exit 1
-fi
+echo "Installing mounted OpenClaw package..."
+package_tgz="${OPENCLAW_CURRENT_PACKAGE_TGZ:?missing OPENCLAW_CURRENT_PACKAGE_TGZ}"
 npm install -g "$package_tgz" --no-fund --no-audit >/tmp/openclaw-load-failure-install.log 2>&1
 
 root="$(package_root)"

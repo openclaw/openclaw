@@ -51,6 +51,15 @@ describe("scripts/test-projects changed-target routing", () => {
     });
   });
 
+  it("does not route live tests through the normal changed-test lane", () => {
+    expect(
+      resolveChangedTestTargetPlan(["src/gateway/gateway-codex-harness.live.test.ts"]),
+    ).toEqual({
+      mode: "targets",
+      targets: [],
+    });
+  });
+
   it("routes changed extension vitest configs to their own shard", () => {
     expect(
       buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
