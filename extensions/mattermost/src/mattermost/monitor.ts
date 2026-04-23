@@ -1632,6 +1632,11 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         let lastToolItemId: string | undefined;
         let lastToolItemName: string | undefined;
         let lastToolItemTitle: string | undefined;
+        // Serialize onItemEvent invocations so concurrent kind=tool/kind=command
+        // events for the same call observe each other's state changes (in particular
+        // the lastToolItemId set, which guards against onToolStart writing a duplicate
+        // no-title placeholder post).
+        let itemEventChain: Promise<void> = Promise.resolve();
         const previewState: MattermostDraftPreviewState = {
           finalizedViaPreviewPost: false,
         };
@@ -1780,39 +1785,47 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                     draftStream.update(buildMattermostToolStatusText(payload));
                     hasStreamedMessage = true;
                   },
-                  onItemEvent: async (payload) => {
-                    if (payload.kind !== "tool" && payload.kind !== "command") return;
-                    if (payload.phase && payload.phase !== "start" && payload.phase !== "update") return;
-                    const callId = payload.itemId?.replace(/^(?:tool|command):/, "");
-                    const callChanged = callId && callId !== lastToolItemId;
-                    if (callChanged) {
-                      // Set lastToolItemId BEFORE awaiting so a racing onToolStart
-                      // (which checks lastToolItemId === undefined to decide whether
-                      // to write its no-title placeholder) cannot run between the
-                      // boundary await and the assignment.
-                      lastToolItemId = callId;
-                      lastToolItemTitle = undefined;
-                      await onDraftBoundary();
-                      // onDraftBoundary clears lastToolItemId; restore it after the
-                      // await so any onToolStart that races in afterwards still sees
-                      // a defined value and skips writing the no-title placeholder.
-                      lastToolItemId = callId;
-                    }
-                    if (payload.name) lastToolItemName = payload.name;
-                    // Same call may emit multiple item events (kind=tool wrapper +
-                    // kind=command inner + later phase=update). Some of them have an
-                    // empty title; remember the best non-empty title we've seen for
-                    // this call and prefer it. Inner kind=command titles are typically
-                    // richer ("command foo") so let them overwrite.
-                    if (payload.title && payload.title.trim()) {
-                      lastToolItemTitle = payload.title;
-                    }
-                    draftStream.update(buildMattermostToolStatusText({
-                      name: payload.name ?? lastToolItemName,
-                      title: lastToolItemTitle,
-                      phase: payload.phase,
-                    }));
-                    hasStreamedMessage = true;
+                  onItemEvent: (payload) => {
+                    // Chain handlers so concurrent kind=tool + kind=command events
+                    // for the same call don't both observe lastToolItemId=undefined
+                    // and each create their own status post.
+                    itemEventChain = itemEventChain
+                      .then(async () => {
+                        if (payload.kind !== "tool" && payload.kind !== "command") return;
+                        if (payload.phase && payload.phase !== "start" && payload.phase !== "update") return;
+                        const callId = payload.itemId?.replace(/^(?:tool|command):/, "");
+                        const callChanged = callId && callId !== lastToolItemId;
+                        if (callChanged) {
+                          // Set lastToolItemId BEFORE awaiting so a racing onToolStart
+                          // (which checks lastToolItemId === undefined to decide whether
+                          // to write its no-title placeholder) cannot run between the
+                          // boundary await and the assignment.
+                          lastToolItemId = callId;
+                          lastToolItemTitle = undefined;
+                          await onDraftBoundary();
+                          // onDraftBoundary clears lastToolItemId; restore it after the
+                          // await so any onToolStart that races in afterwards still sees
+                          // a defined value and skips writing the no-title placeholder.
+                          lastToolItemId = callId;
+                        }
+                        if (payload.name) lastToolItemName = payload.name;
+                        // Same call may emit multiple item events (kind=tool wrapper +
+                        // kind=command inner + later phase=update). Some of them have an
+                        // empty title; remember the best non-empty title we've seen for
+                        // this call and prefer it. Inner kind=command titles are typically
+                        // richer ("command foo") so let them overwrite.
+                        if (payload.title && payload.title.trim()) {
+                          lastToolItemTitle = payload.title;
+                        }
+                        draftStream.update(buildMattermostToolStatusText({
+                          name: payload.name ?? lastToolItemName,
+                          title: lastToolItemTitle,
+                          phase: payload.phase,
+                        }));
+                        hasStreamedMessage = true;
+                      })
+                      .catch(() => {});
+                    return itemEventChain;
                   },
                 },
               }),
