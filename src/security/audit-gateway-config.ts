@@ -1,8 +1,8 @@
 import { isIP } from "node:net";
+import { isLoopbackEquivalentBind } from "../config/gateway-bind.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasConfiguredSecretInput } from "../config/types.secrets.js";
 import { resolveGatewayAuth } from "../gateway/auth-resolve.js";
-import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "../shared/net/ip.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -133,29 +133,26 @@ export function collectGatewayConfigFindings(
         "If you keep them enabled, keep gateway.bind loopback-only (or tailnet-only), restrict network exposure, and treat the gateway token/password as full-admin.",
     });
   }
-  if (bind !== "loopback" && !hasSharedSecret && auth.mode !== "trusted-proxy") {
+  // Classify the bind once; all sibling checks key off the same semantics.
+  // `auto` resolves to 127.0.0.1 on bare-metal hosts and 0.0.0.0 inside
+  // containers, so treat `bind="auto"` the same way the runtime resolver
+  // does. `bind="custom"` with a loopback IPv4 customBindHost also counts.
+  // See src/config/gateway-bind.ts for the shared classifier.
+  const customBindHost = cfg.gateway?.customBindHost;
+  const isLoopbackEquivalent = isLoopbackEquivalentBind({ bind, customBindHost });
+  const safeBind = bind.replace(/[^a-zA-Z0-9._:-]/g, "?");
+
+  if (!isLoopbackEquivalent && !hasSharedSecret && auth.mode !== "trusted-proxy") {
     findings.push({
       checkId: "gateway.bind_no_auth",
       severity: "critical",
       title: "Gateway binds beyond loopback without auth",
-      detail: `gateway.bind="${bind}" but no gateway.auth token/password is configured.`,
+      detail: `gateway.bind="${safeBind}" resolves to a non-loopback listener but no gateway.auth token/password is configured.`,
       remediation: `Set gateway.auth (token recommended) or bind to loopback.`,
     });
   }
 
   if (controlUiEnabled && trustedProxies.length === 0) {
-    const customBindHost = cfg.gateway?.customBindHost;
-    // A `custom` bind with a loopback customBindHost is accepted as
-    // loopback-equivalent elsewhere in the config layer (see
-    // validateGatewayTailscaleBind at src/config/validation.ts:548-557).
-    // Treat it the same here so a local-only deployment using that shape is
-    // not upgraded to `warn`.
-    const isLoopbackEquivalent =
-      bind === "loopback" ||
-      (bind === "custom" &&
-        isCanonicalDottedDecimalIPv4(customBindHost) &&
-        isLoopbackIpAddress(customBindHost));
-    const safeBind = bind.replace(/[^a-zA-Z0-9._:-]/g, "?");
     findings.push({
       checkId: "gateway.trusted_proxies_missing",
       severity: isLoopbackEquivalent ? "info" : "warn",
@@ -167,7 +164,7 @@ export function collectGatewayConfigFindings(
           "X-Forwarded-For spoofing is not reachable off-host on a loopback-only bind. " +
           "If a same-host reverse proxy (nginx, Caddy, systemd socket activation) fronts the Control UI, " +
           "set gateway.trustedProxies so client-IP and local-client checks stay correct."
-        : `gateway.bind="${safeBind}" and gateway.trustedProxies is empty. ` +
+        : `gateway.bind="${safeBind}" is not loopback-equivalent and gateway.trustedProxies is empty. ` +
           "A reverse proxy in front of the Control UI can spoof X-Forwarded-For " +
           "without explicit trusted proxies.",
       remediation: isLoopbackEquivalent
@@ -178,19 +175,19 @@ export function collectGatewayConfigFindings(
     });
   }
 
-  if (bind === "loopback" && controlUiEnabled && !hasGatewayAuth) {
+  if (isLoopbackEquivalent && controlUiEnabled && !hasGatewayAuth) {
     findings.push({
       checkId: "gateway.loopback_no_auth",
       severity: "critical",
       title: "Gateway auth missing on loopback",
       detail:
-        "gateway.bind is loopback but no gateway auth secret is configured. " +
+        `gateway.bind="${safeBind}" is loopback-equivalent but no gateway auth secret is configured. ` +
         "If the Control UI is exposed through a reverse proxy, unauthenticated access is possible.",
       remediation: "Set gateway.auth (token recommended) or keep the Control UI local-only.",
     });
   }
   if (
-    bind !== "loopback" &&
+    !isLoopbackEquivalent &&
     controlUiEnabled &&
     controlUiAllowedOrigins.length === 0 &&
     !dangerouslyAllowHostHeaderOriginFallback
@@ -200,7 +197,7 @@ export function collectGatewayConfigFindings(
       severity: "critical",
       title: "Non-loopback Control UI missing explicit allowed origins",
       detail:
-        "Control UI is enabled on a non-loopback bind but gateway.controlUi.allowedOrigins is empty. " +
+        `gateway.bind="${safeBind}" is not loopback-equivalent but gateway.controlUi.allowedOrigins is empty. ` +
         "Strict origin policy requires explicit allowed origins for non-loopback deployments.",
       remediation:
         "Set gateway.controlUi.allowedOrigins to full trusted origins (for example https://control.example.com). " +
