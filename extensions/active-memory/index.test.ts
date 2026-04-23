@@ -365,6 +365,27 @@ describe("active-memory plugin", () => {
     expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
   });
 
+  it("fails closed when the live active-memory plugin entry is removed", async () => {
+    configFile = {
+      plugins: {
+        entries: {},
+      },
+    };
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "what wings should i order after active memory is removed?", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:live-config-removed",
+        messageProvider: "webchat",
+      },
+    );
+
+    expect(result).toBeUndefined();
+    expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+  });
+
   it("does not run for agents that are not explicitly targeted", async () => {
     const result = await hooks.before_prompt_build(
       { prompt: "what wings should i order?", messages: [] },

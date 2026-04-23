@@ -474,12 +474,24 @@ describe("scripts/test-extension.mjs", () => {
     const totals = shards.map((shard) => shard.estimatedCost);
     expect(Math.max(...totals) - Math.min(...totals)).toBeLessThanOrEqual(1);
 
-    const msTeamsShardIndex = shards.findIndex((shard) => shard.extensionIds.includes("msteams"));
-    const feishuShardIndex = shards.findIndex((shard) => shard.extensionIds.includes("feishu"));
+    const browserShardIndex = shards.findIndex((shard) => shard.extensionIds.includes("browser"));
+    const imessageShardIndex = shards.findIndex((shard) => shard.extensionIds.includes("imessage"));
+    const mattermostShardIndex = shards.findIndex((shard) =>
+      shard.extensionIds.includes("mattermost"),
+    );
+    const openAiShardIndex = shards.findIndex((shard) => shard.extensionIds.includes("openai"));
+    const qaLabShardIndex = shards.findIndex((shard) => shard.extensionIds.includes("qa-lab"));
+    const whatsappShardIndex = shards.findIndex((shard) => shard.extensionIds.includes("whatsapp"));
 
-    expect(msTeamsShardIndex).toBeGreaterThanOrEqual(0);
-    expect(feishuShardIndex).toBeGreaterThanOrEqual(0);
-    expect(msTeamsShardIndex).not.toBe(feishuShardIndex);
+    expect(browserShardIndex).toBeGreaterThanOrEqual(0);
+    expect(imessageShardIndex).toBeGreaterThanOrEqual(0);
+    expect(mattermostShardIndex).toBeGreaterThanOrEqual(0);
+    expect(openAiShardIndex).toBeGreaterThanOrEqual(0);
+    expect(qaLabShardIndex).toBeGreaterThanOrEqual(0);
+    expect(whatsappShardIndex).toBeGreaterThanOrEqual(0);
+    expect(browserShardIndex).not.toBe(qaLabShardIndex);
+    expect(imessageShardIndex).not.toBe(openAiShardIndex);
+    expect(mattermostShardIndex).not.toBe(whatsappShardIndex);
   });
 
   it("runs extension batch config groups concurrently when requested", async () => {

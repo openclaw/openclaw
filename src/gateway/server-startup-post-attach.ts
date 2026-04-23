@@ -41,6 +41,21 @@ function shouldStartGatewayMemoryBackend(cfg: OpenClawConfig): boolean {
   return cfg.memory?.backend === "qmd";
 }
 
+function isConfiguredCliBackendPrimary(params: {
+  cfg: OpenClawConfig;
+  explicitPrimary: string;
+  normalizeProviderId: (provider: string) => string;
+}): boolean {
+  const slashIndex = params.explicitPrimary.indexOf("/");
+  if (slashIndex <= 0) {
+    return false;
+  }
+  const provider = params.normalizeProviderId(params.explicitPrimary.slice(0, slashIndex));
+  return Object.keys(params.cfg.agents?.defaults?.cliBackends ?? {}).some(
+    (backend) => params.normalizeProviderId(backend) === provider,
+  );
+}
+
 async function hasGatewayStartupInternalHookListeners(): Promise<boolean> {
   const { hasInternalHookListeners } = await import("../hooks/internal-hooks.js");
   return hasInternalHookListeners("gateway", "startup");
@@ -55,13 +70,23 @@ async function prewarmConfiguredPrimaryModel(params: {
   if (!explicitPrimary) {
     return;
   }
+  const { normalizeProviderId } = await import("../agents/provider-id.js");
+  if (
+    isConfiguredCliBackendPrimary({
+      cfg: params.cfg,
+      explicitPrimary,
+      normalizeProviderId,
+    })
+  ) {
+    return;
+  }
   const [
     { resolveOpenClawAgentDir },
     { DEFAULT_MODEL, DEFAULT_PROVIDER },
     { selectAgentHarness },
     { isCliProvider, resolveConfiguredModelRef },
     { ensureOpenClawModelsJson },
-    { resolveModel },
+    { resolveModel, resolveModelAsync },
     { resolveEmbeddedAgentRuntime },
   ] = await Promise.all([
     import("../agents/agent-paths.js"),
@@ -94,10 +119,12 @@ async function prewarmConfiguredPrimaryModel(params: {
       skipProviderRuntimeHooks: true,
     });
     if (!resolved.model) {
-      throw new Error(
-        resolved.error ??
-          `Unknown model: ${provider}/${model} (startup warmup only checks static model resolution)`,
-      );
+      const asyncResolved = await resolveModelAsync(provider, model, agentDir, params.cfg);
+      if (!asyncResolved.model) {
+        throw new Error(
+          resolved.error ?? asyncResolved.error ?? `Unknown model: ${provider}/${model}`,
+        );
+      }
     }
   } catch (err) {
     params.log.warn(`startup model warmup failed for ${provider}/${model}: ${String(err)}`);

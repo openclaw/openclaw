@@ -15,13 +15,16 @@ import { isFeishuExtensionRoot } from "../test/vitest/vitest.extension-feishu-pa
 import { isIrcExtensionRoot } from "../test/vitest/vitest.extension-irc-paths.mjs";
 import { isMatrixExtensionRoot } from "../test/vitest/vitest.extension-matrix-paths.mjs";
 import { isMattermostExtensionRoot } from "../test/vitest/vitest.extension-mattermost-paths.mjs";
+import { isMediaExtensionRoot } from "../test/vitest/vitest.extension-media-paths.mjs";
 import { isMemoryExtensionRoot } from "../test/vitest/vitest.extension-memory-paths.mjs";
 import { isMessagingExtensionRoot } from "../test/vitest/vitest.extension-messaging-paths.mjs";
+import { isMiscExtensionRoot } from "../test/vitest/vitest.extension-misc-paths.mjs";
 import { isMsTeamsExtensionRoot } from "../test/vitest/vitest.extension-msteams-paths.mjs";
 import {
   isProviderExtensionRoot,
   isProviderOpenAiExtensionRoot,
 } from "../test/vitest/vitest.extension-provider-paths.mjs";
+import { isQaExtensionRoot } from "../test/vitest/vitest.extension-qa-paths.mjs";
 import { isTelegramExtensionRoot } from "../test/vitest/vitest.extension-telegram-paths.mjs";
 import { isVoiceCallExtensionRoot } from "../test/vitest/vitest.extension-voice-call-paths.mjs";
 import { isWhatsAppExtensionRoot } from "../test/vitest/vitest.extension-whatsapp-paths.mjs";
@@ -72,13 +75,16 @@ const EXTENSION_IMESSAGE_VITEST_CONFIG = "test/vitest/vitest.extension-imessage.
 const EXTENSION_IRC_VITEST_CONFIG = "test/vitest/vitest.extension-irc.config.ts";
 const EXTENSION_LINE_VITEST_CONFIG = "test/vitest/vitest.extension-line.config.ts";
 const EXTENSION_MATTERMOST_VITEST_CONFIG = "test/vitest/vitest.extension-mattermost.config.ts";
+const EXTENSION_MEDIA_VITEST_CONFIG = "test/vitest/vitest.extension-media.config.ts";
 const EXTENSION_MATRIX_VITEST_CONFIG = "test/vitest/vitest.extension-matrix.config.ts";
 const EXTENSION_MEMORY_VITEST_CONFIG = "test/vitest/vitest.extension-memory.config.ts";
 const EXTENSION_MSTEAMS_VITEST_CONFIG = "test/vitest/vitest.extension-msteams.config.ts";
 const EXTENSION_MESSAGING_VITEST_CONFIG = "test/vitest/vitest.extension-messaging.config.ts";
+const EXTENSION_MISC_VITEST_CONFIG = "test/vitest/vitest.extension-misc.config.ts";
 const EXTENSION_PROVIDER_OPENAI_VITEST_CONFIG =
   "test/vitest/vitest.extension-provider-openai.config.ts";
 const EXTENSION_PROVIDERS_VITEST_CONFIG = "test/vitest/vitest.extension-providers.config.ts";
+const EXTENSION_QA_VITEST_CONFIG = "test/vitest/vitest.extension-qa.config.ts";
 const EXTENSION_SIGNAL_VITEST_CONFIG = "test/vitest/vitest.extension-signal.config.ts";
 const EXTENSION_SLACK_VITEST_CONFIG = "test/vitest/vitest.extension-slack.config.ts";
 const EXTENSION_TELEGRAM_VITEST_CONFIG = "test/vitest/vitest.extension-telegram.config.ts";
@@ -141,11 +147,14 @@ const VITEST_CONFIG_BY_KIND = {
   extensionLine: EXTENSION_LINE_VITEST_CONFIG,
   extensionMatrix: EXTENSION_MATRIX_VITEST_CONFIG,
   extensionMattermost: EXTENSION_MATTERMOST_VITEST_CONFIG,
+  extensionMedia: EXTENSION_MEDIA_VITEST_CONFIG,
   extensionMemory: EXTENSION_MEMORY_VITEST_CONFIG,
   extensionMessaging: EXTENSION_MESSAGING_VITEST_CONFIG,
+  extensionMisc: EXTENSION_MISC_VITEST_CONFIG,
   extensionMsTeams: EXTENSION_MSTEAMS_VITEST_CONFIG,
   extensionProviderOpenAi: EXTENSION_PROVIDER_OPENAI_VITEST_CONFIG,
   extensionProvider: EXTENSION_PROVIDERS_VITEST_CONFIG,
+  extensionQa: EXTENSION_QA_VITEST_CONFIG,
   extensionSignal: EXTENSION_SIGNAL_VITEST_CONFIG,
   extensionSlack: EXTENSION_SLACK_VITEST_CONFIG,
   extensionTelegram: EXTENSION_TELEGRAM_VITEST_CONFIG,
@@ -457,6 +466,9 @@ function isRoutableChangedTarget(changedPath) {
   if (GENERATED_CHANGED_TEST_TARGETS.has(changedPath)) {
     return false;
   }
+  if (changedPath.endsWith(".live.test.ts")) {
+    return false;
+  }
   return /^(?:src|test|extensions|ui|packages)(?:\/|$)/u.test(changedPath);
 }
 
@@ -537,6 +549,9 @@ function classifyTarget(arg, cwd) {
     if (isProviderOpenAiExtensionRoot(extensionRoot)) {
       return "extensionProviderOpenAi";
     }
+    if (isQaExtensionRoot(extensionRoot)) {
+      return "extensionQa";
+    }
     if (isChannelSurfaceTestFile(relative)) {
       return "extensionChannel";
     }
@@ -573,6 +588,9 @@ function classifyTarget(arg, cwd) {
     if (isMatrixExtensionRoot(extensionRoot)) {
       return "extensionMatrix";
     }
+    if (isMediaExtensionRoot(extensionRoot)) {
+      return "extensionMedia";
+    }
     if (isMemoryExtensionRoot(extensionRoot)) {
       return "extensionMemory";
     }
@@ -581,6 +599,9 @@ function classifyTarget(arg, cwd) {
     }
     if (isMessagingExtensionRoot(extensionRoot)) {
       return "extensionMessaging";
+    }
+    if (isMiscExtensionRoot(extensionRoot)) {
+      return "extensionMisc";
     }
     return isProviderExtensionRoot(extensionRoot) ? "extensionProvider" : "extension";
   }
@@ -832,11 +853,14 @@ export function buildVitestRunPlans(
     "extensionWhatsApp",
     "extensionZalo",
     "extensionMatrix",
+    "extensionMedia",
     "extensionMemory",
+    "extensionMisc",
     "extensionMsTeams",
     "extensionMessaging",
     "extensionProviderOpenAi",
     "extensionProvider",
+    "extensionQa",
     "extensionSignal",
     "extensionSlack",
     "extensionFull",

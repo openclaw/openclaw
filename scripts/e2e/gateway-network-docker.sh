@@ -2,8 +2,8 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
-IMAGE_NAME="${OPENCLAW_GATEWAY_NETWORK_E2E_IMAGE:-openclaw-gateway-network-e2e}"
+source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
+IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-gateway-network-e2e" OPENCLAW_GATEWAY_NETWORK_E2E_IMAGE)"
 SKIP_BUILD="${OPENCLAW_GATEWAY_NETWORK_E2E_SKIP_BUILD:-0}"
 
 PORT="18789"
@@ -17,12 +17,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-if [ "$SKIP_BUILD" = "1" ]; then
-  echo "Reusing Docker image: $IMAGE_NAME"
-else
-  echo "Building Docker image..."
-  run_logged gateway-network-build docker build -t "$IMAGE_NAME" -f "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR"
-fi
+docker_e2e_build_or_reuse "$IMAGE_NAME" gateway-network "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "" "$SKIP_BUILD"
 
 echo "Creating Docker network..."
 docker network create "$NET_NAME" >/dev/null
