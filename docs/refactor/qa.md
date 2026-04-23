@@ -1,3 +1,11 @@
+---
+summary: "QA refactor plan for scenario catalog and harness consolidation"
+read_when:
+  - Refactoring QA scenario definitions or qa-lab harness code
+  - Moving QA behavior between markdown scenarios and TypeScript harness logic
+title: "QA Refactor"
+---
+
 # QA Refactor
 
 Status: foundational migration landed.
@@ -165,7 +173,7 @@ title: Image generation roundtrip
 surface: image
 tags: [media, image, roundtrip]
 models:
-  primary: openai/gpt-5.4
+  primary: openai/gpt-5.5
 requires:
   tools: [image_generate]
   plugins: [openai, qa-channel]

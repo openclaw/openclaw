@@ -421,12 +421,60 @@ describe("scheduleRestartSentinelWake", () => {
         ctxPayload: expect.objectContaining({
           Body: "Reply with exactly: Yay! I did it!",
           BodyForAgent: "stamped:Reply with exactly: Yay! I did it!",
+          BodyForCommands: "",
+          CommandBody: "",
+          CommandAuthorized: false,
           SessionKey: "agent:main:main",
           Provider: "whatsapp",
           Surface: "whatsapp",
           OriginatingChannel: "whatsapp",
           OriginatingTo: "+15550002",
           MessageThreadId: "thread-42",
+        }),
+      }),
+    );
+  });
+
+  it("preserves the session chat type for agentTurn continuations", async () => {
+    mocks.consumeRestartSentinel.mockResolvedValue({
+      payload: {
+        sessionKey: "agent:main:group",
+        deliveryContext: {
+          channel: "telegram",
+          to: "telegram:-1001",
+          accountId: "default",
+        },
+        ts: 123,
+        continuation: {
+          kind: "agentTurn",
+          message: "continue",
+        },
+      },
+    } as Awaited<ReturnType<typeof mocks.consumeRestartSentinel>>);
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      entry: {
+        sessionId: "agent:main:group",
+        updatedAt: 0,
+        origin: { provider: "telegram", chatType: "group" },
+      },
+      store: {},
+      storePath: "/tmp/sessions.json",
+      canonicalKey: "agent:main:group",
+      legacyKey: undefined,
+    });
+    mocks.resolveOutboundTarget.mockReturnValue({ ok: true as const, to: "telegram:-1001" });
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    expect(mocks.recordInboundSessionAndDispatchReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        routeSessionKey: "agent:main:group",
+        ctxPayload: expect.objectContaining({
+          ChatType: "group",
+          OriginatingChannel: "telegram",
+          OriginatingTo: "telegram:-1001",
         }),
       }),
     );

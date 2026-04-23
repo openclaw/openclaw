@@ -31,7 +31,7 @@ vi.mock("../model-suppression.js", () => ({
     ) {
       return undefined;
     }
-    return `Unknown model: ${provider}/gpt-5.3-codex-spark. gpt-5.3-codex-spark is only supported via openai-codex OAuth. Use openai-codex/gpt-5.3-codex-spark.`;
+    return `Unknown model: ${provider}/gpt-5.3-codex-spark. gpt-5.3-codex-spark is only supported through Codex OAuth. Use openai/gpt-5.3-codex-spark with the Codex OAuth profile.`;
   },
 }));
 
@@ -140,7 +140,7 @@ describe("resolveModel forward-compat errors and overrides", () => {
 
     expect(result.model).toBeUndefined();
     expect(result.error).toBe(
-      "Unknown model: openai/gpt-5.3-codex-spark. gpt-5.3-codex-spark is only supported via openai-codex OAuth. Use openai-codex/gpt-5.3-codex-spark.",
+      "Unknown model: openai/gpt-5.3-codex-spark. gpt-5.3-codex-spark is only supported through Codex OAuth. Use openai/gpt-5.3-codex-spark with the Codex OAuth profile.",
     );
   });
 
@@ -161,7 +161,7 @@ describe("resolveModel forward-compat errors and overrides", () => {
 
     expect(result.model).toBeUndefined();
     expect(result.error).toBe(
-      "Unknown model: openai/gpt-5.3-codex-spark. gpt-5.3-codex-spark is only supported via openai-codex OAuth. Use openai-codex/gpt-5.3-codex-spark.",
+      "Unknown model: openai/gpt-5.3-codex-spark. gpt-5.3-codex-spark is only supported through Codex OAuth. Use openai/gpt-5.3-codex-spark with the Codex OAuth profile.",
     );
   });
 
@@ -174,7 +174,7 @@ describe("resolveModel forward-compat errors and overrides", () => {
 
     expect(result.model).toBeUndefined();
     expect(result.error).toBe(
-      "Unknown model: azure-openai-responses/gpt-5.3-codex-spark. gpt-5.3-codex-spark is only supported via openai-codex OAuth. Use openai-codex/gpt-5.3-codex-spark.",
+      "Unknown model: azure-openai-responses/gpt-5.3-codex-spark. gpt-5.3-codex-spark is only supported through Codex OAuth. Use openai/gpt-5.3-codex-spark with the Codex OAuth profile.",
     );
   });
 

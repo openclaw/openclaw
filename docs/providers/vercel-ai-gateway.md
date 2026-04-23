@@ -21,7 +21,7 @@ access hundreds of models through a single endpoint.
 <Tip>
 OpenClaw auto-discovers the Gateway `/v1/models` catalog, so
 `/models vercel-ai-gateway` includes current model refs such as
-`vercel-ai-gateway/openai/gpt-5.4` and
+`vercel-ai-gateway/openai/gpt-5.5` and
 `vercel-ai-gateway/moonshotai/kimi-k2.6`.
 </Tip>
 
@@ -102,7 +102,7 @@ configuration. OpenClaw resolves the canonical form automatically.
   <Accordion title="Provider routing">
     Vercel AI Gateway routes requests to the upstream provider based on the model
     ref prefix. For example, `vercel-ai-gateway/anthropic/claude-opus-4.6` routes
-    through Anthropic, while `vercel-ai-gateway/openai/gpt-5.4` routes through
+    through Anthropic, while `vercel-ai-gateway/openai/gpt-5.5` routes through
     OpenAI and `vercel-ai-gateway/moonshotai/kimi-k2.6` routes through
     MoonshotAI. Your single `AI_GATEWAY_API_KEY` handles authentication for all
     upstream providers.

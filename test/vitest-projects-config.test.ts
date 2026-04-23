@@ -12,7 +12,10 @@ import {
 } from "./vitest/vitest.contracts-shared.ts";
 import { createGatewayVitestConfig } from "./vitest/vitest.gateway.config.ts";
 import { createPluginSdkLightVitestConfig } from "./vitest/vitest.plugin-sdk-light.config.ts";
-import { sharedVitestConfig } from "./vitest/vitest.shared.config.ts";
+import {
+  resolveSharedVitestWorkerConfig,
+  sharedVitestConfig,
+} from "./vitest/vitest.shared.config.ts";
 import { createUiVitestConfig } from "./vitest/vitest.ui.config.ts";
 import { createUnitFastVitestConfig } from "./vitest/vitest.unit-fast.config.ts";
 import unitUiConfig from "./vitest/vitest.unit-ui.config.ts";
@@ -42,6 +45,39 @@ describe("projects vitest config", () => {
     expect(createPluginSdkLightVitestConfig().test.pool).toBe("threads");
     expect(createUnitFastVitestConfig().test.pool).toBe("threads");
     expect(createContractsVitestConfig(pluginContractPatterns).test.pool).toBe("forks");
+  });
+
+  it("honors explicit worker caps in CI vitest lanes", () => {
+    expect(
+      resolveSharedVitestWorkerConfig({
+        env: { CI: "true", OPENCLAW_VITEST_MAX_WORKERS: "1" },
+        isCI: true,
+        isWindows: false,
+        localScheduling: {
+          fileParallelism: false,
+          maxWorkers: 1,
+          throttledBySystem: false,
+        },
+      }),
+    ).toEqual({
+      fileParallelism: false,
+      maxWorkers: 1,
+    });
+    expect(
+      resolveSharedVitestWorkerConfig({
+        env: { CI: "true" },
+        isCI: true,
+        isWindows: false,
+        localScheduling: {
+          fileParallelism: false,
+          maxWorkers: 1,
+          throttledBySystem: false,
+        },
+      }),
+    ).toEqual({
+      fileParallelism: true,
+      maxWorkers: 3,
+    });
   });
 
   it("keeps contract shards on the non-isolated fork runner by default", () => {

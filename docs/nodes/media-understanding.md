@@ -81,7 +81,7 @@ Each `models[]` entry can be **provider** or **CLI**:
 {
   type: "provider", // default if omitted
   provider: "openai",
-  model: "gpt-5.4-mini",
+  model: "gpt-5.5",
   prompt: "Describe the image in <= 500 chars.",
   maxChars: 500,
   maxBytes: 10485760,
@@ -164,7 +164,7 @@ working option**:
      example through `agents.defaults.imageModel` or
      `openclaw infer image describe --model ollama/<vision-model>`.
    - Bundled fallback order:
-     - Audio: OpenAI → Groq → Deepgram → Google → Mistral
+     - Audio: OpenAI → Groq → xAI → Deepgram → Google → Mistral
      - Image: OpenAI → Anthropic → Google → MiniMax → MiniMax Portal → Z.AI
      - Video: Google → Qwen → Moonshot
 
@@ -212,6 +212,7 @@ lists, OpenClaw can infer defaults:
 - `mistral`: **audio**
 - `zai`: **image**
 - `groq`: **audio**
+- `xai`: **audio**
 - `deepgram`: **audio**
 - Any `models.providers.<id>.models[]` catalog with an image-capable model:
   **image**
@@ -277,7 +278,7 @@ File-attachment extraction behavior:
   tools: {
     media: {
       models: [
-        { provider: "openai", model: "gpt-5.4-mini", capabilities: ["image"] },
+        { provider: "openai", model: "gpt-5.5", capabilities: ["image"] },
         {
           provider: "google",
           model: "gemini-3-flash-preview",
@@ -358,7 +359,7 @@ File-attachment extraction behavior:
         maxBytes: 10485760,
         maxChars: 500,
         models: [
-          { provider: "openai", model: "gpt-5.4-mini" },
+          { provider: "openai", model: "gpt-5.5" },
           { provider: "anthropic", model: "claude-opus-4-6" },
           {
             type: "cli",
@@ -421,7 +422,7 @@ File-attachment extraction behavior:
 When media understanding runs, `/status` includes a short summary line:
 
 ```
-📎 Media: image ok (openai/gpt-5.4-mini) · audio skipped (maxBytes)
+📎 Media: image ok (openai/gpt-5.5) · audio skipped (maxBytes)
 ```
 
 This shows per‑capability outcomes and the chosen provider/model when applicable.

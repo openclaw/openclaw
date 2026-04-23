@@ -31,7 +31,7 @@ You can use Codex CLI **without any config** (the bundled OpenAI plugin
 registers a default backend):
 
 ```bash
-openclaw agent --message "hi" --model codex-cli/gpt-5.4
+openclaw agent --message "hi" --model codex-cli/gpt-5.5
 ```
 
 If your gateway runs under launchd/systemd and PATH is minimal, add just the
@@ -68,11 +68,11 @@ Add a CLI backend to your fallback list so it only runs when primary models fail
     defaults: {
       model: {
         primary: "anthropic/claude-opus-4-6",
-        fallbacks: ["codex-cli/gpt-5.4"],
+        fallbacks: ["codex-cli/gpt-5.5"],
       },
       models: {
         "anthropic/claude-opus-4-6": { alias: "Opus" },
-        "codex-cli/gpt-5.4": {},
+        "codex-cli/gpt-5.5": {},
       },
     },
   },
@@ -169,6 +169,18 @@ resolver sees the same filtered set that OpenClaw would otherwise advertise in
 the prompt. Skill env/API key overrides are still applied by OpenClaw to the
 child process environment for the run.
 
+Before OpenClaw can use the bundled `claude-cli` backend, Claude Code itself
+must already be logged in on the same host:
+
+```bash
+claude auth login
+claude auth status --text
+openclaw models auth login --provider anthropic --method cli --set-default
+```
+
+Use `agents.defaults.cliBackends.claude-cli.command` only when the `claude`
+binary is not already on `PATH`.
+
 ## Sessions
 
 - If the CLI supports sessions, set `sessionArg` (e.g. `--session-id`) or
@@ -181,10 +193,14 @@ child process environment for the run.
   - `always`: always send a session id (new UUID if none stored).
   - `existing`: only send a session id if one was stored before.
   - `none`: never send a session id.
-- The bundled `claude-cli` backend uses `liveSession: "claude-stdio"` so
-  follow-up turns reuse the live Claude process while it is active. If the
-  Gateway restarts or the idle process exits, OpenClaw resumes from the stored
-  Claude session id.
+- `claude-cli` defaults to `liveSession: "claude-stdio"`, `output: "jsonl"`,
+  and `input: "stdin"` so follow-up turns reuse the live Claude process while
+  it is active. Warm stdio is the default now, including for custom configs
+  that omit transport fields. If the Gateway restarts or the idle process
+  exits, OpenClaw resumes from the stored Claude session id. Stored session
+  ids are verified against an existing readable project transcript before
+  resume, so phantom bindings are cleared with `reason=transcript-missing`
+  instead of silently starting a fresh Claude CLI session under `--resume`.
 - Stored CLI sessions are provider-owned continuity. The implicit daily session
   reset does not cut them; `/reset` and explicit `session.reset` policies still
   do.
@@ -193,7 +209,11 @@ Serialization notes:
 
 - `serialize: true` keeps same-lane runs ordered.
 - Most CLIs serialize on one provider lane.
-- OpenClaw drops stored CLI session reuse when the backend auth state changes, including relogin, token rotation, or a changed auth profile credential.
+- OpenClaw drops stored CLI session reuse when the selected auth identity changes,
+  including a changed auth profile id, static API key, static token, or OAuth
+  account identity when the CLI exposes one. OAuth access and refresh token
+  rotation does not cut the stored CLI session. If a CLI does not expose a
+  stable OAuth account id, OpenClaw lets that CLI enforce resume permissions.
 
 ## Images (pass-through)
 

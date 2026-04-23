@@ -9,6 +9,12 @@ import {
 import { maybeRepairBundledPluginRuntimeDeps } from "./doctor-bundled-plugin-runtime-deps.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
+type InstalledRuntimeDeps = Array<{
+  installRoot: string;
+  missingSpecs: string[];
+  installSpecs: string[];
+}>;
+
 function writeJson(filePath: string, value: unknown) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
@@ -23,6 +29,31 @@ function writeBundledChannelPlugin(root: string, id: string, dependencies: Recor
     channels: [id],
     configSchema: { type: "object" },
   });
+}
+
+function createInstalledRuntimeDeps(): InstalledRuntimeDeps {
+  return [];
+}
+
+function createNonInteractivePrompter(
+  options: { updateInProgress?: boolean } = {},
+): DoctorPrompter {
+  return {
+    shouldRepair: false,
+    shouldForce: false,
+    repairMode: {
+      shouldRepair: false,
+      shouldForce: false,
+      nonInteractive: true,
+      canPrompt: false,
+      updateInProgress: options.updateInProgress ?? false,
+    },
+    confirm: async () => false,
+    confirmAutoFix: async () => false,
+    confirmAggressiveAutoFix: async () => false,
+    confirmRuntimeRepair: async () => false,
+    select: async (_params: unknown, fallback: unknown) => fallback,
+  } as DoctorPrompter;
 }
 
 describe("doctor bundled plugin runtime deps", () => {
@@ -175,31 +206,11 @@ describe("doctor bundled plugin runtime deps", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-bundled-"));
     writeJson(path.join(root, "package.json"), { name: "openclaw" });
     writeBundledChannelPlugin(root, "telegram", { grammy: "1.37.0" });
-    const installed: Array<{
-      installRoot: string;
-      missingSpecs: string[];
-      installSpecs: string[];
-    }> = [];
-    const prompter = {
-      shouldRepair: false,
-      shouldForce: false,
-      repairMode: {
-        shouldRepair: false,
-        shouldForce: false,
-        nonInteractive: true,
-        canPrompt: false,
-        updateInProgress: false,
-      },
-      confirm: async () => false,
-      confirmAutoFix: async () => false,
-      confirmAggressiveAutoFix: async () => false,
-      confirmRuntimeRepair: async () => false,
-      select: async (_params: unknown, fallback: unknown) => fallback,
-    } as DoctorPrompter;
+    const installed = createInstalledRuntimeDeps();
 
     await maybeRepairBundledPluginRuntimeDeps({
       runtime: { error: () => {} } as never,
-      prompter,
+      prompter: createNonInteractivePrompter(),
       packageRoot: root,
       config: {
         plugins: { enabled: true },
@@ -219,37 +230,46 @@ describe("doctor bundled plugin runtime deps", () => {
     ]);
   });
 
+  it("repairs Feishu runtime deps from preserved source config", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-bundled-"));
+    writeJson(path.join(root, "package.json"), { name: "openclaw" });
+    writeBundledChannelPlugin(root, "feishu", { "@larksuiteoapi/node-sdk": "^1.61.0" });
+    const installed = createInstalledRuntimeDeps();
+
+    await maybeRepairBundledPluginRuntimeDeps({
+      runtime: { error: () => {} } as never,
+      prompter: createNonInteractivePrompter({ updateInProgress: true }),
+      packageRoot: root,
+      includeConfiguredChannels: true,
+      config: {
+        plugins: { enabled: true },
+        channels: { feishu: { enabled: true } },
+      },
+      installDeps: (params) => {
+        installed.push(params);
+      },
+    });
+
+    expect(installed).toEqual([
+      {
+        installRoot: root,
+        missingSpecs: ["@larksuiteoapi/node-sdk@^1.61.0"],
+        installSpecs: ["@larksuiteoapi/node-sdk@^1.61.0"],
+      },
+    ]);
+  });
+
   it("repairs missing deps into an external stage dir when configured", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-bundled-"));
     const stageDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-bundled-stage-"));
     writeJson(path.join(root, "package.json"), { name: "openclaw", version: "2026.4.22" });
     writeBundledChannelPlugin(root, "slack", { "@slack/web-api": "7.15.1" });
     const env = { OPENCLAW_PLUGIN_STAGE_DIR: stageDir };
-    const installed: Array<{
-      installRoot: string;
-      missingSpecs: string[];
-      installSpecs: string[];
-    }> = [];
-    const prompter = {
-      shouldRepair: false,
-      shouldForce: false,
-      repairMode: {
-        shouldRepair: false,
-        shouldForce: false,
-        nonInteractive: true,
-        canPrompt: false,
-        updateInProgress: false,
-      },
-      confirm: async () => false,
-      confirmAutoFix: async () => false,
-      confirmAggressiveAutoFix: async () => false,
-      confirmRuntimeRepair: async () => false,
-      select: async (_params: unknown, fallback: unknown) => fallback,
-    } as DoctorPrompter;
+    const installed = createInstalledRuntimeDeps();
 
     await maybeRepairBundledPluginRuntimeDeps({
       runtime: { error: () => {} } as never,
-      prompter,
+      prompter: createNonInteractivePrompter(),
       env,
       packageRoot: root,
       config: {
@@ -281,31 +301,11 @@ describe("doctor bundled plugin runtime deps", () => {
       name: "@slack/web-api",
       version: "7.15.1",
     });
-    const installed: Array<{
-      installRoot: string;
-      missingSpecs: string[];
-      installSpecs: string[];
-    }> = [];
-    const prompter = {
-      shouldRepair: false,
-      shouldForce: false,
-      repairMode: {
-        shouldRepair: false,
-        shouldForce: false,
-        nonInteractive: true,
-        canPrompt: false,
-        updateInProgress: false,
-      },
-      confirm: async () => false,
-      confirmAutoFix: async () => false,
-      confirmAggressiveAutoFix: async () => false,
-      confirmRuntimeRepair: async () => false,
-      select: async (_params: unknown, fallback: unknown) => fallback,
-    } as DoctorPrompter;
+    const installed = createInstalledRuntimeDeps();
 
     await maybeRepairBundledPluginRuntimeDeps({
       runtime: { error: () => {} } as never,
-      prompter,
+      prompter: createNonInteractivePrompter(),
       packageRoot: root,
       includeConfiguredChannels: true,
       config: {

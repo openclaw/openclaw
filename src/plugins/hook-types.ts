@@ -247,6 +247,7 @@ export type PluginHookReplyDispatchEvent = {
   ctx: FinalizedMsgContext;
   runId?: string;
   sessionKey?: string;
+  images?: Array<{ data: string; mimeType: string }>;
   inboundAudio: boolean;
   sessionTtsAuto?: TtsAutoMode;
   ttsChannel?: string;
@@ -475,6 +476,9 @@ export type PluginHookSubagentEndedEvent = {
 
 export type PluginHookGatewayContext = {
   port?: number;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  getCron?: () => PluginHookGatewayCronService | undefined;
 };
 
 export type PluginHookGatewayStartEvent = {
@@ -483,6 +487,55 @@ export type PluginHookGatewayStartEvent = {
 
 export type PluginHookGatewayStopEvent = {
   reason?: string;
+};
+
+export type PluginHookGatewayCronJob = {
+  id: string;
+  name?: string;
+  description?: string;
+  enabled?: boolean;
+  schedule?: {
+    kind?: string;
+    expr?: string;
+    tz?: string;
+  };
+  sessionTarget?: string;
+  wakeMode?: string;
+  payload?: {
+    kind?: string;
+    text?: string;
+  };
+  createdAtMs?: number;
+};
+
+export type PluginHookGatewayCronCreateInput = {
+  name: string;
+  description: string;
+  enabled: boolean;
+  schedule: {
+    kind: string;
+    expr: string;
+    tz?: string;
+  };
+  sessionTarget: string;
+  wakeMode: string;
+  payload: {
+    kind: string;
+    text?: string;
+  };
+};
+
+export type PluginHookGatewayCronUpdateInput = Partial<PluginHookGatewayCronCreateInput>;
+
+export type PluginHookGatewayCronRemoveResult = {
+  removed?: boolean;
+};
+
+export type PluginHookGatewayCronService = {
+  list: (opts?: { includeDisabled?: boolean }) => Promise<PluginHookGatewayCronJob[]>;
+  add: (input: PluginHookGatewayCronCreateInput) => Promise<unknown>;
+  update: (id: string, patch: PluginHookGatewayCronUpdateInput) => Promise<unknown>;
+  remove: (id: string) => Promise<PluginHookGatewayCronRemoveResult>;
 };
 
 export type PluginInstallTargetType = "skill" | "plugin";

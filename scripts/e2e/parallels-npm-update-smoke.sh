@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/e2e/lib/parallels-macos-common.sh"
+source "$ROOT_DIR/scripts/e2e/lib/parallels-package-common.sh"
 
 MACOS_VM="macOS Tahoe"
 WINDOWS_VM="Windows 11"
@@ -15,10 +16,12 @@ MODEL_ID=""
 PYTHON_BIN="${PYTHON_BIN:-}"
 PACKAGE_SPEC=""
 UPDATE_TARGET=""
+RUN_PLATFORMS="all"
 JSON_OUTPUT=0
 RUN_DIR="$(mktemp -d /tmp/openclaw-parallels-npm-update.XXXXXX)"
 MAIN_TGZ_DIR="$(mktemp -d)"
 MAIN_TGZ_PATH=""
+BUILD_LOCK_DIR="${TMPDIR:-/tmp}/openclaw-parallels-build.lock"
 WINDOWS_UPDATE_SCRIPT_PATH=""
 SERVER_PID=""
 HOST_IP=""
@@ -31,7 +34,7 @@ UPDATE_EXPECTED_NEEDLE=""
 API_KEY_VALUE=""
 PROGRESS_INTERVAL_S=15
 PROGRESS_STALE_S=60
-TIMEOUT_UPDATE_S="${OPENCLAW_PARALLELS_NPM_UPDATE_TIMEOUT_S:-900}"
+TIMEOUT_UPDATE_S="${OPENCLAW_PARALLELS_NPM_UPDATE_TIMEOUT_S:-1200}"
 TIMEOUT_UPDATE_POLL_GRACE_S=60
 
 child_job_running() {
@@ -113,6 +116,8 @@ Options:
   --update-target <target>    Target passed to guest 'openclaw update --tag'.
                              Default: host-served tgz packed from current checkout.
                              Examples: latest, beta, 2026.4.10, http://host/openclaw.tgz
+  --platform <list>           Comma-separated platforms to run: all, macos, windows, linux.
+                             Default: all
   --provider <openai|anthropic|minimax>
                              Provider auth/model lane. Default: openai
   --api-key-env <var>        Host env var name for provider API key.
@@ -136,6 +141,10 @@ while [[ $# -gt 0 ]]; do
       UPDATE_TARGET="$2"
       shift 2
       ;;
+    --platform|--only)
+      RUN_PLATFORMS="$2"
+      shift 2
+      ;;
     --provider)
       PROVIDER="$2"
       shift 2
@@ -157,6 +166,41 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+platform_enabled() {
+  local platform="$1"
+  [[ "$RUN_PLATFORMS" == "all" ]] && return 0
+  case ",$RUN_PLATFORMS," in
+    *,"$platform",*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+validate_platforms() {
+  local normalized entry valid_any
+  local -a entries
+  normalized="${RUN_PLATFORMS// /}"
+  [[ -n "$normalized" ]] || die "--platform must not be empty"
+  RUN_PLATFORMS="$normalized"
+  if [[ "$RUN_PLATFORMS" == "all" ]]; then
+    return
+  fi
+  valid_any=0
+  IFS=',' read -ra entries <<<"$RUN_PLATFORMS"
+  for entry in "${entries[@]}"; do
+    case "$entry" in
+      macos|windows|linux)
+        valid_any=1
+        ;;
+      *)
+        die "invalid --platform entry: $entry"
+        ;;
+    esac
+  done
+  [[ "$valid_any" -eq 1 ]] || die "--platform must include at least one platform"
+}
+
+validate_platforms
 
 case "$PROVIDER" in
   openai)
@@ -328,26 +372,53 @@ sock.close()
 PY
 }
 
+current_build_commit() {
+  parallels_package_current_build_commit
+}
+
+source_tree_dirty_for_build() {
+  [[ -n "$(git status --porcelain -- src ui packages extensions package.json pnpm-lock.yaml 'tsconfig*.json' 2>/dev/null)" ]]
+}
+
 ensure_current_build() {
+  local build_commit head rc
+  head="$(git rev-parse HEAD)"
+  build_commit="$(current_build_commit)"
+  if [[ "$build_commit" == "$head" ]] && ! source_tree_dirty_for_build; then
+    return 0
+  fi
   say "Build dist for current head"
   pnpm build
+  rc=$?
+  if [[ $rc -eq 0 ]]; then
+    parallels_package_assert_no_generated_drift
+    rc=$?
+  fi
+  return "$rc"
 }
 
 write_package_dist_inventory() {
-  node --import tsx --input-type=module --eval \
-    'import { writePackageDistInventory } from "./src/infra/package-dist-inventory.ts"; await writePackageDistInventory(process.cwd());'
+  parallels_package_write_dist_inventory
 }
 
 pack_main_tgz() {
-  local pkg
+  local pkg rc
   CURRENT_HEAD="$(git rev-parse HEAD)"
   CURRENT_HEAD_SHORT="$(git rev-parse --short=7 HEAD)"
-  ensure_current_build
-  write_package_dist_inventory
-  pkg="$(
-    npm pack --ignore-scripts --json --pack-destination "$MAIN_TGZ_DIR" \
-      | "$PYTHON_BIN" -c 'import json, sys; data = json.load(sys.stdin); print(data[-1]["filename"])'
-  )"
+  parallels_package_acquire_build_lock "$BUILD_LOCK_DIR"
+  set +e
+  {
+    ensure_current_build &&
+      write_package_dist_inventory &&
+      pkg="$(
+        npm pack --ignore-scripts --json --pack-destination "$MAIN_TGZ_DIR" \
+          | "$PYTHON_BIN" -c 'import json, sys; data = json.load(sys.stdin); print(data[-1]["filename"])'
+      )"
+  }
+  rc=$?
+  set -e
+  parallels_package_release_build_lock "$BUILD_LOCK_DIR"
+  [[ $rc -eq 0 ]] || return "$rc"
   MAIN_TGZ_PATH="$MAIN_TGZ_DIR/openclaw-main-$CURRENT_HEAD_SHORT.tgz"
   cp "$MAIN_TGZ_DIR/$pkg" "$MAIN_TGZ_PATH"
 }
@@ -464,20 +535,36 @@ function Wait-GatewayRpcReady {
   for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
     Write-ProgressLog "update.gateway-status.attempt-$attempt"
     try {
-      Invoke-Logged 'openclaw gateway status' { & $OpenClawPath gateway status --deep --require-rpc }
-      return
+      $statusOutput = Invoke-CaptureLogged 'openclaw gateway status' { & $OpenClawPath gateway status --deep --require-rpc }
+      if ($statusOutput -match 'Read probe:\s*failed') {
+        throw 'gateway status returned without RPC read readiness'
+      }
+      return $true
     } catch {
       if ($attempt -ge $Attempts) {
-        throw
+        return $false
       }
       Write-ProgressLog "update.gateway-status.retry-$attempt"
       Start-Sleep -Seconds $SleepSeconds
     }
   }
+  return $false
+}
+
+function Stop-GatewayScheduledTaskIfPresent {
+  $previousNativeErrorPreference = $PSNativeCommandUseErrorActionPreference
+  try {
+    $PSNativeCommandUseErrorActionPreference = $false
+    schtasks /End /TN 'OpenClaw Gateway' 2>$null | Out-Null
+  } catch {
+  } finally {
+    $PSNativeCommandUseErrorActionPreference = $previousNativeErrorPreference
+  }
 }
 
 function Stop-OpenClawGatewayProcesses {
   Write-ProgressLog 'update.stop-old-gateway'
+  Stop-GatewayScheduledTaskIfPresent
   $patterns = @(
     'openclaw-gateway',
     'openclaw.*gateway --port 18789',
@@ -508,7 +595,112 @@ function Stop-OpenClawGatewayProcesses {
     ForEach-Object {
       Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue
     }
-  Start-Sleep -Seconds 2
+  for ($attempt = 1; $attempt -le 20; $attempt++) {
+    $listeners = Get-NetTCPConnection -LocalPort 18789 -State Listen -ErrorAction SilentlyContinue
+    if (-not $listeners) {
+      return
+    }
+    $listeners |
+      ForEach-Object {
+        Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue
+      }
+    Start-Sleep -Seconds 1
+  }
+  $remaining = Get-NetTCPConnection -LocalPort 18789 -State Listen -ErrorAction SilentlyContinue
+  if ($remaining) {
+    $pids = ($remaining | Select-Object -ExpandProperty OwningProcess -Unique) -join ', '
+    throw "gateway listener still active on port 18789 after stop attempts: $pids"
+  }
+}
+
+function Stop-OpenClawUpdateProcesses {
+  Write-ProgressLog 'update.stop-stale-update'
+  $patterns = @(
+    'openclaw.* update --tag ',
+    'openclaw.* completion --write-state'
+  )
+  Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+    Where-Object {
+      $commandLine = $_.CommandLine
+      if (-not $commandLine) {
+        $false
+      } else {
+        $matched = $false
+        foreach ($pattern in $patterns) {
+          if ($commandLine -match $pattern) {
+            $matched = $true
+            break
+          }
+        }
+        $matched
+      }
+    } |
+    Sort-Object ParentProcessId -Descending |
+    ForEach-Object {
+      Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Invoke-OpenClawUpdateWithTimeout {
+  param(
+    [Parameter(Mandatory = $true)][string]$OpenClawPath,
+    [Parameter(Mandatory = $true)][string]$UpdateTarget,
+    [int]$TimeoutSeconds = 600
+  )
+
+  $updateJob = Start-Job -ScriptBlock {
+    param([string]$Path, [string]$Target)
+    $output = & $Path update --tag $Target --yes --json *>&1
+    [pscustomobject]@{
+      ExitCode = $LASTEXITCODE
+      Output = ($output | Out-String).Trim()
+    }
+  } -ArgumentList $OpenClawPath, $UpdateTarget
+
+  $completed = Wait-Job $updateJob -Timeout $TimeoutSeconds
+  if ($null -ne $completed) {
+    $result = Receive-Job $updateJob
+    if ($null -ne $result.Output -and $result.Output.Length -gt 0) {
+      $result.Output | Tee-Object -FilePath $LogPath -Append | Out-Null
+    }
+    Remove-Job $updateJob -Force -ErrorAction SilentlyContinue
+    if ($result.ExitCode -ne 0) {
+      throw "openclaw update failed with exit code $($result.ExitCode)"
+    }
+    return
+  }
+
+  Stop-Job $updateJob -ErrorAction SilentlyContinue
+  Remove-Job $updateJob -Force -ErrorAction SilentlyContinue
+  Write-ProgressLog 'update.openclaw-update.timeout'
+  'openclaw update timed out after package install window; killing stale update/completion processes and verifying installed version' | Tee-Object -FilePath $LogPath -Append | Out-Null
+  Stop-OpenClawUpdateProcesses
+}
+
+function Start-GatewayRunFallback {
+  param(
+    [Parameter(Mandatory = $true)][string]$OpenClawPath
+  )
+
+  Write-ProgressLog 'update.gateway-run-fallback'
+  Stop-OpenClawGatewayProcesses
+  $entry = Join-Path $env:APPDATA 'npm\node_modules\openclaw\dist\index.js'
+  if (-not (Test-Path $entry)) {
+    throw "openclaw dist entry missing: $entry"
+  }
+  $node = (Get-Command node.exe -ErrorAction Stop).Source
+  $stdout = Join-Path $env:TEMP 'openclaw-parallels-npm-update-gateway.log'
+  $stderr = Join-Path $env:TEMP 'openclaw-parallels-npm-update-gateway.err.log'
+  Start-Process -FilePath $node -ArgumentList @($entry, 'gateway', 'run', '--bind', 'loopback', '--port', '18789', '--force') -WindowStyle Hidden -RedirectStandardOutput $stdout -RedirectStandardError $stderr | Out-Null
+  if (-not (Wait-GatewayRpcReady -OpenClawPath $OpenClawPath -Attempts 20 -SleepSeconds 3)) {
+    if (Test-Path $stdout) {
+      Get-Content $stdout -Tail 80 | Tee-Object -FilePath $LogPath -Append | Out-Null
+    }
+    if (Test-Path $stderr) {
+      Get-Content $stderr -Tail 80 | Tee-Object -FilePath $LogPath -Append | Out-Null
+    }
+    throw 'gateway did not become RPC-ready after run fallback'
+  }
 }
 
 function Complete-WorkspaceSetup {
@@ -568,17 +760,15 @@ function Restart-GatewayWithRecovery {
   Remove-Job $restartJob -Force -ErrorAction SilentlyContinue
 
   Write-ProgressLog 'update.gateway-status'
-  try {
-    Wait-GatewayRpcReady -OpenClawPath $OpenClawPath
+  if (Wait-GatewayRpcReady -OpenClawPath $OpenClawPath) {
     return
-  } catch {
-    if (-not $restartFailed) {
-      throw
-    }
-    Write-ProgressLog 'update.gateway-start-recover'
-    Invoke-Logged 'openclaw gateway start' { & $OpenClawPath gateway start }
-    Write-ProgressLog 'update.gateway-status-recover'
-    Wait-GatewayRpcReady -OpenClawPath $OpenClawPath
+  }
+  Write-ProgressLog 'update.gateway-start-recover'
+  Stop-OpenClawGatewayProcesses
+  Invoke-Logged 'openclaw gateway start' { & $OpenClawPath gateway start }
+  Write-ProgressLog 'update.gateway-status-recover'
+  if (-not (Wait-GatewayRpcReady -OpenClawPath $OpenClawPath)) {
+    Start-GatewayRunFallback -OpenClawPath $OpenClawPath
   }
 }
 
@@ -597,7 +787,7 @@ try {
   $openclaw = Join-Path $env:APPDATA 'npm\openclaw.cmd'
   Stop-OpenClawGatewayProcesses
   Write-ProgressLog 'update.openclaw-update'
-  Invoke-Logged 'openclaw update' { & $openclaw update --tag $UpdateTarget --yes --json }
+  Invoke-OpenClawUpdateWithTimeout -OpenClawPath $openclaw -UpdateTarget $UpdateTarget
   Write-ProgressLog 'update.verify-version'
   $version = Invoke-CaptureLogged 'openclaw --version' { & $openclaw --version }
   if ($ExpectedNeedle -and $version -notmatch [regex]::Escape($ExpectedNeedle)) {
@@ -617,7 +807,7 @@ try {
   Restart-GatewayWithRecovery -OpenClawPath $openclaw
   Complete-WorkspaceSetup
   Write-ProgressLog 'update.agent-turn'
-  Invoke-CaptureLogged 'openclaw agent' { & $openclaw agent --agent main --session-id $SessionId --message 'Reply with exact ASCII text OK only.' --json } | Out-Null
+  Invoke-CaptureLogged 'openclaw agent' { & $openclaw agent --local --agent main --session-id $SessionId --message 'Reply with exact ASCII text OK only.' --json } | Out-Null
   $exitCode = $LASTEXITCODE
   if ($null -eq $exitCode) {
     $exitCode = 0
@@ -791,20 +981,62 @@ Write-Output \$version
 if ('$expected_needle' -and \$version -notmatch [regex]::Escape('$expected_needle')) {
   throw "version mismatch after transport loss: expected substring $expected_needle"
 }
+function Test-GatewayWritable {
+  param([string]\$Path)
+  \$statusOutput = & \$Path gateway status --deep --require-rpc *>&1
+  if (\$null -ne \$statusOutput) {
+    \$statusOutput | Write-Output
+  }
+  if (\$LASTEXITCODE -ne 0) {
+    return \$false
+  }
+  \$statusText = (\$statusOutput | Out-String)
+  return (\$statusText -notmatch 'Read probe:\s*failed')
+}
+function Stop-GatewayListeners {
+  \$previousNativeErrorPreference = \$PSNativeCommandUseErrorActionPreference
+  try {
+    \$PSNativeCommandUseErrorActionPreference = \$false
+    schtasks /End /TN 'OpenClaw Gateway' 2>\$null | Out-Null
+  } catch {
+  } finally {
+    \$PSNativeCommandUseErrorActionPreference = \$previousNativeErrorPreference
+  }
+  Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+    Where-Object {
+      \$_.CommandLine -and (
+        \$_.CommandLine -match 'openclaw.*gateway --port 18789' -or
+        \$_.CommandLine -match 'openclaw.*gateway run' -or
+        \$_.CommandLine -match 'dist\\\\index\\.js gateway --port 18789'
+      )
+    } |
+    ForEach-Object {
+      Stop-Process -Id \$_.ProcessId -Force -ErrorAction SilentlyContinue
+    }
+  for (\$i = 0; \$i -lt 20; \$i++) {
+    \$listeners = Get-NetTCPConnection -LocalPort 18789 -State Listen -ErrorAction SilentlyContinue
+    if (-not \$listeners) {
+      return
+    }
+    \$listeners | ForEach-Object {
+      Stop-Process -Id \$_.OwningProcess -Force -ErrorAction SilentlyContinue
+    }
+    Start-Sleep -Seconds 1
+  }
+}
 \$gatewayReady = \$false
 for (\$i = 0; \$i -lt 6; \$i++) {
-  & \$openclaw gateway status --deep --require-rpc
-  if (\$LASTEXITCODE -eq 0) {
+  if (Test-GatewayWritable \$openclaw) {
     \$gatewayReady = \$true
     break
   }
   Start-Sleep -Seconds 2
 }
 if (-not \$gatewayReady) {
+  Stop-GatewayListeners
   & \$openclaw gateway restart
   for (\$i = 0; \$i -lt 6; \$i++) {
-    & \$openclaw gateway status --deep --require-rpc
-    if (\$LASTEXITCODE -eq 0) {
+    if (Test-GatewayWritable \$openclaw) {
       \$gatewayReady = \$true
       break
     }
@@ -812,10 +1044,25 @@ if (-not \$gatewayReady) {
   }
 }
 if (-not \$gatewayReady) {
+  Stop-GatewayListeners
   & \$openclaw gateway start
   for (\$i = 0; \$i -lt 6; \$i++) {
-    & \$openclaw gateway status --deep --require-rpc
-    if (\$LASTEXITCODE -eq 0) {
+    if (Test-GatewayWritable \$openclaw) {
+      \$gatewayReady = \$true
+      break
+    }
+    Start-Sleep -Seconds 2
+  }
+}
+if (-not \$gatewayReady) {
+  Stop-GatewayListeners
+  \$entry = Join-Path \$env:APPDATA 'npm\\node_modules\\openclaw\\dist\\index.js'
+  \$node = (Get-Command node.exe -ErrorAction Stop).Source
+  \$stdout = Join-Path \$env:TEMP 'openclaw-parallels-npm-update-recover-gateway.log'
+  \$stderr = Join-Path \$env:TEMP 'openclaw-parallels-npm-update-recover-gateway.err.log'
+  Start-Process -FilePath \$node -ArgumentList @(\$entry, 'gateway', 'run', '--bind', 'loopback', '--port', '18789', '--force') -WindowStyle Hidden -RedirectStandardOutput \$stdout -RedirectStandardError \$stderr | Out-Null
+  for (\$i = 0; \$i -lt 20; \$i++) {
+    if (Test-GatewayWritable \$openclaw) {
       \$gatewayReady = \$true
       break
     }
@@ -848,7 +1095,7 @@ New-Item -ItemType Directory -Path \$stateDir -Force | Out-Null
 }
 '@ | Set-Content -Path (Join-Path \$stateDir 'workspace-state.json') -Encoding UTF8
 Remove-Item (Join-Path \$workspace 'BOOTSTRAP.md') -Force -ErrorAction SilentlyContinue
-& \$openclaw agent --agent main --session-id 'parallels-npm-update-windows-transport-recovery-$expected_needle' --message 'Reply with exact ASCII text OK only.' --json
+& \$openclaw agent --local --agent main --session-id 'parallels-npm-update-windows-transport-recovery-$expected_needle' --message 'Reply with exact ASCII text OK only.' --json
 EOF
   )"
   local rc=$?
@@ -883,37 +1130,6 @@ stop_timeout_guard() {
   wait "$pid" 2>/dev/null || true
 }
 
-extract_log_progress() {
-  local log_path="$1"
-  "$PYTHON_BIN" - "$log_path" <<'PY'
-import pathlib
-import sys
-
-path = pathlib.Path(sys.argv[1])
-if not path.exists():
-    print("")
-    raise SystemExit(0)
-
-text = path.read_text(encoding="utf-8", errors="replace")
-lines = [line.strip() for line in text.splitlines() if line.strip()]
-
-for line in reversed(lines):
-    if line.startswith("==> "):
-        print(line[4:].strip())
-        raise SystemExit(0)
-
-for line in reversed(lines):
-    if line.startswith("warn:") or line.startswith("error:"):
-        print(line)
-        raise SystemExit(0)
-
-if lines:
-    print(lines[-1][:240])
-else:
-    print("")
-PY
-}
-
 dump_log_tail() {
   local label="$1"
   local log_path="$2"
@@ -925,44 +1141,7 @@ dump_log_tail() {
 monitor_jobs_progress() {
   local group="$1"
   shift
-
-  local labels=()
-  local pids=()
-  local logs=()
-  local last_progress=()
-  local last_print=()
-  local i summary now running
-
-  while [[ $# -gt 0 ]]; do
-    labels+=("$1")
-    pids+=("$2")
-    logs+=("$3")
-    last_progress+=("")
-    last_print+=(0)
-    shift 3
-  done
-
-  say "$group progress; run dir: $RUN_DIR"
-
-  while :; do
-    running=0
-    now=$SECONDS
-    for ((i = 0; i < ${#pids[@]}; i++)); do
-      if ! child_job_running "${pids[$i]}"; then
-        continue
-      fi
-      running=1
-      summary="$(extract_log_progress "${logs[$i]}")"
-      [[ -n "$summary" ]] || summary="waiting for first log line"
-      if [[ "${last_progress[i]}" != "$summary" ]] || (( now - last_print[i] >= PROGRESS_STALE_S )); then
-        say "$group ${labels[$i]}: $summary"
-        last_progress[i]="$summary"
-        last_print[i]=$now
-      fi
-    done
-    (( running )) || break
-    sleep "$PROGRESS_INTERVAL_S"
-  done
+  parallels_monitor_jobs_progress "$group" "$PROGRESS_INTERVAL_S" "$PROGRESS_STALE_S" "$PYTHON_BIN" "$$" "$@"
 }
 
 extract_last_version() {
@@ -1396,50 +1575,65 @@ if [[ -z "$PACKAGE_SPEC" ]]; then
 fi
 resolve_current_head
 
-RESOLVED_LINUX_VM="$(resolve_linux_vm_name)"
-if [[ "$RESOLVED_LINUX_VM" != "$LINUX_VM" ]]; then
-  warn "requested VM $LINUX_VM not found; using $RESOLVED_LINUX_VM"
-  LINUX_VM="$RESOLVED_LINUX_VM"
+if platform_enabled linux; then
+  RESOLVED_LINUX_VM="$(resolve_linux_vm_name)"
+  if [[ "$RESOLVED_LINUX_VM" != "$LINUX_VM" ]]; then
+    warn "requested VM $LINUX_VM not found; using $RESOLVED_LINUX_VM"
+    LINUX_VM="$RESOLVED_LINUX_VM"
+  fi
 fi
 
 say "Run fresh npm baseline: $PACKAGE_SPEC"
+say "Platforms: $RUN_PLATFORMS"
 say "Run dir: $RUN_DIR"
-bash "$ROOT_DIR/scripts/e2e/parallels-macos-smoke.sh" \
-  --mode fresh \
-  --provider "$PROVIDER" \
-  --api-key-env "$API_KEY_ENV" \
-  --target-package-spec "$PACKAGE_SPEC" \
-  --json >"$RUN_DIR/macos-fresh.log" 2>&1 &
-macos_fresh_pid=$!
+fresh_monitor_args=()
+if platform_enabled macos; then
+  bash "$ROOT_DIR/scripts/e2e/parallels-macos-smoke.sh" \
+    --mode fresh \
+    --provider "$PROVIDER" \
+    --api-key-env "$API_KEY_ENV" \
+    --target-package-spec "$PACKAGE_SPEC" \
+    --json >"$RUN_DIR/macos-fresh.log" 2>&1 &
+  macos_fresh_pid=$!
+  fresh_monitor_args+=("macOS" "$macos_fresh_pid" "$RUN_DIR/macos-fresh.log")
+fi
 
-bash "$ROOT_DIR/scripts/e2e/parallels-windows-smoke.sh" \
-  --mode fresh \
-  --provider "$PROVIDER" \
-  --api-key-env "$API_KEY_ENV" \
-  --target-package-spec "$PACKAGE_SPEC" \
-  --json >"$RUN_DIR/windows-fresh.log" 2>&1 &
-windows_fresh_pid=$!
+if platform_enabled windows; then
+  bash "$ROOT_DIR/scripts/e2e/parallels-windows-smoke.sh" \
+    --mode fresh \
+    --provider "$PROVIDER" \
+    --api-key-env "$API_KEY_ENV" \
+    --target-package-spec "$PACKAGE_SPEC" \
+    --json >"$RUN_DIR/windows-fresh.log" 2>&1 &
+  windows_fresh_pid=$!
+  fresh_monitor_args+=("Windows" "$windows_fresh_pid" "$RUN_DIR/windows-fresh.log")
+fi
 
-bash "$ROOT_DIR/scripts/e2e/parallels-linux-smoke.sh" \
-  --mode fresh \
-  --provider "$PROVIDER" \
-  --api-key-env "$API_KEY_ENV" \
-  --target-package-spec "$PACKAGE_SPEC" \
-  --json >"$RUN_DIR/linux-fresh.log" 2>&1 &
-linux_fresh_pid=$!
+if platform_enabled linux; then
+  bash "$ROOT_DIR/scripts/e2e/parallels-linux-smoke.sh" \
+    --mode fresh \
+    --provider "$PROVIDER" \
+    --api-key-env "$API_KEY_ENV" \
+    --target-package-spec "$PACKAGE_SPEC" \
+    --json >"$RUN_DIR/linux-fresh.log" 2>&1 &
+  linux_fresh_pid=$!
+  fresh_monitor_args+=("Linux" "$linux_fresh_pid" "$RUN_DIR/linux-fresh.log")
+fi
 
-monitor_jobs_progress "fresh" \
-  "macOS" "$macos_fresh_pid" "$RUN_DIR/macos-fresh.log" \
-  "Windows" "$windows_fresh_pid" "$RUN_DIR/windows-fresh.log" \
-  "Linux" "$linux_fresh_pid" "$RUN_DIR/linux-fresh.log"
+monitor_jobs_progress "fresh" "${fresh_monitor_args[@]}"
 
-wait_job "macOS fresh" "$macos_fresh_pid" "$RUN_DIR/macos-fresh.log" && MACOS_FRESH_STATUS="pass" || MACOS_FRESH_STATUS="fail"
-wait_job "Windows fresh" "$windows_fresh_pid" "$RUN_DIR/windows-fresh.log" && WINDOWS_FRESH_STATUS="pass" || WINDOWS_FRESH_STATUS="fail"
-wait_job "Linux fresh" "$linux_fresh_pid" "$RUN_DIR/linux-fresh.log" && LINUX_FRESH_STATUS="pass" || LINUX_FRESH_STATUS="fail"
-
-[[ "$MACOS_FRESH_STATUS" == "pass" ]] || die "macOS fresh baseline failed"
-[[ "$WINDOWS_FRESH_STATUS" == "pass" ]] || die "Windows fresh baseline failed"
-[[ "$LINUX_FRESH_STATUS" == "pass" ]] || die "Linux fresh baseline failed"
+if platform_enabled macos; then
+  wait_job "macOS fresh" "$macos_fresh_pid" "$RUN_DIR/macos-fresh.log" && MACOS_FRESH_STATUS="pass" || MACOS_FRESH_STATUS="fail"
+  [[ "$MACOS_FRESH_STATUS" == "pass" ]] || die "macOS fresh baseline failed"
+fi
+if platform_enabled windows; then
+  wait_job "Windows fresh" "$windows_fresh_pid" "$RUN_DIR/windows-fresh.log" && WINDOWS_FRESH_STATUS="pass" || WINDOWS_FRESH_STATUS="fail"
+  [[ "$WINDOWS_FRESH_STATUS" == "pass" ]] || die "Windows fresh baseline failed"
+fi
+if platform_enabled linux; then
+  wait_job "Linux fresh" "$linux_fresh_pid" "$RUN_DIR/linux-fresh.log" && LINUX_FRESH_STATUS="pass" || LINUX_FRESH_STATUS="fail"
+  [[ "$LINUX_FRESH_STATUS" == "pass" ]] || die "Linux fresh baseline failed"
+fi
 
 if [[ -z "$UPDATE_TARGET" || "$UPDATE_TARGET" == "local-main" ]]; then
   pack_main_tgz
@@ -1454,48 +1648,64 @@ else
     [[ -n "$UPDATE_EXPECTED_NEEDLE" ]] || UPDATE_EXPECTED_NEEDLE="$UPDATE_TARGET_EFFECTIVE"
   fi
 fi
-write_windows_update_script
-start_server
+if platform_enabled windows; then
+  write_windows_update_script
+fi
+if [[ -n "$MAIN_TGZ_PATH" ]] || platform_enabled windows; then
+  start_server
+fi
 
 if [[ -n "$MAIN_TGZ_PATH" ]]; then
   UPDATE_TARGET_EFFECTIVE="http://$HOST_IP:$HOST_PORT/$(basename "$MAIN_TGZ_PATH")"
 fi
-windows_update_script_url="http://$HOST_IP:$HOST_PORT/$(basename "$WINDOWS_UPDATE_SCRIPT_PATH")"
+if platform_enabled windows; then
+  windows_update_script_url="http://$HOST_IP:$HOST_PORT/$(basename "$WINDOWS_UPDATE_SCRIPT_PATH")"
+fi
 
 say "Run same-guest openclaw update to $UPDATE_TARGET_EFFECTIVE"
-ensure_vm_running_for_update "$MACOS_VM"
-ensure_vm_running_for_update "$WINDOWS_VM"
-ensure_vm_running_for_update "$LINUX_VM"
-run_macos_update "$UPDATE_TARGET_EFFECTIVE" "$UPDATE_EXPECTED_NEEDLE" >"$RUN_DIR/macos-update.log" 2>&1 &
-macos_update_pid=$!
-run_windows_update "$UPDATE_TARGET_EFFECTIVE" "$UPDATE_EXPECTED_NEEDLE" "$windows_update_script_url" >"$RUN_DIR/windows-update.log" 2>&1 &
-windows_update_pid=$!
-run_linux_update "$UPDATE_TARGET_EFFECTIVE" "$UPDATE_EXPECTED_NEEDLE" >"$RUN_DIR/linux-update.log" 2>&1 &
-linux_update_pid=$!
-macos_update_guard_pid="$(start_timeout_guard "macOS update" "$TIMEOUT_UPDATE_S" "$macos_update_pid" "$RUN_DIR/macos-update.log")"
-windows_update_guard_pid="$(start_timeout_guard "Windows update" "$TIMEOUT_UPDATE_S" "$windows_update_pid" "$RUN_DIR/windows-update.log")"
-linux_update_guard_pid="$(start_timeout_guard "Linux update" "$TIMEOUT_UPDATE_S" "$linux_update_pid" "$RUN_DIR/linux-update.log")"
+update_monitor_args=()
+if platform_enabled macos; then
+  ensure_vm_running_for_update "$MACOS_VM"
+  run_macos_update "$UPDATE_TARGET_EFFECTIVE" "$UPDATE_EXPECTED_NEEDLE" >"$RUN_DIR/macos-update.log" 2>&1 &
+  macos_update_pid=$!
+  macos_update_guard_pid="$(start_timeout_guard "macOS update" "$TIMEOUT_UPDATE_S" "$macos_update_pid" "$RUN_DIR/macos-update.log")"
+  update_monitor_args+=("macOS" "$macos_update_pid" "$RUN_DIR/macos-update.log")
+fi
+if platform_enabled windows; then
+  ensure_vm_running_for_update "$WINDOWS_VM"
+  run_windows_update "$UPDATE_TARGET_EFFECTIVE" "$UPDATE_EXPECTED_NEEDLE" "$windows_update_script_url" >"$RUN_DIR/windows-update.log" 2>&1 &
+  windows_update_pid=$!
+  windows_update_guard_pid="$(start_timeout_guard "Windows update" "$TIMEOUT_UPDATE_S" "$windows_update_pid" "$RUN_DIR/windows-update.log")"
+  update_monitor_args+=("Windows" "$windows_update_pid" "$RUN_DIR/windows-update.log")
+fi
+if platform_enabled linux; then
+  ensure_vm_running_for_update "$LINUX_VM"
+  run_linux_update "$UPDATE_TARGET_EFFECTIVE" "$UPDATE_EXPECTED_NEEDLE" >"$RUN_DIR/linux-update.log" 2>&1 &
+  linux_update_pid=$!
+  linux_update_guard_pid="$(start_timeout_guard "Linux update" "$TIMEOUT_UPDATE_S" "$linux_update_pid" "$RUN_DIR/linux-update.log")"
+  update_monitor_args+=("Linux" "$linux_update_pid" "$RUN_DIR/linux-update.log")
+fi
 
-monitor_jobs_progress "update" \
-  "macOS" "$macos_update_pid" "$RUN_DIR/macos-update.log" \
-  "Windows" "$windows_update_pid" "$RUN_DIR/windows-update.log" \
-  "Linux" "$linux_update_pid" "$RUN_DIR/linux-update.log"
+monitor_jobs_progress "update" "${update_monitor_args[@]}"
 
-stop_timeout_guard "$macos_update_guard_pid"
-stop_timeout_guard "$windows_update_guard_pid"
-stop_timeout_guard "$linux_update_guard_pid"
-
-wait_job "macOS update" "$macos_update_pid" "$RUN_DIR/macos-update.log" && MACOS_UPDATE_STATUS="pass" || MACOS_UPDATE_STATUS="fail"
-wait_job "Windows update" "$windows_update_pid" "$RUN_DIR/windows-update.log" && WINDOWS_UPDATE_STATUS="pass" || WINDOWS_UPDATE_STATUS="fail"
-wait_job "Linux update" "$linux_update_pid" "$RUN_DIR/linux-update.log" && LINUX_UPDATE_STATUS="pass" || LINUX_UPDATE_STATUS="fail"
-
-[[ "$MACOS_UPDATE_STATUS" == "pass" ]] || die "macOS update failed"
-[[ "$WINDOWS_UPDATE_STATUS" == "pass" ]] || die "Windows update failed"
-[[ "$LINUX_UPDATE_STATUS" == "pass" ]] || die "Linux update failed"
-
-MACOS_UPDATE_VERSION="$(extract_last_version "$RUN_DIR/macos-update.log")"
-WINDOWS_UPDATE_VERSION="$(extract_last_version "$RUN_DIR/windows-update.log")"
-LINUX_UPDATE_VERSION="$(extract_last_version "$RUN_DIR/linux-update.log")"
+if platform_enabled macos; then
+  stop_timeout_guard "$macos_update_guard_pid"
+  wait_job "macOS update" "$macos_update_pid" "$RUN_DIR/macos-update.log" && MACOS_UPDATE_STATUS="pass" || MACOS_UPDATE_STATUS="fail"
+  [[ "$MACOS_UPDATE_STATUS" == "pass" ]] || die "macOS update failed"
+  MACOS_UPDATE_VERSION="$(extract_last_version "$RUN_DIR/macos-update.log")"
+fi
+if platform_enabled windows; then
+  stop_timeout_guard "$windows_update_guard_pid"
+  wait_job "Windows update" "$windows_update_pid" "$RUN_DIR/windows-update.log" && WINDOWS_UPDATE_STATUS="pass" || WINDOWS_UPDATE_STATUS="fail"
+  [[ "$WINDOWS_UPDATE_STATUS" == "pass" ]] || die "Windows update failed"
+  WINDOWS_UPDATE_VERSION="$(extract_last_version "$RUN_DIR/windows-update.log")"
+fi
+if platform_enabled linux; then
+  stop_timeout_guard "$linux_update_guard_pid"
+  wait_job "Linux update" "$linux_update_pid" "$RUN_DIR/linux-update.log" && LINUX_UPDATE_STATUS="pass" || LINUX_UPDATE_STATUS="fail"
+  [[ "$LINUX_UPDATE_STATUS" == "pass" ]] || die "Linux update failed"
+  LINUX_UPDATE_VERSION="$(extract_last_version "$RUN_DIR/linux-update.log")"
+fi
 
 SUMMARY_PACKAGE_SPEC="$PACKAGE_SPEC" \
 SUMMARY_UPDATE_TARGET="$UPDATE_TARGET_EFFECTIVE" \
