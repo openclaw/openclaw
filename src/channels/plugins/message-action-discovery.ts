@@ -251,10 +251,19 @@ export function listCrossChannelSchemaSupportedMessageActions(
     includeActions: true,
     includeSchema: true,
   });
-  const hasCurrentChannelOnlySchema = resolved.schemaContributions.some(
-    (contribution) => (contribution.visibility ?? "current-channel") === "current-channel",
-  );
-  return hasCurrentChannelOnlySchema ? [] : resolved.actions;
+  const schemaBlockedActions = new Set<ChannelMessageActionName>();
+  for (const contribution of resolved.schemaContributions) {
+    if ((contribution.visibility ?? "current-channel") !== "current-channel") {
+      continue;
+    }
+    if (!contribution.actions?.length) {
+      return [];
+    }
+    for (const action of contribution.actions) {
+      schemaBlockedActions.add(action);
+    }
+  }
+  return resolved.actions.filter((action) => !schemaBlockedActions.has(action));
 }
 
 export function listChannelMessageCapabilities(cfg: OpenClawConfig): ChannelMessageCapability[] {
