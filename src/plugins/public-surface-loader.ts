@@ -112,8 +112,9 @@ function shouldFallbackSourceArtifactRequireToJiti(error: unknown): boolean {
   if (!(error instanceof Error)) {
     return false;
   }
+  const code = (error as NodeJS.ErrnoException).code;
   return (
-    error.name === "SyntaxError" || (error as NodeJS.ErrnoException).code === "ERR_MODULE_NOT_FOUND"
+    error.name === "SyntaxError" || code === "ERR_MODULE_NOT_FOUND" || code === "MODULE_NOT_FOUND"
   );
 }
 
