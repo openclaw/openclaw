@@ -79,11 +79,11 @@ export function resolveAuthProfileOrder(params: {
   // next transient failure. See #3604.
   clearExpiredCooldowns(store, now);
   const storedOrder =
-    findNormalizedProviderValue(store.order, providerAuthKey) ??
-    findNormalizedProviderValue(store.order, providerKey);
+    resolveNonEmptyAuthOrder(store.order, providerAuthKey) ??
+    resolveNonEmptyAuthOrder(store.order, providerKey);
   const configuredOrder =
-    findNormalizedProviderValue(cfg?.auth?.order, providerAuthKey) ??
-    findNormalizedProviderValue(cfg?.auth?.order, providerKey);
+    resolveNonEmptyAuthOrder(cfg?.auth?.order, providerAuthKey) ??
+    resolveNonEmptyAuthOrder(cfg?.auth?.order, providerKey);
   const explicitOrder = storedOrder ?? configuredOrder;
   const explicitProfiles = cfg?.auth?.profiles
     ? Object.entries(cfg.auth.profiles)
@@ -163,6 +163,14 @@ export function resolveAuthProfileOrder(params: {
   }
 
   return sorted;
+}
+
+function resolveNonEmptyAuthOrder(
+  order: Record<string, string[]> | undefined,
+  provider: string,
+): string[] | undefined {
+  const resolved = findNormalizedProviderValue(order, provider);
+  return resolved && resolved.length > 0 ? resolved : undefined;
 }
 
 function orderProfilesByMode(order: string[], store: AuthProfileStore): string[] {
