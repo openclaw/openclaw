@@ -40,6 +40,10 @@ When debugging real providers/models (requires real creds):
 - Live suite (models + gateway tool/image probes): `pnpm test:live`
 - Target one live file quietly: `pnpm test:live -- src/agents/models.profiles.live.test.ts`
 - Docker live model sweep: `pnpm test:docker:live-models`
+  - Each selected model now runs a text turn plus a small file-read-style probe.
+    Models whose metadata advertises `image` input also run a tiny image turn.
+    Disable the extra probes with `OPENCLAW_LIVE_MODEL_FILE_PROBE=0` or
+    `OPENCLAW_LIVE_MODEL_IMAGE_PROBE=0` when isolating provider failures.
   - CI coverage: daily `OpenClaw Scheduled Live And E2E Checks` and manual
     `OpenClaw Release Checks` both call the reusable live/E2E workflow with
     `include_live_suites: true`, which includes separate Docker live model

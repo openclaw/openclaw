@@ -87,6 +87,11 @@ Scoped guides:
 - Local heavy-check behavior: `OPENCLAW_LOCAL_CHECK=1` default; `OPENCLAW_LOCAL_CHECK_MODE=throttled|full`; `OPENCLAW_LOCAL_CHECK=0` for CI/shared runs.
 - Local validation is local-first. Do not default to Blacksmith/Testbox for routine OpenClaw iteration; it burns warm caches and startup time. Use repo `pnpm` lanes first, then reach for remote CI/Testbox only for parity-only failures, secrets/services, or when explicitly requested.
 
+## GitHub API
+
+- CI polling: keep full `gh` capability, but request only needed fields. Known run status: `gh api repos/<owner>/<repo>/actions/runs/<id> --jq '{status,conclusion,head_sha,updated_at,name,path}'`.
+- Waiting: poll lightly, usually 30-60s backoff. Fetch jobs/logs/artifacts only after completion/failure or when job detail is needed; avoid repeated workflow + run + jobs loops.
+
 ## Gates
 
 - Pre-commit hook: staged format/lint, then `pnpm check:changed --staged`; docs/markdown-only skips changed-scope check; `FAST_COMMIT=1` / `scripts/committer --fast` skips changed-scope check only.

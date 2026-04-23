@@ -235,6 +235,9 @@ const TOOLING_TEST_TARGETS = new Map([
     ["test/scripts/vitest-local-scheduling.test.ts"],
   ],
 ]);
+const SOURCE_TEST_TARGETS = new Map([
+  ["src/agents/live-model-turn-probes.ts", ["src/agents/live-model-turn-probes.test.ts"]],
+]);
 const GENERATED_CHANGED_TEST_TARGETS = new Set([
   "src/canvas-host/a2ui/.bundle.hash",
   "src/canvas-host/a2ui/a2ui.bundle.js",
@@ -511,7 +514,13 @@ export function resolveChangedTestTargetPlan(changedPaths) {
   if (changedLanes.lanes.all) {
     return { mode: "broad", targets: [] };
   }
-  const targets = changedPaths.filter(isRoutableChangedTarget);
+  const targets = changedPaths.flatMap((changedPath) => {
+    const mappedTargets = SOURCE_TEST_TARGETS.get(changedPath);
+    if (mappedTargets) {
+      return mappedTargets;
+    }
+    return isRoutableChangedTarget(changedPath) ? [changedPath] : [];
+  });
   if (changedLanes.extensionImpactFromCore) {
     targets.push("extensions");
   }

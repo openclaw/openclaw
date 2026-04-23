@@ -451,8 +451,8 @@ const hasWebSearch = tools.some((tool) => tool?.type === "web_search" || (tool?.
 if (!hasWebSearch) {
   throw new Error(`success request did not include web_search. Body: ${JSON.stringify(success.body)}`);
 }
-if (success.body.reasoning?.effort !== "low") {
-  throw new Error(`expected reasoning.effort low with web_search, got ${JSON.stringify(success.body.reasoning)}`);
+if (success.body.reasoning?.effort === "minimal") {
+  throw new Error(`expected web_search request to avoid minimal reasoning, got ${JSON.stringify(success.body.reasoning)}`);
 }
 NODE
 

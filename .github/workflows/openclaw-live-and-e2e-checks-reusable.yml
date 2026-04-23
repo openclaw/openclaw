@@ -640,7 +640,7 @@ jobs:
     name: Docker live models (${{ matrix.provider_label }})
     needs: validate_selected_ref
     if: inputs.include_live_suites
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 75
     strategy:
       fail-fast: false

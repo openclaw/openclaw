@@ -144,6 +144,7 @@ Use this skill for Parallels guest workflows and smoke interpretation. Do not lo
   - `--discord-token-env`
   - `--discord-guild-id`
   - `--discord-channel-id`
+- After a successful Discord smoke/roundtrip, shut down the guest VM before handoff (`prlctl stop "$VM_NAME"` or the concrete VM name). The macOS smoke harness should do this automatically after successful Discord proof; still stop the VM manually after ad-hoc Discord checks. Do not leave the Discord-configured guest running; it can keep reading/posting in `#maintainer` and spam Discord after the proof is complete.
 - Keep the Discord token only in a host env var.
 - Use installed `openclaw message send/read`, not `node openclaw.mjs message ...`.
 - Set `channels.discord.guilds` as one JSON object, not dotted config paths with snowflakes.

@@ -336,4 +336,53 @@ describe("CLI attempt execution", () => {
       content: [{ type: "text", text: "hello from cli" }],
     });
   });
+
+  it("forwards user trigger and channel context to CLI runs", async () => {
+    const sessionKey = "agent:main:direct:claude-channel-context";
+    const sessionEntry: SessionEntry = {
+      sessionId: "openclaw-session-channel",
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+    runCliAgentMock.mockResolvedValueOnce(makeCliResult("channel aware"));
+
+    await runAgentAttempt({
+      providerOverride: "claude-cli",
+      modelOverride: "opus",
+      cfg: {} as OpenClawConfig,
+      sessionEntry,
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionAgentId: "main",
+      sessionFile: path.join(tmpDir, "session.jsonl"),
+      workspaceDir: tmpDir,
+      body: "route this",
+      isFallbackRetry: false,
+      resolvedThinkLevel: "medium",
+      timeoutMs: 1_000,
+      runId: "run-cli-channel-context",
+      opts: { senderIsOwner: false } as Parameters<typeof runAgentAttempt>[0]["opts"],
+      runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
+      spawnedBy: undefined,
+      messageChannel: "telegram",
+      skillsSnapshot: undefined,
+      resolvedVerboseLevel: undefined,
+      agentDir: tmpDir,
+      onAgentEvent: vi.fn(),
+      authProfileProvider: "claude-cli",
+      sessionStore,
+      storePath,
+      sessionHasHistory: false,
+    });
+
+    expect(runCliAgentMock).toHaveBeenCalledTimes(1);
+    expect(runCliAgentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        trigger: "user",
+        messageChannel: "telegram",
+        messageProvider: "telegram",
+      }),
+    );
+  });
 });

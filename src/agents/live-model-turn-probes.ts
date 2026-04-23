@@ -1,0 +1,104 @@
+import type { Api, AssistantMessage, Context, Model } from "@mariozechner/pi-ai";
+
+export const LIVE_MODEL_FILE_PROBE_TOKEN = "opal";
+
+export const LIVE_MODEL_FILE_PROBE_ENV = "OPENCLAW_LIVE_MODEL_FILE_PROBE";
+export const LIVE_MODEL_IMAGE_PROBE_ENV = "OPENCLAW_LIVE_MODEL_IMAGE_PROBE";
+
+const PROBE_PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAALUlEQVR4nO3OIQEAAAwCMPrnod8fAzMxv7S9pQgICAgICAgICAgICAgICKwDD+yWbLXSniMNAAAAAElFTkSuQmCC";
+
+const KNOWN_EMPTY_EXTRA_PROBE_MODELS = new Set(["openrouter/amazon/nova-2-lite-v1"]);
+
+export function isLiveModelProbeEnabled(
+  env: Record<string, string | undefined>,
+  key: string,
+): boolean {
+  const raw = env[key]?.trim().toLowerCase();
+  if (!raw) {
+    return true;
+  }
+  return !["0", "false", "no", "off"].includes(raw);
+}
+
+export function extractAssistantText(message: Pick<AssistantMessage, "content">): string {
+  return message.content
+    .filter((block) => block.type === "text")
+    .map((block) => block.text.trim())
+    .filter(Boolean)
+    .join(" ");
+}
+
+export function modelSupportsImageInput(model: Pick<Model<Api>, "input">): boolean {
+  return model.input.includes("image");
+}
+
+export function shouldSkipLiveModelExtraProbes(
+  model: Pick<Model<Api>, "id" | "provider">,
+): boolean {
+  return KNOWN_EMPTY_EXTRA_PROBE_MODELS.has(`${model.provider}/${model.id}`);
+}
+
+export function buildLiveModelFileProbeContext(params: { systemPrompt?: string }): Context {
+  return {
+    systemPrompt: params.systemPrompt,
+    messages: [
+      {
+        role: "user",
+        content:
+          "Read this file excerpt and reply with only the value after LIVE_FILE_TOKEN.\n\n" +
+          "File: live-model-probe.txt\n" +
+          "MIME: text/plain\n\n" +
+          `LIVE_FILE_TOKEN=${LIVE_MODEL_FILE_PROBE_TOKEN}`,
+        timestamp: Date.now(),
+      },
+    ],
+  };
+}
+
+export function buildLiveModelFileProbeRetryContext(params: { systemPrompt?: string }): Context {
+  return {
+    systemPrompt: params.systemPrompt,
+    messages: [
+      {
+        role: "user",
+        content:
+          "The file live-model-probe.txt contains exactly this token:\n\n" +
+          `${LIVE_MODEL_FILE_PROBE_TOKEN}\n\n` +
+          `Reply with exactly ${LIVE_MODEL_FILE_PROBE_TOKEN}.`,
+        timestamp: Date.now(),
+      },
+    ],
+  };
+}
+
+export function buildLiveModelImageProbeContext(params: { systemPrompt?: string }): Context {
+  return {
+    systemPrompt: params.systemPrompt,
+    messages: [
+      {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "Reply with exactly the word OK if you received this image.",
+          },
+          {
+            type: "image",
+            data: PROBE_PNG_BASE64,
+            mimeType: "image/png",
+          },
+        ],
+        timestamp: Date.now(),
+      },
+    ],
+  };
+}
+
+export function fileProbeTextMatches(text: string): boolean {
+  return text.toLowerCase().includes(LIVE_MODEL_FILE_PROBE_TOKEN.toLowerCase());
+}
+
+export function imageProbeTextMatches(text: string): boolean {
+  return /\bok\b/i.test(text);
+}

@@ -228,6 +228,21 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
+  it("routes changed source files to sibling tests when present", () => {
+    const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
+      "src/agents/live-model-turn-probes.ts",
+    ]);
+
+    expect(plans).toEqual([
+      {
+        config: "test/vitest/vitest.unit-fast.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/agents/live-model-turn-probes.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
   it("routes changed utils and shared files to their light scoped lanes", () => {
     const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
       "src/shared/string-normalization.ts",

@@ -1025,6 +1025,7 @@
                   "channels/irc",
                   "channels/line",
                   "channels/matrix",
+                  "channels/matrix-push-rules",
                   "channels/mattermost",
                   "channels/msteams",
                   "channels/nextcloud-talk",

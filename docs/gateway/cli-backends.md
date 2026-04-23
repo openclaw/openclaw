@@ -169,6 +169,18 @@ resolver sees the same filtered set that OpenClaw would otherwise advertise in
 the prompt. Skill env/API key overrides are still applied by OpenClaw to the
 child process environment for the run.
 
+Before OpenClaw can use the bundled `claude-cli` backend, Claude Code itself
+must already be logged in on the same host:
+
+```bash
+claude auth login
+claude auth status --text
+openclaw models auth login --provider anthropic --method cli --set-default
+```
+
+Use `agents.defaults.cliBackends.claude-cli.command` only when the `claude`
+binary is not already on `PATH`.
+
 ## Sessions
 
 - If the CLI supports sessions, set `sessionArg` (e.g. `--session-id`) or

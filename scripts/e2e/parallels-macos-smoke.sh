@@ -293,6 +293,28 @@ discord_smoke_enabled() {
   [[ -n "$DISCORD_TOKEN_VALUE" && -n "$DISCORD_GUILD_ID" && -n "$DISCORD_CHANNEL_ID" ]]
 }
 
+successful_discord_smoke() {
+  discord_smoke_enabled || return 1
+  [[ "$FRESH_DISCORD_STATUS" == "pass" || "$UPGRADE_DISCORD_STATUS" == "pass" ]]
+}
+
+stop_vm_after_successful_discord_smoke() {
+  successful_discord_smoke || return 0
+
+  say "Stop $VM_NAME after successful Discord smoke"
+  set +e
+  if command -v gtimeout >/dev/null 2>&1; then
+    gtimeout --foreground 120s prlctl stop "$VM_NAME"
+  else
+    prlctl stop "$VM_NAME"
+  fi
+  local rc=$?
+  set -e
+  if (( rc != 0 )); then
+    warn "failed to stop $VM_NAME after successful Discord smoke (rc=$rc)"
+  fi
+}
+
 fresh_uses_host_tgz() {
   if [[ -z "$TARGET_PACKAGE_SPEC" ]]; then
     return 0
@@ -2017,6 +2039,8 @@ if [[ "$KEEP_SERVER" -eq 0 && -n "${SERVER_PID:-}" ]]; then
   kill "$SERVER_PID" >/dev/null 2>&1 || true
   SERVER_PID=""
 fi
+
+stop_vm_after_successful_discord_smoke
 
 SUMMARY_JSON_PATH="$(
   SUMMARY_VM="$VM_NAME" \
