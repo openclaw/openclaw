@@ -9,6 +9,60 @@ function trimOptional(value: string | undefined): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
+function normalizeUsageSnapshot(
+  usageSnapshot: CliSessionBinding["usageSnapshot"],
+): CliSessionBinding["usageSnapshot"] | undefined {
+  if (!usageSnapshot) {
+    return undefined;
+  }
+  const input =
+    typeof usageSnapshot.input === "number" &&
+    Number.isFinite(usageSnapshot.input) &&
+    usageSnapshot.input >= 0
+      ? usageSnapshot.input
+      : undefined;
+  const output =
+    typeof usageSnapshot.output === "number" &&
+    Number.isFinite(usageSnapshot.output) &&
+    usageSnapshot.output >= 0
+      ? usageSnapshot.output
+      : undefined;
+  const cacheRead =
+    typeof usageSnapshot.cacheRead === "number" &&
+    Number.isFinite(usageSnapshot.cacheRead) &&
+    usageSnapshot.cacheRead >= 0
+      ? usageSnapshot.cacheRead
+      : undefined;
+  const cacheWrite =
+    typeof usageSnapshot.cacheWrite === "number" &&
+    Number.isFinite(usageSnapshot.cacheWrite) &&
+    usageSnapshot.cacheWrite >= 0
+      ? usageSnapshot.cacheWrite
+      : undefined;
+  const total =
+    typeof usageSnapshot.total === "number" &&
+    Number.isFinite(usageSnapshot.total) &&
+    usageSnapshot.total >= 0
+      ? usageSnapshot.total
+      : undefined;
+  if (
+    input === undefined &&
+    output === undefined &&
+    cacheRead === undefined &&
+    cacheWrite === undefined &&
+    total === undefined
+  ) {
+    return undefined;
+  }
+  return {
+    ...(input !== undefined ? { input } : {}),
+    ...(output !== undefined ? { output } : {}),
+    ...(cacheRead !== undefined ? { cacheRead } : {}),
+    ...(cacheWrite !== undefined ? { cacheWrite } : {}),
+    ...(total !== undefined ? { total } : {}),
+  };
+}
+
 export function hashCliSessionText(value: string | undefined): string | undefined {
   const trimmed = trimOptional(value);
   if (!trimmed) {
@@ -56,6 +110,7 @@ export function getCliSessionBinding(
         fromBindings.semanticCompactionCount >= 0
           ? fromBindings.semanticCompactionCount
           : undefined,
+      usageSnapshot: normalizeUsageSnapshot(fromBindings?.usageSnapshot),
     };
   }
   const fromMap = entry.cliSessionIds?.[normalized];
@@ -89,6 +144,7 @@ export function setCliSessionBinding(
 ): void {
   const normalized = normalizeProviderId(provider);
   const trimmed = binding.sessionId.trim();
+  const usageSnapshot = normalizeUsageSnapshot(binding.usageSnapshot);
   if (!trimmed) {
     return;
   }
@@ -136,6 +192,7 @@ export function setCliSessionBinding(
             semanticCompactionCount: Math.floor(binding.semanticCompactionCount),
           }
         : {}),
+      ...(usageSnapshot ? { usageSnapshot } : {}),
     },
   };
   entry.cliSessionIds = { ...entry.cliSessionIds, [normalized]: trimmed };

@@ -81,6 +81,13 @@ export type CliSessionBinding = {
   semanticSessionFile?: string;
   semanticSessionHash?: string;
   semanticCompactionCount?: number;
+  usageSnapshot?: {
+    input?: number;
+    output?: number;
+    cacheRead?: number;
+    cacheWrite?: number;
+    total?: number;
+  };
 };
 
 export type CliPromptLoadStatus = {
@@ -348,13 +355,52 @@ export function mergeSessionEntryPreserveActivity(
 }
 
 export function resolveFreshSessionTotalTokens(
-  entry?: Pick<SessionEntry, "totalTokens" | "totalTokensFresh"> | null,
+  entry?: Pick<
+    SessionEntry,
+    | "totalTokens"
+    | "totalTokensFresh"
+    | "modelProvider"
+    | "cacheRead"
+    | "inputTokens"
+    | "contextTokens"
+  > | null,
 ): number | undefined {
   const total = entry?.totalTokens;
   if (typeof total !== "number" || !Number.isFinite(total) || total < 0) {
     return undefined;
   }
   if (entry?.totalTokensFresh === false) {
+    return undefined;
+  }
+  const provider = entry?.modelProvider?.trim().toLowerCase();
+  const cacheRead =
+    typeof entry?.cacheRead === "number" && Number.isFinite(entry.cacheRead) && entry.cacheRead >= 0
+      ? entry.cacheRead
+      : undefined;
+  const inputTokens =
+    typeof entry?.inputTokens === "number" &&
+    Number.isFinite(entry.inputTokens) &&
+    entry.inputTokens >= 0
+      ? entry.inputTokens
+      : undefined;
+  const contextTokens =
+    typeof entry?.contextTokens === "number" &&
+    Number.isFinite(entry.contextTokens) &&
+    entry.contextTokens > 0
+      ? entry.contextTokens
+      : undefined;
+  // Claude Code reused sessions report cumulative usage totals, not per-turn
+  // prompt size. Once those accumulated cache reads exceed the model context
+  // window, treat the stored total as stale so status/compaction surfaces do not
+  // display impossible 999% context usage.
+  if (
+    provider === "claude-cli" &&
+    typeof cacheRead === "number" &&
+    typeof contextTokens === "number" &&
+    total > contextTokens &&
+    cacheRead > contextTokens &&
+    cacheRead > Math.max(10_000, (inputTokens ?? 0) * 20)
+  ) {
     return undefined;
   }
   return total;

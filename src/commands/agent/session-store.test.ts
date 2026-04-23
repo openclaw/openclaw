@@ -124,4 +124,77 @@ describe("updateSessionStoreAfterAgentRun", () => {
       "once",
     );
   });
+
+  it("normalizes reused claude-cli cumulative usage back to per-turn deltas", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-store-"));
+    const storePath = path.join(dir, "sessions.json");
+    const sessionKey = `agent:builder:feishu:group:${randomUUID()}`;
+    const sessionId = randomUUID();
+
+    const sessionStore: Record<string, SessionEntry> = {
+      [sessionKey]: {
+        sessionId,
+        updatedAt: Date.now(),
+        modelProvider: "claude-cli",
+        model: "sonnet",
+        contextTokens: 200_000,
+        inputTokens: 20,
+        outputTokens: 4_052,
+        cacheRead: 2_047_725,
+        cacheWrite: 0,
+        totalTokens: 2_047_745,
+        totalTokensFresh: true,
+        cliSessionBindings: {
+          "claude-cli": {
+            sessionId: "claude-session-1",
+          },
+        },
+      },
+    };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf8");
+
+    await updateSessionStoreAfterAgentRun({
+      cfg: {} as never,
+      sessionId,
+      sessionKey,
+      storePath,
+      sessionStore,
+      defaultProvider: "claude-cli",
+      defaultModel: "sonnet",
+      result: {
+        payloads: [],
+        meta: {
+          aborted: false,
+          agentMeta: {
+            sessionId: "claude-session-1",
+            provider: "claude-cli",
+            model: "sonnet",
+            cliSessionBinding: {
+              sessionId: "claude-session-1",
+            },
+            usage: {
+              input: 25,
+              output: 4_200,
+              cacheRead: 2_049_000,
+              cacheWrite: 0,
+            },
+          },
+        },
+      } as never,
+    });
+
+    const persisted = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+    expect(persisted?.inputTokens).toBe(5);
+    expect(persisted?.outputTokens).toBe(148);
+    expect(persisted?.cacheRead).toBe(1_275);
+    expect(persisted?.cacheWrite).toBe(0);
+    expect(persisted?.totalTokens).toBe(1_280);
+    expect(persisted?.totalTokensFresh).toBe(true);
+    expect(persisted?.cliSessionBindings?.["claude-cli"]?.usageSnapshot).toEqual({
+      input: 25,
+      output: 4_200,
+      cacheRead: 2_049_000,
+      cacheWrite: 0,
+    });
+  });
 });

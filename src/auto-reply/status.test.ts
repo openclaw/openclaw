@@ -156,6 +156,37 @@ describe("buildStatusMessage", () => {
     expect(normalized).toContain("fallback=verification_retry");
   });
 
+  it("suppresses impossible cumulative claude-cli context totals", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "claude-cli/sonnet",
+      },
+      sessionEntry: {
+        sessionId: "claude-cumulative",
+        updatedAt: 0,
+        modelProvider: "claude-cli",
+        model: "sonnet",
+        inputTokens: 20,
+        outputTokens: 4052,
+        cacheRead: 2_047_725,
+        cacheWrite: 0,
+        totalTokens: 2_047_745,
+        totalTokensFresh: true,
+        contextTokens: 200_000,
+      },
+      sessionKey: "agent:builder:feishu:group:oc_test",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      now: 10 * 60_000,
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Tokens: 20 in / 4.1k out");
+    expect(normalized).toContain("Cache: 100% hit · 2.0m cached, 0 new");
+    expect(normalized).toContain("Context: 4.1k/200k (2%)");
+    expect(normalized).not.toContain("Context: 2.0m/200k");
+  });
+
   it("distinguishes configured model from last runtime model", () => {
     const text = buildStatusMessage({
       agent: {
