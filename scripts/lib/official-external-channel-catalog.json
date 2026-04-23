@@ -22,6 +22,29 @@
           "defaultChoice": "npm"
         }
       }
+    },
+    {
+      "name": "openclaw-plugin-yuanbao",
+      "description": "OpenClaw Yuanbao channel plugin by the Tencent Yuanbao team.",
+      "source": "external",
+      "kind": "channel",
+      "openclaw": {
+        "channel": {
+          "id": "yuanbao",
+          "label": "Yuanbao",
+          "selectionLabel": "Yuanbao (Tencent Yuanbao)",
+          "detailLabel": "Yuanbao",
+          "docsPath": "/plugins/community#yuanbao",
+          "docsLabel": "yuanbao",
+          "blurb": "Tencent Yuanbao AI assistant conversation channel.",
+          "aliases": ["yb", "tencent-yuanbao"],
+          "order": 78
+        },
+        "install": {
+          "npmSpec": "openclaw-plugin-yuanbao",
+          "defaultChoice": "npm"
+        }
+      }
     }
   ]
 }

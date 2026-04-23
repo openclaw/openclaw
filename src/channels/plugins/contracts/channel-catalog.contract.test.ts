@@ -42,3 +42,9 @@ describeChannelCatalogEntryContract({
   npmSpec: "@wecom/wecom-openclaw-plugin",
   alias: "wework",
 });
+
+describeChannelCatalogEntryContract({
+  channelId: "yuanbao",
+  npmSpec: "openclaw-plugin-yuanbao",
+  alias: "yb",
+});

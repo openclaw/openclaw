@@ -268,6 +268,71 @@ export function describeChannelPluginCatalogEntriesContract() {
           };
         },
       },
+      {
+        name: "accepts rich external manifest entries for yuanbao with pinned npm metadata",
+        setup: () => {
+          const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-catalog-yuanbao-"));
+          const catalogPath = path.join(dir, "catalog.json");
+          fs.writeFileSync(
+            catalogPath,
+            JSON.stringify({
+              $schema: "./manifest.schema.json",
+              schemaVersion: 1,
+              description:
+                "Extension manifest. Declares plugin packages that OpenClaw can discover during onboarding and install on demand via `openclaw plugins install`.",
+              entries: [
+                {
+                  name: "openclaw-plugin-yuanbao",
+                  description:
+                    "OpenClaw Yuanbao (元宝) channel plugin — community maintained, published on npm.",
+                  source: "external",
+                  kind: "channel",
+                  openclaw: {
+                    channel: {
+                      id: "yuanbao",
+                      label: "Yuanbao",
+                      selectionLabel: "Yuanbao (Tencent Yuanbao)",
+                      detailLabel: "Yuanbao",
+                      docsPath: "/channels/yuanbao",
+                      docsLabel: "yuanbao",
+                      blurb: "Tencent Yuanbao AI assistant conversation channel.",
+                      aliases: ["yb", "tencent-yuanbao"],
+                      order: 78,
+                    },
+                    install: {
+                      npmSpec: "openclaw-plugin-yuanbao@1.0.0",
+                      defaultChoice: "npm",
+                      minHostVersion: ">=2026.4.10",
+                      expectedIntegrity: "sha512-yuanbao",
+                    },
+                  },
+                },
+              ],
+            }),
+          );
+          return {
+            channelId: "yuanbao",
+            catalogPaths: [catalogPath],
+            expected: {
+              id: "yuanbao",
+              meta: {
+                label: "Yuanbao",
+                selectionLabel: "Yuanbao (Tencent Yuanbao)",
+                detailLabel: "Yuanbao",
+                docsPath: "/channels/yuanbao",
+                docsLabel: "yuanbao",
+                blurb: "Tencent Yuanbao AI assistant conversation channel.",
+              },
+              install: {
+                npmSpec: "openclaw-plugin-yuanbao@1.0.0",
+                defaultChoice: "npm",
+                minHostVersion: ">=2026.4.10",
+                expectedIntegrity: "sha512-yuanbao",
+              },
+            },
+          };
+        },
+      },
     ] as const)("$name", ({ setup }) => {
       const setupResult = setup();
       const { channelId, expected } = setupResult;

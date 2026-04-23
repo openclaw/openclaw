@@ -83,6 +83,19 @@ describe("buildOfficialChannelCatalog", () => {
             },
           }),
         }),
+        expect.objectContaining({
+          name: "openclaw-plugin-yuanbao",
+          openclaw: expect.objectContaining({
+            channel: expect.objectContaining({
+              id: "yuanbao",
+              label: "Yuanbao",
+            }),
+            install: {
+              npmSpec: "openclaw-plugin-yuanbao",
+              defaultChoice: "npm",
+            },
+          }),
+        }),
         {
           name: "@openclaw/whatsapp",
           version: "2026.3.23",
@@ -135,6 +148,9 @@ describe("buildOfficialChannelCatalog", () => {
       expect.arrayContaining([
         expect.objectContaining({
           name: "@wecom/wecom-openclaw-plugin",
+        }),
+        expect.objectContaining({
+          name: "openclaw-plugin-yuanbao",
         }),
         {
           name: "@openclaw/whatsapp",
