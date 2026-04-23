@@ -15,6 +15,7 @@ OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openwebui
 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:onboard
 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:npm-onboard-channel-agent
 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:gateway-network
+OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openai-web-search-minimal
 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:mcp-channels
 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:pi-bundle-mcp-tools
 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:cron-mcp-cleanup

@@ -101,6 +101,12 @@ Choose your preferred auth method and follow the setup steps.
         ```bash
         openclaw models auth login --provider openai-codex
         ```
+
+        For headless or callback-hostile setups, add `--device-code` to sign in with a ChatGPT device-code flow instead of the localhost browser callback:
+
+        ```bash
+        openclaw models auth login --provider openai-codex --device-code
+        ```
       </Step>
       <Step title="Set the default model">
         ```bash
@@ -133,9 +139,9 @@ Choose your preferred auth method and follow the setup steps.
     }
     ```
 
-    <Tip>
-    If onboarding reuses an existing Codex CLI login, those credentials stay managed by Codex CLI. On expiry, OpenClaw re-reads the external Codex source first and writes the refreshed credential back to Codex storage.
-    </Tip>
+    <Note>
+    Onboarding no longer imports OAuth material from `~/.codex`. Sign in with browser OAuth (default) or the device-code flow above — OpenClaw manages the resulting credentials in its own agent auth store.
+    </Note>
 
     ### Context window cap
 
@@ -560,6 +566,8 @@ provider), see the `azure-openai-responses/*` model refs in the
     ```
 
   </Accordion>
+
+<a id="openai-fast-mode"></a>
 
   <Accordion title="Fast mode">
     OpenClaw exposes a shared fast-mode toggle for both `openai/*` and `openai-codex/*`:

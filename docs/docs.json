@@ -1215,6 +1215,7 @@
                   "tools/btw",
                   "tools/code-execution",
                   "tools/diffs",
+                  "tools/trajectory",
                   "tools/elevated",
                   "tools/exec",
                   "tools/exec-approvals",

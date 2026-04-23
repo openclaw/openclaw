@@ -717,6 +717,82 @@ describe("openai transport stream", () => {
     expect(params.reasoning).toEqual({ effort: "low", summary: "auto" });
   });
 
+  it("raises minimal OpenAI Responses reasoning when web_search is available", () => {
+    const model = {
+      id: "gpt-5.4",
+      name: "GPT-5.4",
+      api: "openai-responses",
+      provider: "openai",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 8192,
+      compat: {
+        supportedReasoningEfforts: ["minimal", "low", "medium", "high"],
+      },
+    } satisfies Model<"openai-responses">;
+
+    const params = buildOpenAIResponsesParams(
+      model,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [
+          {
+            name: "web_search",
+            description: "Search the web",
+            parameters: { type: "object", properties: {}, additionalProperties: false },
+          },
+        ],
+      } as never,
+      {
+        reasoning: "minimal",
+      } as never,
+    ) as { reasoning?: unknown };
+
+    expect(params.reasoning).toEqual({ effort: "low", summary: "auto" });
+  });
+
+  it("keeps minimal OpenAI Responses reasoning without web_search", () => {
+    const model = {
+      id: "gpt-5.4",
+      name: "GPT-5.4",
+      api: "openai-responses",
+      provider: "openai",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 8192,
+      compat: {
+        supportedReasoningEfforts: ["minimal", "low", "medium", "high"],
+      },
+    } satisfies Model<"openai-responses">;
+
+    const params = buildOpenAIResponsesParams(
+      model,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [
+          {
+            name: "lookup_weather",
+            description: "Get forecast",
+            parameters: { type: "object", properties: {}, additionalProperties: false },
+          },
+        ],
+      } as never,
+      {
+        reasoning: "minimal",
+      } as never,
+    ) as { reasoning?: unknown };
+
+    expect(params.reasoning).toEqual({ effort: "minimal", summary: "auto" });
+  });
+
   it("maps low reasoning to medium for Codex mini responses models", () => {
     const params = buildOpenAIResponsesParams(
       {

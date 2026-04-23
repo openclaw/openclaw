@@ -219,6 +219,60 @@ describe("provider install catalog", () => {
     });
   });
 
+  it("exposes trusted registry npm specs without requiring an exact version or integrity pin", () => {
+    discoverOpenClawPlugins.mockReturnValue({
+      candidates: [
+        {
+          idHint: "vllm",
+          origin: "config",
+          rootDir: "/Users/test/.openclaw/extensions/vllm",
+          source: "/Users/test/.openclaw/extensions/vllm/index.js",
+          packageName: "@openclaw/vllm",
+          packageDir: "/Users/test/.openclaw/extensions/vllm",
+          packageManifest: {
+            install: {
+              npmSpec: "@openclaw/vllm",
+            },
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+    loadPluginManifest.mockReturnValue({
+      ok: true,
+      manifestPath: "/Users/test/.openclaw/extensions/vllm/openclaw.plugin.json",
+      manifest: {
+        id: "vllm",
+        configSchema: {
+          type: "object",
+        },
+      },
+    });
+    resolveManifestProviderAuthChoices.mockReturnValue([
+      {
+        pluginId: "vllm",
+        providerId: "vllm",
+        methodId: "server",
+        choiceId: "vllm",
+        choiceLabel: "vLLM",
+      },
+    ]);
+
+    expect(resolveProviderInstallCatalogEntry("vllm")).toEqual({
+      pluginId: "vllm",
+      providerId: "vllm",
+      methodId: "server",
+      choiceId: "vllm",
+      choiceLabel: "vLLM",
+      label: "vLLM",
+      origin: "config",
+      install: {
+        npmSpec: "@openclaw/vllm",
+        defaultChoice: "npm",
+      },
+    });
+  });
+
   it("does not expose npm install specs from untrusted package metadata", () => {
     discoverOpenClawPlugins.mockReturnValue({
       candidates: [

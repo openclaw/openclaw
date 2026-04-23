@@ -2493,6 +2493,8 @@ Notes:
 - File permissions are `0700` for directories and `0600` for files.
 - Cleanup follows the `cleanup` policy: `delete` always removes attachments; `keep` retains them only when `retainOnSessionKeep: true`.
 
+<a id="toolsexperimental"></a>
+
 ### `tools.experimental`
 
 Experimental built-in tool flags. Default off unless a strict-agentic GPT-5 auto-enable rule applies.
@@ -2891,7 +2893,7 @@ See [Local Models](/gateway/local-models). TL;DR: run a large local model via LM
     allow: ["voice-call"],
     deny: [],
     load: {
-      paths: ["~/Projects/oss/voice-call-extension"],
+      paths: ["~/Projects/oss/voice-call-plugin"],
     },
     entries: {
       "voice-call": {

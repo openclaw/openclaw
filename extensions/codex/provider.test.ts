@@ -91,6 +91,52 @@ describe("codex provider", () => {
     expectStaticFallbackCatalog(result);
   });
 
+  it("uses live plugin config to re-enable discovery after startup disable", async () => {
+    const listModels = vi.fn(async () => ({
+      models: [
+        {
+          id: "gpt-5.4",
+          model: "gpt-5.4",
+          displayName: "gpt-5.4",
+          hidden: false,
+          inputModalities: ["text", "image"],
+          supportedReasoningEfforts: ["low", "medium", "high", "xhigh"],
+        },
+      ],
+    }));
+    const provider = buildCodexProvider({
+      pluginConfig: { discovery: { enabled: false } },
+      listModels,
+    });
+
+    const result = await provider.catalog?.run({
+      config: {
+        plugins: {
+          entries: {
+            codex: {
+              config: {
+                discovery: {
+                  enabled: true,
+                  timeoutMs: 4321,
+                },
+              },
+            },
+          },
+        },
+      },
+      env: {},
+    } as never);
+
+    expect(listModels).toHaveBeenCalledWith(
+      expect.objectContaining({ limit: 100, timeoutMs: 4321, sharedClient: false }),
+    );
+    expect(result).toMatchObject({
+      provider: {
+        models: [{ id: "gpt-5.4" }],
+      },
+    });
+  });
+
   it("keeps a static fallback catalog when live discovery is explicitly disabled by env", async () => {
     const listModels = vi.fn();
 

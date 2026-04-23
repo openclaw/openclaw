@@ -162,11 +162,11 @@ Interactive onboarding also uses `openclaw.install` for install-on-demand
 surfaces. If your plugin exposes provider auth choices or channel setup/catalog
 metadata before runtime loads, onboarding can show that choice, prompt for npm
 vs local install, install or enable the plugin, then continue the selected
-flow. Npm onboarding choices require trusted catalog metadata with an exact
-`npmSpec` version and `expectedIntegrity`; unpinned package names and dist-tags
-are not offered for automatic onboarding installs. Keep the "what to show"
-metadata in `openclaw.plugin.json` and the "how to install it" metadata in
-`package.json`.
+flow. Npm onboarding choices require trusted catalog metadata with a registry
+`npmSpec`; exact versions and `expectedIntegrity` are optional pins. If
+`expectedIntegrity` is present, install/update flows enforce it. Keep the "what
+to show" metadata in `openclaw.plugin.json` and the "how to install it"
+metadata in `package.json`.
 
 If `minHostVersion` is set, install and manifest-registry loading both enforce
 it. Older hosts skip the plugin; invalid version strings are rejected.

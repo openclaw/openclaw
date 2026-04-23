@@ -745,6 +745,10 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
   </Accordion>
 
+  <Accordion title="Model picker authorization in groups">
+    Group model-picker inline buttons require the same authorization as `/models`. Unauthorized participants can browse and tap buttons, but OpenClaw rejects the callback before changing the session model.
+  </Accordion>
+
   <Accordion title="Long polling vs webhook">
     Default: long polling.
 
@@ -760,6 +764,8 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     If your public endpoint differs, place a reverse proxy in front and point `webhookUrl` at the public URL.
     Set `webhookHost` (for example `0.0.0.0`) when you intentionally need external ingress.
+
+    The grammY webhook callback returns a 200 within 5 seconds so Telegram does not retry long-running updates as read timeouts; longer work continues in the background. Polling rebuilds the HTTP transport after `getUpdates` 409 conflicts, so retries use a fresh TCP connection instead of looping on a Telegram-terminated keep-alive socket.
 
   </Accordion>
 

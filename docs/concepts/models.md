@@ -192,7 +192,8 @@ Shows configured models by default. Useful flags:
 
 - `--all`: full catalog
 - `--local`: local providers only
-- `--provider <name>`: filter by provider
+- `--provider <id>`: filter by provider id, for example `moonshot`; display
+  labels from interactive pickers are not accepted
 - `--plain`: one model per line
 - `--json`: machine‑readable output
 
