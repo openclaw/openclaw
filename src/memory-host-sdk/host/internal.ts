@@ -92,15 +92,26 @@ function isAllowedMemoryFilePath(filePath: string, multimodal?: MemoryMultimodal
   );
 }
 
-async function walkDir(dir: string, files: string[], multimodal?: MemoryMultimodalSettings) {
+async function walkDir(
+  dir: string,
+  files: string[],
+  multimodal?: MemoryMultimodalSettings,
+  shouldSkipPath?: (absPath: string) => boolean,
+) {
   const entries = await fs.readdir(dir, { withFileTypes: true });
   for (const entry of entries) {
     const full = path.join(dir, entry.name);
+    if (shouldSkipPath?.(full)) {
+      continue;
+    }
     if (entry.isSymbolicLink()) {
       continue;
     }
     if (entry.isDirectory()) {
-      await walkDir(full, files, multimodal);
+      if (entry.name === ".openclaw-repair") {
+        continue;
+      }
+      await walkDir(full, files, multimodal, shouldSkipPath);
       continue;
     }
     if (!entry.isFile()) {
@@ -123,6 +134,24 @@ export async function listMemoryFiles(
   const altMemoryFile = path.join(workspaceDir, "memory.md");
   const memoryDir = path.join(workspaceDir, "memory");
 
+  const shouldSkipWorkspaceMemoryPath = (absPath: string): boolean => {
+    const relative = path.relative(workspaceDir, absPath);
+    if (relative.startsWith("..") || path.isAbsolute(relative)) {
+      return false;
+    }
+    const normalized = relative.replace(/\\/g, "/");
+    if (!normalized) {
+      return false;
+    }
+    if (normalized === "memory.md" && result.includes(memoryFile)) {
+      return true;
+    }
+    return (
+      normalized === ".openclaw-repair/root-memory" ||
+      normalized.startsWith(".openclaw-repair/root-memory/")
+    );
+  };
+
   const addMarkdownFile = async (absPath: string) => {
     try {
       const stat = await fs.lstat(absPath);
@@ -143,20 +172,23 @@ export async function listMemoryFiles(
   try {
     const dirStat = await fs.lstat(memoryDir);
     if (!dirStat.isSymbolicLink() && dirStat.isDirectory()) {
-      await walkDir(memoryDir, result);
+      await walkDir(memoryDir, result, multimodal, shouldSkipWorkspaceMemoryPath);
     }
   } catch {}
 
   const normalizedExtraPaths = normalizeExtraMemoryPaths(workspaceDir, extraPaths);
   if (normalizedExtraPaths.length > 0) {
     for (const inputPath of normalizedExtraPaths) {
+      if (shouldSkipWorkspaceMemoryPath(inputPath)) {
+        continue;
+      }
       try {
         const stat = await fs.lstat(inputPath);
         if (stat.isSymbolicLink()) {
           continue;
         }
         if (stat.isDirectory()) {
-          await walkDir(inputPath, result, multimodal);
+          await walkDir(inputPath, result, multimodal, shouldSkipWorkspaceMemoryPath);
           continue;
         }
         if (stat.isFile() && isAllowedMemoryFilePath(inputPath, multimodal)) {

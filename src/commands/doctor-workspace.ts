@@ -166,7 +166,7 @@ function buildRootMemoryRepairDir(workspaceDir: string): string {
   return path.join(workspaceDir, ".openclaw-repair", "root-memory");
 }
 
-async function archiveLegacyRootMemoryFile(params: {
+async function moveLegacyRootMemoryFileToArchive(params: {
   workspaceDir: string;
   legacyPath: string;
 }): Promise<string> {
@@ -178,7 +178,15 @@ async function archiveLegacyRootMemoryFile(params: {
   );
   await fs.promises.mkdir(archiveDir, { recursive: true });
   const archivePath = path.join(archiveDir, "memory.md");
-  await fs.promises.copyFile(params.legacyPath, archivePath);
+  try {
+    await fs.promises.rename(params.legacyPath, archivePath);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException | undefined)?.code !== "EXDEV") {
+      throw err;
+    }
+    await fs.promises.copyFile(params.legacyPath, archivePath);
+    await fs.promises.unlink(params.legacyPath);
+  }
   return archivePath;
 }
 
@@ -212,13 +220,13 @@ export async function migrateLegacyRootMemoryFile(
     };
   }
   if (detection.canonicalExists) {
-    const archivedLegacyPath = await archiveLegacyRootMemoryFile({
+    const archivedLegacyPath = await moveLegacyRootMemoryFileToArchive({
       workspaceDir: detection.workspaceDir,
       legacyPath: detection.legacyPath,
     });
     const [canonicalText, legacyText] = await Promise.all([
       fs.promises.readFile(detection.canonicalPath, "utf-8"),
-      fs.promises.readFile(detection.legacyPath, "utf-8"),
+      fs.promises.readFile(archivedLegacyPath, "utf-8"),
     ]);
     if (canonicalText !== legacyText) {
       const merged = `${canonicalText.trimEnd()}\n${buildMergedLegacyRootMemorySection({
@@ -227,7 +235,6 @@ export async function migrateLegacyRootMemoryFile(
       })}`;
       await fs.promises.writeFile(detection.canonicalPath, merged, "utf-8");
     }
-    await fs.promises.unlink(detection.legacyPath).catch(() => undefined);
     return {
       changed: true,
       canonicalPath: detection.canonicalPath,
