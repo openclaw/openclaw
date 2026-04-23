@@ -6,7 +6,6 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
-- QA/Telegram: record per-scenario reply RTT in the live Telegram QA report and summary, starting with the canary response. (#70550) Thanks @obviyus.
 - Providers/xAI: add image generation, text-to-speech, and speech-to-text support, including `grok-imagine-image` / `grok-imagine-image-pro`, reference-image edits, six live xAI voices, MP3/WAV/PCM/G.711 TTS formats, `grok-stt` audio transcription, and xAI realtime transcription for Voice Call streaming. (#68694) Thanks @KateWilkins.
 - Providers/STT: add Voice Call streaming transcription for Deepgram, ElevenLabs, and Mistral, alongside the existing OpenAI and xAI realtime STT paths; ElevenLabs also gains Scribe v2 batch audio transcription for inbound media.
 - TUI: add local embedded mode for running terminal chats without a Gateway while keeping plugin approval gates enforced. (#66767) Thanks @fuller-stack-dev.
@@ -38,6 +37,7 @@ Docs: https://docs.openclaw.ai
 - Codex harness/hooks: route native Codex app-server turns through `before_prompt_build` and emit `before_compaction` / `after_compaction` for native compaction items so prompt and compaction hooks stop drifting from Pi. Thanks @vincentkoc.
 - Codex harness/plugins: add a bundled-plugin Codex app-server extension seam for async `tool_result` middleware, fire `after_tool_call` for Codex tool runs, and route mirrored Codex transcript writes through `before_message_write` so tool integrations stop diverging from Pi. Thanks @vincentkoc.
 - Codex harness/hooks: fire `llm_input`, `llm_output`, and `agent_end` for native Codex app-server turns so lifecycle hooks stop drifting from Pi. Thanks @vincentkoc.
+- QA/Telegram: record per-scenario reply RTT in the live Telegram QA report and summary, starting with the canary response. (#70550) Thanks @obviyus.
 
 ### Fixes
 
