@@ -1,5 +1,7 @@
 import {
   embeddedAgentLog,
+  isActiveHarnessContextEngine,
+  runHarnessContextEngineMaintenance,
   type CompactEmbeddedPiSessionParams,
   type EmbeddedPiCompactResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -27,6 +29,52 @@ const DEFAULT_CODEX_COMPACTION_WAIT_TIMEOUT_MS = 5 * 60 * 1000;
 let clientFactory = defaultCodexAppServerClientFactory;
 
 export async function maybeCompactCodexAppServerSession(
+  params: CompactEmbeddedPiSessionParams,
+  options: { pluginConfig?: unknown } = {},
+): Promise<EmbeddedPiCompactResult | undefined> {
+  const activeContextEngine = isActiveHarnessContextEngine(params.contextEngine)
+    ? params.contextEngine
+    : undefined;
+  if (activeContextEngine?.info.ownsCompaction) {
+    const primary = await activeContextEngine.compact({
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      sessionFile: params.sessionFile,
+      tokenBudget: params.contextTokenBudget,
+      currentTokenCount: params.currentTokenCount,
+      compactionTarget: params.trigger === "manual" ? "threshold" : "budget",
+      customInstructions: params.customInstructions,
+      force: params.trigger === "manual",
+    });
+    if (primary.ok && primary.compacted) {
+      await runHarnessContextEngineMaintenance({
+        contextEngine: activeContextEngine,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        sessionFile: params.sessionFile,
+        reason: "compaction",
+      });
+    }
+    const nativeResult = await compactCodexNativeThread(params, options);
+    return {
+      ok: primary.ok,
+      compacted: primary.compacted,
+      reason: primary.reason,
+      result: primary.result
+        ? {
+            summary: primary.result.summary ?? "",
+            firstKeptEntryId: primary.result.firstKeptEntryId ?? "",
+            tokensBefore: primary.result.tokensBefore,
+            tokensAfter: primary.result.tokensAfter,
+            details: mergeCompactionDetails(primary.result.details, nativeResult),
+          }
+        : undefined,
+    };
+  }
+  return await compactCodexNativeThread(params, options);
+}
+
+async function compactCodexNativeThread(
   params: CompactEmbeddedPiSessionParams,
   options: { pluginConfig?: unknown } = {},
 ): Promise<EmbeddedPiCompactResult | undefined> {
@@ -84,6 +132,7 @@ export async function maybeCompactCodexAppServerSession(
       tokensBefore: params.currentTokenCount ?? 0,
       details: {
         backend: "codex-app-server",
+        ownsCompaction: params.contextEngine?.info?.ownsCompaction === true,
         threadId: binding.threadId,
         signal: completion.signal,
         turnId: completion.turnId,
@@ -91,6 +140,24 @@ export async function maybeCompactCodexAppServerSession(
       },
     },
   };
+}
+
+function mergeCompactionDetails(
+  primaryDetails: unknown,
+  nativeResult: EmbeddedPiCompactResult | undefined,
+): unknown {
+  const codexNativeCompaction = nativeResult
+    ? nativeResult.ok && nativeResult.compacted
+      ? { ok: true, compacted: true, details: nativeResult.result?.details }
+      : { ok: false, compacted: false, reason: nativeResult.reason }
+    : undefined;
+  if (primaryDetails && typeof primaryDetails === "object" && !Array.isArray(primaryDetails)) {
+    return {
+      ...(primaryDetails as Record<string, unknown>),
+      ...(codexNativeCompaction ? { codexNativeCompaction } : {}),
+    };
+  }
+  return codexNativeCompaction ? { codexNativeCompaction } : primaryDetails;
 }
 
 function createCodexNativeCompactionWaiter(

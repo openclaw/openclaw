@@ -40,8 +40,49 @@ import type { EmbeddedPiCompactResult } from "./types.js";
 export async function compactEmbeddedPiSession(
   params: CompactEmbeddedPiSessionParams,
 ): Promise<EmbeddedPiCompactResult> {
-  const harnessResult = await maybeCompactAgentHarnessSession(params);
+  ensureRuntimePluginsLoaded({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
+  });
+  ensureContextEnginesInitialized();
+  const contextEngine = await resolveContextEngine(params.config);
+  let contextTokenBudget = params.contextTokenBudget;
+  if (!contextTokenBudget || !Number.isFinite(contextTokenBudget) || contextTokenBudget <= 0) {
+    const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
+    const resolvedCompactionTarget = resolveEmbeddedCompactionTarget({
+      config: params.config,
+      provider: params.provider,
+      modelId: params.model,
+      authProfileId: params.authProfileId,
+      defaultProvider: DEFAULT_PROVIDER,
+      defaultModel: DEFAULT_MODEL,
+    });
+    const ceProvider = resolvedCompactionTarget.provider ?? DEFAULT_PROVIDER;
+    const ceModelId = resolvedCompactionTarget.model ?? DEFAULT_MODEL;
+    const { model: ceModel } = await resolveModelAsync(
+      ceProvider,
+      ceModelId,
+      agentDir,
+      params.config,
+    );
+    const ceRuntimeModel = ceModel as ProviderRuntimeModel | undefined;
+    contextTokenBudget = resolveContextWindowInfo({
+      cfg: params.config,
+      provider: ceProvider,
+      modelId: ceModelId,
+      modelContextTokens: readPiModelContextTokens(ceModel),
+      modelContextWindow: ceRuntimeModel?.contextWindow,
+      defaultTokens: DEFAULT_CONTEXT_TOKENS,
+    }).tokens;
+  }
+  const harnessResult = await maybeCompactAgentHarnessSession({
+    ...params,
+    contextEngine,
+    contextTokenBudget,
+  });
   if (harnessResult) {
+    await contextEngine.dispose?.();
     return harnessResult;
   }
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
@@ -50,44 +91,10 @@ export async function compactEmbeddedPiSession(
     params.enqueue ?? ((task, opts) => enqueueCommandInLane(globalLane, task, opts));
   return enqueueCommandInLane(sessionLane, () =>
     enqueueGlobal(async () => {
-      ensureRuntimePluginsLoaded({
-        config: params.config,
-        workspaceDir: params.workspaceDir,
-        allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
-      });
-      ensureContextEnginesInitialized();
-      const contextEngine = await resolveContextEngine(params.config);
       let checkpointSnapshot: CapturedCompactionCheckpointSnapshot | null = null;
       let checkpointSnapshotRetained = false;
       try {
         const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
-        const resolvedCompactionTarget = resolveEmbeddedCompactionTarget({
-          config: params.config,
-          provider: params.provider,
-          modelId: params.model,
-          authProfileId: params.authProfileId,
-          defaultProvider: DEFAULT_PROVIDER,
-          defaultModel: DEFAULT_MODEL,
-        });
-        // Resolve token budget from the effective compaction model so engine-
-        // owned /compact implementations see the same target as the runtime.
-        const ceProvider = resolvedCompactionTarget.provider ?? DEFAULT_PROVIDER;
-        const ceModelId = resolvedCompactionTarget.model ?? DEFAULT_MODEL;
-        const { model: ceModel } = await resolveModelAsync(
-          ceProvider,
-          ceModelId,
-          agentDir,
-          params.config,
-        );
-        const ceRuntimeModel = ceModel as ProviderRuntimeModel | undefined;
-        const ceCtxInfo = resolveContextWindowInfo({
-          cfg: params.config,
-          provider: ceProvider,
-          modelId: ceModelId,
-          modelContextTokens: readPiModelContextTokens(ceModel),
-          modelContextWindow: ceRuntimeModel?.contextWindow,
-          defaultTokens: DEFAULT_CONTEXT_TOKENS,
-        });
         // When the context engine owns compaction, its compact() implementation
         // bypasses compactEmbeddedPiSessionDirect (which fires the hooks internally).
         // Fire before_compaction / after_compaction hooks here so plugin subscribers
@@ -163,7 +170,7 @@ export async function compactEmbeddedPiSession(
           sessionId: params.sessionId,
           sessionKey: params.sessionKey,
           sessionFile: params.sessionFile,
-          tokenBudget: ceCtxInfo.tokens,
+          tokenBudget: contextTokenBudget,
           currentTokenCount: params.currentTokenCount,
           compactionTarget: params.trigger === "manual" ? "threshold" : "budget",
           customInstructions: params.customInstructions,
