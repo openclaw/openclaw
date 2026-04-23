@@ -666,6 +666,39 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("Deprecated");
   });
 
+  it("does not strip triple-tilde fenced code blocks", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      contextFiles: [
+        {
+          path: "AGENTS.md",
+          content: "Keep this\n~~~text\ncode block content\n~~~\nAnd this",
+        },
+      ],
+    });
+
+    expect(prompt).toContain("Keep this");
+    expect(prompt).toContain("code block content");
+    expect(prompt).toContain("And this");
+  });
+
+  it("strips HTML strikethrough tags with attributes", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      contextFiles: [
+        {
+          path: "AGENTS.md",
+          content: 'Keep this\n<s class="deprecated">old text</s>\n<del style="color:red">removed</del>\nAnd this',
+        },
+      ],
+    });
+
+    expect(prompt).toContain("Keep this");
+    expect(prompt).toContain("And this");
+    expect(prompt).not.toContain("old text");
+    expect(prompt).not.toContain("removed");
+  });
+
   it("summarizes the message tool when available", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

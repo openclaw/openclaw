@@ -76,10 +76,11 @@ function sanitizeContextFileContentForPrompt(content: string): string {
   // Remove deprecated/struck-through text entirely — strikethrough in bootstrap
   // files signals content that has been removed, so it must not be forwarded to
   // the model (it wastes tokens and can confuse the model with stale instructions).
-  result = result.replace(/~~[\s\S]+?~~/g, "");
-  result = result.replace(/<s>[\s\S]+?<\/s>/gi, "");
-  result = result.replace(/<del>[\s\S]+?<\/del>/gi, "");
-  result = result.replace(/<strike>[\s\S]+?<\/strike>/gi, "");
+  // (?!~) and (?<!~) prevent matching triple-tilde fenced code blocks (~~~).
+  result = result.replace(/~~(?!~)[\s\S]+?(?<!~)~~/g, "");
+  result = result.replace(/<s(?:\s[^>]*)?>[\s\S]+?<\/s>/gi, "");
+  result = result.replace(/<del(?:\s[^>]*)?>[\s\S]+?<\/del>/gi, "");
+  result = result.replace(/<strike(?:\s[^>]*)?>[\s\S]+?<\/strike>/gi, "");
 
   return result.replace(/\n{3,}/g, "\n\n");
 }
