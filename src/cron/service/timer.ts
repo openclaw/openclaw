@@ -92,7 +92,7 @@ export async function executeJobCoreWithTimeout(
     return await Promise.race([
       executeJobCore(state, job, runAbortController.signal).then((result) => {
         if (timedOut) {
-          return
+          return; // Promise.race already settled — discard silently
         }
         return result;
       }),
