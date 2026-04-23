@@ -109,6 +109,8 @@ Set these on the gateway host if you prefer env vars:
 
 Env vars apply only to the **default** account (`default`). Other accounts must use config values.
 
+`MATTERMOST_URL` cannot be set from a workspace `.env`; see [Workspace `.env` files](/gateway/security).
+
 ## Chat modes
 
 Mattermost responds to DMs automatically. Channel behavior is controlled by `chatmode`:

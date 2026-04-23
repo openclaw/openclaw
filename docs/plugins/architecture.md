@@ -478,6 +478,10 @@ Important trust note:
 - A workspace plugin with the same id as a bundled plugin intentionally shadows
   the bundled copy when that workspace plugin is enabled/allowlisted.
 - This is normal and useful for local development, patch testing, and hotfixes.
+- Bundled-plugin trust is resolved from the source snapshot — the manifest and
+  code on disk at load time — rather than from install metadata. A corrupted
+  or substituted install record cannot silently widen a bundled plugin's trust
+  surface beyond what the actual source claims.
 
 ## Export boundary
 
@@ -507,8 +511,9 @@ At startup, OpenClaw does roughly this:
 4. normalize plugin config (`plugins.enabled`, `allow`, `deny`, `entries`,
    `slots`, `load.paths`)
 5. decide enablement for each candidate
-6. load enabled native modules via jiti
-7. call native `register(api)` (or `activate(api)` — a legacy alias) hooks and collect registrations into the plugin registry
+6. load enabled native modules: built bundled modules use a native loader;
+   unbuilt native plugins use jiti
+7. call native `register(api)` hooks and collect registrations into the plugin registry
 8. expose the registry to commands/runtime surfaces
 
 <Note>
@@ -804,115 +809,33 @@ api.registerProvider({
 
 ### Built-in examples
 
-- Anthropic uses `resolveDynamicModel`, `capabilities`, `buildAuthDoctorHint`,
-  `resolveUsageAuth`, `fetchUsageSnapshot`, `isCacheTtlEligible`,
-  `resolveThinkingProfile`, `applyConfigDefaults`, `isModernModelRef`,
-  and `wrapStreamFn` because it owns Claude 4.6 forward-compat,
-  provider-family hints, auth repair guidance, usage endpoint integration,
-  prompt-cache eligibility, auth-aware config defaults, Claude
-  default/adaptive thinking policy, and Anthropic-specific stream shaping for
-  beta headers, `/fast` / `serviceTier`, and `context1m`.
-- Anthropic's Claude-specific stream helpers stay in the bundled plugin's own
-  public `api.ts` / `contract-api.ts` seam for now. That package surface
-  exports `wrapAnthropicProviderStream`, `resolveAnthropicBetas`,
-  `resolveAnthropicFastMode`, `resolveAnthropicServiceTier`, and the lower-level
-  Anthropic wrapper builders instead of widening the generic SDK around one
-  provider's beta-header rules.
-- OpenAI uses `resolveDynamicModel`, `normalizeResolvedModel`, and
-  `capabilities` plus `buildMissingAuthMessage`, `suppressBuiltInModel`,
-  `augmentModelCatalog`, `resolveThinkingProfile`, and `isModernModelRef`
-  because it owns GPT-5.4 forward-compat, the direct OpenAI
-  `openai-completions` -> `openai-responses` normalization, Codex-aware auth
-  hints, Spark suppression, synthetic OpenAI list rows, and GPT-5 thinking /
-  live-model policy; the `openai-responses-defaults` stream family owns the
-  shared native OpenAI Responses wrappers for attribution headers,
-  `/fast`/`serviceTier`, text verbosity, native Codex web search,
-  reasoning-compat payload shaping, and Responses context management.
-- OpenRouter uses `catalog` plus `resolveDynamicModel` and
-  `prepareDynamicModel` because the provider is pass-through and may expose new
-  model ids before OpenClaw's static catalog updates; it also uses
-  `capabilities`, `wrapStreamFn`, and `isCacheTtlEligible` to keep
-  provider-specific request headers, routing metadata, reasoning patches, and
-  prompt-cache policy out of core. Its replay policy comes from the
-  `passthrough-gemini` family, while the `openrouter-thinking` stream family
-  owns proxy reasoning injection and the unsupported-model / `auto` skips.
-- GitHub Copilot uses `catalog`, `auth`, `resolveDynamicModel`, and
-  `capabilities` plus `prepareRuntimeAuth` and `fetchUsageSnapshot` because it
-  needs provider-owned device login, model fallback behavior, Claude transcript
-  quirks, a GitHub token -> Copilot token exchange, and a provider-owned usage
-  endpoint.
-- OpenAI Codex uses `catalog`, `resolveDynamicModel`,
-  `normalizeResolvedModel`, `refreshOAuth`, and `augmentModelCatalog` plus
-  `prepareExtraParams`, `resolveUsageAuth`, and `fetchUsageSnapshot` because it
-  still runs on core OpenAI transports but owns its transport/base URL
-  normalization, OAuth refresh fallback policy, default transport choice,
-  synthetic Codex catalog rows, and ChatGPT usage endpoint integration; it
-  shares the same `openai-responses-defaults` stream family as direct OpenAI.
-- Google AI Studio and Gemini CLI OAuth use `resolveDynamicModel`,
-  `buildReplayPolicy`, `sanitizeReplayHistory`,
-  `resolveReasoningOutputMode`, `wrapStreamFn`, and `isModernModelRef` because the
-  `google-gemini` replay family owns Gemini 3.1 forward-compat fallback,
-  native Gemini replay validation, bootstrap replay sanitation, tagged
-  reasoning-output mode, and modern-model matching, while the
-  `google-thinking` stream family owns Gemini thinking payload normalization;
-  Gemini CLI OAuth also uses `formatApiKey`, `resolveUsageAuth`, and
-  `fetchUsageSnapshot` for token formatting, token parsing, and quota endpoint
-  wiring.
-- Anthropic Vertex uses `buildReplayPolicy` through the
-  `anthropic-by-model` replay family so Claude-specific replay cleanup stays
-  scoped to Claude ids instead of every `anthropic-messages` transport.
-- Amazon Bedrock uses `buildReplayPolicy`, `matchesContextOverflowError`,
-  `classifyFailoverReason`, and `resolveThinkingProfile` because it owns
-  Bedrock-specific throttle/not-ready/context-overflow error classification
-  for Anthropic-on-Bedrock traffic; its replay policy still shares the same
-  Claude-only `anthropic-by-model` guard.
-- OpenRouter, Kilocode, Opencode, and Opencode Go use `buildReplayPolicy`
-  through the `passthrough-gemini` replay family because they proxy Gemini
-  models through OpenAI-compatible transports and need Gemini
-  thought-signature sanitation without native Gemini replay validation or
-  bootstrap rewrites.
-- MiniMax uses `buildReplayPolicy` through the
-  `hybrid-anthropic-openai` replay family because one provider owns both
-  Anthropic-message and OpenAI-compatible semantics; it keeps Claude-only
-  thinking-block dropping on the Anthropic side while overriding reasoning
-  output mode back to native, and the `minimax-fast-mode` stream family owns
-  fast-mode model rewrites on the shared stream path.
-- Moonshot uses `catalog`, `resolveThinkingProfile`, and `wrapStreamFn` because it still uses the shared
-  OpenAI transport but needs provider-owned thinking payload normalization; the
-  `moonshot-thinking` stream family maps config plus `/think` state onto its
-  native binary thinking payload.
-- Kilocode uses `catalog`, `capabilities`, `wrapStreamFn`, and
-  `isCacheTtlEligible` because it needs provider-owned request headers,
-  reasoning payload normalization, Gemini transcript hints, and Anthropic
-  cache-TTL gating; the `kilocode-thinking` stream family keeps Kilo thinking
-  injection on the shared proxy stream path while skipping `kilo/auto` and
-  other proxy model ids that do not support explicit reasoning payloads.
-- Z.AI uses `resolveDynamicModel`, `prepareExtraParams`, `wrapStreamFn`,
-  `isCacheTtlEligible`, `resolveThinkingProfile`, `isModernModelRef`,
-  `resolveUsageAuth`, and `fetchUsageSnapshot` because it owns GLM-5 fallback,
-  `tool_stream` defaults, binary thinking UX, modern-model matching, and both
-  usage auth + quota fetching; the `tool-stream-default-on` stream family keeps
-  the default-on `tool_stream` wrapper out of per-provider handwritten glue.
-- xAI uses `normalizeResolvedModel`, `normalizeTransport`,
-  `contributeResolvedModelCompat`, `prepareExtraParams`, `wrapStreamFn`,
-  `resolveSyntheticAuth`, `resolveDynamicModel`, and `isModernModelRef`
-  because it owns native xAI Responses transport normalization, Grok fast-mode
-  alias rewrites, default `tool_stream`, strict-tool / reasoning-payload
-  cleanup, fallback auth reuse for plugin-owned tools, forward-compat Grok
-  model resolution, and provider-owned compat patches such as xAI tool-schema
-  profile, unsupported schema keywords, native `web_search`, and HTML-entity
-  tool-call argument decoding.
-- Mistral, OpenCode Zen, and OpenCode Go use `capabilities` only to keep
-  transcript/tooling quirks out of core.
-- Catalog-only bundled providers such as `byteplus`, `cloudflare-ai-gateway`,
-  `huggingface`, `kimi-coding`, `nvidia`, `qianfan`,
-  `synthetic`, `together`, `venice`, `vercel-ai-gateway`, and `volcengine` use
-  `catalog` only.
-- Qwen uses `catalog` for its text provider plus shared media-understanding and
-  video-generation registrations for its multimodal surfaces.
-- MiniMax and Xiaomi use `catalog` plus usage hooks because their `/usage`
-  behavior is plugin-owned even though inference still runs through the shared
-  transports.
+Bundled provider plugins use the hooks above in combinations tailored to each
+vendor's catalog, auth, thinking, replay, and usage-tracking needs. The exact
+hook set per provider lives with the plugin source under `extensions/`; treat
+that as the authoritative list rather than mirroring it here.
+
+Illustrative patterns:
+
+- **Pass-through catalog providers** (OpenRouter, Kilocode, Z.AI, xAI) register
+  `catalog` plus `resolveDynamicModel`/`prepareDynamicModel` so they can surface
+  upstream model ids ahead of OpenClaw's static catalog.
+- **OAuth + usage endpoint providers** (GitHub Copilot, Gemini CLI, ChatGPT
+  Codex, MiniMax, Xiaomi, z.ai) pair `prepareRuntimeAuth` or `formatApiKey`
+  with `resolveUsageAuth` + `fetchUsageSnapshot` to own token exchange and
+  `/usage` integration.
+- **Replay / transcript cleanup** is shared through named families:
+  `google-gemini`, `passthrough-gemini`, `anthropic-by-model`,
+  `hybrid-anthropic-openai`. Providers opt in through `buildReplayPolicy`
+  instead of each implementing transcript cleanup.
+- **Catalog-only** bundled providers (`byteplus`, `cloudflare-ai-gateway`,
+  `huggingface`, `kimi-coding`, `nvidia`, `qianfan`, `synthetic`, `together`,
+  `venice`, `vercel-ai-gateway`, `volcengine`) register just `catalog` and ride
+  the shared inference loop.
+- **Anthropic-specific stream helpers** (beta headers, `/fast`/`serviceTier`,
+  `context1m`) live inside the Anthropic bundled plugin's public `api.ts` /
+  `contract-api.ts` seam (`wrapAnthropicProviderStream`, `resolveAnthropicBetas`,
+  `resolveAnthropicFastMode`, `resolveAnthropicServiceTier`) rather than in the
+  generic SDK.
 
 ## Runtime helpers
 
@@ -1132,121 +1055,49 @@ Notes:
 
 ## Plugin SDK import paths
 
-Use SDK subpaths instead of the monolithic `openclaw/plugin-sdk` import when
-authoring plugins:
+Use narrow SDK subpaths instead of the monolithic `openclaw/plugin-sdk` root
+barrel when authoring new plugins. Core subpaths:
 
-- `openclaw/plugin-sdk/plugin-entry` for plugin registration primitives.
-- `openclaw/plugin-sdk/core` for the generic shared plugin-facing contract.
-- `openclaw/plugin-sdk/config-schema` for the root `openclaw.json` Zod schema
-  export (`OpenClawSchema`).
-- Stable channel primitives such as `openclaw/plugin-sdk/channel-setup`,
-  `openclaw/plugin-sdk/setup-runtime`,
-  `openclaw/plugin-sdk/setup-adapter-runtime`,
-  `openclaw/plugin-sdk/setup-tools`,
-  `openclaw/plugin-sdk/channel-pairing`,
-  `openclaw/plugin-sdk/channel-contract`,
-  `openclaw/plugin-sdk/channel-feedback`,
-  `openclaw/plugin-sdk/channel-inbound`,
-  `openclaw/plugin-sdk/channel-lifecycle`,
-  `openclaw/plugin-sdk/channel-reply-pipeline`,
-  `openclaw/plugin-sdk/command-auth`,
-  `openclaw/plugin-sdk/secret-input`, and
-  `openclaw/plugin-sdk/webhook-ingress` for shared setup/auth/reply/webhook
-  wiring. `channel-inbound` is the shared home for debounce, mention matching,
-  inbound mention-policy helpers, envelope formatting, and inbound envelope
-  context helpers.
-  `channel-setup` is the narrow optional-install setup seam.
-  `setup-runtime` is the runtime-safe setup surface used by `setupEntry` /
-  deferred startup, including the import-safe setup patch adapters.
-  `setup-adapter-runtime` is the env-aware account-setup adapter seam.
-  `setup-tools` is the small CLI/archive/docs helper seam (`formatCliCommand`,
-  `detectBinary`, `extractArchive`, `resolveBrewExecutable`, `formatDocsLink`,
-  `CONFIG_DIR`).
-- Domain subpaths such as `openclaw/plugin-sdk/channel-config-helpers`,
-  `openclaw/plugin-sdk/allow-from`,
-  `openclaw/plugin-sdk/channel-config-schema`,
-  `openclaw/plugin-sdk/telegram-command-config`,
-  `openclaw/plugin-sdk/channel-policy`,
-  `openclaw/plugin-sdk/approval-gateway-runtime`,
-  `openclaw/plugin-sdk/approval-handler-adapter-runtime`,
-  `openclaw/plugin-sdk/approval-handler-runtime`,
-  `openclaw/plugin-sdk/approval-runtime`,
-  `openclaw/plugin-sdk/config-runtime`,
-  `openclaw/plugin-sdk/infra-runtime`,
-  `openclaw/plugin-sdk/agent-runtime`,
-  `openclaw/plugin-sdk/lazy-runtime`,
-  `openclaw/plugin-sdk/reply-history`,
-  `openclaw/plugin-sdk/routing`,
-  `openclaw/plugin-sdk/status-helpers`,
-  `openclaw/plugin-sdk/text-runtime`,
-  `openclaw/plugin-sdk/runtime-store`, and
-  `openclaw/plugin-sdk/directory-runtime` for shared runtime/config helpers.
-  `telegram-command-config` is the narrow public seam for Telegram custom
-  command normalization/validation and stays available even if the bundled
-  Telegram contract surface is temporarily unavailable.
-  `text-runtime` is the shared text/markdown/logging seam, including
-  assistant-visible-text stripping, markdown render/chunking helpers, redaction
-  helpers, directive-tag helpers, and safe-text utilities.
-- Approval-specific channel seams should prefer one `approvalCapability`
-  contract on the plugin. Core then reads approval auth, delivery, render,
-  native-routing, and lazy native-handler behavior through that one capability
-  instead of mixing approval behavior into unrelated plugin fields.
-- `openclaw/plugin-sdk/channel-runtime` is deprecated and remains only as a
-  compatibility shim for older plugins. New code should import the narrower
-  generic primitives instead, and repo code should not add new imports of the
-  shim.
-- Bundled extension internals remain private. External plugins should use only
-  `openclaw/plugin-sdk/*` subpaths. OpenClaw core/test code may use the repo
-  public entry points under a plugin package root such as `index.js`, `api.js`,
-  `runtime-api.js`, `setup-entry.js`, and narrowly scoped files such as
-  `login-qr-api.js`. Never import a plugin package's `src/*` from core or from
-  another extension.
-- Repo entry point split:
-  `<plugin-package-root>/api.js` is the helper/types barrel,
-  `<plugin-package-root>/runtime-api.js` is the runtime-only barrel,
-  `<plugin-package-root>/index.js` is the bundled plugin entry,
-  and `<plugin-package-root>/setup-entry.js` is the setup plugin entry.
-- Current bundled provider examples:
-  - Anthropic uses `api.js` / `contract-api.js` for Claude stream helpers such
-    as `wrapAnthropicProviderStream`, beta-header helpers, and `service_tier`
-    parsing.
-  - OpenAI uses `api.js` for provider builders, default-model helpers, and
-    realtime provider builders.
-  - OpenRouter uses `api.js` for its provider builder plus onboarding/config
-    helpers, while `register.runtime.js` can still re-export generic
-    `plugin-sdk/provider-stream` helpers for repo-local use.
-- Facade-loaded public entry points prefer the active runtime config snapshot
-  when one exists, then fall back to the resolved config file on disk when
-  OpenClaw is not yet serving a runtime snapshot.
-- Generic shared primitives remain the preferred public SDK contract. A small
-  reserved compatibility set of bundled channel-branded helper seams still
-  exists. Treat those as bundled-maintenance/compatibility seams, not new
-  third-party import targets; new cross-channel contracts should still land on
-  generic `plugin-sdk/*` subpaths or the plugin-local `api.js` /
-  `runtime-api.js` barrels.
+| Subpath                             | Purpose                                            |
+| ----------------------------------- | -------------------------------------------------- |
+| `openclaw/plugin-sdk/plugin-entry`  | Plugin registration primitives                     |
+| `openclaw/plugin-sdk/channel-core`  | Channel entry/build helpers                        |
+| `openclaw/plugin-sdk/core`          | Generic shared helpers and umbrella contract       |
+| `openclaw/plugin-sdk/config-schema` | Root `openclaw.json` Zod schema (`OpenClawSchema`) |
 
-Compatibility note:
+Channel plugins pick from a family of narrow seams — `channel-setup`,
+`setup-runtime`, `setup-adapter-runtime`, `setup-tools`, `channel-pairing`,
+`channel-contract`, `channel-feedback`, `channel-inbound`, `channel-lifecycle`,
+`channel-reply-pipeline`, `command-auth`, `secret-input`, `webhook-ingress`,
+`channel-targets`, and `channel-actions`. Approval behavior should consolidate
+on one `approvalCapability` contract rather than mixing across unrelated
+plugin fields. See [Channel plugins](/plugins/sdk-channel-plugins).
 
-- Avoid the root `openclaw/plugin-sdk` barrel for new code.
-- Prefer the narrow stable primitives first. The newer setup/pairing/reply/
-  feedback/contract/inbound/threading/command/secret-input/webhook/infra/
-  allowlist/status/message-tool subpaths are the intended contract for new
-  bundled and external plugin work.
-  Target parsing/matching belongs on `openclaw/plugin-sdk/channel-targets`.
-  Message action gates and reaction message-id helpers belong on
-  `openclaw/plugin-sdk/channel-actions`.
-- Bundled extension-specific helper barrels are not stable by default. If a
-  helper is only needed by a bundled extension, keep it behind the extension's
-  local `api.js` or `runtime-api.js` seam instead of promoting it into
-  `openclaw/plugin-sdk/<extension>`.
-- New shared helper seams should be generic, not channel-branded. Shared target
-  parsing belongs on `openclaw/plugin-sdk/channel-targets`; channel-specific
-  internals stay behind the owning plugin's local `api.js` or `runtime-api.js`
-  seam.
-- Capability-specific subpaths such as `image-generation`,
-  `media-understanding`, and `speech` exist because bundled/native plugins use
-  them today. Their presence does not by itself mean every exported helper is a
-  long-term frozen external contract.
+Runtime and config helpers live under matching `*-runtime` subpaths
+(`approval-runtime`, `config-runtime`, `infra-runtime`, `agent-runtime`,
+`lazy-runtime`, `directory-runtime`, `text-runtime`, `runtime-store`, etc.).
+
+<Info>
+`openclaw/plugin-sdk/channel-runtime` is deprecated — a compatibility shim for
+older plugins. New code should import narrower generic primitives instead.
+</Info>
+
+Repo-internal entry points (per bundled plugin package root):
+
+- `index.js` — bundled plugin entry
+- `api.js` — helper/types barrel
+- `runtime-api.js` — runtime-only barrel
+- `setup-entry.js` — setup plugin entry
+
+External plugins should only import `openclaw/plugin-sdk/*` subpaths. Never
+import another plugin package's `src/*` from core or from another plugin.
+Facade-loaded entry points prefer the active runtime config snapshot when one
+exists, then fall back to the resolved config file on disk.
+
+Capability-specific subpaths such as `image-generation`, `media-understanding`,
+and `speech` exist because bundled plugins use them today. They are not
+automatically long-term frozen external contracts — check the relevant SDK
+reference page when relying on them.
 
 ## Message tool schemas
 

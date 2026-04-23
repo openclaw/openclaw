@@ -174,8 +174,6 @@ If you prefer explicit config instead of auto-discovery:
     }
     ```
 
-    Context-window metadata for discovered Mantle models uses known published limits when available and falls back conservatively for unlisted models, so compaction and overflow handling behave correctly for newer entries without overstating unknown models.
-
   </Accordion>
 
   <Accordion title="Relationship to Amazon Bedrock provider">

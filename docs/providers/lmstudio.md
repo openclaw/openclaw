@@ -104,9 +104,11 @@ Interactive setup can prompt for an optional preferred load context length and a
 
 ### Streaming usage compatibility
 
-OpenClaw marks LM Studio as streaming-usage compatible, so token accounting no longer degrades to unknown or stale totals on streamed completions. OpenClaw also recovers token counts from llama.cpp-style `timings.prompt_n` / `timings.predicted_n` metadata when LM Studio does not emit an OpenAI-shaped `usage` object.
+LM Studio is streaming-usage compatible. When it does not emit an OpenAI-shaped
+`usage` object, OpenClaw recovers token counts from llama.cpp-style
+`timings.prompt_n` / `timings.predicted_n` metadata instead.
 
-Other OpenAI-compatible local backends covered by the same behavior:
+Same behavior applies to these OpenAI-compatible local backends:
 
 - vLLM
 - SGLang

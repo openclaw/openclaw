@@ -268,6 +268,23 @@ describe("info command handlers", () => {
     );
   });
 
+  it("forwards resolved fast mode to /status", async () => {
+    const params = buildInfoParams("/status", {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig);
+    params.resolvedFastMode = true;
+
+    const statusResult = await handleStatusCommand(params, true);
+
+    expect(statusResult?.shouldContinue).toBe(false);
+    expect(vi.mocked(buildStatusReply)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        resolvedFastMode: true,
+      }),
+    );
+  });
+
   it("uses the canonical target session agent when listing /commands", async () => {
     const { handleCommandsListCommand } = await import("./commands-info.js");
     const params = buildInfoParams("/commands", {

@@ -9,7 +9,7 @@ import {
 import {
   getUpdatesMock,
   getZaloRuntimeMock,
-  loadLifecycleMonitorModule,
+  loadCachedLifecycleMonitorModule,
   resetLifecycleTestState,
   sendMessageMock,
 } from "../test-support/monitor-mocks-test-support.js";
@@ -40,7 +40,7 @@ describe("Zalo polling image handling", () => {
       })
       .mockImplementation(() => new Promise(() => {}));
 
-    const { monitorZaloProvider } = await loadLifecycleMonitorModule();
+    const { monitorZaloProvider } = await loadCachedLifecycleMonitorModule("zalo-image-polling");
     const abort = new AbortController();
     const runtime = createRuntimeEnv();
     const { account, config } = createLifecycleMonitorSetup({
@@ -79,7 +79,7 @@ describe("Zalo polling image handling", () => {
       })
       .mockImplementation(() => new Promise(() => {}));
 
-    const { monitorZaloProvider } = await loadLifecycleMonitorModule();
+    const { monitorZaloProvider } = await loadCachedLifecycleMonitorModule("zalo-image-polling");
     const abort = new AbortController();
     const runtime = createRuntimeEnv();
     const { account, config } = createLifecycleMonitorSetup({

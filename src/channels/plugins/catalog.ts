@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import officialExternalChannelCatalog from "../../../scripts/lib/official-external-channel-catalog.json" with { type: "json" };
 import { MANIFEST_KEY } from "../../compat/legacy-names.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 import { listChannelCatalogEntries } from "../../plugins/channel-catalog-registry.js";
@@ -162,7 +163,9 @@ function resolveOfficialCatalogPaths(options: CatalogOptions): string[] {
 }
 
 function loadOfficialCatalogEntries(options: CatalogOptions): ChannelPluginCatalogEntry[] {
-  return loadCatalogEntriesFromPaths(resolveOfficialCatalogPaths(options))
+  const builtInEntries = parseCatalogEntries(officialExternalChannelCatalog);
+  const fileEntries = loadCatalogEntriesFromPaths(resolveOfficialCatalogPaths(options));
+  return [...builtInEntries, ...fileEntries]
     .map((entry) => buildExternalCatalogEntry(entry))
     .filter((entry): entry is ChannelPluginCatalogEntry => Boolean(entry));
 }

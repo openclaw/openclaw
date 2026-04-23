@@ -13,6 +13,7 @@ Model discovery, scanning, and configuration (default model, fallbacks, auth pro
 Related:
 
 - Providers + models: [Models](/providers/models)
+- Model selection concepts + `/models` slash command: [Models concept](/concepts/models)
 - Provider auth setup: [Getting started](/start/getting-started)
 
 ## Common commands

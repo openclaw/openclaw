@@ -73,6 +73,40 @@ entry=dist/index.mjs
 [ -f "$entry" ] || entry=dist/index.js
 mkdir -p "$OPENCLAW_STATE_DIR"
 
+node --input-type=module <<'NODE'
+import { patchOpenAINativeWebSearchPayload } from "./dist/extensions/openai/native-web-search.js";
+
+const injectedPayload = {
+  reasoning: { effort: "minimal", summary: "auto" },
+};
+const injectedResult = patchOpenAINativeWebSearchPayload(injectedPayload);
+if (injectedResult !== "injected") {
+  throw new Error(`expected native web_search injection, got ${injectedResult}`);
+}
+if (injectedPayload.reasoning.effort !== "low") {
+  throw new Error(
+    `expected injected native web_search to raise minimal reasoning to low, got ${JSON.stringify(injectedPayload.reasoning)}`,
+  );
+}
+if (!injectedPayload.tools?.some((tool) => tool?.type === "web_search")) {
+  throw new Error(`native web_search was not injected: ${JSON.stringify(injectedPayload)}`);
+}
+
+const existingNativePayload = {
+  tools: [{ type: "web_search" }],
+  reasoning: { effort: "minimal" },
+};
+const existingResult = patchOpenAINativeWebSearchPayload(existingNativePayload);
+if (existingResult !== "native_tool_already_present") {
+  throw new Error(`expected existing native web_search, got ${existingResult}`);
+}
+if (existingNativePayload.reasoning.effort !== "low") {
+  throw new Error(
+    `expected existing native web_search to raise minimal reasoning to low, got ${JSON.stringify(existingNativePayload.reasoning)}`,
+  );
+}
+NODE
+
 cat >"$OPENCLAW_STATE_DIR/openclaw.json" <<JSON
 {
   "agents": {
@@ -302,34 +336,30 @@ for _ in $(seq 1 80); do
 done
 node -e "fetch('http://127.0.0.1:${MOCK_PORT}/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" >/dev/null
 
-node "$entry" gateway --port "$PORT" --bind lan --allow-unconfigured >"$GATEWAY_LOG" 2>&1 &
+node "$entry" gateway --port "$PORT" --bind loopback --allow-unconfigured >"$GATEWAY_LOG" 2>&1 &
 gateway_pid="$!"
 for _ in $(seq 1 360); do
   if ! kill -0 "$gateway_pid" 2>/dev/null; then
     echo "gateway exited before listening" >&2
     exit 1
   fi
-  if node --input-type=module -e "
-    import net from 'node:net';
-    const socket = net.createConnection({ host: '127.0.0.1', port: Number(process.env.PORT) });
-    const timeout = setTimeout(() => { socket.destroy(); process.exit(1); }, 400);
-    socket.on('connect', () => { clearTimeout(timeout); socket.end(); process.exit(0); });
-    socket.on('error', () => { clearTimeout(timeout); process.exit(1); });
-  " >/dev/null 2>&1; then
+  if node "$entry" gateway health \
+    --url "ws://127.0.0.1:$PORT" \
+    --token "$TOKEN" \
+    --json >/dev/null 2>&1; then
     break
   fi
   sleep 0.25
 done
-node --input-type=module -e "
-  import net from 'node:net';
-  const socket = net.createConnection({ host: '127.0.0.1', port: Number(process.env.PORT) });
-  const timeout = setTimeout(() => { socket.destroy(); process.exit(1); }, 1000);
-  socket.on('connect', () => { clearTimeout(timeout); socket.end(); process.exit(0); });
-  socket.on('error', () => { clearTimeout(timeout); process.exit(1); });
-" >/dev/null
+node "$entry" gateway health \
+  --url "ws://127.0.0.1:$PORT" \
+  --token "$TOKEN" \
+  --json >/dev/null
 
 cat >/tmp/openclaw-openai-web-search-minimal-client.mjs <<'NODE'
-const PROTOCOL_VERSION = 3;
+import { execFileSync } from "node:child_process";
+
+const entry = process.env.OPENCLAW_ENTRY;
 const port = process.env.PORT;
 const token = process.env.OPENCLAW_GATEWAY_TOKEN;
 const mode = process.argv[2];
@@ -339,91 +369,68 @@ const message =
     : "Return exactly OPENCLAW_SCHEMA_E2E_OK.";
 const id = mode === "reject" ? "schema-reject" : "schema-success";
 
-if (!port || !token) throw new Error("missing PORT/OPENCLAW_GATEWAY_TOKEN");
+if (!entry || !port || !token) throw new Error("missing OPENCLAW_ENTRY/PORT/OPENCLAW_GATEWAY_TOKEN");
 
-const ws = new WebSocket(`ws://127.0.0.1:${port}`);
-await new Promise((resolve, reject) => {
-  const t = setTimeout(() => reject(new Error("ws open timeout")), 5000);
-  ws.addEventListener("open", () => {
-    clearTimeout(t);
-    resolve();
-  }, { once: true });
-});
+const gatewayArgs = [
+  entry,
+  "gateway",
+  "call",
+  "--url",
+  `ws://127.0.0.1:${port}`,
+  "--token",
+  token,
+  "--timeout",
+  "120000",
+  "--json",
+];
 
-function onceFrame(filter, timeoutMs = 30000) {
-  return new Promise((resolve, reject) => {
-    const t = setTimeout(() => reject(new Error("timeout waiting for frame")), timeoutMs);
-    const handler = (event) => {
-      const obj = JSON.parse(String(event.data));
-      if (!filter(obj)) return;
-      clearTimeout(t);
-      ws.removeEventListener("message", handler);
-      resolve(obj);
+function gatewayCall(method, params) {
+  try {
+    return {
+      ok: true,
+      value: JSON.parse(execFileSync("node", [...gatewayArgs, method, "--params", JSON.stringify(params)], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      })),
     };
-    ws.addEventListener("message", handler);
-  });
+  } catch (error) {
+    const stderr = typeof error?.stderr === "string" ? error.stderr : "";
+    const stdout = typeof error?.stdout === "string" ? error.stdout : "";
+    const combined = [String(error), stderr.trim(), stdout.trim()].filter(Boolean).join("\n");
+    return { ok: false, error: new Error(combined) };
+  }
 }
 
-ws.send(JSON.stringify({
-  type: "req",
-  id: "connect",
-  method: "connect",
-  params: {
-    minProtocol: PROTOCOL_VERSION,
-    maxProtocol: PROTOCOL_VERSION,
-    client: {
-      id: "gateway-client",
-      displayName: `openai-web-search-minimal-${mode}`,
-      version: "dev",
-      platform: process.platform,
-      mode: "backend",
-    },
-    role: "operator",
-    scopes: ["operator.read", "operator.write", "operator.admin"],
-    caps: ["tool-events"],
-    auth: { token },
-  },
-}));
-const connectRes = await onceFrame((o) => o?.type === "res" && o?.id === "connect");
-if (!connectRes.ok) throw new Error(`connect failed: ${connectRes.error?.message ?? "unknown"}`);
-
-ws.send(JSON.stringify({
-  type: "req",
-  id,
-  method: "chat.send",
-  params: {
-    sessionKey: "agent:main:main",
-    message,
-    thinking: "minimal",
-    deliver: false,
-    timeoutMs: 30000,
-    idempotencyKey: id,
-  },
-}));
-const sendRes = await onceFrame((o) => o?.type === "res" && o?.id === id);
-if (!sendRes.ok) throw new Error(`chat.send failed: ${sendRes.error?.message ?? "unknown"}`);
+const sendRes = gatewayCall("chat.send", {
+  sessionKey: "agent:main:main",
+  message,
+  thinking: "minimal",
+  deliver: false,
+  timeoutMs: 120000,
+  idempotencyKey: id,
+});
 
 if (mode === "reject") {
-  ws.close();
+  if (!sendRes.ok) {
+    console.error(sendRes.error.message);
+  }
   process.exit(0);
 }
 
-const terminal = await onceFrame(
-  (o) =>
-    o?.type === "event" &&
-    o?.event === "chat" &&
-    o?.payload?.runId === id &&
-    (o?.payload?.state === "final" || o?.payload?.state === "error"),
-  45000,
-);
-ws.close();
+if (!sendRes.ok) throw sendRes.error;
 
-if (mode === "success" && terminal.payload?.state !== "final") {
-  throw new Error(`expected final success event, got ${JSON.stringify(terminal)}`);
+const deadline = Date.now() + 120000;
+while (Date.now() < deadline) {
+  const history = gatewayCall("chat.history", { sessionKey: "agent:main:main" });
+  if (history.ok && JSON.stringify(history.value).includes("OPENCLAW_SCHEMA_E2E_OK")) {
+    process.exit(0);
+  }
+  await new Promise((resolve) => setTimeout(resolve, 250));
 }
+throw new Error("timed out waiting for OPENCLAW_SCHEMA_E2E_OK in chat history");
 NODE
 
-PORT="$PORT" OPENCLAW_GATEWAY_TOKEN="$TOKEN" node /tmp/openclaw-openai-web-search-minimal-client.mjs success >/tmp/openclaw-openai-web-search-minimal-client-success.log 2>&1
+OPENCLAW_ENTRY="$entry" PORT="$PORT" OPENCLAW_GATEWAY_TOKEN="$TOKEN" node /tmp/openclaw-openai-web-search-minimal-client.mjs success >/tmp/openclaw-openai-web-search-minimal-client-success.log 2>&1
 
 node - "$MOCK_REQUEST_LOG" <<'NODE'
 const fs = require("node:fs");
@@ -447,7 +454,7 @@ if (success.body.reasoning?.effort !== "low") {
 }
 NODE
 
-PORT="$PORT" OPENCLAW_GATEWAY_TOKEN="$TOKEN" node /tmp/openclaw-openai-web-search-minimal-client.mjs reject >/tmp/openclaw-openai-web-search-minimal-client-reject.log 2>&1
+OPENCLAW_ENTRY="$entry" PORT="$PORT" OPENCLAW_GATEWAY_TOKEN="$TOKEN" node /tmp/openclaw-openai-web-search-minimal-client.mjs reject >/tmp/openclaw-openai-web-search-minimal-client-reject.log 2>&1
 
 for _ in $(seq 1 80); do
   if grep -Fq "$RAW_SCHEMA_ERROR" "$GATEWAY_LOG"; then
