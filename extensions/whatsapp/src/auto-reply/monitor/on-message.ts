@@ -228,7 +228,10 @@ export function createWebOnMessageHandler(params: {
         groupHistoryKey,
         groupHistories: params.groupHistories,
         ...(preflightAudioTranscript !== undefined ? { preflightAudioTranscript } : {}),
-        ...(ackAlreadySent ? { ackAlreadySent: true } : {}),
+        // Group ack eligibility depends on the target agent/session, so a
+        // preflight ack attempt on the base route must not suppress downstream
+        // per-agent checks during broadcast fan-out.
+        ...(ackAlreadySent && msg.chatType !== "group" ? { ackAlreadySent: true } : {}),
         processMessage: (m, r, k, opts) => processForRoute(m, r, k, opts),
       })
     ) {

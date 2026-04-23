@@ -4,6 +4,7 @@ const events: string[] = [];
 const transcribeFirstAudioMock = vi.fn();
 const maybeSendAckReactionMock = vi.fn();
 const processMessageMock = vi.fn();
+const maybeBroadcastMessageMock = vi.fn();
 
 vi.mock("./audio-preflight.runtime.js", () => ({
   transcribeFirstAudio: (...args: unknown[]) => transcribeFirstAudioMock(...args),
@@ -18,7 +19,7 @@ vi.mock("./process-message.js", () => ({
 }));
 
 vi.mock("./broadcast.js", () => ({
-  maybeBroadcastMessage: vi.fn(async () => false),
+  maybeBroadcastMessage: (...args: unknown[]) => maybeBroadcastMessageMock(...args),
 }));
 
 vi.mock("./group-gating.js", () => ({
@@ -84,6 +85,17 @@ function makeAudioMsg(): WebInboundMsg {
   } as WebInboundMsg;
 }
 
+function makeGroupAudioMsg(): WebInboundMsg {
+  return {
+    ...makeAudioMsg(),
+    from: "1203630@g.us",
+    chatId: "1203630@g.us",
+    chatType: "group",
+    conversationId: "1203630@g.us",
+    wasMentioned: false,
+  } as WebInboundMsg;
+}
+
 function makeEchoTracker() {
   return {
     has: () => false,
@@ -96,6 +108,8 @@ function makeEchoTracker() {
 describe("createWebOnMessageHandler audio preflight", () => {
   beforeEach(() => {
     events.length = 0;
+    maybeBroadcastMessageMock.mockReset();
+    maybeBroadcastMessageMock.mockImplementation(async () => false);
     maybeSendAckReactionMock.mockReset();
     maybeSendAckReactionMock.mockImplementation(async () => {
       events.push("ack");
@@ -149,6 +163,7 @@ describe("createWebOnMessageHandler audio preflight", () => {
   });
 
   it("skips early DM ack/preflight when access-control was not explicitly passed through", async () => {
+
     const handler = createWebOnMessageHandler({
       cfg: {
         channels: {
@@ -187,5 +202,49 @@ describe("createWebOnMessageHandler audio preflight", () => {
         ackAlreadySent: true,
       }),
     );
+  });
+
+  it("preserves per-agent ack checks for group broadcast voice notes", async () => {
+    maybeBroadcastMessageMock.mockImplementation(
+      async (params: { ackAlreadySent?: boolean; preflightAudioTranscript?: string | null }) => {
+        expect(params.preflightAudioTranscript).toBe("transcribed voice note");
+        expect(params.ackAlreadySent).toBeUndefined();
+        return true;
+      },
+    );
+    const handler = createWebOnMessageHandler({
+      cfg: {
+        channels: {
+          whatsapp: {
+            ackReaction: { enabled: true },
+          },
+        },
+        broadcast: {
+          "1203630@g.us": ["main", "backup"],
+        },
+      } as never,
+      verbose: false,
+      connectionId: "conn-1",
+      maxMediaBytes: 1024 * 1024,
+      groupHistoryLimit: 20,
+      groupHistories: new Map(),
+      groupMemberNames: new Map(),
+      echoTracker: makeEchoTracker() as never,
+      backgroundTasks: new Set(),
+      replyResolver: vi.fn() as never,
+      replyLogger: {
+        info: () => {},
+        warn: () => {},
+        debug: () => {},
+        error: () => {},
+      } as never,
+      baseMentionConfig: {} as never,
+      account: { authDir: "/tmp/auth", accountId: "default" },
+    });
+
+    await handler(makeGroupAudioMsg());
+
+    expect(events).toEqual(["ack", "stt"]);
+    expect(processMessageMock).not.toHaveBeenCalled();
   });
 });
