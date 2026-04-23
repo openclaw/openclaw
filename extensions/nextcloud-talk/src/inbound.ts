@@ -328,11 +328,10 @@ export async function handleNextcloudTalkInbound(params: {
     mentionEntries: parsedBody.mentionEntries,
     account,
   });
-  const wasMentioned =
-    explicitMention ||
-    (mentionRegexes.length
-      ? core.channel.mentions.matchesMentionPatterns(effectiveBody, mentionRegexes)
-      : false);
+  const regexMention = mentionRegexes.length
+    ? core.channel.mentions.matchesMentionPatterns(effectiveBody, mentionRegexes)
+    : false;
+  const wasMentioned = explicitMention || regexMention;
   const shouldRequireMention = isGroup
     ? resolveNextcloudTalkRequireMention({
         roomConfig,
@@ -363,10 +362,14 @@ export async function handleNextcloudTalkInbound(params: {
   });
 
   // Send ack reaction (fire-and-forget) if configured.
-  const ackEmoji = resolveAckReaction(config as OpenClawConfig, route.agentId, {
-    channel: "nextcloud-talk",
-    accountId: account.accountId,
-  });
+  // Room-level ackReaction takes precedence over the channel/account/global hierarchy.
+  const ackEmoji =
+    roomMatch.roomConfig?.ackReaction !== undefined
+      ? roomMatch.roomConfig.ackReaction.trim()
+      : resolveAckReaction(config as OpenClawConfig, route.agentId, {
+          channel: "nextcloud-talk",
+          accountId: account.accountId,
+        });
   if (ackEmoji) {
     sendReactionNextcloudTalk(roomToken, message.messageId, ackEmoji, {
       accountId: account.accountId,

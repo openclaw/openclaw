@@ -121,23 +121,36 @@ export async function monitorNextcloudTalkProvider(
     },
     onMessage: async () => {},
     onReaction: async (reaction) => {
-      core.channel.activity.record({
-        channel: "nextcloud-talk",
+      const result = await processNextcloudTalkReplayGuardedMessage({
+        replayGuard,
         accountId: account.accountId,
-        direction: "inbound",
-        at: reaction.timestamp,
+        message: reaction,
+        handleMessage: async () => {
+          core.channel.activity.record({
+            channel: "nextcloud-talk",
+            accountId: account.accountId,
+            direction: "inbound",
+            at: reaction.timestamp,
+          });
+          if (opts.onReaction) {
+            await opts.onReaction(reaction);
+            return;
+          }
+          await handleNextcloudTalkInboundReaction({
+            reaction,
+            account,
+            config: cfg,
+            runtime,
+            statusSink: opts.statusSink,
+          });
+        },
       });
-      if (opts.onReaction) {
-        await opts.onReaction(reaction);
+      if (result === "duplicate") {
+        logger.warn(
+          `[nextcloud-talk:${account.accountId}] replayed reaction webhook ignored room=${reaction.roomToken} messageId=${reaction.messageId}`,
+        );
         return;
       }
-      await handleNextcloudTalkInboundReaction({
-        reaction,
-        account,
-        config: cfg,
-        runtime,
-        statusSink: opts.statusSink,
-      });
     },
     onError: (error) => {
       logger.error(`[nextcloud-talk:${account.accountId}] webhook error: ${error.message}`);

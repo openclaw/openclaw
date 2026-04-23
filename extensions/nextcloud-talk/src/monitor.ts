@@ -63,7 +63,7 @@ export class NextcloudTalkRetryableWebhookError extends Error {
 export async function processNextcloudTalkReplayGuardedMessage(params: {
   replayGuard: NextcloudTalkReplayGuard;
   accountId: string;
-  message: NextcloudTalkInboundMessage;
+  message: { roomToken: string; messageId: string };
   handleMessage: () => Promise<void>;
 }): Promise<"processed" | "duplicate"> {
   const claim = await params.replayGuard.claimMessage({

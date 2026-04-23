@@ -1,7 +1,11 @@
-import { resolveNextcloudTalkAccount } from "./accounts.js";
 import { stripNextcloudTalkTargetPrefix } from "./normalize.js";
-import { getNextcloudTalkRuntime } from "./runtime.js";
-import { generateNextcloudTalkSignature } from "./signature.js";
+import {
+  fetchWithSsrFGuard,
+  generateNextcloudTalkSignature,
+  getNextcloudTalkRuntime,
+  resolveNextcloudTalkAccount,
+  ssrfPolicyFromPrivateNetworkOptIn,
+} from "./send.runtime.js";
 import type { CoreConfig } from "./types.js";
 
 type NextcloudTalkTypingOpts = {
@@ -31,24 +35,11 @@ export async function sendTypingNextcloudTalk(
   typing: boolean,
   opts: NextcloudTalkTypingOpts = {},
 ): Promise<boolean> {
-  let baseUrl: string;
-  let secret: string;
-
-  try {
-    const cfg = (opts.cfg ?? getNextcloudTalkRuntime().config.loadConfig()) as CoreConfig;
-    const account = resolveNextcloudTalkAccount({
-      cfg,
-      accountId: opts.accountId,
-    });
-    baseUrl = opts.baseUrl?.trim() ?? account.baseUrl;
-    secret = opts.secret?.trim() ?? account.secret;
-
-    if (!baseUrl || !secret) {
-      return false;
-    }
-  } catch {
+  const credentials = resolveTypingCredentials(opts);
+  if (!credentials) {
     return false;
   }
+  const { baseUrl, secret, accountConfig } = credentials;
 
   const normalizedToken = stripNextcloudTalkTargetPrefix(roomToken);
   if (!normalizedToken) {
@@ -66,38 +57,69 @@ export async function sendTypingNextcloudTalk(
   const url = `${baseUrl}/ocs/v2.php/apps/spreed/api/v1/bot/${normalizedToken}/typing`;
 
   try {
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "OCS-APIRequest": "true",
-        "X-Nextcloud-Talk-Bot-Random": random,
-        "X-Nextcloud-Talk-Bot-Signature": signature,
+    const { response, release } = await fetchWithSsrFGuard({
+      url,
+      init: {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "OCS-APIRequest": "true",
+          "X-Nextcloud-Talk-Bot-Random": random,
+          "X-Nextcloud-Talk-Bot-Signature": signature,
+        },
+        body,
       },
-      body,
+      auditContext: "nextcloud-talk-typing",
+      policy: ssrfPolicyFromPrivateNetworkOptIn(accountConfig),
     });
 
-    if (response.status === 404) {
-      // Endpoint not available on this Nextcloud version — log once and continue
-      console.warn(
-        `[nextcloud-talk] Typing indicator not supported by server (404). ` +
-          `Upgrade to Nextcloud Talk with bot typing support to enable this feature.`,
-      );
-      return false;
-    }
+    try {
+      if (response.status === 404) {
+        // Endpoint not available on this Nextcloud version — log once and continue
+        console.warn(
+          `[nextcloud-talk] Typing indicator not supported by server (404). ` +
+            `Upgrade to Nextcloud Talk with bot typing support to enable this feature.`,
+        );
+        return false;
+      }
 
-    if (!response.ok) {
-      const errorBody = await response.text().catch(() => "");
-      console.warn(
-        `[nextcloud-talk] Typing indicator failed (${response.status}): ${errorBody}`.trim(),
-      );
-      return false;
-    }
+      if (!response.ok) {
+        const errorBody = await response.text().catch(() => "");
+        console.warn(
+          `[nextcloud-talk] Typing indicator failed (${response.status}): ${errorBody}`.trim(),
+        );
+        return false;
+      }
 
-    return true;
+      return true;
+    } finally {
+      await release();
+    }
   } catch (err) {
     console.warn(`[nextcloud-talk] Typing indicator request failed: ${String(err)}`);
     return false;
+  }
+}
+
+function resolveTypingCredentials(opts: NextcloudTalkTypingOpts): {
+  baseUrl: string;
+  secret: string;
+  accountConfig: ReturnType<typeof resolveNextcloudTalkAccount>["config"];
+} | null {
+  try {
+    const cfg = (opts.cfg ?? getNextcloudTalkRuntime().config.loadConfig()) as CoreConfig;
+    const account = resolveNextcloudTalkAccount({
+      cfg,
+      accountId: opts.accountId,
+    });
+    const baseUrl = opts.baseUrl?.trim() ?? account.baseUrl;
+    const secret = opts.secret?.trim() ?? account.secret;
+    if (!baseUrl || !secret) {
+      return null;
+    }
+    return { baseUrl, secret, accountConfig: account.config };
+  } catch {
+    return null;
   }
 }
 

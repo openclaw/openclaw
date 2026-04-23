@@ -6,6 +6,7 @@ const hoisted = vi.hoisted(() => ({
     accountId: "default",
     baseUrl: "https://nextcloud.example.com",
     secret: "secret-value", // pragma: allowlist secret
+    config: {},
   })),
   generateNextcloudTalkSignature: vi.fn(() => ({
     random: "test-random",
@@ -14,20 +15,21 @@ const hoisted = vi.hoisted(() => ({
   stripNextcloudTalkTargetPrefix: vi.fn((token: string) =>
     token.startsWith("room:") ? token.slice(5) : token,
   ),
+  fetchWithSsrFGuard: vi.fn(async (params: { url: string; init: RequestInit }) => ({
+    response: await fetch(params.url, params.init),
+    release: async () => {},
+  })),
+  ssrfPolicyFromPrivateNetworkOptIn: vi.fn(() => ({})),
 }));
 
-vi.mock("./runtime.js", () => ({
+vi.mock("./send.runtime.js", () => ({
   getNextcloudTalkRuntime: () => ({
     config: { loadConfig: hoisted.loadConfig },
   }),
-}));
-
-vi.mock("./accounts.js", () => ({
   resolveNextcloudTalkAccount: hoisted.resolveNextcloudTalkAccount,
-}));
-
-vi.mock("./signature.js", () => ({
   generateNextcloudTalkSignature: hoisted.generateNextcloudTalkSignature,
+  fetchWithSsrFGuard: hoisted.fetchWithSsrFGuard,
+  ssrfPolicyFromPrivateNetworkOptIn: hoisted.ssrfPolicyFromPrivateNetworkOptIn,
 }));
 
 vi.mock("./normalize.js", () => ({
@@ -160,6 +162,15 @@ describe("sendTypingNextcloudTalk", () => {
     await sendTypingNextcloudTalk("abc123", true);
     const [, init] = fetchMock.mock.calls[0];
     expect((init?.headers as Record<string, string>)["OCS-APIRequest"]).toBe("true");
+  });
+
+  it("passes SSRF policy derived from account config", async () => {
+    fetchMock.mockResolvedValueOnce(new Response("{}", { status: 200 }));
+    await sendTypingNextcloudTalk("abc123", true);
+    expect(hoisted.ssrfPolicyFromPrivateNetworkOptIn).toHaveBeenCalledWith({});
+    expect(hoisted.fetchWithSsrFGuard).toHaveBeenCalledWith(
+      expect.objectContaining({ auditContext: "nextcloud-talk-typing" }),
+    );
   });
 });
 

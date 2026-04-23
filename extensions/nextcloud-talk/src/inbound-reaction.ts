@@ -81,13 +81,15 @@ export async function handleNextcloudTalkInboundReaction(params: {
     senderId: actorId,
   });
   if (!groupAllow.allowed) {
-    // Also check configAllowFrom (DM allowlist) as a fallback
-    const configAllowFrom = normalizeNextcloudTalkAllowlist(account.config.allowFrom);
-    const dmAllow = resolveNextcloudTalkAllowlistMatch({
-      allowFrom: configAllowFrom,
-      senderId: actorId,
-    });
-    if (!dmAllow.allowed) {
+    // Reactions can arrive in DMs. Honor dmPolicy: if it is "open" any actor is accepted;
+    // otherwise fall back to the explicit DM allowlist.
+    const dmPolicyAllows =
+      account.config.dmPolicy === "open" ||
+      resolveNextcloudTalkAllowlistMatch({
+        allowFrom: normalizeNextcloudTalkAllowlist(account.config.allowFrom),
+        senderId: actorId,
+      }).allowed;
+    if (!dmPolicyAllows) {
       runtime.log?.(`nextcloud-talk: reaction drop actor ${actorId} (not allowed)`);
       return;
     }
