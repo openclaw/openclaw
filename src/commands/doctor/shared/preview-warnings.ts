@@ -125,6 +125,23 @@ export async function collectDoctorPreviewWarnings(params: {
 
   if (hasPluginConfig) {
     const {
+      collectConfiguredPluginAutoEnableBlockerWarnings,
+      scanConfiguredPluginAutoEnableBlockers,
+    } = await import("./configured-plugin-auto-enable-blockers.js");
+    const configuredPluginBlockerHits = scanConfiguredPluginAutoEnableBlockers({
+      cfg: params.cfg,
+      env,
+    });
+    if (configuredPluginBlockerHits.length > 0) {
+      warnings.push(
+        collectConfiguredPluginAutoEnableBlockerWarnings({
+          hits: configuredPluginBlockerHits,
+          doctorFixCommand: params.doctorFixCommand,
+        }).join("\n"),
+      );
+    }
+
+    const {
       collectStalePluginConfigWarnings,
       isStalePluginAutoRepairBlocked,
       scanStalePluginConfig,

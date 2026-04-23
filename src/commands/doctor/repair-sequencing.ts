@@ -9,6 +9,7 @@ import {
   applyDoctorConfigMutation,
   type DoctorConfigMutationState,
 } from "./shared/config-mutation-state.js";
+import { maybeRepairConfiguredPluginAutoEnableBlockers } from "./shared/configured-plugin-auto-enable-blockers.js";
 import { scanEmptyAllowlistPolicyWarnings } from "./shared/empty-allowlist-scan.js";
 import { maybeRepairExecSafeBinProfiles } from "./shared/exec-safe-bins.js";
 import { maybeRepairLegacyToolsBySenderKeys } from "./shared/legacy-tools-by-sender.js";
@@ -58,6 +59,12 @@ export async function runDoctorRepairSequence(params: {
   applyMutation(maybeRepairOpenPolicyAllowFrom(state.candidate));
   applyMutation(maybeRepairBundledPluginLoadPaths(state.candidate, env));
   applyMutation(maybeRepairStalePluginConfig(state.candidate, env));
+  applyMutation(
+    maybeRepairConfiguredPluginAutoEnableBlockers({
+      cfg: state.candidate,
+      env,
+    }),
+  );
   applyMutation(await maybeRepairAllowlistPolicyAllowFrom(state.candidate));
 
   const emptyAllowlistWarnings = scanEmptyAllowlistPolicyWarnings(state.candidate, {
