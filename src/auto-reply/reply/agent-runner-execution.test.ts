@@ -25,6 +25,10 @@ const state = vi.hoisted(() => ({
   isCliProviderMock: vi.fn((_: unknown) => false),
   isInternalMessageChannelMock: vi.fn((_: unknown) => false),
   createBlockReplyDeliveryHandlerMock: vi.fn(),
+  isCompactionFailureErrorMock: vi.fn((_: string | undefined) => false),
+  isContextOverflowErrorMock: vi.fn((_: string | undefined) => false),
+  isLikelyContextOverflowErrorMock: vi.fn((_: string | undefined) => false),
+  updateSessionStoreMock: vi.fn(),
 }));
 
 const GENERIC_RUN_FAILURE_TEXT =
@@ -87,10 +91,11 @@ vi.mock("../../agents/pi-embedded-helpers.js", () => ({
     }
     return undefined;
   },
-  isCompactionFailureError: () => false,
-  isContextOverflowError: () => false,
+  isCompactionFailureError: (message?: string) => state.isCompactionFailureErrorMock(message),
+  isContextOverflowError: (message?: string) => state.isContextOverflowErrorMock(message),
   isBillingErrorMessage: () => false,
-  isLikelyContextOverflowError: () => false,
+  isLikelyContextOverflowError: (message?: string) =>
+    state.isLikelyContextOverflowErrorMock(message),
   isOverloadedErrorMessage: (message: string) => /overloaded|capacity/i.test(message),
   isRateLimitErrorMessage: (message: string) =>
     /rate.limit|too many requests|429|usage limit/i.test(message),
@@ -101,7 +106,7 @@ vi.mock("../../agents/pi-embedded-helpers.js", () => ({
 vi.mock("../../config/sessions.js", () => ({
   resolveGroupSessionKey: vi.fn(() => null),
   resolveSessionTranscriptPath: vi.fn(),
-  updateSessionStore: vi.fn(),
+  updateSessionStore: state.updateSessionStoreMock,
 }));
 
 vi.mock("../../globals.js", () => ({
@@ -270,10 +275,13 @@ function createFollowupRun(): FollowupRun {
 function createMockReplyOperation(): {
   replyOperation: ReplyOperation;
   failMock: ReturnType<typeof vi.fn>;
+  updateSessionIdMock: ReturnType<typeof vi.fn>;
 } {
   const failMock = vi.fn();
+  const updateSessionIdMock = vi.fn();
   return {
     failMock,
+    updateSessionIdMock,
     replyOperation: {
       key: "main",
       sessionId: "session",
@@ -282,7 +290,7 @@ function createMockReplyOperation(): {
       phase: "running",
       result: null,
       setPhase: vi.fn(),
-      updateSessionId: vi.fn(),
+      updateSessionId: updateSessionIdMock,
       attachBackend: vi.fn(),
       detachBackend: vi.fn(),
       complete: vi.fn(),
@@ -408,6 +416,19 @@ describe("buildContextOverflowRecoveryText", () => {
 
     expect(text).toContain("reserveTokensFloor");
     expect(text).not.toContain("heartbeat model bleed");
+  });
+
+  it("keeps the preserved-session copy with the existing overflow hint", () => {
+    const text = buildContextOverflowRecoveryText({
+      preserveSessionMapping: true,
+      cfg: {},
+      primaryProvider: "openrouter",
+      primaryModel: "qwen3.6-plus",
+    });
+
+    expect(text).toContain("kept this conversation mapped to the current session");
+    expect(text).toContain("reserveTokensFloor");
+    expect(text).not.toContain("reset our conversation");
   });
 
   it("points to heartbeat model bleed when the last runtime model matches configured heartbeat.model", () => {
@@ -593,6 +614,13 @@ describe("runAgentTurnWithFallback", () => {
     state.isInternalMessageChannelMock.mockReturnValue(false);
     state.createBlockReplyDeliveryHandlerMock.mockReset();
     state.createBlockReplyDeliveryHandlerMock.mockReturnValue(undefined);
+    state.isCompactionFailureErrorMock.mockReset();
+    state.isCompactionFailureErrorMock.mockReturnValue(false);
+    state.isContextOverflowErrorMock.mockReset();
+    state.isContextOverflowErrorMock.mockReturnValue(false);
+    state.isLikelyContextOverflowErrorMock.mockReset();
+    state.isLikelyContextOverflowErrorMock.mockReturnValue(false);
+    state.updateSessionStoreMock.mockReset();
     state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => ({
       result: await params.run("anthropic", "claude"),
       provider: "anthropic",
@@ -4381,6 +4409,105 @@ describe("runAgentTurnWithFallback", () => {
         "⚠️ Agent failed before reply: LLM error server_error: Something exploded. Please try again, or use /new to start a fresh session.",
       );
     }
+  });
+
+  it("preserves the active session when embedded overflow recovery fails", async () => {
+    state.isContextOverflowErrorMock.mockReturnValue(true);
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {
+        error: {
+          message: "400 The prompt is too long: 203557, model maximum context length: 196607",
+        },
+      },
+    });
+
+    const activeSessionEntry = { sessionId: "session", updatedAt: 1 } as SessionEntry;
+    const activeSessionStore = { "agent:main:main": activeSessionEntry };
+    const resetSessionAfterCompactionFailure = vi.fn(async () => true);
+    const { replyOperation, failMock, updateSessionIdMock } = createMockReplyOperation();
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams({
+        sessionCtx: {
+          Provider: "webchat",
+          MessageSid: "msg",
+        } as unknown as TemplateContext,
+      }),
+      replyOperation,
+      resetSessionAfterCompactionFailure,
+      sessionKey: "agent:main:main",
+      getActiveSessionEntry: () => activeSessionEntry,
+      activeSessionStore,
+      storePath: "/tmp/sessions.json",
+    });
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toContain(
+        "kept this conversation mapped to the current session",
+      );
+      expect(result.payload.text).toContain("reserveTokensFloor");
+      expectRecordFields(requireRecord(getReplyPayloadMetadata(result.payload), "reply metadata"), {
+        deliverDespiteSourceReplySuppression: true,
+      });
+    }
+    expect(failMock).toHaveBeenCalledWith(
+      "run_failed",
+      expect.objectContaining({
+        message: "400 The prompt is too long: 203557, model maximum context length: 196607",
+      }),
+    );
+    expect(activeSessionStore["agent:main:main"]?.sessionId).toBe("session");
+    expect(updateSessionIdMock).not.toHaveBeenCalled();
+    expect(state.updateSessionStoreMock).not.toHaveBeenCalled();
+    expect(resetSessionAfterCompactionFailure).not.toHaveBeenCalled();
+  });
+
+  it("preserves the active session when compaction failure is thrown before reply", async () => {
+    state.isCompactionFailureErrorMock.mockReturnValue(true);
+    state.runEmbeddedPiAgentMock.mockRejectedValueOnce(
+      new Error("Auto-compaction failed: nothing to compact"),
+    );
+
+    const activeSessionEntry = { sessionId: "session", updatedAt: 1 } as SessionEntry;
+    const activeSessionStore = { "agent:main:main": activeSessionEntry };
+    const resetSessionAfterCompactionFailure = vi.fn(async () => true);
+    const { replyOperation, failMock, updateSessionIdMock } = createMockReplyOperation();
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams({
+        sessionCtx: {
+          Provider: "webchat",
+          MessageSid: "msg",
+        } as unknown as TemplateContext,
+      }),
+      replyOperation,
+      resetSessionAfterCompactionFailure,
+      sessionKey: "agent:main:main",
+      getActiveSessionEntry: () => activeSessionEntry,
+      activeSessionStore,
+      storePath: "/tmp/sessions.json",
+    });
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toContain(
+        "kept this conversation mapped to the current session",
+      );
+      expect(result.payload.text).toContain("reserveTokensFloor");
+      expectRecordFields(requireRecord(getReplyPayloadMetadata(result.payload), "reply metadata"), {
+        deliverDespiteSourceReplySuppression: true,
+      });
+    }
+    expect(failMock).toHaveBeenCalledWith(
+      "run_failed",
+      expect.objectContaining({ message: "Auto-compaction failed: nothing to compact" }),
+    );
+    expect(activeSessionStore["agent:main:main"]?.sessionId).toBe("session");
+    expect(updateSessionIdMock).not.toHaveBeenCalled();
+    expect(state.updateSessionStoreMock).not.toHaveBeenCalled();
+    expect(resetSessionAfterCompactionFailure).not.toHaveBeenCalled();
   });
 
   it("surfaces gateway reauth guidance for known OAuth refresh failures", async () => {
