@@ -78,6 +78,44 @@ describe("createBlockReplyPipeline dedup with threading", () => {
     expect(pipeline.hasSentPayload({ text: "response text", replyToId: "other-id" })).toBe(true);
   });
 
+  // Regression test for GH #65468 — duplicate MEDIA: delivery.
+  // When MEDIA: appears at a streaming block boundary it is dispatched as a
+  // media-only block. The same media URL is then carried in the final reply
+  // text and normalised a second time, producing a duplicate attachment on
+  // the wire. getSentMediaUrls() lets the final-reply path strip media that
+  // was already delivered in a preceding block.
+  it("getSentMediaUrls returns media URLs delivered via block pipeline", async () => {
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async () => {},
+      timeoutMs: 5000,
+    });
+
+    // Initially empty before anything is sent.
+    expect(pipeline.getSentMediaUrls()).toEqual([]);
+
+    pipeline.enqueue({ text: "caption", mediaUrl: "file:///a.ogg" });
+    pipeline.enqueue({ text: "", mediaUrls: ["file:///b.ogg", "file:///c.ogg"] });
+    await pipeline.flush({ force: true });
+
+    const sent = pipeline.getSentMediaUrls();
+    expect(sent).toContain("file:///a.ogg");
+    expect(sent).toContain("file:///b.ogg");
+    expect(sent).toContain("file:///c.ogg");
+  });
+
+  it("getSentMediaUrls stays empty when no media is delivered", async () => {
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async () => {},
+      timeoutMs: 5000,
+    });
+
+    pipeline.enqueue({ text: "hello" });
+    pipeline.enqueue({ text: "world" });
+    await pipeline.flush({ force: true });
+
+    expect(pipeline.getSentMediaUrls()).toEqual([]);
+  });
+
   it("does not coalesce logical assistant blocks across assistantMessageIndex boundaries", async () => {
     const sent: string[] = [];
     const pipeline = createBlockReplyPipeline({

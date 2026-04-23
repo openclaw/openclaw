@@ -13,6 +13,11 @@ export type BlockReplyPipeline = {
   didStream: () => boolean;
   isAborted: () => boolean;
   hasSentPayload: (payload: ReplyPayload) => boolean;
+  /** Media URLs that have been successfully delivered via block replies.
+   *  Used by the final-reply path to strip media that was already sent in
+   *  a preceding block (e.g. when MEDIA: appears at a block boundary and
+   *  then again inside the final reply text). */
+  getSentMediaUrls: () => string[];
 };
 
 export type BlockReplyBuffer = {
@@ -86,6 +91,7 @@ export function createBlockReplyPipeline(params: {
   const { onBlockReply, timeoutMs, coalescing, buffer } = params;
   const sentKeys = new Set<string>();
   const sentContentKeys = new Set<string>();
+  const sentMediaUrls = new Set<string>();
   const pendingKeys = new Set<string>();
   const seenKeys = new Set<string>();
   const bufferedKeys = new Set<string>();
@@ -147,6 +153,15 @@ export function createBlockReplyPipeline(params: {
         }
         sentKeys.add(payloadKey);
         sentContentKeys.add(contentKey);
+        // Track media URLs so the final-reply path can strip duplicates.
+        // See GH #65468 — MEDIA: directives at block boundaries were being
+        // delivered twice (once as a streamed block, once in the final reply).
+        const sentReply = resolveSendableOutboundReplyParts(payload);
+        for (const url of sentReply.mediaUrls ?? []) {
+          if (url) {
+            sentMediaUrls.add(url);
+          }
+        }
         didStream = true;
       })
       .catch((err) => {
@@ -268,5 +283,6 @@ export function createBlockReplyPipeline(params: {
       const payloadKey = createBlockReplyContentKey(payload);
       return sentContentKeys.has(payloadKey);
     },
+    getSentMediaUrls: () => Array.from(sentMediaUrls),
   };
 }

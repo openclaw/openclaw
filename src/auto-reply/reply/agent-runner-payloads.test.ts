@@ -196,6 +196,7 @@ describe("buildReplyPayloads media filter integration", () => {
       flush: async () => {},
       stop: () => {},
       hasBuffered: () => false,
+      getSentMediaUrls: () => [],
     };
     // shouldDropFinalPayloads short-circuits to [] when the pipeline streamed
     // without aborting, so hasSentPayload is never reached.
@@ -219,6 +220,7 @@ describe("buildReplyPayloads media filter integration", () => {
       flush: async () => {},
       stop: () => {},
       hasBuffered: () => false,
+      getSentMediaUrls: () => [],
     };
 
     const { replyPayloads } = await buildReplyPayloads({

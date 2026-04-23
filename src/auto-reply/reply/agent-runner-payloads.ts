@@ -213,18 +213,37 @@ export async function buildReplyPayloads(params: {
         sentMediaUrls: messagingToolSentMediaUrls,
       })
     : dedupedPayloads;
+  // Strip media URLs from final payloads that were already delivered via the
+  // block-reply pipeline. Fixes GH #65468: when MEDIA: appears at a streaming
+  // block boundary it gets dispatched as a media-only block, and then the
+  // same media URL is carried into the final reply text — causing the
+  // attachment to be sent twice (e.g. duplicate voice notes on Telegram).
+  // This complements the existing content-key dedupe (hasSentPayload) which
+  // only matches when text+media match exactly.
+  const blockSentMediaUrls = params.blockStreamingEnabled
+    ? (params.blockReplyPipeline?.getSentMediaUrls?.() ?? [])
+    : [];
+  const blockMediaFilteredPayloads =
+    blockSentMediaUrls.length > 0
+      ? (
+          dedupeRuntime ?? (await loadReplyPayloadsDedupeRuntime())
+        ).filterMessagingToolMediaDuplicates({
+          payloads: mediaFilteredPayloads,
+          sentMediaUrls: blockSentMediaUrls,
+        })
+      : mediaFilteredPayloads;
   // Filter out payloads already sent via pipeline or directly during tool flush.
   const filteredPayloads = shouldDropFinalPayloads
-    ? mediaFilteredPayloads.filter((payload) => payload.isError)
+    ? blockMediaFilteredPayloads.filter((payload) => payload.isError)
     : params.blockStreamingEnabled
-      ? mediaFilteredPayloads.filter(
+      ? blockMediaFilteredPayloads.filter(
           (payload) => !params.blockReplyPipeline?.hasSentPayload(payload),
         )
       : params.directlySentBlockKeys?.size
-        ? mediaFilteredPayloads.filter(
+        ? blockMediaFilteredPayloads.filter(
             (payload) => !params.directlySentBlockKeys!.has(createBlockReplyContentKey(payload)),
           )
-        : mediaFilteredPayloads;
+        : blockMediaFilteredPayloads;
   const replyPayloads = suppressMessagingToolReplies ? [] : filteredPayloads;
 
   return {
