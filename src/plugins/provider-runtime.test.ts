@@ -22,12 +22,20 @@ type IsPluginProvidersLoadInFlight =
   typeof import("./providers.runtime.js").isPluginProvidersLoadInFlight;
 type ResolveCatalogHookProviderPluginIds =
   typeof import("./providers.js").resolveCatalogHookProviderPluginIds;
+type ResolveExternalAuthProfileCompatFallbackPluginIds =
+  typeof import("./providers.js").resolveExternalAuthProfileCompatFallbackPluginIds;
+type ResolveExternalAuthProfileProviderPluginIds =
+  typeof import("./providers.js").resolveExternalAuthProfileProviderPluginIds;
 
 const resolvePluginProvidersMock = vi.fn<ResolvePluginProviders>((_) => [] as ProviderPlugin[]);
 const isPluginProvidersLoadInFlightMock = vi.fn<IsPluginProvidersLoadInFlight>((_) => false);
 const resolveCatalogHookProviderPluginIdsMock = vi.fn<ResolveCatalogHookProviderPluginIds>(
   (_) => [] as string[],
 );
+const resolveExternalAuthProfileCompatFallbackPluginIdsMock =
+  vi.fn<ResolveExternalAuthProfileCompatFallbackPluginIds>((_) => [] as string[]);
+const resolveExternalAuthProfileProviderPluginIdsMock =
+  vi.fn<ResolveExternalAuthProfileProviderPluginIds>((_) => [] as string[]);
 
 let augmentModelCatalogWithProviderPlugins: typeof import("./provider-runtime.js").augmentModelCatalogWithProviderPlugins;
 let buildProviderAuthDoctorHintWithPlugin: typeof import("./provider-runtime.js").buildProviderAuthDoctorHintWithPlugin;
@@ -238,6 +246,10 @@ describe("provider-runtime", () => {
     vi.doMock("./providers.js", () => ({
       resolveCatalogHookProviderPluginIds: (params: unknown) =>
         resolveCatalogHookProviderPluginIdsMock(params as never),
+      resolveExternalAuthProfileCompatFallbackPluginIds: (params: unknown) =>
+        resolveExternalAuthProfileCompatFallbackPluginIdsMock(params as never),
+      resolveExternalAuthProfileProviderPluginIds: (params: unknown) =>
+        resolveExternalAuthProfileProviderPluginIdsMock(params as never),
     }));
     vi.doMock("./providers.runtime.js", () => ({
       resolvePluginProviders: (params: unknown) => resolvePluginProvidersMock(params as never),
@@ -301,6 +313,10 @@ describe("provider-runtime", () => {
     isPluginProvidersLoadInFlightMock.mockReturnValue(false);
     resolveCatalogHookProviderPluginIdsMock.mockReset();
     resolveCatalogHookProviderPluginIdsMock.mockReturnValue([]);
+    resolveExternalAuthProfileCompatFallbackPluginIdsMock.mockReset();
+    resolveExternalAuthProfileCompatFallbackPluginIdsMock.mockReturnValue([]);
+    resolveExternalAuthProfileProviderPluginIdsMock.mockReset();
+    resolveExternalAuthProfileProviderPluginIdsMock.mockReturnValue([]);
   });
 
   it("matches providers by alias for runtime hook lookup", () => {
@@ -353,6 +369,19 @@ describe("provider-runtime", () => {
         onlyPluginIds: ["alpha", "beta"],
       }),
     );
+  });
+
+  it("skips provider runtime loading when no plugin declares external auth hooks", () => {
+    expect(
+      resolveExternalAuthProfilesWithPlugins({
+        env: process.env,
+        context: {
+          env: process.env,
+          store: { version: 1, profiles: {} },
+        },
+      }),
+    ).toEqual([]);
+    expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
   });
 
   it("returns provider-prepared runtime auth for the matched provider", async () => {
@@ -679,6 +708,7 @@ describe("provider-runtime", () => {
 
   it("dispatches runtime hooks for the matched provider", async () => {
     resolveCatalogHookProviderPluginIdsMock.mockReturnValue(["openai"]);
+    resolveExternalAuthProfileProviderPluginIdsMock.mockReturnValue(["demo"]);
     const prepareDynamicModel = vi.fn(async () => undefined);
     const createStreamFn = vi.fn(() => vi.fn());
     const createEmbeddingProvider = vi.fn(async () => ({
