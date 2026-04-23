@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { Readable } from "node:stream";
 import type * as Lark from "@larksuiteoapi/node-sdk";
-import { mediaKindFromMime } from "openclaw/plugin-sdk/media-runtime";
+import { detectMime, mediaKindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import { withTempDownloadPath } from "openclaw/plugin-sdk/temp-path";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import type { ClawdbotConfig } from "../runtime-api.js";
@@ -620,6 +620,13 @@ export async function sendMediaFeishu(params: {
     contentType = loaded.contentType;
   } else {
     throw new Error("Either mediaUrl or mediaBuffer must be provided");
+  }
+
+  // Sniff buffer MIME type as fallback when content type wasn't resolved from
+  // URL headers or file extension (e.g. AI-generated images stored with a UUID
+  // filename, or CDN URLs that don't advertise a Content-Type).
+  if (!contentType) {
+    contentType = (await detectMime({ buffer })) ?? undefined;
   }
 
   const routing = resolveFeishuOutboundMediaKind({ fileName: name, contentType });
