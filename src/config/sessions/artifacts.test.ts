@@ -21,6 +21,11 @@ describe("session artifact helpers", () => {
   it("classifies primary transcript files", () => {
     expect(isPrimarySessionTranscriptFileName("abc.jsonl")).toBe(true);
     expect(isPrimarySessionTranscriptFileName("keep.deleted.keep.jsonl")).toBe(true);
+    expect(
+      isPrimarySessionTranscriptFileName(
+        "abc.checkpoint.11111111-1111-4111-8111-111111111111.jsonl",
+      ),
+    ).toBe(false);
     expect(isPrimarySessionTranscriptFileName("abc.jsonl.deleted.2026-01-01T00-00-00.000Z")).toBe(
       false,
     );
@@ -35,6 +40,11 @@ describe("session artifact helpers", () => {
     expect(
       isUsageCountedSessionTranscriptFileName("abc.jsonl.deleted.2026-01-01T00-00-00.000Z"),
     ).toBe(true);
+    expect(
+      isUsageCountedSessionTranscriptFileName(
+        "abc.checkpoint.11111111-1111-4111-8111-111111111111.jsonl",
+      ),
+    ).toBe(false);
     expect(isUsageCountedSessionTranscriptFileName("abc.jsonl.bak.2026-01-01T00-00-00.000Z")).toBe(
       false,
     );
@@ -48,6 +58,11 @@ describe("session artifact helpers", () => {
     expect(
       parseUsageCountedSessionIdFromFileName("abc.jsonl.deleted.2026-01-01T00-00-00.000Z"),
     ).toBe("abc");
+    expect(
+      parseUsageCountedSessionIdFromFileName(
+        "abc.checkpoint.11111111-1111-4111-8111-111111111111.jsonl",
+      ),
+    ).toBe(null);
     expect(parseUsageCountedSessionIdFromFileName("abc.jsonl.bak.2026-01-01T00-00-00.000Z")).toBe(
       null,
     );

@@ -121,6 +121,46 @@ describe("session cost usage", () => {
     });
   });
 
+  it("ignores compaction checkpoint transcript snapshots in daily totals", async () => {
+    const root = await makeSessionCostRoot("cost-checkpoint");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    const now = new Date();
+    const assistantEntry = {
+      type: "message",
+      timestamp: now.toISOString(),
+      message: {
+        role: "assistant",
+        provider: "openai",
+        model: "gpt-5.4",
+        usage: {
+          input: 10,
+          output: 20,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 30,
+          cost: { total: 0.03 },
+        },
+      },
+    };
+    const payload = `${JSON.stringify(assistantEntry)}\n`;
+
+    await fs.writeFile(path.join(sessionsDir, "sess-1.jsonl"), payload, "utf-8");
+    await fs.writeFile(
+      path.join(sessionsDir, "sess-1.checkpoint.11111111-1111-4111-8111-111111111111.jsonl"),
+      payload,
+      "utf-8",
+    );
+
+    await withStateDir(root, async () => {
+      const summary = await loadCostUsageSummary({ days: 30 });
+      expect(summary.daily.length).toBe(1);
+      expect(summary.totals.totalTokens).toBe(30);
+      expect(summary.totals.totalCost).toBeCloseTo(0.03, 5);
+    });
+  });
+
   it("summarizes a single session file", async () => {
     const root = await makeSessionCostRoot("cost-session");
     const sessionFile = path.join(root, "session.jsonl");
