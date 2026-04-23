@@ -3,6 +3,12 @@ import { initSubagentRegistry } from "../agents/subagent-registry.js";
 import { runChannelPluginStartupMaintenance } from "../channels/plugins/lifecycle-startup.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
+import {
+  installBundledRuntimeDeps,
+  resolveBundledRuntimeDependencyPackageInstallRoot,
+  scanBundledPluginRuntimeDeps,
+} from "../plugins/bundled-runtime-deps.js";
 import {
   resolveConfiguredDeferredChannelPluginIds,
   resolveGatewayStartupPluginIds,
@@ -21,6 +27,57 @@ type GatewayPluginBootstrapLog = {
   debug: (message: string) => void;
 };
 
+async function maybeRepairBundledPluginRuntimeDepsForGatewayStartup(params: {
+  cfg: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  log: GatewayPluginBootstrapLog;
+  packageRoot?: string | null;
+  installDeps?: (params: { installRoot: string; missingSpecs: string[]; installSpecs: string[] }) => void;
+}) {
+  const env = params.env ?? process.env;
+  const packageRoot =
+    params.packageRoot ??
+    resolveOpenClawPackageRootSync({
+      argv1: process.argv[1],
+      cwd: process.cwd(),
+      moduleUrl: import.meta.url,
+    });
+  if (!packageRoot) {
+    return;
+  }
+
+  const { deps, missing, conflicts } = scanBundledPluginRuntimeDeps({
+    packageRoot,
+    config: params.cfg,
+    includeConfiguredChannels: true,
+    env,
+  });
+  if (conflicts.length > 0) {
+    params.log.warn(
+      `gateway: bundled plugin runtime deps have version conflicts; skipping preflight repair for ${conflicts.map((conflict) => conflict.name).join(", ")}`,
+    );
+  }
+  if (missing.length === 0) {
+    return;
+  }
+
+  const installRoot = resolveBundledRuntimeDependencyPackageInstallRoot(packageRoot, { env });
+  const missingSpecs = missing.map((dep) => `${dep.name}@${dep.version}`);
+  const installSpecs = deps.map((dep) => `${dep.name}@${dep.version}`);
+  params.log.info(
+    `gateway: installing missing bundled plugin runtime deps before startup: ${missingSpecs.join(", ")}`,
+  );
+  const install =
+    params.installDeps ??
+    ((installParams) =>
+      installBundledRuntimeDeps({
+        installRoot: installParams.installRoot,
+        missingSpecs: installParams.installSpecs,
+        env,
+      }));
+  install({ installRoot, missingSpecs, installSpecs });
+}
+
 export async function prepareGatewayPluginBootstrap(params: {
   cfgAtStart: OpenClawConfig;
   startupRuntimeConfig: OpenClawConfig;
@@ -36,6 +93,10 @@ export async function prepareGatewayPluginBootstrap(params: {
       : params.cfgAtStart;
 
   if (!params.minimalTestGateway) {
+    await maybeRepairBundledPluginRuntimeDepsForGatewayStartup({
+      cfg: startupMaintenanceConfig,
+      log: params.log,
+    });
     await Promise.all([
       runChannelPluginStartupMaintenance({
         cfg: startupMaintenanceConfig,

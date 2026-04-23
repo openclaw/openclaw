@@ -40,6 +40,19 @@ export async function doctorCommand(runtime?: RuntimeEnv, options: DoctorOptions
   noteSourceInstallIssues(root);
   noteStartupOptimizationHints();
 
+  const { readConfigFileSnapshot } = await import("../config/config.js");
+  const { maybeRepairBundledPluginRuntimeDeps } = await import(
+    "../commands/doctor-bundled-plugin-runtime-deps.js"
+  );
+  const configSnapshot = await readConfigFileSnapshot();
+  await maybeRepairBundledPluginRuntimeDeps({
+    runtime: effectiveRuntime,
+    prompter,
+    config: configSnapshot.config,
+    packageRoot: root,
+    includeConfiguredChannels: true,
+  });
+
   const { loadAndMaybeMigrateDoctorConfig } = await import("../commands/doctor-config-flow.js");
   const configResult = await loadAndMaybeMigrateDoctorConfig({
     options,
