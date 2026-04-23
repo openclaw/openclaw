@@ -849,10 +849,18 @@ describe("grouped chat rendering", () => {
         static revokeObjectURL = revokeObjectURL;
       },
     );
-    const fetchMock = vi.fn(async () => ({
-      ok: true,
-      blob: async () => new Blob(["ok"], { type: "application/octet-stream" }),
-    }));
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes("meta=1")) {
+        return {
+          ok: true,
+          json: async () => ({ available: true }),
+        };
+      }
+      return {
+        ok: true,
+        blob: async () => new Blob(["ok"], { type: "application/octet-stream" }),
+      };
+    });
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
     const container = document.createElement("div");
     const renderMessage = () =>
@@ -877,9 +885,34 @@ describe("grouped chat rendering", () => {
     renderMessage();
     expect(container.textContent).toContain("Checking...");
     await flushAssistantAttachmentAvailabilityChecks();
+    await flushAssistantAttachmentAvailabilityChecks();
 
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
+      "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Ftest+image.png&token=session-token&meta=1",
+      expect.objectContaining({
+        credentials: "same-origin",
+        method: "GET",
+        headers: {
+          Accept: "application/json",
+          Authorization: "Bearer session-token",
+        },
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Ftest-doc.pdf&token=session-token&meta=1",
+      expect.objectContaining({
+        credentials: "same-origin",
+        method: "GET",
+        headers: {
+          Accept: "application/json",
+          Authorization: "Bearer session-token",
+        },
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
       "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Ftest+image.png",
       expect.objectContaining({
         credentials: "same-origin",
@@ -891,7 +924,7 @@ describe("grouped chat rendering", () => {
       }),
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
-      2,
+      4,
       "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Ftest-doc.pdf",
       expect.objectContaining({
         credentials: "same-origin",
@@ -926,10 +959,22 @@ describe("grouped chat rendering", () => {
         static revokeObjectURL = revokeObjectURL;
       },
     );
-    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => ({
-      ok: init?.headers ? "Authorization" in (init.headers as Record<string, string>) : false,
-      blob: async () => new Blob(["ok"], { type: "image/png" }),
-    }));
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.includes("meta=1")) {
+        return {
+          ok: true,
+          json: async () => ({
+            available: init?.headers
+              ? "Authorization" in (init.headers as Record<string, string>)
+              : false,
+          }),
+        };
+      }
+      return {
+        ok: true,
+        blob: async () => new Blob(["ok"], { type: "image/png" }),
+      };
+    });
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
     const container = document.createElement("div");
 
@@ -957,21 +1002,34 @@ describe("grouped chat rendering", () => {
 
     renderWithToken("fresh-token");
     await flushAssistantAttachmentAvailabilityChecks();
+    await flushAssistantAttachmentAvailabilityChecks();
 
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
-      "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Ftest+image.png",
+      "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Ftest+image.png&meta=1",
       expect.objectContaining({
         credentials: "same-origin",
         method: "GET",
         headers: {
-          Accept: "application/octet-stream",
+          Accept: "application/json",
         },
       }),
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
+      "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Ftest+image.png&token=fresh-token&meta=1",
+      expect.objectContaining({
+        credentials: "same-origin",
+        method: "GET",
+        headers: {
+          Accept: "application/json",
+          Authorization: "Bearer fresh-token",
+        },
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
       "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Ftest+image.png",
       expect.objectContaining({
         credentials: "same-origin",
@@ -1052,10 +1110,18 @@ describe("grouped chat rendering", () => {
         static revokeObjectURL = revokeObjectURL;
       },
     );
-    const fetchMock = vi.fn(async () => ({
-      ok: true,
-      blob: async () => new Blob(["ok"], { type: "image/png" }),
-    }));
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes("meta=1")) {
+        return {
+          ok: true,
+          json: async () => ({ available: true }),
+        };
+      }
+      return {
+        ok: true,
+        blob: async () => new Blob(["ok"], { type: "image/png" }),
+      };
+    });
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
     const container = document.createElement("div");
 
@@ -1117,15 +1183,16 @@ describe("grouped chat rendering", () => {
     ];
 
     await flushAssistantAttachmentAvailabilityChecks();
+    await flushAssistantAttachmentAvailabilityChecks();
 
     for (const expectedUrl of cases) {
       expect(fetchMock).toHaveBeenCalledWith(
-        expectedUrl,
+        `${expectedUrl}&meta=1`,
         expect.objectContaining({
           credentials: "same-origin",
           method: "GET",
           headers: {
-            Accept: "application/octet-stream",
+            Accept: "application/json",
           },
         }),
       );
@@ -1147,10 +1214,21 @@ describe("grouped chat rendering", () => {
       },
     );
     const fetchMock = vi
-      .fn<(url: string) => Promise<{ ok: boolean; blob: () => Promise<Blob> }>>()
+      .fn<
+        (
+          url: string,
+        ) => Promise<
+          | { ok: boolean; json: () => Promise<{ available: boolean }> }
+          | { ok: true; blob: () => Promise<Blob> }
+        >
+      >()
       .mockResolvedValueOnce({
-        ok: false,
-        blob: async () => new Blob(["missing"], { type: "image/png" }),
+        ok: true,
+        json: async () => ({ available: false }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ available: true }),
       })
       .mockResolvedValueOnce({
         ok: true,
@@ -1186,8 +1264,9 @@ describe("grouped chat rendering", () => {
     renderMessage();
     await vi.runAllTimersAsync();
     await Promise.resolve();
+    await flushAssistantAttachmentAvailabilityChecks();
 
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(createObjectURL).toHaveBeenCalledTimes(1);
     expect(container.querySelector(".chat-message-image")).not.toBeNull();
     expect(container.textContent).not.toContain("Unavailable");
