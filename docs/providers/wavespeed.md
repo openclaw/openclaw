@@ -10,11 +10,11 @@ read_when:
 
 [WaveSpeed](https://wavespeed.ai) provides OpenAI-compatible access to hosted LLMs through a unified endpoint. OpenClaw treats WaveSpeed as a first-class named provider, so onboarding, default model selection, and provider docs all work without hand-writing a custom endpoint block.
 
-| Property | Value |
-| -------- | ----- |
-| Provider | `wavespeed` |
-| Auth | `WAVESPEED_API_KEY` |
-| API | OpenAI-compatible |
+| Property | Value                         |
+| -------- | ----------------------------- |
+| Provider | `wavespeed`                   |
+| Auth     | `WAVESPEED_API_KEY`           |
+| API      | OpenAI-compatible             |
 | Base URL | `https://llm.wavespeed.ai/v1` |
 
 ## Getting started
@@ -54,12 +54,12 @@ openclaw onboard --non-interactive \
 
 OpenClaw currently ships this bundled WaveSpeed starter catalog:
 
-| Model ref | Name | Input | Context | Notes |
-| --------- | ---- | ----- | ------- | ----- |
-| `wavespeed/google/gemini-2.5-flash` | Gemini 2.5 Flash | text, image | 1M | Default model; fast general-purpose multimodal option |
-| `wavespeed/anthropic/claude-sonnet-4.6` | Claude Sonnet 4.6 | text, image | 200K | Strong coding and reasoning |
-| `wavespeed/anthropic/claude-opus-4.6` | Claude Opus 4.6 | text, image | 200K | Highest-capability Anthropic option |
-| `wavespeed/openai/gpt-4.1` | GPT-4.1 | text, image | 1M | Broad OpenAI-compatible baseline |
+| Model ref                               | Name              | Input       | Context | Notes                                                 |
+| --------------------------------------- | ----------------- | ----------- | ------- | ----------------------------------------------------- |
+| `wavespeed/google/gemini-2.5-flash`     | Gemini 2.5 Flash  | text, image | 1M      | Default model; fast general-purpose multimodal option |
+| `wavespeed/anthropic/claude-sonnet-4.6` | Claude Sonnet 4.6 | text, image | 200K    | Strong coding and reasoning                           |
+| `wavespeed/anthropic/claude-opus-4.6`   | Claude Opus 4.6   | text, image | 200K    | Highest-capability Anthropic option                   |
+| `wavespeed/openai/gpt-4.1`              | GPT-4.1           | text, image | 1M      | Broad OpenAI-compatible baseline                      |
 
 <Tip>
 The onboarding preset sets `wavespeed/google/gemini-2.5-flash` as the default model.
@@ -67,12 +67,12 @@ The onboarding preset sets `wavespeed/google/gemini-2.5-flash` as the default mo
 
 ## Supported features
 
-| Feature | Supported |
-| ------- | --------- |
-| Streaming | Yes |
-| Tool use / function calling | Yes |
-| Structured output | Yes |
-| Vision input | Yes |
+| Feature                     | Supported |
+| --------------------------- | --------- |
+| Streaming                   | Yes       |
+| Tool use / function calling | Yes       |
+| Structured output           | Yes       |
+| Vision input                | Yes       |
 
 <AccordionGroup>
   <Accordion title="Environment note">
