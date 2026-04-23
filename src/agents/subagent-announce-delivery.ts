@@ -301,6 +301,7 @@ async function sendAnnounce(item: AnnounceQueueItem) {
   const announceTimeoutMs = resolveSubagentAnnounceTimeoutMs(cfg);
   const requesterIsSubagent = isInternalAnnounceRequesterSession(item.sessionKey);
   const origin = item.origin;
+  const hasExplicitDeliveryTarget = Boolean(origin?.channel && origin?.to);
   const threadId =
     origin?.threadId != null && origin.threadId !== "" ? String(origin.threadId) : undefined;
   const idempotencyKey = buildAnnounceIdempotencyKey(
@@ -319,7 +320,10 @@ async function sendAnnounce(item: AnnounceQueueItem) {
       accountId: requesterIsSubagent ? undefined : origin?.accountId,
       to: requesterIsSubagent ? undefined : origin?.to,
       threadId: requesterIsSubagent ? undefined : threadId,
-      deliver: !requesterIsSubagent,
+      deliver: !requesterIsSubagent && hasExplicitDeliveryTarget,
+      ...(requesterIsSubagent || hasExplicitDeliveryTarget
+        ? {}
+        : { bestEffortDeliver: true as const }),
       internalEvents: item.internalEvents,
       inputProvenance: {
         kind: "inter_session",

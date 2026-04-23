@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { __testing, deliverSubagentAnnouncement } from "./subagent-announce-delivery.js";
 import { callGateway as runtimeCallGateway } from "./subagent-announce-delivery.runtime.js";
@@ -253,5 +256,79 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         }),
       }),
     );
+  });
+
+  it("falls back to best-effort queued delivery when the requester has no explicit channel target", async () => {
+    const callGateway = vi.fn(
+      async () => ({}) as Record<string, unknown>,
+    ) as unknown as typeof runtimeCallGateway;
+    const storeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-announce-store-"));
+    const storePath = path.join(storeRoot, "main", "sessions", "sessions.json");
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        "agent:main:paperclip:issue:123": {
+          sessionId: "requester-session-4",
+          channel: null,
+          lastChannel: null,
+          origin: null,
+          updatedAt: Date.now(),
+        },
+      }),
+      "utf8",
+    );
+
+    try {
+      __testing.setDepsForTest({
+        callGateway,
+        getRequesterSessionActivity: () => ({
+          sessionId: "requester-session-4",
+          isActive: true,
+        }),
+        queueEmbeddedPiMessage: () => false,
+        loadConfig: () =>
+          ({
+            session: {
+              store: path.join(storeRoot, "{agentId}", "sessions", "sessions.json"),
+            },
+            messages: {
+              queue: {
+                mode: "followup",
+                debounceMs: 0,
+              },
+            },
+          }) as never,
+      });
+
+      await deliverSubagentAnnouncement({
+        requesterSessionKey: "agent:main:paperclip:issue:123",
+        targetRequesterSessionKey: "agent:main:paperclip:issue:123",
+        triggerMessage: "child done",
+        steerMessage: "child done",
+        requesterOrigin: undefined,
+        requesterSessionOrigin: undefined,
+        completionDirectOrigin: undefined,
+        directOrigin: undefined,
+        requesterIsSubagent: false,
+        expectsCompletionMessage: true,
+        directIdempotencyKey: "announce-no-origin",
+      });
+
+      expect(callGateway).toHaveBeenCalledWith(
+        expect.objectContaining({
+          method: "agent",
+          params: expect.objectContaining({
+            deliver: false,
+            bestEffortDeliver: true,
+            channel: undefined,
+            to: undefined,
+            threadId: undefined,
+          }),
+        }),
+      );
+    } finally {
+      await fs.rm(storeRoot, { recursive: true, force: true });
+    }
   });
 });
