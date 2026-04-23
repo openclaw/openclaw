@@ -148,8 +148,8 @@ function callProcessMessage() {
 
 describe("processMessage group system prompt wiring", () => {
   beforeEach(() => {
-    buildContextMock.mockClear();
-    resolvePolicyMock.mockClear();
+    buildContextMock.mockReset();
+    resolvePolicyMock.mockReset();
     buildContextMock.mockImplementation(
       (params: { groupSystemPrompt?: string; combinedBody?: string }) => ({
         GroupSystemPrompt: params.groupSystemPrompt,
