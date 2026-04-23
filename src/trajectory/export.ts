@@ -233,15 +233,28 @@ function sortTrajectoryEvents(events: TrajectoryEvent[]): TrajectoryEvent[] {
   return sorted;
 }
 
+function prepareOutputDir(outputDir: string): void {
+  fs.mkdirSync(path.dirname(outputDir), { recursive: true, mode: 0o700 });
+  fs.mkdirSync(outputDir, { mode: 0o700 });
+}
+
 function writeJsonFile(filePath: string, value: unknown): void {
-  fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, {
+    encoding: "utf8",
+    flag: "wx",
+    mode: 0o600,
+  });
 }
 
 function writeJsonlFile(filePath: string, events: TrajectoryEvent[]): void {
   const lines = events
     .map((event) => safeJsonStringify(event))
     .filter((line): line is string => Boolean(line));
-  fs.writeFileSync(filePath, `${lines.join("\n")}\n`, "utf8");
+  fs.writeFileSync(filePath, `${lines.join("\n")}\n`, {
+    encoding: "utf8",
+    flag: "wx",
+    mode: 0o600,
+  });
 }
 
 function resolveRuntimeContext(
@@ -518,7 +531,7 @@ export function exportTrajectoryBundle(params: BuildTrajectoryBundleParams): {
   runtimeFile?: string;
   supplementalFiles: string[];
 } {
-  fs.mkdirSync(params.outputDir, { recursive: true });
+  prepareOutputDir(params.outputDir);
 
   const sessionManager = SessionManager.open(params.sessionFile);
   const header = sessionManager.getHeader();
@@ -602,15 +615,27 @@ export function exportTrajectoryBundle(params: BuildTrajectoryBundleParams): {
       entries: branchEntries,
     }),
   );
-  fs.copyFileSync(params.sessionFile, path.join(params.outputDir, "session.jsonl"));
+  fs.copyFileSync(
+    params.sessionFile,
+    path.join(params.outputDir, "session.jsonl"),
+    fs.constants.COPYFILE_EXCL,
+  );
   if (fs.existsSync(runtimeFile)) {
-    fs.copyFileSync(runtimeFile, path.join(params.outputDir, "runtime.jsonl"));
+    fs.copyFileSync(
+      runtimeFile,
+      path.join(params.outputDir, "runtime.jsonl"),
+      fs.constants.COPYFILE_EXCL,
+    );
   }
   if (bundleRuntimeContext.systemPrompt) {
     fs.writeFileSync(
       path.join(params.outputDir, "system-prompt.txt"),
       bundleRuntimeContext.systemPrompt,
-      "utf8",
+      {
+        encoding: "utf8",
+        flag: "wx",
+        mode: 0o600,
+      },
     );
   }
   if (bundleRuntimeContext.tools) {

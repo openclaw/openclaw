@@ -20,6 +20,9 @@ type CodexTrajectoryInit = {
   env?: NodeJS.ProcessEnv;
 };
 
+const SENSITIVE_FIELD_RE = /(?:authorization|cookie|credential|key|password|passwd|secret|token)/iu;
+const PRIVATE_PAYLOAD_FIELD_RE = /(?:image|screenshot|attachment|fileData|dataUri)/iu;
+
 export function createCodexTrajectoryRecorder(
   params: CodexTrajectoryInit,
 ): CodexTrajectoryRecorder | null {
@@ -106,7 +109,7 @@ export function recordCodexTrajectoryCompletion(
     timedOut: params.timedOut,
     yieldDetected: params.yieldDetected ?? false,
     aborted: params.result.aborted,
-    promptError: normalizeError(params.result.promptError),
+    promptError: normalizeCodexTrajectoryError(params.result.promptError),
     usage: params.result.attemptUsage,
     assistantTexts: params.result.assistantTexts,
     messagesSnapshot: params.result.messagesSnapshot,
@@ -121,7 +124,7 @@ function parseTrajectoryEnabled(env: NodeJS.ProcessEnv): boolean {
   if (value === "0" || value === "false" || value === "no" || value === "off") {
     return false;
   }
-  return Boolean(env.OPENCLAW_TRAJECTORY_DIR?.trim());
+  return true;
 }
 
 function resolveTrajectoryFilePath(params: {
@@ -161,13 +164,19 @@ function toTrajectoryToolDefinitions(
     .toSorted((left, right) => left.name.localeCompare(right.name));
 }
 
-function sanitizeValue(value: unknown, depth = 0): unknown {
+function sanitizeValue(value: unknown, depth = 0, key = ""): unknown {
   if (value == null || typeof value === "boolean" || typeof value === "number") {
     return value;
   }
   if (typeof value === "string") {
+    if (SENSITIVE_FIELD_RE.test(key)) {
+      return "<redacted>";
+    }
     if (value.startsWith("data:") && value.length > 256) {
       return `<redacted data-uri ${value.slice(0, value.indexOf(",")).length} chars>`;
+    }
+    if (PRIVATE_PAYLOAD_FIELD_RE.test(key) && value.length > 256) {
+      return "<redacted payload>";
     }
     return value.length > 20_000 ? `${value.slice(0, 20_000)}…` : value;
   }
@@ -175,19 +184,19 @@ function sanitizeValue(value: unknown, depth = 0): unknown {
     return "<truncated>";
   }
   if (Array.isArray(value)) {
-    return value.slice(0, 100).map((entry) => sanitizeValue(entry, depth + 1));
+    return value.slice(0, 100).map((entry) => sanitizeValue(entry, depth + 1, key));
   }
   if (typeof value === "object") {
     const next: Record<string, unknown> = {};
     for (const [key, child] of Object.entries(value).slice(0, 100)) {
-      next[key] = sanitizeValue(child, depth + 1);
+      next[key] = sanitizeValue(child, depth + 1, key);
     }
     return next;
   }
   return JSON.stringify(value);
 }
 
-function normalizeError(value: unknown): string | null {
+export function normalizeCodexTrajectoryError(value: unknown): string | null {
   if (!value) {
     return null;
   }

@@ -123,4 +123,28 @@ describe("buildExportTrajectoryReply", () => {
       }),
     );
   });
+
+  it("expands home-relative output paths without falling back to cwd", async () => {
+    const originalHome = process.env.HOME;
+    process.env.HOME = "/tmp/openclaw-home";
+    try {
+      const { buildExportTrajectoryReply } = await import("./commands-export-trajectory.js");
+      const params = makeParams();
+      params.command.commandBodyNormalized = "/export-trajectory ~/trajectory-bundle";
+
+      await buildExportTrajectoryReply(params);
+
+      expect(hoisted.exportTrajectoryBundleMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          outputDir: "/tmp/openclaw-home/trajectory-bundle",
+        }),
+      );
+    } finally {
+      if (originalHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = originalHome;
+      }
+    }
+  });
 });

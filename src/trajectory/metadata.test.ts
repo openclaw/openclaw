@@ -9,6 +9,47 @@ afterEach(() => {
 });
 
 describe("trajectory metadata", () => {
+  it("redacts harness argv and local paths with the support redaction rules", () => {
+    const originalArgv = process.argv;
+    process.argv = [
+      "node",
+      "/Users/tester/project/openclaw.js",
+      "--api-key",
+      "super-secret",
+      "--config=/Users/tester/.openclaw/openclaw.json",
+    ];
+    try {
+      const metadata = buildTrajectoryRunMetadata({
+        env: {
+          HOME: "/Users/tester",
+          OPENCLAW_STATE_DIR: "/Users/tester/.openclaw",
+        },
+        workspaceDir: "/Users/tester/project",
+        sessionFile: "/Users/tester/project/session.jsonl",
+        timeoutMs: 30_000,
+      });
+
+      const harness = metadata.harness as {
+        invocation?: unknown[];
+        entrypoint?: string;
+        workspaceDir?: string;
+        sessionFile?: string;
+      };
+      expect(harness.invocation).toEqual([
+        "node",
+        "~/project/openclaw.js",
+        "--api-key",
+        "<redacted>",
+        "--config=$OPENCLAW_STATE_DIR/openclaw.json",
+      ]);
+      expect(harness.entrypoint).toBe("~/project/openclaw.js");
+      expect(harness.workspaceDir).toBe("~/project");
+      expect(harness.sessionFile).toBe("~/project/session.jsonl");
+    } finally {
+      process.argv = originalArgv;
+    }
+  });
+
   it("captures redacted config plus active plugin and skill inventory", () => {
     const registry = createEmptyPluginRegistry();
     registry.plugins.push({
@@ -122,7 +163,7 @@ describe("trajectory metadata", () => {
       },
       toolMetas: [{ toolName: "bash", meta: "npm test" }],
       didSendViaMessagingTool: false,
-      successfulCronAdds: [],
+      successfulCronAdds: 0,
       messagingToolSentTexts: [],
       messagingToolSentMediaUrls: [],
       messagingToolSentTargets: [],

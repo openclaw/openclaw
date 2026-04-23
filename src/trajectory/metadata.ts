@@ -1,9 +1,15 @@
 import type { SkillSnapshot } from "../agents/skills.js";
+import { resolveStateDir } from "../config/paths.js";
 import { redactConfigObject } from "../config/redact-snapshot.js";
 import type { SessionSystemPromptReport } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveCommitHash } from "../infra/git-commit.js";
 import { resolveOsSummary } from "../infra/os-summary.js";
+import {
+  redactPathForSupport,
+  sanitizeSupportSnapshotValue,
+  type SupportRedactionContext,
+} from "../logging/diagnostic-support-redaction.js";
 import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { getActivePluginRegistry, listImportedRuntimePluginIds } from "../plugins/runtime.js";
 import { VERSION } from "../version.js";
@@ -193,10 +199,18 @@ function buildSkillsCapture(skillsSnapshot?: SkillSnapshot) {
   };
 }
 
+function buildTrajectorySupportRedaction(env: NodeJS.ProcessEnv): SupportRedactionContext {
+  return {
+    env,
+    stateDir: resolveStateDir(env),
+  };
+}
+
 export function buildTrajectoryRunMetadata(
   params: BuildTrajectoryRunMetadataParams,
 ): Record<string, unknown> {
   const env = params.env ?? process.env;
+  const redaction = buildTrajectorySupportRedaction(env);
   const os = resolveOsSummary();
   const plugins =
     buildPluginsFromActiveRegistry() ??
@@ -218,10 +232,12 @@ export function buildTrajectoryRunMetadata(
       runtime: {
         node: process.version,
       },
-      invocation: [...process.argv],
-      entrypoint: process.argv[1] ?? undefined,
-      workspaceDir: params.workspaceDir,
-      sessionFile: params.sessionFile,
+      invocation: sanitizeSupportSnapshotValue([...process.argv], redaction, "programArguments"),
+      entrypoint: process.argv[1] ? redactPathForSupport(process.argv[1], redaction) : undefined,
+      workspaceDir: redactPathForSupport(params.workspaceDir, redaction),
+      sessionFile: params.sessionFile
+        ? redactPathForSupport(params.sessionFile, redaction)
+        : undefined,
     },
     model: {
       provider: params.provider,
@@ -257,6 +273,11 @@ export function buildTrajectoryRunMetadata(
         mode: "sanitizeDiagnosticPayload",
         credentialsRemoved: true,
         imageDataRedacted: true,
+      },
+      harness: {
+        mode: "diagnostic-support-redaction",
+        programArgumentsRedacted: true,
+        localPathsRedacted: true,
       },
     },
     metadata: {

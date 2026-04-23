@@ -49,6 +49,7 @@ import {
 } from "./thread-lifecycle.js";
 import {
   createCodexTrajectoryRecorder,
+  normalizeCodexTrajectoryError,
   recordCodexTrajectoryCompletion,
   recordCodexTrajectoryContext,
 } from "./trajectory.js";
@@ -415,10 +416,7 @@ export async function runCodexAppServerAttempt(
       turnId: activeTurnId,
       timedOut,
       yieldDetected,
-      promptError:
-        typeof finalPromptError === "string"
-          ? finalPromptError
-          : String(finalPromptError ?? ""),
+      promptError: normalizeCodexTrajectoryError(finalPromptError),
     });
     trajectoryEndRecorded = true;
     await mirrorTranscriptBestEffort({

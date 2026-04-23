@@ -8,6 +8,7 @@ import {
 import { loadSessionStore } from "../../config/sessions/store.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { resolveHomeRelativePath } from "../../infra/home-dir.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import {
   exportTrajectoryBundle,
@@ -26,6 +27,24 @@ function parseExportTrajectoryArgs(commandBodyNormalized: string): { outputPath?
   const args = normalized.replace(/^\/(export-trajectory|trajectory)\s*/, "").trim();
   const outputPath = args.split(/\s+/).find((part) => !part.startsWith("-"));
   return { outputPath };
+}
+
+function resolveTrajectoryCommandOutputDir(params: {
+  outputPath?: string;
+  workspaceDir: string;
+  env?: NodeJS.ProcessEnv;
+  sessionId: string;
+}): string {
+  const raw = params.outputPath?.trim();
+  if (!raw) {
+    return resolveDefaultTrajectoryExportDir({
+      workspaceDir: params.workspaceDir,
+      sessionId: params.sessionId,
+    });
+  }
+  return path.isAbsolute(raw) || raw.startsWith("~")
+    ? resolveHomeRelativePath(raw, { env: params.env })
+    : path.resolve(params.workspaceDir, raw);
 }
 
 export async function buildExportTrajectoryReply(
@@ -61,26 +80,36 @@ export async function buildExportTrajectoryReply(
     sessionEntry: entry as HandleCommandsParams["sessionEntry"],
   });
 
-  const outputDir = args.outputPath
-    ? path.resolve(
-        args.outputPath.startsWith("~")
-          ? args.outputPath.replace("~", process.env.HOME ?? "")
-          : args.outputPath,
-      )
-    : resolveDefaultTrajectoryExportDir({
-        workspaceDir: params.workspaceDir,
-        sessionId: entry.sessionId,
-      });
+  let outputDir: string;
+  try {
+    outputDir = resolveTrajectoryCommandOutputDir({
+      outputPath: args.outputPath,
+      workspaceDir: params.workspaceDir,
+      sessionId: entry.sessionId,
+      env: process.env,
+    });
+  } catch (err) {
+    return {
+      text: `❌ Failed to resolve output path: ${formatErrorMessage(err)}`,
+    };
+  }
 
-  const bundle = exportTrajectoryBundle({
-    outputDir,
-    sessionFile,
-    sessionId: entry.sessionId,
-    sessionKey: params.sessionKey,
-    workspaceDir: params.workspaceDir,
-    systemPrompt,
-    tools: toTrajectoryToolDefinitions(tools),
-  });
+  let bundle: ReturnType<typeof exportTrajectoryBundle>;
+  try {
+    bundle = exportTrajectoryBundle({
+      outputDir,
+      sessionFile,
+      sessionId: entry.sessionId,
+      sessionKey: params.sessionKey,
+      workspaceDir: params.workspaceDir,
+      systemPrompt,
+      tools: toTrajectoryToolDefinitions(tools),
+    });
+  } catch (err) {
+    return {
+      text: `❌ Failed to export trajectory: ${formatErrorMessage(err)}`,
+    };
+  }
 
   const relativePath = path.relative(params.workspaceDir, bundle.outputDir);
   const displayPath = relativePath.startsWith("..") ? bundle.outputDir : relativePath;

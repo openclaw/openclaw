@@ -133,7 +133,8 @@ async function connectGatewayClient(params: {
     requestTimeoutMs: 60_000,
     clientDisplayName: "trajectory-live",
   });
-  (client as { tickIntervalMs?: number }).tickIntervalMs = AGENT_REQUEST_TIMEOUT_MS + 120_000;
+  (client as unknown as { tickIntervalMs?: number }).tickIntervalMs =
+    AGENT_REQUEST_TIMEOUT_MS + 120_000;
   return client;
 }
 
@@ -143,10 +144,7 @@ async function requestAgentExactReply(params: {
   message: string;
   sessionKey: string;
 }): Promise<string> {
-  const payload = await params.client.request<{
-    status?: string;
-    result?: unknown;
-  }>(
+  const payload = (await params.client.request(
     "agent",
     {
       sessionKey: params.sessionKey,
@@ -156,7 +154,10 @@ async function requestAgentExactReply(params: {
       thinking: "low",
     },
     { expectFinal: true, timeoutMs: AGENT_REQUEST_TIMEOUT_MS },
-  );
+  )) as {
+    status?: string;
+    result?: unknown;
+  };
   if (payload?.status !== "ok") {
     throw new Error(`agent request failed: ${JSON.stringify(payload)}`);
   }
@@ -277,7 +278,7 @@ describeLive("gateway live trajectory export", () => {
       const beforeExport = new Set(await listDirectoryNames(tempDir));
       const exportRunId = `chat-export-${randomUUID()}`;
       logLiveStep("export:start", { bundleDir, exportRunId });
-      const exportResponse = await client.request<{ status?: string; message?: unknown }>(
+      const exportResponse = (await client.request(
         "chat.send",
         {
           sessionKey,
@@ -285,7 +286,7 @@ describeLive("gateway live trajectory export", () => {
           idempotencyKey: exportRunId,
         },
         { timeoutMs: 60_000 },
-      );
+      )) as { status?: string; message?: unknown };
       logLiveStep("export:ack", { status: exportResponse?.status });
       expect(
         exportResponse?.status === "accepted" ||

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { Message, Usage } from "@mariozechner/pi-ai";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
 import { exportTrajectoryBundle } from "./export.js";
@@ -14,6 +15,53 @@ function makeTempDir(): string {
   return dir;
 }
 
+const emptyUsage: Usage = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+  totalTokens: 0,
+  cost: {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    total: 0,
+  },
+};
+
+function userMessage(content: string): Message {
+  return {
+    role: "user",
+    content,
+    timestamp: 1,
+  };
+}
+
+function assistantMessage(content: Extract<Message, { role: "assistant" }>["content"]): Message {
+  return {
+    role: "assistant",
+    content,
+    api: "openai-responses",
+    provider: "openai",
+    model: "gpt-5.4",
+    usage: emptyUsage,
+    stopReason: "stop",
+    timestamp: 2,
+  };
+}
+
+function toolResultMessage(content: Extract<Message, { role: "toolResult" }>["content"]): Message {
+  return {
+    role: "toolResult",
+    toolCallId: "call_1",
+    toolName: "read",
+    content,
+    isError: false,
+    timestamp: 3,
+  };
+}
+
 afterEach(() => {
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -21,6 +69,23 @@ afterEach(() => {
 });
 
 describe("exportTrajectoryBundle", () => {
+  it("refuses to write into an existing output directory", () => {
+    const tmpDir = makeTempDir();
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    const outputDir = path.join(tmpDir, "bundle");
+    SessionManager.open(sessionFile).appendMessage(userMessage("hello"));
+    fs.mkdirSync(outputDir);
+
+    expect(() =>
+      exportTrajectoryBundle({
+        outputDir,
+        sessionFile,
+        sessionId: "session-1",
+        workspaceDir: tmpDir,
+      }),
+    ).toThrow();
+  });
+
   it("exports merged runtime and transcript events plus convenience files", () => {
     const tmpDir = makeTempDir();
     const sessionFile = path.join(tmpDir, "session.jsonl");
@@ -29,25 +94,19 @@ describe("exportTrajectoryBundle", () => {
     const sessionManager = SessionManager.open(sessionFile);
 
     sessionManager.appendSessionInfo("Trajectory Test");
-    sessionManager.appendMessage({ role: "user", content: "hello" });
-    sessionManager.appendMessage({
-      role: "assistant",
-      content: [
+    sessionManager.appendMessage(userMessage("hello"));
+    sessionManager.appendMessage(
+      assistantMessage([
         {
           type: "toolCall",
           id: "call_1",
           name: "read",
           arguments: { filePath: path.join(tmpDir, "skills", "weather", "SKILL.md") },
         },
-      ],
-    });
-    sessionManager.appendMessage({
-      role: "toolResult",
-      toolCallId: "call_1",
-      toolName: "read",
-      content: [{ type: "text", text: "README contents" }],
-    });
-    sessionManager.appendMessage({ role: "assistant", content: "done" });
+      ]),
+    );
+    sessionManager.appendMessage(toolResultMessage([{ type: "text", text: "README contents" }]));
+    sessionManager.appendMessage(assistantMessage([{ type: "text", text: "done" }]));
 
     const runtimeEvents: TrajectoryEvent[] = [
       {
