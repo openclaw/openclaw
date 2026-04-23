@@ -355,6 +355,62 @@ describe("runWithModelFallback", () => {
     expect(run).toHaveBeenCalledWith("openai", "gpt-5.4");
   });
 
+  it("retries the same model once on session lock timeout, then stops fan-out", async () => {
+    const cfg = makeCfg();
+    const lockError = new Error(
+      "session file locked (timeout 10000ms): pid=42 /tmp/session.jsonl.lock",
+    );
+    const run = vi.fn().mockRejectedValue(lockError);
+    vi.useFakeTimers();
+    try {
+      const promise = runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        run,
+      });
+      const assertion = expect(promise).rejects.toThrow(/session file locked/);
+      await vi.runAllTimersAsync();
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
+    // Same candidate twice, then break — do not fan out to other models.
+    expect(run.mock.calls).toEqual([
+      ["openai", "gpt-4.1-mini"],
+      ["openai", "gpt-4.1-mini"],
+    ]);
+  });
+
+  it("recovers on session-lock retry without using fallback models", async () => {
+    const cfg = makeCfg();
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new Error("session file locked (timeout 10000ms): pid=42 /tmp/session.jsonl.lock"),
+      )
+      .mockResolvedValueOnce("ok");
+    vi.useFakeTimers();
+    let result!: Awaited<ReturnType<typeof runWithModelFallback<string>>>;
+    try {
+      const promise = runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        run,
+      });
+      await vi.runAllTimersAsync();
+      result = await promise;
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(result.result).toBe("ok");
+    expect(run.mock.calls).toEqual([
+      ["openai", "gpt-4.1-mini"],
+      ["openai", "gpt-4.1-mini"],
+    ]);
+  });
+
   it("falls back on unrecognized errors when candidates remain", async () => {
     const cfg = makeCfg();
     const run = vi.fn().mockRejectedValueOnce(new Error("bad request")).mockResolvedValueOnce("ok");

@@ -37,6 +37,36 @@ import type { FailoverReason } from "./pi-embedded-helpers/types.js";
 
 const log = createSubsystemLogger("model-fallback");
 
+// Detect `acquireSessionWriteLock` timeout escapes so we can retry the same
+// candidate once and then stop the fan-out. A per-session contention is not a
+// per-model problem; cycling through every candidate amplifies one 10s stall
+// into a 6×-long blackhole.
+const SESSION_LOCK_TIMEOUT_RE = /session file locked \(timeout (\d+)ms\)/i;
+const SESSION_LOCK_RETRY_LIMIT = 1;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function parseSessionLockTimeoutMs(err: unknown): number | null {
+  const message = formatErrorMessage(err);
+  const match = SESSION_LOCK_TIMEOUT_RE.exec(message);
+  if (!match) {
+    return null;
+  }
+  const parsed = Number(match[1]);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function resolveSessionLockRetryBackoffMs(params: {
+  lockTimeoutMs: number | null;
+  retryAttempt: number;
+}): number {
+  const timeoutMs = params.lockTimeoutMs ?? 10_000;
+  const base = Math.min(2_000, Math.max(250, Math.floor(timeoutMs / 20)));
+  return Math.min(3_000, base * Math.max(1, params.retryAttempt));
+}
+
 /**
  * Structured error thrown when all model fallback candidates have been
  * exhausted. Carries per-attempt details so callers can build informative
@@ -676,6 +706,7 @@ export async function runWithModelFallback<T>(params: {
   const attempts: FallbackAttempt[] = [];
   let lastError: unknown;
   const cooldownProbeUsedProviders = new Set<string>();
+  const sessionLockRetriesByCandidate = new Map<string, number>();
 
   const hasFallbackCandidates = candidates.length > 1;
 
@@ -850,6 +881,52 @@ export async function runWithModelFallback<T>(params: {
           provider: candidate.provider,
           model: candidate.model,
         }) ?? err;
+
+      // Session write-lock contention is per-session, not per-model. Retry the
+      // same candidate once so a brief hold (compaction, sibling flush) can
+      // clear, then break — do not cascade through every fallback model.
+      const sessionLockTimeoutMs = parseSessionLockTimeoutMs(normalized);
+      if (sessionLockTimeoutMs !== null) {
+        const candidateKey = `${candidate.provider}/${candidate.model}`;
+        const retriesUsed = sessionLockRetriesByCandidate.get(candidateKey) ?? 0;
+        if (retriesUsed < SESSION_LOCK_RETRY_LIMIT) {
+          const nextRetryAttempt = retriesUsed + 1;
+          sessionLockRetriesByCandidate.set(candidateKey, nextRetryAttempt);
+          const retryBackoffMs = resolveSessionLockRetryBackoffMs({
+            lockTimeoutMs: sessionLockTimeoutMs,
+            retryAttempt: nextRetryAttempt,
+          });
+          log.warn(
+            `session lock timeout on ${sanitizeForLog(candidate.provider)}/${sanitizeForLog(candidate.model)}; retrying same candidate in ${retryBackoffMs}ms`,
+          );
+          await sleep(retryBackoffMs);
+          i -= 1;
+          continue;
+        }
+        lastError = normalized;
+        recordFailedCandidateAttempt({
+          attempts,
+          candidate,
+          error: normalized,
+          runId: params.runId,
+          requestedProvider: params.provider,
+          requestedModel: params.model,
+          attempt: i + 1,
+          total: candidates.length,
+          nextCandidate: undefined,
+          isPrimary,
+          requestedModelMatched: requestedModel,
+          fallbackConfigured: hasFallbackCandidates,
+        });
+        await params.onError?.({
+          provider: candidate.provider,
+          model: candidate.model,
+          error: normalized,
+          attempt: i + 1,
+          total: candidates.length,
+        });
+        break;
+      }
 
       // LiveSessionModelSwitchError during fallback means the session's
       // persisted model conflicts with this fallback candidate.  Treat it

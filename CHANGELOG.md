@@ -140,6 +140,7 @@ Docs: https://docs.openclaw.ai
 - Agents/Pi: honor explicit `strict-agentic` execution contracts for incomplete-turn retry guards across providers, so manually opted-in local or compatible models get the same retry behavior without relying on OpenAI model inference. (#66750) Thanks @ziomancer.
 - OpenShell/sandbox: pin verified file reads to an already-opened descriptor, walk the ancestor chain for symlinked parents on platforms without fd-path readlink, and re-check file identity so parent symlink swaps cannot redirect in-sandbox reads to host files outside the allowed mount root. (#69798) Thanks @drobison00.
 - Gateway/Control UI: require authenticated Control UI read access before serving `/__openclaw/control-ui-config.json` when `gateway.auth` is enabled, so unauthenticated callers can no longer read bootstrap metadata. (#70247) Thanks @drobison00.
+- Agents/model fallback: treat session write-lock timeouts as per-session contention and retry the same candidate once before stopping the fan-out, instead of cascading through every fallback model. Previously one 10s lock (typically held by an in-flight compaction) was multiplied by the candidate count — a 6-model chain turned a brief stall into a ~60s wall time per blocked turn.
 
 ## 2026.4.21
 
