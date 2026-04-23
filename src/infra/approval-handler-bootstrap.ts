@@ -9,6 +9,10 @@ import {
   type ChannelApprovalHandler,
 } from "./approval-handler-runtime.js";
 import {
+  getDefaultApprovalHandlerStartCoordinator,
+  type ApprovalHandlerStartCoordinator,
+} from "./approval-handler-start-coordinator.js";
+import {
   getChannelRuntimeContext,
   watchChannelRuntimeContexts,
 } from "./channel-runtime-context.js";
@@ -16,12 +20,18 @@ import {
 type ApprovalBootstrapHandler = ChannelApprovalHandler;
 const APPROVAL_HANDLER_BOOTSTRAP_RETRY_MS = 1_000;
 
+export type { ApprovalHandlerStartCoordinator };
+
 export async function startChannelApprovalHandlerBootstrap(params: {
   plugin: Pick<ChannelPlugin, "id" | "meta" | "approvalCapability">;
   cfg: OpenClawConfig;
   accountId: string;
   channelRuntime?: ChannelRuntimeSurface;
   logger?: ReturnType<typeof createSubsystemLogger>;
+  // Injected for tests; defaults to a process-scoped singleton that applies
+  // randomized startup jitter and caps concurrent handshakes so multi-account
+  // installs do not stampede the loopback gateway on fresh boot.
+  startCoordinator?: ApprovalHandlerStartCoordinator;
 }): Promise<() => Promise<void>> {
   const capability = resolveChannelApprovalCapability(params.plugin);
   if (!capability?.nativeRuntime || !params.channelRuntime) {
@@ -30,6 +40,7 @@ export async function startChannelApprovalHandlerBootstrap(params: {
 
   const channelLabel = params.plugin.meta.label || params.plugin.id;
   const logger = params.logger ?? createSubsystemLogger(`${params.plugin.id}/approval-bootstrap`);
+  const startCoordinator = params.startCoordinator ?? getDefaultApprovalHandlerStartCoordinator();
   let activeGeneration = 0;
   let activeHandler: ApprovalBootstrapHandler | null = null;
   let retryTimer: NodeJS.Timeout | null = null;
@@ -57,36 +68,53 @@ export async function startChannelApprovalHandlerBootstrap(params: {
     if (generation !== activeGeneration) {
       return;
     }
-    await stopHandler();
+    // Jitter before claiming a start slot: spreads the N-account thundering
+    // herd across a small window so the loopback gateway is not asked to
+    // complete N concurrent preauth handshakes at the same tick.
+    await startCoordinator.waitJitter(() => generation !== activeGeneration);
     if (generation !== activeGeneration) {
       return;
     }
-    const handler = await createChannelApprovalHandlerFromCapability({
-      capability,
-      label: `${params.plugin.id}/native-approvals`,
-      clientDisplayName: `${channelLabel} Native Approvals (${params.accountId})`,
-      channel: params.plugin.id,
-      channelLabel,
-      cfg: params.cfg,
-      accountId: params.accountId,
-      context,
-    });
-    if (!handler) {
-      return;
-    }
-    if (generation !== activeGeneration) {
-      await handler.stop().catch(() => {});
-      return;
-    }
-    activeHandler = handler as ApprovalBootstrapHandler;
+    const releaseSlot = await startCoordinator.acquireStartSlot(
+      () => generation !== activeGeneration,
+    );
     try {
-      await handler.start();
-    } catch (error) {
-      if (activeHandler === handler) {
-        activeHandler = null;
+      if (generation !== activeGeneration) {
+        return;
       }
-      await handler.stop().catch(() => {});
-      throw error;
+      await stopHandler();
+      if (generation !== activeGeneration) {
+        return;
+      }
+      const handler = await createChannelApprovalHandlerFromCapability({
+        capability,
+        label: `${params.plugin.id}/native-approvals`,
+        clientDisplayName: `${channelLabel} Native Approvals (${params.accountId})`,
+        channel: params.plugin.id,
+        channelLabel,
+        cfg: params.cfg,
+        accountId: params.accountId,
+        context,
+      });
+      if (!handler) {
+        return;
+      }
+      if (generation !== activeGeneration) {
+        await handler.stop().catch(() => {});
+        return;
+      }
+      activeHandler = handler as ApprovalBootstrapHandler;
+      try {
+        await handler.start();
+      } catch (error) {
+        if (activeHandler === handler) {
+          activeHandler = null;
+        }
+        await handler.stop().catch(() => {});
+        throw error;
+      }
+    } finally {
+      releaseSlot();
     }
   };
 
