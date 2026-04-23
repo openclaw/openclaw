@@ -51,14 +51,19 @@ function isOwnerOnlyTool(tool: AnyAgentTool) {
   return tool.ownerOnly === true || isOwnerOnlyToolName(tool.name);
 }
 
-export function applyOwnerOnlyToolPolicy(tools: AnyAgentTool[], senderIsOwner: boolean) {
+export function applyOwnerOnlyToolPolicy(
+  tools: AnyAgentTool[],
+  senderIsOwner: boolean,
+  opts?: { keepOwnerTools?: boolean },
+): AnyAgentTool[] {
+  const keepOwnerTools = opts?.keepOwnerTools ?? false;
   const withGuard = tools.map((tool) => {
     if (!isOwnerOnlyTool(tool)) {
       return tool;
     }
     return wrapOwnerOnlyToolExecution(tool, senderIsOwner);
   });
-  if (senderIsOwner) {
+  if (senderIsOwner || keepOwnerTools) {
     return withGuard;
   }
   return withGuard.filter((tool) => !isOwnerOnlyTool(tool));

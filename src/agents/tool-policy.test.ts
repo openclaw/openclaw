@@ -110,6 +110,16 @@ describe("tool-policy", () => {
     expect(filtered.map((t) => t.name)).toEqual(["read", "cron", "gateway"]);
   });
 
+  it("keeps owner-only tools during heartbeat runs via keepOwnerTools", async () => {
+    const tools = createOwnerPolicyTools();
+    const filtered = applyOwnerOnlyToolPolicy(tools, false, { keepOwnerTools: true });
+    // Non-owner sender but with keepOwnerTools=true keeps owner tools (wrapped with guard)
+    expect(filtered.map((t) => t.name)).toEqual(["read", "cron", "gateway"]);
+    // Verify cron/gateway are still callable (execute is defined)
+    const cronTool = filtered.find((t) => t.name === "cron");
+    expect(cronTool?.execute).toBeDefined();
+  });
+
   it("honors ownerOnly metadata for custom tool names", async () => {
     const tools = [
       {
