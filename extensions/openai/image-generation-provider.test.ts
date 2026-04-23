@@ -420,6 +420,33 @@ describe("openai image generation provider", () => {
       );
     });
 
+    it("strips trailing /openai/v1 from Azure base URL", async () => {
+      mockGeneratedPngResponse();
+
+      const provider = buildOpenAIImageGenerationProvider();
+      await provider.generateImage({
+        provider: "openai",
+        model: "gpt-image-2",
+        prompt: "Azure cat",
+        cfg: {
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "https://myresource.openai.azure.com/openai/v1",
+                models: [],
+              },
+            },
+          },
+        },
+      });
+
+      expect(postJsonRequestMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          url: "https://myresource.openai.azure.com/openai/deployments/gpt-image-2/images/generations?api-version=2024-12-01-preview",
+        }),
+      );
+    });
+
     it("still uses Bearer auth for public OpenAI hosts", async () => {
       mockGeneratedPngResponse();
 

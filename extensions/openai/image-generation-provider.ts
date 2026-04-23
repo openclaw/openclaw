@@ -51,11 +51,11 @@ function resolveAzureApiVersion(): string {
 }
 
 function buildAzureImageUrl(
-  baseUrl: string,
+  rawBaseUrl: string,
   model: string,
   action: "generations" | "edits",
 ): string {
-  const cleanBase = baseUrl.replace(/\/+$/, "").replace(/\/v1$/, "");
+  const cleanBase = rawBaseUrl.replace(/\/+$/, "").replace(/\/openai\/v1$/, "").replace(/\/v1$/, "");
   return `${cleanBase}/openai/deployments/${model}/images/${action}?api-version=${resolveAzureApiVersion()}`;
 }
 
@@ -142,7 +142,7 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
       const count = req.count ?? 1;
       const size = req.size ?? DEFAULT_SIZE;
       const url = isAzure
-        ? buildAzureImageUrl(baseUrl, model, isEdit ? "edits" : "generations")
+        ? buildAzureImageUrl(rawBaseUrl, model, isEdit ? "edits" : "generations")
         : `${baseUrl}/images/${isEdit ? "edits" : "generations"}`;
       const requestResult = isEdit
         ? await (() => {
