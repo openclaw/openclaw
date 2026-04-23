@@ -212,4 +212,26 @@ describe("promptAuthConfig", () => {
       }),
     );
   });
+
+  it("returns to auth selection when plugin install onboarding asks for a retry", async () => {
+    vi.clearAllMocks();
+    mocks.promptAuthChoiceGrouped
+      .mockResolvedValueOnce("provider-plugin:wecom:default")
+      .mockResolvedValueOnce("kilocode-api-key");
+    mocks.applyAuthChoice
+      .mockResolvedValueOnce({ config: {}, retrySelection: true })
+      .mockResolvedValueOnce(createApplyAuthChoiceConfig());
+    mocks.promptModelAllowlist.mockResolvedValue({ models: undefined });
+    mocks.resolvePreferredProviderForAuthChoice
+      .mockResolvedValueOnce("wecom")
+      .mockResolvedValueOnce("kilocode");
+    mocks.resolvePluginProviders.mockReturnValue([]);
+    mocks.resolveProviderPluginChoice.mockReturnValue(null);
+
+    await promptAuthConfig({}, makeRuntime(), noopPrompter);
+
+    expect(mocks.promptAuthChoiceGrouped).toHaveBeenCalledTimes(2);
+    expect(mocks.applyAuthChoice).toHaveBeenCalledTimes(2);
+    expect(mocks.promptModelAllowlist).toHaveBeenCalledTimes(1);
+  });
 });

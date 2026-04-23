@@ -1015,8 +1015,8 @@ describe("applyAuthChoice", () => {
 
     expect(resolvePluginProviders).toHaveBeenCalledWith(
       expect.objectContaining({
-        config: {},
         env,
+        mode: "setup",
       }),
     );
     expect(confirm).toHaveBeenCalledWith(

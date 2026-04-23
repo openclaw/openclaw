@@ -65,6 +65,10 @@
     "typescript/no-unnecessary-type-parameters": "error",
     "typescript/no-unsafe-type-assertion": "off",
     "typescript/no-useless-default-assignment": "error",
+    "typescript/switch-exhaustiveness-check": [
+      "error",
+      { "considerDefaultExhaustiveForUnions": true }
+    ],
     "typescript/prefer-return-this-type": "error",
     "typescript/prefer-find": "error",
     "typescript/prefer-function-type": "error",

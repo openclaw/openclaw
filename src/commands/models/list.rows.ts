@@ -77,7 +77,7 @@ function shouldSuppressListModel(params: {
 
 export async function loadListModelRegistry(
   cfg: OpenClawConfig,
-  opts?: { sourceConfig?: OpenClawConfig },
+  opts?: { sourceConfig?: OpenClawConfig; providerFilter?: string },
 ) {
   const loaded = await loadModelRegistry(cfg, opts);
   return {

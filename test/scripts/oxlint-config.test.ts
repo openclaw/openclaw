@@ -132,6 +132,15 @@ describe("oxlint config", () => {
     ]);
   });
 
+  it("enables exhaustive switch linting", () => {
+    const config = readJson(".oxlintrc.json") as OxlintConfig;
+
+    expect(config.rules?.["typescript/switch-exhaustiveness-check"]).toEqual([
+      "error",
+      { considerDefaultExhaustiveForUnions: true },
+    ]);
+  });
+
   it("enables clean zero-baseline lint rules", () => {
     const config = readJson(".oxlintrc.json") as OxlintConfig;
 

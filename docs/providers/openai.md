@@ -101,6 +101,12 @@ Choose your preferred auth method and follow the setup steps.
         ```bash
         openclaw models auth login --provider openai-codex
         ```
+
+        For headless or callback-hostile setups, add `--device-code` to sign in with a ChatGPT device-code flow instead of the localhost browser callback:
+
+        ```bash
+        openclaw models auth login --provider openai-codex --device-code
+        ```
       </Step>
       <Step title="Set the default model">
         ```bash
@@ -133,9 +139,9 @@ Choose your preferred auth method and follow the setup steps.
     }
     ```
 
-    <Tip>
-    If onboarding reuses an existing Codex CLI login, those credentials stay managed by Codex CLI. On expiry, OpenClaw re-reads the external Codex source first and writes the refreshed credential back to Codex storage.
-    </Tip>
+    <Note>
+    Onboarding no longer imports OAuth material from `~/.codex`. Sign in with browser OAuth (default) or the device-code flow above — OpenClaw manages the resulting credentials in its own agent auth store.
+    </Note>
 
     ### Context window cap
 
@@ -387,6 +393,134 @@ Legacy `plugins.entries.openai.config.personality` is still read as a compatibil
   </Accordion>
 </AccordionGroup>
 
+## Azure OpenAI endpoints
+
+The bundled `openai` provider can target an Azure OpenAI resource for image
+generation by overriding the base URL. On the image-generation path, OpenClaw
+detects Azure hostnames on `models.providers.openai.baseUrl` and switches to
+Azure's request shape automatically.
+
+<Note>
+Realtime voice uses a separate configuration path
+(`plugins.entries.voice-call.config.realtime.providers.openai.azureEndpoint`)
+and is not affected by `models.providers.openai.baseUrl`. See the **Realtime
+voice** accordion under [Voice and speech](#voice-and-speech) for its Azure
+settings.
+</Note>
+
+Use Azure OpenAI when:
+
+- You already have an Azure OpenAI subscription, quota, or enterprise agreement
+- You need regional data residency or compliance controls Azure provides
+- You want to keep traffic inside an existing Azure tenancy
+
+### Configuration
+
+For Azure image generation through the bundled `openai` provider, point
+`models.providers.openai.baseUrl` at your Azure resource and set `apiKey` to
+the Azure OpenAI key (not an OpenAI Platform key):
+
+```json5
+{
+  models: {
+    providers: {
+      openai: {
+        baseUrl: "https://<your-resource>.openai.azure.com",
+        apiKey: "<azure-openai-api-key>",
+      },
+    },
+  },
+}
+```
+
+OpenClaw recognizes these Azure host suffixes for the Azure image-generation
+route:
+
+- `*.openai.azure.com`
+- `*.services.ai.azure.com`
+- `*.cognitiveservices.azure.com`
+
+For image-generation requests on a recognized Azure host, OpenClaw:
+
+- Sends the `api-key` header instead of `Authorization: Bearer`
+- Uses deployment-scoped paths (`/openai/deployments/{deployment}/...`)
+- Appends `?api-version=...` to each request
+
+Other base URLs (public OpenAI, OpenAI-compatible proxies) keep the standard
+OpenAI image request shape.
+
+<Note>
+Azure routing for the `openai` provider's image-generation path requires
+OpenClaw 2026.4.22 or later. Earlier versions treat any custom
+`openai.baseUrl` like the public OpenAI endpoint and will fail against Azure
+image deployments.
+</Note>
+
+### API version
+
+Set `AZURE_OPENAI_API_VERSION` to pin a specific Azure preview or GA version
+for the Azure image-generation path:
+
+```bash
+export AZURE_OPENAI_API_VERSION="2024-12-01-preview"
+```
+
+The default is `2024-12-01-preview` when the variable is unset.
+
+### Model names are deployment names
+
+Azure OpenAI binds models to deployments. For Azure image-generation requests
+routed through the bundled `openai` provider, the `model` field in OpenClaw
+must be the **Azure deployment name** you configured in the Azure portal, not
+the public OpenAI model id.
+
+If you create a deployment called `gpt-image-2-prod` that serves `gpt-image-2`:
+
+```
+/tool image_generate model=openai/gpt-image-2-prod prompt="A clean poster" size=1024x1024 count=1
+```
+
+The same deployment-name rule applies to image-generation calls routed through
+the bundled `openai` provider.
+
+### Regional availability
+
+Azure image generation is currently available only in a subset of regions
+(for example `eastus2`, `swedencentral`, `polandcentral`, `westus3`,
+`uaenorth`). Check Microsoft's current region list before creating a
+deployment, and confirm the specific model is offered in your region.
+
+### Parameter differences
+
+Azure OpenAI and public OpenAI do not always accept the same image parameters.
+Azure may reject options that public OpenAI allows (for example certain
+`background` values on `gpt-image-2`) or expose them only on specific model
+versions. These differences come from Azure and the underlying model, not
+OpenClaw. If an Azure request fails with a validation error, check the
+parameter set supported by your specific deployment and API version in the
+Azure portal.
+
+<Note>
+Azure OpenAI uses native transport and compat behavior but does not receive
+OpenClaw's hidden attribution headers. See the **Native vs OpenAI-compatible
+routes** accordion under [Advanced configuration](#advanced-configuration)
+for details.
+</Note>
+
+<Tip>
+For a separate Azure OpenAI Responses provider (distinct from the `openai`
+provider), see the `azure-openai-responses/*` model refs in the
+[Server-side compaction](#server-side-compaction-responses-api) accordion.
+</Tip>
+
+<Note>
+Azure chat and Responses traffic need Azure-specific provider/API config in
+addition to a base URL override. If you want Azure model calls beyond image
+generation, use the onboarding flow or a provider config that sets the
+appropriate Azure API/auth shape rather than assuming `openai.baseUrl` alone
+is enough.
+</Note>
+
 ## Advanced configuration
 
 <AccordionGroup>
@@ -444,6 +578,8 @@ Legacy `plugins.entries.openai.config.personality` is still read as a compatibil
     ```
 
   </Accordion>
+
+<a id="openai-fast-mode"></a>
 
   <Accordion title="Fast mode">
     OpenClaw exposes a shared fast-mode toggle for both `openai/*` and `openai-codex/*`:

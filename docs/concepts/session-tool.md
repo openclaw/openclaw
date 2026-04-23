@@ -29,10 +29,11 @@ orchestrate sub-agents.
 `sessions_list` returns sessions with their key, agentId, kind, channel, model,
 token counts, and timestamps. Filter by kind (`main`, `group`, `cron`, `hook`,
 `node`), exact `label`, exact `agentId`, search text, or recency
-(`activeMinutes`). When you need mailbox-style triage, it can also ask for
-derived titles, last-message previews, or bounded recent messages. Preview
-transcript reads are scoped to sessions visible under the configured session
-tool visibility policy.
+(`activeMinutes`). When you need mailbox-style triage, it can also ask for a
+visibility-scoped derived title, a last-message preview snippet, or bounded
+recent messages on each row. Derived titles and previews are produced only for
+sessions the caller can already see under the configured session tool
+visibility policy, so unrelated sessions stay hidden.
 
 `sessions_history` fetches the conversation transcript for a specific session.
 By default, tool results are excluded -- pass `includeTools: true` to see them.

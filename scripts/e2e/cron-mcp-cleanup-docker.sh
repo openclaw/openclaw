@@ -2,8 +2,8 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
-IMAGE_NAME="${OPENCLAW_IMAGE:-openclaw-cron-mcp-cleanup-e2e}"
+source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
+IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-cron-mcp-cleanup-e2e" OPENCLAW_IMAGE)"
 PORT="18789"
 TOKEN="cron-mcp-e2e-$(date +%s)-$$"
 CONTAINER_NAME="openclaw-cron-mcp-e2e-$$"
@@ -15,8 +15,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "Building Docker image..."
-run_logged cron-mcp-cleanup-build docker build -t "$IMAGE_NAME" -f "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR"
+docker_e2e_build_or_reuse "$IMAGE_NAME" cron-mcp-cleanup
 
 echo "Running in-container cron/subagent MCP cleanup smoke..."
 set +e

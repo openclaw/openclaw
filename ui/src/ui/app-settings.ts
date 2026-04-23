@@ -323,6 +323,10 @@ async function refreshAgentsTab(host: SettingsHost, app: SettingsAppHost) {
     case "cron":
       void loadCron(host);
       return;
+    case "overview":
+    case "tools":
+    case undefined:
+      return;
   }
 }
 

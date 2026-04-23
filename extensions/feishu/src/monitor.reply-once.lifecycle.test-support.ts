@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
 import "./lifecycle.test-support.js";
-import { getFeishuLifecycleTestMocks } from "./lifecycle.test-support.js";
+import {
+  getFeishuLifecycleTestMocks,
+  resetFeishuLifecycleTestMocks,
+} from "./lifecycle.test-support.js";
 import {
   createFeishuLifecycleConfig,
   createFeishuLifecycleReplyDispatcher,
@@ -62,7 +65,8 @@ async function setupLifecycleMonitor() {
 describe("Feishu reply-once lifecycle", () => {
   beforeEach(() => {
     vi.useRealTimers();
-    vi.clearAllMocks();
+    resetFeishuLifecycleTestMocks();
+    handleMessageMock.mockReset();
     lastRuntime = null;
     setFeishuLifecycleStateDir("openclaw-feishu-lifecycle");
 

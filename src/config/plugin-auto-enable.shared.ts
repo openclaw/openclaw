@@ -540,10 +540,14 @@ export function resolveConfiguredPluginAutoEnableCandidates(params: {
   }
 
   if (hasSetupAutoEnableRelevantConfig(params.config)) {
+    const manifestMatchedPluginIds = new Set(changes.map((entry) => entry.pluginId));
+    const setupPluginIds = resolveRelevantSetupAutoEnablePluginIds(params.config).filter(
+      (pluginId) => !manifestMatchedPluginIds.has(pluginId),
+    );
     for (const entry of resolvePluginSetupAutoEnableReasons({
       config: params.config,
       env: params.env,
-      pluginIds: resolveRelevantSetupAutoEnablePluginIds(params.config),
+      pluginIds: setupPluginIds,
     })) {
       changes.push({
         pluginId: entry.pluginId,

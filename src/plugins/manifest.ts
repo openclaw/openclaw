@@ -17,6 +17,7 @@ import type { PluginKind } from "./plugin-kind.types.js";
 
 export const PLUGIN_MANIFEST_FILENAME = "openclaw.plugin.json";
 export const PLUGIN_MANIFEST_FILENAMES = [PLUGIN_MANIFEST_FILENAME] as const;
+export const MAX_PLUGIN_MANIFEST_BYTES = 256 * 1024;
 
 export type PluginManifestChannelConfig = {
   schema: JsonSchemaObject;
@@ -232,6 +233,12 @@ export type PluginManifest = {
 
 export type PluginManifestContracts = {
   embeddedExtensionFactories?: string[];
+  /**
+   * Provider ids whose external auth profile hook can contribute runtime-only
+   * credentials. Declaring this lets auth-store overlays load only the owning
+   * plugin instead of every provider plugin.
+   */
+  externalAuthProviders?: string[];
   memoryEmbeddingProviders?: string[];
   speechProviders?: string[];
   realtimeTranscriptionProviders?: string[];
@@ -419,6 +426,7 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
   }
 
   const embeddedExtensionFactories = normalizeTrimmedStringList(value.embeddedExtensionFactories);
+  const externalAuthProviders = normalizeTrimmedStringList(value.externalAuthProviders);
   const memoryEmbeddingProviders = normalizeTrimmedStringList(value.memoryEmbeddingProviders);
   const speechProviders = normalizeTrimmedStringList(value.speechProviders);
   const realtimeTranscriptionProviders = normalizeTrimmedStringList(
@@ -434,6 +442,7 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
   const tools = normalizeTrimmedStringList(value.tools);
   const contracts = {
     ...(embeddedExtensionFactories.length > 0 ? { embeddedExtensionFactories } : {}),
+    ...(externalAuthProviders.length > 0 ? { externalAuthProviders } : {}),
     ...(memoryEmbeddingProviders.length > 0 ? { memoryEmbeddingProviders } : {}),
     ...(speechProviders.length > 0 ? { speechProviders } : {}),
     ...(realtimeTranscriptionProviders.length > 0 ? { realtimeTranscriptionProviders } : {}),
@@ -806,6 +815,7 @@ export function loadPluginManifest(
     absolutePath: manifestPath,
     rootPath: rootDir,
     boundaryLabel: "plugin root",
+    maxBytes: MAX_PLUGIN_MANIFEST_BYTES,
     rejectHardlinks,
   });
   if (!opened.ok) {
@@ -982,6 +992,7 @@ export type PluginPackageInstall = {
   localPath?: string;
   defaultChoice?: "npm" | "local";
   minHostVersion?: string;
+  expectedIntegrity?: string;
   allowInvalidConfigRecovery?: boolean;
 };
 

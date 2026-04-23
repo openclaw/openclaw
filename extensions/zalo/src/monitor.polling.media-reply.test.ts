@@ -9,7 +9,7 @@ import {
 } from "../test-support/lifecycle-test-support.js";
 import {
   getUpdatesMock,
-  loadLifecycleMonitorModule,
+  loadCachedLifecycleMonitorModule,
   resetLifecycleTestState,
   sendPhotoMock,
   setLifecycleRuntimeCore,
@@ -95,7 +95,9 @@ describe("Zalo polling media replies", () => {
       })
       .mockImplementation(() => new Promise(() => {}));
 
-    const { monitorZaloProvider } = await loadLifecycleMonitorModule();
+    const { monitorZaloProvider } = await loadCachedLifecycleMonitorModule(
+      "zalo-polling-media-reply",
+    );
     const abort = new AbortController();
     const runtime = createRuntimeEnv();
     const { account, config } = createLifecycleMonitorSetup({
@@ -155,7 +157,9 @@ describe("Zalo polling media replies", () => {
       })
       .mockImplementation(() => new Promise(() => {}));
 
-    const { monitorZaloProvider } = await loadLifecycleMonitorModule();
+    const { monitorZaloProvider } = await loadCachedLifecycleMonitorModule(
+      "zalo-polling-media-reply",
+    );
     const abort = new AbortController();
     const runtime = createRuntimeEnv();
     const { account, config } = createLifecycleMonitorSetup({
@@ -195,7 +199,9 @@ describe("Zalo polling media replies", () => {
     setActivePluginRegistry(firstRegistry);
     getUpdatesMock.mockImplementation(() => new Promise(() => {}));
 
-    const { monitorZaloProvider } = await loadLifecycleMonitorModule();
+    const { monitorZaloProvider } = await loadCachedLifecycleMonitorModule(
+      "zalo-polling-media-reply",
+    );
     const firstAbort = new AbortController();
     const firstRuntime = createRuntimeEnv();
     const { account, config } = createLifecycleMonitorSetup({

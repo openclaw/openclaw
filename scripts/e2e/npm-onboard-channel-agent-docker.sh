@@ -2,9 +2,9 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
+source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 
-IMAGE_NAME="${OPENCLAW_NPM_ONBOARD_E2E_IMAGE:-openclaw-npm-onboard-channel-agent-e2e}"
+IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-npm-onboard-channel-agent-e2e" OPENCLAW_NPM_ONBOARD_E2E_IMAGE)"
 DOCKER_TARGET="${OPENCLAW_NPM_ONBOARD_DOCKER_TARGET:-e2e-runner}"
 HOST_BUILD="${OPENCLAW_NPM_ONBOARD_HOST_BUILD:-1}"
 PACKAGE_TGZ="${OPENCLAW_NPM_ONBOARD_PACKAGE_TGZ:-}"
@@ -18,12 +18,7 @@ case "$CHANNEL" in
     ;;
 esac
 
-if [ "${OPENCLAW_SKIP_DOCKER_BUILD:-0}" = "1" ]; then
-  echo "Reusing Docker image: $IMAGE_NAME (OPENCLAW_SKIP_DOCKER_BUILD=1)"
-else
-  echo "Building Docker image target $DOCKER_TARGET..."
-  run_logged npm-onboard-channel-agent-build docker build --target "$DOCKER_TARGET" -t "$IMAGE_NAME" -f "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR"
-fi
+docker_e2e_build_or_reuse "$IMAGE_NAME" npm-onboard-channel-agent "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "$DOCKER_TARGET"
 
 prepare_package_tgz() {
   if [ -n "$PACKAGE_TGZ" ]; then

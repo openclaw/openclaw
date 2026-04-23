@@ -133,7 +133,7 @@ Looking for third-party plugins? See [Community Plugins](/plugins/community).
     enabled: true,
     allow: ["voice-call"],
     deny: ["untrusted-plugin"],
-    load: { paths: ["~/Projects/oss/voice-call-extension"] },
+    load: { paths: ["~/Projects/oss/voice-call-plugin"] },
     entries: {
       "voice-call": { enabled: true, config: { provider: "twilio" } },
     },
@@ -169,11 +169,11 @@ OpenClaw scans for plugins in this order (first match wins):
     `plugins.load.paths` — explicit file or directory paths.
   </Step>
 
-  <Step title="Workspace extensions">
+  <Step title="Workspace plugins">
     `\<workspace\>/.openclaw/<plugin-root>/*.ts` and `\<workspace\>/.openclaw/<plugin-root>/*/index.ts`.
   </Step>
 
-  <Step title="Global extensions">
+  <Step title="Global plugins">
     `~/.openclaw/<plugin-root>/*.ts` and `~/.openclaw/<plugin-root>/*/index.ts`.
   </Step>
 
@@ -254,6 +254,10 @@ plugin). Other bundled plugins still need `openclaw plugins enable <id>`.
 `openclaw plugins update <id-or-npm-spec>` for routine upgrades of tracked npm
 plugins. It is not supported with `--link`, which reuses the source path instead
 of copying over a managed install target.
+
+When `plugins.allow` is already set, `openclaw plugins install` adds the
+installed plugin id to that allowlist before enabling it, so installs are
+immediately loadable after restart.
 
 `openclaw plugins update <id-or-npm-spec>` applies to tracked installs. Passing
 an npm package spec with a dist-tag or exact version resolves the package name
