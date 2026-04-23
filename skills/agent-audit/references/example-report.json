@@ -65,6 +65,15 @@
       "note": "Old evidence is accepted as if it were fresh."
     }
   ],
+  "contamination_paths": [
+    {
+      "origin_layer": "session_history",
+      "affected_layer": "tool_selection",
+      "artifact": "stale operational observation",
+      "failure_mode": "stale_state",
+      "note": "A previous observation survives long enough to bias current-turn tool routing."
+    }
+  ],
   "ordered_fix_plan": [
     {
       "order": 1,
