@@ -10,10 +10,20 @@ export type ManagedCache<T> = {
 };
 
 export function resolveSingletonManagedCache<T>(cacheKey: symbol): ManagedCache<T> {
-  return resolveGlobalSingleton<ManagedCache<T>>(cacheKey, () => ({
+  const existing = resolveGlobalSingleton<ManagedCache<T>>(cacheKey, () => ({
     cache: new Map<string, T>(),
     pending: new Map<string, Promise<T>>(),
   }));
+  if (existing.cache instanceof Map && existing.pending instanceof Map) {
+    return existing;
+  }
+  const repaired: ManagedCache<T> = {
+    ...(existing && typeof existing === "object" ? existing : {}),
+    cache: new Map<string, T>(),
+    pending: new Map<string, Promise<T>>(),
+  };
+  (globalThis as Record<symbol, unknown>)[cacheKey] = repaired;
+  return repaired;
 }
 
 export async function getOrCreateManagedCacheEntry<T>(params: {
