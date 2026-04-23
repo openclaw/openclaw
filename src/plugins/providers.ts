@@ -137,9 +137,9 @@ export function resolveExternalAuthProfileCompatFallbackPluginIds(params: {
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
 }): string[] {
-  // Compatibility fallback for provider plugins that implemented the public
-  // external auth hook before contracts.externalAuthProviders existed. Remove
-  // this with the warning path in provider-runtime after the deprecation window.
+  // Deprecated compatibility fallback for provider plugins that still implement
+  // resolveExternalOAuthProfiles or omit contracts.externalAuthProviders. Remove
+  // this with the warning path in provider-runtime after the migration window.
   const declaredPluginIds = new Set(resolveExternalAuthProfileProviderPluginIds(params));
   const registry = loadProviderManifestRegistry(params);
   const normalizedConfig = normalizePluginsConfig(params.config?.plugins);
