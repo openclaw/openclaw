@@ -171,7 +171,8 @@ export function createStreamingDirectiveAccumulator() {
 
     const parsed = parseChunk(combined, { silentToken: options.silentToken });
     const hasTag = activeReply.hasTag || pendingReply.hasTag || parsed.replyToTag;
-    const sawCurrent = activeReply.sawCurrent || pendingReply.sawCurrent || parsed.replyToCurrent;
+    const sawCurrent =
+      activeReply.sawCurrent || pendingReply.sawCurrent || parsed.replyToCurrent === true;
     const explicitId =
       parsed.replyToExplicitId ?? pendingReply.explicitId ?? activeReply.explicitId;
 
