@@ -50,6 +50,23 @@ describe("applyProviderAuthConfigPatch", () => {
     expect(Object.getPrototypeOf(next).polluted).toBeUndefined();
   });
 
+  it("drops prototype-pollution keys from opt-in model replacement", () => {
+    const patch = JSON.parse(
+      '{"agents":{"defaults":{"models":{"__proto__":{"polluted":true},"claude-cli/claude-sonnet-4-6":{"alias":"Sonnet","params":{"constructor":{"polluted":true},"maxTokens":12000}}}}}}',
+    );
+    const next = applyProviderAuthConfigPatch(base, patch, { replaceDefaultModels: true });
+    const models = next.agents?.defaults?.models;
+    expect(models).toEqual({
+      "claude-cli/claude-sonnet-4-6": {
+        alias: "Sonnet",
+        params: { maxTokens: 12000 },
+      },
+    });
+    expect(Object.prototype.hasOwnProperty.call(models, "__proto__")).toBe(false);
+    expect(Object.getPrototypeOf(Object.assign({}, models)).polluted).toBeUndefined();
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+  });
+
   it("keeps normal recursive merges for unrelated provider auth patch fields", () => {
     const base = {
       agents: {
