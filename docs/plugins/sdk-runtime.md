@@ -261,6 +261,13 @@ const pngQr = await api.runtime.media.renderQrPngBase64("https://openclaw.ai", {
   scale: 6, // 1-12
   marginModules: 4, // 0-16
 });
+const pngQrDataUrl = await api.runtime.media.renderQrPngDataUrl("https://openclaw.ai");
+const tmpRoot = resolvePreferredOpenClawTmpDir();
+const pngQrFile = await api.runtime.media.writeQrPngTempFile("https://openclaw.ai", {
+  tmpRoot,
+  dirPrefix: "my-plugin-qr-",
+  fileName: "qr.png",
+});
 ```
 
 ### `api.runtime.config`
