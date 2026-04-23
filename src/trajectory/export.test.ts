@@ -95,6 +95,35 @@ function writeSimpleSessionFile(
   );
 }
 
+function writeToolCallOnlySessionFile(sessionFile: string): void {
+  const header = {
+    type: "session",
+    version: 3,
+    id: "session-1",
+    timestamp: "2026-04-01T05:46:39.000Z",
+    cwd: path.dirname(sessionFile),
+  };
+  const assistantEntry = {
+    type: "message",
+    id: "entry-assistant",
+    parentId: null,
+    timestamp: "2026-04-01T05:46:41.000Z",
+    message: assistantMessage([
+      {
+        type: "toolCall",
+        id: "call_1",
+        name: "read",
+        arguments: { filePath: "README.md" },
+      },
+    ]),
+  };
+  fs.writeFileSync(
+    sessionFile,
+    `${[header, assistantEntry].map((entry) => JSON.stringify(entry)).join("\n")}\n`,
+    "utf8",
+  );
+}
+
 afterEach(() => {
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -364,6 +393,69 @@ describe("exportTrajectoryBundle", () => {
 
     expect(bundle.runtimeFile).toBeUndefined();
     expect(bundle.events.some((event) => event.type === "outside-runtime")).toBe(false);
+  });
+
+  it("does not fall back to runtime pointer targets that are not regular files", () => {
+    const tmpDir = makeTempDir();
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    const targetFile = path.join(tmpDir, "outside-target.jsonl");
+    const symlinkFile = path.join(tmpDir, "recorded", "session-1.jsonl");
+    const outputDir = path.join(tmpDir, "bundle");
+    writeSimpleSessionFile(sessionFile);
+    fs.mkdirSync(path.dirname(symlinkFile), { recursive: true });
+    fs.writeFileSync(
+      resolveTrajectoryPointerFilePath(sessionFile),
+      `${JSON.stringify({
+        traceSchema: "openclaw-trajectory-pointer",
+        schemaVersion: 1,
+        sessionId: "session-1",
+        runtimeFile: symlinkFile,
+      })}\n`,
+      "utf8",
+    );
+    fs.writeFileSync(
+      targetFile,
+      `${JSON.stringify({
+        traceSchema: "openclaw-trajectory",
+        schemaVersion: 1,
+        traceId: "session-1",
+        source: "runtime",
+        type: "symlink-runtime",
+        ts: "2026-04-22T08:00:00.000Z",
+        seq: 1,
+        sourceSeq: 1,
+        sessionId: "session-1",
+      })}\n`,
+      "utf8",
+    );
+    fs.symlinkSync(targetFile, symlinkFile);
+
+    const bundle = exportTrajectoryBundle({
+      outputDir,
+      sessionFile,
+      sessionId: "session-1",
+      workspaceDir: tmpDir,
+    });
+
+    expect(bundle.runtimeFile).toBeUndefined();
+    expect(bundle.events.some((event) => event.type === "symlink-runtime")).toBe(false);
+  });
+
+  it("counts expanded transcript events when enforcing the total event limit", () => {
+    const tmpDir = makeTempDir();
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    const outputDir = path.join(tmpDir, "bundle");
+    writeToolCallOnlySessionFile(sessionFile);
+
+    expect(() =>
+      exportTrajectoryBundle({
+        outputDir,
+        sessionFile,
+        sessionId: "session-1",
+        workspaceDir: tmpDir,
+        maxTotalEvents: 1,
+      }),
+    ).toThrow(/too many events \(2; limit 1\)/u);
   });
 
   it("skips runtime events for other sessions", () => {

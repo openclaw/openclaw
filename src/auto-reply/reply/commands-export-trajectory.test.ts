@@ -203,4 +203,32 @@ describe("buildExportTrajectoryReply", () => {
     expect(reply.text).toContain("Failed to resolve output path");
     expect(hoisted.exportTrajectoryBundleMock).not.toHaveBeenCalled();
   });
+
+  it("rejects default output paths redirected by a symlinked exports directory", async () => {
+    const { buildExportTrajectoryReply } = await import("./commands-export-trajectory.js");
+    const workspaceDir = makeTempDir();
+    const outsideDir = makeTempDir();
+    fs.mkdirSync(path.join(workspaceDir, ".openclaw"), { recursive: true });
+    fs.symlinkSync(outsideDir, path.join(workspaceDir, ".openclaw", "trajectory-exports"));
+
+    const reply = await buildExportTrajectoryReply(makeParams(workspaceDir));
+
+    expect(reply.text).toContain("Failed to resolve output path");
+    expect(hoisted.exportTrajectoryBundleMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects symlinked state directories before creating export folders", async () => {
+    const { buildExportTrajectoryReply } = await import("./commands-export-trajectory.js");
+    const workspaceDir = makeTempDir();
+    const outsideDir = makeTempDir();
+    fs.symlinkSync(outsideDir, path.join(workspaceDir, ".openclaw"));
+    const params = makeParams(workspaceDir);
+    params.command.commandBodyNormalized = "/export-trajectory my-bundle";
+
+    const reply = await buildExportTrajectoryReply(params);
+
+    expect(reply.text).toContain("Failed to resolve output path");
+    expect(fs.existsSync(path.join(outsideDir, "trajectory-exports"))).toBe(false);
+    expect(hoisted.exportTrajectoryBundleMock).not.toHaveBeenCalled();
+  });
 });

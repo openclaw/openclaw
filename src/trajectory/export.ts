@@ -40,6 +40,7 @@ type BuildTrajectoryBundleParams = {
   runtimeFile?: string;
   systemPrompt?: string;
   tools?: TrajectoryToolDefinition[];
+  maxTotalEvents?: number;
 };
 
 type RuntimeTrajectoryContext = {
@@ -173,7 +174,7 @@ function resolveTrajectoryRuntimeFile(params: {
   runtimeFile?: string;
   sessionFile: string;
   sessionId: string;
-}): string {
+}): string | undefined {
   if (params.runtimeFile) {
     return params.runtimeFile;
   }
@@ -189,7 +190,7 @@ function resolveTrajectoryRuntimeFile(params: {
       sessionId: params.sessionId,
     }),
   ].filter((candidate): candidate is string => Boolean(candidate));
-  return candidates.find((candidate) => isRegularNonSymlinkFile(candidate)) ?? candidates[0];
+  return candidates.find((candidate) => isRegularNonSymlinkFile(candidate));
 }
 
 function normalizeTimestamp(value: unknown): string {
@@ -758,17 +759,14 @@ export function exportTrajectoryBundle(params: BuildTrajectoryBundleParams): {
     sessionFile: params.sessionFile,
     sessionId: params.sessionId,
   });
-  const runtimeEvents = parseJsonlFile<TrajectoryEvent>(runtimeFile, {
-    maxBytes: TRAJECTORY_RUNTIME_FILE_MAX_BYTES,
-    maxEvents: MAX_TRAJECTORY_RUNTIME_EVENTS,
-    validate: (value): value is TrajectoryEvent =>
-      isRuntimeTrajectoryEventForSession(value, params.sessionId),
-  });
-  if (runtimeEvents.length + branchEntries.length > MAX_TRAJECTORY_TOTAL_EVENTS) {
-    throw new Error(
-      `Trajectory export has too many events (${runtimeEvents.length + branchEntries.length}; limit ${MAX_TRAJECTORY_TOTAL_EVENTS})`,
-    );
-  }
+  const runtimeEvents = runtimeFile
+    ? parseJsonlFile<TrajectoryEvent>(runtimeFile, {
+        maxBytes: TRAJECTORY_RUNTIME_FILE_MAX_BYTES,
+        maxEvents: MAX_TRAJECTORY_RUNTIME_EVENTS,
+        validate: (value): value is TrajectoryEvent =>
+          isRuntimeTrajectoryEventForSession(value, params.sessionId),
+      })
+    : [];
   const transcriptEvents = buildTranscriptEvents({
     entries: branchEntries,
     sessionId: params.sessionId,
@@ -776,6 +774,13 @@ export function exportTrajectoryBundle(params: BuildTrajectoryBundleParams): {
     workspaceDir: params.workspaceDir,
     traceId: params.sessionId,
   });
+  const maxTotalEvents = params.maxTotalEvents ?? MAX_TRAJECTORY_TOTAL_EVENTS;
+  const totalEventCount = runtimeEvents.length + transcriptEvents.length;
+  if (totalEventCount > maxTotalEvents) {
+    throw new Error(
+      `Trajectory export has too many events (${totalEventCount}; limit ${maxTotalEvents})`,
+    );
+  }
   const rawEvents = sortTrajectoryEvents([...runtimeEvents, ...transcriptEvents]);
   const events = rawEvents.map((event) => redactEventForExport(event, redaction));
   const manifest: TrajectoryBundleManifest = {
@@ -792,9 +797,10 @@ export function exportTrajectoryBundle(params: BuildTrajectoryBundleParams): {
     transcriptEventCount: transcriptEvents.length,
     sourceFiles: {
       session: maybeRedactPathString(params.sessionFile, redaction),
-      runtime: isRegularNonSymlinkFile(runtimeFile)
-        ? maybeRedactPathString(runtimeFile, redaction)
-        : undefined,
+      runtime:
+        runtimeFile && isRegularNonSymlinkFile(runtimeFile)
+          ? maybeRedactPathString(runtimeFile, redaction)
+          : undefined,
     },
   };
 
@@ -881,7 +887,7 @@ export function exportTrajectoryBundle(params: BuildTrajectoryBundleParams): {
     outputDir: params.outputDir,
     events,
     header,
-    runtimeFile: isRegularNonSymlinkFile(runtimeFile) ? runtimeFile : undefined,
+    runtimeFile: runtimeFile && isRegularNonSymlinkFile(runtimeFile) ? runtimeFile : undefined,
     supplementalFiles,
   };
 }

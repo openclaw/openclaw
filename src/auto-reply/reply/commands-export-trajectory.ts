@@ -26,34 +26,83 @@ function parseExportTrajectoryArgs(commandBodyNormalized: string): { outputPath?
   return { outputPath };
 }
 
+function isPathInsideOrEqual(baseDir: string, candidate: string): boolean {
+  const relative = path.relative(baseDir, candidate);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function validateExistingExportDirectory(params: {
+  dir: string;
+  label: string;
+  realWorkspace: string;
+}): string {
+  const linkStat = fs.lstatSync(params.dir);
+  if (linkStat.isSymbolicLink() || !linkStat.isDirectory()) {
+    throw new Error(`${params.label} must be a real directory inside the workspace`);
+  }
+  const realDir = fs.realpathSync(params.dir);
+  if (!isPathInsideOrEqual(params.realWorkspace, realDir)) {
+    throw new Error("Trajectory exports directory must stay inside the workspace");
+  }
+  return realDir;
+}
+
+function mkdirIfMissingThenValidate(params: {
+  dir: string;
+  label: string;
+  realWorkspace: string;
+}): string {
+  if (!fs.existsSync(params.dir)) {
+    try {
+      fs.mkdirSync(params.dir, { mode: 0o700 });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+        throw error;
+      }
+    }
+  }
+  return validateExistingExportDirectory(params);
+}
+
+function resolveTrajectoryExportBaseDir(workspaceDir: string): {
+  baseDir: string;
+  realBase: string;
+} {
+  const workspacePath = path.resolve(workspaceDir);
+  const realWorkspace = fs.realpathSync(workspacePath);
+  const stateDir = path.join(workspacePath, ".openclaw");
+  mkdirIfMissingThenValidate({
+    dir: stateDir,
+    label: "OpenClaw state directory",
+    realWorkspace,
+  });
+  const baseDir = path.join(stateDir, "trajectory-exports");
+  const realBase = mkdirIfMissingThenValidate({
+    dir: baseDir,
+    label: "Trajectory exports directory",
+    realWorkspace,
+  });
+  return { baseDir: path.resolve(baseDir), realBase };
+}
+
 function resolveTrajectoryCommandOutputDir(params: {
   outputPath?: string;
   workspaceDir: string;
   sessionId: string;
 }): string {
+  const { baseDir, realBase } = resolveTrajectoryExportBaseDir(params.workspaceDir);
   const raw = params.outputPath?.trim();
   if (!raw) {
-    return resolveDefaultTrajectoryExportDir({
+    const defaultDir = resolveDefaultTrajectoryExportDir({
       workspaceDir: params.workspaceDir,
       sessionId: params.sessionId,
     });
+    return path.join(baseDir, path.basename(defaultDir));
   }
   if (path.isAbsolute(raw) || raw.startsWith("~")) {
     throw new Error("Output path must be relative to the workspace trajectory exports directory");
   }
-  const baseDir = path.join(params.workspaceDir, ".openclaw", "trajectory-exports");
-  fs.mkdirSync(baseDir, { recursive: true, mode: 0o700 });
   const resolvedBase = path.resolve(baseDir);
-  const realBase = fs.realpathSync(resolvedBase);
-  const realWorkspace = fs.realpathSync(path.resolve(params.workspaceDir));
-  const baseRelativeToWorkspace = path.relative(realWorkspace, realBase);
-  if (
-    !baseRelativeToWorkspace ||
-    baseRelativeToWorkspace.startsWith("..") ||
-    path.isAbsolute(baseRelativeToWorkspace)
-  ) {
-    throw new Error("Trajectory exports directory must stay inside the workspace");
-  }
   const outputDir = path.resolve(resolvedBase, raw);
   const relative = path.relative(resolvedBase, outputDir);
   if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
@@ -68,8 +117,7 @@ function resolveTrajectoryCommandOutputDir(params: {
     existingParent = next;
   }
   const realExistingParent = fs.realpathSync(existingParent);
-  const realRelative = path.relative(realBase, realExistingParent);
-  if (realRelative.startsWith("..") || path.isAbsolute(realRelative)) {
+  if (!isPathInsideOrEqual(realBase, realExistingParent)) {
     throw new Error("Output path must stay inside the real trajectory exports directory");
   }
   return outputDir;

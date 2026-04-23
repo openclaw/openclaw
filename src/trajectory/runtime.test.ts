@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   TRAJECTORY_RUNTIME_EVENT_MAX_BYTES,
   createTrajectoryRuntimeRecorder,
+  resolveTrajectoryPointerOpenFlags,
   resolveTrajectoryPointerFilePath,
   resolveTrajectoryFilePath,
   toTrajectoryToolDefinitions,
@@ -136,6 +137,16 @@ describe("trajectory runtime", () => {
       fs.readFileSync(resolveTrajectoryPointerFilePath(sessionFile), "utf8"),
     ) as { runtimeFile?: string };
     expect(pointer.runtimeFile).toBe(path.join(trajectoryDir, "session-1.jsonl"));
+  });
+
+  it("keeps pointer write flags usable when O_NOFOLLOW is unavailable", () => {
+    expect(
+      resolveTrajectoryPointerOpenFlags({
+        O_CREAT: 0x01,
+        O_TRUNC: 0x02,
+        O_WRONLY: 0x04,
+      }),
+    ).toBe(0x07);
   });
 
   it("does not record runtime events when explicitly disabled", () => {

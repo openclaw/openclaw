@@ -34,9 +34,27 @@ export const TRAJECTORY_RUNTIME_FILE_MAX_BYTES = 50 * 1024 * 1024;
 export const TRAJECTORY_RUNTIME_EVENT_MAX_BYTES = 256 * 1024;
 const MAX_TRAJECTORY_WRITERS = 100;
 
+type TrajectoryPointerOpenFlagConstants = Pick<
+  typeof fs.constants,
+  "O_CREAT" | "O_TRUNC" | "O_WRONLY"
+> &
+  Partial<Pick<typeof fs.constants, "O_NOFOLLOW">>;
+
 export function safeTrajectorySessionFileName(sessionId: string): string {
   const safe = sessionId.replaceAll(/[^A-Za-z0-9_-]/g, "_").slice(0, 120);
   return /[A-Za-z0-9]/u.test(safe) ? safe : "session";
+}
+
+export function resolveTrajectoryPointerOpenFlags(
+  constants: TrajectoryPointerOpenFlagConstants = fs.constants,
+): number {
+  const noFollow = constants.O_NOFOLLOW;
+  return (
+    constants.O_CREAT |
+    constants.O_TRUNC |
+    constants.O_WRONLY |
+    (typeof noFollow === "number" ? noFollow : 0)
+  );
 }
 
 function resolveContainedPath(baseDir: string, fileName: string): string {
@@ -88,10 +106,6 @@ function writeTrajectoryPointerBestEffort(params: {
     return;
   }
   const pointerPath = resolveTrajectoryPointerFilePath(params.sessionFile);
-  const noFollow = fs.constants.O_NOFOLLOW;
-  if (typeof noFollow !== "number") {
-    return;
-  }
   try {
     const pointerDir = path.resolve(path.dirname(pointerPath));
     if (fs.lstatSync(pointerDir).isSymbolicLink()) {
@@ -106,11 +120,7 @@ function writeTrajectoryPointerBestEffort(params: {
         return;
       }
     }
-    const fd = fs.openSync(
-      pointerPath,
-      fs.constants.O_CREAT | fs.constants.O_TRUNC | fs.constants.O_WRONLY | noFollow,
-      0o600,
-    );
+    const fd = fs.openSync(pointerPath, resolveTrajectoryPointerOpenFlags(), 0o600);
     try {
       fs.writeFileSync(
         fd,
