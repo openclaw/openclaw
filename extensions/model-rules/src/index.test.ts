@@ -166,4 +166,23 @@ describe("model-rules hook behavior", () => {
     const content = await fs.readFile(path.join(tmpDir, "MODELS.md"), "utf-8");
     expect(content).toContain("## MODEL: gpt-5.4");
   });
+
+  it("retries seeding after an initial seed failure recovers", async () => {
+    // First call targets a path where seeding cannot succeed (parent dir does
+    // not exist yet). The hook should not permanently mark the workspace as
+    // seeded, so that once the condition clears on a subsequent call, seeding
+    // can still happen.
+    const subDir = path.join(tmpDir, "nested");
+    const hook = await registerAndGetHook();
+
+    // First attempt: parent dir does not exist -> seed fails, no file created
+    await hook({}, { workspaceDir: subDir, modelId: "gpt-5.4" });
+    await expect(fs.access(path.join(subDir, "MODELS.md"))).rejects.toBeDefined();
+
+    // Create the workspace dir, then try again -> seed should now succeed
+    await fs.mkdir(subDir, { recursive: true });
+    await hook({}, { workspaceDir: subDir, modelId: "gpt-5.4" });
+    const content = await fs.readFile(path.join(subDir, "MODELS.md"), "utf-8");
+    expect(content).toContain("## MODEL: gpt-5.4");
+  });
 });

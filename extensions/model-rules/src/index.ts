@@ -40,8 +40,10 @@ export default definePluginEntry({
         }
 
         if (!seededWorkspaces.has(workspaceDir)) {
-          await ensureDefaultModelsFile(workspaceDir, modelsFilename);
-          seededWorkspaces.add(workspaceDir);
+          const created = await ensureDefaultModelsFile(workspaceDir, modelsFilename);
+          if (created) {
+            seededWorkspaces.add(workspaceDir);
+          }
         }
 
         const modelRef = ctx.modelProviderId ? `${ctx.modelProviderId}/${modelId}` : modelId;
@@ -60,6 +62,10 @@ export default definePluginEntry({
         if (!content) {
           return undefined;
         }
+        // File is readable — treat the workspace as seeded so we skip the
+        // ensure call on subsequent turns (covers "file already existed" and
+        // "created by another process" cases that don't return created=true).
+        seededWorkspaces.add(workspaceDir);
 
         const section = findModelSection(content, modelRef);
         if (!section || section.toLowerCase() === PLACEHOLDER_TEXT) {

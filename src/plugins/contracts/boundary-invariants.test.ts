@@ -16,6 +16,7 @@ const BUNDLED_TYPED_HOOK_REGISTRATION_FILES = [
   "extensions/matrix/subagent-hooks-api.ts",
   "extensions/memory-core/src/dreaming.ts",
   "extensions/memory-lancedb/index.ts",
+  "extensions/model-rules/src/index.ts",
   "extensions/skill-workshop/index.ts",
   "extensions/thread-ownership/index.ts",
 ] as const;
@@ -40,6 +41,7 @@ const BUNDLED_TYPED_HOOK_REGISTRATION_GUARDS = {
   ],
   "extensions/memory-core/src/dreaming.ts": ["before_agent_reply", "gateway_start"],
   "extensions/memory-lancedb/index.ts": ["agent_end", "before_prompt_build"],
+  "extensions/model-rules/src/index.ts": ["before_prompt_build"],
   "extensions/skill-workshop/index.ts": ["agent_end", "before_prompt_build"],
   "extensions/thread-ownership/index.ts": ["message_received", "message_sending"],
 } as const satisfies Record<
