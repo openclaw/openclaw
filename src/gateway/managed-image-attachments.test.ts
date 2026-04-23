@@ -79,7 +79,7 @@ async function createFixture(
   stateDir: string,
   options?: { sessionKey?: string; attachmentId?: string; filename?: string },
 ) {
-  const attachmentId = options?.attachmentId ?? "att-123";
+  const attachmentId = options?.attachmentId ?? "11111111-1111-4111-8111-111111111111";
   const sessionKey = options?.sessionKey ?? "agent:main:main";
   const filename = options?.filename ?? `${attachmentId}-cat-full.png`;
   const originalPath = path.join(stateDir, "files", filename);
@@ -887,11 +887,11 @@ describe("cleanupManagedOutgoingImageRecords", () => {
 
   it("reads each session transcript once while evaluating committed records", async () => {
     const firstFixture = await createFixture(stateDir, {
-      attachmentId: "att-1",
+      attachmentId: "11111111-1111-4111-8111-111111111111",
       filename: "att-1.png",
     });
     const secondFixture = await createFixture(stateDir, {
-      attachmentId: "att-2",
+      attachmentId: "22222222-2222-4222-8222-222222222222",
       filename: "att-2.png",
     });
     loadSessionEntryMock.mockReturnValue({
@@ -929,11 +929,11 @@ describe("cleanupManagedOutgoingImageRecords", () => {
   it("does not delete files still referenced by other sessions during session-scoped cleanup", async () => {
     const retainedFixture = await createFixture(stateDir, {
       sessionKey: "agent:other:session",
-      attachmentId: "att-keep",
+      attachmentId: "33333333-3333-4333-8333-333333333333",
     });
     const deletedFixture = await createFixture(stateDir, {
       sessionKey: "agent:main:main",
-      attachmentId: "att-delete",
+      attachmentId: "44444444-4444-4444-8444-444444444444",
     });
 
     loadSessionEntryMock.mockImplementation((sessionKey: string) => ({

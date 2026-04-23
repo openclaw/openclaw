@@ -1012,6 +1012,10 @@ export function renderApp(state: AppViewState) {
             setTheme: (theme, context) => state.setTheme(theme, context),
             setThemeMode: (mode, context) => state.setThemeMode(mode, context),
             setBorderRadius: (value) => state.setBorderRadius(value),
+            userName: state.userName ?? null,
+            userAvatar: state.userAvatar ?? null,
+            onUserNameChange: (name) => state.applyLocalUserIdentity?.({ name }),
+            onUserAvatarChange: (avatar) => state.applyLocalUserIdentity?.({ avatar }),
             configObject: configObj,
             onApplyPreset: (presetId) => {
               void applyQuickSettingsPreset(state, presetId).then(() => requestHostUpdate?.());

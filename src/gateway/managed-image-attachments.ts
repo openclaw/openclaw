@@ -25,6 +25,8 @@ import { loadSessionEntry, readSessionMessages } from "./session-utils.js";
 
 const OUTGOING_IMAGE_ROUTE_PREFIX = "/api/chat/media/outgoing";
 const DEFAULT_TRANSIENT_OUTGOING_IMAGE_TTL_MS = 15 * 60 * 1000;
+const MANAGED_OUTGOING_ATTACHMENT_ID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export const DEFAULT_MANAGED_IMAGE_ATTACHMENT_LIMITS = {
   maxBytes: 12 * 1024 * 1024,
@@ -216,6 +218,7 @@ function computeManagedImageResizeTarget(
 
 async function resizeManagedImageBufferToLimits(params: {
   buffer: Buffer;
+  contentType: string;
   metadata: { width: number; height: number };
   limits: ManagedImageAttachmentLimits;
 }): Promise<{ buffer: Buffer; contentType: string; width: number; height: number }> {
@@ -223,7 +226,7 @@ async function resizeManagedImageBufferToLimits(params: {
   if (!target) {
     return {
       buffer: params.buffer,
-      contentType: "image/jpeg",
+      contentType: params.contentType,
       width: params.metadata.width,
       height: params.metadata.height,
     };
@@ -569,6 +572,9 @@ function parseManagedOutgoingRoute(value: string) {
     if (!match) {
       return null;
     }
+    if (!MANAGED_OUTGOING_ATTACHMENT_ID_RE.test(match[2])) {
+      return null;
+    }
     return {
       sessionKey: decodeURIComponent(match[1]),
       attachmentId: match[2],
@@ -820,7 +826,8 @@ export async function createManagedOutgoingImageBlocks(params: {
               );
             })();
       savedOriginalPath = savedOriginal.path;
-      if (!savedOriginal.contentType?.startsWith("image/")) {
+      let savedOriginalContentType = savedOriginal.contentType;
+      if (!savedOriginalContentType?.startsWith("image/")) {
         await fs.rm(savedOriginal.path, { force: true }).catch(() => {});
         savedOriginalPath = null;
         continue;
@@ -859,6 +866,7 @@ export async function createManagedOutgoingImageBlocks(params: {
         }
         const resized = await resizeManagedImageBufferToLimits({
           buffer: originalBuffer,
+          contentType: savedOriginalContentType,
           metadata: effectiveMetadata,
           limits,
         });
@@ -873,6 +881,7 @@ export async function createManagedOutgoingImageBlocks(params: {
         );
         await fs.rm(savedOriginal.path, { force: true }).catch(() => {});
         savedOriginal = replacement;
+        savedOriginalContentType = replacement.contentType ?? resized.contentType;
         savedOriginalPath = savedOriginal.path;
         originalBuffer = resized.buffer;
         originalStats = await getVariantStats(savedOriginal.path);
@@ -901,7 +910,7 @@ export async function createManagedOutgoingImageBlocks(params: {
         alt,
         original: {
           path: savedOriginal.path,
-          contentType: savedOriginal.contentType ?? "application/octet-stream",
+          contentType: savedOriginalContentType,
           width: originalStats.width,
           height: originalStats.height,
           sizeBytes: originalStats.sizeBytes,
@@ -992,6 +1001,10 @@ export async function handleManagedOutgoingImageHttpRequest(
   const attachmentId = match[2];
   if (!encodedSessionKey || !attachmentId) {
     return false;
+  }
+  if (!MANAGED_OUTGOING_ATTACHMENT_ID_RE.test(attachmentId)) {
+    sendStatus(res, 404, "not found");
+    return true;
   }
   const sessionKey = decodeURIComponent(encodedSessionKey);
   const record = await readManagedImageRecord(attachmentId, opts.stateDir);
