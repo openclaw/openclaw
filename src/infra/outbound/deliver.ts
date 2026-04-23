@@ -431,12 +431,22 @@ function createPluginHandler(
     sendPayload:
       messagePayload || outbound?.sendPayload
         ? async (payload, overrides) => {
+            const payloadForSend =
+              overrides && "replyToId" in overrides
+                ? overrides.replyToId === undefined
+                  ? payload.replyToId === undefined
+                    ? payload
+                    : { ...payload, replyToId: undefined }
+                  : payload.replyToId === overrides.replyToId
+                    ? payload
+                    : { ...payload, replyToId: overrides.replyToId }
+                : payload;
             const payloadCtx = {
               ...resolveCtx(overrides),
               kind: "payload" as const satisfies ChannelMessageSendAttemptKind,
-              text: payload.text ?? "",
-              mediaUrl: payload.mediaUrl,
-              payload,
+              text: payloadForSend.text ?? "",
+              mediaUrl: payloadForSend.mediaUrl,
+              payload: payloadForSend,
             };
             if (messagePayload) {
               const sent = await runChannelMessageSendWithLifecycle({

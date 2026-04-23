@@ -1,15 +1,47 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReplyPayload } from "../../auto-reply/types.js";
-import { telegramOutbound } from "../../channels/plugins/outbound/telegram.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 
 const { deliverOutboundPayloads } = await import("./deliver.js");
+const telegramOutboundForTest = {
+  deliveryMode: "direct" as const,
+  sendText: async ({
+    cfg,
+    to,
+    text,
+    replyToId,
+    deps,
+  }: {
+    cfg: OpenClawConfig;
+    to: string;
+    text: string;
+    replyToId?: string | null;
+    deps?: Record<string, unknown>;
+  }) => {
+    const sendTelegram = deps?.sendTelegram as
+      | ((
+          to: string,
+          text: string,
+          options?: Record<string, unknown>,
+        ) => Promise<{ messageId: string; chatId: string }>)
+      | undefined;
+    if (!sendTelegram) {
+      throw new Error("missing sendTelegram");
+    }
+    const result = await sendTelegram(to, text, {
+      cfg,
+      replyToMessageId:
+        typeof replyToId === "string" && replyToId.trim().length > 0 ? Number(replyToId) : undefined,
+    });
+    return { channel: "telegram" as const, ...result };
+  },
+};
 const defaultRegistry = createTestRegistry([
   {
     pluginId: "telegram",
-    plugin: createOutboundTestPlugin({ id: "telegram", outbound: telegramOutbound }),
+    plugin: createOutboundTestPlugin({ id: "telegram", outbound: telegramOutboundForTest }),
     source: "test",
   },
 ]);
