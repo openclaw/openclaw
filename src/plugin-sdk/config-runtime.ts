@@ -133,10 +133,15 @@ export type {
   TelegramInlineButtonsScope,
   TelegramNetworkConfig,
   TelegramTopicConfig,
+  ResolvedTtsPersona,
   TtsAutoMode,
   TtsConfig,
   TtsMode,
   TtsModelOverrideConfig,
+  TtsPersonaConfig,
+  TtsPersonaFallbackPolicy,
+  TtsPersonaPromptConfig,
+  TtsPersonaRewriteConfig,
   TtsProvider,
 } from "../config/types.js";
 export {

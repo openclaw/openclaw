@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { TtsAutoMode, TtsProvider } from "../config/types.tts.js";
+import type { ResolvedTtsPersona, TtsAutoMode, TtsProvider } from "../config/types.tts.js";
 import type {
   SpeechProviderConfig,
   SpeechVoiceOption,
@@ -24,6 +24,8 @@ export type TtsProviderAttempt = {
   provider: string;
   outcome: "success" | "skipped" | "failed";
   reasonCode: TtsAttemptReasonCode;
+  persona?: string;
+  personaBinding?: "applied" | "missing" | "none";
   latencyMs?: number;
   error?: string;
 };
@@ -34,6 +36,7 @@ export type TtsStatusEntry = {
   textLength: number;
   summarized: boolean;
   provider?: string;
+  persona?: string;
   fallbackFrom?: string;
   attemptedProviders?: string[];
   attempts?: TtsProviderAttempt[];
@@ -126,6 +129,7 @@ export type TtsResult = {
   error?: string;
   latencyMs?: number;
   provider?: string;
+  persona?: string;
   fallbackFrom?: string;
   attemptedProviders?: string[];
   attempts?: TtsProviderAttempt[];
@@ -141,6 +145,7 @@ export type TtsSynthesisResult = {
   error?: string;
   latencyMs?: number;
   provider?: string;
+  persona?: string;
   fallbackFrom?: string;
   attemptedProviders?: string[];
   attempts?: TtsProviderAttempt[];
@@ -156,6 +161,7 @@ export type TtsTelephonyResult = {
   error?: string;
   latencyMs?: number;
   provider?: string;
+  persona?: string;
   fallbackFrom?: string;
   attemptedProviders?: string[];
   attempts?: TtsProviderAttempt[];
@@ -179,6 +185,7 @@ export type TtsRuntimeFacade = {
     cfg?: OpenClawConfig,
   ) => SpeechProviderConfig;
   getTtsMaxLength: (prefsPath: string) => number;
+  getTtsPersona: (config: ResolvedTtsConfig, prefsPath: string) => ResolvedTtsPersona | undefined;
   getTtsProvider: (config: ResolvedTtsConfig, prefsPath: string) => TtsProvider;
   isSummarizationEnabled: (prefsPath: string) => boolean;
   isTtsEnabled: (config: ResolvedTtsConfig, prefsPath: string, sessionAuto?: string) => boolean;
@@ -188,6 +195,7 @@ export type TtsRuntimeFacade = {
     cfg?: OpenClawConfig,
   ) => boolean;
   listSpeechVoices: ListSpeechVoices;
+  listTtsPersonas: (config: ResolvedTtsConfig) => ResolvedTtsPersona[];
   maybeApplyTtsToPayload: (params: MaybeApplyTtsToPayloadParams) => Promise<ReplyPayload>;
   resolveExplicitTtsOverrides: (params: ResolveExplicitTtsOverridesParams) => TtsDirectiveOverrides;
   resolveTtsAutoMode: (params: ResolveTtsAutoModeParams) => TtsAutoMode;
@@ -199,6 +207,7 @@ export type TtsRuntimeFacade = {
   setTtsAutoMode: (prefsPath: string, mode: TtsAutoMode) => void;
   setTtsEnabled: (prefsPath: string, enabled: boolean) => void;
   setTtsMaxLength: (prefsPath: string, maxLength: number) => void;
+  setTtsPersona: (prefsPath: string, persona: string | null | undefined) => void;
   setTtsProvider: (prefsPath: string, provider: TtsProvider) => void;
   synthesizeSpeech: (params: TtsRequestParams) => Promise<TtsSynthesisResult>;
   textToSpeech: TextToSpeech;

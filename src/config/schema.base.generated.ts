@@ -19116,6 +19116,222 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 type: "string",
                 minLength: 1,
               },
+              persona: {
+                type: "string",
+                title: "TTS Persona",
+                description:
+                  "Default TTS persona id. Local TTS persona preferences can override this per host.",
+              },
+              personas: {
+                type: "object",
+                propertyNames: {
+                  type: "string",
+                },
+                additionalProperties: {
+                  type: "object",
+                  properties: {
+                    label: {
+                      type: "string",
+                    },
+                    description: {
+                      type: "string",
+                    },
+                    provider: {
+                      type: "string",
+                      minLength: 1,
+                    },
+                    fallbackPolicy: {
+                      anyOf: [
+                        {
+                          type: "string",
+                          const: "preserve-persona",
+                        },
+                        {
+                          type: "string",
+                          const: "provider-defaults",
+                        },
+                        {
+                          type: "string",
+                          const: "fail",
+                        },
+                      ],
+                    },
+                    prompt: {
+                      type: "object",
+                      properties: {
+                        profile: {
+                          type: "string",
+                        },
+                        scene: {
+                          type: "string",
+                        },
+                        sampleContext: {
+                          type: "string",
+                        },
+                        style: {
+                          type: "string",
+                        },
+                        accent: {
+                          type: "string",
+                        },
+                        pacing: {
+                          type: "string",
+                        },
+                        constraints: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                      },
+                      additionalProperties: false,
+                      title: "TTS Persona Prompt",
+                      description:
+                        "Provider-neutral persona prompt intent. Providers decide whether and how to map this into request instructions.",
+                    },
+                    rewrite: {
+                      type: "object",
+                      properties: {
+                        enabled: {
+                          type: "boolean",
+                        },
+                        model: {
+                          type: "string",
+                        },
+                        preserveMeaning: {
+                          type: "boolean",
+                        },
+                        compressForSpeech: {
+                          type: "boolean",
+                        },
+                        inCharacter: {
+                          type: "boolean",
+                        },
+                        maxChars: {
+                          type: "integer",
+                          minimum: 1,
+                          maximum: 9007199254740991,
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    providers: {
+                      type: "object",
+                      propertyNames: {
+                        type: "string",
+                      },
+                      additionalProperties: {
+                        type: "object",
+                        properties: {
+                          apiKey: {
+                            anyOf: [
+                              {
+                                type: "string",
+                              },
+                              {
+                                oneOf: [
+                                  {
+                                    type: "object",
+                                    properties: {
+                                      source: {
+                                        type: "string",
+                                        const: "env",
+                                      },
+                                      provider: {
+                                        type: "string",
+                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                      },
+                                      id: {
+                                        type: "string",
+                                        pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                      },
+                                    },
+                                    required: ["source", "provider", "id"],
+                                    additionalProperties: false,
+                                  },
+                                  {
+                                    type: "object",
+                                    properties: {
+                                      source: {
+                                        type: "string",
+                                        const: "file",
+                                      },
+                                      provider: {
+                                        type: "string",
+                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                      },
+                                      id: {
+                                        type: "string",
+                                      },
+                                    },
+                                    required: ["source", "provider", "id"],
+                                    additionalProperties: false,
+                                  },
+                                  {
+                                    type: "object",
+                                    properties: {
+                                      source: {
+                                        type: "string",
+                                        const: "exec",
+                                      },
+                                      provider: {
+                                        type: "string",
+                                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                      },
+                                      id: {
+                                        type: "string",
+                                      },
+                                    },
+                                    required: ["source", "provider", "id"],
+                                    additionalProperties: false,
+                                  },
+                                ],
+                              },
+                            ],
+                          },
+                        },
+                        additionalProperties: {
+                          anyOf: [
+                            {
+                              type: "string",
+                            },
+                            {
+                              type: "number",
+                            },
+                            {
+                              type: "boolean",
+                            },
+                            {
+                              type: "null",
+                            },
+                            {
+                              type: "array",
+                              items: {},
+                            },
+                            {
+                              type: "object",
+                              propertyNames: {
+                                type: "string",
+                              },
+                              additionalProperties: {},
+                            },
+                          ],
+                        },
+                      },
+                      title: "TTS Persona Provider Bindings",
+                      description:
+                        "Provider-specific TTS persona bindings keyed by speech provider id. These merge over messages.tts.providers for the active persona.",
+                    },
+                  },
+                  additionalProperties: false,
+                  title: "TTS Persona",
+                  description:
+                    "One TTS persona. Use provider-specific bindings for exact voices/models and prompt templates.",
+                },
+                title: "TTS Personas",
+                description:
+                  "Named TTS personas that define stable spoken identity plus provider-specific speech bindings.",
+              },
               summaryModel: {
                 type: "string",
               },
@@ -27520,6 +27736,31 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Text-to-speech policy for reading agent replies aloud on supported voice or audio surfaces. Keep disabled unless voice playback is part of your operator/user workflow.",
       tags: ["media"],
     },
+    "messages.tts.persona": {
+      label: "TTS Persona",
+      help: "Default TTS persona id. Local TTS persona preferences can override this per host.",
+      tags: ["media"],
+    },
+    "messages.tts.personas": {
+      label: "TTS Personas",
+      help: "Named TTS personas that define stable spoken identity plus provider-specific speech bindings.",
+      tags: ["media"],
+    },
+    "messages.tts.personas.*": {
+      label: "TTS Persona",
+      help: "One TTS persona. Use provider-specific bindings for exact voices/models and prompt templates.",
+      tags: ["media"],
+    },
+    "messages.tts.personas.*.prompt": {
+      label: "TTS Persona Prompt",
+      help: "Provider-neutral persona prompt intent. Providers decide whether and how to map this into request instructions.",
+      tags: ["media"],
+    },
+    "messages.tts.personas.*.providers": {
+      label: "TTS Persona Provider Bindings",
+      help: "Provider-specific TTS persona bindings keyed by speech provider id. These merge over messages.tts.providers for the active persona.",
+      tags: ["media"],
+    },
     "messages.tts.providers": {
       label: "TTS Provider Settings",
       help: "Provider-specific TTS settings keyed by speech provider id. Use this instead of bundled provider-specific top-level keys so speech plugins stay decoupled from core config schema.",
@@ -28080,6 +28321,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "tools.media.video.models[].request.tls.passphrase": {
       sensitive: true,
       tags: ["security", "media", "tools"],
+    },
+    "messages.tts.personas.*.providers.*.apiKey": {
+      sensitive: true,
+      tags: ["security", "auth", "media"],
     },
     "mcp.servers.*.headers.*": {
       sensitive: true,

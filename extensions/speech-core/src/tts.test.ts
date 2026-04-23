@@ -1,7 +1,12 @@
 import { rmSync } from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import type { SpeechProviderPlugin, SpeechSynthesisRequest } from "openclaw/plugin-sdk/speech-core";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
+import type {
+  SpeechProviderPlugin,
+  SpeechProviderPrepareSynthesisContext,
+  SpeechSynthesisRequest,
+} from "openclaw/plugin-sdk/speech-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 type MockSpeechSynthesisResult = Awaited<ReturnType<SpeechProviderPlugin["synthesize"]>>;
@@ -15,6 +20,9 @@ const synthesizeMock = vi.hoisted(() =>
       voiceCompatible: request.target === "voice-note",
     }),
   ),
+);
+const prepareSynthesisMock = vi.hoisted(() =>
+  vi.fn(async (_ctx: SpeechProviderPrepareSynthesisContext) => undefined),
 );
 
 const listSpeechProvidersMock = vi.hoisted(() => vi.fn());
@@ -31,6 +39,7 @@ vi.mock("../api.js", async () => {
     label: "Mock",
     autoSelectOrder: 1,
     isConfigured: () => true,
+    prepareSynthesis: prepareSynthesisMock,
     synthesize: synthesizeMock,
   };
   listSpeechProvidersMock.mockImplementation(() => [mockProvider]);
@@ -49,9 +58,39 @@ vi.mock("../api.js", async () => {
   };
 });
 
-const { _test, maybeApplyTtsToPayload, resolveTtsConfig } = await import("./tts.js");
+const {
+  _test,
+  getTtsPersona,
+  getTtsProvider,
+  maybeApplyTtsToPayload,
+  resolveTtsConfig,
+  synthesizeSpeech,
+  textToSpeechTelephony,
+} = await import("./tts.js");
 
 const nativeVoiceNoteChannels = ["discord", "feishu", "matrix", "telegram", "whatsapp"] as const;
+
+function createMockSpeechProvider(
+  id = "mock",
+  options: Partial<SpeechProviderPlugin> = {},
+): SpeechProviderPlugin {
+  return {
+    id,
+    label: id,
+    autoSelectOrder: id === "mock" ? 1 : 2,
+    isConfigured: () => true,
+    prepareSynthesis: prepareSynthesisMock,
+    synthesize: synthesizeMock,
+    ...options,
+  };
+}
+
+function installSpeechProviders(providers: SpeechProviderPlugin[]): void {
+  listSpeechProvidersMock.mockImplementation(() => providers);
+  getSpeechProviderMock.mockImplementation(
+    (providerId: string) => providers.find((provider) => provider.id === providerId) ?? null,
+  );
+}
 
 function createTtsConfig(prefsName: string): OpenClawConfig {
   return {
@@ -102,6 +141,8 @@ async function expectTtsPayloadResult(params: {
 describe("speech-core native voice-note routing", () => {
   afterEach(() => {
     synthesizeMock.mockClear();
+    prepareSynthesisMock.mockClear();
+    installSpeechProviders([createMockSpeechProvider()]);
   });
 
   it("keeps native voice-note channel support centralized", () => {
@@ -151,6 +192,268 @@ describe("speech-core native voice-note routing", () => {
       text: "Slack replies should be delivered as regular audio attachments.",
       target: "audio-file",
       audioAsVoice: undefined,
+    });
+  });
+
+  it("selects persona preferred provider before config fallback", () => {
+    const cfg: OpenClawConfig = {
+      messages: {
+        tts: {
+          enabled: true,
+          provider: "other",
+          persona: "alfred",
+          personas: {
+            alfred: {
+              label: "Alfred",
+              provider: "mock",
+              providers: {
+                mock: {
+                  voice: "Algieba",
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+    const config = resolveTtsConfig(cfg);
+    const prefsPath = "/tmp/openclaw-speech-core-persona-provider.json";
+
+    expect(getTtsPersona(config, prefsPath)?.id).toBe("alfred");
+    expect(getTtsProvider(config, prefsPath)).toBe("mock");
+  });
+
+  it("merges active persona provider binding into synthesis config", async () => {
+    const cfg: OpenClawConfig = {
+      messages: {
+        tts: {
+          enabled: true,
+          provider: "mock",
+          prefsPath: "/tmp/openclaw-speech-core-persona-merge.json",
+          providers: {
+            mock: {
+              model: "base-model",
+              voice: "base-voice",
+            },
+          },
+          persona: "alfred",
+          personas: {
+            alfred: {
+              provider: "mock",
+              providers: {
+                mock: {
+                  voice: "persona-voice",
+                  style: "dry",
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+
+    const payload: ReplyPayload = {
+      text: "This reply should use persona-specific provider configuration.",
+    };
+
+    let mediaDir: string | undefined;
+    try {
+      const result = await maybeApplyTtsToPayload({
+        payload,
+        cfg,
+        channel: "slack",
+        kind: "final",
+      });
+
+      expect(synthesizeMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          providerConfig: expect.objectContaining({
+            model: "base-model",
+            voice: "persona-voice",
+            style: "dry",
+          }),
+        }),
+      );
+      expect(result.mediaUrl).toMatch(/voice-\d+\.ogg$/);
+
+      mediaDir = result.mediaUrl ? path.dirname(result.mediaUrl) : undefined;
+    } finally {
+      if (mediaDir) {
+        rmSync(mediaDir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("does not mark skipped unregistered providers as missing persona bindings", async () => {
+    const result = await synthesizeSpeech({
+      text: "Use fallback provider.",
+      cfg: {
+        messages: {
+          tts: {
+            enabled: true,
+            provider: "missing",
+            persona: "alfred",
+            personas: {
+              alfred: {
+                providers: {
+                  missing: {
+                    voice: "configured-but-unregistered",
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.attempts?.[0]).toMatchObject({
+      provider: "missing",
+      outcome: "skipped",
+      reasonCode: "no_provider_registered",
+      persona: "alfred",
+    });
+    expect(result.attempts?.[0]).not.toHaveProperty("personaBinding");
+  });
+
+  it("does not mark skipped telephony providers as missing persona bindings", async () => {
+    const result = await textToSpeechTelephony({
+      text: "Use telephony provider.",
+      cfg: {
+        messages: {
+          tts: {
+            enabled: true,
+            provider: "mock",
+            persona: "alfred",
+            personas: {
+              alfred: {
+                providers: {
+                  mock: {
+                    voice: "persona-voice",
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.attempts?.[0]).toMatchObject({
+      provider: "mock",
+      outcome: "skipped",
+      reasonCode: "unsupported_for_telephony",
+      persona: "alfred",
+    });
+    expect(result.attempts?.[0]).not.toHaveProperty("personaBinding");
+  });
+
+  it("uses provider defaults when fallback policy allows missing persona bindings", async () => {
+    await synthesizeSpeech({
+      text: "Use neutral provider defaults.",
+      cfg: {
+        messages: {
+          tts: {
+            enabled: true,
+            provider: "mock",
+            persona: "alfred",
+            personas: {
+              alfred: {
+                fallbackPolicy: "provider-defaults",
+                prompt: {
+                  profile: "A precise butler.",
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(prepareSynthesisMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        persona: undefined,
+        personaProviderConfig: undefined,
+      }),
+    );
+  });
+
+  it("preserves persona prompts by default when provider bindings are missing", async () => {
+    await synthesizeSpeech({
+      text: "Use persona prompt.",
+      cfg: {
+        messages: {
+          tts: {
+            enabled: true,
+            provider: "mock",
+            persona: "alfred",
+            personas: {
+              alfred: {
+                prompt: {
+                  profile: "A precise butler.",
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(prepareSynthesisMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        persona: expect.objectContaining({ id: "alfred" }),
+        personaProviderConfig: undefined,
+      }),
+    );
+  });
+
+  it("skips unbound providers under fail policy while allowing bound fallbacks", async () => {
+    installSpeechProviders([
+      createMockSpeechProvider("mock", { autoSelectOrder: 1 }),
+      createMockSpeechProvider("fallback", { autoSelectOrder: 2 }),
+    ]);
+
+    const result = await synthesizeSpeech({
+      text: "Use the first persona-bound provider.",
+      cfg: {
+        messages: {
+          tts: {
+            enabled: true,
+            provider: "mock",
+            persona: "alfred",
+            personas: {
+              alfred: {
+                fallbackPolicy: "fail",
+                providers: {
+                  fallback: {
+                    voice: "fallback-voice",
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.provider).toBe("fallback");
+    expect(result.fallbackFrom).toBe("mock");
+    expect(result.attempts?.[0]).toMatchObject({
+      provider: "mock",
+      outcome: "skipped",
+      reasonCode: "not_configured",
+      persona: "alfred",
+      personaBinding: "missing",
+      error: "mock: persona alfred has no provider binding",
+    });
+    expect(result.attempts?.[1]).toMatchObject({
+      provider: "fallback",
+      outcome: "success",
+      persona: "alfred",
+      personaBinding: "applied",
     });
   });
 });

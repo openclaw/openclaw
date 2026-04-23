@@ -14,16 +14,19 @@ import {
   getResolvedSpeechProviderConfig,
   getLastTtsAttempt,
   getTtsMaxLength,
+  getTtsPersona,
   getTtsProvider,
   isSummarizationEnabled,
   isTtsEnabled,
   isTtsProviderConfigured,
+  listTtsPersonas,
   resolveTtsConfig,
   resolveTtsPrefsPath,
   setLastTtsAttempt,
   setSummarizationEnabled,
   setTtsEnabled,
   setTtsMaxLength,
+  setTtsPersona,
   setTtsProvider,
   textToSpeech,
 } from "../../tts/tts.js";
@@ -68,7 +71,11 @@ function formatAttemptDetails(attempts: TtsAttemptDetail[] | undefined): string 
     .map((attempt) => {
       const reason = attempt.reasonCode === "success" ? "ok" : attempt.reasonCode;
       const latency = Number.isFinite(attempt.latencyMs) ? ` ${attempt.latencyMs}ms` : "";
-      return `${attempt.provider}:${attempt.outcome}(${reason})${latency}`;
+      const persona =
+        attempt.persona && attempt.personaBinding && attempt.personaBinding !== "none"
+          ? ` persona=${attempt.persona}:${attempt.personaBinding}`
+          : "";
+      return `${attempt.provider}:${attempt.outcome}(${reason})${persona}${latency}`;
     })
     .join(", ");
 }
@@ -83,6 +90,7 @@ function ttsUsage(): ReplyPayload {
       `• /tts off — Disable TTS\n` +
       `• /tts status — Show current settings\n` +
       `• /tts provider [name] — View/change provider\n` +
+      `• /tts persona [id|off] — View/change persona\n` +
       `• /tts limit [number] — View/change text limit\n` +
       `• /tts summary [on|off] — View/change auto-summary\n` +
       `• /tts audio <text> — Generate audio from text\n` +
@@ -96,6 +104,7 @@ function ttsUsage(): ReplyPayload {
       `• Summary OFF: Truncates text, then generates audio\n\n` +
       `**Examples:**\n` +
       `/tts provider <id>\n` +
+      `/tts persona <id>\n` +
       `/tts limit 2000\n` +
       `/tts latest\n` +
       `/tts audio Hello, this is a test!`,
@@ -129,6 +138,7 @@ async function buildTtsAudioReply(params: {
       textLength: params.text.length,
       summarized: false,
       provider: result.provider,
+      persona: result.persona,
       fallbackFrom: result.fallbackFrom,
       attemptedProviders: result.attemptedProviders,
       attempts: result.attempts,
@@ -150,6 +160,7 @@ async function buildTtsAudioReply(params: {
     success: false,
     textLength: params.text.length,
     summarized: false,
+    persona: result.persona,
     attemptedProviders: result.attemptedProviders,
     attempts: result.attempts,
     error: result.error,
@@ -349,6 +360,50 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
     };
   }
 
+  if (action === "persona") {
+    const personas = listTtsPersonas(config);
+    const activePersona = getTtsPersona(config, prefsPath);
+    if (!args.trim()) {
+      const lines = [
+        "🎭 TTS persona",
+        `Active: ${activePersona?.id ?? "none"}`,
+        personas.length > 0
+          ? personas
+              .map((persona) => {
+                const label = persona.label ? ` (${persona.label})` : "";
+                const provider = persona.provider ? ` provider=${persona.provider}` : "";
+                return `${persona.id}${label}${provider}`;
+              })
+              .join("\n")
+          : "No personas configured.",
+        "Usage: /tts persona <id> | off",
+      ];
+      return { shouldContinue: false, reply: { text: lines.join("\n") } };
+    }
+
+    const requested = normalizeOptionalLowercaseString(args) ?? "";
+    if (requested === "off" || requested === "none" || requested === "default") {
+      setTtsPersona(prefsPath, null);
+      return { shouldContinue: false, reply: { text: "✅ TTS persona disabled." } };
+    }
+    const persona = personas.find((entry) => entry.id === requested);
+    if (!persona) {
+      return {
+        shouldContinue: false,
+        reply: {
+          text:
+            `❌ Unknown TTS persona: ${requested || args}.\n` +
+            `Use /tts persona to list configured personas.`,
+        },
+      };
+    }
+    setTtsPersona(prefsPath, persona.id);
+    return {
+      shouldContinue: false,
+      reply: { text: `✅ TTS persona set to ${persona.id}.` },
+    };
+  }
+
   if (action === "limit") {
     if (!args.trim()) {
       const currentLimit = getTtsMaxLength(prefsPath);
@@ -410,6 +465,7 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
   if (action === "status") {
     const enabled = isTtsEnabled(config, prefsPath);
     const provider = getTtsProvider(config, prefsPath);
+    const persona = getTtsPersona(config, prefsPath);
     const hasKey = isTtsProviderConfigured(config, provider, params.cfg);
     const maxLength = getTtsMaxLength(prefsPath);
     const summarize = isSummarizationEnabled(prefsPath);
@@ -419,6 +475,7 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
       `State: ${enabled ? "✅ enabled" : "❌ disabled"}`,
       `Chat override: ${params.sessionEntry?.ttsAuto ?? "default"}`,
       `Provider: ${provider} (${hasKey ? "✅ configured" : "❌ not configured"})`,
+      `Persona: ${persona?.id ?? "none"}`,
       `Text limit: ${maxLength} chars`,
       `Auto-summary: ${summarize ? "on" : "off"}`,
     ];
@@ -429,6 +486,9 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
       lines.push(`Text: ${last.textLength} chars${last.summarized ? " (summarized)" : ""}`);
       if (last.success) {
         lines.push(`Provider: ${last.provider ?? "unknown"}`);
+        if (last.persona) {
+          lines.push(`Persona: ${last.persona}`);
+        }
         if (last.fallbackFrom && last.provider && last.fallbackFrom !== last.provider) {
           lines.push(`Fallback: ${last.fallbackFrom} -> ${last.provider}`);
         }

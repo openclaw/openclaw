@@ -1048,6 +1048,7 @@ Docs: https://docs.openclaw.ai
 - Anthropic/models: add Claude Opus 4.7 `xhigh` reasoning effort support and keep it separate from adaptive thinking.
 - Control UI/settings: overhaul the settings and slash-command experience with faster presets, quick-create flows, and refreshed command discovery. (#67819) Thanks @BunsDev.
 - macOS/gateway: add `screen.snapshot` support for macOS app nodes, including runtime plumbing, default macOS allowlisting, and docs for monitor preview flows. (#67954) Thanks @BunsDev.
+- TTS/personas: add provider-aware TTS personas with deterministic provider binding merges, `/tts persona` controls, gateway/CLI persona state, Google Gemini `audio-profile-v1` prompt wrapping, and OpenAI instruction mapping. (#68323)
 
 ### Fixes
 

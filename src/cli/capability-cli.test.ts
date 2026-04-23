@@ -73,6 +73,7 @@ const mocks = vi.hoisted(() => ({
     attempts: [],
   })),
   setTtsProvider: vi.fn(),
+  setTtsPersona: vi.fn(),
   resolveExplicitTtsOverrides: vi.fn(
     ({
       provider,
@@ -220,11 +221,14 @@ vi.mock("../video-generation/runtime.js", () => ({
 }));
 
 vi.mock("../tts/tts.js", () => ({
+  getTtsPersona: vi.fn(() => undefined),
   getTtsProvider: vi.fn(() => "openai"),
+  listTtsPersonas: vi.fn(() => []),
   listSpeechVoices: vi.fn(async () => []),
   resolveTtsConfig: vi.fn(() => ({})),
   resolveTtsPrefsPath: vi.fn(() => "/tmp/tts.json"),
   setTtsEnabled: vi.fn(),
+  setTtsPersona: mocks.setTtsPersona as typeof import("../tts/tts.js").setTtsPersona,
   setTtsProvider: mocks.setTtsProvider as typeof import("../tts/tts.js").setTtsProvider,
   resolveExplicitTtsOverrides:
     mocks.resolveExplicitTtsOverrides as typeof import("../tts/tts.js").resolveExplicitTtsOverrides,
