@@ -1,0 +1,62 @@
+{
+  "id": "openclaw-wrt",
+  "name": "OpenClaw WRT",
+  "description": "Accept OpenClaw WRT device WebSocket connections and expose a control tool with req_id correlation.",
+  "skills": ["./skills"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean"
+      },
+      "bind": {
+        "type": "string"
+      },
+      "port": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 65535
+      },
+      "path": {
+        "type": "string"
+      },
+      "allowDeviceIds": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "requestTimeoutMs": {
+        "type": "integer",
+        "minimum": 1000,
+        "maximum": 120000
+      },
+      "maxPayloadBytes": {
+        "type": "integer",
+        "minimum": 1024,
+        "maximum": 1048576
+      },
+      "token": {
+        "type": "string"
+      },
+      "awasEnabled": {
+        "type": "boolean"
+      },
+      "awasHost": {
+        "type": "string"
+      },
+      "awasPort": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 65535
+      },
+      "awasPath": {
+        "type": "string"
+      },
+      "awasSsl": {
+        "type": "boolean"
+      }
+    }
+  }
+}

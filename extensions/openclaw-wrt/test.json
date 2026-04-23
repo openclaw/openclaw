@@ -1,0 +1,13 @@
+{
+  "plugins": {
+    "entries": {
+      "openclaw-wrt": {
+        "enabled": true,
+        "bind": "0.0.0.0",
+        "port": 8001,
+        "path": "/ws/wifidogx",
+        "token": "your-secret-token-here"
+      }
+    }
+  }
+}

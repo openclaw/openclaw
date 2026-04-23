@@ -1,0 +1,55 @@
+{
+  "name": "@openclaw/openclaw-wrt",
+  "version": "2026.4.5",
+  "description": "OpenClaw bridge for OpenClaw WRT device WebSocket control",
+  "keywords": [
+    "clawwrt",
+    "openclaw",
+    "openclaw-wrt",
+    "openwrt"
+  ],
+  "license": "MIT",
+  "author": "",
+  "files": [
+    "dist",
+    "skills",
+    "openclaw.plugin.json",
+    "README.md"
+  ],
+  "type": "module",
+  "main": "dist/cjs/index.js",
+  "module": "dist/esm/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "rollup -c",
+    "clean": "rm -rf dist",
+    "dev": "rollup -c -w",
+    "prebuild": "npm run clean"
+  },
+  "dependencies": {
+    "@sinclair/typebox": "0.34.49",
+    "ws": "^8.20.0"
+  },
+  "devDependencies": {
+    "@rollup/plugin-commonjs": "^25.0.7",
+    "@rollup/plugin-json": "^6.1.0",
+    "@rollup/plugin-node-resolve": "^15.2.3",
+    "@rollup/plugin-typescript": "^11.1.6",
+    "@types/ws": "^8.18.1",
+    "openclaw": ">=2026.3.13",
+    "rollup": "^4.9.6",
+    "rollup-plugin-dts": "^6.1.0",
+    "tslib": "^2.6.2",
+    "typescript": "^5.3.3",
+    "vitest": "^4.1.2"
+  },
+  "openclaw": {
+    "extensions": [
+      "./dist/esm/index.js"
+    ],
+    "install": {
+      "npmSpec": "@openclaw/openclaw-wrt",
+      "defaultChoice": "npm"
+    }
+  }
+}
