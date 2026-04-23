@@ -1,13 +1,13 @@
 # 🦞 OpenClaw — Personal AI Assistant
-
+  
 This custom build adds comprehensive media support to OpenClaw across multiple channels:
-
+  
 ### 🌐 WebChat (Complete media suite)
-
+  
 **Previously had NO media support - now fully featured:**
-
+  
 **Images:**
-
+  
 - JPEG/JPG
 - PNG
 - GIF
