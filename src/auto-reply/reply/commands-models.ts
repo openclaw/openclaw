@@ -67,7 +67,7 @@ export async function buildModelsProviderData(
     agentId,
   });
 
-  const catalog = await loadModelCatalog({ config: cfg });
+  const catalog = await loadModelCatalog({ config: cfg, useCache: false });
   const allowed = buildAllowedModelSet({
     cfg,
     catalog,

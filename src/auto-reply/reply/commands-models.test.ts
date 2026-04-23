@@ -214,6 +214,15 @@ function buildParams(
 }
 
 describe("handleModelsCommand", () => {
+  it("bypasses the long-lived model catalog cache for interactive model menus", async () => {
+    await handleModelsCommand(buildParams("/models"), true);
+
+    expect(modelCatalogMocks.loadModelCatalog).toHaveBeenCalledWith({
+      config: expect.any(Object),
+      useCache: false,
+    });
+  });
+
   it("shows a simple providers menu on text surfaces", async () => {
     const result = await handleModelsCommand(buildParams("/models"), true);
 
