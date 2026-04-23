@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type {
   AssistantMessage,
@@ -73,6 +73,7 @@ import { mergeTransportMetadata } from "./transport-stream-shared.js";
 interface WsSession {
   manager: OpenAIWebSocketManager;
   managerConfigSignature: string;
+  authSignature: string;
   /** Number of messages that were in context.messages at the END of the last streamFn call. */
   lastContextLength: number;
   /** True if the connection has been established at least once. */
@@ -418,6 +419,10 @@ function resolveWsManagerConfigSignature(
   });
 }
 
+function resolveWsAuthSignature(apiKey: string): string {
+  return createHash("sha256").update(apiKey).digest("hex");
+}
+
 const AZURE_OPENAI_PROVIDER_IDS = new Set(["azure-openai", "azure-openai-responses"]);
 const OPENAI_CODEX_PROVIDER_ID = "openai-codex";
 
@@ -711,6 +716,7 @@ export function createOpenAIWebSocketStreamFn(
 
       while (true) {
         let session = wsRegistry.get(sessionId);
+        const authSignature = resolveWsAuthSignature(apiKey);
         const managerConfigSignature = resolveWsManagerConfigSignature(
           opts.managerOptions,
           sessionHeaders,
@@ -720,6 +726,7 @@ export function createOpenAIWebSocketStreamFn(
           session = {
             manager,
             managerConfigSignature,
+            authSignature,
             lastContextLength: 0,
             everConnected: false,
             warmUpAttempted: false,
@@ -728,13 +735,17 @@ export function createOpenAIWebSocketStreamFn(
             degradeCooldownMs: wsSessionPolicy.degradeCooldownMs,
           };
           wsRegistry.set(sessionId, session);
-        } else if (session.managerConfigSignature !== managerConfigSignature) {
+        } else if (
+          session.managerConfigSignature !== managerConfigSignature ||
+          session.authSignature !== authSignature
+        ) {
           clearWsSessionIdleTimer(session);
           resetWsSession({
             session,
             createManager: () => createWsManager(opts.managerOptions, sessionHeaders),
           });
           session.managerConfigSignature = managerConfigSignature;
+          session.authSignature = authSignature;
           session.degradeCooldownMs = wsSessionPolicy.degradeCooldownMs;
         } else {
           clearWsSessionIdleTimer(session);

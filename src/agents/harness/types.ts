@@ -27,7 +27,9 @@ export type AgentHarnessResetParams = {
   reason?: "new" | "reset" | "idle" | "daily" | "compaction" | "deleted" | "unknown";
 };
 
-export type AgentHarnessResultClassification = "ok" | "empty" | "reasoning-only" | "planning-only";
+export type AgentHarnessResultClassification =
+  | "ok"
+  | NonNullable<EmbeddedRunAttemptResult["agentHarnessResultClassification"]>;
 
 export type AgentHarness = {
   id: string;

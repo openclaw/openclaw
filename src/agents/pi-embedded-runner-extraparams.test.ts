@@ -1934,6 +1934,8 @@ describe("applyExtraParamsToAgent", () => {
       cfg: undefined,
       provider: "openai",
       modelId: "gpt-5",
+      agentDir: "/tmp/agent",
+      workspaceDir: "/tmp/workspace",
       model,
     });
 
@@ -1947,9 +1949,35 @@ describe("applyExtraParamsToAgent", () => {
         context: expect.objectContaining({
           model,
           transport: "websocket",
+          agentDir: "/tmp/agent",
+          workspaceDir: "/tmp/workspace",
         }),
       }),
     );
+  });
+
+  it("applies transport hook parallel_tool_calls patches to request payloads", () => {
+    extraParamsTesting.setProviderRuntimeDepsForTest({
+      prepareProviderExtraParams: () => undefined,
+      resolveProviderExtraParamsForTransport: () => ({
+        patch: {
+          parallel_tool_calls: true,
+        },
+      }),
+      wrapProviderStreamFn: (params) => params.context.streamFn,
+    });
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "test-openai",
+      applyModelId: "gpt-compatible",
+      model: {
+        api: "openai-responses",
+        provider: "test-openai",
+        id: "gpt-compatible",
+      } as Model<"openai-responses">,
+      payload: {},
+    });
+
+    expect(payload.parallel_tool_calls).toBe(true);
   });
 
   it("uses prepared transport when session settings did not explicitly set one", () => {

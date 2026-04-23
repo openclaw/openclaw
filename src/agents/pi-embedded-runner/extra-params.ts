@@ -10,7 +10,7 @@ import {
   wrapProviderStreamFn as wrapProviderStreamFnRuntime,
 } from "../../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
-import { isGptResponsesFamily } from "../provider-api-families.js";
+import { supportsGptParallelToolCallsPayload } from "../provider-api-families.js";
 import { createGoogleThinkingPayloadWrapper } from "./google-stream-wrappers.js";
 import { log } from "./logger.js";
 import { createMinimaxThinkingDisabledWrapper } from "./minimax-stream-wrappers.js";
@@ -133,6 +133,8 @@ export function resolvePreparedExtraParams(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
   modelId: string;
+  agentDir?: string;
+  workspaceDir?: string;
   extraParamsOverride?: Record<string, unknown>;
   thinkingLevel?: ThinkLevel;
   agentId?: string;
@@ -172,8 +174,11 @@ export function resolvePreparedExtraParams(params: {
     providerRuntimeDeps.prepareProviderExtraParams({
       provider: params.provider,
       config: params.cfg,
+      workspaceDir: params.workspaceDir,
       context: {
         config: params.cfg,
+        agentDir: params.agentDir,
+        workspaceDir: params.workspaceDir,
         provider: params.provider,
         modelId: params.modelId,
         extraParams: merged,
@@ -183,8 +188,11 @@ export function resolvePreparedExtraParams(params: {
   const transportPatch = providerRuntimeDeps.resolveProviderExtraParamsForTransport({
     provider: params.provider,
     config: params.cfg,
+    workspaceDir: params.workspaceDir,
     context: {
       config: params.cfg,
+      agentDir: params.agentDir,
+      workspaceDir: params.workspaceDir,
       provider: params.provider,
       modelId: params.modelId,
       extraParams: prepared,
@@ -353,7 +361,7 @@ function createParallelToolCallsWrapper(
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
-    if (!isGptResponsesFamily(model.api)) {
+    if (!supportsGptParallelToolCallsPayload(model.api)) {
       return underlying(model, context, options);
     }
     log.debug(
@@ -432,7 +440,7 @@ function applyPostPluginStreamWrappers(
   ctx.agent.streamFn = createMinimaxThinkingDisabledWrapper(ctx.agent.streamFn);
 
   const rawParallelToolCalls = resolveAliasedParamValue(
-    [ctx.resolvedExtraParams, ctx.override],
+    [ctx.effectiveExtraParams, ctx.override],
     "parallel_tool_calls",
     "parallelToolCalls",
   );
@@ -489,6 +497,8 @@ export function applyExtraParamsToAgent(
     extraParamsOverride,
     thinkingLevel,
     agentId,
+    agentDir,
+    workspaceDir,
     resolvedExtraParams,
     model,
   });

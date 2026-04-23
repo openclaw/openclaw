@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isGptResponsesFamily } from "./provider-api-families.js";
+import { supportsGptParallelToolCallsPayload } from "./provider-api-families.js";
 
 describe("provider api families", () => {
   it.each([
@@ -7,12 +7,12 @@ describe("provider api families", () => {
     "openai-responses",
     "openai-codex-responses",
     "azure-openai-responses",
-  ])("classifies %s as a GPT Responses-family API", (api) => {
-    expect(isGptResponsesFamily(api)).toBe(true);
+  ])("classifies %s as supporting the GPT parallel_tool_calls payload patch", (api) => {
+    expect(supportsGptParallelToolCallsPayload(api)).toBe(true);
   });
 
   it("rejects unrelated APIs", () => {
-    expect(isGptResponsesFamily("anthropic-messages")).toBe(false);
-    expect(isGptResponsesFamily(undefined)).toBe(false);
+    expect(supportsGptParallelToolCallsPayload("anthropic-messages")).toBe(false);
+    expect(supportsGptParallelToolCallsPayload(undefined)).toBe(false);
   });
 });

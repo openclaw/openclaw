@@ -47,6 +47,7 @@ const { MockManager } = vi.hoisted(() => {
 
     sentEvents: unknown[] = [];
     connectCallCount = 0;
+    connectApiKeys: string[] = [];
     closeCallCount = 0;
     options: unknown;
 
@@ -69,6 +70,7 @@ const { MockManager } = vi.hoisted(() => {
 
     async connect(_apiKey: string): Promise<void> {
       this.connectCallCount++;
+      this.connectApiKeys.push(_apiKey);
       if (this.connectShouldFail || _globalConnectShouldFail) {
         throw new Error("Mock connect failure");
       }
@@ -3762,6 +3764,75 @@ describe("releaseWsSession / hasWsSession", () => {
     secondManager.simulateEvent({
       type: "response.completed",
       response: makeResponseObject("resp-second", "done"),
+    });
+    for await (const _ of await resolveStream(secondStream)) {
+      // consume
+    }
+  });
+
+  it("recreates the cached manager when the API key changes for the same session", async () => {
+    const sessionId = "registry-test";
+    const firstStreamFn = createOpenAIWebSocketStreamFn("sk-first", sessionId);
+    const firstStream = firstStreamFn(
+      {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+        contextWindow: 128000,
+        maxTokens: 4096,
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        name: "GPT-5.4",
+      } as Parameters<typeof firstStreamFn>[0],
+      {
+        systemPrompt: "test",
+        messages: [userMsg("Hi") as Parameters<typeof convertMessagesToInputItems>[0][number]],
+        tools: [],
+      } as Parameters<typeof firstStreamFn>[1],
+    );
+
+    await new Promise((r) => setImmediate(r));
+    const firstManager = MockManager.lastInstance!;
+    expect(firstManager.connectApiKeys).toEqual(["sk-first"]);
+    firstManager.simulateEvent({
+      type: "response.completed",
+      response: makeResponseObject("resp-first-key", "done"),
+    });
+    for await (const _ of await resolveStream(firstStream)) {
+      // consume
+    }
+
+    const secondStreamFn = createOpenAIWebSocketStreamFn("sk-second", sessionId);
+    const secondStream = secondStreamFn(
+      {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+        contextWindow: 128000,
+        maxTokens: 4096,
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        name: "GPT-5.4",
+      } as Parameters<typeof secondStreamFn>[0],
+      {
+        systemPrompt: "test",
+        messages: [userMsg("Again") as Parameters<typeof convertMessagesToInputItems>[0][number]],
+        tools: [],
+      } as Parameters<typeof secondStreamFn>[1],
+    );
+
+    await new Promise((r) => setImmediate(r));
+    expect(MockManager.instances).toHaveLength(2);
+    expect(firstManager.closeCallCount).toBe(1);
+    const secondManager = MockManager.lastInstance!;
+    expect(secondManager).not.toBe(firstManager);
+    expect(secondManager.connectApiKeys).toEqual(["sk-second"]);
+
+    secondManager.simulateEvent({
+      type: "response.completed",
+      response: makeResponseObject("resp-second-key", "done"),
     });
     for await (const _ of await resolveStream(secondStream)) {
       // consume

@@ -2088,8 +2088,10 @@ export async function runEmbeddedAttempt(
                   ? "Merged and removed"
                   : "Removed already-queued"
                 : "Preserved"
-            } orphaned user message ` +
-            `to prevent consecutive user turns. ` +
+            } orphaned user message` +
+            (orphanPromptMerge.removeLeaf
+              ? " to prevent consecutive user turns. "
+              : " without removing the active session leaf. ") +
             `runId=${params.runId} sessionId=${params.sessionId} trigger=${params.trigger}`;
           if (shouldWarnOnOrphanedUserRepair(params.trigger)) {
             log.warn(orphanRepairMessage);

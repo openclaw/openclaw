@@ -36,7 +36,7 @@ export function resolveMessageMergeStrategy(): MessageMergeStrategy {
   return activeMessageMergeStrategy;
 }
 
-export function registerMessageMergeStrategy(strategy: MessageMergeStrategy): () => void {
+function registerMessageMergeStrategy(strategy: MessageMergeStrategy): () => void {
   const previous = activeMessageMergeStrategy;
   activeMessageMergeStrategy = strategy;
   return () => {
@@ -44,4 +44,6 @@ export function registerMessageMergeStrategy(strategy: MessageMergeStrategy): ()
   };
 }
 
-export const registerMessageMergeStrategyForTest = registerMessageMergeStrategy;
+export function registerMessageMergeStrategyForTest(strategy: MessageMergeStrategy): () => void {
+  return registerMessageMergeStrategy(strategy);
+}
