@@ -6,7 +6,7 @@ import {
 import { prepareOpenAICodexCliExecution } from "./openai-codex-cli-bridge.js";
 
 const OPENAI_CODEX_DEFAULT_PROFILE_ID = "openai-codex:default";
-const CODEX_CLI_DEFAULT_MODEL_REF = "codex-cli/gpt-5.4";
+const CODEX_CLI_DEFAULT_MODEL_REF = "codex-cli/gpt-5.5";
 
 export function buildOpenAICodexCliBackend(): CliBackendPlugin {
   return {

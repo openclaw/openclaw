@@ -4,7 +4,7 @@ read_when:
   - You want a reliable fallback when API providers fail
   - You are running Codex CLI or other local AI CLIs and want to reuse them
   - You want to understand the MCP loopback bridge for CLI backend tool access
-title: "CLI Backends"
+title: "CLI backends"
 ---
 
 # CLI backends (fallback runtime)
@@ -31,7 +31,7 @@ You can use Codex CLI **without any config** (the bundled OpenAI plugin
 registers a default backend):
 
 ```bash
-openclaw agent --message "hi" --model codex-cli/gpt-5.4
+openclaw agent --message "hi" --model codex-cli/gpt-5.5
 ```
 
 If your gateway runs under launchd/systemd and PATH is minimal, add just the
@@ -68,11 +68,11 @@ Add a CLI backend to your fallback list so it only runs when primary models fail
     defaults: {
       model: {
         primary: "anthropic/claude-opus-4-6",
-        fallbacks: ["codex-cli/gpt-5.4"],
+        fallbacks: ["codex-cli/gpt-5.5"],
       },
       models: {
         "anthropic/claude-opus-4-6": { alias: "Opus" },
-        "codex-cli/gpt-5.4": {},
+        "codex-cli/gpt-5.5": {},
       },
     },
   },

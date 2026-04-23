@@ -7,8 +7,6 @@ read_when:
 title: "Exec approvals"
 ---
 
-# Exec approvals
-
 Exec approvals are the **companion app / node host guardrail** for letting a
 sandboxed agent run commands on a real host (`gateway` or `node`). A safety
 interlock: commands are allowed only when policy + allowlist + (optional) user

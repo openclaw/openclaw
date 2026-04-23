@@ -1,7 +1,7 @@
 ---
+summary: "Import map, registration API reference, and SDK architecture"
 title: "Plugin SDK overview"
 sidebarTitle: "SDK overview"
-summary: "Import map, registration API reference, and SDK architecture"
 read_when:
   - You need to know which SDK subpath to import from
   - You want a reference for all registration methods on OpenClawPluginApi

@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_EVENT_UPDATE_AVAILABLE } from "../../../src/gateway/events.js";
 import { ConnectErrorDetailCodes } from "../../../src/gateway/protocol/connect-error-details.js";
@@ -206,6 +207,9 @@ describe("connectGateway", () => {
     gatewayClientInstances.length = 0;
     loadChatHistoryMock.mockClear();
     loadControlUiBootstrapConfigMock.mockClear();
+    vi.stubGlobal("window", {
+      setTimeout: globalThis.setTimeout,
+    });
   });
 
   it("ignores stale client onGap callbacks after reconnect", () => {

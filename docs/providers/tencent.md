@@ -1,6 +1,6 @@
 ---
-title: "Tencent Cloud (TokenHub)"
 summary: "Tencent Cloud TokenHub setup for Hy3 preview"
+title: "Tencent Cloud (TokenHub)"
 read_when:
   - You want to use Tencent Hy3 preview with OpenClaw
   - You need the TokenHub API key setup

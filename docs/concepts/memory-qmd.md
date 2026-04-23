@@ -1,12 +1,10 @@
 ---
-title: "QMD Memory Engine"
 summary: "Local-first search sidecar with BM25, vectors, reranking, and query expansion"
+title: "QMD memory engine"
 read_when:
   - You want to set up QMD as your memory backend
   - You want advanced memory features like reranking or extra indexed paths
 ---
-
-# QMD Memory Engine
 
 [QMD](https://github.com/tobi/qmd) is a local-first search sidecar that runs
 alongside OpenClaw. It combines BM25, vector search, and reranking in a single

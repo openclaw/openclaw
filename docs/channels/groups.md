@@ -5,8 +5,6 @@ read_when:
 title: "Groups"
 ---
 
-# Groups
-
 OpenClaw treats group chats consistently across surfaces: Discord, iMessage, Matrix, Microsoft Teams, Signal, Slack, Telegram, WhatsApp, Zalo.
 
 ## Beginner intro (2 minutes)

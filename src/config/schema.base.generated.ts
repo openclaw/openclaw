@@ -824,6 +824,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                       exclusiveMinimum: 0,
                       maximum: 20971520,
                     },
+                    allowInsecurePath: {
+                      type: "boolean",
+                    },
                   },
                   required: ["source", "path"],
                   additionalProperties: false,

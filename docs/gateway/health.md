@@ -3,7 +3,7 @@ summary: "Health check commands and gateway health monitoring"
 read_when:
   - Diagnosing channel connectivity or gateway health
   - Understanding health check CLI commands and options
-title: "Health Checks"
+title: "Health checks"
 ---
 
 # Health Checks (CLI)

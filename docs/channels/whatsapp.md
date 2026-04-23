@@ -5,8 +5,6 @@ read_when:
 title: "WhatsApp"
 ---
 
-# WhatsApp (Web channel)
-
 Status: production-ready via WhatsApp Web (Baileys). Gateway owns linked session(s).
 
 ## Install (on demand)

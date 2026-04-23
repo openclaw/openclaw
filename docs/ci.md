@@ -1,12 +1,10 @@
 ---
-title: CI Pipeline
 summary: "CI job graph, scope gates, and local command equivalents"
+title: CI pipeline
 read_when:
   - You need to understand why a CI job did or did not run
   - You are debugging failing GitHub Actions checks
 ---
-
-# CI Pipeline
 
 The CI runs on every push to `main` and every pull request. It uses smart scoping to skip expensive jobs when only unrelated areas changed.
 
@@ -24,6 +22,18 @@ post-land duplicate cleanup. It defaults to dry-run and only closes explicitly
 listed PRs when `apply=true`. Before mutating GitHub, it verifies that the
 landed PR is merged and that each duplicate has either a shared referenced issue
 or overlapping changed hunks.
+
+The `Test Performance Agent` workflow is an event-driven Codex maintenance lane
+for slow tests. It has no pure schedule: a successful non-bot push CI run on
+`main` can trigger it, but it skips if another workflow-run invocation already
+ran or is running that UTC day. Manual dispatch bypasses that daily activity
+gate. The lane builds a full-suite grouped Vitest performance report, lets Codex
+make only small coverage-preserving test performance fixes, then reruns the
+full-suite report and rejects changes that reduce the passing baseline test
+count. If the baseline has failing tests, Codex may fix only obvious failures
+and the after-agent full-suite report must pass before anything is committed.
+It uses GitHub-hosted Ubuntu so the Codex action can keep the same drop-sudo
+safety posture as the docs agent.
 
 ```bash
 gh workflow run duplicate-after-merge.yml \
@@ -56,6 +66,7 @@ gh workflow run duplicate-after-merge.yml \
 | `macos-node`                     | macOS TypeScript test lane using the shared built artifacts                                  | macOS-relevant changes               |
 | `macos-swift`                    | Swift lint, build, and tests for the macOS app                                               | macOS-relevant changes               |
 | `android`                        | Android unit tests for both flavors plus one debug APK build                                 | Android-relevant changes             |
+| `test-performance-agent`         | Daily Codex slow-test optimization after trusted activity                                    | Main CI success or manual dispatch   |
 
 ## Fail-Fast Order
 
@@ -111,4 +122,6 @@ pnpm check:docs     # docs format + lint + broken links
 pnpm build          # build dist when CI artifact/build-smoke lanes matter
 node scripts/ci-run-timings.mjs <run-id>      # summarize wall time, queue time, and slowest jobs
 node scripts/ci-run-timings.mjs --recent 10   # compare recent successful main CI runs
+pnpm test:perf:groups --full-suite --allow-failures --output .artifacts/test-perf/baseline-before.json
+pnpm test:perf:groups:compare .artifacts/test-perf/baseline-before.json .artifacts/test-perf/after-agent.json
 ```

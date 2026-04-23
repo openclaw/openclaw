@@ -10,6 +10,20 @@ import { printTimingSummary } from "./lib/check-timing-summary.mjs";
 import { runManagedCommand } from "./lib/managed-child-process.mjs";
 import { resolveChangedTestTargetPlan } from "./test-projects.test-support.mjs";
 
+export const CHANGED_CHECK_VITEST_NO_OUTPUT_TIMEOUT_MS = "60000";
+const VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS";
+const VITEST_NO_OUTPUT_RETRY_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_RETRY";
+
+export function createChangedCheckVitestEnv(baseEnv = process.env) {
+  return {
+    ...baseEnv,
+    [VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY]:
+      baseEnv[VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY]?.trim() ||
+      CHANGED_CHECK_VITEST_NO_OUTPUT_TIMEOUT_MS,
+    [VITEST_NO_OUTPUT_RETRY_ENV_KEY]: baseEnv[VITEST_NO_OUTPUT_RETRY_ENV_KEY]?.trim() || "0",
+  };
+}
+
 export function createChangedCheckPlan(result, options = {}) {
   const commands = [];
   const add = (name, args) => {
@@ -138,7 +152,10 @@ export async function runChangedCheck(result, options = {}) {
   }
 
   if (plan.runFullTests) {
-    const status = await runPnpm({ name: "tests all", args: ["test"] }, timings);
+    const status = await runPnpm(
+      { name: "tests all", args: ["test"], env: createChangedCheckVitestEnv() },
+      timings,
+    );
     if (status !== 0) {
       printSummary(timings, options);
       return status;
@@ -151,6 +168,7 @@ export async function runChangedCheck(result, options = {}) {
       {
         name: options.explicitPaths ? "tests all" : "tests changed broad",
         args: testArgs,
+        env: createChangedCheckVitestEnv(),
       },
       timings,
     );
@@ -163,6 +181,7 @@ export async function runChangedCheck(result, options = {}) {
       {
         name: "tests changed",
         args: ["test", ...plan.testTargets],
+        env: createChangedCheckVitestEnv(),
       },
       timings,
     );
@@ -173,7 +192,14 @@ export async function runChangedCheck(result, options = {}) {
   }
 
   if (plan.runExtensionTests) {
-    const status = await runPnpm({ name: "tests extensions", args: ["test:extensions"] }, timings);
+    const status = await runPnpm(
+      {
+        name: "tests extensions",
+        args: ["test:extensions"],
+        env: createChangedCheckVitestEnv(),
+      },
+      timings,
+    );
     if (status !== 0) {
       printSummary(timings, options);
       return status;
@@ -217,6 +243,7 @@ async function runCommand(command, timings) {
     status = await runManagedCommand({
       bin: command.bin,
       args: command.args,
+      env: command.env,
     });
   } catch (error) {
     console.error(error);

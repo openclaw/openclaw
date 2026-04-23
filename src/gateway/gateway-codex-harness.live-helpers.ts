@@ -7,7 +7,9 @@ export const EXPECTED_CODEX_MODELS_COMMAND_TEXT = [
   "Available agent IDs in this session:",
   "opened an interactive trust prompt",
   "opened an interactive model-selection prompt",
+  "running as Codex on `openai/",
   "running as Codex on `codex/",
+  "currently running on `openai/",
   "currently running on `codex/",
   "stdin is not a terminal",
   "The local `codex models` entrypoint is interactive in this environment",
@@ -30,21 +32,33 @@ export const EXPECTED_CODEX_MODELS_COMMAND_TEXT = [
   "Available models in this Codex install",
   "Available agent models:",
   "Visible options in this session:",
+  "Current: `openai/",
   "Current: `codex/",
   "Current model:",
+  "Current model: `openai/",
   "Current model: `codex/",
+  "Current model is `openai/",
   "Current model is `codex/",
+  "Current session model: `openai/",
   "Current session model: `codex/",
+  "Current session model is `openai/",
   "Current session model is `codex/",
+  "The current session is using `openai/",
   "The current session is using `codex/",
+  "current session is using `openai/",
   "current session is using `codex/",
   "Configured model from `~/.codex/config.toml`:",
   "Configured models in this session:",
   "Default model:",
+  "This harness is configured with a single Codex model: `openai/",
   "This harness is configured with a single Codex model: `codex/",
+  "Primary model: `openai/",
   "Primary model: `codex/",
+  "Registered models: `openai/",
   "Registered models: `codex/",
+  "Active model: `openai/",
   "Active model: `codex/",
+  "Current active model is `openai/",
   "Current active model is `codex/",
   "Current OpenClaw session status reports the active model as:",
 ] as const;
@@ -98,7 +112,7 @@ export function isExpectedCodexModelsCommandText(text: string): boolean {
     normalized.includes("live openclaw config shows") ||
     normalized.includes("current gateway config");
   const isSessionConfigFallback =
-    text.includes("`codex/") &&
+    (text.includes("`openai/") || text.includes("`codex/")) &&
     ((mentionsConfiguredModels && mentionsSessionModel) ||
       (mentionsConfigSummary && (mentionsConfiguredModels || mentionsSessionModel)));
 
@@ -112,6 +126,8 @@ export function isExpectedCodexModelsCommandText(text: string): boolean {
     normalized.includes("available here:") ||
     normalized.includes("available agent ids in this session:");
   const mentionsCurrentActiveModel =
+    normalized.includes("current active model is `openai/") ||
+    normalized.includes("current active model is openai/") ||
     normalized.includes("current active model is `codex/") ||
     normalized.includes("current active model is codex/");
   const mentionsCurrentSelectedModel =
@@ -123,11 +139,12 @@ export function isExpectedCodexModelsCommandText(text: string): boolean {
     mentionsVisibleOptions &&
     mentionsCurrentActiveModel;
   const isAgentIdModelSummary =
-    normalized.includes("available agent ids in this session:") && text.includes("`codex/");
+    normalized.includes("available agent ids in this session:") &&
+    (text.includes("`openai/") || text.includes("`codex/"));
   const isAvailableHereModelSummary =
     normalized.includes("available here:") &&
     normalized.includes("current session model") &&
-    text.includes("`codex/");
+    (text.includes("`openai/") || text.includes("`codex/"));
   const isInteractiveTuiSummary =
     mentionsCodexModelsCommand &&
     mentionsInteractiveSelection &&

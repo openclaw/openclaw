@@ -3,10 +3,8 @@ summary: "Slash commands: text vs native, config, and supported commands"
 read_when:
   - Using or configuring chat commands
   - Debugging command routing or permissions
-title: "Slash Commands"
+title: "Slash commands"
 ---
-
-# Slash commands
 
 Commands are handled by the Gateway. Most commands must be sent as a **standalone** message that starts with `/`.
 The host-only bash chat command uses `! <cmd>` (with `/bash <cmd>` as an alias).
@@ -243,7 +241,7 @@ Examples:
 /model
 /model list
 /model 3
-/model openai/gpt-5.4
+/model openai/gpt-5.5
 /model opus@anthropic:default
 /model status
 ```

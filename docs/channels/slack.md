@@ -5,9 +5,7 @@ read_when:
 title: "Slack"
 ---
 
-# Slack
-
-Status: production-ready for DMs + channels via Slack app integrations. Default mode is Socket Mode; HTTP Request URLs are also supported.
+Production-ready for DMs and channels via Slack app integrations. Default mode is Socket Mode; HTTP Request URLs are also supported.
 
 <CardGroup cols={3}>
   <Card title="Pairing" icon="link" href="/channels/pairing">
@@ -356,6 +354,7 @@ Surface different features that extend the above defaults.
 
       </Tab>
       <Tab title="HTTP Request URLs">
+        Use the same `slash_commands` list as Socket Mode above, and add `"url": "https://gateway-host.example.com/slack/events"` to every entry. Example:
 
 ```json
     "slash_commands": [
@@ -366,130 +365,11 @@ Surface different features that extend the above defaults.
         "url": "https://gateway-host.example.com/slack/events"
       },
       {
-        "command": "/reset",
-        "description": "Reset the current session",
-        "url": "https://gateway-host.example.com/slack/events"
-      },
-      {
-        "command": "/compact",
-        "description": "Compact the session context",
-        "usage_hint": "[instructions]",
-        "url": "https://gateway-host.example.com/slack/events"
-      },
-      {
-        "command": "/stop",
-        "description": "Stop the current run",
-        "url": "https://gateway-host.example.com/slack/events"
-      },
-      {
-        "command": "/session",
-        "description": "Manage thread-binding expiry",
-        "usage_hint": "idle <duration|off> or max-age <duration|off>",
-        "url": "https://gateway-host.example.com/slack/events"
-      },
-      {
-        "command": "/think",
-        "description": "Set the thinking level",
-        "usage_hint": "<level>",
-        "url": "https://gateway-host.example.com/slack/events"
-      },
-      {
-        "command": "/verbose",
-        "description": "Toggle verbose output",
-        "usage_hint": "on|off|full",
-        "url": "https://gateway-host.example.com/slack/events"
-      },
-      {
-        "command": "/fast",
-        "description": "Show or set fast mode",
-        "usage_hint": "[status|on|off]",
-        "url": "https://gateway-host.example.com/slack/events"
-      },
-      {
-        "command": "/reasoning",
-        "description": "Toggle reasoning visibility",
-        "usage_hint": "[on|off|stream]",
-        "url": "https://gateway-host.example.com/slack/events"
-      },
-      {
-        "command": "/elevated",
-        "description": "Toggle elevated mode",
-        "usage_hint": "[on|off|ask|full]",
-        "url": "https://gateway-host.example.com/slack/events"
-      },
-      {
-        "command": "/exec",
-        "description": "Show or set exec defaults",
-        "usage_hint": "host=<auto|sandbox|gateway|node> security=<deny|allowlist|full> ask=<off|on-miss|always> node=<id>",
-        "url": "https://gateway-host.example.com/slack/events"
-      },
-      {
-        "command": "/model",
-        "description": "Show or set the model",
-        "usage_hint": "[name|#|status]",
-        "url": "https://gateway-host.example.com/slack/events"
-      },
-      {
-        "command": "/models",
-        "description": "List providers or models for a provider",
-        "usage_hint": "[provider] [page] [limit=<n>|size=<n>|all]",
-        "url": "https://gateway-host.example.com/slack/events"
-      },
-      {
         "command": "/help",
         "description": "Show the short help summary",
         "url": "https://gateway-host.example.com/slack/events"
-      },
-      {
-        "command": "/commands",
-        "description": "Show the generated command catalog",
-        "url": "https://gateway-host.example.com/slack/events"
-      },
-      {
-        "command": "/tools",
-        "description": "Show what the current agent can use right now",
-        "usage_hint": "[compact|verbose]",
-        "url": "https://gateway-host.example.com/slack/events"
-      },
-      {
-        "command": "/agentstatus",
-        "description": "Show runtime status, including provider usage/quota when available",
-        "url": "https://gateway-host.example.com/slack/events"
-      },
-      {
-        "command": "/tasks",
-        "description": "List active/recent background tasks for the current session",
-        "url": "https://gateway-host.example.com/slack/events"
-      },
-      {
-        "command": "/context",
-        "description": "Explain how context is assembled",
-        "usage_hint": "[list|detail|json]",
-        "url": "https://gateway-host.example.com/slack/events"
-      },
-      {
-        "command": "/whoami",
-        "description": "Show your sender identity",
-        "url": "https://gateway-host.example.com/slack/events"
-      },
-      {
-        "command": "/skill",
-        "description": "Run a skill by name",
-        "usage_hint": "<name> [input]",
-        "url": "https://gateway-host.example.com/slack/events"
-      },
-      {
-        "command": "/btw",
-        "description": "Ask a side question without changing session context",
-        "usage_hint": "<question>",
-        "url": "https://gateway-host.example.com/slack/events"
-      },
-      {
-        "command": "/usage",
-        "description": "Control the usage footer or show cost summary",
-        "usage_hint": "off|tokens|full|cost",
-        "url": "https://gateway-host.example.com/slack/events"
       }
+      // ...repeat for every command with the same `url` value
     ]
 ```
 
@@ -903,20 +783,21 @@ Same-chat `/approve` also works in Slack channels and DMs that already support c
   - block actions: selected values, labels, picker values, and `workflow_*` metadata
   - modal `view_submission` and `view_closed` events with routed channel metadata and form inputs
 
-## Configuration reference pointers
+## Configuration reference
 
-Primary reference:
+Primary reference: [Configuration reference - Slack](/gateway/configuration-reference#slack).
 
-- [Configuration reference - Slack](/gateway/configuration-reference#slack)
+<Accordion title="High-signal Slack fields">
 
-  High-signal Slack fields:
-  - mode/auth: `mode`, `botToken`, `appToken`, `signingSecret`, `webhookPath`, `accounts.*`
-  - DM access: `dm.enabled`, `dmPolicy`, `allowFrom` (legacy: `dm.policy`, `dm.allowFrom`), `dm.groupEnabled`, `dm.groupChannels`
-  - compatibility toggle: `dangerouslyAllowNameMatching` (break-glass; keep off unless needed)
-  - channel access: `groupPolicy`, `channels.*`, `channels.*.users`, `channels.*.requireMention`
-  - threading/history: `replyToMode`, `replyToModeByChatType`, `thread.*`, `historyLimit`, `dmHistoryLimit`, `dms.*.historyLimit`
-  - delivery: `textChunkLimit`, `chunkMode`, `mediaMaxMb`, `streaming`, `streaming.nativeTransport`, `streaming.preview.toolProgress`
-  - ops/features: `configWrites`, `commands.native`, `slashCommand.*`, `actions.*`, `userToken`, `userTokenReadOnly`
+- mode/auth: `mode`, `botToken`, `appToken`, `signingSecret`, `webhookPath`, `accounts.*`
+- DM access: `dm.enabled`, `dmPolicy`, `allowFrom` (legacy: `dm.policy`, `dm.allowFrom`), `dm.groupEnabled`, `dm.groupChannels`
+- compatibility toggle: `dangerouslyAllowNameMatching` (break-glass; keep off unless needed)
+- channel access: `groupPolicy`, `channels.*`, `channels.*.users`, `channels.*.requireMention`
+- threading/history: `replyToMode`, `replyToModeByChatType`, `thread.*`, `historyLimit`, `dmHistoryLimit`, `dms.*.historyLimit`
+- delivery: `textChunkLimit`, `chunkMode`, `mediaMaxMb`, `streaming`, `streaming.nativeTransport`, `streaming.preview.toolProgress`
+- ops/features: `configWrites`, `commands.native`, `slashCommand.*`, `actions.*`, `userToken`, `userTokenReadOnly`
+
+</Accordion>
 
 ## Troubleshooting
 
@@ -989,10 +870,23 @@ openclaw pairing list slack
 
 ## Related
 
-- [Pairing](/channels/pairing)
-- [Groups](/channels/groups)
-- [Security](/gateway/security)
-- [Channel routing](/channels/channel-routing)
-- [Troubleshooting](/channels/troubleshooting)
-- [Configuration](/gateway/configuration)
-- [Slash commands](/tools/slash-commands)
+<CardGroup cols={2}>
+  <Card title="Pairing" icon="link" href="/channels/pairing">
+    Pair a Slack user to the gateway.
+  </Card>
+  <Card title="Groups" icon="users" href="/channels/groups">
+    Channel and group DM behavior.
+  </Card>
+  <Card title="Channel routing" icon="route" href="/channels/channel-routing">
+    Route inbound messages to agents.
+  </Card>
+  <Card title="Security" icon="shield" href="/gateway/security">
+    Threat model and hardening.
+  </Card>
+  <Card title="Configuration" icon="sliders" href="/gateway/configuration">
+    Config layout and precedence.
+  </Card>
+  <Card title="Slash commands" icon="terminal" href="/tools/slash-commands">
+    Command catalog and behavior.
+  </Card>
+</CardGroup>

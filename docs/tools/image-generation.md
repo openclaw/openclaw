@@ -4,10 +4,8 @@ read_when:
   - Generating images via the agent
   - Configuring image generation providers and models
   - Understanding the image_generate tool parameters
-title: "Image Generation"
+title: "Image generation"
 ---
-
-# Image Generation
 
 The `image_generate` tool lets the agent create and edit images using your configured providers. Generated images are delivered automatically as media attachments in the agent's reply.
 
@@ -38,15 +36,16 @@ The agent calls `image_generate` automatically. No tool allow-listing needed —
 
 ## Supported providers
 
-| Provider | Default model                    | Edit support                       | API key                                               |
-| -------- | -------------------------------- | ---------------------------------- | ----------------------------------------------------- |
-| OpenAI   | `gpt-image-2`                    | Yes (up to 5 images)               | `OPENAI_API_KEY`                                      |
-| Google   | `gemini-3.1-flash-image-preview` | Yes                                | `GEMINI_API_KEY` or `GOOGLE_API_KEY`                  |
-| fal      | `fal-ai/flux/dev`                | Yes                                | `FAL_KEY`                                             |
-| MiniMax  | `image-01`                       | Yes (subject reference)            | `MINIMAX_API_KEY` or MiniMax OAuth (`minimax-portal`) |
-| ComfyUI  | `workflow`                       | Yes (1 image, workflow-configured) | `COMFY_API_KEY` or `COMFY_CLOUD_API_KEY` for cloud    |
-| Vydra    | `grok-imagine`                   | No                                 | `VYDRA_API_KEY`                                       |
-| xAI      | `grok-imagine-image`             | Yes (up to 5 images)               | `XAI_API_KEY`                                         |
+| Provider     | Default model                    | Edit support                       | API key                                               |
+| ------------ | -------------------------------- | ---------------------------------- | ----------------------------------------------------- |
+| OpenAI       | `gpt-image-2`                    | Yes (up to 4 images)               | `OPENAI_API_KEY`                                      |
+| OpenAI Codex | `gpt-image-2`                    | Yes (up to 4 images)               | OpenAI Codex OAuth                                    |
+| Google       | `gemini-3.1-flash-image-preview` | Yes                                | `GEMINI_API_KEY` or `GOOGLE_API_KEY`                  |
+| fal          | `fal-ai/flux/dev`                | Yes                                | `FAL_KEY`                                             |
+| MiniMax      | `image-01`                       | Yes (subject reference)            | `MINIMAX_API_KEY` or MiniMax OAuth (`minimax-portal`) |
+| ComfyUI      | `workflow`                       | Yes (1 image, workflow-configured) | `COMFY_API_KEY` or `COMFY_CLOUD_API_KEY` for cloud    |
+| Vydra        | `grok-imagine`                   | No                                 | `VYDRA_API_KEY`                                       |
+| xAI          | `grok-imagine-image`             | Yes (up to 5 images)               | `XAI_API_KEY`                                         |
 
 Use `action: "list"` to inspect available providers and models at runtime:
 

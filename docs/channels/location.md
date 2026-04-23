@@ -3,10 +3,8 @@ summary: "Inbound channel location parsing (Telegram/WhatsApp/Matrix) and contex
 read_when:
   - Adding or modifying channel location parsing
   - Using location context fields in agent prompts or tools
-title: "Channel Location Parsing"
+title: "Channel location parsing"
 ---
-
-# Channel location parsing
 
 OpenClaw normalizes shared locations from chat channels into:
 

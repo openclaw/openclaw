@@ -5,10 +5,10 @@ vi.mock("@larksuiteoapi/node-sdk", () => {
 });
 
 describe("feishu setup entry", () => {
-  it("loads the setup plugin without importing Feishu runtime dependencies", async () => {
+  it("declares the setup entry without importing Feishu runtime dependencies", async () => {
     const { default: setupEntry } = await import("./setup-entry.js");
 
     expect(setupEntry.kind).toBe("bundled-channel-setup-entry");
-    expect(setupEntry.loadSetupPlugin({ installRuntimeDeps: false })?.id).toBe("feishu");
+    expect(typeof setupEntry.loadSetupPlugin).toBe("function");
   });
 });

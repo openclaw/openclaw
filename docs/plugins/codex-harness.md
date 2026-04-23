@@ -1,13 +1,11 @@
 ---
-title: "Codex Harness"
 summary: "Run OpenClaw embedded agent turns through the bundled Codex app-server harness"
+title: "Codex harness"
 read_when:
   - You want to use the bundled Codex app-server harness
   - You need Codex model refs and config examples
   - You want to disable PI fallback for Codex-only deployments
 ---
-
-# Codex Harness
 
 The bundled `codex` plugin lets OpenClaw run embedded agent turns through the
 Codex app-server instead of the built-in PI harness.
@@ -31,25 +29,23 @@ aligned with the PI harness:
 Bundled plugins can also register a Codex app-server extension factory to add
 async `tool_result` middleware.
 
-The harness is off by default. It is selected only when the `codex` plugin is
-enabled and the resolved model is a `codex/*` model, or when you explicitly
-force `embeddedHarness.runtime: "codex"` or `OPENCLAW_AGENT_RUNTIME=codex`.
-If you never configure `codex/*`, existing PI, OpenAI, Anthropic, Gemini, local,
-and custom-provider runs keep their current behavior.
+The harness is off by default. New configs should keep OpenAI model refs
+canonical as `openai/gpt-*` and explicitly force
+`embeddedHarness.runtime: "codex"` or `OPENCLAW_AGENT_RUNTIME=codex` when they
+want native app-server execution. Legacy `codex/*` model refs still auto-select
+the harness for compatibility.
 
 ## Pick the right model prefix
 
-OpenClaw has separate routes for OpenAI and Codex-shaped access:
+OpenClaw now keeps OpenAI GPT model refs canonical as `openai/*`:
 
-| Model ref              | Runtime path                                 | Use when                                                                |
-| ---------------------- | -------------------------------------------- | ----------------------------------------------------------------------- |
-| `openai/gpt-5.4`       | OpenAI provider through OpenClaw/PI plumbing | You want direct OpenAI Platform API access with `OPENAI_API_KEY`.       |
-| `openai-codex/gpt-5.4` | OpenAI Codex OAuth provider through PI       | You want ChatGPT/Codex OAuth without the Codex app-server harness.      |
-| `codex/gpt-5.4`        | Bundled Codex provider plus Codex harness    | You want native Codex app-server execution for the embedded agent turn. |
+| Model ref                                             | Runtime path                                 | Use when                                                                |
+| ----------------------------------------------------- | -------------------------------------------- | ----------------------------------------------------------------------- |
+| `openai/gpt-5.5`                                      | OpenAI provider through OpenClaw/PI plumbing | You want direct OpenAI Platform API access with `OPENAI_API_KEY`.       |
+| `openai/gpt-5.5` + `embeddedHarness.runtime: "codex"` | Codex app-server harness                     | You want native Codex app-server execution for the embedded agent turn. |
 
-The Codex harness only claims `codex/*` model refs. Existing `openai/*`,
-`openai-codex/*`, Anthropic, Gemini, xAI, local, and custom provider refs keep
-their normal paths.
+Legacy `openai-codex/gpt-*` and `codex/gpt-*` refs remain accepted as
+compatibility aliases, but new docs/config examples should use `openai/gpt-*`.
 
 Harness selection is not a live session control. When an embedded turn runs,
 OpenClaw records the selected harness id on that session and keeps using it for
@@ -64,7 +60,8 @@ have transcript history. Use `/new` or `/reset` to opt that conversation into
 Codex after changing config.
 
 `/status` shows the effective non-PI harness next to `Fast`, for example
-`Fast · codex`. The default PI harness is omitted.
+`Fast · codex`. The default PI harness remains `Runner: pi (embedded)` and does
+not add a separate harness badge.
 
 ## Requirements
 
@@ -82,7 +79,7 @@ uses.
 
 ## Minimal config
 
-Use `codex/gpt-5.4`, enable the bundled plugin, and force the `codex` harness:
+Use `openai/gpt-5.5`, enable the bundled plugin, and force the `codex` harness:
 
 ```json5
 {
@@ -95,7 +92,7 @@ Use `codex/gpt-5.4`, enable the bundled plugin, and force the `codex` harness:
   },
   agents: {
     defaults: {
-      model: "codex/gpt-5.4",
+      model: "openai/gpt-5.5",
       embeddedHarness: {
         runtime: "codex",
         fallback: "none",
@@ -120,14 +117,15 @@ If your config uses `plugins.allow`, include `codex` there too:
 }
 ```
 
-Setting `agents.defaults.model` or an agent model to `codex/<model>` also
-auto-enables the bundled `codex` plugin. The explicit plugin entry is still
-useful in shared configs because it makes the deployment intent obvious.
+Legacy configs that set `agents.defaults.model` or an agent model to
+`codex/<model>` still auto-enable the bundled `codex` plugin. New configs should
+prefer `openai/<model>` plus the explicit `embeddedHarness` entry above.
 
 ## Add Codex without replacing other models
 
-Keep `runtime: "auto"` when you want Codex for `codex/*` models and PI for
-everything else:
+Keep `runtime: "auto"` when you want legacy `codex/*` refs to select Codex and
+PI for everything else. For new configs, prefer explicit `runtime: "codex"` on
+the agents that should use the harness.
 
 ```json5
 {
@@ -141,17 +139,15 @@ everything else:
   agents: {
     defaults: {
       model: {
-        primary: "codex/gpt-5.4",
-        fallbacks: ["openai/gpt-5.4", "anthropic/claude-opus-4-6"],
+        primary: "openai/gpt-5.5",
+        fallbacks: ["openai/gpt-5.5", "anthropic/claude-opus-4-6"],
       },
       models: {
-        "codex/gpt-5.4": { alias: "codex" },
-        "codex/gpt-5.4-mini": { alias: "codex-mini" },
-        "openai/gpt-5.4": { alias: "gpt" },
+        "openai/gpt-5.5": { alias: "gpt" },
         "anthropic/claude-opus-4-6": { alias: "opus" },
       },
       embeddedHarness: {
-        runtime: "auto",
+        runtime: "codex",
         fallback: "pi",
       },
     },
@@ -161,8 +157,7 @@ everything else:
 
 With this shape:
 
-- `/model codex` or `/model codex/gpt-5.4` uses the Codex app-server harness.
-- `/model gpt` or `/model openai/gpt-5.4` uses the OpenAI provider path.
+- `/model gpt` or `/model openai/gpt-5.5` uses the Codex app-server harness for this config.
 - `/model opus` uses the Anthropic provider path.
 - If a non-Codex model is selected, PI remains the compatibility harness.
 
@@ -175,7 +170,7 @@ the Codex harness:
 {
   agents: {
     defaults: {
-      model: "codex/gpt-5.4",
+      model: "openai/gpt-5.5",
       embeddedHarness: {
         runtime: "codex",
         fallback: "none",
@@ -194,8 +189,7 @@ openclaw gateway run
 ```
 
 With fallback disabled, OpenClaw fails early if the Codex plugin is disabled,
-the requested model is not a `codex/*` ref, the app-server is too old, or the
-app-server cannot start.
+the app-server is too old, or the app-server cannot start.
 
 ## Per-agent Codex
 
@@ -220,7 +214,7 @@ auto-selection:
       {
         id: "codex",
         name: "Codex",
-        model: "codex/gpt-5.4",
+        model: "openai/gpt-5.5",
         embeddedHarness: {
           runtime: "codex",
           fallback: "none",
@@ -239,11 +233,11 @@ and lets the next turn resolve the harness from current config again.
 ## Model discovery
 
 By default, the Codex plugin asks the app-server for available models. If
-discovery fails or times out, it uses the bundled fallback catalog:
+discovery fails or times out, it uses a bundled fallback catalog for:
 
-- `codex/gpt-5.4`
-- `codex/gpt-5.4-mini`
-- `codex/gpt-5.2`
+- GPT-5.5
+- GPT-5.4 mini
+- GPT-5.2
 
 You can tune discovery under `plugins.entries.codex.config.discovery`:
 
@@ -458,8 +452,8 @@ Remote app-server with explicit headers:
 
 Model switching stays OpenClaw-controlled. When an OpenClaw session is attached
 to an existing Codex thread, the next turn sends the currently selected
-`codex/*` model, provider, approval policy, sandbox, and service tier to
-app-server again. Switching from `codex/gpt-5.4` to `codex/gpt-5.2` keeps the
+OpenAI model, provider, approval policy, sandbox, and service tier to
+app-server again. Switching from `openai/gpt-5.5` to `openai/gpt-5.2` keeps the
 thread binding but asks Codex to continue with the newly selected model.
 
 ## Codex command
