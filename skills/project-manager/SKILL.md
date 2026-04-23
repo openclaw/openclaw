@@ -108,7 +108,7 @@ Before writing STATUS.md: **read the file first**, then merge changes, then writ
 
 If `projects/{name}/.git/` exists:
 - Record `Git: {hash}` in STATUS.md header
-- On resume: `git log --oneline -1` to verify state
+- On resume: `git -C projects/{name} log --oneline -1` to verify state
 
 ---
 
