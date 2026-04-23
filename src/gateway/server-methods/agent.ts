@@ -998,45 +998,49 @@ export const agentHandlers: GatewayRequestHandlers = {
       const effectiveDeliveryFields = normalizeSessionDeliveryFields({
         deliveryContext: effectiveDelivery,
       });
-      const nextEntryPatch: SessionEntry = {
+      // Patch carries only fields derived from the current request. Fields
+      // read from the stale cached `entry` must NOT appear here — the patch
+      // is later merged via `{...freshStore, ...patch}` in updateSessionStore,
+      // so any stale value in the patch would clobber a fresh store value
+      // written concurrently (e.g. by sessions.patch setting modelOverride
+      // on a subagent between spawn and run — see #5369).
+      const nextEntryPatch: Partial<SessionEntry> = {
         sessionId,
         updatedAt: now,
-        sessionStartedAt: isNewSession
-          ? now
-          : (entry?.sessionStartedAt ??
-            resolveSessionLifecycleTimestamps({
-              entry,
-              storePath,
-              agentId: resolveAgentIdFromSessionKey(canonicalKey),
-            }).sessionStartedAt),
-        lastInteractionAt: touchInteraction ? now : entry?.lastInteractionAt,
-        thinkingLevel: entry?.thinkingLevel,
-        fastMode: entry?.fastMode,
-        verboseLevel: entry?.verboseLevel,
-        traceLevel: entry?.traceLevel,
-        reasoningLevel: entry?.reasoningLevel,
-        systemSent: entry?.systemSent,
-        sendPolicy: entry?.sendPolicy,
-        skillsSnapshot: entry?.skillsSnapshot,
+        // sessionStartedAt is only written for genuinely new sessions; the
+        // reuse path lets mergeSessionEntry preserve the freshStore value
+        // (and re-derive from updatedAt if absent). Reading entry?.sessionStartedAt
+        // here would re-introduce the #5369 stale-writeback class.
+        ...(isNewSession ? { sessionStartedAt: now } : {}),
+        // Same principle for lastInteractionAt: only write the request-derived
+        // value (now) when this run actually counts as user interaction; let
+        // mergeSessionEntry preserve freshStore otherwise.
+        ...(touchInteraction ? { lastInteractionAt: now } : {}),
         deliveryContext: effectiveDeliveryFields.deliveryContext,
         lastChannel: effectiveDeliveryFields.lastChannel ?? entry?.lastChannel,
         lastTo: effectiveDeliveryFields.lastTo ?? entry?.lastTo,
         lastAccountId: effectiveDeliveryFields.lastAccountId ?? entry?.lastAccountId,
         lastThreadId: effectiveDeliveryFields.lastThreadId ?? entry?.lastThreadId,
-        modelOverride: entry?.modelOverride,
-        providerOverride: entry?.providerOverride,
         label: labelValue,
         spawnedBy: spawnedByValue,
-        spawnedWorkspaceDir: entry?.spawnedWorkspaceDir,
-        spawnDepth: entry?.spawnDepth,
         channel: entry?.channel ?? request.channel?.trim(),
+        // groupId/groupChannel/space carry the *validated* request-derived
+        // values; trust resolution against session key + spawnedBy happens
+        // upstream in resolveTrustedGroup (#73720). Falling back to entry?.X
+        // here would bypass that validation and let a forged groupId persist
+        // across reconnects.
         groupId: resolvedGroupId,
         groupChannel: resolvedGroupChannel,
         space: resolvedGroupSpace,
-        ...(pluginOwnerId ? { pluginOwnerId } : {}),
-        cliSessionIds: entry?.cliSessionIds,
-        cliSessionBindings: entry?.cliSessionBindings,
-        claudeCliSessionId: entry?.claudeCliSessionId,
+        // Only seed pluginOwnerId when the session is brand new (no cached
+        // entry) and the value comes from the connecting client. For existing
+        // entries pluginOwnerId is read from the stale cache, so writing it
+        // back into the patch would be the same #5369 stale-writeback bug.
+        ...(entry === undefined && pluginOwnerId ? { pluginOwnerId } : {}),
+        // cliSessionIds / cliSessionBindings / claudeCliSessionId are
+        // intentionally NOT carried via `entry?.X` writebacks here:
+        // mergeSessionEntry preserves them from the fresh store, and reading
+        // them from the stale cache would be the #5369 stale-writeback class.
       };
       sessionEntry = mergeSessionEntry(entry, nextEntryPatch);
       const sendPolicy = resolveSendPolicy({

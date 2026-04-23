@@ -782,6 +782,53 @@ describe("gateway agent handler", () => {
     expect(capturedEntry?.cliSessionIds).toEqual(existingCliSessionIds);
     expect(capturedEntry?.claudeCliSessionId).toBe(existingClaudeCliSessionId);
   });
+  // #5369: sessions.patch can write modelOverride to the session store between
+  // when the agent handler reads its cached entry and when updateSessionStore
+  // runs. The handler's loadSessionEntry may return the stale pre-patch entry
+  // (no modelOverride), while the store-load inside updateSessionStore has the
+  // fresh value. If the patch built from the stale entry carries modelOverride:
+  // undefined, the merge {...fresh, ...patch} clobbers the fresh value.
+  it("preserves fresh modelOverride when cached entry is stale (#5369)", async () => {
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      entry: {
+        sessionId: "subagent-session-id",
+        updatedAt: Date.now() - 1000,
+        // modelOverride absent — stale pre-patch view
+      },
+      canonicalKey: "agent:main:subagent:test-uuid",
+    });
+    let capturedEntry: Record<string, unknown> | undefined;
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const freshStore: Record<string, Record<string, unknown>> = {
+        "agent:main:subagent:test-uuid": {
+          sessionId: "subagent-session-id",
+          updatedAt: Date.now(),
+          modelOverride: "qwen3-coder:30b",
+          providerOverride: "ollama",
+        },
+      };
+      const result = await updater(freshStore);
+      capturedEntry = freshStore["agent:main:subagent:test-uuid"];
+      return result;
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+    await invokeAgent(
+      {
+        message: "hi",
+        agentId: "main",
+        sessionKey: "agent:main:subagent:test-uuid",
+        idempotencyKey: "test-5369-race",
+      },
+      { reqId: "race-1" },
+    );
+    expect(capturedEntry?.modelOverride).toBe("qwen3-coder:30b");
+    expect(capturedEntry?.providerOverride).toBe("ollama");
+  });
   it("reactivates completed subagent sessions and broadcasts send updates", async () => {
     const childSessionKey = "agent:main:subagent:followup";
     const completedRun = {
