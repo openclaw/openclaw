@@ -12,7 +12,15 @@ export function isMinimaxVlmProvider(provider: string): boolean {
 }
 
 export function isMinimaxVlmModel(provider: string, modelId: string): boolean {
-  return isMinimaxVlmProvider(provider) && modelId.trim() === "MiniMax-VL-01";
+  if (!isMinimaxVlmProvider(provider)) {
+    return false;
+  }
+
+  const normalizedModelId = modelId.trim();
+
+  const supportedVlmModels = ["MiniMax-VL-01", "MiniMax-M2.7", "MiniMax-M2.7-highspeed"];
+
+  return supportedVlmModels.includes(normalizedModelId);
 }
 
 function coerceApiHost(params: {

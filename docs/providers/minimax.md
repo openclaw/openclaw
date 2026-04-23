@@ -11,7 +11,7 @@ OpenClaw's MiniMax provider defaults to **MiniMax M2.7**.
 MiniMax also provides:
 
 - Bundled speech synthesis via T2A v2
-- Bundled image understanding via `MiniMax-VL-01`
+- Bundled image understanding via `MiniMax-VL-01` (with explicit multimodal support for `MiniMax-M2.7` and `MiniMax-M2.7-highspeed` when selected)
 - Bundled music generation via `music-2.6`
 - Bundled `web_search` through the MiniMax Coding Plan search API
 
@@ -28,7 +28,7 @@ Provider split:
 | ------------------------ | ---------------- | ---------------------------------------- |
 | `MiniMax-M2.7`           | Chat (reasoning) | Default hosted reasoning model           |
 | `MiniMax-M2.7-highspeed` | Chat (reasoning) | Faster M2.7 reasoning tier               |
-| `MiniMax-VL-01`          | Vision           | Image understanding model                |
+| `MiniMax-VL-01`          | Vision           | Dedicated image understanding model      |
 | `image-01`               | Image generation | Text-to-image and image-to-image editing |
 | `music-2.6`              | Music generation | Default music model                      |
 | `music-2.5`              | Music generation | Previous music generation tier           |
@@ -244,8 +244,13 @@ through the CN endpoint; the default global endpoint is
 
 When onboarding or API-key setup writes explicit `models.providers.minimax`
 entries, OpenClaw materializes `MiniMax-M2.7` and
-`MiniMax-M2.7-highspeed` as text-only chat models. Image understanding is
-exposed separately through the plugin-owned `MiniMax-VL-01` media provider.
+`MiniMax-M2.7-highspeed` as text-only chat models.
+
+The built-in bundled MiniMax text catalog itself stays text-only metadata until
+that explicit provider config exists. Image understanding is exposed separately
+through the plugin-owned `MiniMax-VL-01` media provider, while explicit
+multimodal refs such as `MiniMax-M2.7` and `MiniMax-M2.7-highspeed`
+also route through the MiniMax image-understanding path when selected.
 
 <Note>
 See [Image Generation](/tools/image-generation) for shared tool parameters, provider selection, and failover behavior.
@@ -354,6 +359,9 @@ catalog:
 
 That is why automatic media routing can use MiniMax image understanding even
 when the bundled text-provider catalog still shows text-only M2.7 chat refs.
+If you explicitly select `MiniMax-M2.7` or `MiniMax-M2.7-highspeed` from a
+configured multimodal MiniMax provider entry, OpenClaw treats those refs as
+valid MiniMax image-understanding models too.
 
 ### Web search
 

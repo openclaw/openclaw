@@ -518,7 +518,7 @@ Plugin-owned capability split:
 
 - Text/chat defaults stay on `minimax/MiniMax-M2.7`
 - Image generation is `minimax/image-01` or `minimax-portal/image-01`
-- Image understanding is plugin-owned `MiniMax-VL-01` on both MiniMax auth paths
+- Image understanding defaults to plugin-owned `MiniMax-VL-01` on both MiniMax auth paths, and explicit multimodal `MiniMax-M2.7` / `MiniMax-M2.7-highspeed` refs also qualify
 - Web search stays on provider id `minimax`
 
 ### LM Studio
