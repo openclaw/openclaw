@@ -175,6 +175,13 @@ export function normalizeStoredOverrideModel(params: {
     };
   }
 
+  if (normalizeProviderId(providerOverride) === "nvidia") {
+    return {
+      providerOverride,
+      modelOverride,
+    };
+  }
+
   const providerPrefix = `${providerOverride.toLowerCase()}/`;
   return {
     providerOverride,

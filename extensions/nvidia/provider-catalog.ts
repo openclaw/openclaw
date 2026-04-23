@@ -12,13 +12,10 @@ const NVIDIA_DEFAULT_COST = {
 
 export function normalizeNvidiaModelId(modelId: string): string {
   const trimmed = modelId.trim();
-  if (!trimmed) {
+  if (!trimmed || trimmed.startsWith("nvidia/")) {
     return trimmed;
   }
-  if (trimmed.includes("/")) {
-    return trimmed;
-  }
-  return trimmed === "nemotron-3-super-120b-a12b" ? NVIDIA_DEFAULT_MODEL_ID : trimmed;
+  return `nvidia/${trimmed}`;
 }
 
 export function buildNvidiaProvider(): ModelProviderConfig {

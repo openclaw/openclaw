@@ -214,7 +214,7 @@ describe("model-selection", () => {
         name: "preserves nested model ids after the provider prefix",
         variants: ["nvidia/moonshotai/kimi-k2.5"],
         defaultProvider: "anthropic",
-        expected: { provider: "nvidia", model: "moonshotai/kimi-k2.5" },
+        expected: { provider: "nvidia", model: "nvidia/moonshotai/kimi-k2.5" },
       },
       {
         name: "normalizes anthropic shorthand aliases",
@@ -440,11 +440,11 @@ describe("model-selection", () => {
         resolvePersistedSelectedModelRef({
           defaultProvider: "anthropic",
           overrideProvider: "nvidia",
-          overrideModel: "nemotron-3-super-120b-a12b",
+          overrideModel: "moonshotai/kimi-k2.5",
         }),
       ).toEqual({
         provider: "nvidia",
-        model: "nvidia/nemotron-3-super-120b-a12b",
+        model: "nvidia/moonshotai/kimi-k2.5",
       });
     });
   });
@@ -697,7 +697,7 @@ describe("model-selection", () => {
       expect(result.allowedCatalog).toEqual([
         {
           provider: "nvidia",
-          id: "moonshotai/kimi-k2.5",
+          id: "nvidia/moonshotai/kimi-k2.5",
           name: "Kimi K2.5 (Configured)",
           alias: "Kimi K2.5 (NVIDIA)",
           contextWindow: 32_000,
@@ -950,6 +950,27 @@ describe("model-selection", () => {
       expect(result).toEqual({
         provider: "nvidia",
         model: "nvidia/nemotron-3-super-120b-a12b",
+      });
+    });
+
+    it("restores configured NVIDIA vendor ids under the NVIDIA namespace", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "nvidia/moonshotai/kimi-k2.5" },
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = resolveConfiguredModelRef({
+        cfg,
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.4",
+      });
+
+      expect(result).toEqual({
+        provider: "nvidia",
+        model: "nvidia/moonshotai/kimi-k2.5",
       });
     });
 

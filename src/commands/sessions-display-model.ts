@@ -50,6 +50,10 @@ function normalizeStoredOverrideModel(params: {
     return { providerOverride, modelOverride };
   }
 
+  if (providerOverride.toLowerCase() === "nvidia") {
+    return { providerOverride, modelOverride };
+  }
+
   const providerPrefix = `${providerOverride.toLowerCase()}/`;
   return {
     providerOverride,

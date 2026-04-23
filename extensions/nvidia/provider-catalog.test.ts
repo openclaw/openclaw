@@ -15,10 +15,11 @@ describe("nvidia provider catalog", () => {
     ]);
   });
 
-  it("normalizes bare Nemotron ids to the full NVIDIA upstream id", () => {
+  it("normalizes NVIDIA model ids to the full upstream namespace", () => {
     expect(normalizeNvidiaModelId("nemotron-3-super-120b-a12b")).toBe(
       "nvidia/nemotron-3-super-120b-a12b",
     );
+    expect(normalizeNvidiaModelId("moonshotai/kimi-k2.5")).toBe("nvidia/moonshotai/kimi-k2.5");
     expect(normalizeNvidiaModelId("nvidia/nemotron-3-super-120b-a12b")).toBe(
       "nvidia/nemotron-3-super-120b-a12b",
     );
