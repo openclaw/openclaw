@@ -4,6 +4,7 @@ import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agen
 import { resolveModelAuthMode } from "../agents/model-auth.js";
 import {
   buildModelAliasIndex,
+  isCliProvider,
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "../agents/model-selection.js";
@@ -45,6 +46,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
+import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import { resolveStatusTtsSnapshot } from "../tts/status-config.js";
 import {
   estimateUsageCost,
@@ -193,6 +195,29 @@ function resolveRuntimeLabel(
   return `${runtime}/${sandboxMode}`;
 }
 
+function resolveRunnerLabel(
+  args: Pick<StatusArgs, "config" | "sessionEntry"> & { fallbackProvider?: string },
+): string {
+  const acpAgentRaw = normalizeOptionalString(args.sessionEntry?.acp?.agent);
+  const acpAgent = acpAgentRaw ? sanitizeTerminalText(acpAgentRaw) : undefined;
+  if (acpAgent) {
+    const backendRaw = normalizeOptionalString(args.sessionEntry?.acp?.backend);
+    const backend = backendRaw ? sanitizeTerminalText(backendRaw) : undefined;
+    return backend ? `${acpAgent} (acp/${backend})` : `${acpAgent} (acp)`;
+  }
+
+  const providerRaw =
+    normalizeOptionalString(args.sessionEntry?.modelProvider) ??
+    normalizeOptionalString(args.sessionEntry?.providerOverride) ??
+    normalizeOptionalString(args.fallbackProvider);
+  const provider = providerRaw ? sanitizeTerminalText(providerRaw) : undefined;
+  if (provider && isCliProvider(provider, args.config)) {
+    return `${provider} (cli)`;
+  }
+
+  return "pi (embedded)";
+}
+
 const formatTokens = (total: number | null | undefined, contextTokens: number | null) => {
   const ctx = contextTokens ?? null;
   if (total == null) {
@@ -235,6 +260,13 @@ const formatQueueDetails = (queue?: QueueStatus) => {
     detailParts.push(`drop ${queue.dropPolicy}`);
   }
   return detailParts.length ? ` (${detailParts.join(" · ")})` : "";
+};
+
+const formatFastModeLabel = (enabled: boolean) => {
+  if (!enabled) {
+    return null;
+  }
+  return "Fast";
 };
 
 const readUsageFromSessionLog = (
@@ -651,6 +683,11 @@ export function buildStatusMessage(args: StatusArgs): string {
     "on";
 
   const runtime = { label: resolveRuntimeLabel(args) };
+  const runnerLabel = resolveRunnerLabel({
+    config: args.config,
+    sessionEntry: args.sessionEntry,
+    fallbackProvider: activeProvider,
+  });
 
   const updatedAt = entry?.updatedAt;
   const sessionLine = [
@@ -704,8 +741,9 @@ export function buildStatusMessage(args: StatusArgs): string {
   });
   const optionParts = [
     `Runtime: ${runtime.label}`,
+    `Runner: ${runnerLabel}`,
     `Think: ${thinkLevel}`,
-    fastMode ? "Fast: on" : null,
+    formatFastModeLabel(fastMode),
     textVerbosity ? `Text: ${textVerbosity}` : null,
     verboseLabel,
     traceLabel,

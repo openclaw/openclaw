@@ -32,6 +32,24 @@ describe("gateway codex harness live helpers", () => {
     expect(isExpectedCodexModelsCommandText(text)).toBe(true);
   });
 
+  it("accepts the agent-id summary with active Codex model", () => {
+    const text = [
+      "Available agent IDs in this session:",
+      "",
+      "- `dev`",
+      "",
+      "Current active model:",
+      "- `codex/gpt-5.4`",
+      "",
+      "I couldn’t get a fuller model catalog from the local `codex` CLI here.",
+    ].join("\n");
+
+    expect(
+      EXPECTED_CODEX_MODELS_COMMAND_TEXT.some((expectedText) => text.includes(expectedText)),
+    ).toBe(true);
+    expect(isExpectedCodexModelsCommandText(text)).toBe(true);
+  });
+
   it("accepts sandbox namespace failures with current-session model fallback", () => {
     const text = [
       "I can’t enumerate `/codex models` from this sandbox because the local `codex` CLI fails to start here with a user-namespace restriction (`bwrap: No permissions to create a new namespace`).",
@@ -40,6 +58,21 @@ describe("gateway codex harness live helpers", () => {
     ].join("\n");
 
     expect(isExpectedCodexModelsCommandText(text)).toBe(true);
+  });
+
+  it("accepts missing codex CLI fallback output", () => {
+    const text = [
+      "`codex` is not installed on the shell PATH in this environment.",
+      "",
+      "Command result:",
+      "```text",
+      "/bin/bash: line 1: codex: command not found",
+      "```",
+    ].join("\n");
+
+    expect(
+      EXPECTED_CODEX_MODELS_COMMAND_TEXT.some((expectedText) => text.includes(expectedText)),
+    ).toBe(true);
   });
 
   it("accepts sandbox escalation rejection for codex models", () => {

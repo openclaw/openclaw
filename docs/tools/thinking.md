@@ -39,7 +39,7 @@ title: "Thinking Levels"
 2. Session override (set by sending a directive-only message).
 3. Per-agent default (`agents.list[].thinkingDefault` in config).
 4. Global default (`agents.defaults.thinkingDefault` in config).
-5. Fallback: provider-declared default when available, `low` for other catalog models marked reasoning-capable, `off` otherwise.
+5. Fallback: provider-declared default when available; otherwise reasoning-capable models resolve to `medium` or the nearest supported non-`off` level for that model, and non-reasoning models stay `off`.
 
 ## Setting a session default
 
@@ -68,6 +68,7 @@ title: "Thinking Levels"
 - For direct public `anthropic/*` requests, including OAuth-authenticated traffic sent to `api.anthropic.com`, fast mode maps to Anthropic service tiers: `/fast on` sets `service_tier=auto`, `/fast off` sets `service_tier=standard_only`.
 - For `minimax/*` on the Anthropic-compatible path, `/fast on` (or `params.fastMode: true`) rewrites `MiniMax-M2.7` to `MiniMax-M2.7-highspeed`.
 - Explicit Anthropic `serviceTier` / `service_tier` model params override the fast-mode default when both are set. OpenClaw still skips Anthropic service-tier injection for non-Anthropic proxy base URLs.
+- `/status` shows `Fast` only when fast mode is enabled.
 
 ## Verbose directives (/verbose or /v)
 
@@ -112,7 +113,7 @@ title: "Thinking Levels"
 
 - The web chat thinking selector mirrors the session's stored level from the inbound session store/config when the page loads.
 - Picking another level writes the session override immediately via `sessions.patch`; it does not wait for the next send and it is not a one-shot `thinkingOnce` override.
-- The first option is always `Default (<resolved level>)`, where the resolved default comes from the active session model's provider thinking profile.
+- The first option is always `Default (<resolved level>)`, where the resolved default comes from the active session model's provider thinking profile plus the same fallback logic that `/status` and `session_status` use.
 - The picker uses `thinkingOptions` returned by the gateway session row. The browser UI does not keep its own provider regex list; plugins own model-specific level sets.
 - `/think:<level>` still works and updates the same stored session level, so chat directives and the picker stay in sync.
 
