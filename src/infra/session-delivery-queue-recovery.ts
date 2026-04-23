@@ -199,8 +199,11 @@ export async function recoverPendingSessionDeliveries(opts: {
   log: SessionDeliveryRecoveryLogger;
   stateDir?: string;
   maxRecoveryMs?: number;
+  maxEnqueuedAt?: number;
 }): Promise<SessionDeliveryRecoverySummary> {
-  const pending = await loadPendingSessionDeliveries(opts.stateDir);
+  const pending = (await loadPendingSessionDeliveries(opts.stateDir)).filter(
+    (entry) => opts.maxEnqueuedAt == null || entry.enqueuedAt <= opts.maxEnqueuedAt,
+  );
   if (pending.length === 0) {
     return createEmptyRecoverySummary();
   }
@@ -223,9 +226,18 @@ export async function recoverPendingSessionDeliveries(opts: {
       if (!currentEntry) {
         continue;
       }
+      if (opts.maxEnqueuedAt != null && currentEntry.enqueuedAt > opts.maxEnqueuedAt) {
+        continue;
+      }
       if (currentEntry.retryCount >= MAX_SESSION_DELIVERY_RETRIES) {
         summary.skippedMaxRetries += 1;
-        await moveSessionDeliveryToFailed(currentEntry.id, opts.stateDir).catch(() => {});
+        try {
+          await moveSessionDeliveryToFailed(currentEntry.id, opts.stateDir);
+        } catch (err) {
+          if (getErrnoCode(err) !== "ENOENT") {
+            throw err;
+          }
+        }
         continue;
       }
 

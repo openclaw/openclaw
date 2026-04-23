@@ -104,6 +104,7 @@ describe("server-runtime-services", () => {
     expect(hoisted.recoverPendingRestartContinuationDeliveries).toHaveBeenCalledWith(
       expect.objectContaining({
         deps: {},
+        maxEnqueuedAt: expect.any(Number),
       }),
     );
   });

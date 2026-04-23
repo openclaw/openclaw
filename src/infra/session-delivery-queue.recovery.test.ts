@@ -65,4 +65,54 @@ describe("session-delivery queue recovery", () => {
       expect(failedEntry?.lastError).toBe("transient failure");
     });
   });
+
+  it("skips entries queued after the startup recovery cutoff", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-23T00:00:00.000Z"));
+
+    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+      await enqueueSessionDelivery(
+        {
+          kind: "systemEvent",
+          sessionKey: "agent:main:main",
+          text: "recover old entry",
+        },
+        tempDir,
+      );
+      const maxEnqueuedAt = Date.now();
+
+      vi.setSystemTime(new Date("2026-04-23T00:00:05.000Z"));
+      await enqueueSessionDelivery(
+        {
+          kind: "systemEvent",
+          sessionKey: "agent:main:main",
+          text: "leave fresh entry queued",
+        },
+        tempDir,
+      );
+
+      const deliver = vi.fn(async () => undefined);
+      const summary = await recoverPendingSessionDeliveries({
+        deliver,
+        stateDir: tempDir,
+        maxEnqueuedAt,
+        log: {
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+        },
+      });
+
+      expect(deliver).toHaveBeenCalledTimes(1);
+      expect(summary.recovered).toBe(1);
+      const pending = await loadPendingSessionDeliveries(tempDir);
+      expect(pending).toHaveLength(1);
+      expect(pending[0]?.kind).toBe("systemEvent");
+      if (pending[0]?.kind === "systemEvent") {
+        expect(pending[0].text).toBe("leave fresh entry queued");
+      }
+    });
+
+    vi.useRealTimers();
+  });
 });

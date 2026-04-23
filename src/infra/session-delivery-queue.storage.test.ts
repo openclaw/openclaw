@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
@@ -5,6 +7,7 @@ import {
   enqueueSessionDelivery,
   failSessionDelivery,
   loadPendingSessionDeliveries,
+  resolveSessionDeliveryQueueDir,
 } from "./session-delivery-queue.js";
 
 describe("session-delivery queue storage", () => {
@@ -54,6 +57,25 @@ describe("session-delivery queue storage", () => {
 
       await ackSessionDelivery(id, tempDir);
       expect(await loadPendingSessionDeliveries(tempDir)).toEqual([]);
+    });
+  });
+
+  it("cleans up orphaned temporary queue files during load", async () => {
+    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+      await enqueueSessionDelivery(
+        {
+          kind: "systemEvent",
+          sessionKey: "agent:main:main",
+          text: "restart complete",
+        },
+        tempDir,
+      );
+      const tmpPath = path.join(resolveSessionDeliveryQueueDir(tempDir), "orphan-entry.tmp");
+      fs.writeFileSync(tmpPath, "stale tmp");
+
+      await loadPendingSessionDeliveries(tempDir);
+
+      expect(fs.existsSync(tmpPath)).toBe(false);
     });
   });
 });
