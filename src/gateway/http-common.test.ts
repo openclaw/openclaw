@@ -381,6 +381,45 @@ describe("startSseHeartbeat", () => {
     expect(write).toHaveBeenCalledTimes(1);
     stop();
   });
+
+  it("pauses heartbeats when res.write() returns false (backpressure)", () => {
+    const { res } = makeMockHttpResponse();
+    // Simulate a slow client: write returns false, indicating the internal
+    // buffer has exceeded highWaterMark and the kernel socket is congested.
+    const write = vi.spyOn(res, "write").mockReturnValue(false);
+    const stop = startSseHeartbeat(res, { intervalMs: 1000 });
+
+    // First tick writes and triggers backpressure.
+    vi.advanceTimersByTime(1000);
+    expect(write).toHaveBeenCalledTimes(1);
+
+    // Subsequent ticks must not write while waiting for drain, even though
+    // the interval keeps firing. This prevents unbounded memory growth from
+    // slow readers (CWE-400 amplification via many concurrent connections).
+    vi.advanceTimersByTime(10_000);
+    expect(write).toHaveBeenCalledTimes(1);
+    stop();
+  });
+
+  it("resumes heartbeats after the response emits drain", () => {
+    const { res } = makeMockHttpResponse();
+    const write = vi.spyOn(res, "write").mockReturnValue(false);
+    const stop = startSseHeartbeat(res, { intervalMs: 1000 });
+
+    vi.advanceTimersByTime(1000);
+    expect(write).toHaveBeenCalledTimes(1);
+
+    // Socket drains: kernel buffer has room again, Node emits drain.
+    write.mockReturnValue(true);
+    res.emit("drain");
+
+    // Next tick should resume heartbeat writes now that backpressure cleared.
+    vi.advanceTimersByTime(1000);
+    expect(write).toHaveBeenCalledTimes(2);
+    vi.advanceTimersByTime(1000);
+    expect(write).toHaveBeenCalledTimes(3);
+    stop();
+  });
 });
 
 describe("watchClientDisconnect", () => {

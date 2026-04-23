@@ -125,6 +125,11 @@ export function setSseHeaders(res: ServerResponse) {
  * the spec and are ignored by clients, but any bytes on the wire reset
  * intermediary idle timers.
  *
+ * Backpressure-aware: when a slow client or congested proxy causes
+ * `res.write()` to return false, the heartbeat pauses until the response
+ * emits `drain`. This prevents unbounded per-connection buffering that could
+ * be amplified into a DoS by many concurrent slow readers (CWE-400).
+ *
  * The returned stop function clears the interval. The helper also auto-stops
  * on `close`/`finish` so callers that already end the response through
  * existing paths do not need to track cleanup manually.
@@ -134,14 +139,30 @@ export function startSseHeartbeat(
   options?: { intervalMs?: number },
 ): () => void {
   const intervalMs = Math.max(1000, options?.intervalMs ?? 30_000);
-  const timer = setInterval(() => {
-    if (res.writableEnded || res.destroyed) {
+  let stopped = false;
+  let waitingForDrain = false;
+
+  const tick = () => {
+    if (stopped || waitingForDrain || res.writableEnded || res.destroyed) {
       return;
     }
-    res.write(": ping\n\n");
-  }, intervalMs);
+    const flushed = res.write(": ping\n\n");
+    if (!flushed) {
+      // Slow client or congested proxy: pause heartbeats until the socket
+      // drains so we do not pile up buffered comments in memory. The real
+      // event writes (deltas, completion) use the same res.write() and will
+      // experience the same backpressure through Node's internal buffering,
+      // but the heartbeat should not contribute additional pressure.
+      waitingForDrain = true;
+      res.once("drain", () => {
+        waitingForDrain = false;
+      });
+    }
+  };
+
+  const timer = setInterval(tick, intervalMs);
   timer.unref?.();
-  let stopped = false;
+
   const stop = () => {
     if (stopped) {
       return;
