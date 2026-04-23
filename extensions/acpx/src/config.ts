@@ -260,12 +260,16 @@ export function resolveAcpxPluginConfig(params: {
     ]),
   );
 
-  const probeAgent = normalized.probeAgent?.trim();
+  // Lowercase probeAgent so lookups match the registry keys built above, which
+  // also go through normalizeLowercaseStringOrEmpty. Without this, a user who
+  // writes `probeAgent: "OpenCode"` would silently miss the stored "opencode"
+  // key.
+  const probeAgent = normalizeLowercaseStringOrEmpty(normalized.probeAgent) || undefined;
 
   return {
     cwd,
     stateDir,
-    probeAgent: normalized.probeAgent,
+    probeAgent,
     permissionMode: normalized.permissionMode ?? DEFAULT_PERMISSION_MODE,
     nonInteractivePermissions:
       normalized.nonInteractivePermissions ?? DEFAULT_NON_INTERACTIVE_POLICY,
@@ -275,7 +279,6 @@ export function resolveAcpxPluginConfig(params: {
       normalized.strictWindowsCmdWrapper ?? DEFAULT_STRICT_WINDOWS_CMD_WRAPPER,
     timeoutSeconds: normalized.timeoutSeconds ?? DEFAULT_ACPX_TIMEOUT_SECONDS,
     queueOwnerTtlSeconds: normalized.queueOwnerTtlSeconds ?? DEFAULT_QUEUE_OWNER_TTL_SECONDS,
-    probeAgent: probeAgent && probeAgent.length > 0 ? probeAgent : undefined,
     legacyCompatibilityConfig: {
       strictWindowsCmdWrapper: normalized.strictWindowsCmdWrapper,
       queueOwnerTtlSeconds: normalized.queueOwnerTtlSeconds,
