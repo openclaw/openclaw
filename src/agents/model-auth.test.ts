@@ -4,6 +4,7 @@ import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/
 import type { ModelProviderConfig } from "../config/config.js";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
+import * as cliCredentials from "./cli-credentials.js";
 import {
   CUSTOM_LOCAL_AUTH_MARKER,
   GCP_VERTEX_CREDENTIALS_MARKER,
@@ -199,6 +200,10 @@ describe("resolveAwsSdkEnvVarName", () => {
 });
 
 describe("resolveModelAuthMode", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("returns mixed when provider has both token and api key profiles", () => {
     const store: AuthProfileStore = {
       version: 1,
@@ -249,6 +254,18 @@ describe("resolveModelAuthMode", () => {
     expect(resolveModelAuthMode("aws-bedrock", undefined, { version: 1, profiles: {} })).toBe(
       "aws-sdk",
     );
+  });
+
+  it("returns oauth for codex when Codex CLI auth is available", () => {
+    vi.spyOn(cliCredentials, "readCodexCliCredentialsCached").mockReturnValue({
+      type: "oauth",
+      provider: "openai-codex",
+      access: "token",
+      refresh: "refresh",
+      expires: Date.now() + 60_000,
+    });
+
+    expect(resolveModelAuthMode("codex", undefined, { version: 1, profiles: {} })).toBe("oauth");
   });
 });
 
