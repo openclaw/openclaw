@@ -51,7 +51,6 @@ parallels_package_run_with_build_lock() {
 }
 
 parallels_package_write_dist_inventory() {
-  node --import tsx scripts/write-npm-update-compat-sidecars.ts
   node --import tsx --input-type=module --eval \
     'import { writePackageDistInventory } from "./src/infra/package-dist-inventory.ts"; await writePackageDistInventory(process.cwd());'
 }

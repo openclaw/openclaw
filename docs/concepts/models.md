@@ -67,6 +67,24 @@ to `zai/*`.
 Provider configuration examples (including OpenCode) live in
 [/providers/opencode](/providers/opencode).
 
+### Safe allowlist edits
+
+Use additive writes when updating `agents.defaults.models` by hand:
+
+```bash
+openclaw config set agents.defaults.models '{"openai-codex/gpt-5.4":{}}' --strict-json --merge
+```
+
+`openclaw config set` protects model/provider maps from accidental clobbers. A
+plain object assignment to `agents.defaults.models`, `models.providers`, or
+`models.providers.<id>.models` is rejected when it would remove existing
+entries. Use `--merge` for additive changes; use `--replace` only when the
+provided value should become the complete target value.
+
+Interactive provider setup and `openclaw configure --section model` also merge
+provider-scoped selections into the existing allowlist, so adding Codex,
+Ollama, or another provider does not drop unrelated model entries.
+
 ## "Model is not allowed" (and why replies stop)
 
 If `agents.defaults.models` is set, it becomes the **allowlist** for `/model` and for

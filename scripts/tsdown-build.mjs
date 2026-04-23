@@ -13,7 +13,7 @@ import {
 
 const logLevel = process.env.OPENCLAW_BUILD_VERBOSE ? "info" : "warn";
 const extraArgs = process.argv.slice(2);
-const INEFFECTIVE_DYNAMIC_IMPORT_RE = /\[INEFFECTIVE_DYNAMIC_IMPORT\]/;
+const INEFFECTIVE_DYNAMIC_IMPORT_MARKER = "[INEFFECTIVE_DYNAMIC_IMPORT]";
 const UNRESOLVED_IMPORT_RE = /\[UNRESOLVED_IMPORT\]/;
 const ANSI_ESCAPE_RE = new RegExp(String.raw`\u001B\[[0-9;]*m`, "g");
 const HASHED_ROOT_JS_RE = /^(?<base>.+)-[A-Za-z0-9_-]+\.js$/u;
@@ -170,7 +170,7 @@ export function createTsdownOutputScanner(params = {}) {
   return {
     append(chunk) {
       const text = Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk);
-      if (INEFFECTIVE_DYNAMIC_IMPORT_RE.test(text)) {
+      if (text.includes(INEFFECTIVE_DYNAMIC_IMPORT_MARKER)) {
         hasIneffectiveDynamicImport = true;
       }
       scanLines(text);
