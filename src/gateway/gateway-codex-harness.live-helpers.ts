@@ -4,6 +4,7 @@ export const EXPECTED_CODEX_MODELS_COMMAND_TEXT = [
   "Available models, local cache:",
   "Available agent target:",
   "Available agent targets:",
+  "Available agent IDs in this session:",
   "opened an interactive trust prompt",
   "opened an interactive model-selection prompt",
   "running as Codex on `codex/",
@@ -98,7 +99,8 @@ export function isExpectedCodexModelsCommandText(text: string): boolean {
     normalized.includes("interactive tui");
   const mentionsVisibleOptions =
     normalized.includes("visible options in this session:") ||
-    normalized.includes("visible options:");
+    normalized.includes("visible options:") ||
+    normalized.includes("available agent ids in this session:");
   const mentionsCurrentActiveModel =
     normalized.includes("current active model is `codex/") ||
     normalized.includes("current active model is codex/");
@@ -110,6 +112,8 @@ export function isExpectedCodexModelsCommandText(text: string): boolean {
     mentionsInteractiveSelection &&
     mentionsVisibleOptions &&
     mentionsCurrentActiveModel;
+  const isAgentIdModelSummary =
+    normalized.includes("available agent ids in this session:") && text.includes("`codex/");
   const isInteractiveTuiSummary =
     mentionsCodexModelsCommand &&
     mentionsInteractiveSelection &&
@@ -120,6 +124,7 @@ export function isExpectedCodexModelsCommandText(text: string): boolean {
     isSandboxFallback ||
     isSessionConfigFallback ||
     isInteractiveSelectionSummary ||
+    isAgentIdModelSummary ||
     isInteractiveTuiSummary
   );
 }

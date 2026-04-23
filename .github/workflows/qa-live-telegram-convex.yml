@@ -1,4 +1,4 @@
-name: QA-Lab - Live Telegram, Live Frontier
+name: QA-Lab - All Lanes
 
 on:
   schedule:
@@ -20,7 +20,7 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: qa-lab-live-telegram-live-frontier-${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
+  group: qa-lab-all-lanes-${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
   cancel-in-progress: false
 
 env:
@@ -114,6 +114,140 @@ jobs:
             echo "Resolved SHA: \`$selected_sha\`"
             echo "Trust reason: \`$trusted_reason\`"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  run_mock_parity:
+    name: Run QA Lab parity gate
+    needs: [validate_selected_ref]
+    runs-on: blacksmith-32vcpu-ubuntu-2404
+    timeout-minutes: 30
+    env:
+      QA_PARITY_CONCURRENCY: "1"
+      OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS: "180000"
+      OPENAI_API_KEY: ""
+      ANTHROPIC_API_KEY: ""
+      OPENCLAW_LIVE_OPENAI_KEY: ""
+      OPENCLAW_LIVE_ANTHROPIC_KEY: ""
+      OPENCLAW_LIVE_GEMINI_KEY: ""
+      OPENCLAW_LIVE_SETUP_TOKEN_VALUE: ""
+    steps:
+      - name: Checkout selected ref
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
+          fetch-depth: 1
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          install-bun: "true"
+
+      - name: Build private QA runtime
+        run: pnpm build
+
+      - name: Run GPT-5.4 lane
+        run: |
+          pnpm openclaw qa suite \
+            --provider-mode mock-openai \
+            --parity-pack agentic \
+            --concurrency "${QA_PARITY_CONCURRENCY}" \
+            --model openai/gpt-5.4 \
+            --alt-model openai/gpt-5.4-alt \
+            --output-dir .artifacts/qa-e2e/gpt54
+
+      - name: Run Opus 4.6 lane
+        run: |
+          pnpm openclaw qa suite \
+            --provider-mode mock-openai \
+            --parity-pack agentic \
+            --concurrency "${QA_PARITY_CONCURRENCY}" \
+            --model anthropic/claude-opus-4-6 \
+            --alt-model anthropic/claude-sonnet-4-6 \
+            --output-dir .artifacts/qa-e2e/opus46
+
+      - name: Generate parity report
+        run: |
+          pnpm openclaw qa parity-report \
+            --repo-root . \
+            --candidate-summary .artifacts/qa-e2e/gpt54/qa-suite-summary.json \
+            --baseline-summary .artifacts/qa-e2e/opus46/qa-suite-summary.json \
+            --candidate-label openai/gpt-5.4 \
+            --baseline-label anthropic/claude-opus-4-6 \
+            --output-dir .artifacts/qa-e2e/parity
+
+      - name: Upload parity artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qa-parity-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/qa-e2e/
+          retention-days: 14
+          if-no-files-found: warn
+
+  run_live_matrix:
+    name: Run Matrix live QA lane
+    needs: [authorize_actor, validate_selected_ref]
+    runs-on: blacksmith-32vcpu-ubuntu-2404
+    timeout-minutes: 60
+    environment: qa-live-shared
+    steps:
+      - name: Checkout selected ref
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
+          fetch-depth: 1
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          install-bun: "true"
+
+      - name: Validate required QA credential env
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${OPENAI_API_KEY:-}" ]]; then
+            echo "Missing required OPENAI_API_KEY." >&2
+            exit 1
+          fi
+
+      - name: Build private QA runtime
+        run: pnpm build
+
+      - name: Run Matrix live lane
+        id: run_lane
+        shell: bash
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
+        run: |
+          set -euo pipefail
+
+          output_dir=".artifacts/qa-e2e/matrix-live-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          echo "output_dir=${output_dir}" >> "$GITHUB_OUTPUT"
+
+          pnpm openclaw qa matrix \
+            --repo-root . \
+            --output-dir "${output_dir}" \
+            --provider-mode live-frontier \
+            --model openai/gpt-5.4 \
+            --alt-model openai/gpt-5.4 \
+            --fast
+
+      - name: Upload Matrix QA artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qa-live-matrix-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.run_lane.outputs.output_dir }}
+          retention-days: 14
+          if-no-files-found: warn
 
   run_live_telegram:
     name: Run Telegram live QA lane with Convex leases

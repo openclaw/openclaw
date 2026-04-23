@@ -382,7 +382,12 @@ function replaceNodeModulesDir(targetDir: string, sourceDir: string): void {
     fs.rmSync(targetDir, { recursive: true, force: true });
     fs.renameSync(stagedDir, targetDir);
   } finally {
-    fs.rmSync(tempDir, { recursive: true, force: true });
+    try {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    } catch {
+      // Stale temp dirs are swept at the next runtime-deps pass. Do not fail
+      // a node_modules replacement on a transient cleanup race.
+    }
   }
 }
 

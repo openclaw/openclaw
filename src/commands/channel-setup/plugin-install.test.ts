@@ -113,6 +113,11 @@ import {
   reloadChannelSetupPluginRegistryForChannel,
 } from "./plugin-install.js";
 
+const bundledChatNpmSpec = "@openclaw/bundled-chat@1.2.3";
+const bundledChatIntegrity = "sha512-bundled-chat";
+const bundledChatForkNpmSpec = "@vendor/bundled-chat-fork@1.2.3";
+const bundledChatForkIntegrity = "sha512-vendor-bundled-chat-fork";
+
 const baseEntry: ChannelPluginCatalogEntry = {
   id: "bundled-chat",
   pluginId: "bundled-chat",
@@ -125,8 +130,9 @@ const baseEntry: ChannelPluginCatalogEntry = {
     blurb: "Test",
   },
   install: {
-    npmSpec: "@openclaw/bundled-chat",
+    npmSpec: bundledChatNpmSpec,
     localPath: bundledPluginRoot("bundled-chat"),
+    expectedIntegrity: bundledChatIntegrity,
   },
 };
 
@@ -138,7 +144,7 @@ function mockBundledChatSource() {
         {
           pluginId: "bundled-chat",
           localPath: bundledPluginRootAt("/opt/openclaw", "bundled-chat"),
-          npmSpec: "@openclaw/bundled-chat",
+          npmSpec: bundledChatNpmSpec,
         },
       ],
     ]),
@@ -288,7 +294,7 @@ describe("ensureChannelSetupPluginInstalled", () => {
     const prompter = makePrompter({
       select: vi.fn(async () => "npm") as WizardPrompter["select"],
     });
-    const cfg: OpenClawConfig = { plugins: { allow: ["other"] } };
+    const cfg: OpenClawConfig = { plugins: { allow: ["bundled-chat"] } };
     vi.mocked(fs.existsSync).mockReturnValue(false);
     installPluginFromNpmSpec.mockResolvedValue({
       ok: true,
@@ -308,10 +314,13 @@ describe("ensureChannelSetupPluginInstalled", () => {
     expect(result.cfg.plugins?.entries?.["bundled-chat"]?.enabled).toBe(true);
     expect(result.cfg.plugins?.allow).toContain("bundled-chat");
     expect(result.cfg.plugins?.installs?.["bundled-chat"]?.source).toBe("npm");
-    expect(result.cfg.plugins?.installs?.["bundled-chat"]?.spec).toBe("@openclaw/bundled-chat");
+    expect(result.cfg.plugins?.installs?.["bundled-chat"]?.spec).toBe(bundledChatNpmSpec);
     expect(result.cfg.plugins?.installs?.["bundled-chat"]?.installPath).toBe("/tmp/bundled-chat");
     expect(installPluginFromNpmSpec).toHaveBeenCalledWith(
-      expect.objectContaining({ spec: "@openclaw/bundled-chat" }),
+      expect.objectContaining({
+        expectedIntegrity: bundledChatIntegrity,
+        spec: bundledChatNpmSpec,
+      }),
     );
   });
 
@@ -412,7 +421,8 @@ describe("ensureChannelSetupPluginInstalled", () => {
           blurb: "Test",
         },
         install: {
-          npmSpec: "@vendor/bundled-chat-fork",
+          npmSpec: bundledChatForkNpmSpec,
+          expectedIntegrity: bundledChatForkIntegrity,
         },
       },
       prompter,
@@ -425,7 +435,7 @@ describe("ensureChannelSetupPluginInstalled", () => {
         options: [
           expect.objectContaining({
             value: "npm",
-            label: "Download from npm (@vendor/bundled-chat-fork)",
+            label: `Download from npm (${bundledChatForkNpmSpec})`,
           }),
           expect.objectContaining({
             value: "skip",

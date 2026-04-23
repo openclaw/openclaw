@@ -7,9 +7,15 @@ import type { PluginRuntime } from "../../src/plugins/runtime/types.js";
 import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-registration.js";
 import amazonBedrockPlugin from "./index.js";
 
-type InferenceProfileResult = { models?: Array<{ modelArn?: string }> } | Error;
+type BedrockClientResult =
+  | {
+      models?: Array<{ modelArn?: string }>;
+      modelSummaries?: Array<Record<string, unknown>>;
+      inferenceProfileSummaries?: Array<Record<string, unknown>>;
+    }
+  | Error;
 
-const inferenceProfileResults: InferenceProfileResult[] = [];
+const inferenceProfileResults: BedrockClientResult[] = [];
 const bedrockClientConfigs: Array<Record<string, unknown>> = [];
 const sendGetInferenceProfile = vi.fn(async () => {
   const next = inferenceProfileResults.shift();
@@ -24,6 +30,14 @@ vi.mock("@aws-sdk/client-bedrock", () => {
     constructor(readonly input: { inferenceProfileIdentifier: string }) {}
   }
 
+  class ListFoundationModelsCommand {
+    constructor(readonly input: Record<string, unknown> = {}) {}
+  }
+
+  class ListInferenceProfilesCommand {
+    constructor(readonly input: Record<string, unknown> = {}) {}
+  }
+
   class BedrockClient {
     constructor(config: Record<string, unknown> = {}) {
       bedrockClientConfigs.push(config);
@@ -35,6 +49,8 @@ vi.mock("@aws-sdk/client-bedrock", () => {
   return {
     BedrockClient,
     GetInferenceProfileCommand,
+    ListFoundationModelsCommand,
+    ListInferenceProfilesCommand,
   };
 });
 
@@ -113,10 +129,12 @@ function callWrappedStream(
   provider: RegisteredProviderPlugin,
   modelId: string,
   modelDescriptor: never,
+  config?: OpenClawConfig,
 ): Record<string, unknown> {
   const wrapped = provider.wrapStreamFn?.({
     provider: "amazon-bedrock",
     modelId,
+    config,
     streamFn: spyStreamFn,
   } as never);
 
@@ -136,6 +154,31 @@ function callWrappedStream(
   }
 
   return result;
+}
+
+async function runCatalog(
+  provider: RegisteredProviderPlugin,
+  config: OpenClawConfig,
+  env: NodeJS.ProcessEnv = {} as NodeJS.ProcessEnv,
+) {
+  return provider.catalog?.run({
+    config,
+    env,
+  } as never);
+}
+
+function runtimePluginConfig(config?: Record<string, unknown>): OpenClawConfig {
+  return {
+    plugins: {
+      entries: config
+        ? {
+            "amazon-bedrock": {
+              config,
+            },
+          }
+        : {},
+    },
+  } as OpenClawConfig;
 }
 
 describe("amazon-bedrock provider plugin", () => {
@@ -353,6 +396,91 @@ describe("amazon-bedrock provider plugin", () => {
       });
       // Non-Anthropic models should also get cacheRetention: "none"
       expect(result).toMatchObject({ cacheRetention: "none" });
+    });
+
+    it("uses live plugin config to inject guardrailConfig after startup disable", async () => {
+      const provider = await registerWithConfig(undefined);
+      const result = callWrappedStream(
+        provider,
+        NON_ANTHROPIC_MODEL,
+        MODEL_DESCRIPTOR,
+        runtimePluginConfig({
+          guardrail: {
+            guardrailIdentifier: "live-guardrail",
+            guardrailVersion: "7",
+          },
+        }),
+      );
+
+      expect(result._capturedPayload).toEqual({
+        guardrailConfig: {
+          guardrailIdentifier: "live-guardrail",
+          guardrailVersion: "7",
+        },
+      });
+    });
+
+    it("does not revive startup guardrail config when the live plugin entry is removed", async () => {
+      const provider = await registerWithConfig({
+        guardrail: {
+          guardrailIdentifier: "startup-guardrail",
+          guardrailVersion: "5",
+        },
+      });
+      const result = callWrappedStream(
+        provider,
+        NON_ANTHROPIC_MODEL,
+        MODEL_DESCRIPTOR,
+        runtimePluginConfig(undefined),
+      );
+
+      expect(result).not.toHaveProperty("_capturedPayload");
+      expect(result).toMatchObject({ cacheRetention: "none" });
+    });
+  });
+
+  describe("discovery config", () => {
+    it("uses live plugin config to re-enable discovery after startup disable", async () => {
+      inferenceProfileResults.push(
+        {
+          modelSummaries: [
+            {
+              modelId: NON_ANTHROPIC_MODEL,
+              modelName: "Nova Micro",
+              providerName: "Amazon",
+              inputModalities: ["TEXT"],
+              outputModalities: ["TEXT"],
+              responseStreamingSupported: true,
+              modelLifecycle: { status: "ACTIVE" },
+            },
+          ],
+        },
+        {
+          inferenceProfileSummaries: [],
+        },
+      );
+      const provider = await registerWithConfig({
+        discovery: {
+          enabled: false,
+        },
+      });
+
+      const catalog = await runCatalog(
+        provider,
+        runtimePluginConfig({
+          discovery: {
+            enabled: true,
+            region: "us-east-1",
+          },
+        }),
+      );
+
+      expect(catalog).toMatchObject({
+        provider: {
+          baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+          api: "bedrock-converse-stream",
+        },
+      });
     });
   });
 

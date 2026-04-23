@@ -2,7 +2,10 @@ import "./lifecycle.test-support.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
 import type { ClawdbotConfig } from "../runtime-api.js";
-import { getFeishuLifecycleTestMocks } from "./lifecycle.test-support.js";
+import {
+  getFeishuLifecycleTestMocks,
+  resetFeishuLifecycleTestMocks,
+} from "./lifecycle.test-support.js";
 import {
   createFeishuLifecycleFixture,
   createFeishuTextMessageEvent,
@@ -73,7 +76,7 @@ async function setupLifecycleMonitor() {
 describe("Feishu ACP-init failure lifecycle", () => {
   beforeEach(() => {
     vi.useRealTimers();
-    vi.clearAllMocks();
+    resetFeishuLifecycleTestMocks();
     _handlers = {};
     lastRuntime = null;
     setFeishuLifecycleStateDir("openclaw-feishu-acp-failure");

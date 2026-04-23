@@ -7,10 +7,11 @@ import type { VoiceCallProvider } from "../providers/base.js";
 import type { HangupCallInput, NormalizedEvent } from "../types.js";
 import type { CallManagerContext } from "./context.js";
 import { processEvent } from "./events.js";
+import { flushPendingCallRecordWritesForTest } from "./store.js";
 
 const contexts: CallManagerContext[] = [];
 
-afterEach(() => {
+afterEach(async () => {
   for (const ctx of contexts.splice(0)) {
     for (const timer of ctx.maxDurationTimers.values()) {
       clearTimeout(timer);
@@ -20,6 +21,7 @@ afterEach(() => {
       clearTimeout(waiter.timeout);
     }
     ctx.transcriptWaiters.clear();
+    await flushPendingCallRecordWritesForTest();
     fs.rmSync(ctx.storePath, { recursive: true, force: true });
   }
 });

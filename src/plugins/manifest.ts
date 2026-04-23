@@ -233,6 +233,12 @@ export type PluginManifest = {
 
 export type PluginManifestContracts = {
   embeddedExtensionFactories?: string[];
+  /**
+   * Provider ids whose external auth profile hook can contribute runtime-only
+   * credentials. Declaring this lets auth-store overlays load only the owning
+   * plugin instead of every provider plugin.
+   */
+  externalAuthProviders?: string[];
   memoryEmbeddingProviders?: string[];
   speechProviders?: string[];
   realtimeTranscriptionProviders?: string[];
@@ -420,6 +426,7 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
   }
 
   const embeddedExtensionFactories = normalizeTrimmedStringList(value.embeddedExtensionFactories);
+  const externalAuthProviders = normalizeTrimmedStringList(value.externalAuthProviders);
   const memoryEmbeddingProviders = normalizeTrimmedStringList(value.memoryEmbeddingProviders);
   const speechProviders = normalizeTrimmedStringList(value.speechProviders);
   const realtimeTranscriptionProviders = normalizeTrimmedStringList(
@@ -435,6 +442,7 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
   const tools = normalizeTrimmedStringList(value.tools);
   const contracts = {
     ...(embeddedExtensionFactories.length > 0 ? { embeddedExtensionFactories } : {}),
+    ...(externalAuthProviders.length > 0 ? { externalAuthProviders } : {}),
     ...(memoryEmbeddingProviders.length > 0 ? { memoryEmbeddingProviders } : {}),
     ...(speechProviders.length > 0 ? { speechProviders } : {}),
     ...(realtimeTranscriptionProviders.length > 0 ? { realtimeTranscriptionProviders } : {}),

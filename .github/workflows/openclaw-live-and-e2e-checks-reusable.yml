@@ -28,6 +28,11 @@ on:
         required: false
         default: true
         type: boolean
+      live_models_only:
+        description: Whether to run only the Docker live model matrix when live suites are enabled
+        required: false
+        default: false
+        type: boolean
   workflow_call:
     inputs:
       ref:
@@ -53,6 +58,11 @@ on:
         description: Whether to run live-provider coverage
         required: false
         default: true
+        type: boolean
+      live_models_only:
+        description: Whether to run only the Docker live model matrix when live suites are enabled
+        required: false
+        default: false
         type: boolean
     secrets:
       OPENAI_API_KEY:
@@ -141,6 +151,8 @@ on:
         required: false
       OPENCLAW_GEMINI_SETTINGS_JSON:
         required: false
+      FIREWORKS_API_KEY:
+        required: false
 
 permissions:
   contents: read
@@ -210,8 +222,8 @@ jobs:
 
   validate_release_live_cache:
     needs: validate_selected_ref
-    if: inputs.include_live_suites
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    if: inputs.include_live_suites && !inputs.live_models_only
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 60
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -276,7 +288,7 @@ jobs:
 
   validate_special_e2e:
     needs: validate_selected_ref
-    if: inputs.include_repo_e2e || inputs.include_live_suites
+    if: inputs.include_repo_e2e || (inputs.include_live_suites && !inputs.live_models_only)
     runs-on: blacksmith-32vcpu-ubuntu-2404
     timeout-minutes: ${{ matrix.timeout_minutes }}
     strategy:
@@ -373,6 +385,11 @@ jobs:
             command: pnpm test:docker:gateway-network
             timeout_minutes: 60
             release_path: true
+          - suite_id: docker-openai-web-search-minimal
+            label: OpenAI Web Search Minimal Docker E2E
+            command: pnpm test:docker:openai-web-search-minimal
+            timeout_minutes: 60
+            release_path: true
           - suite_id: docker-mcp-channels
             label: MCP Channels Docker E2E
             command: pnpm test:docker:mcp-channels
@@ -467,6 +484,7 @@ jobs:
       OPENCLAW_CLAUDE_SETTINGS_JSON: ${{ secrets.OPENCLAW_CLAUDE_SETTINGS_JSON }}
       OPENCLAW_CLAUDE_SETTINGS_LOCAL_JSON: ${{ secrets.OPENCLAW_CLAUDE_SETTINGS_LOCAL_JSON }}
       OPENCLAW_GEMINI_SETTINGS_JSON: ${{ secrets.OPENCLAW_GEMINI_SETTINGS_JSON }}
+      FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY }}
       OPENCLAW_DOCKER_E2E_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.image }}
       OPENCLAW_SKIP_DOCKER_BUILD: "1"
     steps:
@@ -618,9 +636,126 @@ jobs:
           provenance: false
           push: true
 
-  validate_live_provider_suites:
+  validate_live_models_docker:
+    name: Docker live models (${{ matrix.provider_label }})
     needs: validate_selected_ref
     if: inputs.include_live_suites
+    runs-on: blacksmith-32vcpu-ubuntu-2404
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - provider_label: Anthropic
+            providers: anthropic
+          - provider_label: Google
+            providers: google
+          - provider_label: MiniMax
+            providers: minimax
+          - provider_label: OpenAI
+            providers: openai
+          - provider_label: OpenCode
+            providers: opencode-go
+          - provider_label: OpenRouter
+            providers: openrouter
+          - provider_label: xAI
+            providers: xai
+          - provider_label: Z.ai
+            providers: zai
+          - provider_label: Fireworks
+            providers: fireworks
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      ANTHROPIC_API_TOKEN: ${{ secrets.ANTHROPIC_API_TOKEN }}
+      ANTHROPIC_API_KEY_OLD: ${{ secrets.ANTHROPIC_API_KEY_OLD }}
+      BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
+      CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
+      DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
+      MODELSTUDIO_API_KEY: ${{ secrets.MODELSTUDIO_API_KEY }}
+      MOONSHOT_API_KEY: ${{ secrets.MOONSHOT_API_KEY }}
+      MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+      MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+      OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+      OPENCODE_ZEN_API_KEY: ${{ secrets.OPENCODE_ZEN_API_KEY }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      QWEN_API_KEY: ${{ secrets.QWEN_API_KEY }}
+      XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+      ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
+      Z_AI_API_KEY: ${{ secrets.Z_AI_API_KEY }}
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      OPENCLAW_CODEX_AUTH_JSON: ${{ secrets.OPENCLAW_CODEX_AUTH_JSON }}
+      OPENCLAW_CODEX_CONFIG_TOML: ${{ secrets.OPENCLAW_CODEX_CONFIG_TOML }}
+      OPENCLAW_CLAUDE_JSON: ${{ secrets.OPENCLAW_CLAUDE_JSON }}
+      OPENCLAW_CLAUDE_CREDENTIALS_JSON: ${{ secrets.OPENCLAW_CLAUDE_CREDENTIALS_JSON }}
+      OPENCLAW_CLAUDE_SETTINGS_JSON: ${{ secrets.OPENCLAW_CLAUDE_SETTINGS_JSON }}
+      OPENCLAW_CLAUDE_SETTINGS_LOCAL_JSON: ${{ secrets.OPENCLAW_CLAUDE_SETTINGS_LOCAL_JSON }}
+      OPENCLAW_GEMINI_SETTINGS_JSON: ${{ secrets.OPENCLAW_GEMINI_SETTINGS_JSON }}
+      FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY }}
+      OPENCLAW_LIVE_PROVIDERS: ${{ matrix.providers }}
+      OPENCLAW_VITEST_MAX_WORKERS: "2"
+    steps:
+      - name: Checkout selected ref
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
+          fetch-depth: 1
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          install-bun: "true"
+
+      - name: Hydrate live auth/profile inputs
+        run: bash scripts/ci-hydrate-live-auth.sh
+
+      - name: Validate provider credential
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          require_any() {
+            local label="$1"
+            shift
+            local key
+            for key in "$@"; do
+              if [[ -n "${!key:-}" ]]; then
+                return 0
+              fi
+            done
+            echo "Missing credential for ${label}: expected one of $*" >&2
+            exit 1
+          }
+
+          case "${{ matrix.providers }}" in
+            anthropic) require_any Anthropic ANTHROPIC_API_KEY ANTHROPIC_API_KEY_OLD ANTHROPIC_API_TOKEN ;;
+            google) require_any Google GEMINI_API_KEY GOOGLE_API_KEY ;;
+            minimax) require_any MiniMax MINIMAX_API_KEY ;;
+            openai) require_any OpenAI OPENAI_API_KEY ;;
+            opencode-go) require_any OpenCode OPENCODE_API_KEY OPENCODE_ZEN_API_KEY ;;
+            openrouter) require_any OpenRouter OPENROUTER_API_KEY ;;
+            xai) require_any xAI XAI_API_KEY ;;
+            zai) require_any Z.ai ZAI_API_KEY Z_AI_API_KEY ;;
+            fireworks) require_any Fireworks FIREWORKS_API_KEY ;;
+            *)
+              echo "Unhandled live model provider shard: ${{ matrix.providers }}" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Run Docker live model sweep
+        run: pnpm test:docker:live-models
+
+  validate_live_provider_suites:
+    needs: validate_selected_ref
+    if: inputs.include_live_suites && !inputs.live_models_only
     runs-on: blacksmith-32vcpu-ubuntu-2404
     timeout-minutes: ${{ matrix.timeout_minutes }}
     strategy:
@@ -631,11 +766,6 @@ jobs:
             label: pnpm test:live
             command: pnpm test:live
             timeout_minutes: 180
-            profile_env_only: false
-          - suite_id: live-models-docker
-            label: Docker live models
-            command: pnpm test:docker:live-models
-            timeout_minutes: 120
             profile_env_only: false
           - suite_id: live-gateway-docker
             label: Docker live gateway
@@ -701,6 +831,7 @@ jobs:
       OPENCLAW_CLAUDE_SETTINGS_JSON: ${{ secrets.OPENCLAW_CLAUDE_SETTINGS_JSON }}
       OPENCLAW_CLAUDE_SETTINGS_LOCAL_JSON: ${{ secrets.OPENCLAW_CLAUDE_SETTINGS_LOCAL_JSON }}
       OPENCLAW_GEMINI_SETTINGS_JSON: ${{ secrets.OPENCLAW_GEMINI_SETTINGS_JSON }}
+      FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY }}
       OPENCLAW_LIVE_VIDEO_GENERATION_SKIP_PROVIDERS: ""
       OPENCLAW_LIVE_VYDRA_VIDEO: "1"
       OPENCLAW_VITEST_MAX_WORKERS: "2"

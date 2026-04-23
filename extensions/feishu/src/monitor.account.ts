@@ -619,6 +619,7 @@ export type MonitorSingleAccountParams = {
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
   botOpenIdSource?: BotOpenIdSource;
+  fireAndForget?: boolean;
 };
 
 export async function monitorSingleAccount(params: MonitorSingleAccountParams): Promise<void> {
@@ -665,7 +666,7 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
       accountId,
       runtime,
       chatHistories,
-      fireAndForget: true,
+      fireAndForget: params.fireAndForget ?? true,
     });
 
     try {

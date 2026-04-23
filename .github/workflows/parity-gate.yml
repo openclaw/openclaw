@@ -13,8 +13,6 @@ on:
       - "src/gateway/**"
       - "src/media/**"
       - ".github/workflows/parity-gate.yml"
-  schedule:
-    - cron: "17 3 * * *"
   workflow_dispatch:
 
 permissions:

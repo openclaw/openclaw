@@ -513,6 +513,7 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
             },
           },
         },
+        replaceDefaultModels: true,
         defaultModel: "claude-cli/claude-sonnet-4-6",
       }),
     };

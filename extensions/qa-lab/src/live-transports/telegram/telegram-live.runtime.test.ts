@@ -66,6 +66,51 @@ describe("telegram live qa runtime", () => {
     ).toThrow("OPENCLAW_QA_TELEGRAM_GROUP_ID must be a numeric Telegram chat id.");
   });
 
+  it("parses Telegram live progress env booleans", () => {
+    expect(__testing.parseTelegramQaProgressBooleanEnv("true")).toBe(true);
+    expect(__testing.parseTelegramQaProgressBooleanEnv("on")).toBe(true);
+    expect(__testing.parseTelegramQaProgressBooleanEnv("false")).toBe(false);
+    expect(__testing.parseTelegramQaProgressBooleanEnv("off")).toBe(false);
+    expect(__testing.parseTelegramQaProgressBooleanEnv("maybe")).toBeUndefined();
+  });
+
+  it("defaults Telegram live progress logging from CI when no override is set", () => {
+    expect(__testing.shouldLogTelegramQaLiveProgress({ CI: "true" })).toBe(true);
+    expect(__testing.shouldLogTelegramQaLiveProgress({ CI: "false" })).toBe(false);
+  });
+
+  it("applies OPENCLAW_QA_SUITE_PROGRESS override to Telegram live logging", () => {
+    expect(
+      __testing.shouldLogTelegramQaLiveProgress({
+        CI: "false",
+        OPENCLAW_QA_SUITE_PROGRESS: "true",
+      }),
+    ).toBe(true);
+    expect(
+      __testing.shouldLogTelegramQaLiveProgress({
+        CI: "true",
+        OPENCLAW_QA_SUITE_PROGRESS: "false",
+      }),
+    ).toBe(false);
+    expect(
+      __testing.shouldLogTelegramQaLiveProgress({
+        CI: "true",
+        OPENCLAW_QA_SUITE_PROGRESS: "definitely",
+      }),
+    ).toBe(true);
+  });
+
+  it("sanitizes and truncates Telegram live progress details", () => {
+    expect(__testing.sanitizeTelegramQaProgressValue("scenario\nid\tvalue")).toBe(
+      "scenario id value",
+    );
+    expect(__testing.sanitizeTelegramQaProgressValue("\u0000\u0001")).toBe("<empty>");
+    const details = __testing.formatTelegramQaProgressDetails(`header\n${"x".repeat(500)}`);
+    expect(details.startsWith("header ")).toBe(true);
+    expect(details.length).toBeLessThanOrEqual(240);
+    expect(details.endsWith("...")).toBe(true);
+  });
+
   it("parses Telegram pooled credential payloads", () => {
     expect(
       __testing.parseTelegramQaCredentialPayload({
@@ -547,6 +592,28 @@ describe("telegram live qa runtime", () => {
         mediaKinds: [],
       },
     ]);
+  });
+
+  it("prints Telegram scenario RTT in the Markdown report", () => {
+    expect(
+      __testing.renderTelegramQaMarkdown({
+        cleanupIssues: [],
+        credentialSource: "env",
+        groupId: "-100123",
+        redactMetadata: false,
+        startedAt: "2026-04-23T00:00:00.000Z",
+        finishedAt: "2026-04-23T00:00:10.000Z",
+        scenarios: [
+          {
+            id: "telegram-canary",
+            title: "Telegram canary",
+            status: "pass",
+            details: "reply message 12 matched in 4321ms",
+            rttMs: 4321,
+          },
+        ],
+      }),
+    ).toContain("- RTT: 4321ms");
   });
 
   it("formats phase-specific canary diagnostics with context", () => {
