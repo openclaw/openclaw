@@ -168,6 +168,27 @@ describe("listThinkingLevels", () => {
       }),
     ).toBe("high");
   });
+
+  it("maps unsupported adaptive to medium and unsupported xhigh to high", () => {
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockReturnValue({
+      levels: [{ id: "off" }, { id: "minimal" }, { id: "low" }, { id: "medium" }, { id: "high" }],
+    });
+
+    expect(
+      resolveSupportedThinkingLevel({
+        provider: "openai",
+        model: "gpt-5.4",
+        level: "adaptive",
+      }),
+    ).toBe("medium");
+    expect(
+      resolveSupportedThinkingLevel({
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        level: "xhigh",
+      }),
+    ).toBe("high");
+  });
 });
 
 describe("listThinkingLevelLabels", () => {
@@ -238,14 +259,47 @@ describe("resolveThinkingDefaultForModel", () => {
     ).toBe("off");
   });
 
-  it("defaults reasoning-capable catalog models to low", () => {
+  it("defaults reasoning-capable catalog models to medium", () => {
     expect(
       resolveThinkingDefaultForModel({
         provider: "openai",
         model: "gpt-5.4",
         catalog: [{ provider: "openai", id: "gpt-5.4", reasoning: true }],
       }),
+    ).toBe("medium");
+  });
+
+  it("remaps implicit reasoning defaults to the strongest supported level at or below medium", () => {
+    providerRuntimeMocks.resolveProviderBinaryThinking.mockImplementation(
+      ({ provider }) => provider === "demo-binary",
+    );
+
+    expect(
+      resolveThinkingDefaultForModel({
+        provider: "demo-binary",
+        model: "demo-model",
+        catalog: [{ provider: "demo-binary", id: "demo-model", reasoning: true }],
+      }),
     ).toBe("low");
+  });
+
+  it("keeps catalog reasoning context when remapping implicit reasoning defaults", () => {
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockImplementation(
+      ({ provider, context }) =>
+        provider === "demo-contextual" && context.reasoning
+          ? { levels: [{ id: "off" }, { id: "low" }, { id: "medium" }] }
+          : provider === "demo-contextual"
+            ? { levels: [{ id: "off" }] }
+            : undefined,
+    );
+
+    expect(
+      resolveThinkingDefaultForModel({
+        provider: "demo-contextual",
+        model: "demo-model",
+        catalog: [{ provider: "demo-contextual", id: "demo-model", reasoning: true }],
+      }),
+    ).toBe("medium");
   });
 
   it("defaults to off when no adaptive or reasoning hint is present", () => {

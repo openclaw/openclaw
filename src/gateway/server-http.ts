@@ -81,6 +81,9 @@ const HOOK_AUTH_FAILURE_WINDOW_MS = 60_000;
 let identityAvatarModulePromise: Promise<typeof import("../agents/identity-avatar.js")> | undefined;
 let controlUiModulePromise: Promise<typeof import("./control-ui.js")> | undefined;
 let embeddingsHttpModulePromise: Promise<typeof import("./embeddings-http.js")> | undefined;
+let managedImageAttachmentsModulePromise:
+  | Promise<typeof import("./managed-image-attachments.js")>
+  | undefined;
 let modelsHttpModulePromise: Promise<typeof import("./models-http.js")> | undefined;
 let openAiHttpModulePromise: Promise<typeof import("./openai-http.js")> | undefined;
 let openResponsesHttpModulePromise: Promise<typeof import("./openresponses-http.js")> | undefined;
@@ -103,6 +106,11 @@ function getControlUiModule() {
 function getEmbeddingsHttpModule() {
   embeddingsHttpModulePromise ??= import("./embeddings-http.js");
   return embeddingsHttpModulePromise;
+}
+
+function getManagedImageAttachmentsModule() {
+  managedImageAttachmentsModulePromise ??= import("./managed-image-attachments.js");
+  return managedImageAttachmentsModulePromise;
 }
 
 function getModelsHttpModule() {
@@ -976,6 +984,7 @@ export function createGatewayHttpServer(opts: {
           run: async () =>
             (await getSessionHistoryHttpModule()).handleSessionHistoryHttpRequest(req, res, {
               auth: resolvedAuth,
+              getResolvedAuth,
               trustedProxies,
               allowRealIpFallback,
               rateLimiter,
@@ -1060,6 +1069,21 @@ export function createGatewayHttpServer(opts: {
         }),
       );
 
+      requestStages.push({
+        name: "chat-managed-image-media",
+        run: async () =>
+          (await getManagedImageAttachmentsModule()).handleManagedOutgoingImageHttpRequest(
+            req,
+            res,
+            {
+              auth: resolvedAuth,
+              trustedProxies,
+              allowRealIpFallback,
+              rateLimiter,
+            },
+          ),
+      });
+
       if (controlUiEnabled) {
         requestStages.push({
           name: "control-ui-assistant-media",
@@ -1081,6 +1105,10 @@ export function createGatewayHttpServer(opts: {
             const { resolveAgentAvatar } = await getIdentityAvatarModule();
             return handleControlUiAvatarRequest(req, res, {
               basePath: controlUiBasePath,
+              auth: resolvedAuth,
+              trustedProxies,
+              allowRealIpFallback,
+              rateLimiter,
               resolveAvatar: (agentId) =>
                 resolveAgentAvatar(configSnapshot, agentId, { includeUiOverride: true }),
             });
@@ -1094,6 +1122,10 @@ export function createGatewayHttpServer(opts: {
               config: configSnapshot,
               agentId: resolveAssistantIdentity({ cfg: configSnapshot }).agentId,
               root: controlUiRoot,
+              auth: resolvedAuth,
+              trustedProxies,
+              allowRealIpFallback,
+              rateLimiter,
             }),
         });
       }

@@ -1,5 +1,4 @@
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import WebSocket from "ws";
 import { isLoopbackHost } from "../gateway/net.js";
 import {
@@ -157,7 +156,7 @@ export function getHeadersWithAuth(url: string, headers: Record<string, string> 
   try {
     const parsed = new URL(url);
     const hasAuthHeader = Object.keys(mergedHeaders).some(
-      (key) => normalizeLowercaseStringOrEmpty(key) === "authorization",
+      (key) => key.trim().toLowerCase() === "authorization",
     );
     if (hasAuthHeader) {
       return mergedHeaders;

@@ -1,47 +1,13 @@
 import type { CliBackendConfig } from "openclaw/plugin-sdk/cli-backend";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
-
-export const CLAUDE_CLI_BACKEND_ID = "claude-cli";
-export const CLAUDE_CLI_DEFAULT_MODEL_REF = `${CLAUDE_CLI_BACKEND_ID}/claude-opus-4-7`;
-export const CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS = [
+import { CLAUDE_CLI_BACKEND_ID } from "./cli-constants.js";
+export {
+  CLAUDE_CLI_BACKEND_ID,
+  CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS,
   CLAUDE_CLI_DEFAULT_MODEL_REF,
-  `${CLAUDE_CLI_BACKEND_ID}/claude-sonnet-4-6`,
-  `${CLAUDE_CLI_BACKEND_ID}/claude-opus-4-6`,
-  `${CLAUDE_CLI_BACKEND_ID}/claude-opus-4-5`,
-  `${CLAUDE_CLI_BACKEND_ID}/claude-sonnet-4-5`,
-  `${CLAUDE_CLI_BACKEND_ID}/claude-haiku-4-5`,
-] as const;
-
-export const CLAUDE_CLI_MODEL_ALIASES: Record<string, string> = {
-  opus: "opus",
-  "opus-4.7": "opus",
-  "opus-4.6": "opus",
-  "opus-4.5": "opus",
-  "opus-4": "opus",
-  "claude-opus-4-7": "opus",
-  "claude-opus-4-6": "opus",
-  "claude-opus-4-5": "opus",
-  "claude-opus-4": "opus",
-  sonnet: "sonnet",
-  "sonnet-4.6": "sonnet",
-  "sonnet-4.5": "sonnet",
-  "sonnet-4.1": "sonnet",
-  "sonnet-4.0": "sonnet",
-  "claude-sonnet-4-6": "sonnet",
-  "claude-sonnet-4-5": "sonnet",
-  "claude-sonnet-4-1": "sonnet",
-  "claude-sonnet-4-0": "sonnet",
-  haiku: "haiku",
-  "haiku-3.5": "haiku",
-  "claude-haiku-3-5": "haiku",
-};
-
-export const CLAUDE_CLI_SESSION_ID_FIELDS = [
-  "session_id",
-  "sessionId",
-  "conversation_id",
-  "conversationId",
-] as const;
+  CLAUDE_CLI_MODEL_ALIASES,
+  CLAUDE_CLI_SESSION_ID_FIELDS,
+} from "./cli-constants.js";
 
 // Claude Code honors provider-routing, auth, and config-root env before
 // consulting its local login state, so inherited shell overrides must not
@@ -90,7 +56,6 @@ export const CLAUDE_CLI_CLEAR_ENV = [
 
 const CLAUDE_LEGACY_SKIP_PERMISSIONS_ARG = "--dangerously-skip-permissions";
 const CLAUDE_PERMISSION_MODE_ARG = "--permission-mode";
-const CLAUDE_BYPASS_PERMISSIONS_MODE = "bypassPermissions";
 const CLAUDE_SETTING_SOURCES_ARG = "--setting-sources";
 const CLAUDE_SAFE_SETTING_SOURCES = "user";
 
@@ -103,7 +68,6 @@ export function normalizeClaudePermissionArgs(args?: string[]): string[] | undef
     return args;
   }
   const normalized: string[] = [];
-  let hasPermissionMode = false;
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
     if (arg === CLAUDE_LEGACY_SKIP_PERMISSIONS_ARG) {
@@ -116,7 +80,6 @@ export function normalizeClaudePermissionArgs(args?: string[]): string[] | undef
         maybeValue.trim().length > 0 &&
         !maybeValue.startsWith("-")
       ) {
-        hasPermissionMode = true;
         normalized.push(arg);
         normalized.push(maybeValue);
         i += 1;
@@ -124,12 +87,13 @@ export function normalizeClaudePermissionArgs(args?: string[]): string[] | undef
       continue;
     }
     if (arg.startsWith(`${CLAUDE_PERMISSION_MODE_ARG}=`)) {
-      hasPermissionMode = true;
+      const maybeValue = arg.slice(`${CLAUDE_PERMISSION_MODE_ARG}=`.length).trim();
+      if (maybeValue.length > 0 && !maybeValue.startsWith("-")) {
+        normalized.push(`${CLAUDE_PERMISSION_MODE_ARG}=${maybeValue}`);
+      }
+      continue;
     }
     normalized.push(arg);
-  }
-  if (!hasPermissionMode) {
-    normalized.push(CLAUDE_PERMISSION_MODE_ARG, CLAUDE_BYPASS_PERMISSIONS_MODE);
   }
   return normalized;
 }
@@ -169,9 +133,15 @@ export function normalizeClaudeSettingSourcesArgs(args?: string[]): string[] | u
 }
 
 export function normalizeClaudeBackendConfig(config: CliBackendConfig): CliBackendConfig {
+  const output = config.output ?? "jsonl";
+  const input = config.input ?? "stdin";
   return {
     ...config,
     args: normalizeClaudePermissionArgs(normalizeClaudeSettingSourcesArgs(config.args)),
     resumeArgs: normalizeClaudePermissionArgs(normalizeClaudeSettingSourcesArgs(config.resumeArgs)),
+    output,
+    liveSession:
+      config.liveSession ?? (output === "jsonl" && input === "stdin" ? "claude-stdio" : undefined),
+    input,
   };
 }

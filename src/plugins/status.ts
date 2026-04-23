@@ -82,6 +82,7 @@ export type PluginInspectReport = {
   diagnostics: PluginDiagnostic[];
   policy: {
     allowPromptInjection?: boolean;
+    allowConversationAccess?: boolean;
     allowModelOverride?: boolean;
     allowedModels: string[];
     hasAllowedModelsConfig: boolean;
@@ -348,6 +349,7 @@ export function buildPluginInspectReport(params: {
     diagnostics,
     policy: {
       allowPromptInjection: policyEntry?.hooks?.allowPromptInjection,
+      allowConversationAccess: policyEntry?.hooks?.allowConversationAccess,
       allowModelOverride: policyEntry?.subagent?.allowModelOverride,
       allowedModels: [...(policyEntry?.subagent?.allowedModels ?? [])],
       hasAllowedModelsConfig: policyEntry?.subagent?.hasAllowedModelsConfig === true,
@@ -404,6 +406,18 @@ export function buildPluginCompatibilityNotices(params?: {
   report?: PluginStatusReport;
 }): PluginCompatibilityNotice[] {
   return buildAllPluginInspectReports(params).flatMap((inspect) => inspect.compatibility);
+}
+
+export function buildPluginCompatibilitySnapshotNotices(params?: {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): PluginCompatibilityNotice[] {
+  const report = buildPluginSnapshotReport(params);
+  return buildPluginCompatibilityNotices({
+    ...params,
+    report,
+  });
 }
 
 export function formatPluginCompatibilityNotice(notice: PluginCompatibilityNotice): string {

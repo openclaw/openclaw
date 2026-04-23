@@ -450,11 +450,32 @@ export async function createModelSelectionState(params: {
     if (defaultThinkingLevel) {
       return defaultThinkingLevel;
     }
-    let catalogForThinking = modelCatalog ?? allowedModelCatalog;
-    if (!catalogForThinking || catalogForThinking.length === 0) {
+    const agentThinkingDefault = agentEntry?.thinkingDefault as ThinkLevel | undefined;
+    const configuredThinkingDefault = agentCfg?.thinkingDefault as ThinkLevel | undefined;
+    const explicitThinkingDefault = agentThinkingDefault ?? configuredThinkingDefault;
+    if (explicitThinkingDefault) {
+      defaultThinkingLevel = explicitThinkingDefault;
+      return defaultThinkingLevel;
+    }
+    let catalogForThinking =
+      modelCatalog && modelCatalog.length > 0 ? modelCatalog : allowedModelCatalog;
+    const selectedCatalogEntry = catalogForThinking?.find(
+      (entry) => entry.provider === provider && entry.id === model,
+    );
+    const shouldHydrateRuntimeCatalog =
+      !modelCatalog && (!selectedCatalogEntry || selectedCatalogEntry.reasoning === undefined);
+    if (shouldHydrateRuntimeCatalog) {
       modelCatalog = await (await loadModelCatalogRuntime()).loadModelCatalog({ config: cfg });
       logStage("catalog-loaded-for-thinking", `entries=${modelCatalog.length}`);
-      catalogForThinking = modelCatalog;
+      const runtimeSelectedEntry = modelCatalog.find(
+        (entry) => entry.provider === provider && entry.id === model,
+      );
+      catalogForThinking =
+        runtimeSelectedEntry || !catalogForThinking || catalogForThinking.length === 0
+          ? modelCatalog.length > 0
+            ? modelCatalog
+            : allowedModelCatalog
+          : allowedModelCatalog;
     }
     const resolved = resolveThinkingDefault({
       cfg,
@@ -462,12 +483,7 @@ export async function createModelSelectionState(params: {
       model,
       catalog: catalogForThinking,
     });
-    const agentThinkingDefault = agentEntry?.thinkingDefault as ThinkLevel | undefined;
-    defaultThinkingLevel =
-      agentThinkingDefault ??
-      resolved ??
-      (agentCfg?.thinkingDefault as ThinkLevel | undefined) ??
-      "off";
+    defaultThinkingLevel = resolved ?? "off";
     return defaultThinkingLevel;
   };
 

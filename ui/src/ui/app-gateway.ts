@@ -30,6 +30,7 @@ import {
   type ChatEventPayload,
   type ChatState,
 } from "./controllers/chat.ts";
+import { loadControlUiBootstrapConfig } from "./controllers/control-ui-bootstrap.ts";
 import { loadDevices, type DevicesState } from "./controllers/devices.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import {
@@ -92,6 +93,7 @@ type GatewayHost = {
   serverVersion: string | null;
   sessionKey: string;
   chatRunId: string | null;
+  pendingAbort?: { runId: string; sessionKey: string } | null;
   refreshSessionsAfterChat: Set<string>;
   execApprovalQueue: ExecApprovalRequest[];
   execApprovalError: string | null;
@@ -292,6 +294,24 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
       host.lastErrorCode = null;
       host.hello = hello;
       applySnapshot(host, hello);
+      void loadControlUiBootstrapConfig(
+        host as unknown as Parameters<typeof loadControlUiBootstrapConfig>[0],
+      );
+      // Process any pending abort from before the disconnect.
+      if (host.pendingAbort) {
+        const abort = host.pendingAbort;
+        host.pendingAbort = null;
+        void host.client
+          .request("chat.abort", {
+            sessionKey: abort.sessionKey,
+            runId: abort.runId,
+          })
+          .catch((err) => {
+            // Log to console for diagnostics; user sees no feedback for a stale abort
+            // since the run likely completed during the disconnect window anyway.
+            console.warn("[openclaw] pending abort failed:", err);
+          });
+      }
       // Reset orphaned chat run state from before disconnect.
       // Any in-flight run's final event was lost during the disconnect window.
       host.chatRunId = null;

@@ -40,7 +40,8 @@ import type { SidebarContent } from "../sidebar-content.ts";
 import { detectTextDirection } from "../text-direction.ts";
 import type { SessionsListResult } from "../types.ts";
 import type { ChatAttachment, ChatQueueItem } from "../ui-types.ts";
-import { agentLogoUrl, resolveAgentAvatarUrl } from "./agents-utils.ts";
+import { resolveLocalUserName } from "../user-identity.ts";
+import { agentLogoUrl, resolveChatAvatarRenderUrl } from "./agents-utils.ts";
 import { renderMarkdownSidebar } from "./markdown-sidebar.ts";
 import "../components/resizable-divider.ts";
 
@@ -79,6 +80,8 @@ export type ChatProps = {
   allowExternalEmbedUrls?: boolean;
   assistantName: string;
   assistantAvatar: string | null;
+  userName?: string | null;
+  userAvatar?: string | null;
   localMediaPreviewRoots?: string[];
   assistantAttachmentAuthToken?: string | null;
   autoExpandToolCalls?: boolean;
@@ -465,7 +468,7 @@ const WELCOME_SUGGESTIONS = [
 
 function renderWelcomeState(props: ChatProps): TemplateResult {
   const name = props.assistantName || "Assistant";
-  const avatar = resolveAgentAvatarUrl({
+  const avatar = resolveChatAvatarRenderUrl(props.assistantAvatarUrl, {
     identity: {
       avatar: props.assistantAvatar ?? undefined,
       avatarUrl: props.assistantAvatarUrl ?? undefined,
@@ -547,6 +550,10 @@ function renderPinnedSection(
   pinned: PinnedMessages,
   requestUpdate: () => void,
 ): TemplateResult | typeof nothing {
+  const userRoleLabel = resolveLocalUserName({
+    name: props.userName ?? null,
+    avatar: props.userAvatar ?? null,
+  });
   const messages = Array.isArray(props.messages) ? props.messages : [];
   const entries: Array<{ index: number; text: string; role: string }> = [];
   for (const idx of pinned.indices) {
@@ -565,6 +572,7 @@ function renderPinnedSection(
     <div class="agent-chat__pinned">
       <button
         class="agent-chat__pinned-toggle"
+        aria-expanded=${vs.pinnedExpanded}
         @click=${() => {
           vs.pinnedExpanded = !vs.pinnedExpanded;
           requestUpdate();
@@ -582,7 +590,7 @@ function renderPinnedSection(
                 ({ index, text, role }) => html`
                   <div class="agent-chat__pinned-item">
                     <span class="agent-chat__pinned-role"
-                      >${role === "user" ? "You" : "Assistant"}</span
+                      >${role === "user" ? userRoleLabel : "Assistant"}</span
                     >
                     <span class="agent-chat__pinned-text"
                       >${text.slice(0, 100)}${text.length > 100 ? "..." : ""}</span
@@ -741,7 +749,7 @@ export function renderChat(props: ChatProps) {
   const assistantIdentity = {
     name: props.assistantName,
     avatar:
-      resolveAgentAvatarUrl({
+      resolveChatAvatarRenderUrl(props.assistantAvatarUrl, {
         identity: {
           avatar: props.assistantAvatar ?? undefined,
           avatarUrl: props.assistantAvatarUrl ?? undefined,
@@ -866,7 +874,11 @@ export function renderChat(props: ChatProps) {
               `;
             }
             if (item.kind === "reading-indicator") {
-              return renderReadingIndicatorGroup(assistantIdentity, props.basePath);
+              return renderReadingIndicatorGroup(
+                assistantIdentity,
+                props.basePath,
+                props.assistantAttachmentAuthToken ?? null,
+              );
             }
             if (item.kind === "stream") {
               return renderStreamingGroup(
@@ -875,6 +887,7 @@ export function renderChat(props: ChatProps) {
                 props.onOpenSidebar,
                 assistantIdentity,
                 props.basePath,
+                props.assistantAttachmentAuthToken ?? null,
               );
             }
             if (item.kind === "group") {
@@ -897,6 +910,8 @@ export function renderChat(props: ChatProps) {
                 onRequestUpdate: requestUpdate,
                 assistantName: props.assistantName,
                 assistantAvatar: assistantIdentity.avatar,
+                userName: props.userName ?? null,
+                userAvatar: props.userAvatar ?? null,
                 basePath: props.basePath,
                 localMediaPreviewRoots: props.localMediaPreviewRoots ?? [],
                 assistantAttachmentAuthToken: props.assistantAttachmentAuthToken ?? null,
@@ -1237,6 +1252,7 @@ export function renderChat(props: ChatProps) {
                       }
                     }}
                     title=${vs.sttRecording ? "Stop recording" : "Voice input"}
+                    aria-label=${vs.sttRecording ? "Stop recording" : "Voice input"}
                     ?disabled=${!props.connected}
                   >
                     ${vs.sttRecording ? icons.micOff : icons.mic}

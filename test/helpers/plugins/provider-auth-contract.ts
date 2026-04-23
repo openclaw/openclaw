@@ -119,12 +119,12 @@ function buildOpenAICodexOAuthResult(params: {
       agents: {
         defaults: {
           models: {
-            "openai-codex/gpt-5.4": {},
+            "openai/gpt-5.5": {},
           },
         },
       },
     },
-    defaultModel: "openai-codex/gpt-5.4",
+    defaultModel: "openai/gpt-5.5",
     notes: undefined,
   };
 }
@@ -347,7 +347,7 @@ export function describeGithubCopilotProviderAuthContract(load: ProviderAuthCont
               },
             },
           ],
-          defaultModel: "github-copilot/claude-opus-4.6",
+          defaultModel: "github-copilot/claude-opus-4.7",
         });
       } finally {
         if (previousIsTTYDescriptor) {

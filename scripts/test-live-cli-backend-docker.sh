@@ -22,6 +22,14 @@ DOCKER_AUTH_PRESTAGED=0
 if [[ -z "$CLI_PROVIDER" || "$CLI_PROVIDER" == "$CLI_MODEL" ]]; then
   CLI_PROVIDER="$DEFAULT_PROVIDER"
 fi
+CLI_USE_CI_SAFE_CODEX_CONFIG="${OPENCLAW_LIVE_CLI_BACKEND_USE_CI_SAFE_CODEX_CONFIG:-}"
+if [[ -z "$CLI_USE_CI_SAFE_CODEX_CONFIG" ]]; then
+  if [[ "$CLI_PROVIDER" == "codex-cli" ]]; then
+    CLI_USE_CI_SAFE_CODEX_CONFIG="1"
+  else
+    CLI_USE_CI_SAFE_CODEX_CONFIG="0"
+  fi
+fi
 
 case "$CLI_AUTH_MODE" in
   auto | api-key | subscription)
@@ -251,13 +259,29 @@ provider="${OPENCLAW_DOCKER_CLI_BACKEND_PROVIDER:-claude-cli}"
 default_command="${OPENCLAW_DOCKER_CLI_BACKEND_COMMAND_DEFAULT:-}"
 docker_package="${OPENCLAW_DOCKER_CLI_BACKEND_NPM_PACKAGE:-}"
 binary_name="${OPENCLAW_DOCKER_CLI_BACKEND_BINARY_NAME:-}"
+if [ "$provider" = "codex-cli" ] && [ "${OPENCLAW_LIVE_CLI_BACKEND_AUTH:-auto}" != "api-key" ]; then
+  unset OPENAI_API_KEY
+  unset OPENAI_BASE_URL
+fi
 if [ -z "$binary_name" ] && [ -n "$default_command" ]; then
   binary_name="$(basename "$default_command")"
 fi
 if [ -z "${OPENCLAW_LIVE_CLI_BACKEND_COMMAND:-}" ] && [ -n "$binary_name" ]; then
   export OPENCLAW_LIVE_CLI_BACKEND_COMMAND="$NPM_CONFIG_PREFIX/bin/$binary_name"
 fi
+package_has_explicit_version() {
+  case "$1" in
+    @*/*@*) return 0 ;;
+    *@*)
+      [[ "$1" != @* ]]
+      return
+      ;;
+    *) return 1 ;;
+  esac
+}
 if [ -n "${OPENCLAW_LIVE_CLI_BACKEND_COMMAND:-}" ] && [ ! -x "${OPENCLAW_LIVE_CLI_BACKEND_COMMAND}" ] && [ -n "$docker_package" ]; then
+  npm install -g "$docker_package"
+elif [ -n "$docker_package" ] && package_has_explicit_version "$docker_package"; then
   npm install -g "$docker_package"
 fi
 if [ "$provider" = "codex-cli" ] && [ "${OPENCLAW_LIVE_CLI_BACKEND_AUTH:-auto}" = "api-key" ]; then
@@ -375,6 +399,9 @@ echo "==> Run CLI backend live test in Docker"
 echo "==> Model: $CLI_MODEL"
 echo "==> Provider: $CLI_PROVIDER"
 echo "==> Auth mode: $CLI_AUTH_MODE"
+if [[ "$CLI_PROVIDER" == "codex-cli" ]]; then
+  echo "==> CI-safe Codex config: $CLI_USE_CI_SAFE_CODEX_CONFIG"
+fi
 if [[ "$CLI_PROVIDER" == "claude-cli" && "$CLI_AUTH_MODE" == "subscription" ]]; then
   echo "==> Claude subscription: $CLAUDE_SUBSCRIPTION_TYPE"
   echo "==> Claude subscription source: $CLAUDE_SUBSCRIPTION_AUTH_SOURCE"
@@ -410,7 +437,7 @@ else
   )
 fi
 
-docker run --rm -t \
+DOCKER_RUN_ARGS=(docker run --rm -t \
   -u "$DOCKER_USER" \
   --entrypoint bash \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
@@ -421,7 +448,7 @@ docker run --rm -t \
   -e OPENCLAW_DOCKER_AUTH_PRESTAGED="$DOCKER_AUTH_PRESTAGED" \
   -e OPENCLAW_DOCKER_AUTH_DIRS_RESOLVED="$AUTH_DIRS_CSV" \
   -e OPENCLAW_DOCKER_AUTH_FILES_RESOLVED="$AUTH_FILES_CSV" \
-  -e OPENCLAW_LIVE_CLI_BACKEND_USE_CI_SAFE_CODEX_CONFIG="${OPENCLAW_LIVE_CLI_BACKEND_USE_CI_SAFE_CODEX_CONFIG:-0}" \
+  -e OPENCLAW_LIVE_CLI_BACKEND_USE_CI_SAFE_CODEX_CONFIG="$CLI_USE_CI_SAFE_CODEX_CONFIG" \
   -e OPENCLAW_DOCKER_CLI_BACKEND_PROVIDER="$CLI_PROVIDER" \
   -e OPENCLAW_DOCKER_CLI_BACKEND_COMMAND_DEFAULT="$CLI_DEFAULT_COMMAND" \
   -e OPENCLAW_DOCKER_CLI_BACKEND_NPM_PACKAGE="$CLI_DOCKER_NPM_PACKAGE" \
@@ -440,17 +467,21 @@ docker run --rm -t \
   -e OPENCLAW_LIVE_CLI_BACKEND_MODEL_SWITCH_PROBE="${OPENCLAW_LIVE_CLI_BACKEND_MODEL_SWITCH_PROBE:-}" \
   -e OPENCLAW_LIVE_CLI_BACKEND_IMAGE_PROBE="${OPENCLAW_LIVE_CLI_BACKEND_IMAGE_PROBE:-}" \
   -e OPENCLAW_LIVE_CLI_BACKEND_MCP_PROBE="${OPENCLAW_LIVE_CLI_BACKEND_MCP_PROBE:-}" \
+  -e OPENCLAW_LIVE_CLI_BACKEND_MCP_SCHEMA_PROBE="${OPENCLAW_LIVE_CLI_BACKEND_MCP_SCHEMA_PROBE:-}" \
   -e OPENCLAW_LIVE_CLI_BACKEND_IMAGE_ARG="${OPENCLAW_LIVE_CLI_BACKEND_IMAGE_ARG:-}" \
-  -e OPENCLAW_LIVE_CLI_BACKEND_IMAGE_MODE="${OPENCLAW_LIVE_CLI_BACKEND_IMAGE_MODE:-}" \
-  "${DOCKER_HOME_MOUNT[@]}" \
-  "${DOCKER_EXTRA_ENV_FILES[@]}" \
+  -e OPENCLAW_LIVE_CLI_BACKEND_IMAGE_MODE="${OPENCLAW_LIVE_CLI_BACKEND_IMAGE_MODE:-}")
+openclaw_live_append_array DOCKER_RUN_ARGS DOCKER_HOME_MOUNT
+openclaw_live_append_array DOCKER_RUN_ARGS DOCKER_EXTRA_ENV_FILES
+DOCKER_RUN_ARGS+=(\
   -v "$CACHE_HOME_DIR":/home/node/.cache \
   -v "$ROOT_DIR":/src:ro \
   -v "$CONFIG_DIR":/home/node/.openclaw \
   -v "$WORKSPACE_DIR":/home/node/.openclaw/workspace \
-  -v "$CLI_TOOLS_DIR":/home/node/.npm-global \
-  "${EXTERNAL_AUTH_MOUNTS[@]}" \
-  "${DOCKER_AUTH_ENV[@]}" \
-  "${PROFILE_MOUNT[@]}" \
+  -v "$CLI_TOOLS_DIR":/home/node/.npm-global)
+openclaw_live_append_array DOCKER_RUN_ARGS EXTERNAL_AUTH_MOUNTS
+openclaw_live_append_array DOCKER_RUN_ARGS DOCKER_AUTH_ENV
+openclaw_live_append_array DOCKER_RUN_ARGS PROFILE_MOUNT
+DOCKER_RUN_ARGS+=(\
   "$LIVE_IMAGE_NAME" \
-  -lc "$LIVE_TEST_CMD"
+  -lc "$LIVE_TEST_CMD")
+"${DOCKER_RUN_ARGS[@]}"

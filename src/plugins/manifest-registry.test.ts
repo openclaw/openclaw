@@ -478,6 +478,27 @@ describe("loadPluginManifestRegistry", () => {
     ]);
   });
 
+  it("falls back providerDiscoverySource from .ts to emitted .js files", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "anthropic-vertex",
+      providers: ["anthropic-vertex"],
+      providerDiscoveryEntry: "./provider-discovery.ts",
+      configSchema: { type: "object" },
+    });
+    fs.writeFileSync(path.join(dir, "provider-discovery.js"), "export default {};\n", "utf8");
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "anthropic-vertex",
+      rootDir: dir,
+      origin: "bundled",
+    });
+
+    expect(registry.plugins[0]?.providerDiscoverySource).toBe(
+      path.join(dir, "provider-discovery.js"),
+    );
+  });
+
   it("preserves activation and setup descriptors from plugin manifests", () => {
     const dir = makeTempDir();
     writeManifest(dir, {
@@ -529,6 +550,76 @@ describe("loadPluginManifestRegistry", () => {
       cliBackends: ["openai-cli"],
       configMigrations: ["legacy-openai-auth"],
       requiresRuntime: false,
+    });
+  });
+
+  it("preserves media-understanding provider metadata from plugin manifests", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "openai",
+      contracts: {
+        mediaUnderstandingProviders: ["openai"],
+      },
+      mediaUnderstandingProviderMetadata: {
+        openai: {
+          capabilities: ["image", "audio", "unknown"],
+          defaultModels: {
+            image: "gpt-5.4-mini",
+            audio: "gpt-4o-transcribe",
+            unknown: "ignored",
+          },
+          autoPriority: {
+            image: 10,
+            audio: 20,
+            video: "ignored",
+          },
+          nativeDocumentInputs: ["pdf", "docx"],
+        },
+      },
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "openai",
+      rootDir: dir,
+      origin: "bundled",
+    });
+
+    expect(registry.plugins[0]?.mediaUnderstandingProviderMetadata).toEqual({
+      openai: {
+        capabilities: ["image", "audio"],
+        defaultModels: {
+          image: "gpt-5.4-mini",
+          audio: "gpt-4o-transcribe",
+        },
+        autoPriority: {
+          image: 10,
+          audio: 20,
+        },
+        nativeDocumentInputs: ["pdf"],
+      },
+    });
+  });
+
+  it("preserves external auth provider contracts from plugin manifests", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "acme-ai",
+      providers: ["acme-ai"],
+      contracts: {
+        externalAuthProviders: ["acme-ai"],
+      },
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "acme-ai",
+      rootDir: dir,
+      origin: "bundled",
+    });
+
+    expect(registry.plugins[0]?.contracts).toEqual({
+      externalAuthProviders: ["acme-ai"],
     });
   });
 

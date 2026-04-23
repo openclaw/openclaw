@@ -17,7 +17,7 @@ describe("resolveDefaultMediaModel", () => {
       "MiniMax-VL-01",
     );
     expect(resolveDefaultMediaModel({ providerId: "openai-codex", capability: "image" })).toBe(
-      "gpt-5.4",
+      "gpt-5.5",
     );
     expect(resolveDefaultMediaModel({ providerId: "moonshot", capability: "image" })).toBe(
       "kimi-k2.6",
@@ -33,8 +33,10 @@ describe("resolveAutoMediaKeyProviders", () => {
     expect(resolveAutoMediaKeyProviders({ capability: "audio" })).toEqual([
       "openai",
       "groq",
+      "xai",
       "deepgram",
       "google",
+      "elevenlabs",
       "mistral",
     ]);
   });

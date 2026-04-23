@@ -4,7 +4,7 @@ read_when:
   - Scheduling background jobs or wakeups
   - Wiring external triggers (webhooks, Gmail) into OpenClaw
   - Deciding between heartbeat and cron for scheduled tasks
-title: "Scheduled Tasks"
+title: "Scheduled tasks"
 ---
 
 # Scheduled Tasks (Cron)
@@ -89,6 +89,8 @@ This fires ~5–6 times per month instead of 0–1 times per month. OpenClaw use
 **Main session** jobs enqueue a system event and optionally wake the heartbeat (`--wake now` or `--wake next-heartbeat`). **Isolated** jobs run a dedicated agent turn with a fresh session. **Custom sessions** (`session:xxx`) persist context across runs, enabling workflows like daily standups that build on previous summaries.
 
 For isolated jobs, runtime teardown now includes best-effort browser cleanup for that cron session. Cleanup failures are ignored so the actual cron result still wins.
+
+Isolated cron runs also dispose any bundled MCP runtime instances created for the job through the shared runtime-cleanup path. This matches how main-session and custom-session MCP clients are torn down, so isolated cron jobs do not leak stdio child processes or long-lived MCP connections across runs.
 
 When isolated cron runs orchestrate subagents, delivery also prefers the final
 descendant output over stale parent interim text. If descendants are still
@@ -233,7 +235,7 @@ Run an isolated agent turn:
 curl -X POST http://127.0.0.1:18789/hooks/agent \
   -H 'Authorization: Bearer SECRET' \
   -H 'Content-Type: application/json' \
-  -d '{"message":"Summarize inbox","name":"Email","model":"openai/gpt-5.4-mini"}'
+  -d '{"message":"Summarize inbox","name":"Email","model":"openai/gpt-5.5"}'
 ```
 
 Fields: `message` (required), `name`, `agentId`, `wakeMode`, `deliver`, `channel`, `to`, `model`, `thinking`, `timeoutSeconds`.

@@ -132,7 +132,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             type: "boolean",
             title: "Diagnostics Enabled",
             description:
-              "Master toggle for diagnostics instrumentation output in logs and telemetry wiring paths. Keep enabled for normal observability, and disable only in tightly constrained environments.",
+              "Master toggle for diagnostics instrumentation output in logs and telemetry wiring paths. Defaults to enabled; set false only in tightly constrained environments.",
           },
           flags: {
             type: "array",
@@ -823,6 +823,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                       type: "integer",
                       exclusiveMinimum: 0,
                       maximum: 20971520,
+                    },
+                    allowInsecurePath: {
+                      type: "boolean",
                     },
                   },
                   required: ["source", "path"],
@@ -2734,6 +2737,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                           "azure-openai-responses",
                         ],
                       },
+                      baseUrl: {
+                        type: "string",
+                        minLength: 1,
+                      },
                       reasoning: {
                         type: "boolean",
                       },
@@ -3023,7 +3030,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     enum: ["pi", "none"],
                     title: "Default Embedded Harness Fallback",
                     description:
-                      "Embedded harness fallback when no plugin harness matches or an auto-selected plugin harness fails before side effects. Set none to disable automatic PI fallback.",
+                      "Embedded harness fallback when no plugin harness matches. Selected plugin harness failures surface directly. Set none to disable automatic PI fallback.",
                   },
                 },
                 additionalProperties: false,
@@ -3321,6 +3328,43 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
               systemPromptOverride: {
                 type: "string",
               },
+              promptOverlays: {
+                type: "object",
+                properties: {
+                  gpt5: {
+                    type: "object",
+                    properties: {
+                      personality: {
+                        anyOf: [
+                          {
+                            type: "string",
+                            const: "friendly",
+                          },
+                          {
+                            type: "string",
+                            const: "on",
+                          },
+                          {
+                            type: "string",
+                            const: "off",
+                          },
+                        ],
+                        title: "GPT-5 Personality Overlay",
+                        description:
+                          'Friendly interaction-style layer for GPT-5-family models ("friendly" or "on" enables it; "off" disables only that layer). The tagged behavior contract remains enabled for matching GPT-5 models.',
+                      },
+                    },
+                    additionalProperties: false,
+                    title: "GPT-5 Prompt Overlay",
+                    description:
+                      "Shared GPT-5-family prompt overlay applied to matching model ids across providers such as OpenAI, OpenRouter, OpenCode, Codex, and compatible gateways.",
+                  },
+                },
+                additionalProperties: false,
+                title: "Prompt Overlays",
+                description:
+                  "Provider-independent prompt overlays applied by model family before provider-specific prompt hooks.",
+              },
               skipBootstrap: {
                 type: "boolean",
               },
@@ -3605,6 +3649,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     jsonlDialect: {
                       type: "string",
                       const: "claude-stream-json",
+                    },
+                    liveSession: {
+                      type: "string",
+                      const: "claude-stdio",
                     },
                     input: {
                       anyOf: [
@@ -4121,6 +4169,15 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                       },
                       modelCacheDir: {
                         type: "string",
+                      },
+                      contextSize: {
+                        anyOf: [
+                          { type: "integer", exclusiveMinimum: 0, maximum: 9007199254740991 },
+                          { type: "string", const: "auto" },
+                        ],
+                        title: "Local Embedding Context Size",
+                        description:
+                          'Context window size passed to node-llama-cpp when creating the embedding context (default: 4096). 4096 safely covers typical memory-search chunks (128\u2013512 tokens) while keeping non-weight VRAM bounded. Lower to 1024\u20132048 on resource-constrained hosts. Set to "auto" to let node-llama-cpp use the model\'s trained maximum \u2014 not recommended for large models (e.g. Qwen3-Embedding-8B trained on 40\u202f960 tokens can push VRAM from ~8.8\u202fGB to ~32\u202fGB).',
                       },
                     },
                     additionalProperties: false,
@@ -4687,6 +4744,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     title: "Compaction Memory Flush",
                     description:
                       "Pre-compaction memory flush settings that run an agentic memory write before heavy compaction. Keep enabled for long sessions so salient context is persisted before aggressive trimming.",
+                  },
+                  truncateAfterCompaction: {
+                    type: "boolean",
+                    title: "Truncate After Compaction",
+                    description:
+                      "When enabled, rewrites the session JSONL file after compaction to remove entries that were summarized. Prevents unbounded file growth in long-running sessions with many compaction cycles. Default: false.",
                   },
                   notifyUser: {
                     type: "boolean",
@@ -5721,7 +5784,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   additionalProperties: false,
                   title: "Agent Embedded Harness",
                   description:
-                    "Per-agent embedded harness policy override. Use fallback=none to make this agent fail instead of falling back to PI.",
+                    "Per-agent embedded harness policy override. Use fallback=none to make missing plugin harness selection fail instead of falling back to PI.",
                 },
                 model: {
                   anyOf: [
@@ -6001,6 +6064,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         },
                         modelCacheDir: {
                           type: "string",
+                        },
+                        contextSize: {
+                          anyOf: [
+                            { type: "integer", exclusiveMinimum: 0, maximum: 9007199254740991 },
+                            { type: "string", const: "auto" },
+                          ],
                         },
                       },
                       additionalProperties: false,
@@ -18777,6 +18846,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
         default: {
           native: "auto",
           nativeSkills: "auto",
+          modelsWrite: true,
           restart: true,
           ownerDisplay: "raw",
         },
@@ -18817,6 +18887,13 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             title: "Text Commands",
             description:
               "Enables text-command parsing in chat input in addition to native command surfaces where available. Keep this enabled for compatibility across channels that do not support native command registration.",
+          },
+          modelsWrite: {
+            default: true,
+            type: "boolean",
+            title: "Allow /models writes",
+            description:
+              "Allow model-management write commands such as `/models add` to register provider/model entries directly into config and make them available without restarting the gateway (default: true).",
           },
           bash: {
             type: "boolean",
@@ -18919,7 +18996,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
               "Defines elevated command allow rules by channel and sender for owner-level command surfaces. Use narrow provider-specific identities so privileged commands are not exposed to broad chat audiences.",
           },
         },
-        required: ["native", "nativeSkills", "restart", "ownerDisplay"],
+        required: ["native", "nativeSkills", "modelsWrite", "restart", "ownerDisplay"],
         additionalProperties: false,
         title: "Commands",
         description:
@@ -21244,7 +21321,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             maximum: 9007199254740991,
             title: "Gateway Channel Stale Event Threshold (min)",
             description:
-              "How many minutes a connected channel can go without receiving any event before the health monitor treats it as a stale socket and triggers a restart. Default: 30.",
+              "How many minutes a connected channel can go without provider-proven transport activity before the health monitor treats it as a stale socket and triggers a restart. Default: 30.",
           },
           channelMaxRestartsPerHour: {
             type: "integer",
@@ -23226,7 +23303,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "diagnostics.enabled": {
       label: "Diagnostics Enabled",
-      help: "Master toggle for diagnostics instrumentation output in logs and telemetry wiring paths. Keep enabled for normal observability, and disable only in tightly constrained environments.",
+      help: "Master toggle for diagnostics instrumentation output in logs and telemetry wiring paths. Defaults to enabled; set false only in tightly constrained environments.",
       tags: ["observability"],
     },
     "diagnostics.flags": {
@@ -23416,7 +23493,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "agents.defaults.embeddedHarness.fallback": {
       label: "Default Embedded Harness Fallback",
-      help: "Embedded harness fallback when no plugin harness matches or an auto-selected plugin harness fails before side effects. Set none to disable automatic PI fallback.",
+      help: "Embedded harness fallback when no plugin harness matches. Selected plugin harness failures surface directly. Set none to disable automatic PI fallback.",
       tags: ["reliability"],
     },
     "agents.list": {
@@ -23461,7 +23538,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "agents.list.*.embeddedHarness": {
       label: "Agent Embedded Harness",
-      help: "Per-agent embedded harness policy override. Use fallback=none to make this agent fail instead of falling back to PI.",
+      help: "Per-agent embedded harness policy override. Use fallback=none to make missing plugin harness selection fail instead of falling back to PI.",
       tags: ["advanced"],
     },
     "agents.list.*.embeddedHarness.runtime": {
@@ -23561,7 +23638,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "gateway.channelStaleEventThresholdMinutes": {
       label: "Gateway Channel Stale Event Threshold (min)",
-      help: "How many minutes a connected channel can go without receiving any event before the health monitor treats it as a stale socket and triggers a restart. Default: 30.",
+      help: "How many minutes a connected channel can go without provider-proven transport activity before the health monitor treats it as a stale socket and triggers a restart. Default: 30.",
       tags: ["network"],
     },
     "gateway.channelMaxRestartsPerHour": {
@@ -24857,6 +24934,21 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Optional repository root shown in the system prompt runtime line (overrides auto-detect).",
       tags: ["advanced"],
     },
+    "agents.defaults.promptOverlays": {
+      label: "Prompt Overlays",
+      help: "Provider-independent prompt overlays applied by model family before provider-specific prompt hooks.",
+      tags: ["advanced"],
+    },
+    "agents.defaults.promptOverlays.gpt5": {
+      label: "GPT-5 Prompt Overlay",
+      help: "Shared GPT-5-family prompt overlay applied to matching model ids across providers such as OpenAI, OpenRouter, OpenCode, Codex, and compatible gateways.",
+      tags: ["advanced"],
+    },
+    "agents.defaults.promptOverlays.gpt5.personality": {
+      label: "GPT-5 Personality Overlay",
+      help: 'Friendly interaction-style layer for GPT-5-family models ("friendly" or "on" enables it; "off" disables only that layer). The tagged behavior contract remains enabled for matching GPT-5 models.',
+      tags: ["advanced"],
+    },
     "agents.defaults.contextInjection": {
       label: "Context Injection",
       help: 'Controls when workspace bootstrap files are injected into the system prompt: "always" (default) or "continuation-skip" for safe continuation turns after a completed assistant response.',
@@ -25072,6 +25164,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Local Embedding Model Path",
       help: "Specifies the local embedding model source for local memory search, such as a GGUF file path or `hf:` URI. Use this only when provider is `local`, and verify model compatibility before large index rebuilds.",
       tags: ["storage"],
+    },
+    "agents.defaults.memorySearch.local.contextSize": {
+      label: "Local Embedding Context Size",
+      help: 'Context window size passed to node-llama-cpp when creating the embedding context (default: 4096). 4096 safely covers typical memory-search chunks (128\u2013512 tokens) while keeping non-weight VRAM bounded. Lower to 1024\u20132048 on resource-constrained hosts. Set to "auto" to let node-llama-cpp use the model\'s trained maximum \u2014 not recommended for large models (e.g. Qwen3-Embedding-8B trained on 40\u202f960 tokens can push VRAM from ~8.8\u202fGB to ~32\u202fGB).',
+      tags: ["advanced"],
     },
     "agents.defaults.memorySearch.store.path": {
       label: "Memory Search Index Path",
@@ -26015,6 +26112,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "commands.text": {
       label: "Text Commands",
       help: "Enables text-command parsing in chat input in addition to native command surfaces where available. Keep this enabled for compatibility across channels that do not support native command registration.",
+      tags: ["advanced"],
+    },
+    "commands.modelsWrite": {
+      label: "Allow /models writes",
+      help: "Allow model-management write commands such as `/models add` to register provider/model entries directly into config and make them available without restarting the gateway (default: true).",
       tags: ["advanced"],
     },
     "commands.bash": {
@@ -27597,6 +27699,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       sensitive: true,
       tags: ["security", "auth"],
     },
+    "models.providers.*.models[].baseUrl": {
+      tags: ["models", "url-secret"],
+    },
     "agents.list[].memorySearch.remote.baseUrl": {
       tags: ["advanced", "url-secret"],
     },
@@ -27646,6 +27751,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       tags: ["advanced", "url-secret"],
     },
   },
-  version: "2026.4.20",
+  version: "2026.4.23",
   generatedAt: "2026-03-22T21:17:33.302Z",
 };

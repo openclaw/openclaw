@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
 const {
   refreshChatMock,
@@ -178,9 +179,20 @@ describe("parseSessionKey", () => {
 });
 
 describe("resolveAssistantAttachmentAuthToken", () => {
+  it("prefers the paired device token when present", () => {
+    expect(
+      resolveAssistantAttachmentAuthToken({
+        hello: { auth: { deviceToken: "device-token" } } as AppViewState["hello"],
+        settings: { token: "session-token" } as AppViewState["settings"],
+        password: "shared-password",
+      }),
+    ).toBe("device-token");
+  });
+
   it("prefers the explicit gateway token when present", () => {
     expect(
       resolveAssistantAttachmentAuthToken({
+        hello: null,
         settings: { token: "session-token" } as AppViewState["settings"],
         password: "shared-password",
       }),
@@ -190,6 +202,7 @@ describe("resolveAssistantAttachmentAuthToken", () => {
   it("falls back to the shared password when token is blank", () => {
     expect(
       resolveAssistantAttachmentAuthToken({
+        hello: null,
         settings: { token: "   " } as AppViewState["settings"],
         password: "shared-password",
       }),
@@ -199,6 +212,7 @@ describe("resolveAssistantAttachmentAuthToken", () => {
   it("returns null when neither auth secret is available", () => {
     expect(
       resolveAssistantAttachmentAuthToken({
+        hello: null,
         settings: { token: "" } as AppViewState["settings"],
         password: "   ",
       }),

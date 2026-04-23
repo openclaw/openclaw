@@ -1,6 +1,5 @@
 import {
   Button,
-  ChannelType,
   Container,
   Row,
   StringSelectMenu,
@@ -34,8 +33,7 @@ import {
   normalizeOptionalString,
   withTimeout,
 } from "openclaw/plugin-sdk/text-runtime";
-import { resolveDiscordChannelNameSafe } from "./channel-access.js";
-import { resolveDiscordChannelInfo } from "./message-utils.js";
+import { resolveDiscordSlashCommandConfig } from "./commands.js";
 import {
   readDiscordModelPickerRecentModels,
   recordDiscordModelPickerRecentModel,
@@ -52,8 +50,8 @@ import {
   type DiscordModelPickerCommandContext,
 } from "./model-picker.js";
 import { resolveDiscordNativeInteractionRouteState } from "./native-command-route.js";
+import { resolveDiscordNativeInteractionChannelContext } from "./native-interaction-channel-context.js";
 import type { ThreadBindingManager } from "./thread-bindings.js";
-import { resolveDiscordThreadParentInfo } from "./threading.js";
 
 type DiscordConfig = NonNullable<OpenClawConfig["channels"]>["discord"];
 
@@ -65,6 +63,7 @@ export type DiscordCommandArgContext = {
   accountId: string;
   sessionPrefix: string;
   threadBindings: ThreadBindingManager;
+  postApplySettleMs?: number;
 };
 
 export type DiscordModelPickerContext = DiscordCommandArgContext;
@@ -80,6 +79,7 @@ export type DispatchDiscordCommandInteractionParams = {
   sessionPrefix: string;
   preferFollowUp: boolean;
   threadBindings: ThreadBindingManager;
+  responseEphemeral?: boolean;
   suppressReplies?: boolean;
 };
 
@@ -236,33 +236,16 @@ async function resolveDiscordModelPickerRouteState(params: {
   enforceConfiguredBindingReadiness?: boolean;
 }) {
   const { interaction, cfg, accountId } = params;
-  const channel = interaction.channel;
-  const channelType = channel?.type;
-  const isDirectMessage = channelType === ChannelType.DM;
-  const isGroupDm = channelType === ChannelType.GroupDM;
-  const isThreadChannel =
-    channelType === ChannelType.PublicThread ||
-    channelType === ChannelType.PrivateThread ||
-    channelType === ChannelType.AnnouncementThread;
-  const rawChannelId = channel?.id ?? "unknown";
+  const { isDirectMessage, isGroupDm, isThreadChannel, rawChannelId, threadParentId } =
+    await resolveDiscordNativeInteractionChannelContext({
+      channel: interaction.channel,
+      client: interaction.client,
+      hasGuild: Boolean(interaction.guild),
+      channelIdFallback: "unknown",
+    });
   const memberRoleIds = Array.isArray(interaction.rawData.member?.roles)
     ? interaction.rawData.member.roles.map((roleId: string) => roleId)
     : [];
-  let threadParentId: string | undefined;
-  if (interaction.guild && channel && isThreadChannel && rawChannelId) {
-    const channelInfo = await resolveDiscordChannelInfo(interaction.client, rawChannelId);
-    const parentInfo = await resolveDiscordThreadParentInfo({
-      client: interaction.client,
-      threadChannel: {
-        id: rawChannelId,
-        name: resolveDiscordChannelNameSafe(channel),
-        parentId: "parentId" in channel ? (channel.parentId ?? undefined) : undefined,
-        parent: undefined,
-      },
-      channelInfo,
-    });
-    threadParentId = parentInfo.id;
-  }
 
   const threadBinding = isThreadChannel
     ? params.threadBindings.getByThreadId(rawChannelId)
@@ -811,7 +794,10 @@ export async function handleDiscordModelPickerInteraction(params: {
       return;
     }
 
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    const settleMs = ctx.postApplySettleMs ?? 250;
+    if (settleMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, settleMs));
+    }
 
     const effectiveModelRef = resolveDiscordModelPickerCurrentModel({
       cfg: ctx.cfg,
@@ -918,6 +904,7 @@ export async function handleDiscordCommandArgInteraction(params: {
     sessionPrefix: ctx.sessionPrefix,
     preferFollowUp: true,
     threadBindings: ctx.threadBindings,
+    responseEphemeral: resolveDiscordSlashCommandConfig(ctx.discordConfig?.slashCommand).ephemeral,
   });
 }
 

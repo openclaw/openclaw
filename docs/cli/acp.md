@@ -3,10 +3,8 @@ summary: "Run the ACP bridge for IDE integrations"
 read_when:
   - Setting up ACP-based IDE integrations
   - Debugging ACP session routing to the Gateway
-title: "acp"
+title: "ACP"
 ---
-
-# acp
 
 Run the [Agent Client Protocol (ACP)](https://agentclientprotocol.com/) bridge that talks to an OpenClaw Gateway.
 
@@ -166,9 +164,11 @@ Per-session `mcpServers` are not supported in bridge mode. If an ACP client
 sends them during `newSession` or `loadSession`, the bridge returns a clear
 error instead of silently ignoring them.
 
-If you want ACPX-backed sessions to see OpenClaw plugin tools, enable the
-gateway-side ACPX plugin bridge instead of trying to pass per-session
-`mcpServers`. See [ACP Agents](/tools/acp-agents#plugin-tools-mcp-bridge).
+If you want ACPX-backed sessions to see OpenClaw plugin tools or selected
+built-in tools such as `cron`, enable the gateway-side ACPX MCP bridges instead
+of trying to pass per-session `mcpServers`. See
+[ACP Agents](/tools/acp-agents#plugin-tools-mcp-bridge) and
+[OpenClaw tools MCP bridge](/tools/acp-agents#openclaw-tools-mcp-bridge).
 
 ## Use from `acpx` (Codex, Claude, other ACP clients)
 

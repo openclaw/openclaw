@@ -4,10 +4,8 @@ read_when:
   - Inspecting background work in progress or recently completed
   - Debugging delivery failures for detached agent runs
   - Understanding how background runs relate to sessions, cron, and heartbeat
-title: "Background Tasks"
+title: "Background tasks"
 ---
-
-# Background Tasks
 
 > **Looking for scheduling?** See [Automation & Tasks](/automation) for choosing the right mechanism. This page covers **tracking** background work, not scheduling it.
 
@@ -227,7 +225,7 @@ Completion cleanup is also runtime-aware:
 - Isolated cron completion best-effort closes tracked browser tabs/processes for the cron session before the run fully tears down.
 - Isolated cron delivery waits out descendant subagent follow-up when needed and
   suppresses stale parent acknowledgement text instead of announcing it.
-- Subagent completion delivery prefers the latest visible assistant text; if that is empty it falls back to sanitized latest tool/toolResult text, and timeout-only tool-call runs can collapse to a short partial-progress summary.
+- Subagent completion delivery prefers the latest visible assistant text; if that is empty it falls back to sanitized latest tool/toolResult text, and timeout-only tool-call runs can collapse to a short partial-progress summary. Terminal failed runs announce failure status without replaying captured reply text.
 - Cleanup failures do not mask the real task outcome.
 
 ### `tasks flow list|show|cancel`
@@ -325,4 +323,4 @@ A task's `runId` links to the agent run doing the work. Agent lifecycle events (
 - [Task Flow](/automation/taskflow) — flow orchestration above tasks
 - [Scheduled Tasks](/automation/cron-jobs) — scheduling background work
 - [Heartbeat](/gateway/heartbeat) — periodic main-session turns
-- [CLI: Tasks](/cli/index#tasks) — CLI command reference
+- [CLI: Tasks](/cli/tasks) — CLI command reference

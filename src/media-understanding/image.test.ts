@@ -52,6 +52,10 @@ vi.mock("../agents/model-auth.js", () => ({
   requireApiKey: requireApiKeyMock,
 }));
 
+vi.mock("../agents/provider-stream.js", () => ({
+  registerProviderStreamForModel: registerProviderStreamForModelMock,
+}));
+
 vi.mock("../agents/pi-model-discovery-runtime.js", () => ({
   discoverAuthStorage: () => ({
     setRuntimeApiKey: setRuntimeApiKeyMock,
@@ -174,6 +178,16 @@ describe("describeImageWithModel", () => {
       text: "generic ok",
       model: "custom-vision",
     });
+    expect(registerProviderStreamForModelMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: expect.objectContaining({
+          provider: "minimax-portal",
+          id: "custom-vision",
+        }),
+        cfg: {},
+        agentDir: "/tmp/openclaw-agent",
+      }),
+    );
     expect(completeMock).toHaveBeenCalledOnce();
     expect(fetchMock).not.toHaveBeenCalled();
   });

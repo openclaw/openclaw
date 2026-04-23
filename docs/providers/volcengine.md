@@ -1,12 +1,10 @@
 ---
-title: "Volcengine (Doubao)"
 summary: "Volcano Engine setup (Doubao models, general + coding endpoints)"
+title: "Volcengine (Doubao)"
 read_when:
   - You want to use Volcano Engine or Doubao models with OpenClaw
   - You need the Volcengine API key setup
 ---
-
-# Volcengine (Doubao)
 
 The Volcengine provider gives access to Doubao models and third-party models
 hosted on Volcano Engine, with separate endpoints for general and coding
@@ -97,7 +95,7 @@ Both providers are configured from a single API key. Setup registers both automa
   </Tab>
 </Tabs>
 
-## Advanced notes
+## Advanced configuration
 
 <AccordionGroup>
   <Accordion title="Default model after onboarding">
@@ -131,7 +129,7 @@ interactive shell are not automatically inherited. See the daemon note above.
   <Card title="Model selection" href="/concepts/model-providers" icon="layers">
     Choosing providers, model refs, and failover behavior.
   </Card>
-  <Card title="Configuration" href="/configuration" icon="gear">
+  <Card title="Configuration" href="/gateway/configuration" icon="gear">
     Full config reference for agents, models, and providers.
   </Card>
   <Card title="Troubleshooting" href="/help/troubleshooting" icon="wrench">
