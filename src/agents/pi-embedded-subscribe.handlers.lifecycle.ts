@@ -196,7 +196,12 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
       return;
     }
     lifecycleTerminalEmitted = true;
-    const beforeLifecycleTerminal = ctx.params.onBeforeLifecycleTerminal?.();
+    let beforeLifecycleTerminal: void | Promise<void> = undefined;
+    try {
+      beforeLifecycleTerminal = ctx.params.onBeforeLifecycleTerminal?.();
+    } catch (err) {
+      ctx.log.debug(`before lifecycle terminal failed: ${String(err)}`);
+    }
     if (isPromiseLike<void>(beforeLifecycleTerminal)) {
       return Promise.resolve(beforeLifecycleTerminal)
         .catch((err) => {

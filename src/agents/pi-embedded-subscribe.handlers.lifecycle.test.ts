@@ -405,6 +405,67 @@ describe("handleAgentEnd", () => {
     });
   });
 
+  it("runs an async before-lifecycle callback before the lifecycle end event", async () => {
+    const order: string[] = [];
+    const onAgentEvent = vi.fn(() => {
+      order.push("event");
+    });
+    const onBeforeLifecycleTerminal = vi.fn(() =>
+      Promise.resolve().then(() => {
+        order.push("before");
+      }),
+    );
+    const ctx = createContext(undefined, {
+      onAgentEvent,
+      onBeforeLifecycleTerminal,
+    });
+
+    await handleAgentEnd(ctx);
+
+    expect(order).toEqual(["before", "event"]);
+    expect(onBeforeLifecycleTerminal).toHaveBeenCalledTimes(1);
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: { phase: "end" },
+    });
+  });
+
+  it("still emits lifecycle terminal when sync before-lifecycle callback throws", async () => {
+    const onAgentEvent = vi.fn();
+    const onBeforeLifecycleTerminal = vi.fn(() => {
+      throw new Error("hook exploded");
+    });
+    const ctx = createContext(undefined, {
+      onAgentEvent,
+      onBeforeLifecycleTerminal,
+    });
+
+    await handleAgentEnd(ctx);
+
+    expect(onBeforeLifecycleTerminal).toHaveBeenCalledTimes(1);
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: { phase: "end" },
+    });
+  });
+
+  it("still emits lifecycle terminal when async before-lifecycle callback rejects", async () => {
+    const onAgentEvent = vi.fn();
+    const onBeforeLifecycleTerminal = vi.fn(() => Promise.reject(new Error("hook failed")));
+    const ctx = createContext(undefined, {
+      onAgentEvent,
+      onBeforeLifecycleTerminal,
+    });
+
+    await handleAgentEnd(ctx);
+
+    expect(onBeforeLifecycleTerminal).toHaveBeenCalledTimes(1);
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: { phase: "end" },
+    });
+  });
+
   it("emits lifecycle end after async channel flush completes", async () => {
     let resolveChannelFlush: (() => void) | undefined;
     const onAgentEvent = vi.fn();
