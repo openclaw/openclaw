@@ -250,7 +250,7 @@ When the linked self number is also present in `allowFrom`, WhatsApp self-chat s
     - `<media:document>`
     - `<media:sticker>`
 
-    Location and contact payloads are normalized into textual context before routing.
+    Location bodies use terse coordinate text. Location labels/comments and contact/vCard details are rendered as fenced untrusted metadata, not inline prompt text.
 
   </Accordion>
 
@@ -330,6 +330,28 @@ When the linked self number is also present in `allowFrom`, WhatsApp self-chat s
     - on media send failure, first-item fallback sends text warning instead of dropping the response silently
   </Accordion>
 </AccordionGroup>
+
+## Reply quoting
+
+WhatsApp supports native reply quoting, where outbound replies visibly quote the inbound message. Control it with `channels.whatsapp.replyToMode`.
+
+| Value    | Behavior                                                                           |
+| -------- | ---------------------------------------------------------------------------------- |
+| `"auto"` | Quote the inbound message when the provider supports it; skip quoting otherwise    |
+| `"on"`   | Always quote the inbound message; fall back to a plain send if quoting is rejected |
+| `"off"`  | Never quote; send as a plain message                                               |
+
+Default is `"auto"`. Per-account overrides use `channels.whatsapp.accounts.<id>.replyToMode`.
+
+```json5
+{
+  channels: {
+    whatsapp: {
+      replyToMode: "on",
+    },
+  },
+}
+```
 
 ## Reaction level
 

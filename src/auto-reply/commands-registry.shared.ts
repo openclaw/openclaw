@@ -252,6 +252,23 @@ export function buildBuiltinChatCommands(): ChatCommandDefinition[] {
       ],
     }),
     defineChatCommand({
+      key: "export-trajectory",
+      nativeName: "export-trajectory",
+      description: "Export a JSONL trajectory bundle for the active session.",
+      textAliases: ["/export-trajectory", "/trajectory"],
+      acceptsArgs: true,
+      category: "status",
+      tier: "essential",
+      args: [
+        {
+          name: "path",
+          description: "Output directory (default: workspace)",
+          type: "string",
+          required: false,
+        },
+      ],
+    }),
+    defineChatCommand({
       key: "tts",
       nativeName: "tts",
       description: "Control text-to-speech (TTS).",

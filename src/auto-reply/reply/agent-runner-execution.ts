@@ -69,6 +69,7 @@ import {
   resolveModelFallbackOptions,
 } from "./agent-runner-utils.js";
 import { type BlockReplyPipeline } from "./block-reply-pipeline.js";
+import { resolveOriginMessageProvider } from "./origin-routing.js";
 import type { FollowupRun } from "./queue.js";
 import { createBlockReplyDeliveryHandler } from "./reply-delivery.js";
 import type { ReplyMediaContext } from "./reply-media-paths.js";
@@ -85,6 +86,10 @@ const GPT_CHAT_BREVITY_ACK_MAX_CHARS = 420;
 const GPT_CHAT_BREVITY_ACK_MAX_SENTENCES = 3;
 const GPT_CHAT_BREVITY_SOFT_MAX_CHARS = 900;
 const GPT_CHAT_BREVITY_SOFT_MAX_SENTENCES = 6;
+
+function readApprovalScopeValue(value: unknown): "turn" | "session" | undefined {
+  return value === "turn" || value === "session" ? value : undefined;
+}
 
 export type RuntimeFallbackAttempt = {
   provider: string;
@@ -351,7 +356,7 @@ function buildMissingApiKeyFailureText(message: string): string | null {
     return null;
   }
   if (provider === "openai" && normalizedMessage.includes("OpenAI Codex OAuth")) {
-    return "⚠️ Missing API key for OpenAI on the gateway. Use `openai-codex/gpt-5.4` for OAuth, or set `OPENAI_API_KEY`, then try again.";
+    return "⚠️ Missing API key for OpenAI on the gateway. Use `openai-codex/gpt-5.5` for OAuth, or set `OPENAI_API_KEY`, then try again.";
   }
   if (SAFE_MISSING_API_KEY_PROVIDERS.has(provider)) {
     return `⚠️ Missing API key for provider "${provider}". Configure the gateway auth for that provider, then try again.`;
@@ -562,6 +567,7 @@ export async function runAgentTurnWithFallback(params: {
   commandBody: string;
   followupRun: FollowupRun;
   sessionCtx: TemplateContext;
+  replyThreading?: TemplateContext["ReplyThreading"];
   replyOperation?: ReplyOperation;
   opts?: GetReplyOptions;
   typingSignals: TypingSignaler;
@@ -582,6 +588,7 @@ export async function runAgentTurnWithFallback(params: {
   resetSessionAfterRoleOrderingConflict: (reason: string) => Promise<boolean>;
   isHeartbeat: boolean;
   sessionKey?: string;
+  runtimePolicySessionKey?: string;
   getActiveSessionEntry: () => SessionEntry | undefined;
   activeSessionStore?: Record<string, SessionEntry>;
   storePath?: string;
@@ -837,6 +844,7 @@ export async function runAgentTurnWithFallback(params: {
         ? createBlockReplyDeliveryHandler({
             onBlockReply: params.opts.onBlockReply,
             currentMessageId: params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid,
+            replyThreading: params.replyThreading,
             normalizeStreamingText,
             applyReplyToMode: params.applyReplyToMode,
             normalizeMediaPaths: replyMediaContext.normalizePayload,
@@ -889,6 +897,10 @@ export async function runAgentTurnWithFallback(params: {
               provider === params.followupRun.run.provider
                 ? params.followupRun.run.authProfileId
                 : undefined;
+            const hookMessageProvider = resolveOriginMessageProvider({
+              originatingChannel: params.followupRun.originatingChannel,
+              provider: params.sessionCtx.Provider,
+            });
             return (async () => {
               let lifecycleTerminalEmitted = false;
               try {
@@ -896,6 +908,7 @@ export async function runAgentTurnWithFallback(params: {
                   sessionId: params.followupRun.run.sessionId,
                   sessionKey: params.sessionKey,
                   agentId: params.followupRun.run.agentId,
+                  trigger: params.isHeartbeat ? "heartbeat" : "user",
                   sessionFile: params.followupRun.run.sessionFile,
                   workspaceDir: params.followupRun.run.workspaceDir,
                   config: runtimeConfig,
@@ -919,7 +932,8 @@ export async function runAgentTurnWithFallback(params: {
                   images: params.opts?.images,
                   imageOrder: params.opts?.imageOrder,
                   skillsSnapshot: params.followupRun.run.skillsSnapshot,
-                  messageProvider: params.followupRun.run.messageProvider,
+                  messageChannel: params.followupRun.originatingChannel ?? undefined,
+                  messageProvider: hookMessageProvider,
                   agentAccountId: params.followupRun.run.agentAccountId,
                   senderIsOwner: params.followupRun.run.senderIsOwner,
                   abortSignal: params.replyOperation?.abortSignal ?? params.opts?.abortSignal,
@@ -1018,6 +1032,7 @@ export async function runAgentTurnWithFallback(params: {
                 groupSpace: normalizeOptionalString(params.sessionCtx.GroupSpace),
                 ...senderContext,
                 ...runBaseParams,
+                sandboxSessionKey: params.runtimePolicySessionKey,
                 prompt: params.commandBody,
                 extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
                 toolResultFormat: (() => {
@@ -1122,6 +1137,7 @@ export async function runAgentTurnWithFallback(params: {
                       command: readStringValue(evt.data.command),
                       host: readStringValue(evt.data.host),
                       reason: readStringValue(evt.data.reason),
+                      scope: readApprovalScopeValue(evt.data.scope),
                       message: readStringValue(evt.data.message),
                     });
                   }

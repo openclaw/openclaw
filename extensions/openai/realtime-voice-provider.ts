@@ -117,7 +117,7 @@ function base64ToBuffer(b64: string): Buffer {
 }
 
 class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
-  private static readonly DEFAULT_MODEL = "gpt-realtime";
+  private static readonly DEFAULT_MODEL = "gpt-realtime-1.5";
   private static readonly MAX_RECONNECT_ATTEMPTS = 5;
   private static readonly BASE_RECONNECT_DELAY_MS = 1000;
   private static readonly CONNECT_TIMEOUT_MS = 10_000;

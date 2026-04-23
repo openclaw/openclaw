@@ -87,11 +87,14 @@ export default definePluginEntry({
 
 OpenClaw chooses a harness after provider/model resolution:
 
-1. `OPENCLAW_AGENT_RUNTIME=<id>` forces a registered harness with that id.
-2. `OPENCLAW_AGENT_RUNTIME=pi` forces the built-in PI harness.
-3. `OPENCLAW_AGENT_RUNTIME=auto` asks registered harnesses if they support the
+1. An existing session's recorded harness id wins, so config/env changes do not
+   hot-switch that transcript to another runtime.
+2. `OPENCLAW_AGENT_RUNTIME=<id>` forces a registered harness with that id for
+   sessions that are not already pinned.
+3. `OPENCLAW_AGENT_RUNTIME=pi` forces the built-in PI harness.
+4. `OPENCLAW_AGENT_RUNTIME=auto` asks registered harnesses if they support the
    resolved provider/model.
-4. If no registered harness matches, OpenClaw uses PI unless PI fallback is
+5. If no registered harness matches, OpenClaw uses PI unless PI fallback is
    disabled.
 
 Plugin harness failures surface as run failures. In `auto` mode, PI fallback is
@@ -99,6 +102,12 @@ only used when no registered plugin harness supports the resolved
 provider/model. Once a plugin harness has claimed a run, OpenClaw does not
 replay that same turn through PI because that can change auth/runtime semantics
 or duplicate side effects.
+
+The selected harness id is persisted with the session id after an embedded run.
+Legacy sessions created before harness pins are treated as PI-pinned once they
+have transcript history. Use a new/reset session when changing between PI and a
+native plugin harness. `/status` shows non-default harness ids such as `codex`
+next to `Fast`; PI stays hidden because it is the default compatibility path.
 
 The bundled Codex plugin registers `codex` as its harness id. Core treats that
 as an ordinary plugin harness id; Codex-specific aliases belong in the plugin
@@ -113,7 +122,7 @@ OpenClaw. The harness then claims that provider in `supports(...)`.
 The bundled Codex plugin follows this pattern:
 
 - provider id: `codex`
-- user model refs: `codex/gpt-5.4`, `codex/gpt-5.2`, or another model returned
+- user model refs: `codex/gpt-5.5`, `codex/gpt-5.2`, or another model returned
   by the Codex app server
 - harness id: `codex`
 - auth: synthetic provider availability, because the Codex harness owns the
@@ -133,6 +142,15 @@ For operator setup, model prefix examples, and Codex-only configs, see
 OpenClaw requires Codex app-server `0.118.0` or newer. The Codex plugin checks
 the app-server initialize handshake and blocks older or unversioned servers so
 OpenClaw only runs against the protocol surface it has been tested with.
+
+### Codex app-server tool-result middleware
+
+Bundled plugins can also attach Codex app-server-specific `tool_result`
+middleware through `api.registerCodexAppServerExtensionFactory(...)` when their
+manifest declares `contracts.embeddedExtensionFactories: ["codex-app-server"]`.
+This is the trusted-plugin seam for async tool-result transforms that need to
+run inside the native Codex harness before the tool output is projected back
+into the OpenClaw transcript.
 
 ### Native Codex harness mode
 
@@ -171,7 +189,7 @@ For Codex-only embedded runs:
 {
   "agents": {
     "defaults": {
-      "model": "codex/gpt-5.4",
+      "model": "codex/gpt-5.5",
       "embeddedHarness": {
         "runtime": "codex",
         "fallback": "none"
@@ -212,7 +230,7 @@ Per-agent overrides use the same shape:
     "list": [
       {
         "id": "codex-only",
-        "model": "codex/gpt-5.4",
+        "model": "codex/gpt-5.5",
         "embeddedHarness": {
           "runtime": "codex",
           "fallback": "none"

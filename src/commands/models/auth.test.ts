@@ -154,23 +154,28 @@ vi.mock("../provider-auth-helpers.js", () => {
         null
       );
     }),
-    applyProviderAuthConfigPatch: vi.fn((cfg: OpenClawConfig, patch: unknown) => {
-      const merged = mergePatch(cfg, patch);
-      const patchModels = (patch as { agents?: { defaults?: { models?: unknown } } })?.agents
-        ?.defaults?.models;
-      return isRecord(patchModels)
-        ? {
-            ...merged,
-            agents: {
-              ...merged.agents,
-              defaults: {
-                ...merged.agents?.defaults,
-                models: patchModels,
+    applyProviderAuthConfigPatch: vi.fn(
+      (cfg: OpenClawConfig, patch: unknown, options?: { replaceDefaultModels?: boolean }) => {
+        const merged = mergePatch(cfg, patch);
+        if (!options?.replaceDefaultModels) {
+          return merged;
+        }
+        const patchModels = (patch as { agents?: { defaults?: { models?: unknown } } })?.agents
+          ?.defaults?.models;
+        return isRecord(patchModels)
+          ? {
+              ...merged,
+              agents: {
+                ...merged.agents,
+                defaults: {
+                  ...merged.agents?.defaults,
+                  models: patchModels,
+                },
               },
-            },
-          }
-        : merged;
-    }),
+            }
+          : merged;
+      },
+    ),
     applyDefaultModel: vi.fn((cfg: OpenClawConfig, model: string) => ({
       ...cfg,
       agents: {
@@ -293,7 +298,7 @@ describe("modelsAuthLoginCommand", () => {
           },
         },
       ],
-      defaultModel: "openai-codex/gpt-5.4",
+      defaultModel: "openai-codex/gpt-5.5",
     });
     mocks.resolvePluginProviders.mockReturnValue([
       createProvider({
@@ -360,7 +365,7 @@ describe("modelsAuthLoginCommand", () => {
       "Auth profile: openai-codex:user@example.com (openai-codex/oauth)",
     );
     expect(runtime.log).toHaveBeenCalledWith(
-      "Default model available: openai-codex/gpt-5.4 (use --set-default to apply)",
+      "Default model available: openai-codex/gpt-5.5 (use --set-default to apply)",
     );
     expect(runtime.log).toHaveBeenCalledWith(
       "Tip: Codex-capable models can use native Codex web search. Enable it with openclaw configure --section web (recommended mode: cached). Docs: https://docs.openclaw.ai/tools/web",
@@ -482,6 +487,7 @@ describe("modelsAuthLoginCommand", () => {
             },
           },
         },
+        replaceDefaultModels: true,
         notes: [
           "Claude CLI auth detected; switched Anthropic model selection to the local Claude CLI backend.",
           "Existing Anthropic auth profiles are kept for rollback.",
@@ -571,6 +577,38 @@ describe("modelsAuthLoginCommand", () => {
       "Provider notes",
     );
     expect(runtime.log).toHaveBeenCalledWith("Default model set to claude-cli/claude-sonnet-4-6");
+  });
+
+  it("preserves other providers' allowlist entries on an openai-codex OAuth login", async () => {
+    const runtime = createRuntime();
+    const existingModels = {
+      "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
+      "anthropic/claude-opus-4-6": { alias: "opus" },
+      "moonshot/kimi-k2.5": { alias: "kimi" },
+      "openai-codex/gpt-5.5": { alias: "gpt55" },
+    };
+    currentConfig = { agents: { defaults: { models: existingModels } } };
+    runProviderAuth.mockResolvedValue({
+      profiles: [
+        {
+          profileId: "openai-codex:user@example.com",
+          credential: {
+            type: "oauth",
+            provider: "openai-codex",
+            access: "a",
+            refresh: "r",
+            expires: Date.now() + 60_000,
+            email: "user@example.com",
+          },
+        },
+      ],
+      configPatch: { agents: { defaults: { models: { "openai-codex/gpt-5.5": {} } } } },
+      defaultModel: "openai-codex/gpt-5.5",
+    });
+
+    await modelsAuthLoginCommand({ provider: "openai-codex" }, runtime);
+
+    expect(lastUpdatedConfig?.agents?.defaults?.models).toEqual(existingModels);
   });
 
   it("survives lockout clearing failure without blocking login", async () => {
