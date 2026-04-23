@@ -1,5 +1,9 @@
 const ANTIGRAVITY_BARE_PRO_IDS = new Set(["gemini-3-pro", "gemini-3.1-pro", "gemini-3-1-pro"]);
 
+export function normalizeNativeNvidiaModelId(id: string): string {
+  return id === "nemotron-3-super-120b-a12b" ? "nvidia/nemotron-3-super-120b-a12b" : id;
+}
+
 export function normalizeGooglePreviewModelId(id: string): string {
   if (id === "gemini-3-pro") {
     return "gemini-3-pro-preview";

@@ -1,5 +1,6 @@
 import chalk from "chalk";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { modelKey } from "../agents/model-ref-shared.js";
 import { resolveConfiguredModelRef } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getResolvedLoggerSettings } from "../logging.js";
@@ -21,7 +22,7 @@ export function logGatewayStartup(params: {
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });
-  const modelRef = `${agentProvider}/${agentModel}`;
+  const modelRef = modelKey(agentProvider, agentModel);
   params.log.info(`agent model: ${modelRef}`, {
     consoleMessage: `agent model: ${chalk.whiteBright(modelRef)}`,
   });

@@ -10,6 +10,17 @@ const NVIDIA_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
+export function normalizeNvidiaModelId(modelId: string): string {
+  const trimmed = modelId.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+  if (trimmed.includes("/")) {
+    return trimmed;
+  }
+  return trimmed === "nemotron-3-super-120b-a12b" ? NVIDIA_DEFAULT_MODEL_ID : trimmed;
+}
+
 export function buildNvidiaProvider(): ModelProviderConfig {
   return {
     baseUrl: NVIDIA_BASE_URL,

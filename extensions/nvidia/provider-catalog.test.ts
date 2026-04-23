@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildNvidiaProvider } from "./provider-catalog.js";
+import { buildNvidiaProvider, normalizeNvidiaModelId } from "./provider-catalog.js";
 
 describe("nvidia provider catalog", () => {
   it("builds the bundled NVIDIA provider defaults", () => {
@@ -13,5 +13,14 @@ describe("nvidia provider catalog", () => {
       "minimaxai/minimax-m2.5",
       "z-ai/glm5",
     ]);
+  });
+
+  it("normalizes bare Nemotron ids to the full NVIDIA upstream id", () => {
+    expect(normalizeNvidiaModelId("nemotron-3-super-120b-a12b")).toBe(
+      "nvidia/nemotron-3-super-120b-a12b",
+    );
+    expect(normalizeNvidiaModelId("nvidia/nemotron-3-super-120b-a12b")).toBe(
+      "nvidia/nemotron-3-super-120b-a12b",
+    );
   });
 });

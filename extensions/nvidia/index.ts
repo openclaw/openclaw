@@ -1,5 +1,5 @@
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
-import { buildNvidiaProvider } from "./provider-catalog.js";
+import { buildNvidiaProvider, normalizeNvidiaModelId } from "./provider-catalog.js";
 
 const PROVIDER_ID = "nvidia";
 
@@ -12,6 +12,7 @@ export default defineSingleProviderPluginEntry({
     docsPath: "/providers/nvidia",
     envVars: ["NVIDIA_API_KEY"],
     auth: [],
+    normalizeModelId: ({ modelId }) => normalizeNvidiaModelId(modelId),
     catalog: {
       buildProvider: buildNvidiaProvider,
     },
