@@ -7,7 +7,7 @@ import {
   formatReasoningMessage,
   promoteThinkingTagsToBlocks,
   stripDowngradedToolCallText,
-  stripFinalTagsFromMessage,
+  stripReasoningTagsFromMessage,
 } from "./pi-embedded-utils.js";
 
 function makeAssistantMessage(
@@ -827,14 +827,14 @@ describe("promoteThinkingTagsToBlocks", () => {
   });
 });
 
-describe("stripFinalTagsFromMessage", () => {
+describe("stripReasoningTagsFromMessage", () => {
   it("strips <final> and </final> tags from text blocks", () => {
     const msg = makeAssistantMessage({
       role: "assistant",
       content: [{ type: "text", text: "<final>Hello world!</final>" }],
       timestamp: Date.now(),
     });
-    stripFinalTagsFromMessage(msg);
+    stripReasoningTagsFromMessage(msg);
     expect(msg.content).toEqual([{ type: "text", text: "Hello world!" }]);
   });
 
@@ -844,7 +844,7 @@ describe("stripFinalTagsFromMessage", () => {
       content: [{ type: "text", text: "Hello<final/>" }],
       timestamp: Date.now(),
     });
-    stripFinalTagsFromMessage(msg);
+    stripReasoningTagsFromMessage(msg);
     expect(msg.content).toEqual([{ type: "text", text: "Hello" }]);
   });
 
@@ -857,7 +857,7 @@ describe("stripFinalTagsFromMessage", () => {
       ],
       timestamp: Date.now(),
     });
-    stripFinalTagsFromMessage(msg);
+    stripReasoningTagsFromMessage(msg);
     expect(msg.content).toEqual([
       { type: "thinking", thinking: "internal reasoning" },
       { type: "text", text: "visible" },
@@ -874,18 +874,86 @@ describe("stripFinalTagsFromMessage", () => {
       ],
       timestamp: Date.now(),
     });
-    stripFinalTagsFromMessage(msg);
+    stripReasoningTagsFromMessage(msg);
     expect(msg.content).toEqual([{ type: "text", text: "Hello" }]);
   });
 
-  it("does not mutate message without final tags", () => {
+  it("does not mutate message without reasoning tags", () => {
     const msg = makeAssistantMessage({
       role: "assistant",
       content: [{ type: "text", text: "no tags here" }],
       timestamp: Date.now(),
     });
-    stripFinalTagsFromMessage(msg);
+    stripReasoningTagsFromMessage(msg);
     expect(msg.content).toEqual([{ type: "text", text: "no tags here" }]);
+  });
+
+  it("strips inline <think> left in text when a native thinking block is present", () => {
+    // gemma/gemini sometimes emit native reasoning AND inline <think> tags in
+    // the same turn. promoteThinkingTagsToBlocks early-returns on the pre-
+    // existing thinking block, so this safety net must still clean the text.
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "native" },
+        { type: "text", text: "<think>inline reasoning</think> <final>answer</final>" },
+      ],
+      timestamp: Date.now(),
+    });
+    stripReasoningTagsFromMessage(msg);
+    expect(msg.content).toEqual([
+      { type: "thinking", thinking: "native" },
+      { type: "text", text: " answer" },
+    ]);
+  });
+
+  it("strips <think> content when preamble text blocks promoteThinkingTagsToBlocks", () => {
+    // Any text before the opening <think> makes splitThinkingTaggedText bail,
+    // so the inline think block gets persisted raw unless this sanitizer
+    // catches it.
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "preface <think>reasoning</think> <final>answer</final>",
+        },
+      ],
+      timestamp: Date.now(),
+    });
+    stripReasoningTagsFromMessage(msg);
+    expect(msg.content).toEqual([{ type: "text", text: "preface  answer" }]);
+  });
+
+  it("drops unclosed <think> content (strict mode)", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "<think>truncated reasoning never closed" }],
+      timestamp: Date.now(),
+    });
+    stripReasoningTagsFromMessage(msg);
+    expect(msg.content).toEqual([]);
+  });
+
+  it("preserves <final> tags inside code fences (matches streaming behavior)", () => {
+    const text = "Here's an example:\n```html\n<final>wrapper</final>\n```";
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [{ type: "text", text }],
+      timestamp: Date.now(),
+    });
+    stripReasoningTagsFromMessage(msg);
+    expect(msg.content).toEqual([{ type: "text", text }]);
+  });
+
+  it("does not throw on non-string block.text (malformed content guard)", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [{ type: "text", text: 42 as unknown as string }],
+      timestamp: Date.now(),
+    });
+    expect(() => stripReasoningTagsFromMessage(msg)).not.toThrow();
+    expect(msg.content).toEqual([{ type: "text", text: 42 as unknown as string }]);
   });
 });
 

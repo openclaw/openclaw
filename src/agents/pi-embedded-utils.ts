@@ -295,16 +295,18 @@ export function promoteThinkingTagsToBlocks(message: AssistantMessage): void {
   message.content = next;
 }
 
-const FINAL_TAG_RE = /<\s*\/?\s*final\b[^<>]*>/gi;
-
 /**
- * Strip `<final>` / `</final>` wrapper tags from text content blocks in an
+ * Strip `<think>` / `<final>` wrapper tags from text content blocks in an
  * assistant message so they do not leak into the persisted session transcript.
- * The streaming path already strips these via `stripBlockTags`, but the stored
- * message retains the raw LLM output. Mutates in place (same pattern as
- * `promoteThinkingTagsToBlocks`).
+ * The streaming path strips these live via `stripBlockTags`, but the stored
+ * message retains the raw LLM output; when the UI rehydrates from storage the
+ * tags reappear. Reuses the canonical `stripReasoningTagsFromText` helper so
+ * the persistence side matches streaming behavior, including code-span
+ * preservation. Runs after `promoteThinkingTagsToBlocks` as a safety net for
+ * the cases where that helper bails (preamble text, unbalanced tags, or a
+ * pre-existing native thinking block). Mutates in place.
  */
-export function stripFinalTagsFromMessage(message: AssistantMessage): void {
+export function stripReasoningTagsFromMessage(message: AssistantMessage): void {
   if (!Array.isArray(message.content)) {
     return;
   }
@@ -313,7 +315,10 @@ export function stripFinalTagsFromMessage(message: AssistantMessage): void {
     if (!block || typeof block !== "object" || block.type !== "text") {
       continue;
     }
-    const stripped = block.text.replace(FINAL_TAG_RE, "");
+    if (typeof block.text !== "string") {
+      continue;
+    }
+    const stripped = stripReasoningTagsFromText(block.text, { mode: "strict", trim: "none" });
     if (stripped !== block.text) {
       block.text = stripped;
       changed = true;
@@ -322,7 +327,13 @@ export function stripFinalTagsFromMessage(message: AssistantMessage): void {
   if (changed) {
     message.content = message.content.filter(
       (block) =>
-        !(block && typeof block === "object" && block.type === "text" && !block.text.trim()),
+        !(
+          block &&
+          typeof block === "object" &&
+          block.type === "text" &&
+          typeof block.text === "string" &&
+          !block.text.trim()
+        ),
     );
   }
 }
