@@ -489,6 +489,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
       },
       actions: discordMessageActions,
       bindings: {
+        selfParentConversationByDefault: true,
         compileConfiguredBinding: ({ conversationId }) =>
           normalizeDiscordAcpConversationId(conversationId),
         matchInboundConversation: ({ compiledBinding, conversationId, parentConversationId }) =>

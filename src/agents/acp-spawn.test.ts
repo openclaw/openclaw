@@ -719,6 +719,22 @@ describe("spawnAcpDirect", () => {
   });
 
   it("uses the top-level Discord channel as the parent for child ACP thread spawns", async () => {
+    const discordPlugin = {
+      id: "discord",
+      bindings: {
+        selfParentConversationByDefault: true,
+      },
+      conversationBindings: {
+        defaultTopLevelPlacement: "child" as const,
+      },
+    };
+    hoisted.getLoadedChannelPluginMock.mockImplementation((channelId: string) =>
+      channelId === "discord" ? discordPlugin : undefined,
+    );
+    hoisted.getChannelPluginMock.mockImplementation((channelId: string) =>
+      channelId === "discord" ? discordPlugin : undefined,
+    );
+
     const result = await spawnAcpDirect(
       {
         task: "Investigate flaky tests",
@@ -770,6 +786,10 @@ describe("spawnAcpDirect", () => {
       },
     });
     const discordPlugin = {
+      id: "discord",
+      bindings: {
+        selfParentConversationByDefault: true,
+      },
       config: {
         defaultAccountId: () => "finn",
       },

@@ -641,12 +641,6 @@ function prepareAcpThreadBinding(params: {
       error: `Could not resolve a ${policy.channel} conversation for ACP thread spawn.`,
     };
   }
-  const parentConversationId =
-    conversationRef.parentConversationId ??
-    (policy.channel === "discord" && placementToUse === "child" && params.threadId == null
-      ? conversationRef.conversationId
-      : undefined);
-
   return {
     ok: true,
     binding: {
@@ -654,7 +648,9 @@ function prepareAcpThreadBinding(params: {
       accountId: policy.accountId,
       placement: placementToUse,
       conversationId: conversationRef.conversationId,
-      ...(parentConversationId ? { parentConversationId } : {}),
+      ...(conversationRef.parentConversationId
+        ? { parentConversationId: conversationRef.parentConversationId }
+        : {}),
     },
   };
 }
