@@ -449,8 +449,14 @@ describe("exportTrajectoryBundle", () => {
         sourceSeq: 2,
         sessionId: "session-1",
         data: {
-          systemPrompt: "system prompt",
-          tools: [{ name: "read", parameters: { type: "object" } }],
+          systemPrompt: `system prompt for ${path.join(tmpDir, "instructions.md")}`,
+          tools: [
+            {
+              name: "read",
+              description: `Reads ${path.join(tmpDir, "docs")}`,
+              parameters: { type: "object" },
+            },
+          ],
         },
       },
       {
@@ -473,6 +479,12 @@ describe("exportTrajectoryBundle", () => {
                 filePath: path.join(tmpDir, "skills", "weather", "SKILL.md"),
               },
             ],
+          },
+          prompting: {
+            systemPromptReport: {
+              workspaceDir: tmpDir,
+              injectedWorkspaceFiles: [{ path: path.join(tmpDir, "AGENTS.md") }],
+            },
           },
         },
       },
@@ -503,6 +515,7 @@ describe("exportTrajectoryBundle", () => {
         data: {
           finalStatus: "success",
           assistantTexts: ["done"],
+          finalPromptText: `final prompt from ${path.join(tmpDir, "prompt.txt")}`,
           itemLifecycle: {
             startedCount: 1,
             completedCount: 1,
@@ -578,5 +591,14 @@ describe("exportTrajectoryBundle", () => {
       id: "weather",
       invoked: true,
     });
+    const prompts = fs.readFileSync(path.join(outputDir, "prompts.json"), "utf8");
+    const artifacts = fs.readFileSync(path.join(outputDir, "artifacts.json"), "utf8");
+    const systemPrompt = fs.readFileSync(path.join(outputDir, "system-prompt.txt"), "utf8");
+    const tools = fs.readFileSync(path.join(outputDir, "tools.json"), "utf8");
+    expect(prompts).toContain("$WORKSPACE_DIR/AGENTS.md");
+    expect(artifacts).toContain("$WORKSPACE_DIR/prompt.txt");
+    expect(systemPrompt).toContain("$WORKSPACE_DIR/instructions.md");
+    expect(tools).toContain("$WORKSPACE_DIR/docs");
+    expect(`${prompts}\n${artifacts}\n${systemPrompt}\n${tools}`).not.toContain(tmpDir);
   });
 });

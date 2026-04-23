@@ -822,11 +822,15 @@ export function exportTrajectoryBundle(params: BuildTrajectoryBundleParams): {
     supplementalFiles.push("metadata.json");
   }
   if (artifactsCapture) {
-    files.push(jsonSupportBundleFile("artifacts.json", artifactsCapture));
+    files.push(
+      jsonSupportBundleFile("artifacts.json", redactLocalPathValues(artifactsCapture, redaction)),
+    );
     supplementalFiles.push("artifacts.json");
   }
   if (promptsCapture) {
-    files.push(jsonSupportBundleFile("prompts.json", promptsCapture));
+    files.push(
+      jsonSupportBundleFile("prompts.json", redactLocalPathValues(promptsCapture, redaction)),
+    );
     supplementalFiles.push("prompts.json");
   }
   if (supplementalFiles.length > 0) {
@@ -848,10 +852,20 @@ export function exportTrajectoryBundle(params: BuildTrajectoryBundleParams): {
     ),
   );
   if (bundleRuntimeContext.systemPrompt) {
-    files.push(textSupportBundleFile("system-prompt.txt", bundleRuntimeContext.systemPrompt));
+    files.push(
+      textSupportBundleFile(
+        "system-prompt.txt",
+        redactLocalPathValues(bundleRuntimeContext.systemPrompt, redaction) as string,
+      ),
+    );
   }
   if (bundleRuntimeContext.tools) {
-    files.push(jsonSupportBundleFile("tools.json", bundleRuntimeContext.tools));
+    files.push(
+      jsonSupportBundleFile(
+        "tools.json",
+        redactLocalPathValues(bundleRuntimeContext.tools, redaction),
+      ),
+    );
   }
 
   const contents: DiagnosticSupportBundleContent[] = [...supportBundleContents(files)];
