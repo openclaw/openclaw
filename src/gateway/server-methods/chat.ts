@@ -1476,6 +1476,9 @@ async function buildAssistantDisplayContentFromReplyPayloads(params: {
     } else if (typeof payload.text === "string" && payload.text.trim().length > 0) {
       strippedTextPayloadCount += 1;
     }
+    if (params.includeSensitiveMedia === false && payload.sensitiveMedia === true) {
+      continue;
+    }
     const audioBlocks = await buildWebchatAudioContentBlocksFromReplyPayloads([payload], {
       localRoots: Array.isArray(params.managedImageLocalRoots)
         ? params.managedImageLocalRoots
@@ -1486,9 +1489,6 @@ async function buildAssistantDisplayContentFromReplyPayloads(params: {
     });
     if (audioBlocks.length > 0) {
       content.push(...audioBlocks);
-    }
-    if (params.includeSensitiveMedia === false && payload.sensitiveMedia === true) {
-      continue;
     }
     const mediaUrls = Array.from(
       new Set([

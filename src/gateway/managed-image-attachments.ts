@@ -135,10 +135,6 @@ function isManagedImageAttachmentSafeError(error: unknown): error is Error {
   );
 }
 
-function throwSanitizedManagedImageAttachmentError(error: unknown, alt: string): never {
-  throw getSanitizedManagedImageAttachmentError(error, alt);
-}
-
 function getSanitizedManagedImageAttachmentError(error: unknown, alt: string): Error {
   if (isManagedImageAttachmentSafeError(error)) {
     return error;

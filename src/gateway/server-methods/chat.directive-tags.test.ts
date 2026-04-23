@@ -23,6 +23,8 @@ const mockState = vi.hoisted(() => ({
   finalPayload: null as {
     text?: string;
     mediaUrl?: string;
+    mediaUrls?: string[];
+    trustedLocalMedia?: boolean;
     sensitiveMedia?: boolean;
     replyToId?: string;
     replyToCurrent?: boolean;
@@ -33,6 +35,7 @@ const mockState = vi.hoisted(() => ({
       text?: string;
       mediaUrl?: string;
       mediaUrls?: string[];
+      sensitiveMedia?: boolean;
       trustedLocalMedia?: boolean;
       replyToId?: string;
       replyToCurrent?: boolean;
@@ -110,6 +113,8 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
         sendFinalReply: (payload: {
           text?: string;
           mediaUrl?: string;
+          mediaUrls?: string[];
+          trustedLocalMedia?: boolean;
           sensitiveMedia?: boolean;
           replyToId?: string;
           replyToCurrent?: boolean;
@@ -118,6 +123,7 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
           text?: string;
           mediaUrl?: string;
           mediaUrls?: string[];
+          sensitiveMedia?: boolean;
           trustedLocalMedia?: boolean;
           replyToId?: string;
           replyToCurrent?: boolean;
@@ -126,6 +132,7 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
           text?: string;
           mediaUrl?: string;
           mediaUrls?: string[];
+          sensitiveMedia?: boolean;
           trustedLocalMedia?: boolean;
           replyToId?: string;
           replyToCurrent?: boolean;
@@ -2153,6 +2160,57 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
     expect(JSON.stringify(transcriptUpdate)).not.toContain("/api/chat/media/outgoing/");
     expect(JSON.stringify(transcriptUpdate)).not.toContain(TEST_PNG_DATA_URL);
+  });
+
+  it("does not persist sensitive audio media into transcript updates", async () => {
+    createTranscriptFixture("openclaw-chat-send-sensitive-audio-final-");
+    const transcriptDir = path.dirname(mockState.transcriptPath);
+    const audioPath = path.join(transcriptDir, "reply.mp3");
+    fs.writeFileSync(audioPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+    mockState.finalPayload = {
+      text: "Here is the secure voice reply.",
+      mediaUrl: audioPath,
+      mediaUrls: [audioPath],
+      sensitiveMedia: true,
+      trustedLocalMedia: true,
+    };
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    const payload = await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-sensitive-audio-final",
+    });
+
+    const content = extractContentBlocks(payload);
+    expect(content[0]).toEqual({
+      type: "text",
+      text: "Here is the secure voice reply.",
+    });
+    expect(content[1]).toEqual(
+      expect.objectContaining({
+        type: "audio",
+        source: expect.objectContaining({
+          type: "base64",
+          media_type: "audio/mpeg",
+        }),
+      }),
+    );
+    const transcriptUpdate = mockState.emittedTranscriptUpdates.find(
+      (update) =>
+        typeof update.message === "object" &&
+        update.message !== null &&
+        (update.message as { role?: unknown }).role === "assistant",
+    );
+    expect(transcriptUpdate).toMatchObject({
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Here is the secure voice reply." }],
+      },
+    });
+    expect(JSON.stringify(transcriptUpdate)).not.toContain('"type":"audio"');
+    expect(JSON.stringify(transcriptUpdate)).not.toContain("audio/mpeg");
   });
 
   it("sanitizes malformed replyToId values so control tags do not leak into transcript or broadcast", async () => {
