@@ -206,7 +206,7 @@ export async function processDiscordMessage(
     return;
   }
 
-  persistDiscordPrompt(text);
+
   
   const ssrfPolicy = cfg.browser?.ssrfPolicy;
   const mediaResolveOptions = {
@@ -234,6 +234,8 @@ export async function processDiscordMessage(
     logVerbose("discord: drop message " + message.id + " (empty content)");
     return;
   }
+  
+  persistDiscordPrompt(text);
 
   const boundThreadId = ctx.threadBinding?.conversation?.conversationId?.trim();
   if (boundThreadId && typeof threadBindings.touchThread === "function") {
