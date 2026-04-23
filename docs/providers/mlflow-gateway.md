@@ -91,6 +91,25 @@ configured through the MLflow UI.
   </Step>
 </Steps>
 
+## Provider passthrough
+
+MLflow AI Gateway exposes **provider-specific passthrough endpoints** in
+addition to its unified API. The path you use depends on the SDK/format your
+client speaks:
+
+| Path                                    | Format                     | Used by              |
+| --------------------------------------- | -------------------------- | -------------------- |
+| `/gateway/mlflow/v1/chat/completions`   | MLflow unified (OpenAI-compatible) | Any OpenAI SDK client |
+| `/gateway/openai/v1/chat/completions`   | OpenAI passthrough         | OpenAI SDK (native)  |
+| `/gateway/anthropic/v1/messages`        | Anthropic passthrough      | Anthropic SDK        |
+| `/gateway/gemini/v1beta/models/...`     | Gemini passthrough         | Google GenAI SDK     |
+
+Since OpenClaw uses the OpenAI provider format, either
+`/gateway/openai/v1` or `/gateway/mlflow/v1` works — use
+`/gateway/openai/v1` for the OpenAI-native passthrough path shown above, or
+`/gateway/mlflow/v1` for the unified MLflow format. Both accept the same
+OpenAI-compatible request body.
+
 ## Why use MLflow Gateway?
 
 - **Multi-provider routing** — switch LLM providers by reconfiguring the gateway
