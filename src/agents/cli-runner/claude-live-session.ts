@@ -53,7 +53,25 @@ type ClaudeLiveRunResult = {
 
 const CLAUDE_LIVE_IDLE_TIMEOUT_MS = 10 * 60 * 1_000;
 const CLAUDE_LIVE_MAX_SESSIONS = 16;
-const CLAUDE_LIVE_MAX_STDOUT_BUFFER_CHARS = 256 * 1024;
+
+// Extended-thinking turns on Opus 4.7 (high/xhigh/max) can emit single
+// stream-json lines well above the prior 256KB default, so allow operators
+// to raise the ceiling via OPENCLAW_CLAUDE_CLI_MAX_STDOUT_BYTES. Negative
+// or non-numeric values fall back to the default.
+const CLAUDE_LIVE_DEFAULT_MAX_STDOUT_BUFFER_CHARS = 256 * 1024;
+const CLAUDE_LIVE_MAX_STDOUT_BUFFER_CHARS = resolveClaudeLiveMaxStdoutBufferChars();
+
+function resolveClaudeLiveMaxStdoutBufferChars(): number {
+  const raw = process.env.OPENCLAW_CLAUDE_CLI_MAX_STDOUT_BYTES;
+  if (raw === undefined || raw === "") {
+    return CLAUDE_LIVE_DEFAULT_MAX_STDOUT_BUFFER_CHARS;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return CLAUDE_LIVE_DEFAULT_MAX_STDOUT_BUFFER_CHARS;
+  }
+  return parsed;
+}
 const CLAUDE_LIVE_MAX_STDERR_CHARS = 64 * 1024;
 const CLAUDE_LIVE_MAX_TURN_RAW_CHARS = 2 * 1024 * 1024;
 const CLAUDE_LIVE_MAX_TURN_LINES = 5_000;
@@ -419,7 +437,10 @@ function parseClaudeLiveJsonLine(
     closeLiveSession(
       session,
       "abort",
-      createOutputLimitError(session, "Claude CLI JSONL line exceeded output limit."),
+      createOutputLimitError(
+        session,
+        `Claude CLI JSONL line exceeded output limit (${trimmed.length} > ${CLAUDE_LIVE_MAX_STDOUT_BUFFER_CHARS} chars; raise OPENCLAW_CLAUDE_CLI_MAX_STDOUT_BYTES to adjust).`,
+      ),
     );
     return null;
   }
@@ -517,7 +538,10 @@ function handleClaudeStdout(session: ClaudeLiveSession, chunk: string) {
     closeLiveSession(
       session,
       "abort",
-      createOutputLimitError(session, "Claude CLI stdout buffer exceeded limit."),
+      createOutputLimitError(
+        session,
+        `Claude CLI stdout buffer exceeded limit (${session.stdoutBuffer.length} > ${CLAUDE_LIVE_MAX_STDOUT_BUFFER_CHARS} chars; raise OPENCLAW_CLAUDE_CLI_MAX_STDOUT_BYTES to adjust).`,
+      ),
     );
     return;
   }
