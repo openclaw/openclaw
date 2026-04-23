@@ -372,10 +372,9 @@ export async function sendVoice(
             msgId: ctx.replyToId,
           });
           return { channel: "qqbot", messageId: r.id, timestamp: r.timestamp };
-        } else {
-          debugLog(`sendVoice: voice not supported in channel`);
-          return { channel: "qqbot", error: "Voice not supported in channel" };
         }
+        debugLog(`sendVoice: voice not supported in channel`);
+        return { channel: "qqbot", error: "Voice not supported in channel" };
       } catch (err) {
         const msg = formatErrorMessage(err);
         debugWarn(
@@ -457,10 +456,9 @@ async function sendVoiceFromLocal(
         localPathForMeta: safeMediaPath,
       });
       return { channel: "qqbot", messageId: r.id, timestamp: r.timestamp };
-    } else {
-      debugLog(`sendVoice: voice not supported in channel`);
-      return { channel: "qqbot", error: "Voice not supported in channel" };
     }
+    debugLog(`sendVoice: voice not supported in channel`);
+    return { channel: "qqbot", error: "Voice not supported in channel" };
   } catch (err) {
     if (err instanceof UploadDailyLimitExceededError) {
       debugError(`sendVoice (local): daily upload quota exceeded`);
@@ -506,10 +504,9 @@ export async function sendVideoMsg(
           msgId: ctx.replyToId,
         });
         return { channel: "qqbot", messageId: r.id, timestamp: r.timestamp };
-      } else {
-        debugLog(`sendVideoMsg: video not supported in channel`);
-        return { channel: "qqbot", error: "Video not supported in channel" };
       }
+      debugLog(`sendVideoMsg: video not supported in channel`);
+      return { channel: "qqbot", error: "Video not supported in channel" };
     }
 
     return await sendVideoFromLocal(ctx, mediaPath);
@@ -559,10 +556,9 @@ async function sendVideoFromLocal(
         localPathForMeta: mediaPath,
       });
       return { channel: "qqbot", messageId: r.id, timestamp: r.timestamp };
-    } else {
-      debugLog(`sendVideoMsg: video not supported in channel`);
-      return { channel: "qqbot", error: "Video not supported in channel" };
     }
+    debugLog(`sendVideoMsg: video not supported in channel`);
+    return { channel: "qqbot", error: "Video not supported in channel" };
   } catch (err) {
     if (err instanceof UploadDailyLimitExceededError) {
       debugError(`sendVideoMsg (local): daily upload quota exceeded`);
@@ -616,10 +612,9 @@ export async function sendDocument(
           fileName,
         });
         return { channel: "qqbot", messageId: r.id, timestamp: r.timestamp };
-      } else {
-        debugLog(`sendDocument: file not supported in channel`);
-        return { channel: "qqbot", error: "File not supported in channel" };
       }
+      debugLog(`sendDocument: file not supported in channel`);
+      return { channel: "qqbot", error: "File not supported in channel" };
     }
 
     return await sendDocumentFromLocal(ctx, mediaPath);
@@ -675,10 +670,9 @@ async function sendDocumentFromLocal(
         localPathForMeta: mediaPath,
       });
       return { channel: "qqbot", messageId: r.id, timestamp: r.timestamp };
-    } else {
-      debugLog(`sendDocument: file not supported in channel`);
-      return { channel: "qqbot", error: "File not supported in channel" };
     }
+    debugLog(`sendDocument: file not supported in channel`);
+    return { channel: "qqbot", error: "File not supported in channel" };
   } catch (err) {
     if (err instanceof UploadDailyLimitExceededError) {
       debugError(`sendDocument (local): daily upload quota exceeded`);

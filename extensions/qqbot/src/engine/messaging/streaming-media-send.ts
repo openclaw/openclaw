@@ -92,7 +92,7 @@ export function fixPathEncoding(
 
       // Step 1: 将八进制转义转换为字节
       let decoded = result.replace(/\\([0-7]{1,3})/g, (_: string, octal: string) =>
-        String.fromCharCode(parseInt(octal, 8)),
+        String.fromCharCode(Number.parseInt(octal, 8)),
       );
 
       // Step 2: 提取所有字节（包括 Latin-1 字符）

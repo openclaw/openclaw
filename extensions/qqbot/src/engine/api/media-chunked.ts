@@ -581,7 +581,7 @@ async function putToPresignedUrl(
         );
       }
       if (attempt < PART_UPLOAD_MAX_RETRIES) {
-        const delay = 1000 * Math.pow(2, attempt);
+        const delay = 1000 * 2 ** attempt;
         (logger?.warn ?? logger?.error)?.(
           `${prefix} PUT part ${partIndex}/${totalParts} attempt ${attempt + 1} failed (${lastError.message.slice(0, 120)}), retrying in ${delay}ms`,
         );

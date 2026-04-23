@@ -172,7 +172,7 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
           debugLog(`[qqbot] sendText: Decoding path with mixed encoding: ${mediaPath}`);
 
           let decoded = mediaPath.replace(/\\([0-7]{1,3})/g, (_: string, octal: string) => {
-            return String.fromCharCode(parseInt(octal, 8));
+            return String.fromCharCode(Number.parseInt(octal, 8));
           });
 
           const bytes: number[] = [];
