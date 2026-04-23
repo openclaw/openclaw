@@ -855,6 +855,7 @@ export async function startGatewayServer(
     const activated = activateGatewayScheduledServices({
       minimalTestGateway,
       cfgAtStart,
+      deps,
       cron: runtimeState.cronState.cron,
       logCron,
       log,
