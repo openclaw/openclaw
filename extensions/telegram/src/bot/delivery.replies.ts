@@ -9,21 +9,16 @@ import {
   toPluginMessageContext,
   toPluginMessageSentEvent,
 } from "openclaw/plugin-sdk/hook-runtime";
-import type { ReplyPayloadDelivery } from "openclaw/plugin-sdk/interactive-runtime";
 import { buildOutboundMediaLoadOptions } from "openclaw/plugin-sdk/media-runtime";
 import { isGifMedia, kindFromMime } from "openclaw/plugin-sdk/media-runtime";
-import {
-  createOutboundPayloadPlan,
-  projectOutboundPayloadPlanForDelivery,
-} from "openclaw/plugin-sdk/outbound-runtime";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { chunkMarkdownTextWithMode, type ChunkMode } from "openclaw/plugin-sdk/reply-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
+import { normalizeReplyPayloadsForDelivery } from "../../../../src/infra/outbound/payloads.js";
 import type { TelegramInlineButtons } from "../button-types.js";
 import { splitTelegramCaption } from "../caption.js";
 import {
@@ -47,11 +42,10 @@ import {
   type DeliveryProgress as ReplyThreadDeliveryProgress,
 } from "./reply-threading.js";
 
-const VOICE_FORBIDDEN_MARKER = "VOICE_MESSAGES_FORBIDDEN";
+const VOICE_FORBIDDEN_RE = /VOICE_MESSAGES_FORBIDDEN/;
 const CAPTION_TOO_LONG_RE = /caption is too long/i;
 const GrammyErrorCtor: typeof GrammyError | undefined =
   typeof GrammyError === "function" ? GrammyError : undefined;
-const silentReplyLogger = createSubsystemLogger("telegram/silent-reply");
 
 type DeliveryProgress = ReplyThreadDeliveryProgress & {
   deliveredCount: number;
@@ -193,9 +187,9 @@ async function sendPendingFollowUpText(params: {
 
 function isVoiceMessagesForbidden(err: unknown): boolean {
   if (GrammyErrorCtor && err instanceof GrammyErrorCtor) {
-    return err.description.includes(VOICE_FORBIDDEN_MARKER);
+    return err.description.includes("VOICE_MESSAGES_FORBIDDEN");
   }
-  return formatErrorMessage(err).includes(VOICE_FORBIDDEN_MARKER);
+  return VOICE_FORBIDDEN_RE.test(formatErrorMessage(err));
 }
 
 function isCaptionTooLong(err: unknown): boolean {
@@ -488,20 +482,18 @@ async function deliverMediaReply(params: {
 }
 
 async function maybePinFirstDeliveredMessage(params: {
-  pin: ReplyPayloadDelivery["pin"];
+  shouldPin: boolean;
   bot: Bot;
   chatId: string;
   runtime: RuntimeEnv;
   firstDeliveredMessageId?: number;
 }): Promise<void> {
-  const shouldPin = params.pin === true || (typeof params.pin === "object" && params.pin.enabled);
-  if (!shouldPin || typeof params.firstDeliveredMessageId !== "number") {
+  if (!params.shouldPin || typeof params.firstDeliveredMessageId !== "number") {
     return;
   }
-  const notify = typeof params.pin === "object" && params.pin.notify === true;
   try {
     await params.bot.api.pinChatMessage(params.chatId, params.firstDeliveredMessageId, {
-      disable_notification: !notify,
+      disable_notification: true,
     });
   } catch (err) {
     logVerbose(
@@ -590,18 +582,17 @@ export function emitTelegramMessageSentHooks(params: EmitMessageSentHookParams):
 
 export async function deliverReplies(params: {
   replies: ReplyPayload[];
-  cfg?: import("openclaw/plugin-sdk/config-runtime").OpenClawConfig;
+  currentMessageId?: string;
   chatId: string;
   accountId?: string;
   sessionKeyForInternalHooks?: string;
-  policySessionKey?: string;
   mirrorIsGroup?: boolean;
   mirrorGroupId?: string;
   token: string;
   runtime: RuntimeEnv;
   bot: Bot;
   mediaLocalRoots?: readonly string[];
-  replyToMode: ReplyToMode;
+  replyToMode?: ReplyToMode;
   textLimit: number;
   thread?: TelegramThreadSpec | null;
   tableMode?: MarkdownTableMode;
@@ -626,39 +617,16 @@ export async function deliverReplies(params: {
   const hookRunner = getGlobalHookRunner();
   const hasMessageSendingHooks = hookRunner?.hasHooks("message_sending") ?? false;
   const hasMessageSentHooks = hookRunner?.hasHooks("message_sent") ?? false;
+  const effectiveReplyToMode =
+    params.replyToMode ?? (params.thread?.scope === "dm" ? "off" : "all");
   const chunkText = buildChunkTextResolver({
     textLimit: params.textLimit,
     chunkMode: params.chunkMode ?? "length",
     tableMode: params.tableMode,
   });
-  const candidateReplies: ReplyPayload[] = [];
-  for (const reply of params.replies) {
-    if (!reply || typeof reply !== "object") {
-      params.runtime.error?.(danger("reply missing text/media"));
-      continue;
-    }
-    candidateReplies.push(reply);
-  }
-  const normalizedReplies = projectOutboundPayloadPlanForDelivery(
-    createOutboundPayloadPlan(candidateReplies, {
-      cfg: params.cfg,
-      sessionKey: params.policySessionKey ?? params.sessionKeyForInternalHooks,
-      surface: "telegram",
-    }),
-  );
-  const originalExactSilentCount = candidateReplies.filter(
-    (reply) => typeof reply.text === "string" && reply.text.trim().toUpperCase() === "NO_REPLY",
-  ).length;
-  if (originalExactSilentCount > 0) {
-    silentReplyLogger.debug("telegram delivery normalized NO_REPLY candidates", {
-      hasSessionKey: Boolean(params.sessionKeyForInternalHooks),
-      hasChatId: params.chatId.length > 0,
-      originalCount: candidateReplies.length,
-      normalizedCount: normalizedReplies.length,
-      originalExactSilentCount,
-    });
-  }
-  for (const originalReply of normalizedReplies) {
+  for (const originalReply of normalizeReplyPayloadsForDelivery(params.replies, {
+    currentMessageId: params.currentMessageId,
+  })) {
     let reply = originalReply;
     const mediaList = reply?.mediaUrls?.length
       ? reply.mediaUrls
@@ -676,15 +644,11 @@ export async function deliverReplies(params: {
     }
 
     const rawContent = reply.text || "";
-    const replyToId =
-      params.replyToMode === "off" ? undefined : resolveTelegramReplyId(reply.replyToId);
     if (hasMessageSendingHooks) {
       const hookResult = await hookRunner?.runMessageSending(
         {
           to: params.chatId,
           content: rawContent,
-          replyToId,
-          threadId: params.thread?.id,
           metadata: {
             channel: "telegram",
             mediaUrls: mediaList,
@@ -709,7 +673,13 @@ export async function deliverReplies(params: {
 
     try {
       const deliveredCountBeforeReply = progress.deliveredCount;
+      const explicitReplyOverride = Boolean(reply.replyToTag) || Boolean(reply.replyToCurrent);
+      const replyToId =
+        effectiveReplyToMode === "off" && !explicitReplyOverride
+          ? undefined
+          : resolveTelegramReplyId(reply.replyToId);
       const telegramData = reply.channelData?.telegram as TelegramReplyChannelData | undefined;
+      const shouldPinFirstMessage = telegramData?.pin === true;
       const replyMarkup = buildInlineKeyboard(telegramData?.buttons);
       let firstDeliveredMessageId: number | undefined;
       if (mediaList.length === 0) {
@@ -725,7 +695,7 @@ export async function deliverReplies(params: {
           linkPreview: params.linkPreview,
           silent: params.silent,
           replyToId,
-          replyToMode: params.replyToMode,
+          replyToMode: effectiveReplyToMode,
           progress,
         });
       } else {
@@ -746,12 +716,12 @@ export async function deliverReplies(params: {
           replyQuoteText: params.replyQuoteText,
           replyMarkup,
           replyToId,
-          replyToMode: params.replyToMode,
+          replyToMode: effectiveReplyToMode,
           progress,
         });
       }
       await maybePinFirstDeliveredMessage({
-        pin: reply.delivery?.pin,
+        shouldPin: shouldPinFirstMessage,
         bot: params.bot,
         chatId: params.chatId,
         runtime: params.runtime,

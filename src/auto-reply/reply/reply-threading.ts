@@ -1,4 +1,3 @@
-import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelThreadingAdapter } from "../../channels/plugins/types.core.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
 import type { ReplyToMode } from "../../config/types.js";
@@ -30,13 +29,21 @@ export function resolveConfiguredReplyToMode(
   chatType?: string | null,
 ): ReplyToMode {
   const provider = normalizeAnyChannelId(channel) ?? normalizeOptionalLowercaseString(channel);
+  const normalizedChatType = normalizeReplyToModeChatType(chatType);
+  const defaultMode: ReplyToMode =
+    normalizedChatType == null
+      ? "all"
+      : provider === "telegram"
+        ? normalizedChatType !== "direct"
+          ? "all"
+          : "off"
+        : "all";
   if (!provider) {
-    return "all";
+    return defaultMode;
   }
   const channelConfig = (cfg.channels as Record<string, ReplyToModeChannelConfig> | undefined)?.[
     provider
   ];
-  const normalizedChatType = normalizeReplyToModeChatType(chatType);
   if (normalizedChatType) {
     const scopedMode = channelConfig?.replyToModeByChatType?.[normalizedChatType];
     if (scopedMode !== undefined) {
@@ -49,7 +56,7 @@ export function resolveConfiguredReplyToMode(
       return legacyDirectMode;
     }
   }
-  return channelConfig?.replyToMode ?? "all";
+  return channelConfig?.replyToMode ?? defaultMode;
 }
 
 export function resolveReplyToModeWithThreading(
@@ -75,24 +82,15 @@ export function resolveReplyToMode(
   accountId?: string | null,
   chatType?: string | null,
 ): ReplyToMode {
-  const normalizedAccountId = normalizeOptionalLowercaseString(accountId);
-  if (!normalizedAccountId) {
-    return resolveConfiguredReplyToMode(cfg, channel, chatType);
-  }
-  const provider = normalizeAnyChannelId(channel) ?? normalizeOptionalLowercaseString(channel);
-  const threading = provider ? getChannelPlugin(provider)?.threading : undefined;
-  return resolveReplyToModeWithThreading(cfg, threading, {
-    channel,
-    accountId: normalizedAccountId,
-    chatType,
-  });
+  void accountId;
+  return resolveConfiguredReplyToMode(cfg, channel, chatType);
 }
 
 export function createReplyToModeFilter(
   mode: ReplyToMode,
   opts: { allowExplicitReplyTagsWhenOff?: boolean } = {},
 ) {
-  let hasThreaded = false;
+  const threadedIds = new Set<string>();
   return (payload: ReplyPayload): ReplyPayload => {
     if (!payload.replyToId) {
       return payload;
@@ -112,7 +110,7 @@ export function createReplyToModeFilter(
     if (mode === "all") {
       return payload;
     }
-    if (isSingleUseReplyToMode(mode) && hasThreaded) {
+    if (isSingleUseReplyToMode(mode) && threadedIds.has(payload.replyToId)) {
       // Compaction notices are transient status messages that should always
       // appear in-thread, even after the first assistant block has already
       // consumed the "first" slot.  Let them keep their replyToId.
@@ -126,7 +124,7 @@ export function createReplyToModeFilter(
     // "first" slot of the replyToMode=first|batched filter.  Skip advancing
     // hasThreaded so the real assistant reply still gets replyToId.
     if (isSingleUseReplyToMode(mode) && !payload.isCompactionNotice) {
-      hasThreaded = true;
+      threadedIds.add(payload.replyToId);
     }
     return payload;
   };

@@ -2,6 +2,7 @@ import type { ReplyToMode } from "openclaw/plugin-sdk/config-runtime";
 import type { TelegramAccountConfig } from "openclaw/plugin-sdk/config-runtime";
 import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { resolveTelegramReplyToMode } from "./accounts.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import {
   buildTelegramMessageContext,
@@ -47,7 +48,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
     loadFreshConfig,
     sendChatActionHandler,
     runtime,
-    replyToMode,
+    replyToMode: _replyToMode,
     streamMode,
     textLimit,
     telegramDeps,
@@ -108,12 +109,17 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
       );
     }
     try {
+      const effectiveReplyToMode = resolveTelegramReplyToMode(
+        cfg,
+        context.route?.accountId,
+        context.msg.chat.type === "channel" ? "channel" : context.isGroup ? "group" : "direct",
+      );
       await dispatchTelegramMessage({
         context,
         bot,
         cfg,
         runtime,
-        replyToMode,
+        replyToMode: effectiveReplyToMode,
         streamMode,
         textLimit,
         telegramCfg,
