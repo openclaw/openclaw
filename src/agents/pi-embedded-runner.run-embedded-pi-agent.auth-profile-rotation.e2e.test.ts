@@ -381,6 +381,21 @@ const writeCopilotAuthStore = async (agentDir: string, token = "gh-token") => {
   await fs.writeFile(authPath, JSON.stringify(payload));
 };
 
+const writeOpenAiCodexAuthStore = async (agentDir: string) => {
+  const authPath = path.join(agentDir, "auth-profiles.json");
+  const payload = {
+    version: 1,
+    profiles: {
+      "openai-codex:work": {
+        type: "api_key",
+        provider: "openai-codex",
+        key: "sk-codex",
+      },
+    },
+  };
+  await fs.writeFile(authPath, JSON.stringify(payload));
+};
+
 const buildCopilotAssistant = (overrides: Partial<AssistantMessage> = {}) =>
   buildAssistant({ provider: "github-copilot", model: copilotModelId, ...overrides });
 
@@ -1096,6 +1111,36 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
       expect(usageStats["openai:p1"]?.lastUsed).toBe(1);
       expect(typeof usageStats["openai:p2"]?.lastUsed).toBe("number");
       expect(usageStats["openai:p2"]?.lastUsed).not.toBe(2);
+    });
+  });
+
+  it("preserves user-pinned auth profiles across provider aliases", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      await writeOpenAiCodexAuthStore(agentDir);
+      mockSingleSuccessfulAttempt();
+
+      await runEmbeddedPiAgentInline({
+        sessionId: "session:test",
+        sessionKey: "agent:test:user-auth-alias",
+        sessionFile: path.join(workspaceDir, "session.jsonl"),
+        workspaceDir,
+        agentDir,
+        config: makeConfig(),
+        prompt: "hello",
+        provider: "codex-cli",
+        model: "gpt-5.4",
+        authProfileId: "openai-codex:work",
+        authProfileIdSource: "user",
+        timeoutMs: 5_000,
+        runId: "run:user-auth-alias",
+      });
+
+      expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
+      expect(runEmbeddedAttemptMock.mock.calls[0]?.[0]).toMatchObject({
+        authProfileId: "openai-codex:work",
+        authProfileIdSource: "user",
+        provider: "codex-cli",
+      });
     });
   });
 
