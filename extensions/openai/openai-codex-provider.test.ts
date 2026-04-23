@@ -110,6 +110,21 @@ describe("openai codex provider", () => {
     });
   });
 
+  it("exposes grouped model/auth picker labels for Codex auth methods", () => {
+    const provider = buildOpenAICodexProviderPlugin();
+    const oauth = provider.auth?.find((method) => method.id === "oauth");
+    const deviceCode = provider.auth?.find((method) => method.id === "device-code");
+
+    expect(oauth?.wizard).toMatchObject({
+      choiceLabel: "OpenAI Codex Browser Login",
+      groupHint: "API key or Codex sign-in",
+    });
+    expect(deviceCode?.wizard).toMatchObject({
+      choiceLabel: "OpenAI Codex Device Pairing",
+      groupHint: "API key or Codex sign-in",
+    });
+  });
+
   it("returns deprecated-profile doctor guidance for legacy Codex CLI ids", () => {
     const provider = buildOpenAICodexProviderPlugin();
 
@@ -123,6 +138,17 @@ describe("openai codex provider", () => {
     ).toBe(
       "Deprecated profile. Run `openclaw models auth login --provider openai-codex` or `openclaw configure`.",
     );
+  });
+
+  it("declares the legacy default OAuth profile repair", () => {
+    const provider = buildOpenAICodexProviderPlugin();
+
+    expect(provider.oauthProfileIdRepairs).toEqual([
+      {
+        legacyProfileId: "openai-codex:default",
+        promptLabel: "OpenAI Codex",
+      },
+    ]);
   });
 
   it("offers OpenAI menu auth methods for browser login and device pairing", () => {

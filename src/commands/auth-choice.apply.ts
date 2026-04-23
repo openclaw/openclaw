@@ -58,7 +58,7 @@ async function formatDeprecatedProviderChoiceError(
   if (!deprecatedChoice) {
     return undefined;
   }
-  return `Auth choice "${authChoice}" is no longer supported. Use "${deprecatedChoice.choiceId}" instead.`;
+  return `Auth choice ${JSON.stringify(authChoice)} is no longer supported. Use ${JSON.stringify(deprecatedChoice.choiceId)} instead.`;
 }
 
 export async function applyAuthChoice(

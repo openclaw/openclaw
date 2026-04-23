@@ -30,7 +30,6 @@ describe("QA provider image generation config", () => {
       "qa-channel",
     ]);
   });
-
   it("uses the selected mock provider for AIMock image generation", () => {
     const patch = buildQaImageGenerationConfigPatch({
       providerMode: "aimock",

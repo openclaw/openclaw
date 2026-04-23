@@ -3,7 +3,6 @@ import { SessionManager } from "@mariozechner/pi-coding-agent";
 import {
   buildEmbeddedAttemptToolRunContext,
   clearActiveEmbeddedRun,
-  createOpenClawCodingTools,
   embeddedAgentLog,
   formatErrorMessage,
   isSubagentSessionKey,
@@ -22,7 +21,7 @@ import {
   supportsModelTools,
   type EmbeddedRunAttemptParams,
   type EmbeddedRunAttemptResult,
-} from "openclaw/plugin-sdk/agent-harness";
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
 import {
   createCodexAppServerClientFactoryTestHooks,
@@ -295,11 +294,21 @@ export async function runCodexAppServerAttempt(
   }
   turnId = turn.turn.id;
   projector = new CodexAppServerEventProjector(params, thread.threadId, turnId);
+  const activeTurnId = turnId;
+  const activeProjector = projector;
   for (const notification of pendingNotifications.splice(0)) {
     await enqueueNotification(notification);
   }
-  const activeTurnId = turnId;
-  const activeProjector = projector;
+  if (!completed && isTerminalTurnStatus(turn.turn.status)) {
+    await enqueueNotification({
+      method: "turn/completed",
+      params: {
+        threadId: thread.threadId,
+        turnId: activeTurnId,
+        turn: turn.turn as unknown as JsonObject,
+      },
+    });
+  }
 
   const handle = {
     kind: "embedded" as const,
@@ -422,6 +431,7 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
   }
   const modelHasVision = params.model.input?.includes("image") ?? false;
   const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
+  const { createOpenClawCodingTools } = await import("openclaw/plugin-sdk/agent-harness");
   const allTools = createOpenClawCodingTools({
     agentId: input.sessionAgentId,
     ...buildEmbeddedAttemptToolRunContext(params),
@@ -581,7 +591,20 @@ function isTurnNotification(
   if (!isJsonObject(value)) {
     return false;
   }
-  return readString(value, "threadId") === threadId && readString(value, "turnId") === turnId;
+  return readString(value, "threadId") === threadId && readNotificationTurnId(value) === turnId;
+}
+
+function isTerminalTurnStatus(status: string | undefined): boolean {
+  return status === "completed" || status === "interrupted" || status === "failed";
+}
+
+function readNotificationTurnId(record: JsonObject): string | undefined {
+  return readString(record, "turnId") ?? readNestedTurnId(record);
+}
+
+function readNestedTurnId(record: JsonObject): string | undefined {
+  const turn = record.turn;
+  return isJsonObject(turn) ? readString(turn, "id") : undefined;
 }
 
 function readString(record: JsonObject, key: string): string | undefined {

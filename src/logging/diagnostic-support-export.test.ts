@@ -522,7 +522,7 @@ describe("diagnostic support export", () => {
     >;
 
     expect(Object.getPrototypeOf(snapshot)).toBe(null);
-    expect(snapshot.__proto__).toBeUndefined();
+    expect(Object.hasOwn(snapshot, "__proto__")).toBe(false);
     expect(snapshot.constructor).toBeUndefined();
     expect(snapshot.prototype).toBeUndefined();
     expect(snapshot.field0000).toBe(0);

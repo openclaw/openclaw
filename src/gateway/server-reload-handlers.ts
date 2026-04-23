@@ -278,15 +278,14 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         },
       });
       return true;
-    } else {
-      // No active operations or pending replies, restart immediately
-      params.logReload.warn(`config change requires gateway restart (${reasons})`);
-      const emitted = emitGatewayRestart();
-      if (!emitted) {
-        params.logReload.info("gateway restart already scheduled; skipping duplicate signal");
-      }
-      return true;
     }
+    // No active operations or pending replies, restart immediately
+    params.logReload.warn(`config change requires gateway restart (${reasons})`);
+    const emitted = emitGatewayRestart();
+    if (!emitted) {
+      params.logReload.info("gateway restart already scheduled; skipping duplicate signal");
+    }
+    return true;
   };
 
   return { applyHotReload, requestGatewayRestart };

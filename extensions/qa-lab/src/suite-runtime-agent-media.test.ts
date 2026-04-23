@@ -108,7 +108,6 @@ describe("qa suite runtime agent media helpers", () => {
     expect(waitForGatewayHealthyMock).toHaveBeenCalled();
     expect(waitForTransportReadyMock).toHaveBeenCalledWith(expect.anything(), 60_000);
   });
-
   it("preserves plugins already allowed by the gateway when configuring media", async () => {
     readConfigSnapshotMock.mockResolvedValue({
       hash: "hash",

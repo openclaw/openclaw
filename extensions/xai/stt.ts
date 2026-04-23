@@ -5,6 +5,7 @@ import type {
 } from "openclaw/plugin-sdk/media-understanding";
 import {
   assertOkOrThrowHttpError,
+  buildAudioTranscriptionFormData,
   postTranscriptionRequest,
   resolveProviderHttpRequestConfig,
   requireTranscriptionText,
@@ -41,19 +42,17 @@ export async function transcribeXaiAudio(
       transport: "media-understanding",
     });
 
-  const form = new FormData();
-  const blob = new Blob([new Uint8Array(params.buffer)], {
-    type: params.mime ?? "application/octet-stream",
-  });
-  form.append("file", blob, params.fileName || "audio");
   const model = normalizeOptionalString(params.model);
-  if (model) {
-    form.append("model", model);
-  }
   const language = normalizeOptionalString(params.language);
-  if (language) {
-    form.append("language", language);
-  }
+  const form = buildAudioTranscriptionFormData({
+    buffer: params.buffer,
+    fileName: params.fileName,
+    mime: params.mime,
+    fields: {
+      model,
+      language,
+    },
+  });
 
   const { response, release } = await postTranscriptionRequest({
     url: `${baseUrl}/stt`,

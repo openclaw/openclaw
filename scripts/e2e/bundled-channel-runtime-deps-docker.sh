@@ -2,9 +2,9 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
+source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 
-IMAGE_NAME="${OPENCLAW_BUNDLED_CHANNEL_DEPS_E2E_IMAGE:-openclaw-bundled-channel-deps-e2e}"
+IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-bundled-channel-deps-e2e" OPENCLAW_BUNDLED_CHANNEL_DEPS_E2E_IMAGE)"
 UPDATE_BASELINE_VERSION="${OPENCLAW_BUNDLED_CHANNEL_UPDATE_BASELINE_VERSION:-2026.4.20}"
 DOCKER_TARGET="${OPENCLAW_BUNDLED_CHANNEL_DOCKER_TARGET:-e2e-runner}"
 HOST_BUILD="${OPENCLAW_BUNDLED_CHANNEL_HOST_BUILD:-1}"
@@ -15,12 +15,7 @@ RUN_ROOT_OWNED_SCENARIO="${OPENCLAW_BUNDLED_CHANNEL_ROOT_OWNED_SCENARIO:-1}"
 RUN_SETUP_ENTRY_SCENARIO="${OPENCLAW_BUNDLED_CHANNEL_SETUP_ENTRY_SCENARIO:-1}"
 RUN_LOAD_FAILURE_SCENARIO="${OPENCLAW_BUNDLED_CHANNEL_LOAD_FAILURE_SCENARIO:-1}"
 
-if [ "${OPENCLAW_SKIP_DOCKER_BUILD:-0}" = "1" ]; then
-  echo "Reusing Docker image: $IMAGE_NAME (OPENCLAW_SKIP_DOCKER_BUILD=1)"
-else
-  echo "Building Docker image target $DOCKER_TARGET..."
-  run_logged bundled-channel-deps-build docker build --target "$DOCKER_TARGET" -t "$IMAGE_NAME" -f "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR"
-fi
+docker_e2e_build_or_reuse "$IMAGE_NAME" bundled-channel-deps "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "$DOCKER_TARGET"
 
 prepare_package_tgz() {
   if [ -n "$PACKAGE_TGZ" ]; then

@@ -703,6 +703,35 @@ describe("runCodexAppServerAttempt", () => {
     });
   });
 
+  it("completes when turn/start returns a terminal turn without a follow-up notification", async () => {
+    const harness = createAppServerHarness(async (method) => {
+      if (method === "thread/start") {
+        return threadStartResult();
+      }
+      if (method === "turn/start") {
+        return {
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            items: [{ type: "agentMessage", id: "msg-1", text: "done from response" }],
+          },
+        };
+      }
+      return {};
+    });
+
+    const result = await runCodexAppServerAttempt(
+      createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace")),
+    );
+
+    expect(harness.requests.map((entry) => entry.method)).toContain("turn/start");
+    expect(result).toMatchObject({
+      assistantTexts: ["done from response"],
+      aborted: false,
+      timedOut: false,
+    });
+  });
+
   it("does not complete on unscoped turn/completed notifications", async () => {
     const harness = createStartedThreadHarness();
     const run = runCodexAppServerAttempt(
@@ -731,7 +760,6 @@ describe("runCodexAppServerAttempt", () => {
       method: "turn/completed",
       params: {
         threadId: "thread-1",
-        turnId: "turn-1",
         turn: {
           id: "turn-1",
           status: "completed",
@@ -788,7 +816,6 @@ describe("runCodexAppServerAttempt", () => {
       method: "turn/completed",
       params: {
         threadId: "thread-1",
-        turnId: "turn-1",
         turn: {
           id: "turn-1",
           status: "completed",

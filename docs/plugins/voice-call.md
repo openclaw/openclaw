@@ -155,7 +155,8 @@ Current runtime behavior:
 
 - `streaming.provider` is optional. If unset, Voice Call uses the first
   registered realtime transcription provider.
-- Bundled realtime transcription providers include OpenAI (`openai`) and xAI
+- Bundled realtime transcription providers include Deepgram (`deepgram`),
+  ElevenLabs (`elevenlabs`), Mistral (`mistral`), OpenAI (`openai`), and xAI
   (`xai`), registered by their provider plugins.
 - Provider-owned raw config lives under `streaming.providers.<providerId>`.
 - If `streaming.provider` points at an unregistered provider, or no realtime

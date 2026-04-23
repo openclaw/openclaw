@@ -8,7 +8,7 @@ title: "plugins"
 
 # `openclaw plugins`
 
-Manage Gateway plugins/extensions, hook packs, and compatible bundles.
+Manage Gateway plugins, hook packs, and compatible bundles.
 
 Related:
 

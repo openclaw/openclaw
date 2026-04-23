@@ -243,7 +243,7 @@ describe("handleToolExecutionEnd media emission", () => {
       toolCallId: "tc-1",
       isError: false,
       result: {
-        content: [{ type: "text", text: "Generated audio reply." }],
+        content: [{ type: "text", text: "(spoken) hello" }],
         details: {
           media: {
             mediaUrl: "/tmp/reply.opus",

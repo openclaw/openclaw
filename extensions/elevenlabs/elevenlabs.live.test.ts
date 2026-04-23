@@ -2,9 +2,8 @@ import { describe, expect, it } from "vitest";
 import { isLiveTestEnabled } from "../../src/agents/live-test-helpers.js";
 import {
   normalizeTranscriptForMatch,
-  streamAudioForLiveTest,
+  runRealtimeSttLiveTest,
   synthesizeElevenLabsLiveSpeech,
-  waitForLiveExpectation,
 } from "../../test/helpers/stt-live-audio.js";
 import { elevenLabsMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { buildElevenLabsRealtimeTranscriptionProvider } from "./realtime-transcription-provider.js";
@@ -45,10 +44,9 @@ describeLive("elevenlabs plugin live", () => {
       outputFormat: "ulaw_8000",
       timeoutMs: 30_000,
     });
-    const transcripts: string[] = [];
-    const partials: string[] = [];
-    const errors: Error[] = [];
-    const session = provider.createSession({
+
+    await runRealtimeSttLiveTest({
+      provider,
       providerConfig: {
         apiKey: ELEVENLABS_KEY,
         audioFormat: "ulaw_8000",
@@ -56,29 +54,8 @@ describeLive("elevenlabs plugin live", () => {
         commitStrategy: "vad",
         languageCode: "en",
       },
-      onPartial: (partial) => partials.push(partial),
-      onTranscript: (transcript) => transcripts.push(transcript),
-      onError: (error) => errors.push(error),
+      audio: Buffer.concat([Buffer.alloc(4000, 0xff), speech, Buffer.alloc(8000, 0xff)]),
+      closeBeforeWait: true,
     });
-
-    try {
-      await session.connect();
-      await streamAudioForLiveTest({
-        audio: Buffer.concat([Buffer.alloc(4000, 0xff), speech, Buffer.alloc(8000, 0xff)]),
-        sendAudio: (chunk) => session.sendAudio(chunk),
-      });
-      session.close();
-
-      await waitForLiveExpectation(() => {
-        if (errors[0]) {
-          throw errors[0];
-        }
-        expect(normalizeTranscriptForMatch(transcripts.join(" "))).toContain("openclaw");
-      }, 60_000);
-    } finally {
-      session.close();
-    }
-
-    expect(partials.length + transcripts.length).toBeGreaterThan(0);
   }, 90_000);
 });

@@ -124,9 +124,13 @@ function agentMessageDelta(delta: string, itemId = "msg-1"): ProjectorNotificati
 }
 
 function turnCompleted(items: unknown[] = []): ProjectorNotification {
-  return forCurrentTurn("turn/completed", {
-    turn: { id: TURN_ID, status: "completed", items },
-  });
+  return {
+    method: "turn/completed",
+    params: {
+      threadId: THREAD_ID,
+      turn: { id: TURN_ID, status: "completed", items },
+    },
+  } as ProjectorNotification;
 }
 
 describe("CodexAppServerEventProjector", () => {

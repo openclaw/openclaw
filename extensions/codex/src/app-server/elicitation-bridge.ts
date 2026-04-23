@@ -1,4 +1,7 @@
-import { embeddedAgentLog, type EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
+import {
+  embeddedAgentLog,
+  type EmbeddedRunAttemptParams,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   mapExecDecisionToOutcome,
   requestPluginApproval,

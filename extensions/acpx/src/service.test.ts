@@ -145,6 +145,37 @@ describe("createAcpxRuntimeService", () => {
     await service.stop?.(ctx);
   });
 
+  it("forwards a configured probeAgent to the runtime factory so the probe does not hardcode the default", async () => {
+    const workspaceDir = await makeTempDir();
+    const ctx = createServiceContext(workspaceDir);
+    const runtime = {
+      ensureSession: vi.fn(),
+      runTurn: vi.fn(),
+      cancel: vi.fn(),
+      close: vi.fn(),
+      probeAvailability: vi.fn(async () => {}),
+      isHealthy: vi.fn(() => true),
+      doctor: vi.fn(async () => ({ ok: true, message: "ok" })),
+    };
+    const runtimeFactory = vi.fn(() => runtime as never);
+    const service = createAcpxRuntimeService({
+      pluginConfig: { probeAgent: "opencode" },
+      runtimeFactory,
+    });
+
+    await service.start(ctx);
+
+    expect(runtimeFactory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pluginConfig: expect.objectContaining({
+          probeAgent: "opencode",
+        }),
+      }),
+    );
+
+    await service.stop?.(ctx);
+  });
+
   it("warns when legacy compatibility config is explicitly ignored", async () => {
     const workspaceDir = await makeTempDir();
     const ctx = createServiceContext(workspaceDir);

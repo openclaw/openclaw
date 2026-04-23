@@ -13,7 +13,7 @@ const DEFAULT_MAX_SDK_RETRY_WAIT_SECONDS = 60;
 function parseRetryAfterSeconds(headers: Headers): number | undefined {
   const retryAfterMs = headers.get("retry-after-ms");
   if (retryAfterMs) {
-    const milliseconds = parseFloat(retryAfterMs);
+    const milliseconds = Number.parseFloat(retryAfterMs);
     if (Number.isFinite(milliseconds) && milliseconds >= 0) {
       return milliseconds / 1000;
     }
@@ -24,7 +24,7 @@ function parseRetryAfterSeconds(headers: Headers): number | undefined {
     return undefined;
   }
 
-  const seconds = parseFloat(retryAfter);
+  const seconds = Number.parseFloat(retryAfter);
   if (Number.isFinite(seconds) && seconds >= 0) {
     return seconds;
   }
@@ -47,7 +47,7 @@ function resolveMaxSdkRetryWaitSeconds(): number | undefined {
     return undefined;
   }
 
-  const seconds = parseFloat(raw);
+  const seconds = Number.parseFloat(raw);
   if (Number.isFinite(seconds) && seconds > 0) {
     return seconds;
   }

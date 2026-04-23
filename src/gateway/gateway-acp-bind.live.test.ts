@@ -36,6 +36,7 @@ const describeLive = LIVE && ACP_BIND_LIVE ? describe : describe.skip;
 
 const CONNECT_TIMEOUT_MS = 90_000;
 const LIVE_TIMEOUT_MS = 240_000;
+const DEFAULT_LIVE_CODEX_MODEL = "gpt-5.4";
 type LiveAcpAgent = "claude" | "codex" | "gemini";
 
 function createSlackCurrentConversationBindingRegistry() {
@@ -127,6 +128,32 @@ async function getFreeGatewayPort(): Promise<number> {
 
 function logLiveStep(message: string): void {
   console.info(`[live-acp-bind] ${message}`);
+}
+
+async function prepareCodexHomeForLiveBindTest(): Promise<void> {
+  const home = process.env.HOME?.trim();
+  if (!home) {
+    return;
+  }
+  const model = process.env.OPENCLAW_LIVE_ACP_BIND_CODEX_MODEL?.trim() || DEFAULT_LIVE_CODEX_MODEL;
+  const codexHome = path.join(home, ".codex");
+  await fs.mkdir(codexHome, { recursive: true });
+  const configPath = path.join(codexHome, "config.toml");
+  let rawConfig = "";
+  try {
+    rawConfig = await fs.readFile(configPath, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
+      throw error;
+    }
+  }
+  const modelLine = `model = ${JSON.stringify(model)}`;
+  const nextConfig = /^model\s*=.*$/m.test(rawConfig)
+    ? rawConfig.replace(/^model\s*=.*$/m, modelLine)
+    : `${modelLine}\n${rawConfig}`;
+  await fs.writeFile(configPath, nextConfig, "utf8");
+  process.env.CODEX_HOME = codexHome;
+  logLiveStep(`using Codex ACP model ${model}`);
 }
 
 async function waitForGatewayPort(params: {
@@ -414,6 +441,7 @@ describeLive("gateway live (ACP bind)", () => {
         skipGmail: process.env.OPENCLAW_SKIP_GMAIL_WATCHER,
         skipCron: process.env.OPENCLAW_SKIP_CRON,
         skipCanvas: process.env.OPENCLAW_SKIP_CANVAS_HOST,
+        codexHome: process.env.CODEX_HOME,
       };
       const liveAgent = normalizeAcpAgent(process.env.OPENCLAW_LIVE_ACP_BIND_AGENT);
       const agentCommandOverride =
@@ -438,6 +466,9 @@ describeLive("gateway live (ACP bind)", () => {
       process.env.OPENCLAW_SKIP_CANVAS_HOST = "1";
       process.env.OPENCLAW_GATEWAY_TOKEN = token;
       process.env.OPENCLAW_GATEWAY_PORT = String(port);
+      if (liveAgent === "codex" && !agentCommandOverride) {
+        await prepareCodexHomeForLiveBindTest();
+      }
 
       const cfg = loadConfig();
       const acpxEntry = cfg.plugins?.entries?.acpx;
@@ -865,6 +896,11 @@ describeLive("gateway live (ACP bind)", () => {
           delete process.env.OPENCLAW_SKIP_CANVAS_HOST;
         } else {
           process.env.OPENCLAW_SKIP_CANVAS_HOST = previous.skipCanvas;
+        }
+        if (previous.codexHome === undefined) {
+          delete process.env.CODEX_HOME;
+        } else {
+          process.env.CODEX_HOME = previous.codexHome;
         }
       }
     },

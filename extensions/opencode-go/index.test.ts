@@ -34,6 +34,8 @@ describe("opencode-go provider plugin", () => {
       "kimi-k2.6",
       "mimo-v2-omni",
       "mimo-v2-pro",
+      "mimo-v2.5",
+      "mimo-v2.5-pro",
       "minimax-m2.5",
       "minimax-m2.7",
       "qwen3.5-plus",
@@ -61,13 +63,13 @@ describe("opencode-go provider plugin", () => {
       input: ["text"],
       reasoning: true,
       contextWindow: 1_048_576,
-      maxTokens: 64_000,
+      maxTokens: 128_000,
     });
     expect(models.get("mimo-v2-omni")).toMatchObject({
       input: ["text", "image"],
       reasoning: true,
       contextWindow: 262_144,
-      maxTokens: 64_000,
+      maxTokens: 128_000,
     });
   });
 
