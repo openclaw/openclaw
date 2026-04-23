@@ -1,11 +1,11 @@
-import fs from "node:fs";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "..", "..");
 
 describe("bundled agent-audit skill", () => {
-  it("ships the structured audit references and key artifact guidance", () => {
+  it("ships the structured audit references and key artifact guidance", async () => {
     const skillPath = path.join(REPO_ROOT, "skills", "agent-audit", "SKILL.md");
     const schemaPath = path.join(
       REPO_ROOT,
@@ -22,9 +22,9 @@ describe("bundled agent-audit skill", () => {
       "example-report.json",
     );
 
-    const skill = fs.readFileSync(skillPath, "utf8");
-    const schema = JSON.parse(fs.readFileSync(schemaPath, "utf8")) as Record<string, unknown>;
-    const example = JSON.parse(fs.readFileSync(examplePath, "utf8")) as Record<string, unknown>;
+    const skill = await fs.readFile(skillPath, "utf8");
+    const schema = JSON.parse(await fs.readFile(schemaPath, "utf8")) as Record<string, unknown>;
+    const example = JSON.parse(await fs.readFile(examplePath, "utf8")) as Record<string, unknown>;
 
     expect(skill).toContain("agent_check_scope.json");
     expect(skill).toContain("evidence_pack.json");
@@ -35,6 +35,8 @@ describe("bundled agent-audit skill", () => {
 
     expect(schema["schema_version"]).toBe("agent-audit.report.v1");
     expect(example["schema_version"]).toBe("agent-audit.report.v1");
+    expect(schema).toHaveProperty("contamination_paths");
+    expect(example).toHaveProperty("contamination_paths");
     expect(example).toHaveProperty("ordered_fix_plan");
   });
 });
