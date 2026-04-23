@@ -124,10 +124,13 @@ function supportsAdaptiveThinking(modelId: string): boolean {
 }
 
 function mapThinkingLevelToEffort(level: ThinkingLevel, modelId: string): AnthropicAdaptiveEffort {
+  // claude-opus-4.7 only accepts effort values of "medium" or higher via the Copilot proxy.
+  // Clamp "minimal" and "low" to "medium" to avoid HTTP 400 invalid_reasoning_effort errors.
+  const clampToMedium = isClaudeOpus47Model(modelId);
   switch (level) {
     case "minimal":
     case "low":
-      return "low";
+      return clampToMedium ? "medium" : "low";
     case "medium":
       return "medium";
     case "xhigh":
