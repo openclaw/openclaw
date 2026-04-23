@@ -29,6 +29,7 @@ import {
   mimeTypeFromFilePath,
   normalizeMimeType,
 } from "./mime.js";
+import { extractOriginalFilename } from "./store.js";
 
 export { getDefaultLocalRoots, LocalMediaAccessError };
 export type { LocalMediaAccessErrorCode };
@@ -592,7 +593,8 @@ async function loadWebMediaInternal(
       buffer: data,
     });
   }
-  let fileName = path.basename(mediaUrl) || undefined;
+  const rawBasename = path.basename(mediaUrl) || undefined;
+  let fileName = rawBasename ? extractOriginalFilename(rawBasename) : undefined;
   if (fileName && !path.extname(fileName) && mime) {
     const ext = extensionForMime(mime);
     if (ext) {

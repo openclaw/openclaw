@@ -495,7 +495,7 @@ describe("openai image generation provider", () => {
     });
   });
 
-  it("routes transparent default-model requests to the OpenAI image model that supports alpha", async () => {
+  it("keeps transparent GPT Image 2 requests on the requested OpenAI image model", async () => {
     mockGeneratedPngResponse();
 
     const provider = buildOpenAIImageGenerationProvider();
@@ -512,13 +512,13 @@ describe("openai image generation provider", () => {
       expect.objectContaining({
         url: "https://api.openai.com/v1/images/generations",
         body: expect.objectContaining({
-          model: "gpt-image-1.5",
+          model: "gpt-image-2",
           output_format: "png",
           background: "transparent",
         }),
       }),
     );
-    expect(result.model).toBe("gpt-image-1.5");
+    expect(result.model).toBe("gpt-image-2");
   });
 
   it("does not reroute transparent requests for custom OpenAI-compatible endpoints", async () => {
@@ -557,6 +557,30 @@ describe("openai image generation provider", () => {
         }),
       }),
     );
+  });
+
+  it("uses GPT Image 2 as the default OpenAI image model", async () => {
+    mockGeneratedPngResponse();
+
+    const provider = buildOpenAIImageGenerationProvider();
+    const result = await provider.generateImage({
+      provider: "openai",
+      model: "",
+      prompt: "Draw a QA lighthouse",
+      cfg: {},
+    });
+
+    expect(provider.defaultModel).toBe("gpt-image-2");
+    expect(provider.models).toContain("gpt-image-2");
+    expect(postJsonRequestMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://api.openai.com/v1/images/generations",
+        body: expect.objectContaining({
+          model: "gpt-image-2",
+        }),
+      }),
+    );
+    expect(result.model).toBe("gpt-image-2");
   });
 
   it("allows loopback image requests for the synthetic mock-openai provider", async () => {

@@ -158,7 +158,7 @@ const ERROR_PATTERNS = {
     // `\breason:` does not match provider payloads like `finish_reason: network_error` (#61281).
     /\bfinish_reason:\s*(?:abort|error|malformed_response|network_error)\b/i,
     // AbortError messages from fetch/stream aborts (Ollama NDJSON stream
-    // timeouts, signal aborts, etc.) — without these the flattened message
+    // timeouts, signal aborts, etc.) - without these the flattened message
     // falls through to reason=unknown (#58315).
     /\boperation was aborted\b/i,
     /\bstream (?:was )?(?:closed|aborted)\b/i,
@@ -174,6 +174,20 @@ const ERROR_PATTERNS = {
     // the configured fallback chain runs instead of surfacing the error.
     /^request failed$/i,
     /\brequest failed after repeated internal retries\b/i,
+    // Bare transport-interruption tokens emitted by Node undici when a
+    // streamed connection is torn down mid-response (raw errorMessage is
+    // literally "terminated"/"aborted"/"cancelled"/"canceled"). Without
+    // these the assistant error classifier returns null and the failover
+    // policy does not rotate to the next model, causing the same failing
+    // model to be retried up to 5 times and surface "LLM request was
+    // interrupted" to the user.
+    /^(?:terminated|aborted|cancelled|canceled)$/i,
+    // Human-readable forms of the network-interruption set. The ECONN*
+    // regex above covers "ECONNREFUSED" style codes; these cover the
+    // plain-English forms that appear in fetch error messages.
+    /\bconnection (?:refused|reset|aborted|closed)\b/i,
+    /\b(?:network|host) is unreachable\b/i,
+    /\bsocket hang[ -]?up\b/i,
   ],
   billing: [
     /["']?(?:status|code)["']?\s*[:=]\s*402\b|\bhttp\s*402\b|\berror(?:\s+code)?\s*[:=]?\s*402\b|\b(?:got|returned|received)\s+(?:a\s+)?402\b|^\s*402\s+payment/i,

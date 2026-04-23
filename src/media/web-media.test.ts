@@ -247,6 +247,21 @@ describe("loadWebMedia", () => {
     }
   });
 
+  it("extracts original filename from persisted outbound pattern", async () => {
+    const persistedPath = path.join(
+      fixtureRoot,
+      "tulsi-villa-requisition---a1b2c3d4-e5f6-7890-abcd-ef1234567890.png",
+    );
+    await fs.writeFile(persistedPath, Buffer.from(TINY_PNG_BASE64, "base64"));
+    const result = await loadWebMedia(persistedPath, createLocalWebMediaOptions());
+    expect(result.fileName).toBe("tulsi-villa-requisition.png");
+  });
+
+  it("preserves plain filenames without the outbound pattern", async () => {
+    const result = await loadWebMedia(tinyPngFile, createLocalWebMediaOptions());
+    expect(result.fileName).toBe("tiny.png");
+  });
+
   it("rejects host-read text files outside local roots", async () => {
     const secretFile = path.join(fixtureRoot, "secret.txt");
     await fs.writeFile(secretFile, "secret", "utf8");

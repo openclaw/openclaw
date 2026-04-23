@@ -256,6 +256,11 @@ describe("formatAssistantErrorText", () => {
     );
   });
 
+  it("does not surface bare terminated provider errors", () => {
+    const msg = makeAssistantError("terminated");
+    expect(formatAssistantErrorText(msg)).toBe("LLM request was interrupted. Please try again.");
+  });
+
   it("returns an explicit re-authentication message for OAuth refresh failures", () => {
     const msg = makeAssistantError(
       "OAuth token refresh failed for openai-codex: invalid_grant. Please try again or re-authenticate.",

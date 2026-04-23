@@ -485,6 +485,20 @@ function providerHasGenericConfig(params: {
   );
 }
 
+function imageProviderHasRuntimeConfig(params: {
+  cfg: OpenClawConfig;
+  provider: ReturnType<typeof listRuntimeImageGenerationProviders>[number];
+}): boolean {
+  const agentDir = resolveAgentDir(params.cfg, resolveDefaultAgentId(params.cfg));
+  if (params.provider.isConfigured) {
+    return params.provider.isConfigured({
+      cfg: params.cfg,
+      agentDir,
+    });
+  }
+  return providerHasGenericConfig({ cfg: params.cfg, providerId: params.provider.id });
+}
+
 async function writeOutputAsset(params: {
   buffer: Buffer;
   mimeType?: string;
@@ -1846,9 +1860,7 @@ export function registerCapabilityCli(program: Command) {
         );
         const result = listRuntimeImageGenerationProviders({ config: cfg }).map((provider) => ({
           available: true,
-          configured:
-            selectedProvider === provider.id ||
-            providerHasGenericConfig({ cfg, providerId: provider.id }),
+          configured: imageProviderHasRuntimeConfig({ cfg, provider }),
           selected: selectedProvider === provider.id,
           id: provider.id,
           label: provider.label,

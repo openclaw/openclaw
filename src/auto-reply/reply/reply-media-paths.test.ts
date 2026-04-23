@@ -19,7 +19,10 @@ vi.mock("../../media/read-capability.js", () => ({
   resolveAgentScopedOutboundMediaAccess,
 }));
 
-import { createReplyMediaPathNormalizer } from "./reply-media-paths.js";
+import {
+  clearRecentlyDispatchedMediaCacheForTest,
+  createReplyMediaPathNormalizer,
+} from "./reply-media-paths.js";
 
 describe("createReplyMediaPathNormalizer", () => {
   beforeEach(() => {
@@ -34,6 +37,7 @@ describe("createReplyMediaPathNormalizer", () => {
         localRoots: workspaceDir ? [workspaceDir] : undefined,
         readFile: async () => Buffer.from("image"),
       }));
+    clearRecentlyDispatchedMediaCacheForTest();
     vi.unstubAllEnvs();
   });
 
@@ -455,6 +459,48 @@ describe("createReplyMediaPathNormalizer", () => {
       groupChannel: "whatsapp",
       groupSpace: "team",
     });
+  });
+
+  it("drops repeated media sources from a second reply on the same session", async () => {
+    const absolutePath = "/Users/peter/.openclaw/workspace/creations/documents/report.docx";
+    const firstNormalize = createReplyMediaPathNormalizer({
+      cfg: { agents: { defaults: { mediaMaxMb: 8 } } },
+      sessionKey: "agent:main:whatsapp:group:tulsi",
+      workspaceDir: "/Users/peter/.openclaw/workspace",
+    });
+    const firstResult = await firstNormalize({ mediaUrls: [absolutePath] });
+    expect(firstResult.mediaUrls).toEqual(["/tmp/outbound-media/report.docx"]);
+    expect(resolveOutboundAttachmentFromUrl).toHaveBeenCalledTimes(1);
+
+    const secondNormalize = createReplyMediaPathNormalizer({
+      cfg: { agents: { defaults: { mediaMaxMb: 8 } } },
+      sessionKey: "agent:main:whatsapp:group:tulsi",
+      workspaceDir: "/Users/peter/.openclaw/workspace",
+    });
+    const secondResult = await secondNormalize({ mediaUrls: [absolutePath] });
+
+    expect(secondResult).toMatchObject({ mediaUrl: undefined, mediaUrls: undefined });
+    expect(resolveOutboundAttachmentFromUrl).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not dedupe the same media across different sessions", async () => {
+    const absolutePath = "/Users/peter/.openclaw/workspace/creations/documents/report.docx";
+    const normalizeA = createReplyMediaPathNormalizer({
+      cfg: { agents: { defaults: { mediaMaxMb: 8 } } },
+      sessionKey: "agent:main:whatsapp:group:tulsi",
+      workspaceDir: "/Users/peter/.openclaw/workspace",
+    });
+    await normalizeA({ mediaUrls: [absolutePath] });
+
+    const normalizeB = createReplyMediaPathNormalizer({
+      cfg: { agents: { defaults: { mediaMaxMb: 8 } } },
+      sessionKey: "agent:main:whatsapp:group:brodie",
+      workspaceDir: "/Users/peter/.openclaw/workspace",
+    });
+    const resultB = await normalizeB({ mediaUrls: [absolutePath] });
+
+    expect(resultB.mediaUrls).toEqual(["/tmp/outbound-media/report.docx"]);
+    expect(resolveOutboundAttachmentFromUrl).toHaveBeenCalledTimes(2);
   });
 
   it("passes absolute local media sources into shared outbound media access", async () => {

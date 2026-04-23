@@ -5,6 +5,7 @@ import {
   isOverloadedErrorMessage,
   isRateLimitErrorMessage,
   isServerErrorMessage,
+  isTimeoutErrorMessage,
 } from "./failover-matches.js";
 
 describe("Z.ai vendor error codes (#48988)", () => {
@@ -101,5 +102,52 @@ describe("server error status classification", () => {
 
   it("does not classify prefixed plain internal server error status prose", () => {
     expect(isServerErrorMessage("Proxy notice: Status: Internal Server Error")).toBe(false);
+  });
+});
+
+describe("bare transport-interruption tokens classify as timeout", () => {
+  it.each(["terminated", "aborted", "cancelled", "canceled"])(
+    "classifies bare %s as timeout",
+    (raw) => {
+      expect(isTimeoutErrorMessage(raw)).toBe(true);
+    },
+  );
+
+  it.each([
+    "Terminated",
+    "TERMINATED",
+    " terminated ",
+    "Aborted",
+    "Cancelled",
+    "Canceled",
+  ])("classifies case/whitespace variants of bare interrupt tokens as timeout: %s", (raw) => {
+    expect(isTimeoutErrorMessage(raw)).toBe(true);
+  });
+
+  it("does not classify assistant prose containing the word terminated", () => {
+    // The pattern is anchored with ^...$ so running text stays unclassified
+    // and only falls into timeout via other patterns (or not at all).
+    expect(isTimeoutErrorMessage("the subprocess was terminated after five seconds")).toBe(
+      false,
+    );
+  });
+});
+
+describe("human-readable network interruption phrases classify as timeout", () => {
+  it.each([
+    "connection refused",
+    "connection reset",
+    "connection aborted",
+    "connection closed",
+    "network is unreachable",
+    "host is unreachable",
+    "socket hang up",
+    "socket hangup",
+  ])("classifies %s as timeout", (raw) => {
+    expect(isTimeoutErrorMessage(raw)).toBe(true);
+  });
+
+  it("does not classify unrelated phrases with the word connection", () => {
+    expect(isTimeoutErrorMessage("connection established to database")).toBe(false);
   });
 });

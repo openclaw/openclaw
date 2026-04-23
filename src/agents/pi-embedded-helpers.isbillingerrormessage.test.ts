@@ -1439,6 +1439,7 @@ describe("classifyProviderRuntimeFailureKind", () => {
       classifyProviderRuntimeFailureKind("dial tcp: lookup api.example.com: no such host"),
     ).toBe("dns");
     expect(classifyProviderRuntimeFailureKind("socket hang up")).toBe("timeout");
+    expect(classifyProviderRuntimeFailureKind("terminated")).toBe("timeout");
     expect(
       classifyProviderRuntimeFailureKind("INVALID_REQUEST_ERROR: string should match pattern"),
     ).toBe("schema");

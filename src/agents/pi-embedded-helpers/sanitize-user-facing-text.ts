@@ -73,6 +73,7 @@ const RATE_LIMIT_SPECIFIC_HINT_RE =
 const MODEL_CAPACITY_ERROR_RE = /\b(?:selected\s+)?model\s+(?:is\s+)?at capacity\b/i;
 const NON_ERROR_PROVIDER_PAYLOAD_MAX_LENGTH = 16_384;
 const NON_ERROR_PROVIDER_PAYLOAD_PREFIX_RE = /^codex\s*error(?:\s+\d{3})?[:\s-]+/i;
+const INTERRUPTED_REQUEST_RE = /^(?:terminated|aborted|cancelled|canceled)$/i;
 
 function extractProviderRateLimitMessage(raw: string): string | undefined {
   const withoutPrefix = raw.replace(ERROR_PREFIX_RE, "").trim();
@@ -123,6 +124,10 @@ export function formatTransportErrorCopy(raw: string): string | undefined {
   }
 
   const lower = normalizeLowercaseStringOrEmpty(raw);
+
+  if (INTERRUPTED_REQUEST_RE.test(raw.trim())) {
+    return "LLM request was interrupted. Please try again.";
+  }
 
   if (
     /\beconnrefused\b/i.test(raw) ||

@@ -22,6 +22,46 @@ const WINDOWS_DRIVE_RE = /^[a-zA-Z]:[\\/]/;
 const SCHEME_RE = /^[a-zA-Z][a-zA-Z0-9+.-]*:/;
 const HAS_FILE_EXT_RE = /\.\w{1,10}$/;
 
+// Module-scoped cache that remembers media sources recently staged for a session.
+// Protects against LLM duplicate re-emissions: an agent will often re-include the
+// same MEDIA: path across back-to-back turns (e.g., narration turn plus a follow-up
+// "send here") without knowing the first batch already delivered. Without this
+// guard each turn persists a fresh UUID-suffixed copy and ships the same file twice.
+const RECENT_DISPATCH_TTL_MS = 90_000;
+const recentlyDispatchedBySession = new Map<string, Map<string, number>>();
+
+function hasBeenRecentlyDispatched(sessionKey: string, source: string): boolean {
+  const sessionMap = recentlyDispatchedBySession.get(sessionKey);
+  if (!sessionMap) {
+    return false;
+  }
+  const ts = sessionMap.get(source);
+  if (ts === undefined) {
+    return false;
+  }
+  if (Date.now() - ts > RECENT_DISPATCH_TTL_MS) {
+    sessionMap.delete(source);
+    if (sessionMap.size === 0) {
+      recentlyDispatchedBySession.delete(sessionKey);
+    }
+    return false;
+  }
+  return true;
+}
+
+function markRecentlyDispatched(sessionKey: string, source: string): void {
+  let sessionMap = recentlyDispatchedBySession.get(sessionKey);
+  if (!sessionMap) {
+    sessionMap = new Map();
+    recentlyDispatchedBySession.set(sessionKey, sessionMap);
+  }
+  sessionMap.set(source, Date.now());
+}
+
+export function clearRecentlyDispatchedMediaCacheForTest(): void {
+  recentlyDispatchedBySession.clear();
+}
+
 function isLikelyLocalMediaSource(media: string): boolean {
   return (
     FILE_URL_RE.test(media) ||
@@ -124,6 +164,12 @@ export function createReplyMediaPathNormalizer(params: {
     if (managedMediaPath) {
       return managedMediaPath;
     }
+    if (params.sessionKey && hasBeenRecentlyDispatched(params.sessionKey, media)) {
+      logVerbose(
+        `dropping duplicate reply media within ${RECENT_DISPATCH_TTL_MS}ms: ${media} (session ${params.sessionKey})`,
+      );
+      return "";
+    }
     const cached = persistedMediaBySource.get(media);
     if (cached) {
       return await cached;
@@ -131,7 +177,12 @@ export function createReplyMediaPathNormalizer(params: {
     const persistPromise = resolveOutboundAttachmentFromUrl(media, maxBytes, {
       mediaAccess: resolveMediaAccessForSource(media),
     })
-      .then((saved) => saved.path)
+      .then((saved) => {
+        if (params.sessionKey) {
+          markRecentlyDispatched(params.sessionKey, media);
+        }
+        return saved.path;
+      })
       .catch((err) => {
         persistedMediaBySource.delete(media);
         throw err;
