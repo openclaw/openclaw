@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { enablePluginInConfig } from "../plugins/enable.js";
+import { normalizePluginsConfig, resolveEffectiveEnableState } from "../plugins/config-state.js";
 import { resolveProviderInstallCatalogEntries } from "../plugins/provider-install-catalog.js";
 import {
   resolveProviderModelPickerEntries,
@@ -72,6 +72,7 @@ function resolveInstallCatalogProviderSetupFlowContributions(params?: {
   scope?: ProviderFlowScope;
 }): ProviderSetupFlowContribution[] {
   const scope = params?.scope ?? DEFAULT_PROVIDER_FLOW_SCOPE;
+  const normalizedPluginsConfig = normalizePluginsConfig(params?.config?.plugins);
   return resolveProviderInstallCatalogEntries({
     ...params,
     includeUntrustedWorkspacePlugins: false,
@@ -79,7 +80,13 @@ function resolveInstallCatalogProviderSetupFlowContributions(params?: {
     .filter(
       (entry) =>
         includesProviderFlowScope(entry.onboardingScopes, scope) &&
-        enablePluginInConfig(params?.config ?? {}, entry.pluginId).enabled,
+        resolveEffectiveEnableState({
+          id: entry.pluginId,
+          origin: entry.origin,
+          config: normalizedPluginsConfig,
+          rootConfig: params?.config,
+          enabledByDefault: true,
+        }).enabled,
     )
     .map((entry) => {
       const groupId = entry.groupId ?? entry.providerId;

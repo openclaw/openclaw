@@ -1,4 +1,5 @@
 import path from "node:path";
+import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import { discoverOpenClawPlugins } from "./discovery.js";
 import {
@@ -52,13 +53,32 @@ function resolvePluginManifest(
   return manifest.ok ? manifest : null;
 }
 
-function resolveInstallInfo(params: {
+function resolveTrustedPinnedNpmSpec(params: {
+  origin: PluginOrigin;
   install?: PluginPackageInstall;
-  packageName?: string;
+}): string | undefined {
+  if (params.origin !== "bundled" && params.origin !== "config") {
+    return undefined;
+  }
+  const npmSpec = params.install?.npmSpec?.trim();
+  const expectedIntegrity = params.install?.expectedIntegrity?.trim();
+  if (!npmSpec || !expectedIntegrity) {
+    return undefined;
+  }
+  const parsed = parseRegistryNpmSpec(npmSpec);
+  return parsed?.selectorKind === "exact-version" ? npmSpec : undefined;
+}
+
+function resolveInstallInfo(params: {
+  origin: PluginOrigin;
+  install?: PluginPackageInstall;
   packageDir?: string;
   workspaceDir?: string;
 }): PluginPackageInstall | null {
-  const npmSpec = params.install?.npmSpec?.trim() ?? params.packageName?.trim();
+  const npmSpec = resolveTrustedPinnedNpmSpec({
+    origin: params.origin,
+    install: params.install,
+  });
   let localPath = params.install?.localPath?.trim();
   if (!localPath && params.workspaceDir && params.packageDir) {
     const relative = path.relative(params.workspaceDir, params.packageDir);
@@ -74,7 +94,7 @@ function resolveInstallInfo(params: {
     ...(localPath ? { localPath } : {}),
     ...(defaultChoice ? { defaultChoice } : {}),
     ...(params.install?.minHostVersion ? { minHostVersion: params.install.minHostVersion } : {}),
-    ...(params.install?.expectedIntegrity
+    ...(npmSpec && params.install?.expectedIntegrity
       ? { expectedIntegrity: params.install.expectedIntegrity }
       : {}),
     ...(params.install?.allowInvalidConfigRecovery === true
@@ -125,8 +145,8 @@ function resolvePreferredInstallsByPluginId(
       continue;
     }
     const install = resolveInstallInfo({
+      origin: candidate.origin,
       install: candidate.packageManifest?.install,
-      packageName: candidate.packageName,
       packageDir: candidate.packageDir,
       workspaceDir: candidate.workspaceDir,
     });

@@ -152,6 +152,34 @@ describe("provider flow install catalog contributions", () => {
     ).toEqual([]);
   });
 
+  it("hides install-catalog choices outside a configured plugin allowlist", () => {
+    resolveProviderInstallCatalogEntries.mockReturnValue([
+      {
+        pluginId: "blocked-provider",
+        providerId: "blocked-provider",
+        methodId: "api-key",
+        choiceId: "blocked-provider-api-key",
+        choiceLabel: "Blocked Provider API key",
+        label: "Blocked Provider",
+        origin: "global",
+        install: {
+          npmSpec: "@vendor/blocked-provider@1.2.3",
+          expectedIntegrity: "sha512-blocked",
+        },
+      },
+    ]);
+
+    expect(
+      resolveProviderSetupFlowContributions({
+        config: {
+          plugins: {
+            allow: ["openai"],
+          },
+        },
+      }),
+    ).toEqual([]);
+  });
+
   it("prefers runtime setup contributions over duplicate install-catalog entries", () => {
     resolveProviderWizardOptions.mockReturnValue([
       {

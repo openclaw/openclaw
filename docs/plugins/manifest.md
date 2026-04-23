@@ -572,8 +572,11 @@ plugin on older hosts.
 
 Exact npm version pinning already lives in `npmSpec`, for example
 `"npmSpec": "@wecom/wecom-openclaw-plugin@1.2.3"`. Pair that with
-`expectedIntegrity` when you want onboarding or update flows to fail closed if
-the fetched npm artifact no longer matches the pinned release.
+`expectedIntegrity` when you want update flows to fail closed if the fetched
+npm artifact no longer matches the pinned release. Interactive onboarding only
+offers npm install choices from trusted catalog metadata when `npmSpec` is an
+exact version and `expectedIntegrity` is present; otherwise it falls back to a
+local source or skip.
 
 Channel plugins should provide `openclaw.setupEntry` when status, channel list,
 or SecretRef scans need to identify configured accounts without loading the full

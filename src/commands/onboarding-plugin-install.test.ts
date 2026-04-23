@@ -32,11 +32,6 @@ vi.mock("../plugins/installs.js", () => ({
   buildNpmResolutionInstallFields,
 }));
 
-const execFileSync = vi.hoisted(() => vi.fn());
-vi.mock("node:child_process", () => ({
-  execFileSync,
-}));
-
 const withTimeout = vi.hoisted(() => vi.fn(async <T>(promise: Promise<T>) => await promise));
 vi.mock("../utils/with-timeout.js", () => ({
   withTimeout,
@@ -47,9 +42,6 @@ import { ensureOnboardingPluginInstalled } from "./onboarding-plugin-install.js"
 describe("ensureOnboardingPluginInstalled", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    execFileSync.mockImplementation(() => {
-      throw new Error("not a git worktree");
-    });
     withTimeout.mockImplementation(async <T>(promise: Promise<T>) => await promise);
   });
 
@@ -111,7 +103,8 @@ describe("ensureOnboardingPluginInstalled", () => {
         pluginId: "demo-plugin",
         label: "Demo Plugin",
         install: {
-          npmSpec: "@demo/plugin",
+          npmSpec: "@demo/plugin@1.2.3",
+          expectedIntegrity: "sha512-demo",
         },
       },
       prompter: {
@@ -132,16 +125,49 @@ describe("ensureOnboardingPluginInstalled", () => {
     });
     expect(stop).toHaveBeenCalledWith("Install timed out: Demo Plugin");
     expect(note).toHaveBeenCalledWith(
-      "Installing @demo/plugin timed out after 5 minutes.\nReturning to selection.",
+      "Installing @demo/plugin@1.2.3 timed out after 5 minutes.\nReturning to selection.",
       "Plugin install",
     );
+  });
+
+  it("does not offer npm installs without an exact version and integrity pin", async () => {
+    let captured:
+      | {
+          options: Array<{ value: "npm" | "local" | "skip"; label: string; hint?: string }>;
+          initialValue: "npm" | "local" | "skip";
+        }
+      | undefined;
+
+    await ensureOnboardingPluginInstalled({
+      cfg: {},
+      entry: {
+        pluginId: "demo-plugin",
+        label: "Demo Plugin",
+        install: {
+          npmSpec: "@demo/plugin",
+        },
+      },
+      prompter: {
+        select: vi.fn(async (input) => {
+          captured = input;
+          return "skip";
+        }),
+      } as never,
+      runtime: {} as never,
+    });
+
+    expect(captured?.options).toEqual([{ value: "skip", label: "Skip for now" }]);
+    expect(captured?.initialValue).toBe("skip");
+    expect(installPluginFromNpmSpec).not.toHaveBeenCalled();
   });
 
   it("does not offer local installs when the workspace only has a spoofed .git marker", async () => {
     await withTempDir({ prefix: "openclaw-onboarding-install-spoofed-git-" }, async (temp) => {
       const workspaceDir = path.join(temp, "workspace");
+      const cwdDir = path.join(temp, "cwd");
       const pluginDir = path.join(workspaceDir, "plugins", "demo");
       await fs.mkdir(pluginDir, { recursive: true });
+      await fs.mkdir(cwdDir, { recursive: true });
       await fs.writeFile(path.join(workspaceDir, ".git"), "not-a-gitdir-pointer\n", "utf8");
 
       let captured:
@@ -152,24 +178,30 @@ describe("ensureOnboardingPluginInstalled", () => {
           }
         | undefined;
 
-      const result = await ensureOnboardingPluginInstalled({
-        cfg: {},
-        entry: {
-          pluginId: "demo-plugin",
-          label: "Demo Plugin",
-          install: {
-            localPath: "plugins/demo",
+      const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
+      let result: Awaited<ReturnType<typeof ensureOnboardingPluginInstalled>> | undefined;
+      try {
+        result = await ensureOnboardingPluginInstalled({
+          cfg: {},
+          entry: {
+            pluginId: "demo-plugin",
+            label: "Demo Plugin",
+            install: {
+              localPath: "plugins/demo",
+            },
           },
-        },
-        prompter: {
-          select: vi.fn(async (input) => {
-            captured = input;
-            return "skip";
-          }),
-        } as never,
-        runtime: {} as never,
-        workspaceDir,
-      });
+          prompter: {
+            select: vi.fn(async (input) => {
+              captured = input;
+              return "skip";
+            }),
+          } as never,
+          runtime: {} as never,
+          workspaceDir,
+        });
+      } finally {
+        cwdSpy.mockRestore();
+      }
 
       expect(captured).toBeDefined();
       expect(captured?.message).toBe("Install Demo Plugin plugin?");
@@ -189,24 +221,6 @@ describe("ensureOnboardingPluginInstalled", () => {
       const pluginDir = path.join(workspaceDir, "plugins", "demo");
       await fs.mkdir(pluginDir, { recursive: true });
       await fs.mkdir(path.join(workspaceDir, ".git"), { recursive: true });
-      const realWorkspaceDir = await fs.realpath(workspaceDir);
-      execFileSync.mockImplementation((command: string, args: string[]) => {
-        expect(command).toBe("git");
-        if (args[1] !== realWorkspaceDir || args[2] !== "rev-parse") {
-          throw new Error("unexpected git call");
-        }
-        const request = args.slice(3).join(" ");
-        if (request === "--is-inside-work-tree") {
-          return "true\n";
-        }
-        if (request === "--path-format=absolute --show-toplevel") {
-          return `${realWorkspaceDir}\n`;
-        }
-        if (request === "--path-format=absolute --git-common-dir") {
-          return `${path.join(realWorkspaceDir, ".git")}\n`;
-        }
-        throw new Error(`unexpected git args: ${request}`);
-      });
 
       let captured:
         | {
@@ -222,7 +236,8 @@ describe("ensureOnboardingPluginInstalled", () => {
           pluginId: "demo-plugin",
           label: "Demo\x1b[31m Plugin\n",
           install: {
-            npmSpec: "@demo/\x1b[32mplugin",
+            npmSpec: "@demo/plugin@1.2.3",
+            expectedIntegrity: "sha512-demo",
             localPath: "plugins/demo",
           },
         },
@@ -240,7 +255,7 @@ describe("ensureOnboardingPluginInstalled", () => {
       expect(captured).toBeDefined();
       expect(captured?.message).toBe("Install Demo Plugin\\n plugin?");
       expect(captured?.options).toEqual([
-        { value: "npm", label: "Download from npm (@demo/plugin)" },
+        { value: "npm", label: "Download from npm (@demo/plugin@1.2.3)" },
         {
           value: "local",
           label: "Use local plugin path",
@@ -253,6 +268,53 @@ describe("ensureOnboardingPluginInstalled", () => {
     });
   });
 
+  it("does not add local plugin paths when enablement is blocked by policy", async () => {
+    await withTempDir({ prefix: "openclaw-onboarding-install-blocked-enable-" }, async (temp) => {
+      const workspaceDir = path.join(temp, "workspace");
+      const pluginDir = path.join(workspaceDir, "plugins", "demo");
+      await fs.mkdir(pluginDir, { recursive: true });
+      await fs.mkdir(path.join(workspaceDir, ".git"), { recursive: true });
+      enablePluginInConfig.mockReturnValueOnce({
+        config: {},
+        enabled: false,
+        reason: "blocked by allowlist",
+      });
+      const note = vi.fn(async () => {});
+      const error = vi.fn();
+
+      const result = await ensureOnboardingPluginInstalled({
+        cfg: {},
+        entry: {
+          pluginId: "demo-plugin",
+          label: "Demo Plugin",
+          install: {
+            localPath: "plugins/demo",
+          },
+        },
+        prompter: {
+          select: vi.fn(async () => "local"),
+          note,
+        } as never,
+        runtime: { error } as never,
+        workspaceDir,
+      });
+
+      expect(result).toEqual({
+        cfg: {},
+        installed: false,
+        pluginId: "demo-plugin",
+        status: "failed",
+      });
+      expect(note).toHaveBeenCalledWith(
+        "Cannot enable Demo Plugin: blocked by allowlist.",
+        "Plugin install",
+      );
+      expect(error).toHaveBeenCalledWith(
+        "Plugin install failed: demo-plugin is disabled (blocked by allowlist).",
+      );
+    });
+  });
+
   it("allows local installs for linked git worktrees", async () => {
     await withTempDir({ prefix: "openclaw-onboarding-install-worktree-" }, async (temp) => {
       const workspaceDir = path.join(temp, "workspace");
@@ -260,25 +322,8 @@ describe("ensureOnboardingPluginInstalled", () => {
       const commonGitDir = path.join(temp, "repo.git");
       await fs.mkdir(pluginDir, { recursive: true });
       await fs.mkdir(commonGitDir, { recursive: true });
-      const realWorkspaceDir = await fs.realpath(workspaceDir);
       const realCommonGitDir = await fs.realpath(commonGitDir);
-      execFileSync.mockImplementation((command: string, args: string[]) => {
-        expect(command).toBe("git");
-        if (args[1] !== realWorkspaceDir || args[2] !== "rev-parse") {
-          throw new Error("unexpected git call");
-        }
-        const request = args.slice(3).join(" ");
-        if (request === "--is-inside-work-tree") {
-          return "true\n";
-        }
-        if (request === "--path-format=absolute --show-toplevel") {
-          return `${realWorkspaceDir}\n`;
-        }
-        if (request === "--path-format=absolute --git-common-dir") {
-          return `${realCommonGitDir}\n`;
-        }
-        throw new Error(`unexpected git args: ${request}`);
-      });
+      await fs.writeFile(path.join(workspaceDir, ".git"), `gitdir: ${realCommonGitDir}\n`, "utf8");
 
       let captured:
         | {
@@ -328,28 +373,6 @@ describe("ensureOnboardingPluginInstalled", () => {
       await fs.mkdir(path.join(repoDir, ".git"), { recursive: true });
       await fs.mkdir(pluginDir, { recursive: true });
       await fs.mkdir(workspaceDir, { recursive: true });
-      const realRepoDir = await fs.realpath(repoDir);
-      execFileSync.mockImplementation((command: string, args: string[]) => {
-        expect(command).toBe("git");
-        const root = args[1];
-        if (args[2] !== "rev-parse") {
-          throw new Error("unexpected git call");
-        }
-        const request = args.slice(3).join(" ");
-        if (root !== realRepoDir) {
-          throw new Error("not a git worktree");
-        }
-        if (request === "--is-inside-work-tree") {
-          return "true\n";
-        }
-        if (request === "--path-format=absolute --show-toplevel") {
-          return `${realRepoDir}\n`;
-        }
-        if (request === "--path-format=absolute --git-common-dir") {
-          return `${path.join(realRepoDir, ".git")}\n`;
-        }
-        throw new Error(`unexpected git args: ${request}`);
-      });
 
       let captured:
         | {
@@ -398,24 +421,6 @@ describe("ensureOnboardingPluginInstalled", () => {
       const pluginDir = path.join(temp, "external-plugin");
       await fs.mkdir(path.join(workspaceDir, ".git"), { recursive: true });
       await fs.mkdir(pluginDir, { recursive: true });
-      const realWorkspaceDir = await fs.realpath(workspaceDir);
-      execFileSync.mockImplementation((command: string, args: string[]) => {
-        expect(command).toBe("git");
-        if (args[1] !== realWorkspaceDir || args[2] !== "rev-parse") {
-          throw new Error("unexpected git call");
-        }
-        const request = args.slice(3).join(" ");
-        if (request === "--is-inside-work-tree") {
-          return "true\n";
-        }
-        if (request === "--path-format=absolute --show-toplevel") {
-          return `${realWorkspaceDir}\n`;
-        }
-        if (request === "--path-format=absolute --git-common-dir") {
-          return `${path.join(realWorkspaceDir, ".git")}\n`;
-        }
-        throw new Error(`unexpected git args: ${request}`);
-      });
 
       let captured:
         | {
@@ -453,23 +458,6 @@ describe("ensureOnboardingPluginInstalled", () => {
       await fs.mkdir(path.join(workspaceDir, ".git"), { recursive: true });
       await fs.mkdir(pluginDir, { recursive: true });
       const realWorkspaceDir = await fs.realpath(workspaceDir);
-      execFileSync.mockImplementation((command: string, args: string[]) => {
-        expect(command).toBe("git");
-        if (args[1] !== realWorkspaceDir || args[2] !== "rev-parse") {
-          throw new Error("unexpected git call");
-        }
-        const request = args.slice(3).join(" ");
-        if (request === "--is-inside-work-tree") {
-          return "true\n";
-        }
-        if (request === "--path-format=absolute --show-toplevel") {
-          return `${realWorkspaceDir}\n`;
-        }
-        if (request === "--path-format=absolute --git-common-dir") {
-          return `${path.join(realWorkspaceDir, ".git")}\n`;
-        }
-        throw new Error(`unexpected git args: ${request}`);
-      });
 
       const originalRelative = path.relative;
       const originalIsAbsolute = path.isAbsolute;

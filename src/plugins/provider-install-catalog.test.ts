@@ -56,7 +56,7 @@ describe("provider install catalog", () => {
           packageDir: "/repo/extensions/openai",
           packageManifest: {
             install: {
-              npmSpec: "@openclaw/openai",
+              npmSpec: "@openclaw/openai@1.2.3",
               defaultChoice: "npm",
               expectedIntegrity: "sha512-openai",
             },
@@ -99,7 +99,7 @@ describe("provider install catalog", () => {
         label: "OpenAI",
         origin: "bundled",
         install: {
-          npmSpec: "@openclaw/openai",
+          npmSpec: "@openclaw/openai@1.2.3",
           localPath: "extensions/openai",
           defaultChoice: "npm",
           expectedIntegrity: "sha512-openai",
@@ -108,7 +108,7 @@ describe("provider install catalog", () => {
     ]);
   });
 
-  it("falls back to package name and workspace-relative local path when install metadata is sparse", () => {
+  it("falls back to workspace-relative local path when install metadata is sparse", () => {
     discoverOpenClawPlugins.mockReturnValue({
       candidates: [
         {
@@ -154,7 +154,6 @@ describe("provider install catalog", () => {
         label: "Demo Provider API key",
         origin: "workspace",
         install: {
-          npmSpec: "@vendor/demo-provider",
           localPath: "extensions/demo-provider",
           defaultChoice: "local",
         },
@@ -167,14 +166,15 @@ describe("provider install catalog", () => {
       candidates: [
         {
           idHint: "vllm",
-          origin: "global",
+          origin: "config",
           rootDir: "/Users/test/.openclaw/extensions/vllm",
           source: "/Users/test/.openclaw/extensions/vllm/index.js",
           packageName: "@openclaw/vllm",
           packageDir: "/Users/test/.openclaw/extensions/vllm",
           packageManifest: {
             install: {
-              npmSpec: "@openclaw/vllm",
+              npmSpec: "@openclaw/vllm@2.0.0",
+              expectedIntegrity: "sha512-vllm",
             },
           },
         },
@@ -210,12 +210,56 @@ describe("provider install catalog", () => {
       choiceLabel: "vLLM",
       groupLabel: "vLLM",
       label: "vLLM",
-      origin: "global",
+      origin: "config",
       install: {
-        npmSpec: "@openclaw/vllm",
+        npmSpec: "@openclaw/vllm@2.0.0",
+        expectedIntegrity: "sha512-vllm",
         defaultChoice: "npm",
       },
     });
+  });
+
+  it("does not expose npm install specs from untrusted package metadata", () => {
+    discoverOpenClawPlugins.mockReturnValue({
+      candidates: [
+        {
+          idHint: "demo-provider",
+          origin: "global",
+          rootDir: "/Users/test/.openclaw/extensions/demo-provider",
+          source: "/Users/test/.openclaw/extensions/demo-provider/index.js",
+          packageName: "@vendor/demo-provider",
+          packageDir: "/Users/test/.openclaw/extensions/demo-provider",
+          packageManifest: {
+            install: {
+              npmSpec: "@vendor/demo-provider@1.2.3",
+              expectedIntegrity: "sha512-demo",
+            },
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+    loadPluginManifest.mockReturnValue({
+      ok: true,
+      manifestPath: "/Users/test/.openclaw/extensions/demo-provider/openclaw.plugin.json",
+      manifest: {
+        id: "demo-provider",
+        configSchema: {
+          type: "object",
+        },
+      },
+    });
+    resolveManifestProviderAuthChoices.mockReturnValue([
+      {
+        pluginId: "demo-provider",
+        providerId: "demo-provider",
+        methodId: "api-key",
+        choiceId: "demo-provider-api-key",
+        choiceLabel: "Demo Provider API key",
+      },
+    ]);
+
+    expect(resolveProviderInstallCatalogEntries()).toEqual([]);
   });
 
   it("skips untrusted workspace install candidates when requested", () => {

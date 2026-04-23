@@ -1,13 +1,13 @@
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { resolveBundledInstallPlanForCatalogEntry } from "../cli/plugin-install-plan.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import {
   findBundledPluginSourceInMap,
   resolveBundledPluginSources,
 } from "../plugins/bundled-sources.js";
-import { enablePluginInConfig } from "../plugins/enable.js";
+import { enablePluginInConfig, type PluginEnableResult } from "../plugins/enable.js";
 import { installPluginFromNpmSpec } from "../plugins/install.js";
 import { buildNpmResolutionInstallFields, recordPluginInstall } from "../plugins/installs.js";
 import type { PluginPackageInstall } from "../plugins/manifest.js";
@@ -44,23 +44,29 @@ function resolveRealDirectory(dir: string): string | null {
   }
 }
 
-function resolveGitRevParse(root: string, args: string[]): string | null {
+function resolveGitDirectoryMarker(dir: string): string | null {
+  const marker = path.join(dir, ".git");
   try {
-    const output = execFileSync("git", ["-C", root, "rev-parse", ...args], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-    return output || null;
+    const stat = fs.statSync(marker);
+    if (stat.isDirectory()) {
+      return resolveRealDirectory(marker);
+    }
+    if (!stat.isFile()) {
+      return null;
+    }
+    const content = fs.readFileSync(marker, "utf8").trim();
+    const match = /^gitdir:\s*(.+)$/i.exec(content);
+    if (!match) {
+      return null;
+    }
+    const gitDir = match[1]?.trim();
+    if (!gitDir) {
+      return null;
+    }
+    return resolveRealDirectory(path.isAbsolute(gitDir) ? gitDir : path.resolve(dir, gitDir));
   } catch {
     return null;
   }
-}
-
-function resolveGitOutputDirectory(root: string, output: string | null): string | null {
-  if (!output) {
-    return null;
-  }
-  return resolveRealDirectory(path.isAbsolute(output) ? output : path.resolve(root, output));
 }
 
 function isWithinBaseDirectory(baseDir: string, targetPath: string): boolean {
@@ -76,19 +82,15 @@ function hasTrustedGitWorkspace(root: string): boolean {
   if (!realRoot) {
     return false;
   }
-  const isInsideWorkTree = resolveGitRevParse(realRoot, ["--is-inside-work-tree"]);
-  if (isInsideWorkTree !== "true") {
-    return false;
+  for (let dir = realRoot; ; dir = path.dirname(dir)) {
+    if (resolveGitDirectoryMarker(dir)) {
+      return true;
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) {
+      return false;
+    }
   }
-  const gitTopLevel = resolveGitOutputDirectory(
-    realRoot,
-    resolveGitRevParse(realRoot, ["--path-format=absolute", "--show-toplevel"]),
-  );
-  const gitCommonDir = resolveGitOutputDirectory(
-    realRoot,
-    resolveGitRevParse(realRoot, ["--path-format=absolute", "--git-common-dir"]),
-  );
-  return gitTopLevel !== null && gitCommonDir !== null;
 }
 
 function hasGitWorkspace(workspaceDir?: string): boolean {
@@ -189,6 +191,16 @@ function resolveBundledLocalPath(params: {
   );
 }
 
+function resolvePinnedNpmSpecForOnboarding(install: PluginPackageInstall): string | null {
+  const npmSpec = install.npmSpec?.trim();
+  const expectedIntegrity = install.expectedIntegrity?.trim();
+  if (!npmSpec || !expectedIntegrity) {
+    return null;
+  }
+  const parsed = parseRegistryNpmSpec(npmSpec);
+  return parsed?.selectorKind === "exact-version" ? npmSpec : null;
+}
+
 function resolveInstallDefaultChoice(params: {
   cfg: OpenClawConfig;
   entry: OnboardingPluginInstallEntry;
@@ -229,7 +241,7 @@ async function promptInstallChoice(params: {
   defaultChoice: InstallChoice;
   prompter: WizardPrompter;
 }): Promise<InstallChoice> {
-  const npmSpec = params.entry.install.npmSpec?.trim();
+  const npmSpec = resolvePinnedNpmSpecForOnboarding(params.entry.install);
   const safeLabel = sanitizeTerminalText(params.entry.label);
   const safeNpmSpec = npmSpec ? sanitizeTerminalText(npmSpec) : null;
   const safeLocalPath = params.localPath ? sanitizeTerminalText(params.localPath) : null;
@@ -284,6 +296,26 @@ function summarizeInstallError(message: string): string {
 
 function isTimeoutError(error: unknown): boolean {
   return error instanceof Error && error.message === "timeout";
+}
+
+async function applyPluginEnablement(params: {
+  cfg: OpenClawConfig;
+  pluginId: string;
+  label: string;
+  prompter: WizardPrompter;
+  runtime: RuntimeEnv;
+}): Promise<PluginEnableResult> {
+  const enableResult = enablePluginInConfig(params.cfg, params.pluginId);
+  if (enableResult.enabled) {
+    return enableResult;
+  }
+  const safeLabel = sanitizeTerminalText(params.label);
+  const reason = enableResult.reason ?? "plugin disabled";
+  await params.prompter.note(`Cannot enable ${safeLabel}: ${reason}.`, "Plugin install");
+  params.runtime.error?.(
+    `Plugin install failed: ${sanitizeTerminalText(params.pluginId)} is disabled (${reason}).`,
+  );
+  return enableResult;
 }
 
 async function installPluginFromNpmSpecWithProgress(params: {
@@ -367,7 +399,7 @@ export async function ensureOnboardingPluginInstalled(params: {
       workspaceDir,
       allowLocal,
     });
-  const npmSpec = entry.install.npmSpec?.trim();
+  const npmSpec = resolvePinnedNpmSpecForOnboarding(entry.install);
   const defaultChoice = resolveInstallDefaultChoice({
     cfg: next,
     entry,
@@ -392,8 +424,22 @@ export async function ensureOnboardingPluginInstalled(params: {
   }
 
   if (choice === "local" && localPath) {
-    next = addPluginLoadPath(next, localPath);
-    next = enablePluginInConfig(next, entry.pluginId).config;
+    const enableResult = await applyPluginEnablement({
+      cfg: next,
+      pluginId: entry.pluginId,
+      label: entry.label,
+      prompter,
+      runtime,
+    });
+    if (!enableResult.enabled) {
+      return {
+        cfg: enableResult.config,
+        installed: false,
+        pluginId: entry.pluginId,
+        status: "failed",
+      };
+    }
+    next = addPluginLoadPath(enableResult.config, localPath);
     return {
       cfg: next,
       installed: true,
@@ -447,7 +493,22 @@ export async function ensureOnboardingPluginInstalled(params: {
   const { result } = installOutcome;
 
   if (result.ok) {
-    next = enablePluginInConfig(next, result.pluginId).config;
+    const enableResult = await applyPluginEnablement({
+      cfg: next,
+      pluginId: result.pluginId,
+      label: entry.label,
+      prompter,
+      runtime,
+    });
+    if (!enableResult.enabled) {
+      return {
+        cfg: enableResult.config,
+        installed: false,
+        pluginId: result.pluginId,
+        status: "failed",
+      };
+    }
+    next = enableResult.config;
     next = recordPluginInstall(next, {
       pluginId: result.pluginId,
       source: "npm",
@@ -478,8 +539,22 @@ export async function ensureOnboardingPluginInstalled(params: {
       initialValue: true,
     });
     if (fallback) {
-      next = addPluginLoadPath(next, localPath);
-      next = enablePluginInConfig(next, entry.pluginId).config;
+      const enableResult = await applyPluginEnablement({
+        cfg: next,
+        pluginId: entry.pluginId,
+        label: entry.label,
+        prompter,
+        runtime,
+      });
+      if (!enableResult.enabled) {
+        return {
+          cfg: enableResult.config,
+          installed: false,
+          pluginId: entry.pluginId,
+          status: "failed",
+        };
+      }
+      next = addPluginLoadPath(enableResult.config, localPath);
       return {
         cfg: next,
         installed: true,
