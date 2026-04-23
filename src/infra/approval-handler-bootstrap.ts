@@ -68,6 +68,14 @@ export async function startChannelApprovalHandlerBootstrap(params: {
     if (generation !== activeGeneration) {
       return;
     }
+    // Stop the previous handler immediately on context replacement, BEFORE
+    // jitter + slot acquisition. Otherwise a stale handler keeps processing
+    // with outdated context for the full jitter + queue wait (potentially
+    // seconds under pressure).
+    await stopHandler();
+    if (generation !== activeGeneration) {
+      return;
+    }
     // Jitter before claiming a start slot: spreads the N-account thundering
     // herd across a small window so the loopback gateway is not asked to
     // complete N concurrent preauth handshakes at the same tick.
@@ -79,10 +87,6 @@ export async function startChannelApprovalHandlerBootstrap(params: {
       () => generation !== activeGeneration,
     );
     try {
-      if (generation !== activeGeneration) {
-        return;
-      }
-      await stopHandler();
       if (generation !== activeGeneration) {
         return;
       }

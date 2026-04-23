@@ -465,4 +465,46 @@ describe("startChannelApprovalHandlerBootstrap", () => {
     await firstCleanup();
     await secondCleanup();
   });
+
+  it("stops the previous handler before the replacement start waits on jitter or a queued slot", async () => {
+    vi.useFakeTimers();
+    const channelRuntime = createRuntimeChannel();
+    const startFirst = vi.fn().mockResolvedValue(undefined);
+    const stopFirst = vi.fn().mockResolvedValue(undefined);
+    const startSecond = vi.fn().mockResolvedValue(undefined);
+    const stopSecond = vi.fn().mockResolvedValue(undefined);
+    createChannelApprovalHandlerFromCapability
+      .mockResolvedValueOnce({ start: startFirst, stop: stopFirst })
+      .mockResolvedValueOnce({ start: startSecond, stop: stopSecond });
+
+    const startCoordinator = createApprovalHandlerStartCoordinator({
+      jitterMs: 5_000,
+      maxConcurrentStarts: 1_000,
+      random: () => 0.5,
+    });
+
+    const cleanup = await startTestBootstrap({ channelRuntime, startCoordinator });
+
+    registerApprovalContext(channelRuntime, { ok: "first" });
+    await vi.advanceTimersByTimeAsync(5_000);
+    await flushTransitions();
+    expect(startFirst).toHaveBeenCalledTimes(1);
+    expect(stopFirst).not.toHaveBeenCalled();
+
+    // Replacement: the new `registered` event fires while jitter is long.
+    registerApprovalContext(channelRuntime, { ok: "second" });
+    await flushTransitions();
+
+    // The previous handler must be stopped ASAP -- NOT after jitter elapses.
+    // Without this guarantee the stale handler would keep processing with
+    // outdated context for up to jitterMs + queue delay.
+    expect(stopFirst).toHaveBeenCalledTimes(1);
+    expect(startSecond).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    await flushTransitions();
+    expect(startSecond).toHaveBeenCalledTimes(1);
+
+    await cleanup();
+  });
 });
