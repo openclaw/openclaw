@@ -482,7 +482,12 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
         return false;
       }
       const id = ctx.modelId.trim().toLowerCase();
-      return id === OPENAI_CODEX_GPT_54_MODEL_ID || id === OPENAI_CODEX_GPT_54_PRO_MODEL_ID;
+      return [
+        OPENAI_CODEX_GPT_55_MODEL_ID,
+        OPENAI_CODEX_GPT_55_PRO_MODEL_ID,
+        OPENAI_CODEX_GPT_54_MODEL_ID,
+        OPENAI_CODEX_GPT_54_PRO_MODEL_ID,
+      ].includes(id);
     },
     ...buildOpenAIResponsesProviderHooks(),
     resolveReasoningOutputMode: () => "native",
