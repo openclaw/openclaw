@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   formatSessionArchiveTimestamp,
+  isCompactionCheckpointTranscriptFileName,
   isPrimarySessionTranscriptFileName,
   isSessionArchiveArtifactName,
   isUsageCountedSessionTranscriptFileName,
@@ -16,6 +17,16 @@ describe("session artifact helpers", () => {
     expect(isSessionArchiveArtifactName("sessions.json.bak.1737420882")).toBe(true);
     expect(isSessionArchiveArtifactName("keep.deleted.keep.jsonl")).toBe(false);
     expect(isSessionArchiveArtifactName("abc.jsonl")).toBe(false);
+  });
+
+  it("classifies compaction checkpoint transcript snapshots", () => {
+    expect(
+      isCompactionCheckpointTranscriptFileName(
+        "abc.checkpoint.11111111-1111-4111-8111-111111111111.jsonl",
+      ),
+    ).toBe(true);
+    expect(isCompactionCheckpointTranscriptFileName("abc.checkpoint-test.jsonl")).toBe(false);
+    expect(isCompactionCheckpointTranscriptFileName("abc.jsonl")).toBe(false);
   });
 
   it("classifies primary transcript files", () => {

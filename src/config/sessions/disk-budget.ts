@@ -4,7 +4,11 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "../../shared/string-coerce.js";
-import { isPrimarySessionTranscriptFileName, isSessionArchiveArtifactName } from "./artifacts.js";
+import {
+  isCompactionCheckpointTranscriptFileName,
+  isPrimarySessionTranscriptFileName,
+  isSessionArchiveArtifactName,
+} from "./artifacts.js";
 import { resolveSessionFilePath } from "./paths.js";
 import type { SessionEntry } from "./types.js";
 
@@ -259,6 +263,7 @@ export async function enforceSessionDiskBudget(params: {
     .filter(
       (file) =>
         isSessionArchiveArtifactName(file.name) ||
+        isCompactionCheckpointTranscriptFileName(file.name) ||
         (isPrimarySessionTranscriptFileName(file.name) && !referencedPaths.has(file.canonicalPath)),
     )
     .toSorted((a, b) => a.mtimeMs - b.mtimeMs);

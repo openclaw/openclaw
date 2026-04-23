@@ -81,4 +81,46 @@ describe("enforceSessionDiskBudget", () => {
       );
     });
   });
+
+  it("removes compaction checkpoint transcript snapshots before active transcripts", async () => {
+    await withTempDir({ prefix: "openclaw-disk-budget-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      const sessionId = "keep";
+      const activeKey = "agent:main:main";
+      const transcriptPath = path.join(dir, `${sessionId}.jsonl`);
+      const checkpointPath = path.join(
+        dir,
+        `${sessionId}.checkpoint.11111111-1111-4111-8111-111111111111.jsonl`,
+      );
+      const store: Record<string, SessionEntry> = {
+        [activeKey]: {
+          sessionId,
+          updatedAt: Date.now(),
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+      await fs.writeFile(transcriptPath, "k".repeat(80), "utf-8");
+      await fs.writeFile(checkpointPath, "c".repeat(260), "utf-8");
+
+      const result = await enforceSessionDiskBudget({
+        store,
+        storePath,
+        activeSessionKey: activeKey,
+        maintenance: {
+          maxDiskBytes: 300,
+          highWaterBytes: 220,
+        },
+        warnOnly: false,
+      });
+
+      await expect(fs.stat(transcriptPath)).resolves.toBeDefined();
+      await expect(fs.stat(checkpointPath)).rejects.toThrow();
+      expect(result).toEqual(
+        expect.objectContaining({
+          removedFiles: 1,
+          removedEntries: 0,
+        }),
+      );
+    });
+  });
 });

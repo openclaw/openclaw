@@ -26,6 +26,10 @@ export function isSessionArchiveArtifactName(fileName: string): boolean {
   );
 }
 
+export function isCompactionCheckpointTranscriptFileName(fileName: string): boolean {
+  return COMPACTION_CHECKPOINT_TRANSCRIPT_RE.test(fileName);
+}
+
 export function isPrimarySessionTranscriptFileName(fileName: string): boolean {
   if (fileName === "sessions.json") {
     return false;
@@ -33,7 +37,7 @@ export function isPrimarySessionTranscriptFileName(fileName: string): boolean {
   if (!fileName.endsWith(".jsonl")) {
     return false;
   }
-  if (COMPACTION_CHECKPOINT_TRANSCRIPT_RE.test(fileName)) {
+  if (isCompactionCheckpointTranscriptFileName(fileName)) {
     return false;
   }
   return !isSessionArchiveArtifactName(fileName);
