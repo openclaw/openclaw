@@ -199,11 +199,11 @@ async function getVaultToken(): Promise<string> {
     throw new Error("vault-oauth: AppRole login did not return a client_token");
   }
 
-  const leaseSec = resp.auth.lease_duration ?? 3600;
+  const leaseSec = resp.auth?.lease_duration ?? 3600;
   tokenCache = {
     token,
     expiresAt: Date.now() + leaseSec * 1000,
-    renewable: resp.auth.renewable ?? false,
+    renewable: resp.auth?.renewable ?? false,
   };
 
   log.info("vault-oauth: obtained new Vault token via AppRole", {
@@ -330,22 +330,26 @@ export async function readVaultOAuthCredential(
     return credentialCache.credential;
   }
 
-  const token = await getVaultToken().catch((err: unknown) => {
-    log.warn("vault-oauth: cannot get Vault token for read", { err: String(err) });
-    return null;
-  });
-  if (!token) {
-    return null;
-  }
+  // Read strategy: vault-agent proxy at 8212 uses its own dev auto-auth token
+  // (use_auto_auth_token=true), so we send no token header and it injects its
+  // own. Fall back to direct Vault with AppRole token if the proxy is down.
+  type ReadTarget = { base: string; headers: Record<string, string | number> };
+  const buildReadTargets = async (): Promise<ReadTarget[]> => {
+    const targets: ReadTarget[] = [{ base: VAULT_AGENT_READ_ADDR, headers: {} }];
+    const appRoleToken = await getVaultToken().catch(() => null);
+    if (appRoleToken) {
+      targets.push({ base: VAULT_ADDR, headers: { "X-Vault-Token": appRoleToken } });
+    }
+    return targets;
+  };
+  const readTargets = await buildReadTargets();
 
-  // Try the caching vault-agent proxy first; fall back to direct Vault on failure.
-  const readTargets = [VAULT_AGENT_READ_ADDR, VAULT_ADDR];
-  for (const base of readTargets) {
+  for (const { base, headers } of readTargets) {
     try {
       const resp = (await httpsRequest(base, {
         path: VAULT_KV_API_PATH,
         method: "GET",
-        headers: { "X-Vault-Token": token },
+        headers,
       })) as { data?: { data?: VaultKvData } };
 
       const data = resp?.data?.data;
