@@ -1009,15 +1009,6 @@ async function resolveManagedOutgoingImageBlobUrl(
   return pending;
 }
 
-function buildAssistantAttachmentMetaUrl(
-  source: string,
-  basePath?: string,
-  authToken?: string | null,
-): string {
-  const attachmentUrl = buildAssistantAttachmentUrl(source, basePath, authToken);
-  return `${attachmentUrl}${attachmentUrl.includes("?") ? "&" : "?"}meta=1`;
-}
-
 function buildAssistantAttachmentFetchHeaders(
   accept: string,
   authToken: string | null | undefined,
