@@ -288,7 +288,7 @@ describe("matrix CLI verification commands", () => {
     expect(consoleLogMock).toHaveBeenCalledWith("Device verified by owner: no");
     expect(consoleLogMock).toHaveBeenCalledWith("Backup: active and trusted on this device");
     expect(consoleLogMock).toHaveBeenCalledWith(
-      "- Recovery key can unlock the room-key backup, but full Matrix identity trust is still incomplete. Run openclaw matrix verify self and follow the prompts from another Matrix client.",
+      "- Recovery key can unlock the room-key backup, but full Matrix identity trust is still incomplete. Run openclaw matrix verify self, accept the request in another verified Matrix client, and confirm the SAS only if it matches.",
     );
     expect(consoleLogMock).toHaveBeenCalledWith(
       "- If you intend to replace the current cross-signing identity, run openclaw matrix verify bootstrap --recovery-key '<key>' --force-reset-cross-signing.",
@@ -1432,10 +1432,47 @@ describe("matrix CLI verification commands", () => {
       "Backup issue: backup decryption key is not loaded on this device (secret storage did not return a key)",
     );
     expect(console.log).toHaveBeenCalledWith(
-      "- Backup key is not loaded on this device. Run openclaw matrix verify backup restore to load it and restore old room keys.",
+      "- Backup key is not loaded on this device. Run openclaw matrix verify backup restore to load it and restore old room keys. If restore still cannot load the key, run openclaw matrix verify backup restore --recovery-key '<key>' with the Matrix recovery key.",
     );
     expect(console.log).not.toHaveBeenCalledWith(
       "- Backup is present but not trusted for this device. Re-run 'openclaw matrix verify device <key>'.",
+    );
+  });
+
+  it("fails status with re-login guidance when the current Matrix device is missing on the server", async () => {
+    getMatrixVerificationStatusMock.mockResolvedValue({
+      encryptionEnabled: true,
+      verified: false,
+      localVerified: true,
+      crossSigningVerified: false,
+      signedByOwner: false,
+      userId: "@bot:example.org",
+      deviceId: "DEVICE123",
+      serverDeviceKnown: false,
+      backupVersion: null,
+      backup: {
+        serverVersion: null,
+        activeVersion: null,
+        trusted: null,
+        matchesDecryptionKey: null,
+        decryptionKeyCached: true,
+        keyLoadAttempted: false,
+        keyLoadError: null,
+      },
+      recoveryKeyStored: true,
+      recoveryKeyCreatedAt: "2026-02-25T20:10:11.000Z",
+      pendingVerifications: 0,
+    });
+    const program = buildProgram();
+
+    await program.parseAsync(["matrix", "verify", "status"], { from: "user" });
+
+    expect(process.exitCode).toBe(1);
+    expect(console.log).toHaveBeenCalledWith(
+      "Device issue: current Matrix device is missing from the homeserver device list",
+    );
+    expect(console.log).toHaveBeenCalledWith(
+      "- This Matrix device is no longer listed on the homeserver. Create a new OpenClaw Matrix device with openclaw matrix account add --homeserver '<url>' --user-id '<@user:server>' --password '<password>' --device-name OpenClaw-Gateway. If you use token auth, create a fresh Matrix access token in your Matrix client or admin UI, then run openclaw matrix account add --homeserver '<url>' --access-token '<token>'.",
     );
   });
 
@@ -1499,7 +1536,7 @@ describe("matrix CLI verification commands", () => {
     await program.parseAsync(["matrix", "verify", "status"], { from: "user" });
 
     expect(console.log).toHaveBeenCalledWith(
-      "- If you want a fresh backup baseline and accept losing unrecoverable history, run openclaw matrix verify backup reset --yes. This may also repair secret storage so the new backup key can be loaded after restart.",
+      "- If you want a fresh backup baseline and accept losing unrecoverable history, run openclaw matrix verify backup reset --yes. Add --rotate-recovery-key only when the old recovery key should stop unlocking the fresh backup.",
     );
   });
 
@@ -1513,7 +1550,7 @@ describe("matrix CLI verification commands", () => {
     expect(process.exitCode).toBe(1);
     expect(resetMatrixRoomKeyBackupMock).not.toHaveBeenCalled();
     expect(console.error).toHaveBeenCalledWith(
-      "Backup reset failed: Refusing to reset Matrix room-key backup without --yes",
+      "Backup reset failed: Refusing to reset Matrix room-key backup without --yes. If you accept losing unrecoverable history, re-run openclaw matrix verify backup reset --yes.",
     );
   });
 
@@ -1527,12 +1564,30 @@ describe("matrix CLI verification commands", () => {
     expect(resetMatrixRoomKeyBackupMock).toHaveBeenCalledWith({
       accountId: "default",
       cfg: {},
+      rotateRecoveryKey: false,
     });
     expect(console.log).toHaveBeenCalledWith("Reset success: yes");
     expect(console.log).toHaveBeenCalledWith("Previous backup version: 1");
     expect(console.log).toHaveBeenCalledWith("Deleted backup version: 1");
     expect(console.log).toHaveBeenCalledWith("Current backup version: 2");
     expect(console.log).toHaveBeenCalledWith("Backup: active and trusted on this device");
+  });
+
+  it("passes recovery-key rotation through backup reset", async () => {
+    const program = buildProgram();
+
+    await program.parseAsync(
+      ["matrix", "verify", "backup", "reset", "--yes", "--rotate-recovery-key"],
+      {
+        from: "user",
+      },
+    );
+
+    expect(resetMatrixRoomKeyBackupMock).toHaveBeenCalledWith({
+      accountId: "default",
+      cfg: {},
+      rotateRecoveryKey: true,
+    });
   });
 
   it("prints resolved account-aware guidance when a named Matrix account is selected implicitly", async () => {
@@ -1577,7 +1632,7 @@ describe("matrix CLI verification commands", () => {
     });
     expect(console.log).toHaveBeenCalledWith("Account: assistant");
     expect(console.log).toHaveBeenCalledWith(
-      "- Run openclaw matrix verify device '<key>' --account assistant to verify this device.",
+      "- Run openclaw matrix verify device '<key>' --account assistant with your Matrix recovery key. If you do not have the recovery key but still have another verified Matrix client, run openclaw matrix verify self --account assistant instead.",
     );
     expect(console.log).toHaveBeenCalledWith(
       "- Run openclaw matrix verify bootstrap --account assistant to create a room key backup.",

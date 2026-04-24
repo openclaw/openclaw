@@ -530,8 +530,16 @@ export async function restoreMatrixRoomKeyBackup(
   );
 }
 
-export async function resetMatrixRoomKeyBackup(opts: MatrixActionClientOpts = {}) {
-  return await withStartedActionClient(opts, async (client) => await client.resetRoomKeyBackup());
+export async function resetMatrixRoomKeyBackup(
+  opts: MatrixActionClientOpts & { rotateRecoveryKey?: boolean } = {},
+) {
+  return await withStartedActionClient(
+    opts,
+    async (client) =>
+      await client.resetRoomKeyBackup({
+        rotateRecoveryKey: opts.rotateRecoveryKey,
+      }),
+  );
 }
 
 export async function bootstrapMatrixVerification(
