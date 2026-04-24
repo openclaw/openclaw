@@ -2,8 +2,11 @@ import { resolveProviderAuthAliasMap } from "../agents/provider-auth-aliases.js"
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
+import {
+  isWorkspacePluginAllowedByConfig,
+  normalizePluginConfigId,
+} from "../plugins/plugin-config-trust.js";
 import { hasKind } from "../plugins/slots.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 
 const CORE_PROVIDER_AUTH_ENV_VAR_CANDIDATES = {
   anthropic: ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
@@ -15,6 +18,7 @@ const CORE_PROVIDER_AUTH_ENV_VAR_CANDIDATES = {
 } as const;
 
 const CORE_PROVIDER_SETUP_ENV_VAR_OVERRIDES = {
+  minimax: ["MINIMAX_API_KEY"],
   "minimax-cn": ["MINIMAX_API_KEY"],
 } as const;
 
@@ -25,59 +29,17 @@ export type ProviderEnvVarLookupParams = {
   includeUntrustedWorkspacePlugins?: boolean;
 };
 
-type PluginEntriesConfig = NonNullable<NonNullable<OpenClawConfig["plugins"]>["entries"]>;
-
-function normalizePluginConfigId(id: unknown): string {
-  return normalizeOptionalLowercaseString(id) ?? "";
-}
-
-function hasPluginId(list: unknown, pluginId: string): boolean {
-  return Array.isArray(list) && list.some((entry) => normalizePluginConfigId(entry) === pluginId);
-}
-
-function findPluginEntry(
-  entries: PluginEntriesConfig | undefined,
-  pluginId: string,
-): { enabled?: boolean } | undefined {
-  if (!entries || typeof entries !== "object" || Array.isArray(entries)) {
-    return undefined;
-  }
-  for (const [key, value] of Object.entries(entries)) {
-    if (normalizePluginConfigId(key) !== pluginId) {
-      continue;
-    }
-    return value && typeof value === "object" && !Array.isArray(value)
-      ? (value as { enabled?: boolean })
-      : {};
-  }
-  return undefined;
-}
-
 function isWorkspacePluginTrustedForProviderEnvVars(
   plugin: PluginManifestRecord,
   config: OpenClawConfig | undefined,
 ): boolean {
-  const pluginsConfig = config?.plugins;
-  if (pluginsConfig?.enabled === false) {
-    return false;
-  }
-
-  const pluginId = normalizePluginConfigId(plugin.id);
-  if (!pluginId || hasPluginId(pluginsConfig?.deny, pluginId)) {
-    return false;
-  }
-
-  const entry = findPluginEntry(pluginsConfig?.entries, pluginId);
-  if (entry?.enabled === false) {
-    return false;
-  }
-  if (entry?.enabled === true || hasPluginId(pluginsConfig?.allow, pluginId)) {
-    return true;
-  }
-  return (
-    hasKind(plugin.kind, "context-engine") &&
-    normalizePluginConfigId(pluginsConfig?.slots?.contextEngine) === pluginId
-  );
+  return isWorkspacePluginAllowedByConfig({
+    config,
+    isImplicitlyAllowed: (pluginId) =>
+      hasKind(plugin.kind, "context-engine") &&
+      normalizePluginConfigId(config?.plugins?.slots?.contextEngine) === pluginId,
+    plugin,
+  });
 }
 
 function shouldUsePluginProviderEnvVars(
@@ -163,10 +125,15 @@ export function resolveProviderEnvVars(
   };
 }
 
+const lazyRecordCacheResetters = new Set<() => void>();
+
 function createLazyReadonlyRecord(
   resolve: () => Record<string, readonly string[]>,
 ): Record<string, readonly string[]> {
   let cached: Record<string, readonly string[]> | undefined;
+  lazyRecordCacheResetters.add(() => {
+    cached = undefined;
+  });
   const getResolved = (): Record<string, readonly string[]> => {
     cached ??= resolve();
     return cached;
@@ -225,6 +192,14 @@ export const PROVIDER_AUTH_ENV_VAR_CANDIDATES = createLazyReadonlyRecord(() =>
  */
 export const PROVIDER_ENV_VARS = createLazyReadonlyRecord(() => resolveProviderEnvVars());
 
+export const __testing = {
+  resetProviderEnvVarCachesForTests(): void {
+    for (const reset of lazyRecordCacheResetters) {
+      reset();
+    }
+  },
+};
+
 export function getProviderEnvVars(
   providerId: string,
   params?: ProviderEnvVarLookupParams,
@@ -236,8 +211,6 @@ export function getProviderEnvVars(
   return Array.isArray(envVars) ? [...envVars] : [];
 }
 
-const EXTRA_PROVIDER_AUTH_ENV_VARS = ["MINIMAX_CODE_PLAN_KEY", "MINIMAX_CODING_API_KEY"] as const;
-
 // OPENCLAW_API_KEY authenticates the local OpenClaw bridge itself and must
 // remain available to child bridge/runtime processes.
 export function listKnownProviderAuthEnvVarNames(params?: ProviderEnvVarLookupParams): string[] {
@@ -245,7 +218,6 @@ export function listKnownProviderAuthEnvVarNames(params?: ProviderEnvVarLookupPa
     ...new Set([
       ...Object.values(resolveProviderAuthEnvVarCandidates(params)).flatMap((keys) => keys),
       ...Object.values(resolveProviderEnvVars(params)).flatMap((keys) => keys),
-      ...EXTRA_PROVIDER_AUTH_ENV_VARS,
     ]),
   ];
 }

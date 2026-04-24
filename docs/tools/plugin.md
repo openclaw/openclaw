@@ -8,11 +8,9 @@ title: "Plugins"
 sidebarTitle: "Install and Configure"
 ---
 
-# Plugins
-
 Plugins extend OpenClaw with new capabilities: channels, model providers,
-tools, skills, speech, realtime transcription, realtime voice,
-media-understanding, image generation, video generation, web fetch, web
+agent harnesses, tools, skills, speech, realtime transcription, realtime
+voice, media-understanding, image generation, video generation, web fetch, web
 search, and more. Some plugins are **core** (shipped with OpenClaw), others
 are **external** (published on npm by the community).
 
@@ -62,6 +60,13 @@ If config is invalid, install normally fails closed and points you at
 `openclaw doctor --fix`. The only recovery exception is a narrow bundled-plugin
 reinstall path for plugins that opt into
 `openclaw.install.allowInvalidConfigRecovery`.
+
+Packaged OpenClaw installs do not eagerly install every bundled plugin's
+runtime dependency tree. When a bundled OpenClaw-owned plugin is active from
+plugin config, legacy channel config, or a default-enabled manifest, startup
+repairs only that plugin's declared runtime dependencies before importing it.
+External plugins and custom load paths must still be installed through
+`openclaw plugins install`.
 
 ## Plugin types
 
@@ -126,7 +131,7 @@ Looking for third-party plugins? See [Community Plugins](/plugins/community).
     enabled: true,
     allow: ["voice-call"],
     deny: ["untrusted-plugin"],
-    load: { paths: ["~/Projects/oss/voice-call-extension"] },
+    load: { paths: ["~/Projects/oss/voice-call-plugin"] },
     entries: {
       "voice-call": { enabled: true, config: { provider: "twilio" } },
     },
@@ -162,11 +167,11 @@ OpenClaw scans for plugins in this order (first match wins):
     `plugins.load.paths` — explicit file or directory paths.
   </Step>
 
-  <Step title="Workspace extensions">
+  <Step title="Workspace plugins">
     `\<workspace\>/.openclaw/<plugin-root>/*.ts` and `\<workspace\>/.openclaw/<plugin-root>/*/index.ts`.
   </Step>
 
-  <Step title="Global extensions">
+  <Step title="Global plugins">
     `~/.openclaw/<plugin-root>/*.ts` and `~/.openclaw/<plugin-root>/*/index.ts`.
   </Step>
 
@@ -184,6 +189,13 @@ OpenClaw scans for plugins in this order (first match wins):
 - Workspace-origin plugins are **disabled by default** (must be explicitly enabled)
 - Bundled plugins follow the built-in default-on set unless overridden
 - Exclusive slots can force-enable the selected plugin for that slot
+- Some bundled opt-in plugins are enabled automatically when config names a
+  plugin-owned surface, such as a provider model ref, channel config, or harness
+  runtime
+- OpenAI-family Codex routes keep separate plugin boundaries:
+  `openai-codex/*` belongs to the OpenAI plugin, while the bundled Codex
+  app-server plugin is selected by `embeddedHarness.runtime: "codex"` or legacy
+  `codex/*` model refs
 
 ## Plugin slots (exclusive categories)
 
@@ -227,8 +239,8 @@ openclaw plugins install <plugin> --marketplace <source>
 openclaw plugins install <plugin> --marketplace https://github.com/<owner>/<repo>
 openclaw plugins install <spec> --pin      # record exact resolved npm spec
 openclaw plugins install <spec> --dangerously-force-unsafe-install
-openclaw plugins update <id>             # update one plugin
-openclaw plugins update <id> --dangerously-force-unsafe-install
+openclaw plugins update <id-or-npm-spec> # update one plugin
+openclaw plugins update <id-or-npm-spec> --dangerously-force-unsafe-install
 openclaw plugins update --all            # update all
 openclaw plugins uninstall <id>          # remove config/install records
 openclaw plugins uninstall <id> --keep-files
@@ -243,9 +255,22 @@ Bundled plugins ship with OpenClaw. Many are enabled by default (for example
 bundled model providers, bundled speech providers, and the bundled browser
 plugin). Other bundled plugins still need `openclaw plugins enable <id>`.
 
-`--force` overwrites an existing installed plugin or hook pack in place.
-It is not supported with `--link`, which reuses the source path instead of
-copying over a managed install target.
+`--force` overwrites an existing installed plugin or hook pack in place. Use
+`openclaw plugins update <id-or-npm-spec>` for routine upgrades of tracked npm
+plugins. It is not supported with `--link`, which reuses the source path instead
+of copying over a managed install target.
+
+When `plugins.allow` is already set, `openclaw plugins install` adds the
+installed plugin id to that allowlist before enabling it, so installs are
+immediately loadable after restart.
+
+`openclaw plugins update <id-or-npm-spec>` applies to tracked installs. Passing
+an npm package spec with a dist-tag or exact version resolves the package name
+back to the tracked plugin record and records the new spec for future updates.
+Passing the package name without a version moves an exact pinned install back to
+the registry's default release line. If the installed npm plugin already matches
+the resolved version and recorded artifact identity, OpenClaw skips the update
+without downloading, reinstalling, or rewriting config.
 
 `--pin` is npm-only. It is not supported with `--marketplace`, because
 marketplace installs persist marketplace source metadata instead of an npm spec.

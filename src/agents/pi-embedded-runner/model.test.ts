@@ -4,16 +4,20 @@ import { createProviderRuntimeTestMock } from "./model.provider-runtime.test-sup
 
 vi.mock("../model-suppression.js", () => ({
   shouldSuppressBuiltInModel: ({ provider, id }: { provider?: string; id?: string }) =>
-    (provider === "openai" || provider === "azure-openai-responses") &&
+    (provider === "openai" ||
+      provider === "azure-openai-responses" ||
+      provider === "openai-codex") &&
     id?.trim().toLowerCase() === "gpt-5.3-codex-spark",
   buildSuppressedBuiltInModelError: ({ provider, id }: { provider?: string; id?: string }) => {
     if (
-      (provider !== "openai" && provider !== "azure-openai-responses") ||
+      (provider !== "openai" &&
+        provider !== "azure-openai-responses" &&
+        provider !== "openai-codex") ||
       id?.trim().toLowerCase() !== "gpt-5.3-codex-spark"
     ) {
       return undefined;
     }
-    return `Unknown model: ${provider}/gpt-5.3-codex-spark. gpt-5.3-codex-spark is only supported via openai-codex OAuth. Use openai-codex/gpt-5.3-codex-spark.`;
+    return `Unknown model: ${provider}/gpt-5.3-codex-spark. gpt-5.3-codex-spark is no longer exposed by the OpenAI or Codex catalogs. Use openai/gpt-5.5.`;
   },
 }));
 
@@ -987,18 +991,18 @@ describe("resolveModel", () => {
     expect(result.model).toMatchObject(buildOpenAICodexForwardCompatExpectation("gpt-5.4-mini"));
   });
 
-  it("builds an openai-codex fallback for gpt-5.3-codex-spark", () => {
+  it("does not build an openai-codex fallback for removed gpt-5.3-codex-spark", () => {
     mockOpenAICodexTemplateModel(discoverModels);
 
     const result = resolveModelForTest("openai-codex", "gpt-5.3-codex-spark", "/tmp/agent");
 
-    expect(result.error).toBeUndefined();
-    expect(result.model).toMatchObject(
-      buildOpenAICodexForwardCompatExpectation("gpt-5.3-codex-spark"),
+    expect(result.model).toBeUndefined();
+    expect(result.error).toBe(
+      "Unknown model: openai-codex/gpt-5.3-codex-spark. gpt-5.3-codex-spark is no longer exposed by the OpenAI or Codex catalogs. Use openai/gpt-5.5.",
     );
   });
 
-  it("keeps openai-codex gpt-5.3-codex-spark when discovery provides it", () => {
+  it("rejects stale openai-codex gpt-5.3-codex-spark discovery rows", () => {
     mockDiscoveredModel(discoverModels, {
       provider: "openai-codex",
       modelId: "gpt-5.3-codex-spark",
@@ -1011,13 +1015,10 @@ describe("resolveModel", () => {
 
     const result = resolveModelForTest("openai-codex", "gpt-5.3-codex-spark", "/tmp/agent");
 
-    expect(result.error).toBeUndefined();
-    expect(result.model).toMatchObject({
-      provider: "openai-codex",
-      id: "gpt-5.3-codex-spark",
-      api: "openai-codex-responses",
-      baseUrl: "https://chatgpt.com/backend-api",
-    });
+    expect(result.model).toBeUndefined();
+    expect(result.error).toBe(
+      "Unknown model: openai-codex/gpt-5.3-codex-spark. gpt-5.3-codex-spark is no longer exposed by the OpenAI or Codex catalogs. Use openai/gpt-5.5.",
+    );
   });
 
   it("prefers runtime-resolved openai-codex gpt-5.4 metadata when it has a larger context window", () => {
@@ -1043,6 +1044,169 @@ describe("resolveModel", () => {
       baseUrl: "https://chatgpt.com/backend-api",
       contextWindow: 1_050_000,
       contextTokens: 272_000,
+    });
+  });
+
+  it("lets official openai-codex metadata override stale configured model rows", () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "openai-codex",
+      modelId: "gpt-5.4",
+      templateModel: {
+        ...buildOpenAICodexForwardCompatExpectation("gpt-5.4"),
+        name: "GPT-5.4",
+      },
+    });
+
+    const cfg = {
+      models: {
+        providers: {
+          "openai-codex": {
+            baseUrl: "https://chatgpt.com/backend-api",
+            api: "openai-codex-responses",
+            models: [
+              {
+                ...makeModel("gpt-5.5-pro"),
+                api: "openai-codex-responses",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
+                contextWindow: 400_000,
+                contextTokens: 64_000,
+                maxTokens: 32_000,
+                metadataSource: "models-add",
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("openai-codex", "gpt-5.5-pro", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openai-codex",
+      id: "gpt-5.5-pro",
+      api: "openai-codex-responses",
+      baseUrl: "https://chatgpt.com/backend-api",
+      reasoning: true,
+      input: ["text", "image"],
+      cost: { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1_000_000,
+      contextTokens: 272_000,
+      maxTokens: 128_000,
+    });
+  });
+
+  it("lets official openai-codex metadata override legacy unmarked models-add rows", () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "openai-codex",
+      modelId: "gpt-5.5",
+      templateModel: {
+        ...buildOpenAICodexForwardCompatExpectation("gpt-5.5"),
+        name: "GPT-5.5",
+        cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
+        contextWindow: 400_000,
+      },
+    });
+
+    const cfg = {
+      models: {
+        providers: {
+          "openai-codex": {
+            baseUrl: "https://chatgpt.com/backend-api",
+            api: "openai-codex-responses",
+            models: [
+              {
+                ...makeModel("gpt-5.5"),
+                api: "openai-codex-responses",
+                reasoning: true,
+                input: ["text", "image"],
+                cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
+                contextWindow: 400_000,
+                contextTokens: 272_000,
+                maxTokens: 128_000,
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("openai-codex", "gpt-5.5", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openai-codex",
+      id: "gpt-5.5",
+      cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
+      contextWindow: 400_000,
+      maxTokens: 128_000,
+    });
+  });
+
+  it("resolves openai-codex gpt-5.5 even when discovery omits the OAuth catalog row", () => {
+    const result = resolveModelForTest("openai-codex", "gpt-5.5");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openai-codex",
+      id: "gpt-5.5",
+      api: "openai-codex-responses",
+      baseUrl: "https://chatgpt.com/backend-api",
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 1_000_000,
+      contextTokens: 272_000,
+      maxTokens: 128_000,
+    });
+  });
+
+  it("preserves unmarked manual openai-codex metadata overrides", () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "openai-codex",
+      modelId: "gpt-5.5",
+      templateModel: {
+        ...buildOpenAICodexForwardCompatExpectation("gpt-5.5"),
+        name: "GPT-5.5",
+        cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
+        contextWindow: 400_000,
+      },
+    });
+
+    const cfg = {
+      models: {
+        providers: {
+          "openai-codex": {
+            baseUrl: "https://chatgpt.com/backend-api",
+            api: "openai-codex-responses",
+            models: [
+              {
+                ...makeModel("gpt-5.5"),
+                api: "openai-codex-responses",
+                reasoning: true,
+                input: ["text", "image"],
+                cost: { input: 9, output: 99, cacheRead: 0.9, cacheWrite: 0 },
+                contextWindow: 555_555,
+                contextTokens: 111_111,
+                maxTokens: 22_222,
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("openai-codex", "gpt-5.5", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openai-codex",
+      id: "gpt-5.5",
+      cost: { input: 9, output: 99, cacheRead: 0.9, cacheWrite: 0 },
+      contextWindow: 555_555,
+      contextTokens: 111_111,
+      maxTokens: 22_222,
     });
   });
 
@@ -1088,6 +1252,35 @@ describe("resolveModel", () => {
       id: "gpt-5.4",
       api: "openai-codex-responses",
       baseUrl: "https://chatgpt.com/backend-api",
+    });
+  });
+
+  it("normalizes stale discovered openrouter /v1 metadata", () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "openrouter",
+      modelId: "openai/gpt-5.4",
+      templateModel: {
+        provider: "openrouter",
+        id: "openai/gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-completions",
+        baseUrl: "https://openrouter.ai/v1",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200_000,
+        maxTokens: 8_192,
+      },
+    });
+
+    const result = resolveModelForTest("openrouter", "openai/gpt-5.4", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openrouter",
+      id: "openai/gpt-5.4",
+      api: "openai-completions",
+      baseUrl: "https://openrouter.ai/api/v1",
     });
   });
 
@@ -1231,7 +1424,7 @@ describe("resolveModel", () => {
 
     expect(result.model).toBeUndefined();
     expect(result.error).toBe(
-      "Unknown model: openai/gpt-5.3-codex-spark. gpt-5.3-codex-spark is only supported via openai-codex OAuth. Use openai-codex/gpt-5.3-codex-spark.",
+      "Unknown model: openai/gpt-5.3-codex-spark. gpt-5.3-codex-spark is no longer exposed by the OpenAI or Codex catalogs. Use openai/gpt-5.5.",
     );
   });
 

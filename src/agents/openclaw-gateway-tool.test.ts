@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { __testing as restartTesting } from "../infra/restart.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import "./test-helpers/fast-core-tools.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
@@ -48,6 +49,7 @@ function expectConfigMutationCall(params: {
 
 describe("gateway tool", () => {
   beforeEach(() => {
+    restartTesting.resetSigusr1State();
     callGatewayToolMock.mockClear();
     readGatewayCallOptionsMock.mockClear();
     callGatewayToolMock.mockImplementation(async (method: string) => {
@@ -95,8 +97,9 @@ describe("gateway tool", () => {
   });
 
   it("schedules SIGUSR1 restart", async () => {
-    vi.useFakeTimers();
     const kill = vi.spyOn(process, "kill").mockImplementation(() => true);
+    const sigusr1Handler = vi.fn();
+    process.on("SIGUSR1", sigusr1Handler);
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-"));
 
     try {
@@ -116,6 +119,14 @@ describe("gateway tool", () => {
             delayMs: 0,
           });
 
+          expect(kill).not.toHaveBeenCalled();
+          expect(sigusr1Handler).not.toHaveBeenCalled();
+          await vi.waitFor(() => expect(sigusr1Handler).toHaveBeenCalledTimes(1), {
+            interval: 1,
+            timeout: 1_000,
+          });
+          expect(kill).not.toHaveBeenCalled();
+
           const sentinelPath = path.join(stateDir, "restart-sentinel.json");
           const raw = await fs.readFile(sentinelPath, "utf-8");
           const parsed = JSON.parse(raw) as {
@@ -125,15 +136,12 @@ describe("gateway tool", () => {
           expect(parsed.payload?.doctorHint).toBe(
             "Run: openclaw --profile isolated doctor --non-interactive",
           );
-
-          expect(kill).not.toHaveBeenCalled();
-          await vi.runAllTimersAsync();
-          expect(kill).toHaveBeenCalledWith(process.pid, "SIGUSR1");
         },
       );
     } finally {
+      process.removeListener("SIGUSR1", sigusr1Handler);
       kill.mockRestore();
-      vi.useRealTimers();
+      restartTesting.resetSigusr1State();
       await fs.rm(stateDir, { recursive: true, force: true });
     }
   });
@@ -143,7 +151,7 @@ describe("gateway tool", () => {
     const tool = requireGatewayTool(sessionKey);
 
     const raw =
-      '{\n  agents: { defaults: { workspace: "~/openclaw" } },\n  tools: { exec: { ask: "on-miss", security: "allowlist" } }\n}\n';
+      '{\n  agents: { defaults: { systemPromptOverride: "You are a terse assistant." } },\n  tools: { exec: { ask: "on-miss", security: "allowlist" } }\n}\n';
     await tool.execute("call2", {
       action: "config.apply",
       raw,
@@ -201,7 +209,7 @@ describe("gateway tool", () => {
         raw: '{ tools: { exec: { safeBins: ["bash"], safeBinProfiles: { bash: { allowedValueFlags: ["-c"] } } } } }',
       }),
     ).rejects.toThrow(
-      "gateway config.patch cannot change protected config paths: tools.exec.safeBins, tools.exec.safeBinProfiles",
+      "gateway config.patch cannot change protected config paths: tools.exec.safeBinProfiles.bash.allowedValueFlags, tools.exec.safeBins",
     );
     expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
     expect(callGatewayTool).not.toHaveBeenCalledWith(
@@ -365,7 +373,7 @@ describe("gateway tool", () => {
     await expect(
       tool.execute("call-missing-protected", {
         action: "config.apply",
-        raw: '{ agents: { defaults: { workspace: "~/openclaw" } } }',
+        raw: '{ agents: { defaults: { systemPromptOverride: "You are a terse assistant." } } }',
       }),
     ).rejects.toThrow(
       "gateway config.apply cannot change protected config paths: tools.exec.ask, tools.exec.security",
@@ -397,6 +405,44 @@ describe("gateway tool", () => {
     );
   });
 
+  it("rejects config.patch when it rewrites gateway.remote.url", async () => {
+    const tool = requireGatewayTool();
+
+    await expect(
+      tool.execute("call-remote-redirect", {
+        action: "config.patch",
+        raw: '{ gateway: { remote: { url: "wss://attacker.example/collect" } } }',
+      }),
+    ).rejects.toThrow(
+      "gateway config.patch cannot change protected config paths: gateway.remote.url",
+    );
+    expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
+    expect(callGatewayTool).not.toHaveBeenCalledWith(
+      "config.patch",
+      expect.any(Object),
+      expect.anything(),
+    );
+  });
+
+  it("rejects config.patch when it rewrites global tools policy", async () => {
+    const tool = requireGatewayTool();
+
+    await expect(
+      tool.execute("call-tools-policy", {
+        action: "config.patch",
+        raw: '{ tools: { allow: ["exec"], elevated: { enabled: true } } }',
+      }),
+    ).rejects.toThrow(
+      "gateway config.patch cannot change protected config paths: tools.allow, tools.elevated.enabled",
+    );
+    expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
+    expect(callGatewayTool).not.toHaveBeenCalledWith(
+      "config.patch",
+      expect.any(Object),
+      expect.anything(),
+    );
+  });
+
   it("rejects config.patch that enables dangerouslyDisableDeviceAuth", async () => {
     const tool = requireGatewayTool();
 
@@ -405,7 +451,9 @@ describe("gateway tool", () => {
         action: "config.patch",
         raw: "{ gateway: { controlUi: { dangerouslyDisableDeviceAuth: true } } }",
       }),
-    ).rejects.toThrow("cannot enable dangerous config flags");
+    ).rejects.toThrow(
+      "gateway config.patch cannot change protected config paths: gateway.controlUi.dangerouslyDisableDeviceAuth",
+    );
     expect(callGatewayTool).not.toHaveBeenCalledWith(
       "config.patch",
       expect.any(Object),
@@ -421,7 +469,9 @@ describe("gateway tool", () => {
         action: "config.patch",
         raw: "{ hooks: { gmail: { allowUnsafeExternalContent: true } } }",
       }),
-    ).rejects.toThrow("cannot enable dangerous config flags");
+    ).rejects.toThrow(
+      "gateway config.patch cannot change protected config paths: hooks.gmail.allowUnsafeExternalContent",
+    );
     expect(callGatewayTool).not.toHaveBeenCalledWith(
       "config.patch",
       expect.any(Object),
@@ -437,7 +487,9 @@ describe("gateway tool", () => {
         action: "config.patch",
         raw: "{ tools: { exec: { applyPatch: { workspaceOnly: false } } } }",
       }),
-    ).rejects.toThrow("cannot enable dangerous config flags");
+    ).rejects.toThrow(
+      "gateway config.patch cannot change protected config paths: tools.exec.applyPatch.workspaceOnly",
+    );
     expect(callGatewayTool).not.toHaveBeenCalledWith(
       "config.patch",
       expect.any(Object),
@@ -453,7 +505,9 @@ describe("gateway tool", () => {
         action: "config.patch",
         raw: "{ gateway: { controlUi: { allowInsecureAuth: true } } }",
       }),
-    ).rejects.toThrow("cannot enable dangerous config flags");
+    ).rejects.toThrow(
+      "gateway config.patch cannot change protected config paths: gateway.controlUi.allowInsecureAuth",
+    );
     expect(callGatewayTool).not.toHaveBeenCalledWith(
       "config.patch",
       expect.any(Object),
@@ -469,7 +523,9 @@ describe("gateway tool", () => {
         action: "config.patch",
         raw: "{ gateway: { controlUi: { dangerouslyAllowHostHeaderOriginFallback: true } } }",
       }),
-    ).rejects.toThrow("cannot enable dangerous config flags");
+    ).rejects.toThrow(
+      "gateway config.patch cannot change protected config paths: gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback",
+    );
     expect(callGatewayTool).not.toHaveBeenCalledWith(
       "config.patch",
       expect.any(Object),
@@ -494,7 +550,7 @@ describe("gateway tool", () => {
     );
   });
 
-  it("allows config.patch when a dangerous flag is already enabled and stays enabled", async () => {
+  it("allows config.patch on allowlisted paths when a dangerous flag is already enabled", async () => {
     vi.mocked(callGatewayTool).mockImplementationOnce(async (method: string) => {
       if (method === "config.get") {
         return {
@@ -510,8 +566,7 @@ describe("gateway tool", () => {
     const sessionKey = "agent:main:whatsapp:dm:+15555550123";
     const tool = requireGatewayTool(sessionKey);
 
-    const raw =
-      '{ hooks: { gmail: { allowUnsafeExternalContent: true } }, agents: { defaults: { workspace: "~/test" } } }';
+    const raw = '{ agents: { defaults: { systemPromptOverride: "You are a terse assistant." } } }';
     await tool.execute("call-keep-dangerous", {
       action: "config.patch",
       raw,
@@ -532,7 +587,9 @@ describe("gateway tool", () => {
         action: "config.apply",
         raw: '{ tools: { exec: { ask: "on-miss", security: "allowlist", applyPatch: { workspaceOnly: false } } } }',
       }),
-    ).rejects.toThrow("cannot enable dangerous config flags");
+    ).rejects.toThrow(
+      "gateway config.apply cannot change protected config paths: tools.exec.applyPatch.workspaceOnly",
+    );
     expect(callGatewayTool).not.toHaveBeenCalledWith(
       "config.apply",
       expect.any(Object),

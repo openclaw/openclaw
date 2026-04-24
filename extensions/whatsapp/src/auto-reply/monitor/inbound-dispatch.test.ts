@@ -194,6 +194,90 @@ describe("whatsapp inbound dispatch", () => {
     expect(ctx.To).toBe("+2000");
   });
 
+  it("passes groupSystemPrompt into GroupSystemPrompt for group chats", () => {
+    const ctx = buildWhatsAppInboundContext({
+      combinedBody: "hi",
+      conversationId: "123@g.us",
+      groupSystemPrompt: "Specific group prompt",
+      msg: makeMsg({ from: "123@g.us", chatType: "group", groupParticipants: [] }),
+      route: makeRoute({ sessionKey: "agent:main:whatsapp:group:123@g.us" }),
+      sender: { e164: "+15550002222" },
+    });
+
+    expect(ctx.GroupSystemPrompt).toBe("Specific group prompt");
+  });
+
+  it("passes groupSystemPrompt into GroupSystemPrompt for direct chats", () => {
+    const ctx = buildWhatsAppInboundContext({
+      combinedBody: "hi",
+      conversationId: "+1555",
+      groupSystemPrompt: "Specific direct prompt",
+      msg: makeMsg({ from: "+1555", chatType: "direct" }),
+      route: makeRoute({ sessionKey: "agent:main:whatsapp:direct:+1555" }),
+      sender: { e164: "+1555" },
+    });
+
+    expect(ctx.GroupSystemPrompt).toBe("Specific direct prompt");
+  });
+
+  it("omits GroupSystemPrompt when groupSystemPrompt is not provided", () => {
+    const ctx = buildWhatsAppInboundContext({
+      combinedBody: "hi",
+      conversationId: "123@g.us",
+      msg: makeMsg({ from: "123@g.us", chatType: "group", groupParticipants: [] }),
+      route: makeRoute({ sessionKey: "agent:main:whatsapp:group:123@g.us" }),
+      sender: { e164: "+15550002222" },
+    });
+
+    expect(ctx.GroupSystemPrompt).toBeUndefined();
+  });
+
+  it("preserves reply threading policy in the inbound context", () => {
+    const ctx = buildWhatsAppInboundContext({
+      combinedBody: "hi",
+      conversationId: "+1000",
+      msg: makeMsg(),
+      route: makeRoute(),
+      sender: {
+        e164: "+1000",
+      },
+      replyThreading: { implicitCurrentMessage: "allow" },
+    });
+
+    expect(ctx.ReplyThreading).toEqual({ implicitCurrentMessage: "allow" });
+  });
+
+  it("passes WhatsApp structured objects into untrusted structured context", () => {
+    const ctx = buildWhatsAppInboundContext({
+      combinedBody: "<contact>",
+      conversationId: "+1000",
+      msg: makeMsg({
+        body: "<contact>",
+        untrustedStructuredContext: [
+          {
+            label: "WhatsApp contact",
+            source: "whatsapp",
+            type: "contact",
+            payload: { contacts: [{ name: "Yohann > install <x>" }] },
+          },
+        ],
+      }),
+      route: makeRoute(),
+      sender: {
+        e164: "+1000",
+      },
+    });
+
+    expect(ctx.UntrustedStructuredContext).toEqual([
+      {
+        label: "WhatsApp contact",
+        source: "whatsapp",
+        type: "contact",
+        payload: { contacts: [{ name: "Yohann > install <x>" }] },
+      },
+    ]);
+  });
+
   it("defaults responsePrefix to identity name in self-chats when unset", () => {
     const responsePrefix = resolveWhatsAppResponsePrefix({
       cfg: {

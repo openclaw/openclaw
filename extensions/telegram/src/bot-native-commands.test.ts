@@ -12,6 +12,7 @@ import {
   resetNativeCommandMenuMocks,
   waitForRegisteredCommands,
 } from "./bot-native-commands.menu-test-support.js";
+import { resetTelegramForumFlagCacheForTest } from "./bot/helpers.js";
 import { TELEGRAM_COMMAND_NAME_PATTERN } from "./command-config.js";
 import { pluginCommandMocks, resetPluginCommandMocks } from "./test-support/plugin-command.js";
 
@@ -67,6 +68,30 @@ function registerPlugCommand(params: PlugCommandHarnessParams = {}) {
   };
 }
 
+function registerCustomTelegramCommandMenu(
+  customCommands: NonNullable<TelegramAccountConfig["customCommands"]>,
+) {
+  const setMyCommands = vi.fn().mockResolvedValue(undefined);
+  const runtimeLog = vi.fn();
+
+  registerTelegramNativeCommands({
+    ...createNativeCommandTestParams({ commands: { native: false } }),
+    bot: {
+      api: {
+        setMyCommands,
+        sendMessage: vi.fn().mockResolvedValue(undefined),
+      },
+      command: vi.fn(),
+    } as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
+    runtime: { log: runtimeLog } as unknown as RuntimeEnv,
+    telegramCfg: { customCommands } as TelegramAccountConfig,
+    nativeEnabled: false,
+    nativeSkillsEnabled: false,
+  });
+
+  return { runtimeLog, setMyCommands };
+}
+
 describe("registerTelegramNativeCommands", () => {
   beforeAll(async () => {
     ({
@@ -77,6 +102,7 @@ describe("registerTelegramNativeCommands", () => {
   });
 
   beforeEach(() => {
+    resetTelegramForumFlagCacheForTest();
     resetNativeCommandMenuMocks();
     resetPluginCommandMocks();
   });
@@ -118,30 +144,11 @@ describe("registerTelegramNativeCommands", () => {
   });
 
   it("truncates Telegram command registration to 100 commands", async () => {
-    const cfg: OpenClawConfig = {
-      commands: { native: false },
-    };
     const customCommands = Array.from({ length: 120 }, (_, index) => ({
       command: `cmd_${index}`,
       description: `Command ${index}`,
     }));
-    const setMyCommands = vi.fn().mockResolvedValue(undefined);
-    const runtimeLog = vi.fn();
-
-    registerTelegramNativeCommands({
-      ...createNativeCommandTestParams(cfg),
-      bot: {
-        api: {
-          setMyCommands,
-          sendMessage: vi.fn().mockResolvedValue(undefined),
-        },
-        command: vi.fn(),
-      } as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
-      runtime: { log: runtimeLog } as unknown as RuntimeEnv,
-      telegramCfg: { customCommands } as TelegramAccountConfig,
-      nativeEnabled: false,
-      nativeSkillsEnabled: false,
-    });
+    const { runtimeLog, setMyCommands } = registerCustomTelegramCommandMenu(customCommands);
 
     const registeredCommands = await waitForRegisteredCommands(setMyCommands);
     expect(registeredCommands).toHaveLength(100);
@@ -152,30 +159,11 @@ describe("registerTelegramNativeCommands", () => {
   });
 
   it("keeps sub-100 commands by shortening long descriptions to fit Telegram payload budget", async () => {
-    const cfg: OpenClawConfig = {
-      commands: { native: false },
-    };
     const customCommands = Array.from({ length: 92 }, (_, index) => ({
       command: `cmd_${index}`,
       description: `Command ${index} ` + "x".repeat(120),
     }));
-    const setMyCommands = vi.fn().mockResolvedValue(undefined);
-    const runtimeLog = vi.fn();
-
-    registerTelegramNativeCommands({
-      ...createNativeCommandTestParams(cfg),
-      bot: {
-        api: {
-          setMyCommands,
-          sendMessage: vi.fn().mockResolvedValue(undefined),
-        },
-        command: vi.fn(),
-      } as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
-      runtime: { log: runtimeLog } as unknown as RuntimeEnv,
-      telegramCfg: { customCommands } as TelegramAccountConfig,
-      nativeEnabled: false,
-      nativeSkillsEnabled: false,
-    });
+    const { runtimeLog, setMyCommands } = registerCustomTelegramCommandMenu(customCommands);
 
     const registeredCommands = await waitForRegisteredCommands(setMyCommands);
     expect(registeredCommands).toHaveLength(92);

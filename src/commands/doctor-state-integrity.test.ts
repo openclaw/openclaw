@@ -3,7 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveStorePath, resolveSessionTranscriptsDirForAgent } from "../config/sessions.js";
+import {
+  resolveStorePath,
+  resolveSessionTranscriptsDirForAgent,
+} from "../config/sessions/paths.js";
 import { noteStateIntegrity } from "./doctor-state-integrity.js";
 
 vi.mock("../channels/plugins/bundled-ids.js", () => ({
@@ -11,6 +14,7 @@ vi.mock("../channels/plugins/bundled-ids.js", () => ({
 }));
 
 vi.mock("../channels/plugins/persisted-auth-state.js", () => ({
+  listBundledChannelIdsWithPersistedAuthState: () => ["matrix", "whatsapp"],
   hasBundledChannelPersistedAuthState: () => false,
 }));
 

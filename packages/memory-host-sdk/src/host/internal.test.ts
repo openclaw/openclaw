@@ -89,13 +89,13 @@ describe("listMemoryFiles", () => {
     expect(files.some((file) => file.endsWith("standalone.md"))).toBe(true);
   });
 
-  it("uses lowercase memory.md as the root fallback when MEMORY.md is absent", async () => {
+  it("ignores lowercase root memory.md when canonical MEMORY.md is absent", async () => {
     const tmpDir = getTmpDir();
     await fs.writeFile(path.join(tmpDir, "memory.md"), "# Legacy memory");
 
-    const files = await listMemoryFiles(tmpDir);
+    const files = await listMemoryFiles(tmpDir, [path.join(tmpDir, "memory.md")]);
 
-    expect(files).toEqual([path.join(tmpDir, "memory.md")]);
+    expect(files).toEqual([]);
   });
 
   it("prefers MEMORY.md when both root files exist", async () => {
@@ -103,9 +103,22 @@ describe("listMemoryFiles", () => {
     await fs.writeFile(path.join(tmpDir, "MEMORY.md"), "# Default memory");
     await fs.writeFile(path.join(tmpDir, "memory.md"), "# Legacy memory");
 
-    const files = await listMemoryFiles(tmpDir);
+    const files = await listMemoryFiles(tmpDir, [path.join(tmpDir, "memory.md"), tmpDir]);
 
     expect(files).toEqual([path.join(tmpDir, "MEMORY.md")]);
+  });
+
+  it("skips root-memory repair backups from extra workspace paths", async () => {
+    const tmpDir = getTmpDir();
+    await fs.writeFile(path.join(tmpDir, "MEMORY.md"), "# Default memory");
+    const repairDir = path.join(tmpDir, ".openclaw-repair", "root-memory", "2026-04-23");
+    await fs.mkdir(repairDir, { recursive: true });
+    await fs.writeFile(path.join(repairDir, "memory.md"), "# Archived legacy memory");
+
+    const files = await listMemoryFiles(tmpDir, [tmpDir]);
+
+    expect(files).toHaveLength(1);
+    expect(files[0]).toBe(path.join(tmpDir, "MEMORY.md"));
   });
 
   it("handles relative paths in additional paths", async () => {
@@ -368,11 +381,10 @@ describe("chunkMarkdown", () => {
   });
   it("does not break surrogate pairs when splitting long CJK lines", () => {
     // "𠀀" (U+20000) is a surrogate pair: 2 UTF-16 code units per character.
-    // A line of 500 such characters = 1000 UTF-16 code units.
-    // With tokens=99 (odd), the fine-split must not cut inside a pair.
+    // With an odd token budget, the fine-split must not cut inside a pair.
     const surrogateChar = "\u{20000}"; // 𠀀
-    const longLine = surrogateChar.repeat(500);
-    const chunks = chunkMarkdown(longLine, { tokens: 99, overlap: 0 });
+    const longLine = surrogateChar.repeat(120);
+    const chunks = chunkMarkdown(longLine, { tokens: 31, overlap: 0 });
     for (const chunk of chunks) {
       // No chunk should contain the Unicode replacement character U+FFFD,
       // which would indicate a broken surrogate pair.

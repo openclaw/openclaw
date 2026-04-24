@@ -1,5 +1,7 @@
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveProviderModernModelRef } from "../plugins/provider-runtime.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { liveProvidersShareOwningPlugin } from "./live-provider-owner.js";
 import { normalizeProviderId } from "./provider-id.js";
 
 export type ModelRef = {
@@ -20,11 +22,13 @@ const HIGH_SIGNAL_LIVE_MODEL_PRIORITY = [
   "openrouter/ai21/jamba-large-1.7",
   "xai/grok-4-1-fast-non-reasoning",
   "zai/glm-4.7",
+  "fireworks/accounts/fireworks/models/kimi-k2p6",
   "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
   "minimax-portal/minimax-m2.7",
 ] as const;
 
 export const DEFAULT_HIGH_SIGNAL_LIVE_MODEL_LIMIT = HIGH_SIGNAL_LIVE_MODEL_PRIORITY.length;
+const DEFAULT_HIGH_SIGNAL_LIVE_EXCLUDED_PROVIDERS = new Set(["codex", "codex-cli", "openai-codex"]);
 
 const HIGH_SIGNAL_LIVE_MODEL_PRIORITY_INDEX = new Map<string, number>(
   HIGH_SIGNAL_LIVE_MODEL_PRIORITY.map((key, index) => [key, index]),
@@ -66,6 +70,38 @@ function isPreGemini3ModelId(id: string): boolean {
   return Number.isFinite(major) && major < 3;
 }
 
+function isOpenAiFamilyLiveModel(provider: string, id: string): boolean {
+  const normalized = normalizeLowercaseStringOrEmpty(id);
+  const modelName = normalized.split("/").pop() ?? "";
+  if (provider === "openrouter") {
+    return normalized.startsWith("openai/");
+  }
+  if (provider === "opencode") {
+    return modelName.startsWith("gpt-");
+  }
+  return (
+    provider === "openai" ||
+    provider === "openai-codex" ||
+    provider === "codex-cli" ||
+    provider === "opencode" ||
+    provider === "github-copilot" ||
+    provider === "microsoft-foundry"
+  );
+}
+
+function isUnsupportedOpenAiLiveModelRef(provider: string, id: string): boolean {
+  if (!isOpenAiFamilyLiveModel(provider, id)) {
+    return false;
+  }
+  const modelName = normalizeLowercaseStringOrEmpty(id).split("/").pop() ?? "";
+  return !modelName.startsWith("gpt-5.2");
+}
+
+function isOldMiniMaxLiveModelRef(id: string): boolean {
+  const modelName = normalizeLowercaseStringOrEmpty(id).split("/").pop() ?? "";
+  return modelName === "minimax-m2.1" || modelName.startsWith("minimax-m2.1:");
+}
+
 export function isModernModelRef(ref: ModelRef): boolean {
   const provider = normalizeProviderId(ref.provider ?? "");
   const id = normalizeLowercaseStringOrEmpty(ref.id);
@@ -87,6 +123,7 @@ export function isModernModelRef(ref: ModelRef): boolean {
 }
 
 export function isHighSignalLiveModelRef(ref: ModelRef): boolean {
+  const provider = normalizeProviderId(ref.provider ?? "");
   const id = normalizeLowercaseStringOrEmpty(ref.id);
   if (!isModernModelRef(ref) || !id) {
     return false;
@@ -94,7 +131,52 @@ export function isHighSignalLiveModelRef(ref: ModelRef): boolean {
   if (isPreGemini3ModelId(id)) {
     return false;
   }
+  if (isUnsupportedOpenAiLiveModelRef(provider, id)) {
+    return false;
+  }
+  if (isOldMiniMaxLiveModelRef(id)) {
+    return false;
+  }
   return isHighSignalClaudeModelId(id);
+}
+
+export function shouldExcludeProviderFromDefaultHighSignalLiveSweep(params: {
+  provider?: string | null;
+  useExplicitModels: boolean;
+  providerFilter?: ReadonlySet<string> | null;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): boolean {
+  const provider = normalizeProviderId(params.provider ?? "");
+  if (!provider || params.useExplicitModels) {
+    return false;
+  }
+  if (!DEFAULT_HIGH_SIGNAL_LIVE_EXCLUDED_PROVIDERS.has(provider)) {
+    return false;
+  }
+  const ownerCache = new Map<string, readonly string[]>();
+  for (const filterEntry of params.providerFilter ?? []) {
+    const requestedProvider = normalizeProviderId(filterEntry);
+    if (requestedProvider === provider) {
+      return false;
+    }
+    if (
+      requestedProvider &&
+      liveProvidersShareOwningPlugin(requestedProvider, provider, {
+        config: params.config,
+        workspaceDir: params.workspaceDir,
+        env: params.env,
+        ownerCache,
+      })
+    ) {
+      return false;
+    }
+    if (requestedProvider && DEFAULT_HIGH_SIGNAL_LIVE_EXCLUDED_PROVIDERS.has(requestedProvider)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function toCanonicalHighSignalLiveModelKey(ref: ModelRef): string | null {

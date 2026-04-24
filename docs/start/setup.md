@@ -6,8 +6,6 @@ read_when:
 title: "Setup"
 ---
 
-# Setup
-
 <Note>
 If you are setting up for the first time, start with [Getting Started](/start/getting-started).
 For onboarding details, see [Onboarding (CLI)](/start/wizard).
@@ -15,9 +13,11 @@ For onboarding details, see [Onboarding (CLI)](/start/wizard).
 
 ## TL;DR
 
-- **Tailoring lives outside the repo:** `~/.openclaw/workspace` (workspace) + `~/.openclaw/openclaw.json` (config).
-- **Stable workflow:** install the macOS app; let it run the bundled Gateway.
-- **Bleeding edge workflow:** run the Gateway yourself via `pnpm gateway:watch`, then let the macOS app attach in Local mode.
+Pick a setup workflow based on how often you want updates and whether you want to run the Gateway yourself:
+
+- **Tailoring lives outside the repo:** keep your config and workspace in `~/.openclaw/openclaw.json` and `~/.openclaw/workspace/` so repo updates don't touch them.
+- **Stable workflow (recommended for most):** install the macOS app and let it run the bundled Gateway.
+- **Bleeding edge workflow (dev):** run the Gateway yourself via `pnpm gateway:watch`, then let the macOS app attach in Local mode.
 
 ## Prereqs (from source)
 
@@ -91,16 +91,22 @@ If you also want the macOS app on the bleeding edge:
 
 ```bash
 pnpm install
+# First run only (or after resetting local OpenClaw config/workspace)
+pnpm openclaw setup
 pnpm gateway:watch
 ```
 
 `gateway:watch` runs the gateway in watch mode and reloads on relevant source,
 config, and bundled-plugin metadata changes.
+`pnpm openclaw setup` is the one-time local config/workspace initialization step for a fresh checkout.
+`pnpm gateway:watch` does not rebuild `dist/control-ui`, so rerun `pnpm ui:build` after `ui/` changes or use `pnpm ui:dev` while developing the Control UI.
 
 If you are intentionally using the Bun workflow, the equivalent commands are:
 
 ```bash
 bun install
+# First run only (or after resetting local OpenClaw config/workspace)
+bun run openclaw setup
 bun run gateway:watch
 ```
 

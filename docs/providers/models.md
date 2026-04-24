@@ -3,7 +3,7 @@ summary: "Model providers (LLMs) supported by OpenClaw"
 read_when:
   - You want to choose a model provider
   - You want quick setup examples for LLM auth + model selection
-title: "Model Provider Quickstart"
+title: "Model provider quickstart"
 ---
 
 # Model Providers
@@ -25,8 +25,8 @@ model as `provider/model`.
 ## Supported providers (starter set)
 
 - [Alibaba Model Studio](/providers/alibaba)
-- [Anthropic (API + Claude CLI)](/providers/anthropic)
 - [Amazon Bedrock](/providers/bedrock)
+- [Anthropic (API + Claude CLI)](/providers/anthropic)
 - [BytePlus (International)](/concepts/model-providers#byteplus-international)
 - [Chutes](/providers/chutes)
 - [ComfyUI](/providers/comfy)
@@ -58,3 +58,9 @@ model as `provider/model`.
 
 For the full provider catalog (xAI, Groq, Mistral, etc.) and advanced configuration,
 see [Model providers](/concepts/model-providers).
+
+## Related
+
+- [Model selection](/concepts/model-providers)
+- [Model failover](/concepts/model-failover)
+- [Models CLI](/cli/models)

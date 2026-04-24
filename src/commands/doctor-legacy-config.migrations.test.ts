@@ -12,6 +12,41 @@ vi.mock("../plugins/setup-registry.js", () => ({
   }),
 }));
 
+vi.mock("../plugins/manifest-registry.js", () => ({
+  loadPluginManifestRegistry: () => ({
+    plugins: [
+      {
+        id: "brave",
+        origin: "bundled",
+        contracts: { webSearchProviders: ["brave"] },
+      },
+      {
+        id: "google",
+        origin: "bundled",
+        contracts: { webSearchProviders: ["gemini"] },
+      },
+      {
+        id: "firecrawl",
+        origin: "bundled",
+        contracts: { webSearchProviders: ["firecrawl"] },
+      },
+    ],
+  }),
+  resolveManifestContractOwnerPluginId: ({ value }: { value: string }): string | undefined => {
+    if (value === "gemini") {
+      return "google";
+    }
+    return value === "brave" || value === "firecrawl" ? value : undefined;
+  },
+}));
+
+vi.mock("./doctor/shared/channel-legacy-config-migrate.js", () => ({
+  applyChannelDoctorCompatibilityMigrations: (cfg: OpenClawConfig) => ({
+    next: cfg,
+    changes: [],
+  }),
+}));
+
 describe("normalizeCompatibilityConfigValues", () => {
   let previousOauthDir: string | undefined;
   let tempOauthDir = "";
@@ -80,6 +115,39 @@ describe("normalizeCompatibilityConfigValues", () => {
     });
   });
 
+  it("moves WhatsApp access defaults into accounts.default for named accounts", () => {
+    const res = normalizeCompatibilityConfigValues({
+      channels: {
+        whatsapp: {
+          enabled: true,
+          dmPolicy: "allowlist",
+          allowFrom: ["+15550001111"],
+          groupPolicy: "open",
+          groupAllowFrom: [],
+          accounts: {
+            work: {
+              enabled: true,
+              authDir: "/tmp/wa-work",
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.config.channels?.whatsapp?.dmPolicy).toBeUndefined();
+    expect(res.config.channels?.whatsapp?.allowFrom).toBeUndefined();
+    expect(res.config.channels?.whatsapp?.groupPolicy).toBeUndefined();
+    expect(res.config.channels?.whatsapp?.groupAllowFrom).toBeUndefined();
+    expect(res.config.channels?.whatsapp?.accounts?.default).toMatchObject({
+      dmPolicy: "allowlist",
+      allowFrom: ["+15550001111"],
+      groupPolicy: "open",
+      groupAllowFrom: [],
+    });
+    expect(res.changes).toContain(
+      "Moved channels.whatsapp single-account top-level values into channels.whatsapp.accounts.default.",
+    );
+  });
   it("migrates browser ssrfPolicy allowPrivateNetwork to dangerouslyAllowPrivateNetwork", () => {
     const res = normalizeCompatibilityConfigValues({
       browser: {
@@ -149,6 +217,91 @@ describe("normalizeCompatibilityConfigValues", () => {
       "Moved skills.entries.nano-banana-pro.apiKey → models.providers.google.apiKey.",
       "Removed legacy skills.entries.nano-banana-pro.",
     ]);
+  });
+
+  it("marks legacy untagged /models add OpenAI Codex metadata rows for doctor repair", () => {
+    const res = normalizeCompatibilityConfigValues({
+      models: {
+        providers: {
+          "openai-codex": {
+            baseUrl: "https://chatgpt.com/backend-api",
+            api: "openai-codex-responses",
+            models: [
+              {
+                id: "gpt-5.5",
+                name: "gpt-5.5",
+                api: "openai-codex-responses",
+                reasoning: true,
+                input: ["text", "image"],
+                cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
+                contextWindow: 400_000,
+                contextTokens: 272_000,
+                maxTokens: 128_000,
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(res.config.models?.providers?.["openai-codex"]?.models?.[0]).toMatchObject({
+      id: "gpt-5.5",
+      metadataSource: "models-add",
+    });
+    expect(res.changes).toContain(
+      "Marked models.providers.openai-codex.models.gpt-5.5 as /models add metadata so official OpenAI Codex metadata can override it.",
+    );
+  });
+
+  it("does not mark untagged manual OpenAI Codex metadata overrides", () => {
+    const res = normalizeCompatibilityConfigValues({
+      models: {
+        providers: {
+          "openai-codex": {
+            baseUrl: "https://chatgpt.com/backend-api",
+            api: "openai-codex-responses",
+            models: [
+              {
+                id: "gpt-5.5",
+                name: "gpt-5.5",
+                api: "openai-codex-responses",
+                reasoning: true,
+                input: ["text", "image"],
+                cost: { input: 9, output: 99, cacheRead: 0.9, cacheWrite: 0 },
+                contextWindow: 555_555,
+                contextTokens: 111_111,
+                maxTokens: 22_222,
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(res.config).toEqual({
+      models: {
+        providers: {
+          "openai-codex": {
+            baseUrl: "https://chatgpt.com/backend-api",
+            api: "openai-codex-responses",
+            models: [
+              {
+                id: "gpt-5.5",
+                name: "gpt-5.5",
+                api: "openai-codex-responses",
+                reasoning: true,
+                input: ["text", "image"],
+                cost: { input: 9, output: 99, cacheRead: 0.9, cacheWrite: 0 },
+                contextWindow: 555_555,
+                contextTokens: 111_111,
+                maxTokens: 22_222,
+              },
+            ],
+          },
+        },
+      },
+    });
+    expect(res.changes).toEqual([]);
   });
 
   it("prefers legacy nano-banana env.GEMINI_API_KEY over skill apiKey during migration", () => {

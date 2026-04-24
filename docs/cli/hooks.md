@@ -3,7 +3,7 @@ summary: "CLI reference for `openclaw hooks` (agent hooks)"
 read_when:
   - You want to manage agent hooks
   - You want to inspect hook availability or enable workspace hooks
-title: "hooks"
+title: "Hooks"
 ---
 
 # `openclaw hooks`
@@ -15,7 +15,7 @@ Running `openclaw hooks` with no subcommand is equivalent to `openclaw hooks lis
 Related:
 
 - Hooks: [Hooks](/automation/hooks)
-- Plugin hooks: [Plugin hooks](/plugins/architecture#provider-runtime-hooks)
+- Plugin hooks: [Plugin hooks](/plugins/architecture-internals#provider-runtime-hooks)
 
 ## List All Hooks
 
@@ -24,6 +24,7 @@ openclaw hooks list
 ```
 
 List all discovered hooks from workspace, managed, extra, and bundled directories.
+Gateway startup does not load internal hook handlers until at least one internal hook is configured.
 
 **Options:**
 
@@ -335,3 +336,8 @@ openclaw hooks enable boot-md
 ```
 
 **See:** [boot-md documentation](/automation/hooks#boot-md)
+
+## Related
+
+- [CLI reference](/cli)
+- [Automation hooks](/automation/hooks)

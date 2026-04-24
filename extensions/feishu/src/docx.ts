@@ -3,9 +3,9 @@ import { homedir } from "node:os";
 import { isAbsolute, resolve } from "node:path";
 import { basename } from "node:path";
 import type * as Lark from "@larksuiteoapi/node-sdk";
-import { Type } from "@sinclair/typebox";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { Type } from "typebox";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { listEnabledFeishuAccounts } from "./accounts.js";
 import { FeishuDocSchema, type FeishuDocParams } from "./doc-schema.js";
@@ -110,7 +110,7 @@ function cleanBlocksForInsert(blocks: FeishuDocxBlock[]): {
     .map((block) => {
       if (block.block_type === 31 && block.table?.merge_info) {
         const { merge_info: _merge_info, ...tableRest } = block.table;
-        return { ...block, table: tableRest };
+        return Object.assign({}, block, { table: tableRest });
       }
       return block;
     });

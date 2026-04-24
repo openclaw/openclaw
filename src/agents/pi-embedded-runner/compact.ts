@@ -22,6 +22,7 @@ import { resolveHeartbeatSummaryForAgent } from "../../infra/heartbeat-summary.j
 import { getMachineDisplayName } from "../../infra/machine-name.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { extractModelCompat } from "../../plugins/provider-model-compat.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import {
   prepareProviderRuntimeAuth,
@@ -71,6 +72,7 @@ import {
   setCompactionSafeguardCancelReason,
 } from "../pi-hooks/compaction-safeguard-runtime.js";
 import { createPreparedEmbeddedPiSettingsManager } from "../pi-project-settings.js";
+import { applyPiCompactionSettingsFromConfig } from "../pi-settings.js";
 import { createOpenClawCodingTools } from "../pi-tools.js";
 import { wrapStreamFnTextTransforms } from "../plugin-text-transforms.js";
 import { registerProviderStreamForModel } from "../provider-stream.js";
@@ -106,6 +108,7 @@ import {
   compactWithSafetyTimeout,
   resolveCompactionTimeoutMs,
 } from "./compaction-safety-timeout.js";
+import { applyFinalEffectiveToolPolicy } from "./effective-tool-policy.js";
 import { buildEmbeddedExtensionFactories } from "./extensions.js";
 import { applyExtraParamsToAgent } from "./extra-params.js";
 import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "./history.js";
@@ -130,7 +133,11 @@ import {
   buildEmbeddedSystemPrompt,
   createSystemPromptOverride,
 } from "./system-prompt.js";
-import { collectAllowedToolNames } from "./tool-name-allowlist.js";
+import {
+  collectAllowedToolNames,
+  collectRegisteredToolNames,
+  toSessionToolAllowlist,
+} from "./tool-name-allowlist.js";
 import {
   logProviderToolSchemaDiagnostics,
   normalizeProviderToolSchemas,
@@ -406,7 +413,8 @@ export async function compactEmbeddedPiSessionDirect(
   }
 
   await fs.mkdir(resolvedWorkspace, { recursive: true });
-  const sandboxSessionKey = params.sessionKey?.trim() || params.sessionId;
+  const sandboxSessionKey =
+    params.sandboxSessionKey?.trim() || params.sessionKey?.trim() || params.sessionId;
   const sandbox = await resolveSandboxContext({
     config: params.config,
     sessionKey: sandboxSessionKey,
@@ -521,7 +529,7 @@ export async function compactEmbeddedPiSessionDirect(
       abortSignal: runAbortController.signal,
       modelProvider: model.provider,
       modelId,
-      modelCompat: effectiveModel.compat,
+      modelCompat: extractModelCompat(effectiveModel),
       modelApi: model.api,
       modelContextWindowTokens: ctxInfo.tokens,
       modelAuthMode: resolveModelAuthMode(model.provider, params.config),
@@ -554,11 +562,33 @@ export async function compactEmbeddedPiSessionDirect(
           ],
         })
       : undefined;
-    const effectiveTools = [
-      ...tools,
-      ...(bundleMcpRuntime?.tools ?? []),
-      ...(bundleLspRuntime?.tools ?? []),
-    ];
+    const filteredBundledTools = applyFinalEffectiveToolPolicy({
+      bundledTools: [...(bundleMcpRuntime?.tools ?? []), ...(bundleLspRuntime?.tools ?? [])],
+      config: params.config,
+      sandboxToolPolicy: sandbox?.tools,
+      sessionKey: sandboxSessionKey,
+      // Intentionally omit explicit agentId: the core tools just built with
+      // createOpenClawCodingTools(...) also omit it, so both paths resolve
+      // agentId the same way via resolveAgentIdFromSessionKey(sessionKey).
+      // Passing effectiveSkillAgentId here would diverge from the core-tool
+      // policy for legacy/non-agent session keys where the two sources fall
+      // back to different ids.
+      modelProvider: model.provider,
+      modelId,
+      messageProvider: resolvedMessageProvider,
+      agentAccountId: params.agentAccountId,
+      groupId: params.groupId,
+      groupChannel: params.groupChannel,
+      groupSpace: params.groupSpace,
+      spawnedBy: params.spawnedBy,
+      senderId: params.senderId,
+      senderName: params.senderName,
+      senderUsername: params.senderUsername,
+      senderE164: params.senderE164,
+      senderIsOwner: params.senderIsOwner,
+      warn: (message) => log.warn(message),
+    });
+    const effectiveTools = [...tools, ...filteredBundledTools];
     const allowedToolNames = collectAllowedToolNames({ tools: effectiveTools });
     logProviderToolSchemaDiagnostics({
       tools: effectiveTools,
@@ -800,23 +830,28 @@ export async function compactEmbeddedPiSessionDirect(
         modelId,
         model,
       });
-      // Only create an explicit resource loader when there are extension factories
-      // to register; otherwise let createAgentSession use its built-in default.
-      let resourceLoader: DefaultResourceLoader | undefined;
-      if (extensionFactories.length > 0) {
-        resourceLoader = new DefaultResourceLoader({
-          cwd: resolvedWorkspace,
-          agentDir,
-          settingsManager,
-          extensionFactories,
-        });
-        await resourceLoader.reload();
-      }
+      const resourceLoader = new DefaultResourceLoader({
+        cwd: resolvedWorkspace,
+        agentDir,
+        settingsManager,
+        extensionFactories,
+      });
+      await resourceLoader.reload();
+      // DefaultResourceLoader.reload() rehydrates settings from disk and can drop OpenClaw
+      // compaction overrides applied in createPreparedEmbeddedPiSettingsManager.
+      applyPiCompactionSettingsFromConfig({
+        settingsManager,
+        cfg: params.config,
+        contextTokenBudget: ctxInfo.tokens,
+      });
 
-      const { builtInTools, customTools } = splitSdkTools({
+      const { customTools } = splitSdkTools({
         tools: effectiveTools,
         sandboxEnabled: !!sandbox?.enabled,
       });
+      // Pi treats `tools` as a name allowlist during session creation. Pass the
+      // exact OpenClaw-managed registrations so custom tools survive startup.
+      const sessionToolAllowlist = toSessionToolAllowlist(collectRegisteredToolNames(customTools));
 
       const providerStreamFn = resolveCompactionProviderStream({
         effectiveModel,
@@ -827,6 +862,7 @@ export async function compactEmbeddedPiSessionDirect(
       const shouldUseWebSocketTransport = shouldUseOpenAIWebSocketTransport({
         provider,
         modelApi: effectiveModel.api,
+        modelBaseUrl: effectiveModel.baseUrl,
       });
       const wsApiKey = shouldUseWebSocketTransport
         ? await resolveEmbeddedAgentApiKey({
@@ -853,7 +889,7 @@ export async function compactEmbeddedPiSessionDirect(
             modelRegistry,
             model: effectiveModel,
             thinkingLevel: mapThinkingLevel(thinkLevel),
-            tools: builtInTools,
+            tools: sessionToolAllowlist,
             customTools,
             sessionManager,
             settingsManager,
@@ -861,6 +897,7 @@ export async function compactEmbeddedPiSessionDirect(
           });
           session = createdSession.session;
           applySystemPromptOverrideToSession(session, buildSystemPromptOverride(thinkLevel)());
+          session.setActiveToolsByName(sessionToolAllowlist);
           // Compaction builds the same embedded system prompt, so it must flow
           // through the same transport/payload shaping stack as normal turns.
           prepareCompactionSessionAgent({

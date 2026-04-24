@@ -98,6 +98,18 @@ describe("qa run config", () => {
     ).toEqual(["dm-chat-baseline", "thread-lifecycle"]);
   });
 
+  it("keeps idle snapshots on static defaults so startup does not inspect auth profiles", () => {
+    defaultQaRuntimeModelForMode.mockReturnValue("openai/gpt-5.4");
+    defaultQaRuntimeModelForMode.mockClear();
+
+    expect(createIdleQaRunnerSnapshot(scenarios).selection).toMatchObject({
+      providerMode: "live-frontier",
+      primaryModel: "openai/gpt-5.4",
+      alternateModel: "openai/gpt-5.4",
+    });
+    expect(defaultQaRuntimeModelForMode).not.toHaveBeenCalled();
+  });
+
   it("normalizes aimock selections", () => {
     expect(
       normalizeQaRunSelection(
@@ -126,14 +138,14 @@ describe("qa run config", () => {
   it("prefers the Codex OAuth default when the runtime resolver says it is available", () => {
     defaultQaRuntimeModelForMode.mockImplementation((mode, options) =>
       mode === "live-frontier"
-        ? "openai-codex/gpt-5.4"
+        ? "openai/gpt-5.4"
         : defaultQaProviderModelForMode(mode as QaProviderModeInput, options),
     );
 
     expect(createDefaultQaRunSelection(scenarios)).toEqual({
       providerMode: "live-frontier",
-      primaryModel: "openai-codex/gpt-5.4",
-      alternateModel: "openai-codex/gpt-5.4",
+      primaryModel: "openai/gpt-5.4",
+      alternateModel: "openai/gpt-5.4",
       fastMode: true,
       scenarioIds: ["dm-chat-baseline", "thread-lifecycle"],
     });

@@ -67,19 +67,24 @@ type AzureIdentityModule = {
 
 const AZURE_IDENTITY_MODULE = "@azure/identity";
 
+let azureIdentityModulePromise: Promise<AzureIdentityModule> | null = null;
+
 async function loadAzureIdentity(): Promise<AzureIdentityModule> {
-  return (await import(AZURE_IDENTITY_MODULE)) as AzureIdentityModule;
+  azureIdentityModulePromise ??= import(AZURE_IDENTITY_MODULE) as Promise<AzureIdentityModule>;
+  return azureIdentityModulePromise;
 }
 
+let msTeamsSdkPromise: Promise<MSTeamsTeamsSdk> | null = null;
+
 export async function loadMSTeamsSdk(): Promise<MSTeamsTeamsSdk> {
-  const [appsModule, apiModule] = await Promise.all([
+  msTeamsSdkPromise ??= Promise.all([
     import("@microsoft/teams.apps"),
     import("@microsoft/teams.api"),
-  ]);
-  return {
+  ]).then(([appsModule, apiModule]) => ({
     App: appsModule.App,
     Client: apiModule.Client,
-  };
+  }));
+  return msTeamsSdkPromise;
 }
 
 /**
@@ -653,6 +658,68 @@ const BOT_FRAMEWORK_ISSUERS: ReadonlyArray<{
   },
 ];
 
+type BotFrameworkJwtDeps = {
+  jwt: typeof import("jsonwebtoken");
+  JwksClient: typeof import("jwks-rsa").JwksClient;
+};
+
+const BOT_FRAMEWORK_GLOBAL_AUDIENCE = "https://api.botframework.com";
+
+function isJwtPayloadObject(
+  value: unknown,
+): value is { iss?: unknown; aud?: unknown; appid?: unknown; azp?: unknown } {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function getAudienceClaims(payload: unknown): string[] {
+  if (!isJwtPayloadObject(payload)) {
+    return [];
+  }
+  const audience = payload.aud;
+  if (typeof audience === "string") {
+    const trimmed = audience.trim();
+    return trimmed ? [trimmed] : [];
+  }
+  if (Array.isArray(audience)) {
+    return audience
+      .filter((value): value is string => typeof value === "string")
+      .map((value) => value.trim())
+      .filter(Boolean);
+  }
+  return [];
+}
+
+function normalizeBotIdentityClaim(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const normalized = value.trim().toLowerCase();
+  return normalized || null;
+}
+
+function hasExpectedBotIdentity(payload: unknown, expectedAppId: string): boolean {
+  if (!isJwtPayloadObject(payload)) {
+    return false;
+  }
+  const expected = normalizeBotIdentityClaim(expectedAppId);
+  if (!expected) {
+    return false;
+  }
+  return (
+    normalizeBotIdentityClaim(payload.appid) === expected ||
+    normalizeBotIdentityClaim(payload.azp) === expected
+  );
+}
+
+let botFrameworkJwtDepsPromise: Promise<BotFrameworkJwtDeps> | null = null;
+
+async function loadBotFrameworkJwtDeps(): Promise<BotFrameworkJwtDeps> {
+  botFrameworkJwtDepsPromise ??= Promise.all([import("jsonwebtoken"), import("jwks-rsa")]).then(
+    ([jwt, { JwksClient }]) => ({ jwt, JwksClient }),
+  );
+  return botFrameworkJwtDepsPromise;
+}
+
 /**
  * Create a Bot Framework JWT validator using jsonwebtoken + jwks-rsa directly.
  *
@@ -670,13 +737,12 @@ const BOT_FRAMEWORK_ISSUERS: ReadonlyArray<{
 export async function createBotFrameworkJwtValidator(creds: MSTeamsCredentials): Promise<{
   validate: (authHeader: string) => Promise<boolean>;
 }> {
-  const jwt = await import("jsonwebtoken");
-  const { JwksClient } = await import("jwks-rsa");
+  const { jwt, JwksClient } = await loadBotFrameworkJwtDeps();
 
   const allowedAudiences: [string, ...string[]] = [
     creds.appId,
     `api://${creds.appId}`,
-    "https://api.botframework.com",
+    BOT_FRAMEWORK_GLOBAL_AUDIENCE,
   ];
 
   const allowedIssuers = BOT_FRAMEWORK_ISSUERS.map((entry) =>
@@ -726,8 +792,12 @@ export async function createBotFrameworkJwtValidator(creds: MSTeamsCredentials):
 
       // Decode without verification to extract issuer and kid for key lookup.
       const header = decodeHeader(token);
-      const unverifiedPayload = jwt.decode(token) as { iss?: string } | null;
-      if (!header?.kid || !unverifiedPayload?.iss) {
+      const unverifiedPayload = jwt.decode(token);
+      if (
+        !header?.kid ||
+        !isJwtPayloadObject(unverifiedPayload) ||
+        typeof unverifiedPayload.iss !== "string"
+      ) {
         return false;
       }
 
@@ -741,12 +811,22 @@ export async function createBotFrameworkJwtValidator(creds: MSTeamsCredentials):
       try {
         const signingKey = await client.getSigningKey(header.kid);
         const publicKey = signingKey.getPublicKey();
-        jwt.verify(token, publicKey, {
+        const verifiedPayload = jwt.verify(token, publicKey, {
           audience: allowedAudiences,
           issuer: allowedIssuers,
           algorithms: ["RS256"],
           clockTolerance: 300,
         });
+        if (!isJwtPayloadObject(verifiedPayload)) {
+          return false;
+        }
+        const audiences = getAudienceClaims(verifiedPayload);
+        if (
+          audiences.includes(BOT_FRAMEWORK_GLOBAL_AUDIENCE) &&
+          !hasExpectedBotIdentity(verifiedPayload, creds.appId)
+        ) {
+          return false;
+        }
         return true;
       } catch {
         return false;

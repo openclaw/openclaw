@@ -1,14 +1,12 @@
 ---
-title: "Trusted Proxy Auth"
 summary: "Delegate gateway authentication to a trusted reverse proxy (Pomerium, Caddy, nginx + OAuth)"
+title: "Trusted proxy auth"
 read_when:
   - Running OpenClaw behind an identity-aware proxy
   - Setting up Pomerium, Caddy, or nginx with OAuth in front of OpenClaw
   - Fixing WebSocket 1008 unauthorized errors with reverse proxy setups
   - Deciding where to set HSTS and other HTTP hardening headers
 ---
-
-# Trusted Proxy Auth
 
 > ⚠️ **Security-sensitive feature.** This mode delegates authentication entirely to your reverse proxy. Misconfiguration can expose your Gateway to unauthorized access. Read this page carefully before enabling.
 
@@ -82,6 +80,7 @@ Important runtime rule:
 - Same-host loopback reverse proxies do **not** satisfy trusted-proxy auth.
 - For same-host loopback proxy setups, use token/password auth instead, or route through a non-loopback trusted proxy address that OpenClaw can verify.
 - Non-loopback Control UI deployments still need explicit `gateway.controlUi.allowedOrigins`.
+- **Forwarded-header evidence overrides loopback locality.** If a request arrives on loopback but carries `X-Forwarded-For` / `X-Forwarded-Host` / `X-Forwarded-Proto` headers pointing at a non-local origin, that evidence disqualifies the loopback locality claim. The request is treated as remote for pairing, trusted-proxy auth, and Control UI device-identity gating. This prevents a same-host loopback proxy from laundering forwarded-header identity into trusted-proxy auth.
 
 ### Configuration Reference
 

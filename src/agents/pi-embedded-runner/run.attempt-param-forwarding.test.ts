@@ -1,8 +1,9 @@
-import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentInternalEvent } from "../internal-events.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   loadRunOverflowCompactionHarness,
+  mockedGetApiKeyForModel,
   mockedRunEmbeddedAttempt,
   overflowBaseRunParams,
   resetRunOverflowCompactionHarnessMocks,
@@ -10,7 +11,6 @@ import {
 import type { RunEmbeddedPiAgentParams } from "./run/params.js";
 
 type ForwardingCase = {
-  name: string;
   runId: string;
   params: Partial<RunEmbeddedPiAgentParams>;
   expected: Record<string, unknown>;
@@ -18,44 +18,27 @@ type ForwardingCase = {
 
 let runEmbeddedPiAgent: typeof import("./run.js").runEmbeddedPiAgent;
 const internalEvents: AgentInternalEvent[] = [];
-const forwardingCases = [
-  {
-    name: "forwards toolsAllow so the per-job tool allowlist can be honored",
-    runId: "forward-toolsAllow",
-    params: { toolsAllow: ["exec", "read"] },
-    expected: { toolsAllow: ["exec", "read"] },
+const forwardingCase = {
+  runId: "forward-attempt-params",
+  params: {
+    toolsAllow: ["exec", "read"],
+    bootstrapContextMode: "lightweight",
+    bootstrapContextRunKind: "cron",
+    disableMessageTool: true,
+    forceMessageTool: true,
+    requireExplicitMessageTarget: true,
+    internalEvents,
   },
-  {
-    name: "forwards bootstrapContextMode so lightContext cron jobs strip workspace bootstrap files",
-    runId: "forward-bootstrapContextMode",
-    params: { bootstrapContextMode: "lightweight" },
-    expected: { bootstrapContextMode: "lightweight" },
+  expected: {
+    toolsAllow: ["exec", "read"],
+    bootstrapContextMode: "lightweight",
+    bootstrapContextRunKind: "cron",
+    disableMessageTool: true,
+    forceMessageTool: true,
+    requireExplicitMessageTarget: true,
+    internalEvents,
   },
-  {
-    name: "forwards bootstrapContextRunKind so the bootstrap filter knows the caller context",
-    runId: "forward-bootstrapContextRunKind",
-    params: { bootstrapContextRunKind: "cron" },
-    expected: { bootstrapContextRunKind: "cron" },
-  },
-  {
-    name: "forwards disableMessageTool so cron-owned delivery suppresses the messaging tool",
-    runId: "forward-disableMessageTool",
-    params: { disableMessageTool: true },
-    expected: { disableMessageTool: true },
-  },
-  {
-    name: "forwards requireExplicitMessageTarget so non-subagent callers can opt in explicitly",
-    runId: "forward-requireExplicitMessageTarget",
-    params: { requireExplicitMessageTarget: true },
-    expected: { requireExplicitMessageTarget: true },
-  },
-  {
-    name: "forwards internalEvents so the agent command attempt path can deliver internal events",
-    runId: "forward-internalEvents",
-    params: { internalEvents },
-    expected: { internalEvents },
-  },
-] satisfies ForwardingCase[];
+} satisfies ForwardingCase;
 
 describe("runEmbeddedPiAgent forwards optional params to runEmbeddedAttempt", () => {
   beforeAll(async () => {
@@ -66,15 +49,52 @@ describe("runEmbeddedPiAgent forwards optional params to runEmbeddedAttempt", ()
     resetRunOverflowCompactionHarnessMocks();
   });
 
-  it.each(forwardingCases)("$name", async ({ runId, params, expected }) => {
+  it("forwards optional attempt params in one attempt call", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
 
     await runEmbeddedPiAgent({
       ...overflowBaseRunParams,
-      ...params,
-      runId,
+      ...forwardingCase.params,
+      runId: forwardingCase.runId,
     });
 
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledWith(expect.objectContaining(expected));
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledWith(
+      expect.objectContaining(forwardingCase.expected),
+    );
+  });
+
+  it("lets plugin harnesses own auth before the attempt runs", async () => {
+    const { clearAgentHarnesses, registerAgentHarness } = await import("../harness/registry.js");
+    const pluginRunAttempt = vi.fn(async () => makeAttemptResult({ assistantTexts: ["ok"] }));
+    clearAgentHarnesses();
+    registerAgentHarness({
+      id: "codex",
+      label: "Codex",
+      supports: (ctx) =>
+        ctx.provider === "codex" ? { supported: true, priority: 100 } : { supported: false },
+      runAttempt: pluginRunAttempt,
+    });
+    mockedGetApiKeyForModel.mockRejectedValueOnce(new Error("generic auth should be skipped"));
+
+    try {
+      await runEmbeddedPiAgent({
+        ...overflowBaseRunParams,
+        provider: "codex",
+        model: "gpt-5.4",
+        config: {
+          agents: {
+            defaults: {
+              embeddedHarness: { runtime: "codex", fallback: "none" },
+            },
+          },
+        },
+        runId: "plugin-harness-skips-generic-auth",
+      });
+    } finally {
+      clearAgentHarnesses();
+    }
+
+    expect(mockedGetApiKeyForModel).not.toHaveBeenCalled();
+    expect(pluginRunAttempt).toHaveBeenCalledWith(expect.objectContaining({ provider: "codex" }));
   });
 });

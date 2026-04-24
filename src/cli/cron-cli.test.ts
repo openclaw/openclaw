@@ -1,5 +1,6 @@
 import { Command } from "commander";
 import { describe, expect, it, vi } from "vitest";
+import type { CronJob } from "../cron/types.js";
 import { registerCronCli } from "./cron-cli.js";
 
 const CRON_CLI_TEST_TIMEOUT_MS = 15_000;
@@ -60,6 +61,7 @@ type CronUpdatePatch = {
       model?: string;
       thinking?: string;
       lightContext?: boolean;
+      toolsAllow?: string[];
     };
     delivery?: {
       mode?: string;
@@ -73,7 +75,12 @@ type CronUpdatePatch = {
 
 type CronAddParams = {
   schedule?: { kind?: string; staggerMs?: number };
-  payload?: { model?: string; thinking?: string; lightContext?: boolean };
+  payload?: {
+    model?: string;
+    thinking?: string;
+    lightContext?: boolean;
+    toolsAllow?: string[];
+  };
   delivery?: { mode?: string; accountId?: string };
   deleteAfterRun?: boolean;
   agentId?: string;
@@ -85,6 +92,22 @@ function buildProgram() {
   program.exitOverride();
   registerCronCli(program);
   return program;
+}
+
+function createCronJob(id: string, name: string): CronJob {
+  const now = Date.now();
+  return {
+    id,
+    name,
+    enabled: true,
+    createdAtMs: now,
+    updatedAtMs: now,
+    schedule: { kind: "at", at: new Date(now + 3_600_000).toISOString() },
+    sessionTarget: "isolated",
+    wakeMode: "next-heartbeat",
+    payload: { kind: "agentTurn", message: "hello" },
+    state: {},
+  };
 }
 
 function resetGatewayMock() {
@@ -147,6 +170,7 @@ function mockCronEditJobLookup(schedule: unknown): void {
   );
 }
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper lets each assertion ascribe expected RPC params.
 function getGatewayCallParams<T>(method: string): T {
   const call = callGatewayFromCli.mock.calls.find((entry) => entry[0] === method);
   return (call?.[2] ?? {}) as T;
@@ -380,6 +404,54 @@ describe("cron cli", () => {
     expect(patch.enabled).toBe(expectedEnabled);
   });
 
+  it("paginates cron show lookups", async () => {
+    resetGatewayMock();
+    callGatewayFromCli.mockImplementation(
+      async (method: string, _opts: unknown, params?: unknown) => {
+        if (method === "cron.status") {
+          return { enabled: true };
+        }
+        if (method === "cron.list") {
+          const offset = (params as { offset?: number }).offset ?? 0;
+          if (offset === 0) {
+            return {
+              jobs: [createCronJob("first-page", "First Page")],
+              hasMore: true,
+              nextOffset: 200,
+            };
+          }
+          return {
+            jobs: [createCronJob("target-job", "Target Job")],
+            hasMore: false,
+            nextOffset: null,
+            deliveryPreviews: {
+              "target-job": {
+                label: "announce -> telegram:-100",
+                detail: "resolved from last, main session",
+              },
+            },
+          };
+        }
+        return { ok: true, params };
+      },
+    );
+
+    const program = buildProgram();
+    await program.parseAsync(["cron", "show", "Target Job"], { from: "user" });
+
+    const listParams = callGatewayFromCli.mock.calls
+      .filter((call) => call[0] === "cron.list")
+      .map((call) => call[2]);
+    expect(listParams).toEqual([
+      { includeDisabled: true, limit: 200, offset: 0 },
+      { includeDisabled: true, limit: 200, offset: 200 },
+    ]);
+    expect(defaultRuntime.log).toHaveBeenCalledWith("id: target-job");
+    expect(defaultRuntime.log).toHaveBeenCalledWith(
+      "delivery: announce -> telegram:-100 (resolved from last, main session)",
+    );
+  });
+
   it("sends agent id on cron add", async () => {
     await runCronCommand([
       "cron",
@@ -417,6 +489,23 @@ describe("cron cli", () => {
     expect(params?.payload?.lightContext).toBe(true);
   });
 
+  it("splits PowerShell-style space-separated --tools on cron add", async () => {
+    const params = await runCronAddAndGetParams([
+      "--name",
+      "Tools",
+      "--cron",
+      "* * * * *",
+      "--session",
+      "isolated",
+      "--message",
+      "hello",
+      "--tools",
+      "exec read write",
+    ]);
+
+    expect(params?.payload?.toolsAllow).toEqual(["exec", "read", "write"]);
+  });
+
   it.each([
     {
       label: "omits empty model and thinking",
@@ -434,6 +523,17 @@ describe("cron cli", () => {
     const patch = await runCronEditAndGetPatch(args);
     expect(patch?.patch?.payload?.model).toBe(expectedModel);
     expect(patch?.patch?.payload?.thinking).toBe(expectedThinking);
+  });
+
+  it("splits PowerShell-style space-separated --tools on cron edit", async () => {
+    const patch = await runCronEditAndGetPatch([
+      "--message",
+      "hello",
+      "--tools",
+      "exec read write",
+    ]);
+
+    expect(patch?.patch?.payload?.toolsAllow).toEqual(["exec", "read", "write"]);
   });
 
   it("sets and clears agent id on cron edit", async () => {

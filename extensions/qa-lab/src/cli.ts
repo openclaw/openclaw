@@ -35,6 +35,8 @@ async function runQaSuite(opts: {
   primaryModel?: string;
   alternateModel?: string;
   fastMode?: boolean;
+  thinking?: string;
+  allowFailures?: boolean;
   cliAuthMode?: string;
   parityPack?: string;
   scenarioIds?: string[];
@@ -44,6 +46,7 @@ async function runQaSuite(opts: {
   cpus?: number;
   memory?: string;
   disk?: string;
+  preflight?: boolean;
 }) {
   const runtime = await loadQaLabCliRuntime();
   await runtime.runQaSuiteCommand(opts);
@@ -60,6 +63,12 @@ async function runQaParityReport(opts: {
   const runtime = await loadQaLabCliRuntime();
   await runtime.runQaParityReportCommand(opts);
 }
+
+async function runQaCoverageReport(opts: { repoRoot?: string; output?: string; json?: boolean }) {
+  const runtime = await loadQaLabCliRuntime();
+  await runtime.runQaCoverageReportCommand(opts);
+}
+
 async function runQaCharacterEval(opts: {
   repoRoot?: string;
   outputDir?: string;
@@ -232,7 +241,17 @@ export function registerQaLabCli(program: Command) {
     .option("--concurrency <count>", "Scenario worker concurrency", (value: string) =>
       Number(value),
     )
+    .option("--preflight", "Run a single-scenario bootstrap preflight and stop", false)
+    .option(
+      "--allow-failures",
+      "Write artifacts without setting a failing exit code when scenarios fail",
+      false,
+    )
     .option("--fast", "Enable provider fast mode where supported", false)
+    .option(
+      "--thinking <level>",
+      "Suite thinking default: off|minimal|low|medium|high|xhigh|adaptive|max",
+    )
     .option("--image <alias>", "Multipass image alias")
     .option("--cpus <count>", "Multipass vCPU count", (value: string) => Number(value))
     .option("--memory <size>", "Multipass memory size")
@@ -250,11 +269,14 @@ export function registerQaLabCli(program: Command) {
         parityPack?: string;
         scenario?: string[];
         concurrency?: number;
+        allowFailures?: boolean;
         fast?: boolean;
+        thinking?: string;
         image?: string;
         cpus?: number;
         memory?: string;
         disk?: string;
+        preflight?: boolean;
       }) => {
         await runQaSuite({
           repoRoot: opts.repoRoot,
@@ -265,14 +287,17 @@ export function registerQaLabCli(program: Command) {
           primaryModel: opts.model,
           alternateModel: opts.altModel,
           fastMode: opts.fast,
+          thinking: opts.thinking,
           cliAuthMode: opts.cliAuthMode,
           parityPack: opts.parityPack,
           scenarioIds: opts.scenario,
           concurrency: opts.concurrency,
+          allowFailures: opts.allowFailures,
           image: opts.image,
           cpus: opts.cpus,
           memory: opts.memory,
           disk: opts.disk,
+          preflight: opts.preflight,
         });
       },
     );
@@ -302,6 +327,15 @@ export function registerQaLabCli(program: Command) {
       },
     );
 
+  qa.command("coverage")
+    .description("Print the markdown scenario coverage inventory")
+    .option("--repo-root <path>", "Repository root to target when writing --output")
+    .option("--output <path>", "Write the coverage inventory to this path")
+    .option("--json", "Print JSON instead of Markdown", false)
+    .action(async (opts: { repoRoot?: string; output?: string; json?: boolean }) => {
+      await runQaCoverageReport(opts);
+    });
+
   qa.command("character-eval")
     .description("Run the character QA scenario across live models and write a judged report")
     .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
@@ -316,7 +350,7 @@ export function registerQaLabCli(program: Command) {
     .option("--fast", "Enable provider fast mode for all candidate runs")
     .option(
       "--thinking <level>",
-      "Candidate thinking default: off|minimal|low|medium|high|xhigh|adaptive",
+      "Candidate thinking default: off|minimal|low|medium|high|xhigh|adaptive|max",
     )
     .option(
       "--model-thinking <ref=level>",
