@@ -265,24 +265,43 @@ async function workspaceHasBootstrapCompletionEvidence(params: { dir: string }):
   return await workspaceProfileLooksConfigured(params);
 }
 
-async function repairStaleWorkspaceBootstrapCompletion(params: {
+type WorkspaceBootstrapCompletionReconcileResult = {
+  repaired: boolean;
+  bootstrapExists: boolean;
+  state: WorkspaceSetupState;
+};
+
+async function reconcileWorkspaceBootstrapCompletionState(params: {
   dir: string;
   bootstrapPath: string;
   statePath: string;
   state: WorkspaceSetupState;
-}): Promise<{ repaired: boolean; state: WorkspaceSetupState }> {
+  bootstrapExists?: boolean;
+}): Promise<WorkspaceBootstrapCompletionReconcileResult> {
+  const bootstrapExists = params.bootstrapExists ?? (await fileExists(params.bootstrapPath));
   if (
     typeof params.state.setupCompletedAt === "string" &&
     params.state.setupCompletedAt.trim().length > 0
   ) {
-    return { repaired: false, state: params.state };
+    return { repaired: false, bootstrapExists, state: params.state };
   }
+
+  if (params.state.bootstrapSeededAt && !bootstrapExists) {
+    const completedState: WorkspaceSetupState = {
+      ...params.state,
+      setupCompletedAt: new Date().toISOString(),
+    };
+    await writeWorkspaceSetupState(params.statePath, completedState);
+    return { repaired: true, bootstrapExists: false, state: completedState };
+  }
+
   if (
+    !bootstrapExists ||
     !(await workspaceHasBootstrapCompletionEvidence({
       dir: params.dir,
     }))
   ) {
-    return { repaired: false, state: params.state };
+    return { repaired: false, bootstrapExists, state: params.state };
   }
 
   const now = new Date().toISOString();
@@ -293,7 +312,7 @@ async function repairStaleWorkspaceBootstrapCompletion(params: {
   };
   await fs.rm(params.bootstrapPath, { force: true });
   await writeWorkspaceSetupState(params.statePath, repairedState);
-  return { repaired: true, state: repairedState };
+  return { repaired: true, bootstrapExists: false, state: repairedState };
 }
 
 function resolveWorkspaceStatePath(dir: string): string {
@@ -321,11 +340,15 @@ function parseWorkspaceSetupState(raw: string): WorkspaceSetupState | null {
   }
 }
 
-async function readWorkspaceSetupState(statePath: string): Promise<WorkspaceSetupState> {
+async function readWorkspaceSetupState(
+  statePath: string,
+  opts?: { persistLegacyMigration?: boolean },
+): Promise<WorkspaceSetupState> {
   try {
     const raw = await fs.readFile(statePath, "utf-8");
     const parsed = parseWorkspaceSetupState(raw);
     if (
+      opts?.persistLegacyMigration &&
       parsed &&
       raw.includes('"onboardingCompletedAt"') &&
       !raw.includes('"setupCompletedAt"') &&
@@ -369,17 +392,28 @@ export async function resolveWorkspaceBootstrapStatus(
   if (!bootstrapExists) {
     return "complete";
   }
-  const repair = await repairStaleWorkspaceBootstrapCompletion({
+  return "pending";
+}
+
+export async function isWorkspaceBootstrapPending(dir: string): Promise<boolean> {
+  return (await resolveWorkspaceBootstrapStatus(dir)) === "pending";
+}
+
+export async function reconcileWorkspaceBootstrapCompletion(
+  dir: string,
+): Promise<WorkspaceBootstrapCompletionReconcileResult> {
+  const resolvedDir = resolveUserPath(dir);
+  const statePath = resolveWorkspaceStatePath(resolvedDir);
+  const bootstrapPath = path.join(resolvedDir, DEFAULT_BOOTSTRAP_FILENAME);
+  const state = await readWorkspaceSetupState(statePath, {
+    persistLegacyMigration: true,
+  });
+  return await reconcileWorkspaceBootstrapCompletionState({
     dir: resolvedDir,
     bootstrapPath,
     statePath,
     state,
   });
-  return repair.repaired ? "complete" : "pending";
-}
-
-export async function isWorkspaceBootstrapPending(dir: string): Promise<boolean> {
-  return (await resolveWorkspaceBootstrapStatus(dir)) === "pending";
 }
 
 async function writeWorkspaceSetupState(
@@ -503,7 +537,9 @@ export async function ensureAgentWorkspace(params?: {
   await writeFileIfMissing(userPath, userTemplate);
   await writeFileIfMissing(heartbeatPath, heartbeatTemplate);
 
-  let state = await readWorkspaceSetupState(statePath);
+  let state = await readWorkspaceSetupState(statePath, {
+    persistLegacyMigration: true,
+  });
   let stateDirty = false;
   const markState = (next: Partial<WorkspaceSetupState>) => {
     state = { ...state, ...next };
@@ -516,22 +552,19 @@ export async function ensureAgentWorkspace(params?: {
     markState({ bootstrapSeededAt: nowIso() });
   }
 
-  if (!state.setupCompletedAt && bootstrapExists) {
-    const repair = await repairStaleWorkspaceBootstrapCompletion({
+  if (!state.setupCompletedAt) {
+    const repair = await reconcileWorkspaceBootstrapCompletionState({
       dir,
       bootstrapPath,
       statePath,
       state,
+      bootstrapExists,
     });
     if (repair.repaired) {
       state = repair.state;
       stateDirty = false;
-      bootstrapExists = false;
+      bootstrapExists = repair.bootstrapExists;
     }
-  }
-
-  if (!state.setupCompletedAt && state.bootstrapSeededAt && !bootstrapExists) {
-    markState({ setupCompletedAt: nowIso() });
   }
 
   if (!state.bootstrapSeededAt && !state.setupCompletedAt && !bootstrapExists) {
