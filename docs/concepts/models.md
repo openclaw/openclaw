@@ -10,6 +10,11 @@ title: "Models CLI"
 See [/concepts/model-failover](/concepts/model-failover) for auth profile
 rotation, cooldowns, and how that interacts with fallbacks.
 Quick provider overview + examples: [/concepts/model-providers](/concepts/model-providers).
+Model refs choose a provider and model. They do not usually choose the
+low-level agent runtime. For example, `openai/gpt-5.5` can run through the
+normal OpenAI provider path or through the Codex app-server runtime, depending
+on `agents.defaults.embeddedHarness.runtime`. See
+[/concepts/agent-runtimes](/concepts/agent-runtimes).
 
 ## How model selection works
 
@@ -278,6 +283,7 @@ This applies whenever OpenClaw regenerates `models.json`, including command-driv
 ## Related
 
 - [Model Providers](/concepts/model-providers) — provider routing and auth
+- [Agent Runtimes](/concepts/agent-runtimes) — PI, Codex, and other agent loop runtimes
 - [Model Failover](/concepts/model-failover) — fallback chains
 - [Image Generation](/tools/image-generation) — image model configuration
 - [Music Generation](/tools/music-generation) — music model configuration
