@@ -207,6 +207,28 @@ describe("handleModelsCommand", () => {
     });
   });
 
+  it("hides the virtual Codex harness provider from /models menus", async () => {
+    modelCatalogMocks.loadModelCatalog.mockResolvedValue([
+      { provider: "codex", id: "gpt-5.5", name: "GPT-5.5" },
+      { provider: "openai", id: "gpt-5.5", name: "GPT-5.5" },
+    ]);
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "codex/gpt-5.5": { alias: "legacy-codex" },
+            "openai/gpt-5.5": { alias: "gpt" },
+          },
+        },
+      },
+    } satisfies Partial<OpenClawConfig>;
+
+    const result = await handleModelsCommand(buildParams("/models", cfg), true);
+
+    expect(result?.reply?.text).toContain("- openai (1)");
+    expect(result?.reply?.text).not.toContain("- codex");
+  });
+
   it("lists models for /models <provider>", async () => {
     const result = await handleModelsCommand(buildParams("/models openai"), true);
 
