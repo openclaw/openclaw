@@ -31,6 +31,10 @@ vi.mock("@mariozechner/pi-ai/oauth", async () => {
   };
 });
 
+vi.mock("../../../extensions/openai/openai-codex-provider.runtime.js", () => ({
+  refreshOpenAICodexToken: refreshOpenAICodexTokenMock,
+}));
+
 function createModel(overrides: Partial<ProviderRuntimeModel> & Pick<ProviderRuntimeModel, "id">) {
   return {
     id: overrides.id,
@@ -441,6 +445,27 @@ export function describeOpenAIProviderRuntimeContract(load: ProviderRuntimeContr
       });
     });
 
+    it("leaves openai gpt-5.5 forward-compat resolution to Pi", () => {
+      const provider = requireProviderContractProvider("openai");
+      const model = provider.resolveDynamicModel?.({
+        provider: "openai",
+        modelId: "gpt-5.5",
+        modelRegistry: {
+          find: (_provider: string, id: string) =>
+            id === "gpt-5.4"
+              ? createModel({
+                  id,
+                  provider: "openai",
+                  baseUrl: "https://api.openai.com/v1",
+                  input: ["text", "image"],
+                })
+              : null,
+        } as never,
+      });
+
+      expect(model).toBeUndefined();
+    });
+
     it("owns openai gpt-5.4 mini forward-compat resolution", () => {
       const provider = requireProviderContractProvider("openai");
       const model = provider.resolveDynamicModel?.({
@@ -534,6 +559,37 @@ export function describeOpenAIProviderRuntimeContract(load: ProviderRuntimeContr
         provider: "openai-codex",
         api: "openai-codex-responses",
         contextWindow: 1_050_000,
+        maxTokens: 128_000,
+      });
+    });
+
+    it("uses Pi registry metadata for codex gpt-5.5 models", () => {
+      const provider = requireProviderContractProvider("openai-codex");
+      const model = provider.resolveDynamicModel?.({
+        provider: "openai-codex",
+        modelId: "gpt-5.5",
+        modelRegistry: {
+          find: (_provider: string, id: string) =>
+            id === "gpt-5.5"
+              ? createModel({
+                  id,
+                  api: "openai-codex-responses",
+                  provider: "openai-codex",
+                  baseUrl: "https://chatgpt.com/backend-api",
+                  input: ["text", "image"],
+                  cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
+                  contextWindow: 400_000,
+                  maxTokens: 128_000,
+                })
+              : null,
+        } as never,
+      });
+
+      expect(model).toMatchObject({
+        id: "gpt-5.5",
+        provider: "openai-codex",
+        api: "openai-codex-responses",
+        contextWindow: 400_000,
         maxTokens: 128_000,
       });
     });

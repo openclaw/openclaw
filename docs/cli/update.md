@@ -3,7 +3,7 @@ summary: "CLI reference for `openclaw update` (safe-ish source update + gateway 
 read_when:
   - You want to update a source checkout safely
   - You need to understand `--update` shorthand behavior
-title: "update"
+title: "Update"
 ---
 
 # `openclaw update`
@@ -82,6 +82,12 @@ install method aligned:
 
 The Gateway core auto-updater (when enabled via config) reuses this same update path.
 
+For package-manager installs, `openclaw update` resolves the target package
+version before invoking the package manager. If the installed version exactly
+matches the target and no update-channel change needs to be persisted, the
+command exits as skipped before package install, plugin sync, completion refresh,
+or gateway restart work.
+
 ## Git checkout flow
 
 Channels:
@@ -101,7 +107,7 @@ High-level:
 6. Installs deps with the repo package manager. For pnpm checkouts, the updater bootstraps `pnpm` on demand (via `corepack` first, then a temporary `npm install pnpm@10` fallback) instead of running `npm run build` inside a pnpm workspace.
 7. Builds + builds the Control UI.
 8. Runs `openclaw doctor` as the final “safe update” check.
-9. Syncs plugins to the active channel (dev uses bundled extensions; stable/beta uses npm) and updates npm-installed plugins.
+9. Syncs plugins to the active channel (dev uses bundled plugins; stable/beta uses npm) and updates npm-installed plugins.
 
 If an exact pinned npm plugin update resolves to an artifact whose integrity
 differs from the stored install record, `openclaw update` aborts that plugin
@@ -114,7 +120,7 @@ If pnpm bootstrap still fails, the updater now stops early with a package-manage
 
 `openclaw --update` rewrites to `openclaw update` (useful for shells and launcher scripts).
 
-## See also
+## Related
 
 - `openclaw doctor` (offers to run update first on git checkouts)
 - [Development channels](/install/development-channels)

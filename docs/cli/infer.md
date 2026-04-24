@@ -6,8 +6,6 @@ read_when:
 title: "Inference CLI"
 ---
 
-# Inference CLI
-
 `openclaw infer` is the canonical headless surface for provider-backed inference workflows.
 
 It intentionally exposes capability families, not raw gateway RPC names and not raw agent tool ids.
@@ -123,7 +121,7 @@ This table maps common inference tasks to the corresponding infer command.
 - Use `--json` when the output will be consumed by another command or script.
 - Use `--provider` or `--model provider/model` when a specific backend is required.
 - For `image describe`, `audio transcribe`, and `video describe`, `--model` must use the form `<provider/model>`.
-- For `image describe`, an explicit `--model` runs that provider/model directly. The model must be image-capable in the model catalog or provider config.
+- For `image describe`, an explicit `--model` runs that provider/model directly. The model must be image-capable in the model catalog or provider config. `codex/<model>` runs a bounded Codex app-server image-understanding turn; `openai-codex/<model>` uses the OpenAI Codex OAuth provider path.
 - Stateless execution commands default to local.
 - Gateway-managed state commands default to gateway.
 - The normal local path does not require the gateway to be running.
@@ -136,7 +134,7 @@ Use `model` for provider-backed text inference and model/provider inspection.
 openclaw infer model run --prompt "Reply with exactly: smoke-ok" --json
 openclaw infer model run --prompt "Summarize this changelog entry" --provider openai --json
 openclaw infer model providers --json
-openclaw infer model inspect --name gpt-5.4 --json
+openclaw infer model inspect --name gpt-5.5 --json
 ```
 
 Notes:

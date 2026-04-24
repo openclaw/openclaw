@@ -6,8 +6,6 @@ read_when:
 title: "Control UI"
 ---
 
-# Control UI (browser)
-
 The Control UI is a small **Vite + Lit** single-page app served by the Gateway:
 
 - default: `http://<host>:18789/`
@@ -76,13 +74,30 @@ you revoke it with `openclaw devices revoke --device <id> --role <role>`. See
 - Each browser profile generates a unique device ID, so switching browsers or
   clearing browser data will require re-pairing.
 
+## Personal identity (browser-local)
+
+The Control UI supports a per-browser personal identity (display name and
+avatar) attached to outgoing messages for attribution in shared sessions. It
+lives in browser storage, is scoped to the current browser profile, and is not
+synced to other devices or persisted server-side beyond the normal transcript
+authorship metadata on messages you actually send. Clearing site data or
+switching browsers resets it to empty.
+
+## Runtime config endpoint
+
+The Control UI fetches its runtime settings from
+`/__openclaw/control-ui-config.json`. That endpoint is gated by the same
+gateway auth as the rest of the HTTP surface: unauthenticated browsers cannot
+fetch it, and a successful fetch requires either an already valid gateway
+token/password, Tailscale Serve identity, or a trusted-proxy identity.
+
 ## Language support
 
 The Control UI can localize itself on first load based on your browser locale.
 To override it later, open **Overview -> Gateway Access -> Language**. The
 locale picker lives in the Gateway Access card, not under Appearance.
 
-- Supported locales: `en`, `zh-CN`, `zh-TW`, `pt-BR`, `de`, `es`, `ja-JP`, `ko`, `fr`, `tr`, `uk`, `id`, `pl`
+- Supported locales: `en`, `zh-CN`, `zh-TW`, `pt-BR`, `de`, `es`, `ja-JP`, `ko`, `fr`, `tr`, `uk`, `id`, `pl`, `th`
 - Non-English translations are lazy-loaded in the browser.
 - The selected locale is saved in browser storage and reused on future visits.
 - Missing translation keys fall back to English.
@@ -109,6 +124,7 @@ locale picker lives in the Gateway Access card, not under Appearance.
   plus plugin + channel schemas when available); Raw JSON editor is
   available only when the snapshot has a safe raw round-trip
 - If a snapshot cannot safely round-trip raw text, Control UI forces Form mode and disables Raw mode for that snapshot
+- Raw JSON editor "Reset to saved" preserves the raw-authored shape (formatting, comments, `$include` layout) instead of re-rendering a flattened snapshot, so external edits survive a reset when the snapshot can safely round-trip
 - Structured SecretRef object values are rendered read-only in form text inputs to prevent accidental object-to-string corruption
 - Debug: status/health/models snapshots + event log + manual RPC calls (`status`, `health`, `models.list`)
 - Logs: live tail of gateway file logs with filter/export (`logs.tail`)
@@ -131,11 +147,13 @@ Cron jobs panel notes:
 - `chat.send` is **non-blocking**: it acks immediately with `{ runId, status: "started" }` and the response streams via `chat` events.
 - Re-sending with the same `idempotencyKey` returns `{ status: "in_flight" }` while running, and `{ status: "ok" }` after completion.
 - `chat.history` responses are size-bounded for UI safety. When transcript entries are too large, Gateway may truncate long text fields, omit heavy metadata blocks, and replace oversized messages with a placeholder (`[chat.history omitted: message too large]`).
+- Assistant/generated images are persisted as managed media references and served back through authenticated Gateway media URLs, so reloads do not depend on raw base64 image payloads staying in the chat history response.
 - `chat.history` also strips display-only inline directive tags from visible assistant text (for example `[[reply_to_*]]` and `[[audio_as_voice]]`), plain-text tool-call XML payloads (including `<tool_call>...</tool_call>`, `<function_call>...</function_call>`, `<tool_calls>...</tool_calls>`, `<function_calls>...</function_calls>`, and truncated tool-call blocks), and leaked ASCII/full-width model control tokens, and omits assistant entries whose whole visible text is only the exact silent token `NO_REPLY` / `no_reply`.
 - `chat.inject` appends an assistant note to the session transcript and broadcasts a `chat` event for UI-only updates (no agent run, no channel delivery).
 - The chat header model and thinking pickers patch the active session immediately through `sessions.patch`; they are persistent session overrides, not one-turn-only send options.
 - Stop:
   - Click **Stop** (calls `chat.abort`)
+  - While a run is active, normal follow-ups queue. Click **Steer** on a queued message to inject that follow-up into the running turn.
   - Type `/stop` (or standalone abort phrases like `stop`, `stop action`, `stop run`, `stop openclaw`, `please stop`) to abort out-of-band
   - `chat.abort` supports `{ sessionKey }` (no `runId`) to abort all active runs for that session
 - Abort partial retention:

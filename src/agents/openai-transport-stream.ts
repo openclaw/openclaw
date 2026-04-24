@@ -19,6 +19,7 @@ import type {
   ResponseInput,
   ResponseInputMessageContentList,
 } from "openai/resources/responses/responses.js";
+import type { ModelCompatConfig } from "../config/types.models.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { resolveProviderTransportTurnStateWithPlugin } from "../plugins/provider-runtime.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dynamic-headers.js";
@@ -80,8 +81,8 @@ type OpenAICompletionsOptions = BaseStreamOptions & {
   reasoningEffort?: OpenAIReasoningEffort;
 };
 
-type OpenAIModeModel = Model<Api> & {
-  compat?: Record<string, unknown>;
+type OpenAIModeModel = Omit<Model<Api>, "compat"> & {
+  compat?: ModelCompatConfig;
 };
 
 type MutableAssistantOutput = {
@@ -362,7 +363,10 @@ function convertResponsesTools(
     type: "function",
     name: tool.name,
     description: tool.description,
-    parameters: normalizeOpenAIStrictToolParameters(tool.parameters, strict),
+    parameters: normalizeOpenAIStrictToolParameters(tool.parameters, strict) as Record<
+      string,
+      unknown
+    >,
     strict,
   }));
 }
@@ -752,6 +756,49 @@ function resolveOpenAIReasoningEffort(
   ) as OpenAIApiReasoningEffort;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function hasResponsesWebSearchTool(tools: unknown): boolean {
+  if (!Array.isArray(tools)) {
+    return false;
+  }
+  return tools.some((tool) => {
+    if (!isRecord(tool)) {
+      return false;
+    }
+    if (tool.type === "web_search") {
+      return true;
+    }
+    if (tool.type === "function" && tool.name === "web_search") {
+      return true;
+    }
+    const fn = tool.function;
+    return isRecord(fn) && fn.name === "web_search";
+  });
+}
+
+function raiseMinimalReasoningForResponsesWebSearch(params: {
+  model: Model<Api>;
+  effort: OpenAIApiReasoningEffort;
+  tools: unknown;
+}): OpenAIApiReasoningEffort {
+  if (params.effort !== "minimal" || !hasResponsesWebSearchTool(params.tools)) {
+    return params.effort;
+  }
+  for (const effort of ["low", "medium", "high"] as const) {
+    const resolved = resolveOpenAIReasoningEffortForModel({
+      model: params.model,
+      effort,
+    });
+    if (resolved && resolved !== "none" && resolved !== "minimal") {
+      return resolved;
+    }
+  }
+  return params.effort;
+}
+
 export function buildOpenAIResponsesParams(
   model: Model<Api>,
   context: Context,
@@ -798,10 +845,17 @@ export function buildOpenAIResponsesParams(
   if (model.reasoning) {
     if (options?.reasoningEffort || options?.reasoning || options?.reasoningSummary) {
       const requestedReasoningEffort = resolveOpenAIReasoningEffort(options);
-      const reasoningEffort = resolveOpenAIReasoningEffortForModel({
+      const resolvedReasoningEffort = resolveOpenAIReasoningEffortForModel({
         model,
         effort: requestedReasoningEffort,
       });
+      const reasoningEffort = resolvedReasoningEffort
+        ? raiseMinimalReasoningForResponsesWebSearch({
+            model,
+            effort: resolvedReasoningEffort,
+            tools: params.tools,
+          })
+        : undefined;
       if (reasoningEffort) {
         params.reasoning = {
           effort: reasoningEffort,
@@ -963,13 +1017,71 @@ function createOpenAICompletionsClient(
   apiKey: string,
   optionHeaders?: Record<string, string>,
 ) {
+  const clientConfig = buildOpenAICompletionsClientConfig(model, context, optionHeaders);
   return new OpenAI({
     apiKey,
-    baseURL: model.baseUrl,
+    baseURL: clientConfig.baseURL,
     dangerouslyAllowBrowser: true,
-    defaultHeaders: buildOpenAIClientHeaders(model, context, optionHeaders),
+    defaultHeaders: clientConfig.defaultHeaders,
+    defaultQuery: clientConfig.defaultQuery,
     fetch: buildGuardedModelFetch(model),
   });
+}
+
+function isAzureOpenAICompatibleHost(hostname: string): boolean {
+  return (
+    hostname.endsWith(".openai.azure.com") ||
+    hostname.endsWith(".services.ai.azure.com") ||
+    hostname.endsWith(".cognitiveservices.azure.com")
+  );
+}
+
+function buildOpenAICompletionsClientConfig(
+  model: Model<Api>,
+  context: Context,
+  optionHeaders?: Record<string, string>,
+): {
+  baseURL: string;
+  defaultHeaders: Record<string, string>;
+  defaultQuery?: Record<string, string>;
+} {
+  const headers = buildOpenAIClientHeaders(model, context, optionHeaders);
+  const defaultQuery: Record<string, string> = {};
+  let baseURL = model.baseUrl;
+  let isAzureHost = false;
+
+  try {
+    const parsed = new URL(model.baseUrl);
+    isAzureHost = isAzureOpenAICompatibleHost(parsed.hostname.toLowerCase());
+    parsed.searchParams.forEach((value, key) => {
+      if (value) {
+        defaultQuery[key] = value;
+      }
+    });
+    parsed.search = "";
+    baseURL = parsed.toString().replace(/\/$/, "");
+  } catch {
+    // Keep the configured base URL unchanged; the OpenAI SDK will surface invalid URLs.
+  }
+
+  if (isAzureHost) {
+    const apiVersionHeader = Object.keys(headers).find(
+      (key) => key.toLowerCase() === "api-version",
+    );
+    if (apiVersionHeader) {
+      const apiVersion = headers[apiVersionHeader]?.trim();
+      delete headers[apiVersionHeader];
+      if (apiVersion && !defaultQuery["api-version"]) {
+        defaultQuery["api-version"] = apiVersion;
+      }
+    }
+  }
+
+  return {
+    baseURL,
+    defaultHeaders: headers,
+    defaultQuery: Object.keys(defaultQuery).length > 0 ? defaultQuery : undefined,
+  };
 }
 
 export function createOpenAICompletionsTransportStreamFn(): StreamFn {
@@ -1045,6 +1157,7 @@ async function processOpenAICompletionsStream(
         name: string;
         arguments: Record<string, unknown>;
         partialArgs: string;
+        thoughtSignature?: string;
       }
     | null = null;
   let pendingPostToolCallDeltas: CompletionsReasoningDelta[] = [];
@@ -1209,12 +1322,14 @@ async function processOpenAICompletionsStream(
             currentBlock = null;
             flushPendingPostToolCallDeltas();
           }
+          const initialSig = extractGoogleThoughtSignature(toolCall);
           currentBlock = {
             type: "toolCall",
             id: toolCall.id || "",
             name: toolCall.function?.name || "",
             arguments: {},
             partialArgs: "",
+            ...(initialSig ? { thoughtSignature: initialSig } : {}),
           };
           currentToolCallArgumentBytes = 0;
           output.content.push(currentBlock);
@@ -1228,6 +1343,10 @@ async function processOpenAICompletionsStream(
         }
         if (toolCall.function?.name) {
           currentBlock.name = toolCall.function.name;
+        }
+        const deltaSig = extractGoogleThoughtSignature(toolCall);
+        if (deltaSig) {
+          currentBlock.thoughtSignature = deltaSig;
         }
         if (toolCall.function?.arguments) {
           const nextArgumentBytes = measureUtf8Bytes(toolCall.function.arguments);
@@ -1387,31 +1506,24 @@ function getCompat(model: OpenAIModeModel): {
       : detected.supportsReasoningEffort;
   return {
     supportsStore,
-    supportsDeveloperRole:
-      (compat.supportsDeveloperRole as boolean | undefined) ?? detected.supportsDeveloperRole,
+    supportsDeveloperRole: compat.supportsDeveloperRole ?? detected.supportsDeveloperRole,
     supportsReasoningEffort,
     reasoningEffortMap: resolveOpenAIReasoningEffortMap(model, detected.reasoningEffortMap),
-    supportsUsageInStreaming:
-      (compat.supportsUsageInStreaming as boolean | undefined) ?? detected.supportsUsageInStreaming,
+    supportsUsageInStreaming: compat.supportsUsageInStreaming ?? detected.supportsUsageInStreaming,
     maxTokensField: (compat.maxTokensField as string | undefined) ?? detected.maxTokensField,
-    requiresToolResultName:
-      (compat.requiresToolResultName as boolean | undefined) ?? detected.requiresToolResultName,
+    requiresToolResultName: compat.requiresToolResultName ?? detected.requiresToolResultName,
     requiresAssistantAfterToolResult:
-      (compat.requiresAssistantAfterToolResult as boolean | undefined) ??
-      detected.requiresAssistantAfterToolResult,
-    requiresThinkingAsText:
-      (compat.requiresThinkingAsText as boolean | undefined) ?? detected.requiresThinkingAsText,
+      compat.requiresAssistantAfterToolResult ?? detected.requiresAssistantAfterToolResult,
+    requiresThinkingAsText: compat.requiresThinkingAsText ?? detected.requiresThinkingAsText,
     thinkingFormat: (compat.thinkingFormat as string | undefined) ?? detected.thinkingFormat,
     openRouterRouting: (compat.openRouterRouting as Record<string, unknown> | undefined) ?? {},
     vercelGatewayRouting:
       (compat.vercelGatewayRouting as Record<string, unknown> | undefined) ??
       detected.vercelGatewayRouting,
-    supportsStrictMode:
-      (compat.supportsStrictMode as boolean | undefined) ?? detected.supportsStrictMode,
-    requiresStringContent: (compat.requiresStringContent as boolean | undefined) ?? false,
+    supportsStrictMode: compat.supportsStrictMode ?? detected.supportsStrictMode,
+    requiresStringContent: compat.requiresStringContent ?? false,
     visibleReasoningDetailTypes:
-      (compat.visibleReasoningDetailTypes as string[] | undefined) ??
-      detected.visibleReasoningDetailTypes,
+      compat.visibleReasoningDetailTypes ?? detected.visibleReasoningDetailTypes,
   };
 }
 
@@ -1463,6 +1575,100 @@ function convertTools(
   }));
 }
 
+function extractGoogleThoughtSignature(toolCall: unknown): string | undefined {
+  const tc = toolCall as Record<string, unknown> | undefined;
+  if (!tc) {
+    return undefined;
+  }
+  const extra = (tc.extra_content as Record<string, unknown> | undefined)?.google as
+    | Record<string, unknown>
+    | undefined;
+  const fromExtra = extra?.thought_signature;
+  if (typeof fromExtra === "string" && fromExtra.length > 0) {
+    return fromExtra;
+  }
+  const fromFunction = (tc.function as { thought_signature?: unknown } | undefined)
+    ?.thought_signature;
+  return typeof fromFunction === "string" && fromFunction.length > 0 ? fromFunction : undefined;
+}
+
+function isGoogleOpenAICompatModel(model: OpenAIModeModel): boolean {
+  const endpointClass = detectOpenAICompletionsCompat(model as Model<"openai-completions">)
+    .capabilities.endpointClass;
+  return (
+    model.provider === "google" ||
+    endpointClass === "google-generative-ai" ||
+    endpointClass === "google-vertex"
+  );
+}
+
+function injectToolCallThoughtSignatures(
+  outgoingMessages: unknown[],
+  context: Context,
+  model: OpenAIModeModel,
+): void {
+  if (!isGoogleOpenAICompatModel(model)) {
+    return;
+  }
+  const sigById = new Map<string, string>();
+  for (const msg of context.messages ?? []) {
+    if ((msg as { role?: string }).role !== "assistant") {
+      continue;
+    }
+    const source = msg as { api?: string; provider?: string; model?: string; content?: unknown };
+    if (
+      source.api !== model.api ||
+      source.provider !== model.provider ||
+      source.model !== model.id
+    ) {
+      continue;
+    }
+    if (!Array.isArray(source.content)) {
+      continue;
+    }
+    for (const block of source.content as Array<Record<string, unknown>>) {
+      if (block.type !== "toolCall") {
+        continue;
+      }
+      const id = block.id;
+      const sig = block.thoughtSignature;
+      if (typeof id === "string" && typeof sig === "string" && sig.length > 0) {
+        sigById.set(id, sig);
+      }
+    }
+  }
+  if (sigById.size === 0) {
+    return;
+  }
+  for (const message of outgoingMessages) {
+    const toolCalls = (message as { tool_calls?: unknown }).tool_calls;
+    if (!Array.isArray(toolCalls)) {
+      continue;
+    }
+    for (const toolCall of toolCalls as Array<Record<string, unknown>>) {
+      const id = toolCall.id;
+      if (typeof id !== "string") {
+        continue;
+      }
+      const sig = sigById.get(id);
+      if (!sig) {
+        continue;
+      }
+      const extra =
+        toolCall.extra_content && typeof toolCall.extra_content === "object"
+          ? (toolCall.extra_content as Record<string, unknown>)
+          : {};
+      toolCall.extra_content = extra;
+      const google =
+        extra.google && typeof extra.google === "object"
+          ? (extra.google as Record<string, unknown>)
+          : {};
+      extra.google = google;
+      google.thought_signature = sig;
+    }
+  }
+}
+
 export function buildOpenAICompletionsParams(
   model: OpenAIModeModel,
   context: Context,
@@ -1476,6 +1682,7 @@ export function buildOpenAICompletionsParams(
       }
     : context;
   const messages = convertMessages(model as never, completionsContext, compat as never);
+  injectToolCallThoughtSignatures(messages as unknown[], context, model);
   const params: Record<string, unknown> = {
     model: model.id,
     messages: compat.requiresStringContent
@@ -1577,5 +1784,6 @@ function mapStopReason(reason: string | null) {
 }
 
 export const __testing = {
+  buildOpenAICompletionsClientConfig,
   processOpenAICompletionsStream,
 };

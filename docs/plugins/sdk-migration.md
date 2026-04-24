@@ -1,15 +1,13 @@
 ---
-title: "Plugin SDK Migration"
-sidebarTitle: "Migrate to SDK"
 summary: "Migrate from the legacy backwards-compatibility layer to the modern plugin SDK"
+title: "Plugin SDK migration"
+sidebarTitle: "Migrate to SDK"
 read_when:
   - You see the OPENCLAW_PLUGIN_SDK_COMPAT_DEPRECATED warning
   - You see the OPENCLAW_EXTENSION_API_DEPRECATED warning
   - You are updating a plugin to the modern plugin architecture
   - You maintain an external OpenClaw plugin
 ---
-
-# Plugin SDK Migration
 
 OpenClaw has moved from a broad backwards-compatibility layer to a modern plugin
 architecture with focused, documented imports. If your plugin was built before
@@ -275,11 +273,12 @@ Current bundled provider examples:
   | `plugin-sdk/provider-auth-api-key` | Provider API-key setup helpers | API-key onboarding/profile-write helpers |
   | `plugin-sdk/provider-auth-result` | Provider auth-result helpers | Standard OAuth auth-result builder |
   | `plugin-sdk/provider-auth-login` | Provider interactive login helpers | Shared interactive login helpers |
+  | `plugin-sdk/provider-selection-runtime` | Provider selection helpers | Configured-or-auto provider selection and raw provider config merging |
   | `plugin-sdk/provider-env-vars` | Provider env-var helpers | Provider auth env-var lookup helpers |
   | `plugin-sdk/provider-model-shared` | Shared provider model/replay helpers | `ProviderReplayFamily`, `buildProviderReplayFamilyHooks`, `normalizeModelCompat`, shared replay-policy builders, provider-endpoint helpers, and model-id normalization helpers |
   | `plugin-sdk/provider-catalog-shared` | Shared provider catalog helpers | `findCatalogTemplate`, `buildSingleProviderApiKeyCatalog`, `supportsNativeStreamingUsageCompat`, `applyProviderNativeStreamingUsageCompat` |
   | `plugin-sdk/provider-onboard` | Provider onboarding patches | Onboarding config helpers |
-  | `plugin-sdk/provider-http` | Provider HTTP helpers | Generic provider HTTP/endpoint capability helpers |
+  | `plugin-sdk/provider-http` | Provider HTTP helpers | Generic provider HTTP/endpoint capability helpers, including audio transcription multipart form helpers |
   | `plugin-sdk/provider-web-fetch` | Provider web-fetch helpers | Web-fetch provider registration/cache helpers |
   | `plugin-sdk/provider-web-search-config-contract` | Provider web-search config helpers | Narrow web-search config/credential helpers for providers that do not need plugin-enable wiring |
   | `plugin-sdk/provider-web-search-contract` | Provider web-search contract helpers | Narrow web-search config/credential contract helpers such as `createWebSearchProviderContractFields`, `enablePluginInConfig`, `resolveProviderWebSearchPluginConfig`, and scoped credential setters/getters |
@@ -296,8 +295,8 @@ Current bundled provider examples:
   | `plugin-sdk/text-chunking` | Text chunking helpers | Outbound text chunking helper |
   | `plugin-sdk/speech` | Speech helpers | Speech provider types plus provider-facing directive, registry, and validation helpers |
   | `plugin-sdk/speech-core` | Shared speech core | Speech provider types, registry, directives, normalization |
-  | `plugin-sdk/realtime-transcription` | Realtime transcription helpers | Provider types and registry helpers |
-  | `plugin-sdk/realtime-voice` | Realtime voice helpers | Provider types and registry helpers |
+  | `plugin-sdk/realtime-transcription` | Realtime transcription helpers | Provider types, registry helpers, and shared WebSocket session helper |
+  | `plugin-sdk/realtime-voice` | Realtime voice helpers | Provider types, registry/resolution helpers, and bridge session helpers |
   | `plugin-sdk/image-generation-core` | Shared image-generation core | Image-generation types, failover, auth, and registry helpers |
   | `plugin-sdk/music-generation` | Music-generation helpers | Music-generation provider/request/result types |
   | `plugin-sdk/music-generation-core` | Shared music-generation core | Music-generation types, failover helpers, provider lookup, and model-ref parsing |

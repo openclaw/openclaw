@@ -7,8 +7,6 @@ read_when:
 title: "Canvas"
 ---
 
-# Canvas (macOS app)
-
 The macOS app embeds an agent‑controlled **Canvas panel** using `WKWebView`. It
 is a lightweight visual workspace for HTML/CSS/JS, A2UI, and small interactive
 UI surfaces.

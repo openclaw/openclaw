@@ -4,7 +4,6 @@ import { getPresence } from "../monitor/presence-cache.js";
 import {
   type ActionGate,
   jsonResult,
-  parseAvailableTags,
   readNumberParam,
   readStringArrayParam,
   readStringParam,
@@ -32,7 +31,11 @@ import {
   uploadStickerDiscord,
   resolveEventCoverImage,
 } from "../send.js";
-import { readDiscordParentIdParam } from "./runtime.shared.js";
+import {
+  readDiscordChannelCreateParams,
+  readDiscordChannelEditParams,
+  readDiscordChannelMoveParams,
+} from "./runtime.shared.js";
 
 export const discordGuildActionRuntime = {
   addRoleDiscord,
@@ -326,23 +329,8 @@ export async function handleDiscordGuildAction(
       if (!isActionEnabled("channels")) {
         throw new Error("Discord channel management is disabled.");
       }
-      const guildId = readStringParam(params, "guildId", { required: true });
-      const name = readStringParam(params, "name", { required: true });
-      const type = readNumberParam(params, "type", { integer: true });
-      const parentId = readDiscordParentIdParam(params);
-      const topic = readStringParam(params, "topic");
-      const position = readNumberParam(params, "position", { integer: true });
-      const nsfw = params.nsfw as boolean | undefined;
       const channel = await discordGuildActionRuntime.createChannelDiscord(
-        {
-          guildId,
-          name,
-          type: type ?? undefined,
-          parentId: parentId ?? undefined,
-          topic: topic ?? undefined,
-          position: position ?? undefined,
-          nsfw,
-        },
+        readDiscordChannelCreateParams(params),
         withOpts(),
       );
       return jsonResult({ ok: true, channel });
@@ -351,37 +339,10 @@ export async function handleDiscordGuildAction(
       if (!isActionEnabled("channels")) {
         throw new Error("Discord channel management is disabled.");
       }
-      const channelId = readStringParam(params, "channelId", {
-        required: true,
-      });
-      const name = readStringParam(params, "name");
-      const topic = readStringParam(params, "topic");
-      const position = readNumberParam(params, "position", { integer: true });
-      const parentId = readDiscordParentIdParam(params);
-      const nsfw = params.nsfw as boolean | undefined;
-      const rateLimitPerUser = readNumberParam(params, "rateLimitPerUser", {
-        integer: true,
-      });
-      const archived = typeof params.archived === "boolean" ? params.archived : undefined;
-      const locked = typeof params.locked === "boolean" ? params.locked : undefined;
-      const autoArchiveDuration = readNumberParam(params, "autoArchiveDuration", {
-        integer: true,
-      });
-      const availableTags = parseAvailableTags(params.availableTags);
-      const editPayload = {
-        channelId,
-        name: name ?? undefined,
-        topic: topic ?? undefined,
-        position: position ?? undefined,
-        parentId,
-        nsfw,
-        rateLimitPerUser: rateLimitPerUser ?? undefined,
-        archived,
-        locked,
-        autoArchiveDuration: autoArchiveDuration ?? undefined,
-        availableTags,
-      };
-      const channel = await discordGuildActionRuntime.editChannelDiscord(editPayload, withOpts());
+      const channel = await discordGuildActionRuntime.editChannelDiscord(
+        readDiscordChannelEditParams(params),
+        withOpts(),
+      );
       return jsonResult({ ok: true, channel });
     }
     case "channelDelete": {
@@ -398,19 +359,8 @@ export async function handleDiscordGuildAction(
       if (!isActionEnabled("channels")) {
         throw new Error("Discord channel management is disabled.");
       }
-      const guildId = readStringParam(params, "guildId", { required: true });
-      const channelId = readStringParam(params, "channelId", {
-        required: true,
-      });
-      const parentId = readDiscordParentIdParam(params);
-      const position = readNumberParam(params, "position", { integer: true });
       await discordGuildActionRuntime.moveChannelDiscord(
-        {
-          guildId,
-          channelId,
-          parentId,
-          position: position ?? undefined,
-        },
+        readDiscordChannelMoveParams(params),
         withOpts(),
       );
       return jsonResult({ ok: true });

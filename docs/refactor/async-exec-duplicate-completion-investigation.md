@@ -1,4 +1,10 @@
-# Async Exec Duplicate Completion Investigation
+---
+summary: "Investigation notes for duplicate async exec completion injection"
+read_when:
+  - Debugging repeated node exec completion events
+  - Working on heartbeat/system-event dedupe
+title: "Async exec duplicate completion investigation"
+---
 
 ## Scope
 

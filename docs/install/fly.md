@@ -1,6 +1,6 @@
 ---
-title: Fly.io
 summary: "Step-by-step Fly.io deployment for OpenClaw with persistent storage and HTTPS"
+title: Fly.io
 read_when:
   - Deploying OpenClaw on Fly.io
   - Setting up Fly volumes, secrets, and first-run config

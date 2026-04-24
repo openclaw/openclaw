@@ -40,6 +40,7 @@ import type { SidebarContent } from "../sidebar-content.ts";
 import { detectTextDirection } from "../text-direction.ts";
 import type { SessionsListResult } from "../types.ts";
 import type { ChatAttachment, ChatQueueItem } from "../ui-types.ts";
+import { resolveLocalUserName } from "../user-identity.ts";
 import { agentLogoUrl, resolveChatAvatarRenderUrl } from "./agents-utils.ts";
 import { renderMarkdownSidebar } from "./markdown-sidebar.ts";
 import "../components/resizable-divider.ts";
@@ -79,6 +80,8 @@ export type ChatProps = {
   allowExternalEmbedUrls?: boolean;
   assistantName: string;
   assistantAvatar: string | null;
+  userName?: string | null;
+  userAvatar?: string | null;
   localMediaPreviewRoots?: string[];
   assistantAttachmentAuthToken?: string | null;
   autoExpandToolCalls?: boolean;
@@ -94,6 +97,7 @@ export type ChatProps = {
   onSend: () => void;
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;
+  onQueueSteer?: (id: string) => void;
   onDismissSideResult?: () => void;
   onNewSession: () => void;
   onClearHistory?: () => void;
@@ -547,6 +551,10 @@ function renderPinnedSection(
   pinned: PinnedMessages,
   requestUpdate: () => void,
 ): TemplateResult | typeof nothing {
+  const userRoleLabel = resolveLocalUserName({
+    name: props.userName ?? null,
+    avatar: props.userAvatar ?? null,
+  });
   const messages = Array.isArray(props.messages) ? props.messages : [];
   const entries: Array<{ index: number; text: string; role: string }> = [];
   for (const idx of pinned.indices) {
@@ -565,6 +573,7 @@ function renderPinnedSection(
     <div class="agent-chat__pinned">
       <button
         class="agent-chat__pinned-toggle"
+        aria-expanded=${vs.pinnedExpanded}
         @click=${() => {
           vs.pinnedExpanded = !vs.pinnedExpanded;
           requestUpdate();
@@ -582,7 +591,7 @@ function renderPinnedSection(
                 ({ index, text, role }) => html`
                   <div class="agent-chat__pinned-item">
                     <span class="agent-chat__pinned-role"
-                      >${role === "user" ? "You" : "Assistant"}</span
+                      >${role === "user" ? userRoleLabel : "Assistant"}</span
                     >
                     <span class="agent-chat__pinned-text"
                       >${text.slice(0, 100)}${text.length > 100 ? "..." : ""}</span
@@ -902,6 +911,8 @@ export function renderChat(props: ChatProps) {
                 onRequestUpdate: requestUpdate,
                 assistantName: props.assistantName,
                 assistantAvatar: assistantIdentity.avatar,
+                userName: props.userName ?? null,
+                userAvatar: props.userAvatar ?? null,
                 basePath: props.basePath,
                 localMediaPreviewRoots: props.localMediaPreviewRoots ?? [],
                 assistantAttachmentAuthToken: props.assistantAttachmentAuthToken ?? null,
@@ -1121,19 +1132,47 @@ export function renderChat(props: ChatProps) {
               <div class="chat-queue__list">
                 ${props.queue.map(
                   (item) => html`
-                    <div class="chat-queue__item">
-                      <div class="chat-queue__text">
-                        ${item.text ||
-                        (item.attachments?.length ? `Image (${item.attachments.length})` : "")}
+                    <div
+                      class="chat-queue__item ${item.kind === "steered"
+                        ? "chat-queue__item--steered"
+                        : ""}"
+                    >
+                      <div class="chat-queue__main">
+                        ${item.kind === "steered"
+                          ? html`<span class="chat-queue__badge">Steered</span>`
+                          : nothing}
+                        <div class="chat-queue__text">
+                          ${item.text ||
+                          (item.attachments?.length ? `Image (${item.attachments.length})` : "")}
+                        </div>
                       </div>
-                      <button
-                        class="btn chat-queue__remove"
-                        type="button"
-                        aria-label="Remove queued message"
-                        @click=${() => props.onQueueRemove(item.id)}
-                      >
-                        ${icons.x}
-                      </button>
+                      <div class="chat-queue__actions">
+                        ${props.canAbort &&
+                        props.onQueueSteer &&
+                        item.kind !== "steered" &&
+                        !item.localCommandName
+                          ? html`
+                              <button
+                                class="btn chat-queue__steer"
+                                type="button"
+                                title="Steer now"
+                                aria-label="Steer queued message"
+                                @click=${() => props.onQueueSteer?.(item.id)}
+                              >
+                                ${icons.cornerDownRight}
+                                <span>Steer</span>
+                              </button>
+                            `
+                          : nothing}
+                        <button
+                          class="btn chat-queue__remove"
+                          type="button"
+                          aria-label="Remove queued message"
+                          @click=${() => props.onQueueRemove(item.id)}
+                        >
+                          ${icons.x}
+                        </button>
+                      </div>
                     </div>
                   `,
                 )}
@@ -1242,6 +1281,7 @@ export function renderChat(props: ChatProps) {
                       }
                     }}
                     title=${vs.sttRecording ? "Stop recording" : "Voice input"}
+                    aria-label=${vs.sttRecording ? "Stop recording" : "Voice input"}
                     ?disabled=${!props.connected}
                   >
                     ${vs.sttRecording ? icons.micOff : icons.mic}

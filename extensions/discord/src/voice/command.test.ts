@@ -1,5 +1,6 @@
 import type { CommandInteraction, CommandWithSubcommands } from "@buape/carbon";
 import { describe, expect, it, vi } from "vitest";
+import { createPartialDiscordChannelWithThrowingGetters } from "../test-support/partial-channel.js";
 import { createDiscordVoiceCommand } from "./command.js";
 import type { DiscordVoiceManager } from "./manager.js";
 
@@ -103,19 +104,10 @@ describe("createDiscordVoiceCommand", () => {
       status: statusSpy,
     } as unknown as DiscordVoiceManager;
     const { status } = createVoiceCommandHarness(manager);
-    const partialChannel = { id: "123456789012345678" };
-    Object.defineProperties(partialChannel, {
-      name: {
-        get() {
-          throw new Error("Cannot access rawData on partial Channel");
-        },
-      },
-      parentId: {
-        get() {
-          throw new Error("Cannot access rawData on partial Channel");
-        },
-      },
-    });
+    const partialChannel = createPartialDiscordChannelWithThrowingGetters(
+      { id: "123456789012345678" },
+      ["name", "parentId"],
+    );
     const { interaction, reply } = createInteraction({
       channel: partialChannel as CommandInteraction["channel"],
       client: { fetchChannel: vi.fn(async () => null) } as unknown as CommandInteraction["client"],

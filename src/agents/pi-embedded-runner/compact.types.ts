@@ -8,6 +8,8 @@ export type CompactEmbeddedPiSessionParams = {
   sessionId: string;
   runId?: string;
   sessionKey?: string;
+  /** Session key used only for runtime policy/sandbox resolution. Defaults to sessionKey. */
+  sandboxSessionKey?: string;
   messageChannel?: string;
   messageProvider?: string;
   agentAccountId?: string;
@@ -39,6 +41,8 @@ export type CompactEmbeddedPiSessionParams = {
   skillsSnapshot?: SkillSnapshot;
   provider?: string;
   model?: string;
+  /** Session-pinned embedded harness id. Prevents compaction hot-switching. */
+  agentHarnessId?: string;
   thinkLevel?: ThinkLevel;
   reasoningLevel?: ReasoningLevel;
   bashElevated?: ExecElevatedDefaults;

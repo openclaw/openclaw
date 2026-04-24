@@ -21,14 +21,10 @@ import {
   resolveChannelStreamingBlockEnabled,
   resolveChannelStreamingPreviewToolProgress,
 } from "openclaw/plugin-sdk/channel-streaming";
-import {
-  isDangerousNameMatchingEnabled,
-  readSessionUpdatedAt,
-  resolveChannelContextVisibilityMode,
-  resolveMarkdownTableMode,
-  resolveStorePath,
-} from "openclaw/plugin-sdk/config-runtime";
+import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
 import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
+import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 import { resolveChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
@@ -41,6 +37,7 @@ import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-pay
 import { buildAgentSessionKey, resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
+import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   convertMarkdownTables,
   stripInlineDirectiveTagsForDelivery,
@@ -99,6 +96,21 @@ async function loadReplyRuntime() {
 
 function isProcessAborted(abortSignal?: AbortSignal): boolean {
   return Boolean(abortSignal?.aborted);
+}
+
+function formatDiscordReplyDeliveryFailure(params: {
+  kind: string;
+  err: unknown;
+  target: string;
+  sessionKey?: string;
+}) {
+  const context = [
+    `target=${params.target}`,
+    params.sessionKey ? `session=${params.sessionKey}` : undefined,
+  ]
+    .filter(Boolean)
+    .join(" ");
+  return `discord ${params.kind} reply failed (${context}): ${String(params.err)}`;
 }
 
 type DiscordMessageProcessObserver = {
@@ -275,7 +287,7 @@ export async function processDiscordMessage(
   const forumParentSlug =
     isForumParent && threadParentName ? normalizeDiscordSlug(threadParentName) : "";
   const threadChannelId = threadChannel?.id;
-  const threadInheritParent = discordConfig?.thread?.inheritParent ?? false;
+  const threadParentInheritanceEnabled = discordConfig?.thread?.inheritParent ?? false;
   const isForumStarter =
     Boolean(threadChannelId && isForumParent && forumParentSlug) && message.id === threadChannelId;
   const forumContextLine = isForumStarter ? `[Forum parent: #${forumParentSlug}]` : null;
@@ -411,7 +423,7 @@ export async function processDiscordMessage(
         peer: { kind: "channel", id: threadParentId },
       });
     }
-    if (!threadInheritParent) {
+    if (!threadParentInheritanceEnabled) {
       parentSessionKey = undefined;
     }
   }
@@ -438,7 +450,7 @@ export async function processDiscordMessage(
     agentId: route.agentId,
     channel: route.channel,
     cfg,
-    threadInheritParent,
+    threadParentInheritanceEnabled,
   });
   const deliverTarget = replyPlan.deliverTarget;
   const replyTarget = replyPlan.replyTarget;
@@ -892,7 +904,16 @@ export async function processDiscordMessage(
         }
       },
       onError: (err, info) => {
-        runtime.error?.(danger(`discord ${info.kind} reply failed: ${String(err)}`));
+        runtime.error?.(
+          danger(
+            formatDiscordReplyDeliveryFailure({
+              kind: info.kind,
+              err,
+              target: deliverTarget,
+              sessionKey: ctxPayload.SessionKey,
+            }),
+          ),
+        );
       },
       onReplyStart: async () => {
         if (isProcessAborted(abortSignal)) {

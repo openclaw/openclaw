@@ -1,20 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { deliverOutboundPayloads } from "../../../src/infra/outbound/deliver.js";
 import {
-  initializeGlobalHookRunner,
-  resetGlobalHookRunner,
-} from "../../../src/plugins/hook-runner-global.js";
-import { addTestHook } from "../../../src/plugins/hooks.test-helpers.js";
-import { createEmptyPluginRegistry } from "../../../src/plugins/registry.js";
-import {
-  releasePinnedPluginChannelRegistry,
-  setActivePluginRegistry,
-} from "../../../src/plugins/runtime.js";
-import type { PluginHookRegistration } from "../../../src/plugins/types.js";
-import {
+  addTestHook,
+  createEmptyPluginRegistry,
   createOutboundTestPlugin,
   createTestRegistry,
-} from "../../../src/test-utils/channel-plugins.js";
+  deliverOutboundPayloads,
+  initializeGlobalHookRunner,
+  releasePinnedPluginChannelRegistry,
+  resetGlobalHookRunner,
+  setActivePluginRegistry,
+  type PluginHookRegistration,
+} from "../../../test/helpers/plugins/outbound-delivery.js";
 import { slackOutbound } from "./outbound-adapter.js";
 import type { OpenClawConfig } from "./runtime-api.js";
 

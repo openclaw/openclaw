@@ -1,16 +1,15 @@
 import crypto from "node:crypto";
-import { normalizeOptionalString, readStringValue } from "openclaw/plugin-sdk/text-runtime";
 import {
   executeActAction,
   executeConsoleAction,
   executeSnapshotAction,
   executeTabsAction,
 } from "./browser-tool.actions.js";
-import { BrowserToolSchema } from "./browser-tool.schema.js";
 import {
   type AnyAgentTool,
   type NodeListNode,
   DEFAULT_UPLOAD_DIR,
+  BrowserToolSchema,
   applyBrowserProxyPaths,
   browserAct,
   browserArmDialog,
@@ -25,13 +24,16 @@ import {
   browserStart,
   browserStatus,
   browserStop,
+  callGatewayTool,
   getBrowserProfileCapabilities,
   imageResultFromFile,
   jsonResult,
   listNodes,
   loadConfig,
+  normalizeOptionalString,
   persistBrowserProxyFiles,
   readStringParam,
+  readStringValue,
   resolveBrowserConfig,
   resolveExistingPathsWithinRoot,
   resolveNodeIdFromList,
@@ -39,8 +41,7 @@ import {
   selectDefaultNodeFromList,
   trackSessionBrowserTab,
   untrackSessionBrowserTab,
-} from "./core-api.js";
-import { callGatewayTool } from "./core-api.js";
+} from "./browser-tool.runtime.js";
 
 const browserToolDeps = {
   browserAct,

@@ -1,6 +1,6 @@
 ---
 name: openclaw-qa-testing
-description: Run, watch, debug, and extend OpenClaw QA testing with qa-lab and qa-channel. Use when Codex needs to execute the repo-backed QA suite, inspect live QA artifacts, debug failing scenarios, add new QA scenarios, or explain the OpenClaw QA workflow. Prefer the live OpenAI lane with regular openai/gpt-5.4 in fast mode; do not use gpt-5.4-pro or gpt-5.4-mini unless the user explicitly overrides that policy.
+description: Run, watch, debug, extend, or explain OpenClaw qa-lab and qa-channel scenarios, artifacts, and live lanes.
 ---
 
 # OpenClaw QA Testing

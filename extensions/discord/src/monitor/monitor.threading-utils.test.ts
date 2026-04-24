@@ -284,20 +284,20 @@ describe("resolveDiscordAutoThreadContext", () => {
         name: "no created thread",
         createdThreadId: undefined,
         expectedNull: true,
-        inheritParent: undefined,
+        parentInheritanceEnabled: undefined,
       },
       {
         name: "created thread without parent inheritance",
         createdThreadId: "thread",
         expectedNull: false,
-        inheritParent: false,
+        parentInheritanceEnabled: false,
         expectedParentSessionKey: undefined,
       },
       {
         name: "created thread with parent inheritance",
         createdThreadId: "thread",
         expectedNull: false,
-        inheritParent: true,
+        parentInheritanceEnabled: true,
         expectedParentSessionKey: buildAgentSessionKey({
           agentId: "agent",
           channel: "discord",
@@ -312,7 +312,7 @@ describe("resolveDiscordAutoThreadContext", () => {
         channel: "discord",
         messageChannelId: "parent",
         createdThreadId: testCase.createdThreadId,
-        inheritParent: testCase.inheritParent,
+        parentInheritanceEnabled: testCase.parentInheritanceEnabled,
       });
 
       if (testCase.expectedNull) {
@@ -472,7 +472,7 @@ describe("resolveDiscordAutoThreadReplyPlan", () => {
     client?: Client;
     channelConfig?: DiscordChannelConfigResolved;
     threadChannel?: { id: string } | null;
-    threadInheritParent?: boolean;
+    threadParentInheritanceEnabled?: boolean;
   }) {
     return {
       client:
@@ -492,7 +492,7 @@ describe("resolveDiscordAutoThreadReplyPlan", () => {
       replyToMode: "all" as const,
       agentId: "agent",
       channel: "discord" as const,
-      threadInheritParent: overrides?.threadInheritParent,
+      threadParentInheritanceEnabled: overrides?.threadParentInheritanceEnabled,
     };
   }
 
@@ -513,7 +513,7 @@ describe("resolveDiscordAutoThreadReplyPlan", () => {
       {
         name: "created thread with parent inheritance",
         params: {
-          threadInheritParent: true,
+          threadParentInheritanceEnabled: true,
         },
         expectedDeliverTarget: "channel:thread",
         expectedReplyReference: undefined,

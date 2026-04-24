@@ -110,10 +110,10 @@ export function ensureGlobalUndiciEnvProxyDispatcher(): void {
 
 export function ensureGlobalUndiciStreamTimeouts(opts?: { timeoutMs?: number }): void {
   const timeoutMsRaw = opts?.timeoutMs ?? DEFAULT_UNDICI_STREAM_TIMEOUT_MS;
-  const timeoutMs = Math.max(1, Math.floor(timeoutMsRaw));
   if (!Number.isFinite(timeoutMsRaw)) {
     return;
   }
+  const timeoutMs = Math.max(DEFAULT_UNDICI_STREAM_TIMEOUT_MS, Math.floor(timeoutMsRaw));
   const kind = resolveCurrentDispatcherKind();
   if (kind === null) {
     return;

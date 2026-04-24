@@ -1,3 +1,4 @@
+import path from "node:path";
 import type {
   ProviderRequestCapability,
   ProviderRequestTransport,
@@ -6,6 +7,7 @@ import {
   buildProviderRequestDispatcherPolicy,
   normalizeBaseUrl,
   resolveProviderRequestPolicyConfig,
+  sanitizeConfiguredModelProviderRequest,
   type ProviderRequestTransportOverrides,
   type ResolvedProviderRequestConfig,
 } from "../agents/provider-request-config.js";
@@ -16,11 +18,47 @@ import type { LookupFn, PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/
 import { fetchWithTimeout } from "../utils/fetch-timeout.js";
 export { fetchWithTimeout };
 export { normalizeBaseUrl } from "../agents/provider-request-config.js";
+export { sanitizeConfiguredModelProviderRequest } from "../agents/provider-request-config.js";
 
 const MAX_ERROR_CHARS = 300;
 const MAX_ERROR_RESPONSE_BYTES = 4096;
 const DEFAULT_GUARDED_HTTP_TIMEOUT_MS = 60_000;
 const MAX_AUDIT_CONTEXT_CHARS = 80;
+
+export function resolveAudioTranscriptionUploadFileName(fileName?: string, mime?: string): string {
+  const trimmed = fileName?.trim();
+  const baseName = trimmed ? path.basename(trimmed) : "audio";
+  const lowerMime = mime?.trim().toLowerCase();
+
+  if (/\.aac$/i.test(baseName)) {
+    return `${baseName.slice(0, -4) || "audio"}.m4a`;
+  }
+  if (!path.extname(baseName) && lowerMime === "audio/aac") {
+    return `${baseName || "audio"}.m4a`;
+  }
+  return baseName;
+}
+
+export function buildAudioTranscriptionFormData(params: {
+  buffer: Buffer;
+  fileName?: string;
+  mime?: string;
+  fields?: Record<string, string | number | boolean | undefined>;
+}): FormData {
+  const form = new FormData();
+  const bytes = new Uint8Array(params.buffer);
+  const blob = new Blob([bytes], {
+    type: params.mime ?? "application/octet-stream",
+  });
+  form.append("file", blob, resolveAudioTranscriptionUploadFileName(params.fileName, params.mime));
+  for (const [name, value] of Object.entries(params.fields ?? {})) {
+    const text = typeof value === "string" ? value.trim() : value == null ? "" : String(value);
+    if (text) {
+      form.append(name, text);
+    }
+  }
+  return form;
+}
 
 export type ProviderOperationDeadline = {
   deadlineAtMs?: number;
@@ -381,6 +419,36 @@ export async function postJsonRequest(params: {
       method: "POST",
       headers: params.headers,
       body: JSON.stringify(params.body),
+    },
+    params.timeoutMs,
+    params.fetchFn,
+    resolveGuardedPostRequestOptions(params),
+  );
+}
+
+export async function postMultipartRequest(params: {
+  url: string;
+  headers: Headers;
+  body: BodyInit;
+  timeoutMs?: number;
+  fetchFn: typeof fetch;
+  pinDns?: boolean;
+  allowPrivateNetwork?: boolean;
+  dispatcherPolicy?: PinnedDispatcherPolicy;
+  auditContext?: string;
+  /**
+   * Override the guarded-fetch mode. Defaults to an auto-upgrade to
+   * `TRUSTED_ENV_PROXY` when `HTTP_PROXY`/`HTTPS_PROXY` is configured in the
+   * environment; pass `"strict"` to force pinned-DNS even inside a proxy.
+   */
+  mode?: GuardedFetchMode;
+}) {
+  return fetchWithTimeoutGuarded(
+    params.url,
+    {
+      method: "POST",
+      headers: params.headers,
+      body: params.body,
     },
     params.timeoutMs,
     params.fetchFn,

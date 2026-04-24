@@ -11,6 +11,7 @@ import {
 import { resolveConfigWriteTargetFromPath } from "../../channels/plugins/config-writes.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { normalizeChannelId } from "../../channels/registry.js";
+import { isModelsWriteEnabled } from "../../config/commands.flags.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -261,6 +262,7 @@ export function formatModelsAvailableHeader(params: {
 function buildModelsMenuText(params: {
   providers: string[];
   byProvider: ReadonlyMap<string, ReadonlySet<string>>;
+  includeAddAction?: boolean;
 }): string {
   return [
     "Providers:",
@@ -273,7 +275,7 @@ function buildModelsMenuText(params: {
     "",
     "Use: /models <provider>",
     "Switch: /model <provider/model>",
-    "Add: /models add",
+    ...(params.includeAddAction ? ["Add: /models add"] : []),
   ].join("\n");
 }
 
@@ -344,12 +346,15 @@ export async function resolveModelsCommandReply(params: {
   );
   const commandPlugin = params.surface ? getChannelPlugin(params.surface) : null;
   const providerInfos = buildProviderInfos({ providers, byProvider });
+  const modelsWriteEnabled = isModelsWriteEnabled(params.cfg);
 
   if (parsed.action === "providers") {
     const channelData =
-      commandPlugin?.commands?.buildModelsMenuChannelData?.({
-        providers: providerInfos,
-      }) ??
+      (modelsWriteEnabled
+        ? commandPlugin?.commands?.buildModelsMenuChannelData?.({
+            providers: providerInfos,
+          })
+        : null) ??
       commandPlugin?.commands?.buildModelsProviderChannelData?.({
         providers: providerInfos,
       });
@@ -360,11 +365,16 @@ export async function resolveModelsCommandReply(params: {
       };
     }
     return {
-      text: buildModelsMenuText({ providers, byProvider }),
+      text: buildModelsMenuText({ providers, byProvider, includeAddAction: modelsWriteEnabled }),
     };
   }
 
   if (parsed.action === "add") {
+    if (!modelsWriteEnabled) {
+      return {
+        text: "⚠️ /models add is disabled. Set commands.modelsWrite=true to enable model registration.",
+      };
+    }
     const addableProviders = listAddableProviders({
       cfg: params.cfg,
       discoveredProviders: providers,
@@ -399,6 +409,22 @@ export async function resolveModelsCommandReply(params: {
       discoveredProviders: providers,
     });
     if (!validatedProvider.ok) {
+      if (validatedProvider.knownProvider) {
+        return {
+          text: [
+            `${validatedProvider.knownProvider} is available for model selection, but /models add cannot create models for this provider from chat.`,
+            "",
+            "Browse:",
+            `/models ${validatedProvider.knownProvider}`,
+            "",
+            "Switch:",
+            `/model ${validatedProvider.knownProvider}/<modelId>`,
+            "",
+            "To configure providers or auth, run:",
+            "openclaw configure",
+          ].join("\n"),
+        };
+      }
       return {
         text: [
           `Unknown provider: ${parsed.provider}`,
@@ -471,7 +497,7 @@ export async function resolveModelsCommandReply(params: {
       };
     }
     return {
-      text: buildModelsMenuText({ providers, byProvider }),
+      text: buildModelsMenuText({ providers, byProvider, includeAddAction: modelsWriteEnabled }),
     };
   }
 
@@ -588,6 +614,14 @@ export const handleModelsCommand: CommandHandler = async (params, allowTextComma
   }
 
   if (parsed.action === "add") {
+    if (!isModelsWriteEnabled(params.cfg)) {
+      return {
+        shouldContinue: false,
+        reply: {
+          text: "⚠️ /models add is disabled. Set commands.modelsWrite=true to enable model registration.",
+        },
+      };
+    }
     const commandLabel = "/models add";
     const nonOwner = rejectNonOwnerCommand(params, commandLabel);
     if (nonOwner) {

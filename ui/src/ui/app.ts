@@ -19,6 +19,7 @@ import {
   handleAbortChat as handleAbortChatInternal,
   handleSendChat as handleSendChatInternal,
   removeQueuedMessage as removeQueuedMessageInternal,
+  steerQueuedChatMessage as steerQueuedChatMessageInternal,
 } from "./app-chat.ts";
 import { DEFAULT_CRON_FORM, DEFAULT_LOG_LEVEL_FILTERS } from "./app-defaults.ts";
 import type { EventLogEntry } from "./app-events.ts";
@@ -39,6 +40,7 @@ import {
 } from "./app-scroll.ts";
 import {
   applySettings as applySettingsInternal,
+  applyLocalUserIdentity as applyLocalUserIdentityInternal,
   loadCron as loadCronInternal,
   loadOverview as loadOverviewInternal,
   setTab as setTabInternal,
@@ -77,7 +79,7 @@ import type {
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import type { Tab } from "./navigation.ts";
 import type { SidebarContent } from "./sidebar-content.ts";
-import { loadSettings, type UiSettings } from "./storage.ts";
+import { loadLocalUserIdentity, loadSettings, type UiSettings } from "./storage.ts";
 import { VALID_THEME_NAMES, type ResolvedTheme, type ThemeMode, type ThemeName } from "./theme.ts";
 import type {
   AgentsListResult,
@@ -115,6 +117,7 @@ declare global {
 }
 
 const bootAssistantIdentity = normalizeAssistantIdentity({});
+const bootLocalUserIdentity = loadLocalUserIdentity();
 
 function resolveOnboardingMode(): boolean {
   if (!window.location.search) {
@@ -162,6 +165,8 @@ export class OpenClawApp extends LitElement {
   @state() assistantName = bootAssistantIdentity.name;
   @state() assistantAvatar = bootAssistantIdentity.avatar;
   @state() assistantAgentId = bootAssistantIdentity.agentId ?? null;
+  @state() userName = bootLocalUserIdentity.name;
+  @state() userAvatar = bootLocalUserIdentity.avatar;
   @state() localMediaPreviewRoots: string[] = [];
   @state() embedSandboxMode: "strict" | "scripts" | "trusted" = "scripts";
   @state() allowExternalEmbedUrls = false;
@@ -636,6 +641,13 @@ export class OpenClawApp extends LitElement {
     applySettingsInternal(this as unknown as Parameters<typeof applySettingsInternal>[0], next);
   }
 
+  applyLocalUserIdentity(next: { name?: string | null; avatar?: string | null }) {
+    applyLocalUserIdentityInternal(
+      this as unknown as Parameters<typeof applyLocalUserIdentityInternal>[0],
+      next,
+    );
+  }
+
   setTab(next: Tab) {
     setTabInternal(this as unknown as Parameters<typeof setTabInternal>[0], next);
     this.navDrawerOpen = false;
@@ -695,6 +707,13 @@ export class OpenClawApp extends LitElement {
       this as unknown as Parameters<typeof handleSendChatInternal>[0],
       messageOverride,
       opts,
+    );
+  }
+
+  async steerQueuedChatMessage(id: string) {
+    await steerQueuedChatMessageInternal(
+      this as unknown as Parameters<typeof steerQueuedChatMessageInternal>[0],
+      id,
     );
   }
 
