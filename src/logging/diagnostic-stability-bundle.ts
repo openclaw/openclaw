@@ -8,6 +8,7 @@ import {
   MAX_DIAGNOSTIC_STABILITY_LIMIT,
   type DiagnosticStabilitySnapshot,
 } from "./diagnostic-stability.js";
+import { redactTextForSupport } from "./diagnostic-support-redaction.js";
 
 export const DIAGNOSTIC_STABILITY_BUNDLE_VERSION = 1;
 export const DEFAULT_DIAGNOSTIC_STABILITY_BUNDLE_LIMIT = MAX_DIAGNOSTIC_STABILITY_LIMIT;
@@ -18,6 +19,18 @@ const SAFE_REASON_CODE = /^[A-Za-z0-9_.:-]{1,120}$/u;
 const BUNDLE_PREFIX = "openclaw-stability-";
 const BUNDLE_SUFFIX = ".json";
 const REDACTED_HOSTNAME = "<redacted-hostname>";
+const MAX_ERROR_MESSAGE_LENGTH = 1024;
+const MAX_ERROR_STACK_LENGTH = 4096;
+const MAX_ERROR_CAUSE_DEPTH = 3;
+const ERROR_TRUNCATION_SUFFIX = "...<truncated>";
+
+export type DiagnosticStabilityBundleError = {
+  name?: string;
+  code?: string;
+  message?: string;
+  stack?: string;
+  cause?: DiagnosticStabilityBundleError;
+};
 
 export type DiagnosticStabilityBundle = {
   version: typeof DIAGNOSTIC_STABILITY_BUNDLE_VERSION;
@@ -33,10 +46,7 @@ export type DiagnosticStabilityBundle = {
   host: {
     hostname: string;
   };
-  error?: {
-    name?: string;
-    code?: string;
-  };
+  error?: DiagnosticStabilityBundleError;
   snapshot: DiagnosticStabilitySnapshot;
 };
 
@@ -113,7 +123,80 @@ function readErrorName(error: unknown): string | undefined {
   return typeof name === "string" && SAFE_REASON_CODE.test(name) ? name : undefined;
 }
 
-function readSafeErrorMetadata(error: unknown): DiagnosticStabilityBundle["error"] | undefined {
+function redactAndTruncate(value: string, maxLength: number): string {
+  const redacted = redactTextForSupport(value);
+  if (redacted.length <= maxLength) {
+    return redacted;
+  }
+  return `${redacted.slice(0, maxLength)}${ERROR_TRUNCATION_SUFFIX}`;
+}
+
+function readErrorMessage(error: unknown): string | undefined {
+  if (!error || typeof error !== "object" || !("message" in error)) {
+    return undefined;
+  }
+  const message = (error as { message?: unknown }).message;
+  if (typeof message !== "string" || message.length === 0) {
+    return undefined;
+  }
+  return redactAndTruncate(message, MAX_ERROR_MESSAGE_LENGTH);
+}
+
+function readErrorStack(error: unknown): string | undefined {
+  if (!error || typeof error !== "object" || !("stack" in error)) {
+    return undefined;
+  }
+  const stack = (error as { stack?: unknown }).stack;
+  if (typeof stack !== "string" || stack.length === 0) {
+    return undefined;
+  }
+  return redactAndTruncate(stack, MAX_ERROR_STACK_LENGTH);
+}
+
+function readErrorCause(error: unknown, depth: number): DiagnosticStabilityBundleError | undefined {
+  if (depth >= MAX_ERROR_CAUSE_DEPTH) {
+    return undefined;
+  }
+  if (!error || typeof error !== "object" || !("cause" in error)) {
+    return undefined;
+  }
+  const cause = (error as { cause?: unknown }).cause;
+  if (cause === undefined || cause === null) {
+    return undefined;
+  }
+  return readSafeErrorMetadataAtDepth(cause, depth + 1);
+}
+
+function readSafeErrorMetadataAtDepth(
+  error: unknown,
+  depth: number,
+): DiagnosticStabilityBundleError | undefined {
+  const name = readErrorName(error);
+  const code = readErrorCode(error);
+  const message = readErrorMessage(error);
+  const stack = readErrorStack(error);
+  const cause = readErrorCause(error, depth);
+  if (!name && !code && !message && !stack && !cause) {
+    return undefined;
+  }
+  return {
+    ...(name ? { name } : {}),
+    ...(code ? { code } : {}),
+    ...(message ? { message } : {}),
+    ...(stack ? { stack } : {}),
+    ...(cause ? { cause } : {}),
+  };
+}
+
+function readSafeErrorMetadata(error: unknown): DiagnosticStabilityBundleError | undefined {
+  return readSafeErrorMetadataAtDepth(error, 0);
+}
+
+// Parser path: imported bundles may be adversarial, so we only keep the
+// name/code fields that are already constrained by SAFE_REASON_CODE. This
+// deliberately drops any message/stack/cause from disk-sourced bundles to
+// avoid re-emitting untrusted free-form text during sanitized reads.
+function readImportedSafeErrorMetadata(error: unknown): DiagnosticStabilityBundleError | undefined {
   const name = readErrorName(error);
   const code = readErrorCode(error);
   if (!name && !code) {
@@ -454,7 +537,8 @@ function parseDiagnosticStabilityBundle(value: unknown): DiagnosticStabilityBund
   }
   const processInfo = readObject(bundle.process, "process");
   readObject(bundle.host, "host");
-  const error = bundle.error === undefined ? undefined : readSafeErrorMetadata(bundle.error);
+  const error =
+    bundle.error === undefined ? undefined : readImportedSafeErrorMetadata(bundle.error);
   return {
     version: DIAGNOSTIC_STABILITY_BUNDLE_VERSION,
     generatedAt: readTimestampString(bundle.generatedAt, "generatedAt"),

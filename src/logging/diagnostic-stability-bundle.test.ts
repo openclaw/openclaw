@@ -88,7 +88,12 @@ describe("diagnostic stability bundles", () => {
       reason: "json_body_limit",
     });
 
-    const error = Object.assign(new Error("contains secret message"), { code: "ERR_TEST" });
+    const error = Object.assign(
+      new Error(
+        "startup failed for alice@example.com token=eyJhbGciOiJIUzI1NiJ9.payloadsecret.signaturesecret",
+      ),
+      { code: "ERR_TEST" },
+    );
     const result = writeDiagnosticStabilityBundleSync({
       reason: "gateway.restart_startup_failed",
       error,
@@ -116,6 +121,14 @@ describe("diagnostic stability bundles", () => {
         count: 2,
       },
     });
+    // Safe parts of the error message are preserved so startup failures are
+    // actually diagnosable (#71071).
+    expect(bundle.error?.message).toContain("startup failed");
+    expect(typeof bundle.error?.stack).toBe("string");
+    expect(bundle.error?.stack).toContain("Error");
+    // Sensitive fragments are redacted by redactTextForSupport.
+    expect(bundle.error?.message).not.toContain("alice@example.com");
+    expect(bundle.error?.message).not.toContain("eyJhbGciOiJIUzI1NiJ9");
     expect(bundle.snapshot.events[0]).toMatchObject({
       type: "webhook.error",
       channel: "telegram",
@@ -124,8 +137,86 @@ describe("diagnostic stability bundles", () => {
     expect(bundle.snapshot.events[0]).not.toHaveProperty("error");
     expect(raw).not.toContain("chat-secret");
     expect(raw).not.toContain("message body");
-    expect(raw).not.toContain("contains secret message");
+    expect(raw).not.toContain("alice@example.com");
+    expect(raw).not.toContain("eyJhbGciOiJIUzI1NiJ9");
     expect(raw).not.toContain(os.hostname());
+  });
+
+  it("preserves error message, stack, and nested cause for startup failures", () => {
+    // Regression test for #71071: stability bundles must retain the actionable
+    // error metadata that engineers need to diagnose gateway startup failures.
+    const inner = new Error("root cause: hooks.allowedSessionKeyPrefixes is required");
+    const outer = Object.assign(new Error("gateway startup failed: config validation"), {
+      code: "ERR_CONFIG_PARSE",
+      cause: inner,
+    });
+
+    const result = writeDiagnosticStabilityBundleForFailureSync("gateway.startup_failed", outer, {
+      stateDir: tempDir,
+      now: new Date("2026-04-22T12:00:00.000Z"),
+    });
+
+    if (result.status !== "written") {
+      throw new Error(`expected written bundle, got ${result.status}`);
+    }
+    const bundle = readBundle(result.path);
+    expect(bundle.error?.name).toBe("Error");
+    expect(bundle.error?.code).toBe("ERR_CONFIG_PARSE");
+    expect(bundle.error?.message).toContain("gateway startup failed");
+    expect(bundle.error?.message).toContain("config validation");
+    expect(bundle.error?.stack).toContain("Error");
+    expect(bundle.error?.cause?.message).toContain("hooks.allowedSessionKeyPrefixes is required");
+    expect(bundle.error?.cause?.stack).toContain("Error");
+  });
+
+  it("truncates and redacts oversized error messages and stacks", () => {
+    const longSecret = "a".repeat(4096);
+    const error = Object.assign(new Error(`huge blob ${longSecret}`), {
+      code: "ERR_BIG",
+    });
+    // Synthesize an equally oversized stack with a redactable token.
+    error.stack = `Error: huge blob\n  at token=eyJhbGciOiJIUzI1NiJ9.payloadsecret.signaturesecret\n${"x".repeat(8192)}`;
+
+    const result = writeDiagnosticStabilityBundleForFailureSync("gateway.startup_failed", error, {
+      stateDir: tempDir,
+      now: new Date("2026-04-22T12:00:00.000Z"),
+    });
+    if (result.status !== "written") {
+      throw new Error(`expected written bundle, got ${result.status}`);
+    }
+    const bundle = readBundle(result.path);
+    // Message and stack must be bounded to keep bundles small.
+    expect(bundle.error?.message?.length).toBeLessThanOrEqual(1024 + 32);
+    expect(bundle.error?.stack?.length).toBeLessThanOrEqual(4096 + 32);
+    expect(bundle.error?.message?.endsWith("...<truncated>")).toBe(true);
+    expect(bundle.error?.stack?.endsWith("...<truncated>")).toBe(true);
+    // JWT in the stack trace must not leak.
+    expect(bundle.error?.stack).not.toContain("eyJhbGciOiJIUzI1NiJ9");
+  });
+
+  it("limits error cause chains to avoid runaway recursion", () => {
+    // Build a chain deeper than the permitted recursion limit.
+    const depth5 = new Error("depth 5");
+    const depth4 = Object.assign(new Error("depth 4"), { cause: depth5 });
+    const depth3 = Object.assign(new Error("depth 3"), { cause: depth4 });
+    const depth2 = Object.assign(new Error("depth 2"), { cause: depth3 });
+    const depth1 = Object.assign(new Error("depth 1"), { cause: depth2 });
+    const depth0 = Object.assign(new Error("depth 0"), { cause: depth1 });
+
+    const result = writeDiagnosticStabilityBundleForFailureSync("gateway.startup_failed", depth0, {
+      stateDir: tempDir,
+      now: new Date("2026-04-22T12:00:00.000Z"),
+    });
+    if (result.status !== "written") {
+      throw new Error(`expected written bundle, got ${result.status}`);
+    }
+    const bundle = readBundle(result.path);
+    // We keep the top-level error plus up to MAX_ERROR_CAUSE_DEPTH (3) nested causes.
+    expect(bundle.error?.message).toContain("depth 0");
+    expect(bundle.error?.cause?.message).toContain("depth 1");
+    expect(bundle.error?.cause?.cause?.message).toContain("depth 2");
+    expect(bundle.error?.cause?.cause?.cause?.message).toContain("depth 3");
+    expect(bundle.error?.cause?.cause?.cause?.cause).toBeUndefined();
   });
 
   it("skips empty recorder snapshots by default", () => {
@@ -139,9 +230,18 @@ describe("diagnostic stability bundles", () => {
   });
 
   it("writes failure bundles even when the recorder snapshot is empty", () => {
+    // The error.message is now preserved (sanitized) so engineers can diagnose
+    // startup failures straight from the stability bundle (#71071). Use a
+    // payload containing a token to ensure sensitive content is still redacted.
+    const error = Object.assign(
+      new Error(
+        "raw startup config payload token=eyJhbGciOiJIUzI1NiJ9.payloadsecret.signaturesecret",
+      ),
+      { code: "ERR_CONFIG_PARSE" },
+    );
     const result = writeDiagnosticStabilityBundleForFailureSync(
       "gateway.restart_startup_failed",
-      Object.assign(new Error("raw startup config payload"), { code: "ERR_CONFIG_PARSE" }),
+      error,
       {
         stateDir: tempDir,
         now: new Date("2026-04-22T12:00:00.000Z"),
@@ -164,7 +264,10 @@ describe("diagnostic stability bundles", () => {
         events: [],
       },
     });
-    expect(raw).not.toContain("raw startup config payload");
+    expect(bundle.error?.message).toContain("raw startup config payload");
+    expect(bundle.error?.stack).toContain("Error");
+    // JWT-like tokens are redacted before being written to disk.
+    expect(raw).not.toContain("eyJhbGciOiJIUzI1NiJ9");
   });
 
   it("registers a fatal hook only while installed", () => {
