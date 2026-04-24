@@ -1,7 +1,5 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { buildChannelSummary } from "./channel-summary.js";
 
 const isFixtureAccountConfigured = (account: unknown) =>
@@ -72,6 +70,7 @@ function makeTelegramSummaryPlugin(params: {
   enabled: boolean;
   configured: boolean;
   linked?: boolean;
+  statusState?: string;
   authAgeMs?: number;
   allowFrom?: string[];
 }): ChannelPlugin {
@@ -107,6 +106,7 @@ function makeTelegramSummaryPlugin(params: {
     },
     status: {
       buildChannelSummary: async () => ({
+        statusState: params.statusState,
         linked: params.linked,
         configured: params.configured,
         authAgeMs: params.authAgeMs,
@@ -187,20 +187,11 @@ function makeFallbackSummaryPlugin(params: {
 }
 
 describe("buildChannelSummary", () => {
-  afterEach(() => {
-    setActivePluginRegistry(createTestRegistry([]));
-  });
-
   it("preserves Slack HTTP signing-secret unavailable state from source config", async () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        { pluginId: "slack", plugin: makeSlackHttpSummaryPlugin(), source: "test" },
-      ]),
-    );
-
     const lines = await buildChannelSummary({ marker: "resolved", channels: {} } as never, {
       colorize: false,
       includeAllowFrom: false,
+      plugins: [makeSlackHttpSummaryPlugin()],
       sourceConfig: { marker: "source", channels: {} } as never,
     });
 
@@ -211,44 +202,28 @@ describe("buildChannelSummary", () => {
   });
 
   it("shows disabled status without configured account detail lines", async () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "telegram",
-          plugin: makeTelegramSummaryPlugin({ enabled: false, configured: false }),
-          source: "test",
-        },
-      ]),
-    );
-
     const lines = await buildChannelSummary({ channels: {} } as never, {
       colorize: false,
       includeAllowFrom: true,
+      plugins: [makeTelegramSummaryPlugin({ enabled: false, configured: false })],
     });
 
     expect(lines).toEqual(["Telegram: disabled +15551234567"]);
   });
 
   it("includes linked summary metadata and truncates allow-from details", async () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "telegram",
-          plugin: makeTelegramSummaryPlugin({
-            enabled: true,
-            configured: true,
-            linked: true,
-            authAgeMs: 300_000,
-            allowFrom: ["alice", "bob", "carol"],
-          }),
-          source: "test",
-        },
-      ]),
-    );
-
     const lines = await buildChannelSummary({ channels: {} } as never, {
       colorize: false,
       includeAllowFrom: true,
+      plugins: [
+        makeTelegramSummaryPlugin({
+          enabled: true,
+          configured: true,
+          linked: true,
+          authAgeMs: 300_000,
+          allowFrom: ["alice", "bob", "carol"],
+        }),
+      ],
     });
 
     expect(lines).toContain("Telegram: linked +15551234567 auth 5m ago");
@@ -256,43 +231,43 @@ describe("buildChannelSummary", () => {
   });
 
   it("shows not-linked status when linked metadata is explicitly false", async () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "telegram",
-          plugin: makeTelegramSummaryPlugin({
-            enabled: true,
-            configured: true,
-            linked: false,
-          }),
-          source: "test",
-        },
-      ]),
-    );
-
     const lines = await buildChannelSummary({ channels: {} } as never, {
       colorize: false,
       includeAllowFrom: false,
+      plugins: [
+        makeTelegramSummaryPlugin({
+          enabled: true,
+          configured: true,
+          linked: false,
+        }),
+      ],
     });
 
     expect(lines).toContain("Telegram: not linked +15551234567");
     expect(lines).toContain("  - primary (Main Bot) (dm:mutuals, token:env)");
   });
 
-  it("renders non-slack account detail fields for configured accounts", async () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "signal",
-          plugin: makeSignalSummaryPlugin({ enabled: false, configured: true }),
-          source: "test",
-        },
-      ]),
-    );
-
+  it("prefers plugin statusState when provided", async () => {
     const lines = await buildChannelSummary({ channels: {} } as never, {
       colorize: false,
       includeAllowFrom: false,
+      plugins: [
+        makeTelegramSummaryPlugin({
+          enabled: true,
+          configured: true,
+          statusState: "unstable",
+        }),
+      ],
+    });
+
+    expect(lines).toContain("Telegram: auth stabilizing +15551234567");
+  });
+
+  it("renders non-slack account detail fields for configured accounts", async () => {
+    const lines = await buildChannelSummary({ channels: {} } as never, {
+      colorize: false,
+      includeAllowFrom: false,
+      plugins: [makeSignalSummaryPlugin({ enabled: false, configured: true })],
     });
 
     expect(lines).toEqual([
@@ -302,47 +277,33 @@ describe("buildChannelSummary", () => {
   });
 
   it("uses the channel label and default account id when no accounts exist", async () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "fallback-plugin",
-          plugin: makeFallbackSummaryPlugin({
-            enabled: true,
-            configured: true,
-            accountIds: [],
-            defaultAccountId: "fallback-account",
-          }),
-          source: "test",
-        },
-      ]),
-    );
-
     const lines = await buildChannelSummary({ channels: {} } as never, {
       colorize: false,
       includeAllowFrom: false,
+      plugins: [
+        makeFallbackSummaryPlugin({
+          enabled: true,
+          configured: true,
+          accountIds: [],
+          defaultAccountId: "fallback-account",
+        }),
+      ],
     });
 
     expect(lines).toEqual(["Fallback: configured", "  - fallback-account"]);
   });
 
   it("shows not-configured status when enabled accounts exist without configured ones", async () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "fallback-plugin",
-          plugin: makeFallbackSummaryPlugin({
-            enabled: true,
-            configured: false,
-            accountIds: ["fallback-account"],
-          }),
-          source: "test",
-        },
-      ]),
-    );
-
     const lines = await buildChannelSummary({ channels: {} } as never, {
       colorize: false,
       includeAllowFrom: false,
+      plugins: [
+        makeFallbackSummaryPlugin({
+          enabled: true,
+          configured: false,
+          accountIds: ["fallback-account"],
+        }),
+      ],
     });
 
     expect(lines).toEqual(["Fallback: not configured"]);

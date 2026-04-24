@@ -1,5 +1,4 @@
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import WebSocket from "ws";
 import { isLoopbackHost } from "../gateway/net.js";
 import {
@@ -7,7 +6,6 @@ import {
   type SsrFPolicy,
   resolvePinnedHostnameWithPolicy,
 } from "../infra/net/ssrf.js";
-import { rawDataToString } from "../infra/ws.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { getDirectAgentForCdp, withNoProxyForCdpUrl } from "./cdp-proxy-bypass.js";
 import { CDP_HTTP_REQUEST_TIMEOUT_MS, CDP_WS_HANDSHAKE_TIMEOUT_MS } from "./cdp-timeouts.js";
@@ -33,6 +31,11 @@ export function parseBrowserHttpUrl(raw: string, label: string) {
         ? 443
         : 80;
 
+  // WHATWG URL rejects invalid ports (non-numeric, negative, >65535), and
+  // the ternary above falls back to 80/443 for empty or zero parsed.port,
+  // so this defensive guard is unreachable at runtime. Kept as a
+  // belt-and-braces check against parser drift.
+  /* c8 ignore next 3 */
   if (Number.isNaN(port) || port <= 0 || port > 65535) {
     throw new Error(`${label} has invalid port: ${parsed.port}`);
   }
@@ -56,6 +59,37 @@ export function isWebSocketUrl(url: string): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * Returns true when `url` is a ws/wss URL with a `/devtools/<kind>/<id>`
+ * path segment — i.e. a handshake-ready per-browser or per-target CDP
+ * endpoint that can be opened directly without HTTP discovery.
+ *
+ * Bare ws roots (`ws://host:port`, `ws://host:port/`) and any other
+ * non-`/devtools/...` paths are NOT direct endpoints: Chrome's debug
+ * port only accepts WebSocket upgrades on the specific path returned
+ * by `GET /json/version`. Callers with a bare ws root must normalise
+ * it to http for discovery instead of attempting a root handshake that
+ * Chrome will reject with HTTP 400.
+ */
+export function isDirectCdpWebSocketEndpoint(url: string): boolean {
+  if (!isWebSocketUrl(url)) {
+    return false;
+  }
+  try {
+    const parsed = new URL(url);
+    return /\/devtools\/(?:browser|page|worker|shared_worker|service_worker)\/[^/]/i.test(
+      parsed.pathname,
+    );
+    // isWebSocketUrl above already parsed the same URL successfully, so
+    // new URL(url) cannot throw here. Kept for structural symmetry with
+    // the other try/catch URL helpers.
+    /* c8 ignore start */
+  } catch {
+    return false;
+  }
+  /* c8 ignore stop */
 }
 
 export async function assertCdpEndpointAllowed(
@@ -116,12 +150,28 @@ export type CdpSendFn = (
   sessionId?: string,
 ) => Promise<unknown>;
 
+function rawCdpMessageToString(data: WebSocket.RawData): string {
+  if (typeof data === "string") {
+    return data;
+  }
+  if (Buffer.isBuffer(data)) {
+    return data.toString("utf8");
+  }
+  if (Array.isArray(data)) {
+    return Buffer.concat(data).toString("utf8");
+  }
+  if (ArrayBuffer.isView(data)) {
+    return Buffer.from(data.buffer, data.byteOffset, data.byteLength).toString("utf8");
+  }
+  return Buffer.from(data).toString("utf8");
+}
+
 export function getHeadersWithAuth(url: string, headers: Record<string, string> = {}) {
   const mergedHeaders = { ...headers };
   try {
     const parsed = new URL(url);
     const hasAuthHeader = Object.keys(mergedHeaders).some(
-      (key) => normalizeLowercaseStringOrEmpty(key) === "authorization",
+      (key) => key.trim().toLowerCase() === "authorization",
     );
     if (hasAuthHeader) {
       return mergedHeaders;
@@ -201,12 +251,17 @@ function createCdpSender(ws: WebSocket) {
   };
 
   ws.on("error", (err) => {
+    // The `err instanceof Error` guard is defensive: Node's `ws` library
+    // always emits Error instances on the 'error' event. Triggering the
+    // non-Error branch would require synthetically emitting on the socket,
+    // which the library treats as an unhandled error and hangs the test.
+    /* c8 ignore next */
     closeWithError(err instanceof Error ? err : new Error(String(err)));
   });
 
   ws.on("message", (data) => {
     try {
-      const parsed = JSON.parse(rawDataToString(data)) as CdpResponse;
+      const parsed = JSON.parse(rawCdpMessageToString(data)) as CdpResponse;
       if (typeof parsed.id !== "number") {
         return;
       }
@@ -342,6 +397,11 @@ export async function withCdpSocket<T>(
   try {
     await openPromise;
   } catch (err) {
+    // openPromise is only rejected via `ws.once('error', err => reject(err))`
+    // or the close event's `new Error(...)`; the former always carries an
+    // Error from Node's `ws` library, the latter is already an Error. The
+    // non-Error wrap is defensive and structurally unreachable.
+    /* c8 ignore next */
     closeWithError(err instanceof Error ? err : new Error(String(err)));
     throw err;
   }

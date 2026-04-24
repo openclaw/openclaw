@@ -7,12 +7,17 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import {
+  parseBrowserMajorVersion,
+  resolveGoogleChromeExecutableForPlatform,
+} from "./chrome.executables.js";
+import {
   decorateOpenClawProfile,
   diagnoseChromeCdp,
   ensureProfileCleanExit,
   findChromeExecutableMac,
   findChromeExecutableWindows,
   formatChromeCdpDiagnostic,
+  buildOpenClawChromeLaunchArgs,
   getChromeWebSocketUrl,
   isChromeCdpReady,
   isChromeReachable,
@@ -377,7 +382,7 @@ describe("browser chrome helpers", () => {
     try {
       const addr = server.address() as AddressInfo;
       await expect(
-        getChromeWebSocketUrl(`http://127.0.0.1:${addr.port}`, 50, {
+        getChromeWebSocketUrl(`http://127.0.0.1:${addr.port}`, 1000, {
           dangerouslyAllowPrivateNetwork: false,
           allowedHostnames: ["127.0.0.1"],
         }),
@@ -430,7 +435,7 @@ describe("browser chrome helpers", () => {
       // Simulate a stale command channel: WS opens but never responds to commands.
       onConnection: (wss) => wss.on("connection", (_ws) => {}),
       run: async (baseUrl) => {
-        await expect(isChromeCdpReady(baseUrl, 300, 150)).resolves.toBe(false);
+        await expect(isChromeCdpReady(baseUrl, 300, 5)).resolves.toBe(false);
       },
     });
   });
@@ -440,7 +445,7 @@ describe("browser chrome helpers", () => {
       wsPath: "/devtools/browser/stale-diagnostic",
       onConnection: (wss) => wss.on("connection", (_ws) => {}),
       run: async (baseUrl) => {
-        const diagnostic = await diagnoseChromeCdp(baseUrl, 300, 150);
+        const diagnostic = await diagnoseChromeCdp(baseUrl, 300, 50);
         expect(diagnostic).toMatchObject({
           ok: false,
           code: "websocket_health_command_timeout",
@@ -468,14 +473,84 @@ describe("browser chrome helpers", () => {
     expect(formatted).not.toContain("supersecret123");
   });
 
-  it("probes WebSocket URLs via handshake instead of HTTP", async () => {
-    // For ws:// URLs, isChromeReachable should NOT call fetch at all —
-    // it should attempt a WebSocket handshake instead.
+  it("probes direct ws:// CDP URLs (with /devtools/ path) via handshake instead of HTTP", async () => {
+    // A direct WS endpoint like ws://host/devtools/browser/<uuid> is already
+    // the handshake target — isChromeReachable must NOT hit /json/version.
     const fetchSpy = vi.fn().mockRejectedValue(new Error("should not be called"));
     vi.stubGlobal("fetch", fetchSpy);
     // No WS server listening → handshake fails → not reachable
-    await expect(isChromeReachable("ws://127.0.0.1:19999", 50)).resolves.toBe(false);
+    await expect(isChromeReachable("ws://127.0.0.1:19999/devtools/browser/ABC", 50)).resolves.toBe(
+      false,
+    );
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("falls back to HTTP /json/version discovery for a bare ws:// CDP URL (issue #68027)", async () => {
+    // A user-supplied cdpUrl of `ws://host:port` without a /devtools/ path
+    // points at Chrome's debug root; Chrome only accepts WS upgrades on the
+    // specific path returned by `GET /json/version`. The reachability probe
+    // must normalise the ws scheme to http for discovery, not attempt a
+    // handshake at the bare root.
+    await withMockChromeCdpServer({
+      wsPath: "/devtools/browser/DISCOVERED",
+      run: async (baseUrl) => {
+        const url = new URL(baseUrl);
+        const wsOnlyBase = `ws://${url.host}`;
+        await expect(isChromeReachable(wsOnlyBase, 300)).resolves.toBe(true);
+        await expect(getChromeWebSocketUrl(wsOnlyBase, 300)).resolves.toBe(
+          `ws://${url.host}/devtools/browser/DISCOVERED`,
+        );
+      },
+    });
+  });
+
+  it("reports unreachable when a bare ws:// CDP URL points at a server with no /json/version and refuses WS", async () => {
+    // Negative counterpart to the #68027 happy path — a bare ws URL
+    // pointed at a port that neither serves /json/version nor accepts
+    // WS upgrades must resolve false without hanging.
+    const fetchSpy = vi.fn().mockRejectedValue(new Error("connection refused"));
+    vi.stubGlobal("fetch", fetchSpy);
+    // Port 19998 is not listening; the WS fallback probe will also fail.
+    await expect(isChromeReachable("ws://127.0.0.1:19998", 50)).resolves.toBe(false);
+    // fetch() must have been invoked — HTTP discovery is always tried first.
+    expect(fetchSpy).toHaveBeenCalled();
+  });
+
+  it("falls back to a direct WS probe when /json/version is unavailable for a bare ws:// URL", async () => {
+    // Covers the WS-fallback path in isChromeReachable: /json/version returns
+    // nothing (simulated by empty response) but the WS socket IS accepting
+    // connections (Browserless/Browserbase-style provider).
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({}), // empty — no webSocketDebuggerUrl
+      } as unknown as Response),
+    );
+    // A real WS server accepts the handshake.
+    const wss = new WebSocketServer({ port: 0, host: "127.0.0.1" });
+    await new Promise<void>((resolve) => wss.once("listening", () => resolve()));
+    const port = (wss.address() as AddressInfo).port;
+    try {
+      await expect(isChromeReachable(`ws://127.0.0.1:${port}`, 500)).resolves.toBe(true);
+    } finally {
+      await new Promise<void>((resolve) => wss.close(() => resolve()));
+    }
+  });
+
+  it("returns the original ws:// URL from getChromeWebSocketUrl when /json/version provides no debugger URL", async () => {
+    // Covers the getChromeWebSocketUrl WS-fallback: discovery succeeds but
+    // webSocketDebuggerUrl is absent — the original URL is returned as-is.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({}),
+      } as unknown as Response),
+    );
+    await expect(getChromeWebSocketUrl("ws://127.0.0.1:12345", 50)).resolves.toBe(
+      "ws://127.0.0.1:12345",
+    );
   });
 
   it("stopOpenClawChrome no-ops when process is already killed", async () => {
@@ -503,5 +578,85 @@ describe("browser chrome helpers", () => {
     await stopChromeWithProc(proc, 1);
     expect(proc.kill).toHaveBeenNthCalledWith(1, "SIGTERM");
     expect(proc.kill).toHaveBeenNthCalledWith(2, "SIGKILL");
+  });
+});
+
+describe("chrome executables", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("parses odd dotted browser version tokens using the last match", () => {
+    expect(parseBrowserMajorVersion("Chromium 3.0/1.2.3")).toBe(1);
+  });
+
+  it("returns null when no dotted version token exists", () => {
+    expect(parseBrowserMajorVersion("no version here")).toBeNull();
+  });
+
+  it("classifies beta Linux Google Chrome builds as canary", () => {
+    vi.spyOn(fs, "existsSync").mockImplementation((candidate) => {
+      return String(candidate) === "/usr/bin/google-chrome-beta";
+    });
+
+    expect(resolveGoogleChromeExecutableForPlatform("linux")).toEqual({
+      kind: "canary",
+      path: "/usr/bin/google-chrome-beta",
+    });
+  });
+
+  it("classifies unstable Linux Google Chrome builds as canary", () => {
+    vi.spyOn(fs, "existsSync").mockImplementation((candidate) => {
+      return String(candidate) === "/usr/bin/google-chrome-unstable";
+    });
+
+    expect(resolveGoogleChromeExecutableForPlatform("linux")).toEqual({
+      kind: "canary",
+      path: "/usr/bin/google-chrome-unstable",
+    });
+  });
+});
+
+describe("browser chrome launch args", () => {
+  it("does not force an about:blank tab at startup", () => {
+    const args = buildOpenClawChromeLaunchArgs({
+      resolved: {
+        enabled: true,
+        controlPort: 18791,
+        cdpProtocol: "http",
+        cdpHost: "127.0.0.1",
+        cdpIsLoopback: true,
+        cdpPortRangeStart: 18800,
+        cdpPortRangeEnd: 18810,
+        evaluateEnabled: false,
+        remoteCdpTimeoutMs: 1500,
+        remoteCdpHandshakeTimeoutMs: 3000,
+        extraArgs: [],
+        color: "#FF4500",
+        headless: false,
+        noSandbox: false,
+        attachOnly: false,
+        ssrfPolicy: { allowPrivateNetwork: true },
+        defaultProfile: "openclaw",
+        profiles: {
+          openclaw: { cdpPort: 18800, color: "#FF4500" },
+        },
+      },
+      profile: {
+        name: "openclaw",
+        cdpUrl: "http://127.0.0.1:18800",
+        cdpPort: 18800,
+        cdpHost: "127.0.0.1",
+        cdpIsLoopback: true,
+        color: "#FF4500",
+        driver: "openclaw",
+        attachOnly: false,
+      },
+      userDataDir: "/tmp/openclaw-test-user-data",
+    });
+
+    expect(args).not.toContain("about:blank");
+    expect(args).toContain("--remote-debugging-port=18800");
+    expect(args).toContain("--user-data-dir=/tmp/openclaw-test-user-data");
   });
 });

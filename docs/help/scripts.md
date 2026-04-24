@@ -6,8 +6,6 @@ read_when:
 title: "Scripts"
 ---
 
-# Scripts
-
 The `scripts/` directory contains helper scripts for local workflows and ops tasks.
 Use these when a task is clearly tied to a script; otherwise prefer the CLI.
 
@@ -51,3 +49,8 @@ Examples:
 
 - Keep scripts focused and documented.
 - Add a short entry in the relevant doc (or create one if missing).
+
+## Related
+
+- [Testing](/help/testing)
+- [Testing live](/help/testing-live)

@@ -6,8 +6,6 @@ read_when:
 title: "GitHub Copilot"
 ---
 
-# GitHub Copilot
-
 GitHub Copilot is GitHub's AI coding assistant. It provides access to Copilot
 models for your GitHub account and plan. OpenClaw can use Copilot as a model
 provider in two different ways.
@@ -31,14 +29,16 @@ provider in two different ways.
       </Step>
       <Step title="Set a default model">
         ```bash
-        openclaw models set github-copilot/gpt-4o
+        openclaw models set github-copilot/claude-opus-4.7
         ```
 
         Or in config:
 
         ```json5
         {
-          agents: { defaults: { model: { primary: "github-copilot/gpt-4o" } } },
+          agents: {
+            defaults: { model: { primary: "github-copilot/claude-opus-4.7" } },
+          },
         }
         ```
       </Step>

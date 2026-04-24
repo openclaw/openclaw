@@ -2,9 +2,9 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
+source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 
-IMAGE_NAME="openclaw-openwebui-e2e"
+IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-openwebui-e2e" OPENCLAW_OPENWEBUI_E2E_IMAGE)"
 OPENWEBUI_IMAGE="${OPENWEBUI_IMAGE:-ghcr.io/open-webui/open-webui:v0.8.10}"
 # Keep the default on a broadly available non-reasoning OpenAI model for
 # Open WebUI compatibility smoke. Callers can still override this explicitly.
@@ -40,8 +40,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "Building Docker image..."
-run_logged openwebui-build docker build -t "$IMAGE_NAME" -f "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR"
+docker_e2e_build_or_reuse "$IMAGE_NAME" openwebui
 
 echo "Pulling Open WebUI image: $OPENWEBUI_IMAGE"
 docker pull "$OPENWEBUI_IMAGE" >/dev/null
@@ -55,6 +54,10 @@ docker run -d \
   --network "$NET_NAME" \
   -e "OPENCLAW_GATEWAY_TOKEN=$TOKEN" \
   -e "OPENCLAW_OPENWEBUI_MODEL=$MODEL" \
+  -e "OPENCLAW_SKIP_CHANNELS=1" \
+  -e "OPENCLAW_SKIP_GMAIL_WATCHER=1" \
+  -e "OPENCLAW_SKIP_CRON=1" \
+  -e "OPENCLAW_SKIP_CANVAS_HOST=1" \
   -e OPENAI_API_KEY \
   ${OPENAI_BASE_URL_VALUE:+-e OPENAI_BASE_URL} \
   "$IMAGE_NAME" \
@@ -111,7 +114,7 @@ EOF
 
 echo "Waiting for gateway HTTP surface..."
 gateway_ready=0
-for _ in $(seq 1 60); do
+for _ in $(seq 1 240); do
   if [ "$(docker inspect -f '{{.State.Running}}' "$GW_NAME" 2>/dev/null || echo false)" != "true" ]; then
     break
   fi
@@ -129,6 +132,10 @@ done
 
 if [ "$gateway_ready" -ne 1 ]; then
   echo "Gateway failed to start"
+  docker inspect "$GW_NAME" --format '{{json .State}}' 2>/dev/null || true
+  if [ "$(docker inspect -f '{{.State.Running}}' "$GW_NAME" 2>/dev/null || echo false)" = "true" ]; then
+    docker exec "$GW_NAME" bash -lc 'tail -n 200 /tmp/openwebui-gateway.log' || true
+  fi
   docker logs "$GW_NAME" 2>&1 | tail -n 200 || true
   exit 1
 fi

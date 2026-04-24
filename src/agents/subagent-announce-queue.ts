@@ -1,10 +1,7 @@
 import { type QueueDropPolicy, type QueueMode } from "../auto-reply/reply/queue.js";
 import { defaultRuntime } from "../runtime.js";
-import {
-  type DeliveryContext,
-  deliveryContextKey,
-  normalizeDeliveryContext,
-} from "../utils/delivery-context.js";
+import { deliveryContextKey, normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
+import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import {
   applyQueueRuntimeSettings,
   applyQueueDropPolicy,
@@ -192,7 +189,7 @@ function scheduleAnnounceDrain(key: string) {
     } catch (err) {
       queue.consecutiveFailures++;
       // Exponential backoff on consecutive failures: 2s, 4s, 8s, ... capped at 60s.
-      const errorBackoffMs = Math.min(1000 * Math.pow(2, queue.consecutiveFailures), 60_000);
+      const errorBackoffMs = Math.min(1000 * 2 ** queue.consecutiveFailures, 60_000);
       const retryDelayMs = Math.max(errorBackoffMs, queue.debounceMs);
       queue.lastEnqueuedAt = Date.now() + retryDelayMs - queue.debounceMs;
       defaultRuntime.error?.(

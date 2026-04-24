@@ -4,7 +4,10 @@ import type {
   ModelProviderConfig,
   OpenClawConfig,
 } from "../config/types.js";
-import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-runtime.js";
+import {
+  createLazyFacadeValue as createLazyFacadeRuntimeValue,
+  loadBundledPluginPublicSurfaceModuleSync,
+} from "./facade-runtime.js";
 
 type LmstudioReasoningCapabilityWire = {
   allowed_options?: unknown;
@@ -45,6 +48,13 @@ export type LmstudioModelBase = {
   maxTokens: number;
 };
 
+export type FetchLmstudioModelsResult = {
+  reachable: boolean;
+  status?: number;
+  models: LmstudioModelWire[];
+  error?: unknown;
+};
+
 type FacadeModule = {
   LMSTUDIO_DEFAULT_BASE_URL: string;
   LMSTUDIO_DEFAULT_INFERENCE_BASE_URL: string;
@@ -65,7 +75,10 @@ type FacadeModule = {
     baseUrl?: string;
     apiKey?: string;
     headers?: Record<string, string>;
-  }) => Promise<unknown>;
+    ssrfPolicy?: unknown;
+    timeoutMs?: number;
+    fetchImpl?: typeof fetch;
+  }) => Promise<FetchLmstudioModelsResult>;
   mapLmstudioWireEntry: (entry: LmstudioModelWire) => LmstudioModelBase | null;
   discoverLmstudioModels: (params?: {
     config?: OpenClawConfig;
@@ -90,6 +103,16 @@ type FacadeModule = {
     headers?: unknown;
     path?: string;
   }) => Promise<Record<string, string> | undefined>;
+  resolveLmstudioRequestContext: (params: {
+    config?: OpenClawConfig;
+    env?: NodeJS.ProcessEnv;
+    headers?: unknown;
+    providerHeaders?: unknown;
+    path?: string;
+  }) => Promise<{
+    apiKey?: string;
+    headers?: Record<string, string>;
+  }>;
   resolveLmstudioRuntimeApiKey: (params: {
     config?: OpenClawConfig;
     agentDir?: string;
@@ -125,38 +148,30 @@ export const LMSTUDIO_DEFAULT_MODEL_ID: FacadeModule["LMSTUDIO_DEFAULT_MODEL_ID"
 export const LMSTUDIO_PROVIDER_ID: FacadeModule["LMSTUDIO_PROVIDER_ID"] = "lmstudio";
 
 export const resolveLmstudioReasoningCapability: FacadeModule["resolveLmstudioReasoningCapability"] =
-  createLazyFacadeValue("resolveLmstudioReasoningCapability");
+  createLazyFacadeRuntimeValue(loadFacadeModule, "resolveLmstudioReasoningCapability");
 export const resolveLoadedContextWindow: FacadeModule["resolveLoadedContextWindow"] =
-  createLazyFacadeValue("resolveLoadedContextWindow");
+  createLazyFacadeRuntimeValue(loadFacadeModule, "resolveLoadedContextWindow");
 export const resolveLmstudioServerBase: FacadeModule["resolveLmstudioServerBase"] =
-  createLazyFacadeValue("resolveLmstudioServerBase");
+  createLazyFacadeRuntimeValue(loadFacadeModule, "resolveLmstudioServerBase");
 export const resolveLmstudioInferenceBase: FacadeModule["resolveLmstudioInferenceBase"] =
-  createLazyFacadeValue("resolveLmstudioInferenceBase");
+  createLazyFacadeRuntimeValue(loadFacadeModule, "resolveLmstudioInferenceBase");
 export const normalizeLmstudioProviderConfig: FacadeModule["normalizeLmstudioProviderConfig"] =
-  createLazyFacadeValue("normalizeLmstudioProviderConfig");
+  createLazyFacadeRuntimeValue(loadFacadeModule, "normalizeLmstudioProviderConfig");
 export const fetchLmstudioModels: FacadeModule["fetchLmstudioModels"] =
-  createLazyFacadeValue("fetchLmstudioModels");
+  createLazyFacadeRuntimeValue(loadFacadeModule, "fetchLmstudioModels");
 export const mapLmstudioWireEntry: FacadeModule["mapLmstudioWireEntry"] =
-  createLazyFacadeValue("mapLmstudioWireEntry");
+  createLazyFacadeRuntimeValue(loadFacadeModule, "mapLmstudioWireEntry");
 export const discoverLmstudioModels: FacadeModule["discoverLmstudioModels"] =
-  createLazyFacadeValue("discoverLmstudioModels");
+  createLazyFacadeRuntimeValue(loadFacadeModule, "discoverLmstudioModels");
 export const ensureLmstudioModelLoaded: FacadeModule["ensureLmstudioModelLoaded"] =
-  createLazyFacadeValue("ensureLmstudioModelLoaded");
+  createLazyFacadeRuntimeValue(loadFacadeModule, "ensureLmstudioModelLoaded");
 export const buildLmstudioAuthHeaders: FacadeModule["buildLmstudioAuthHeaders"] =
-  createLazyFacadeValue("buildLmstudioAuthHeaders");
+  createLazyFacadeRuntimeValue(loadFacadeModule, "buildLmstudioAuthHeaders");
 export const resolveLmstudioConfiguredApiKey: FacadeModule["resolveLmstudioConfiguredApiKey"] =
-  createLazyFacadeValue("resolveLmstudioConfiguredApiKey");
+  createLazyFacadeRuntimeValue(loadFacadeModule, "resolveLmstudioConfiguredApiKey");
 export const resolveLmstudioProviderHeaders: FacadeModule["resolveLmstudioProviderHeaders"] =
-  createLazyFacadeValue("resolveLmstudioProviderHeaders");
+  createLazyFacadeRuntimeValue(loadFacadeModule, "resolveLmstudioProviderHeaders");
+export const resolveLmstudioRequestContext: FacadeModule["resolveLmstudioRequestContext"] =
+  createLazyFacadeRuntimeValue(loadFacadeModule, "resolveLmstudioRequestContext");
 export const resolveLmstudioRuntimeApiKey: FacadeModule["resolveLmstudioRuntimeApiKey"] =
-  createLazyFacadeValue("resolveLmstudioRuntimeApiKey");
-
-function createLazyFacadeValue<K extends keyof FacadeModule>(key: K): FacadeModule[K] {
-  return ((...args: unknown[]) => {
-    const value = loadFacadeModule()[key];
-    if (typeof value !== "function") {
-      return value;
-    }
-    return (value as (...innerArgs: unknown[]) => unknown)(...args);
-  }) as FacadeModule[K];
-}
+  createLazyFacadeRuntimeValue(loadFacadeModule, "resolveLmstudioRuntimeApiKey");

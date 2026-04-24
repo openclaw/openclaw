@@ -95,6 +95,9 @@ export const registerProviderStreamForModelMock: Mock<(params?: unknown) => unkn
 export const applyExtraParamsToAgentMock = vi.fn(() => ({ effectiveExtraParams: {} }));
 export const resolveAgentTransportOverrideMock: Mock<(params?: unknown) => string | undefined> =
   vi.fn(() => undefined);
+export const resolveSandboxContextMock = vi.fn(async () => null);
+export const maybeCompactAgentHarnessSessionMock: Mock<(params?: unknown) => Promise<unknown>> =
+  vi.fn(async () => undefined);
 
 export function resetCompactSessionStateMocks(): void {
   sanitizeSessionHistoryMock.mockReset();
@@ -131,6 +134,10 @@ export function resetCompactSessionStateMocks(): void {
   applyExtraParamsToAgentMock.mockReturnValue({ effectiveExtraParams: {} });
   resolveAgentTransportOverrideMock.mockReset();
   resolveAgentTransportOverrideMock.mockReturnValue(undefined);
+  resolveSandboxContextMock.mockReset();
+  resolveSandboxContextMock.mockResolvedValue(null);
+  maybeCompactAgentHarnessSessionMock.mockReset();
+  maybeCompactAgentHarnessSessionMock.mockResolvedValue(undefined);
 }
 
 export function resetCompactHooksHarnessMocks(): void {
@@ -197,7 +204,7 @@ export async function loadCompactHooksHarness(): Promise<{
   }));
 
   vi.doMock("../harness/selection.js", () => ({
-    maybeCompactAgentHarnessSession: vi.fn(async () => undefined),
+    maybeCompactAgentHarnessSession: maybeCompactAgentHarnessSessionMock,
   }));
 
   vi.doMock("../../plugins/provider-runtime.js", () => ({
@@ -240,11 +247,7 @@ export async function loadCompactHooksHarness(): Promise<{
     createAgentSession: vi.fn(async () => {
       const session = {
         sessionId: "session-1",
-        messages: sessionMessages.map((message) =>
-          typeof structuredClone === "function"
-            ? structuredClone(message)
-            : JSON.parse(JSON.stringify(message)),
-        ),
+        messages: sessionMessages.map((message) => structuredClone(message)),
         agent: {
           streamFn: vi.fn(),
           transport: "sse",
@@ -253,7 +256,7 @@ export async function loadCompactHooksHarness(): Promise<{
               return session.messages;
             },
             set messages(messages: unknown[]) {
-              session.messages = [...(messages as typeof session.messages)];
+              session.messages = [...messages];
             },
           },
         },
@@ -300,7 +303,7 @@ export async function loadCompactHooksHarness(): Promise<{
   }));
 
   vi.doMock("../sandbox.js", () => ({
-    resolveSandboxContext: vi.fn(async () => null),
+    resolveSandboxContext: resolveSandboxContextMock,
   }));
 
   vi.doMock("../session-file-repair.js", () => ({
@@ -340,6 +343,7 @@ export async function loadCompactHooksHarness(): Promise<{
   }));
 
   vi.doMock("../pi-bundle-mcp-tools.js", () => ({
+    retireSessionMcpRuntime: vi.fn(async () => true),
     createBundleMcpToolRuntime: vi.fn(async () => ({
       tools: [],
       dispose: vi.fn(async () => {}),
@@ -389,7 +393,7 @@ export async function loadCompactHooksHarness(): Promise<{
   }));
 
   vi.doMock("./tool-split.js", () => ({
-    splitSdkTools: vi.fn(() => ({ builtInTools: [], customTools: [] })),
+    splitSdkTools: vi.fn(() => ({ customTools: [] })),
   }));
 
   vi.doMock("./compaction-safety-timeout.js", () => ({

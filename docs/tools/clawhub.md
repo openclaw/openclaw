@@ -7,8 +7,6 @@ read_when:
 title: "ClawHub"
 ---
 
-# ClawHub
-
 ClawHub is the public registry for **OpenClaw skills and plugins**.
 
 - Use native `openclaw` commands to search/install/update skills and install
@@ -297,7 +295,8 @@ Code plugins must include the required OpenClaw metadata in `package.json`:
   "version": "1.0.0",
   "type": "module",
   "openclaw": {
-    "extensions": ["./index.ts"],
+    "extensions": ["./src/index.ts"],
+    "runtimeExtensions": ["./dist/index.js"],
     "compat": {
       "pluginApi": ">=2026.3.24-beta.2",
       "minGatewayVersion": "2026.3.24-beta.2"
@@ -309,6 +308,11 @@ Code plugins must include the required OpenClaw metadata in `package.json`:
   }
 }
 ```
+
+Published packages should ship built JavaScript and point `runtimeExtensions`
+at that output. Git checkout installs can still fall back to TypeScript source
+when no built files exist, but built runtime entries avoid runtime TypeScript
+compilation in startup, doctor, and plugin loading paths.
 
 ## Advanced details (technical)
 
@@ -346,3 +350,9 @@ export CLAWHUB_DISABLE_TELEMETRY=1
 - `CLAWHUB_CONFIG_PATH`: Override where the CLI stores the token/config.
 - `CLAWHUB_WORKDIR`: Override the default workdir.
 - `CLAWHUB_DISABLE_TELEMETRY=1`: Disable telemetry on `sync`.
+
+## Related
+
+- [Plugin](/tools/plugin)
+- [Skills](/tools/skills)
+- [Community plugins](/plugins/community)

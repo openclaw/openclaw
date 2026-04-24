@@ -1,12 +1,10 @@
 ---
-title: "Alibaba Model Studio"
 summary: "Alibaba Model Studio Wan video generation in OpenClaw"
+title: "Alibaba Model Studio"
 read_when:
   - You want to use Alibaba Wan video generation in OpenClaw
   - You need Model Studio or DashScope API key setup for video generation
 ---
-
-# Alibaba Model Studio
 
 OpenClaw ships a bundled `alibaba` video-generation provider for Wan models on
 Alibaba Model Studio / DashScope.
@@ -110,7 +108,7 @@ Reference image/video mode currently requires **remote http(s) URLs**. Local fil
   <Card title="Qwen" href="/providers/qwen" icon="microchip">
     Qwen provider setup and DashScope integration.
   </Card>
-  <Card title="Configuration reference" href="/gateway/configuration-reference#agent-defaults" icon="gear">
+  <Card title="Configuration reference" href="/gateway/config-agents#agent-defaults" icon="gear">
     Agent defaults and model configuration.
   </Card>
 </CardGroup>

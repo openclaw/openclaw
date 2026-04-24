@@ -614,7 +614,7 @@ class ChatController(
         if (phase.isNullOrEmpty() || name.isNullOrEmpty() || toolCallId.isNullOrEmpty()) return
 
         if (phase == "start") {
-          val args = data["args"].asObjectOrNull()
+          val args = data.get("args").asObjectOrNull()
           pendingToolCallsById[toolCallId] =
             ChatPendingToolCall(
               toolCallId = toolCallId,

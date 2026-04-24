@@ -1,23 +1,37 @@
 import type { Bot } from "grammy";
 import {
+  DEFAULT_TIMING,
   logAckFailure,
   logTypingFailure,
   removeAckReactionAfterReply,
 } from "openclaw/plugin-sdk/channel-feedback";
 import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
-import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel-streaming";
+import {
+  resolveChannelStreamingBlockEnabled,
+  resolveChannelStreamingPreviewToolProgress,
+} from "openclaw/plugin-sdk/channel-streaming";
+import { isAbortRequestText } from "openclaw/plugin-sdk/command-primitives-runtime";
 import type {
   OpenClawConfig,
   ReplyToMode,
   TelegramAccountConfig,
 } from "openclaw/plugin-sdk/config-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  createOutboundPayloadPlan,
+  projectOutboundPayloadPlanForDelivery,
+} from "openclaw/plugin-sdk/outbound-runtime";
 import { clearHistoryEntriesIfEnabled } from "openclaw/plugin-sdk/reply-history";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
-import { isAbortRequestText, type ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { defaultTelegramBotDeps, type TelegramBotDeps } from "./bot-deps.js";
+import {
+  createSubsystemLogger,
+  danger,
+  logVerbose,
+  sleepWithAbort,
+} from "openclaw/plugin-sdk/runtime-env";
+import type { TelegramBotDeps } from "./bot-deps.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
 import {
   findModelInCatalog,
@@ -26,6 +40,7 @@ import {
   resolveAgentDir,
   resolveDefaultModelForAgent,
 } from "./bot-message-dispatch.agent.runtime.js";
+import { pruneStickerMediaFromContext } from "./bot-message-dispatch.media.js";
 import {
   generateTopicLabel,
   getAgentScopedMediaLocalRoots,
@@ -64,7 +79,10 @@ import {
 import { editMessageTelegram } from "./send.js";
 import { cacheSticker, describeStickerImage } from "./sticker-cache.js";
 
+export { pruneStickerMediaFromContext } from "./bot-message-dispatch.media.js";
+
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
+const silentReplyDispatchLogger = createSubsystemLogger("telegram/silent-reply-dispatch");
 
 /** Minimum chars before sending first streaming message (improves push notification UX) */
 const DRAFT_MIN_INITIAL_CHARS = 30;
@@ -81,37 +99,6 @@ async function resolveStickerVisionSupport(cfg: OpenClawConfig, agentId: string)
   } catch {
     return false;
   }
-}
-
-export function pruneStickerMediaFromContext(
-  ctxPayload: {
-    MediaPath?: string;
-    MediaUrl?: string;
-    MediaType?: string;
-    MediaPaths?: string[];
-    MediaUrls?: string[];
-    MediaTypes?: string[];
-  },
-  opts?: { stickerMediaIncluded?: boolean },
-) {
-  if (opts?.stickerMediaIncluded === false) {
-    return;
-  }
-  const nextMediaPaths = Array.isArray(ctxPayload.MediaPaths)
-    ? ctxPayload.MediaPaths.slice(1)
-    : undefined;
-  const nextMediaUrls = Array.isArray(ctxPayload.MediaUrls)
-    ? ctxPayload.MediaUrls.slice(1)
-    : undefined;
-  const nextMediaTypes = Array.isArray(ctxPayload.MediaTypes)
-    ? ctxPayload.MediaTypes.slice(1)
-    : undefined;
-  ctxPayload.MediaPaths = nextMediaPaths && nextMediaPaths.length > 0 ? nextMediaPaths : undefined;
-  ctxPayload.MediaUrls = nextMediaUrls && nextMediaUrls.length > 0 ? nextMediaUrls : undefined;
-  ctxPayload.MediaTypes = nextMediaTypes && nextMediaTypes.length > 0 ? nextMediaTypes : undefined;
-  ctxPayload.MediaPath = ctxPayload.MediaPaths?.[0];
-  ctxPayload.MediaUrl = ctxPayload.MediaUrls?.[0] ?? ctxPayload.MediaPath;
-  ctxPayload.MediaType = ctxPayload.MediaTypes?.[0];
 }
 
 type DispatchTelegramMessageParams = {
@@ -229,9 +216,11 @@ export const dispatchTelegramMessage = async ({
   streamMode,
   textLimit,
   telegramCfg,
-  telegramDeps = defaultTelegramBotDeps,
+  telegramDeps: injectedTelegramDeps,
   opts,
 }: DispatchTelegramMessageParams) => {
+  const telegramDeps =
+    injectedTelegramDeps ?? (await import("./bot-deps.js")).defaultTelegramBotDeps;
   const {
     ctxPayload,
     msg,
@@ -252,6 +241,48 @@ export const dispatchTelegramMessage = async ({
     removeAckAfterReply,
     statusReactionController,
   } = context;
+  const statusReactionTiming = {
+    ...DEFAULT_TIMING,
+    ...cfg.messages?.statusReactions?.timing,
+  };
+  const clearTelegramStatusReaction = async () => {
+    if (!msg.message_id || !reactionApi) {
+      return;
+    }
+    await reactionApi(chatId, msg.message_id, []);
+  };
+  const finalizeTelegramStatusReaction = async (params: {
+    outcome: "done" | "error";
+    hasFinalResponse: boolean;
+  }) => {
+    if (!statusReactionController) {
+      return;
+    }
+    if (params.outcome === "done") {
+      await statusReactionController.setDone();
+      if (removeAckAfterReply) {
+        await sleepWithAbort(statusReactionTiming.doneHoldMs);
+        await clearTelegramStatusReaction();
+      } else {
+        await statusReactionController.restoreInitial();
+      }
+      return;
+    }
+    await statusReactionController.setError();
+    if (params.hasFinalResponse) {
+      if (removeAckAfterReply) {
+        await sleepWithAbort(statusReactionTiming.errorHoldMs);
+        await clearTelegramStatusReaction();
+      } else {
+        await statusReactionController.restoreInitial();
+      }
+      return;
+    }
+    if (removeAckAfterReply) {
+      await sleepWithAbort(statusReactionTiming.errorHoldMs);
+    }
+    await statusReactionController.restoreInitial();
+  };
   const dispatchFenceKey = resolveTelegramAbortFenceKey({
     ctxPayload,
     chatId,
@@ -356,6 +387,29 @@ export const dispatchTelegramMessage = async ({
   };
   const answerLane = lanes.answer;
   const reasoningLane = lanes.reasoning;
+  const previewToolProgressEnabled =
+    Boolean(answerLane.stream) && resolveChannelStreamingPreviewToolProgress(telegramCfg);
+  let previewToolProgressSuppressed = false;
+  let previewToolProgressLines: string[] = [];
+  const pushPreviewToolProgress = (line?: string) => {
+    if (!previewToolProgressEnabled || previewToolProgressSuppressed || !answerLane.stream) {
+      return;
+    }
+    const normalized = line?.replace(/\s+/g, " ").trim();
+    if (!normalized) {
+      return;
+    }
+    const previous = previewToolProgressLines.at(-1);
+    if (previous === normalized) {
+      return;
+    }
+    previewToolProgressLines = [...previewToolProgressLines, normalized].slice(-8);
+    const previewText = ["Working…", ...previewToolProgressLines.map((entry) => `• ${entry}`)].join(
+      "\n",
+    );
+    answerLane.lastPartialText = previewText;
+    answerLane.stream.update(previewText);
+  };
   let splitReasoningOnNextStream = false;
   let skipNextAnswerMessageStartRotation = false;
   let pendingCompactionReplayBoundary = false;
@@ -430,6 +484,10 @@ export const dispatchTelegramMessage = async ({
     }
     if (text === lane.lastPartialText) {
       return;
+    }
+    if (lane === answerLane) {
+      previewToolProgressSuppressed = true;
+      previewToolProgressLines = [];
     }
     lane.hasStreamedMessage = true;
     if (
@@ -881,6 +939,8 @@ export const dispatchTelegramMessage = async ({
             ? () =>
                 enqueueDraftLaneEvent(async () => {
                   reasoningStepState.resetForNextStep();
+                  previewToolProgressSuppressed = false;
+                  previewToolProgressLines = [];
                   if (skipNextAnswerMessageStartRotation) {
                     skipNextAnswerMessageStartRotation = false;
                     activePreviewLifecycleByLane.answer = "transient";
@@ -902,16 +962,53 @@ export const dispatchTelegramMessage = async ({
             ? () =>
                 enqueueDraftLaneEvent(async () => {
                   splitReasoningOnNextStream = reasoningLane.hasStreamedMessage;
+                  previewToolProgressSuppressed = false;
+                  previewToolProgressLines = [];
                 })
             : undefined,
-          onToolStart: statusReactionController
-            ? async (payload) => {
-                const toolName = payload.name?.trim();
-                if (toolName) {
-                  await statusReactionController.setTool(toolName);
-                }
-              }
-            : undefined,
+          suppressDefaultToolProgressMessages: previewToolProgressEnabled ? true : undefined,
+          onToolStart: async (payload) => {
+            const toolName = payload.name?.trim();
+            if (statusReactionController && toolName) {
+              await statusReactionController.setTool(toolName);
+            }
+            pushPreviewToolProgress(toolName ? `tool: ${toolName}` : "tool running");
+          },
+          onItemEvent: async (payload) => {
+            pushPreviewToolProgress(
+              payload.progressText ?? payload.summary ?? payload.title ?? payload.name,
+            );
+          },
+          onPlanUpdate: async (payload) => {
+            if (payload.phase !== "update") {
+              return;
+            }
+            pushPreviewToolProgress(payload.explanation ?? payload.steps?.[0] ?? "planning");
+          },
+          onApprovalEvent: async (payload) => {
+            if (payload.phase !== "requested") {
+              return;
+            }
+            pushPreviewToolProgress(
+              payload.command ? `approval: ${payload.command}` : "approval requested",
+            );
+          },
+          onCommandOutput: async (payload) => {
+            if (payload.phase !== "end") {
+              return;
+            }
+            pushPreviewToolProgress(
+              payload.name
+                ? `${payload.name}${payload.exitCode === 0 ? " ✓" : payload.exitCode != null ? ` (exit ${payload.exitCode})` : ""}`
+                : payload.title,
+            );
+          },
+          onPatchSummary: async (payload) => {
+            if (payload.phase !== "end") {
+              return;
+            }
+            pushPreviewToolProgress(payload.summary ?? payload.title ?? "patch applied");
+          },
           onCompactionStart:
             statusReactionController || answerLane.stream
               ? async () => {
@@ -1017,9 +1114,11 @@ export const dispatchTelegramMessage = async ({
   }
   if (dispatchWasSuperseded) {
     if (statusReactionController) {
-      void Promise.resolve(statusReactionController.setDone()).catch((err: unknown) => {
-        logVerbose(`telegram: status reaction finalize failed: ${String(err)}`);
-      });
+      void finalizeTelegramStatusReaction({ outcome: "done", hasFinalResponse: true }).catch(
+        (err: unknown) => {
+          logVerbose(`telegram: status reaction finalize failed: ${String(err)}`);
+        },
+      );
     } else {
       removeAckReactionAfterReply({
         removeAfterReply: removeAckAfterReply,
@@ -1062,12 +1161,43 @@ export const dispatchTelegramMessage = async ({
     sentFallback = result.delivered;
   }
 
-  const hasFinalResponse = queuedFinal || sentFallback;
+  if (!queuedFinal && !sentFallback && !dispatchError && !deliverySummary.delivered) {
+    const policySessionKey =
+      ctxPayload.CommandSource === "native"
+        ? (ctxPayload.CommandTargetSessionKey ?? ctxPayload.SessionKey)
+        : ctxPayload.SessionKey;
+    const silentReplyFallback = projectOutboundPayloadPlanForDelivery(
+      createOutboundPayloadPlan([{ text: "NO_REPLY" }], {
+        cfg,
+        sessionKey: policySessionKey,
+        surface: "telegram",
+      }),
+    );
+    if (silentReplyFallback.length > 0) {
+      const result = await (telegramDeps.deliverReplies ?? deliverReplies)({
+        replies: silentReplyFallback,
+        ...deliveryBaseOptions,
+        silent: false,
+        mediaLoader: telegramDeps.loadWebMedia,
+      });
+      sentFallback = result.delivered;
+    }
+    silentReplyDispatchLogger.debug("telegram turn ended without visible final response", {
+      hasSessionKey: Boolean(policySessionKey),
+      hasChatId: chatId != null,
+      queuedFinal,
+      sentFallback,
+    });
+  }
+
+  const hasFinalResponse = queuedFinal || sentFallback || deliverySummary.delivered;
 
   if (statusReactionController && !hasFinalResponse) {
-    void Promise.resolve(statusReactionController.setError()).catch((err: unknown) => {
-      logVerbose(`telegram: status reaction error finalize failed: ${String(err)}`);
-    });
+    void finalizeTelegramStatusReaction({ outcome: "error", hasFinalResponse: false }).catch(
+      (err: unknown) => {
+        logVerbose(`telegram: status reaction error finalize failed: ${String(err)}`);
+      },
+    );
   }
 
   if (!hasFinalResponse) {
@@ -1116,7 +1246,11 @@ export const dispatchTelegramMessage = async ({
   }
 
   if (statusReactionController) {
-    void Promise.resolve(statusReactionController.setDone()).catch((err: unknown) => {
+    const statusReactionOutcome = dispatchError || sentFallback ? "error" : "done";
+    void finalizeTelegramStatusReaction({
+      outcome: statusReactionOutcome,
+      hasFinalResponse: true,
+    }).catch((err: unknown) => {
       logVerbose(`telegram: status reaction finalize failed: ${String(err)}`);
     });
   } else {

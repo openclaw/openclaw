@@ -286,7 +286,7 @@ function getExistingSessionUnsupportedMessage(action: BrowserActRequest): string
       if (action.slowly) {
         return EXISTING_SESSION_LIMITS.act.typeSlowly;
       }
-      return null;
+      return action.timeoutMs ? EXISTING_SESSION_LIMITS.act.typeTimeout : null;
     case "press":
       return action.delayMs ? EXISTING_SESSION_LIMITS.act.pressDelay : null;
     case "hover":
@@ -419,6 +419,8 @@ export function registerBrowserAgentActRoutes(
                       targetId: tab.targetId,
                       uid: action.ref!,
                       doubleClick: action.doubleClick ?? false,
+                      timeoutMs: action.timeoutMs,
+                      signal: req.signal,
                     }),
                   guard: existingSessionNavigationGuard,
                 });

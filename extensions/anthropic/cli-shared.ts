@@ -1,47 +1,16 @@
-import type { CliBackendConfig } from "openclaw/plugin-sdk/cli-backend";
+import type {
+  CliBackendConfig,
+  CliBackendNormalizeConfigContext,
+} from "openclaw/plugin-sdk/cli-backend";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
-
-export const CLAUDE_CLI_BACKEND_ID = "claude-cli";
-export const CLAUDE_CLI_DEFAULT_MODEL_REF = `${CLAUDE_CLI_BACKEND_ID}/claude-opus-4-7`;
-export const CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS = [
+import { CLAUDE_CLI_BACKEND_ID } from "./cli-constants.js";
+export {
+  CLAUDE_CLI_BACKEND_ID,
+  CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS,
   CLAUDE_CLI_DEFAULT_MODEL_REF,
-  `${CLAUDE_CLI_BACKEND_ID}/claude-sonnet-4-6`,
-  `${CLAUDE_CLI_BACKEND_ID}/claude-opus-4-6`,
-  `${CLAUDE_CLI_BACKEND_ID}/claude-opus-4-5`,
-  `${CLAUDE_CLI_BACKEND_ID}/claude-sonnet-4-5`,
-  `${CLAUDE_CLI_BACKEND_ID}/claude-haiku-4-5`,
-] as const;
-
-export const CLAUDE_CLI_MODEL_ALIASES: Record<string, string> = {
-  opus: "opus",
-  "opus-4.7": "opus",
-  "opus-4.6": "opus",
-  "opus-4.5": "opus",
-  "opus-4": "opus",
-  "claude-opus-4-7": "opus",
-  "claude-opus-4-6": "opus",
-  "claude-opus-4-5": "opus",
-  "claude-opus-4": "opus",
-  sonnet: "sonnet",
-  "sonnet-4.6": "sonnet",
-  "sonnet-4.5": "sonnet",
-  "sonnet-4.1": "sonnet",
-  "sonnet-4.0": "sonnet",
-  "claude-sonnet-4-6": "sonnet",
-  "claude-sonnet-4-5": "sonnet",
-  "claude-sonnet-4-1": "sonnet",
-  "claude-sonnet-4-0": "sonnet",
-  haiku: "haiku",
-  "haiku-3.5": "haiku",
-  "claude-haiku-3-5": "haiku",
-};
-
-export const CLAUDE_CLI_SESSION_ID_FIELDS = [
-  "session_id",
-  "sessionId",
-  "conversation_id",
-  "conversationId",
-] as const;
+  CLAUDE_CLI_MODEL_ALIASES,
+  CLAUDE_CLI_SESSION_ID_FIELDS,
+} from "./cli-constants.js";
 
 // Claude Code honors provider-routing, auth, and config-root env before
 // consulting its local login state, so inherited shell overrides must not
@@ -90,17 +59,39 @@ export const CLAUDE_CLI_CLEAR_ENV = [
 
 const CLAUDE_LEGACY_SKIP_PERMISSIONS_ARG = "--dangerously-skip-permissions";
 const CLAUDE_PERMISSION_MODE_ARG = "--permission-mode";
-const CLAUDE_BYPASS_PERMISSIONS_MODE = "bypassPermissions";
 const CLAUDE_SETTING_SOURCES_ARG = "--setting-sources";
 const CLAUDE_SAFE_SETTING_SOURCES = "user";
+const CLAUDE_BYPASS_PERMISSION_MODE = "bypassPermissions";
 
 export function isClaudeCliProvider(providerId: string): boolean {
   return normalizeOptionalLowercaseString(providerId) === CLAUDE_CLI_BACKEND_ID;
 }
 
-export function normalizeClaudePermissionArgs(args?: string[]): string[] | undefined {
+function isOpenClawRequestedYolo(context?: CliBackendNormalizeConfigContext): boolean {
+  const agentExec = context?.agentId
+    ? context.config?.agents?.list?.find((agent) => agent.id === context.agentId)?.tools?.exec
+    : undefined;
+  const exec = agentExec ?? context?.config?.tools?.exec;
+  const security = exec?.security ?? "full";
+  const ask = exec?.ask ?? "off";
+  return security === "full" && ask === "off";
+}
+
+export function resolveClaudePermissionMode(context?: CliBackendNormalizeConfigContext): {
+  mode?: string;
+  overrideExisting: boolean;
+} {
+  return isOpenClawRequestedYolo(context)
+    ? { mode: CLAUDE_BYPASS_PERMISSION_MODE, overrideExisting: false }
+    : { overrideExisting: false };
+}
+
+export function normalizeClaudePermissionArgs(
+  args?: string[],
+  options?: { mode?: string; overrideExisting?: boolean },
+): string[] | undefined {
   if (!args) {
-    return args;
+    return options?.mode ? [CLAUDE_PERMISSION_MODE_ARG, options.mode] : args;
   }
   const normalized: string[] = [];
   let hasPermissionMode = false;
@@ -117,19 +108,28 @@ export function normalizeClaudePermissionArgs(args?: string[]): string[] | undef
         !maybeValue.startsWith("-")
       ) {
         hasPermissionMode = true;
-        normalized.push(arg);
-        normalized.push(maybeValue);
+        if (!options?.overrideExisting) {
+          normalized.push(arg);
+          normalized.push(maybeValue);
+        }
         i += 1;
       }
       continue;
     }
     if (arg.startsWith(`${CLAUDE_PERMISSION_MODE_ARG}=`)) {
-      hasPermissionMode = true;
+      const maybeValue = arg.slice(`${CLAUDE_PERMISSION_MODE_ARG}=`.length).trim();
+      if (maybeValue.length > 0 && !maybeValue.startsWith("-")) {
+        hasPermissionMode = true;
+        if (!options?.overrideExisting) {
+          normalized.push(`${CLAUDE_PERMISSION_MODE_ARG}=${maybeValue}`);
+        }
+      }
+      continue;
     }
     normalized.push(arg);
   }
-  if (!hasPermissionMode) {
-    normalized.push(CLAUDE_PERMISSION_MODE_ARG, CLAUDE_BYPASS_PERMISSIONS_MODE);
+  if (options?.mode && (!hasPermissionMode || options.overrideExisting)) {
+    normalized.push(CLAUDE_PERMISSION_MODE_ARG, options.mode);
   }
   return normalized;
 }
@@ -168,10 +168,23 @@ export function normalizeClaudeSettingSourcesArgs(args?: string[]): string[] | u
   return normalized;
 }
 
-export function normalizeClaudeBackendConfig(config: CliBackendConfig): CliBackendConfig {
+export function normalizeClaudeBackendConfig(
+  config: CliBackendConfig,
+  context?: CliBackendNormalizeConfigContext,
+): CliBackendConfig {
+  const output = config.output ?? "jsonl";
+  const input = config.input ?? "stdin";
+  const permission = resolveClaudePermissionMode(context);
   return {
     ...config,
-    args: normalizeClaudePermissionArgs(normalizeClaudeSettingSourcesArgs(config.args)),
-    resumeArgs: normalizeClaudePermissionArgs(normalizeClaudeSettingSourcesArgs(config.resumeArgs)),
+    args: normalizeClaudePermissionArgs(normalizeClaudeSettingSourcesArgs(config.args), permission),
+    resumeArgs: normalizeClaudePermissionArgs(
+      normalizeClaudeSettingSourcesArgs(config.resumeArgs),
+      permission,
+    ),
+    output,
+    liveSession:
+      config.liveSession ?? (output === "jsonl" && input === "stdin" ? "claude-stdio" : undefined),
+    input,
   };
 }

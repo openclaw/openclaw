@@ -4,7 +4,7 @@ read_when:
   - You want to index or search semantic memory
   - You’re debugging memory availability or indexing
   - You want to promote recalled short-term memory into `MEMORY.md`
-title: "memory"
+title: "Memory"
 ---
 
 # `openclaw memory`
@@ -55,6 +55,8 @@ openclaw memory index --agent main --verbose
 - `--index`: run a reindex if the store is dirty (implies `--deep`).
 - `--fix`: repair stale recall locks and normalize promotion metadata.
 - `--json`: print JSON output.
+
+If `memory status` shows `Dreaming status: blocked`, the managed dreaming cron is enabled but the heartbeat that drives it is not firing for the default agent. See [Dreaming never runs](/concepts/dreaming#dreaming-never-runs-status-shows-blocked) for the two common causes.
 
 `memory index`:
 
@@ -172,3 +174,8 @@ Notes:
 - `memory rem-backfill --path <file-or-dir> --stage-short-term` also seeds grounded durable candidates into the live short-term promotion store so the normal deep phase can rank them.
 - `memory rem-backfill --rollback` removes previously written grounded diary entries, and `memory rem-backfill --rollback-short-term` removes previously staged grounded short-term candidates.
 - See [Dreaming](/concepts/dreaming) for full phase descriptions and configuration reference.
+
+## Related
+
+- [CLI reference](/cli)
+- [Memory overview](/concepts/memory)
