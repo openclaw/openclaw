@@ -2248,6 +2248,10 @@ export const chatHandlers: GatewayRequestHandlers = {
         ownerConnId: normalizeOptionalText(client?.connId),
         ownerDeviceId: normalizeOptionalText(client?.connect?.device?.id),
       });
+      context.addChatRun(clientRunId, {
+        sessionKey,
+        clientRunId,
+      });
       const ackPayload = {
         runId: clientRunId,
         status: "started" as const,
@@ -2740,8 +2744,11 @@ export const chatHandlers: GatewayRequestHandlers = {
         })
         .finally(() => {
           context.chatAbortControllers.delete(clientRunId);
+          context.removeChatRun(clientRunId, clientRunId, sessionKey);
         });
     } catch (err) {
+      context.chatAbortControllers.delete(clientRunId);
+      context.removeChatRun(clientRunId, clientRunId, sessionKey);
       const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
       const payload = {
         runId: clientRunId,
