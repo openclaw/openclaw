@@ -245,6 +245,7 @@ describe("routeReply", () => {
       cfg,
       sessionKey: "agent:main:main",
       policySessionKey: "agent:main:direct:U123",
+      isGroup: true,
     });
 
     expect(res.ok).toBe(true);
@@ -255,6 +256,8 @@ describe("routeReply", () => {
         policyKey: "agent:main:direct:U123",
       }),
     });
+    const session = mocks.deliverOutboundPayloads.mock.calls.at(-1)?.[0]?.session;
+    expect(session).not.toEqual(expect.objectContaining({ conversationType: "group" }));
   });
 
   it("applies responsePrefix when routing", async () => {

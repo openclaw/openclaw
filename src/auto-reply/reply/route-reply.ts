@@ -213,7 +213,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       agentId: resolvedAgentId,
       sessionKey: params.sessionKey,
       policySessionKey: params.policySessionKey,
-      isGroup: params.isGroup,
+      isGroup: params.policySessionKey ? undefined : params.isGroup,
       requesterSenderId: params.requesterSenderId,
       requesterSenderName: params.requesterSenderName,
       requesterSenderUsername: params.requesterSenderUsername,
