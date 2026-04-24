@@ -275,6 +275,7 @@ describe("openai plugin", () => {
   });
 
   it("does not allow private-network routing just because a custom base URL is configured", async () => {
+    vi.stubEnv("OPENCLAW_QA_ALLOW_LOCAL_IMAGE_PROVIDER", "0");
     vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
       apiKey: "sk-test",
       source: "env",

@@ -50,6 +50,13 @@ const LOG_VALUE_MAX_CHARS = 256;
 const MOCK_OPENAI_PROVIDER_ID = "mock-openai";
 const OPENAI_OUTPUT_FORMATS = ["png", "jpeg", "webp"] as const;
 const OPENAI_QUALITIES = ["low", "medium", "high", "auto"] as const;
+const QA_LOCAL_IMAGE_PROVIDER_HOSTNAMES = new Set([
+  "127.0.0.1",
+  "::1",
+  "[::1]",
+  "localhost",
+  "host.docker.internal",
+]);
 const log = createSubsystemLogger("image-generation/openai");
 
 const AZURE_HOSTNAME_SUFFIXES = [
@@ -81,8 +88,30 @@ function sanitizeLogValue(value: unknown): string {
     : cleaned;
 }
 
-function resolveOpenAIImageTimeoutMs(timeoutMs: number | undefined): number {
-  return timeoutMs ?? DEFAULT_OPENAI_IMAGE_TIMEOUT_MS;
+function resolveOpenAIImageTimeoutMs(
+  cfg: OpenClawConfig | undefined,
+  timeoutMs: number | undefined,
+): number {
+  return (
+    timeoutMs ??
+    cfg?.gateway?.http?.endpoints?.chatCompletions?.images?.timeoutMs ??
+    DEFAULT_OPENAI_IMAGE_TIMEOUT_MS
+  );
+}
+
+function shouldAllowQaLocalImageEndpoint(baseUrl: string): boolean {
+  if (process.env.OPENCLAW_QA_ALLOW_LOCAL_IMAGE_PROVIDER !== "1") {
+    return false;
+  }
+  try {
+    const parsed = new URL(baseUrl);
+    return (
+      parsed.protocol === "http:" &&
+      QA_LOCAL_IMAGE_PROVIDER_HOSTNAMES.has(parsed.hostname.toLowerCase())
+    );
+  } catch {
+    return false;
+  }
 }
 
 function resolveOpenAIImageCount(count: number | undefined): number {
@@ -195,10 +224,7 @@ function shouldAllowPrivateImageEndpoint(req: {
     return true;
   }
   const baseUrl = resolveConfiguredOpenAIBaseUrl(req.cfg);
-  if (!baseUrl.startsWith("http://127.0.0.1:") && !baseUrl.startsWith("http://localhost:")) {
-    return false;
-  }
-  return process.env.OPENCLAW_QA_ALLOW_LOCAL_IMAGE_PROVIDER === "1";
+  return shouldAllowQaLocalImageEndpoint(baseUrl);
 }
 
 function normalizeProviderId(value: string | undefined): string {
@@ -550,7 +576,7 @@ async function generateOpenAICodexImage(params: {
   const model = req.model || DEFAULT_OPENAI_IMAGE_MODEL;
   const count = resolveOpenAIImageCount(req.count);
   const size = req.size ?? DEFAULT_SIZE;
-  const timeoutMs = resolveOpenAIImageTimeoutMs(req.timeoutMs);
+  const timeoutMs = resolveOpenAIImageTimeoutMs(req.cfg, req.timeoutMs);
   const openai = req.providerOptions?.openai;
   headers.set("Content-Type", "application/json");
   const content: Array<Record<string, unknown>> = [
@@ -666,7 +692,7 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
         if (!codexAuth.apiKey) {
           throw new Error("OpenAI Codex OAuth missing");
         }
-        const timeoutMs = resolveOpenAIImageTimeoutMs(req.timeoutMs);
+        const timeoutMs = resolveOpenAIImageTimeoutMs(req.cfg, req.timeoutMs);
         logCodexImageAuthSelected({ req, authMode: codexAuth.mode, timeoutMs });
         return generateOpenAICodexImage({ req, apiKey: codexAuth.apiKey });
       }
@@ -688,7 +714,7 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
           store: req.authStore,
         });
         if (codexAuth?.apiKey) {
-          const timeoutMs = resolveOpenAIImageTimeoutMs(req.timeoutMs);
+          const timeoutMs = resolveOpenAIImageTimeoutMs(req.cfg, req.timeoutMs);
           logCodexImageAuthSelected({ req, authMode: codexAuth.mode, timeoutMs });
           return generateOpenAICodexImage({ req, apiKey: codexAuth.apiKey });
         }
@@ -712,7 +738,7 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
       const model = req.model || DEFAULT_OPENAI_IMAGE_MODEL;
       const count = resolveOpenAIImageCount(req.count);
       const size = req.size ?? DEFAULT_SIZE;
-      const timeoutMs = resolveOpenAIImageTimeoutMs(req.timeoutMs);
+      const timeoutMs = resolveOpenAIImageTimeoutMs(req.cfg, req.timeoutMs);
       const url = isAzure
         ? buildAzureImageUrl(rawBaseUrl, model, isEdit ? "edits" : "generations")
         : `${baseUrl}/images/${isEdit ? "edits" : "generations"}`;

@@ -284,6 +284,7 @@ describe("openai image generation provider", () => {
 
   it("does not auto-allow local baseUrl overrides for image requests", async () => {
     mockGeneratedPngResponse();
+    vi.stubEnv("OPENCLAW_QA_ALLOW_LOCAL_IMAGE_PROVIDER", "0");
 
     const provider = buildOpenAIImageGenerationProvider();
     const result = await provider.generateImage({
@@ -373,6 +374,7 @@ describe("openai image generation provider", () => {
     expect(postJsonRequestMock).toHaveBeenCalledWith(
       expect.objectContaining({
         url: "https://api.openai.com/v1/images/generations",
+        timeoutMs: 180_000,
         body: {
           model: "gpt-image-2",
           prompt: "Create two landscape campaign variants",
@@ -496,6 +498,73 @@ describe("openai image generation provider", () => {
     expect(result.images).toHaveLength(1);
   });
 
+  it("allows Docker host image requests for openai inside the QA harness envelope", async () => {
+    mockGeneratedPngResponse();
+    vi.stubEnv("OPENCLAW_QA_ALLOW_LOCAL_IMAGE_PROVIDER", "1");
+
+    const provider = buildOpenAIImageGenerationProvider();
+    const result = await provider.generateImage({
+      provider: "openai",
+      model: "gpt-image-2",
+      prompt: "Draw a QA lighthouse",
+      cfg: {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "http://host.docker.internal:8317/v1",
+              models: [],
+            },
+          },
+        },
+      },
+    });
+
+    expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowPrivateNetwork: true,
+      }),
+    );
+    expect(postJsonRequestMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "http://host.docker.internal:8317/v1/images/generations",
+        allowPrivateNetwork: true,
+      }),
+    );
+    expect(result.images).toHaveLength(1);
+  });
+
+  it("uses the configured gateway image timeout for direct generations", async () => {
+    mockGeneratedPngResponse();
+
+    const provider = buildOpenAIImageGenerationProvider();
+    const result = await provider.generateImage({
+      provider: "openai",
+      model: "gpt-image-2",
+      prompt: "Draw with the configured timeout",
+      cfg: {
+        gateway: {
+          http: {
+            endpoints: {
+              chatCompletions: {
+                images: {
+                  timeoutMs: 245_000,
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(postJsonRequestMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://api.openai.com/v1/images/generations",
+        timeoutMs: 245_000,
+      }),
+    );
+    expect(result.images).toHaveLength(1);
+  });
+
   it("forwards edit count, custom size, and multiple input images", async () => {
     mockGeneratedPngResponse();
 
@@ -528,6 +597,7 @@ describe("openai image generation provider", () => {
         allowPrivateNetwork: false,
         dispatcherPolicy: undefined,
         fetchFn: fetch,
+        timeoutMs: 180_000,
       }),
     );
     const editCallArgs = postMultipartRequestMock.mock.calls[0]?.[0] as {
@@ -550,6 +620,38 @@ describe("openai image generation provider", () => {
       expect.objectContaining({ url: "https://api.openai.com/v1/images/edits" }),
     );
     expect(result.images).toHaveLength(1);
+  });
+
+  it("uses the configured gateway image timeout for multipart edits", async () => {
+    mockGeneratedPngResponse();
+
+    const provider = buildOpenAIImageGenerationProvider();
+    await provider.generateImage({
+      provider: "openai",
+      model: "gpt-image-2",
+      prompt: "Edit with the configured timeout",
+      cfg: {
+        gateway: {
+          http: {
+            endpoints: {
+              chatCompletions: {
+                images: {
+                  timeoutMs: 245_000,
+                },
+              },
+            },
+          },
+        },
+      },
+      inputImages: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
+    });
+
+    expect(postMultipartRequestMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://api.openai.com/v1/images/edits",
+        timeoutMs: 245_000,
+      }),
+    );
   });
 
   it("forwards output and OpenAI-only options on multipart edits", async () => {
@@ -1073,6 +1175,7 @@ describe("openai image generation provider", () => {
 
   it("forwards SSRF guard fields to multipart edit requests", async () => {
     mockGeneratedPngResponse();
+    vi.stubEnv("OPENCLAW_QA_ALLOW_LOCAL_IMAGE_PROVIDER", "0");
 
     const provider = buildOpenAIImageGenerationProvider();
     await provider.generateImage({
