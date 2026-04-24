@@ -20,7 +20,7 @@
     },
     "defaultTransport": {
       "label": "Default Transport",
-      "help": "Chrome uses a signed-in browser profile. Twilio uses Meet dial-in numbers."
+      "help": "Chrome uses a signed-in browser profile. Chrome-node runs Chrome on a paired node. Twilio uses Meet dial-in numbers."
     },
     "defaultMode": {
       "label": "Default Mode",
@@ -53,6 +53,11 @@
     },
     "chrome.audioBridgeHealthCommand": {
       "label": "Audio Bridge Health Command",
+      "advanced": true
+    },
+    "chromeNode.node": {
+      "label": "Chrome Node",
+      "help": "Node id/name/IP that owns Chrome, BlackHole, and SoX for chrome-node transport.",
       "advanced": true
     },
     "twilio.defaultDialInNumber": {
@@ -157,7 +162,7 @@
       },
       "defaultTransport": {
         "type": "string",
-        "enum": ["chrome", "twilio"],
+        "enum": ["chrome", "chrome-node", "twilio"],
         "default": "chrome"
       },
       "defaultMode": {
@@ -238,6 +243,15 @@
             "items": {
               "type": "string"
             }
+          }
+        }
+      },
+      "chromeNode": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "node": {
+            "type": "string"
           }
         }
       },

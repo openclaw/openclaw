@@ -175,7 +175,7 @@ export function registerGoogleMeetCli(params: {
   root
     .command("join")
     .argument("[url]", "Explicit https://meet.google.com/... URL")
-    .option("--transport <transport>", "Transport: chrome or twilio")
+    .option("--transport <transport>", "Transport: chrome, chrome-node, or twilio")
     .option("--mode <mode>", "Mode: realtime or transcribe")
     .option("--dial-in-number <phone>", "Meet dial-in number for Twilio transport")
     .option("--pin <pin>", "Meet phone PIN; # is appended if omitted")

@@ -5,7 +5,7 @@ import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-ru
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { GoogleMeetConfig, GoogleMeetMode, GoogleMeetTransport } from "./config.js";
 import { getGoogleMeetSetupStatus } from "./setup.js";
-import { launchChromeMeet } from "./transports/chrome.js";
+import { launchChromeMeet, launchChromeMeetOnNode } from "./transports/chrome.js";
 import { buildMeetDtmfSequence, normalizeDialInNumber } from "./transports/twilio.js";
 import type {
   GoogleMeetJoinRequest,
@@ -94,7 +94,11 @@ export class GoogleMeetRuntime {
       createdAt,
       updatedAt: createdAt,
       participantIdentity:
-        transport === "chrome" ? "signed-in Google Chrome profile" : "Twilio phone participant",
+        transport === "twilio"
+          ? "Twilio phone participant"
+          : transport === "chrome-node"
+            ? "signed-in Google Chrome profile on a paired node"
+            : "signed-in Google Chrome profile",
       realtime: {
         enabled: mode === "realtime",
         provider: this.params.config.realtime.provider,
@@ -105,36 +109,54 @@ export class GoogleMeetRuntime {
     };
 
     try {
-      if (transport === "chrome") {
-        const result = await launchChromeMeet({
-          runtime: this.params.runtime,
-          config: this.params.config,
-          fullConfig: this.params.fullConfig,
-          meetingSessionId: session.id,
-          mode,
-          url,
-          logger: this.params.logger,
-        });
+      if (transport === "chrome" || transport === "chrome-node") {
+        const result =
+          transport === "chrome-node"
+            ? await launchChromeMeetOnNode({
+                runtime: this.params.runtime,
+                config: this.params.config,
+                fullConfig: this.params.fullConfig,
+                meetingSessionId: session.id,
+                mode,
+                url,
+                logger: this.params.logger,
+              })
+            : await launchChromeMeet({
+                runtime: this.params.runtime,
+                config: this.params.config,
+                fullConfig: this.params.fullConfig,
+                meetingSessionId: session.id,
+                mode,
+                url,
+                logger: this.params.logger,
+              });
         session.chrome = {
           audioBackend: this.params.config.chrome.audioBackend,
           launched: result.launched,
+          nodeId: "nodeId" in result ? result.nodeId : undefined,
           browserProfile: this.params.config.chrome.browserProfile,
           audioBridge: result.audioBridge
             ? {
                 type: result.audioBridge.type,
                 provider:
-                  result.audioBridge.type === "command-pair"
+                  result.audioBridge.type === "command-pair" ||
+                  result.audioBridge.type === "node-command-pair"
                     ? result.audioBridge.providerId
                     : undefined,
               }
             : undefined,
         };
-        if (result.audioBridge?.type === "command-pair") {
+        if (
+          result.audioBridge?.type === "command-pair" ||
+          result.audioBridge?.type === "node-command-pair"
+        ) {
           this.#sessionStops.set(session.id, result.audioBridge.stop);
         }
         session.notes.push(
           result.audioBridge
-            ? "Chrome transport joins as the signed-in Google profile and routes realtime audio through the configured bridge."
+            ? transport === "chrome-node"
+              ? "Chrome node transport joins as the signed-in Google profile on the selected node and routes realtime audio through the node bridge."
+              : "Chrome transport joins as the signed-in Google profile and routes realtime audio through the configured bridge."
             : "Chrome transport joins as the signed-in Google profile and expects BlackHole 2ch audio routing.",
         );
       } else {

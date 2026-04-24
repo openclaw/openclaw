@@ -384,6 +384,28 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
   };
 }
 
+export function createGatewayNodesRuntime(): PluginRuntime["nodes"] {
+  return {
+    async list(params) {
+      const payload = await dispatchGatewayMethod<{ nodes?: unknown[] }>("node.list", {
+        ...(params?.connected === true && { connected: true }),
+      });
+      const nodes = Array.isArray(payload?.nodes) ? payload.nodes : [];
+      return { nodes: nodes as Awaited<ReturnType<PluginRuntime["nodes"]["list"]>>["nodes"] };
+    },
+    async invoke(params) {
+      const payload = await dispatchGatewayMethod<unknown>("node.invoke", {
+        nodeId: params.nodeId,
+        command: params.command,
+        ...(params.params !== undefined && { params: params.params }),
+        timeoutMs: params.timeoutMs,
+        idempotencyKey: params.idempotencyKey || randomUUID(),
+      });
+      return payload;
+    },
+  };
+}
+
 // ── Plugin loading ──────────────────────────────────────────────────
 
 function createGatewayPluginRegistrationLogger(params?: {

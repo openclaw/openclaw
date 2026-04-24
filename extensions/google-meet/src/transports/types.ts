@@ -29,9 +29,10 @@ export type GoogleMeetSession = {
   chrome?: {
     audioBackend: "blackhole-2ch";
     launched: boolean;
+    nodeId?: string;
     browserProfile?: string;
     audioBridge?: {
-      type: "command-pair" | "external-command";
+      type: "command-pair" | "node-command-pair" | "external-command";
       provider?: string;
     };
   };
