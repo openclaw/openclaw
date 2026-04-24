@@ -2,9 +2,11 @@ import { randomBytes } from "node:crypto";
 
 const TRACEPARENT_VERSION = "00";
 const DEFAULT_TRACE_FLAGS = "01";
+const MAX_TRACEPARENT_LENGTH = 128;
 const TRACE_ID_RE = /^[0-9a-f]{32}$/;
 const SPAN_ID_RE = /^[0-9a-f]{16}$/;
 const TRACE_FLAGS_RE = /^[0-9a-f]{2}$/;
+const TRACEPARENT_VERSION_RE = /^[0-9a-f]{2}$/;
 
 export type DiagnosticTraceContext = {
   /** W3C trace id, 32 lowercase hex chars. */
@@ -27,6 +29,22 @@ function randomHex(bytes: number): string {
 
 function isNonZeroHex(value: string): boolean {
   return !/^0+$/.test(value);
+}
+
+function randomTraceId(): string {
+  let traceId = randomHex(16);
+  while (!isNonZeroHex(traceId)) {
+    traceId = randomHex(16);
+  }
+  return traceId;
+}
+
+function randomSpanId(): string {
+  let spanId = randomHex(8);
+  while (!isNonZeroHex(spanId)) {
+    spanId = randomHex(8);
+  }
+  return spanId;
 }
 
 export function isValidDiagnosticTraceId(value: unknown): value is string {
@@ -68,12 +86,19 @@ function normalizeTraceFlags(value: unknown): string | undefined {
 export function parseDiagnosticTraceparent(
   traceparent: string | undefined,
 ): DiagnosticTraceContext | undefined {
-  const parts = traceparent?.trim().toLowerCase().split("-");
-  if (!parts || parts.length !== 4) {
+  if (typeof traceparent !== "string" || traceparent.length > MAX_TRACEPARENT_LENGTH) {
+    return undefined;
+  }
+  const parts = traceparent.trim().toLowerCase().split("-");
+  if (!parts || parts.length < 4) {
     return undefined;
   }
   const [version, traceId, spanId, traceFlags] = parts;
-  if (version !== TRACEPARENT_VERSION) {
+  if (
+    !TRACEPARENT_VERSION_RE.test(version) ||
+    version === "ff" ||
+    (version === TRACEPARENT_VERSION && parts.length !== 4)
+  ) {
     return undefined;
   }
   const normalizedTraceId = normalizeTraceId(traceId);
@@ -108,8 +133,8 @@ export function createDiagnosticTraceContext(
   input: DiagnosticTraceContextInput = {},
 ): DiagnosticTraceContext {
   const parsed = parseDiagnosticTraceparent(input.traceparent);
-  const traceId = normalizeTraceId(input.traceId) ?? parsed?.traceId ?? randomHex(16);
-  const spanId = normalizeSpanId(input.spanId) ?? parsed?.spanId ?? randomHex(8);
+  const traceId = normalizeTraceId(input.traceId) ?? parsed?.traceId ?? randomTraceId();
+  const spanId = normalizeSpanId(input.spanId) ?? parsed?.spanId ?? randomSpanId();
   const parentSpanId = normalizeSpanId(input.parentSpanId);
   return {
     traceId,
