@@ -377,8 +377,7 @@ export async function runPreflightCompactionIfNeeded(params: {
     return entry ?? params.sessionEntry;
   }
 
-  const isCli = isCliProvider(params.followupRun.run.provider, params.cfg);
-  if (params.isHeartbeat || isCli) {
+  if (params.isHeartbeat) {
     return entry ?? params.sessionEntry;
   }
 
@@ -431,7 +430,7 @@ export async function runPreflightCompactionIfNeeded(params: {
     `preflightCompaction check: sessionKey=${params.sessionKey} ` +
       `tokenCount=${tokenCountForCompaction ?? freshPersistedTokens ?? "undefined"} ` +
       `contextWindow=${contextWindowTokens} threshold=${threshold} ` +
-      `isHeartbeat=${params.isHeartbeat} isCli=${isCli} ` +
+      `isHeartbeat=${params.isHeartbeat} ` +
       `persistedFresh=${entry?.totalTokensFresh === true} ` +
       `transcriptPromptTokens=${transcriptPromptTokens ?? "undefined"} ` +
       `promptTokensEst=${promptTokenEstimate ?? "undefined"}`,
@@ -553,7 +552,7 @@ export async function runMemoryFlushIfNeeded(params: {
   })();
 
   const isCli = isCliProvider(params.followupRun.run.provider, params.cfg);
-  const canAttemptFlush = memoryFlushWritable && !params.isHeartbeat && !isCli;
+  const canAttemptFlush = memoryFlushWritable && !params.isHeartbeat;
   let entry =
     params.sessionEntry ??
     (params.sessionKey ? params.sessionStore?.[params.sessionKey] : undefined);
@@ -700,7 +699,6 @@ export async function runMemoryFlushIfNeeded(params: {
   const shouldFlushMemory =
     (memoryFlushWritable &&
       !params.isHeartbeat &&
-      !isCli &&
       shouldRunMemoryFlush({
         entry,
         tokenCount: tokenCountForFlush,

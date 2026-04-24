@@ -169,30 +169,54 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(persisted.main.memoryFlushAt).toBe(1_700_000_000_000);
   });
 
-  it("skips memory flush for CLI providers", async () => {
+  it("allows memory flush for CLI providers", async () => {
+    const storePath = path.join(rootDir, "sessions-cli.json");
+    const sessionKey = "main";
     const sessionEntry: SessionEntry = {
       sessionId: "session",
       updatedAt: Date.now(),
       totalTokens: 80_000,
       compactionCount: 1,
     };
+    const sessionStore = { [sessionKey]: sessionEntry };
+    await writeTestSessionStore(storePath, sessionKey, sessionEntry);
+
+    runEmbeddedPiAgentMock.mockImplementationOnce(
+      async (params: {
+        onAgentEvent?: (evt: { stream: string; data: { phase: string } }) => void;
+      }) => {
+        params.onAgentEvent?.({ stream: "compaction", data: { phase: "end" } });
+        return {
+          payloads: [],
+          meta: { agentMeta: { sessionId: "session-rotated" } },
+        };
+      },
+    );
 
     const entry = await runMemoryFlushIfNeeded({
-      cfg: { agents: { defaults: { cliBackends: { "codex-cli": { command: "codex" } } } } },
+      cfg: {
+        agents: {
+          defaults: {
+            cliBackends: { "codex-cli": { command: "codex" } },
+            compaction: { memoryFlush: {} },
+          },
+        },
+      },
       followupRun: createTestFollowupRun({ provider: "codex-cli" }),
       sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
       defaultModel: "codex-cli/gpt-5.5",
       agentCfgContextTokens: 100_000,
       resolvedVerboseLevel: "off",
       sessionEntry,
-      sessionStore: { main: sessionEntry },
-      sessionKey: "main",
+      sessionStore,
+      sessionKey,
+      storePath,
       isHeartbeat: false,
       replyOperation: createReplyOperation(),
     });
 
-    expect(entry).toBe(sessionEntry);
-    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    expect(entry?.sessionId).toBe("session-rotated");
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
   });
 
   it("uses runtime policy session key when checking memory-flush sandbox writability", async () => {
