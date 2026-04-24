@@ -42,9 +42,6 @@ importers:
       '@agentclientprotocol/sdk':
         specifier: 0.19.1
         version: 0.19.1(zod@4.3.6)
-      '@anthropic-ai/vertex-sdk':
-        specifier: ^0.16.0
-        version: 0.16.0(zod@4.3.6)
       '@clack/prompts':
         specifier: ^1.2.0
         version: 1.2.0
@@ -292,6 +289,16 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/anthropic-vertex:
+    dependencies:
+      '@anthropic-ai/vertex-sdk':
+        specifier: ^0.16.0
+        version: 0.16.0(zod@4.3.6)
+      '@mariozechner/pi-agent-core':
+        specifier: 0.70.2
+        version: 0.70.2(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
+      '@mariozechner/pi-ai':
+        specifier: 0.70.2
+        version: 0.70.2(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
