@@ -91,6 +91,7 @@ async function resolveHelloWithModelDefaults(params: {
   defaultReasoning: "on";
   sessionEntry?: SessionEntry;
   agentCfg?: { reasoningDefault?: "off" | "on" | "stream" };
+  ctx?: Parameters<typeof buildTestCtx>[0];
 }) {
   const resolveDefaultThinkingLevel = vi.fn(async () => params.defaultThinking);
   const resolveDefaultReasoningLevel = vi.fn(async () => params.defaultReasoning);
@@ -108,6 +109,7 @@ async function resolveHelloWithModelDefaults(params: {
     ctx: buildTestCtx({
       Body: "hello",
       CommandBody: "hello",
+      ...params.ctx,
     }),
     cfg: {},
     agentId: "main",
@@ -478,6 +480,39 @@ describe("resolveReplyDirectives", () => {
       result: expect.objectContaining({
         resolvedThinkLevel: "off",
         resolvedReasoningLevel: "off",
+      }),
+    });
+    expect(resolveDefaultReasoningLevel).not.toHaveBeenCalled();
+  });
+
+  it("does not expose configured reasoning defaults to untrusted senders", async () => {
+    const { result, resolveDefaultReasoningLevel } = await resolveHelloWithModelDefaults({
+      defaultThinking: "off",
+      defaultReasoning: "on",
+      agentCfg: { reasoningDefault: "stream" },
+    });
+
+    expect(result).toEqual({
+      kind: "continue",
+      result: expect.objectContaining({
+        resolvedReasoningLevel: "off",
+      }),
+    });
+    expect(resolveDefaultReasoningLevel).not.toHaveBeenCalled();
+  });
+
+  it("allows configured reasoning defaults for operator gateway clients", async () => {
+    const { result, resolveDefaultReasoningLevel } = await resolveHelloWithModelDefaults({
+      defaultThinking: "off",
+      defaultReasoning: "on",
+      agentCfg: { reasoningDefault: "stream" },
+      ctx: { GatewayClientScopes: ["operator.admin"] },
+    });
+
+    expect(result).toEqual({
+      kind: "continue",
+      result: expect.objectContaining({
+        resolvedReasoningLevel: "stream",
       }),
     });
     expect(resolveDefaultReasoningLevel).not.toHaveBeenCalled();
