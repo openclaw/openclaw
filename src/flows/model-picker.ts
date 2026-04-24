@@ -871,6 +871,8 @@ export async function promptModelAllowlist(params: {
   prompter: WizardPrompter;
   message?: string;
   agentDir?: string;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
   allowedKeys?: string[];
   initialSelections?: string[];
   preferredProvider?: string;
@@ -1019,7 +1021,11 @@ export async function promptModelAllowlist(params: {
     return { models: normalizeModelKeys(parsed) };
   }
 
-  const literalPrefixProviders = await resolveLiteralPrefixProviderIds({ cfg });
+  const literalPrefixProviders = await resolveLiteralPrefixProviderIds({
+    cfg,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  });
 
   const options: WizardSelectOption[] = [];
   const seen = new Set<string>();
