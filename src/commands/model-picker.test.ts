@@ -112,6 +112,37 @@ beforeEach(() => {
 });
 
 describe("promptDefaultModel", () => {
+  it("hides the virtual Codex harness provider from model choices", async () => {
+    loadModelCatalog.mockResolvedValue([
+      {
+        provider: "codex",
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+      },
+      {
+        provider: "openai",
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+      },
+    ]);
+
+    const select = vi.fn(async (params) => params.initialValue as never);
+    const prompter = makePrompter({ select });
+
+    await promptDefaultModel({
+      config: { agents: { defaults: {} } } as OpenClawConfig,
+      prompter,
+      allowKeep: false,
+      includeManual: false,
+      ignoreAllowlist: true,
+    });
+
+    const values = (select.mock.calls[0]?.[0]?.options ?? []).map(
+      (opt: { value: string }) => opt.value,
+    );
+    expect(values).toEqual(["openai/gpt-5.5"]);
+  });
+
   it("adds auth-route hints for OpenAI API and Codex OAuth models", async () => {
     loadModelCatalog.mockResolvedValue([
       {
@@ -329,6 +360,41 @@ describe("promptDefaultModel", () => {
 });
 
 describe("promptModelAllowlist", () => {
+  it("hides legacy Codex harness models from allowlist choices", async () => {
+    loadModelCatalog.mockResolvedValue([
+      {
+        provider: "codex",
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+      },
+      {
+        provider: "openai",
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+      },
+    ]);
+
+    const multiselect = createSelectAllMultiselect();
+    const prompter = makePrompter({ multiselect });
+    const config = {
+      agents: {
+        defaults: {
+          models: {
+            "codex/gpt-5.5": { alias: "Codex" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await promptModelAllowlist({
+      config,
+      prompter,
+    });
+
+    const options = multiselect.mock.calls[0]?.[0]?.options ?? [];
+    expect(options.map((opt: { value: string }) => opt.value)).toEqual(["openai/gpt-5.5"]);
+  });
+
   it("filters to allowed keys when provided", async () => {
     loadModelCatalog.mockResolvedValue([
       {

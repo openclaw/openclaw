@@ -172,6 +172,243 @@ type ModelProviderEntry = Partial<
 >;
 type ModelsConfigPatch = Partial<NonNullable<OpenClawConfig["models"]>>;
 type ModelDefinitionEntry = NonNullable<ModelProviderEntry["models"]>[number];
+type AgentDefaultsPatch = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>;
+type AgentEntryPatch = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
+type AgentModelConfigPatch = NonNullable<AgentDefaultsPatch["model"]>;
+type AgentEmbeddedHarnessPatch = NonNullable<AgentDefaultsPatch["embeddedHarness"]>;
+type AgentModelsMapPatch = NonNullable<AgentDefaultsPatch["models"]>;
+
+const LEGACY_CODEX_PROVIDER_ID = "codex";
+const OPENAI_PROVIDER_ID = "openai";
+const CODEX_HARNESS_RUNTIME = "codex";
+
+function migrateLegacyCodexModelRef(raw: string): string | null {
+  const trimmed = raw.trim();
+  const separatorIndex = trimmed.indexOf("/");
+  if (separatorIndex <= 0 || separatorIndex === trimmed.length - 1) {
+    return null;
+  }
+  const provider = trimmed.slice(0, separatorIndex);
+  if (normalizeProviderId(provider) !== LEGACY_CODEX_PROVIDER_ID) {
+    return null;
+  }
+  return `${OPENAI_PROVIDER_ID}/${trimmed.slice(separatorIndex + 1)}`;
+}
+
+function normalizeNoopEmbeddedHarness(raw: AgentEmbeddedHarnessPatch | undefined): {
+  value?: AgentEmbeddedHarnessPatch;
+  changed: boolean;
+} {
+  if (!isRecord(raw)) {
+    return { value: raw, changed: false };
+  }
+  const next = { ...raw };
+  let changed = false;
+  const runtime = normalizeOptionalLowercaseString(next.runtime);
+  if (!runtime || runtime === "auto") {
+    if ("runtime" in next) {
+      delete next.runtime;
+      changed = true;
+    }
+  }
+  const fallback = normalizeOptionalLowercaseString(next.fallback);
+  if (!fallback || fallback === "pi") {
+    if ("fallback" in next) {
+      delete next.fallback;
+      changed = true;
+    }
+  }
+  if (Object.keys(next).length === 0) {
+    return { value: undefined, changed: true };
+  }
+  return { value: next as AgentEmbeddedHarnessPatch, changed };
+}
+
+function ensureCodexEmbeddedHarness(raw: AgentEmbeddedHarnessPatch | undefined): {
+  value: AgentEmbeddedHarnessPatch;
+  changed: boolean;
+} {
+  if (!isRecord(raw)) {
+    return { value: { runtime: CODEX_HARNESS_RUNTIME }, changed: true };
+  }
+  const runtime = normalizeOptionalLowercaseString(raw.runtime);
+  if (!runtime || runtime === "auto") {
+    return {
+      value: { ...raw, runtime: CODEX_HARNESS_RUNTIME },
+      changed: runtime !== CODEX_HARNESS_RUNTIME,
+    };
+  }
+  return { value: raw, changed: false };
+}
+
+function normalizeLegacyCodexAgentModelConfig(raw: AgentModelConfigPatch | undefined): {
+  value?: AgentModelConfigPatch;
+  changed: boolean;
+  codexSelected: boolean;
+} {
+  if (typeof raw === "string") {
+    const migrated = migrateLegacyCodexModelRef(raw);
+    return migrated
+      ? { value: migrated, changed: true, codexSelected: true }
+      : { value: raw, changed: false, codexSelected: false };
+  }
+  if (!isRecord(raw)) {
+    return { value: raw, changed: false, codexSelected: false };
+  }
+
+  let changed = false;
+  let codexSelected = false;
+  const next = { ...raw };
+  if (typeof raw.primary === "string") {
+    const migratedPrimary = migrateLegacyCodexModelRef(raw.primary);
+    if (migratedPrimary) {
+      next.primary = migratedPrimary;
+      changed = true;
+      codexSelected = true;
+    }
+  }
+  if (Array.isArray(raw.fallbacks)) {
+    const fallbacks = raw.fallbacks.map((fallback) => {
+      if (typeof fallback !== "string") {
+        return fallback;
+      }
+      const migratedFallback = migrateLegacyCodexModelRef(fallback);
+      if (migratedFallback) {
+        changed = true;
+        codexSelected = true;
+        return migratedFallback;
+      }
+      return fallback;
+    });
+    next.fallbacks = fallbacks;
+  }
+  return { value: next as AgentModelConfigPatch, changed, codexSelected };
+}
+
+function mergeModelEntry(
+  legacyEntry: AgentModelsMapPatch[string],
+  currentEntry: AgentModelsMapPatch[string] | undefined,
+): AgentModelsMapPatch[string] {
+  if (!isRecord(legacyEntry) || !isRecord(currentEntry)) {
+    return currentEntry ?? legacyEntry;
+  }
+  return { ...legacyEntry, ...currentEntry };
+}
+
+function normalizeLegacyCodexAllowlistModels(rawModels: AgentDefaultsPatch["models"] | undefined): {
+  value?: AgentDefaultsPatch["models"];
+  changed: boolean;
+} {
+  if (!isRecord(rawModels)) {
+    return { value: rawModels, changed: false };
+  }
+  let changed = false;
+  const next: AgentModelsMapPatch = {};
+  for (const [rawKey, entry] of Object.entries(rawModels)) {
+    const migratedKey = migrateLegacyCodexModelRef(rawKey);
+    if (migratedKey) {
+      changed = true;
+      next[migratedKey] = mergeModelEntry(entry, next[migratedKey]);
+      continue;
+    }
+    next[rawKey] = mergeModelEntry(entry, next[rawKey]);
+  }
+  return { value: next, changed };
+}
+
+function normalizeLegacyCodexAgentContainer<T extends AgentDefaultsPatch | AgentEntryPatch>(
+  raw: T,
+  path: string,
+  changes: string[],
+): { value: T; changed: boolean } {
+  let changed = false;
+  const next = { ...raw } as Record<string, unknown>;
+
+  const model = normalizeLegacyCodexAgentModelConfig(raw.model);
+  if (model.changed) {
+    next.model = model.value;
+    changed = true;
+    changes.push(`Moved ${path}.model codex/* refs → openai/* and selected Codex harness.`);
+  }
+  if ("models" in raw) {
+    const models = normalizeLegacyCodexAllowlistModels(raw.models);
+    if (models.changed) {
+      next.models = models.value;
+      changed = true;
+      changes.push(`Moved ${path}.models codex/* keys → openai/*.`);
+    }
+  }
+  if (model.codexSelected) {
+    const harness = ensureCodexEmbeddedHarness(raw.embeddedHarness);
+    if (harness.changed) {
+      next.embeddedHarness = harness.value;
+      changed = true;
+    }
+  }
+
+  const harness = normalizeNoopEmbeddedHarness(next.embeddedHarness as AgentEmbeddedHarnessPatch);
+  if (harness.changed) {
+    if (harness.value) {
+      next.embeddedHarness = harness.value;
+    } else {
+      delete next.embeddedHarness;
+    }
+    changed = true;
+    changes.push(`Removed no-op ${path}.embeddedHarness defaults.`);
+  }
+
+  return { value: next as T, changed };
+}
+
+export function normalizeLegacyCodexHarnessModelRefs(
+  cfg: OpenClawConfig,
+  changes: string[],
+): OpenClawConfig {
+  const rawAgents = cfg.agents;
+  if (!isRecord(rawAgents)) {
+    return cfg;
+  }
+  let changed = false;
+  const nextAgents = { ...rawAgents };
+
+  if (isRecord(rawAgents.defaults)) {
+    const defaults = normalizeLegacyCodexAgentContainer(
+      rawAgents.defaults,
+      "agents.defaults",
+      changes,
+    );
+    if (defaults.changed) {
+      nextAgents.defaults = defaults.value;
+      changed = true;
+    }
+  }
+
+  if (Array.isArray(rawAgents.list)) {
+    const nextList = rawAgents.list.map((entry, index) => {
+      if (!isRecord(entry)) {
+        return entry;
+      }
+      const agentId = normalizeOptionalString(entry.id) ?? String(index);
+      const agent = normalizeLegacyCodexAgentContainer(entry, `agents.list.${agentId}`, changes);
+      if (agent.changed) {
+        changed = true;
+        return agent.value;
+      }
+      return entry;
+    });
+    if (changed) {
+      nextAgents.list = nextList as NonNullable<OpenClawConfig["agents"]>["list"];
+    }
+  }
+
+  if (!changed) {
+    return cfg;
+  }
+  return {
+    ...cfg,
+    agents: nextAgents as OpenClawConfig["agents"],
+  };
+}
 
 export function normalizeLegacyOpenAICodexModelsAddMetadata(
   cfg: OpenClawConfig,

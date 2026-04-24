@@ -3,7 +3,7 @@ summary: "Run OpenClaw embedded agent turns through the bundled Codex app-server
 title: "Codex harness"
 read_when:
   - You want to use the bundled Codex app-server harness
-  - You need Codex model refs and config examples
+  - You need Codex harness config examples
   - You want to disable PI fallback for Codex-only deployments
 ---
 
@@ -34,8 +34,9 @@ OpenClaw-owned transcript tool-result writes.
 The harness is off by default. New configs should keep OpenAI model refs
 canonical as `openai/gpt-*` and explicitly force
 `embeddedHarness.runtime: "codex"` or `OPENCLAW_AGENT_RUNTIME=codex` when they
-want native app-server execution. Legacy `codex/*` model refs still auto-select
-the harness for compatibility.
+want native app-server execution. Legacy `codex/*` model refs are compatibility
+aliases; config migration rewrites them to `openai/*` and records the Codex
+harness policy separately.
 
 ## Pick the right model prefix
 
@@ -54,17 +55,17 @@ GPT-5.5 is currently subscription/OAuth-only in OpenClaw. Use
 app-server harness. Direct API-key access for `openai/gpt-5.5` is supported
 once OpenAI enables GPT-5.5 on the public API.
 
-Legacy `codex/gpt-*` refs remain accepted as compatibility aliases. New PI
-Codex OAuth configs should use `openai-codex/gpt-*`; new native app-server
-harness configs should use `openai/gpt-*` plus `embeddedHarness.runtime:
-"codex"`.
+New PI Codex OAuth configs should use `openai-codex/gpt-*`; new native
+app-server harness configs should use `openai/gpt-*` plus
+`embeddedHarness.runtime: "codex"`.
 
 `agents.defaults.imageModel` follows the same prefix split. Use
 `openai-codex/gpt-*` when image understanding should run through the OpenAI
-Codex OAuth provider path. Use `codex/gpt-*` when image understanding should run
-through a bounded Codex app-server turn. The Codex app-server model must
-advertise image input support; text-only Codex models fail before the media turn
-starts.
+Codex OAuth provider path. For native Codex app-server image turns, prefer an
+`openai/gpt-*` model with the Codex harness policy on the agent. Older
+`codex/gpt-*` media refs still work as compatibility aliases, but they are not
+shown as normal model-picker choices. The Codex app-server model must advertise
+image input support; text-only Codex models fail before the media turn starts.
 
 Use `/status` to confirm the effective harness for the current session. If the
 selection is surprising, enable debug logging for the `agents/harness` subsystem

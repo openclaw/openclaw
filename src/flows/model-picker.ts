@@ -3,6 +3,10 @@ import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { hasUsableCustomProviderApiKey, resolveEnvApiKey } from "../agents/model-auth.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import {
+  isModelPickerVisibleModelRef,
+  isModelPickerVisibleProvider,
+} from "../agents/model-picker-visibility.js";
+import {
   buildAllowedModelSet,
   buildModelAliasIndex,
   modelKey,
@@ -142,7 +146,11 @@ function addModelSelectOption(params: {
   hasAuth: (provider: string) => boolean;
 }) {
   const key = modelKey(params.entry.provider, params.entry.id);
-  if (params.seen.has(key) || HIDDEN_ROUTER_MODELS.has(key)) {
+  if (
+    params.seen.has(key) ||
+    HIDDEN_ROUTER_MODELS.has(key) ||
+    !isModelPickerVisibleProvider(params.entry.provider)
+  ) {
     return;
   }
   const hints: string[] = [];
@@ -448,14 +456,16 @@ export async function promptDefaultModel(
     defaultProvider: DEFAULT_PROVIDER,
   });
   const models = ignoreAllowlist
-    ? catalog
+    ? catalog.filter((entry) => isModelPickerVisibleProvider(entry.provider))
     : (() => {
         const { allowedCatalog } = buildAllowedModelSet({
           cfg,
           catalog,
           defaultProvider: DEFAULT_PROVIDER,
         });
-        return allowedCatalog.length > 0 ? allowedCatalog : catalog;
+        return (allowedCatalog.length > 0 ? allowedCatalog : catalog).filter((entry) =>
+          isModelPickerVisibleProvider(entry.provider),
+        );
       })();
   if (models.length === 0) {
     return promptManualModel({
@@ -514,7 +524,7 @@ export async function promptDefaultModel(
   for (const entry of filteredModels) {
     addModelSelectOption({ entry, options, seen, aliasIndex, hasAuth });
   }
-  if (configuredKey && !seen.has(configuredKey)) {
+  if (configuredKey && isModelPickerVisibleModelRef(configuredKey) && !seen.has(configuredKey)) {
     options.push({
       value: configuredKey,
       label: configuredKey,
@@ -651,8 +661,12 @@ export async function promptModelAllowlist(params: {
   const options: WizardSelectOption[] = [];
   const seen = new Set<string>();
   const allowedCatalog = allowedKeySet
-    ? catalog.filter((entry) => allowedKeySet.has(modelKey(entry.provider, entry.id)))
-    : catalog;
+    ? catalog.filter(
+        (entry) =>
+          allowedKeySet.has(modelKey(entry.provider, entry.id)) &&
+          isModelPickerVisibleProvider(entry.provider),
+      )
+    : catalog.filter((entry) => isModelPickerVisibleProvider(entry.provider));
   const filteredCatalog =
     preferredProvider && allowedCatalog.some((entry) => matchesPreferredProvider?.(entry.provider))
       ? allowedCatalog.filter((entry) => matchesPreferredProvider?.(entry.provider))
@@ -670,7 +684,7 @@ export async function promptModelAllowlist(params: {
 
   const supplementalKeys = allowedKeySet ? allowedKeys : existingKeys;
   for (const key of supplementalKeys) {
-    if (seen.has(key)) {
+    if (seen.has(key) || !isModelPickerVisibleModelRef(key)) {
       continue;
     }
     options.push({

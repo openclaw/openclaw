@@ -253,6 +253,54 @@ describe("normalizeCompatibilityConfigValues", () => {
     );
   });
 
+  it("migrates legacy Codex model refs to OpenAI plus explicit Codex harness", () => {
+    const res = normalizeCompatibilityConfigValues({
+      agents: {
+        defaults: {
+          embeddedHarness: { runtime: "auto", fallback: "pi" },
+          model: {
+            primary: "codex/gpt-5.5",
+            fallbacks: ["anthropic/claude-sonnet-4-6", "codex/gpt-5.4-mini"],
+          },
+          models: {
+            "codex/gpt-5.5": { alias: "Codex" },
+            "openai/gpt-5.5": { params: { temperature: 0.2 } },
+            "codex/gpt-5.4-mini": {},
+          },
+        },
+        list: [
+          {
+            id: "reviewer",
+            embeddedHarness: { fallback: "pi" },
+            model: "codex/gpt-5.4-mini",
+          },
+        ],
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(res.config.agents?.defaults?.model).toEqual({
+      primary: "openai/gpt-5.5",
+      fallbacks: ["anthropic/claude-sonnet-4-6", "openai/gpt-5.4-mini"],
+    });
+    expect(res.config.agents?.defaults?.embeddedHarness).toEqual({ runtime: "codex" });
+    expect(res.config.agents?.defaults?.models).toEqual({
+      "openai/gpt-5.5": { alias: "Codex", params: { temperature: 0.2 } },
+      "openai/gpt-5.4-mini": {},
+    });
+    expect(res.config.agents?.list?.[0]).toMatchObject({
+      id: "reviewer",
+      embeddedHarness: { runtime: "codex" },
+      model: "openai/gpt-5.4-mini",
+    });
+    expect(res.changes).toEqual(
+      expect.arrayContaining([
+        "Moved agents.defaults.model codex/* refs → openai/* and selected Codex harness.",
+        "Moved agents.defaults.models codex/* keys → openai/*.",
+        "Moved agents.list.reviewer.model codex/* refs → openai/* and selected Codex harness.",
+      ]),
+    );
+  });
+
   it("does not mark untagged manual OpenAI Codex metadata overrides", () => {
     const res = normalizeCompatibilityConfigValues({
       models: {

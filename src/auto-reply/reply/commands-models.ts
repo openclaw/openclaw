@@ -1,6 +1,7 @@
 import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
+import { isModelPickerVisibleProvider } from "../../agents/model-picker-visibility.js";
 import {
   buildAllowedModelSet,
   buildModelAliasIndex,
@@ -84,6 +85,9 @@ export async function buildModelsProviderData(
   const byProvider = new Map<string, Set<string>>();
   const add = (p: string, m: string) => {
     const key = normalizeProviderId(p);
+    if (!isModelPickerVisibleProvider(key)) {
+      return;
+    }
     const set = byProvider.get(key) ?? new Set<string>();
     set.add(m);
     byProvider.set(key, set);

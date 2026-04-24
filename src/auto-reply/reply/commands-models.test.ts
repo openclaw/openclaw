@@ -231,6 +231,18 @@ describe("handleModelsCommand", () => {
     expect(result?.reply?.text).toContain("Add: /models add");
   });
 
+  it("hides the virtual Codex harness provider from /models provider lists", async () => {
+    modelCatalogMocks.loadModelCatalog.mockResolvedValueOnce([
+      { provider: "codex", id: "gpt-5.5", name: "GPT-5.5" },
+      { provider: "openai", id: "gpt-5.5", name: "GPT-5.5" },
+    ]);
+
+    const result = await handleModelsCommand(buildParams("/models"), true);
+
+    expect(result?.reply?.text).toContain("- openai (1)");
+    expect(result?.reply?.text).not.toContain("- codex");
+  });
+
   it("shows the add-model action in the telegram provider picker by default", async () => {
     const params = buildParams("/models");
     params.ctx.Surface = "telegram";

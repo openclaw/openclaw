@@ -180,4 +180,18 @@ describe("config io paths", () => {
       groupAllowFrom: [],
     });
   });
+
+  it("migrates legacy Codex model refs during runtime compat", () => {
+    const migrated = applyRuntimeLegacyConfigMigrations({
+      agents: {
+        defaults: {
+          model: "codex/gpt-5.5",
+        },
+      },
+    });
+
+    const next = migrated.next as OpenClawConfig | null;
+    expect(next?.agents?.defaults?.model).toBe("openai/gpt-5.5");
+    expect(next?.agents?.defaults?.embeddedHarness).toEqual({ runtime: "codex" });
+  });
 });
