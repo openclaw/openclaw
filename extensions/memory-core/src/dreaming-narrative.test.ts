@@ -839,7 +839,7 @@ describe("generateAndAppendDreamNarrative", () => {
     expect(subagent.deleteSession).not.toHaveBeenCalled();
   });
 
-  it("does not suppress inline output when the request-scoped fallback write fails", async () => {
+  it("suppresses inline output when the request-scoped fallback write fails", async () => {
     const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
     await fs.mkdir(path.join(workspaceDir, "DREAMS.md"), { recursive: true });
     const subagent = createMockSubagent("");
@@ -855,7 +855,7 @@ describe("generateAndAppendDreamNarrative", () => {
       logger,
     });
 
-    expect(result).toEqual({ fallbackUsed: false });
+    expect(result).toEqual({ fallbackUsed: true });
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("narrative fallback failed"));
   });
 

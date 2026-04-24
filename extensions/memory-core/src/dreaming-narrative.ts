@@ -209,7 +209,7 @@ async function startNarrativeRunOrFallback(params: {
   timezone?: string;
   model?: string;
   logger: Logger;
-}): Promise<{ runId: string | null; fallbackWritten: boolean }> {
+}): Promise<{ runId: string | null; fallbackUsed: boolean }> {
   try {
     const run = await params.subagent.run({
       idempotencyKey: params.sessionKey,
@@ -221,12 +221,11 @@ async function startNarrativeRunOrFallback(params: {
       lightContext: true,
       deliver: false,
     });
-    return { runId: run.runId, fallbackWritten: false };
+    return { runId: run.runId, fallbackUsed: false };
   } catch (runErr) {
     if (!isRequestScopedSubagentRuntimeError(runErr)) {
       throw runErr;
     }
-    let fallbackWritten = false;
     try {
       await appendNarrativeEntry({
         workspaceDir: params.workspaceDir,
@@ -234,7 +233,6 @@ async function startNarrativeRunOrFallback(params: {
         nowMs: params.nowMs,
         timezone: params.timezone,
       });
-      fallbackWritten = true;
       params.logger.warn(
         `memory-core: narrative generation used fallback for ${params.data.phase} phase because subagent runtime is request-scoped.`,
       );
@@ -243,7 +241,7 @@ async function startNarrativeRunOrFallback(params: {
         `memory-core: narrative fallback failed for ${params.data.phase} phase (${formatFallbackWriteFailure(fallbackErr)})`,
       );
     }
-    return { runId: null, fallbackWritten };
+    return { runId: null, fallbackUsed: true };
   }
 }
 
@@ -949,7 +947,7 @@ export async function generateAndAppendDreamNarrative(params: {
         });
         const runId = startResult.runId;
         if (!runId) {
-          return { fallbackUsed: startResult.fallbackWritten };
+          return { fallbackUsed: startResult.fallbackUsed };
         }
         attempt.runId = runId;
 
