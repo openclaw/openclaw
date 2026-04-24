@@ -7,7 +7,7 @@ import {
   withResolvedWebhookRequestPipeline,
 } from "openclaw/plugin-sdk/webhook-targets";
 import { verifyGoogleChatRequest } from "./auth.js";
-import type { WebhookTarget } from "./monitor-types.js";
+import type { GoogleChatRuntimeEnv, WebhookTarget } from "./monitor-types.js";
 import type {
   GoogleChatEvent,
   GoogleChatMessage,
@@ -101,6 +101,46 @@ function parseGoogleChatInboundPayload(
   return { ok: true, event, addOnBearerToken };
 }
 
+/**
+ * Surface webhook auth rejection reasons at WARN level so operators can
+ * diagnose Google Chat integration issues without having to attach a debugger.
+ * The `reason` returned by `verifyGoogleChatRequest` is already sanitized
+ * (only validated claim fields like `sub` / issuer email are included, never
+ * the raw bearer or JWT payload), so it is safe to log as-is.
+ *
+ * Duplicate reject reasons for the same account are suppressed within a short
+ * window to avoid log spam when an upstream integration is misconfigured and
+ * Google retries aggressively.
+ */
+const REJECT_WARN_WINDOW_MS = 60_000;
+const recentRejectWarnings = new Map<string, number>();
+
+function emitAuthRejectWarning(
+  runtime: GoogleChatRuntimeEnv,
+  accountId: string,
+  audienceType: string | undefined,
+  reason: string,
+): void {
+  const key = `${accountId}::${audienceType ?? "(none)"}::${reason}`;
+  const now = Date.now();
+  const previous = recentRejectWarnings.get(key);
+  if (previous !== undefined && now - previous < REJECT_WARN_WINDOW_MS) {
+    return;
+  }
+  recentRejectWarnings.set(key, now);
+  // Opportunistic pruning: keep the map bounded under sustained rejection storms.
+  if (recentRejectWarnings.size > 256) {
+    for (const [mapKey, ts] of recentRejectWarnings) {
+      if (now - ts >= REJECT_WARN_WINDOW_MS) {
+        recentRejectWarnings.delete(mapKey);
+      }
+    }
+  }
+  const message = `[${accountId}] Google Chat webhook auth rejected (audienceType=${audienceType ?? "unset"}): ${reason}`;
+  const warn = runtime.warn ?? runtime.log ?? runtime.error;
+  warn?.(message);
+}
+
 async function isAuthorizedGoogleChatTarget(
   target: WebhookTarget,
   bearer: string,
@@ -111,8 +151,22 @@ async function isAuthorizedGoogleChatTarget(
     audience: target.audience,
     expectedAddOnPrincipal: target.account.config.appPrincipal,
   });
+  if (!verification.ok) {
+    emitAuthRejectWarning(
+      target.runtime,
+      target.account.accountId,
+      target.audienceType,
+      verification.reason ?? "unknown",
+    );
+  }
   return verification.ok;
 }
+
+export const __testing = {
+  resetGoogleChatWebhookRejectWarningsForTests(): void {
+    recentRejectWarnings.clear();
+  },
+};
 
 export function createGoogleChatWebhookRequestHandler(params: {
   webhookTargets: Map<string, WebhookTarget[]>;

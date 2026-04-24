@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WebhookTarget } from "./monitor-types.js";
 import type { GoogleChatEvent } from "./types.js";
+let resetGoogleChatWebhookRejectWarningsForTests: () => void;
 
 const readJsonWebhookBodyOrReject = vi.hoisted(() => vi.fn());
 const resolveWebhookTargetWithAuthOrReject = vi.hoisted(() => vi.fn());
@@ -93,11 +94,15 @@ async function runWebhookHandler(options?: {
 
 describe("googlechat monitor webhook", () => {
   beforeAll(async () => {
-    ({ createGoogleChatWebhookRequestHandler } = await import("./monitor-webhook.js"));
+    const mod = await import("./monitor-webhook.js");
+    createGoogleChatWebhookRequestHandler = mod.createGoogleChatWebhookRequestHandler;
+    resetGoogleChatWebhookRejectWarningsForTests =
+      mod.__testing.resetGoogleChatWebhookRejectWarningsForTests;
   });
 
   beforeEach(() => {
     vi.clearAllMocks();
+    resetGoogleChatWebhookRejectWarningsForTests?.();
   });
 
   it("accepts add-on payloads that carry systemIdToken in the body", async () => {
@@ -154,6 +159,156 @@ describe("googlechat monitor webhook", () => {
     );
     expect(res.statusCode).toBe(200);
     expect(res.headers["Content-Type"]).toBe("application/json");
+  });
+
+  it("warns with the structured reason when verifyGoogleChatRequest rejects an add-on token", async () => {
+    const warn = vi.fn();
+    installSimplePipeline([
+      {
+        account: {
+          accountId: "default",
+          config: { appPrincipal: "123456789012345678901" },
+        },
+        runtime: { warn, error: vi.fn() },
+        statusSink: vi.fn(),
+        audienceType: "app-url",
+        audience: "https://example.com/googlechat",
+      },
+    ]);
+    readJsonWebhookBodyOrReject.mockResolvedValue({
+      ok: true,
+      value: {
+        commonEventObject: { hostApp: "CHAT" },
+        authorizationEventObject: { systemIdToken: "addon-token" },
+        chat: {
+          eventTime: "2026-03-22T00:00:00.000Z",
+          user: { name: "users/123" },
+          messagePayload: {
+            space: { name: "spaces/AAA" },
+            message: { name: "spaces/AAA/messages/1", text: "hello" },
+          },
+        },
+      },
+    });
+    resolveWebhookTargetWithAuthOrReject.mockImplementation(async ({ isMatch, targets }) => {
+      for (const target of targets) {
+        if (await isMatch(target)) {
+          return target;
+        }
+      }
+      return null;
+    });
+    verifyGoogleChatRequest.mockResolvedValue({
+      ok: false,
+      reason: "unexpected add-on principal: 999",
+    });
+
+    await runWebhookHandler();
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    const [message] = warn.mock.calls[0] as [string];
+    expect(message).toContain("[default]");
+    expect(message).toContain("audienceType=app-url");
+    expect(message).toContain("unexpected add-on principal: 999");
+    // Must not leak the bearer token value.
+    expect(message).not.toContain("addon-token");
+  });
+
+  it("falls back to runtime.log when runtime.warn is not provided", async () => {
+    const log = vi.fn();
+    installSimplePipeline([
+      {
+        account: {
+          accountId: "default",
+          config: { appPrincipal: "123456789012345678901" },
+        },
+        runtime: { log, error: vi.fn() },
+        statusSink: vi.fn(),
+        audienceType: "app-url",
+        audience: "https://example.com/googlechat",
+      },
+    ]);
+    readJsonWebhookBodyOrReject.mockResolvedValue({
+      ok: true,
+      value: {
+        commonEventObject: { hostApp: "CHAT" },
+        authorizationEventObject: { systemIdToken: "addon-token" },
+        chat: {
+          eventTime: "2026-03-22T00:00:00.000Z",
+          user: { name: "users/123" },
+          messagePayload: {
+            space: { name: "spaces/AAA" },
+            message: { name: "spaces/AAA/messages/1", text: "hello" },
+          },
+        },
+      },
+    });
+    resolveWebhookTargetWithAuthOrReject.mockImplementation(async ({ isMatch, targets }) => {
+      for (const target of targets) {
+        if (await isMatch(target)) {
+          return target;
+        }
+      }
+      return null;
+    });
+    verifyGoogleChatRequest.mockResolvedValue({
+      ok: false,
+      reason: "missing add-on principal binding",
+    });
+
+    await runWebhookHandler();
+
+    expect(log).toHaveBeenCalledTimes(1);
+    const [message] = log.mock.calls[0] as [string];
+    expect(message).toContain("missing add-on principal binding");
+  });
+
+  it("coalesces duplicate reject reasons within the warn window", async () => {
+    const warn = vi.fn();
+    const target = {
+      account: {
+        accountId: "default",
+        config: { appPrincipal: "123456789012345678901" },
+      },
+      runtime: { warn, error: vi.fn() },
+      statusSink: vi.fn(),
+      audienceType: "app-url" as const,
+      audience: "https://example.com/googlechat",
+    };
+    resolveWebhookTargetWithAuthOrReject.mockImplementation(async ({ isMatch, targets }) => {
+      for (const t of targets) {
+        if (await isMatch(t)) {
+          return t;
+        }
+      }
+      return null;
+    });
+    verifyGoogleChatRequest.mockResolvedValue({
+      ok: false,
+      reason: "unexpected add-on principal: 999",
+    });
+    const payload = {
+      commonEventObject: { hostApp: "CHAT" },
+      authorizationEventObject: { systemIdToken: "addon-token" },
+      chat: {
+        eventTime: "2026-03-22T00:00:00.000Z",
+        user: { name: "users/123" },
+        messagePayload: {
+          space: { name: "spaces/AAA" },
+          message: { name: "spaces/AAA/messages/1", text: "hello" },
+        },
+      },
+    };
+    readJsonWebhookBodyOrReject.mockResolvedValue({ ok: true, value: payload });
+
+    installSimplePipeline([target]);
+    await runWebhookHandler();
+    installSimplePipeline([target]);
+    await runWebhookHandler();
+    installSimplePipeline([target]);
+    await runWebhookHandler();
+
+    expect(warn).toHaveBeenCalledTimes(1);
   });
 
   it("rejects missing add-on bearer tokens before dispatch", async () => {

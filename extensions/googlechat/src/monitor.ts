@@ -477,6 +477,13 @@ export function monitorGoogleChatProvider(options: GoogleChatMonitorOptions): ()
   const audience = options.account.config.audience?.trim();
   const mediaMaxMb = options.account.config.mediaMaxMb ?? 20;
 
+  warnIfAddOnPrincipalLooksWrong({
+    runtime: options.runtime,
+    accountId: options.account.accountId,
+    audienceType,
+    appPrincipal: options.account.config.appPrincipal,
+  });
+
   const unregisterTarget = registerGoogleChatWebhookTarget({
     account: options.account,
     config: options.config,
@@ -498,6 +505,47 @@ export async function startGoogleChatMonitor(
   params: GoogleChatMonitorOptions,
 ): Promise<() => void> {
   return monitorGoogleChatProvider(params);
+}
+
+/**
+ * Emit a one-time startup WARN when an `app-url` webhook is configured without
+ * a usable `appPrincipal`. Add-on webhooks signed by
+ * `service-<PROJECT_NUMBER>@gcp-sa-gsuiteaddons.iam.gserviceaccount.com`
+ * include the caller's numeric OAuth 2.0 client id in the JWT `sub` claim, not
+ * the signer email, so an unset or email-shaped value silently rejects every
+ * inbound webhook with an opaque 401.
+ *
+ * Exported for tests; also invoked by `monitorGoogleChatProvider` at startup.
+ */
+export function warnIfAddOnPrincipalLooksWrong(params: {
+  runtime: GoogleChatRuntimeEnv;
+  accountId: string;
+  audienceType: GoogleChatAudienceType | undefined;
+  appPrincipal: string | undefined;
+}): void {
+  if (params.audienceType !== "app-url") {
+    return;
+  }
+  const trimmed = params.appPrincipal?.trim() ?? "";
+  const warn = params.runtime.warn ?? params.runtime.log ?? params.runtime.error;
+  if (!warn) {
+    return;
+  }
+  if (!trimmed) {
+    warn(
+      `[${params.accountId}] channels.googlechat.appPrincipal is unset with audienceType="app-url": ` +
+        "Google Workspace add-on webhooks will be rejected as unauthorized. " +
+        "Set appPrincipal to the numeric OAuth 2.0 client id (uniqueId, 21 digits) of the add-on service account, not its email.",
+    );
+    return;
+  }
+  if (trimmed.includes("@")) {
+    warn(
+      `[${params.accountId}] channels.googlechat.appPrincipal looks email-shaped ("${trimmed}"): ` +
+        "the Chat verifier compares it against the JWT `sub` claim, which is the numeric OAuth 2.0 client id (uniqueId, 21 digits), not the service account email. " +
+        "Add-on webhooks will be rejected until this is corrected.",
+    );
+  }
 }
 
 export function resolveGoogleChatWebhookPath(params: {

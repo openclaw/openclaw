@@ -73,7 +73,23 @@ export type GoogleChatAccountConfig = {
   audienceType?: "app-url" | "project-number";
   /** Audience value (app URL or project number). */
   audience?: string;
-  /** Exact add-on principal to accept when app-url delivery uses add-on tokens. */
+  /**
+   * Exact add-on principal to accept when `audienceType: "app-url"` delivery uses
+   * Google Workspace add-on tokens.
+   *
+   * NOTE: this must be the numeric OAuth 2.0 client id (aka `uniqueId`, 21 digits)
+   * of the add-on service account — NOT its email. Inbound webhooks signed by
+   * `service-<PROJECT_NUMBER>@gcp-sa-gsuiteaddons.iam.gserviceaccount.com` carry
+   * the service agent's email in the `email` claim but the numeric client id in
+   * the JWT `sub` claim, which is what the verifier compares against.
+   *
+   * Leaving this unset, or setting it to the service-agent email, will cause every
+   * add-on webhook to be rejected as unauthorized. The correct value can be
+   * retrieved from the IAM API (`serviceAccounts.get`, `uniqueId` field).
+   *
+   * Legacy deployments using the classic `chat@system.gserviceaccount.com` signer
+   * do not need this field set.
+   */
   appPrincipal?: string;
   /** Google Chat webhook path (default: /googlechat). */
   webhookPath?: string;

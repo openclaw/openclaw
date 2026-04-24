@@ -5,6 +5,7 @@ import type { getGoogleChatRuntime } from "./runtime.js";
 
 export type GoogleChatRuntimeEnv = {
   log?: (message: string) => void;
+  warn?: (message: string) => void;
   error?: (message: string) => void;
 };
 
