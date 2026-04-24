@@ -1,3 +1,4 @@
+import { isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
 import { isGpt5ModelId } from "../gpt5-prompt-overlay.js";
 import type { ModelFallbackResultClassification } from "../model-fallback.js";
 import type { EmbeddedPiRunResult } from "./types.js";
@@ -40,6 +41,12 @@ function hasOutboundSideEffects(result: EmbeddedPiRunResult): boolean {
   );
 }
 
+function hasDeliberateSilentTerminalReply(result: EmbeddedPiRunResult): boolean {
+  return [result.meta.finalAssistantRawText, result.meta.finalAssistantVisibleText].some(
+    (text) => typeof text === "string" && isSilentReplyPayloadText(text),
+  );
+}
+
 export function classifyEmbeddedPiRunResultForModelFallback(params: {
   provider: string;
   model: string;
@@ -63,6 +70,9 @@ export function classifyEmbeddedPiRunResultForModelFallback(params: {
   }
 
   const payloads = params.result.payloads ?? [];
+  if (payloads.length === 0 && hasDeliberateSilentTerminalReply(params.result)) {
+    return null;
+  }
   if (payloads.length === 0) {
     return {
       message: `${params.provider}/${params.model} ended without a visible assistant reply`,

@@ -543,6 +543,24 @@ describe("runWithModelFallback", () => {
     ).toBeNull();
   });
 
+  it("keeps normalized silent GPT-5 terminal replies out of fallback", () => {
+    const runResult: EmbeddedPiRunResult = {
+      payloads: [],
+      meta: {
+        durationMs: 1,
+        finalAssistantRawText: "NO_REPLY",
+      },
+    };
+
+    expect(
+      classifyEmbeddedPiRunResultForModelFallback({
+        provider: "openai-codex",
+        model: "gpt-5.4",
+        result: runResult,
+      }),
+    ).toBeNull();
+  });
+
   it("passes original unknown errors to onError during fallback", async () => {
     const cfg = makeCfg();
     const unknownError = new Error("provider misbehaved");

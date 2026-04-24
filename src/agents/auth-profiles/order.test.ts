@@ -162,6 +162,65 @@ describe("resolveAuthProfileOrder", () => {
     expect(order).toEqual(["fixture-provider:secondary", "fixture-provider:primary"]);
   });
 
+  it("keeps explicit empty configured auth order as a provider disable", async () => {
+    const { resolveAuthProfileOrder } = await importAuthProfileModulesWithAliasRegistry();
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "fixture-provider:primary": {
+          type: "api_key",
+          provider: "fixture-provider",
+          key: "sk-primary",
+        },
+      },
+    };
+
+    const order = resolveAuthProfileOrder({
+      cfg: {
+        auth: {
+          order: {
+            "fixture-provider": [],
+          },
+        },
+      },
+      store,
+      provider: "fixture-provider",
+    });
+
+    expect(order).toEqual([]);
+  });
+
+  it("keeps explicit empty stored auth order as a provider disable", async () => {
+    const { resolveAuthProfileOrder } = await importAuthProfileModulesWithAliasRegistry();
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "fixture-provider:primary": {
+          type: "api_key",
+          provider: "fixture-provider",
+          key: "sk-primary",
+        },
+      },
+      order: {
+        "fixture-provider": [],
+      },
+    };
+
+    const order = resolveAuthProfileOrder({
+      cfg: {
+        auth: {
+          order: {
+            "fixture-provider": ["fixture-provider:primary"],
+          },
+        },
+      },
+      store,
+      provider: "fixture-provider",
+    });
+
+    expect(order).toEqual([]);
+  });
+
   it("marks aliased provider profiles good under the canonical auth provider", async () => {
     const { markAuthProfileGood } = await importAuthProfileModulesWithAliasRegistry();
     const agentDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-auth-profile-alias-"));
