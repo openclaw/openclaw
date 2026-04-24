@@ -6,8 +6,6 @@ read_when:
 title: "iMessage"
 ---
 
-# iMessage (legacy: imsg)
-
 <Warning>
 For new iMessage deployments, use <a href="/channels/bluebubbles">BlueBubbles</a>.
 
@@ -23,7 +21,7 @@ Status: legacy external CLI integration. Gateway spawns `imsg rpc` and communica
   <Card title="Pairing" icon="link" href="/channels/pairing">
     iMessage DMs default to pairing mode.
   </Card>
-  <Card title="Configuration reference" icon="settings" href="/gateway/configuration-reference#imessage">
+  <Card title="Configuration reference" icon="settings" href="/gateway/config-channels#imessage">
     Full iMessage field reference.
   </Card>
 </CardGroup>
@@ -413,7 +411,7 @@ imsg send <handle> "test"
 
 ## Configuration reference pointers
 
-- [Configuration reference - iMessage](/gateway/configuration-reference#imessage)
+- [Configuration reference - iMessage](/gateway/config-channels#imessage)
 - [Gateway configuration](/gateway/configuration)
 - [Pairing](/channels/pairing)
 - [BlueBubbles](/channels/bluebubbles)

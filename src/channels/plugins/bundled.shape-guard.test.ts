@@ -522,6 +522,13 @@ describe("bundled channel entry shape guards", () => {
         "./bundled.js?scope=bundled-setup-only-feature",
       );
 
+      expect(
+        bundled.listBundledChannelLegacyStateMigrationDetectors({
+          config: { channels: { alpha: { enabled: false } } },
+        }),
+      ).toEqual([]);
+      expect(testGlobal.__bundledSetupOnlySetupLoaded).toBeUndefined();
+
       const detectors = bundled.listBundledChannelLegacyStateMigrationDetectors();
       expect(
         detectors.map((detector) =>
@@ -757,6 +764,34 @@ describe("bundled channel entry shape guards", () => {
         if (usesFeature !== hasHint) {
           offenders.push(`${path.relative(process.cwd(), extensionDir)}:${feature}`);
         }
+      }
+    }
+
+    expect(offenders).toEqual([]);
+  });
+
+  it("keeps staged runtime-dependency setup entries on setup-only plugin barrels", () => {
+    const offenders: string[] = [];
+
+    for (const extensionDir of bundledPluginRoots) {
+      const setupEntryPath = path.join(extensionDir, "setup-entry.ts");
+      const packageJsonPath = path.join(extensionDir, "package.json");
+      if (!fs.existsSync(setupEntryPath) || !fs.existsSync(packageJsonPath)) {
+        continue;
+      }
+      const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as {
+        openclaw?: {
+          bundle?: {
+            stageRuntimeDependencies?: boolean;
+          };
+        };
+      };
+      if (packageJson.openclaw?.bundle?.stageRuntimeDependencies !== true) {
+        continue;
+      }
+      const setupEntrySource = fs.readFileSync(setupEntryPath, "utf8");
+      if (/specifier:\s*["']\.\/(?:api|channel-plugin-api)\.js["']/u.test(setupEntrySource)) {
+        offenders.push(path.relative(process.cwd(), setupEntryPath));
       }
     }
 

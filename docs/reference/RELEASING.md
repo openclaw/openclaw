@@ -88,6 +88,14 @@ OpenClaw has three public release lanes:
   `node --import tsx scripts/openclaw-npm-postpublish-verify.ts YYYY.M.D`
   (or the matching beta/correction version) to verify the published registry
   install path in a fresh temp prefix
+- After a beta publish, run `OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC=openclaw@YYYY.M.D-beta.N OPENCLAW_NPM_TELEGRAM_CREDENTIAL_SOURCE=convex OPENCLAW_NPM_TELEGRAM_CREDENTIAL_ROLE=ci pnpm test:docker:npm-telegram-live`
+  to verify installed-package onboarding, Telegram setup, and real Telegram E2E
+  against the published npm package using the shared leased Telegram credential
+  pool. Local maintainer one-offs may omit the Convex vars and pass the three
+  `OPENCLAW_QA_TELEGRAM_*` env credentials directly.
+- Maintainers can run the same post-publish check from GitHub Actions via the
+  manual `NPM Telegram Beta E2E` workflow. It is intentionally manual-only and
+  does not run on every merge.
 - Maintainer release automation now uses preflight-then-promote:
   - real npm publish must pass a successful npm `preflight_run_id`
   - the real npm publish must be dispatched from the same `main` or
@@ -192,6 +200,11 @@ requires `NPM_TOKEN`, while the public repo keeps OIDC-only publish.
 That keeps the direct publish path and the beta-first promotion path both
 documented and operator-visible.
 
+If a maintainer must fall back to local npm authentication, run any 1Password
+CLI (`op`) commands only inside a dedicated tmux session. Do not call `op`
+directly from the main agent shell; keeping it inside tmux makes prompts,
+alerts, and OTP handling observable and prevents repeated host alerts.
+
 ## Public references
 
 - [`.github/workflows/openclaw-npm-release.yml`](https://github.com/openclaw/openclaw/blob/main/.github/workflows/openclaw-npm-release.yml)
@@ -204,3 +217,7 @@ documented and operator-visible.
 Maintainers use the private release docs in
 [`openclaw/maintainers/release/README.md`](https://github.com/openclaw/maintainers/blob/main/release/README.md)
 for the actual runbook.
+
+## Related
+
+- [Release channels](/install/development-channels)

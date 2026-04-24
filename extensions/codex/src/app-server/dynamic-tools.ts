@@ -1,14 +1,17 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { ImageContent, TextContent } from "@mariozechner/pi-ai";
 import {
+  createAgentToolResultMiddlewareRunner,
   createCodexAppServerToolResultExtensionRunner,
   extractToolResultMediaArtifact,
   filterToolResultMediaUrls,
+  isToolWrappedWithBeforeToolCallHook,
   isMessagingTool,
   isMessagingToolSendAction,
   runAgentHarnessAfterToolCallHook,
   type AnyAgentTool,
   type MessagingToolSend,
+  wrapToolWithBeforeToolCallHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   type CodexDynamicToolCallOutputContentItem,
@@ -42,7 +45,12 @@ export function createCodexDynamicToolBridge(params: {
     runId?: string;
   };
 }): CodexDynamicToolBridge {
-  const toolMap = new Map(params.tools.map((tool) => [tool.name, tool]));
+  const tools = params.tools.map((tool) =>
+    isToolWrappedWithBeforeToolCallHook(tool)
+      ? tool
+      : wrapToolWithBeforeToolCallHook(tool, params.hookContext),
+  );
+  const toolMap = new Map(tools.map((tool) => [tool.name, tool]));
   const telemetry: CodexDynamicToolBridge["telemetry"] = {
     didSendViaMessagingTool: false,
     messagingToolSentTexts: [],
@@ -51,10 +59,16 @@ export function createCodexDynamicToolBridge(params: {
     toolMediaUrls: [],
     toolAudioAsVoice: false,
   };
-  const extensionRunner = createCodexAppServerToolResultExtensionRunner(params.hookContext ?? {});
+  const middlewareRunner = createAgentToolResultMiddlewareRunner({
+    harness: "codex-app-server",
+    ...params.hookContext,
+  });
+  const legacyExtensionRunner = createCodexAppServerToolResultExtensionRunner(
+    params.hookContext ?? {},
+  );
 
   return {
-    specs: params.tools.map((tool) => ({
+    specs: tools.map((tool) => ({
       name: tool.name,
       description: tool.description,
       inputSchema: toJsonValue(tool.parameters),
@@ -73,13 +87,21 @@ export function createCodexDynamicToolBridge(params: {
       try {
         const preparedArgs = tool.prepareArguments ? tool.prepareArguments(args) : args;
         const rawResult = await tool.execute(call.callId, preparedArgs, params.signal);
-        const result = await extensionRunner.applyToolResultExtensions({
+        const middlewareResult = await middlewareRunner.applyToolResultMiddleware({
           threadId: call.threadId,
           turnId: call.turnId,
           toolCallId: call.callId,
           toolName: tool.name,
           args,
           result: rawResult,
+        });
+        const result = await legacyExtensionRunner.applyToolResultExtensions({
+          threadId: call.threadId,
+          turnId: call.turnId,
+          toolCallId: call.callId,
+          toolName: tool.name,
+          args,
+          result: middlewareResult,
         });
         collectToolTelemetry({
           toolName: tool.name,

@@ -104,6 +104,22 @@ describe("provider install catalog", () => {
           defaultChoice: "npm",
           expectedIntegrity: "sha512-openai",
         },
+        installSource: {
+          defaultChoice: "npm",
+          npm: {
+            spec: "@openclaw/openai@1.2.3",
+            packageName: "@openclaw/openai",
+            selector: "1.2.3",
+            selectorKind: "exact-version",
+            exactVersion: true,
+            expectedIntegrity: "sha512-openai",
+            pinState: "exact-with-integrity",
+          },
+          local: {
+            path: "extensions/openai",
+          },
+          warnings: [],
+        },
       },
     ]);
   });
@@ -156,6 +172,13 @@ describe("provider install catalog", () => {
         install: {
           localPath: "extensions/demo-provider",
           defaultChoice: "local",
+        },
+        installSource: {
+          defaultChoice: "local",
+          local: {
+            path: "extensions/demo-provider",
+          },
+          warnings: [],
         },
       },
     ]);
@@ -216,6 +239,19 @@ describe("provider install catalog", () => {
         expectedIntegrity: "sha512-vllm",
         defaultChoice: "npm",
       },
+      installSource: {
+        defaultChoice: "npm",
+        npm: {
+          spec: "@openclaw/vllm@2.0.0",
+          packageName: "@openclaw/vllm",
+          selector: "2.0.0",
+          selectorKind: "exact-version",
+          exactVersion: true,
+          expectedIntegrity: "sha512-vllm",
+          pinState: "exact-with-integrity",
+        },
+        warnings: [],
+      },
     });
   });
 
@@ -270,6 +306,73 @@ describe("provider install catalog", () => {
         npmSpec: "@openclaw/vllm",
         defaultChoice: "npm",
       },
+      installSource: {
+        defaultChoice: "npm",
+        npm: {
+          spec: "@openclaw/vllm",
+          packageName: "@openclaw/vllm",
+          selectorKind: "none",
+          exactVersion: false,
+          pinState: "floating-without-integrity",
+        },
+        warnings: ["npm-spec-floating", "npm-spec-missing-integrity"],
+      },
+    });
+  });
+
+  it("warns when provider install npmSpec drifts from package identity", () => {
+    discoverOpenClawPlugins.mockReturnValue({
+      candidates: [
+        {
+          idHint: "vllm",
+          origin: "config",
+          rootDir: "/Users/test/.openclaw/extensions/vllm",
+          source: "/Users/test/.openclaw/extensions/vllm/index.js",
+          packageName: "@openclaw/vllm",
+          packageDir: "/Users/test/.openclaw/extensions/vllm",
+          packageManifest: {
+            install: {
+              npmSpec: "@openclaw/vllm-fork@2.0.0",
+              expectedIntegrity: "sha512-vllm",
+            },
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+    loadPluginManifest.mockReturnValue({
+      ok: true,
+      manifestPath: "/Users/test/.openclaw/extensions/vllm/openclaw.plugin.json",
+      manifest: {
+        id: "vllm",
+        configSchema: {
+          type: "object",
+        },
+      },
+    });
+    resolveManifestProviderAuthChoices.mockReturnValue([
+      {
+        pluginId: "vllm",
+        providerId: "vllm",
+        methodId: "server",
+        choiceId: "vllm",
+        choiceLabel: "vLLM",
+      },
+    ]);
+
+    expect(resolveProviderInstallCatalogEntry("vllm")?.installSource).toEqual({
+      defaultChoice: "npm",
+      npm: {
+        spec: "@openclaw/vllm-fork@2.0.0",
+        packageName: "@openclaw/vllm-fork",
+        expectedPackageName: "@openclaw/vllm",
+        selector: "2.0.0",
+        selectorKind: "exact-version",
+        exactVersion: true,
+        expectedIntegrity: "sha512-vllm",
+        pinState: "exact-with-integrity",
+      },
+      warnings: ["npm-spec-package-name-mismatch"],
     });
   });
 

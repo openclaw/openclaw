@@ -283,7 +283,7 @@ sections are configured.
 ## Related
 
 - [Background Tasks](/automation/tasks) - task tracking for detached `music_generate` runs
-- [Configuration Reference](/gateway/configuration-reference#agent-defaults) - `musicGenerationModel` config
+- [Configuration Reference](/gateway/config-agents#agent-defaults) - `musicGenerationModel` config
 - [ComfyUI](/providers/comfy)
 - [Google (Gemini)](/providers/google)
 - [MiniMax](/providers/minimax)

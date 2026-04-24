@@ -17,6 +17,7 @@ reference for **what to import** and **what you can register**.
 - First plugin? Start with [Building plugins](/plugins/building-plugins).
 - Channel plugin? See [Channel plugins](/plugins/sdk-channel-plugins).
 - Provider plugin? See [Provider plugins](/plugins/sdk-provider-plugins).
+- Tool or lifecycle hook plugin? See [Plugin hooks](/plugins/hooks).
   </Tip>
 
 ## Import convention
@@ -94,10 +95,12 @@ methods:
 | `api.registerHook(events, handler, opts?)`      | Event hook                              |
 | `api.registerHttpRoute(params)`                 | Gateway HTTP endpoint                   |
 | `api.registerGatewayMethod(name, handler)`      | Gateway RPC method                      |
+| `api.registerGatewayDiscoveryService(service)`  | Local Gateway discovery advertiser      |
 | `api.registerCli(registrar, opts?)`             | CLI subcommand                          |
 | `api.registerService(service)`                  | Background service                      |
 | `api.registerInteractiveHandler(registration)`  | Interactive handler                     |
-| `api.registerEmbeddedExtensionFactory(factory)` | Pi embedded-runner extension factory    |
+| `api.registerAgentToolResultMiddleware(...)`    | Harness tool-result middleware          |
+| `api.registerEmbeddedExtensionFactory(factory)` | Deprecated PI extension factory         |
 | `api.registerMemoryPromptSupplement(builder)`   | Additive memory-adjacent prompt section |
 | `api.registerMemoryCorpusSupplement(adapter)`   | Additive memory search/read corpus      |
 
@@ -108,16 +111,49 @@ methods:
   plugin-owned methods.
 </Note>
 
-<Accordion title="When to use registerEmbeddedExtensionFactory">
-  Use `api.registerEmbeddedExtensionFactory(...)` when a plugin needs Pi-native
-  event timing during OpenClaw embedded runs — for example async `tool_result`
-  rewrites that must happen before the final tool-result message is emitted.
+<Accordion title="When to use tool-result middleware">
+  Use `api.registerAgentToolResultMiddleware(...)` when a plugin needs to
+  rewrite a tool result after execution and before the harness feeds that
+  result back into the model. This is the harness-neutral seam for async output
+  reducers such as tokenjuice.
 
-This is a bundled-plugin seam today: only bundled plugins may register one,
-and they must declare `contracts.embeddedExtensionFactories: ["pi"]` in
-`openclaw.plugin.json`. Keep normal OpenClaw plugin hooks for everything that
-does not require that lower-level seam.
+Plugins must declare `contracts.agentToolResultMiddleware` for each targeted
+harness, for example `["pi", "codex-app-server"]`. Keep normal OpenClaw
+plugin hooks for work that does not need pre-model tool-result timing.
 </Accordion>
+
+<Accordion title="Legacy Pi extension factories">
+  `api.registerEmbeddedExtensionFactory(...)` is deprecated. It remains a
+  compatibility seam for bundled plugins that still need direct Pi
+  embedded-runner events. New tool-result transforms should use
+  `api.registerAgentToolResultMiddleware(...)` instead.
+</Accordion>
+
+### Gateway discovery registration
+
+`api.registerGatewayDiscoveryService(...)` lets a plugin advertise the active
+Gateway on a local discovery transport such as mDNS/Bonjour. OpenClaw calls the
+service during Gateway startup when local discovery is enabled, passes the
+current Gateway ports and non-secret TXT hint data, and calls the returned
+`stop` handler during Gateway shutdown.
+
+```typescript
+api.registerGatewayDiscoveryService({
+  id: "my-discovery",
+  async advertise(ctx) {
+    const handle = await startMyAdvertiser({
+      gatewayPort: ctx.gatewayPort,
+      tls: ctx.gatewayTlsEnabled,
+      displayName: ctx.machineDisplayName,
+    });
+    return { stop: () => handle.stop() };
+  },
+});
+```
+
+Gateway discovery plugins must not treat advertised TXT values as secrets or
+authentication. Discovery is a routing hint; Gateway auth and TLS pinning still
+own trust.
 
 ### CLI registration metadata
 
@@ -201,6 +237,9 @@ AI CLI backend such as `codex-cli`.
 | -------------------------------------------- | ----------------------------- |
 | `api.on(hookName, handler, opts?)`           | Typed lifecycle hook          |
 | `api.onConversationBindingResolved(handler)` | Conversation binding callback |
+
+See [Plugin hooks](/plugins/hooks) for examples, common hook names, and guard
+semantics.
 
 ### Hook decision semantics
 

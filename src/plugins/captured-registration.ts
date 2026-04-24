@@ -1,5 +1,6 @@
 import type { ExtensionFactory } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { AgentToolResultMiddleware } from "./agent-tool-result-middleware-types.js";
 import { buildPluginApi } from "./api-builder.js";
 import type { CodexAppServerExtensionFactory } from "./codex-app-server-extension-types.js";
 import type { MemoryEmbeddingProviderAdapter } from "./memory-embedding-providers.js";
@@ -39,6 +40,7 @@ export type CapturedPluginRegistration = {
   textTransforms: PluginTextTransformRegistration[];
   embeddedExtensionFactories: ExtensionFactory[];
   codexAppServerExtensionFactories: CodexAppServerExtensionFactory[];
+  agentToolResultMiddlewares: AgentToolResultMiddleware[];
   speechProviders: SpeechProviderPlugin[];
   realtimeTranscriptionProviders: RealtimeTranscriptionProviderPlugin[];
   realtimeVoiceProviders: RealtimeVoiceProviderPlugin[];
@@ -63,6 +65,7 @@ export function createCapturedPluginRegistration(params?: {
   const textTransforms: PluginTextTransformRegistration[] = [];
   const embeddedExtensionFactories: ExtensionFactory[] = [];
   const codexAppServerExtensionFactories: CodexAppServerExtensionFactory[] = [];
+  const agentToolResultMiddlewares: AgentToolResultMiddleware[] = [];
   const speechProviders: SpeechProviderPlugin[] = [];
   const realtimeTranscriptionProviders: RealtimeTranscriptionProviderPlugin[] = [];
   const realtimeVoiceProviders: RealtimeVoiceProviderPlugin[] = [];
@@ -89,6 +92,7 @@ export function createCapturedPluginRegistration(params?: {
     textTransforms,
     embeddedExtensionFactories,
     codexAppServerExtensionFactories,
+    agentToolResultMiddlewares,
     speechProviders,
     realtimeTranscriptionProviders,
     realtimeVoiceProviders,
@@ -144,6 +148,9 @@ export function createCapturedPluginRegistration(params?: {
         },
         registerCodexAppServerExtensionFactory(factory: CodexAppServerExtensionFactory) {
           codexAppServerExtensionFactories.push(factory);
+        },
+        registerAgentToolResultMiddleware(handler: AgentToolResultMiddleware) {
+          agentToolResultMiddlewares.push(handler);
         },
         registerCliBackend(backend: CliBackendPlugin) {
           cliBackends.push(backend);

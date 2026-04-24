@@ -279,7 +279,7 @@ Set `enabled: false` to disable a native approval client explicitly. Set `enable
 it on when approvers resolve. Public origin-chat delivery stays explicit through
 `channels.<channel>.execApprovals.target`.
 
-FAQ: [Why are there two exec approval configs for chat approvals?](/help/faq#why-are-there-two-exec-approval-configs-for-chat-approvals)
+FAQ: [Why are there two exec approval configs for chat approvals?](/help/faq-first-run#why-are-there-two-exec-approval-configs-for-chat-approvals)
 
 - Discord: `channels.discord.execApprovals.*`
 - Slack: `channels.slack.execApprovals.*`

@@ -28,6 +28,7 @@ export type BuildPluginApiParams = {
       | "registerNodeHostCommand"
       | "registerSecurityAuditCollector"
       | "registerService"
+      | "registerGatewayDiscoveryService"
       | "registerCliBackend"
       | "registerTextTransforms"
       | "registerConfigMigration"
@@ -50,6 +51,7 @@ export type BuildPluginApiParams = {
       | "registerAgentHarness"
       | "registerEmbeddedExtensionFactory"
       | "registerCodexAppServerExtensionFactory"
+      | "registerAgentToolResultMiddleware"
       | "registerDetachedTaskRuntime"
       | "registerMemoryCapability"
       | "registerMemoryPromptSection"
@@ -74,6 +76,8 @@ const noopRegisterNodeHostCommand: OpenClawPluginApi["registerNodeHostCommand"] 
 const noopRegisterSecurityAuditCollector: OpenClawPluginApi["registerSecurityAuditCollector"] =
   () => {};
 const noopRegisterService: OpenClawPluginApi["registerService"] = () => {};
+const noopRegisterGatewayDiscoveryService: OpenClawPluginApi["registerGatewayDiscoveryService"] =
+  () => {};
 const noopRegisterCliBackend: OpenClawPluginApi["registerCliBackend"] = () => {};
 const noopRegisterTextTransforms: OpenClawPluginApi["registerTextTransforms"] = () => {};
 const noopRegisterConfigMigration: OpenClawPluginApi["registerConfigMigration"] = () => {};
@@ -104,6 +108,8 @@ const noopRegisterAgentHarness: OpenClawPluginApi["registerAgentHarness"] = () =
 const noopRegisterEmbeddedExtensionFactory: OpenClawPluginApi["registerEmbeddedExtensionFactory"] =
   () => {};
 const noopRegisterCodexAppServerExtensionFactory: OpenClawPluginApi["registerCodexAppServerExtensionFactory"] =
+  () => {};
+const noopRegisterAgentToolResultMiddleware: OpenClawPluginApi["registerAgentToolResultMiddleware"] =
   () => {};
 const noopRegisterDetachedTaskRuntime: OpenClawPluginApi["registerDetachedTaskRuntime"] = () => {};
 const noopRegisterMemoryCapability: OpenClawPluginApi["registerMemoryCapability"] = () => {};
@@ -143,6 +149,8 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
     registerSecurityAuditCollector:
       handlers.registerSecurityAuditCollector ?? noopRegisterSecurityAuditCollector,
     registerService: handlers.registerService ?? noopRegisterService,
+    registerGatewayDiscoveryService:
+      handlers.registerGatewayDiscoveryService ?? noopRegisterGatewayDiscoveryService,
     registerCliBackend: handlers.registerCliBackend ?? noopRegisterCliBackend,
     registerTextTransforms: handlers.registerTextTransforms ?? noopRegisterTextTransforms,
     registerConfigMigration: handlers.registerConfigMigration ?? noopRegisterConfigMigration,
@@ -176,6 +184,8 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
       handlers.registerEmbeddedExtensionFactory ?? noopRegisterEmbeddedExtensionFactory,
     registerCodexAppServerExtensionFactory:
       handlers.registerCodexAppServerExtensionFactory ?? noopRegisterCodexAppServerExtensionFactory,
+    registerAgentToolResultMiddleware:
+      handlers.registerAgentToolResultMiddleware ?? noopRegisterAgentToolResultMiddleware,
     registerDetachedTaskRuntime:
       handlers.registerDetachedTaskRuntime ?? noopRegisterDetachedTaskRuntime,
     registerMemoryCapability: handlers.registerMemoryCapability ?? noopRegisterMemoryCapability,

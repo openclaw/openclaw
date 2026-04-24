@@ -1,6 +1,7 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { AnyAgentTool } from "openclaw/plugin-sdk/agent-harness";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { wrapToolWithBeforeToolCallHook } from "../../../../src/agents/pi-tools.before-tool-call.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
@@ -33,6 +34,13 @@ function mediaResult(mediaUrl: string, audioAsVoice?: boolean): AgentToolResult<
   };
 }
 
+function textToolResult(text: string, details: unknown = {}): AgentToolResult<unknown> {
+  return {
+    content: [{ type: "text", text }],
+    details,
+  };
+}
+
 function createBridgeWithToolResult(toolName: string, toolResult: AgentToolResult<unknown>) {
   return createCodexDynamicToolBridge({
     tools: [
@@ -60,6 +68,7 @@ async function handleMessageToolCall(
     threadId: "thread-1",
     turnId: "turn-1",
     callId: "call-1",
+    namespace: null,
     tool: "message",
     arguments: arguments_,
   });
@@ -85,6 +94,7 @@ describe("createCodexDynamicToolBridge", () => {
         threadId: "thread-1",
         turnId: "turn-1",
         callId: "call-1",
+        namespace: null,
         tool: toolName,
         arguments: { prompt: "hello" },
       });
@@ -117,6 +127,7 @@ describe("createCodexDynamicToolBridge", () => {
       threadId: "thread-1",
       turnId: "turn-1",
       callId: "call-1",
+      namespace: null,
       tool: "tts",
       arguments: { text: "hello" },
     });
@@ -199,7 +210,54 @@ describe("createCodexDynamicToolBridge", () => {
     });
   });
 
-  it("applies codex app-server tool_result extensions from the active plugin registry", async () => {
+  it("applies agent tool result middleware from the active plugin registry", async () => {
+    const registry = createEmptyPluginRegistry();
+    const handler = vi.fn(
+      async (event: { result: AgentToolResult<unknown>; toolName: string }) => ({
+        result: {
+          ...event.result,
+          content: [{ type: "text" as const, text: `${event.toolName} compacted` }],
+        },
+      }),
+    );
+    registry.agentToolResultMiddlewares.push({
+      pluginId: "tokenjuice",
+      pluginName: "Tokenjuice",
+      rawHandler: handler,
+      handler,
+      harnesses: ["codex-app-server"],
+      source: "test",
+    });
+    setActivePluginRegistry(registry);
+
+    const bridge = createBridgeWithToolResult("exec", {
+      content: [{ type: "text", text: "raw output" }],
+      details: {},
+    });
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-1",
+      namespace: null,
+      tool: "exec",
+      arguments: { command: "git status" },
+    });
+
+    expect(result).toEqual(expectInputText("exec compacted"));
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({
+        threadId: "thread-1",
+        turnId: "turn-1",
+        toolCallId: "call-1",
+        toolName: "exec",
+        args: { command: "git status" },
+      }),
+      expect.objectContaining({ harness: "codex-app-server" }),
+    );
+  });
+
+  it("still applies legacy codex app-server extension factories after middleware", async () => {
     const registry = createEmptyPluginRegistry();
     const factory = async (codex: {
       on: (
@@ -210,7 +268,7 @@ describe("createCodexDynamicToolBridge", () => {
       codex.on("tool_result", async (event) => ({
         result: {
           ...event.result,
-          content: [{ type: "text", text: `${event.toolName} compacted` }],
+          content: [{ type: "text", text: "legacy compacted" }],
         },
       }));
     };
@@ -232,11 +290,12 @@ describe("createCodexDynamicToolBridge", () => {
       threadId: "thread-1",
       turnId: "turn-1",
       callId: "call-1",
+      namespace: null,
       tool: "exec",
       arguments: { command: "git status" },
     });
 
-    expect(result).toEqual(expectInputText("exec compacted"));
+    expect(result).toEqual(expectInputText("legacy compacted"));
   });
 
   it("fires after_tool_call for successful codex tool executions", async () => {
@@ -254,6 +313,7 @@ describe("createCodexDynamicToolBridge", () => {
       threadId: "thread-1",
       turnId: "turn-1",
       callId: "call-1",
+      namespace: null,
       tool: "exec",
       arguments: { command: "pwd" },
     });
@@ -275,5 +335,289 @@ describe("createCodexDynamicToolBridge", () => {
         }),
       );
     });
+  });
+
+  it("runs before_tool_call for unwrapped dynamic tools before execution", async () => {
+    const beforeToolCall = vi.fn(async () => ({ params: { mode: "safe" } }));
+    const afterToolCall = vi.fn();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        { hookName: "before_tool_call", handler: beforeToolCall },
+        { hookName: "after_tool_call", handler: afterToolCall },
+      ]),
+    );
+
+    const execute = vi.fn(async () => textToolResult("done", { ok: true }));
+    const bridge = createCodexDynamicToolBridge({
+      tools: [createTool({ name: "exec", execute })],
+      signal: new AbortController().signal,
+      hookContext: {
+        agentId: "agent-1",
+        sessionId: "session-1",
+        sessionKey: "agent:agent-1:session-1",
+        runId: "run-1",
+      },
+    });
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-1",
+      namespace: null,
+      tool: "exec",
+      arguments: { command: "pwd" },
+    });
+
+    expect(result).toEqual(expectInputText("done"));
+    expect(beforeToolCall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "exec",
+        toolCallId: "call-1",
+        runId: "run-1",
+        params: { command: "pwd" },
+      }),
+      expect.objectContaining({
+        agentId: "agent-1",
+        sessionId: "session-1",
+        sessionKey: "agent:agent-1:session-1",
+        runId: "run-1",
+        toolCallId: "call-1",
+      }),
+    );
+    expect(execute).toHaveBeenCalledWith(
+      "call-1",
+      { command: "pwd", mode: "safe" },
+      expect.any(AbortSignal),
+      undefined,
+    );
+    await vi.waitFor(() => {
+      expect(afterToolCall).toHaveBeenCalledWith(
+        expect.objectContaining({
+          toolName: "exec",
+          toolCallId: "call-1",
+          params: { command: "pwd", mode: "safe" },
+          result: expect.objectContaining({
+            content: [{ type: "text", text: "done" }],
+            details: { ok: true },
+          }),
+        }),
+        expect.objectContaining({
+          agentId: "agent-1",
+          sessionId: "session-1",
+          sessionKey: "agent:agent-1:session-1",
+          runId: "run-1",
+          toolCallId: "call-1",
+        }),
+      );
+    });
+  });
+
+  it("does not execute dynamic tools blocked by before_tool_call", async () => {
+    const beforeToolCall = vi.fn(async () => ({
+      block: true,
+      blockReason: "blocked by policy",
+    }));
+    const afterToolCall = vi.fn();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        { hookName: "before_tool_call", handler: beforeToolCall },
+        { hookName: "after_tool_call", handler: afterToolCall },
+      ]),
+    );
+    const execute = vi.fn(async () => textToolResult("should not run"));
+    const bridge = createCodexDynamicToolBridge({
+      tools: [createTool({ name: "message", execute })],
+      signal: new AbortController().signal,
+      hookContext: { runId: "run-blocked" },
+    });
+
+    const result = await handleMessageToolCall(bridge, {
+      action: "send",
+      text: "blocked",
+      provider: "telegram",
+      to: "chat-1",
+    });
+
+    expect(result).toEqual({
+      success: false,
+      contentItems: [{ type: "inputText", text: "blocked by policy" }],
+    });
+    expect(execute).not.toHaveBeenCalled();
+    expect(bridge.telemetry.didSendViaMessagingTool).toBe(false);
+    await vi.waitFor(() => {
+      expect(afterToolCall).toHaveBeenCalledWith(
+        expect.objectContaining({
+          toolName: "message",
+          toolCallId: "call-1",
+          params: {
+            action: "send",
+            text: "blocked",
+            provider: "telegram",
+            to: "chat-1",
+          },
+          error: "blocked by policy",
+        }),
+        expect.objectContaining({
+          runId: "run-blocked",
+          toolCallId: "call-1",
+        }),
+      );
+    });
+  });
+
+  it("applies dynamic tool result middleware before after_tool_call observes the result", async () => {
+    const events: string[] = [];
+    const beforeToolCall = vi.fn(async () => {
+      events.push("before_tool_call");
+      return { params: { mode: "safe" } };
+    });
+    const afterToolCall = vi.fn(async (event) => {
+      events.push("after_tool_call");
+      expect(event).toMatchObject({
+        params: { command: "status", mode: "safe" },
+        result: {
+          content: [{ type: "text", text: "compacted output" }],
+          details: { stage: "middleware" },
+        },
+      });
+    });
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        { hookName: "before_tool_call", handler: beforeToolCall },
+        { hookName: "after_tool_call", handler: afterToolCall },
+      ]),
+    );
+    const registry = createEmptyPluginRegistry();
+    const handler = vi.fn(
+      async (event: { args: Record<string, unknown>; result: AgentToolResult<unknown> }) => {
+        events.push("middleware");
+        expect(event.args).toEqual({ command: "status" });
+        return {
+          result: {
+            ...event.result,
+            content: [{ type: "text" as const, text: "compacted output" }],
+            details: { stage: "middleware" },
+          },
+        };
+      },
+    );
+    registry.agentToolResultMiddlewares.push({
+      pluginId: "tokenjuice",
+      pluginName: "Tokenjuice",
+      rawHandler: handler,
+      handler,
+      harnesses: ["codex-app-server"],
+      source: "test",
+    });
+    setActivePluginRegistry(registry);
+    const execute = vi.fn(async () => {
+      events.push("execute");
+      return textToolResult("raw output", { stage: "execute" });
+    });
+    const bridge = createCodexDynamicToolBridge({
+      tools: [createTool({ name: "exec", execute })],
+      signal: new AbortController().signal,
+      hookContext: { runId: "run-middleware" },
+    });
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-1",
+      namespace: null,
+      tool: "exec",
+      arguments: { command: "status" },
+    });
+
+    expect(result).toEqual(expectInputText("compacted output"));
+    await vi.waitFor(() => {
+      expect(events).toEqual(["before_tool_call", "execute", "middleware", "after_tool_call"]);
+    });
+  });
+
+  it("reports dynamic tool execution errors through after_tool_call without stranding the turn", async () => {
+    const beforeToolCall = vi.fn(async () => ({ params: { timeoutSec: 1 } }));
+    const afterToolCall = vi.fn();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        { hookName: "before_tool_call", handler: beforeToolCall },
+        { hookName: "after_tool_call", handler: afterToolCall },
+      ]),
+    );
+    const execute = vi.fn(async () => {
+      throw new Error("tool failed");
+    });
+    const bridge = createCodexDynamicToolBridge({
+      tools: [createTool({ name: "exec", execute })],
+      signal: new AbortController().signal,
+      hookContext: { runId: "run-error" },
+    });
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-err",
+      namespace: null,
+      tool: "exec",
+      arguments: { command: "false" },
+    });
+
+    expect(result).toEqual({
+      success: false,
+      contentItems: [{ type: "inputText", text: "tool failed" }],
+    });
+    expect(execute).toHaveBeenCalledWith(
+      "call-err",
+      { command: "false", timeoutSec: 1 },
+      expect.any(AbortSignal),
+      undefined,
+    );
+    await vi.waitFor(() => {
+      expect(afterToolCall).toHaveBeenCalledWith(
+        expect.objectContaining({
+          toolName: "exec",
+          toolCallId: "call-err",
+          params: { command: "false", timeoutSec: 1 },
+          error: "tool failed",
+        }),
+        expect.objectContaining({
+          runId: "run-error",
+          toolCallId: "call-err",
+        }),
+      );
+    });
+  });
+
+  it("does not double-wrap dynamic tools that already have before_tool_call", async () => {
+    const beforeToolCall = vi.fn(async () => ({ params: { mode: "safe" } }));
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
+    );
+    const execute = vi.fn(async () => textToolResult("done"));
+    const tool = wrapToolWithBeforeToolCallHook(createTool({ name: "exec", execute }), {
+      runId: "run-wrapped",
+    });
+    const bridge = createCodexDynamicToolBridge({
+      tools: [tool],
+      signal: new AbortController().signal,
+      hookContext: { runId: "run-wrapped" },
+    });
+
+    await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-wrapped",
+      namespace: null,
+      tool: "exec",
+      arguments: { command: "pwd" },
+    });
+
+    expect(beforeToolCall).toHaveBeenCalledTimes(1);
+    expect(execute).toHaveBeenCalledWith(
+      "call-wrapped",
+      { command: "pwd", mode: "safe" },
+      expect.any(AbortSignal),
+      undefined,
+    );
   });
 });

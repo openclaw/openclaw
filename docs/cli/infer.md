@@ -47,6 +47,11 @@ Benefits:
 - Prefer a first-party OpenClaw surface when the task is fundamentally "run inference."
 - Use the normal local path without requiring the gateway for most infer commands.
 
+For end-to-end provider checks, prefer `openclaw infer ...` once lower-level
+provider tests are green. It exercises the shipped CLI, config loading,
+default-agent resolution, bundled plugin activation, runtime-dependency repair,
+and the shared capability runtime before the provider request is made.
+
 ## Command tree
 
 ```text
@@ -121,7 +126,7 @@ This table maps common inference tasks to the corresponding infer command.
 - Use `--json` when the output will be consumed by another command or script.
 - Use `--provider` or `--model provider/model` when a specific backend is required.
 - For `image describe`, `audio transcribe`, and `video describe`, `--model` must use the form `<provider/model>`.
-- For `image describe`, an explicit `--model` runs that provider/model directly. The model must be image-capable in the model catalog or provider config.
+- For `image describe`, an explicit `--model` runs that provider/model directly. The model must be image-capable in the model catalog or provider config. `codex/<model>` runs a bounded Codex app-server image-understanding turn; `openai-codex/<model>` uses the OpenAI Codex OAuth provider path.
 - Stateless execution commands default to local.
 - Gateway-managed state commands default to gateway.
 - The normal local path does not require the gateway to be running.
@@ -157,6 +162,25 @@ openclaw infer image describe --file ./photo.jpg --model ollama/qwen2.5vl:7b --j
 Notes:
 
 - Use `image edit` when starting from existing input files.
+- Use `image providers --json` to verify which bundled image providers are
+  discoverable, configured, selected, and which generation/edit capabilities
+  each provider exposes.
+- Use `image generate --model <provider/model> --json` as the narrowest live
+  CLI smoke for image generation changes. Example:
+
+  ```bash
+  openclaw infer image providers --json
+  openclaw infer image generate \
+    --model google/gemini-3.1-flash-image-preview \
+    --prompt "Minimal flat test image: one blue square on a white background, no text." \
+    --output ./openclaw-infer-image-smoke.png \
+    --json
+  ```
+
+  The JSON response reports `ok`, `provider`, `model`, `attempts`, and written
+  output paths. When `--output` is set, the final extension may follow the
+  provider's returned MIME type.
+
 - For `image describe`, `--model` must be an image-capable `<provider/model>`.
 - For local Ollama vision models, pull the model first and set `OLLAMA_API_KEY` to any placeholder value, for example `ollama-local`. See [Ollama](/providers/ollama#vision-and-image-description).
 
@@ -258,6 +282,10 @@ Top-level fields are stable:
 - `outputs`
 - `error`
 
+For generated media commands, `outputs` contains files written by OpenClaw. Use
+the `path`, `mimeType`, `size`, and any media-specific dimensions in that array
+for automation instead of parsing human-readable stdout.
+
 ## Common pitfalls
 
 ```bash
@@ -279,3 +307,8 @@ openclaw infer audio transcribe --file ./memo.m4a --model openai/whisper-1 --jso
 ## Notes
 
 - `openclaw capability ...` is an alias for `openclaw infer ...`.
+
+## Related
+
+- [CLI reference](/cli)
+- [Models](/concepts/models)

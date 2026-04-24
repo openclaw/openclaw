@@ -75,6 +75,65 @@ const defaultSubagentAnnounceDeliveryDeps: SubagentAnnounceDeliveryDeps = {
 let subagentAnnounceDeliveryDeps: SubagentAnnounceDeliveryDeps =
   defaultSubagentAnnounceDeliveryDeps;
 
+function resolveBoundConversationOrigin(params: {
+  bindingConversation: ConversationRef & { parentConversationId?: string };
+  requesterConversation?: ConversationRef;
+  requesterOrigin?: DeliveryContext;
+}): DeliveryContext {
+  const conversation = params.bindingConversation;
+  const conversationId = conversation.conversationId?.trim() ?? "";
+  const parentConversationId = conversation.parentConversationId?.trim() ?? "";
+  const requesterConversationId = params.requesterConversation?.conversationId?.trim() ?? "";
+  const requesterTo = params.requesterOrigin?.to?.trim();
+  if (
+    conversation.channel === "matrix" &&
+    parentConversationId &&
+    requesterConversationId &&
+    parentConversationId === requesterConversationId &&
+    requesterTo
+  ) {
+    return {
+      channel: conversation.channel,
+      accountId: conversation.accountId,
+      to: requesterTo,
+      ...(conversationId ? { threadId: conversationId } : {}),
+    };
+  }
+
+  const boundTarget = resolveConversationDeliveryTarget({
+    channel: conversation.channel,
+    conversationId,
+    parentConversationId,
+  });
+  if (
+    requesterTo &&
+    conversationId &&
+    requesterConversationId &&
+    conversationId.toLowerCase() === requesterConversationId.toLowerCase()
+  ) {
+    return {
+      channel: conversation.channel,
+      accountId: conversation.accountId,
+      to: requesterTo,
+      threadId:
+        boundTarget.threadId ??
+        (params.requesterOrigin?.threadId != null && params.requesterOrigin.threadId !== ""
+          ? String(params.requesterOrigin.threadId)
+          : undefined),
+    };
+  }
+  return {
+    channel: conversation.channel,
+    accountId: conversation.accountId,
+    to: boundTarget.to,
+    threadId:
+      boundTarget.threadId ??
+      (params.requesterOrigin?.threadId != null && params.requesterOrigin.threadId !== ""
+        ? String(params.requesterOrigin.threadId)
+        : undefined),
+  };
+}
+
 function resolveRequesterSessionActivity(requesterSessionKey: string) {
   const activity = subagentAnnounceDeliveryDeps.getRequesterSessionActivity(requesterSessionKey);
   if (activity.sessionId || activity.isActive) {
@@ -243,22 +302,12 @@ export async function resolveSubagentCompletionOrigin(params: {
     failClosed: false,
   });
   if (route.mode === "bound" && route.binding) {
-    const boundTarget = resolveConversationDeliveryTarget({
-      channel: route.binding.conversation.channel,
-      conversationId: route.binding.conversation.conversationId,
-      parentConversationId: route.binding.conversation.parentConversationId,
-    });
     return mergeDeliveryContext(
-      {
-        channel: route.binding.conversation.channel,
-        accountId: route.binding.conversation.accountId,
-        to: boundTarget.to,
-        threadId:
-          boundTarget.threadId ??
-          (requesterOrigin?.threadId != null && requesterOrigin.threadId !== ""
-            ? String(requesterOrigin.threadId)
-            : undefined),
-      },
+      resolveBoundConversationOrigin({
+        bindingConversation: route.binding.conversation,
+        requesterConversation,
+        requesterOrigin,
+      }),
       requesterOrigin,
     );
   }
@@ -489,7 +538,7 @@ async function sendSubagentAnnounceDirectly(params: {
         ? normalizedSessionOnlyOriginChannel
         : undefined;
     const requesterActivity = resolveRequesterSessionActivity(canonicalRequesterSessionKey);
-    if (params.expectsCompletionMessage && requesterActivity.isActive) {
+    if (params.expectsCompletionMessage && requesterActivity.sessionId) {
       const woke = requesterActivity.sessionId
         ? subagentAnnounceDeliveryDeps.queueEmbeddedPiMessage(
             requesterActivity.sessionId,
@@ -502,11 +551,13 @@ async function sendSubagentAnnounceDirectly(params: {
           path: "steered",
         };
       }
-      return {
-        delivered: false,
-        path: "direct",
-        error: "active requester session could not be woken",
-      };
+      if (requesterActivity.isActive) {
+        return {
+          delivered: false,
+          path: "direct",
+          error: "active requester session could not be woken",
+        };
+      }
     }
     if (params.signal?.aborted) {
       return {

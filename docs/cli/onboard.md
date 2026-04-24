@@ -23,11 +23,14 @@ Interactive onboarding for local or remote Gateway setup.
 openclaw onboard
 openclaw onboard --flow quickstart
 openclaw onboard --flow manual
+openclaw onboard --skip-bootstrap
 openclaw onboard --mode remote --remote-url wss://gateway-host:18789
 ```
 
 For plaintext private-network `ws://` targets (trusted networks only), set
 `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1` in the onboarding process environment.
+There is no `openclaw.json` equivalent for this client-side transport
+break-glass.
 
 Non-interactive custom provider:
 
@@ -113,6 +116,7 @@ Non-interactive local gateway health:
 - Unless you pass `--skip-health`, onboarding waits for a reachable local gateway before it exits successfully.
 - `--install-daemon` starts the managed gateway install path first. Without it, you must already have a local gateway running, for example `openclaw gateway run`.
 - If you only want config/workspace/bootstrap writes in automation, use `--skip-health`.
+- If you manage workspace files yourself, pass `--skip-bootstrap` to set `agents.defaults.skipBootstrap: true` and skip creating `AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, and `BOOTSTRAP.md`.
 - On native Windows, `--install-daemon` tries Scheduled Tasks first and falls back to a per-user Startup-folder login item if task creation is denied.
 
 Interactive onboarding behavior with reference mode:

@@ -40,6 +40,8 @@ import type {
 } from "../realtime-transcription/provider-types.js";
 import type {
   RealtimeVoiceBridge,
+  RealtimeVoiceBrowserSession,
+  RealtimeVoiceBrowserSessionCreateRequest,
   RealtimeVoiceBridgeCreateRequest,
   RealtimeVoiceProviderConfig,
   RealtimeVoiceProviderConfiguredContext,
@@ -67,6 +69,10 @@ import type {
 } from "../tts/provider-types.js";
 import type { VideoGenerationProvider } from "../video-generation/types.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
+import type {
+  AgentToolResultMiddleware,
+  AgentToolResultMiddlewareOptions,
+} from "./agent-tool-result-middleware-types.js";
 import type {
   CliBackendAuthEpochMode,
   CliBackendNormalizeConfigContext,
@@ -140,6 +146,15 @@ export type {
 } from "./tool-types.js";
 export type { AnyAgentTool } from "../agents/tools/common.js";
 export type { AgentHarness } from "../agents/harness/types.js";
+export type {
+  AgentToolResultMiddleware,
+  AgentToolResultMiddlewareContext,
+  AgentToolResultMiddlewareEvent,
+  AgentToolResultMiddlewareHarness,
+  AgentToolResultMiddlewareOptions,
+  AgentToolResultMiddlewareResult,
+  OpenClawAgentToolResult,
+} from "./agent-tool-result-middleware-types.js";
 export type {
   PluginConversationBinding,
   PluginConversationBindingRequestParams,
@@ -596,6 +611,53 @@ export type ProviderPrepareExtraParamsContext = {
   modelId: string;
   extraParams?: Record<string, unknown>;
   thinkingLevel?: ThinkLevel;
+};
+
+export type ProviderExtraParamsForTransportContext = Omit<
+  ProviderPrepareExtraParamsContext,
+  "extraParams"
+> & {
+  model?: ProviderRuntimeModel;
+  transport?: "sse" | "websocket" | "auto";
+  extraParams: Record<string, unknown>;
+};
+
+export type ProviderExtraParamsForTransportResult = {
+  patch?: Record<string, unknown> | null;
+};
+
+export type ProviderResolvePromptOverlayContext = ProviderSystemPromptContributionContext & {
+  baseOverlay?: ProviderSystemPromptContribution;
+};
+
+export type ProviderFollowupFallbackRouteContext = {
+  config?: OpenClawConfig;
+  agentDir?: string;
+  workspaceDir?: string;
+  provider: string;
+  modelId: string;
+  payload: ReplyPayload;
+  originatingChannel?: string;
+  originatingTo?: string;
+  originRoutable: boolean;
+  dispatcherAvailable: boolean;
+};
+
+export type ProviderFollowupFallbackRouteResult = {
+  route?: "origin" | "dispatcher" | "drop";
+  reason?: string;
+};
+
+export type ProviderResolveAuthProfileIdContext = {
+  config?: OpenClawConfig;
+  agentDir?: string;
+  workspaceDir?: string;
+  provider: string;
+  modelId: string;
+  preferredProfileId?: string;
+  lockedProfileId?: string;
+  profileOrder: string[];
+  authStore: AuthProfileStore;
 };
 
 export type ProviderReplaySanitizeMode = "full" | "images-only";
@@ -1268,6 +1330,15 @@ export type ProviderPlugin = {
     ctx: ProviderPrepareExtraParamsContext,
   ) => Record<string, unknown> | null | undefined;
   /**
+   * Provider-owned request params after transport/model resolution.
+   *
+   * Use this for transport-family request knobs that should be keyed by the
+   * resolved model API/transport rather than a hardcoded core allowlist.
+   */
+  extraParamsForTransport?: (
+    ctx: ProviderExtraParamsForTransportContext,
+  ) => ProviderExtraParamsForTransportResult | null | undefined;
+  /**
    * Provider-owned transport factory.
    *
    * Use this when the provider needs a fully custom StreamFn instead of a
@@ -1462,6 +1533,30 @@ export type ProviderPlugin = {
   resolveSystemPromptContribution?: (
     ctx: ProviderSystemPromptContributionContext,
   ) => ProviderSystemPromptContribution | null | undefined;
+  /**
+   * Provider-owned GPT/model prompt overlay seam.
+   *
+   * Runs after OpenClaw's built-in overlay is resolved and before the
+   * provider's regular system-prompt contribution is merged.
+   */
+  resolvePromptOverlay?: (
+    ctx: ProviderResolvePromptOverlayContext,
+  ) => ProviderSystemPromptContribution | null | undefined;
+  /**
+   * Provider-owned fallback route override for model/profile failure handling.
+   *
+   * Return undefined/null to keep OpenClaw's default fallback policy.
+   */
+  followupFallbackRoute?: (
+    ctx: ProviderFollowupFallbackRouteContext,
+  ) => ProviderFollowupFallbackRouteResult | null | undefined;
+  /**
+   * Provider-owned auth profile resolver.
+   *
+   * Return a profile id from the supplied order to prefer it for this attempt;
+   * invalid or missing ids are ignored by core.
+   */
+  resolveAuthProfileId?: (ctx: ProviderResolveAuthProfileIdContext) => string | null | undefined;
   /**
    * Provider-owned final system-prompt transform.
    *
@@ -1661,6 +1756,9 @@ export type RealtimeVoiceProviderPlugin = {
   resolveConfig?: (ctx: RealtimeVoiceProviderResolveConfigContext) => RealtimeVoiceProviderConfig;
   isConfigured: (ctx: RealtimeVoiceProviderConfiguredContext) => boolean;
   createBridge: (req: RealtimeVoiceBridgeCreateRequest) => RealtimeVoiceBridge;
+  createBrowserSession?: (
+    req: RealtimeVoiceBrowserSessionCreateRequest,
+  ) => Promise<RealtimeVoiceBrowserSession>;
 };
 
 export type PluginRealtimeVoiceProviderEntry = RealtimeVoiceProviderPlugin & {
@@ -1847,6 +1945,25 @@ export type OpenClawPluginSecurityAuditCollector = (
   ctx: OpenClawPluginSecurityAuditContext,
 ) => SecurityAuditFinding[] | Promise<SecurityAuditFinding[]>;
 
+export type OpenClawGatewayDiscoveryAdvertiseContext = {
+  machineDisplayName: string;
+  gatewayPort: number;
+  gatewayTlsEnabled: boolean;
+  gatewayTlsFingerprintSha256?: string;
+  canvasPort?: number;
+  tailnetDns?: string;
+  sshPort?: number;
+  cliPath?: string;
+  minimal: boolean;
+};
+
+export type OpenClawGatewayDiscoveryService = {
+  id: string;
+  advertise: (
+    ctx: OpenClawGatewayDiscoveryAdvertiseContext,
+  ) => void | Promise<void | { stop?: () => void | Promise<void> }>;
+};
+
 /** Context passed to long-lived plugin services. */
 export type OpenClawPluginServiceContext = {
   config: OpenClawConfig;
@@ -1964,6 +2081,8 @@ export type OpenClawPluginApi = {
   registerNodeHostCommand: (command: OpenClawPluginNodeHostCommand) => void;
   registerSecurityAuditCollector: (collector: OpenClawPluginSecurityAuditCollector) => void;
   registerService: (service: OpenClawPluginService) => void;
+  /** Register a local gateway discovery advertiser such as mDNS/Bonjour. */
+  registerGatewayDiscoveryService: (service: OpenClawGatewayDiscoveryService) => void;
   /** Register a text-only CLI backend used by the local CLI runner. */
   registerCliBackend: (backend: CliBackendPlugin) => void;
   /** Register plugin-owned prompt/message compatibility text transforms. */
@@ -2013,10 +2132,21 @@ export type OpenClawPluginApi = {
   ) => void;
   /** Register an agent harness implementation. */
   registerAgentHarness: (harness: AgentHarness) => void;
-  /** Register a Pi embedded extension factory for OpenClaw embedded runs. Only bundled plugins may use this seam, and `contracts.embeddedExtensionFactories` must include `"pi"`. */
+  /**
+   * Register a Pi embedded extension factory for OpenClaw embedded runs.
+   *
+   * @deprecated This is a bundled compatibility seam. New tool-result transforms
+   * should use `registerAgentToolResultMiddleware(...)` and declare
+   * `contracts.agentToolResultMiddleware` for the targeted harnesses.
+   */
   registerEmbeddedExtensionFactory: (factory: ExtensionFactory) => void;
   /** Register a Codex app-server extension factory for Codex harness tool-result middleware. Only bundled plugins may use this seam, and `contracts.embeddedExtensionFactories` must include `"codex-app-server"`. */
   registerCodexAppServerExtensionFactory: (factory: CodexAppServerExtensionFactory) => void;
+  /** Register harness-neutral tool-result middleware. Declare `contracts.agentToolResultMiddleware` for every targeted harness. */
+  registerAgentToolResultMiddleware: (
+    handler: AgentToolResultMiddleware,
+    options?: AgentToolResultMiddlewareOptions,
+  ) => void;
   /** Register the active detached task runtime for this plugin (exclusive slot). */
   registerDetachedTaskRuntime: (
     runtime: import("./runtime/runtime-tasks.types.js").DetachedTaskLifecycleRuntime,

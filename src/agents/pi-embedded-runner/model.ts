@@ -1,5 +1,10 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
-import type { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
+import {
+  AuthStorage as PiAuthStorageClass,
+  ModelRegistry as PiModelRegistryClass,
+  type AuthStorage,
+  type ModelRegistry,
+} from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import {
@@ -86,6 +91,21 @@ const STATIC_PROVIDER_RUNTIME_HOOKS: ProviderRuntimeHooks = {
   normalizeProviderResolvedModelWithPlugin: () => undefined,
   normalizeProviderTransportWithPlugin: () => undefined,
 };
+
+function createEmptyPiDiscoveryStores(): {
+  authStorage: AuthStorage;
+  modelRegistry: ModelRegistry;
+} {
+  const authStorage =
+    typeof PiAuthStorageClass.inMemory === "function"
+      ? PiAuthStorageClass.inMemory({})
+      : PiAuthStorageClass.create();
+  const modelRegistry =
+    typeof PiModelRegistryClass.inMemory === "function"
+      ? PiModelRegistryClass.inMemory(authStorage)
+      : PiModelRegistryClass.create(authStorage);
+  return { authStorage, modelRegistry };
+}
 
 function resolveRuntimeHooks(params?: {
   runtimeHooks?: ProviderRuntimeHooks;
@@ -739,6 +759,7 @@ export async function resolveModelAsync(
     retryTransientProviderRuntimeMiss?: boolean;
     runtimeHooks?: ProviderRuntimeHooks;
     skipProviderRuntimeHooks?: boolean;
+    skipPiDiscovery?: boolean;
   },
 ): Promise<{
   model?: Model<Api>;
@@ -751,8 +772,18 @@ export async function resolveModelAsync(
     model: normalizeStaticProviderModelId(normalizeProviderId(provider), modelId),
   };
   const resolvedAgentDir = agentDir ?? resolveOpenClawAgentDir();
-  const authStorage = options?.authStorage ?? discoverAuthStorage(resolvedAgentDir);
-  const modelRegistry = options?.modelRegistry ?? discoverModels(authStorage, resolvedAgentDir);
+  const emptyDiscoveryStores =
+    options?.skipPiDiscovery && (!options.authStorage || !options.modelRegistry)
+      ? createEmptyPiDiscoveryStores()
+      : undefined;
+  const authStorage =
+    options?.authStorage ??
+    emptyDiscoveryStores?.authStorage ??
+    discoverAuthStorage(resolvedAgentDir);
+  const modelRegistry =
+    options?.modelRegistry ??
+    emptyDiscoveryStores?.modelRegistry ??
+    discoverModels(authStorage, resolvedAgentDir);
   const runtimeHooks = resolveRuntimeHooks(options);
   const explicitModel = resolveExplicitModelWithRegistry({
     provider: normalizedRef.provider,

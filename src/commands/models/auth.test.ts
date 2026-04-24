@@ -298,7 +298,7 @@ describe("modelsAuthLoginCommand", () => {
           },
         },
       ],
-      defaultModel: "openai/gpt-5.5",
+      defaultModel: "openai-codex/gpt-5.5",
     });
     mocks.resolvePluginProviders.mockReturnValue([
       createProvider({
@@ -365,7 +365,7 @@ describe("modelsAuthLoginCommand", () => {
       "Auth profile: openai-codex:user@example.com (openai-codex/oauth)",
     );
     expect(runtime.log).toHaveBeenCalledWith(
-      "Default model available: openai/gpt-5.5 (use --set-default to apply)",
+      "Default model available: openai-codex/gpt-5.5 (use --set-default to apply)",
     );
     expect(runtime.log).toHaveBeenCalledWith(
       "Tip: Codex-capable models can use native Codex web search. Enable it with openclaw configure --section web (recommended mode: cached). Docs: https://docs.openclaw.ai/tools/web",
@@ -602,13 +602,39 @@ describe("modelsAuthLoginCommand", () => {
           },
         },
       ],
-      configPatch: { agents: { defaults: { models: { "openai/gpt-5.5": {} } } } },
-      defaultModel: "openai/gpt-5.5",
+      configPatch: { agents: { defaults: { models: { "openai-codex/gpt-5.5": {} } } } },
+      defaultModel: "openai-codex/gpt-5.5",
     });
 
     await modelsAuthLoginCommand({ provider: "openai-codex" }, runtime);
 
-    expect(lastUpdatedConfig?.agents?.defaults?.models).toEqual(existingModels);
+    expect(lastUpdatedConfig?.agents?.defaults?.models).toEqual({
+      ...existingModels,
+      "openai-codex/gpt-5.5": {},
+    });
+  });
+
+  it("overwrites an existing primary when login uses --set-default", async () => {
+    const runtime = createRuntime();
+    currentConfig = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-6" },
+          models: { "anthropic/claude-opus-4-6": {} },
+        },
+      },
+    };
+
+    await modelsAuthLoginCommand({ provider: "openai-codex", setDefault: true }, runtime);
+
+    expect(lastUpdatedConfig?.agents?.defaults?.model).toEqual({
+      primary: "openai-codex/gpt-5.5",
+    });
+    expect(lastUpdatedConfig?.agents?.defaults?.models).toEqual({
+      "anthropic/claude-opus-4-6": {},
+      "openai-codex/gpt-5.5": {},
+    });
+    expect(runtime.log).toHaveBeenCalledWith("Default model set to openai-codex/gpt-5.5");
   });
 
   it("survives lockout clearing failure without blocking login", async () => {
