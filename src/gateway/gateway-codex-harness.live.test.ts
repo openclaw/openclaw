@@ -388,14 +388,16 @@ async function verifyCodexGuardianProbe(params: {
     events: allowResult.events,
     label: "allow probe",
   });
-  if (allowResult.text.includes(allowToken)) {
-    expect(findGuardianReviewStatus(allowResult.events) ?? "approved").toBe("approved");
-  } else {
+  const allowStatus = findGuardianReviewStatus(allowResult.events);
+  if (allowStatus === "denied") {
     // Guardian policy is owned by Codex and may reject even low-risk escalations.
     // The OpenClaw contract is that the review completes and the agent receives
     // a final response instead of hanging on approval plumbing.
     expect(allowResult.text.toLowerCase()).toMatch(/approv|permission|guardian|reject|denied/);
-    expect(allowReview?.data?.status ?? "denied").toBe("denied");
+    expect(allowReview?.data?.status).toBe("denied");
+  } else {
+    expect(allowResult.text).toContain(allowToken);
+    expect(allowStatus ?? "approved").toBe("approved");
   }
 
   const askBackToken = `OPENCLAW-GUARDIAN-ASK-BACK-${randomBytes(3).toString("hex").toUpperCase()}`;
