@@ -5,15 +5,4 @@ import type { AbsolutePathBuf } from "../AbsolutePathBuf.js";
 import type { NetworkAccess } from "./NetworkAccess.js";
 import type { ReadOnlyAccess } from "./ReadOnlyAccess.js";
 
-export type SandboxPolicy =
-  | { type: "dangerFullAccess" }
-  | { type: "readOnly"; access: ReadOnlyAccess; networkAccess: boolean }
-  | { type: "externalSandbox"; networkAccess: NetworkAccess }
-  | {
-      type: "workspaceWrite";
-      writableRoots: Array<AbsolutePathBuf>;
-      readOnlyAccess: ReadOnlyAccess;
-      networkAccess: boolean;
-      excludeTmpdirEnvVar: boolean;
-      excludeSlashTmp: boolean;
-    };
+export type SandboxPolicy = { "type": "dangerFullAccess" } | { "type": "readOnly", access: ReadOnlyAccess, networkAccess: boolean, } | { "type": "externalSandbox", networkAccess: NetworkAccess, } | { "type": "workspaceWrite", writableRoots: Array<AbsolutePathBuf>, readOnlyAccess: ReadOnlyAccess, networkAccess: boolean, excludeTmpdirEnvVar: boolean, excludeSlashTmp: boolean, };

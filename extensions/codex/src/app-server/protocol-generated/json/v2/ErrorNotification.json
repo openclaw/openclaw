@@ -27,13 +27,18 @@
                 "httpStatusCode": {
                   "format": "uint16",
                   "minimum": 0.0,
-                  "type": ["integer", "null"]
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
                 }
               },
               "type": "object"
             }
           },
-          "required": ["httpConnectionFailed"],
+          "required": [
+            "httpConnectionFailed"
+          ],
           "title": "HttpConnectionFailedCodexErrorInfo",
           "type": "object"
         },
@@ -46,13 +51,18 @@
                 "httpStatusCode": {
                   "format": "uint16",
                   "minimum": 0.0,
-                  "type": ["integer", "null"]
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
                 }
               },
               "type": "object"
             }
           },
-          "required": ["responseStreamConnectionFailed"],
+          "required": [
+            "responseStreamConnectionFailed"
+          ],
           "title": "ResponseStreamConnectionFailedCodexErrorInfo",
           "type": "object"
         },
@@ -65,13 +75,18 @@
                 "httpStatusCode": {
                   "format": "uint16",
                   "minimum": 0.0,
-                  "type": ["integer", "null"]
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
                 }
               },
               "type": "object"
             }
           },
-          "required": ["responseStreamDisconnected"],
+          "required": [
+            "responseStreamDisconnected"
+          ],
           "title": "ResponseStreamDisconnectedCodexErrorInfo",
           "type": "object"
         },
@@ -84,13 +99,18 @@
                 "httpStatusCode": {
                   "format": "uint16",
                   "minimum": 0.0,
-                  "type": ["integer", "null"]
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
                 }
               },
               "type": "object"
             }
           },
-          "required": ["responseTooManyFailedAttempts"],
+          "required": [
+            "responseTooManyFailedAttempts"
+          ],
           "title": "ResponseTooManyFailedAttemptsCodexErrorInfo",
           "type": "object"
         },
@@ -104,25 +124,35 @@
                   "$ref": "#/definitions/NonSteerableTurnKind"
                 }
               },
-              "required": ["turnKind"],
+              "required": [
+                "turnKind"
+              ],
               "type": "object"
             }
           },
-          "required": ["activeTurnNotSteerable"],
+          "required": [
+            "activeTurnNotSteerable"
+          ],
           "title": "ActiveTurnNotSteerableCodexErrorInfo",
           "type": "object"
         }
       ]
     },
     "NonSteerableTurnKind": {
-      "enum": ["review", "compact"],
+      "enum": [
+        "review",
+        "compact"
+      ],
       "type": "string"
     },
     "TurnError": {
       "properties": {
         "additionalDetails": {
           "default": null,
-          "type": ["string", "null"]
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "codexErrorInfo": {
           "anyOf": [
@@ -138,7 +168,9 @@
           "type": "string"
         }
       },
-      "required": ["message"],
+      "required": [
+        "message"
+      ],
       "type": "object"
     }
   },
@@ -156,7 +188,12 @@
       "type": "boolean"
     }
   },
-  "required": ["error", "threadId", "turnId", "willRetry"],
+  "required": [
+    "error",
+    "threadId",
+    "turnId",
+    "willRetry"
+  ],
   "title": "ErrorNotification",
   "type": "object"
 }

@@ -33,10 +33,6 @@ import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import { handleCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
 import {
-  assertCodexTurnStartResponse,
-  readCodexDynamicToolCallParams,
-} from "./protocol-validators.js";
-import {
   isJsonObject,
   type CodexServerNotification,
   type CodexDynamicToolCallParams,
@@ -44,6 +40,10 @@ import {
   type JsonObject,
   type JsonValue,
 } from "./protocol.js";
+import {
+  assertCodexTurnStartResponse,
+  readCodexDynamicToolCallParams,
+} from "./protocol-validators.js";
 import { readCodexAppServerBinding, type CodexAppServerThreadBinding } from "./session-binding.js";
 import { clearSharedCodexAppServerClient } from "./shared-client.js";
 import {

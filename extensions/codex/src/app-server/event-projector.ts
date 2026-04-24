@@ -10,7 +10,6 @@ import {
   type EmbeddedRunAttemptResult,
   type MessagingToolSend,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { readCodexTurn } from "./protocol-validators.js";
 import {
   isJsonObject,
   type CodexServerNotification,
@@ -19,6 +18,7 @@ import {
   type JsonObject,
   type JsonValue,
 } from "./protocol.js";
+import { readCodexTurn } from "./protocol-validators.js";
 
 export type CodexAppServerToolTelemetry = {
   didSendViaMessagingTool: boolean;

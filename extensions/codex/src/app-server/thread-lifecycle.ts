@@ -6,10 +6,6 @@ import { renderCodexPromptOverlay } from "../../prompt-overlay.js";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
 import {
-  assertCodexThreadResumeResponse,
-  assertCodexThreadStartResponse,
-} from "./protocol-validators.js";
-import {
   isJsonObject,
   type CodexDynamicToolSpec,
   type CodexThreadResumeParams,
@@ -19,6 +15,10 @@ import {
   type JsonObject,
   type JsonValue,
 } from "./protocol.js";
+import {
+  assertCodexThreadResumeResponse,
+  assertCodexThreadStartResponse,
+} from "./protocol-validators.js";
 import {
   clearCodexAppServerBinding,
   readCodexAppServerBinding,
@@ -91,21 +91,24 @@ export async function startOrResumeThread(params: {
   }
 
   const response = assertCodexThreadStartResponse(
-    await params.client.request<unknown>("thread/start", {
-      model: params.params.modelId,
-      modelProvider: normalizeModelProvider(params.params.provider),
-      cwd: params.cwd,
-      approvalPolicy: params.appServer.approvalPolicy,
-      approvalsReviewer: params.appServer.approvalsReviewer,
-      sandbox: params.appServer.sandbox,
-      ...(params.appServer.serviceTier ? { serviceTier: params.appServer.serviceTier } : {}),
-      serviceName: "OpenClaw",
-      developerInstructions:
-        params.developerInstructions ?? buildDeveloperInstructions(params.params),
-      dynamicTools: params.dynamicTools,
-      experimentalRawEvents: true,
-      persistExtendedHistory: true,
-    } satisfies CodexThreadStartParams as unknown as JsonValue),
+    await params.client.request<unknown>(
+      "thread/start",
+      ({
+        model: params.params.modelId,
+        modelProvider: normalizeModelProvider(params.params.provider),
+        cwd: params.cwd,
+        approvalPolicy: params.appServer.approvalPolicy,
+        approvalsReviewer: params.appServer.approvalsReviewer,
+        sandbox: params.appServer.sandbox,
+        ...(params.appServer.serviceTier ? { serviceTier: params.appServer.serviceTier } : {}),
+        serviceName: "OpenClaw",
+        developerInstructions:
+          params.developerInstructions ?? buildDeveloperInstructions(params.params),
+        dynamicTools: params.dynamicTools,
+        experimentalRawEvents: true,
+        persistExtendedHistory: true,
+      } satisfies CodexThreadStartParams) as unknown as JsonValue,
+    ),
   );
   const createdAt = new Date().toISOString();
   await writeCodexAppServerBinding(params.params.sessionFile, {
