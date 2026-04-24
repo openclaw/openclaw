@@ -698,7 +698,9 @@ describe("exec approvals shell analysis", () => {
       },
     );
 
-    it("fails allowlist analysis for shell line continuations", () => {
+    it("fails allowlist analysis when a spliced line continuation produces an unsafe construct", () => {
+      // After splicing `\<newline>`, this becomes `echo "ok $(id -u)"` which
+      // the parser rejects as an unsupported shell substitution.
       const result = evaluateShellAllowlist({
         command: 'echo "ok $\\\n(id -u)"',
         allowlist: [{ pattern: "/usr/bin/echo" }],
@@ -706,6 +708,50 @@ describe("exec approvals shell analysis", () => {
         cwd: "/tmp",
       });
       expect(result.analysisOk).toBe(false);
+      expect(result.allowlistSatisfied).toBe(false);
+    });
+
+    it("satisfies allowlist for safe backslash-newline line continuations", () => {
+      const result = evaluateShellAllowlist({
+        command: "/usr/bin/git \\\n  commit \\\n  -m 'msg'",
+        allowlist: [{ pattern: "/usr/bin/git" }],
+        safeBins: new Set(),
+        cwd: "/tmp",
+      });
+      expect(result.analysisOk).toBe(true);
+      expect(result.allowlistSatisfied).toBe(true);
+    });
+
+    it("does not splice backslash-newline inside single quotes", () => {
+      const result = evaluateShellAllowlist({
+        command: "/usr/bin/git commit -m 'fix: foo\\\nbar'",
+        allowlist: [{ pattern: "/usr/bin/git" }],
+        safeBins: new Set(),
+        cwd: "/tmp",
+      });
+      expect(result.analysisOk).toBe(true);
+      expect(result.allowlistSatisfied).toBe(true);
+    });
+
+    it("marks analysisOk true but allowlistSatisfied false for unapproved binary after splicing", () => {
+      const result = evaluateShellAllowlist({
+        command: "/usr/bin/curl \\\n  https://example.com",
+        allowlist: [],
+        safeBins: new Set(),
+        cwd: "/tmp",
+      });
+      expect(result.analysisOk).toBe(true);
+      expect(result.allowlistSatisfied).toBe(false);
+    });
+
+    it("evaluates chain operators exposed by line continuation splicing", () => {
+      const result = evaluateShellAllowlist({
+        command: "/usr/bin/echo ok \\\n&& /usr/bin/rm -rf /",
+        allowlist: [{ pattern: "/usr/bin/echo" }],
+        safeBins: new Set(),
+        cwd: "/tmp",
+      });
+      expect(result.analysisOk).toBe(true);
       expect(result.allowlistSatisfied).toBe(false);
     });
 

@@ -47,6 +47,43 @@ function hasShellLineContinuation(command: string): boolean {
   return /\\(?:\r\n|\n|\r)/.test(command);
 }
 
+function spliceShellLineContinuations(command: string): string {
+  let result = "";
+  let quote: "single" | "double" | null = null;
+
+  for (let index = 0; index < command.length; index += 1) {
+    const char = command[index];
+    const next = command[index + 1];
+
+    if (char === "\\" && quote !== "single") {
+      if (next === "\r" || next === "\n") {
+        index += next === "\r" && command[index + 2] === "\n" ? 2 : 1;
+        continue;
+      }
+      if (quote === "double" && next && ['"', "`", "$", "\\"].includes(next)) {
+        result += char + next;
+        index += 1;
+        continue;
+      }
+      if (quote === null && next) {
+        result += char + next;
+        index += 1;
+        continue;
+      }
+    }
+
+    if (char === "'" && quote !== "double") {
+      quote = quote === "single" ? null : "single";
+    } else if (char === '"' && quote !== "single") {
+      quote = quote === "double" ? null : "double";
+    }
+
+    result += char;
+  }
+
+  return result;
+}
+
 export function normalizeSafeBins(entries?: readonly string[]): Set<string> {
   if (!Array.isArray(entries)) {
     return new Set();
@@ -1092,18 +1129,21 @@ export function evaluateShellAllowlist(
     segmentSatisfiedBy: [],
   });
 
-  // Keep allowlist analysis conservative: line-continuation semantics are shell-dependent
-  // and can rewrite token boundaries at runtime.
-  if (hasShellLineContinuation(params.command)) {
-    return analysisFailure();
-  }
+  // Splice backslash-newline line continuations before analysis so that
+  // multi-line commands (e.g. `git \<newline>  commit`) are evaluated against
+  // the allowlist rather than unconditionally rejected. Commands with dangerous
+  // constructs embedded in continuations (e.g. `"$\<newline>(id)"`) still fail
+  // at the parser level, preserving the existing safety contract.
+  const command = hasShellLineContinuation(params.command)
+    ? spliceShellLineContinuations(params.command)
+    : params.command;
 
   const chainParts = isWindowsPlatform(params.platform)
     ? null
-    : splitCommandChainWithOperators(params.command);
+    : splitCommandChainWithOperators(command);
   if (!chainParts) {
     const analysis = analyzeShellCommand({
-      command: params.command,
+      command,
       cwd: params.cwd,
       env: params.env,
       platform: params.platform,
