@@ -56,6 +56,9 @@ function activeRegistrySatisfiesScope(
   switch (scope) {
     case "configured-channels":
     case "channels":
+      if (expectedChannelPluginIds.length === 0) {
+        return false;
+      }
       return (
         active.channels.length > 0 &&
         expectedChannelPluginIds.every((pluginId) => activeChannelPluginIds.has(pluginId))

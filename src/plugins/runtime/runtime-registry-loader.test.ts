@@ -252,4 +252,30 @@ describe("ensurePluginRegistryLoaded", () => {
       }),
     );
   });
+
+  it("does not treat a warm channel registry as satisfying a new empty channel scope", () => {
+    mocks.getActivePluginRegistry.mockReturnValue({
+      ...createEmptyPluginRegistry(),
+      plugins: [{ id: "demo-channel", status: "loaded" } as never],
+      channels: [
+        {
+          pluginId: "demo-channel",
+          plugin: { id: "demo-channel" } as never,
+          source: "test",
+        },
+      ],
+    });
+    mocks.resolveChannelPluginIds.mockReturnValue([]);
+
+    ensurePluginRegistryLoaded({
+      scope: "channels",
+      config: {} as never,
+    });
+
+    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onlyPluginIds: [],
+      }),
+    );
+  });
 });
