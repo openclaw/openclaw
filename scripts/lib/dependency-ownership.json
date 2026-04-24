@@ -76,11 +76,6 @@
       "class": "core-runtime",
       "risk": ["filesystem-watch"]
     },
-    "cli-highlight": {
-      "owner": "capability:tui",
-      "class": "default-runtime-initially",
-      "risk": ["syntax-highlighting", "large-transitive-cone"]
-    },
     "commander": {
       "owner": "core:cli",
       "class": "core-runtime",
