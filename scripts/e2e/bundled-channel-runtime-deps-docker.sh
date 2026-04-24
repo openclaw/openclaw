@@ -1366,11 +1366,22 @@ EOF
 }
 
 if [ "$RUN_CHANNEL_SCENARIOS" != "0" ]; then
-  run_channel_scenario telegram grammy
-  run_channel_scenario discord discord-api-types
-  run_channel_scenario slack @slack/web-api
-  run_channel_scenario feishu @larksuiteoapi/node-sdk
-  run_channel_scenario memory-lancedb @lancedb/lancedb
+  IFS=',' read -r -a CHANNEL_SCENARIOS <<<"${OPENCLAW_BUNDLED_CHANNELS:-telegram,discord,slack,feishu,memory-lancedb}"
+  for channel_scenario in "${CHANNEL_SCENARIOS[@]}"; do
+    channel_scenario="${channel_scenario//[[:space:]]/}"
+    [ -n "$channel_scenario" ] || continue
+    case "$channel_scenario" in
+      telegram) run_channel_scenario telegram grammy ;;
+      discord) run_channel_scenario discord discord-api-types ;;
+      slack) run_channel_scenario slack @slack/web-api ;;
+      feishu) run_channel_scenario feishu @larksuiteoapi/node-sdk ;;
+      memory-lancedb) run_channel_scenario memory-lancedb @lancedb/lancedb ;;
+      *)
+        echo "Unsupported OPENCLAW_BUNDLED_CHANNELS entry: $channel_scenario" >&2
+        exit 1
+        ;;
+    esac
+  done
 fi
 if [ "$RUN_UPDATE_SCENARIO" != "0" ]; then
   run_update_scenario
