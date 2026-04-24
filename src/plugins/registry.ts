@@ -65,7 +65,6 @@ import type {
   PluginCliRegistration,
   PluginCommandRegistration,
   PluginConversationBindingResolvedHandlerRegistration,
-  PluginGatewayDiscoveryServiceRegistration,
   PluginHookRegistration,
   PluginHttpRouteRegistration as RegistryTypesPluginHttpRouteRegistration,
   PluginAgentHarnessRegistration,
