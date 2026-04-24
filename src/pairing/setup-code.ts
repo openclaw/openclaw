@@ -6,7 +6,6 @@ import { materializeGatewayAuthSecretRefs } from "../gateway/auth-config-utils.j
 import { assertExplicitGatewayAuthModeWhenBothConfigured } from "../gateway/auth-mode-policy.js";
 import { isLoopbackHost, isSecureWebSocketUrl } from "../gateway/net.js";
 import { issueDeviceBootstrapToken } from "../infra/device-bootstrap.js";
-import { normalizeHostname } from "../infra/net/hostname.js";
 import {
   pickMatchingExternalInterfaceAddress,
   safeNetworkInterfaces,
@@ -20,7 +19,10 @@ import {
   isRfc1918Ipv4Address,
   parseCanonicalIpAddress,
 } from "../shared/net/ip.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { resolveTailnetHostWithRunner } from "../shared/tailscale-status.js";
 
 export type PairingSetupPayload = {
@@ -72,18 +74,10 @@ function describeSecureMobilePairingFix(source?: string): string {
   return (
     "Tailscale and public mobile pairing require a secure gateway URL (wss://) or Tailscale Serve/Funnel." +
     sourceNote +
-    " Fix: use a private LAN host/address, prefer gateway.tailscale.mode=serve, or set " +
+    " Fix: use a private LAN IP address, prefer gateway.tailscale.mode=serve, or set " +
     "gateway.remote.url / plugins.entries.device-pair.config.publicUrl to a wss:// URL. " +
-    "ws:// is only valid for localhost, private LAN, or the Android emulator."
+    "ws:// is only valid for localhost, private LAN IP addresses, or the Android emulator."
   );
-}
-
-function isPrivateLanHostname(host: string): boolean {
-  const normalized = normalizeHostname(host);
-  if (!normalized) {
-    return false;
-  }
-  return normalized.endsWith(".local") || (!normalized.includes(".") && !normalized.includes(":"));
 }
 
 function isPrivateLanIpHost(host: string): boolean {
@@ -101,19 +95,14 @@ function isPrivateLanIpHost(host: string): boolean {
   if (!isIpv6Address(parsed)) {
     return false;
   }
-  const normalized = parsed.toString().toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(parsed.toString());
   return (
     normalized.startsWith("fe80:") || normalized.startsWith("fc") || normalized.startsWith("fd")
   );
 }
 
 function isMobilePairingCleartextAllowedHost(host: string): boolean {
-  return (
-    isLoopbackHost(host) ||
-    host === "10.0.2.2" ||
-    isPrivateLanIpHost(host) ||
-    isPrivateLanHostname(host)
-  );
+  return isLoopbackHost(host) || host === "10.0.2.2" || isPrivateLanIpHost(host);
 }
 
 function validateMobilePairingUrl(url: string, source?: string): string | null {

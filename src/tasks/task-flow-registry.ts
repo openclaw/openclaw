@@ -58,6 +58,29 @@ type FlowRecordPatch = Omit<
   endedAt?: number | null;
 };
 
+type FlowRecordCreateFields = {
+  ownerKey: string;
+  requesterOrigin?: TaskFlowRecord["requesterOrigin"];
+  status?: TaskFlowStatus;
+  notifyPolicy?: TaskNotifyPolicy;
+  goal: string;
+  currentStep?: string | null;
+  blockedTaskId?: string | null;
+  blockedSummary?: string | null;
+  stateJson?: JsonValue | null;
+  waitJson?: JsonValue | null;
+  cancelRequestedAt?: number | null;
+  createdAt?: number;
+  updatedAt?: number;
+  endedAt?: number | null;
+};
+
+export type CreateFlowRecordParams = FlowRecordCreateFields & {
+  syncMode?: TaskFlowSyncMode;
+  controllerId?: string | null;
+  revision?: number;
+};
+
 export type TaskFlowUpdateResult =
   | {
       applied: true;
@@ -241,25 +264,7 @@ function persistFlowDelete(flowId: string) {
   persistFlowRegistry();
 }
 
-function buildFlowRecord(params: {
-  syncMode?: TaskFlowSyncMode;
-  ownerKey: string;
-  requesterOrigin?: TaskFlowRecord["requesterOrigin"];
-  controllerId?: string | null;
-  revision?: number;
-  status?: TaskFlowStatus;
-  notifyPolicy?: TaskNotifyPolicy;
-  goal: string;
-  currentStep?: string | null;
-  blockedTaskId?: string | null;
-  blockedSummary?: string | null;
-  stateJson?: JsonValue | null;
-  waitJson?: JsonValue | null;
-  cancelRequestedAt?: number | null;
-  createdAt?: number;
-  updatedAt?: number;
-  endedAt?: number | null;
-}): TaskFlowRecord {
+function buildFlowRecord(params: CreateFlowRecordParams): TaskFlowRecord {
   const now = params.createdAt ?? Date.now();
   const syncMode = params.syncMode ?? "managed";
   const controllerId = syncMode === "managed" ? assertControllerId(params.controllerId) : undefined;
@@ -341,47 +346,17 @@ function writeFlowRecord(next: TaskFlowRecord, previous?: TaskFlowRecord): TaskF
   return cloneFlowRecord(next);
 }
 
-export function createFlowRecord(params: {
-  syncMode?: TaskFlowSyncMode;
-  ownerKey: string;
-  requesterOrigin?: TaskFlowRecord["requesterOrigin"];
-  controllerId?: string | null;
-  revision?: number;
-  status?: TaskFlowStatus;
-  notifyPolicy?: TaskNotifyPolicy;
-  goal: string;
-  currentStep?: string | null;
-  blockedTaskId?: string | null;
-  blockedSummary?: string | null;
-  stateJson?: JsonValue | null;
-  waitJson?: JsonValue | null;
-  cancelRequestedAt?: number | null;
-  createdAt?: number;
-  updatedAt?: number;
-  endedAt?: number | null;
-}): TaskFlowRecord {
+export function createFlowRecord(params: CreateFlowRecordParams): TaskFlowRecord {
   ensureFlowRegistryReady();
   const record = buildFlowRecord(params);
   return writeFlowRecord(record);
 }
 
-export function createManagedTaskFlow(params: {
-  ownerKey: string;
-  controllerId: string;
-  requesterOrigin?: TaskFlowRecord["requesterOrigin"];
-  status?: TaskFlowStatus;
-  notifyPolicy?: TaskNotifyPolicy;
-  goal: string;
-  currentStep?: string | null;
-  blockedTaskId?: string | null;
-  blockedSummary?: string | null;
-  stateJson?: JsonValue | null;
-  waitJson?: JsonValue | null;
-  cancelRequestedAt?: number | null;
-  createdAt?: number;
-  updatedAt?: number;
-  endedAt?: number | null;
-}): TaskFlowRecord {
+export function createManagedTaskFlow(
+  params: FlowRecordCreateFields & {
+    controllerId: string;
+  },
+): TaskFlowRecord {
   return createFlowRecord({
     ...params,
     syncMode: "managed",

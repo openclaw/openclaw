@@ -3,275 +3,8 @@ import type {
   ChannelDoctorLegacyConfigRule,
 } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { asObjectRecord, normalizeLegacyChannelAliases } from "openclaw/plugin-sdk/runtime-doctor";
 import { resolveDiscordPreviewStreamMode } from "./preview-streaming.js";
-
-function asObjectRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function ensureNestedRecord(owner: Record<string, unknown>, key: string): Record<string, unknown> {
-  const existing = asObjectRecord(owner[key]);
-  if (existing) {
-    return { ...existing };
-  }
-  return {};
-}
-
-function allowFromListsMatch(left: unknown, right: unknown): boolean {
-  if (!Array.isArray(left) || !Array.isArray(right)) {
-    return false;
-  }
-  const normalizedLeft = left.map((value) => String(value).trim()).filter(Boolean);
-  const normalizedRight = right.map((value) => String(value).trim()).filter(Boolean);
-  if (normalizedLeft.length !== normalizedRight.length) {
-    return false;
-  }
-  return normalizedLeft.every((value, index) => value === normalizedRight[index]);
-}
-
-function normalizeLegacyDmAliases(params: {
-  entry: Record<string, unknown>;
-  pathPrefix: string;
-  changes: string[];
-  promoteAllowFrom?: boolean;
-}): { entry: Record<string, unknown>; changed: boolean } {
-  let changed = false;
-  let updated: Record<string, unknown> = params.entry;
-  const rawDm = updated.dm;
-  const dm = asObjectRecord(rawDm) ? (structuredClone(rawDm) as Record<string, unknown>) : null;
-  let dmChanged = false;
-
-  const topDmPolicy = updated.dmPolicy;
-  const legacyDmPolicy = dm?.policy;
-  if (topDmPolicy === undefined && legacyDmPolicy !== undefined) {
-    updated = { ...updated, dmPolicy: legacyDmPolicy };
-    changed = true;
-    if (dm) {
-      delete dm.policy;
-      dmChanged = true;
-    }
-    params.changes.push(`Moved ${params.pathPrefix}.dm.policy → ${params.pathPrefix}.dmPolicy.`);
-  } else if (
-    topDmPolicy !== undefined &&
-    legacyDmPolicy !== undefined &&
-    topDmPolicy === legacyDmPolicy
-  ) {
-    if (dm) {
-      delete dm.policy;
-      dmChanged = true;
-      params.changes.push(`Removed ${params.pathPrefix}.dm.policy (dmPolicy already set).`);
-    }
-  }
-
-  if (params.promoteAllowFrom !== false) {
-    const topAllowFrom = updated.allowFrom;
-    const legacyAllowFrom = dm?.allowFrom;
-    if (topAllowFrom === undefined && legacyAllowFrom !== undefined) {
-      updated = { ...updated, allowFrom: legacyAllowFrom };
-      changed = true;
-      if (dm) {
-        delete dm.allowFrom;
-        dmChanged = true;
-      }
-      params.changes.push(
-        `Moved ${params.pathPrefix}.dm.allowFrom → ${params.pathPrefix}.allowFrom.`,
-      );
-    } else if (
-      topAllowFrom !== undefined &&
-      legacyAllowFrom !== undefined &&
-      allowFromListsMatch(topAllowFrom, legacyAllowFrom)
-    ) {
-      if (dm) {
-        delete dm.allowFrom;
-        dmChanged = true;
-        params.changes.push(`Removed ${params.pathPrefix}.dm.allowFrom (allowFrom already set).`);
-      }
-    }
-  }
-
-  if (dm && asObjectRecord(rawDm) && dmChanged) {
-    const keys = Object.keys(dm);
-    if (keys.length === 0) {
-      if (updated.dm !== undefined) {
-        const { dm: _ignored, ...rest } = updated;
-        updated = rest;
-        changed = true;
-        params.changes.push(`Removed empty ${params.pathPrefix}.dm after migration.`);
-      }
-    } else {
-      updated = { ...updated, dm };
-      changed = true;
-    }
-  }
-
-  return { entry: updated, changed };
-}
-
-function normalizeLegacyStreamingAliases(params: {
-  entry: Record<string, unknown>;
-  pathPrefix: string;
-  changes: string[];
-  resolvedMode: string;
-  includePreviewChunk?: boolean;
-  resolvedNativeTransport?: unknown;
-  offModeLegacyNotice?: (pathPrefix: string) => string;
-}): { entry: Record<string, unknown>; changed: boolean } {
-  const beforeStreaming = params.entry.streaming;
-  const hadLegacyStreamMode = params.entry.streamMode !== undefined;
-  const hasLegacyFlatFields =
-    params.entry.chunkMode !== undefined ||
-    params.entry.blockStreaming !== undefined ||
-    params.entry.blockStreamingCoalesce !== undefined ||
-    (params.includePreviewChunk === true && params.entry.draftChunk !== undefined) ||
-    params.entry.nativeStreaming !== undefined;
-  const shouldNormalize =
-    hadLegacyStreamMode ||
-    typeof beforeStreaming === "boolean" ||
-    typeof beforeStreaming === "string" ||
-    hasLegacyFlatFields;
-  if (!shouldNormalize) {
-    return { entry: params.entry, changed: false };
-  }
-
-  let updated = { ...params.entry };
-  let changed = false;
-  const streaming = ensureNestedRecord(updated, "streaming");
-  const block = ensureNestedRecord(streaming, "block");
-  const preview = ensureNestedRecord(streaming, "preview");
-
-  if (
-    (hadLegacyStreamMode ||
-      typeof beforeStreaming === "boolean" ||
-      typeof beforeStreaming === "string") &&
-    streaming.mode === undefined
-  ) {
-    streaming.mode = params.resolvedMode;
-    if (hadLegacyStreamMode) {
-      params.changes.push(
-        `Moved ${params.pathPrefix}.streamMode → ${params.pathPrefix}.streaming.mode (${params.resolvedMode}).`,
-      );
-    } else if (typeof beforeStreaming === "boolean") {
-      params.changes.push(
-        `Moved ${params.pathPrefix}.streaming (boolean) → ${params.pathPrefix}.streaming.mode (${params.resolvedMode}).`,
-      );
-    } else if (typeof beforeStreaming === "string") {
-      params.changes.push(
-        `Moved ${params.pathPrefix}.streaming (scalar) → ${params.pathPrefix}.streaming.mode (${params.resolvedMode}).`,
-      );
-    }
-    changed = true;
-  }
-  if (hadLegacyStreamMode) {
-    delete updated.streamMode;
-    changed = true;
-  }
-  if (updated.chunkMode !== undefined && streaming.chunkMode === undefined) {
-    streaming.chunkMode = updated.chunkMode;
-    delete updated.chunkMode;
-    params.changes.push(
-      `Moved ${params.pathPrefix}.chunkMode → ${params.pathPrefix}.streaming.chunkMode.`,
-    );
-    changed = true;
-  }
-  if (updated.blockStreaming !== undefined && block.enabled === undefined) {
-    block.enabled = updated.blockStreaming;
-    delete updated.blockStreaming;
-    params.changes.push(
-      `Moved ${params.pathPrefix}.blockStreaming → ${params.pathPrefix}.streaming.block.enabled.`,
-    );
-    changed = true;
-  }
-  if (
-    params.includePreviewChunk === true &&
-    updated.draftChunk !== undefined &&
-    preview.chunk === undefined
-  ) {
-    preview.chunk = updated.draftChunk;
-    delete updated.draftChunk;
-    params.changes.push(
-      `Moved ${params.pathPrefix}.draftChunk → ${params.pathPrefix}.streaming.preview.chunk.`,
-    );
-    changed = true;
-  }
-  if (updated.blockStreamingCoalesce !== undefined && block.coalesce === undefined) {
-    block.coalesce = updated.blockStreamingCoalesce;
-    delete updated.blockStreamingCoalesce;
-    params.changes.push(
-      `Moved ${params.pathPrefix}.blockStreamingCoalesce → ${params.pathPrefix}.streaming.block.coalesce.`,
-    );
-    changed = true;
-  }
-  if (
-    updated.nativeStreaming !== undefined &&
-    streaming.nativeTransport === undefined &&
-    params.resolvedNativeTransport !== undefined
-  ) {
-    streaming.nativeTransport = params.resolvedNativeTransport;
-    delete updated.nativeStreaming;
-    params.changes.push(
-      `Moved ${params.pathPrefix}.nativeStreaming → ${params.pathPrefix}.streaming.nativeTransport.`,
-    );
-    changed = true;
-  } else if (
-    typeof beforeStreaming === "boolean" &&
-    streaming.nativeTransport === undefined &&
-    params.resolvedNativeTransport !== undefined
-  ) {
-    streaming.nativeTransport = params.resolvedNativeTransport;
-    params.changes.push(
-      `Moved ${params.pathPrefix}.streaming (boolean) → ${params.pathPrefix}.streaming.nativeTransport.`,
-    );
-    changed = true;
-  }
-
-  if (Object.keys(preview).length > 0) {
-    streaming.preview = preview;
-  }
-  if (Object.keys(block).length > 0) {
-    streaming.block = block;
-  }
-  updated.streaming = streaming;
-  if (
-    hadLegacyStreamMode &&
-    params.resolvedMode === "off" &&
-    params.offModeLegacyNotice !== undefined
-  ) {
-    params.changes.push(params.offModeLegacyNotice(params.pathPrefix));
-  }
-  return { entry: updated, changed };
-}
-
-function hasLegacyDiscordStreamingAliases(value: unknown): boolean {
-  const entry = asObjectRecord(value);
-  if (!entry) {
-    return false;
-  }
-  if (
-    typeof entry.streamMode === "string" ||
-    typeof entry.chunkMode === "string" ||
-    typeof entry.blockStreaming === "boolean" ||
-    typeof entry.blockStreamingCoalesce === "boolean" ||
-    typeof entry.draftChunk === "boolean" ||
-    (entry.draftChunk && typeof entry.draftChunk === "object")
-  ) {
-    return true;
-  }
-  const streaming = entry.streaming;
-  return typeof streaming === "string" || typeof streaming === "boolean";
-}
-
-function hasLegacyAccountStreamingAliases(
-  value: unknown,
-  match: (entry: unknown) => boolean,
-): boolean {
-  const accounts = asObjectRecord(value);
-  if (!accounts) {
-    return false;
-  }
-  return Object.values(accounts).some((account) => match(account));
-}
 
 const LEGACY_TTS_PROVIDER_KEYS = ["openai", "elevenlabs", "microsoft", "edge"] as const;
 
@@ -293,6 +26,30 @@ function hasLegacyDiscordAccountTtsProviderKeys(value: unknown): boolean {
     const voice = asObjectRecord(account?.voice);
     return hasLegacyTtsProviderKeys(voice?.tts);
   });
+}
+
+function hasLegacyDiscordGuildChannelAllowAlias(value: unknown): boolean {
+  const guilds = asObjectRecord(asObjectRecord(value)?.guilds);
+  if (!guilds) {
+    return false;
+  }
+  return Object.values(guilds).some((guildValue) => {
+    const channels = asObjectRecord(asObjectRecord(guildValue)?.channels);
+    if (!channels) {
+      return false;
+    }
+    return Object.values(channels).some((channel) =>
+      Object.prototype.hasOwnProperty.call(asObjectRecord(channel) ?? {}, "allow"),
+    );
+  });
+}
+
+function hasLegacyDiscordAccountGuildChannelAllowAlias(value: unknown): boolean {
+  const accounts = asObjectRecord(value);
+  if (!accounts) {
+    return false;
+  }
+  return Object.values(accounts).some((account) => hasLegacyDiscordGuildChannelAllowAlias(account));
 }
 
 function mergeMissing(target: Record<string, unknown>, source: Record<string, unknown>) {
@@ -370,19 +127,59 @@ function migrateLegacyTtsConfig(
   return changed;
 }
 
+function normalizeDiscordGuildChannelAllowAliases(params: {
+  entry: Record<string, unknown>;
+  pathPrefix: string;
+  changes: string[];
+}): { entry: Record<string, unknown>; changed: boolean } {
+  const guilds = asObjectRecord(params.entry.guilds);
+  if (!guilds) {
+    return { entry: params.entry, changed: false };
+  }
+
+  let changed = false;
+  const nextGuilds = { ...guilds };
+  for (const [guildId, guildValue] of Object.entries(guilds)) {
+    const guild = asObjectRecord(guildValue);
+    const channels = asObjectRecord(guild?.channels);
+    if (!guild || !channels) {
+      continue;
+    }
+    let channelsChanged = false;
+    const nextChannels = { ...channels };
+    for (const [channelId, channelValue] of Object.entries(channels)) {
+      const channel = asObjectRecord(channelValue);
+      if (!channel || !Object.prototype.hasOwnProperty.call(channel, "allow")) {
+        continue;
+      }
+      const nextChannel = { ...channel };
+      if (nextChannel.enabled === undefined) {
+        nextChannel.enabled = channel.allow;
+        params.changes.push(
+          `Moved ${params.pathPrefix}.guilds.${guildId}.channels.${channelId}.allow → ${params.pathPrefix}.guilds.${guildId}.channels.${channelId}.enabled.`,
+        );
+      } else {
+        params.changes.push(
+          `Removed ${params.pathPrefix}.guilds.${guildId}.channels.${channelId}.allow (${params.pathPrefix}.guilds.${guildId}.channels.${channelId}.enabled already set).`,
+        );
+      }
+      delete nextChannel.allow;
+      nextChannels[channelId] = nextChannel;
+      channelsChanged = true;
+    }
+    if (!channelsChanged) {
+      continue;
+    }
+    nextGuilds[guildId] = { ...guild, channels: nextChannels };
+    changed = true;
+  }
+
+  return changed
+    ? { entry: { ...params.entry, guilds: nextGuilds }, changed: true }
+    : { entry: params.entry, changed: false };
+}
+
 export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
-  {
-    path: ["channels", "discord"],
-    message:
-      "channels.discord.streamMode, channels.discord.streaming (scalar), chunkMode, blockStreaming, draftChunk, and blockStreamingCoalesce are legacy; use channels.discord.streaming.{mode,chunkMode,preview.chunk,block.enabled,block.coalesce}.",
-    match: hasLegacyDiscordStreamingAliases,
-  },
-  {
-    path: ["channels", "discord", "accounts"],
-    message:
-      "channels.discord.accounts.<id>.streamMode, streaming (scalar), chunkMode, blockStreaming, draftChunk, and blockStreamingCoalesce are legacy; use channels.discord.accounts.<id>.streaming.{mode,chunkMode,preview.chunk,block.enabled,block.coalesce}.",
-    match: (value) => hasLegacyAccountStreamingAliases(value, hasLegacyDiscordStreamingAliases),
-  },
   {
     path: ["channels", "discord", "voice", "tts"],
     message:
@@ -394,6 +191,18 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
     message:
       'channels.discord.accounts.<id>.voice.tts.<provider> keys (openai/elevenlabs/microsoft/edge) are legacy; use channels.discord.accounts.<id>.voice.tts.providers.<provider>. Run "openclaw doctor --fix".',
     match: hasLegacyDiscordAccountTtsProviderKeys,
+  },
+  {
+    path: ["channels", "discord"],
+    message:
+      'channels.discord.guilds.<id>.channels.<id>.allow is legacy; use channels.discord.guilds.<id>.channels.<id>.enabled instead. Run "openclaw doctor --fix".',
+    match: hasLegacyDiscordGuildChannelAllowAlias,
+  },
+  {
+    path: ["channels", "discord", "accounts"],
+    message:
+      'channels.discord.accounts.<id>.guilds.<id>.channels.<id>.allow is legacy; use channels.discord.accounts.<id>.guilds.<id>.channels.<id>.enabled instead. Run "openclaw doctor --fix".',
+    match: hasLegacyDiscordAccountGuildChannelAllowAlias,
   },
 ];
 
@@ -412,78 +221,71 @@ export function normalizeCompatibilityConfig({
   let changed = false;
   const shouldPromoteRootDmAllowFrom = !asObjectRecord(updated.accounts);
 
-  const dm = normalizeLegacyDmAliases({
-    entry: updated,
+  const aliases = normalizeLegacyChannelAliases({
+    entry: rawEntry,
     pathPrefix: "channels.discord",
     changes,
-    promoteAllowFrom: shouldPromoteRootDmAllowFrom,
-  });
-  updated = dm.entry;
-  changed = changed || dm.changed;
-
-  const streaming = normalizeLegacyStreamingAliases({
-    entry: updated,
-    pathPrefix: "channels.discord",
-    changes,
-    includePreviewChunk: true,
-    resolvedMode: resolveDiscordPreviewStreamMode(updated),
-    offModeLegacyNotice: (pathPrefix) =>
-      `${pathPrefix}.streaming remains off by default to avoid Discord preview-edit rate limits; set ${pathPrefix}.streaming.mode="partial" to opt in explicitly.`,
-  });
-  updated = streaming.entry;
-  changed = changed || streaming.changed;
-
-  const rawAccounts = asObjectRecord(updated.accounts);
-  if (rawAccounts) {
-    let accountsChanged = false;
-    const accounts = { ...rawAccounts };
-    for (const [accountId, rawAccount] of Object.entries(rawAccounts)) {
-      const account = asObjectRecord(rawAccount);
-      if (!account) {
-        continue;
-      }
-      let accountEntry = account;
-      let accountChanged = false;
-      const accountDm = normalizeLegacyDmAliases({
-        entry: accountEntry,
-        pathPrefix: `channels.discord.accounts.${accountId}`,
-        changes,
-      });
-      accountEntry = accountDm.entry;
-      accountChanged = accountDm.changed;
-      const accountStreaming = normalizeLegacyStreamingAliases({
-        entry: accountEntry,
-        pathPrefix: `channels.discord.accounts.${accountId}`,
-        changes,
-        includePreviewChunk: true,
-        resolvedMode: resolveDiscordPreviewStreamMode(accountEntry),
-        offModeLegacyNotice: (pathPrefix) =>
-          `${pathPrefix}.streaming remains off by default to avoid Discord preview-edit rate limits; set ${pathPrefix}.streaming.mode="partial" to opt in explicitly.`,
-      });
-      accountEntry = accountStreaming.entry;
-      accountChanged = accountChanged || accountStreaming.changed;
-      const accountVoice = asObjectRecord(accountEntry.voice);
+    normalizeDm: true,
+    rootDmPromoteAllowFrom: shouldPromoteRootDmAllowFrom,
+    normalizeAccountDm: true,
+    resolveStreamingOptions: (entry) => ({
+      resolvedMode: resolveDiscordPreviewStreamMode(entry),
+      includePreviewChunk: true,
+    }),
+    normalizeAccountExtra: ({ account, pathPrefix }) => {
+      const accountVoice = asObjectRecord(account.voice);
       if (
-        accountVoice &&
-        migrateLegacyTtsConfig(
+        !accountVoice ||
+        !migrateLegacyTtsConfig(
           asObjectRecord(accountVoice.tts),
-          `channels.discord.accounts.${accountId}.voice.tts`,
+          `${pathPrefix}.voice.tts`,
           changes,
         )
       ) {
-        accountEntry = {
-          ...accountEntry,
+        return { entry: account, changed: false };
+      }
+      return {
+        entry: {
+          ...account,
           voice: accountVoice,
-        };
-        accountChanged = true;
+        },
+        changed: true,
+      };
+    },
+  });
+  updated = aliases.entry;
+  changed = aliases.changed;
+
+  const guildAliases = normalizeDiscordGuildChannelAllowAliases({
+    entry: updated,
+    pathPrefix: "channels.discord",
+    changes,
+  });
+  updated = guildAliases.entry;
+  changed = changed || guildAliases.changed;
+
+  const accounts = asObjectRecord(updated.accounts);
+  if (accounts) {
+    let accountsChanged = false;
+    const nextAccounts = { ...accounts };
+    for (const [accountId, accountValue] of Object.entries(accounts)) {
+      const account = asObjectRecord(accountValue);
+      if (!account) {
+        continue;
       }
-      if (accountChanged) {
-        accounts[accountId] = accountEntry;
-        accountsChanged = true;
+      const normalized = normalizeDiscordGuildChannelAllowAliases({
+        entry: account,
+        pathPrefix: `channels.discord.accounts.${accountId}`,
+        changes,
+      });
+      if (!normalized.changed) {
+        continue;
       }
+      nextAccounts[accountId] = normalized.entry;
+      accountsChanged = true;
     }
     if (accountsChanged) {
-      updated = { ...updated, accounts };
+      updated = { ...updated, accounts: nextAccounts };
       changed = true;
     }
   }

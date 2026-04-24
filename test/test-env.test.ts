@@ -89,10 +89,22 @@ describe("installTestEnv", () => {
     );
     writeFile(path.join(realHome, ".openclaw", "credentials", "token.txt"), "secret\n");
     writeFile(
+      path.join(realHome, ".openclaw", "external-plugins", "glueclaw", "openclaw.plugin.json"),
+      '{"id":"glueclaw"}\n',
+    );
+    writeFile(
       path.join(realHome, ".openclaw", "agents", "main", "agent", "auth-profiles.json"),
       JSON.stringify({ version: 1, profiles: { default: { provider: "openai" } } }, null, 2),
     );
     writeFile(path.join(realHome, ".claude", ".credentials.json"), '{"accessToken":"token"}\n');
+    writeFile(path.join(realHome, ".claude", "projects", "old-session.jsonl"), "session\n");
+    fs.mkdirSync(path.join(realHome, ".claude", "settings.local.json"), { recursive: true });
+    writeFile(path.join(realHome, ".codex", "auth.json"), '{"OPENAI_API_KEY":"token"}\n');
+    writeFile(path.join(realHome, ".codex", "config.toml"), 'model = "gpt-5.4"\n');
+    writeFile(
+      path.join(realHome, ".codex", "sessions", "2026", "02", "26", "rollout.jsonl"),
+      "session\n",
+    );
 
     process.env.HOME = realHome;
     process.env.USERPROFILE = realHome;
@@ -145,10 +157,28 @@ describe("installTestEnv", () => {
     ).toBe(true);
     expect(
       fs.existsSync(
+        path.join(
+          testEnv.tempHome,
+          ".openclaw",
+          "external-plugins",
+          "glueclaw",
+          "openclaw.plugin.json",
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      fs.existsSync(
         path.join(testEnv.tempHome, ".openclaw", "agents", "main", "agent", "auth-profiles.json"),
       ),
     ).toBe(true);
     expect(fs.existsSync(path.join(testEnv.tempHome, ".claude", ".credentials.json"))).toBe(true);
+    expect(fs.existsSync(path.join(testEnv.tempHome, ".claude", "projects"))).toBe(false);
+    expect(fs.existsSync(path.join(testEnv.tempHome, ".claude", "settings.local.json"))).toBe(
+      false,
+    );
+    expect(fs.existsSync(path.join(testEnv.tempHome, ".codex", "auth.json"))).toBe(true);
+    expect(fs.existsSync(path.join(testEnv.tempHome, ".codex", "config.toml"))).toBe(true);
+    expect(fs.existsSync(path.join(testEnv.tempHome, ".codex", "sessions"))).toBe(false);
   });
 
   it("allows explicit live runs against the real HOME", () => {

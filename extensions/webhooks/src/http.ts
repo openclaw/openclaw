@@ -8,13 +8,15 @@ import {
   createWebhookInFlightLimiter,
   readJsonWebhookBodyOrReject,
   resolveRequestClientIp,
-  resolveWebhookTargetWithAuthOrRejectSync,
+  resolveConfiguredSecretInputString,
+  resolveWebhookTargetWithAuthOrReject,
   withResolvedWebhookRequestPipeline,
   WEBHOOK_IN_FLIGHT_DEFAULTS,
   WEBHOOK_RATE_LIMIT_DEFAULTS,
   type OpenClawConfig,
   type WebhookInFlightLimiter,
 } from "../runtime-api.js";
+import type { WebhookSecretInput } from "./config.js";
 
 type BoundTaskFlowRuntime = ReturnType<PluginRuntime["taskFlow"]["bindSession"]>;
 
@@ -174,7 +176,8 @@ type WebhookAction = z.infer<typeof webhookActionSchema>;
 export type TaskFlowWebhookTarget = {
   routeId: string;
   path: string;
-  secret: string;
+  secretInput: WebhookSecretInput;
+  secretConfigPath: string;
   defaultControllerId: string;
   taskFlow: BoundTaskFlowRuntime;
 };
@@ -308,15 +311,13 @@ function writeJson(res: ServerResponse, statusCode: number, body: unknown): void
 
 function extractSharedSecret(req: IncomingMessage): string {
   const authHeader = Array.isArray(req.headers.authorization)
-    ? String(req.headers.authorization[0] ?? "")
-    : String(req.headers.authorization ?? "");
+    ? (req.headers.authorization[0] ?? "")
+    : (req.headers.authorization ?? "");
   if (normalizeLowercaseStringOrEmpty(authHeader).startsWith("bearer ")) {
     return authHeader.slice("bearer ".length).trim();
   }
   const sharedHeader = req.headers["x-openclaw-webhook-secret"];
-  return Array.isArray(sharedHeader)
-    ? String(sharedHeader[0] ?? "").trim()
-    : String(sharedHeader ?? "").trim();
+  return Array.isArray(sharedHeader) ? (sharedHeader[0] ?? "").trim() : (sharedHeader ?? "").trim();
 }
 
 function timingSafeEquals(left: string, right: string): boolean {
@@ -658,6 +659,7 @@ async function executeWebhookAction(params: {
       };
     }
   }
+  throw new Error("Unsupported webhook action");
 }
 
 export function createTaskFlowWebhookRequestHandler(params: {
@@ -676,6 +678,20 @@ export function createTaskFlowWebhookRequestHandler(params: {
       maxInFlightPerKey: WEBHOOK_IN_FLIGHT_DEFAULTS.maxInFlightPerKey,
       maxTrackedKeys: WEBHOOK_IN_FLIGHT_DEFAULTS.maxTrackedKeys,
     });
+  const resolveTargetSecret = async (
+    target: TaskFlowWebhookTarget,
+  ): Promise<string | undefined> => {
+    if (typeof target.secretInput === "string") {
+      return target.secretInput;
+    }
+    const resolved = await resolveConfiguredSecretInputString({
+      config: params.cfg,
+      env: process.env,
+      value: target.secretInput,
+      path: target.secretConfigPath,
+    });
+    return resolved.value;
+  };
 
   return async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {
     return await withResolvedWebhookRequestPipeline({
@@ -699,11 +715,16 @@ export function createTaskFlowWebhookRequestHandler(params: {
       inFlightLimiter,
       handle: async ({ targets }) => {
         const presentedSecret = extractSharedSecret(req);
-        const target = resolveWebhookTargetWithAuthOrRejectSync({
+        const target = await resolveWebhookTargetWithAuthOrReject({
           targets,
           res,
-          isMatch: (candidate) =>
-            presentedSecret.length > 0 && timingSafeEquals(candidate.secret, presentedSecret),
+          isMatch: async (candidate) => {
+            if (presentedSecret.length === 0) {
+              return false;
+            }
+            const resolvedSecret = await resolveTargetSecret(candidate);
+            return Boolean(resolvedSecret && timingSafeEquals(resolvedSecret, presentedSecret));
+          },
         });
         if (!target) {
           return true;

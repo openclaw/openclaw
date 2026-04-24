@@ -85,6 +85,18 @@ export type GatewayControlUiConfig = {
   basePath?: string;
   /** Optional filesystem root for Control UI assets (defaults to dist/control-ui). */
   root?: string;
+  /**
+   * Embed sandbox mode for hosted Control UI previews.
+   * - strict: no script execution inside embeds
+   * - scripts: allow scripts while keeping embeds origin-isolated (default)
+   * - trusted: allow scripts and same-origin privileges
+   */
+  embedSandbox?: "strict" | "scripts" | "trusted";
+  /**
+   * DANGEROUS: Allow hosted embeds to load absolute external http(s) URLs.
+   * Default off; prefer hosted /__openclaw__/canvas or /__openclaw__/a2ui content.
+   */
+  allowExternalEmbedUrls?: boolean;
   /** Allowed browser origins for Control UI/WebChat websocket connections. */
   allowedOrigins?: string[];
   /**
@@ -428,9 +440,9 @@ export type GatewayConfig = {
    */
   channelHealthCheckMinutes?: number;
   /**
-   * Stale event threshold in minutes for the channel health monitor.
-   * A connected channel that receives no events for this duration is treated
-   * as a stale socket and restarted. Default: 30.
+   * Stale transport-activity threshold in minutes for the channel health monitor.
+   * A connected channel that reports no provider-proven transport activity for
+   * this duration is treated as a stale socket and restarted. Default: 30.
    */
   channelStaleEventThresholdMinutes?: number;
   /**

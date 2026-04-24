@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeChannel } from "../plugins/runtime/runtime-channel.js";
 import { startChannelApprovalHandlerBootstrap } from "./approval-handler-bootstrap.js";
+import { createApprovalNativeRuntimeAdapterStubs } from "./approval-handler.test-helpers.js";
 
 const { createChannelApprovalHandlerFromCapability } = vi.hoisted(() => ({
   createChannelApprovalHandlerFromCapability: vi.fn(),
@@ -28,6 +29,38 @@ describe("startChannelApprovalHandlerBootstrap", () => {
     await Promise.resolve();
   };
 
+  const createApprovalPlugin = () =>
+    ({
+      id: "slack",
+      meta: { label: "Slack" },
+      approvalCapability: {
+        nativeRuntime: createApprovalNativeRuntimeAdapterStubs(),
+      },
+    }) as never;
+
+  const startTestBootstrap = (params: {
+    channelRuntime: ReturnType<typeof createRuntimeChannel>;
+    logger?: unknown;
+  }) =>
+    startChannelApprovalHandlerBootstrap({
+      plugin: createApprovalPlugin(),
+      cfg: {} as never,
+      accountId: "default",
+      channelRuntime: params.channelRuntime,
+      logger: params.logger as never,
+    });
+
+  const registerApprovalContext = (
+    channelRuntime: ReturnType<typeof createRuntimeChannel>,
+    app: unknown = { ok: true },
+  ) =>
+    channelRuntime.runtimeContexts.register({
+      channelId: "slack",
+      accountId: "default",
+      capability: "approval.native",
+      context: { app },
+    });
+
   it("starts and stops the shared approval handler from runtime context registration", async () => {
     const channelRuntime = createRuntimeChannel();
     const start = vi.fn().mockResolvedValue(undefined);
@@ -37,39 +70,9 @@ describe("startChannelApprovalHandlerBootstrap", () => {
       stop,
     });
 
-    const cleanup = await startChannelApprovalHandlerBootstrap({
-      plugin: {
-        id: "slack",
-        meta: { label: "Slack" },
-        approvalCapability: {
-          nativeRuntime: {
-            availability: {
-              isConfigured: vi.fn().mockReturnValue(true),
-              shouldHandle: vi.fn().mockReturnValue(true),
-            },
-            presentation: {
-              buildPendingPayload: vi.fn(),
-              buildResolvedResult: vi.fn(),
-              buildExpiredResult: vi.fn(),
-            },
-            transport: {
-              prepareTarget: vi.fn(),
-              deliverPending: vi.fn(),
-            },
-          },
-        },
-      } as never,
-      cfg: {} as never,
-      accountId: "default",
-      channelRuntime,
-    });
+    const cleanup = await startTestBootstrap({ channelRuntime });
 
-    const lease = channelRuntime.runtimeContexts.register({
-      channelId: "slack",
-      accountId: "default",
-      capability: "approval.native",
-      context: { app: { ok: true } },
-    });
+    const lease = registerApprovalContext(channelRuntime);
     await flushTransitions();
 
     expect(createChannelApprovalHandlerFromCapability).toHaveBeenCalled();
@@ -92,39 +95,9 @@ describe("startChannelApprovalHandlerBootstrap", () => {
       stop,
     });
 
-    const lease = channelRuntime.runtimeContexts.register({
-      channelId: "slack",
-      accountId: "default",
-      capability: "approval.native",
-      context: { app: { ok: true } },
-    });
+    const lease = registerApprovalContext(channelRuntime);
 
-    const cleanup = await startChannelApprovalHandlerBootstrap({
-      plugin: {
-        id: "slack",
-        meta: { label: "Slack" },
-        approvalCapability: {
-          nativeRuntime: {
-            availability: {
-              isConfigured: vi.fn().mockReturnValue(true),
-              shouldHandle: vi.fn().mockReturnValue(true),
-            },
-            presentation: {
-              buildPendingPayload: vi.fn(),
-              buildResolvedResult: vi.fn(),
-              buildExpiredResult: vi.fn(),
-            },
-            transport: {
-              prepareTarget: vi.fn(),
-              deliverPending: vi.fn(),
-            },
-          },
-        },
-      } as never,
-      cfg: {} as never,
-      accountId: "default",
-      channelRuntime,
-    });
+    const cleanup = await startTestBootstrap({ channelRuntime });
 
     expect(createChannelApprovalHandlerFromCapability).toHaveBeenCalledTimes(1);
     expect(start).toHaveBeenCalledTimes(1);
@@ -147,39 +120,9 @@ describe("startChannelApprovalHandlerBootstrap", () => {
     });
     createChannelApprovalHandlerFromCapability.mockReturnValue(runtimePromise);
 
-    const cleanup = await startChannelApprovalHandlerBootstrap({
-      plugin: {
-        id: "slack",
-        meta: { label: "Slack" },
-        approvalCapability: {
-          nativeRuntime: {
-            availability: {
-              isConfigured: vi.fn().mockReturnValue(true),
-              shouldHandle: vi.fn().mockReturnValue(true),
-            },
-            presentation: {
-              buildPendingPayload: vi.fn(),
-              buildResolvedResult: vi.fn(),
-              buildExpiredResult: vi.fn(),
-            },
-            transport: {
-              prepareTarget: vi.fn(),
-              deliverPending: vi.fn(),
-            },
-          },
-        },
-      } as never,
-      cfg: {} as never,
-      accountId: "default",
-      channelRuntime,
-    });
+    const cleanup = await startTestBootstrap({ channelRuntime });
 
-    const lease = channelRuntime.runtimeContexts.register({
-      channelId: "slack",
-      accountId: "default",
-      capability: "approval.native",
-      context: { app: { ok: true } },
-    });
+    const lease = registerApprovalContext(channelRuntime);
     await flushTransitions();
 
     const start = vi.fn().mockResolvedValue(undefined);
@@ -211,47 +154,12 @@ describe("startChannelApprovalHandlerBootstrap", () => {
         stop: stopSecond,
       });
 
-    const cleanup = await startChannelApprovalHandlerBootstrap({
-      plugin: {
-        id: "slack",
-        meta: { label: "Slack" },
-        approvalCapability: {
-          nativeRuntime: {
-            availability: {
-              isConfigured: vi.fn().mockReturnValue(true),
-              shouldHandle: vi.fn().mockReturnValue(true),
-            },
-            presentation: {
-              buildPendingPayload: vi.fn(),
-              buildResolvedResult: vi.fn(),
-              buildExpiredResult: vi.fn(),
-            },
-            transport: {
-              prepareTarget: vi.fn(),
-              deliverPending: vi.fn(),
-            },
-          },
-        },
-      } as never,
-      cfg: {} as never,
-      accountId: "default",
-      channelRuntime,
-    });
+    const cleanup = await startTestBootstrap({ channelRuntime });
 
-    const firstLease = channelRuntime.runtimeContexts.register({
-      channelId: "slack",
-      accountId: "default",
-      capability: "approval.native",
-      context: { app: { ok: "first" } },
-    });
+    const firstLease = registerApprovalContext(channelRuntime, { ok: "first" });
     await flushTransitions();
 
-    const secondLease = channelRuntime.runtimeContexts.register({
-      channelId: "slack",
-      accountId: "default",
-      capability: "approval.native",
-      context: { app: { ok: "second" } },
-    });
+    const secondLease = registerApprovalContext(channelRuntime, { ok: "second" });
     await flushTransitions();
 
     expect(createChannelApprovalHandlerFromCapability).toHaveBeenCalledTimes(2);
@@ -287,40 +195,9 @@ describe("startChannelApprovalHandlerBootstrap", () => {
       .mockResolvedValueOnce({ start, stop })
       .mockResolvedValueOnce({ start, stop });
 
-    const cleanup = await startChannelApprovalHandlerBootstrap({
-      plugin: {
-        id: "slack",
-        meta: { label: "Slack" },
-        approvalCapability: {
-          nativeRuntime: {
-            availability: {
-              isConfigured: vi.fn().mockReturnValue(true),
-              shouldHandle: vi.fn().mockReturnValue(true),
-            },
-            presentation: {
-              buildPendingPayload: vi.fn(),
-              buildResolvedResult: vi.fn(),
-              buildExpiredResult: vi.fn(),
-            },
-            transport: {
-              prepareTarget: vi.fn(),
-              deliverPending: vi.fn(),
-            },
-          },
-        },
-      } as never,
-      cfg: {} as never,
-      accountId: "default",
-      channelRuntime,
-      logger: logger as never,
-    });
+    const cleanup = await startTestBootstrap({ channelRuntime, logger });
 
-    channelRuntime.runtimeContexts.register({
-      channelId: "slack",
-      accountId: "default",
-      capability: "approval.native",
-      context: { app: { ok: true } },
-    });
+    registerApprovalContext(channelRuntime);
     await flushTransitions();
 
     expect(start).toHaveBeenCalledTimes(1);
@@ -349,48 +226,13 @@ describe("startChannelApprovalHandlerBootstrap", () => {
       .mockResolvedValueOnce({ start: secondStart, stop: secondStop })
       .mockResolvedValueOnce({ start: secondStart, stop: secondStop });
 
-    const cleanup = await startChannelApprovalHandlerBootstrap({
-      plugin: {
-        id: "slack",
-        meta: { label: "Slack" },
-        approvalCapability: {
-          nativeRuntime: {
-            availability: {
-              isConfigured: vi.fn().mockReturnValue(true),
-              shouldHandle: vi.fn().mockReturnValue(true),
-            },
-            presentation: {
-              buildPendingPayload: vi.fn(),
-              buildResolvedResult: vi.fn(),
-              buildExpiredResult: vi.fn(),
-            },
-            transport: {
-              prepareTarget: vi.fn(),
-              deliverPending: vi.fn(),
-            },
-          },
-        },
-      } as never,
-      cfg: {} as never,
-      accountId: "default",
-      channelRuntime,
-    });
+    const cleanup = await startTestBootstrap({ channelRuntime });
 
-    channelRuntime.runtimeContexts.register({
-      channelId: "slack",
-      accountId: "default",
-      capability: "approval.native",
-      context: { app: { ok: "first" } },
-    });
+    registerApprovalContext(channelRuntime, { ok: "first" });
     await flushTransitions();
     expect(firstStart).toHaveBeenCalledTimes(1);
 
-    channelRuntime.runtimeContexts.register({
-      channelId: "slack",
-      accountId: "default",
-      capability: "approval.native",
-      context: { app: { ok: "second" } },
-    });
+    registerApprovalContext(channelRuntime, { ok: "second" });
     await flushTransitions();
     expect(secondStart).toHaveBeenCalledTimes(1);
 

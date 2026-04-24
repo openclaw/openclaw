@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { clearPluginManifestRegistryCache } from "../plugins/manifest-registry.js";
-import { validateConfigObjectWithPlugins } from "./config.js";
+import { validateConfigObjectWithPlugins } from "./validation.js";
 
 vi.unmock("../version.js");
 
@@ -109,7 +109,6 @@ describe("config plugin validation", () => {
       OPENCLAW_HOME: undefined,
       OPENCLAW_STATE_DIR: path.join(suiteHome, ".openclaw"),
       OPENCLAW_PLUGIN_MANIFEST_CACHE_MS: "10000",
-      OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
       OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
       OPENCLAW_VERSION: undefined,
       VITEST: "true",
@@ -228,11 +227,6 @@ describe("config plugin validation", () => {
     });
   });
 
-  afterEach(() => {
-    vi.restoreAllMocks();
-    clearPluginManifestRegistryCache();
-  });
-
   afterAll(async () => {
     await fs.rm(fixtureRoot, { recursive: true, force: true });
     clearPluginManifestRegistryCache();
@@ -276,6 +270,35 @@ describe("config plugin validation", () => {
           "plugin not found: missing-plugin (stale config entry ignored; remove it from plugins config)",
       });
     }
+  });
+
+  it("warns with actionable guidance when a runtime command name is used in plugins.allow", async () => {
+    const res = validateInSuite({
+      agents: { list: [{ id: "pi" }] },
+      plugins: {
+        allow: ["dreaming"],
+        entries: {
+          "memory-core": {
+            config: { dreaming: { enabled: true } },
+          },
+        },
+      },
+    });
+    // Should not produce the generic "plugin not found" warning.
+    expect(
+      res.warnings?.some(
+        (w) => w.path === "plugins.allow" && w.message.includes("plugin not found: dreaming"),
+      ),
+    ).toBe(false);
+    // Should produce a helpful redirect to the parent plugin.
+    expect(
+      res.warnings?.some(
+        (w) =>
+          w.path === "plugins.allow" &&
+          w.message.includes('"dreaming" is not a plugin') &&
+          w.message.includes("memory-core"),
+      ),
+    ).toBe(true);
   });
 
   it("does not fail validation for the implicit default memory slot when plugins config is explicit", async () => {

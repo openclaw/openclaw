@@ -1,16 +1,13 @@
-import type { PluginRuntime } from "../plugins/runtime/types.js";
-
-export type ChannelRuntimeContextKey = {
-  channelId: string;
-  accountId?: string | null;
-  capability: string;
-};
+import type {
+  ChannelRuntimeContextKey,
+  ChannelRuntimeSurface,
+} from "../channels/plugins/channel-runtime-surface.types.js";
 
 const NOOP_DISPOSE = () => {};
 
 function resolveScopedRuntimeContextRegistry(params: {
-  channelRuntime: PluginRuntime["channel"];
-}): PluginRuntime["channel"]["runtimeContexts"] {
+  channelRuntime: ChannelRuntimeSurface;
+}): ChannelRuntimeSurface["runtimeContexts"] {
   const runtimeContexts = resolveRuntimeContextRegistry(params);
   if (
     runtimeContexts &&
@@ -26,14 +23,14 @@ function resolveScopedRuntimeContextRegistry(params: {
 }
 
 function resolveRuntimeContextRegistry(params: {
-  channelRuntime?: PluginRuntime["channel"];
-}): PluginRuntime["channel"]["runtimeContexts"] | null {
+  channelRuntime?: ChannelRuntimeSurface;
+}): ChannelRuntimeSurface["runtimeContexts"] | null {
   return params.channelRuntime?.runtimeContexts ?? null;
 }
 
 export function registerChannelRuntimeContext(
   params: ChannelRuntimeContextKey & {
-    channelRuntime?: PluginRuntime["channel"];
+    channelRuntime?: ChannelRuntimeSurface;
     context: unknown;
     abortSignal?: AbortSignal;
   },
@@ -51,9 +48,10 @@ export function registerChannelRuntimeContext(
   });
 }
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Runtime context values are caller-typed by key.
 export function getChannelRuntimeContext<T = unknown>(
   params: ChannelRuntimeContextKey & {
-    channelRuntime?: PluginRuntime["channel"];
+    channelRuntime?: ChannelRuntimeSurface;
   },
 ): T | undefined {
   const runtimeContexts = resolveRuntimeContextRegistry(params);
@@ -69,8 +67,8 @@ export function getChannelRuntimeContext<T = unknown>(
 
 export function watchChannelRuntimeContexts(
   params: ChannelRuntimeContextKey & {
-    channelRuntime?: PluginRuntime["channel"];
-    onEvent: Parameters<PluginRuntime["channel"]["runtimeContexts"]["watch"]>[0]["onEvent"];
+    channelRuntime?: ChannelRuntimeSurface;
+    onEvent: Parameters<ChannelRuntimeSurface["runtimeContexts"]["watch"]>[0]["onEvent"];
   },
 ): (() => void) | null {
   const runtimeContexts = resolveRuntimeContextRegistry(params);
@@ -86,9 +84,9 @@ export function watchChannelRuntimeContexts(
 }
 
 export function createTaskScopedChannelRuntime(params: {
-  channelRuntime?: PluginRuntime["channel"];
+  channelRuntime?: ChannelRuntimeSurface;
 }): {
-  channelRuntime?: PluginRuntime["channel"];
+  channelRuntime?: ChannelRuntimeSurface;
   dispose: () => void;
 } {
   const baseRuntime = params.channelRuntime;
@@ -116,7 +114,7 @@ export function createTaskScopedChannelRuntime(params: {
     };
   };
 
-  const scopedRuntime: PluginRuntime["channel"] = {
+  const scopedRuntime: ChannelRuntimeSurface = {
     ...baseRuntime,
     runtimeContexts: {
       ...runtimeContexts,

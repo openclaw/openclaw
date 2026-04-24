@@ -199,6 +199,20 @@ export function registerVoiceCallCli(params: {
     });
 
   root
+    .command("dtmf")
+    .description("Send DTMF digits to an active call")
+    .requiredOption("--call-id <id>", "Call ID")
+    .requiredOption("--digits <digits>", "DTMF digits")
+    .action(async (options: { callId: string; digits: string }) => {
+      const rt = await ensureRuntime();
+      const result = await rt.manager.sendDtmf(options.callId, options.digits);
+      if (!result.success) {
+        throw new Error(result.error || "dtmf failed");
+      }
+      writeStdoutJson(result);
+    });
+
+  root
     .command("end")
     .description("Hang up an active call")
     .requiredOption("--call-id <id>", "Call ID")
@@ -327,8 +341,8 @@ export function registerVoiceCallCli(params: {
       async (options: { mode?: string; port?: string; path?: string; servePath?: string }) => {
         const mode = resolveMode(options.mode ?? "funnel");
         const servePort = Number(options.port ?? config.serve.port ?? 3334);
-        const servePath = String(options.servePath ?? config.serve.path ?? "/voice/webhook");
-        const tsPath = String(options.path ?? config.tailscale?.path ?? servePath);
+        const servePath = options.servePath ?? config.serve.path ?? "/voice/webhook";
+        const tsPath = options.path ?? config.tailscale?.path ?? servePath;
 
         const localUrl = `http://127.0.0.1:${servePort}`;
 

@@ -196,10 +196,17 @@ export const pl: TranslationMap = {
       wsUrl: "URL WebSocket",
       token: "Token Gateway",
       password: "Hasło (nie jest przechowywane)",
+      passwordPlaceholder: "hasło systemowe lub współdzielone",
       sessionKey: "Domyślny klucz sesji",
       language: "Język",
       connectHint: "Kliknij Połącz, aby zastosować zmiany połączenia.",
       trustedProxy: "Uwierzytelniono przez zaufany serwer proxy.",
+      showToken: "Pokaż token",
+      hideToken: "Ukryj token",
+      toggleTokenVisibility: "Przełącz widoczność tokenu",
+      showPassword: "Pokaż hasło",
+      hidePassword: "Ukryj hasło",
+      togglePasswordVisibility: "Przełącz widoczność hasła",
     },
     snapshot: {
       title: "Migawka",
@@ -237,8 +244,19 @@ export const pl: TranslationMap = {
     },
     pairing: {
       hint: "To urządzenie wymaga zatwierdzenia parowania przez host Gateway.",
+      scopeUpgradeTitle: "Rozszerzenie zakresu oczekuje na zatwierdzenie.",
+      scopeUpgradeSummary:
+        "To urządzenie jest już sparowane, ale żądane rozszerzenie zakresu oczekuje na zatwierdzenie.",
+      roleUpgradeTitle: "Zmiana roli oczekuje na zatwierdzenie.",
+      roleUpgradeSummary:
+        "To urządzenie jest już sparowane, ale żądana zmiana roli oczekuje na zatwierdzenie.",
+      metadataUpgradeTitle: "Zmiana metadanych urządzenia oczekuje na zatwierdzenie.",
+      metadataUpgradeSummary:
+        "To urządzenie jest już sparowane, ale zmiana metadanych oczekuje na zatwierdzenie.",
       mobileHint:
         "Na urządzeniu mobilnym? Skopiuj pełny URL (w tym #token=...) z openclaw dashboard --no-open na komputerze.",
+      docsTitle: "Dokumentacja parowania urządzeń (otwiera się w nowej karcie)",
+      docsLink: "Dokumentacja: Parowanie urządzeń",
     },
     insecure: {
       hint: "Ta strona używa HTTP, więc przeglądarka blokuje tożsamość urządzenia. Użyj HTTPS (Tailscale Serve) lub otwórz {url} na hoście Gateway.",
@@ -252,11 +270,29 @@ export const pl: TranslationMap = {
       step4: "Lub wygeneruj token wielokrotnego użytku:",
       docsHint: "Do zdalnego dostępu zalecany jest Tailscale Serve. ",
       docsLink: "Przeczytaj dokumentację →",
+      authDocsTitle: "Dokumentacja uwierzytelniania Control UI (otwiera się w nowej karcie)",
+      authDocsLink: "Dokumentacja: Uwierzytelnianie Control UI",
+      tailscaleDocsTitle: "Dokumentacja Tailscale Serve (otwiera się w nowej karcie)",
+      tailscaleDocsLink: "Dokumentacja: Tailscale Serve",
+      insecureHttpDocsTitle: "Dokumentacja niezabezpieczonego HTTP (otwiera się w nowej karcie)",
+      insecureHttpDocsLink: "Dokumentacja: Niezabezpieczone HTTP",
     },
     cards: {
       cost: "Koszt",
       skills: "Skills",
       recentSessions: "Ostatnie sesje",
+      modelAuth: "Uwierzytelnianie modeli",
+      modelAuthOk: "{count} ok",
+      modelAuthExpired: "{count} wygasło",
+      modelAuthExpiring: "{count} wkrótce wygaśnie",
+      modelAuthProviders: "{count} dostawców",
+      modelAuthUsageLeft: "Pozostało {pct}%",
+      modelAuthExpiresIn: "wygasa {when}",
+      modelAuthAttentionExpiredTitle: "Uwierzytelnianie modeli wygasło",
+      modelAuthAttentionExpiringTitle: "Uwierzytelnianie modeli wkrótce wygaśnie",
+      modelAuthAttentionExpiredDesc:
+        "{providers} — uwierzytelnij ponownie za pomocą openclaw models auth",
+      modelAuthAttentionExpiringEntry: "{provider} ({when})",
     },
     attention: {
       title: "Uwaga",
@@ -282,6 +318,7 @@ export const pl: TranslationMap = {
     tabs: {
       scene: "Scena",
       diary: "Dziennik",
+      advanced: "Zaawansowane",
     },
     header: {
       refresh: "Odśwież",
@@ -295,10 +332,63 @@ export const pl: TranslationMap = {
       promotedSuffix: "promowany",
       nextSweepPrefix: "następne przetwarzanie",
     },
+    scene: {
+      backfill: "Uzupełnij",
+      dedupeDiary: "Dziennik deduplikacji",
+      reset: "Resetuj",
+      clearGrounded: "Wyczyść uziemione",
+      repairCache: "Napraw pamięć podręczną snów",
+      working: "Przetwarzanie…",
+    },
+    phase: {
+      light: "Lekki",
+      deep: "Głęboki",
+      rem: "Rem",
+      off: "wył.",
+    },
+    advanced: {
+      eyebrow: "Przegląd",
+      title: "Przegląd dziennego dziennika",
+      description:
+        "Sprawdź, co pochodzi z dziennego dziennika, co czeka na awans i co zostało ostatnio awansowane.",
+      summaryFromDailyLog: "z dziennego dziennika",
+      summaryWaiting: "oczekujące",
+      summaryPromotedToday: "awansowane dzisiaj",
+      stagedTitle: "Z dziennego dziennika",
+      stagedDescription:
+        "Kandydaci do odtworzenia wyciągnięci ze starszych wpisów dziennego dziennika.",
+      shortTermTitle: "Oczekujące na awans",
+      shortTermDescription:
+        "Bieżący kandydaci krótkoterminowi czekający na przejście do prawdziwej pamięci.",
+      sortRecent: "Najnowsze",
+      sortSignals: "Najsilniejsze wsparcie",
+      originDailyLog: "odtworzone",
+      originLive: "na żywo",
+      originMixed: "mieszane",
+      promotedTitle: "Ostatnie awanse",
+      promotedDescription: "Elementy, które przeszły już proces awansu.",
+      emptyGrounded: "Obecnie nie ma przygotowanych wpisów do odtworzenia opartych na dzienniku.",
+      emptyShortTerm: "Brak krótkoterminowych wpisów do sprawdzenia.",
+      emptyPromoted: "Brak ostatnich awansów do sprawdzenia.",
+      updatedPrefix: "zaktualizowano",
+    },
     stats: {
       shortTerm: "Krótkoterminowe",
+      grounded: "Uziemione",
       signals: "Sygnały",
+      promoted: "Promowane",
       phaseHits: "Trafienia faz",
+    },
+    trace: {
+      shortTerm: "Krótkoterminowe",
+      grounded: "Uziemione",
+      signals: "Sygnały",
+      promoted: "Promowane",
+      groundedLed: "grounded-led",
+      emptyShortTerm: "Brak aktywnych elementów krótkoterminowych.",
+      emptyGrounded: "Brak przygotowanych uziemionych elementów.",
+      emptySignals: "Brak aktywnych sygnałów.",
+      emptyPromoted: "Nic nie zostało jeszcze dziś promowane.",
     },
     diary: {
       title: "Dziennik snów",
@@ -560,6 +650,12 @@ export const pl: TranslationMap = {
   login: {
     subtitle: "Panel Gateway",
     passwordPlaceholder: "opcjonalne",
+    showToken: "Pokaż token",
+    hideToken: "Ukryj token",
+    toggleTokenVisibility: "Przełącz widoczność tokenu",
+    showPassword: "Pokaż hasło",
+    hidePassword: "Ukryj hasło",
+    togglePasswordVisibility: "Przełącz widoczność hasła",
   },
   chat: {
     disconnected: "Rozłączono z Gateway.",
@@ -586,6 +682,7 @@ export const pl: TranslationMap = {
     uk: "Українська (ukraiński)",
     id: "Bahasa Indonesia (indonezyjski)",
     pl: "Polski (polski)",
+    th: "ไทย (tajski)",
   },
   cron: {
     summary: {

@@ -1,4 +1,7 @@
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 
 export type DurationMsParseOptions = {
   defaultUnit?: "ms" | "s" | "m" | "h" | "d";
@@ -13,7 +16,7 @@ const DURATION_MULTIPLIERS: Record<string, number> = {
 };
 
 export function parseDurationMs(raw: string, opts?: DurationMsParseOptions): number {
-  const trimmed = normalizeLowercaseStringOrEmpty(String(raw ?? "").trim());
+  const trimmed = normalizeLowercaseStringOrEmpty(normalizeOptionalString(raw) ?? "");
   if (!trimmed) {
     throw new Error("invalid duration (empty)");
   }

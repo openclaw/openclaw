@@ -8,6 +8,7 @@ import {
   resolveProviderRequestAttributionHeaders,
   resolveProviderRequestCapabilities,
   resolveProviderRequestPolicy,
+  describeProviderRequestRoutingSummary,
 } from "./provider-attribution.js";
 
 describe("provider attribution", () => {
@@ -303,6 +304,77 @@ describe("provider attribution", () => {
     ).toBeUndefined();
   });
 
+  it("summarizes proxy-like, local, invalid, default, and native routing compactly", () => {
+    expect(
+      describeProviderRequestRoutingSummary({
+        provider: "openai",
+        api: "openai-responses",
+      }),
+    ).toBe("provider=openai api=openai-responses endpoint=default route=default policy=none");
+
+    expect(
+      describeProviderRequestRoutingSummary({
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "javascript:alert(1)",
+      }),
+    ).toBe("provider=openai api=openai-responses endpoint=invalid route=invalid policy=none");
+
+    expect(
+      describeProviderRequestRoutingSummary({
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "https://proxy.example.com/v1",
+        transport: "stream",
+        capability: "llm",
+      }),
+    ).toBe("provider=openai api=openai-responses endpoint=custom route=proxy-like policy=none");
+
+    expect(
+      describeProviderRequestRoutingSummary({
+        provider: "qwen",
+        api: "openai-responses",
+        baseUrl: "http://localhost:1234/v1",
+        transport: "stream",
+        capability: "llm",
+      }),
+    ).toBe("provider=qwen api=openai-responses endpoint=local route=local policy=none");
+
+    expect(
+      describeProviderRequestRoutingSummary({
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        transport: "stream",
+        capability: "llm",
+      }),
+    ).toBe(
+      "provider=openai api=openai-responses endpoint=openai-public route=native policy=hidden",
+    );
+
+    expect(
+      describeProviderRequestRoutingSummary({
+        provider: "openrouter",
+        api: "openai-responses",
+        baseUrl: "https://openrouter.ai/api/v1",
+        transport: "stream",
+        capability: "llm",
+      }),
+    ).toBe(
+      "provider=openrouter api=openai-responses endpoint=openrouter route=proxy-like policy=documented",
+    );
+
+    expect(
+      describeProviderRequestRoutingSummary({
+        provider: "groq",
+        api: "openai-completions",
+        baseUrl: "https://api.groq.com/openai/v1",
+        transport: "stream",
+        capability: "llm",
+      }),
+    ).toBe("provider=groq api=openai-completions endpoint=groq-native route=native policy=none");
+  });
+
   it("models other provider families without enabling hidden attribution", () => {
     expect(
       resolveProviderRequestPolicy({
@@ -548,6 +620,55 @@ describe("provider attribution", () => {
     });
   });
 
+  it("respects compat.supportsPromptCacheKey override on prompt cache stripping", () => {
+    // compat.supportsPromptCacheKey = true disables the strip even on a
+    // proxy-like endpoint that would otherwise trigger it.
+    expect(
+      resolveProviderRequestCapabilities({
+        provider: "custom-proxy",
+        api: "openai-responses",
+        baseUrl: "https://proxy.example.com/v1",
+        capability: "llm",
+        transport: "stream",
+        compat: { supportsPromptCacheKey: true },
+      }),
+    ).toMatchObject({
+      endpointClass: "custom",
+      shouldStripResponsesPromptCache: false,
+    });
+
+    // compat.supportsPromptCacheKey = false forces the strip even on a
+    // native OpenAI endpoint that would otherwise forward the field.
+    expect(
+      resolveProviderRequestCapabilities({
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        capability: "llm",
+        transport: "stream",
+        compat: { supportsPromptCacheKey: false },
+      }),
+    ).toMatchObject({
+      endpointClass: "openai-public",
+      shouldStripResponsesPromptCache: true,
+    });
+
+    // compat.supportsPromptCacheKey unset preserves the existing default
+    // (strip on proxy-like responses endpoints, preserving the fix from
+    // #48155 for providers that reject the field).
+    expect(
+      resolveProviderRequestCapabilities({
+        provider: "custom-proxy",
+        api: "openai-responses",
+        baseUrl: "https://proxy.example.com/v1",
+        capability: "llm",
+        transport: "stream",
+      }),
+    ).toMatchObject({
+      shouldStripResponsesPromptCache: true,
+    });
+  });
+
   it("resolves shared compat families and native streaming-usage gates", () => {
     expect(
       resolveProviderRequestCapabilities({
@@ -591,13 +712,15 @@ describe("provider attribution", () => {
 
     expect(
       resolveProviderRequestCapabilities({
-        provider: "ollama",
-        modelId: "kimi-k2.5:cloud",
+        provider: "custom-local",
+        api: "openai-completions",
+        baseUrl: "http://127.0.0.1:11434/v1",
         capability: "llm",
         transport: "stream",
       }),
     ).toMatchObject({
-      compatibilityFamily: "moonshot",
+      endpointClass: "local",
+      supportsNativeStreamingUsageCompat: false,
     });
   });
 
@@ -832,6 +955,28 @@ describe("provider attribution", () => {
           allowsResponsesStore: false,
           supportsResponsesStoreField: true,
           shouldStripResponsesPromptCache: true,
+          allowsAnthropicServiceTier: false,
+          supportsNativeStreamingUsageCompat: false,
+        },
+      },
+      {
+        name: "native OpenAI Codex responses",
+        input: {
+          provider: "openai-codex",
+          api: "openai-codex-responses",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          capability: "llm" as const,
+          transport: "stream" as const,
+        },
+        expected: {
+          knownProviderFamily: "openai-family",
+          endpointClass: "openai-codex",
+          isKnownNativeEndpoint: true,
+          allowsOpenAIServiceTier: true,
+          supportsOpenAIReasoningCompatPayload: true,
+          allowsResponsesStore: false,
+          supportsResponsesStoreField: true,
+          shouldStripResponsesPromptCache: false,
           allowsAnthropicServiceTier: false,
           supportsNativeStreamingUsageCompat: false,
         },

@@ -1,9 +1,10 @@
 import type { Command } from "commander";
-import qrcode from "qrcode-terminal";
 import { loadConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasConfiguredSecretInput } from "../config/types.secrets.js";
 import { trimToUndefined } from "../gateway/credentials.js";
 import { resolveRequiredConfiguredSecretRefInputString } from "../gateway/resolve-configured-secret-input-string.js";
+import { renderQrTerminal } from "../media/qr-terminal.ts";
 import { resolvePairingSetupFromConfig, encodePairingSetupCode } from "../pairing/setup-code.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime } from "../runtime.js";
@@ -24,14 +25,9 @@ type QrCliOptions = {
 };
 
 function renderQrAscii(data: string): Promise<string> {
-  return new Promise((resolve) => {
-    qrcode.generate(data, { small: true }, (output: string) => {
-      resolve(output);
-    });
-  });
+  return renderQrTerminal(data, { small: true });
 }
-
-function readDevicePairPublicUrlFromConfig(cfg: ReturnType<typeof loadConfig>): string | undefined {
+function readDevicePairPublicUrlFromConfig(cfg: OpenClawConfig): string | undefined {
   const value = cfg.plugins?.entries?.["device-pair"]?.config?.["publicUrl"];
   if (typeof value !== "string") {
     return undefined;
@@ -41,7 +37,7 @@ function readDevicePairPublicUrlFromConfig(cfg: ReturnType<typeof loadConfig>): 
 }
 
 function shouldResolveLocalGatewayPasswordSecret(
-  cfg: ReturnType<typeof loadConfig>,
+  cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,
 ): boolean {
   if (trimToUndefined(env.OPENCLAW_GATEWAY_PASSWORD)) {
@@ -62,9 +58,7 @@ function shouldResolveLocalGatewayPasswordSecret(
   return !envToken && !configTokenConfigured;
 }
 
-async function resolveLocalGatewayPasswordSecretIfNeeded(
-  cfg: ReturnType<typeof loadConfig>,
-): Promise<void> {
+async function resolveLocalGatewayPasswordSecretIfNeeded(cfg: OpenClawConfig): Promise<void> {
   const resolvedPassword = await resolveRequiredConfiguredSecretRefInputString({
     config: cfg,
     env: process.env,
@@ -121,15 +115,15 @@ export function registerQrCli(program: Command) {
           throw new Error("Use either --token or --password, not both.");
         }
 
-        const token = typeof opts.token === "string" ? opts.token.trim() : "";
-        const password = typeof opts.password === "string" ? opts.password.trim() : "";
+        const token = trimToUndefined(opts.token) ?? "";
+        const password = trimToUndefined(opts.password) ?? "";
         const wantsRemote = opts.remote === true;
 
         const loadedRaw = loadConfig();
         if (wantsRemote && !opts.url && !opts.publicUrl) {
           const tailscaleMode = loadedRaw.gateway?.tailscale?.mode ?? "off";
           const remoteUrl = loadedRaw.gateway?.remote?.url;
-          const hasRemoteUrl = typeof remoteUrl === "string" && remoteUrl.trim().length > 0;
+          const hasRemoteUrl = Boolean(trimToUndefined(remoteUrl));
           const hasTailscaleServe = tailscaleMode === "serve" || tailscaleMode === "funnel";
           if (!hasRemoteUrl && !hasTailscaleServe) {
             throw new Error(
@@ -170,12 +164,8 @@ export function registerQrCli(program: Command) {
           cfg.gateway.auth.token = undefined;
         }
         if (wantsRemote && !token && !password) {
-          const remoteToken =
-            typeof cfg.gateway?.remote?.token === "string" ? cfg.gateway.remote.token.trim() : "";
-          const remotePassword =
-            typeof cfg.gateway?.remote?.password === "string"
-              ? cfg.gateway.remote.password.trim()
-              : "";
+          const remoteToken = trimToUndefined(cfg.gateway?.remote?.token) ?? "";
+          const remotePassword = trimToUndefined(cfg.gateway?.remote?.password) ?? "";
           if (remoteToken) {
             cfg.gateway.auth.mode = "token";
             cfg.gateway.auth.token = remoteToken;

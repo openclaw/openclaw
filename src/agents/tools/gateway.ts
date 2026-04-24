@@ -1,13 +1,17 @@
 import { loadConfig, resolveGatewayPort } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
 import { resolveGatewayCredentialsFromConfig, trimToUndefined } from "../../gateway/credentials.js";
 import {
   resolveLeastPrivilegeOperatorScopesForMethod,
   type OperatorScope,
 } from "../../gateway/method-scopes.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../gateway/protocol/client-info.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { readStringParam } from "./common.js";
 
 export const DEFAULT_GATEWAY_URL = "ws://127.0.0.1:18789";
@@ -59,7 +63,7 @@ function canonicalizeToolGatewayWsUrl(raw: string): { origin: string; key: strin
 }
 
 function validateGatewayUrlOverrideForAgentTools(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   urlOverride: string;
 }): { url: string; target: GatewayOverrideTarget } {
   const { cfg } = params;
@@ -74,8 +78,7 @@ function validateGatewayUrlOverrideForAgentTools(params: {
   ]);
 
   let remoteKey: string | undefined;
-  const remoteUrl =
-    typeof cfg.gateway?.remote?.url === "string" ? cfg.gateway.remote.url.trim() : "";
+  const remoteUrl = normalizeOptionalString(cfg.gateway?.remote?.url) ?? "";
   if (remoteUrl) {
     try {
       const remote = canonicalizeToolGatewayWsUrl(remoteUrl);
@@ -102,7 +105,7 @@ function validateGatewayUrlOverrideForAgentTools(params: {
 }
 
 function resolveGatewayOverrideToken(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   target: GatewayOverrideTarget;
   explicitToken?: string;
 }): string | undefined {

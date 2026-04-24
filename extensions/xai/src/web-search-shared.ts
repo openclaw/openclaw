@@ -1,4 +1,4 @@
-import { postTrustedWebToolsJson, wrapWebContent } from "@openclaw/plugin-sdk/provider-web-search";
+import { postTrustedWebToolsJson, wrapWebContent } from "openclaw/plugin-sdk/provider-web-search";
 import { normalizeXaiModelId } from "../model-id.js";
 import {
   buildXaiResponsesToolBody,
@@ -7,36 +7,12 @@ import {
   XAI_RESPONSES_ENDPOINT,
 } from "./responses-tool-shared.js";
 import { isRecord } from "./tool-config-shared.js";
+import type { XaiWebSearchResponse } from "./web-search-response.types.js";
 export { extractXaiWebSearchContent } from "./responses-tool-shared.js";
+export type { XaiWebSearchResponse } from "./web-search-response.types.js";
 
 export const XAI_WEB_SEARCH_ENDPOINT = XAI_RESPONSES_ENDPOINT;
 export const XAI_DEFAULT_WEB_SEARCH_MODEL = "grok-4-1-fast";
-
-export type XaiWebSearchResponse = {
-  output?: Array<{
-    type?: string;
-    text?: string;
-    content?: Array<{
-      type?: string;
-      text?: string;
-      annotations?: Array<{
-        type?: string;
-        url?: string;
-      }>;
-    }>;
-    annotations?: Array<{
-      type?: string;
-      url?: string;
-    }>;
-  }>;
-  output_text?: string;
-  citations?: string[];
-  inline_citations?: Array<{
-    start_index: number;
-    end_index: number;
-    url: string;
-  }>;
-};
 
 type XaiWebSearchConfig = Record<string, unknown> & {
   model?: unknown;

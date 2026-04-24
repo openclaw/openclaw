@@ -2,34 +2,80 @@ import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import type {
   ChannelApprovalNativeAvailabilityAdapter,
   ChannelApprovalNativeRuntimeAdapter,
-} from "./approval-handler-runtime.js";
-import type { ExecApprovalChannelRuntimeEventKind } from "./exec-approval-channel-runtime.js";
+} from "./approval-handler-runtime-types.js";
+import type { ExecApprovalChannelRuntimeEventKind } from "./exec-approval-channel-runtime.types.js";
 
 export const CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY = "approval.native";
 
-type LazyChannelApprovalNativeRuntimeParams = {
-  load: () => Promise<ChannelApprovalNativeRuntimeAdapter>;
+export function createLazyChannelApprovalNativeRuntimeAdapter<
+  TPendingPayload = unknown,
+  TPreparedTarget = unknown,
+  TPendingEntry = unknown,
+  TBinding = unknown,
+  TFinalPayload = unknown,
+>(params: {
+  load: () => Promise<
+    ChannelApprovalNativeRuntimeAdapter<
+      TPendingPayload,
+      TPreparedTarget,
+      TPendingEntry,
+      TBinding,
+      TFinalPayload
+    >
+  >;
   isConfigured: ChannelApprovalNativeAvailabilityAdapter["isConfigured"];
   shouldHandle: ChannelApprovalNativeAvailabilityAdapter["shouldHandle"];
   eventKinds?: readonly ExecApprovalChannelRuntimeEventKind[];
   resolveApprovalKind?: ChannelApprovalNativeRuntimeAdapter["resolveApprovalKind"];
-};
-
-export function createLazyChannelApprovalNativeRuntimeAdapter(
-  params: LazyChannelApprovalNativeRuntimeParams,
-): ChannelApprovalNativeRuntimeAdapter {
+}): ChannelApprovalNativeRuntimeAdapter<
+  TPendingPayload,
+  TPreparedTarget,
+  TPendingEntry,
+  TBinding,
+  TFinalPayload
+> {
   const loadRuntime = createLazyRuntimeModule(params.load);
-  let loadedRuntime: ChannelApprovalNativeRuntimeAdapter | null = null;
-  const loadResolvedRuntime = async (): Promise<ChannelApprovalNativeRuntimeAdapter> => {
+  let loadedRuntime: ChannelApprovalNativeRuntimeAdapter<
+    TPendingPayload,
+    TPreparedTarget,
+    TPendingEntry,
+    TBinding,
+    TFinalPayload
+  > | null = null;
+  const loadResolvedRuntime = async (): Promise<
+    ChannelApprovalNativeRuntimeAdapter<
+      TPendingPayload,
+      TPreparedTarget,
+      TPendingEntry,
+      TBinding,
+      TFinalPayload
+    >
+  > => {
     const runtime = await loadRuntime();
     loadedRuntime = runtime;
     return runtime;
   };
   const loadRequired = async <TResult>(
-    select: (runtime: ChannelApprovalNativeRuntimeAdapter) => TResult,
+    select: (
+      runtime: ChannelApprovalNativeRuntimeAdapter<
+        TPendingPayload,
+        TPreparedTarget,
+        TPendingEntry,
+        TBinding,
+        TFinalPayload
+      >,
+    ) => TResult,
   ): Promise<TResult> => select(await loadResolvedRuntime());
   const loadOptional = async <TResult>(
-    select: (runtime: ChannelApprovalNativeRuntimeAdapter) => TResult | undefined,
+    select: (
+      runtime: ChannelApprovalNativeRuntimeAdapter<
+        TPendingPayload,
+        TPreparedTarget,
+        TPendingEntry,
+        TBinding,
+        TFinalPayload
+      >,
+    ) => TResult | undefined,
   ): Promise<TResult | undefined> => select(await loadResolvedRuntime());
 
   return {
@@ -63,7 +109,8 @@ export function createLazyChannelApprovalNativeRuntimeAdapter(
     },
     interactions: {
       bindPending: async (runtimeParams) =>
-        (await loadOptional((runtime) => runtime.interactions?.bindPending))?.(runtimeParams),
+        (await loadOptional((runtime) => runtime.interactions?.bindPending))?.(runtimeParams) ??
+        null,
       unbindPending: async (runtimeParams) =>
         await (
           await loadOptional((runtime) => runtime.interactions?.unbindPending)

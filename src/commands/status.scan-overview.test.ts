@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { collectStatusScanOverview } from "./status.scan-overview.ts";
 
 const mocks = vi.hoisted(() => ({
   hasPotentialConfiguredChannels: vi.fn(),
@@ -12,8 +13,8 @@ const mocks = vi.hoisted(() => ({
   buildChannelsTable: vi.fn(),
 }));
 
-vi.mock("../channels/config-presence.js", () => ({
-  hasPotentialConfiguredChannels: mocks.hasPotentialConfiguredChannels,
+vi.mock("../plugins/channel-plugin-ids.js", () => ({
+  hasConfiguredChannelsForReadOnlyScope: mocks.hasPotentialConfiguredChannels,
 }));
 
 vi.mock("../cli/command-config-resolution.js", () => ({
@@ -49,7 +50,6 @@ vi.mock("./status.scan.runtime.js", () => ({
 
 describe("collectStatusScanOverview", () => {
   beforeEach(() => {
-    vi.resetModules();
     vi.clearAllMocks();
 
     mocks.hasPotentialConfiguredChannels.mockReturnValue(true);
@@ -91,13 +91,11 @@ describe("collectStatusScanOverview", () => {
       skipColdStartNetworkChecks: false,
     });
     mocks.callGateway.mockResolvedValue({ channelAccounts: {} });
-    mocks.collectChannelStatusIssues.mockReturnValue([{ channel: "signal", message: "boom" }]);
+    mocks.collectChannelStatusIssues.mockReturnValue([{ channel: "quietchat", message: "boom" }]);
     mocks.buildChannelsTable.mockResolvedValue({ rows: [], details: [] });
   });
 
   it("uses gateway fallback overrides for channels.status when requested", async () => {
-    const { collectStatusScanOverview } = await import("./status.scan-overview.ts");
-
     const result = await collectStatusScanOverview({
       commandName: "status --all",
       opts: { timeoutMs: 1234 },
@@ -119,7 +117,7 @@ describe("collectStatusScanOverview", () => {
         sourceConfig: { session: {} },
       }),
     );
-    expect(result.channelIssues).toEqual([{ channel: "signal", message: "boom" }]);
+    expect(result.channelIssues).toEqual([{ channel: "quietchat", message: "boom" }]);
   });
 
   it("skips channels.status when the gateway is unreachable", async () => {
@@ -149,8 +147,6 @@ describe("collectStatusScanOverview", () => {
       resolveTailscaleHttpsUrl: vi.fn(async () => null),
       skipColdStartNetworkChecks: false,
     });
-    const { collectStatusScanOverview } = await import("./status.scan-overview.ts");
-
     const result = await collectStatusScanOverview({
       commandName: "status",
       opts: {},

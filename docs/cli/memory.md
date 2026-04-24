@@ -4,7 +4,7 @@ read_when:
   - You want to index or search semantic memory
   - You’re debugging memory availability or indexing
   - You want to promote recalled short-term memory into `MEMORY.md`
-title: "memory"
+title: "Memory"
 ---
 
 # `openclaw memory`
@@ -15,6 +15,8 @@ Provided by the active memory plugin (default: `memory-core`; set `plugins.slots
 Related:
 
 - Memory concept: [Memory](/concepts/memory)
+- Memory wiki: [Memory Wiki](/plugins/memory-wiki)
+- Wiki CLI: [wiki](/cli/wiki)
 - Plugins: [Plugins](/tools/plugin)
 
 ## Examples
@@ -53,6 +55,8 @@ openclaw memory index --agent main --verbose
 - `--index`: run a reindex if the store is dirty (implies `--deep`).
 - `--fix`: repair stale recall locks and normalize promotion metadata.
 - `--json`: print JSON output.
+
+If `memory status` shows `Dreaming status: blocked`, the managed dreaming cron is enabled but the heartbeat that drives it is not firing for the default agent. See [Dreaming never runs](/concepts/dreaming#dreaming-never-runs-status-shows-blocked) for the two common causes.
 
 `memory index`:
 
@@ -119,7 +123,7 @@ openclaw memory rem-harness [--agent <id>] [--include-promoted] [--json]
 - `--include-promoted`: include already promoted deep candidates.
 - `--json`: print JSON output.
 
-## Dreaming (experimental)
+## Dreaming
 
 Dreaming is the background memory consolidation system with three cooperative
 phases: **light** (sort/stage short-term material), **deep** (promote durable
@@ -165,4 +169,13 @@ Notes:
 - If effectively active memory remote API key fields are configured as SecretRefs, the command resolves those values from the active gateway snapshot. If gateway is unavailable, the command fails fast.
 - Gateway version skew note: this command path requires a gateway that supports `secrets.resolve`; older gateways return an unknown-method error.
 - Tune scheduled sweep cadence with `dreaming.frequency`. Deep promotion policy is otherwise internal; use CLI flags on `memory promote` when you need one-off manual overrides.
+- `memory rem-harness --path <file-or-dir> --grounded` previews grounded `What Happened`, `Reflections`, and `Possible Lasting Updates` from historical daily notes without writing anything.
+- `memory rem-backfill --path <file-or-dir>` writes reversible grounded diary entries into `DREAMS.md` for UI review.
+- `memory rem-backfill --path <file-or-dir> --stage-short-term` also seeds grounded durable candidates into the live short-term promotion store so the normal deep phase can rank them.
+- `memory rem-backfill --rollback` removes previously written grounded diary entries, and `memory rem-backfill --rollback-short-term` removes previously staged grounded short-term candidates.
 - See [Dreaming](/concepts/dreaming) for full phase descriptions and configuration reference.
+
+## Related
+
+- [CLI reference](/cli)
+- [Memory overview](/concepts/memory)

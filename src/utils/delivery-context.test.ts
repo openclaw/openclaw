@@ -39,6 +39,31 @@ describe("delivery context helpers", () => {
             },
           },
         },
+        {
+          pluginId: "thread-child-chat",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({
+              id: "thread-child-chat",
+              label: "Thread child chat",
+            }),
+            messaging: {
+              resolveDeliveryTarget: ({
+                conversationId,
+                parentConversationId,
+              }: {
+                conversationId: string;
+                parentConversationId?: string;
+              }) => {
+                const parent = parentConversationId?.trim();
+                const child = conversationId.trim();
+                return parent && parent !== child
+                  ? { to: `channel:${parent}`, threadId: child }
+                  : { to: `channel:${child}` };
+              },
+            },
+          },
+        },
       ]),
     );
   });
@@ -147,6 +172,16 @@ describe("delivery context helpers", () => {
       to: "room:!room:example",
       threadId: "$thread",
     });
+  });
+
+  it("resolves parent-scoped thread delivery targets through channel messaging hooks", () => {
+    expect(
+      resolveConversationDeliveryTarget({
+        channel: "thread-child-chat",
+        conversationId: "msg-child-id",
+        parentConversationId: "channel-parent-id",
+      }),
+    ).toEqual({ to: "channel:channel-parent-id", threadId: "msg-child-id" });
   });
 
   it("derives delivery context from a session entry", () => {

@@ -1,4 +1,9 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { mkdtempSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { describe, expect, it, vi } from "vitest";
+import { installDebugProxyTestResetHooks } from "../test-support/debug-proxy-env-test-helpers.js";
+import { createStreamingErrorResponse } from "../test-support/streaming-error-response.js";
 import {
   isValidOpenAIModel,
   isValidOpenAIVoice,
@@ -8,13 +13,22 @@ import {
   resolveOpenAITtsInstructions,
 } from "./tts.js";
 
-describe("openai tts", () => {
-  const originalFetch = globalThis.fetch;
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
+  fetchWithSsrFGuard: async ({
+    url,
+    init,
+  }: {
+    url: string;
+    init?: RequestInit;
+  }): Promise<{ response: Response; release: () => Promise<void> }> => ({
+    response: await globalThis.fetch(url, init),
+    release: vi.fn(async () => {}),
+  }),
+  ssrfPolicyFromHttpBaseUrlAllowedHostname: () => undefined,
+}));
 
-  afterEach(() => {
-    globalThis.fetch = originalFetch;
-    vi.restoreAllMocks();
-  });
+describe("openai tts", () => {
+  const proxyReset = installDebugProxyTestResetHooks();
 
   describe("isValidOpenAIVoice", () => {
     it("accepts all valid OpenAI voices including newer additions", () => {
@@ -80,29 +94,6 @@ describe("openai tts", () => {
   });
 
   describe("openaiTTS diagnostics", () => {
-    function createStreamingErrorResponse(params: {
-      status: number;
-      chunkCount: number;
-      chunkSize: number;
-      byte: number;
-    }): { response: Response; getReadCount: () => number } {
-      let reads = 0;
-      const stream = new ReadableStream<Uint8Array>({
-        pull(controller) {
-          if (reads >= params.chunkCount) {
-            controller.close();
-            return;
-          }
-          reads += 1;
-          controller.enqueue(new Uint8Array(params.chunkSize).fill(params.byte));
-        },
-      });
-      return {
-        response: new Response(stream, { status: params.status }),
-        getReadCount: () => reads,
-      };
-    }
-
     it("includes parsed provider detail and request id for JSON API errors", async () => {
       const fetchMock = vi.fn(
         async () =>
@@ -182,6 +173,98 @@ describe("openai tts", () => {
       ).rejects.toThrow("OpenAI TTS API error (503)");
 
       expect(streamed.getReadCount()).toBeLessThan(200);
+    });
+
+    it("records TTS exchanges in debug proxy capture mode", async () => {
+      const tempDir = mkdtempSync(path.join(os.tmpdir(), "openai-tts-capture-"));
+      proxyReset.captureProxyEnv();
+      process.env.OPENCLAW_DEBUG_PROXY_ENABLED = "1";
+      process.env.OPENCLAW_DEBUG_PROXY_DB_PATH = path.join(tempDir, "capture.sqlite");
+      process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR = path.join(tempDir, "blobs");
+      process.env.OPENCLAW_DEBUG_PROXY_SESSION_ID = "tts-session";
+
+      globalThis.fetch = vi
+        .fn()
+        .mockResolvedValue(
+          new Response(Buffer.from("audio-bytes"), { status: 200 }),
+        ) as unknown as typeof globalThis.fetch;
+
+      const { getDebugProxyCaptureStore } = await import("../../src/proxy-capture/store.sqlite.js");
+      const store = getDebugProxyCaptureStore(
+        process.env.OPENCLAW_DEBUG_PROXY_DB_PATH,
+        process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR,
+      );
+      store.upsertSession({
+        id: "tts-session",
+        startedAt: Date.now(),
+        mode: "test",
+        sourceScope: "openclaw",
+        sourceProcess: "openclaw",
+        dbPath: process.env.OPENCLAW_DEBUG_PROXY_DB_PATH,
+        blobDir: process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR,
+      });
+
+      await openaiTTS({
+        text: "hello",
+        apiKey: "test-key",
+        baseUrl: "https://api.openai.com/v1",
+        model: "gpt-4o-mini-tts",
+        voice: "alloy",
+        responseFormat: "mp3",
+        timeoutMs: 5_000,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      const events = store.getSessionEvents("tts-session", 10);
+      expect(
+        events.some((event) => event.kind === "request" && event.host === "api.openai.com"),
+      ).toBe(true);
+      expect(
+        events.some((event) => event.kind === "response" && event.host === "api.openai.com"),
+      ).toBe(true);
+    });
+
+    it("does not double-capture TTS exchanges when the global fetch patch is installed", async () => {
+      const tempDir = mkdtempSync(path.join(os.tmpdir(), "openai-tts-patched-capture-"));
+      proxyReset.captureProxyEnv();
+      process.env.OPENCLAW_DEBUG_PROXY_ENABLED = "1";
+      process.env.OPENCLAW_DEBUG_PROXY_DB_PATH = path.join(tempDir, "capture.sqlite");
+      process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR = path.join(tempDir, "blobs");
+      process.env.OPENCLAW_DEBUG_PROXY_SESSION_ID = "tts-patched-session";
+
+      globalThis.fetch = vi
+        .fn()
+        .mockResolvedValue(
+          new Response(Buffer.from("audio-bytes"), { status: 200 }),
+        ) as unknown as typeof globalThis.fetch;
+
+      const runtime = await import("../../src/proxy-capture/runtime.js");
+      const { getDebugProxyCaptureStore } = await import("../../src/proxy-capture/store.sqlite.js");
+      runtime.initializeDebugProxyCapture("test");
+
+      await openaiTTS({
+        text: "hello",
+        apiKey: "test-key",
+        baseUrl: "https://api.openai.com/v1",
+        model: "gpt-4o-mini-tts",
+        voice: "alloy",
+        responseFormat: "mp3",
+        timeoutMs: 5_000,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      runtime.finalizeDebugProxyCapture();
+
+      const store = getDebugProxyCaptureStore(
+        process.env.OPENCLAW_DEBUG_PROXY_DB_PATH,
+        process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR,
+      );
+      const events = store
+        .getSessionEvents("tts-patched-session", 10)
+        .filter((event) => event.host === "api.openai.com");
+      expect(events).toHaveLength(2);
+      const kinds = events.map((event) => String(event.kind)).toSorted();
+      expect(kinds).toEqual(["request", "response"]);
+      store.close();
     });
   });
 });

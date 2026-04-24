@@ -6,11 +6,11 @@ export default defineBundledChannelEntry({
   description: "BlueBubbles channel plugin (macOS app)",
   importMetaUrl: import.meta.url,
   plugin: {
-    specifier: "./api.js",
+    specifier: "./channel-plugin-api.js",
     exportName: "bluebubblesPlugin",
   },
   secrets: {
-    specifier: "./src/secret-contract.js",
+    specifier: "./secret-contract-api.js",
     exportName: "channelSecrets",
   },
   runtime: {

@@ -205,6 +205,7 @@ export function mockResolvedDiscordAccountConfig(overrides: Record<string, unkno
   }));
 }
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper lets assertions ascribe handler params shape.
 export function getFirstDiscordMessageHandlerParams<T extends object>() {
   expect(createDiscordMessageHandlerMock).toHaveBeenCalledTimes(1);
   const firstCall = createDiscordMessageHandlerMock.mock.calls.at(0) as [T] | undefined;
@@ -341,7 +342,7 @@ vi.mock("@buape/carbon/gateway", () => ({
 }));
 
 vi.mock("@buape/carbon/voice", () => ({
-  VoicePlugin: class VoicePlugin {},
+  VoicePlugin: function VoicePlugin() {},
 }));
 
 vi.mock("openclaw/plugin-sdk/acp-runtime", async () => {
@@ -472,11 +473,11 @@ vi.mock(buildDiscordSourceModuleId("monitor/gateway-plugin.js"), () => ({
 }));
 
 vi.mock(buildDiscordSourceModuleId("monitor/listeners.js"), () => ({
-  DiscordMessageListener: class DiscordMessageListener {},
-  DiscordPresenceListener: class DiscordPresenceListener {},
-  DiscordReactionListener: class DiscordReactionListener {},
-  DiscordReactionRemoveListener: class DiscordReactionRemoveListener {},
-  DiscordThreadUpdateListener: class DiscordThreadUpdateListener {},
+  DiscordMessageListener: function DiscordMessageListener() {},
+  DiscordPresenceListener: function DiscordPresenceListener() {},
+  DiscordReactionListener: function DiscordReactionListener() {},
+  DiscordReactionRemoveListener: function DiscordReactionRemoveListener() {},
+  DiscordThreadUpdateListener: function DiscordThreadUpdateListener() {},
   registerDiscordListener: vi.fn(),
 }));
 

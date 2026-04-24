@@ -1,24 +1,35 @@
-import { isDeepStrictEqual } from "node:util";
-import { normalizeProviderId } from "../../../agents/model-selection.js";
-import { resolveSingleAccountKeysToMove } from "../../../channels/plugins/setup-helpers.js";
-import type { OpenClawConfig } from "../../../config/config.js";
+import { isLegacyModelsAddCodexMetadataModel } from "../../../agents/openai-codex-models-add-legacy.js";
+import { normalizeProviderId } from "../../../agents/provider-id.js";
+import { resolveSingleAccountKeysToMove } from "../../../channels/plugins/setup-promotion-helpers.js";
 import { resolveNormalizedProviderModelMaxTokens } from "../../../config/defaults.js";
-import { normalizeTalkSection } from "../../../config/talk.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { DEFAULT_GOOGLE_API_BASE_URL } from "../../../infra/google-api-base-url.js";
 import { DEFAULT_ACCOUNT_ID } from "../../../routing/session-key.js";
-import { normalizeOptionalLowercaseString } from "../../../shared/string-coerce.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../../shared/string-coerce.js";
+import { sanitizeForLog } from "../../../terminal/ansi.js";
 import { isRecord } from "./legacy-config-record-shared.js";
+export { normalizeLegacyTalkConfig } from "./legacy-talk-config-normalizer.js";
 
-function buildLegacyTalkProviderCompat(
-  talk: Record<string, unknown>,
-): Record<string, unknown> | undefined {
-  const compat: Record<string, unknown> = {};
-  for (const key of ["voiceId", "voiceAliases", "modelId", "outputFormat", "apiKey"] as const) {
-    if (talk[key] !== undefined) {
-      compat[key] = talk[key];
-    }
+export function normalizeLegacyCommandsConfig(
+  cfg: OpenClawConfig,
+  changes: string[],
+): OpenClawConfig {
+  const rawCommands = cfg.commands;
+  if (!isRecord(rawCommands) || !("modelsWrite" in rawCommands)) {
+    return cfg;
   }
-  return Object.keys(compat).length > 0 ? compat : undefined;
+
+  const commands = { ...rawCommands };
+  delete commands.modelsWrite;
+  changes.push("Removed deprecated commands.modelsWrite (/models add is deprecated).");
+
+  return {
+    ...cfg,
+    commands: commands as OpenClawConfig["commands"],
+  };
 }
 
 export function normalizeLegacyBrowserConfig(
@@ -49,7 +60,7 @@ export function normalizeLegacyBrowserConfig(
       if (!isRecord(rawProfile)) {
         continue;
       }
-      const rawDriver = typeof rawProfile.driver === "string" ? rawProfile.driver.trim() : "";
+      const rawDriver = normalizeOptionalString(rawProfile.driver) ?? "";
       if (rawDriver !== "extension") {
         continue;
       }
@@ -180,6 +191,260 @@ type ModelProviderEntry = Partial<
   NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>[string]
 >;
 type ModelsConfigPatch = Partial<NonNullable<OpenClawConfig["models"]>>;
+type ModelDefinitionEntry = NonNullable<ModelProviderEntry["models"]>[number];
+type AgentEmbeddedHarnessPatch = NonNullable<
+  NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["embeddedHarness"]
+>;
+
+const LEGACY_CODEX_PROVIDER_ID = "codex";
+const OPENAI_PROVIDER_ID = "openai";
+const CODEX_HARNESS_RUNTIME = "codex";
+
+function migrateLegacyCodexModelRef(raw: string): string | null {
+  const trimmed = raw.trim();
+  const separatorIndex = trimmed.indexOf("/");
+  if (separatorIndex <= 0 || separatorIndex === trimmed.length - 1) {
+    return null;
+  }
+  if (normalizeProviderId(trimmed.slice(0, separatorIndex)) !== LEGACY_CODEX_PROVIDER_ID) {
+    return null;
+  }
+  return `${OPENAI_PROVIDER_ID}/${trimmed.slice(separatorIndex + 1)}`;
+}
+
+function normalizeLegacyCodexAgentModelConfig(raw: unknown): {
+  value?: unknown;
+  changed: boolean;
+  codexPrimarySelected: boolean;
+} {
+  if (typeof raw === "string") {
+    const migrated = migrateLegacyCodexModelRef(raw);
+    return migrated
+      ? { value: migrated, changed: true, codexPrimarySelected: true }
+      : { value: raw, changed: false, codexPrimarySelected: false };
+  }
+  if (!isRecord(raw)) {
+    return { value: raw, changed: false, codexPrimarySelected: false };
+  }
+
+  const migratedPrimary =
+    typeof raw.primary === "string" ? migrateLegacyCodexModelRef(raw.primary) : null;
+  if (!migratedPrimary) {
+    return { value: raw, changed: false, codexPrimarySelected: false };
+  }
+
+  const next: Record<string, unknown> = { ...raw, primary: migratedPrimary };
+  if (Array.isArray(raw.fallbacks)) {
+    next.fallbacks = raw.fallbacks.map((fallback) => {
+      if (typeof fallback !== "string") {
+        return fallback;
+      }
+      return migrateLegacyCodexModelRef(fallback) ?? fallback;
+    });
+  }
+  return { value: next, changed: true, codexPrimarySelected: true };
+}
+
+function mergeModelEntry(legacyEntry: unknown, currentEntry: unknown): unknown {
+  if (!isRecord(legacyEntry) || !isRecord(currentEntry)) {
+    return currentEntry ?? legacyEntry;
+  }
+  return { ...legacyEntry, ...currentEntry };
+}
+
+function normalizeLegacyCodexAllowlistModels(
+  rawModels: unknown,
+  migrateCodexKeys: boolean,
+): {
+  value?: unknown;
+  changed: boolean;
+} {
+  if (!migrateCodexKeys || !isRecord(rawModels)) {
+    return { value: rawModels, changed: false };
+  }
+
+  let changed = false;
+  const next: Record<string, unknown> = {};
+  const legacyEntries: Array<[string, unknown]> = [];
+  for (const [rawKey, entry] of Object.entries(rawModels)) {
+    const migratedKey = migrateLegacyCodexModelRef(rawKey);
+    if (migratedKey) {
+      changed = true;
+      legacyEntries.push([migratedKey, entry]);
+      continue;
+    }
+    next[rawKey] = mergeModelEntry(entry, next[rawKey]);
+  }
+  for (const [migratedKey, entry] of legacyEntries) {
+    next[migratedKey] = mergeModelEntry(entry, next[migratedKey]);
+  }
+  return { value: next, changed };
+}
+
+function ensureCodexEmbeddedHarness(raw: unknown): {
+  value: AgentEmbeddedHarnessPatch;
+  changed: boolean;
+} {
+  if (!isRecord(raw)) {
+    return { value: { runtime: CODEX_HARNESS_RUNTIME }, changed: true };
+  }
+  const runtime = normalizeOptionalLowercaseString(raw.runtime);
+  if (runtime === CODEX_HARNESS_RUNTIME) {
+    return { value: raw as AgentEmbeddedHarnessPatch, changed: false };
+  }
+  return {
+    value: { ...raw, runtime: CODEX_HARNESS_RUNTIME } as AgentEmbeddedHarnessPatch,
+    changed: true,
+  };
+}
+
+function normalizeLegacyCodexAgentContainer(
+  raw: Record<string, unknown>,
+  path: string,
+  changes: string[],
+): { value: Record<string, unknown>; changed: boolean } {
+  let changed = false;
+  const next: Record<string, unknown> = { ...raw };
+
+  const model = normalizeLegacyCodexAgentModelConfig(raw.model);
+  if (model.changed) {
+    next.model = model.value;
+    changed = true;
+    changes.push(`Moved ${path}.model legacy codex/* primary refs to openai/* with Codex harness.`);
+  }
+
+  const models = normalizeLegacyCodexAllowlistModels(raw.models, model.codexPrimarySelected);
+  if (models.changed) {
+    next.models = models.value;
+    changed = true;
+    changes.push(`Moved ${path}.models legacy codex/* keys to openai/*.`);
+  }
+
+  if (model.codexPrimarySelected) {
+    const harness = ensureCodexEmbeddedHarness(raw.embeddedHarness);
+    if (harness.changed) {
+      next.embeddedHarness = harness.value;
+      changed = true;
+    }
+  }
+
+  return { value: next, changed };
+}
+
+export function normalizeLegacyCodexHarnessModelRefs(
+  cfg: OpenClawConfig,
+  changes: string[],
+): OpenClawConfig {
+  const rawAgents = cfg.agents;
+  if (!isRecord(rawAgents)) {
+    return cfg;
+  }
+
+  let changed = false;
+  const nextAgents: Record<string, unknown> = { ...rawAgents };
+  if (isRecord(rawAgents.defaults)) {
+    const defaults = normalizeLegacyCodexAgentContainer(
+      rawAgents.defaults,
+      "agents.defaults",
+      changes,
+    );
+    if (defaults.changed) {
+      nextAgents.defaults = defaults.value;
+      changed = true;
+    }
+  }
+
+  if (Array.isArray(rawAgents.list)) {
+    const nextList = rawAgents.list.map((entry, index) => {
+      if (!isRecord(entry)) {
+        return entry;
+      }
+      const agentId = normalizeOptionalString(entry.id) ?? String(index);
+      const agent = normalizeLegacyCodexAgentContainer(entry, `agents.list.${agentId}`, changes);
+      if (!agent.changed) {
+        return entry;
+      }
+      changed = true;
+      return agent.value;
+    });
+    if (changed) {
+      nextAgents.list = nextList;
+    }
+  }
+
+  if (!changed) {
+    return cfg;
+  }
+  return {
+    ...cfg,
+    agents: nextAgents as OpenClawConfig["agents"],
+  };
+}
+
+export function normalizeLegacyOpenAICodexModelsAddMetadata(
+  cfg: OpenClawConfig,
+  changes: string[],
+): OpenClawConfig {
+  const rawModels = cfg.models;
+  if (!isRecord(rawModels) || !isRecord(rawModels.providers)) {
+    return cfg;
+  }
+
+  let providersChanged = false;
+  const nextProviders = { ...rawModels.providers };
+  for (const [providerId, rawProvider] of Object.entries(rawModels.providers)) {
+    if (normalizeProviderId(providerId) !== "openai-codex" || !isRecord(rawProvider)) {
+      continue;
+    }
+    const rawProviderModels = rawProvider.models;
+    if (!Array.isArray(rawProviderModels)) {
+      continue;
+    }
+    let providerChanged = false;
+    const nextModels: typeof rawProviderModels = [];
+    for (const model of rawProviderModels) {
+      if (
+        isRecord(model) &&
+        !("metadataSource" in model) &&
+        isLegacyModelsAddCodexMetadataModel({
+          provider: providerId,
+          model: model as Partial<ModelDefinitionEntry>,
+        })
+      ) {
+        providerChanged = true;
+        const safeProviderId = sanitizeForLog(providerId);
+        const safeModelId = sanitizeForLog(model.id);
+        changes.push(
+          `Marked models.providers.${safeProviderId}.models.${safeModelId} as /models add metadata so official OpenAI Codex metadata can override it.`,
+        );
+        nextModels.push(Object.assign({}, model, { metadataSource: "models-add" }));
+      } else {
+        nextModels.push(model);
+      }
+    }
+
+    if (!providerChanged) {
+      continue;
+    }
+    nextProviders[providerId] = {
+      ...rawProvider,
+      models: nextModels,
+    } as (typeof nextProviders)[string];
+    providersChanged = true;
+  }
+
+  if (!providersChanged) {
+    return cfg;
+  }
+
+  return {
+    ...cfg,
+    models: {
+      ...rawModels,
+      providers: nextProviders as NonNullable<OpenClawConfig["models"]>["providers"],
+    },
+  };
+}
 
 export function normalizeLegacyNanoBananaSkill(
   cfg: OpenClawConfig,
@@ -254,12 +519,11 @@ export function normalizeLegacyNanoBananaSkill(
   }
 
   const legacyEnv = isRecord(rawLegacyEntry.env) ? rawLegacyEntry.env : undefined;
-  const legacyEnvApiKey =
-    typeof legacyEnv?.GEMINI_API_KEY === "string" ? legacyEnv.GEMINI_API_KEY.trim() : "";
+  const legacyEnvApiKey = normalizeOptionalString(legacyEnv?.GEMINI_API_KEY) ?? "";
   const legacyApiKey =
     legacyEnvApiKey ||
     (typeof rawLegacyEntry.apiKey === "string"
-      ? rawLegacyEntry.apiKey.trim()
+      ? normalizeOptionalString(rawLegacyEntry.apiKey)
       : rawLegacyEntry.apiKey && isRecord(rawLegacyEntry.apiKey)
         ? structuredClone(rawLegacyEntry.apiKey)
         : undefined);
@@ -315,36 +579,6 @@ export function normalizeLegacyNanoBananaSkill(
   return {
     ...next,
     skills,
-  };
-}
-
-export function normalizeLegacyTalkConfig(cfg: OpenClawConfig, changes: string[]): OpenClawConfig {
-  const rawTalk = cfg.talk;
-  if (!isRecord(rawTalk)) {
-    return cfg;
-  }
-
-  const normalizedTalk = normalizeTalkSection(rawTalk as OpenClawConfig["talk"]) ?? {};
-  const legacyProviderCompat = buildLegacyTalkProviderCompat(rawTalk);
-  if (legacyProviderCompat) {
-    normalizedTalk.providers = {
-      ...normalizedTalk.providers,
-      elevenlabs: {
-        ...legacyProviderCompat,
-        ...normalizedTalk.providers?.elevenlabs,
-      },
-    };
-  }
-  if (Object.keys(normalizedTalk).length === 0 || isDeepStrictEqual(normalizedTalk, rawTalk)) {
-    return cfg;
-  }
-
-  changes.push(
-    "Normalized talk.provider/providers shape (trimmed provider ids and merged missing compatibility fields).",
-  );
-  return {
-    ...cfg,
-    talk: normalizedTalk,
   };
 }
 
@@ -545,7 +779,7 @@ export function normalizeLegacyMistralModelMaxTokens(
       if (!isRecord(model)) {
         return model;
       }
-      const modelId = typeof model.id === "string" ? model.id.trim() : "";
+      const modelId = normalizeOptionalString(model.id) ?? "";
       const contextWindow =
         typeof model.contextWindow === "number" && Number.isFinite(model.contextWindow)
           ? model.contextWindow
@@ -572,10 +806,7 @@ export function normalizeLegacyMistralModelMaxTokens(
       changes.push(
         `Normalized models.providers.${providerId}.models[${index}].maxTokens (${maxTokens} → ${normalizedMaxTokens}) to avoid Mistral context-window rejects.`,
       );
-      return {
-        ...model,
-        maxTokens: normalizedMaxTokens,
-      };
+      return Object.assign({}, model, { maxTokens: normalizedMaxTokens });
     });
 
     if (!modelsChanged) {

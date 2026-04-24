@@ -10,6 +10,57 @@ import {
   resolveConfigAuditLogPath,
 } from "./io.audit.js";
 
+function createAuditRecordBase(configPath: string) {
+  return createConfigWriteAuditRecordBase({
+    configPath,
+    env: {} as NodeJS.ProcessEnv,
+    existsBefore: true,
+    previousHash: "prev-hash",
+    nextHash: "next-hash",
+    previousBytes: 12,
+    nextBytes: 24,
+    previousMetadata: {
+      dev: "10",
+      ino: "11",
+      mode: 0o600,
+      nlink: 1,
+      uid: 501,
+      gid: 20,
+    },
+    changedPathCount: 1,
+    hasMetaBefore: true,
+    hasMetaAfter: true,
+    gatewayModeBefore: "local",
+    gatewayModeAfter: "local",
+    suspicious: [],
+    now: "2026-04-07T08:00:00.000Z",
+  });
+}
+
+function createRenameAuditRecord(home: string) {
+  return finalizeConfigWriteAuditRecord({
+    base: createAuditRecordBase(path.join(home, ".openclaw", "openclaw.json")),
+    result: "rename",
+    nextMetadata: {
+      dev: "12",
+      ino: "13",
+      mode: 0o600,
+      nlink: 1,
+      uid: 501,
+      gid: 20,
+    },
+  });
+}
+
+function readAuditLog(home: string): unknown[] {
+  const auditPath = path.join(home, ".openclaw", "logs", "config-audit.jsonl");
+  return fs
+    .readFileSync(auditPath, "utf-8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+}
+
 describe("config io audit helpers", () => {
   const suiteRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-config-audit-" });
 
@@ -108,30 +159,7 @@ describe("config io audit helpers", () => {
   });
 
   it("drops next-file metadata and preserves error details for failed writes", () => {
-    const base = createConfigWriteAuditRecordBase({
-      configPath: "/tmp/openclaw.json",
-      env: {} as NodeJS.ProcessEnv,
-      existsBefore: true,
-      previousHash: "prev-hash",
-      nextHash: "next-hash",
-      previousBytes: 12,
-      nextBytes: 24,
-      previousMetadata: {
-        dev: "10",
-        ino: "11",
-        mode: 0o600,
-        nlink: 1,
-        uid: 501,
-        gid: 20,
-      },
-      changedPathCount: 1,
-      hasMetaBefore: true,
-      hasMetaAfter: true,
-      gatewayModeBefore: "local",
-      gatewayModeAfter: "local",
-      suspicious: [],
-      now: "2026-04-07T08:00:00.000Z",
-    });
+    const base = createAuditRecordBase("/tmp/openclaw.json");
     const err = Object.assign(new Error("disk full"), { code: "ENOSPC" });
     const record = finalizeConfigWriteAuditRecord({
       base,
@@ -149,41 +177,7 @@ describe("config io audit helpers", () => {
 
   it("appends JSONL audit entries to the resolved audit path", async () => {
     const home = await suiteRootTracker.make("append");
-    const record = finalizeConfigWriteAuditRecord({
-      base: createConfigWriteAuditRecordBase({
-        configPath: path.join(home, ".openclaw", "openclaw.json"),
-        env: {} as NodeJS.ProcessEnv,
-        existsBefore: true,
-        previousHash: "prev-hash",
-        nextHash: "next-hash",
-        previousBytes: 12,
-        nextBytes: 24,
-        previousMetadata: {
-          dev: "10",
-          ino: "11",
-          mode: 0o600,
-          nlink: 1,
-          uid: 501,
-          gid: 20,
-        },
-        changedPathCount: 1,
-        hasMetaBefore: true,
-        hasMetaAfter: true,
-        gatewayModeBefore: "local",
-        gatewayModeAfter: "local",
-        suspicious: [],
-        now: "2026-04-07T08:00:00.000Z",
-      }),
-      result: "rename",
-      nextMetadata: {
-        dev: "12",
-        ino: "13",
-        mode: 0o600,
-        nlink: 1,
-        uid: 501,
-        gid: 20,
-      },
-    });
+    const record = createRenameAuditRecord(home);
 
     await appendConfigAuditRecord({
       fs,
@@ -192,10 +186,9 @@ describe("config io audit helpers", () => {
       record,
     });
 
-    const auditPath = path.join(home, ".openclaw", "logs", "config-audit.jsonl");
-    const lines = fs.readFileSync(auditPath, "utf-8").trim().split("\n");
-    expect(lines).toHaveLength(1);
-    expect(JSON.parse(lines[0])).toMatchObject({
+    const records = readAuditLog(home);
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
       event: "config.write",
       result: "rename",
       nextHash: "next-hash",
@@ -204,41 +197,7 @@ describe("config io audit helpers", () => {
 
   it("also accepts flattened audit record params from legacy call sites", async () => {
     const home = await suiteRootTracker.make("append-flat");
-    const record = finalizeConfigWriteAuditRecord({
-      base: createConfigWriteAuditRecordBase({
-        configPath: path.join(home, ".openclaw", "openclaw.json"),
-        env: {} as NodeJS.ProcessEnv,
-        existsBefore: true,
-        previousHash: "prev-hash",
-        nextHash: "next-hash",
-        previousBytes: 12,
-        nextBytes: 24,
-        previousMetadata: {
-          dev: "10",
-          ino: "11",
-          mode: 0o600,
-          nlink: 1,
-          uid: 501,
-          gid: 20,
-        },
-        changedPathCount: 1,
-        hasMetaBefore: true,
-        hasMetaAfter: true,
-        gatewayModeBefore: "local",
-        gatewayModeAfter: "local",
-        suspicious: [],
-        now: "2026-04-07T08:00:00.000Z",
-      }),
-      result: "rename",
-      nextMetadata: {
-        dev: "12",
-        ino: "13",
-        mode: 0o600,
-        nlink: 1,
-        uid: 501,
-        gid: 20,
-      },
-    });
+    const record = createRenameAuditRecord(home);
 
     await appendConfigAuditRecord({
       fs,
@@ -247,10 +206,9 @@ describe("config io audit helpers", () => {
       ...record,
     });
 
-    const auditPath = path.join(home, ".openclaw", "logs", "config-audit.jsonl");
-    const lines = fs.readFileSync(auditPath, "utf-8").trim().split("\n");
-    expect(lines).toHaveLength(1);
-    expect(JSON.parse(lines[0])).toMatchObject({
+    const records = readAuditLog(home);
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
       event: "config.write",
       result: "rename",
       nextHash: "next-hash",

@@ -46,7 +46,7 @@ function resolveAllowFromFormatter(params: {
       accountId: params.accountId,
       allowFrom: values,
     })
-      .map((entry) => String(entry).trim())
+      .map((entry) => normalizeOptionalString(entry) ?? "")
       .filter(Boolean);
 }
 

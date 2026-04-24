@@ -1,12 +1,11 @@
 import {
-  getScopedCredentialValue,
-  resolveProviderWebSearchPluginConfig,
-  setProviderWebSearchPluginConfigValue,
-  setScopedCredentialValue,
+  createWebSearchProviderContractFields,
   type WebSearchProviderPlugin,
-} from "openclaw/plugin-sdk/provider-web-search-contract";
+} from "openclaw/plugin-sdk/provider-web-search-config-contract";
 
 export function createKimiWebSearchProvider(): WebSearchProviderPlugin {
+  const credentialPath = "plugins.entries.moonshot.config.webSearch.apiKey";
+
   return {
     id: "kimi",
     label: "Kimi (Moonshot)",
@@ -18,16 +17,12 @@ export function createKimiWebSearchProvider(): WebSearchProviderPlugin {
     signupUrl: "https://platform.moonshot.cn/",
     docsUrl: "https://docs.openclaw.ai/tools/web",
     autoDetectOrder: 40,
-    credentialPath: "plugins.entries.moonshot.config.webSearch.apiKey",
-    inactiveSecretPaths: ["plugins.entries.moonshot.config.webSearch.apiKey"],
-    getCredentialValue: (searchConfig) => getScopedCredentialValue(searchConfig, "kimi"),
-    setCredentialValue: (searchConfigTarget, value) =>
-      setScopedCredentialValue(searchConfigTarget, "kimi", value),
-    getConfiguredCredentialValue: (config) =>
-      resolveProviderWebSearchPluginConfig(config, "moonshot")?.apiKey,
-    setConfiguredCredentialValue: (configTarget, value) => {
-      setProviderWebSearchPluginConfigValue(configTarget, "moonshot", "apiKey", value);
-    },
+    credentialPath,
+    ...createWebSearchProviderContractFields({
+      credentialPath,
+      searchCredential: { type: "scoped", scopeId: "kimi" },
+      configuredCredential: { pluginId: "moonshot" },
+    }),
     createTool: () => null,
   };
 }

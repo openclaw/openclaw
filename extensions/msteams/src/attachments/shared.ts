@@ -82,6 +82,103 @@ export const DEFAULT_MEDIA_AUTH_HOST_ALLOWLIST = [
 export const GRAPH_ROOT = "https://graph.microsoft.com/v1.0";
 export { isRecord };
 
+// Keep this local; importing the broad media-runtime SDK barrel pulls image/audio runtimes into
+// hot MSTeams attachment tests for one tiny estimator.
+export function estimateBase64DecodedBytes(base64: string): number {
+  let effectiveLen = 0;
+  for (let i = 0; i < base64.length; i += 1) {
+    const code = base64.charCodeAt(i);
+    if (code <= 0x20) {
+      continue;
+    }
+    effectiveLen += 1;
+  }
+
+  if (effectiveLen === 0) {
+    return 0;
+  }
+
+  let padding = 0;
+  let end = base64.length - 1;
+  while (end >= 0 && base64.charCodeAt(end) <= 0x20) {
+    end -= 1;
+  }
+  if (end >= 0 && base64[end] === "=") {
+    padding = 1;
+    end -= 1;
+    while (end >= 0 && base64.charCodeAt(end) <= 0x20) {
+      end -= 1;
+    }
+    if (end >= 0 && base64[end] === "=") {
+      padding = 2;
+    }
+  }
+
+  const estimated = Math.floor((effectiveLen * 3) / 4) - padding;
+  return Math.max(0, estimated);
+}
+
+/**
+ * Host suffixes for SharePoint/OneDrive shared links that must be fetched via
+ * the Graph `/shares/{shareId}/driveItem/content` endpoint instead of directly.
+ *
+ * Direct fetches of SharePoint/OneDrive shared URLs return empty/HTML landing
+ * pages unless encoded as a Graph share id. See
+ * https://learn.microsoft.com/en-us/graph/api/shares-get for the encoding.
+ */
+const GRAPH_SHARED_LINK_HOST_SUFFIXES = [
+  ".sharepoint.com",
+  ".sharepoint.us",
+  ".sharepoint.de",
+  ".sharepoint.cn",
+  ".sharepoint-df.com",
+  "1drv.ms",
+  "onedrive.live.com",
+  "onedrive.com",
+] as const;
+
+/**
+ * Returns true when the URL points at a SharePoint or OneDrive host whose
+ * shared-link content must be fetched through the Graph shares API rather
+ * than directly.
+ */
+export function isGraphSharedLinkUrl(url: string): boolean {
+  let host: string;
+  try {
+    host = normalizeLowercaseStringOrEmpty(new URL(url).hostname);
+  } catch {
+    return false;
+  }
+  if (!host) {
+    return false;
+  }
+  return GRAPH_SHARED_LINK_HOST_SUFFIXES.some((suffix) => host === suffix || host.endsWith(suffix));
+}
+
+/**
+ * Encode a SharePoint/OneDrive URL as a Graph shareId using the documented
+ * `u!` + base64url (no padding) scheme:
+ * https://learn.microsoft.com/en-us/graph/api/shares-get#encoding-sharing-urls
+ */
+export function encodeGraphShareId(url: string): string {
+  // Buffer.from(...).toString("base64url") already returns base64url without
+  // padding, matching the Graph spec exactly.
+  return `u!${Buffer.from(url, "utf8").toString("base64url")}`;
+}
+
+/**
+ * When `url` is a SharePoint/OneDrive shared link, return the matching
+ * `GET /shares/{shareId}/driveItem/content` URL that actually yields the file
+ * bytes. Returns `undefined` for non-shared-link URLs so callers can fall
+ * through to the existing fetch path.
+ */
+export function tryBuildGraphSharesUrlForSharedLink(url: string): string | undefined {
+  if (!isGraphSharedLinkUrl(url)) {
+    return undefined;
+  }
+  return `${GRAPH_ROOT}/shares/${encodeGraphShareId(url)}/driveItem/content`;
+}
+
 export function readNestedString(value: unknown, keys: Array<string | number>): string | undefined {
   let current: unknown = value;
   for (const key of keys) {
@@ -210,20 +307,6 @@ export function extractHtmlFromAttachment(att: MSTeamsAttachmentLike): string | 
   return text;
 }
 
-function estimateBase64DecodedBytes(value: string): number {
-  const normalized = value.replace(/\s+/g, "");
-  if (!normalized) {
-    return 0;
-  }
-  let padding = 0;
-  if (normalized.endsWith("==")) {
-    padding = 2;
-  } else if (normalized.endsWith("=")) {
-    padding = 1;
-  }
-  return Math.max(0, Math.floor((normalized.length * 3) / 4) - padding);
-}
-
 function isLikelyBase64Payload(value: string): boolean {
   return /^[A-Za-z0-9+/=\r\n]+$/.test(value);
 }
@@ -342,6 +425,19 @@ export type MSTeamsAttachmentFetchPolicy = {
   authAllowHosts: string[];
 };
 
+/**
+ * Logger surface for attachment download errors. Structured so callers can
+ * pass `MSTeamsMonitorLogger` directly without adapters. Optional `warn`/
+ * `error` methods prevent silent swallowing of fetch failures — see issue
+ * #63396 where empty `catch {}` blocks hid a Node 24+ undici incompatibility.
+ */
+export type MSTeamsAttachmentDownloadLogger = {
+  warn?: (message: string, meta?: Record<string, unknown>) => void;
+  error?: (message: string, meta?: Record<string, unknown>) => void;
+};
+
+export type MSTeamsAttachmentResolveFn = (hostname: string) => Promise<{ address: string }>;
+
 export function resolveAttachmentFetchPolicy(params?: {
   allowHosts?: string[];
   authAllowHosts?: string[];
@@ -393,7 +489,7 @@ export const isPrivateOrReservedIP: (ip: string) => boolean = isPrivateIpAddress
  */
 export async function resolveAndValidateIP(
   hostname: string,
-  resolveFn?: (hostname: string) => Promise<{ address: string }>,
+  resolveFn?: MSTeamsAttachmentResolveFn,
 ): Promise<string> {
   const resolve = resolveFn ?? lookup;
   let resolved: { address: string };
@@ -430,10 +526,10 @@ export async function safeFetch(params: {
   authorizationAllowHosts?: string[];
   fetchFn?: typeof fetch;
   requestInit?: RequestInit;
-  resolveFn?: (hostname: string) => Promise<{ address: string }>;
+  resolveFn?: MSTeamsAttachmentResolveFn;
 }): Promise<Response> {
   const fetchFn = params.fetchFn ?? fetch;
-  const resolveFn = params.resolveFn;
+  const resolveFn = params.resolveFn ?? lookup;
   const hasDispatcher = Boolean(
     params.requestInit &&
     typeof params.requestInit === "object" &&
@@ -517,7 +613,7 @@ export async function safeFetchWithPolicy(params: {
   policy: MSTeamsAttachmentFetchPolicy;
   fetchFn?: typeof fetch;
   requestInit?: RequestInit;
-  resolveFn?: (hostname: string) => Promise<{ address: string }>;
+  resolveFn?: MSTeamsAttachmentResolveFn;
 }): Promise<Response> {
   return await safeFetch({
     url: params.url,

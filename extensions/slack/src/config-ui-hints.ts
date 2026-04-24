@@ -95,7 +95,11 @@ export const slackChannelConfigUiHints = {
   },
   "streaming.nativeTransport": {
     label: "Slack Native Streaming",
-    help: "Enable native Slack text streaming (chat.startStream/chat.appendStream/chat.stopStream) when channels.slack.streaming.mode is partial (default: true).",
+    help: "Enable native Slack text streaming (chat.startStream/chat.appendStream/chat.stopStream) when channels.slack.streaming.mode is partial (default: true). Requires a reply thread target; top-level DMs stay on the non-thread fallback path.",
+  },
+  "streaming.preview.toolProgress": {
+    label: "Slack Draft Tool Progress",
+    help: "Show tool/progress activity in the live draft preview message (default: true). Set false to keep tool updates as separate messages.",
   },
   "thread.historyScope": {
     label: "Slack Thread History Scope",

@@ -14,7 +14,52 @@ afterEach(() => {
   }
   vi.resetModules();
   vi.doUnmock("jiti");
+  vi.unstubAllEnvs();
 });
+
+async function expectBuiltArtifactNodeRequireFastPath(
+  scope: string,
+  artifactRoot = "dist",
+): Promise<void> {
+  vi.stubEnv("OPENCLAW_PLUGIN_LOAD_PROFILE", "1");
+  const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+  try {
+    const channelEntryContract = await importFreshModule<
+      typeof import("./channel-entry-contract.js")
+    >(import.meta.url, `./channel-entry-contract.js?scope=${scope}`);
+
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-entry-contract-"));
+    tempDirs.push(tempRoot);
+
+    const pluginRoot = path.join(tempRoot, artifactRoot, "extensions", "telegram");
+    fs.mkdirSync(pluginRoot, { recursive: true });
+
+    const importerPath = path.join(pluginRoot, "index.js");
+    const sidecarPath = path.join(pluginRoot, "fast-path-sidecar.js");
+    fs.writeFileSync(importerPath, "export default {};\n", "utf8");
+    // CommonJS so `nodeRequire` succeeds without falling back to jiti.
+    fs.writeFileSync(sidecarPath, "module.exports = { sentinel: 7 };\n", "utf8");
+
+    expect(
+      channelEntryContract.loadBundledEntryExportSync<number>(pathToFileURL(importerPath).href, {
+        specifier: "./fast-path-sidecar.js",
+        exportName: "sentinel",
+      }),
+    ).toBe(7);
+
+    const profileLine = errorSpy.mock.calls
+      .map((args) => String(args[0] ?? ""))
+      .find((line) => line.startsWith("[plugin-load-profile] phase=bundled-entry-module-load"));
+    expect(profileLine, "expected a bundled-entry-module-load profile line").toBeDefined();
+    expect(profileLine).toContain("getJitiMs=0.0");
+    expect(profileLine).toContain("jitiCallMs=0.0");
+    expect(profileLine).not.toMatch(/getJitiMs=-/);
+    expect(profileLine).not.toMatch(/jitiCallMs=-/);
+  } finally {
+    errorSpy.mockRestore();
+  }
+}
 
 describe("loadBundledEntryExportSync", () => {
   it("includes importer and resolved path context when a bundled sidecar is missing", () => {
@@ -83,5 +128,99 @@ describe("loadBundledEntryExportSync", () => {
     } finally {
       platformSpy.mockRestore();
     }
+  });
+
+  it("loads packaged telegram setup sidecars from dist-facing api modules", () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-entry-contract-"));
+    tempDirs.push(tempRoot);
+
+    const pluginRoot = path.join(tempRoot, "dist", "extensions", "telegram");
+    fs.mkdirSync(pluginRoot, { recursive: true });
+
+    const importerPath = path.join(pluginRoot, "setup-entry.js");
+    const setupApiPath = path.join(pluginRoot, "setup-plugin-api.js");
+    const secretsApiPath = path.join(pluginRoot, "secret-contract-api.js");
+
+    fs.writeFileSync(importerPath, "export default {};\n", "utf8");
+    fs.writeFileSync(
+      setupApiPath,
+      'export const telegramSetupPlugin = { id: "telegram" };\n',
+      "utf8",
+    );
+    fs.writeFileSync(
+      secretsApiPath,
+      [
+        "export const collectRuntimeConfigAssignments = () => [];",
+        "export const secretTargetRegistryEntries = [];",
+        'export const channelSecrets = { TELEGRAM_TOKEN: { env: "TELEGRAM_TOKEN" } };',
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    expect(
+      loadBundledEntryExportSync<{ id: string }>(pathToFileURL(importerPath).href, {
+        specifier: "./setup-plugin-api.js",
+        exportName: "telegramSetupPlugin",
+      }),
+    ).toEqual({ id: "telegram" });
+
+    expect(
+      loadBundledEntryExportSync<Record<string, unknown>>(pathToFileURL(importerPath).href, {
+        specifier: "./secret-contract-api.js",
+        exportName: "channelSecrets",
+      }),
+    ).toEqual({
+      TELEGRAM_TOKEN: {
+        env: "TELEGRAM_TOKEN",
+      },
+    });
+  });
+
+  it("emits zero jiti sub-step timings on the built-artifact nodeRequire fast-path", async () => {
+    // The built-artifact fast-path goes through `nodeRequire` directly and never
+    // touches jiti. The plugin-load-profile line must reflect that with
+    // `getJitiMs=0.0 jitiCallMs=0.0` rather than negative or full-elapsed
+    // values that would mis-attribute nodeRequire time to jiti sub-steps.
+    await expectBuiltArtifactNodeRequireFastPath("built-artifact-profile-fast-path");
+  });
+
+  it("keeps dist-runtime built sidecar loads on the nodeRequire fast-path", async () => {
+    await expectBuiltArtifactNodeRequireFastPath("dist-runtime-profile-fast-path", "dist-runtime");
+  });
+
+  it("can disable source-tree fallback for dist bundled entry checks", () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-entry-contract-"));
+    tempDirs.push(tempRoot);
+
+    fs.writeFileSync(path.join(tempRoot, "package.json"), '{"name":"openclaw"}\n', "utf8");
+    const pluginRoot = path.join(tempRoot, "dist", "extensions", "telegram");
+    const sourceRoot = path.join(tempRoot, "extensions", "telegram", "src");
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    fs.mkdirSync(sourceRoot, { recursive: true });
+
+    const importerPath = path.join(pluginRoot, "index.js");
+    fs.writeFileSync(importerPath, "export default {};\n", "utf8");
+    fs.writeFileSync(
+      path.join(sourceRoot, "secret-contract.ts"),
+      "export const sentinel = 42;\n",
+      "utf8",
+    );
+
+    expect(
+      loadBundledEntryExportSync<number>(pathToFileURL(importerPath).href, {
+        specifier: "./src/secret-contract.js",
+        exportName: "sentinel",
+      }),
+    ).toBe(42);
+
+    vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK", "1");
+
+    expect(() =>
+      loadBundledEntryExportSync<number>(pathToFileURL(importerPath).href, {
+        specifier: "./src/secret-contract.js",
+        exportName: "sentinel",
+      }),
+    ).toThrow(`resolved "${path.join(pluginRoot, "src", "secret-contract.js")}"`);
   });
 });

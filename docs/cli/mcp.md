@@ -4,10 +4,8 @@ read_when:
   - Connecting Codex, Claude Code, or another MCP client to OpenClaw-backed channels
   - Running `openclaw mcp serve`
   - Managing OpenClaw-saved MCP server definitions
-title: "mcp"
+title: "MCP"
 ---
-
-# mcp
 
 `openclaw mcp` has two jobs:
 
@@ -63,6 +61,12 @@ Important behavior:
 - older transcript history is read with `messages_read`
 - Claude push notifications only exist while the MCP session is alive
 - when the client disconnects, the bridge exits and the live queue is gone
+- stdio MCP servers launched by OpenClaw (bundled or user-configured) are torn
+  down as a process tree on shutdown, so child subprocesses started by the
+  server do not survive after the parent stdio client exits
+- deleting or resetting a session disposes that session's MCP clients through
+  the shared runtime cleanup path, so there are no lingering stdio connections
+  tied to a removed session
 
 ## Choose a client mode
 
@@ -369,6 +373,9 @@ Important behavior:
   reachable right now
 - runtime adapters decide which transport shapes they actually support at
   execution time
+- embedded Pi exposes configured MCP tools in normal `coding` and `messaging`
+  tool profiles; `minimal` still hides them, and `tools.deny: ["bundle-mcp"]`
+  disables them explicitly
 
 ## Saved MCP server definitions
 
@@ -427,6 +434,12 @@ Launches a local child process and communicates over stdin/stdout.
 | `args`                     | Array of command-line arguments   |
 | `env`                      | Extra environment variables       |
 | `cwd` / `workingDirectory` | Working directory for the process |
+
+#### Stdio env safety filter
+
+OpenClaw rejects interpreter-startup env keys that can alter how a stdio MCP server starts up before the first RPC, even if they appear in a server's `env` block. Blocked keys include `NODE_OPTIONS`, `PYTHONSTARTUP`, `PYTHONPATH`, `PERL5OPT`, `RUBYOPT`, `SHELLOPTS`, `PS4`, and similar runtime-control variables. Startup rejects these with a configuration error so they cannot inject an implicit prelude, swap the interpreter, or enable a debugger against the stdio process. Ordinary credential, proxy, and server-specific env vars (`GITHUB_TOKEN`, `HTTP_PROXY`, custom `*_API_KEY`, etc.) are unaffected.
+
+If your MCP server genuinely needs one of the blocked variables, set it on the gateway host process instead of under the stdio server's `env`.
 
 ### SSE / HTTP transport
 
@@ -503,3 +516,8 @@ Current limits:
 - HTTP/SSE/streamable-http transport connects to a single remote server; no multiplexed upstream yet
 - `permissions_list_open` only includes approvals observed while the bridge is
   connected
+
+## Related
+
+- [CLI reference](/cli)
+- [Plugins](/cli/plugins)

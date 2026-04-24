@@ -7,6 +7,9 @@ const CHECK_EXTENSION_PACKAGE_BOUNDARY_BIN = resolve(
   REPO_ROOT,
   "scripts/check-extension-package-tsc-boundary.mjs",
 );
+const SHOULD_RUN_BOUNDARY_SCRIPT_WRAPPER =
+  process.env.GITHUB_ACTIONS !== "true" ||
+  process.env.OPENCLAW_RUN_EXTENSION_PACKAGE_BOUNDARY_TEST === "1";
 
 function runNode(args: string[], timeout: number) {
   return spawnSync(process.execPath, args, {
@@ -17,18 +20,19 @@ function runNode(args: string[], timeout: number) {
   });
 }
 
-describe("opt-in extension package TypeScript boundaries", () => {
-  it(
-    "typechecks each opt-in extension cleanly through @openclaw/plugin-sdk",
-    () => {
+// The CI check-additional job runs this script directly. Avoid duplicating the cold
+// 97-extension compile inside the full node test shard.
+describe.skipIf(!SHOULD_RUN_BOUNDARY_SCRIPT_WRAPPER)(
+  "opt-in extension package TypeScript boundaries",
+  () => {
+    it("typechecks each opt-in extension cleanly through @openclaw/plugin-sdk", () => {
       const result = runNode([CHECK_EXTENSION_PACKAGE_BOUNDARY_BIN, "--mode=compile"], 420_000);
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-    },
-    300_000,
-  );
+    }, 300_000);
 
-  it("fails when opt-in extensions import src/cli through a relative path", () => {
-    const result = runNode([CHECK_EXTENSION_PACKAGE_BOUNDARY_BIN, "--mode=canary"], 180_000);
-    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-  });
-});
+    it("fails when opt-in extensions import src/cli through a relative path", () => {
+      const result = runNode([CHECK_EXTENSION_PACKAGE_BOUNDARY_BIN, "--mode=canary"], 180_000);
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    });
+  },
+);

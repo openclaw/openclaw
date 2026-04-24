@@ -5,21 +5,24 @@ import {
 } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import {
-  buildProviderReplayFamilyHooks,
   DEFAULT_CONTEXT_TOKENS,
+  PASSTHROUGH_GEMINI_REPLAY_HOOKS,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
-  buildProviderStreamFamilyHooks,
   getOpenRouterModelCapabilities,
   loadOpenRouterModelCapabilities,
 } from "openclaw/plugin-sdk/provider-stream-family";
+import { buildOpenRouterImageGenerationProvider } from "./image-generation-provider.js";
 import { openrouterMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { applyOpenrouterConfig, OPENROUTER_DEFAULT_MODEL_REF } from "./onboard.js";
-import { buildOpenrouterProvider } from "./provider-catalog.js";
+import {
+  buildOpenrouterProvider,
+  normalizeOpenRouterBaseUrl,
+  OPENROUTER_BASE_URL,
+} from "./provider-catalog.js";
 import { wrapOpenRouterProviderStream } from "./stream.js";
 
 const PROVIDER_ID = "openrouter";
-const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 const OPENROUTER_DEFAULT_MAX_TOKENS = 8192;
 const OPENROUTER_CACHE_TTL_MODEL_PREFIXES = [
   "anthropic/",
@@ -28,15 +31,22 @@ const OPENROUTER_CACHE_TTL_MODEL_PREFIXES = [
   "zai/",
 ] as const;
 
+function normalizeOpenRouterResolvedModel<T extends ProviderRuntimeModel>(model: T): T | undefined {
+  const normalizedBaseUrl = normalizeOpenRouterBaseUrl(model.baseUrl);
+  if (!normalizedBaseUrl || normalizedBaseUrl === model.baseUrl) {
+    return undefined;
+  }
+  return {
+    ...model,
+    baseUrl: normalizedBaseUrl,
+  };
+}
+
 export default definePluginEntry({
   id: "openrouter",
   name: "OpenRouter Provider",
   description: "Bundled OpenRouter provider plugin",
   register(api) {
-    const PASSTHROUGH_GEMINI_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
-      family: "passthrough-gemini",
-    });
-    const _OPENROUTER_THINKING_STREAM_HOOKS = buildProviderStreamFamilyHooks("openrouter-thinking");
     function buildDynamicOpenRouterModel(
       ctx: ProviderResolveDynamicModelContext,
     ): ProviderRuntimeModel {
@@ -101,9 +111,31 @@ export default definePluginEntry({
           };
         },
       },
+      staticCatalog: {
+        order: "simple",
+        run: async () => ({
+          provider: buildOpenrouterProvider(),
+        }),
+      },
       resolveDynamicModel: (ctx) => buildDynamicOpenRouterModel(ctx),
       prepareDynamicModel: async (ctx) => {
         await loadOpenRouterModelCapabilities(ctx.modelId);
+      },
+      normalizeConfig: ({ providerConfig }) => {
+        const normalizedBaseUrl = normalizeOpenRouterBaseUrl(providerConfig.baseUrl);
+        return normalizedBaseUrl && normalizedBaseUrl !== providerConfig.baseUrl
+          ? { ...providerConfig, baseUrl: normalizedBaseUrl }
+          : undefined;
+      },
+      normalizeResolvedModel: ({ model }) => normalizeOpenRouterResolvedModel(model),
+      normalizeTransport: ({ api, baseUrl }) => {
+        const normalizedBaseUrl = normalizeOpenRouterBaseUrl(baseUrl);
+        return normalizedBaseUrl && normalizedBaseUrl !== baseUrl
+          ? {
+              api,
+              baseUrl: normalizedBaseUrl,
+            }
+          : undefined;
       },
       ...PASSTHROUGH_GEMINI_REPLAY_HOOKS,
       resolveReasoningOutputMode: () => "native",
@@ -112,5 +144,6 @@ export default definePluginEntry({
       isCacheTtlEligible: (ctx) => isOpenRouterCacheTtlModel(ctx.modelId),
     });
     api.registerMediaUnderstandingProvider(openrouterMediaUnderstandingProvider);
+    api.registerImageGenerationProvider(buildOpenRouterImageGenerationProvider());
   },
 });

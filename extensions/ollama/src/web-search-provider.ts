@@ -1,4 +1,3 @@
-import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   isNonSecretApiKeyMarker,
@@ -10,6 +9,7 @@ import {
   readNumberParam,
   readResponseText,
   readStringParam,
+  resolveProviderWebSearchPluginConfig,
   resolveSearchCount,
   resolveSiteName,
   truncateText,
@@ -17,7 +17,9 @@ import {
   type WebSearchProviderPlugin,
 } from "openclaw/plugin-sdk/provider-web-search";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { OLLAMA_DEFAULT_BASE_URL } from "./defaults.js";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { Type } from "typebox";
+import { OLLAMA_CLOUD_BASE_URL, OLLAMA_DEFAULT_BASE_URL } from "./defaults.js";
 import {
   buildOllamaBaseUrlSsrFPolicy,
   fetchOllamaModels,
@@ -63,9 +65,18 @@ function resolveOllamaWebSearchApiKey(config?: OpenClawConfig): string | undefin
 }
 
 function resolveOllamaWebSearchBaseUrl(config?: OpenClawConfig): string {
+  const pluginBaseUrl = normalizeOptionalString(
+    resolveProviderWebSearchPluginConfig(config, "ollama")?.baseUrl,
+  );
+  if (pluginBaseUrl) {
+    return resolveOllamaApiBase(pluginBaseUrl);
+  }
   const configuredBaseUrl = config?.models?.providers?.ollama?.baseUrl;
-  if (typeof configuredBaseUrl === "string" && configuredBaseUrl.trim()) {
-    return resolveOllamaApiBase(configuredBaseUrl);
+  if (normalizeOptionalString(configuredBaseUrl)) {
+    const baseUrl = resolveOllamaApiBase(configuredBaseUrl);
+    if (baseUrl !== OLLAMA_CLOUD_BASE_URL) {
+      return baseUrl;
+    }
   }
   return OLLAMA_DEFAULT_BASE_URL;
 }
@@ -73,14 +84,14 @@ function resolveOllamaWebSearchBaseUrl(config?: OpenClawConfig): string {
 function normalizeOllamaWebSearchResult(
   result: OllamaWebSearchResult,
 ): { title: string; url: string; content: string } | null {
-  const url = typeof result.url === "string" ? result.url.trim() : "";
+  const url = normalizeOptionalString(result.url) ?? "";
   if (!url) {
     return null;
   }
   return {
-    title: typeof result.title === "string" ? result.title.trim() : "",
+    title: normalizeOptionalString(result.title) ?? "",
     url,
-    content: typeof result.content === "string" ? result.content.trim() : "",
+    content: normalizeOptionalString(result.content) ?? "",
   };
 }
 

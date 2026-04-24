@@ -1,6 +1,7 @@
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
+  normalizeOptionalString,
 } from "./string-coerce.ts";
 
 export type ParsedAgentSessionKey = {
@@ -27,7 +28,7 @@ export function parseAgentSessionKey(
   if (parts.length < 3 || parts[0] !== "agent") {
     return null;
   }
-  const agentId = parts[1]?.trim();
+  const agentId = normalizeOptionalString(parts[1]);
   const rest = parts.slice(2).join(":");
   if (!agentId || !rest) {
     return null;
@@ -40,7 +41,7 @@ export function normalizeMainKey(value: string | undefined | null): string {
 }
 
 export function normalizeAgentId(value: string | undefined | null): string {
-  const trimmed = (value ?? "").trim();
+  const trimmed = normalizeOptionalString(value) ?? "";
   if (!trimmed) {
     return DEFAULT_AGENT_ID;
   }
@@ -71,7 +72,7 @@ export function resolveAgentIdFromSessionKey(sessionKey: string | undefined | nu
 }
 
 export function isSubagentSessionKey(sessionKey: string | undefined | null): boolean {
-  const raw = (sessionKey ?? "").trim();
+  const raw = normalizeOptionalString(sessionKey) ?? "";
   if (!raw) {
     return false;
   }

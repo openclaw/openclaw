@@ -91,4 +91,85 @@ describe("qa-bus state", () => {
       }),
     ).rejects.toThrow("qa-bus wait timeout");
   });
+
+  it("keeps account-scoped cursor waits blocked on unrelated account traffic", async () => {
+    const state = createQaBusState();
+    const pending = state.waitForCursorAdvance(0, 500, (snapshot) => {
+      return snapshot.events.some((event) => event.accountId === "acct-a" && event.cursor > 0);
+    });
+
+    state.addInboundMessage({
+      accountId: "acct-b",
+      conversation: { id: "other", kind: "direct" },
+      senderId: "acct-b-user",
+      text: "unrelated",
+    });
+
+    const beforeMatch = await Promise.race([
+      pending.then(() => "resolved"),
+      new Promise((resolve) => setTimeout(() => resolve("still-waiting"), 20)),
+    ]);
+    expect(beforeMatch).toBe("still-waiting");
+
+    state.addInboundMessage({
+      accountId: "acct-a",
+      conversation: { id: "target", kind: "direct" },
+      senderId: "acct-a-user",
+      text: "matched",
+    });
+
+    await expect(pending).resolves.toBeUndefined();
+  });
+
+  it("wakes default-account cursor waits when accountId is omitted", async () => {
+    const state = createQaBusState();
+    const pending = state.waitForCursorAdvance(0, 500, (snapshot) => {
+      return snapshot.events.some((event) => event.accountId === "default" && event.cursor > 0);
+    });
+
+    state.addInboundMessage({
+      conversation: { id: "target", kind: "direct" },
+      senderId: "default-user",
+      text: "matched",
+    });
+
+    await expect(pending).resolves.toBeUndefined();
+  });
+
+  it("preserves inline attachments and lets search match attachment metadata", () => {
+    const state = createQaBusState();
+
+    const outbound = state.addOutboundMessage({
+      to: "dm:alice",
+      text: "artifact attached",
+      attachments: [
+        {
+          id: "image-1",
+          kind: "image",
+          mimeType: "image/png",
+          fileName: "qa-screenshot.png",
+          altText: "QA dashboard screenshot",
+          contentBase64: "aGVsbG8=",
+        },
+      ],
+    });
+
+    const readback = state.readMessage({ messageId: outbound.id });
+    expect(readback.attachments).toHaveLength(1);
+    expect(readback.attachments?.[0]).toMatchObject({
+      kind: "image",
+      fileName: "qa-screenshot.png",
+      altText: "QA dashboard screenshot",
+    });
+
+    const byFilename = state.searchMessages({
+      query: "screenshot",
+    });
+    expect(byFilename.some((message) => message.id === outbound.id)).toBe(true);
+
+    const byAltText = state.searchMessages({
+      query: "dashboard",
+    });
+    expect(byAltText.some((message) => message.id === outbound.id)).toBe(true);
+  });
 });

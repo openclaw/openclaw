@@ -8,8 +8,12 @@ import {
   resolveDefaultModelForAgent,
 } from "../agents/model-selection.js";
 import { loadConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../routing/session-key.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import {
@@ -17,8 +21,9 @@ import {
   type GatewayAuthResult,
   type ResolvedGatewayAuth,
 } from "./auth.js";
-import { sendGatewayAuthFailure } from "./http-common.js";
+import { sendGatewayAuthFailure, sendJson } from "./http-common.js";
 import { ADMIN_SCOPE, CLI_DEFAULT_OPERATOR_SCOPES } from "./method-scopes.js";
+import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { loadGatewayModelCatalog } from "./server-model-catalog.js";
 
 export const OPENCLAW_MODEL_ID = "openclaw";
@@ -36,12 +41,11 @@ export function getHeader(req: IncomingMessage, name: string): string | undefine
 }
 
 export function getBearerToken(req: IncomingMessage): string | undefined {
-  const raw = getHeader(req, "authorization")?.trim() ?? "";
+  const raw = normalizeOptionalString(getHeader(req, "authorization")) ?? "";
   if (!normalizeLowercaseStringOrEmpty(raw).startsWith("bearer ")) {
     return undefined;
   }
-  const token = raw.slice(7).trim();
-  return token || undefined;
+  return normalizeOptionalString(raw.slice(7));
 }
 
 type SharedSecretGatewayAuth = Pick<ResolvedGatewayAuth, "mode">;
@@ -49,6 +53,16 @@ export type AuthorizedGatewayHttpRequest = {
   authMethod?: GatewayAuthResult["method"];
   trustDeclaredOperatorScopes: boolean;
 };
+
+export type GatewayHttpRequestAuthCheckResult =
+  | {
+      ok: true;
+      requestAuth: AuthorizedGatewayHttpRequest;
+    }
+  | {
+      ok: false;
+      authResult: GatewayAuthResult;
+    };
 
 export function resolveHttpBrowserOriginPolicy(
   req: IncomingMessage,
@@ -92,8 +106,24 @@ export async function authorizeGatewayHttpRequestOrReply(params: {
   allowRealIpFallback?: boolean;
   rateLimiter?: AuthRateLimiter;
 }): Promise<AuthorizedGatewayHttpRequest | null> {
+  const result = await checkGatewayHttpRequestAuth(params);
+  if (!result.ok) {
+    sendGatewayAuthFailure(params.res, result.authResult);
+    return null;
+  }
+  return result.requestAuth;
+}
+
+export async function checkGatewayHttpRequestAuth(params: {
+  req: IncomingMessage;
+  auth: ResolvedGatewayAuth;
+  trustedProxies?: string[];
+  allowRealIpFallback?: boolean;
+  rateLimiter?: AuthRateLimiter;
+  cfg?: OpenClawConfig;
+}): Promise<GatewayHttpRequestAuthCheckResult> {
   const token = getBearerToken(params.req);
-  const browserOriginPolicy = resolveHttpBrowserOriginPolicy(params.req);
+  const browserOriginPolicy = resolveHttpBrowserOriginPolicy(params.req, params.cfg);
   const authResult = await authorizeHttpGatewayConnect({
     auth: params.auth,
     connectAuth: token ? { token, password: token } : null,
@@ -104,17 +134,64 @@ export async function authorizeGatewayHttpRequestOrReply(params: {
     browserOriginPolicy,
   });
   if (!authResult.ok) {
-    sendGatewayAuthFailure(params.res, authResult);
-    return null;
+    return {
+      ok: false,
+      authResult,
+    };
   }
   return {
-    authMethod: authResult.method,
-    // Shared-secret bearer auth proves possession of the gateway secret, but it
-    // does not prove a narrower per-request operator identity. HTTP endpoints
-    // must opt in explicitly if they want to treat that shared-secret path as a
-    // full trusted-operator surface.
-    trustDeclaredOperatorScopes: !usesSharedSecretGatewayMethod(authResult.method),
+    ok: true,
+    requestAuth: {
+      authMethod: authResult.method,
+      // Shared-secret bearer auth proves possession of the gateway secret, but it
+      // does not prove a narrower per-request operator identity. HTTP endpoints
+      // must opt in explicitly if they want to treat that shared-secret path as a
+      // full trusted-operator surface.
+      trustDeclaredOperatorScopes: !usesSharedSecretGatewayMethod(authResult.method),
+    },
   };
+}
+
+export async function authorizeScopedGatewayHttpRequestOrReply(params: {
+  req: IncomingMessage;
+  res: ServerResponse;
+  auth: ResolvedGatewayAuth;
+  trustedProxies?: string[];
+  allowRealIpFallback?: boolean;
+  rateLimiter?: AuthRateLimiter;
+  operatorMethod: string;
+  resolveOperatorScopes: (
+    req: IncomingMessage,
+    requestAuth: AuthorizedGatewayHttpRequest,
+  ) => string[];
+}): Promise<{ cfg: OpenClawConfig; requestAuth: AuthorizedGatewayHttpRequest } | null> {
+  const cfg = loadConfig();
+  const requestAuth = await authorizeGatewayHttpRequestOrReply({
+    req: params.req,
+    res: params.res,
+    auth: params.auth,
+    trustedProxies: params.trustedProxies ?? cfg.gateway?.trustedProxies,
+    allowRealIpFallback: params.allowRealIpFallback ?? cfg.gateway?.allowRealIpFallback,
+    rateLimiter: params.rateLimiter,
+  });
+  if (!requestAuth) {
+    return null;
+  }
+
+  const requestedScopes = params.resolveOperatorScopes(params.req, requestAuth);
+  const scopeAuth = authorizeOperatorScopesForMethod(params.operatorMethod, requestedScopes);
+  if (!scopeAuth.allowed) {
+    sendJson(params.res, 403, {
+      ok: false,
+      error: {
+        type: "forbidden",
+        message: `missing scope: ${scopeAuth.missingScope}`,
+      },
+    });
+    return null;
+  }
+
+  return { cfg, requestAuth };
 }
 
 export function isGatewayBearerHttpRequest(
@@ -191,8 +268,8 @@ export function resolveOpenAiCompatibleHttpSenderIsOwner(
 
 export function resolveAgentIdFromHeader(req: IncomingMessage): string | undefined {
   const raw =
-    getHeader(req, "x-openclaw-agent-id")?.trim() ||
-    getHeader(req, "x-openclaw-agent")?.trim() ||
+    normalizeOptionalString(getHeader(req, "x-openclaw-agent-id")) ||
+    normalizeOptionalString(getHeader(req, "x-openclaw-agent")) ||
     "";
   if (!raw) {
     return undefined;

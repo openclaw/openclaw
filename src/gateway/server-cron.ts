@@ -1,6 +1,6 @@
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-cleanup.js";
-import type { CliDeps } from "../cli/deps.js";
+import type { CliDeps } from "../cli/deps.types.js";
 import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
 import { loadConfig } from "../config/config.js";
 import {
@@ -9,6 +9,7 @@ import {
   resolveAgentMainSessionKey,
 } from "../config/sessions.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   resolveCronDeliveryPlan,
   resolveFailureDestination,
@@ -144,7 +145,7 @@ async function postCronWebhook(params: {
 }
 
 export function buildGatewayCronService(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   deps: CliDeps;
   broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
 }): GatewayCronState {
@@ -152,23 +153,56 @@ export function buildGatewayCronService(params: {
   const storePath = resolveCronStorePath(params.cfg.cron?.store);
   const cronEnabled = process.env.OPENCLAW_SKIP_CRON !== "1" && params.cfg.cron?.enabled !== false;
 
+  const findAgentEntry = (cfg: OpenClawConfig, agentId: string) =>
+    Array.isArray(cfg.agents?.list)
+      ? cfg.agents.list.find(
+          (entry) =>
+            entry && typeof entry.id === "string" && normalizeAgentId(entry.id) === agentId,
+        )
+      : undefined;
+
+  const hasConfiguredAgent = (cfg: OpenClawConfig, agentId: string) =>
+    Boolean(findAgentEntry(cfg, agentId));
+
+  const mergeRuntimeAgentConfig = (runtimeConfig: OpenClawConfig, requestedAgentId: string) => {
+    if (hasConfiguredAgent(runtimeConfig, requestedAgentId)) {
+      return runtimeConfig;
+    }
+    const fallbackAgentEntry = findAgentEntry(params.cfg, requestedAgentId);
+    if (!fallbackAgentEntry) {
+      return runtimeConfig;
+    }
+    const startupAgents = params.cfg.agents;
+    const runtimeAgents = runtimeConfig.agents;
+    return {
+      ...runtimeConfig,
+      agents: {
+        ...startupAgents,
+        ...runtimeAgents,
+        defaults: {
+          ...startupAgents?.defaults,
+          ...runtimeAgents?.defaults,
+        },
+        list: [...(runtimeAgents?.list ?? []), fallbackAgentEntry],
+      },
+    };
+  };
+
   const resolveCronAgent = (requested?: string | null) => {
     const runtimeConfig = loadConfig();
     const normalized =
       typeof requested === "string" && requested.trim() ? normalizeAgentId(requested) : undefined;
-    const hasAgent =
-      normalized !== undefined &&
-      Array.isArray(runtimeConfig.agents?.list) &&
-      runtimeConfig.agents.list.some(
-        (entry) =>
-          entry && typeof entry.id === "string" && normalizeAgentId(entry.id) === normalized,
-      );
-    const agentId = hasAgent ? normalized : resolveDefaultAgentId(runtimeConfig);
-    return { agentId, cfg: runtimeConfig };
+    const effectiveConfig =
+      normalized !== undefined ? mergeRuntimeAgentConfig(runtimeConfig, normalized) : runtimeConfig;
+    const agentId =
+      normalized !== undefined && hasConfiguredAgent(effectiveConfig, normalized)
+        ? normalized
+        : resolveDefaultAgentId(effectiveConfig);
+    return { agentId, cfg: effectiveConfig };
   };
 
   const resolveCronSessionKey = (params: {
-    runtimeConfig: ReturnType<typeof loadConfig>;
+    runtimeConfig: OpenClawConfig;
     agentId: string;
     requestedSessionKey?: string | null;
   }) => {
@@ -202,13 +236,20 @@ export function buildGatewayCronService(params: {
   };
 
   const resolveCronWakeTarget = (opts?: { agentId?: string; sessionKey?: string | null }) => {
-    const runtimeConfig = loadConfig();
-    const requestedAgentId = opts?.agentId ? resolveCronAgent(opts.agentId).agentId : undefined;
+    const requestedAgentId =
+      typeof opts?.agentId === "string" && opts.agentId.trim()
+        ? normalizeAgentId(opts.agentId)
+        : undefined;
     const derivedAgentId =
       requestedAgentId ??
       (opts?.sessionKey
         ? normalizeAgentId(resolveAgentIdFromSessionKey(opts.sessionKey))
         : undefined);
+    const runtimeConfigBase = loadConfig();
+    const runtimeConfig =
+      derivedAgentId !== undefined
+        ? mergeRuntimeAgentConfig(runtimeConfigBase, derivedAgentId)
+        : runtimeConfigBase;
     const agentId = derivedAgentId || undefined;
     const sessionKey =
       opts?.sessionKey && agentId
@@ -244,7 +285,11 @@ export function buildGatewayCronService(params: {
         agentId,
         requestedSessionKey: opts?.sessionKey,
       });
-      enqueueSystemEvent(text, { sessionKey, contextKey: opts?.contextKey });
+      enqueueSystemEvent(text, {
+        sessionKey,
+        contextKey: opts?.contextKey,
+        trusted: opts?.trusted,
+      });
     },
     requestHeartbeatNow: (opts) => {
       const { agentId, sessionKey } = resolveCronWakeTarget(opts);
@@ -252,6 +297,7 @@ export function buildGatewayCronService(params: {
         reason: opts?.reason,
         agentId,
         sessionKey,
+        heartbeat: opts?.heartbeat,
       });
     },
     runHeartbeatOnce: async (opts) => {
@@ -516,6 +562,7 @@ export function buildGatewayCronService(params: {
             delivered: evt.delivered,
             deliveryStatus: evt.deliveryStatus,
             deliveryError: evt.deliveryError,
+            delivery: evt.delivery,
             sessionId: evt.sessionId,
             sessionKey: evt.sessionKey,
             runAtMs: evt.runAtMs,

@@ -7,7 +7,7 @@ import {
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
-import type { MentionTarget } from "./mention.js";
+import type { MentionTarget } from "./mention-target.types.js";
 import { buildMentionedCardContent, buildMentionedMessage } from "./mention.js";
 import { parsePostContent } from "./post.js";
 import { assertFeishuMessageApiSuccess, toFeishuSendResult } from "./send-result.js";
@@ -276,7 +276,7 @@ function parseFeishuMessageItem(
     senderType: item.sender?.sender_type,
     content: parseFeishuMessageContent(rawContent, msgType),
     contentType: msgType,
-    createTime: item.create_time ? parseInt(String(item.create_time), 10) : undefined,
+    createTime: item.create_time ? Number.parseInt(item.create_time, 10) : undefined,
     threadId: item.thread_id || undefined,
   };
 }

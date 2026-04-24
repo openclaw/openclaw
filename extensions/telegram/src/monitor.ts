@@ -1,6 +1,5 @@
 import type { RunOptions } from "@grammyjs/runner";
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
-import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import { resolveAgentMaxConcurrent } from "openclaw/plugin-sdk/config-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
@@ -13,28 +12,14 @@ import { resolveTelegramAccount } from "./accounts.js";
 import { resolveTelegramAllowedUpdates } from "./allowed-updates.js";
 import { isTelegramExecApprovalHandlerConfigured } from "./exec-approvals.js";
 import { resolveTelegramTransport } from "./fetch.js";
+import type { MonitorTelegramOpts } from "./monitor.types.js";
 import {
   isRecoverableTelegramNetworkError,
   isTelegramPollingNetworkError,
 } from "./network-errors.js";
 import { makeProxyFetch } from "./proxy.js";
 
-export type MonitorTelegramOpts = {
-  token?: string;
-  accountId?: string;
-  config?: OpenClawConfig;
-  runtime?: RuntimeEnv;
-  channelRuntime?: PluginRuntime["channel"];
-  abortSignal?: AbortSignal;
-  useWebhook?: boolean;
-  webhookPath?: string;
-  webhookPort?: number;
-  webhookSecret?: string;
-  webhookHost?: string;
-  proxyFetch?: typeof fetch;
-  webhookUrl?: string;
-  webhookCertPath?: string;
-};
+export type { MonitorTelegramOpts } from "./monitor.types.js";
 
 export function createTelegramRunnerOptions(cfg: OpenClawConfig): RunOptions<unknown> {
   return {
@@ -242,6 +227,8 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       log,
       telegramTransport,
       createTelegramTransport: createTelegramTransportForPolling,
+      stallThresholdMs: account.config.pollingStallThresholdMs,
+      setStatus: opts.setStatus,
     });
     await pollingSession.runUntilAbort();
   } finally {

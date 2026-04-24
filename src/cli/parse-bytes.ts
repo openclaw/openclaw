@@ -1,4 +1,7 @@
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 
 export type BytesParseOptions = {
   defaultUnit?: "b" | "kb" | "mb" | "gb" | "tb";
@@ -17,7 +20,7 @@ const UNIT_MULTIPLIERS: Record<string, number> = {
 };
 
 export function parseByteSize(raw: string, opts?: BytesParseOptions): number {
-  const trimmed = normalizeLowercaseStringOrEmpty(String(raw ?? "").trim());
+  const trimmed = normalizeLowercaseStringOrEmpty(normalizeOptionalString(raw) ?? "");
   if (!trimmed) {
     throw new Error("invalid byte size (empty)");
   }

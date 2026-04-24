@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const ensurePluginRegistryLoadedMock = vi.hoisted(() => vi.fn());
 
@@ -12,12 +12,14 @@ describe("plugin-registry-loader", () => {
   let resolvePluginRegistryScopeForCommandPath: typeof import("./plugin-registry-loader.js").resolvePluginRegistryScopeForCommandPath;
   let loggingState: typeof import("../logging/state.js").loggingState;
 
-  beforeEach(async () => {
-    vi.clearAllMocks();
-    vi.resetModules();
+  beforeAll(async () => {
     ({ ensureCliPluginRegistryLoaded, resolvePluginRegistryScopeForCommandPath } =
       await import("./plugin-registry-loader.js"));
     ({ loggingState } = await import("../logging/state.js"));
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
     originalForceStderr = loggingState.forceConsoleToStderr;
     loggingState.forceConsoleToStderr = false;
   });
@@ -56,6 +58,23 @@ describe("plugin-registry-loader", () => {
 
     expect(captured).toEqual([false]);
     expect(loggingState.forceConsoleToStderr).toBe(false);
+  });
+
+  it("forwards explicit config snapshots to plugin loading", async () => {
+    const config = { channels: { quietchat: { enabled: true } } } as never;
+    const activationSourceConfig = { channels: { quietchat: { enabled: true } } } as never;
+
+    await ensureCliPluginRegistryLoaded({
+      scope: "configured-channels",
+      config,
+      activationSourceConfig,
+    });
+
+    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
+      scope: "configured-channels",
+      config,
+      activationSourceConfig,
+    });
   });
 
   it("maps command paths to plugin registry scopes", () => {

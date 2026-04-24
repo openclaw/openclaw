@@ -1,13 +1,13 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { normalizeOptionalString, readStringValue } from "openclaw/plugin-sdk/text-runtime";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { asRecord } from "../record-shared.js";
 import type { ChromeMcpSnapshotNode } from "./chrome-mcp.snapshot.js";
-import type { BrowserTab } from "./client.js";
+import type { BrowserTab } from "./client.types.js";
 import { BrowserProfileUnavailableError, BrowserTabNotFoundError } from "./errors.js";
 
 type ChromeMcpStructuredPage = {
@@ -42,6 +42,8 @@ const DEFAULT_CHROME_MCP_ARGS = [
   "--experimentalStructuredContent",
   "--experimental-page-id-routing",
 ];
+const CHROME_MCP_NEW_PAGE_TIMEOUT_MS = 5_000;
+const CHROME_MCP_NAVIGATE_TIMEOUT_MS = 20_000;
 
 const sessions = new Map<string, ChromeMcpSession>();
 const pendingSessions = new Map<string, Promise<ChromeMcpSession>>();
@@ -308,20 +310,68 @@ async function callTool(
   userDataDir: string | undefined,
   name: string,
   args: Record<string, unknown> = {},
+  opts?: { timeoutMs?: number; signal?: AbortSignal },
 ): Promise<ChromeMcpToolResult> {
   const cacheKey = buildChromeMcpSessionCacheKey(profileName, userDataDir);
   const session = await getSession(profileName, userDataDir);
+  const timeoutMs = opts?.timeoutMs;
+  const signal = opts?.signal;
+  if (signal?.aborted) {
+    throw signal.reason ?? new Error("aborted");
+  }
+
+  const rawCall = session.client.callTool({
+    name,
+    arguments: args,
+  }) as Promise<ChromeMcpToolResult>;
+
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  let abortListener: (() => void) | undefined;
+  const racers: Array<Promise<ChromeMcpToolResult> | Promise<never>> = [rawCall];
+
+  if (timeoutMs !== undefined && timeoutMs > 0) {
+    racers.push(
+      new Promise<never>((_, reject) => {
+        timeoutHandle = setTimeout(() => {
+          reject(
+            new Error(
+              `Chrome MCP "${name}" timed out after ${timeoutMs}ms. Session reset for reconnect.`,
+            ),
+          );
+        }, timeoutMs);
+      }),
+    );
+  }
+
+  if (signal) {
+    racers.push(
+      new Promise<never>((_, reject) => {
+        abortListener = () => reject(signal.reason ?? new Error("aborted"));
+        signal.addEventListener("abort", abortListener, { once: true });
+      }),
+    );
+  }
+
   let result: ChromeMcpToolResult;
   try {
-    result = (await session.client.callTool({
-      name,
-      arguments: args,
-    })) as ChromeMcpToolResult;
+    result = racers.length === 1 ? await rawCall : await Promise.race(racers);
   } catch (err) {
-    // Transport/connection error — tear down session so it reconnects on next call
-    sessions.delete(cacheKey);
-    await session.client.close().catch(() => {});
+    void rawCall.catch(() => {});
+    // Transport/connection error, timeout, or abort: tear down session so it reconnects.
+    // Transport-identity check prevents clobbering a replacement session created concurrently.
+    const cur = sessions.get(cacheKey);
+    if (cur?.transport === session.transport) {
+      sessions.delete(cacheKey);
+      await session.client.close().catch(() => {});
+    }
     throw err;
+  } finally {
+    if (timeoutHandle !== undefined) {
+      clearTimeout(timeoutHandle);
+    }
+    if (signal && abortListener) {
+      signal.removeEventListener("abort", abortListener);
+    }
   }
   // Tool-level errors (element not found, script error, etc.) don't indicate a
   // broken connection — don't tear down the session for these.
@@ -332,7 +382,7 @@ async function callTool(
 }
 
 async function withTempFile<T>(fn: (filePath: string) => Promise<T>): Promise<T> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-chrome-mcp-"));
+  const dir = await fs.mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "openclaw-chrome-mcp-"));
   const filePath = path.join(dir, randomUUID());
   try {
     return await fn(filePath);
@@ -401,16 +451,33 @@ export async function openChromeMcpTab(
   url: string,
   userDataDir?: string,
 ): Promise<BrowserTab> {
-  const result = await callTool(profileName, userDataDir, "new_page", { url });
+  const targetUrl = url.trim() || "about:blank";
+  const result = await callTool(profileName, userDataDir, "new_page", {
+    url: "about:blank",
+    timeout: CHROME_MCP_NEW_PAGE_TIMEOUT_MS,
+  });
   const pages = extractStructuredPages(result);
   const chosen = pages.find((page) => page.selected) ?? pages.at(-1);
   if (!chosen) {
     throw new Error("Chrome MCP did not return the created page.");
   }
+  const targetId = String(chosen.id);
+  const finalUrl =
+    targetUrl === "about:blank"
+      ? (chosen.url ?? targetUrl)
+      : (
+          await navigateChromeMcpPage({
+            profileName,
+            userDataDir,
+            targetId,
+            url: targetUrl,
+            timeoutMs: CHROME_MCP_NAVIGATE_TIMEOUT_MS,
+          })
+        ).url;
   return {
-    targetId: String(chosen.id),
+    targetId,
     title: "",
-    url: chosen.url ?? url,
+    url: finalUrl,
     type: "page",
   };
 }
@@ -441,12 +508,19 @@ export async function navigateChromeMcpPage(params: {
   url: string;
   timeoutMs?: number;
 }): Promise<{ url: string }> {
-  await callTool(params.profileName, params.userDataDir, "navigate_page", {
-    pageId: parsePageId(params.targetId),
-    type: "url",
-    url: params.url,
-    ...(typeof params.timeoutMs === "number" ? { timeout: params.timeoutMs } : {}),
-  });
+  const resolvedTimeoutMs = params.timeoutMs ?? CHROME_MCP_NAVIGATE_TIMEOUT_MS;
+  await callTool(
+    params.profileName,
+    params.userDataDir,
+    "navigate_page",
+    {
+      pageId: parsePageId(params.targetId),
+      type: "url",
+      url: params.url,
+      timeout: resolvedTimeoutMs,
+    },
+    { timeoutMs: resolvedTimeoutMs + 5_000 },
+  );
   const page = await findPageById(
     params.profileName,
     parsePageId(params.targetId),
@@ -492,12 +566,23 @@ export async function clickChromeMcpElement(params: {
   targetId: string;
   uid: string;
   doubleClick?: boolean;
+  timeoutMs?: number;
+  signal?: AbortSignal;
 }): Promise<void> {
-  await callTool(params.profileName, params.userDataDir, "click", {
-    pageId: parsePageId(params.targetId),
-    uid: params.uid,
-    ...(params.doubleClick ? { dblClick: true } : {}),
-  });
+  await callTool(
+    params.profileName,
+    params.userDataDir,
+    "click",
+    {
+      pageId: parsePageId(params.targetId),
+      uid: params.uid,
+      ...(params.doubleClick ? { dblClick: true } : {}),
+    },
+    {
+      timeoutMs: params.timeoutMs,
+      signal: params.signal,
+    },
+  );
 }
 
 export async function fillChromeMcpElement(params: {

@@ -57,6 +57,39 @@ export type UpdateRunResult = {
   after?: { sha?: string | null; version?: string | null };
   steps: UpdateStepResult[];
   durationMs: number;
+  postUpdate?: {
+    plugins?: {
+      status: "ok" | "skipped" | "error";
+      reason?: string;
+      changed: boolean;
+      sync: {
+        changed: boolean;
+        switchedToBundled: string[];
+        switchedToNpm: string[];
+        warnings: string[];
+        errors: string[];
+      };
+      npm: {
+        changed: boolean;
+        outcomes: Array<{
+          pluginId: string;
+          status: "updated" | "unchanged" | "skipped" | "error";
+          message: string;
+          currentVersion?: string;
+          nextVersion?: string;
+        }>;
+      };
+      integrityDrifts: Array<{
+        pluginId: string;
+        spec: string;
+        expectedIntegrity: string;
+        actualIntegrity: string;
+        resolvedSpec?: string;
+        resolvedVersion?: string;
+        action: "aborted";
+      }>;
+    };
+  };
 };
 
 type CommandRunner = (
@@ -87,6 +120,7 @@ type UpdateRunnerOptions = {
   argv1?: string;
   tag?: string;
   channel?: UpdateChannel;
+  devTargetRef?: string;
   timeoutMs?: number;
   runCommand?: CommandRunner;
   progress?: UpdateStepProgress;
@@ -104,6 +138,11 @@ const PREFLIGHT_MAX_COMMITS = 10;
 const START_DIRS = ["cwd", "argv1", "process"];
 const DEFAULT_PACKAGE_NAME = "openclaw";
 const CORE_PACKAGE_NAMES = new Set([DEFAULT_PACKAGE_NAME]);
+const PREFLIGHT_TEMP_PREFIX =
+  process.platform === "win32" ? "ocu-pf-" : "openclaw-update-preflight-";
+const PREFLIGHT_WORKTREE_DIRNAME = process.platform === "win32" ? "wt" : "worktree";
+const WINDOWS_PREFLIGHT_BASE_DIR = "ocu";
+const WINDOWS_BUILD_MAX_OLD_SPACE_MB = 4096;
 
 function normalizeDir(value?: string | null) {
   if (!value) {
@@ -150,6 +189,46 @@ function buildStartDirs(opts: UpdateRunnerOptions): string[] {
     dirs.push(proc);
   }
   return Array.from(new Set(dirs));
+}
+
+function resolvePreflightTempRootPrefix() {
+  return path.join(os.tmpdir(), PREFLIGHT_TEMP_PREFIX);
+}
+
+function resolvePreflightWorktreeDir(preflightRoot: string) {
+  return path.join(preflightRoot, PREFLIGHT_WORKTREE_DIRNAME);
+}
+
+function shouldUseNativeWindowsTempRoot() {
+  return process.platform === "win32" && path.sep === "\\";
+}
+
+async function createPreflightRoot() {
+  if (shouldUseNativeWindowsTempRoot()) {
+    const baseDir = path.win32.join(process.env.SystemDrive ?? "C:", WINDOWS_PREFLIGHT_BASE_DIR);
+    await fs.mkdir(baseDir, { recursive: true });
+    return fs.mkdtemp(path.win32.join(baseDir, PREFLIGHT_TEMP_PREFIX));
+  }
+  return fs.mkdtemp(resolvePreflightTempRootPrefix());
+}
+
+async function removePathRecursive(target: string) {
+  await fs
+    .rm(target, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 })
+    .catch(() => {});
+}
+
+async function repairWindowsPreflightCleanup(worktreeDir: string, preflightRoot: string) {
+  if (process.platform !== "win32") {
+    return false;
+  }
+  try {
+    await fs.rm(worktreeDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
+    await fs.rm(preflightRoot, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function readBranchName(
@@ -310,8 +389,111 @@ function normalizeTag(tag?: string) {
   return normalizePackageTagInput(tag, ["openclaw", DEFAULT_PACKAGE_NAME]) ?? "latest";
 }
 
+function normalizeDevTargetRef(value?: string | null): string | null {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
+}
+
+function looksLikeFullCommitSha(value: string): boolean {
+  return /^[0-9a-f]{40}$/i.test(value.trim());
+}
+
+function buildDevTargetRefResolutionCandidates(devTargetRef: string): string[] {
+  const trimmed = devTargetRef.trim();
+  const candidates: string[] = [];
+  const addCandidate = (candidate?: string | null) => {
+    if (!candidate || candidates.includes(candidate)) {
+      return;
+    }
+    candidates.push(candidate);
+  };
+
+  if (looksLikeFullCommitSha(trimmed)) {
+    addCandidate(trimmed);
+    return candidates;
+  }
+
+  if (trimmed.startsWith("refs/remotes/")) {
+    addCandidate(trimmed);
+    return candidates;
+  }
+
+  if (trimmed.startsWith("refs/heads/")) {
+    addCandidate(`refs/remotes/origin/${trimmed.slice("refs/heads/".length)}`);
+    return candidates;
+  }
+
+  if (trimmed.startsWith("origin/")) {
+    addCandidate(`refs/remotes/${trimmed}`);
+    return candidates;
+  }
+
+  if (trimmed.startsWith("refs/tags/")) {
+    addCandidate(`${trimmed}^{}`);
+    addCandidate(trimmed);
+    return candidates;
+  }
+
+  // Resolve plain branch names from the freshly fetched remote ref instead of
+  // a possibly stale local branch checkout.
+  addCandidate(`refs/remotes/origin/${trimmed}`);
+  addCandidate(`refs/tags/${trimmed}^{}`);
+  addCandidate(`refs/tags/${trimmed}`);
+  return candidates;
+}
+
+async function resolveComparablePath(target: string): Promise<string> {
+  return await fs.realpath(target).catch(() => path.resolve(target));
+}
+
+async function pathsReferToSameLocation(left: string, right: string): Promise<boolean> {
+  return (await resolveComparablePath(left)) === (await resolveComparablePath(right));
+}
+
+async function looksLikeGitCheckout(root: string): Promise<boolean> {
+  try {
+    await fs.access(path.join(root, ".git"));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function shouldRetryWindowsInstallIgnoringScripts(manager: "pnpm" | "bun" | "npm"): boolean {
   return process.platform === "win32" && manager === "pnpm";
+}
+
+function shouldPreferIgnoreScriptsForWindowsPreflight(manager: "pnpm" | "bun" | "npm"): boolean {
+  return process.platform === "win32" && manager === "pnpm";
+}
+
+function resolveWindowsBuildNodeOptions(baseOptions: string | undefined): string {
+  const current = baseOptions?.trim() ?? "";
+  const desired = `--max-old-space-size=${WINDOWS_BUILD_MAX_OLD_SPACE_MB}`;
+  const existingMatch = /(?:^|\s)--max-old-space-size=(\d+)(?=\s|$)/.exec(current);
+  if (!existingMatch) {
+    return current ? `${current} ${desired}` : desired;
+  }
+  const existingValue = Number(existingMatch[1]);
+  if (Number.isFinite(existingValue) && existingValue >= WINDOWS_BUILD_MAX_OLD_SPACE_MB) {
+    return current;
+  }
+  return current.replace(/(?:^|\s)--max-old-space-size=\d+(?=\s|$)/, ` ${desired}`).trim();
+}
+
+function resolveWindowsBuildEnv(env?: NodeJS.ProcessEnv): NodeJS.ProcessEnv | undefined {
+  if (process.platform !== "win32") {
+    return env;
+  }
+  const currentNodeOptions = env?.NODE_OPTIONS ?? process.env.NODE_OPTIONS;
+  const nextNodeOptions = resolveWindowsBuildNodeOptions(currentNodeOptions);
+  if (nextNodeOptions === currentNodeOptions) {
+    return env;
+  }
+  return {
+    ...env,
+    NODE_OPTIONS: nextNodeOptions,
+  };
 }
 
 function isSupersededInstallFailure(
@@ -352,6 +534,10 @@ function mergeCommandEnvironments(
     ...baseEnv,
     ...overrideEnv,
   };
+}
+
+function shouldRunDevPreflightLint(): boolean {
+  return process.platform !== "win32";
 }
 
 export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<UpdateRunResult> {
@@ -398,7 +584,17 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
   const pkgRoot = await findPackageRoot(candidates);
 
   let gitRoot = await resolveGitRoot(runCommand, candidates, timeoutMs);
-  if (gitRoot && pkgRoot && path.resolve(gitRoot) !== path.resolve(pkgRoot)) {
+  if (!gitRoot && pkgRoot) {
+    const cwdRoot = normalizeDir(opts.cwd);
+    if (
+      cwdRoot &&
+      (await pathsReferToSameLocation(cwdRoot, pkgRoot)) &&
+      (await looksLikeGitCheckout(cwdRoot))
+    ) {
+      gitRoot = await resolveComparablePath(cwdRoot);
+    }
+  }
+  if (gitRoot && pkgRoot && !(await pathsReferToSameLocation(gitRoot, pkgRoot))) {
     gitRoot = null;
   }
 
@@ -413,7 +609,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
     };
   }
 
-  if (gitRoot && pkgRoot && path.resolve(gitRoot) === path.resolve(pkgRoot)) {
+  if (gitRoot && pkgRoot && (await pathsReferToSameLocation(gitRoot, pkgRoot))) {
     // Get current SHA (not a visible step, no progress)
     const beforeShaResult = await runCommand(["git", "-C", gitRoot, "rev-parse", "HEAD"], {
       cwd: gitRoot,
@@ -422,8 +618,9 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
     const beforeSha = beforeShaResult.stdout.trim() || null;
     const beforeVersion = await readPackageVersion(gitRoot);
     const channel: UpdateChannel = opts.channel ?? "dev";
+    const devTargetRef = channel === "dev" ? normalizeDevTargetRef(opts.devTargetRef) : null;
     const branch = channel === "dev" ? await readBranchName(runCommand, gitRoot, timeoutMs) : null;
-    const needsCheckoutMain = channel === "dev" && branch !== DEV_BRANCH;
+    const needsCheckoutMain = channel === "dev" && !devTargetRef && branch !== DEV_BRANCH;
     gitTotalSteps = channel === "dev" ? (needsCheckoutMain ? 11 : 10) : 9;
     const buildGitErrorResult = (reason: string): UpdateRunResult => ({
       status: "error",
@@ -479,90 +676,135 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
         }
       }
 
-      const upstreamStep = await runStep(
-        step(
-          "upstream check",
-          [
-            "git",
-            "-C",
-            gitRoot,
-            "rev-parse",
-            "--abbrev-ref",
-            "--symbolic-full-name",
-            "@{upstream}",
-          ],
-          gitRoot,
-        ),
-      );
-      steps.push(upstreamStep);
-      if (upstreamStep.exitCode !== 0) {
-        return {
-          status: "skipped",
-          mode: "git",
-          root: gitRoot,
-          reason: "no-upstream",
-          before: { sha: beforeSha, version: beforeVersion },
-          steps,
-          durationMs: Date.now() - startedAt,
-        };
-      }
-
       const fetchStep = await runStep(
         step("git fetch", ["git", "-C", gitRoot, "fetch", "--all", "--prune", "--tags"], gitRoot),
       );
       steps.push(fetchStep);
+      let preflightBaseSha: string | null = null;
+      let candidates: string[] = [];
+      if (devTargetRef) {
+        let targetSha: string | null = null;
+        for (const targetRefCandidate of buildDevTargetRefResolutionCandidates(devTargetRef)) {
+          const targetShaStep = await runStep(
+            step(
+              `git rev-parse ${targetRefCandidate}`,
+              ["git", "-C", gitRoot, "rev-parse", targetRefCandidate],
+              gitRoot,
+            ),
+          );
+          steps.push(targetShaStep);
+          const resolvedTargetSha = targetShaStep.stdoutTail?.trim();
+          if (targetShaStep.exitCode === 0 && resolvedTargetSha) {
+            targetSha = resolvedTargetSha;
+            break;
+          }
+        }
+        if (!targetSha) {
+          return {
+            status: "error",
+            mode: "git",
+            root: gitRoot,
+            reason: "no-target-sha",
+            before: { sha: beforeSha, version: beforeVersion },
+            steps,
+            durationMs: Date.now() - startedAt,
+          };
+        }
+        preflightBaseSha = targetSha;
+        candidates = [targetSha];
+      } else {
+        const upstreamStep = await runStep(
+          step(
+            "upstream check",
+            [
+              "git",
+              "-C",
+              gitRoot,
+              "rev-parse",
+              "--abbrev-ref",
+              "--symbolic-full-name",
+              "@{upstream}",
+            ],
+            gitRoot,
+          ),
+        );
+        steps.push(upstreamStep);
+        if (upstreamStep.exitCode !== 0) {
+          return {
+            status: "skipped",
+            mode: "git",
+            root: gitRoot,
+            reason: "no-upstream",
+            before: { sha: beforeSha, version: beforeVersion },
+            steps,
+            durationMs: Date.now() - startedAt,
+          };
+        }
 
-      const upstreamShaStep = await runStep(
-        step(
-          "git rev-parse @{upstream}",
-          ["git", "-C", gitRoot, "rev-parse", "@{upstream}"],
-          gitRoot,
-        ),
-      );
-      steps.push(upstreamShaStep);
-      const upstreamSha = upstreamShaStep.stdoutTail?.trim();
-      if (!upstreamShaStep.stdoutTail || !upstreamSha) {
-        return {
-          status: "error",
-          mode: "git",
-          root: gitRoot,
-          reason: "no-upstream-sha",
-          before: { sha: beforeSha, version: beforeVersion },
-          steps,
-          durationMs: Date.now() - startedAt,
-        };
+        const upstreamShaStep = await runStep(
+          step(
+            "git rev-parse @{upstream}",
+            ["git", "-C", gitRoot, "rev-parse", "@{upstream}"],
+            gitRoot,
+          ),
+        );
+        steps.push(upstreamShaStep);
+        const upstreamSha = upstreamShaStep.stdoutTail?.trim();
+        if (!upstreamShaStep.stdoutTail || !upstreamSha) {
+          return {
+            status: "error",
+            mode: "git",
+            root: gitRoot,
+            reason: "no-upstream-sha",
+            before: { sha: beforeSha, version: beforeVersion },
+            steps,
+            durationMs: Date.now() - startedAt,
+          };
+        }
+
+        const revListStep = await runStep(
+          step(
+            "git rev-list",
+            ["git", "-C", gitRoot, "rev-list", `--max-count=${PREFLIGHT_MAX_COMMITS}`, upstreamSha],
+            gitRoot,
+          ),
+        );
+        steps.push(revListStep);
+        if (revListStep.exitCode !== 0) {
+          return {
+            status: "error",
+            mode: "git",
+            root: gitRoot,
+            reason: "preflight-revlist-failed",
+            before: { sha: beforeSha, version: beforeVersion },
+            steps,
+            durationMs: Date.now() - startedAt,
+          };
+        }
+
+        candidates = (revListStep.stdoutTail ?? "")
+          .split("\n")
+          .map((line) => line.trim())
+          .filter(Boolean);
+        if (candidates.length === 0) {
+          return {
+            status: "error",
+            mode: "git",
+            root: gitRoot,
+            reason: "preflight-no-candidates",
+            before: { sha: beforeSha, version: beforeVersion },
+            steps,
+            durationMs: Date.now() - startedAt,
+          };
+        }
+        preflightBaseSha = upstreamSha;
       }
-
-      const revListStep = await runStep(
-        step(
-          "git rev-list",
-          ["git", "-C", gitRoot, "rev-list", `--max-count=${PREFLIGHT_MAX_COMMITS}`, upstreamSha],
-          gitRoot,
-        ),
-      );
-      steps.push(revListStep);
-      if (revListStep.exitCode !== 0) {
+      if (!preflightBaseSha) {
         return {
           status: "error",
           mode: "git",
           root: gitRoot,
-          reason: "preflight-revlist-failed",
-          before: { sha: beforeSha, version: beforeVersion },
-          steps,
-          durationMs: Date.now() - startedAt,
-        };
-      }
-
-      const candidates = (revListStep.stdoutTail ?? "")
-        .split("\n")
-        .map((line) => line.trim())
-        .filter(Boolean);
-      if (candidates.length === 0) {
-        return {
-          status: "error",
-          mode: "git",
-          root: gitRoot,
-          reason: "preflight-no-candidates",
+          reason: "preflight-base-missing",
           before: { sha: beforeSha, version: beforeVersion },
           steps,
           durationMs: Date.now() - startedAt,
@@ -587,18 +829,18 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
           durationMs: Date.now() - startedAt,
         };
       }
-      const preflightRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-preflight-"));
-      const worktreeDir = path.join(preflightRoot, "worktree");
+      const preflightRoot = await createPreflightRoot();
+      const worktreeDir = resolvePreflightWorktreeDir(preflightRoot);
       const worktreeStep = await runStep(
         step(
           "preflight worktree",
-          ["git", "-C", gitRoot, "worktree", "add", "--detach", worktreeDir, upstreamSha],
+          ["git", "-C", gitRoot, "worktree", "add", "--detach", worktreeDir, preflightBaseSha],
           gitRoot,
         ),
       );
       steps.push(worktreeStep);
       if (worktreeStep.exitCode !== 0) {
-        await fs.rm(preflightRoot, { recursive: true, force: true }).catch(() => {});
+        await removePathRecursive(preflightRoot);
         return {
           status: "error",
           mode: "git",
@@ -626,20 +868,27 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
             continue;
           }
 
+          const preflightIgnoreScripts = shouldPreferIgnoreScriptsForWindowsPreflight(
+            manager.manager,
+          );
+          const preflightIgnoreScriptsArgv = managerInstallIgnoreScriptsArgs(manager.manager);
+          const depsStepArgv =
+            preflightIgnoreScripts && preflightIgnoreScriptsArgv
+              ? preflightIgnoreScriptsArgv
+              : managerInstallArgs(manager.manager, {
+                  compatFallback: manager.fallback && manager.manager === "npm",
+                });
+          const depsStepName = preflightIgnoreScripts
+            ? `preflight deps install (ignore scripts) (${shortSha})`
+            : `preflight deps install (${shortSha})`;
           const depsStep = await runStep(
-            step(
-              `preflight deps install (${shortSha})`,
-              managerInstallArgs(manager.manager, {
-                compatFallback: manager.fallback && manager.manager === "npm",
-              }),
-              worktreeDir,
-              manager.env,
-            ),
+            step(depsStepName, depsStepArgv, worktreeDir, manager.env),
           );
           steps.push(depsStep);
           let finalDepsStep = depsStep;
           if (
             depsStep.exitCode !== 0 &&
+            !preflightIgnoreScripts &&
             shouldRetryWindowsInstallIgnoringScripts(manager.manager)
           ) {
             const retryArgv = managerInstallIgnoreScriptsArgs(manager.manager);
@@ -665,7 +914,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
               `preflight build (${shortSha})`,
               managerScriptArgs(manager.manager, "build"),
               worktreeDir,
-              manager.env,
+              resolveWindowsBuildEnv(manager.env),
             ),
           );
           steps.push(buildStep);
@@ -673,17 +922,19 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
             continue;
           }
 
-          const lintStep = await runStep(
-            step(
-              `preflight lint (${shortSha})`,
-              managerScriptArgs(manager.manager, "lint"),
-              worktreeDir,
-              manager.env,
-            ),
-          );
-          steps.push(lintStep);
-          if (lintStep.exitCode !== 0) {
-            continue;
+          if (shouldRunDevPreflightLint()) {
+            const lintStep = await runStep(
+              step(
+                `preflight lint (${shortSha})`,
+                managerScriptArgs(manager.manager, "lint"),
+                worktreeDir,
+                manager.env,
+              ),
+            );
+            steps.push(lintStep);
+            if (lintStep.exitCode !== 0) {
+              continue;
+            }
           }
 
           selectedSha = sha;
@@ -697,12 +948,24 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
             gitRoot,
           ),
         );
+        if (
+          removeStep.exitCode !== 0 &&
+          (await repairWindowsPreflightCleanup(worktreeDir, preflightRoot))
+        ) {
+          removeStep.exitCode = 0;
+          removeStep.stderrTail = trimLogTail(
+            [removeStep.stderrTail, "windows fallback cleanup removed preflight tree"]
+              .filter(Boolean)
+              .join("\n"),
+            MAX_LOG_CHARS,
+          );
+        }
         steps.push(removeStep);
         await runCommand(["git", "-C", gitRoot, "worktree", "prune"], {
           cwd: gitRoot,
           timeoutMs,
         }).catch(() => null);
-        await fs.rm(preflightRoot, { recursive: true, force: true }).catch(() => {});
+        await removePathRecursive(preflightRoot);
         await manager.cleanup?.();
       }
 
@@ -718,33 +981,47 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
         };
       }
 
-      const rebaseStep = await runStep(
-        step("git rebase", ["git", "-C", gitRoot, "rebase", selectedSha], gitRoot),
-      );
-      steps.push(rebaseStep);
-      if (rebaseStep.exitCode !== 0) {
-        const abortResult = await runCommand(["git", "-C", gitRoot, "rebase", "--abort"], {
-          cwd: gitRoot,
-          timeoutMs,
-        });
-        steps.push({
-          name: "git rebase --abort",
-          command: "git rebase --abort",
-          cwd: gitRoot,
-          durationMs: 0,
-          exitCode: abortResult.code,
-          stdoutTail: trimLogTail(abortResult.stdout, MAX_LOG_CHARS),
-          stderrTail: trimLogTail(abortResult.stderr, MAX_LOG_CHARS),
-        });
-        return {
-          status: "error",
-          mode: "git",
-          root: gitRoot,
-          reason: "rebase-failed",
-          before: { sha: beforeSha, version: beforeVersion },
-          steps,
-          durationMs: Date.now() - startedAt,
-        };
+      if (devTargetRef) {
+        const failure = await runGitCheckoutOrFail(`git checkout ${selectedSha}`, [
+          "git",
+          "-C",
+          gitRoot,
+          "checkout",
+          "--detach",
+          selectedSha,
+        ]);
+        if (failure) {
+          return failure;
+        }
+      } else {
+        const rebaseStep = await runStep(
+          step("git rebase", ["git", "-C", gitRoot, "rebase", selectedSha], gitRoot),
+        );
+        steps.push(rebaseStep);
+        if (rebaseStep.exitCode !== 0) {
+          const abortResult = await runCommand(["git", "-C", gitRoot, "rebase", "--abort"], {
+            cwd: gitRoot,
+            timeoutMs,
+          });
+          steps.push({
+            name: "git rebase --abort",
+            command: "git rebase --abort",
+            cwd: gitRoot,
+            durationMs: 0,
+            exitCode: abortResult.code,
+            stdoutTail: trimLogTail(abortResult.stdout, MAX_LOG_CHARS),
+            stderrTail: trimLogTail(abortResult.stderr, MAX_LOG_CHARS),
+          });
+          return {
+            status: "error",
+            mode: "git",
+            root: gitRoot,
+            reason: "rebase-failed",
+            before: { sha: beforeSha, version: beforeVersion },
+            steps,
+            durationMs: Date.now() - startedAt,
+          };
+        }
       }
     } else {
       const fetchStep = await runStep(
@@ -843,7 +1120,12 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       }
 
       const buildStep = await runStep(
-        step("build", managerScriptArgs(manager.manager, "build"), gitRoot, manager.env),
+        step(
+          "build",
+          managerScriptArgs(manager.manager, "build"),
+          gitRoot,
+          resolveWindowsBuildEnv(manager.env),
+        ),
       );
       steps.push(buildStep);
       if (buildStep.exitCode !== 0) {

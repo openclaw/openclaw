@@ -1,5 +1,5 @@
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
-import type { ReplyPayload } from "../runtime-api.js";
 import {
   createAgendaCard,
   createAppleTvRemoteCard,
@@ -64,9 +64,9 @@ export function parseLineDirectives(payload: ReplyPayload): ReplyPayload {
     const parts = locationMatch[1].split("|").map((s) => s.trim());
     if (parts.length >= 4) {
       const [title, address, latStr, lonStr] = parts;
-      const latitude = parseFloat(latStr);
-      const longitude = parseFloat(lonStr);
-      if (!isNaN(latitude) && !isNaN(longitude)) {
+      const latitude = Number.parseFloat(latStr);
+      const longitude = Number.parseFloat(lonStr);
+      if (!Number.isNaN(latitude) && !Number.isNaN(longitude)) {
         lineData.location = {
           title: title || "Location",
           address: address || "",

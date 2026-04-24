@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.js";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { listSpeechProviders } from "./provider-registry.js";
@@ -13,6 +13,7 @@ type ParseTtsDirectiveOptions = {
   cfg?: OpenClawConfig;
   providers?: readonly SpeechProviderPlugin[];
   providerConfigs?: Record<string, SpeechProviderConfig>;
+  preferredProviderId?: string;
 };
 
 function buildProviderOrder(left: SpeechProviderPlugin, right: SpeechProviderPlugin): number {
@@ -38,6 +39,20 @@ function resolveDirectiveProviderConfig(
   return options?.providerConfigs?.[provider.id];
 }
 
+function prioritizeProvider(
+  providers: readonly SpeechProviderPlugin[],
+  providerId: string | undefined,
+): SpeechProviderPlugin[] {
+  if (!providerId) {
+    return [...providers];
+  }
+  const preferredProvider = providers.find((provider) => provider.id === providerId);
+  if (!preferredProvider) {
+    return [...providers];
+  }
+  return [preferredProvider, ...providers.filter((provider) => provider.id !== providerId)];
+}
+
 export function parseTtsDirectives(
   text: string,
   policy: SpeechModelOverridePolicy,
@@ -47,7 +62,15 @@ export function parseTtsDirectives(
     return { cleanedText: text, overrides: {}, warnings: [], hasDirective: false };
   }
 
-  const providers = resolveDirectiveProviders(options);
+  if (!/\[\[tts:/iu.test(text)) {
+    return { cleanedText: text, overrides: {}, warnings: [], hasDirective: false };
+  }
+
+  let providers: SpeechProviderPlugin[] | undefined;
+  const getProviders = () => {
+    providers ??= resolveDirectiveProviders(options);
+    return providers;
+  };
   const overrides: TtsDirectiveOverrides = {};
   const warnings: string[] = [];
   let cleanedText = text;
@@ -66,6 +89,41 @@ export function parseTtsDirectives(
   cleanedText = cleanedText.replace(directiveRegex, (_match, body: string) => {
     hasDirective = true;
     const tokens = body.split(/\s+/).filter(Boolean);
+
+    let declaredProviderId: string | undefined;
+    if (policy.allowProvider) {
+      for (const token of tokens) {
+        const eqIndex = token.indexOf("=");
+        if (eqIndex === -1) {
+          continue;
+        }
+        const rawKey = token.slice(0, eqIndex).trim();
+        if (!rawKey || normalizeLowercaseStringOrEmpty(rawKey) !== "provider") {
+          continue;
+        }
+        const rawValue = token.slice(eqIndex + 1).trim();
+        if (!rawValue) {
+          continue;
+        }
+        const providerId = normalizeLowercaseStringOrEmpty(rawValue);
+        if (!providerId) {
+          warnings.push("invalid provider id");
+          continue;
+        }
+        declaredProviderId = providerId;
+        overrides.provider = providerId;
+      }
+    }
+
+    let orderedProviders: SpeechProviderPlugin[] | undefined;
+    const getOrderedProviders = () => {
+      orderedProviders ??= prioritizeProvider(
+        getProviders(),
+        declaredProviderId ?? normalizeLowercaseStringOrEmpty(options?.preferredProviderId),
+      );
+      return orderedProviders;
+    };
+
     for (const token of tokens) {
       const eqIndex = token.indexOf("=");
       if (eqIndex === -1) {
@@ -76,21 +134,12 @@ export function parseTtsDirectives(
       if (!rawKey || !rawValue) {
         continue;
       }
-      const key = rawKey.toLowerCase();
+      const key = normalizeLowercaseStringOrEmpty(rawKey);
       if (key === "provider") {
-        if (policy.allowProvider) {
-          const providerId = normalizeLowercaseStringOrEmpty(rawValue);
-          if (providerId) {
-            overrides.provider = providerId;
-          } else {
-            warnings.push("invalid provider id");
-          }
-        }
         continue;
       }
 
-      let handled = false;
-      for (const provider of providers) {
+      for (const provider of getOrderedProviders()) {
         const parsed = provider.parseDirectiveToken?.({
           key,
           value: rawValue,
@@ -101,7 +150,6 @@ export function parseTtsDirectives(
         if (!parsed?.handled) {
           continue;
         }
-        handled = true;
         if (parsed.overrides) {
           overrides.providerOverrides = {
             ...overrides.providerOverrides,
@@ -115,10 +163,6 @@ export function parseTtsDirectives(
           warnings.push(...parsed.warnings);
         }
         break;
-      }
-
-      if (!handled) {
-        continue;
       }
     }
     return "";

@@ -172,9 +172,7 @@ describe("copyBundledPluginMetadata", () => {
     expect(fs.existsSync(path.join(copiedSkillDir, "SKILL.md"))).toBe(true);
     expect(fs.lstatSync(copiedSkillDir).isSymbolicLink()).toBe(false);
     expect(fs.existsSync(path.join(copiedSkillDir, "node_modules"))).toBe(false);
-    expect(fs.existsSync(path.join(bundledPluginDir(repoRoot, "tlon"), "node_modules"))).toBe(
-      false,
-    );
+    expect(fs.existsSync(staleNodeModulesSkillDir)).toBe(false);
     expectBundledSkills(repoRoot, "tlon", ["./bundled-skills/@tloncorp/tlon-skill"]);
   });
 
@@ -217,7 +215,7 @@ describe("copyBundledPluginMetadata", () => {
     expect(fs.existsSync(path.join(repoRoot, "dist", "extensions", "tlon", "bundled-skills"))).toBe(
       false,
     );
-    expect(fs.existsSync(staleNodeModulesDir)).toBe(false);
+    expect(fs.existsSync(staleNodeModulesDir)).toBe(true);
   });
 
   it("retries transient skill copy races from concurrent runtime postbuilds", () => {
@@ -316,6 +314,30 @@ describe("copyBundledPluginMetadata", () => {
     copyBundledPluginMetadata({ repoRoot });
 
     expect(fs.existsSync(staleDistDir)).toBe(false);
+  });
+
+  it("removes non-packaged private QA plugin metadata unless private QA build is enabled", () => {
+    const repoRoot = makeRepoRoot("openclaw-private-qa-metadata-");
+    createPlugin(repoRoot, {
+      id: "qa-lab",
+      packageName: "@openclaw/qa-lab",
+      packageOpenClaw: { extensions: ["./index.ts"] },
+    });
+    const staleDistDir = path.join(repoRoot, "dist", "extensions", "qa-lab");
+    fs.mkdirSync(staleDistDir, { recursive: true });
+    fs.writeFileSync(path.join(staleDistDir, "runtime-api.js"), "export {};\n", "utf8");
+
+    copyBundledPluginMetadataWithEnv({ repoRoot, env: {} });
+
+    expect(fs.existsSync(staleDistDir)).toBe(false);
+
+    copyBundledPluginMetadataWithEnv({
+      repoRoot,
+      env: { OPENCLAW_BUILD_PRIVATE_QA: "1" } as NodeJS.ProcessEnv,
+    });
+
+    expect(fs.existsSync(path.join(staleDistDir, "openclaw.plugin.json"))).toBe(true);
+    expect(fs.existsSync(path.join(staleDistDir, "package.json"))).toBe(true);
   });
 
   it.each([

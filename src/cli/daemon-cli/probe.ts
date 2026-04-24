@@ -1,6 +1,15 @@
 import { formatErrorMessage } from "../../infra/errors.js";
 import { withProgress } from "../progress.js";
 
+type GatewayStatusProbeKind = "connect" | "read";
+
+let probeGatewayModulePromise: Promise<typeof import("../../gateway/probe.js")> | undefined;
+
+async function loadProbeGatewayModule(): Promise<typeof import("../../gateway/probe.js")> {
+  probeGatewayModulePromise ??= import("../../gateway/probe.js");
+  return await probeGatewayModulePromise;
+}
+
 function resolveProbeFailureMessage(result: {
   error?: string | null;
   close?: { code: number; reason: string } | null;
@@ -24,6 +33,7 @@ export async function probeGatewayStatus(opts: {
   requireRpc?: boolean;
   configPath?: string;
 }) {
+  const kind = (opts.requireRpc ? "read" : "connect") satisfies GatewayStatusProbeKind;
   try {
     const result = await withProgress(
       {
@@ -43,9 +53,20 @@ export async function probeGatewayStatus(opts: {
             timeoutMs: opts.timeoutMs,
             ...(opts.configPath ? { configPath: opts.configPath } : {}),
           });
-          return { ok: true } as const;
+          const { probeGateway } = await loadProbeGatewayModule();
+          const authProbe = await probeGateway({
+            url: opts.url,
+            auth: {
+              token: opts.token,
+              password: opts.password,
+            },
+            tlsFingerprint: opts.tlsFingerprint,
+            timeoutMs: opts.timeoutMs,
+            includeDetails: false,
+          }).catch(() => null);
+          return { ok: true as const, authProbe };
         }
-        const { probeGateway } = await import("../../gateway/probe.js");
+        const { probeGateway } = await loadProbeGatewayModule();
         return await probeGateway({
           url: opts.url,
           auth: {
@@ -58,16 +79,34 @@ export async function probeGatewayStatus(opts: {
         });
       },
     );
+    const auth =
+      "auth" in result ? result.auth : "authProbe" in result ? result.authProbe?.auth : undefined;
     if (result.ok) {
-      return { ok: true } as const;
+      return {
+        ok: true,
+        kind,
+        capability:
+          kind === "read"
+            ? auth?.capability && auth.capability !== "unknown"
+              ? auth.capability
+              : // The status RPC proves read access even when a follow-up hello probe
+                // cannot recover richer scope metadata.
+                "read_only"
+            : auth?.capability,
+        auth,
+      } as const;
     }
     return {
       ok: false,
+      kind,
+      capability: auth?.capability,
+      auth,
       error: resolveProbeFailureMessage(result),
     } as const;
   } catch (err) {
     return {
       ok: false,
+      kind,
       error: formatErrorMessage(err),
     } as const;
   }

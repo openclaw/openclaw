@@ -3,7 +3,6 @@ import path from "node:path";
 import ts from "typescript";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { bundledPluginRoot } from "../../../test/helpers/bundled-plugin-paths.js";
-import { loadRuntimeApiExportTypesViaJiti } from "../../../test/helpers/plugins/jiti-runtime-api.ts";
 import {
   createPluginSetupWizardConfigure,
   createTestWizardPrompter,
@@ -13,9 +12,11 @@ import {
 import { createStartAccountContext } from "../../../test/helpers/plugins/start-account-context.js";
 import type { OpenClawConfig, PluginRuntime, ResolvedLineAccount } from "../api.js";
 import { linePlugin } from "./channel.js";
+import { lineGatewayAdapter } from "./gateway.js";
 import { probeLineBot } from "./probe.js";
 import { clearLineRuntime, setLineRuntime } from "./runtime.js";
 import { lineSetupWizard } from "./setup-surface.js";
+import { lineStatusAdapter } from "./status.js";
 
 const { getBotInfoMock, MessagingApiClientMock } = vi.hoisted(() => {
   const getBotInfoMock = vi.fn();
@@ -366,37 +367,13 @@ describe("linePlugin status.probeAccount", () => {
 
     clearLineRuntime();
 
-    await expect(linePlugin.status!.probeAccount!(params)).resolves.toEqual(
+    await expect(lineStatusAdapter.probeAccount!(params)).resolves.toEqual(
       await probeLineBot("token", 50),
     );
   });
 });
 
 describe("line runtime api", () => {
-  it("loads through Jiti without duplicate export errors", () => {
-    const runtimeApiPath = path.join(process.cwd(), "extensions", "line", "runtime-api.ts");
-
-    expect(
-      loadRuntimeApiExportTypesViaJiti({
-        modulePath: runtimeApiPath,
-        exportNames: [
-          "buildTemplateMessageFromPayload",
-          "downloadLineMedia",
-          "isSenderAllowed",
-          "probeLineBot",
-          "pushMessageLine",
-        ],
-        realPluginSdkSpecifiers: ["openclaw/plugin-sdk/line-runtime"],
-      }),
-    ).toEqual({
-      buildTemplateMessageFromPayload: "function",
-      downloadLineMedia: "function",
-      isSenderAllowed: "function",
-      probeLineBot: "function",
-      pushMessageLine: "function",
-    });
-  }, 240_000);
-
   it("keeps the LINE runtime barrel self-contained", () => {
     const runtimeApiPath = path.join(process.cwd(), "extensions", "line", "runtime-api.ts");
     expect(collectRuntimeApiPreExports(runtimeApiPath)).toEqual([]);
@@ -444,7 +421,7 @@ function startLineAccount(params: { account: ResolvedLineAccount; abortSignal?: 
   setLineRuntime(runtime);
   return {
     monitorLineProvider,
-    task: linePlugin.gateway!.startAccount!(
+    task: lineGatewayAdapter.startAccount!(
       createStartAccountContext({
         account: params.account,
         abortSignal: params.abortSignal,

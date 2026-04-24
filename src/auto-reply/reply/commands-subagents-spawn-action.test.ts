@@ -2,9 +2,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SpawnSubagentResult } from "../../agents/subagent-spawn.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { createEmptyInlineDirectives } from "./commands-subagents.test-helpers.js";
 import { handleSubagentsSpawnAction } from "./commands-subagents/action-spawn.js";
 import type { HandleCommandsParams } from "./commands-types.js";
-import type { InlineDirectives } from "./directive-handling.js";
 
 const spawnSubagentDirectMock = vi.hoisted(() => vi.fn());
 
@@ -41,25 +41,6 @@ function buildContext(params?: {
   context?: Partial<HandleCommandsParams["ctx"]>;
   sessionEntry?: SessionEntry | undefined;
 }) {
-  const directives: InlineDirectives = {
-    cleaned: "",
-    hasThinkDirective: false,
-    hasVerboseDirective: false,
-    hasFastDirective: false,
-    hasReasoningDirective: false,
-    hasElevatedDirective: false,
-    hasExecDirective: false,
-    hasExecOptions: false,
-    invalidExecHost: false,
-    invalidExecSecurity: false,
-    invalidExecAsk: false,
-    invalidExecNode: false,
-    hasStatusDirective: false,
-    hasModelDirective: false,
-    hasQueueDirective: false,
-    queueReset: false,
-    hasQueueOptions: false,
-  };
   const ctx = {
     OriginatingChannel: "whatsapp",
     OriginatingTo: "channel:origin",
@@ -81,7 +62,7 @@ function buildContext(params?: {
         commandBodyNormalized: "",
         to: params?.commandTo ?? "channel:command",
       },
-      directives,
+      directives: createEmptyInlineDirectives(),
       elevated: { enabled: false, allowed: false, failures: [] },
       sessionKey: "agent:main:main",
       workspaceDir: "/tmp/openclaw-subagents-spawn",
@@ -230,6 +211,76 @@ describe("subagents spawn action", () => {
         agentSessionKey: "agent:main:target",
         agentChannel: "discord",
         agentTo: "channel:12345",
+      }),
+    );
+  });
+
+  it("prefers the requester-key session entry for group metadata", async () => {
+    spawnSubagentDirectMock.mockResolvedValue(acceptedResult());
+    await handleSubagentsSpawnAction(
+      buildContext({
+        requesterKey: "agent:main:target",
+        sessionEntry: {
+          sessionId: "wrapper-session",
+          updatedAt: Date.now(),
+          groupId: "wrapper-group",
+          groupChannel: "#wrapper",
+          space: "wrapper-space",
+        },
+      }),
+    );
+    const call = spawnSubagentDirectMock.mock.calls.at(-1);
+    expect(call?.[1]).toEqual(
+      expect.objectContaining({
+        agentSessionKey: "agent:main:target",
+        agentGroupId: "wrapper-group",
+        agentGroupChannel: "#wrapper",
+        agentGroupSpace: "wrapper-space",
+      }),
+    );
+
+    spawnSubagentDirectMock.mockClear();
+    await handleSubagentsSpawnAction({
+      ...buildContext({
+        requesterKey: "agent:main:target",
+        sessionEntry: {
+          sessionId: "wrapper-session",
+          updatedAt: Date.now(),
+          groupId: "wrapper-group",
+          groupChannel: "#wrapper",
+          space: "wrapper-space",
+        },
+      }),
+      params: {
+        ...buildContext({
+          requesterKey: "agent:main:target",
+          sessionEntry: {
+            sessionId: "wrapper-session",
+            updatedAt: Date.now(),
+            groupId: "wrapper-group",
+            groupChannel: "#wrapper",
+            space: "wrapper-space",
+          },
+        }).params,
+        sessionStore: {
+          "agent:main:target": {
+            sessionId: "target-session",
+            updatedAt: Date.now(),
+            groupId: "target-group",
+            groupChannel: "#target",
+            space: "target-space",
+          },
+        },
+      },
+    });
+
+    expect(spawnSubagentDirectMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        agentSessionKey: "agent:main:target",
+        agentGroupId: "target-group",
+        agentGroupChannel: "#target",
+        agentGroupSpace: "target-space",
       }),
     );
   });

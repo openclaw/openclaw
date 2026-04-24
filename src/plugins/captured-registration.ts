@@ -1,16 +1,26 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { ExtensionFactory } from "@mariozechner/pi-coding-agent";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type {
+  AgentToolResultMiddleware,
+  AgentToolResultMiddlewareOptions,
+} from "./agent-tool-result-middleware-types.js";
+import { normalizeAgentToolResultMiddlewareHarnesses } from "./agent-tool-result-middleware.js";
 import { buildPluginApi } from "./api-builder.js";
+import type { CodexAppServerExtensionFactory } from "./codex-app-server-extension-types.js";
 import type { MemoryEmbeddingProviderAdapter } from "./memory-embedding-providers.js";
+import type { PluginAgentToolResultMiddlewareRegistration } from "./registry-types.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import type {
   AnyAgentTool,
+  AgentHarness,
   CliBackendPlugin,
+  OpenClawPluginApi,
   ImageGenerationProviderPlugin,
   MediaUnderstandingProviderPlugin,
   MusicGenerationProviderPlugin,
-  OpenClawPluginApi,
   OpenClawPluginCliCommandDescriptor,
   OpenClawPluginCliRegistrar,
+  PluginTextTransformRegistration,
   ProviderPlugin,
   RealtimeTranscriptionProviderPlugin,
   RealtimeVoiceProviderPlugin,
@@ -29,8 +39,13 @@ type CapturedPluginCliRegistration = {
 export type CapturedPluginRegistration = {
   api: OpenClawPluginApi;
   providers: ProviderPlugin[];
+  agentHarnesses: AgentHarness[];
   cliRegistrars: CapturedPluginCliRegistration[];
   cliBackends: CliBackendPlugin[];
+  textTransforms: PluginTextTransformRegistration[];
+  embeddedExtensionFactories: ExtensionFactory[];
+  codexAppServerExtensionFactories: CodexAppServerExtensionFactory[];
+  agentToolResultMiddlewares: PluginAgentToolResultMiddlewareRegistration[];
   speechProviders: SpeechProviderPlugin[];
   realtimeTranscriptionProviders: RealtimeTranscriptionProviderPlugin[];
   realtimeVoiceProviders: RealtimeVoiceProviderPlugin[];
@@ -49,8 +64,13 @@ export function createCapturedPluginRegistration(params?: {
   registrationMode?: OpenClawPluginApi["registrationMode"];
 }): CapturedPluginRegistration {
   const providers: ProviderPlugin[] = [];
+  const agentHarnesses: AgentHarness[] = [];
   const cliRegistrars: CapturedPluginCliRegistration[] = [];
   const cliBackends: CliBackendPlugin[] = [];
+  const textTransforms: PluginTextTransformRegistration[] = [];
+  const embeddedExtensionFactories: ExtensionFactory[] = [];
+  const codexAppServerExtensionFactories: CodexAppServerExtensionFactory[] = [];
+  const agentToolResultMiddlewares: PluginAgentToolResultMiddlewareRegistration[] = [];
   const speechProviders: SpeechProviderPlugin[] = [];
   const realtimeTranscriptionProviders: RealtimeTranscriptionProviderPlugin[] = [];
   const realtimeVoiceProviders: RealtimeVoiceProviderPlugin[] = [];
@@ -71,8 +91,13 @@ export function createCapturedPluginRegistration(params?: {
 
   return {
     providers,
+    agentHarnesses,
     cliRegistrars,
     cliBackends,
+    textTransforms,
+    embeddedExtensionFactories,
+    codexAppServerExtensionFactories,
+    agentToolResultMiddlewares,
     speechProviders,
     realtimeTranscriptionProviders,
     realtimeVoiceProviders,
@@ -120,8 +145,34 @@ export function createCapturedPluginRegistration(params?: {
         registerProvider(provider: ProviderPlugin) {
           providers.push(provider);
         },
+        registerAgentHarness(harness: AgentHarness) {
+          agentHarnesses.push(harness);
+        },
+        registerEmbeddedExtensionFactory(factory: ExtensionFactory) {
+          embeddedExtensionFactories.push(factory);
+        },
+        registerCodexAppServerExtensionFactory(factory: CodexAppServerExtensionFactory) {
+          codexAppServerExtensionFactories.push(factory);
+        },
+        registerAgentToolResultMiddleware(
+          handler: AgentToolResultMiddleware,
+          options?: AgentToolResultMiddlewareOptions,
+        ) {
+          const harnesses = normalizeAgentToolResultMiddlewareHarnesses(options);
+          agentToolResultMiddlewares.push({
+            pluginId: "captured-plugin-registration",
+            pluginName: "Captured Plugin Registration",
+            rawHandler: handler,
+            handler,
+            harnesses,
+            source: "captured-plugin-registration",
+          });
+        },
         registerCliBackend(backend: CliBackendPlugin) {
           cliBackends.push(backend);
+        },
+        registerTextTransforms(transforms: PluginTextTransformRegistration) {
+          textTransforms.push(transforms);
         },
         registerSpeechProvider(provider: SpeechProviderPlugin) {
           speechProviders.push(provider);

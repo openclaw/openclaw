@@ -16,6 +16,10 @@ import * as synologyClient from "./client.js";
 import { validateToken, authorizeUserForDm, sanitizeInput, RateLimiter } from "./security.js";
 import type { SynologyWebhookPayload, ResolvedSynologyChatAccount } from "./types.js";
 
+function normalizeLowercaseStringOrEmpty(value: unknown): string {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+
 // One rate limiter per account, created lazily
 const rateLimiters = new Map<string, RateLimiter>();
 const invalidTokenRateLimiters = new Map<string, InvalidTokenRateLimiter>();
@@ -141,7 +145,10 @@ function getSynologyWebhookInFlightKey(account: ResolvedSynologyChatAccount): st
 }
 
 /** Read the full request body as a string. */
-async function readBody(req: IncomingMessage): Promise<
+async function readBody(
+  req: IncomingMessage,
+  timeoutMs = PREAUTH_BODY_TIMEOUT_MS,
+): Promise<
   | { ok: true; body: string }
   | {
       ok: false;
@@ -152,7 +159,7 @@ async function readBody(req: IncomingMessage): Promise<
   try {
     const body = await readRequestBodyWithLimit(req, {
       maxBytes: PREAUTH_MAX_BODY_BYTES,
-      timeoutMs: PREAUTH_BODY_TIMEOUT_MS,
+      timeoutMs,
     });
     return { ok: true, body };
   } catch (err) {
@@ -264,7 +271,7 @@ function extractTokenFromHeaders(req: IncomingMessage): string | undefined {
  * - text    <- text | message | content
  */
 function parsePayload(req: IncomingMessage, body: string): SynologyWebhookPayload | null {
-  const contentType = String(req.headers["content-type"] ?? "").toLowerCase();
+  const contentType = normalizeLowercaseStringOrEmpty(req.headers["content-type"]);
 
   let bodyFields: Record<string, unknown> = {};
   if (contentType.includes("application/json")) {
@@ -341,6 +348,7 @@ export interface WebhookHandlerDeps {
     warn: (...args: unknown[]) => void;
     error: (...args: unknown[]) => void;
   };
+  bodyTimeoutMs?: number;
 }
 
 /**
@@ -370,8 +378,9 @@ async function parseWebhookPayloadRequest(params: {
   req: IncomingMessage;
   res: ServerResponse;
   log?: WebhookHandlerDeps["log"];
+  bodyTimeoutMs?: number;
 }): Promise<{ ok: false } | { ok: true; payload: SynologyWebhookPayload }> {
-  const bodyResult = await readBody(params.req);
+  const bodyResult = await readBody(params.req, params.bodyTimeoutMs);
   if (!bodyResult.ok) {
     params.log?.error("Failed to read request body", bodyResult.error);
     respondJson(params.res, bodyResult.statusCode, { error: bodyResult.error });
@@ -464,6 +473,7 @@ async function parseAndAuthorizeSynologyWebhook(params: {
   invalidTokenRateLimiter: InvalidTokenRateLimiter;
   rateLimiter: RateLimiter;
   log?: WebhookHandlerDeps["log"];
+  bodyTimeoutMs?: number;
 }): Promise<{ ok: false } | { ok: true; message: AuthorizedSynologyWebhook }> {
   const parsed = await parseWebhookPayloadRequest(params);
   if (!parsed.ok) {
@@ -611,6 +621,7 @@ export function createWebhookHandler(deps: WebhookHandlerDeps) {
         invalidTokenRateLimiter,
         rateLimiter,
         log,
+        bodyTimeoutMs: deps.bodyTimeoutMs,
       });
     } finally {
       // Only bound the pre-auth request pipeline; async reply delivery is outside webhook ingress.

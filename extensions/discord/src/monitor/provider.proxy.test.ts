@@ -1,13 +1,25 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+
+function resolveGatewayInfoFetch(resolve: ((value: Response) => void) | undefined): void {
+  expect(resolve).toBeDefined();
+  resolve!({
+    ok: true,
+    status: 200,
+    text: async () => JSON.stringify({ url: "wss://gateway.discord.gg" }),
+  } as Response);
+}
 
 const {
   GatewayIntents,
   baseRegisterClientSpy,
+  captureHttpExchangeSpy,
+  captureWsEventSpy,
   GatewayPlugin,
   globalFetchMock,
   HttpsProxyAgent,
   getLastAgent,
   restProxyAgentSpy,
+  resolveDebugProxySettingsMock,
   undiciFetchMock,
   undiciProxyAgentSpy,
   resetLastAgent,
@@ -21,6 +33,9 @@ const {
   const globalFetchMock = vi.fn();
   const baseRegisterClientSpy = vi.fn();
   const webSocketSpy = vi.fn();
+  const captureHttpExchangeSpy = vi.fn();
+  const captureWsEventSpy = vi.fn();
+  const resolveDebugProxySettingsMock = vi.fn(() => ({ enabled: false }));
 
   const GatewayIntents = {
     Guilds: 1 << 0,
@@ -36,9 +51,15 @@ const {
   class GatewayPlugin {
     options: unknown;
     gatewayInfo: unknown;
+    client: unknown;
+    ws: unknown;
+    isConnecting: boolean;
     constructor(options?: unknown, gatewayInfo?: unknown) {
       this.options = options;
       this.gatewayInfo = gatewayInfo;
+      this.client = undefined;
+      this.ws = undefined;
+      this.isConnecting = false;
     }
     async registerClient(client: unknown) {
       baseRegisterClientSpy(client);
@@ -66,6 +87,9 @@ const {
     HttpsProxyAgent,
     getLastAgent: () => HttpsProxyAgent.lastCreated,
     restProxyAgentSpy,
+    captureHttpExchangeSpy,
+    captureWsEventSpy,
+    resolveDebugProxySettingsMock,
     undiciFetchMock,
     undiciProxyAgentSpy,
     resetLastAgent: () => {
@@ -92,23 +116,26 @@ vi.mock("https-proxy-agent", () => ({
 }));
 
 vi.mock("undici", () => ({
-  ProxyAgent: class {
-    proxyUrl: string;
-    constructor(proxyUrl: string) {
-      this.proxyUrl = proxyUrl;
-      undiciProxyAgentSpy(proxyUrl);
-      restProxyAgentSpy(proxyUrl);
-    }
+  ProxyAgent: function ProxyAgent(this: { proxyUrl: string }, proxyUrl: string) {
+    this.proxyUrl = proxyUrl;
+    undiciProxyAgentSpy(proxyUrl);
+    restProxyAgentSpy(proxyUrl);
   },
   fetch: undiciFetchMock,
 }));
 
 vi.mock("ws", () => ({
-  default: class MockWebSocket {
-    constructor(url: string, options?: { agent?: unknown }) {
-      webSocketSpy(url, options);
-    }
+  default: function MockWebSocket(url: string, options?: { agent?: unknown }) {
+    webSocketSpy(url, options);
   },
+}));
+
+vi.mock("openclaw/plugin-sdk/proxy-capture", () => ({
+  captureHttpExchange: captureHttpExchangeSpy,
+  captureWsEvent: captureWsEventSpy,
+  resolveEffectiveDebugProxyUrl: (configuredProxyUrl?: string) =>
+    configuredProxyUrl?.trim() || process.env.OPENCLAW_DEBUG_PROXY_URL,
+  resolveDebugProxySettings: resolveDebugProxySettingsMock,
 }));
 
 describe("createDiscordGatewayPlugin", () => {
@@ -132,19 +159,14 @@ describe("createDiscordGatewayPlugin", () => {
     return {
       HttpsProxyAgentCtor:
         HttpsProxyAgent as unknown as typeof import("https-proxy-agent").HttpsProxyAgent,
-      ProxyAgentCtor: class {
-        proxyUrl: string;
-        constructor(proxyUrl: string) {
-          this.proxyUrl = proxyUrl;
-          undiciProxyAgentSpy(proxyUrl);
-          restProxyAgentSpy(proxyUrl);
-        }
+      ProxyAgentCtor: function ProxyAgentCtor(this: { proxyUrl: string }, proxyUrl: string) {
+        this.proxyUrl = proxyUrl;
+        undiciProxyAgentSpy(proxyUrl);
+        restProxyAgentSpy(proxyUrl);
       } as unknown as typeof import("undici").ProxyAgent,
       undiciFetch: undiciFetchMock,
-      webSocketCtor: class {
-        constructor(url: string, options?: { agent?: unknown }) {
-          webSocketSpy(url, options);
-        }
+      webSocketCtor: function WebSocketCtor(url: string, options?: { agent?: unknown }) {
+        webSocketSpy(url, options);
       } as unknown as new (url: string, options?: { agent?: unknown }) => import("ws").WebSocket,
       registerClient: async (_plugin: unknown, client: unknown) => {
         baseRegisterClientSpy(client);
@@ -214,6 +236,9 @@ describe("createDiscordGatewayPlugin", () => {
   }
 
   beforeEach(() => {
+    vi.unstubAllEnvs();
+    vi.stubEnv("OPENCLAW_DEBUG_PROXY_ENABLED", "");
+    vi.stubEnv("OPENCLAW_DEBUG_PROXY_URL", "");
     vi.stubGlobal("fetch", globalFetchMock);
     vi.useRealTimers();
     baseRegisterClientSpy.mockClear();
@@ -223,7 +248,15 @@ describe("createDiscordGatewayPlugin", () => {
     undiciProxyAgentSpy.mockClear();
     wsProxyAgentSpy.mockClear();
     webSocketSpy.mockClear();
+    captureHttpExchangeSpy.mockClear();
+    captureWsEventSpy.mockClear();
+    resolveDebugProxySettingsMock.mockReset().mockReturnValue({ enabled: false });
     resetLastAgent();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllEnvs();
   });
 
   it("uses safe gateway metadata lookup without proxy", async () => {
@@ -257,6 +290,23 @@ describe("createDiscordGatewayPlugin", () => {
 
     expect(webSocketSpy).toHaveBeenCalledWith("wss://gateway.discord.gg", undefined);
     expect(wsProxyAgentSpy).not.toHaveBeenCalled();
+  });
+
+  it("allocates a fresh websocket flow id for each gateway socket", () => {
+    const runtime = createRuntime();
+    const plugin = createDiscordGatewayPlugin({
+      discordConfig: {},
+      runtime,
+    });
+
+    const createWebSocket = (plugin as unknown as { createWebSocket: (url: string) => unknown })
+      .createWebSocket;
+    createWebSocket("wss://gateway.discord.gg/?attempt=1");
+    createWebSocket("wss://gateway.discord.gg/?attempt=2");
+
+    const openCalls = captureWsEventSpy.mock.calls.filter(([event]) => event?.kind === "ws-open");
+    expect(openCalls).toHaveLength(2);
+    expect(openCalls[0]?.[0]?.flowId).not.toBe(openCalls[1]?.[0]?.flowId);
   });
 
   it("maps plain-text Discord 503 responses to fetch failed", async () => {
@@ -334,6 +384,19 @@ describe("createDiscordGatewayPlugin", () => {
     expect(baseRegisterClientSpy).toHaveBeenCalledTimes(1);
   });
 
+  it("does not double-capture gateway metadata fetches when global fetch patching is enabled", async () => {
+    resolveDebugProxySettingsMock.mockReturnValue({ enabled: true });
+    const runtime = createRuntime();
+    const plugin = createDiscordGatewayPlugin({
+      discordConfig: {},
+      runtime,
+    });
+
+    await registerGatewayClientWithMetadata({ plugin, fetchMock: globalFetchMock });
+
+    expect(captureHttpExchangeSpy).not.toHaveBeenCalled();
+  });
+
   it("accepts IPv6 loopback proxy URLs for gateway metadata and websocket setup", async () => {
     const runtime = createRuntime();
     const plugin = createDiscordGatewayPlugin({
@@ -395,6 +458,89 @@ describe("createDiscordGatewayPlugin", () => {
     expect(runtime.log).toHaveBeenCalledWith(
       expect.stringContaining("discord: gateway metadata lookup failed transiently"),
     );
+  });
+
+  it("sets client reference before the async gateway-info fetch resolves (regression for #52372)", async () => {
+    vi.useFakeTimers();
+    const runtime = createRuntime();
+    let fetchResolve: ((v: Response) => void) | undefined;
+    globalFetchMock.mockImplementation(
+      () =>
+        new Promise<Response>((resolve) => {
+          fetchResolve = resolve;
+        }),
+    );
+    const plugin = createDiscordGatewayPlugin({
+      discordConfig: {},
+      runtime,
+    });
+
+    const clientArg = {
+      options: { token: "token-race" },
+      registerListener: baseRegisterClientSpy,
+      unregisterListener: vi.fn(),
+    };
+    const registerPromise = (
+      plugin as unknown as {
+        registerClient: (c: typeof clientArg) => Promise<void>;
+      }
+    ).registerClient(clientArg);
+
+    // Before the metadata fetch resolves, this.client should already be set so
+    // that a concurrent identify() cannot observe an undefined client.
+    expect((plugin as unknown as { client: unknown }).client).toBe(clientArg);
+
+    resolveGatewayInfoFetch(fetchResolve);
+    await registerPromise;
+
+    expect(baseRegisterClientSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips super.registerClient when an external connect starts during the metadata fetch (regression for #52372)", async () => {
+    const runCase = async (markStarted: (plugin: unknown) => void) => {
+      vi.useFakeTimers();
+      const runtime = createRuntime();
+      let fetchResolve: ((v: Response) => void) | undefined;
+      globalFetchMock.mockImplementation(
+        () =>
+          new Promise<Response>((resolve) => {
+            fetchResolve = resolve;
+          }),
+      );
+      const plugin = createDiscordGatewayPlugin({
+        discordConfig: {},
+        runtime,
+      });
+
+      const clientArg = {
+        options: { token: "token-race" },
+        registerListener: baseRegisterClientSpy,
+        unregisterListener: vi.fn(),
+      };
+      const registerPromise = (
+        plugin as unknown as {
+          registerClient: (c: typeof clientArg) => Promise<void>;
+        }
+      ).registerClient(clientArg);
+
+      markStarted(plugin);
+      resolveGatewayInfoFetch(fetchResolve);
+      await registerPromise;
+    };
+
+    await runCase((plugin) => {
+      (plugin as { ws: unknown }).ws = { readyState: 1 };
+    });
+    expect(baseRegisterClientSpy).not.toHaveBeenCalled();
+
+    baseRegisterClientSpy.mockClear();
+    globalFetchMock.mockReset();
+    vi.useRealTimers();
+
+    await runCase((plugin) => {
+      (plugin as { isConnecting: boolean }).isConnecting = true;
+    });
+    expect(baseRegisterClientSpy).not.toHaveBeenCalled();
   });
 
   it("refreshes fallback gateway metadata on the next register attempt", async () => {

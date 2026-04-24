@@ -115,4 +115,60 @@ describe("applyModelProviderToolPolicy", () => {
 
     expect(toolNames(filtered)).toEqual(["read", "web_search", "exec"]);
   });
+
+  it("drops heavyweight tools when the experimental lean local-model flag is enabled", () => {
+    const filtered = __testing.applyModelProviderToolPolicy(
+      [
+        { name: "read" },
+        { name: "browser" },
+        { name: "cron" },
+        { name: "message" },
+        { name: "exec" },
+      ] as unknown as AnyAgentTool[],
+      {
+        config: {
+          agents: {
+            defaults: {
+              experimental: {
+                localModelLean: true,
+              },
+            },
+          },
+        },
+        modelProvider: "openai",
+        modelApi: "openai-responses",
+        modelId: "gpt-5.4",
+      },
+    );
+
+    expect(toolNames(filtered)).toEqual(["read", "exec"]);
+  });
+
+  it("keeps heavyweight tools when the experimental lean local-model flag is not enabled", () => {
+    const filtered = __testing.applyModelProviderToolPolicy(
+      [
+        { name: "read" },
+        { name: "browser" },
+        { name: "cron" },
+        { name: "message" },
+        { name: "exec" },
+      ] as unknown as AnyAgentTool[],
+      {
+        config: {
+          agents: {
+            defaults: {
+              experimental: {
+                localModelLean: false,
+              },
+            },
+          },
+        },
+        modelProvider: "openai",
+        modelApi: "openai-responses",
+        modelId: "gpt-5.4",
+      },
+    );
+
+    expect(toolNames(filtered)).toEqual(["read", "browser", "cron", "message", "exec"]);
+  });
 });

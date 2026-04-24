@@ -139,6 +139,10 @@ export function resolveCompatibilityHostVersion(
   env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
   fallback = RUNTIME_SERVICE_VERSION_FALLBACK,
 ): string {
+  const explicitCompatibilityVersion = firstNonEmpty(env.OPENCLAW_COMPATIBILITY_HOST_VERSION);
+  if (explicitCompatibilityVersion) {
+    return explicitCompatibilityVersion;
+  }
   return resolveVersionFromRuntimeSources({
     env,
     runtimeVersion: resolveUsableRuntimeVersion(VERSION),

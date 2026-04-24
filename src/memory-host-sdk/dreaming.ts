@@ -1,16 +1,18 @@
 import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { asNullableRecord } from "../shared/record-coerce.js";
 import {
+  lowercasePreservingWhitespace,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
+  normalizeStringifiedOptionalString,
 } from "../shared/string-coerce.js";
 
 export const DEFAULT_MEMORY_DREAMING_ENABLED = false;
 export const DEFAULT_MEMORY_DREAMING_TIMEZONE = undefined;
 export const DEFAULT_MEMORY_DREAMING_VERBOSE_LOGGING = false;
-export const DEFAULT_MEMORY_DREAMING_STORAGE_MODE = "inline";
+export const DEFAULT_MEMORY_DREAMING_STORAGE_MODE = "separate";
 export const DEFAULT_MEMORY_DREAMING_SEPARATE_REPORTS = false;
 export const DEFAULT_MEMORY_DREAMING_FREQUENCY = "0 3 * * *";
 export const DEFAULT_MEMORY_DREAMING_PLUGIN_ID = "memory-core";
@@ -157,10 +159,11 @@ function normalizeTrimmedString(value: unknown): string | undefined {
 }
 
 function normalizeNonNegativeInt(value: unknown, fallback: number): number {
-  if (typeof value === "string" && value.trim().length === 0) {
+  const normalized = normalizeStringifiedOptionalString(value);
+  if (typeof value === "string" && !normalized) {
     return fallback;
   }
-  const num = typeof value === "string" ? Number(value.trim()) : Number(value);
+  const num = typeof value === "string" ? Number(normalized) : Number(value);
   if (!Number.isFinite(num)) {
     return fallback;
   }
@@ -175,10 +178,11 @@ function normalizeOptionalPositiveInt(value: unknown): number | undefined {
   if (value === undefined || value === null) {
     return undefined;
   }
-  if (typeof value === "string" && value.trim().length === 0) {
+  const normalized = normalizeStringifiedOptionalString(value);
+  if (typeof value === "string" && !normalized) {
     return undefined;
   }
-  const num = typeof value === "string" ? Number(value.trim()) : Number(value);
+  const num = typeof value === "string" ? Number(normalized) : Number(value);
   if (!Number.isFinite(num)) {
     return undefined;
   }
@@ -206,10 +210,11 @@ function normalizeBoolean(value: unknown, fallback: boolean): boolean {
 }
 
 function normalizeScore(value: unknown, fallback: number): number {
-  if (typeof value === "string" && value.trim().length === 0) {
+  const normalized = normalizeStringifiedOptionalString(value);
+  if (typeof value === "string" && !normalized) {
     return fallback;
   }
-  const num = typeof value === "string" ? Number(value.trim()) : Number(value);
+  const num = typeof value === "string" ? Number(normalized) : Number(value);
   if (!Number.isFinite(num) || num < 0 || num > 1) {
     return fallback;
   }
@@ -302,7 +307,7 @@ function resolveExecutionConfig(
 
 function normalizePathForComparison(input: string): string {
   const normalized = path.resolve(input);
-  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+  return process.platform === "win32" ? lowercasePreservingWhitespace(normalized) : normalized;
 }
 
 function formatLocalIsoDay(epochMs: number): string {

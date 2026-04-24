@@ -1,5 +1,4 @@
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PollInput } from "../../polls.js";
 import { normalizePollInput } from "../../polls.js";
 import {
@@ -16,7 +15,11 @@ import {
   type OutboundSendDeps,
 } from "./deliver.js";
 import type { OutboundMirror } from "./mirror.js";
-import { normalizeReplyPayloadsForDelivery } from "./payloads.js";
+import {
+  createOutboundPayloadPlan,
+  projectOutboundPayloadPlanForDelivery,
+  projectOutboundPayloadPlanForMirror,
+} from "./payloads.js";
 import { buildOutboundSessionContext } from "./session-context.js";
 import { resolveOutboundTarget } from "./targets.js";
 
@@ -49,6 +52,18 @@ type MessageSendParams = {
   content: string;
   /** Active agent id for per-agent outbound media root scoping. */
   agentId?: string;
+  /** Originating session key used for requester-scoped outbound media policy. */
+  requesterSessionKey?: string;
+  /** Originating account id used for requester-scoped outbound media policy. */
+  requesterAccountId?: string;
+  /** Originating sender id used for sender-scoped outbound media policy. */
+  requesterSenderId?: string;
+  /** Originating sender display name for name-keyed sender policy matching. */
+  requesterSenderName?: string;
+  /** Originating sender username for username-keyed sender policy matching. */
+  requesterSenderUsername?: string;
+  /** Originating sender E.164 phone number for e164-keyed sender policy matching. */
+  requesterSenderE164?: string;
   channel?: string;
   mediaUrl?: string;
   mediaUrls?: string[];
@@ -222,20 +237,17 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
   const channel = await resolveRequiredChannel({ cfg, channel: params.channel });
   const plugin = resolveRequiredPlugin(channel, cfg);
   const deliveryMode = plugin.outbound?.deliveryMode ?? "direct";
-  const normalizedPayloads = normalizeReplyPayloadsForDelivery([
+  const outboundPlan = createOutboundPayloadPlan([
     {
       text: params.content,
       mediaUrl: params.mediaUrl,
       mediaUrls: params.mediaUrls,
     },
   ]);
-  const mirrorText = normalizedPayloads
-    .map((payload) => payload.text)
-    .filter(Boolean)
-    .join("\n");
-  const mirrorMediaUrls = normalizedPayloads.flatMap(
-    (payload) => resolveSendableOutboundReplyParts(payload).mediaUrls,
-  );
+  const normalizedPayloads = projectOutboundPayloadPlanForDelivery(outboundPlan);
+  const mirrorProjection = projectOutboundPayloadPlanForMirror(outboundPlan);
+  const mirrorText = mirrorProjection.text;
+  const mirrorMediaUrls = mirrorProjection.mediaUrls;
   const primaryMediaUrl = mirrorMediaUrls[0] ?? params.mediaUrl ?? null;
 
   if (params.dryRun) {
@@ -265,7 +277,12 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
     const outboundSession = buildOutboundSessionContext({
       cfg,
       agentId: params.agentId,
-      sessionKey: params.mirror?.sessionKey,
+      sessionKey: params.requesterSessionKey ?? params.mirror?.sessionKey,
+      requesterAccountId: params.requesterAccountId ?? params.accountId,
+      requesterSenderId: params.requesterSenderId,
+      requesterSenderName: params.requesterSenderName,
+      requesterSenderUsername: params.requesterSenderUsername,
+      requesterSenderE164: params.requesterSenderE164,
     });
     const results = await deliverOutboundPayloads({
       cfg,
@@ -314,6 +331,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       accountId: params.accountId,
       agentId: params.agentId,
       channel,
+      replyToId: params.replyToId,
       sessionKey: params.mirror?.sessionKey,
       idempotencyKey: await resolveGatewayIdempotencyKey(params.idempotencyKey),
     },

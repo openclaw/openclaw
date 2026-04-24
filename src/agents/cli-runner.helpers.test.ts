@@ -10,6 +10,7 @@ import {
   prepareCliPromptImagePayload,
   resolveCliRunQueueKey,
   writeCliImages,
+  writeCliSystemPromptFile,
 } from "./cli-runner/helpers.js";
 import * as promptImageUtils from "./pi-embedded-runner/run/images.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
@@ -143,6 +144,23 @@ describe("buildCliArgs", () => {
     ).toEqual(["-p", "--append-system-prompt", "Stable prefix\nDynamic suffix"]);
   });
 
+  it("passes Codex system prompts via a model instructions file config override", () => {
+    expect(
+      buildCliArgs({
+        backend: {
+          command: "codex",
+          systemPromptFileConfigArg: "-c",
+          systemPromptFileConfigKey: "model_instructions_file",
+        },
+        baseArgs: ["exec", "--json"],
+        modelId: "gpt-5.4",
+        systemPrompt: "Stable prefix",
+        systemPromptFilePath: "/tmp/openclaw/system-prompt.md",
+        useResume: false,
+      }),
+    ).toEqual(["exec", "--json", "-c", 'model_instructions_file="/tmp/openclaw/system-prompt.md"']);
+  });
+
   it("replaces prompt placeholders before falling back to a trailing positional prompt", () => {
     expect(
       buildCliArgs({
@@ -257,11 +275,15 @@ describe("writeCliImages", () => {
         baseArgs: ["exec", "--json"],
         modelId: "gpt-5.4",
         imagePaths: prepared.imagePaths,
+        promptArg: "describe the attached image",
         useResume: false,
       });
 
       const imageArgIndex = argv.indexOf("--image");
+      const promptIndex = argv.indexOf("describe the attached image");
       expect(imageArgIndex).toBeGreaterThanOrEqual(0);
+      expect(promptIndex).toBeGreaterThanOrEqual(0);
+      expect(imageArgIndex).toBeGreaterThan(promptIndex);
       expect(argv[imageArgIndex + 1]).toContain("openclaw-cli-images");
       expect(argv[imageArgIndex + 1]).not.toBe(sourceImage);
 
@@ -409,6 +431,28 @@ describe("writeCliImages", () => {
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("writeCliSystemPromptFile", () => {
+  it("writes stripped system prompts to a private temp file", async () => {
+    const written = await writeCliSystemPromptFile({
+      backend: {
+        command: "codex",
+        systemPromptFileConfigKey: "model_instructions_file",
+      },
+      systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
+    });
+
+    try {
+      expect(written.filePath).toContain("openclaw-cli-system-prompt-");
+      await expect(fs.readFile(written.filePath ?? "", "utf-8")).resolves.toBe(
+        "Stable prefix\nDynamic suffix",
+      );
+    } finally {
+      await written.cleanup();
+    }
+    await expect(fs.access(written.filePath ?? "")).rejects.toMatchObject({ code: "ENOENT" });
   });
 });
 

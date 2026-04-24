@@ -27,6 +27,7 @@ let lastClientOptions: {
   token?: string;
   password?: string;
   tlsFingerprint?: string;
+  clientDisplayName?: string;
   scopes?: string[];
   deviceIdentity?: unknown;
   onHelloOk?: (hello: { features?: { methods?: string[] } }) => void | Promise<void>;
@@ -58,6 +59,7 @@ vi.mock("./client.js", () => ({
       url?: string;
       token?: string;
       password?: string;
+      clientDisplayName?: string;
       scopes?: string[];
       onHelloOk?: (hello: { features?: { methods?: string[] } }) => void | Promise<void>;
       onClose?: (code: number, reason: string) => void;
@@ -95,6 +97,7 @@ class StubGatewayClient {
     url?: string;
     token?: string;
     password?: string;
+    clientDisplayName?: string;
     scopes?: string[];
     onHelloOk?: (hello: { features?: { methods?: string[] } }) => void | Promise<void>;
     onClose?: (code: number, reason: string) => void;
@@ -121,6 +124,7 @@ class StubGatewayClient {
     }
   }
   stop() {}
+  async stopAndWait() {}
 }
 
 function resetGatewayCallMocks() {
@@ -327,6 +331,20 @@ describe("callGateway url resolution", () => {
     expect(lastRequestOptions?.method).toBe("health");
   });
 
+  it("honors an explicit null device identity override", async () => {
+    setLocalLoopbackGatewayConfig();
+
+    await callGateway({
+      method: "health",
+      token: "explicit-token",
+      deviceIdentity: null,
+    });
+
+    expect(lastClientOptions?.url).toBe("ws://127.0.0.1:18789");
+    expect(lastClientOptions?.token).toBe("explicit-token");
+    expect(lastClientOptions?.deviceIdentity).toBeNull();
+  });
+
   it("uses OPENCLAW_GATEWAY_URL env override in remote mode when remote URL is missing", async () => {
     loadConfig.mockReturnValue({
       gateway: { mode: "remote", bind: "loopback", remote: {} },
@@ -452,6 +470,22 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.scopes).toEqual([]);
   });
 
+  it("labels default backend calls with the requested method", async () => {
+    setLocalLoopbackGatewayConfig();
+
+    await callGateway({ method: "sessions.delete" });
+
+    expect(lastClientOptions?.clientDisplayName).toBe("gateway:sessions.delete");
+  });
+
+  it("does not synthesize display names for CLI calls", async () => {
+    setLocalLoopbackGatewayConfig();
+
+    await callGatewayCli({ method: "health" });
+
+    expect(lastClientOptions?.clientDisplayName).toBeUndefined();
+  });
+
   it("yields one event-loop turn before starting CLI pairing requests", async () => {
     setLocalLoopbackGatewayConfig();
 
@@ -474,7 +508,7 @@ describe("callGateway url resolution", () => {
           },
           start() {
             sawYieldBeforeStart = preConnectYieldRan;
-            void opts.onHelloOk?.({
+            opts.onHelloOk?.({
               features: {
                 methods: helloMethods ?? [],
                 events: [],
@@ -777,6 +811,123 @@ describe("callGateway error details", () => {
     expect(lastRequestOptions?.method).toBe("health");
     expect(lastRequestOptions?.opts?.expectFinal).toBe(true);
     expect(lastRequestOptions?.opts?.timeoutMs).toBeUndefined();
+  });
+
+  it("waits for gateway client teardown before resolving", async () => {
+    setLocalLoopbackGatewayConfig();
+
+    let releaseStop!: () => void;
+    let stopStarted = false;
+    let stopFinished = false;
+    let callResolved = false;
+
+    __testing.setDepsForTests({
+      createGatewayClient: (opts) =>
+        ({
+          async request(
+            method: string,
+            params: unknown,
+            requestOpts?: { expectFinal?: boolean; timeoutMs?: number | null },
+          ) {
+            lastRequestOptions = { method, params, opts: requestOpts };
+            return { ok: true };
+          },
+          start() {
+            opts.onHelloOk?.({
+              features: {
+                methods: helloMethods ?? [],
+                events: [],
+              },
+            } as unknown as Parameters<NonNullable<typeof opts.onHelloOk>>[0]);
+          },
+          stop() {},
+          async stopAndWait() {
+            stopStarted = true;
+            await new Promise<void>((resolve) => {
+              releaseStop = () => {
+                stopFinished = true;
+                resolve();
+              };
+            });
+          },
+        }) as never,
+      loadConfig: loadConfig as unknown as () => OpenClawConfig,
+      loadOrCreateDeviceIdentity: () => deviceIdentityState.value,
+      resolveGatewayPort: resolveGatewayPort as unknown as (
+        cfg?: OpenClawConfig,
+        env?: NodeJS.ProcessEnv,
+      ) => number,
+    });
+
+    const promise = callGateway({ method: "health" }).then(() => {
+      callResolved = true;
+    });
+
+    await vi.waitFor(() => {
+      expect(stopStarted).toBe(true);
+    });
+    expect(callResolved).toBe(false);
+
+    releaseStop();
+    await promise;
+
+    expect(stopFinished).toBe(true);
+    expect(callResolved).toBe(true);
+  });
+
+  it("clears the wrapper timeout before awaiting gateway teardown", async () => {
+    setLocalLoopbackGatewayConfig();
+
+    vi.useFakeTimers();
+    let releaseStop!: () => void;
+    let stopStarted = false;
+
+    __testing.setDepsForTests({
+      createGatewayClient: (opts) =>
+        ({
+          async request(
+            method: string,
+            params: unknown,
+            requestOpts?: { expectFinal?: boolean; timeoutMs?: number | null },
+          ) {
+            lastRequestOptions = { method, params, opts: requestOpts };
+            return { ok: true };
+          },
+          start() {
+            opts.onHelloOk?.({
+              features: {
+                methods: helloMethods ?? [],
+                events: [],
+              },
+            } as unknown as Parameters<NonNullable<typeof opts.onHelloOk>>[0]);
+          },
+          stop() {},
+          async stopAndWait() {
+            stopStarted = true;
+            await new Promise<void>((resolve) => {
+              releaseStop = resolve;
+            });
+          },
+        }) as never,
+      loadConfig: loadConfig as unknown as () => OpenClawConfig,
+      loadOrCreateDeviceIdentity: () => deviceIdentityState.value,
+      resolveGatewayPort: resolveGatewayPort as unknown as (
+        cfg?: OpenClawConfig,
+        env?: NodeJS.ProcessEnv,
+      ) => number,
+    });
+
+    const promise = callGateway<{ ok: true }>({ method: "health", timeoutMs: 5 });
+
+    await vi.waitFor(() => {
+      expect(stopStarted).toBe(true);
+    });
+
+    await vi.advanceTimersByTimeAsync(5);
+
+    releaseStop();
+
+    await expect(promise).resolves.toEqual({ ok: true });
   });
 
   it("fails fast when remote mode is missing remote url", async () => {

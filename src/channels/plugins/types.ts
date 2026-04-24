@@ -48,6 +48,7 @@ export type {
   ChannelSetupAdapter,
   ChannelStatusAdapter,
 } from "./types.adapters.js";
+export type { ChannelRuntimeSurface } from "./channel-runtime-surface.types.js";
 export type {
   ChannelAccountSnapshot,
   ChannelAccountState,
@@ -78,6 +79,7 @@ export type {
   ChannelStatusIssue,
   ChannelStreamingAdapter,
   ChannelStructuredComponents,
+  ChannelCrossContextPresentationFactory,
   ChannelThreadingAdapter,
   ChannelThreadingContext,
   ChannelThreadingToolContext,

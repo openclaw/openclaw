@@ -6,8 +6,6 @@ read_when:
 title: "Inference CLI"
 ---
 
-# Inference CLI
-
 `openclaw infer` is the canonical headless surface for provider-backed inference workflows.
 
 It intentionally exposes capability families, not raw gateway RPC names and not raw agent tool ids.
@@ -48,6 +46,11 @@ Benefits:
 - Use a stable `--json` output shape for scripts, automation, and agent-driven workflows.
 - Prefer a first-party OpenClaw surface when the task is fundamentally "run inference."
 - Use the normal local path without requiring the gateway for most infer commands.
+
+For end-to-end provider checks, prefer `openclaw infer ...` once lower-level
+provider tests are green. It exercises the shipped CLI, config loading,
+default-agent resolution, bundled plugin activation, runtime-dependency repair,
+and the shared capability runtime before the provider request is made.
 
 ## Command tree
 
@@ -104,18 +107,18 @@ Benefits:
 
 This table maps common inference tasks to the corresponding infer command.
 
-| Task                    | Command                                                                | Notes                                                |
-| ----------------------- | ---------------------------------------------------------------------- | ---------------------------------------------------- |
-| Run a text/model prompt | `openclaw infer model run --prompt "..." --json`                       | Uses the normal local path by default                |
-| Generate an image       | `openclaw infer image generate --prompt "..." --json`                  | Use `image edit` when starting from an existing file |
-| Describe an image file  | `openclaw infer image describe --file ./image.png --json`              | `--model` must be `<provider/model>`                 |
-| Transcribe audio        | `openclaw infer audio transcribe --file ./memo.m4a --json`             | `--model` must be `<provider/model>`                 |
-| Synthesize speech       | `openclaw infer tts convert --text "..." --output ./speech.mp3 --json` | `tts status` is gateway-oriented                     |
-| Generate a video        | `openclaw infer video generate --prompt "..." --json`                  |                                                      |
-| Describe a video file   | `openclaw infer video describe --file ./clip.mp4 --json`               | `--model` must be `<provider/model>`                 |
-| Search the web          | `openclaw infer web search --query "..." --json`                       |                                                      |
-| Fetch a web page        | `openclaw infer web fetch --url https://example.com --json`            |                                                      |
-| Create embeddings       | `openclaw infer embedding create --text "..." --json`                  |                                                      |
+| Task                    | Command                                                                | Notes                                                 |
+| ----------------------- | ---------------------------------------------------------------------- | ----------------------------------------------------- |
+| Run a text/model prompt | `openclaw infer model run --prompt "..." --json`                       | Uses the normal local path by default                 |
+| Generate an image       | `openclaw infer image generate --prompt "..." --json`                  | Use `image edit` when starting from an existing file  |
+| Describe an image file  | `openclaw infer image describe --file ./image.png --json`              | `--model` must be an image-capable `<provider/model>` |
+| Transcribe audio        | `openclaw infer audio transcribe --file ./memo.m4a --json`             | `--model` must be `<provider/model>`                  |
+| Synthesize speech       | `openclaw infer tts convert --text "..." --output ./speech.mp3 --json` | `tts status` is gateway-oriented                      |
+| Generate a video        | `openclaw infer video generate --prompt "..." --json`                  |                                                       |
+| Describe a video file   | `openclaw infer video describe --file ./clip.mp4 --json`               | `--model` must be `<provider/model>`                  |
+| Search the web          | `openclaw infer web search --query "..." --json`                       |                                                       |
+| Fetch a web page        | `openclaw infer web fetch --url https://example.com --json`            |                                                       |
+| Create embeddings       | `openclaw infer embedding create --text "..." --json`                  |                                                       |
 
 ## Behavior
 
@@ -123,6 +126,7 @@ This table maps common inference tasks to the corresponding infer command.
 - Use `--json` when the output will be consumed by another command or script.
 - Use `--provider` or `--model provider/model` when a specific backend is required.
 - For `image describe`, `audio transcribe`, and `video describe`, `--model` must use the form `<provider/model>`.
+- For `image describe`, an explicit `--model` runs that provider/model directly. The model must be image-capable in the model catalog or provider config. `codex/<model>` runs a bounded Codex app-server image-understanding turn; `openai-codex/<model>` uses the OpenAI Codex OAuth provider path.
 - Stateless execution commands default to local.
 - Gateway-managed state commands default to gateway.
 - The normal local path does not require the gateway to be running.
@@ -135,7 +139,7 @@ Use `model` for provider-backed text inference and model/provider inspection.
 openclaw infer model run --prompt "Reply with exactly: smoke-ok" --json
 openclaw infer model run --prompt "Summarize this changelog entry" --provider openai --json
 openclaw infer model providers --json
-openclaw infer model inspect --name gpt-5.4 --json
+openclaw infer model inspect --name gpt-5.5 --json
 ```
 
 Notes:
@@ -152,12 +156,33 @@ openclaw infer image generate --prompt "friendly lobster illustration" --json
 openclaw infer image generate --prompt "cinematic product photo of headphones" --json
 openclaw infer image describe --file ./photo.jpg --json
 openclaw infer image describe --file ./ui-screenshot.png --model openai/gpt-4.1-mini --json
+openclaw infer image describe --file ./photo.jpg --model ollama/qwen2.5vl:7b --json
 ```
 
 Notes:
 
 - Use `image edit` when starting from existing input files.
-- For `image describe`, `--model` must be `<provider/model>`.
+- Use `image providers --json` to verify which bundled image providers are
+  discoverable, configured, selected, and which generation/edit capabilities
+  each provider exposes.
+- Use `image generate --model <provider/model> --json` as the narrowest live
+  CLI smoke for image generation changes. Example:
+
+  ```bash
+  openclaw infer image providers --json
+  openclaw infer image generate \
+    --model google/gemini-3.1-flash-image-preview \
+    --prompt "Minimal flat test image: one blue square on a white background, no text." \
+    --output ./openclaw-infer-image-smoke.png \
+    --json
+  ```
+
+  The JSON response reports `ok`, `provider`, `model`, `attempts`, and written
+  output paths. When `--output` is set, the final extension may follow the
+  provider's returned MIME type.
+
+- For `image describe`, `--model` must be an image-capable `<provider/model>`.
+- For local Ollama vision models, pull the model first and set `OLLAMA_API_KEY` to any placeholder value, for example `ollama-local`. See [Ollama](/providers/ollama#vision-and-image-description).
 
 ## Audio
 
@@ -240,7 +265,7 @@ Infer commands normalize JSON output under a shared envelope:
   "capability": "image.generate",
   "transport": "local",
   "provider": "openai",
-  "model": "gpt-image-1",
+  "model": "gpt-image-2",
   "attempts": [],
   "outputs": []
 }
@@ -256,6 +281,10 @@ Top-level fields are stable:
 - `attempts`
 - `outputs`
 - `error`
+
+For generated media commands, `outputs` contains files written by OpenClaw. Use
+the `path`, `mimeType`, `size`, and any media-specific dimensions in that array
+for automation instead of parsing human-readable stdout.
 
 ## Common pitfalls
 
@@ -278,3 +307,8 @@ openclaw infer audio transcribe --file ./memo.m4a --model openai/whisper-1 --jso
 ## Notes
 
 - `openclaw capability ...` is an alias for `openclaw infer ...`.
+
+## Related
+
+- [CLI reference](/cli)
+- [Models](/concepts/models)

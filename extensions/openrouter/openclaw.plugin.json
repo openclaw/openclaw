@@ -21,7 +21,16 @@
     }
   ],
   "contracts": {
-    "mediaUnderstandingProviders": ["openrouter"]
+    "mediaUnderstandingProviders": ["openrouter"],
+    "imageGenerationProviders": ["openrouter"]
+  },
+  "mediaUnderstandingProviderMetadata": {
+    "openrouter": {
+      "capabilities": ["image"],
+      "defaultModels": {
+        "image": "auto"
+      }
+    }
   },
   "configSchema": {
     "type": "object",

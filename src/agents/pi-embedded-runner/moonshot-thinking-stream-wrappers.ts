@@ -1,10 +1,18 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
-import { streamSimple } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 
 type MoonshotThinkingType = "enabled" | "disabled";
+type MoonshotThinkingKeep = "all";
+const MOONSHOT_THINKING_KEEP_MODEL_ID = "kimi-k2.6";
+let piAiRuntimePromise: Promise<typeof import("@mariozechner/pi-ai")> | undefined;
+
+async function loadDefaultStreamFn(): Promise<StreamFn> {
+  piAiRuntimePromise ??= import("@mariozechner/pi-ai");
+  const runtime = await piAiRuntimePromise;
+  return runtime.streamSimple;
+}
 
 function normalizeMoonshotThinkingType(value: unknown): MoonshotThinkingType | undefined {
   if (typeof value === "boolean") {
@@ -27,6 +35,17 @@ function normalizeMoonshotThinkingType(value: unknown): MoonshotThinkingType | u
     return normalizeMoonshotThinkingType((value as Record<string, unknown>).type);
   }
   return undefined;
+}
+
+function normalizeMoonshotThinkingKeep(value: unknown): MoonshotThinkingKeep | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const keepValue = (value as Record<string, unknown>).keep;
+  if (typeof keepValue !== "string") {
+    return undefined;
+  }
+  return normalizeOptionalLowercaseString(keepValue) === "all" ? "all" : undefined;
 }
 
 function isMoonshotToolChoiceCompatible(toolChoice: unknown): boolean {
@@ -62,13 +81,20 @@ export function resolveMoonshotThinkingType(params: {
   return params.thinkingLevel === "off" ? "disabled" : "enabled";
 }
 
+export function resolveMoonshotThinkingKeep(params: {
+  configuredThinking: unknown;
+}): MoonshotThinkingKeep | undefined {
+  return normalizeMoonshotThinkingKeep(params.configuredThinking);
+}
+
 export function createMoonshotThinkingWrapper(
   baseStreamFn: StreamFn | undefined,
   thinkingType?: MoonshotThinkingType,
+  thinkingKeep?: MoonshotThinkingKeep,
 ): StreamFn {
-  const underlying = baseStreamFn ?? streamSimple;
-  return (model, context, options) =>
-    streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
+  return async (model, context, options) => {
+    const underlying = baseStreamFn ?? (await loadDefaultStreamFn());
+    return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
       let effectiveThinkingType = normalizeMoonshotThinkingType(payloadObj.thinking);
 
       if (thinkingType) {
@@ -84,7 +110,21 @@ export function createMoonshotThinkingWrapper(
           payloadObj.tool_choice = "auto";
         } else if (isPinnedToolChoice(payloadObj.tool_choice)) {
           payloadObj.thinking = { type: "disabled" };
+          effectiveThinkingType = "disabled";
+        }
+      }
+
+      // thinking.keep is only valid on kimi-k2.6 when thinking is enabled. Gate
+      // by the final payload.model and final type so stray config never leaks.
+      const isKeepCapableModel = payloadObj.model === MOONSHOT_THINKING_KEEP_MODEL_ID;
+      if (payloadObj.thinking && typeof payloadObj.thinking === "object") {
+        const thinkingObj = payloadObj.thinking as Record<string, unknown>;
+        if (isKeepCapableModel && effectiveThinkingType === "enabled" && thinkingKeep === "all") {
+          thinkingObj.keep = "all";
+        } else if ("keep" in thinkingObj) {
+          delete thinkingObj.keep;
         }
       }
     });
+  };
 }

@@ -3,7 +3,23 @@ import { findCatalogTemplate } from "openclaw/plugin-sdk/provider-catalog-shared
 import {
   cloneFirstTemplateModel,
   matchesExactOrPrefix,
+  type ProviderPlugin,
 } from "openclaw/plugin-sdk/provider-model-shared";
+import { OPENAI_RESPONSES_STREAM_HOOKS } from "openclaw/plugin-sdk/provider-stream-family";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { createOpenAINativeWebSearchWrapper } from "./native-web-search.js";
+import { buildOpenAIReplayPolicy } from "./replay-policy.js";
+import {
+  resolveOpenAITransportTurnState,
+  resolveOpenAIWebSocketSessionPolicy,
+} from "./transport-policy.js";
+
+type SyntheticOpenAIModelCatalogCost = {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+};
 
 type SyntheticOpenAIModelCatalogEntry = {
   provider: string;
@@ -13,6 +29,7 @@ type SyntheticOpenAIModelCatalogEntry = {
   input?: ("text" | "image")[];
   contextWindow?: number;
   contextTokens?: number;
+  cost?: SyntheticOpenAIModelCatalogCost;
 };
 
 export const OPENAI_API_BASE_URL = "https://api.openai.com/v1";
@@ -22,23 +39,69 @@ export function toOpenAIDataUrl(buffer: Buffer, mimeType: string): string {
 }
 
 export function resolveConfiguredOpenAIBaseUrl(cfg: OpenClawConfig | undefined): string {
-  return cfg?.models?.providers?.openai?.baseUrl?.trim() || OPENAI_API_BASE_URL;
+  return normalizeOptionalString(cfg?.models?.providers?.openai?.baseUrl) ?? OPENAI_API_BASE_URL;
 }
 
-export function isOpenAIApiBaseUrl(baseUrl?: string): boolean {
-  const trimmed = baseUrl?.trim();
-  if (!trimmed) {
-    return false;
-  }
-  return /^https?:\/\/api\.openai\.com(?:\/v1)?\/?$/i.test(trimmed);
+function hasSupportedOpenAIResponsesTransport(
+  transport: unknown,
+): transport is "auto" | "sse" | "websocket" {
+  return transport === "auto" || transport === "sse" || transport === "websocket";
 }
 
-export function isOpenAICodexBaseUrl(baseUrl?: string): boolean {
-  const trimmed = baseUrl?.trim();
-  if (!trimmed) {
-    return false;
+export function defaultOpenAIResponsesExtraParams(
+  extraParams: Record<string, unknown> | undefined,
+  options?: { openaiWsWarmup?: boolean },
+): Record<string, unknown> | undefined {
+  const hasSupportedTransport = hasSupportedOpenAIResponsesTransport(extraParams?.transport);
+  const hasExplicitWarmup = typeof extraParams?.openaiWsWarmup === "boolean";
+  const shouldDefaultWarmup = options?.openaiWsWarmup === true;
+  if (hasSupportedTransport && (!shouldDefaultWarmup || hasExplicitWarmup)) {
+    return extraParams;
   }
-  return /^https?:\/\/chatgpt\.com\/backend-api\/?$/i.test(trimmed);
+
+  return {
+    ...extraParams,
+    ...(hasSupportedTransport ? {} : { transport: "auto" }),
+    ...(shouldDefaultWarmup && !hasExplicitWarmup ? { openaiWsWarmup: true } : {}),
+  };
+}
+
+type OpenAIResponsesProviderHooks = Pick<
+  ProviderPlugin,
+  | "buildReplayPolicy"
+  | "prepareExtraParams"
+  | "wrapStreamFn"
+  | "resolveTransportTurnState"
+  | "resolveWebSocketSessionPolicy"
+>;
+
+const resolveOpenAIResponsesTransportTurnState: NonNullable<
+  OpenAIResponsesProviderHooks["resolveTransportTurnState"]
+> = (ctx) => resolveOpenAITransportTurnState(ctx);
+
+const resolveOpenAIResponsesWebSocketSessionPolicy: NonNullable<
+  OpenAIResponsesProviderHooks["resolveWebSocketSessionPolicy"]
+> = (ctx) => resolveOpenAIWebSocketSessionPolicy(ctx);
+
+const wrapOpenAIResponsesStreamFn = OPENAI_RESPONSES_STREAM_HOOKS.wrapStreamFn;
+const wrapOpenAIResponsesProviderStreamFn: NonNullable<
+  OpenAIResponsesProviderHooks["wrapStreamFn"]
+> = (ctx) =>
+  createOpenAINativeWebSearchWrapper(wrapOpenAIResponsesStreamFn?.(ctx) ?? ctx.streamFn, {
+    config: ctx.config,
+  });
+
+export function buildOpenAIResponsesProviderHooks(options?: {
+  openaiWsWarmup?: boolean;
+}): OpenAIResponsesProviderHooks {
+  return {
+    buildReplayPolicy: buildOpenAIReplayPolicy,
+    prepareExtraParams: (ctx) => defaultOpenAIResponsesExtraParams(ctx.extraParams, options),
+    ...OPENAI_RESPONSES_STREAM_HOOKS,
+    wrapStreamFn: wrapOpenAIResponsesProviderStreamFn,
+    resolveTransportTurnState: resolveOpenAIResponsesTransportTurnState,
+    resolveWebSocketSessionPolicy: resolveOpenAIResponsesWebSocketSessionPolicy,
+  };
 }
 
 export function buildOpenAISyntheticCatalogEntry(
@@ -49,6 +112,7 @@ export function buildOpenAISyntheticCatalogEntry(
     input: readonly ("text" | "image")[];
     contextWindow: number;
     contextTokens?: number;
+    cost?: SyntheticOpenAIModelCatalogCost;
   },
 ): SyntheticOpenAIModelCatalogEntry | undefined {
   if (!template) {
@@ -62,6 +126,7 @@ export function buildOpenAISyntheticCatalogEntry(
     input: [...entry.input],
     contextWindow: entry.contextWindow,
     ...(entry.contextTokens === undefined ? {} : { contextTokens: entry.contextTokens }),
+    ...(entry.cost === undefined ? {} : { cost: entry.cost }),
   };
 }
 

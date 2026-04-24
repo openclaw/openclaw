@@ -1,10 +1,30 @@
-import type { OpenClawConfig } from "../config/config.js";
 import type { CliBackendConfig } from "../config/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveRuntimeCliBackends } from "../plugins/cli-backends.runtime.js";
 import { resolvePluginSetupCliBackend } from "../plugins/setup-registry.js";
-import type { CliBundleMcpMode } from "../plugins/types.js";
+import { resolveRuntimeTextTransforms } from "../plugins/text-transforms.runtime.js";
+import type {
+  CliBackendAuthEpochMode,
+  CliBackendNormalizeConfigContext,
+  CliBundleMcpMode,
+  CliBackendPlugin,
+  PluginTextTransforms,
+} from "../plugins/types.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { normalizeProviderId } from "./model-selection.js";
+import { mergePluginTextTransforms } from "./plugin-text-transforms.js";
+
+type CliBackendsDeps = {
+  resolvePluginSetupCliBackend: typeof resolvePluginSetupCliBackend;
+  resolveRuntimeCliBackends: typeof resolveRuntimeCliBackends;
+};
+
+const defaultCliBackendsDeps: CliBackendsDeps = {
+  resolvePluginSetupCliBackend,
+  resolveRuntimeCliBackends,
+};
+
+let cliBackendsDeps: CliBackendsDeps = defaultCliBackendsDeps;
 
 export type ResolvedCliBackend = {
   id: string;
@@ -12,6 +32,11 @@ export type ResolvedCliBackend = {
   bundleMcp: boolean;
   bundleMcpMode?: CliBundleMcpMode;
   pluginId?: string;
+  transformSystemPrompt?: CliBackendPlugin["transformSystemPrompt"];
+  textTransforms?: PluginTextTransforms;
+  defaultAuthProfileId?: string;
+  authEpochMode?: CliBackendAuthEpochMode;
+  prepareExecution?: CliBackendPlugin["prepareExecution"];
 };
 
 export type ResolvedCliBackendLiveTest = {
@@ -22,16 +47,19 @@ export type ResolvedCliBackendLiveTest = {
   dockerBinaryName?: string;
 };
 
-export function normalizeClaudeBackendConfig(config: CliBackendConfig): CliBackendConfig {
-  const normalizeConfig = resolveFallbackCliBackendPolicy("claude-cli")?.normalizeConfig;
-  return normalizeConfig ? normalizeConfig(config) : config;
-}
-
 type FallbackCliBackendPolicy = {
   bundleMcp: boolean;
   bundleMcpMode?: CliBundleMcpMode;
   baseConfig?: CliBackendConfig;
-  normalizeConfig?: (config: CliBackendConfig) => CliBackendConfig;
+  normalizeConfig?: (
+    config: CliBackendConfig,
+    context?: CliBackendNormalizeConfigContext,
+  ) => CliBackendConfig;
+  transformSystemPrompt?: CliBackendPlugin["transformSystemPrompt"];
+  textTransforms?: PluginTextTransforms;
+  defaultAuthProfileId?: string;
+  authEpochMode?: CliBackendAuthEpochMode;
+  prepareExecution?: CliBackendPlugin["prepareExecution"];
 };
 
 const FALLBACK_CLI_BACKEND_POLICIES: Record<string, FallbackCliBackendPolicy> = {};
@@ -47,7 +75,7 @@ function normalizeBundleMcpMode(
 }
 
 function resolveSetupCliBackendPolicy(provider: string): FallbackCliBackendPolicy | undefined {
-  const entry = resolvePluginSetupCliBackend({
+  const entry = cliBackendsDeps.resolvePluginSetupCliBackend({
     backend: provider,
   });
   if (!entry) {
@@ -63,6 +91,11 @@ function resolveSetupCliBackendPolicy(provider: string): FallbackCliBackendPolic
     ),
     baseConfig: entry.backend.config,
     normalizeConfig: entry.backend.normalizeConfig,
+    transformSystemPrompt: entry.backend.transformSystemPrompt,
+    textTransforms: entry.backend.textTransforms,
+    defaultAuthProfileId: entry.backend.defaultAuthProfileId,
+    authEpochMode: entry.backend.authEpochMode,
+    prepareExecution: entry.backend.prepareExecution,
   };
 }
 
@@ -94,7 +127,9 @@ function pickBackendConfig(
 
 function resolveRegisteredBackend(provider: string) {
   const normalized = normalizeBackendKey(provider);
-  return resolveRuntimeCliBackends().find((entry) => normalizeBackendKey(entry.id) === normalized);
+  return cliBackendsDeps
+    .resolveRuntimeCliBackends()
+    .find((entry) => normalizeBackendKey(entry.id) === normalized);
 }
 
 function mergeBackendConfig(base: CliBackendConfig, override?: CliBackendConfig): CliBackendConfig {
@@ -134,23 +169,13 @@ function mergeBackendConfig(base: CliBackendConfig, override?: CliBackendConfig)
   };
 }
 
-export function resolveCliBackendIds(cfg?: OpenClawConfig): Set<string> {
-  const ids = new Set<string>();
-  for (const backend of resolveRuntimeCliBackends()) {
-    ids.add(normalizeBackendKey(backend.id));
-  }
-  const configured = cfg?.agents?.defaults?.cliBackends ?? {};
-  for (const key of Object.keys(configured)) {
-    ids.add(normalizeBackendKey(key));
-  }
-  return ids;
-}
-
 export function resolveCliBackendLiveTest(provider: string): ResolvedCliBackendLiveTest | null {
   const normalized = normalizeBackendKey(provider);
   const entry =
-    resolvePluginSetupCliBackend({ backend: normalized }) ??
-    resolveRuntimeCliBackends().find((backend) => normalizeBackendKey(backend.id) === normalized);
+    cliBackendsDeps.resolvePluginSetupCliBackend({ backend: normalized }) ??
+    cliBackendsDeps
+      .resolveRuntimeCliBackends()
+      .find((backend) => normalizeBackendKey(backend.id) === normalized);
   if (!entry) {
     return null;
   }
@@ -167,15 +192,23 @@ export function resolveCliBackendLiveTest(provider: string): ResolvedCliBackendL
 export function resolveCliBackendConfig(
   provider: string,
   cfg?: OpenClawConfig,
+  options: { agentId?: string } = {},
 ): ResolvedCliBackend | null {
   const normalized = normalizeBackendKey(provider);
-  const fallbackPolicy = resolveFallbackCliBackendPolicy(normalized);
+  const normalizeContext: CliBackendNormalizeConfigContext = {
+    backendId: normalized,
+    ...(options.agentId ? { agentId: options.agentId } : {}),
+    ...(cfg ? { config: cfg } : {}),
+  };
+  const runtimeTextTransforms = resolveRuntimeTextTransforms();
   const configured = cfg?.agents?.defaults?.cliBackends ?? {};
   const override = pickBackendConfig(configured, normalized);
   const registered = resolveRegisteredBackend(normalized);
   if (registered) {
     const merged = mergeBackendConfig(registered.config, override);
-    const config = registered.normalizeConfig ? registered.normalizeConfig(merged) : merged;
+    const config = registered.normalizeConfig
+      ? registered.normalizeConfig(merged, normalizeContext)
+      : merged;
     const command = config.command?.trim();
     if (!command) {
       return null;
@@ -189,15 +222,21 @@ export function resolveCliBackendConfig(
         registered.bundleMcp === true,
       ),
       pluginId: registered.pluginId,
+      transformSystemPrompt: registered.transformSystemPrompt,
+      textTransforms: mergePluginTextTransforms(runtimeTextTransforms, registered.textTransforms),
+      defaultAuthProfileId: registered.defaultAuthProfileId,
+      authEpochMode: registered.authEpochMode,
+      prepareExecution: registered.prepareExecution,
     };
   }
 
+  const fallbackPolicy = resolveFallbackCliBackendPolicy(normalized);
   if (!override) {
     if (!fallbackPolicy?.baseConfig) {
       return null;
     }
     const baseConfig = fallbackPolicy.normalizeConfig
-      ? fallbackPolicy.normalizeConfig(fallbackPolicy.baseConfig)
+      ? fallbackPolicy.normalizeConfig(fallbackPolicy.baseConfig, normalizeContext)
       : fallbackPolicy.baseConfig;
     const command = baseConfig.command?.trim();
     if (!command) {
@@ -208,13 +247,21 @@ export function resolveCliBackendConfig(
       config: { ...baseConfig, command },
       bundleMcp: fallbackPolicy.bundleMcp,
       bundleMcpMode: fallbackPolicy.bundleMcpMode,
+      transformSystemPrompt: fallbackPolicy.transformSystemPrompt,
+      textTransforms: mergePluginTextTransforms(
+        runtimeTextTransforms,
+        fallbackPolicy.textTransforms,
+      ),
+      defaultAuthProfileId: fallbackPolicy.defaultAuthProfileId,
+      authEpochMode: fallbackPolicy.authEpochMode,
+      prepareExecution: fallbackPolicy.prepareExecution,
     };
   }
   const mergedFallback = fallbackPolicy?.baseConfig
     ? mergeBackendConfig(fallbackPolicy.baseConfig, override)
     : override;
   const config = fallbackPolicy?.normalizeConfig
-    ? fallbackPolicy.normalizeConfig(mergedFallback)
+    ? fallbackPolicy.normalizeConfig(mergedFallback, normalizeContext)
     : mergedFallback;
   const command = config.command?.trim();
   if (!command) {
@@ -225,5 +272,25 @@ export function resolveCliBackendConfig(
     config: { ...config, command },
     bundleMcp: fallbackPolicy?.bundleMcp === true,
     bundleMcpMode: fallbackPolicy?.bundleMcpMode,
+    transformSystemPrompt: fallbackPolicy?.transformSystemPrompt,
+    textTransforms: mergePluginTextTransforms(
+      runtimeTextTransforms,
+      fallbackPolicy?.textTransforms,
+    ),
+    defaultAuthProfileId: fallbackPolicy?.defaultAuthProfileId,
+    authEpochMode: fallbackPolicy?.authEpochMode,
+    prepareExecution: fallbackPolicy?.prepareExecution,
   };
 }
+
+export const __testing = {
+  resetDepsForTest(): void {
+    cliBackendsDeps = defaultCliBackendsDeps;
+  },
+  setDepsForTest(deps: Partial<CliBackendsDeps>): void {
+    cliBackendsDeps = {
+      ...defaultCliBackendsDeps,
+      ...deps,
+    };
+  },
+} as const;

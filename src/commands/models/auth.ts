@@ -10,19 +10,16 @@ import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
-import {
-  clearAuthProfileCooldown,
-  listProfilesForProvider,
-  loadAuthProfileStoreForRuntime,
-  upsertAuthProfile,
-} from "../../agents/auth-profiles.js";
+import { listProfilesForProvider, upsertAuthProfile } from "../../agents/auth-profiles/profiles.js";
+import { loadAuthProfileStoreForRuntime } from "../../agents/auth-profiles/store.js";
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
-import { normalizeProviderId } from "../../agents/model-selection.js";
+import { clearAuthProfileCooldown } from "../../agents/auth-profiles/usage.js";
+import { normalizeProviderId } from "../../agents/model-selection-normalize.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import { logConfigUpdated } from "../../config/logging.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { applyAuthProfileConfig } from "../../plugins/provider-auth-helpers.js";
 import { resolvePluginProviders } from "../../plugins/providers.runtime.js";
 import type {
@@ -31,12 +28,15 @@ import type {
   ProviderPlugin,
 } from "../../plugins/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import {
+  normalizeOptionalString,
+  normalizeStringifiedOptionalString,
+} from "../../shared/string-coerce.js";
 import { stylePromptHint, stylePromptMessage } from "../../terminal/prompt-style.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import { validateAnthropicSetupToken } from "../auth-token.js";
 import { isRemoteEnvironment } from "../oauth-env.js";
 import { createVpsAwareOAuthHandlers } from "../oauth-flow.js";
-import { openUrl } from "../onboard-helpers.js";
 import {
   applyProviderAuthConfigPatch,
   applyDefaultModel,
@@ -127,6 +127,11 @@ async function resolveModelsAuthContext(params?: {
   };
 }
 
+async function resolveModelsAuthAgentDir(): Promise<string> {
+  const config = await loadValidConfigOrThrow();
+  return resolveAgentDir(config, resolveDefaultAgentId(config));
+}
+
 function resolveRequestedProviderOrThrow(
   providers: ProviderPlugin[],
   rawProvider?: string,
@@ -188,7 +193,7 @@ async function pickProviderAuthMethod(params: {
         hint: method.hint,
       })),
     })
-    .then((id) => params.provider.auth.find((method) => method.id === String(id)) ?? null);
+    .then((id) => params.provider.auth.find((method) => method.id === id) ?? null);
 }
 
 async function pickProviderTokenMethod(params: {
@@ -220,7 +225,7 @@ async function pickProviderTokenMethod(params: {
         hint: method.hint,
       })),
     })
-    .then((id) => tokenMethods.find((method) => method.id === String(id)) ?? null);
+    .then((id) => tokenMethods.find((method) => method.id === id) ?? null);
 }
 
 async function persistProviderAuthResult(params: {
@@ -241,7 +246,9 @@ async function persistProviderAuthResult(params: {
   await updateConfig((cfg) => {
     let next = cfg;
     if (params.result.configPatch) {
-      next = applyProviderAuthConfigPatch(next, params.result.configPatch);
+      next = applyProviderAuthConfigPatch(next, params.result.configPatch, {
+        replaceDefaultModels: params.result.replaceDefaultModels,
+      });
     }
     for (const profile of params.result.profiles) {
       next = applyAuthProfileConfig(next, {
@@ -296,6 +303,7 @@ async function runProviderAuthMethod(params: {
     allowSecretRefPrompt: false,
     isRemote: isRemoteEnvironment(),
     openUrl: async (url) => {
+      const { openUrl } = await import("../onboard-helpers.js");
       await openUrl(url);
     },
     oauth: {
@@ -371,13 +379,14 @@ export async function modelsAuthPasteTokenCommand(
   },
   runtime: RuntimeEnv,
 ) {
-  const { agentDir } = await resolveModelsAuthContext();
-  const rawProvider = opts.provider?.trim();
+  const agentDir = await resolveModelsAuthAgentDir();
+  const rawProvider = normalizeOptionalString(opts.provider);
   if (!rawProvider) {
     throw new Error("Missing --provider.");
   }
   const provider = normalizeProviderId(rawProvider);
-  const profileId = opts.profileId?.trim() || resolveDefaultTokenProfileId(provider);
+  const profileId =
+    normalizeOptionalString(opts.profileId) || resolveDefaultTokenProfileId(provider);
 
   const tokenInput = await text({
     message: `Paste token for ${provider}`,
@@ -394,15 +403,15 @@ export async function modelsAuthPasteTokenCommand(
   });
   const token =
     provider === "anthropic"
-      ? String(tokenInput ?? "")
-          .replaceAll(/\s+/g, "")
-          .trim()
-      : String(tokenInput ?? "").trim();
+      ? tokenInput.replaceAll(/\s+/g, "").trim()
+      : (normalizeOptionalString(tokenInput) ?? "");
 
-  const expires =
-    opts.expiresIn?.trim() && opts.expiresIn.trim().length > 0
-      ? Date.now() + parseDurationMs(String(opts.expiresIn ?? "").trim(), { defaultUnit: "d" })
-      : undefined;
+  const expires = normalizeStringifiedOptionalString(opts.expiresIn)
+    ? Date.now() +
+      parseDurationMs(normalizeStringifiedOptionalString(opts.expiresIn) ?? "", {
+        defaultUnit: "d",
+      })
+    : undefined;
 
   upsertAuthProfile({
     profileId,
@@ -445,12 +454,10 @@ export async function modelsAuthAddCommand(_opts: Record<string, never>, runtime
   const providerId =
     provider === "custom"
       ? normalizeProviderId(
-          String(
-            await text({
-              message: "Provider id",
-              validate: (value) => (value?.trim() ? undefined : "Required"),
-            }),
-          ),
+          await text({
+            message: "Provider id",
+            validate: (value) => (value?.trim() ? undefined : "Required"),
+          }),
         )
       : provider;
 
@@ -476,7 +483,7 @@ export async function modelsAuthAddCommand(_opts: Record<string, never>, runtime
       const prompter = createClackPrompter();
       const method = tokenMethods.find((candidate) => candidate.id === methodId);
       if (!method) {
-        throw new Error(`Unknown token auth method "${String(methodId)}".`);
+        throw new Error(`Unknown token auth method "${methodId}".`);
       }
       await runProviderAuthMethod({
         config,
@@ -492,12 +499,12 @@ export async function modelsAuthAddCommand(_opts: Record<string, never>, runtime
   }
 
   const profileIdDefault = resolveDefaultTokenProfileId(providerId);
-  const profileId = String(
+  const profileId = (
     await text({
       message: "Profile id",
       initialValue: profileIdDefault,
       validate: (value) => (value?.trim() ? undefined : "Required"),
-    }),
+    })
   ).trim();
 
   const wantsExpiry = await confirm({
@@ -505,19 +512,19 @@ export async function modelsAuthAddCommand(_opts: Record<string, never>, runtime
     initialValue: false,
   });
   const expiresIn = wantsExpiry
-    ? String(
+    ? (
         await text({
           message: "Expires in (duration)",
           initialValue: "365d",
           validate: (value) => {
             try {
-              parseDurationMs(String(value ?? ""), { defaultUnit: "d" });
+              parseDurationMs(value ?? "", { defaultUnit: "d" });
               return undefined;
             } catch {
               return "Invalid duration (e.g. 365d, 12h, 30m)";
             }
           },
-        }),
+        })
       ).trim()
     : undefined;
 
@@ -602,7 +609,7 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
           hint: provider.docsPath ? `Docs: ${provider.docsPath}` : undefined,
         })),
       })
-      .then((id) => resolveProviderMatch(authProviders, String(id))));
+      .then((id) => resolveProviderMatch(authProviders, id)));
 
   if (!selectedProvider) {
     throw new Error("Unknown provider. Use --provider <id> to pick a provider plugin.");

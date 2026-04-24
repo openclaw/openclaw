@@ -11,11 +11,16 @@ const sendMocks = vi.hoisted(() => ({
   >(async () => {}),
 }));
 function createMockDraftStream() {
+  let messageId: string | undefined = "preview-1";
   return {
     update: vi.fn<(text: string) => void>(() => {}),
     flush: vi.fn(async () => {}),
-    messageId: vi.fn(() => "preview-1"),
-    clear: vi.fn(async () => {}),
+    messageId: vi.fn(() => messageId),
+    clear: vi.fn(async () => {
+      messageId = undefined;
+    }),
+    discardPending: vi.fn(async () => {}),
+    seal: vi.fn(async () => {}),
     stop: vi.fn(async () => {}),
     forceNewMessage: vi.fn(() => {}),
   };
@@ -45,6 +50,30 @@ type DispatchInboundParams = {
     onReasoningStream?: () => Promise<void> | void;
     onReasoningEnd?: () => Promise<void> | void;
     onToolStart?: (payload: { name?: string }) => Promise<void> | void;
+    onItemEvent?: (payload: {
+      progressText?: string;
+      summary?: string;
+      title?: string;
+      name?: string;
+    }) => Promise<void> | void;
+    onPlanUpdate?: (payload: {
+      phase?: string;
+      explanation?: string;
+      steps?: string[];
+    }) => Promise<void> | void;
+    onApprovalEvent?: (payload: { phase?: string; command?: string }) => Promise<void> | void;
+    onCommandOutput?: (payload: {
+      phase?: string;
+      name?: string;
+      title?: string;
+      exitCode?: number | null;
+    }) => Promise<void> | void;
+    onPatchSummary?: (payload: {
+      phase?: string;
+      summary?: string;
+      title?: string;
+    }) => Promise<void> | void;
+    suppressDefaultToolProgressMessages?: boolean;
     onCompactionStart?: () => Promise<void> | void;
     onCompactionEnd?: () => Promise<void> | void;
     onPartialReply?: (payload: { text?: string }) => Promise<void> | void;
@@ -146,15 +175,15 @@ vi.spyOn(conversationRuntimeModule, "recordInboundSession").mockImplementation(
     recordInboundSession(params) as never) as never,
 );
 
-const configRuntimeModule = await import("openclaw/plugin-sdk/config-runtime");
-vi.spyOn(configRuntimeModule, "readSessionUpdatedAt").mockImplementation(
-  ((params: Parameters<typeof configRuntimeModule.readSessionUpdatedAt>[0]) =>
+const sessionStoreRuntimeModule = await import("openclaw/plugin-sdk/session-store-runtime");
+vi.spyOn(sessionStoreRuntimeModule, "readSessionUpdatedAt").mockImplementation(
+  ((params: Parameters<typeof sessionStoreRuntimeModule.readSessionUpdatedAt>[0]) =>
     configSessionsMocks.readSessionUpdatedAt(params) as never) as never,
 );
-vi.spyOn(configRuntimeModule, "resolveStorePath").mockImplementation(
+vi.spyOn(sessionStoreRuntimeModule, "resolveStorePath").mockImplementation(
   ((
-    path: Parameters<typeof configRuntimeModule.resolveStorePath>[0],
-    opts: Parameters<typeof configRuntimeModule.resolveStorePath>[1],
+    path: Parameters<typeof sessionStoreRuntimeModule.resolveStorePath>[0],
+    opts: Parameters<typeof sessionStoreRuntimeModule.resolveStorePath>[1],
   ) => configSessionsMocks.resolveStorePath(path, opts) as never) as never,
 );
 
@@ -792,6 +821,52 @@ describe("processDiscordMessage draft streaming", () => {
 
     await processDiscordMessage(ctx as any);
 
+    expect(editMessageDiscord).not.toHaveBeenCalled();
+    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not flush draft previews for media finals before normal delivery", async () => {
+    const draftStream = createMockDraftStreamForTest();
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.dispatcher.sendFinalReply({
+        text: "Photo",
+        mediaUrl: "https://example.com/a.png",
+      } as never);
+      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
+    });
+
+    const ctx = await createBaseContext({
+      discordConfig: { streamMode: "partial", maxLinesPerMessage: 5 },
+    });
+
+    await processDiscordMessage(ctx as any);
+
+    expect(draftStream.flush).not.toHaveBeenCalled();
+    expect(draftStream.discardPending).toHaveBeenCalledTimes(1);
+    expect(draftStream.clear).toHaveBeenCalledTimes(1);
+    expect(editMessageDiscord).not.toHaveBeenCalled();
+    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not flush draft previews for error finals before normal delivery", async () => {
+    const draftStream = createMockDraftStreamForTest();
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.dispatcher.sendFinalReply({
+        text: "Something failed",
+        isError: true,
+      } as never);
+      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
+    });
+
+    const ctx = await createBaseContext({
+      discordConfig: { streamMode: "partial", maxLinesPerMessage: 5 },
+    });
+
+    await processDiscordMessage(ctx as any);
+
+    expect(draftStream.flush).not.toHaveBeenCalled();
+    expect(draftStream.discardPending).toHaveBeenCalledTimes(1);
+    expect(draftStream.clear).toHaveBeenCalledTimes(1);
     expect(editMessageDiscord).not.toHaveBeenCalled();
     expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
   });

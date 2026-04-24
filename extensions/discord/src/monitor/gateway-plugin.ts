@@ -1,8 +1,15 @@
+import { randomUUID } from "node:crypto";
 import * as carbonGateway from "@buape/carbon/gateway";
 import type { APIGatewayBotInfo } from "discord-api-types/v10";
 import * as httpsProxyAgent from "https-proxy-agent";
 import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  captureHttpExchange,
+  captureWsEvent,
+  resolveEffectiveDebugProxyUrl,
+  resolveDebugProxySettings,
+} from "openclaw/plugin-sdk/proxy-capture";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
@@ -25,6 +32,23 @@ type DiscordGatewayFetch = (
 
 type DiscordGatewayMetadataError = Error & { transient?: boolean };
 type DiscordGatewayWebSocketCtor = new (url: string, options?: { agent?: unknown }) => ws.WebSocket;
+type CarbonGatewayRegistrationState = {
+  client?: Parameters<carbonGateway.GatewayPlugin["registerClient"]>[0];
+  ws?: unknown;
+  isConnecting?: boolean;
+};
+
+function assignCarbonGatewayClient(
+  plugin: carbonGateway.GatewayPlugin,
+  client: Parameters<carbonGateway.GatewayPlugin["registerClient"]>[0],
+): void {
+  (plugin as unknown as CarbonGatewayRegistrationState).client = client;
+}
+
+function hasCarbonGatewaySocketStarted(plugin: carbonGateway.GatewayPlugin): boolean {
+  const state = plugin as unknown as CarbonGatewayRegistrationState;
+  return state.ws != null || state.isConnecting === true;
+}
 
 export function resolveDiscordGatewayIntents(
   intentsConfig?: import("openclaw/plugin-sdk/config-runtime").DiscordIntentsConfig,
@@ -247,9 +271,32 @@ function createGatewayPlugin(params: {
       super(params.options);
     }
 
+    public override connect(resume = false): void {
+      // Guard against stale heartbeat timers from the @buape/carbon
+      // firstHeartbeatTimeout race (openclaw/openclaw#65009, #64011, #63387).
+      // Parent connect() only calls stopHeartbeat() when isConnecting=false.
+      // If isConnecting=true it returns early — leaving a stale setInterval
+      // that fires with a closed reconnectCallback and crashes the process.
+      if (this.heartbeatInterval !== undefined) {
+        clearInterval(this.heartbeatInterval);
+        this.heartbeatInterval = undefined;
+      }
+      if (this.firstHeartbeatTimeout !== undefined) {
+        clearTimeout(this.firstHeartbeatTimeout);
+        this.firstHeartbeatTimeout = undefined;
+      }
+      super.connect(resume);
+    }
+
     override async registerClient(
       client: Parameters<carbonGateway.GatewayPlugin["registerClient"]>[0],
     ) {
+      // Carbon's Client constructor does not await plugin registerClient().
+      // Match Carbon's own GatewayPlugin ordering by publishing the client
+      // reference before our metadata fetch can yield, so an external
+      // connect()->identify() cannot silently drop IDENTIFY (#52372).
+      assignCarbonGatewayClient(this, client);
+
       if (!this.gatewayInfo || this.gatewayInfoUsedFallback) {
         const resolved = await fetchDiscordGatewayInfoWithTimeout({
           token: client.options.token,
@@ -268,6 +315,13 @@ function createGatewayPlugin(params: {
         await params.testing.registerClient(this, client);
         return;
       }
+      // If the lifecycle timeout already started a socket while metadata was
+      // loading, do not call Carbon's registerClient() again; it would close
+      // that socket and open another one. Carbon stores these as runtime fields
+      // even though they are protected/private in the .d.ts.
+      if (hasCarbonGatewaySocketStarted(this)) {
+        return;
+      }
       return super.registerClient(client);
     }
 
@@ -275,11 +329,50 @@ function createGatewayPlugin(params: {
       if (!url) {
         throw new Error("Gateway URL is required");
       }
+      const wsFlowId = randomUUID();
       // Avoid Node's undici-backed global WebSocket here. We have seen late
       // close-path crashes during Discord gateway teardown; the ws transport is
       // already our proxy path and behaves predictably for lifecycle cleanup.
       const WebSocketCtor = params.testing?.webSocketCtor ?? ws.default;
       const socket = new WebSocketCtor(url, params.wsAgent ? { agent: params.wsAgent } : undefined);
+      captureWsEvent({
+        url,
+        direction: "local",
+        kind: "ws-open",
+        flowId: wsFlowId,
+        meta: { subsystem: "discord-gateway" },
+      });
+      socket.on?.("message", (data: unknown) => {
+        captureWsEvent({
+          url,
+          direction: "inbound",
+          kind: "ws-frame",
+          flowId: wsFlowId,
+          payload: Buffer.isBuffer(data) ? data : Buffer.from(String(data)),
+          meta: { subsystem: "discord-gateway" },
+        });
+      });
+      socket.on?.("close", (code: number, reason: Buffer) => {
+        captureWsEvent({
+          url,
+          direction: "local",
+          kind: "ws-close",
+          flowId: wsFlowId,
+          closeCode: code,
+          payload: reason,
+          meta: { subsystem: "discord-gateway" },
+        });
+      });
+      socket.on?.("error", (error: Error) => {
+        captureWsEvent({
+          url,
+          direction: "local",
+          kind: "error",
+          flowId: wsFlowId,
+          errorText: error.message,
+          meta: { subsystem: "discord-gateway" },
+        });
+      });
       if ("binaryType" in socket) {
         try {
           socket.binaryType = "arraybuffer";
@@ -309,7 +402,8 @@ export function createDiscordGatewayPlugin(params: {
   };
 }): carbonGateway.GatewayPlugin {
   const intents = resolveDiscordGatewayIntents(params.discordConfig?.intents);
-  const proxy = params.discordConfig?.proxy?.trim();
+  const proxy = resolveEffectiveDebugProxyUrl(params.discordConfig?.proxy);
+  const debugProxySettings = resolveDebugProxySettings();
   const options = {
     reconnect: { maxAttempts: 50 },
     intents,
@@ -319,7 +413,21 @@ export function createDiscordGatewayPlugin(params: {
   if (!proxy) {
     return createGatewayPlugin({
       options,
-      fetchImpl: (input, init) => fetch(input, init as RequestInit),
+      fetchImpl: async (input, init) => {
+        const response = await fetch(input, init as RequestInit);
+        if (!debugProxySettings.enabled) {
+          captureHttpExchange({
+            url: input,
+            method: (init?.method as string | undefined) ?? "GET",
+            requestHeaders: init?.headers as Headers | Record<string, string> | undefined,
+            requestBody: (init as RequestInit & { body?: BodyInit | null })?.body ?? null,
+            response,
+            flowId: randomUUID(),
+            meta: { subsystem: "discord-gateway-metadata" },
+          });
+        }
+        return response;
+      },
       runtime: params.runtime,
       testing: params.__testing
         ? {
@@ -342,7 +450,22 @@ export function createDiscordGatewayPlugin(params: {
 
     return createGatewayPlugin({
       options,
-      fetchImpl: (input, init) => (params.__testing?.undiciFetch ?? undici.fetch)(input, init),
+      fetchImpl: async (input, init) => {
+        const response = (await (params.__testing?.undiciFetch ?? undici.fetch)(
+          input,
+          init,
+        )) as unknown as Response;
+        captureHttpExchange({
+          url: input,
+          method: (init?.method as string | undefined) ?? "GET",
+          requestHeaders: init?.headers as Headers | Record<string, string> | undefined,
+          requestBody: (init as RequestInit & { body?: BodyInit | null })?.body ?? null,
+          response,
+          flowId: randomUUID(),
+          meta: { subsystem: "discord-gateway-metadata" },
+        });
+        return response;
+      },
       fetchInit: { dispatcher: fetchAgent },
       wsAgent,
       runtime: params.runtime,

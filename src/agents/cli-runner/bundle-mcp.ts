@@ -2,9 +2,9 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { OpenClawConfig } from "../../config/config.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import type { CliBackendConfig } from "../../config/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   extractMcpServerMap,
   loadEnabledBundleMcpConfig,
@@ -16,11 +16,13 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
+import { serializeTomlInlineValue } from "./toml-inline.js";
 
 type PreparedCliBundleMcpConfig = {
   backend: CliBackendConfig;
   cleanup?: () => Promise<void>;
   mcpConfigHash?: string;
+  mcpResumeHash?: string;
   env?: Record<string, string>;
 };
 
@@ -116,8 +118,10 @@ function decodeHeaderEnvPlaceholder(value: string): { envVar: string; bearer: bo
   return null;
 }
 
-function normalizeCodexServerConfig(server: BundleMcpServerConfig): Record<string, unknown> {
-  const next: Record<string, unknown> = {};
+function applyCommonServerConfig(
+  next: Record<string, unknown>,
+  server: BundleMcpServerConfig,
+): void {
   if (typeof server.command === "string") {
     next.command = server.command;
   }
@@ -134,6 +138,25 @@ function normalizeCodexServerConfig(server: BundleMcpServerConfig): Record<strin
   }
   if (typeof server.url === "string") {
     next.url = server.url;
+  }
+}
+
+function isOpenClawLoopbackMcpServer(name: string, server: BundleMcpServerConfig): boolean {
+  return (
+    name === "openclaw" &&
+    typeof server.url === "string" &&
+    /^https?:\/\/(?:127\.0\.0\.1|localhost):\d+\/mcp(?:[?#].*)?$/.test(server.url)
+  );
+}
+
+function normalizeCodexServerConfig(
+  name: string,
+  server: BundleMcpServerConfig,
+): Record<string, unknown> {
+  const next: Record<string, unknown> = {};
+  applyCommonServerConfig(next, server);
+  if (isOpenClawLoopbackMcpServer(name, server)) {
+    next.default_tools_approval_mode = "approve";
   }
   const httpHeaders = normalizeStringRecord(server.headers);
   if (httpHeaders) {
@@ -178,23 +201,7 @@ function normalizeGeminiServerConfig(
   inheritedEnv: Record<string, string> | undefined,
 ): Record<string, unknown> {
   const next: Record<string, unknown> = {};
-  if (typeof server.command === "string") {
-    next.command = server.command;
-  }
-  const args = normalizeStringArray(server.args);
-  if (args) {
-    next.args = args;
-  }
-  const env = normalizeStringRecord(server.env);
-  if (env) {
-    next.env = env;
-  }
-  if (typeof server.cwd === "string") {
-    next.cwd = server.cwd;
-  }
-  if (typeof server.url === "string") {
-    next.url = server.url;
-  }
+  applyCommonServerConfig(next, server);
   if (typeof server.type === "string") {
     next.type = server.type;
   }
@@ -213,41 +220,12 @@ function normalizeGeminiServerConfig(
   return next;
 }
 
-function escapeTomlString(value: string): string {
-  return value.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
-}
-
-function formatTomlKey(key: string): string {
-  return /^[A-Za-z0-9_-]+$/.test(key) ? key : `"${escapeTomlString(key)}"`;
-}
-
-function serializeTomlInlineValue(value: unknown): string {
-  if (typeof value === "string") {
-    return `"${escapeTomlString(value)}"`;
-  }
-  if (typeof value === "number" || typeof value === "bigint") {
-    return String(value);
-  }
-  if (typeof value === "boolean") {
-    return value ? "true" : "false";
-  }
-  if (Array.isArray(value)) {
-    return `[${value.map((entry) => serializeTomlInlineValue(entry)).join(", ")}]`;
-  }
-  if (isRecord(value)) {
-    return `{ ${Object.entries(value)
-      .map(([key, entry]) => `${formatTomlKey(key)} = ${serializeTomlInlineValue(entry)}`)
-      .join(", ")} }`;
-  }
-  throw new Error(`Unsupported TOML value for Codex MCP config: ${String(value)}`);
-}
-
 function injectCodexMcpConfigArgs(args: string[] | undefined, config: BundleMcpConfig): string[] {
   const overrides = serializeTomlInlineValue(
     Object.fromEntries(
       Object.entries(config.mcpServers).map(([name, server]) => [
         name,
-        normalizeCodexServerConfig(server),
+        normalizeCodexServerConfig(name, server),
       ]),
     ),
   );
@@ -292,6 +270,49 @@ async function writeGeminiSystemSettings(
   };
 }
 
+function sortJsonValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) => sortJsonValue(entry));
+  }
+  if (!isRecord(value)) {
+    return value;
+  }
+  return Object.fromEntries(
+    Object.keys(value)
+      .toSorted()
+      .map((key) => [key, sortJsonValue(value[key])]),
+  );
+}
+
+function normalizeOpenClawLoopbackUrl(value: string): string {
+  const match =
+    /^(http:\/\/(?:127\.0\.0\.1|localhost|\[::1\])):\d+(\/mcp)$/.exec(value.trim()) ?? undefined;
+  if (!match) {
+    return value;
+  }
+  return `${match[1]}:<openclaw-loopback>${match[2]}`;
+}
+
+function canonicalizeBundleMcpConfigForResume(config: BundleMcpConfig): BundleMcpConfig {
+  const canonicalServers = Object.fromEntries(
+    Object.entries(config.mcpServers).map(([name, server]) => {
+      if (name !== "openclaw" || typeof server.url !== "string") {
+        return [name, sortJsonValue(server)];
+      }
+      return [
+        name,
+        sortJsonValue({
+          ...server,
+          url: normalizeOpenClawLoopbackUrl(server.url),
+        }),
+      ];
+    }),
+  ) as BundleMcpConfig["mcpServers"];
+  return {
+    mcpServers: sortJsonValue(canonicalServers) as BundleMcpConfig["mcpServers"],
+  };
+}
+
 async function prepareModeSpecificBundleMcpConfig(params: {
   mode: CliBundleMcpMode;
   backend: CliBackendConfig;
@@ -300,6 +321,12 @@ async function prepareModeSpecificBundleMcpConfig(params: {
 }): Promise<PreparedCliBundleMcpConfig> {
   const serializedConfig = `${JSON.stringify(params.mergedConfig, null, 2)}\n`;
   const mcpConfigHash = crypto.createHash("sha256").update(serializedConfig).digest("hex");
+  const serializedResumeConfig = `${JSON.stringify(
+    canonicalizeBundleMcpConfigForResume(params.mergedConfig),
+    null,
+    2,
+  )}\n`;
+  const mcpResumeHash = crypto.createHash("sha256").update(serializedResumeConfig).digest("hex");
 
   if (params.mode === "codex-config-overrides") {
     return {
@@ -312,6 +339,7 @@ async function prepareModeSpecificBundleMcpConfig(params: {
         ),
       },
       mcpConfigHash,
+      mcpResumeHash,
       env: params.env,
     };
   }
@@ -321,6 +349,7 @@ async function prepareModeSpecificBundleMcpConfig(params: {
     return {
       backend: params.backend,
       mcpConfigHash,
+      mcpResumeHash,
       env: settings.env,
       cleanup: settings.cleanup,
     };
@@ -339,6 +368,7 @@ async function prepareModeSpecificBundleMcpConfig(params: {
       ),
     },
     mcpConfigHash,
+    mcpResumeHash,
     env: params.env,
     cleanup: async () => {
       await fs.rm(tempDir, { recursive: true, force: true });

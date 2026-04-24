@@ -5,9 +5,10 @@
  * error handling, priority ordering, and async support.
  */
 
+import { formatHookErrorForLog } from "../hooks/fire-and-forget.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { concatOptionalTextSegments } from "../shared/text/join-segments.js";
-import type { PluginRegistry } from "./registry.js";
+import type { GlobalHookRunnerRegistry, HookRunnerRegistry } from "./hook-registry.types.js";
 import type {
   PluginHookAfterCompactionEvent,
   PluginHookAfterToolCallEvent,
@@ -65,7 +66,7 @@ import type {
   PluginHookBeforeInstallContext,
   PluginHookBeforeInstallEvent,
   PluginHookBeforeInstallResult,
-} from "./types.js";
+} from "./hook-types.js";
 
 // Re-export types for consumers
 export type {
@@ -184,7 +185,7 @@ type SyncHookResult<K extends SyncHookName> = ReturnType<SyncHookHandler<K>>;
  * Get hooks for a specific hook name, sorted by priority (higher first).
  */
 function getHooksForName<K extends PluginHookName>(
-  registry: PluginRegistry,
+  registry: HookRunnerRegistry,
   hookName: K,
 ): PluginHookRegistration<K>[] {
   return (registry.typedHooks as PluginHookRegistration<K>[])
@@ -193,7 +194,7 @@ function getHooksForName<K extends PluginHookName>(
 }
 
 function getHooksForNameAndPlugin<K extends PluginHookName>(
-  registry: PluginRegistry,
+  registry: HookRunnerRegistry,
   hookName: K,
   pluginId: string,
 ): PluginHookRegistration<K>[] {
@@ -203,7 +204,10 @@ function getHooksForNameAndPlugin<K extends PluginHookName>(
 /**
  * Create a hook runner for a specific registry.
  */
-export function createHookRunner(registry: PluginRegistry, options: HookRunnerOptions = {}) {
+export function createHookRunner(
+  registry: GlobalHookRunnerRegistry,
+  options: HookRunnerOptions = {},
+) {
   const logger = options.logger;
   const catchErrors = options.catchErrors ?? true;
   const failurePolicyByHook = options.failurePolicyByHook ?? {};
@@ -255,9 +259,11 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     if (next.status === "error") {
       return next;
     }
+    const deliveryOrigin = acc?.deliveryOrigin ?? next.deliveryOrigin;
     return {
       status: "ok",
       threadBindingReady: Boolean(acc?.threadBindingReady || next.threadBindingReady),
+      ...(deliveryOrigin ? { deliveryOrigin } : {}),
     };
   };
 
@@ -276,9 +282,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     pluginId: string;
     error: unknown;
   }): never | void => {
-    const msg = `[hooks] ${params.hookName} handler from ${params.pluginId} failed: ${String(
-      params.error,
-    )}`;
+    const msg = `[hooks] ${params.hookName} handler from ${params.pluginId} failed: ${formatHookErrorForLog(params.error)}`;
     if (shouldCatchHookErrors(params.hookName)) {
       logger?.error(msg);
       return;
@@ -450,6 +454,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
 
   async function runClaimingHookForPluginOutcome<
     K extends PluginHookName,
+    // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Targeted hook outcomes preserve caller-specific handled result types.
     TResult extends { handled: boolean },
   >(
     hookName: K,
@@ -504,6 +509,16 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   // Agent Hooks
   // =========================================================================
 
+  function withAgentRunId<TEvent extends { runId?: string }>(
+    event: TEvent,
+    ctx: PluginHookAgentContext,
+  ): TEvent {
+    if (event.runId || !ctx.runId) {
+      return event;
+    }
+    return { ...event, runId: ctx.runId };
+  }
+
   /**
    * Run before_model_resolve hook.
    * Allows plugins to override provider/model before model resolution.
@@ -546,7 +561,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   ): Promise<PluginHookBeforeAgentStartResult | undefined> {
     return runModifyingHook<"before_agent_start", PluginHookBeforeAgentStartResult>(
       "before_agent_start",
-      event,
+      withAgentRunId(event, ctx),
       ctx,
       {
         mergeResults: (acc, next) => ({
@@ -582,7 +597,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     event: PluginHookAgentEndEvent,
     ctx: PluginHookAgentContext,
   ): Promise<void> {
-    return runVoidHook("agent_end", event, ctx);
+    return runVoidHook("agent_end", withAgentRunId(event, ctx), ctx);
   }
 
   /**

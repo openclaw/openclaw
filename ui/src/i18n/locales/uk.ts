@@ -196,10 +196,17 @@ export const uk: TranslationMap = {
       wsUrl: "URL WebSocket",
       token: "Токен шлюзу",
       password: "Пароль (не зберігається)",
+      passwordPlaceholder: "системний або спільний пароль",
       sessionKey: "Типовий ключ сеансу",
       language: "Мова",
       connectHint: "Натисніть «Підключити», щоб застосувати зміни підключення.",
       trustedProxy: "Автентифіковано через довірений проксі.",
+      showToken: "Показати токен",
+      hideToken: "Приховати токен",
+      toggleTokenVisibility: "Перемкнути видимість токена",
+      showPassword: "Показати пароль",
+      hidePassword: "Приховати пароль",
+      togglePasswordVisibility: "Перемкнути видимість пароля",
     },
     snapshot: {
       title: "Знімок",
@@ -238,8 +245,19 @@ export const uk: TranslationMap = {
     },
     pairing: {
       hint: "Цей пристрій потребує схвалення спарювання від хоста шлюзу.",
+      scopeUpgradeTitle: "Розширення області дії очікує на схвалення.",
+      scopeUpgradeSummary:
+        "Цей пристрій уже сполучено, але запитуване ширше охоплення очікує на схвалення.",
+      roleUpgradeTitle: "Зміна ролі очікує на схвалення.",
+      roleUpgradeSummary:
+        "Цей пристрій уже сполучено, але запитувана зміна ролі очікує на схвалення.",
+      metadataUpgradeTitle: "Зміна метаданих пристрою очікує на схвалення.",
+      metadataUpgradeSummary:
+        "Цей пристрій уже сполучено, але зміна метаданих очікує на схвалення.",
       mobileHint:
         "На мобільному? Скопіюйте повний URL (включно з #token=...) з openclaw dashboard --no-open на вашому комп’ютері.",
+      docsTitle: "Документація щодо сполучення пристроїв (відкривається в новій вкладці)",
+      docsLink: "Документація: Сполучення пристроїв",
     },
     insecure: {
       hint: "Ця сторінка використовує HTTP, тому браузер блокує ідентичність пристрою. Використовуйте HTTPS (Tailscale Serve) або відкрийте {url} на хості шлюзу.",
@@ -253,11 +271,29 @@ export const uk: TranslationMap = {
       step4: "Або згенеруйте багаторазовий токен:",
       docsHint: "Для віддаленого доступу рекомендовано Tailscale Serve. ",
       docsLink: "Читати документацію →",
+      authDocsTitle: "Документація щодо автентифікації Control UI (відкривається в новій вкладці)",
+      authDocsLink: "Документація: автентифікація Control UI",
+      tailscaleDocsTitle: "Документація щодо Tailscale Serve (відкривається в новій вкладці)",
+      tailscaleDocsLink: "Документація: Tailscale Serve",
+      insecureHttpDocsTitle: "Документація щодо незахищеного HTTP (відкривається в новій вкладці)",
+      insecureHttpDocsLink: "Документація: незахищений HTTP",
     },
     cards: {
       cost: "Вартість",
       skills: "Навички",
       recentSessions: "Нещодавні сеанси",
+      modelAuth: "Авторизація моделей",
+      modelAuthOk: "{count} в нормі",
+      modelAuthExpired: "{count} прострочено",
+      modelAuthExpiring: "{count} скоро спливає",
+      modelAuthProviders: "{count} провайдерів",
+      modelAuthUsageLeft: "Залишилося {pct}%",
+      modelAuthExpiresIn: "спливає {when}",
+      modelAuthAttentionExpiredTitle: "Авторизація моделей прострочена",
+      modelAuthAttentionExpiringTitle: "Термін авторизації моделей скоро спливає",
+      modelAuthAttentionExpiredDesc:
+        "{providers} — повторно виконайте авторизацію через openclaw models auth",
+      modelAuthAttentionExpiringEntry: "{provider} ({when})",
     },
     attention: {
       title: "Увага",
@@ -283,6 +319,7 @@ export const uk: TranslationMap = {
     tabs: {
       scene: "Сцена",
       diary: "Щоденник",
+      advanced: "Розширені",
     },
     header: {
       refresh: "Оновити",
@@ -296,10 +333,63 @@ export const uk: TranslationMap = {
       promotedSuffix: "підвищено",
       nextSweepPrefix: "наступний цикл",
     },
+    scene: {
+      backfill: "Заповнити пропуски",
+      dedupeDiary: "Щоденник дедуплікації",
+      reset: "Скинути",
+      clearGrounded: "Очистити заземлене",
+      repairCache: "Відновити кеш сновидінь",
+      working: "Обробка…",
+    },
+    phase: {
+      light: "Легкий",
+      deep: "Глибокий",
+      rem: "REM",
+      off: "вимкнено",
+    },
+    advanced: {
+      eyebrow: "Огляд",
+      title: "Огляд щоденного журналу",
+      description:
+        "Перегляньте, що надійшло зі щоденного журналу, що очікує на підвищення та що було підвищено нещодавно.",
+      summaryFromDailyLog: "зі щоденного журналу",
+      summaryWaiting: "очікує",
+      summaryPromotedToday: "підвищено сьогодні",
+      stagedTitle: "Із щоденного журналу",
+      stagedDescription:
+        "Кандидати для повторного відтворення, взяті зі старіших записів щоденного журналу.",
+      shortTermTitle: "Очікують на підвищення",
+      shortTermDescription:
+        "Поточні короткострокові кандидати, які очікують переходу до справжньої пам’яті.",
+      sortRecent: "Найновіші",
+      sortSignals: "Найсильніша підтримка",
+      originDailyLog: "повторено",
+      originLive: "наживо",
+      originMixed: "змішано",
+      promotedTitle: "Нещодавні підвищення",
+      promotedDescription: "Елементи, які вже пройшли підвищення.",
+      emptyGrounded: "Зараз немає підготовлених записів відтворення з прив’язкою до джерела.",
+      emptyShortTerm: "Немає короткострокових записів для перегляду.",
+      emptyPromoted: "Немає нещодавніх підвищень для перегляду.",
+      updatedPrefix: "оновлено",
+    },
     stats: {
       shortTerm: "Короткостроково",
+      grounded: "Заземлене",
       signals: "Сигнали",
+      promoted: "Підвищено",
       phaseHits: "Збіги фаз",
+    },
+    trace: {
+      shortTerm: "Короткострокові",
+      grounded: "Заземлене",
+      signals: "Сигнали",
+      promoted: "Підвищено",
+      groundedLed: "grounded-led",
+      emptyShortTerm: "Немає активних короткострокових елементів.",
+      emptyGrounded: "Немає підготовлених заземлених елементів.",
+      emptySignals: "Немає активних сигналів.",
+      emptyPromoted: "Сьогодні ще нічого не підвищено.",
     },
     diary: {
       title: "Щоденник сновидінь",
@@ -559,6 +649,12 @@ export const uk: TranslationMap = {
   login: {
     subtitle: "Панель Gateway",
     passwordPlaceholder: "необов’язково",
+    showToken: "Показати токен",
+    hideToken: "Приховати токен",
+    toggleTokenVisibility: "Перемкнути видимість токена",
+    showPassword: "Показати пароль",
+    hidePassword: "Приховати пароль",
+    togglePasswordVisibility: "Перемкнути видимість пароля",
   },
   chat: {
     disconnected: "Відключено від шлюзу.",
@@ -585,6 +681,7 @@ export const uk: TranslationMap = {
     uk: "Українська (українська)",
     id: "Bahasa Indonesia (індонезійська)",
     pl: "Polski (польська)",
+    th: "ไทย (тайська)",
   },
   cron: {
     summary: {

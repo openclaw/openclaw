@@ -1,5 +1,7 @@
 import type { EventLogEntry } from "./app-events.ts";
 import type { CompactionStatus, FallbackStatus } from "./app-tool-stream.ts";
+import type { RealtimeTalkStatus } from "./chat/realtime-talk.ts";
+import type { ChatSideResult } from "./chat/side-result.ts";
 import type { CronModelSuggestionsState, CronState } from "./controllers/cron.ts";
 import type { DevicePairingList } from "./controllers/devices.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
@@ -9,8 +11,10 @@ import type {
   ClawHubSkillDetail,
   SkillMessage,
 } from "./controllers/skills.ts";
+import type { EmbedSandboxMode } from "./embed-sandbox.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import type { Tab } from "./navigation.ts";
+import type { SidebarContent } from "./sidebar-content.ts";
 import type { UiSettings } from "./storage.ts";
 import type { ThemeTransitionContext } from "./theme-transition.ts";
 import type { ResolvedTheme, ThemeMode, ThemeName } from "./theme.ts";
@@ -26,6 +30,7 @@ import type {
   LogEntry,
   LogLevel,
   ChatModelOverride,
+  ModelAuthStatusResult,
   ModelCatalogEntry,
   NostrProfile,
   PresenceEntry,
@@ -33,6 +38,7 @@ import type {
   CostUsageSummary,
   SessionUsageTimeSeries,
   SessionsListResult,
+  SessionCompactionCheckpoint,
   SkillStatusReport,
   StatusSummary,
   ToolsCatalogResult,
@@ -61,6 +67,11 @@ export type AppViewState = {
   assistantName: string;
   assistantAvatar: string | null;
   assistantAgentId: string | null;
+  userName?: string | null;
+  userAvatar?: string | null;
+  localMediaPreviewRoots: string[];
+  embedSandboxMode: EmbedSandboxMode;
+  allowExternalEmbedUrls: boolean;
   sessionKey: string;
   chatLoading: boolean;
   chatSending: boolean;
@@ -72,6 +83,8 @@ export type AppViewState = {
   chatStream: string | null;
   chatStreamStartedAt: number | null;
   chatRunId: string | null;
+  chatSideResult: ChatSideResult | null;
+  chatSideResultTerminalRuns: Set<string>;
   compactionStatus: CompactionStatus | null;
   fallbackStatus: FallbackStatus | null;
   chatAvatarUrl: string | null;
@@ -80,13 +93,17 @@ export type AppViewState = {
   chatModelsLoading: boolean;
   chatModelCatalog: ModelCatalogEntry[];
   chatQueue: ChatQueueItem[];
+  realtimeTalkActive: boolean;
+  realtimeTalkStatus: RealtimeTalkStatus;
+  realtimeTalkDetail: string | null;
+  realtimeTalkTranscript: string | null;
   chatManualRefreshInFlight: boolean;
   nodesLoading: boolean;
   nodes: Array<Record<string, unknown>>;
   chatNewMessagesBelow: boolean;
   navDrawerOpen: boolean;
   sidebarOpen: boolean;
-  sidebarContent: string | null;
+  sidebarContent: SidebarContent | null;
   sidebarError: string | null;
   splitRatio: number;
   scrollToBottom: (opts?: { smooth?: boolean }) => void;
@@ -126,10 +143,20 @@ export type AppViewState = {
   dreamingStatus: import("./controllers/dreaming.js").DreamingStatus | null;
   dreamingModeSaving: boolean;
   dreamDiaryLoading: boolean;
+  dreamDiaryActionLoading: boolean;
+  dreamDiaryActionMessage: { kind: "success" | "error"; text: string } | null;
+  dreamDiaryActionArchivePath: string | null;
   dreamDiaryError: string | null;
   dreamDiaryPath: string | null;
   dreamDiaryContent: string | null;
+  wikiImportInsightsLoading: boolean;
+  wikiImportInsightsError: string | null;
+  wikiImportInsights: import("./controllers/dreaming.js").WikiImportInsights | null;
+  wikiMemoryPalaceLoading: boolean;
+  wikiMemoryPalaceError: string | null;
+  wikiMemoryPalace: import("./controllers/dreaming.js").WikiMemoryPalace | null;
   configFormMode: "form" | "raw";
+  configSettingsMode: "quick" | "advanced";
   configSearchQuery: string;
   configActiveSection: string | null;
   configActiveSubsection: string | null;
@@ -198,6 +225,9 @@ export type AppViewState = {
   sessionsLoading: boolean;
   sessionsResult: SessionsListResult | null;
   sessionsError: string | null;
+  threadsLoading: boolean;
+  threadsResult: SessionsListResult | null;
+  threadsError: string | null;
   sessionsFilterActive: string;
   sessionsFilterLimit: string;
   sessionsIncludeGlobal: boolean;
@@ -210,7 +240,7 @@ export type AppViewState = {
   sessionsPageSize: number;
   sessionsSelectedKeys: Set<string>;
   sessionsExpandedCheckpointKey: string | null;
-  sessionsCheckpointItemsByKey: Record<string, import("./types.ts").SessionCompactionCheckpoint[]>;
+  sessionsCheckpointItemsByKey: Record<string, SessionCompactionCheckpoint[]>;
   sessionsCheckpointLoadingKey: string | null;
   sessionsCheckpointBusyKey: string | null;
   sessionsCheckpointErrorByKey: Record<string, string>;
@@ -252,6 +282,9 @@ export type AppViewState = {
 } & Pick<
   CronState,
   | "cronLoading"
+  | "cronQuickCreateOpen"
+  | "cronQuickCreateStep"
+  | "cronQuickCreateDraft"
   | "cronJobsLoadingMore"
   | "cronJobs"
   | "cronJobsTotal"
@@ -307,6 +340,9 @@ export type AppViewState = {
     healthLoading: boolean;
     healthResult: HealthSummary | null;
     healthError: string | null;
+    modelAuthStatusLoading: boolean;
+    modelAuthStatusResult: ModelAuthStatusResult | null;
+    modelAuthStatusError: string | null;
     debugLoading: boolean;
     debugStatus: StatusSummary | null;
     debugHealth: HealthSummary | null;
@@ -347,7 +383,8 @@ export type AppViewState = {
     setThemeMode: (mode: ThemeMode, context?: ThemeTransitionContext) => void;
     setBorderRadius: (value: number) => void;
     applySettings: (next: UiSettings) => void;
-    loadOverview: () => Promise<void>;
+    applyLocalUserIdentity?: (next: { name?: string | null; avatar?: string | null }) => void;
+    loadOverview: (opts?: { refresh?: boolean }) => Promise<void>;
     loadAssistantIdentity: () => Promise<void>;
     loadCron: () => Promise<void>;
     handleWhatsAppStart: (force: boolean) => Promise<void>;
@@ -393,6 +430,8 @@ export type AppViewState = {
     setPassword: (next: string) => void;
     setChatMessage: (next: string) => void;
     handleSendChat: (messageOverride?: string, opts?: { restoreDraft?: boolean }) => Promise<void>;
+    toggleRealtimeTalk: () => Promise<void>;
+    steerQueuedChatMessage: (id: string) => Promise<void>;
     handleAbortChat: () => Promise<void>;
     removeQueuedMessage: (id: string) => void;
     handleChatScroll: (event: Event) => void;
@@ -400,7 +439,7 @@ export type AppViewState = {
     resetChatScroll: () => void;
     exportLogs: (lines: string[], label: string) => void;
     handleLogsScroll: (event: Event) => void;
-    handleOpenSidebar: (content: string) => void;
+    handleOpenSidebar: (content: SidebarContent) => void;
     handleCloseSidebar: () => void;
     handleSplitRatioChange: (ratio: number) => void;
   };

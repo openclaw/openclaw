@@ -1,6 +1,6 @@
 import { type Context, complete } from "@mariozechner/pi-ai";
-import { Type } from "@sinclair/typebox";
-import type { OpenClawConfig } from "../../config/config.js";
+import { Type } from "typebox";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { extractPdfContent, type PdfExtractedContent } from "../../media/pdf-extract.js";
 import { loadWebMediaRaw } from "../../media/web-media.js";
 import {
@@ -457,10 +457,12 @@ export function createPdfTool(options?: {
                 : {}),
             }
           : {
-              pdfs: loadedPdfs.map((p) => ({
-                pdf: p.resolvedPath,
-                ...(p.rewrittenFrom ? { rewrittenFrom: p.rewrittenFrom } : {}),
-              })),
+              pdfs: loadedPdfs.map((p) =>
+                Object.assign(
+                  { pdf: p.resolvedPath },
+                  p.rewrittenFrom ? { rewrittenFrom: p.rewrittenFrom } : {},
+                ),
+              ),
             };
 
       return buildTextToolResult(result, { native: result.native, ...pdfDetails });

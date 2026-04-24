@@ -2,10 +2,14 @@ import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
+  createProviderOperationDeadline,
   fetchWithTimeout,
+  pollProviderOperationJson,
   postJsonRequest,
+  resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type {
   GeneratedVideoAsset,
   VideoGenerationProvider,
@@ -58,14 +62,14 @@ function resolveSize(params: {
   aspectRatio?: string;
   resolution?: string;
 }): (typeof OPENAI_VIDEO_SIZES)[number] | undefined {
-  const explicitSize = params.size?.trim();
+  const explicitSize = normalizeOptionalString(params.size);
   if (
     explicitSize &&
     OPENAI_VIDEO_SIZES.includes(explicitSize as (typeof OPENAI_VIDEO_SIZES)[number])
   ) {
     return explicitSize as (typeof OPENAI_VIDEO_SIZES)[number];
   }
-  switch (params.aspectRatio?.trim()) {
+  switch (normalizeOptionalString(params.aspectRatio)) {
     case "9:16":
       return "720x1280";
     case "16:9":
@@ -98,7 +102,8 @@ function resolveReferenceAsset(req: VideoGenerationRequest) {
     );
   }
   const mimeType =
-    asset.mimeType?.trim() || ((req.inputVideos?.length ?? 0) > 0 ? "video/mp4" : "image/png");
+    normalizeOptionalString(asset.mimeType) ||
+    ((req.inputVideos?.length ?? 0) > 0 ? "video/mp4" : "image/png");
   const extension = mimeType.includes("video")
     ? "mp4"
     : mimeType.includes("jpeg")
@@ -107,7 +112,7 @@ function resolveReferenceAsset(req: VideoGenerationRequest) {
         ? "webp"
         : "png";
   const fileName =
-    asset.fileName?.trim() ||
+    normalizeOptionalString(asset.fileName) ||
     `${(req.inputVideos?.length ?? 0) > 0 ? "reference-video" : "reference-image"}.${extension}`;
   return new File([toBlobBytes(asset.buffer)], fileName, { type: mimeType });
 }
@@ -119,27 +124,26 @@ async function pollOpenAIVideo(params: {
   baseUrl: string;
   fetchFn: typeof fetch;
 }): Promise<OpenAIVideoResponse> {
-  for (let attempt = 0; attempt < MAX_POLL_ATTEMPTS; attempt += 1) {
-    const response = await fetchWithTimeout(
-      `${params.baseUrl}/videos/${params.videoId}`,
-      {
-        method: "GET",
-        headers: params.headers,
-      },
-      params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-      params.fetchFn,
-    );
-    await assertOkOrThrowHttpError(response, "OpenAI video status request failed");
-    const payload = (await response.json()) as OpenAIVideoResponse;
-    if (payload.status === "completed") {
-      return payload;
-    }
-    if (payload.status === "failed") {
-      throw new Error(payload.error?.message?.trim() || "OpenAI video generation failed");
-    }
-    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
-  }
-  throw new Error(`OpenAI video generation task ${params.videoId} did not finish in time`);
+  const deadline = createProviderOperationDeadline({
+    timeoutMs: params.timeoutMs,
+    label: `OpenAI video generation task ${params.videoId}`,
+  });
+  return await pollProviderOperationJson<OpenAIVideoResponse>({
+    url: `${params.baseUrl}/videos/${params.videoId}`,
+    headers: params.headers,
+    deadline,
+    defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
+    fetchFn: params.fetchFn,
+    maxAttempts: MAX_POLL_ATTEMPTS,
+    pollIntervalMs: POLL_INTERVAL_MS,
+    requestFailedMessage: "OpenAI video status request failed",
+    timeoutMessage: `OpenAI video generation task ${params.videoId} did not finish in time`,
+    isComplete: (payload) => payload.status === "completed",
+    getFailureMessage: (payload) =>
+      payload.status === "failed"
+        ? normalizeOptionalString(payload.error?.message) || "OpenAI video generation failed"
+        : undefined,
+  });
 }
 
 async function downloadOpenAIVideo(params: {
@@ -164,7 +168,7 @@ async function downloadOpenAIVideo(params: {
     params.fetchFn,
   );
   await assertOkOrThrowHttpError(response, "OpenAI video download failed");
-  const mimeType = response.headers.get("content-type")?.trim() || "video/mp4";
+  const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
   const arrayBuffer = await response.arrayBuffer();
   return {
     buffer: Buffer.from(arrayBuffer),
@@ -223,6 +227,10 @@ export function buildOpenAIVideoGenerationProvider(): VideoGenerationProvider {
       }
 
       const fetchFn = fetch;
+      const deadline = createProviderOperationDeadline({
+        timeoutMs: req.timeoutMs,
+        label: "OpenAI video generation",
+      });
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
         resolveProviderHttpRequestConfig({
           baseUrl: resolveConfiguredOpenAIBaseUrl(req.cfg),
@@ -236,7 +244,7 @@ export function buildOpenAIVideoGenerationProvider(): VideoGenerationProvider {
           transport: "http",
         });
 
-      const model = req.model?.trim() || DEFAULT_OPENAI_VIDEO_MODEL;
+      const model = normalizeOptionalString(req.model) ?? DEFAULT_OPENAI_VIDEO_MODEL;
       const seconds = resolveDurationSeconds(req.durationSeconds);
       const size = resolveSize({
         size: req.size,
@@ -262,11 +270,14 @@ export function buildOpenAIVideoGenerationProvider(): VideoGenerationProvider {
                   input_reference: {
                     image_url: toOpenAIDataUrl(
                       inputImage.buffer,
-                      inputImage.mimeType?.trim() || "image/png",
+                      normalizeOptionalString(inputImage.mimeType) ?? "image/png",
                     ),
                   },
                 },
-                timeoutMs: req.timeoutMs,
+                timeoutMs: resolveProviderOperationTimeoutMs({
+                  deadline,
+                  defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
+                }),
                 fetchFn,
                 allowPrivateNetwork,
                 dispatcherPolicy,
@@ -292,7 +303,10 @@ export function buildOpenAIVideoGenerationProvider(): VideoGenerationProvider {
                   headers: multipartHeaders,
                   body: form,
                 },
-                req.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+                resolveProviderOperationTimeoutMs({
+                  deadline,
+                  defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
+                }),
                 fetchFn,
               ).then((response) => ({
                 response,
@@ -311,7 +325,10 @@ export function buildOpenAIVideoGenerationProvider(): VideoGenerationProvider {
                 ...(seconds ? { seconds } : {}),
                 ...(size ? { size } : {}),
               },
-              timeoutMs: req.timeoutMs,
+              timeoutMs: resolveProviderOperationTimeoutMs({
+                deadline,
+                defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
+              }),
               fetchFn,
               allowPrivateNetwork,
               dispatcherPolicy,
@@ -322,21 +339,27 @@ export function buildOpenAIVideoGenerationProvider(): VideoGenerationProvider {
       try {
         await assertOkOrThrowHttpError(response, "OpenAI video generation failed");
         const submitted = (await response.json()) as OpenAIVideoResponse;
-        const videoId = submitted.id?.trim();
+        const videoId = normalizeOptionalString(submitted.id);
         if (!videoId) {
           throw new Error("OpenAI video generation response missing video id");
         }
         const completed = await pollOpenAIVideo({
           videoId,
           headers,
-          timeoutMs: req.timeoutMs,
+          timeoutMs: resolveProviderOperationTimeoutMs({
+            deadline,
+            defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
+          }),
           baseUrl,
           fetchFn,
         });
         const video = await downloadOpenAIVideo({
           videoId,
           headers,
-          timeoutMs: req.timeoutMs,
+          timeoutMs: resolveProviderOperationTimeoutMs({
+            deadline,
+            defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
+          }),
           baseUrl,
           fetchFn,
         });

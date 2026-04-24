@@ -1,7 +1,26 @@
-import { resolveWhatsAppAccount } from "../../accounts.js";
+import {
+  createInternalHookEvent,
+  deriveInboundMessageHookContext,
+  fireAndForgetBoundedHook,
+  toInternalMessageReceivedContext,
+  toPluginMessageContext,
+  toPluginMessageReceivedEvent,
+  triggerInternalHook,
+} from "openclaw/plugin-sdk/hook-runtime";
+import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
+import { resolveBatchedReplyThreadingPolicy } from "openclaw/plugin-sdk/reply-reference";
 import { getPrimaryIdentityId, getSelfIdentity, getSenderIdentity } from "../../identity.js";
+import {
+  resolveWhatsAppCommandAuthorized,
+  resolveWhatsAppInboundPolicy,
+  type ResolvedWhatsAppInboundPolicy,
+} from "../../inbound-policy.js";
 import { newConnectionId } from "../../reconnect.js";
 import { formatError } from "../../session.js";
+import {
+  resolveWhatsAppDirectSystemPrompt,
+  resolveWhatsAppGroupSystemPrompt,
+} from "../../system-prompt.js";
 import { deliverWebReply } from "../deliver-reply.js";
 import { whatsappInboundLog } from "../loggers.js";
 import type { WebInboundMsg } from "../types.js";
@@ -27,12 +46,10 @@ import {
   formatInboundEnvelope,
   logVerbose,
   normalizeE164,
-  readStoreAllowFromForDmPolicy,
   recordSessionMetaFromInbound,
   resolveChannelContextVisibilityMode,
   resolveInboundSessionEnvelopeContext,
   resolvePinnedMainDmOwnerFromAllowlist,
-  resolveDmGroupAccessWithCommandGate,
   shouldComputeCommandAuthorized,
   shouldLogVerbose,
   type getChildLogger,
@@ -42,74 +59,107 @@ import {
   type resolveAgentRoute,
 } from "./runtime-api.js";
 
-async function resolveWhatsAppCommandAuthorized(params: {
+const WHATSAPP_MESSAGE_RECEIVED_HOOK_LIMITS = {
+  maxConcurrency: 8,
+  maxQueue: 128,
+  timeoutMs: 2_000,
+};
+
+type WhatsAppMessageReceivedHookConfig = {
+  pluginHooks?: {
+    messageReceived?: unknown;
+  };
+  accounts?: Record<string, unknown>;
+};
+
+function readWhatsAppMessageReceivedHookOptIn(value: unknown): boolean | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const pluginHooks = (value as WhatsAppMessageReceivedHookConfig).pluginHooks;
+  return pluginHooks?.messageReceived === true ? true : undefined;
+}
+
+function shouldEmitWhatsAppMessageReceivedHooks(params: {
   cfg: ReturnType<LoadConfigFn>;
-  msg: WebInboundMsg;
-}): Promise<boolean> {
-  const useAccessGroups = params.cfg.commands?.useAccessGroups !== false;
-  if (!useAccessGroups) {
-    return true;
-  }
-
-  const isGroup = params.msg.chatType === "group";
-  const sender = getSenderIdentity(params.msg);
-  const self = getSelfIdentity(params.msg);
-  const senderE164 = normalizeE164(
-    isGroup ? (sender.e164 ?? "") : (sender.e164 ?? params.msg.from ?? ""),
+  accountId?: string;
+}): boolean {
+  const channelConfig = params.cfg.channels?.whatsapp as
+    | WhatsAppMessageReceivedHookConfig
+    | undefined;
+  const accountConfig =
+    params.accountId && channelConfig?.accounts
+      ? channelConfig.accounts[params.accountId]
+      : undefined;
+  return (
+    readWhatsAppMessageReceivedHookOptIn(accountConfig) ??
+    readWhatsAppMessageReceivedHookOptIn(channelConfig) ??
+    false
   );
-  if (!senderE164) {
-    return false;
+}
+
+function emitWhatsAppMessageReceivedHooks(params: {
+  ctx: ReturnType<typeof buildWhatsAppInboundContext>;
+  sessionKey: string;
+}): void {
+  const canonical = deriveInboundMessageHookContext(params.ctx);
+  const hookRunner = getGlobalHookRunner();
+  if (hookRunner?.hasHooks("message_received")) {
+    fireAndForgetBoundedHook(
+      () =>
+        hookRunner.runMessageReceived(
+          toPluginMessageReceivedEvent(canonical),
+          toPluginMessageContext(canonical),
+        ),
+      "whatsapp: message_received plugin hook failed",
+      undefined,
+      WHATSAPP_MESSAGE_RECEIVED_HOOK_LIMITS,
+    );
+  }
+  fireAndForgetBoundedHook(
+    () =>
+      triggerInternalHook(
+        createInternalHookEvent(
+          "message",
+          "received",
+          params.sessionKey,
+          toInternalMessageReceivedContext(canonical),
+        ),
+      ),
+    "whatsapp: message_received internal hook failed",
+    undefined,
+    WHATSAPP_MESSAGE_RECEIVED_HOOK_LIMITS,
+  );
+}
+
+function emitWhatsAppMessageReceivedHooksIfEnabled(params: {
+  cfg: ReturnType<LoadConfigFn>;
+  ctx: ReturnType<typeof buildWhatsAppInboundContext>;
+  accountId?: string;
+  sessionKey: string;
+}): void {
+  if (
+    !shouldEmitWhatsAppMessageReceivedHooks({
+      cfg: params.cfg,
+      accountId: params.accountId,
+    })
+  ) {
+    return;
   }
 
-  const account = resolveWhatsAppAccount({ cfg: params.cfg, accountId: params.msg.accountId });
-  const dmPolicy = account.dmPolicy ?? "pairing";
-  const groupPolicy = account.groupPolicy ?? "allowlist";
-  const configuredAllowFrom = account.allowFrom ?? [];
-  const configuredGroupAllowFrom =
-    account.groupAllowFrom ?? (configuredAllowFrom.length > 0 ? configuredAllowFrom : undefined);
-
-  const storeAllowFrom = isGroup
-    ? []
-    : await readStoreAllowFromForDmPolicy({
-        provider: "whatsapp",
-        accountId: params.msg.accountId,
-        dmPolicy,
-      });
-  const dmAllowFrom =
-    configuredAllowFrom.length > 0 ? configuredAllowFrom : self.e164 ? [self.e164] : [];
-  const access = resolveDmGroupAccessWithCommandGate({
-    isGroup,
-    dmPolicy,
-    groupPolicy,
-    allowFrom: dmAllowFrom,
-    groupAllowFrom: configuredGroupAllowFrom,
-    storeAllowFrom,
-    isSenderAllowed: (allowEntries) => {
-      if (allowEntries.includes("*")) {
-        return true;
-      }
-      const normalizedEntries = allowEntries
-        .map((entry) => normalizeE164(String(entry)))
-        .filter((entry): entry is string => Boolean(entry));
-      return normalizedEntries.includes(senderE164);
-    },
-    command: {
-      useAccessGroups,
-      allowTextCommands: true,
-      hasControlCommand: true,
-    },
+  emitWhatsAppMessageReceivedHooks({
+    ctx: params.ctx,
+    sessionKey: params.sessionKey,
   });
-  return access.commandAuthorized;
 }
 
 function resolvePinnedMainDmRecipient(params: {
   cfg: ReturnType<LoadConfigFn>;
-  msg: WebInboundMsg;
+  allowFrom?: string[];
 }): string | null {
-  const account = resolveWhatsAppAccount({ cfg: params.cfg, accountId: params.msg.accountId });
   return resolvePinnedMainDmOwnerFromAllowlist({
     dmScope: params.cfg.session?.dmScope,
-    allowFrom: account.allowFrom,
+    allowFrom: params.allowFrom,
     normalizeEntry: (entry) => normalizeE164(entry),
   });
 }
@@ -143,20 +193,18 @@ export async function processMessage(params: {
   suppressGroupHistoryClear?: boolean;
 }) {
   const conversationId = params.msg.conversationId ?? params.msg.from;
-  const account = resolveWhatsAppAccount({
+  const self = getSelfIdentity(params.msg);
+  const inboundPolicy = resolveWhatsAppInboundPolicy({
     cfg: params.cfg,
     accountId: params.route.accountId ?? params.msg.accountId,
+    selfE164: self.e164 ?? null,
   });
+  const account = inboundPolicy.account;
   const contextVisibilityMode = resolveChannelContextVisibilityMode({
     cfg: params.cfg,
     channel: "whatsapp",
     accountId: account.accountId,
   });
-  const configuredAllowFrom = account.allowFrom ?? [];
-  const configuredGroupAllowFrom =
-    account.groupAllowFrom ?? (configuredAllowFrom.length > 0 ? configuredAllowFrom : undefined);
-  const groupAllowFrom = configuredGroupAllowFrom ?? [];
-  const groupPolicy = account.groupPolicy ?? "allowlist";
   const { storePath, envelopeOptions, previousTimestamp } = resolveInboundSessionEnvelopeContext({
     cfg: params.cfg,
     agentId: params.route.agentId,
@@ -175,8 +223,8 @@ export async function processMessage(params: {
       ? resolveVisibleWhatsAppGroupHistory({
           history: params.groupHistory ?? params.groupHistories.get(params.groupHistoryKey) ?? [],
           mode: contextVisibilityMode,
-          groupPolicy,
-          groupAllowFrom,
+          groupPolicy: inboundPolicy.groupPolicy,
+          groupAllowFrom: inboundPolicy.groupAllowFrom,
         })
       : undefined;
 
@@ -220,14 +268,14 @@ export async function processMessage(params: {
   }
 
   // Send ack reaction immediately upon message receipt (post-gating)
-  maybeSendAckReaction({
+  await maybeSendAckReaction({
     cfg: params.cfg,
     msg: params.msg,
     agentId: params.route.agentId,
     sessionKey: params.route.sessionKey,
     conversationId,
     verbose: params.verbose,
-    accountId: params.route.accountId,
+    accountId: account.accountId,
     info: params.replyLogger.info.bind(params.replyLogger),
     warn: params.replyLogger.warn.bind(params.replyLogger),
   });
@@ -256,13 +304,12 @@ export async function processMessage(params: {
   }
 
   const sender = getSenderIdentity(params.msg);
-  const self = getSelfIdentity(params.msg);
   const visibleReplyTo = resolveVisibleWhatsAppReplyContext({
     msg: params.msg,
     authDir: account.authDir,
     mode: contextVisibilityMode,
-    groupPolicy,
-    groupAllowFrom,
+    groupPolicy: inboundPolicy.groupPolicy,
+    groupAllowFrom: inboundPolicy.groupAllowFrom,
   });
   const dmRouteTarget = resolveWhatsAppDmRouteTarget({
     msg: params.msg,
@@ -270,7 +317,11 @@ export async function processMessage(params: {
     normalizeE164,
   });
   const commandAuthorized = shouldComputeCommandAuthorized(params.msg.body, params.cfg)
-    ? await resolveWhatsAppCommandAuthorized({ cfg: params.cfg, msg: params.msg })
+    ? await resolveWhatsAppCommandAuthorized({
+        cfg: params.cfg,
+        msg: params.msg,
+        policy: inboundPolicy,
+      })
     : undefined;
   const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
     cfg: params.cfg,
@@ -278,16 +329,28 @@ export async function processMessage(params: {
     channel: "whatsapp",
     accountId: params.route.accountId,
   });
-  const isSelfChat =
-    params.msg.chatType !== "group" &&
-    Boolean(self.e164) &&
-    normalizeE164(params.msg.from) === normalizeE164(self.e164 ?? "");
   const responsePrefix = resolveWhatsAppResponsePrefix({
     cfg: params.cfg,
     agentId: params.route.agentId,
-    isSelfChat,
+    isSelfChat: params.msg.chatType !== "group" && inboundPolicy.isSelfChat,
     pipelineResponsePrefix: replyPipeline.responsePrefix,
   });
+  const replyThreading = resolveBatchedReplyThreadingPolicy(
+    account.replyToMode ?? "off",
+    params.msg.isBatched === true,
+  );
+
+  // Resolve combined conversation system prompt using the group or direct surface.
+  const conversationSystemPrompt =
+    params.msg.chatType === "group"
+      ? resolveWhatsAppGroupSystemPrompt({
+          accountConfig: account,
+          groupId: conversationId,
+        })
+      : resolveWhatsAppDirectSystemPrompt({
+          accountConfig: account,
+          peerId: dmRouteTarget ?? params.msg.from,
+        });
 
   const ctxPayload = buildWhatsAppInboundContext({
     combinedBody,
@@ -295,6 +358,7 @@ export async function processMessage(params: {
     conversationId,
     groupHistory: visibleGroupHistory,
     groupMemberRoster: params.groupMemberNames.get(params.groupHistoryKey),
+    groupSystemPrompt: conversationSystemPrompt,
     msg: params.msg,
     route: params.route,
     sender: {
@@ -302,12 +366,19 @@ export async function processMessage(params: {
       name: sender.name ?? undefined,
       e164: sender.e164 ?? undefined,
     },
+    replyThreading,
     visibleReplyTo: visibleReplyTo ?? undefined,
+  });
+  emitWhatsAppMessageReceivedHooksIfEnabled({
+    cfg: params.cfg,
+    ctx: ctxPayload,
+    accountId: params.route.accountId,
+    sessionKey: params.route.sessionKey,
   });
 
   const pinnedMainDmRecipient = resolvePinnedMainDmRecipient({
     cfg: params.cfg,
-    msg: params.msg,
+    allowFrom: inboundPolicy.configuredAllowFrom,
   });
   updateWhatsAppMainLastRoute({
     backgroundTasks: params.backgroundTasks,
@@ -359,3 +430,10 @@ export async function processMessage(params: {
     shouldClearGroupHistory,
   });
 }
+
+export const __testing = {
+  resolveWhatsAppCommandAuthorized,
+  resolveWhatsAppInboundPolicy: (
+    params: Parameters<typeof resolveWhatsAppInboundPolicy>[0],
+  ): ResolvedWhatsAppInboundPolicy => resolveWhatsAppInboundPolicy(params),
+};

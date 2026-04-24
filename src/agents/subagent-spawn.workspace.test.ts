@@ -71,6 +71,20 @@ function getRegisteredRun() {
     | undefined;
 }
 
+function findLastSessionDeleteCall() {
+  return hoisted.callGatewayMock.mock.calls.findLast(
+    ([request]) => (request as { method?: string }).method === "sessions.delete",
+  )?.[0] as
+    | {
+        params?: {
+          key?: string;
+          deleteTranscript?: boolean;
+          emitLifecycleHooks?: boolean;
+        };
+      }
+    | undefined;
+}
+
 async function expectAcceptedWorkspace(params: { agentId: string; expectedWorkspaceDir: string }) {
   const result = await spawnSubagentDirect(
     {
@@ -148,51 +162,40 @@ describe("spawnSubagentDirect workspace inheritance", () => {
     });
   });
 
-  it("passes lightweight bootstrap context flags for lightContext subagent spawns", async () => {
-    await spawnSubagentDirect(
-      {
-        task: "inspect workspace",
-        lightContext: true,
-      },
-      {
-        agentSessionKey: "agent:main:main",
-        agentChannel: "telegram",
-        agentAccountId: "123",
-        agentTo: "456",
-        workspaceDir: "/tmp/requester-workspace",
-      },
-    );
+  async function spawnAndReadAgentParams(task: { task: string; lightContext?: boolean }) {
+    await spawnSubagentDirect(task, {
+      agentSessionKey: "agent:main:main",
+      agentChannel: "telegram",
+      agentAccountId: "123",
+      agentTo: "456",
+      workspaceDir: "/tmp/requester-workspace",
+    });
 
     const agentCall = hoisted.callGatewayMock.mock.calls.find(
       ([request]) => (request as { method?: string }).method === "agent",
     )?.[0] as { params?: Record<string, unknown> } | undefined;
+    return agentCall?.params;
+  }
 
-    expect(agentCall?.params).toMatchObject({
+  it("passes lightweight bootstrap context flags for lightContext subagent spawns", async () => {
+    const agentParams = await spawnAndReadAgentParams({
+      task: "inspect workspace",
+      lightContext: true,
+    });
+
+    expect(agentParams).toMatchObject({
       bootstrapContextMode: "lightweight",
       bootstrapContextRunKind: "default",
     });
   });
 
   it("omits bootstrap context flags for default subagent spawns", async () => {
-    await spawnSubagentDirect(
-      {
-        task: "inspect workspace",
-      },
-      {
-        agentSessionKey: "agent:main:main",
-        agentChannel: "telegram",
-        agentAccountId: "123",
-        agentTo: "456",
-        workspaceDir: "/tmp/requester-workspace",
-      },
-    );
+    const agentParams = await spawnAndReadAgentParams({
+      task: "inspect workspace",
+    });
 
-    const agentCall = hoisted.callGatewayMock.mock.calls.find(
-      ([request]) => (request as { method?: string }).method === "agent",
-    )?.[0] as { params?: Record<string, unknown> } | undefined;
-
-    expect(agentCall?.params).not.toHaveProperty("bootstrapContextMode");
-    expect(agentCall?.params).not.toHaveProperty("bootstrapContextRunKind");
+    expect(agentParams).not.toHaveProperty("bootstrapContextMode");
+    expect(agentParams).not.toHaveProperty("bootstrapContextRunKind");
   });
 
   it("deletes the provisional child session when a non-thread subagent start fails", async () => {
@@ -234,18 +237,7 @@ describe("spawnSubagentDirect workspace inheritance", () => {
     expect(result.childSessionKey).toMatch(/^agent:main:subagent:/);
     expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
 
-    const deleteCall = hoisted.callGatewayMock.mock.calls.find(
-      ([request]) => (request as { method?: string }).method === "sessions.delete",
-    )?.[0] as
-      | {
-          params?: {
-            key?: string;
-            deleteTranscript?: boolean;
-            emitLifecycleHooks?: boolean;
-          };
-        }
-      | undefined;
-
+    const deleteCall = findLastSessionDeleteCall();
     expect(deleteCall?.params).toMatchObject({
       key: result.childSessionKey,
       deleteTranscript: true,
@@ -302,18 +294,7 @@ describe("spawnSubagentDirect workspace inheritance", () => {
       runId: "run-thread-register-fail",
     });
 
-    const deleteCall = hoisted.callGatewayMock.mock.calls.findLast(
-      ([request]) => (request as { method?: string }).method === "sessions.delete",
-    )?.[0] as
-      | {
-          params?: {
-            key?: string;
-            deleteTranscript?: boolean;
-            emitLifecycleHooks?: boolean;
-          };
-        }
-      | undefined;
-
+    const deleteCall = findLastSessionDeleteCall();
     expect(deleteCall?.params).toMatchObject({
       key: result.childSessionKey,
       deleteTranscript: true,

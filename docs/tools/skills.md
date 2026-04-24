@@ -6,8 +6,6 @@ read_when:
 title: "Skills"
 ---
 
-# Skills (OpenClaw)
-
 OpenClaw uses **[AgentSkills](https://agentskills.io)-compatible** skill folders to teach the agent how to use tools. Each skill is a directory containing a `SKILL.md` with YAML frontmatter and instructions. OpenClaw loads **bundled skills** plus optional local overrides, and filters them at load time based on environment, config, and binary presence.
 
 ## Locations and precedence
@@ -89,6 +87,24 @@ managed, agent, or workspace skill overrides them.
 You can gate them via `metadata.openclaw.requires.config` on the plugin’s config
 entry. See [Plugins](/tools/plugin) for discovery/config and [Tools](/tools) for the
 tool surface those skills teach.
+
+## Skill Workshop
+
+The optional, experimental Skill Workshop plugin can create or update workspace
+skills from reusable procedures observed during agent work. It is disabled by
+default and must be explicitly enabled through
+`plugins.entries.skill-workshop`.
+
+Skill Workshop writes only to `<workspace>/skills`, scans generated content,
+supports pending approval or automatic safe writes, quarantines unsafe
+proposals, and refreshes the skill snapshot after successful writes so new
+skills can become available without a Gateway restart.
+
+Use it when you want corrections such as “next time, verify GIF attribution” or
+hard-won workflows such as media QA checklists to become durable procedural
+instructions. Start with pending approval; use automatic writes only in trusted
+workspaces after reviewing its proposals. Full guide:
+[Skill Workshop Plugin](/plugins/skill-workshop).
 
 ## ClawHub (install + sync)
 
@@ -302,6 +318,13 @@ When an agent run starts, OpenClaw:
 4. Restores the original environment after the run ends.
 
 This is **scoped to the agent run**, not a global shell environment.
+
+For the bundled `claude-cli` backend, OpenClaw also materializes the same
+eligible snapshot as a temporary Claude Code plugin and passes it with
+`--plugin-dir`. Claude Code can then use its native skill resolver while
+OpenClaw still owns precedence, per-agent allowlists, gating, and
+`skills.entries.*` env/API key injection. Other CLI backends use the prompt
+catalog only.
 
 ## Session snapshot (performance)
 

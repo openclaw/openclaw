@@ -4,6 +4,7 @@ import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { runExec } from "../process/exec.js";
 
 type Sharp = typeof import("sharp");
+type SharpFactory = (buffer: Buffer) => ReturnType<Sharp>;
 
 export type ImageMetadata = {
   width: number;
@@ -31,14 +32,18 @@ function prefersSips(): boolean {
   );
 }
 
-async function loadSharp(): Promise<(buffer: Buffer) => ReturnType<Sharp>> {
-  const mod = (await import("sharp")) as unknown as { default?: Sharp };
-  const sharp = mod.default ?? (mod as unknown as Sharp);
-  return (buffer) =>
-    sharp(buffer, {
-      failOnError: false,
-      limitInputPixels: MAX_IMAGE_INPUT_PIXELS,
-    });
+let sharpFactoryPromise: Promise<SharpFactory> | null = null;
+
+async function loadSharp(): Promise<SharpFactory> {
+  sharpFactoryPromise ??= import("sharp").then((mod) => {
+    const sharp = (mod as unknown as { default?: Sharp }).default ?? (mod as unknown as Sharp);
+    return (buffer: Buffer) =>
+      sharp(buffer, {
+        failOnError: false,
+        limitInputPixels: MAX_IMAGE_INPUT_PIXELS,
+      });
+  });
+  return sharpFactoryPromise;
 }
 
 function isPositiveImageDimension(value: number): boolean {
@@ -406,8 +411,8 @@ export async function getImageMetadata(buffer: Buffer): Promise<ImageMetadata | 
   try {
     const sharp = await loadSharp();
     const meta = await sharp(buffer).metadata();
-    const width = Number(meta.width ?? 0);
-    const height = Number(meta.height ?? 0);
+    const width = meta.width ?? 0;
+    const height = meta.height ?? 0;
     if (!Number.isFinite(width) || !Number.isFinite(height)) {
       return null;
     }

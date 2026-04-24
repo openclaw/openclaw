@@ -1,110 +1,25 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
-import { createEmptyPluginRegistry } from "../plugins/registry.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
-import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
+import { describe, expect, it } from "vitest";
+import { asConfig, setupSecretsRuntimeSnapshotTestHooks } from "./runtime.test-support.ts";
 
-type WebProviderUnderTest = "brave" | "gemini" | "grok" | "kimi" | "perplexity" | "firecrawl";
+const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks();
 
-const { resolvePluginWebSearchProvidersMock } = vi.hoisted(() => ({
-  resolvePluginWebSearchProvidersMock: vi.fn(() => buildTestWebSearchProviders()),
-}));
+async function expectInactiveGatewayPassword(config: unknown): Promise<void> {
+  const snapshot = await prepareSecretsRuntimeSnapshot({
+    config: asConfig(config),
+    env: {},
+    agentDirs: ["/tmp/openclaw-agent-main"],
+    loadAuthStore: () => ({ version: 1, profiles: {} }),
+  });
 
-vi.mock("../plugins/web-search-providers.runtime.js", () => ({
-  resolvePluginWebSearchProviders: resolvePluginWebSearchProvidersMock,
-}));
-
-function asConfig(value: unknown): OpenClawConfig {
-  return value as OpenClawConfig;
+  expect(snapshot.config.gateway?.auth?.password).toEqual({
+    source: "env",
+    provider: "default",
+    id: "GATEWAY_PASSWORD_REF",
+  });
+  expect(snapshot.warnings.map((warning) => warning.path)).toContain("gateway.auth.password");
 }
-
-function createTestProvider(params: {
-  id: WebProviderUnderTest;
-  pluginId: string;
-  order: number;
-}): PluginWebSearchProviderEntry {
-  const credentialPath = `plugins.entries.${params.pluginId}.config.webSearch.apiKey`;
-  const readSearchConfigKey = (searchConfig?: Record<string, unknown>): unknown => {
-    const providerConfig =
-      searchConfig?.[params.id] && typeof searchConfig[params.id] === "object"
-        ? (searchConfig[params.id] as { apiKey?: unknown })
-        : undefined;
-    return providerConfig?.apiKey ?? searchConfig?.apiKey;
-  };
-  return {
-    pluginId: params.pluginId,
-    id: params.id,
-    label: params.id,
-    hint: `${params.id} test provider`,
-    envVars: [`${params.id.toUpperCase()}_API_KEY`],
-    placeholder: `${params.id}-...`,
-    signupUrl: `https://example.com/${params.id}`,
-    autoDetectOrder: params.order,
-    credentialPath,
-    inactiveSecretPaths: [credentialPath],
-    getCredentialValue: readSearchConfigKey,
-    setCredentialValue: (searchConfigTarget, value) => {
-      const providerConfig =
-        params.id === "brave" || params.id === "firecrawl"
-          ? searchConfigTarget
-          : ((searchConfigTarget[params.id] ??= {}) as { apiKey?: unknown });
-      providerConfig.apiKey = value;
-    },
-    getConfiguredCredentialValue: (config) =>
-      (config?.plugins?.entries?.[params.pluginId]?.config as { webSearch?: { apiKey?: unknown } })
-        ?.webSearch?.apiKey,
-    setConfiguredCredentialValue: (configTarget, value) => {
-      const plugins = (configTarget.plugins ??= {}) as { entries?: Record<string, unknown> };
-      const entries = (plugins.entries ??= {});
-      const entry = (entries[params.pluginId] ??= {}) as { config?: Record<string, unknown> };
-      const config = (entry.config ??= {});
-      const webSearch = (config.webSearch ??= {}) as { apiKey?: unknown };
-      webSearch.apiKey = value;
-    },
-    resolveRuntimeMetadata:
-      params.id === "perplexity"
-        ? () => ({
-            perplexityTransport: "search_api" as const,
-          })
-        : undefined,
-    createTool: () => null,
-  };
-}
-
-function buildTestWebSearchProviders(): PluginWebSearchProviderEntry[] {
-  return [
-    createTestProvider({ id: "brave", pluginId: "brave", order: 10 }),
-    createTestProvider({ id: "gemini", pluginId: "google", order: 20 }),
-    createTestProvider({ id: "grok", pluginId: "xai", order: 30 }),
-    createTestProvider({ id: "kimi", pluginId: "moonshot", order: 40 }),
-    createTestProvider({ id: "perplexity", pluginId: "perplexity", order: 50 }),
-    createTestProvider({ id: "firecrawl", pluginId: "firecrawl", order: 60 }),
-  ];
-}
-
-let clearConfigCache: typeof import("../config/config.js").clearConfigCache;
-let clearRuntimeConfigSnapshot: typeof import("../config/config.js").clearRuntimeConfigSnapshot;
-let clearSecretsRuntimeSnapshot: typeof import("./runtime.js").clearSecretsRuntimeSnapshot;
-let prepareSecretsRuntimeSnapshot: typeof import("./runtime.js").prepareSecretsRuntimeSnapshot;
 
 describe("secrets runtime gateway local surfaces", () => {
-  beforeAll(async () => {
-    ({ clearConfigCache, clearRuntimeConfigSnapshot } = await import("../config/config.js"));
-    ({ clearSecretsRuntimeSnapshot, prepareSecretsRuntimeSnapshot } = await import("./runtime.js"));
-  });
-
-  beforeEach(() => {
-    resolvePluginWebSearchProvidersMock.mockReset();
-    resolvePluginWebSearchProvidersMock.mockReturnValue(buildTestWebSearchProviders());
-  });
-
-  afterEach(() => {
-    setActivePluginRegistry(createEmptyPluginRegistry());
-    clearSecretsRuntimeSnapshot();
-    clearRuntimeConfigSnapshot();
-    clearConfigCache();
-  });
-
   it("treats gateway.remote refs as inactive when local auth credentials are configured", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({
@@ -225,53 +140,29 @@ describe("secrets runtime gateway local surfaces", () => {
   });
 
   it("treats gateway.auth.password ref as inactive when auth mode is trusted-proxy", async () => {
-    const snapshot = await prepareSecretsRuntimeSnapshot({
-      config: asConfig({
-        gateway: {
-          auth: {
-            mode: "trusted-proxy",
-            password: { source: "env", provider: "default", id: "GATEWAY_PASSWORD_REF" },
-          },
+    await expectInactiveGatewayPassword({
+      gateway: {
+        auth: {
+          mode: "trusted-proxy",
+          password: { source: "env", provider: "default", id: "GATEWAY_PASSWORD_REF" },
         },
-      }),
-      env: {},
-      agentDirs: ["/tmp/openclaw-agent-main"],
-      loadAuthStore: () => ({ version: 1, profiles: {} }),
+      },
     });
-
-    expect(snapshot.config.gateway?.auth?.password).toEqual({
-      source: "env",
-      provider: "default",
-      id: "GATEWAY_PASSWORD_REF",
-    });
-    expect(snapshot.warnings.map((warning) => warning.path)).toContain("gateway.auth.password");
   });
 
   it("treats gateway.auth.password ref as inactive when remote token is configured", async () => {
-    const snapshot = await prepareSecretsRuntimeSnapshot({
-      config: asConfig({
-        gateway: {
-          mode: "local",
-          auth: {
-            password: { source: "env", provider: "default", id: "GATEWAY_PASSWORD_REF" },
-          },
-          remote: {
-            enabled: true,
-            token: "remote-token",
-          },
+    await expectInactiveGatewayPassword({
+      gateway: {
+        mode: "local",
+        auth: {
+          password: { source: "env", provider: "default", id: "GATEWAY_PASSWORD_REF" },
         },
-      }),
-      env: {},
-      agentDirs: ["/tmp/openclaw-agent-main"],
-      loadAuthStore: () => ({ version: 1, profiles: {} }),
+        remote: {
+          enabled: true,
+          token: "remote-token",
+        },
+      },
     });
-
-    expect(snapshot.config.gateway?.auth?.password).toEqual({
-      source: "env",
-      provider: "default",
-      id: "GATEWAY_PASSWORD_REF",
-    });
-    expect(snapshot.warnings.map((warning) => warning.path)).toContain("gateway.auth.password");
   });
 
   it.each(["none", "trusted-proxy"] as const)(
@@ -281,7 +172,9 @@ describe("secrets runtime gateway local surfaces", () => {
         config: asConfig({
           gateway: {
             mode: "local",
-            auth: { mode },
+            auth: {
+              mode,
+            },
             remote: {
               enabled: true,
               token: { source: "env", provider: "default", id: "REMOTE_GATEWAY_TOKEN_REF" },

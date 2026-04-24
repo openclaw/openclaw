@@ -5,14 +5,10 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { isLoopbackHost } from "../gateway/net.js";
 import { deleteBridgeAuthForPort, setBridgeAuthForPort } from "./bridge-auth-registry.js";
 import type { ResolvedBrowserConfig } from "./config.js";
-import { registerBrowserRoutes } from "./routes/index.js";
 import type { BrowserRouteRegistrar } from "./routes/types.js";
+import type { BrowserServerState, ProfileContext } from "./server-context.js";
 import {
-  type BrowserServerState,
-  createBrowserRouteContext,
-  type ProfileContext,
-} from "./server-context.js";
-import {
+  hasVerifiedBrowserAuth,
   installBrowserAuthMiddleware,
   installBrowserCommonMiddleware,
 } from "./server-middleware.js";
@@ -66,6 +62,7 @@ export async function startBrowserBridgeServer(params: {
   authPassword?: string;
   onEnsureAttachTarget?: (profile: ProfileContext["profile"]) => Promise<void>;
   resolveSandboxNoVncToken?: (token: string) => ResolvedNoVncObserver | null;
+  skipRouteRegistrationForTest?: boolean;
 }): Promise<BrowserBridge> {
   const host = params.host ?? "127.0.0.1";
   if (!isLoopbackHost(host)) {
@@ -76,8 +73,19 @@ export async function startBrowserBridgeServer(params: {
   const app = express();
   installBrowserCommonMiddleware(app);
 
+  const authToken = normalizeOptionalString(params.authToken);
+  const authPassword = normalizeOptionalString(params.authPassword);
+  if (!authToken && !authPassword) {
+    throw new Error("bridge server requires auth (authToken/authPassword missing)");
+  }
+  installBrowserAuthMiddleware(app, { token: authToken, password: authPassword });
+
   if (params.resolveSandboxNoVncToken) {
     app.get("/sandbox/novnc", (req, res) => {
+      if (!hasVerifiedBrowserAuth(req)) {
+        res.status(401).send("Unauthorized");
+        return;
+      }
       res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
       res.setHeader("Pragma", "no-cache");
       res.setHeader("Expires", "0");
@@ -96,13 +104,6 @@ export async function startBrowserBridgeServer(params: {
     });
   }
 
-  const authToken = normalizeOptionalString(params.authToken);
-  const authPassword = normalizeOptionalString(params.authPassword);
-  if (!authToken && !authPassword) {
-    throw new Error("bridge server requires auth (authToken/authPassword missing)");
-  }
-  installBrowserAuthMiddleware(app, { token: authToken, password: authPassword });
-
   const state: BrowserServerState = {
     server: null as unknown as Server,
     port,
@@ -110,11 +111,21 @@ export async function startBrowserBridgeServer(params: {
     profiles: new Map(),
   };
 
-  const ctx = createBrowserRouteContext({
-    getState: () => state,
-    onEnsureAttachTarget: params.onEnsureAttachTarget,
-  });
-  registerBrowserRoutes(app as unknown as BrowserRouteRegistrar, ctx);
+  if (params.skipRouteRegistrationForTest) {
+    app.get("/", (_req, res) => {
+      res.status(200).send("OK");
+    });
+  } else {
+    const [{ createBrowserRouteContext }, { registerBrowserRoutes }] = await Promise.all([
+      import("./server-context.js"),
+      import("./routes/index.js"),
+    ]);
+    const ctx = createBrowserRouteContext({
+      getState: () => state,
+      onEnsureAttachTarget: params.onEnsureAttachTarget,
+    });
+    registerBrowserRoutes(app as unknown as BrowserRouteRegistrar, ctx);
+  }
 
   const server = await new Promise<Server>((resolve, reject) => {
     const s = app.listen(port, host, () => resolve(s));

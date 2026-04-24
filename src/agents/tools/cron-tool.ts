@@ -1,4 +1,4 @@
-import { Type, type TSchema } from "@sinclair/typebox";
+import { Type, type TSchema } from "typebox";
 import { loadConfig } from "../../config/config.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
 import type { CronDelivery, CronMessageChannel } from "../../cron/types.js";
@@ -15,6 +15,7 @@ import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
 import { CRON_TOOL_DISPLAY_SUMMARY } from "../tool-description-presets.js";
 import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
 import { callGatewayTool, readGatewayCallOptions, type GatewayCallOptions } from "./gateway.js";
+import { isOpenClawOwnerOnlyCoreToolName } from "./owner-only-tools.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-helpers.js";
 
 // We spell out job/patch properties so that LLMs know what fields to send.
@@ -58,6 +59,34 @@ const REMINDER_CONTEXT_MESSAGES_MAX = 10;
 const REMINDER_CONTEXT_PER_MESSAGE_MAX = 220;
 const REMINDER_CONTEXT_TOTAL_MAX = 700;
 const REMINDER_CONTEXT_MARKER = "\n\nRecent context:\n";
+
+function isMissingOrEmptyObject(value: unknown): boolean {
+  return !value || (isRecord(value) && Object.keys(value).length === 0);
+}
+
+function recoverCronObjectFromFlatParams(params: Record<string, unknown>): {
+  found: boolean;
+  value: Record<string, unknown>;
+} {
+  const value: Record<string, unknown> = {};
+  let found = false;
+  for (const key of Object.keys(params)) {
+    if (CRON_RECOVERABLE_OBJECT_KEYS.has(key) && params[key] !== undefined) {
+      value[key] = params[key];
+      found = true;
+    }
+  }
+  return { found, value };
+}
+
+function hasCronCreateSignal(value: Record<string, unknown>): boolean {
+  return (
+    value.schedule !== undefined ||
+    value.payload !== undefined ||
+    value.message !== undefined ||
+    value.text !== undefined
+  );
+}
 
 function nullableStringSchema(description: string) {
   return Type.Optional(Type.String({ description }));
@@ -182,26 +211,7 @@ const CronPatchObjectSchema = Type.Optional(
   Type.Object(
     {
       name: Type.Optional(Type.String({ description: "Job name" })),
-      schedule: Type.Optional(
-        Type.Object(
-          {
-            kind: optionalStringEnum(CRON_SCHEDULE_KINDS, { description: "Schedule type" }),
-            at: Type.Optional(Type.String({ description: "ISO-8601 timestamp (kind=at)" })),
-            everyMs: Type.Optional(
-              Type.Number({ description: "Interval in milliseconds (kind=every)" }),
-            ),
-            anchorMs: Type.Optional(
-              Type.Number({ description: "Optional start anchor in milliseconds (kind=every)" }),
-            ),
-            expr: Type.Optional(Type.String({ description: "Cron expression (kind=cron)" })),
-            tz: Type.Optional(Type.String({ description: "IANA timezone (kind=cron)" })),
-            staggerMs: Type.Optional(
-              Type.Number({ description: "Random jitter in ms (kind=cron)" }),
-            ),
-          },
-          { additionalProperties: true },
-        ),
-      ),
+      schedule: CronScheduleSchema,
       sessionTarget: Type.Optional(Type.String({ description: "Session target" })),
       wakeMode: optionalStringEnum(CRON_WAKE_MODES),
       payload: Type.Optional(
@@ -209,29 +219,7 @@ const CronPatchObjectSchema = Type.Optional(
           toolsAllow: nullableStringArraySchema("Allowed tool ids, or null to clear"),
         }),
       ),
-      delivery: Type.Optional(
-        Type.Object(
-          {
-            mode: optionalStringEnum(CRON_DELIVERY_MODES, { description: "Delivery mode" }),
-            channel: Type.Optional(Type.String({ description: "Delivery channel" })),
-            to: Type.Optional(Type.String({ description: "Delivery target" })),
-            bestEffort: Type.Optional(Type.Boolean()),
-            accountId: Type.Optional(Type.String({ description: "Account target for delivery" })),
-            failureDestination: Type.Optional(
-              Type.Object(
-                {
-                  channel: Type.Optional(Type.String()),
-                  to: Type.Optional(Type.String()),
-                  accountId: Type.Optional(Type.String()),
-                  mode: optionalStringEnum(["announce", "webhook"] as const),
-                },
-                { additionalProperties: true },
-              ),
-            ),
-          },
-          { additionalProperties: true },
-        ),
-      ),
+      delivery: CronDeliverySchema,
       description: Type.Optional(Type.String()),
       enabled: Type.Optional(Type.Boolean()),
       deleteAfterRun: Type.Optional(Type.Boolean()),
@@ -428,7 +416,7 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
   return {
     label: "Cron",
     name: "cron",
-    ownerOnly: true,
+    ownerOnly: isOpenClawOwnerOnlyCoreToolName("cron"),
     displaySummary: CRON_TOOL_DISPLAY_SUMMARY,
     description: `Manage Gateway cron jobs (status/list/add/update/remove/run/runs) and send wake events. Use this for reminders, "check back later" requests, delayed follow-ups, and recurring tasks. Do not emulate scheduling with exec sleep or process polling.
 
@@ -526,31 +514,13 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
           // them inside `job`. When `params.job` is missing or empty, reconstruct
           // a synthetic job object from any recognised top-level job fields.
           // See: https://github.com/openclaw/openclaw/issues/11310
-          if (
-            !params.job ||
-            (typeof params.job === "object" &&
-              params.job !== null &&
-              Object.keys(params.job as Record<string, unknown>).length === 0)
-          ) {
-            const synthetic: Record<string, unknown> = {};
-            let found = false;
-            for (const key of Object.keys(params)) {
-              if (CRON_RECOVERABLE_OBJECT_KEYS.has(key) && params[key] !== undefined) {
-                synthetic[key] = params[key];
-                found = true;
-              }
-            }
+          if (isMissingOrEmptyObject(params.job)) {
+            const synthetic = recoverCronObjectFromFlatParams(params);
             // Only use the synthetic job if at least one meaningful field is present
             // (schedule, payload, message, or text are the minimum signals that the
             // LLM intended to create a job).
-            if (
-              found &&
-              (synthetic.schedule !== undefined ||
-                synthetic.payload !== undefined ||
-                synthetic.message !== undefined ||
-                synthetic.text !== undefined)
-            ) {
-              params.job = synthetic;
+            if (synthetic.found && hasCronCreateSignal(synthetic.value)) {
+              params.job = synthetic.value;
             }
           }
 
@@ -655,22 +625,10 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
 
           // Flat-params recovery for patch
           let recoveredFlatPatch = false;
-          if (
-            !params.patch ||
-            (typeof params.patch === "object" &&
-              params.patch !== null &&
-              Object.keys(params.patch as Record<string, unknown>).length === 0)
-          ) {
-            const synthetic: Record<string, unknown> = {};
-            let found = false;
-            for (const key of Object.keys(params)) {
-              if (CRON_RECOVERABLE_OBJECT_KEYS.has(key) && params[key] !== undefined) {
-                synthetic[key] = params[key];
-                found = true;
-              }
-            }
-            if (found) {
-              params.patch = synthetic;
+          if (isMissingOrEmptyObject(params.patch)) {
+            const synthetic = recoverCronObjectFromFlatParams(params);
+            if (synthetic.found) {
+              params.patch = synthetic.value;
               recoveredFlatPatch = true;
             }
           }

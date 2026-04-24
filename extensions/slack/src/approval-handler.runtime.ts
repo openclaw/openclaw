@@ -13,12 +13,11 @@ import {
   buildApprovalInteractiveReplyFromActionDescriptors,
   type ExecApprovalRequest,
 } from "openclaw/plugin-sdk/infra-runtime";
-import { logError } from "openclaw/plugin-sdk/text-runtime";
-import { slackNativeApprovalAdapter } from "./approval-native.js";
+import { logError, normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import {
   isSlackExecApprovalClientEnabled,
-  normalizeSlackApproverId,
   shouldHandleSlackExecApprovalRequest,
+  normalizeSlackApproverId,
 } from "./exec-approvals.js";
 import { resolveSlackReplyBlocks } from "./reply-blocks.js";
 import { sendMessageSlack } from "./send.js";
@@ -47,7 +46,7 @@ function resolveHandlerContext(params: ChannelApprovalCapabilityHandlerContext):
   context: SlackApprovalHandlerContext;
 } | null {
   const context = params.context as SlackApprovalHandlerContext | undefined;
-  const accountId = params.accountId?.trim() || "";
+  const accountId = normalizeOptionalString(params.accountId) ?? "";
   if (!context?.app || !accountId) {
     return null;
   }
@@ -71,7 +70,7 @@ function formatSlackApprover(resolvedBy?: string | null): string | null {
   if (normalized) {
     return `<@${normalized}>`;
   }
-  const trimmed = resolvedBy?.trim();
+  const trimmed = normalizeOptionalString(resolvedBy);
   return trimmed ? trimmed : null;
 }
 
@@ -229,7 +228,8 @@ export const slackApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdap
   SlackPendingDelivery,
   { to: string; threadTs?: string },
   SlackPendingApproval,
-  never
+  never,
+  SlackPendingDelivery
 >({
   eventKinds: ["exec"],
   availability: {
@@ -247,19 +247,11 @@ export const slackApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdap
       if (!resolved) {
         return false;
       }
-      return (
-        shouldHandleSlackExecApprovalRequest({
-          cfg: params.cfg,
-          accountId: resolved.accountId,
-          request: params.request as ExecApprovalRequest,
-        }) &&
-        slackNativeApprovalAdapter.native?.describeDeliveryCapabilities({
-          cfg: params.cfg,
-          accountId: resolved.accountId,
-          approvalKind: "exec",
-          request: params.request as ExecApprovalRequest,
-        }).enabled === true
-      );
+      return shouldHandleSlackExecApprovalRequest({
+        cfg: params.cfg,
+        accountId: resolved.accountId,
+        request: params.request as ExecApprovalRequest,
+      });
     },
   },
   presentation: {
@@ -313,7 +305,7 @@ export const slackApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdap
       if (!resolved) {
         return;
       }
-      const nextPayload = payload as SlackPendingDelivery;
+      const nextPayload = payload;
       await updateMessage({
         app: resolved.context.app,
         channelId: entry.channelId,

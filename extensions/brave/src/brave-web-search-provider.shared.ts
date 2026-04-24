@@ -1,5 +1,8 @@
-import { Type } from "@sinclair/typebox";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
+import { Type } from "typebox";
 
 export type BraveConfig = {
   mode?: string;
@@ -126,7 +129,8 @@ function normalizeBraveSearchLang(value: string | undefined): string | undefined
   if (!trimmed) {
     return undefined;
   }
-  const canonical = BRAVE_SEARCH_LANG_ALIASES[trimmed.toLowerCase()] ?? trimmed.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(trimmed);
+  const canonical = BRAVE_SEARCH_LANG_ALIASES[lower] ?? lower;
   if (!BRAVE_SEARCH_LANG_CODES.has(canonical)) {
     return undefined;
   }
@@ -158,7 +162,7 @@ function normalizeBraveUiLang(value: string | undefined): string | undefined {
     return undefined;
   }
   const [, language, region] = match;
-  return `${language.toLowerCase()}-${region.toUpperCase()}`;
+  return `${normalizeLowercaseStringOrEmpty(language)}-${region.toUpperCase()}`;
 }
 
 export function resolveBraveConfig(searchConfig?: Record<string, unknown>): BraveConfig {

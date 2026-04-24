@@ -1,3 +1,4 @@
+import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -90,9 +91,7 @@ export type ProviderRequestPolicyResolution = {
 
 export type ProviderRequestCapabilitiesInput = ProviderRequestPolicyInput & {
   modelId?: string | null;
-  compat?: {
-    supportsStore?: boolean;
-  } | null;
+  compat?: unknown;
 };
 
 export type ProviderRequestCompatibilityFamily = "moonshot";
@@ -109,6 +108,17 @@ export type ProviderRequestCapabilities = ProviderRequestPolicyResolution & {
   compatibilityFamily?: ProviderRequestCompatibilityFamily;
 };
 
+function readCompatBoolean(
+  compat: unknown,
+  key: "supportsStore" | "supportsPromptCacheKey",
+): boolean | undefined {
+  if (!compat || typeof compat !== "object") {
+    return undefined;
+  }
+  const value = (compat as Record<string, unknown>)[key];
+  return typeof value === "boolean" ? value : undefined;
+}
+
 const OPENCLAW_ATTRIBUTION_PRODUCT = "OpenClaw";
 const OPENCLAW_ATTRIBUTION_ORIGINATOR = "openclaw";
 
@@ -123,9 +133,20 @@ const MODELSTUDIO_NATIVE_BASE_URLS = new Set([
   "https://dashscope.aliyuncs.com/compatible-mode/v1",
   "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
 ]);
-const OPENAI_RESPONSES_APIS = new Set(["openai-responses", "azure-openai-responses"]);
+const OPENAI_RESPONSES_APIS = new Set([
+  "openai-responses",
+  "azure-openai-responses",
+  "openai-codex-responses",
+]);
 const OPENAI_RESPONSES_PROVIDERS = new Set(["openai", "azure-openai", "azure-openai-responses"]);
 const MOONSHOT_COMPAT_PROVIDERS = new Set(["moonshot", "kimi"]);
+const MANIFEST_PROVIDER_ENDPOINT_CLASSES = new Set<ProviderEndpointClass>(["xai-native"]);
+type ManifestProviderEndpointCacheEntry = {
+  endpointClass: ProviderEndpointClass;
+  hosts: readonly string[];
+  normalizedBaseUrls: readonly string[];
+};
+let manifestProviderEndpointCache: ManifestProviderEndpointCacheEntry[] | null = null;
 
 function formatOpenClawUserAgent(version: string): string {
   return `${OPENCLAW_ATTRIBUTION_ORIGINATOR}/${version}`;
@@ -179,6 +200,51 @@ function normalizeComparableBaseUrl(value: string): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+function isManifestProviderEndpointClass(value: string): value is ProviderEndpointClass {
+  return MANIFEST_PROVIDER_ENDPOINT_CLASSES.has(value as ProviderEndpointClass);
+}
+
+function loadManifestProviderEndpointCache(): ManifestProviderEndpointCacheEntry[] {
+  if (!manifestProviderEndpointCache) {
+    const registry = loadPluginManifestRegistry({ cache: true });
+    const entries: ManifestProviderEndpointCacheEntry[] = [];
+    for (const plugin of registry.plugins) {
+      for (const endpoint of plugin.providerEndpoints ?? []) {
+        if (!isManifestProviderEndpointClass(endpoint.endpointClass)) {
+          continue;
+        }
+        entries.push({
+          endpointClass: endpoint.endpointClass,
+          hosts: (endpoint.hosts ?? []).map((host) => host.toLowerCase()),
+          normalizedBaseUrls: (endpoint.baseUrls ?? [])
+            .map((baseUrl) => normalizeComparableBaseUrl(baseUrl))
+            .filter((baseUrl): baseUrl is string => baseUrl !== undefined),
+        });
+      }
+    }
+    manifestProviderEndpointCache = entries;
+  }
+  return manifestProviderEndpointCache;
+}
+
+function resolveManifestProviderEndpoint(params: {
+  host: string;
+  normalizedBaseUrl?: string;
+}): ProviderEndpointResolution | undefined {
+  for (const endpoint of loadManifestProviderEndpointCache()) {
+    if (endpoint.hosts.includes(params.host)) {
+      return { endpointClass: endpoint.endpointClass, hostname: params.host };
+    }
+    if (
+      params.normalizedBaseUrl &&
+      endpoint.normalizedBaseUrls.includes(params.normalizedBaseUrl)
+    ) {
+      return { endpointClass: endpoint.endpointClass, hostname: params.host };
+    }
+  }
+  return undefined;
 }
 
 function isLocalEndpointHost(host: string): boolean {
@@ -241,9 +307,6 @@ export function resolveProviderEndpoint(
   if (host === "openrouter.ai" || host.endsWith(".openrouter.ai")) {
     return { endpointClass: "openrouter", hostname: host };
   }
-  if (host === "api.x.ai" || host === "api.grok.x.ai") {
-    return { endpointClass: "xai-native", hostname: host };
-  }
   if (host === "api.z.ai") {
     return { endpointClass: "zai-native", hostname: host };
   }
@@ -267,6 +330,10 @@ export function resolveProviderEndpoint(
       hostname: host,
       googleVertexRegion: googleVertexHost[1],
     };
+  }
+  const manifestEndpoint = resolveManifestProviderEndpoint({ host, normalizedBaseUrl });
+  if (manifestEndpoint) {
+    return manifestEndpoint;
   }
   if (isLocalEndpointHost(host)) {
     return { endpointClass: "local", hostname: host };
@@ -314,6 +381,11 @@ function resolveKnownProviderFamily(provider: string | undefined): string {
     default:
       return provider || "unknown";
   }
+}
+
+export function isOpenAIResponsesApi(api: string | null | undefined): boolean {
+  const normalizedApi = normalizeOptionalLowercaseString(api);
+  return normalizedApi !== undefined && OPENAI_RESPONSES_APIS.has(normalizedApi);
 }
 
 export function resolveProviderAttributionIdentity(
@@ -539,7 +611,6 @@ export function resolveProviderRequestCapabilities(
   const policy = resolveProviderRequestPolicy(input, env);
   const provider = policy.provider;
   const api = normalizeOptionalLowercaseString(input.api);
-  const normalizedModelId = normalizeOptionalLowercaseString(input.modelId);
   const endpointClass = policy.endpointClass;
   const isKnownNativeEndpoint =
     endpointClass === "anthropic-public" ||
@@ -564,13 +635,24 @@ export function resolveProviderRequestCapabilities(
   let compatibilityFamily: ProviderRequestCompatibilityFamily | undefined;
   if (provider && MOONSHOT_COMPAT_PROVIDERS.has(provider)) {
     compatibilityFamily = "moonshot";
-  } else if (
-    provider === "ollama" &&
-    normalizedModelId?.startsWith("kimi-k") &&
-    normalizedModelId.includes(":cloud")
-  ) {
-    compatibilityFamily = "moonshot";
   }
+
+  const isResponsesApi = isOpenAIResponsesApi(api);
+  const promptCacheKeySupport = readCompatBoolean(input.compat, "supportsPromptCacheKey");
+  // Default strip behavior (proxy-like endpoints with responses APIs) is
+  // preserved as a safety net for providers that reject prompt_cache_key,
+  // see #48155 (Volcano Engine DeepSeek). Operators running their payload
+  // through an OpenAI-compatible proxy known to forward the field
+  // (CLIProxy, LiteLLM, etc.) can opt out via compat.supportsPromptCacheKey
+  // to recover prompt caching; providers known to reject the field can
+  // force the strip with compat.supportsPromptCacheKey = false even on
+  // native endpoints.
+  const shouldStripResponsesPromptCache =
+    promptCacheKeySupport === true
+      ? false
+      : promptCacheKeySupport === false
+        ? isResponsesApi
+        : isResponsesApi && policy.usesExplicitProxyLikeEndpoint;
 
   return {
     ...policy,
@@ -599,20 +681,73 @@ export function resolveProviderRequestCapabilities(
     // This is intentionally the gate for emitting `store: false` on Responses
     // transports, not just a statement about vendor support in the abstract.
     supportsResponsesStoreField:
-      input.compat?.supportsStore !== false && api !== undefined && OPENAI_RESPONSES_APIS.has(api),
+      readCompatBoolean(input.compat, "supportsStore") !== false && isResponsesApi,
     allowsResponsesStore:
-      input.compat?.supportsStore !== false &&
+      readCompatBoolean(input.compat, "supportsStore") !== false &&
       provider !== undefined &&
-      api !== undefined &&
-      OPENAI_RESPONSES_APIS.has(api) &&
+      isResponsesApi &&
       OPENAI_RESPONSES_PROVIDERS.has(provider) &&
       policy.usesKnownNativeOpenAIEndpoint,
-    shouldStripResponsesPromptCache:
-      api !== undefined && OPENAI_RESPONSES_APIS.has(api) && policy.usesExplicitProxyLikeEndpoint,
+    shouldStripResponsesPromptCache,
     // Native endpoint class is the real signal here. Users can point a generic
     // provider key at Moonshot or DashScope and still need streaming usage.
     supportsNativeStreamingUsageCompat:
       endpointClass === "moonshot-native" || endpointClass === "modelstudio-native",
     compatibilityFamily,
   };
+}
+
+function describeProviderRequestRoutingPolicy(
+  policy: ProviderRequestPolicyResolution,
+): "hidden" | "documented" | "sdk-hook-only" | "none" {
+  if (!policy.attributionProvider) {
+    return "none";
+  }
+  switch (policy.policy?.verification) {
+    case "vendor-hidden-api-spec":
+      return "hidden";
+    case "vendor-documented":
+      return "documented";
+    case "vendor-sdk-hook-only":
+      return "sdk-hook-only";
+    default:
+      return "none";
+  }
+}
+
+function describeProviderRequestRouteClass(
+  policy: ProviderRequestPolicyResolution,
+): "default" | "native" | "proxy-like" | "local" | "invalid" {
+  if (policy.endpointClass === "default") {
+    return "default";
+  }
+  if (policy.endpointClass === "invalid") {
+    return "invalid";
+  }
+  if (policy.endpointClass === "local") {
+    return "local";
+  }
+  if (policy.endpointClass === "custom" || policy.endpointClass === "openrouter") {
+    return "proxy-like";
+  }
+  return "native";
+}
+
+export function describeProviderRequestRoutingSummary(
+  input: ProviderRequestPolicyInput,
+  env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
+): string {
+  const policy = resolveProviderRequestPolicy(input, env);
+  const api = normalizeOptionalLowercaseString(input.api) ?? "unknown";
+  const provider = policy.provider ?? "unknown";
+  const routeClass = describeProviderRequestRouteClass(policy);
+  const routingPolicy = describeProviderRequestRoutingPolicy(policy);
+
+  return [
+    `provider=${provider}`,
+    `api=${api}`,
+    `endpoint=${policy.endpointClass}`,
+    `route=${routeClass}`,
+    `policy=${routingPolicy}`,
+  ].join(" ");
 }

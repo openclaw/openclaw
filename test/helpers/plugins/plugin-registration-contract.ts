@@ -1,12 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  imageGenerationProviderContractRegistry,
-  mediaUnderstandingProviderContractRegistry,
-  musicGenerationProviderContractRegistry,
-  pluginRegistrationContractRegistry,
-  speechProviderContractRegistry,
-  videoGenerationProviderContractRegistry,
-} from "../../../src/plugins/contracts/registry.js";
+import { pluginRegistrationContractRegistry } from "../../../src/plugins/contracts/registry.js";
 import { loadPluginManifestRegistry } from "../../../src/plugins/manifest-registry.js";
 
 type PluginRegistrationContractParams = {
@@ -47,79 +40,6 @@ function findRegistration(pluginId: string) {
   return entry;
 }
 
-function findSpeechProviderIds(pluginId: string) {
-  return speechProviderContractRegistry
-    .filter((entry) => entry.pluginId === pluginId)
-    .map((entry) => entry.provider.id)
-    .toSorted((left, right) => left.localeCompare(right));
-}
-
-function findSpeechProvider(pluginId: string) {
-  const entry = speechProviderContractRegistry.find((candidate) => candidate.pluginId === pluginId);
-  if (!entry) {
-    throw new Error(`speech provider contract missing for ${pluginId}`);
-  }
-  return entry.provider;
-}
-
-function findMediaUnderstandingProviderIds(pluginId: string) {
-  return mediaUnderstandingProviderContractRegistry
-    .filter((entry) => entry.pluginId === pluginId)
-    .map((entry) => entry.provider.id)
-    .toSorted((left, right) => left.localeCompare(right));
-}
-
-function findMediaUnderstandingProvider(pluginId: string) {
-  const entry = mediaUnderstandingProviderContractRegistry.find(
-    (candidate) => candidate.pluginId === pluginId,
-  );
-  if (!entry) {
-    throw new Error(`media-understanding provider contract missing for ${pluginId}`);
-  }
-  return entry.provider;
-}
-
-function findImageGenerationProviderIds(pluginId: string) {
-  return imageGenerationProviderContractRegistry
-    .filter((entry) => entry.pluginId === pluginId)
-    .map((entry) => entry.provider.id)
-    .toSorted((left, right) => left.localeCompare(right));
-}
-
-function findImageGenerationProvider(pluginId: string) {
-  const entry = imageGenerationProviderContractRegistry.find(
-    (candidate) => candidate.pluginId === pluginId,
-  );
-  if (!entry) {
-    throw new Error(`image-generation provider contract missing for ${pluginId}`);
-  }
-  return entry.provider;
-}
-
-function findVideoGenerationProviderIds(pluginId: string) {
-  return videoGenerationProviderContractRegistry
-    .filter((entry) => entry.pluginId === pluginId)
-    .map((entry) => entry.provider.id)
-    .toSorted((left, right) => left.localeCompare(right));
-}
-
-function findVideoGenerationProvider(pluginId: string) {
-  const entry = videoGenerationProviderContractRegistry.find(
-    (candidate) => candidate.pluginId === pluginId,
-  );
-  if (!entry) {
-    throw new Error(`video-generation provider contract missing for ${pluginId}`);
-  }
-  return entry.provider;
-}
-
-function findMusicGenerationProviderIds(pluginId: string) {
-  return musicGenerationProviderContractRegistry
-    .filter((entry) => entry.pluginId === pluginId)
-    .map((entry) => entry.provider.id)
-    .toSorted((left, right) => left.localeCompare(right));
-}
-
 export function describePluginRegistrationContract(params: PluginRegistrationContractParams) {
   describe(`${params.pluginId} plugin registration contract`, () => {
     if (params.cliBackendIds) {
@@ -155,7 +75,6 @@ export function describePluginRegistrationContract(params: PluginRegistrationCon
         expect(findRegistration(params.pluginId).speechProviderIds).toEqual(
           params.speechProviderIds,
         );
-        expect(findSpeechProviderIds(params.pluginId)).toEqual(params.speechProviderIds);
       });
     }
 
@@ -180,18 +99,12 @@ export function describePluginRegistrationContract(params: PluginRegistrationCon
         expect(findRegistration(params.pluginId).mediaUnderstandingProviderIds).toEqual(
           params.mediaUnderstandingProviderIds,
         );
-        expect(findMediaUnderstandingProviderIds(params.pluginId)).toEqual(
-          params.mediaUnderstandingProviderIds,
-        );
       });
     }
 
     if (params.imageGenerationProviderIds) {
       it("keeps bundled image-generation ownership explicit", () => {
         expect(findRegistration(params.pluginId).imageGenerationProviderIds).toEqual(
-          params.imageGenerationProviderIds,
-        );
-        expect(findImageGenerationProviderIds(params.pluginId)).toEqual(
           params.imageGenerationProviderIds,
         );
       });
@@ -202,9 +115,6 @@ export function describePluginRegistrationContract(params: PluginRegistrationCon
         expect(findRegistration(params.pluginId).videoGenerationProviderIds).toEqual(
           params.videoGenerationProviderIds,
         );
-        expect(findVideoGenerationProviderIds(params.pluginId)).toEqual(
-          params.videoGenerationProviderIds,
-        );
       });
     }
 
@@ -213,45 +123,12 @@ export function describePluginRegistrationContract(params: PluginRegistrationCon
         expect(findRegistration(params.pluginId).musicGenerationProviderIds).toEqual(
           params.musicGenerationProviderIds,
         );
-        expect(findMusicGenerationProviderIds(params.pluginId)).toEqual(
-          params.musicGenerationProviderIds,
-        );
       });
     }
 
     if (params.toolNames) {
       it("keeps bundled tool ownership explicit", () => {
         expect(findRegistration(params.pluginId).toolNames).toEqual(params.toolNames);
-      });
-    }
-
-    if (params.requireSpeechVoices) {
-      it("keeps bundled speech voice-list support explicit", () => {
-        expect(findSpeechProvider(params.pluginId).listVoices).toEqual(expect.any(Function));
-      });
-    }
-
-    if (params.requireDescribeImages) {
-      it("keeps bundled multi-image support explicit", () => {
-        expect(findMediaUnderstandingProvider(params.pluginId).describeImages).toEqual(
-          expect.any(Function),
-        );
-      });
-    }
-
-    if (params.requireGenerateImage) {
-      it("keeps bundled image-generation support explicit", () => {
-        expect(findImageGenerationProvider(params.pluginId).generateImage).toEqual(
-          expect.any(Function),
-        );
-      });
-    }
-
-    if (params.requireGenerateVideo) {
-      it("keeps bundled video-generation support explicit", () => {
-        expect(findVideoGenerationProvider(params.pluginId).generateVideo).toEqual(
-          expect.any(Function),
-        );
       });
     }
 

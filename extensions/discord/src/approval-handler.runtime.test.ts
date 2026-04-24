@@ -1,4 +1,3 @@
-import { buildChannelApprovalNativeTargetKey } from "openclaw/plugin-sdk/approval-native-runtime";
 import { describe, expect, it } from "vitest";
 import { discordApprovalNativeRuntime } from "./approval-handler.runtime.js";
 
@@ -33,10 +32,7 @@ describe("discordApprovalNativeRuntime", () => {
     });
 
     expect(prepared).toEqual({
-      dedupeKey: buildChannelApprovalNativeTargetKey({
-        to: "123456789",
-        threadId: "777888999",
-      }),
+      dedupeKey: "777888999",
       target: {
         discordChannelId: "777888999",
       },
