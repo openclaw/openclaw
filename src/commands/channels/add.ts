@@ -1,6 +1,6 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { parseOptionalDelimitedEntries } from "../../channels/plugins/helpers.js";
-import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
+import { getLoadedChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { moveSingleAccountChannelSectionToDefaultAccount } from "../../channels/plugins/setup-helpers.js";
 import type { ChannelSetupPlugin } from "../../channels/plugins/setup-wizard-types.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
@@ -141,7 +141,7 @@ export async function channelsAddCommand(
     if (wantsNames) {
       for (const channel of selection) {
         const accountId = accountIds[channel] ?? DEFAULT_ACCOUNT_ID;
-        const plugin = resolvedPlugins.get(channel) ?? getChannelPlugin(channel);
+        const plugin = resolvedPlugins.get(channel) ?? getLoadedChannelPlugin(channel);
         const account = plugin?.config.resolveAccount(nextConfig, accountId) as
           | { name?: string }
           | undefined;
@@ -248,7 +248,7 @@ export async function channelsAddCommand(
     channelId: ChannelId,
     pluginId?: string,
   ): Promise<ChannelPlugin | undefined> => {
-    const existing = getChannelPlugin(channelId);
+    const existing = getLoadedChannelPlugin(channelId);
     if (existing) {
       return existing;
     }
@@ -260,10 +260,11 @@ export async function channelsAddCommand(
       channel: channelId,
       ...(pluginId ? { pluginId } : {}),
       workspaceDir: resolveWorkspaceDir(),
+      installRuntimeDeps: false,
     });
     return (
-      snapshot.channels.find((entry) => entry.plugin.id === channelId)?.plugin ??
-      snapshot.channelSetups.find((entry) => entry.plugin.id === channelId)?.plugin
+      snapshot.channelSetups.find((entry) => entry.plugin.id === channelId)?.plugin ??
+      snapshot.channels.find((entry) => entry.plugin.id === channelId)?.plugin
     );
   };
 
@@ -359,7 +360,7 @@ export async function channelsAddCommand(
     nextConfig,
     ...(baseHash !== undefined ? { baseHash } : {}),
   });
-  runtime.log(`Added ${channelLabel(channel)} account "${accountId}".`);
+  runtime.log(`Added ${plugin.meta.label ?? channelLabel(channel)} account "${accountId}".`);
   const afterAccountConfigWritten = plugin.setup?.afterAccountConfigWritten;
   if (afterAccountConfigWritten) {
     const { runCollectedChannelOnboardingPostWriteHooks } = await loadOnboardChannels();
