@@ -9,9 +9,10 @@ title: "Bonjour discovery"
 # Bonjour / mDNS discovery
 
 OpenClaw uses Bonjour (mDNS / DNS‑SD) to discover an active Gateway (WebSocket endpoint).
-Multicast `local.` browsing is a **LAN-only convenience**. For cross-network discovery, the
-same beacon can also be published through a configured wide-area DNS-SD domain. Discovery is
-still best-effort and does **not** replace SSH or Tailnet-based connectivity.
+Multicast `local.` browsing is a **LAN-only convenience**. The bundled `bonjour`
+plugin owns LAN advertising and is enabled by default. For cross-network discovery,
+the same beacon can also be published through a configured wide-area DNS-SD domain.
+Discovery is still best-effort and does **not** replace SSH or Tailnet-based connectivity.
 
 ## Wide-area Bonjour (Unicast DNS-SD) over Tailscale
 
@@ -79,7 +80,9 @@ For tailnet‑only setups:
 
 ## What advertises
 
-Only the Gateway advertises `_openclaw-gw._tcp`.
+Only the Gateway advertises `_openclaw-gw._tcp`. LAN multicast advertising is
+provided by the bundled `bonjour` plugin; wide-area DNS-SD publishing remains
+Gateway-owned.
 
 ## Service types
 
@@ -167,7 +170,9 @@ sequences (e.g. spaces become `\032`).
 
 ## Disabling / configuration
 
-- `OPENCLAW_DISABLE_BONJOUR=1` disables advertising (legacy: `OPENCLAW_DISABLE_BONJOUR`).
+- `openclaw plugins disable bonjour` disables LAN multicast advertising by disabling the bundled plugin.
+- `openclaw plugins enable bonjour` restores the default LAN discovery plugin.
+- `OPENCLAW_DISABLE_BONJOUR=1` disables LAN multicast advertising without changing plugin config (legacy: `OPENCLAW_DISABLE_BONJOUR`).
 - `gateway.bind` in `~/.openclaw/openclaw.json` controls the Gateway bind mode.
 - `OPENCLAW_SSH_PORT` overrides the SSH port when `sshPort` is advertised (legacy: `OPENCLAW_SSH_PORT`).
 - `OPENCLAW_TAILNET_DNS` publishes a MagicDNS hint in TXT (legacy: `OPENCLAW_TAILNET_DNS`).

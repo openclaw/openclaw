@@ -65,6 +65,7 @@ import type {
   PluginCliRegistration,
   PluginCommandRegistration,
   PluginConversationBindingResolvedHandlerRegistration,
+  PluginGatewayDiscoveryServiceRegistration,
   PluginHookRegistration,
   PluginHttpRouteRegistration as RegistryTypesPluginHttpRouteRegistration,
   PluginAgentHarnessRegistration,
@@ -99,6 +100,7 @@ import type {
   OpenClawPluginCommandDefinition,
   PluginConversationBindingResolvedEvent,
   OpenClawPluginGatewayRuntimeScopeSurface,
+  OpenClawGatewayDiscoveryService,
   OpenClawPluginHttpRouteParams,
   OpenClawPluginHookOptions,
   OpenClawPluginNodeHostCommand,
@@ -1118,6 +1120,37 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     });
   };
 
+  const registerGatewayDiscoveryService = (
+    record: PluginRecord,
+    service: OpenClawGatewayDiscoveryService,
+  ) => {
+    const id = service.id.trim();
+    if (!id) {
+      return;
+    }
+    const existing = registry.gatewayDiscoveryServices.find((entry) => entry.service.id === id);
+    if (existing) {
+      if (existing.pluginId === record.id) {
+        return;
+      }
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `gateway discovery service already registered: ${id} (${existing.pluginId})`,
+      });
+      return;
+    }
+    record.services.push(id);
+    registry.gatewayDiscoveryServices.push({
+      pluginId: record.id,
+      pluginName: record.name,
+      service,
+      source: record.source,
+      rootDir: record.rootDir,
+    });
+  };
+
   const registerCommand = (record: PluginRecord, command: OpenClawPluginCommandDefinition) => {
     const name = command.name.trim();
     if (!name) {
@@ -1359,6 +1392,8 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               registerGatewayMethod: (method, handler, opts) =>
                 registerGatewayMethod(record, method, handler, opts),
               registerService: (service) => registerService(record, service),
+              registerGatewayDiscoveryService: (service) =>
+                registerGatewayDiscoveryService(record, service),
               registerCliBackend: (backend) => registerCliBackend(record, backend),
               registerTextTransforms: (transforms) => registerTextTransforms(record, transforms),
               registerReload: (registration) => registerReload(record, registration),

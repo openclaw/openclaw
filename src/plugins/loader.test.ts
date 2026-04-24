@@ -4118,6 +4118,26 @@ module.exports = { id: "throws-after-import", register() {} };`,
         assert: expectDuplicateRegistrationResult,
       },
       {
+        label: "gateway discovery service ids",
+        ownerA: "discovery-owner-a",
+        ownerB: "discovery-owner-b",
+        buildBody: (ownerId: string) => `module.exports = { id: "${ownerId}", register(api) {
+  api.registerGatewayDiscoveryService({ id: "shared-discovery", advertise() {} });
+} };`,
+        selectCount: (registry: ReturnType<typeof loadOpenClawPlugins>) =>
+          registry.gatewayDiscoveryServices.filter(
+            (entry) => entry.service.id === "shared-discovery",
+          ).length,
+        duplicateMessage:
+          "gateway discovery service already registered: shared-discovery (discovery-owner-a)",
+        assertPrimaryOwner: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+          expect(
+            registry.plugins.find((entry) => entry.id === "discovery-owner-a")?.services,
+          ).toEqual(["shared-discovery"]);
+        },
+        assert: expectDuplicateRegistrationResult,
+      },
+      {
         label: "plugin context engine ids",
         ownerA: "context-engine-owner-a",
         ownerB: "context-engine-owner-b",

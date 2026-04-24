@@ -1,9 +1,6 @@
-import { logDebug, logWarn } from "../logger.js";
-import { getLogger } from "../logging.js";
-import { classifyCiaoUnhandledRejection } from "./bonjour-ciao.js";
-import { formatBonjourError } from "./bonjour-errors.js";
-import { isTruthyEnvValue } from "./env.js";
-import { registerUnhandledRejectionHandler } from "./unhandled-rejections.js";
+import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
+import { classifyCiaoUnhandledRejection } from "./ciao.js";
+import { formatBonjourError } from "./errors.js";
 
 export type GatewayBonjourAdvertiser = {
   stop: () => Promise<void>;
@@ -18,35 +15,8 @@ export type GatewayBonjourAdvertiseOpts = {
   canvasPort?: number;
   tailnetDns?: string;
   cliPath?: string;
-  /**
-   * Minimal mode - omit sensitive fields (cliPath, sshPort) from TXT records.
-   * Reduces information disclosure for better operational security.
-   */
   minimal?: boolean;
 };
-
-function isDisabledByEnv() {
-  if (isTruthyEnvValue(process.env.OPENCLAW_DISABLE_BONJOUR)) {
-    return true;
-  }
-  if (process.env.NODE_ENV === "test") {
-    return true;
-  }
-  if (process.env.VITEST) {
-    return true;
-  }
-  return false;
-}
-
-function safeServiceName(name: string) {
-  const trimmed = name.trim();
-  return trimmed.length > 0 ? trimmed : "OpenClaw";
-}
-
-function prettifyInstanceName(name: string) {
-  const normalized = name.trim().replace(/\s+/g, " ");
-  return normalized.replace(/\s+\(OpenClaw\)\s*$/i, "").trim() || normalized;
-}
 
 type BonjourService = {
   serviceState?: unknown;
@@ -88,6 +58,12 @@ type ServiceStateTracker = {
 };
 
 type ConsoleLogFn = (...args: unknown[]) => void;
+type UnhandledRejectionHandler = (reason: unknown) => boolean;
+
+type BonjourAdvertiserDeps = {
+  logger?: Pick<PluginLogger, "info" | "warn" | "debug">;
+  registerUnhandledRejectionHandler?: (handler: UnhandledRejectionHandler) => () => void;
+};
 
 const WATCHDOG_INTERVAL_MS = 5_000;
 const REPAIR_DEBOUNCE_MS = 30_000;
@@ -95,6 +71,55 @@ const STUCK_ANNOUNCING_MS = 8_000;
 const BONJOUR_ANNOUNCED_STATE = "announced";
 const CIAO_SELF_PROBE_RETRY_FRAGMENT =
   "failed probing with reason: Error: Can't probe for a service which is announced already.";
+
+const defaultLogger = {
+  info: (_msg: string) => {},
+  warn: (_msg: string) => {},
+  debug: (_msg: string) => {},
+};
+
+const CIAO_MODULE_ID = "@homebridge/ciao";
+let ciaoModulePromise: Promise<CiaoModule> | null = null;
+
+async function loadCiaoModule(): Promise<CiaoModule> {
+  ciaoModulePromise ??= import(CIAO_MODULE_ID) as Promise<CiaoModule>;
+  return ciaoModulePromise;
+}
+
+function defaultRegisterUnhandledRejectionHandler(handler: UnhandledRejectionHandler): () => void {
+  const listener = (reason: unknown) => {
+    if (!handler(reason)) {
+      return;
+    }
+  };
+  process.on("unhandledRejection", listener);
+  return () => {
+    process.off("unhandledRejection", listener);
+  };
+}
+
+function isDisabledByEnv() {
+  if (process.env.OPENCLAW_DISABLE_BONJOUR === "1") {
+    return true;
+  }
+  if (process.env.NODE_ENV === "test") {
+    return true;
+  }
+  if (process.env.VITEST) {
+    return true;
+  }
+  return false;
+}
+
+function safeServiceName(name: string) {
+  const trimmed = name.trim();
+  return trimmed.length > 0 ? trimmed : "OpenClaw";
+}
+
+function prettifyInstanceName(name: string) {
+  const normalized = name.trim().replace(/\s+/g, " ");
+  return normalized.replace(/\s+\(OpenClaw\)\s*$/i, "").trim() || normalized;
+}
 
 function serviceSummary(label: string, svc: BonjourService): string {
   let fqdn = "unknown";
@@ -123,21 +148,6 @@ function isAnnouncedState(state: string) {
   return state === BONJOUR_ANNOUNCED_STATE;
 }
 
-function handleCiaoUnhandledRejection(reason: unknown): boolean {
-  const classification = classifyCiaoUnhandledRejection(reason);
-  if (!classification) {
-    return false;
-  }
-
-  if (classification.kind === "interface-assertion") {
-    logWarn(`bonjour: suppressing ciao interface assertion: ${classification.formatted}`);
-    return true;
-  }
-
-  logDebug(`bonjour: ignoring unhandled ciao rejection: ${classification.formatted}`);
-  return true;
-}
-
 function shouldSuppressCiaoConsoleLog(args: unknown[]): boolean {
   return args.some(
     (arg) => typeof arg === "string" && arg.includes(CIAO_SELF_PROBE_RETRY_FRAGMENT),
@@ -160,27 +170,40 @@ function installCiaoConsoleNoiseFilter(): () => void {
   };
 }
 
-const CIAO_MODULE_ID = "@homebridge/ciao";
-let ciaoModulePromise: Promise<CiaoModule> | null = null;
-
-async function loadCiaoModule(): Promise<CiaoModule> {
-  ciaoModulePromise ??= import(CIAO_MODULE_ID) as Promise<CiaoModule>;
-  return ciaoModulePromise;
-}
-
 export async function startGatewayBonjourAdvertiser(
   opts: GatewayBonjourAdvertiseOpts,
+  deps: BonjourAdvertiserDeps = {},
 ): Promise<GatewayBonjourAdvertiser> {
   if (isDisabledByEnv()) {
     return { stop: async () => {} };
   }
 
+  const logger = {
+    info: deps.logger?.info ?? defaultLogger.info,
+    warn: deps.logger?.warn ?? defaultLogger.warn,
+    debug: deps.logger?.debug ?? defaultLogger.debug,
+  };
+  const registerUnhandledRejectionHandler =
+    deps.registerUnhandledRejectionHandler ?? defaultRegisterUnhandledRejectionHandler;
   const { getResponder, Protocol } = await loadCiaoModule();
   const restoreConsoleLog = installCiaoConsoleNoiseFilter();
+
+  const handleCiaoUnhandledRejection = (reason: unknown): boolean => {
+    const classification = classifyCiaoUnhandledRejection(reason);
+    if (!classification) {
+      return false;
+    }
+
+    if (classification.kind === "interface-assertion") {
+      logger.warn(`bonjour: suppressing ciao interface assertion: ${classification.formatted}`);
+      return true;
+    }
+
+    logger.debug(`bonjour: ignoring unhandled ciao rejection: ${classification.formatted}`);
+    return true;
+  };
+
   try {
-    // mDNS service instance names are single DNS labels; dots in hostnames (like
-    // `Mac.localdomain`) can confuse some resolvers/browsers and break discovery.
-    // Keep only the first label and normalize away a trailing `.local`.
     const hostnameRaw = process.env.OPENCLAW_MDNS_HOSTNAME?.trim() || "openclaw";
     const hostname =
       hostnameRaw
@@ -211,14 +234,10 @@ export async function startGatewayBonjourAdvertiser(
     if (typeof opts.tailnetDns === "string" && opts.tailnetDns.trim()) {
       txtBase.tailnetDns = opts.tailnetDns.trim();
     }
-    // In minimal mode, omit cliPath to avoid exposing filesystem structure.
-    // This info can be obtained via the authenticated WebSocket if needed.
     if (!opts.minimal && typeof opts.cliPath === "string" && opts.cliPath.trim()) {
       txtBase.cliPath = opts.cliPath.trim();
     }
 
-    // Build TXT record for the gateway service.
-    // In minimal mode, omit sshPort to avoid advertising SSH availability.
     const gatewayTxt: Record<string, string> = {
       ...txtBase,
       transport: "gateway",
@@ -264,9 +283,6 @@ export async function startGatewayBonjourAdvertiser(
         republishService?: (...args: unknown[]) => unknown;
       };
       const noopAsync = async () => {};
-      // ciao schedules its own 2s retry timers after failed probe/announce attempts.
-      // Those callbacks target the original responder instance, so disarm it before
-      // destroy/shutdown to prevent a dead cycle from re-entering advertise/probe.
       responder.advertiseService = noopAsync;
       responder.announce = noopAsync;
       responder.probe = noopAsync;
@@ -292,16 +308,18 @@ export async function startGatewayBonjourAdvertiser(
         try {
           svc.on("name-change", (name: unknown) => {
             const next = typeof name === "string" ? name : String(name);
-            logWarn(`bonjour: ${label} name conflict resolved; newName=${JSON.stringify(next)}`);
+            logger.warn(
+              `bonjour: ${label} name conflict resolved; newName=${JSON.stringify(next)}`,
+            );
           });
           svc.on("hostname-change", (nextHostname: unknown) => {
             const next = typeof nextHostname === "string" ? nextHostname : String(nextHostname);
-            logWarn(
+            logger.warn(
               `bonjour: ${label} hostname conflict resolved; newHostname=${JSON.stringify(next)}`,
             );
           });
         } catch (err) {
-          logDebug(`bonjour: failed to attach listeners for ${label}: ${String(err)}`);
+          logger.debug(`bonjour: failed to attach listeners for ${label}: ${String(err)}`);
         }
       }
     }
@@ -312,23 +330,22 @@ export async function startGatewayBonjourAdvertiser(
           void svc
             .advertise()
             .then(() => {
-              // Keep this out of stdout/stderr (menubar + tests) but capture in the rolling log.
-              getLogger().info(`bonjour: advertised ${serviceSummary(label, svc)}`);
+              logger.info(`bonjour: advertised ${serviceSummary(label, svc)}`);
             })
             .catch((err) => {
-              logWarn(
+              logger.warn(
                 `bonjour: advertise failed (${serviceSummary(label, svc)}): ${formatBonjourError(err)}`,
               );
             });
         } catch (err) {
-          logWarn(
+          logger.warn(
             `bonjour: advertise threw (${serviceSummary(label, svc)}): ${formatBonjourError(err)}`,
           );
         }
       }
     }
 
-    logDebug(
+    logger.debug(
       `bonjour: starting (hostname=${hostname}, instance=${JSON.stringify(
         safeServiceName(instanceName),
       )}, gatewayPort=${opts.gatewayPort}${opts.minimal ? ", minimal=true" : `, sshPort=${opts.sshPort ?? 22}`})`,
@@ -364,7 +381,7 @@ export async function startGatewayBonjourAdvertiser(
         return recreatePromise;
       }
       recreatePromise = (async () => {
-        logWarn(`bonjour: restarting advertiser (${reason})`);
+        logger.warn(`bonjour: restarting advertiser (${reason})`);
         const previous = cycle;
         await stopCycle(previous);
         cycle = createCycle();
@@ -377,8 +394,6 @@ export async function startGatewayBonjourAdvertiser(
       return recreatePromise;
     };
 
-    // Watchdog: if we ever end up in an unannounced state (e.g. after sleep/wake or
-    // interface churn), try to re-advertise instead of requiring a full gateway restart.
     const lastRepairAttempt = new Map<string, number>();
     const watchdog = setInterval(() => {
       if (stopped || recreatePromise) {
@@ -421,7 +436,7 @@ export async function startGatewayBonjourAdvertiser(
         }
         lastRepairAttempt.set(key, now);
 
-        logWarn(
+        logger.warn(
           `bonjour: watchdog detected non-announced service; attempting re-advertise (${serviceSummary(
             label,
             svc,
@@ -429,13 +444,13 @@ export async function startGatewayBonjourAdvertiser(
         );
         try {
           void svc.advertise().catch((err) => {
-            logWarn(
-              `bonjour: watchdog advertise failed (${serviceSummary(label, svc)}): ${formatBonjourError(err)}`,
+            logger.warn(
+              `bonjour: watchdog re-advertise failed (${serviceSummary(label, svc)}): ${formatBonjourError(err)}`,
             );
           });
         } catch (err) {
-          logWarn(
-            `bonjour: watchdog advertise threw (${serviceSummary(label, svc)}): ${formatBonjourError(err)}`,
+          logger.warn(
+            `bonjour: watchdog re-advertise threw (${serviceSummary(label, svc)}): ${formatBonjourError(err)}`,
           );
         }
       }
@@ -445,13 +460,14 @@ export async function startGatewayBonjourAdvertiser(
     return {
       stop: async () => {
         stopped = true;
+        clearInterval(watchdog);
         try {
-          clearInterval(watchdog);
           await recreatePromise;
-          await stopCycle(cycle);
-        } finally {
-          restoreConsoleLog();
+        } catch {
+          // ignore
         }
+        await stopCycle(cycle);
+        restoreConsoleLog();
       },
     };
   } catch (err) {

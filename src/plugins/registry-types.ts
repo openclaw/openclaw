@@ -27,6 +27,7 @@ import type {
   OpenClawPluginCliRegistrar,
   OpenClawPluginCommandDefinition,
   OpenClawPluginGatewayRuntimeScopeSurface,
+  OpenClawGatewayDiscoveryService,
   OpenClawPluginHttpRouteAuth,
   OpenClawPluginHttpRouteHandler,
   OpenClawPluginHttpRouteMatch,
@@ -187,6 +188,14 @@ export type PluginServiceRegistration = {
   rootDir?: string;
 };
 
+export type PluginGatewayDiscoveryServiceRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  service: OpenClawGatewayDiscoveryService;
+  source: string;
+  rootDir?: string;
+};
+
 export type PluginReloadRegistration = {
   pluginId: string;
   pluginName?: string;
@@ -312,6 +321,7 @@ export type PluginRegistry = {
   nodeHostCommands?: PluginNodeHostCommandRegistration[];
   securityAuditCollectors?: PluginSecurityAuditCollectorRegistration[];
   services: PluginServiceRegistration[];
+  gatewayDiscoveryServices: PluginGatewayDiscoveryServiceRegistration[];
   commands: PluginCommandRegistration[];
   conversationBindingResolvedHandlers: PluginConversationBindingResolvedHandlerRegistration[];
   diagnostics: PluginDiagnostic[];
