@@ -2208,7 +2208,6 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
               );
             }
           }
-          ensureOpenClawPluginSdkAlias(path.dirname(path.dirname(pluginRoot)));
           if (path.resolve(installRoot) !== path.resolve(pluginRoot)) {
             registerBundledRuntimeDependencyNodePath(installRoot);
             runtimePluginRoot = mirrorBundledPluginRuntimeRoot({
@@ -2227,6 +2226,8 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
               pluginRoot,
               mirroredRoot: runtimePluginRoot,
             });
+          } else {
+            ensureOpenClawPluginSdkAlias(path.dirname(path.dirname(pluginRoot)));
           }
         } catch (error) {
           pushPluginLoadError(`failed to install bundled runtime deps: ${String(error)}`);

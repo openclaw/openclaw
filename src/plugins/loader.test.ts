@@ -1527,35 +1527,42 @@ module.exports = {
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
     process.env.OPENCLAW_PLUGIN_STAGE_DIR = stageDir;
 
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      config: {
-        plugins: {
-          enabled: true,
+    let registry: PluginRegistry | null = null;
+    try {
+      fs.chmodSync(bundledDir, 0o555);
+      registry = loadOpenClawPlugins({
+        cache: false,
+        config: {
+          plugins: {
+            enabled: true,
+          },
         },
-      },
-      bundledRuntimeDepsInstaller: ({ installRoot }) => {
-        const depRoot = path.join(installRoot, "node_modules", "external-runtime");
-        fs.mkdirSync(depRoot, { recursive: true });
-        fs.writeFileSync(
-          path.join(depRoot, "package.json"),
-          JSON.stringify({
-            name: "external-runtime",
-            version: "1.0.0",
-            type: "module",
-            exports: "./index.js",
-          }),
-          "utf-8",
-        );
-        fs.writeFileSync(
-          path.join(depRoot, "index.js"),
-          "export default { marker: 'SDK-OK' };\n",
-          "utf-8",
-        );
-      },
-    });
+        bundledRuntimeDepsInstaller: ({ installRoot }) => {
+          const depRoot = path.join(installRoot, "node_modules", "external-runtime");
+          fs.mkdirSync(depRoot, { recursive: true });
+          fs.writeFileSync(
+            path.join(depRoot, "package.json"),
+            JSON.stringify({
+              name: "external-runtime",
+              version: "1.0.0",
+              type: "module",
+              exports: "./index.js",
+            }),
+            "utf-8",
+          );
+          fs.writeFileSync(
+            path.join(depRoot, "index.js"),
+            "export default { marker: 'SDK-OK' };\n",
+            "utf-8",
+          );
+        },
+      });
+    } finally {
+      fs.chmodSync(bundledDir, 0o755);
+    }
 
-    expect(registry.plugins.find((entry) => entry.id === "telegram")?.status).toBe("loaded");
+    expect(registry?.plugins.find((entry) => entry.id === "telegram")?.status).toBe("loaded");
+    expect(fs.existsSync(path.join(bundledDir, "node_modules", "openclaw"))).toBe(false);
   });
 
   it("loads bundled plugins with plugin-sdk imports from a package dist root", () => {
