@@ -93,7 +93,7 @@
     },
     "realtime.provider": {
       "label": "Realtime Provider",
-      "help": "Uses the first registered realtime voice provider when unset."
+      "help": "Defaults to OpenAI; uses OPENAI_API_KEY when no provider config is set."
     },
     "realtime.model": {
       "label": "Realtime Model",
@@ -157,11 +157,13 @@
       },
       "defaultTransport": {
         "type": "string",
-        "enum": ["chrome", "twilio"]
+        "enum": ["chrome", "twilio"],
+        "default": "chrome"
       },
       "defaultMode": {
         "type": "string",
-        "enum": ["realtime", "transcribe"]
+        "enum": ["realtime", "transcribe"],
+        "default": "realtime"
       },
       "chrome": {
         "type": "object",
@@ -169,25 +171,58 @@
         "properties": {
           "audioBackend": {
             "type": "string",
-            "enum": ["blackhole-2ch"]
+            "enum": ["blackhole-2ch"],
+            "default": "blackhole-2ch"
           },
           "launch": {
-            "type": "boolean"
+            "type": "boolean",
+            "default": true
           },
           "browserProfile": {
             "type": "string"
           },
           "joinTimeoutMs": {
-            "type": "number"
+            "type": "number",
+            "default": 30000
           },
           "audioInputCommand": {
             "type": "array",
+            "default": [
+              "rec",
+              "-q",
+              "-t",
+              "raw",
+              "-r",
+              "8000",
+              "-c",
+              "1",
+              "-e",
+              "mu-law",
+              "-b",
+              "8",
+              "-"
+            ],
             "items": {
               "type": "string"
             }
           },
           "audioOutputCommand": {
             "type": "array",
+            "default": [
+              "play",
+              "-q",
+              "-t",
+              "raw",
+              "-r",
+              "8000",
+              "-c",
+              "1",
+              "-e",
+              "mu-law",
+              "-b",
+              "8",
+              "-"
+            ],
             "items": {
               "type": "string"
             }
@@ -226,7 +261,8 @@
         "additionalProperties": false,
         "properties": {
           "enabled": {
-            "type": "boolean"
+            "type": "boolean",
+            "default": true
           },
           "gatewayUrl": {
             "type": "string"
@@ -235,10 +271,12 @@
             "type": "string"
           },
           "requestTimeoutMs": {
-            "type": "number"
+            "type": "number",
+            "default": 30000
           },
           "dtmfDelayMs": {
-            "type": "number"
+            "type": "number",
+            "default": 2500
           },
           "introMessage": {
             "type": "string"
@@ -250,17 +288,20 @@
         "additionalProperties": false,
         "properties": {
           "provider": {
-            "type": "string"
+            "type": "string",
+            "default": "openai"
           },
           "model": {
             "type": "string"
           },
           "instructions": {
-            "type": "string"
+            "type": "string",
+            "default": "You are joining a private Google Meet as an OpenClaw agent. Keep spoken replies brief and natural. When a question needs deeper reasoning, current information, or tools, call openclaw_agent_consult before answering."
           },
           "toolPolicy": {
             "type": "string",
-            "enum": ["safe-read-only", "owner", "none"]
+            "enum": ["safe-read-only", "owner", "none"],
+            "default": "safe-read-only"
           },
           "providers": {
             "type": "object",

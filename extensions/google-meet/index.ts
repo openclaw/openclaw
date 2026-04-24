@@ -78,7 +78,7 @@ const googleMeetConfigSchema = {
     "voiceCall.introMessage": { label: "Voice Call Intro Message", advanced: true },
     "realtime.provider": {
       label: "Realtime Provider",
-      help: "Uses the first registered realtime voice provider when unset.",
+      help: "Defaults to OpenAI; uses OPENAI_API_KEY when no provider config is set.",
     },
     "realtime.model": { label: "Realtime Model", advanced: true },
     "realtime.instructions": { label: "Realtime Instructions", advanced: true },
