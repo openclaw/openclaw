@@ -37,6 +37,7 @@ export type ChannelsAddOptions = {
 } & Record<string, unknown>;
 
 const CHANNEL_ADD_CONTROL_OPTION_KEYS = new Set(["channel", "account"]);
+const NEXTCLOUD_TALK_CLI_ALIASES = new Set(["nextcloud-talk", "nc-talk", "nc"]);
 
 async function resolveCatalogChannelEntry(raw: string, cfg: OpenClawConfig | null) {
   const trimmed = normalizeOptionalLowercaseString(raw);
@@ -72,6 +73,10 @@ function parseOptionalDelimitedInput(value: unknown): string[] | undefined {
   return parseOptionalDelimitedEntries(typeof value === "string" ? value : undefined);
 }
 
+function readOptionalString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
 function buildChannelSetupInput(opts: ChannelsAddOptions): ChannelSetupInput {
   const input: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(opts)) {
@@ -79,6 +84,13 @@ function buildChannelSetupInput(opts: ChannelsAddOptions): ChannelSetupInput {
       continue;
     }
     input[key] = value;
+  }
+
+  const rawChannel = readOptionalString(opts.channel)?.trim().toLowerCase();
+  if (rawChannel && NEXTCLOUD_TALK_CLI_ALIASES.has(rawChannel)) {
+    input.baseUrl ??= readOptionalString(input.url);
+    input.secret ??= readOptionalString(input.token) ?? readOptionalString(input.password);
+    input.secretFile ??= readOptionalString(input.tokenFile);
   }
 
   input.initialSyncLimit = parseOptionalInt(opts.initialSyncLimit);

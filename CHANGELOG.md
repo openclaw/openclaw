@@ -30,6 +30,7 @@ Docs: https://docs.openclaw.ai
 - Codex harness: route native `request_user_input` prompts back to the originating chat, preserve queued follow-up answers, and honor newer app-server command approval amendment decisions.
 - Codex status: report Codex CLI OAuth as `oauth (codex-cli)` for native `codex/*` sessions instead of showing unknown auth. Fixes #70688. Thanks @jb510.
 - Codex harness/context-engine: redact context-engine assembly failures before logging, so fallback warnings do not serialize raw error objects. (#70809) Thanks @jalehman.
+- Channels/CLI: accept explicit shared-secret, base-URL, and auth-directory setup flags, and map legacy Nextcloud Talk `--url`/`--token` add commands to the bundled plugin setup input. Fixes #61759 and #61923.
 - WhatsApp/onboarding: keep first-run setup entry loading off the Baileys runtime dependency path, so packaged QuickStart installs can show WhatsApp setup before runtime deps are staged. Fixes #70932.
 - Block streaming: suppress final assembled text after partial block-delivery aborts when the already-sent text chunks exactly cover the final reply, preventing duplicate replies without dropping unrelated short messages. Fixes #70921.
 - Codex harness/Windows: resolve npm-installed `codex.cmd` shims through PATHEXT before starting the native app-server, so `codex/*` models work without a manual `.exe` shim. Fixes #70913.
