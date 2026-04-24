@@ -163,6 +163,50 @@ describe("prepareCliBundleMcpConfig", () => {
     await prepared.cleanup?.();
   });
 
+  it("includes user-configured mcp.servers from OpenClaw config alongside bundle MCP servers", async () => {
+    const env = captureEnv(["HOME"]);
+    try {
+      process.env.HOME = bundleProbeHomeDir;
+      const prepared = await prepareCliBundleMcpConfig({
+        enabled: true,
+        mode: "claude-config-file",
+        backend: {
+          command: "node",
+          args: ["./fake-claude.mjs"],
+        },
+        workspaceDir: bundleProbeWorkspaceDir,
+        config: {
+          plugins: {
+            entries: {
+              "bundle-probe": { enabled: true },
+            },
+          },
+          mcp: {
+            servers: {
+              bg3: {
+                command: "python3",
+                args: ["/home/user/bg3-mcp/server.py"],
+              },
+            },
+          },
+        },
+      });
+
+      const configFlagIndex = prepared.backend.args?.indexOf("--mcp-config") ?? -1;
+      const generatedConfigPath = prepared.backend.args?.[configFlagIndex + 1];
+      const raw = JSON.parse(await fs.readFile(generatedConfigPath as string, "utf-8")) as {
+        mcpServers?: Record<string, { command?: string; args?: string[] }>;
+      };
+      expect(Object.keys(raw.mcpServers ?? {}).toSorted()).toEqual(["bg3", "bundleProbe"]);
+      expect(raw.mcpServers?.bg3?.command).toBe("python3");
+      expect(raw.mcpServers?.bg3?.args).toEqual(["/home/user/bg3-mcp/server.py"]);
+
+      await prepared.cleanup?.();
+    } finally {
+      env.restore();
+    }
+  });
+
   it("merges loopback overlay config with bundle MCP servers", async () => {
     const prepared = await prepareBundleProbeCliConfig({
       additionalConfig: {
