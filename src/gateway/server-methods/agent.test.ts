@@ -1594,6 +1594,38 @@ describe("gateway agent handler chat.abort integration", () => {
     expect(entry?.controller.signal.aborted).toBe(false);
   });
 
+  it("sets the maintenance expiry to the configured agent timeout, not the 24h chat default", async () => {
+    prime();
+    const pending = new Promise(() => {});
+    mocks.agentCommand.mockReturnValueOnce(pending);
+
+    mocks.loadConfigReturn = {
+      agents: { defaults: { timeoutSeconds: 48 * 60 * 60 } },
+    };
+    const context = makeContext();
+    const runId = "idem-abort-expires";
+    const before = Date.now();
+    await invokeAgent(
+      {
+        message: "hi",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        idempotencyKey: runId,
+      },
+      { context, reqId: runId },
+    );
+    mocks.loadConfigReturn = {};
+
+    const entry = context.chatAbortControllers.get(runId);
+    expect(entry).toBeDefined();
+    // 48h configured timeout must not be silently truncated to the 24h
+    // chat.send default cap baked into resolveChatRunExpiresAtMs. Assert
+    // at least 25h to leave headroom above the 24h cap; the expected
+    // value is ~48h.
+    const TWENTY_FIVE_HOURS_MS = 25 * 60 * 60 * 1_000;
+    expect((entry?.expiresAtMs ?? 0) - before).toBeGreaterThan(TWENTY_FIVE_HOURS_MS);
+  });
+
   it("chat.abort by runId aborts the agent run's signal and removes the entry", async () => {
     prime();
     const pending = new Promise(() => {});

@@ -893,7 +893,11 @@ export const agentHandlers: GatewayRequestHandlers = {
         sessionId: resolvedSessionId ?? runId,
         sessionKey: resolvedSessionKey,
         startedAtMs: now,
-        expiresAtMs: resolveChatRunExpiresAtMs({ now, timeoutMs }),
+        // Agent runs routinely exceed chat.send's 24h default cap (48h
+        // default timeout, indefinite when `timeout=0`). Pin the maintenance
+        // expiry to the configured timeout + grace so long-running autonomous
+        // agents are not force-aborted by the dedupe sweep.
+        expiresAtMs: resolveChatRunExpiresAtMs({ now, timeoutMs, maxMs: timeoutMs + 60_000 }),
         ownerConnId: typeof client?.connId === "string" ? client.connId : undefined,
         ownerDeviceId:
           typeof client?.connect?.device?.id === "string" ? client.connect.device.id : undefined,
