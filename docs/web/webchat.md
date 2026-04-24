@@ -73,3 +73,8 @@ Related global options:
 - `gateway.auth.mode: "trusted-proxy"`: reverse-proxy auth for browser clients behind an identity-aware **non-loopback** proxy source (see [Trusted Proxy Auth](/gateway/trusted-proxy-auth)).
 - `gateway.remote.url`, `gateway.remote.token`, `gateway.remote.password`: remote gateway target.
 - `session.*`: session storage and main key defaults.
+
+## Related
+
+- [Control UI](/web/control-ui)
+- [Dashboard](/web/dashboard)

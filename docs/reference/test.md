@@ -127,3 +127,8 @@ Ensures the maintained QR runtime helper loads under the supported Docker Node r
 ```bash
 pnpm test:docker:qr
 ```
+
+## Related
+
+- [Testing](/help/testing)
+- [Testing live](/help/testing-live)

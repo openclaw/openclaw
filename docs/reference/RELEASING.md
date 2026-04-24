@@ -204,3 +204,8 @@ documented and operator-visible.
 Maintainers use the private release docs in
 [`openclaw/maintainers/release/README.md`](https://github.com/openclaw/maintainers/blob/main/release/README.md)
 for the actual runbook.
+
+## Related
+
+- [Release policy](/reference/release-policy)
+- [Release channels](/install/development-channels)

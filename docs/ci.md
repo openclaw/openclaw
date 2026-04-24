@@ -136,3 +136,8 @@ node scripts/ci-run-timings.mjs --recent 10   # compare recent successful main C
 pnpm test:perf:groups --full-suite --allow-failures --output .artifacts/test-perf/baseline-before.json
 pnpm test:perf:groups:compare .artifacts/test-perf/baseline-before.json .artifacts/test-perf/after-agent.json
 ```
+
+## Related
+
+- [Install overview](/install)
+- [Release channels](/install/development-channels)
