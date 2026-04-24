@@ -484,28 +484,43 @@ describe("diagnostics-otel service", () => {
     await service.stop?.(ctx);
   });
 
-  test("does not recursively report repeated log export failures", async () => {
+  test("rate-limits repeated log export failure reports", async () => {
     const service = createDiagnosticsOtelService();
     const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { logs: true });
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
     logEmit.mockImplementation(() => {
       throw new Error("export failed");
     });
-    await service.start(ctx);
+    try {
+      await service.start(ctx);
 
-    emitDiagnosticEvent({
-      type: "log.record",
-      level: "ERROR",
-      message: "first failing log",
-    });
-    emitDiagnosticEvent({
-      type: "log.record",
-      level: "ERROR",
-      message: "second failing log",
-    });
-    await flushDiagnosticEvents();
+      emitDiagnosticEvent({
+        type: "log.record",
+        level: "ERROR",
+        message: "first failing log",
+      });
+      emitDiagnosticEvent({
+        type: "log.record",
+        level: "ERROR",
+        message: "second failing log",
+      });
+      await flushDiagnosticEvents();
 
-    expect(ctx.logger.error).toHaveBeenCalledTimes(1);
-    await service.stop?.(ctx);
+      expect(ctx.logger.error).toHaveBeenCalledTimes(1);
+
+      nowSpy.mockReturnValue(62_000);
+      emitDiagnosticEvent({
+        type: "log.record",
+        level: "ERROR",
+        message: "third failing log",
+      });
+      await flushDiagnosticEvents();
+
+      expect(ctx.logger.error).toHaveBeenCalledTimes(2);
+    } finally {
+      nowSpy.mockRestore();
+      await service.stop?.(ctx);
+    }
   });
 
   test("does not parent diagnostic event spans from plugin-emittable trace context", async () => {

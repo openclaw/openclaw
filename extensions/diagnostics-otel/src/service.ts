@@ -43,6 +43,7 @@ const LOW_CARDINALITY_VALUE_RE = /^[A-Za-z0-9_.:-]{1,120}$/u;
 const MAX_OTEL_LOG_BODY_CHARS = 4 * 1024;
 const MAX_OTEL_LOG_ATTRIBUTE_COUNT = 64;
 const MAX_OTEL_LOG_ATTRIBUTE_VALUE_CHARS = 4 * 1024;
+const LOG_RECORD_EXPORT_FAILURE_REPORT_INTERVAL_MS = 60_000;
 const OTEL_LOG_RAW_ATTRIBUTE_KEY_RE = /^[A-Za-z0-9_.:-]{1,64}$/u;
 const OTEL_LOG_ATTRIBUTE_KEY_RE = /^[A-Za-z0-9_.:-]{1,96}$/u;
 
@@ -410,7 +411,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         | ((evt: Extract<DiagnosticEventPayload, { type: "log.record" }>) => void)
         | undefined;
       if (logsEnabled) {
-        let logRecordExportFailureReported = false;
+        let logRecordExportFailureLastReportedAt = Number.NEGATIVE_INFINITY;
         const logExporter = new OTLPLogExporter({
           ...(logUrl ? { url: logUrl } : {}),
           ...(headers ? { headers } : {}),
@@ -472,8 +473,12 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
             }
             otelLogger.emit(logRecord);
           } catch (err) {
-            if (!logRecordExportFailureReported) {
-              logRecordExportFailureReported = true;
+            const now = Date.now();
+            if (
+              now - logRecordExportFailureLastReportedAt >=
+              LOG_RECORD_EXPORT_FAILURE_REPORT_INTERVAL_MS
+            ) {
+              logRecordExportFailureLastReportedAt = now;
               ctx.logger.error(`diagnostics-otel: log record export failed: ${formatError(err)}`);
             }
           }
