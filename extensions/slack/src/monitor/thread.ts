@@ -1,6 +1,7 @@
 import type { WebClient as SlackWebClient } from "@slack/web-api";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { formatSlackFileReferenceList } from "../file-reference.js";
 import type { SlackFile } from "../types.js";
 import { logVerbose } from "./thread.runtime.js";
 
@@ -32,7 +33,7 @@ function evictThreadStarterCache(): void {
 }
 
 function formatSlackFilePlaceholder(files: SlackFile[] | undefined): string {
-  return `[attached: ${files?.map((file) => file.name ?? "file").join(", ") ?? "file"}]`;
+  return `[attached: ${formatSlackFileReferenceList(files)}]`;
 }
 
 export async function resolveSlackThreadStarter(params: {

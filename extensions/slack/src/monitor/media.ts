@@ -1,5 +1,6 @@
 import { normalizeHostname } from "openclaw/plugin-sdk/host-runtime";
 import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
+import { formatSlackFileReference } from "../file-reference.js";
 import type { SlackAttachment, SlackFile } from "../types.js";
 export { MAX_SLACK_MEDIA_FILES, type SlackMediaResult } from "./media-types.js";
 import { MAX_SLACK_MEDIA_FILES, type SlackMediaResult } from "./media-types.js";
@@ -281,7 +282,7 @@ export async function resolveSlackMedia(params: {
         return {
           path: saved.path,
           ...(contentType ? { contentType } : {}),
-          placeholder: label ? `[Slack file: ${label}]` : "[Slack file]",
+          placeholder: `[Slack file: ${formatSlackFileReference({ ...file, name: label })}]`,
         };
       } catch {
         return null;
