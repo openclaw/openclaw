@@ -23,10 +23,6 @@ import {
   resolveThinkingDefault,
   resolveModelRefFromString,
 } from "./model-selection.js";
-import {
-  __resetProviderSelfPrefixForTest,
-  registerProviderSelfPrefix,
-} from "./provider-self-prefix.js";
 
 const EXPLICIT_ALLOWLIST_CONFIG = {
   agents: {
@@ -186,27 +182,8 @@ describe("model-selection", () => {
   });
 
   describe("modelKey", () => {
-    beforeEach(() => {
-      __resetProviderSelfPrefixForTest();
-      registerProviderSelfPrefix("openrouter");
-    });
-
-    afterEach(() => {
-      __resetProviderSelfPrefixForTest();
-    });
-
     it("keeps canonical OpenRouter native ids without duplicating the provider", () => {
       expect(modelKey("openrouter", "openrouter/hunter-alpha")).toBe("openrouter/hunter-alpha");
-    });
-
-    it("preserves three-segment refs for providers that are not self-prefixed", () => {
-      expect(modelKey("nvidia", "nvidia/nemotron-3-super-120b-a12b")).toBe(
-        "nvidia/nvidia/nemotron-3-super-120b-a12b",
-      );
-    });
-
-    it("prepends the provider for unrelated maker-prefixed ids", () => {
-      expect(modelKey("nvidia", "moonshotai/kimi-k2.5")).toBe("nvidia/moonshotai/kimi-k2.5");
     });
   });
 

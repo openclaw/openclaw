@@ -1,10 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { modelKey } from "../agents/model-selection.js";
 import type { normalizeProviderModelIdWithRuntime } from "../agents/provider-model-normalization.runtime.js";
-import {
-  __resetProviderSelfPrefixForTest,
-  registerProviderSelfPrefix,
-} from "../agents/provider-self-prefix.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
@@ -64,8 +60,6 @@ import {
 describe("model-pricing-cache", () => {
   beforeEach(() => {
     __resetGatewayModelPricingCacheForTest();
-    __resetProviderSelfPrefixForTest();
-    registerProviderSelfPrefix("openrouter");
     pluginManifestRegistryMocks.manifestRegistry = undefined;
     pluginManifestRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockClear();
     pluginManifestRegistryMocks.listOpenClawPluginManifestMetadata.mockClear();
@@ -76,7 +70,6 @@ describe("model-pricing-cache", () => {
     __resetGatewayModelPricingCacheForTest();
     loggingState.rawConsole = null;
     resetLogger();
-    __resetProviderSelfPrefixForTest();
   });
 
   it("collects configured model refs across defaults, aliases, overrides, and media tools", () => {

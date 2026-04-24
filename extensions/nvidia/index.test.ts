@@ -132,14 +132,15 @@ describe("nvidia provider hooks", () => {
     expect(entries?.every((entry) => entry.provider === "nvidia")).toBe(true);
   });
 
-  it("does not declare nativeIdsIncludeProviderPrefix", async () => {
+  it("opts into literal provider-prefix preservation", async () => {
     const provider = await registerNvidiaProvider();
 
-    // NVIDIA's ids like nvidia/nemotron-... are opaque upstream identifiers,
-    // not a redundant provider prefix. Leaving the flag unset keeps the
-    // user-facing ref as nvidia/nvidia/nemotron-... (the literal
-    // <provider>/<model-id> concatenation).
-    expect(provider.nativeIdsIncludeProviderPrefix).toBeUndefined();
+    // NVIDIA's ids like nvidia/nemotron-... sit alongside moonshotai/...,
+    // minimaxai/..., z-ai/... in the same catalog, so the leading nvidia/
+    // is a vendor namespace rather than a redundant provider prefix. The
+    // flag keeps the canonical ref as nvidia/nvidia/nemotron-... instead
+    // of letting the default string-based dedupe collapse it.
+    expect(provider.preserveLiteralProviderPrefix).toBe(true);
   });
 
   it("registers nvidia provider through the plugin api", () => {
