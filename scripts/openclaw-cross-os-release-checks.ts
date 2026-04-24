@@ -2415,17 +2415,32 @@ async function runAgentTurn(params) {
 function parseAgentPayloadTexts(stdout) {
   try {
     const payload = JSON.parse(stdout);
+    const directTexts = [
+      payload?.finalAssistantVisibleText,
+      payload?.finalAssistantRawText,
+      payload?.meta?.finalAssistantVisibleText,
+      payload?.meta?.finalAssistantRawText,
+      payload?.result?.finalAssistantVisibleText,
+      payload?.result?.finalAssistantRawText,
+      payload?.result?.meta?.finalAssistantVisibleText,
+      payload?.result?.meta?.finalAssistantRawText,
+    ].filter((text): text is string => typeof text === "string");
     const entries = Array.isArray(payload?.payloads)
       ? payload.payloads
       : Array.isArray(payload?.result?.payloads)
         ? payload.result.payloads
         : [];
-    if (!Array.isArray(entries)) {
-      return [];
-    }
-    return entries.flatMap((entry) => (typeof entry?.text === "string" ? [entry.text] : []));
+    const payloadTexts = Array.isArray(entries)
+      ? entries.flatMap((entry) => (typeof entry?.text === "string" ? [entry.text] : []))
+      : [];
+    return [...directTexts, ...payloadTexts];
   } catch {
-    return stdout.trim() ? [stdout] : [];
+    const finalTextMatches = [
+      ...stdout.matchAll(
+        /"(?:finalAssistantVisibleText|finalAssistantRawText|text)"\s*:\s*"([^"]*)"/gu,
+      ),
+    ].map((match) => match[1]);
+    return finalTextMatches.length > 0 ? finalTextMatches : stdout.trim() ? [stdout] : [];
   }
 }
 
