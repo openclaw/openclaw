@@ -148,11 +148,18 @@ export async function buildReplyPayloads(params: {
           currentMessageId: params.currentMessageId,
           silentToken: SILENT_REPLY_TOKEN,
           parseMode: "always",
-        }).payload;
-        return await normalizeReplyPayloadMedia({
-          payload: parsed,
+        });
+        const mediaNormalizedPayload = await normalizeReplyPayloadMedia({
+          payload: parsed.payload,
           normalizeMediaPaths: params.normalizeMediaPaths,
         });
+        if (
+          parsed.isSilent &&
+          !resolveSendableOutboundReplyParts(mediaNormalizedPayload).hasMedia
+        ) {
+          mediaNormalizedPayload.text = undefined;
+        }
+        return mediaNormalizedPayload;
       }),
     )
   ).filter(isRenderablePayload);

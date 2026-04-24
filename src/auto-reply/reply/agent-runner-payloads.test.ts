@@ -260,6 +260,20 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads).toHaveLength(0);
   });
 
+  it("suppresses warning text when silent media payloads fail normalization", async () => {
+    const normalizeMediaPaths = async () => {
+      throw new Error("file not found");
+    };
+
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      payloads: [{ text: "NO_REPLY\nMEDIA: ./missing.png" }],
+      normalizeMediaPaths,
+    });
+
+    expect(replyPayloads).toHaveLength(0);
+  });
+
   it("extracts markdown image replies into final payload media urls", async () => {
     const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,
