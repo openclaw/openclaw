@@ -603,7 +603,11 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
   assertMainSessionAgentId(job, state.deps.defaultAgentId);
   assertDeliverySupport(job);
   assertFailureDestinationSupport(job);
-  job.state.nextRunAtMs = computeJobNextRunAtMs(job, now);
+  try {
+    job.state.nextRunAtMs = computeJobNextRunAtMs(job, now);
+  } catch (err) {
+    recordScheduleComputeError({ state, job, err });
+  }
   return job;
 }
 
