@@ -1,3 +1,4 @@
+type PreflightWebLoginWithQrStart = typeof import("./src/login-qr.js").preflightWebLoginWithQrStart;
 type StartWebLoginWithQr = typeof import("./src/login-qr.js").startWebLoginWithQr;
 type WaitForWebLogin = typeof import("./src/login-qr.js").waitForWebLogin;
 
@@ -6,6 +7,13 @@ let loginQrModulePromise: Promise<typeof import("./src/login-qr.js")> | null = n
 function loadLoginQrModule() {
   loginQrModulePromise ??= import("./src/login-qr.js");
   return loginQrModulePromise;
+}
+
+export async function preflightWebLoginWithQrStart(
+  ...args: Parameters<PreflightWebLoginWithQrStart>
+): ReturnType<PreflightWebLoginWithQrStart> {
+  const { preflightWebLoginWithQrStart } = await loadLoginQrModule();
+  return await preflightWebLoginWithQrStart(...args);
 }
 
 export async function startWebLoginWithQr(

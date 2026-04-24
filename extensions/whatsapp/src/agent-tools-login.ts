@@ -52,7 +52,7 @@ export function createWhatsAppLoginTool(): ChannelAgentTool {
               text: result.message,
             },
           ],
-          details: { qr: false },
+          details: { qr: false, ...(result.code ? { code: result.code } : {}) },
         };
       }
 

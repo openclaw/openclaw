@@ -1,4 +1,5 @@
 import {
+  preflightWebLoginWithQrStart as preflightWebLoginWithQrStartImpl,
   startWebLoginWithQr as startWebLoginWithQrImpl,
   waitForWebLogin as waitForWebLoginImpl,
 } from "../login-qr-runtime.js";
@@ -31,6 +32,8 @@ type ReadWebAuthSnapshotBestEffort = typeof import("./auth-store.js").readWebAut
 type ReadWebSelfId = typeof import("./auth-store.js").readWebSelfId;
 type WebAuthExists = typeof import("./auth-store.js").webAuthExists;
 type LoginWeb = typeof import("./login.js").loginWeb;
+type PreflightWebLoginWithQrStart =
+  typeof import("../login-qr-runtime.js").preflightWebLoginWithQrStart;
 type StartWebLoginWithQr = typeof import("../login-qr-runtime.js").startWebLoginWithQr;
 type WaitForWebLogin = typeof import("../login-qr-runtime.js").waitForWebLogin;
 type WhatsAppSetupWizard = typeof import("./setup-surface.js").whatsappSetupWizard;
@@ -94,6 +97,12 @@ export function webAuthExists(...args: Parameters<WebAuthExists>): ReturnType<We
 
 export function loginWeb(...args: Parameters<LoginWeb>): ReturnType<LoginWeb> {
   return loginWebImpl(...args);
+}
+
+export async function preflightWebLoginWithQrStart(
+  ...args: Parameters<PreflightWebLoginWithQrStart>
+): ReturnType<PreflightWebLoginWithQrStart> {
+  return await preflightWebLoginWithQrStartImpl(...args);
 }
 
 export async function startWebLoginWithQr(
