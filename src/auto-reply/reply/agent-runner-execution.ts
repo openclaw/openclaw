@@ -17,6 +17,7 @@ import { isCliProvider } from "../../agents/model-selection.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
   formatRateLimitOrOverloadedErrorCopy,
+  isAuthErrorMessage,
   isCompactionFailureError,
   isContextOverflowError,
   isBillingErrorMessage,
@@ -1592,19 +1593,29 @@ export async function runAgentTurnWithFallback(params: {
         ? sanitizeUserFacingText(message, { errorContext: true })
         : message;
       const trimmedMessage = safeMessage.replace(/\.\s*$/, "");
+      // Provider auth failures (expired/invalidated OAuth tokens, missing
+      // credentials, etc.) frequently include raw provider error text —
+      // e.g. "Your authentication token has been invalidated. Please try
+      // signing in again." — which is inappropriate to echo back into a
+      // public chat channel (WhatsApp group, Slack channel, etc.). Return
+      // a neutral, non-revealing message instead. The raw error is still
+      // logged via `defaultRuntime.error(...)` above for operators.
+      const isAuthError = isAuthErrorMessage(message);
       const fallbackText = isBilling
         ? BILLING_ERROR_USER_MESSAGE
-        : isRateLimit && !isOverloadedErrorMessage(message)
-          ? buildRateLimitCooldownMessage(err)
-          : rateLimitOrOverloadedCopy
-            ? rateLimitOrOverloadedCopy
-            : isContextOverflow
-              ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
-              : isRoleOrderingError
-                ? "⚠️ Message ordering conflict - please try again. If this persists, use /new to start a fresh session."
-                : shouldSurfaceToControlUi
-                  ? `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`
-                  : buildExternalRunFailureText(message);
+        : isAuthError
+          ? "⚠️ Momentarily offline — will be back shortly."
+          : isRateLimit && !isOverloadedErrorMessage(message)
+            ? buildRateLimitCooldownMessage(err)
+            : rateLimitOrOverloadedCopy
+              ? rateLimitOrOverloadedCopy
+              : isContextOverflow
+                ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
+                : isRoleOrderingError
+                  ? "⚠️ Message ordering conflict - please try again. If this persists, use /new to start a fresh session."
+                  : shouldSurfaceToControlUi
+                    ? `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`
+                    : buildExternalRunFailureText(message);
 
       params.replyOperation?.fail("run_failed", err);
       return {
