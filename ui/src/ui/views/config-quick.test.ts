@@ -32,6 +32,8 @@ function createProps(overrides: Partial<QuickSettingsProps> = {}): QuickSettings
     onSecurityConfigure: vi.fn(),
     theme: "claw",
     themeMode: "system",
+    hasCustomTheme: false,
+    customThemeLabel: null,
     borderRadius: 50,
     setTheme: vi.fn(),
     setThemeMode: vi.fn(),
