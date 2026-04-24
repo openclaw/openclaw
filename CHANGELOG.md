@@ -21,7 +21,7 @@ Docs: https://docs.openclaw.ai
 - Agents/subagents: add optional forked context for native `sessions_spawn` runs so agents can let a child inherit the requester transcript when needed, while keeping clean isolated sessions as the default; includes prompt guidance, context-engine hook metadata, docs, and QA coverage.
 - Codex harness: add structured debug logging for embedded harness selection decisions so `/status` stays simple while gateway logs explain auto-selection and Pi fallback reasons. (#70760) Thanks @100yenadmin.
 - Plugin SDK/Codex harness: add provider-owned transport/auth/follow-up seams and harness result classification so Codex-style runtimes can participate in fallback policy without core special-casing. (#70772) Thanks @100yenadmin.
-- Dependencies/Pi: update bundled Pi packages to `0.70.0`, use Pi's upstream `gpt-5.5` catalog metadata for OpenAI and OpenAI Codex, and keep only local `gpt-5.5-pro` forward-compat handling.
+- Dependencies/Pi: update bundled Pi packages to `0.70.2`, use Pi's upstream `gpt-5.5` and DeepSeek V4 catalog metadata, and keep only local `gpt-5.5-pro` forward-compat handling.
 - Models/CLI: speed up `openclaw models list --all --provider <id>` for bundled providers with safe static catalogs while keeping live and third-party providers on registry discovery. (#70632) Thanks @shakkernerd.
 - Models/CLI: avoid broad registry enumeration for default `openclaw models list`, reducing default listing latency while preserving configured-row output. (#70883) Thanks @shakkernerd.
 - Models/CLI: split `openclaw models list` row-source orchestration and registry loading into narrower helpers without changing list output behavior. (#70867) Thanks @shakkernerd.
@@ -35,6 +35,7 @@ Docs: https://docs.openclaw.ai
 - Providers/OpenRouter: add image generation and reference-image editing through `image_generate`, so OpenRouter image models work with `OPENROUTER_API_KEY`. Fixes #55066 via #67668. Thanks @notamicrodose.
 - Image generation: let agents request provider-supported quality and output format hints, and pass OpenAI-specific background, moderation, compression, and user hints through the `image_generate` tool. (#70503) Thanks @ottodeng.
 - Plugins/Google Meet: let realtime Meet sessions consult the full OpenClaw agent for deeper answers while staying in the live voice loop.
+- Providers/DeepSeek: add DeepSeek V4 Flash and V4 Pro to the bundled catalog and make V4 Flash the onboarding default.
 
 ### Fixes
 
@@ -42,6 +43,7 @@ Docs: https://docs.openclaw.ai
 - Browser/tool: tell agents not to pass per-call `timeoutMs` on existing-session type, evaluate, and other Chrome MCP actions that reject timeout overrides.
 - Codex/GPT-5.4: harden fallback, auth-profile, tool-schema, and replay edge cases across native and embedded runtime paths. (#70743) Thanks @100yenadmin.
 - Voice-call/Telnyx: preserve inbound/outbound callback metadata and read transcription text from Telnyx's current `transcription_data` payload.
+- Providers/DeepSeek: wire V4 thinking controls and OpenAI-compatible replay policy so follow-up turns preserve DeepSeek `reasoning_content`, while the None/off thinking path strips replayed reasoning fields. Fixes #70931.
 - Codex harness: send verbose tool progress to chat channels for native app-server runs, matching the Pi harness `/verbose on` and `/verbose full` behavior. (#70966) Thanks @jalehman.
 - Codex models: fetch paginated Codex app-server model catalogs, mark truncated `/codex models` output, and keep ChatGPT OAuth defaults on the `openai-codex/gpt-5.5` route instead of the OpenAI API-key route.
 - Codex harness: route native `request_user_input` prompts back to the originating chat, preserve queued follow-up answers, and honor newer app-server command approval amendment decisions.

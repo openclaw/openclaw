@@ -2902,6 +2902,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                               },
                               {
                                 type: "string",
+                                const: "deepseek",
+                              },
+                              {
+                                type: "string",
                                 const: "zai",
                               },
                               {
