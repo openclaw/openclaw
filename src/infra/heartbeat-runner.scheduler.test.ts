@@ -305,7 +305,7 @@ describe("startHeartbeatRunner", () => {
     runner.stop();
   });
 
-  it("merges targeted wake heartbeat overrides onto the agent heartbeat config", async () => {
+  it("passes targeted wake heartbeat overrides raw so runOnce can apply target-last semantics", async () => {
     useFakeHeartbeatTime();
     const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
     const runner = await expectWakeDispatch({
@@ -334,12 +334,7 @@ describe("startHeartbeatRunner", () => {
         agentId: "ops",
         reason: "cron:job-123",
         sessionKey: "agent:ops:discord:channel:alerts",
-        heartbeat: {
-          every: "15m",
-          prompt: "Ops prompt",
-          directPolicy: "block",
-          target: "last",
-        },
+        heartbeat: { target: "last" },
       },
     });
 

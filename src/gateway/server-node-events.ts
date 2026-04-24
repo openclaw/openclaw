@@ -4,6 +4,7 @@ import { updatePairedDeviceMetadata } from "../infra/device-pairing.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { updatePairedNodeMetadata } from "../infra/node-pairing.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import {
   NODE_PRESENCE_ALIVE_EVENT,
   normalizeNodePresenceAliveReason,
@@ -50,6 +51,23 @@ const EXEC_FINISHED_RUN_DEDUPE_WINDOW_MS = 10 * 60 * 1000;
 const MAX_RECENT_EXEC_FINISHED_RUNS = 2000;
 const NODE_PRESENCE_PERSIST_MIN_INTERVAL_MS = 60_000;
 const MAX_RECENT_NODE_PRESENCE_KEYS = 1024;
+const EXEC_EVENT_HEARTBEAT_OVERRIDE = {
+  target: "last",
+  to: undefined,
+  accountId: undefined,
+  isolatedSession: false,
+} as const;
+
+function scopedExecEventWakeOptions(sessionKey: string) {
+  const wakeOptions = { reason: "exec-event", coalesceMs: 0 };
+  if (parseAgentSessionKey(sessionKey)) {
+    return scopedHeartbeatWakeOptions(sessionKey, {
+      ...wakeOptions,
+      heartbeat: EXEC_EVENT_HEARTBEAT_OVERRIDE,
+    });
+  }
+  return scopedHeartbeatWakeOptions(sessionKey, wakeOptions);
+}
 
 const recentVoiceTranscripts = new Map<string, { fingerprint: string; ts: number }>();
 const recentExecFinishedRuns = new Map<string, number>();
@@ -746,12 +764,9 @@ export const handleNodeEvent = async (
         trusted: false,
       });
       if (queued) {
-        // Scope wakes only for canonical agent sessions. Synthetic node-* fallback
-        // keys should keep legacy unscoped behavior so enabled non-main heartbeat
-        // agents still run when no explicit agent session is provided.
-        requestHeartbeatNow(
-          scopedHeartbeatWakeOptions(sessionKey, { reason: "exec-event", coalesceMs: 0 }),
-        );
+        // Canonical agent/global sessions have stored routing state; synthetic
+        // node-* fallback keys keep legacy heartbeat delivery config.
+        requestHeartbeatNow(scopedExecEventWakeOptions(sessionKey));
       }
       return undefined;
     }

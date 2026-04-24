@@ -109,10 +109,15 @@ export function resolveHeartbeatDeliveryTarget(params: {
     });
   }
 
-  const resolvedTurnSource =
-    target === "last"
+  const shouldUseTurnSourceRoute = target === "last";
+  const resolvedTurnSource = shouldUseTurnSourceRoute
+    ? params.turnSource
       ? mergeDeliveryContext(params.turnSource, deliveryContextFromSession(entry))
-      : undefined;
+      : deliveryContextFromSession(entry)
+    : undefined;
+
+  const shouldPreferTurnSourceRoute =
+    shouldUseTurnSourceRoute && !heartbeat?.to && Boolean(params.turnSource);
 
   const resolvedTarget = resolveSessionDeliveryTarget({
     entry,
@@ -125,12 +130,11 @@ export function resolveHeartbeatDeliveryTarget(params: {
         : undefined,
     turnSourceTo: resolvedTurnSource?.to,
     turnSourceAccountId: resolvedTurnSource?.accountId,
-    // Only pass threadId from an explicit turn source (e.g., restart sentinel's
-    // delivery context). Do NOT fall back to session-stored threadId here —
-    // heartbeat mode intentionally drops inherited thread IDs to avoid replying
-    // in stale threads (e.g., Slack thread_ts). The sentinel's delivery context
-    // carries the correct topic/thread ID when present.
-    turnSourceThreadId: params.turnSource?.threadId,
+    // Only pass threadId from an explicit turn source when that turn source is
+    // allowed to provide the route. Do NOT let requester-scoped thread IDs
+    // override a fixed heartbeat.to destination.
+    turnSourceThreadId:
+      shouldPreferTurnSourceRoute || !heartbeat?.to ? params.turnSource?.threadId : undefined,
   });
 
   const heartbeatAccountId = heartbeat?.accountId?.trim();

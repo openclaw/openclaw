@@ -200,6 +200,37 @@ function resolveHeartbeatConfig(
   return { ...defaults, ...overrides };
 }
 
+function hasHeartbeatOverrideKey<K extends keyof NonNullable<HeartbeatConfig>>(
+  override: HeartbeatConfig,
+  key: K,
+): boolean {
+  return Object.prototype.hasOwnProperty.call(override, key);
+}
+
+function resolveHeartbeatRunConfig(
+  cfg: OpenClawConfig,
+  agentId: string,
+  override?: HeartbeatConfig,
+): HeartbeatConfig | undefined {
+  const resolved = resolveHeartbeatConfig(cfg, agentId);
+  if (!override) {
+    return resolved;
+  }
+  const merged = { ...resolved, ...override };
+  if (override.target === "last") {
+    if (!hasHeartbeatOverrideKey(override, "to")) {
+      merged.to = undefined;
+    }
+    if (!hasHeartbeatOverrideKey(override, "accountId")) {
+      merged.accountId = undefined;
+    }
+    if (!hasHeartbeatOverrideKey(override, "isolatedSession")) {
+      merged.isolatedSession = undefined;
+    }
+  }
+  return merged;
+}
+
 function resolveHeartbeatAgents(cfg: OpenClawConfig): HeartbeatAgent[] {
   const list = cfg.agents?.list ?? [];
   if (hasExplicitHeartbeatAgents(cfg)) {
@@ -739,7 +770,7 @@ export async function runHeartbeatOnce(opts: {
   const agentId = normalizeAgentId(
     explicitAgentId || forcedSessionAgentId || resolveDefaultAgentId(cfg),
   );
-  const heartbeat = opts.heartbeat ?? resolveHeartbeatConfig(cfg, agentId);
+  const heartbeat = resolveHeartbeatRunConfig(cfg, agentId, opts.heartbeat);
   if (!areHeartbeatsEnabled()) {
     return { status: "skipped", reason: "disabled" };
   }
@@ -1478,8 +1509,6 @@ export function startHeartbeatRunner(opts: {
     const requestedAgentId = params?.agentId ? normalizeAgentId(params.agentId) : undefined;
     const requestedSessionKey = normalizeOptionalString(params?.sessionKey);
     const requestedHeartbeat = params?.heartbeat;
-    const resolveRequestedHeartbeat = (heartbeat?: HeartbeatConfig) =>
-      requestedHeartbeat ? { ...heartbeat, ...requestedHeartbeat } : heartbeat;
     const isInterval = reason === "interval";
     const startedAt = Date.now();
     const now = startedAt;
@@ -1499,7 +1528,7 @@ export function startHeartbeatRunner(opts: {
           const res = await runOnce({
             cfg: state.cfg,
             agentId: targetAgent.agentId,
-            heartbeat: resolveRequestedHeartbeat(targetAgent.heartbeat),
+            heartbeat: requestedHeartbeat ?? targetAgent.heartbeat,
             reason,
             sessionKey: requestedSessionKey,
             deps: { runtime: state.runtime },
