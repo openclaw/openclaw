@@ -36,6 +36,28 @@ export const TalkSpeakParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const TalkRealtimeSessionParamsSchema = Type.Object(
+  {
+    sessionKey: Type.Optional(Type.String()),
+    provider: Type.Optional(Type.String()),
+    model: Type.Optional(Type.String()),
+    voice: Type.Optional(Type.String()),
+    instructions: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
+export const TalkRealtimeSessionResultSchema = Type.Object(
+  {
+    provider: NonEmptyString,
+    clientSecret: NonEmptyString,
+    model: Type.Optional(Type.String()),
+    voice: Type.Optional(Type.String()),
+    expiresAt: Type.Optional(Type.Number()),
+  },
+  { additionalProperties: false },
+);
+
 const talkProviderFieldSchemas = {
   apiKey: Type.Optional(SecretInputSchema),
 };

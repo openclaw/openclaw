@@ -563,4 +563,4 @@ and that the remote app-server speaks the same Codex app-server protocol version
 - [Agent Harness Plugins](/plugins/sdk-agent-harness)
 - [Model Providers](/concepts/model-providers)
 - [Configuration Reference](/gateway/configuration-reference)
-- [Testing](/help/testing#live-codex-app-server-harness-smoke)
+- [Testing](/help/testing-live#live-codex-app-server-harness-smoke)

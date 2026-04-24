@@ -58,6 +58,7 @@ import {
   recordCodexTrajectoryContext,
 } from "./trajectory.js";
 import { mirrorCodexAppServerTranscript } from "./transcript-mirror.js";
+import { filterToolsForVisionInputs } from "./vision-tools.js";
 
 let clientFactory = defaultCodexAppServerClientFactory;
 
@@ -599,19 +600,6 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
     modelApi: params.model.api,
     model: params.model,
   });
-}
-
-function filterToolsForVisionInputs<T extends { name?: string }>(
-  tools: T[],
-  params: {
-    modelHasVision: boolean;
-    hasInboundImages: boolean;
-  },
-): T[] {
-  if (!params.modelHasVision || !params.hasInboundImages) {
-    return tools;
-  }
-  return tools.filter((tool) => tool.name !== "image");
 }
 
 async function withCodexStartupTimeout<T>(params: {

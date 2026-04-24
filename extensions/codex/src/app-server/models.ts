@@ -1,10 +1,6 @@
 import type { CodexAppServerStartOptions } from "./config.js";
 import type { v2 } from "./protocol-generated/typescript/index.js";
 import { readCodexModelListResponse } from "./protocol-validators.js";
-import {
-  createIsolatedCodexAppServerClient,
-  getSharedCodexAppServerClient,
-} from "./shared-client.js";
 
 export type CodexAppServerModel = {
   id: string;
@@ -38,6 +34,8 @@ export async function listCodexAppServerModels(
 ): Promise<CodexAppServerModelListResult> {
   const timeoutMs = options.timeoutMs ?? 2500;
   const useSharedClient = options.sharedClient !== false;
+  const { createIsolatedCodexAppServerClient, getSharedCodexAppServerClient } =
+    await import("./shared-client.js");
   const client = useSharedClient
     ? await getSharedCodexAppServerClient({
         startOptions: options.startOptions,

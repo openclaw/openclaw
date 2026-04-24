@@ -23,7 +23,6 @@ import {
   type CodexTurnStartParams,
   type JsonObject,
 } from "./src/app-server/protocol.js";
-import { createIsolatedCodexAppServerClient } from "./src/app-server/shared-client.js";
 
 const DEFAULT_CODEX_IMAGE_MODEL =
   FALLBACK_CODEX_MODELS.find((model) => model.inputModalities.includes("image"))?.id ??
@@ -83,11 +82,14 @@ async function describeCodexImages(
   const ownsClient = !options.clientFactory;
   const client = options.clientFactory
     ? await options.clientFactory(appServer.start, req.profile)
-    : await createIsolatedCodexAppServerClient({
-        startOptions: appServer.start,
-        timeoutMs,
-        authProfileId: req.profile,
-      });
+    : await import("./src/app-server/shared-client.js").then(
+        ({ createIsolatedCodexAppServerClient }) =>
+          createIsolatedCodexAppServerClient({
+            startOptions: appServer.start,
+            timeoutMs,
+            authProfileId: req.profile,
+          }),
+      );
   const abortController = new AbortController();
   const timeout = setTimeout(() => abortController.abort("timeout"), timeoutMs);
   timeout.unref?.();

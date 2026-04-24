@@ -2,6 +2,8 @@ export type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 export type {
   RealtimeVoiceBridge,
   RealtimeVoiceBridgeCallbacks,
+  RealtimeVoiceBrowserSession,
+  RealtimeVoiceBrowserSessionCreateRequest,
   RealtimeVoiceBridgeCreateRequest,
   RealtimeVoiceCloseReason,
   RealtimeVoiceProviderConfig,
@@ -12,6 +14,10 @@ export type {
   RealtimeVoiceTool,
   RealtimeVoiceToolCallEvent,
 } from "../realtime-voice/provider-types.js";
+export {
+  REALTIME_VOICE_AGENT_CONSULT_TOOL,
+  REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+} from "../realtime-voice/agent-consult-tool.js";
 export {
   canonicalizeRealtimeVoiceProviderId,
   getRealtimeVoiceProvider,
