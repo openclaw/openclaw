@@ -141,4 +141,33 @@ describe("discord audit", () => {
     expect(collected.channelIds).toEqual(["111"]);
     expect(collected.unresolvedChannels).toBe(1);
   });
+
+  it("audits channels concurrently while preserving configured order", async () => {
+    let activeRequests = 0;
+    let maxConcurrentRequests = 0;
+    fetchChannelPermissionsDiscordMock.mockImplementation(async (channelId: string) => {
+      activeRequests += 1;
+      maxConcurrentRequests = Math.max(maxConcurrentRequests, activeRequests);
+      const delayMs = channelId === "111" ? 15 : channelId === "222" ? 1 : 5;
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      activeRequests -= 1;
+      return {
+        channelId,
+        permissions: ["ViewChannel", "SendMessages"],
+        raw: "0",
+        isDm: false,
+      };
+    });
+
+    const audit = await auditDiscordChannelPermissionsWithFetcher({
+      token: "t",
+      accountId: "default",
+      channelIds: ["111", "222", "333"],
+      timeoutMs: 1000,
+      fetchChannelPermissions: fetchChannelPermissionsDiscordMock,
+    });
+
+    expect(maxConcurrentRequests).toBeGreaterThan(1);
+    expect(audit.channels.map((channel) => channel.channelId)).toEqual(["111", "222", "333"]);
+  });
 });

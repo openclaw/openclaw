@@ -1,7 +1,7 @@
 import type { RequestClient } from "@buape/carbon";
 import type { APIChannel, APIGuild, APIGuildMember, APIRole } from "discord-api-types/v10";
 import { ChannelType, PermissionFlagsBits, Routes } from "discord-api-types/v10";
-import { resolveDiscordRest } from "./client.js";
+import { createDiscordRestClient, resolveDiscordRest } from "./client.js";
 import type { DiscordPermissionsSummary, DiscordReactOpts } from "./send.types.js";
 
 const PERMISSION_ENTRIES = Object.entries(PermissionFlagsBits).filter(
@@ -9,6 +9,25 @@ const PERMISSION_ENTRIES = Object.entries(PermissionFlagsBits).filter(
 );
 const ALL_PERMISSIONS = PERMISSION_ENTRIES.reduce((acc, [, value]) => acc | value, 0n);
 const ADMINISTRATOR_BIT = PermissionFlagsBits.Administrator;
+const DISCORD_PERMISSION_CACHE_TTL_MS = 30_000;
+
+type DiscordGuildPermissionContext = {
+  botId: string;
+  member: APIGuildMember;
+  rolesById: Map<string, APIRole>;
+};
+
+type DiscordTimedCacheEntry<T> = {
+  expiresAt: number;
+  value?: T;
+  promise?: Promise<T>;
+};
+
+const discordBotIdCache = new Map<string, DiscordTimedCacheEntry<string>>();
+const discordGuildPermissionContextCache = new Map<
+  string,
+  DiscordTimedCacheEntry<DiscordGuildPermissionContext>
+>();
 
 function addPermissionBits(base: bigint, add?: string) {
   if (!add) {
@@ -52,6 +71,80 @@ async function fetchBotUserId(rest: RequestClient) {
     throw new Error("Failed to resolve bot user id");
   }
   return me.id;
+}
+
+function getDiscordGuildPermissionCacheKey(token: string, guildId: string) {
+  return `${token}\u0000${guildId}`;
+}
+
+async function getOrLoadDiscordTimedCacheEntry<T>(
+  cache: Map<string, DiscordTimedCacheEntry<T>>,
+  key: string,
+  load: () => Promise<T>,
+): Promise<T> {
+  const now = Date.now();
+  const cached = cache.get(key);
+  if (cached && cached.expiresAt > now) {
+    if (cached.value !== undefined) {
+      return cached.value;
+    }
+    if (cached.promise) {
+      return await cached.promise;
+    }
+  }
+
+  const promise = load()
+    .then((value) => {
+      cache.set(key, {
+        expiresAt: Date.now() + DISCORD_PERMISSION_CACHE_TTL_MS,
+        value,
+      });
+      return value;
+    })
+    .catch((err) => {
+      if (cache.get(key)?.promise === promise) {
+        cache.delete(key);
+      }
+      throw err;
+    });
+
+  cache.set(key, {
+    expiresAt: now + DISCORD_PERMISSION_CACHE_TTL_MS,
+    promise,
+  });
+  return await promise;
+}
+
+async function fetchDiscordGuildPermissionContext(
+  rest: RequestClient,
+  token: string,
+  guildId: string,
+): Promise<DiscordGuildPermissionContext> {
+  return await getOrLoadDiscordTimedCacheEntry(
+    discordGuildPermissionContextCache,
+    getDiscordGuildPermissionCacheKey(token, guildId),
+    async () => {
+      const botId = await getOrLoadDiscordTimedCacheEntry(
+        discordBotIdCache,
+        token,
+        async () => await fetchBotUserId(rest),
+      );
+      const [guild, member] = await Promise.all([
+        rest.get(Routes.guild(guildId)) as Promise<APIGuild>,
+        rest.get(Routes.guildMember(guildId, botId)) as Promise<APIGuildMember>,
+      ]);
+      return {
+        botId,
+        member,
+        rolesById: new Map<string, APIRole>((guild.roles ?? []).map((role) => [role.id, role])),
+      };
+    },
+  );
+}
+
+export function __resetDiscordPermissionCacheForTest() {
+  discordBotIdCache.clear();
+  discordGuildPermissionContextCache.clear();
 }
 
 /**
@@ -155,7 +248,7 @@ export async function fetchChannelPermissionsDiscord(
   channelId: string,
   opts: DiscordReactOpts = {},
 ): Promise<DiscordPermissionsSummary> {
-  const rest = resolveDiscordRest(opts);
+  const { rest, token } = createDiscordRestClient(opts, opts.cfg);
   const channel = (await rest.get(Routes.channel(channelId))) as APIChannel;
   const channelType = "type" in channel ? channel.type : undefined;
   const guildId = "guild_id" in channel ? channel.guild_id : undefined;
@@ -169,13 +262,11 @@ export async function fetchChannelPermissionsDiscord(
     };
   }
 
-  const botId = await fetchBotUserId(rest);
-  const [guild, member] = await Promise.all([
-    rest.get(Routes.guild(guildId)) as Promise<APIGuild>,
-    rest.get(Routes.guildMember(guildId, botId)) as Promise<APIGuildMember>,
-  ]);
-
-  const rolesById = new Map<string, APIRole>((guild.roles ?? []).map((role) => [role.id, role]));
+  const { botId, member, rolesById } = await fetchDiscordGuildPermissionContext(
+    rest,
+    token,
+    guildId,
+  );
   const everyoneRole = rolesById.get(guildId);
   let base = 0n;
   if (everyoneRole?.permissions) {
