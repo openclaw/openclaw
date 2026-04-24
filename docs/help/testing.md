@@ -50,6 +50,11 @@ When debugging real providers/models (requires real creds):
   - Add new high-signal provider secrets to `scripts/ci-hydrate-live-auth.sh`
     plus `.github/workflows/openclaw-live-and-e2e-checks-reusable.yml` and its
     scheduled/release callers.
+- Native Codex bound-chat smoke: `pnpm test:docker:live-codex-bind`
+  - Runs a Docker live lane against the Codex app-server path, binds a synthetic
+    Slack DM with `/codex bind`, exercises `/codex fast` and
+    `/codex permissions`, then verifies a plain reply and an image attachment
+    route through the native plugin binding instead of ACP.
 - Moonshot/Kimi cost smoke: with `MOONSHOT_API_KEY` set, run
   `openclaw models list --provider moonshot --json`, then run an isolated
   `openclaw agent --local --session-id live-kimi-cost --message 'Reply exactly: KIMI_LIVE_OK' --thinking off --json`
