@@ -1555,111 +1555,107 @@ export function renderApp(state: AppViewState) {
               }),
             )
           : nothing}
-        ${state.tab === "sessions"
-          ? lazyRender(lazySessions, (m) =>
-              m.renderSessions({
-                loading: state.sessionsLoading,
-                result: state.sessionsResult,
-                error: state.sessionsError,
-                activeMinutes: state.sessionsFilterActive,
-                limit: state.sessionsFilterLimit,
-                includeGlobal: state.sessionsIncludeGlobal,
-                includeUnknown: state.sessionsIncludeUnknown,
-                basePath: state.basePath,
-                searchQuery: state.sessionsSearchQuery,
-                sortColumn: state.sessionsSortColumn,
-                sortDir: state.sessionsSortDir,
-                page: state.sessionsPage,
-                pageSize: state.sessionsPageSize,
-                selectedKeys: state.sessionsSelectedKeys,
-                expandedCheckpointKey: state.sessionsExpandedCheckpointKey,
-                checkpointItemsByKey: state.sessionsCheckpointItemsByKey,
-                checkpointLoadingKey: state.sessionsCheckpointLoadingKey,
-                checkpointBusyKey: state.sessionsCheckpointBusyKey,
-                checkpointErrorByKey: state.sessionsCheckpointErrorByKey,
-                onFiltersChange: (next) => {
-                  state.sessionsFilterActive = next.activeMinutes;
-                  state.sessionsFilterLimit = next.limit;
-                  state.sessionsIncludeGlobal = next.includeGlobal;
-                  state.sessionsIncludeUnknown = next.includeUnknown;
-                },
-                onSearchChange: (q) => {
-                  state.sessionsSearchQuery = q;
-                  state.sessionsPage = 0;
-                },
-                onSortChange: (col, dir) => {
-                  state.sessionsSortColumn = col;
-                  state.sessionsSortDir = dir;
-                  state.sessionsPage = 0;
-                },
-                onPageChange: (p) => {
-                  state.sessionsPage = p;
-                },
-                onPageSizeChange: (s) => {
-                  state.sessionsPageSize = s;
-                  state.sessionsPage = 0;
-                },
-                onRefresh: () => loadSessions(state),
-                onPatch: (key, patch) => patchSession(state, key, patch),
-                onToggleSelect: (key) => {
-                  const next = new Set(state.sessionsSelectedKeys);
-                  if (next.has(key)) {
-                    next.delete(key);
-                  } else {
-                    next.add(key);
-                  }
-                  state.sessionsSelectedKeys = next;
-                },
-                onSelectPage: (keys) => {
-                  const next = new Set(state.sessionsSelectedKeys);
-                  for (const k of keys) {
-                    next.add(k);
-                  }
-                  state.sessionsSelectedKeys = next;
-                },
-                onDeselectPage: (keys) => {
-                  const next = new Set(state.sessionsSelectedKeys);
-                  for (const k of keys) {
-                    next.delete(k);
-                  }
-                  state.sessionsSelectedKeys = next;
-                },
-                onDeselectAll: () => {
-                  state.sessionsSelectedKeys = new Set();
-                },
-                onDeleteSelected: async () => {
-                  const keys = [...state.sessionsSelectedKeys];
-                  const deleted = await deleteSessionsAndRefresh(state, keys);
-                  if (deleted.length > 0) {
+          ${state.tab === "sessions"
+            ? lazyRender(lazySessions, (m) =>
+                m.renderSessions({
+                  loading: state.sessionsLoading,
+                  result: state.sessionsResult,
+                  error: state.sessionsError,
+                  activeMinutes: state.sessionsFilterActive,
+                  limit: state.sessionsFilterLimit,
+                  includeGlobal: state.sessionsIncludeGlobal,
+                  includeUnknown: state.sessionsIncludeUnknown,
+                  basePath: state.basePath,
+                  searchQuery: state.sessionsSearchQuery,
+                  sortColumn: state.sessionsSortColumn,
+                  sortDir: state.sessionsSortDir,
+                  page: state.sessionsPage,
+                  pageSize: state.sessionsPageSize,
+                  selectedKeys: state.sessionsSelectedKeys,
+                  expandedCheckpointKey: state.sessionsExpandedCheckpointKey,
+                  checkpointItemsByKey: state.sessionsCheckpointItemsByKey,
+                  checkpointLoadingKey: state.sessionsCheckpointLoadingKey,
+                  checkpointBusyKey: state.sessionsCheckpointBusyKey,
+                  checkpointErrorByKey: state.sessionsCheckpointErrorByKey,
+                  onFiltersChange: (next) => {
+                    state.sessionsFilterActive = next.activeMinutes;
+                    state.sessionsFilterLimit = next.limit;
+                    state.sessionsIncludeGlobal = next.includeGlobal;
+                    state.sessionsIncludeUnknown = next.includeUnknown;
+                  },
+                  onSearchChange: (q) => {
+                    state.sessionsSearchQuery = q;
+                    state.sessionsPage = 0;
+                  },
+                  onSortChange: (col, dir) => {
+                    state.sessionsSortColumn = col;
+                    state.sessionsSortDir = dir;
+                    state.sessionsPage = 0;
+                  },
+                  onPageChange: (p) => {
+                    state.sessionsPage = p;
+                  },
+                  onPageSizeChange: (s) => {
+                    state.sessionsPageSize = s;
+                    state.sessionsPage = 0;
+                  },
+                  onRefresh: () => loadSessions(state),
+                  onPatch: (key, patch) => patchSession(state, key, patch),
+                  onToggleSelect: (key) => {
                     const next = new Set(state.sessionsSelectedKeys);
-                    for (const k of deleted) {
+                    if (next.has(key)) {
+                      next.delete(key);
+                    } else {
+                      next.add(key);
+                    }
+                    state.sessionsSelectedKeys = next;
+                  },
+                  onSelectPage: (keys) => {
+                    const next = new Set(state.sessionsSelectedKeys);
+                    for (const k of keys) {
+                      next.add(k);
+                    }
+                    state.sessionsSelectedKeys = next;
+                  },
+                  onDeselectPage: (keys) => {
+                    const next = new Set(state.sessionsSelectedKeys);
+                    for (const k of keys) {
                       next.delete(k);
                     }
                     state.sessionsSelectedKeys = next;
-                  }
-                },
-                onNavigateToChat: (sessionKey) => {
-                  switchChatSession(state, sessionKey);
-                  state.setTab("chat" as import("./navigation.ts").Tab);
-                },
-                onToggleCheckpointDetails: (sessionKey) =>
-                  toggleSessionCompactionCheckpoints(state, sessionKey),
-                onBranchFromCheckpoint: async (sessionKey, checkpointId) => {
-                  const nextKey = await branchSessionFromCheckpoint(
-                    state,
-                    sessionKey,
-                    checkpointId,
-                  );
-                  if (nextKey) {
-                    switchChatSession(state, nextKey);
+                  },
+                  onDeselectAll: () => {
+                    state.sessionsSelectedKeys = new Set();
+                  },
+                  onDeleteSelected: async () => {
+                    const keys = [...state.sessionsSelectedKeys];
+                    const deleted = await deleteSessionsAndRefresh(state, keys);
+                    if (deleted.length > 0) {
+                      const next = new Set(state.sessionsSelectedKeys);
+                      for (const k of deleted) {
+                        next.delete(k);
+                      }
+                      state.sessionsSelectedKeys = next;
+                    }
+                  },
+                  onNavigateToChat: (sessionKey) => {
+                    switchChatSession(state, sessionKey);
                     state.setTab("chat" as import("./navigation.ts").Tab);
-                  }
-                },
-                onRestoreCheckpoint: (sessionKey, checkpointId) =>
-                  restoreSessionFromCheckpoint(state, sessionKey, checkpointId),
-              }),
-            )
-          : nothing}
+                  },
+                  onToggleCheckpointDetails: (sessionKey) =>
+                    toggleSessionCompactionCheckpoints(state, sessionKey),
+                  onBranchFromCheckpoint: async (sessionKey, checkpointId) => {
+                    const nextKey = await branchSessionFromCheckpoint(state, sessionKey, checkpointId);
+                    if (nextKey) {
+                      switchChatSession(state, nextKey);
+                      state.setTab("chat" as import("./navigation.ts").Tab);
+                    }
+                  },
+                  onRestoreCheckpoint: (sessionKey, checkpointId) =>
+                    restoreSessionFromCheckpoint(state, sessionKey, checkpointId),
+                }),
+              )
+            : nothing}
         ${renderUsageTab(state)}
         ${state.tab === "cron" ? renderCronQuickCreateForTab(state, requestHostUpdate) : nothing}
         ${state.tab === "cron"

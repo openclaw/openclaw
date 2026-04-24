@@ -24,7 +24,7 @@ function createState(request: RequestFn, overrides: Partial<SessionsState> = {})
     sessionsResult: null,
     sessionsError: null,
     sessionsFilterActive: "0",
-    sessionsFilterLimit: "0",
+    sessionsFilterLimit: 0,
     sessionsIncludeGlobal: true,
     sessionsIncludeUnknown: true,
     sessionsExpandedCheckpointKey: null,
