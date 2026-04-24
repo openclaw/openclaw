@@ -4,9 +4,9 @@ import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
-import type { ProviderFollowupFallbackRoute } from "../../plugins/types.js";
+import type { ProviderFollowupFallbackRouteResult } from "../../plugins/types.js";
 import type { SupportedTransport } from "../pi-embedded-runner/extra-params.js";
-import type { EmbeddedPiRunResult } from "../pi-embedded-runner/types.js";
+import type { classifyEmbeddedPiRunResultForModelFallback } from "../pi-embedded-runner/result-fallback-classifier.js";
 import type { TranscriptPolicy } from "../transcript-policy.js";
 
 export type AgentRuntimeResolvedRef = {
@@ -44,15 +44,11 @@ export type AgentRuntimeDeliveryPlan = {
     originatingTo?: string;
     originRoutable: boolean;
     dispatcherAvailable: boolean;
-  }): ProviderFollowupFallbackRoute | undefined;
+  }): ProviderFollowupFallbackRouteResult | undefined;
 };
 
 export type AgentRuntimeOutcomePlan = {
-  classifyRunResult(
-    result: EmbeddedPiRunResult,
-  ): ReturnType<
-    typeof import("../pi-embedded-runner/result-fallback-classifier.js").classifyEmbeddedPiRunResultForModelFallback
-  >;
+  classifyRunResult: typeof classifyEmbeddedPiRunResultForModelFallback;
 };
 
 export type AgentRuntimeTransportPlan = {
