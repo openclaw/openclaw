@@ -270,8 +270,9 @@ export async function prepareSecretsRuntimeSnapshot(params: {
   const candidateDirs = params.agentDirs?.length
     ? [...new Set(params.agentDirs.map((entry) => resolveUserPath(entry, runtimeEnv)))]
     : collectCandidateAgentDirs(resolvedConfig, runtimeEnv);
-  const authStoresReadAtMs = Date.now();
+  let authStoresReadAtMs = 0;
   if (includeAuthStoreRefs) {
+    authStoresReadAtMs = Date.now();
     for (const agentDir of candidateDirs) {
       authStores.push({
         agentDir,
@@ -324,6 +325,7 @@ export async function prepareSecretsRuntimeSnapshot(params: {
   if (includeAuthStoreRefs) {
     const loadAuthStore = params.loadAuthStore ?? loadAuthProfileStoreForSecretsRuntime;
     if (!params.loadAuthStore) {
+      authStoresReadAtMs = Date.now();
       authStores = candidateDirs.map((agentDir) => ({
         agentDir,
         store: structuredClone(loadAuthStore(agentDir)),

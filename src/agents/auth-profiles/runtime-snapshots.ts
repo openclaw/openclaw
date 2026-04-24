@@ -22,6 +22,9 @@ function readAuthStoreMtimeMs(authPath: string): number | null {
 }
 
 function clearStaleRuntimeSnapshotsIfNeeded(storeKey: string): boolean {
+  if (!runtimeAuthStoreSnapshots.has(storeKey)) {
+    return false;
+  }
   if (runtimeAuthStoreSnapshotsLoadedAtMs <= 0) {
     return false;
   }
