@@ -12,6 +12,7 @@ export type SubagentRunParams = {
   model?: string;
   extraSystemPrompt?: string;
   lane?: string;
+  lightContext?: boolean;
   deliver?: boolean;
   idempotencyKey?: string;
 };
