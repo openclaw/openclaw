@@ -43,6 +43,9 @@ export type RemindCronParams =
 
 export type RemindCronScheduler = (params: RemindCronParams) => Promise<unknown>;
 
+const PREPARED_CRON_PARAMS_INSTRUCTION =
+  "Gateway cron parameters prepared for internal QQ reminder scheduling.";
+
 /**
  * JSON Schema for AI tool parameters (used by framework registration).
  * AI Tool 参数的 JSON Schema 定义（供框架注册使用）。
@@ -292,7 +295,7 @@ function formatSchedulerError(error: unknown): string {
 export function executeRemind(params: RemindParams, ctx: RemindExecuteContext = {}) {
   if (params.action === "list") {
     return json({
-      _instruction: "Use the cron tool immediately with the following parameters.",
+      _instruction: PREPARED_CRON_PARAMS_INSTRUCTION,
       cronParams: { action: "list" },
     });
   }
@@ -304,7 +307,7 @@ export function executeRemind(params: RemindParams, ctx: RemindExecuteContext = 
       });
     }
     return json({
-      _instruction: "Use the cron tool immediately with the following parameters.",
+      _instruction: PREPARED_CRON_PARAMS_INSTRUCTION,
       cronParams: { action: "remove", jobId: params.jobId },
     });
   }
@@ -327,9 +330,7 @@ export function executeRemind(params: RemindParams, ctx: RemindExecuteContext = 
 
   if (isCronExpression(params.time)) {
     return json({
-      _instruction:
-        "Use the cron tool immediately with the following parameters. " +
-        "Pass cronParams verbatim — do not modify or omit any field, especially delivery.accountId — then tell the user the reminder has been scheduled.",
+      _instruction: PREPARED_CRON_PARAMS_INSTRUCTION,
       cronParams: buildCronJob(params, resolvedTo, resolvedAccountId),
       summary: `⏰ Recurring reminder: "${params.content}" (${params.time}, tz=${params.timezone || "Asia/Shanghai"})`,
     });
@@ -346,9 +347,7 @@ export function executeRemind(params: RemindParams, ctx: RemindExecuteContext = 
   }
 
   return json({
-    _instruction:
-      "Use the cron tool immediately with the following parameters. " +
-      "Pass cronParams verbatim — do not modify or omit any field, especially delivery.accountId — then tell the user the reminder has been scheduled.",
+    _instruction: PREPARED_CRON_PARAMS_INSTRUCTION,
     cronParams: buildOnceJob(params, delayMs, resolvedTo, resolvedAccountId),
     summary: `⏰ Reminder in ${formatDelay(delayMs)}: "${params.content}"`,
   });

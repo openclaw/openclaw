@@ -104,9 +104,12 @@ describe("engine/tools/remind-logic", () => {
     it("returns list instruction", () => {
       const result = executeRemind({ action: "list" });
       expect(result.details).toEqual({
-        _instruction: expect.any(String),
+        _instruction: "Gateway cron parameters prepared for internal QQ reminder scheduling.",
         cronParams: { action: "list" },
       });
+      expect((result.details as { _instruction: string })._instruction).not.toContain(
+        "Use the cron tool",
+      );
     });
 
     it("returns error when removing without jobId", () => {
