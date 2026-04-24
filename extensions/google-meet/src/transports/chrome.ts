@@ -445,6 +445,9 @@ async function openMeetWithBrowserProxy(params: {
       if (browser?.inCall === true) {
         return { launched: true, browser };
       }
+      if (browser?.manualActionRequired === true) {
+        return { launched: true, browser };
+      }
     } catch (error) {
       browser = {
         ...browser,
