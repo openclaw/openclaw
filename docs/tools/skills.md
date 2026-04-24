@@ -81,9 +81,13 @@ slash-command discovery, sandbox sync, and skill snapshots.
 
 Plugins can ship their own skills by listing `skills` directories in
 `openclaw.plugin.json` (paths relative to the plugin root). Plugin skills load
-when the plugin is enabled. Today those directories are merged into the same
-low-precedence path as `skills.load.extraDirs`, so a same-named bundled,
-managed, agent, or workspace skill overrides them.
+when the plugin is enabled. This is the right place for tool-specific operating
+guides that are too long for the tool description but should be available
+whenever the plugin is installed; for example, the browser plugin ships a
+`browser-automation` skill for multi-step browser control. Today those
+directories are merged into the same low-precedence path as
+`skills.load.extraDirs`, so a same-named bundled, managed, agent, or workspace
+skill overrides them.
 You can gate them via `metadata.openclaw.requires.config` on the plugin’s config
 entry. See [Plugins](/tools/plugin) for discovery/config and [Tools](/tools) for the
 tool surface those skills teach.

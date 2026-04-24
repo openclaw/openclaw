@@ -103,6 +103,8 @@ Docs: https://docs.openclaw.ai
 - WhatsApp/groups+direct: setting `systemPrompt: ""` on a specific `groups.<id>` or `direct.<peerId>` entry now suppresses the wildcard system prompt instead of falling through to it, so users can silence the global prompt for a specific group or peer. (#70381) Thanks @Bluetegu.
 - Browser/tool: tell agents not to pass per-call `timeoutMs` on existing-session type, evaluate, and other Chrome MCP actions that reject timeout overrides. Thanks @steipete.
 - Browser/tool: use Playwright's current AI aria snapshot API for `refs="aria"` and fall back to role refs when a node browser cannot provide aria refs, so agents can still inspect and click controls such as Google Meet admission buttons. Thanks @steipete.
+- Browser/tool: expose stable `tabId` handles such as `t1` plus optional tab labels, and accept those handles anywhere a browser tab target is needed. Thanks @steipete.
+- Browser/tool: bundle a `browser-automation` skill with the multi-step snapshot, stable-tab, stale-ref, and manual-blocker loop for agent-controlled pages. Thanks @steipete.
 - Plugins/Google Meet: use browser automation to classify and clear Meet's microphone-choice interstitial during browser meeting creation, and reuse in-progress create tabs on retry instead of opening duplicates. Thanks @steipete.
 - Codex/GPT-5.4: harden fallback, auth-profile, tool-schema, and replay edge cases across native and embedded runtime paths. (#70743) Thanks @100yenadmin.
 - Models/fallback: resolve bare fallback model provider ids before model switching, so configured fallback chains keep working when a fallback is named without an explicit provider prefix. Thanks @steipete.

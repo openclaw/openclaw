@@ -23,6 +23,9 @@ Beginner view:
 - A separate browser profile named **openclaw** (orange accent by default).
 - Deterministic tab control (list/open/focus/close).
 - Agent actions (click/type/drag/select), snapshots, screenshots, PDFs.
+- A bundled `browser-automation` skill that teaches agents the snapshot,
+  stable-tab, stale-ref, and manual-blocker recovery loop when the browser
+  plugin is enabled.
 - Optional multi-profile support (`openclaw`, `work`, `remote`, ...).
 
 This browser is **not** your daily driver. It is a safe, isolated surface for
@@ -62,6 +65,22 @@ The default `browser` tool is a bundled plugin. Disable it to replace it with an
 Defaults need both `plugins.entries.browser.enabled` **and** `browser.enabled=true`. Disabling only the plugin removes the `openclaw browser` CLI, `browser.request` gateway method, agent tool, and control service as one unit; your `browser.*` config stays intact for a replacement.
 
 Browser config changes require a Gateway restart so the plugin can re-register its service.
+
+## Agent guidance
+
+The browser plugin ships two levels of agent guidance:
+
+- The `browser` tool description carries the compact always-on contract: pick
+  the right profile, keep refs on the same tab, use `tabId`/labels for tab
+  targeting, and load the browser skill for multi-step work.
+- The bundled `browser-automation` skill carries the longer operating loop:
+  check status/tabs first, label task tabs, snapshot before acting, resnapshot
+  after UI changes, recover stale refs once, and report login/2FA/captcha or
+  camera/microphone blockers as manual action instead of guessing.
+
+Plugin-bundled skills are listed in the agent's available skills when the
+plugin is enabled. The full skill instructions are loaded on demand, so routine
+turns do not pay the full token cost.
 
 ## Missing browser command or tool
 
@@ -494,7 +513,8 @@ Compared to the managed `openclaw` profile, existing-session drivers are more co
 
 - **Dedicated user data dir**: never touches your personal browser profile.
 - **Dedicated ports**: avoids `9222` to prevent collisions with dev workflows.
-- **Deterministic tab control**: target tabs by `targetId`, not “last tab”.
+- **Deterministic tab control**: target tabs by raw `targetId`, stable `tabId`
+  handles such as `t1`, or labels you assign with `open --label` / `tab label`.
 
 ## Browser selection
 
