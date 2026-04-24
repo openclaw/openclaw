@@ -73,7 +73,7 @@ function createProfileContext(
     profileState.running = running;
   };
 
-  const { listTabs, openTab } = createProfileTabOps({
+  const { listTabs, openTab, labelTab } = createProfileTabOps({
     profile,
     state,
     getProfileState,
@@ -113,6 +113,7 @@ function createProfileContext(
     isReachable,
     listTabs,
     openTab,
+    labelTab,
     focusTab,
     closeTab,
     stopRunningBrowser,
@@ -252,7 +253,8 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
     isHttpReachable: (timeoutMs) => getDefaultContext().isHttpReachable(timeoutMs),
     isReachable: (timeoutMs) => getDefaultContext().isReachable(timeoutMs),
     listTabs: () => getDefaultContext().listTabs(),
-    openTab: (url) => getDefaultContext().openTab(url),
+    openTab: (url, opts) => getDefaultContext().openTab(url, opts),
+    labelTab: (targetId, label) => getDefaultContext().labelTab(targetId, label),
     focusTab: (targetId) => getDefaultContext().focusTab(targetId),
     closeTab: (targetId) => getDefaultContext().closeTab(targetId),
     stopRunningBrowser: () => getDefaultContext().stopRunningBrowser(),

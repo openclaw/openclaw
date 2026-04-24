@@ -121,6 +121,11 @@ function parseRequiredTargetId(res: BrowserResponse, rawTargetId: unknown): stri
   return targetId;
 }
 
+function readOptionalTabLabel(body: unknown): string | undefined {
+  const label = toStringOrEmpty((body as { label?: unknown })?.label);
+  return label || undefined;
+}
+
 async function runTabTargetMutation(params: {
   req: BrowserRequest;
   res: BrowserResponse;
@@ -170,6 +175,7 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
     "/tabs/open",
     asyncBrowserRoute(async (req, res) => {
       const url = toStringOrEmpty((req.body as { url?: unknown })?.url);
+      const label = readOptionalTabLabel(req.body);
       if (!url) {
         return jsonError(res, 400, "url is required");
       }
@@ -185,7 +191,7 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
             ...withBrowserNavigationPolicy(ctx.state().resolved.ssrfPolicy),
           });
           await profileCtx.ensureBrowserAvailable();
-          const tab = await profileCtx.openTab(url);
+          const tab = await profileCtx.openTab(url, { label });
           res.json(tab);
         },
       });
@@ -275,7 +281,28 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
 
           if (action === "new") {
             await profileCtx.ensureBrowserAvailable();
-            const tab = await profileCtx.openTab("about:blank");
+            const tab = await profileCtx.openTab("about:blank", {
+              label: readOptionalTabLabel(req.body),
+            });
+            return res.json({ ok: true, tab });
+          }
+
+          if (action === "label") {
+            if (!(await ensureBrowserRunning(profileCtx, res))) {
+              return;
+            }
+            const targetId = parseRequiredTargetId(
+              res,
+              (req.body as { targetId?: unknown })?.targetId,
+            );
+            if (!targetId) {
+              return;
+            }
+            const label = readOptionalTabLabel(req.body);
+            if (!label) {
+              return jsonError(res, 400, "label is required");
+            }
+            const tab = await profileCtx.labelTab(targetId, label);
             return res.json({ ok: true, tab });
           }
 

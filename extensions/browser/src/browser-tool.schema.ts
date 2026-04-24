@@ -93,6 +93,7 @@ export const BrowserToolSchema = Type.Object({
   targetUrl: Type.Optional(Type.String()),
   url: Type.Optional(Type.String()),
   targetId: Type.Optional(Type.String()),
+  label: Type.Optional(Type.String()),
   limit: Type.Optional(Type.Number()),
   maxChars: Type.Optional(Type.Number()),
   mode: optionalStringEnum(BROWSER_SNAPSHOT_MODES),
