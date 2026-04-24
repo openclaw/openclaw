@@ -378,8 +378,83 @@ describe("setup-registry getJiti", () => {
       cliBackends: [],
       configMigrations: [],
       autoEnableProbes: [],
+      diagnostics: [],
     });
     expect(mocks.createJiti).not.toHaveBeenCalled();
+  });
+
+  it("reports setup descriptor drift without rejecting runtime registrations", () => {
+    const pluginRoot = makeTempDir();
+    fs.writeFileSync(path.join(pluginRoot, "setup-api.js"), "export default {};\n", "utf-8");
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "openai",
+          rootDir: pluginRoot,
+          setup: {
+            providers: [{ id: "openai" }],
+            cliBackends: ["codex-cli"],
+            requiresRuntime: true,
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+    mocks.createJiti.mockImplementation(() => {
+      return () => ({
+        default: {
+          register(api: {
+            registerProvider: (provider: { id: string; label: string; auth: [] }) => void;
+            registerCliBackend: (backend: { id: string; config: { command: string } }) => void;
+          }) {
+            api.registerProvider({
+              id: "anthropic",
+              label: "Anthropic",
+              auth: [],
+            });
+            api.registerCliBackend({
+              id: "claude-cli",
+              config: { command: "claude" },
+            });
+          },
+        },
+      });
+    });
+
+    const registry = resolvePluginSetupRegistry({ env: {} });
+
+    expect(registry.providers.map((entry) => entry.provider.id)).toEqual(["anthropic"]);
+    expect(registry.cliBackends.map((entry) => entry.backend.id)).toEqual(["claude-cli"]);
+    expect(registry.diagnostics).toEqual([
+      expect.objectContaining({
+        pluginId: "openai",
+        code: "setup-descriptor-provider-missing-runtime",
+        declaredId: "openai",
+      }),
+      expect.objectContaining({
+        pluginId: "openai",
+        code: "setup-descriptor-provider-runtime-undeclared",
+        runtimeId: "anthropic",
+      }),
+      expect.objectContaining({
+        pluginId: "openai",
+        code: "setup-descriptor-cli-backend-missing-runtime",
+        declaredId: "codex-cli",
+      }),
+      expect.objectContaining({
+        pluginId: "openai",
+        code: "setup-descriptor-cli-backend-runtime-undeclared",
+        runtimeId: "claude-cli",
+      }),
+    ]);
+  });
+
+  it("does not report drift when setup descriptors match runtime registrations", () => {
+    mockOpenAiCliBackendRegistration({
+      requiresRuntime: true,
+    });
+
+    expect(resolvePluginSetupRegistry({ env: {} }).diagnostics).toEqual([]);
   });
 
   it("does not load setup-api modules from the current working directory", () => {

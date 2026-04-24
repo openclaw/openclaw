@@ -338,6 +338,11 @@ Because setup lookup can execute plugin-owned `setup-api` code, normalized
 discovered plugins. Ambiguous ownership fails closed instead of picking a
 winner from discovery order.
 
+When setup runtime does execute, setup registry diagnostics report descriptor
+drift if `setup-api` registers a provider or CLI backend that the manifest
+descriptors do not declare, or if a descriptor has no matching runtime
+registration. These diagnostics are additive and do not reject legacy plugins.
+
 ### setup.providers reference
 
 | Field         | Required | Type       | What it means                                                                        |
