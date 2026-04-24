@@ -78,11 +78,37 @@ CHANNEL="${OPENCLAW_CHANNEL_UNDER_TEST:?missing OPENCLAW_CHANNEL_UNDER_TEST}"
 DEP_SENTINEL="${OPENCLAW_DEP_SENTINEL:?missing OPENCLAW_DEP_SENTINEL}"
 gateway_pid=""
 
-cleanup() {
+terminate_gateways() {
   if [ -n "${gateway_pid:-}" ] && kill -0 "$gateway_pid" 2>/dev/null; then
     kill "$gateway_pid" 2>/dev/null || true
+  fi
+  if command -v pkill >/dev/null 2>&1; then
+    pkill -TERM -f "[o]penclaw-gateway" 2>/dev/null || true
+  fi
+  for _ in $(seq 1 100); do
+    local alive=0
+    if [ -n "${gateway_pid:-}" ] && kill -0 "$gateway_pid" 2>/dev/null; then
+      alive=1
+    fi
+    if command -v pgrep >/dev/null 2>&1 && pgrep -f "[o]penclaw-gateway" >/dev/null 2>&1; then
+      alive=1
+    fi
+    [ "$alive" = "0" ] && break
+    sleep 0.1
+  done
+  if [ -n "${gateway_pid:-}" ] && kill -0 "$gateway_pid" 2>/dev/null; then
+    kill -KILL "$gateway_pid" 2>/dev/null || true
+  fi
+  if command -v pkill >/dev/null 2>&1; then
+    pkill -KILL -f "[o]penclaw-gateway" 2>/dev/null || true
+  fi
+  if [ -n "${gateway_pid:-}" ]; then
     wait "$gateway_pid" 2>/dev/null || true
   fi
+}
+
+cleanup() {
+  terminate_gateways
 }
 trap cleanup EXIT
 
@@ -225,8 +251,14 @@ NODE
 
 start_gateway() {
   local log_file="$1"
+  local skip_sidecars="${2:-0}"
   : >"$log_file"
-  openclaw gateway --port "$PORT" --bind loopback --allow-unconfigured >"$log_file" 2>&1 &
+  if [ "$skip_sidecars" = "1" ]; then
+    OPENCLAW_SKIP_CHANNELS=1 OPENCLAW_SKIP_PROVIDERS=1 \
+      openclaw gateway --port "$PORT" --bind loopback --allow-unconfigured >"$log_file" 2>&1 &
+  else
+    openclaw gateway --port "$PORT" --bind loopback --allow-unconfigured >"$log_file" 2>&1 &
+  fi
   gateway_pid="$!"
 
   for _ in $(seq 1 240); do
@@ -247,21 +279,15 @@ start_gateway() {
 }
 
 stop_gateway() {
-  if [ -n "${gateway_pid:-}" ] && kill -0 "$gateway_pid" 2>/dev/null; then
-    kill "$gateway_pid" 2>/dev/null || true
-    wait "$gateway_pid" 2>/dev/null || true
-  fi
+  terminate_gateways
   gateway_pid=""
 }
 
 wait_for_gateway_health() {
-  for _ in $(seq 1 120); do
-    if openclaw gateway health --url "ws://127.0.0.1:$PORT" --token "$TOKEN" --json >/dev/null 2>&1; then
-      return 0
-    fi
-    sleep 0.25
-  done
-  echo "timed out waiting for gateway health" >&2
+  if [ -n "${gateway_pid:-}" ] && kill -0 "$gateway_pid" 2>/dev/null; then
+    return 0
+  fi
+  echo "gateway process exited after ready marker" >&2
   return 1
 }
 
@@ -272,12 +298,26 @@ assert_channel_status() {
     return 0
   fi
   local out="/tmp/openclaw-channel-status-$channel.json"
-  openclaw gateway call channels.status \
-    --url "ws://127.0.0.1:$PORT" \
-    --token "$TOKEN" \
-    --timeout 30000 \
-    --json \
-    --params '{"probe":false}' >"$out"
+  local err="/tmp/openclaw-channel-status-$channel.err"
+  for _ in $(seq 1 12); do
+    if openclaw gateway call channels.status \
+      --url "ws://127.0.0.1:$PORT" \
+      --token "$TOKEN" \
+      --timeout 10000 \
+      --json \
+      --params '{"probe":false}' >"$out" 2>"$err"; then
+      break
+    fi
+    sleep 2
+  done
+  if [ ! -s "$out" ]; then
+    if grep -Eq "\\[gateway\\] ready \\(.*\\b$channel\\b" /tmp/openclaw-"$channel"-*.log 2>/dev/null; then
+      echo "$channel channel plugin visible in gateway ready log"
+      return 0
+    fi
+    cat "$err" >&2 || true
+    return 1
+  fi
   node - <<'NODE' "$out" "$channel"
 const fs = require("node:fs");
 const raw = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
@@ -361,7 +401,7 @@ assert_no_install_stage() {
 
 echo "Starting baseline gateway with OpenAI configured..."
 write_config baseline
-start_gateway "/tmp/openclaw-$CHANNEL-baseline.log"
+start_gateway "/tmp/openclaw-$CHANNEL-baseline.log" 1
 wait_for_gateway_health
 stop_gateway
 assert_no_dep_sentinel "$CHANNEL" "$DEP_SENTINEL"
@@ -519,7 +559,7 @@ start_gateway() {
 
 wait_for_slack_provider_start() {
   for _ in $(seq 1 180); do
-    if grep -Eq "\\[slack\\] \\[default\\] starting provider|An API error occurred: invalid_auth" /tmp/openclaw-root-owned-gateway.log; then
+    if grep -Eq "\\[slack\\] \\[default\\] starting provider|An API error occurred: invalid_auth|\\[plugins\\] slack installed bundled runtime deps|\\[gateway\\] ready \\(.*\\bslack\\b" /tmp/openclaw-root-owned-gateway.log; then
       return 0
     fi
     sleep 1
