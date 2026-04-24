@@ -78,7 +78,8 @@ describe("Pi transcript repair runtime contract", () => {
     expect(result.removeLeaf).toBe(true);
     expect(result.prompt).toContain("please inspect this inline image");
     expect(result.prompt).toContain("[image_url] inline data URI (image/png, 4118 chars)");
-    expect(result.prompt).not.toContain("base64");
+    expect(result.prompt).not.toContain("data:");
+    expect(result.prompt).not.toContain("data:image/png;base64,");
     expect(result.prompt).not.toContain("aaaa");
   });
 
@@ -99,7 +100,7 @@ describe("Pi transcript repair runtime contract", () => {
   });
 
   it("allows the active transcript repair strategy to be replaced for adapter contracts", () => {
-    const mergeOrphanedTrailingUserPrompt = vi.fn((params: { prompt: string }) => ({
+    const mergeOrphanedTrailingUserPromptSpy = vi.fn((params: { prompt: string }) => ({
       prompt: `custom strategy: ${params.prompt}`,
       merged: false,
       removeLeaf: false,
@@ -107,7 +108,7 @@ describe("Pi transcript repair runtime contract", () => {
 
     restoreStrategy = registerMessageMergeStrategyForTest({
       id: DEFAULT_MESSAGE_MERGE_STRATEGY_ID,
-      mergeOrphanedTrailingUserPrompt,
+      mergeOrphanedTrailingUserPrompt: mergeOrphanedTrailingUserPromptSpy,
     });
 
     const result = resolveMessageMergeStrategy().mergeOrphanedTrailingUserPrompt({
@@ -116,7 +117,7 @@ describe("Pi transcript repair runtime contract", () => {
       leafMessage: textOrphanLeaf("queued via custom strategy"),
     });
 
-    expect(mergeOrphanedTrailingUserPrompt).toHaveBeenCalledWith({
+    expect(mergeOrphanedTrailingUserPromptSpy).toHaveBeenCalledWith({
       prompt: "newest inbound message",
       trigger: "manual",
       leafMessage: textOrphanLeaf("queued via custom strategy"),
