@@ -1063,6 +1063,17 @@ function installPluginRuntimeDepsWithRetries(params) {
       if (attempt === attempts) {
         break;
       }
+      // Back off before retrying. Plugin staging failures are often transient
+      // filesystem races — for example npm's internal rmdir hitting ENOTEMPTY
+      // on a shared transitive dep (bare-os/prebuilds) while a concurrent
+      // install pass has the directory momentarily non-empty. Without a delay
+      // the immediate retry tends to hit the same state and fails again,
+      // exhausting all attempts on what is really a recoverable race.
+      const delayIndex = Math.min(attempt - 1, TEMP_REMOVE_RETRY_DELAYS_MS.length - 1);
+      const delay = TEMP_REMOVE_RETRY_DELAYS_MS[delayIndex];
+      if (delay !== undefined && delay > 0) {
+        sleepSync(delay);
+      }
     }
   }
   throw lastError;
