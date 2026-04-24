@@ -135,11 +135,11 @@ is skipped when a candidate contains redacted secret placeholders such as `***`.
         defaults: {
           model: {
             primary: "anthropic/claude-sonnet-4-6",
-            fallbacks: ["openai/gpt-5.5"],
+            fallbacks: ["openai/gpt-5.4"],
           },
           models: {
             "anthropic/claude-sonnet-4-6": { alias: "Sonnet" },
-            "openai/gpt-5.5": { alias: "GPT" },
+            "openai/gpt-5.4": { alias: "GPT" },
           },
         },
       },

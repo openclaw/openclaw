@@ -1147,6 +1147,7 @@
                     "group": "SDK Reference",
                     "pages": [
                       "plugins/sdk-overview",
+                      "plugins/sdk-subpaths",
                       "plugins/sdk-entrypoints",
                       "plugins/sdk-runtime",
                       "plugins/sdk-agent-harness",
@@ -1189,6 +1190,7 @@
                   "tools/diffs",
                   "tools/elevated",
                   "tools/exec-approvals",
+                  "tools/exec-approvals-advanced",
                   "tools/exec",
                   "tools/image-generation",
                   "tools/llm-task",

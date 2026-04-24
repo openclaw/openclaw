@@ -652,3 +652,9 @@ surface unless you are maintaining that bundled plugin family directly.
 - [SDK Overview](/plugins/sdk-overview) — full subpath import reference
 - [SDK Testing](/plugins/sdk-testing) — test utilities and contract tests
 - [Plugin Manifest](/plugins/manifest) — full manifest schema
+
+## Related
+
+- [Plugin SDK setup](/plugins/sdk-setup)
+- [Building plugins](/plugins/building-plugins)
+- [Agent harness plugins](/plugins/sdk-agent-harness)

@@ -656,20 +656,29 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   </Accordion>
 
   <Accordion title="How does Codex auth work?">
-    OpenClaw supports **OpenAI Code (Codex)** via OAuth (ChatGPT sign-in). New model refs should use the canonical `openai/gpt-5.5` path; `openai-codex/gpt-*` remains a legacy compatibility alias. See [Model providers](/concepts/model-providers) and [Onboarding (CLI)](/start/wizard).
+    OpenClaw supports **OpenAI Code (Codex)** via OAuth (ChatGPT sign-in). Use
+    `openai-codex/gpt-5.5` for Codex OAuth through the default PI runner. Use
+    `openai/gpt-5.4` for current direct OpenAI API-key access. GPT-5.5 direct
+    API-key access is supported once OpenAI enables it on the public API; today
+    GPT-5.5 uses subscription/OAuth via `openai-codex/gpt-5.5` or native Codex
+    app-server runs with `openai/gpt-5.5` and `embeddedHarness.runtime: "codex"`.
+    See [Model providers](/concepts/model-providers) and [Onboarding (CLI)](/start/wizard).
   </Accordion>
 
   <Accordion title="Why does OpenClaw still mention openai-codex?">
-    `openai-codex` is still the internal auth/profile provider id for ChatGPT/Codex OAuth. The model ref should be canonical OpenAI:
+    `openai-codex` is the provider and auth-profile id for ChatGPT/Codex OAuth.
+    It is also the explicit PI model prefix for Codex OAuth:
 
-    - `openai/gpt-5.5` = canonical GPT-5.5 model ref
-    - `openai-codex/gpt-5.5` = legacy compatibility alias
+    - `openai/gpt-5.4` = current direct OpenAI API-key route in PI
+    - `openai/gpt-5.5` = future direct API-key route once OpenAI enables GPT-5.5 on the API
+    - `openai-codex/gpt-5.5` = Codex OAuth route in PI
+    - `openai/gpt-5.5` + `embeddedHarness.runtime: "codex"` = native Codex app-server route
     - `openai-codex:...` = auth profile id, not a model ref
 
     If you want the direct OpenAI Platform billing/limit path, set
     `OPENAI_API_KEY`. If you want ChatGPT/Codex subscription auth, sign in with
-    `openclaw models auth login --provider openai-codex` and keep model refs on
-    `openai/*` in new configs.
+    `openclaw models auth login --provider openai-codex` and use
+    `openai-codex/*` model refs for PI runs.
 
   </Accordion>
 
@@ -2218,7 +2227,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
     agents.defaults.model.primary
     ```
 
-    Models are referenced as `provider/model` (example: `openai/gpt-5.5`). If you omit the provider, OpenClaw first tries an alias, then a unique configured-provider match for that exact model id, and only then falls back to the configured default provider as a deprecated compatibility path. If that provider no longer exposes the configured default model, OpenClaw falls back to the first configured provider/model instead of surfacing a stale removed-provider default. You should still **explicitly** set `provider/model`.
+    Models are referenced as `provider/model` (example: `openai/gpt-5.4` or `openai-codex/gpt-5.5`). If you omit the provider, OpenClaw first tries an alias, then a unique configured-provider match for that exact model id, and only then falls back to the configured default provider as a deprecated compatibility path. If that provider no longer exposes the configured default model, OpenClaw falls back to the first configured provider/model instead of surfacing a stale removed-provider default. You should still **explicitly** set `provider/model`.
 
   </Accordion>
 
@@ -2343,9 +2352,12 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   <Accordion title="Can I use GPT 5.5 for daily tasks and Codex 5.5 for coding?">
     Yes. Set one as default and switch as needed:
 
-    - **Quick switch (per session):** `/model gpt-5.5` for daily tasks, or keep the same model and switch auth/profile as needed.
-    - **Default:** set `agents.defaults.model.primary` to `openai/gpt-5.5`.
+    - **Quick switch (per session):** `/model openai/gpt-5.4` for current direct OpenAI API-key tasks or `/model openai-codex/gpt-5.5` for GPT-5.5 Codex OAuth tasks.
+    - **Default:** set `agents.defaults.model.primary` to `openai/gpt-5.4` for API-key usage or `openai-codex/gpt-5.5` for GPT-5.5 Codex OAuth usage.
     - **Sub-agents:** route coding tasks to sub-agents with a different default model.
+
+    Direct API-key access for `openai/gpt-5.5` is supported once OpenAI enables
+    GPT-5.5 on the public API. Until then GPT-5.5 is subscription/OAuth-only.
 
     See [Models](/concepts/models) and [Slash commands](/tools/slash-commands).
 
@@ -2354,9 +2366,8 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   <Accordion title="How do I configure fast mode for GPT 5.5?">
     Use either a session toggle or a config default:
 
-    - **Per session:** send `/fast on` while the session is using `openai/gpt-5.5`.
-    - **Per model default:** set `agents.defaults.models["openai/gpt-5.5"].params.fastMode` to `true`.
-    - **Legacy aliases:** older `openai-codex/gpt-*` entries can keep their own params, but new configs should put params on `openai/gpt-*`.
+    - **Per session:** send `/fast on` while the session is using `openai/gpt-5.4` or `openai-codex/gpt-5.5`.
+    - **Per model default:** set `agents.defaults.models["openai/gpt-5.4"].params.fastMode` or `agents.defaults.models["openai-codex/gpt-5.5"].params.fastMode` to `true`.
 
     Example:
 
@@ -2365,7 +2376,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
       agents: {
         defaults: {
           models: {
-            "openai/gpt-5.5": {
+            "openai/gpt-5.4": {
               params: {
                 fastMode: true,
               },
@@ -2436,7 +2447,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
           model: { primary: "minimax/MiniMax-M2.7" },
           models: {
             "minimax/MiniMax-M2.7": { alias: "minimax" },
-            "openai/gpt-5.5": { alias: "gpt" },
+            "openai/gpt-5.4": { alias: "gpt" },
           },
         },
       },
@@ -2464,7 +2475,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 
     - `opus` → `anthropic/claude-opus-4-6`
     - `sonnet` → `anthropic/claude-sonnet-4-6`
-    - `gpt` → `openai/gpt-5.5`
+    - `gpt` → `openai/gpt-5.4` for API-key setups, or `openai-codex/gpt-5.5` when configured for Codex OAuth
     - `gpt-mini` → `openai/gpt-5.4-mini`
     - `gpt-nano` → `openai/gpt-5.4-nano`
     - `gemini` → `google/gemini-3.1-pro-preview`

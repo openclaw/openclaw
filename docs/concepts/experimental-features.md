@@ -43,3 +43,8 @@ If a feature is experimental, OpenClaw should say so plainly in docs and in the
 config path itself. What it should **not** do is smuggle preview behavior into a
 stable-looking default knob and pretend that is normal. That's how config
 surfaces get messy.
+
+## Related
+
+- [Features](/concepts/features)
+- [Release channels](/install/development-channels)

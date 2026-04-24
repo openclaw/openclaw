@@ -6,8 +6,6 @@ read_when:
 title: "Control UI"
 ---
 
-# Control UI (browser)
-
 The Control UI is a small **Vite + Lit** single-page app served by the Gateway:
 
 - default: `http://<host>:18789/`

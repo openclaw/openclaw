@@ -481,7 +481,7 @@ Notes:
 | `/acp close`         | Close session and unbind thread targets.                  | `/acp close`                                                  |
 | `/acp status`        | Show backend, mode, state, runtime options, capabilities. | `/acp status`                                                 |
 | `/acp set-mode`      | Set runtime mode for target session.                      | `/acp set-mode plan`                                          |
-| `/acp set`           | Generic runtime config option write.                      | `/acp set model openai/gpt-5.5`                               |
+| `/acp set`           | Generic runtime config option write.                      | `/acp set model openai/gpt-5.4`                               |
 | `/acp cwd`           | Set runtime working directory override.                   | `/acp cwd /Users/user/Projects/repo`                          |
 | `/acp permissions`   | Set approval policy profile.                              | `/acp permissions strict`                                     |
 | `/acp timeout`       | Set runtime timeout (seconds).                            | `/acp timeout 120`                                            |
@@ -800,3 +800,9 @@ Restart the gateway after changing these values.
 | `AcpRuntimeError: Permission prompt unavailable in non-interactive mode`    | `permissionMode` blocks writes/exec in non-interactive ACP session.             | Set `plugins.entries.acpx.config.permissionMode` to `approve-all` and restart gateway. See [Permission configuration](#permission-configuration).                 |
 | ACP session fails early with little output                                  | Permission prompts are blocked by `permissionMode`/`nonInteractivePermissions`. | Check gateway logs for `AcpRuntimeError`. For full permissions, set `permissionMode=approve-all`; for graceful degradation, set `nonInteractivePermissions=deny`. |
 | ACP session stalls indefinitely after completing work                       | Harness process finished but ACP session did not report completion.             | Monitor with `ps aux \| grep acpx`; kill stale processes manually.                                                                                                |
+
+## Related
+
+- [Sub-agents](/tools/subagents)
+- [Multi-agent sandbox tools](/tools/multi-agent-sandbox-tools)
+- [Agent send](/tools/agent-send)

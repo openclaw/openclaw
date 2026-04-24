@@ -156,7 +156,7 @@ read_when:
         "defaults": {
           "model": {
             "primary": "anthropic/claude-opus-4-6",
-            "fallbacks": ["anthropic/claude-sonnet-4-6", "openai/gpt-5.5"]
+            "fallbacks": ["anthropic/claude-sonnet-4-6", "openai/gpt-5.4"]
           },
           "maxConcurrent": 4
         },

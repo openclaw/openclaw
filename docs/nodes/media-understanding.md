@@ -222,11 +222,11 @@ If you omit `capabilities`, the entry is eligible for the list it appears in.
 
 ## Provider support matrix (OpenClaw integrations)
 
-| Capability | Provider integration                                                                   | Notes                                                                                                                                    |
-| ---------- | -------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| Image      | OpenAI, OpenRouter, Anthropic, Google, MiniMax, Moonshot, Qwen, Z.AI, config providers | Vendor plugins register image support; MiniMax and MiniMax OAuth both use `MiniMax-VL-01`; image-capable config providers auto-register. |
-| Audio      | OpenAI, Groq, Deepgram, Google, Mistral                                                | Provider transcription (Whisper/Deepgram/Gemini/Voxtral).                                                                                |
-| Video      | Google, Qwen, Moonshot                                                                 | Provider video understanding via vendor plugins; Qwen video understanding uses the Standard DashScope endpoints.                         |
+| Capability | Provider integration                                                                                                         | Notes                                                                                                                                                                                                                                   |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Image      | OpenAI, OpenAI Codex OAuth, Codex app-server, OpenRouter, Anthropic, Google, MiniMax, Moonshot, Qwen, Z.AI, config providers | Vendor plugins register image support; `openai-codex/*` uses OAuth provider plumbing; `codex/*` uses a bounded Codex app-server turn; MiniMax and MiniMax OAuth both use `MiniMax-VL-01`; image-capable config providers auto-register. |
+| Audio      | OpenAI, Groq, Deepgram, Google, Mistral                                                                                      | Provider transcription (Whisper/Deepgram/Gemini/Voxtral).                                                                                                                                                                               |
+| Video      | Google, Qwen, Moonshot                                                                                                       | Provider video understanding via vendor plugins; Qwen video understanding uses the Standard DashScope endpoints.                                                                                                                        |
 
 MiniMax note:
 
@@ -422,7 +422,7 @@ File-attachment extraction behavior:
 When media understanding runs, `/status` includes a short summary line:
 
 ```
-📎 Media: image ok (openai/gpt-5.5) · audio skipped (maxBytes)
+📎 Media: image ok (openai/gpt-5.4) · audio skipped (maxBytes)
 ```
 
 This shows per‑capability outcomes and the chosen provider/model when applicable.

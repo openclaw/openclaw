@@ -478,6 +478,62 @@ describe("createImageGenerateTool", () => {
     expect(text).toContain("MEDIA:/tmp/generated-2.png");
   });
 
+  it("forwards output hints and OpenAI provider options", async () => {
+    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
+      provider: "openai",
+      model: "gpt-image-2",
+      attempts: [],
+      ignoredOverrides: [],
+      images: [
+        {
+          buffer: Buffer.from("jpg-out"),
+          mimeType: "image/jpeg",
+          fileName: "preview.jpg",
+        },
+      ],
+    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
+      path: "/tmp/generated.jpg",
+      id: "generated.jpg",
+      size: 5,
+      contentType: "image/jpeg",
+    });
+
+    const tool = createToolWithPrimaryImageModel("openai/gpt-image-2");
+    const result = await tool.execute("call-openai-hints", {
+      prompt: "Cheap preview",
+      quality: "low",
+      outputFormat: "jpeg",
+      openai: {
+        background: "opaque",
+        moderation: "low",
+        outputCompression: 60,
+        user: "end-user-42",
+      },
+    });
+
+    expect(generateImage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        quality: "low",
+        outputFormat: "jpeg",
+        providerOptions: {
+          openai: {
+            background: "opaque",
+            moderation: "low",
+            outputCompression: 60,
+            user: "end-user-42",
+          },
+        },
+      }),
+    );
+    expect(result).toMatchObject({
+      details: {
+        quality: "low",
+        outputFormat: "jpeg",
+      },
+    });
+  });
+
   it("includes MEDIA paths in content text so follow-up replies use the real saved file", async () => {
     vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
       {

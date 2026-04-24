@@ -718,3 +718,9 @@ providers:
 - [SDK Runtime](/plugins/sdk-runtime) — `api.runtime` helpers (TTS, search, subagent)
 - [SDK Overview](/plugins/sdk-overview) — full subpath import reference
 - [Plugin Internals](/plugins/architecture#provider-runtime-hooks) — hook details and bundled examples
+
+## Related
+
+- [Plugin SDK setup](/plugins/sdk-setup)
+- [Building plugins](/plugins/building-plugins)
+- [Building channel plugins](/plugins/sdk-channel-plugins)

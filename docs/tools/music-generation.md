@@ -125,6 +125,7 @@ Direct generation example:
 | `image`           | string   | Single reference image path or URL                                                                |
 | `images`          | string[] | Multiple reference images (up to 10)                                                              |
 | `durationSeconds` | number   | Target duration in seconds when the provider supports duration hints                              |
+| `timeoutMs`       | number   | Optional provider request timeout in milliseconds                                                 |
 | `format`          | string   | Output format hint (`mp3` or `wav`) when the provider supports it                                 |
 | `filename`        | string   | Output filename hint                                                                              |
 

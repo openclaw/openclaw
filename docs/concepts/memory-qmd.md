@@ -185,3 +185,9 @@ cycle-safe traversal or explicit exclusion controls.
 For the full config surface (`memory.qmd.*`), search modes, update intervals,
 scope rules, and all other knobs, see the
 [Memory configuration reference](/reference/memory-config).
+
+## Related
+
+- [Memory overview](/concepts/memory)
+- [Builtin memory engine](/concepts/memory-builtin)
+- [Honcho memory](/concepts/memory-honcho)

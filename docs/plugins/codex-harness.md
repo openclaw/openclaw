@@ -37,15 +37,32 @@ the harness for compatibility.
 
 ## Pick the right model prefix
 
-OpenClaw now keeps OpenAI GPT model refs canonical as `openai/*`:
+OpenAI-family routes are prefix-specific. Use `openai-codex/*` when you want
+Codex OAuth through PI; use `openai/*` when you want direct OpenAI API access or
+when you are forcing the native Codex app-server harness:
 
-| Model ref                                             | Runtime path                                 | Use when                                                                |
-| ----------------------------------------------------- | -------------------------------------------- | ----------------------------------------------------------------------- |
-| `openai/gpt-5.5`                                      | OpenAI provider through OpenClaw/PI plumbing | You want direct OpenAI Platform API access with `OPENAI_API_KEY`.       |
-| `openai/gpt-5.5` + `embeddedHarness.runtime: "codex"` | Codex app-server harness                     | You want native Codex app-server execution for the embedded agent turn. |
+| Model ref                                             | Runtime path                                 | Use when                                                                  |
+| ----------------------------------------------------- | -------------------------------------------- | ------------------------------------------------------------------------- |
+| `openai/gpt-5.4`                                      | OpenAI provider through OpenClaw/PI plumbing | You want current direct OpenAI Platform API access with `OPENAI_API_KEY`. |
+| `openai-codex/gpt-5.5`                                | OpenAI Codex OAuth through OpenClaw/PI       | You want ChatGPT/Codex subscription auth with the default PI runner.      |
+| `openai/gpt-5.5` + `embeddedHarness.runtime: "codex"` | Codex app-server harness                     | You want native Codex app-server execution for the embedded agent turn.   |
 
-Legacy `openai-codex/gpt-*` and `codex/gpt-*` refs remain accepted as
-compatibility aliases, but new docs/config examples should use `openai/gpt-*`.
+GPT-5.5 is currently subscription/OAuth-only in OpenClaw. Use
+`openai-codex/gpt-5.5` for PI OAuth, or `openai/gpt-5.5` with the Codex
+app-server harness. Direct API-key access for `openai/gpt-5.5` is supported
+once OpenAI enables GPT-5.5 on the public API.
+
+Legacy `codex/gpt-*` refs remain accepted as compatibility aliases. New PI
+Codex OAuth configs should use `openai-codex/gpt-*`; new native app-server
+harness configs should use `openai/gpt-*` plus `embeddedHarness.runtime:
+"codex"`.
+
+`agents.defaults.imageModel` follows the same prefix split. Use
+`openai-codex/gpt-*` when image understanding should run through the OpenAI
+Codex OAuth provider path. Use `codex/gpt-*` when image understanding should run
+through a bounded Codex app-server turn. The Codex app-server model must
+advertise image input support; text-only Codex models fail before the media turn
+starts.
 
 Use `/status` to confirm the effective harness for the current session. If the
 selection is surprising, enable debug logging for the `agents/harness` subsystem

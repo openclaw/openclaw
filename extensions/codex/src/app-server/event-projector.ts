@@ -10,6 +10,7 @@ import {
   type EmbeddedRunAttemptResult,
   type MessagingToolSend,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { readCodexTurn } from "./protocol-validators.js";
 import {
   isJsonObject,
   type CodexServerNotification,
@@ -797,28 +798,5 @@ function readItem(value: JsonValue | undefined): CodexThreadItem | undefined {
 }
 
 function readTurn(value: JsonValue | undefined): CodexTurn | undefined {
-  if (!isJsonObject(value)) {
-    return undefined;
-  }
-  const id = typeof value.id === "string" ? value.id : undefined;
-  const status = typeof value.status === "string" ? value.status : undefined;
-  if (!id || !status) {
-    return undefined;
-  }
-  const items = Array.isArray(value.items)
-    ? value.items.flatMap((item) => {
-        const parsed = readItem(item);
-        return parsed ? [parsed] : [];
-      })
-    : undefined;
-  return {
-    id,
-    status: status as CodexTurn["status"],
-    error: isJsonObject(value.error)
-      ? {
-          message: typeof value.error.message === "string" ? value.error.message : undefined,
-        }
-      : null,
-    items,
-  };
+  return readCodexTurn(value);
 }

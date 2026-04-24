@@ -7,8 +7,6 @@ read_when:
 title: "Peekaboo bridge"
 ---
 
-# Peekaboo Bridge (macOS UI automation)
-
 OpenClaw can host **PeekabooBridge** as a local, permission‑aware UI automation
 broker. This lets the `peekaboo` CLI drive UI automation while reusing the
 macOS app’s TCC permissions.

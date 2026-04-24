@@ -101,3 +101,9 @@ For embedding provider setup, hybrid search tuning (weights, MMR, temporal
 decay), batch indexing, multimodal memory, sqlite-vec, extra paths, and all
 other config knobs, see the
 [Memory configuration reference](/reference/memory-config).
+
+## Related
+
+- [Memory overview](/concepts/memory)
+- [Memory search](/concepts/memory-search)
+- [Active memory](/concepts/active-memory)

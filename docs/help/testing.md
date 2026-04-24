@@ -315,7 +315,7 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
   - No real keys required
   - Should be fast and stable
     <AccordionGroup>
-    <Accordion title="Projects, shards, and scoped lanes"> - Untargeted `pnpm test` runs twelve smaller shard configs (`core-unit-fast`, `core-unit-src`, `core-unit-security`, `core-unit-ui`, `core-unit-support`, `core-support-boundary`, `core-contracts`, `core-bundled`, `core-runtime`, `agentic`, `auto-reply`, `extensions`) instead of one giant native root-project process. This cuts peak RSS on loaded machines and avoids auto-reply/extension work starving unrelated suites. - `pnpm test --watch` still uses the native root `vitest.config.ts` project graph, because a multi-shard watch loop is not practical. - `pnpm test`, `pnpm test:watch`, and `pnpm test:perf:imports` route explicit file/directory targets through scoped lanes first, so `pnpm test extensions/discord/src/monitor/message-handler.preflight.test.ts` avoids paying the full root project startup tax. - `pnpm test:changed` expands changed git paths into the same scoped lanes when the diff only touches routable source/test files; config/setup edits still fall back to the broad root-project rerun. - `pnpm check:changed` is the normal smart local gate for narrow work. It classifies the diff into core, core tests, extensions, extension tests, apps, docs, release metadata, and tooling, then runs the matching typecheck/lint/test lanes. Public Plugin SDK and plugin-contract changes include extension validation because extensions depend on those core contracts. Release metadata-only version bumps run targeted version/config/root-dependency checks instead of the full suite, with a guard that rejects package changes outside the top-level version field. - Import-light unit tests from agents, commands, plugins, auto-reply helpers, `plugin-sdk`, and similar pure utility areas route through the `unit-fast` lane, which skips `test/setup-openclaw-runtime.ts`; stateful/runtime-heavy files stay on the existing lanes. - Selected `plugin-sdk` and `commands` helper source files also map changed-mode runs to explicit sibling tests in those light lanes, so helper edits avoid rerunning the full heavy suite for that directory. - `auto-reply` has three dedicated buckets: top-level core helpers, top-level `reply.*` integration tests, and the `src/auto-reply/reply/**` subtree. This keeps the heaviest reply harness work off the cheap status/chunk/token tests.
+    <Accordion title="Projects, shards, and scoped lanes"> - Untargeted `pnpm test` runs twelve smaller shard configs (`core-unit-fast`, `core-unit-src`, `core-unit-security`, `core-unit-ui`, `core-unit-support`, `core-support-boundary`, `core-contracts`, `core-bundled`, `core-runtime`, `agentic`, `auto-reply`, `extensions`) instead of one giant native root-project process. This cuts peak RSS on loaded machines and avoids auto-reply/extension work starving unrelated suites. - `pnpm test --watch` still uses the native root `vitest.config.ts` project graph, because a multi-shard watch loop is not practical. - `pnpm test`, `pnpm test:watch`, and `pnpm test:perf:imports` route explicit file/directory targets through scoped lanes first, so `pnpm test extensions/discord/src/monitor/message-handler.preflight.test.ts` avoids paying the full root project startup tax. - `pnpm test:changed` expands changed git paths into the same scoped lanes when the diff only touches routable source/test files; config/setup edits still fall back to the broad root-project rerun. - `pnpm check:changed` is the normal smart local gate for narrow work. It classifies the diff into core, core tests, extensions, extension tests, apps, docs, release metadata, and tooling, then runs the matching typecheck/lint/test lanes. Public Plugin SDK and plugin-contract changes include one extension validation pass because extensions depend on those core contracts. Release metadata-only version bumps run targeted version/config/root-dependency checks instead of the full suite, with a guard that rejects package changes outside the top-level version field. - Import-light unit tests from agents, commands, plugins, auto-reply helpers, `plugin-sdk`, and similar pure utility areas route through the `unit-fast` lane, which skips `test/setup-openclaw-runtime.ts`; stateful/runtime-heavy files stay on the existing lanes. - Selected `plugin-sdk` and `commands` helper source files also map changed-mode runs to explicit sibling tests in those light lanes, so helper edits avoid rerunning the full heavy suite for that directory. - `auto-reply` has three dedicated buckets: top-level core helpers, top-level `reply.*` integration tests, and the `src/auto-reply/reply/**` subtree. This keeps the heaviest reply harness work off the cheap status/chunk/token tests.
     </Accordion>
 
       <Accordion title="Embedded runner coverage">
@@ -348,17 +348,11 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
 
       <Accordion title="Fast local iteration">
         - `pnpm changed:lanes` shows which architectural lanes a diff triggers.
-        - The pre-commit hook runs `pnpm check:changed --staged` after staged
-          formatting/linting, so core-only commits do not pay extension test cost
-          unless they touch public extension-facing contracts. Release
-          metadata-only commits stay on the targeted
-          version/config/root-dependency lane.
-        - If the exact staged change set was already validated with
-          equal-or-stronger gates, use
-          `scripts/committer --fast "<message>" <files...>` to skip only the
-          changed-scope hook rerun. Staged format/lint still run. Mention the
-          completed gates in your handoff. This is also acceptable after an
-          isolated flaky hook failure is rerun and passes with scoped proof.
+        - The pre-commit hook is formatting-only. It restages formatted files and
+          does not run lint, typecheck, or tests.
+        - Run `pnpm check:changed` explicitly before handoff or push when you
+          need the smart local gate. Public Plugin SDK and plugin-contract
+          changes include one extension validation pass.
         - `pnpm test:changed` routes through scoped lanes when the changed paths
           map cleanly to a smaller suite.
         - `pnpm test:max` and `pnpm test:changed:max` keep the same routing
@@ -379,6 +373,10 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
           import-breakdown output.
         - `pnpm test:perf:imports:changed` scopes the same profiling view to
           files changed since `origin/main`.
+        - When one hot test still spends most of its time in startup imports,
+          keep heavy dependencies behind a narrow local `*.runtime.ts` seam and
+          mock that seam directly instead of deep-importing runtime helpers just
+          to pass them through `vi.mock(...)`.
         - `pnpm test:perf:changed:bench -- --ref <git-ref>` compares routed
           `test:changed` against the native root-project path for that committed
           diff and prints wall time plus macOS max RSS.
@@ -512,7 +510,7 @@ Live tests are split into two layers so we can isolate failures:
 - How to select models:
   - `OPENCLAW_LIVE_MODELS=modern` to run the modern allowlist (Opus/Sonnet 4.6+, GPT-5.x + Codex, Gemini 3, GLM 4.7, MiniMax M2.7, Grok 4)
   - `OPENCLAW_LIVE_MODELS=all` is an alias for the modern allowlist
-  - or `OPENCLAW_LIVE_MODELS="openai/gpt-5.5,anthropic/claude-opus-4-6,..."` (comma allowlist)
+  - or `OPENCLAW_LIVE_MODELS="openai/gpt-5.4,openai-codex/gpt-5.5,anthropic/claude-opus-4-6,..."` (comma allowlist)
   - Modern/all sweeps default to a curated high-signal cap; set `OPENCLAW_LIVE_MAX_MODELS=0` for an exhaustive modern sweep or a positive number for a smaller cap.
 - How to select providers:
   - `OPENCLAW_LIVE_PROVIDERS="google,google-antigravity,google-gemini-cli"` (comma allowlist)
@@ -698,8 +696,9 @@ Docker notes:
 - Optional Guardian probe: `OPENCLAW_LIVE_CODEX_HARNESS_GUARDIAN_PROBE=1`
 - The smoke sets `OPENCLAW_AGENT_HARNESS_FALLBACK=none` so a broken Codex
   harness cannot pass by silently falling back to PI.
-- Auth: `OPENAI_API_KEY` from the shell/profile, plus optional copied
-  `~/.codex/auth.json` and `~/.codex/config.toml`
+- Auth: Codex app-server auth from the local Codex subscription login. Docker
+  smokes can also provide `OPENAI_API_KEY` for non-Codex probes when applicable,
+  plus optional copied `~/.codex/auth.json` and `~/.codex/config.toml`.
 
 Local recipe:
 
@@ -740,13 +739,13 @@ Docker notes:
 Narrow, explicit allowlists are fastest and least flaky:
 
 - Single model, direct (no gateway):
-  - `OPENCLAW_LIVE_MODELS="openai/gpt-5.5" pnpm test:live src/agents/models.profiles.live.test.ts`
+  - `OPENCLAW_LIVE_MODELS="openai/gpt-5.4" pnpm test:live src/agents/models.profiles.live.test.ts`
 
 - Single model, gateway smoke:
-  - `OPENCLAW_LIVE_GATEWAY_MODELS="openai/gpt-5.5" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
+  - `OPENCLAW_LIVE_GATEWAY_MODELS="openai/gpt-5.4" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
 
 - Tool calling across several providers:
-  - `OPENCLAW_LIVE_GATEWAY_MODELS="openai/gpt-5.5,anthropic/claude-opus-4-6,google/gemini-3-flash-preview,zai/glm-4.7,minimax/MiniMax-M2.7" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
+  - `OPENCLAW_LIVE_GATEWAY_MODELS="openai/gpt-5.4,openai-codex/gpt-5.5,anthropic/claude-opus-4-6,google/gemini-3-flash-preview,zai/glm-4.7,minimax/MiniMax-M2.7" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
 
 - Google focus (Gemini API key + Antigravity):
   - Gemini (API key): `OPENCLAW_LIVE_GATEWAY_MODELS="google/gemini-3-flash-preview" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
@@ -769,8 +768,8 @@ There is no fixed “CI model list” (live is opt-in), but these are the **reco
 
 This is the “common models” run we expect to keep working:
 
-- OpenAI (non-Codex): `openai/gpt-5.5` (optional: `openai/gpt-5.4-mini`)
-- OpenAI Codex OAuth: `openai/gpt-5.5` (`openai-codex/gpt-*` remains a legacy alias)
+- OpenAI (non-Codex): `openai/gpt-5.4` (optional: `openai/gpt-5.4-mini`)
+- OpenAI Codex OAuth: `openai-codex/gpt-5.5`
 - Anthropic: `anthropic/claude-opus-4-6` (or `anthropic/claude-sonnet-4-6`)
 - Google (Gemini API): `google/gemini-3.1-pro-preview` and `google/gemini-3-flash-preview` (avoid older Gemini 2.x models)
 - Google (Antigravity): `google-antigravity/claude-opus-4-6-thinking` and `google-antigravity/gemini-3-flash`
@@ -778,13 +777,13 @@ This is the “common models” run we expect to keep working:
 - MiniMax: `minimax/MiniMax-M2.7`
 
 Run gateway smoke with tools + image:
-`OPENCLAW_LIVE_GATEWAY_MODELS="openai/gpt-5.5,anthropic/claude-opus-4-6,google/gemini-3.1-pro-preview,google/gemini-3-flash-preview,google-antigravity/claude-opus-4-6-thinking,google-antigravity/gemini-3-flash,zai/glm-4.7,minimax/MiniMax-M2.7" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
+`OPENCLAW_LIVE_GATEWAY_MODELS="openai/gpt-5.4,openai-codex/gpt-5.5,anthropic/claude-opus-4-6,google/gemini-3.1-pro-preview,google/gemini-3-flash-preview,google-antigravity/claude-opus-4-6-thinking,google-antigravity/gemini-3-flash,zai/glm-4.7,minimax/MiniMax-M2.7" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
 
 ### Baseline: tool calling (Read + optional Exec)
 
 Pick at least one per provider family:
 
-- OpenAI: `openai/gpt-5.5` (or `openai/gpt-5.4-mini`)
+- OpenAI: `openai/gpt-5.4` (or `openai/gpt-5.4-mini`)
 - Anthropic: `anthropic/claude-opus-4-6` (or `anthropic/claude-sonnet-4-6`)
 - Google: `google/gemini-3-flash-preview` (or `google/gemini-3.1-pro-preview`)
 - Z.AI (GLM): `zai/glm-4.7`
@@ -869,12 +868,13 @@ If you want to rely on env keys (e.g. exported in your `~/.profile`), run local 
   - `google`
   - `minimax`
   - `openai`
+  - `openrouter`
   - `vydra`
   - `xai`
 - Optional narrowing:
-  - `OPENCLAW_LIVE_IMAGE_GENERATION_PROVIDERS="openai,google,xai"`
-  - `OPENCLAW_LIVE_IMAGE_GENERATION_MODELS="openai/gpt-image-2,google/gemini-3.1-flash-image-preview,xai/grok-imagine-image"`
-  - `OPENCLAW_LIVE_IMAGE_GENERATION_CASES="google:flash-generate,google:pro-edit,xai:default-generate,xai:default-edit"`
+  - `OPENCLAW_LIVE_IMAGE_GENERATION_PROVIDERS="openai,google,openrouter,xai"`
+  - `OPENCLAW_LIVE_IMAGE_GENERATION_MODELS="openai/gpt-image-2,google/gemini-3.1-flash-image-preview,openrouter/google/gemini-3.1-flash-image-preview,xai/grok-imagine-image"`
+  - `OPENCLAW_LIVE_IMAGE_GENERATION_CASES="google:flash-generate,google:pro-edit,openrouter:generate,xai:default-generate,xai:default-edit"`
 - Optional auth behavior:
   - `OPENCLAW_LIVE_REQUIRE_PROFILE_KEYS=1` to force profile-store auth and ignore env-only overrides
 

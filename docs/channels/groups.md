@@ -413,3 +413,10 @@ See [WhatsApp](/channels/whatsapp#system-prompts) for the canonical WhatsApp sys
 ## WhatsApp specifics
 
 See [Group messages](/channels/group-messages) for WhatsApp-only behavior (history injection, mention handling details).
+
+## Related
+
+- [Group messages](/channels/group-messages)
+- [Broadcast groups](/channels/broadcast-groups)
+- [Channel routing](/channels/channel-routing)
+- [Pairing](/channels/pairing)

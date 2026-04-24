@@ -22,6 +22,7 @@ import {
   buildSuppressedBuiltInModelError,
   shouldSuppressBuiltInModel,
 } from "../model-suppression.js";
+import { isLegacyModelsAddCodexMetadataModel } from "../openai-codex-models-add-legacy.js";
 import { discoverAuthStorage, discoverModels } from "../pi-model-discovery.js";
 import {
   attachModelProviderRequestTransport,
@@ -275,6 +276,16 @@ function resolveConfiguredProviderConfig(
   return findNormalizedProviderValue(configuredProviders, provider);
 }
 
+function isModelsAddMetadataModel(params: {
+  provider: string;
+  model: NonNullable<InlineProviderConfig["models"]>[number] | undefined;
+}) {
+  return (
+    (params.model as { metadataSource?: unknown } | undefined)?.metadataSource === "models-add" ||
+    isLegacyModelsAddCodexMetadataModel(params)
+  );
+}
+
 function applyConfiguredProviderOverrides(params: {
   provider: string;
   discoveredModel: ProviderRuntimeModel;
@@ -282,6 +293,7 @@ function applyConfiguredProviderOverrides(params: {
   modelId: string;
   cfg?: OpenClawConfig;
   runtimeHooks?: ProviderRuntimeHooks;
+  preferDiscoveredModelMetadata?: boolean;
 }): ProviderRuntimeModel {
   const { discoveredModel, providerConfig, modelId } = params;
   if (!providerConfig) {
@@ -296,6 +308,11 @@ function applyConfiguredProviderOverrides(params: {
     (discoveredModel.id !== modelId
       ? providerConfig.models?.find((candidate) => candidate.id === discoveredModel.id)
       : undefined);
+  const metadataOverrideModel =
+    params.preferDiscoveredModelMetadata &&
+    isModelsAddMetadataModel({ provider: params.provider, model: configuredModel })
+      ? undefined
+      : configuredModel;
   const discoveredHeaders = sanitizeModelHeaders(discoveredModel.headers, {
     stripSecretRefMarkers: true,
   });
@@ -321,14 +338,14 @@ function applyConfiguredProviderOverrides(params: {
   const normalizedInput = resolveProviderModelInput({
     provider: params.provider,
     modelId,
-    modelName: configuredModel?.name ?? discoveredModel.name,
-    input: configuredModel?.input,
+    modelName: metadataOverrideModel?.name ?? discoveredModel.name,
+    input: metadataOverrideModel?.input,
     fallbackInput: discoveredModel.input,
   });
 
   const resolvedTransport = resolveProviderTransport({
     provider: params.provider,
-    api: configuredModel?.api ?? providerConfig.api ?? discoveredModel.api,
+    api: metadataOverrideModel?.api ?? providerConfig.api ?? discoveredModel.api,
     baseUrl: providerConfig.baseUrl ?? discoveredModel.baseUrl,
     cfg: params.cfg,
     runtimeHooks: params.runtimeHooks,
@@ -353,14 +370,14 @@ function applyConfiguredProviderOverrides(params: {
       ...discoveredModel,
       api: requestConfig.api ?? "openai-responses",
       baseUrl: requestConfig.baseUrl ?? discoveredModel.baseUrl,
-      reasoning: configuredModel?.reasoning ?? discoveredModel.reasoning,
+      reasoning: metadataOverrideModel?.reasoning ?? discoveredModel.reasoning,
       input: normalizedInput,
-      cost: configuredModel?.cost ?? discoveredModel.cost,
-      contextWindow: configuredModel?.contextWindow ?? discoveredModel.contextWindow,
-      contextTokens: configuredModel?.contextTokens ?? discoveredModel.contextTokens,
-      maxTokens: configuredModel?.maxTokens ?? discoveredModel.maxTokens,
+      cost: metadataOverrideModel?.cost ?? discoveredModel.cost,
+      contextWindow: metadataOverrideModel?.contextWindow ?? discoveredModel.contextWindow,
+      contextTokens: metadataOverrideModel?.contextTokens ?? discoveredModel.contextTokens,
+      maxTokens: metadataOverrideModel?.maxTokens ?? discoveredModel.maxTokens,
       headers: requestConfig.headers,
-      compat: configuredModel?.compat ?? discoveredModel.compat,
+      compat: metadataOverrideModel?.compat ?? discoveredModel.compat,
     },
     providerRequest,
   );
@@ -458,6 +475,14 @@ function resolvePluginDynamicModelWithRegistry(params: {
   const { provider, modelId, modelRegistry, cfg, agentDir, workspaceDir } = params;
   const runtimeHooks = params.runtimeHooks ?? DEFAULT_PROVIDER_RUNTIME_HOOKS;
   const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
+  const preferDiscoveredModelMetadata = shouldCompareProviderRuntimeResolvedModel({
+    provider,
+    modelId,
+    cfg,
+    agentDir,
+    workspaceDir,
+    runtimeHooks,
+  });
   const pluginDynamicModel = runtimeHooks.runProviderDynamicModel({
     provider,
     config: cfg,
@@ -481,6 +506,7 @@ function resolvePluginDynamicModelWithRegistry(params: {
     modelId,
     cfg,
     runtimeHooks,
+    preferDiscoveredModelMetadata,
   });
   return normalizeResolvedModel({
     provider,
@@ -593,10 +619,7 @@ function preferProviderRuntimeResolvedModel(params: {
   explicitModel: Model<Api>;
   runtimeResolvedModel?: Model<Api>;
 }): Model<Api> {
-  if (
-    params.runtimeResolvedModel &&
-    params.runtimeResolvedModel.contextWindow > params.explicitModel.contextWindow
-  ) {
+  if (params.runtimeResolvedModel) {
     return params.runtimeResolvedModel;
   }
   return params.explicitModel;

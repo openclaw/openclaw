@@ -6,16 +6,26 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Agents/tools: add optional per-call `timeoutMs` support for image, video, music, and TTS generation tools so agents can extend provider request timeouts only when a specific generation needs it.
 - Agents/subagents: add optional forked context for native `sessions_spawn` runs so agents can let a child inherit the requester transcript when needed, while keeping clean isolated sessions as the default; includes prompt guidance, context-engine hook metadata, docs, and QA coverage.
 - Codex harness: add structured debug logging for embedded harness selection decisions so `/status` stays simple while gateway logs explain auto-selection and Pi fallback reasons. (#70760) Thanks @100yenadmin.
-- Providers/OpenAI: add forward-compatible `gpt-5.5` and `gpt-5.5-pro` support for OpenAI API keys, OpenAI Codex OAuth, and the Codex CLI default model.
+- Dependencies/Pi: update bundled Pi packages to `0.70.0`, use Pi's upstream `gpt-5.5` catalog metadata for OpenAI and OpenAI Codex, and keep only local `gpt-5.5-pro` forward-compat handling.
 - Providers/OpenAI: add image generation and reference-image editing through Codex OAuth, so `openai/gpt-image-2` works without an `OPENAI_API_KEY`. Fixes #70703.
+- Providers/OpenRouter: add image generation and reference-image editing through `image_generate`, so OpenRouter image models work with `OPENROUTER_API_KEY`. Fixes #55066 via #67668. Thanks @notamicrodose.
+- Image generation: let agents request provider-supported quality and output format hints, and pass OpenAI-specific background, moderation, compression, and user hints through the `image_generate` tool. (#70503) Thanks @ottodeng.
 
 ### Fixes
 
+- Codex/media understanding: support `codex/*` image models through bounded Codex app-server image turns, while keeping `openai-codex/*` on the OpenAI Codex OAuth route and validating app-server responses against generated protocol contracts. Fixes #70201.
+- Providers/OpenAI Codex: synthesize the `openai-codex/gpt-5.5` OAuth model row when Codex catalog discovery omits it, so cron and subagent runs do not fail with `Unknown model` while the account is authenticated.
+- Providers/Google: honor the private-network SSRF opt-in for Gemini image generation requests, so trusted proxy setups that resolve Google API hosts to private addresses can use `image_generate`. Fixes #67216.
+- Agents/transport: stop embedded runs from lowering the process-wide undici stream timeouts, so slow Gemini image generation and other long-running provider requests no longer inherit short run-attempt headers timeouts. Fixes #70423. Thanks @giangthb.
+- Providers/OpenRouter: send image-understanding prompts as user text before image parts, restoring non-empty vision responses for OpenRouter multimodal models. Fixes #70410.
 - Memory/QMD: recreate stale managed QMD collections when startup repair finds the collection name already exists, so root memory narrows back to `MEMORY.md` instead of staying on broad workspace markdown indexing.
 - Agents/OpenAI: surface selected-model capacity failures from PI, Codex, and auto-reply harness paths with a model-switch hint instead of the generic empty-response error. Thanks @vincentkoc.
 - Providers/OpenAI: route `openai/gpt-image-2` through configured Codex OAuth directly when an `openai-codex` profile is active, instead of probing `OPENAI_API_KEY` first.
+- Providers/OpenAI: harden image generation auth routing and Codex OAuth response parsing so fallback only applies to public OpenAI API routes and bounded SSE results. Thanks @Takhoffman.
+- Providers/OpenAI: honor the private-network SSRF opt-in for OpenAI-compatible image generation endpoints, so trusted LocalAI/LAN `image_generate` routes work without disabling SSRF checks globally. Fixes #62879. Thanks @seitzbg.
 - Providers/OpenAI: stop advertising the removed `gpt-5.3-codex-spark` Codex model through fallback catalogs, and suppress stale rows with a GPT-5.5 recovery hint.
 - Plugins/QR: replace legacy `qrcode-terminal` QR rendering with bounded `qrcode-tui` helpers for plugin login/setup flows. (#65969) Thanks @vincentkoc.
 - Voice-call/realtime: wait for OpenAI session configuration before greeting or forwarding buffered audio, and reject non-allowlisted Twilio callers before stream setup. (#43501) Thanks @forrestblount.

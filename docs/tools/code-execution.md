@@ -86,3 +86,9 @@ the full analysis request and any inline data in one prompt.
 - [Web tools](/tools/web)
 - [Exec](/tools/exec)
 - [xAI](/providers/xai)
+
+## Related
+
+- [Exec tool](/tools/exec)
+- [Exec approvals](/tools/exec-approvals)
+- [apply_patch tool](/tools/apply-patch)

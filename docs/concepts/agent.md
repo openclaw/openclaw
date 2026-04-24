@@ -125,3 +125,9 @@ At minimum, set:
 ---
 
 _Next: [Group Chats](/channels/group-messages)_ 🦞
+
+## Related
+
+- [Agent workspace](/concepts/agent-workspace)
+- [Multi-agent routing](/concepts/multi-agent)
+- [Session management](/concepts/session)

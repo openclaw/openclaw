@@ -115,3 +115,9 @@ Before shipping a new capability, verify:
 
 If a PR skips the capability layer and hardcodes vendor behavior into a
 channel/tool, send it back and define the contract first.
+
+## Related
+
+- [Plugin](/tools/plugin)
+- [Creating skills](/tools/creating-skills)
+- [Tools and plugins](/tools)

@@ -19,10 +19,8 @@ export const expectedAugmentedOpenaiCodexCatalogEntries = [
 ];
 
 export const expectedAugmentedOpenaiCodexCatalogEntriesWithGpt55 = [
-  { provider: "openai", id: "gpt-5.5", name: "gpt-5.5" },
   { provider: "openai", id: "gpt-5.5-pro", name: "gpt-5.5-pro" },
   ...expectedAugmentedOpenaiCodexCatalogEntries.slice(0, 4),
-  { provider: "openai-codex", id: "gpt-5.5", name: "gpt-5.5" },
   { provider: "openai-codex", id: "gpt-5.5-pro", name: "gpt-5.5-pro" },
   ...expectedAugmentedOpenaiCodexCatalogEntries.slice(4),
 ];

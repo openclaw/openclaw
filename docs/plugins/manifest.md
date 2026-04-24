@@ -6,8 +6,6 @@ read_when:
 title: "Plugin manifest"
 ---
 
-# Plugin manifest (openclaw.plugin.json)
-
 This page is for the **native OpenClaw plugin manifest** only.
 
 For compatible bundle layouts, see [Plugin bundles](/plugins/bundles).
