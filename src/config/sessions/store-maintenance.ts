@@ -409,8 +409,17 @@ export function capEntryCount(
 }
 
 const ORPHAN_TRANSCRIPT_SUFFIX = ".jsonl";
-const ORPHAN_TRANSCRIPT_TOPIC_SEPARATOR = "-topic-";
-const ORPHAN_HEADER_READ_MAX_BYTES = 2048;
+const ORPHAN_HEADER_READ_MAX_BYTES = 16 * 1024;
+const ORPHAN_CANDIDATE_CONCURRENCY = 32;
+
+function canonicalizePathForOrphanComparison(filePath: string): string {
+  const resolved = path.resolve(filePath);
+  try {
+    return fs.realpathSync(resolved);
+  } catch {
+    return resolved;
+  }
+}
 
 async function readSessionTranscriptHeaderId(filePath: string): Promise<string | null> {
   let fd: fs.promises.FileHandle;
@@ -457,34 +466,38 @@ export type OrphanTranscriptPruneResult = {
 };
 
 /**
- * Remove JSONL transcript files in `sessionsDir` that are not referenced by
- * any entry in the index and whose mtime is older than the configured
- * `pruneAfter` grace window. In `warn` mode no files are touched; totals are
- * reported. In `enforce` mode orphans are unlinked so the bytes are reclaimed
- * and subsequent disk-budget sweeps see the freed space.
+ * Remove JSONL transcript files in `sessionsDir` (and its subdirectories) whose
+ * canonical path is not in `preservedPaths` and whose mtime is older than the
+ * configured `pruneAfter` grace window. In `warn` mode no files are touched;
+ * totals are reported. In `enforce` mode orphans are unlinked so the bytes are
+ * reclaimed and subsequent disk-budget sweeps see the freed space.
  *
- * Preservation is layered for safety:
- *  1. Fast filename check — accepts a file whose basename (without `.jsonl`)
- *     matches `sessionId`, `basename(sessionFile).replace(/\.jsonl$/, "")`,
- *     or `${sessionId}-topic-<encoded-topicId>` for topic-thread transcripts.
- *  2. Content check — before marking a file as an orphan we read its header
- *     line and require `type: "session"` plus a non-empty `id`. If the header
- *     `id` is in the reference set we preserve the file (header is
- *     authoritative; this catches filename schemes the caller did not
- *     enumerate). Files without a valid session header are skipped entirely,
- *     so unrelated `.jsonl` files that happen to sit in the sessions
- *     directory are left alone.
+ * Path resolution is delegated to the caller via `preservedPaths`. That set
+ * should contain every live transcript path for every live index entry (the
+ * `resolveSessionTranscriptCandidates` helper in `gateway/session-transcript-files`
+ * enumerates the full set of valid paths per session, covering explicit
+ * `sessionFile` values, legacy absolute paths, and the agent/topic-thread
+ * derivations). When `sessionsDir` may host multiple `sessions.json` stores
+ * side by side, the caller is expected to union `preservedPaths` across every
+ * neighbouring store. Paths are compared after `fs.realpathSync`
+ * canonicalization, so symlinked `sessionsDir` access still matches the stored
+ * realpath forms.
+ *
+ * Every candidate file also passes a content check: we read its header line
+ * and require `type: "session"` plus a non-empty `id`. Files without a valid
+ * session header are skipped entirely, so unrelated `.jsonl` files that sit
+ * in the sessions directory are left alone. Files that carry a session header
+ * but are not in `preservedPaths` are treated as duplicate/leftover
+ * transcripts and pruned (this is how stale copies of a live session's
+ * transcript get reclaimed).
  *
  * This function is intentionally NOT wired into the hot
  * `saveSessionStoreUnlocked` path. Callers (e.g., a dedicated maintenance
- * command) should invoke it deliberately and, when `sessionsDir` may host
- * multiple `sessions.json` stores side by side, pass the union of every
- * neighbouring store's entries via `indexEntries` to avoid unlinking a
- * sibling store's still-referenced transcripts.
+ * command) should invoke it deliberately.
  */
 export async function pruneOrphanedTranscripts(
   sessionsDir: string,
-  indexEntries: Record<string, SessionEntry>,
+  preservedPaths: Iterable<string>,
   opts: {
     mode: SessionMaintenanceMode;
     pruneAfterMs?: number;
@@ -503,84 +516,84 @@ export async function pruneOrphanedTranscripts(
   const now = opts.nowMs ?? Date.now();
   const cutoffMs = now - pruneAfterMs;
 
-  const referenced = new Set<string>();
-  for (const entry of Object.values(indexEntries)) {
-    if (!entry) {
+  const preservedCanonicalPaths = new Set<string>();
+  for (const candidatePath of preservedPaths) {
+    if (typeof candidatePath !== "string" || candidatePath.length === 0) {
       continue;
     }
-    if (typeof entry.sessionId === "string" && entry.sessionId.length > 0) {
-      referenced.add(entry.sessionId);
-    }
-    if (typeof entry.sessionFile === "string" && entry.sessionFile.length > 0) {
-      const base = path.basename(entry.sessionFile);
-      const id = base.endsWith(ORPHAN_TRANSCRIPT_SUFFIX)
-        ? base.slice(0, -ORPHAN_TRANSCRIPT_SUFFIX.length)
-        : base;
-      if (id.length > 0) {
-        referenced.add(id);
-      }
-    }
+    preservedCanonicalPaths.add(canonicalizePathForOrphanComparison(candidatePath));
   }
 
   let dirents: fs.Dirent[];
   try {
-    dirents = await fs.promises.readdir(sessionsDir, { withFileTypes: true });
+    dirents = await fs.promises.readdir(sessionsDir, {
+      withFileTypes: true,
+      recursive: true,
+    });
   } catch {
     return result;
   }
 
-  const isReferencedFilename = (baseId: string): boolean => {
-    if (referenced.has(baseId)) {
-      return true;
-    }
-    for (const refId of referenced) {
-      // Topic-thread transcript: `${sessionId}-topic-${encoded-topicId}`
-      if (
-        baseId.length > refId.length + ORPHAN_TRANSCRIPT_TOPIC_SEPARATOR.length &&
-        baseId.startsWith(`${refId}${ORPHAN_TRANSCRIPT_TOPIC_SEPARATOR}`)
-      ) {
-        return true;
-      }
-    }
-    return false;
-  };
-
-  const orphans: Array<{ filePath: string; size: number }> = [];
+  const candidates: Array<{ filePath: string }> = [];
   for (const dirent of dirents) {
     if (!dirent.isFile()) {
       continue;
     }
-    const name = dirent.name;
-    if (!name.endsWith(ORPHAN_TRANSCRIPT_SUFFIX)) {
+    if (!dirent.name.endsWith(ORPHAN_TRANSCRIPT_SUFFIX)) {
       continue;
     }
-    const baseId = name.slice(0, -ORPHAN_TRANSCRIPT_SUFFIX.length);
-    if (isReferencedFilename(baseId)) {
-      continue;
+    // Node 22+ exposes `parentPath`; older builds used `path`. Fall back to
+    // sessionsDir when neither is present (non-recursive listing).
+    const parentPath =
+      (dirent as { parentPath?: string }).parentPath ??
+      (dirent as { path?: string }).path ??
+      sessionsDir;
+    candidates.push({ filePath: path.join(parentPath, dirent.name) });
+  }
+
+  // Stat + header read per file is I/O heavy. Batch candidates with a bounded
+  // concurrency so a CLI invocation on a cold filesystem with thousands of
+  // accumulated transcripts still completes in reasonable wall-clock time.
+  const orphans: Array<{ filePath: string; size: number }> = [];
+  const checkCandidate = async (candidate: {
+    filePath: string;
+  }): Promise<{ filePath: string; size: number } | null> => {
+    // Path preservation is authoritative — the caller is expected to supply
+    // every live transcript path. Canonicalize both sides so a symlinked
+    // sessionsDir (where stored paths are the realpath) still matches the
+    // alias path we walk.
+    const canonicalCandidatePath = canonicalizePathForOrphanComparison(candidate.filePath);
+    if (preservedCanonicalPaths.has(canonicalCandidatePath)) {
+      return null;
     }
-    const filePath = path.join(sessionsDir, name);
     let stat: Awaited<ReturnType<typeof fs.promises.stat>>;
     try {
-      stat = await fs.promises.stat(filePath);
+      stat = await fs.promises.stat(candidate.filePath);
     } catch {
-      continue;
+      return null;
     }
     if (stat.mtimeMs >= cutoffMs) {
-      continue;
+      return null;
     }
-    // Content gate: only treat this file as an orphan transcript if it carries
-    // a valid session header. This protects unrelated .jsonl files that may
-    // sit alongside sessions.json when `session.store` is configured to a
-    // custom path, and it also protects transcripts whose live sessionId
-    // differs from the filename (header id is authoritative).
-    const headerSessionId = await readSessionTranscriptHeaderId(filePath);
+    // Content gate: only treat this file as an orphan transcript if it
+    // carries a valid session header. Unrelated .jsonl files (logs, exports,
+    // etc.) that sit alongside sessions.json when `session.store` is set to a
+    // custom path are left alone.
+    const headerSessionId = await readSessionTranscriptHeaderId(candidate.filePath);
     if (headerSessionId == null) {
-      continue;
+      return null;
     }
-    if (referenced.has(headerSessionId)) {
-      continue;
+    return { filePath: candidate.filePath, size: stat.size };
+  };
+
+  for (let i = 0; i < candidates.length; i += ORPHAN_CANDIDATE_CONCURRENCY) {
+    const batch = candidates.slice(i, i + ORPHAN_CANDIDATE_CONCURRENCY);
+    const batchResults = await Promise.all(batch.map(checkCandidate));
+    for (const batchResult of batchResults) {
+      if (batchResult) {
+        orphans.push(batchResult);
+      }
     }
-    orphans.push({ filePath, size: stat.size });
   }
 
   if (orphans.length === 0) {
@@ -600,13 +613,23 @@ export async function pruneOrphanedTranscripts(
     return result;
   }
 
-  for (const orphan of orphans) {
-    try {
-      await fs.promises.unlink(orphan.filePath);
-      result.pruned += 1;
-      result.bytes += orphan.size;
-    } catch {
-      // Best-effort; skip this orphan on unlink failure.
+  for (let i = 0; i < orphans.length; i += ORPHAN_CANDIDATE_CONCURRENCY) {
+    const batch = orphans.slice(i, i + ORPHAN_CANDIDATE_CONCURRENCY);
+    const batchResults = await Promise.all(
+      batch.map(async (orphan) => {
+        try {
+          await fs.promises.unlink(orphan.filePath);
+          return { pruned: true, size: orphan.size };
+        } catch {
+          return { pruned: false, size: 0 };
+        }
+      }),
+    );
+    for (const batchResult of batchResults) {
+      if (batchResult.pruned) {
+        result.pruned += 1;
+        result.bytes += batchResult.size;
+      }
     }
   }
 
@@ -614,6 +637,7 @@ export async function pruneOrphanedTranscripts(
     log.info("pruned orphan session transcripts", {
       pruned: result.pruned,
       bytes: result.bytes,
+      sessionsDir,
     });
   }
 

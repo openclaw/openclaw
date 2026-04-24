@@ -255,9 +255,9 @@ describe("pruneOrphanedTranscripts", () => {
   it("warn mode: reports orphans but does not delete", async () => {
     await writeTranscript("orphan-old", "orphan-old", -60 * DAY_MS);
     await writeTranscript("kept", "kept", 0);
-    const store = makeStore([["active", { sessionId: "kept", updatedAt: Date.now() }]]);
+    const preservedPaths = [path.join(testDir, "kept.jsonl")];
 
-    const result = await pruneOrphanedTranscripts(testDir, store, {
+    const result = await pruneOrphanedTranscripts(testDir, preservedPaths, {
       mode: "warn",
       pruneAfterMs: 30 * DAY_MS,
     });
@@ -272,9 +272,9 @@ describe("pruneOrphanedTranscripts", () => {
   it("enforce mode: unlinks orphan older than grace window", async () => {
     await writeTranscript("orphan-old", "orphan-old", -60 * DAY_MS);
     await writeTranscript("kept", "kept", 0);
-    const store = makeStore([["active", { sessionId: "kept", updatedAt: Date.now() }]]);
+    const preservedPaths = [path.join(testDir, "kept.jsonl")];
 
-    const result = await pruneOrphanedTranscripts(testDir, store, {
+    const result = await pruneOrphanedTranscripts(testDir, preservedPaths, {
       mode: "enforce",
       pruneAfterMs: 30 * DAY_MS,
     });
@@ -291,9 +291,8 @@ describe("pruneOrphanedTranscripts", () => {
 
   it("preserves orphan transcripts younger than pruneAfterMs", async () => {
     await writeTranscript("orphan-young", "orphan-young", -1 * DAY_MS);
-    const store = makeStore([]);
 
-    const result = await pruneOrphanedTranscripts(testDir, store, {
+    const result = await pruneOrphanedTranscripts(testDir, [], {
       mode: "enforce",
       pruneAfterMs: 30 * DAY_MS,
     });
@@ -304,18 +303,15 @@ describe("pruneOrphanedTranscripts", () => {
     expect(remaining).toContain("orphan-young.jsonl");
   });
 
-  it("preserves topic-thread transcript (sessionId-topic-threadId.jsonl) without explicit sessionFile", async () => {
+  it("preserves topic-thread transcript (sessionId-topic-threadId.jsonl) when the caller supplies its path", async () => {
     // Topic sessions derive transcript path as `${sessionId}-topic-${encoded-topicId}.jsonl`
-    // via resolveSessionTranscriptPathInDir. The stored SessionEntry may only carry sessionId;
-    // the live transcript file would otherwise look like an orphan to a naive scanner.
-    // File header carries the live sessionId; filename reflects the derived
-    // topic path produced by resolveSessionTranscriptPathInDir.
+    // via resolveSessionTranscriptPathInDir. The caller (e.g. a sessions-cleanup
+    // CLI wired through resolveSessionTranscriptCandidates) is responsible for
+    // enumerating those derived paths; the utility only does path matching.
     await writeTranscript("abc-uuid-topic-456", "abc-uuid", -60 * DAY_MS);
-    const store = makeStore([
-      ["agent:main:channel:thread-456", { sessionId: "abc-uuid", updatedAt: Date.now() }],
-    ]);
+    const preservedPaths = [path.join(testDir, "abc-uuid-topic-456.jsonl")];
 
-    const result = await pruneOrphanedTranscripts(testDir, store, {
+    const result = await pruneOrphanedTranscripts(testDir, preservedPaths, {
       mode: "enforce",
       pruneAfterMs: 30 * DAY_MS,
     });
@@ -325,40 +321,93 @@ describe("pruneOrphanedTranscripts", () => {
     expect(remaining).toContain("abc-uuid-topic-456.jsonl");
   });
 
-  it("treats sessionFile basename as a reference (transcript name != current sessionId)", async () => {
-    // Header id reflects the live sessionId written by ensureSessionHeader.
-    await writeTranscript("legacy-file-id", "new-session-id", -60 * DAY_MS);
-    const store = makeStore([
-      [
-        "active",
-        {
-          sessionId: "new-session-id",
-          sessionFile: path.join(testDir, "legacy-file-id.jsonl"),
-          updatedAt: Date.now(),
-        },
-      ],
-    ]);
+  it("prunes an orphan even when its sessionId shares a prefix with a live session (no filename-pattern shortcut)", async () => {
+    // validateSessionId() allows "-topic-" in ordinary session IDs, and the
+    // utility no longer uses any filename-pattern shortcut: preservation is
+    // driven by caller-supplied paths. A file outside preservedPaths is
+    // pruned regardless of any accidental basename resemblance to a live
+    // session's id.
+    await writeTranscript("abc-topic-123", "abc-topic-123", -60 * DAY_MS);
+    const preservedPaths = [path.join(testDir, "abc.jsonl")];
 
-    const result = await pruneOrphanedTranscripts(testDir, store, {
+    const result = await pruneOrphanedTranscripts(testDir, preservedPaths, {
+      mode: "enforce",
+      pruneAfterMs: 30 * DAY_MS,
+    });
+
+    expect(result.pruned).toBe(1);
+    const remaining = await fs.readdir(testDir);
+    expect(remaining).not.toContain("abc-topic-123.jsonl");
+  });
+
+  it("preserves a file referenced by preservedPaths even when the header id is stale", async () => {
+    // ensureSessionHeader() never rewrites an existing header, so a live
+    // entry can keep an explicit sessionFile whose header carries a previous
+    // session's id. The path reference must preserve that file regardless of
+    // the on-disk header.
+    await writeTranscript("legacy-file", "stale-header-id", -60 * DAY_MS);
+    const preservedPaths = [path.join(testDir, "legacy-file.jsonl")];
+
+    const result = await pruneOrphanedTranscripts(testDir, preservedPaths, {
       mode: "enforce",
       pruneAfterMs: 30 * DAY_MS,
     });
 
     expect(result.pruned).toBe(0);
     const remaining = await fs.readdir(testDir);
-    expect(remaining).toContain("legacy-file-id.jsonl");
+    expect(remaining).toContain("legacy-file.jsonl");
+  });
+
+  it("prunes duplicate transcripts whose header id matches a live session but whose path is not preserved", async () => {
+    // If a session has multiple on-disk copies (e.g. after moving onto a
+    // custom sessionFile), only the preserved path is live — leftover copies
+    // with the same header id should still be reclaimed.
+    await writeTranscript("live-file", "session-1", -60 * DAY_MS);
+    await writeTranscript("duplicate-copy", "session-1", -60 * DAY_MS);
+    const preservedPaths = [path.join(testDir, "live-file.jsonl")];
+
+    const result = await pruneOrphanedTranscripts(testDir, preservedPaths, {
+      mode: "enforce",
+      pruneAfterMs: 30 * DAY_MS,
+    });
+
+    expect(result.pruned).toBe(1);
+    const remaining = await fs.readdir(testDir);
+    expect(remaining).toContain("live-file.jsonl");
+    expect(remaining).not.toContain("duplicate-copy.jsonl");
+  });
+
+  it("recursively traverses sessionsDir for orphans in subdirectories", async () => {
+    // resolveSessionFilePath() accepts sessionFile values under subdirs of
+    // sessionsDir, so the sweep must traverse to find those orphans too.
+    const nestedDir = path.join(testDir, "nested");
+    await fs.mkdir(nestedDir, { recursive: true });
+    const nestedOrphanPath = path.join(nestedDir, "nested-orphan.jsonl");
+    const header = {
+      type: "session",
+      version: 1,
+      id: "nested-orphan",
+      timestamp: new Date().toISOString(),
+    };
+    await fs.writeFile(nestedOrphanPath, `${JSON.stringify(header)}\n`, "utf-8");
+    const mtime = new Date(Date.now() - 60 * DAY_MS);
+    await fs.utimes(nestedOrphanPath, mtime, mtime);
+
+    const result = await pruneOrphanedTranscripts(testDir, [], {
+      mode: "enforce",
+      pruneAfterMs: 30 * DAY_MS,
+    });
+
+    expect(result.pruned).toBe(1);
+    await expect(fs.stat(nestedOrphanPath)).rejects.toThrow();
   });
 
   it("missing sessions dir: no-op, no throw", async () => {
     const missingDir = path.join(testDir, "does-not-exist");
-    const result = await pruneOrphanedTranscripts(
-      missingDir,
-      {},
-      {
-        mode: "enforce",
-        pruneAfterMs: 30 * DAY_MS,
-      },
-    );
+    const result = await pruneOrphanedTranscripts(missingDir, [], {
+      mode: "enforce",
+      pruneAfterMs: 30 * DAY_MS,
+    });
     expect(result.pruned).toBe(0);
     expect(result.wouldPrune).toBe(0);
   });
@@ -366,40 +415,32 @@ describe("pruneOrphanedTranscripts", () => {
   it("ignores non-jsonl files and subdirectories", async () => {
     await writeTranscript("orphan-old", "orphan-old", -60 * DAY_MS);
     await fs.writeFile(path.join(testDir, "sessions.json"), "{}", "utf-8");
-    await fs.mkdir(path.join(testDir, "some-subdir"), { recursive: true });
+    await fs.mkdir(path.join(testDir, "empty-subdir"), { recursive: true });
 
-    const result = await pruneOrphanedTranscripts(
-      testDir,
-      {},
-      {
-        mode: "enforce",
-        pruneAfterMs: 30 * DAY_MS,
-      },
-    );
+    const result = await pruneOrphanedTranscripts(testDir, [], {
+      mode: "enforce",
+      pruneAfterMs: 30 * DAY_MS,
+    });
 
     expect(result.pruned).toBe(1);
     const remaining = await fs.readdir(testDir);
     expect(remaining).toContain("sessions.json");
-    expect(remaining).toContain("some-subdir");
+    expect(remaining).toContain("empty-subdir");
   });
 
   it("does not delete unrelated .jsonl files lacking a session header (custom session.store scenario)", async () => {
     // Simulate a custom session.store dir that contains unrelated logs or
-    // exports. The old-enough .jsonl without a session header must be left
-    // alone even though its name would pass the filename filter.
+    // exports. An old-enough .jsonl without a valid session header is left
+    // alone even though it is not in preservedPaths.
     const filePath = path.join(testDir, "my-unrelated-log.jsonl");
     await fs.writeFile(filePath, `{"kind":"log","ts":"2025-01-01T00:00:00Z"}\n`, "utf-8");
     const mtime = new Date(Date.now() - 60 * DAY_MS);
     await fs.utimes(filePath, mtime, mtime);
 
-    const result = await pruneOrphanedTranscripts(
-      testDir,
-      {},
-      {
-        mode: "enforce",
-        pruneAfterMs: 30 * DAY_MS,
-      },
-    );
+    const result = await pruneOrphanedTranscripts(testDir, [], {
+      mode: "enforce",
+      pruneAfterMs: 30 * DAY_MS,
+    });
 
     expect(result.pruned).toBe(0);
     const remaining = await fs.readdir(testDir);
