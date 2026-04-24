@@ -14,7 +14,7 @@ describe("AgentRuntimePlan structural type compatibility", () => {
     expectTypeOf<AgentRuntimeFailoverReason>().toEqualTypeOf<FailoverReason>();
   });
 
-  it("keeps runtime reply payloads assignable to the real reply payload shape", () => {
-    expectTypeOf<AgentRuntimeReplyPayload>().toMatchTypeOf<ReplyPayload>();
+  it("keeps real reply payloads assignable to the runtime leaf payload shape", () => {
+    expectTypeOf<ReplyPayload>().toMatchTypeOf<AgentRuntimeReplyPayload>();
   });
 });
