@@ -371,6 +371,33 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     );
   });
 
+  it("finalizes fast draft preview text without sending a duplicate normal reply", async () => {
+    const draftStream = {
+      ...createDraftStreamStub(),
+      flush: vi.fn(noopAsync),
+      clear: vi.fn(noopAsync),
+      discardPending: vi.fn(noopAsync),
+      seal: vi.fn(noopAsync),
+    };
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    finalizeSlackPreviewEditMock.mockResolvedValueOnce(undefined);
+    mockedDispatchSequence = [{ kind: "final", payload: { text: "✅" } }];
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+
+    expect(draftStream.flush).toHaveBeenCalledTimes(1);
+    expect(draftStream.seal).toHaveBeenCalledTimes(1);
+    expect(finalizeSlackPreviewEditMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channelId: "C123",
+        messageId: "171234.567",
+        text: "✅",
+      }),
+    );
+    expect(deliverRepliesMock).not.toHaveBeenCalled();
+    expect(draftStream.clear).not.toHaveBeenCalled();
+  });
+
   it("suppresses block streaming when Slack draft preview streaming is active", async () => {
     mockedBlockStreamingEnabled = true;
 
