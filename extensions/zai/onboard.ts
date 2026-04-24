@@ -30,6 +30,15 @@ const ZAI_CATALOG_IDS = [
   "glm-4.5v",
 ] as const;
 
+// Bundled Z.AI vision ids whose baseUrl is managed by onboarding. User-defined
+// image-capable models are left untouched so custom host overrides survive
+// re-onboarding or endpoint switches.
+const ZAI_BUNDLED_VISION_IDS: ReadonlySet<string> = new Set([
+  "glm-4.6v",
+  "glm-4.5v",
+  "glm-5v-turbo",
+]);
+
 function buildZaiCatalogModels(providerBaseUrl: string): ModelDefinitionConfig[] {
   // When the provider is configured to a Coding Plan endpoint, vision models
   // must target the matching non-coding host; carry a per-model baseUrl so
@@ -68,7 +77,7 @@ function syncZaiVisionBaseUrls(cfg: OpenClawConfig, providerBaseUrl: string): Op
     ? resolveZaiNonCodingBaseUrl(providerBaseUrl)
     : undefined;
   const patched = zai.models.map((model) => {
-    if (!model.input?.includes("image")) {
+    if (!ZAI_BUNDLED_VISION_IDS.has(model.id)) {
       return model;
     }
     if (visionBaseUrl) {

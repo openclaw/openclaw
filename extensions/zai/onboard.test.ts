@@ -96,6 +96,36 @@ describe("zai onboard", () => {
     expect(byId.get("glm-5v-turbo")?.baseUrl).toBe(ZAI_GLOBAL_BASE_URL);
   });
 
+  it("preserves user-defined custom image-capable zai models during re-onboarding", () => {
+    // A user-added Z.AI model that isn't part of the bundled catalog must keep
+    // its pinned baseUrl across endpoint changes. Only the bundled vision ids
+    // (glm-4.6v / glm-4.5v / glm-5v-turbo) are managed by onboarding.
+    const seed = applyZaiConfig({}, { endpoint: "coding-global" });
+    const zai = seed.models?.providers?.zai;
+    const customModel = {
+      id: "acme-vision-custom",
+      name: "ACME Vision",
+      api: "openai-completions" as const,
+      input: ["text", "image"] as const,
+      output: ["text"] as const,
+      baseUrl: "https://acme.example.com/v1",
+    };
+    const withCustom = {
+      ...seed,
+      models: {
+        ...seed.models,
+        providers: {
+          ...seed.models?.providers,
+          zai: { ...zai, models: [...(zai?.models ?? []), customModel] },
+        },
+      },
+    };
+    const switched = applyZaiConfig(withCustom, { endpoint: "global" });
+    const byId = new Map((switched.models?.providers?.zai?.models ?? []).map((m) => [m.id, m]));
+    expect(byId.get("acme-vision-custom")?.baseUrl).toBe("https://acme.example.com/v1");
+    expect(byId.get("glm-4.6v")?.baseUrl).toBeUndefined();
+  });
+
   it("rewrites stale vision baseUrl when switching between endpoints", () => {
     const first = applyZaiConfig({}, { endpoint: "coding-global" });
     const second = applyZaiConfig(first, { endpoint: "coding-cn" });
