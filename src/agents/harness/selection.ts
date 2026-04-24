@@ -190,7 +190,7 @@ export async function runAgentHarnessAttemptWithFallback(
   });
   const v2Harness = adaptAgentHarnessToV2(harness);
   if (harness.id === "pi") {
-    return runAgentHarnessV2LifecycleAttempt(v2Harness, params);
+    return await runAgentHarnessV2LifecycleAttempt(v2Harness, params);
   }
 
   try {

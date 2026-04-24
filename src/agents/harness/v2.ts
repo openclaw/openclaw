@@ -1,3 +1,5 @@
+import { formatErrorMessage } from "../../infra/errors.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { applyAgentHarnessResultClassification } from "./result-classification.js";
 import type {
   AgentHarness,
@@ -9,6 +11,8 @@ import type {
   AgentHarnessSupport,
   AgentHarnessSupportContext,
 } from "./types.js";
+
+const log = createSubsystemLogger("agents/harness/v2");
 
 type AgentHarnessV2RunBase = {
   harnessId: string;
@@ -107,9 +111,14 @@ export async function runAgentHarnessV2LifecycleAttempt(
       await harness.cleanup({ session, error });
     } catch (cleanupError) {
       // Preserve the user-visible harness failure. Cleanup errors after a
-      // failed send/outcome should be observable in future telemetry, but they
-      // must not mask the actionable runtime error.
-      void cleanupError;
+      // failed send/outcome must not mask the actionable runtime error.
+      log.warn("agent harness cleanup failed after attempt failure", {
+        harnessId: harness.id,
+        provider: params.provider,
+        modelId: params.modelId,
+        error: formatErrorMessage(cleanupError),
+        originalError: formatErrorMessage(error),
+      });
     }
     throw error;
   }
