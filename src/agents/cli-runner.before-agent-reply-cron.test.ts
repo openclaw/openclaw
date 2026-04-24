@@ -1,16 +1,34 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 
-// Mocks for the critical seams runCliAgent loads dynamically. Each mock is
-// reset between tests via vi.clearAllMocks. We avoid touching the broader CLI
-// runtime — this test only exercises the hook-gate decision at the entry point.
+// vi.mock factories are hoisted above imports, so any references inside them
+// must come from vi.hoisted() so they exist at hoist time (otherwise they'd
+// be TDZ-undefined and the mocks would silently misbehave). This test only
+// exercises the hook-gate decision at the runCliAgent entry point — we mock
+// the prepareCliRunContext + executePreparedCliRun seams so no broader CLI
+// runtime needs to load.
+type BeforeAgentReplyResult =
+  | undefined
+  | {
+      handled?: boolean;
+      reply?: { text?: string };
+    };
 
-const hasHooksMock = vi.fn<(hookName: string) => boolean>(() => false);
-const runBeforeAgentReplyMock = vi.fn(async (_event: unknown, _ctx: unknown) => undefined);
-const executePreparedCliRunMock = vi.fn(async (_context: unknown, _cliSessionIdToUse?: string) => ({
-  text: "",
+const {
+  hasHooksMock,
+  runBeforeAgentReplyMock,
+  executePreparedCliRunMock,
+  prepareCliRunContextMock,
+} = vi.hoisted(() => ({
+  hasHooksMock: vi.fn<(hookName: string) => boolean>(() => false),
+  runBeforeAgentReplyMock: vi.fn<(event: unknown, ctx: unknown) => Promise<BeforeAgentReplyResult>>(
+    async () => undefined,
+  ),
+  executePreparedCliRunMock: vi.fn(async (_context: unknown, _cliSessionIdToUse?: string) => ({
+    text: "",
+  })),
+  prepareCliRunContextMock: vi.fn(),
 }));
-const prepareCliRunContextMock = vi.fn();
 
 vi.mock("../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: vi.fn(() => ({
@@ -40,13 +58,13 @@ const baseRunParams = {
   runId: "test-run-id",
 } as const;
 
-function makeStubContext(promptOverride?: string) {
+function makeStubContext(params: typeof baseRunParams & { trigger?: string }) {
   return {
-    params: { ...baseRunParams, ...(promptOverride ? { prompt: promptOverride } : {}) },
+    params,
     started: Date.now(),
-    workspaceDir: baseRunParams.workspaceDir,
-    modelId: baseRunParams.model,
-    normalizedModel: baseRunParams.model,
+    workspaceDir: params.workspaceDir,
+    modelId: params.model,
+    normalizedModel: params.model,
     systemPrompt: "",
     systemPromptReport: {},
     bootstrapPromptWarningLines: [],
@@ -65,8 +83,8 @@ beforeEach(() => {
   executePreparedCliRunMock.mockReset();
   executePreparedCliRunMock.mockResolvedValue({ text: "" });
   prepareCliRunContextMock.mockReset();
-  prepareCliRunContextMock.mockImplementation(async (params: typeof baseRunParams) =>
-    makeStubContext(params.prompt),
+  prepareCliRunContextMock.mockImplementation(async (params) =>
+    makeStubContext(params as typeof baseRunParams & { trigger?: string }),
   );
 });
 
@@ -98,6 +116,20 @@ describe("runCliAgent cron before_agent_reply seam", () => {
     );
     expect(executePreparedCliRunMock).not.toHaveBeenCalled();
     expect(result.payloads?.[0]?.text).toBe("dreaming claimed via cli runner");
+  });
+
+  it("does not run prepareCliRunContext when the cron hook claims (no resource allocation, no leak)", async () => {
+    // Regression for PR #70950 review (greptile-apps, P1): the gate must fire
+    // before any backend resources are allocated, otherwise preparedBackend.cleanup
+    // is silently skipped on every claimed cron turn.
+    const { runCliAgent } = await import("./cli-runner.js");
+    hasHooksMock.mockImplementation((hookName) => hookName === "before_agent_reply");
+    runBeforeAgentReplyMock.mockResolvedValue({ handled: true });
+
+    await runCliAgent({ ...baseRunParams, trigger: "cron" });
+
+    expect(prepareCliRunContextMock).not.toHaveBeenCalled();
+    expect(executePreparedCliRunMock).not.toHaveBeenCalled();
   });
 
   it("returns a silent payload when a cron hook claims without a reply body", async () => {
