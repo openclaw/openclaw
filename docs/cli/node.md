@@ -135,3 +135,8 @@ For approved async node exec, OpenClaw prepares a canonical `systemRunPlan`
 before prompting. The later approved `system.run` forward reuses that stored
 plan, so edits to command/cwd/session fields after the approval request was
 created are rejected instead of changing what the node executes.
+
+## Related
+
+- [CLI reference](/cli)
+- [Nodes](/nodes)

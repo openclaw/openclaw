@@ -278,3 +278,8 @@ Notes:
 - `openclaw/default` is always present so one stable id works across environments.
 - Backend provider/model overrides belong in `x-openclaw-model`, not the OpenAI `model` field.
 - `/v1/embeddings` supports `input` as a string or array of strings.
+
+## Related
+
+- [Configuration reference](/gateway/configuration-reference)
+- [OpenAI](/providers/openai)

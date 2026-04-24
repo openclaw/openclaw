@@ -1967,3 +1967,9 @@ moved to a dedicated page:
 ---
 
 Still stuck? Ask in [Discord](https://discord.com/invite/clawd) or open a [GitHub discussion](https://github.com/openclaw/openclaw/discussions).
+
+## Related
+
+- [FAQ — quick start and first-run setup](/help/faq-first-run)
+- [FAQ — models and auth profiles](/help/faq-models)
+- [Troubleshooting](/help/troubleshooting)
