@@ -4,6 +4,7 @@ import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
+import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ContextEngine } from "../../../../src/context-engine/types.js";
 import type { CodexServerNotification } from "./protocol.js";
@@ -362,6 +363,41 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
           }),
         ]),
       }),
+    );
+  });
+
+  it("logs assemble failures as a formatted message instead of the raw error object", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const rawError = new Error("Authorization: Bearer sk-abcdefghijklmnopqrstuv");
+    const contextEngine = createContextEngine({
+      assemble: vi.fn(async () => {
+        throw rawError;
+      }),
+      bootstrap: undefined,
+    });
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.contextEngine = contextEngine;
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn();
+    await run;
+
+    expect(warn).toHaveBeenCalledWith(
+      "context engine assemble failed; using Codex baseline prompt",
+      {
+        error: expect.any(String),
+      },
+    );
+    const warning = warn.mock.calls.find(
+      ([message]) => message === "context engine assemble failed; using Codex baseline prompt",
+    );
+    expect(warning?.[1]).not.toEqual({ error: rawError });
+    expect(String((warning?.[1] as { error?: unknown } | undefined)?.error)).not.toContain(
+      "sk-abcdefghijklmnopqrstuv",
     );
   });
 
