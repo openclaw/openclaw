@@ -709,6 +709,102 @@ for channel in "${!SETUP_ENTRY_DEP_SENTINELS[@]}"; do
   fi
 done
 
+echo "Running packaged guided WhatsApp setup; runtime deps should be staged before finalize..."
+OPENCLAW_PACKAGE_ROOT="$root" node --input-type=module - <<'NODE'
+import path from "node:path";
+import { readdir } from "node:fs/promises";
+import { pathToFileURL } from "node:url";
+
+const root = process.env.OPENCLAW_PACKAGE_ROOT;
+if (!root) {
+  throw new Error("missing OPENCLAW_PACKAGE_ROOT");
+}
+const distDir = path.join(root, "dist");
+const onboardChannelFiles = (await readdir(distDir))
+  .filter((entry) => /^onboard-channels-.*\.js$/.test(entry))
+  .sort();
+let setupChannels;
+for (const entry of onboardChannelFiles) {
+  const module = await import(pathToFileURL(path.join(distDir, entry)));
+  if (typeof module.setupChannels === "function") {
+    setupChannels = module.setupChannels;
+    break;
+  }
+}
+if (!setupChannels) {
+  throw new Error(
+    `could not find packaged setupChannels export in ${JSON.stringify(onboardChannelFiles)}`,
+  );
+}
+
+let channelSelectCount = 0;
+const notes = [];
+const prompter = {
+  intro: async () => {},
+  outro: async () => {},
+  note: async (body, title) => {
+    notes.push({ title, body });
+  },
+  confirm: async ({ message, initialValue }) => {
+    if (message === "Link WhatsApp now (QR)?") {
+      return false;
+    }
+    return initialValue ?? true;
+  },
+  select: async ({ message }) => {
+    if (message === "Select a channel") {
+      channelSelectCount += 1;
+      return channelSelectCount === 1 ? "whatsapp" : "__done__";
+    }
+    if (message === "WhatsApp phone setup") {
+      return "separate";
+    }
+    if (message === "WhatsApp DM policy") {
+      return "disabled";
+    }
+    throw new Error(`unexpected select prompt: ${message}`);
+  },
+  multiselect: async ({ message }) => {
+    throw new Error(`unexpected multiselect prompt: ${message}`);
+  },
+  text: async ({ message }) => {
+    throw new Error(`unexpected text prompt: ${message}`);
+  },
+};
+const runtime = {
+  log: (message) => console.log(message),
+  error: (message) => console.error(message),
+};
+
+const result = await setupChannels(
+  { plugins: { enabled: true } },
+  runtime,
+  prompter,
+  {
+    deferStatusUntilSelection: true,
+    skipConfirm: true,
+    skipStatusNote: true,
+    skipDmPolicyPrompt: true,
+    initialSelection: ["whatsapp"],
+  },
+);
+
+if (!result.channels?.whatsapp) {
+  throw new Error(`WhatsApp setup did not write channel config: ${JSON.stringify(result)}`);
+}
+console.log("packaged guided WhatsApp setup completed");
+NODE
+
+if [ -e "$root/dist/extensions/whatsapp/node_modules/@whiskeysockets/baileys/package.json" ]; then
+  echo "expected guided WhatsApp setup deps to be installed externally, not into bundled plugin tree" >&2
+  exit 1
+fi
+if ! find "$OPENCLAW_PLUGIN_STAGE_DIR" -maxdepth 12 -path "*/node_modules/@whiskeysockets/baileys/package.json" -type f | grep -q .; then
+  echo "guided WhatsApp setup did not stage @whiskeysockets/baileys before finalize" >&2
+  find "$OPENCLAW_PLUGIN_STAGE_DIR" -maxdepth 12 -type f | sort | head -160 >&2 || true
+  exit 1
+fi
+
 echo "Configuring setup-entry channels; doctor should now install bundled runtime deps externally..."
 node - <<'NODE'
 const fs = require("node:fs");
