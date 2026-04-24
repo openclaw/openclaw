@@ -8,7 +8,6 @@ import {
   listRuntimeMusicGenerationProviders,
 } from "../../music-generation/runtime.js";
 import { RequestScopedSubagentRuntimeError } from "../../plugin-sdk/error-runtime.js";
-import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import {
   createLazyRuntimeMethod,
   createLazyRuntimeMethodBinder,
@@ -20,6 +19,12 @@ import {
   listRuntimeVideoGenerationProviders,
 } from "../../video-generation/runtime.js";
 import { listWebSearchProviders, runWebSearch } from "../../web-search/runtime.js";
+import {
+  gatewaySubagentState,
+  setGatewayNodesRuntime,
+  setGatewaySubagentRuntime,
+  clearGatewaySubagentRuntime,
+} from "./gateway-bindings.js";
 import { createRuntimeAgent } from "./runtime-agent.js";
 import { defineCachedValue } from "./runtime-cache.js";
 import { createRuntimeChannel } from "./runtime-channel.js";
@@ -33,6 +38,11 @@ import { createRuntimeTasks } from "./runtime-tasks.js";
 import type { CreatePluginRuntimeOptions, PluginRuntime } from "./types.js";
 
 export type { CreatePluginRuntimeOptions } from "./types.js";
+export {
+  clearGatewaySubagentRuntime,
+  setGatewayNodesRuntime,
+  setGatewaySubagentRuntime,
+} from "./gateway-bindings.js";
 
 const loadTtsRuntime = createLazyRuntimeModule(() => import("../../tts/tts.js"));
 const loadMediaUnderstandingRuntime = createLazyRuntimeModule(
@@ -139,46 +149,6 @@ function createUnavailableSubagentRuntime(): PluginRuntime["subagent"] {
 // A process-global holder lets explicitly gateway-bindable runtimes resolve the
 // active gateway subagent dynamically without changing the default behavior for
 // ordinary plugin runtimes.
-
-const GATEWAY_SUBAGENT_SYMBOL: unique symbol = Symbol.for(
-  "openclaw.plugin.gatewaySubagentRuntime",
-) as unknown as typeof GATEWAY_SUBAGENT_SYMBOL;
-
-type GatewaySubagentState = {
-  subagent: PluginRuntime["subagent"] | undefined;
-  nodes: PluginRuntime["nodes"] | undefined;
-};
-
-const gatewaySubagentState = resolveGlobalSingleton<GatewaySubagentState>(
-  GATEWAY_SUBAGENT_SYMBOL,
-  () => ({
-    subagent: undefined,
-    nodes: undefined,
-  }),
-);
-
-/**
- * Set the process-global gateway subagent runtime.
- * Called during gateway startup so that gateway-bindable plugin runtimes can
- * resolve subagent methods dynamically even when their registry was cached
- * before the gateway finished loading plugins.
- */
-export function setGatewaySubagentRuntime(subagent: PluginRuntime["subagent"]): void {
-  gatewaySubagentState.subagent = subagent;
-}
-
-export function setGatewayNodesRuntime(nodes: PluginRuntime["nodes"]): void {
-  gatewaySubagentState.nodes = nodes;
-}
-
-/**
- * Reset the process-global gateway subagent runtime.
- * Used by tests to avoid leaking gateway state across module reloads.
- */
-export function clearGatewaySubagentRuntime(): void {
-  gatewaySubagentState.subagent = undefined;
-  gatewaySubagentState.nodes = undefined;
-}
 
 /**
  * Create a late-binding subagent that resolves to:

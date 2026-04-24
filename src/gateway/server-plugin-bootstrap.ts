@@ -3,7 +3,10 @@ import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import { pinActivePluginChannelRegistry } from "../plugins/runtime.js";
-import { setGatewayNodesRuntime, setGatewaySubagentRuntime } from "../plugins/runtime/index.js";
+import {
+  setGatewayNodesRuntime,
+  setGatewaySubagentRuntime,
+} from "../plugins/runtime/gateway-bindings.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
 import {
   createGatewayNodesRuntime,
