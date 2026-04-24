@@ -1,0 +1,28 @@
+{
+  "id": "futurmix",
+  "enabledByDefault": true,
+  "providers": ["futurmix"],
+  "providerAuthEnvVars": {
+    "futurmix": ["FUTURMIX_API_KEY"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "futurmix",
+      "method": "api-key",
+      "choiceId": "futurmix-api-key",
+      "choiceLabel": "FuturMix API key",
+      "groupId": "futurmix",
+      "groupLabel": "FuturMix",
+      "groupHint": "API key",
+      "optionKey": "futurmixApiKey",
+      "cliFlag": "--futurmix-api-key",
+      "cliOption": "--futurmix-api-key <key>",
+      "cliDescription": "FuturMix API key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
