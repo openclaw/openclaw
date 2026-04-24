@@ -252,7 +252,7 @@ fun ChatSheetContent(
     ChatComposer(
       draftText = draftText,
       healthOk = healthOk,
-      thinkingLevel = activeSession?.thinkingLevel ?: thinkingLevel,
+      thinkingLevel = thinkingLevel,
       pendingRunCount = pendingRunCount,
       attachments = attachments,
       activeSession = activeSession,
@@ -274,7 +274,7 @@ fun ChatSheetContent(
         val outgoing = attachments.map { it.toOutgoingAttachment() }
         attachments.clear()
         attachmentError = null
-        viewModel.sendChat(message = text, thinking = activeSession?.thinkingLevel ?: thinkingLevel, attachments = outgoing)
+        viewModel.sendChat(message = text, thinking = thinkingLevel, attachments = outgoing)
       },
       footerContent = {
         ChatDisplayControlsRow(

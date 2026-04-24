@@ -28,7 +28,6 @@ class ConnectionManager(
   companion object {
     private val defaultOperatorScopes =
       listOf(
-        "operator.admin",
         "operator.read",
         "operator.write",
         "operator.talk.secrets",

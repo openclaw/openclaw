@@ -234,7 +234,7 @@ class ConnectionManagerTest {
   }
 
   @Test
-  fun buildOperatorConnectOptionsDefaultsIncludeAdminScope() {
+  fun buildOperatorConnectOptionsDefaultsAvoidAdminScopeUpgrade() {
     val app = RuntimeEnvironment.getApplication()
     val manager =
       ConnectionManager(
@@ -256,7 +256,7 @@ class ConnectionManagerTest {
 
     assertEquals("operator", options.role)
     assertEquals(
-      listOf("operator.admin", "operator.read", "operator.talk.secrets", "operator.write"),
+      listOf("operator.read", "operator.talk.secrets", "operator.write"),
       options.scopes,
     )
   }
