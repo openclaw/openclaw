@@ -20,6 +20,22 @@
     "target": "Agent Runtimes"
   },
   {
+    "source": "Codex harness",
+    "target": "Codex harness"
+  },
+  {
+    "source": "Agent harness plugins",
+    "target": "Agent harness plugins"
+  },
+  {
+    "source": "Agent loop",
+    "target": "Agent loop"
+  },
+  {
+    "source": "Models",
+    "target": "Models"
+  },
+  {
     "source": "Skills",
     "target": "Skills"
   },
