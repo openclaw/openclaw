@@ -49,27 +49,24 @@ Phase 2 tooling is live: `gemmaclaw setup` auto-detects hardware and provisions 
 
 ### Prerequisites
 
-- Node.js 22+ and pnpm
+- Node.js 22+ and [pnpm](https://pnpm.io/installation)
 - For gemma.cpp backend (advanced): cmake, g++ (or clang++), git, and a [HuggingFace token](https://huggingface.co/settings/tokens) (`HF_TOKEN`)
 
 No pre-installed Ollama, llama.cpp, or gemma.cpp required. Gemmaclaw downloads and manages everything under `~/.gemmaclaw/`.
 
-### Install
+### Quick start
+
+Clone, build, and run the setup wizard. Copy and paste the block below:
 
 ```bash
 git clone https://github.com/gemmaclaw/gemmaclaw.git
 cd gemmaclaw
 pnpm install
 pnpm build
-```
-
-### Quick setup (recommended)
-
-One command. Detects your hardware, picks the safest backend, provisions it, and runs a smoke test:
-
-```bash
 node gemmaclaw.mjs setup
 ```
+
+The setup command detects your hardware, picks the best backend, downloads the model, and runs a smoke test. When it finishes, your Gemma assistant is ready.
 
 Example output:
 
@@ -119,7 +116,7 @@ HF_TOKEN=hf_... node gemmaclaw.mjs provision --backend gemma-cpp
 
 ### Verify it works
 
-After setup or provisioning, the backend serves an OpenAI-compatible API. Test it:
+After setup or provisioning, the backend exposes a local chat completions endpoint. Test it:
 
 ```bash
 curl http://127.0.0.1:11434/v1/chat/completions \
@@ -128,6 +125,8 @@ curl http://127.0.0.1:11434/v1/chat/completions \
 ```
 
 Default ports: Ollama = 11434, llama.cpp = 8080, gemma.cpp = 11436.
+
+The API follows the [OpenAI Chat Completions format](https://platform.openai.com/docs/api-reference/chat/create), so any client or library that speaks that protocol will work out of the box. See the OpenAI docs for the full request/response schema if needed.
 
 ### Troubleshooting
 
@@ -171,8 +170,8 @@ Issues and pull requests are welcome. Keep contributions small, reproducible, an
 
 ## Links
 
-- [Upstream OpenClaw](https://github.com/openclaw/openclaw)
-- [OpenClaw docs](https://docs.openclaw.ai)
+- [Upstream OpenClaw](https://github.com/openclaw/openclaw) (the framework Gemmaclaw is built on)
+- [OpenClaw docs](https://docs.openclaw.ai) (optional reference for advanced configuration)
 - [gemma.cpp](https://github.com/google/gemma.cpp)
 
 ## Disclaimer
