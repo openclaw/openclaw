@@ -7,8 +7,6 @@ read_when:
 title: "Gateway-owned pairing"
 ---
 
-# Gateway-owned pairing (Option B)
-
 In Gateway-owned pairing, the **Gateway** is the source of truth for which nodes
 are allowed to join. UIs (macOS app, future clients) are just frontends that
 approve or reject pending requests.

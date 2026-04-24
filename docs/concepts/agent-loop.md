@@ -6,8 +6,6 @@ read_when:
 title: "Agent loop"
 ---
 
-# Agent Loop (OpenClaw)
-
 An agentic loop is the full “real” run of an agent: intake → context assembly → model inference →
 tool execution → streaming replies → persistence. It’s the authoritative path that turns a message
 into actions and a final reply, while keeping session state consistent.
