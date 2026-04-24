@@ -62,7 +62,12 @@ export function approvalRequestExplicitlyUnavailable(result: unknown): boolean {
   if (result === null || result === undefined || typeof result !== "object") {
     return false;
   }
-  const descriptor = Object.getOwnPropertyDescriptor(result, "decision");
+  let descriptor: PropertyDescriptor | undefined;
+  try {
+    descriptor = Object.getOwnPropertyDescriptor(result, "decision");
+  } catch {
+    return false;
+  }
   return descriptor !== undefined && "value" in descriptor && descriptor.value === null;
 }
 

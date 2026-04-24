@@ -390,6 +390,39 @@ describe("Codex app-server approval bridge", () => {
     expect(result).toEqual({ decision: "accept" });
   });
 
+  it("does not fail when request-time decision descriptors throw", async () => {
+    const params = createParams();
+    const requestResult = new Proxy(
+      { id: "plugin:approval-proxy", status: "accepted" },
+      {
+        getOwnPropertyDescriptor(target, property) {
+          if (property === "decision") {
+            throw new Error("descriptor trap must not fail approval");
+          }
+          return Reflect.getOwnPropertyDescriptor(target, property);
+        },
+      },
+    );
+    mockCallGatewayTool
+      .mockResolvedValueOnce(requestResult)
+      .mockResolvedValueOnce({ id: "plugin:approval-proxy", decision: "allow-once" });
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-proxy",
+        command: "pnpm test",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    expect(result).toEqual({ decision: "accept" });
+  });
+
   it("fails closed when no approval route is available", async () => {
     const params = createParams();
     mockCallGatewayTool.mockResolvedValueOnce({
