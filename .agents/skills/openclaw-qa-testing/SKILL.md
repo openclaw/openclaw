@@ -68,6 +68,7 @@ op account list
   - `OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC`
 - Convex QA secrets currently live in 1Password items:
   - vault: `OpenClaw`
+  - item: `OPENCLAW_QA_CONVEX_SITE_URL`
   - item: `OPENCLAW_QA_CONVEX_SECRET_MAINTAINER`
   - item: `OPENCLAW_QA_CONVEX_SECRET_CI`
 - Additional related notes/login items seen during QA credential work:
@@ -77,7 +78,8 @@ op account list
   - do not guess
   - ask the maintainer/operator for the current value or the current 1Password item name
   - for Telegram direct runs, `OPENCLAW_QA_TELEGRAM_GROUP_ID` may be stored separately from `Telegram E2E`
-  - for Convex runs, if the current `OPENCLAW_QA_CONVEX_SITE_URL` is not in the obvious notes, ask for the active pool URL before running
+  - for Convex runs, the leased Telegram credential should provide the Telegram group id and bot tokens together; do not require a separate `OPENCLAW_QA_TELEGRAM_GROUP_ID`
+  - for Convex runs, prefer `OpenClaw/OPENCLAW_QA_CONVEX_SITE_URL`; if that is stale or unclear, ask for the active pool URL before running
 - Prefer direct Telegram envs for the npm Telegram Docker lane when available:
 
 ```bash
@@ -88,6 +90,24 @@ OPENCLAW_QA_PROVIDER_MODE="mock-openai" \
 OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC="openclaw@beta" \
 pnpm test:docker:npm-telegram-live
 ```
+
+- Prefer Convex mode when the goal is stable shared QA infra:
+  - round-robin credential leasing
+  - thinner wrapper for channel-specific setup
+  - CLI/admin flows around the pooled credentials
+- Live npm Telegram Docker lane note:
+  - `scripts/e2e/npm-telegram-live-runner.ts` reads `OPENCLAW_NPM_TELEGRAM_PROVIDER_MODE`
+  - do not assume `OPENCLAW_QA_PROVIDER_MODE` is consumed by that wrapper
+  - if a 1Password note only gives `OPENCLAW_QA_PROVIDER_MODE`, map it explicitly to `OPENCLAW_NPM_TELEGRAM_PROVIDER_MODE` before running the Docker lane
+- Verified live shape:
+  - Convex mode can pass the real Docker lane without direct Telegram env vars
+  - leased Telegram payload includes the group id coupled to the driver/SUT tokens
+  - a real run of `pnpm test:docker:npm-telegram-live` passed with:
+    - `OPENCLAW_QA_CREDENTIAL_SOURCE=convex`
+    - `OPENCLAW_QA_CREDENTIAL_ROLE=maintainer`
+    - `OPENCLAW_QA_CONVEX_SITE_URL`
+    - `OPENCLAW_QA_CONVEX_SECRET_MAINTAINER`
+    - `OPENCLAW_NPM_TELEGRAM_PROVIDER_MODE=mock-openai`
 
 ## Character evals
 
