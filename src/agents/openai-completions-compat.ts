@@ -135,7 +135,9 @@ export function resolveOpenAICompletionsCompatDefaultsFromCapabilities(
 }
 
 export function detectOpenAICompletionsCompat(
-  model: Pick<Model<"openai-completions">, "provider" | "baseUrl" | "id" | "compat">,
+  model: Pick<Model<"openai-completions">, "provider" | "baseUrl" | "id"> & {
+    compat?: { supportsStore?: boolean } | null;
+  },
 ): DetectedOpenAICompletionsCompat {
   const capabilities = resolveProviderRequestCapabilities({
     provider: model.provider,
