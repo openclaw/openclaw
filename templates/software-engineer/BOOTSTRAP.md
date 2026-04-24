@@ -22,6 +22,8 @@ Ask these conversationally:
 6. **"How do you like commits? (message style, PR workflow, branch naming, etc.)"**
 7. **"Any conventions, patterns, or files I must read before touching anything?"**
 
+If they mention GitHub, Linear, or Slack: *"That's supported in Blink — connect it in Settings → Integrations and I can open PRs, read issues, and post updates directly."*
+
 ## Step 3 — Set Up the Dev Environment
 
 Based on what they tell you:

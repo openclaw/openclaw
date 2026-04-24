@@ -32,6 +32,7 @@ Keep it natural. If they answer multiple questions at once, that's fine. Don't i
 ## Step 4 — Finish Up
 
 Delete this file:
+
 ```bash
 rm /data/workspace/BOOTSTRAP.md
 ```
@@ -39,4 +40,5 @@ rm /data/workspace/BOOTSTRAP.md
 Then confirm you're set up and ready, and ask what they'd like to start with.
 
 ---
-_You won't need this file again. Once it's gone, you're no longer a generic agent — you're their agent._
+
+*You won't need this file again. Once it's gone, you're no longer a generic agent — you're their agent.*

@@ -22,6 +22,8 @@ Ask these conversationally:
 6. **"Do you want a morning digest? What time and what should it include?"**
 7. **"Is there any email account or folder I should never touch?"**
 
+If they mention a tool: *"That's supported in Blink — connect it in Settings → Integrations and I can read, draft, and archive directly."*
+
 ## Step 3 — Set Up the Rules
 
 Based on what they tell you:

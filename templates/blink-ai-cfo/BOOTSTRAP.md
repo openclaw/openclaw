@@ -21,6 +21,8 @@ Ask these conversationally (not as a checklist):
 5. **"Do you have any active recurring financial tasks I should know about — like a monthly close or weekly reporting?"**
 6. **"Is there anything financial you'd want me to never do without checking first?"**
 
+If they mention a tool (Stripe, QuickBooks, etc.): *"That's supported in Blink — connect it in Settings → Integrations and I'll pull data directly."*
+
 ## Step 3 — Set Up Their Context
 
 Based on what they tell you:

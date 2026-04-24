@@ -6,6 +6,7 @@ import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import { normalizeAnyChannelId } from "../channels/registry.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { readChannelAllowFromStoreEntriesSync } from "../pairing/allow-from-store-read.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -226,6 +227,34 @@ function resolveProviderAllowFrom(params: {
   }
 }
 
+// Paired senders (users who completed the operator-approved `/pair` device-
+// pair flow) are trusted DM owners for the channel+account. Their entries
+// live in the per-account pairing store under `{channel}-{accountId}-allow
+// From.json`. The plugin-provided `resolveAllowFrom` returns the static
+// config-derived list only, so we merge the pairing-store entries on top to
+// keep a single source of truth for "who is a trusted DM sender / owner
+// candidate" across every channel (telegram, slack, whatsapp, discord, ...).
+//
+// The underlying read is mtime-cached per file, so this stays on the hot
+// inbound-message path without re-reading the JSON every turn.
+function readChannelPairingStoreAllowFromEntries(
+  providerId: ChannelId | undefined,
+  accountId: string | null | undefined,
+): string[] {
+  if (!providerId) {
+    return [];
+  }
+  try {
+    return readChannelAllowFromStoreEntriesSync(
+      providerId,
+      process.env,
+      normalizeOptionalString(accountId) ?? undefined,
+    );
+  } catch {
+    return [];
+  }
+}
+
 function buildProviderAllowFromResolution(params: {
   plugin?: ChannelPlugin;
   cfg: OpenClawConfig;
@@ -248,13 +277,22 @@ function buildProviderAllowFromResolution(params: {
         cfg: params.cfg,
         accountId: params.accountId,
       });
+  const pairingStoreEntries = readChannelPairingStoreAllowFromEntries(providerId, params.accountId);
+  const mergedAllowFrom: Array<string | number> =
+    pairingStoreEntries.length === 0
+      ? resolvedAllowFrom.allowFrom
+      : [
+          ...(Array.isArray(resolvedAllowFrom.allowFrom) ? resolvedAllowFrom.allowFrom : []),
+          ...pairingStoreEntries,
+        ];
   return {
     ...resolvedAllowFrom,
+    allowFrom: mergedAllowFrom,
     allowFromList: formatAllowFromList({
       plugin: params.plugin,
       cfg: params.cfg,
       accountId: params.accountId,
-      allowFrom: resolvedAllowFrom.allowFrom,
+      allowFrom: mergedAllowFrom,
     }),
   };
 }
@@ -706,9 +744,7 @@ export function resolveCommandAuthorization(params: {
       ? true
       : ownerAllowlistConfigured
         ? senderIsOwner
-        : ownerState.allowAll ||
-          ownerState.ownerCandidatesForCommands.length === 0 ||
-          Boolean(matchedCommandOwner);
+        : senderIsOwnerByScope || Boolean(matchedCommandOwner);
   const isAuthorizedSender = resolveCommandSenderAuthorization({
     commandAuthorized,
     isOwnerForCommands,

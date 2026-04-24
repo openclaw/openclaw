@@ -22,6 +22,8 @@ Ask these conversationally:
 6. **"What does a good weekly customer health check need to include for you?"**
 7. **"Are there any customers right now that are at risk or need immediate attention?"**
 
+If they mention a support tool: *"That's supported in Blink — connect it in Settings → Integrations and I'll work with it directly."*
+
 ## Step 3 — Set Up the Customer System
 
 Based on what they tell you:

@@ -55,10 +55,29 @@ if [ "$(stat -c %U "${STATE_DIR}" 2>/dev/null || echo root)" != "node" ]; then
   chown -R node:node "${STATE_DIR}"
 fi
 
+# Pool mode: overwrite config with skeleton ONLY if not yet adopted.
+# The claim flow writes /data/.adopted after writing the real openclaw.json.
+# Without this guard, every restart clobbers the user's config with the skeleton.
+if [ "${BLINK_POOL_MODE:-}" = "true" ] && [ ! -f "${STATE_DIR}/.adopted" ]; then
+  rm -f "${STATE_DIR}/logs/config-health.json" "${CONFIG_FILE}.bak"
+  cat > "${CONFIG_FILE}" <<'POOL_SKELETON'
+{"agents":{"defaults":{"workspace":"/data/workspace"}},"plugins":{"slots":{"memory":"none"}},"gateway":{"auth":{"mode":"token"},"controlUi":{"dangerouslyAllowHostHeaderOriginFallback":true,"dangerouslyDisableDeviceAuth":true},"http":{"endpoints":{"chatCompletions":{"enabled":true}}}},"browser":{"headless":true,"noSandbox":true,"profiles":{"user":{"driver":"openclaw","cdpPort":18800,"color":"#00AA00"}}},"session":{"maintenance":{"mode":"enforce","pruneAfter":"30d","maxEntries":200}}}
+POOL_SKELETON
+  chown node:node "${CONFIG_FILE}"
+fi
+
 # Ensure agent dir always exists (for machines with pre-existing volumes that
 # never had this subdirectory — OpenClaw v2026.4.15 requires it).
 mkdir -p "${AGENT_DIR}"
 chown node:node "${AGENT_DIR}"
+
+# Source agent secrets (set via `blink secrets set` → /data/.env).
+if [ -f "${ENV_FILE}" ]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "${ENV_FILE}"
+  set +a
+fi
 
 # Seed auth-profiles.json with the Blink provider credential.
 # This is required by upstream v2026.4.15+ where the gateway reads API keys
@@ -189,14 +208,6 @@ with open('${CONFIG_FILE}') as f: d = json.load(f)
 if 'secrets' in d: del d['secrets']
 with open('${CONFIG_FILE}', 'w') as f: json.dump(d, f, indent=2)
 " 2>/dev/null
-fi
-
-# Source agent secrets (set via `blink secrets set` → /data/.env).
-if [ -f "${ENV_FILE}" ]; then
-  set -a
-  # shellcheck disable=SC1090
-  . "${ENV_FILE}"
-  set +a
 fi
 
 # Never let the gateway daemonize — Fly init supervises this process.

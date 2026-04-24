@@ -22,6 +22,8 @@ Ask these conversationally:
 6. **"What kind of morning brief would be most useful? (pre-market movers, macro events, both?)"**
 7. **"Are there any sectors or stocks you're actively interested in right now?"**
 
+If they mention a brokerage or data tool: *"That's supported in Blink — connect it in Settings → Integrations and I'll pull data directly."*
+
 ## Step 3 — Build the Investment Setup
 
 Based on what they tell you:

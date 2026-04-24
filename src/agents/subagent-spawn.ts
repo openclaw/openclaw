@@ -27,6 +27,7 @@ export {
   SUBAGENT_SPAWN_ACCEPTED_NOTE,
   SUBAGENT_SPAWN_SESSION_ACCEPTED_NOTE,
 } from "./subagent-spawn-accepted-note.js";
+import { resolveRequesterOriginForChild } from "./spawn-requester-origin.js";
 import {
   resolveConfiguredSubagentRunTimeoutSeconds,
   resolveSubagentModelAndThinkingPlan,
@@ -35,6 +36,7 @@ import {
 import {
   ADMIN_SCOPE,
   AGENT_LANE_SUBAGENT,
+  DEFAULT_SUBAGENT_MAX_CHILDREN_PER_AGENT,
   DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH,
   buildSubagentSystemPrompt,
   callGateway,
@@ -113,6 +115,7 @@ export type SpawnSubagentContext = {
   agentGroupId?: string | null;
   agentGroupChannel?: string | null;
   agentGroupSpace?: string | null;
+  agentMemberRoleIds?: string[];
   requesterAgentIdOverride?: string;
   /** Explicit workspace directory for subagent to inherit (optional). */
   workspaceDir?: string;
@@ -396,13 +399,6 @@ export async function spawnSubagentDirect(
         ? params.cleanup
         : "keep";
   const expectsCompletionMessage = params.expectsCompletionMessage !== false;
-  const requesterOrigin = normalizeDeliveryContext({
-    channel: ctx.agentChannel,
-    accountId: ctx.agentAccountId,
-    to: ctx.agentTo,
-    threadId: ctx.agentThreadId,
-  });
-  let childSessionOrigin = requesterOrigin;
   const hookRunner = subagentSpawnDeps.getGlobalHookRunner();
   const cfg = loadSubagentConfig();
 
@@ -441,7 +437,8 @@ export async function spawnSubagentDirect(
     };
   }
 
-  const maxChildren = cfg.agents?.defaults?.subagents?.maxChildrenPerAgent ?? 5;
+  const maxChildren =
+    cfg.agents?.defaults?.subagents?.maxChildrenPerAgent ?? DEFAULT_SUBAGENT_MAX_CHILDREN_PER_AGENT;
   const activeChildren = countActiveRunsForSession(requesterInternalKey);
   if (activeChildren >= maxChildren) {
     return {
@@ -465,6 +462,18 @@ export async function spawnSubagentDirect(
     };
   }
   const targetAgentId = requestedAgentId ? normalizeAgentId(requestedAgentId) : requesterAgentId;
+  const requesterOrigin = resolveRequesterOriginForChild({
+    cfg,
+    targetAgentId,
+    requesterAgentId,
+    requesterChannel: ctx.agentChannel,
+    requesterAccountId: ctx.agentAccountId,
+    requesterTo: ctx.agentTo,
+    requesterThreadId: ctx.agentThreadId,
+    requesterGroupSpace: ctx.agentGroupSpace,
+    requesterMemberRoleIds: ctx.agentMemberRoleIds,
+  });
+  let childSessionOrigin = requesterOrigin;
   if (targetAgentId !== requesterAgentId) {
     const allowAgents =
       resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowAgents ??

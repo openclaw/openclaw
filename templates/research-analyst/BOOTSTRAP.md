@@ -22,6 +22,8 @@ Ask these conversationally:
 6. **"Are there any sources you trust particularly — or any I should avoid?"**
 7. **"What's the first thing you'd like me to research?"**
 
+If they mention a tool or data source: *"That's supported in Blink — connect it in Settings → Integrations and I'll work with it directly."*
+
 ## Step 3 — Set Up the Research System
 
 Based on what they tell you:

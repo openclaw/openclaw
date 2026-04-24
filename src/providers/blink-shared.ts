@@ -49,12 +49,19 @@ export const BLINK_DEFAULT_MODEL_ID = "anthropic/claude-sonnet-4.6";
  * Keep model IDs in sync with what the gateway actually returns.
  */
 export const BLINK_MODEL_CATALOG_STATIC: BlinkModelCatalogEntry[] = [
+  { id: "anthropic/claude-opus-4.7", name: "Claude Opus 4.7", reasoning: false, input: ["text", "image"], contextWindow: 200000, maxTokens: 32000 },
+  { id: "anthropic/claude-opus-4.6", name: "Claude Opus 4.6", reasoning: false, input: ["text", "image"], contextWindow: 200000, maxTokens: 32000 },
+  { id: "anthropic/claude-opus-4.5", name: "Claude Opus 4.5", reasoning: false, input: ["text", "image"], contextWindow: 200000, maxTokens: 32000 },
+  { id: "anthropic/claude-opus-4.1", name: "Claude Opus 4.1", reasoning: false, input: ["text", "image"], contextWindow: 200000, maxTokens: 32000 },
+  { id: "anthropic/claude-opus-4", name: "Claude Opus 4", reasoning: false, input: ["text", "image"], contextWindow: 200000, maxTokens: 32000 },
   { id: "anthropic/claude-sonnet-4.6", name: "Claude Sonnet 4.6", reasoning: false, input: ["text", "image"], contextWindow: 200000, maxTokens: 64000 },
   { id: "anthropic/claude-sonnet-4.5", name: "Claude Sonnet 4.5", reasoning: false, input: ["text", "image"], contextWindow: 200000, maxTokens: 64000 },
+  { id: "anthropic/claude-sonnet-4", name: "Claude Sonnet 4", reasoning: false, input: ["text", "image"], contextWindow: 200000, maxTokens: 64000 },
   { id: "anthropic/claude-haiku-4.5", name: "Claude Haiku 4.5", reasoning: false, input: ["text", "image"], contextWindow: 200000, maxTokens: 16000 },
-  { id: "anthropic/claude-opus-4.5", name: "Claude Opus 4.5", reasoning: false, input: ["text", "image"], contextWindow: 200000, maxTokens: 32000 },
+  { id: "anthropic/claude-3.7-sonnet", name: "Claude 3.7 Sonnet", reasoning: false, input: ["text", "image"], contextWindow: 200000, maxTokens: 8192 },
   { id: "anthropic/claude-3.5-sonnet", name: "Claude 3.5 Sonnet", reasoning: false, input: ["text", "image"], contextWindow: 200000, maxTokens: 8192 },
   { id: "anthropic/claude-3.5-haiku", name: "Claude 3.5 Haiku", reasoning: false, input: ["text", "image"], contextWindow: 200000, maxTokens: 8192 },
+  { id: "anthropic/claude-3-haiku", name: "Claude 3 Haiku", reasoning: false, input: ["text", "image"], contextWindow: 200000, maxTokens: 4096 },
   { id: "openai/gpt-5.2", name: "GPT-5.2", reasoning: false, input: ["text", "image"], contextWindow: 1047576, maxTokens: 32768 },
   { id: "openai/gpt-5-mini", name: "GPT-5 Mini", reasoning: false, input: ["text", "image"], contextWindow: 128000, maxTokens: 16384 },
   { id: "openai/gpt-5.1-codex-mini", name: "GPT-5.1 Codex Mini", reasoning: false, input: ["text"], contextWindow: 1047576, maxTokens: 32768 },

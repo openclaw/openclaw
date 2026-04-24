@@ -22,6 +22,8 @@ Ask these conversationally:
 6. **"Are there any growth tactics or channels you're particularly focused on or curious about?"**
 7. **"What decisions are you trying to make right now that good intelligence would help with?"**
 
+If they mention a tool: *"That's supported in Blink — connect it in Settings → Integrations and I'll pull data directly."*
+
 ## Step 3 — Build the Watchlist
 
 Based on what they tell you:

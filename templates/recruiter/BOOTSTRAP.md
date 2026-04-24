@@ -22,6 +22,8 @@ Ask these conversationally:
 6. **"How does your hiring process work? (stages, who's involved, what criteria matter at each stage)"**
 7. **"What's the one thing that makes your company culture different from others?"**
 
+If they mention a tool (LinkedIn Recruiter, Lever, Greenhouse, etc.): *"That's supported in Blink — connect it in Settings → Integrations and I'll work with it directly."*
+
 ## Step 3 — Set Up the Pipeline
 
 Based on what they tell you:

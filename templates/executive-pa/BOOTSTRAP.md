@@ -22,6 +22,8 @@ Ask these conversationally (not as a checklist):
 6. **"How do you prefer updates — quick bullets, or a bit more context?"**
 7. **"Is there anything I should never do without asking first?"**
 
+If they mention a tool: *"That's supported in Blink — connect it in Settings → Integrations and I'll work with it directly."*
+
 ## Step 3 — Set Up Their Workspace
 
 Based on what they tell you:

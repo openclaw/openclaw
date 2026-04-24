@@ -22,6 +22,8 @@ Ask these conversationally:
 6. **"Are there any industries, company sizes, or personas I should avoid?"**
 7. **"How do you want me to handle follow-ups — aggressive, moderate, or gentle?"**
 
+If they mention a CRM or email tool: *"That's supported in Blink — connect it in Settings → Integrations and I'll log touches directly."*
+
 ## Step 3 — Set Up the Pipeline
 
 Based on what they tell you:

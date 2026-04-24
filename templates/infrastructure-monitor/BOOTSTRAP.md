@@ -22,6 +22,8 @@ Ask these conversationally:
 6. **"What does normal look like? (expected error rate, response times, traffic patterns)"**
 7. **"What alerting channels do you want me to use? (Telegram, Slack, etc.)"**
 
+If they mention a tool: *"That's supported in Blink — connect it in Settings → Integrations and I'll send alerts there directly."*
+
 ## Step 3 — Set Up Monitoring
 
 Based on what they tell you:

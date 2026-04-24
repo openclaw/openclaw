@@ -22,6 +22,8 @@ Ask these conversationally:
 6. **"What data sources do you have access to? (spreadsheets, APIs, dashboards, CSVs)"**
 7. **"What financial decisions are you trying to make right now?"**
 
+If they mention a data source: *"That's supported in Blink — connect it in Settings → Integrations and I'll pull data directly."*
+
 ## Step 3 — Build the Metrics Foundation
 
 Based on what they tell you:

@@ -5,9 +5,10 @@ import type {
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
 import {
-  ensureAuthProfileStore,
+  ensureAuthProfileStoreForLocalUpdate,
   listProfilesForProvider,
   type OAuthCredential,
+  type ProviderAuthResult,
 } from "openclaw/plugin-sdk/provider-auth";
 import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-auth";
 import { loginOpenAICodexOAuth } from "openclaw/plugin-sdk/provider-auth-login";
@@ -33,7 +34,7 @@ import {
 } from "./shared.js";
 
 const PROVIDER_ID = "openai-codex";
-const OPENAI_CODEX_BASE_URL = "https://chatgpt.com/backend-api";
+const OPENAI_CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex";
 const OPENAI_CODEX_GPT_54_MODEL_ID = "gpt-5.4";
 const OPENAI_CODEX_GPT_54_LEGACY_MODEL_ID = "gpt-5.4-codex";
 const OPENAI_CODEX_GPT_54_PRO_MODEL_ID = "gpt-5.4-pro";
@@ -95,6 +96,11 @@ const OPENAI_CODEX_MODERN_MODEL_IDS = [
   OPENAI_CODEX_GPT_53_SPARK_MODEL_ID,
 ] as const;
 
+function isLegacyCodexCompatBaseUrl(baseUrl?: string): boolean {
+  const trimmed = baseUrl?.trim();
+  return !!trimmed && /^https?:\/\/api\.githubcopilot\.com(?:\/v1)?\/?$/iu.test(trimmed);
+}
+
 function normalizeCodexTransportFields(params: {
   api?: ProviderRuntimeModel["api"] | null;
   baseUrl?: string;
@@ -103,9 +109,13 @@ function normalizeCodexTransportFields(params: {
   baseUrl?: string;
 } {
   const useCodexTransport =
-    !params.baseUrl || isOpenAIApiBaseUrl(params.baseUrl) || isOpenAICodexBaseUrl(params.baseUrl);
+    !params.baseUrl ||
+    isOpenAIApiBaseUrl(params.baseUrl) ||
+    isOpenAICodexBaseUrl(params.baseUrl) ||
+    isLegacyCodexCompatBaseUrl(params.baseUrl);
   const api =
-    useCodexTransport && (!params.api || params.api === "openai-responses")
+    useCodexTransport &&
+    (!params.api || params.api === "openai-responses" || params.api === "openai-completions")
       ? "openai-codex-responses"
       : (params.api ?? undefined);
   const baseUrl =
@@ -282,6 +292,51 @@ async function runOpenAICodexOAuth(ctx: ProviderAuthContext) {
   });
 }
 
+async function runImportOpenAICodexCliAuth(ctx: ProviderAuthContext) {
+  const profile = readOpenAICodexCliOAuthProfile({
+    env: ctx.env ?? process.env,
+    store: ensureAuthProfileStoreForLocalUpdate(ctx.agentDir),
+  });
+  if (!profile) {
+    throw new Error(
+      "No compatible Codex CLI OAuth login found. Sign in with `codex` first or use ChatGPT OAuth instead.",
+    );
+  }
+
+  return {
+    profiles: [{ profileId: profile.profileId, credential: profile.credential }],
+    configPatch: {
+      agents: {
+        defaults: {
+          models: {
+            [OPENAI_CODEX_DEFAULT_MODEL]: {},
+          },
+        },
+      },
+    },
+    defaultModel: OPENAI_CODEX_DEFAULT_MODEL,
+    notes: ["Imported existing Codex CLI login into OpenClaw canonical auth."],
+  } satisfies ProviderAuthResult;
+}
+
+function ensureOpenAICodexCatalogAuthStore(ctx: { agentDir?: string; env?: NodeJS.ProcessEnv }) {
+  const store = ensureAuthProfileStoreForLocalUpdate(ctx.agentDir);
+  const profile = readOpenAICodexCliOAuthProfile({
+    env: ctx.env ?? process.env,
+    store,
+  });
+  if (!profile) {
+    return store;
+  }
+  return {
+    ...store,
+    profiles: {
+      ...store.profiles,
+      [profile.profileId]: profile.credential,
+    },
+  };
+}
+
 function buildOpenAICodexAuthDoctorHint(ctx: { profileId?: string }) {
   if (ctx.profileId !== CODEX_CLI_PROFILE_ID) {
     return undefined;
@@ -302,6 +357,13 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
         kind: "oauth",
         run: async (ctx) => await runOpenAICodexOAuth(ctx),
       },
+      {
+        id: "import-codex-cli",
+        label: "Import Codex CLI login",
+        hint: "Use existing .codex auth once",
+        kind: "oauth",
+        run: async (ctx) => await runImportOpenAICodexCliAuth(ctx),
+      },
     ],
     wizard: {
       setup: {
@@ -314,9 +376,7 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
     catalog: {
       order: "profile",
       run: async (ctx) => {
-        const authStore = ensureAuthProfileStore(ctx.agentDir, {
-          allowKeychainPrompt: false,
-        });
+        const authStore = ensureOpenAICodexCatalogAuthStore(ctx);
         if (listProfilesForProvider(authStore, PROVIDER_ID).length === 0) {
           return null;
         }
@@ -327,15 +387,18 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
     },
     resolveDynamicModel: (ctx) => resolveCodexForwardCompatModel(ctx),
     buildAuthDoctorHint: (ctx) => buildOpenAICodexAuthDoctorHint(ctx),
-    resolveExternalAuthProfiles: (ctx) => {
-      const profile = readOpenAICodexCliOAuthProfile({
-        env: ctx.env,
-        store: ctx.store,
-      });
-      return profile ? [{ ...profile, persistence: "runtime-only" }] : undefined;
-    },
-    supportsXHighThinking: ({ modelId }) =>
-      matchesExactOrPrefix(modelId, OPENAI_CODEX_XHIGH_MODEL_IDS),
+    resolveThinkingProfile: ({ modelId }) => ({
+      levels: [
+        { id: "off" },
+        { id: "minimal" },
+        { id: "low" },
+        { id: "medium" },
+        { id: "high" },
+        ...(matchesExactOrPrefix(modelId, OPENAI_CODEX_XHIGH_MODEL_IDS)
+          ? [{ id: "xhigh" as const }]
+          : []),
+      ],
+    }),
     isModernModelRef: ({ modelId }) => matchesExactOrPrefix(modelId, OPENAI_CODEX_MODERN_MODEL_IDS),
     preferRuntimeResolvedModel: (ctx) => {
       if (normalizeProviderId(ctx.provider) !== PROVIDER_ID) {
@@ -366,6 +429,13 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
     fetchUsageSnapshot: async (ctx) =>
       await fetchCodexUsage(ctx.token, ctx.accountId, ctx.timeoutMs, ctx.fetchFn),
     refreshOAuth: async (cred) => await refreshOpenAICodexOAuthCredential(cred),
+    resolveExternalAuthProfiles: (ctx) => {
+      const profile = readOpenAICodexCliOAuthProfile({
+        env: ctx.env,
+        store: ctx.store,
+      });
+      return profile ? [{ ...profile, persistence: "runtime-only" }] : [];
+    },
     augmentModelCatalog: (ctx) => {
       const gpt54Template = findCatalogTemplate({
         entries: ctx.entries,

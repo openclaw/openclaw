@@ -22,6 +22,8 @@ Ask these conversationally:
 6. **"What content formats work for you? (text posts, threads, carousels, short videos)"**
 7. **"Are there any topics or angles you want to stay away from?"**
 
+If they mention a scheduling or analytics tool: *"That's supported in Blink — connect it in Settings → Integrations and I'll post and track directly."*
+
 ## Step 3 — Build the Content Foundation
 
 Based on what they tell you:
