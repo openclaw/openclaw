@@ -1581,7 +1581,6 @@
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "0.19.1",
-    "@anthropic-ai/vertex-sdk": "^0.16.0",
     "@clack/prompts": "^1.2.0",
     "@lydell/node-pty": "1.2.0-beta.12",
     "@mariozechner/pi-agent-core": "0.70.2",

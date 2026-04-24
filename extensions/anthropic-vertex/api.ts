@@ -1,3 +1,5 @@
+import type { StreamFn } from "@mariozechner/pi-agent-core";
+
 export {
   ANTHROPIC_VERTEX_DEFAULT_MODEL_ID,
   buildAnthropicVertexProvider,
@@ -39,4 +41,29 @@ export function resolveImplicitAnthropicVertexProvider(params?: { env?: NodeJS.P
   }
 
   return buildAnthropicVertexProvider({ env });
+}
+
+export function createAnthropicVertexStreamFn(
+  projectId: string | undefined,
+  region: string,
+  baseURL?: string,
+): StreamFn {
+  return async (model, context, options) => {
+    const runtime = await import("./stream-runtime.js");
+    return runtime.createAnthropicVertexStreamFn(projectId, region, baseURL)(
+      model,
+      context,
+      options,
+    );
+  };
+}
+
+export function createAnthropicVertexStreamFnForModel(
+  model: { baseUrl?: string },
+  env: NodeJS.ProcessEnv = process.env,
+): StreamFn {
+  return async (...args) => {
+    const runtime = await import("./stream-runtime.js");
+    return runtime.createAnthropicVertexStreamFnForModel(model, env)(...args);
+  };
 }
