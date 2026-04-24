@@ -2,6 +2,7 @@
 
 import fs from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { runTelegramQaLive } from "../../extensions/qa-lab/src/live-transports/telegram/telegram-live.runtime.ts";
 import { formatErrorMessage } from "../../src/infra/errors.ts";
 
@@ -15,6 +16,14 @@ function splitCsv(value: string | undefined) {
     .split(",")
     .map((entry) => entry.trim())
     .filter((entry) => entry.length > 0);
+}
+
+function resolveCredentialSource(env: NodeJS.ProcessEnv) {
+  return env.OPENCLAW_NPM_TELEGRAM_CREDENTIAL_SOURCE ?? env.OPENCLAW_QA_CREDENTIAL_SOURCE;
+}
+
+function resolveCredentialRole(env: NodeJS.ProcessEnv) {
+  return env.OPENCLAW_NPM_TELEGRAM_CREDENTIAL_ROLE ?? env.OPENCLAW_QA_CREDENTIAL_ROLE;
 }
 
 async function resolveTrustedOpenClawCommand(rawCommand: string) {
@@ -63,8 +72,8 @@ async function main() {
     fastMode: parseBoolean(process.env.OPENCLAW_NPM_TELEGRAM_FAST),
     scenarioIds: splitCsv(process.env.OPENCLAW_NPM_TELEGRAM_SCENARIOS),
     sutAccountId: process.env.OPENCLAW_NPM_TELEGRAM_SUT_ACCOUNT,
-    credentialSource: process.env.OPENCLAW_QA_CREDENTIAL_SOURCE,
-    credentialRole: process.env.OPENCLAW_QA_CREDENTIAL_ROLE,
+    credentialSource: resolveCredentialSource(process.env),
+    credentialRole: resolveCredentialRole(process.env),
   });
 
   process.stdout.write(`NPM Telegram QA report: ${result.reportPath}\n`);
@@ -78,7 +87,14 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  process.stderr.write(`npm telegram live e2e failed: ${formatErrorMessage(error)}\n`);
-  process.exitCode = 1;
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((error) => {
+    process.stderr.write(`npm telegram live e2e failed: ${formatErrorMessage(error)}\n`);
+    process.exitCode = 1;
+  });
+}
+
+export const __testing = {
+  resolveCredentialRole,
+  resolveCredentialSource,
+};

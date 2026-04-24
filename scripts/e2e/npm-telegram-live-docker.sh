@@ -9,6 +9,32 @@ DOCKER_TARGET="${OPENCLAW_NPM_TELEGRAM_DOCKER_TARGET:-build}"
 PACKAGE_SPEC="${OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC:-openclaw@beta}"
 OUTPUT_DIR="${OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR:-.artifacts/qa-e2e/npm-telegram-live}"
 
+resolve_credential_source() {
+  if [ -n "${OPENCLAW_NPM_TELEGRAM_CREDENTIAL_SOURCE:-}" ]; then
+    printf "%s" "$OPENCLAW_NPM_TELEGRAM_CREDENTIAL_SOURCE"
+    return 0
+  fi
+  if [ -n "${OPENCLAW_QA_CREDENTIAL_SOURCE:-}" ]; then
+    printf "%s" "$OPENCLAW_QA_CREDENTIAL_SOURCE"
+    return 0
+  fi
+  if [ -n "${CI:-}" ] && [ -n "${OPENCLAW_QA_CONVEX_SITE_URL:-}" ]; then
+    if [ -n "${OPENCLAW_QA_CONVEX_SECRET_CI:-}" ] || [ -n "${OPENCLAW_QA_CONVEX_SECRET_MAINTAINER:-}" ]; then
+      printf "convex"
+    fi
+  fi
+}
+
+resolve_credential_role() {
+  if [ -n "${OPENCLAW_NPM_TELEGRAM_CREDENTIAL_ROLE:-}" ]; then
+    printf "%s" "$OPENCLAW_NPM_TELEGRAM_CREDENTIAL_ROLE"
+    return 0
+  fi
+  if [ -n "${OPENCLAW_QA_CREDENTIAL_ROLE:-}" ]; then
+    printf "%s" "$OPENCLAW_QA_CREDENTIAL_ROLE"
+  fi
+}
+
 validate_openclaw_package_spec() {
   local spec="$1"
   if [[ "$spec" =~ ^openclaw@(beta|latest|[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*|-beta\.[1-9][0-9]*)?)$ ]]; then
@@ -24,6 +50,8 @@ docker_e2e_build_or_reuse "$IMAGE_NAME" npm-telegram-live "$ROOT_DIR/scripts/e2e
 
 mkdir -p "$ROOT_DIR/.artifacts/qa-e2e"
 run_log="$(mktemp "${TMPDIR:-/tmp}/openclaw-npm-telegram-live.XXXXXX")"
+credential_source="$(resolve_credential_source)"
+credential_role="$(resolve_credential_role)"
 
 docker_env=(
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0
@@ -39,6 +67,13 @@ forward_env_if_set() {
   fi
 }
 
+if [ -n "$credential_source" ]; then
+  docker_env+=(-e OPENCLAW_QA_CREDENTIAL_SOURCE="$credential_source")
+fi
+if [ -n "$credential_role" ]; then
+  docker_env+=(-e OPENCLAW_QA_CREDENTIAL_ROLE="$credential_role")
+fi
+
 for key in \
   OPENAI_API_KEY \
   ANTHROPIC_API_KEY \
@@ -50,8 +85,6 @@ for key in \
   OPENCLAW_QA_TELEGRAM_GROUP_ID \
   OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN \
   OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN \
-  OPENCLAW_QA_CREDENTIAL_SOURCE \
-  OPENCLAW_QA_CREDENTIAL_ROLE \
   OPENCLAW_QA_CONVEX_SITE_URL \
   OPENCLAW_QA_CONVEX_SECRET_CI \
   OPENCLAW_QA_CONVEX_SECRET_MAINTAINER \

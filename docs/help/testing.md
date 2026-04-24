@@ -112,7 +112,13 @@ runs the same lanes before release approval.
     live Telegram QA lane with that installed package as the SUT Gateway.
   - Defaults to `OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC=openclaw@beta`.
   - Uses the same Telegram env credentials or Convex credential source as
-    `pnpm openclaw qa telegram`.
+    `pnpm openclaw qa telegram`. For CI/release automation, set
+    `OPENCLAW_NPM_TELEGRAM_CREDENTIAL_SOURCE=convex` plus
+    `OPENCLAW_QA_CONVEX_SITE_URL` and the role secret. If
+    `OPENCLAW_QA_CONVEX_SITE_URL` and a Convex role secret are present in CI,
+    the Docker wrapper selects Convex automatically.
+  - `OPENCLAW_NPM_TELEGRAM_CREDENTIAL_ROLE=ci|maintainer` overrides the shared
+    `OPENCLAW_QA_CREDENTIAL_ROLE` for this lane only.
 - `pnpm test:docker:bundled-channel-deps`
   - Packs and installs the current OpenClaw build in Docker, starts the Gateway
     with OpenAI configured, then enables bundled channel/plugins via config
