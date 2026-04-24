@@ -939,6 +939,14 @@ export const OpenClawSchema = z
     plugins: z
       .object({
         enabled: z.boolean().optional(),
+        bundled: z
+          .object({
+            mode: z
+              .union([z.literal("default"), z.literal("explicit"), z.literal("disabled")])
+              .optional(),
+          })
+          .strict()
+          .optional(),
         allow: z.array(z.string()).optional(),
         deny: z.array(z.string()).optional(),
         load: z

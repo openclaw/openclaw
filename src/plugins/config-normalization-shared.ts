@@ -8,6 +8,9 @@ import { defaultSlotIdForKey } from "./slots.js";
 
 export type NormalizedPluginsConfig = {
   enabled: boolean;
+  bundled: {
+    mode: "default" | "explicit" | "disabled";
+  };
   allow: string[];
   deny: string[];
   loadPaths: string[];
@@ -55,6 +58,11 @@ function normalizeSlotValue(value: unknown): string | null | undefined {
     return null;
   }
   return trimmed;
+}
+
+function normalizeBundledMode(value: unknown): NormalizedPluginsConfig["bundled"]["mode"] {
+  const normalized = normalizeOptionalLowercaseString(value);
+  return normalized === "explicit" || normalized === "disabled" ? normalized : "default";
 }
 
 function normalizePluginEntries(
@@ -145,14 +153,25 @@ export function normalizePluginsConfigWithResolver(
   config?: OpenClawConfig["plugins"],
   normalizePluginId: NormalizePluginId = identityNormalizePluginId,
 ): NormalizedPluginsConfig {
+  const bundledMode = normalizeBundledMode(config?.bundled?.mode);
+  const hasExplicitMemorySlot =
+    !!config?.slots && Object.prototype.hasOwnProperty.call(config.slots, "memory");
   const memorySlot = normalizeSlotValue(config?.slots?.memory);
   return {
     enabled: config?.enabled !== false,
+    bundled: {
+      mode: bundledMode,
+    },
     allow: normalizeList(config?.allow, normalizePluginId),
     deny: normalizeList(config?.deny, normalizePluginId),
     loadPaths: normalizeList(config?.load?.paths, identityNormalizePluginId),
     slots: {
-      memory: memorySlot === undefined ? defaultSlotIdForKey("memory") : memorySlot,
+      memory:
+        memorySlot === undefined
+          ? hasExplicitMemorySlot || bundledMode === "default"
+            ? defaultSlotIdForKey("memory")
+            : null
+          : memorySlot,
       contextEngine: normalizeSlotValue(config?.slots?.contextEngine),
     },
     entries: normalizePluginEntries(config?.entries, normalizePluginId),
@@ -164,6 +183,9 @@ export function hasExplicitPluginConfig(plugins?: OpenClawConfig["plugins"]): bo
     return false;
   }
   if (typeof plugins.enabled === "boolean") {
+    return true;
+  }
+  if (plugins.bundled && Object.keys(plugins.bundled).length > 0) {
     return true;
   }
   if (Array.isArray(plugins.allow) && plugins.allow.length > 0) {

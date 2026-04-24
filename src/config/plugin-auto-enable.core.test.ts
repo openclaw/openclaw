@@ -448,6 +448,21 @@ describe("applyPluginAutoEnable core", () => {
     expect(result.changes).toEqual([]);
   });
 
+  it("does not auto-enable bundled channels when bundled plugins are disabled", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        channels: { slack: { botToken: "x" } },
+        plugins: { bundled: { mode: "disabled" } },
+      },
+      env,
+    });
+
+    expect(result.config.channels?.slack?.enabled).toBeUndefined();
+    expect(result.config.plugins?.allow).toBeUndefined();
+    expect(result.changes).toEqual([]);
+    expect(result.autoEnabledReasons).toEqual({});
+  });
+
   it("respects built-in channel explicit disable via channels.<id>.enabled", () => {
     const result = applyPluginAutoEnable({
       config: {

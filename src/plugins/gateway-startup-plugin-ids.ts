@@ -100,6 +100,9 @@ function canStartConfiguredChannelPlugin(params: {
   if (params.pluginsConfig.entries[params.plugin.id]?.enabled === false) {
     return false;
   }
+  if (params.plugin.origin === "bundled" && params.pluginsConfig.bundled.mode === "disabled") {
+    return false;
+  }
   const explicitBundledChannelConfig =
     params.plugin.origin === "bundled" &&
     params.plugin.channels.some((channelId) =>

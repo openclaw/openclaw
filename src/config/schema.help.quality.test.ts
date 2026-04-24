@@ -343,6 +343,8 @@ const TARGET_KEYS = [
   "ui.assistant",
   "plugins",
   "plugins.enabled",
+  "plugins.bundled",
+  "plugins.bundled.mode",
   "plugins.allow",
   "plugins.deny",
   "plugins.load",

@@ -24,6 +24,7 @@ export type PluginExplicitSelectionCause =
 export type PluginActivationCause =
   | PluginExplicitSelectionCause
   | "plugins-disabled"
+  | "bundled-plugins-disabled"
   | "blocked-by-denylist"
   | "disabled-in-config"
   | "workspace-disabled-by-default"
@@ -31,6 +32,7 @@ export type PluginActivationCause =
   | "enabled-by-effective-config"
   | "bundled-channel-configured"
   | "bundled-default-enablement"
+  | "bundled-defaults-disabled"
   | "bundled-disabled-by-default";
 
 export type PluginActivationStateLike = {
@@ -47,6 +49,9 @@ export type PluginActivationDecision = PluginActivationStateLike & {
 
 type PluginActivationConfigLike = {
   enabled: boolean;
+  bundled: {
+    mode: "default" | "explicit" | "disabled";
+  };
   allow: readonly string[];
   deny: readonly string[];
   slots: {
@@ -68,6 +73,7 @@ export const PLUGIN_ACTIVATION_REASON_BY_CAUSE: Record<PluginActivationCause, st
   "selected-context-engine-slot": "selected context engine slot",
   "selected-in-allowlist": "selected in allowlist",
   "plugins-disabled": "plugins disabled",
+  "bundled-plugins-disabled": "bundled plugins disabled",
   "blocked-by-denylist": "blocked by denylist",
   "disabled-in-config": "disabled in config",
   "workspace-disabled-by-default": "workspace plugin (disabled by default)",
@@ -75,6 +81,7 @@ export const PLUGIN_ACTIVATION_REASON_BY_CAUSE: Record<PluginActivationCause, st
   "enabled-by-effective-config": "enabled by effective config",
   "bundled-channel-configured": "channel configured",
   "bundled-default-enablement": "bundled default enablement",
+  "bundled-defaults-disabled": "bundled defaults disabled",
   "bundled-disabled-by-default": "bundled (disabled by default)",
 };
 
@@ -125,7 +132,10 @@ function resolveExplicitPluginSelectionShared<TRootConfig>(params: {
   if (params.config.slots.contextEngine === params.id) {
     return { explicitlyEnabled: true, cause: "selected-context-engine-slot" };
   }
-  if (params.origin !== "bundled" && params.config.allow.includes(params.id)) {
+  if (
+    (params.origin !== "bundled" || params.config.bundled.mode === "explicit") &&
+    params.config.allow.includes(params.id)
+  ) {
     return { explicitlyEnabled: true, cause: "selected-in-allowlist" };
   }
   return { explicitlyEnabled: false };
@@ -183,6 +193,15 @@ export function resolvePluginActivationDecisionShared<TRootConfig>(params: {
       explicitlyEnabled: explicitSelection.explicitlyEnabled,
       source: "disabled",
       cause: "disabled-in-config",
+    };
+  }
+  if (params.origin === "bundled" && params.config.bundled.mode === "disabled") {
+    return {
+      enabled: false,
+      activated: false,
+      explicitlyEnabled: explicitSelection.explicitlyEnabled,
+      source: "disabled",
+      cause: "bundled-plugins-disabled",
     };
   }
   const explicitlyAllowed = params.config.allow.includes(params.id);
@@ -279,6 +298,15 @@ export function resolvePluginActivationDecisionShared<TRootConfig>(params: {
     };
   }
   if (params.origin === "bundled" && params.enabledByDefault === true) {
+    if (params.config.bundled.mode === "explicit") {
+      return {
+        enabled: false,
+        activated: false,
+        explicitlyEnabled: false,
+        source: "disabled",
+        cause: "bundled-defaults-disabled",
+      };
+    }
     return {
       enabled: true,
       activated: true,

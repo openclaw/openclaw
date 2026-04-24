@@ -45,6 +45,9 @@ describe("normalizePluginsConfig", () => {
   it.each([
     [{}, "memory-core"],
     [{ slots: { memory: "custom-memory" } }, "custom-memory"],
+    [{ bundled: { mode: "explicit" } }, null],
+    [{ bundled: { mode: "disabled" } }, null],
+    [{ bundled: { mode: "explicit" }, slots: { memory: "memory-core" } }, "memory-core"],
     [{ slots: { memory: "none" } }, null],
     [{ slots: { memory: "None" } }, null],
     [{ slots: { memory: "  custom-memory  " } }, "custom-memory"],
@@ -52,6 +55,25 @@ describe("normalizePluginsConfig", () => {
     [{ slots: { memory: "   " } }, "memory-core"],
   ] as const)("normalizes memory slot for %o", (config, expected) => {
     expect(normalizePluginsConfig(config).slots.memory).toBe(expected);
+  });
+
+  const bundledModeCases: Array<[Parameters<typeof normalizePluginsConfig>[0], string]> = [
+    [{}, "default"],
+    [{ bundled: { mode: "default" } }, "default"],
+    [{ bundled: { mode: "explicit" } }, "explicit"],
+    [{ bundled: { mode: "disabled" } }, "disabled"],
+    [
+      { bundled: { mode: "DISABLED" } } as unknown as Parameters<typeof normalizePluginsConfig>[0],
+      "disabled",
+    ],
+    [
+      { bundled: { mode: "unknown" } } as unknown as Parameters<typeof normalizePluginsConfig>[0],
+      "default",
+    ],
+  ];
+
+  it.each(bundledModeCases)("normalizes bundled plugin mode for %o", (config, expected) => {
+    expect(normalizePluginsConfig(config).bundled.mode).toBe(expected);
   });
 
   it.each([
@@ -258,7 +280,9 @@ describe("resolveEffectivePluginActivationState", () => {
   });
 
   it("preserves explicit selection even when plugins are globally disabled", () => {
-    const rawConfig = {
+    const rawConfig: NonNullable<
+      Parameters<typeof resolveEffectivePluginActivationState>[0]["rootConfig"]
+    > = {
       plugins: {
         enabled: false,
         entries: {
@@ -300,6 +324,81 @@ describe("resolveEffectivePluginActivationState", () => {
       explicitlyEnabled: false,
       source: "default",
       reason: "bundled default enablement",
+    });
+  });
+
+  it("blocks bundled plugins when bundled mode is disabled", () => {
+    const rawConfig: NonNullable<
+      Parameters<typeof resolveEffectivePluginActivationState>[0]["rootConfig"]
+    > = {
+      channels: {
+        telegram: {
+          enabled: true,
+        },
+      },
+      plugins: {
+        bundled: { mode: "disabled" },
+        allow: ["telegram"],
+        entries: {
+          telegram: {
+            enabled: true,
+          },
+        },
+      },
+    };
+
+    expect(
+      resolveEffectivePluginActivationState({
+        id: "telegram",
+        origin: "bundled",
+        config: normalizePluginsConfig(rawConfig.plugins),
+        rootConfig: rawConfig,
+        activationSource: createPluginActivationSource({ config: rawConfig }),
+        enabledByDefault: true,
+      }),
+    ).toEqual({
+      enabled: false,
+      activated: false,
+      explicitlyEnabled: true,
+      source: "disabled",
+      reason: "bundled plugins disabled",
+    });
+  });
+
+  it("disables bundled defaults in explicit bundled mode until selected", () => {
+    expect(
+      resolveEffectivePluginActivationState({
+        id: "openai",
+        origin: "bundled",
+        config: normalizePluginsConfig({
+          bundled: { mode: "explicit" },
+        }),
+        enabledByDefault: true,
+      }),
+    ).toEqual({
+      enabled: false,
+      activated: false,
+      explicitlyEnabled: false,
+      source: "disabled",
+      reason: "bundled defaults disabled",
+    });
+
+    expect(
+      resolveEffectivePluginActivationState({
+        id: "openai",
+        origin: "bundled",
+        config: normalizePluginsConfig({
+          bundled: { mode: "explicit" },
+          allow: ["openai"],
+        }),
+        enabledByDefault: true,
+      }),
+    ).toEqual({
+      enabled: true,
+      activated: true,
+      explicitlyEnabled: true,
+      source: "explicit",
+      reason: "selected in allowlist",
     });
   });
 

@@ -582,6 +582,21 @@ function isPluginDenied(cfg: OpenClawConfig, pluginId: string): boolean {
   return Array.isArray(deny) && deny.includes(pluginId);
 }
 
+function isBundledPluginDisabledByPolicy(
+  cfg: OpenClawConfig,
+  pluginId: string,
+  manifestRegistry: PluginManifestRegistry,
+): boolean {
+  if (cfg.plugins?.bundled?.mode !== "disabled") {
+    return false;
+  }
+  const plugin = manifestRegistry.plugins.find((entry) => entry.id === pluginId);
+  if (plugin) {
+    return plugin.origin === "bundled";
+  }
+  return normalizeChatChannelId(pluginId) !== null;
+}
+
 function isBuiltInChannelAlreadyEnabled(cfg: OpenClawConfig, channelId: string): boolean {
   const channels = cfg.channels as Record<string, unknown> | undefined;
   const channelConfig = channels?.[channelId];
@@ -670,6 +685,7 @@ function materializeConfiguredPluginEntryAllowlist(params: {
       !hasMaterialPluginEntryConfig(entry) ||
       isPluginDenied(next, pluginId) ||
       isPluginExplicitlyDisabled(next, pluginId) ||
+      isBundledPluginDisabledByPolicy(next, pluginId, params.manifestRegistry) ||
       allow.includes(pluginId) ||
       !isKnownPluginId(pluginId, params.manifestRegistry)
     ) {
@@ -738,7 +754,11 @@ export function materializePluginAutoEnableCandidatesInternal(params: {
 
   for (const entry of params.candidates) {
     const builtInChannelId = normalizeChatChannelId(entry.pluginId);
-    if (isPluginDenied(next, entry.pluginId) || isPluginExplicitlyDisabled(next, entry.pluginId)) {
+    if (
+      isPluginDenied(next, entry.pluginId) ||
+      isPluginExplicitlyDisabled(next, entry.pluginId) ||
+      isBundledPluginDisabledByPolicy(next, entry.pluginId, params.manifestRegistry)
+    ) {
       continue;
     }
     if (

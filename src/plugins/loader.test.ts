@@ -3784,6 +3784,52 @@ module.exports = { id: "throws-after-import", register() {} };`,
     expect(blocked?.status).toBe("disabled");
   });
 
+  it("can load an allowed external plugin while bundled plugins are disabled", () => {
+    const bundledDir = makeTempDir();
+    const bundled = writePlugin({
+      id: "openai",
+      dir: bundledDir,
+      filename: "openai.cjs",
+      body: simplePluginBody("openai"),
+    });
+    fs.writeFileSync(
+      path.join(bundled.dir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "openai",
+          enabledByDefault: true,
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+
+    const plugin = writePlugin({
+      id: "foo",
+      body: simplePluginBody("foo"),
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["foo"],
+        bundled: { mode: "disabled" },
+        entries: {
+          foo: { enabled: true },
+        },
+      },
+    });
+
+    expect(registry.plugins.find((entry) => entry.id === "foo")?.status).toBe("loaded");
+    expect(registry.plugins.find((entry) => entry.id === "openai")).toMatchObject({
+      status: "disabled",
+      error: "bundled plugins disabled",
+    });
+  });
+
   it("fails fast on invalid plugin config", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({

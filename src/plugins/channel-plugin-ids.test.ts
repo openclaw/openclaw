@@ -510,6 +510,29 @@ describe("resolveGatewayStartupPluginIds", () => {
     });
   });
 
+  it("does not start bundled channel or sidecar plugins when bundled plugins are disabled", () => {
+    expectStartupPluginIdsCase({
+      config: {
+        channels: {
+          "demo-channel": {
+            token: "configured",
+            enabled: true,
+          },
+        },
+        plugins: {
+          bundled: { mode: "disabled" },
+          allow: ["browser", "demo-channel"],
+          entries: {
+            browser: { enabled: true },
+            "demo-channel": { enabled: true },
+          },
+        },
+      } as OpenClawConfig,
+      env: {},
+      expected: [],
+    });
+  });
+
   it("includes the explicitly selected memory slot plugin in startup scope", () => {
     expectStartupPluginIdsCase({
       config: createStartupConfig({

@@ -33,6 +33,16 @@ export type PluginsLoadConfig = {
   paths?: string[];
 };
 
+export type BundledPluginsConfig = {
+  /**
+   * Bundled plugin activation policy.
+   * - "default": preserve built-in default enablement.
+   * - "explicit": disable bundled defaults unless selected explicitly.
+   * - "disabled": block all bundled plugins.
+   */
+  mode?: "default" | "explicit" | "disabled";
+};
+
 export type PluginInstallRecord = Omit<InstallRecordBase, "source"> & {
   source: InstallRecordBase["source"] | "marketplace";
   marketplaceName?: string;
@@ -43,6 +53,8 @@ export type PluginInstallRecord = Omit<InstallRecordBase, "source"> & {
 export type PluginsConfig = {
   /** Enable or disable plugin loading. */
   enabled?: boolean;
+  /** Controls default activation behavior for plugins shipped with OpenClaw. */
+  bundled?: BundledPluginsConfig;
   /** Optional plugin allowlist (plugin ids). */
   allow?: string[];
   /** Optional plugin denylist (plugin ids). */

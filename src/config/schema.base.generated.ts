@@ -22629,6 +22629,34 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             description:
               "Enable or disable plugin/extension loading globally during startup and config reload (default: true). Keep enabled only when extension capabilities are required by your deployment.",
           },
+          bundled: {
+            type: "object",
+            properties: {
+              mode: {
+                anyOf: [
+                  {
+                    type: "string",
+                    const: "default",
+                  },
+                  {
+                    type: "string",
+                    const: "explicit",
+                  },
+                  {
+                    type: "string",
+                    const: "disabled",
+                  },
+                ],
+                title: "Bundled Plugin Mode",
+                description:
+                  'Bundled plugin policy: "default" preserves shipped defaults, "explicit" disables bundled defaults unless selected explicitly, and "disabled" blocks bundled plugins entirely.',
+              },
+            },
+            additionalProperties: false,
+            title: "Bundled Plugins",
+            description:
+              "Controls activation policy for plugins shipped with OpenClaw. Use explicit or disabled mode when you want a narrow external-plugin inventory without bundled defaults.",
+          },
           allow: {
             type: "array",
             items: {
@@ -27198,6 +27226,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "plugins.enabled": {
       label: "Enable Plugins",
       help: "Enable or disable plugin/extension loading globally during startup and config reload (default: true). Keep enabled only when extension capabilities are required by your deployment.",
+      tags: ["advanced"],
+    },
+    "plugins.bundled": {
+      label: "Bundled Plugins",
+      help: "Controls activation policy for plugins shipped with OpenClaw. Use explicit or disabled mode when you want a narrow external-plugin inventory without bundled defaults.",
+      tags: ["advanced"],
+    },
+    "plugins.bundled.mode": {
+      label: "Bundled Plugin Mode",
+      help: 'Bundled plugin policy: "default" preserves shipped defaults, "explicit" disables bundled defaults unless selected explicitly, and "disabled" blocks bundled plugins entirely.',
       tags: ["advanced"],
     },
     "plugins.allow": {

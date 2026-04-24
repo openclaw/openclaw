@@ -1084,6 +1084,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Plugin system controls for enabling extensions, constraining load scope, configuring entries, and tracking installs. Keep plugin policy explicit and least-privilege in production environments.",
   "plugins.enabled":
     "Enable or disable plugin/extension loading globally during startup and config reload (default: true). Keep enabled only when extension capabilities are required by your deployment.",
+  "plugins.bundled":
+    "Controls activation policy for plugins shipped with OpenClaw. Use explicit or disabled mode when you want a narrow external-plugin inventory without bundled defaults.",
+  "plugins.bundled.mode":
+    'Bundled plugin policy: "default" preserves shipped defaults, "explicit" disables bundled defaults unless selected explicitly, and "disabled" blocks bundled plugins entirely.',
   "plugins.allow":
     "Optional allowlist of plugin IDs; when set, only listed plugins are eligible to load. Configured bundled chat channels can still activate their bundled plugin when the channel is explicitly enabled in config. Use this to enforce approved extension inventories in controlled environments.",
   "plugins.deny":

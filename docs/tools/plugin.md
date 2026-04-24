@@ -129,6 +129,7 @@ Looking for third-party plugins? See [Community Plugins](/plugins/community).
 {
   plugins: {
     enabled: true,
+    bundled: { mode: "default" },
     allow: ["voice-call"],
     deny: ["untrusted-plugin"],
     load: { paths: ["~/Projects/oss/voice-call-plugin"] },
@@ -142,6 +143,7 @@ Looking for third-party plugins? See [Community Plugins](/plugins/community).
 | Field            | Description                                               |
 | ---------------- | --------------------------------------------------------- |
 | `enabled`        | Master toggle (default: `true`)                           |
+| `bundled.mode`   | Bundled plugin policy (`default`, `explicit`, `disabled`) |
 | `allow`          | Plugin allowlist (optional)                               |
 | `deny`           | Plugin denylist (optional; deny wins)                     |
 | `load.paths`     | Extra plugin files/directories                            |
@@ -186,9 +188,25 @@ OpenClaw scans for plugins in this order (first match wins):
 - `plugins.enabled: false` disables all plugins
 - `plugins.deny` always wins over allow
 - `plugins.entries.\<id\>.enabled: false` disables that plugin
+- `plugins.bundled.mode: "disabled"` disables all bundled plugins
+- `plugins.bundled.mode: "explicit"` disables bundled defaults unless selected explicitly
 - Workspace-origin plugins are **disabled by default** (must be explicitly enabled)
 - Bundled plugins follow the built-in default-on set unless overridden
-- Exclusive slots can force-enable the selected plugin for that slot
+- Exclusive slots can force-enable the selected plugin unless `bundled.mode: "disabled"` blocks it
+
+To load only a specific external plugin and no bundled plugins:
+
+```json5
+{
+  plugins: {
+    bundled: { mode: "disabled" },
+    allow: ["foo"],
+    entries: {
+      foo: { enabled: true },
+    },
+  },
+}
+```
 
 ## Plugin slots (exclusive categories)
 

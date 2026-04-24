@@ -568,6 +568,9 @@ function isBundledPluginConfiguredForRuntimeDeps(params: {
   if (entry?.enabled === false) {
     return false;
   }
+  if (plugins.bundled.mode === "disabled") {
+    return false;
+  }
   if (entry?.enabled === true) {
     return true;
   }
@@ -589,7 +592,7 @@ function isBundledPluginConfiguredForRuntimeDeps(params: {
       return true;
     }
   }
-  return readBundledPluginEnabledByDefault(params.pluginDir);
+  return plugins.bundled.mode === "default" && readBundledPluginEnabledByDefault(params.pluginDir);
 }
 
 function shouldIncludeBundledPluginRuntimeDeps(params: {

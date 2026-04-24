@@ -1,11 +1,19 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginEntryConfig } from "../config/types.plugins.js";
+import { normalizePluginsConfigWithResolver } from "./config-normalization-shared.js";
 import { hasExplicitPluginConfig } from "./config-policy.js";
+
+function allowsBundledDefaultCompat(config: OpenClawConfig | undefined): boolean {
+  return normalizePluginsConfigWithResolver(config?.plugins).bundled.mode === "default";
+}
 
 export function withBundledPluginAllowlistCompat(params: {
   config: OpenClawConfig | undefined;
   pluginIds: readonly string[];
 }): OpenClawConfig | undefined {
+  if (!allowsBundledDefaultCompat(params.config)) {
+    return params.config;
+  }
   const allow = params.config?.plugins?.allow;
   if (!Array.isArray(allow) || allow.length === 0) {
     return params.config;
@@ -37,6 +45,9 @@ export function withBundledPluginEnablementCompat(params: {
   config: OpenClawConfig | undefined;
   pluginIds: readonly string[];
 }): OpenClawConfig | undefined {
+  if (!allowsBundledDefaultCompat(params.config)) {
+    return params.config;
+  }
   const existingEntries = params.config?.plugins?.entries ?? {};
   const forcePluginsEnabled = params.config?.plugins?.enabled === false;
   let changed = false;
