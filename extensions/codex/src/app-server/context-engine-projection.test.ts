@@ -63,4 +63,42 @@ describe("projectContextEngineAssemblyForCodex", () => {
     expect(ordered.promptText).toContain("[user]\none\n\n[assistant]\ntwo\n\n[toolResult]\nthree");
     expect(ordered.prePromptMessageCount).toBe(1);
   });
+
+  it("frames projected history as reference data and omits tool payloads", () => {
+    const result = projectContextEngineAssemblyForCodex({
+      assembledMessages: [
+        {
+          role: "assistant",
+          content: [
+            { type: "toolCall", name: "exec", input: { token: "sk-secret", cmd: "cat .env" } },
+          ],
+          timestamp: 1,
+        } as unknown as AgentMessage,
+        {
+          role: "toolResult",
+          content: [{ type: "toolResult", toolUseId: "call-1", content: "API_KEY=sk-secret" }],
+          timestamp: 2,
+        } as unknown as AgentMessage,
+      ],
+      originalHistoryMessages: [],
+      prompt: "continue",
+    });
+
+    expect(result.promptText).toContain("quoted reference data");
+    expect(result.promptText).toContain("tool call: exec [input omitted]");
+    expect(result.promptText).toContain("tool result: call-1 [content omitted]");
+    expect(result.promptText).not.toContain("sk-secret");
+    expect(result.promptText).not.toContain("cat .env");
+  });
+
+  it("bounds oversized text context", () => {
+    const result = projectContextEngineAssemblyForCodex({
+      assembledMessages: [textMessage("assistant", "x".repeat(30_000))],
+      originalHistoryMessages: [],
+      prompt: "next",
+    });
+
+    expect(result.promptText).toContain("[truncated ");
+    expect(result.promptText.length).toBeLessThan(25_000);
+  });
 });

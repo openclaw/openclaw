@@ -1,5 +1,6 @@
 import {
   embeddedAgentLog,
+  formatErrorMessage,
   isActiveHarnessContextEngine,
   runHarnessContextEngineMaintenance,
   type CompactEmbeddedPiSessionParams,
@@ -23,6 +24,9 @@ type CodexNativeCompactionWaiter = {
   startTimeout: () => void;
   cancel: () => void;
 };
+type ContextEngineCompactResult = Awaited<
+  ReturnType<NonNullable<CompactEmbeddedPiSessionParams["contextEngine"]>["compact"]>
+>;
 
 const DEFAULT_CODEX_COMPACTION_WAIT_TIMEOUT_MS = 5 * 60 * 1000;
 
@@ -36,39 +40,65 @@ export async function maybeCompactCodexAppServerSession(
     ? params.contextEngine
     : undefined;
   if (activeContextEngine?.info.ownsCompaction) {
-    const primary = await activeContextEngine.compact({
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      sessionFile: params.sessionFile,
-      tokenBudget: params.contextTokenBudget,
-      currentTokenCount: params.currentTokenCount,
-      compactionTarget: params.trigger === "manual" ? "threshold" : "budget",
-      customInstructions: params.customInstructions,
-      force: params.trigger === "manual",
-    });
-    if (primary.ok && primary.compacted) {
-      await runHarnessContextEngineMaintenance({
-        contextEngine: activeContextEngine,
+    let primary: ContextEngineCompactResult | undefined;
+    let primaryError: string | undefined;
+    try {
+      primary = await activeContextEngine.compact({
         sessionId: params.sessionId,
         sessionKey: params.sessionKey,
         sessionFile: params.sessionFile,
-        reason: "compaction",
+        tokenBudget: params.contextTokenBudget,
+        currentTokenCount: params.currentTokenCount,
+        compactionTarget: params.trigger === "manual" ? "threshold" : "budget",
+        customInstructions: params.customInstructions,
+        force: params.trigger === "manual",
+        runtimeContext: params.contextEngineRuntimeContext,
       });
+    } catch (error) {
+      primaryError = formatErrorMessage(error);
+      embeddedAgentLog.warn(
+        "context engine compaction failed; attempting Codex native compaction",
+        {
+          sessionId: params.sessionId,
+          engineId: activeContextEngine.info.id,
+          error: primaryError,
+        },
+      );
+    }
+    if (primary?.ok && primary.compacted) {
+      try {
+        await runHarnessContextEngineMaintenance({
+          contextEngine: activeContextEngine,
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+          sessionFile: params.sessionFile,
+          reason: "compaction",
+          runtimeContext: params.contextEngineRuntimeContext,
+        });
+      } catch (error) {
+        embeddedAgentLog.warn(
+          "context engine compaction maintenance failed; continuing Codex native compaction",
+          {
+            sessionId: params.sessionId,
+            engineId: activeContextEngine.info.id,
+            error: formatErrorMessage(error),
+          },
+        );
+      }
     }
     const nativeResult = await compactCodexNativeThread(params, options);
+    if (!primary) {
+      return buildContextEngineCompactionFailureResult({
+        primaryError,
+        nativeResult,
+        currentTokenCount: params.currentTokenCount,
+      });
+    }
     return {
       ok: primary.ok,
       compacted: primary.compacted,
       reason: primary.reason,
-      result: primary.result
-        ? {
-            summary: primary.result.summary ?? "",
-            firstKeptEntryId: primary.result.firstKeptEntryId ?? "",
-            tokensBefore: primary.result.tokensBefore,
-            tokensAfter: primary.result.tokensAfter,
-            details: mergeCompactionDetails(primary.result.details, nativeResult),
-          }
-        : undefined,
+      result: buildContextEnginePrimaryResult(primary, nativeResult, params.currentTokenCount),
     };
   }
   return await compactCodexNativeThread(params, options);
@@ -145,19 +175,74 @@ async function compactCodexNativeThread(
 function mergeCompactionDetails(
   primaryDetails: unknown,
   nativeResult: EmbeddedPiCompactResult | undefined,
+  contextEngineCompaction?: { ok: false; reason?: string },
 ): unknown {
   const codexNativeCompaction = nativeResult
     ? nativeResult.ok && nativeResult.compacted
       ? { ok: true, compacted: true, details: nativeResult.result?.details }
       : { ok: false, compacted: false, reason: nativeResult.reason }
     : undefined;
+  const extraDetails = {
+    ...(codexNativeCompaction ? { codexNativeCompaction } : {}),
+    ...(contextEngineCompaction ? { contextEngineCompaction } : {}),
+  };
   if (primaryDetails && typeof primaryDetails === "object" && !Array.isArray(primaryDetails)) {
     return {
       ...(primaryDetails as Record<string, unknown>),
-      ...(codexNativeCompaction ? { codexNativeCompaction } : {}),
+      ...extraDetails,
     };
   }
-  return codexNativeCompaction ? { codexNativeCompaction } : primaryDetails;
+  return Object.keys(extraDetails).length > 0 ? extraDetails : primaryDetails;
+}
+
+function buildContextEnginePrimaryResult(
+  primary: ContextEngineCompactResult,
+  nativeResult: EmbeddedPiCompactResult | undefined,
+  currentTokenCount: number | undefined,
+): NonNullable<EmbeddedPiCompactResult["result"]> | undefined {
+  if (primary.result) {
+    return {
+      summary: primary.result.summary ?? "",
+      firstKeptEntryId: primary.result.firstKeptEntryId ?? "",
+      tokensBefore: primary.result.tokensBefore,
+      tokensAfter: primary.result.tokensAfter,
+      details: mergeCompactionDetails(primary.result.details, nativeResult),
+    };
+  }
+  const details = mergeCompactionDetails(undefined, nativeResult);
+  return details
+    ? {
+        summary: "",
+        firstKeptEntryId: "",
+        tokensBefore: nativeResult?.result?.tokensBefore ?? currentTokenCount ?? 0,
+        details,
+      }
+    : undefined;
+}
+
+function buildContextEngineCompactionFailureResult(params: {
+  primaryError?: string;
+  nativeResult: EmbeddedPiCompactResult | undefined;
+  currentTokenCount?: number;
+}): EmbeddedPiCompactResult {
+  const reason = params.primaryError
+    ? `context engine compaction failed: ${params.primaryError}`
+    : "context engine compaction failed";
+  return {
+    ok: false,
+    compacted: params.nativeResult?.compacted ?? false,
+    reason,
+    result: {
+      summary: params.nativeResult?.result?.summary ?? "",
+      firstKeptEntryId: params.nativeResult?.result?.firstKeptEntryId ?? "",
+      tokensBefore: params.nativeResult?.result?.tokensBefore ?? params.currentTokenCount ?? 0,
+      tokensAfter: params.nativeResult?.result?.tokensAfter,
+      details: mergeCompactionDetails(params.nativeResult?.result?.details, params.nativeResult, {
+        ok: false,
+        reason,
+      }),
+    },
+  };
 }
 
 function createCodexNativeCompactionWaiter(
