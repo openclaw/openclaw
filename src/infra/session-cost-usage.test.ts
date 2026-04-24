@@ -161,6 +161,9 @@ describe("session cost usage", () => {
     await fs.writeFile(
       path.join(sessionsDir, "sessions.json"),
       JSON.stringify({
+        "agent:main:bad": {
+          compactionCheckpoints: {},
+        },
         "agent:main:main": {
           compactionCheckpoints: [
             {

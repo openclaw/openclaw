@@ -88,7 +88,10 @@ async function loadCompactionCheckpointFileNames(
     }
     const resolvedSessionsDir = path.resolve(sessionsDir);
     for (const entry of Object.values(parsed as Record<string, SessionEntry>)) {
-      for (const checkpoint of entry?.compactionCheckpoints ?? []) {
+      const checkpoints = Array.isArray(entry?.compactionCheckpoints)
+        ? entry.compactionCheckpoints
+        : [];
+      for (const checkpoint of checkpoints) {
         const sessionFile = normalizeOptionalString(checkpoint?.preCompaction?.sessionFile);
         if (!sessionFile) {
           continue;
