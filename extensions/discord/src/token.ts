@@ -20,8 +20,22 @@ export function normalizeDiscordToken(raw: unknown, path: string): string | unde
 
 export function resolveDiscordToken(
   cfg?: OpenClawConfig,
-  opts: { accountId?: string | null; envToken?: string | null } = {},
+  opts: {
+    accountId?: string | null;
+    envToken?: string | null;
+    explicit?: boolean;
+  } = {},
 ): DiscordTokenResolution {
+  // Treat as explicit only when the caller intentionally targeted this account.
+  // Direct callers that supply an accountId are treated as explicit by default
+  // (back-compat); indirect callers such as resolveDiscordAccount forward
+  // `explicit: false` when the id was filled in from channels.discord.defaultAccount.
+  const hasProvidedAccountId =
+    typeof opts.accountId === "string" && opts.accountId.trim().length > 0;
+  const explicitAccountId =
+    hasProvidedAccountId && opts.explicit !== false
+      ? normalizeAccountId(opts.accountId)
+      : undefined;
   const accountId = normalizeAccountId(opts.accountId);
   const discordCfg = cfg?.channels?.discord;
   const accountCfg = resolveAccountEntry(discordCfg?.accounts, accountId);
@@ -37,6 +51,9 @@ export function resolveDiscordToken(
     return { token: accountToken, source: "config" };
   }
   if (hasAccountToken) {
+    return { token: "", source: "none" };
+  }
+  if (explicitAccountId && explicitAccountId !== DEFAULT_ACCOUNT_ID) {
     return { token: "", source: "none" };
   }
 

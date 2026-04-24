@@ -59,6 +59,12 @@ export function resolveDiscordAccount(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): ResolvedDiscordAccount {
+  // Preserve whether the caller explicitly targeted an account vs. letting us
+  // fall back to channels.discord.defaultAccount. The token resolver uses this
+  // to decide if a missing account token should hard-fail (explicit routing)
+  // or fall through to the channel-level token (implicit default flow).
+  const callerProvidedAccountId =
+    typeof params.accountId === "string" && params.accountId.trim().length > 0;
   const accountId = normalizeAccountId(
     params.accountId ?? resolveDefaultDiscordAccountId(params.cfg),
   );
@@ -66,7 +72,10 @@ export function resolveDiscordAccount(params: {
   const merged = mergeDiscordAccountConfig(params.cfg, accountId);
   const accountEnabled = merged.enabled !== false;
   const enabled = baseEnabled && accountEnabled;
-  const tokenResolution = resolveDiscordToken(params.cfg, { accountId });
+  const tokenResolution = resolveDiscordToken(params.cfg, {
+    accountId,
+    explicit: callerProvidedAccountId,
+  });
   return {
     accountId,
     enabled,

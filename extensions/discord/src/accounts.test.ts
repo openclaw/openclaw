@@ -61,6 +61,54 @@ describe("resolveDiscordAccount allowFrom precedence", () => {
     expect(resolved.config.allowFrom).toEqual(["top"]);
   });
 
+  it("inherits top-level token when defaultAccount resolves implicitly and account has no token", () => {
+    // Regression: strict explicit-account token guard must not fire for the
+    // implicit default-account flow (caller omits accountId and the defaultAccount
+    // setting picks a non-default id). Otherwise a channel token-only config
+    // with accounts.<name> overrides for non-token fields would break.
+    const resolved = resolveDiscordAccount({
+      cfg: {
+        channels: {
+          discord: {
+            token: "base-token",
+            defaultAccount: "work",
+            accounts: {
+              work: { name: "Work" },
+            },
+          },
+        },
+      },
+    });
+
+    expect(resolved.accountId).toBe("work");
+    expect(resolved.token).toBe("base-token");
+    expect(resolved.tokenSource).toBe("config");
+  });
+
+  it("does not inherit top-level token when accountId is passed explicitly without an account token", () => {
+    // Preserves the PR's original intent: explicit routing to a non-default
+    // account without its own token must not silently impersonate the default
+    // identity.
+    const resolved = resolveDiscordAccount({
+      cfg: {
+        channels: {
+          discord: {
+            token: "base-token",
+            defaultAccount: "work",
+            accounts: {
+              work: { name: "Work" },
+            },
+          },
+        },
+      },
+      accountId: "work",
+    });
+
+    expect(resolved.accountId).toBe("work");
+    expect(resolved.token).toBe("");
+    expect(resolved.tokenSource).toBe("none");
+  });
+
   it("does not inherit default account allowFrom for named account when top-level is absent", () => {
     const resolved = resolveDiscordAccount({
       cfg: {
