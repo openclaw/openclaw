@@ -72,19 +72,11 @@ Official or bundled promotion should require a clear product, security, or maint
 
 ### MCP Support
 
-OpenClaw has first-class MCP support in core.
-MCP docs: [`docs/cli/mcp.md`](docs/cli/mcp.md)
+OpenClaw supports MCP as both a server and a runtime integration surface.
+MCP details live in [`docs/cli/mcp.md`](docs/cli/mcp.md).
 
-Current core surfaces:
-
-- `openclaw mcp serve` exposes OpenClaw-backed channel conversations to Codex, Claude Code, and other MCP clients.
-- `openclaw mcp list|show|set|unset` manages OpenClaw-owned outbound MCP server definitions under `mcp.servers`.
-- Embedded Pi can materialize configured MCP servers as agent tools, filtered through the same owner/tool-policy pipeline as other tools.
-- CLI backends can opt into bundle MCP overlays so Codex, Claude, Gemini, and similar CLIs receive scoped Gateway tools through a loopback MCP bridge.
-- ACPX integrations can expose selected OpenClaw tools through explicit MCP bridges.
-
-`mcporter` is still useful for direct MCP server inspection, ad-hoc calls, generated CLIs, and specialized integrations such as QMD keep-alive.
-It is no longer the only OpenClaw MCP integration path.
+The project goal is pragmatic MCP support without duplicating existing agent,
+tool, ACPX, plugin, or ClawHub paths.
 
 ### Setup
 
@@ -106,7 +98,7 @@ It is widely known, fast to iterate in, and easy to read, modify, and extend.
 - Full-doc translation sets for all docs (deferred; we plan AI-generated translations later)
 - Commercial service integrations that do not clearly fit the model-provider category
 - Wrapper channels around already supported channels without a clear capability or security gap
-- MCP work that duplicates existing `openclaw mcp`, bundle-MCP, ACPX bridge, or `mcporter` paths without a clear product or security gap
+- MCP work that duplicates existing MCP, ACPX, plugin, or ClawHub paths without a clear product or security gap
 - Agent-hierarchy frameworks (manager-of-managers / nested planner trees) as a default architecture
 - Heavy orchestration layers that duplicate existing agent and tool infrastructure
 
