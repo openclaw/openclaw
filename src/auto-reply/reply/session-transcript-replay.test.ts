@@ -47,6 +47,15 @@ describe("replayRecentUserAssistantMessages", () => {
       expect(["user", "assistant"]).toContain(r.message.role);
     }
     expect(await call(path.join(root, "missing.jsonl"), path.join(root, "out.jsonl"))).toBe(0);
+
+    const assistantSource = path.join(root, "all-assistant.jsonl");
+    const assistantTarget = path.join(root, "all-assistant-out.jsonl");
+    const onlyAssistants = Array.from({ length: 3 }, () =>
+      j({ message: { role: "assistant", content: "x" } }),
+    ).join("");
+    await fs.writeFile(assistantSource, onlyAssistants, "utf8");
+    expect(await call(assistantSource, assistantTarget)).toBe(0);
+    await expect(fs.stat(assistantTarget)).rejects.toThrow();
   });
 
   it("skips header for pre-existing targets and aligns the tail to a user turn", async () => {

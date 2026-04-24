@@ -47,8 +47,13 @@ export async function replayRecentUserAssistantMessages(params: {
       return 0;
     }
     let startIdx = Math.max(0, kept.length - max);
-    while (startIdx < kept.length - 1 && kept[startIdx].role === "assistant") {
+    while (startIdx < kept.length && kept[startIdx].role === "assistant") {
       startIdx += 1;
+    }
+    if (startIdx === kept.length) {
+      // Retained window is assistant-only; replaying would re-create the same
+      // role-ordering hazard this reset path is recovering from.
+      return 0;
     }
     const tail = kept.slice(startIdx).map((entry) => entry.line);
     if (!fs.existsSync(params.targetTranscript)) {
