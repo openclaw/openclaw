@@ -6,6 +6,7 @@ import {
   validatePluginInteractiveNamespace,
 } from "./interactive-shared.js";
 import {
+  clearPluginInteractiveHandlerRegistrationsState,
   clearPluginInteractiveHandlersState,
   getPluginInteractiveHandlersState,
   type RegisteredInteractiveHandler,
@@ -62,6 +63,10 @@ export function clearPluginInteractiveHandlers(): void {
   clearPluginInteractiveHandlersState();
 }
 
+export function clearPluginInteractiveHandlerRegistrations(): void {
+  clearPluginInteractiveHandlerRegistrationsState();
+}
+
 export function clearPluginInteractiveHandlersForPlugin(pluginId: string): void {
   const interactiveHandlers = getPluginInteractiveHandlersState();
   for (const [key, value] of interactiveHandlers.entries()) {
@@ -78,7 +83,7 @@ export function listPluginInteractiveHandlers(): RegisteredInteractiveHandler[] 
 export function restorePluginInteractiveHandlers(
   registrations: readonly RegisteredInteractiveHandler[],
 ): void {
-  clearPluginInteractiveHandlers();
+  clearPluginInteractiveHandlerRegistrations();
   const interactiveHandlers = getPluginInteractiveHandlersState();
   for (const registration of registrations) {
     const namespace = normalizePluginInteractiveNamespace(registration.namespace);
