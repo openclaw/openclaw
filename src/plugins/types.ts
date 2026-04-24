@@ -1100,17 +1100,18 @@ export type ProviderPlugin = {
    */
   staticCatalog?: ProviderPluginCatalog;
   /**
-   * Opt into self-prefix dedupe when composing canonical model keys.
+   * Show catalog row labels as the literal `<provider>/<entry.id>`
+   * composition instead of the canonical (deduped) key.
    *
-   * Set this when the provider's native catalog ids already include the
-   * provider prefix (for example OpenRouter's `openrouter/hunter-alpha`). The
-   * canonical `modelKey` composition will then preserve the existing prefix
-   * instead of prepending a second copy. Providers whose model ids simply
-   * happen to start with their own name (for example NVIDIA's
-   * `nvidia/nemotron-3-super-120b-a12b`) should leave this unset, so the
-   * user-facing ref retains both segments verbatim.
+   * `modelKey` strips a duplicate `<provider>/` prefix so storage and
+   * lookups stay stable. This flag only changes the picker label — the
+   * option value and persisted config remain canonical.
+   *
+   * Set when the leading `<provider>/` segment in the native model id is
+   * a meaningful vendor namespace (e.g. NVIDIA's `nvidia/nemotron-...`
+   * alongside `moonshotai/kimi-k2.5`).
    */
-  nativeIdsIncludeProviderPrefix?: boolean;
+  preserveLiteralProviderPrefix?: boolean;
   /**
    * Legacy alias for catalog.
    * Kept for compatibility with existing provider plugins.

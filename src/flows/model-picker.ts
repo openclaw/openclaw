@@ -128,6 +128,39 @@ function resolveModelRouteHint(provider: string): string | undefined {
   return undefined;
 }
 
+async function resolveLiteralPrefixProviderIds(params: {
+  cfg: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): Promise<Set<string>> {
+  const { resolvePluginProviders } = await loadResolvedModelPickerRuntime();
+  const providers = resolvePluginProviders({
+    config: params.cfg,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+    activate: false,
+    cache: false,
+    includeUntrustedWorkspacePlugins: false,
+  });
+  const ids = new Set<string>();
+  for (const provider of providers) {
+    if (!provider.preserveLiteralProviderPrefix) {
+      continue;
+    }
+    const id = normalizeProviderId(provider.id);
+    if (id) {
+      ids.add(id);
+    }
+    for (const alias of provider.aliases ?? []) {
+      const aliasId = normalizeProviderId(alias);
+      if (aliasId) {
+        ids.add(aliasId);
+      }
+    }
+  }
+  return ids;
+}
+
 function addModelSelectOption(params: {
   entry: {
     provider: string;
@@ -140,6 +173,7 @@ function addModelSelectOption(params: {
   seen: Set<string>;
   aliasIndex: ReturnType<typeof buildModelAliasIndex>;
   hasAuth: (provider: string) => boolean;
+  literalPrefixProviders: Set<string>;
 }) {
   const key = modelKey(params.entry.provider, params.entry.id);
   if (params.seen.has(key) || HIDDEN_ROUTER_MODELS.has(key)) {
@@ -166,9 +200,12 @@ function addModelSelectOption(params: {
   if (!params.hasAuth(params.entry.provider)) {
     hints.push("auth missing");
   }
+  const label = params.literalPrefixProviders.has(normalizeProviderId(params.entry.provider))
+    ? `${params.entry.provider}/${params.entry.id}`
+    : key;
   params.options.push({
     value: key,
-    label: key,
+    label,
     hint: hints.length > 0 ? hints.join(" · ") : undefined,
   });
   params.seen.add(key);
@@ -485,6 +522,11 @@ export async function promptDefaultModel(
     ? filteredModels.some((entry) => matchesPreferredProvider?.(entry.provider))
     : false;
   const hasAuth = createProviderAuthChecker({ cfg, agentDir: params.agentDir });
+  const literalPrefixProviders = await resolveLiteralPrefixProviderIds({
+    cfg,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  });
 
   const options: WizardSelectOption[] = [];
   if (allowKeep) {
@@ -512,7 +554,14 @@ export async function promptDefaultModel(
 
   const seen = new Set<string>();
   for (const entry of filteredModels) {
-    addModelSelectOption({ entry, options, seen, aliasIndex, hasAuth });
+    addModelSelectOption({
+      entry,
+      options,
+      seen,
+      aliasIndex,
+      hasAuth,
+      literalPrefixProviders,
+    });
   }
   if (configuredKey && !seen.has(configuredKey)) {
     options.push({
@@ -641,6 +690,7 @@ export async function promptModelAllowlist(params: {
     defaultProvider: DEFAULT_PROVIDER,
   });
   const hasAuth = createProviderAuthChecker({ cfg, agentDir: params.agentDir });
+  const literalPrefixProviders = await resolveLiteralPrefixProviderIds({ cfg });
   const matchesPreferredProvider = preferredProvider
     ? createPreferredProviderMatcher({
         preferredProvider,
@@ -665,7 +715,14 @@ export async function promptModelAllowlist(params: {
       : undefined;
 
   for (const entry of filteredCatalog) {
-    addModelSelectOption({ entry, options, seen, aliasIndex, hasAuth });
+    addModelSelectOption({
+      entry,
+      options,
+      seen,
+      aliasIndex,
+      hasAuth,
+      literalPrefixProviders,
+    });
   }
 
   const supplementalKeys = allowedKeySet ? allowedKeys : existingKeys;

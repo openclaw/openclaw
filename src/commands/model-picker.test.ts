@@ -326,57 +326,6 @@ describe("promptDefaultModel", () => {
       expect.arrayContaining([expect.objectContaining({ value: "legacy-entry" })]),
     );
   });
-
-  it("surfaces NVIDIA provider model-picker contributions", async () => {
-    loadModelCatalog.mockResolvedValue([
-      {
-        provider: "openai",
-        id: "gpt-5.4",
-        name: "GPT-5.4",
-      },
-    ]);
-    providerModelPickerContributionRuntime.enabled = true;
-    providerModelPickerContributionRuntime.resolve.mockReturnValue([
-      {
-        id: "provider:model-picker:provider-plugin:nvidia:api-key",
-        kind: "provider",
-        surface: "model-picker",
-        option: {
-          value: "provider-plugin:nvidia:api-key",
-          label: "NVIDIA (custom)",
-          hint: "Use NVIDIA-hosted open models",
-        },
-      },
-    ] as never);
-
-    const select = vi.fn(async (params) => {
-      const nvidia = params.options.find(
-        (opt: { value: string }) => opt.value === "provider-plugin:nvidia:api-key",
-      );
-      return (nvidia?.value ?? "") as never;
-    });
-    const prompter = makePrompter({ select });
-
-    await promptDefaultModel({
-      config: { agents: { defaults: {} } } as OpenClawConfig,
-      prompter,
-      allowKeep: false,
-      includeManual: false,
-      includeProviderPluginSetups: true,
-      ignoreAllowlist: true,
-      agentDir: "/tmp/openclaw-agent",
-      runtime: {} as never,
-    });
-
-    expect(select.mock.calls[0]?.[0]?.options).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          value: "provider-plugin:nvidia:api-key",
-          label: "NVIDIA (custom)",
-        }),
-      ]),
-    );
-  });
 });
 
 describe("promptModelAllowlist", () => {

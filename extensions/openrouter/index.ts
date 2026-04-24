@@ -73,7 +73,6 @@ export default definePluginEntry({
       label: "OpenRouter",
       docsPath: "/providers/models",
       envVars: ["OPENROUTER_API_KEY"],
-      nativeIdsIncludeProviderPrefix: true,
       auth: [
         createProviderApiKeyAuthMethod({
           providerId: PROVIDER_ID,

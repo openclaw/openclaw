@@ -23,6 +23,7 @@ export default defineSingleProviderPluginEntry({
     label: "NVIDIA",
     docsPath: "/providers/nvidia",
     envVars: ["NVIDIA_API_KEY"],
+    preserveLiteralProviderPrefix: true,
     auth: [
       {
         methodId: "api-key",

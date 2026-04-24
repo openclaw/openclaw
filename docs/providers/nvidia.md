@@ -21,7 +21,12 @@ open models for free. Authenticate with an API key from
   <Step title="Export the key and run onboarding">
     ```bash
     export NVIDIA_API_KEY="nvapi-..."
-    openclaw onboard --auth-choice nvidia-api-key
+    openclaw onboard --auth-choice skip
+    ```
+  </Step>
+  <Step title="Set an NVIDIA model">
+    ```bash
+    openclaw models set nvidia/nvidia/nemotron-3-super-120b-a12b
     ```
   </Step>
 </Steps>

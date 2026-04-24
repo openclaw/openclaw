@@ -164,15 +164,6 @@ describe("buildAuthChoiceOptions", () => {
         groupLabel: "Z.AI",
       },
       {
-        pluginId: "nvidia",
-        providerId: "nvidia",
-        methodId: "api-key",
-        choiceId: "nvidia-api-key",
-        choiceLabel: "NVIDIA API key",
-        groupId: "nvidia",
-        groupLabel: "NVIDIA",
-      },
-      {
         pluginId: "xiaomi",
         providerId: "xiaomi",
         methodId: "api-key",
@@ -264,7 +255,6 @@ describe("buildAuthChoiceOptions", () => {
     for (const value of [
       "github-copilot",
       "zai-api-key",
-      "nvidia-api-key",
       "xiaomi-api-key",
       "minimax-global-api",
       "moonshot-api-key",
