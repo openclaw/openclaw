@@ -543,6 +543,94 @@ describe("handleMessageUpdate", () => {
     });
   });
 
+  it("does not leak OpenAI Responses commentary while text item phase is pending", () => {
+    const onAgentEvent = vi.fn();
+    const ctx = createMessageUpdateContext({
+      onAgentEvent,
+      shouldEmitPartialReplies: false,
+    });
+
+    handleMessageUpdate(
+      ctx,
+      createTextUpdateEvent({
+        type: "text_delta",
+        text: "I will ask Codex to draft the rules.",
+        partial: createOpenAiResponsesPartial({
+          text: "I will ask Codex to draft the rules.",
+          id: "item_pending_commentary",
+        }),
+      }),
+    );
+
+    expect(onAgentEvent).not.toHaveBeenCalled();
+    expect(ctx.state.deltaBuffer).toBe("");
+    expect(ctx.state.blockBuffer).toBe("");
+
+    handleMessageUpdate(
+      ctx,
+      createTextUpdateEvent({
+        type: "text_delta",
+        text: "I will ask Codex to draft the rules.",
+        partial: createOpenAiResponsesPartial({
+          text: "I will ask Codex to draft the rules.",
+          id: "item_pending_commentary",
+          signaturePhase: "commentary",
+          partialPhase: "commentary",
+        }),
+      }),
+    );
+
+    expect(onAgentEvent).not.toHaveBeenCalled();
+    expect(ctx.state.deltaBuffer).toBe("");
+    expect(ctx.state.blockBuffer).toBe("");
+  });
+
+  it("emits OpenAI Responses final answer once a pending text item gains final phase", () => {
+    const onAgentEvent = vi.fn();
+    const ctx = createMessageUpdateContext({
+      onAgentEvent,
+      shouldEmitPartialReplies: false,
+    });
+
+    handleMessageUpdate(
+      ctx,
+      createTextUpdateEvent({
+        type: "text_delta",
+        text: "Draft is ready.",
+        partial: createOpenAiResponsesPartial({
+          text: "Draft is ready.",
+          id: "item_pending_final",
+        }),
+      }),
+    );
+
+    expect(onAgentEvent).not.toHaveBeenCalled();
+
+    handleMessageUpdate(
+      ctx,
+      createTextUpdateEvent({
+        type: "text_delta",
+        text: "Draft is ready.",
+        partial: createOpenAiResponsesPartial({
+          text: "Draft is ready.",
+          id: "item_pending_final",
+          signaturePhase: "final_answer",
+          partialPhase: "final_answer",
+        }),
+      }),
+    );
+
+    expect(onAgentEvent).toHaveBeenCalledTimes(1);
+    expect(onAgentEvent.mock.calls[0]?.[0]).toMatchObject({
+      stream: "assistant",
+      data: {
+        text: "Draft is ready.",
+        delta: "Draft is ready.",
+        phase: "final_answer",
+      },
+    });
+  });
+
   it("contains synchronous text_end flush failures", async () => {
     const debug = vi.fn();
     const ctx = createMessageUpdateContext({
