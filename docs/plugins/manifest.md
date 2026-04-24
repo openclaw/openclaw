@@ -152,7 +152,7 @@ or npm install metadata. Those belong in your plugin code and `package.json`.
 | `providerAuthAliases`                | No       | `Record<string, string>`         | Provider ids that should reuse another provider id for auth lookup, for example a coding provider that shares the base provider API key and auth profiles.                                                                        |
 | `channelEnvVars`                     | No       | `Record<string, string[]>`       | Cheap channel env metadata that OpenClaw can inspect without loading plugin code. Use this for env-driven channel setup or auth surfaces that generic startup/config helpers should see.                                          |
 | `providerAuthChoices`                | No       | `object[]`                       | Cheap auth-choice metadata for onboarding pickers, preferred-provider resolution, and simple CLI flag wiring.                                                                                                                     |
-| `activation`                         | No       | `object`                         | Cheap activation hints for provider, command, channel, route, and capability-triggered loading. Metadata only; plugin runtime still owns actual behavior.                                                                         |
+| `activation`                         | No       | `object`                         | Cheap activation planner metadata for provider, command, channel, route, and capability-triggered loading. Metadata only; plugin runtime still owns actual behavior.                                                              |
 | `setup`                              | No       | `object`                         | Cheap setup/onboarding descriptors that discovery and setup surfaces can inspect without loading plugin runtime.                                                                                                                  |
 | `qaRunners`                          | No       | `object[]`                       | Cheap QA runner descriptors used by the shared `openclaw qa` host before plugin runtime loads.                                                                                                                                    |
 | `contracts`                          | No       | `object`                         | Static bundled capability snapshot for external auth hooks, speech, realtime transcription, realtime voice, media-understanding, image-generation, music-generation, video-generation, web-fetch, web search, and tool ownership. |
@@ -215,7 +215,62 @@ uses this metadata for diagnostics without importing plugin runtime code.
 ## activation reference
 
 Use `activation` when the plugin can cheaply declare which control-plane events
-should activate it later.
+should include it in an activation/load plan.
+
+This block is planner metadata, not a lifecycle API. It does not register
+runtime behavior, does not replace `register(...)`, and does not promise that
+plugin code has already executed. The activation planner uses these fields to
+narrow candidate plugins before falling back to existing manifest ownership
+metadata such as `providers`, `channels`, `commandAliases`, `setup.providers`,
+`contracts.tools`, and hooks.
+
+Prefer the narrowest metadata that already describes ownership. Use
+`providers`, `channels`, `commandAliases`, setup descriptors, or `contracts`
+when those fields express the relationship. Use `activation` for extra planner
+hints that cannot be represented by those ownership fields.
+
+This block is metadata only. It does not register runtime behavior, and it does
+not replace `register(...)`, `setupEntry`, or other runtime/plugin entrypoints.
+Current consumers use it as a narrowing hint before broader plugin loading, so
+missing activation metadata usually only costs performance; it should not
+change correctness while legacy manifest ownership fallbacks still exist.
+
+```json
+{
+  "activation": {
+    "onProviders": ["openai"],
+    "onCommands": ["models"],
+    "onChannels": ["web"],
+    "onRoutes": ["gateway-webhook"],
+    "onCapabilities": ["provider", "tool"]
+  }
+}
+```
+
+| Field            | Required | Type                                                 | What it means                                                                                           |
+| ---------------- | -------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `onProviders`    | No       | `string[]`                                           | Provider ids that should include this plugin in activation/load plans.                                  |
+| `onCommands`     | No       | `string[]`                                           | Command ids that should include this plugin in activation/load plans.                                   |
+| `onChannels`     | No       | `string[]`                                           | Channel ids that should include this plugin in activation/load plans.                                   |
+| `onRoutes`       | No       | `string[]`                                           | Route kinds that should include this plugin in activation/load plans.                                   |
+| `onCapabilities` | No       | `Array<"provider" \| "channel" \| "tool" \| "hook">` | Broad capability hints used by control-plane activation planning. Prefer narrower fields when possible. |
+
+Current live consumers:
+
+- command-triggered CLI planning falls back to legacy
+  `commandAliases[].cliCommand` or `commandAliases[].name`
+- channel-triggered setup/channel planning falls back to legacy `channels[]`
+  ownership when explicit channel activation metadata is missing
+- provider-triggered setup/runtime planning falls back to legacy
+  `providers[]` and top-level `cliBackends[]` ownership when explicit provider
+  activation metadata is missing
+
+Planner diagnostics can distinguish explicit activation hints from manifest
+ownership fallback. For example, `activation-command-hint` means
+`activation.onCommands` matched, while `manifest-command-alias` means the
+planner used `commandAliases` ownership instead. These reason labels are for
+host diagnostics and tests; plugin authors should keep declaring the metadata
+that best describes ownership.
 
 ## qaRunners reference
 
@@ -239,42 +294,6 @@ runtime still owns actual CLI registration through a lightweight
 | ------------- | -------- | -------- | ------------------------------------------------------------------ |
 | `commandName` | Yes      | `string` | Subcommand mounted beneath `openclaw qa`, for example `matrix`.    |
 | `description` | No       | `string` | Fallback help text used when the shared host needs a stub command. |
-
-This block is metadata only. It does not register runtime behavior, and it does
-not replace `register(...)`, `setupEntry`, or other runtime/plugin entrypoints.
-Current consumers use it as a narrowing hint before broader plugin loading, so
-missing activation metadata usually only costs performance; it should not
-change correctness while legacy manifest ownership fallbacks still exist.
-
-```json
-{
-  "activation": {
-    "onProviders": ["openai"],
-    "onCommands": ["models"],
-    "onChannels": ["web"],
-    "onRoutes": ["gateway-webhook"],
-    "onCapabilities": ["provider", "tool"]
-  }
-}
-```
-
-| Field            | Required | Type                                                 | What it means                                                     |
-| ---------------- | -------- | ---------------------------------------------------- | ----------------------------------------------------------------- |
-| `onProviders`    | No       | `string[]`                                           | Provider ids that should activate this plugin when requested.     |
-| `onCommands`     | No       | `string[]`                                           | Command ids that should activate this plugin.                     |
-| `onChannels`     | No       | `string[]`                                           | Channel ids that should activate this plugin.                     |
-| `onRoutes`       | No       | `string[]`                                           | Route kinds that should activate this plugin.                     |
-| `onCapabilities` | No       | `Array<"provider" \| "channel" \| "tool" \| "hook">` | Broad capability hints used by control-plane activation planning. |
-
-Current live consumers:
-
-- command-triggered CLI planning falls back to legacy
-  `commandAliases[].cliCommand` or `commandAliases[].name`
-- channel-triggered setup/channel planning falls back to legacy `channels[]`
-  ownership when explicit channel activation metadata is missing
-- provider-triggered setup/runtime planning falls back to legacy
-  `providers[]` and top-level `cliBackends[]` ownership when explicit provider
-  activation metadata is missing
 
 ## setup reference
 

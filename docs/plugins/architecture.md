@@ -153,6 +153,26 @@ The important design boundary:
 That split lets OpenClaw validate config, explain missing/disabled plugins, and
 build UI/schema hints before the full runtime is active.
 
+### Activation planning
+
+Activation planning is part of the control plane. Callers can ask which plugins
+are relevant to a concrete command, provider, channel, route, agent harness, or
+capability before loading broader runtime registries.
+
+The planner keeps current manifest behavior compatible:
+
+- `activation.*` fields are explicit planner hints
+- `providers`, `channels`, `commandAliases`, `setup.providers`,
+  `contracts.tools`, and hooks remain manifest ownership fallback
+- the ids-only planner API stays available for existing callers
+- the plan API reports reason labels so diagnostics can distinguish explicit
+  hints from ownership fallback
+
+Do not treat `activation` as a lifecycle hook or a replacement for
+`register(...)`. It is metadata used to narrow loading. Prefer ownership fields
+when they already describe the relationship; use `activation` only for extra
+planner hints.
+
 ### Channel plugins and the shared message tool
 
 Channel plugins do not need to register a separate send/edit/react tool for
