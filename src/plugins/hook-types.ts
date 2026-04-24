@@ -7,6 +7,7 @@ import type {
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { TtsAutoMode } from "../config/types.tts.js";
+import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
 import {
   PLUGIN_PROMPT_MUTATION_RESULT_FIELDS,
   stripPromptMutationFieldsFromLegacyHookResult,
@@ -153,6 +154,7 @@ export const isConversationHookName = (hookName: PluginHookName): boolean =>
 
 export type PluginHookAgentContext = {
   runId?: string;
+  trace?: DiagnosticTraceContext;
   agentId?: string;
   sessionKey?: string;
   sessionId?: string;
@@ -300,6 +302,7 @@ export type PluginHookToolContext = {
   sessionKey?: string;
   sessionId?: string;
   runId?: string;
+  trace?: DiagnosticTraceContext;
   toolName: string;
   toolCallId?: string;
 };

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   createChildDiagnosticTraceContext,
   createDiagnosticTraceContext,
+  freezeDiagnosticTraceContext,
   formatDiagnosticTraceparent,
   isValidDiagnosticSpanId,
   isValidDiagnosticTraceFlags,
@@ -112,5 +113,18 @@ describe("diagnostic-trace-context", () => {
     expect(
       createChildDiagnosticTraceContext(parent, { spanId: SPAN_ID }).parentSpanId,
     ).toBeUndefined();
+  });
+
+  it("freezes a defensive trace context copy", () => {
+    const context = createDiagnosticTraceContext({
+      traceId: TRACE_ID,
+      spanId: SPAN_ID,
+      traceFlags: "01",
+    });
+    const frozen = freezeDiagnosticTraceContext(context);
+
+    expect(frozen).toEqual(context);
+    expect(frozen).not.toBe(context);
+    expect(Object.isFrozen(frozen)).toBe(true);
   });
 });
