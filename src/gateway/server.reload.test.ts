@@ -242,9 +242,13 @@ vi.mock("./server-channels.js", () => ({
   createChannelManager: hoisted.createChannelManager,
 }));
 
-vi.mock("./config-reload.js", () => ({
-  startGatewayConfigReloader: hoisted.startGatewayConfigReloader,
-}));
+vi.mock("./config-reload.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./config-reload.js")>();
+  return {
+    ...actual,
+    startGatewayConfigReloader: hoisted.startGatewayConfigReloader,
+  };
+});
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -718,7 +722,7 @@ describe("gateway hot reload", () => {
       const reload = await rpcReq<{ warningCount?: number }>(ws, "secrets.reload", {});
       expect(reload.ok).toBe(false);
       expect(reload.error?.code).toBe("UNAVAILABLE");
-      expect(reload.error?.message ?? "").toContain(refId);
+      expect(reload.error?.message).toBe("secrets.reload failed");
 
       const postResolve = await rpcReq<{
         assignments?: Array<{ path: string; pathSegments: string[]; value: unknown }>;
@@ -820,7 +824,7 @@ process.stdin.on("end", () => {
       const reload = await rpcReq<{ warningCount?: number }>(ws, "secrets.reload", {});
       expect(reload.ok).toBe(false);
       expect(reload.error?.code).toBe("UNAVAILABLE");
-      expect(reload.error?.message ?? "").toContain("forced failure");
+      expect(reload.error?.message).toBe("secrets.reload failed");
 
       const postResolve = await rpcReq<{
         assignments?: Array<{ path: string; pathSegments: string[]; value: unknown }>;
