@@ -498,7 +498,9 @@ Each provider entry can include:
 ## channelConfigs reference
 
 Use `channelConfigs` when a channel plugin needs cheap config metadata before
-runtime loads.
+runtime loads. Read-only channel setup/status discovery can use this metadata
+directly for configured external channels when no setup entry is available, or
+when `setup.requiresRuntime: false` declares setup runtime unnecessary.
 
 ```json
 {
