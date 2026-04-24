@@ -75,6 +75,7 @@ The setup output is meant to be agent-readable. It reports Chrome profile,
 audio bridge, node pinning, delayed realtime intro, and, when Twilio delegation
 is configured, whether the `voice-call` plugin and Twilio credentials are ready.
 Treat any `ok: false` check as a blocker before asking an agent to join.
+Use `openclaw googlemeet setup --json` for scripts or machine-readable output.
 
 Join a meeting:
 
