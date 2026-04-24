@@ -12,7 +12,7 @@ if (shouldWarnCompatImport) {
     {
       code: "OPENCLAW_PLUGIN_SDK_COMPAT_DEPRECATED",
       detail:
-        "Bundled plugins must use scoped plugin-sdk subpaths. External plugins may keep compat temporarily while migrating. Migration guide: https://docs.openclaw.ai/plugins/sdk-migration",
+        "Bundled plugins must use scoped plugin-sdk subpaths. External plugins may keep compat during the documented migration window. Migration guide: https://docs.openclaw.ai/plugins/sdk-migration",
     },
   );
 }

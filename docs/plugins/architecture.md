@@ -119,22 +119,31 @@ signals also appear in `openclaw status --all` and `openclaw plugins doctor`.
 
 ## Architecture overview
 
-OpenClaw's plugin system has four layers:
+OpenClaw's plugin system is split into four planes:
 
-1. **Manifest + discovery**
-   OpenClaw finds candidate plugins from configured paths, workspace roots,
-   global plugin roots, and bundled plugins. Discovery reads native
-   `openclaw.plugin.json` manifests plus supported bundle manifests first.
-2. **Enablement + validation**
-   Core decides whether a discovered plugin is enabled, disabled, blocked, or
-   selected for an exclusive slot such as memory.
-3. **Runtime loading**
-   Native OpenClaw plugins are loaded in-process via jiti and register
-   capabilities into a central registry. Compatible bundles are normalized into
-   registry records without importing runtime code.
-4. **Surface consumption**
-   The rest of OpenClaw reads the registry to expose tools, channels, provider
-   setup, hooks, HTTP routes, CLI commands, and services.
+1. **Source plane**
+   OpenClaw decides where a plugin comes from and how it can be installed. This
+   includes bundled catalogs, official external catalogs, ClawHub/npm specs,
+   local source paths, minimum host version, expected npm integrity, and install
+   policy checks.
+2. **Control plane**
+   OpenClaw reads package and manifest metadata before runtime code executes.
+   This includes discovery, config schemas, provider/channel ownership,
+   setup/onboarding hints, contracts, auth choices, and enablement policy.
+3. **Load plane**
+   OpenClaw builds deterministic plans for concrete needs such as a provider,
+   channel, command, hook stage, or contract. Legacy `activation.*` fields are
+   compatibility hints in this plane, not the preferred public contract.
+4. **Runtime plane**
+   OpenClaw imports plugin code only for actual execution. Native plugins
+   register capabilities into scoped or compatibility registries; compatible
+   bundles can still normalize into registry records without importing runtime
+   code.
+
+The important compatibility rule: documented external plugins and existing
+bundled plugins must keep working while contracts migrate. Breaking changes need
+a replacement contract, compatibility adapter, diagnostics, tests, docs, and an
+approved deprecation window before removal.
 
 For plugin CLI specifically, root command discovery is split in two phases:
 

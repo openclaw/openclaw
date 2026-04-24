@@ -239,11 +239,15 @@ runtime still owns actual CLI registration through a lightweight
 | `commandName` | Yes      | `string` | Subcommand mounted beneath `openclaw qa`, for example `matrix`.    |
 | `description` | No       | `string` | Fallback help text used when the shared host needs a stub command. |
 
-This block is metadata only. It does not register runtime behavior, and it does
-not replace `register(...)`, `setupEntry`, or other runtime/plugin entrypoints.
-Current consumers use it as a narrowing hint before broader plugin loading, so
-missing activation metadata usually only costs performance; it should not
-change correctness while legacy manifest ownership fallbacks still exist.
+This block is legacy hint metadata. It does not register runtime behavior, and
+it does not replace `register(...)`, `setupEntry`, or other runtime/plugin
+entrypoints. Existing plugins may keep these fields, but new manifests should
+prefer explicit ownership fields such as `providers`, `channels`, `contracts`,
+`commandAliases`, and `setup`.
+
+Current consumers still parse `activation` through the compatibility layer so
+existing bundled and external plugins keep working. New code should treat these
+fields as fallback hints for load planning, not as the primary plugin contract.
 
 ```json
 {
@@ -257,23 +261,24 @@ change correctness while legacy manifest ownership fallbacks still exist.
 }
 ```
 
-| Field            | Required | Type                                                 | What it means                                                     |
-| ---------------- | -------- | ---------------------------------------------------- | ----------------------------------------------------------------- |
-| `onProviders`    | No       | `string[]`                                           | Provider ids that should activate this plugin when requested.     |
-| `onCommands`     | No       | `string[]`                                           | Command ids that should activate this plugin.                     |
-| `onChannels`     | No       | `string[]`                                           | Channel ids that should activate this plugin.                     |
-| `onRoutes`       | No       | `string[]`                                           | Route kinds that should activate this plugin.                     |
-| `onCapabilities` | No       | `Array<"provider" \| "channel" \| "tool" \| "hook">` | Broad capability hints used by control-plane activation planning. |
+| Field            | Required | Type                                                 | What it means                                                                 |
+| ---------------- | -------- | ---------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `onProviders`    | No       | `string[]`                                           | Legacy provider load hint. Prefer top-level `providers`.                      |
+| `onCommands`     | No       | `string[]`                                           | Legacy command load hint. Prefer command aliases or CLI descriptors.          |
+| `onChannels`     | No       | `string[]`                                           | Legacy channel load hint. Prefer top-level `channels`.                        |
+| `onRoutes`       | No       | `string[]`                                           | Legacy route load hint. Keep only when no narrower route metadata exists yet. |
+| `onCapabilities` | No       | `Array<"provider" \| "channel" \| "tool" \| "hook">` | Legacy broad capability hint. Do not add new uses.                            |
 
 Current live consumers:
 
-- command-triggered CLI planning falls back to legacy
-  `commandAliases[].cliCommand` or `commandAliases[].name`
-- channel-triggered setup/channel planning falls back to legacy `channels[]`
-  ownership when explicit channel activation metadata is missing
-- provider-triggered setup/runtime planning falls back to legacy
-  `providers[]` and top-level `cliBackends[]` ownership when explicit provider
-  activation metadata is missing
+- command-triggered CLI planning prefers `commandAliases[].cliCommand` or
+  `commandAliases[].name` before legacy `activation.onCommands`
+- channel-triggered setup/channel planning prefers `channels[]` before legacy
+  `activation.onChannels`
+- provider-triggered setup/runtime planning prefers `providers[]` and
+  `setup.providers[]` before legacy `activation.onProviders`
+- broad capability planning prefers explicit ownership metadata before legacy
+  `activation.onCapabilities`
 
 ## setup reference
 
