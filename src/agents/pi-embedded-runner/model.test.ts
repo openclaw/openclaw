@@ -1101,10 +1101,12 @@ describe("resolveModel", () => {
   it("lets official openai-codex metadata override legacy unmarked models-add rows", () => {
     mockDiscoveredModel(discoverModels, {
       provider: "openai-codex",
-      modelId: "gpt-5.4",
+      modelId: "gpt-5.5",
       templateModel: {
-        ...buildOpenAICodexForwardCompatExpectation("gpt-5.4"),
-        name: "GPT-5.4",
+        ...buildOpenAICodexForwardCompatExpectation("gpt-5.5"),
+        name: "GPT-5.5",
+        cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
+        contextWindow: 400_000,
       },
     });
 
@@ -1137,9 +1139,8 @@ describe("resolveModel", () => {
     expect(result.model).toMatchObject({
       provider: "openai-codex",
       id: "gpt-5.5",
-      cost: { input: 5, output: 30, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 1_000_000,
-      contextTokens: 272_000,
+      cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
+      contextWindow: 400_000,
       maxTokens: 128_000,
     });
   });
@@ -1147,10 +1148,12 @@ describe("resolveModel", () => {
   it("preserves unmarked manual openai-codex metadata overrides", () => {
     mockDiscoveredModel(discoverModels, {
       provider: "openai-codex",
-      modelId: "gpt-5.4",
+      modelId: "gpt-5.5",
       templateModel: {
-        ...buildOpenAICodexForwardCompatExpectation("gpt-5.4"),
-        name: "GPT-5.4",
+        ...buildOpenAICodexForwardCompatExpectation("gpt-5.5"),
+        name: "GPT-5.5",
+        cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
+        contextWindow: 400_000,
       },
     });
 

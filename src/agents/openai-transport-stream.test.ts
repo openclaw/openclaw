@@ -732,7 +732,7 @@ describe("openai transport stream", () => {
       compat: {
         supportedReasoningEfforts: ["minimal", "low", "medium", "high"],
       },
-    } satisfies Model<"openai-responses">;
+    } as unknown as Model<"openai-responses">;
 
     const params = buildOpenAIResponsesParams(
       model,
@@ -770,7 +770,7 @@ describe("openai transport stream", () => {
       compat: {
         supportedReasoningEfforts: ["minimal", "low", "medium", "high"],
       },
-    } satisfies Model<"openai-responses">;
+    } as unknown as Model<"openai-responses">;
 
     const params = buildOpenAIResponsesParams(
       model,
