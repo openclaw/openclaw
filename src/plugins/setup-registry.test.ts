@@ -349,6 +349,39 @@ describe("setup-registry getJiti", () => {
     expect(mocks.createJiti.mock.calls[0]?.[0]).toBe(path.join(pluginRoot, "setup-api.js"));
   });
 
+  it("treats explicit descriptor-only setup as a runtime cutoff", () => {
+    const pluginRoot = makeTempDir();
+    fs.writeFileSync(
+      path.join(pluginRoot, "setup-api.js"),
+      "export default { register(api) { api.registerProvider({ id: 'openai', label: 'OpenAI', auth: [] }); api.registerCliBackend({ id: 'codex-cli', config: { command: 'codex' } }); } };\n",
+      "utf-8",
+    );
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "openai",
+          rootDir: pluginRoot,
+          setup: {
+            providers: [{ id: "openai" }],
+            cliBackends: ["codex-cli"],
+            requiresRuntime: false,
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+
+    expect(resolvePluginSetupProvider({ provider: "openai", env: {} })).toBeUndefined();
+    expect(resolvePluginSetupCliBackend({ backend: "codex-cli", env: {} })).toBeUndefined();
+    expect(resolvePluginSetupRegistry({ env: {} })).toEqual({
+      providers: [],
+      cliBackends: [],
+      configMigrations: [],
+      autoEnableProbes: [],
+    });
+    expect(mocks.createJiti).not.toHaveBeenCalled();
+  });
+
   it("does not load setup-api modules from the current working directory", () => {
     const pluginRoot = makeTempDir();
     const workspaceRoot = makeTempDir();
