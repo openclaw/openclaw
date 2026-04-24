@@ -10,7 +10,7 @@ export {
   formatProviderHttpErrorMessage,
   readResponseTextLimited,
   truncateErrorDetail,
-} from "../tts/provider-error-utils.js";
+} from "../agents/provider-http-errors.js";
 export {
   assertOkOrThrowHttpError,
   buildAudioTranscriptionFormData,
