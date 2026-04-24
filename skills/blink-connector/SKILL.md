@@ -11,7 +11,7 @@ description: >
   (Gmail, Drive, Calendar, Docs, Sheets, Slides), HubSpot, Airtable,
   Microsoft (Outlook, Teams, OneDrive, Calendar), Salesforce, GitHub, Jira,
   Asana, Linear, Attio, Pipedrive, Zoom, Stripe, Shopify, Figma, Instagram,
-  TikTok, YouTube, Loom, Mailchimp, Typeform, Calendly, Etsy, Vercel,
+  TikTok, YouTube, Mailchimp, Typeform, Calendly, Etsy, Vercel,
   Reddit, Facebook, Monday, Amplitude, Google Analytics, Zendesk, Apollo,
   Datagma, Mixpanel, PeopleDataLabs, Google BigQuery, Supabase, QuickBooks,
   Brex, Google Ads, Intercom, ZoomInfo, Gong, DocuSign, Box, Todoist, Ashby,
@@ -80,7 +80,6 @@ A missing provider means it's not linked — ask the user to connect it in the A
 | Instagram | `instagram` | `https://graph.instagram.com/v22.0/` |
 | TikTok | `tiktok` | `https://open.tiktokapis.com/v2/` |
 | YouTube | `youtube` | `https://www.googleapis.com/youtube/v3/` |
-| Loom | `loom` | `https://www.loom.com/v1/` |
 | Mailchimp | `mailchimp` | `https://{dc}.api.mailchimp.com/3.0/` |
 | Typeform | `typeform` | `https://api.typeform.com/` |
 | Calendly | `calendly` | `https://api.calendly.com/` |
@@ -116,7 +115,7 @@ A missing provider means it's not linked — ask the user to connect it in the A
 | Intercom | `composio_intercom` | `https://api.intercom.io/` |
 | ZoomInfo | `composio_zoominfo` | `https://api.zoominfo.com/` |
 | Gong | `composio_gong` | `https://api.gong.io/v2/` |
-| DocuSign | `composio_docusign` | `https://account.docusign.com/restapi/` (path: `v2.1/accounts/{accountId}/...`) |
+| DocuSign | `composio_docusign` | account-specific (e.g. `https://na3.docusign.net/restapi/`); resolved from `metadata.docusign_base_uri` (path: `v2.1/accounts/{accountId}/...`) |
 | Box | `composio_box` | `https://api.box.com/2.0/` |
 | Todoist | `composio_todoist` | `https://api.todoist.com/api/v1/` |
 | Ashby | `composio_ashby` | `https://api.ashbyhq.com/` |
@@ -813,16 +812,6 @@ blink connector exec tiktok user/info/ GET '{"fields":"display_name,follower_cou
 blink connector exec tiktok video/list/ POST '{"max_count":10}'
 ```
 
-### Loom
-
-```bash
-# List videos
-blink connector exec loom videos GET '{"limit":"10"}'
-
-# Get video details
-blink connector exec loom videos/VIDEO_ID GET
-```
-
 ### Etsy
 
 Etsy's API does **not** accept `me` as a user_id placeholder — pass the numeric `user_id` / `shop_id` returned by `/users/me`. If `/users/me` returns `"Could not find a shop for User with user_id = ..."`, the account has no Etsy shop and shop-scoped endpoints will always fail until the user creates one on etsy.com.
@@ -1024,8 +1013,10 @@ blink connector exec composio_gong calls/transcript POST '{"filter":{"callIds":[
 
 ### DocuSign
 
-DocuSign is account-scoped. Get the `accountId` from `/oauth/userinfo` or
-`blink connector status` metadata.
+DocuSign is account-scoped. The connect callback captures both
+`docusign_account_id` and `docusign_base_uri` into `metadata` so the executor
+auto-routes to the correct account host (e.g. `https://na3.docusign.net/restapi/`).
+Get `ACCOUNT_ID` from `blink connector status` metadata (`docusign_account_id`).
 
 ```bash
 # Get my account info
@@ -1097,8 +1088,10 @@ blink connector exec composio_ashby job.list POST '{"limit":20}'
 
 ### Basecamp
 
-Basecamp 4 is account-scoped — get the `accountId` (an integer) from
-`https://launchpad.37signals.com/authorization.json` or `blink connector status`.
+Basecamp 4 is account-scoped — the connect callback captures the user's
+first account id into `metadata.basecamp_account_id`. Read it from
+`blink connector status`, or call
+`https://launchpad.37signals.com/authorization.json` to list all accounts.
 
 ```bash
 # List projects
