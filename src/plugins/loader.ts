@@ -280,6 +280,7 @@ type PluginRegistrySnapshot = {
     webSearchProviders: PluginRegistry["webSearchProviders"];
     embeddedExtensionFactories: PluginRegistry["embeddedExtensionFactories"];
     codexAppServerExtensionFactories: PluginRegistry["codexAppServerExtensionFactories"];
+    agentToolResultMiddlewares: PluginRegistry["agentToolResultMiddlewares"];
     memoryEmbeddingProviders: PluginRegistry["memoryEmbeddingProviders"];
     agentHarnesses: PluginRegistry["agentHarnesses"];
     httpRoutes: PluginRegistry["httpRoutes"];
@@ -318,6 +319,7 @@ function snapshotPluginRegistry(registry: PluginRegistry): PluginRegistrySnapsho
       webSearchProviders: [...registry.webSearchProviders],
       embeddedExtensionFactories: [...registry.embeddedExtensionFactories],
       codexAppServerExtensionFactories: [...registry.codexAppServerExtensionFactories],
+      agentToolResultMiddlewares: [...registry.agentToolResultMiddlewares],
       memoryEmbeddingProviders: [...registry.memoryEmbeddingProviders],
       agentHarnesses: [...registry.agentHarnesses],
       httpRoutes: [...registry.httpRoutes],
@@ -355,6 +357,7 @@ function restorePluginRegistry(registry: PluginRegistry, snapshot: PluginRegistr
   registry.webSearchProviders = snapshot.arrays.webSearchProviders;
   registry.embeddedExtensionFactories = snapshot.arrays.embeddedExtensionFactories;
   registry.codexAppServerExtensionFactories = snapshot.arrays.codexAppServerExtensionFactories;
+  registry.agentToolResultMiddlewares = snapshot.arrays.agentToolResultMiddlewares;
   registry.memoryEmbeddingProviders = snapshot.arrays.memoryEmbeddingProviders;
   registry.agentHarnesses = snapshot.arrays.agentHarnesses;
   registry.httpRoutes = snapshot.arrays.httpRoutes;

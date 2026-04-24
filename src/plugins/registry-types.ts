@@ -5,6 +5,10 @@ import type { OperatorScope } from "../gateway/operator-scopes.js";
 import type { GatewayRequestHandlers } from "../gateway/server-methods/types.js";
 import type { HookEntry } from "../hooks/types.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
+import type {
+  AgentToolResultMiddleware,
+  AgentToolResultMiddlewareHarness,
+} from "./agent-tool-result-middleware-types.js";
 import type { CodexAppServerExtensionFactory } from "./codex-app-server-extension-types.js";
 import type { PluginActivationSource } from "./config-state.js";
 import type {
@@ -164,6 +168,15 @@ export type PluginCodexAppServerExtensionFactoryRegistration = {
   source: string;
   rootDir?: string;
 };
+export type PluginAgentToolResultMiddlewareRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  rawHandler: AgentToolResultMiddleware;
+  handler: AgentToolResultMiddleware;
+  harnesses: AgentToolResultMiddlewareHarness[];
+  source: string;
+  rootDir?: string;
+};
 export type PluginAgentHarnessRegistration = {
   pluginId: string;
   pluginName?: string;
@@ -312,6 +325,7 @@ export type PluginRegistry = {
   webSearchProviders: PluginWebSearchProviderRegistration[];
   embeddedExtensionFactories: PluginEmbeddedExtensionFactoryRegistration[];
   codexAppServerExtensionFactories: PluginCodexAppServerExtensionFactoryRegistration[];
+  agentToolResultMiddlewares: PluginAgentToolResultMiddlewareRegistration[];
   memoryEmbeddingProviders: PluginMemoryEmbeddingProviderRegistration[];
   agentHarnesses: PluginAgentHarnessRegistration[];
   gatewayHandlers: GatewayRequestHandlers;

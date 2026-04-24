@@ -396,7 +396,7 @@ read without importing the plugin runtime.
 ```json
 {
   "contracts": {
-    "embeddedExtensionFactories": ["pi"],
+    "agentToolResultMiddleware": ["pi", "codex-app-server"],
     "externalAuthProviders": ["acme-ai"],
     "speechProviders": ["openai"],
     "realtimeTranscriptionProviders": ["openai"],
@@ -414,20 +414,26 @@ read without importing the plugin runtime.
 
 Each list is optional:
 
-| Field                            | Type       | What it means                                                     |
-| -------------------------------- | ---------- | ----------------------------------------------------------------- |
-| `embeddedExtensionFactories`     | `string[]` | Embedded runtime ids a bundled plugin may register factories for. |
-| `externalAuthProviders`          | `string[]` | Provider ids whose external auth profile hook this plugin owns.   |
-| `speechProviders`                | `string[]` | Speech provider ids this plugin owns.                             |
-| `realtimeTranscriptionProviders` | `string[]` | Realtime-transcription provider ids this plugin owns.             |
-| `realtimeVoiceProviders`         | `string[]` | Realtime-voice provider ids this plugin owns.                     |
-| `memoryEmbeddingProviders`       | `string[]` | Memory embedding provider ids this plugin owns.                   |
-| `mediaUnderstandingProviders`    | `string[]` | Media-understanding provider ids this plugin owns.                |
-| `imageGenerationProviders`       | `string[]` | Image-generation provider ids this plugin owns.                   |
-| `videoGenerationProviders`       | `string[]` | Video-generation provider ids this plugin owns.                   |
-| `webFetchProviders`              | `string[]` | Web-fetch provider ids this plugin owns.                          |
-| `webSearchProviders`             | `string[]` | Web-search provider ids this plugin owns.                         |
-| `tools`                          | `string[]` | Agent tool names this plugin owns for bundled contract checks.    |
+| Field                            | Type       | What it means                                                    |
+| -------------------------------- | ---------- | ---------------------------------------------------------------- |
+| `embeddedExtensionFactories`     | `string[]` | Deprecated embedded extension factory ids.                       |
+| `agentToolResultMiddleware`      | `string[]` | Harness ids this plugin may register tool-result middleware for. |
+| `externalAuthProviders`          | `string[]` | Provider ids whose external auth profile hook this plugin owns.  |
+| `speechProviders`                | `string[]` | Speech provider ids this plugin owns.                            |
+| `realtimeTranscriptionProviders` | `string[]` | Realtime-transcription provider ids this plugin owns.            |
+| `realtimeVoiceProviders`         | `string[]` | Realtime-voice provider ids this plugin owns.                    |
+| `memoryEmbeddingProviders`       | `string[]` | Memory embedding provider ids this plugin owns.                  |
+| `mediaUnderstandingProviders`    | `string[]` | Media-understanding provider ids this plugin owns.               |
+| `imageGenerationProviders`       | `string[]` | Image-generation provider ids this plugin owns.                  |
+| `videoGenerationProviders`       | `string[]` | Video-generation provider ids this plugin owns.                  |
+| `webFetchProviders`              | `string[]` | Web-fetch provider ids this plugin owns.                         |
+| `webSearchProviders`             | `string[]` | Web-search provider ids this plugin owns.                        |
+| `tools`                          | `string[]` | Agent tool names this plugin owns for bundled contract checks.   |
+
+`contracts.embeddedExtensionFactories` is retained for bundled compatibility
+code that still needs direct Pi embedded-runner events. New tool-result
+transforms should declare `contracts.agentToolResultMiddleware` and register
+with `api.registerAgentToolResultMiddleware(...)` instead.
 
 Provider plugins that implement `resolveExternalAuthProfiles` should declare
 `contracts.externalAuthProviders`. Plugins without the declaration still run

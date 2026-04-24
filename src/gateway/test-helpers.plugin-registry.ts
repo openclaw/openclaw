@@ -24,6 +24,7 @@ function createStubPluginRegistry(): PluginRegistry {
     webSearchProviders: [],
     embeddedExtensionFactories: [],
     codexAppServerExtensionFactories: [],
+    agentToolResultMiddlewares: [],
     memoryEmbeddingProviders: [],
     textTransforms: [],
     agentHarnesses: [],

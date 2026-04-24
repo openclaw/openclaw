@@ -144,14 +144,20 @@ OpenClaw requires Codex app-server `0.118.0` or newer. The Codex plugin checks
 the app-server initialize handshake and blocks older or unversioned servers so
 OpenClaw only runs against the protocol surface it has been tested with.
 
-### Codex app-server tool-result middleware
+### Tool-result middleware
 
-Bundled plugins can also attach Codex app-server-specific `tool_result`
-middleware through `api.registerCodexAppServerExtensionFactory(...)` when their
-manifest declares `contracts.embeddedExtensionFactories: ["codex-app-server"]`.
-This is the trusted-plugin seam for async tool-result transforms that need to
-run inside the native Codex harness before the tool output is projected back
-into the OpenClaw transcript.
+Plugins can attach harness-neutral tool-result middleware through
+`api.registerAgentToolResultMiddleware(...)` when their manifest declares the
+targeted harness ids in `contracts.agentToolResultMiddleware`. This is the seam
+for async tool-result transforms that must run before PI or Codex feeds tool
+output back into the model.
+
+Legacy bundled plugins can still use
+`api.registerCodexAppServerExtensionFactory(...)` for Codex app-server-only
+middleware, but new result transforms should use the harness-neutral API.
+The Pi-only `api.registerEmbeddedExtensionFactory(...)` hook is deprecated for
+tool-result transforms; keep it only for bundled compatibility code that still
+needs direct Pi embedded-runner events.
 
 ### Native Codex harness mode
 

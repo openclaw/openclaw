@@ -1,9 +1,11 @@
+import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { ExtensionFactory, SessionManager } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { listEmbeddedExtensionFactories } from "../../plugins/embedded-extension-factory.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
+import { createAgentToolResultMiddlewareRunner } from "../harness/tool-result-middleware.js";
 import { setCompactionSafeguardRuntime } from "../pi-hooks/compaction-safeguard-runtime.js";
 import compactionSafeguardExtension from "../pi-hooks/compaction-safeguard.js";
 import contextPruningExtension from "../pi-hooks/context-pruning.js";
@@ -13,6 +15,57 @@ import { makeToolPrunablePredicate } from "../pi-hooks/context-pruning/tools.js"
 import { ensurePiCompactionReserveTokens } from "../pi-settings.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "./cache-ttl.js";
+
+type PiToolResultEvent = {
+  threadId?: string;
+  turnId?: string;
+  toolCallId?: string;
+  toolName?: string;
+  input?: unknown;
+  content?: AgentToolResult<unknown>["content"];
+  details?: unknown;
+  isError?: boolean;
+};
+
+function recordFromUnknown(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function buildAgentToolResultMiddlewareFactory(): ExtensionFactory {
+  const runner = createAgentToolResultMiddlewareRunner({ harness: "pi" });
+  return (pi) => {
+    pi.on("tool_result", async (rawEvent: unknown, ctx: { cwd?: string }) => {
+      const event = recordFromUnknown(rawEvent) as PiToolResultEvent;
+      if (!event.toolName) {
+        return undefined;
+      }
+      const content = Array.isArray(event.content) ? event.content : [];
+      const current = {
+        content,
+        details: event.details,
+      } satisfies AgentToolResult<unknown>;
+      const result = await runner.applyToolResultMiddleware({
+        threadId: event.threadId,
+        turnId: event.turnId,
+        toolCallId: event.toolCallId ?? event.toolName,
+        toolName: event.toolName,
+        args: recordFromUnknown(event.input),
+        cwd: ctx.cwd,
+        isError: event.isError,
+        result: current,
+      });
+      if (result === current) {
+        return undefined;
+      }
+      return {
+        content: result.content,
+        details: result.details,
+      };
+    });
+  };
+}
 
 function resolveContextWindowTokens(params: {
   cfg: OpenClawConfig | undefined;
@@ -115,6 +168,7 @@ export function buildEmbeddedExtensionFactories(params: {
   if (pruningFactory) {
     factories.push(pruningFactory);
   }
+  factories.push(buildAgentToolResultMiddlewareFactory());
   factories.push(...listEmbeddedExtensionFactories());
   return factories;
 }
