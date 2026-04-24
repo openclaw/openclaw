@@ -72,6 +72,31 @@ describe("configured plugin auto-enable blockers", () => {
     ]);
   });
 
+  it("keeps restrictive allowlist blocking OpenAI companion repair even when Codex is disabled", () => {
+    const cfg: OpenClawConfig = {
+      plugins: {
+        allow: ["openai"],
+        entries: {
+          codex: {
+            enabled: false,
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const repaired = maybeRepairConfiguredPluginAutoEnableBlockers({
+      cfg,
+      env,
+      manifestRegistry: registry,
+    });
+
+    expect(repaired.config).toBe(cfg);
+    expect(repaired.changes).toEqual([]);
+    expect(repaired.warnings).toEqual([
+      '- plugins.allow: plugin "codex" is not allowlisted, but OpenAI plugin enabled. Add "codex" to plugins.allow before relying on that configuration. Also enable plugins.entries.codex.enabled before relying on that configuration.',
+    ]);
+  });
+
   it("does not enable Codex when the plugin is unavailable", () => {
     const cfg: OpenClawConfig = {
       plugins: {
@@ -216,6 +241,45 @@ describe("configured plugin auto-enable blockers", () => {
     expect(repaired.changes.join("\n")).not.toContain("\u001B");
     expect(repaired.changes.join("\n")).not.toContain("\r");
     expect(repaired.changes.join("\n")).not.toContain("\nforged");
+  });
+
+  it("warns instead of repairing reserved plugin ids", () => {
+    const reservedPluginId = ["__", "proto__"].join("");
+    const entries = Object.create(null) as Record<string, { enabled: false }>;
+    entries[reservedPluginId] = { enabled: false };
+    const cfg: OpenClawConfig = {
+      auth: {
+        profiles: {
+          dangerous: {
+            provider: "danger",
+            mode: "api_key",
+          },
+        },
+      },
+      plugins: {
+        entries,
+      },
+    } as OpenClawConfig;
+
+    const repaired = maybeRepairConfiguredPluginAutoEnableBlockers({
+      cfg,
+      env,
+      manifestRegistry: makeRegistry([
+        {
+          id: reservedPluginId,
+          channels: [],
+          providers: ["danger"],
+          autoEnableWhenConfiguredProviders: ["danger"],
+        },
+      ]),
+    });
+
+    expect(repaired.config).toBe(cfg);
+    expect(repaired.changes).toEqual([]);
+    expect(repaired.warnings).toEqual([
+      `- plugins.entries.${reservedPluginId}.enabled: plugin id is reserved and cannot be auto-repaired, but danger auth configured. Use a non-reserved plugin id before relying on that configuration.`,
+    ]);
+    expect(Object.prototype).not.toHaveProperty("enabled");
   });
 
   it("warns instead of removing denylist blockers", () => {

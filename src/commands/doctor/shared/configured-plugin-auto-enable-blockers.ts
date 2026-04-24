@@ -4,6 +4,7 @@ import {
   type PluginAutoEnableCandidate,
 } from "../../../config/plugin-auto-enable.js";
 import { ensurePluginAllowlisted } from "../../../config/plugins-allowlist.js";
+import { isBlockedObjectKey } from "../../../config/prototype-keys.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
   loadPluginManifestRegistry,
@@ -23,12 +24,14 @@ export type ConfiguredPluginAutoEnableBlockerReason =
   | "blocked-by-denylist"
   | "blocked-by-allowlist"
   | "plugins-disabled"
+  | "invalid-plugin-id"
   | "not-enabled";
 
 export type ConfiguredPluginAutoEnableBlockerHit = {
   pluginId: string;
   reasons: string[];
   blocker: ConfiguredPluginAutoEnableBlockerReason;
+  entryDisabled?: boolean;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -105,6 +108,9 @@ function shouldEnableCodexForOpenAi(
 }
 
 function setPluginEntryEnabled(cfg: OpenClawConfig, pluginId: string): OpenClawConfig {
+  if (isBlockedObjectKey(pluginId)) {
+    return cfg;
+  }
   const entry = cfg.plugins?.entries?.[pluginId];
   const existingEntry = isRecord(entry) ? entry : {};
   return {
@@ -132,6 +138,18 @@ function sanitizeOutput(value: string): string {
 
 function isOpenAiCompanionOnlyReason(reasons: readonly string[]): boolean {
   return reasons.length === 1 && reasons[0] === OPENAI_ENABLED_CODEX_REASON;
+}
+
+function isOpenAiCompanionAllowlistBlocked(
+  cfg: OpenClawConfig,
+  pluginId: string,
+  reasons: readonly string[],
+): boolean {
+  return (
+    pluginId === "codex" &&
+    isOpenAiCompanionOnlyReason(reasons) &&
+    isPluginAllowMissing(cfg, pluginId)
+  );
 }
 
 function addReason(reasonsByPlugin: Map<string, string[]>, pluginId: string, reason: string): void {
@@ -174,6 +192,10 @@ export function scanConfiguredPluginAutoEnableBlockers(params: {
     left.localeCompare(right),
   )) {
     const reasons = reasonsByPlugin.get(pluginId) ?? [];
+    if (isBlockedObjectKey(pluginId)) {
+      hits.push({ pluginId, reasons, blocker: "invalid-plugin-id" });
+      continue;
+    }
     if (params.cfg.plugins?.enabled === false) {
       hits.push({ pluginId, reasons, blocker: "plugins-disabled" });
       continue;
@@ -182,12 +204,13 @@ export function scanConfiguredPluginAutoEnableBlockers(params: {
       hits.push({ pluginId, reasons, blocker: "blocked-by-denylist" });
       continue;
     }
-    if (
-      pluginId === "codex" &&
-      isOpenAiCompanionOnlyReason(reasons) &&
-      isPluginAllowMissing(params.cfg, pluginId)
-    ) {
-      hits.push({ pluginId, reasons, blocker: "blocked-by-allowlist" });
+    if (isOpenAiCompanionAllowlistBlocked(params.cfg, pluginId, reasons)) {
+      hits.push({
+        pluginId,
+        reasons,
+        blocker: "blocked-by-allowlist",
+        entryDisabled: isPluginEntryDisabled(params.cfg, pluginId),
+      });
       continue;
     }
     if (isPluginEntryDisabled(params.cfg, pluginId)) {
@@ -221,10 +244,16 @@ export function collectConfiguredPluginAutoEnableBlockerWarnings(params: {
       return `- plugins.entries.${pluginId}.enabled: plugin is not enabled, but ${reason}.${suffix}`;
     }
     if (hit.blocker === "blocked-by-allowlist") {
-      return `- plugins.allow: plugin "${pluginId}" is not allowlisted, but ${reason}. Add "${pluginId}" to plugins.allow before relying on that configuration.`;
+      const disabledSuffix = hit.entryDisabled
+        ? ` Also enable plugins.entries.${pluginId}.enabled before relying on that configuration.`
+        : "";
+      return `- plugins.allow: plugin "${pluginId}" is not allowlisted, but ${reason}. Add "${pluginId}" to plugins.allow before relying on that configuration.${disabledSuffix}`;
     }
     if (hit.blocker === "blocked-by-denylist") {
       return `- plugins.deny: plugin "${pluginId}" is denied, but ${reason}. Remove it from plugins.deny before relying on that configuration.`;
+    }
+    if (hit.blocker === "invalid-plugin-id") {
+      return `- plugins.entries.${pluginId}.enabled: plugin id is reserved and cannot be auto-repaired, but ${reason}. Use a non-reserved plugin id before relying on that configuration.`;
     }
     return `- plugins.enabled: plugins are disabled globally, but plugin "${pluginId}" is needed because ${reason}. Enable plugins before relying on that configuration.`;
   });
