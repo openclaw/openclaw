@@ -1,9 +1,9 @@
 import { z } from "zod";
 import { parseByteSize } from "../cli/parse-bytes.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
-import { getBundledMediaProviderDefaults } from "../media-understanding/bundled-defaults.js";
 import { resolveConfiguredMediaEntryCapabilities } from "../media-understanding/entry-capabilities.js";
 import { normalizeMediaProviderId } from "../media-understanding/provider-id.js";
+import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringifiedOptionalString,
@@ -210,6 +210,33 @@ function resolveConfigProviderImageCapability(params: {
   return "unknown";
 }
 
+function resolveManifestProviderImageCapability(providerId: string): SharedMediaImageCapability {
+  const registry = loadPluginManifestRegistry({ cache: true });
+  let hasProviderOwner = false;
+  for (const plugin of registry.plugins) {
+    if (
+      plugin.providers.some((candidate) => normalizeMediaProviderId(candidate) === providerId) ||
+      plugin.cliBackends.some((candidate) => normalizeMediaProviderId(candidate) === providerId)
+    ) {
+      hasProviderOwner = true;
+    }
+    const declaredMediaProvider = (plugin.contracts?.mediaUnderstandingProviders ?? []).find(
+      (candidate) => normalizeMediaProviderId(candidate) === providerId,
+    );
+    if (!declaredMediaProvider) {
+      continue;
+    }
+    const metadata = Object.entries(plugin.mediaUnderstandingProviderMetadata ?? {}).find(
+      ([candidate]) => normalizeMediaProviderId(candidate) === providerId,
+    )?.[1];
+    if (!metadata?.capabilities) {
+      return "unknown";
+    }
+    return metadata.capabilities.includes("image") ? "image" : "non-image";
+  }
+  return hasProviderOwner ? "non-image" : "unknown";
+}
+
 function resolveSharedMediaModelImageCapability(params: {
   cfg: MediaAliasValidationConfig;
   model: MediaUnderstandingModelConfig | undefined;
@@ -231,11 +258,14 @@ function resolveSharedMediaModelImageCapability(params: {
   if (!providerId) {
     return "unknown";
   }
-  const bundledDefaults = getBundledMediaProviderDefaults(providerId);
-  if (bundledDefaults) {
-    return bundledDefaults.defaultModels?.image ? "image" : "non-image";
+  const configProviderCapability = resolveConfigProviderImageCapability({
+    cfg: params.cfg,
+    providerId,
+  });
+  if (configProviderCapability !== "unknown") {
+    return configProviderCapability;
   }
-  return resolveConfigProviderImageCapability({ cfg: params.cfg, providerId });
+  return resolveManifestProviderImageCapability(providerId);
 }
 
 function toolsMediaImageCanFallBackToAgentDefaults(cfg: MediaAliasValidationConfig): boolean {

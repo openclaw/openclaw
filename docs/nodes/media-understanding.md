@@ -152,7 +152,7 @@ configured models, OpenClaw auto-detects in this order and **stops at the first
 working option**:
 
 1. **Active reply model** when its provider supports the capability.
-2. **`agents.defaults.imageModel`** primary/fallback refs (image only).
+2. **`agents.defaults.imageModel`** primary/fallback refs (image only). Avoid LiteLLM routing aliases here and use direct provider/model refs.
 3. **Local CLIs** (audio only; if installed)
    - `sherpa-onnx-offline` (requires `SHERPA_ONNX_MODEL_DIR` with encoder/decoder/joiner/tokens)
    - `whisper-cli` (`whisper-cpp`; uses `WHISPER_CPP_MODEL` or the bundled tiny model)

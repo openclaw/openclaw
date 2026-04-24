@@ -1163,8 +1163,9 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.list.*.embeddedHarness.fallback":
     "Per-agent embedded harness fallback. Auto mode defaults to pi; explicit plugin runtimes default to none and do not inherit broader fallback settings.",
   "agents.defaults.imageModel.primary":
-    "Optional image model (provider/model) used when the primary model lacks image input.",
-  "agents.defaults.imageModel.fallbacks": "Ordered fallback image models (provider/model).",
+    "Optional image model (provider/model) used when the primary model lacks image input. When media understanding can fall back here, avoid LiteLLM routing aliases like litellm/vision and use a direct provider/model id instead.",
+  "agents.defaults.imageModel.fallbacks":
+    "Ordered fallback image models (provider/model). When media understanding can fall back here, avoid LiteLLM routing aliases like litellm/vision and use direct provider/model ids instead.",
   "agents.defaults.imageGenerationModel.primary":
     "Optional image-generation model (provider/model) used by the shared image generation capability.",
   "agents.defaults.imageGenerationModel.fallbacks":

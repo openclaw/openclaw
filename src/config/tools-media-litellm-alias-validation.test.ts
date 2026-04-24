@@ -195,6 +195,39 @@ describe("tools.media LiteLLM alias validation", () => {
     );
   });
 
+  it("rejects agents.defaults.imageModel aliases when shared LiteLLM media models cannot resolve for image", () => {
+    const res = validateConfigObject({
+      tools: {
+        media: {
+          models: [
+            {
+              provider: "litellm",
+              model: "gpt-4o-mini",
+              type: "provider",
+            },
+          ],
+        },
+      },
+      agents: {
+        defaults: {
+          imageModel: "litellm/vision",
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (res.ok) {
+      throw new Error("expected config validation to fail");
+    }
+    expect(res.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: "agents.defaults.imageModel",
+        }),
+      ]),
+    );
+  });
+
   it("rejects agents.defaults.imageModel aliases when explicit image entries cannot resolve for image", () => {
     const res = validateConfigObject({
       tools: {

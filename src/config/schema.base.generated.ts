@@ -3085,7 +3085,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         type: "string",
                         title: "Image Model",
                         description:
-                          "Optional image model (provider/model) used when the primary model lacks image input.",
+                          "Optional image model (provider/model) used when the primary model lacks image input. When media understanding can fall back here, avoid LiteLLM routing aliases like litellm/vision and use a direct provider/model id instead.",
                       },
                       fallbacks: {
                         type: "array",
@@ -3093,7 +3093,8 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                           type: "string",
                         },
                         title: "Image Model Fallbacks",
-                        description: "Ordered fallback image models (provider/model).",
+                        description:
+                          "Ordered fallback image models (provider/model). When media understanding can fall back here, avoid LiteLLM routing aliases like litellm/vision and use direct provider/model ids instead.",
                       },
                     },
                     additionalProperties: false,
@@ -25828,12 +25829,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "agents.defaults.imageModel.primary": {
       label: "Image Model",
-      help: "Optional image model (provider/model) used when the primary model lacks image input.",
+      help: "Optional image model (provider/model) used when the primary model lacks image input. When media understanding can fall back here, avoid LiteLLM routing aliases like litellm/vision and use a direct provider/model id instead.",
       tags: ["models", "media"],
     },
     "agents.defaults.imageModel.fallbacks": {
       label: "Image Model Fallbacks",
-      help: "Ordered fallback image models (provider/model).",
+      help: "Ordered fallback image models (provider/model). When media understanding can fall back here, avoid LiteLLM routing aliases like litellm/vision and use direct provider/model ids instead.",
       tags: ["reliability", "models", "media"],
     },
     "agents.defaults.imageGenerationModel.primary": {
