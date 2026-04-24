@@ -145,7 +145,9 @@ describe("bun global install smoke", () => {
 
     expect(workflow).toContain("workflow_call:");
     expect(workflow).toContain("run_bun_global_install_smoke:");
-    expect(workflow).toContain('install-bun: "true"');
+    expect(workflow).toContain(
+      "install-bun: ${{ needs.preflight.outputs.run_bun_global_install_smoke }}",
+    );
     expect(workflow).toContain(
       "if: needs.preflight.outputs.run_bun_global_install_smoke == 'true'",
     );
