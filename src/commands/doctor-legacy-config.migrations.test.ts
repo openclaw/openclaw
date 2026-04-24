@@ -219,6 +219,20 @@ describe("normalizeCompatibilityConfigValues", () => {
     ]);
   });
 
+  it("removes deprecated commands.modelsWrite from legacy configs", () => {
+    const res = normalizeCompatibilityConfigValues({
+      commands: {
+        text: true,
+        modelsWrite: false,
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(res.config.commands).toEqual({ text: true });
+    expect(res.changes).toContain(
+      "Removed deprecated commands.modelsWrite (/models add is deprecated).",
+    );
+  });
+
   it("marks legacy untagged /models add OpenAI Codex metadata rows for doctor repair", () => {
     const res = normalizeCompatibilityConfigValues({
       models: {
