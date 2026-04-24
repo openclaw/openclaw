@@ -2,6 +2,7 @@ import {
   resolveExternalBestEffortDeliveryTarget,
   type ExternalBestEffortDeliveryTarget,
 } from "../infra/outbound/best-effort-delivery.js";
+import { buildHermesArbiterMetadata } from "../infra/outbound/hermes-arbiter-metadata.js";
 import { sendMessage } from "../infra/outbound/message.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
@@ -174,14 +175,31 @@ async function sendDirectFollowupFallback(params: {
   }
 
   const prefix = params.sessionError ? buildSessionResumeFallbackPrefix() : "";
+  const effectiveContent = `${prefix}${directText}`;
+  const targetChatId = params.deliveryTarget.to?.trim();
+  const hermesArbiter = targetChatId
+    ? buildHermesArbiterMetadata({
+        topic: "dev-iox",
+        botName: "AHC_A8_bot",
+        text: effectiveContent,
+        actionType: "status",
+        targetChatId,
+        extra: {
+          approvalId: params.approvalId,
+          eventKind: "exec_approval_followup",
+          fallback: params.sessionError ? "session_error" : "direct",
+        },
+      })
+    : undefined;
   await sendMessage({
     channel: params.deliveryTarget.channel,
     to: params.deliveryTarget.to ?? "",
     accountId: params.deliveryTarget.accountId,
     threadId: params.deliveryTarget.threadId,
-    content: `${prefix}${directText}`,
+    content: effectiveContent,
     agentId: undefined,
     idempotencyKey: `exec-approval-followup:${params.approvalId}`,
+    ...(hermesArbiter ? { hermesArbiter } : {}),
   });
   return true;
 }
