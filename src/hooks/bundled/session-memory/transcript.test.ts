@@ -1,5 +1,8 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, it, expect } from "vitest";
-import { sanitizeModelOutput } from "./transcript.js";
+import { getRecentSessionContent, sanitizeModelOutput } from "./transcript.js";
 
 describe("sanitizeModelOutput", () => {
   it("returns clean text unchanged", () => {
@@ -25,11 +28,13 @@ describe("sanitizeModelOutput", () => {
   it("strips NO_REPLY and variants case-insensitively", () => {
     expect(sanitizeModelOutput("NO_REPLY")).toBe("");
     expect(sanitizeModelOutput("no_reply")).toBe("");
+    expect(sanitizeModelOutput("NO_REPLY_TOKENS")).toBe("");
+    expect(sanitizeModelOutput("[NO_REPLY]")).toBe("");
+    expect(sanitizeModelOutput("[NO_REPLY_TOKENS]")).toBe("");
     // Note: "NoReply" (no underscore) does not match /NO_REPLY/gi since the
     // pattern requires an underscore between O and R.
     expect(sanitizeModelOutput("NoReply")).toBe("NoReply");
-    // After stripping, consecutive spaces are collapsed by step 8.
-    expect(sanitizeModelOutput("Some text NO_REPLY more")).toBe("Some text more");
+    expect(sanitizeModelOutput("Some text NO_REPLY more")).toBe("Some text  more");
   });
 
   it("strips [AUDIO_AS_VOICE] metadata marker", () => {
@@ -86,8 +91,10 @@ World`;
     expect(sanitizeModelOutput(input)).toBe("Hello world");
   });
 
-  it("strips orphaned role markers at line start", () => {
-    expect(sanitizeModelOutput("user: Hello\nassistant: World")).toBe("");
+  it("strips orphaned role markers at line start, preserving content", () => {
+    // Role prefix is removed but message content is preserved (reviewer feedback).
+    expect(sanitizeModelOutput("user: Hello\nassistant: World")).toBe("Hello\nWorld");
+    expect(sanitizeModelOutput("system: \nBe helpful")).toBe("Be helpful");
   });
 
   it("strips system instruction leakage (## System header)", () => {
@@ -132,11 +139,46 @@ Let me know if you need more.`;
     expect(sanitizeModelOutput(output)).toBe(output);
   });
 
+  it("strips [UNUSED_TOKEN] and [PAD_TOKEN]", () => {
+    expect(sanitizeModelOutput("Hello [UNUSED_TOKEN] world")).toBe("Hello  world");
+    expect(sanitizeModelOutput("Hello [PAD_TOKEN] world")).toBe("Hello  world");
+  });
+
   it("does not strip content that merely resembles a token", () => {
     // e.g. the word "start" inside a sentence
     expect(sanitizeModelOutput("Let's start the process")).toBe("Let's start the process");
     expect(sanitizeModelOutput("The meeting ended at end_of_day")).toBe(
       "The meeting ended at end_of_day",
     );
+  });
+});
+
+describe("getRecentSessionContent", () => {
+  it("sanitizes assistant transcript content before returning memory text", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "session-memory-"));
+    const sessionFile = path.join(tmpDir, "test.jsonl");
+
+    const lines = [
+      JSON.stringify({
+        type: "message",
+        message: { role: "user", content: "hello" },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          content:
+            '<|im_start|>assistant\nHello <tool_call name="exec">rm -rf /</tool_call> NO_REPLY_TOKENS [PAD_TOKEN] world<|im_end|>',
+        },
+      }),
+    ];
+
+    await fs.writeFile(sessionFile, `${lines.join("\n")}\n`, "utf8");
+
+    await expect(getRecentSessionContent(sessionFile, 10)).resolves.toBe(
+      "user: hello\nassistant: Hello    world",
+    );
+
+    await fs.rm(tmpDir, { recursive: true, force: true });
   });
 });

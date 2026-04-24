@@ -36,6 +36,8 @@ export function sanitizeModelOutput(rawText: string): string {
     "<|end_of_text|>",
     "<|reserved_", // <|reserved_xxx|> — prefix match below
     "[REMOVED_SPECIAL_TOKEN]",
+    "[UNUSED_TOKEN]",
+    "[PAD_TOKEN]",
     "</s>",
     "<s>",
     "<TOOL_CALL>",
@@ -56,9 +58,10 @@ export function sanitizeModelOutput(rawText: string): string {
   // Remove all variants regardless of case or word boundaries. This is safe
   // because NO_REPLY is an in-band control token that should never appear in
   // legitimate assistant output.
-  text = text.replace(/NO_REPLY/gi, "");
-  text = text.replace(/NO_REPLY_TOKENS/gi, "");
-  text = text.replace(/\[NO_REPLY[_\s]*(TOKEN|COUNT)?[^\]]*\]/gi, "");
+  // Remove NO_REPLY and variants in one pass to avoid partial-stripping
+  // (NO_REPLY must not consume the _TOKENS suffix before the longer variant).
+  text = text.replace(/\[NO_REPLY[_\s]*(TOKENS|COUNT)?[^\]]*\]/gi, "");
+  text = text.replace(/NO_REPLY(?:_TOKENS)?/gi, "");
   text = text.replace(/\[AUDIO_AS_VOICE\]/gi, "");
   text = text.replace(/\[MEDIA:[^\]]*\]/g, "");
   text = text.replace(/\[reply_to[_:]?(current|[\w-]+)\]/gi, "");
@@ -94,7 +97,8 @@ export function sanitizeModelOutput(rawText: string): string {
   // Model sometimes drops role Begin/End markers but leaves a stray prefix.
   // Handles both `role:` (with colon) and `role\n` (role followed by newline,
   // which happens when <|im_start|>role gets split and role is left orphaned).
-  text = text.replace(/^\s*(user|assistant|system|tool)\s*:[\s\S]*?$/gim, "");
+  // Only strip the role prefix, not the entire line content (reviewer feedback).
+  text = text.replace(/^\s*(user|assistant|system|tool)\s*:\s*/gim, "");
   text = text.replace(/^\s*(user|assistant|system|tool)\s*$/gim, "");
 
   // ── 7. System instruction leakage ──────────────────────────────────────────
@@ -113,14 +117,15 @@ export function sanitizeModelOutput(rawText: string): string {
     /^##[ \t]+(system|instructions?|directives?|protocol)[ \t]*\n[\s\S]*?(?=\n\n|$)/gim,
     "",
   );
-  // Bold **System** style.
-  text = text.replace(/^\*\*System\s*[^\n]*\*\*[\s\S]*?(?=^\*\*|$)/gim, "");
+  // Bold **System** style — exact match on "**System**" to avoid false positives
+  // like "**System requirements**" (reviewer feedback).
+  text = text.replace(/^\*\*System\*\*\s*\n[\s\S]*?(?=^\*\*|$)/gim, "");
 
   // ── 8. Collapse whitespace ────────────────────────────────────────────────
   text = text.replace(/[ \t]+\n/g, "\n");
   text = text.replace(/\n{3,}/g, "\n\n");
   // Collapse consecutive spaces left by token removal (e.g. "Hello  world").
-  text = text.replace(/  +/g, " ");
+  // Note: Consecutive spaces are preserved to maintain indentation in code blocks.
   text = text.trim();
 
   return text;
