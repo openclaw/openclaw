@@ -16,6 +16,9 @@ import {
   clearProviderRuntimeHookCache,
   prepareProviderExtraParams,
   resetProviderRuntimeHookCacheForTest,
+  resolveProviderAuthProfileId,
+  resolveProviderExtraParamsForTransport,
+  resolveProviderFollowupFallbackRoute,
   resolveProviderHookPlugin,
   resolveProviderPluginsForHooks,
   resolveProviderRuntimePlugin,
@@ -88,6 +91,9 @@ function resetExternalAuthFallbackWarningCacheForTest(): void {
 export {
   clearProviderRuntimeHookCache,
   prepareProviderExtraParams,
+  resolveProviderAuthProfileId,
+  resolveProviderExtraParamsForTransport,
+  resolveProviderFollowupFallbackRoute,
   resetProviderRuntimeHookCacheForTest,
   resolveProviderRuntimePlugin,
   wrapProviderStreamFn,
@@ -136,14 +142,20 @@ export function resolveProviderSystemPromptContribution(params: {
   env?: NodeJS.ProcessEnv;
   context: ProviderSystemPromptContributionContext;
 }): ProviderSystemPromptContribution | undefined {
+  const plugin = resolveProviderRuntimePlugin(params);
+  const baseOverlay = resolveGpt5SystemPromptContribution({
+    config: params.context.config ?? params.config,
+    providerId: params.context.provider ?? params.provider,
+    modelId: params.context.modelId,
+  });
+  const providerOverlay =
+    plugin?.resolvePromptOverlay?.({
+      ...params.context,
+      baseOverlay,
+    }) ?? undefined;
   return mergeProviderSystemPromptContributions(
-    resolveGpt5SystemPromptContribution({
-      config: params.context.config ?? params.config,
-      providerId: params.context.provider ?? params.provider,
-      modelId: params.context.modelId,
-    }),
-    resolveProviderRuntimePlugin(params)?.resolveSystemPromptContribution?.(params.context) ??
-      undefined,
+    mergeProviderSystemPromptContributions(baseOverlay, providerOverlay),
+    plugin?.resolveSystemPromptContribution?.(params.context) ?? undefined,
   );
 }
 

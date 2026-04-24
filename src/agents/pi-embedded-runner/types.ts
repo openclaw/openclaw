@@ -106,6 +106,7 @@ export type EmbeddedPiRunMeta = {
   finalAssistantRawText?: string;
   replayInvalid?: boolean;
   livenessState?: EmbeddedRunLivenessState;
+  agentHarnessResultClassification?: "empty" | "reasoning-only" | "planning-only";
   error?: {
     kind:
       | "context_overflow"

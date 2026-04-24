@@ -141,7 +141,11 @@ import { resolveCompactionTimeoutMs } from "../compaction-safety-timeout.js";
 import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
 import { applyFinalEffectiveToolPolicy } from "../effective-tool-policy.js";
 import { buildEmbeddedExtensionFactories } from "../extensions.js";
-import { applyExtraParamsToAgent, resolveAgentTransportOverride } from "../extra-params.js";
+import {
+  applyExtraParamsToAgent,
+  resolveAgentTransportOverride,
+  resolveExplicitSettingsTransport,
+} from "../extra-params.js";
 import { prepareGooglePromptCacheStreamFn } from "../google-prompt-cache.js";
 import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
 import { log } from "../logger.js";
@@ -224,7 +228,6 @@ import {
 import {
   buildAfterTurnRuntimeContext,
   buildAfterTurnRuntimeContextFromUsage,
-  mergeOrphanedTrailingUserPrompt,
   prependSystemPromptAddition,
   resolveAttemptFsWorkspaceOnly,
   resolveAttemptPrependSystemContext,
@@ -274,6 +277,7 @@ import { pruneProcessedHistoryImages } from "./history-image-prune.js";
 import { detectAndLoadPromptImages } from "./images.js";
 import { buildAttemptReplayMetadata } from "./incomplete-turn.js";
 import { resolveLlmIdleTimeoutMs, streamWithIdleTimeout } from "./llm-idle-timeout.js";
+import { resolveMessageMergeStrategy } from "./message-merge-strategy.js";
 import {
   PREEMPTIVE_OVERFLOW_ERROR_TEXT,
   shouldPreemptivelyCompactBeforePrompt,
@@ -1381,6 +1385,10 @@ export async function runEmbeddedAttempt(
         effectiveWorkspace,
         params.model,
         agentDir,
+        resolveExplicitSettingsTransport({
+          settingsManager,
+          sessionTransport: activeSession.agent.transport,
+        }),
       );
       const effectivePromptCacheRetention = resolveCacheRetention(
         effectiveExtraParams,
@@ -2066,7 +2074,7 @@ export async function runEmbeddedAttempt(
         // Repair orphaned trailing user messages so new prompts don't violate role ordering.
         const leafEntry = sessionManager.getLeafEntry();
         if (leafEntry?.type === "message" && leafEntry.message.role === "user") {
-          const orphanPromptMerge = mergeOrphanedTrailingUserPrompt({
+          const orphanPromptMerge = resolveMessageMergeStrategy().mergeOrphanedTrailingUserPrompt({
             prompt: effectivePrompt,
             trigger: params.trigger,
             leafMessage: leafEntry.message,
@@ -2088,8 +2096,10 @@ export async function runEmbeddedAttempt(
                   ? "Merged and removed"
                   : "Removed already-queued"
                 : "Preserved"
-            } orphaned user message ` +
-            `to prevent consecutive user turns. ` +
+            } orphaned user message` +
+            (orphanPromptMerge.removeLeaf
+              ? " to prevent consecutive user turns. "
+              : " without removing the active session leaf. ") +
             `runId=${params.runId} sessionId=${params.sessionId} trigger=${params.trigger}`;
           if (shouldWarnOnOrphanedUserRepair(params.trigger)) {
             log.warn(orphanRepairMessage);
@@ -2694,6 +2704,7 @@ export async function runEmbeddedAttempt(
               sessionId: params.sessionId,
               provider: params.provider,
               model: params.modelId,
+              resolvedRef: `${params.provider}/${params.modelId}`,
               assistantTexts,
               lastAssistant,
               usage: attemptUsage,
@@ -2841,6 +2852,8 @@ export async function runEmbeddedAttempt(
         session,
         sessionManager,
         releaseWsSession,
+        allowWsSessionPool:
+          !promptError && !aborted && !timedOut && !idleTimedOut && !timedOutDuringCompaction,
         sessionId: params.sessionId,
         bundleLspRuntime,
         sessionLock,

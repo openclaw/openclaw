@@ -16,6 +16,7 @@ import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { resolveProviderFollowupFallbackRoute } from "../../plugins/provider-runtime.js";
 import { defaultRuntime } from "../../runtime.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
@@ -74,7 +75,11 @@ export function createFollowupRunner(params: {
    * session's current dispatcher. This ensures replies go back to
    * where the message originated.
    */
-  const sendFollowupPayloads = async (payloads: ReplyPayload[], queued: FollowupRun) => {
+  const sendFollowupPayloads = async (
+    payloads: ReplyPayload[],
+    queued: FollowupRun,
+    resolvedRun: { provider: string; modelId: string },
+  ) => {
     // Check if we should route to originating channel.
     const { originatingChannel, originatingTo } = queued;
     const runtimeConfig = resolveQueuedReplyRuntimeConfig(queued.run.config);
@@ -99,10 +104,43 @@ export function createFollowupRunner(params: {
       ) {
         continue;
       }
+      const providerRoute = resolveProviderFollowupFallbackRoute({
+        provider: resolvedRun.provider,
+        config: runtimeConfig,
+        workspaceDir: queued.run.workspaceDir,
+        context: {
+          config: runtimeConfig,
+          agentDir: queued.run.agentDir,
+          workspaceDir: queued.run.workspaceDir,
+          provider: resolvedRun.provider,
+          modelId: resolvedRun.modelId,
+          payload,
+          originatingChannel,
+          originatingTo,
+          originRoutable: Boolean(shouldRouteToOriginating),
+          dispatcherAvailable: Boolean(opts?.onBlockReply),
+        },
+      });
+      if (providerRoute?.route === "drop") {
+        logVerbose(
+          `followup queue: provider hook dropped payload route reason=${providerRoute.reason ?? "unspecified"}`,
+        );
+        continue;
+      }
+      const deliveryRoute =
+        providerRoute?.route === "origin" && shouldRouteToOriginating
+          ? "origin"
+          : providerRoute?.route === "dispatcher" && opts?.onBlockReply
+            ? "dispatcher"
+            : shouldRouteToOriginating
+              ? "origin"
+              : opts?.onBlockReply
+                ? "dispatcher"
+                : undefined;
       await typingSignals.signalTextDelta(payload.text);
 
       // Route to originating channel if set, otherwise fall back to dispatcher.
-      if (shouldRouteToOriginating) {
+      if (deliveryRoute === "origin" && isRoutableChannel(originatingChannel) && originatingTo) {
         const result = await routeReply({
           payload,
           channel: originatingChannel,
@@ -145,7 +183,7 @@ export function createFollowupRunner(params: {
             routedAnyCrossChannelPayloadToOrigin = true;
           }
         }
-      } else if (opts?.onBlockReply) {
+      } else if (deliveryRoute === "dispatcher" && opts?.onBlockReply) {
         await opts.onBlockReply(payload);
       }
     }
@@ -438,7 +476,10 @@ export function createFollowupRunner(params: {
         }
       }
 
-      await sendFollowupPayloads(finalPayloads, effectiveQueued);
+      await sendFollowupPayloads(finalPayloads, effectiveQueued, {
+        provider: providerUsed,
+        modelId: modelUsed,
+      });
     } finally {
       replyOperation.complete();
       // Both signals are required for the typing controller to clean up.

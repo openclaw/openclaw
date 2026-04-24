@@ -75,6 +75,7 @@ export type EmbeddedRunAttemptResult = {
   sessionIdUsed: string;
   diagnosticTrace?: DiagnosticTraceContext;
   agentHarnessId?: string;
+  agentHarnessResultClassification?: "empty" | "reasoning-only" | "planning-only";
   bootstrapPromptWarningSignaturesSeen?: string[];
   bootstrapPromptWarningSignature?: string;
   systemPromptReport?: SessionSystemPromptReport;
