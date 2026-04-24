@@ -1641,7 +1641,7 @@ async function deliverOutboundPayloadsCore(
         completeDeliveryDiagnostics(deliveredResults.length);
         emitMessageSent({
           success: results.length > beforeCount,
-          content: payloadSummary.hookContent ?? payloadSummary.text,
+          content: payloadSummary.hookContent ?? fallbackText,
           messageId,
         });
         continue;
