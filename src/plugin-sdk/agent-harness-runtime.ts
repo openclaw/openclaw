@@ -69,6 +69,10 @@ export {
   setActiveEmbeddedRun,
 } from "../agents/pi-embedded-runner/runs.js";
 export { disposeRegisteredAgentHarnesses } from "../agents/harness/registry.js";
+export {
+  logAgentRuntimeToolDiagnostics,
+  normalizeAgentRuntimeTools,
+} from "../agents/runtime-plan/tools.js";
 export { normalizeProviderToolSchemas } from "../agents/pi-embedded-runner/tool-schema-runtime.js";
 export { resolveSandboxContext } from "../agents/sandbox.js";
 export { isSubagentSessionKey } from "../routing/session-key.js";

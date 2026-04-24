@@ -111,6 +111,10 @@ import { createOpenClawCodingTools, resolveToolLoopDetectionConfig } from "../..
 import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
 import { describeProviderRequestRoutingSummary } from "../../provider-attribution.js";
 import { registerProviderStreamForModel } from "../../provider-stream.js";
+import {
+  logAgentRuntimeToolDiagnostics,
+  normalizeAgentRuntimeTools,
+} from "../../runtime-plan/tools.js";
 import { resolveSandboxContext } from "../../sandbox.js";
 import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 import { repairSessionFileIfNeeded } from "../../session-file-repair.js";
@@ -202,10 +206,6 @@ import {
   resolveLiveToolResultMaxChars,
   truncateOversizedToolResultsInSessionManager,
 } from "../tool-result-truncation.js";
-import {
-  logProviderToolSchemaDiagnostics,
-  normalizeProviderToolSchemas,
-} from "../tool-schema-runtime.js";
 import { splitSdkTools } from "../tool-split.js";
 import { mapThinkingLevel } from "../utils.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
@@ -734,18 +734,17 @@ export async function runEmbeddedAttempt(
       modelApi: params.model.api,
       model: params.model,
     };
-    const tools =
-      params.runtimePlan?.tools.normalize(toolsEnabled ? toolsRaw : [], runtimePlanModelContext) ??
-      normalizeProviderToolSchemas({
-        tools: toolsEnabled ? toolsRaw : [],
-        provider: params.provider,
-        config: params.config,
-        workspaceDir: effectiveWorkspace,
-        env: process.env,
-        modelId: params.modelId,
-        modelApi: params.model.api,
-        model: params.model,
-      });
+    const tools = normalizeAgentRuntimeTools({
+      runtimePlan: params.runtimePlan,
+      tools: toolsEnabled ? toolsRaw : [],
+      provider: params.provider,
+      config: params.config,
+      workspaceDir: effectiveWorkspace,
+      env: process.env,
+      modelId: params.modelId,
+      modelApi: params.model.api,
+      model: params.model,
+    });
     const clientTools = toolsEnabled ? params.clientTools : undefined;
     const bundleMcpSessionRuntime = toolsEnabled
       ? await getOrCreateSessionMcpRuntime({
@@ -801,20 +800,17 @@ export async function runEmbeddedAttempt(
       tools: effectiveTools,
       clientTools,
     });
-    if (params.runtimePlan) {
-      params.runtimePlan.tools.logDiagnostics(effectiveTools, runtimePlanModelContext);
-    } else {
-      logProviderToolSchemaDiagnostics({
-        tools: effectiveTools,
-        provider: params.provider,
-        config: params.config,
-        workspaceDir: effectiveWorkspace,
-        env: process.env,
-        modelId: params.modelId,
-        modelApi: params.model.api,
-        model: params.model,
-      });
-    }
+    logAgentRuntimeToolDiagnostics({
+      runtimePlan: params.runtimePlan,
+      tools: effectiveTools,
+      provider: params.provider,
+      config: params.config,
+      workspaceDir: effectiveWorkspace,
+      env: process.env,
+      modelId: params.modelId,
+      modelApi: params.model.api,
+      model: params.model,
+    });
 
     const machineName = await getMachineDisplayName();
     const runtimeChannel = normalizeMessageChannel(params.messageChannel ?? params.messageProvider);
