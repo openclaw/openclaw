@@ -7,9 +7,7 @@ import {
   freezeDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
-import { formatErrorMessage } from "../infra/errors.js";
 import type { SessionState } from "../logging/diagnostic-session-state.js";
-import { redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { copyPluginToolMeta } from "../plugins/tools.js";
@@ -98,8 +96,7 @@ function summarizeToolParams(params: unknown): DiagnosticToolParamsSummary {
     return { kind: "array", length: params.length };
   }
   if (typeof params === "object") {
-    const keys = Object.keys(params).toSorted();
-    return { kind: "object", keys, keyCount: keys.length };
+    return { kind: "object" };
   }
   if (typeof params === "string") {
     return { kind: "string", length: params.length };
@@ -118,6 +115,25 @@ function errorCategory(err: unknown): string {
     return err.name;
   }
   return typeof err;
+}
+
+function diagnosticErrorCode(err: unknown): string | undefined {
+  if (!err || typeof err !== "object") {
+    return undefined;
+  }
+  const candidate = err as { code?: unknown; status?: unknown; statusCode?: unknown };
+  const code = candidate.code ?? candidate.status ?? candidate.statusCode;
+  if (typeof code === "number" && Number.isFinite(code)) {
+    return String(code);
+  }
+  if (typeof code !== "string") {
+    return undefined;
+  }
+  const trimmed = code.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  return trimmed.slice(0, 64);
 }
 
 function shouldEmitLoopWarning(state: SessionState, warningKey: string, count: number): boolean {
@@ -454,7 +470,6 @@ export function wrapToolWithBeforeToolCallHook(
         }
       }
       const normalizedToolName = normalizeToolName(toolName || "tool");
-      const startedAt = Date.now();
       const eventBase = {
         ...(ctx?.runId && { runId: ctx.runId }),
         ...(ctx?.sessionKey && { sessionKey: ctx.sessionKey }),
@@ -468,6 +483,7 @@ export function wrapToolWithBeforeToolCallHook(
         type: "tool.execution.started",
         ...eventBase,
       });
+      const startedAt = Date.now();
       try {
         const result = await execute(toolCallId, outcome.params, signal, onUpdate);
         emitDiagnosticEvent({
@@ -485,12 +501,13 @@ export function wrapToolWithBeforeToolCallHook(
         return result;
       } catch (err) {
         const cause = unwrapErrorCause(err);
+        const errorCode = diagnosticErrorCode(cause);
         emitDiagnosticEvent({
           type: "tool.execution.error",
           ...eventBase,
           durationMs: Date.now() - startedAt,
           errorCategory: errorCategory(cause),
-          error: redactSensitiveText(formatErrorMessage(cause)),
+          ...(errorCode ? { errorCode } : {}),
         });
         await recordLoopOutcome({
           ctx,

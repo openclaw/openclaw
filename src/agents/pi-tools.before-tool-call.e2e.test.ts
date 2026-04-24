@@ -388,8 +388,6 @@ describe("before_tool_call loop detection behavior", () => {
         toolCallId: "tool-call-1",
         paramsSummary: {
           kind: "object",
-          keys: ["command", "token"],
-          keyCount: 2,
         },
         trace,
       });
@@ -431,6 +429,32 @@ describe("before_tool_call loop detection behavior", () => {
         errorCategory: "Error",
       });
       expect(JSON.stringify(emitted[1])).not.toContain("sk-1234567890abcdef1234567890abcdef");
+    });
+  });
+
+  it("summarizes hostile object params without enumerating keys", async () => {
+    const execute = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "ok" }] });
+    const tool = wrapToolWithBeforeToolCallHook({ name: "bash", execute } as any, {
+      agentId: "main",
+      sessionKey: "session-key",
+      loopDetection: { enabled: false },
+    });
+    const params = new Proxy(
+      {},
+      {
+        ownKeys() {
+          throw new Error("should not enumerate params");
+        },
+      },
+    );
+
+    await withToolExecutionEvents(async (emitted) => {
+      await tool.execute("tool-call-proxy", params, undefined, undefined);
+
+      expect(emitted[0]).toMatchObject({
+        type: "tool.execution.started",
+        paramsSummary: { kind: "object" },
+      });
     });
   });
 });

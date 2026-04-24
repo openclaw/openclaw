@@ -155,7 +155,7 @@ export type DiagnosticToolLoopEvent = DiagnosticBaseEvent & {
 };
 
 export type DiagnosticToolParamsSummary =
-  | { kind: "object"; keys: string[]; keyCount: number }
+  | { kind: "object" }
   | { kind: "array"; length: number }
   | { kind: "string"; length: number }
   | { kind: "number" | "boolean" | "null" | "undefined" | "other" };
@@ -182,7 +182,7 @@ export type DiagnosticToolExecutionErrorEvent = DiagnosticToolExecutionBaseEvent
   type: "tool.execution.error";
   durationMs: number;
   errorCategory: string;
-  error?: string;
+  errorCode?: string;
 };
 
 export type DiagnosticMemoryUsage = {
