@@ -261,6 +261,47 @@ describe("installBundledRuntimeDeps", () => {
     );
   });
 
+  it("cleans an owned isolated execution root after copying node_modules back", () => {
+    const installRoot = makeTempDir();
+    const installExecutionRoot = path.join(installRoot, ".openclaw-install-stage");
+    spawnSyncMock.mockImplementation((_command, _args, options) => {
+      const cwd = String(options?.cwd ?? "");
+      fs.mkdirSync(path.join(cwd, "node_modules", "tokenjuice"), { recursive: true });
+      fs.writeFileSync(
+        path.join(cwd, "node_modules", "tokenjuice", "package.json"),
+        JSON.stringify({ name: "tokenjuice", version: "0.6.1" }),
+      );
+      return {
+        pid: 123,
+        output: [],
+        stdout: "",
+        stderr: "",
+        signal: null,
+        status: 0,
+      };
+    });
+
+    installBundledRuntimeDeps({
+      installRoot,
+      installExecutionRoot,
+      missingSpecs: ["tokenjuice@0.6.1"],
+      env: {},
+    });
+
+    expect(fs.existsSync(installExecutionRoot)).toBe(false);
+    expect(
+      JSON.parse(
+        fs.readFileSync(
+          path.join(installRoot, "node_modules", "tokenjuice", "package.json"),
+          "utf8",
+        ),
+      ),
+    ).toEqual({
+      name: "tokenjuice",
+      version: "0.6.1",
+    });
+  });
+
   it("does not fail an isolated runtime deps install when temp cleanup races", () => {
     const installRoot = makeTempDir();
     const installExecutionRoot = makeTempDir();
@@ -483,7 +524,9 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     ]);
     // The stage dir must be distinct from the plugin root so npm does not read
     // the plugin's cwd manifest during install.
-    expect(path.resolve(calls[0]!.installExecutionRoot!)).not.toEqual(path.resolve(pluginRoot));
+    const installExecutionRoot = calls[0]?.installExecutionRoot;
+    expect(installExecutionRoot).toBeDefined();
+    expect(path.resolve(installExecutionRoot ?? "")).not.toEqual(path.resolve(pluginRoot));
   });
 
   it("installs runtime deps into an external stage dir and exposes loader aliases", () => {
