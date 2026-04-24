@@ -71,7 +71,8 @@ describe("AgentRuntimePlan", () => {
         result: {},
       }),
     ).toBeNull();
-    expect(plan.observability.resolvedRef).toBe("codex:openai/gpt-5.4");
+    expect(plan.observability.resolvedRef).toBe("openai/gpt-5.4");
+    expect(plan.observability.harnessId).toBe("codex");
   });
 
   it("keeps OpenClaw-owned tool-schema normalization reachable from the plan", () => {

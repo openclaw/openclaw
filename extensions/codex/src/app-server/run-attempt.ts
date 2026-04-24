@@ -498,6 +498,9 @@ export async function runCodexAppServerAttempt(
         model: params.modelId,
         resolvedRef:
           params.runtimePlan?.observability.resolvedRef ?? `${params.provider}/${params.modelId}`,
+        ...(params.runtimePlan?.observability.harnessId
+          ? { harnessId: params.runtimePlan.observability.harnessId }
+          : {}),
         assistantTexts: [],
       },
       ctx: hookContext,
@@ -655,6 +658,9 @@ export async function runCodexAppServerAttempt(
         model: params.modelId,
         resolvedRef:
           params.runtimePlan?.observability.resolvedRef ?? `${params.provider}/${params.modelId}`,
+        ...(params.runtimePlan?.observability.harnessId
+          ? { harnessId: params.runtimePlan.observability.harnessId }
+          : {}),
         assistantTexts: result.assistantTexts,
         ...(result.lastAssistant ? { lastAssistant: result.lastAssistant } : {}),
         ...(result.attemptUsage ? { usage: result.attemptUsage } : {}),

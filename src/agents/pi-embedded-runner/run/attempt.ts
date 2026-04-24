@@ -2794,6 +2794,9 @@ export async function runEmbeddedAttempt(
               resolvedRef:
                 params.runtimePlan?.observability.resolvedRef ??
                 `${params.provider}/${params.modelId}`,
+              ...(params.runtimePlan?.observability.harnessId
+                ? { harnessId: params.runtimePlan.observability.harnessId }
+                : {}),
               assistantTexts,
               lastAssistant,
               usage: attemptUsage,

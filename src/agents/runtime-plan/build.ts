@@ -22,14 +22,8 @@ import type {
   BuildAgentRuntimePlanParams,
 } from "./types.js";
 
-function formatResolvedRef(params: {
-  provider: string;
-  modelId: string;
-  harnessId?: string;
-}): string {
-  return params.harnessId
-    ? `${params.harnessId}:${params.provider}/${params.modelId}`
-    : `${params.provider}/${params.modelId}`;
+function formatResolvedRef(params: { provider: string; modelId: string }): string {
+  return `${params.provider}/${params.modelId}`;
 }
 
 function hasMedia(payload: { mediaUrl?: string; mediaUrls?: string[] }): boolean {
@@ -197,7 +191,6 @@ export function buildAgentRuntimePlan(params: BuildAgentRuntimePlanParams): Agen
       resolvedRef: formatResolvedRef({
         provider: params.provider,
         modelId: params.modelId,
-        harnessId: params.harnessId,
       }),
       provider: params.provider,
       modelId: params.modelId,
