@@ -6,10 +6,6 @@ import { githubCopilotMemoryEmbeddingProviderAdapter } from "./embeddings.js";
 import { PROVIDER_ID, resolveCopilotForwardCompatModel } from "./models.js";
 import { buildGithubCopilotReplayPolicy } from "./replay-policy.js";
 import { wrapCopilotProviderStream } from "./stream.js";
-import { DEFAULT_COPILOT_API_BASE_URL, resolveCopilotApiToken } from "./token.js";
-import { fetchCopilotUsage } from "./usage.js";
-import { discoverCopilotModels, COPILOT_IDE_HEADERS } from "./discovery.js";
-import { getDefaultCopilotModelIds } from "./models-defaults.js";
 
 const COPILOT_ENV_VARS = ["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"];
 const COPILOT_XHIGH_MODEL_IDS = ["gpt-5.4", "gpt-5.2", "gpt-5.2-codex"] as const;
@@ -111,6 +107,8 @@ export default definePluginEntry({
           }
           const { DEFAULT_COPILOT_API_BASE_URL, resolveCopilotApiToken } =
             await loadGithubCopilotRuntime();
+          const { discoverCopilotModels, COPILOT_IDE_HEADERS } = await import("./discovery.js");
+          const { getDefaultCopilotModelIds } = await import("./models-defaults.js");
           const { githubToken, hasProfile } = await resolveFirstGithubToken({
             agentDir: ctx.agentDir,
             config: ctx.config,

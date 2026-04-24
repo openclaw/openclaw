@@ -31,6 +31,7 @@ const allowedRawFetchCallsites = new Set([
   bundledPluginCallsite("feishu", "src/monitor.webhook.test-helpers.ts", 25),
   bundledPluginCallsite("github-copilot", "login.ts", 48),
   bundledPluginCallsite("github-copilot", "login.ts", 80),
+  bundledPluginCallsite("github-copilot", "discovery.ts", 77),
   bundledPluginCallsite("googlechat", "src/auth.ts", 83),
   bundledPluginCallsite("huggingface", "models.ts", 142),
   bundledPluginCallsite("kilocode", "provider-models.ts", 130),

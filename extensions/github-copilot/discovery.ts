@@ -94,11 +94,17 @@ export async function discoverCopilotModels(params: {
   return body.data
     .filter((m) => {
       // Only enabled models
-      if (m.policy?.state && m.policy.state !== "enabled") return false;
+      if (m.policy?.state && m.policy.state !== "enabled") {
+        return false;
+      }
       // Only chat-capable models (skip embeddings, etc.)
-      if (m.capabilities?.type && m.capabilities.type !== "chat") return false;
+      if (m.capabilities?.type && m.capabilities.type !== "chat") {
+        return false;
+      }
       // Skip models already in the built-in list
-      if (knownModelIds?.has(m.id)) return false;
+      if (knownModelIds?.has(m.id)) {
+        return false;
+      }
       return true;
     })
     .map(buildModelDefinition);

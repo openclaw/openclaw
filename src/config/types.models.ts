@@ -54,6 +54,8 @@ export type ModelDefinitionConfig = {
   id: string;
   name: string;
   api?: ModelApi;
+  /** Optional per-model base URL override (e.g. for Anthropic Messages on Bedrock Mantle). */
+  baseUrl?: string;
   reasoning: boolean;
   input: Array<"text" | "image">;
   cost: {
