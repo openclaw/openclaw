@@ -105,10 +105,12 @@ vi.mock("../../../src/agents/tools/nodes-utils.js", async () => {
 });
 
 const gatewayMocks = vi.hoisted(() => ({
-  callGatewayTool: vi.fn(async () => ({
-    ok: true,
-    payload: { result: { ok: true, running: true } },
-  })),
+  callGatewayTool: vi.fn(
+    async (): Promise<Record<string, unknown>> => ({
+      ok: true,
+      payload: { result: { ok: true, running: true } },
+    }),
+  ),
 }));
 vi.mock("../../../src/agents/tools/gateway.js", () => gatewayMocks);
 
@@ -505,6 +507,62 @@ describe("browser tool snapshot maxChars", () => {
       }),
     );
     expect(browserClientMocks.browserStatus).not.toHaveBeenCalled();
+  });
+
+  it("falls back to role refs when a node snapshot cannot provide aria refs", async () => {
+    mockSingleBrowserProxyNode();
+    gatewayMocks.callGatewayTool
+      .mockRejectedValueOnce(
+        new Error("INVALID_REQUEST: Error: refs=aria requires Playwright _snapshotForAI support."),
+      )
+      .mockResolvedValueOnce({
+        ok: true,
+        payload: {
+          result: {
+            ok: true,
+            format: "ai",
+            targetId: "tab-1",
+            url: "https://meet.google.com/abc-defg-hij",
+            snapshot: 'button "Admit"',
+            refs: { e1: { role: "button", name: "Admit" } },
+          },
+        },
+      });
+    const tool = createBrowserTool();
+
+    const result = await tool.execute?.("call-1", {
+      action: "snapshot",
+      target: "node",
+      node: "Browser Node",
+      targetId: "tab-1",
+      refs: "aria",
+      depth: 4,
+      maxChars: 12_000,
+    });
+
+    expect(result?.details).toMatchObject({ refsFallback: "role" });
+    expect(gatewayMocks.callGatewayTool).toHaveBeenNthCalledWith(
+      1,
+      "node.invoke",
+      { timeoutMs: 25000 },
+      expect.objectContaining({
+        params: expect.objectContaining({
+          path: "/snapshot",
+          query: expect.objectContaining({ refs: "aria" }),
+        }),
+      }),
+    );
+    expect(gatewayMocks.callGatewayTool).toHaveBeenNthCalledWith(
+      2,
+      "node.invoke",
+      { timeoutMs: 25000 },
+      expect.objectContaining({
+        params: expect.objectContaining({
+          path: "/snapshot",
+          query: expect.objectContaining({ refs: "role" }),
+        }),
+      }),
+    );
   });
 
   it("gives node.invoke extra slack beyond the default proxy timeout", async () => {
