@@ -131,10 +131,7 @@ import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
 import { UNKNOWN_TOOL_THRESHOLD } from "../../tool-loop-detection.js";
-import {
-  resolveTranscriptPolicy,
-  shouldAllowProviderOwnedThinkingReplay,
-} from "../../transcript-policy.js";
+import { shouldAllowProviderOwnedThinkingReplay } from "../../transcript-policy.js";
 import { normalizeUsage, type NormalizedUsage } from "../../usage.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
 import { isRunnerAbortError } from "../abort.js";
@@ -272,6 +269,7 @@ import {
   wrapStreamFnTrimToolCallNames,
 } from "./attempt.tool-call-normalization.js";
 import { buildEmbeddedAttemptToolRunContext } from "./attempt.tool-run-context.js";
+import { resolveAttemptTranscriptPolicy } from "./attempt.transcript-policy.js";
 import { waitForCompactionRetryWithAggregateTimeout } from "./compaction-retry-aggregate-timeout.js";
 import {
   resolveRunTimeoutDuringCompaction,
@@ -1059,17 +1057,14 @@ export async function runEmbeddedAttempt(
         .then(() => true)
         .catch(() => false);
 
-      const transcriptPolicy =
-        params.runtimePlan?.transcript.resolvePolicy(runtimePlanModelContext) ??
-        resolveTranscriptPolicy({
-          modelApi: params.model?.api,
-          provider: params.provider,
-          modelId: params.modelId,
-          config: params.config,
-          workspaceDir: effectiveWorkspace,
-          env: process.env,
-          model: params.model,
-        });
+      const transcriptPolicy = resolveAttemptTranscriptPolicy({
+        runtimePlan: params.runtimePlan,
+        runtimePlanModelContext,
+        provider: params.provider,
+        modelId: params.modelId,
+        config: params.config,
+        env: process.env,
+      });
 
       await prewarmSessionFile(params.sessionFile);
       sessionManager = guardSessionManager(SessionManager.open(params.sessionFile), {
