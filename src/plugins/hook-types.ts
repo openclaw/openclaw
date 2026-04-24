@@ -231,6 +231,7 @@ export type PluginHookAfterCompactionEvent = {
 
 export type PluginHookInboundClaimResult = {
   handled: boolean;
+  reply?: ReplyPayload;
 };
 
 export type PluginHookBeforeDispatchEvent = {

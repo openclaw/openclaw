@@ -512,7 +512,7 @@ export async function dispatchReplyFromConfig(
         ? await hookRunner.runInboundClaimForPluginOutcome(
             pluginOwnedBinding.pluginId,
             inboundClaimEvent,
-            inboundClaimContext,
+            { ...inboundClaimContext, pluginBinding: pluginOwnedBinding },
           )
         : (() => {
             const pluginLoaded =
@@ -526,6 +526,9 @@ export async function dispatchReplyFromConfig(
 
       switch (targetedClaimOutcome.status) {
         case "handled": {
+          if (targetedClaimOutcome.result.reply) {
+            await sendBindingNotice(targetedClaimOutcome.result.reply, "terminal");
+          }
           markIdle("plugin_binding_dispatch");
           recordProcessed("completed", { reason: "plugin-bound-handled" });
           return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
