@@ -1,0 +1,15 @@
+name: kcc-large-canary
+
+on:
+  workflow_dispatch:
+
+jobs:
+  canary:
+    runs-on: [self-hosted, Linux, X64, dragonsbreath, docker, kcc, kcc-large]
+    steps:
+      - name: Echo runner context
+        run: |
+          echo "runner=${RUNNER_NAME:-unknown}"
+          uname -a
+      - name: Docker version
+        run: docker version
