@@ -57,7 +57,8 @@ const LIVE_TEST_TIMEOUT_MS = Math.max(
   1_000,
   toInt(process.env.OPENCLAW_LIVE_TEST_TIMEOUT_MS, 60 * 60 * 1000),
 );
-const LIVE_MODEL_CONCURRENCY = Math.max(1, toInt(process.env.OPENCLAW_LIVE_MODEL_CONCURRENCY, 1));
+const DEFAULT_LIVE_MODEL_CONCURRENCY = 20;
+const LIVE_MODEL_CONCURRENCY = resolveLiveModelConcurrency();
 const LIVE_MODELS_JSON_TIMEOUT_MS = resolveLiveModelsJsonTimeoutMs();
 const LIVE_FILE_PROBE_ENABLED = isLiveModelProbeEnabled(process.env, LIVE_MODEL_FILE_PROBE_ENV);
 const LIVE_IMAGE_PROBE_ENABLED = isLiveModelProbeEnabled(process.env, LIVE_MODEL_IMAGE_PROBE_ENV);
@@ -316,6 +317,21 @@ function toInt(value: string | undefined, fallback: number): number {
   const parsed = Number.parseInt(trimmed, 10);
   return Number.isFinite(parsed) ? parsed : fallback;
 }
+
+function resolveLiveModelConcurrency(raw = process.env.OPENCLAW_LIVE_MODEL_CONCURRENCY): number {
+  return Math.max(1, toInt(raw, DEFAULT_LIVE_MODEL_CONCURRENCY));
+}
+
+describe("resolveLiveModelConcurrency", () => {
+  it("defaults direct-model probes to 20-way concurrency", () => {
+    expect(resolveLiveModelConcurrency(undefined)).toBe(20);
+  });
+
+  it("accepts explicit concurrency overrides", () => {
+    expect(resolveLiveModelConcurrency("7")).toBe(7);
+    expect(resolveLiveModelConcurrency("0")).toBe(1);
+  });
+});
 
 function resolveLiveModelsJsonTimeoutMs(
   modelsJsonTimeoutRaw = process.env.OPENCLAW_LIVE_MODELS_JSON_TIMEOUT_MS,
