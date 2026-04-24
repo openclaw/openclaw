@@ -730,6 +730,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         },
         onPreviewFinalized: (_preview) => {
           const finalThreadTs = usedReplyThreadTs ?? statusThreadTs;
+          draftStreamClearedByFinalizer = true;
           observedReplyDelivery = true;
           replyPlan.markSent();
           deliveryTracker.markDelivered({ kind: info.kind, payload, threadTs: finalThreadTs });
