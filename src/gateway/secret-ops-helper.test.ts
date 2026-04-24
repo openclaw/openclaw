@@ -10,6 +10,10 @@ import {
 } from "./secret-ops-helper.js";
 import { resolveAuthStorePath } from "../agents/auth-profiles/paths.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
+import { DEFAULT_PROVIDER } from "../agents/defaults.js";
+
+const RESERVED_PROFILE_ID = `${DEFAULT_PROVIDER}:jarvis-desktop`;
+const BACKUP_PROFILE_ID = `${DEFAULT_PROVIDER}:backup`;
 
 function createTempAgentDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-secret-ops-"));
@@ -54,7 +58,7 @@ describe("secret-ops-helper", () => {
         resolveAgentDir: () => agentDir,
         resolveApiKeyForProfile: vi.fn().mockResolvedValue({
           apiKey: "sk-live-secret",
-          provider: "anthropic",
+          provider: DEFAULT_PROVIDER,
         }),
         updateAuthProfileStoreWithLock: (params: {
           agentDir?: string;
@@ -76,16 +80,16 @@ describe("secret-ops-helper", () => {
     expect(result).toMatchObject({
       action: "apply-live-api-key",
       agentId: "jarvis-desktop",
-      profileId: "anthropic:jarvis-desktop",
-      provider: "anthropic",
+      profileId: RESERVED_PROFILE_ID,
+      provider: DEFAULT_PROVIDER,
       ready: true,
     });
-    expect(store.profiles["anthropic:jarvis-desktop"]).toMatchObject({
+    expect(store.profiles[RESERVED_PROFILE_ID]).toMatchObject({
       type: "api_key",
-      provider: "anthropic",
+      provider: DEFAULT_PROVIDER,
       key: "sk-live-secret",
     });
-    expect(store.order?.anthropic).toEqual(["anthropic:jarvis-desktop"]);
+    expect(store.order?.[DEFAULT_PROVIDER]).toEqual([RESERVED_PROFILE_ID]);
     expect(callGatewayScopedMock).toHaveBeenCalledWith(
       expect.objectContaining({
         method: "secrets.reload",
@@ -105,25 +109,25 @@ describe("secret-ops-helper", () => {
         {
           version: 1,
           profiles: {
-            "anthropic:jarvis-desktop": {
+            [RESERVED_PROFILE_ID]: {
               type: "api_key",
-              provider: "anthropic",
+              provider: DEFAULT_PROVIDER,
               key: "sk-live-secret",
             },
-            "anthropic:backup": {
+            [BACKUP_PROFILE_ID]: {
               type: "api_key",
-              provider: "anthropic",
+              provider: DEFAULT_PROVIDER,
               key: "sk-backup",
             },
           },
           order: {
-            anthropic: ["anthropic:jarvis-desktop", "anthropic:backup"],
+            [DEFAULT_PROVIDER]: [RESERVED_PROFILE_ID, BACKUP_PROFILE_ID],
           },
           lastGood: {
-            anthropic: "anthropic:jarvis-desktop",
+            [DEFAULT_PROVIDER]: RESERVED_PROFILE_ID,
           },
           usageStats: {
-            "anthropic:jarvis-desktop": {
+            [RESERVED_PROFILE_ID]: {
               lastUsed: Date.now(),
             },
           },
@@ -167,8 +171,8 @@ describe("secret-ops-helper", () => {
 
     const store = readAuthStore(agentDir);
 
-    expect(store.profiles["anthropic:jarvis-desktop"]).toBeUndefined();
-    expect(store.order?.anthropic).toEqual(["anthropic:backup"]);
+    expect(store.profiles[RESERVED_PROFILE_ID]).toBeUndefined();
+    expect(store.order?.[DEFAULT_PROVIDER]).toEqual([BACKUP_PROFILE_ID]);
     expect(store.lastGood).toBeUndefined();
     expect(store.usageStats).toBeUndefined();
   });
@@ -185,9 +189,9 @@ describe("secret-ops-helper", () => {
         {
           version: 1,
           profiles: {
-            "anthropic:jarvis-desktop": {
+            [RESERVED_PROFILE_ID]: {
               type: "api_key",
-              provider: "anthropic",
+              provider: DEFAULT_PROVIDER,
               key: "sk-live-secret",
             },
           },
@@ -200,7 +204,7 @@ describe("secret-ops-helper", () => {
 
     const resolveApiKeyForProfileMock = vi.fn().mockResolvedValue({
       apiKey: "sk-live-secret",
-      provider: "anthropic",
+      provider: DEFAULT_PROVIDER,
     });
 
     const result = await probeLiveApiKey(
@@ -227,14 +231,14 @@ describe("secret-ops-helper", () => {
 
     expect(resolveApiKeyForProfileMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        profileId: "anthropic:jarvis-desktop",
+        profileId: RESERVED_PROFILE_ID,
         agentDir,
       }),
     );
     expect(result).toMatchObject({
       action: "probe-live-api-key",
       ready: true,
-      profileId: "anthropic:jarvis-desktop",
+      profileId: RESERVED_PROFILE_ID,
     });
   });
 

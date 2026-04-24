@@ -54,7 +54,7 @@ function resolveInvokeUrl(url: string | undefined): { invokeUrl: string; mode: "
 
   if (!normalizedUrl) {
     const port = cfg.gateway?.port ?? 19001;
-    const secure = cfg.gateway?.tls?.enabled === true;
+    const secure = Boolean(cfg.gateway?.tls?.enabled);
     return {
       invokeUrl: `${secure ? "https" : "http"}://127.0.0.1:${port}/tools/invoke`,
       mode: "local",

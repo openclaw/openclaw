@@ -276,7 +276,7 @@ function normalizeWizardResult(
   return {
     action,
     sessionId: typeof sessionId === "string" ? sessionId : "sessionId" in result ? result.sessionId : null,
-    done: result.done === true,
+    done: Boolean(result.done),
     status: result.status ?? null,
     error: typeof result.error === "string" ? result.error : null,
     step: result.step ?? null,
@@ -366,7 +366,7 @@ export async function cancelWizardSession(
   options: OnboardingHelperOptions = {},
   deps: OnboardingHelperDeps = defaultDeps,
 ) {
-  const result = await deps.callGatewayScoped<{ status?: string; error?: string }>({
+  const result: { status?: string; error?: string } = await deps.callGatewayScoped({
     method: "wizard.cancel",
     params: {
       sessionId,

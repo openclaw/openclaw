@@ -154,7 +154,7 @@ function resolveContext(options: SecretOpsOptions, deps: SecretOpsDeps) {
 
 async function reloadSecretsInternal(options: SecretOpsOptions, deps: SecretOpsDeps) {
   const context = resolveContext(options, deps);
-  const result = await deps.callGatewayScoped<{ ok?: boolean; warningCount?: number }>({
+  const result: { ok?: boolean; warningCount?: number } = await deps.callGatewayScoped({
     method: "secrets.reload",
     scopes: [ADMIN_SCOPE],
     config: context.gatewayTarget.config,

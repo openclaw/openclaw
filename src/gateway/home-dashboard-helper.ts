@@ -94,7 +94,7 @@ function resolveGatewayTarget(url: string | undefined) {
     return {
       config,
       url: undefined,
-      gatewayUrl: `ws${config.gateway?.tls?.enabled === true ? "s" : ""}://127.0.0.1:${
+      gatewayUrl: `ws${Boolean(config.gateway?.tls?.enabled) ? "s" : ""}://127.0.0.1:${
         config.gateway?.port ?? 19001
       }`,
     };
@@ -246,7 +246,7 @@ async function fetchSessionsList(
   agentId: string,
   options: FetchHomeDashboardOptions,
 ): Promise<SessionsListResult> {
-  return await callReadOnlyGateway<SessionsListResult>({
+  return await callReadOnlyGateway({
     method: "sessions.list",
     payload: {
       agentId,
@@ -261,7 +261,7 @@ async function fetchSessionsList(
 async function fetchCronList(
   options: FetchHomeDashboardOptions,
 ): Promise<CronListPageResult<CronJob[]>> {
-  return await callReadOnlyGateway<CronListPageResult<CronJob[]>>({
+  return await callReadOnlyGateway({
     method: "cron.list",
     payload: {
       enabled: "enabled",
@@ -320,7 +320,7 @@ function normalizeScheduledItem(job: Record<string, unknown>): HomeDashboardSche
     id: trimToUndefined(job.id) ?? "unknown-job",
     name: trimToUndefined(job.name) ?? "Unnamed job",
     mode: trimToUndefined(schedule.kind) ?? "unknown",
-    enabled: job.enabled === true,
+    enabled: Boolean(job.enabled),
     nextRunAt:
       typeof state.nextRunAtMs === "number" ? toIsoString(state.nextRunAtMs) : null,
     updatedAt:

@@ -33,6 +33,12 @@ export const isSecureWebSocketUrlMock: TestMock<
   }
   return opts?.allowPrivateWs === true || isLoopbackHostMock(parsed.hostname);
 });
+export const isLocalGatewayUrlMock: TestMock<[string], boolean> = vi.fn((url: string) => {
+  const parsed = new URL(url);
+  const protocol =
+    parsed.protocol === "https:" ? "wss:" : parsed.protocol === "http:" ? "ws:" : parsed.protocol;
+  return (protocol === "ws:" || protocol === "wss:") && isLoopbackHostMock(parsed.hostname);
+});
 
 vi.mock("../infra/tailnet.js", () => ({
   pickPrimaryTailnetIPv4: pickPrimaryTailnetIPv4Mock,

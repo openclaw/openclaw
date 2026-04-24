@@ -36,7 +36,7 @@ export type DesktopEventsRunOptions = DesktopEventsBridgeOptions & {
 export type DesktopEventsGatewayClient = {
   start: () => void;
   stop: () => void;
-  request: <T = Record<string, unknown>>(
+  request: <T>(
     method: string,
     params?: unknown,
     opts?: { expectFinal?: boolean },
@@ -92,7 +92,7 @@ async function resolveTlsFingerprint(params: {
     return trimToUndefined(remote.tlsFingerprint);
   }
 
-  const useLocalTls = config.gateway?.tls?.enabled === true && !urlOverride && url.startsWith("wss://");
+  const useLocalTls = Boolean(config.gateway?.tls?.enabled) && !urlOverride && url.startsWith("wss://");
   if (!useLocalTls) {
     return undefined;
   }

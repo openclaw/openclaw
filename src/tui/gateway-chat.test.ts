@@ -24,6 +24,7 @@ vi.mock("../gateway/net.js", async () => {
   const mocks = await import("../gateway/gateway-connection.test-mocks.js");
   return {
     isLoopbackHost: mocks.isLoopbackHostMock,
+    isLocalGatewayUrl: mocks.isLocalGatewayUrlMock,
     isSecureWebSocketUrl: mocks.isSecureWebSocketUrlMock,
     pickPrimaryLanIPv4: mocks.pickPrimaryLanIPv4Mock,
   };
