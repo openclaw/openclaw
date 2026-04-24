@@ -14,7 +14,7 @@ export function applyAgentHarnessResultClassification(
   }
   const { agentHarnessResultClassification: _previousClassification, ...resultWithoutPrevious } =
     result;
-  const classification = harness.classify(result, params);
+  const classification = harness.classify(resultWithoutPrevious, params);
   if (!classification || classification === "ok") {
     return { ...resultWithoutPrevious, agentHarnessId: harness.id };
   }
