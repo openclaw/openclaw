@@ -279,7 +279,6 @@ afterEach(async () => {
 });
 describe("initSessionState thread forking", () => {
   it("forks a new session from the parent session file", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const root = await makeCaseDir("openclaw-thread-session-");
     const sessionsDir = path.join(root, "sessions");
     await fs.mkdir(sessionsDir);
