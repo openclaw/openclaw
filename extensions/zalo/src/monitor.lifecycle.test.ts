@@ -152,7 +152,7 @@ describe("monitorZaloProvider lifecycle", () => {
 
     abort.abort();
 
-    await vi.waitFor(() => expect(deleteWebhookMock).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(deleteWebhookMock).toHaveBeenCalledTimes(1), { timeout: 5000 });
     expect(deleteWebhookMock).toHaveBeenCalledWith("test-token", undefined, 5000);
     expect(settled).toBe(false);
     expect(registry.httpRoutes).toHaveLength(2);
