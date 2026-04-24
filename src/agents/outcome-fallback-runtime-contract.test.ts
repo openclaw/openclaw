@@ -48,7 +48,7 @@ describe("Outcome/fallback runtime contract - Pi fallback classifier", () => {
     const run = vi.fn().mockResolvedValueOnce(primary).mockResolvedValueOnce(fallback);
 
     const result = await runWithModelFallback({
-      cfg: createContractFallbackConfig() as OpenClawConfig,
+      cfg: createContractFallbackConfig() as unknown as OpenClawConfig,
       provider: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryProvider,
       model: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel,
       run,
@@ -74,31 +74,103 @@ describe("Outcome/fallback runtime contract - Pi fallback classifier", () => {
     });
   });
 
-  it("does not fallback for intentional silence, visible replies, aborts, or tool side effects", () => {
-    const cases = [
-      createContractRunResult({
+  it.each([
+    {
+      name: "intentional NO_REPLY",
+      result: createContractRunResult({
         meta: { durationMs: 1, finalAssistantRawText: "NO_REPLY" },
       }),
-      createContractRunResult({
+    },
+    {
+      name: "visible reply",
+      result: createContractRunResult({
         payloads: [{ text: "visible answer" }],
         meta: { durationMs: 1 },
       }),
-      createContractRunResult({
+    },
+    {
+      name: "abort",
+      result: createContractRunResult({
         meta: { durationMs: 1, aborted: true, agentHarnessResultClassification: "empty" },
       }),
-      createContractRunResult({
+    },
+    {
+      name: "tool summary side effect",
+      result: createContractRunResult({
         meta: { durationMs: 1, toolSummary: { calls: 1, tools: ["message"] } },
       }),
-    ];
+    },
+    {
+      name: "messaging text side effect",
+      result: createContractRunResult({
+        messagingToolSentTexts: ["sent out of band"],
+        meta: { durationMs: 1, agentHarnessResultClassification: "empty" },
+      }),
+    },
+    {
+      name: "messaging media side effect",
+      result: createContractRunResult({
+        messagingToolSentMediaUrls: ["https://example.test/image.png"],
+        meta: { durationMs: 1, agentHarnessResultClassification: "empty" },
+      }),
+    },
+    {
+      name: "messaging target side effect",
+      result: createContractRunResult({
+        messagingToolSentTargets: [{ tool: "message", provider: "slack", to: "channel-1" }],
+        meta: { durationMs: 1, agentHarnessResultClassification: "empty" },
+      }),
+    },
+    {
+      name: "cron side effect",
+      result: createContractRunResult({
+        successfulCronAdds: 1,
+        meta: { durationMs: 1, agentHarnessResultClassification: "empty" },
+      }),
+    },
+    {
+      name: "direct block reply",
+      result: createContractRunResult({
+        meta: { durationMs: 1, agentHarnessResultClassification: "empty" },
+      }),
+      hasDirectlySentBlockReply: true,
+    },
+    {
+      name: "block reply pipeline output",
+      result: createContractRunResult({
+        meta: { durationMs: 1, agentHarnessResultClassification: "empty" },
+      }),
+      hasBlockReplyPipelineOutput: true,
+    },
+  ])("does not fallback for $name", async (contractCase) => {
+    expect(
+      classifyEmbeddedPiRunResultForModelFallback({
+        provider: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryProvider,
+        model: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel,
+        result: contractCase.result,
+        hasDirectlySentBlockReply: contractCase.hasDirectlySentBlockReply,
+        hasBlockReplyPipelineOutput: contractCase.hasBlockReplyPipelineOutput,
+      }),
+    ).toBeNull();
 
-    for (const result of cases) {
-      expect(
+    const run = vi.fn().mockResolvedValue(contractCase.result);
+    const result = await runWithModelFallback({
+      cfg: createContractFallbackConfig() as unknown as OpenClawConfig,
+      provider: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryProvider,
+      model: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel,
+      run,
+      classifyResult: ({ provider, model, result }) =>
         classifyEmbeddedPiRunResultForModelFallback({
-          provider: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryProvider,
-          model: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel,
+          provider,
+          model,
           result,
+          hasDirectlySentBlockReply: contractCase.hasDirectlySentBlockReply,
+          hasBlockReplyPipelineOutput: contractCase.hasBlockReplyPipelineOutput,
         }),
-      ).toBeNull();
-    }
+    });
+
+    expect(result.result).toBe(contractCase.result);
+    expect(result.attempts).toEqual([]);
+    expect(run).toHaveBeenCalledTimes(1);
   });
 });

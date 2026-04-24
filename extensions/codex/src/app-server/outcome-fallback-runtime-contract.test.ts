@@ -95,6 +95,15 @@ describe("Outcome/fallback runtime contract - Codex app-server adapter", () => {
         delta: "NO_REPLY",
       }),
     );
+    await projector.handleNotification(
+      forCurrentTurn("turn/completed", {
+        turn: {
+          id: TURN_ID,
+          status: "completed",
+          items: [{ type: "agentMessage", id: "msg-1", text: "NO_REPLY" }],
+        },
+      }),
+    );
 
     const result = projector.buildResult(buildToolTelemetry());
 
