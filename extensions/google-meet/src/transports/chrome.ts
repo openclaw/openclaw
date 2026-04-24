@@ -231,6 +231,12 @@ type BrowserTab = {
   url?: string;
 };
 
+const GOOGLE_MEET_NEW_URL = "https://meet.google.com/new";
+const GOOGLE_MEET_BROWSER_CREATE_TIMEOUT_MS = 60_000;
+const GOOGLE_MEET_BROWSER_STEP_TIMEOUT_MS = 10_000;
+const GOOGLE_MEET_BROWSER_NAVIGATION_RETRY_MS = 1_000;
+const GOOGLE_MEET_BROWSER_POLL_MS = 500;
+
 type BrowserCreateStepResult = {
   meetingUri?: string;
   browserUrl?: string;
@@ -322,6 +328,50 @@ function asBrowserTabs(result: unknown): BrowserTab[] {
 
 function readBrowserTab(result: unknown): BrowserTab | undefined {
   return result && typeof result === "object" ? (result as BrowserTab) : undefined;
+}
+
+function isGoogleMeetCreateTab(tab: BrowserTab): boolean {
+  const url = tab.url ?? "";
+  if (/^https:\/\/meet\.google\.com\/(?:new|[a-z]{3}-[a-z]{4}-[a-z]{3})(?:$|[/?#])/i.test(url)) {
+    return true;
+  }
+  return (
+    url.startsWith("https://accounts.google.com/") &&
+    /sign in|google accounts|meet/i.test(tab.title ?? "")
+  );
+}
+
+async function findGoogleMeetCreateTab(params: {
+  runtime: PluginRuntime;
+  nodeId: string;
+  timeoutMs: number;
+}): Promise<BrowserTab | undefined> {
+  const tabs = asBrowserTabs(
+    await callBrowserProxyOnNode({
+      runtime: params.runtime,
+      nodeId: params.nodeId,
+      method: "GET",
+      path: "/tabs",
+      timeoutMs: params.timeoutMs,
+    }),
+  );
+  return tabs.find(isGoogleMeetCreateTab);
+}
+
+async function focusBrowserTab(params: {
+  runtime: PluginRuntime;
+  nodeId: string;
+  targetId: string;
+  timeoutMs: number;
+}): Promise<void> {
+  await callBrowserProxyOnNode({
+    runtime: params.runtime,
+    nodeId: params.nodeId,
+    method: "POST",
+    path: "/tabs/focus",
+    body: { targetId: params.targetId },
+    timeoutMs: params.timeoutMs,
+  });
 }
 
 function readStringArray(value: unknown): string[] | undefined {
@@ -454,17 +504,35 @@ export async function createMeetWithBrowserProxyOnNode(params: {
     runtime: params.runtime,
     requestedNode: params.config.chromeNode.node,
   });
-  const timeoutMs = Math.max(15_000, params.config.chrome.joinTimeoutMs);
-  const tab = readBrowserTab(
-    await callBrowserProxyOnNode({
+  const timeoutMs = Math.max(
+    GOOGLE_MEET_BROWSER_CREATE_TIMEOUT_MS,
+    params.config.chrome.joinTimeoutMs,
+  );
+  const stepTimeoutMs = Math.min(timeoutMs, GOOGLE_MEET_BROWSER_STEP_TIMEOUT_MS);
+  let tab = await findGoogleMeetCreateTab({
+    runtime: params.runtime,
+    nodeId,
+    timeoutMs: stepTimeoutMs,
+  });
+  if (tab?.targetId) {
+    await focusBrowserTab({
       runtime: params.runtime,
       nodeId,
-      method: "POST",
-      path: "/tabs/open",
-      body: { url: "https://meet.google.com/new" },
-      timeoutMs,
-    }),
-  );
+      targetId: tab.targetId,
+      timeoutMs: stepTimeoutMs,
+    });
+  } else {
+    tab = readBrowserTab(
+      await callBrowserProxyOnNode({
+        runtime: params.runtime,
+        nodeId,
+        method: "POST",
+        path: "/tabs/open",
+        body: { url: GOOGLE_MEET_NEW_URL },
+        timeoutMs: stepTimeoutMs,
+      }),
+    );
+  }
   const targetId = tab?.targetId;
   if (!targetId) {
     throw new Error("Browser fallback opened Google Meet but did not return a targetId.");
@@ -485,7 +553,7 @@ export async function createMeetWithBrowserProxyOnNode(params: {
           targetId,
           fn: CREATE_MEET_FROM_BROWSER_SCRIPT,
         },
-        timeoutMs: Math.min(timeoutMs, 10_000),
+        timeoutMs: stepTimeoutMs,
       });
       const result = readBrowserCreateResult(evaluated);
       lastResult = result;
@@ -509,13 +577,13 @@ export async function createMeetWithBrowserProxyOnNode(params: {
         }
         throw new Error(result.manualAction);
       }
-      await sleep(result.retryAfterMs ?? 500);
+      await sleep(result.retryAfterMs ?? GOOGLE_MEET_BROWSER_POLL_MS);
     } catch (error) {
       lastError = error;
       if (!isBrowserNavigationInterruption(error)) {
         throw error;
       }
-      await sleep(1_000);
+      await sleep(GOOGLE_MEET_BROWSER_NAVIGATION_RETRY_MS);
     }
   }
   throw new Error(

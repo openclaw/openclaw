@@ -820,6 +820,9 @@ describe("google-meet plugin", () => {
       {
         nodesInvokeHandler: async (params) => {
           const proxy = params.params as { path?: string; body?: { url?: string } };
+          if (proxy.path === "/tabs") {
+            return { payload: { result: { tabs: [] } } };
+          }
           if (proxy.path === "/tabs/open") {
             return {
               payload: {
@@ -873,6 +876,83 @@ describe("google-meet plugin", () => {
           path: "/tabs/open",
           body: { url: "https://meet.google.com/new" },
         }),
+      }),
+    );
+  });
+
+  it("reuses an existing browser create tab instead of opening duplicates", async () => {
+    const { methods, nodesInvoke } = setup(
+      {
+        defaultTransport: "chrome-node",
+        chromeNode: { node: "parallels-macos" },
+      },
+      {
+        nodesInvokeHandler: async (params) => {
+          const proxy = params.params as { path?: string; body?: { targetId?: string } };
+          if (proxy.path === "/tabs") {
+            return {
+              payload: {
+                result: {
+                  tabs: [
+                    {
+                      targetId: "existing-create-tab",
+                      title: "Meet",
+                      url: "https://meet.google.com/new",
+                    },
+                  ],
+                },
+              },
+            };
+          }
+          if (proxy.path === "/tabs/focus") {
+            return { payload: { result: { ok: true } } };
+          }
+          if (proxy.path === "/act") {
+            return {
+              payload: {
+                result: {
+                  ok: true,
+                  targetId: proxy.body?.targetId ?? "existing-create-tab",
+                  result: {
+                    meetingUri: "https://meet.google.com/reu-sedx-tab",
+                    browserUrl: "https://meet.google.com/reu-sedx-tab",
+                    browserTitle: "Meet",
+                  },
+                },
+              },
+            };
+          }
+          throw new Error(`unexpected browser proxy path ${proxy.path}`);
+        },
+      },
+    );
+    const handler = methods.get("googlemeet.create") as
+      | ((ctx: {
+          params: Record<string, unknown>;
+          respond: ReturnType<typeof vi.fn>;
+        }) => Promise<void>)
+      | undefined;
+    const respond = vi.fn();
+
+    await handler?.({ params: {}, respond });
+
+    expect(respond.mock.calls[0]?.[0]).toBe(true);
+    expect(respond.mock.calls[0]?.[1]).toMatchObject({
+      source: "browser",
+      meetingUri: "https://meet.google.com/reu-sedx-tab",
+      browser: { nodeId: "node-1", targetId: "existing-create-tab" },
+    });
+    expect(nodesInvoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: expect.objectContaining({
+          path: "/tabs/focus",
+          body: { targetId: "existing-create-tab" },
+        }),
+      }),
+    );
+    expect(nodesInvoke).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: expect.objectContaining({ path: "/tabs/open" }),
       }),
     );
   });
