@@ -353,7 +353,6 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Gateway/chat: register chat.send runs in the chat run registry so lifecycle error events reach the client instead of being silently dropped, fixing stuck 'waiting' state and /abort reporting no active run. (#69747) Thanks @wangshu94.
-- fix(gateway): surface chat.send lifecycle errors to clients (#69747). Thanks @wangshu94
 
 ## 2026.4.20
 
