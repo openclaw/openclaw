@@ -7,6 +7,7 @@ export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
 export type { ChannelSetupAdapter } from "../channels/plugins/types.adapters.js";
 export { formatPairingApproveHint } from "../channels/plugins/helpers.js";
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+export { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 export { createChannelReplyPipeline } from "./channel-reply-pipeline.js";
 export {
   createDirectDmPreCryptoGuardPolicy,

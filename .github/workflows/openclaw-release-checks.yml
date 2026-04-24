@@ -1,0 +1,439 @@
+name: OpenClaw Release Checks
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Existing release tag or current full 40-character workflow-branch commit SHA to validate (for example v2026.4.12 or 0123456789abcdef0123456789abcdef01234567)
+        required: true
+        type: string
+      provider:
+        description: Provider lane for cross-OS onboarding and the end-to-end agent turn
+        required: false
+        default: openai
+        type: choice
+        options:
+          - openai
+          - anthropic
+          - minimax
+      mode:
+        description: Which cross-OS release lanes to run
+        required: false
+        default: both
+        type: choice
+        options:
+          - fresh
+          - upgrade
+          - both
+
+concurrency:
+  group: openclaw-release-checks-${{ inputs.ref }}
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  NODE_VERSION: "24.x"
+  PNPM_VERSION: "10.33.0"
+
+jobs:
+  resolve_target:
+    runs-on: blacksmith-32vcpu-ubuntu-2404
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    outputs:
+      ref: ${{ steps.inputs.outputs.ref }}
+      sha: ${{ steps.ref.outputs.sha }}
+      provider: ${{ steps.inputs.outputs.provider }}
+      mode: ${{ steps.inputs.outputs.mode }}
+    steps:
+      - name: Require main or release workflow ref for release checks
+        env:
+          WORKFLOW_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          if [[ "${WORKFLOW_REF}" != "refs/heads/main" ]] && [[ ! "${WORKFLOW_REF}" =~ ^refs/heads/release/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$ ]]; then
+            echo "Release checks must be dispatched from main or release/YYYY.M.D so workflow logic and secrets stay controlled." >&2
+            exit 1
+          fi
+
+      - name: Validate ref input
+        env:
+          RELEASE_REF: ${{ inputs.ref }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${RELEASE_REF}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-beta\.[1-9][0-9]*)|(-[1-9][0-9]*))?$ ]] && [[ ! "${RELEASE_REF}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "Expected an existing release tag or current full 40-character workflow-branch commit SHA, got: ${RELEASE_REF}" >&2
+            exit 1
+          fi
+
+      - name: Checkout selected ref
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+
+      - name: Resolve checked-out SHA
+        id: ref
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Validate selected ref is on workflow branch
+        env:
+          RELEASE_REF: ${{ inputs.ref }}
+          WORKFLOW_REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          RELEASE_BRANCH_REF="refs/remotes/origin/${WORKFLOW_REF_NAME}"
+          git fetch --no-tags origin "+refs/heads/${WORKFLOW_REF_NAME}:refs/remotes/origin/${WORKFLOW_REF_NAME}"
+          if [[ "${RELEASE_REF}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            BRANCH_SHA="$(git rev-parse "${RELEASE_BRANCH_REF}")"
+            if [[ "$(git rev-parse HEAD)" != "${BRANCH_SHA}" ]]; then
+              echo "Commit SHA mode only supports the current ${WORKFLOW_REF_NAME} HEAD. Use a release tag for older commits." >&2
+              exit 1
+            fi
+          else
+            git merge-base --is-ancestor HEAD "${RELEASE_BRANCH_REF}"
+          fi
+
+      - name: Capture selected inputs
+        id: inputs
+        env:
+          RELEASE_REF_INPUT: ${{ inputs.ref }}
+          RELEASE_PROVIDER_INPUT: ${{ inputs.provider }}
+          RELEASE_MODE_INPUT: ${{ inputs.mode }}
+        run: |
+          set -euo pipefail
+          {
+            printf 'ref=%s\n' "$RELEASE_REF_INPUT"
+            printf 'provider=%s\n' "$RELEASE_PROVIDER_INPUT"
+            printf 'mode=%s\n' "$RELEASE_MODE_INPUT"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Summarize validated ref
+        env:
+          RELEASE_REF: ${{ inputs.ref }}
+          RELEASE_SHA: ${{ steps.ref.outputs.sha }}
+          RELEASE_PROVIDER: ${{ inputs.provider }}
+          RELEASE_MODE: ${{ inputs.mode }}
+        run: |
+          {
+            echo "## Release checks"
+            echo
+            echo "- Requested ref: \`${RELEASE_REF}\`"
+            echo "- Validated SHA: \`${RELEASE_SHA}\`"
+            echo "- Cross-OS provider: \`${RELEASE_PROVIDER}\`"
+            echo "- Cross-OS mode: \`${RELEASE_MODE}\`"
+            echo "- This run will execute cross-OS release validation, install smoke, QA Lab parity, Matrix, and Telegram lanes, and the non-Parallels Docker/live/openwebui coverage from the CI migration plan."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  install_smoke_release_checks:
+    needs: [resolve_target]
+    permissions:
+      contents: read
+    uses: ./.github/workflows/install-smoke.yml
+    with:
+      ref: ${{ needs.resolve_target.outputs.ref }}
+      run_bun_global_install_smoke: true
+
+  cross_os_release_checks:
+    needs: [resolve_target]
+    permissions: read-all
+    uses: ./.github/workflows/openclaw-cross-os-release-checks-reusable.yml
+    with:
+      ref: ${{ needs.resolve_target.outputs.ref }}
+      provider: ${{ needs.resolve_target.outputs.provider }}
+      mode: ${{ needs.resolve_target.outputs.mode }}
+    secrets:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+      OPENCLAW_DISCORD_SMOKE_BOT_TOKEN: ${{ secrets.OPENCLAW_DISCORD_SMOKE_BOT_TOKEN }}
+      OPENCLAW_DISCORD_SMOKE_GUILD_ID: ${{ secrets.OPENCLAW_DISCORD_SMOKE_GUILD_ID }}
+      OPENCLAW_DISCORD_SMOKE_CHANNEL_ID: ${{ secrets.OPENCLAW_DISCORD_SMOKE_CHANNEL_ID }}
+
+  live_and_e2e_release_checks:
+    needs: [resolve_target]
+    permissions:
+      contents: read
+      packages: write
+      pull-requests: read
+    uses: ./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml
+    with:
+      ref: ${{ needs.resolve_target.outputs.ref }}
+      include_repo_e2e: true
+      include_release_path_suites: true
+      include_openwebui: true
+      include_live_suites: true
+    secrets:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      ANTHROPIC_API_KEY_OLD: ${{ secrets.ANTHROPIC_API_KEY_OLD }}
+      ANTHROPIC_API_TOKEN: ${{ secrets.ANTHROPIC_API_TOKEN }}
+      BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
+      CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
+      DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
+      MODELSTUDIO_API_KEY: ${{ secrets.MODELSTUDIO_API_KEY }}
+      MOONSHOT_API_KEY: ${{ secrets.MOONSHOT_API_KEY }}
+      MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+      MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+      OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+      OPENCODE_ZEN_API_KEY: ${{ secrets.OPENCODE_ZEN_API_KEY }}
+      OPENCLAW_LIVE_BROWSER_CDP_URL: ${{ secrets.OPENCLAW_LIVE_BROWSER_CDP_URL }}
+      OPENCLAW_LIVE_SETUP_TOKEN: ${{ secrets.OPENCLAW_LIVE_SETUP_TOKEN }}
+      OPENCLAW_LIVE_SETUP_TOKEN_MODEL: ${{ secrets.OPENCLAW_LIVE_SETUP_TOKEN_MODEL }}
+      OPENCLAW_LIVE_SETUP_TOKEN_PROFILE: ${{ secrets.OPENCLAW_LIVE_SETUP_TOKEN_PROFILE }}
+      OPENCLAW_LIVE_SETUP_TOKEN_VALUE: ${{ secrets.OPENCLAW_LIVE_SETUP_TOKEN_VALUE }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      QWEN_API_KEY: ${{ secrets.QWEN_API_KEY }}
+      FAL_KEY: ${{ secrets.FAL_KEY }}
+      RUNWAY_API_KEY: ${{ secrets.RUNWAY_API_KEY }}
+      DEEPGRAM_API_KEY: ${{ secrets.DEEPGRAM_API_KEY }}
+      TOGETHER_API_KEY: ${{ secrets.TOGETHER_API_KEY }}
+      VYDRA_API_KEY: ${{ secrets.VYDRA_API_KEY }}
+      XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+      ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
+      Z_AI_API_KEY: ${{ secrets.Z_AI_API_KEY }}
+      BYTEPLUS_ACCESS_KEY_ID: ${{ secrets.BYTEPLUS_ACCESS_KEY_ID }}
+      BYTEPLUS_SECRET_ACCESS_KEY: ${{ secrets.BYTEPLUS_SECRET_ACCESS_KEY }}
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      OPENCLAW_CODEX_AUTH_JSON: ${{ secrets.OPENCLAW_CODEX_AUTH_JSON }}
+      OPENCLAW_CODEX_CONFIG_TOML: ${{ secrets.OPENCLAW_CODEX_CONFIG_TOML }}
+      OPENCLAW_CLAUDE_JSON: ${{ secrets.OPENCLAW_CLAUDE_JSON }}
+      OPENCLAW_CLAUDE_CREDENTIALS_JSON: ${{ secrets.OPENCLAW_CLAUDE_CREDENTIALS_JSON }}
+      OPENCLAW_CLAUDE_SETTINGS_JSON: ${{ secrets.OPENCLAW_CLAUDE_SETTINGS_JSON }}
+      OPENCLAW_CLAUDE_SETTINGS_LOCAL_JSON: ${{ secrets.OPENCLAW_CLAUDE_SETTINGS_LOCAL_JSON }}
+      OPENCLAW_GEMINI_SETTINGS_JSON: ${{ secrets.OPENCLAW_GEMINI_SETTINGS_JSON }}
+      FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY }}
+
+  qa_lab_parity_release_checks:
+    name: Run QA Lab parity gate
+    needs: [resolve_target]
+    runs-on: blacksmith-32vcpu-ubuntu-2404
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      QA_PARITY_CONCURRENCY: "1"
+      OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS: "180000"
+      OPENAI_API_KEY: ""
+      ANTHROPIC_API_KEY: ""
+      OPENCLAW_LIVE_OPENAI_KEY: ""
+      OPENCLAW_LIVE_ANTHROPIC_KEY: ""
+      OPENCLAW_LIVE_GEMINI_KEY: ""
+      OPENCLAW_LIVE_SETUP_TOKEN_VALUE: ""
+      OPENCLAW_BUILD_PRIVATE_QA: "1"
+      OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
+    steps:
+      - name: Checkout selected ref
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.resolve_target.outputs.ref }}
+          fetch-depth: 1
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          install-bun: "true"
+
+      - name: Build private QA runtime
+        run: pnpm build
+
+      - name: Run GPT-5.4 lane
+        run: |
+          pnpm openclaw qa suite \
+            --provider-mode mock-openai \
+            --parity-pack agentic \
+            --concurrency "${QA_PARITY_CONCURRENCY}" \
+            --model openai/gpt-5.4 \
+            --alt-model openai/gpt-5.4-alt \
+            --output-dir .artifacts/qa-e2e/gpt54
+
+      - name: Run Opus 4.6 lane
+        run: |
+          pnpm openclaw qa suite \
+            --provider-mode mock-openai \
+            --parity-pack agentic \
+            --concurrency "${QA_PARITY_CONCURRENCY}" \
+            --model anthropic/claude-opus-4-6 \
+            --alt-model anthropic/claude-sonnet-4-6 \
+            --output-dir .artifacts/qa-e2e/opus46
+
+      - name: Generate parity report
+        run: |
+          pnpm openclaw qa parity-report \
+            --repo-root . \
+            --candidate-summary .artifacts/qa-e2e/gpt54/qa-suite-summary.json \
+            --baseline-summary .artifacts/qa-e2e/opus46/qa-suite-summary.json \
+            --candidate-label openai/gpt-5.4 \
+            --baseline-label anthropic/claude-opus-4-6 \
+            --output-dir .artifacts/qa-e2e/parity
+
+      - name: Upload parity artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-qa-parity-${{ needs.resolve_target.outputs.sha }}
+          path: .artifacts/qa-e2e/
+          retention-days: 14
+          if-no-files-found: warn
+
+  qa_live_matrix_release_checks:
+    name: Run QA Lab live Matrix lane
+    needs: [resolve_target]
+    runs-on: blacksmith-32vcpu-ubuntu-2404
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      pull-requests: read
+    environment: qa-live-shared
+    env:
+      OPENCLAW_BUILD_PRIVATE_QA: "1"
+      OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
+    steps:
+      - name: Checkout selected ref
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.resolve_target.outputs.ref }}
+          fetch-depth: 1
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          install-bun: "true"
+
+      - name: Validate required QA credential env
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${OPENAI_API_KEY:-}" ]]; then
+            echo "Missing required OPENAI_API_KEY." >&2
+            exit 1
+          fi
+
+      - name: Build private QA runtime
+        run: pnpm build
+
+      - name: Run Matrix live lane
+        id: run_lane
+        shell: bash
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
+        run: |
+          set -euo pipefail
+
+          output_dir=".artifacts/qa-e2e/matrix-live-release-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          echo "output_dir=${output_dir}" >> "$GITHUB_OUTPUT"
+
+          pnpm openclaw qa matrix \
+            --repo-root . \
+            --output-dir "${output_dir}" \
+            --provider-mode live-frontier \
+            --model openai/gpt-5.4 \
+            --alt-model openai/gpt-5.4 \
+            --fast
+
+      - name: Upload Matrix QA artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-qa-live-matrix-${{ needs.resolve_target.outputs.sha }}
+          path: ${{ steps.run_lane.outputs.output_dir }}
+          retention-days: 14
+          if-no-files-found: warn
+
+  qa_live_telegram_release_checks:
+    name: Run QA Lab live Telegram lane
+    needs: [resolve_target]
+    runs-on: blacksmith-32vcpu-ubuntu-2404
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      pull-requests: read
+    environment: qa-live-shared
+    env:
+      OPENCLAW_BUILD_PRIVATE_QA: "1"
+      OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
+    steps:
+      - name: Checkout selected ref
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.resolve_target.outputs.ref }}
+          fetch-depth: 1
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          install-bun: "true"
+
+      - name: Validate required QA credential env
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
+          OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          require_var() {
+            local key="$1"
+            if [[ -z "${!key:-}" ]]; then
+              echo "Missing required ${key}." >&2
+              exit 1
+            fi
+          }
+
+          require_var OPENAI_API_KEY
+          require_var OPENCLAW_QA_CONVEX_SITE_URL
+          require_var OPENCLAW_QA_CONVEX_SECRET_CI
+
+      - name: Build private QA runtime
+        run: pnpm build
+
+      - name: Run Telegram live lane
+        id: run_lane
+        shell: bash
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
+          OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
+          OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
+          OPENCLAW_QA_TELEGRAM_CAPTURE_CONTENT: "1"
+        run: |
+          set -euo pipefail
+
+          output_dir=".artifacts/qa-e2e/telegram-live-release-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          echo "output_dir=${output_dir}" >> "$GITHUB_OUTPUT"
+
+          pnpm openclaw qa telegram \
+            --repo-root . \
+            --output-dir "${output_dir}" \
+            --provider-mode live-frontier \
+            --model openai/gpt-5.4 \
+            --alt-model openai/gpt-5.4 \
+            --fast \
+            --credential-source convex \
+            --credential-role ci
+
+      - name: Upload Telegram QA artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-qa-live-telegram-${{ needs.resolve_target.outputs.sha }}
+          path: ${{ steps.run_lane.outputs.output_dir }}
+          retention-days: 14
+          if-no-files-found: warn

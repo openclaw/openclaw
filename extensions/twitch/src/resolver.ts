@@ -8,6 +8,7 @@
 import { ApiClient } from "@twurple/api";
 import { StaticAuthProvider } from "@twurple/auth";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import type { ChannelResolveKind, ChannelResolveResult } from "./types.js";
 import type { ChannelLogSink, TwitchAccountConfig } from "./types.js";
 import { normalizeToken } from "./utils/twitch.js";
@@ -18,9 +19,9 @@ import { normalizeToken } from "./utils/twitch.js";
 function normalizeUsername(input: string): string {
   const trimmed = input.trim();
   if (trimmed.startsWith("@")) {
-    return trimmed.slice(1).toLowerCase();
+    return normalizeLowercaseStringOrEmpty(trimmed.slice(1));
   }
-  return trimmed.toLowerCase();
+  return normalizeLowercaseStringOrEmpty(trimmed);
 }
 
 /**

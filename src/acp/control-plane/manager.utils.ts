@@ -1,9 +1,9 @@
-import type { OpenClawConfig } from "../../config/config.js";
 import {
   canonicalizeMainSessionAlias,
   resolveMainSessionKey,
 } from "../../config/sessions/main-session.js";
 import type { SessionAcpMeta } from "../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   normalizeAgentId,
   normalizeMainKey,
@@ -59,7 +59,7 @@ export function canonicalizeAcpSessionKey(params: {
   if (!normalized) {
     return "";
   }
-  const lowered = normalized.toLowerCase();
+  const lowered = normalizeLowercaseStringOrEmpty(normalized);
   if (lowered === "global" || lowered === "unknown") {
     return lowered;
   }

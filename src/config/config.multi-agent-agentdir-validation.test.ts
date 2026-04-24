@@ -1,8 +1,9 @@
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { loadConfig, validateConfigObject } from "./config.js";
+import { loadConfig } from "./config.js";
 import { withTempHomeConfig } from "./test-helpers.js";
+import { validateConfigObject } from "./validation.js";
 
 describe("multi-agent agentDir validation", () => {
   it("rejects shared agents.list agentDir", async () => {
@@ -31,7 +32,7 @@ describe("multi-agent agentDir validation", () => {
             { id: "b", agentDir: "~/.openclaw/agents/shared/agent" },
           ],
         },
-        bindings: [{ agentId: "a", match: { channel: "telegram" } }],
+        bindings: [{ agentId: "a", match: { channel: "forum" } }],
       },
       async () => {
         const spy = vi.spyOn(console, "error").mockImplementation(() => {});

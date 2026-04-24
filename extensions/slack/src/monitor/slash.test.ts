@@ -190,8 +190,12 @@ beforeEach(() => {
   resetSlackSlashMocks();
 });
 
-async function registerCommands(ctx: unknown, account: unknown) {
-  await registerSlackMonitorSlashCommands({ ctx: ctx as never, account: account as never });
+async function registerCommands(ctx: unknown, account: unknown, trackEvent?: () => void) {
+  await registerSlackMonitorSlashCommands({
+    ctx: ctx as never,
+    account: account as never,
+    trackEvent,
+  } as never);
 }
 
 function encodeValue(parts: { command: string; arg: string; value: string; userId: string }) {
@@ -220,7 +224,7 @@ function createDeferred<T>() {
 
 function createArgMenusHarness() {
   const commands = new Map<string, (args: unknown) => Promise<void>>();
-  const actions = new Map<string, (args: unknown) => Promise<void>>();
+  const actions = new Map<string | RegExp, (args: unknown) => Promise<void>>();
   const options = new Map<string, (args: unknown) => Promise<void>>();
   const optionsReceiverContexts: unknown[] = [];
 
@@ -230,7 +234,7 @@ function createArgMenusHarness() {
     command: (name: string, handler: (args: unknown) => Promise<void>) => {
       commands.set(name, handler);
     },
-    action: (id: string, handler: (args: unknown) => Promise<void>) => {
+    action: (id: string | RegExp, handler: (args: unknown) => Promise<void>) => {
       actions.set(id, handler);
     },
     options: function (this: unknown, id: string, handler: (args: unknown) => Promise<void>) {
@@ -285,11 +289,16 @@ function createArgMenusHarness() {
 }
 
 function requireHandler(
-  handlers: Map<string, (args: unknown) => Promise<void>>,
-  key: string,
+  handlers: Map<string | RegExp, (args: unknown) => Promise<void>>,
+  key: string | RegExp,
   label: string,
 ): (args: unknown) => Promise<void> {
-  const handler = handlers.get(key);
+  const handler =
+    key instanceof RegExp
+      ? Array.from(handlers.entries()).find(
+          ([candidate]) => candidate instanceof RegExp && String(candidate) === String(key),
+        )?.[1]
+      : handlers.get(key);
   if (!handler) {
     throw new Error(`Missing ${label} handler`);
   }
@@ -414,7 +423,7 @@ describe("Slack native command argument menus", () => {
     reportLongHandler = requireHandler(harness.commands, "/reportlong", "/reportlong");
     unsafeConfirmHandler = requireHandler(harness.commands, "/unsafeconfirm", "/unsafeconfirm");
     agentStatusHandler = requireHandler(harness.commands, "/agentstatus", "/agentstatus");
-    argMenuHandler = requireHandler(harness.actions, "openclaw_cmdarg", "arg-menu action");
+    argMenuHandler = requireHandler(harness.actions, /^openclaw_cmdarg/, "arg-menu action");
     argMenuOptionsHandler = requireHandler(harness.options, "openclaw_cmdarg", "arg-menu options");
   });
 
@@ -426,21 +435,25 @@ describe("Slack native command argument menus", () => {
     const testHarness = createArgMenusHarness();
     await registerCommands(testHarness.ctx, testHarness.account);
     expect(testHarness.commands.size).toBeGreaterThan(0);
-    expect(testHarness.actions.has("openclaw_cmdarg")).toBe(true);
+    expect(
+      Array.from(testHarness.actions.keys()).some(
+        (key) => key instanceof RegExp && String(key) === String(/^openclaw_cmdarg/),
+      ),
+    ).toBe(true);
     expect(testHarness.options.has("openclaw_cmdarg")).toBe(true);
     expect(testHarness.optionsReceiverContexts[0]).toBe(testHarness.app);
   });
 
   it("falls back to static menus when app.options() throws during registration", async () => {
     const commands = new Map<string, (args: unknown) => Promise<void>>();
-    const actions = new Map<string, (args: unknown) => Promise<void>>();
+    const actions = new Map<string | RegExp, (args: unknown) => Promise<void>>();
     const postEphemeral = vi.fn().mockResolvedValue({ ok: true });
     const app = {
       client: { chat: { postEphemeral } },
       command: (name: string, handler: (args: unknown) => Promise<void>) => {
         commands.set(name, handler);
       },
-      action: (id: string, handler: (args: unknown) => Promise<void>) => {
+      action: (id: string | RegExp, handler: (args: unknown) => Promise<void>) => {
         actions.set(id, handler);
       },
       // Simulate Bolt throwing during options registration (e.g. receiver not initialized)
@@ -483,7 +496,11 @@ describe("Slack native command argument menus", () => {
     // Registration should not throw despite app.options() throwing
     await registerCommands(ctx, account);
     expect(commands.size).toBeGreaterThan(0);
-    expect(actions.has("openclaw_cmdarg")).toBe(true);
+    expect(
+      Array.from(actions.keys()).some(
+        (key) => key instanceof RegExp && String(key) === String(/^openclaw_cmdarg/),
+      ),
+    ).toBe(true);
 
     // The /reportexternal command (140 choices) should fall back to static_select
     // instead of external_select since options registration failed
@@ -508,6 +525,8 @@ describe("Slack native command argument menus", () => {
     const actions = expectArgMenuLayout(respond);
     const elementType = actions?.elements?.[0]?.type;
     expect(elementType).toBe("button");
+    expect(actions?.elements?.[0]?.action_id).toBe("openclaw_cmdarg_0_0");
+    expect(actions?.elements?.[1]?.action_id).toBe("openclaw_cmdarg_0_1");
     expect(actions?.elements?.[0]?.confirm).toBeTruthy();
   });
 
@@ -552,6 +571,17 @@ describe("Slack native command argument menus", () => {
     expect(dispatchMock).toHaveBeenCalledTimes(1);
     const call = dispatchMock.mock.calls[0]?.[0] as { ctx?: { Body?: string } };
     expect(call.ctx?.Body).toBe("/usage tokens");
+  });
+
+  it("tracks accepted slash command activity", async () => {
+    const trackingHarness = createArgMenusHarness();
+    const trackEvent = vi.fn();
+    await registerCommands(trackingHarness.ctx, trackingHarness.account, trackEvent);
+    const usageTrackingHandler = requireHandler(trackingHarness.commands, "/usage", "/usage");
+
+    await runCommandHandler(usageTrackingHandler);
+
+    expect(trackEvent).toHaveBeenCalledTimes(1);
   });
 
   it("maps /agentstatus to /status when dispatching", async () => {
@@ -624,6 +654,36 @@ describe("Slack native command argument menus", () => {
     expect(optionTexts.some((text) => text.includes("Period 12"))).toBe(true);
   });
 
+  it("tracks accepted external_select option requests", async () => {
+    const trackingHarness = createArgMenusHarness();
+    const trackEvent = vi.fn();
+    await registerCommands(trackingHarness.ctx, trackingHarness.account, trackEvent);
+    const reportExternalTrackingHandler = requireHandler(
+      trackingHarness.commands,
+      "/reportexternal",
+      "/reportexternal",
+    );
+    const argMenuOptionsTrackingHandler = requireHandler(
+      trackingHarness.options,
+      "openclaw_cmdarg",
+      "arg-menu options",
+    );
+    const { blockId } = await runCommandAndResolveActionsBlock(reportExternalTrackingHandler);
+    const ackOptions = vi.fn().mockResolvedValue(undefined);
+    trackEvent.mockClear();
+
+    await argMenuOptionsTrackingHandler({
+      ack: ackOptions,
+      body: {
+        user: { id: "U1" },
+        value: "period 12",
+        actions: [{ block_id: blockId }],
+      },
+    });
+
+    expect(trackEvent).toHaveBeenCalledTimes(1);
+  });
+
   it("rejects external_select option requests without user identity", async () => {
     const { blockId } = await runCommandAndResolveActionsBlock(reportExternalHandler);
     expect(blockId).toContain("openclaw_cmdarg_ext:");
@@ -655,6 +715,25 @@ describe("Slack native command argument menus", () => {
       text: "That menu is for another user.",
       response_type: "ephemeral",
     });
+  });
+
+  it("tracks accepted arg-menu actions", async () => {
+    const trackingHarness = createArgMenusHarness();
+    const trackEvent = vi.fn();
+    await registerCommands(trackingHarness.ctx, trackingHarness.account, trackEvent);
+    const argMenuTrackingHandler = requireHandler(
+      trackingHarness.actions,
+      /^openclaw_cmdarg/,
+      "arg-menu action",
+    );
+
+    await runArgMenuAction(argMenuTrackingHandler, {
+      action: {
+        value: encodeValue({ command: "usage", arg: "mode", value: "tokens", userId: "U1" }),
+      },
+    });
+
+    expect(trackEvent).toHaveBeenCalledTimes(1);
   });
 
   it("falls back to postEphemeral with token when respond is unavailable", async () => {
@@ -944,6 +1023,22 @@ describe("slack slash commands access groups", () => {
     expect(dispatchArg?.ctx?.CommandAuthorized).toBe(false);
   });
 
+  it("classifies MPIM slash commands as group chat context", async () => {
+    const harness = createPolicyHarness({
+      channelId: "G_MPIM",
+      channelName: "group-dm",
+      resolveChannelName: async () => ({ name: "group-dm", type: "mpim" }),
+    });
+    await registerAndRunPolicySlash({ harness });
+
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+    const dispatchArg = dispatchMock.mock.calls[0]?.[0] as {
+      ctx?: { ChatType?: string; From?: string };
+    };
+    expect(dispatchArg?.ctx?.ChatType).toBe("group");
+    expect(dispatchArg?.ctx?.From).toBe("slack:group:G_MPIM");
+  });
+
   it("enforces access-group gating when lookup fails for private channels", async () => {
     const harness = createPolicyHarness({
       allowFrom: [],
@@ -968,9 +1063,10 @@ describe("slack slash command session metadata", () => {
     expect(recordSessionMetaFromInboundMock).toHaveBeenCalledTimes(1);
     const call = recordSessionMetaFromInboundMock.mock.calls[0]?.[0] as {
       sessionKey?: string;
-      ctx?: { OriginatingChannel?: string };
+      ctx?: { GroupSpace?: string; OriginatingChannel?: string };
     };
     expect(call.ctx?.OriginatingChannel).toBe("slack");
+    expect(call.ctx?.GroupSpace).toBe("T1");
     expect(call.sessionKey).toBeDefined();
   });
 

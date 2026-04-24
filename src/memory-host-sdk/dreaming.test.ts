@@ -90,6 +90,31 @@ describe("memory dreaming host helpers", () => {
     });
   });
 
+  it("defaults storage mode to separate so phase blocks do not pollute daily memory files", () => {
+    const resolved = resolveMemoryDreamingConfig({
+      pluginConfig: {},
+    });
+
+    expect(resolved.storage).toEqual({
+      mode: "separate",
+      separateReports: false,
+    });
+  });
+
+  it("preserves explicit inline storage mode for callers that opt in", () => {
+    const resolved = resolveMemoryDreamingConfig({
+      pluginConfig: {
+        dreaming: {
+          storage: {
+            mode: "inline",
+          },
+        },
+      },
+    });
+
+    expect(resolved.storage.mode).toBe("inline");
+  });
+
   it("applies top-level dreaming frequency across all phases", () => {
     const resolved = resolveMemoryDreamingConfig({
       pluginConfig: {
@@ -156,6 +181,9 @@ describe("memory dreaming host helpers", () => {
         "America/Los_Angeles",
       ),
     ).toBe(true);
+  });
+
+  it("resolves the configured memory-slot plugin id", () => {
     expect(
       resolveMemoryDreamingPluginId({
         plugins: {
@@ -165,6 +193,9 @@ describe("memory dreaming host helpers", () => {
         },
       } as OpenClawConfig),
     ).toBe("memos-local-openclaw-plugin");
+  });
+
+  it("reads dreaming config from the configured memory-slot owner", () => {
     expect(
       resolveMemoryDreamingPluginConfig({
         plugins: {
@@ -187,6 +218,36 @@ describe("memory dreaming host helpers", () => {
         enabled: true,
       },
     });
+  });
+
+  it("reads dreaming config from memory-lancedb when it owns the memory slot", () => {
+    expect(
+      resolveMemoryDreamingPluginConfig({
+        plugins: {
+          slots: {
+            memory: "memory-lancedb",
+          },
+          entries: {
+            "memory-lancedb": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  frequency: "0 */6 * * *",
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig),
+    ).toEqual({
+      dreaming: {
+        enabled: true,
+        frequency: "0 */6 * * *",
+      },
+    });
+  });
+
+  it("falls back to memory-core when no memory slot override is configured", () => {
     expect(
       resolveMemoryDreamingPluginConfig({
         plugins: {

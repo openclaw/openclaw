@@ -1,6 +1,9 @@
 import { readFileSync, statSync } from "node:fs";
 import path from "node:path";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 
 export type WindowsSpawnResolution =
   | "direct"
@@ -82,7 +85,9 @@ export function resolveWindowsExecutablePath(command: string, env: NodeJS.Proces
 
   for (const dir of pathEntries) {
     for (const ext of pathExt) {
-      for (const candidateExt of [ext, ext.toLowerCase(), ext.toUpperCase()]) {
+      const normalizedExt = normalizeLowercaseStringOrEmpty(ext);
+      const uppercaseExt = ext.toUpperCase();
+      for (const candidateExt of [ext, normalizedExt, uppercaseExt]) {
         const candidate = path.join(dir, `${command}${candidateExt}`);
         if (isFilePath(candidate)) {
           return candidate;
@@ -116,7 +121,7 @@ function resolveEntrypointFromCmdShim(wrapperPath: string): string | null {
       }
     }
     const nonNode = candidates.find((candidate) => {
-      const base = path.basename(candidate).toLowerCase();
+      const base = normalizeLowercaseStringOrEmpty(path.basename(candidate));
       return base !== "node.exe" && base !== "node";
     });
     return nonNode ?? null;
@@ -211,7 +216,7 @@ export function resolveWindowsSpawnProgramCandidate(
   }
 
   const resolvedCommand = resolveWindowsExecutablePath(params.command, env);
-  const ext = path.extname(resolvedCommand).toLowerCase();
+  const ext = normalizeLowercaseStringOrEmpty(path.extname(resolvedCommand));
   if (ext === ".js" || ext === ".cjs" || ext === ".mjs") {
     return {
       command: execPath,
@@ -226,7 +231,7 @@ export function resolveWindowsSpawnProgramCandidate(
       resolveEntrypointFromCmdShim(resolvedCommand) ??
       resolveEntrypointFromPackageJson(resolvedCommand, params.packageName);
     if (entrypoint) {
-      const entryExt = path.extname(entrypoint).toLowerCase();
+      const entryExt = normalizeLowercaseStringOrEmpty(path.extname(entrypoint));
       if (entryExt === ".exe") {
         return {
           command: entrypoint,

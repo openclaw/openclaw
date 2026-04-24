@@ -1,26 +1,11 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createBlueBubblesPairingText } from "./pairing.js";
 import type { OpenClawConfig } from "./runtime-api.js";
 
-const sendMessageBlueBubblesMock = vi.hoisted(() => vi.fn());
-
-vi.mock("./channel.runtime.js", () => ({
-  blueBubblesChannelRuntime: {
-    sendMessageBlueBubbles: sendMessageBlueBubblesMock,
-  },
-}));
-
-vi.mock("../../../src/channels/plugins/bundled.js", () => ({
-  bundledChannelPlugins: [],
-  bundledChannelSetupPlugins: [],
-}));
-
-let bluebubblesPlugin: typeof import("./channel.js").bluebubblesPlugin;
+const sendMessageBlueBubblesMock = vi.fn();
+const bluebubblesPairingText = createBlueBubblesPairingText(sendMessageBlueBubblesMock);
 
 describe("bluebubblesPlugin.pairing.notifyApproval", () => {
-  beforeAll(async () => {
-    ({ bluebubblesPlugin } = await import("./channel.js"));
-  });
-
   beforeEach(() => {
     sendMessageBlueBubblesMock.mockReset();
     sendMessageBlueBubblesMock.mockResolvedValue({ messageId: "bb-pairing" });
@@ -40,9 +25,14 @@ describe("bluebubblesPlugin.pairing.notifyApproval", () => {
       },
     } as OpenClawConfig;
 
-    await bluebubblesPlugin.pairing?.notifyApproval?.({
+    expect(bluebubblesPairingText.normalizeAllowEntry("  bluebubbles:+15551234567  ")).toBe(
+      "+15551234567",
+    );
+
+    await bluebubblesPairingText.notify({
       cfg,
       id: "+15551234567",
+      message: bluebubblesPairingText.message,
       accountId: "work",
     });
 

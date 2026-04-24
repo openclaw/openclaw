@@ -20,13 +20,14 @@ import {
 import { drainSystemEvents, peekSystemEvents } from "../infra/system-events.js";
 import { rawDataToString } from "../infra/ws.js";
 import { resetLogger, setLoggerOverride } from "../logging.js";
-import { clearGatewaySubagentRuntime } from "../plugins/runtime/index.js";
+import { clearGatewaySubagentRuntime } from "../plugins/runtime/gateway-bindings.js";
 import {
   DEFAULT_AGENT_ID,
   normalizeMainKey,
   parseAgentSessionKey,
   toAgentStoreSessionKey,
 } from "../routing/session-key.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { captureEnv } from "../test-utils/env.js";
 import { getDeterministicFreePortBlock } from "../test-utils/ports.js";
@@ -471,7 +472,7 @@ export function installGatewayTestHooks(options?: { scope?: "test" | "suite" }) 
       if (activeSuiteHookScopeCount === 0) {
         await cleanupGatewayTestHome({ restoreEnv: true });
       }
-    });
+    }, 300_000);
     return;
   }
 
@@ -606,7 +607,7 @@ export async function startGatewayServer(port: number, opts?: GatewayServerOptio
   return server;
 }
 
-async function startGatewayServerWithRetries(params: {
+export async function startGatewayServerWithRetries(params: {
   port: number;
   opts?: GatewayServerOptions;
 }): Promise<{ port: number; server: Awaited<ReturnType<typeof startGatewayServer>> }> {
@@ -711,11 +712,7 @@ export async function createGatewaySuiteHarness(opts?: {
   };
 }
 
-export async function startServerWithClient(
-  token?: string,
-  opts?: GatewayServerOptions & { wsHeaders?: Record<string, string> },
-) {
-  const { wsHeaders, ...gatewayOpts } = opts ?? {};
+export async function startServer(token?: string, opts?: GatewayServerOptions) {
   let port = await getFreePort();
   const envSnapshot = captureEnv(["OPENCLAW_GATEWAY_TOKEN"]);
   const prev = process.env.OPENCLAW_GATEWAY_TOKEN;
@@ -734,19 +731,29 @@ export async function startServerWithClient(
   }
 
   const resolvedGatewayOpts: GatewayServerOptions =
-    fallbackToken && !gatewayOpts.auth
+    fallbackToken && !opts?.auth
       ? {
-          ...gatewayOpts,
+          ...opts,
           auth: { mode: "token", token: fallbackToken },
         }
-      : gatewayOpts;
+      : (opts ?? {});
 
   const started = await startGatewayServerWithRetries({ port, opts: resolvedGatewayOpts });
   port = started.port;
   const server = started.server;
 
+  return { server, port, prevToken: prev, envSnapshot };
+}
+
+export async function startServerWithClient(
+  token?: string,
+  opts?: GatewayServerOptions & { wsHeaders?: Record<string, string> },
+) {
+  const { wsHeaders, ...gatewayOpts } = opts ?? {};
+  const started = await startServer(token, gatewayOpts);
+  const { server, port, prevToken, envSnapshot } = started;
   const ws = await openTrackedWebSocket({ port, headers: wsHeaders });
-  return { server, ws, port, prevToken: prev, envSnapshot };
+  return { server, ws, port, prevToken, envSnapshot };
 }
 
 export async function startConnectedServerWithClient(
@@ -773,10 +780,12 @@ function resolveDefaultTestDeviceIdentityPath(params: {
   deviceFamily?: string;
   role: string;
 }) {
-  const safe =
-    `${params.clientId}-${params.clientMode}-${params.platform}-${params.deviceFamily ?? "none"}-${params.role}`
-      .replace(/[^a-zA-Z0-9._-]+/g, "_")
-      .toLowerCase();
+  const safe = normalizeLowercaseStringOrEmpty(
+    `${params.clientId}-${params.clientMode}-${params.platform}-${params.deviceFamily ?? "none"}-${params.role}`.replace(
+      /[^a-zA-Z0-9._-]+/g,
+      "_",
+    ),
+  );
   const suiteRoot = process.env.OPENCLAW_STATE_DIR ?? process.env.HOME ?? os.tmpdir();
   return path.join(suiteRoot, "test-device-identities", `${safe}.json`);
 }
@@ -791,11 +800,11 @@ export async function readConnectChallengeNonce(
   }
   trackConnectChallengeNonce(ws);
   try {
-    const evt = await onceMessage<{
-      type?: string;
-      event?: string;
-      payload?: Record<string, unknown> | null;
-    }>(ws, (o) => o.type === "event" && o.event === "connect.challenge", timeoutMs);
+    const evt = await onceMessage(
+      ws,
+      (o) => o.type === "event" && o.event === "connect.challenge",
+      timeoutMs,
+    );
     const nonce = (evt.payload as { nonce?: unknown } | undefined)?.nonce;
     if (typeof nonce === "string" && nonce.trim().length > 0) {
       (ws as TrackedWs)[CONNECT_CHALLENGE_NONCE_KEY] = nonce.trim();
@@ -941,6 +950,14 @@ export async function connectReq(
       nonce: connectChallengeNonce,
     };
   })();
+  const isResponseForId = (o: unknown): boolean => {
+    if (!o || typeof o !== "object" || Array.isArray(o)) {
+      return false;
+    }
+    const rec = o as Record<string, unknown>;
+    return rec.type === "res" && rec.id === id;
+  };
+  const responsePromise = onceMessage<ConnectResponse>(ws, isResponseForId, opts?.timeoutMs);
   ws.send(
     JSON.stringify({
       type: "req",
@@ -968,14 +985,7 @@ export async function connectReq(
       },
     }),
   );
-  const isResponseForId = (o: unknown): boolean => {
-    if (!o || typeof o !== "object" || Array.isArray(o)) {
-      return false;
-    }
-    const rec = o as Record<string, unknown>;
-    return rec.type === "res" && rec.id === id;
-  };
-  return await onceMessage<ConnectResponse>(ws, isResponseForId, opts?.timeoutMs);
+  return await responsePromise;
 }
 
 export async function connectOk(ws: WebSocket, opts?: Parameters<typeof connectReq>[1]) {
@@ -1023,6 +1033,7 @@ export async function connectWebchatClient(params: {
   return ws;
 }
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Gateway test RPC helper lets callers ascribe response payload shape.
 export async function rpcReq<T extends Record<string, unknown>>(
   ws: WebSocket,
   method: string,
@@ -1039,8 +1050,7 @@ export async function rpcReq<T extends Record<string, unknown>>(
   clearSessionStoreCacheForTest();
   const { randomUUID } = await import("node:crypto");
   const id = randomUUID();
-  ws.send(JSON.stringify({ type: "req", id, method, params }));
-  return await onceMessage<{
+  const responsePromise = onceMessage<{
     type: "res";
     id: string;
     ok: boolean;
@@ -1057,6 +1067,8 @@ export async function rpcReq<T extends Record<string, unknown>>(
     },
     timeoutMs,
   );
+  ws.send(JSON.stringify({ type: "req", id, method, params }));
+  return await responsePromise;
 }
 
 export async function waitForSystemEvent(timeoutMs = 2000) {

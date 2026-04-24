@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { buildTelegramModelsProviderChannelData } from "../../../test/helpers/channels/command-contract.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
@@ -10,15 +9,60 @@ import {
 import { handleModelsCommand } from "./commands-models.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
-vi.mock("../../agents/model-catalog.js", () => ({
-  loadModelCatalog: vi.fn(async () => [
-    { provider: "anthropic", id: "claude-opus-4-5", name: "Claude Opus" },
-    { provider: "anthropic", id: "claude-sonnet-4-5", name: "Claude Sonnet" },
-    { provider: "openai", id: "gpt-4.1", name: "GPT-4.1" },
-    { provider: "openai", id: "gpt-4.1-mini", name: "GPT-4.1 Mini" },
-    { provider: "google", id: "gemini-2.0-flash", name: "Gemini Flash" },
-  ]),
+const modelCatalogMocks = vi.hoisted(() => ({
+  loadModelCatalog: vi.fn(),
 }));
+
+const modelAuthLabelMocks = vi.hoisted(() => ({
+  resolveModelAuthLabel: vi.fn<(params: unknown) => string | undefined>(() => undefined),
+}));
+
+const modelsAddMocks = vi.hoisted(() => ({
+  addModelToConfig: vi.fn(),
+  listAddableProviders: vi.fn<(params: unknown) => string[]>(),
+  validateAddProvider:
+    vi.fn<
+      (
+        params: unknown,
+      ) =>
+        | { ok: true; provider: string }
+        | { ok: false; providers: string[]; knownProvider?: string }
+    >(),
+}));
+
+const configWriteAuthMocks = vi.hoisted(() => ({
+  resolveConfigWriteDeniedText: vi.fn<(params: { target: string }) => string | null>(() => null),
+}));
+
+const configWriteTargetMocks = vi.hoisted(() => ({
+  resolveConfigWriteTargetFromPath: vi.fn((path: string[]) => path.join(".")),
+}));
+
+vi.mock("../../agents/model-catalog.js", () => ({
+  loadModelCatalog: modelCatalogMocks.loadModelCatalog,
+}));
+
+vi.mock("../../agents/model-auth-label.js", () => ({
+  resolveModelAuthLabel: modelAuthLabelMocks.resolveModelAuthLabel,
+}));
+
+vi.mock("../../channels/plugins/config-writes.js", () => ({
+  resolveConfigWriteTargetFromPath: configWriteTargetMocks.resolveConfigWriteTargetFromPath,
+}));
+
+vi.mock("./config-write-authorization.js", () => ({
+  resolveConfigWriteDeniedText: configWriteAuthMocks.resolveConfigWriteDeniedText,
+}));
+
+vi.mock("./models-add.js", async () => {
+  const actual = await vi.importActual<typeof import("./models-add.js")>("./models-add.js");
+  return {
+    ...actual,
+    addModelToConfig: modelsAddMocks.addModelToConfig,
+    listAddableProviders: modelsAddMocks.listAddableProviders,
+    validateAddProvider: modelsAddMocks.validateAddProvider,
+  };
+});
 
 const telegramModelsTestPlugin: ChannelPlugin = {
   ...createChannelTestPluginBase({
@@ -36,13 +80,88 @@ const telegramModelsTestPlugin: ChannelPlugin = {
     },
   }),
   commands: {
-    buildModelsProviderChannelData: buildTelegramModelsProviderChannelData,
+    buildModelsMenuChannelData: ({ providers }) => ({
+      telegram: {
+        buttons: [
+          [{ text: "Add model", callback_data: "/models add" }],
+          ...providers.map((provider) => [
+            {
+              text: provider.id,
+              callback_data: `models:${provider.id}`,
+            },
+          ]),
+        ],
+      },
+    }),
+    buildModelsProviderChannelData: ({ providers }) => ({
+      telegram: {
+        buttons: providers.map((provider) => [
+          {
+            text: provider.id,
+            callback_data: `models:${provider.id}`,
+          },
+        ]),
+      },
+    }),
+    buildModelsAddProviderChannelData: ({ providers }) => ({
+      telegram: {
+        buttons: providers.map((provider) => [
+          {
+            text: provider.id,
+            callback_data: `/models add ${provider.id}`,
+          },
+        ]),
+      },
+    }),
   },
 };
 
+const textSurfaceModelsTestPlugins = (["discord", "whatsapp"] as const).map((id) => ({
+  pluginId: id,
+  plugin: createChannelTestPluginBase({ id }),
+  source: "test",
+}));
+
 beforeEach(() => {
+  modelCatalogMocks.loadModelCatalog.mockReset();
+  modelCatalogMocks.loadModelCatalog.mockResolvedValue([
+    { provider: "anthropic", id: "claude-opus-4-5", name: "Claude Opus" },
+    { provider: "anthropic", id: "claude-sonnet-4-5", name: "Claude Sonnet" },
+    { provider: "openai", id: "gpt-4.1", name: "GPT-4.1" },
+    { provider: "openai", id: "gpt-4.1-mini", name: "GPT-4.1 Mini" },
+    { provider: "google", id: "gemini-2.0-flash", name: "Gemini Flash" },
+  ]);
+  modelAuthLabelMocks.resolveModelAuthLabel.mockReset();
+  modelAuthLabelMocks.resolveModelAuthLabel.mockReturnValue(undefined);
+  modelsAddMocks.addModelToConfig.mockReset();
+  modelsAddMocks.addModelToConfig.mockResolvedValue({
+    ok: true,
+    result: {
+      provider: "ollama",
+      modelId: "glm-5.1:cloud",
+      existed: false,
+      allowlistAdded: false,
+      warnings: [],
+    },
+  });
+  modelsAddMocks.listAddableProviders.mockReset();
+  modelsAddMocks.listAddableProviders.mockReturnValue([
+    "anthropic",
+    "lmstudio",
+    "ollama",
+    "openai",
+  ]);
+  modelsAddMocks.validateAddProvider.mockReset();
+  modelsAddMocks.validateAddProvider.mockImplementation((params: unknown) => ({
+    ok: true,
+    provider: (params as { provider: string }).provider,
+  }));
+  configWriteAuthMocks.resolveConfigWriteDeniedText.mockReset();
+  configWriteAuthMocks.resolveConfigWriteDeniedText.mockReturnValue(null);
+  configWriteTargetMocks.resolveConfigWriteTargetFromPath.mockClear();
   setActivePluginRegistry(
     createTestRegistry([
+      ...textSurfaceModelsTestPlugins,
       {
         pluginId: "telegram",
         plugin: telegramModelsTestPlugin,
@@ -52,174 +171,253 @@ beforeEach(() => {
   );
 });
 
-function buildModelsParams(
-  commandBody: string,
-  cfg: OpenClawConfig,
-  surface: string,
-  options?: {
-    authorized?: boolean;
-    agentId?: string;
-    sessionKey?: string;
-  },
+function buildParams(
+  commandBodyNormalized: string,
+  cfgOverrides: Partial<OpenClawConfig> = {},
 ): HandleCommandsParams {
-  const params = {
-    cfg,
+  return {
+    cfg: {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-5" },
+        },
+      },
+      commands: {
+        text: true,
+      },
+      ...cfgOverrides,
+    } as OpenClawConfig,
     ctx: {
-      Provider: surface,
-      Surface: surface,
-      CommandSource: "text",
+      Surface: "discord",
     },
     command: {
-      commandBodyNormalized: commandBody,
+      commandBodyNormalized,
       isAuthorizedSender: true,
-      senderId: "owner",
+      senderIsOwner: true,
+      senderId: "user-1",
+      channel: "discord",
+      channelId: "channel-1",
+      surface: "discord",
+      ownerList: [],
+      from: "user-1",
+      to: "bot",
     },
-    sessionKey: "agent:main:main",
+    sessionKey: "agent:main:discord:direct:user-1",
+    workspaceDir: "/tmp",
     provider: "anthropic",
     model: "claude-opus-4-5",
+    contextTokens: 0,
+    defaultGroupActivation: () => "mention",
+    resolvedVerboseLevel: "off",
+    resolvedReasoningLevel: "off",
+    resolveDefaultThinkingLevel: async () => undefined,
+    isGroup: false,
+    directives: {},
+    elevated: { enabled: true, allowed: true, failures: [] },
   } as unknown as HandleCommandsParams;
-  if (options?.authorized === false) {
-    params.command.isAuthorizedSender = false;
-    params.command.senderId = "unauthorized";
-  }
-  if (options?.agentId) {
-    params.agentId = options.agentId;
-  }
-  if (options?.sessionKey) {
-    params.sessionKey = options.sessionKey;
-  }
-  return params;
 }
 
 describe("handleModelsCommand", () => {
-  const cfg = {
-    commands: { text: true },
-    agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" } } },
-  } as OpenClawConfig;
+  it("shows a simple providers menu on text surfaces", async () => {
+    const result = await handleModelsCommand(buildParams("/models"), true);
 
-  it.each(["discord", "whatsapp"])("lists providers on %s text surfaces", async (surface) => {
-    const result = await handleModelsCommand(buildModelsParams("/models", cfg, surface), true);
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toContain("Providers:");
-    expect(result?.reply?.text).toContain("anthropic");
+    expect(result?.reply?.text).toContain("- anthropic (2)");
+    expect(result?.reply?.text).toContain("- google (1)");
+    expect(result?.reply?.text).toContain("- openai (2)");
     expect(result?.reply?.text).toContain("Use: /models <provider>");
+    expect(result?.reply?.text).toContain("Switch: /model <provider/model>");
+    expect(result?.reply?.text).toContain("Add: /models add");
   });
 
-  it("rejects unauthorized /models commands", async () => {
-    const result = await handleModelsCommand(
-      buildModelsParams("/models", cfg, "discord", { authorized: false }),
-      true,
-    );
-    expect(result).toEqual({ shouldContinue: false });
-  });
+  it("shows the add-model action in the telegram provider picker by default", async () => {
+    const params = buildParams("/models");
+    params.ctx.Surface = "telegram";
+    params.command.channel = "telegram";
+    params.command.surface = "telegram";
 
-  it("lists providers on telegram with buttons", async () => {
-    const result = await handleModelsCommand(buildModelsParams("/models", cfg, "telegram"), true);
-    expect(result?.shouldContinue).toBe(false);
+    const result = await handleModelsCommand(params, true);
+
     expect(result?.reply?.text).toBe("Select a provider:");
-    const buttons = (result?.reply?.channelData as { telegram?: { buttons?: unknown[][] } })
-      ?.telegram?.buttons;
-    expect(buttons).toBeDefined();
-    expect(buttons?.length).toBeGreaterThan(0);
-  });
-
-  it("handles provider pagination all mode and unknown providers", async () => {
-    const cases = [
-      {
-        name: "lists provider models with pagination hints",
-        command: "/models anthropic",
-        includes: [
-          "Models (anthropic",
-          "page 1/",
-          "anthropic/claude-opus-4-5",
-          "Switch: /model <provider/model>",
-          "All: /models anthropic all",
+    expect(result?.reply?.channelData).toEqual({
+      telegram: {
+        buttons: [
+          [{ text: "Add model", callback_data: "/models add" }],
+          [{ text: "anthropic", callback_data: "models:anthropic" }],
+          [{ text: "google", callback_data: "models:google" }],
+          [{ text: "openai", callback_data: "models:openai" }],
         ],
-        excludes: [],
       },
-      {
-        name: "ignores page argument when all flag is present",
-        command: "/models anthropic 3 all",
-        includes: ["Models (anthropic", "page 1/1", "anthropic/claude-opus-4-5"],
-        excludes: ["Page out of range"],
-      },
-      {
-        name: "errors on out-of-range pages",
-        command: "/models anthropic 4",
-        includes: ["Page out of range", "valid: 1-"],
-        excludes: [],
-      },
-      {
-        name: "handles unknown providers",
-        command: "/models not-a-provider",
-        includes: ["Unknown provider", "Available providers"],
-        excludes: [],
-      },
-    ] as const;
-
-    for (const testCase of cases) {
-      const result = await handleModelsCommand(
-        buildModelsParams(testCase.command, cfg, "discord"),
-        true,
-      );
-      expect(result?.shouldContinue, testCase.name).toBe(false);
-      for (const expected of testCase.includes) {
-        expect(result?.reply?.text, `${testCase.name}: ${expected}`).toContain(expected);
-      }
-      for (const blocked of testCase.excludes) {
-        expect(result?.reply?.text, `${testCase.name}: !${blocked}`).not.toContain(blocked);
-      }
-    }
+    });
   });
 
-  it("lists configured models outside the curated catalog", async () => {
-    const customCfg = {
-      commands: { text: true },
-      agents: {
-        defaults: {
-          model: {
-            primary: "localai/ultra-chat",
-            fallbacks: ["anthropic/claude-opus-4-5"],
-          },
-          imageModel: "visionpro/studio-v1",
-        },
+  it("keeps the telegram provider picker browse-only when modelsWrite is disabled", async () => {
+    const params = buildParams("/models", {
+      commands: {
+        text: true,
+        modelsWrite: false,
       },
-    } as OpenClawConfig;
+    });
+    params.ctx.Surface = "telegram";
+    params.command.channel = "telegram";
+    params.command.surface = "telegram";
 
-    const providerList = await handleModelsCommand(
-      buildModelsParams("/models", customCfg, "discord"),
-      true,
-    );
-    expect(providerList?.reply?.text).toContain("localai");
-    expect(providerList?.reply?.text).toContain("visionpro");
+    const result = await handleModelsCommand(params, true);
 
-    const result = await handleModelsCommand(
-      buildModelsParams("/models localai", customCfg, "discord"),
-      true,
+    expect(result?.reply?.text).toBe("Select a provider:");
+    expect(result?.reply?.channelData).toEqual({
+      telegram: {
+        buttons: [
+          [{ text: "anthropic", callback_data: "models:anthropic" }],
+          [{ text: "google", callback_data: "models:google" }],
+          [{ text: "openai", callback_data: "models:openai" }],
+        ],
+      },
+    });
+  });
+
+  it("lists models for /models <provider>", async () => {
+    const result = await handleModelsCommand(buildParams("/models openai"), true);
+
+    expect(result?.reply?.text).toContain("Models (openai) — showing 1-2 of 2 (page 1/1)");
+    expect(result?.reply?.text).toContain("- openai/gpt-4.1");
+    expect(result?.reply?.text).toContain("- openai/gpt-4.1-mini");
+    expect(result?.reply?.text).toContain("Switch: /model <provider/model>");
+  });
+
+  it("keeps /models list <provider> as an alias", async () => {
+    const result = await handleModelsCommand(buildParams("/models list anthropic"), true);
+
+    expect(result?.reply?.text).toContain("Models (anthropic) — showing 1-2 of 2 (page 1/1)");
+    expect(result?.reply?.text).toContain("- anthropic/claude-opus-4-5");
+  });
+
+  it("keeps the auth label on text-surface provider listings", async () => {
+    modelAuthLabelMocks.resolveModelAuthLabel.mockReturnValue("target-auth");
+    const params = buildParams("/models anthropic");
+    params.sessionEntry = {
+      sessionId: "wrapper-session",
+      updatedAt: Date.now(),
+      authProfileOverride: "wrapper-auth",
+    };
+    params.sessionStore = {
+      "agent:main:discord:direct:user-1": {
+        sessionId: "target-session",
+        updatedAt: Date.now(),
+        authProfileOverride: "target-auth",
+      },
+    };
+
+    const result = await handleModelsCommand(params, true);
+
+    expect(result?.reply?.text).toContain("Models (anthropic · 🔑 target-auth) — showing 1-2 of 2");
+  });
+
+  it("guides /models add when no provider is given", async () => {
+    const result = await handleModelsCommand(buildParams("/models add"), true);
+
+    expect(result?.reply?.text).toContain(
+      "Add a model: choose a provider, then send one of these example commands.",
     );
-    expect(result?.shouldContinue).toBe(false);
-    expect(result?.reply?.text).toContain("Models (localai");
-    expect(result?.reply?.text).toContain("localai/ultra-chat");
+    expect(result?.reply?.text).toContain(
+      "These examples use models that already exist for those providers.",
+    );
+    expect(result?.reply?.text).toContain("```text");
+    expect(result?.reply?.text).toContain("/models add ollama glm-5.1:cloud");
+    expect(result?.reply?.text).toContain("/models add lmstudio qwen/qwen3.5-9b");
+    expect(result?.reply?.text).toContain("/models add <provider> <modelId>");
+    expect(result?.reply?.text).toContain("Generic form:");
+    expect(result?.reply?.text).toContain("/models add <provider> <modelId>");
+    expect(result?.reply?.text).toContain("- anthropic");
+    expect(result?.reply?.text).toContain("- lmstudio");
+    expect(result?.reply?.text).toContain("- ollama");
+    expect(result?.reply?.text).toContain("- openai");
+  });
+
+  it("guides /models add <provider> when the model id is missing", async () => {
+    const result = await handleModelsCommand(buildParams("/models add ollama"), true);
+
+    expect(result?.reply?.text).toContain("Add a model to ollama:");
+    expect(result?.reply?.text).toContain("```text\n/models add ollama <modelId>\n```");
+    expect(result?.reply?.text).toContain("```text\n/models ollama\n```");
+  });
+
+  it("explains when a selectable provider does not support /models add", async () => {
+    modelsAddMocks.validateAddProvider.mockReturnValueOnce({
+      ok: false,
+      providers: ["lmstudio", "ollama"],
+      knownProvider: "openai",
+    });
+
+    const result = await handleModelsCommand(buildParams("/models add openai gpt-5.5"), true);
+
+    expect(result?.reply?.text).toContain(
+      "openai is available for model selection, but /models add cannot create models for this provider from chat.",
+    );
+    expect(result?.reply?.text).toContain("/models openai");
+    expect(result?.reply?.text).toContain("/model openai/<modelId>");
+    expect(result?.reply?.text).toContain("openclaw configure");
     expect(result?.reply?.text).not.toContain("Unknown provider");
   });
 
-  it("threads the routed agent through /models replies", async () => {
-    const scopedCfg = {
-      commands: { text: true },
-      agents: {
-        defaults: { model: { primary: "anthropic/claude-opus-4-5" } },
-        list: [{ id: "support", model: "localai/ultra-chat" }],
-      },
-    } as OpenClawConfig;
+  it("adds a model and points users back to browse or switch", async () => {
+    const result = await handleModelsCommand(buildParams("/models add ollama glm-5.1:cloud"), true);
 
+    expect(modelsAddMocks.addModelToConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "ollama",
+        modelId: "glm-5.1:cloud",
+      }),
+    );
+    expect(result?.reply?.text).toContain("✅ Added model: ollama/glm-5.1:cloud.");
+    expect(result?.reply?.text).toContain("Browse:");
+    expect(result?.reply?.text).toContain("/models ollama");
+    expect(result?.reply?.text).toContain("Switch now:");
+    expect(result?.reply?.text).toContain("/model ollama/glm-5.1:cloud");
+    expect(result?.reply?.text).not.toContain("/models repair");
+    expect(result?.reply?.text).not.toContain("/models ollama/glm-5.1:cloud");
+  });
+
+  it("checks all config-write targets touched by /models add", async () => {
+    const result = await handleModelsCommand(buildParams("/models add ollama glm-5.1:cloud"), true);
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(configWriteTargetMocks.resolveConfigWriteTargetFromPath).toHaveBeenCalledTimes(3);
+    expect(configWriteTargetMocks.resolveConfigWriteTargetFromPath.mock.calls).toEqual([
+      [["models", "providers", "ollama"]],
+      [["models", "providers", "ollama", "models"]],
+      [["agents", "defaults", "models"]],
+    ]);
+  });
+
+  it("returns config-write denial text for add-time provider bootstrap", async () => {
+    configWriteAuthMocks.resolveConfigWriteDeniedText.mockReturnValueOnce("denied");
+
+    const result = await handleModelsCommand(buildParams("/models add ollama glm-5.1:cloud"), true);
+
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: "denied" },
+    });
+    expect(modelsAddMocks.addModelToConfig).not.toHaveBeenCalled();
+  });
+
+  it("rejects /models add when modelsWrite is disabled", async () => {
     const result = await handleModelsCommand(
-      buildModelsParams("/models", scopedCfg, "discord", {
-        agentId: "support",
-        sessionKey: "agent:support:main",
+      buildParams("/models add ollama glm-5.1:cloud", {
+        commands: { text: true, modelsWrite: false },
       }),
       true,
     );
 
-    expect(result?.reply?.text).toContain("localai");
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: {
+        text: "⚠️ /models add is disabled. Set commands.modelsWrite=true to enable model registration.",
+      },
+    });
+    expect(modelsAddMocks.addModelToConfig).not.toHaveBeenCalled();
+    expect(configWriteTargetMocks.resolveConfigWriteTargetFromPath).not.toHaveBeenCalled();
   });
 });

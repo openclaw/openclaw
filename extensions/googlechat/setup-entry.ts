@@ -3,11 +3,11 @@ import { defineBundledChannelSetupEntry } from "openclaw/plugin-sdk/channel-entr
 export default defineBundledChannelSetupEntry({
   importMetaUrl: import.meta.url,
   plugin: {
-    specifier: "./api.js",
-    exportName: "googlechatPlugin",
+    specifier: "./setup-plugin-api.js",
+    exportName: "googlechatSetupPlugin",
   },
   secrets: {
-    specifier: "./src/secret-contract.js",
+    specifier: "./secret-contract-api.js",
     exportName: "channelSecrets",
   },
 });

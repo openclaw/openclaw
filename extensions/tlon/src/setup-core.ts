@@ -10,7 +10,11 @@ import {
   type ChannelSetupWizard,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/setup";
-import { buildTlonAccountFields } from "./account-fields.js";
+import {
+  normalizeOptionalString,
+  normalizeStringifiedOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
+import { buildTlonAccountFields, type TlonAccountFieldsInput } from "./account-fields.js";
 import { normalizeShip } from "./targets.js";
 import { listTlonAccountIds, resolveTlonAccount, type TlonResolvedAccount } from "./types.js";
 import { validateUrbitBaseUrl } from "./urbit/base-url.js";
@@ -19,16 +23,7 @@ function tlonChannelId() {
   return "tlon" as const;
 }
 
-export type TlonSetupInput = ChannelSetupInput & {
-  ship?: string;
-  url?: string;
-  code?: string;
-  dangerouslyAllowPrivateNetwork?: boolean;
-  groupChannels?: string[];
-  dmAllowlist?: string[];
-  autoDiscoverChannels?: boolean;
-  ownerShip?: string;
-};
+export type TlonSetupInput = ChannelSetupInput & TlonAccountFieldsInput;
 
 function isConfigured(account: TlonResolvedAccount): boolean {
   return Boolean(account.ship && account.url && account.code);
@@ -78,8 +73,10 @@ export function createTlonSetupWizardBase(params: TlonSetupWizardBaseParams): Ch
         message: "Ship name",
         placeholder: "~sampel-palnet",
         currentValue: ({ cfg, accountId }) => resolveTlonAccount(cfg, accountId).ship ?? undefined,
-        validate: ({ value }) => (String(value ?? "").trim() ? undefined : "Required"),
-        normalizeValue: ({ value }) => normalizeShip(String(value).trim()),
+        validate: ({ value }) =>
+          normalizeStringifiedOptionalString(value) ? undefined : "Required",
+        normalizeValue: ({ value }) =>
+          normalizeShip(normalizeStringifiedOptionalString(value) ?? ""),
         applySet: async ({ cfg, accountId, value }) =>
           applyTlonSetupConfig({
             cfg,
@@ -93,13 +90,13 @@ export function createTlonSetupWizardBase(params: TlonSetupWizardBaseParams): Ch
         placeholder: "https://your-ship-host",
         currentValue: ({ cfg, accountId }) => resolveTlonAccount(cfg, accountId).url ?? undefined,
         validate: ({ value }) => {
-          const next = validateUrbitBaseUrl(String(value ?? ""));
+          const next = validateUrbitBaseUrl(value ?? "");
           if (!next.ok) {
             return next.error;
           }
           return undefined;
         },
-        normalizeValue: ({ value }) => String(value).trim(),
+        normalizeValue: ({ value }) => normalizeStringifiedOptionalString(value) ?? "",
         applySet: async ({ cfg, accountId, value }) =>
           applyTlonSetupConfig({
             cfg,
@@ -112,8 +109,9 @@ export function createTlonSetupWizardBase(params: TlonSetupWizardBaseParams): Ch
         message: "Login code",
         placeholder: "lidlut-tabwed-pillex-ridrup",
         currentValue: ({ cfg, accountId }) => resolveTlonAccount(cfg, accountId).code ?? undefined,
-        validate: ({ value }) => (String(value ?? "").trim() ? undefined : "Required"),
-        normalizeValue: ({ value }) => String(value).trim(),
+        validate: ({ value }) =>
+          normalizeStringifiedOptionalString(value) ? undefined : "Required",
+        normalizeValue: ({ value }) => normalizeStringifiedOptionalString(value) ?? "",
         applySet: async ({ cfg, accountId, value }) =>
           applyTlonSetupConfig({
             cfg,
@@ -206,9 +204,9 @@ export const tlonSetupAdapter: ChannelSetupAdapter = {
   validateInput: createSetupInputPresenceValidator({
     validate: ({ cfg, accountId, input }) => {
       const resolved = resolveTlonAccount(cfg, accountId ?? undefined);
-      const ship = input.ship?.trim() || resolved.ship;
-      const url = input.url?.trim() || resolved.url;
-      const code = input.code?.trim() || resolved.code;
+      const ship = normalizeOptionalString(input.ship) || resolved.ship;
+      const url = normalizeOptionalString(input.url) || resolved.url;
+      const code = normalizeOptionalString(input.code) || resolved.code;
       if (!ship) {
         return "Tlon requires --ship.";
       }

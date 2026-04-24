@@ -4,7 +4,7 @@ read_when:
   - Setting up OpenClaw on a Raspberry Pi
   - Running OpenClaw on ARM devices
   - Building a cheap always-on personal AI
-title: "Raspberry Pi (Platform)"
+title: "Raspberry Pi (platform)"
 ---
 
 # OpenClaw on Raspberry Pi
@@ -411,7 +411,7 @@ echo 'wireless-power off' | sudo tee -a /etc/network/interfaces
 
 ---
 
-## See Also
+## Related
 
 - [Linux guide](/platforms/linux) — general Linux setup
 - [DigitalOcean guide](/platforms/digitalocean) — cloud alternative

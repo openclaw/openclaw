@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 import {
   readEmbeddedGatewayTokenForTest,
@@ -14,10 +15,6 @@ let originalIsTTY: boolean | undefined;
 let originalStateDir: string | undefined;
 let originalUpdateInProgress: string | undefined;
 let tempStateDir: string | undefined;
-
-function buildBundledPluginModuleId(pluginId: string, artifactBasename: string): string {
-  return ["..", "..", "extensions", pluginId, artifactBasename].join("/");
-}
 
 function setStdinTty(value: boolean | undefined) {
   try {
@@ -71,10 +68,16 @@ export const resolveOpenClawPackageRoot = vi.fn().mockResolvedValue(null) as unk
 export const runGatewayUpdate = vi
   .fn()
   .mockResolvedValue(createGatewayUpdateResult()) as unknown as MockFn;
+export const collectRelevantDoctorPluginIds = vi.fn(() => []) as unknown as MockFn;
 export const listPluginDoctorLegacyConfigRules = vi.fn(() => []) as unknown as MockFn;
 export const runDoctorHealthContributions = vi.fn(
   defaultRunDoctorHealthContributions,
 ) as unknown as MockFn;
+export const maybeRepairMemoryRecallHealth = vi
+  .fn()
+  .mockResolvedValue(undefined) as unknown as MockFn;
+export const noteMemorySearchHealth = vi.fn().mockResolvedValue(undefined) as unknown as MockFn;
+export const noteMemoryRecallHealth = vi.fn().mockResolvedValue(undefined) as unknown as MockFn;
 export const migrateLegacyConfig = vi.fn((raw: unknown) => ({
   config: raw as Record<string, unknown>,
   changes: ["Moved routing.allowFrom → channels.whatsapp.allowFrom."],
@@ -243,7 +246,9 @@ vi.mock("../agents/skills-status.js", () => ({
 }));
 
 vi.mock("../plugins/loader.js", () => ({
+  isPluginRegistryLoadInFlight: () => false,
   loadOpenClawPlugins: () => createEmptyPluginRegistry(),
+  resolveRuntimePluginRegistry: () => null,
 }));
 
 vi.mock("../config/config.js", async () => {
@@ -255,6 +260,16 @@ vi.mock("../config/config.js", async () => {
     readConfigFileSnapshot,
     writeConfigFile,
     migrateLegacyConfig,
+  };
+});
+
+vi.mock("../config/io.js", async () => {
+  const actual = await vi.importActual<typeof import("../config/io.js")>("../config/io.js");
+  return {
+    ...actual,
+    createConfigIO,
+    readConfigFileSnapshot,
+    writeConfigFile,
   };
 });
 
@@ -307,7 +322,7 @@ vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
 
 vi.mock("openclaw/plugin-sdk/provider-model-shared", () => ({
   DEFAULT_CONTEXT_TOKENS: 32768,
-  normalizeProviderId: (value: string) => value.trim().toLowerCase(),
+  normalizeProviderId: (value: string) => normalizeLowercaseStringOrEmpty(value),
 }));
 
 vi.mock("openclaw/plugin-sdk/provider-stream-shared", () => ({
@@ -338,8 +353,27 @@ vi.mock("../flows/doctor-health-contributions.js", () => ({
   runDoctorHealthContributions,
 }));
 
+vi.mock("./doctor-memory-search.js", () => ({
+  maybeRepairMemoryRecallHealth,
+  noteMemorySearchHealth,
+  noteMemoryRecallHealth,
+}));
+
 vi.mock("../plugins/doctor-contract-registry.js", () => ({
+  applyPluginDoctorCompatibilityMigrations: (config: unknown) => ({
+    config,
+    changes: [],
+  }),
+  collectRelevantDoctorPluginIds,
   listPluginDoctorLegacyConfigRules,
+}));
+
+vi.mock("../channels/plugins/doctor-contract-api.js", () => ({
+  loadBundledChannelDoctorContractApi: vi.fn(() => undefined),
+}));
+
+vi.mock("../channels/plugins/bootstrap-registry.js", () => ({
+  getBootstrapChannelPlugin: vi.fn(() => undefined),
 }));
 
 vi.mock("./doctor-bundled-plugin-runtime-deps.js", () => ({
@@ -349,6 +383,16 @@ vi.mock("./doctor-bundled-plugin-runtime-deps.js", () => ({
 vi.mock("../agents/auth-profiles.js", async () => {
   const actual = await vi.importActual<typeof import("../agents/auth-profiles.js")>(
     "../agents/auth-profiles.js",
+  );
+  return {
+    ...actual,
+    ensureAuthProfileStore,
+  };
+});
+
+vi.mock("../agents/auth-profiles/store.js", async () => {
+  const actual = await vi.importActual<typeof import("../agents/auth-profiles/store.js")>(
+    "../agents/auth-profiles/store.js",
   );
   return {
     ...actual,
@@ -374,10 +418,6 @@ vi.mock("../daemon/service.js", () => ({
 vi.mock("../pairing/pairing-store.js", () => ({
   readChannelAllowFromStore: vi.fn().mockResolvedValue([]),
   upsertChannelPairingRequest: vi.fn().mockResolvedValue({ code: "000000", created: false }),
-}));
-
-vi.mock(buildBundledPluginModuleId("telegram", "api.js"), () => ({
-  resolveTelegramToken: vi.fn(() => ({ token: "", source: "none" })),
 }));
 
 vi.mock("../runtime.js", () => ({
@@ -493,6 +533,9 @@ beforeEach(() => {
   runGatewayUpdate.mockReset().mockResolvedValue(createGatewayUpdateResult());
   listPluginDoctorLegacyConfigRules.mockReset().mockReturnValue([]);
   runDoctorHealthContributions.mockReset().mockImplementation(defaultRunDoctorHealthContributions);
+  maybeRepairMemoryRecallHealth.mockReset().mockResolvedValue(undefined);
+  noteMemorySearchHealth.mockReset().mockResolvedValue(undefined);
+  noteMemoryRecallHealth.mockReset().mockResolvedValue(undefined);
   legacyReadConfigFileSnapshot.mockReset().mockResolvedValue(createLegacyConfigSnapshot());
   createConfigIO.mockReset().mockImplementation(() => ({
     readConfigFileSnapshot: legacyReadConfigFileSnapshot,

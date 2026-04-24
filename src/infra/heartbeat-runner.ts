@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -11,7 +12,7 @@ import {
 } from "../agents/agent-scope.js";
 import { appendCronStyleCurrentTimeLine } from "../agents/current-time.js";
 import { resolveEffectiveMessagesConfig } from "../agents/identity.js";
-import { resolveEmbeddedSessionLane } from "../agents/pi-embedded-runner.js";
+import { resolveEmbeddedSessionLane } from "../agents/pi-embedded-runner/lanes.js";
 import { DEFAULT_HEARTBEAT_FILENAME } from "../agents/workspace.js";
 import { resolveHeartbeatReplyPayload } from "../auto-reply/heartbeat-reply-payload.js";
 import {
@@ -26,8 +27,11 @@ import {
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { getChannelPlugin } from "../channels/plugins/index.js";
-import type { ChannelHeartbeatDeps } from "../channels/plugins/types.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type {
+  ChannelHeartbeatDeps,
+  ChannelId,
+  ChannelPlugin,
+} from "../channels/plugins/types.public.js";
 import { loadConfig } from "../config/config.js";
 import {
   canonicalizeMainSessionAlias,
@@ -35,10 +39,16 @@ import {
 } from "../config/sessions/main-session.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { loadSessionStore } from "../config/sessions/store-load.js";
-import { saveSessionStore, updateSessionStore } from "../config/sessions/store.js";
+import {
+  archiveRemovedSessionTranscripts,
+  saveSessionStore,
+  updateSessionStore,
+} from "../config/sessions/store.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveCronSession } from "../cron/isolated-agent/session.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { getActivePluginChannelRegistry } from "../plugins/runtime.js";
 import { getQueueSize } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
 import {
@@ -49,8 +59,12 @@ import {
   toAgentStoreSessionKey,
 } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { escapeRegExp } from "../utils.js";
+import { loadOrCreateDeviceIdentity } from "./device-identity.js";
 import { formatErrorMessage, hasErrnoCode } from "./errors.js";
 import { isWithinActiveHours } from "./heartbeat-active-hours.js";
 import {
@@ -62,16 +76,23 @@ import {
 import { emitHeartbeatEvent, resolveIndicatorType } from "./heartbeat-events.js";
 import { resolveHeartbeatReasonKind } from "./heartbeat-reason.js";
 import {
+  computeNextHeartbeatPhaseDueMs,
+  resolveHeartbeatPhaseMs,
+  resolveNextHeartbeatDueMs,
+} from "./heartbeat-schedule.js";
+import {
   isHeartbeatEnabledForAgent,
   resolveHeartbeatIntervalMs,
   resolveHeartbeatSummaryForAgent,
   type HeartbeatSummary,
 } from "./heartbeat-summary.js";
+import { createHeartbeatTypingCallbacks } from "./heartbeat-typing.js";
 import { resolveHeartbeatVisibility } from "./heartbeat-visibility.js";
 import {
   areHeartbeatsEnabled,
   type HeartbeatRunResult,
   type HeartbeatWakeHandler,
+  type HeartbeatWakeRequest,
   requestHeartbeatNow,
   setHeartbeatsEnabled,
   setHeartbeatWakeHandler,
@@ -83,7 +104,11 @@ import {
   resolveHeartbeatDeliveryTarget,
   resolveHeartbeatSenderContext,
 } from "./outbound/targets.js";
-import { peekSystemEventEntries, resolveSystemEventDeliveryContext } from "./system-events.js";
+import {
+  consumeSystemEventEntries,
+  peekSystemEventEntries,
+  resolveSystemEventDeliveryContext,
+} from "./system-events.js";
 
 export type HeartbeatDeps = OutboundSendDeps &
   ChannelHeartbeatDeps & {
@@ -100,6 +125,13 @@ let heartbeatRunnerRuntimePromise: Promise<typeof import("./heartbeat-runner.run
 function loadHeartbeatRunnerRuntime() {
   heartbeatRunnerRuntimePromise ??= import("./heartbeat-runner.runtime.js");
   return heartbeatRunnerRuntimePromise;
+}
+
+function resolveHeartbeatChannelPlugin(channel: string): ChannelPlugin | undefined {
+  const activePlugin = getActivePluginChannelRegistry()?.channels.find(
+    (entry) => entry.plugin.id === channel,
+  )?.plugin;
+  return activePlugin ?? getChannelPlugin(channel as ChannelId);
 }
 
 export { areHeartbeatsEnabled, setHeartbeatsEnabled };
@@ -122,7 +154,7 @@ type HeartbeatAgentState = {
   agentId: string;
   heartbeat?: HeartbeatConfig;
   intervalMs: number;
-  lastRunMs?: number;
+  phaseMs: number;
   nextDueMs: number;
 };
 
@@ -130,6 +162,22 @@ export type HeartbeatRunner = {
   stop: () => void;
   updateConfig: (cfg: OpenClawConfig) => void;
 };
+
+function resolveHeartbeatSchedulerSeed(explicitSeed?: string) {
+  const normalized = normalizeOptionalString(explicitSeed);
+  if (normalized) {
+    return normalized;
+  }
+  try {
+    return loadOrCreateDeviceIdentity().deviceId;
+  } catch {
+    return createHash("sha256")
+      .update(process.env.HOME ?? "")
+      .update("\0")
+      .update(process.cwd())
+      .digest("hex");
+  }
+}
 
 function hasExplicitHeartbeatAgents(cfg: OpenClawConfig) {
   const list = cfg.agents?.list ?? [];
@@ -177,6 +225,21 @@ function resolveHeartbeatAckMaxChars(cfg: OpenClawConfig, heartbeat?: HeartbeatC
       cfg.agents?.defaults?.heartbeat?.ackMaxChars ??
       DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
   );
+}
+
+function isHeartbeatTypingEnabled(params: { cfg: OpenClawConfig; hasChatDelivery: boolean }) {
+  if (!params.hasChatDelivery) {
+    return false;
+  }
+  const agentCfg = params.cfg.agents?.defaults;
+  const typingMode = params.cfg.session?.typingMode ?? agentCfg?.typingMode;
+  return typingMode !== "never";
+}
+
+function resolveHeartbeatTypingIntervalSeconds(cfg: OpenClawConfig) {
+  const agentCfg = cfg.agents?.defaults;
+  const configured = agentCfg?.typingIntervalSeconds ?? cfg.session?.typingIntervalSeconds;
+  return typeof configured === "number" && configured > 0 ? configured : undefined;
 }
 
 function resolveHeartbeatSession(
@@ -257,7 +320,7 @@ function resolveHeartbeatSession(
     };
   }
 
-  const normalized = trimmed.toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(trimmed);
   if (normalized === "main" || normalized === "global") {
     return {
       sessionKey: mainSessionKey,
@@ -307,6 +370,68 @@ function resolveHeartbeatSession(
     entry: mainEntry,
     suppressOriginatingContext: false,
   };
+}
+
+function resolveIsolatedHeartbeatSessionKey(params: {
+  sessionKey: string;
+  configuredSessionKey: string;
+  sessionEntry?: { heartbeatIsolatedBaseSessionKey?: string };
+}) {
+  const storedBaseSessionKey = params.sessionEntry?.heartbeatIsolatedBaseSessionKey?.trim();
+  if (storedBaseSessionKey) {
+    const suffix = params.sessionKey.slice(storedBaseSessionKey.length);
+    if (
+      params.sessionKey.startsWith(storedBaseSessionKey) &&
+      suffix.length > 0 &&
+      /^(:heartbeat)+$/.test(suffix)
+    ) {
+      return {
+        isolatedSessionKey: `${storedBaseSessionKey}:heartbeat`,
+        isolatedBaseSessionKey: storedBaseSessionKey,
+      };
+    }
+  }
+
+  // Collapse repeated `:heartbeat` suffixes introduced by wake-triggered re-entry.
+  // The guard on configuredSessionKey ensures we do not strip a legitimate single
+  // `:heartbeat` suffix that is part of the user-configured base key itself
+  // (e.g. heartbeat.session: "alerts:heartbeat"). When the configured key already
+  // ends with `:heartbeat`, a forced wake passes `configuredKey:heartbeat` which
+  // must be treated as a new base rather than an existing isolated key.
+  const configuredSuffix = params.sessionKey.slice(params.configuredSessionKey.length);
+  if (
+    params.sessionKey.startsWith(params.configuredSessionKey) &&
+    /^(:heartbeat)+$/.test(configuredSuffix) &&
+    !params.configuredSessionKey.endsWith(":heartbeat")
+  ) {
+    return {
+      isolatedSessionKey: `${params.configuredSessionKey}:heartbeat`,
+      isolatedBaseSessionKey: params.configuredSessionKey,
+    };
+  }
+  return {
+    isolatedSessionKey: `${params.sessionKey}:heartbeat`,
+    isolatedBaseSessionKey: params.sessionKey,
+  };
+}
+
+function resolveStaleHeartbeatIsolatedSessionKey(params: {
+  sessionKey: string;
+  isolatedSessionKey: string;
+  isolatedBaseSessionKey: string;
+}) {
+  if (params.sessionKey === params.isolatedSessionKey) {
+    return undefined;
+  }
+  const suffix = params.sessionKey.slice(params.isolatedBaseSessionKey.length);
+  if (
+    params.sessionKey.startsWith(params.isolatedBaseSessionKey) &&
+    suffix.length > 0 &&
+    /^(:heartbeat)+$/.test(suffix)
+  ) {
+    return params.sessionKey;
+  }
+  return undefined;
 }
 
 function resolveHeartbeatReasoningPayloads(
@@ -441,8 +566,28 @@ async function resolveHeartbeatPreflight(params: {
   const hasTaggedCronEvents = pendingEventEntries.some((event) =>
     event.contextKey?.startsWith("cron:"),
   );
+  // Wake-triggered runs should only inspect pending events when preflight peeks
+  // the same queue that the run itself will execute/drain.
+  const shouldInspectWakePendingEvents = (() => {
+    if (!reasonFlags.isWakeReason) {
+      return false;
+    }
+    if (params.heartbeat?.isolatedSession !== true) {
+      return true;
+    }
+    const configuredSession = resolveHeartbeatSession(params.cfg, params.agentId, params.heartbeat);
+    const { isolatedSessionKey } = resolveIsolatedHeartbeatSessionKey({
+      sessionKey: session.sessionKey,
+      configuredSessionKey: configuredSession.sessionKey,
+      sessionEntry: session.entry,
+    });
+    return isolatedSessionKey === session.sessionKey;
+  })();
   const shouldInspectPendingEvents =
-    reasonFlags.isExecEventReason || reasonFlags.isCronEventReason || hasTaggedCronEvents;
+    reasonFlags.isExecEventReason ||
+    reasonFlags.isCronEventReason ||
+    shouldInspectWakePendingEvents ||
+    hasTaggedCronEvents;
   const shouldBypassFileGates =
     reasonFlags.isExecEventReason ||
     reasonFlags.isCronEventReason ||
@@ -709,23 +854,84 @@ export async function runHeartbeatOnce(opts: {
 
   // If no tasks are due, skip heartbeat entirely
   if (prompt === null) {
+    // Wake-triggered events should stay queued when the run short-circuits:
+    // no reply turn ran, so there is nothing that actually consumed that wake payload.
+    const shouldConsumeInspectedEvents =
+      !preflight.isWakeReason && preflight.shouldInspectPendingEvents;
+    if (shouldConsumeInspectedEvents && preflight.pendingEventEntries.length > 0) {
+      consumeSystemEventEntries(sessionKey, preflight.pendingEventEntries);
+    }
     return { status: "skipped", reason: "no-tasks-due" };
   }
 
   let runSessionKey = sessionKey;
   if (useIsolatedSession) {
-    const isolatedKey = `${sessionKey}:heartbeat`;
+    const configuredSession = resolveHeartbeatSession(cfg, agentId, heartbeat);
+    // Collapse only the repeated `:heartbeat` suffixes introduced by wake-triggered
+    // re-entry for heartbeat-created isolated sessions. Real session keys that
+    // happen to end with `:heartbeat` still get a distinct isolated sibling.
+    const { isolatedSessionKey, isolatedBaseSessionKey } = resolveIsolatedHeartbeatSessionKey({
+      sessionKey,
+      configuredSessionKey: configuredSession.sessionKey,
+      sessionEntry: entry,
+    });
     const cronSession = resolveCronSession({
       cfg,
-      sessionKey: isolatedKey,
+      sessionKey: isolatedSessionKey,
       agentId,
       nowMs: startedAt,
       forceNew: true,
     });
-    cronSession.store[isolatedKey] = cronSession.sessionEntry;
+    const staleIsolatedSessionKey = resolveStaleHeartbeatIsolatedSessionKey({
+      sessionKey,
+      isolatedSessionKey,
+      isolatedBaseSessionKey,
+    });
+    const removedSessionFiles = new Map<string, string | undefined>();
+    if (staleIsolatedSessionKey) {
+      const staleEntry = cronSession.store[staleIsolatedSessionKey];
+      if (staleEntry?.sessionId) {
+        removedSessionFiles.set(staleEntry.sessionId, staleEntry.sessionFile);
+      }
+      delete cronSession.store[staleIsolatedSessionKey];
+    }
+    cronSession.sessionEntry.heartbeatIsolatedBaseSessionKey = isolatedBaseSessionKey;
+    cronSession.store[isolatedSessionKey] = cronSession.sessionEntry;
     await saveSessionStore(cronSession.storePath, cronSession.store);
-    runSessionKey = isolatedKey;
+    if (removedSessionFiles.size > 0) {
+      try {
+        const referencedSessionIds = new Set(
+          Object.values(cronSession.store)
+            .map((sessionEntry) => sessionEntry?.sessionId)
+            .filter((sessionId): sessionId is string => Boolean(sessionId)),
+        );
+        await archiveRemovedSessionTranscripts({
+          removedSessionFiles,
+          referencedSessionIds,
+          storePath: cronSession.storePath,
+          reason: "deleted",
+          restrictToStoreDir: true,
+        });
+      } catch (err) {
+        log.warn("heartbeat: failed to archive stale isolated session transcript", {
+          err: String(err),
+          sessionKey: staleIsolatedSessionKey,
+        });
+      }
+    }
+    runSessionKey = isolatedSessionKey;
   }
+  const activeSessionPendingEventEntries =
+    runSessionKey === sessionKey
+      ? preflight.pendingEventEntries
+      : peekSystemEventEntries(runSessionKey);
+  const hasUntrustedInspectedEvents =
+    preflight.shouldInspectPendingEvents &&
+    preflight.pendingEventEntries.some((event) => event.trusted === false);
+  const hasUntrustedActiveSessionEvents = activeSessionPendingEventEntries.some(
+    (event) => event.trusted === false,
+  );
+  const hasUntrustedPendingEvents = hasUntrustedInspectedEvents || hasUntrustedActiveSessionEvents;
 
   // Update task last run times AFTER successful heartbeat completion
   const updateTaskTimestamps = async () => {
@@ -757,6 +963,13 @@ export async function runHeartbeatOnce(opts: {
     await saveSessionStore(storePath, store);
   };
 
+  const consumeInspectedSystemEvents = () => {
+    if (!preflight.shouldInspectPendingEvents || preflight.pendingEventEntries.length === 0) {
+      return;
+    }
+    consumeSystemEventEntries(sessionKey, preflight.pendingEventEntries);
+  };
+
   const ctx = {
     Body: appendCronStyleCurrentTimeLine(prompt, cfg, startedAt),
     From: sender,
@@ -768,7 +981,7 @@ export async function runHeartbeatOnce(opts: {
     MessageThreadId: delivery.threadId,
     Provider: hasExecCompletion ? "exec-event" : hasCronEvents ? "cron-event" : "heartbeat",
     SessionKey: runSessionKey,
-    ForceSenderIsOwnerFalse: hasExecCompletion,
+    ForceSenderIsOwnerFalse: hasExecCompletion || hasUntrustedPendingEvents,
   };
   if (!visibility.showAlerts && !visibility.showOk && !visibility.useIndicator) {
     emitHeartbeatEvent({
@@ -790,11 +1003,39 @@ export async function runHeartbeatOnce(opts: {
   const canAttemptHeartbeatOk = Boolean(
     visibility.showOk && delivery.channel !== "none" && delivery.to,
   );
+  const hasChatDelivery = Boolean(
+    delivery.channel !== "none" && delivery.to && (visibility.showAlerts || visibility.showOk),
+  );
+  const heartbeatTypingIntervalSeconds = resolveHeartbeatTypingIntervalSeconds(cfg);
+  const heartbeatChannelPlugin =
+    delivery.channel !== "none" ? resolveHeartbeatChannelPlugin(delivery.channel) : undefined;
+  const heartbeatTyping =
+    delivery.channel !== "none" &&
+    isHeartbeatTypingEnabled({
+      cfg,
+      hasChatDelivery,
+    })
+      ? createHeartbeatTypingCallbacks({
+          cfg,
+          target: {
+            channel: delivery.channel,
+            ...(delivery.to !== undefined ? { to: delivery.to } : {}),
+            ...(delivery.accountId !== undefined ? { accountId: delivery.accountId } : {}),
+            ...(delivery.threadId !== undefined ? { threadId: delivery.threadId } : {}),
+          },
+          ...(heartbeatChannelPlugin ? { plugin: heartbeatChannelPlugin } : {}),
+          ...(opts.deps ? { deps: opts.deps } : {}),
+          ...(heartbeatTypingIntervalSeconds !== undefined
+            ? { typingIntervalSeconds: heartbeatTypingIntervalSeconds }
+            : {}),
+          log,
+        })
+      : undefined;
   const maybeSendHeartbeatOk = async () => {
     if (!canAttemptHeartbeatOk || delivery.channel === "none" || !delivery.to) {
       return false;
     }
-    const heartbeatPlugin = getChannelPlugin(delivery.channel);
+    const heartbeatPlugin = resolveHeartbeatChannelPlugin(delivery.channel);
     if (heartbeatPlugin?.heartbeat?.checkReady) {
       const readiness = await heartbeatPlugin.heartbeat.checkReady({
         cfg,
@@ -819,18 +1060,21 @@ export async function runHeartbeatOnce(opts: {
   };
 
   try {
+    await heartbeatTyping?.onReplyStart();
     const heartbeatModelOverride = normalizeOptionalString(heartbeat?.model);
     const suppressToolErrorWarnings = heartbeat?.suppressToolErrorWarnings === true;
+    const timeoutOverrideSeconds =
+      typeof heartbeat?.timeoutSeconds === "number" ? heartbeat.timeoutSeconds : undefined;
     const bootstrapContextMode: "lightweight" | undefined =
       heartbeat?.lightContext === true ? "lightweight" : undefined;
-    const replyOpts = heartbeatModelOverride
-      ? {
-          isHeartbeat: true,
-          heartbeatModelOverride,
-          suppressToolErrorWarnings,
-          bootstrapContextMode,
-        }
-      : { isHeartbeat: true, suppressToolErrorWarnings, bootstrapContextMode };
+    const replyOpts = {
+      isHeartbeat: true,
+      ...(heartbeatModelOverride ? { heartbeatModelOverride } : {}),
+      suppressToolErrorWarnings,
+      // Heartbeat timeout is a per-run override so user turns keep the global default.
+      timeoutOverrideSeconds,
+      bootstrapContextMode,
+    };
     const getReplyFromConfig =
       opts.deps?.getReplyFromConfig ?? (await loadHeartbeatRunnerRuntime()).getReplyFromConfig;
     const replyResult = await getReplyFromConfig(ctx, replyOpts, cfg);
@@ -858,6 +1102,7 @@ export async function runHeartbeatOnce(opts: {
         indicatorType: visibility.useIndicator ? resolveIndicatorType("ok-empty") : undefined,
       });
       await updateTaskTimestamps();
+      consumeInspectedSystemEvents();
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 
@@ -894,6 +1139,7 @@ export async function runHeartbeatOnce(opts: {
         indicatorType: visibility.useIndicator ? resolveIndicatorType("ok-token") : undefined,
       });
       await updateTaskTimestamps();
+      consumeInspectedSystemEvents();
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 
@@ -930,6 +1176,7 @@ export async function runHeartbeatOnce(opts: {
         accountId: delivery.accountId,
       });
       await updateTaskTimestamps();
+      consumeInspectedSystemEvents();
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 
@@ -951,6 +1198,7 @@ export async function runHeartbeatOnce(opts: {
         accountId: delivery.accountId,
       });
       await updateTaskTimestamps();
+      consumeInspectedSystemEvents();
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 
@@ -971,11 +1219,12 @@ export async function runHeartbeatOnce(opts: {
         accountId: delivery.accountId,
         indicatorType: visibility.useIndicator ? resolveIndicatorType("sent") : undefined,
       });
+      consumeInspectedSystemEvents();
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 
     const deliveryAccountId = delivery.accountId;
-    const heartbeatPlugin = getChannelPlugin(delivery.channel);
+    const heartbeatPlugin = resolveHeartbeatChannelPlugin(delivery.channel);
     if (heartbeatPlugin?.heartbeat?.checkReady) {
       const readiness = await heartbeatPlugin.heartbeat.checkReady({
         cfg,
@@ -1046,6 +1295,7 @@ export async function runHeartbeatOnce(opts: {
       indicatorType: visibility.useIndicator ? resolveIndicatorType("sent") : undefined,
     });
     await updateTaskTimestamps();
+    consumeInspectedSystemEvents();
     return { status: "ran", durationMs: Date.now() - startedAt };
   } catch (err) {
     const reason = formatErrorMessage(err);
@@ -1059,6 +1309,8 @@ export async function runHeartbeatOnce(opts: {
     });
     log.error(`heartbeat failed: ${reason}`, { error: reason });
     return { status: "failed", reason };
+  } finally {
+    heartbeatTyping?.onCleanup?.();
   }
 }
 
@@ -1067,31 +1319,50 @@ export function startHeartbeatRunner(opts: {
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
   runOnce?: typeof runHeartbeatOnce;
+  stableSchedulerSeed?: string;
 }): HeartbeatRunner {
   const runtime = opts.runtime ?? defaultRuntime;
   const runOnce = opts.runOnce ?? runHeartbeatOnce;
   const state = {
     cfg: opts.cfg ?? loadConfig(),
     runtime,
+    schedulerSeed: resolveHeartbeatSchedulerSeed(opts.stableSchedulerSeed),
     agents: new Map<string, HeartbeatAgentState>(),
     timer: null as NodeJS.Timeout | null,
     stopped: false,
   };
   let initialized = false;
 
-  const resolveNextDue = (now: number, intervalMs: number, prevState?: HeartbeatAgentState) => {
-    if (typeof prevState?.lastRunMs === "number") {
-      return prevState.lastRunMs + intervalMs;
-    }
-    if (prevState && prevState.intervalMs === intervalMs && prevState.nextDueMs > now) {
-      return prevState.nextDueMs;
-    }
-    return now + intervalMs;
-  };
+  const resolveNextDue = (
+    now: number,
+    intervalMs: number,
+    phaseMs: number,
+    prevState?: HeartbeatAgentState,
+  ) =>
+    resolveNextHeartbeatDueMs({
+      nowMs: now,
+      intervalMs,
+      phaseMs,
+      prev: prevState
+        ? {
+            intervalMs: prevState.intervalMs,
+            phaseMs: prevState.phaseMs,
+            nextDueMs: prevState.nextDueMs,
+          }
+        : undefined,
+    });
 
-  const advanceAgentSchedule = (agent: HeartbeatAgentState, now: number) => {
-    agent.lastRunMs = now;
-    agent.nextDueMs = now + agent.intervalMs;
+  const advanceAgentSchedule = (agent: HeartbeatAgentState, now: number, reason?: string) => {
+    agent.nextDueMs =
+      reason === "interval"
+        ? computeNextHeartbeatPhaseDueMs({
+            nowMs: now,
+            intervalMs: agent.intervalMs,
+            phaseMs: agent.phaseMs,
+          })
+        : // Targeted and action-driven wakes still count as a fresh heartbeat run
+          // for cooldown purposes, so keep the existing now + interval behavior.
+          now + agent.intervalMs;
   };
 
   const scheduleNext = () => {
@@ -1137,14 +1408,19 @@ export function startHeartbeatRunner(opts: {
       if (!intervalMs) {
         continue;
       }
+      const phaseMs = resolveHeartbeatPhaseMs({
+        schedulerSeed: state.schedulerSeed,
+        agentId: agent.agentId,
+        intervalMs,
+      });
       intervals.push(intervalMs);
       const prevState = prevAgents.get(agent.agentId);
-      const nextDueMs = resolveNextDue(now, intervalMs, prevState);
+      const nextDueMs = resolveNextDue(now, intervalMs, phaseMs, prevState);
       nextAgents.set(agent.agentId, {
         agentId: agent.agentId,
         heartbeat: agent.heartbeat,
         intervalMs,
-        lastRunMs: prevState?.lastRunMs,
+        phaseMs,
         nextDueMs,
       });
     }
@@ -1193,6 +1469,9 @@ export function startHeartbeatRunner(opts: {
     const reason = params?.reason;
     const requestedAgentId = params?.agentId ? normalizeAgentId(params.agentId) : undefined;
     const requestedSessionKey = normalizeOptionalString(params?.sessionKey);
+    const requestedHeartbeat = params?.heartbeat;
+    const resolveRequestedHeartbeat = (heartbeat?: HeartbeatConfig) =>
+      requestedHeartbeat ? { ...heartbeat, ...requestedHeartbeat } : heartbeat;
     const isInterval = reason === "interval";
     const startedAt = Date.now();
     const now = startedAt;
@@ -1212,13 +1491,13 @@ export function startHeartbeatRunner(opts: {
           const res = await runOnce({
             cfg: state.cfg,
             agentId: targetAgent.agentId,
-            heartbeat: targetAgent.heartbeat,
+            heartbeat: resolveRequestedHeartbeat(targetAgent.heartbeat),
             reason,
             sessionKey: requestedSessionKey,
             deps: { runtime: state.runtime },
           });
           if (res.status !== "skipped" || res.reason !== "disabled") {
-            advanceAgentSchedule(targetAgent, now);
+            advanceAgentSchedule(targetAgent, now, reason);
           }
           return res.status === "ran" ? { status: "ran", durationMs: Date.now() - startedAt } : res;
         } catch (err) {
@@ -1226,7 +1505,7 @@ export function startHeartbeatRunner(opts: {
           log.error(`heartbeat runner: targeted runOnce threw unexpectedly: ${errMsg}`, {
             error: errMsg,
           });
-          advanceAgentSchedule(targetAgent, now);
+          advanceAgentSchedule(targetAgent, now, reason);
           return { status: "failed", reason: errMsg };
         }
       }
@@ -1248,7 +1527,7 @@ export function startHeartbeatRunner(opts: {
         } catch (err) {
           const errMsg = formatErrorMessage(err);
           log.error(`heartbeat runner: runOnce threw unexpectedly: ${errMsg}`, { error: errMsg });
-          advanceAgentSchedule(agent, now);
+          advanceAgentSchedule(agent, now, reason);
           continue;
         }
         if (res.status === "skipped" && res.reason === "requests-in-flight") {
@@ -1260,7 +1539,7 @@ export function startHeartbeatRunner(opts: {
           return res;
         }
         if (res.status !== "skipped" || res.reason !== "disabled") {
-          advanceAgentSchedule(agent, now);
+          advanceAgentSchedule(agent, now, reason);
         }
         if (res.status === "ran") {
           ran = true;
@@ -1280,11 +1559,12 @@ export function startHeartbeatRunner(opts: {
     }
   };
 
-  const wakeHandler: HeartbeatWakeHandler = async (params) =>
+  const wakeHandler: HeartbeatWakeHandler = async (params: HeartbeatWakeRequest) =>
     run({
       reason: params.reason,
       agentId: params.agentId,
       sessionKey: params.sessionKey,
+      heartbeat: params.heartbeat,
     });
   const disposeWakeHandler = setHeartbeatWakeHandler(wakeHandler);
   updateConfig(state.cfg);

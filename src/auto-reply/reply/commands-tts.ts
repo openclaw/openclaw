@@ -1,5 +1,8 @@
 import { logVerbose } from "../../globals.js";
-import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import {
   canonicalizeSpeechProviderId,
   getSpeechProvider,
@@ -47,7 +50,10 @@ function parseTtsCommand(normalized: string): ParsedTtsCommand | null {
     return { action: "status", args: "" };
   }
   const [action, ...tail] = rest.split(/\s+/);
-  return { action: action.toLowerCase(), args: tail.join(" ").trim() };
+  return {
+    action: normalizeOptionalLowercaseString(action) ?? "",
+    args: normalizeOptionalString(tail.join(" ")) ?? "",
+  };
 }
 
 function formatAttemptDetails(attempts: TtsAttemptDetail[] | undefined): string | undefined {
@@ -161,6 +167,7 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
       const payload: ReplyPayload = {
         mediaUrl: result.audioPath,
         audioAsVoice: result.voiceCompatible === true,
+        trustedLocalMedia: true,
       };
       return { shouldContinue: false, reply: payload };
     }

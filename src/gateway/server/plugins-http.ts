@@ -3,9 +3,11 @@ import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginRegistry } from "../../plugins/registry.js";
 import { resolveActivePluginHttpRouteRegistry } from "../../plugins/runtime.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
+import type { AuthorizedGatewayHttpRequest } from "../http-utils.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../protocol/client-info.js";
 import { PROTOCOL_VERSION } from "../protocol/index.js";
 import type { GatewayRequestOptions } from "../server-methods/types.js";
+import { resolvePluginRouteRuntimeOperatorScopes } from "./plugin-route-runtime-scopes.js";
 import {
   resolvePluginRoutePathContext,
   type PluginRoutePathContext,
@@ -47,6 +49,7 @@ function createPluginRouteRuntimeClient(
 
 export type PluginRouteDispatchContext = {
   gatewayAuthSatisfied?: boolean;
+  gatewayRequestAuth?: AuthorizedGatewayHttpRequest;
   gatewayRequestOperatorScopes?: readonly string[];
 };
 
@@ -80,46 +83,72 @@ export function createGatewayPluginRequestHandler(params: {
       return false;
     }
     const requiresGatewayAuth = matchedPluginRoutesRequireGatewayAuth(matchedRoutes);
-    let runtimeScopes: readonly string[] = [];
-    if (requiresGatewayAuth) {
-      if (dispatchContext?.gatewayAuthSatisfied !== true) {
-        log.warn(`plugin http route blocked without gateway auth (${pathContext.canonicalPath})`);
-        return false;
+    if (requiresGatewayAuth && dispatchContext?.gatewayAuthSatisfied !== true) {
+      log.warn(`plugin http route blocked without gateway auth (${pathContext.canonicalPath})`);
+      return false;
+    }
+    const gatewayRequestAuth = dispatchContext?.gatewayRequestAuth;
+    const gatewayRequestOperatorScopes = dispatchContext?.gatewayRequestOperatorScopes;
+
+    // Fail closed before invoking any handlers when matched gateway routes are
+    // missing the runtime auth/scope context they require.
+    for (const route of matchedRoutes) {
+      if (route.auth !== "gateway") {
+        continue;
       }
-      if (dispatchContext.gatewayRequestOperatorScopes === undefined) {
+      if (route.gatewayRuntimeScopeSurface === "trusted-operator") {
+        if (!gatewayRequestAuth) {
+          log.warn(
+            `plugin http route blocked without caller auth context (${pathContext.canonicalPath})`,
+          );
+          return false;
+        }
+        continue;
+      }
+      if (gatewayRequestOperatorScopes === undefined) {
         log.warn(
           `plugin http route blocked without caller scope context (${pathContext.canonicalPath})`,
         );
         return false;
       }
-      runtimeScopes = dispatchContext.gatewayRequestOperatorScopes;
     }
-    const runtimeClient = createPluginRouteRuntimeClient(runtimeScopes);
 
-    return await withPluginRuntimeGatewayRequestScope(
-      {
-        client: runtimeClient,
-        isWebchatConnect: () => false,
-      },
-      async () => {
-        for (const route of matchedRoutes) {
-          try {
-            const handled = await route.handler(req, res);
-            if (handled !== false) {
-              return true;
-            }
-          } catch (err) {
-            log.warn(`plugin http route failed (${route.pluginId ?? "unknown"}): ${String(err)}`);
-            if (!res.headersSent) {
-              res.statusCode = 500;
-              res.setHeader("Content-Type", "text/plain; charset=utf-8");
-              res.end("Internal Server Error");
-            }
-            return true;
-          }
+    for (const route of matchedRoutes) {
+      let runtimeScopes: readonly string[] = [];
+      if (route.auth === "gateway") {
+        if (route.gatewayRuntimeScopeSurface === "trusted-operator") {
+          runtimeScopes = resolvePluginRouteRuntimeOperatorScopes(
+            req,
+            gatewayRequestAuth!,
+            "trusted-operator",
+          );
+        } else {
+          runtimeScopes = gatewayRequestOperatorScopes!;
         }
-        return false;
-      },
-    );
+      }
+
+      const runtimeClient = createPluginRouteRuntimeClient(runtimeScopes);
+      try {
+        const handled = await withPluginRuntimeGatewayRequestScope(
+          {
+            client: runtimeClient,
+            isWebchatConnect: () => false,
+          },
+          async () => route.handler(req, res),
+        );
+        if (handled !== false) {
+          return true;
+        }
+      } catch (err) {
+        log.warn(`plugin http route failed (${route.pluginId ?? "unknown"}): ${String(err)}`);
+        if (!res.headersSent) {
+          res.statusCode = 500;
+          res.setHeader("Content-Type", "text/plain; charset=utf-8");
+          res.end("Internal Server Error");
+        }
+        return true;
+      }
+    }
+    return false;
   };
 }

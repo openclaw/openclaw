@@ -1,7 +1,10 @@
 import { createHmac } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { safeEqualSecret } from "openclaw/plugin-sdk/browser-security-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeOptionalString,
+  normalizeStringifiedOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import { getMattermostRuntime } from "../runtime.js";
 import { updateMattermostPost, type MattermostClient, type MattermostPost } from "./client.js";
 import { isTrustedProxyAddress, resolveClientIp, type OpenClawConfig } from "./runtime-api.js";
@@ -320,8 +323,8 @@ export function buildButtonProps(params: {
 
   const buttons = rawButtons
     .map((btn) => ({
-      id: String(btn.id ?? btn.callback_data ?? "").trim(),
-      name: String(btn.text ?? btn.name ?? btn.label ?? "").trim(),
+      id: normalizeStringifiedOptionalString(btn.id ?? btn.callback_data) ?? "",
+      name: normalizeStringifiedOptionalString(btn.text ?? btn.name ?? btn.label) ?? "",
       style: btn.style ?? "default",
       context:
         typeof btn.context === "object" && btn.context !== null

@@ -1,15 +1,16 @@
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { isAcpSessionKey } from "../../sessions/session-key-utils.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import {
   createRunningTaskRun,
   completeTaskRunByRunId,
   failTaskRunByRunId,
   startTaskRunByRunId,
-} from "../../tasks/task-executor.js";
+} from "../../tasks/detached-task-runtime.js";
 import type { DeliveryContext } from "../../utils/delivery-context.js";
 import {
   AcpRuntimeError,
@@ -310,7 +311,10 @@ export class AcpSessionManager {
     return await this.withSessionActor(sessionKey, async () => {
       const backend = this.deps.requireRuntimeBackend(input.backendId || input.cfg.acp?.backend);
       const runtime = backend.runtime;
-      const initialRuntimeOptions = validateRuntimeOptionPatch({ cwd: input.cwd });
+      const initialRuntimeOptions = validateRuntimeOptionPatch({
+        ...input.runtimeOptions,
+        ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
+      });
       const requestedCwd = initialRuntimeOptions.cwd;
       this.enforceConcurrentSessionLimit({
         cfg: input.cfg,
@@ -1581,13 +1585,12 @@ export class AcpSessionManager {
     if (!status) {
       return false;
     }
-    const detailsStatus =
-      typeof status.details?.status === "string" ? status.details.status.trim().toLowerCase() : "";
+    const detailsStatus = normalizeLowercaseStringOrEmpty(status.details?.status);
     if (detailsStatus === "dead" || detailsStatus === "no-session") {
       return true;
     }
     const summaryMatch = status.summary?.match(/\bstatus=([^\s]+)/i);
-    const summaryStatus = normalizeText(summaryMatch?.[1])?.toLowerCase() ?? "";
+    const summaryStatus = normalizeLowercaseStringOrEmpty(summaryMatch?.[1]);
     return summaryStatus === "dead" || summaryStatus === "no-session";
   }
 

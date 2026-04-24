@@ -7,8 +7,12 @@ import {
 } from "../../../plugins/memory-state.js";
 import {
   type AttemptContextEngine,
+  buildLoopPromptCacheInfo,
   assembleAttemptContextEngine,
+  buildContextEnginePromptCacheInfo,
+  findCurrentAttemptAssistantMessage,
   finalizeAttemptContextEngineTurn,
+  resolvePromptCacheTouchTimestamp,
   runAttemptContextEngineBootstrap,
 } from "./attempt.context-engine-helpers.js";
 import {
@@ -28,6 +32,7 @@ const embeddedSessionId = "embedded-session";
 const sessionFile = "/tmp/session.jsonl";
 const seedMessage = { role: "user", content: "seed", timestamp: 1 } as AgentMessage;
 const doneMessage = { role: "assistant", content: "done", timestamp: 2 } as unknown as AgentMessage;
+type AfterTurnPromptCacheCall = { runtimeContext?: { promptCache?: Record<string, unknown> } };
 
 function createTestContextEngine(params: Partial<AttemptContextEngine>): AttemptContextEngine {
   return {
@@ -106,9 +111,8 @@ async function finalizeTurn(
 }
 
 describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
-  const sessionKey = "agent:main:discord:channel:test-ctx-engine";
+  const sessionKey = "agent:main:guildchat:channel:test-ctx-engine";
   const tempPaths: string[] = [];
-
   beforeEach(() => {
     resetEmbeddedAttemptHarness();
     clearMemoryPluginState();
@@ -116,8 +120,9 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   });
 
   afterEach(async () => {
-    clearMemoryPluginState();
     await cleanupTempPaths(tempPaths);
+    clearMemoryPluginState();
+    vi.restoreAllMocks();
   });
 
   it("forwards sessionKey to bootstrap, assemble, and afterTurn", async () => {
@@ -306,6 +311,177 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     );
   });
 
+  it("builds prompt-cache retention, last-call usage, and cache-touch metadata", () => {
+    expect(
+      buildContextEnginePromptCacheInfo({
+        retention: "short",
+        lastCallUsage: {
+          input: 10,
+          output: 5,
+          cacheRead: 40,
+          cacheWrite: 2,
+          total: 57,
+        },
+        lastCacheTouchAt: 123,
+      }),
+    ).toEqual(
+      expect.objectContaining({
+        retention: "short",
+        lastCallUsage: {
+          input: 10,
+          output: 5,
+          cacheRead: 40,
+          cacheWrite: 2,
+          total: 57,
+        },
+        lastCacheTouchAt: 123,
+      }),
+    );
+  });
+
+  it("omits prompt-cache metadata when no cache data is available", () => {
+    expect(buildContextEnginePromptCacheInfo({})).toBeUndefined();
+  });
+
+  it("does not reuse a prior turn's usage when the current attempt has no assistant", () => {
+    const priorAssistant = {
+      role: "assistant",
+      content: "prior turn",
+      timestamp: 2,
+      usage: {
+        input: 99,
+        output: 7,
+        cacheRead: 1234,
+        total: 1340,
+      },
+    } as unknown as AgentMessage;
+    const currentAttemptAssistant = findCurrentAttemptAssistantMessage({
+      messagesSnapshot: [seedMessage, priorAssistant],
+      prePromptMessageCount: 2,
+    });
+    const promptCache = buildContextEnginePromptCacheInfo({
+      retention: "short",
+      lastCallUsage: (currentAttemptAssistant as { usage?: undefined } | undefined)?.usage,
+    });
+
+    expect(currentAttemptAssistant).toBeUndefined();
+    expect(promptCache).toEqual({ retention: "short" });
+  });
+
+  it("derives live loop prompt-cache info from the current attempt assistant", () => {
+    const toolUseAssistant = {
+      role: "assistant",
+      content: "tool use",
+      timestamp: "2026-04-16T16:49:59.536Z",
+      usage: {
+        input: 1,
+        output: 2,
+        cacheRead: 39036,
+        cacheWrite: 59934,
+        total: 98973,
+      },
+    } as unknown as AgentMessage;
+
+    expect(
+      buildLoopPromptCacheInfo({
+        messagesSnapshot: [seedMessage, toolUseAssistant],
+        prePromptMessageCount: 1,
+        retention: "short",
+        fallbackLastCacheTouchAt: 123,
+      }),
+    ).toEqual(
+      expect.objectContaining({
+        retention: "short",
+        lastCallUsage: expect.objectContaining({
+          cacheRead: 39036,
+          cacheWrite: 59934,
+          total: 98973,
+        }),
+        lastCacheTouchAt: Date.parse("2026-04-16T16:49:59.536Z"),
+      }),
+    );
+  });
+
+  it("falls back to the persisted cache touch when loop usage has no cache metrics", () => {
+    const toolUseAssistant = {
+      role: "assistant",
+      content: "tool use",
+      timestamp: "2026-04-16T16:49:59.536Z",
+      usage: {
+        input: 1,
+        output: 2,
+        total: 3,
+      },
+    } as unknown as AgentMessage;
+
+    expect(
+      buildLoopPromptCacheInfo({
+        messagesSnapshot: [seedMessage, toolUseAssistant],
+        prePromptMessageCount: 1,
+        retention: "short",
+        fallbackLastCacheTouchAt: 123,
+      }),
+    ).toEqual(
+      expect.objectContaining({
+        retention: "short",
+        lastCallUsage: expect.objectContaining({
+          total: 3,
+        }),
+        lastCacheTouchAt: 123,
+      }),
+    );
+  });
+
+  it("derives a live cache touch timestamp for final afterTurn usage snapshots", () => {
+    const lastCallUsage = {
+      input: 1,
+      output: 2,
+      cacheRead: 39036,
+      cacheWrite: 0,
+      total: 39039,
+    };
+
+    expect(
+      resolvePromptCacheTouchTimestamp({
+        lastCallUsage,
+        assistantTimestamp: "2026-04-16T17:04:46.974Z",
+        fallbackLastCacheTouchAt: 123,
+      }),
+    ).toBe(Date.parse("2026-04-16T17:04:46.974Z"));
+  });
+
+  it("threads prompt-cache break observations into afterTurn", async () => {
+    const afterTurn = vi.fn(async (_params: AfterTurnPromptCacheCall) => {});
+
+    await finalizeTurn(sessionKey, createTestContextEngine({ afterTurn }), {
+      runtimeContext: {
+        promptCache: {
+          observation: {
+            broke: true,
+            previousCacheRead: 5000,
+            cacheRead: 2000,
+            changes: [{ code: "systemPrompt", detail: "system prompt digest changed" }],
+          },
+        },
+      },
+    });
+
+    const afterTurnCall = afterTurn.mock.calls.at(0)?.[0];
+    const runtimeContext = afterTurnCall?.runtimeContext;
+    const observation = runtimeContext?.promptCache?.observation as
+      | { broke?: boolean; previousCacheRead?: number; cacheRead?: number; changes?: unknown[] }
+      | undefined;
+
+    expect(observation).toEqual(
+      expect.objectContaining({
+        broke: true,
+        previousCacheRead: 5000,
+        cacheRead: 2000,
+        changes: expect.arrayContaining([expect.objectContaining({ code: "systemPrompt" })]),
+      }),
+    );
+  });
+
   it("skips maintenance when ingestBatch fails", async () => {
     const { bootstrap, assemble } = createContextEngineBootstrapAndAssemble();
     const ingestBatch = vi.fn(async () => {
@@ -344,6 +520,8 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(flushMock).toHaveBeenCalledTimes(1);
     expect(disposeMock).toHaveBeenCalledTimes(1);
     expect(releaseMock).toHaveBeenCalledTimes(1);
-    expect(hoisted.releaseWsSessionMock).toHaveBeenCalledWith("embedded-session");
+    expect(hoisted.releaseWsSessionMock).toHaveBeenCalledWith("embedded-session", {
+      allowPool: false,
+    });
   });
 });

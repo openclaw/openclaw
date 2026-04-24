@@ -12,7 +12,7 @@ import {
   validateConfigObjectWithPlugins,
   writeConfigFile,
 } from "../../config/config.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { resolveArchiveKind } from "../../infra/archive.js";
 import { parseClawHubPluginSpec } from "../../infra/clawhub.js";
@@ -418,7 +418,7 @@ export const handlePluginsCommand: CommandHandler = async (params, allowTextComm
         reply: { text: formatPluginsList(loaded.report) },
       };
     }
-    if (pluginsCommand.name.toLowerCase() === "all") {
+    if (normalizeOptionalLowercaseString(pluginsCommand.name) === "all") {
       return {
         shouldContinue: false,
         reply: {

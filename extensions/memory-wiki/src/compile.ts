@@ -4,6 +4,7 @@ import {
   replaceManagedMarkdownBlock,
   withTrailingNewline,
 } from "openclaw/plugin-sdk/memory-host-markdown";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import {
   assessClaimFreshness,
   assessPageFreshness,
@@ -288,6 +289,7 @@ function formatFreshnessLabel(freshness: WikiFreshness): string {
     case "unknown":
       return freshness.reason;
   }
+  throw new Error("Unsupported wiki freshness level");
 }
 
 function formatClaimIdentity(claim: WikiClaimHealth): string {
@@ -342,13 +344,14 @@ function formatClaimContradictionClusterLine(
 }
 
 function normalizeComparableTarget(value: string): string {
-  return value
-    .trim()
-    .replace(/\\/g, "/")
-    .replace(/\.md$/i, "")
-    .replace(/^\.\/+/, "")
-    .replace(/\/+$/, "")
-    .toLowerCase();
+  return normalizeLowercaseStringOrEmpty(
+    value
+      .trim()
+      .replace(/\\/g, "/")
+      .replace(/\.md$/i, "")
+      .replace(/^\.\/+/, "")
+      .replace(/\/+$/, ""),
+  );
 }
 
 function uniquePages(pages: WikiPageSummary[]): WikiPageSummary[] {
@@ -669,7 +672,7 @@ function buildRootIndexBody(params: {
       renderSectionList({
         config: params.config,
         pages: params.pages.filter((page) => page.kind === group.kind),
-        emptyText: `No ${group.heading.toLowerCase()} yet.`,
+        emptyText: `No ${normalizeLowercaseStringOrEmpty(group.heading)} yet.`,
       }),
     );
   }
@@ -685,7 +688,7 @@ function buildDirectoryIndexBody(params: {
   return renderSectionList({
     config: params.config,
     pages: params.pages.filter((page) => page.kind === params.group.kind),
-    emptyText: `No ${params.group.heading.toLowerCase()} yet.`,
+    emptyText: `No ${normalizeLowercaseStringOrEmpty(params.group.heading)} yet.`,
   });
 }
 
@@ -759,6 +762,7 @@ function rankFreshnessLevel(level: WikiFreshnessLevel): number {
     case "unknown":
       return 0;
   }
+  throw new Error("Unsupported wiki freshness level");
 }
 
 function sortClaims(page: WikiPageSummary): WikiClaim[] {
@@ -836,35 +840,45 @@ function buildAgentDigest(params: {
     .toSorted((left, right) => left.relativePath.localeCompare(right.relativePath))
     .map((page) => {
       const pageFreshness = assessPageFreshness(page);
-      return {
-        ...(page.id ? { id: page.id } : {}),
-        title: page.title,
-        kind: page.kind,
-        path: page.relativePath,
-        sourceIds: [...page.sourceIds],
-        questions: [...page.questions],
-        contradictions: [...page.contradictions],
-        ...(typeof page.confidence === "number" ? { confidence: page.confidence } : {}),
-        freshnessLevel: pageFreshness.level,
-        ...(pageFreshness.lastTouchedAt ? { lastTouchedAt: pageFreshness.lastTouchedAt } : {}),
-        claimCount: page.claims.length,
-        topClaims: sortClaims(page)
-          .slice(0, 5)
-          .map((claim) => {
-            const freshness = assessClaimFreshness({ page, claim });
-            return {
-              ...(claim.id ? { id: claim.id } : {}),
-              text: claim.text,
-              status: normalizeClaimStatus(claim.status),
-              ...(typeof claim.confidence === "number" ? { confidence: claim.confidence } : {}),
-              evidenceCount: claim.evidence.length,
-              missingEvidence: claim.evidence.length === 0,
-              evidence: [...claim.evidence],
-              freshnessLevel: freshness.level,
-              ...(freshness.lastTouchedAt ? { lastTouchedAt: freshness.lastTouchedAt } : {}),
-            };
-          }),
-      };
+      return Object.assign(
+        {},
+        page.id ? { id: page.id } : {},
+        {
+          title: page.title,
+          kind: page.kind,
+          path: page.relativePath,
+          sourceIds: [...page.sourceIds],
+          questions: [...page.questions],
+          contradictions: [...page.contradictions],
+        },
+        typeof page.confidence === "number" ? { confidence: page.confidence } : {},
+        { freshnessLevel: pageFreshness.level },
+        pageFreshness.lastTouchedAt ? { lastTouchedAt: pageFreshness.lastTouchedAt } : {},
+        {
+          claimCount: page.claims.length,
+          topClaims: sortClaims(page)
+            .slice(0, 5)
+            .map((claim) => {
+              const freshness = assessClaimFreshness({ page, claim });
+              return Object.assign(
+                {},
+                claim.id ? { id: claim.id } : {},
+                {
+                  text: claim.text,
+                  status: normalizeClaimStatus(claim.status),
+                },
+                typeof claim.confidence === "number" ? { confidence: claim.confidence } : {},
+                {
+                  evidenceCount: claim.evidence.length,
+                  missingEvidence: claim.evidence.length === 0,
+                  evidence: [...claim.evidence],
+                  freshnessLevel: freshness.level,
+                },
+                freshness.lastTouchedAt ? { lastTouchedAt: freshness.lastTouchedAt } : {},
+              );
+            }),
+        },
+      );
     });
   return {
     pageCounts: params.pageCounts,

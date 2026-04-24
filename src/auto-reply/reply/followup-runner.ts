@@ -5,23 +5,29 @@ import {
 } from "openclaw/plugin-sdk/reply-payload";
 import { resolveRunModelFallbacksOverride } from "../../agents/agent-scope.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
-import { lookupContextTokens } from "../../agents/context.js";
+import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
+import { classifyEmbeddedPiRunResultForModelFallback } from "../../agents/pi-embedded-runner/result-fallback-classifier.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
-import { registerAgentRunContext } from "../../infra/agent-events.js";
+import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { resolveProviderFollowupFallbackRoute } from "../../plugins/provider-runtime.js";
 import { defaultRuntime } from "../../runtime.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { runPreflightCompactionIfNeeded } from "./agent-runner-memory.js";
-import { resolveRunAuthProfile } from "./agent-runner-utils.js";
+import {
+  resolveQueuedReplyExecutionConfig,
+  resolveQueuedReplyRuntimeConfig,
+  resolveRunAuthProfile,
+} from "./agent-runner-utils.js";
 import { resolveFollowupDeliveryPayloads } from "./followup-delivery.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { refreshQueuedFollowupSession, type FollowupRun } from "./queue.js";
@@ -30,6 +36,8 @@ import { isRoutableChannel, routeReply } from "./route-reply.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
+
+type EmbeddedAgentRunResult = Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
 
 export function createFollowupRunner(params: {
   opts?: GetReplyOptions;
@@ -67,16 +75,25 @@ export function createFollowupRunner(params: {
    * session's current dispatcher. This ensures replies go back to
    * where the message originated.
    */
-  const sendFollowupPayloads = async (payloads: ReplyPayload[], queued: FollowupRun) => {
+  const sendFollowupPayloads = async (
+    payloads: ReplyPayload[],
+    queued: FollowupRun,
+    resolvedRun: { provider: string; modelId: string },
+  ) => {
     // Check if we should route to originating channel.
     const { originatingChannel, originatingTo } = queued;
+    const runtimeConfig = resolveQueuedReplyRuntimeConfig(queued.run.config);
     const shouldRouteToOriginating = isRoutableChannel(originatingChannel) && originatingTo;
 
     if (!shouldRouteToOriginating && !opts?.onBlockReply) {
-      logVerbose("followup queue: no onBlockReply handler; dropping payloads");
+      defaultRuntime.error?.(
+        "followup queue: completed with payloads but no origin route or visible dispatcher is available",
+      );
       return;
     }
 
+    let crossChannelRouteFailureNeedsNotice = false;
+    let routedAnyCrossChannelPayloadToOrigin = false;
     for (const payload of payloads) {
       if (!payload || !hasOutboundReplyContent(payload)) {
         continue;
@@ -87,48 +104,122 @@ export function createFollowupRunner(params: {
       ) {
         continue;
       }
+      const providerRoute = resolveProviderFollowupFallbackRoute({
+        provider: resolvedRun.provider,
+        config: runtimeConfig,
+        workspaceDir: queued.run.workspaceDir,
+        context: {
+          config: runtimeConfig,
+          agentDir: queued.run.agentDir,
+          workspaceDir: queued.run.workspaceDir,
+          provider: resolvedRun.provider,
+          modelId: resolvedRun.modelId,
+          payload,
+          originatingChannel,
+          originatingTo,
+          originRoutable: Boolean(shouldRouteToOriginating),
+          dispatcherAvailable: Boolean(opts?.onBlockReply),
+        },
+      });
+      if (providerRoute?.route === "drop") {
+        logVerbose(
+          `followup queue: provider hook dropped payload route reason=${providerRoute.reason ?? "unspecified"}`,
+        );
+        continue;
+      }
+      const deliveryRoute =
+        providerRoute?.route === "origin" && shouldRouteToOriginating
+          ? "origin"
+          : providerRoute?.route === "dispatcher" && opts?.onBlockReply
+            ? "dispatcher"
+            : shouldRouteToOriginating
+              ? "origin"
+              : opts?.onBlockReply
+                ? "dispatcher"
+                : undefined;
       await typingSignals.signalTextDelta(payload.text);
 
       // Route to originating channel if set, otherwise fall back to dispatcher.
-      if (shouldRouteToOriginating) {
+      if (deliveryRoute === "origin" && isRoutableChannel(originatingChannel) && originatingTo) {
         const result = await routeReply({
           payload,
           channel: originatingChannel,
           to: originatingTo,
           sessionKey: queued.run.sessionKey,
           accountId: queued.originatingAccountId,
+          requesterSenderId: queued.run.senderId,
+          requesterSenderName: queued.run.senderName,
+          requesterSenderUsername: queued.run.senderUsername,
+          requesterSenderE164: queued.run.senderE164,
           threadId: queued.originatingThreadId,
-          cfg: queued.run.config,
+          cfg: runtimeConfig,
         });
         if (!result.ok) {
           const errorMsg = result.error ?? "unknown error";
           logVerbose(`followup queue: route-reply failed: ${errorMsg}`);
-          // Fall back to the caller-provided dispatcher only when the
-          // originating channel matches the session's message provider.
-          // In that case onBlockReply was created by the same channel's
-          // handler and delivers to the correct destination.  For true
-          // cross-channel routing (origin !== provider), falling back
-          // would send to the wrong channel, so we drop the payload.
           const provider = resolveOriginMessageProvider({
             provider: queued.run.messageProvider,
           });
           const origin = resolveOriginMessageProvider({
             originatingChannel,
           });
-          if (opts?.onBlockReply && origin && origin === provider) {
-            await opts.onBlockReply(payload);
+          if (opts?.onBlockReply) {
+            if (origin && origin === provider) {
+              await opts.onBlockReply(payload);
+            } else {
+              crossChannelRouteFailureNeedsNotice = true;
+            }
+          } else {
+            defaultRuntime.error?.(`followup queue: route-reply failed: ${errorMsg}`);
+          }
+        } else {
+          const provider = resolveOriginMessageProvider({
+            provider: queued.run.messageProvider,
+          });
+          const origin = resolveOriginMessageProvider({
+            originatingChannel,
+          });
+          if (origin && provider && origin !== provider) {
+            routedAnyCrossChannelPayloadToOrigin = true;
           }
         }
-      } else if (opts?.onBlockReply) {
+      } else if (deliveryRoute === "dispatcher" && opts?.onBlockReply) {
         await opts.onBlockReply(payload);
       }
+    }
+    if (
+      crossChannelRouteFailureNeedsNotice &&
+      !routedAnyCrossChannelPayloadToOrigin &&
+      opts?.onBlockReply
+    ) {
+      await opts.onBlockReply({
+        text:
+          "Follow-up completed, but OpenClaw could not deliver it to the originating " +
+          "channel. The reply content was not forwarded to this channel to avoid " +
+          "cross-channel misdelivery.",
+        isError: true,
+      });
     }
   };
 
   return async (queued: FollowupRun) => {
+    const queuedImages = queued.images ?? opts?.images;
+    const queuedImageOrder = queued.imageOrder ?? opts?.imageOrder;
+    queued.run.config = await resolveQueuedReplyExecutionConfig(queued.run.config, {
+      originatingChannel: queued.originatingChannel,
+      messageProvider: queued.run.messageProvider,
+      originatingAccountId: queued.originatingAccountId,
+      agentAccountId: queued.run.agentAccountId,
+    });
     const replySessionKey = queued.run.sessionKey ?? sessionKey;
+    const runtimeConfig = resolveQueuedReplyRuntimeConfig(queued.run.config);
+    const effectiveQueued =
+      runtimeConfig === queued.run.config
+        ? queued
+        : { ...queued, run: { ...queued.run, config: runtimeConfig } };
+    const run = effectiveQueued.run;
     const replyOperation = createReplyOperation({
-      sessionId: queued.run.sessionId,
+      sessionId: run.sessionId,
       sessionKey: replySessionKey ?? "",
       resetTriggered: false,
       upstreamAbortSignal: opts?.abortSignal,
@@ -138,25 +229,25 @@ export function createFollowupRunner(params: {
       const shouldSurfaceToControlUi = isInternalMessageChannel(
         resolveOriginMessageProvider({
           originatingChannel: queued.originatingChannel,
-          provider: queued.run.messageProvider,
+          provider: run.messageProvider,
         }),
       );
-      if (queued.run.sessionKey) {
+      if (run.sessionKey) {
         registerAgentRunContext(runId, {
-          sessionKey: queued.run.sessionKey,
-          verboseLevel: queued.run.verboseLevel,
+          sessionKey: run.sessionKey,
+          verboseLevel: run.verboseLevel,
           isControlUiVisible: shouldSurfaceToControlUi,
         });
       }
       let autoCompactionCount = 0;
       let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
-      let fallbackProvider = queued.run.provider;
-      let fallbackModel = queued.run.model;
+      let fallbackProvider = run.provider;
+      let fallbackModel = run.model;
       let activeSessionEntry =
         (sessionKey ? sessionStore?.[sessionKey] : undefined) ?? sessionEntry;
       activeSessionEntry = await runPreflightCompactionIfNeeded({
-        cfg: queued.run.config,
-        followupRun: queued,
+        cfg: runtimeConfig,
+        followupRun: effectiveQueued,
         promptForEstimate: queued.prompt,
         defaultModel,
         agentCfgContextTokens,
@@ -172,31 +263,33 @@ export function createFollowupRunner(params: {
       );
       replyOperation.setPhase("running");
       try {
-        const fallbackResult = await runWithModelFallback({
-          cfg: queued.run.config,
-          provider: queued.run.provider,
-          model: queued.run.model,
+        const fallbackResult = await runWithModelFallback<EmbeddedAgentRunResult>({
+          cfg: runtimeConfig,
+          provider: run.provider,
+          model: run.model,
           runId,
-          agentDir: queued.run.agentDir,
+          agentDir: run.agentDir,
           fallbacksOverride: resolveRunModelFallbacksOverride({
-            cfg: queued.run.config,
-            agentId: queued.run.agentId,
-            sessionKey: queued.run.sessionKey,
+            cfg: runtimeConfig,
+            agentId: run.agentId,
+            sessionKey: run.sessionKey,
           }),
+          classifyResult: ({ result, provider, model }) =>
+            classifyEmbeddedPiRunResultForModelFallback({ result, provider, model }),
           run: async (provider, model, runOptions) => {
-            const authProfile = resolveRunAuthProfile(queued.run, provider);
+            const authProfile = resolveRunAuthProfile(run, provider, { config: runtimeConfig });
             let attemptCompactionCount = 0;
             try {
               const result = await runEmbeddedPiAgent({
                 allowGatewaySubagentBinding: true,
                 replyOperation,
-                sessionId: queued.run.sessionId,
-                sessionKey: queued.run.sessionKey,
-                agentId: queued.run.agentId,
+                sessionId: run.sessionId,
+                sessionKey: run.sessionKey,
+                agentId: run.agentId,
                 trigger: "user",
                 messageChannel: queued.originatingChannel ?? undefined,
-                messageProvider: queued.run.messageProvider,
-                agentAccountId: queued.run.agentAccountId,
+                messageProvider: run.messageProvider,
+                agentAccountId: run.agentAccountId,
                 messageTo: queued.originatingTo,
                 messageThreadId: queued.originatingThreadId,
                 currentChannelId: queued.originatingTo,
@@ -204,42 +297,51 @@ export function createFollowupRunner(params: {
                   queued.originatingThreadId != null
                     ? String(queued.originatingThreadId)
                     : undefined,
-                groupId: queued.run.groupId,
-                groupChannel: queued.run.groupChannel,
-                groupSpace: queued.run.groupSpace,
-                senderId: queued.run.senderId,
-                senderName: queued.run.senderName,
-                senderUsername: queued.run.senderUsername,
-                senderE164: queued.run.senderE164,
-                senderIsOwner: queued.run.senderIsOwner,
-                sessionFile: queued.run.sessionFile,
-                agentDir: queued.run.agentDir,
-                workspaceDir: queued.run.workspaceDir,
-                config: queued.run.config,
-                skillsSnapshot: queued.run.skillsSnapshot,
+                groupId: run.groupId,
+                groupChannel: run.groupChannel,
+                groupSpace: run.groupSpace,
+                senderId: run.senderId,
+                senderName: run.senderName,
+                senderUsername: run.senderUsername,
+                senderE164: run.senderE164,
+                senderIsOwner: run.senderIsOwner,
+                sessionFile: run.sessionFile,
+                agentDir: run.agentDir,
+                workspaceDir: run.workspaceDir,
+                config: runtimeConfig,
+                skillsSnapshot: run.skillsSnapshot,
                 prompt: queued.prompt,
-                extraSystemPrompt: queued.run.extraSystemPrompt,
-                ownerNumbers: queued.run.ownerNumbers,
-                enforceFinalTag: queued.run.enforceFinalTag,
+                extraSystemPrompt: run.extraSystemPrompt,
+                ownerNumbers: run.ownerNumbers,
+                enforceFinalTag: run.enforceFinalTag,
                 provider,
                 model,
                 ...authProfile,
-                thinkLevel: queued.run.thinkLevel,
-                verboseLevel: queued.run.verboseLevel,
-                reasoningLevel: queued.run.reasoningLevel,
+                thinkLevel: run.thinkLevel,
+                verboseLevel: run.verboseLevel,
+                reasoningLevel: run.reasoningLevel,
                 suppressToolErrorWarnings: opts?.suppressToolErrorWarnings,
-                execOverrides: queued.run.execOverrides,
-                bashElevated: queued.run.bashElevated,
-                timeoutMs: queued.run.timeoutMs,
+                execOverrides: run.execOverrides,
+                bashElevated: run.bashElevated,
+                timeoutMs: run.timeoutMs,
                 runId,
+                images: queuedImages,
+                imageOrder: queuedImageOrder,
                 allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
-                blockReplyBreak: queued.run.blockReplyBreak,
+                blockReplyBreak: run.blockReplyBreak,
                 bootstrapPromptWarningSignaturesSeen,
                 bootstrapPromptWarningSignature:
                   bootstrapPromptWarningSignaturesSeen[
                     bootstrapPromptWarningSignaturesSeen.length - 1
                   ],
                 onAgentEvent: (evt) => {
+                  if (evt.stream.startsWith("codex_app_server.")) {
+                    emitAgentEvent({
+                      runId,
+                      stream: evt.stream,
+                      data: evt.data,
+                    });
+                  }
                   if (evt.stream !== "compaction") {
                     return;
                   }
@@ -277,29 +379,32 @@ export function createFollowupRunner(params: {
       const usage = runResult.meta?.agentMeta?.usage;
       const promptTokens = runResult.meta?.agentMeta?.promptTokens;
       const modelUsed = runResult.meta?.agentMeta?.model ?? fallbackModel ?? defaultModel;
+      const providerUsed =
+        runResult.meta?.agentMeta?.provider ?? fallbackProvider ?? queued.run.provider;
       const contextTokensUsed =
-        agentCfgContextTokens ??
-        lookupContextTokens(modelUsed) ??
-        sessionEntry?.contextTokens ??
-        DEFAULT_CONTEXT_TOKENS;
+        resolveContextTokensForModel({
+          cfg: queued.run.config,
+          provider: providerUsed,
+          model: modelUsed,
+          contextTokensOverride: agentCfgContextTokens,
+          fallbackContextTokens: sessionEntry?.contextTokens ?? DEFAULT_CONTEXT_TOKENS,
+          allowAsyncLoad: false,
+        }) ?? DEFAULT_CONTEXT_TOKENS;
 
       if (storePath && sessionKey) {
         await persistRunSessionUsage({
           storePath,
           sessionKey,
-          cfg: queued.run.config,
+          cfg: runtimeConfig,
           usage,
           lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
           promptTokens,
           modelUsed,
-          providerUsed: fallbackProvider,
+          providerUsed,
           contextTokensUsed,
           systemPromptReport: runResult.meta?.systemPromptReport,
           cliSessionBinding: runResult.meta?.agentMeta?.cliSessionBinding,
-          usageIsContextSnapshot: isCliProvider(
-            fallbackProvider ?? queued.run.provider,
-            queued.run.config,
-          ),
+          usageIsContextSnapshot: isCliProvider(providerUsed, runtimeConfig),
           logLabel: "followup",
         });
       }
@@ -321,10 +426,10 @@ export function createFollowupRunner(params: {
         return [{ ...payload, text: stripped.text }];
       });
       const finalPayloads = resolveFollowupDeliveryPayloads({
-        cfg: queued.run.config,
+        cfg: runtimeConfig,
         payloads: sanitizedPayloads,
-        messageProvider: queued.run.messageProvider,
-        originatingAccountId: queued.originatingAccountId ?? queued.run.agentAccountId,
+        messageProvider: run.messageProvider,
+        originatingAccountId: queued.originatingAccountId ?? run.agentAccountId,
         originatingChannel: queued.originatingChannel,
         originatingChatType: queued.originatingChatType,
         originatingTo: queued.originatingTo,
@@ -338,9 +443,9 @@ export function createFollowupRunner(params: {
       }
 
       if (autoCompactionCount > 0) {
-        const previousSessionId = queued.run.sessionId;
+        const previousSessionId = run.sessionId;
         const count = await incrementRunCompactionCount({
-          cfg: queued.run.config,
+          cfg: runtimeConfig,
           sessionEntry,
           sessionStore,
           sessionKey,
@@ -353,7 +458,7 @@ export function createFollowupRunner(params: {
         const refreshedSessionEntry =
           sessionKey && sessionStore ? sessionStore[sessionKey] : undefined;
         if (refreshedSessionEntry) {
-          const queueKey = queued.run.sessionKey ?? sessionKey;
+          const queueKey = run.sessionKey ?? sessionKey;
           if (queueKey) {
             refreshQueuedFollowupSession({
               key: queueKey,
@@ -363,7 +468,7 @@ export function createFollowupRunner(params: {
             });
           }
         }
-        if (queued.run.verboseLevel && queued.run.verboseLevel !== "off") {
+        if (run.verboseLevel && run.verboseLevel !== "off") {
           const suffix = typeof count === "number" ? ` (count ${count})` : "";
           finalPayloads.unshift({
             text: `🧹 Auto-compaction complete${suffix}.`,
@@ -371,7 +476,10 @@ export function createFollowupRunner(params: {
         }
       }
 
-      await sendFollowupPayloads(finalPayloads, queued);
+      await sendFollowupPayloads(finalPayloads, effectiveQueued, {
+        provider: providerUsed,
+        modelId: modelUsed,
+      });
     } finally {
       replyOperation.complete();
       // Both signals are required for the typing controller to clean up.

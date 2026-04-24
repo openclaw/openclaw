@@ -53,11 +53,7 @@ function flattenUnionSchema(raw: Record<string, unknown>): Record<string, unknow
   }
   const required =
     requiredSets.length > 0
-      ? [
-          ...requiredSets.reduce(
-            (left, right) => new Set([...left].filter((key) => right.has(key))),
-          ),
-        ]
+      ? [...(requiredSets[0] ?? [])].filter((key) => requiredSets.every((set) => set.has(key)))
       : [];
   const { anyOf: _anyOf, oneOf: _oneOf, ...rest } = raw;
   return { ...rest, type: "object", properties: mergedProps, required };
@@ -74,9 +70,9 @@ export function buildMcpToolSchema(tools: McpLoopbackTool[]): McpToolSchemaEntry
     }
     if (raw.type !== "object") {
       raw.type = "object";
-      if (!raw.properties) {
-        raw.properties = {};
-      }
+    }
+    if (!raw.properties) {
+      raw.properties = {};
     }
     return {
       name: tool.name,

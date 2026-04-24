@@ -6,8 +6,6 @@ read_when:
 title: "Mattermost"
 ---
 
-# Mattermost
-
 Status: bundled plugin (bot token + WebSocket events). Channels, groups, and DMs are supported.
 Mattermost is a self-hostable team messaging platform; see the official site at
 [mattermost.com](https://mattermost.com) for product details and downloads.
@@ -108,6 +106,8 @@ Set these on the gateway host if you prefer env vars:
 - `MATTERMOST_URL=https://chat.example.com`
 
 Env vars apply only to the **default** account (`default`). Other accounts must use config values.
+
+`MATTERMOST_URL` cannot be set from a workspace `.env`; see [Workspace `.env` files](/gateway/security).
 
 ## Chat modes
 
@@ -244,6 +244,32 @@ Notes:
 - Retries apply to transient failures such as rate limits, 5xx responses, and network or timeout errors.
 - 4xx client errors other than `429` are treated as permanent and are not retried.
 
+## Preview streaming
+
+Mattermost streams thinking, tool activity, and partial reply text into a single **draft preview post** that finalizes in place when the final answer is safe to send. The preview updates on the same post id instead of spamming the channel with per-chunk messages. Media/error finals cancel pending preview edits and use normal delivery instead of flushing a throwaway preview post.
+
+Enable via `channels.mattermost.streaming`:
+
+```json5
+{
+  channels: {
+    mattermost: {
+      streaming: "partial", // off | partial | block | progress
+    },
+  },
+}
+```
+
+Notes:
+
+- `partial` is the usual choice: one preview post that is edited as the reply grows, then finalized with the complete answer.
+- `block` uses append-style draft chunks inside the preview post.
+- `progress` shows a status preview while generating and only posts the final answer at completion.
+- `off` disables preview streaming.
+- If the stream cannot be finalized in place (for example the post was deleted mid-stream), OpenClaw falls back to sending a fresh final post so the reply is never lost.
+- Reasoning-only payloads are suppressed from channel posts, including text that arrives as a `> Reasoning:` blockquote. Set `/reasoning on` to see thinking in other surfaces; the Mattermost final post keeps the answer only.
+- See [Streaming](/concepts/streaming#preview-streaming-modes) for the channel-mapping matrix.
+
 ## Reactions (message tool)
 
 - Use `message action=react` with `channel=mattermost`.
@@ -326,7 +352,7 @@ Config:
 
 External scripts and webhooks can post buttons directly via the Mattermost REST API
 instead of going through the agent's `message` tool. Use `buildButtonAttachments()` from
-the extension when possible; if posting raw JSON, follow these rules:
+the plugin when possible; if posting raw JSON, follow these rules:
 
 **Payload structure:**
 

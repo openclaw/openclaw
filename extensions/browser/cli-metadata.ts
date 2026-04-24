@@ -1,4 +1,4 @@
-import { definePluginEntry } from "openclaw/plugin-sdk/core";
+import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 
 export default definePluginEntry({
   id: "browser",

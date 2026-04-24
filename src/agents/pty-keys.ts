@@ -124,7 +124,7 @@ export function hasCursorModeSensitiveKeys(request: KeyEncodingRequest): boolean
       if (hasAnyModifier(parsed.mods)) {
         return false;
       }
-      return parsed.base.toLowerCase() in DECCKM_SS3_KEYS;
+      return normalizeLowercaseStringOrEmpty(parsed.base) in DECCKM_SS3_KEYS;
     }) ?? false
   );
 }
@@ -186,7 +186,7 @@ function encodeKeyToken(
 
   const parsed = parseModifiers(token);
   const base = parsed.base;
-  const baseLower = base.toLowerCase();
+  const baseLower = normalizeLowercaseStringOrEmpty(base);
 
   if (baseLower === "tab" && parsed.mods.shift) {
     return `${ESC}[Z`;
@@ -240,7 +240,7 @@ function parseModifiers(token: string) {
   let sawModifiers = false;
 
   while (rest.length > 2 && rest[1] === "-") {
-    const mod = rest[0].toLowerCase();
+    const mod = normalizeLowercaseStringOrEmpty(rest[0]);
     if (mod === "c") {
       mods.ctrl = true;
     } else if (mod === "m") {

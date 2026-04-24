@@ -1,5 +1,38 @@
 import type { Api, Context, Model } from "@mariozechner/pi-ai";
 
+const SYNTHETIC_TOOL_RESULT_APIS = new Set<string>([
+  "anthropic-messages",
+  "openclaw-anthropic-messages-transport",
+  "bedrock-converse-stream",
+  "google-generative-ai",
+  "openclaw-google-generative-ai-transport",
+]);
+
+type PendingToolCall = { id: string; name: string };
+
+function defaultAllowSyntheticToolResults(modelApi: Api): boolean {
+  return SYNTHETIC_TOOL_RESULT_APIS.has(modelApi);
+}
+
+function appendMissingToolResults(
+  result: Context["messages"],
+  pendingToolCalls: PendingToolCall[],
+  existingToolResultIds: ReadonlySet<string>,
+): void {
+  for (const toolCall of pendingToolCalls) {
+    if (!existingToolResultIds.has(toolCall.id)) {
+      result.push({
+        role: "toolResult",
+        toolCallId: toolCall.id,
+        toolName: toolCall.name,
+        content: [{ type: "text", text: "No result provided" }],
+        isError: true,
+        timestamp: Date.now(),
+      });
+    }
+  }
+}
+
 export function transformTransportMessages(
   messages: Context["messages"],
   model: Model<Api>,
@@ -9,6 +42,7 @@ export function transformTransportMessages(
     source: { provider: string; api: Api; model: string },
   ) => string,
 ): Context["messages"] {
+  const allowSyntheticToolResults = defaultAllowSyntheticToolResults(model.api);
   const toolCallIdMap = new Map<string, string>();
   const transformed = messages.map((msg) => {
     if (msg.role === "user") {
@@ -70,26 +104,15 @@ export function transformTransportMessages(
   });
 
   const result: Context["messages"] = [];
-  let pendingToolCalls: Array<{ id: string; name: string }> = [];
+  let pendingToolCalls: PendingToolCall[] = [];
   let existingToolResultIds = new Set<string>();
   for (const msg of transformed) {
     if (msg.role === "assistant") {
-      if (pendingToolCalls.length > 0) {
-        for (const toolCall of pendingToolCalls) {
-          if (!existingToolResultIds.has(toolCall.id)) {
-            result.push({
-              role: "toolResult",
-              toolCallId: toolCall.id,
-              toolName: toolCall.name,
-              content: [{ type: "text", text: "No result provided" }],
-              isError: true,
-              timestamp: Date.now(),
-            });
-          }
-        }
-        pendingToolCalls = [];
-        existingToolResultIds = new Set();
+      if (allowSyntheticToolResults && pendingToolCalls.length > 0) {
+        appendMissingToolResults(result, pendingToolCalls, existingToolResultIds);
       }
+      pendingToolCalls = [];
+      existingToolResultIds = new Set();
       if (msg.stopReason === "error" || msg.stopReason === "aborted") {
         continue;
       }
@@ -109,22 +132,11 @@ export function transformTransportMessages(
       result.push(msg);
       continue;
     }
-    if (pendingToolCalls.length > 0) {
-      for (const toolCall of pendingToolCalls) {
-        if (!existingToolResultIds.has(toolCall.id)) {
-          result.push({
-            role: "toolResult",
-            toolCallId: toolCall.id,
-            toolName: toolCall.name,
-            content: [{ type: "text", text: "No result provided" }],
-            isError: true,
-            timestamp: Date.now(),
-          });
-        }
-      }
-      pendingToolCalls = [];
-      existingToolResultIds = new Set();
+    if (allowSyntheticToolResults && pendingToolCalls.length > 0) {
+      appendMissingToolResults(result, pendingToolCalls, existingToolResultIds);
     }
+    pendingToolCalls = [];
+    existingToolResultIds = new Set();
     result.push(msg);
   }
   return result;

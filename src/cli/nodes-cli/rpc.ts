@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Command } from "commander";
 import { resolveNodeFromNodeList } from "../../shared/node-resolve.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { parseNodeList, parsePairingList } from "./format.js";
 import type { NodeListNode, NodesRpcOpts } from "./types.js";
 
@@ -50,7 +51,7 @@ export function buildNodeInvokeParams(params: {
 }
 
 export function unauthorizedHintForMessage(message: string): string | null {
-  const haystack = message.toLowerCase();
+  const haystack = normalizeLowercaseStringOrEmpty(message);
   if (
     haystack.includes("unauthorizedclient") ||
     haystack.includes("bridge client is not authorized") ||

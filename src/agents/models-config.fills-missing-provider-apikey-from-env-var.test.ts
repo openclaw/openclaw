@@ -1,20 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-
-async function loadSecretsModule() {
-  vi.doUnmock("../plugins/manifest-registry.js");
-  vi.doUnmock("../secrets/provider-env-vars.js");
-  vi.resetModules();
-  return import("./models-config.providers.secrets.js");
-}
-
-beforeEach(() => {
-  vi.doUnmock("../plugins/manifest-registry.js");
-  vi.doUnmock("../secrets/provider-env-vars.js");
-});
+import { describe, expect, it } from "vitest";
+import { resolveMissingProviderApiKey } from "./models-config.providers.secret-helpers.js";
 
 describe("models-config", () => {
-  it("fills missing provider.apiKey from env var name when models exist", async () => {
-    const { resolveMissingProviderApiKey } = await loadSecretsModule();
+  it("fills missing provider.apiKey from env var name when models exist", () => {
     const provider = resolveMissingProviderApiKey({
       providerKey: "minimax",
       provider: {

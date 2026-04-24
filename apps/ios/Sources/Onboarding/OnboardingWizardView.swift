@@ -69,6 +69,7 @@ struct OnboardingWizardView: View {
     @State private var showQRScanner: Bool = false
     @State private var scannerError: String?
     @State private var selectedPhoto: PhotosPickerItem?
+    @State private var showGatewayProblemDetails: Bool = false
     @State private var lastPairingAutoResumeAttemptAt: Date?
     private static let pairingAutoResumeTicker = Timer.publish(every: 2.0, on: .main, in: .common).autoconnect()
 
@@ -84,6 +85,10 @@ struct OnboardingWizardView: View {
 
     private var isFullScreenStep: Bool {
         self.step == .intro || self.step == .welcome || self.step == .success
+    }
+
+    private var currentProblem: GatewayConnectionProblem? {
+        self.appModel.lastGatewayProblem
     }
 
     var body: some View {
@@ -216,6 +221,16 @@ struct OnboardingWizardView: View {
                 }
             }
         }
+        .sheet(isPresented: self.$showGatewayProblemDetails) {
+            if let currentProblem = self.currentProblem {
+                GatewayProblemDetailsSheet(
+                    problem: currentProblem,
+                    primaryActionTitle: "Retry",
+                    onPrimaryAction: {
+                        Task { await self.retryLastAttempt() }
+                    })
+            }
+        }
         .onAppear {
             self.initializeState()
         }
@@ -250,39 +265,11 @@ struct OnboardingWizardView: View {
         .onChange(of: self.gatewayPassword) { _, newValue in
             self.saveGatewayCredentials(token: self.gatewayToken, password: newValue)
         }
+        .onChange(of: self.appModel.lastGatewayProblem) { _, newValue in
+            self.updateConnectionIssue(problem: newValue, statusText: self.appModel.gatewayStatusText)
+        }
         .onChange(of: self.appModel.gatewayStatusText) { _, newValue in
-            let next = GatewayConnectionIssue.detect(from: newValue)
-            // Avoid "flip-flopping" the UI by clearing actionable issues when the underlying connection
-            // transitions through intermediate statuses (e.g. Offline/Connecting while reconnect churns).
-            if self.issue.needsPairing, next.needsPairing {
-                // Keep the requestId sticky even if the status line omits it after we pause.
-                let mergedRequestId = next.requestId ?? self.issue.requestId ?? self.pairingRequestId
-                self.issue = .pairingRequired(requestId: mergedRequestId)
-            } else if self.issue.needsPairing, !next.needsPairing {
-                // Ignore non-pairing statuses until the user explicitly retries/scans again, or we connect.
-            } else if self.issue.needsAuthToken, !next.needsAuthToken, !next.needsPairing {
-                // Same idea for auth: once we learn credentials are missing/rejected, keep that sticky until
-                // the user retries/scans again or we successfully connect.
-            } else {
-                self.issue = next
-            }
-
-            if let requestId = next.requestId, !requestId.isEmpty {
-                self.pairingRequestId = requestId
-            }
-
-            // If the gateway tells us auth is missing/rejected, stop reconnect churn until the user intervenes.
-            if next.needsAuthToken {
-                self.appModel.gatewayAutoReconnectEnabled = false
-            }
-
-            if self.issue.needsAuthToken || self.issue.needsPairing {
-                self.step = .auth
-            }
-            if !newValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                self.connectMessage = newValue
-                self.statusLine = newValue
-            }
+            self.updateConnectionIssue(problem: self.appModel.lastGatewayProblem, statusText: newValue)
         }
         .onChange(of: self.appModel.gatewayServerName) { _, newValue in
             guard newValue != nil else { return }
@@ -351,7 +338,9 @@ struct OnboardingWizardView: View {
                     Text("Security notice")
                         .font(.headline)
                     Text(
-                        "The connected OpenClaw agent can use device capabilities you enable, such as camera, microphone, photos, contacts, calendar, and location. Continue only if you trust the gateway and agent you connect to.")
+                        "The connected OpenClaw agent can use device capabilities you enable, "
+                            + "such as camera, microphone, photos, contacts, calendar, and location. "
+                            + "Continue only if you trust the gateway and agent you connect to.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -509,7 +498,7 @@ struct OnboardingWizardView: View {
             Section {
                 LabeledContent("Mode", value: selectedMode.title)
                 LabeledContent("Discovery", value: self.gatewayController.discoveryStatusText)
-                LabeledContent("Status", value: self.appModel.gatewayStatusText)
+                LabeledContent("Status", value: self.appModel.gatewayDisplayStatusText)
                 LabeledContent("Progress", value: self.statusLine)
             } header: {
                 Text("Status")
@@ -612,7 +601,17 @@ struct OnboardingWizardView: View {
                     .autocorrectionDisabled()
                 SecureField("Gateway Password", text: self.$gatewayPassword)
 
-                if self.issue.needsAuthToken {
+                if let problem = self.currentProblem {
+                    GatewayProblemBanner(
+                        problem: problem,
+                        primaryActionTitle: "Retry connection",
+                        onPrimaryAction: {
+                            Task { await self.retryLastAttempt() }
+                        },
+                        onShowDetails: {
+                            self.showGatewayProblemDetails = true
+                        })
+                } else if self.issue.needsAuthToken {
                     Text("Gateway rejected credentials. Scan a fresh QR code or update token/password.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
@@ -635,14 +634,15 @@ struct OnboardingWizardView: View {
                     Text("Pairing Approval")
                 } footer: {
                     let requestLine: String = {
-                        if let id = self.issue.requestId, !id.isEmpty {
+                        if let id = self.currentProblem?.requestId ?? self.issue.requestId, !id.isEmpty {
                             return "Request ID: \(id)"
                         }
                         return "Request ID: check `openclaw devices list`."
                     }()
+                    let commandLine = self.currentProblem?.actionCommand ?? "openclaw devices approve <requestId>"
                     Text(
                         "Approve this device on the gateway.\n"
-                            + "1) `openclaw devices approve` (or `openclaw devices approve <requestId>`)\n"
+                            + "1) `\(commandLine)`\n"
                             + "2) `/pair approve` in your OpenClaw chat\n"
                             + "\(requestLine)\n"
                             + "OpenClaw will also retry automatically when you return to this app.")
@@ -822,6 +822,45 @@ struct OnboardingWizardView: View {
         }
         self.lastPairingAutoResumeAttemptAt = now
         self.resumeAfterPairingApprovalInBackground()
+    }
+
+    private func updateConnectionIssue(problem: GatewayConnectionProblem?, statusText: String) {
+        let next = GatewayConnectionIssue.detect(problem: problem)
+        let fallback = next == .none ? GatewayConnectionIssue.detect(from: statusText) : next
+
+        // Avoid "flip-flopping" the UI by clearing actionable issues when the underlying connection
+        // transitions through intermediate statuses (e.g. Offline/Connecting while reconnect churns).
+        if self.issue.needsPairing, fallback.needsPairing {
+            let mergedRequestId = fallback.requestId ?? self.issue.requestId ?? self.pairingRequestId
+            self.issue = .pairingRequired(requestId: mergedRequestId)
+        } else if self.issue.needsPairing, !fallback.needsPairing {
+            // Ignore non-pairing statuses until the user explicitly retries/scans again, or we connect.
+        } else if self.issue.needsAuthToken, !fallback.needsAuthToken, !fallback.needsPairing {
+            // Same idea for auth: once we learn credentials are missing/rejected, keep that sticky until
+            // the user retries/scans again or we successfully connect.
+        } else {
+            self.issue = fallback
+        }
+
+        if let requestId = problem?.requestId ?? fallback.requestId, !requestId.isEmpty {
+            self.pairingRequestId = requestId
+        }
+
+        if self.issue.needsAuthToken || self.issue.needsPairing || problem?.pauseReconnect == true {
+            self.step = .auth
+        }
+
+        if let problem {
+            self.connectMessage = problem.message
+            self.statusLine = problem.message
+            return
+        }
+
+        let trimmedStatus = statusText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedStatus.isEmpty {
+            self.connectMessage = trimmedStatus
+            self.statusLine = trimmedStatus
+        }
     }
 
     private func detectQRCode(from data: Data) -> String? {

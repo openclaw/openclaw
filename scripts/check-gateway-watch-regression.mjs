@@ -6,12 +6,15 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
+import { pathToFileURL } from "node:url";
 import { writeBuildStamp } from "./build-stamp.mjs";
 import { resolveBuildRequirement } from "./run-node.mjs";
 
 const DEFAULTS = {
   outputDir: path.join(process.cwd(), ".local", "gateway-watch-regression"),
   windowMs: 10_000,
+  readyTimeoutMs: 20_000,
+  readySettleMs: 500,
   sigkillGraceMs: 10_000,
   cpuWarnMs: 1_000,
   cpuFailMs: 8_000,
@@ -30,6 +33,8 @@ const WATCH_GATEWAY_SKIP_ENV = {
   OPENCLAW_SKIP_CHANNELS: "1",
   OPENCLAW_SKIP_CRON: "1",
   OPENCLAW_SKIP_GMAIL_WATCHER: "1",
+  OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
+  NODE_ENV: "test",
 };
 
 function parseArgs(argv) {
@@ -50,6 +55,12 @@ function parseArgs(argv) {
         break;
       case "--window-ms":
         options.windowMs = Number(readValue());
+        break;
+      case "--ready-timeout-ms":
+        options.readyTimeoutMs = Number(readValue());
+        break;
+      case "--ready-settle-ms":
+        options.readySettleMs = Number(readValue());
         break;
       case "--sigkill-grace-ms":
         options.sigkillGraceMs = Number(readValue());
@@ -84,6 +95,17 @@ function removePathIfExists(targetPath) {
   fs.rmSync(targetPath, { recursive: true, force: true });
 }
 
+function lstatIfExists(targetPath) {
+  try {
+    return fs.lstatSync(targetPath);
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
+}
+
 function normalizePath(filePath) {
   return filePath.replaceAll("\\", "/");
 }
@@ -101,7 +123,15 @@ function listTreeEntries(rootName) {
     if (!current) {
       continue;
     }
-    const dirents = fs.readdirSync(current, { withFileTypes: true });
+    let dirents;
+    try {
+      dirents = fs.readdirSync(current, { withFileTypes: true });
+    } catch (error) {
+      if (error?.code === "ENOENT") {
+        continue;
+      }
+      throw error;
+    }
     for (const dirent of dirents) {
       const fullPath = path.join(current, dirent.name);
       const relativePath = normalizePath(path.relative(process.cwd(), fullPath));
@@ -148,7 +178,10 @@ function snapshotTree(rootName) {
     if (!current) {
       continue;
     }
-    const currentStats = fs.lstatSync(current);
+    const currentStats = lstatIfExists(current);
+    if (!currentStats) {
+      continue;
+    }
     stats.entries += 1;
     if (currentStats.isDirectory()) {
       stats.directories += 1;
@@ -168,6 +201,23 @@ function snapshotTree(rootName) {
   }
 
   return stats;
+}
+
+export function isIgnoredDistRuntimeWatchPath(entry) {
+  return (
+    entry === "dist-runtime/extensions/node_modules" ||
+    entry.startsWith("dist-runtime/extensions/node_modules/")
+  );
+}
+
+function summarizeDistRuntimeAddedPaths(added) {
+  const addedPaths = added.filter((entry) => entry.startsWith("dist-runtime/"));
+  const ignoredDependencyAddedPaths = addedPaths.filter(isIgnoredDistRuntimeWatchPath);
+  const topologyAddedPaths = addedPaths.filter((entry) => !isIgnoredDistRuntimeWatchPath(entry));
+  return {
+    ignoredDependencyAddedPaths,
+    topologyAddedPaths,
+  };
 }
 
 function writeSnapshot(snapshotDir) {
@@ -229,6 +279,90 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function parsePsCpuTimeMs(timeText) {
+  const [maybeDays, clockText] = timeText.includes("-") ? timeText.split("-", 2) : ["0", timeText];
+  const days = Number(maybeDays);
+  const parts = clockText.split(":");
+  if (!Number.isFinite(days) || parts.length < 2 || parts.length > 3) {
+    return null;
+  }
+  const seconds = Number(parts.at(-1));
+  const minutes = Number(parts.at(-2));
+  const hours = parts.length === 3 ? Number(parts[0]) : 0;
+  if (![seconds, minutes, hours].every(Number.isFinite)) {
+    return null;
+  }
+  return Math.round(((days * 24 + hours) * 60 * 60 + minutes * 60 + seconds) * 1000);
+}
+
+function readProcessTreeCpuMs(rootPid) {
+  if (!Number.isInteger(rootPid) || rootPid <= 0) {
+    return null;
+  }
+  const result = spawnSync("ps", ["-eo", "pid=,ppid=,time="], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  if (result.status !== 0) {
+    return null;
+  }
+
+  const rows = [];
+  for (const line of result.stdout.split("\n")) {
+    const match = line.trim().match(/^(\d+)\s+(\d+)\s+(\S+)$/);
+    if (!match) {
+      continue;
+    }
+    const pid = Number(match[1]);
+    const ppid = Number(match[2]);
+    const cpuMs = parsePsCpuTimeMs(match[3]);
+    if (!Number.isInteger(pid) || !Number.isInteger(ppid) || cpuMs == null) {
+      continue;
+    }
+    rows.push({ pid, ppid, cpuMs });
+  }
+
+  const childrenByParent = new Map();
+  const cpuByPid = new Map();
+  for (const row of rows) {
+    cpuByPid.set(row.pid, row.cpuMs);
+    const children = childrenByParent.get(row.ppid) ?? [];
+    children.push(row.pid);
+    childrenByParent.set(row.ppid, children);
+  }
+  if (!cpuByPid.has(rootPid)) {
+    return null;
+  }
+
+  let totalCpuMs = 0;
+  const seen = new Set();
+  const stack = [rootPid];
+  while (stack.length > 0) {
+    const pid = stack.pop();
+    if (!pid || seen.has(pid)) {
+      continue;
+    }
+    seen.add(pid);
+    totalCpuMs += cpuByPid.get(pid) ?? 0;
+    for (const childPid of childrenByParent.get(pid) ?? []) {
+      stack.push(childPid);
+    }
+  }
+  return totalCpuMs;
+}
+
+async function waitForGatewayReady(readText, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (/\[gateway\] ready \(/.test(readText())) {
+      return true;
+    }
+    await sleep(100);
+  }
+  return false;
+}
+
 async function allocateLoopbackPort() {
   return await new Promise((resolve, reject) => {
     const server = net.createServer();
@@ -255,7 +389,7 @@ function buildTimedWatchCommand(pidFilePath, timeFilePath, isolatedHomeDir, port
   const shellSource = [
     'echo "$$" > "$OPENCLAW_WATCH_PID_FILE"',
     'mkdir -p "$OPENCLAW_HOME/.openclaw"',
-    `printf '%s\n' '{"gateway":{"controlUi":{"enabled":false}}}' > "$OPENCLAW_HOME/.openclaw/openclaw.json"`,
+    `printf '%s\n' '{"gateway":{"controlUi":{"enabled":false}},"plugins":{"enabled":false}}' > "$OPENCLAW_HOME/.openclaw/openclaw.json"`,
     `exec node scripts/watch-node.mjs gateway --force --allow-unconfigured --port ${String(port)} --token watch-regression-token`,
   ].join("\n");
   const env = {
@@ -355,7 +489,16 @@ async function runTimedWatch(options, outputDir) {
     await sleep(100);
   }
 
+  const readyBeforeWindow = await waitForGatewayReady(
+    () => `${stdout}\n${stderr}`,
+    options.readyTimeoutMs,
+  );
+  if (readyBeforeWindow && options.readySettleMs > 0) {
+    await sleep(options.readySettleMs);
+  }
+  const idleCpuStartMs = watchPid ? readProcessTreeCpuMs(watchPid) : null;
   await sleep(options.windowMs);
+  const idleCpuEndMs = watchPid ? readProcessTreeCpuMs(watchPid) : null;
 
   if (watchPid) {
     try {
@@ -390,6 +533,11 @@ async function runTimedWatch(options, outputDir) {
   return {
     exit,
     timing,
+    readyBeforeWindow,
+    idleCpuMs:
+      idleCpuStartMs == null || idleCpuEndMs == null
+        ? null
+        : Math.max(0, idleCpuEndMs - idleCpuStartMs),
     stdoutPath,
     stderrPath,
     timeFilePath,
@@ -453,18 +601,42 @@ function buildRunNodeDeps(env) {
   };
 }
 
+export function shouldRefreshBuildStampForRestoredArtifacts(params) {
+  return (
+    params.skipBuild === true &&
+    params.buildRequirement?.shouldBuild === true &&
+    params.buildRequirement.reason === "config_newer"
+  );
+}
+
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   ensureDir(options.outputDir);
   if (!options.skipBuild) {
-    runCheckedCommand("pnpm", ["build"]);
-    // The watch harness must start from a completed-build baseline. Refresh
-    // the build stamp after the full build pipeline finishes so run-node does
-    // not spuriously rebuild inside the bounded watch window.
+    runCheckedCommand("node", ["scripts/build-all.mjs", "gatewayWatch"]);
+    // The watch harness must start from a completed dist/runtime baseline.
+    // Refresh the build stamp after the gateway build finishes so run-node
+    // does not spuriously rebuild inside the bounded watch window.
+    writeBuildStamp({ cwd: process.cwd() });
+  } else {
+    // Restored CI artifacts can be older than the fresh checkout mtimes.
+    // Refresh only the stamp so run-node trusts the already-built dist.
     writeBuildStamp({ cwd: process.cwd() });
   }
 
-  const preflightBuildRequirement = resolveBuildRequirement(buildRunNodeDeps(process.env));
+  let preflightBuildRequirement = resolveBuildRequirement(buildRunNodeDeps(process.env));
+  if (
+    shouldRefreshBuildStampForRestoredArtifacts({
+      skipBuild: options.skipBuild,
+      buildRequirement: preflightBuildRequirement,
+    })
+  ) {
+    // CI's skip-build path restores a built dist artifact after checkout.
+    // Refresh the stamp so checkout mtimes for package/config files do not
+    // force a duplicate build during the bounded gateway:watch window.
+    writeBuildStamp({ cwd: process.cwd() });
+    preflightBuildRequirement = resolveBuildRequirement(buildRunNodeDeps(process.env));
+  }
   if (
     preflightBuildRequirement.shouldBuild &&
     preflightBuildRequirement.reason === "dirty_watched_tree"
@@ -498,12 +670,19 @@ async function main() {
   const post = writeSnapshot(postDir);
   const diff = writeDiffArtifacts(options.outputDir, preDir, postDir);
 
-  const distRuntimeFileGrowth = post.distRuntime.files - pre.distRuntime.files;
-  const distRuntimeByteGrowth = post.distRuntime.apparentBytes - pre.distRuntime.apparentBytes;
-  const distRuntimeAddedPaths = diff.added.filter((entry) =>
-    entry.startsWith("dist-runtime/"),
-  ).length;
-  const cpuMs = Math.round((watchResult.timing.userSeconds + watchResult.timing.sysSeconds) * 1000);
+  const distRuntimeAddedPathSummary = summarizeDistRuntimeAddedPaths(diff.added);
+  const distRuntimeAddedPaths = distRuntimeAddedPathSummary.topologyAddedPaths.length;
+  const distRuntimeIgnoredDependencyAddedPaths =
+    distRuntimeAddedPathSummary.ignoredDependencyAddedPaths.length;
+  const distRuntimeFileGrowth = distRuntimeAddedPaths;
+  const distRuntimeByteGrowth =
+    distRuntimeAddedPaths === 0
+      ? 0
+      : post.distRuntime.apparentBytes - pre.distRuntime.apparentBytes;
+  const totalCpuMs = Math.round(
+    (watchResult.timing.userSeconds + watchResult.timing.sysSeconds) * 1000,
+  );
+  const cpuMs = watchResult.idleCpuMs ?? totalCpuMs;
   const watchTriggeredBuild =
     fs
       .readFileSync(watchResult.stderrPath, "utf8")
@@ -519,6 +698,8 @@ async function main() {
     watchTriggeredBuild,
     watchBuildReason,
     cpuMs,
+    totalCpuMs,
+    readyBeforeWindow: watchResult.readyBeforeWindow,
     cpuWarnMs: options.cpuWarnMs,
     cpuFailMs: options.cpuFailMs,
     distRuntimeFileGrowth,
@@ -526,6 +707,7 @@ async function main() {
     distRuntimeByteGrowth,
     distRuntimeByteGrowthMax: options.distRuntimeByteGrowthMax,
     distRuntimeAddedPaths,
+    distRuntimeIgnoredDependencyAddedPaths,
     addedPaths: diff.added.length,
     removedPaths: diff.removed.length,
     watchExit: watchResult.exit,
@@ -586,4 +768,6 @@ async function main() {
   process.exit(0);
 }
 
-await main();
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  await main();
+}

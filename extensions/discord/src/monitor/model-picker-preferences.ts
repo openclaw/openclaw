@@ -5,6 +5,7 @@ import { withFileLock } from "openclaw/plugin-sdk/file-lock";
 import { readJsonFileWithFallback, writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 
 const MODEL_PICKER_PREFERENCES_LOCK_OPTIONS = {
   retries: {
@@ -63,7 +64,7 @@ function resolvePreferencesStorePath(env: NodeJS.ProcessEnv = process.env): stri
 }
 
 function normalizeId(value?: string): string {
-  return value?.trim() ?? "";
+  return normalizeOptionalString(value) ?? "";
 }
 
 export function buildDiscordModelPickerPreferenceKey(

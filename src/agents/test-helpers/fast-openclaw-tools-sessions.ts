@@ -1,4 +1,5 @@
 import { vi } from "vitest";
+import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { stubTool } from "./fast-tool-stubs.js";
 
 // Sessions-tool tests only exercise sessions/subagent registrations.
@@ -45,7 +46,7 @@ vi.mock("../tools/update-plan-tool.js", () => ({
 
 vi.mock("../../channels/plugins/index.js", () => ({
   getChannelPlugin: () => null,
-  normalizeChannelId: (channel?: string) => channel?.trim().toLowerCase() || undefined,
+  normalizeChannelId: (channel?: string) => normalizeOptionalLowercaseString(channel),
   listChannelPlugins: () => [],
 }));
 

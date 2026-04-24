@@ -3,8 +3,12 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { loadConfig } from "../config/config.js";
 import { loadSessionStore } from "../config/sessions.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import {
@@ -14,7 +18,8 @@ import {
   setSseHeaders,
 } from "./http-common.js";
 import {
-  authorizeGatewayHttpRequestOrReply,
+  authorizeScopedGatewayHttpRequestOrReply,
+  checkGatewayHttpRequestAuth,
   getHeader,
   resolveTrustedHttpOperatorScopes,
 } from "./http-utils.js";
@@ -27,6 +32,8 @@ import {
   resolveGatewaySessionStoreTarget,
   resolveSessionTranscriptCandidates,
 } from "./session-utils.js";
+
+const log = createSubsystemLogger("gateway/sessions-history-sse");
 
 const MAX_SESSION_HISTORY_LIMIT = 1000;
 
@@ -44,7 +51,7 @@ function resolveSessionHistoryPath(req: IncomingMessage): string | null {
 }
 
 function shouldStreamSse(req: IncomingMessage): boolean {
-  const accept = getHeader(req, "accept")?.toLowerCase() ?? "";
+  const accept = normalizeLowercaseStringOrEmpty(getHeader(req, "accept"));
   return accept.includes("text/event-stream");
 }
 
@@ -87,6 +94,7 @@ export async function handleSessionHistoryHttpRequest(
   res: ServerResponse,
   opts: {
     auth: ResolvedGatewayAuth;
+    getResolvedAuth?: () => ResolvedGatewayAuth;
     trustedProxies?: string[];
     allowRealIpFallback?: boolean;
     rateLimiter?: AuthRateLimiter;
@@ -105,33 +113,22 @@ export async function handleSessionHistoryHttpRequest(
     return true;
   }
 
-  const cfg = loadConfig();
-  const requestAuth = await authorizeGatewayHttpRequestOrReply({
+  // HTTP callers must declare the same least-privilege operator scopes they
+  // intend to use over WS so both transport surfaces enforce the same gate.
+  const authResult = await authorizeScopedGatewayHttpRequestOrReply({
     req,
     res,
     auth: opts.auth,
-    trustedProxies: opts.trustedProxies ?? cfg.gateway?.trustedProxies,
-    allowRealIpFallback: opts.allowRealIpFallback ?? cfg.gateway?.allowRealIpFallback,
+    trustedProxies: opts.trustedProxies,
+    allowRealIpFallback: opts.allowRealIpFallback,
     rateLimiter: opts.rateLimiter,
+    operatorMethod: "chat.history",
+    resolveOperatorScopes: resolveTrustedHttpOperatorScopes,
   });
-  if (!requestAuth) {
+  if (!authResult) {
     return true;
   }
-
-  // HTTP callers must declare the same least-privilege operator scopes they
-  // intend to use over WS so both transport surfaces enforce the same gate.
-  const requestedScopes = resolveTrustedHttpOperatorScopes(req, requestAuth);
-  const scopeAuth = authorizeOperatorScopesForMethod("chat.history", requestedScopes);
-  if (!scopeAuth.allowed) {
-    sendJson(res, 403, {
-      ok: false,
-      error: {
-        type: "forbidden",
-        message: `missing scope: ${scopeAuth.missingScope}`,
-      },
-    });
-    return true;
-  }
+  const { cfg } = authResult;
 
   const target = resolveGatewaySessionStoreTarget({ cfg, key: sessionKey });
   const store = loadSessionStore(target.storePath);
@@ -207,50 +204,128 @@ export async function handleSessionHistoryHttpRequest(
     ...sentHistory,
   });
 
-  const heartbeat = setInterval(() => {
-    if (!res.writableEnded) {
-      res.write(": keepalive\n\n");
+  let cleanedUp = false;
+  let streamQueue = Promise.resolve();
+  // Forward-declared so `cleanup` can reference them without relying on
+  // Temporal-Dead-Zone leniency. A future refactor that wires the close event
+  // listeners before the `setInterval` / `onSessionTranscriptUpdate` calls
+  // would otherwise hit a `ReferenceError` on the first cleanup invocation.
+  let heartbeat: ReturnType<typeof setInterval> | undefined;
+  let unsubscribe: (() => void) | undefined;
+
+  const cleanup = () => {
+    if (cleanedUp) {
+      return;
     }
+    cleanedUp = true;
+    if (heartbeat) {
+      clearInterval(heartbeat);
+    }
+    if (unsubscribe) {
+      unsubscribe();
+    }
+  };
+
+  const closeStream = () => {
+    cleanup();
+    if (!res.writableEnded) {
+      res.end();
+    }
+  };
+
+  const queueStreamWork = (work: () => Promise<void>) => {
+    streamQueue = streamQueue
+      .then(async () => {
+        if (cleanedUp || res.writableEnded) {
+          return;
+        }
+        await work();
+      })
+      .catch((error) => {
+        // Surface the underlying error so operators can distinguish transient
+        // infrastructure failures (for example a `loadConfig()` read error
+        // inside the reauth path) from deliberate revocation, then fail closed.
+        log.warn("session history SSE stream work failed; closing stream", { error });
+        closeStream();
+      });
+  };
+
+  const isStreamStillAuthorized = async (): Promise<boolean> => {
+    const cfg = loadConfig();
+    const currentRequestAuth = await checkGatewayHttpRequestAuth({
+      req,
+      auth: opts.getResolvedAuth?.() ?? opts.auth,
+      trustedProxies: cfg.gateway?.trustedProxies,
+      allowRealIpFallback: cfg.gateway?.allowRealIpFallback,
+      rateLimiter: opts.rateLimiter,
+      cfg,
+    });
+    if (!currentRequestAuth.ok) {
+      return false;
+    }
+    const requestedScopes = resolveTrustedHttpOperatorScopes(req, currentRequestAuth.requestAuth);
+    return authorizeOperatorScopesForMethod("chat.history", requestedScopes).allowed;
+  };
+
+  heartbeat = setInterval(() => {
+    queueStreamWork(async () => {
+      if (!(await isStreamStillAuthorized())) {
+        closeStream();
+        return;
+      }
+      if (!res.writableEnded) {
+        res.write(": keepalive\n\n");
+      }
+    });
   }, 15_000);
 
-  const unsubscribe = onSessionTranscriptUpdate((update) => {
-    if (res.writableEnded || !entry?.sessionId) {
+  unsubscribe = onSessionTranscriptUpdate((update) => {
+    // Filter to candidate sessions synchronously before enqueueing any async
+    // work. `onSessionTranscriptUpdate` is a global fan-out listener, so every
+    // transcript write in the gateway would otherwise append a Promise-chain
+    // entry capturing `update.message` to every open SSE stream's queue —
+    // O(streams × updates) for busy deployments.
+    if (!entry?.sessionId) {
       return;
     }
     const updatePath = canonicalizePath(update.sessionFile);
     if (!updatePath || !transcriptCandidates.has(updatePath)) {
       return;
     }
-    if (update.message !== undefined) {
-      if (limit === undefined && cursor === undefined) {
-        const nextEvent = sseState.appendInlineMessage({
-          message: update.message,
-          messageId: update.messageId,
-        });
-        if (!nextEvent) {
-          return;
-        }
-        sentHistory = sseState.snapshot();
-        sseWrite(res, "message", {
-          sessionKey: target.canonicalKey,
-          message: nextEvent.message,
-          ...(typeof update.messageId === "string" ? { messageId: update.messageId } : {}),
-          messageSeq: nextEvent.messageSeq,
-        });
+    queueStreamWork(async () => {
+      if (res.writableEnded) {
         return;
       }
-    }
-    sentHistory = sseState.refresh();
-    sseWrite(res, "history", {
-      sessionKey: target.canonicalKey,
-      ...sentHistory,
+      if (!(await isStreamStillAuthorized())) {
+        closeStream();
+        return;
+      }
+      if (update.message !== undefined) {
+        if (limit === undefined && cursor === undefined) {
+          const nextEvent = sseState.appendInlineMessage({
+            message: update.message,
+            messageId: update.messageId,
+          });
+          if (!nextEvent) {
+            return;
+          }
+          sentHistory = sseState.snapshot();
+          sseWrite(res, "message", {
+            sessionKey: target.canonicalKey,
+            message: nextEvent.message,
+            ...(typeof update.messageId === "string" ? { messageId: update.messageId } : {}),
+            messageSeq: nextEvent.messageSeq,
+          });
+          return;
+        }
+      }
+      sentHistory = sseState.refresh();
+      sseWrite(res, "history", {
+        sessionKey: target.canonicalKey,
+        ...sentHistory,
+      });
     });
   });
-
-  const cleanup = () => {
-    clearInterval(heartbeat);
-    unsubscribe();
-  };
   req.on("close", cleanup);
   res.on("close", cleanup);
   res.on("finish", cleanup);

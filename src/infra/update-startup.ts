@@ -2,9 +2,10 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
-import type { loadConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { VERSION } from "../version.js";
 import { writeJsonAtomic } from "./json-files.js";
 import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
@@ -76,7 +77,7 @@ function shouldSkipCheck(allowInTests: boolean): boolean {
   return false;
 }
 
-function resolveAutoUpdatePolicy(cfg: ReturnType<typeof loadConfig>): AutoUpdatePolicy {
+function resolveAutoUpdatePolicy(cfg: OpenClawConfig): AutoUpdatePolicy {
   const auto = cfg.update?.auto;
   const stableDelayHours =
     typeof auto?.stableDelayHours === "number" && Number.isFinite(auto.stableDelayHours)
@@ -99,7 +100,7 @@ function resolveAutoUpdatePolicy(cfg: ReturnType<typeof loadConfig>): AutoUpdate
   };
 }
 
-function resolveCheckIntervalMs(cfg: ReturnType<typeof loadConfig>): number {
+function resolveCheckIntervalMs(cfg: OpenClawConfig): number {
   const channel = normalizeUpdateChannel(cfg.update?.channel) ?? DEFAULT_PACKAGE_CHANNEL;
   const auto = resolveAutoUpdatePolicy(cfg);
   if (!auto.enabled) {
@@ -236,7 +237,7 @@ async function runAutoUpdateCommand(params: {
   const baseArgs = ["update", "--yes", "--channel", params.channel, "--json"];
   const execPath = process.execPath?.trim();
   const argv1 = process.argv[1]?.trim();
-  const lowerExecBase = execPath ? path.basename(execPath).toLowerCase() : "";
+  const lowerExecBase = execPath ? normalizeLowercaseStringOrEmpty(path.basename(execPath)) : "";
   const runtimeIsNodeOrBun =
     lowerExecBase === "node" ||
     lowerExecBase === "node.exe" ||
@@ -298,7 +299,7 @@ function clearAutoState(nextState: UpdateCheckState): void {
 }
 
 export async function runGatewayUpdateCheck(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   log: { info: (msg: string, meta?: Record<string, unknown>) => void };
   isNixMode: boolean;
   allowInTests?: boolean;
@@ -485,7 +486,7 @@ export async function runGatewayUpdateCheck(params: {
 }
 
 export function scheduleGatewayUpdateCheck(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   log: { info: (msg: string, meta?: Record<string, unknown>) => void };
   isNixMode: boolean;
   onUpdateAvailableChange?: (updateAvailable: UpdateAvailable | null) => void;

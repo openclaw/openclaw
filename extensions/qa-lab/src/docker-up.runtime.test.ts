@@ -1,8 +1,50 @@
 import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { runQaDockerUp } from "./docker-up.runtime.js";
+
+type QaDockerUpDeps = NonNullable<Parameters<typeof runQaDockerUp>[1]>;
+
+async function occupyPortOrAcceptExisting(port: number): Promise<{ close: () => Promise<void> }> {
+  const server = createServer();
+  const listening = await new Promise<boolean>((resolve, reject) => {
+    server.once("error", (error: NodeJS.ErrnoException) => {
+      if (error.code === "EADDRINUSE") {
+        resolve(false);
+        return;
+      }
+      reject(error);
+    });
+    server.listen(port, "127.0.0.1", () => resolve(true));
+  });
+
+  return {
+    close: async () => {
+      if (!listening) {
+        return;
+      }
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      );
+    },
+  };
+}
+
+function createHealthyDockerDeps(calls: string[]): QaDockerUpDeps {
+  return {
+    async runCommand(command, args, cwd) {
+      calls.push([command, ...args, `@${cwd}`].join(" "));
+      if (args.join(" ").includes("ps --format json openclaw-qa-gateway")) {
+        return { stdout: '{"Health":"healthy","State":"running"}\n', stderr: "" };
+      }
+      return { stdout: "", stderr: "" };
+    },
+    fetchImpl: vi.fn(async () => ({ ok: true })),
+    sleepImpl: vi.fn(async () => {}),
+  };
+}
 
 describe("runQaDockerUp", () => {
   it("builds the QA UI, writes the harness, starts compose, and waits for health", async () => {
@@ -23,7 +65,7 @@ describe("runQaDockerUp", () => {
           async runCommand(command, args, cwd) {
             calls.push([command, ...args, `@${cwd}`].join(" "));
             if (args.join(" ").includes("ps --format json openclaw-qa-gateway")) {
-              return { stdout: '{"Health":"healthy","State":"running"}\n', stderr: "" };
+              return { stdout: '[{"Health":"healthy","State":"running"}]\n', stderr: "" };
             }
             return { stdout: "", stderr: "" };
           },
@@ -70,17 +112,7 @@ describe("runQaDockerUp", () => {
           bindUiDist: true,
           skipUiBuild: true,
         },
-        {
-          async runCommand(command, args, cwd) {
-            calls.push([command, ...args, `@${cwd}`].join(" "));
-            if (args.join(" ").includes("ps --format json openclaw-qa-gateway")) {
-              return { stdout: '{"Health":"healthy","State":"running"}\n', stderr: "" };
-            }
-            return { stdout: "", stderr: "" };
-          },
-          fetchImpl: vi.fn(async () => ({ ok: true })),
-          sleepImpl: vi.fn(async () => {}),
-        },
+        createHealthyDockerDeps(calls),
       );
 
       expect(calls).toEqual([
@@ -93,6 +125,34 @@ describe("runQaDockerUp", () => {
       expect(compose).toContain("      - --ui-dist-dir");
     } finally {
       await rm(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses a repo-root-relative default output dir when none is provided", async () => {
+    const calls: string[] = [];
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-docker-root-"));
+
+    try {
+      const result = await runQaDockerUp(
+        {
+          repoRoot,
+          usePrebuiltImage: true,
+          skipUiBuild: true,
+        },
+        createHealthyDockerDeps(calls),
+      );
+
+      expect(result.outputDir).toBe(path.join(repoRoot, ".artifacts/qa-docker"));
+      expect(result.composeFile).toBe(
+        path.join(repoRoot, ".artifacts/qa-docker/docker-compose.qa.yml"),
+      );
+      expect(calls).toEqual([
+        `docker compose -f ${path.join(repoRoot, ".artifacts/qa-docker/docker-compose.qa.yml")} down --remove-orphans @${repoRoot}`,
+        `docker compose -f ${path.join(repoRoot, ".artifacts/qa-docker/docker-compose.qa.yml")} up -d @${repoRoot}`,
+        `docker compose -f ${path.join(repoRoot, ".artifacts/qa-docker/docker-compose.qa.yml")} ps --format json openclaw-qa-gateway @${repoRoot}`,
+      ]);
+    } finally {
+      await rm(repoRoot, { recursive: true, force: true });
     }
   });
 
@@ -109,6 +169,8 @@ describe("runQaDockerUp", () => {
       }
       return preferredPort;
     });
+    const gatewayPortReservation = await occupyPortOrAcceptExisting(18789);
+    const qaLabPortReservation = await occupyPortOrAcceptExisting(43124);
 
     try {
       const result = await runQaDockerUp(
@@ -138,6 +200,8 @@ describe("runQaDockerUp", () => {
       expect(result.gatewayUrl).toBe("http://127.0.0.1:28001/");
       expect(result.qaLabUrl).toBe("http://127.0.0.1:28002");
     } finally {
+      await gatewayPortReservation.close();
+      await qaLabPortReservation.close();
       await rm(outputDir, { recursive: true, force: true });
     }
   });

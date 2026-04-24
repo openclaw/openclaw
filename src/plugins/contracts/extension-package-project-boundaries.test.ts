@@ -38,6 +38,7 @@ type PackageJson = {
   devDependencies?: Record<string, string>;
 };
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper lets assertions ascribe JSON file shape.
 function readJsonFile<T>(relativePath: string): T {
   return JSON.parse(readFileSync(resolve(REPO_ROOT, relativePath), "utf8")) as T;
 }
@@ -152,6 +153,9 @@ describe("opt-in extension package boundaries", () => {
     );
     expect(packageJson.exports?.["./provider-web-search-contract"]?.types).toBe(
       "./dist/src/plugin-sdk/provider-web-search-contract.d.ts",
+    );
+    expect(packageJson.exports?.["./provider-web-search-config-contract"]?.types).toBe(
+      "./dist/src/plugin-sdk/provider-web-search-config-contract.d.ts",
     );
     expect(packageJson.exports?.["./runtime-doctor"]?.types).toBe(
       "./dist/src/plugin-sdk/runtime-doctor.d.ts",

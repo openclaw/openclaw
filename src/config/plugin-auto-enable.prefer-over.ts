@@ -2,9 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { getChatChannelMeta, normalizeChatChannelId } from "../channels/registry.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { isRecord, resolveConfigDir, resolveUserPath } from "../utils.js";
-import type { OpenClawConfig } from "./config.js";
-import type { PluginAutoEnableCandidate } from "./plugin-auto-enable.shared.js";
+import type { PluginAutoEnableCandidate } from "./plugin-auto-enable.types.js";
+import type { OpenClawConfig } from "./types.openclaw.js";
 
 type ExternalCatalogChannelEntry = {
   id: string;
@@ -14,21 +16,19 @@ type ExternalCatalogChannelEntry = {
 const ENV_CATALOG_PATHS = ["OPENCLAW_PLUGIN_CATALOG_PATHS", "OPENCLAW_MPM_CATALOG_PATHS"];
 
 function splitEnvPaths(value: string): string[] {
-  const trimmed = value.trim();
+  const trimmed = normalizeOptionalString(value) ?? "";
   if (!trimmed) {
     return [];
   }
-  return trimmed
-    .split(/[;,]/g)
-    .flatMap((chunk) => chunk.split(path.delimiter))
-    .map((entry) => entry.trim())
-    .filter(Boolean);
+  return normalizeStringEntries(
+    trimmed.split(/[;,]/g).flatMap((chunk) => chunk.split(path.delimiter)),
+  );
 }
 
 function resolveExternalCatalogPaths(env: NodeJS.ProcessEnv): string[] {
   for (const key of ENV_CATALOG_PATHS) {
-    const raw = env[key];
-    if (raw && raw.trim()) {
+    const raw = normalizeOptionalString(env[key]);
+    if (raw) {
       return splitEnvPaths(raw);
     }
   }
@@ -58,7 +58,7 @@ function parseExternalCatalogChannelEntries(raw: unknown): ExternalCatalogChanne
       continue;
     }
     const channel = entry.openclaw.channel;
-    const id = typeof channel.id === "string" ? channel.id.trim() : "";
+    const id = normalizeOptionalString(channel.id) ?? "";
     if (!id) {
       continue;
     }
@@ -91,17 +91,23 @@ function resolveExternalCatalogPreferOver(channelId: string, env: NodeJS.Process
   return [];
 }
 
+function resolveBuiltInChannelPreferOver(channelId: string): readonly string[] {
+  const builtInChannelId = normalizeChatChannelId(channelId);
+  if (!builtInChannelId) {
+    return [];
+  }
+  return getChatChannelMeta(builtInChannelId)?.preferOver ?? [];
+}
+
 function resolvePreferredOverIds(
-  pluginId: string,
+  candidate: PluginAutoEnableCandidate,
   env: NodeJS.ProcessEnv,
   registry: PluginManifestRegistry,
 ): string[] {
-  const normalized = normalizeChatChannelId(pluginId);
-  if (normalized) {
-    return [...(getChatChannelMeta(normalized).preferOver ?? [])];
-  }
-  const installedPlugin = registry.plugins.find((record) => record.id === pluginId);
-  const manifestChannelPreferOver = installedPlugin?.channelConfigs?.[pluginId]?.preferOver;
+  const channelId =
+    candidate.kind === "channel-configured" ? candidate.channelId : candidate.pluginId;
+  const installedPlugin = registry.plugins.find((record) => record.id === candidate.pluginId);
+  const manifestChannelPreferOver = installedPlugin?.channelConfigs?.[channelId]?.preferOver;
   if (manifestChannelPreferOver?.length) {
     return [...manifestChannelPreferOver];
   }
@@ -109,7 +115,15 @@ function resolvePreferredOverIds(
   if (installedChannelMeta?.preferOver?.length) {
     return [...installedChannelMeta.preferOver];
   }
-  return resolveExternalCatalogPreferOver(pluginId, env);
+  const builtInChannelPreferOver = resolveBuiltInChannelPreferOver(channelId);
+  if (builtInChannelPreferOver.length) {
+    return [...builtInChannelPreferOver];
+  }
+  return resolveExternalCatalogPreferOver(channelId, env);
+}
+
+function getPluginAutoEnableCandidateCacheKey(candidate: PluginAutoEnableCandidate): string {
+  return `${candidate.pluginId}:${candidate.kind === "channel-configured" ? candidate.channelId : candidate.pluginId}`;
 }
 
 export function shouldSkipPreferredPluginAutoEnable(params: {
@@ -120,7 +134,19 @@ export function shouldSkipPreferredPluginAutoEnable(params: {
   registry: PluginManifestRegistry;
   isPluginDenied: (config: OpenClawConfig, pluginId: string) => boolean;
   isPluginExplicitlyDisabled: (config: OpenClawConfig, pluginId: string) => boolean;
+  preferOverCache: Map<string, string[]>;
 }): boolean {
+  const getPreferredOverIds = (candidate: PluginAutoEnableCandidate): string[] => {
+    const cacheKey = getPluginAutoEnableCandidateCacheKey(candidate);
+    const cached = params.preferOverCache.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+    const resolved = resolvePreferredOverIds(candidate, params.env, params.registry);
+    params.preferOverCache.set(cacheKey, resolved);
+    return resolved;
+  };
+
   for (const other of params.configured) {
     if (other.pluginId === params.entry.pluginId) {
       continue;
@@ -131,11 +157,7 @@ export function shouldSkipPreferredPluginAutoEnable(params: {
     ) {
       continue;
     }
-    if (
-      resolvePreferredOverIds(other.pluginId, params.env, params.registry).includes(
-        params.entry.pluginId,
-      )
-    ) {
+    if (getPreferredOverIds(other).includes(params.entry.pluginId)) {
       return true;
     }
   }

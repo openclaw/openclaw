@@ -1,7 +1,21 @@
-import type { Express } from "express";
+import type { Express, Request } from "express";
 import express from "express";
 import { browserMutationGuardMiddleware } from "./csrf.js";
 import { isAuthorizedBrowserRequest } from "./http-auth.js";
+
+export const BROWSER_AUTH_VERIFIED_FLAG = "__openclawBrowserAuthVerified";
+
+type BrowserAuthMarkedRequest = Request & {
+  [BROWSER_AUTH_VERIFIED_FLAG]?: boolean;
+};
+
+export function hasVerifiedBrowserAuth(req: Request): boolean {
+  return (req as BrowserAuthMarkedRequest)[BROWSER_AUTH_VERIFIED_FLAG] === true;
+}
+
+function markVerifiedBrowserAuth(req: Request) {
+  (req as BrowserAuthMarkedRequest)[BROWSER_AUTH_VERIFIED_FLAG] = true;
+}
 
 export function installBrowserCommonMiddleware(app: Express) {
   app.use((req, res, next) => {
@@ -30,6 +44,7 @@ export function installBrowserAuthMiddleware(
   }
   app.use((req, res, next) => {
     if (isAuthorizedBrowserRequest(req, auth)) {
+      markVerifiedBrowserAuth(req);
       return next();
     }
     res.status(401).send("Unauthorized");

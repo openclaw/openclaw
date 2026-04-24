@@ -4,6 +4,7 @@ import { createRestrictSendersChannelSecurity } from "openclaw/plugin-sdk/channe
 import { createEmptyChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveLineAccount } from "./accounts.js";
+import { lineBindingsAdapter } from "./bindings.js";
 import { type ChannelPlugin, type ResolvedLineAccount } from "./channel-api.js";
 import { lineChannelPluginCommon } from "./channel-shared.js";
 import { lineGatewayAdapter } from "./gateway.js";
@@ -16,33 +17,6 @@ import { lineSetupWizard } from "./setup-surface.js";
 import { lineStatusAdapter } from "./status.js";
 
 const loadLineChannelRuntime = createLazyRuntimeModule(() => import("./channel.runtime.js"));
-
-function normalizeLineConversationId(raw?: string | null): string | null {
-  const trimmed = raw?.trim() ?? "";
-  if (!trimmed) {
-    return null;
-  }
-  const prefixed = trimmed.match(/^line:(?:(?:user|group|room):)?(.+)$/i)?.[1];
-  return (prefixed ?? trimmed).trim() || null;
-}
-
-function resolveLineCommandConversation(params: {
-  originatingTo?: string;
-  commandTo?: string;
-  fallbackTo?: string;
-}) {
-  const conversationId =
-    normalizeLineConversationId(params.originatingTo) ??
-    normalizeLineConversationId(params.commandTo) ??
-    normalizeLineConversationId(params.fallbackTo);
-  return conversationId ? { conversationId } : null;
-}
-
-function resolveLineInboundConversation(params: { to?: string; conversationId?: string }) {
-  const conversationId =
-    normalizeLineConversationId(params.conversationId) ?? normalizeLineConversationId(params.to);
-  return conversationId ? { conversationId } : null;
-}
 
 const lineSecurityAdapter = createRestrictSendersChannelSecurity<ResolvedLineAccount>({
   channelKey: "line",
@@ -75,8 +49,7 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = createChatChannelP
         }
         return trimmed.replace(/^line:(group|room|user):/i, "").replace(/^line:/i, "");
       },
-      resolveInboundConversation: ({ to, conversationId }) =>
-        resolveLineInboundConversation({ to, conversationId }),
+      resolveInboundConversation: lineBindingsAdapter.resolveInboundConversation,
       transformReplyPayload: ({ payload }) => {
         if (!payload.text || !hasLineDirectives(payload.text)) {
           return payload;
@@ -98,28 +71,7 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = createChatChannelP
     setup: lineSetupAdapter,
     status: lineStatusAdapter,
     gateway: lineGatewayAdapter,
-    bindings: {
-      compileConfiguredBinding: ({ conversationId }) => {
-        const normalized = normalizeLineConversationId(conversationId);
-        return normalized ? { conversationId: normalized } : null;
-      },
-      matchInboundConversation: ({ compiledBinding, conversationId }) => {
-        const normalizedIncoming = normalizeLineConversationId(conversationId);
-        if (!normalizedIncoming || compiledBinding.conversationId !== normalizedIncoming) {
-          return null;
-        }
-        return {
-          conversationId: normalizedIncoming,
-          matchPriority: 2,
-        };
-      },
-      resolveCommandConversation: ({ originatingTo, commandTo, fallbackTo }) =>
-        resolveLineCommandConversation({
-          originatingTo,
-          commandTo,
-          fallbackTo,
-        }),
-    },
+    bindings: lineBindingsAdapter,
     conversationBindings: {
       defaultTopLevelPlacement: "current",
     },
@@ -189,6 +141,7 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = createChatChannelP
           getLineRuntime().channel.line?.pushMessageLine ??
           (await loadLineChannelRuntime()).pushMessageLine;
         await pushMessageLine(id, message, {
+          cfg,
           accountId: account.accountId,
           channelAccessToken: account.channelAccessToken,
         });

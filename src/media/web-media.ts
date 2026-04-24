@@ -1,19 +1,15 @@
 import path from "node:path";
+import { resolveCanvasHttpPathToLocalPath } from "../gateway/canvas-documents.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { SafeOpenError, readLocalFileSafely } from "../infra/fs-safe.js";
 import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../infra/local-file-access.js";
-import type { SsrFPolicy } from "../infra/net/ssrf.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
+import type { PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
 import { resolveUserPath } from "../utils.js";
 import { maxBytesForKind, type MediaKind } from "./constants.js";
 import { fetchRemoteMedia } from "./fetch.js";
 import {
   convertHeicToJpeg,
   hasAlphaChannel,
-  MAX_IMAGE_INPUT_PIXELS,
   optimizeImageToPng,
   resizeToJpeg,
 } from "./image-ops.js";
@@ -23,7 +19,15 @@ import {
   LocalMediaAccessError,
   type LocalMediaAccessErrorCode,
 } from "./local-media-access.js";
-import { detectMime, extensionForMime, kindFromMime, normalizeMimeType } from "./mime.js";
+import {
+  detectMime,
+  extensionForMime,
+  getFileExtension,
+  kindFromMime,
+  mimeTypeFromFilePath,
+  normalizeMimeType,
+} from "./mime.js";
+import { resolveMediaBufferPath } from "./store.js";
 
 export { getDefaultLocalRoots, LocalMediaAccessError };
 export type { LocalMediaAccessErrorCode };
@@ -39,6 +43,11 @@ type WebMediaOptions = {
   maxBytes?: number;
   optimizeImages?: boolean;
   ssrfPolicy?: SsrFPolicy;
+  proxyUrl?: string;
+  fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+  requestInit?: RequestInit;
+  trustExplicitProxyDns?: boolean;
+  workspaceDir?: string;
   /** Allowed root directories for local path reads. "any" is deprecated; prefer sandboxValidated + readFile. */
   localRoots?: readonly string[] | "any";
   /** Caller already validated the local path (sandbox/other guards); requires readFile override. */
@@ -46,9 +55,47 @@ type WebMediaOptions = {
   readFile?: (filePath: string) => Promise<Buffer>;
   /** Host-local fs-policy read piggyback; rejects plaintext-like document sends. */
   hostReadCapability?: boolean;
-  /** Agent workspace directory for resolving relative MEDIA: paths. */
-  workspaceDir?: string;
 };
+
+async function resolveMediaStoreUriToPath(mediaUrl: string): Promise<string | null> {
+  if (!mediaUrl.startsWith("media://")) {
+    return null;
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(mediaUrl);
+  } catch (err) {
+    throw new LocalMediaAccessError("invalid-path", `Invalid media URI: ${mediaUrl}`, {
+      cause: err,
+    });
+  }
+  if (parsed.hostname !== "inbound") {
+    throw new LocalMediaAccessError(
+      "path-not-allowed",
+      `Unsupported media URI location: ${parsed.hostname || "(missing)"}`,
+    );
+  }
+  let id: string;
+  try {
+    id = decodeURIComponent(parsed.pathname.replace(/^\/+/, ""));
+  } catch (err) {
+    throw new LocalMediaAccessError("invalid-path", `Invalid media URI: ${mediaUrl}`, {
+      cause: err,
+    });
+  }
+  if (!id || id.includes("/")) {
+    throw new LocalMediaAccessError("invalid-path", `Invalid media URI: ${mediaUrl}`);
+  }
+  try {
+    return await resolveMediaBufferPath(id, "inbound");
+  } catch (err) {
+    throw new LocalMediaAccessError(
+      "invalid-path",
+      err instanceof Error ? err.message : `Invalid media URI: ${mediaUrl}`,
+      { cause: err },
+    );
+  }
+}
 
 function resolveWebMediaOptions(params: {
   maxBytesOrOptions?: number | WebMediaOptions;
@@ -73,6 +120,7 @@ function resolveWebMediaOptions(params: {
 
 const HEIC_MIME_RE = /^image\/hei[cf]$/i;
 const HEIC_EXT_RE = /\.(heic|heif)$/i;
+const WINDOWS_DRIVE_RE = /^[A-Za-z]:[\\/]/;
 const HOST_READ_ALLOWED_DOCUMENT_MIMES = new Set([
   "application/msword",
   "application/pdf",
@@ -81,8 +129,94 @@ const HOST_READ_ALLOWED_DOCUMENT_MIMES = new Set([
   "application/vnd.openxmlformats-officedocument.presentationml.presentation",
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "text/csv",
+  "text/markdown",
 ]);
+// file-type returns undefined (no magic bytes) for plain-text formats like CSV and
+// Markdown, so host-read needs an explicit "this really decodes as text" fallback.
+const HOST_READ_TEXT_PLAIN_ALIASES = new Set(["text/csv", "text/markdown"]);
 const MB = 1024 * 1024;
+
+function getTextStats(text: string): { printableRatio: number } {
+  if (!text) {
+    return { printableRatio: 0 };
+  }
+  let printable = 0;
+  let control = 0;
+  for (const char of text) {
+    const code = char.codePointAt(0) ?? 0;
+    if (code === 9 || code === 10 || code === 13 || code === 32) {
+      printable += 1;
+      continue;
+    }
+    if (code < 32 || (code >= 0x7f && code <= 0x9f)) {
+      control += 1;
+      continue;
+    }
+    printable += 1;
+  }
+  const total = printable + control;
+  if (total === 0) {
+    return { printableRatio: 0 };
+  }
+  return { printableRatio: printable / total };
+}
+
+function hasSingleByteTextShape(buffer: Buffer): boolean {
+  if (buffer.length === 0) {
+    return true;
+  }
+  let asciiText = 0;
+  let control = 0;
+  for (const byte of buffer) {
+    if (byte === 9 || byte === 10 || byte === 13 || (byte >= 0x20 && byte <= 0x7e)) {
+      asciiText += 1;
+      continue;
+    }
+    if (byte < 0x20 || byte === 0x7f) {
+      control += 1;
+    }
+  }
+  const total = buffer.length;
+  const highBytes = total - asciiText - control;
+  return control === 0 && asciiText / total >= 0.7 && highBytes / total <= 0.3;
+}
+
+function decodeHostReadText(buffer: Buffer): string | undefined {
+  if (buffer.length === 0) {
+    return "";
+  }
+  // UTF-16 decoding is intentionally omitted: TextDecoder("utf-16le/be") never throws on
+  // arbitrary byte pairs, so every byte pair is a valid (if meaningless) Unicode scalar —
+  // an attacker can prepend a BOM and pass getTextStats with printableRatio≈1.0 on pure
+  // binary garbage. The Latin-1 path below already covers the most common non-UTF-8
+  // real-world case (Excel CSV exports with accented chars like é, ñ) while remaining
+  // safe because hasSingleByteTextShape gates on byte shape *before* any decode.
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(buffer);
+  } catch {
+    if (!hasSingleByteTextShape(buffer)) {
+      return undefined;
+    }
+    // WHATWG latin1 decodes common Excel-style single-byte exports via Windows-1252 mapping.
+    return new TextDecoder("latin1").decode(buffer);
+  }
+}
+
+function isValidatedHostReadText(buffer?: Buffer): boolean {
+  if (!buffer) {
+    return false;
+  }
+  if (buffer.length === 0) {
+    return true;
+  }
+  const text = decodeHostReadText(buffer);
+  if (text === undefined) {
+    return false;
+  }
+  const { printableRatio } = getTextStats(text);
+  return printableRatio > 0.95;
+}
 
 function formatMb(bytes: number, digits = 2): string {
   return (bytes / MB).toFixed(digits);
@@ -96,44 +230,83 @@ function formatCapReduce(label: string, cap: number, size: number): string {
   return `${label} could not be reduced below ${formatMb(cap, 0)}MB (got ${formatMb(size)}MB)`;
 }
 
-function isPixelLimitError(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    error.message.includes(`${MAX_IMAGE_INPUT_PIXELS.toLocaleString("en-US")} pixel input limit`)
-  );
-}
-
 function isHeicSource(opts: { contentType?: string; fileName?: string }): boolean {
-  if (HEIC_MIME_RE.test(normalizeOptionalString(opts.contentType) ?? "")) {
+  if (opts.contentType && HEIC_MIME_RE.test(opts.contentType.trim())) {
     return true;
   }
-  if (HEIC_EXT_RE.test(normalizeOptionalString(opts.fileName) ?? "")) {
+  if (opts.fileName && HEIC_EXT_RE.test(opts.fileName.trim())) {
     return true;
   }
   return false;
 }
 
 function assertHostReadMediaAllowed(params: {
+  sniffedContentType?: string;
   contentType?: string;
+  filePath?: string;
   kind: MediaKind | undefined;
+  buffer?: Buffer;
 }): void {
-  if (params.kind === "image" || params.kind === "audio" || params.kind === "video") {
-    return;
-  }
-  if (params.kind !== "document") {
-    const contentType = normalizeMimeType(params.contentType);
+  const declaredMime = normalizeMimeType(mimeTypeFromFilePath(params.filePath));
+  const normalizedMime = normalizeMimeType(params.contentType);
+  // For extension-declared plain-text aliases such as .csv/.md, trust only the
+  // text validator path. Some opaque blobs can still produce bogus binary MIME
+  // hits (for example BOM-prefixed 0xFF data sniffing as audio/mpeg), and
+  // host-read should reject those instead of returning early on the sniff.
+  if (declaredMime && HOST_READ_TEXT_PLAIN_ALIASES.has(declaredMime)) {
+    if (!params.sniffedContentType && params.buffer && isValidatedHostReadText(params.buffer)) {
+      return;
+    }
     throw new LocalMediaAccessError(
       "path-not-allowed",
-      `Host-local media sends only allow images, audio, video, PDF, and Office documents (got ${contentType ?? "unknown"}).`,
+      "hostReadCapability permits only validated plain-text CSV/Markdown documents for local reads",
     );
   }
-  const normalizedMime = normalizeMimeType(params.contentType);
-  if (normalizedMime && HOST_READ_ALLOWED_DOCUMENT_MIMES.has(normalizedMime)) {
+  const sniffedKind = kindFromMime(params.sniffedContentType);
+  if (sniffedKind === "image" || sniffedKind === "audio" || sniffedKind === "video") {
     return;
+  }
+  const sniffedMime = normalizeMimeType(params.sniffedContentType);
+  if (
+    sniffedKind === "document" &&
+    sniffedMime &&
+    HOST_READ_ALLOWED_DOCUMENT_MIMES.has(sniffedMime)
+  ) {
+    return;
+  }
+  if (
+    sniffedMime === "application/x-cfb" &&
+    [".doc", ".ppt", ".xls"].includes(getFileExtension(params.filePath) ?? "")
+  ) {
+    return;
+  }
+  // CSV / Markdown exception: file-type v22 returns undefined (not "text/plain") for
+  // plain-text buffers that have no binary magic bytes. Allow these formats when:
+  // - sniffedMime is undefined (no binary signature detected by file-type)
+  // - The extension-derived MIME is text/csv or text/markdown (operator intent)
+  // - The buffer decodes as actual text instead of opaque binary bytes
+  if (
+    !sniffedMime &&
+    normalizedMime &&
+    HOST_READ_TEXT_PLAIN_ALIASES.has(normalizedMime) &&
+    params.buffer &&
+    isValidatedHostReadText(params.buffer)
+  ) {
+    return;
+  }
+  if (
+    params.kind === "document" &&
+    normalizedMime &&
+    HOST_READ_ALLOWED_DOCUMENT_MIMES.has(normalizedMime)
+  ) {
+    throw new LocalMediaAccessError(
+      "path-not-allowed",
+      `Host-local media sends require buffer-verified media/document types (got fallback ${normalizedMime}).`,
+    );
   }
   throw new LocalMediaAccessError(
     "path-not-allowed",
-    `Host-local media sends only allow images, audio, video, PDF, and Office documents (got ${normalizedMime ?? "unknown"}).`,
+    `Host-local media sends only allow buffer-verified images, audio, video, PDF, and Office documents (got ${sniffedMime ?? normalizedMime ?? "unknown"}).`,
   );
 }
 
@@ -185,9 +358,7 @@ async function optimizeImageWithFallback(params: {
   meta?: { contentType?: string; fileName?: string };
 }): Promise<OptimizedImage> {
   const { buffer, cap, meta } = params;
-  const isPng =
-    meta?.contentType === "image/png" ||
-    normalizeLowercaseStringOrEmpty(meta?.fileName).endsWith(".png");
+  const isPng = meta?.contentType === "image/png" || meta?.fileName?.toLowerCase().endsWith(".png");
   const hasAlpha = isPng && (await hasAlphaChannel(buffer));
 
   if (hasAlpha) {
@@ -214,15 +385,22 @@ async function loadWebMediaInternal(
     maxBytes,
     optimizeImages = true,
     ssrfPolicy,
+    proxyUrl,
+    fetchImpl,
+    requestInit,
+    trustExplicitProxyDns,
+    workspaceDir,
     localRoots,
     sandboxValidated = false,
     readFile: readFileOverride,
     hostReadCapability = false,
-    workspaceDir,
   } = options;
   // Strip MEDIA: prefix used by agent tools (e.g. TTS) to tag media paths.
   // Be lenient: LLM output may add extra whitespace (e.g. "  MEDIA :  /tmp/x.png").
-  mediaUrl = mediaUrl.replace(/^\s*MEDIA\s*:\s*/i, "");
+  if (!/^\s*media:\/\//i.test(mediaUrl)) {
+    mediaUrl = mediaUrl.replace(/^\s*MEDIA\s*:\s*/i, "");
+  }
+  mediaUrl = (await resolveMediaStoreUriToPath(mediaUrl)) ?? mediaUrl;
   // Use fileURLToPath for proper handling of file:// URLs (handles file://localhost/path, etc.)
   if (mediaUrl.startsWith("file://")) {
     try {
@@ -231,6 +409,7 @@ async function loadWebMediaInternal(
       throw new LocalMediaAccessError("invalid-file-url", (err as Error).message, { cause: err });
     }
   }
+  mediaUrl = resolveCanvasHttpPathToLocalPath(mediaUrl) ?? mediaUrl;
 
   const optimizeAndClampImage = async (
     buffer: Buffer,
@@ -309,7 +488,22 @@ async function loadWebMediaInternal(
         : optimizeImages
           ? Math.max(maxBytes, defaultFetchCap)
           : maxBytes;
-    const fetched = await fetchRemoteMedia({ url: mediaUrl, maxBytes: fetchCap, ssrfPolicy });
+    const dispatcherPolicy: PinnedDispatcherPolicy | undefined = proxyUrl
+      ? {
+          mode: "explicit-proxy",
+          proxyUrl,
+          allowPrivateProxy: true,
+        }
+      : undefined;
+    const fetched = await fetchRemoteMedia({
+      url: mediaUrl,
+      fetchImpl,
+      requestInit,
+      maxBytes: fetchCap,
+      ssrfPolicy,
+      dispatcherPolicy,
+      trustExplicitProxyDns,
+    });
     const { buffer, contentType, fileName } = fetched;
     const kind = kindFromMime(contentType);
     return await clampAndFinalize({ buffer, contentType, kind, fileName });
@@ -319,11 +513,7 @@ async function loadWebMediaInternal(
   if (mediaUrl.startsWith("~")) {
     mediaUrl = resolveUserPath(mediaUrl);
   }
-
-  // Resolve relative MEDIA: paths (e.g. "poker_profit.png", "./subdir/file.png")
-  // against the agent workspace directory so bare filenames written by agents
-  // are found on disk and pass the local-roots allowlist check.
-  if (workspaceDir && !path.isAbsolute(mediaUrl)) {
+  if (workspaceDir && !path.isAbsolute(mediaUrl) && !WINDOWS_DRIVE_RE.test(mediaUrl)) {
     mediaUrl = path.resolve(workspaceDir, mediaUrl);
   }
   try {
@@ -376,22 +566,24 @@ async function loadWebMediaInternal(
       throw err;
     }
   }
-  const detectedMime = await detectMime({ buffer: data, filePath: mediaUrl });
-  const verifiedMime = hostReadCapability ? await detectMime({ buffer: data }) : detectedMime;
-  const mime = verifiedMime ?? detectedMime;
+  const sniffedMime = await detectMime({ buffer: data });
+  const mime = await detectMime({ buffer: data, filePath: mediaUrl });
   const kind = kindFromMime(mime);
+  if (hostReadCapability) {
+    assertHostReadMediaAllowed({
+      sniffedContentType: sniffedMime,
+      contentType: mime,
+      filePath: mediaUrl,
+      kind,
+      buffer: data,
+    });
+  }
   let fileName = path.basename(mediaUrl) || undefined;
   if (fileName && !path.extname(fileName) && mime) {
     const ext = extensionForMime(mime);
     if (ext) {
       fileName = `${fileName}${ext}`;
     }
-  }
-  if (hostReadCapability) {
-    assertHostReadMediaAllowed({
-      contentType: verifiedMime,
-      kind: kindFromMime(detectedMime ?? verifiedMime),
-    });
   }
   return await clampAndFinalize({
     buffer: data,
@@ -472,10 +664,7 @@ export async function optimizeImageToJpeg(
             quality,
           };
         }
-      } catch (error) {
-        if (isPixelLimitError(error)) {
-          throw error;
-        }
+      } catch {
         // Continue trying other size/quality combinations
       }
     }

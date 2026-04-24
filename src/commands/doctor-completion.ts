@@ -8,7 +8,7 @@ import {
   resolveCompletionCachePath,
   resolveShellFromEnv,
   usesSlowDynamicCompletion,
-} from "../cli/completion-cli.js";
+} from "../cli/completion-runtime.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { note } from "../terminal/note.js";

@@ -1,40 +1,39 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   defaultQaModelForMode,
-  isQaFastModeModelRef,
+  normalizeQaProviderMode,
   splitQaModelRef,
   type QaProviderMode,
 } from "./model-selection.js";
+import { getQaProvider } from "./providers/index.js";
+import { DEFAULT_QA_PROVIDER_MODE } from "./providers/index.js";
+import { normalizeQaThinkingLevel, type QaThinkingLevel } from "./qa-thinking.js";
+import type { QaTransportGatewayConfig } from "./qa-transport.js";
 
-const DISABLED_BUNDLED_CHANNELS = Object.freeze({
-  bluebubbles: { enabled: false },
-  discord: { enabled: false },
-  feishu: { enabled: false },
-  googlechat: { enabled: false },
-  imessage: { enabled: false },
-  irc: { enabled: false },
-  line: { enabled: false },
-  mattermost: { enabled: false },
-  matrix: { enabled: false },
-  msteams: { enabled: false },
-  qqbot: { enabled: false },
-  signal: { enabled: false },
-  slack: { enabled: false },
-  "synology-chat": { enabled: false },
-  telegram: { enabled: false },
-  tlon: { enabled: false },
-  whatsapp: { enabled: false },
-  zalo: { enabled: false },
-  zalouser: { enabled: false },
-} satisfies Record<string, { enabled: false }>);
+export { normalizeQaThinkingLevel, type QaThinkingLevel } from "./qa-thinking.js";
+
+export const DEFAULT_QA_CONTROL_UI_ALLOWED_ORIGINS = Object.freeze([
+  "http://127.0.0.1:18789",
+  "http://localhost:18789",
+  "http://127.0.0.1:43124",
+  "http://localhost:43124",
+]);
+
+export const QA_BASE_RUNTIME_PLUGIN_IDS = Object.freeze(["acpx", "memory-core"]);
+
+export function mergeQaControlUiAllowedOrigins(extraOrigins?: string[]) {
+  const normalizedExtra = (extraOrigins ?? [])
+    .map((origin) => origin.trim())
+    .filter((origin) => origin.length > 0);
+  return [...new Set([...DEFAULT_QA_CONTROL_UI_ALLOWED_ORIGINS, ...normalizedExtra])];
+}
 
 export function buildQaGatewayConfig(params: {
   bind: "loopback" | "lan";
   gatewayPort: number;
   gatewayToken: string;
   providerBaseUrl?: string;
-  qaBusBaseUrl: string;
   workspaceDir: string;
   controlUiRoot?: string;
   controlUiAllowedOrigins?: string[];
@@ -42,116 +41,94 @@ export function buildQaGatewayConfig(params: {
   providerMode?: QaProviderMode;
   primaryModel?: string;
   alternateModel?: string;
+  imageGenerationModel?: string | null;
+  enabledProviderIds?: string[];
+  enabledPluginIds?: string[];
+  transportPluginIds?: readonly string[];
+  transportConfig?: QaTransportGatewayConfig;
+  liveProviderConfigs?: Record<string, ModelProviderConfig>;
+  fastMode?: boolean;
+  thinkingDefault?: QaThinkingLevel;
 }): OpenClawConfig {
-  const mockProviderBaseUrl = params.providerBaseUrl ?? "http://127.0.0.1:44080/v1";
-  const mockOpenAiProvider: ModelProviderConfig = {
-    baseUrl: mockProviderBaseUrl,
-    apiKey: "test",
-    api: "openai-responses",
-    models: [
-      {
-        id: "gpt-5.4",
-        name: "gpt-5.4",
-        api: "openai-responses",
-        reasoning: false,
-        input: ["text", "image"],
-        cost: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-        },
-        contextWindow: 128_000,
-        maxTokens: 4096,
-      },
-      {
-        id: "gpt-5.4-alt",
-        name: "gpt-5.4-alt",
-        api: "openai-responses",
-        reasoning: false,
-        input: ["text", "image"],
-        cost: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-        },
-        contextWindow: 128_000,
-        maxTokens: 4096,
-      },
-      {
-        id: "gpt-image-1",
-        name: "gpt-image-1",
-        api: "openai-responses",
-        reasoning: false,
-        input: ["text"],
-        cost: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-        },
-        contextWindow: 128_000,
-        maxTokens: 4096,
-      },
-    ],
-  };
-  const providerMode = params.providerMode ?? "mock-openai";
+  const providerBaseUrl = params.providerBaseUrl ?? "http://127.0.0.1:44080/v1";
+  const providerMode = normalizeQaProviderMode(params.providerMode ?? DEFAULT_QA_PROVIDER_MODE);
+  const provider = getQaProvider(providerMode);
   const primaryModel = params.primaryModel ?? defaultQaModelForMode(providerMode);
   const alternateModel =
     params.alternateModel ?? defaultQaModelForMode(providerMode, { alternate: true });
+  const modelProviderIds = [primaryModel, alternateModel]
+    .map((ref) => splitQaModelRef(ref)?.provider)
+    .filter((provider): provider is string => Boolean(provider));
   const imageGenerationModelRef =
-    providerMode === "live-openai" ? "openai/gpt-image-1" : "mock-openai/gpt-image-1";
-  const selectedProviderIds =
-    providerMode === "live-openai"
-      ? [
-          ...new Set(
-            [primaryModel, alternateModel, imageGenerationModelRef]
-              .map((ref) => splitQaModelRef(ref)?.provider)
-              .filter((provider): provider is string => Boolean(provider)),
-          ),
-        ]
-      : [];
-  const pluginEntries =
-    providerMode === "live-openai"
-      ? Object.fromEntries(selectedProviderIds.map((providerId) => [providerId, { enabled: true }]))
-      : {};
-  const allowedPlugins =
-    providerMode === "live-openai"
-      ? ["memory-core", ...selectedProviderIds, "qa-channel"]
-      : ["memory-core", "qa-channel"];
-  const liveModelParams =
-    providerMode === "live-openai"
-      ? (modelRef: string) => ({
-          transport: "sse",
-          openaiWsWarmup: false,
-          ...(isQaFastModeModelRef(modelRef) ? { fastMode: true } : {}),
-        })
-      : (_modelRef: string) => ({
-          transport: "sse",
-          openaiWsWarmup: false,
-        });
-  const allowedOrigins =
-    params.controlUiAllowedOrigins && params.controlUiAllowedOrigins.length > 0
-      ? params.controlUiAllowedOrigins
-      : [
-          "http://127.0.0.1:18789",
-          "http://localhost:18789",
-          "http://127.0.0.1:43124",
-          "http://localhost:43124",
-        ];
+    params.imageGenerationModel !== undefined
+      ? params.imageGenerationModel
+      : provider.defaultImageGenerationModel({ modelProviderIds });
+  const selectedProviderIds = provider.usesModelProviderPlugins
+    ? [
+        ...new Set(
+          [...(params.enabledProviderIds ?? []), ...modelProviderIds, imageGenerationModelRef]
+            .map((value) =>
+              typeof value === "string" ? (splitQaModelRef(value)?.provider ?? value) : null,
+            )
+            .filter((provider): provider is string => Boolean(provider)),
+        ),
+      ]
+    : [];
+  const selectedPluginIds = provider.usesModelProviderPlugins
+    ? [
+        ...new Set(
+          (params.enabledPluginIds?.length ?? 0) > 0
+            ? params.enabledPluginIds
+            : selectedProviderIds,
+        ),
+      ]
+    : [
+        ...new Set(
+          (params.enabledPluginIds ?? [])
+            .map((pluginId) => pluginId.trim())
+            .filter((pluginId) => pluginId.length > 0),
+        ),
+      ];
+  const transportPluginIds = [...new Set(params.transportPluginIds ?? [])]
+    .map((pluginId) => pluginId.trim())
+    .filter((pluginId) => pluginId.length > 0);
+  const pluginEntries = Object.fromEntries(
+    selectedPluginIds.map((pluginId) => [pluginId, { enabled: true }]),
+  );
+  const transportPluginEntries = Object.fromEntries(
+    transportPluginIds.map((pluginId) => [pluginId, { enabled: true }]),
+  );
+  const allowedPlugins = [
+    ...new Set([...QA_BASE_RUNTIME_PLUGIN_IDS, ...selectedPluginIds, ...transportPluginIds]),
+  ];
+  const resolveModelParams = (modelRef: string) =>
+    provider.resolveModelParams({
+      modelRef,
+      fastMode: params.fastMode,
+      thinkingDefault: params.thinkingDefault,
+    });
+  const allowedOrigins = mergeQaControlUiAllowedOrigins(params.controlUiAllowedOrigins);
+  const gatewayModels = provider.buildGatewayModels({
+    providerBaseUrl,
+    liveProviderConfigs: params.liveProviderConfigs,
+  });
 
   return {
     plugins: {
       allow: allowedPlugins,
       entries: {
         acpx: {
-          enabled: false,
+          enabled: true,
+          config: {
+            pluginToolsMcpBridge: true,
+            openClawToolsMcpBridge: true,
+          },
         },
         "memory-core": {
           enabled: true,
         },
         ...pluginEntries,
+        ...transportPluginEntries,
       },
     },
     agents: {
@@ -160,9 +137,14 @@ export function buildQaGatewayConfig(params: {
         model: {
           primary: primaryModel,
         },
-        imageGenerationModel: {
-          primary: imageGenerationModelRef,
-        },
+        ...(imageGenerationModelRef
+          ? {
+              imageGenerationModel: {
+                primary: imageGenerationModelRef,
+              },
+            }
+          : {}),
+        ...(params.thinkingDefault ? { thinkingDefault: params.thinkingDefault } : {}),
         memorySearch: {
           sync: {
             watch: true,
@@ -173,10 +155,10 @@ export function buildQaGatewayConfig(params: {
         },
         models: {
           [primaryModel]: {
-            params: liveModelParams(primaryModel),
+            params: resolveModelParams(primaryModel),
           },
           [alternateModel]: {
-            params: liveModelParams(alternateModel),
+            params: resolveModelParams(alternateModel),
           },
         },
         subagents: {
@@ -200,19 +182,26 @@ export function buildQaGatewayConfig(params: {
           subagents: {
             allowAgents: ["*"],
           },
+          tools: {
+            profile: "coding",
+          },
         },
       ],
     },
     memory: {
       backend: "builtin",
     },
-    ...(providerMode === "mock-openai"
+    tools: {
+      // The parity scenarios are code-agent contracts: they must always expose
+      // file, image, memory, and subagent tools even when the surrounding
+      // environment defaults to a messaging-only profile.
+      profile: "coding",
+    },
+    ...(gatewayModels
       ? {
           models: {
-            mode: "replace",
-            providers: {
-              "mock-openai": mockOpenAiProvider,
-            },
+            mode: gatewayModels.mode,
+            providers: gatewayModels.providers,
           },
         }
       : {}),
@@ -223,6 +212,11 @@ export function buildQaGatewayConfig(params: {
       auth: {
         mode: "token",
         token: params.gatewayToken,
+      },
+      reload: {
+        // QA restart scenarios need deterministic reload timing instead of the
+        // much longer production deferral window.
+        deferralTimeoutMs: 1_000,
       },
       controlUi: {
         enabled: params.controlUiEnabled ?? true,
@@ -242,21 +236,7 @@ export function buildQaGatewayConfig(params: {
         mode: "off",
       },
     },
-    channels: {
-      ...DISABLED_BUNDLED_CHANNELS,
-      "qa-channel": {
-        enabled: true,
-        baseUrl: params.qaBusBaseUrl,
-        botUserId: "openclaw",
-        botDisplayName: "OpenClaw QA",
-        allowFrom: ["*"],
-        pollTimeoutMs: 250,
-      },
-    },
-    messages: {
-      groupChat: {
-        mentionPatterns: ["\\b@?openclaw\\b"],
-      },
-    },
+    ...(params.transportConfig?.channels ? { channels: params.transportConfig.channels } : {}),
+    ...(params.transportConfig?.messages ? { messages: params.transportConfig.messages } : {}),
   } satisfies OpenClawConfig;
 }

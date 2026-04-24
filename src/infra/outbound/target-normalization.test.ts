@@ -1,7 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 
-const normalizeChannelIdMock = vi.hoisted(() => vi.fn());
 const getChannelPluginMock = vi.hoisted(() => vi.fn());
 const getActivePluginChannelRegistryVersionMock = vi.hoisted(() => vi.fn());
 
@@ -15,9 +14,8 @@ let resolveNormalizedTargetInput: TargetNormalizationModule["resolveNormalizedTa
 let normalizeTargetForProvider: TargetNormalizationModule["normalizeTargetForProvider"];
 let resetTargetNormalizerCacheForTests: TargetNormalizationModule["__testing"]["resetTargetNormalizerCacheForTests"];
 
-vi.mock("../../channels/plugins/index.js", () => ({
-  normalizeChannelId: (...args: unknown[]) => normalizeChannelIdMock(...args),
-  getChannelPlugin: (...args: unknown[]) => getChannelPluginMock(...args),
+vi.mock("../../channels/plugins/registry-loaded-read.js", () => ({
+  getLoadedChannelPluginForRead: (...args: unknown[]) => getChannelPluginMock(...args),
 }));
 
 vi.mock("../../plugins/runtime.js", () => ({
@@ -40,7 +38,6 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
-  normalizeChannelIdMock.mockReset();
   getChannelPluginMock.mockReset();
   getActivePluginChannelRegistryVersionMock.mockReset();
   resetTargetNormalizerCacheForTests();
@@ -54,21 +51,20 @@ describe("normalizeChannelTargetInput", () => {
 
 describe("normalizeTargetForProvider", () => {
   it.each([undefined, "   "])("returns undefined for blank raw input %j", (raw) => {
-    expect(normalizeTargetForProvider("telegram", raw)).toBeUndefined();
+    expect(normalizeTargetForProvider("alpha", raw)).toBeUndefined();
   });
 
   it.each([
     {
       provider: "unknown",
       setup: () => {
-        normalizeChannelIdMock.mockReturnValueOnce(null);
+        getChannelPluginMock.mockReturnValueOnce(undefined);
       },
       expected: "raw-id",
     },
     {
-      provider: "telegram",
+      provider: "alpha",
       setup: () => {
-        normalizeChannelIdMock.mockReturnValueOnce("telegram");
         getActivePluginChannelRegistryVersionMock.mockReturnValueOnce(1);
         getChannelPluginMock.mockReturnValueOnce(undefined);
       },
@@ -85,7 +81,6 @@ describe("normalizeTargetForProvider", () => {
   it("uses the cached target normalizer until the plugin registry version changes", () => {
     const firstNormalizer = vi.fn((raw: string) => raw.trim().toUpperCase());
     const secondNormalizer = vi.fn((raw: string) => `next:${raw.trim()}`);
-    normalizeChannelIdMock.mockReturnValue("telegram");
     getActivePluginChannelRegistryVersionMock
       .mockReturnValueOnce(10)
       .mockReturnValueOnce(10)
@@ -98,9 +93,9 @@ describe("normalizeTargetForProvider", () => {
         messaging: { normalizeTarget: secondNormalizer },
       });
 
-    expect(normalizeTargetForProvider("telegram", "  abc  ")).toBe("ABC");
-    expect(normalizeTargetForProvider("telegram", "  def  ")).toBe("DEF");
-    expect(normalizeTargetForProvider("telegram", "  ghi  ")).toBe("next:ghi");
+    expect(normalizeTargetForProvider("alpha", "  abc  ")).toBe("ABC");
+    expect(normalizeTargetForProvider("alpha", "  def  ")).toBe("DEF");
+    expect(normalizeTargetForProvider("alpha", "  ghi  ")).toBe("next:ghi");
 
     expect(getChannelPluginMock).toHaveBeenCalledTimes(2);
     expect(firstNormalizer).toHaveBeenCalledTimes(2);
@@ -108,7 +103,6 @@ describe("normalizeTargetForProvider", () => {
   });
 
   it("returns undefined when the provider normalizer resolves to an empty value", () => {
-    normalizeChannelIdMock.mockReturnValueOnce("telegram");
     getActivePluginChannelRegistryVersionMock.mockReturnValueOnce(20);
     getChannelPluginMock.mockReturnValueOnce({
       messaging: {
@@ -116,17 +110,16 @@ describe("normalizeTargetForProvider", () => {
       },
     });
 
-    expect(normalizeTargetForProvider("telegram", "  raw-id  ")).toBeUndefined();
+    expect(normalizeTargetForProvider("alpha", "  raw-id  ")).toBeUndefined();
   });
 });
 
 describe("resolveNormalizedTargetInput", () => {
   it("returns undefined for blank input", () => {
-    expect(resolveNormalizedTargetInput("telegram", "   ")).toBeUndefined();
+    expect(resolveNormalizedTargetInput("alpha", "   ")).toBeUndefined();
   });
 
   it("returns raw and normalized values", () => {
-    normalizeChannelIdMock.mockReturnValueOnce("telegram");
     getActivePluginChannelRegistryVersionMock.mockReturnValueOnce(1);
     getChannelPluginMock.mockReturnValueOnce({
       messaging: {
@@ -134,7 +127,7 @@ describe("resolveNormalizedTargetInput", () => {
       },
     });
 
-    expect(resolveNormalizedTargetInput("telegram", "  abc  ")).toEqual({
+    expect(resolveNormalizedTargetInput("alpha", "  abc  ")).toEqual({
       raw: "abc",
       normalized: "ABC",
     });
@@ -154,7 +147,7 @@ describe("looksLikeTargetId", () => {
 
     expect(
       looksLikeTargetId({
-        channel: "telegram",
+        channel: "alpha",
         raw: "room-1",
         normalized: "ROOM-1",
       }),
@@ -166,7 +159,7 @@ describe("looksLikeTargetId", () => {
     "falls back to built-in id-like heuristics for %s",
     (raw) => {
       getChannelPluginMock.mockReturnValueOnce(undefined);
-      expect(looksLikeTargetId({ channel: "slack", raw })).toBe(true);
+      expect(looksLikeTargetId({ channel: "workspace", raw })).toBe(true);
     },
   );
 });
@@ -187,7 +180,7 @@ describe("maybeResolvePluginMessagingTarget", () => {
     await expect(
       maybeResolvePluginMessagingTarget({
         cfg,
-        channel: "slack",
+        channel: "workspace",
         input: "general",
         requireIdLike: true,
       }),
@@ -195,7 +188,6 @@ describe("maybeResolvePluginMessagingTarget", () => {
   });
 
   it("invokes the plugin resolver with normalized input and defaults source", async () => {
-    normalizeChannelIdMock.mockReturnValueOnce("slack");
     getActivePluginChannelRegistryVersionMock.mockReturnValueOnce(1);
     const resolveTarget = vi.fn().mockResolvedValue({
       to: "channel:C123ABC",
@@ -219,7 +211,7 @@ describe("maybeResolvePluginMessagingTarget", () => {
     await expect(
       maybeResolvePluginMessagingTarget({
         cfg,
-        channel: "slack",
+        channel: "workspace",
         input: "  channel:c123abc  ",
       }),
     ).resolves.toEqual({
@@ -251,7 +243,7 @@ describe("buildTargetResolverSignature", () => {
       },
     });
 
-    const first = buildTargetResolverSignature("slack");
+    const first = buildTargetResolverSignature("workspace");
     getChannelPluginMock.mockReturnValueOnce({
       messaging: {
         targetResolver: {
@@ -260,7 +252,7 @@ describe("buildTargetResolverSignature", () => {
         },
       },
     });
-    const second = buildTargetResolverSignature("slack");
+    const second = buildTargetResolverSignature("workspace");
 
     expect(first).toBe(second);
   });
@@ -274,7 +266,7 @@ describe("buildTargetResolverSignature", () => {
         },
       },
     });
-    const first = buildTargetResolverSignature("slack");
+    const first = buildTargetResolverSignature("workspace");
 
     getChannelPluginMock.mockReturnValueOnce({
       messaging: {
@@ -284,7 +276,7 @@ describe("buildTargetResolverSignature", () => {
         },
       },
     });
-    const second = buildTargetResolverSignature("slack");
+    const second = buildTargetResolverSignature("workspace");
 
     expect(first).not.toBe(second);
   });

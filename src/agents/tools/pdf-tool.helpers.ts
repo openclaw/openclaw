@@ -1,10 +1,10 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
-import type { OpenClawConfig } from "../../config/config.js";
 import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../../config/model-input.js";
-import { bundledProviderSupportsNativePdfDocument } from "../../media-understanding/bundled-defaults.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { providerSupportsNativePdfDocument } from "../../media-understanding/defaults.js";
 import { extractAssistantText } from "../pi-embedded-utils.js";
 
 export type PdfModelConfig = { primary?: string; fallbacks?: string[] };
@@ -38,7 +38,7 @@ export function resolvePdfInputs(record: Record<string, unknown>): string[] {
  * Check whether a provider supports native PDF document input.
  */
 export function providerSupportsNativePdf(provider: string): boolean {
-  return bundledProviderSupportsNativePdfDocument(provider);
+  return providerSupportsNativePdfDocument({ providerId: provider });
 }
 
 /**

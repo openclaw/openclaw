@@ -1,8 +1,11 @@
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 
 function resolveExplicitConversationTargetId(target: string): string | undefined {
   for (const prefix of ["channel:", "conversation:", "group:", "room:", "dm:"]) {
-    if (target.toLowerCase().startsWith(prefix)) {
+    if (normalizeLowercaseStringOrEmpty(target).startsWith(prefix)) {
       return normalizeOptionalString(target.slice(prefix.length));
     }
   }

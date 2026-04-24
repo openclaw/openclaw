@@ -8,7 +8,10 @@ import {
   type PortUsage,
 } from "../../infra/ports.js";
 import { killProcessTree } from "../../process/kill-tree.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { sleep } from "../../utils.js";
 
 export const DEFAULT_RESTART_HEALTH_TIMEOUT_MS = 60_000;
@@ -17,7 +20,7 @@ export const DEFAULT_RESTART_HEALTH_ATTEMPTS = Math.ceil(
   DEFAULT_RESTART_HEALTH_TIMEOUT_MS / DEFAULT_RESTART_HEALTH_DELAY_MS,
 );
 const STOPPED_FREE_EARLY_EXIT_GRACE_MS = 10_000;
-const WINDOWS_STOPPED_FREE_EARLY_EXIT_GRACE_MS = 25_000;
+const WINDOWS_STOPPED_FREE_EARLY_EXIT_GRACE_MS = 90_000;
 
 export type GatewayRestartWaitOutcome = "healthy" | "stale-pids" | "stopped-free" | "timeout";
 
@@ -56,7 +59,7 @@ function looksLikeAuthClose(code: number | undefined, reason: string | undefined
   if (code !== 1008) {
     return false;
   }
-  const normalized = (reason ?? "").toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(reason);
   return (
     normalized.includes("auth") ||
     normalized.includes("token") ||

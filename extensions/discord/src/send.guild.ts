@@ -7,6 +7,8 @@ import type {
   RESTPostAPIGuildScheduledEventJSONBody,
 } from "discord-api-types/v10";
 import { Routes } from "discord-api-types/v10";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
+import { loadWebMediaRaw } from "openclaw/plugin-sdk/web-media";
 import { resolveDiscordRest } from "./send.shared.js";
 import type {
   DiscordModerationTarget,
@@ -14,6 +16,7 @@ import type {
   DiscordRoleChange,
   DiscordTimeoutTarget,
 } from "./send.types.js";
+import { DISCORD_MAX_EVENT_COVER_BYTES } from "./send.types.js";
 
 export async function fetchMemberInfoDiscord(
   guildId: string,
@@ -75,6 +78,25 @@ export async function listScheduledEventsDiscord(
 ): Promise<APIGuildScheduledEvent[]> {
   const rest = resolveDiscordRest(opts);
   return (await rest.get(Routes.guildScheduledEvents(guildId))) as APIGuildScheduledEvent[];
+}
+
+const ALLOWED_EVENT_COVER_TYPES = new Set(["image/png", "image/jpeg", "image/jpg", "image/gif"]);
+
+// Loads an image from a URL or path and returns a data URI suitable for the Discord API.
+export async function resolveEventCoverImage(
+  imageUrl: string,
+  opts?: { localRoots?: readonly string[] },
+): Promise<string> {
+  const media = await loadWebMediaRaw(imageUrl, DISCORD_MAX_EVENT_COVER_BYTES, {
+    localRoots: opts?.localRoots,
+  });
+  const contentType = normalizeOptionalLowercaseString(media.contentType);
+  if (!contentType || !ALLOWED_EVENT_COVER_TYPES.has(contentType)) {
+    throw new Error(
+      `Discord event cover images must be PNG, JPG, or GIF (got ${contentType ?? "unknown"})`,
+    );
+  }
+  return `data:${contentType};base64,${media.buffer.toString("base64")}`;
 }
 
 export async function createScheduledEventDiscord(

@@ -6,6 +6,10 @@ import type {
   SpeechProviderPlugin,
 } from "openclaw/plugin-sdk/speech";
 import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "openclaw/plugin-sdk/text-runtime";
+import {
   asFiniteNumber,
   asObjectRecord,
   resolveOpenAIProviderConfigRecord,
@@ -44,7 +48,7 @@ type OpenAITtsProviderOverrides = {
 function normalizeOpenAISpeechResponseFormat(
   value: unknown,
 ): OpenAiSpeechResponseFormat | undefined {
-  const next = trimToUndefined(typeof value === "string" ? value : undefined)?.toLowerCase();
+  const next = normalizeOptionalLowercaseString(value);
   if (!next) {
     return undefined;
   }
@@ -58,7 +62,7 @@ function normalizeOpenAISpeechResponseFormat(
 
 function isGroqSpeechBaseUrl(baseUrl: string): boolean {
   try {
-    const hostname = new URL(baseUrl).hostname.toLowerCase();
+    const hostname = normalizeLowercaseStringOrEmpty(new URL(baseUrl).hostname);
     return hostname === "groq.com" || hostname.endsWith(".groq.com");
   } catch {
     return false;

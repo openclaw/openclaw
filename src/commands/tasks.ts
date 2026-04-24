@@ -1,12 +1,7 @@
-import { loadConfig } from "../config/config.js";
-import { info } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
-import {
-  cancelTaskById,
-  getTaskById,
-  updateTaskNotifyPolicyById,
-} from "../tasks/runtime-internal.js";
+import { getTaskById, updateTaskNotifyPolicyById } from "../tasks/runtime-internal.js";
+import { cancelDetachedTaskRunById } from "../tasks/task-executor.js";
 import {
   listTaskFlowAuditFindings,
   summarizeTaskFlowAuditFindings,
@@ -25,6 +20,7 @@ import {
   type TaskAuditCode,
   type TaskAuditSeverity,
 } from "../tasks/task-registry.audit.js";
+import { compareTaskAuditFindingSortKeys } from "../tasks/task-registry.audit.shared.js";
 import {
   getInspectableTaskAuditSummary,
   getInspectableTaskRegistrySummary,
@@ -44,6 +40,13 @@ const STATUS_PAD = 10;
 const DELIVERY_PAD = 14;
 const ID_PAD = 10;
 const RUN_PAD = 10;
+
+const info = theme.info;
+
+async function loadTaskCancelConfig() {
+  const { loadConfig } = await import("../config/config.js");
+  return loadConfig();
+}
 
 function truncate(value: string, maxChars: number) {
   if (value.length <= maxChars) {
@@ -93,9 +96,9 @@ function formatTaskRows(tasks: TaskRecord[], rich: boolean) {
   const lines = [rich ? theme.heading(header) : header];
   for (const task of tasks) {
     const summary = truncate(
-      task.terminalSummary?.trim() ||
-        task.progressSummary?.trim() ||
-        task.label?.trim() ||
+      normalizeOptionalString(task.terminalSummary) ||
+        normalizeOptionalString(task.progressSummary) ||
+        normalizeOptionalString(task.label) ||
         task.task.trim(),
       80,
     );
@@ -105,7 +108,7 @@ function formatTaskRows(tasks: TaskRecord[], rich: boolean) {
       formatTaskStatusCell(task.status, rich),
       task.deliveryStatus.padEnd(DELIVERY_PAD),
       shortToken(task.runId, RUN_PAD).padEnd(RUN_PAD),
-      truncate(task.childSessionKey?.trim() || "n/a", 36).padEnd(36),
+      truncate(normalizeOptionalString(task.childSessionKey) || "n/a", 36).padEnd(36),
       summary,
     ].join(" ");
     lines.push(line.trimEnd());
@@ -154,19 +157,18 @@ type TaskSystemAuditFinding = {
 };
 
 function compareSystemAuditFindings(left: TaskSystemAuditFinding, right: TaskSystemAuditFinding) {
-  const severityRank = (severity: TaskSystemAuditSeverity) => (severity === "error" ? 0 : 1);
-  const severityDiff = severityRank(left.severity) - severityRank(right.severity);
-  if (severityDiff !== 0) {
-    return severityDiff;
-  }
-  const leftAge = left.ageMs ?? -1;
-  const rightAge = right.ageMs ?? -1;
-  if (leftAge !== rightAge) {
-    return rightAge - leftAge;
-  }
-  const leftCreatedAt = left.task?.createdAt ?? left.flow?.createdAt ?? 0;
-  const rightCreatedAt = right.task?.createdAt ?? right.flow?.createdAt ?? 0;
-  return leftCreatedAt - rightCreatedAt;
+  return compareTaskAuditFindingSortKeys(
+    {
+      severity: left.severity,
+      ageMs: left.ageMs,
+      createdAt: left.task?.createdAt ?? left.flow?.createdAt ?? 0,
+    },
+    {
+      severity: right.severity,
+      ageMs: right.ageMs,
+      createdAt: right.task?.createdAt ?? right.flow?.createdAt ?? 0,
+    },
+  );
 }
 
 function formatAuditRows(findings: TaskSystemAuditFinding[], rich: boolean) {
@@ -386,8 +388,8 @@ export async function tasksCancelCommand(opts: { lookup: string }, runtime: Runt
     runtime.exit(1);
     return;
   }
-  const result = await cancelTaskById({
-    cfg: loadConfig(),
+  const result = await cancelDetachedTaskRunById({
+    cfg: await loadTaskCancelConfig(),
     taskId: task.taskId,
   });
   if (!result.found) {
@@ -529,7 +531,7 @@ export async function tasksMaintenanceCommand(
 
   runtime.log(
     info(
-      `Tasks maintenance (${opts.apply ? "applied" : "preview"}): tasks ${taskMaintenance.reconciled} reconcile · ${taskMaintenance.cleanupStamped} cleanup stamp · ${taskMaintenance.pruned} prune; task-flows ${flowMaintenance.reconciled} reconcile · ${flowMaintenance.pruned} prune`,
+      `Tasks maintenance (${opts.apply ? "applied" : "preview"}): tasks ${taskMaintenance.reconciled} reconcile · ${taskMaintenance.recovered} recovered · ${taskMaintenance.cleanupStamped} cleanup stamp · ${taskMaintenance.pruned} prune; task-flows ${flowMaintenance.reconciled} reconcile · ${flowMaintenance.pruned} prune`,
     ),
   );
   runtime.log(

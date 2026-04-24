@@ -1,6 +1,6 @@
 ---
-title: "Contributing to the Threat Model"
 summary: "How to contribute to the OpenClaw threat model"
+title: "Contributing to the threat model"
 read_when:
   - You want to contribute security findings or threat scenarios
   - Reviewing or updating the threat model
@@ -96,3 +96,8 @@ If you're unsure about the risk level, just describe the impact and we'll assess
 ## Recognition
 
 Contributors to the threat model are recognized in the threat model acknowledgments, release notes, and the OpenClaw security hall of fame for significant contributions.
+
+## Related
+
+- [Threat model](/security/THREAT-MODEL-ATLAS)
+- [Formal verification](/security/formal-verification)

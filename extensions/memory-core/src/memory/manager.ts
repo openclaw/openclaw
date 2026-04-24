@@ -15,6 +15,7 @@ import {
   type MemoryEmbeddingProbeResult,
   type MemoryProviderStatus,
   type MemorySearchManager,
+  type MemorySearchRuntimeDebug,
   type MemorySearchResult,
   type MemorySource,
   type MemorySyncProgressUpdate,
@@ -54,6 +55,7 @@ import {
   runMemorySyncWithReadonlyRecovery,
   type MemoryReadonlyRecoveryState,
 } from "./manager-sync-control.js";
+import { applyTemporalDecayToHybridResults } from "./temporal-decay.js";
 const SNIPPET_MAX_CHARS = 700;
 const VECTOR_TABLE = "chunks_vec";
 const FTS_TABLE = "chunks_fts";
@@ -290,11 +292,26 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       maxResults?: number;
       minScore?: number;
       sessionKey?: string;
+      qmdSearchModeOverride?: "query" | "search" | "vsearch";
+      onDebug?: (debug: MemorySearchRuntimeDebug) => void;
     },
   ): Promise<MemorySearchResult[]> {
+    opts?.onDebug?.({ backend: "builtin" });
+    let hasIndexedContent = this.hasIndexedContent();
+    if (!hasIndexedContent) {
+      try {
+        // A fresh process can receive its first search before background watch/session
+        // syncs have built the index. Force one synchronous bootstrap so the first
+        // lookup after restart does not fail closed with empty results.
+        await this.sync({ reason: "search", force: true });
+      } catch (err) {
+        log.warn(`memory sync failed (search-bootstrap): ${String(err)}`);
+      }
+      hasIndexedContent = this.hasIndexedContent();
+    }
     const preflight = resolveMemorySearchPreflight({
       query,
-      hasIndexedContent: this.hasIndexedContent(),
+      hasIndexedContent,
     });
     if (!preflight.shouldSearch) {
       return [];
@@ -328,17 +345,27 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         return [];
       }
 
-      // Extract keywords for better FTS matching on conversational queries
-      // e.g., "that thing we discussed about the API" → ["discussed", "API"]
-      const keywords = extractKeywords(cleaned, {
-        ftsTokenizer: this.settings.store.fts.tokenizer,
-      });
-      const searchTerms = keywords.length > 0 ? keywords : [cleaned];
-
-      // Search with each keyword and merge results
-      const resultSets = await Promise.all(
-        searchTerms.map((term) => this.searchKeyword(term, candidates).catch(() => [])),
-      );
+      const fullQueryResults = await this.searchKeyword(cleaned, candidates, {
+        boostFallbackRanking: true,
+      }).catch(() => []);
+      const resultSets =
+        fullQueryResults.length > 0
+          ? [fullQueryResults]
+          : await Promise.all(
+              // Fallback: broaden recall for conversational queries when the
+              // exact AND query is too strict to return any results.
+              (() => {
+                const keywords = extractKeywords(cleaned, {
+                  ftsTokenizer: this.settings.store.fts.tokenizer,
+                });
+                const searchTerms = keywords.length > 0 ? keywords : [cleaned];
+                return searchTerms.map((term) =>
+                  this.searchKeyword(term, candidates, { boostFallbackRanking: true }).catch(
+                    () => [],
+                  ),
+                );
+              })(),
+            );
 
       // Merge and deduplicate results, keeping highest score for each chunk
       const seenIds = new Map<string, (typeof resultSets)[0][0]>();
@@ -351,8 +378,14 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         }
       }
 
-      const merged = [...seenIds.values()].toSorted((a, b) => b.score - a.score);
-      return this.selectScoredResults(merged, maxResults, minScore, 0);
+      const merged = [...seenIds.values()];
+      const decayed = await applyTemporalDecayToHybridResults({
+        results: merged,
+        temporalDecay: hybrid.temporalDecay,
+        workspaceDir: this.workspaceDir,
+      });
+      const sorted = decayed.toSorted((a, b) => b.score - a.score);
+      return this.selectScoredResults(sorted, maxResults, minScore, 0);
     }
 
     // If FTS isn't available, hybrid mode cannot use keyword search; degrade to vector-only.
@@ -466,6 +499,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   private async searchKeyword(
     query: string,
     limit: number,
+    options?: { boostFallbackRanking?: boolean },
   ): Promise<Array<MemorySearchResult & { id: string; textScore: number }>> {
     if (!this.fts.enabled || !this.fts.available) {
       return [];
@@ -484,6 +518,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       sourceFilter,
       buildFtsQuery: (raw) => this.buildFtsQuery(raw),
       bm25RankToScore,
+      boostFallbackRanking: options?.boostFallbackRanking,
     });
     return results.map((entry) => entry as MemorySearchResult & { id: string; textScore: number });
   }
@@ -580,10 +615,6 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     const setDb = (value: DatabaseSync) => {
       this.db = value;
     };
-    const getVectorReady = () => this.vectorReady;
-    const setVectorReady = (value: Promise<boolean> | null) => {
-      this.vectorReady = value;
-    };
     const getReadonlyRecoveryAttempts = () => this.readonlyRecoveryAttempts;
     const setReadonlyRecoveryAttempts = (value: number) => {
       this.readonlyRecoveryAttempts = value;
@@ -609,12 +640,6 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       },
       set db(value) {
         setDb(value);
-      },
-      get vectorReady() {
-        return getVectorReady();
-      },
-      set vectorReady(value) {
-        setVectorReady(value);
       },
       vector: this.vector,
       get readonlyRecoveryAttempts() {
@@ -643,6 +668,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       },
       runSync: (nextParams) => this.runSync(nextParams),
       openDatabase: () => this.openDatabase(),
+      resetVectorState: () => this.resetVectorState(),
       ensureSchema: () => this.ensureSchema(),
       readMeta: () => this.readMeta() ?? undefined,
     };

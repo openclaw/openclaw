@@ -1,7 +1,10 @@
-import { formatCliCommand } from "../cli/command-format.js";
 import { ensurePageState, getPageForTargetId } from "./pw-session.js";
 import { normalizeTimeoutMs } from "./pw-tools-core.shared.js";
 import { matchBrowserUrlPattern } from "./url-pattern.js";
+
+function normalizeOptionalString(value: unknown): string | undefined {
+  return typeof value === "string" ? value.trim() || undefined : undefined;
+}
 
 export async function responseBodyViaPlaywright(opts: {
   cdpUrl: string;
@@ -16,7 +19,7 @@ export async function responseBodyViaPlaywright(opts: {
   body: string;
   truncated?: boolean;
 }> {
-  const pattern = String(opts.url ?? "").trim();
+  const pattern = normalizeOptionalString(opts.url) ?? "";
   if (!pattern) {
     throw new Error("url is required");
   }
@@ -67,7 +70,7 @@ export async function responseBodyViaPlaywright(opts: {
       cleanup();
       reject(
         new Error(
-          `Response not found for url pattern "${pattern}". Run '${formatCliCommand("openclaw browser requests")}' to inspect recent network activity.`,
+          `Response not found for url pattern "${pattern}". Run 'openclaw browser requests' to inspect recent network activity.`,
         ),
       );
     }, timeout);

@@ -580,7 +580,7 @@ async function runGatewayPrompt(prompt: string): Promise<PromptResult> {
   try {
     const url = `ws://127.0.0.1:${port}`;
     await waitForGatewayReady(url, gatewayToken);
-    const agentRes = await callGateway<{ runId?: string }>({
+    const agentRes = await callGateway({
       url,
       token: gatewayToken,
       method: "agent",
@@ -607,7 +607,7 @@ async function runGatewayPrompt(prompt: string): Promise<PromptResult> {
         tmpDir,
       };
     }
-    const waitRes = await callGateway<{ status?: string; error?: string; payloads?: unknown[] }>({
+    const waitRes = await callGateway({
       url,
       token: gatewayToken,
       method: "agent.wait",

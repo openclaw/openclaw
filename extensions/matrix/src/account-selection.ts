@@ -10,7 +10,8 @@ import {
   normalizeOptionalAccountId,
 } from "openclaw/plugin-sdk/account-id";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
+import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   resolveMatrixAccountStringValues,
   type MatrixResolvedStringField,
@@ -21,7 +22,7 @@ import { isRecord } from "./record-shared.js";
 type MatrixTopologyStringSources = Partial<Record<MatrixResolvedStringField, string>>;
 
 function readConfiguredMatrixString(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
+  return normalizeOptionalString(value) ?? "";
 }
 
 function readConfiguredMatrixSecretSource(value: unknown): string {
@@ -45,8 +46,7 @@ function resolveMatrixChannelStringSources(
 }
 
 function readEnvMatrixString(env: NodeJS.ProcessEnv, key: string): string {
-  const value = env[key];
-  return typeof value === "string" ? value.trim() : "";
+  return normalizeOptionalString(env[key]) ?? "";
 }
 
 function resolveScopedMatrixEnvStringSources(
@@ -211,6 +211,9 @@ export function requiresExplicitMatrixDefaultAccount(
   }
   const configuredAccountIds = resolveConfiguredMatrixAccountIds(cfg, env);
   if (configuredAccountIds.length <= 1) {
+    return false;
+  }
+  if (configuredAccountIds.includes(DEFAULT_ACCOUNT_ID)) {
     return false;
   }
   const configuredDefault = normalizeOptionalAccountId(

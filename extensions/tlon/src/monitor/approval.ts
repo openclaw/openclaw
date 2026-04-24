@@ -7,12 +7,15 @@
 
 // Extensions cannot import core internals directly, so use node:crypto here.
 import { randomBytes } from "node:crypto";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import type { PendingApproval } from "../settings.js";
 
 export type { PendingApproval };
 
 export type ApprovalType = "dm" | "channel" | "group";
+
+function normalizeLowercaseStringOrEmpty(value: unknown): string {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
 
 export type CreateApprovalParams = {
   type: ApprovalType;
@@ -62,7 +65,7 @@ function truncate(text: string, maxLength: number): string {
   if (text.length <= maxLength) {
     return text;
   }
-  return text.substring(0, maxLength - 3) + "...";
+  return text.slice(0, maxLength - 3) + "...";
 }
 
 /**
@@ -92,6 +95,7 @@ export function formatApprovalRequest(approval: PendingApproval): string {
         `(ID: ${approval.id})`
       );
   }
+  throw new Error("Unsupported approval type");
 }
 
 export type ApprovalResponse = {
@@ -211,6 +215,7 @@ export function formatApprovalConfirmation(
       }
       return `${actionText} group invite from ${approval.requestingShip} to ${approval.groupFlag}.`;
   }
+  throw new Error("Unsupported approval type");
 }
 
 // ============================================================================
@@ -230,7 +235,7 @@ export type AdminCommand =
  *   - "pending" - list all pending approvals
  */
 export function parseAdminCommand(text: string): AdminCommand | null {
-  const trimmed = text.trim().toLowerCase();
+  const trimmed = normalizeLowercaseStringOrEmpty(text);
 
   // "blocked" - list blocked ships
   if (trimmed === "blocked") {

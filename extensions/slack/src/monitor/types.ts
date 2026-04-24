@@ -1,3 +1,4 @@
+import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig, SlackSlashCommandConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { SlackFile, SlackMessageEvent } from "../types.js";
@@ -9,10 +10,11 @@ export type MonitorSlackOpts = {
   mode?: "socket" | "http";
   config?: OpenClawConfig;
   runtime?: RuntimeEnv;
+  channelRuntime?: ChannelRuntimeSurface;
   abortSignal?: AbortSignal;
   mediaMaxMb?: number;
   slashCommand?: SlackSlashCommandConfig;
-  /** Callback to update the channel account status snapshot (e.g. lastEventAt). */
+  /** Callback to update app-level channel account activity (e.g. lastEventAt). */
   setStatus?: (next: Record<string, unknown>) => void;
   /** Callback to read the current channel account status snapshot. */
   getStatus?: () => Record<string, unknown>;

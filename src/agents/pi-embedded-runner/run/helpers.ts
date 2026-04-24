@@ -1,5 +1,8 @@
-import type { OpenClawConfig } from "../../../config/config.js";
+import type { AssistantMessage } from "@mariozechner/pi-ai";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { generateSecureToken } from "../../../infra/secure-random.js";
+import { extractAssistantTextForPhase } from "../../../shared/chat-message-content.js";
+import { extractAssistantVisibleText } from "../../pi-embedded-utils.js";
 import { derivePromptTokens, normalizeUsage } from "../../usage.js";
 import type { EmbeddedPiAgentMeta } from "../types.js";
 import { toLastCallUsage, toNormalizedUsage, type UsageAccumulator } from "../usage-accumulator.js";
@@ -13,6 +16,7 @@ type UsageSnapshot = {
 };
 
 export type RuntimeAuthState = {
+  generation: number;
   sourceApiKey: string;
   authMode: string;
   profileId?: string;
@@ -75,13 +79,18 @@ export function resolveMaxRunRetryIterations(profileCandidateCount: number): num
 }
 
 export function resolveActiveErrorContext(params: {
-  lastAssistant: { provider?: string; model?: string } | undefined;
   provider: string;
   model: string;
-}): { provider: string; model: string } {
+  assistant?: { provider?: string; model?: string };
+}): {
+  provider: string;
+  model: string;
+} {
+  const assistantProvider = params.assistant?.provider?.trim();
+  const assistantModel = params.assistant?.model?.trim();
   return {
-    provider: params.lastAssistant?.provider ?? params.provider,
-    model: params.lastAssistant?.model ?? params.model,
+    provider: assistantProvider || params.provider,
+    model: assistantModel || params.model,
   };
 }
 
@@ -134,4 +143,25 @@ export function buildErrorAgentMeta(params: {
     ...(usageMeta.lastCallUsage ? { lastCallUsage: usageMeta.lastCallUsage } : {}),
     ...(usageMeta.promptTokens ? { promptTokens: usageMeta.promptTokens } : {}),
   };
+}
+
+export function resolveFinalAssistantVisibleText(
+  lastAssistant: AssistantMessage | undefined,
+): string | undefined {
+  if (!lastAssistant) {
+    return undefined;
+  }
+  const visibleText = extractAssistantVisibleText(lastAssistant).trim();
+  return visibleText || undefined;
+}
+
+export function resolveFinalAssistantRawText(
+  lastAssistant: AssistantMessage | undefined,
+): string | undefined {
+  if (!lastAssistant) {
+    return undefined;
+  }
+  const finalAnswerText = extractAssistantTextForPhase(lastAssistant, { phase: "final_answer" });
+  const rawText = (finalAnswerText ?? extractAssistantTextForPhase(lastAssistant) ?? "").trim();
+  return rawText || undefined;
 }

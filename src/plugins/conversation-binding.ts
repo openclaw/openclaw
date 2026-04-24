@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import type { ReplyPayload } from "../auto-reply/types.js";
+import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import {
   createConversationBindingRecord,
   resolveConversationBindingRecord,
@@ -18,14 +18,14 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
-import { getActivePluginRegistry } from "./runtime.js";
 import type {
   PluginConversationBinding,
   PluginConversationBindingResolvedEvent,
   PluginConversationBindingResolutionDecision,
   PluginConversationBindingRequestParams,
   PluginConversationBindingRequestResult,
-} from "./types.js";
+} from "./conversation-binding.types.js";
+import { getActivePluginRegistry } from "./runtime.js";
 
 const log = createSubsystemLogger("plugins/binding");
 
@@ -74,6 +74,7 @@ type PendingPluginBindingRequest = {
   requestedBySenderId?: string;
   summary?: string;
   detachHint?: string;
+  data?: Record<string, unknown>;
 };
 
 type PluginBindingApprovalAction = {
@@ -94,6 +95,7 @@ type PluginBindingMetadata = {
   pluginRoot: string;
   summary?: string;
   detachHint?: string;
+  data?: Record<string, unknown>;
 };
 
 type PluginBindingResolveResult =
@@ -172,6 +174,13 @@ function normalizeConversation(params: PluginBindingConversation): PluginBinding
         ? Math.trunc(params.threadId)
         : normalizeOptionalString(params.threadId?.toString()),
   };
+}
+
+function normalizeBindingData(data: unknown): Record<string, unknown> | undefined {
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    return undefined;
+  }
+  return { ...(data as Record<string, unknown>) };
 }
 
 function toConversationRef(params: PluginBindingConversation): ConversationRef {
@@ -341,16 +350,16 @@ function loadApprovalsFromDisk(): PluginBindingApprovalsFile {
     return {
       version: 1,
       approvals: parsed.approvals
-        .filter((entry): entry is PluginBindingApprovalEntry =>
-          Boolean(entry && typeof entry === "object"),
+        .filter(
+          (entry): entry is PluginBindingApprovalEntry =>
+            entry !== null && typeof entry === "object",
         )
         .map((entry) => ({
           pluginRoot: typeof entry.pluginRoot === "string" ? entry.pluginRoot : "",
           pluginId: typeof entry.pluginId === "string" ? entry.pluginId : "",
           pluginName: typeof entry.pluginName === "string" ? entry.pluginName : undefined,
           channel: typeof entry.channel === "string" ? normalizeChannel(entry.channel) : "",
-          accountId:
-            typeof entry.accountId === "string" ? entry.accountId.trim() || "default" : "default",
+          accountId: normalizeOptionalString(entry.accountId) ?? "default",
           approvedAt:
             typeof entry.approvedAt === "number" && Number.isFinite(entry.approvedAt)
               ? Math.floor(entry.approvedAt)
@@ -425,6 +434,7 @@ function buildBindingMetadata(params: {
   pluginRoot: string;
   summary?: string;
   detachHint?: string;
+  data?: Record<string, unknown>;
 }): PluginBindingMetadata {
   return {
     pluginBindingOwner: PLUGIN_BINDING_OWNER,
@@ -433,6 +443,7 @@ function buildBindingMetadata(params: {
     pluginRoot: params.pluginRoot,
     summary: normalizeOptionalString(params.summary),
     detachHint: normalizeOptionalString(params.detachHint),
+    data: normalizeBindingData(params.data),
   };
 }
 
@@ -486,6 +497,7 @@ export function toPluginConversationBinding(
     boundAt: record.boundAt,
     summary: metadata.summary,
     detachHint: metadata.detachHint,
+    data: metadata.data,
   };
 }
 
@@ -532,19 +544,21 @@ function bindConversationFromIdentity(params: {
   conversation: PluginBindingConversation;
   summary?: string;
   detachHint?: string;
+  data?: Record<string, unknown>;
 }): Promise<PluginConversationBinding> {
   return bindConversationNow({
     identity: buildPluginBindingIdentity(params.identity),
     conversation: params.conversation,
     summary: params.summary,
     detachHint: params.detachHint,
+    data: params.data,
   });
 }
 
 function bindConversationFromRequest(
   request: Pick<
     PendingPluginBindingRequest,
-    "pluginId" | "pluginName" | "pluginRoot" | "conversation" | "summary" | "detachHint"
+    "pluginId" | "pluginName" | "pluginRoot" | "conversation" | "summary" | "detachHint" | "data"
   >,
 ): Promise<PluginConversationBinding> {
   return bindConversationFromIdentity({
@@ -552,6 +566,7 @@ function bindConversationFromRequest(
     conversation: request.conversation,
     summary: request.summary,
     detachHint: request.detachHint,
+    data: request.data,
   });
 }
 
@@ -577,6 +592,7 @@ async function bindConversationNow(params: {
   conversation: PluginBindingConversation;
   summary?: string;
   detachHint?: string;
+  data?: Record<string, unknown>;
 }): Promise<PluginConversationBinding> {
   const ref = toConversationRef(params.conversation);
   const targetSessionKey = buildPluginBindingSessionKey({
@@ -596,6 +612,7 @@ async function bindConversationNow(params: {
       pluginRoot: params.identity.pluginRoot,
       summary: params.summary,
       detachHint: params.detachHint,
+      data: params.data,
     }),
   });
   const binding = toPluginConversationBinding(record);
@@ -625,7 +642,7 @@ function resolvePluginBindingDisplayName(binding: {
   pluginId: string;
   pluginName?: string;
 }): string {
-  return binding.pluginName?.trim() || binding.pluginId;
+  return normalizeOptionalString(binding.pluginName) || binding.pluginId;
 }
 
 function buildDetachHintSuffix(detachHint?: string): string {
@@ -765,6 +782,7 @@ export async function requestPluginConversationBinding(params: {
       conversation,
       summary: params.binding?.summary,
       detachHint: params.binding?.detachHint,
+      data: params.binding?.data,
     });
     logPluginBindingLifecycleEvent({
       event: "auto-refresh",
@@ -789,6 +807,7 @@ export async function requestPluginConversationBinding(params: {
       conversation,
       summary: params.binding?.summary,
       detachHint: params.binding?.detachHint,
+      data: params.binding?.data,
     });
     logPluginBindingLifecycleEvent({
       event: "auto-approved",
@@ -811,6 +830,7 @@ export async function requestPluginConversationBinding(params: {
     requestedBySenderId: normalizeOptionalString(params.requestedBySenderId),
     summary: normalizeOptionalString(params.binding?.summary),
     detachHint: normalizeOptionalString(params.binding?.detachHint),
+    data: normalizeBindingData(params.binding?.data),
   };
   pendingRequests.set(request.id, request);
   logPluginBindingLifecycleEvent({
@@ -955,6 +975,7 @@ async function notifyPluginConversationBindingResolved(params: {
         request: {
           summary: params.request.summary,
           detachHint: params.request.detachHint,
+          data: params.request.data,
           requestedBySenderId: params.request.requestedBySenderId,
           conversation: params.request.conversation,
         },

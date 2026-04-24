@@ -3,8 +3,11 @@ import {
   type ModelRef,
   normalizeProviderId,
 } from "../../agents/model-selection.js";
-import type { OpenClawConfig } from "../../config/config.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 
 export type ModelPickerCatalogEntry = {
   provider: string;
@@ -78,7 +81,9 @@ export function buildModelPickerItems(catalog: ModelPickerCatalogEntry[]): Model
     if (providerOrder !== 0) {
       return providerOrder;
     }
-    return a.model.toLowerCase().localeCompare(b.model.toLowerCase());
+    return normalizeLowercaseStringOrEmpty(a.model).localeCompare(
+      normalizeLowercaseStringOrEmpty(b.model),
+    );
   });
 
   return out;

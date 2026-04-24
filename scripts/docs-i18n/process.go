@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -138,16 +139,28 @@ func translateFrontMatter(ctx context.Context, translator docsTranslator, tm *Tr
 		return nil
 	}
 	if summary, ok := data["summary"].(string); ok {
+		if docsI18nVerboseLogs() {
+			log.Printf("docs-i18n: frontmatter start %s field=summary bytes=%d", relPath, len(summary))
+		}
 		translated, err := translateSnippet(ctx, translator, tm, relPath+":frontmatter:summary", summary, srcLang, tgtLang)
 		if err != nil {
 			return err
 		}
+		if docsI18nVerboseLogs() {
+			log.Printf("docs-i18n: frontmatter done %s field=summary out_bytes=%d", relPath, len(translated))
+		}
 		data["summary"] = translated
 	}
 	if title, ok := data["title"].(string); ok {
+		if docsI18nVerboseLogs() {
+			log.Printf("docs-i18n: frontmatter start %s field=title bytes=%d", relPath, len(title))
+		}
 		translated, err := translateSnippet(ctx, translator, tm, relPath+":frontmatter:title", title, srcLang, tgtLang)
 		if err != nil {
 			return err
+		}
+		if docsI18nVerboseLogs() {
+			log.Printf("docs-i18n: frontmatter done %s field=title out_bytes=%d", relPath, len(translated))
 		}
 		data["title"] = translated
 	}
@@ -159,15 +172,34 @@ func translateFrontMatter(ctx context.Context, translator docsTranslator, tm *Tr
 				translated = append(translated, item)
 				continue
 			}
+			if docsI18nVerboseLogs() {
+				log.Printf("docs-i18n: frontmatter start %s field=read_when[%d] bytes=%d", relPath, idx, len(textValue))
+			}
 			value, err := translateSnippet(ctx, translator, tm, fmt.Sprintf("%s:frontmatter:read_when:%d", relPath, idx), textValue, srcLang, tgtLang)
 			if err != nil {
 				return err
+			}
+			if docsI18nVerboseLogs() {
+				log.Printf("docs-i18n: frontmatter done %s field=read_when[%d] out_bytes=%d", relPath, idx, len(value))
 			}
 			translated = append(translated, value)
 		}
 		data["read_when"] = translated
 	}
 	return nil
+}
+
+func docsI18nVerboseLogs() bool {
+	value := strings.TrimSpace(os.Getenv("OPENCLAW_DOCS_I18N_VERBOSE_LOGS"))
+	if value == "" {
+		return false
+	}
+	switch strings.ToLower(value) {
+	case "1", "true", "yes", "on", "debug", "verbose":
+		return true
+	default:
+		return false
+	}
 }
 
 func translateSnippet(ctx context.Context, translator docsTranslator, tm *TranslationMemory, segmentID, textValue, srcLang, tgtLang string) (string, error) {
@@ -184,6 +216,12 @@ func translateSnippet(ctx context.Context, translator docsTranslator, tm *Transl
 	if err != nil {
 		return "", err
 	}
+	shouldCache := true
+	if validationErr := validateFrontmatterScalarTranslation(textValue, translated); validationErr != nil {
+		log.Printf("docs-i18n: frontmatter fallback %s reason=%v", segmentID, validationErr)
+		translated = textValue
+		shouldCache = false
+	}
 	entry := TMEntry{
 		CacheKey:   ck,
 		SegmentID:  segmentID,
@@ -197,6 +235,45 @@ func translateSnippet(ctx context.Context, translator docsTranslator, tm *Transl
 		TgtLang:    tgtLang,
 		UpdatedAt:  time.Now().UTC().Format(time.RFC3339),
 	}
-	tm.Put(entry)
+	if shouldCache {
+		tm.Put(entry)
+	}
 	return translated, nil
+}
+
+func validateFrontmatterScalarTranslation(source, translated string) error {
+	trimmed := strings.TrimSpace(translated)
+	if trimmed == "" {
+		return fmt.Errorf("empty translation")
+	}
+	lower := strings.ToLower(trimmed)
+	if strings.Contains(lower, "<frontmatter>") || strings.Contains(lower, "</frontmatter>") || strings.Contains(lower, "<body>") || strings.Contains(lower, "</body>") {
+		return fmt.Errorf("tagged document wrapper detected")
+	}
+	if strings.Contains(trimmed, "[[[FM_") {
+		return fmt.Errorf("frontmatter marker leaked into scalar translation")
+	}
+	if strings.Contains(trimmed, "\n---\n") || strings.HasPrefix(trimmed, "---\n") {
+		return fmt.Errorf("yaml document boundary detected")
+	}
+	if !strings.Contains(source, "\n") && strings.Count(trimmed, "\n") >= 3 {
+		return fmt.Errorf("unexpected multiline expansion")
+	}
+	sourceLen := len(strings.TrimSpace(source))
+	translatedLen := len(trimmed)
+	if sourceLen > 0 {
+		limit := sourceLen*8 + 256
+		if limit < 512 {
+			limit = 512
+		}
+		if translatedLen > limit {
+			return fmt.Errorf("unexpected size expansion source=%d translated=%d", sourceLen, translatedLen)
+		}
+	}
+	for _, key := range []string{"title:", "summary:", "read_when:"} {
+		if strings.Contains(lower, "\n"+key) || strings.HasPrefix(lower, key) {
+			return fmt.Errorf("frontmatter key leaked into scalar translation")
+		}
+	}
+	return nil
 }

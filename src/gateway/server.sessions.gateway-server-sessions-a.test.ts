@@ -3,27 +3,39 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { AssistantMessage, UserMessage } from "@mariozechner/pi-ai";
-import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
-import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
-import { loadConfig } from "../config/config.js";
-import { withSessionStoreLockForTest } from "../config/sessions/store.js";
 import { isSessionPatchEvent, type InternalHookEvent } from "../hooks/internal-hooks.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "./protocol/client-info.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
-import { resolveGatewaySessionStoreTarget } from "./session-utils.js";
 import {
   connectOk,
   embeddedRunMock,
   installGatewayTestHooks,
   piSdkMock,
   rpcReq,
+  startConnectedServerWithClient,
   testState,
   trackConnectChallengeNonce,
   writeSessionStore,
 } from "./test-helpers.js";
+
+let sessionManagerModulePromise:
+  | Promise<typeof import("@mariozechner/pi-coding-agent")>
+  | undefined;
+let gatewayConfigModulePromise: Promise<typeof import("../config/config.js")> | undefined;
+
+async function getSessionManagerModule() {
+  sessionManagerModulePromise ??= import("@mariozechner/pi-coding-agent");
+  return await sessionManagerModulePromise;
+}
+
+async function getGatewayConfigModule() {
+  gatewayConfigModulePromise ??= import("../config/config.js");
+  return await gatewayConfigModulePromise;
+}
 
 async function getSessionsHandlers() {
   return (await import("./server-methods/sessions.js")).sessionsHandlers;
@@ -84,6 +96,9 @@ const acpManagerMocks = vi.hoisted(() => ({
 }));
 const browserSessionTabMocks = vi.hoisted(() => ({
   closeTrackedBrowserTabsForSessions: vi.fn(async () => 0),
+}));
+const bundleMcpRuntimeMocks = vi.hoisted(() => ({
+  disposeSessionMcpRuntime: vi.fn(async (_sessionId: string) => {}),
 }));
 
 vi.mock("../auto-reply/reply/queue.js", async () => {
@@ -190,6 +205,14 @@ vi.mock("../plugin-sdk/browser-maintenance.js", () => ({
   movePathToTrash: vi.fn(async () => {}),
 }));
 
+vi.mock("../agents/pi-bundle-mcp-tools.js", () => ({
+  disposeSessionMcpRuntime: bundleMcpRuntimeMocks.disposeSessionMcpRuntime,
+  retireSessionMcpRuntime: ({ sessionId }: { sessionId?: string | null }) =>
+    sessionId
+      ? bundleMcpRuntimeMocks.disposeSessionMcpRuntime(sessionId).then(() => true)
+      : Promise.resolve(false),
+}));
+
 installGatewayTestHooks({ scope: "suite" });
 
 let harness: GatewayServerHarness;
@@ -224,7 +247,8 @@ async function writeSingleLineSession(dir: string, sessionId: string, content: s
   );
 }
 
-function createCheckpointFixture(dir: string) {
+async function createCheckpointFixture(dir: string) {
+  const { SessionManager } = await getSessionManagerModule();
   const session = SessionManager.create(dir, dir);
   const userMessage: UserMessage = {
     role: "user",
@@ -330,6 +354,52 @@ async function getMainPreviewEntry(ws: import("ws").WebSocket) {
   return entry;
 }
 
+type SessionsHandlers = Awaited<ReturnType<typeof getSessionsHandlers>>;
+
+async function directSessionReq<TPayload = unknown>(
+  method: keyof SessionsHandlers,
+  params: Record<string, unknown>,
+  opts?: {
+    context?: Record<string, unknown>;
+    client?: Parameters<SessionsHandlers[keyof SessionsHandlers]>[0]["client"];
+    isWebchatConnect?: Parameters<SessionsHandlers[keyof SessionsHandlers]>[0]["isWebchatConnect"];
+    coercePayload?: (payload: unknown) => TPayload;
+  },
+): Promise<{ ok: boolean; payload?: TPayload; error?: { code?: string; message?: string } }> {
+  const sessionsHandlers = await getSessionsHandlers();
+  let result:
+    | { ok: boolean; payload?: TPayload; error?: { code?: string; message?: string } }
+    | undefined;
+  await sessionsHandlers[method]({
+    req: {} as never,
+    params,
+    respond: (ok, payload, error) => {
+      result = {
+        ok,
+        payload:
+          payload === undefined
+            ? undefined
+            : opts?.coercePayload
+              ? opts.coercePayload(payload)
+              : (payload as TPayload),
+        error,
+      };
+    },
+    context: {
+      broadcastToConnIds: vi.fn(),
+      getSessionEventSubscriberConnIds: () => new Set<string>(),
+      loadGatewayModelCatalog: async () => piSdkMock.models,
+      ...opts?.context,
+    } as never,
+    client: opts?.client ?? null,
+    isWebchatConnect: opts?.isWebchatConnect ?? (() => false),
+  });
+  if (!result) {
+    throw new Error(`${method} did not respond`);
+  }
+  return result;
+}
+
 function isInternalHookEvent(value: unknown): value is InternalHookEvent {
   if (!value || typeof value !== "object") {
     return false;
@@ -346,7 +416,8 @@ function isInternalHookEvent(value: unknown): value is InternalHookEvent {
 }
 
 describe("gateway server sessions", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    const { clearConfigCache, clearRuntimeConfigSnapshot } = await getGatewayConfigModule();
     clearRuntimeConfigSnapshot();
     clearConfigCache();
     sessionCleanupMocks.clearSessionQueues.mockClear();
@@ -376,6 +447,8 @@ describe("gateway server sessions", () => {
     acpManagerMocks.closeSession.mockClear();
     browserSessionTabMocks.closeTrackedBrowserTabsForSessions.mockClear();
     browserSessionTabMocks.closeTrackedBrowserTabsForSessions.mockResolvedValue(0);
+    bundleMcpRuntimeMocks.disposeSessionMcpRuntime.mockClear();
+    bundleMcpRuntimeMocks.disposeSessionMcpRuntime.mockResolvedValue(undefined);
   });
 
   test("sessions.create stores dashboard session model and parent linkage, and creates a transcript", async () => {
@@ -390,9 +463,7 @@ describe("gateway server sessions", () => {
         },
       },
     });
-    const { ws } = await openClient();
-
-    const created = await rpcReq<{
+    const created = await directSessionReq<{
       key?: string;
       sessionId?: string;
       entry?: {
@@ -402,7 +473,7 @@ describe("gateway server sessions", () => {
         parentSessionKey?: string;
         sessionFile?: string;
       };
-    }>(ws, "sessions.create", {
+    }>("sessions.create", {
       agentId: "ops",
       label: "Dashboard Chat",
       model: "openai/gpt-test-a",
@@ -448,22 +519,19 @@ describe("gateway server sessions", () => {
       type: "session",
       id: created.payload?.sessionId,
     });
-
-    ws.close();
   });
 
   test("sessions.create accepts an explicit key for persistent dashboard sessions", async () => {
     await createSessionStoreDir();
-    const { ws } = await openClient();
 
     const key = "agent:ops-agent:dashboard:direct:subagent-orchestrator";
-    const created = await rpcReq<{
+    const created = await directSessionReq<{
       key?: string;
       sessionId?: string;
       entry?: {
         label?: string;
       };
-    }>(ws, "sessions.create", {
+    }>("sessions.create", {
       key,
       label: "Dashboard Orchestrator",
     });
@@ -474,21 +542,18 @@ describe("gateway server sessions", () => {
     expect(created.payload?.sessionId).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
     );
-
-    ws.close();
   });
 
   test("sessions.create scopes the main alias to the requested agent", async () => {
     const { storePath } = await createSessionStoreDir();
-    const { ws } = await openClient();
 
-    const created = await rpcReq<{
+    const created = await directSessionReq<{
       key?: string;
       sessionId?: string;
       entry?: {
         sessionFile?: string;
       };
-    }>(ws, "sessions.create", {
+    }>("sessions.create", {
       key: "main",
       agentId: "longmemeval",
     });
@@ -505,21 +570,18 @@ describe("gateway server sessions", () => {
     >;
     expect(rawStore["agent:longmemeval:main"]?.sessionId).toBe(created.payload?.sessionId);
     expect(rawStore["agent:main:main"]).toBeUndefined();
-
-    ws.close();
   });
 
   test("sessions.create preserves global and unknown sentinel keys", async () => {
     const { storePath } = await createSessionStoreDir();
-    const { ws } = await openClient();
 
-    const globalCreated = await rpcReq<{
+    const globalCreated = await directSessionReq<{
       key?: string;
       sessionId?: string;
       entry?: {
         sessionFile?: string;
       };
-    }>(ws, "sessions.create", {
+    }>("sessions.create", {
       key: "global",
       agentId: "longmemeval",
     });
@@ -528,13 +590,13 @@ describe("gateway server sessions", () => {
     expect(globalCreated.payload?.key).toBe("global");
     expect(globalCreated.payload?.entry?.sessionFile).toBeTruthy();
 
-    const unknownCreated = await rpcReq<{
+    const unknownCreated = await directSessionReq<{
       key?: string;
       sessionId?: string;
       entry?: {
         sessionFile?: string;
       };
-    }>(ws, "sessions.create", {
+    }>("sessions.create", {
       key: "unknown",
       agentId: "longmemeval",
     });
@@ -553,15 +615,12 @@ describe("gateway server sessions", () => {
     expect(rawStore.unknown?.sessionId).toBe(unknownCreated.payload?.sessionId);
     expect(rawStore["agent:longmemeval:global"]).toBeUndefined();
     expect(rawStore["agent:longmemeval:unknown"]).toBeUndefined();
-
-    ws.close();
   });
 
   test("sessions.create rejects unknown parentSessionKey", async () => {
     await createSessionStoreDir();
-    const { ws } = await openClient();
 
-    const created = await rpcReq(ws, "sessions.create", {
+    const created = await directSessionReq("sessions.create", {
       agentId: "ops",
       parentSessionKey: "agent:main:missing",
     });
@@ -570,12 +629,13 @@ describe("gateway server sessions", () => {
     expect((created.error as { message?: string } | undefined)?.message ?? "").toContain(
       "unknown parent session",
     );
-
-    ws.close();
   });
 
   test("sessions.create can start the first agent turn from an initial task", async () => {
     await createSessionStoreDir();
+    // Register "ops" so the deleted-agent guard added in #65986 does not
+    // reject the auto-started chat.send triggered by `task:`.
+    testState.agentsConfig = { list: [{ id: "ops", default: true }] };
     const { ws } = await openClient();
 
     const created = await rpcReq<{
@@ -1005,6 +1065,48 @@ describe("gateway server sessions", () => {
         "sessions.compact",
       ]),
     );
+    const sessionsHandlers = await getSessionsHandlers();
+    const directContext = {
+      broadcastToConnIds: vi.fn(),
+      getSessionEventSubscriberConnIds: () => new Set<string>(),
+      loadGatewayModelCatalog: async () => piSdkMock.models,
+    } as never;
+    async function directSessionReq<TPayload = unknown>(
+      method: keyof typeof sessionsHandlers,
+      params: Record<string, unknown>,
+      coercePayload?: (payload: unknown) => TPayload,
+    ): Promise<{ ok: boolean; payload?: TPayload; error?: unknown }> {
+      let result:
+        | {
+            ok: boolean;
+            payload?: TPayload;
+            error?: unknown;
+          }
+        | undefined;
+      await sessionsHandlers[method]({
+        req: {} as never,
+        params,
+        respond: (ok, payload, error) => {
+          result = {
+            ok,
+            payload:
+              payload === undefined
+                ? undefined
+                : coercePayload
+                  ? coercePayload(payload)
+                  : (payload as TPayload),
+            error,
+          };
+        },
+        context: directContext,
+        client: null,
+        isWebchatConnect: () => false,
+      });
+      if (!result) {
+        throw new Error(`${method} did not respond`);
+      }
+      return result;
+    }
 
     const resolvedByKey = await rpcReq<{ ok: true; key: string }>(ws, "sessions.resolve", {
       key: "main",
@@ -1017,8 +1119,9 @@ describe("gateway server sessions", () => {
     });
     expect(resolvedBySessionId.ok).toBe(true);
     expect(resolvedBySessionId.payload?.key).toBe("agent:main:discord:group:dev");
+    ws.close();
 
-    const list1 = await rpcReq<{
+    const list1 = await directSessionReq<{
       path: string;
       defaults?: { model?: string | null; modelProvider?: string | null };
       sessions: Array<{
@@ -1030,7 +1133,7 @@ describe("gateway server sessions", () => {
         lastAccountId?: string;
         deliveryContext?: { channel?: string; to?: string; accountId?: string };
       }>;
-    }>(ws, "sessions.list", { includeGlobal: false, includeUnknown: false });
+    }>("sessions.list", { includeGlobal: false, includeUnknown: false });
 
     expect(list1.ok).toBe(true);
     expect(list1.payload?.path).toBe(storePath);
@@ -1049,9 +1152,9 @@ describe("gateway server sessions", () => {
       threadId: "1737500000.123456",
     });
 
-    const active = await rpcReq<{
+    const active = await directSessionReq<{
       sessions: Array<{ key: string }>;
-    }>(ws, "sessions.list", {
+    }>("sessions.list", {
       includeGlobal: false,
       includeUnknown: false,
       activeMinutes: 5,
@@ -1059,9 +1162,9 @@ describe("gateway server sessions", () => {
     expect(active.ok).toBe(true);
     expect(active.payload?.sessions.map((s) => s.key)).toEqual(["agent:main:main"]);
 
-    const limited = await rpcReq<{
+    const limited = await directSessionReq<{
       sessions: Array<{ key: string }>;
-    }>(ws, "sessions.list", {
+    }>("sessions.list", {
       includeGlobal: true,
       includeUnknown: false,
       limit: 1,
@@ -1070,7 +1173,7 @@ describe("gateway server sessions", () => {
     expect(limited.payload?.sessions).toHaveLength(1);
     expect(limited.payload?.sessions[0]?.key).toBe("global");
 
-    const patched = await rpcReq<{ ok: true; key: string }>(ws, "sessions.patch", {
+    const patched = await directSessionReq<{ ok: true; key: string }>("sessions.patch", {
       key: "agent:main:main",
       thinkingLevel: "medium",
       verboseLevel: "off",
@@ -1079,30 +1182,30 @@ describe("gateway server sessions", () => {
     expect(patched.payload?.ok).toBe(true);
     expect(patched.payload?.key).toBe("agent:main:main");
 
-    const sendPolicyPatched = await rpcReq<{
+    const sendPolicyPatched = await directSessionReq<{
       ok: true;
       entry: { sendPolicy?: string };
-    }>(ws, "sessions.patch", { key: "agent:main:main", sendPolicy: "deny" });
+    }>("sessions.patch", { key: "agent:main:main", sendPolicy: "deny" });
     expect(sendPolicyPatched.ok).toBe(true);
     expect(sendPolicyPatched.payload?.entry.sendPolicy).toBe("deny");
 
-    const labelPatched = await rpcReq<{
+    const labelPatched = await directSessionReq<{
       ok: true;
       entry: { label?: string };
-    }>(ws, "sessions.patch", {
+    }>("sessions.patch", {
       key: "agent:main:subagent:one",
       label: "Briefing",
     });
     expect(labelPatched.ok).toBe(true);
     expect(labelPatched.payload?.entry.label).toBe("Briefing");
 
-    const labelPatchedDuplicate = await rpcReq(ws, "sessions.patch", {
+    const labelPatchedDuplicate = await directSessionReq("sessions.patch", {
       key: "agent:main:discord:group:dev",
       label: "Briefing",
     });
     expect(labelPatchedDuplicate.ok).toBe(false);
 
-    const list2 = await rpcReq<{
+    const list2 = await directSessionReq<{
       sessions: Array<{
         key: string;
         thinkingLevel?: string;
@@ -1111,7 +1214,7 @@ describe("gateway server sessions", () => {
         label?: string;
         displayName?: string;
       }>;
-    }>(ws, "sessions.list", {});
+    }>("sessions.list", {});
     expect(list2.ok).toBe(true);
     const main2 = list2.payload?.sessions.find((s) => s.key === "agent:main:main");
     expect(main2?.thinkingLevel).toBe("medium");
@@ -1121,25 +1224,25 @@ describe("gateway server sessions", () => {
     expect(subagent?.label).toBe("Briefing");
     expect(subagent?.displayName).toBe("Briefing");
 
-    const clearedVerbose = await rpcReq<{ ok: true; key: string }>(ws, "sessions.patch", {
+    const clearedVerbose = await directSessionReq<{ ok: true; key: string }>("sessions.patch", {
       key: "agent:main:main",
       verboseLevel: null,
     });
     expect(clearedVerbose.ok).toBe(true);
 
-    const list3 = await rpcReq<{
+    const list3 = await directSessionReq<{
       sessions: Array<{
         key: string;
         verboseLevel?: string;
       }>;
-    }>(ws, "sessions.list", {});
+    }>("sessions.list", {});
     expect(list3.ok).toBe(true);
     const main3 = list3.payload?.sessions.find((s) => s.key === "agent:main:main");
     expect(main3?.verboseLevel).toBeUndefined();
 
-    const listByLabel = await rpcReq<{
+    const listByLabel = await directSessionReq<{
       sessions: Array<{ key: string }>;
-    }>(ws, "sessions.list", {
+    }>("sessions.list", {
       includeGlobal: false,
       includeUnknown: false,
       label: "Briefing",
@@ -1147,16 +1250,16 @@ describe("gateway server sessions", () => {
     expect(listByLabel.ok).toBe(true);
     expect(listByLabel.payload?.sessions.map((s) => s.key)).toEqual(["agent:main:subagent:one"]);
 
-    const resolvedByLabel = await rpcReq<{ ok: true; key: string }>(ws, "sessions.resolve", {
+    const resolvedByLabel = await directSessionReq<{ ok: true; key: string }>("sessions.resolve", {
       label: "Briefing",
       agentId: "main",
     });
     expect(resolvedByLabel.ok).toBe(true);
     expect(resolvedByLabel.payload?.key).toBe("agent:main:subagent:one");
 
-    const spawnedOnly = await rpcReq<{
+    const spawnedOnly = await directSessionReq<{
       sessions: Array<{ key: string }>;
-    }>(ws, "sessions.list", {
+    }>("sessions.list", {
       includeGlobal: true,
       includeUnknown: true,
       spawnedBy: "agent:main:main",
@@ -1164,20 +1267,20 @@ describe("gateway server sessions", () => {
     expect(spawnedOnly.ok).toBe(true);
     expect(spawnedOnly.payload?.sessions.map((s) => s.key)).toEqual(["agent:main:subagent:one"]);
 
-    const spawnedPatched = await rpcReq<{
+    const spawnedPatched = await directSessionReq<{
       ok: true;
       entry: { spawnedBy?: string };
-    }>(ws, "sessions.patch", {
+    }>("sessions.patch", {
       key: "agent:main:subagent:two",
       spawnedBy: "agent:main:main",
     });
     expect(spawnedPatched.ok).toBe(true);
     expect(spawnedPatched.payload?.entry.spawnedBy).toBe("agent:main:main");
 
-    const acpPatched = await rpcReq<{
+    const acpPatched = await directSessionReq<{
       ok: true;
       entry: { spawnedBy?: string; spawnDepth?: number };
-    }>(ws, "sessions.patch", {
+    }>("sessions.patch", {
       key: "agent:main:acp:child",
       spawnedBy: "agent:main:main",
       spawnDepth: 1,
@@ -1186,7 +1289,7 @@ describe("gateway server sessions", () => {
     expect(acpPatched.payload?.entry.spawnedBy).toBe("agent:main:main");
     expect(acpPatched.payload?.entry.spawnDepth).toBe(1);
 
-    const spawnedPatchedInvalidKey = await rpcReq(ws, "sessions.patch", {
+    const spawnedPatchedInvalidKey = await directSessionReq("sessions.patch", {
       key: "agent:main:main",
       spawnedBy: "agent:main:main",
     });
@@ -1194,7 +1297,7 @@ describe("gateway server sessions", () => {
 
     piSdkMock.enabled = true;
     piSdkMock.models = [{ id: "gpt-test-a", name: "A", provider: "openai" }];
-    const modelPatched = await rpcReq<{
+    const modelPatched = await directSessionReq<{
       ok: true;
       entry: {
         modelOverride?: string;
@@ -1203,7 +1306,7 @@ describe("gateway server sessions", () => {
         modelProvider?: string;
       };
       resolved?: { model?: string; modelProvider?: string };
-    }>(ws, "sessions.patch", {
+    }>("sessions.patch", {
       key: "agent:main:main",
       model: "openai/gpt-test-a",
     });
@@ -1215,9 +1318,9 @@ describe("gateway server sessions", () => {
     expect(modelPatched.payload?.resolved?.modelProvider).toBe("openai");
     expect(modelPatched.payload?.resolved?.model).toBe("gpt-test-a");
 
-    const listAfterModelPatch = await rpcReq<{
+    const listAfterModelPatch = await directSessionReq<{
       sessions: Array<{ key: string; modelProvider?: string; model?: string }>;
-    }>(ws, "sessions.list", {});
+    }>("sessions.list", {});
     expect(listAfterModelPatch.ok).toBe(true);
     const mainAfterModelPatch = listAfterModelPatch.payload?.sessions.find(
       (session) => session.key === "agent:main:main",
@@ -1225,7 +1328,7 @@ describe("gateway server sessions", () => {
     expect(mainAfterModelPatch?.modelProvider).toBe("openai");
     expect(mainAfterModelPatch?.model).toBe("gpt-test-a");
 
-    const compacted = await rpcReq<{ ok: true; compacted: boolean }>(ws, "sessions.compact", {
+    const compacted = await directSessionReq<{ ok: true; compacted: boolean }>("sessions.compact", {
       key: "agent:main:main",
       maxLines: 3,
     });
@@ -1238,14 +1341,14 @@ describe("gateway server sessions", () => {
     const filesAfterCompact = await fs.readdir(dir);
     expect(filesAfterCompact.some((f) => f.startsWith("sess-main.jsonl.bak."))).toBe(true);
 
-    const deleted = await rpcReq<{ ok: true; deleted: boolean }>(ws, "sessions.delete", {
+    const deleted = await directSessionReq<{ ok: true; deleted: boolean }>("sessions.delete", {
       key: "agent:main:discord:group:dev",
     });
     expect(deleted.ok).toBe(true);
     expect(deleted.payload?.deleted).toBe(true);
-    const listAfterDelete = await rpcReq<{
+    const listAfterDelete = await directSessionReq<{
       sessions: Array<{ key: string }>;
-    }>(ws, "sessions.list", {});
+    }>("sessions.list", {});
     expect(listAfterDelete.ok).toBe(true);
     expect(
       listAfterDelete.payload?.sessions.some((s) => s.key === "agent:main:discord:group:dev"),
@@ -1253,7 +1356,7 @@ describe("gateway server sessions", () => {
     const filesAfterDelete = await fs.readdir(dir);
     expect(filesAfterDelete.some((f) => f.startsWith("sess-group.jsonl.deleted."))).toBe(true);
 
-    const reset = await rpcReq<{
+    const reset = await directSessionReq<{
       ok: true;
       key: string;
       entry: {
@@ -1263,7 +1366,7 @@ describe("gateway server sessions", () => {
         lastAccountId?: string;
         lastThreadId?: string | number;
       };
-    }>(ws, "sessions.reset", { key: "agent:main:main" });
+    }>("sessions.reset", { key: "agent:main:main" });
     expect(reset.ok).toBe(true);
     expect(reset.payload?.key).toBe("agent:main:main");
     expect(reset.payload?.entry.sessionId).not.toBe("sess-main");
@@ -1280,7 +1383,7 @@ describe("gateway server sessions", () => {
     const filesAfterReset = await fs.readdir(dir);
     expect(filesAfterReset.some((f) => f.startsWith("sess-main.jsonl.reset."))).toBe(true);
 
-    const badThinking = await rpcReq(ws, "sessions.patch", {
+    const badThinking = await directSessionReq("sessions.patch", {
       key: "agent:main:main",
       thinkingLevel: "banana",
     });
@@ -1288,13 +1391,12 @@ describe("gateway server sessions", () => {
     expect((badThinking.error as { message?: unknown } | undefined)?.message ?? "").toMatch(
       /invalid thinkinglevel/i,
     );
-
-    ws.close();
   });
 
   test("sessions.compaction.* lists checkpoints and branches or restores from pre-compaction snapshots", async () => {
     const { dir, storePath } = await createSessionStoreDir();
-    const fixture = createCheckpointFixture(dir);
+    const fixture = await createCheckpointFixture(dir);
+    const { SessionManager } = await getSessionManagerModule();
     await writeSessionStore({
       entries: {
         main: {
@@ -1497,6 +1599,83 @@ describe("gateway server sessions", () => {
     ws.close();
   });
 
+  test("sessions.patch preserves nested model ids under provider overrides", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-sessions-nested-"));
+    const storePath = path.join(dir, "sessions.json");
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        "agent:main:main": {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+        },
+      }),
+      "utf-8",
+    );
+
+    await withEnvAsync({ OPENCLAW_CONFIG_PATH: undefined }, async () => {
+      const { clearConfigCache, clearRuntimeConfigSnapshot } = await getGatewayConfigModule();
+      clearConfigCache();
+      clearRuntimeConfigSnapshot();
+      const cfg = {
+        session: { store: storePath, mainKey: "main" },
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-test-a" },
+          },
+          list: [{ id: "main", default: true, workspace: dir }],
+        },
+      };
+      const configPath = path.join(dir, "openclaw.json");
+      await fs.writeFile(configPath, JSON.stringify(cfg, null, 2), "utf-8");
+
+      await withEnvAsync({ OPENCLAW_CONFIG_PATH: configPath }, async () => {
+        const started = await startConnectedServerWithClient();
+        const { server, ws } = started;
+        try {
+          piSdkMock.enabled = true;
+          piSdkMock.models = [
+            { id: "moonshotai/kimi-k2.5", name: "Kimi K2.5 (NVIDIA)", provider: "nvidia" },
+          ];
+
+          const patched = await rpcReq<{
+            ok: true;
+            entry: {
+              modelOverride?: string;
+              providerOverride?: string;
+              model?: string;
+              modelProvider?: string;
+            };
+            resolved?: { model?: string; modelProvider?: string };
+          }>(ws, "sessions.patch", {
+            key: "agent:main:main",
+            model: "nvidia/moonshotai/kimi-k2.5",
+          });
+          expect(patched.ok).toBe(true);
+          expect(patched.payload?.entry.modelOverride).toBe("moonshotai/kimi-k2.5");
+          expect(patched.payload?.entry.providerOverride).toBe("nvidia");
+          expect(patched.payload?.entry.model).toBeUndefined();
+          expect(patched.payload?.entry.modelProvider).toBeUndefined();
+          expect(patched.payload?.resolved?.modelProvider).toBe("nvidia");
+          expect(patched.payload?.resolved?.model).toBe("moonshotai/kimi-k2.5");
+
+          const listed = await rpcReq<{
+            sessions: Array<{ key: string; modelProvider?: string; model?: string }>;
+          }>(ws, "sessions.list", {});
+          expect(listed.ok).toBe(true);
+          const mainSession = listed.payload?.sessions.find(
+            (session) => session.key === "agent:main:main",
+          );
+          expect(mainSession?.modelProvider).toBe("nvidia");
+          expect(mainSession?.model).toBe("moonshotai/kimi-k2.5");
+        } finally {
+          ws.close();
+          await server.close();
+        }
+      });
+    });
+  });
+
   test("sessions.preview returns transcript previews", async () => {
     const { dir } = await createSessionStoreDir();
     const sessionId = "sess-preview";
@@ -1513,12 +1692,19 @@ describe("gateway server sessions", () => {
       },
     });
 
-    const { ws } = await openClient();
-    const entry = await getMainPreviewEntry(ws);
+    const preview = await directSessionReq<{
+      previews: Array<{
+        key: string;
+        status: string;
+        items: Array<{ role: string; text: string }>;
+      }>;
+    }>("sessions.preview", { keys: ["main"], limit: 3, maxChars: 120 });
+    expect(preview.ok).toBe(true);
+    const entry = preview.payload?.previews[0];
+    expect(entry?.key).toBe("main");
+    expect(entry?.status).toBe("ok");
     expect(entry?.items.map((item) => item.role)).toEqual(["assistant", "tool", "assistant"]);
     expect(entry?.items[1]?.text).toContain("call weather");
-
-    ws.close();
   });
 
   test("sessions.reset recomputes model from defaults instead of stale runtime model", async () => {
@@ -1541,8 +1727,7 @@ describe("gateway server sessions", () => {
       },
     });
 
-    const { ws } = await openClient();
-    const reset = await rpcReq<{
+    const reset = await directSessionReq<{
       ok: true;
       key: string;
       entry: {
@@ -1552,7 +1737,7 @@ describe("gateway server sessions", () => {
         model?: string;
         contextTokens?: number;
       };
-    }>(ws, "sessions.reset", { key: "main" });
+    }>("sessions.reset", { key: "main" });
 
     expect(reset.ok).toBe(true);
     expect(reset.payload?.key).toBe("agent:main:main");
@@ -1562,8 +1747,173 @@ describe("gateway server sessions", () => {
     expect(reset.payload?.entry.model).toBe("gpt-test-a");
     expect(reset.payload?.entry.contextTokens).toBeUndefined();
     await expect(fs.stat(reset.payload?.entry.sessionFile as string)).resolves.toBeTruthy();
+  });
 
-    ws.close();
+  test("sessions.reset preserves legacy explicit model overrides without modelOverrideSource", async () => {
+    const { storePath } = await createSessionStoreDir();
+    testState.agentConfig = {
+      model: {
+        primary: "openai/gpt-test-a",
+      },
+    };
+
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-explicit-model-override",
+          updatedAt: Date.now(),
+          providerOverride: "anthropic",
+          modelOverride: "claude-opus-4-1",
+          modelProvider: "openai",
+          model: "gpt-test-a",
+        },
+      },
+    });
+
+    const reset = await directSessionReq<{
+      ok: true;
+      key: string;
+      entry: {
+        providerOverride?: string;
+        modelOverride?: string;
+        modelOverrideSource?: string;
+        modelProvider?: string;
+        model?: string;
+      };
+    }>("sessions.reset", { key: "main" });
+
+    expect(reset.ok).toBe(true);
+    expect(reset.payload?.entry.providerOverride).toBe("anthropic");
+    expect(reset.payload?.entry.modelOverride).toBe("claude-opus-4-1");
+    expect(reset.payload?.entry.modelOverrideSource).toBe("user");
+    expect(reset.payload?.entry.modelProvider).toBe("anthropic");
+    expect(reset.payload?.entry.model).toBe("claude-opus-4-1");
+
+    const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      {
+        providerOverride?: string;
+        modelOverride?: string;
+        modelOverrideSource?: string;
+        modelProvider?: string;
+        model?: string;
+      }
+    >;
+    expect(store["agent:main:main"]?.providerOverride).toBe("anthropic");
+    expect(store["agent:main:main"]?.modelOverride).toBe("claude-opus-4-1");
+    expect(store["agent:main:main"]?.modelOverrideSource).toBe("user");
+    expect(store["agent:main:main"]?.modelProvider).toBe("anthropic");
+    expect(store["agent:main:main"]?.model).toBe("claude-opus-4-1");
+  });
+
+  test("sessions.reset clears fallback-pinned model overrides and restores the selected model", async () => {
+    const { storePath } = await createSessionStoreDir();
+    testState.agentConfig = {
+      model: {
+        primary: "openai/gpt-test-a",
+      },
+    };
+
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-fallback-model-override",
+          updatedAt: Date.now(),
+          providerOverride: "anthropic",
+          modelOverride: "claude-opus-4-1",
+          modelOverrideSource: "auto",
+          fallbackNoticeSelectedModel: "openai/gpt-test-a",
+          fallbackNoticeActiveModel: "anthropic/claude-opus-4-1",
+          fallbackNoticeReason: "rate limit",
+        },
+      },
+    });
+
+    const reset = await directSessionReq<{
+      ok: true;
+      key: string;
+      entry: {
+        providerOverride?: string;
+        modelOverride?: string;
+        modelProvider?: string;
+        model?: string;
+      };
+    }>("sessions.reset", { key: "main" });
+
+    expect(reset.ok).toBe(true);
+    expect(reset.payload?.entry.providerOverride).toBeUndefined();
+    expect(reset.payload?.entry.modelOverride).toBeUndefined();
+    expect(reset.payload?.entry.modelProvider).toBe("openai");
+    expect(reset.payload?.entry.model).toBe("gpt-test-a");
+
+    const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      {
+        providerOverride?: string;
+        modelOverride?: string;
+        modelProvider?: string;
+        model?: string;
+      }
+    >;
+    expect(store["agent:main:main"]?.providerOverride).toBeUndefined();
+    expect(store["agent:main:main"]?.modelOverride).toBeUndefined();
+    expect(store["agent:main:main"]?.modelProvider).toBe("openai");
+    expect(store["agent:main:main"]?.model).toBe("gpt-test-a");
+  });
+
+  test("sessions.reset follows the updated default after an auto fallback pinned an older default", async () => {
+    const { storePath } = await createSessionStoreDir();
+    testState.agentConfig = {
+      model: {
+        primary: "openai/gpt-test-c",
+      },
+    };
+
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-fallback-stale-default",
+          updatedAt: Date.now(),
+          providerOverride: "anthropic",
+          modelOverride: "claude-opus-4-1",
+          modelOverrideSource: "auto",
+          fallbackNoticeSelectedModel: "openai/gpt-test-a",
+          fallbackNoticeActiveModel: "anthropic/claude-opus-4-1",
+          fallbackNoticeReason: "rate limit",
+        },
+      },
+    });
+
+    const reset = await directSessionReq<{
+      ok: true;
+      key: string;
+      entry: {
+        providerOverride?: string;
+        modelOverride?: string;
+        modelProvider?: string;
+        model?: string;
+      };
+    }>("sessions.reset", { key: "main" });
+
+    expect(reset.ok).toBe(true);
+    expect(reset.payload?.entry.providerOverride).toBeUndefined();
+    expect(reset.payload?.entry.modelOverride).toBeUndefined();
+    expect(reset.payload?.entry.modelProvider).toBe("openai");
+    expect(reset.payload?.entry.model).toBe("gpt-test-c");
+
+    const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      {
+        providerOverride?: string;
+        modelOverride?: string;
+        modelProvider?: string;
+        model?: string;
+      }
+    >;
+    expect(store["agent:main:main"]?.providerOverride).toBeUndefined();
+    expect(store["agent:main:main"]?.modelOverride).toBeUndefined();
+    expect(store["agent:main:main"]?.modelProvider).toBe("openai");
+    expect(store["agent:main:main"]?.model).toBe("gpt-test-c");
   });
 
   test("sessions.reset preserves spawned session ownership metadata", async () => {
@@ -1595,6 +1945,7 @@ describe("gateway server sessions", () => {
           ttsAuto: "always",
           providerOverride: "anthropic",
           modelOverride: "claude-opus-4-1",
+          modelOverrideSource: "user",
           authProfileOverride: "work",
           authProfileOverrideSource: "user",
           authProfileOverrideCompactionCount: 7,
@@ -1632,8 +1983,7 @@ describe("gateway server sessions", () => {
       },
     });
 
-    const { ws } = await openClient();
-    const reset = await rpcReq<{
+    const reset = await directSessionReq<{
       ok: true;
       key: string;
       entry: {
@@ -1689,7 +2039,7 @@ describe("gateway server sessions", () => {
         };
         label?: string;
       };
-    }>(ws, "sessions.reset", { key: "subagent:child" });
+    }>("sessions.reset", { key: "subagent:child" });
 
     expect(reset.ok).toBe(true);
     expect(reset.payload?.entry.sessionFile).toBe(customSessionFile);
@@ -1851,8 +2201,6 @@ describe("gateway server sessions", () => {
       threadId: "thread-1",
     });
     expect(store["agent:main:subagent:child"]?.label).toBe("owned child");
-
-    ws.close();
   });
 
   test("sessions.preview resolves legacy mixed-case main alias with custom mainKey", async () => {
@@ -2092,12 +2440,10 @@ describe("gateway server sessions", () => {
     embeddedRunMock.activeIds.add("sess-active");
     embeddedRunMock.waitResults.set("sess-active", true);
 
-    const { ws } = await openClient();
-
-    const mainDelete = await rpcReq(ws, "sessions.delete", { key: "main" });
+    const mainDelete = await directSessionReq("sessions.delete", { key: "main" });
     expect(mainDelete.ok).toBe(false);
 
-    const deleted = await rpcReq<{ ok: true; deleted: boolean }>(ws, "sessions.delete", {
+    const deleted = await directSessionReq<{ ok: true; deleted: boolean }>("sessions.delete", {
       key: "discord:group:dev",
     });
     expect(deleted.ok).toBe(true);
@@ -2107,6 +2453,7 @@ describe("gateway server sessions", () => {
       ["discord:group:dev", "agent:main:discord:group:dev", "sess-active"],
       "sess-active",
     );
+    expect(bundleMcpRuntimeMocks.disposeSessionMcpRuntime).toHaveBeenCalledWith("sess-active");
     expect(browserSessionTabMocks.closeTrackedBrowserTabsForSessions).toHaveBeenCalledTimes(1);
     expect(browserSessionTabMocks.closeTrackedBrowserTabsForSessions).toHaveBeenCalledWith({
       sessionKeys: expect.arrayContaining([
@@ -2134,8 +2481,6 @@ describe("gateway server sessions", () => {
       targetSessionKey: "agent:main:discord:group:dev",
       reason: "session-delete",
     });
-
-    ws.close();
   });
 
   test("sessions.delete closes ACP runtime handles before removing ACP sessions", async () => {
@@ -2160,8 +2505,7 @@ describe("gateway server sessions", () => {
         },
       },
     });
-    const { ws } = await openClient();
-    const deleted = await rpcReq<{ ok: true; deleted: boolean }>(ws, "sessions.delete", {
+    const deleted = await directSessionReq<{ ok: true; deleted: boolean }>("sessions.delete", {
       key: "discord:group:dev",
     });
     expect(deleted.ok).toBe(true);
@@ -2179,8 +2523,6 @@ describe("gateway server sessions", () => {
       reason: "session-delete",
       sessionKey: "agent:main:discord:group:dev",
     });
-
-    ws.close();
   });
 
   test("sessions.delete emits session_end with deleted reason and no replacement", async () => {
@@ -2208,8 +2550,7 @@ describe("gateway server sessions", () => {
       },
     });
 
-    const { ws } = await openClient();
-    const deleted = await rpcReq<{ ok: true; deleted: boolean }>(ws, "sessions.delete", {
+    const deleted = await directSessionReq<{ ok: true; deleted: boolean }>("sessions.delete", {
       key: "discord:group:delete",
     });
     expect(deleted.ok).toBe(true);
@@ -2235,7 +2576,6 @@ describe("gateway server sessions", () => {
       sessionKey: "agent:main:discord:group:delete",
       agentId: "main",
     });
-    ws.close();
   });
 
   test("sessions.delete does not emit lifecycle events when nothing was deleted", async () => {
@@ -2247,8 +2587,7 @@ describe("gateway server sessions", () => {
       },
     });
 
-    const { ws } = await openClient();
-    const deleted = await rpcReq<{ ok: true; deleted: boolean }>(ws, "sessions.delete", {
+    const deleted = await directSessionReq<{ ok: true; deleted: boolean }>("sessions.delete", {
       key: "agent:main:subagent:missing",
     });
 
@@ -2256,8 +2595,6 @@ describe("gateway server sessions", () => {
     expect(deleted.payload?.deleted).toBe(false);
     expect(subagentLifecycleHookMocks.runSubagentEnded).not.toHaveBeenCalled();
     expect(threadBindingMocks.unbindThreadBindingsBySessionKey).not.toHaveBeenCalled();
-
-    ws.close();
   });
 
   test("sessions.delete emits subagent targetKind for subagent sessions", async () => {
@@ -2272,14 +2609,15 @@ describe("gateway server sessions", () => {
       },
     });
 
-    const { ws } = await openClient();
-    const deleted = await rpcReq<{ ok: true; deleted: boolean }>(ws, "sessions.delete", {
+    const deleted = await directSessionReq<{ ok: true; deleted: boolean }>("sessions.delete", {
       key: "agent:main:subagent:worker",
     });
     expect(deleted.ok).toBe(true);
     expect(deleted.payload?.deleted).toBe(true);
     expect(subagentLifecycleHookMocks.runSubagentEnded).toHaveBeenCalledTimes(1);
-    const event = (subagentLifecycleHookMocks.runSubagentEnded.mock.calls as unknown[][])[0]?.[0] as
+    const event = (
+      subagentLifecycleHookMocks.runSubagentEnded.mock.calls as unknown[][]
+    )[0]?.[0] as
       | { targetKind?: string; targetSessionKey?: string; reason?: string; outcome?: string }
       | undefined;
     expect(event).toMatchObject({
@@ -2293,8 +2631,6 @@ describe("gateway server sessions", () => {
       targetSessionKey: "agent:main:subagent:worker",
       reason: "session-delete",
     });
-
-    ws.close();
   });
 
   test("sessions.delete can skip lifecycle hooks while still unbinding thread bindings", async () => {
@@ -2309,8 +2645,7 @@ describe("gateway server sessions", () => {
       },
     });
 
-    const { ws } = await openClient();
-    const deleted = await rpcReq<{ ok: true; deleted: boolean }>(ws, "sessions.delete", {
+    const deleted = await directSessionReq<{ ok: true; deleted: boolean }>("sessions.delete", {
       key: "agent:main:subagent:worker",
       emitLifecycleHooks: false,
     });
@@ -2322,8 +2657,6 @@ describe("gateway server sessions", () => {
       targetSessionKey: "agent:main:subagent:worker",
       reason: "session-delete",
     });
-
-    ws.close();
   });
 
   test("sessions.delete directly unbinds thread bindings when hooks are unavailable", async () => {
@@ -2339,8 +2672,7 @@ describe("gateway server sessions", () => {
     });
     subagentLifecycleHookState.hasSubagentEndedHook = false;
 
-    const { ws } = await openClient();
-    const deleted = await rpcReq<{ ok: true; deleted: boolean }>(ws, "sessions.delete", {
+    const deleted = await directSessionReq<{ ok: true; deleted: boolean }>("sessions.delete", {
       key: "agent:main:subagent:worker",
     });
     expect(deleted.ok).toBe(true);
@@ -2350,8 +2682,6 @@ describe("gateway server sessions", () => {
       targetSessionKey: "agent:main:subagent:worker",
       reason: "session-delete",
     });
-
-    ws.close();
   });
 
   test("sessions.reset aborts active runs and clears queues", async () => {
@@ -2364,10 +2694,7 @@ describe("gateway server sessions", () => {
     embeddedRunMock.activeIds.add("sess-main");
     embeddedRunMock.waitResults.set("sess-main", true);
 
-    const { ws } = await openClient();
-
-    const reset = await rpcReq<{ ok: true; key: string; entry: { sessionId: string } }>(
-      ws,
+    const reset = await directSessionReq<{ ok: true; key: string; entry: { sessionId: string } }>(
       "sessions.reset",
       {
         key: "main",
@@ -2381,6 +2708,7 @@ describe("gateway server sessions", () => {
       ["main", "agent:main:main", "sess-main"],
       "sess-main",
     );
+    expect(bundleMcpRuntimeMocks.disposeSessionMcpRuntime).toHaveBeenCalledWith("sess-main");
     expect(waitCallCountAtSnapshotClear).toEqual([1]);
     expect(browserSessionTabMocks.closeTrackedBrowserTabsForSessions).toHaveBeenCalledTimes(1);
     expect(browserSessionTabMocks.closeTrackedBrowserTabsForSessions).toHaveBeenCalledWith({
@@ -2405,8 +2733,6 @@ describe("gateway server sessions", () => {
       targetSessionKey: "agent:main:main",
       reason: "session-reset",
     });
-
-    ws.close();
   });
 
   test("sessions.reset closes ACP runtime handles for ACP sessions", async () => {
@@ -2448,8 +2774,7 @@ describe("gateway server sessions", () => {
         },
       },
     });
-    const { ws } = await openClient();
-    const reset = await rpcReq<{
+    const reset = await directSessionReq<{
       ok: true;
       key: string;
       entry: {
@@ -2471,7 +2796,7 @@ describe("gateway server sessions", () => {
           state?: string;
         };
       };
-    }>(ws, "sessions.reset", {
+    }>("sessions.reset", {
       key: "main",
     });
     expect(reset.ok).toBe(true);
@@ -2542,8 +2867,6 @@ describe("gateway server sessions", () => {
       state: "idle",
     });
     expect(store["agent:main:main"]?.acp?.identity?.acpxSessionId).toBeUndefined();
-
-    ws.close();
   });
 
   test("sessions.reset does not emit lifecycle events when key does not exist", async () => {
@@ -2555,20 +2878,17 @@ describe("gateway server sessions", () => {
       },
     });
 
-    const { ws } = await openClient();
-    const reset = await rpcReq<{ ok: true; key: string; entry: { sessionId: string } }>(
-      ws,
-      "sessions.reset",
-      {
-        key: "agent:main:subagent:missing",
-      },
-    );
+    const reset = await directSessionReq<{
+      ok: true;
+      key: string;
+      entry: { sessionId: string };
+    }>("sessions.reset", {
+      key: "agent:main:subagent:missing",
+    });
 
     expect(reset.ok).toBe(true);
     expect(subagentLifecycleHookMocks.runSubagentEnded).not.toHaveBeenCalled();
     expect(threadBindingMocks.unbindThreadBindingsBySessionKey).not.toHaveBeenCalled();
-
-    ws.close();
   });
 
   test("sessions.reset emits subagent targetKind for subagent sessions", async () => {
@@ -2583,19 +2903,20 @@ describe("gateway server sessions", () => {
       },
     });
 
-    const { ws } = await openClient();
-    const reset = await rpcReq<{ ok: true; key: string; entry: { sessionId: string } }>(
-      ws,
-      "sessions.reset",
-      {
-        key: "agent:main:subagent:worker",
-      },
-    );
+    const reset = await directSessionReq<{
+      ok: true;
+      key: string;
+      entry: { sessionId: string };
+    }>("sessions.reset", {
+      key: "agent:main:subagent:worker",
+    });
     expect(reset.ok).toBe(true);
     expect(reset.payload?.key).toBe("agent:main:subagent:worker");
     expect(reset.payload?.entry.sessionId).not.toBe("sess-subagent");
     expect(subagentLifecycleHookMocks.runSubagentEnded).toHaveBeenCalledTimes(1);
-    const event = (subagentLifecycleHookMocks.runSubagentEnded.mock.calls as unknown[][])[0]?.[0] as
+    const event = (
+      subagentLifecycleHookMocks.runSubagentEnded.mock.calls as unknown[][]
+    )[0]?.[0] as
       | { targetKind?: string; targetSessionKey?: string; reason?: string; outcome?: string }
       | undefined;
     expect(event).toMatchObject({
@@ -2609,8 +2930,6 @@ describe("gateway server sessions", () => {
       targetSessionKey: "agent:main:subagent:worker",
       reason: "session-reset",
     });
-
-    ws.close();
   });
 
   test("sessions.reset directly unbinds thread bindings when hooks are unavailable", async () => {
@@ -2626,8 +2945,7 @@ describe("gateway server sessions", () => {
     });
     subagentLifecycleHookState.hasSubagentEndedHook = false;
 
-    const { ws } = await openClient();
-    const reset = await rpcReq<{ ok: true; key: string }>(ws, "sessions.reset", {
+    const reset = await directSessionReq<{ ok: true; key: string }>("sessions.reset", {
       key: "main",
     });
     expect(reset.ok).toBe(true);
@@ -2637,8 +2955,6 @@ describe("gateway server sessions", () => {
       targetSessionKey: "agent:main:main",
       reason: "session-reset",
     });
-
-    ws.close();
   });
 
   test("sessions.reset emits internal command hook with reason", async () => {
@@ -2651,16 +2967,30 @@ describe("gateway server sessions", () => {
       },
     });
 
-    const { ws } = await openClient();
-    const reset = await rpcReq<{ ok: true; key: string }>(ws, "sessions.reset", {
+    const reset = await directSessionReq<{ ok: true; key: string }>("sessions.reset", {
       key: "main",
       reason: "new",
     });
     expect(reset.ok).toBe(true);
-    expect(sessionHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
-    const event = (
+    const resetHookEvents = (
       sessionHookMocks.triggerInternalHook.mock.calls as unknown as Array<[unknown]>
-    )[0]?.[0] as { context?: { previousSessionEntry?: unknown } } | undefined;
+    )
+      .map((call) => call[0])
+      .filter(
+        (
+          event,
+        ): event is {
+          type: string;
+          action: string;
+          context?: { previousSessionEntry?: unknown };
+        } =>
+          Boolean(event) &&
+          typeof event === "object" &&
+          (event as { type?: unknown }).type === "command" &&
+          (event as { action?: unknown }).action === "new",
+      );
+    expect(resetHookEvents).toHaveLength(1);
+    const event = resetHookEvents[0];
     if (!event) {
       throw new Error("expected session hook event");
     }
@@ -2673,7 +3003,6 @@ describe("gateway server sessions", () => {
       },
     });
     expect(event.context?.previousSessionEntry).toMatchObject({ sessionId: "sess-main" });
-    ws.close();
   });
 
   test("sessions.reset emits before_reset hook with transcript context", async () => {
@@ -2701,8 +3030,7 @@ describe("gateway server sessions", () => {
 
     beforeResetHookState.hasBeforeResetHook = true;
 
-    const { ws } = await openClient();
-    const reset = await rpcReq<{ ok: true; key: string }>(ws, "sessions.reset", {
+    const reset = await directSessionReq<{ ok: true; key: string }>("sessions.reset", {
       key: "main",
       reason: "new",
     });
@@ -2726,7 +3054,6 @@ describe("gateway server sessions", () => {
       sessionKey: "agent:main:main",
       sessionId: "sess-main",
     });
-    ws.close();
   });
 
   test("sessions.reset emits enriched session_end and session_start hooks", async () => {
@@ -2752,8 +3079,7 @@ describe("gateway server sessions", () => {
       },
     });
 
-    const { ws } = await openClient();
-    const reset = await rpcReq<{ ok: true; key: string }>(ws, "sessions.reset", {
+    const reset = await directSessionReq<{ ok: true; key: string }>("sessions.reset", {
       key: "main",
       reason: "new",
     });
@@ -2794,7 +3120,6 @@ describe("gateway server sessions", () => {
       sessionKey: "agent:main:main",
       agentId: "main",
     });
-    ws.close();
   });
 
   test("sessions.reset returns unavailable when active run does not stop", async () => {
@@ -2808,9 +3133,7 @@ describe("gateway server sessions", () => {
     embeddedRunMock.activeIds.add("sess-main");
     embeddedRunMock.waitResults.set("sess-main", false);
 
-    const { ws } = await openClient();
-
-    const reset = await rpcReq(ws, "sessions.reset", {
+    const reset = await directSessionReq("sessions.reset", {
       key: "main",
     });
     expect(reset.ok).toBe(false);
@@ -2832,8 +3155,6 @@ describe("gateway server sessions", () => {
     expect(store["agent:main:main"]?.sessionId).toBe("sess-main");
     const filesAfterResetAttempt = await fs.readdir(dir);
     expect(filesAfterResetAttempt.some((f) => f.startsWith("sess-main.jsonl.reset."))).toBe(false);
-
-    ws.close();
   });
 
   test("sessions.reset emits before_reset for the entry actually reset under the store lock", async () => {
@@ -2870,6 +3191,12 @@ describe("gateway server sessions", () => {
     });
 
     beforeResetHookState.hasBeforeResetHook = true;
+    const [{ loadConfig }, { resolveGatewaySessionStoreTarget }, { withSessionStoreLockForTest }] =
+      await Promise.all([
+        import("../config/config.js"),
+        import("./session-utils.js"),
+        import("../config/sessions/store.js"),
+      ]);
     const gatewayStorePath = resolveGatewaySessionStoreTarget({
       cfg: loadConfig(),
       key: "main",
@@ -2976,14 +3303,40 @@ describe("gateway server sessions", () => {
     ws.close();
   });
 
-  test("webchat clients cannot patch or delete sessions", async () => {
-    await createSessionStoreDir();
+  test("webchat clients cannot patch, delete, compact, or restore sessions", async () => {
+    const { dir } = await createSessionStoreDir();
+    const fixture = await createCheckpointFixture(dir);
 
     await writeSessionStore({
       entries: {
         main: {
-          sessionId: "sess-main",
+          sessionId: fixture.sessionId,
+          sessionFile: fixture.sessionFile,
           updatedAt: Date.now(),
+          compactionCheckpoints: [
+            {
+              checkpointId: "checkpoint-1",
+              sessionKey: "agent:main:main",
+              sessionId: fixture.sessionId,
+              createdAt: Date.now(),
+              reason: "manual",
+              tokensBefore: 123,
+              tokensAfter: 45,
+              summary: "checkpoint summary",
+              firstKeptEntryId: fixture.preCompactionLeafId,
+              preCompaction: {
+                sessionId: fixture.preCompactionSession.getSessionId(),
+                sessionFile: fixture.preCompactionSessionFile,
+                leafId: fixture.preCompactionLeafId,
+              },
+              postCompaction: {
+                sessionId: fixture.sessionId,
+                sessionFile: fixture.sessionFile,
+                leafId: fixture.postCompactionLeafId,
+                entryId: fixture.postCompactionLeafId,
+              },
+            },
+          ],
         },
         "discord:group:dev": {
           sessionId: "sess-group",
@@ -3019,6 +3372,20 @@ describe("gateway server sessions", () => {
     });
     expect(deleted.ok).toBe(false);
     expect(deleted.error?.message ?? "").toMatch(/webchat clients cannot delete sessions/i);
+
+    const compacted = await rpcReq(ws, "sessions.compact", {
+      key: "main",
+      maxLines: 3,
+    });
+    expect(compacted.ok).toBe(false);
+    expect(compacted.error?.message ?? "").toMatch(/webchat clients cannot compact sessions/i);
+
+    const restored = await rpcReq(ws, "sessions.compaction.restore", {
+      key: "main",
+      checkpointId: "checkpoint-1",
+    });
+    expect(restored.ok).toBe(false);
+    expect(restored.error?.message ?? "").toMatch(/webchat clients cannot restore sessions/i);
 
     ws.close();
   });

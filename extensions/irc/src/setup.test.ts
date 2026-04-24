@@ -12,8 +12,12 @@ import {
   startAccountAndTrackLifecycle,
   waitForStartedMocks,
 } from "../../../test/helpers/plugins/start-account-lifecycle.js";
-import type { ResolvedIrcAccount } from "./accounts.js";
-import { ircPlugin } from "./channel.js";
+import {
+  listIrcAccountIds,
+  resolveDefaultIrcAccountId,
+  type ResolvedIrcAccount,
+} from "./accounts.js";
+import { startIrcGatewayAccount } from "./gateway.js";
 import { clearIrcRuntime, setIrcRuntime } from "./runtime.js";
 import {
   ircSetupAdapter,
@@ -24,6 +28,7 @@ import {
   setIrcNickServ,
   updateIrcAccountConfig,
 } from "./setup-core.js";
+import { ircSetupWizard } from "./setup-surface.js";
 import type { CoreConfig } from "./types.js";
 
 const hoisted = vi.hoisted(() => ({
@@ -38,8 +43,20 @@ vi.mock("./channel-runtime.js", () => {
   };
 });
 
-const ircConfigureAdapter = createPluginSetupWizardAdapter(ircPlugin);
-const ircStatus = createPluginSetupWizardStatus(ircPlugin);
+const ircSetupPlugin = {
+  id: "irc",
+  meta: {
+    label: "IRC",
+  },
+  config: {
+    defaultAccountId: resolveDefaultIrcAccountId,
+    listAccountIds: listIrcAccountIds,
+  },
+  setupWizard: ircSetupWizard,
+} as never;
+
+const ircConfigureAdapter = createPluginSetupWizardAdapter(ircSetupPlugin);
+const ircStatus = createPluginSetupWizardStatus(ircSetupPlugin);
 
 function buildAccount(): ResolvedIrcAccount {
   return {
@@ -409,7 +426,11 @@ describe("irc setup", () => {
     installIrcRuntime();
 
     const { abort, task, isSettled } = startAccountAndTrackLifecycle({
-      startAccount: ircPlugin.gateway!.startAccount!,
+      startAccount: async (ctx) =>
+        await startIrcGatewayAccount({
+          ...ctx,
+          cfg: ctx.cfg as CoreConfig,
+        }),
       account: buildAccount(),
     });
 

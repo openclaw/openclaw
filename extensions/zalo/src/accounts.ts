@@ -3,8 +3,8 @@ import {
   resolveMergedAccountConfig,
 } from "openclaw/plugin-sdk/account-helpers";
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
-import type { OpenClawConfig } from "./runtime-api.js";
 import { resolveZaloToken } from "./token.js";
 import type { ResolvedZaloAccount, ZaloAccountConfig, ZaloConfig } from "./types.js";
 

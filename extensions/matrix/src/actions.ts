@@ -1,17 +1,20 @@
-import { Type } from "@sinclair/typebox";
-import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
-import { requiresExplicitMatrixDefaultAccount } from "./account-selection.js";
-import { resolveDefaultMatrixAccountId, resolveMatrixAccount } from "./matrix/accounts.js";
 import {
   createActionGate,
   readNumberParam,
   readStringParam,
-  type ChannelMessageActionAdapter,
-  type ChannelMessageActionContext,
-  type ChannelMessageActionName,
-  type ChannelMessageToolDiscovery,
-  type ChannelToolSend,
-} from "./runtime-api.js";
+  ToolAuthorizationError,
+} from "openclaw/plugin-sdk/channel-actions";
+import type {
+  ChannelMessageActionAdapter,
+  ChannelMessageActionContext,
+  ChannelMessageActionName,
+  ChannelMessageToolDiscovery,
+} from "openclaw/plugin-sdk/channel-contract";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
+import { Type } from "typebox";
+import { requiresExplicitMatrixDefaultAccount } from "./account-selection.js";
+import { resolveDefaultMatrixAccountId, resolveMatrixAccount } from "./matrix/accounts.js";
 import type { CoreConfig } from "./types.js";
 
 const MATRIX_PLUGIN_HANDLED_ACTIONS = new Set<ChannelMessageActionName>([
@@ -30,10 +33,38 @@ const MATRIX_PLUGIN_HANDLED_ACTIONS = new Set<ChannelMessageActionName>([
   "channel-info",
   "permissions",
 ]);
+const MATRIX_PROFILE_MEDIA_PROPERTIES = {
+  avatarUrl: Type.Optional(
+    Type.String({
+      description:
+        "Profile avatar URL for Matrix self-profile update actions. Matrix accepts mxc:// and http(s) URLs.",
+    }),
+  ),
+  avatar_url: Type.Optional(
+    Type.String({
+      description:
+        "snake_case alias of avatarUrl for Matrix self-profile update actions. Matrix accepts mxc:// and http(s) URLs.",
+    }),
+  ),
+  avatarPath: Type.Optional(
+    Type.String({
+      description:
+        "Local avatar file path for Matrix self-profile update actions. Matrix uploads this file and sets the resulting MXC URI.",
+    }),
+  ),
+  avatar_path: Type.Optional(
+    Type.String({
+      description:
+        "snake_case alias of avatarPath for Matrix self-profile update actions. Matrix uploads this file and sets the resulting MXC URI.",
+    }),
+  ),
+} as const;
+const MATRIX_PROFILE_MEDIA_SOURCE_PARAMS = Object.freeze(["avatarUrl", "avatarPath"]);
 
 function createMatrixExposedActions(params: {
   gate: ReturnType<typeof createActionGate>;
   encryptionEnabled: boolean;
+  senderIsOwner?: boolean;
 }) {
   const actions = new Set<ChannelMessageActionName>(["poll", "poll-vote"]);
   if (params.gate("messages")) {
@@ -51,7 +82,7 @@ function createMatrixExposedActions(params: {
     actions.add("unpin");
     actions.add("list-pins");
   }
-  if (params.gate("profile")) {
+  if (params.gate("profile") && params.senderIsOwner === true) {
     actions.add("set-profile");
   }
   if (params.gate("memberInfo")) {
@@ -68,6 +99,7 @@ function createMatrixExposedActions(params: {
 
 function buildMatrixProfileToolSchema(): NonNullable<ChannelMessageToolDiscovery["schema"]> {
   return {
+    actions: ["set-profile"],
     properties: {
       displayName: Type.Optional(
         Type.String({
@@ -79,36 +111,13 @@ function buildMatrixProfileToolSchema(): NonNullable<ChannelMessageToolDiscovery
           description: "snake_case alias of displayName for Matrix self-profile update actions.",
         }),
       ),
-      avatarUrl: Type.Optional(
-        Type.String({
-          description:
-            "Profile avatar URL for Matrix self-profile update actions. Matrix accepts mxc:// and http(s) URLs.",
-        }),
-      ),
-      avatar_url: Type.Optional(
-        Type.String({
-          description:
-            "snake_case alias of avatarUrl for Matrix self-profile update actions. Matrix accepts mxc:// and http(s) URLs.",
-        }),
-      ),
-      avatarPath: Type.Optional(
-        Type.String({
-          description:
-            "Local avatar file path for Matrix self-profile update actions. Matrix uploads this file and sets the resulting MXC URI.",
-        }),
-      ),
-      avatar_path: Type.Optional(
-        Type.String({
-          description:
-            "snake_case alias of avatarPath for Matrix self-profile update actions. Matrix uploads this file and sets the resulting MXC URI.",
-        }),
-      ),
+      ...MATRIX_PROFILE_MEDIA_PROPERTIES,
     },
   };
 }
 
 export const matrixMessageActions: ChannelMessageActionAdapter = {
-  describeMessageTool: ({ cfg, accountId }) => {
+  describeMessageTool: ({ cfg, accountId, senderIsOwner }) => {
     const resolvedCfg = cfg as CoreConfig;
     if (!accountId && requiresExplicitMatrixDefaultAccount(resolvedCfg)) {
       return { actions: [], capabilities: [] };
@@ -124,16 +133,20 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
     const actions = createMatrixExposedActions({
       gate,
       encryptionEnabled: account.config.encryption === true,
+      senderIsOwner,
     });
     const listedActions = Array.from(actions);
     return {
       actions: listedActions,
       capabilities: [],
       schema: listedActions.includes("set-profile") ? buildMatrixProfileToolSchema() : null,
+      mediaSourceParams: listedActions.includes("set-profile")
+        ? { "set-profile": MATRIX_PROFILE_MEDIA_SOURCE_PARAMS }
+        : null,
     };
   },
   supportsAction: ({ action }) => MATRIX_PLUGIN_HANDLED_ACTIONS.has(action),
-  extractToolSend: ({ args }): ChannelToolSend | null => {
+  extractToolSend: ({ args }) => {
     return extractToolSend(args, "sendMessage");
   },
   handleAction: async (ctx: ChannelMessageActionContext) => {
@@ -258,6 +271,9 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
     }
 
     if (action === "set-profile") {
+      if (ctx.senderIsOwner !== true) {
+        throw new ToolAuthorizationError("Matrix profile updates require owner access.");
+      }
       const avatarPath =
         readStringParam(params, "avatarPath") ??
         readStringParam(params, "path") ??
@@ -287,13 +303,11 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
     }
 
     if (action === "permissions") {
-      const operation = (
+      const operation = normalizeLowercaseStringOrEmpty(
         readStringParam(params, "operation") ??
-        readStringParam(params, "mode") ??
-        "verification-list"
-      )
-        .trim()
-        .toLowerCase();
+          readStringParam(params, "mode") ??
+          "verification-list",
+      );
       const operationToAction: Record<string, string> = {
         "encryption-status": "encryptionStatus",
         "verification-status": "verificationStatus",

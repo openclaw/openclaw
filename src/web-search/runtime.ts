@@ -1,15 +1,18 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logVerbose } from "../globals.js";
 import type {
   PluginWebSearchProviderEntry,
   WebSearchProviderToolDefinition,
-} from "../plugins/types.js";
+} from "../plugins/web-provider-types.js";
 import { resolvePluginWebSearchProviders } from "../plugins/web-search-providers.runtime.js";
 import { resolveRuntimeWebSearchProviders } from "../plugins/web-search-providers.runtime.js";
 import { sortWebSearchProvidersForAutoDetect } from "../plugins/web-search-providers.shared.js";
 import { getActiveRuntimeWebToolsMetadata } from "../secrets/runtime-web-tools-state.js";
 import type { RuntimeWebSearchMetadata } from "../secrets/runtime-web-tools.types.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../shared/string-coerce.js";
 import {
   hasWebProviderEntryCredential,
   providerRequiresCredential,
@@ -17,27 +20,25 @@ import {
   resolveWebProviderConfig,
   resolveWebProviderDefinition,
 } from "../web/provider-runtime-shared.js";
+import type {
+  ResolveWebSearchDefinitionParams,
+  RunWebSearchParams,
+  RunWebSearchResult,
+  RuntimeWebSearchConfig as WebSearchConfig,
+} from "./runtime-types.js";
 
-type WebSearchConfig = NonNullable<OpenClawConfig["tools"]>["web"] extends infer Web
-  ? Web extends { search?: infer Search }
-    ? Search
-    : undefined
-  : undefined;
-
-export type ResolveWebSearchDefinitionParams = {
-  config?: OpenClawConfig;
-  sandboxed?: boolean;
-  runtimeWebSearch?: RuntimeWebSearchMetadata;
-  providerId?: string;
-  preferRuntimeProviders?: boolean;
-};
-
-export type RunWebSearchParams = ResolveWebSearchDefinitionParams & {
-  args: Record<string, unknown>;
-};
+export type {
+  ListWebSearchProvidersParams,
+  ResolveWebSearchDefinitionParams,
+  RunWebSearchParams,
+  RunWebSearchResult,
+  RuntimeWebSearchConfig,
+  RuntimeWebSearchProviderEntry,
+  RuntimeWebSearchToolDefinition,
+} from "./runtime-types.js";
 
 function resolveSearchConfig(cfg?: OpenClawConfig): WebSearchConfig {
-  return resolveWebProviderConfig<"search", NonNullable<WebSearchConfig>>(cfg, "search");
+  return resolveWebProviderConfig(cfg, "search") as NonNullable<WebSearchConfig> | undefined;
 }
 
 export function resolveWebSearchEnabled(params: {
@@ -70,9 +71,8 @@ function hasEntryCredential(
     provider,
     config,
     toolConfig: search as Record<string, unknown> | undefined,
-    resolveRawValue: ({ provider: currentProvider, config: currentConfig, toolConfig }) =>
-      currentProvider.getConfiguredCredentialValue?.(currentConfig) ??
-      (currentProvider.id === "brave" ? currentProvider.getCredentialValue(toolConfig) : undefined),
+    resolveRawValue: ({ provider: currentProvider, config: currentConfig }) =>
+      currentProvider.getConfiguredCredentialValue?.(currentConfig),
     resolveEnvValue: ({ provider: currentProvider, configuredEnvVarId }) =>
       (configuredEnvVarId ? readWebProviderEnvValue([configuredEnvVarId]) : undefined) ??
       readWebProviderEnvValue(currentProvider.envVars),
@@ -271,22 +271,18 @@ function hasExplicitWebSearchSelection(params: {
     return true;
   }
   const availableProviderIds = new Set(
-    (params.providers ?? []).map((provider) => provider.id.trim().toLowerCase()),
+    (params.providers ?? []).map((provider) => normalizeLowercaseStringOrEmpty(provider.id)),
   );
   const configuredProviderId =
-    params.search &&
-    "provider" in params.search &&
-    typeof params.search.provider === "string"
-      ? params.search.provider.trim().toLowerCase()
+    params.search && "provider" in params.search && typeof params.search.provider === "string"
+      ? normalizeLowercaseStringOrEmpty(params.search.provider)
       : "";
   if (configuredProviderId && availableProviderIds.has(configuredProviderId)) {
     return true;
   }
-  const runtimeConfiguredId = (
-    params.runtimeWebSearch?.selectedProvider ?? params.runtimeWebSearch?.providerConfigured
-  )
-    ?.trim()
-    .toLowerCase();
+  const runtimeConfiguredId = normalizeOptionalLowercaseString(
+    params.runtimeWebSearch?.selectedProvider ?? params.runtimeWebSearch?.providerConfigured,
+  );
   if (
     params.runtimeWebSearch?.providerSource === "configured" &&
     runtimeConfiguredId &&
@@ -297,9 +293,7 @@ function hasExplicitWebSearchSelection(params: {
   return false;
 }
 
-export async function runWebSearch(
-  params: RunWebSearchParams,
-): Promise<{ provider: string; result: Record<string, unknown> }> {
+export async function runWebSearch(params: RunWebSearchParams): Promise<RunWebSearchResult> {
   const search = resolveSearchConfig(params.config);
   const runtimeWebSearch = params.runtimeWebSearch ?? getActiveRuntimeWebToolsMetadata()?.search;
   const candidates = resolveWebSearchCandidates({

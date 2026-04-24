@@ -1,5 +1,6 @@
 import type { Dispatcher } from "undici";
 import { logWarn } from "../../logger.js";
+import { captureHttpExchange } from "../../proxy-capture/runtime.js";
 import { buildTimeoutAbortSignal } from "../../utils/fetch-timeout.js";
 import { hasProxyEnvConfigured } from "./proxy-env.js";
 import { retainSafeHeadersForCrossOriginRedirect as retainSafeRedirectHeaders } from "./redirect-headers.js";
@@ -9,6 +10,7 @@ import {
   type DispatcherAwareRequestInit,
 } from "./runtime-fetch.js";
 import {
+  assertHostnameAllowedWithPolicy,
   closeDispatcher,
   createPinnedDispatcher,
   resolvePinnedHostnameWithPolicy,
@@ -17,17 +19,31 @@ import {
   SsrFBlockedError,
   type SsrFPolicy,
 } from "./ssrf.js";
+import { _globalUndiciStreamTimeoutMs } from "./undici-global-dispatcher.js";
 import {
   createHttp1Agent,
   createHttp1EnvHttpProxyAgent,
   createHttp1ProxyAgent,
 } from "./undici-runtime.js";
 
+function resolveDispatcherTimeoutMs(fromParams: number | undefined): number | undefined {
+  if (fromParams !== undefined) {
+    return fromParams;
+  }
+  // Fall back to module-level bridge set by ensureGlobalUndiciStreamTimeouts
+  // (avoids reading Undici's non-public `.options` field)
+  if (_globalUndiciStreamTimeoutMs !== undefined) {
+    return _globalUndiciStreamTimeoutMs;
+  }
+  return undefined;
+}
+
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
 export const GUARDED_FETCH_MODE = {
   STRICT: "strict",
   TRUSTED_ENV_PROXY: "trusted_env_proxy",
+  TRUSTED_EXPLICIT_PROXY: "trusted_explicit_proxy",
 } as const;
 
 export type GuardedFetchMode = (typeof GUARDED_FETCH_MODE)[keyof typeof GUARDED_FETCH_MODE];
@@ -36,7 +52,19 @@ export type GuardedFetchOptions = {
   url: string;
   fetchImpl?: FetchLike;
   init?: RequestInit;
+  capture?:
+    | false
+    | {
+        flowId?: string;
+        meta?: Record<string, unknown>;
+      };
   maxRedirects?: number;
+  /**
+   * Allow replaying unsafe request methods and bodies across cross-origin redirects.
+   * Sensitive cross-origin headers (for example Authorization/Cookie) are still stripped.
+   * Defaults to false.
+   */
+  allowCrossOriginUnsafeRedirectReplay?: boolean;
   timeoutMs?: number;
   signal?: AbortSignal;
   policy?: SsrFPolicy;
@@ -76,6 +104,12 @@ export function withTrustedEnvProxyGuardedFetchMode(
   return { ...params, mode: GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY };
 }
 
+export function withTrustedExplicitProxyGuardedFetchMode(
+  params: GuardedFetchPresetOptions,
+): GuardedFetchOptions {
+  return { ...params, mode: GUARDED_FETCH_MODE.TRUSTED_EXPLICIT_PROXY };
+}
+
 function resolveGuardedFetchMode(params: GuardedFetchOptions): GuardedFetchMode {
   if (params.mode) {
     return params.mode;
@@ -104,6 +138,7 @@ function assertExplicitProxySupportsPinnedDns(
 
 function createPolicyDispatcherWithoutPinnedDns(
   dispatcherPolicy?: PinnedDispatcherPolicy,
+  timeoutMs?: number,
 ): Dispatcher | null {
   if (!dispatcherPolicy) {
     return null;
@@ -112,23 +147,28 @@ function createPolicyDispatcherWithoutPinnedDns(
   if (dispatcherPolicy.mode === "direct") {
     return createHttp1Agent(
       dispatcherPolicy.connect ? { connect: { ...dispatcherPolicy.connect } } : undefined,
+      timeoutMs,
     );
   }
 
   if (dispatcherPolicy.mode === "env-proxy") {
-    return createHttp1EnvHttpProxyAgent({
-      ...(dispatcherPolicy.connect ? { connect: { ...dispatcherPolicy.connect } } : {}),
-      ...(dispatcherPolicy.proxyTls ? { proxyTls: { ...dispatcherPolicy.proxyTls } } : {}),
-    });
+    return createHttp1EnvHttpProxyAgent(
+      {
+        ...(dispatcherPolicy.connect ? { connect: { ...dispatcherPolicy.connect } } : {}),
+        ...(dispatcherPolicy.proxyTls ? { proxyTls: { ...dispatcherPolicy.proxyTls } } : {}),
+      },
+      timeoutMs,
+    );
   }
 
   const proxyUrl = dispatcherPolicy.proxyUrl.trim();
-  return dispatcherPolicy.proxyTls
-    ? createHttp1ProxyAgent({
-        uri: proxyUrl,
-        requestTls: { ...dispatcherPolicy.proxyTls },
-      })
-    : createHttp1ProxyAgent({ uri: proxyUrl });
+  if (dispatcherPolicy.proxyTls) {
+    return createHttp1ProxyAgent(
+      { uri: proxyUrl, requestTls: { ...dispatcherPolicy.proxyTls } },
+      timeoutMs,
+    );
+  }
+  return createHttp1ProxyAgent({ uri: proxyUrl }, timeoutMs);
 }
 
 async function assertExplicitProxyAllowed(
@@ -153,8 +193,14 @@ async function assertExplicitProxyAllowed(
     policy:
       dispatcherPolicy.allowPrivateProxy === true
         ? {
+            // The proxy hostname is operator-configured, not user input.
+            // Clear the target-scoped hostnameAllowlist so configured proxies
+            // like localhost or internal hosts aren't rejected by an allowlist
+            // that was built for the target URL (for example api.example.test).
+            // Private-network IP checks still apply via allowPrivateNetwork.
             ...policy,
             allowPrivateNetwork: true,
+            hostnameAllowlist: undefined,
           }
         : policy,
   });
@@ -229,6 +275,27 @@ function rewriteRedirectInitForMethod(params: {
   };
 }
 
+function rewriteRedirectInitForCrossOrigin(params: {
+  init?: RequestInit;
+  allowUnsafeReplay: boolean;
+}): RequestInit | undefined {
+  const { init, allowUnsafeReplay } = params;
+  if (!init || allowUnsafeReplay) {
+    return init;
+  }
+
+  const currentMethod = init.method?.toUpperCase() ?? "GET";
+  if (currentMethod === "GET" || currentMethod === "HEAD") {
+    return init;
+  }
+
+  return {
+    ...init,
+    body: undefined,
+    headers: dropBodyHeaders(init.headers),
+  };
+}
+
 export { fetchWithRuntimeDispatcher } from "./runtime-fetch.js";
 
 export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<GuardedFetchResult> {
@@ -278,20 +345,42 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
 
     let dispatcher: Dispatcher | null = null;
     try {
-      assertExplicitProxySupportsPinnedDns(parsedUrl, params.dispatcherPolicy, params.pinDns);
+      const usesTrustedExplicitProxyMode =
+        mode === GUARDED_FETCH_MODE.TRUSTED_EXPLICIT_PROXY &&
+        params.dispatcherPolicy?.mode === "explicit-proxy";
+      assertExplicitProxySupportsPinnedDns(
+        parsedUrl,
+        params.dispatcherPolicy,
+        usesTrustedExplicitProxyMode ? false : params.pinDns,
+      );
       await assertExplicitProxyAllowed(params.dispatcherPolicy, params.lookupFn, params.policy);
-      const pinned = await resolvePinnedHostnameWithPolicy(parsedUrl.hostname, {
-        lookupFn: params.lookupFn,
-        policy: params.policy,
-      });
       const canUseTrustedEnvProxy =
         mode === GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY && hasProxyEnvConfigured();
+      const timeoutMs = resolveDispatcherTimeoutMs(params.timeoutMs);
       if (canUseTrustedEnvProxy) {
-        dispatcher = createHttp1EnvHttpProxyAgent();
+        dispatcher = createHttp1EnvHttpProxyAgent(undefined, timeoutMs);
+      } else if (usesTrustedExplicitProxyMode) {
+        // Explicit proxy targets are still checked against the caller's hostname
+        // policy, but the proxy does the DNS resolution for the final target.
+        assertHostnameAllowedWithPolicy(parsedUrl.hostname, params.policy);
+        dispatcher = createPolicyDispatcherWithoutPinnedDns(params.dispatcherPolicy, timeoutMs);
       } else if (params.pinDns === false) {
-        dispatcher = createPolicyDispatcherWithoutPinnedDns(params.dispatcherPolicy);
+        await resolvePinnedHostnameWithPolicy(parsedUrl.hostname, {
+          lookupFn: params.lookupFn,
+          policy: params.policy,
+        });
+        dispatcher = createPolicyDispatcherWithoutPinnedDns(params.dispatcherPolicy, timeoutMs);
       } else {
-        dispatcher = createPinnedDispatcher(pinned, params.dispatcherPolicy, params.policy);
+        const pinned = await resolvePinnedHostnameWithPolicy(parsedUrl.hostname, {
+          lookupFn: params.lookupFn,
+          policy: params.policy,
+        });
+        dispatcher = createPinnedDispatcher(
+          pinned,
+          params.dispatcherPolicy,
+          params.policy,
+          timeoutMs,
+        );
       }
 
       const init: DispatcherAwareRequestInit = {
@@ -317,6 +406,24 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
         ? await fetchWithRuntimeDispatcher(parsedUrl.toString(), init)
         : await defaultFetch(parsedUrl.toString(), init);
 
+      if (params.capture !== false) {
+        captureHttpExchange({
+          url: parsedUrl.toString(),
+          method: currentInit?.method ?? "GET",
+          requestHeaders: currentInit?.headers as Headers | Record<string, string> | undefined,
+          requestBody:
+            (currentInit as (RequestInit & { body?: BodyInit | null }) | undefined)?.body ?? null,
+          response,
+          transport: "http",
+          flowId: params.capture?.flowId,
+          meta: {
+            captureOrigin: "guarded-fetch",
+            ...(params.auditContext ? { auditContext: params.auditContext } : {}),
+            ...params.capture?.meta,
+          },
+        });
+      }
+
       if (isRedirectStatus(response.status)) {
         const location = response.headers.get("location");
         if (!location) {
@@ -336,6 +443,10 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
         }
         currentInit = rewriteRedirectInitForMethod({ init: currentInit, status: response.status });
         if (nextParsedUrl.origin !== parsedUrl.origin) {
+          currentInit = rewriteRedirectInitForCrossOrigin({
+            init: currentInit,
+            allowUnsafeReplay: params.allowCrossOriginUnsafeRedirectReplay === true,
+          });
           currentInit = retainSafeHeadersForCrossOriginRedirect(currentInit);
         }
         visited.add(nextUrl);
@@ -354,7 +465,7 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
       if (err instanceof SsrFBlockedError) {
         const context = params.auditContext ?? "url-fetch";
         logWarn(
-          `security: blocked URL fetch (${context}) target=${parsedUrl.origin}${parsedUrl.pathname} reason=${err.message}`,
+          `security: blocked URL fetch (${context}) targetOrigin=${parsedUrl.origin} reason=${err.message}`,
         );
       }
       await release(dispatcher);

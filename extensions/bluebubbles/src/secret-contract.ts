@@ -33,7 +33,7 @@ export const secretTargetRegistryEntries = [
 
 export function collectRuntimeConfigAssignments(params: {
   config: { channels?: Record<string, unknown> };
-  defaults: SecretDefaults | undefined;
+  defaults?: SecretDefaults;
   context: ResolverContext;
 }): void {
   const resolved = getChannelSurface(params.config, "bluebubbles");

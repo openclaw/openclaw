@@ -58,7 +58,40 @@ export type AgentWaitResult = {
 export type SubagentRunOutcome = {
   status: "ok" | "error" | "timeout" | "unknown";
   error?: string;
+  startedAt?: number;
+  endedAt?: number;
+  elapsedMs?: number;
 };
+
+function isFailedOutcome(outcome?: SubagentRunOutcome): boolean {
+  return outcome?.status === "error";
+}
+
+function readFiniteNumber(value: number | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+export function withSubagentOutcomeTiming(
+  outcome: SubagentRunOutcome,
+  timing: {
+    startedAt?: number;
+    endedAt?: number;
+  },
+): SubagentRunOutcome {
+  const startedAt = readFiniteNumber(timing.startedAt) ?? readFiniteNumber(outcome.startedAt);
+  const endedAt = readFiniteNumber(timing.endedAt) ?? readFiniteNumber(outcome.endedAt);
+  const nextTiming: Pick<SubagentRunOutcome, "startedAt" | "endedAt" | "elapsedMs"> = {};
+  if (typeof startedAt === "number") {
+    nextTiming.startedAt = startedAt;
+  }
+  if (typeof endedAt === "number") {
+    nextTiming.endedAt = endedAt;
+  }
+  if (typeof startedAt === "number" && typeof endedAt === "number") {
+    nextTiming.elapsedMs = Math.max(0, endedAt - startedAt);
+  }
+  return { ...outcome, ...nextTiming };
+}
 
 function extractToolResultText(content: unknown): string {
   if (typeof content === "string") {
@@ -224,6 +257,9 @@ function selectSubagentOutputText(
   snapshot: SubagentOutputSnapshot,
   outcome?: SubagentRunOutcome,
 ): string | undefined {
+  if (isFailedOutcome(outcome)) {
+    return undefined;
+  }
   if (snapshot.latestSilentText) {
     return snapshot.latestSilentText;
   }
@@ -241,7 +277,10 @@ export async function readSubagentOutput(
   sessionKey: string,
   outcome?: SubagentRunOutcome,
 ): Promise<string | undefined> {
-  const history = await subagentAnnounceOutputDeps.callGateway<{ messages?: Array<unknown> }>({
+  if (isFailedOutcome(outcome)) {
+    return undefined;
+  }
+  const history = await subagentAnnounceOutputDeps.callGateway({
     method: "chat.history",
     params: { sessionKey, limit: 100 },
   });
@@ -276,7 +315,7 @@ export async function waitForSubagentRunOutcome(
   timeoutMs: number,
 ): Promise<AgentWaitResult> {
   const waitMs = Math.max(0, Math.floor(timeoutMs));
-  return await subagentAnnounceOutputDeps.callGateway<AgentWaitResult>({
+  return await subagentAnnounceOutputDeps.callGateway({
     method: "agent.wait",
     params: {
       runId,
@@ -297,33 +336,39 @@ export function applySubagentWaitOutcome(params: {
     startedAt: params.startedAt,
     endedAt: params.endedAt,
   };
-  const waitError = typeof params.wait?.error === "string" ? params.wait.error : undefined;
-  if (params.wait?.status === "timeout") {
-    next.outcome = { status: "timeout" };
-  } else if (params.wait?.status === "error") {
-    next.outcome = { status: "error", error: waitError };
-  } else if (params.wait?.status === "ok") {
-    next.outcome = { status: "ok" };
-  }
-  if (typeof params.wait?.startedAt === "number" && !next.startedAt) {
+  if (typeof params.wait?.startedAt === "number" && typeof next.startedAt !== "number") {
     next.startedAt = params.wait.startedAt;
   }
-  if (typeof params.wait?.endedAt === "number" && !next.endedAt) {
+  if (typeof params.wait?.endedAt === "number" && typeof next.endedAt !== "number") {
     next.endedAt = params.wait.endedAt;
   }
+  const waitError = typeof params.wait?.error === "string" ? params.wait.error : undefined;
+  let outcome = next.outcome;
+  if (params.wait?.status === "timeout") {
+    outcome = { status: "timeout" };
+  } else if (params.wait?.status === "error") {
+    outcome = { status: "error", error: waitError };
+  } else if (params.wait?.status === "ok") {
+    outcome = { status: "ok" };
+  }
+  next.outcome = outcome ? withSubagentOutcomeTiming(outcome, next) : undefined;
   return next;
 }
 
 export async function captureSubagentCompletionReply(
   sessionKey: string,
-  options?: { waitForReply?: boolean },
+  options?: { waitForReply?: boolean; outcome?: SubagentRunOutcome },
 ): Promise<string | undefined> {
+  if (isFailedOutcome(options?.outcome)) {
+    return undefined;
+  }
   return await captureSubagentCompletionReplyUsing({
     sessionKey,
     waitForReply: options?.waitForReply,
     maxWaitMs: isFastTestMode() ? 50 : 1_500,
     retryIntervalMs: isFastTestMode() ? FAST_TEST_RETRY_INTERVAL_MS : 100,
-    readSubagentOutput: async (nextSessionKey) => await readSubagentOutput(nextSessionKey),
+    readSubagentOutput: async (nextSessionKey) =>
+      await readSubagentOutput(nextSessionKey, options?.outcome),
   });
 }
 

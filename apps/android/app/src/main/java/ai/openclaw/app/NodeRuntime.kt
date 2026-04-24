@@ -556,6 +556,12 @@ class NodeRuntime(
   fun setGatewayToken(value: String) = prefs.setGatewayToken(value)
   fun setGatewayBootstrapToken(value: String) = prefs.setGatewayBootstrapToken(value)
   fun setGatewayPassword(value: String) = prefs.setGatewayPassword(value)
+  fun resetGatewaySetupAuth() {
+    prefs.clearGatewaySetupAuth()
+    val deviceId = identityStore.loadOrCreate().deviceId
+    deviceAuthStore.clearToken(deviceId, "node")
+    deviceAuthStore.clearToken(deviceId, "operator")
+  }
   fun setOnboardingCompleted(value: Boolean) = prefs.setOnboardingCompleted(value)
   val lastDiscoveredStableId: StateFlow<String> = prefs.lastDiscoveredStableId
   val canvasDebugStatusEnabled: StateFlow<Boolean> = prefs.canvasDebugStatusEnabled
@@ -1325,11 +1331,18 @@ internal fun resolveOperatorSessionConnectAuth(
 
   val storedToken = storedOperatorToken?.trim()?.takeIf { it.isNotEmpty() }
   if (storedToken != null) {
-    // Bootstrap can seed the operator token, but operator should reconnect
-    // through the stored device-token path rather than bootstrap auth itself.
     return NodeRuntime.GatewayConnectAuth(
       token = null,
       bootstrapToken = null,
+      password = null,
+    )
+  }
+
+  val explicitBootstrapToken = auth.bootstrapToken?.trim()?.takeIf { it.isNotEmpty() }
+  if (explicitBootstrapToken != null) {
+    return NodeRuntime.GatewayConnectAuth(
+      token = null,
+      bootstrapToken = explicitBootstrapToken,
       password = null,
     )
   }

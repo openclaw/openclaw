@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { isAcpSessionKey, normalizeMainKey } from "../../routing/session-key.js";
@@ -66,10 +66,7 @@ export async function listSpawnedSessionKeys(params: {
       },
     });
     const sessions = Array.isArray(list?.sessions) ? list.sessions : [];
-    const keys = sessions
-      .map((entry) => (typeof entry?.key === "string" ? entry.key : ""))
-      .map((value) => value.trim())
-      .filter(Boolean);
+    const keys = sessions.map((entry) => normalizeOptionalString(entry?.key) ?? "").filter(Boolean);
     return new Set(keys);
   } catch {
     return new Set();
@@ -85,7 +82,7 @@ export async function isRequesterSpawnedSessionVisible(params: {
     return true;
   }
   try {
-    const resolved = await sessionsResolutionDeps.callGateway<{ key?: string }>({
+    const resolved = await sessionsResolutionDeps.callGateway({
       method: "sessions.resolve",
       params: {
         key: params.targetSessionKey,
@@ -234,11 +231,11 @@ async function callGatewayResolveSessionId(params: {
   requesterInternalKey?: string;
   restrictToSpawned: boolean;
 }): Promise<string> {
-  const result = await sessionsResolutionDeps.callGateway<{ key?: string }>({
+  const result = await sessionsResolutionDeps.callGateway({
     method: "sessions.resolve",
     params: buildSessionIdResolveParams(params),
   });
-  const key = typeof result?.key === "string" ? result.key.trim() : "";
+  const key = normalizeOptionalString(result?.key) ?? "";
   if (!key) {
     throw new Error(
       `Session not found: ${params.sessionId} (use the full sessionKey from sessions_list)`,
@@ -291,14 +288,14 @@ async function resolveSessionKeyFromKey(params: {
 }): Promise<SessionReferenceResolution | null> {
   try {
     // Try key-based resolution first so non-standard keys keep working.
-    const result = await sessionsResolutionDeps.callGateway<{ key?: string }>({
+    const result = await sessionsResolutionDeps.callGateway({
       method: "sessions.resolve",
       params: {
         key: params.key,
         spawnedBy: params.restrictToSpawned ? params.requesterInternalKey : undefined,
       },
     });
-    const key = typeof result?.key === "string" ? result.key.trim() : "";
+    const key = normalizeOptionalString(result?.key) ?? "";
     if (!key) {
       return null;
     }

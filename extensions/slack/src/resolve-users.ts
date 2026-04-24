@@ -1,5 +1,8 @@
 import type { WebClient } from "@slack/web-api";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import { createSlackWebClient } from "./client.js";
 import {
   collectSlackCursorItems,
@@ -59,7 +62,7 @@ function parseSlackUserInput(raw: string): { id?: string; name?: string; email?:
     return { id: prefixed.toUpperCase() };
   }
   if (trimmed.includes("@") && !trimmed.startsWith("@")) {
-    return { email: trimmed.toLowerCase() };
+    return { email: normalizeLowercaseStringOrEmpty(trimmed) };
   }
   const name = trimmed.replace(/^@/, "").trim();
   return name ? { name } : {};
@@ -88,7 +91,10 @@ async function listSlackUsers(client: WebClient): Promise<SlackUserLookup[]> {
             realName:
               normalizeOptionalString(profile.real_name) ??
               normalizeOptionalString(member.real_name),
-            email: normalizeOptionalString(profile.email)?.toLowerCase(),
+            email:
+              normalizeOptionalString(profile.email) == null
+                ? undefined
+                : normalizeLowercaseStringOrEmpty(profile.email),
             deleted: Boolean(member.deleted),
             isBot: Boolean(member.is_bot),
             isAppUser: Boolean(member.is_app_user),
@@ -110,10 +116,10 @@ function scoreSlackUser(user: SlackUserLookup, match: { name?: string; email?: s
     score += 5;
   }
   if (match.name) {
-    const target = match.name.toLowerCase();
+    const target = normalizeLowercaseStringOrEmpty(match.name);
     const candidates = [user.name, user.displayName, user.realName]
-      .map((value) => value?.toLowerCase())
-      .filter(Boolean) as string[];
+      .map((value) => normalizeLowercaseStringOrEmpty(value))
+      .filter(Boolean);
     if (candidates.some((value) => value === target)) {
       score += 2;
     }
@@ -175,11 +181,11 @@ export async function resolveSlackUserAllowlist(params: {
         }
       }
       if (parsed.name) {
-        const target = parsed.name.toLowerCase();
+        const target = normalizeLowercaseStringOrEmpty(parsed.name);
         const matches = lookup.filter((user) => {
           const candidates = [user.name, user.displayName, user.realName]
-            .map((value) => value?.toLowerCase())
-            .filter(Boolean) as string[];
+            .map((value) => normalizeLowercaseStringOrEmpty(value))
+            .filter(Boolean);
           return candidates.includes(target);
         });
         if (matches.length > 0) {

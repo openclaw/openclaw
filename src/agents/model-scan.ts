@@ -7,9 +7,13 @@ import {
   type OpenAICompletionsOptions,
   type Tool,
 } from "@mariozechner/pi-ai";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { formatErrorMessage } from "../infra/errors.js";
 import { inferParamBFromIdOrName } from "../shared/model-param-b.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { normalizeProviderId } from "./provider-id.js";
 
 const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
@@ -104,7 +108,7 @@ function parseModality(modality: string | null): Array<"text" | "image"> {
   if (!modality) {
     return ["text"];
   }
-  const normalized = modality.toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(modality);
   const parts = normalized.split(/[^a-z]+/).filter(Boolean);
   const hasImage = parts.includes("image");
   return hasImage ? ["text", "image"] : ["text"];
@@ -192,7 +196,7 @@ async function fetchOpenRouterModels(fetchImpl: typeof fetch): Promise<OpenRoute
         return null;
       }
       const obj = entry as Record<string, unknown>;
-      const id = typeof obj.id === "string" ? obj.id.trim() : "";
+      const id = normalizeOptionalString(obj.id) ?? "";
       if (!id) {
         return null;
       }

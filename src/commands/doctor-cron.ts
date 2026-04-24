@@ -1,5 +1,5 @@
 import { formatCliCommand } from "../cli/command-format.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveCronStorePath, loadCronStore, saveCronStore } from "../cron/store.js";
 import type { CronJob } from "../cron/types.js";
 import {
@@ -8,6 +8,10 @@ import {
 } from "../shared/string-coerce.js";
 import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
+import {
+  countStaleDreamingJobs,
+  migrateLegacyDreamingPayloadShape,
+} from "./doctor-cron-dreaming-payload-migration.js";
 import { normalizeStoredCronJobs } from "./doctor-cron-store-migration.js";
 import type { DoctorPrompter, DoctorOptions } from "./doctor-prompter.js";
 
@@ -24,6 +28,12 @@ function formatLegacyIssuePreview(issues: Partial<Record<string, number>>): stri
   const lines: string[] = [];
   if (issues.jobId) {
     lines.push(`- ${pluralize(issues.jobId, "job")} still uses legacy \`jobId\``);
+  }
+  if (issues.missingId) {
+    lines.push(`- ${pluralize(issues.missingId, "job")} is missing a canonical string \`id\``);
+  }
+  if (issues.nonStringId) {
+    lines.push(`- ${pluralize(issues.nonStringId, "job")} stores \`id\` as a non-string value`);
   }
   if (issues.legacyScheduleString) {
     lines.push(
@@ -134,10 +144,16 @@ export async function maybeRepairLegacyCronStore(params: {
   const normalized = normalizeStoredCronJobs(rawJobs);
   const legacyWebhook = normalizeOptionalString(params.cfg.cron?.webhook);
   const notifyCount = rawJobs.filter((job) => job.notify === true).length;
+  const dreamingStaleCount = countStaleDreamingJobs(rawJobs);
   const previewLines = formatLegacyIssuePreview(normalized.issues);
   if (notifyCount > 0) {
     previewLines.push(
       `- ${pluralize(notifyCount, "job")} still uses legacy \`notify: true\` webhook fallback`,
+    );
+  }
+  if (dreamingStaleCount > 0) {
+    previewLines.push(
+      `- ${pluralize(dreamingStaleCount, "managed dreaming job")} still has the legacy heartbeat-coupled shape`,
     );
   }
   if (previewLines.length === 0) {
@@ -165,7 +181,8 @@ export async function maybeRepairLegacyCronStore(params: {
     jobs: rawJobs,
     legacyWebhook,
   });
-  const changed = normalized.mutated || notifyMigration.changed;
+  const dreamingMigration = migrateLegacyDreamingPayloadShape(rawJobs);
+  const changed = normalized.mutated || notifyMigration.changed || dreamingMigration.changed;
   if (!changed && notifyMigration.warnings.length === 0) {
     return;
   }
@@ -176,6 +193,12 @@ export async function maybeRepairLegacyCronStore(params: {
       jobs: rawJobs as unknown as CronJob[],
     });
     note(`Cron store normalized at ${shortenHomePath(storePath)}.`, "Doctor changes");
+    if (dreamingMigration.rewrittenCount > 0) {
+      note(
+        `Rewrote ${pluralize(dreamingMigration.rewrittenCount, "managed dreaming job")} to run as an isolated agent turn so dreaming no longer requires heartbeat.`,
+        "Doctor changes",
+      );
+    }
   }
 
   if (notifyMigration.warnings.length > 0) {

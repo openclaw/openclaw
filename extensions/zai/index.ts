@@ -17,11 +17,13 @@ import {
   validateApiKeyInput,
 } from "openclaw/plugin-sdk/provider-auth-api-key";
 import {
-  buildProviderReplayFamilyHooks,
   normalizeModelCompat,
+  OPENAI_COMPATIBLE_REPLAY_HOOKS,
 } from "openclaw/plugin-sdk/provider-model-shared";
-import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
+import { TOOL_STREAM_DEFAULT_ON_HOOKS } from "openclaw/plugin-sdk/provider-stream-family";
+import { defaultToolStreamExtraParams } from "openclaw/plugin-sdk/provider-stream-shared";
 import { fetchZaiUsage, resolveLegacyPiAgentAccessToken } from "openclaw/plugin-sdk/provider-usage";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { detectZaiEndpoint, type ZaiEndpointId } from "./detect.js";
 import { zaiMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { buildZaiModelDefinition } from "./model-definitions.js";
@@ -30,16 +32,12 @@ import { applyZaiConfig, applyZaiProviderConfig, ZAI_DEFAULT_MODEL_REF } from ".
 const PROVIDER_ID = "zai";
 const GLM5_TEMPLATE_MODEL_ID = "glm-4.7";
 const PROFILE_ID = "zai:default";
-const OPENAI_COMPATIBLE_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
-  family: "openai-compatible",
-});
-const ZAI_TOOL_STREAM_HOOKS = buildProviderStreamFamilyHooks("tool-stream-default-on");
 
 function resolveGlm5ForwardCompatModel(
   ctx: ProviderResolveDynamicModelContext,
 ): ProviderRuntimeModel | undefined {
   const trimmedModelId = ctx.modelId.trim();
-  if (!trimmedModelId.toLowerCase().startsWith("glm-5")) {
+  if (!normalizeLowercaseStringOrEmpty(trimmedModelId).startsWith("glm-5")) {
     return undefined;
   }
 
@@ -280,19 +278,17 @@ export default definePluginEntry({
       ],
       resolveDynamicModel: (ctx) => resolveGlm5ForwardCompatModel(ctx),
       ...OPENAI_COMPATIBLE_REPLAY_HOOKS,
-      prepareExtraParams: (ctx) => {
-        if (ctx.extraParams?.tool_stream !== undefined) {
-          return ctx.extraParams;
-        }
-        return {
-          ...ctx.extraParams,
-          tool_stream: true,
-        };
-      },
-      ...ZAI_TOOL_STREAM_HOOKS,
-      isBinaryThinking: () => true,
+      prepareExtraParams: (ctx) => defaultToolStreamExtraParams(ctx.extraParams),
+      ...TOOL_STREAM_DEFAULT_ON_HOOKS,
+      resolveThinkingProfile: () => ({
+        levels: [
+          { id: "off", label: "off" },
+          { id: "low", label: "on" },
+        ],
+        defaultLevel: "off",
+      }),
       isModernModelRef: ({ modelId }) => {
-        const lower = modelId.trim().toLowerCase();
+        const lower = normalizeLowercaseStringOrEmpty(modelId);
         return (
           lower.startsWith("glm-5") ||
           lower.startsWith("glm-4.7") ||

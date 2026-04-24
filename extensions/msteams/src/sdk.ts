@@ -1,9 +1,11 @@
+import * as fs from "node:fs";
 // IHttpServerAdapter is re-exported via the public barrel (`export * from './http'`)
 // but tsgo cannot resolve the chain. Use the dist subpath directly (type-only import).
 import type { IHttpServerAdapter } from "@microsoft/teams.apps/dist/http/index.js";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { formatUnknownError } from "./errors.js";
 import type { MSTeamsAdapter } from "./messenger.js";
-import type { MSTeamsCredentials } from "./token.js";
+import type { MSTeamsCredentials, MSTeamsFederatedCredentials } from "./token.js";
 import { buildUserAgent } from "./user-agent.js";
 
 /**
@@ -46,15 +48,43 @@ type MSTeamsProcessContext = MSTeamsSendContext & {
   ) => Promise<unknown[]>;
 };
 
+type AzureAccessToken = {
+  token?: string;
+} | null;
+
+type AzureTokenCredential = {
+  getToken: (scope: string | string[]) => Promise<AzureAccessToken>;
+};
+
+type AzureIdentityModule = {
+  ClientCertificateCredential: new (
+    tenantId: string,
+    clientId: string,
+    options: { certificate: string },
+  ) => AzureTokenCredential;
+  ManagedIdentityCredential: new (clientId?: string) => AzureTokenCredential;
+};
+
+const AZURE_IDENTITY_MODULE = "@azure/identity";
+
+let azureIdentityModulePromise: Promise<AzureIdentityModule> | null = null;
+
+async function loadAzureIdentity(): Promise<AzureIdentityModule> {
+  azureIdentityModulePromise ??= import(AZURE_IDENTITY_MODULE) as Promise<AzureIdentityModule>;
+  return azureIdentityModulePromise;
+}
+
+let msTeamsSdkPromise: Promise<MSTeamsTeamsSdk> | null = null;
+
 export async function loadMSTeamsSdk(): Promise<MSTeamsTeamsSdk> {
-  const [appsModule, apiModule] = await Promise.all([
+  msTeamsSdkPromise ??= Promise.all([
     import("@microsoft/teams.apps"),
     import("@microsoft/teams.api"),
-  ]);
-  return {
+  ]).then(([appsModule, apiModule]) => ({
     App: appsModule.App,
     Client: apiModule.Client,
-  };
+  }));
+  return msTeamsSdkPromise;
 }
 
 /**
@@ -87,12 +117,115 @@ export async function createMSTeamsApp(
   creds: MSTeamsCredentials,
   sdk: MSTeamsTeamsSdk,
 ): Promise<MSTeamsApp> {
+  if (creds.type === "federated") {
+    return createFederatedApp(creds, sdk);
+  }
   return new sdk.App({
     clientId: creds.appId,
     clientSecret: creds.appPassword,
     tenantId: creds.tenantId,
     httpServerAdapter: createNoOpHttpServerAdapter(),
   } as ConstructorParameters<MSTeamsTeamsSdk["App"]>[0]);
+}
+
+function createFederatedApp(creds: MSTeamsFederatedCredentials, sdk: MSTeamsTeamsSdk): MSTeamsApp {
+  if (creds.useManagedIdentity) {
+    return createManagedIdentityApp(creds, sdk);
+  }
+
+  // Certificate-based auth
+  if (!creds.certificatePath) {
+    throw new Error("Federated credentials require either a certificate path or managed identity.");
+  }
+
+  let privateKey: string;
+  try {
+    privateKey = fs.readFileSync(creds.certificatePath, "utf-8");
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(`Failed to read certificate file at '${creds.certificatePath}': ${msg}`, {
+      cause: err,
+    });
+  }
+
+  return createCertificateApp(creds, privateKey, sdk);
+}
+
+function createCertificateApp(
+  creds: MSTeamsFederatedCredentials,
+  privateKey: string,
+  sdk: MSTeamsTeamsSdk,
+): MSTeamsApp {
+  // Lazily create and cache the credential so the token cache is reused.
+  let credentialPromise: Promise<AzureTokenCredential> | null = null;
+
+  const getCredential = async () => {
+    if (!credentialPromise) {
+      credentialPromise = loadAzureIdentity().then(
+        (az) =>
+          new az.ClientCertificateCredential(creds.tenantId, creds.appId, {
+            certificate: privateKey,
+          }),
+      );
+    }
+    return credentialPromise;
+  };
+
+  const tokenProvider = async (scope: string | string[]): Promise<string> => {
+    const credential = await getCredential();
+    const token = await credential.getToken(scope);
+
+    if (!token?.token) {
+      throw new Error("Failed to acquire token via certificate credential.");
+    }
+
+    return token.token;
+  };
+
+  return new sdk.App({
+    clientId: creds.appId,
+    tenantId: creds.tenantId,
+    token: tokenProvider,
+    httpServerAdapter: createNoOpHttpServerAdapter(),
+  } as unknown as ConstructorParameters<MSTeamsTeamsSdk["App"]>[0]);
+}
+
+function createManagedIdentityApp(
+  creds: MSTeamsFederatedCredentials,
+  sdk: MSTeamsTeamsSdk,
+): MSTeamsApp {
+  // Lazily create and cache the credential instance so the token cache is
+  // reused across calls instead of hitting IMDS/AAD on every message.
+  let credentialPromise: Promise<AzureTokenCredential> | null = null;
+
+  const getCredential = async () => {
+    if (!credentialPromise) {
+      credentialPromise = loadAzureIdentity().then((az) =>
+        creds.managedIdentityClientId
+          ? new az.ManagedIdentityCredential(creds.managedIdentityClientId)
+          : new az.ManagedIdentityCredential(),
+      );
+    }
+    return credentialPromise;
+  };
+
+  const tokenProvider = async (scope: string | string[]): Promise<string> => {
+    const credential = await getCredential();
+    const token = await credential.getToken(scope);
+
+    if (!token?.token) {
+      throw new Error("Failed to acquire token via managed identity.");
+    }
+
+    return token.token;
+  };
+
+  return new sdk.App({
+    clientId: creds.appId,
+    tenantId: creds.tenantId,
+    token: tokenProvider,
+    httpServerAdapter: createNoOpHttpServerAdapter(),
+  } as unknown as ConstructorParameters<MSTeamsTeamsSdk["App"]>[0]);
 }
 
 /**
@@ -150,6 +283,16 @@ function createSendContext(params: {
   replyToActivityId?: string;
   getToken: () => Promise<string | undefined>;
   treatInvokeResponseAsNoop?: boolean;
+  /**
+   * Azure AD tenant ID for the target conversation. Bot Framework requires this
+   * on outbound proactive activities so the connector can route them to the
+   * correct tenant. Missing `tenantId` causes HTTP 403 on proactive sends.
+   */
+  tenantId?: string;
+  /** Target user's Teams user ID (e.g. `29:xxx`); included on the recipient field for routing. */
+  recipientId?: string;
+  /** Target user's Azure AD object ID; included as the recipient on personal DMs. */
+  recipientAadObjectId?: string;
 }): MSTeamsSendContext {
   const apiClient =
     params.serviceUrl && params.conversationId
@@ -166,16 +309,43 @@ function createSendContext(params: {
         return { id: "unknown" };
       }
 
+      // Merge caller-provided channelData with the tenant metadata so Bot
+      // Framework receives `channelData.tenant.id` (the canonical source it
+      // uses to route proactive sends). Preserve any existing channelData
+      // fields the caller set (e.g. feedbackLoopEnabled).
+      const existingChannelData =
+        msg.channelData && typeof msg.channelData === "object"
+          ? (msg.channelData as Record<string, unknown>)
+          : undefined;
+      const channelData = params.tenantId
+        ? {
+            ...existingChannelData,
+            tenant: { id: params.tenantId },
+          }
+        : existingChannelData;
+
       return await apiClient.conversations.activities(params.conversationId).create({
         type: "message",
         ...msg,
+        ...(channelData ? { channelData } : {}),
         from: params.bot?.id
           ? { id: params.bot.id, name: params.bot.name ?? "", role: "bot" }
           : undefined,
         conversation: {
           id: params.conversationId,
           conversationType: params.conversationType ?? "personal",
+          ...(params.tenantId ? { tenantId: params.tenantId } : {}),
         },
+        ...(params.recipientId || params.recipientAadObjectId
+          ? {
+              recipient: {
+                ...(params.recipientId ? { id: params.recipientId } : {}),
+                ...(params.recipientAadObjectId
+                  ? { aadObjectId: params.recipientAadObjectId }
+                  : {}),
+              },
+            }
+          : {}),
         ...(params.replyToActivityId && !msg.replyToId
           ? { replyToId: params.replyToActivityId }
           : {}),
@@ -289,24 +459,34 @@ async function updateActivityViaRest(params: {
     headers.Authorization = `Bearer ${token}`;
   }
 
-  const response = await fetch(url, {
-    method: "PUT",
-    headers,
-    body: JSON.stringify({
-      type: "message",
-      ...activity,
-      id: activityId,
-    }),
+  const currentFetch = globalThis.fetch;
+  const { response, release } = await fetchWithSsrFGuard({
+    url,
+    fetchImpl: async (input, guardedInit) => await currentFetch(input, guardedInit),
+    init: {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({
+        type: "message",
+        ...activity,
+        id: activityId,
+      }),
+    },
+    auditContext: "msteams-update-activity",
   });
 
-  if (!response.ok) {
-    const body = await response.text().catch(() => "");
-    throw Object.assign(new Error(`updateActivity failed: HTTP ${response.status} ${body}`), {
-      statusCode: response.status,
-    });
-  }
+  try {
+    if (!response.ok) {
+      const body = await response.text().catch(() => "");
+      throw Object.assign(new Error(`updateActivity failed: HTTP ${response.status} ${body}`), {
+        statusCode: response.status,
+      });
+    }
 
-  return await response.json().catch(() => ({ id: activityId }));
+    return await response.json().catch(() => ({ id: activityId }));
+  } finally {
+    await release();
+  }
 }
 
 /**
@@ -330,16 +510,26 @@ async function deleteActivityViaRest(params: {
     headers.Authorization = `Bearer ${token}`;
   }
 
-  const response = await fetch(url, {
-    method: "DELETE",
-    headers,
+  const currentFetch = globalThis.fetch;
+  const { response, release } = await fetchWithSsrFGuard({
+    url,
+    fetchImpl: async (input, guardedInit) => await currentFetch(input, guardedInit),
+    init: {
+      method: "DELETE",
+      headers,
+    },
+    auditContext: "msteams-delete-activity",
   });
 
-  if (!response.ok) {
-    const body = await response.text().catch(() => "");
-    throw Object.assign(new Error(`deleteActivity failed: HTTP ${response.status} ${body}`), {
-      statusCode: response.status,
-    });
+  try {
+    if (!response.ok) {
+      const body = await response.text().catch(() => "");
+      throw Object.assign(new Error(`deleteActivity failed: HTTP ${response.status} ${body}`), {
+        statusCode: response.status,
+      });
+    }
+  } finally {
+    await release();
   }
 }
 
@@ -364,6 +554,16 @@ export function createMSTeamsAdapter(app: MSTeamsApp, sdk: MSTeamsTeamsSdk): MST
         throw new Error("Missing conversation.id in conversation reference");
       }
 
+      // Bot Framework requires `tenantId` on proactive sends so the connector
+      // can route them to the correct Azure AD tenant. Without it, requests
+      // fail with HTTP 403. Prefer the top-level `reference.tenantId` (captured
+      // from `activity.channelData.tenant.id` at inbound time) and fall back
+      // to `conversation.tenantId` for older stored references.
+      const tenantId = reference.tenantId ?? reference.conversation?.tenantId;
+      const recipientAadObjectId = reference.aadObjectId ?? reference.user?.aadObjectId;
+
+      const recipientId = reference.user?.id;
+
       const sendContext = createSendContext({
         sdk,
         serviceUrl,
@@ -371,6 +571,9 @@ export function createMSTeamsAdapter(app: MSTeamsApp, sdk: MSTeamsTeamsSdk): MST
         conversationType: reference.conversation?.conversationType,
         bot: reference.agent ?? undefined,
         getToken: createBotTokenGetter(app),
+        tenantId,
+        recipientId,
+        recipientAadObjectId,
       });
 
       await logic(sendContext);
@@ -428,72 +631,206 @@ export async function loadMSTeamsSdkWithAuth(creds: MSTeamsCredentials) {
 }
 
 /**
- * Create a Bot Framework JWT validator with strict multi-issuer support.
+ * Bot Framework issuer → JWKS mapping.
+ * During Microsoft's transition, inbound service tokens can be signed by either
+ * the legacy Bot Framework issuer or the Entra issuer. Each gets its own JWKS
+ * endpoint so we verify signatures with the correct key set.
+ */
+const BOT_FRAMEWORK_ISSUERS: ReadonlyArray<{
+  issuer: string | ((tenantId: string) => string);
+  jwksUri: string;
+}> = [
+  {
+    issuer: "https://api.botframework.com",
+    jwksUri: "https://login.botframework.com/v1/.well-known/keys",
+  },
+  {
+    issuer: (tenantId: string) => `https://login.microsoftonline.com/${tenantId}/v2.0`,
+    jwksUri: "https://login.microsoftonline.com/common/discovery/v2.0/keys",
+  },
+  {
+    // SingleTenant bot deployments (Microsoft's default since 2025-07-31) get
+    // tokens signed by the Azure AD v1 endpoint, whose issuer is scoped to the
+    // bot's tenant. This must be a function so each deployment accepts its own
+    // tenant rather than a single hardcoded one (#64270).
+    issuer: (tenantId: string) => `https://sts.windows.net/${tenantId}/`,
+    jwksUri: "https://login.microsoftonline.com/common/discovery/v2.0/keys",
+  },
+];
+
+type BotFrameworkJwtDeps = {
+  jwt: typeof import("jsonwebtoken");
+  JwksClient: typeof import("jwks-rsa").JwksClient;
+};
+
+const BOT_FRAMEWORK_GLOBAL_AUDIENCE = "https://api.botframework.com";
+
+function isJwtPayloadObject(
+  value: unknown,
+): value is { iss?: unknown; aud?: unknown; appid?: unknown; azp?: unknown } {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function getAudienceClaims(payload: unknown): string[] {
+  if (!isJwtPayloadObject(payload)) {
+    return [];
+  }
+  const audience = payload.aud;
+  if (typeof audience === "string") {
+    const trimmed = audience.trim();
+    return trimmed ? [trimmed] : [];
+  }
+  if (Array.isArray(audience)) {
+    return audience
+      .filter((value): value is string => typeof value === "string")
+      .map((value) => value.trim())
+      .filter(Boolean);
+  }
+  return [];
+}
+
+function normalizeBotIdentityClaim(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const normalized = value.trim().toLowerCase();
+  return normalized || null;
+}
+
+function hasExpectedBotIdentity(payload: unknown, expectedAppId: string): boolean {
+  if (!isJwtPayloadObject(payload)) {
+    return false;
+  }
+  const expected = normalizeBotIdentityClaim(expectedAppId);
+  if (!expected) {
+    return false;
+  }
+  return (
+    normalizeBotIdentityClaim(payload.appid) === expected ||
+    normalizeBotIdentityClaim(payload.azp) === expected
+  );
+}
+
+let botFrameworkJwtDepsPromise: Promise<BotFrameworkJwtDeps> | null = null;
+
+async function loadBotFrameworkJwtDeps(): Promise<BotFrameworkJwtDeps> {
+  botFrameworkJwtDepsPromise ??= Promise.all([import("jsonwebtoken"), import("jwks-rsa")]).then(
+    ([jwt, { JwksClient }]) => ({ jwt, JwksClient }),
+  );
+  return botFrameworkJwtDepsPromise;
+}
+
+/**
+ * Create a Bot Framework JWT validator using jsonwebtoken + jwks-rsa directly.
  *
- * During Microsoft's transition, inbound service tokens can be signed by either:
- * - Legacy Bot Framework issuer/JWKS
- * - Entra issuer/JWKS
+ * The @microsoft/teams.apps JwtValidator hardcodes audience to [clientId, api://clientId],
+ * which rejects valid Bot Framework tokens that carry aud: "https://api.botframework.com".
+ * This implementation uses jsonwebtoken directly with the correct audience list, matching
+ * the behavior of the legacy @microsoft/agents-hosting authorizeJWT middleware.
  *
- * Security invariants are preserved for both paths:
- * - signature verification (issuer-specific JWKS)
- * - audience validation (appId)
- * - issuer validation (strict allowlist)
- * - expiration validation (Teams SDK defaults)
+ * Security invariants:
+ * - signature verification via issuer-specific JWKS endpoints
+ * - audience validation: appId, api://appId, and https://api.botframework.com
+ * - issuer validation: strict allowlist (Bot Framework + tenant-scoped Entra)
+ * - expiration validation with 5-minute clock tolerance
  */
 export async function createBotFrameworkJwtValidator(creds: MSTeamsCredentials): Promise<{
-  validate: (authHeader: string, serviceUrl?: string) => Promise<boolean>;
+  validate: (authHeader: string) => Promise<boolean>;
 }> {
-  const { JwtValidator } =
-    await import("@microsoft/teams.apps/dist/middleware/auth/jwt-validator.js");
+  const { jwt, JwksClient } = await loadBotFrameworkJwtDeps();
 
-  const botFrameworkValidator = new JwtValidator({
-    clientId: creds.appId,
-    tenantId: creds.tenantId,
-    validateIssuer: { allowedIssuer: "https://api.botframework.com" },
-    jwksUriOptions: {
-      type: "uri",
-      uri: "https://login.botframework.com/v1/.well-known/keys",
-    },
-  });
+  const allowedAudiences: [string, ...string[]] = [
+    creds.appId,
+    `api://${creds.appId}`,
+    BOT_FRAMEWORK_GLOBAL_AUDIENCE,
+  ];
 
-  const entraValidator = new JwtValidator({
-    clientId: creds.appId,
-    tenantId: creds.tenantId,
-    validateIssuer: { allowedTenantIds: [creds.tenantId] },
-    jwksUriOptions: {
-      type: "uri",
-      uri: "https://login.microsoftonline.com/common/discovery/v2.0/keys",
-    },
-  });
+  const allowedIssuers = BOT_FRAMEWORK_ISSUERS.map((entry) =>
+    typeof entry.issuer === "function" ? entry.issuer(creds.tenantId) : entry.issuer,
+  ) as [string, ...string[]];
 
-  async function validateWithFallback(
-    token: string,
-    overrides: { validateServiceUrl: { expectedServiceUrl: string } } | undefined,
-  ): Promise<boolean> {
-    for (const validator of [botFrameworkValidator, entraValidator]) {
-      try {
-        const result = await validator.validateAccessToken(token, overrides);
-        if (result != null) {
-          return true;
-        }
-      } catch {
-        continue;
-      }
+  // One JWKS client per distinct endpoint, cached for the validator lifetime.
+  const jwksClients = new Map<string, InstanceType<typeof JwksClient>>();
+  function getJwksClient(uri: string): InstanceType<typeof JwksClient> {
+    let client = jwksClients.get(uri);
+    if (!client) {
+      client = new JwksClient({
+        jwksUri: uri,
+        cache: true,
+        cacheMaxAge: 600_000,
+        rateLimit: true,
+      });
+      jwksClients.set(uri, client);
     }
-    return false;
+    return client;
+  }
+
+  /** Decode the token header without verification to determine the kid. */
+  function decodeHeader(token: string): { kid?: string } | null {
+    const decoded = jwt.decode(token, { complete: true });
+    return decoded && typeof decoded === "object" ? (decoded.header as { kid?: string }) : null;
+  }
+
+  /** Resolve the issuer entry for a token's issuer claim (pre-verification). */
+  function resolveIssuerEntry(issuerClaim: string | undefined) {
+    if (!issuerClaim) {
+      return undefined;
+    }
+    return BOT_FRAMEWORK_ISSUERS.find((entry) => {
+      const expected =
+        typeof entry.issuer === "function" ? entry.issuer(creds.tenantId) : entry.issuer;
+      return expected === issuerClaim;
+    });
   }
 
   return {
-    async validate(authHeader: string, serviceUrl?: string): Promise<boolean> {
+    async validate(authHeader: string, _serviceUrl?: string): Promise<boolean> {
       const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : authHeader;
       if (!token) {
         return false;
       }
 
-      const overrides = serviceUrl
-        ? ({ validateServiceUrl: { expectedServiceUrl: serviceUrl } } as const)
-        : undefined;
-      return await validateWithFallback(token, overrides);
+      // Decode without verification to extract issuer and kid for key lookup.
+      const header = decodeHeader(token);
+      const unverifiedPayload = jwt.decode(token);
+      if (
+        !header?.kid ||
+        !isJwtPayloadObject(unverifiedPayload) ||
+        typeof unverifiedPayload.iss !== "string"
+      ) {
+        return false;
+      }
+
+      // Resolve which JWKS endpoint to use based on the issuer claim.
+      const issuerEntry = resolveIssuerEntry(unverifiedPayload.iss);
+      if (!issuerEntry) {
+        return false;
+      }
+
+      const client = getJwksClient(issuerEntry.jwksUri);
+      try {
+        const signingKey = await client.getSigningKey(header.kid);
+        const publicKey = signingKey.getPublicKey();
+        const verifiedPayload = jwt.verify(token, publicKey, {
+          audience: allowedAudiences,
+          issuer: allowedIssuers,
+          algorithms: ["RS256"],
+          clockTolerance: 300,
+        });
+        if (!isJwtPayloadObject(verifiedPayload)) {
+          return false;
+        }
+        const audiences = getAudienceClaims(verifiedPayload);
+        if (
+          audiences.includes(BOT_FRAMEWORK_GLOBAL_AUDIENCE) &&
+          !hasExpectedBotIdentity(verifiedPayload, creds.appId)
+        ) {
+          return false;
+        }
+        return true;
+      } catch {
+        return false;
+      }
     },
   };
 }

@@ -6,7 +6,10 @@ import {
   tryReadSecretFileSync,
 } from "openclaw/plugin-sdk/channel-core";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import type { CoreConfig, IrcAccountConfig, IrcNickServConfig } from "./types.js";
 
 const TRUTHY_ENV = new Set(["true", "1", "yes", "on"]);
@@ -31,7 +34,7 @@ function parseTruthy(value?: string): boolean {
   if (!value) {
     return false;
   }
-  return TRUTHY_ENV.has(value.trim().toLowerCase());
+  return TRUTHY_ENV.has(normalizeLowercaseStringOrEmpty(value));
 }
 
 function parseIntEnv(value?: string): number | undefined {

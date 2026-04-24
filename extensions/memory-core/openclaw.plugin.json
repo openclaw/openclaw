@@ -1,6 +1,16 @@
 {
   "id": "memory-core",
   "kind": "memory",
+  "contracts": {
+    "memoryEmbeddingProviders": ["local"]
+  },
+  "commandAliases": [
+    {
+      "name": "dreaming",
+      "kind": "runtime-slash",
+      "cliCommand": "memory"
+    }
+  ],
   "uiHints": {
     "dreaming.frequency": {
       "label": "Dreaming Frequency",

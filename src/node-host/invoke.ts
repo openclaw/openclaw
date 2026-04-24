@@ -421,7 +421,7 @@ export async function handleInvoke(
   client: GatewayClient,
   skillBins: SkillBinsProvider,
 ) {
-  const command = String(frame.command ?? "");
+  const command = frame.command ?? "";
   if (command === "system.execApprovals.get") {
     try {
       ensureExecApprovals();
@@ -560,6 +560,7 @@ export async function handleInvoke(
   });
 }
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- CLI JSON params are typed by the invoked method.
 function decodeParams<T>(raw?: string | null): T {
   if (!raw) {
     throw new Error("INVALID_REQUEST: paramsJSON required");

@@ -1,7 +1,10 @@
 export {
+  buildApprovalInteractiveReplyFromActionDescriptors,
+  buildExecApprovalActionDescriptors,
   buildExecApprovalPendingReplyPayload,
   getExecApprovalApproverDmNoticeText,
   getExecApprovalReplyMetadata,
+  type ExecApprovalActionDescriptor,
   type ExecApprovalPendingReplyParams,
   type ExecApprovalReplyDecision,
   type ExecApprovalReplyMetadata,

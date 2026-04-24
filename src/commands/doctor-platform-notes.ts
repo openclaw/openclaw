@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasConfiguredSecretInput } from "../config/types.secrets.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { note } from "../terminal/note.js";
@@ -38,7 +38,7 @@ export async function noteMacLaunchAgentOverrides() {
 async function launchctlGetenv(name: string): Promise<string | undefined> {
   try {
     const result = await execFileAsync("/bin/launchctl", ["getenv", name], { encoding: "utf8" });
-    const value = String(result.stdout ?? "").trim();
+    const value = normalizeOptionalString(result.stdout ?? "") ?? "";
     return value.length > 0 ? value : undefined;
   } catch {
     return undefined;
@@ -49,11 +49,11 @@ function hasConfigGatewayCreds(cfg: OpenClawConfig): boolean {
   const localPassword = cfg.gateway?.auth?.password;
   const remoteToken = cfg.gateway?.remote?.token;
   const remotePassword = cfg.gateway?.remote?.password;
-  return Boolean(
+  return (
     hasConfiguredSecretInput(cfg.gateway?.auth?.token, cfg.secrets?.defaults) ||
     hasConfiguredSecretInput(localPassword, cfg.secrets?.defaults) ||
     hasConfiguredSecretInput(remoteToken, cfg.secrets?.defaults) ||
-    hasConfiguredSecretInput(remotePassword, cfg.secrets?.defaults),
+    hasConfiguredSecretInput(remotePassword, cfg.secrets?.defaults)
   );
 }
 
@@ -144,9 +144,9 @@ export function noteStartupOptimizationHints(
   }
 
   const noteFn = deps?.noteFn ?? note;
-  const compileCache = env.NODE_COMPILE_CACHE?.trim() ?? "";
-  const disableCompileCache = env.NODE_DISABLE_COMPILE_CACHE?.trim() ?? "";
-  const noRespawn = env.OPENCLAW_NO_RESPAWN?.trim() ?? "";
+  const compileCache = normalizeOptionalString(env.NODE_COMPILE_CACHE) ?? "";
+  const disableCompileCache = normalizeOptionalString(env.NODE_DISABLE_COMPILE_CACHE) ?? "";
+  const noRespawn = normalizeOptionalString(env.OPENCLAW_NO_RESPAWN) ?? "";
   const lines: string[] = [];
 
   if (!compileCache) {

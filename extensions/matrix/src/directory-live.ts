@@ -1,4 +1,7 @@
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveMatrixAuth } from "./matrix/client.js";
 import { MatrixAuthedHttpClient } from "./matrix/sdk/http-client.js";
 import { isMatrixQualifiedUserId, normalizeMatrixMessagingTarget } from "./matrix/target-ids.js";
@@ -66,7 +69,7 @@ async function resolveMatrixDirectoryContext(params: MatrixDirectoryLiveParams):
     auth,
     client: createMatrixDirectoryClient(auth),
     query,
-    queryLower: query.toLowerCase(),
+    queryLower: normalizeLowercaseStringOrEmpty(query),
   };
 }
 
@@ -217,7 +220,7 @@ export async function listMatrixDirectoryGroupsLive(
 
   for (const roomId of rooms) {
     const name = await fetchMatrixRoomName(client, roomId);
-    if (!name || !name.toLowerCase().includes(queryLower)) {
+    if (!name || !normalizeLowercaseStringOrEmpty(name).includes(queryLower)) {
       continue;
     }
     results.push({

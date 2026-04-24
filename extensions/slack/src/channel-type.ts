@@ -1,3 +1,7 @@
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import { resolveSlackAccount } from "./accounts.js";
 import { createSlackWebClient } from "./client.js";
 import { normalizeAllowListLower } from "./monitor/allow-list.js";
@@ -21,7 +25,7 @@ export async function resolveSlackChannelType(params: {
     return cached;
   }
   const groupChannels = normalizeAllowListLower(account.dm?.groupChannels);
-  const channelIdLower = channelId.toLowerCase();
+  const channelIdLower = normalizeLowercaseStringOrEmpty(channelId);
   if (
     groupChannels.includes(channelIdLower) ||
     groupChannels.includes(`slack:${channelIdLower}`) ||
@@ -36,7 +40,7 @@ export async function resolveSlackChannelType(params: {
   const channelKeys = Object.keys(account.channels ?? {});
   if (
     channelKeys.some((key) => {
-      const normalized = key.trim().toLowerCase();
+      const normalized = normalizeLowercaseStringOrEmpty(key);
       return (
         normalized === channelIdLower ||
         normalized === `channel:${channelIdLower}` ||
@@ -48,7 +52,10 @@ export async function resolveSlackChannelType(params: {
     return "channel";
   }
 
-  const token = account.botToken?.trim() || account.config.userToken?.trim() || "";
+  const token =
+    normalizeOptionalString(account.botToken) ??
+    normalizeOptionalString(account.config.userToken) ??
+    "";
   if (!token) {
     SLACK_CHANNEL_TYPE_CACHE.set(cacheKey, "unknown");
     return "unknown";

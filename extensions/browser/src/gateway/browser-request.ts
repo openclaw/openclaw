@@ -1,5 +1,8 @@
 import crypto from "node:crypto";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import {
   ErrorCodes,
   applyBrowserProxyPaths,
@@ -15,6 +18,7 @@ import {
   respondUnavailableOnNodeInvokeError,
   safeParseJson,
   startBrowserControlServiceFromConfig,
+  withTimeout,
   type GatewayRequestHandlers,
   type NodeSession,
 } from "../core-api.js";
@@ -49,7 +53,7 @@ function normalizeNodeKey(value: string) {
 }
 
 function resolveBrowserNode(nodes: NodeSession[], query: string): NodeSession | null {
-  const q = query.trim();
+  const q = normalizeOptionalString(query) ?? "";
   if (!q) {
     return null;
   }
@@ -94,12 +98,12 @@ function resolveBrowserNodeTarget(params: {
   }
   const browserNodes = params.nodes.filter((node) => isBrowserNode(node));
   if (browserNodes.length === 0) {
-    if (policy?.node?.trim()) {
+    if (normalizeOptionalString(policy?.node)) {
       throw new Error("No connected browser-capable nodes.");
     }
     return null;
   }
-  const requested = policy?.node?.trim() || "";
+  const requested = normalizeOptionalString(policy?.node) ?? "";
   if (requested) {
     const resolved = resolveBrowserNode(browserNodes, requested);
     if (!resolved) {
@@ -130,8 +134,8 @@ export async function handleBrowserGatewayRequest({
   context,
 }: Parameters<GatewayRequestHandlers["browser.request"]>[0]) {
   const typed = params as BrowserRequestParams;
-  const methodRaw = typeof typed.method === "string" ? typed.method.trim().toUpperCase() : "";
-  const path = typeof typed.path === "string" ? typed.path.trim() : "";
+  const methodRaw = (normalizeOptionalString(typed.method) ?? "").toUpperCase();
+  const path = normalizeOptionalString(typed.path) ?? "";
   const query = typed.query && typeof typed.query === "object" ? typed.query : undefined;
   const body = typed.body;
   const timeoutMs =
@@ -243,12 +247,31 @@ export async function handleBrowserGatewayRequest({
     return;
   }
 
-  const result = await dispatcher.dispatch({
-    method: methodRaw,
-    path,
-    query,
-    body,
-  });
+  let result;
+  try {
+    result = timeoutMs
+      ? await withTimeout(
+          (signal) =>
+            dispatcher.dispatch({
+              method: methodRaw,
+              path,
+              query,
+              body,
+              signal,
+            }),
+          timeoutMs,
+          "browser request",
+        )
+      : await dispatcher.dispatch({
+          method: methodRaw,
+          path,
+          query,
+          body,
+        });
+  } catch (err) {
+    respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
+    return;
+  }
 
   if (result.status >= 400) {
     const message =

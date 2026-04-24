@@ -9,9 +9,13 @@ const mocks = vi.hoisted(() => ({
   resolvePluginCapabilityProviders: vi.fn<
     typeof import("./capability-provider-runtime.js").resolvePluginCapabilityProviders
   >(() => []),
+  resolvePluginCapabilityProvider: vi.fn<
+    typeof import("./capability-provider-runtime.js").resolvePluginCapabilityProvider
+  >(() => undefined),
 }));
 
 vi.mock("./capability-provider-runtime.js", () => ({
+  resolvePluginCapabilityProvider: mocks.resolvePluginCapabilityProvider,
   resolvePluginCapabilityProviders: mocks.resolvePluginCapabilityProviders,
 }));
 
@@ -28,6 +32,8 @@ beforeEach(async () => {
   clearMemoryEmbeddingProviders();
   mocks.resolvePluginCapabilityProviders.mockReset();
   mocks.resolvePluginCapabilityProviders.mockReturnValue([]);
+  mocks.resolvePluginCapabilityProvider.mockReset();
+  mocks.resolvePluginCapabilityProvider.mockReturnValue(undefined);
   runtimeModule = await import("./memory-embedding-provider-runtime.js");
 });
 
@@ -36,7 +42,7 @@ afterEach(() => {
 });
 
 describe("memory embedding provider runtime resolution", () => {
-  it("prefers registered adapters over capability fallback adapters", () => {
+  it("merges registered and declared capability fallback adapters", () => {
     registerMemoryEmbeddingProvider({
       id: "registered",
       create: async () => ({ provider: null }),
@@ -45,29 +51,44 @@ describe("memory embedding provider runtime resolution", () => {
 
     expect(runtimeModule.listMemoryEmbeddingProviders().map((adapter) => adapter.id)).toEqual([
       "registered",
+      "capability",
     ]);
     expect(runtimeModule.getMemoryEmbeddingProvider("registered")?.id).toBe("registered");
-    expect(mocks.resolvePluginCapabilityProviders).not.toHaveBeenCalled();
+    expect(mocks.resolvePluginCapabilityProviders).toHaveBeenCalledTimes(1);
   });
 
   it("falls back to declared capability adapters when the registry is cold", () => {
     mocks.resolvePluginCapabilityProviders.mockReturnValue([createCapabilityAdapter("ollama")]);
+    mocks.resolvePluginCapabilityProvider.mockReturnValue(createCapabilityAdapter("ollama"));
 
     expect(runtimeModule.listMemoryEmbeddingProviders().map((adapter) => adapter.id)).toEqual([
       "ollama",
     ]);
     expect(runtimeModule.getMemoryEmbeddingProvider("ollama")?.id).toBe("ollama");
-    expect(mocks.resolvePluginCapabilityProviders).toHaveBeenCalledTimes(2);
+    expect(mocks.resolvePluginCapabilityProviders).toHaveBeenCalledTimes(1);
+    expect(mocks.resolvePluginCapabilityProvider).toHaveBeenCalledWith({
+      key: "memoryEmbeddingProviders",
+      providerId: "ollama",
+      cfg: undefined,
+    });
   });
 
-  it("does not consult capability fallback once runtime adapters are registered", () => {
-    registerMemoryEmbeddingProvider({
+  it("prefers registered adapters over declared capability fallback adapters with the same id", () => {
+    const registered = {
       id: "openai",
       create: async () => ({ provider: null }),
+    } satisfies MemoryEmbeddingProviderAdapter;
+    registerMemoryEmbeddingProvider({
+      ...registered,
     });
-    mocks.resolvePluginCapabilityProviders.mockReturnValue([createCapabilityAdapter("ollama")]);
+    mocks.resolvePluginCapabilityProviders.mockReturnValue([createCapabilityAdapter("openai")]);
 
-    expect(runtimeModule.getMemoryEmbeddingProvider("ollama")).toBeUndefined();
-    expect(mocks.resolvePluginCapabilityProviders).not.toHaveBeenCalled();
+    expect(runtimeModule.getMemoryEmbeddingProvider("openai")).toEqual(
+      expect.objectContaining({ id: "openai" }),
+    );
+    expect(runtimeModule.listMemoryEmbeddingProviders().map((adapter) => adapter.id)).toEqual([
+      "openai",
+    ]);
+    expect(mocks.resolvePluginCapabilityProviders).toHaveBeenCalledTimes(1);
   });
 });

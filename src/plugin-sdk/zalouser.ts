@@ -3,7 +3,7 @@
 
 import { createOptionalChannelSetupSurface } from "./channel-setup.js";
 
-export type { ReplyPayload } from "../auto-reply/types.js";
+export type { ReplyPayload } from "./reply-payload.js";
 export { mergeAllowlist, summarizeMapping } from "../channels/allowlists/resolve-utils.js";
 export {
   resolveMentionGating,
@@ -35,7 +35,7 @@ export type {
   ChannelGroupContext,
   ChannelMessageActionAdapter,
   ChannelStatusIssue,
-} from "../channels/plugins/types.js";
+} from "../channels/plugins/types.public.js";
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export { createChannelReplyPipeline } from "./channel-reply-pipeline.js";
 export type { OpenClawConfig } from "../config/config.js";
@@ -82,8 +82,23 @@ export { formatResolvedUnresolvedNote } from "./resolution-notes.js";
 export { buildBaseAccountStatusSnapshot } from "./status-helpers.js";
 export { chunkTextForOutbound } from "./text-chunking.js";
 
-type FacadeModule = typeof import("@openclaw/zalouser/contract-api.js");
+import type { SecurityAuditFinding } from "../security/audit.types.js";
 import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-loader.js";
+
+type FacadeModule = {
+  collectZalouserSecurityAuditFindings: (params: {
+    accountId?: string | null;
+    account: {
+      accountId?: string;
+      config?: {
+        groups?: Record<string, unknown>;
+        dangerouslyAllowNameMatching?: boolean;
+      };
+    };
+    orderedAccountIds: string[];
+    hasExplicitAccountPath: boolean;
+  }) => SecurityAuditFinding[];
+};
 
 function loadFacadeModule(): FacadeModule {
   return loadBundledPluginPublicSurfaceModuleSync<FacadeModule>({

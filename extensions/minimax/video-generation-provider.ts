@@ -2,10 +2,14 @@ import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
+  createProviderOperationDeadline,
   fetchWithTimeout,
   postJsonRequest,
+  resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
+  waitProviderOperationPollInterval,
 } from "openclaw/plugin-sdk/provider-http";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type {
   GeneratedVideoAsset,
   VideoGenerationProvider,
@@ -51,7 +55,7 @@ type MinimaxFileRetrieveResponse = {
 function resolveMinimaxVideoBaseUrl(
   cfg: Parameters<typeof resolveApiKeyForProvider>[0]["cfg"],
 ): string {
-  const direct = cfg?.models?.providers?.minimax?.baseUrl?.trim();
+  const direct = normalizeOptionalString(cfg?.models?.providers?.minimax?.baseUrl);
   if (!direct) {
     return DEFAULT_MINIMAX_VIDEO_BASE_URL;
   }
@@ -80,13 +84,14 @@ function resolveFirstFrameImage(req: VideoGenerationRequest): string | undefined
   if (!input) {
     return undefined;
   }
-  if (input.url?.trim()) {
-    return input.url.trim();
+  const inputUrl = normalizeOptionalString(input.url);
+  if (inputUrl) {
+    return inputUrl;
   }
   if (!input.buffer) {
     throw new Error("MiniMax image-to-video input is missing image data.");
   }
-  return toDataUrl(input.buffer, input.mimeType?.trim() || "image/png");
+  return toDataUrl(input.buffer, normalizeOptionalString(input.mimeType) ?? "image/png");
 }
 
 function resolveDurationSeconds(params: {
@@ -113,6 +118,10 @@ async function pollMinimaxVideo(params: {
   baseUrl: string;
   fetchFn: typeof fetch;
 }): Promise<MinimaxQueryResponse> {
+  const deadline = createProviderOperationDeadline({
+    timeoutMs: params.timeoutMs,
+    label: `MiniMax video generation task ${params.taskId}`,
+  });
   for (let attempt = 0; attempt < MAX_POLL_ATTEMPTS; attempt += 1) {
     const url = new URL(`${params.baseUrl}/v1/query/video_generation`);
     url.searchParams.set("task_id", params.taskId);
@@ -122,21 +131,24 @@ async function pollMinimaxVideo(params: {
         method: "GET",
         headers: params.headers,
       },
-      params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      resolveProviderOperationTimeoutMs({ deadline, defaultTimeoutMs: DEFAULT_TIMEOUT_MS }),
       params.fetchFn,
     );
     await assertOkOrThrowHttpError(response, "MiniMax video status request failed");
     const payload = (await response.json()) as MinimaxQueryResponse;
     assertMinimaxBaseResp(payload.base_resp, "MiniMax video generation failed");
-    switch (payload.status?.trim()) {
+    switch (normalizeOptionalString(payload.status)) {
       case "Success":
         return payload;
       case "Fail":
-        throw new Error(payload.base_resp?.status_msg?.trim() || "MiniMax video generation failed");
+        throw new Error(
+          normalizeOptionalString(payload.base_resp?.status_msg) ||
+            "MiniMax video generation failed",
+        );
       case "Preparing":
       case "Processing":
       default:
-        await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+        await waitProviderOperationPollInterval({ deadline, pollIntervalMs: POLL_INTERVAL_MS });
         break;
     }
   }
@@ -155,7 +167,7 @@ async function downloadVideoFromUrl(params: {
     params.fetchFn,
   );
   await assertOkOrThrowHttpError(response, "MiniMax generated video download failed");
-  const mimeType = response.headers.get("content-type")?.trim() || "video/mp4";
+  const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
   const arrayBuffer = await response.arrayBuffer();
   return {
     buffer: Buffer.from(arrayBuffer),
@@ -188,7 +200,7 @@ async function downloadVideoFromFileId(params: {
   );
   const metadata = (await metadataResponse.json()) as MinimaxFileRetrieveResponse;
   assertMinimaxBaseResp(metadata.base_resp, "MiniMax generated video metadata request failed");
-  const downloadUrl = metadata.file?.download_url?.trim();
+  const downloadUrl = normalizeOptionalString(metadata.file?.download_url);
   if (!downloadUrl) {
     throw new Error("MiniMax generated video metadata missing download_url");
   }
@@ -199,13 +211,14 @@ async function downloadVideoFromFileId(params: {
     params.fetchFn,
   );
   await assertOkOrThrowHttpError(response, "MiniMax generated video download failed");
-  const mimeType = response.headers.get("content-type")?.trim() || "video/mp4";
+  const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
   const arrayBuffer = await response.arrayBuffer();
   return {
     buffer: Buffer.from(arrayBuffer),
     mimeType,
     fileName:
-      metadata.file?.filename?.trim() || `video-1.${mimeType.includes("webm") ? "webm" : "mp4"}`,
+      normalizeOptionalString(metadata.file?.filename) ||
+      `video-1.${mimeType.includes("webm") ? "webm" : "mp4"}`,
   };
 }
 
@@ -263,6 +276,10 @@ export function buildMinimaxVideoGenerationProvider(): VideoGenerationProvider {
       }
 
       const fetchFn = fetch;
+      const deadline = createProviderOperationDeadline({
+        timeoutMs: req.timeoutMs,
+        label: "MiniMax video generation",
+      });
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
         resolveProviderHttpRequestConfig({
           baseUrl: resolveMinimaxVideoBaseUrl(req.cfg),
@@ -276,7 +293,7 @@ export function buildMinimaxVideoGenerationProvider(): VideoGenerationProvider {
           capability: "video",
           transport: "http",
         });
-      const model = req.model?.trim() || DEFAULT_MINIMAX_VIDEO_MODEL;
+      const model = normalizeOptionalString(req.model) ?? DEFAULT_MINIMAX_VIDEO_MODEL;
       const body: Record<string, unknown> = {
         model,
         prompt: req.prompt,
@@ -299,7 +316,10 @@ export function buildMinimaxVideoGenerationProvider(): VideoGenerationProvider {
         url: `${baseUrl}/v1/video_generation`,
         headers,
         body,
-        timeoutMs: req.timeoutMs,
+        timeoutMs: resolveProviderOperationTimeoutMs({
+          deadline,
+          defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
+        }),
         fetchFn,
         allowPrivateNetwork,
         dispatcherPolicy,
@@ -308,30 +328,39 @@ export function buildMinimaxVideoGenerationProvider(): VideoGenerationProvider {
         await assertOkOrThrowHttpError(response, "MiniMax video generation failed");
         const submitted = (await response.json()) as MinimaxCreateResponse;
         assertMinimaxBaseResp(submitted.base_resp, "MiniMax video generation failed");
-        const taskId = submitted.task_id?.trim();
+        const taskId = normalizeOptionalString(submitted.task_id);
         if (!taskId) {
           throw new Error("MiniMax video generation response missing task_id");
         }
         const completed = await pollMinimaxVideo({
           taskId,
           headers,
-          timeoutMs: req.timeoutMs,
+          timeoutMs: resolveProviderOperationTimeoutMs({
+            deadline,
+            defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
+          }),
           baseUrl,
           fetchFn,
         });
-        const videoUrl = completed.video_url?.trim();
-        const fileId = completed.file_id?.trim();
+        const videoUrl = normalizeOptionalString(completed.video_url);
+        const fileId = normalizeOptionalString(completed.file_id);
         const video = videoUrl
           ? await downloadVideoFromUrl({
               url: videoUrl,
-              timeoutMs: req.timeoutMs,
+              timeoutMs: resolveProviderOperationTimeoutMs({
+                deadline,
+                defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
+              }),
               fetchFn,
             })
           : fileId
             ? await downloadVideoFromFileId({
                 fileId,
                 headers,
-                timeoutMs: req.timeoutMs,
+                timeoutMs: resolveProviderOperationTimeoutMs({
+                  deadline,
+                  defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
+                }),
                 baseUrl,
                 fetchFn,
               })

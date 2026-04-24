@@ -1,28 +1,14 @@
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.models.js";
-import { withEnvAsync } from "../test-utils/env.js";
-import { installModelsConfigTestHooks } from "./models-config.e2e-harness.js";
+import { resolveEnvApiKey } from "./model-auth-env.js";
+import {
+  resolveEnvApiKeyVarName,
+  resolveMissingProviderApiKey,
+} from "./models-config.providers.secret-helpers.js";
 
 const NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1";
 const MINIMAX_BASE_URL = "https://api.minimax.io/anthropic";
 const VLLM_DEFAULT_BASE_URL = "http://127.0.0.1:8000/v1";
-
-installModelsConfigTestHooks();
-
-let resolveApiKeyForProvider: typeof import("./model-auth.js").resolveApiKeyForProvider;
-let resolveEnvApiKeyVarName: typeof import("./models-config.providers.secrets.js").resolveEnvApiKeyVarName;
-let resolveMissingProviderApiKey: typeof import("./models-config.providers.secrets.js").resolveMissingProviderApiKey;
-
-beforeEach(async () => {
-  vi.doUnmock("../plugins/provider-runtime.js");
-  vi.resetModules();
-  ({ resolveApiKeyForProvider } = await import("./model-auth.js"));
-  ({ resolveEnvApiKeyVarName, resolveMissingProviderApiKey } =
-    await import("./models-config.providers.secrets.js"));
-});
 
 function createTestModel(id: string): ModelDefinitionConfig {
   return {
@@ -93,17 +79,14 @@ describe("NVIDIA provider", () => {
     expect(provider.models?.length).toBeGreaterThan(0);
   });
 
-  it("resolves the nvidia api key value from env", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
-    await withEnvAsync({ NVIDIA_API_KEY: "nvidia-test-api-key" }, async () => {
-      const auth = await resolveApiKeyForProvider({
-        provider: "nvidia",
-        agentDir,
-      });
+  it("resolves the nvidia api key value from env", () => {
+    const auth = resolveEnvApiKey("nvidia", {
+      NVIDIA_API_KEY: "nvidia-test-api-key",
+    } as NodeJS.ProcessEnv);
 
-      expect(auth.apiKey).toBe("nvidia-test-api-key");
-      expect(auth.mode).toBe("api-key");
-      expect(auth.source).toContain("NVIDIA_API_KEY");
+    expect(auth).toEqual({
+      apiKey: "nvidia-test-api-key",
+      source: "env: NVIDIA_API_KEY",
     });
   });
 });

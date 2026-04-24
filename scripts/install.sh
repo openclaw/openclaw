@@ -1942,6 +1942,11 @@ resolve_beta_version() {
     echo "$beta"
 }
 
+to_lowercase_ascii() {
+    # macOS still ships Bash 3.2, so avoid `${value,,}` here.
+    printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]'
+}
+
 is_explicit_package_install_spec() {
     local value="${1:-}"
     [[ "$value" == *"://"* || "$value" == *"#"* || "$value" =~ ^(file|github|git\+ssh|git\+https|git\+http|git\+file|npm): ]]
@@ -1949,10 +1954,12 @@ is_explicit_package_install_spec() {
 
 can_resolve_registry_package_version() {
     local value="${1:-}"
+    local normalized_value=""
+    normalized_value="$(to_lowercase_ascii "$value")"
     if [[ -z "$value" ]]; then
         return 0
     fi
-    if [[ "${value,,}" == "main" ]]; then
+    if [[ "$normalized_value" == "main" ]]; then
         return 1
     fi
     if is_explicit_package_install_spec "$value"; then
@@ -1964,7 +1971,9 @@ can_resolve_registry_package_version() {
 resolve_package_install_spec() {
     local package_name="$1"
     local value="$2"
-    if [[ "${value,,}" == "main" ]]; then
+    local normalized_value=""
+    normalized_value="$(to_lowercase_ascii "$value")"
+    if [[ "$normalized_value" == "main" ]]; then
         echo "github:openclaw/openclaw#main"
         return 0
     fi
@@ -2129,15 +2138,10 @@ if ! declare -F extract_openclaw_semver >/dev/null 2>&1; then
 # Inline fallback when version-parse.sh could not be sourced (for example, stdin install).
 extract_openclaw_semver() {
     local raw="${1:-}"
-    local parsed=""
-    parsed="$(
-        printf '%s\n' "$raw" \
-            | tr -d '\r' \
-            | grep -Eo 'v?[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z]+(\.[0-9A-Za-z]+)*)?(\+[0-9A-Za-z.-]+)?' \
-            | head -n 1 \
-            || true
-    )"
-    printf '%s' "${parsed#v}"
+    raw="${raw//$'\r'/}"
+    if [[ "$raw" =~ v?([0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z]+(\.[0-9A-Za-z]+)*)?(\+[0-9A-Za-z.-]+)?) ]]; then
+        printf '%s' "${BASH_REMATCH[1]}"
+    fi
 }
 fi
 
@@ -2149,7 +2153,9 @@ resolve_openclaw_version() {
         claw="$(command -v openclaw)"
     fi
     if [[ -n "$claw" ]]; then
-        raw_version_output=$("$claw" --version 2>/dev/null | head -n 1 | tr -d '\r')
+        raw_version_output=$("$claw" --version 2>/dev/null || true)
+        raw_version_output="${raw_version_output%%$'\n'*}"
+        raw_version_output="${raw_version_output//$'\r'/}"
         version="$(extract_openclaw_semver "$raw_version_output")"
         if [[ -z "$version" ]]; then
             version="$raw_version_output"
@@ -2466,15 +2472,13 @@ main() {
                 return 0
             fi
             local -a doctor_args=()
-            if [[ "$NO_ONBOARD" == "1" ]]; then
-                if "$claw" doctor --help 2>/dev/null | grep -q -- "--non-interactive"; then
-                    doctor_args+=("--non-interactive")
-                fi
+            if [[ "$NO_ONBOARD" == "1" || "$NO_PROMPT" == "1" ]]; then
+                doctor_args+=("--non-interactive")
             fi
             ui_info "Running openclaw doctor"
             local doctor_ok=0
             if (( ${#doctor_args[@]} )); then
-                OPENCLAW_UPDATE_IN_PROGRESS=1 "$claw" doctor "${doctor_args[@]}" </dev/tty && doctor_ok=1
+                OPENCLAW_UPDATE_IN_PROGRESS=1 "$claw" doctor "${doctor_args[@]}" </dev/null && doctor_ok=1
             else
                 OPENCLAW_UPDATE_IN_PROGRESS=1 "$claw" doctor </dev/tty && doctor_ok=1
             fi

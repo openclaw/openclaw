@@ -109,13 +109,19 @@ cd apps/ios
 fastlane ios auth_check
 ```
 
-4. Set the official/TestFlight relay URL before release:
+4. If you are starting a brand-new production release train, pin iOS to the current gateway version:
+
+```bash
+pnpm ios:version:pin -- --from-gateway
+```
+
+5. Set the official/TestFlight relay URL before release:
 
 ```bash
 export OPENCLAW_PUSH_RELAY_BASE_URL=https://relay.example.com
 ```
 
-5. Upload:
+6. Upload:
 
 ```bash
 pnpm ios:beta
@@ -129,9 +135,15 @@ Quick verification after upload:
 
 Versioning rules:
 
-- Root `package.json.version` is the single source of truth for iOS
-- Use `YYYY.M.D` for stable versions and `YYYY.M.D-beta.N` for beta versions
-- Fastlane stamps `CFBundleShortVersionString` to `YYYY.M.D`
+- `apps/ios/version.json` is the pinned iOS release version source
+- `apps/ios/CHANGELOG.md` is the iOS-only changelog and release-note source
+- Supported pinned iOS versions use CalVer: `YYYY.M.D`
+- `pnpm ios:version:pin -- --from-gateway` promotes the current root gateway version into the pinned iOS release version
+- Fastlane uses the pinned iOS version only; changing `package.json.version` alone does not change the iOS app version
+- Fastlane sets `CFBundleShortVersionString` to the pinned iOS version, for example `2026.4.10`
 - Fastlane resolves `CFBundleVersion` as the next integer TestFlight build number for that short version
+- Run `pnpm ios:version:sync` after changing `apps/ios/version.json` or `apps/ios/CHANGELOG.md`
+- `pnpm ios:version:check` validates that checked-in iOS version artifacts are in sync
 - The beta flow regenerates `apps/ios/OpenClaw.xcodeproj` from `apps/ios/project.yml` before archiving
 - Local beta signing uses a temporary generated xcconfig and leaves local development signing overrides untouched
+- See `apps/ios/VERSIONING.md` for the detailed workflow

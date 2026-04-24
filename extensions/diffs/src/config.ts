@@ -1,4 +1,5 @@
-import { buildPluginConfigSchema } from "openclaw/plugin-sdk/core";
+import { mapPluginConfigIssues } from "openclaw/plugin-sdk/extension-shared";
+import { buildPluginConfigSchema } from "openclaw/plugin-sdk/plugin-entry";
 import { z } from "openclaw/plugin-sdk/zod";
 import type { OpenClawPluginConfigSchema } from "../api.js";
 import {
@@ -180,13 +181,7 @@ const diffsPluginConfigSchemaBase = buildPluginConfigSchema(DiffsPluginJsonSchem
     return {
       success: false,
       error: {
-        issues: result.error.issues.map((issue) => ({
-          path: issue.path.filter((segment): segment is string | number => {
-            const kind = typeof segment;
-            return kind === "string" || kind === "number";
-          }),
-          message: issue.message,
-        })),
+        issues: mapPluginConfigIssues(result.error.issues),
       },
     };
   },

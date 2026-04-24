@@ -1,11 +1,11 @@
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { rawDataToString } from "openclaw/plugin-sdk/browser-node-runtime";
+import { formatInboundFromLabel as formatInboundFromLabelShared } from "openclaw/plugin-sdk/channel-inbound";
+import { createDedupeCache, type OpenClawConfig } from "openclaw/plugin-sdk/core";
+import { resolveThreadSessionKeys as resolveThreadSessionKeysShared } from "openclaw/plugin-sdk/routing";
 import {
-  createDedupeCache,
-  formatInboundFromLabel as formatInboundFromLabelShared,
-  rawDataToString,
-  resolveThreadSessionKeys as resolveThreadSessionKeysShared,
-  type OpenClawConfig,
-} from "./runtime-api.js";
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 
 export { createDedupeCache, rawDataToString };
 
@@ -34,8 +34,7 @@ function normalizeAgentId(value: string | undefined | null): string {
     return trimmed;
   }
   return (
-    trimmed
-      .toLowerCase()
+    normalizeLowercaseStringOrEmpty(trimmed)
       .replace(/[^a-z0-9_-]+/g, "-")
       .replace(/^-+/, "")
       .replace(/-+$/, "")

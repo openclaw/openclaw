@@ -1,4 +1,8 @@
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
+import { normalizeStringEntries } from "../../shared/string-normalization.js";
 
 export type ServicePrefix<TService extends string> = { prefix: string; service: TService };
 
@@ -25,16 +29,16 @@ export type ChatSenderAllowParams = {
   chatIdentifier?: string | null;
 };
 
-function isAllowedParsedChatSender<TParsed extends ParsedChatAllowTarget>(params: {
+export function isAllowedParsedChatSender(params: {
   allowFrom: Array<string | number>;
   sender: string;
   chatId?: number | null;
   chatGuid?: string | null;
   chatIdentifier?: string | null;
   normalizeSender: (sender: string) => string;
-  parseAllowTarget: (entry: string) => TParsed;
+  parseAllowTarget: (entry: string) => ParsedChatAllowTarget;
 }): boolean {
-  const allowFrom = params.allowFrom.map((entry) => String(entry).trim());
+  const allowFrom = normalizeStringEntries(params.allowFrom);
   if (allowFrom.length === 0) {
     return false;
   }
@@ -44,8 +48,8 @@ function isAllowedParsedChatSender<TParsed extends ParsedChatAllowTarget>(params
 
   const senderNormalized = params.normalizeSender(params.sender);
   const chatId = params.chatId ?? undefined;
-  const chatGuid = params.chatGuid?.trim();
-  const chatIdentifier = params.chatIdentifier?.trim();
+  const chatGuid = normalizeOptionalString(params.chatGuid);
+  const chatIdentifier = normalizeOptionalString(params.chatIdentifier);
 
   for (const entry of allowFrom) {
     if (!entry) {
@@ -220,9 +224,9 @@ export function resolveServicePrefixedOrChatAllowTarget<
   return null;
 }
 
-export function createAllowedChatSenderMatcher<TParsed extends ParsedChatAllowTarget>(params: {
+export function createAllowedChatSenderMatcher(params: {
   normalizeSender: (sender: string) => string;
-  parseAllowTarget: (entry: string) => TParsed;
+  parseAllowTarget: (entry: string) => ParsedChatAllowTarget;
 }): (input: ChatSenderAllowParams) => boolean {
   return (input) =>
     isAllowedParsedChatSender({

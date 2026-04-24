@@ -3,6 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createTestPluginApi } from "../../test/helpers/plugins/plugin-api.ts";
+import type { OpenClawPluginApi } from "./api.js";
 
 let runtimeStub: {
   config: { toNumber?: string };
@@ -10,6 +12,7 @@ let runtimeStub: {
     initiateCall: ReturnType<typeof vi.fn>;
     continueCall: ReturnType<typeof vi.fn>;
     speak: ReturnType<typeof vi.fn>;
+    sendDtmf: ReturnType<typeof vi.fn>;
     endCall: ReturnType<typeof vi.fn>;
     getCall: ReturnType<typeof vi.fn>;
     getCallByProviderCallId: ReturnType<typeof vi.fn>;
@@ -35,7 +38,7 @@ type Registered = {
   methods: Map<string, unknown>;
   tools: unknown[];
 };
-type RegisterVoiceCall = (api: Record<string, unknown>) => void | Promise<void>;
+type RegisterVoiceCall = (api: Record<string, unknown>) => void;
 type RegisterCliContext = {
   program: Command;
   config: Record<string, unknown>;
@@ -57,7 +60,7 @@ function captureStdout() {
 function setup(config: Record<string, unknown>): Registered {
   const methods = new Map<string, unknown>();
   const tools: unknown[] = [];
-  void plugin.register({
+  const api = createTestPluginApi({
     id: "voice-call",
     name: "Voice Call",
     description: "test",
@@ -65,16 +68,15 @@ function setup(config: Record<string, unknown>): Registered {
     source: "test",
     config: {},
     pluginConfig: config,
-    runtime: { tts: { textToSpeechTelephony: vi.fn() } } as unknown as Parameters<
-      typeof plugin.register
-    >[0]["runtime"],
+    runtime: { tts: { textToSpeechTelephony: vi.fn() } } as unknown as OpenClawPluginApi["runtime"],
     logger: noopLogger,
     registerGatewayMethod: (method: string, handler: unknown) => methods.set(method, handler),
     registerTool: (tool: unknown) => tools.push(tool),
     registerCli: () => {},
     registerService: () => {},
     resolvePath: (p: string) => p,
-  } as unknown as Parameters<typeof plugin.register>[0]);
+  });
+  plugin.register(api);
   return { methods, tools };
 }
 
@@ -82,7 +84,7 @@ async function registerVoiceCallCli(program: Command) {
   const { register } = plugin as unknown as {
     register: RegisterVoiceCall;
   };
-  await register({
+  register({
     id: "voice-call",
     name: "Voice Call",
     description: "test",
@@ -122,6 +124,7 @@ describe("voice-call plugin", () => {
           transcript: "hello",
         })),
         speak: vi.fn(async () => ({ success: true })),
+        sendDtmf: vi.fn(async () => ({ success: true })),
         endCall: vi.fn(async () => ({ success: true })),
         getCall: vi.fn((id: string) => (id === "call-1" ? { callId: "call-1" } : undefined)),
         getCallByProviderCallId: vi.fn(() => undefined),
@@ -161,6 +164,22 @@ describe("voice-call plugin", () => {
     const [ok, payload] = respond.mock.calls[0];
     expect(ok).toBe(true);
     expect(payload.found).toBe(true);
+  });
+
+  it("sends DTMF via voicecall.dtmf", async () => {
+    const { methods } = setup({ provider: "mock" });
+    const handler = methods.get("voicecall.dtmf") as
+      | ((ctx: {
+          params: Record<string, unknown>;
+          respond: ReturnType<typeof vi.fn>;
+        }) => Promise<void>)
+      | undefined;
+    const respond = vi.fn();
+
+    await handler?.({ params: { callId: "call-1", digits: "ww123#" }, respond });
+
+    expect(runtimeStub.manager.sendDtmf).toHaveBeenCalledWith("call-1", "ww123#");
+    expect(respond.mock.calls[0]).toEqual([true, { success: true }]);
   });
 
   it("normalizes legacy config through runtime creation and warns to run doctor", async () => {
@@ -216,6 +235,20 @@ describe("voice-call plugin", () => {
       callId: "call-1",
     })) as { details: { found?: boolean } };
     expect(result.details.found).toBe(true);
+  });
+
+  it("tool send_dtmf returns json payload", async () => {
+    const { tools } = setup({ provider: "mock" });
+    const tool = tools[0] as {
+      execute: (id: string, params: unknown) => Promise<unknown>;
+    };
+    const result = (await tool.execute("id", {
+      action: "send_dtmf",
+      callId: "call-1",
+      digits: "ww123#",
+    })) as { details: { success?: boolean } };
+    expect(runtimeStub.manager.sendDtmf).toHaveBeenCalledWith("call-1", "ww123#");
+    expect(result.details.success).toBe(true);
   });
 
   it("legacy tool status without sid returns error payload", async () => {

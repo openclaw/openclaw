@@ -2,11 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
   isCommandsLightTarget,
   resolveCommandsLightIncludePattern,
-} from "../vitest.commands-light-paths.mjs";
+} from "./vitest/vitest.commands-light-paths.mjs";
 import {
   isPluginSdkLightTarget,
   resolvePluginSdkLightIncludePattern,
-} from "../vitest.plugin-sdk-paths.mjs";
+} from "./vitest/vitest.plugin-sdk-paths.mjs";
 
 describe("light vitest path routing", () => {
   it("maps plugin-sdk allowlist source and test files to sibling light tests", () => {

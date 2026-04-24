@@ -44,6 +44,7 @@ describe("applyModelOverrideToSessionEntry", () => {
     expect(entry.fallbackNoticeSelectedModel).toBeUndefined();
     expect(entry.fallbackNoticeActiveModel).toBeUndefined();
     expect(entry.fallbackNoticeReason).toBeUndefined();
+    expect(entry.modelOverrideSource).toBe("user");
   });
 
   it("clears stale runtime model fields even when override selection is unchanged", () => {
@@ -85,11 +86,12 @@ describe("applyModelOverrideToSessionEntry", () => {
       },
     });
 
-    expect(result.updated).toBe(false);
+    expect(result.updated).toBe(true);
     expect(entry.modelProvider).toBe("openai");
     expect(entry.model).toBe("gpt-5.4");
+    expect(entry.modelOverrideSource).toBe("user");
     expect(entry.contextTokens).toBe(200_000);
-    expect(entry.updatedAt).toBe(before);
+    expect((entry.updatedAt ?? 0) >= before).toBe(true);
   });
 
   it("clears stale contextTokens when switching back to the default model", () => {
@@ -114,8 +116,30 @@ describe("applyModelOverrideToSessionEntry", () => {
     expect(result.updated).toBe(true);
     expect(entry.providerOverride).toBeUndefined();
     expect(entry.modelOverride).toBeUndefined();
+    expect(entry.modelOverrideSource).toBeUndefined();
     expect(entry.contextTokens).toBeUndefined();
     expect((entry.updatedAt ?? 0) > before).toBe(true);
+  });
+
+  it("marks non-default overrides with the provided source", () => {
+    const entry: SessionEntry = {
+      sessionId: "sess-5a",
+      updatedAt: Date.now() - 5_000,
+    };
+
+    const result = applyModelOverrideToSessionEntry({
+      entry,
+      selection: {
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+      },
+      selectionSource: "auto",
+    });
+
+    expect(result.updated).toBe(true);
+    expect(entry.providerOverride).toBe("anthropic");
+    expect(entry.modelOverride).toBe("claude-sonnet-4-6");
+    expect(entry.modelOverrideSource).toBe("auto");
   });
 
   it("sets liveModelSwitchPending only when explicitly requested", () => {

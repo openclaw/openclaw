@@ -1,7 +1,8 @@
 import net from "node:net";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 function normalizeHost(host: string): string {
-  const normalized = host.trim().toLowerCase().replace(/\.+$/, "");
+  const normalized = normalizeLowercaseStringOrEmpty(host).replace(/\.+$/, "");
   return normalized.startsWith("[") && normalized.endsWith("]")
     ? normalized.slice(1, -1)
     : normalized;

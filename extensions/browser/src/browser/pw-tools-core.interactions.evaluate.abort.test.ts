@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-let page: { evaluate: ReturnType<typeof vi.fn> } | null = null;
+let page: { evaluate: ReturnType<typeof vi.fn>; url: ReturnType<typeof vi.fn> } | null = null;
 let locator: { evaluate: ReturnType<typeof vi.fn> } | null = null;
 
 const forceDisconnectPlaywrightForTarget = vi.fn(async () => {});
@@ -11,6 +11,7 @@ const getPageForTargetId = vi.fn(async () => {
   return page;
 });
 const ensurePageState = vi.fn(() => {});
+const assertPageNavigationCompletedSafely = vi.fn(async () => {});
 const restoreRoleRefsForTarget = vi.fn(() => {});
 const refLocator = vi.fn(() => {
   if (!locator) {
@@ -21,6 +22,7 @@ const refLocator = vi.fn(() => {
 
 vi.mock("./pw-session.js", () => {
   return {
+    assertPageNavigationCompletedSafely,
     ensurePageState,
     forceDisconnectPlaywrightForTarget,
     getPageForTargetId,
@@ -64,6 +66,7 @@ describe("evaluateViaPlaywright (abort)", () => {
         }
         return pendingPromise;
       }),
+      url: vi.fn(() => "https://example.com/current"),
     };
     locator = {
       evaluate: vi.fn(() => {

@@ -37,9 +37,9 @@ export function registerNodesPushCommand(nodes: Command) {
       .option("--environment <sandbox|production>", "Override APNs environment")
       .action(async (opts: NodesPushOpts) => {
         await runNodesCommand("push", async () => {
-          const nodeId = await resolveNodeId(opts, String(opts.node ?? ""));
-          const title = String(opts.title ?? "").trim() || "OpenClaw";
-          const body = String(opts.body ?? "").trim() || `Push test for node ${nodeId}`;
+          const nodeId = await resolveNodeId(opts, normalizeOptionalString(opts.node) ?? "");
+          const title = normalizeOptionalString(opts.title) || "OpenClaw";
+          const body = normalizeOptionalString(opts.body) || `Push test for node ${nodeId}`;
           const environment = normalizeEnvironment(opts.environment);
           if (opts.environment && !environment) {
             throw new Error("invalid --environment (use sandbox|production)");

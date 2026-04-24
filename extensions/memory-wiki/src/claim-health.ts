@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import type { WikiClaim, WikiPageSummary } from "./markdown.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -60,14 +61,12 @@ function clampDaysSinceTouch(daysSinceTouch: number): number {
 }
 
 function normalizeClaimTextKey(text: string): string {
-  return text.trim().replace(/\s+/g, " ").toLowerCase();
+  return normalizeLowercaseStringOrEmpty(text.replace(/\s+/g, " "));
 }
 
 function normalizeTextKey(text: string): string {
-  return text
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
+  return normalizeLowercaseStringOrEmpty(text)
+    .replace(/[^\p{L}\p{N}\p{M}]+/gu, " ")
     .replace(/\s+/g, " ");
 }
 
@@ -120,7 +119,7 @@ function resolveLatestTimestamp(candidates: Array<string | undefined>): string |
 }
 
 export function normalizeClaimStatus(status?: string): string {
-  return status?.trim().toLowerCase() || "supported";
+  return normalizeLowercaseStringOrEmpty(status) || "supported";
 }
 
 export function isClaimContestedStatus(status?: string): boolean {

@@ -310,7 +310,7 @@ afterEach(() => {
 });
 
 describe("loadPluginManifestRegistry", () => {
-  it("emits duplicate warning for truly distinct plugins with same id", () => {
+  it("keeps only the higher-precedence plugin for truly distinct duplicates", () => {
     const dirA = makeTempDir();
     const dirB = makeTempDir();
     const manifest = { id: "test-plugin", configSchema: { type: "object" } };
@@ -330,7 +330,42 @@ describe("loadPluginManifestRegistry", () => {
       }),
     ];
 
-    expect(countDuplicateWarnings(loadRegistry(candidates))).toBe(1);
+    const registry = loadRegistry(candidates);
+    expect(countDuplicateWarnings(registry)).toBe(1);
+    expect(registry.plugins).toHaveLength(1);
+    expect(registry.plugins[0]?.origin).toBe("bundled");
+    expectRegistryDiagnosticContains(
+      registry,
+      "global plugin will be overridden by bundled plugin",
+    );
+  });
+
+  it("lets config-loaded plugins replace bundled duplicates", () => {
+    const bundledDir = makeTempDir();
+    const configDir = makeTempDir();
+    const manifest = { id: "config-shadow", configSchema: { type: "object" } };
+    writeManifest(bundledDir, manifest);
+    writeManifest(configDir, manifest);
+
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "config-shadow",
+        rootDir: bundledDir,
+        origin: "bundled",
+      }),
+      createPluginCandidate({
+        idHint: "config-shadow",
+        rootDir: configDir,
+        origin: "config",
+      }),
+    ]);
+
+    expect(countDuplicateWarnings(registry)).toBe(1);
+    expect(registry.plugins).toHaveLength(1);
+    expect(registry.plugins[0]?.origin).toBe("config");
+    const warning = registry.diagnostics.find((diag) => diag.pluginId === "config-shadow");
+    expect(warning?.source).toBe(path.join(bundledDir, "index.ts"));
+    expect(warning?.message).toContain(path.join(configDir, "index.ts"));
   });
 
   it("reports explicit installed globals as the effective duplicate winner", () => {
@@ -371,6 +406,8 @@ describe("loadPluginManifestRegistry", () => {
         diag.message.includes("bundled plugin will be overridden by global plugin"),
       ),
     ).toBe(true);
+    expect(registry.plugins).toHaveLength(1);
+    expect(registry.plugins[0]?.origin).toBe("global");
   });
 
   it("preserves provider auth env metadata from plugin manifests", () => {
@@ -381,6 +418,18 @@ describe("loadPluginManifestRegistry", () => {
       providers: ["openai", "openai-codex"],
       providerAuthEnvVars: {
         openai: ["OPENAI_API_KEY"],
+      },
+      providerEndpoints: [
+        {
+          endpointClass: "openai-public",
+          hosts: ["API.OPENAI.COM", ""],
+          baseUrls: ["https://api.openai.com/v1"],
+        },
+      ],
+      syntheticAuthRefs: ["openai-cli"],
+      nonSecretAuthMarkers: ["openai-cli"],
+      providerAuthAliases: {
+        "openai-codex": "openai",
       },
       providerAuthChoices: [
         {
@@ -404,6 +453,18 @@ describe("loadPluginManifestRegistry", () => {
     expect(registry.plugins[0]?.providerAuthEnvVars).toEqual({
       openai: ["OPENAI_API_KEY"],
     });
+    expect(registry.plugins[0]?.providerEndpoints).toEqual([
+      {
+        endpointClass: "openai-public",
+        hosts: ["api.openai.com"],
+        baseUrls: ["https://api.openai.com/v1"],
+      },
+    ]);
+    expect(registry.plugins[0]?.syntheticAuthRefs).toEqual(["openai-cli"]);
+    expect(registry.plugins[0]?.nonSecretAuthMarkers).toEqual(["openai-cli"]);
+    expect(registry.plugins[0]?.providerAuthAliases).toEqual({
+      "openai-codex": "openai",
+    });
     expect(registry.plugins[0]?.enabledByDefault).toBe(true);
     expect(registry.plugins[0]?.providerAuthChoices).toEqual([
       {
@@ -415,6 +476,151 @@ describe("loadPluginManifestRegistry", () => {
         assistantVisibility: "visible",
       },
     ]);
+  });
+
+  it("falls back providerDiscoverySource from .ts to emitted .js files", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "anthropic-vertex",
+      providers: ["anthropic-vertex"],
+      providerDiscoveryEntry: "./provider-discovery.ts",
+      configSchema: { type: "object" },
+    });
+    fs.writeFileSync(path.join(dir, "provider-discovery.js"), "export default {};\n", "utf8");
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "anthropic-vertex",
+      rootDir: dir,
+      origin: "bundled",
+    });
+
+    expect(registry.plugins[0]?.providerDiscoverySource).toBe(
+      path.join(dir, "provider-discovery.js"),
+    );
+  });
+
+  it("preserves activation and setup descriptors from plugin manifests", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "openai",
+      providers: ["openai"],
+      activation: {
+        onProviders: ["openai"],
+        onCommands: ["models"],
+        onChannels: ["web"],
+        onRoutes: ["gateway-webhook"],
+        onCapabilities: ["provider", "tool"],
+      },
+      setup: {
+        providers: [
+          {
+            id: "openai",
+            authMethods: ["api-key"],
+            envVars: ["OPENAI_API_KEY"],
+          },
+        ],
+        cliBackends: ["openai-cli"],
+        configMigrations: ["legacy-openai-auth"],
+        requiresRuntime: false,
+      },
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "openai",
+      rootDir: dir,
+      origin: "bundled",
+    });
+
+    expect(registry.plugins[0]?.activation).toEqual({
+      onProviders: ["openai"],
+      onCommands: ["models"],
+      onChannels: ["web"],
+      onRoutes: ["gateway-webhook"],
+      onCapabilities: ["provider", "tool"],
+    });
+    expect(registry.plugins[0]?.setup).toEqual({
+      providers: [
+        {
+          id: "openai",
+          authMethods: ["api-key"],
+          envVars: ["OPENAI_API_KEY"],
+        },
+      ],
+      cliBackends: ["openai-cli"],
+      configMigrations: ["legacy-openai-auth"],
+      requiresRuntime: false,
+    });
+  });
+
+  it("preserves media-understanding provider metadata from plugin manifests", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "openai",
+      contracts: {
+        mediaUnderstandingProviders: ["openai"],
+      },
+      mediaUnderstandingProviderMetadata: {
+        openai: {
+          capabilities: ["image", "audio", "unknown"],
+          defaultModels: {
+            image: "gpt-5.4-mini",
+            audio: "gpt-4o-transcribe",
+            unknown: "ignored",
+          },
+          autoPriority: {
+            image: 10,
+            audio: 20,
+            video: "ignored",
+          },
+          nativeDocumentInputs: ["pdf", "docx"],
+        },
+      },
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "openai",
+      rootDir: dir,
+      origin: "bundled",
+    });
+
+    expect(registry.plugins[0]?.mediaUnderstandingProviderMetadata).toEqual({
+      openai: {
+        capabilities: ["image", "audio"],
+        defaultModels: {
+          image: "gpt-5.4-mini",
+          audio: "gpt-4o-transcribe",
+        },
+        autoPriority: {
+          image: 10,
+          audio: 20,
+        },
+        nativeDocumentInputs: ["pdf"],
+      },
+    });
+  });
+
+  it("preserves external auth provider contracts from plugin manifests", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "acme-ai",
+      providers: ["acme-ai"],
+      contracts: {
+        externalAuthProviders: ["acme-ai"],
+      },
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "acme-ai",
+      rootDir: dir,
+      origin: "bundled",
+    });
+
+    expect(registry.plugins[0]?.contracts).toEqual({
+      externalAuthProviders: ["acme-ai"],
+    });
   });
 
   it("preserves channel env metadata from plugin manifests", () => {
@@ -437,6 +643,33 @@ describe("loadPluginManifestRegistry", () => {
     expect(registry.plugins[0]?.channelEnvVars).toEqual({
       slack: ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "SLACK_USER_TOKEN"],
     });
+  });
+
+  it("preserves qa runner descriptors from plugin manifests", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "qa-matrix",
+      qaRunners: [
+        {
+          commandName: "matrix",
+          description: "Run the Matrix live QA lane",
+        },
+      ],
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "qa-matrix",
+      rootDir: dir,
+      origin: "bundled",
+    });
+
+    expect(registry.plugins[0]?.qaRunners).toEqual([
+      {
+        commandName: "matrix",
+        description: "Run the Matrix live QA lane",
+      },
+    ]);
   });
 
   it("preserves channel config metadata from plugin manifests", () => {
@@ -682,6 +915,8 @@ describe("loadPluginManifestRegistry", () => {
   ] as const)("$name", ({ registry: buildRegistry, expectedMessage }) => {
     const registry = buildRegistry();
     expectRegistryDiagnosticContains(registry, expectedMessage);
+    expect(registry.plugins).toHaveLength(1);
+    expect(registry.plugins[0]?.origin).toBe("bundled");
   });
 
   it("suppresses duplicate warning when candidates share the same physical directory via symlink", () => {

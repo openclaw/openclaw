@@ -255,6 +255,19 @@ function queueSharedGatewayAuthDisconnect(
   });
 }
 
+function queueSharedGatewayAuthGenerationRefresh(
+  shouldRefresh: boolean,
+  nextConfig: OpenClawConfig,
+  context?: GatewayRequestContext,
+): void {
+  if (!shouldRefresh) {
+    return;
+  }
+  queueMicrotask(() => {
+    context?.enforceSharedGatewayAuthGenerationForConfigWrite?.(nextConfig);
+  });
+}
+
 function summarizeConfigValidationIssues(issues: ReadonlyArray<ConfigValidationIssue>): string {
   const trimmed = issues.slice(0, MAX_CONFIG_ISSUES_IN_ERROR_MESSAGE);
   const lines = formatConfigIssueLines(trimmed, "", { normalizeRoot: true })
@@ -315,18 +328,25 @@ function resolveConfigRestartRequest(params: unknown): {
   deliveryContext: ReturnType<typeof extractDeliveryInfo>["deliveryContext"];
   threadId: ReturnType<typeof extractDeliveryInfo>["threadId"];
 } {
-  const { sessionKey, note, restartDelayMs } = parseRestartRequestParams(params);
+  const {
+    sessionKey,
+    deliveryContext: requestedDeliveryContext,
+    threadId: requestedThreadId,
+    note,
+    restartDelayMs,
+  } = parseRestartRequestParams(params);
 
   // Extract deliveryContext + threadId for routing after restart.
   // Uses generic :thread: parsing plus plugin-owned session grammars.
-  const { deliveryContext, threadId } = extractDeliveryInfo(sessionKey);
+  const { deliveryContext: sessionDeliveryContext, threadId: sessionThreadId } =
+    extractDeliveryInfo(sessionKey);
 
   return {
     sessionKey,
     note,
     restartDelayMs,
-    deliveryContext,
-    threadId,
+    deliveryContext: requestedDeliveryContext ?? sessionDeliveryContext,
+    threadId: requestedThreadId ?? sessionThreadId,
   };
 }
 
@@ -421,7 +441,7 @@ export const configHandlers: GatewayRequestHandlers = {
     }
     respond(true, result, undefined);
   },
-  "config.set": async ({ params, respond }) => {
+  "config.set": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateConfigSetParams, "config.set", respond)) {
       return;
     }
@@ -446,6 +466,7 @@ export const configHandlers: GatewayRequestHandlers = {
       },
       undefined,
     );
+    queueSharedGatewayAuthGenerationRefresh(true, parsed.config, context);
   },
   "config.patch": async ({ params, respond, client, context }) => {
     if (!assertValidParams(params, validateConfigPatchParams, "config.patch", respond)) {
@@ -602,6 +623,7 @@ export const configHandlers: GatewayRequestHandlers = {
       },
       undefined,
     );
+    queueSharedGatewayAuthGenerationRefresh(true, validated.config, context);
     queueSharedGatewayAuthDisconnect(disconnectSharedAuthClients, context);
   },
   "config.apply": async ({ params, respond, client, context }) => {
@@ -674,6 +696,7 @@ export const configHandlers: GatewayRequestHandlers = {
       },
       undefined,
     );
+    queueSharedGatewayAuthGenerationRefresh(true, parsed.config, context);
     queueSharedGatewayAuthDisconnect(disconnectSharedAuthClients, context);
   },
   "config.openFile": async ({ params, respond, context }) => {

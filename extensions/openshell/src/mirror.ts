@@ -1,12 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 
 export const DEFAULT_OPEN_SHELL_MIRROR_EXCLUDE_DIRS = ["hooks", "git-hooks", ".git"] as const;
 const COPY_TREE_FS_CONCURRENCY = 16;
 
 function createExcludeMatcher(excludeDirs?: readonly string[]) {
-  const excluded = new Set((excludeDirs ?? []).map((d) => d.toLowerCase()));
-  return (name: string) => excluded.has(name.toLowerCase());
+  const excluded = new Set((excludeDirs ?? []).map((d) => normalizeLowercaseStringOrEmpty(d)));
+  return (name: string) => excluded.has(normalizeLowercaseStringOrEmpty(name));
 }
 
 function createConcurrencyLimiter(limit: number) {

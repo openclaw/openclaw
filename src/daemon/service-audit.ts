@@ -1,6 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { resolveLaunchAgentPlistPath } from "./launchd.js";
 import { isBunRuntime, isNodeRuntime } from "./runtime-binary.js";
 import {
@@ -252,7 +255,7 @@ function normalizePathEntry(entry: string, platform: NodeJS.Platform): string {
   const pathModule = getPathModule(platform);
   const normalized = pathModule.normalize(entry).replaceAll("\\", "/");
   if (platform === "win32") {
-    return normalized.toLowerCase();
+    return normalizeLowercaseStringOrEmpty(normalized);
   }
   return normalized;
 }

@@ -1,4 +1,4 @@
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/channel-plugin-common";
 
 export function registerMatrixCliMetadata(api: OpenClawPluginApi) {
   api.registerCli(

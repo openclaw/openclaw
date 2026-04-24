@@ -4,7 +4,7 @@ read_when:
   - You are debugging provider request rejections tied to transcript shape
   - You are changing transcript sanitization or tool-call repair logic
   - You are investigating tool-call id mismatches across providers
-title: "Transcript Hygiene"
+title: "Transcript hygiene"
 ---
 
 # Transcript Hygiene (Provider Fixups)
@@ -37,7 +37,7 @@ If you need transcript storage details, see:
 All transcript hygiene is centralized in the embedded runner:
 
 - Policy selection: `src/agents/transcript-policy.ts`
-- Sanitization/repair application: `sanitizeSessionHistory` in `src/agents/pi-embedded-runner/google.ts`
+- Sanitization/repair application: `sanitizeSessionHistory` in `src/agents/pi-embedded-runner/replay-history.ts`
 
 The policy uses `provider`, `modelApi`, and `modelId` to decide what to apply.
 
@@ -73,7 +73,7 @@ persisted tool calls (for example, after a rate limit failure).
 Implementation:
 
 - `sanitizeToolCallInputs` in `src/agents/session-transcript-repair.ts`
-- Applied in `sanitizeSessionHistory` in `src/agents/pi-embedded-runner/google.ts`
+- Applied in `sanitizeSessionHistory` in `src/agents/pi-embedded-runner/replay-history.ts`
 
 ---
 
@@ -149,3 +149,8 @@ Before the 2026.1.22 release, OpenClaw applied multiple layers of transcript hyg
 This complexity caused cross-provider regressions (notably `openai-responses`
 `call_id|fc_id` pairing). The 2026.1.22 cleanup removed the extension, centralized
 logic in the runner, and made OpenAI **no-touch** beyond image sanitization.
+
+## Related
+
+- [Session management](/concepts/session)
+- [Session pruning](/concepts/session-pruning)

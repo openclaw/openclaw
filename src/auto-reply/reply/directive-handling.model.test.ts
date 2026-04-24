@@ -11,6 +11,7 @@ vi.mock("../../agents/auth-profiles.js", () => ({
     version: 1,
     profiles: authProfilesStoreMock.profiles,
   }),
+  isProfileInCooldown: () => false,
   replaceRuntimeAuthProfileStoreSnapshots: (
     snapshots: Array<{
       store?: { profiles?: Record<string, { type: "api_key"; provider: string; key: string }> };
@@ -18,9 +19,42 @@ vi.mock("../../agents/auth-profiles.js", () => ({
   ) => {
     authProfilesStoreMock.profiles = snapshots[0]?.store?.profiles ?? {};
   },
+  resolveAuthProfileDisplayLabel: ({ profileId }: { profileId: string }) => profileId,
+  resolveAuthProfileOrder: () => [],
   resolveAuthStorePathForDisplay: () => "/tmp/auth-profiles.json",
 }));
 
+vi.mock("../../agents/auth-profiles/store.js", () => {
+  const store = () => ({
+    version: 1,
+    profiles: authProfilesStoreMock.profiles,
+  });
+  return {
+    clearRuntimeAuthProfileStoreSnapshots: () => {
+      authProfilesStoreMock.profiles = {};
+    },
+    ensureAuthProfileStore: store,
+    ensureAuthProfileStoreForLocalUpdate: store,
+    findPersistedAuthProfileCredential: ({ profileId }: { profileId: string }) =>
+      authProfilesStoreMock.profiles[profileId],
+    hasAnyAuthProfileStoreSource: () => Object.keys(authProfilesStoreMock.profiles).length > 0,
+    loadAuthProfileStore: store,
+    loadAuthProfileStoreForRuntime: store,
+    loadAuthProfileStoreForSecretsRuntime: store,
+    loadAuthProfileStoreWithoutExternalProfiles: store,
+    replaceRuntimeAuthProfileStoreSnapshots: (
+      snapshots: Array<{
+        store?: { profiles?: Record<string, { type: "api_key"; provider: string; key: string }> };
+      }>,
+    ) => {
+      authProfilesStoreMock.profiles = snapshots[0]?.store?.profiles ?? {};
+    },
+    saveAuthProfileStore: vi.fn(),
+    updateAuthProfileStoreWithLock: vi.fn(async ({ update }) => update(store())),
+  };
+});
+
+import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   replaceRuntimeAuthProfileStoreSnapshots,
@@ -28,12 +62,17 @@ import {
 import type { ModelAliasIndex } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { enqueueSystemEvent } from "../../infra/system-events.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import type { ProviderPlugin } from "../../plugins/types.js";
+import type { ElevatedLevel } from "../thinking.js";
 import { handleDirectiveOnly } from "./directive-handling.impl.js";
-import { parseInlineDirectives } from "./directive-handling.js";
 import {
   maybeHandleModelDirectiveInfo,
   resolveModelSelectionFromDirective,
 } from "./directive-handling.model.js";
+import { parseInlineDirectives } from "./directive-handling.parse.js";
 import { persistInlineDirectives } from "./directive-handling.persist.js";
 
 const liveModelSwitchMocks = vi.hoisted(() => ({
@@ -47,7 +86,15 @@ const queueMocks = vi.hoisted(() => ({
 vi.mock("../../agents/agent-scope.js", () => ({
   resolveAgentConfig: vi.fn(() => ({})),
   resolveAgentDir: vi.fn(() => "/tmp/agent"),
+  resolveAgentEffectiveModelPrimary: vi.fn(() => undefined),
   resolveSessionAgentId: vi.fn(() => "main"),
+}));
+
+vi.mock("../../agents/model-catalog.js", () => ({
+  loadModelCatalog: vi.fn(async () => [
+    { provider: "anthropic", id: "claude-opus-4-6", name: "Claude Opus" },
+    { provider: "localai", id: "ultra-chat", name: "Ultra Chat" },
+  ]),
 }));
 
 vi.mock("../../agents/sandbox.js", () => ({
@@ -96,7 +143,18 @@ function createSessionEntry(overrides?: Partial<SessionEntry>): SessionEntry {
   };
 }
 
+function setDirectiveTestProviders(providers: ProviderPlugin[]): void {
+  const registry = createEmptyPluginRegistry();
+  registry.providers = providers.map((provider) => ({
+    pluginId: "test",
+    provider,
+    source: "test",
+  }));
+  setActivePluginRegistry(registry);
+}
+
 beforeEach(() => {
+  setDirectiveTestProviders([]);
   clearRuntimeAuthProfileStoreSnapshots();
   replaceRuntimeAuthProfileStoreSnapshots([
     {
@@ -104,11 +162,15 @@ beforeEach(() => {
       store: { version: 1, profiles: {} },
     },
   ]);
+  vi.mocked(resolveAgentDir).mockReset().mockReturnValue(TEST_AGENT_DIR);
+  vi.mocked(resolveSessionAgentId).mockReset().mockReturnValue("main");
+  vi.mocked(enqueueSystemEvent).mockClear();
   liveModelSwitchMocks.requestLiveSessionModelSwitch.mockReset().mockReturnValue(false);
   queueMocks.refreshQueuedFollowupSession.mockReset();
 });
 
 afterEach(() => {
+  setDirectiveTestProviders([]);
   clearRuntimeAuthProfileStoreSnapshots();
 });
 
@@ -135,6 +197,21 @@ function createGptAliasIndex(): ModelAliasIndex {
   return {
     byAlias: new Map([["gpt", { alias: "gpt", ref: { provider: "openai", model: "gpt-4o" } }]]),
     byKey: new Map([["openai/gpt-4o", ["gpt"]]]),
+  };
+}
+
+function createOpusAliasIndex(): ModelAliasIndex {
+  return {
+    byAlias: new Map([
+      [
+        "opus",
+        {
+          alias: "Opus",
+          ref: { provider: "anthropic", model: "claude-opus-4-6" },
+        },
+      ],
+    ]),
+    byKey: new Map([["anthropic/claude-opus-4-6", ["Opus"]]]),
   };
 }
 
@@ -198,6 +275,39 @@ async function persistModelDirectiveForTest(params: {
   return { persisted, sessionEntry };
 }
 
+type PersistInlineDirectivesParams = Parameters<typeof persistInlineDirectives>[0];
+
+async function persistInternalOperatorWriteDirective(
+  command: string,
+  overrides: Partial<PersistInlineDirectivesParams> = {},
+) {
+  const sessionEntry = overrides.sessionEntry ?? createSessionEntry();
+  const sessionStore = overrides.sessionStore ?? { "agent:main:main": sessionEntry };
+  await persistInlineDirectives({
+    directives: parseInlineDirectives(command),
+    cfg: baseConfig(),
+    sessionEntry,
+    sessionStore,
+    sessionKey: "agent:main:main",
+    storePath: "/tmp/sessions.json",
+    elevatedEnabled: true,
+    elevatedAllowed: true,
+    defaultProvider: "anthropic",
+    defaultModel: "claude-opus-4-6",
+    aliasIndex: baseAliasIndex(),
+    allowedModelKeys: new Set(["anthropic/claude-opus-4-6", "openai/gpt-4o"]),
+    provider: "anthropic",
+    model: "claude-opus-4-6",
+    initialModelLabel: "anthropic/claude-opus-4-6",
+    formatModelSwitchEvent: (label) => `Switched to ${label}`,
+    agentCfg: undefined,
+    surface: "webchat",
+    gatewayClientScopes: ["operator.write"],
+    ...overrides,
+  });
+  return sessionEntry;
+}
+
 async function resolveModelInfoReply(
   overrides: Partial<Parameters<typeof maybeHandleModelDirectiveInfo>[0]> = {},
 ) {
@@ -242,6 +352,33 @@ describe("/model chat UX", () => {
       "Current: fireworks/accounts/fireworks/routers/kimi-k2p5-turbo (selected)",
     );
     expect(reply?.text).toContain("Active: deepinfra/moonshotai/Kimi-K2.5 (runtime)");
+  });
+
+  it("shows status for the allowed catalog without duplicate missing auth labels", async () => {
+    const reply = await resolveModelInfoReply({
+      directives: parseInlineDirectives("/model status"),
+      cfg: {
+        commands: { text: true },
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-opus-4-6": {},
+              "openai/gpt-4.1-mini": {},
+            },
+          },
+        },
+      } as OpenClawConfig,
+      allowedModelCatalog: [
+        { provider: "anthropic", id: "claude-opus-4-6", name: "Claude Opus 4.5" },
+        { provider: "openai", id: "gpt-4.1-mini", name: "GPT-4.1 mini" },
+      ],
+    });
+
+    expect(reply?.text).toContain("anthropic/claude-opus-4-6");
+    expect(reply?.text).toContain("openai/gpt-4.1-mini");
+    expect(reply?.text).not.toContain("claude-sonnet-4-1");
+    expect(reply?.text).toContain("auth:");
+    expect(reply?.text).not.toContain("missing (missing)");
   });
 
   it("auto-applies closest match for typos", () => {
@@ -441,6 +578,23 @@ describe("/model chat UX", () => {
     expect(sessionEntry.authProfileOverride).toBe(OPENAI_DATE_PROFILE_ID);
   });
 
+  it("resolves agentDir from the target session agent before wrapper agentDir", async () => {
+    vi.mocked(resolveSessionAgentId).mockReturnValue("target");
+    vi.mocked(resolveAgentDir).mockReturnValue("/tmp/target-agent");
+
+    await persistModelDirectiveForTest({
+      command: "/model openai/gpt-4o hello",
+      allowedModelKeys: ["openai/gpt-4o"],
+      sessionEntry: createSessionEntry(),
+    });
+
+    expect(resolveSessionAgentId).toHaveBeenCalledWith({
+      sessionKey: "agent:main:dm:1",
+      config: expect.any(Object),
+    });
+    expect(resolveAgentDir).toHaveBeenCalledWith(expect.any(Object), "target");
+  });
+
   it("persists explicit auth profiles after @YYYYMMDD version suffixes in mixed-content messages", async () => {
     const { sessionEntry } = await persistModelDirectiveForTest({
       command: `/model custom/vertex-ai_claude-haiku-4-5@${OPENAI_DATE_PROFILE_ID}@work hello`,
@@ -541,6 +695,23 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     expect(sessionEntry.liveModelSwitchPending).toBe(true);
   });
 
+  it("remaps unsupported stored thinking levels when persisting a model switch", async () => {
+    const sessionEntry = createSessionEntry({ thinkingLevel: "adaptive" });
+    const { persisted } = await persistModelDirectiveForTest({
+      command: "/model openai/gpt-4o",
+      allowedModelKeys: ["anthropic/claude-opus-4-6", "openai/gpt-4o"],
+      sessionEntry,
+    });
+
+    expect(sessionEntry.thinkingLevel).toBe("medium");
+    expect(persisted.thinkingRemap).toEqual({
+      from: "adaptive",
+      to: "medium",
+      provider: "openai",
+      model: "gpt-4o",
+    });
+  });
+
   it("does not request a live restart when /model mutates an active session", async () => {
     const directives = parseInlineDirectives("/model openai/gpt-4o");
     const sessionEntry = createSessionEntry();
@@ -575,6 +746,55 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     });
   });
 
+  it("persists auth profile overrides for alias model directives", async () => {
+    setAuthProfiles({
+      "anthropic:work": {
+        type: "api_key",
+        provider: "anthropic",
+        key: "sk-test",
+      },
+    });
+    const sessionEntry = createSessionEntry();
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const result = await handleDirectiveOnly(
+      createHandleParams({
+        directives: parseInlineDirectives("/model Opus@anthropic:work"),
+        aliasIndex: createOpusAliasIndex(),
+        defaultProvider: "openai",
+        defaultModel: "gpt-4o",
+        provider: "openai",
+        model: "gpt-4o",
+        initialModelLabel: "openai/gpt-4o",
+        sessionEntry,
+        sessionStore,
+        formatModelSwitchEvent: (label, alias) =>
+          alias ? `Model switched to ${alias} (${label}).` : `Model switched to ${label}.`,
+      }),
+    );
+
+    expect(result?.text).toContain("Model set to Opus (anthropic/claude-opus-4-6).");
+    expect(result?.text).toContain("Auth profile set to anthropic:work.");
+    expect(sessionEntry.providerOverride).toBe("anthropic");
+    expect(sessionEntry.modelOverride).toBe("claude-opus-4-6");
+    expect(sessionEntry.authProfileOverride).toBe("anthropic:work");
+    expect(sessionEntry.authProfileOverrideSource).toBe("user");
+    expect(queueMocks.refreshQueuedFollowupSession).toHaveBeenCalledWith({
+      key: sessionKey,
+      nextProvider: "anthropic",
+      nextModel: "claude-opus-4-6",
+      nextAuthProfileId: "anthropic:work",
+      nextAuthProfileIdSource: "user",
+    });
+    expect(enqueueSystemEvent).toHaveBeenCalledWith(
+      "Model switched to Opus (anthropic/claude-opus-4-6).",
+      {
+        sessionKey,
+        contextKey: "model:anthropic/claude-opus-4-6",
+      },
+    );
+  });
+
   it("shows no model message when no /model directive", async () => {
     const directives = parseInlineDirectives("hello world");
     const sessionEntry = createSessionEntry();
@@ -587,6 +807,14 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
 
     expect(result?.text ?? "").not.toContain("Model set to");
     expect(result?.text ?? "").not.toContain("failed");
+  });
+
+  it("strips inline elevated directives while keeping user text", () => {
+    const directives = parseInlineDirectives("hello there /elevated off");
+
+    expect(directives.hasElevatedDirective).toBe(true);
+    expect(directives.elevatedLevel).toBe("off");
+    expect(directives.cleaned).toBe("hello there");
   });
 
   it("persists thinkingLevel=off (does not clear)", async () => {
@@ -604,6 +832,174 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     expect(result?.text ?? "").not.toContain("failed");
     expect(sessionEntry.thinkingLevel).toBe("off");
     expect(sessionStore["agent:main:dm:1"]?.thinkingLevel).toBe("off");
+  });
+
+  it("reports current thinking status", async () => {
+    setDirectiveTestProviders([
+      {
+        id: "anthropic",
+        label: "Anthropic",
+        auth: [],
+        resolveThinkingProfile: () => ({
+          levels: [
+            { id: "off" },
+            { id: "minimal" },
+            { id: "low" },
+            { id: "medium" },
+            { id: "adaptive" },
+            { id: "high" },
+          ],
+        }),
+      },
+    ]);
+
+    const result = await handleDirectiveOnly(
+      createHandleParams({
+        directives: parseInlineDirectives("/think"),
+        currentThinkLevel: "low",
+      }),
+    );
+
+    expect(result?.text).toContain("Current thinking level: low");
+    expect(result?.text).toContain("Options: off, minimal, low, medium, adaptive, high.");
+  });
+
+  it("persists verbose on and off directives", async () => {
+    const sessionEntry = createSessionEntry();
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const enabled = await handleDirectiveOnly(
+      createHandleParams({
+        directives: parseInlineDirectives("/verbose on"),
+        sessionEntry,
+        sessionStore,
+      }),
+    );
+    expect(enabled?.text).toMatch(/^⚙️ Verbose logging enabled\./);
+    expect(sessionEntry.verboseLevel).toBe("on");
+
+    const disabled = await handleDirectiveOnly(
+      createHandleParams({
+        directives: parseInlineDirectives("/verbose off"),
+        sessionEntry,
+        sessionStore,
+      }),
+    );
+    expect(disabled?.text).toMatch(/Verbose logging disabled\./);
+    expect(sessionEntry.verboseLevel).toBe("off");
+  });
+
+  it("persists and reports fast-mode directives", async () => {
+    const sessionEntry = createSessionEntry();
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const onReply = await handleDirectiveOnly(
+      createHandleParams({
+        directives: parseInlineDirectives("/fast on"),
+        sessionEntry,
+        sessionStore,
+      }),
+    );
+    expect(onReply?.text).toContain("Fast mode enabled");
+    expect(sessionEntry.fastMode).toBe(true);
+
+    const statusReply = await handleDirectiveOnly(
+      createHandleParams({
+        directives: parseInlineDirectives("/fast"),
+        sessionEntry,
+        sessionStore,
+        currentFastMode: sessionEntry.fastMode,
+      }),
+    );
+    expect(statusReply?.text).toContain("Current fast mode: on");
+
+    const offReply = await handleDirectiveOnly(
+      createHandleParams({
+        directives: parseInlineDirectives("/fast off"),
+        sessionEntry,
+        sessionStore,
+        currentFastMode: sessionEntry.fastMode,
+      }),
+    );
+    expect(offReply?.text).toContain("Fast mode disabled");
+    expect(sessionEntry.fastMode).toBe(false);
+  });
+
+  it("persists and reports elevated-mode directives when allowed", async () => {
+    const sessionEntry = createSessionEntry();
+    const sessionStore = { [sessionKey]: sessionEntry };
+    const base = {
+      elevatedAllowed: true,
+      elevatedEnabled: true,
+      sessionEntry,
+      sessionStore,
+    } satisfies Partial<HandleParams>;
+
+    const onReply = await handleDirectiveOnly(
+      createHandleParams({
+        ...base,
+        directives: parseInlineDirectives("/elevated on"),
+      }),
+    );
+    expect(onReply?.text).toContain("Elevated mode set to ask");
+    expect(sessionEntry.elevatedLevel).toBe("on");
+
+    const statusReply = await handleDirectiveOnly(
+      createHandleParams({
+        ...base,
+        directives: parseInlineDirectives("/elevated"),
+        currentElevatedLevel: sessionEntry.elevatedLevel as ElevatedLevel | undefined,
+      }),
+    );
+    expect(statusReply?.text).toContain("Current elevated level: on");
+
+    const offReply = await handleDirectiveOnly(
+      createHandleParams({
+        ...base,
+        directives: parseInlineDirectives("/elevated off"),
+        currentElevatedLevel: sessionEntry.elevatedLevel as ElevatedLevel | undefined,
+      }),
+    );
+    expect(offReply?.text).toContain("Elevated mode disabled");
+    expect(sessionEntry.elevatedLevel).toBe("off");
+  });
+
+  it("queues system events for elevated and reasoning mode directives", async () => {
+    const sessionEntry = createSessionEntry();
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    await handleDirectiveOnly(
+      createHandleParams({
+        directives: parseInlineDirectives("/elevated on"),
+        elevatedAllowed: true,
+        elevatedEnabled: true,
+        sessionEntry,
+        sessionStore,
+      }),
+    );
+
+    expect(enqueueSystemEvent).toHaveBeenCalledWith(
+      "Elevated ASK - exec runs on host; approvals may still apply.",
+      {
+        sessionKey,
+        contextKey: "mode:elevated",
+      },
+    );
+
+    vi.mocked(enqueueSystemEvent).mockClear();
+
+    await handleDirectiveOnly(
+      createHandleParams({
+        directives: parseInlineDirectives("/reasoning stream"),
+        sessionEntry,
+        sessionStore,
+      }),
+    );
+
+    expect(enqueueSystemEvent).toHaveBeenCalledWith("Reasoning STREAM - emit live <think>.", {
+      sessionKey,
+      contextKey: "mode:reasoning",
+    });
   });
 
   it("blocks internal operator.write exec persistence in directive-only handling", async () => {
@@ -692,37 +1088,9 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
 
 describe("persistInlineDirectives internal exec scope gate", () => {
   it("skips exec persistence for internal operator.write callers", async () => {
-    const allowedModelKeys = new Set(["anthropic/claude-opus-4-6", "openai/gpt-4o"]);
-    const directives = parseInlineDirectives(
+    const sessionEntry = await persistInternalOperatorWriteDirective(
       "/exec host=node security=allowlist ask=always node=worker-1",
     );
-    const sessionEntry = {
-      sessionId: "s1",
-      updatedAt: Date.now(),
-    } as SessionEntry;
-    const sessionStore = { "agent:main:main": sessionEntry };
-
-    await persistInlineDirectives({
-      directives,
-      cfg: baseConfig(),
-      sessionEntry,
-      sessionStore,
-      sessionKey: "agent:main:main",
-      storePath: "/tmp/sessions.json",
-      elevatedEnabled: true,
-      elevatedAllowed: true,
-      defaultProvider: "anthropic",
-      defaultModel: "claude-opus-4-6",
-      aliasIndex: baseAliasIndex(),
-      allowedModelKeys,
-      provider: "anthropic",
-      model: "claude-opus-4-6",
-      initialModelLabel: "anthropic/claude-opus-4-6",
-      formatModelSwitchEvent: (label) => `Switched to ${label}`,
-      agentCfg: undefined,
-      surface: "webchat",
-      gatewayClientScopes: ["operator.write"],
-    });
 
     expect(sessionEntry.execHost).toBeUndefined();
     expect(sessionEntry.execSecurity).toBeUndefined();
@@ -731,69 +1099,15 @@ describe("persistInlineDirectives internal exec scope gate", () => {
   });
 
   it("skips verbose persistence for internal operator.write callers", async () => {
-    const allowedModelKeys = new Set(["anthropic/claude-opus-4-6", "openai/gpt-4o"]);
-    const directives = parseInlineDirectives("/verbose full");
-    const sessionEntry = {
-      sessionId: "s1",
-      updatedAt: Date.now(),
-    } as SessionEntry;
-    const sessionStore = { "agent:main:main": sessionEntry };
-
-    await persistInlineDirectives({
-      directives,
-      cfg: baseConfig(),
-      sessionEntry,
-      sessionStore,
-      sessionKey: "agent:main:main",
-      storePath: "/tmp/sessions.json",
-      elevatedEnabled: true,
-      elevatedAllowed: true,
-      defaultProvider: "anthropic",
-      defaultModel: "claude-opus-4-6",
-      aliasIndex: baseAliasIndex(),
-      allowedModelKeys,
-      provider: "anthropic",
-      model: "claude-opus-4-6",
-      initialModelLabel: "anthropic/claude-opus-4-6",
-      formatModelSwitchEvent: (label) => `Switched to ${label}`,
-      agentCfg: undefined,
-      surface: "webchat",
-      gatewayClientScopes: ["operator.write"],
-    });
+    const sessionEntry = await persistInternalOperatorWriteDirective("/verbose full");
 
     expect(sessionEntry.verboseLevel).toBeUndefined();
   });
 
   it("treats internal provider context as authoritative over external surface metadata", async () => {
-    const allowedModelKeys = new Set(["anthropic/claude-opus-4-6", "openai/gpt-4o"]);
-    const directives = parseInlineDirectives("/verbose full");
-    const sessionEntry = {
-      sessionId: "s1",
-      updatedAt: Date.now(),
-    } as SessionEntry;
-    const sessionStore = { "agent:main:main": sessionEntry };
-
-    await persistInlineDirectives({
-      directives,
-      cfg: baseConfig(),
-      sessionEntry,
-      sessionStore,
-      sessionKey: "agent:main:main",
-      storePath: "/tmp/sessions.json",
-      elevatedEnabled: true,
-      elevatedAllowed: true,
-      defaultProvider: "anthropic",
-      defaultModel: "claude-opus-4-6",
-      aliasIndex: baseAliasIndex(),
-      allowedModelKeys,
-      provider: "anthropic",
-      model: "claude-opus-4-6",
-      initialModelLabel: "anthropic/claude-opus-4-6",
-      formatModelSwitchEvent: (label) => `Switched to ${label}`,
-      agentCfg: undefined,
+    const sessionEntry = await persistInternalOperatorWriteDirective("/verbose full", {
       messageProvider: "webchat",
-      surface: "telegram",
-      gatewayClientScopes: ["operator.write"],
+      surface: "forum",
     });
 
     expect(sessionEntry.verboseLevel).toBeUndefined();

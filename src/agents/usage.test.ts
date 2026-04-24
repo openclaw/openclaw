@@ -4,6 +4,7 @@ import {
   hasNonzeroUsage,
   derivePromptTokens,
   deriveSessionTotalTokens,
+  toOpenAiChatCompletionsUsage,
 } from "./usage.js";
 
 describe("normalizeUsage", () => {
@@ -143,6 +144,90 @@ describe("normalizeUsage", () => {
   it("handles undefined input", () => {
     const usage = normalizeUsage(undefined);
     expect(usage).toBeUndefined();
+  });
+});
+
+describe("toOpenAiChatCompletionsUsage", () => {
+  it("uses max(component sum, aggregate total) when breakdown is partial", () => {
+    const usage = normalizeUsage({ output_tokens: 20, total_tokens: 100 });
+    expect(toOpenAiChatCompletionsUsage(usage)).toEqual({
+      prompt_tokens: 0,
+      completion_tokens: 20,
+      total_tokens: 100,
+    });
+  });
+
+  it("uses component sum when it exceeds aggregate total", () => {
+    expect(
+      toOpenAiChatCompletionsUsage({
+        input: 30,
+        output: 40,
+        total: 50,
+      }),
+    ).toEqual({
+      prompt_tokens: 30,
+      completion_tokens: 40,
+      total_tokens: 70,
+    });
+  });
+
+  it("uses aggregate total when only total is present", () => {
+    const usage = normalizeUsage({ total_tokens: 42 });
+    expect(toOpenAiChatCompletionsUsage(usage)).toEqual({
+      prompt_tokens: 0,
+      completion_tokens: 0,
+      total_tokens: 42,
+    });
+  });
+
+  it("returns zeros for undefined usage", () => {
+    expect(toOpenAiChatCompletionsUsage(undefined)).toEqual({
+      prompt_tokens: 0,
+      completion_tokens: 0,
+      total_tokens: 0,
+    });
+  });
+
+  it("raises total_tokens with aggregate when cache write is excluded from prompt sum", () => {
+    expect(
+      toOpenAiChatCompletionsUsage({
+        input: 10,
+        output: 5,
+        cacheWrite: 100,
+        total: 200,
+      }),
+    ).toEqual({
+      prompt_tokens: 10,
+      completion_tokens: 5,
+      total_tokens: 200,
+    });
+  });
+
+  it("clamps negative completion before deriving total_tokens", () => {
+    expect(
+      toOpenAiChatCompletionsUsage({
+        input: 3,
+        output: -5,
+      }),
+    ).toEqual({
+      prompt_tokens: 3,
+      completion_tokens: 0,
+      total_tokens: 3,
+    });
+  });
+
+  it("preserves aggregate total when components are partially negative", () => {
+    expect(
+      toOpenAiChatCompletionsUsage({
+        input: 3,
+        output: -5,
+        total: 7,
+      }),
+    ).toEqual({
+      prompt_tokens: 3,
+      completion_tokens: 0,
+      total_tokens: 7,
+    });
   });
 });
 

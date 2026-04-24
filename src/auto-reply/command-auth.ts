@@ -1,10 +1,15 @@
-import { getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.js";
-import type { ChannelId, ChannelPlugin } from "../channels/plugins/types.js";
+import {
+  getLoadedChannelPluginById,
+  listLoadedChannelPlugins,
+} from "../channels/plugins/registry-loaded.js";
+import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import type { ChannelId } from "../channels/plugins/types.public.js";
 import { normalizeAnyChannelId } from "../channels/registry.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
+  normalizeOptionalString,
 } from "../shared/string-coerce.js";
 import { normalizeStringEntries } from "../shared/string-normalization.js";
 import {
@@ -104,10 +109,10 @@ function resolveProviderFromContext(
 
 function probeInferredProviders(ctx: MsgContext, cfg: OpenClawConfig): InferredProviderProbe {
   let droppedResolutionError = false;
-  const candidates = listChannelPlugins()
+  const candidates = listLoadedChannelPlugins()
     .map((plugin) => {
       const resolvedAllowFrom = buildProviderAllowFromResolution({
-        plugin,
+        plugin: plugin as ChannelPlugin,
         cfg,
         accountId: ctx.AccountId,
       });
@@ -256,7 +261,7 @@ function buildProviderAllowFromResolution(params: {
 
 function describeAllowFromResolutionError(err: unknown): string {
   if (err instanceof Error) {
-    const name = err.name.trim();
+    const name = normalizeOptionalString(err.name) ?? "";
     return name || "Error";
   }
   return "unknown_error";
@@ -275,7 +280,7 @@ function resolveOwnerAllowFromList(params: {
   }
   const filtered: string[] = [];
   for (const entry of raw) {
-    const trimmed = String(entry ?? "").trim();
+    const trimmed = normalizeOptionalString(String(entry ?? "")) ?? "";
     if (!trimmed) {
       continue;
     }
@@ -453,9 +458,6 @@ function isConversationLikeIdentity(value: string): boolean {
   if (!normalized) {
     return false;
   }
-  if (normalized.includes("@g.us")) {
-    return true;
-  }
   if (normalized.startsWith("chat_id:")) {
     return true;
   }
@@ -466,7 +468,7 @@ function shouldUseFromAsSenderFallback(params: {
   from?: string | null;
   chatType?: string | null;
 }): boolean {
-  const from = (params.from ?? "").trim();
+  const from = normalizeOptionalString(params.from) ?? "";
   if (!from) {
     return false;
   }
@@ -490,7 +492,7 @@ function resolveSenderCandidates(params: {
   const { plugin, cfg, accountId } = params;
   const candidates: string[] = [];
   const pushCandidate = (value?: string | null) => {
-    const trimmed = (value ?? "").trim();
+    const trimmed = normalizeOptionalString(value) ?? "";
     if (!trimmed) {
       return;
     }
@@ -527,7 +529,7 @@ function resolveFallbackAllowFrom(params: {
   providerId?: ChannelId;
   accountId?: string | null;
 }): Array<string | number> {
-  const providerId = params.providerId?.trim();
+  const providerId = normalizeOptionalString(params.providerId);
   if (!providerId) {
     return [];
   }
@@ -628,9 +630,11 @@ export function resolveCommandAuthorization(params: {
     ctx,
     cfg,
   );
-  const plugin = providerId ? getChannelPlugin(providerId) : undefined;
-  const from = (ctx.From ?? "").trim();
-  const to = (ctx.To ?? "").trim();
+  const plugin = providerId
+    ? ((getLoadedChannelPluginById(providerId) as ChannelPlugin | undefined) ?? undefined)
+    : undefined;
+  const from = normalizeOptionalString(ctx.From) ?? "";
+  const to = normalizeOptionalString(ctx.To) ?? "";
   const commandsAllowFromConfigured = Boolean(
     cfg.commands?.allowFrom && typeof cfg.commands.allowFrom === "object",
   );
@@ -699,9 +703,7 @@ export function resolveCommandAuthorization(params: {
       ? true
       : ownerAllowlistConfigured
         ? senderIsOwner
-        : ownerState.allowAll ||
-          ownerState.ownerCandidatesForCommands.length === 0 ||
-          Boolean(matchedCommandOwner);
+        : senderIsOwnerByScope || Boolean(matchedCommandOwner);
   const isAuthorizedSender = resolveCommandSenderAuthorization({
     commandAuthorized,
     isOwnerForCommands,

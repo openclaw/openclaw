@@ -16,15 +16,18 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/setup-runtime";
 import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/text-runtime";
 import { inspectSlackAccount } from "./account-inspect.js";
 import { resolveSlackAccount } from "./accounts.js";
 import {
   buildSlackSetupLines,
-  SLACK_CHANNEL as channel,
   isSlackSetupAccountConfigured,
+  SLACK_CHANNEL as channel,
   setSlackChannelAllowlist,
-} from "./shared.js";
+} from "./setup-shared.js";
 
 function enableSlackAccount(cfg: OpenClawConfig, accountId: string): OpenClawConfig {
   return patchChannelConfigForAccount({
@@ -39,7 +42,7 @@ function hasSlackInteractiveRepliesConfig(cfg: OpenClawConfig, accountId: string
   const capabilities = resolveSlackAccount({ cfg, accountId }).config.capabilities;
   if (Array.isArray(capabilities)) {
     return capabilities.some(
-      (entry) => String(entry).trim().toLowerCase() === "interactivereplies",
+      (entry) => normalizeLowercaseStringOrEmpty(entry) === "interactivereplies",
     );
   }
   if (!capabilities || typeof capabilities !== "object") {
@@ -57,7 +60,9 @@ function setSlackInteractiveReplies(
   const nextCapabilities = Array.isArray(capabilities)
     ? interactiveReplies
       ? [...new Set([...capabilities, "interactiveReplies"])]
-      : capabilities.filter((entry) => String(entry).trim().toLowerCase() !== "interactivereplies")
+      : capabilities.filter(
+          (entry) => normalizeLowercaseStringOrEmpty(entry) !== "interactivereplies",
+        )
     : {
         ...((capabilities && typeof capabilities === "object" ? capabilities : {}) as Record<
           string,
@@ -252,7 +257,7 @@ export function createSlackSetupWizardBase(handlers: {
     }),
     finalize: async ({ cfg, accountId, options, prompter }) => {
       if (hasSlackInteractiveRepliesConfig(cfg, accountId)) {
-        return;
+        return undefined;
       }
       if (options?.quickstartDefaults) {
         return {

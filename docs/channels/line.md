@@ -7,8 +7,6 @@ read_when:
 title: LINE
 ---
 
-# LINE
-
 LINE connects to OpenClaw via the LINE Messaging API. The plugin runs as a webhook
 receiver on the gateway and uses your channel access token + channel secret for
 authentication.
@@ -204,6 +202,8 @@ The LINE plugin supports sending images, videos, and audio files through the age
 - **Images**: sent as LINE image messages with automatic preview generation.
 - **Videos**: sent with explicit preview and content-type handling.
 - **Audio**: sent as LINE audio messages.
+
+Outbound media URLs must be public HTTPS URLs. OpenClaw validates the target hostname before handing the URL to LINE and rejects loopback, link-local, and private-network targets.
 
 Generic media sends fall back to the existing image-only route when a LINE-specific path is not available.
 

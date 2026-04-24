@@ -98,7 +98,7 @@ export const FIELD_HELP: Record<string, string> = {
   "gateway.channelHealthCheckMinutes":
     "Interval in minutes for automatic channel health probing and status updates. Use lower intervals for faster detection, or higher intervals to reduce periodic probe noise.",
   "gateway.channelStaleEventThresholdMinutes":
-    "How many minutes a connected channel can go without receiving any event before the health monitor treats it as a stale socket and triggers a restart. Default: 30.",
+    "How many minutes a connected channel can go without provider-proven transport activity before the health monitor treats it as a stale socket and triggers a restart. Default: 30.",
   "gateway.channelMaxRestartsPerHour":
     "Maximum number of health-monitor-initiated channel restarts allowed within a rolling one-hour window. Once hit, further restarts are skipped until the window expires. Default: 10.",
   "gateway.tailscale":
@@ -196,8 +196,32 @@ export const FIELD_HELP: Record<string, string> = {
     "Shared default settings inherited by agents unless overridden per entry in agents.list. Use defaults to enforce consistent baseline behavior and reduce duplicated per-agent configuration.",
   "agents.defaults.skills":
     "Optional default skill allowlist inherited by agents that omit agents.list[].skills. Omit for unrestricted skills, set [] to give inheriting agents no skills, and remember explicit agents.list[].skills replaces this default instead of merging with it.",
+  "agents.defaults.contextLimits":
+    "Focused per-agent-context budget defaults for selected high-volume excerpts and injected prompt blocks. Use this to tune bounded read/injection sizes without reopening any unbounded call paths.",
+  "agents.defaults.contextLimits.memoryGetMaxChars":
+    "Default max characters returned by memory_get before truncation metadata and continuation notice are added. Increase to approximate older larger excerpts, but keep it bounded.",
+  "agents.defaults.contextLimits.memoryGetDefaultLines":
+    "Default memory_get line window used when requests omit lines. This controls how many source lines are selected before the max-char cap is applied.",
+  "agents.defaults.contextLimits.toolResultMaxChars":
+    "Default max characters kept for a single live tool result before truncation. This affects both persisted live tool-result writes and overflow-recovery truncation heuristics.",
+  "agents.defaults.contextLimits.postCompactionMaxChars":
+    "Default max characters retained from AGENTS.md during post-compaction context refresh injection. Lower this to make compaction recovery cheaper, or raise it for agents that depend on longer startup guidance.",
   "agents.list":
     "Explicit list of configured agents with IDs and optional overrides for model, tools, identity, and workspace. Keep IDs stable over time so bindings, approvals, and session routing remain deterministic.",
+  "agents.list[].skillsLimits":
+    "Optional per-agent overrides for skills subsystem budgets. Use this when an agent needs a different skills prompt budget without introducing a second generic context-limits path.",
+  "agents.list[].skillsLimits.maxSkillsPromptChars":
+    "Per-agent override for the skills prompt character budget. This extends the existing skills.limits.maxSkillsPromptChars path instead of routing the same budget through contextLimits.",
+  "agents.list[].contextLimits":
+    "Optional per-agent overrides for the focused context budget knobs. Omitted fields inherit agents.defaults.contextLimits.",
+  "agents.list[].contextLimits.memoryGetMaxChars":
+    "Per-agent override for the default memory_get max character budget.",
+  "agents.list[].contextLimits.memoryGetDefaultLines":
+    "Per-agent override for the default memory_get line window when lines is omitted.",
+  "agents.list[].contextLimits.toolResultMaxChars":
+    "Per-agent override for the live tool-result max character budget.",
+  "agents.list[].contextLimits.postCompactionMaxChars":
+    "Per-agent override for the post-compaction AGENTS.md excerpt budget.",
   "agents.list[].thinkingDefault":
     "Optional per-agent default thinking level. Overrides agents.defaults.thinkingDefault for this agent when no per-message or session override is set.",
   "agents.list[].reasoningDefault":
@@ -224,6 +248,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Suppress tool error warning payloads during heartbeat runs.",
   "agents.list[].heartbeat.suppressToolErrorWarnings":
     "Suppress tool error warning payloads during heartbeat runs.",
+  "agents.defaults.heartbeat.timeoutSeconds":
+    "Maximum time in seconds allowed for a heartbeat agent turn before it is aborted. Leave unset to use agents.defaults.timeoutSeconds.",
+  "agents.list[].heartbeat.timeoutSeconds":
+    "Per-agent maximum time in seconds allowed for a heartbeat agent turn before it is aborted. Leave unset to inherit the merged heartbeat/default agent timeout.",
   browser:
     "Browser runtime controls for local or remote CDP attachment, profile routing, and screenshot/snapshot behavior. Keep defaults unless your automation workflow requires custom browser transport settings.",
   "browser.enabled":
@@ -251,9 +279,9 @@ export const FIELD_HELP: Record<string, string> = {
   "browser.profiles.*.cdpUrl":
     "Per-profile CDP websocket URL used for explicit remote browser routing by profile name. Use this when profile connections terminate on remote hosts or tunnels.",
   "browser.profiles.*.userDataDir":
-    "Per-profile Chromium user data directory for existing-session attachment through Chrome DevTools MCP. Use this for host-local Brave, Edge, Chromium, or non-default Chrome profiles when the built-in auto-connect path would pick the wrong browser data directory.",
+    "Per-profile Chromium user data directory for existing-session attachment through Chrome DevTools MCP. Use this for Brave, Edge, Chromium, or non-default Chrome profiles when the built-in auto-connect path would pick the wrong browser data directory on the selected host or browser node.",
   "browser.profiles.*.driver":
-    'Per-profile browser driver mode. Use "openclaw" (or legacy "clawd") for CDP-based profiles, or use "existing-session" for host-local Chrome DevTools MCP attachment.',
+    'Per-profile browser driver mode. Use "openclaw" (or legacy "clawd") for CDP-based profiles, or use "existing-session" for Chrome DevTools MCP attachment on the selected host or browser node.',
   "browser.profiles.*.attachOnly":
     "Per-profile attach-only override that skips local browser launch and only attaches to an existing CDP endpoint. Useful when one profile is externally managed but others are locally launched.",
   "browser.profiles.*.color":
@@ -267,7 +295,7 @@ export const FIELD_HELP: Record<string, string> = {
   "browser.ssrfPolicy":
     "Server-side request forgery guardrail settings for browser/network fetch paths that could reach internal hosts. Keep restrictive defaults in production and open only explicitly approved targets.",
   "browser.ssrfPolicy.dangerouslyAllowPrivateNetwork":
-    "Allows access to private-network address ranges from browser tooling. Default is enabled for trusted-network operator setups; disable to enforce strict public-only resolution checks.",
+    "Allows access to private-network address ranges from browser tooling. Default is disabled when unset; enable only for explicitly trusted private-network destinations.",
   "browser.ssrfPolicy.allowedHostnames":
     "Explicit hostname allowlist exceptions for SSRF policy checks on browser/network requests. Keep this list minimal and review entries regularly to avoid stale broad access.",
   "browser.ssrfPolicy.hostnameAllowlist":
@@ -315,7 +343,7 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.experimental":
     "Experimental built-in tool flags. Keep these off by default and enable only when you are intentionally testing a preview surface.",
   "tools.experimental.planTool":
-    "Enable the experimental structured `update_plan` tool for non-trivial multi-step work tracking across all providers. OpenAI and OpenAI Codex runs auto-enable it even when this flag is unset.",
+    "Enable the experimental structured `update_plan` tool for non-trivial multi-step work tracking. Leave this off unless you explicitly want the tool outside strict-agentic embedded Pi runs.",
   "tools.elevated":
     "Elevated tool access controls for privileged command surfaces that should only be reachable from trusted senders. Keep disabled unless operator workflows explicitly require elevated actions.",
   "tools.elevated.enabled":
@@ -376,6 +404,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional URL prefix where the Control UI is served (e.g. /openclaw).",
   "gateway.controlUi.root":
     "Optional filesystem root for Control UI assets (defaults to dist/control-ui).",
+  "gateway.controlUi.embedSandbox":
+    'Iframe sandbox policy for hosted Control UI embeds. "strict" disables scripts, "scripts" allows interactive embeds while keeping origin isolation (default), and "trusted" adds `allow-same-origin` for same-site documents that intentionally need stronger privileges.',
+  "gateway.controlUi.allowExternalEmbedUrls":
+    "DANGEROUS toggle that allows hosted embeds to load absolute external http(s) URLs. Keep this off unless your Control UI intentionally embeds trusted third-party pages; hosted /__openclaw__/canvas and /__openclaw__/a2ui documents do not need it.",
   "gateway.controlUi.allowedOrigins":
     'Allowed browser origins for Control UI/WebChat websocket connections (full origins only, e.g. https://control.example.com). Required for non-loopback Control UI deployments unless dangerous Host-header fallback is explicitly enabled. Setting ["*"] means allow any browser origin and should be avoided outside tightly controlled local testing.',
   "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback":
@@ -493,7 +525,7 @@ export const FIELD_HELP: Record<string, string> = {
   "diagnostics.flags":
     'Enable targeted diagnostics logs by flag (e.g. ["telegram.http"]). Supports wildcards like "telegram.*" or "*".',
   "diagnostics.enabled":
-    "Master toggle for diagnostics instrumentation output in logs and telemetry wiring paths. Keep enabled for normal observability, and disable only in tightly constrained environments.",
+    "Master toggle for diagnostics instrumentation output in logs and telemetry wiring paths. Defaults to enabled; set false only in tightly constrained environments.",
   "diagnostics.stuckSessionWarnMs":
     "Age threshold in milliseconds for emitting stuck-session warnings while a session remains in processing state. Increase for long multi-tool turns to reduce false positives; decrease for faster hang detection.",
   "diagnostics.otel.enabled":
@@ -535,6 +567,8 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.loopDetection.historySize": "Tool history window size for loop detection (default: 30).",
   "tools.loopDetection.warningThreshold":
     "Warning threshold for repetitive patterns when detector is enabled (default: 10).",
+  "tools.loopDetection.unknownToolThreshold":
+    "Block repeated calls to the same unavailable tool after this many misses (default: 10).",
   "tools.loopDetection.criticalThreshold":
     "Critical threshold for repetitive patterns when detector is enabled (default: 20).",
   "tools.loopDetection.globalCircuitBreakerThreshold":
@@ -720,6 +754,10 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.web.fetch.userAgent": "Override User-Agent header for web_fetch requests.",
   "tools.web.fetch.readability":
     "Use Readability to extract main content from HTML (fallbacks to basic HTML cleanup).",
+  "tools.web.fetch.ssrfPolicy":
+    "Scoped SSRF policy overrides for web_fetch. Keep this narrow and opt in only for known local-network proxy environments.",
+  "tools.web.fetch.ssrfPolicy.allowRfc2544BenchmarkRange":
+    "Allow RFC 2544 benchmark-range IPs (198.18.0.0/15) for fake-IP proxy compatibility such as Clash or Surge.",
   models:
     "Model catalog root for provider definitions, merge/replace behavior, and optional Bedrock discovery integration. Keep provider definitions explicit and validated before relying on production failover paths.",
   "models.mode":
@@ -741,7 +779,7 @@ export const FIELD_HELP: Record<string, string> = {
   "models.providers.*.authHeader":
     "When true, credentials are sent via the HTTP Authorization header even if alternate auth is possible. Use this only when your provider or proxy explicitly requires Authorization forwarding.",
   "models.providers.*.request":
-    "Optional request overrides for model-provider requests, including extra headers, auth overrides, proxy routing, and TLS client settings. Use these only when your upstream or enterprise network path requires transport customization.",
+    "Optional request overrides for model-provider requests, including extra headers, auth overrides, proxy routing, TLS client settings, and optional allowPrivateNetwork for trusted self-hosted endpoints. Use these only when your upstream or enterprise network path requires transport customization.",
   "models.providers.*.request.headers":
     "Extra headers merged into provider requests after default attribution and auth resolution.",
   "models.providers.*.request.auth":
@@ -790,6 +828,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional SNI/server-name override used when establishing upstream TLS.",
   "models.providers.*.request.tls.insecureSkipVerify":
     "Skips upstream TLS certificate verification. Use only for controlled development environments.",
+  "models.providers.*.request.allowPrivateNetwork":
+    "When true, allow HTTPS to the model base URL when DNS resolves to private, CGNAT, or similar ranges, via the provider HTTP fetch guard (fetchWithSsrFGuard). OpenAI Responses WebSocket reuses request for headers/TLS but does not use that fetch SSRF path. Use only for operator-controlled self-hosted OpenAI-compatible endpoints (LAN, overlay, split DNS). Default is false.",
   "models.providers.*.models":
     "Declared model list for a provider including identifiers, metadata, and optional compatibility/cost hints. Keep IDs exact to provider catalog values so selection and fallback resolve correctly.",
   auth: "Authentication profile root used for multi-profile provider credentials and cooldown-based failover ordering. Keep profiles minimal and explicit so automatic failover behavior stays auditable.",
@@ -829,13 +869,37 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.contextInjection":
     'Controls when workspace bootstrap files are injected into the system prompt: "always" (default) or "continuation-skip" for safe continuation turns after a completed assistant response.',
   "agents.defaults.bootstrapMaxChars":
-    "Max characters of each workspace bootstrap file injected into the system prompt before truncation (default: 20000).",
+    "Max characters of each workspace bootstrap file injected into the system prompt before truncation (default: 12000).",
   "agents.defaults.bootstrapTotalMaxChars":
-    "Max total characters across all injected workspace bootstrap files (default: 150000).",
+    "Max total characters across all injected workspace bootstrap files (default: 60000).",
+  "agents.defaults.experimental":
+    "Experimental agent-default flags. Keep these off unless you are intentionally testing a preview surface.",
+  "agents.defaults.experimental.localModelLean":
+    "Experimental local-model prompt trim. When enabled, OpenClaw drops heavyweight default tools like browser, cron, and message for weaker or smaller local-model backends.",
   "agents.defaults.bootstrapPromptTruncationWarning":
     'Inject agent-visible warning text when bootstrap files are truncated: "off", "once" (default), or "always".',
+  "agents.defaults.startupContext":
+    'Runtime-owned first-turn prelude for bare "/new" and "/reset". Use this to control whether recent daily memory files are preloaded into the first prompt instead of asking the model to decide what to read.',
+  "agents.defaults.startupContext.enabled":
+    "Enable the startup-context prelude for bare session resets (default: true). Disable this to fall back to prompt-only behavior with no runtime-loaded daily memory.",
+  "agents.defaults.startupContext.applyOn":
+    'Chooses which bare reset commands get startup context: include "new", "reset", or both (default: ["new","reset"]).',
+  "agents.defaults.startupContext.dailyMemoryDays":
+    "Number of dated memory files to load counting backward from today in the configured user timezone (default: 2 for today + yesterday).",
+  "agents.defaults.startupContext.maxFileBytes":
+    "Maximum bytes allowed per daily memory file when building startup context (default: 16384). Files over this boundary-safe read limit are skipped.",
+  "agents.defaults.startupContext.maxFileChars":
+    "Maximum characters retained from each loaded daily memory file in the startup prelude (default: 1200).",
+  "agents.defaults.startupContext.maxTotalChars":
+    "Maximum total characters retained across all loaded daily memory files in the startup prelude (default: 2800). Additional files are truncated from the prelude once this cap is reached.",
   "agents.defaults.repoRoot":
     "Optional repository root shown in the system prompt runtime line (overrides auto-detect).",
+  "agents.defaults.promptOverlays":
+    "Provider-independent prompt overlays applied by model family before provider-specific prompt hooks.",
+  "agents.defaults.promptOverlays.gpt5":
+    "Shared GPT-5-family prompt overlay applied to matching model ids across providers such as OpenAI, OpenRouter, OpenCode, Codex, and compatible gateways.",
+  "agents.defaults.promptOverlays.gpt5.personality":
+    'Friendly interaction-style layer for GPT-5-family models ("friendly" or "on" enables it; "off" disables only that layer). The tagged behavior contract remains enabled for matching GPT-5 models.',
   "agents.defaults.envelopeTimezone":
     'Timezone for message envelopes ("utc", "local", "user", or an IANA timezone string).',
   "agents.defaults.envelopeTimestamp":
@@ -871,7 +935,7 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.memorySearch.experimental.sessionMemory":
     "Indexes session transcripts into memory search so responses can reference prior chat turns. Keep this off unless transcript recall is needed, because indexing cost and storage usage both increase.",
   "agents.defaults.memorySearch.provider":
-    'Selects the embedding backend used to build/query memory vectors: "openai", "gemini", "voyage", "mistral", "bedrock", "ollama", or "local". Keep your most reliable provider here and configure fallback for resilience.',
+    'Selects the embedding backend used to build/query memory vectors: "openai", "gemini", "voyage", "mistral", "bedrock", "lmstudio", "ollama", or "local". Keep your most reliable provider here and configure fallback for resilience.',
   "agents.defaults.memorySearch.model":
     "Embedding model override used by the selected memory provider when a non-default model is required. Set this only when you need explicit recall quality/cost tuning beyond provider defaults.",
   "agents.defaults.memorySearch.outputDimensionality":
@@ -894,8 +958,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Sets the maximum wait time for a full embedding batch operation in minutes (default: 60). Increase for very large corpora or slower providers, and lower it to fail fast in automation-heavy flows.",
   "agents.defaults.memorySearch.local.modelPath":
     "Specifies the local embedding model source for local memory search, such as a GGUF file path or `hf:` URI. Use this only when provider is `local`, and verify model compatibility before large index rebuilds.",
+  "agents.defaults.memorySearch.local.contextSize":
+    'Context window size passed to node-llama-cpp when creating the embedding context (default: 4096). 4096 safely covers typical memory-search chunks (128\u2013512 tokens) while keeping non-weight VRAM bounded. Lower to 1024\u20132048 on resource-constrained hosts. Set to "auto" to let node-llama-cpp use the model\'s trained maximum \u2014 not recommended for large models (e.g. Qwen3-Embedding-8B trained on 40\u202f960 tokens can push VRAM from ~8.8\u202fGB to ~32\u202fGB).',
   "agents.defaults.memorySearch.fallback":
-    'Backup provider used when primary embeddings fail: "openai", "gemini", "voyage", "mistral", "ollama", "local", or "none". Set a real fallback for production reliability; use "none" only if you prefer explicit failures.',
+    'Backup provider used when primary embeddings fail: "openai", "gemini", "voyage", "mistral", "bedrock", "lmstudio", "ollama", "local", or "none". Set a real fallback for production reliability; use "none" only if you prefer explicit failures.',
   "agents.defaults.memorySearch.store.path":
     "Sets where the SQLite memory index is stored on disk for each agent. Keep the default `~/.openclaw/memory/{agentId}.sqlite` unless you need custom storage placement or backup policy alignment.",
   "agents.defaults.memorySearch.store.vector.enabled":
@@ -1082,6 +1148,18 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.model.primary": "Primary model (provider/model).",
   "agents.defaults.model.fallbacks":
     "Ordered fallback models (provider/model). Used when the primary model fails.",
+  "agents.defaults.embeddedHarness":
+    "Default embedded agent harness policy. Use runtime=auto for plugin harness selection, runtime=pi for built-in PI, or a registered harness id such as codex.",
+  "agents.defaults.embeddedHarness.runtime":
+    "Embedded harness runtime: auto, pi, or a registered plugin harness id such as codex.",
+  "agents.defaults.embeddedHarness.fallback":
+    "Embedded harness fallback when no plugin harness matches. Selected plugin harness failures surface directly. Set none to disable automatic PI fallback.",
+  "agents.list.*.embeddedHarness":
+    "Per-agent embedded harness policy override. Use fallback=none to make missing plugin harness selection fail instead of falling back to PI.",
+  "agents.list.*.embeddedHarness.runtime":
+    "Per-agent embedded harness runtime: auto, pi, or a registered plugin harness id such as codex.",
+  "agents.list.*.embeddedHarness.fallback":
+    "Per-agent embedded harness fallback. Set none to disable automatic PI fallback for this agent.",
   "agents.defaults.imageModel.primary":
     "Optional image model (provider/model) used when the primary model lacks image input.",
   "agents.defaults.imageModel.fallbacks": "Ordered fallback image models (provider/model).",
@@ -1113,6 +1191,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Compaction tuning for when context nears token limits, including history share, reserve headroom, and pre-compaction memory flush behavior. Use this when long-running sessions need stable continuity under tight context windows.",
   "agents.defaults.compaction.mode":
     'Compaction strategy mode: "default" uses baseline behavior, while "safeguard" applies stricter guardrails to preserve recent context. Keep "default" unless you observe aggressive history loss near limit boundaries.',
+  "agents.defaults.compaction.provider":
+    "Id of a registered compaction provider plugin used for summarization. When set and the provider is registered, its summarize() method is called instead of the built-in summarizeInStages pipeline. Falls back to built-in on provider failure. Leave unset to use the default built-in summarization.",
   "agents.defaults.compaction.reserveTokens":
     "Token headroom reserved for reply generation and tool output after compaction runs. Use higher reserves for verbose/tool-heavy sessions, and lower reserves when maximizing retained history matters more.",
   "agents.defaults.compaction.keepRecentTokens":
@@ -1144,7 +1224,7 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.compaction.truncateAfterCompaction":
     "When enabled, rewrites the session JSONL file after compaction to remove entries that were summarized. Prevents unbounded file growth in long-running sessions with many compaction cycles. Default: false.",
   "agents.defaults.compaction.notifyUser":
-    "When enabled, sends a brief compaction notice to the user (e.g. '🧹 Compacting context...') when compaction starts. Disabled by default to keep compaction silent and non-intrusive.",
+    "When enabled, sends brief compaction notices to the user when compaction starts and when it completes (for example, '🧹 Compacting context...' and '🧹 Compaction complete'). Disabled by default to keep compaction silent and non-intrusive.",
   "agents.defaults.compaction.memoryFlush":
     "Pre-compaction memory flush settings that run an agentic memory write before heavy compaction. Keep enabled for long sessions so salient context is persisted before aggressive trimming.",
   "agents.defaults.compaction.memoryFlush.enabled":
@@ -1161,6 +1241,12 @@ export const FIELD_HELP: Record<string, string> = {
     "Embedded Pi runner hardening controls for how workspace-local Pi settings are trusted and applied in OpenClaw sessions.",
   "agents.defaults.embeddedPi.projectSettingsPolicy":
     'How embedded Pi handles workspace-local `.pi/config/settings.json`: "sanitize" (default) strips shellPath/shellCommandPrefix, "ignore" disables project settings entirely, and "trusted" applies project settings as-is.',
+  "agents.defaults.embeddedPi.executionContract":
+    'Embedded Pi execution contract: "default" keeps the standard runner behavior, while "strict-agentic" keeps OpenAI/OpenAI Codex GPT-5-family runs acting until they hit a real blocker instead of stopping at plans or filler.',
+  "agents.list[].embeddedPi":
+    "Optional per-agent embedded Pi overrides. Use this to opt specific agents into stricter GPT-5 execution behavior without changing the global default.",
+  "agents.list[].embeddedPi.executionContract":
+    'Optional per-agent embedded Pi execution contract override. Set "strict-agentic" to keep that agent acting through plan-only turns on OpenAI/OpenAI Codex GPT-5-family runs, or "default" to inherit the standard runner behavior.',
   "agents.defaults.humanDelay.mode": 'Delay style for block replies ("off", "natural", "custom").',
   "agents.defaults.humanDelay.minMs": "Minimum delay in ms for custom humanDelay (default: 800).",
   "agents.defaults.humanDelay.maxMs": "Maximum delay in ms for custom humanDelay (default: 2500).",
@@ -1172,6 +1258,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Registers native skill commands so users can invoke skills directly from provider command menus where supported. Keep aligned with your skill policy so exposed commands match what operators expect.",
   "commands.text":
     "Enables text-command parsing in chat input in addition to native command surfaces where available. Keep this enabled for compatibility across channels that do not support native command registration.",
+  "commands.modelsWrite":
+    "Allow model-management write commands such as `/models add` to register provider/model entries directly into config and make them available without restarting the gateway (default: true).",
   "commands.bash":
     "Allow bash chat command (`!`; `/bash` alias) to run host shell commands (default: false; requires tools.elevated).",
   "commands.bashForegroundMs":

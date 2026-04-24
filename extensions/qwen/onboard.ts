@@ -22,7 +22,7 @@ export {
 const qwenPresetAppliers = createModelCatalogPresetAppliers<[string]>({
   primaryModelRef: QWEN_DEFAULT_MODEL_REF,
   resolveParams: (_cfg: OpenClawConfig, baseUrl: string) => {
-    const provider = buildQwenProvider();
+    const provider = buildQwenProvider({ baseUrl });
     return {
       providerId: "qwen",
       api: provider.api ?? "openai-completions",

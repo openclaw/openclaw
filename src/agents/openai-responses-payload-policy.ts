@@ -1,12 +1,15 @@
 import { readStringValue } from "../shared/string-coerce.js";
+import { supportsOpenAIReasoningEffort } from "./openai-reasoning-effort.js";
+import { isOpenAIResponsesApi } from "./provider-attribution.js";
 import { resolveProviderRequestPolicyConfig } from "./provider-request-config.js";
 
 type OpenAIResponsesPayloadModel = {
   api?: unknown;
   baseUrl?: unknown;
+  id?: unknown;
   provider?: unknown;
   contextWindow?: unknown;
-  compat?: { supportsStore?: boolean };
+  compat?: unknown;
 };
 
 type OpenAIResponsesPayloadPolicyOptions = {
@@ -25,12 +28,6 @@ export type OpenAIResponsesPayloadPolicy = {
   shouldStripStore: boolean;
   useServerCompaction: boolean;
 };
-
-const OPENAI_RESPONSES_APIS = new Set([
-  "openai-responses",
-  "azure-openai-responses",
-  "openai-codex-responses",
-]);
 
 function parsePositiveInteger(value: unknown): number | undefined {
   if (typeof value === "number" && Number.isFinite(value) && value > 0) {
@@ -51,6 +48,14 @@ function resolveOpenAIResponsesCompactThreshold(model: { contextWindow?: unknown
     return Math.max(1_000, Math.floor(contextWindow * 0.7));
   }
   return 80_000;
+}
+
+function readCompatBoolean(compat: unknown, key: "supportsStore"): boolean | undefined {
+  if (!compat || typeof compat !== "object") {
+    return undefined;
+  }
+  const value = (compat as Record<string, unknown>)[key];
+  return typeof value === "boolean" ? value : undefined;
 }
 
 function shouldEnableOpenAIResponsesServerCompaction(
@@ -81,8 +86,8 @@ function stripDisabledOpenAIReasoningPayload(payloadObj: Record<string, unknown>
     return;
   }
 
-  // Proxy/OpenAI-compat routes can reject `reasoning.effort: "none"`. Treat the
-  // disabled effort as "reasoning omitted" instead of forwarding an unsupported value.
+  // Some Responses models and OpenAI-compatible proxies reject
+  // `reasoning.effort: "none"`. Treat unsupported disabled effort as omitted.
   const reasoningObj = reasoning as Record<string, unknown>;
   if (reasoningObj.effort === "none") {
     delete payloadObj.reasoning;
@@ -93,11 +98,15 @@ export function resolveOpenAIResponsesPayloadPolicy(
   model: OpenAIResponsesPayloadModel,
   options: OpenAIResponsesPayloadPolicyOptions = {},
 ): OpenAIResponsesPayloadPolicy {
+  const compat =
+    model.compat && typeof model.compat === "object"
+      ? (model.compat as { supportsStore?: boolean })
+      : undefined;
   const capabilities = resolveProviderRequestPolicyConfig({
     provider: readStringValue(model.provider),
     api: readStringValue(model.api),
     baseUrl: readStringValue(model.baseUrl),
-    compat: model.compat,
+    compat,
     capability: "llm",
     transport: "stream",
   }).capabilities;
@@ -112,7 +121,10 @@ export function resolveOpenAIResponsesPayloadPolicy(
         : capabilities.allowsResponsesStore
           ? true
           : undefined;
-  const isResponsesApi = typeof model.api === "string" && OPENAI_RESPONSES_APIS.has(model.api);
+  const isResponsesApi = isOpenAIResponsesApi(readStringValue(model.api));
+  const shouldStripDisabledReasoningPayload =
+    isResponsesApi &&
+    (!capabilities.usesKnownNativeOpenAIRoute || !supportsOpenAIReasoningEffort(model, "none"));
 
   return {
     allowsServiceTier: capabilities.allowsOpenAIServiceTier,
@@ -120,11 +132,13 @@ export function resolveOpenAIResponsesPayloadPolicy(
       parsePositiveInteger(options.extraParams?.responsesCompactThreshold) ??
       resolveOpenAIResponsesCompactThreshold(model),
     explicitStore,
-    shouldStripDisabledReasoningPayload: isResponsesApi && !capabilities.usesKnownNativeOpenAIRoute,
+    shouldStripDisabledReasoningPayload,
     shouldStripPromptCache:
       options.enablePromptCacheStripping === true && capabilities.shouldStripResponsesPromptCache,
     shouldStripStore:
-      explicitStore !== true && model.compat?.supportsStore === false && isResponsesApi,
+      explicitStore !== true &&
+      readCompatBoolean(model.compat, "supportsStore") === false &&
+      isResponsesApi,
     useServerCompaction:
       options.enableServerCompaction === true &&
       shouldEnableOpenAIResponsesServerCompaction(

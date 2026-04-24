@@ -1,13 +1,13 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { optimizeImageToPng } from "openclaw/plugin-sdk/media-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { captureEnv } from "openclaw/plugin-sdk/testing";
+import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/testing";
+import { optimizeImageToPng } from "openclaw/plugin-sdk/web-media";
 import sharp from "sharp";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { mockPinnedHostnameResolution } from "../../../src/test-helpers/ssrf.js";
 import { sendVoiceMessageDiscord } from "../../discord/src/send.js";
 import {
   LocalMediaAccessError,
@@ -339,7 +339,7 @@ describe("Discord voice message input hardening", () => {
 
     for (const testCase of cases) {
       await expect(
-        sendVoiceMessageDiscord("channel:123", testCase.candidate),
+        sendVoiceMessageDiscord("channel:123", testCase.candidate, { cfg: {} as never }),
         testCase.name,
       ).rejects.toThrow(testCase.expectedMessage);
     }

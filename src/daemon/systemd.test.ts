@@ -1,18 +1,16 @@
 import fs from "node:fs/promises";
 import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const execFileMock = vi.hoisted(() => vi.fn());
 
 vi.mock("node:child_process", async () => {
-  const { mockNodeBuiltinModule } = await import("../../test/helpers/node-builtin-mocks.js");
-  return mockNodeBuiltinModule(
-    () => vi.importActual<typeof import("node:child_process")>("node:child_process"),
-    {
-      execFile: Object.assign(execFileMock, {
-        __promisify__: vi.fn(),
-      }) as typeof import("node:child_process").execFile,
-    },
+  const { mockNodeChildProcessExecFile } = await import("../../test/helpers/node-builtin-mocks.js");
+  return mockNodeChildProcessExecFile(
+    Object.assign(execFileMock, {
+      __promisify__: vi.fn(),
+    }) as typeof import("node:child_process").execFile,
   );
 });
 
@@ -26,6 +24,7 @@ import {
   readSystemdServiceExecStart,
   restartSystemdService,
   resolveSystemdUserUnitPath,
+  stageSystemdService,
   stopSystemdService,
 } from "./systemd.js";
 
@@ -168,6 +167,40 @@ describe("systemd availability", () => {
       });
 
     await expect(isSystemdUserServiceAvailable({ USER: "debian" })).resolves.toBe(true);
+  });
+
+  it("does not fall back to machine scope when --user fails with permission denied", async () => {
+    execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
+      expect(args).toEqual(["--user", "status"]);
+      cb(
+        createExecFileError("Failed to connect to bus: Permission denied", {
+          stderr: "Failed to connect to bus: Permission denied",
+          code: 1,
+        }),
+        "",
+        "",
+      );
+    });
+    // Only one call should be made: no machine-scope fallback for permission denied errors.
+    await expect(isSystemdUserServiceAvailable({ USER: "debian" })).resolves.toBe(false);
+    expect(execFileMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not fall back to direct --user when machine scope fails under sudo", async () => {
+    execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
+      assertMachineUserSystemctlArgs(args, "ai", "status");
+      cb(
+        createExecFileError("Failed to connect to bus: No such file or directory", {
+          stderr: "Failed to connect to bus: No such file or directory",
+          code: 1,
+        }),
+        "",
+        "",
+      );
+    });
+
+    await expect(isSystemdUserServiceAvailable({ SUDO_USER: "ai" })).resolves.toBe(false);
+    expect(execFileMock).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -602,6 +635,116 @@ describe("readSystemdServiceExecStart", () => {
     expect(command?.environmentValueSources).toEqual({
       OPENCLAW_GATEWAY_TOKEN: "file",
       OPENCLAW_GATEWAY_PASSWORD: "file", // pragma: allowlist secret
+    });
+  });
+});
+
+describe("stageSystemdService", () => {
+  async function withStageFixture(
+    run: (context: {
+      env: Record<string, string>;
+      stateDir: string;
+      unitPath: string;
+      envFilePath: string;
+    }) => Promise<void>,
+  ): Promise<void> {
+    const tempHomeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-systemd-stage-"));
+    const home = path.join(tempHomeRoot, "home");
+    const stateDir = path.join(home, ".openclaw");
+    const env = {
+      HOME: home,
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-stage-test",
+    };
+    const unitPath = resolveSystemdUserUnitPath(env);
+    const envFilePath = path.join(stateDir, "gateway.systemd.env");
+
+    try {
+      await fs.mkdir(stateDir, { recursive: true });
+      await run({ env, stateDir, unitPath, envFilePath });
+    } finally {
+      await fs.rm(tempHomeRoot, { recursive: true, force: true });
+    }
+  }
+
+  function mockSystemctlStatusOk(): void {
+    execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
+      assertUserSystemctlArgs(args, "status");
+      cb(null, "", "");
+    });
+  }
+
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    execFileMock.mockReset();
+  });
+
+  it("writes dotenv-backed values to a separate env file and keeps inline env minimal", async () => {
+    await withStageFixture(async ({ env, stateDir, unitPath, envFilePath }) => {
+      await fs.writeFile(
+        path.join(stateDir, ".env"),
+        ["OPENCLAW_GATEWAY_TOKEN=dotenv-token", "LLM_API_KEY=dotenv-key"].join("\n"),
+        "utf8",
+      );
+
+      mockSystemctlStatusOk();
+
+      await stageSystemdService({
+        env,
+        stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+        programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+        workingDirectory: "/tmp",
+        environment: {
+          OPENCLAW_GATEWAY_TOKEN: "dotenv-token",
+          LLM_API_KEY: "dotenv-key",
+          OPENCLAW_GATEWAY_PORT: "18789",
+        },
+      });
+
+      const [unit, envFile, envFileStat] = await Promise.all([
+        fs.readFile(unitPath, "utf8"),
+        fs.readFile(envFilePath, "utf8"),
+        fs.stat(envFilePath),
+      ]);
+
+      expect(unit).toContain(`EnvironmentFile=-${envFilePath}`);
+      expect(unit).toContain("Environment=OPENCLAW_GATEWAY_PORT=18789");
+      expect(unit).not.toContain("Environment=OPENCLAW_GATEWAY_TOKEN=dotenv-token");
+      expect(unit).not.toContain("Environment=LLM_API_KEY=dotenv-key");
+      expect(envFile).toBe("OPENCLAW_GATEWAY_TOKEN=dotenv-token\nLLM_API_KEY=dotenv-key\n");
+      expect(envFileStat.mode & 0o777).toBe(0o600);
+    });
+  });
+
+  it("keeps inline overrides out of the generated env file", async () => {
+    await withStageFixture(async ({ env, stateDir, unitPath, envFilePath }) => {
+      await fs.writeFile(
+        path.join(stateDir, ".env"),
+        ["OPENCLAW_GATEWAY_TOKEN=stale-token", "LLM_API_KEY=dotenv-key"].join("\n"),
+        "utf8",
+      );
+
+      mockSystemctlStatusOk();
+
+      await stageSystemdService({
+        env,
+        stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+        programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+        workingDirectory: "/tmp",
+        environment: {
+          OPENCLAW_GATEWAY_TOKEN: "fresh-token",
+          LLM_API_KEY: "dotenv-key",
+        },
+      });
+
+      const [unit, envFile] = await Promise.all([
+        fs.readFile(unitPath, "utf8"),
+        fs.readFile(envFilePath, "utf8"),
+      ]);
+
+      expect(unit).toContain(`EnvironmentFile=-${envFilePath}`);
+      expect(unit).toContain("Environment=OPENCLAW_GATEWAY_TOKEN=fresh-token");
+      expect(envFile).toBe("LLM_API_KEY=dotenv-key\n");
     });
   });
 });

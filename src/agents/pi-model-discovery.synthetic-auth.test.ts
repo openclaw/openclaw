@@ -1,8 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { saveAuthProfileStore } from "./auth-profiles.js";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveRuntimeSyntheticAuthProviderRefs = vi.hoisted(() => vi.fn(() => ["claude-cli"]));
 
@@ -30,6 +29,8 @@ vi.mock("../plugins/provider-runtime.js", () => ({
   resolveExternalAuthProfilesWithPlugins: () => [],
 }));
 
+let resolvePiCredentialsForDiscovery: typeof import("./pi-auth-discovery.js").resolvePiCredentialsForDiscovery;
+
 async function withAgentDir(run: (agentDir: string) => Promise<void>): Promise<void> {
   const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pi-synthetic-auth-"));
   try {
@@ -40,28 +41,24 @@ async function withAgentDir(run: (agentDir: string) => Promise<void>): Promise<v
 }
 
 describe("pi model discovery synthetic auth", () => {
+  beforeAll(async () => {
+    ({ resolvePiCredentialsForDiscovery } = await import("./pi-auth-discovery.js"));
+  });
+
   beforeEach(() => {
-    vi.resetModules();
     resolveRuntimeSyntheticAuthProviderRefs.mockClear();
     resolveProviderSyntheticAuthWithPlugin.mockClear();
+    vi.stubEnv("ANTHROPIC_API_KEY", "");
+    vi.stubEnv("ANTHROPIC_OAUTH_TOKEN", "");
   });
 
   afterEach(() => {
     vi.unstubAllEnvs();
   });
 
-  it("mirrors plugin-owned synthetic cli auth into pi auth storage", async () => {
+  it("mirrors plugin-owned synthetic cli auth into pi credential discovery", async () => {
     await withAgentDir(async (agentDir) => {
-      saveAuthProfileStore(
-        {
-          version: 1,
-          profiles: {},
-        },
-        agentDir,
-      );
-
-      const { discoverAuthStorage } = await import("./pi-model-discovery.js");
-      const authStorage = discoverAuthStorage(agentDir);
+      const credentials = resolvePiCredentialsForDiscovery(agentDir, { readOnly: true });
 
       expect(resolveRuntimeSyntheticAuthProviderRefs).toHaveBeenCalled();
       expect(resolveProviderSyntheticAuthWithPlugin).toHaveBeenCalledWith({
@@ -72,8 +69,10 @@ describe("pi model discovery synthetic auth", () => {
           providerConfig: undefined,
         },
       });
-      expect(authStorage.hasAuth("claude-cli")).toBe(true);
-      await expect(authStorage.getApiKey("claude-cli")).resolves.toBe("claude-cli-access-token");
+      expect(credentials["claude-cli"]).toEqual({
+        type: "api_key",
+        key: "claude-cli-access-token",
+      });
     });
   });
 });

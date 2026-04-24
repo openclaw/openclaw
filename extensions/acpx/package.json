@@ -1,10 +1,10 @@
 {
   "name": "@openclaw/acpx",
-  "version": "2026.4.6",
+  "version": "2026.4.20",
   "description": "OpenClaw ACP runtime backend",
   "type": "module",
   "dependencies": {
-    "acpx": "0.5.2"
+    "acpx": "0.5.3"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
@@ -12,6 +12,9 @@
   "openclaw": {
     "extensions": [
       "./index.ts"
-    ]
+    ],
+    "bundle": {
+      "stageRuntimeDependencies": true
+    }
   }
 }

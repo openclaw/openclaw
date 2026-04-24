@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 const DIAGNOSTICS_ENV = "OPENCLAW_DIAGNOSTICS";
@@ -8,10 +8,10 @@ function parseEnvFlags(raw?: string): string[] {
     return [];
   }
   const trimmed = raw.trim();
-  if (!trimmed) {
+  const lowered = normalizeLowercaseStringOrEmpty(trimmed);
+  if (!lowered) {
     return [];
   }
-  const lowered = trimmed.toLowerCase();
   if (["0", "false", "off", "none"].includes(lowered)) {
     return [];
   }

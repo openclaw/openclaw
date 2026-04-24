@@ -11,8 +11,16 @@ import {
   buildCommandsMessage,
   buildCommandsMessagePaginated,
   buildHelpMessage,
-  buildStatusMessage,
+  buildStatusMessage as buildStatusMessageRaw,
 } from "./status.js";
+import type { buildStatusMessage as BuildStatusMessage } from "./status.js";
+
+const buildStatusMessage: typeof BuildStatusMessage = (args) =>
+  buildStatusMessageRaw({
+    modelAuth: "api-key",
+    activeModelAuth: "api-key",
+    ...args,
+  });
 
 const { listPluginCommands } = vi.hoisted(() => ({
   listPluginCommands: vi.fn(
@@ -87,10 +95,113 @@ describe("buildStatusMessage", () => {
     expect(normalized).toContain("Session: agent:main:main");
     expect(normalized).toContain("updated 10m ago");
     expect(normalized).toContain("Runtime: direct");
+    expect(normalized).toContain("Runner: pi (embedded)");
     expect(normalized).toContain("Think: medium");
     expect(normalized).not.toContain("verbose");
     expect(normalized).toContain("elevated");
     expect(normalized).toContain("Queue: collect");
+  });
+
+  it("shows the CLI runner for CLI-backed providers", () => {
+    const text = buildStatusMessage({
+      config: {
+        agents: {
+          defaults: {
+            cliBackends: {
+              "claude-cli": {},
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      agent: {
+        model: "claude-cli/opus",
+      },
+      sessionEntry: {
+        sessionId: "cli",
+        updatedAt: 0,
+        modelProvider: "claude-cli",
+        model: "opus",
+      },
+      sessionKey: "agent:main:main",
+      queue: { mode: "collect", depth: 0 },
+    });
+
+    expect(normalizeTestText(text)).toContain("Runner: claude-cli (cli)");
+  });
+
+  it("falls back to the configured CLI provider when session provider fields are empty", () => {
+    const text = buildStatusMessage({
+      config: {
+        agents: {
+          defaults: {
+            cliBackends: {
+              "claude-cli": {},
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      agent: {
+        model: "claude-cli/opus",
+      },
+      sessionEntry: {
+        sessionId: "cli-default",
+        updatedAt: 0,
+      },
+      sessionKey: "agent:main:main",
+      queue: { mode: "collect", depth: 0 },
+    });
+
+    expect(normalizeTestText(text)).toContain("Runner: claude-cli (cli)");
+  });
+
+  it("shows the ACP harness agent and backend when ACP owns the session", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "anthropic/claude-opus-4-6",
+      },
+      sessionEntry: {
+        sessionId: "acp",
+        updatedAt: 0,
+        acp: {
+          backend: "acpx",
+          agent: "gemini",
+          runtimeSessionName: "status-test",
+          mode: "persistent",
+          state: "idle",
+          lastActivityAt: 0,
+        },
+      },
+      sessionKey: "agent:main:main",
+      queue: { mode: "collect", depth: 0 },
+    });
+
+    expect(normalizeTestText(text)).toContain("Runner: gemini (acp/acpx)");
+  });
+
+  it("sanitizes runner labels sourced from session metadata", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "anthropic/claude-opus-4-6",
+      },
+      sessionEntry: {
+        sessionId: "acp-sanitized",
+        updatedAt: 0,
+        acp: {
+          backend: "acpx\nrewritten",
+          agent: "gemini\u001b[2K",
+          runtimeSessionName: "status-test",
+          mode: "persistent",
+          state: "idle",
+          lastActivityAt: 0,
+        },
+      },
+      sessionKey: "agent:main:main",
+      queue: { mode: "collect", depth: 0 },
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Runner: gemini (acp/acpx\\nrewritten)");
+    expect(normalized).not.toContain("\u001b");
   });
 
   it("falls back to sessionEntry levels when resolved levels are not passed", () => {
@@ -115,6 +226,145 @@ describe("buildStatusMessage", () => {
     expect(normalized).toContain("Reasoning: on");
   });
 
+  it("shows plugin status lines only when verbose is enabled", () => {
+    const visible = normalizeTestText(
+      buildStatusMessage({
+        agent: {
+          model: "anthropic/pi:opus",
+        },
+        sessionEntry: {
+          sessionId: "abc",
+          updatedAt: 0,
+          verboseLevel: "on",
+          pluginDebugEntries: [
+            {
+              pluginId: "active-memory",
+              lines: ["🧩 Active Memory: status=timeout elapsed=15s query=recent"],
+            },
+          ],
+        },
+        sessionKey: "agent:main:main",
+        queue: { mode: "collect", depth: 0 },
+      }),
+    );
+    const hidden = normalizeTestText(
+      buildStatusMessage({
+        agent: {
+          model: "anthropic/pi:opus",
+        },
+        sessionEntry: {
+          sessionId: "abc",
+          updatedAt: 0,
+          verboseLevel: "off",
+          pluginDebugEntries: [
+            {
+              pluginId: "active-memory",
+              lines: ["🧩 Active Memory: status=timeout elapsed=15s query=recent"],
+            },
+          ],
+        },
+        sessionKey: "agent:main:main",
+        queue: { mode: "collect", depth: 0 },
+      }),
+    );
+
+    expect(visible).toContain("Active Memory: status=timeout elapsed=15s query=recent");
+    expect(hidden).not.toContain("Active Memory: status=timeout elapsed=15s query=recent");
+  });
+
+  it("shows structured plugin debug lines in verbose status", () => {
+    const visible = normalizeTestText(
+      buildStatusMessage({
+        agent: {
+          model: "anthropic/pi:opus",
+        },
+        sessionEntry: {
+          sessionId: "abc",
+          updatedAt: 0,
+          verboseLevel: "on",
+          pluginDebugEntries: [
+            {
+              pluginId: "active-memory",
+              lines: ["🧩 Active Memory: status=ok elapsed=842ms query=recent summary=34 chars"],
+            },
+          ],
+        },
+        sessionKey: "agent:main:main",
+        queue: { mode: "collect", depth: 0 },
+      }),
+    );
+
+    expect(visible).toContain(
+      "Active Memory: status=ok elapsed=842ms query=recent summary=34 chars",
+    );
+  });
+
+  it("shows trace lines only when trace is enabled", () => {
+    const hidden = normalizeTestText(
+      buildStatusMessage({
+        agent: {
+          model: "anthropic/pi:opus",
+        },
+        sessionEntry: {
+          sessionId: "abc",
+          updatedAt: 0,
+          verboseLevel: "on",
+          pluginDebugEntries: [
+            { pluginId: "active-memory", lines: ["🔎 Active Memory Debug: spicy ramen; tacos"] },
+          ],
+        },
+        sessionKey: "agent:main:main",
+        queue: { mode: "collect", depth: 0 },
+      }),
+    );
+    const visible = normalizeTestText(
+      buildStatusMessage({
+        agent: {
+          model: "anthropic/pi:opus",
+        },
+        sessionEntry: {
+          sessionId: "abc",
+          updatedAt: 0,
+          verboseLevel: "off",
+          traceLevel: "on",
+          pluginDebugEntries: [
+            { pluginId: "active-memory", lines: ["🔎 Active Memory Debug: spicy ramen; tacos"] },
+          ],
+        },
+        sessionKey: "agent:main:main",
+        queue: { mode: "collect", depth: 0 },
+      }),
+    );
+
+    expect(hidden).not.toContain("Active Memory Debug: spicy ramen; tacos");
+    expect(visible).toContain("Active Memory Debug: spicy ramen; tacos");
+    expect(visible).toContain("trace");
+  });
+
+  it("shows raw trace mode and plugin trace lines in status", () => {
+    const visible = normalizeTestText(
+      buildStatusMessage({
+        agent: {
+          model: "anthropic/pi:opus",
+        },
+        sessionEntry: {
+          sessionId: "abc",
+          updatedAt: 0,
+          verboseLevel: "off",
+          traceLevel: "raw",
+          pluginDebugEntries: [
+            { pluginId: "active-memory", lines: ["🔎 Active Memory Debug: spicy ramen; tacos"] },
+          ],
+        },
+        sessionKey: "agent:main:main",
+        queue: { mode: "collect", depth: 0 },
+      }),
+    );
+
+    expect(visible).toContain("Active Memory Debug: spicy ramen; tacos");
+    expect(visible).toContain("trace:raw");
+  });
+
   it("shows fast mode when enabled", () => {
     const text = buildStatusMessage({
       agent: {
@@ -129,7 +379,61 @@ describe("buildStatusMessage", () => {
       queue: { mode: "collect", depth: 0 },
     });
 
-    expect(normalizeTestText(text)).toContain("Fast: on");
+    expect(normalizeTestText(text)).toContain("Fast");
+  });
+
+  it("shows a non-PI harness next to fast mode when resolved", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "openai/gpt-5.4",
+      },
+      sessionEntry: {
+        sessionId: "codex-harness",
+        updatedAt: 0,
+        fastMode: true,
+      },
+      sessionKey: "agent:main:main",
+      queue: { mode: "collect", depth: 0 },
+      resolvedHarness: "codex",
+    });
+
+    expect(normalizeTestText(text)).toContain("Fast · codex");
+  });
+
+  it("hides the default PI harness label", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "openai/gpt-5.4",
+      },
+      sessionEntry: {
+        sessionId: "pi-harness",
+        updatedAt: 0,
+        fastMode: true,
+      },
+      sessionKey: "agent:main:main",
+      queue: { mode: "collect", depth: 0 },
+      resolvedHarness: "pi",
+    });
+
+    expect(normalizeTestText(text)).toContain("Fast");
+    expect(normalizeTestText(text)).not.toContain("· pi");
+  });
+
+  it("hides fast mode when disabled", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "anthropic/claude-opus-4-6",
+      },
+      sessionEntry: {
+        sessionId: "fast-off",
+        updatedAt: 0,
+        fastMode: false,
+      },
+      sessionKey: "agent:main:main",
+      queue: { mode: "collect", depth: 0 },
+    });
+
+    expect(normalizeTestText(text)).not.toContain("Fast");
   });
 
   it("shows configured text verbosity for the active model", () => {
@@ -221,7 +525,7 @@ describe("buildStatusMessage", () => {
         channel: "discord",
         groupId: "123",
       },
-      sessionKey: "agent:main:discord:channel:123",
+      sessionKey: "agent:main:main",
       sessionScope: "per-sender",
       queue: { mode: "collect", depth: 0 },
     });
@@ -259,6 +563,26 @@ describe("buildStatusMessage", () => {
     });
 
     expect(normalizeTestText(text)).toContain("Context: 200k/1.0m");
+  });
+
+  it("shows 1M context window for claude opus 4.7 variants", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "claude-cli/claude-opus-4.7-20260219",
+      },
+      sessionEntry: {
+        sessionId: "opus47",
+        updatedAt: 0,
+        totalTokens: 200_000,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Context: 200k/1.0m");
+    expect(normalized).not.toContain("Context: 200k/200k");
   });
 
   it("recomputes context window from the active model after switching away from a smaller session override", () => {
@@ -669,6 +993,43 @@ describe("buildStatusMessage", () => {
     expect(normalized).toContain("Media: image ok (openai/gpt-5.4) · audio skipped (maxBytes)");
   });
 
+  it("includes failed media understanding decisions with the surfaced reason", () => {
+    const text = buildStatusMessage({
+      agent: { model: "anthropic/claude-opus-4-6" },
+      sessionEntry: { sessionId: "media-failed", updatedAt: 0 },
+      sessionKey: "agent:main:main",
+      queue: { mode: "none" },
+      mediaDecisions: [
+        {
+          capability: "audio",
+          outcome: "failed",
+          attachments: [
+            {
+              attachmentIndex: 0,
+              attempts: [
+                {
+                  type: "provider",
+                  outcome: "skipped",
+                  reason: "empty output",
+                },
+                {
+                  type: "provider",
+                  outcome: "failed",
+                  reason: "Error: Audio transcription response missing text",
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(normalizeTestText(text)).toContain(
+      "Media: audio failed (Audio transcription response missing text)",
+    );
+    expect(normalizeTestText(text)).not.toContain("empty output");
+  });
+
   it("omits media line when all decisions are none", () => {
     const text = buildStatusMessage({
       agent: { model: "anthropic/claude-opus-4-6" },
@@ -784,6 +1145,41 @@ describe("buildStatusMessage", () => {
 
     const normalized = normalizeTestText(text);
     expect(normalized).not.toContain("Fallback:");
+  });
+
+  it("shows configured fallback models when provided", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: {
+          primary: "anthropic/claude-opus-4-6",
+          fallbacks: ["google/gemini-2.5-flash", "openai/gpt-5-mini"],
+        },
+      },
+      sessionEntry: { sessionId: "fb1", updatedAt: 0 },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Fallbacks: google/gemini-2.5-flash, openai/gpt-5-mini");
+  });
+
+  it("omits configured fallbacks line when no fallbacks provided", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "anthropic/claude-opus-4-6",
+      },
+      sessionEntry: { sessionId: "fb2", updatedAt: 0 },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).not.toContain("Fallbacks:");
   });
 
   it("keeps provider prefix from configured model", () => {
@@ -1465,6 +1861,7 @@ describe("buildCommandsMessage", () => {
     expect(text).toContain("/skill - Run a skill by name.");
     expect(text).toContain("/think (/thinking, /t) - Set thinking level.");
     expect(text).toContain("/compact - Compact the session context.");
+    expect(text).toContain("/models - List model providers/models or add a model.");
     expect(text).not.toContain("/config");
     expect(text).not.toContain("/debug");
   });
@@ -1499,6 +1896,10 @@ describe("buildHelpMessage", () => {
 
   it("includes /fast in help output", () => {
     expect(buildHelpMessage()).toContain("/fast status|on|off");
+  });
+
+  it("includes raw trace mode in help output", () => {
+    expect(buildHelpMessage()).toContain("/trace on|off|raw");
   });
 });
 

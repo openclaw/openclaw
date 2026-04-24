@@ -34,7 +34,7 @@ function readNumberLike(record: Record<string, unknown> | null, key: string): nu
   return parseFiniteNumber(record[key]);
 }
 
-function extractAttachments(message: Record<string, unknown>): BlueBubblesAttachment[] {
+export function extractAttachments(message: Record<string, unknown>): BlueBubblesAttachment[] {
   const raw = message["attachments"];
   if (!Array.isArray(raw)) {
     return [];
@@ -477,6 +477,17 @@ export type NormalizedWebhookMessage = {
   replyToId?: string;
   replyToBody?: string;
   replyToSender?: string;
+  /** Webhook event type preserved for dedup key differentiation. */
+  eventType?: string;
+  /**
+   * When the debouncer merges multiple source webhook events into one
+   * processed message (see `combineDebounceEntries` in `monitor-debounce.ts`),
+   * this preserves every source `messageId` that contributed to the merged
+   * view. Downstream inbound-dedupe commits all of them so a later BlueBubbles
+   * MessagePoller replay of any individual source event is recognized as a
+   * duplicate rather than re-processed. Unset for single-event messages.
+   */
+  coalescedMessageIds?: string[];
 };
 
 export type NormalizedWebhookReaction = {
@@ -589,7 +600,7 @@ export function parseTapbackText(params: {
   quotedText: string;
 } | null {
   const trimmed = params.text.trim();
-  const lower = trimmed.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(trimmed);
   if (!trimmed) {
     return null;
   }
@@ -687,6 +698,7 @@ function extractMessagePayload(payload: Record<string, unknown>): Record<string,
 
 export function normalizeWebhookMessage(
   payload: Record<string, unknown>,
+  options?: { eventType?: string },
 ): NormalizedWebhookMessage | null {
   const message = extractMessagePayload(payload);
   if (!message) {
@@ -774,6 +786,7 @@ export function normalizeWebhookMessage(
     replyToId: replyMetadata.replyToId,
     replyToBody: replyMetadata.replyToBody,
     replyToSender: replyMetadata.replyToSender,
+    eventType: options?.eventType,
   };
 }
 

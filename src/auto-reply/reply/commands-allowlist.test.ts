@@ -515,6 +515,29 @@ describe("handleAllowlistCommand", () => {
     expect(addChannelAllowFromStoreEntryMock).not.toHaveBeenCalled();
   });
 
+  it("blocks non-owner allowlist writes before resolving target channel", async () => {
+    const cfg = {
+      commands: { text: true, config: true },
+      channels: {
+        telegram: { allowFrom: ["*"], configWrites: true },
+      },
+    } as OpenClawConfig;
+    const params = buildAllowlistParams("/allowlist add dm --channel unknown attacker-id", cfg, {
+      Provider: "telegram",
+      Surface: "telegram",
+      SenderId: "telegram-attacker",
+      From: "telegram-attacker",
+    });
+    params.command.senderIsOwner = false;
+
+    const result = await handleAllowlistCommand(params, true);
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply).toBeUndefined();
+    expect(writeConfigFileMock).not.toHaveBeenCalled();
+    expect(addChannelAllowFromStoreEntryMock).not.toHaveBeenCalled();
+  });
+
   it("removes default-account entries from scoped and legacy pairing stores", async () => {
     removeChannelAllowFromStoreEntryMock
       .mockResolvedValueOnce({

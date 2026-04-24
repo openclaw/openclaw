@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 import { RateLimitError } from "@buape/carbon";
-import { AcpRuntimeError } from "openclaw/plugin-sdk/acp-runtime";
+import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -16,6 +16,7 @@ const {
   clientFetchUserMock,
   clientGetPluginMock,
   clientHandleDeployRequestMock,
+  createDiscordExecApprovalButtonContextMock,
   createDiscordMessageHandlerMock,
   createDiscordNativeCommandMock,
   createdBindingManagers,
@@ -38,6 +39,34 @@ const {
 let monitorDiscordProvider: typeof import("./provider.js").monitorDiscordProvider;
 let providerTesting: typeof import("./provider.js").__testing;
 let runtimeEnvModule: typeof import("openclaw/plugin-sdk/runtime-env");
+
+function createAcpRuntimeError(code: string, message: string): Error & { code: string } {
+  return Object.assign(new Error(message), { code });
+}
+
+function createTestChannelRuntime(): ChannelRuntimeSurface {
+  const contexts = new Map<string, unknown>();
+  const keyFor = (params: { channelId: string; accountId?: string | null; capability: string }) =>
+    `${params.channelId}:${params.accountId ?? ""}:${params.capability}`;
+  const runtimeContexts: ChannelRuntimeSurface["runtimeContexts"] = {
+    register(params) {
+      contexts.set(keyFor(params), params.context);
+      return {
+        dispose: () => {
+          contexts.delete(keyFor(params));
+        },
+      };
+    },
+    get: ((params: { channelId: string; accountId?: string | null; capability: string }) =>
+      contexts.get(keyFor(params))) as ChannelRuntimeSurface["runtimeContexts"]["get"],
+    watch() {
+      return () => {};
+    },
+  };
+  return {
+    runtimeContexts,
+  };
+}
 
 function createCompatRateLimitError(
   response: Response,
@@ -75,8 +104,8 @@ function createConfigWithDiscordAccount(overrides: Record<string, unknown> = {})
 vi.mock("../voice/manager.runtime.js", () => {
   voiceRuntimeModuleLoadedMock();
   return {
-    DiscordVoiceManager: class DiscordVoiceManager {},
-    DiscordVoiceReadyListener: class DiscordVoiceReadyListener {},
+    DiscordVoiceManager: function DiscordVoiceManager() {},
+    DiscordVoiceReadyListener: function DiscordVoiceReadyListener() {},
   };
 });
 describe("monitorDiscordProvider", () => {
@@ -95,21 +124,23 @@ describe("monitorDiscordProvider", () => {
     ) => Promise<{ status: string; reason?: string }>;
   };
 
-  const getConstructedEventQueue = (): { listenerTimeout?: number } | undefined => {
+  const getConstructedEventQueue = ():
+    | { listenerTimeout?: number; slowListenerThreshold?: number }
+    | undefined => {
     expect(clientConstructorOptionsMock).toHaveBeenCalledTimes(1);
     const opts = clientConstructorOptionsMock.mock.calls[0]?.[0] as {
-      eventQueue?: { listenerTimeout?: number };
+      eventQueue?: { listenerTimeout?: number; slowListenerThreshold?: number };
     };
     return opts.eventQueue;
   };
 
   const getConstructedClientOptions = (): {
-    eventQueue?: { listenerTimeout?: number };
+    eventQueue?: { listenerTimeout?: number; slowListenerThreshold?: number };
   } => {
     expect(clientConstructorOptionsMock).toHaveBeenCalledTimes(1);
     return (
       (clientConstructorOptionsMock.mock.calls[0]?.[0] as {
-        eventQueue?: { listenerTimeout?: number };
+        eventQueue?: { listenerTimeout?: number; slowListenerThreshold?: number };
       }) ?? {}
     );
   };
@@ -171,8 +202,8 @@ describe("monitorDiscordProvider", () => {
     providerTesting.setLoadDiscordVoiceRuntime(async () => {
       voiceRuntimeModuleLoadedMock();
       return {
-        DiscordVoiceManager: class DiscordVoiceManager {},
-        DiscordVoiceReadyListener: class DiscordVoiceReadyListener {},
+        DiscordVoiceManager: function DiscordVoiceManager() {},
+        DiscordVoiceReadyListener: function DiscordVoiceReadyListener() {},
       } as never;
     });
     providerTesting.setLoadDiscordProviderSessionRuntime(
@@ -317,6 +348,64 @@ describe("monitorDiscordProvider", () => {
     expect(voiceRuntimeModuleLoadedMock).toHaveBeenCalledTimes(1);
   });
 
+  it("wires exec approval button context from the resolved Discord account config", async () => {
+    const cfg = createConfigWithDiscordAccount();
+    const execApprovalsConfig = { enabled: true, approvers: ["123"] };
+    resolveDiscordAccountMock.mockReturnValue({
+      accountId: "default",
+      token: "cfg-token",
+      config: {
+        commands: { native: true, nativeSkills: false },
+        voice: { enabled: false },
+        agentComponents: { enabled: false },
+        execApprovals: execApprovalsConfig,
+      },
+    });
+
+    await monitorDiscordProvider({
+      config: cfg,
+      runtime: baseRuntime(),
+    });
+
+    expect(createDiscordExecApprovalButtonContextMock).toHaveBeenCalledWith({
+      cfg,
+      accountId: "default",
+      config: execApprovalsConfig,
+    });
+  });
+
+  it("registers the native approval runtime context when exec approvals are enabled", async () => {
+    const channelRuntime = createTestChannelRuntime();
+    const execApprovalsConfig = { enabled: true, approvers: ["123"] };
+    resolveDiscordAccountMock.mockReturnValue({
+      accountId: "default",
+      token: "cfg-token",
+      config: {
+        commands: { native: true, nativeSkills: false },
+        voice: { enabled: false },
+        agentComponents: { enabled: false },
+        execApprovals: execApprovalsConfig,
+      },
+    });
+
+    await monitorDiscordProvider({
+      config: baseConfig(),
+      runtime: baseRuntime(),
+      channelRuntime,
+    });
+
+    expect(
+      channelRuntime.runtimeContexts.get({
+        channelId: "discord",
+        accountId: "default",
+        capability: "approval.native",
+      }),
+    ).toEqual({
+      token: "cfg-token",
+      config: execApprovalsConfig,
+    });
+  });
+
   it("treats ACP error status as uncertain during startup thread-binding probes", async () => {
     getAcpSessionStatusMock.mockResolvedValue({ state: "error" });
 
@@ -346,7 +435,7 @@ describe("monitorDiscordProvider", () => {
 
   it("classifies typed ACP session init failures as stale", async () => {
     getAcpSessionStatusMock.mockRejectedValue(
-      new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "missing ACP metadata"),
+      createAcpRuntimeError("ACP_SESSION_INIT_FAILED", "missing ACP metadata"),
     );
 
     await monitorDiscordProvider({
@@ -375,7 +464,7 @@ describe("monitorDiscordProvider", () => {
 
   it("classifies typed non-init ACP errors as uncertain when not stale-running", async () => {
     getAcpSessionStatusMock.mockRejectedValue(
-      new AcpRuntimeError("ACP_BACKEND_UNAVAILABLE", "runtime unavailable"),
+      createAcpRuntimeError("ACP_BACKEND_UNAVAILABLE", "runtime unavailable"),
     );
 
     await monitorDiscordProvider({
@@ -513,14 +602,17 @@ describe("monitorDiscordProvider", () => {
     expect(drained[0]?.message).toContain("4014");
   });
 
-  it("passes default eventQueue.listenerTimeout of 120s to Carbon Client", async () => {
+  it("passes OpenClaw EventQueue defaults to Carbon Client", async () => {
     await monitorDiscordProvider({
       config: baseConfig(),
       runtime: baseRuntime(),
     });
 
     const eventQueue = getConstructedEventQueue();
-    expect(eventQueue).toEqual({ listenerTimeout: 120_000 });
+    expect(eventQueue).toEqual({
+      listenerTimeout: 120_000,
+      slowListenerThreshold: 30_000,
+    });
   });
 
   it("forwards custom eventQueue config from discord config to Carbon Client", async () => {

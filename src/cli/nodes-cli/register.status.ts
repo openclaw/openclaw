@@ -3,6 +3,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
 import { defaultRuntime } from "../../runtime.js";
 import {
+  normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
@@ -20,7 +21,7 @@ function formatVersionLabel(raw: string) {
   if (!trimmed) {
     return raw;
   }
-  if (trimmed.toLowerCase().startsWith("v")) {
+  if (normalizeLowercaseStringOrEmpty(trimmed).startsWith("v")) {
     return trimmed;
   }
   return /^\d/.test(trimmed) ? `v${trimmed}` : trimmed;
@@ -91,8 +92,7 @@ function parseSinceMs(raw: unknown, label: string): number | undefined {
   if (raw === undefined || raw === null) {
     return undefined;
   }
-  const value =
-    typeof raw === "string" ? raw.trim() : typeof raw === "number" ? String(raw).trim() : null;
+  const value = normalizeOptionalString(raw) ?? (typeof raw === "number" ? String(raw) : null);
   if (value === null) {
     defaultRuntime.error(`${label}: invalid duration value`);
     defaultRuntime.exit(1);
@@ -234,7 +234,7 @@ export function registerNodesStatusCommands(nodes: Command) {
       .requiredOption("--node <idOrNameOrIp>", "Node id, name, or IP")
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("describe", async () => {
-          const nodeId = await resolveNodeId(opts, String(opts.node ?? ""));
+          const nodeId = await resolveNodeId(opts, opts.node ?? "");
           const result = await callGatewayCli("node.describe", opts, {
             nodeId,
           });

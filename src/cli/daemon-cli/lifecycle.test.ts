@@ -289,6 +289,27 @@ describe("runDaemonRestart health checks", () => {
     expect(renderRestartDiagnostics).toHaveBeenCalledTimes(1);
   });
 
+  it("waits longer for Windows gateway restart health", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    waitForGatewayHealthyRestart.mockResolvedValue({
+      healthy: true,
+      staleGatewayPids: [],
+      runtime: { status: "running" },
+      portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
+    });
+
+    await runDaemonRestart({ json: true });
+
+    expect(waitForGatewayHealthyRestart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        attempts: 360,
+        delayMs: 500,
+        includeUnknownListenersAsStale: true,
+        port: 18789,
+      }),
+    );
+  });
+
   it("fails restart with a stopped-free message when the waiter exits early", async () => {
     const { formatCliCommand } = await import("../command-format.js");
     const unhealthy: RestartHealthSnapshot = {
@@ -324,6 +345,14 @@ describe("runDaemonRestart health checks", () => {
     expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(18789);
     expect(signalVerifiedGatewayPidSync).toHaveBeenCalledWith(4200, "SIGTERM");
     expect(signalVerifiedGatewayPidSync).toHaveBeenCalledWith(4300, "SIGTERM");
+  });
+
+  it("skips gateway port resolution on stop when the service manager handles the stop", async () => {
+    await runDaemonStop({ json: true });
+
+    expect(service.readCommand).not.toHaveBeenCalled();
+    expect(loadConfig).not.toHaveBeenCalled();
+    expect(resolveGatewayPort).not.toHaveBeenCalled();
   });
 
   it("signals a single unmanaged gateway process on restart", async () => {

@@ -1,6 +1,10 @@
 import { getBootstrapChannelPlugin } from "../../channels/plugins/bootstrap-registry.js";
-import type { ChannelMessageActionName } from "../../channels/plugins/types.js";
-import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
+import type { ChannelMessageActionName } from "../../channels/plugins/types.public.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
+import { hasPotentialPluginActionParam } from "./message-action-param-keys.js";
 
 export type MessageActionTargetMode = "to" | "channelId" | "none";
 
@@ -81,6 +85,7 @@ const ACTION_TARGET_ALIASES: Partial<Record<ChannelMessageActionName, ActionTarg
 
 function listActionTargetAliasSpecs(
   action: ChannelMessageActionName,
+  params: Record<string, unknown>,
   channel?: string,
 ): ActionTargetAliasSpec[] {
   const specs: ActionTargetAliasSpec[] = [];
@@ -89,7 +94,7 @@ function listActionTargetAliasSpecs(
     specs.push(coreSpec);
   }
   const normalizedChannel = normalizeOptionalLowercaseString(channel);
-  if (!normalizedChannel) {
+  if (!normalizedChannel || !hasPotentialPluginActionParam(params)) {
     return specs;
   }
   const plugin = getBootstrapChannelPlugin(normalizedChannel);
@@ -109,15 +114,15 @@ export function actionHasTarget(
   params: Record<string, unknown>,
   options?: { channel?: string },
 ): boolean {
-  const to = typeof params.to === "string" ? params.to.trim() : "";
+  const to = normalizeOptionalString(params.to) ?? "";
   if (to) {
     return true;
   }
-  const channelId = typeof params.channelId === "string" ? params.channelId.trim() : "";
+  const channelId = normalizeOptionalString(params.channelId) ?? "";
   if (channelId) {
     return true;
   }
-  const specs = listActionTargetAliasSpecs(action, options?.channel);
+  const specs = listActionTargetAliasSpecs(action, params, options?.channel);
   if (specs.length === 0) {
     return false;
   }
@@ -125,7 +130,7 @@ export function actionHasTarget(
     spec.aliases.some((alias) => {
       const value = params[alias];
       if (typeof value === "string") {
-        return value.trim().length > 0;
+        return Boolean(normalizeOptionalString(value));
       }
       if (typeof value === "number") {
         return Number.isFinite(value);

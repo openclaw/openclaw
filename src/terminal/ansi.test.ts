@@ -9,8 +9,16 @@ describe("terminal ansi helpers", () => {
   });
 
   it("sanitizes control characters for log-safe interpolation", () => {
-    const input = "\u001B[31mwarn\u001B[0m\r\nnext\u0000line\u007f";
-    expect(sanitizeForLog(input)).toBe("warnnextline");
+    const input =
+      "\u001B[31mwarn\u001B[0m" +
+      "\r\n" +
+      "next" +
+      String.fromCharCode(0) +
+      "line" +
+      String.fromCharCode(127) +
+      String.fromCharCode(0x9b) +
+      "done";
+    expect(sanitizeForLog(input)).toBe("warnnextlinedone");
   });
 
   it("measures wide graphemes by terminal cell width", () => {
