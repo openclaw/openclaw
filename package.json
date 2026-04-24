@@ -1484,6 +1484,7 @@
     "test:docker:live-models:gemini": "OPENCLAW_LIVE_PROVIDERS=google-gemini-cli OPENCLAW_LIVE_MODELS=google-gemini-cli/gemini-3.1-pro-preview bash scripts/test-live-models-docker.sh",
     "test:docker:mcp-channels": "bash scripts/e2e/mcp-channels-docker.sh",
     "test:docker:npm-onboard-channel-agent": "bash scripts/e2e/npm-onboard-channel-agent-docker.sh",
+    "test:docker:npm-telegram-live": "bash scripts/e2e/npm-telegram-live-docker.sh",
     "test:docker:onboard": "bash scripts/e2e/onboard-docker.sh",
     "test:docker:openai-image-auth": "bash scripts/e2e/openai-image-auth-docker.sh",
     "test:docker:openai-web-search-minimal": "bash scripts/e2e/openai-web-search-minimal-docker.sh",

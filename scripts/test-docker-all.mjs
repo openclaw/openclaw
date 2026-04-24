@@ -6,7 +6,8 @@ import { fileURLToPath } from "node:url";
 
 const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_E2E_IMAGE = "openclaw-docker-e2e:local";
-const DEFAULT_PARALLELISM = 4;
+const DEFAULT_PARALLELISM = 8;
+const DEFAULT_TAIL_PARALLELISM = 8;
 const DEFAULT_FAILURE_TAIL_LINES = 80;
 const DEFAULT_LANE_TIMEOUT_MS = 120 * 60 * 1000;
 
@@ -53,6 +54,8 @@ const exclusiveLanes = [
   ],
   ["live-acp-bind", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-acp-bind"],
 ];
+
+const tailLanes = exclusiveLanes;
 
 function parsePositiveInt(raw, fallback, label) {
   if (!raw) {
@@ -228,20 +231,6 @@ async function runLanePool(poolLanes, baseEnv, logDir, parallelism, options) {
   return failures;
 }
 
-async function runLanesSerial(serialLanes, baseEnv, logDir, options) {
-  const failures = [];
-  for (const lane of serialLanes) {
-    const result = await runLane(lane, baseEnv, logDir, options.timeoutMs);
-    if (result.status !== 0) {
-      failures.push(result);
-      if (options.failFast) {
-        break;
-      }
-    }
-  }
-  return failures;
-}
-
 async function tailFile(file, lines) {
   const content = await readFile(file, "utf8").catch(() => "");
   const tail = content.split(/\r?\n/).slice(-lines).join("\n");
@@ -281,6 +270,11 @@ async function main() {
     DEFAULT_PARALLELISM,
     "OPENCLAW_DOCKER_ALL_PARALLELISM",
   );
+  const tailParallelism = parsePositiveInt(
+    process.env.OPENCLAW_DOCKER_ALL_TAIL_PARALLELISM,
+    Math.min(parallelism, DEFAULT_TAIL_PARALLELISM),
+    "OPENCLAW_DOCKER_ALL_TAIL_PARALLELISM",
+  );
   const tailLines = parsePositiveInt(
     process.env.OPENCLAW_DOCKER_ALL_FAILURE_TAIL_LINES,
     DEFAULT_FAILURE_TAIL_LINES,
@@ -308,6 +302,7 @@ async function main() {
 
   console.log(`==> Docker test logs: ${logDir}`);
   console.log(`==> Parallelism: ${parallelism}`);
+  console.log(`==> Tail parallelism: ${tailParallelism}`);
   console.log(`==> Lane timeout: ${laneTimeoutMs}ms`);
   console.log(`==> Fail fast: ${failFast ? "yes" : "no"}`);
   console.log(`==> Live-test bundled plugin deps: ${baseEnv.OPENCLAW_DOCKER_BUILD_EXTENSIONS}`);
@@ -321,13 +316,13 @@ async function main() {
 
   const options = { failFast, timeoutMs: laneTimeoutMs };
   const failures = await runLanePool(lanes, baseEnv, logDir, parallelism, options);
-  if (failures.length > 0) {
+  if (failFast && failures.length > 0) {
     await printFailureSummary(failures, tailLines);
     process.exit(1);
   }
 
-  console.log("==> Running provider-sensitive Docker lanes exclusively");
-  failures.push(...(await runLanesSerial(exclusiveLanes, baseEnv, logDir, options)));
+  console.log("==> Running provider-sensitive Docker tail lanes");
+  failures.push(...(await runLanePool(tailLanes, baseEnv, logDir, tailParallelism, options)));
   if (failures.length > 0) {
     await printFailureSummary(failures, tailLines);
     process.exit(1);

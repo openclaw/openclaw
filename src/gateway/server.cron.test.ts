@@ -172,22 +172,22 @@ async function createDirectCronState(): Promise<DirectCronState> {
   });
 }
 
-async function directCronReq<TPayload = unknown>(
+async function directCronReq(
   cronState: DirectCronState,
   method: string,
   params: Record<string, unknown>,
-): Promise<{ ok: boolean; payload?: TPayload; error?: { code?: string; message?: string } }> {
+): Promise<{ ok: boolean; payload?: unknown; error?: { code?: string; message?: string } }> {
   const { cronHandlers } = await import("./server-methods/cron.js");
   let result:
-    | { ok: boolean; payload?: TPayload; error?: { code?: string; message?: string } }
+    | { ok: boolean; payload?: unknown; error?: { code?: string; message?: string } }
     | undefined;
-  await cronHandlers[method as keyof typeof cronHandlers]({
+  await cronHandlers[method]({
     req: {} as never,
     params,
     respond: (ok, payload, error) => {
       result = {
         ok,
-        payload: payload as TPayload,
+        payload,
         error,
       };
     },
@@ -204,7 +204,7 @@ async function directCronReq<TPayload = unknown>(
     isWebchatConnect: () => false,
   });
   if (!result) {
-    throw new Error(`${String(method)} did not respond`);
+    throw new Error(`${method} did not respond`);
   }
   return result;
 }
