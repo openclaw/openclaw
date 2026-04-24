@@ -34,6 +34,7 @@ agent automation and verification.
 ## Quick start
 
 ```bash
+openclaw browser --browser-profile openclaw doctor
 openclaw browser --browser-profile openclaw status
 openclaw browser --browser-profile openclaw start
 openclaw browser --browser-profile openclaw open https://example.com
@@ -603,7 +604,8 @@ How it maps:
 
 - `browser snapshot` returns a stable UI tree (AI or ARIA).
 - `browser act` uses the snapshot `ref` IDs to click/type/drag/select.
-- `browser screenshot` captures pixels (full page or element).
+- `browser screenshot` captures pixels (full page, element, or labeled refs).
+- `browser doctor` checks Gateway, plugin, profile, browser, and tab readiness.
 - `browser` accepts:
   - `profile` to choose a named browser profile (openclaw, chrome, or remote CDP).
   - `target` (`sandbox` | `host` | `node`) to select where the browser lives.
