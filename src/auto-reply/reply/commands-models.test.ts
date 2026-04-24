@@ -17,26 +17,8 @@ const modelAuthLabelMocks = vi.hoisted(() => ({
   resolveModelAuthLabel: vi.fn<(params: unknown) => string | undefined>(() => undefined),
 }));
 
-const modelsAddMocks = vi.hoisted(() => ({
-  addModelToConfig: vi.fn(),
-  listAddableProviders: vi.fn<(params: unknown) => string[]>(),
-  validateAddProvider:
-    vi.fn<
-      (
-        params: unknown,
-      ) =>
-        | { ok: true; provider: string }
-        | { ok: false; providers: string[]; knownProvider?: string }
-    >(),
-}));
-
-const configWriteAuthMocks = vi.hoisted(() => ({
-  resolveConfigWriteDeniedText: vi.fn<(params: { target: string }) => string | null>(() => null),
-}));
-
-const configWriteTargetMocks = vi.hoisted(() => ({
-  resolveConfigWriteTargetFromPath: vi.fn((path: string[]) => path.join(".")),
-}));
+const MODELS_ADD_DEPRECATED_TEXT =
+  "⚠️ /models add is deprecated. Use /models to browse providers and /model to switch models.";
 
 vi.mock("../../agents/model-catalog.js", () => ({
   loadModelCatalog: modelCatalogMocks.loadModelCatalog,
@@ -45,24 +27,6 @@ vi.mock("../../agents/model-catalog.js", () => ({
 vi.mock("../../agents/model-auth-label.js", () => ({
   resolveModelAuthLabel: modelAuthLabelMocks.resolveModelAuthLabel,
 }));
-
-vi.mock("../../channels/plugins/config-writes.js", () => ({
-  resolveConfigWriteTargetFromPath: configWriteTargetMocks.resolveConfigWriteTargetFromPath,
-}));
-
-vi.mock("./config-write-authorization.js", () => ({
-  resolveConfigWriteDeniedText: configWriteAuthMocks.resolveConfigWriteDeniedText,
-}));
-
-vi.mock("./models-add.js", async () => {
-  const actual = await vi.importActual<typeof import("./models-add.js")>("./models-add.js");
-  return {
-    ...actual,
-    addModelToConfig: modelsAddMocks.addModelToConfig,
-    listAddableProviders: modelsAddMocks.listAddableProviders,
-    validateAddProvider: modelsAddMocks.validateAddProvider,
-  };
-});
 
 const telegramModelsTestPlugin: ChannelPlugin = {
   ...createChannelTestPluginBase({
@@ -80,19 +44,6 @@ const telegramModelsTestPlugin: ChannelPlugin = {
     },
   }),
   commands: {
-    buildModelsMenuChannelData: ({ providers }) => ({
-      telegram: {
-        buttons: [
-          [{ text: "Add model", callback_data: "/models add" }],
-          ...providers.map((provider) => [
-            {
-              text: provider.id,
-              callback_data: `models:${provider.id}`,
-            },
-          ]),
-        ],
-      },
-    }),
     buildModelsProviderChannelData: ({ providers }) => ({
       telegram: {
         buttons: providers.map((provider) => [
@@ -103,14 +54,23 @@ const telegramModelsTestPlugin: ChannelPlugin = {
         ]),
       },
     }),
-    buildModelsAddProviderChannelData: ({ providers }) => ({
-      telegram: {
-        buttons: providers.map((provider) => [
-          {
-            text: provider.id,
-            callback_data: `/models add ${provider.id}`,
-          },
-        ]),
+  },
+};
+
+const menuOnlyModelsTestPlugin: ChannelPlugin = {
+  ...createChannelTestPluginBase({
+    id: "menuonly",
+    label: "Menu Only",
+    capabilities: {
+      chatTypes: ["direct"],
+      nativeCommands: true,
+    },
+  }),
+  commands: {
+    buildModelsMenuChannelData: ({ providers }) => ({
+      menuonly: {
+        providerIds: providers.map((provider) => provider.id),
+        labels: providers.map((provider) => `${provider.id}:${provider.count}`),
       },
     }),
   },
@@ -133,38 +93,17 @@ beforeEach(() => {
   ]);
   modelAuthLabelMocks.resolveModelAuthLabel.mockReset();
   modelAuthLabelMocks.resolveModelAuthLabel.mockReturnValue(undefined);
-  modelsAddMocks.addModelToConfig.mockReset();
-  modelsAddMocks.addModelToConfig.mockResolvedValue({
-    ok: true,
-    result: {
-      provider: "ollama",
-      modelId: "glm-5.1:cloud",
-      existed: false,
-      allowlistAdded: false,
-      warnings: [],
-    },
-  });
-  modelsAddMocks.listAddableProviders.mockReset();
-  modelsAddMocks.listAddableProviders.mockReturnValue([
-    "anthropic",
-    "lmstudio",
-    "ollama",
-    "openai",
-  ]);
-  modelsAddMocks.validateAddProvider.mockReset();
-  modelsAddMocks.validateAddProvider.mockImplementation((params: unknown) => ({
-    ok: true,
-    provider: (params as { provider: string }).provider,
-  }));
-  configWriteAuthMocks.resolveConfigWriteDeniedText.mockReset();
-  configWriteAuthMocks.resolveConfigWriteDeniedText.mockReturnValue(null);
-  configWriteTargetMocks.resolveConfigWriteTargetFromPath.mockClear();
   setActivePluginRegistry(
     createTestRegistry([
       ...textSurfaceModelsTestPlugins,
       {
         pluginId: "telegram",
         plugin: telegramModelsTestPlugin,
+        source: "test",
+      },
+      {
+        pluginId: "menuonly",
+        plugin: menuOnlyModelsTestPlugin,
         source: "test",
       },
     ]),
@@ -228,10 +167,10 @@ describe("handleModelsCommand", () => {
     expect(result?.reply?.text).toContain("- openai (2)");
     expect(result?.reply?.text).toContain("Use: /models <provider>");
     expect(result?.reply?.text).toContain("Switch: /model <provider/model>");
-    expect(result?.reply?.text).toContain("Add: /models add");
+    expect(result?.reply?.text).not.toContain("Add: /models add");
   });
 
-  it("shows the add-model action in the telegram provider picker by default", async () => {
+  it("keeps the telegram provider picker browse-only", async () => {
     const params = buildParams("/models");
     params.ctx.Surface = "telegram";
     params.command.channel = "telegram";
@@ -243,7 +182,6 @@ describe("handleModelsCommand", () => {
     expect(result?.reply?.channelData).toEqual({
       telegram: {
         buttons: [
-          [{ text: "Add model", callback_data: "/models add" }],
           [{ text: "anthropic", callback_data: "models:anthropic" }],
           [{ text: "google", callback_data: "models:google" }],
           [{ text: "openai", callback_data: "models:openai" }],
@@ -252,27 +190,19 @@ describe("handleModelsCommand", () => {
     });
   });
 
-  it("keeps the telegram provider picker browse-only when modelsWrite is disabled", async () => {
-    const params = buildParams("/models", {
-      commands: {
-        text: true,
-        modelsWrite: false,
-      },
-    });
-    params.ctx.Surface = "telegram";
-    params.command.channel = "telegram";
-    params.command.surface = "telegram";
+  it("keeps plugin menu hook compatibility for provider pickers", async () => {
+    const params = buildParams("/models");
+    params.ctx.Surface = "menuonly";
+    params.command.channel = "menuonly";
+    params.command.surface = "menuonly";
 
     const result = await handleModelsCommand(params, true);
 
     expect(result?.reply?.text).toBe("Select a provider:");
     expect(result?.reply?.channelData).toEqual({
-      telegram: {
-        buttons: [
-          [{ text: "anthropic", callback_data: "models:anthropic" }],
-          [{ text: "google", callback_data: "models:google" }],
-          [{ text: "openai", callback_data: "models:openai" }],
-        ],
+      menuonly: {
+        providerIds: ["anthropic", "google", "openai"],
+        labels: ["anthropic:2", "google:1", "openai:2"],
       },
     });
   });
@@ -314,110 +244,30 @@ describe("handleModelsCommand", () => {
     expect(result?.reply?.text).toContain("Models (anthropic · 🔑 target-auth) — showing 1-2 of 2");
   });
 
-  it("guides /models add when no provider is given", async () => {
+  it("returns a deprecation message for /models add when no provider is given", async () => {
     const result = await handleModelsCommand(buildParams("/models add"), true);
 
-    expect(result?.reply?.text).toContain(
-      "Add a model: choose a provider, then send one of these example commands.",
-    );
-    expect(result?.reply?.text).toContain(
-      "These examples use models that already exist for those providers.",
-    );
-    expect(result?.reply?.text).toContain("```text");
-    expect(result?.reply?.text).toContain("/models add ollama glm-5.1:cloud");
-    expect(result?.reply?.text).toContain("/models add lmstudio qwen/qwen3.5-9b");
-    expect(result?.reply?.text).toContain("/models add <provider> <modelId>");
-    expect(result?.reply?.text).toContain("Generic form:");
-    expect(result?.reply?.text).toContain("/models add <provider> <modelId>");
-    expect(result?.reply?.text).toContain("- anthropic");
-    expect(result?.reply?.text).toContain("- lmstudio");
-    expect(result?.reply?.text).toContain("- ollama");
-    expect(result?.reply?.text).toContain("- openai");
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: MODELS_ADD_DEPRECATED_TEXT },
+    });
   });
 
-  it("guides /models add <provider> when the model id is missing", async () => {
+  it("returns a deprecation message for /models add <provider>", async () => {
     const result = await handleModelsCommand(buildParams("/models add ollama"), true);
 
-    expect(result?.reply?.text).toContain("Add a model to ollama:");
-    expect(result?.reply?.text).toContain("```text\n/models add ollama <modelId>\n```");
-    expect(result?.reply?.text).toContain("```text\n/models ollama\n```");
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: MODELS_ADD_DEPRECATED_TEXT },
+    });
   });
 
-  it("explains when a selectable provider does not support /models add", async () => {
-    modelsAddMocks.validateAddProvider.mockReturnValueOnce({
-      ok: false,
-      providers: ["lmstudio", "ollama"],
-      knownProvider: "openai",
-    });
-
+  it("returns a deprecation message for /models add <provider> <modelId>", async () => {
     const result = await handleModelsCommand(buildParams("/models add openai gpt-5.5"), true);
 
-    expect(result?.reply?.text).toContain(
-      "openai is available for model selection, but /models add cannot create models for this provider from chat.",
-    );
-    expect(result?.reply?.text).toContain("/models openai");
-    expect(result?.reply?.text).toContain("/model openai/<modelId>");
-    expect(result?.reply?.text).toContain("openclaw configure");
-    expect(result?.reply?.text).not.toContain("Unknown provider");
-  });
-
-  it("adds a model and points users back to browse or switch", async () => {
-    const result = await handleModelsCommand(buildParams("/models add ollama glm-5.1:cloud"), true);
-
-    expect(modelsAddMocks.addModelToConfig).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "ollama",
-        modelId: "glm-5.1:cloud",
-      }),
-    );
-    expect(result?.reply?.text).toContain("✅ Added model: ollama/glm-5.1:cloud.");
-    expect(result?.reply?.text).toContain("Browse:");
-    expect(result?.reply?.text).toContain("/models ollama");
-    expect(result?.reply?.text).toContain("Switch now:");
-    expect(result?.reply?.text).toContain("/model ollama/glm-5.1:cloud");
-    expect(result?.reply?.text).not.toContain("/models repair");
-    expect(result?.reply?.text).not.toContain("/models ollama/glm-5.1:cloud");
-  });
-
-  it("checks all config-write targets touched by /models add", async () => {
-    const result = await handleModelsCommand(buildParams("/models add ollama glm-5.1:cloud"), true);
-
-    expect(result?.shouldContinue).toBe(false);
-    expect(configWriteTargetMocks.resolveConfigWriteTargetFromPath).toHaveBeenCalledTimes(3);
-    expect(configWriteTargetMocks.resolveConfigWriteTargetFromPath.mock.calls).toEqual([
-      [["models", "providers", "ollama"]],
-      [["models", "providers", "ollama", "models"]],
-      [["agents", "defaults", "models"]],
-    ]);
-  });
-
-  it("returns config-write denial text for add-time provider bootstrap", async () => {
-    configWriteAuthMocks.resolveConfigWriteDeniedText.mockReturnValueOnce("denied");
-
-    const result = await handleModelsCommand(buildParams("/models add ollama glm-5.1:cloud"), true);
-
     expect(result).toEqual({
       shouldContinue: false,
-      reply: { text: "denied" },
+      reply: { text: MODELS_ADD_DEPRECATED_TEXT },
     });
-    expect(modelsAddMocks.addModelToConfig).not.toHaveBeenCalled();
-  });
-
-  it("rejects /models add when modelsWrite is disabled", async () => {
-    const result = await handleModelsCommand(
-      buildParams("/models add ollama glm-5.1:cloud", {
-        commands: { text: true, modelsWrite: false },
-      }),
-      true,
-    );
-
-    expect(result).toEqual({
-      shouldContinue: false,
-      reply: {
-        text: "⚠️ /models add is disabled. Set commands.modelsWrite=true to enable model registration.",
-      },
-    });
-    expect(modelsAddMocks.addModelToConfig).not.toHaveBeenCalled();
-    expect(configWriteTargetMocks.resolveConfigWriteTargetFromPath).not.toHaveBeenCalled();
   });
 });
