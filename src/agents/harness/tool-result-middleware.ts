@@ -12,6 +12,9 @@ const log = createSubsystemLogger("agents/harness");
 const MAX_MIDDLEWARE_CONTENT_BLOCKS = 200;
 const MAX_MIDDLEWARE_TEXT_CHARS = 100_000;
 const MAX_MIDDLEWARE_IMAGE_DATA_CHARS = 5_000_000;
+const MAX_MIDDLEWARE_DETAILS_BYTES = 100_000;
+const MAX_MIDDLEWARE_DETAILS_DEPTH = 20;
+const MAX_MIDDLEWARE_DETAILS_KEYS = 1_000;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -35,6 +38,61 @@ function isValidMiddlewareContentBlock(value: unknown): boolean {
   return false;
 }
 
+function isValidMiddlewareDetails(
+  value: unknown,
+  state: { keys: number; bytes: number; seen: WeakSet<object> } = {
+    keys: 0,
+    bytes: 0,
+    seen: new WeakSet<object>(),
+  },
+  depth = 0,
+): boolean {
+  if (value === undefined || value === null) {
+    return true;
+  }
+  if (depth > MAX_MIDDLEWARE_DETAILS_DEPTH) {
+    return false;
+  }
+  if (typeof value === "string") {
+    state.bytes += value.length;
+    return state.bytes <= MAX_MIDDLEWARE_DETAILS_BYTES;
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    state.bytes += String(value).length;
+    return state.bytes <= MAX_MIDDLEWARE_DETAILS_BYTES;
+  }
+  if (typeof value !== "object") {
+    return false;
+  }
+  if (state.seen.has(value)) {
+    return false;
+  }
+  state.seen.add(value);
+  if (Array.isArray(value)) {
+    state.keys += value.length;
+    if (state.keys > MAX_MIDDLEWARE_DETAILS_KEYS) {
+      return false;
+    }
+    for (const entry of value) {
+      if (!isValidMiddlewareDetails(entry, state, depth + 1)) {
+        return false;
+      }
+    }
+    return true;
+  }
+  for (const [key, entry] of Object.entries(value)) {
+    state.keys += 1;
+    state.bytes += key.length;
+    if (state.keys > MAX_MIDDLEWARE_DETAILS_KEYS || state.bytes > MAX_MIDDLEWARE_DETAILS_BYTES) {
+      return false;
+    }
+    if (!isValidMiddlewareDetails(entry, state, depth + 1)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function isValidMiddlewareToolResult(value: unknown): value is OpenClawAgentToolResult {
   if (!isRecord(value) || !Array.isArray(value.content)) {
     return false;
@@ -42,7 +100,9 @@ function isValidMiddlewareToolResult(value: unknown): value is OpenClawAgentTool
   if (value.content.length > MAX_MIDDLEWARE_CONTENT_BLOCKS) {
     return false;
   }
-  return value.content.every(isValidMiddlewareContentBlock);
+  return (
+    value.content.every(isValidMiddlewareContentBlock) && isValidMiddlewareDetails(value.details)
+  );
 }
 
 function buildMiddlewareFailureResult(): OpenClawAgentToolResult {
@@ -54,7 +114,7 @@ function buildMiddlewareFailureResult(): OpenClawAgentToolResult {
       },
     ],
     details: {
-      status: "failed",
+      status: "error",
       middlewareError: true,
     },
   };
@@ -72,17 +132,20 @@ export function createAgentToolResultMiddlewareRunner(
       for (const handler of handlers) {
         try {
           const next = await handler({ ...event, result: current }, ctx);
-          if (next?.result) {
-            if (isValidMiddlewareToolResult(next.result)) {
-              current = next.result;
-            } else {
-              log.warn(
-                `[${ctx.harness}] discarded invalid tool result middleware output for ${truncateUtf16Safe(
-                  event.toolName,
-                  120,
-                )}`,
-              );
-            }
+          // Middleware may mutate event.result in place for legacy Pi parity.
+          // Validate the current object after every handler so in-place writes
+          // cannot bypass the same shape and size bounds as returned results.
+          const candidate = next?.result ?? current;
+          if (isValidMiddlewareToolResult(candidate)) {
+            current = candidate;
+          } else {
+            log.warn(
+              `[${ctx.harness}] discarded invalid tool result middleware output for ${truncateUtf16Safe(
+                event.toolName,
+                120,
+              )}`,
+            );
+            return buildMiddlewareFailureResult();
           }
         } catch {
           log.warn(
