@@ -1649,7 +1649,7 @@
               },
               {
                 "group": "Release and CI",
-                "pages": ["reference/RELEASING", "reference/test", "ci"]
+                "pages": ["reference/RELEASING", "reference/test", "ci", "help/scripts"]
               }
             ]
           },
@@ -1666,7 +1666,7 @@
               },
               {
                 "group": "Testing",
-                "pages": ["help/testing", "help/testing-live", "help/scripts"]
+                "pages": ["help/testing", "help/testing-live"]
               },
               {
                 "group": "Diagnostics",
