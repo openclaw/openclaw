@@ -26,7 +26,7 @@ describe("OpenAI transport schema normalization runtime contract", () => {
     expect(wsTools.map((tool) => tool.strict)).toEqual([false, false]);
   });
 
-  it("normalizes parameter-free tool schemas consistently for HTTP Responses and WebSocket", () => {
+  it("documents the current HTTP/WS parameter-free schema normalization gap", () => {
     const tools = [createParameterFreeTool()] as never;
     const httpParams = buildResponsesParams(
       createNativeOpenAIResponsesModel() as never,
@@ -34,15 +34,20 @@ describe("OpenAI transport schema normalization runtime contract", () => {
       undefined,
     ) as { tools?: Array<{ strict?: boolean; parameters?: unknown }> };
     const wsTools = convertWsTools(tools, { strict: true });
+    const normalizedSchema = normalizedParameterFreeSchema();
 
     expect(httpParams.tools?.[0]?.strict).toBe(wsTools[0]?.strict);
-    expect(httpParams.tools?.[0]?.parameters).toMatchObject({
-      type: normalizedParameterFreeSchema().type,
-      properties: normalizedParameterFreeSchema().properties,
+    expect(httpParams.tools?.[0]?.parameters).toEqual({
+      type: normalizedSchema.type,
+      properties: normalizedSchema.properties,
     });
-    expect(wsTools[0]?.parameters).toMatchObject({
-      type: normalizedParameterFreeSchema().type,
-      properties: normalizedParameterFreeSchema().properties,
+    expect(wsTools[0]?.parameters).toEqual({
+      type: normalizedSchema.type,
+      properties: normalizedSchema.properties,
     });
   });
+
+  it.todo(
+    "normalizes parameter-free tool schemas to the same strict-compatible object shape for HTTP Responses and WebSocket",
+  );
 });
