@@ -751,7 +751,7 @@ jobs:
     name: ${{ matrix.checkName }}
     needs: [preflight]
     if: needs.preflight.outputs.run_checks_fast == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -857,7 +857,7 @@ jobs:
     name: "checks-fast-protocol"
     needs: [preflight]
     if: needs.preflight.outputs.run_checks_fast == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     timeout-minutes: 30
     steps:
       - name: Checkout
@@ -1122,7 +1122,7 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: needs.preflight.outputs.run_checks_node_core_nondist == 'true'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && (matrix.runner || 'ubuntu-24.04') || 'ubuntu-24.04' }}
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && (matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || 'ubuntu-24.04' }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -1375,7 +1375,7 @@ jobs:
         include:
           - check_name: check-preflight-guards
             task: preflight-guards
-            runner: ubuntu-24.04
+            runner: blacksmith-4vcpu-ubuntu-2404
           - check_name: check-prod-types
             task: prod-types
             runner: blacksmith-4vcpu-ubuntu-2404
@@ -1384,13 +1384,13 @@ jobs:
             runner: blacksmith-8vcpu-ubuntu-2404
           - check_name: check-policy-guards
             task: policy-guards
-            runner: ubuntu-24.04
+            runner: blacksmith-4vcpu-ubuntu-2404
           - check_name: check-test-types
             task: test-types
             runner: blacksmith-4vcpu-ubuntu-2404
           - check_name: check-strict-smoke
             task: strict-smoke
-            runner: ubuntu-24.04
+            runner: blacksmith-4vcpu-ubuntu-2404
     steps:
       - name: Checkout
         shell: bash
@@ -1507,7 +1507,7 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: ${{ !cancelled() && always() && needs.preflight.outputs.run_check_additional == 'true' }}
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
