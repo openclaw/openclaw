@@ -87,8 +87,12 @@ function mergeLockOptions(overrides?: Partial<FileLockOptions>): FileLockOptions
 function createEmptyEnvelope<T>(): Envelope<T> {
   return {
     version: STORE_VERSION,
-    entries: {},
+    entries: createEntriesMap(),
   };
+}
+
+function createEntriesMap<T>(): Record<string, StoredEntry<T>> {
+  return Object.create(null) as Record<string, StoredEntry<T>>;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -141,6 +145,18 @@ function resolveStoreFilePath(namespace: string, stateDir?: string): string {
   }
   const root = trimmedStateDir ? path.resolve(trimmedStateDir) : resolveStateDir(process.env);
   return path.resolve(root, "lifecycle", namespace, "store.json");
+}
+
+async function resolveStoreAccessQueueKey(filePath: string): Promise<string> {
+  const resolved = path.resolve(filePath);
+  const dir = path.dirname(resolved);
+  await fs.mkdir(dir, { recursive: true });
+  try {
+    const realDir = await fs.realpath(dir);
+    return path.join(realDir, path.basename(resolved));
+  } catch {
+    return resolved;
+  }
 }
 
 function serializeEnvelope<T>(envelope: Envelope<T>): string {
@@ -254,7 +270,7 @@ async function readEnvelopeDetailed<T>(filePath: string): Promise<ReadEnvelopeRe
   }
 
   const entries = rawEntries;
-  const sanitizedEntries: Record<string, StoredEntry<T>> = {};
+  const sanitizedEntries = createEntriesMap<T>();
   for (const [id, entry] of Object.entries(entries)) {
     if (!id || id.trim() !== id || !isRecord(entry) || !isFiniteNumber(entry.createdAt)) {
       return {
@@ -323,14 +339,15 @@ async function quarantineStoreFile(
   });
 }
 
-function runSerializedStoreAccess<R>(filePath: string, fn: () => Promise<R>): Promise<R> {
-  const previous = ACCESS_QUEUES.get(filePath) ?? Promise.resolve();
+async function runSerializedStoreAccess<R>(filePath: string, fn: () => Promise<R>): Promise<R> {
+  const queueKey = await resolveStoreAccessQueueKey(filePath);
+  const previous = ACCESS_QUEUES.get(queueKey) ?? Promise.resolve();
   const next = previous.then(fn, fn);
-  ACCESS_QUEUES.set(filePath, next);
+  ACCESS_QUEUES.set(queueKey, next);
   next
     .finally(() => {
-      if (ACCESS_QUEUES.get(filePath) === next) {
-        ACCESS_QUEUES.delete(filePath);
+      if (ACCESS_QUEUES.get(queueKey) === next) {
+        ACCESS_QUEUES.delete(queueKey);
       }
     })
     .catch(() => {});

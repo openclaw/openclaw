@@ -10,6 +10,7 @@ type DemoRecord = {
 };
 
 const { createTempDir } = createPluginSdkTestHarness();
+const itWithDirectorySymlinks = process.platform === "win32" ? it.skip : it;
 
 function createStore(
   stateDir: string,
@@ -66,6 +67,20 @@ describe("createPersistentKeyedStore", () => {
     await store.register("message-1", { value: "hello" });
 
     await expect(store.lookup("message-1")).resolves.toEqual({ value: "hello" });
+  });
+
+  it("stores prototype-shaped ids as data keys", async () => {
+    const stateDir = await createTempDir("openclaw-keyed-store-");
+    const store = createStore(stateDir);
+
+    await store.register("__proto__", { value: "hello" });
+
+    await expect(store.lookup("__proto__")).resolves.toEqual({ value: "hello" });
+    await expect(store.entries()).resolves.toEqual([
+      expect.objectContaining({ id: "__proto__", record: { value: "hello" } }),
+    ]);
+    const envelope = await readStoreEnvelope(stateDir);
+    expect(Object.hasOwn(envelope.entries, "__proto__")).toBe(true);
   });
 
   it("persists records across new instances", async () => {
@@ -235,6 +250,28 @@ describe("createPersistentKeyedStore", () => {
     const stateDir = await createTempDir("openclaw-keyed-store-");
     const first = createStore(stateDir);
     const second = createStore(stateDir);
+
+    await Promise.all(
+      Array.from({ length: 20 }, (_, index) =>
+        (index % 2 === 0 ? first : second).register(`message-${index}`, { value: index }),
+      ),
+    );
+
+    const entries = await first.entries();
+    expect(entries).toHaveLength(20);
+    expect(entries.map((entry) => entry.id).toSorted()).toEqual(
+      Array.from({ length: 20 }, (_, index) => `message-${index}`).toSorted(),
+    );
+  });
+
+  itWithDirectorySymlinks("serializes concurrent registers across aliased state dirs", async () => {
+    const parentDir = await createTempDir("openclaw-keyed-store-alias-");
+    const realStateDir = path.join(parentDir, "real");
+    const linkedStateDir = path.join(parentDir, "linked");
+    await fs.mkdir(realStateDir, { recursive: true });
+    await fs.symlink(realStateDir, linkedStateDir, "dir");
+    const first = createStore(realStateDir);
+    const second = createStore(linkedStateDir);
 
     await Promise.all(
       Array.from({ length: 20 }, (_, index) =>
