@@ -335,6 +335,11 @@ adapter during the deprecation window, but non-bundled plugins that still use it
 receive a manifest diagnostic. New plugins should put setup/status env metadata
 on `setup.providers[].envVars`.
 
+OpenClaw can also derive simple setup choices from `setup.providers[].authMethods`
+when no setup entry is available, or when `setup.requiresRuntime: false`
+declares setup runtime unnecessary. Explicit `providerAuthChoices` entries stay
+preferred for custom labels, CLI flags, onboarding scope, and assistant metadata.
+
 Set `requiresRuntime: false` only when those descriptors are sufficient for the
 setup surface. OpenClaw treats explicit `false` as a descriptor-only contract
 and will not execute `setup-api` or `openclaw.setupEntry` for setup lookup. If
