@@ -1,6 +1,6 @@
 import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
 import { CODEX_CONTROL_METHODS, type CodexControlMethod } from "./app-server/capabilities.js";
-import { listCodexAppServerModels } from "./app-server/models.js";
+import { listAllCodexAppServerModels } from "./app-server/models.js";
 import { isJsonObject, type JsonValue } from "./app-server/protocol.js";
 import {
   clearCodexAppServerBinding,
@@ -42,7 +42,7 @@ import {
 
 export type CodexCommandDeps = {
   codexControlRequest: CodexControlRequestFn;
-  listCodexAppServerModels: typeof listCodexAppServerModels;
+  listCodexAppServerModels: typeof listAllCodexAppServerModels;
   readCodexStatusProbes: typeof readCodexStatusProbes;
   readCodexAppServerBinding: typeof readCodexAppServerBinding;
   requestOptions: typeof requestOptions;
@@ -73,7 +73,7 @@ type SafeCodexControlRequestFn = (
 
 const defaultCodexCommandDeps: CodexCommandDeps = {
   codexControlRequest,
-  listCodexAppServerModels,
+  listCodexAppServerModels: listAllCodexAppServerModels,
   readCodexStatusProbes,
   readCodexAppServerBinding,
   requestOptions,

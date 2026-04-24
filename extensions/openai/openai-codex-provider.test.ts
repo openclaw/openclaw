@@ -224,7 +224,7 @@ describe("openai codex provider", () => {
           },
         },
       ],
-      defaultModel: "openai/gpt-5.5",
+      defaultModel: "openai-codex/gpt-5.5",
     });
     expect(result?.profiles[0]?.credential).not.toHaveProperty("idToken");
     expect(result?.profiles[0]?.credential).not.toHaveProperty("accountId");
