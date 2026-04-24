@@ -27,7 +27,7 @@ const allowedRawFetchCallsites = new Set([
   bundledPluginCallsite("discord", "src/voice-message.ts", 298),
   bundledPluginCallsite("discord", "src/voice-message.ts", 333),
   bundledPluginCallsite("elevenlabs", "speech-provider.ts", 295),
-  bundledPluginCallsite("elevenlabs", "tts.ts", 116),
+  bundledPluginCallsite("elevenlabs", "tts.ts", 74),
   bundledPluginCallsite("feishu", "src/monitor.webhook.test-helpers.ts", 25),
   bundledPluginCallsite("github-copilot", "login.ts", 48),
   bundledPluginCallsite("github-copilot", "login.ts", 80),
