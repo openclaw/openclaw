@@ -406,6 +406,30 @@ function createGatewayPlugin(params: {
   return new SafeGatewayPlugin();
 }
 
+async function fetchDiscordGatewayMetadataDirect(
+  input: string,
+  init?: DiscordGatewayFetchInit,
+  capture?: false | { flowId: string; meta: Record<string, unknown> },
+): Promise<Response> {
+  const runtimeFetch = globalThis.fetch;
+  if (typeof runtimeFetch !== "function") {
+    throw new Error("fetch is not available");
+  }
+  const response = await runtimeFetch(input, init as RequestInit);
+  if (capture) {
+    captureHttpExchange({
+      url: input,
+      method: (init?.method as string | undefined) ?? "GET",
+      requestHeaders: init?.headers as Headers | Record<string, string> | undefined,
+      requestBody: (init as RequestInit & { body?: BodyInit | null })?.body ?? null,
+      response,
+      flowId: capture.flowId,
+      meta: capture.meta,
+    });
+  }
+  return response;
+}
+
 export function waitForDiscordGatewayPluginRegistration(
   plugin: unknown,
 ): Promise<void> | undefined {
@@ -442,19 +466,16 @@ export function createDiscordGatewayPlugin(params: {
     return createGatewayPlugin({
       options,
       fetchImpl: async (input, init) => {
-        const response = await fetch(input, init as RequestInit);
-        if (!debugProxySettings.enabled) {
-          captureHttpExchange({
-            url: input,
-            method: (init?.method as string | undefined) ?? "GET",
-            requestHeaders: init?.headers as Headers | Record<string, string> | undefined,
-            requestBody: (init as RequestInit & { body?: BodyInit | null })?.body ?? null,
-            response,
-            flowId: randomUUID(),
-            meta: { subsystem: "discord-gateway-metadata" },
-          });
-        }
-        return response;
+        return await fetchDiscordGatewayMetadataDirect(
+          input,
+          init,
+          debugProxySettings.enabled
+            ? false
+            : {
+                flowId: randomUUID(),
+                meta: { subsystem: "discord-gateway-metadata" },
+              },
+        );
       },
       runtime: params.runtime,
       testing: params.__testing
@@ -508,7 +529,7 @@ export function createDiscordGatewayPlugin(params: {
     params.runtime.error?.(danger(`discord: invalid gateway proxy: ${String(err)}`));
     return createGatewayPlugin({
       options,
-      fetchImpl: (input, init) => fetch(input, init as RequestInit),
+      fetchImpl: (input, init) => fetchDiscordGatewayMetadataDirect(input, init, false),
       runtime: params.runtime,
       testing: params.__testing
         ? {
