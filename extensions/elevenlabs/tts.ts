@@ -5,6 +5,10 @@ import {
   normalizeSeed,
   requireInRange,
 } from "openclaw/plugin-sdk/speech";
+import {
+  fetchWithSsrFGuard,
+  ssrfPolicyFromHttpBaseUrlAllowedHostname,
+} from "openclaw/plugin-sdk/ssrf-runtime";
 import { isValidElevenLabsVoiceId, normalizeElevenLabsBaseUrl } from "./shared.js";
 
 function assertElevenLabsVoiceSettings(settings: {
@@ -61,17 +65,15 @@ export async function elevenLabsTTS(params: {
   const normalizedLanguage = normalizeLanguageCode(languageCode);
   const normalizedNormalization = normalizeApplyTextNormalization(applyTextNormalization);
   const normalizedSeed = normalizeSeed(seed);
+  const normalizedBaseUrl = normalizeElevenLabsBaseUrl(baseUrl);
+  const url = new URL(`${normalizedBaseUrl}/v1/text-to-speech/${voiceId}`);
+  if (outputFormat) {
+    url.searchParams.set("output_format", outputFormat);
+  }
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-
-  try {
-    const url = new URL(`${normalizeElevenLabsBaseUrl(baseUrl)}/v1/text-to-speech/${voiceId}`);
-    if (outputFormat) {
-      url.searchParams.set("output_format", outputFormat);
-    }
-
-    const response = await fetch(url.toString(), {
+  const { response, release } = await fetchWithSsrFGuard({
+    url: url.toString(),
+    init: {
       method: "POST",
       headers: {
         "xi-api-key": apiKey,
@@ -93,13 +95,16 @@ export async function elevenLabsTTS(params: {
           speed: voiceSettings.speed,
         },
       }),
-      signal: controller.signal,
-    });
-
+    },
+    timeoutMs,
+    policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(normalizedBaseUrl),
+    auditContext: "elevenlabs.tts",
+  });
+  try {
     await assertOkOrThrowProviderError(response, "ElevenLabs API error");
 
     return Buffer.from(await response.arrayBuffer());
   } finally {
-    clearTimeout(timeout);
+    await release();
   }
 }
