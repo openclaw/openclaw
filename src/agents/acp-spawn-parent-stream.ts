@@ -6,7 +6,7 @@ import { onAgentEvent } from "../infra/agent-events.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { scopedHeartbeatWakeOptions } from "../routing/session-key.js";
-import { normalizeAssistantPhase } from "../shared/chat-message-content.js";
+import { resolveAssistantEventPhase } from "../shared/chat-message-content.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { recordTaskRunProgressByRunId } from "../tasks/detached-task-runtime.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
@@ -311,9 +311,7 @@ export function startAcpSpawnParentStreamRelay(params: {
 
     if (event.stream === "assistant") {
       const data = event.data;
-      const assistantPhase = normalizeAssistantPhase(
-        (data as { phase?: unknown } | undefined)?.phase,
-      );
+      const assistantPhase = resolveAssistantEventPhase(data);
       const deltaCandidate =
         (data as { delta?: unknown } | undefined)?.delta ??
         (data as { text?: unknown } | undefined)?.text;

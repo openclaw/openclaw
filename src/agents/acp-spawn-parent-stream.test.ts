@@ -316,6 +316,45 @@ describe("startAcpSpawnParentStreamRelay", () => {
     relay.dispose();
   });
 
+  it("suppresses assistant relay text when commentary phase only exists in message metadata", () => {
+    const relay = startAcpSpawnParentStreamRelay({
+      runId: "run-commentary-signature",
+      parentSessionKey: "agent:main:main",
+      childSessionKey: "agent:codex:acp:child-commentary-signature",
+      agentId: "codex",
+      streamFlushMs: 10,
+      noOutputNoticeMs: 120_000,
+    });
+
+    emitAgentEvent({
+      runId: "run-commentary-signature",
+      stream: "assistant",
+      data: {
+        delta: "I will first clone the repository into a temporary directory.",
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "I will first clone the repository into a temporary directory.",
+              textSignature: JSON.stringify({
+                v: 1,
+                id: "msg_commentary",
+                phase: "commentary",
+              }),
+            },
+          ],
+        },
+      },
+    });
+    vi.advanceTimersByTime(15);
+
+    const texts = collectedTexts();
+    expect(texts.some((text) => text.includes("clone the repository"))).toBe(false);
+    expect(texts.some((text) => text.includes("temporary directory"))).toBe(false);
+    relay.dispose();
+  });
+
   it("still relays final_answer assistant text after suppressed commentary", () => {
     const relay = startAcpSpawnParentStreamRelay({
       runId: "run-final",

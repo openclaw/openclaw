@@ -367,6 +367,9 @@ One-shot ACP sessions spawned by another agent run are background children, simi
 - Child turns run on the same background lane used by native sub-agent spawns, so a slow ACP harness does not block unrelated main-session work.
 - Completion reports back through the internal task-completion announce path.
 - The parent rewrites the child result in normal assistant voice when a user-facing reply is useful.
+- Parent progress relays suppress commentary-phase assistant text, including
+  signature-only phase metadata, so internal planning text does not briefly
+  surface and then disappear when the durable child transcript is replayed.
 
 Do not treat this path as a peer-to-peer chat between parent and child. The child already has a completion channel back to the parent.
 
