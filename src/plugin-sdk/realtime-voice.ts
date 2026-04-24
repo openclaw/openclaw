@@ -36,3 +36,10 @@ export {
   type RealtimeVoiceBridgeSessionParams,
   type RealtimeVoiceMarkStrategy,
 } from "../realtime-voice/session-runtime.js";
+export {
+  convertPcmToMulaw8k,
+  mulawToPcm,
+  pcmToMulaw,
+  resamplePcm,
+  resamplePcmTo8k,
+} from "../realtime-voice/audio-codec.js";

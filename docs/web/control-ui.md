@@ -156,12 +156,14 @@ Cron jobs panel notes:
 - `chat.history` also strips display-only inline directive tags from visible assistant text (for example `[[reply_to_*]]` and `[[audio_as_voice]]`), plain-text tool-call XML payloads (including `<tool_call>...</tool_call>`, `<function_call>...</function_call>`, `<tool_calls>...</tool_calls>`, `<function_calls>...</function_calls>`, and truncated tool-call blocks), and leaked ASCII/full-width model control tokens, and omits assistant entries whose whole visible text is only the exact silent token `NO_REPLY` / `no_reply`.
 - `chat.inject` appends an assistant note to the session transcript and broadcasts a `chat` event for UI-only updates (no agent run, no channel delivery).
 - The chat header model and thinking pickers patch the active session immediately through `sessions.patch`; they are persistent session overrides, not one-turn-only send options.
-- Talk mode uses the registered realtime voice provider. Configure OpenAI with
-  `talk.provider: "openai"` plus `talk.providers.openai.apiKey`, or reuse the
-  Voice Call realtime provider config. The browser never receives the standard
-  OpenAI API key; it receives only the ephemeral Realtime client secret. The
-  Realtime session prompt is assembled by the Gateway; `talk.realtime.session`
-  does not accept caller-provided instruction overrides.
+- Talk mode uses a registered realtime voice provider that supports browser
+  WebRTC sessions. Configure OpenAI with `talk.provider: "openai"` plus
+  `talk.providers.openai.apiKey`, or reuse the Voice Call realtime provider
+  config. The browser never receives the standard OpenAI API key; it receives
+  only the ephemeral Realtime client secret. Google Live realtime voice is
+  supported for backend Voice Call and Google Meet bridges, but not this browser
+  WebRTC path yet. The Realtime session prompt is assembled by the Gateway;
+  `talk.realtime.session` does not accept caller-provided instruction overrides.
 - In the Chat composer, the Talk control is the waves button next to the
   microphone dictation button. When Talk starts, the composer status row shows
   `Connecting Talk...`, then `Talk live` while audio is connected, or
