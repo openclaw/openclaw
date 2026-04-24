@@ -126,6 +126,30 @@ describe("resolveSessionKeyForRequest", () => {
     expect(result.storePath).toBe(MYBOT_STORE_PATH);
   });
 
+  it("does not search other agent stores when --agent scopes --session-id", async () => {
+    setupMainAndMybotStorePaths();
+    mockStoresByPath({
+      [MAIN_STORE_PATH]: {
+        "agent:main:whatsapp:direct:+15550000000": {
+          sessionId: "target-session-id",
+          updatedAt: 10,
+        },
+      },
+      [MYBOT_STORE_PATH]: {},
+    });
+
+    const result = resolveSessionKeyForRequest({
+      cfg: baseCfg,
+      agentId: "mybot",
+      sessionId: "target-session-id",
+    });
+
+    expect(result.sessionKey).toBe("agent:mybot:explicit:target-session-id");
+    expect(result.storePath).toBe(MYBOT_STORE_PATH);
+    expect(mocks.loadSessionStore).toHaveBeenCalledTimes(1);
+    expect(mocks.loadSessionStore).toHaveBeenCalledWith(MYBOT_STORE_PATH);
+  });
+
   it("returns correct sessionStore when session found in non-primary agent store", async () => {
     const mybotStore = {
       "agent:mybot:main": { sessionId: "target-session-id", updatedAt: 0 },

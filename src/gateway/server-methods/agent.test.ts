@@ -1018,9 +1018,11 @@ describe("gateway agent handler", () => {
 
     await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
     const call = mocks.agentCommand.mock.calls.at(-1)?.[0] as {
+      agentId?: string;
       sessionId?: string;
       sessionKey?: string;
     };
+    expect(call?.agentId).toBe("main");
     expect(call?.sessionId).toBe("resume-whatsapp-session");
     expect(call?.sessionKey).toBeUndefined();
   });

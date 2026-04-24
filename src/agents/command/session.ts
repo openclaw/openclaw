@@ -58,6 +58,7 @@ function collectSessionIdMatchesForRequest(opts: {
   storePath: string;
   storeAgentId?: string;
   sessionId: string;
+  searchOtherAgentStores: boolean;
 }): SessionIdMatchSet {
   const matches: Array<[string, SessionEntry]> = [];
   const primaryStoreMatches: Array<[string, SessionEntry]> = [];
@@ -85,6 +86,10 @@ function collectSessionIdMatchesForRequest(opts: {
   };
 
   addMatches(opts.sessionStore, opts.storePath, { primary: true });
+  if (!opts.searchOtherAgentStores) {
+    return { matches, primaryStoreMatches, storeByKey };
+  }
+
   for (const agentId of listAgentIds(opts.cfg)) {
     if (agentId === opts.storeAgentId) {
       continue;
@@ -146,7 +151,9 @@ export function resolveSessionKeyForRequest(opts: {
           agentId: requestedAgentId,
         })
       : undefined);
-  const storeAgentId = resolveAgentIdFromSessionKey(explicitSessionKey) ?? requestedAgentId;
+  const storeAgentId = explicitSessionKey
+    ? resolveAgentIdFromSessionKey(explicitSessionKey)
+    : (requestedAgentId ?? normalizeAgentId(undefined));
   const storePath = resolveStorePath(sessionCfg?.store, {
     agentId: storeAgentId,
   });
@@ -171,6 +178,7 @@ export function resolveSessionKeyForRequest(opts: {
       storePath,
       storeAgentId,
       sessionId: opts.sessionId,
+      searchOtherAgentStores: requestedAgentId === undefined,
     });
     const preferredSelection = resolveSessionIdMatchSelection(matches, opts.sessionId);
     const currentStoreSelection =

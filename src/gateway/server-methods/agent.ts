@@ -921,6 +921,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         message,
         images,
         imageOrder,
+        agentId,
         provider: providerOverride,
         model: modelOverride,
         to: resolvedTo,
