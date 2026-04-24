@@ -1,8 +1,19 @@
-import { spawn } from "node:child_process";
+import { spawn, type SpawnOptionsWithoutStdio } from "node:child_process";
 import type { CodexAppServerStartOptions } from "./config.js";
 import type { CodexAppServerTransport } from "./transport.js";
 
 export function createStdioTransport(options: CodexAppServerStartOptions): CodexAppServerTransport {
+  return spawn(
+    options.command,
+    options.args,
+    buildCodexAppServerStdioSpawnOptions(options, process.platform),
+  );
+}
+
+export function buildCodexAppServerStdioSpawnOptions(
+  options: Pick<CodexAppServerStartOptions, "env" | "clearEnv">,
+  platform: NodeJS.Platform,
+): SpawnOptionsWithoutStdio {
   const env = {
     ...process.env,
     ...options.env,
@@ -10,9 +21,11 @@ export function createStdioTransport(options: CodexAppServerStartOptions): Codex
   for (const key of options.clearEnv ?? []) {
     delete env[key];
   }
-  return spawn(options.command, options.args, {
+
+  return {
     env,
-    detached: process.platform !== "win32",
+    detached: platform !== "win32",
+    shell: platform === "win32",
     stdio: ["pipe", "pipe", "pipe"],
-  });
+  };
 }
