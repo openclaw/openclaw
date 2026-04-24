@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  hasProviderStaticCatalogForFilter,
   loadProviderCatalogModelsForList,
   resolveProviderCatalogPluginIdsForFilter,
 } from "./list.provider-catalog.js";
@@ -87,6 +88,18 @@ const openaiProvider = {
   },
 };
 
+const catalogOnlyProvider = {
+  id: "ollama",
+  pluginId: "ollama",
+  label: "Ollama",
+  auth: [],
+  catalog: {
+    run: async () => ({
+      provider: { baseUrl: "http://127.0.0.1:11434", models: [] },
+    }),
+  },
+};
+
 const defaultProviders = [chutesProvider, moonshotProvider, openaiProvider];
 
 describe("loadProviderCatalogModelsForList", () => {
@@ -96,10 +109,13 @@ describe("loadProviderCatalogModelsForList", () => {
       "chutes",
       "moonshot",
       "openai",
+      "ollama",
     ]);
     providerDiscoveryMocks.resolveOwningPluginIdsForProvider.mockImplementation(
       ({ provider }: { provider: string }) =>
-        defaultProviders.some((entry) => entry.id === provider) ? [provider] : undefined,
+        [...defaultProviders, catalogOnlyProvider].some((entry) => entry.id === provider)
+          ? [provider]
+          : undefined,
     );
     providerDiscoveryMocks.resolveProviderContractPluginIdsForProviderAlias.mockImplementation(
       (provider: string) => (provider === "azure-openai-responses" ? ["openai"] : undefined),
@@ -146,6 +162,27 @@ describe("loadProviderCatalogModelsForList", () => {
       expect.objectContaining({
         onlyPluginIds: ["moonshot"],
         requireCompleteDiscoveryEntryCoverage: true,
+        discoveryEntriesOnly: true,
+      }),
+    );
+  });
+
+  it("only skips registry for providers with actual static catalogs", async () => {
+    providerDiscoveryMocks.resolvePluginDiscoveryProviders.mockResolvedValue([catalogOnlyProvider]);
+
+    await expect(
+      hasProviderStaticCatalogForFilter({
+        cfg: baseParams.cfg,
+        env: baseParams.env,
+        providerFilter: "ollama",
+      }),
+    ).resolves.toBe(false);
+
+    expect(providerDiscoveryMocks.resolvePluginDiscoveryProviders).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onlyPluginIds: ["ollama"],
+        requireCompleteDiscoveryEntryCoverage: true,
+        discoveryEntriesOnly: true,
       }),
     );
   });
