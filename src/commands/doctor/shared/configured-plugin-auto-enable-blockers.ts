@@ -1,45 +1,24 @@
-import {
-  detectPluginAutoEnableCandidates,
-  resolvePluginAutoEnableCandidateReason,
-  type PluginAutoEnableCandidate,
-} from "../../../config/plugin-auto-enable.js";
 import { ensurePluginAllowlisted } from "../../../config/plugins-allowlist.js";
-import { isBlockedObjectKey } from "../../../config/prototype-keys.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
   loadPluginManifestRegistry,
   type PluginManifestRegistry,
 } from "../../../plugins/manifest-registry.js";
-import { sanitizeForLog } from "../../../terminal/ansi.js";
 
-const REPAIRABLE_CANDIDATE_KINDS = new Set<PluginAutoEnableCandidate["kind"]>([
-  "provider-auth-configured",
-  "provider-model-configured",
-  "agent-harness-runtime-configured",
-]);
+const CODEX_PLUGIN_ID = "codex";
+const OPENAI_PLUGIN_ID = "openai";
 const OPENAI_ENABLED_CODEX_REASON = "OpenAI plugin enabled";
 
-export type ConfiguredPluginAutoEnableBlockerReason =
-  | "disabled-in-config"
-  | "blocked-by-denylist"
-  | "blocked-by-allowlist"
-  | "plugins-disabled"
-  | "invalid-plugin-id"
-  | "not-enabled";
+export type ConfiguredPluginAutoEnableBlockerReason = "blocked-by-denylist" | "not-enabled";
 
 export type ConfiguredPluginAutoEnableBlockerHit = {
-  pluginId: string;
-  reasons: string[];
+  pluginId: typeof CODEX_PLUGIN_ID;
+  reasons: [typeof OPENAI_ENABLED_CODEX_REASON];
   blocker: ConfiguredPluginAutoEnableBlockerReason;
-  entryDisabled?: boolean;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
-function isRepairableCandidate(candidate: PluginAutoEnableCandidate): boolean {
-  return REPAIRABLE_CANDIDATE_KINDS.has(candidate.kind);
 }
 
 function isPluginDenied(cfg: OpenClawConfig, pluginId: string): boolean {
@@ -59,23 +38,29 @@ function isPluginAllowMissing(cfg: OpenClawConfig, pluginId: string): boolean {
 }
 
 function isOpenAiExplicitlyEnabled(cfg: OpenClawConfig): boolean {
-  if (cfg.plugins?.enabled === false || isPluginDenied(cfg, "openai")) {
+  if (cfg.plugins?.enabled === false || isPluginDenied(cfg, OPENAI_PLUGIN_ID)) {
     return false;
   }
-  if (isPluginEntryDisabled(cfg, "openai")) {
+  if (isPluginEntryDisabled(cfg, OPENAI_PLUGIN_ID)) {
     return false;
   }
-  if (isPluginAllowMissing(cfg, "openai")) {
+  if (isPluginAllowMissing(cfg, OPENAI_PLUGIN_ID)) {
     return false;
   }
-  return isPluginEntryEnabled(cfg, "openai") || cfg.plugins?.allow?.includes("openai") === true;
+  return (
+    isPluginEntryEnabled(cfg, OPENAI_PLUGIN_ID) ||
+    cfg.plugins?.allow?.includes(OPENAI_PLUGIN_ID) === true
+  );
 }
 
-function isCodexAlreadyEnabled(cfg: OpenClawConfig): boolean {
-  if (!isPluginEntryEnabled(cfg, "codex")) {
+function isCodexEnabled(cfg: OpenClawConfig): boolean {
+  if (isPluginDenied(cfg, CODEX_PLUGIN_ID)) {
     return false;
   }
-  return !isPluginAllowMissing(cfg, "codex");
+  if (!isPluginEntryEnabled(cfg, CODEX_PLUGIN_ID)) {
+    return false;
+  }
+  return !isPluginAllowMissing(cfg, CODEX_PLUGIN_ID);
 }
 
 function resolveRegistry(params: {
@@ -92,26 +77,19 @@ function resolveRegistry(params: {
   );
 }
 
-function hasManifestPlugin(registry: PluginManifestRegistry, pluginId: string): boolean {
-  return registry.plugins.some((plugin) => plugin.id === pluginId);
+function hasCodexManifest(registry: PluginManifestRegistry): boolean {
+  return registry.plugins.some((plugin) => plugin.id === CODEX_PLUGIN_ID);
 }
 
 function shouldEnableCodexForOpenAi(
   cfg: OpenClawConfig,
   registry: PluginManifestRegistry,
 ): boolean {
-  return (
-    isOpenAiExplicitlyEnabled(cfg) &&
-    !isCodexAlreadyEnabled(cfg) &&
-    hasManifestPlugin(registry, "codex")
-  );
+  return isOpenAiExplicitlyEnabled(cfg) && !isCodexEnabled(cfg) && hasCodexManifest(registry);
 }
 
-function setPluginEntryEnabled(cfg: OpenClawConfig, pluginId: string): OpenClawConfig {
-  if (isBlockedObjectKey(pluginId)) {
-    return cfg;
-  }
-  const entry = cfg.plugins?.entries?.[pluginId];
+function setCodexEntryEnabled(cfg: OpenClawConfig): OpenClawConfig {
+  const entry = cfg.plugins?.entries?.[CODEX_PLUGIN_ID];
   const existingEntry = isRecord(entry) ? entry : {};
   return {
     ...cfg,
@@ -119,7 +97,7 @@ function setPluginEntryEnabled(cfg: OpenClawConfig, pluginId: string): OpenClawC
       ...cfg.plugins,
       entries: {
         ...cfg.plugins?.entries,
-        [pluginId]: {
+        [CODEX_PLUGIN_ID]: {
           ...existingEntry,
           enabled: true,
         },
@@ -128,100 +106,22 @@ function setPluginEntryEnabled(cfg: OpenClawConfig, pluginId: string): OpenClawC
   };
 }
 
-function joinReasons(reasons: readonly string[]): string {
-  return reasons.join("; ");
-}
-
-function sanitizeOutput(value: string): string {
-  return sanitizeForLog(value);
-}
-
-function isOpenAiCompanionOnlyReason(reasons: readonly string[]): boolean {
-  return reasons.length === 1 && reasons[0] === OPENAI_ENABLED_CODEX_REASON;
-}
-
-function isOpenAiCompanionAllowlistBlocked(
-  cfg: OpenClawConfig,
-  pluginId: string,
-  reasons: readonly string[],
-): boolean {
-  return (
-    pluginId === "codex" &&
-    isOpenAiCompanionOnlyReason(reasons) &&
-    isPluginAllowMissing(cfg, pluginId)
-  );
-}
-
-function addReason(reasonsByPlugin: Map<string, string[]>, pluginId: string, reason: string): void {
-  const reasons = reasonsByPlugin.get(pluginId) ?? [];
-  if (!reasons.includes(reason)) {
-    reasons.push(reason);
-  }
-  reasonsByPlugin.set(pluginId, reasons);
-}
-
 export function scanConfiguredPluginAutoEnableBlockers(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   manifestRegistry?: PluginManifestRegistry;
 }): ConfiguredPluginAutoEnableBlockerHit[] {
   const registry = resolveRegistry(params);
-  const candidates = detectPluginAutoEnableCandidates({
-    config: params.cfg,
-    env: params.env,
-    manifestRegistry: registry,
-  }).filter(isRepairableCandidate);
-
-  const reasonsByPlugin = new Map<string, string[]>();
-  for (const candidate of candidates) {
-    addReason(
-      reasonsByPlugin,
-      candidate.pluginId,
-      resolvePluginAutoEnableCandidateReason(candidate),
-    );
-  }
-  if (shouldEnableCodexForOpenAi(params.cfg, registry)) {
-    addReason(reasonsByPlugin, "codex", OPENAI_ENABLED_CODEX_REASON);
-  }
-  if (reasonsByPlugin.size === 0) {
+  if (!shouldEnableCodexForOpenAi(params.cfg, registry)) {
     return [];
   }
-
-  const hits: ConfiguredPluginAutoEnableBlockerHit[] = [];
-  for (const pluginId of [...reasonsByPlugin.keys()].toSorted((left, right) =>
-    left.localeCompare(right),
-  )) {
-    const reasons = reasonsByPlugin.get(pluginId) ?? [];
-    if (isBlockedObjectKey(pluginId)) {
-      hits.push({ pluginId, reasons, blocker: "invalid-plugin-id" });
-      continue;
-    }
-    if (params.cfg.plugins?.enabled === false) {
-      hits.push({ pluginId, reasons, blocker: "plugins-disabled" });
-      continue;
-    }
-    if (isPluginDenied(params.cfg, pluginId)) {
-      hits.push({ pluginId, reasons, blocker: "blocked-by-denylist" });
-      continue;
-    }
-    if (isOpenAiCompanionAllowlistBlocked(params.cfg, pluginId, reasons)) {
-      hits.push({
-        pluginId,
-        reasons,
-        blocker: "blocked-by-allowlist",
-        entryDisabled: isPluginEntryDisabled(params.cfg, pluginId),
-      });
-      continue;
-    }
-    if (isPluginEntryDisabled(params.cfg, pluginId)) {
-      hits.push({ pluginId, reasons, blocker: "disabled-in-config" });
-      continue;
-    }
-    if (pluginId === "codex" && reasons.includes(OPENAI_ENABLED_CODEX_REASON)) {
-      hits.push({ pluginId, reasons, blocker: "not-enabled" });
-    }
-  }
-  return hits;
+  return [
+    {
+      pluginId: CODEX_PLUGIN_ID,
+      reasons: [OPENAI_ENABLED_CODEX_REASON],
+      blocker: isPluginDenied(params.cfg, CODEX_PLUGIN_ID) ? "blocked-by-denylist" : "not-enabled",
+    },
+  ];
 }
 
 export function collectConfiguredPluginAutoEnableBlockerWarnings(params: {
@@ -229,33 +129,13 @@ export function collectConfiguredPluginAutoEnableBlockerWarnings(params: {
   doctorFixCommand?: string;
 }): string[] {
   return params.hits.map((hit) => {
-    const pluginId = sanitizeOutput(hit.pluginId);
-    const reason = sanitizeOutput(joinReasons(hit.reasons));
-    if (hit.blocker === "disabled-in-config") {
-      const suffix = params.doctorFixCommand
-        ? ` Run "${params.doctorFixCommand}" to enable it.`
-        : " Enable the plugin before relying on that configuration.";
-      return `- plugins.entries.${pluginId}.enabled: plugin is disabled, but ${reason}.${suffix}`;
-    }
-    if (hit.blocker === "not-enabled") {
-      const suffix = params.doctorFixCommand
-        ? ` Run "${params.doctorFixCommand}" to enable it.`
-        : " Enable the plugin before relying on that configuration.";
-      return `- plugins.entries.${pluginId}.enabled: plugin is not enabled, but ${reason}.${suffix}`;
-    }
-    if (hit.blocker === "blocked-by-allowlist") {
-      const disabledSuffix = hit.entryDisabled
-        ? ` Also enable plugins.entries.${pluginId}.enabled before relying on that configuration.`
-        : "";
-      return `- plugins.allow: plugin "${pluginId}" is not allowlisted, but ${reason}. Add "${pluginId}" to plugins.allow before relying on that configuration.${disabledSuffix}`;
-    }
     if (hit.blocker === "blocked-by-denylist") {
-      return `- plugins.deny: plugin "${pluginId}" is denied, but ${reason}. Remove it from plugins.deny before relying on that configuration.`;
+      return `- plugins.deny: plugin "${hit.pluginId}" is denied, but ${hit.reasons[0]}. Remove it from plugins.deny before relying on that configuration.`;
     }
-    if (hit.blocker === "invalid-plugin-id") {
-      return `- plugins.entries.${pluginId}.enabled: plugin id is reserved and cannot be auto-repaired, but ${reason}. Use a non-reserved plugin id before relying on that configuration.`;
-    }
-    return `- plugins.enabled: plugins are disabled globally, but plugin "${pluginId}" is needed because ${reason}. Enable plugins before relying on that configuration.`;
+    const suffix = params.doctorFixCommand
+      ? ` Run "${params.doctorFixCommand}" to enable it.`
+      : " Enable the plugin before relying on that configuration.";
+    return `- plugins.entries.${hit.pluginId}.enabled: plugin is not enabled, but ${hit.reasons[0]}.${suffix}`;
   });
 }
 
@@ -268,27 +148,28 @@ export function maybeRepairConfiguredPluginAutoEnableBlockers(params: {
   changes: string[];
   warnings: string[];
 } {
-  let next = params.cfg;
-  const changes: string[] = [];
-  const warnings: string[] = [];
   const hits = scanConfiguredPluginAutoEnableBlockers(params);
-
-  for (const hit of hits) {
-    if (hit.blocker !== "disabled-in-config" && hit.blocker !== "not-enabled") {
-      warnings.push(...collectConfiguredPluginAutoEnableBlockerWarnings({ hits: [hit] }));
-      continue;
-    }
-
-    const hadAllowlistMissing = isPluginAllowMissing(next, hit.pluginId);
-    next = setPluginEntryEnabled(next, hit.pluginId);
-    next = ensurePluginAllowlisted(next, hit.pluginId);
-    const pluginId = sanitizeOutput(hit.pluginId);
-    const reason = sanitizeOutput(joinReasons(hit.reasons));
-    changes.push(`plugins.entries.${pluginId}.enabled: enabled plugin because ${reason}.`);
-    if (hadAllowlistMissing) {
-      changes.push(`plugins.allow: added "${pluginId}" because ${reason}.`);
-    }
+  if (hits.length === 0) {
+    return { config: params.cfg, changes: [], warnings: [] };
+  }
+  const hit = hits[0];
+  if (hit.blocker === "blocked-by-denylist") {
+    return {
+      config: params.cfg,
+      changes: [],
+      warnings: collectConfiguredPluginAutoEnableBlockerWarnings({ hits }),
+    };
   }
 
-  return { config: next, changes, warnings };
+  const hadAllowlistMissing = isPluginAllowMissing(params.cfg, CODEX_PLUGIN_ID);
+  const config = ensurePluginAllowlisted(setCodexEntryEnabled(params.cfg), CODEX_PLUGIN_ID);
+  const changes = [
+    `plugins.entries.${CODEX_PLUGIN_ID}.enabled: enabled plugin because ${OPENAI_ENABLED_CODEX_REASON}.`,
+  ];
+  if (hadAllowlistMissing) {
+    changes.push(
+      `plugins.allow: added "${CODEX_PLUGIN_ID}" because ${OPENAI_ENABLED_CODEX_REASON}.`,
+    );
+  }
+  return { config, changes, warnings: [] };
 }
