@@ -4,7 +4,6 @@ import type { ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { loadPluginManifestRegistry } from "../../plugins/manifest-registry.js";
 import {
   groupPluginDiscoveryProvidersByOrder,
   normalizePluginDiscoveryResult,
@@ -15,10 +14,22 @@ import {
   resolveBundledProviderCompatPluginIds,
   resolveOwningPluginIdsForProvider,
 } from "../../plugins/providers.js";
+import type { ProviderPlugin } from "../../plugins/types.js";
 
 const DISCOVERY_ORDERS = ["simple", "profile", "paired", "late"] as const;
 const SELF_HOSTED_DISCOVERY_PROVIDER_IDS = new Set(["lmstudio", "ollama", "sglang", "vllm"]);
 const log = createSubsystemLogger("models/list-provider-catalog");
+
+function providerMatchesFilter(params: {
+  provider: Pick<ProviderPlugin, "id" | "aliases" | "hookAliases">;
+  providerFilter: string;
+}): boolean {
+  return [
+    params.provider.id,
+    ...(params.provider.aliases ?? []),
+    ...(params.provider.hookAliases ?? []),
+  ].some((providerId) => normalizeProviderId(providerId) === params.providerFilter);
+}
 
 export async function resolveProviderCatalogPluginIdsForFilter(params: {
   cfg: OpenClawConfig;
@@ -51,13 +62,26 @@ export async function hasProviderStaticCatalogForFilter(params: {
   env?: NodeJS.ProcessEnv;
   providerFilter: string;
 }): Promise<boolean> {
+  const providerFilter = normalizeProviderId(params.providerFilter);
+  if (!providerFilter) {
+    return false;
+  }
   const pluginIds = await resolveProviderCatalogPluginIdsForFilter(params);
   if (!pluginIds || pluginIds.length === 0) {
     return false;
   }
-  const pluginIdSet = new Set(pluginIds);
-  return loadPluginManifestRegistry({ config: params.cfg, env: params.env }).plugins.some(
-    (plugin) => pluginIdSet.has(plugin.id) && typeof plugin.providerDiscoverySource === "string",
+  const providers = await resolvePluginDiscoveryProviders({
+    config: params.cfg,
+    env: params.env,
+    onlyPluginIds: pluginIds,
+    includeUntrustedWorkspacePlugins: false,
+    requireCompleteDiscoveryEntryCoverage: true,
+    discoveryEntriesOnly: true,
+  });
+  return providers.some(
+    (provider) =>
+      typeof provider.staticCatalog?.run === "function" &&
+      providerMatchesFilter({ provider, providerFilter }),
   );
 }
 
@@ -71,7 +95,7 @@ function modelFromProviderCatalog(params: {
     name: params.model.name || params.model.id,
     provider: params.provider,
     api: params.model.api ?? params.providerConfig.api ?? "openai-responses",
-    baseUrl: params.providerConfig.baseUrl,
+    baseUrl: params.model.baseUrl ?? params.providerConfig.baseUrl,
     reasoning: params.model.reasoning,
     input: params.model.input ?? ["text"],
     cost: params.model.cost,
@@ -122,6 +146,7 @@ export async function loadProviderCatalogModelsForList(params: {
       onlyPluginIds: scopedPluginIds,
       includeUntrustedWorkspacePlugins: false,
       requireCompleteDiscoveryEntryCoverage: params.staticOnly === true,
+      discoveryEntriesOnly: params.staticOnly === true,
     })
   ).filter(
     (provider) =>

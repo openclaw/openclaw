@@ -108,10 +108,7 @@ function shouldListConfiguredProviderModel(params: {
   providerConfig: Partial<ModelProviderConfig>;
   model: Partial<ModelDefinitionConfig>;
 }): boolean {
-  return (
-    params.providerConfig.apiKey !== undefined &&
-    (params.providerConfig.api !== undefined || params.model.api !== undefined)
-  );
+  return params.providerConfig.api !== undefined || params.model.api !== undefined;
 }
 
 export function appendDiscoveredRows(params: {

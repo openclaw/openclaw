@@ -33,6 +33,11 @@ export function modelRowSourcesRequireRegistry(params: {
 export async function appendAllModelRowSources(params: AllModelRowSources): Promise<void> {
   if (params.context.filter.provider && params.useProviderCatalogFastPath) {
     let seenKeys = new Set<string>();
+    appendConfiguredProviderRows({
+      rows: params.rows,
+      context: params.context,
+      seenKeys,
+    });
     const catalogRows = await appendProviderCatalogRows({
       rows: params.rows,
       context: params.context,
@@ -46,11 +51,6 @@ export async function appendAllModelRowSources(params: AllModelRowSources): Prom
         context: params.context,
       });
     }
-    appendConfiguredProviderRows({
-      rows: params.rows,
-      context: params.context,
-      seenKeys,
-    });
     return;
   }
 
