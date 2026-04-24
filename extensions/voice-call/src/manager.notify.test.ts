@@ -177,6 +177,38 @@ describe("CallManager notify and mapping", () => {
     expectFirstPlayTtsText(provider, "Twilio non-stream");
   });
 
+  it("lets realtime conversations own the initial greeting instead of posting legacy TwiML", async () => {
+    const { manager, provider } = await createManagerHarness(
+      { realtime: { enabled: true, provider: "openai" } },
+      new FakeProvider("twilio"),
+    );
+
+    const callId = await initiateCallWithMessage(
+      manager,
+      "+15550000010",
+      "Tell Nana dinner is at 6pm.",
+      "conversation",
+    );
+    await answerCall(manager, callId, "evt-conversation-twilio-realtime");
+
+    expect(provider.playTtsCalls).toHaveLength(0);
+    expect(requireCall(manager, callId).metadata).toEqual(
+      expect.objectContaining({ initialMessage: "Tell Nana dinner is at 6pm." }),
+    );
+  });
+
+  it("still speaks initial message in notify mode when realtime is enabled", async () => {
+    const { manager, provider } = await createManagerHarness(
+      { realtime: { enabled: true, provider: "openai" } },
+      new FakeProvider("twilio"),
+    );
+
+    const callId = await initiateCallWithMessage(manager, "+15550000011", "Notify text", "notify");
+    await answerCall(manager, callId, "evt-notify-twilio-realtime");
+
+    expectFirstPlayTtsText(provider, "Notify text");
+  });
+
   it("waits for stream connect in conversation mode when Twilio streaming is enabled", async () => {
     const { manager, provider } = await createManagerHarness(
       { streaming: { enabled: true } },
