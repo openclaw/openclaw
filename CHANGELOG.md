@@ -99,7 +99,7 @@ Docs: https://docs.openclaw.ai
 - Models/fallback: resolve bare fallback model provider ids before model switching, so configured fallback chains keep working when a fallback is named without an explicit provider prefix. Thanks @steipete.
 - Voice-call/Telnyx: preserve inbound/outbound callback metadata and read transcription text from Telnyx's current `transcription_data` payload. Thanks @steipete.
 - Providers/DeepSeek: wire V4 thinking controls and OpenAI-compatible replay policy so follow-up turns preserve DeepSeek `reasoning_content`, while the None/off thinking path strips replayed reasoning fields. Fixes #70931. Thanks @lsdsjy.
-- Providers/GitHub Copilot: align Copilot request headers across Anthropic and Responses transports, including tool-result and image follow-up turns, without enabling unverified Responses continuation. Thanks @steipete.
+- Providers/GitHub Copilot: align Copilot request headers across Anthropic, Responses, and built-in compaction summarization paths, including tool-result and image follow-up turns, without enabling unverified Responses continuation. Thanks @steipete.
 - Codex harness: send verbose tool progress to chat channels for native app-server runs, matching the Pi harness `/verbose on` and `/verbose full` behavior. (#70966) Thanks @jalehman.
 - Codex models: fetch paginated Codex app-server model catalogs, mark truncated `/codex models` output, and keep ChatGPT OAuth defaults on the `openai-codex/gpt-5.5` route instead of the OpenAI API-key route. Thanks @steipete.
 - Codex status: report Codex CLI OAuth as `oauth (codex-cli)` for native `codex/*` sessions instead of showing unknown auth. Fixes #70688. Thanks @jb510.
