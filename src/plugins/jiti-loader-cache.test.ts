@@ -202,4 +202,60 @@ describe("getCachedPluginJitiLoader", () => {
     expect(firstAlias?.beta).toBe("/repo/alpha/sub");
     expect((firstAlias as Record<symbol, unknown>)[marker]).toBe(true);
   });
+
+  it("serves compiled .js targets from native require without invoking the jiti loader", async () => {
+    const jitiLoader = vi.fn();
+    const createJiti = vi.fn(() => jitiLoader);
+    vi.doMock("jiti", () => ({ createJiti }));
+    vi.doMock("./native-module-require.js", () => ({
+      isJavaScriptModulePath: (p: string) =>
+        p.endsWith(".js") || p.endsWith(".mjs") || p.endsWith(".cjs"),
+      tryNativeRequireJavaScriptModule: (target: string) => ({
+        ok: true,
+        moduleExport: { loadedFrom: target },
+      }),
+    }));
+    const { getCachedPluginJitiLoader } = await importFreshModule<
+      typeof import("./jiti-loader-cache.js")
+    >(import.meta.url, "./jiti-loader-cache.js?scope=native-require-fastpath");
+
+    const cache = new Map();
+    const loader = getCachedPluginJitiLoader({
+      cache,
+      modulePath: "/repo/dist/extensions/demo/api.js",
+      importerUrl: "file:///repo/src/plugins/public-surface-loader.ts",
+      jitiFilename: "file:///repo/src/plugins/public-surface-loader.ts",
+    });
+
+    const result = loader("/repo/dist/extensions/demo/api.js") as { loadedFrom: string };
+    expect(result.loadedFrom).toBe("/repo/dist/extensions/demo/api.js");
+    // jiti is created eagerly, but its loader must NOT be invoked for .js
+    // targets that `tryNativeRequireJavaScriptModule` resolves.
+    expect(jitiLoader).not.toHaveBeenCalled();
+  });
+
+  it("falls back to jiti when the native-require helper declines", async () => {
+    const jitiLoader = vi.fn(() => ({ fromJiti: true }));
+    const createJiti = vi.fn(() => jitiLoader);
+    vi.doMock("jiti", () => ({ createJiti }));
+    vi.doMock("./native-module-require.js", () => ({
+      isJavaScriptModulePath: () => true,
+      tryNativeRequireJavaScriptModule: () => ({ ok: false }),
+    }));
+    const { getCachedPluginJitiLoader } = await importFreshModule<
+      typeof import("./jiti-loader-cache.js")
+    >(import.meta.url, "./jiti-loader-cache.js?scope=native-require-fallback");
+
+    const cache = new Map();
+    const loader = getCachedPluginJitiLoader({
+      cache,
+      modulePath: "/repo/dist/extensions/demo/api.js",
+      importerUrl: "file:///repo/src/plugins/public-surface-loader.ts",
+      jitiFilename: "file:///repo/src/plugins/public-surface-loader.ts",
+    });
+
+    const result = loader("/repo/dist/extensions/demo/api.js") as { fromJiti: boolean };
+    expect(result.fromJiti).toBe(true);
+    expect(jitiLoader).toHaveBeenCalledWith("/repo/dist/extensions/demo/api.js");
+  });
 });
