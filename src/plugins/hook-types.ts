@@ -217,6 +217,7 @@ export type PluginHookLlmOutputEvent = {
 };
 
 export type PluginHookAgentEndEvent = {
+  runId?: string;
   messages: unknown[];
   success: boolean;
   error?: string;
