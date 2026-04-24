@@ -61,6 +61,14 @@ to narrow plugin loading before broader registry materialization:
 - explicit provider setup/runtime resolution narrows to plugins that own the
   requested provider id
 
+The activation planner exposes both an ids-only API for existing callers and a
+plan API for new diagnostics. Plan entries report why a plugin was selected,
+separating explicit `activation.*` planner hints from manifest ownership
+fallback such as `providers`, `channels`, `commandAliases`, `setup.providers`,
+`contracts.tools`, and hooks. That reason split is the compatibility boundary:
+existing plugin metadata keeps working, while new code can detect broad hints
+or fallback behavior without changing runtime loading semantics.
+
 Setup discovery now prefers descriptor-owned ids such as `setup.providers` and
 `setup.cliBackends` to narrow candidate plugins before it falls back to
 `setup-api` for plugins that still need setup-time runtime hooks. If more than
