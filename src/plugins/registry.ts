@@ -196,6 +196,27 @@ const activePluginHookRegistrations = resolveGlobalSingleton<
 type HookRegistration = { event: string; handler: Parameters<typeof registerInternalHook>[1] };
 type HookRollbackEntry = { name: string; previousRegistrations: HookRegistration[] };
 
+type PluginRegistrationCapabilities = {
+  /** Broad registry writes that discovery and live activation both need. */
+  capabilityHandlers: boolean;
+  /** Runtime channel registration is suppressed for setup-only metadata loads. */
+  runtimeChannel: boolean;
+};
+
+/**
+ * Keep mode decoding centralized. PluginRegistrationMode is the public label;
+ * registry code should consume these booleans instead of duplicating string
+ * checks across individual registration handlers.
+ */
+function resolvePluginRegistrationCapabilities(
+  mode: PluginRegistrationMode,
+): PluginRegistrationCapabilities {
+  return {
+    capabilityHandlers: mode === "full" || mode === "discovery",
+    runtimeChannel: mode !== "setup-only",
+  };
+}
+
 export function createPluginRegistry(registryParams: PluginRegistryParams) {
   const registry = createEmptyPluginRegistry();
   const coreGatewayMethods = new Set(Object.keys(registryParams.coreGatewayHandlers ?? {}));
@@ -621,7 +642,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       if (!existing) {
         return;
       }
-      if (!params.replaceExisting) {
+      if (!params.replaceExisting && existing.pluginId !== record.id) {
         pushDiagnostic({
           level: "error",
           pluginId: record.id,
@@ -671,6 +692,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     registration: OpenClawPluginChannelRegistration | ChannelPlugin,
     mode: PluginRegistrationMode = "full",
   ) => {
+    const registrationCapabilities = resolvePluginRegistrationCapabilities(mode);
     const normalized =
       typeof (registration as OpenClawPluginChannelRegistration).plugin === "object"
         ? (registration as OpenClawPluginChannelRegistration)
@@ -686,7 +708,22 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     }
     const id = plugin.id;
     const existingRuntime = registry.channels.find((entry) => entry.plugin.id === id);
-    if (mode !== "setup-only" && existingRuntime) {
+    if (registrationCapabilities.runtimeChannel && existingRuntime) {
+      if (existingRuntime.pluginId === record.id) {
+        existingRuntime.plugin = plugin;
+        existingRuntime.pluginName = record.name;
+        existingRuntime.source = record.source;
+        existingRuntime.rootDir = record.rootDir;
+        const existingSetup = registry.channelSetups.find((entry) => entry.plugin.id === id);
+        if (existingSetup) {
+          existingSetup.plugin = plugin;
+          existingSetup.pluginName = record.name;
+          existingSetup.source = record.source;
+          existingSetup.enabled = record.enabled;
+          existingSetup.rootDir = record.rootDir;
+        }
+        return;
+      }
       pushDiagnostic({
         level: "error",
         pluginId: record.id,
@@ -697,6 +734,14 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     }
     const existingSetup = registry.channelSetups.find((entry) => entry.plugin.id === id);
     if (existingSetup) {
+      if (existingSetup.pluginId === record.id) {
+        existingSetup.plugin = plugin;
+        existingSetup.pluginName = record.name;
+        existingSetup.source = record.source;
+        existingSetup.enabled = record.enabled;
+        existingSetup.rootDir = record.rootDir;
+        return;
+      }
       pushDiagnostic({
         level: "error",
         pluginId: record.id,
@@ -714,7 +759,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       enabled: record.enabled,
       rootDir: record.rootDir,
     });
-    if (mode === "setup-only") {
+    if (!registrationCapabilities.runtimeChannel) {
       return;
     }
     registry.channels.push({
@@ -1412,6 +1457,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     },
   ): OpenClawPluginApi => {
     const registrationMode = params.registrationMode ?? "full";
+    const registrationCapabilities = resolvePluginRegistrationCapabilities(registrationMode);
     return buildPluginApi({
       id: record.id,
       name: record.name,
@@ -1426,7 +1472,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       logger: normalizeLogger(registryParams.logger),
       resolvePath: (input: string) => resolveUserPath(input),
       handlers: {
-        ...(registrationMode === "full"
+        ...(registrationCapabilities.capabilityHandlers
           ? {
               registerTool: (tool, opts) => registerTool(record, tool, opts),
               registerHook: (events, handler, opts) =>
