@@ -1,7 +1,6 @@
 {
   "id": "arcee",
   "enabledByDefault": true,
-  "providerDiscoveryEntry": "./provider-discovery.ts",
   "providers": ["arcee"],
   "providerAuthEnvVars": {
     "arcee": ["ARCEEAI_API_KEY"]
