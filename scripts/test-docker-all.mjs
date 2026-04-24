@@ -105,7 +105,7 @@ const lanes = [
     { resources: ["npm"], weight: 3 },
   ),
   serviceLane("openwebui", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openwebui", {
-    weight: 3,
+    weight: 5,
   }),
   serviceLane("onboard", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:onboard", {
     weight: 2,
