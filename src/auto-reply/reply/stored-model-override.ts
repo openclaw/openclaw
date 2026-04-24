@@ -47,6 +47,13 @@ export function resolveStoredModelOverride(params: {
     return null;
   }
   const parentEntry = params.sessionStore[parentKey];
+  const parentOverrideSource = parentEntry?.modelOverrideSource;
+  const allowParentOverride =
+    parentOverrideSource === "user" ||
+    (parentOverrideSource === undefined && Boolean(parentEntry?.modelOverride));
+  if (!allowParentOverride) {
+    return null;
+  }
   const parentOverride = resolvePersistedOverrideModelRef({
     defaultProvider: params.defaultProvider,
     overrideProvider: parentEntry?.providerOverride,
