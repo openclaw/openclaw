@@ -1,7 +1,8 @@
-# OpenClaw Contributor Status - 2026-04-23
+# OpenClaw Contributor Status - 2026-04-24
 
-## Merged PRs: 4 (lifetime, gap to 46: 42)
+## Merged PRs: 5 (lifetime, gap to 46: 41)
 
+- 2026-04-23: #70413 fix(agents): route /btw through provider stream fn for correct URLs
 - 2026-04-19: #55787 fix: strip orphaned OpenAI reasoning blocks before responses API call
 - 2026-04-16: #67457 fix(ollama): strip provider prefix from model ID in chat requests
 - 2026-04-14: #64735 fix(hooks): pass workspaceDir in gateway session reset internal hook context
@@ -17,7 +18,7 @@
 | #66544 | fix(gateway): exclude heartbeat sender ID from session display name            | gateway, size:XS      | 9d  | Awaiting review |
 | #66225 | fix(agents): align final tag regexes to handle self-closing `<final/>` variant | agents, size:S        | 9d  | Awaiting review |
 
-## Actions Taken This Run (2026-04-23)
+## Actions Taken This Run (2026-04-24)
 
 ### New fix: browser snapshot Playwright compat (closes #70158, #70337)
 
@@ -70,8 +71,21 @@ https://github.com/suboss87/openclaw/compare/fix/mcp-nested-run-cleanup
 Unable to read PR-level comments on `openclaw/openclaw` (GitHub MCP restricted to fork).
 No changes-requested reviews found via search API. No rebases attempted.
 
+### New fix this run: configure wizard clobbers primary model (closes #70696)
+
+Root cause in `src/commands/auth-choice.default-model.ts`: `applyDefaultModelChoice`
+with `setDefaultModel: true` called `applyDefaultConfig` unconditionally, which always
+calls `applyAgentDefaultModelPrimary` overwriting the user's custom primary model.
+
+Fix: if an existing primary is set, use `applyProviderConfig` (sets up auth/allowlist
+only, does not touch primary). 12-line change + 4 unit tests, all pass, lint clean.
+
+Branch `fix/configure-preserves-custom-primary-model` pushed to fork.
+Upstream PR to open manually:
+https://github.com/openclaw/openclaw/compare/main...suboss87:openclaw:fix/configure-preserves-custom-primary-model
+
 ## Next Steps
 
-1. Open upstream PRs for both pending branches (browser-snapshot and mcp-nested-run-cleanup).
-2. Follow up on #66544 and #66225 (9 days old, may need a ping).
-3. Check CI on #70413 (opened today).
+1. Open upstream PRs for all three pending branches (browser-snapshot, mcp-nested-run-cleanup, configure-preserves-custom-primary-model).
+2. Follow up on #66544 and #66225 (10 days old, may need a ping).
+3. Check comment activity on #69685 and #68446.
