@@ -194,7 +194,13 @@ export type PluginManifest = {
    * config diagnostics before runtime loads.
    */
   commandAliases?: PluginManifestCommandAlias[];
-  /** Cheap provider-auth env lookup without booting plugin runtime. */
+  /**
+   * Cheap provider-auth env lookup without booting plugin runtime.
+   *
+   * @deprecated Prefer setup.providers[].envVars for generic setup/status env
+   * metadata. This field remains supported through the provider env-var
+   * compatibility adapter during the deprecation window.
+   */
   providerAuthEnvVars?: Record<string, string[]>;
   /** Provider ids that should reuse another provider id for auth lookup. */
   providerAuthAliases?: Record<string, string>;

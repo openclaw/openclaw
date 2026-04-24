@@ -450,6 +450,28 @@ function buildBundleRecord(params: {
   };
 }
 
+function pushProviderAuthEnvVarsCompatDiagnostic(params: {
+  record: PluginManifestRecord;
+  diagnostics: PluginDiagnostic[];
+}): void {
+  if (params.record.origin === "bundled" || !params.record.providerAuthEnvVars) {
+    return;
+  }
+  const providerIds = Object.entries(params.record.providerAuthEnvVars)
+    .filter(([providerId, envVars]) => providerId.trim() && envVars.length > 0)
+    .map(([providerId]) => providerId)
+    .toSorted((left, right) => left.localeCompare(right));
+  if (providerIds.length === 0) {
+    return;
+  }
+  params.diagnostics.push({
+    level: "warn",
+    pluginId: params.record.id,
+    source: params.record.manifestPath,
+    message: `providerAuthEnvVars is deprecated compatibility metadata for provider env-var lookup; mirror ${providerIds.join(", ")} env vars to setup.providers[].envVars before the deprecation window closes`,
+  });
+}
+
 function matchesInstalledPluginRecord(params: {
   pluginId: string;
   candidate: PluginCandidate;
@@ -642,6 +664,7 @@ export function loadPluginManifestRegistry(
         if (PLUGIN_ORIGIN_RANK[candidate.origin] < PLUGIN_ORIGIN_RANK[existing.candidate.origin]) {
           records[existing.recordIndex] = record;
           seenIds.set(manifest.id, { candidate, recordIndex: existing.recordIndex });
+          pushProviderAuthEnvVarsCompatDiagnostic({ record, diagnostics });
         }
         continue;
       }
@@ -664,6 +687,7 @@ export function loadPluginManifestRegistry(
       if (candidateWins) {
         records[existing.recordIndex] = record;
         seenIds.set(manifest.id, { candidate, recordIndex: existing.recordIndex });
+        pushProviderAuthEnvVarsCompatDiagnostic({ record, diagnostics });
       }
       diagnostics.push({
         level: "warn",
@@ -676,6 +700,7 @@ export function loadPluginManifestRegistry(
 
     seenIds.set(manifest.id, { candidate, recordIndex: records.length });
     records.push(record);
+    pushProviderAuthEnvVarsCompatDiagnostic({ record, diagnostics });
   }
 
   const registry = { plugins: records, diagnostics };

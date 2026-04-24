@@ -166,9 +166,9 @@ conversation, and it runs after core approval handling finishes.
 
 Provider plugins have three layers:
 
-- **Manifest metadata** for cheap pre-runtime lookup: `providerAuthEnvVars`,
-  `setup.providers[].envVars`, `providerAuthAliases`, `providerAuthChoices`,
-  and `channelEnvVars`.
+- **Manifest metadata** for cheap pre-runtime lookup:
+  `setup.providers[].envVars`, deprecated compatibility `providerAuthEnvVars`,
+  `providerAuthAliases`, `providerAuthChoices`, and `channelEnvVars`.
 - **Config-time hooks**: `catalog` (legacy `discovery`) plus
   `applyConfigDefaults`.
 - **Runtime hooks**: 40+ optional hooks covering auth, model resolution,
@@ -179,13 +179,16 @@ OpenClaw still owns the generic agent loop, failover, transcript handling, and
 tool policy. These hooks are the extension surface for provider-specific
 behavior without needing a whole custom inference transport.
 
-Use manifest `providerAuthEnvVars` when the provider has env-based credentials
-that generic auth/status/model-picker paths should see without loading plugin
-runtime. Use manifest `providerAuthAliases` when one provider id should reuse
-another provider id's env vars, auth profiles, config-backed auth, and API-key
-onboarding choice. Use manifest `providerAuthChoices` when onboarding/auth-choice
-CLI surfaces should know the provider's choice id, group labels, and simple
-one-flag auth wiring without loading provider runtime. Keep provider runtime
+Use manifest `setup.providers[].envVars` when the provider has env-based
+credentials that generic auth/status/model-picker paths should see without
+loading plugin runtime. Deprecated `providerAuthEnvVars` is still read by the
+compatibility adapter during the deprecation window, and non-bundled plugins
+that use it receive a manifest diagnostic. Use manifest `providerAuthAliases`
+when one provider id should reuse another provider id's env vars, auth profiles,
+config-backed auth, and API-key onboarding choice. Use manifest
+`providerAuthChoices` when onboarding/auth-choice CLI surfaces should know the
+provider's choice id, group labels, and simple one-flag auth wiring without
+loading provider runtime. Keep provider runtime
 `envVars` for operator-facing hints such as onboarding labels or OAuth
 client-id/client-secret setup vars.
 
