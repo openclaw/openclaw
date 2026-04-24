@@ -641,6 +641,35 @@ function Stop-OpenClawUpdateProcesses {
     }
 }
 
+function Remove-FuturePluginEntries {
+  $configPath = Join-Path $env:USERPROFILE '.openclaw\openclaw.json'
+  if (-not (Test-Path $configPath)) {
+    return
+  }
+  try {
+    $config = Get-Content $configPath -Raw | ConvertFrom-Json -AsHashtable
+  } catch {
+    return
+  }
+  $plugins = $config['plugins']
+  if (-not ($plugins -is [hashtable])) {
+    return
+  }
+  $entries = $plugins['entries']
+  if ($entries -is [hashtable]) {
+    foreach ($pluginId in @('feishu', 'whatsapp')) {
+      if ($entries.ContainsKey($pluginId)) {
+        $entries.Remove($pluginId)
+      }
+    }
+  }
+  $allow = $plugins['allow']
+  if ($allow -is [array]) {
+    $plugins['allow'] = @($allow | Where-Object { $_ -notin @('feishu', 'whatsapp') })
+  }
+  $config | ConvertTo-Json -Depth 100 | Set-Content -Path $configPath -Encoding UTF8
+}
+
 function Invoke-OpenClawUpdateWithTimeout {
   param(
     [Parameter(Mandatory = $true)][string]$OpenClawPath,
@@ -785,6 +814,7 @@ try {
   }
   Set-Item -Path ('Env:' + $ProviderKeyEnv) -Value $ProviderKey
   $openclaw = Join-Path $env:APPDATA 'npm\openclaw.cmd'
+  Remove-FuturePluginEntries
   Stop-OpenClawGatewayProcesses
   Write-ProgressLog 'update.openclaw-update'
   Invoke-OpenClawUpdateWithTimeout -OpenClawPath $openclaw -UpdateTarget $UpdateTarget
@@ -1375,6 +1405,31 @@ if [ -z "\${$API_KEY_ENV:-}" ]; then
   exit 1
 fi
 cd "\$HOME"
+scrub_future_plugin_entries() {
+  /opt/homebrew/bin/python3 - <<'PY' || true
+import json
+from pathlib import Path
+
+config_path = Path.home() / ".openclaw" / "openclaw.json"
+if not config_path.exists():
+    raise SystemExit(0)
+try:
+    config = json.loads(config_path.read_text())
+except Exception:
+    raise SystemExit(0)
+plugins = config.get("plugins")
+if not isinstance(plugins, dict):
+    raise SystemExit(0)
+entries = plugins.get("entries")
+if isinstance(entries, dict):
+    for plugin_id in ("feishu", "whatsapp"):
+        entries.pop(plugin_id, None)
+allow = plugins.get("allow")
+if isinstance(allow, list):
+    plugins["allow"] = [plugin_id for plugin_id in allow if plugin_id not in {"feishu", "whatsapp"}]
+config_path.write_text(json.dumps(config, indent=2) + "\n")
+PY
+}
 stop_openclaw_gateway_processes() {
   /opt/homebrew/bin/openclaw gateway stop >/dev/null 2>&1 || true
   /usr/bin/pkill -9 -f openclaw-gateway || true
@@ -1386,6 +1441,7 @@ stop_openclaw_gateway_processes() {
 }
 # Stop the pre-update gateway before replacing the package. Otherwise the old
 # host can observe new plugin metadata mid-update and abort config validation.
+scrub_future_plugin_entries
 stop_openclaw_gateway_processes
 /opt/homebrew/bin/openclaw update --tag "$update_target" --yes --json
 # Same-guest npm upgrades can leave the old gateway process holding the old
@@ -1473,6 +1529,31 @@ run_linux_update() {
 set -euo pipefail
 export HOME=/root
 cd "\$HOME"
+scrub_future_plugin_entries() {
+  python3 - <<'PY' || true
+import json
+from pathlib import Path
+
+config_path = Path.home() / ".openclaw" / "openclaw.json"
+if not config_path.exists():
+    raise SystemExit(0)
+try:
+    config = json.loads(config_path.read_text())
+except Exception:
+    raise SystemExit(0)
+plugins = config.get("plugins")
+if not isinstance(plugins, dict):
+    raise SystemExit(0)
+entries = plugins.get("entries")
+if isinstance(entries, dict):
+    for plugin_id in ("feishu", "whatsapp"):
+        entries.pop(plugin_id, None)
+allow = plugins.get("allow")
+if isinstance(allow, list):
+    plugins["allow"] = [plugin_id for plugin_id in allow if plugin_id not in {"feishu", "whatsapp"}]
+config_path.write_text(json.dumps(config, indent=2) + "\n")
+PY
+}
 stop_openclaw_gateway_processes() {
   openclaw gateway stop >/dev/null 2>&1 || true
   pkill -9 -f openclaw-gateway || true
@@ -1489,6 +1570,7 @@ stop_openclaw_gateway_processes() {
 }
 # Stop the pre-update manual gateway before replacing the package. Otherwise
 # the old host can observe new plugin metadata mid-update and abort validation.
+scrub_future_plugin_entries
 stop_openclaw_gateway_processes
 openclaw update --tag "$update_target" --yes --json
 # The fresh Linux lane starts a manual gateway; stop the old process before
