@@ -181,9 +181,9 @@ const baseRoute = {
   matchedBy: "default",
 };
 
-function callProcessMessage() {
+function callProcessMessage(overrides: { cfg?: unknown } = {}) {
   return processMessage({
-    cfg: {} as never,
+    cfg: (overrides.cfg ?? {}) as never,
     msg: baseMsg as never,
     route: baseRoute as never,
     groupHistoryKey: "whatsapp:default:group:123@g.us",
@@ -259,7 +259,19 @@ describe("processMessage group system prompt wiring", () => {
       GroupSubject: "Test Group",
     }));
 
-    await callProcessMessage();
+    await callProcessMessage({
+      cfg: {
+        channels: {
+          whatsapp: {
+            pluginHooks: {
+              messageReceived: true,
+            },
+          },
+        },
+      },
+    });
+    await Promise.resolve();
+    await Promise.resolve();
 
     expect(runMessageReceivedMock).toHaveBeenCalledTimes(1);
     expect(runMessageReceivedMock).toHaveBeenCalledWith(
@@ -296,5 +308,16 @@ describe("processMessage group system prompt wiring", () => {
         }),
       }),
     );
+  });
+
+  it("does not fire WhatsApp message_received hooks without explicit opt-in", async () => {
+    const internalReceived = vi.fn();
+    registerInternalHook("message:received", internalReceived);
+    resolvePolicyMock.mockReturnValue(makePolicy(makeAccount()));
+
+    await callProcessMessage();
+
+    expect(runMessageReceivedMock).not.toHaveBeenCalled();
+    expect(internalReceived).not.toHaveBeenCalled();
   });
 });

@@ -1,7 +1,7 @@
 import {
   createInternalHookEvent,
   deriveInboundMessageHookContext,
-  fireAndForgetHook,
+  fireAndForgetBoundedHook,
   toInternalMessageReceivedContext,
   toPluginMessageContext,
   toPluginMessageReceivedEvent,
@@ -59,6 +59,45 @@ import {
   type resolveAgentRoute,
 } from "./runtime-api.js";
 
+const WHATSAPP_MESSAGE_RECEIVED_HOOK_LIMITS = {
+  maxConcurrency: 8,
+  maxQueue: 128,
+  timeoutMs: 2_000,
+};
+
+type WhatsAppMessageReceivedHookConfig = {
+  pluginHooks?: {
+    messageReceived?: unknown;
+  };
+  accounts?: Record<string, unknown>;
+};
+
+function readWhatsAppMessageReceivedHookOptIn(value: unknown): boolean | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const pluginHooks = (value as WhatsAppMessageReceivedHookConfig).pluginHooks;
+  return pluginHooks?.messageReceived === true ? true : undefined;
+}
+
+function shouldEmitWhatsAppMessageReceivedHooks(params: {
+  cfg: ReturnType<LoadConfigFn>;
+  accountId?: string;
+}): boolean {
+  const channelConfig = params.cfg.channels?.whatsapp as
+    | WhatsAppMessageReceivedHookConfig
+    | undefined;
+  const accountConfig =
+    params.accountId && channelConfig?.accounts
+      ? channelConfig.accounts[params.accountId]
+      : undefined;
+  return (
+    readWhatsAppMessageReceivedHookOptIn(accountConfig) ??
+    readWhatsAppMessageReceivedHookOptIn(channelConfig) ??
+    false
+  );
+}
+
 function emitWhatsAppMessageReceivedHooks(params: {
   ctx: ReturnType<typeof buildWhatsAppInboundContext>;
   sessionKey: string;
@@ -66,25 +105,52 @@ function emitWhatsAppMessageReceivedHooks(params: {
   const canonical = deriveInboundMessageHookContext(params.ctx);
   const hookRunner = getGlobalHookRunner();
   if (hookRunner?.hasHooks("message_received")) {
-    fireAndForgetHook(
-      hookRunner.runMessageReceived(
-        toPluginMessageReceivedEvent(canonical),
-        toPluginMessageContext(canonical),
-      ),
+    fireAndForgetBoundedHook(
+      () =>
+        hookRunner.runMessageReceived(
+          toPluginMessageReceivedEvent(canonical),
+          toPluginMessageContext(canonical),
+        ),
       "whatsapp: message_received plugin hook failed",
+      undefined,
+      WHATSAPP_MESSAGE_RECEIVED_HOOK_LIMITS,
     );
   }
-  fireAndForgetHook(
-    triggerInternalHook(
-      createInternalHookEvent(
-        "message",
-        "received",
-        params.sessionKey,
-        toInternalMessageReceivedContext(canonical),
+  fireAndForgetBoundedHook(
+    () =>
+      triggerInternalHook(
+        createInternalHookEvent(
+          "message",
+          "received",
+          params.sessionKey,
+          toInternalMessageReceivedContext(canonical),
+        ),
       ),
-    ),
     "whatsapp: message_received internal hook failed",
+    undefined,
+    WHATSAPP_MESSAGE_RECEIVED_HOOK_LIMITS,
   );
+}
+
+function emitWhatsAppMessageReceivedHooksIfEnabled(params: {
+  cfg: ReturnType<LoadConfigFn>;
+  ctx: ReturnType<typeof buildWhatsAppInboundContext>;
+  accountId?: string;
+  sessionKey: string;
+}): void {
+  if (
+    !shouldEmitWhatsAppMessageReceivedHooks({
+      cfg: params.cfg,
+      accountId: params.accountId,
+    })
+  ) {
+    return;
+  }
+
+  emitWhatsAppMessageReceivedHooks({
+    ctx: params.ctx,
+    sessionKey: params.sessionKey,
+  });
 }
 
 function resolvePinnedMainDmRecipient(params: {
@@ -209,7 +275,7 @@ export async function processMessage(params: {
     sessionKey: params.route.sessionKey,
     conversationId,
     verbose: params.verbose,
-    accountId: params.route.accountId,
+    accountId: account.accountId,
     info: params.replyLogger.info.bind(params.replyLogger),
     warn: params.replyLogger.warn.bind(params.replyLogger),
   });
@@ -303,8 +369,10 @@ export async function processMessage(params: {
     replyThreading,
     visibleReplyTo: visibleReplyTo ?? undefined,
   });
-  emitWhatsAppMessageReceivedHooks({
+  emitWhatsAppMessageReceivedHooksIfEnabled({
+    cfg: params.cfg,
     ctx: ctxPayload,
+    accountId: params.route.accountId,
     sessionKey: params.route.sessionKey,
   });
 
