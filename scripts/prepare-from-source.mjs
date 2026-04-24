@@ -56,7 +56,11 @@ function run(cmd) {
 }
 
 const pnpmVersion = detectPnpmVersion(ROOT);
-const pnpmRunner = hasCmd("pnpm") ? "pnpm" : `npm exec -y pnpm@${pnpmVersion} -- pnpm`;
+// Resolve pnpm: prefer global pnpm, then npx as fallback.
+// "npm exec -y pkg -- cmd" fails in nested npm lifecycle contexts (the
+// downloaded binary is not placed on PATH correctly), so we use npx which
+// runs the binary directly without relying on PATH injection.
+const pnpmRunner = hasCmd("pnpm") ? "pnpm" : `npx -y pnpm@${pnpmVersion}`;
 
 try {
   // Remove any partial node_modules that npm may have created. pnpm needs to

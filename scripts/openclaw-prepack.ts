@@ -123,7 +123,7 @@ function detectPnpmVersionFromPackageManager(): string {
 async function main(): Promise<void> {
   const pnpmCommand = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
   const corepackCommand = process.platform === "win32" ? "corepack.cmd" : "corepack";
-  const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
+  const npxCommand = process.platform === "win32" ? "npx.cmd" : "npx";
   const pnpmVersion = detectPnpmVersionFromPackageManager();
 
   const pnpmProbe = spawnSync(pnpmCommand, ["--version"], {
@@ -136,14 +136,16 @@ async function main(): Promise<void> {
     env: process.env,
   });
 
+  // npx runs the downloaded binary directly rather than relying on PATH
+  // injection, which is more reliable in nested npm lifecycle contexts.
   const pnpmRunner =
     pnpmProbe.status === 0
       ? { command: pnpmCommand, prefixArgs: [] as string[] }
       : corepackProbe.status === 0
         ? { command: corepackCommand, prefixArgs: ["pnpm"] as string[] }
         : {
-            command: npmCommand,
-            prefixArgs: ["exec", "-y", `pnpm@${pnpmVersion}`, "--", "pnpm"] as string[],
+            command: npxCommand,
+            prefixArgs: ["-y", `pnpm@${pnpmVersion}`] as string[],
           };
 
   run(pnpmRunner.command, [...pnpmRunner.prefixArgs, "build"]);
