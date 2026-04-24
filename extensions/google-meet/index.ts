@@ -35,7 +35,7 @@ const googleMeetConfigSchema = {
     },
     defaultMode: {
       label: "Default Mode",
-      help: "Realtime voice is the default.",
+      help: "Realtime starts the duplex voice model loop. Transcribe joins/observes without the realtime talk-back bridge.",
     },
     "chrome.audioBackend": {
       label: "Chrome Audio Backend",
@@ -148,7 +148,13 @@ const GoogleMeetToolSchema = Type.Object({
   transport: Type.Optional(
     Type.String({ enum: ["chrome", "chrome-node", "twilio"], description: "Join transport" }),
   ),
-  mode: Type.Optional(Type.String({ enum: ["realtime", "transcribe"], description: "Join mode" })),
+  mode: Type.Optional(
+    Type.String({
+      enum: ["realtime", "transcribe"],
+      description:
+        "Join mode. realtime starts live listen/talk-back through the realtime voice model; transcribe joins without the realtime talk-back bridge.",
+    }),
+  ),
   dialInNumber: Type.Optional(Type.String({ description: "Meet dial-in number for Twilio" })),
   pin: Type.Optional(Type.String({ description: "Meet phone PIN for Twilio" })),
   dtmfSequence: Type.Optional(Type.String({ description: "Explicit DTMF sequence for Twilio" })),

@@ -12,6 +12,9 @@ Google Meet participant support for OpenClaw — the plugin is explicit by desig
 - `realtime` voice is the default mode.
 - Realtime voice can call back into the full OpenClaw agent when deeper
   reasoning or tools are needed.
+- Agents choose the join behavior with `mode`: use `realtime` for live
+  listen/talk-back, or `transcribe` to join/control the browser without the
+  realtime voice bridge.
 - Auth starts as personal Google OAuth or an already signed-in Chrome profile.
 - There is no automatic consent announcement.
 - The default Chrome audio backend is `BlackHole 2ch`.
@@ -79,9 +82,15 @@ Or let an agent join through the `google_meet` tool:
 ```json
 {
   "action": "join",
-  "url": "https://meet.google.com/abc-defg-hij"
+  "url": "https://meet.google.com/abc-defg-hij",
+  "transport": "chrome-node",
+  "mode": "realtime"
 }
 ```
+
+For an observe-only/browser-control join, set `"mode": "transcribe"`. That does
+not start the duplex realtime model bridge, so it will not talk back into the
+meeting.
 
 Chrome joins as the signed-in Chrome profile. In Meet, pick `BlackHole 2ch` for
 the microphone/speaker path used by OpenClaw. For clean duplex audio, use
