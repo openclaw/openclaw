@@ -184,17 +184,17 @@ export function inspectMattermostAccount(params: {
   const botToken = tokenInspection.botToken ?? envToken;
   const botTokenSource: MattermostTokenSource = tokenInspection.botToken
     ? "config"
-    : tokenInspection.botTokenStatus === "configured_unavailable"
-      ? "config"
-      : envToken
-        ? "env"
+    : envToken
+      ? "env"
+      : tokenInspection.botTokenStatus === "configured_unavailable"
+        ? "config"
         : "none";
   const botTokenStatus: MattermostCredentialStatus = tokenInspection.botToken
     ? "available"
-    : tokenInspection.botTokenStatus === "configured_unavailable"
-      ? "configured_unavailable"
-      : envToken
-        ? "available"
+    : envToken
+      ? "available"
+      : tokenInspection.botTokenStatus === "configured_unavailable"
+        ? "configured_unavailable"
         : "missing";
   const baseUrl = normalizeMattermostBaseUrl(configUrl || envUrl);
   const baseUrlSource: MattermostBaseUrlSource = configUrl ? "config" : envUrl ? "env" : "none";
