@@ -96,6 +96,23 @@ describe("enforceSessionDiskBudget", () => {
         [activeKey]: {
           sessionId,
           updatedAt: Date.now(),
+          compactionCheckpoints: [
+            {
+              checkpointId: "checkpoint-1",
+              sessionKey: activeKey,
+              sessionId,
+              createdAt: Date.now() - 1,
+              reason: "manual",
+              preCompaction: {
+                sessionId,
+                sessionFile: checkpointPath,
+              },
+              postCompaction: {
+                sessionId,
+                sessionFile: transcriptPath,
+              },
+            },
+          ],
         },
       };
       await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
@@ -119,6 +136,41 @@ describe("enforceSessionDiskBudget", () => {
         expect.objectContaining({
           removedFiles: 1,
           removedEntries: 0,
+        }),
+      );
+    });
+  });
+
+  it("preserves referenced primary transcripts with checkpoint-shaped session IDs", async () => {
+    await withTempDir({ prefix: "openclaw-disk-budget-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      const sessionId = "keep.checkpoint.11111111-1111-4111-8111-111111111111";
+      const activeKey = "agent:main:main";
+      const transcriptPath = path.join(dir, `${sessionId}.jsonl`);
+      const store: Record<string, SessionEntry> = {
+        [activeKey]: {
+          sessionId,
+          updatedAt: Date.now(),
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+      await fs.writeFile(transcriptPath, "x".repeat(256), "utf-8");
+
+      const result = await enforceSessionDiskBudget({
+        store,
+        storePath,
+        activeSessionKey: activeKey,
+        maintenance: {
+          maxDiskBytes: 150,
+          highWaterBytes: 100,
+        },
+        warnOnly: false,
+      });
+
+      await expect(fs.stat(transcriptPath)).resolves.toBeDefined();
+      expect(result).toEqual(
+        expect.objectContaining({
+          removedFiles: 0,
         }),
       );
     });

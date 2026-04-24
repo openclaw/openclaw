@@ -4,11 +4,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "../../shared/string-coerce.js";
-import {
-  isCompactionCheckpointTranscriptFileName,
-  isPrimarySessionTranscriptFileName,
-  isSessionArchiveArtifactName,
-} from "./artifacts.js";
+import { isPrimarySessionTranscriptFileName, isSessionArchiveArtifactName } from "./artifacts.js";
 import { resolveSessionFilePath } from "./paths.js";
 import type { SessionEntry } from "./types.js";
 
@@ -136,6 +132,47 @@ function resolveReferencedSessionTranscriptPaths(params: {
   return referenced;
 }
 
+function resolvePathWithinSessionsDir(params: {
+  sessionsDir: string;
+  filePath: string;
+}): string | null {
+  const trimmed = params.filePath.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const candidate = path.isAbsolute(trimmed) ? trimmed : path.join(params.sessionsDir, trimmed);
+  const resolvedSessionsDir = canonicalizePathForComparison(params.sessionsDir);
+  const resolvedPath = canonicalizePathForComparison(candidate);
+  const relative = path.relative(resolvedSessionsDir, resolvedPath);
+  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+    return null;
+  }
+  return resolvedPath;
+}
+
+function resolveCompactionCheckpointTranscriptPaths(params: {
+  sessionsDir: string;
+  store: Record<string, SessionEntry>;
+}): Set<string> {
+  const checkpoints = new Set<string>();
+  for (const entry of Object.values(params.store)) {
+    for (const checkpoint of entry.compactionCheckpoints ?? []) {
+      const sessionFile = checkpoint.preCompaction?.sessionFile;
+      if (!sessionFile) {
+        continue;
+      }
+      const resolved = resolvePathWithinSessionsDir({
+        sessionsDir: params.sessionsDir,
+        filePath: sessionFile,
+      });
+      if (resolved) {
+        checkpoints.add(resolved);
+      }
+    }
+  }
+  return checkpoints;
+}
+
 async function readSessionsDirFiles(sessionsDir: string): Promise<SessionsDirFileStat[]> {
   const dirEntries = await fs.promises
     .readdir(sessionsDir, { withFileTypes: true })
@@ -259,11 +296,15 @@ export async function enforceSessionDiskBudget(params: {
     sessionsDir,
     store: params.store,
   });
+  const checkpointPaths = resolveCompactionCheckpointTranscriptPaths({
+    sessionsDir,
+    store: params.store,
+  });
   const removableFileQueue = files
     .filter(
       (file) =>
         isSessionArchiveArtifactName(file.name) ||
-        isCompactionCheckpointTranscriptFileName(file.name) ||
+        (checkpointPaths.has(file.canonicalPath) && !referencedPaths.has(file.canonicalPath)) ||
         (isPrimarySessionTranscriptFileName(file.name) && !referencedPaths.has(file.canonicalPath)),
     )
     .toSorted((a, b) => a.mtimeMs - b.mtimeMs);

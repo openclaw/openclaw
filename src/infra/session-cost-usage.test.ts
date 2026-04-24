@@ -147,15 +147,76 @@ describe("session cost usage", () => {
     const payload = `${JSON.stringify(assistantEntry)}\n`;
 
     await fs.writeFile(path.join(sessionsDir, "sess-1.jsonl"), payload, "utf-8");
+    const checkpointPath = path.join(
+      sessionsDir,
+      "sess-1.checkpoint.11111111-1111-4111-8111-111111111111.jsonl",
+    );
+    await fs.writeFile(checkpointPath, payload, "utf-8");
     await fs.writeFile(
-      path.join(sessionsDir, "sess-1.checkpoint.11111111-1111-4111-8111-111111111111.jsonl"),
-      payload,
+      path.join(sessionsDir, "sessions.json"),
+      JSON.stringify({
+        "agent:main:main": {
+          sessionId: "sess-1",
+          updatedAt: Date.now(),
+          compactionCheckpoints: [
+            {
+              checkpointId: "checkpoint-1",
+              sessionKey: "agent:main:main",
+              sessionId: "sess-1",
+              createdAt: Date.now() - 1,
+              reason: "manual",
+              preCompaction: {
+                sessionId: "sess-1",
+                sessionFile: checkpointPath,
+              },
+              postCompaction: {
+                sessionId: "sess-1",
+                sessionFile: path.join(sessionsDir, "sess-1.jsonl"),
+              },
+            },
+          ],
+        },
+      }),
       "utf-8",
     );
 
     await withStateDir(root, async () => {
       const summary = await loadCostUsageSummary({ days: 30 });
       expect(summary.daily.length).toBe(1);
+      expect(summary.totals.totalTokens).toBe(30);
+      expect(summary.totals.totalCost).toBeCloseTo(0.03, 5);
+    });
+  });
+
+  it("counts checkpoint-shaped explicit session ids in daily totals", async () => {
+    const root = await makeSessionCostRoot("cost-checkpoint-shaped-id");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    await fs.writeFile(
+      path.join(sessionsDir, "sess.checkpoint.11111111-1111-4111-8111-111111111111.jsonl"),
+      JSON.stringify({
+        type: "message",
+        timestamp: new Date().toISOString(),
+        message: {
+          role: "assistant",
+          provider: "openai",
+          model: "gpt-5.4",
+          usage: {
+            input: 10,
+            output: 20,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 30,
+            cost: { total: 0.03 },
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    await withStateDir(root, async () => {
+      const summary = await loadCostUsageSummary({ days: 30 });
       expect(summary.totals.totalTokens).toBe(30);
       expect(summary.totals.totalCost).toBeCloseTo(0.03, 5);
     });

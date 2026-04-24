@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   formatSessionArchiveTimestamp,
-  isCompactionCheckpointTranscriptFileName,
   isPrimarySessionTranscriptFileName,
   isSessionArchiveArtifactName,
   isUsageCountedSessionTranscriptFileName,
@@ -19,16 +18,6 @@ describe("session artifact helpers", () => {
     expect(isSessionArchiveArtifactName("abc.jsonl")).toBe(false);
   });
 
-  it("classifies compaction checkpoint transcript snapshots", () => {
-    expect(
-      isCompactionCheckpointTranscriptFileName(
-        "abc.checkpoint.11111111-1111-4111-8111-111111111111.jsonl",
-      ),
-    ).toBe(true);
-    expect(isCompactionCheckpointTranscriptFileName("abc.checkpoint-test.jsonl")).toBe(false);
-    expect(isCompactionCheckpointTranscriptFileName("abc.jsonl")).toBe(false);
-  });
-
   it("classifies primary transcript files", () => {
     expect(isPrimarySessionTranscriptFileName("abc.jsonl")).toBe(true);
     expect(isPrimarySessionTranscriptFileName("keep.deleted.keep.jsonl")).toBe(true);
@@ -36,7 +25,7 @@ describe("session artifact helpers", () => {
       isPrimarySessionTranscriptFileName(
         "abc.checkpoint.11111111-1111-4111-8111-111111111111.jsonl",
       ),
-    ).toBe(false);
+    ).toBe(true);
     expect(isPrimarySessionTranscriptFileName("abc.jsonl.deleted.2026-01-01T00-00-00.000Z")).toBe(
       false,
     );
@@ -55,7 +44,7 @@ describe("session artifact helpers", () => {
       isUsageCountedSessionTranscriptFileName(
         "abc.checkpoint.11111111-1111-4111-8111-111111111111.jsonl",
       ),
-    ).toBe(false);
+    ).toBe(true);
     expect(isUsageCountedSessionTranscriptFileName("abc.jsonl.bak.2026-01-01T00-00-00.000Z")).toBe(
       false,
     );
@@ -73,7 +62,7 @@ describe("session artifact helpers", () => {
       parseUsageCountedSessionIdFromFileName(
         "abc.checkpoint.11111111-1111-4111-8111-111111111111.jsonl",
       ),
-    ).toBe(null);
+    ).toBe("abc.checkpoint.11111111-1111-4111-8111-111111111111");
     expect(parseUsageCountedSessionIdFromFileName("abc.jsonl.bak.2026-01-01T00-00-00.000Z")).toBe(
       null,
     );
