@@ -152,7 +152,7 @@ export async function runCodexAppServerAttempt(
   });
   const hadSessionFile = await fileExists(params.sessionFile);
   const sessionManager = SessionManager.open(params.sessionFile);
-  const historyMessages =
+  let historyMessages =
     readMirroredSessionHistoryMessages(params.sessionFile, sessionManager) ?? [];
   const hookContext = {
     runId: params.runId,
@@ -181,6 +181,7 @@ export async function runCodexAppServerAttempt(
       runMaintenance: runHarnessContextEngineMaintenance,
       warn: (message) => embeddedAgentLog.warn(message),
     });
+    historyMessages = readMirroredSessionHistoryMessages(params.sessionFile) ?? historyMessages;
   }
   const baseDeveloperInstructions = buildDeveloperInstructions(params);
   let promptText = params.prompt;

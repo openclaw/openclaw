@@ -308,6 +308,63 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(maintain).toHaveBeenCalledTimes(1);
   });
 
+  it("reloads mirrored history after bootstrap mutates the session transcript", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    SessionManager.open(sessionFile).appendMessage(
+      assistantMessage("existing context", Date.now()) as never,
+    );
+    const afterTurn = vi.fn(
+      async (_params: Parameters<NonNullable<ContextEngine["afterTurn"]>>[0]) => undefined,
+    );
+    const bootstrap = vi.fn(
+      async ({ sessionFile: file }: Parameters<NonNullable<ContextEngine["bootstrap"]>>[0]) => {
+        SessionManager.open(file).appendMessage(
+          assistantMessage("bootstrap context", Date.now() + 1) as never,
+        );
+        return { bootstrapped: true };
+      },
+    );
+    const contextEngine = createContextEngine({
+      bootstrap,
+      afterTurn,
+      maintain: undefined,
+    });
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.contextEngine = contextEngine;
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn();
+    await run;
+
+    expect(contextEngine.assemble).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messages: [
+          expect.objectContaining({ role: "assistant" }),
+          expect.objectContaining({ role: "assistant" }),
+        ],
+      }),
+    );
+    expect(afterTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prePromptMessageCount: 2,
+      }),
+    );
+    const turnStart = harness.requests.find((request) => request.method === "turn/start");
+    expect(turnStart?.params).toEqual(
+      expect.objectContaining({
+        input: expect.arrayContaining([
+          expect.objectContaining({
+            type: "text",
+            text: expect.stringContaining("bootstrap context"),
+          }),
+        ]),
+      }),
+    );
+  });
+
   it("falls back to ingestBatch and skips turn maintenance on prompt failure", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
