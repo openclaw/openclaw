@@ -3038,7 +3038,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     enum: ["pi", "none"],
                     title: "Default Embedded Harness Fallback",
                     description:
-                      "Embedded harness fallback when no plugin harness matches. Auto mode defaults to pi; explicit plugin runtimes default to none. Selected plugin harness failures surface directly.",
+                      "Embedded harness fallback when no plugin harness matches. Auto mode defaults to pi; explicit plugin runtimes default to none and do not inherit broader fallback settings. Selected plugin harness failures surface directly.",
                   },
                 },
                 additionalProperties: false,
@@ -5793,7 +5793,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                       enum: ["pi", "none"],
                       title: "Agent Embedded Harness Fallback",
                       description:
-                        "Per-agent embedded harness fallback. Auto mode defaults to pi; explicit plugin runtimes default to none.",
+                        "Per-agent embedded harness fallback. Auto mode defaults to pi; explicit plugin runtimes default to none and do not inherit broader fallback settings.",
                     },
                   },
                   additionalProperties: false,
@@ -23513,7 +23513,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "agents.defaults.embeddedHarness.fallback": {
       label: "Default Embedded Harness Fallback",
-      help: "Embedded harness fallback when no plugin harness matches. Auto mode defaults to pi; explicit plugin runtimes default to none. Selected plugin harness failures surface directly.",
+      help: "Embedded harness fallback when no plugin harness matches. Auto mode defaults to pi; explicit plugin runtimes default to none and do not inherit broader fallback settings. Selected plugin harness failures surface directly.",
       tags: ["reliability"],
     },
     "agents.list": {
@@ -23568,7 +23568,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "agents.list.*.embeddedHarness.fallback": {
       label: "Agent Embedded Harness Fallback",
-      help: "Per-agent embedded harness fallback. Auto mode defaults to pi; explicit plugin runtimes default to none.",
+      help: "Per-agent embedded harness fallback. Auto mode defaults to pi; explicit plugin runtimes default to none and do not inherit broader fallback settings.",
       tags: ["reliability"],
     },
     "gateway.port": {

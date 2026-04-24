@@ -333,10 +333,43 @@ export function resolveAgentHarnessPolicy(params: {
     : normalizeEmbeddedAgentRuntime(agentPolicy?.runtime ?? defaultsPolicy?.runtime);
   return {
     runtime,
-    fallback:
-      resolveEmbeddedAgentHarnessFallback(env) ??
-      normalizeAgentHarnessFallback(agentPolicy?.fallback ?? defaultsPolicy?.fallback, runtime),
+    fallback: resolveAgentHarnessFallbackPolicy({
+      env,
+      runtime,
+      agentPolicy,
+      defaultsPolicy,
+    }),
   };
+}
+
+function resolveAgentHarnessFallbackPolicy(params: {
+  env: NodeJS.ProcessEnv;
+  runtime: EmbeddedAgentRuntime;
+  agentPolicy?: AgentEmbeddedHarnessConfig;
+  defaultsPolicy?: AgentEmbeddedHarnessConfig;
+}): EmbeddedAgentHarnessFallback {
+  const envFallback = resolveEmbeddedAgentHarnessFallback(params.env);
+  if (envFallback) {
+    return envFallback;
+  }
+
+  const envRuntime = params.env.OPENCLAW_AGENT_RUNTIME?.trim();
+  if (envRuntime && isPluginAgentRuntime(params.runtime)) {
+    return normalizeAgentHarnessFallback(undefined, params.runtime);
+  }
+
+  if (params.agentPolicy?.runtime) {
+    return normalizeAgentHarnessFallback(params.agentPolicy.fallback, params.runtime);
+  }
+
+  return normalizeAgentHarnessFallback(
+    params.agentPolicy?.fallback ?? params.defaultsPolicy?.fallback,
+    params.runtime,
+  );
+}
+
+function isPluginAgentRuntime(runtime: EmbeddedAgentRuntime): boolean {
+  return runtime !== "auto" && runtime !== "pi";
 }
 
 function resolveAgentEmbeddedHarnessConfig(
