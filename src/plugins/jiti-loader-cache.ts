@@ -1,4 +1,5 @@
 import { createJiti } from "jiti";
+import { tryNativeRequireJavaScriptModule } from "./native-module-require.js";
 import {
   buildPluginLoaderJitiOptions,
   createPluginLoaderJitiCacheKey,
@@ -74,10 +75,24 @@ export function getCachedPluginJitiLoader(params: {
   if (cached) {
     return cached;
   }
-  const loader = (params.createLoader ?? createJiti)(jitiFilename, {
+  const jitiLoader = (params.createLoader ?? createJiti)(jitiFilename, {
     ...buildPluginLoaderJitiOptions(aliasMap),
     tryNative,
   });
+  // The returned loader prefers native require() for already-compiled JS
+  // artifacts (the bundled plugin public surfaces shipped in dist/) because
+  // jiti's transform pipeline provides no value for output that is already
+  // plain JS and adds several seconds of per-load overhead on slower hosts.
+  // Jiti stays on the hot path for TS / TSX and for the small set of
+  // require(esm)/async-module fallbacks `tryNativeRequireJavaScriptModule`
+  // declines to handle.
+  const loader = ((target: string) => {
+    const native = tryNativeRequireJavaScriptModule(target);
+    if (native.ok) {
+      return native.moduleExport;
+    }
+    return jitiLoader(target);
+  }) as PluginJitiLoader;
   params.cache.set(scopedCacheKey, loader);
   return loader;
 }
