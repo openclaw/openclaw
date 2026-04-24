@@ -2,22 +2,28 @@ import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildMemoryFlushPlan } from "../../../extensions/memory-core/index.js";
+import { resolveCronStyleNow } from "../../agents/current-time.js";
+import { DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR } from "../../agents/pi-settings.js";
+import { parseNonNegativeByteSize } from "../../config/byte-size.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import * as sessions from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   getMemoryFlushPlanResolver,
   getMemoryPromptSectionBuilder,
   getMemoryRuntime,
   listMemoryCorpusSupplements,
   listMemoryPromptSupplements,
+  type MemoryFlushPlan,
   registerMemoryFlushPlanResolver,
   restoreMemoryPluginState,
 } from "../../plugins/memory-state.js";
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
 import type { TemplateContext } from "../templating.js";
+import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { resolveMemoryFlushRelativePathForRun } from "./memory-flush.js";
 import {
   enqueueFollowupRun,
   refreshQueuedFollowupSession,
@@ -62,6 +68,36 @@ const initialMemoryPluginState = {
   flushPlanResolver: getMemoryFlushPlanResolver(),
   runtime: getMemoryRuntime(),
 };
+
+const DEFAULT_MEMORY_FLUSH_SOFT_TOKENS = 4_000;
+const DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES = 2 * 1024 * 1024;
+const MEMORY_FLUSH_TARGET_HINT =
+  "Store durable memories only in memory/YYYY-MM-DD.md (create memory/ if needed).";
+const MEMORY_FLUSH_APPEND_ONLY_HINT =
+  "If memory/YYYY-MM-DD.md already exists, APPEND new content only and do not overwrite existing entries.";
+const MEMORY_FLUSH_READ_ONLY_HINT =
+  "Treat workspace bootstrap/reference files such as MEMORY.md, DREAMS.md, SOUL.md, TOOLS.md, and AGENTS.md as read-only during this flush; never overwrite, replace, or edit them.";
+const MEMORY_FLUSH_REQUIRED_HINTS = [
+  MEMORY_FLUSH_TARGET_HINT,
+  MEMORY_FLUSH_APPEND_ONLY_HINT,
+  MEMORY_FLUSH_READ_ONLY_HINT,
+];
+const DEFAULT_MEMORY_FLUSH_PROMPT = [
+  "Pre-compaction memory flush.",
+  MEMORY_FLUSH_TARGET_HINT,
+  MEMORY_FLUSH_READ_ONLY_HINT,
+  MEMORY_FLUSH_APPEND_ONLY_HINT,
+  "Do NOT create timestamped variant files (e.g., YYYY-MM-DD-HHMM.md); always use the canonical YYYY-MM-DD.md filename.",
+  `If nothing to store, reply with ${SILENT_REPLY_TOKEN}.`,
+].join(" ");
+const DEFAULT_MEMORY_FLUSH_SYSTEM_PROMPT = [
+  "Pre-compaction memory flush turn.",
+  "The session is near auto-compaction; capture durable memories to disk.",
+  MEMORY_FLUSH_TARGET_HINT,
+  MEMORY_FLUSH_READ_ONLY_HINT,
+  MEMORY_FLUSH_APPEND_ONLY_HINT,
+  `You may reply, but usually ${SILENT_REPLY_TOKEN} is correct.`,
+].join(" ");
 
 let modelFallbackModule: typeof import("../../agents/model-fallback.js");
 let onAgentEvent: typeof import("../../infra/agent-events.js").onAgentEvent;
@@ -338,9 +374,88 @@ async function runReplyAgentWithBase(params: {
   });
 }
 
+function normalizeNonNegativeInt(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return null;
+  }
+  const int = Math.floor(value);
+  return int >= 0 ? int : null;
+}
+
+function ensureNoReplyHint(text: string): string {
+  if (text.includes(SILENT_REPLY_TOKEN)) {
+    return text;
+  }
+  return `${text}\n\nIf no user-visible reply is needed, start with ${SILENT_REPLY_TOKEN}.`;
+}
+
+function ensureMemoryFlushSafetyHints(text: string): string {
+  let next = text.trim();
+  for (const hint of MEMORY_FLUSH_REQUIRED_HINTS) {
+    if (!next.includes(hint)) {
+      next = next ? `${next}\n\n${hint}` : hint;
+    }
+  }
+  return next;
+}
+
+function appendCurrentTimeLine(text: string, timeLine: string): string {
+  const trimmed = text.trimEnd();
+  if (!trimmed) {
+    return timeLine;
+  }
+  if (trimmed.includes("Current time:")) {
+    return trimmed;
+  }
+  return `${trimmed}\n${timeLine}`;
+}
+
+function resolveMemoryFlushDateStamp(relativePath: string): string {
+  const match = /^memory\/(\d{4}-\d{2}-\d{2})\.md$/.exec(relativePath);
+  return match?.[1] ?? "YYYY-MM-DD";
+}
+
+function buildTestMemoryFlushPlan(params: {
+  cfg?: OpenClawConfig;
+  nowMs?: number;
+}): MemoryFlushPlan | null {
+  const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
+  const cfg = params.cfg;
+  const defaults = cfg?.agents?.defaults?.compaction?.memoryFlush;
+  if (defaults?.enabled === false) {
+    return null;
+  }
+
+  const relativePath = resolveMemoryFlushRelativePathForRun({ cfg, nowMs });
+  const dateStamp = resolveMemoryFlushDateStamp(relativePath);
+  const { timeLine } = resolveCronStyleNow(cfg ?? {}, nowMs);
+  const promptBase = ensureNoReplyHint(
+    ensureMemoryFlushSafetyHints(defaults?.prompt?.trim() || DEFAULT_MEMORY_FLUSH_PROMPT),
+  );
+  const systemPrompt = ensureNoReplyHint(
+    ensureMemoryFlushSafetyHints(
+      defaults?.systemPrompt?.trim() || DEFAULT_MEMORY_FLUSH_SYSTEM_PROMPT,
+    ),
+  );
+
+  return {
+    softThresholdTokens:
+      normalizeNonNegativeInt(defaults?.softThresholdTokens) ?? DEFAULT_MEMORY_FLUSH_SOFT_TOKENS,
+    forceFlushTranscriptBytes:
+      parseNonNegativeByteSize(defaults?.forceFlushTranscriptBytes) ??
+      DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES,
+    reserveTokensFloor:
+      normalizeNonNegativeInt(cfg?.agents?.defaults?.compaction?.reserveTokensFloor) ??
+      DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR,
+    prompt: appendCurrentTimeLine(promptBase.replaceAll("YYYY-MM-DD", dateStamp), timeLine),
+    systemPrompt: systemPrompt.replaceAll("YYYY-MM-DD", dateStamp),
+    relativePath,
+  };
+}
+
 function registerBuiltInMemoryFlushPlanResolver() {
   registerMemoryFlushPlanResolver(({ cfg, nowMs }) => {
-    return buildMemoryFlushPlan({
+    return buildTestMemoryFlushPlan({
       cfg,
       nowMs,
     });
