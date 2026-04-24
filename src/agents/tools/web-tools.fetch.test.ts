@@ -276,6 +276,31 @@ describe("web_fetch extraction fallbacks", () => {
     expect(requestInit?.dispatcher).not.toBeInstanceOf(EnvHttpProxyAgent);
   });
 
+  it("uses EnvHttpProxyAgent when web_fetch.useEnvProxy is enabled", async () => {
+    vi.stubEnv("HTTP_PROXY", "http://127.0.0.1:7890");
+    const mockFetch = installMockFetch((input: RequestInfo | URL) =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        headers: makeFetchHeaders({ "content-type": "text/plain" }),
+        text: async () => "proxy body",
+        url: resolveRequestUrl(input),
+      } as Response),
+    );
+    const tool = createFetchTool({
+      useEnvProxy: true,
+      firecrawl: { enabled: false },
+    });
+
+    await tool?.execute?.("call", { url: "https://example.com/proxy-env" });
+
+    const requestInit = mockFetch.mock.calls[0]?.[1] as
+      | (RequestInit & { dispatcher?: unknown })
+      | undefined;
+    expect(requestInit?.dispatcher).toBeDefined();
+    expect(requestInit?.dispatcher).toBeInstanceOf(EnvHttpProxyAgent);
+  });
+
   // NOTE: Test for wrapping url/finalUrl/warning fields requires DNS mocking.
   // The sanitization of these fields is verified by external-content.test.ts tests.
 

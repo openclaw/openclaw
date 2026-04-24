@@ -563,6 +563,8 @@ export type ToolsConfig = {
       userAgent?: string;
       /** Use Readability to extract main content (default: true). */
       readability?: boolean;
+      /** Use HTTP(S) proxy settings from environment variables (default: false). */
+      useEnvProxy?: boolean;
       /** SSRF policy configuration for web_fetch. */
       ssrfPolicy?: {
         /** Allow RFC 2544 benchmark range IPs (198.18.0.0/15) for fake-IP proxy compatibility (e.g., Clash TUN mode, Surge). */

@@ -116,6 +116,10 @@ function resolveFetchReadabilityEnabled(fetch?: WebFetchConfig): boolean {
   return true;
 }
 
+function resolveFetchUseEnvProxy(fetch?: WebFetchConfig): boolean {
+  return fetch?.useEnvProxy === true;
+}
+
 function resolveFetchMaxCharsCap(fetch?: WebFetchConfig): number {
   const raw =
     fetch && "maxCharsCap" in fetch && typeof fetch.maxCharsCap === "number"
@@ -272,6 +276,7 @@ type WebFetchRuntimeParams = {
   userAgent: string;
   readabilityEnabled: boolean;
   config?: OpenClawConfig;
+  useEnvProxy: boolean;
   ssrfPolicy?: {
     allowRfc2544BenchmarkRange?: boolean;
   };
@@ -417,6 +422,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
       url: params.url,
       maxRedirects: params.maxRedirects,
       timeoutSeconds: params.timeoutSeconds,
+      useEnvProxy: params.useEnvProxy,
       lookupFn: params.lookupFn,
       policy: allowRfc2544BenchmarkRange ? { allowRfc2544BenchmarkRange } : undefined,
       init: {
@@ -605,6 +611,8 @@ export function createWebFetchTool(options?: {
     return null;
   }
   const readabilityEnabled = resolveFetchReadabilityEnabled(fetch);
+  const useEnvProxy = resolveFetchUseEnvProxy(fetch);
+
   const userAgent =
     (fetch && "userAgent" in fetch && typeof fetch.userAgent === "string" && fetch.userAgent) ||
     DEFAULT_FETCH_USER_AGENT;
@@ -652,6 +660,7 @@ export function createWebFetchTool(options?: {
         readabilityEnabled,
         config: options?.config,
         ssrfPolicy: fetch?.ssrfPolicy,
+        useEnvProxy,
         lookupFn: options?.lookupFn,
         resolveProviderFallback,
       });
