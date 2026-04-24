@@ -18,6 +18,8 @@ function writeExternalSetupChannelPlugin(
     channelId?: string;
     manifestChannelIds?: string[];
     manifestChannelConfig?: boolean;
+    manifestChannelDescription?: string;
+    manifestChannelLabel?: string;
     setupRequiresRuntime?: boolean;
     setupChannelId?: string;
   } = {},
@@ -80,8 +82,8 @@ function writeExternalSetupChannelPlugin(
                         sensitive: true,
                       },
                     },
-                    label: "External Chat Manifest",
-                    description: "manifest config",
+                    label: options.manifestChannelLabel ?? "External Chat Manifest",
+                    description: options.manifestChannelDescription ?? "manifest config",
                     preferOver: ["legacy-external-chat"],
                   },
                 ]),
@@ -567,6 +569,103 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
     });
     expect(fs.existsSync(setupMarker)).toBe(false);
     expect(fs.existsSync(fullMarker)).toBe(false);
+  });
+
+  it("sanitizes terminal control sequences from manifest channel metadata", () => {
+    const { pluginDir } = writeExternalSetupChannelPlugin({
+      setupEntry: false,
+      pluginId: "external-chat-plugin",
+      channelId: "external-chat",
+      manifestChannelConfig: true,
+      manifestChannelLabel: "External\u001b[31m Chat\u001b[0m",
+      manifestChannelDescription: "manifest\u001b[2K config",
+    });
+    const plugins = listReadOnlyChannelPluginsForConfig(
+      {
+        channels: {
+          "external-chat": { token: "configured" },
+        },
+        plugins: {
+          load: { paths: [pluginDir] },
+          allow: ["external-chat-plugin"],
+        },
+      } as never,
+      {
+        env: { ...process.env },
+        includePersistedAuthState: false,
+      },
+    );
+
+    const plugin = plugins.find((entry) => entry.id === "external-chat");
+    expect(plugin?.meta.label).toBe("External Chat");
+    expect(plugin?.meta.selectionLabel).toBe("External Chat");
+    expect(plugin?.meta.blurb).toBe("manifest config");
+  });
+
+  it("ignores manifest channel configs with unsafe channel ids", () => {
+    const unsafeChannelId = "__proto__";
+    const { pluginDir, fullMarker, setupMarker } = writeExternalSetupChannelPlugin({
+      setupEntry: false,
+      pluginId: "external-chat-plugin",
+      channelId: unsafeChannelId,
+      manifestChannelIds: [unsafeChannelId],
+      manifestChannelConfig: true,
+    });
+    const plugins = listReadOnlyChannelPluginsForConfig(
+      {
+        channels: Object.fromEntries([[unsafeChannelId, { token: "configured" }]]),
+        plugins: {
+          load: { paths: [pluginDir] },
+          allow: ["external-chat-plugin"],
+        },
+      } as never,
+      {
+        env: { ...process.env },
+        includePersistedAuthState: false,
+      },
+    );
+
+    expect(plugins.some((entry) => entry.id === unsafeChannelId)).toBe(false);
+    expect(fs.existsSync(setupMarker)).toBe(false);
+    expect(fs.existsSync(fullMarker)).toBe(false);
+  });
+
+  it("uses own normalized account ids for manifest channel account config", () => {
+    const { pluginDir } = writeExternalSetupChannelPlugin({
+      setupEntry: false,
+      pluginId: "external-chat-plugin",
+      channelId: "external-chat",
+      manifestChannelConfig: true,
+    });
+    const inheritedAccounts = Object.create({
+      inherited: { token: "prototype-token" },
+    }) as Record<string, unknown>;
+    inheritedAccounts.default = { token: "default-token" };
+    inheritedAccounts.named = { token: "named-token" };
+    const cfg = {
+      channels: {
+        "external-chat": {
+          accounts: inheritedAccounts,
+        },
+      },
+      plugins: {
+        load: { paths: [pluginDir] },
+        allow: ["external-chat-plugin"],
+      },
+    } as never;
+    const plugin = listReadOnlyChannelPluginsForConfig(cfg, {
+      env: { ...process.env },
+      includePersistedAuthState: false,
+    }).find((entry) => entry.id === "external-chat");
+
+    expect(plugin?.config.listAccountIds(cfg)).toEqual(["default", "named"]);
+    expect(plugin?.config.resolveAccount(cfg, "__proto__")).toMatchObject({
+      accountId: "default",
+      config: { token: "default-token" },
+    });
+    expect(plugin?.config.resolveAccount(cfg, "inherited")).not.toMatchObject({
+      config: { token: "prototype-token" },
+    });
   });
 
   it("keeps setup-entry precedence when channel config descriptors are not runtime cutoffs", () => {
