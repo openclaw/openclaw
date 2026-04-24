@@ -1,7 +1,5 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
-const registerLogTransportMock = vi.hoisted(() => vi.fn());
-
 const telemetryState = vi.hoisted(() => {
   const counters = new Map<string, { add: ReturnType<typeof vi.fn> }>();
   const histograms = new Map<string, { record: ReturnType<typeof vi.fn> }>();
@@ -113,14 +111,6 @@ vi.mock("@opentelemetry/semantic-conventions", () => ({
   ATTR_SERVICE_NAME: "service.name",
 }));
 
-vi.mock("../api.js", async () => {
-  const actual = await vi.importActual<typeof import("../api.js")>("../api.js");
-  return {
-    ...actual,
-    registerLogTransport: registerLogTransportMock,
-  };
-});
-
 import type { OpenClawPluginServiceContext } from "../api.js";
 import { emitDiagnosticEvent } from "../api.js";
 import { createDiagnosticsOtelService } from "./service.js";
@@ -132,6 +122,7 @@ const TRACE_ID = "4bf92f3577b34da6a3ce929d0e0e4736";
 const SPAN_ID = "00f067aa0ba902b7";
 const CHILD_SPAN_ID = "1111111111111111";
 const GRANDCHILD_SPAN_ID = "2222222222222222";
+const PROTO_KEY = "__proto__";
 
 function createLogger() {
   return {
@@ -174,26 +165,17 @@ function createTraceOnlyContext(endpoint: string): OpenClawPluginServiceContext 
   return createOtelContext(endpoint, { traces: true });
 }
 
-type RegisteredLogTransport = (logObj: Record<string, unknown>) => void;
-function setupRegisteredTransports() {
-  const registeredTransports: RegisteredLogTransport[] = [];
-  const stopTransports: ReturnType<typeof vi.fn>[] = [];
-  registerLogTransportMock.mockImplementation((transport) => {
-    registeredTransports.push(transport);
-    const stopTransport = vi.fn();
-    stopTransports.push(stopTransport);
-    return stopTransport;
-  });
-  return { registeredTransports, stopTransports };
-}
-
-async function emitAndCaptureLog(logObj: Record<string, unknown>) {
-  const { registeredTransports } = setupRegisteredTransports();
+async function emitAndCaptureLog(
+  event: Omit<Extract<Parameters<typeof emitDiagnosticEvent>[0], { type: "log.record" }>, "type">,
+) {
   const service = createDiagnosticsOtelService();
   const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { logs: true });
   await service.start(ctx);
-  expect(registeredTransports).toHaveLength(1);
-  registeredTransports[0]?.(logObj);
+  emitDiagnosticEvent({
+    type: "log.record",
+    ...event,
+  });
+  await flushDiagnosticEvents();
   expect(logEmit).toHaveBeenCalled();
   const emitCall = logEmit.mock.calls[0]?.[0];
   await service.stop?.(ctx);
@@ -215,15 +197,12 @@ describe("diagnostics-otel service", () => {
     telemetryState.meter.createHistogram.mockClear();
     sdkStart.mockClear();
     sdkShutdown.mockClear();
-    logEmit.mockClear();
+    logEmit.mockReset();
     logShutdown.mockClear();
     traceExporterCtor.mockClear();
-    registerLogTransportMock.mockReset();
   });
 
   test("records message-flow metrics and spans", async () => {
-    const { registeredTransports } = setupRegisteredTransports();
-
     const service = createDiagnosticsOtelService();
     const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true, logs: true });
     await service.start(ctx);
@@ -289,29 +268,24 @@ describe("diagnostics-otel service", () => {
     expect(spanNames).toContain("openclaw.message.processed");
     expect(spanNames).toContain("openclaw.session.stuck");
 
-    expect(registerLogTransportMock).toHaveBeenCalledTimes(1);
-    expect(registeredTransports).toHaveLength(1);
-    registeredTransports[0]?.({
-      0: '{"subsystem":"diagnostic"}',
-      1: "hello",
-      _meta: { logLevelName: "INFO", date: new Date() },
+    emitDiagnosticEvent({
+      type: "log.record",
+      level: "INFO",
+      message: "hello",
+      attributes: { subsystem: "diagnostic" },
     });
+    await flushDiagnosticEvents();
     expect(logEmit).toHaveBeenCalled();
 
     await service.stop?.(ctx);
   });
 
   test("restarts without retaining prior listeners or log transports", async () => {
-    const { registeredTransports, stopTransports } = setupRegisteredTransports();
-
     const service = createDiagnosticsOtelService();
     const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true, logs: true });
     await service.start(ctx);
     await service.start(ctx);
 
-    expect(registerLogTransportMock).toHaveBeenCalledTimes(2);
-    expect(registeredTransports).toHaveLength(2);
-    expect(stopTransports[0]).toHaveBeenCalledTimes(1);
     expect(logShutdown).toHaveBeenCalledTimes(1);
     expect(sdkShutdown).toHaveBeenCalledTimes(1);
 
@@ -325,7 +299,6 @@ describe("diagnostics-otel service", () => {
     expect(telemetryState.tracer.startSpan).toHaveBeenCalledTimes(1);
 
     await service.stop?.(ctx);
-    expect(stopTransports[1]).toHaveBeenCalledTimes(1);
     expect(logShutdown).toHaveBeenCalledTimes(2);
     expect(sdkShutdown).toHaveBeenCalledTimes(2);
 
@@ -340,8 +313,6 @@ describe("diagnostics-otel service", () => {
   });
 
   test("tears down active handles when restarted with diagnostics disabled", async () => {
-    const { stopTransports } = setupRegisteredTransports();
-
     const service = createDiagnosticsOtelService();
     const enabledCtx = createOtelContext(OTEL_TEST_ENDPOINT, {
       traces: true,
@@ -354,7 +325,6 @@ describe("diagnostics-otel service", () => {
       config: { diagnostics: { enabled: false } },
     });
 
-    expect(stopTransports[0]).toHaveBeenCalledTimes(1);
     expect(logShutdown).toHaveBeenCalledTimes(1);
     expect(sdkShutdown).toHaveBeenCalledTimes(1);
 
@@ -410,8 +380,8 @@ describe("diagnostics-otel service", () => {
 
   test("redacts sensitive data from log messages before export", async () => {
     const emitCall = await emitAndCaptureLog({
-      0: "Using API key sk-1234567890abcdef1234567890abcdef",
-      _meta: { logLevelName: "INFO", date: new Date() },
+      level: "INFO",
+      message: "Using API key sk-1234567890abcdef1234567890abcdef",
     });
 
     expect(emitCall?.body).not.toContain("sk-1234567890abcdef1234567890abcdef");
@@ -421,9 +391,11 @@ describe("diagnostics-otel service", () => {
 
   test("redacts sensitive data from log attributes before export", async () => {
     const emitCall = await emitAndCaptureLog({
-      0: '{"token":"ghp_abcdefghijklmnopqrstuvwxyz123456"}', // pragma: allowlist secret
-      1: "auth configured",
-      _meta: { logLevelName: "DEBUG", date: new Date() },
+      level: "DEBUG",
+      message: "auth configured",
+      attributes: {
+        token: "ghp_abcdefghijklmnopqrstuvwxyz123456", // pragma: allowlist secret
+      },
     });
 
     const tokenAttr = emitCall?.attributes?.["openclaw.token"];
@@ -435,16 +407,16 @@ describe("diagnostics-otel service", () => {
 
   test("attaches diagnostic trace context to exported logs", async () => {
     const emitCall = await emitAndCaptureLog({
-      0: '{"subsystem":"diagnostic"}',
-      1: {
-        trace: {
-          traceId: TRACE_ID,
-          spanId: SPAN_ID,
-          traceFlags: "01",
-        },
+      level: "INFO",
+      message: "traceable log",
+      attributes: {
+        subsystem: "diagnostic",
       },
-      2: "traceable log",
-      _meta: { logLevelName: "INFO", date: new Date() },
+      trace: {
+        traceId: TRACE_ID,
+        spanId: SPAN_ID,
+        traceFlags: "01",
+      },
     });
 
     expect(emitCall?.attributes).toMatchObject({
@@ -471,6 +443,99 @@ describe("diagnostics-otel service", () => {
         spanId: SPAN_ID,
       }),
     });
+  });
+
+  test("bounds plugin-emitted log attributes and omits source paths", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { logs: true });
+    await service.start(ctx);
+
+    const attributes = Object.create(null) as Record<string, string>;
+    attributes.good = "y".repeat(6000);
+    attributes["bad key"] = "drop-me";
+    attributes[PROTO_KEY] = "pollute";
+    attributes["constructor"] = "pollute";
+    attributes["prototype"] = "pollute";
+    attributes["sk-1234567890abcdef1234567890abcdef"] = "secret-key"; // pragma: allowlist secret
+
+    emitDiagnosticEvent({
+      type: "log.record",
+      level: "INFO",
+      message: "x".repeat(6000),
+      attributes,
+      code: {
+        filepath: "/Users/alice/openclaw/src/private.ts",
+        line: 42,
+        functionName: "handler",
+        location: "/Users/alice/openclaw/src/private.ts:42",
+      },
+    } as Parameters<typeof emitDiagnosticEvent>[0]);
+    await flushDiagnosticEvents();
+
+    const emitCall = logEmit.mock.calls[0]?.[0];
+    expect(emitCall?.body.length).toBeLessThanOrEqual(4200);
+    expect(emitCall?.attributes).toMatchObject({
+      "openclaw.good": expect.stringMatching(/^y+/),
+      "code.lineno": 42,
+      "code.function": "handler",
+    });
+    expect(String(emitCall?.attributes?.["openclaw.good"]).length).toBeLessThanOrEqual(4200);
+    expect(Object.hasOwn(emitCall?.attributes ?? {}, `openclaw.${PROTO_KEY}`)).toBe(false);
+    expect(Object.hasOwn(emitCall?.attributes ?? {}, "openclaw.constructor")).toBe(false);
+    expect(Object.hasOwn(emitCall?.attributes ?? {}, "openclaw.prototype")).toBe(false);
+    expect(
+      Object.hasOwn(
+        emitCall?.attributes ?? {},
+        "openclaw.sk-1234567890abcdef1234567890abcdef", // pragma: allowlist secret
+      ),
+    ).toBe(false);
+    expect(emitCall?.attributes).toEqual(
+      expect.not.objectContaining({
+        "openclaw.bad key": expect.anything(),
+        "code.filepath": expect.anything(),
+        "openclaw.code.location": expect.anything(),
+      }),
+    );
+    await service.stop?.(ctx);
+  });
+
+  test("rate-limits repeated log export failure reports", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { logs: true });
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    logEmit.mockImplementation(() => {
+      throw new Error("export failed");
+    });
+    try {
+      await service.start(ctx);
+
+      emitDiagnosticEvent({
+        type: "log.record",
+        level: "ERROR",
+        message: "first failing log",
+      });
+      emitDiagnosticEvent({
+        type: "log.record",
+        level: "ERROR",
+        message: "second failing log",
+      });
+      await flushDiagnosticEvents();
+
+      expect(ctx.logger.error).toHaveBeenCalledTimes(1);
+
+      nowSpy.mockReturnValue(62_000);
+      emitDiagnosticEvent({
+        type: "log.record",
+        level: "ERROR",
+        message: "third failing log",
+      });
+      await flushDiagnosticEvents();
+
+      expect(ctx.logger.error).toHaveBeenCalledTimes(2);
+    } finally {
+      nowSpy.mockRestore();
+      await service.stop?.(ctx);
+    }
   });
 
   test("does not parent diagnostic event spans from plugin-emittable trace context", async () => {
