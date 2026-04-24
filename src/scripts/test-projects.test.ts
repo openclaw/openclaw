@@ -815,7 +815,7 @@ describe("test-projects args", () => {
     ]);
   });
 
-  it("routes browser extension targets to the extensions config", () => {
+  it("routes browser extension targets to the browser extension config", () => {
     expect(buildVitestRunPlans(["extensions/browser/index.test.ts"])).toEqual([
       {
         config: "test/vitest/vitest.extension-browser.config.ts",
