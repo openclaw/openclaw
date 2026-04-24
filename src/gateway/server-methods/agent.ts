@@ -500,9 +500,10 @@ export const agentHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    const requestedSessionId = normalizeOptionalString(request.sessionId);
     let requestedSessionKey =
       requestedSessionKeyRaw ??
-      (!request.sessionId
+      (!requestedSessionId
         ? resolveExplicitAgentSessionKey({
             cfg,
             agentId,
@@ -522,7 +523,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         return;
       }
     }
-    let resolvedSessionId = normalizeOptionalString(request.sessionId);
+    let resolvedSessionId = requestedSessionId;
     let sessionEntry: SessionEntry | undefined;
     let bestEffortDeliver = requestedBestEffortDeliver ?? false;
     let cfgForAgent: OpenClawConfig | undefined;
@@ -915,13 +916,18 @@ export const agentHandlers: GatewayRequestHandlers = {
     }
 
     const resolvedThreadId = explicitThreadId ?? deliveryPlan.resolvedThreadId;
+    const ingressAgentId =
+      agentId &&
+      (!resolvedSessionKey || resolveAgentIdFromSessionKey(resolvedSessionKey) === agentId)
+        ? agentId
+        : undefined;
 
     dispatchAgentRunFromGateway({
       ingressOpts: {
         message,
         images,
         imageOrder,
-        agentId,
+        agentId: ingressAgentId,
         provider: providerOverride,
         model: modelOverride,
         to: resolvedTo,
