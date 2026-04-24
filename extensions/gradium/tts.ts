@@ -1,4 +1,4 @@
-import { assertOkOrThrowProviderError } from "openclaw/plugin-sdk/speech";
+import { assertOkOrThrowProviderError } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeGradiumBaseUrl } from "./shared.js";
 

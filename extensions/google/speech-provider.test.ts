@@ -245,4 +245,37 @@ describe("Google speech provider", () => {
       ]),
     );
   });
+
+  it("formats Google TTS HTTP errors with provider details", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            error: {
+              message: "Quota exceeded",
+              status: "RESOURCE_EXHAUSTED",
+            },
+          }),
+          {
+            status: 429,
+            headers: { "x-request-id": "google_req_123" },
+          },
+        ),
+      ),
+    );
+    const provider = buildGoogleSpeechProvider();
+
+    await expect(
+      provider.synthesize({
+        text: "Read this plainly.",
+        cfg: {},
+        providerConfig: { apiKey: "google-test-key" },
+        target: "audio-file",
+        timeoutMs: 10_000,
+      }),
+    ).rejects.toThrow(
+      "Google TTS failed (429): Quota exceeded [code=RESOURCE_EXHAUSTED] [request_id=google_req_123]",
+    );
+  });
 });
