@@ -31,10 +31,9 @@ describe("npm Telegram live Docker E2E", () => {
 
   it("installs the npm package before forwarding runtime secrets", () => {
     const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
-    const installRun = script.slice(
-      script.indexOf('echo "Running published npm Telegram live Docker E2E'),
-      script.indexOf('cat "$run_log"\n>"$run_log"'),
-    );
+    const installRunStart = script.indexOf('echo "Running published npm Telegram live Docker E2E');
+    const installRunEnd = script.indexOf('run_logged docker run --rm \\\n  "${docker_env[@]}"');
+    const installRun = script.slice(installRunStart, installRunEnd);
 
     expect(installRun).toContain('npm install -g "$package_spec" --no-fund --no-audit');
     expect(installRun).not.toContain('"${docker_env[@]}"');

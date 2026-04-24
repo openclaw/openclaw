@@ -51,6 +51,7 @@ docker_e2e_build_or_reuse "$IMAGE_NAME" npm-telegram-live "$ROOT_DIR/scripts/e2e
 mkdir -p "$ROOT_DIR/.artifacts/qa-e2e"
 run_log="$(mktemp "${TMPDIR:-/tmp}/openclaw-npm-telegram-live.XXXXXX")"
 npm_prefix_host="$(mktemp -d "$ROOT_DIR/.artifacts/qa-e2e/npm-telegram-live-prefix.XXXXXX")"
+trap 'rm -f "$run_log"; rm -rf "$npm_prefix_host"' EXIT
 credential_source="$(resolve_credential_source)"
 credential_role="$(resolve_credential_role)"
 if [ -z "$credential_role" ] && [ -n "${CI:-}" ] && [ "$credential_source" = "convex" ]; then
@@ -111,12 +112,21 @@ for key in \
   forward_env_if_set "$key"
 done
 
+run_logged() {
+  if ! "$@" >"$run_log" 2>&1; then
+    cat "$run_log"
+    exit 1
+  fi
+  cat "$run_log"
+  >"$run_log"
+}
+
 echo "Running published npm Telegram live Docker E2E ($PACKAGE_SPEC)..."
-if ! docker run --rm \
+run_logged docker run --rm \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
   -e OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC="$PACKAGE_SPEC" \
   -v "$npm_prefix_host:/npm-global" \
-  -i "$IMAGE_NAME" bash -s >"$run_log" 2>&1 <<'EOF'
+  -i "$IMAGE_NAME" bash -s <<'EOF'
 set -euo pipefail
 
 export HOME="$(mktemp -d "/tmp/openclaw-npm-telegram-install.XXXXXX")"
@@ -124,31 +134,18 @@ export NPM_CONFIG_PREFIX="/npm-global"
 export PATH="$NPM_CONFIG_PREFIX/bin:$PATH"
 
 package_spec="${OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC:?missing OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC}"
-if [[ ! "$package_spec" =~ ^openclaw@(beta|latest|[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*|-beta\.[1-9][0-9]*)?)$ ]]; then
-  echo "OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC must be openclaw@beta, openclaw@latest, or an exact OpenClaw release version; got: $package_spec" >&2
-  exit 1
-fi
 echo "Installing ${package_spec}..."
 npm install -g "$package_spec" --no-fund --no-audit
 
 command -v openclaw
 openclaw --version
 EOF
-then
-  cat "$run_log"
-  rm -f "$run_log"
-  rm -rf "$npm_prefix_host"
-  exit 1
-fi
 
-cat "$run_log"
->"$run_log"
-
-if ! docker run --rm \
+run_logged docker run --rm \
   "${docker_env[@]}" \
   -v "$ROOT_DIR/.artifacts:/app/.artifacts" \
   -v "$npm_prefix_host:/npm-global" \
-  -i "$IMAGE_NAME" bash -s >"$run_log" 2>&1 <<'EOF'
+  -i "$IMAGE_NAME" bash -s <<'EOF'
 set -euo pipefail
 
 export HOME="$(mktemp -d "/tmp/openclaw-npm-telegram-runtime.XXXXXX")"
@@ -162,14 +159,5 @@ openclaw --version
 export OPENCLAW_NPM_TELEGRAM_SUT_COMMAND="$(command -v openclaw)"
 node --import tsx scripts/e2e/npm-telegram-live-runner.ts
 EOF
-then
-  cat "$run_log"
-  rm -f "$run_log"
-  rm -rf "$npm_prefix_host"
-  exit 1
-fi
 
-cat "$run_log"
-rm -f "$run_log"
-rm -rf "$npm_prefix_host"
 echo "published npm Telegram live Docker E2E passed ($PACKAGE_SPEC)"
