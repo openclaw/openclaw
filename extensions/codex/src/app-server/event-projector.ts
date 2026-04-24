@@ -34,6 +34,10 @@ export type CodexAppServerToolTelemetry = {
   successfulCronAdds?: number;
 };
 
+type AgentHarnessResultClassification = NonNullable<
+  EmbeddedRunAttemptResult["agentHarnessResultClassification"]
+>;
+
 const ZERO_USAGE: Usage = {
   input: 0,
   output: 0,
@@ -59,6 +63,25 @@ const CURRENT_TOKEN_USAGE_KEYS = [
 ] as const;
 
 const MAX_TOOL_OUTPUT_DELTA_MESSAGES_PER_ITEM = 20;
+
+function classifyTerminalResult(params: {
+  assistantTexts: string[];
+  reasoningText: string;
+  planText: string;
+  promptError: unknown;
+  turnCompleted: boolean;
+}): AgentHarnessResultClassification | undefined {
+  if (!params.turnCompleted || params.promptError || params.assistantTexts.length > 0) {
+    return undefined;
+  }
+  if (params.planText.trim()) {
+    return "planning-only";
+  }
+  if (params.reasoningText.trim()) {
+    return "reasoning-only";
+  }
+  return "empty";
+}
 
 export class CodexAppServerEventProjector {
   private readonly assistantTextByItem = new Map<string, string>();
@@ -192,6 +215,13 @@ export class CodexAppServerEventProjector {
     const promptError =
       this.promptError ??
       (turnFailed ? (this.completedTurn?.error?.message ?? "codex app-server turn failed") : null);
+    const agentHarnessResultClassification = classifyTerminalResult({
+      assistantTexts,
+      reasoningText,
+      planText,
+      promptError,
+      turnCompleted: Boolean(this.completedTurn),
+    });
     return {
       aborted: this.aborted || turnInterrupted,
       externalAbort: false,
@@ -201,6 +231,7 @@ export class CodexAppServerEventProjector {
       promptError,
       promptErrorSource: promptError ? this.promptErrorSource || "prompt" : null,
       sessionIdUsed: this.params.sessionId,
+      ...(agentHarnessResultClassification ? { agentHarnessResultClassification } : {}),
       bootstrapPromptWarningSignaturesSeen: this.params.bootstrapPromptWarningSignaturesSeen,
       bootstrapPromptWarningSignature: this.params.bootstrapPromptWarningSignature,
       messagesSnapshot,

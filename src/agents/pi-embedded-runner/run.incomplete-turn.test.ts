@@ -62,9 +62,12 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
 
     const result = await runEmbeddedPiAgent({
       ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-4.1",
       runId: "run-incomplete-turn-messaging-warning",
     });
 
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
     expect(mockedClassifyFailoverReason).toHaveBeenCalledTimes(1);
     expect(result.payloads?.[0]?.isError).toBe(true);
     expect(result.payloads?.[0]?.text).toContain("verify before retrying");
