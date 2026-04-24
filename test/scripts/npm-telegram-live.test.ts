@@ -41,14 +41,15 @@ describe("npm Telegram live Docker E2E", () => {
     expect(script).toContain('credential_role="ci"');
   });
 
-  it("limits the manual npm beta workflow to release managers", () => {
+  it("requires release manager environment approval for the manual npm beta workflow", () => {
     const workflow = readFileSync(WORKFLOW_PATH, "utf8");
 
-    expect(workflow).toContain('const teamSlug = "openclaw-release-managers";');
-    expect(workflow).toContain("github.rest.teams.listMembersInOrg");
-    expect(workflow).toContain("memberLogins.has(context.actor)");
+    expect(workflow).toContain("approve_release_manager:");
+    expect(workflow).toContain("environment: npm-release");
+    expect(workflow).toContain("needs: approve_release_manager");
     expect(workflow).not.toContain('new Set(["admin", "write"])');
     expect(workflow).not.toContain("data.role_name");
+    expect(workflow).not.toContain("github.rest.teams.listMembersInOrg");
     expect(workflow).not.toContain("getMembershipForUserInOrg");
   });
 
