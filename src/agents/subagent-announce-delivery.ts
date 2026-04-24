@@ -499,6 +499,9 @@ export function extractThreadCompletionFallbackText(internalEvents?: AgentIntern
     if (statusLabel) {
       return statusLabel;
     }
+    if (taskLabel) {
+      return taskLabel;
+    }
   }
   return "";
 }
@@ -594,18 +597,25 @@ async function sendSubagentAnnounceDirectly(params: {
       params.expectsCompletionMessage && deliveryTarget.deliver && deliveryTarget.threadId
         ? extractThreadCompletionFallbackText(params.internalEvents)
         : "";
-    if (threadCompletionFallbackText && deliveryTarget.channel && deliveryTarget.to) {
-      await subagentAnnounceDeliveryDeps.sendMessage({
-        cfg,
-        channel: deliveryTarget.channel,
-        to: deliveryTarget.to,
-        accountId: deliveryTarget.accountId,
-        threadId: deliveryTarget.threadId,
-        content: threadCompletionFallbackText,
-        requesterSessionKey: canonicalRequesterSessionKey,
-        bestEffort: params.bestEffortDeliver,
-        idempotencyKey: params.directIdempotencyKey,
-        abortSignal: params.signal,
+    const fallbackChannel = deliveryTarget.channel;
+    const fallbackTo = deliveryTarget.to;
+    if (threadCompletionFallbackText && fallbackChannel && fallbackTo) {
+      await runAnnounceDeliveryWithRetry({
+        operation: "completion direct thread fallback send",
+        signal: params.signal,
+        run: async () =>
+          await subagentAnnounceDeliveryDeps.sendMessage({
+            cfg,
+            channel: fallbackChannel,
+            to: fallbackTo,
+            accountId: deliveryTarget.accountId,
+            threadId: deliveryTarget.threadId,
+            content: threadCompletionFallbackText,
+            requesterSessionKey: canonicalRequesterSessionKey,
+            bestEffort: params.bestEffortDeliver,
+            idempotencyKey: params.directIdempotencyKey,
+            abortSignal: params.signal,
+          }),
       });
       return {
         delivered: true,

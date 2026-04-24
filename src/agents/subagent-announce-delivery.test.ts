@@ -294,4 +294,22 @@ describe("extractThreadCompletionFallbackText", () => {
       ]),
     ).toBe("sample task: completed successfully");
   });
+
+  it("falls back to the task label when result and status label are empty", () => {
+    expect(
+      extractThreadCompletionFallbackText([
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:child",
+          announceType: "subagent task",
+          taskLabel: "sample task",
+          status: "ok",
+          statusLabel: "   ",
+          result: "   ",
+          replyInstruction: "Summarize the result.",
+        },
+      ]),
+    ).toBe("sample task");
+  });
 });
