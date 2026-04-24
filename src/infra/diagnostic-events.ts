@@ -1,10 +1,12 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { DiagnosticTraceContext } from "./diagnostic-trace-context.js";
 
 export type DiagnosticSessionState = "idle" | "processing" | "waiting";
 
 type DiagnosticBaseEvent = {
   ts: number;
   seq: number;
+  trace?: DiagnosticTraceContext;
 };
 
 export type DiagnosticUsageEvent = DiagnosticBaseEvent & {
