@@ -26,12 +26,15 @@ The plugin is explicit by design:
 
 ## Quick start
 
-Install the local audio dependencies and make sure the realtime provider can use
-OpenAI:
+Install the local audio dependencies and configure a backend realtime voice
+provider. OpenAI is the default; Google Gemini Live also works with
+`realtime.provider: "google"`:
 
 ```bash
 brew install blackhole-2ch sox
 export OPENAI_API_KEY=sk-...
+# or
+export GEMINI_API_KEY=...
 ```
 
 `blackhole-2ch` installs the `BlackHole 2ch` virtual audio device. Homebrew's
@@ -184,6 +187,11 @@ Route Meet through that node on the Gateway host:
         enabled: true,
         config: {
           defaultTransport: "chrome-node",
+          chrome: {
+            guestName: "OpenClaw Agent",
+            autoJoin: true,
+            reuseExistingTab: true,
+          },
           chromeNode: {
             node: "parallels-macos",
           },
@@ -202,6 +210,13 @@ openclaw googlemeet join https://meet.google.com/abc-defg-hij
 
 or ask the agent to use the `google_meet` tool with `transport: "chrome-node"`.
 
+For a one-command smoke test that creates or reuses a session, speaks a known
+phrase, and prints session health:
+
+```bash
+openclaw googlemeet test-speech https://meet.google.com/abc-defg-hij
+```
+
 If `chromeNode.node` is omitted, OpenClaw auto-selects only when exactly one
 connected node advertises `googlemeet.chrome`. If several capable nodes are
 connected, set `chromeNode.node` to the node id, display name, or remote IP.
@@ -214,8 +229,12 @@ Common failure checks:
   `gateway.nodes.allowCommands: ["googlemeet.chrome"]`.
 - `BlackHole 2ch audio device not found on the node`: install `blackhole-2ch`
   in the VM and reboot the VM.
-- Chrome opens but cannot join: sign in to Chrome inside the VM and confirm that
-  profile can join the Meet URL manually.
+- Chrome opens but cannot join: sign in to Chrome inside the VM, or keep
+  `chrome.guestName` set for guest join. Guest auto-join uses Chrome Apple
+  Events; if it reports an automation warning, enable Chrome > View > Developer
+  > Allow JavaScript from Apple Events, then retry.
+- Duplicate Meet tabs: leave `chrome.reuseExistingTab: true` enabled. OpenClaw
+  activates an existing tab for the same Meet URL before opening a new one.
 - No audio: in Meet, route microphone/speaker through the virtual audio device
   path used by OpenClaw; use separate virtual devices or Loopback-style routing
   for clean duplex audio.
@@ -319,11 +338,14 @@ Workspace Developer Preview Program for Meet media APIs.
 ## Config
 
 The common Chrome realtime path only needs the plugin enabled, BlackHole, SoX,
-and an OpenAI key:
+and a backend realtime voice provider key. OpenAI is the default; set
+`realtime.provider: "google"` to use Google Gemini Live:
 
 ```bash
 brew install blackhole-2ch sox
 export OPENAI_API_KEY=sk-...
+# or
+export GEMINI_API_KEY=...
 ```
 
 Set the plugin config under `plugins.entries.google-meet.config`:
@@ -347,6 +369,13 @@ Defaults:
 - `defaultMode: "realtime"`
 - `chromeNode.node`: optional node id/name/IP for `chrome-node`
 - `chrome.audioBackend: "blackhole-2ch"`
+- `chrome.guestName: "OpenClaw Agent"`: name used on the signed-out Meet guest
+  screen
+- `chrome.autoJoin: true`: best-effort guest-name fill and Join Now click
+- `chrome.reuseExistingTab: true`: activate an existing Meet tab instead of
+  opening duplicates
+- `chrome.waitForInCallMs: 20000`: wait for the Meet tab to report in-call
+  before the realtime intro is triggered
 - `chrome.audioInputCommand`: SoX `rec` command writing 8 kHz G.711 mu-law
   audio to stdout
 - `chrome.audioOutputCommand`: SoX `play` command reading 8 kHz G.711 mu-law
@@ -355,6 +384,8 @@ Defaults:
 - `realtime.toolPolicy: "safe-read-only"`
 - `realtime.instructions`: brief spoken replies, with
   `openclaw_agent_consult` for deeper answers
+- `realtime.introMessage`: short spoken readiness check when the realtime bridge
+  connects; set it to `""` to join silently
 
 Optional overrides:
 
@@ -365,12 +396,22 @@ Optional overrides:
   },
   chrome: {
     browserProfile: "Default",
+    guestName: "OpenClaw Agent",
+    waitForInCallMs: 30000,
   },
   chromeNode: {
     node: "parallels-macos",
   },
   realtime: {
+    provider: "google",
     toolPolicy: "owner",
+    introMessage: "Say exactly: I'm here.",
+    providers: {
+      google: {
+        model: "gemini-2.5-flash-native-audio-preview-12-2025",
+        voice: "Kore",
+      },
+    },
   },
 }
 ```
@@ -409,7 +450,25 @@ VM. In both cases the realtime model and `openclaw_agent_consult` run on the
 Gateway host, so model credentials stay there.
 
 Use `action: "status"` to list active sessions or inspect a session ID. Use
-`action: "leave"` to mark a session ended.
+`action: "speak"` with `sessionId` and `message` to make the realtime agent
+speak immediately. Use `action: "test_speech"` to create or reuse the session,
+trigger a known phrase, and return `inCall` health when the Chrome host can
+report it. Use `action: "leave"` to mark a session ended.
+
+`status` includes Chrome health when available:
+
+- `inCall`: Chrome appears to be inside the Meet call
+- `micMuted`: best-effort Meet microphone state
+- `providerConnected` / `realtimeReady`: realtime voice bridge state
+- `lastInputAt` / `lastOutputAt`: last audio seen from or sent to the bridge
+
+```json
+{
+  "action": "speak",
+  "sessionId": "meet_...",
+  "message": "Say exactly: I'm here and listening."
+}
+```
 
 ## Realtime agent consult
 
@@ -434,6 +493,20 @@ voice session. The voice model can then speak that answer back into the meeting.
 The consult session key is scoped per Meet session, so follow-up consult calls
 can reuse prior consult context during the same meeting.
 
+To force a spoken readiness check after Chrome has fully joined the call:
+
+```bash
+openclaw googlemeet speak meet_... "Say exactly: I'm here and listening."
+```
+
+For the full join-and-speak smoke:
+
+```bash
+openclaw googlemeet test-speech https://meet.google.com/abc-defg-hij \
+  --transport chrome-node \
+  --message "Say exactly: I'm here and listening."
+```
+
 ## Notes
 
 Google Meet's official media API is receive-oriented, so speaking into a Meet
@@ -453,9 +526,9 @@ For clean duplex audio, route Meet output and Meet microphone through separate
 virtual devices or a Loopback-style virtual device graph. A single shared
 BlackHole device can echo other participants back into the call.
 
-`googlemeet leave` stops the command-pair realtime audio bridge for Chrome
-sessions. For Twilio sessions delegated through the Voice Call plugin, it also
-hangs up the underlying voice call.
+`googlemeet speak` triggers the active realtime audio bridge for a Chrome
+session. `googlemeet leave` stops that bridge. For Twilio sessions delegated
+through the Voice Call plugin, `leave` also hangs up the underlying voice call.
 
 ## Related
 

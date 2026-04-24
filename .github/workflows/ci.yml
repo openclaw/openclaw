@@ -913,7 +913,7 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: needs.preflight.outputs.run_checks_fast == 'true'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -1036,7 +1036,7 @@ jobs:
     name: checks-node-compat-node22
     needs: [preflight]
     if: needs.preflight.outputs.run_node == 'true' && github.event_name == 'push'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     timeout-minutes: 60
     steps:
       - name: Checkout
@@ -1372,16 +1372,16 @@ jobs:
             runner: ubuntu-24.04
           - check_name: check-prod-types
             task: prod-types
-            runner: ubuntu-24.04
+            runner: blacksmith-4vcpu-ubuntu-2404
           - check_name: check-lint
             task: lint
-            runner: ubuntu-24.04
+            runner: blacksmith-4vcpu-ubuntu-2404
           - check_name: check-policy-guards
             task: policy-guards
             runner: ubuntu-24.04
           - check_name: check-test-types
             task: test-types
-            runner: ubuntu-24.04
+            runner: blacksmith-4vcpu-ubuntu-2404
           - check_name: check-strict-smoke
             task: strict-smoke
             runner: ubuntu-24.04

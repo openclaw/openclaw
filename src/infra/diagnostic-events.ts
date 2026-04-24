@@ -154,6 +154,85 @@ export type DiagnosticToolLoopEvent = DiagnosticBaseEvent & {
   pairedToolName?: string;
 };
 
+export type DiagnosticToolParamsSummary =
+  | { kind: "object" }
+  | { kind: "array"; length: number }
+  | { kind: "string"; length: number }
+  | { kind: "number" | "boolean" | "null" | "undefined" | "other" };
+
+type DiagnosticToolExecutionBaseEvent = DiagnosticBaseEvent & {
+  runId?: string;
+  sessionKey?: string;
+  sessionId?: string;
+  toolName: string;
+  toolCallId?: string;
+  paramsSummary?: DiagnosticToolParamsSummary;
+};
+
+export type DiagnosticToolExecutionStartedEvent = DiagnosticToolExecutionBaseEvent & {
+  type: "tool.execution.started";
+};
+
+export type DiagnosticToolExecutionCompletedEvent = DiagnosticToolExecutionBaseEvent & {
+  type: "tool.execution.completed";
+  durationMs: number;
+};
+
+export type DiagnosticToolExecutionErrorEvent = DiagnosticToolExecutionBaseEvent & {
+  type: "tool.execution.error";
+  durationMs: number;
+  errorCategory: string;
+  errorCode?: string;
+};
+
+type DiagnosticRunBaseEvent = DiagnosticBaseEvent & {
+  runId: string;
+  sessionKey?: string;
+  sessionId?: string;
+  provider?: string;
+  model?: string;
+  trigger?: string;
+  channel?: string;
+};
+
+export type DiagnosticRunStartedEvent = DiagnosticRunBaseEvent & {
+  type: "run.started";
+};
+
+export type DiagnosticRunCompletedEvent = DiagnosticRunBaseEvent & {
+  type: "run.completed";
+  durationMs: number;
+  outcome: "completed" | "aborted" | "error";
+  errorCategory?: string;
+};
+
+type DiagnosticModelCallBaseEvent = DiagnosticBaseEvent & {
+  type: "model.call.started" | "model.call.completed" | "model.call.error";
+  runId: string;
+  callId: string;
+  sessionKey?: string;
+  sessionId?: string;
+  provider: string;
+  model: string;
+  api?: string;
+  transport?: string;
+};
+
+export type DiagnosticModelCallStartedEvent = DiagnosticModelCallBaseEvent & {
+  type: "model.call.started";
+};
+
+export type DiagnosticModelCallCompletedEvent = DiagnosticModelCallBaseEvent & {
+  type: "model.call.completed";
+  durationMs: number;
+};
+
+export type DiagnosticModelCallErrorEvent = DiagnosticModelCallBaseEvent & {
+  type: "model.call.error";
+  durationMs: number;
+  errorCategory: string;
+};
+
 export type DiagnosticMemoryUsage = {
   rssBytes: number;
   heapTotalBytes: number;
@@ -204,6 +283,14 @@ export type DiagnosticEventPayload =
   | DiagnosticRunAttemptEvent
   | DiagnosticHeartbeatEvent
   | DiagnosticToolLoopEvent
+  | DiagnosticToolExecutionStartedEvent
+  | DiagnosticToolExecutionCompletedEvent
+  | DiagnosticToolExecutionErrorEvent
+  | DiagnosticRunStartedEvent
+  | DiagnosticRunCompletedEvent
+  | DiagnosticModelCallStartedEvent
+  | DiagnosticModelCallCompletedEvent
+  | DiagnosticModelCallErrorEvent
   | DiagnosticMemorySampleEvent
   | DiagnosticMemoryPressureEvent
   | DiagnosticPayloadLargeEvent;

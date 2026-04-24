@@ -1,4 +1,5 @@
 export { resolveChunkMode } from "../auto-reply/chunk.js";
+export { generateConversationLabel } from "../auto-reply/reply/conversation-label-generator.js";
 export { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import type {
   DispatchReplyWithBufferedBlockDispatcher,

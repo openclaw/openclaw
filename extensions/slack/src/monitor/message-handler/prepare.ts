@@ -54,9 +54,9 @@ import {
 } from "../context.js";
 import { recordInboundSession, resolveConversationLabel } from "../conversation.runtime.js";
 import { authorizeSlackDirectMessage } from "../dm-auth.js";
-import { resolveSlackThreadStarter } from "../media.js";
 import { resolveSlackRoomContextHints } from "../room-context.js";
 import { sendMessageSlack } from "../send.runtime.js";
+import { resolveSlackThreadStarter } from "../thread.js";
 import { resolveSlackMessageContent } from "./prepare-content.js";
 import { resolveSlackRoutingContext } from "./prepare-routing.js";
 import { resolveSlackThreadContextData } from "./prepare-thread-context.js";

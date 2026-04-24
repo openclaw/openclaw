@@ -10,6 +10,7 @@ import {
   startCommandRealtimeAudioBridge,
   type ChromeRealtimeAudioBridgeHandle,
 } from "../realtime.js";
+import type { GoogleMeetChromeHealth } from "./types.js";
 
 export const GOOGLE_MEET_SYSTEM_PROFILER_COMMAND = "/usr/sbin/system_profiler";
 
@@ -200,14 +201,20 @@ function parseNodeStartResult(raw: unknown): {
   launched?: boolean;
   bridgeId?: string;
   audioBridge?: { type?: string };
+  browser?: GoogleMeetChromeHealth;
 } {
-  if (!raw || typeof raw !== "object") {
+  const value =
+    raw && typeof raw === "object" && "payload" in raw
+      ? (raw as { payload?: unknown }).payload
+      : raw;
+  if (!value || typeof value !== "object") {
     throw new Error("Google Meet node returned an invalid start result.");
   }
-  return raw as {
+  return value as {
     launched?: boolean;
     bridgeId?: string;
     audioBridge?: { type?: string };
+    browser?: GoogleMeetChromeHealth;
   };
 }
 
@@ -225,6 +232,7 @@ export async function launchChromeMeetOnNode(params: {
   audioBridge?:
     | { type: "external-command" }
     | ({ type: "node-command-pair" } & ChromeNodeRealtimeAudioBridgeHandle);
+  browser?: GoogleMeetChromeHealth;
 }> {
   const nodeId = await resolveChromeNode({
     runtime: params.runtime,
@@ -244,6 +252,10 @@ export async function launchChromeMeetOnNode(params: {
       audioOutputCommand: params.config.chrome.audioOutputCommand,
       audioBridgeCommand: params.config.chrome.audioBridgeCommand,
       audioBridgeHealthCommand: params.config.chrome.audioBridgeHealthCommand,
+      guestName: params.config.chrome.guestName,
+      reuseExistingTab: params.config.chrome.reuseExistingTab,
+      autoJoin: params.config.chrome.autoJoin,
+      waitForInCallMs: params.config.chrome.waitForInCallMs,
     },
     timeoutMs: params.config.chrome.joinTimeoutMs + 5_000,
   });
@@ -265,6 +277,7 @@ export async function launchChromeMeetOnNode(params: {
       nodeId,
       launched: result.launched === true,
       audioBridge: bridge,
+      browser: result.browser,
     };
   }
   if (result.audioBridge?.type === "external-command") {
@@ -272,7 +285,8 @@ export async function launchChromeMeetOnNode(params: {
       nodeId,
       launched: result.launched === true,
       audioBridge: { type: "external-command" },
+      browser: result.browser,
     };
   }
-  return { nodeId, launched: result.launched === true };
+  return { nodeId, launched: result.launched === true, browser: result.browser };
 }

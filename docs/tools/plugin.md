@@ -9,8 +9,8 @@ sidebarTitle: "Install and Configure"
 ---
 
 Plugins extend OpenClaw with new capabilities: channels, model providers,
-tools, skills, speech, realtime transcription, realtime voice,
-media-understanding, image generation, video generation, web fetch, web
+agent harnesses, tools, skills, speech, realtime transcription, realtime
+voice, media-understanding, image generation, video generation, web fetch, web
 search, and more. Some plugins are **core** (shipped with OpenClaw), others
 are **external** (published on npm by the community).
 
@@ -151,6 +151,17 @@ Looking for third-party plugins? See [Community Plugins](/plugins/community).
 Config changes **require a gateway restart**. If the Gateway is running with config
 watch + in-process restart enabled (the default `openclaw gateway` path), that
 restart is usually performed automatically a moment after the config write lands.
+There is no supported hot-reload path for native plugin runtime code or lifecycle
+hooks; restart the Gateway process that is serving the live channel before
+expecting updated `register(api)` code, `api.on(...)` hooks, tools, services, or
+provider/runtime hooks to run.
+
+`openclaw plugins list` is a local CLI/config snapshot. A `loaded` plugin there
+means the plugin is discoverable and loadable from the config/files seen by that
+CLI invocation. It does not prove that an already-running remote Gateway child
+has restarted into the same plugin code. On VPS/container setups with wrapper
+processes, send restarts to the actual `openclaw gateway run` process, or use
+`openclaw gateway restart` against the running Gateway.
 
 <Accordion title="Plugin states: disabled vs missing vs invalid">
   - **Disabled**: plugin exists but enablement rules turned it off. Config is preserved.
@@ -196,6 +207,27 @@ OpenClaw scans for plugins in this order (first match wins):
   `openai-codex/*` belongs to the OpenAI plugin, while the bundled Codex
   app-server plugin is selected by `embeddedHarness.runtime: "codex"` or legacy
   `codex/*` model refs
+
+## Troubleshooting Runtime Hooks
+
+If a plugin appears in `plugins list` but `register(api)` side effects or hooks
+do not run in live chat traffic, check these first:
+
+- Run `openclaw gateway status --deep --require-rpc` and confirm the active
+  Gateway URL, profile, config path, and process are the ones you are editing.
+- Restart the live Gateway after plugin install/config/code changes. In wrapper
+  containers, PID 1 may only be a supervisor; restart or signal the child
+  `openclaw gateway run` process.
+- Use `openclaw plugins inspect <id> --json` to confirm hook registrations and
+  diagnostics. Non-bundled conversation hooks such as `llm_input`,
+  `llm_output`, and `agent_end` need
+  `plugins.entries.<id>.hooks.allowConversationAccess=true`.
+- For model switching, prefer `before_model_resolve`. It runs before model
+  resolution for agent turns; `llm_output` only runs after a model attempt
+  produces assistant output.
+- For proof of the effective session model, use `openclaw sessions` or the
+  Gateway session/status surfaces and, when debugging provider payloads, start
+  the Gateway with `--raw-stream --raw-stream-path <path>`.
 
 ## Plugin slots (exclusive categories)
 
