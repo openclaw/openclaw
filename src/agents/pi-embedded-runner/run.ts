@@ -77,6 +77,7 @@ import {
 } from "../pi-embedded-helpers.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
+import { buildAgentRuntimePlan } from "../runtime-plan/build.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
@@ -808,6 +809,26 @@ export async function runEmbeddedPiAgent(
           if (!runtimeAuthState && apiKeyInfo) {
             resolvedStreamApiKey = (apiKeyInfo as ApiKeyInfo).apiKey;
           }
+          const runtimePlan = buildAgentRuntimePlan({
+            provider,
+            modelId,
+            model: effectiveModel,
+            modelApi: effectiveModel.api,
+            harnessId: agentHarness.id,
+            harnessRuntime: agentHarness.id,
+            allowHarnessAuthProfileForwarding: pluginHarnessOwnsTransport,
+            authProfileProvider: lastProfileId?.split(":", 1)[0],
+            sessionAuthProfileId: lastProfileId,
+            config: params.config,
+            workspaceDir: resolvedWorkspace,
+            agentDir,
+            agentId: workspaceResolution.agentId,
+            thinkingLevel: thinkLevel,
+            extraParamsOverride: {
+              ...params.streamParams,
+              fastMode: params.fastMode,
+            },
+          });
 
           const attempt = await runEmbeddedAttemptWithBackend({
             sessionId: params.sessionId,
@@ -855,6 +876,7 @@ export async function runEmbeddedPiAgent(
             // attempt too. Otherwise plugin-owned transports can skip PI auth
             // bootstrap but drift back to PI when the attempt is created.
             agentHarnessId: agentHarness.id,
+            runtimePlan,
             model: applyAuthHeaderOverride(
               applyLocalNoAuthHeaderOverride(effectiveModel, apiKeyInfo),
               // When runtime auth exchange produced a different credential
