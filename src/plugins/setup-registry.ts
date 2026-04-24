@@ -47,6 +47,7 @@ type SetupAutoEnableProbeEntry = {
 };
 
 export type PluginSetupRegistryDiagnosticCode =
+  | "setup-descriptor-runtime-disabled"
   | "setup-descriptor-provider-missing-runtime"
   | "setup-descriptor-provider-runtime-undeclared"
   | "setup-descriptor-cli-backend-missing-runtime"
@@ -189,7 +190,10 @@ function buildSetupCliBackendCacheKey(params: {
   });
 }
 
-function resolveSetupApiPath(rootDir: string): string | null {
+function resolveSetupApiPath(
+  rootDir: string,
+  options?: { includeBundledSourceFallback?: boolean },
+): string | null {
   const orderedExtensions = RUNNING_FROM_BUILT_ARTIFACT
     ? SETUP_API_EXTENSIONS
     : ([...SETUP_API_EXTENSIONS.slice(3), ...SETUP_API_EXTENSIONS.slice(0, 3)] as const);
@@ -207,6 +211,10 @@ function resolveSetupApiPath(rootDir: string): string | null {
   const direct = findSetupApi(rootDir);
   if (direct) {
     return direct;
+  }
+
+  if (options?.includeBundledSourceFallback === false) {
+    return null;
   }
 
   const bundledExtensionDir = path.basename(rootDir);
@@ -283,6 +291,19 @@ function resolveRegister(mod: OpenClawPluginModule): {
   return {};
 }
 
+function resolveLoadableSetupRuntimeSource(record: PluginManifestRecord): string | null {
+  return record.setupSource ?? resolveSetupApiPath(record.rootDir);
+}
+
+function resolveDeclaredSetupRuntimeSource(record: PluginManifestRecord): string | null {
+  return (
+    record.setupSource ??
+    resolveSetupApiPath(record.rootDir, {
+      includeBundledSourceFallback: false,
+    })
+  );
+}
+
 function resolveSetupRegistration(record: PluginManifestRecord): {
   setupSource: string;
   register: (api: ReturnType<typeof buildPluginApi>) => void | Promise<void>;
@@ -290,7 +311,7 @@ function resolveSetupRegistration(record: PluginManifestRecord): {
   if (record.setup?.requiresRuntime === false) {
     return null;
   }
-  const setupSource = record.setupSource ?? resolveSetupApiPath(record.rootDir);
+  const setupSource = resolveLoadableSetupRuntimeSource(record);
   if (!setupSource) {
     return null;
   }
@@ -399,6 +420,21 @@ function mapNormalizedIds(ids: readonly string[]): Map<string, string> {
   return mapped;
 }
 
+function pushDescriptorRuntimeDisabledDiagnostic(params: {
+  record: PluginManifestRecord;
+  diagnostics: PluginSetupRegistryDiagnostic[];
+}): void {
+  if (!resolveDeclaredSetupRuntimeSource(params.record)) {
+    return;
+  }
+  params.diagnostics.push({
+    pluginId: params.record.id,
+    code: "setup-descriptor-runtime-disabled",
+    message:
+      "setup.requiresRuntime is false, so OpenClaw ignored the plugin setup runtime entry. Remove setup-api/openclaw.setupEntry or set requiresRuntime true if setup lookup still needs plugin code.",
+  });
+}
+
 function pushSetupDescriptorDriftDiagnostics(params: {
   record: PluginManifestRecord;
   providers: readonly ProviderPlugin[];
@@ -502,6 +538,13 @@ export function resolvePluginSetupRegistry(params?: {
 
   for (const record of manifestRegistry.plugins) {
     if (selectedPluginIds && !selectedPluginIds.has(record.id)) {
+      continue;
+    }
+    if (record.setup?.requiresRuntime === false) {
+      pushDescriptorRuntimeDisabledDiagnostic({
+        record,
+        diagnostics,
+      });
       continue;
     }
     const setupRegistration = resolveSetupRegistration(record);
