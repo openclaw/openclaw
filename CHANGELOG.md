@@ -57,7 +57,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/providers: mirror runtime auth choices in bundled provider manifests and detect `KIMI_API_KEY` for Moonshot/Kimi web search before plugin runtime loads. Thanks @vincentkoc.
 - Gateway/chat: register chat.send runs in the chat run registry so lifecycle error events reach the client instead of being silently dropped, fixing stuck 'waiting' state and /abort reporting no active run. (#69747) Thanks @wangshu94.
 - Plugins/QQ Bot: enable the bundled qqbot plugin by default so its runtime dependency `@tencent-connect/qqbot-connector` is installed on first launch, unblocking the QR-code binding flow that dynamically imports the connector before any account is configured. (#71051) Thanks @cxyhhhhh.
-- Gateway/agent RPC: register active `agent` runs into the chat abort controller map so `chat.abort` and `sessions.abort` can interrupt them, matching `chat.send` behavior and unblocking external runtimes that drive the Gateway through the public `agent` RPC. Fixes #71128.
+- Gateway/agent RPC: register active `agent` runs into the chat abort controller map so `chat.abort` and `sessions.abort` can interrupt them, matching `chat.send` behavior and unblocking external runtimes that drive the Gateway through the public `agent` RPC. Fixes #71128. (#71214) Thanks @bitloi.
 
 ## 2026.4.23
 
