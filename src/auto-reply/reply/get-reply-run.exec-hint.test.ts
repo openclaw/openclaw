@@ -91,4 +91,18 @@ describe("resolvePromptSilentReplyConversationType", () => {
       }),
     ).toBeUndefined();
   });
+
+  it("uses the inbound session key when session context was rewritten to the target", () => {
+    expect(
+      resolvePromptSilentReplyConversationType({
+        ctx: buildGetReplyGroupCtx({
+          CommandSource: "native",
+          SessionKey: "agent:main:telegram:direct:target",
+          CommandTargetSessionKey: "agent:main:telegram:direct:target",
+          ChatType: "group",
+        }),
+        inboundSessionKey: "agent:main:telegram:group:source",
+      }),
+    ).toBeUndefined();
+  });
 });

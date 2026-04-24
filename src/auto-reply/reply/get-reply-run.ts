@@ -67,11 +67,13 @@ type ExecOverrides = Pick<ExecToolDefaults, "host" | "security" | "ask" | "node"
 
 export function resolvePromptSilentReplyConversationType(params: {
   ctx: Pick<MsgContext, "ChatType" | "CommandSource" | "CommandTargetSessionKey" | "SessionKey">;
+  inboundSessionKey?: string;
 }): SilentReplyConversationType | undefined {
+  const sourceSessionKey = params.inboundSessionKey ?? params.ctx.SessionKey;
   if (
     params.ctx.CommandSource === "native" &&
     params.ctx.CommandTargetSessionKey &&
-    params.ctx.CommandTargetSessionKey !== params.ctx.SessionKey
+    params.ctx.CommandTargetSessionKey !== sourceSessionKey
   ) {
     return undefined;
   }
@@ -266,7 +268,10 @@ export async function runPreparedReply(
     cfg,
     sessionKey: runtimePolicySessionKey,
     surface: sessionCtx.Surface ?? sessionCtx.Provider,
-    conversationType: resolvePromptSilentReplyConversationType({ ctx: sessionCtx }),
+    conversationType: resolvePromptSilentReplyConversationType({
+      ctx: sessionCtx,
+      inboundSessionKey: ctx.SessionKey,
+    }),
   });
   let {
     sessionEntry,
