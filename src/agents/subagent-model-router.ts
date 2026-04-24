@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { promises as fs } from "node:fs";
+import nodePath from "node:path";
 import { promisify } from "node:util";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
@@ -24,6 +25,7 @@ export type SubagentModelRouterRecommendation = {
   source: "heuristic" | "shared-model-router-cli";
   reason: string;
   routeEffectApplied: false;
+  resolvedConfig: SubagentModelRouterConfig;
 };
 
 export type SubagentModelRouterTelemetryEvent = {
@@ -113,6 +115,12 @@ export async function resolveSubagentModelRouterRecommendation(params: {
   const config = resolveSubagentModelRouterConfig(params.cfg);
   const mode = config.mode ?? "off";
   if (mode === "off") return undefined;
+  if (mode === "pilot" || mode === "live") {
+    // pilot/live not yet implemented — behaves as shadow and emits a warning
+    console.warn(
+      `[subagent-model-router] mode "${mode}" is not yet implemented; falling back to shadow-only behavior`,
+    );
+  }
   const taskType = classifySubagentModelRouterTask(params.task);
 
   let source: SubagentModelRouterRecommendation["source"] = "heuristic";
@@ -143,6 +151,7 @@ export async function resolveSubagentModelRouterRecommendation(params: {
     source,
     reason,
     routeEffectApplied: false,
+    resolvedConfig: config,
   };
 }
 
@@ -152,6 +161,6 @@ export async function appendSubagentModelRouterTelemetry(params: {
 }): Promise<void> {
   const telemetryPath = params.config.telemetryPath;
   if (!telemetryPath) return;
-  await fs.mkdir(telemetryPath.replace(/[/\\][^/\\]*$/, "") || ".", { recursive: true });
+  await fs.mkdir(nodePath.dirname(telemetryPath) || ".", { recursive: true });
   await fs.appendFile(telemetryPath, `${JSON.stringify(params.event)}\n`, "utf8");
 }
