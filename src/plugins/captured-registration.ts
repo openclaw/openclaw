@@ -1,9 +1,14 @@
 import type { ExtensionFactory } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { AgentToolResultMiddleware } from "./agent-tool-result-middleware-types.js";
+import type {
+  AgentToolResultMiddleware,
+  AgentToolResultMiddlewareOptions,
+} from "./agent-tool-result-middleware-types.js";
+import { normalizeAgentToolResultMiddlewareHarnesses } from "./agent-tool-result-middleware.js";
 import { buildPluginApi } from "./api-builder.js";
 import type { CodexAppServerExtensionFactory } from "./codex-app-server-extension-types.js";
 import type { MemoryEmbeddingProviderAdapter } from "./memory-embedding-providers.js";
+import type { PluginAgentToolResultMiddlewareRegistration } from "./registry-types.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import type {
   AnyAgentTool,
@@ -40,7 +45,7 @@ export type CapturedPluginRegistration = {
   textTransforms: PluginTextTransformRegistration[];
   embeddedExtensionFactories: ExtensionFactory[];
   codexAppServerExtensionFactories: CodexAppServerExtensionFactory[];
-  agentToolResultMiddlewares: AgentToolResultMiddleware[];
+  agentToolResultMiddlewares: PluginAgentToolResultMiddlewareRegistration[];
   speechProviders: SpeechProviderPlugin[];
   realtimeTranscriptionProviders: RealtimeTranscriptionProviderPlugin[];
   realtimeVoiceProviders: RealtimeVoiceProviderPlugin[];
@@ -65,7 +70,7 @@ export function createCapturedPluginRegistration(params?: {
   const textTransforms: PluginTextTransformRegistration[] = [];
   const embeddedExtensionFactories: ExtensionFactory[] = [];
   const codexAppServerExtensionFactories: CodexAppServerExtensionFactory[] = [];
-  const agentToolResultMiddlewares: AgentToolResultMiddleware[] = [];
+  const agentToolResultMiddlewares: PluginAgentToolResultMiddlewareRegistration[] = [];
   const speechProviders: SpeechProviderPlugin[] = [];
   const realtimeTranscriptionProviders: RealtimeTranscriptionProviderPlugin[] = [];
   const realtimeVoiceProviders: RealtimeVoiceProviderPlugin[] = [];
@@ -149,8 +154,19 @@ export function createCapturedPluginRegistration(params?: {
         registerCodexAppServerExtensionFactory(factory: CodexAppServerExtensionFactory) {
           codexAppServerExtensionFactories.push(factory);
         },
-        registerAgentToolResultMiddleware(handler: AgentToolResultMiddleware) {
-          agentToolResultMiddlewares.push(handler);
+        registerAgentToolResultMiddleware(
+          handler: AgentToolResultMiddleware,
+          options?: AgentToolResultMiddlewareOptions,
+        ) {
+          const harnesses = normalizeAgentToolResultMiddlewareHarnesses(options);
+          agentToolResultMiddlewares.push({
+            pluginId: "captured-plugin-registration",
+            pluginName: "Captured Plugin Registration",
+            rawHandler: handler,
+            handler,
+            harnesses,
+            source: "captured-plugin-registration",
+          });
         },
         registerCliBackend(backend: CliBackendPlugin) {
           cliBackends.push(backend);
