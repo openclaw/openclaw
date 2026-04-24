@@ -45,7 +45,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
-import { createRunningTaskRun } from "../../tasks/task-executor.js";
+import { createRunningTaskRun } from "../../tasks/detached-task-runtime.js";
 import {
   mergeDeliveryContext,
   normalizeDeliveryContext,
@@ -351,6 +351,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       idempotencyKey: string;
       timeout?: number;
       bestEffortDeliver?: boolean;
+      cleanupBundleMcpOnRunEnd?: boolean;
       label?: string;
       inputProvenance?: InputProvenance;
     };
@@ -499,12 +500,15 @@ export const agentHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    const requestedSessionId = normalizeOptionalString(request.sessionId);
     let requestedSessionKey =
       requestedSessionKeyRaw ??
-      resolveExplicitAgentSessionKey({
-        cfg,
-        agentId,
-      });
+      (!requestedSessionId
+        ? resolveExplicitAgentSessionKey({
+            cfg,
+            agentId,
+          })
+        : undefined);
     if (agentId && requestedSessionKeyRaw) {
       const sessionAgentId = resolveAgentIdFromSessionKey(requestedSessionKeyRaw);
       if (sessionAgentId !== agentId) {
@@ -519,7 +523,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         return;
       }
     }
-    let resolvedSessionId = normalizeOptionalString(request.sessionId);
+    let resolvedSessionId = requestedSessionId;
     let sessionEntry: SessionEntry | undefined;
     let bestEffortDeliver = requestedBestEffortDeliver ?? false;
     let cfgForAgent: OpenClawConfig | undefined;
@@ -643,7 +647,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       const deliveryFields = normalizeSessionDeliveryFields(entry);
       // When the session has no delivery context yet (e.g. a freshly-spawned subagent
       // with deliver: false), seed it from the request's channel/to/threadId params.
-      // Without this, subagent sessions end up with deliveryContext: {channel: "slack"}
+      // Without this, subagent sessions end up with a channel-only deliveryContext
       // and no `to`/`threadId`, which causes announce delivery to either target the
       // wrong channel (when the parent's lastTo drifts) or fail entirely.
       const requestDeliveryHint = normalizeDeliveryContext({
@@ -688,6 +692,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         groupChannel: resolvedGroupChannel ?? entry?.groupChannel,
         space: resolvedGroupSpace ?? entry?.space,
         cliSessionIds: entry?.cliSessionIds,
+        cliSessionBindings: entry?.cliSessionBindings,
         claudeCliSessionId: entry?.claudeCliSessionId,
       };
       sessionEntry = mergeSessionEntry(entry, nextEntryPatch);
@@ -911,12 +916,18 @@ export const agentHandlers: GatewayRequestHandlers = {
     }
 
     const resolvedThreadId = explicitThreadId ?? deliveryPlan.resolvedThreadId;
+    const ingressAgentId =
+      agentId &&
+      (!resolvedSessionKey || resolveAgentIdFromSessionKey(resolvedSessionKey) === agentId)
+        ? agentId
+        : undefined;
 
     dispatchAgentRunFromGateway({
       ingressOpts: {
         message,
         images,
         imageOrder,
+        agentId: ingressAgentId,
         provider: providerOverride,
         model: modelOverride,
         to: resolvedTo,
@@ -945,6 +956,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         messageChannel: originMessageChannel,
         runId,
         lane: request.lane,
+        cleanupBundleMcpOnRunEnd: request.cleanupBundleMcpOnRunEnd === true,
         extraSystemPrompt: request.extraSystemPrompt,
         bootstrapContextMode: request.bootstrapContextMode,
         bootstrapContextRunKind: request.bootstrapContextRunKind,

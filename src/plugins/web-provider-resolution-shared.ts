@@ -175,9 +175,6 @@ export function mapRegistryProviders<TProvider extends { id: string }>(params: {
   return params.sortProviders(
     params.entries
       .filter((entry) => !onlyPluginIdSet || onlyPluginIdSet.has(entry.pluginId))
-      .map((entry) => ({
-        ...entry.provider,
-        pluginId: entry.pluginId,
-      })),
+      .map((entry) => Object.assign({}, entry.provider, { pluginId: entry.pluginId })),
   );
 }

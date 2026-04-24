@@ -3,10 +3,8 @@ summary: "Camera capture (iOS/Android nodes + macOS app) for agent use: photos (
 read_when:
   - Adding or modifying camera capture on iOS/Android nodes or macOS
   - Extending agent-accessible MEDIA temp-file workflows
-title: "Camera Capture"
+title: "Camera capture"
 ---
-
-# Camera capture (agent)
 
 OpenClaw supports **camera capture** for agent workflows:
 
@@ -160,3 +158,9 @@ openclaw nodes screen record --node <id> --duration 10s --fps 15   # prints MEDI
 Notes:
 
 - Requires macOS **Screen Recording** permission (TCC).
+
+## Related
+
+- [Image and media support](/nodes/images)
+- [Media understanding](/nodes/media-understanding)
+- [Location command](/nodes/location-command)

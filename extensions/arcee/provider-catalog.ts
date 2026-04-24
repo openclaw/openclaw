@@ -36,10 +36,9 @@ export function buildArceeCatalogModels(): NonNullable<ModelProviderConfig["mode
 }
 
 export function buildArceeOpenRouterCatalogModels(): NonNullable<ModelProviderConfig["models"]> {
-  return buildArceeCatalogModels().map((model) => ({
-    ...model,
-    id: toArceeOpenRouterModelId(model.id),
-  }));
+  return buildArceeCatalogModels().map((model) =>
+    Object.assign({}, model, { id: toArceeOpenRouterModelId(model.id) }),
+  );
 }
 
 export function buildArceeProvider(): ModelProviderConfig {

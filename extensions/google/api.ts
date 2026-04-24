@@ -2,7 +2,8 @@ import {
   resolveProviderHttpRequestConfig,
   type ProviderRequestTransportOverrides,
 } from "openclaw/plugin-sdk/provider-http";
-import { parseGoogleOauthApiKey } from "./oauth-token-shared.js";
+import { parseGeminiAuth } from "./gemini-auth.js";
+export { parseGeminiAuth };
 export { applyGoogleGeminiModelDefault, GOOGLE_GEMINI_DEFAULT_MODEL } from "./onboard.js";
 import {
   DEFAULT_GOOGLE_API_BASE_URL,
@@ -24,6 +25,10 @@ export {
   type GoogleThinkingLevel,
 } from "./thinking-api.js";
 export {
+  buildGoogleGenerativeAiParams,
+  createGoogleGenerativeAiTransportStreamFn,
+} from "./transport-stream.js";
+export {
   DEFAULT_GOOGLE_API_BASE_URL,
   isGoogleGenerativeAiApi,
   normalizeGoogleApiBaseUrl,
@@ -37,24 +42,9 @@ export {
 export { buildGoogleGeminiCliProvider } from "./gemini-cli-provider.js";
 export { buildGoogleProvider } from "./provider-registration.js";
 
-export function parseGeminiAuth(apiKey: string): { headers: Record<string, string> } {
-  const parsed = apiKey.startsWith("{") ? parseGoogleOauthApiKey(apiKey) : null;
-  if (parsed?.token) {
-    return {
-      headers: {
-        Authorization: `Bearer ${parsed.token}`,
-        "Content-Type": "application/json",
-      },
-    };
-  }
-
-  return {
-    headers: {
-      "x-goog-api-key": apiKey,
-      "Content-Type": "application/json",
-    },
-  };
-}
+type GoogleGenerativeAiRequestOverrides = ProviderRequestTransportOverrides & {
+  allowPrivateNetwork?: boolean;
+};
 
 function resolveTrustedGoogleGenerativeAiBaseUrl(baseUrl?: string): string {
   const normalized =
@@ -83,14 +73,14 @@ export function resolveGoogleGenerativeAiHttpRequestConfig(params: {
   apiKey: string;
   baseUrl?: string;
   headers?: Record<string, string>;
-  request?: ProviderRequestTransportOverrides;
+  request?: GoogleGenerativeAiRequestOverrides;
   capability: "image" | "audio" | "video";
   transport: "http" | "media-understanding";
 }) {
   return resolveProviderHttpRequestConfig({
     baseUrl: resolveTrustedGoogleGenerativeAiBaseUrl(params.baseUrl),
     defaultBaseUrl: DEFAULT_GOOGLE_API_BASE_URL,
-    allowPrivateNetwork: false,
+    allowPrivateNetwork: params.request?.allowPrivateNetwork,
     headers: params.headers,
     request: params.request,
     defaultHeaders: parseGeminiAuth(params.apiKey).headers,

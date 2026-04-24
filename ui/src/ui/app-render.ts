@@ -42,6 +42,7 @@ import {
   findAgentConfigEntryIndex,
   loadConfig,
   openConfigFile,
+  resetConfigPendingChanges,
   runUpdate,
   saveConfig,
   updateConfigFormValue,
@@ -118,10 +119,11 @@ import {
   updateSkillEnabled,
 } from "./controllers/skills.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "./external-link.ts";
-import "./components/dashboard-header.ts";
 import { icons } from "./icons.ts";
+import "./components/dashboard-header.ts";
 import { normalizeBasePath, TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
 import { isPluginEnabledInConfigSnapshot } from "./plugin-activation.ts";
+import { isRenderableControlUiAvatarUrl } from "./views/agents-utils.ts";
 import { agentLogoUrl } from "./views/agents-utils.ts";
 import {
   resolveAgentConfig,
@@ -199,10 +201,15 @@ function resolveDreamingNextCycle(
   if (!status?.phases) {
     return null;
   }
-  const nextRunAtMs = Object.values(status.phases)
-    .filter((phase) => phase.enabled && typeof phase.nextRunAtMs === "number")
-    .map((phase) => phase.nextRunAtMs as number)
-    .toSorted((a, b) => a - b)[0];
+  let nextRunAtMs: number | undefined;
+  for (const phase of Object.values(status.phases)) {
+    if (!phase.enabled || typeof phase.nextRunAtMs !== "number") {
+      continue;
+    }
+    if (nextRunAtMs === undefined || phase.nextRunAtMs < nextRunAtMs) {
+      nextRunAtMs = phase.nextRunAtMs;
+    }
+  }
   return formatDreamNextCycle(nextRunAtMs);
 }
 
@@ -309,8 +316,6 @@ function dismissUpdateBanner(updateAvailable: unknown) {
   }
 }
 
-const AVATAR_DATA_RE = /^data:/i;
-const AVATAR_HTTP_RE = /^https?:\/\//i;
 const COMMUNICATION_SECTION_KEYS = ["channels", "messages", "broadcast", "talk", "audio"] as const;
 const APPEARANCE_SECTION_KEYS = ["__appearance__", "ui", "wizard"] as const;
 const AUTOMATION_SECTION_KEYS = [
@@ -408,10 +413,10 @@ function resolveAssistantAvatarUrl(state: AppViewState): string | undefined {
   if (!candidate) {
     return undefined;
   }
-  if (AVATAR_DATA_RE.test(candidate) || AVATAR_HTTP_RE.test(candidate)) {
+  if (isRenderableControlUiAvatarUrl(candidate)) {
     return candidate;
   }
-  return identity?.avatarUrl;
+  return undefined;
 }
 
 // ── Quick Settings data extraction helpers ──
@@ -852,6 +857,7 @@ export function renderApp(state: AppViewState) {
     onFormPatch: (path: Array<string | number>, value: unknown) =>
       updateConfigFormValue(state, path, value),
     onReload: () => loadConfig(state),
+    onReset: () => resetConfigPendingChanges(state),
     onSave: () => saveConfig(state),
     onApply: () => applyConfig(state),
     onUpdate: () => runUpdate(state),
@@ -1005,6 +1011,10 @@ export function renderApp(state: AppViewState) {
             setTheme: (theme, context) => state.setTheme(theme, context),
             setThemeMode: (mode, context) => state.setThemeMode(mode, context),
             setBorderRadius: (value) => state.setBorderRadius(value),
+            userName: state.userName ?? null,
+            userAvatar: state.userAvatar ?? null,
+            onUserNameChange: (name) => state.applyLocalUserIdentity?.({ name }),
+            onUserAvatarChange: (avatar) => state.applyLocalUserIdentity?.({ avatar }),
             configObject: configObj,
             onApplyPreset: (presetId) => {
               void applyQuickSettingsPreset(state, presetId).then(() => requestHostUpdate?.());
@@ -1147,6 +1157,10 @@ export function renderApp(state: AppViewState) {
       case "tools":
         void loadToolsCatalog(state, agentId);
         void refreshVisibleToolsEffectiveForCurrentSession(state);
+        return;
+      case "overview":
+      case "channels":
+      case "cron":
         return;
     }
   };
@@ -2214,6 +2228,10 @@ export function renderApp(state: AppViewState) {
               streamStartedAt: state.chatStreamStartedAt,
               draft: state.chatMessage,
               queue: state.chatQueue,
+              realtimeTalkActive: state.realtimeTalkActive,
+              realtimeTalkStatus: state.realtimeTalkStatus,
+              realtimeTalkDetail: state.realtimeTalkDetail,
+              realtimeTalkTranscript: state.realtimeTalkTranscript,
               connected: state.connected,
               canSend: state.connected,
               disabledReason: chatDisabledReason,
@@ -2242,9 +2260,11 @@ export function renderApp(state: AppViewState) {
               attachments: state.chatAttachments,
               onAttachmentsChange: (next) => (state.chatAttachments = next),
               onSend: () => state.handleSendChat(),
+              onToggleRealtimeTalk: () => state.toggleRealtimeTalk(),
               canAbort: Boolean(state.chatRunId),
               onAbort: () => void state.handleAbortChat(),
               onQueueRemove: (id) => state.removeQueuedMessage(id),
+              onQueueSteer: (id) => void state.steerQueuedChatMessage(id),
               onDismissSideResult: () => {
                 state.chatSideResult = null;
               },
@@ -2289,6 +2309,8 @@ export function renderApp(state: AppViewState) {
               onSplitRatioChange: (ratio: number) => state.handleSplitRatioChange(ratio),
               assistantName: state.assistantName,
               assistantAvatar: state.assistantAvatar,
+              userName: state.userName ?? null,
+              userAvatar: state.userAvatar ?? null,
               localMediaPreviewRoots: state.localMediaPreviewRoots,
               embedSandboxMode: state.embedSandboxMode,
               allowExternalEmbedUrls: state.allowExternalEmbedUrls,

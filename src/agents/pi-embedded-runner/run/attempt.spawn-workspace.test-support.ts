@@ -9,6 +9,7 @@ import type {
   BootstrapResult,
   CompactResult,
   ContextEngineInfo,
+  ContextEngineMaintenanceResult,
   IngestBatchResult,
   IngestResult,
 } from "../../../context-engine/types.js";
@@ -29,6 +30,9 @@ type AcquireSessionWriteLockFn =
 type SubscriptionMock = ReturnType<SubscribeEmbeddedPiSessionFn>;
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
 type AsyncUnknownMock = Mock<(...args: unknown[]) => Promise<unknown>>;
+type AsyncContextEngineMaintenanceMock = Mock<
+  (...args: unknown[]) => Promise<ContextEngineMaintenanceResult | undefined>
+>;
 type BootstrapContext = {
   bootstrapFiles: WorkspaceBootstrapFile[];
   contextFiles: EmbeddedContextFile[];
@@ -68,13 +72,39 @@ type AttemptSpawnWorkspaceHoisted = {
   supportsModelToolsMock: Mock<(model?: unknown) => boolean>;
   getGlobalHookRunnerMock: Mock<() => unknown>;
   initializeGlobalHookRunnerMock: UnknownMock;
-  runContextEngineMaintenanceMock: AsyncUnknownMock;
+  runContextEngineMaintenanceMock: AsyncContextEngineMaintenanceMock;
   getDmHistoryLimitFromSessionKeyMock: Mock<
     (sessionKey: string | undefined, config: unknown) => number | undefined
   >;
   limitHistoryTurnsMock: Mock<<T>(messages: T, limit: number | undefined) => T>;
   sessionManager: SessionManagerMocks;
 };
+
+export function createSubscriptionMock(): SubscriptionMock {
+  return {
+    assistantTexts: [] as string[],
+    toolMetas: [] as Array<{ toolName: string; meta?: string }>,
+    unsubscribe: () => {},
+    setTerminalLifecycleMeta: () => {},
+    waitForCompactionRetry: async () => {},
+    getMessagingToolSentTexts: () => [] as string[],
+    getMessagingToolSentMediaUrls: () => [] as string[],
+    getMessagingToolSentTargets: () => [] as MessagingToolSend[],
+    getSuccessfulCronAdds: () => 0,
+    getReplayState: () => ({
+      replayInvalid: false,
+      hadPotentialSideEffects: false,
+    }),
+    didSendViaMessagingTool: () => false,
+    didSendDeterministicApprovalPrompt: () => false,
+    getLastToolError: () => undefined,
+    getUsageTotals: () => undefined,
+    getCompactionCount: () => 0,
+    getItemLifecycle: () => ({ startedCount: 0, completedCount: 0, activeCount: 0 }),
+    isCompacting: () => false,
+    isCompactionInFlight: () => false,
+  };
+}
 
 const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
   const spawnSubagentDirectMock = vi.fn();
@@ -87,31 +117,8 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
   const installToolResultContextGuardMock = vi.fn(() => () => {});
   const flushPendingToolResultsAfterIdleMock = vi.fn(async () => {});
   const releaseWsSessionMock = vi.fn(() => {});
-  const subscribeEmbeddedPiSessionMock = vi.fn<SubscribeEmbeddedPiSessionFn>(
-    (_params) =>
-      ({
-        assistantTexts: [] as string[],
-        toolMetas: [] as Array<{ toolName: string; meta?: string }>,
-        unsubscribe: () => {},
-        setTerminalLifecycleMeta: () => {},
-        waitForCompactionRetry: async () => {},
-        getMessagingToolSentTexts: () => [] as string[],
-        getMessagingToolSentMediaUrls: () => [] as string[],
-        getMessagingToolSentTargets: () => [] as MessagingToolSend[],
-        getSuccessfulCronAdds: () => 0,
-        getReplayState: () => ({
-          replayInvalid: false,
-          hadPotentialSideEffects: false,
-        }),
-        didSendViaMessagingTool: () => false,
-        didSendDeterministicApprovalPrompt: () => false,
-        getLastToolError: () => undefined,
-        getUsageTotals: () => undefined,
-        getCompactionCount: () => 0,
-        getItemLifecycle: () => ({ startedCount: 0, completedCount: 0, activeCount: 0 }),
-        isCompacting: () => false,
-        isCompactionInFlight: () => false,
-      }) satisfies SubscriptionMock,
+  const subscribeEmbeddedPiSessionMock = vi.fn<SubscribeEmbeddedPiSessionFn>(() =>
+    createSubscriptionMock(),
   );
   const acquireSessionWriteLockMock = vi.fn<AcquireSessionWriteLockFn>(async (_params) => ({
     release: async () => {},
@@ -281,6 +288,13 @@ vi.mock("../../pi-project-settings.js", () => ({
 
 vi.mock("../../pi-settings.js", () => ({
   applyPiAutoCompactionGuard: () => {},
+  applyPiCompactionSettingsFromConfig: () => ({
+    didOverride: false,
+    compaction: {
+      reserveTokens: 0,
+      keepRecentTokens: 40_000,
+    },
+  }),
 }));
 
 vi.mock("../extensions.js", () => ({
@@ -414,6 +428,7 @@ vi.mock("../../pi-bundle-mcp-tools.js", () => ({
   createBundleMcpToolRuntime: async () => undefined,
   getOrCreateSessionMcpRuntime: async () => undefined,
   materializeBundleMcpToolsForRun: async () => undefined,
+  retireSessionMcpRuntime: async () => true,
 }));
 
 vi.mock("../../pi-bundle-lsp-runtime.js", () => ({
@@ -586,13 +601,16 @@ vi.mock("../thinking.js", () => ({
   dropThinkingBlocks: <T>(messages: T) => messages,
 }));
 
-vi.mock("../tool-name-allowlist.js", () => ({
-  collectAllowedToolNames: () => undefined,
-}));
+vi.mock("../tool-name-allowlist.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../tool-name-allowlist.js")>();
+  return {
+    ...actual,
+    collectAllowedToolNames: () => undefined,
+  };
+});
 
 vi.mock("../tool-split.js", () => ({
   splitSdkTools: ({ tools }: { tools: unknown[] }) => ({
-    builtInTools: [],
     customTools: tools,
   }),
 }));
@@ -650,36 +668,11 @@ export type MutableSession = {
     };
   };
   prompt: (prompt: string, options?: { images?: unknown[] }) => Promise<void>;
+  setActiveToolsByName: (toolNames: string[]) => void;
   abort: () => Promise<void>;
   dispose: () => void;
   steer: (text: string) => Promise<void>;
 };
-
-export function createSubscriptionMock(): SubscriptionMock {
-  return {
-    assistantTexts: [] as string[],
-    toolMetas: [] as Array<{ toolName: string; meta?: string }>,
-    unsubscribe: () => {},
-    setTerminalLifecycleMeta: () => {},
-    waitForCompactionRetry: async () => {},
-    getMessagingToolSentTexts: () => [] as string[],
-    getMessagingToolSentMediaUrls: () => [] as string[],
-    getMessagingToolSentTargets: () => [] as MessagingToolSend[],
-    getSuccessfulCronAdds: () => 0,
-    getReplayState: () => ({
-      replayInvalid: false,
-      hadPotentialSideEffects: false,
-    }),
-    didSendViaMessagingTool: () => false,
-    didSendDeterministicApprovalPrompt: () => false,
-    getLastToolError: () => undefined,
-    getUsageTotals: () => undefined,
-    getCompactionCount: () => 0,
-    getItemLifecycle: () => ({ startedCount: 0, completedCount: 0, activeCount: 0 }),
-    isCompacting: () => false,
-    isCompactionInFlight: () => false,
-  };
-}
 
 type SessionPromptOverride = (
   session: MutableSession,
@@ -788,6 +781,7 @@ export function createDefaultEmbeddedSession(params?: {
         },
       },
     },
+    setActiveToolsByName: () => {},
     prompt: async (prompt, options) => {
       if (params?.prompt) {
         await params.prompt(session, prompt, options);

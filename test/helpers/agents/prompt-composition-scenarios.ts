@@ -57,8 +57,8 @@ function buildCommonSystemParams(workspaceDir: string) {
       os: "Darwin 24.0.0",
       arch: "arm64",
       node: process.version,
-      model: "anthropic/claude-sonnet-4-5",
-      defaultModel: "anthropic/claude-sonnet-4-5",
+      model: "anthropic/claude-sonnet-4-6",
+      defaultModel: "anthropic/claude-sonnet-4-6",
       shell: "zsh",
     },
     userTimezone: "America/Los_Angeles",
@@ -155,7 +155,7 @@ function buildToolRichSystemPrompt(params: {
     "web_search",
     "x_search",
     "web_fetch",
-  ].map((name) => ({ ...createStubTool(name), description: `${name} tool` }));
+  ].map((name) => Object.assign({}, createStubTool(name), { description: `${name} tool` }));
   return buildEmbeddedSystemPrompt({
     workspaceDir: params.workspaceDir,
     reasoningTagHint: false,

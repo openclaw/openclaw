@@ -7,7 +7,6 @@ import {
   resolveRequiredHomeDir,
 } from "./infra/home-dir.js";
 import { isPlainObject } from "./infra/plain-object.js";
-import { formatTerminalLink } from "./terminal/terminal-link.js";
 
 export async function ensureDir(dir: string) {
   await fs.promises.mkdir(dir, { recursive: true });
@@ -55,7 +54,7 @@ export function safeParseJson<T>(raw: string): T | null {
   }
 }
 
-export { formatTerminalLink, isPlainObject };
+export { isPlainObject };
 
 /**
  * Type guard for Record<string, unknown> (less strict than isPlainObject).

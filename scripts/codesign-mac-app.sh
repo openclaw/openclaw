@@ -247,6 +247,12 @@ verify_team_ids() {
   fi
 }
 
+# Sign bundled helper binaries before signing the app bundle.
+MLX_TTS_HELPER="$APP_BUNDLE/Contents/MacOS/openclaw-mlx-tts"
+if [ -f "$MLX_TTS_HELPER" ]; then
+  echo "Signing MLX TTS helper"; sign_item "$MLX_TTS_HELPER" "$APP_ENTITLEMENTS"
+fi
+
 # Sign main binary
 if [ -f "$APP_BUNDLE/Contents/MacOS/OpenClaw" ]; then
   echo "Signing main binary"; sign_item "$APP_BUNDLE/Contents/MacOS/OpenClaw" "$APP_ENTITLEMENTS"

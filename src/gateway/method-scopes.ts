@@ -68,6 +68,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
   [READ_SCOPE]: [
     "assistant.media.get",
     "health",
+    "diagnostics.stability",
     "doctor.memory.status",
     "doctor.memory.dreamDiary",
     "logs.tail",
@@ -124,6 +125,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "agent.wait",
     "wake",
     "talk.mode",
+    "talk.realtime.session",
     "talk.speak",
     "tts.enable",
     "tts.disable",
@@ -147,6 +149,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "node.pending.enqueue",
   ],
   [ADMIN_SCOPE]: [
+    "channels.start",
     "channels.logout",
     "agents.create",
     "agents.update",

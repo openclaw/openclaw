@@ -9,6 +9,8 @@ export {
   normalizeGoogleApiBaseUrl,
   normalizeGoogleModelId,
   parseGeminiAuth,
+  buildGoogleGenerativeAiParams,
+  createGoogleGenerativeAiTransportStreamFn,
   resolveGoogleGemini3ThinkingLevel,
   resolveGoogleGenerativeAiHttpRequestConfig,
   sanitizeGoogleThinkingPayload,

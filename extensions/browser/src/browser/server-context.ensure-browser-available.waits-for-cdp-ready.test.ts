@@ -25,6 +25,27 @@ function setupEnsureBrowserAvailableHarness() {
   return { launchOpenClawChrome, stopOpenClawChrome, isChromeCdpReady, profile, state };
 }
 
+function createAttachOnlyLoopbackProfile(cdpUrl: string) {
+  const state = makeBrowserServerState({
+    profile: {
+      name: "manual-cdp",
+      cdpUrl,
+      cdpHost: "127.0.0.1",
+      cdpIsLoopback: true,
+      cdpPort: 9222,
+      color: "#00AA00",
+      driver: "openclaw",
+      attachOnly: true,
+    },
+    resolvedOverrides: {
+      defaultProfile: "manual-cdp",
+      ssrfPolicy: {},
+    },
+  });
+  const ctx = createBrowserRouteContext({ getState: () => state });
+  return { profile: ctx.forProfile("manual-cdp"), state };
+}
+
 afterEach(() => {
   vi.useRealTimers();
   vi.clearAllMocks();
@@ -55,8 +76,12 @@ describe("browser server-context ensureBrowserAvailable", () => {
 
     const promise = profile.ensureBrowserAvailable();
     const rejected = expect(promise).rejects.toThrow("not reachable after start");
+    const diagnosticRejected = expect(promise).rejects.toThrow(
+      "CDP diagnostic: websocket_health_command_timeout; mock CDP diagnostic.",
+    );
     await vi.advanceTimersByTimeAsync(8100);
     await rejected;
+    await diagnosticRejected;
 
     expect(launchOpenClawChrome).toHaveBeenCalledTimes(1);
     expect(stopOpenClawChrome).toHaveBeenCalledTimes(1);
@@ -138,24 +163,7 @@ describe("browser server-context ensureBrowserAvailable", () => {
     const isChromeReachable = vi.mocked(chromeModule.isChromeReachable);
     const isChromeCdpReady = vi.mocked(chromeModule.isChromeCdpReady);
 
-    const state = makeBrowserServerState({
-      profile: {
-        name: "manual-cdp",
-        cdpUrl: "http://127.0.0.1:9222",
-        cdpHost: "127.0.0.1",
-        cdpIsLoopback: true,
-        cdpPort: 9222,
-        color: "#00AA00",
-        driver: "openclaw",
-        attachOnly: true,
-      },
-      resolvedOverrides: {
-        defaultProfile: "manual-cdp",
-        ssrfPolicy: {},
-      },
-    });
-    const ctx = createBrowserRouteContext({ getState: () => state });
-    const profile = ctx.forProfile("manual-cdp");
+    const { profile, state } = createAttachOnlyLoopbackProfile("http://127.0.0.1:9222");
 
     isChromeReachable.mockResolvedValueOnce(true);
     isChromeCdpReady.mockResolvedValueOnce(true);
@@ -169,6 +177,44 @@ describe("browser server-context ensureBrowserAvailable", () => {
     );
     expect(isChromeCdpReady).toHaveBeenCalledWith(
       "http://127.0.0.1:9222",
+      state.resolved.remoteCdpTimeoutMs,
+      state.resolved.remoteCdpHandshakeTimeoutMs,
+      undefined,
+    );
+    expect(launchOpenClawChrome).not.toHaveBeenCalled();
+    expect(stopOpenClawChrome).not.toHaveBeenCalled();
+  });
+
+  it("resolves for attachOnly loopback profile with a bare ws:// cdpUrl when CDP is reachable (#68027)", async () => {
+    // Regression for #68027: a bare `ws://host:port` cdpUrl on a loopback
+    // attachOnly profile must not surface as
+    //   `Browser attachOnly is enabled and profile "<name>" is not running.`
+    // when the underlying CDP endpoint is actually healthy. The low-level
+    // fix lives in chrome.ts/cdp.ts (see chrome.test.ts #68027 tests); this
+    // higher-level test locks the user-facing symptom at
+    // ensureBrowserAvailable() so future refactors of the availability flow
+    // cannot silently reintroduce the bug by munging/short-circuiting bare
+    // ws:// URLs before they reach the helpers.
+    const { launchOpenClawChrome, stopOpenClawChrome } = setupEnsureBrowserAvailableHarness();
+    const isChromeReachable = vi.mocked(chromeModule.isChromeReachable);
+    const isChromeCdpReady = vi.mocked(chromeModule.isChromeCdpReady);
+
+    const { profile, state } = createAttachOnlyLoopbackProfile("ws://127.0.0.1:9222");
+
+    isChromeReachable.mockResolvedValueOnce(true);
+    isChromeCdpReady.mockResolvedValueOnce(true);
+
+    await expect(profile.ensureBrowserAvailable()).resolves.toBeUndefined();
+
+    // The bare ws:// URL must pass through unchanged — the helpers own the
+    // discovery-first-then-fallback strategy for bare ws roots.
+    expect(isChromeReachable).toHaveBeenCalledWith(
+      "ws://127.0.0.1:9222",
+      state.resolved.remoteCdpTimeoutMs,
+      undefined,
+    );
+    expect(isChromeCdpReady).toHaveBeenCalledWith(
+      "ws://127.0.0.1:9222",
       state.resolved.remoteCdpTimeoutMs,
       state.resolved.remoteCdpHandshakeTimeoutMs,
       undefined,

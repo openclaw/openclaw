@@ -3,10 +3,8 @@ summary: "What the OpenClaw system prompt contains and how it is assembled"
 read_when:
   - Editing system prompt text, tools list, or time/heartbeat sections
   - Changing workspace bootstrap or skills injection behavior
-title: "System Prompt"
+title: "System prompt"
 ---
-
-# System Prompt
 
 OpenClaw builds a custom system prompt for every agent run. The prompt is **OpenClaw-owned** and does not use the pi-coding-agent default prompt.
 
@@ -24,11 +22,19 @@ Use provider-owned contributions for model-family-specific tuning. Keep legacy
 `before_prompt_build` prompt mutation for compatibility or truly global prompt
 changes, not normal provider behavior.
 
+The OpenAI GPT-5 family overlay keeps the core execution rule small and adds
+model-specific guidance for persona latching, concise output, tool discipline,
+parallel lookup, deliverable coverage, verification, missing context, and
+terminal-tool hygiene.
+
 ## Structure
 
 The prompt is intentionally compact and uses fixed sections:
 
 - **Tooling**: structured-tool source-of-truth reminder plus runtime tool-use guidance.
+- **Execution Bias**: compact follow-through guidance: act in-turn on
+  actionable requests, continue until done or blocked, recover from weak tool
+  results, check mutable state live, and verify before finalizing.
 - **Safety**: short guardrail reminder to avoid power-seeking behavior or bypassing oversight.
 - **Skills** (when available): tells the model how to load skill instructions on demand.
 - **OpenClaw Self-Update**: how to inspect config safely with
@@ -101,7 +107,7 @@ Bootstrap files are trimmed and appended under **Project Context** so the model 
 - `USER.md`
 - `HEARTBEAT.md`
 - `BOOTSTRAP.md` (only on brand-new workspaces)
-- `MEMORY.md` when present, otherwise `memory.md` as a lowercase fallback
+- `MEMORY.md` when present
 
 All of these files are **injected into the context window** on every turn unless
 a file-specific gate applies. `HEARTBEAT.md` is omitted on normal runs when
@@ -198,3 +204,9 @@ package docs) and also notes the public mirror, source repo, community Discord, 
 ClawHub ([https://clawhub.ai](https://clawhub.ai)) for skills discovery. The prompt instructs the model to consult local docs first
 for OpenClaw behavior, commands, configuration, or architecture, and to run
 `openclaw status` itself when possible (asking the user only when it lacks access).
+
+## Related
+
+- [Agent runtime](/concepts/agent)
+- [Agent workspace](/concepts/agent-workspace)
+- [Context engine](/concepts/context-engine)

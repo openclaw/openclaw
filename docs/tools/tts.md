@@ -4,12 +4,10 @@ read_when:
   - Enabling text-to-speech for replies
   - Configuring TTS providers or limits
   - Using /tts commands
-title: "Text-to-Speech"
+title: "Text-to-speech"
 ---
 
-# Text-to-speech (TTS)
-
-OpenClaw can convert outbound replies into audio using ElevenLabs, Google Gemini, Microsoft, MiniMax, or OpenAI.
+OpenClaw can convert outbound replies into audio using ElevenLabs, Google Gemini, Microsoft, MiniMax, OpenAI, or xAI.
 It works anywhere OpenClaw can send audio.
 
 ## Supported services
@@ -19,6 +17,7 @@ It works anywhere OpenClaw can send audio.
 - **Microsoft** (primary or fallback provider; current bundled implementation uses `node-edge-tts`)
 - **MiniMax** (primary or fallback provider; uses the T2A v2 API)
 - **OpenAI** (primary or fallback provider; also used for summaries)
+- **xAI** (primary or fallback provider; uses the xAI TTS API)
 
 ### Microsoft speech notes
 
@@ -35,12 +34,13 @@ or ElevenLabs.
 
 ## Optional keys
 
-If you want OpenAI, ElevenLabs, Google Gemini, or MiniMax:
+If you want OpenAI, ElevenLabs, Google Gemini, MiniMax, or xAI:
 
 - `ELEVENLABS_API_KEY` (or `XI_API_KEY`)
 - `GEMINI_API_KEY` (or `GOOGLE_API_KEY`)
 - `MINIMAX_API_KEY`
 - `OPENAI_API_KEY`
+- `XAI_API_KEY`
 
 Microsoft speech does **not** require an API key.
 
@@ -57,6 +57,7 @@ so that provider must also be authenticated if you enable summaries.
 - [MiniMax T2A v2 API](https://platform.minimaxi.com/document/T2A%20V2)
 - [node-edge-tts](https://github.com/SchneeHertz/node-edge-tts)
 - [Microsoft Speech output formats](https://learn.microsoft.com/azure/ai-services/speech-service/rest-text-to-speech#audio-outputs)
+- [xAI Text to Speech](https://docs.x.ai/developers/rest-api-reference/inference/voice#text-to-speech-rest)
 
 ## Is it enabled by default?
 
@@ -198,6 +199,33 @@ by the bundled Google image-generation provider. Resolution order is
 `messages.tts.providers.google.apiKey` -> `models.providers.google.apiKey` ->
 `GEMINI_API_KEY` -> `GOOGLE_API_KEY`.
 
+### xAI primary
+
+```json5
+{
+  messages: {
+    tts: {
+      auto: "always",
+      provider: "xai",
+      providers: {
+        xai: {
+          apiKey: "xai_api_key",
+          voiceId: "eve",
+          language: "en",
+          responseFormat: "mp3",
+          speed: 1.0,
+        },
+      },
+    },
+  },
+}
+```
+
+xAI TTS uses the same `XAI_API_KEY` path as the bundled Grok model provider.
+Resolution order is `messages.tts.providers.xai.apiKey` -> `XAI_API_KEY`.
+Current live voices are `ara`, `eve`, `leo`, `rex`, `sal`, and `una`; `eve` is
+the default. `language` accepts a BCP-47 tag or `auto`.
+
 ### Disable Microsoft speech
 
 ```json5
@@ -300,6 +328,12 @@ Then run:
 - `providers.google.voiceName`: Gemini prebuilt voice name (default `Kore`; `voice` is also accepted).
 - `providers.google.baseUrl`: override the Gemini API base URL. Only `https://generativelanguage.googleapis.com` is accepted.
   - If `messages.tts.providers.google.apiKey` is omitted, TTS can reuse `models.providers.google.apiKey` before env fallback.
+- `providers.xai.apiKey`: xAI TTS API key (env: `XAI_API_KEY`).
+- `providers.xai.baseUrl`: override the xAI TTS base URL (default `https://api.x.ai/v1`, env: `XAI_BASE_URL`).
+- `providers.xai.voiceId`: xAI voice id (default `eve`; current live voices: `ara`, `eve`, `leo`, `rex`, `sal`, `una`).
+- `providers.xai.language`: BCP-47 language code or `auto` (default `en`).
+- `providers.xai.responseFormat`: `mp3`, `wav`, `pcm`, `mulaw`, or `alaw` (default `mp3`).
+- `providers.xai.speed`: provider-native speed override.
 - `providers.microsoft.enabled`: allow Microsoft speech usage (default `true`; no API key).
 - `providers.microsoft.voice`: Microsoft neural voice name (e.g. `en-US-MichelleNeural`).
 - `providers.microsoft.lang`: language code (e.g. `en-US`).
@@ -335,7 +369,7 @@ Here you go.
 Available directive keys (when enabled):
 
 - `provider` (registered speech provider id, for example `openai`, `elevenlabs`, `google`, `minimax`, or `microsoft`; requires `allowProvider: true`)
-- `voice` (OpenAI voice), `voiceName` / `voice_name` / `google_voice` (Google voice), or `voiceId` (ElevenLabs / MiniMax)
+- `voice` (OpenAI voice), `voiceName` / `voice_name` / `google_voice` (Google voice), or `voiceId` (ElevenLabs / MiniMax / xAI)
 - `model` (OpenAI TTS model, ElevenLabs model id, or MiniMax model) or `google_model` (Google TTS model)
 - `stability`, `similarityBoost`, `style`, `speed`, `useSpeakerBoost`
 - `vol` / `volume` (MiniMax volume, 0-10)
@@ -397,6 +431,7 @@ These override `messages.tts.*` for that host.
   - 44.1kHz / 128kbps is the default balance for speech clarity.
 - **MiniMax**: MP3 (`speech-2.8-hd` model, 32kHz sample rate). Voice-note format not natively supported; use OpenAI or ElevenLabs for guaranteed Opus voice messages.
 - **Google Gemini**: Gemini API TTS returns raw 24kHz PCM. OpenClaw wraps it as WAV for audio attachments and returns PCM directly for Talk/telephony. Native Opus voice-note format is not supported by this path.
+- **xAI**: MP3 by default; `responseFormat` may be `mp3`, `wav`, `pcm`, `mulaw`, or `alaw`. OpenClaw uses xAI's batch REST TTS endpoint and returns a complete audio attachment; xAI's streaming TTS WebSocket is not used by this provider path. Native Opus voice-note format is not supported by this path.
 - **Microsoft**: uses `microsoft.outputFormat` (default `audio-24khz-48kbitrate-mono-mp3`).
   - The bundled transport accepts an `outputFormat`, but not all formats are available from the service.
   - Output format values follow Microsoft Speech output formats (including Ogg/WebM Opus).
@@ -472,6 +507,8 @@ Notes:
 The `tts` tool converts text to speech and returns an audio attachment for
 reply delivery. When the channel is Feishu, Matrix, Telegram, or WhatsApp,
 the audio is delivered as a voice message rather than a file attachment.
+It accepts optional `channel` and `timeoutMs` fields; `timeoutMs` is a
+per-call provider request timeout in milliseconds.
 
 ## Gateway RPC
 
@@ -483,3 +520,9 @@ Gateway methods:
 - `tts.convert`
 - `tts.setProvider`
 - `tts.providers`
+
+## Related
+
+- [Media overview](/tools/media-overview)
+- [Music generation](/tools/music-generation)
+- [Video generation](/tools/video-generation)

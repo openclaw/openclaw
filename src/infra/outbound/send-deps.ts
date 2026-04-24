@@ -5,7 +5,7 @@
  */
 export type OutboundSendDeps = { [channelId: string]: unknown };
 
-function resolveLegacyDepKeysForChannel(channelId: string): string[] {
+export function resolveLegacyOutboundSendDepKeys(channelId: string): string[] {
   const compact = channelId.replace(/[^a-z0-9]+/gi, "");
   if (!compact) {
     return [];
@@ -36,7 +36,10 @@ export function resolveOutboundSendDep<T>(
   if (dynamic !== undefined) {
     return dynamic as T;
   }
-  const legacyKeys = [...resolveLegacyDepKeysForChannel(channelId), ...(options?.legacyKeys ?? [])];
+  const legacyKeys = [
+    ...resolveLegacyOutboundSendDepKeys(channelId),
+    ...(options?.legacyKeys ?? []),
+  ];
   for (const legacyKey of legacyKeys) {
     const legacy = deps?.[legacyKey];
     if (legacy !== undefined) {

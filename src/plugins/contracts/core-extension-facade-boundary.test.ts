@@ -9,6 +9,17 @@ const forbiddenOllamaFacadeFiles = [
   "src/plugin-sdk/ollama.ts",
   "src/plugin-sdk/ollama-runtime.ts",
 ] as const;
+const genericCoreFixtureFiles = [
+  "src/commands/auth-choice.apply.plugin-provider.test.ts",
+  "src/plugins/contracts/memory-embedding-provider.contract.test.ts",
+  "src/plugins/discovery.test.ts",
+  "test/helpers/plugins/tts-contract-suites.ts",
+] as const;
+const forbiddenGenericFixtureTerms = [
+  /\bOllama\b|\bollama\b/u,
+  /\bMoonshot\b|\bmoonshot\b/u,
+  /\bxAI\b|\bxai\b|\bx-ai\b/u,
+] as const;
 const importSpecifierPattern =
   /\b(?:import|export)\s+(?:type\s+)?(?:[^'"]*?\s+from\s+)?["']([^"']+)["']|import\(\s*["']([^"']+)["']\s*\)/g;
 
@@ -48,6 +59,20 @@ describe("core extension facade boundary", () => {
         const specifier = match[1] ?? match[2];
         if (specifier?.includes("plugin-sdk/ollama")) {
           violations.push(`${toRepoRelative(filePath)} -> ${specifier}`);
+        }
+      }
+    }
+
+    expect(violations).toEqual([]);
+  });
+
+  it("keeps generic core fixtures free of bundled provider names", () => {
+    const violations: string[] = [];
+    for (const file of genericCoreFixtureFiles) {
+      const source = fs.readFileSync(path.join(repoRoot, file), "utf8");
+      for (const pattern of forbiddenGenericFixtureTerms) {
+        if (pattern.test(source)) {
+          violations.push(`${file} matches ${String(pattern)}`);
         }
       }
     }

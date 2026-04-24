@@ -1,3 +1,8 @@
+import {
+  buildPairingConnectRecoveryTitle,
+  describePairingConnectRequirement,
+  type ConnectPairingRequiredReason,
+} from "../gateway/protocol/connect-error-details.js";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import type { Tone } from "../memory-host-sdk/status.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
@@ -19,12 +24,29 @@ type MemoryLike = MemoryStatusSnapshot | null;
 type MemoryPluginLike = MemoryPluginStatus;
 type SessionsRecentLike = SessionStatus;
 
+export type StatusMemoryStateResolvers = {
+  resolveMemoryVectorState: (value: NonNullable<MemoryStatusSnapshot["vector"]>) => {
+    state: string;
+    tone: Tone;
+  };
+  resolveMemoryFtsState: (value: NonNullable<MemoryStatusSnapshot["fts"]>) => {
+    state: string;
+    tone: Tone;
+  };
+  resolveMemoryCacheSummary: (value: NonNullable<MemoryStatusSnapshot["cache"]>) => {
+    text: string;
+    tone: Tone;
+  };
+};
+
 type PluginCompatibilityNoticeLike = {
   severity?: "warn" | "info" | null;
 };
 
 type PairingRecoveryLike = {
   requestId?: string | null;
+  reason?: ConnectPairingRequiredReason | null;
+  remediationHint?: string | null;
 };
 
 export const statusHealthColumns: TableColumn[] = [
@@ -115,25 +137,15 @@ export function buildStatusLastHeartbeatValue(params: {
     .join(" · ");
 }
 
-export function buildStatusMemoryValue(params: {
-  memory: MemoryLike;
-  memoryPlugin: MemoryPluginLike;
-  ok: (value: string) => string;
-  warn: (value: string) => string;
-  muted: (value: string) => string;
-  resolveMemoryVectorState: (value: NonNullable<MemoryStatusSnapshot["vector"]>) => {
-    state: string;
-    tone: Tone;
-  };
-  resolveMemoryFtsState: (value: NonNullable<MemoryStatusSnapshot["fts"]>) => {
-    state: string;
-    tone: Tone;
-  };
-  resolveMemoryCacheSummary: (value: NonNullable<MemoryStatusSnapshot["cache"]>) => {
-    text: string;
-    tone: Tone;
-  };
-}) {
+export function buildStatusMemoryValue(
+  params: {
+    memory: MemoryLike;
+    memoryPlugin: MemoryPluginLike;
+    ok: (value: string) => string;
+    warn: (value: string) => string;
+    muted: (value: string) => string;
+  } & StatusMemoryStateResolvers,
+) {
   if (!params.memoryPlugin.enabled) {
     const suffix = params.memoryPlugin.reason ? ` (${params.memoryPlugin.reason})` : "";
     return params.muted(`disabled${suffix}`);
@@ -362,7 +374,17 @@ export function buildStatusPairingRecoveryLines(params: {
     return [];
   }
   return [
-    params.warn("Gateway pairing approval required."),
+    params.warn(buildPairingConnectRecoveryTitle(params.pairingRecovery.reason ?? undefined)),
+    ...(params.pairingRecovery.reason
+      ? [
+          params.muted(
+            `Reason: ${describePairingConnectRequirement(params.pairingRecovery.reason)}.`,
+          ),
+        ]
+      : []),
+    ...(params.pairingRecovery.remediationHint
+      ? [params.muted(`Hint: ${params.pairingRecovery.remediationHint}`)]
+      : []),
     ...(params.pairingRecovery.requestId
       ? [
           params.muted(

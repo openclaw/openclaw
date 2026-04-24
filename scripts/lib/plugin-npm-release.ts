@@ -462,10 +462,11 @@ export function collectPluginReleasePlan(params?: {
             })
           : allPublishable;
 
-  const all = selectedPublishable.map((plugin) => ({
-    ...plugin,
-    alreadyPublished: isPluginVersionPublished(plugin.packageName, plugin.version),
-  }));
+  const all = selectedPublishable.map((plugin) =>
+    Object.assign({}, plugin, {
+      alreadyPublished: isPluginVersionPublished(plugin.packageName, plugin.version),
+    }),
+  );
 
   return {
     all,

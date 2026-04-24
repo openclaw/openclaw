@@ -1,4 +1,5 @@
 import type { AuthProfileCredential, OAuthCredential } from "../agents/auth-profiles/types.js";
+import { resolveGpt5SystemPromptContribution } from "../agents/gpt5-prompt-overlay.js";
 import {
   applyPluginTextReplacements,
   mergePluginTextTransforms,
@@ -6,12 +7,18 @@ import {
 import type { ProviderSystemPromptContribution } from "../agents/system-prompt-contribution.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { sanitizeForLog } from "../terminal/ansi.js";
+import { resolvePluginDiscoveryProvidersRuntime } from "./provider-discovery.runtime.js";
 import {
   __testing as providerHookRuntimeTesting,
   clearProviderRuntimeHookCache,
   prepareProviderExtraParams,
   resetProviderRuntimeHookCacheForTest,
+  resolveProviderAuthProfileId,
+  resolveProviderExtraParamsForTransport,
+  resolveProviderFollowupFallbackRoute,
   resolveProviderHookPlugin,
   resolveProviderPluginsForHooks,
   resolveProviderRuntimePlugin,
@@ -19,7 +26,12 @@ import {
 } from "./provider-hook-runtime.js";
 import { resolveBundledProviderPolicySurface } from "./provider-public-artifacts.js";
 import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
-import { resolveCatalogHookProviderPluginIds } from "./providers.js";
+import type { ProviderThinkingProfile } from "./provider-thinking.types.js";
+import {
+  resolveCatalogHookProviderPluginIds,
+  resolveExternalAuthProfileCompatFallbackPluginIds,
+  resolveExternalAuthProfileProviderPluginIds,
+} from "./providers.js";
 import { getActivePluginRegistryWorkspaceDirFromState } from "./runtime-state.js";
 import { resolveRuntimeTextTransforms } from "./text-transforms.runtime.js";
 import type {
@@ -68,9 +80,20 @@ import type {
   ProviderWebSocketSessionPolicy,
   PluginTextTransforms,
 } from "./types.js";
+
+const log = createSubsystemLogger("plugins/provider-runtime");
+const warnedExternalAuthFallbackPluginIds = new Set<string>();
+
+function resetExternalAuthFallbackWarningCacheForTest(): void {
+  warnedExternalAuthFallbackPluginIds.clear();
+}
+
 export {
   clearProviderRuntimeHookCache,
   prepareProviderExtraParams,
+  resolveProviderAuthProfileId,
+  resolveProviderExtraParamsForTransport,
+  resolveProviderFollowupFallbackRoute,
   resetProviderRuntimeHookCacheForTest,
   resolveProviderRuntimePlugin,
   wrapProviderStreamFn,
@@ -78,6 +101,7 @@ export {
 
 export const __testing = {
   ...providerHookRuntimeTesting,
+  resetExternalAuthFallbackWarningCacheForTest,
 } as const;
 
 function resolveProviderPluginsForCatalogHooks(params: {
@@ -118,10 +142,48 @@ export function resolveProviderSystemPromptContribution(params: {
   env?: NodeJS.ProcessEnv;
   context: ProviderSystemPromptContributionContext;
 }): ProviderSystemPromptContribution | undefined {
-  return (
-    resolveProviderRuntimePlugin(params)?.resolveSystemPromptContribution?.(params.context) ??
-    undefined
+  const plugin = resolveProviderRuntimePlugin(params);
+  const baseOverlay = resolveGpt5SystemPromptContribution({
+    config: params.context.config ?? params.config,
+    providerId: params.context.provider ?? params.provider,
+    modelId: params.context.modelId,
+  });
+  const providerOverlay =
+    plugin?.resolvePromptOverlay?.({
+      ...params.context,
+      baseOverlay,
+    }) ?? undefined;
+  return mergeProviderSystemPromptContributions(
+    mergeProviderSystemPromptContributions(baseOverlay, providerOverlay),
+    plugin?.resolveSystemPromptContribution?.(params.context) ?? undefined,
   );
+}
+
+function mergeProviderSystemPromptContributions(
+  base?: ProviderSystemPromptContribution,
+  override?: ProviderSystemPromptContribution,
+): ProviderSystemPromptContribution | undefined {
+  if (!base) {
+    return override;
+  }
+  if (!override) {
+    return base;
+  }
+  const stablePrefix = mergeUniquePromptSections(base.stablePrefix, override.stablePrefix);
+  const dynamicSuffix = mergeUniquePromptSections(base.dynamicSuffix, override.dynamicSuffix);
+  return {
+    ...(stablePrefix ? { stablePrefix } : {}),
+    ...(dynamicSuffix ? { dynamicSuffix } : {}),
+    sectionOverrides: {
+      ...base.sectionOverrides,
+      ...override.sectionOverrides,
+    },
+  };
+}
+
+function mergeUniquePromptSections(...sections: Array<string | undefined>): string | undefined {
+  const uniqueSections = [...new Set(sections.filter((section) => section?.trim()))];
+  return uniqueSections.length > 0 ? uniqueSections.join("\n\n") : undefined;
 }
 
 export function transformProviderSystemPrompt(params: {
@@ -640,6 +702,16 @@ export function resolveProviderXHighThinking(params: {
   return resolveProviderRuntimePlugin(params)?.supportsXHighThinking?.(params.context);
 }
 
+export function resolveProviderThinkingProfile(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  context: ProviderDefaultThinkingPolicyContext;
+}): ProviderThinkingProfile | null | undefined {
+  return resolveProviderRuntimePlugin(params)?.resolveThinkingProfile?.(params.context);
+}
+
 export function resolveProviderDefaultThinkingLevel(params: {
   provider: string;
   config?: OpenClawConfig;
@@ -703,7 +775,19 @@ export function resolveProviderSyntheticAuthWithPlugin(params: {
   env?: NodeJS.ProcessEnv;
   context: ProviderResolveSyntheticAuthContext;
 }) {
-  return resolveProviderRuntimePlugin(params)?.resolveSyntheticAuth?.(params.context) ?? undefined;
+  const runtimeResolved = resolveProviderRuntimePlugin(params)?.resolveSyntheticAuth?.(
+    params.context,
+  );
+  if (runtimeResolved) {
+    return runtimeResolved;
+  }
+  return resolvePluginDiscoveryProvidersRuntime({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  })
+    .find((provider) => provider.id === params.provider)
+    ?.resolveSyntheticAuth?.(params.context);
 }
 
 export function resolveExternalAuthProfilesWithPlugins(params: {
@@ -712,13 +796,48 @@ export function resolveExternalAuthProfilesWithPlugins(params: {
   env?: NodeJS.ProcessEnv;
   context: ProviderResolveExternalAuthProfilesContext;
 }): ProviderExternalAuthProfile[] {
+  const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
+  const env = params.env ?? process.env;
+  const externalAuthPluginIds = resolveExternalAuthProfileProviderPluginIds({
+    config: params.config,
+    workspaceDir,
+    env,
+  });
+  const declaredPluginIds = new Set(externalAuthPluginIds);
+  const fallbackPluginIds = resolveExternalAuthProfileCompatFallbackPluginIds({
+    config: params.config,
+    workspaceDir,
+    env,
+    declaredPluginIds,
+  });
+  const pluginIds = [...new Set([...externalAuthPluginIds, ...fallbackPluginIds])].toSorted(
+    (left, right) => left.localeCompare(right),
+  );
+  if (pluginIds.length === 0) {
+    return [];
+  }
   const matches: ProviderExternalAuthProfile[] = [];
-  for (const plugin of resolveProviderPluginsForHooks(params)) {
+  for (const plugin of resolveProviderPluginsForHooks({
+    ...params,
+    workspaceDir,
+    env,
+    onlyPluginIds: pluginIds,
+  })) {
     const profiles =
       plugin.resolveExternalAuthProfiles?.(params.context) ??
       plugin.resolveExternalOAuthProfiles?.(params.context);
     if (!profiles || profiles.length === 0) {
       continue;
+    }
+    const pluginId = plugin.pluginId ?? plugin.id;
+    if (!declaredPluginIds.has(pluginId) && !warnedExternalAuthFallbackPluginIds.has(pluginId)) {
+      warnedExternalAuthFallbackPluginIds.add(pluginId);
+      // Deprecated compatibility path for plugins that still implement
+      // resolveExternalOAuthProfiles or omit contracts.externalAuthProviders.
+      // Remove this warning with the fallback resolver after the migration window.
+      log.warn(
+        `Provider plugin "${sanitizeForLog(pluginId)}" uses external auth hooks without declaring contracts.externalAuthProviders. This compatibility fallback is deprecated and will be removed in a future release.`,
+      );
     }
     matches.push(...profiles);
   }
