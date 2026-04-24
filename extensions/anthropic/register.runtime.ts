@@ -78,9 +78,11 @@ const CLAUDE_CLI_CANONICAL_ALLOWLIST_REFS = CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS.ma
     ? `anthropic/${ref.slice(CLAUDE_CLI_BACKEND_ID.length + 1)}`
     : ref,
 );
-const CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF = `anthropic/${CLAUDE_CLI_DEFAULT_MODEL_REF.slice(
-  CLAUDE_CLI_BACKEND_ID.length + 1,
-)}`;
+const CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF = CLAUDE_CLI_DEFAULT_MODEL_REF.startsWith(
+  `${CLAUDE_CLI_BACKEND_ID}/`,
+)
+  ? `anthropic/${CLAUDE_CLI_DEFAULT_MODEL_REF.slice(CLAUDE_CLI_BACKEND_ID.length + 1)}`
+  : CLAUDE_CLI_DEFAULT_MODEL_REF;
 
 function normalizeAnthropicSetupTokenInput(value: string): string {
   return value.replaceAll(/\s+/g, "").trim();

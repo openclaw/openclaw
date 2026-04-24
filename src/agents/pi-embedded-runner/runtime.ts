@@ -12,6 +12,9 @@ export function normalizeEmbeddedAgentRuntime(raw: string | undefined): Embedded
   if (value === "auto") {
     return "auto";
   }
+  if (value === "codex-app-server") {
+    return "codex";
+  }
   return value;
 }
 

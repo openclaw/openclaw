@@ -47,7 +47,7 @@ describe("createAgentToolResultMiddlewareRunner", () => {
   });
 
   it("fails closed when middleware mutates the current result into an invalid shape", async () => {
-    const runner = createAgentToolResultMiddlewareRunner({ harness: "pi" }, [
+    const runner = createAgentToolResultMiddlewareRunner({ runtime: "pi" }, [
       (event) => {
         event.result.content = "not an array" as never;
         return undefined;
@@ -65,7 +65,7 @@ describe("createAgentToolResultMiddlewareRunner", () => {
   });
 
   it("rejects oversized middleware details", async () => {
-    const runner = createAgentToolResultMiddlewareRunner({ harness: "codex-app-server" }, [
+    const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [
       () => ({
         result: {
           content: [{ type: "text", text: "compacted" }],
@@ -87,7 +87,7 @@ describe("createAgentToolResultMiddlewareRunner", () => {
   it("rejects cyclic middleware details", async () => {
     const details: Record<string, unknown> = {};
     details.self = details;
-    const runner = createAgentToolResultMiddlewareRunner({ harness: "codex-app-server" }, [
+    const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [
       () => ({
         result: {
           content: [{ type: "text", text: "compacted" }],

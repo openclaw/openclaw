@@ -3094,7 +3094,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   },
                 },
                 additionalProperties: false,
-                title: "Default Agent Runtime",
+                title: "Default Agent Runtime Settings",
                 description:
                   "Default embedded agent harness policy. Omitted runtime uses built-in OpenClaw Pi. Use runtime=auto for plugin harness selection, or a registered harness id such as codex.",
               },
@@ -23589,7 +23589,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       tags: ["performance"],
     },
     "agents.defaults.embeddedHarness": {
-      label: "Default Agent Runtime",
+      label: "Default Agent Runtime Settings",
       help: "Default embedded agent harness policy. Omitted runtime uses built-in OpenClaw Pi. Use runtime=auto for plugin harness selection, or a registered harness id such as codex.",
       tags: ["advanced"],
     },
