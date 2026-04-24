@@ -391,7 +391,27 @@ Behavior:
 - Task last-run timestamps are stored in session state (`heartbeatTaskState`), so intervals survive normal restarts.
 - Task timestamps are only advanced after a heartbeat run completes its normal reply path. Skipped `empty-heartbeat-file` / `no-tasks-due` runs do not mark tasks as completed.
 
-Task mode is useful when you want one heartbeat file to hold several periodic checks without paying for all of them every tick.
+### Task mode is useful when you want one heartbeat file to hold several periodic checks without paying for all of them every tick
+
+### PENDING.md integration (optional)
+
+A common pattern is to use `HEARTBEAT.md` to check `PENDING.md` for overdue commitments.
+
+`PENDING.md` is an optional workspace file for tracking cross-session commitments with deadlines. See [PENDING.md Template](/reference/templates/PENDING.md) for the full pattern.
+
+Example `HEARTBEAT.md` task for overdue detection:
+
+```md
+tasks:
+
+- name: pending-tasks-check
+  interval: 30m
+  prompt: |
+  Read PENDING.md if it exists.
+  Check each pending item's deadline against the current time.
+  If any item is overdue and not completed, report the overdue items to the user.
+  If all items are on-track, reply HEARTBEAT_OK.
+```
 
 ### Can the agent update HEARTBEAT.md?
 
