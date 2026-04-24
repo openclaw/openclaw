@@ -1,5 +1,9 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { vi } from "vitest";
+import type {
+  CodexAppServerExtensionFactory,
+  CodexAppServerToolResultEvent,
+} from "../../../src/plugins/codex-app-server-extension-types.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
@@ -39,6 +43,27 @@ export function installOpenClawOwnedToolHooks(params?: {
     ]),
   );
   return { beforeToolCall, afterToolCall };
+}
+
+export function installCodexToolResultMiddleware(
+  handler: (event: CodexAppServerToolResultEvent) => AgentToolResult<unknown>,
+) {
+  const middleware = vi.fn(async (event: CodexAppServerToolResultEvent) => ({
+    result: handler(event),
+  }));
+  const registry = createEmptyPluginRegistry();
+  const factory: CodexAppServerExtensionFactory = async (codex) => {
+    codex.on("tool_result", middleware);
+  };
+  registry.codexAppServerExtensionFactories.push({
+    pluginId: "runtime-contract",
+    pluginName: "Runtime Contract",
+    rawFactory: factory,
+    factory,
+    source: "test",
+  });
+  setActivePluginRegistry(registry);
+  return { middleware };
 }
 
 export function resetOpenClawOwnedToolHooks(): void {

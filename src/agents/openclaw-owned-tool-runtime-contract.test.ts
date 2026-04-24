@@ -113,4 +113,77 @@ describe("OpenClaw-owned tool runtime contract — Pi adapter", () => {
       );
     });
   });
+
+  it("fails closed when before_tool_call blocks a Pi dynamic tool", async () => {
+    const hooks = installOpenClawOwnedToolHooks({ blockReason: "blocked by policy" });
+    const execute = vi.fn(async () => textToolResult("should not run"));
+    const tool = wrapToolWithBeforeToolCallHook(createContractTool("message", execute), {
+      agentId: "agent-1",
+      sessionId: "session-1",
+      sessionKey: "agent:agent-1:session-1",
+      runId: "run-blocked",
+    });
+    const definition = toToolDefinitions([tool])[0];
+    if (!definition) {
+      throw new Error("missing Pi tool definition");
+    }
+    const ctx = createToolHandlerCtx();
+    ctx.params.runId = "run-blocked";
+    const toolCallId = "call-blocked";
+    const originalParams = {
+      action: "send",
+      text: "blocked",
+      provider: "telegram",
+      to: "chat-1",
+    };
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "message",
+        toolCallId,
+        args: originalParams,
+      } as never,
+    );
+    const result = await definition.execute(toolCallId, originalParams, undefined, undefined, {});
+    expect(result).toEqual(
+      expect.objectContaining({
+        details: expect.objectContaining({
+          status: "error",
+          error: "blocked by policy",
+        }),
+      }),
+    );
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "message",
+        toolCallId,
+        isError: true,
+        result,
+      } as never,
+    );
+
+    expect(hooks.beforeToolCall).toHaveBeenCalledTimes(1);
+    expect(execute).not.toHaveBeenCalled();
+    await vi.waitFor(() => {
+      expect(hooks.afterToolCall).toHaveBeenCalledWith(
+        expect.objectContaining({
+          toolName: "message",
+          toolCallId,
+          params: originalParams,
+          error: "blocked by policy",
+        }),
+        expect.objectContaining({
+          agentId: "agent-1",
+          sessionId: "session-1",
+          sessionKey: "agent:agent-1:session-1",
+          runId: "run-blocked",
+          toolCallId,
+        }),
+      );
+    });
+  });
 });
