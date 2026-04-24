@@ -103,7 +103,7 @@ describe("OpenAI transport schema normalization runtime contract", () => {
       responsesServerCompaction: true,
     });
 
-    streamFn(model, { systemPrompt: "system", messages: [], tools } as never, {});
+    void streamFn(model, { systemPrompt: "system", messages: [], tools } as never, {});
 
     expect(payload?.context_management).toEqual([
       {
