@@ -2699,15 +2699,6 @@ export const chatHandlers: GatewayRequestHandlers = {
             }
           } else {
             void emitUserTranscriptUpdate();
-            // Some harnesses emit live item/tool activity but do not mirror a
-            // terminal assistant/lifecycle event onto the gateway chat stream.
-            // The run still completed and the transcript has been updated, so
-            // send a message-less final event as a UI resync point.
-            broadcastChatFinal({
-              context,
-              runId: clientRunId,
-              sessionKey,
-            });
           }
           setGatewayDedupeEntry({
             dedupe: context.dedupe,
