@@ -1702,6 +1702,48 @@ function injectToolCallThoughtSignatures(
   }
 }
 
+function injectDeepSeekReasoningReplay(outgoingMessages: unknown[], model: OpenAIModeModel): void {
+  const { capabilities } = detectOpenAICompletionsCompat(model);
+  const endpointClass = capabilities.endpointClass;
+  const isDefaultRoute = endpointClass === "default";
+  const isDeepSeekLike =
+    endpointClass === "deepseek-native" || (isDefaultRoute && model.provider === "deepseek");
+  if (!isDeepSeekLike) {
+    return;
+  }
+  for (const message of outgoingMessages) {
+    if (!message || typeof message !== "object") {
+      continue;
+    }
+    const record = message as {
+      role?: unknown;
+      content?: unknown;
+      tool_calls?: unknown;
+      reasoning_content?: unknown;
+      reasoning?: unknown;
+      reasoning_text?: unknown;
+    };
+    if (
+      record.role !== "assistant" ||
+      !Array.isArray(record.tool_calls) ||
+      record.tool_calls.length === 0
+    ) {
+      continue;
+    }
+    if (
+      typeof record.reasoning_content === "string" ||
+      typeof record.reasoning === "string" ||
+      typeof record.reasoning_text === "string"
+    ) {
+      continue;
+    }
+    if (typeof record.content !== "string" || record.content.trim().length === 0) {
+      continue;
+    }
+    record.reasoning_content = record.content;
+  }
+}
+
 export function buildOpenAICompletionsParams(
   model: OpenAIModeModel,
   context: Context,
@@ -1716,6 +1758,7 @@ export function buildOpenAICompletionsParams(
     : context;
   const messages = convertMessages(model as never, completionsContext, compat as never);
   injectToolCallThoughtSignatures(messages as unknown[], context, model);
+  injectDeepSeekReasoningReplay(messages as unknown[], model);
   const params: Record<string, unknown> = {
     model: model.id,
     messages: compat.requiresStringContent
