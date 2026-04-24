@@ -88,9 +88,9 @@ Legacy sessions created before harness pins are treated as PI-pinned once they
 have transcript history. Use `/new` or `/reset` to opt that conversation into
 Codex after changing config.
 
-`/status` shows the effective non-PI harness next to `Fast`, for example
-`Fast · codex`. The default PI harness remains `Runner: pi (embedded)` and does
-not add a separate harness badge.
+`/status` shows the effective model runtime. The default PI harness appears as
+`Runtime: OpenClaw (pi embedded)`, and the Codex app-server harness appears as
+`Runtime: OpenAI Codex`.
 
 ## Requirements
 
