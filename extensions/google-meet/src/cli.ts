@@ -40,6 +40,10 @@ type ResolveSpaceOptions = {
   json?: boolean;
 };
 
+type SetupOptions = {
+  json?: boolean;
+};
+
 function writeStdoutJson(value: unknown): void {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
 }
@@ -69,6 +73,13 @@ function parseOptionalNumber(value: string | undefined): number | undefined {
     throw new Error(`Expected a numeric value, received ${value}`);
   }
   return parsed;
+}
+
+function writeSetupStatus(status: ReturnType<GoogleMeetRuntime["setupStatus"]>): void {
+  writeStdoutLine("Google Meet setup: %s", status.ok ? "OK" : "needs attention");
+  for (const check of status.checks) {
+    writeStdoutLine("[%s] %s: %s", check.ok ? "ok" : "fail", check.id, check.message);
+  }
 }
 
 function resolveMeetingInput(config: GoogleMeetConfig, value?: string): string {
@@ -319,9 +330,15 @@ export function registerGoogleMeetCli(params: {
   root
     .command("setup")
     .description("Show Google Meet transport setup status")
-    .action(async () => {
+    .option("--json", "Print JSON output", false)
+    .action(async (options: SetupOptions) => {
       const rt = await params.ensureRuntime();
-      writeStdoutJson(rt.setupStatus());
+      const status = rt.setupStatus();
+      if (options.json) {
+        writeStdoutJson(status);
+        return;
+      }
+      writeSetupStatus(status);
     });
 
   root
