@@ -159,7 +159,9 @@ Cron jobs panel notes:
 - Talk mode uses the registered realtime voice provider. Configure OpenAI with
   `talk.provider: "openai"` plus `talk.providers.openai.apiKey`, or reuse the
   Voice Call realtime provider config. The browser never receives the standard
-  OpenAI API key; it receives only the ephemeral Realtime client secret.
+  OpenAI API key; it receives only the ephemeral Realtime client secret. The
+  Realtime session prompt is assembled by the Gateway; `talk.realtime.session`
+  does not accept caller-provided instruction overrides.
 - In the Chat composer, the Talk control is the waves button next to the
   microphone dictation button. When Talk starts, the composer status row shows
   `Connecting Talk...`, then `Talk live` while audio is connected, or
