@@ -156,6 +156,17 @@ describe("slack native streaming thread hint", () => {
     ).toBe("1000.2");
   });
 
+  it("uses the message timestamp for top-level channel replies when replyToMode=all", () => {
+    expect(
+      resolveSlackStreamingThreadHint({
+        replyToMode: "all",
+        incomingThreadTs: undefined,
+        messageTs: "1000.4",
+        isThreadReply: false,
+      }),
+    ).toBe("1000.4");
+  });
+
   it("uses the existing incoming thread regardless of replyToMode", () => {
     expect(
       resolveSlackStreamingThreadHint({
