@@ -124,7 +124,9 @@ function isJsonSerializableValue(value: unknown, seen = new WeakSet<object>()): 
       return false;
     }
     seen.add(value);
-    const valid = value.every((entry) => isJsonSerializableValue(entry, seen));
+    const valid =
+      Object.keys(value).length === value.length &&
+      value.every((entry) => isJsonSerializableValue(entry, seen));
     seen.delete(value);
     return valid;
   }

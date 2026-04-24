@@ -1,9 +1,14 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { createDedupeCache } from "../infra/dedupe.js";
+import { resolveProcessScopedMap } from "../shared/process-scoped-map.js";
 import type { FileLockOptions } from "./file-lock.js";
 import { withFileLock } from "./file-lock.js";
 import { readJsonFileWithFallback, writeJsonFileAtomically } from "./json-store.js";
 
 type PersistentDedupeData = Record<string, number>;
+const FILE_WRITE_QUEUE_KEY = Symbol.for("openclaw.persistentDedupeFileWriteQueues");
+const FILE_WRITE_QUEUES = resolveProcessScopedMap<Promise<unknown>>(FILE_WRITE_QUEUE_KEY);
 
 export type PersistentDedupeOptions = {
   ttlMs: number;
@@ -80,6 +85,7 @@ const DEFAULT_LOCK_OPTIONS: FileLockOptions = {
   },
   stale: 60_000,
 };
+const DEDUPE_DIR_MODE = 0o700;
 
 function mergeLockOptions(overrides?: Partial<FileLockOptions>): FileLockOptions {
   return {
@@ -146,6 +152,19 @@ function isRecentTimestamp(seenAt: number | undefined, ttlMs: number, now: numbe
   return seenAt != null && (ttlMs <= 0 || now - seenAt < ttlMs);
 }
 
+async function resolveFileWriteQueueKey(filePath: string): Promise<string> {
+  const resolved = path.resolve(filePath);
+  const dir = path.dirname(resolved);
+  await fs.mkdir(dir, { recursive: true, mode: DEDUPE_DIR_MODE });
+  await fs.chmod(dir, DEDUPE_DIR_MODE).catch(() => undefined);
+  try {
+    const realDir = await fs.realpath(dir);
+    return path.join(realDir, path.basename(resolved));
+  } catch {
+    return resolved;
+  }
+}
+
 /** Create a dedupe helper that combines in-memory fast checks with a lock-protected disk store. */
 export function createPersistentDedupe(options: PersistentDedupeOptions): PersistentDedupe {
   const ttlMs = Math.max(0, Math.floor(options.ttlMs));
@@ -154,7 +173,7 @@ export function createPersistentDedupe(options: PersistentDedupeOptions): Persis
   const lockOptions = mergeLockOptions(options.lockOptions);
   const memory = createDedupeCache({ ttlMs, maxSize: memoryMaxSize });
   const inflight = new Map<string, Promise<boolean>>();
-  // In-process write queue per file path. `withFileLock` is re-entrant
+  // In-process write queue per physical file path. `withFileLock` is re-entrant
   // within the same process (a second caller for the same path gets
   // immediate access instead of waiting), so two concurrent
   // checkAndRecordInner calls for different keys but the same file can
@@ -164,20 +183,20 @@ export function createPersistentDedupe(options: PersistentDedupeOptions): Persis
   // targeting the same file within this process, preventing the lost
   // update while still allowing cross-process file-lock contention to
   // be handled by the file lock itself.
-  const fileWriteQueues = new Map<string, Promise<unknown>>();
 
-  function enqueueFileWrite<T>(filePath: string, fn: () => Promise<T>): Promise<T> {
-    const prev = fileWriteQueues.get(filePath) ?? Promise.resolve();
+  async function enqueueFileWrite<T>(filePath: string, fn: () => Promise<T>): Promise<T> {
+    const queueKey = await resolveFileWriteQueueKey(filePath);
+    const prev = FILE_WRITE_QUEUES.get(queueKey) ?? Promise.resolve();
     const next = prev.then(fn, fn);
-    fileWriteQueues.set(filePath, next);
+    FILE_WRITE_QUEUES.set(queueKey, next);
     // Cleanup: remove the queue entry once this link settles, but only if
     // no newer work was chained after us. The `.catch(() => {})` prevents
     // an unhandled rejection when `next` rejects — callers still observe
     // the rejection through the returned `next` promise directly.
     next
       .finally(() => {
-        if (fileWriteQueues.get(filePath) === next) {
-          fileWriteQueues.delete(filePath);
+        if (FILE_WRITE_QUEUES.get(queueKey) === next) {
+          FILE_WRITE_QUEUES.delete(queueKey);
         }
       })
       .catch(() => {});

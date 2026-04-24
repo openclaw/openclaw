@@ -173,6 +173,9 @@ describe("createPersistentKeyedStore", () => {
     await expect(
       store.register("infinite-number", { value: Number.POSITIVE_INFINITY }),
     ).rejects.toThrow(/JSON/i);
+    const sparseArray: unknown[] = [];
+    sparseArray[1] = "hole";
+    await expect(store.register("sparse-array", sparseArray)).rejects.toThrow(/JSON/i);
     await expect(fs.access(resolveStoreFile(stateDir))).rejects.toMatchObject({
       code: "ENOENT",
     });
