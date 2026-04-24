@@ -213,8 +213,8 @@ export class PluginLoadReentryError extends Error {
 type CachedPluginState = {
   registry: PluginRegistry;
   detachedTaskRuntimeRegistration: ReturnType<typeof getDetachedTaskLifecycleRuntimeRegistration>;
-  commands: ReturnType<typeof listRegisteredPluginCommands>;
-  interactiveHandlers: ReturnType<typeof listPluginInteractiveHandlers>;
+  commands?: ReturnType<typeof listRegisteredPluginCommands>;
+  interactiveHandlers?: ReturnType<typeof listPluginInteractiveHandlers>;
   memoryCapability: ReturnType<typeof getMemoryCapabilityRegistration>;
   memoryCorpusSupplements: ReturnType<typeof listMemoryCorpusSupplements>;
   agentHarnesses: ReturnType<typeof listRegisteredAgentHarnesses>;
@@ -1883,10 +1883,10 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     const cached = getCachedPluginRegistry(cacheKey);
     if (cached) {
       restoreRegisteredAgentHarnesses(cached.agentHarnesses);
-      restorePluginCommands(cached.commands);
+      restorePluginCommands(cached.commands ?? []);
       restoreRegisteredCompactionProviders(cached.compactionProviders);
       restoreDetachedTaskLifecycleRuntimeRegistration(cached.detachedTaskRuntimeRegistration);
-      restorePluginInteractiveHandlers(cached.interactiveHandlers);
+      restorePluginInteractiveHandlers(cached.interactiveHandlers ?? []);
       restoreRegisteredMemoryEmbeddingProviders(cached.memoryEmbeddingProviders);
       restoreMemoryPluginState({
         capability: cached.memoryCapability,

@@ -26,9 +26,14 @@ import { clearPluginCommands, getPluginCommandSpecs } from "./command-registry-s
 import { getGlobalHookRunner, resetGlobalHookRunner } from "./hook-runner-global.js";
 import { createHookRunner } from "./hooks.js";
 import {
+  clearPluginInteractiveHandlerRegistrations,
   clearPluginInteractiveHandlers,
   resolvePluginInteractiveNamespaceMatch,
 } from "./interactive-registry.js";
+import {
+  claimPluginInteractiveCallbackDedupe,
+  commitPluginInteractiveCallbackDedupe,
+} from "./interactive-state.js";
 import {
   __testing,
   clearPluginLoaderCache,
@@ -3217,8 +3222,16 @@ module.exports = { id: "throws-after-import", register() {} };`,
     ]);
     expect(resolvePluginInteractiveNamespaceMatch("telegram", "hue:on")).toBeDefined();
 
+    const dedupeKey = "telegram:hue:callback-1";
+    expect(claimPluginInteractiveCallbackDedupe(dedupeKey, 1_000)).toBe(true);
+    commitPluginInteractiveCallbackDedupe(dedupeKey, 1_000);
+    expect(claimPluginInteractiveCallbackDedupe(dedupeKey, 1_001)).toBe(false);
+
+    loadOpenClawPlugins(loadOptions);
+    expect(claimPluginInteractiveCallbackDedupe(dedupeKey, 1_002)).toBe(false);
+
     clearPluginCommands();
-    clearPluginInteractiveHandlers();
+    clearPluginInteractiveHandlerRegistrations();
     expect(getPluginCommandSpecs()).toEqual([]);
     expect(resolvePluginInteractiveNamespaceMatch("telegram", "hue:on")).toBeNull();
 
@@ -3234,6 +3247,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
       namespace: "hue",
       channel: "telegram",
     });
+    expect(claimPluginInteractiveCallbackDedupe(dedupeKey, 1_003)).toBe(false);
   });
 
   it("clears stale detached task runtime registrations on active reloads when no plugin re-registers one", () => {
