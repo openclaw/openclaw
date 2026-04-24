@@ -21,7 +21,6 @@ import type {
   OpenClawPluginService,
 } from "../api.js";
 import {
-  isBlockedObjectKey,
   isValidDiagnosticSpanId,
   isValidDiagnosticTraceFlags,
   isValidDiagnosticTraceId,
@@ -47,6 +46,7 @@ const MAX_OTEL_LOG_ATTRIBUTE_VALUE_CHARS = 4 * 1024;
 const LOG_RECORD_EXPORT_FAILURE_REPORT_INTERVAL_MS = 60_000;
 const OTEL_LOG_RAW_ATTRIBUTE_KEY_RE = /^[A-Za-z0-9_.:-]{1,64}$/u;
 const OTEL_LOG_ATTRIBUTE_KEY_RE = /^[A-Za-z0-9_.:-]{1,96}$/u;
+const BLOCKED_OTEL_LOG_ATTRIBUTE_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 
 function normalizeEndpoint(endpoint?: string): string | undefined {
   const trimmed = endpoint?.trim();
@@ -127,7 +127,7 @@ function assignOtelLogAttribute(
   if (Object.keys(attributes).length >= MAX_OTEL_LOG_ATTRIBUTE_COUNT) {
     return;
   }
-  if (isBlockedObjectKey(key)) {
+  if (BLOCKED_OTEL_LOG_ATTRIBUTE_KEYS.has(key)) {
     return;
   }
   if (redactSensitiveText(key) !== key) {
@@ -189,7 +189,7 @@ function assignOtelLogEventAttributes(
       continue;
     }
     const key = rawKey.trim();
-    if (isBlockedObjectKey(key)) {
+    if (BLOCKED_OTEL_LOG_ATTRIBUTE_KEYS.has(key)) {
       continue;
     }
     if (redactSensitiveText(key) !== key) {
