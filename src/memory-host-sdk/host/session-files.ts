@@ -4,7 +4,7 @@ import { stripInternalRuntimeContext } from "../../agents/internal-runtime-conte
 import { isHeartbeatUserMessage } from "../../auto-reply/heartbeat-filter.js";
 import { HEARTBEAT_PROMPT } from "../../auto-reply/heartbeat.js";
 import { stripInboundMetadata } from "../../auto-reply/reply/strip-inbound-meta.js";
-import { isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
+import { HEARTBEAT_TOKEN, isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
 import {
   isSessionArchiveArtifactName,
   isUsageCountedSessionTranscriptFileName,
@@ -362,21 +362,6 @@ function isGeneratedHeartbeatPromptMessage(text: string, role: "user" | "assista
   return role === "user" && isHeartbeatUserMessage({ role, content: text }, HEARTBEAT_PROMPT);
 }
 
-function shouldSkipGeneratedPrompt(rawText: string, role: "user" | "assistant"): boolean {
-  const strippedInbound = stripInboundMetadataForUserRole(rawText, role);
-  const strippedInternal = stripInternalRuntimeContext(strippedInbound);
-  const normalized = normalizeSessionText(strippedInternal);
-  if (!normalized) {
-    return strippedInternal !== rawText;
-  }
-  return (
-    isGeneratedSystemWrapperMessage(normalized, role) ||
-    isGeneratedCronPromptMessage(normalized, role) ||
-    isGeneratedHeartbeatPromptMessage(normalized, role) ||
-    isExecCompletionEvent(normalized.replace(GENERATED_SYSTEM_MESSAGE_RE, "").trim())
-  );
-}
-
 function sanitizeSessionText(text: string, role: "user" | "assistant"): string | null {
   const strippedInbound = stripInboundMetadataForUserRole(text, role);
   const strippedInternal = stripInternalRuntimeContext(strippedInbound);
@@ -394,6 +379,13 @@ function sanitizeSessionText(text: string, role: "user" | "assistant"): string |
     return null;
   }
   if (isSilentReplyPayloadText(normalized)) {
+    return null;
+  }
+  // Assistant-side machinery acks: HEARTBEAT_OK is the canonical "all clear,
+  // nothing to do" reply to a heartbeat tick. Drop on the assistant side
+  // directly so we do not have to rely on cross-message coupling with the
+  // preceding user message (which a real user could spoof).
+  if (role === "assistant" && normalized === HEARTBEAT_TOKEN) {
     return null;
   }
   const withoutSystemEnvelope = normalized.replace(GENERATED_SYSTEM_MESSAGE_RE, "").trim();
@@ -463,7 +455,6 @@ export async function buildSessionEntry(
       opts.generatedByDreamingNarrative ?? isDreamingNarrativeTranscriptFromSessionStore(absPath);
     const generatedByCronRun =
       opts.generatedByCronRun ?? isCronRunTranscriptFromSessionStore(absPath);
-    let skippingGeneratedFollowup = false;
     for (let jsonlIdx = 0; jsonlIdx < lines.length; jsonlIdx++) {
       const line = lines[jsonlIdx];
       if (!line.trim()) {
@@ -499,17 +490,14 @@ export async function buildSessionEntry(
         continue;
       }
       const text = sanitizeSessionText(rawText, message.role);
-      if (message.role === "user") {
-        if (!text) {
-          skippingGeneratedFollowup = shouldSkipGeneratedPrompt(rawText, message.role);
-          continue;
-        }
-        skippingGeneratedFollowup = false;
-      } else if (skippingGeneratedFollowup) {
-        skippingGeneratedFollowup = false;
-        continue;
-      }
       if (!text) {
+        // Assistant-side machinery (silent replies, system wrappers) is already
+        // dropped by sanitizeSessionText. We deliberately do NOT use the prior
+        // user message's pattern-match to drop the next assistant message:
+        // user-typed text can match those same patterns (`[cron:...]`,
+        // `System (untrusted): ...`) and a cross-message drop would let users
+        // exfiltrate real assistant replies from the dreaming corpus by
+        // prefixing their own prompt. See PR #70737 review (aisle-research-bot).
         continue;
       }
       if (generatedByDreamingNarrative || generatedByCronRun) {

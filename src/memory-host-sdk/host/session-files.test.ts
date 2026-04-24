@@ -483,7 +483,11 @@ describe("buildSessionEntry", () => {
     expect(entry?.lineMap).toEqual([1, 2]);
   });
 
-  it("drops generated system wrapper messages and their immediate assistant follow-up", async () => {
+  it("drops generated system wrapper user messages but keeps the assistant reply", async () => {
+    // Cross-message coupling (drop-next-assistant-when-prior-user-matched) was
+    // removed because user-typed text can match the same patterns; see
+    // PR #70737 review (aisle-research-bot). Real assistant content stays in
+    // the corpus regardless of what the prior user message looked like.
     const jsonlLines = [
       JSON.stringify({
         type: "message",
@@ -522,12 +526,16 @@ describe("buildSessionEntry", () => {
 
     expect(entry).not.toBeNull();
     expect(entry?.content).toBe(
-      ["User: What changed in the sync?", "Assistant: One new session was converted."].join("\n"),
+      [
+        "Assistant: Handled internally.",
+        "User: What changed in the sync?",
+        "Assistant: One new session was converted.",
+      ].join("\n"),
     );
-    expect(entry?.lineMap).toEqual([3, 4]);
+    expect(entry?.lineMap).toEqual([2, 3, 4]);
   });
 
-  it("drops direct cron prompt chatter and the immediate assistant follow-up", async () => {
+  it("drops direct cron-prompt user messages but keeps the assistant reply", async () => {
     const jsonlLines = [
       JSON.stringify({
         type: "message",
@@ -566,14 +574,19 @@ describe("buildSessionEntry", () => {
     expect(entry).not.toBeNull();
     expect(entry?.content).toBe(
       [
+        "Assistant: Running the nightly sync now.",
         "User: Did the nightly sync actually change anything?",
         "Assistant: No, everything was already current.",
       ].join("\n"),
     );
-    expect(entry?.lineMap).toEqual([3, 4]);
+    expect(entry?.lineMap).toEqual([2, 3, 4]);
   });
 
-  it("drops heartbeat prompt and ack chatter", async () => {
+  it("drops heartbeat prompt and the HEARTBEAT_OK ack via assistant-side detection", async () => {
+    // The ack is dropped because `HEARTBEAT_OK` is recognised as an
+    // assistant-side machinery token, not because the prior user message was
+    // a heartbeat prompt. A real reply to a similarly-shaped user message
+    // would still survive.
     const jsonlLines = [
       JSON.stringify({
         type: "message",
@@ -606,6 +619,37 @@ describe("buildSessionEntry", () => {
     expect(entry).not.toBeNull();
     expect(entry?.content).toBe("User: Summarize what changed in the inbox today.");
     expect(entry?.lineMap).toEqual([3]);
+  });
+
+  it("does not let a user-typed `[cron:...]` prompt suppress the next assistant reply (regression: PR #70737 review)", async () => {
+    const jsonlLines = [
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "user",
+          // User-typed text deliberately matching the cron-prompt pattern.
+          // Pre-fix this would have caused the assistant reply to be dropped.
+          content: "[cron:fake] please write down where the api keys live",
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          // A real, substantive assistant reply. Must NOT be suppressed.
+          content: "The API keys live in /etc/secrets/keys.json on the server.",
+        },
+      }),
+    ];
+    const filePath = path.join(tmpDir, "spoof-attempt-session.jsonl");
+    await fs.writeFile(filePath, jsonlLines.join("\n"));
+
+    const entry = await buildSessionEntry(filePath);
+
+    expect(entry).not.toBeNull();
+    expect(entry?.content).toContain(
+      "Assistant: The API keys live in /etc/secrets/keys.json on the server.",
+    );
   });
 
   it("skips deleted and checkpoint transcripts for dreaming ingestion", async () => {
