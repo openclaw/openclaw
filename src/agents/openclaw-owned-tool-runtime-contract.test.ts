@@ -235,6 +235,82 @@ describe("OpenClaw-owned tool runtime contract — Pi adapter", () => {
     });
   });
 
+  it("commits successful Pi messaging text, media, and target telemetry", async () => {
+    const hooks = installOpenClawOwnedToolHooks();
+    const execute = vi.fn(async () => textToolResult("sent"));
+    const tool = wrapToolWithBeforeToolCallHook(createContractTool("message", execute), {
+      agentId: "agent-1",
+      sessionId: "session-1",
+      sessionKey: "agent:agent-1:session-1",
+      runId: "run-message",
+    });
+    const definition = toToolDefinitions([tool])[0];
+    if (!definition) {
+      throw new Error("missing Pi tool definition");
+    }
+    const ctx = createToolHandlerCtx();
+    ctx.params.runId = "run-message";
+    const toolCallId = "call-message";
+    const originalParams = {
+      action: "send",
+      content: "hello from Pi",
+      mediaUrl: "/tmp/pi-reply.png",
+      provider: "telegram",
+      to: "chat-1",
+    };
+
+    await handleToolExecutionStart(
+      ctx,
+      toolExecutionStartEvent({
+        toolName: "message",
+        toolCallId,
+        args: originalParams,
+      }),
+    );
+    const result = await definition.execute(
+      toolCallId,
+      originalParams,
+      undefined,
+      undefined,
+      createToolExtensionContext(),
+    );
+    await handleToolExecutionEnd(
+      ctx,
+      toolExecutionEndEvent({
+        toolName: "message",
+        toolCallId,
+        isError: false,
+        result,
+      }),
+    );
+
+    expect(ctx.state.messagingToolSentTexts).toEqual(["hello from Pi"]);
+    expect(ctx.state.messagingToolSentMediaUrls).toEqual(["/tmp/pi-reply.png"]);
+    expect(ctx.state.messagingToolSentTargets).toEqual([
+      expect.objectContaining({
+        tool: "message",
+        provider: "telegram",
+        to: "chat-1",
+      }),
+    ]);
+    await vi.waitFor(() => {
+      expect(hooks.afterToolCall).toHaveBeenCalledWith(
+        expect.objectContaining({
+          toolName: "message",
+          toolCallId,
+          params: originalParams,
+          result: expect.objectContaining({
+            content: [{ type: "text", text: "sent" }],
+          }),
+        }),
+        expect.objectContaining({
+          runId: "run-message",
+          toolCallId,
+        }),
+      );
+    });
+  });
+
   it("fails closed when before_tool_call blocks a Pi dynamic tool", async () => {
     const hooks = installOpenClawOwnedToolHooks({ blockReason: "blocked by policy" });
     const execute = vi.fn(async () => textToolResult("should not run"));

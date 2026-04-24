@@ -23,6 +23,19 @@ export function textToolResult(
   };
 }
 
+export function mediaToolResult(
+  text: string,
+  mediaUrl: string,
+  audioAsVoice = false,
+): AgentToolResult<unknown> {
+  return textToolResult(text, {
+    media: {
+      mediaUrl,
+      ...(audioAsVoice ? { audioAsVoice } : {}),
+    },
+  });
+}
+
 export function installOpenClawOwnedToolHooks(params?: {
   adjustedParams?: Record<string, unknown>;
   blockReason?: string;
