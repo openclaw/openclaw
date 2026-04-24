@@ -651,6 +651,46 @@ describe("sendChatMessage", () => {
       ],
     });
   });
+
+  it("sends non-image attachments as generic files and keeps the local badge payload", async () => {
+    const request = vi.fn().mockResolvedValue({ ok: true });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    const result = await sendChatMessage(state, "review this", [
+      {
+        id: "att-1",
+        dataUrl: "data:application/pdf;base64,JVBERi0xLjQK",
+        mimeType: "application/pdf",
+        fileName: "brief.pdf",
+      },
+    ]);
+
+    expect(result).toBeTypeOf("string");
+    expect(request).toHaveBeenCalledWith("chat.send", {
+      sessionKey: "main",
+      message: "review this",
+      deliver: false,
+      idempotencyKey: result,
+      attachments: [
+        {
+          type: "file",
+          mimeType: "application/pdf",
+          content: "JVBERi0xLjQK",
+          fileName: "brief.pdf",
+        },
+      ],
+    });
+    expect(state.chatMessages.at(-1)).toMatchObject({
+      role: "user",
+      content: [
+        { type: "text", text: "review this" },
+        { type: "file", mimeType: "application/pdf", fileName: "brief.pdf" },
+      ],
+    });
+  });
 });
 
 describe("abortChatRun", () => {

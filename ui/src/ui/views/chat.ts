@@ -231,6 +231,7 @@ function handlePaste(e: ClipboardEvent, props: ChatProps) {
         id: generateAttachmentId(),
         dataUrl,
         mimeType: file.type,
+        fileName: file.name,
       };
       const current = props.attachments ?? [];
       props.onAttachmentsChange?.([...current, newAttachment]);
@@ -258,6 +259,7 @@ function handleFileSelect(e: Event, props: ChatProps) {
         id: generateAttachmentId(),
         dataUrl: reader.result as string,
         mimeType: file.type,
+        fileName: file.name,
       });
       pending--;
       if (pending === 0) {
@@ -289,6 +291,7 @@ function handleDrop(e: DragEvent, props: ChatProps) {
         id: generateAttachmentId(),
         dataUrl: reader.result as string,
         mimeType: file.type,
+        fileName: file.name,
       });
       pending--;
       if (pending === 0) {
@@ -297,6 +300,10 @@ function handleDrop(e: DragEvent, props: ChatProps) {
     });
     reader.readAsDataURL(file);
   }
+}
+
+function isImageMimeType(mimeType: string): boolean {
+  return mimeType.startsWith("image/");
 }
 
 function renderAttachmentPreview(props: ChatProps): TemplateResult | typeof nothing {
@@ -308,8 +315,32 @@ function renderAttachmentPreview(props: ChatProps): TemplateResult | typeof noth
     <div class="chat-attachments-preview">
       ${attachments.map(
         (att) => html`
-          <div class="chat-attachment-thumb">
-            <img src=${att.dataUrl} alt="Attachment preview" />
+          <div
+            class="chat-attachment-thumb ${isImageMimeType(att.mimeType)
+              ? ""
+              : "chat-attachment-thumb--file"}"
+          >
+            ${isImageMimeType(att.mimeType)
+              ? html`<img src=${att.dataUrl} alt="Attachment preview" />`
+              : html`<div class="chat-attachment-file-icon">
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.5"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                    <polyline points="14 2 14 8 20 8" />
+                    <line x1="16" y1="13" x2="8" y2="13" />
+                    <line x1="16" y1="17" x2="8" y2="17" />
+                    <polyline points="10 9 9 9 8 9" />
+                  </svg>
+                  ${att.fileName
+                    ? html`<span class="chat-attachment-file-name">${att.fileName}</span>`
+                    : nothing}
+                </div>`}
             <button
               class="chat-attachment-remove"
               type="button"
@@ -771,7 +802,7 @@ export function renderChat(props: ChatProps) {
 
   const placeholder = props.connected
     ? hasAttachments
-      ? "Add a message or paste more images..."
+      ? "Add a message or attach more files..."
       : `Message ${props.assistantName || "agent"} (Enter to send)`
     : "Connect to the gateway to start chatting...";
 
@@ -1149,7 +1180,9 @@ export function renderChat(props: ChatProps) {
                           : nothing}
                         <div class="chat-queue__text">
                           ${item.text ||
-                          (item.attachments?.length ? `Image (${item.attachments.length})` : "")}
+                          (item.attachments?.length
+                            ? `Attachment${item.attachments.length === 1 ? "" : "s"} (${item.attachments.length})`
+                            : "")}
                         </div>
                       </div>
                       <div class="chat-queue__actions">

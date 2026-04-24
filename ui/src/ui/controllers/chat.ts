@@ -203,7 +203,7 @@ export async function loadChatHistory(state: ChatState) {
 }
 
 function dataUrlToBase64(dataUrl: string): { content: string; mimeType: string } | null {
-  const match = /^data:([^;]+);base64,(.+)$/.exec(dataUrl);
+  const match = /^data:([^;]*);base64,(.+)$/.exec(dataUrl);
   if (!match) {
     return null;
   }
@@ -219,10 +219,12 @@ function buildApiAttachments(attachments?: ChatAttachment[]) {
           if (!parsed) {
             return null;
           }
+          const mimeType = parsed.mimeType || att.mimeType || "application/octet-stream";
           return {
-            type: "image",
-            mimeType: parsed.mimeType,
+            type: mimeType.startsWith("image/") ? "image" : "file",
+            mimeType,
             content: parsed.content,
+            ...(att.fileName ? { fileName: att.fileName } : {}),
           };
         })
         .filter((a): a is NonNullable<typeof a> => a !== null)
@@ -308,16 +310,25 @@ export async function sendChatMessage(
   const now = Date.now();
 
   // Build user message content blocks
-  const contentBlocks: Array<{ type: string; text?: string; source?: unknown }> = [];
+  const contentBlocks: Array<Record<string, unknown>> = [];
   if (msg) {
     contentBlocks.push({ type: "text", text: msg });
   }
-  // Add image previews to the message for display
+  // Preserve local attachment rendering for both images and generic files.
   if (hasAttachments) {
     for (const att of attachments) {
+      const mimeType = att.mimeType || "application/octet-stream";
+      if (mimeType.startsWith("image/")) {
+        contentBlocks.push({
+          type: "image",
+          source: { type: "base64", media_type: mimeType, data: att.dataUrl },
+        });
+        continue;
+      }
       contentBlocks.push({
-        type: "image",
-        source: { type: "base64", media_type: att.mimeType, data: att.dataUrl },
+        type: "file",
+        fileName: att.fileName,
+        mimeType,
       });
     }
   }

@@ -67,6 +67,12 @@ type ImageBlock = {
   height?: number;
 };
 
+type FileBlock = {
+  fileName?: string;
+  mimeType: string;
+  source?: string;
+};
+
 type ImageRenderOptions = {
   localMediaPreviewRoots?: readonly string[];
   basePath?: string;
@@ -82,9 +88,26 @@ const managedImageBlobUrlResolvedCache = new Map<string, string>();
 const managedImageBlobUrlMissCache = new Map<string, number>();
 const MANAGED_IMAGE_BLOB_URL_MISS_RETRY_MS = 5_000;
 
+type RenderableFileBlock = FileBlock & {
+  displayName: string;
+};
+
 function appendImageBlock(images: ImageBlock[], block: ImageBlock) {
   if (!images.some((entry) => entry.url === block.url && entry.alt === block.alt)) {
     images.push(block);
+  }
+}
+
+function appendFileBlock(files: FileBlock[], block: FileBlock) {
+  if (
+    !files.some(
+      (entry) =>
+        entry.source === block.source &&
+        entry.fileName === block.fileName &&
+        entry.mimeType === block.mimeType,
+    )
+  ) {
+    files.push(block);
   }
 }
 
@@ -109,6 +132,25 @@ function getFileExtension(url: string): string | undefined {
   const fileName = source.split(/[\\/]/).pop() ?? source;
   const match = /\.([a-zA-Z0-9]+)$/.exec(fileName);
   return match?.[1]?.toLowerCase();
+}
+
+function getDisplayFileName(source: string): string | undefined {
+  const candidate = (() => {
+    try {
+      const trimmed = source.trim();
+      if (/^https?:\/\//i.test(trimmed)) {
+        return new URL(trimmed).pathname;
+      }
+      if (/^file:\/\//i.test(trimmed)) {
+        return decodeURIComponent(trimmed.replace(/^file:\/+/, "/"));
+      }
+    } catch {
+      // Fall back to the raw source when decoding fails.
+    }
+    return source;
+  })();
+  const fileName = candidate.split(/[\\/]/).pop()?.trim();
+  return fileName || undefined;
 }
 
 function isImageTranscriptMediaPath(path: string, mediaType: unknown): boolean {
@@ -209,6 +251,55 @@ function extractImages(message: unknown): ImageBlock[] {
   }
 
   return images;
+}
+
+function extractFiles(message: unknown): FileBlock[] {
+  const m = message as Record<string, unknown>;
+  const content = m.content;
+  const files: FileBlock[] = [];
+
+  if (Array.isArray(content)) {
+    for (const block of content) {
+      if (typeof block !== "object" || block === null) {
+        continue;
+      }
+      const b = block as Record<string, unknown>;
+      if (b.type !== "file") {
+        continue;
+      }
+      appendFileBlock(files, {
+        fileName: typeof b.fileName === "string" ? b.fileName : undefined,
+        mimeType: typeof b.mimeType === "string" ? b.mimeType : "application/octet-stream",
+      });
+    }
+  }
+
+  const transcriptMediaPaths = Array.isArray(m.MediaPaths)
+    ? m.MediaPaths.filter((value): value is string => typeof value === "string")
+    : typeof m.MediaPath === "string"
+      ? [m.MediaPath]
+      : [];
+  const transcriptMediaTypes = Array.isArray(m.MediaTypes)
+    ? m.MediaTypes
+    : typeof m.MediaType === "string"
+      ? [m.MediaType]
+      : [];
+  for (const [index, mediaPath] of transcriptMediaPaths.entries()) {
+    const mediaType =
+      typeof transcriptMediaTypes[index] === "string" && transcriptMediaTypes[index].trim()
+        ? transcriptMediaTypes[index].trim()
+        : "application/octet-stream";
+    if (isImageTranscriptMediaPath(mediaPath, mediaType)) {
+      continue;
+    }
+    appendFileBlock(files, {
+      fileName: getDisplayFileName(mediaPath),
+      mimeType: mediaType,
+      source: mediaPath,
+    });
+  }
+
+  return files;
 }
 
 export function renderReadingIndicatorGroup(
@@ -754,6 +845,30 @@ function resolveRenderableMessageImages(
   });
 }
 
+function resolveRenderableMessageFiles(
+  files: FileBlock[],
+  opts?: ImageRenderOptions,
+): RenderableFileBlock[] {
+  return files.flatMap((file) => {
+    const isLocalFile =
+      typeof file.source === "string" && isLocalAssistantAttachmentSource(file.source);
+    if (
+      isLocalFile &&
+      !isLocalAttachmentPreviewAllowed(file.source!, opts?.localMediaPreviewRoots ?? [])
+    ) {
+      return [];
+    }
+    const displayName =
+      file.fileName?.trim() || (file.source ? getDisplayFileName(file.source) : "");
+    return [
+      {
+        ...file,
+        displayName: displayName || file.mimeType,
+      },
+    ];
+  });
+}
+
 function renderMessageImages(images: RenderableImageBlock[], opts?: ImageRenderOptions) {
   if (images.length === 0) {
     return nothing;
@@ -788,6 +903,41 @@ function renderMessageImages(images: RenderableImageBlock[], opts?: ImageRenderO
   };
 
   return html` <div class="chat-message-images">${images.map((img) => renderImage(img))}</div> `;
+}
+
+function renderMessageFiles(files: RenderableFileBlock[]) {
+  if (files.length === 0) {
+    return nothing;
+  }
+
+  return html`
+    <div class="chat-message-files">
+      ${files.map(
+        (file) => html`
+          <div class="chat-message-file">
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.5"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              class="chat-message-file__icon"
+            >
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+              <polyline points="14 2 14 8 20 8" />
+              <line x1="16" y1="13" x2="8" y2="13" />
+              <line x1="16" y1="17" x2="8" y2="17" />
+              <polyline points="10 9 9 9 8 9" />
+            </svg>
+            ${file.displayName
+              ? html`<span class="chat-message-file__name">${file.displayName}</span>`
+              : html`<span class="chat-message-file__type">${file.mimeType}</span>`}
+          </div>
+        `,
+      )}
+    </div>
+  `;
 }
 
 function renderReplyPill(replyTarget: NormalizedMessage["replyTarget"]) {
@@ -1347,6 +1497,10 @@ function renderGroupedMessage(
   };
   const images = resolveRenderableMessageImages(extractImages(message), imageRenderOptions);
   const hasImages = images.length > 0;
+  const files = resolveRenderableMessageFiles(extractFiles(message), {
+    localMediaPreviewRoots: opts.localMediaPreviewRoots ?? [],
+  });
+  const hasFiles = files.length > 0;
 
   const normalizedMessage = normalizeMessage(message);
   const extractedText = normalizedMessage.content
@@ -1386,6 +1540,7 @@ function renderGroupedMessage(
     !markdown &&
     !visibleToolCards &&
     !hasImages &&
+    !hasFiles &&
     assistantAttachments.length === 0 &&
     assistantViewBlocks.length === 0 &&
     !normalizedMessage.replyTarget
@@ -1405,7 +1560,7 @@ function renderGroupedMessage(
     markdown && !toolSummaryLabel ? markdown.trim().replace(/\s+/g, " ").slice(0, 120) : "";
   const singleToolCard = toolCards.length === 1 ? toolCards[0] : null;
   const toolMessageLabel =
-    singleToolCard && !markdown && !hasImages
+    singleToolCard && !markdown && !hasImages && !hasFiles
       ? singleToolCard.outputText?.trim()
         ? "Tool output"
         : "Tool call"
@@ -1447,6 +1602,7 @@ function renderGroupedMessage(
                 ? html`
                     <div class="chat-tool-msg-body">
                       ${renderMessageImages(images, imageRenderOptions)}
+                      ${renderMessageFiles(files)}
                       ${renderAssistantAttachments(
                         assistantAttachments,
                         opts.localMediaPreviewRoots ?? [],
@@ -1478,7 +1634,7 @@ function renderGroupedMessage(
                             </div>`
                           : nothing}
                       ${hasToolCards
-                        ? singleToolCard && !markdown && !hasImages
+                        ? singleToolCard && !markdown && !hasImages && !hasFiles
                           ? renderExpandedToolCardContent(
                               singleToolCard,
                               onOpenSidebar,
@@ -1503,6 +1659,7 @@ function renderGroupedMessage(
           `
         : html`
             ${renderMessageImages(images, imageRenderOptions)}
+            ${renderMessageFiles(files)}
             ${renderAssistantAttachments(
               assistantAttachments,
               opts.localMediaPreviewRoots ?? [],

@@ -122,6 +122,8 @@ type AbortedPartialSnapshot = {
   abortOrigin: AbortOrigin;
 };
 
+const CHAT_SEND_ATTACHMENT_MAX_BYTES = 5_000_000;
+
 type ChatAbortRequester = {
   connId?: string;
   deviceId?: string;
@@ -738,12 +740,62 @@ async function persistChatSendImages(params: {
   return saved;
 }
 
+function isImageChatAttachmentMimeType(mimeType: string | null | undefined): boolean {
+  return typeof mimeType === "string" && mimeType.trim().toLowerCase().startsWith("image/");
+}
+
+function stripChatAttachmentDataUrlPrefix(content: string): string {
+  const trimmed = content.trim();
+  const match = /^data:[^;]+;base64,(.*)$/.exec(trimmed);
+  return match ? match[1] : trimmed;
+}
+
+async function persistChatSendNonImageAttachments(params: {
+  attachments: Array<{ content?: unknown; mimeType?: string; fileName?: string; type?: string }>;
+  client: GatewayRequestHandlerOptions["client"];
+  logGateway: GatewayRequestContext["logGateway"];
+}): Promise<SavedMedia[]> {
+  if (params.attachments.length === 0 || isAcpBridgeClient(params.client)) {
+    return [];
+  }
+  const saved: SavedMedia[] = [];
+  for (const att of params.attachments) {
+    if (typeof att.content !== "string") {
+      continue;
+    }
+    const mimeType =
+      typeof att.mimeType === "string" && att.mimeType.trim()
+        ? att.mimeType.trim()
+        : "application/octet-stream";
+    if (isImageChatAttachmentMimeType(mimeType)) {
+      continue;
+    }
+    try {
+      saved.push(
+        await saveMediaBuffer(
+          Buffer.from(stripChatAttachmentDataUrlPrefix(att.content), "base64"),
+          mimeType,
+          "inbound",
+          CHAT_SEND_ATTACHMENT_MAX_BYTES,
+          att.fileName,
+        ),
+      );
+    } catch (err) {
+      const label = att.fileName ?? att.type ?? "attachment";
+      params.logGateway.warn(
+        `chat.send: failed to persist inbound attachment ${label} (${mimeType}): ${formatForLog(err)}`,
+      );
+    }
+  }
+  return saved;
+}
+
 function buildChatSendTranscriptMessage(params: {
   message: string;
-  savedImages: SavedMedia[];
+  savedMedia: SavedMedia[];
   timestamp: number;
 }) {
-  const mediaFields = resolveChatSendTranscriptMediaFields(params.savedImages);
+  const mediaFields = resolveChatSendTranscriptMediaFields(params.savedMedia);
   return {
     role: "user" as const,
     content: params.message,
@@ -752,12 +804,12 @@ function buildChatSendTranscriptMessage(params: {
   };
 }
 
-function resolveChatSendTranscriptMediaFields(savedImages: SavedMedia[]) {
-  const mediaPaths = savedImages.map((entry) => entry.path);
+function resolveChatSendTranscriptMediaFields(savedMedia: SavedMedia[]) {
+  const mediaPaths = savedMedia.map((entry) => entry.path);
   if (mediaPaths.length === 0) {
     return {};
   }
-  const mediaTypes = savedImages.map((entry) => entry.contentType ?? "application/octet-stream");
+  const mediaTypes = savedMedia.map((entry) => entry.contentType ?? "application/octet-stream");
   return {
     MediaPath: mediaPaths[0],
     MediaPaths: mediaPaths,
@@ -785,9 +837,9 @@ async function rewriteChatSendUserTurnMediaPaths(params: {
   transcriptPath: string;
   sessionKey: string;
   message: string;
-  savedImages: SavedMedia[];
+  savedMedia: SavedMedia[];
 }) {
-  const mediaFields = resolveChatSendTranscriptMediaFields(params.savedImages);
+  const mediaFields = resolveChatSendTranscriptMediaFields(params.savedMedia);
   if (!("MediaPath" in mediaFields)) {
     return;
   }
@@ -2201,7 +2253,13 @@ export const chatHandlers: GatewayRequestHandlers = {
     const explicitOriginTargetsPlugin = explicitOriginTargetsPluginBinding(
       explicitOriginResult.value,
     );
-    if (normalizedAttachments.length > 0) {
+    const imageCandidateAttachments = normalizedAttachments.filter((attachment) =>
+      isImageChatAttachmentMimeType(attachment.mimeType),
+    );
+    const hasNonImageAttachments = normalizedAttachments.some(
+      (attachment) => !isImageChatAttachmentMimeType(attachment.mimeType),
+    );
+    if (imageCandidateAttachments.length > 0) {
       const modelRef = resolveSessionModelRef(cfg, entry, agentId);
       const supportsSessionModelImages = await resolveGatewayModelSupportsImages({
         loadGatewayModelCatalog: context.loadGatewayModelCatalog,
@@ -2215,11 +2273,15 @@ export const chatHandlers: GatewayRequestHandlers = {
         explicitOriginTargetsAcpSession(explicitOriginResult.value) ||
         explicitOriginTargetsPlugin;
       try {
-        const parsed = await parseMessageWithAttachments(inboundMessage, normalizedAttachments, {
-          maxBytes: 5_000_000,
-          log: context.logGateway,
-          supportsImages,
-        });
+        const parsed = await parseMessageWithAttachments(
+          inboundMessage,
+          imageCandidateAttachments,
+          {
+            maxBytes: CHAT_SEND_ATTACHMENT_MAX_BYTES,
+            log: context.logGateway,
+            supportsImages,
+          },
+        );
         parsedMessage = parsed.message;
         parsedImages = parsed.images;
         imageOrder = parsed.imageOrder;
@@ -2260,10 +2322,21 @@ export const chatHandlers: GatewayRequestHandlers = {
         client,
         logGateway: context.logGateway,
       });
-      const pluginBoundMediaFields =
-        explicitOriginTargetsPlugin && parsedImages.length > 0
-          ? resolveChatSendTranscriptMediaFields(await persistedImagesPromise)
-          : {};
+      const persistedNonImageAttachmentsPromise = hasNonImageAttachments
+        ? persistChatSendNonImageAttachments({
+            attachments: normalizedAttachments,
+            client,
+            logGateway: context.logGateway,
+          })
+        : Promise.resolve([]);
+      const persistedTranscriptMediaPromise = hasNonImageAttachments
+        ? Promise.all([persistedImagesPromise, persistedNonImageAttachmentsPromise]).then(
+            ([persistedImages, persistedNonImageAttachments]) => [
+              ...persistedImages,
+              ...persistedNonImageAttachments,
+            ],
+          )
+        : persistedImagesPromise;
 
       const trimmedMessage = parsedMessage.trim();
       const injectThinking = Boolean(
@@ -2293,6 +2366,9 @@ export const chatHandlers: GatewayRequestHandlers = {
       // Only BodyForAgent gets the timestamp — Body stays raw for UI display.
       // See: https://github.com/moltbot/moltbot/issues/3658
       const stampedMessage = injectTimestamp(messageForAgent, timestampOptsFromConfig(cfg));
+      const chatContextMediaFields = explicitOriginTargetsPlugin || hasNonImageAttachments
+        ? resolveChatSendTranscriptMediaFields(await persistedTranscriptMediaPromise)
+        : {};
 
       const ctx: MsgContext = {
         Body: messageForAgent,
@@ -2316,7 +2392,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         SenderName: clientInfo?.displayName,
         SenderUsername: clientInfo?.displayName,
         GatewayClientScopes: client?.connect?.scopes ?? [],
-        ...pluginBoundMediaFields,
+        ...chatContextMediaFields,
       };
 
       const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
@@ -2347,13 +2423,13 @@ export const chatHandlers: GatewayRequestHandlers = {
           if (!transcriptPath) {
             return;
           }
-          const persistedImages = await persistedImagesPromise;
+          const persistedMedia = await persistedTranscriptMediaPromise;
           emitSessionTranscriptUpdate({
             sessionFile: transcriptPath,
             sessionKey,
             message: buildChatSendTranscriptMessage({
               message: parsedMessage,
-              savedImages: persistedImages,
+              savedMedia: persistedMedia,
               timestamp: now,
             }),
           });
@@ -2384,7 +2460,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           transcriptPath,
           sessionKey,
           message: parsedMessage,
-          savedImages: await persistedImagesPromise,
+          savedMedia: await persistedTranscriptMediaPromise,
         });
       };
       const appendWebchatAgentMediaTranscriptIfNeeded = async (payload: ReplyPayload) => {

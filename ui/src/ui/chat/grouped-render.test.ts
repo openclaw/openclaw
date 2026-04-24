@@ -587,7 +587,7 @@ describe("grouped chat rendering", () => {
     expect(container.textContent).not.toContain("MEDIA:https://example.com/photo.png");
   });
 
-  it("renders allowed transcript images and skips blocked/non-image media", () => {
+  it("renders allowed transcript images and generic file badges while skipping blocked media", () => {
     const renderUserMedia = (message: unknown) => {
       const container = document.createElement("div");
       renderGroupedMessage(container, message, "user", {
@@ -663,6 +663,9 @@ describe("grouped chat rendering", () => {
       timestamp: Date.now(),
     });
     expect(container.querySelector(".chat-message-image")).toBeNull();
+    expect(container.querySelector(".chat-message-file__name")?.textContent).toBe(
+      "user-upload.pdf",
+    );
   });
 
   it("renders legacy input_image image_url blocks", () => {

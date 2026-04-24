@@ -2167,6 +2167,79 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(mockState.lastDispatchImageOrder).toEqual(["inline"]);
   });
 
+  it("persists non-image attachments for text-only session models without image-drop warnings", async () => {
+    createTranscriptFixture("openclaw-chat-send-text-only-files-");
+    mockState.finalText = "ok";
+    mockState.sessionEntry = {
+      modelProvider: "test-provider",
+      model: "text-only",
+    };
+    mockState.modelCatalog = [
+      {
+        provider: "test-provider",
+        id: "text-only",
+        name: "Text only",
+        input: ["text"],
+      },
+    ];
+    mockState.savedMediaResults = [
+      { path: "/tmp/chat-send-brief.pdf", contentType: "application/pdf" },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-text-only-files",
+      message: "review the file",
+      requestParams: {
+        attachments: [
+          {
+            type: "file",
+            mimeType: "application/pdf",
+            fileName: "brief.pdf",
+            content: Buffer.from("%PDF-1.4\n").toString("base64"),
+          },
+        ],
+      },
+      expectBroadcast: false,
+    });
+
+    const warnMock = context.logGateway.warn as unknown as ReturnType<typeof vi.fn>;
+    const userUpdate = mockState.emittedTranscriptUpdates.find(
+      (update) =>
+        typeof update.message === "object" &&
+        update.message !== null &&
+        (update.message as { role?: unknown }).role === "user",
+    );
+    const userMessage = userUpdate?.message as
+      | {
+          MediaPath?: string;
+          MediaPaths?: string[];
+          MediaType?: string;
+          MediaTypes?: string[];
+        }
+      | undefined;
+
+    expect(mockState.savedMediaCalls).toEqual([
+      expect.objectContaining({ contentType: "application/pdf", subdir: "inbound" }),
+    ]);
+    expect(mockState.lastDispatchImages).toBeUndefined();
+    expect(mockState.lastDispatchImageOrder).toBeUndefined();
+    expect(mockState.lastDispatchCtx?.MediaPath).toBe("/tmp/chat-send-brief.pdf");
+    expect(mockState.lastDispatchCtx?.MediaPaths).toEqual(["/tmp/chat-send-brief.pdf"]);
+    expect(mockState.lastDispatchCtx?.MediaType).toBe("application/pdf");
+    expect(mockState.lastDispatchCtx?.MediaTypes).toEqual(["application/pdf"]);
+    expect(userMessage?.MediaPath).toBe("/tmp/chat-send-brief.pdf");
+    expect(userMessage?.MediaPaths).toEqual(["/tmp/chat-send-brief.pdf"]);
+    expect(userMessage?.MediaType).toBe("application/pdf");
+    expect(userMessage?.MediaTypes).toEqual(["application/pdf"]);
+    expect(
+      warnMock.mock.calls.some(([message]) => String(message).includes("detected non-image")),
+    ).toBe(false);
+  });
+
   it("resolves attachment image support from the session agent model", async () => {
     createTranscriptFixture("openclaw-chat-send-agent-scoped-text-only-attachments-");
     mockState.finalText = "ok";

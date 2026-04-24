@@ -567,6 +567,31 @@ describe("media store", () => {
     });
   });
 
+  it("preserves OOXML mime for buffered docx uploads when the original filename is known", async () => {
+    await withTempStore(async (store) => {
+      const zip = new JSZip();
+      zip.file(
+        "[Content_Types].xml",
+        '<Types><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>',
+      );
+      zip.file("word/document.xml", "<w:document/>");
+      const buffer = await zip.generateAsync({ type: "nodebuffer" });
+
+      const saved = await store.saveMediaBuffer(
+        buffer,
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "inbound",
+        5 * 1024 * 1024,
+        "report.docx",
+      );
+
+      expect(saved.contentType).toBe(
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      );
+      expect(path.extname(saved.path)).toBe(".docx");
+    });
+  });
+
   it("prefers header mime extension when sniffed mime lacks mapping", async () => {
     await withTempStore(async (_store, home) => {
       vi.doMock("./mime.js", async () => {
