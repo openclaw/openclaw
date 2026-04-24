@@ -103,7 +103,15 @@ Workspace Developer Preview Program for Meet media APIs.
 
 ## Config
 
-Set config under `plugins.entries.google-meet.config`:
+The common Chrome realtime path only needs the plugin enabled, BlackHole, SoX,
+and an OpenAI key:
+
+```bash
+brew install blackhole-2ch sox
+export OPENAI_API_KEY=sk-...
+```
+
+Set the plugin config under `plugins.entries.google-meet.config`:
 
 ```json5
 {
@@ -111,82 +119,54 @@ Set config under `plugins.entries.google-meet.config`:
     entries: {
       "google-meet": {
         enabled: true,
-        config: {
-          defaultTransport: "chrome",
-          defaultMode: "realtime",
-          defaults: {
-            meeting: "https://meet.google.com/abc-defg-hij",
-          },
-          preview: {
-            enrollmentAcknowledged: false,
-          },
-          chrome: {
-            audioBackend: "blackhole-2ch",
-            launch: true,
-            browserProfile: "Default",
-            // Command-pair bridge: input writes 8 kHz G.711 mu-law audio to stdout.
-            audioInputCommand: [
-              "rec",
-              "-q",
-              "-t",
-              "raw",
-              "-r",
-              "8000",
-              "-c",
-              "1",
-              "-e",
-              "mu-law",
-              "-b",
-              "8",
-              "-",
-            ],
-            // Output reads 8 kHz G.711 mu-law audio from stdin.
-            audioOutputCommand: [
-              "play",
-              "-q",
-              "-t",
-              "raw",
-              "-r",
-              "8000",
-              "-c",
-              "1",
-              "-e",
-              "mu-law",
-              "-b",
-              "8",
-              "-",
-            ],
-          },
-          twilio: {
-            defaultDialInNumber: "+15551234567",
-            defaultPin: "123456",
-          },
-          voiceCall: {
-            enabled: true,
-            gatewayUrl: "ws://127.0.0.1:18789",
-            dtmfDelayMs: 2500,
-          },
-          realtime: {
-            provider: "openai",
-            model: "gpt-realtime",
-            instructions: "You are joining a private Google Meet as my OpenClaw agent. Keep replies brief unless asked.",
-            toolPolicy: "safe-read-only",
-            providers: {
-              openai: {
-                apiKey: { env: "OPENAI_API_KEY" },
-              },
-            },
-          },
-          auth: {
-            provider: "google-oauth",
-          },
-          oauth: {
-            clientId: "your-google-oauth-client-id.apps.googleusercontent.com",
-            refreshToken: "stored-refresh-token",
-          },
-        },
+        config: {},
       },
     },
+  },
+}
+```
+
+Defaults:
+
+- `defaultTransport: "chrome"`
+- `defaultMode: "realtime"`
+- `chrome.audioBackend: "blackhole-2ch"`
+- `chrome.audioInputCommand`: SoX `rec` command writing 8 kHz G.711 mu-law
+  audio to stdout
+- `chrome.audioOutputCommand`: SoX `play` command reading 8 kHz G.711 mu-law
+  audio from stdin
+- `realtime.provider: "openai"`
+- `realtime.toolPolicy: "safe-read-only"`
+- `realtime.instructions`: brief spoken replies, with
+  `openclaw_agent_consult` for deeper answers
+
+Optional overrides:
+
+```json5
+{
+  defaults: {
+    meeting: "https://meet.google.com/abc-defg-hij",
+  },
+  chrome: {
+    browserProfile: "Default",
+  },
+  realtime: {
+    toolPolicy: "owner",
+  },
+}
+```
+
+Twilio-only config:
+
+```json5
+{
+  defaultTransport: "twilio",
+  twilio: {
+    defaultDialInNumber: "+15551234567",
+    defaultPin: "123456",
+  },
+  voiceCall: {
+    gatewayUrl: "ws://127.0.0.1:18789",
   },
 }
 ```

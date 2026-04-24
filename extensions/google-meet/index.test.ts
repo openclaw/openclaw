@@ -113,12 +113,49 @@ describe("google-meet plugin", () => {
       preview: { enrollmentAcknowledged: false },
       defaultTransport: "chrome",
       defaultMode: "realtime",
-      chrome: { audioBackend: "blackhole-2ch", launch: true },
+      chrome: {
+        audioBackend: "blackhole-2ch",
+        launch: true,
+        audioInputCommand: [
+          "rec",
+          "-q",
+          "-t",
+          "raw",
+          "-r",
+          "8000",
+          "-c",
+          "1",
+          "-e",
+          "mu-law",
+          "-b",
+          "8",
+          "-",
+        ],
+        audioOutputCommand: [
+          "play",
+          "-q",
+          "-t",
+          "raw",
+          "-r",
+          "8000",
+          "-c",
+          "1",
+          "-e",
+          "mu-law",
+          "-b",
+          "8",
+          "-",
+        ],
+      },
       voiceCall: { enabled: true, requestTimeoutMs: 30000, dtmfDelayMs: 2500 },
-      realtime: { toolPolicy: "safe-read-only" },
+      realtime: {
+        provider: "openai",
+        toolPolicy: "safe-read-only",
+      },
       oauth: {},
       auth: { provider: "google-oauth" },
     });
+    expect(resolveGoogleMeetConfig({}).realtime.instructions).toContain("openclaw_agent_consult");
   });
 
   it("uses env fallbacks for OAuth, preview, and default meeting values", () => {

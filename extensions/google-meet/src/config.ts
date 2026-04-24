@@ -62,6 +62,41 @@ export type GoogleMeetConfig = {
   };
 };
 
+export const DEFAULT_GOOGLE_MEET_AUDIO_INPUT_COMMAND = [
+  "rec",
+  "-q",
+  "-t",
+  "raw",
+  "-r",
+  "8000",
+  "-c",
+  "1",
+  "-e",
+  "mu-law",
+  "-b",
+  "8",
+  "-",
+] as const;
+
+export const DEFAULT_GOOGLE_MEET_AUDIO_OUTPUT_COMMAND = [
+  "play",
+  "-q",
+  "-t",
+  "raw",
+  "-r",
+  "8000",
+  "-c",
+  "1",
+  "-e",
+  "mu-law",
+  "-b",
+  "8",
+  "-",
+] as const;
+
+export const DEFAULT_GOOGLE_MEET_REALTIME_INSTRUCTIONS =
+  "You are joining a private Google Meet as an OpenClaw agent. Keep spoken replies brief and natural. When a question needs deeper reasoning, current information, or tools, call openclaw_agent_consult before answering.";
+
 export const DEFAULT_GOOGLE_MEET_CONFIG: GoogleMeetConfig = {
   enabled: true,
   defaults: {},
@@ -74,6 +109,8 @@ export const DEFAULT_GOOGLE_MEET_CONFIG: GoogleMeetConfig = {
     audioBackend: "blackhole-2ch",
     launch: true,
     joinTimeoutMs: 30_000,
+    audioInputCommand: [...DEFAULT_GOOGLE_MEET_AUDIO_INPUT_COMMAND],
+    audioOutputCommand: [...DEFAULT_GOOGLE_MEET_AUDIO_OUTPUT_COMMAND],
   },
   twilio: {},
   voiceCall: {
@@ -82,6 +119,8 @@ export const DEFAULT_GOOGLE_MEET_CONFIG: GoogleMeetConfig = {
     dtmfDelayMs: 2_500,
   },
   realtime: {
+    provider: "openai",
+    instructions: DEFAULT_GOOGLE_MEET_REALTIME_INSTRUCTIONS,
     toolPolicy: "safe-read-only",
     providers: {},
   },
@@ -255,8 +294,12 @@ export function resolveGoogleMeetConfigWithEnv(
         chrome.joinTimeoutMs,
         DEFAULT_GOOGLE_MEET_CONFIG.chrome.joinTimeoutMs,
       ),
-      audioInputCommand: resolveStringArray(chrome.audioInputCommand),
-      audioOutputCommand: resolveStringArray(chrome.audioOutputCommand),
+      audioInputCommand: resolveStringArray(chrome.audioInputCommand) ?? [
+        ...DEFAULT_GOOGLE_MEET_AUDIO_INPUT_COMMAND,
+      ],
+      audioOutputCommand: resolveStringArray(chrome.audioOutputCommand) ?? [
+        ...DEFAULT_GOOGLE_MEET_AUDIO_OUTPUT_COMMAND,
+      ],
       audioBridgeCommand: resolveStringArray(chrome.audioBridgeCommand),
       audioBridgeHealthCommand: resolveStringArray(chrome.audioBridgeHealthCommand),
     },
@@ -280,9 +323,12 @@ export function resolveGoogleMeetConfigWithEnv(
       introMessage: normalizeOptionalString(voiceCall.introMessage),
     },
     realtime: {
-      provider: normalizeOptionalString(realtime.provider),
-      model: normalizeOptionalString(realtime.model),
-      instructions: normalizeOptionalString(realtime.instructions),
+      provider:
+        normalizeOptionalString(realtime.provider) ?? DEFAULT_GOOGLE_MEET_CONFIG.realtime.provider,
+      model: normalizeOptionalString(realtime.model) ?? DEFAULT_GOOGLE_MEET_CONFIG.realtime.model,
+      instructions:
+        normalizeOptionalString(realtime.instructions) ??
+        DEFAULT_GOOGLE_MEET_CONFIG.realtime.instructions,
       toolPolicy: resolveToolPolicy(
         realtime.toolPolicy,
         DEFAULT_GOOGLE_MEET_CONFIG.realtime.toolPolicy,
