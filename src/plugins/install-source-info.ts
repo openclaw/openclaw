@@ -1,4 +1,5 @@
 import { parseRegistryNpmSpec, type ParsedRegistryNpmSpec } from "../infra/npm-registry-spec.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { PluginPackageInstall } from "./manifest.js";
 
 export type PluginInstallSourceWarning =
@@ -46,8 +47,12 @@ function resolveNpmPinState(params: {
 export function describePluginInstallSource(
   install: PluginPackageInstall,
 ): PluginInstallSourceInfo {
-  const npmSpec = install.npmSpec?.trim();
-  const localPath = install.localPath?.trim();
+  const npmSpec = normalizeOptionalString(install.npmSpec);
+  const localPath = normalizeOptionalString(install.localPath);
+  const defaultChoice =
+    install.defaultChoice === "npm" || install.defaultChoice === "local"
+      ? install.defaultChoice
+      : undefined;
   const warnings: PluginInstallSourceWarning[] = [];
   let npm: PluginInstallNpmSourceInfo | undefined;
 
@@ -55,7 +60,7 @@ export function describePluginInstallSource(
     const parsed = parseRegistryNpmSpec(npmSpec);
     if (parsed) {
       const exactVersion = parsed.selectorKind === "exact-version";
-      const expectedIntegrity = install.expectedIntegrity?.trim();
+      const expectedIntegrity = normalizeOptionalString(install.expectedIntegrity);
       const hasIntegrity = Boolean(expectedIntegrity);
       if (!exactVersion) {
         warnings.push("npm-spec-floating");
@@ -78,7 +83,7 @@ export function describePluginInstallSource(
   }
 
   return {
-    ...(install.defaultChoice ? { defaultChoice: install.defaultChoice } : {}),
+    ...(defaultChoice ? { defaultChoice } : {}),
     ...(npm ? { npm } : {}),
     ...(localPath ? { local: { path: localPath } } : {}),
     warnings,

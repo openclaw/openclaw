@@ -61,6 +61,25 @@ describe("describePluginInstallSource", () => {
     });
   });
 
+  it("treats non-string integrity metadata as missing", () => {
+    expect(
+      describePluginInstallSource({
+        npmSpec: "@vendor/demo@1.2.3",
+        expectedIntegrity: 123,
+      } as never),
+    ).toEqual({
+      npm: {
+        spec: "@vendor/demo@1.2.3",
+        packageName: "@vendor/demo",
+        selector: "1.2.3",
+        selectorKind: "exact-version",
+        exactVersion: true,
+        pinState: "exact-without-integrity",
+      },
+      warnings: ["npm-spec-missing-integrity"],
+    });
+  });
+
   it("surfaces floating specs with integrity without rejecting them", () => {
     expect(
       describePluginInstallSource({
