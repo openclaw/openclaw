@@ -25,19 +25,19 @@ API-enabled model such as `openai/gpt-5.4` for `OPENAI_API_KEY` setups.
 
 ## OpenClaw feature coverage
 
-| OpenAI capability         | OpenClaw surface                                       | Status                                                 |
-| ------------------------- | ------------------------------------------------------ | ------------------------------------------------------ |
-| Chat / Responses          | `openai/<model>` model provider                        | Yes                                                    |
-| Codex subscription models | `openai-codex/<model>` with `openai-codex` OAuth       | Yes                                                    |
-| Codex app-server harness  | `openai/<model>` with `embeddedHarness.runtime: codex` | Yes                                                    |
-| Server-side web search    | Native OpenAI Responses tool                           | Yes, when web search is enabled and no provider pinned |
-| Images                    | `image_generate`                                       | Yes                                                    |
-| Videos                    | `video_generate`                                       | Yes                                                    |
-| Text-to-speech            | `messages.tts.provider: "openai"` / `tts`              | Yes                                                    |
-| Batch speech-to-text      | `tools.media.audio` / media understanding              | Yes                                                    |
-| Streaming speech-to-text  | Voice Call `streaming.provider: "openai"`              | Yes                                                    |
-| Realtime voice            | Voice Call `realtime.provider: "openai"`               | Yes                                                    |
-| Embeddings                | memory embedding provider                              | Yes                                                    |
+| OpenAI capability         | OpenClaw surface                                           | Status                                                 |
+| ------------------------- | ---------------------------------------------------------- | ------------------------------------------------------ |
+| Chat / Responses          | `openai/<model>` model provider                            | Yes                                                    |
+| Codex subscription models | `openai-codex/<model>` with `openai-codex` OAuth           | Yes                                                    |
+| Codex app-server harness  | `openai/<model>` with `embeddedHarness.runtime: codex`     | Yes                                                    |
+| Server-side web search    | Native OpenAI Responses tool                               | Yes, when web search is enabled and no provider pinned |
+| Images                    | `image_generate`                                           | Yes                                                    |
+| Videos                    | `video_generate`                                           | Yes                                                    |
+| Text-to-speech            | `messages.tts.provider: "openai"` / `tts`                  | Yes                                                    |
+| Batch speech-to-text      | `tools.media.audio` / media understanding                  | Yes                                                    |
+| Streaming speech-to-text  | Voice Call `streaming.provider: "openai"`                  | Yes                                                    |
+| Realtime voice            | Voice Call `realtime.provider: "openai"` / Control UI Talk | Yes                                                    |
+| Embeddings                | memory embedding provider                                  | Yes                                                    |
 
 ## Getting started
 
@@ -661,11 +661,13 @@ the Server-side compaction accordion below.
   </Accordion>
 
   <Accordion title="Server-side compaction (Responses API)">
-    For direct OpenAI Responses models (`openai/*` on `api.openai.com`), OpenClaw auto-enables server-side compaction:
+    For direct OpenAI Responses models (`openai/*` on `api.openai.com`), the OpenAI plugin's Pi-harness stream wrapper auto-enables server-side compaction:
 
     - Forces `store: true` (unless model compat sets `supportsStore: false`)
     - Injects `context_management: [{ type: "compaction", compact_threshold: ... }]`
     - Default `compact_threshold`: 70% of `contextWindow` (or `80000` when unavailable)
+
+    This applies to the built-in Pi harness path and to OpenAI provider hooks used by embedded runs. The native Codex app-server harness manages its own context through Codex and is configured separately with `agents.defaults.embeddedHarness.runtime`.
 
     <Tabs>
       <Tab title="Enable explicitly">

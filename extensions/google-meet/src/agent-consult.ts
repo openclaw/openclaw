@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
-import type { RealtimeVoiceTool } from "openclaw/plugin-sdk/realtime-voice";
+import {
+  REALTIME_VOICE_AGENT_CONSULT_TOOL,
+  REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+  type RealtimeVoiceTool,
+} from "openclaw/plugin-sdk/realtime-voice";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { GoogleMeetConfig, GoogleMeetToolPolicy } from "./config.js";
 
@@ -11,32 +15,8 @@ type AgentPayload = {
   isReasoning?: boolean;
 };
 
-export const GOOGLE_MEET_AGENT_CONSULT_TOOL_NAME = "openclaw_agent_consult";
-
-export const GOOGLE_MEET_AGENT_CONSULT_TOOL: RealtimeVoiceTool = {
-  type: "function",
-  name: GOOGLE_MEET_AGENT_CONSULT_TOOL_NAME,
-  description:
-    "Ask the full OpenClaw agent for deeper reasoning, current information, or tool-backed help before speaking in the meeting.",
-  parameters: {
-    type: "object",
-    properties: {
-      question: {
-        type: "string",
-        description: "The concrete question or task the meeting participant asked.",
-      },
-      context: {
-        type: "string",
-        description: "Optional relevant meeting context or transcript summary.",
-      },
-      responseStyle: {
-        type: "string",
-        description: "Optional style hint for the spoken answer.",
-      },
-    },
-    required: ["question"],
-  },
-};
+export const GOOGLE_MEET_AGENT_CONSULT_TOOL_NAME = REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME;
+export const GOOGLE_MEET_AGENT_CONSULT_TOOL = REALTIME_VOICE_AGENT_CONSULT_TOOL;
 
 export function resolveGoogleMeetRealtimeTools(policy: GoogleMeetToolPolicy): RealtimeVoiceTool[] {
   return policy === "none" ? [] : [GOOGLE_MEET_AGENT_CONSULT_TOOL];

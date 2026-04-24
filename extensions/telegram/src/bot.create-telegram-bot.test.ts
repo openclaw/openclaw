@@ -1,6 +1,7 @@
 import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { escapeRegExp, formatEnvelopeTimestamp } from "../../../test/helpers/envelope-timestamp.js";
+import type { TelegramBotOptions } from "./bot.types.js";
 const harness = await import("./bot.create-telegram-bot.test-harness.js");
 const conversationRuntime = await import("openclaw/plugin-sdk/conversation-runtime");
 const configRuntime = await import("openclaw/plugin-sdk/config-runtime");
@@ -41,14 +42,14 @@ const {
 } = harness;
 const { resolveTelegramFetch } = await import("./fetch.js");
 const {
-  createTelegramBot: createTelegramBotBase,
+  createTelegramBotCore: createTelegramBotBase,
   getTelegramSequentialKey,
   setTelegramBotRuntimeForTest,
-} = await import("./bot.js");
+} = await import("./bot-core.js");
 const { resetTelegramForumFlagCacheForTest } = await import("./bot/helpers.js");
 let createTelegramBot: (
-  opts: Parameters<typeof import("./bot.js").createTelegramBot>[0],
-) => ReturnType<typeof import("./bot.js").createTelegramBot>;
+  opts: TelegramBotOptions,
+) => ReturnType<typeof import("./bot-core.js").createTelegramBotCore>;
 
 const loadConfig = getLoadConfigMock();
 const loadSessionStore = getLoadSessionStoreMock();
@@ -144,6 +145,11 @@ async function withEnvAsync(env: Record<string, string | undefined>, fn: () => P
       }
     }
   }
+}
+
+async function flushTelegramTestMicrotasks() {
+  await Promise.resolve();
+  await Promise.resolve();
 }
 
 describe("createTelegramBot", () => {
@@ -278,9 +284,8 @@ describe("createTelegramBot", () => {
       events.push("busy:end");
     });
 
-    await vi.waitFor(() => {
-      expect(events).toEqual(["busy:start"]);
-    });
+    await flushTelegramTestMicrotasks();
+    expect(events).toEqual(["busy:start"]);
 
     await sequentializer(statusCtx, async () => {
       events.push("status");
@@ -1225,9 +1230,8 @@ describe("createTelegramBot", () => {
 
     try {
       await runMiddlewareChain({ update: { update_id: 13_100 } }, async () => {});
-      await vi.waitFor(() => {
-        expect(onUpdateId).toHaveBeenCalledWith(13_100);
-      });
+      await flushTelegramTestMicrotasks();
+      expect(onUpdateId).toHaveBeenCalledWith(13_100);
       expect(unhandled).toEqual([]);
     } finally {
       process.off("unhandledRejection", onUnhandledRejection);
@@ -1295,9 +1299,8 @@ describe("createTelegramBot", () => {
 
     await runMiddlewareChain({ update: { update_id: 201 } }, async () => {});
 
-    await vi.waitFor(() => {
-      expect(onUpdateId).toHaveBeenCalledWith(202);
-    });
+    await flushTelegramTestMicrotasks();
+    expect(onUpdateId).toHaveBeenCalledWith(202);
   });
   it("allows distinct callback_query ids without update_id", async () => {
     loadConfig.mockReturnValue({
@@ -3367,9 +3370,8 @@ describe("createTelegramBot", () => {
       }),
     ).resolves.toBeUndefined();
 
-    await vi.waitFor(() => {
-      expect(onUpdateId).toHaveBeenCalledWith(777);
-    });
+    await flushTelegramTestMicrotasks();
+    expect(onUpdateId).toHaveBeenCalledWith(777);
 
     await runTelegramMiddlewareChain({
       ctx,

@@ -564,3 +564,9 @@ Related:
 - [/gateway/pairing](/gateway/pairing)
 - [/gateway/authentication](/gateway/authentication)
 - [/gateway/background-process](/gateway/background-process)
+
+## Related
+
+- [Gateway runbook](/gateway)
+- [Doctor](/gateway/doctor)
+- [FAQ](/help/faq)

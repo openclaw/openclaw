@@ -288,4 +288,4 @@ This applies whenever OpenClaw regenerates `models.json`, including command-driv
 - [Image Generation](/tools/image-generation) — image model configuration
 - [Music Generation](/tools/music-generation) — music model configuration
 - [Video Generation](/tools/video-generation) — video model configuration
-- [Configuration Reference](/gateway/configuration-reference#agent-defaults) — model config keys
+- [Configuration Reference](/gateway/config-agents#agent-defaults) — model config keys

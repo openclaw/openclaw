@@ -20,7 +20,10 @@ export function modelRowSourcesRequireRegistry(params: {
   all?: boolean;
   useProviderCatalogFastPath: boolean;
 }): boolean {
-  return !(params.all && params.useProviderCatalogFastPath);
+  if (!params.all) {
+    return false;
+  }
+  return !params.useProviderCatalogFastPath;
 }
 
 export async function appendAllModelRowSources(params: AllModelRowSources): Promise<void> {

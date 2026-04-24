@@ -18,6 +18,7 @@ import {
 import { InputHistory } from "../chat/input-history.ts";
 import { PinnedMessages } from "../chat/pinned-messages.ts";
 import { getPinnedMessageSummary } from "../chat/pinned-summary.ts";
+import type { RealtimeTalkStatus } from "../chat/realtime-talk.ts";
 import { renderChatRunControls } from "../chat/run-controls.ts";
 import { getOrCreateSessionCacheValue } from "../chat/session-cache.ts";
 import { renderSideResult } from "../chat/side-result-render.ts";
@@ -65,6 +66,10 @@ export type ChatProps = {
   assistantAvatarUrl?: string | null;
   draft: string;
   queue: ChatQueueItem[];
+  realtimeTalkActive?: boolean;
+  realtimeTalkStatus?: RealtimeTalkStatus;
+  realtimeTalkDetail?: string | null;
+  realtimeTalkTranscript?: string | null;
   connected: boolean;
   canSend: boolean;
   disabledReason: string | null;
@@ -95,6 +100,7 @@ export type ChatProps = {
   onDraftChange: (next: string) => void;
   onRequestUpdate?: () => void;
   onSend: () => void;
+  onToggleRealtimeTalk?: () => void;
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;
   onQueueSteer?: (id: string) => void;
@@ -1207,6 +1213,19 @@ export function renderChat(props: ChatProps) {
         ${vs.sttRecording && vs.sttInterimText
           ? html`<div class="agent-chat__stt-interim">${vs.sttInterimText}</div>`
           : nothing}
+        ${props.realtimeTalkActive || props.realtimeTalkDetail || props.realtimeTalkTranscript
+          ? html`
+              <div class="agent-chat__stt-interim agent-chat__talk-status">
+                ${props.realtimeTalkDetail ??
+                props.realtimeTalkTranscript ??
+                (props.realtimeTalkStatus === "thinking"
+                  ? "Asking OpenClaw..."
+                  : props.realtimeTalkStatus === "connecting"
+                    ? "Connecting Talk..."
+                    : "Talk live")}
+              </div>
+            `
+          : nothing}
 
         <textarea
           ${ref((el) => el && adjustTextareaHeight(el as HTMLTextAreaElement))}
@@ -1285,6 +1304,21 @@ export function renderChat(props: ChatProps) {
                     ?disabled=${!props.connected}
                   >
                     ${vs.sttRecording ? icons.micOff : icons.mic}
+                  </button>
+                `
+              : nothing}
+            ${props.onToggleRealtimeTalk
+              ? html`
+                  <button
+                    class="agent-chat__input-btn ${props.realtimeTalkActive
+                      ? "agent-chat__input-btn--talk"
+                      : ""}"
+                    @click=${props.onToggleRealtimeTalk}
+                    title=${props.realtimeTalkActive ? "Stop Talk" : "Start Talk"}
+                    aria-label=${props.realtimeTalkActive ? "Stop Talk" : "Start Talk"}
+                    ?disabled=${!props.connected}
+                  >
+                    ${props.realtimeTalkActive ? icons.volume2 : icons.radio}
                   </button>
                 `
               : nothing}

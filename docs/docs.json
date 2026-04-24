@@ -1155,7 +1155,8 @@
                       "plugins/sdk-setup",
                       "plugins/sdk-testing",
                       "plugins/manifest",
-                      "plugins/architecture"
+                      "plugins/architecture",
+                      "plugins/architecture-internals"
                     ]
                   }
                 ]
@@ -1209,6 +1210,7 @@
                     "group": "Web Browser",
                     "pages": [
                       "tools/browser",
+                      "tools/browser-control",
                       "tools/browser-login",
                       "tools/browser-linux-troubleshooting",
                       "tools/browser-wsl2-windows-remote-cdp-troubleshooting"
@@ -1241,6 +1243,7 @@
                   "tools/agent-send",
                   "tools/subagents",
                   "tools/acp-agents",
+                  "tools/acp-agents-setup",
                   "tools/multi-agent-sandbox-tools"
                 ]
               }
@@ -1363,6 +1366,8 @@
                     "pages": [
                       "gateway/configuration",
                       "gateway/configuration-reference",
+                      "gateway/config-agents",
+                      "gateway/config-channels",
                       "gateway/configuration-examples",
                       "gateway/authentication",
                       "auth-credential-semantics",
@@ -1614,6 +1619,7 @@
                   "help/environment",
                   "help/debugging",
                   "help/testing",
+                  "help/testing-live",
                   "help/scripts",
                   "debug/node-issue",
                   "diagnostics/flags"

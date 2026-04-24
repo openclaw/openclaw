@@ -1308,7 +1308,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 
     Setup walkthrough + example config: [Groups: personal DMs + public groups](/channels/groups#pattern-personal-dms-public-groups-single-agent)
 
-    Key config reference: [Gateway configuration](/gateway/configuration-reference#agentsdefaultssandbox)
+    Key config reference: [Gateway configuration](/gateway/config-agents#agentsdefaultssandbox)
 
   </Accordion>
 

@@ -33,6 +33,20 @@ brew install blackhole-2ch sox
 export OPENAI_API_KEY=sk-...
 ```
 
+`blackhole-2ch` installs the `BlackHole 2ch` virtual audio device. Homebrew's
+installer requires a reboot before macOS exposes the device:
+
+```bash
+sudo reboot
+```
+
+After reboot, verify both pieces:
+
+```bash
+system_profiler SPAudioDataType | grep -i BlackHole
+command -v rec play
+```
+
 Enable the plugin:
 
 ```json5
@@ -73,6 +87,21 @@ Chrome joins as the signed-in Chrome profile. In Meet, pick `BlackHole 2ch` for
 the microphone/speaker path used by OpenClaw. For clean duplex audio, use
 separate virtual devices or a Loopback-style graph; a single BlackHole device is
 enough for a first smoke test but can echo.
+
+## Install notes
+
+The Chrome realtime default uses two external tools:
+
+- `sox`: command-line audio utility. The plugin uses its `rec` and `play`
+  commands for the default 8 kHz G.711 mu-law audio bridge.
+- `blackhole-2ch`: macOS virtual audio driver. It creates the `BlackHole 2ch`
+  audio device that Chrome/Meet can route through.
+
+OpenClaw does not bundle or redistribute either package. The docs ask users to
+install them as host dependencies through Homebrew. SoX is licensed as
+`LGPL-2.0-only AND GPL-2.0-only`; BlackHole is GPL-3.0. If you build an
+installer or appliance that bundles BlackHole with OpenClaw, review BlackHole's
+upstream licensing terms or get a separate license from Existential Audio.
 
 ## Transports
 
