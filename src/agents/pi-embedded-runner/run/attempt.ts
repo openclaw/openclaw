@@ -728,7 +728,10 @@ export async function runEmbeddedAttempt(
       senderIsOwner: params.senderIsOwner,
       warn: (message) => log.warn(message),
     });
-    const effectiveTools = [...tools, ...filteredBundledTools];
+    const effectiveTools = applyEmbeddedAttemptToolsAllow(
+      [...tools, ...filteredBundledTools],
+      params.toolsAllow,
+    );
     const allowedToolNames = collectAllowedToolNames({
       tools: effectiveTools,
       clientTools,
