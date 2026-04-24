@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { REDACTED_SENTINEL } from "../config/redact-snapshot.js";
+import {
+  redactPathForSupport,
+  type SupportRedactionContext,
+} from "../logging/diagnostic-support-redaction.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 
@@ -175,6 +179,75 @@ describe("trajectory metadata", () => {
       id: "weather",
       filePath: "/tmp/workspace/skills/weather/SKILL.md",
     });
+  });
+
+  it("tolerates skill snapshot entries with missing name/paths (symlink-escape rejects)", () => {
+    const metadata = buildTrajectoryRunMetadata({
+      workspaceDir: "/tmp/workspace",
+      sessionFile: "/tmp/workspace/session.jsonl",
+      timeoutMs: 30_000,
+      skillsSnapshot: {
+        prompt: "skill prompt",
+        version: 1,
+        skills: [],
+        resolvedSkills: [
+          {
+            name: "alpha",
+            description: "valid entry",
+            filePath: "/tmp/workspace/skills/alpha/SKILL.md",
+            baseDir: "/tmp/workspace/skills/alpha",
+            source: "workspace",
+            sourceInfo: {},
+            disableModelInvocation: false,
+          },
+          {
+            name: undefined as unknown as string,
+            description: undefined,
+            filePath: undefined as unknown as string,
+            baseDir: undefined as unknown as string,
+            source: "workspace",
+            sourceInfo: undefined,
+            disableModelInvocation: false,
+          },
+        ],
+      },
+    });
+
+    const skills = metadata.skills as { entries?: Array<{ name?: string }> };
+    expect(skills.entries?.map((e) => e.name)).toEqual(["alpha"]);
+  });
+
+  it("falls back to skills list when every resolvedSkills entry is partial", () => {
+    const metadata = buildTrajectoryRunMetadata({
+      workspaceDir: "/tmp/workspace",
+      sessionFile: "/tmp/workspace/session.jsonl",
+      timeoutMs: 30_000,
+      skillsSnapshot: {
+        prompt: "skill prompt",
+        version: 1,
+        skills: [{ name: "fallback-skill" }],
+        resolvedSkills: [
+          {
+            name: undefined as unknown as string,
+            description: undefined,
+            filePath: undefined as unknown as string,
+            baseDir: undefined as unknown as string,
+            source: "workspace",
+            sourceInfo: undefined,
+            disableModelInvocation: false,
+          },
+        ],
+      },
+    });
+
+    const skills = metadata.skills as { entries?: Array<{ name?: string }> };
+    expect(skills.entries?.map((e) => e.name)).toEqual(["fallback-skill"]);
+  });
+
+  it("redactPathForSupport returns empty string for null/undefined input", () => {
+    const ctx: SupportRedactionContext = { env: {}, stateDir: "/tmp/.openclaw" };
+    expect(redactPathForSupport(undefined, ctx)).toBe("");
+    expect(redactPathForSupport(null, ctx)).toBe("");
   });
 
   it("captures final artifact summaries for export sidecars", () => {
