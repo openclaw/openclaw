@@ -47,6 +47,35 @@ function hasDeliberateSilentTerminalReply(result: EmbeddedPiRunResult): boolean 
   );
 }
 
+function classifyHarnessResult(params: {
+  provider: string;
+  model: string;
+  result: EmbeddedPiRunResult;
+}): ModelFallbackResultClassification {
+  switch (params.result.meta.agentHarnessResultClassification) {
+    case "empty":
+      return {
+        message: `${params.provider}/${params.model} ended without a visible assistant reply`,
+        reason: "format",
+        code: "empty_result",
+      };
+    case "reasoning-only":
+      return {
+        message: `${params.provider}/${params.model} ended with reasoning only`,
+        reason: "format",
+        code: "reasoning_only_result",
+      };
+    case "planning-only":
+      return {
+        message: `${params.provider}/${params.model} exhausted plan-only retries without taking action`,
+        reason: "format",
+        code: "planning_only_result",
+      };
+    default:
+      return null;
+  }
+}
+
 export function classifyEmbeddedPiRunResultForModelFallback(params: {
   provider: string;
   model: string;
@@ -67,6 +96,15 @@ export function classifyEmbeddedPiRunResultForModelFallback(params: {
   }
   if (hasOutboundSideEffects(params.result)) {
     return null;
+  }
+
+  const harnessClassification = classifyHarnessResult({
+    provider: params.provider,
+    model: params.model,
+    result: params.result,
+  });
+  if (harnessClassification) {
+    return harnessClassification;
   }
 
   const payloads = params.result.payloads ?? [];

@@ -561,6 +561,46 @@ describe("runWithModelFallback", () => {
     ).toBeNull();
   });
 
+  it("uses harness-owned terminal classification for GPT-5 fallback", () => {
+    const runResult: EmbeddedPiRunResult = {
+      payloads: [],
+      meta: {
+        durationMs: 1,
+        agentHarnessResultClassification: "planning-only",
+      },
+    };
+
+    expect(
+      classifyEmbeddedPiRunResultForModelFallback({
+        provider: "codex",
+        model: "gpt-5.4",
+        result: runResult,
+      }),
+    ).toMatchObject({
+      code: "planning_only_result",
+      reason: "format",
+    });
+  });
+
+  it("keeps aborted harness-classified GPT-5 runs out of fallback", () => {
+    const runResult: EmbeddedPiRunResult = {
+      payloads: [],
+      meta: {
+        durationMs: 1,
+        aborted: true,
+        agentHarnessResultClassification: "empty",
+      },
+    };
+
+    expect(
+      classifyEmbeddedPiRunResultForModelFallback({
+        provider: "codex",
+        model: "gpt-5.4",
+        result: runResult,
+      }),
+    ).toBeNull();
+  });
+
   it("passes original unknown errors to onError during fallback", async () => {
     const cfg = makeCfg();
     const unknownError = new Error("provider misbehaved");

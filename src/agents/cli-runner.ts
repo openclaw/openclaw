@@ -199,6 +199,7 @@ export async function runPreparedCliAgent(
           sessionId: params.sessionId,
           provider: params.provider,
           model: context.modelId,
+          resolvedRef: `${params.provider}/${context.modelId}`,
           assistantTexts,
           ...(lastAssistant ? { lastAssistant } : {}),
           ...(output.usage ? { usage: output.usage } : {}),

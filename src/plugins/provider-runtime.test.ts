@@ -53,7 +53,10 @@ let applyProviderResolvedModelCompatWithPlugins: typeof import("./provider-runti
 let applyProviderResolvedTransportWithPlugin: typeof import("./provider-runtime.js").applyProviderResolvedTransportWithPlugin;
 let normalizeProviderTransportWithPlugin: typeof import("./provider-runtime.js").normalizeProviderTransportWithPlugin;
 let prepareProviderExtraParams: typeof import("./provider-runtime.js").prepareProviderExtraParams;
+let resolveProviderAuthProfileId: typeof import("./provider-runtime.js").resolveProviderAuthProfileId;
 let resolveProviderConfigApiKeyWithPlugin: typeof import("./provider-runtime.js").resolveProviderConfigApiKeyWithPlugin;
+let resolveProviderExtraParamsForTransport: typeof import("./provider-runtime.js").resolveProviderExtraParamsForTransport;
+let resolveProviderFollowupFallbackRoute: typeof import("./provider-runtime.js").resolveProviderFollowupFallbackRoute;
 let resolveProviderStreamFn: typeof import("./provider-runtime.js").resolveProviderStreamFn;
 let resolveProviderCacheTtlEligibility: typeof import("./provider-runtime.js").resolveProviderCacheTtlEligibility;
 let resolveProviderBinaryThinking: typeof import("./provider-runtime.js").resolveProviderBinaryThinking;
@@ -280,7 +283,10 @@ describe("provider-runtime", () => {
       normalizeProviderModelIdWithPlugin,
       normalizeProviderTransportWithPlugin,
       prepareProviderExtraParams,
+      resolveProviderAuthProfileId,
       resolveProviderConfigApiKeyWithPlugin,
+      resolveProviderExtraParamsForTransport,
+      resolveProviderFollowupFallbackRoute,
       resolveProviderStreamFn,
       resolveProviderCacheTtlEligibility,
       resolveProviderBinaryThinking,
@@ -528,6 +534,84 @@ describe("provider-runtime", () => {
     });
   });
 
+  it("exposes provider-owned transport extra params", () => {
+    const extraParamsForTransport = vi.fn((_ctx) => ({
+      patch: {
+        providerTransportPatch: true,
+      },
+    }));
+    resolvePluginProvidersMock.mockReturnValue([
+      {
+        id: DEMO_PROVIDER_ID,
+        label: "Demo",
+        auth: [],
+        extraParamsForTransport,
+      } satisfies ProviderPlugin,
+    ]);
+
+    expect(
+      resolveProviderExtraParamsForTransport({
+        provider: DEMO_PROVIDER_ID,
+        context: createDemoResolvedModelContext({
+          extraParams: { transport: "websocket" },
+          transport: "websocket" as const,
+        }),
+      }),
+    ).toEqual({
+      patch: {
+        providerTransportPatch: true,
+      },
+    });
+    expect(extraParamsForTransport).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: DEMO_PROVIDER_ID,
+        modelId: MODEL.id,
+        model: MODEL,
+        transport: "websocket",
+      }),
+    );
+  });
+
+  it("exposes provider-owned auth profile and fallback route seams", () => {
+    const resolveAuthProfileId = vi.fn(() => "profile-b");
+    const followupFallbackRoute = vi.fn(() => ({
+      route: "dispatcher" as const,
+      reason: "origin unavailable",
+    }));
+    resolvePluginProvidersMock.mockReturnValue([
+      {
+        id: DEMO_PROVIDER_ID,
+        label: "Demo",
+        auth: [],
+        resolveAuthProfileId,
+        followupFallbackRoute,
+      } satisfies ProviderPlugin,
+    ]);
+
+    expect(
+      resolveProviderAuthProfileId({
+        provider: DEMO_PROVIDER_ID,
+        context: createDemoRuntimeContext({
+          profileOrder: ["profile-a", "profile-b"],
+          authStore: { version: 1, profiles: {}, order: {} },
+        }),
+      }),
+    ).toBe("profile-b");
+    expect(
+      resolveProviderFollowupFallbackRoute({
+        provider: DEMO_PROVIDER_ID,
+        context: createDemoRuntimeContext({
+          payload: { text: "hello" },
+          originRoutable: false,
+          dispatcherAvailable: true,
+        }),
+      }),
+    ).toEqual({
+      route: "dispatcher",
+      reason: "origin unavailable",
+    });
+  });
+
   it("applies the shared GPT-5 prompt overlay for any provider", () => {
     const contribution = resolveProviderSystemPromptContribution({
       provider: "openrouter",
@@ -565,6 +649,45 @@ describe("provider-runtime", () => {
 
     expect(contribution?.stablePrefix).toContain("<persona_latch>");
     expect(contribution?.sectionOverrides).toEqual({});
+  });
+
+  it("lets provider-owned prompt overlays compose after the built-in GPT-5 overlay", () => {
+    const resolvePromptOverlay = vi.fn((ctx) => ({
+      stablePrefix: "provider overlay",
+      sectionOverrides: {
+        execution_bias: ctx.baseOverlay?.stablePrefix ? "saw built-in overlay" : "missing",
+      },
+    }));
+    resolvePluginProvidersMock.mockReturnValue([
+      {
+        id: "openrouter",
+        label: "OpenRouter",
+        auth: [],
+        resolvePromptOverlay,
+      } satisfies ProviderPlugin,
+    ]);
+
+    const contribution = resolveProviderSystemPromptContribution({
+      provider: "openrouter",
+      context: {
+        provider: "openrouter",
+        modelId: "openai/gpt-5.4",
+        promptMode: "full",
+      } as never,
+    });
+
+    expect(contribution?.stablePrefix).toContain("<persona_latch>");
+    expect(contribution?.stablePrefix).toContain("provider overlay");
+    expect(contribution?.sectionOverrides?.execution_bias).toBe("saw built-in overlay");
+    expect(resolvePromptOverlay).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openrouter",
+        modelId: "openai/gpt-5.4",
+        baseOverlay: expect.objectContaining({
+          stablePrefix: expect.stringContaining("<persona_latch>"),
+        }),
+      }),
+    );
   });
 
   it("ignores OpenAI plugin personality fallback for non-OpenAI GPT-5 providers", () => {

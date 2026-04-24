@@ -192,6 +192,14 @@ export type PluginHookLlmOutputEvent = {
   sessionId: string;
   provider: string;
   model: string;
+  /**
+   * Fully resolved provider/model ref used for the call.
+   *
+   * This intentionally keeps the provider prefix so operator tooling can
+   * distinguish e.g. openai-codex/gpt-5.4 from codex/gpt-5.4 even when display
+   * names collapse to just the model id.
+   */
+  resolvedRef?: string;
   assistantTexts: string[];
   lastAssistant?: unknown;
   usage?: {

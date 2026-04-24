@@ -240,7 +240,6 @@ describe("createTelegramBot", () => {
   it("lets /status bypass a busy Telegram topic lane", async () => {
     installPerKeySequentializer();
     loadConfig.mockReturnValue({
-      commands: { native: true },
       channels: {
         telegram: {
           dmPolicy: "open",

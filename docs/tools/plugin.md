@@ -9,8 +9,8 @@ sidebarTitle: "Install and Configure"
 ---
 
 Plugins extend OpenClaw with new capabilities: channels, model providers,
-tools, skills, speech, realtime transcription, realtime voice,
-media-understanding, image generation, video generation, web fetch, web
+agent harnesses, tools, skills, speech, realtime transcription, realtime
+voice, media-understanding, image generation, video generation, web fetch, web
 search, and more. Some plugins are **core** (shipped with OpenClaw), others
 are **external** (published on npm by the community).
 
