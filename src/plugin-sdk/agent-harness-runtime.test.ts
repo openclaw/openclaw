@@ -29,13 +29,25 @@ describe("classifyAgentHarnessTerminalOutcome", () => {
     ).toBeUndefined();
   });
 
-  it("does not classify visible assistant text including NO_REPLY", () => {
+  it("does not classify deliberate silent replies such as NO_REPLY", () => {
     expect(
       classifyAgentHarnessTerminalOutcome({
         assistantTexts: ["NO_REPLY"],
         reasoningText: "",
         planText: "",
         promptError: null,
+        turnCompleted: true,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("treats empty-string prompt errors as terminal errors", () => {
+    expect(
+      classifyAgentHarnessTerminalOutcome({
+        assistantTexts: [],
+        reasoningText: "",
+        planText: "",
+        promptError: "",
         turnCompleted: true,
       }),
     ).toBeUndefined();

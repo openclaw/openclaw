@@ -158,17 +158,19 @@ export type AgentHarnessTerminalOutcomeClassification = NonNullable<
 >;
 
 /**
- * Classify terminal harness turns that completed without user-visible assistant
- * text. This is intentionally SDK-level so plugin harness adapters such as
- * Codex preserve the same OpenClaw-owned fallback signals as the built-in PI
- * path without re-implementing terminal-result policy.
+ * Classify terminal harness turns that completed without assistant output that
+ * should advance fallback. Deliberate silent replies such as NO_REPLY count as
+ * intentional output, while whitespace-only text remains fallback-eligible.
+ * This is intentionally SDK-level so plugin harness adapters such as Codex
+ * preserve the same OpenClaw-owned fallback signals as the built-in PI path
+ * without re-implementing terminal-result policy.
  */
 export function classifyAgentHarnessTerminalOutcome(
   params: AgentHarnessTerminalOutcomeInput,
 ): AgentHarnessTerminalOutcomeClassification | undefined {
   if (
     !params.turnCompleted ||
-    params.promptError ||
+    (params.promptError !== undefined && params.promptError !== null) ||
     hasVisibleAssistantText(params.assistantTexts)
   ) {
     return undefined;
