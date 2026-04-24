@@ -1051,6 +1051,7 @@ async function runStartupCatchupCandidate(
     startedAt,
   });
   emit(state, { jobId: candidate.job.id, action: "started", runAtMs: startedAt });
+  markCronJobActive(candidate.job.id);
   try {
     const result = await executeJobCoreWithTimeout(state, candidate.job);
     return {
@@ -1077,6 +1078,8 @@ async function runStartupCatchupCandidate(
       startedAt,
       endedAt: state.deps.nowMs(),
     };
+  } finally {
+    clearCronJobActive(candidate.job.id);
   }
 }
 
