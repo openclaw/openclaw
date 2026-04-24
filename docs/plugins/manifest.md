@@ -591,10 +591,12 @@ registry loading. Invalid values are rejected; newer-but-valid values skip the
 plugin on older hosts.
 
 Exact npm version pinning already lives in `npmSpec`, for example
-`"npmSpec": "@wecom/wecom-openclaw-plugin@1.2.3"`. Pair that with
-`expectedIntegrity` when you want update flows to fail closed if the fetched
-npm artifact no longer matches the pinned release. Interactive onboarding
-offers trusted registry npm specs, including bare package names and dist-tags.
+`"npmSpec": "@wecom/wecom-openclaw-plugin@1.2.3"`. Official external catalog
+entries should pair exact specs with `expectedIntegrity` so update flows fail
+closed if the fetched npm artifact no longer matches the pinned release.
+Interactive onboarding still offers trusted registry npm specs, including bare
+package names and dist-tags, for compatibility. Catalog diagnostics can
+distinguish exact, floating, integrity-pinned, and missing-integrity sources.
 When `expectedIntegrity` is present, install/update flows enforce it; when it
 is omitted, the registry resolution is recorded without an integrity pin.
 
