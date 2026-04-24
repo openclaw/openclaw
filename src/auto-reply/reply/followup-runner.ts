@@ -13,7 +13,7 @@ import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
-import { registerAgentRunContext } from "../../infra/agent-events.js";
+import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
@@ -265,6 +265,13 @@ export function createFollowupRunner(params: {
                     bootstrapPromptWarningSignaturesSeen.length - 1
                   ],
                 onAgentEvent: (evt) => {
+                  if (evt.stream.startsWith("codex_app_server.")) {
+                    emitAgentEvent({
+                      runId,
+                      stream: evt.stream,
+                      data: evt.data,
+                    });
+                  }
                   if (evt.stream !== "compaction") {
                     return;
                   }

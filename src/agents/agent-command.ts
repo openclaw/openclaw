@@ -906,6 +906,13 @@ async function agentCommandInternal(
               sessionHasHistory:
                 !isNewSession || (await attemptExecutionRuntime.sessionFileHasContent(sessionFile)),
               onAgentEvent: (evt) => {
+                if (evt.stream.startsWith("codex_app_server.")) {
+                  emitAgentEvent({
+                    runId,
+                    stream: evt.stream,
+                    data: evt.data ?? {},
+                  });
+                }
                 if (
                   evt.stream === "lifecycle" &&
                   typeof evt.data?.phase === "string" &&

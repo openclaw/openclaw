@@ -21,6 +21,7 @@ import {
 } from "../agent-scope.js";
 import {
   type AuthProfileFailureReason,
+  type AuthProfileStore,
   markAuthProfileFailure,
   resolveAuthProfileEligibility,
   markAuthProfileGood,
@@ -38,6 +39,7 @@ import {
   FailoverError,
   resolveFailoverStatus,
 } from "../failover-error.js";
+import { selectAgentHarness } from "../harness/selection.js";
 import { LiveSessionModelSwitchError } from "../live-model-switch-error.js";
 import { shouldSwitchToLiveModel, clearLiveModelSwitchPending } from "../live-model-switch.js";
 import {
@@ -139,6 +141,13 @@ import { createUsageAccumulator, mergeUsageIntoAccumulator } from "./usage-accum
 type ApiKeyInfo = ResolvedProviderAuth;
 
 const MAX_SAME_MODEL_IDLE_TIMEOUT_RETRIES = 1;
+
+function createEmptyAuthProfileStore(): AuthProfileStore {
+  return {
+    version: 1,
+    profiles: {},
+  };
+}
 
 function buildTraceToolSummary(params: {
   toolMetas: Array<{ toolName: string; meta?: string }>;
@@ -291,7 +300,6 @@ export async function runEmbeddedPiAgent(
         agentId: params.agentId,
         sessionKey: normalizedSessionKey,
       });
-      await ensureOpenClawModelsJson(params.config, agentDir);
       const resolvedSessionKey = normalizedSessionKey;
       const hookRunner = getGlobalHookRunner();
       const hookCtx = {
@@ -318,12 +326,28 @@ export async function runEmbeddedPiAgent(
       provider = hookSelection.provider;
       modelId = hookSelection.modelId;
       const legacyBeforeAgentStartResult = hookSelection.legacyBeforeAgentStartResult;
+      const agentHarness = selectAgentHarness({
+        provider,
+        modelId,
+        config: params.config,
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+        agentHarnessId: params.agentHarnessId,
+      });
+      const pluginHarnessOwnsTransport = agentHarness.id !== "pi";
+      if (!pluginHarnessOwnsTransport) {
+        await ensureOpenClawModelsJson(params.config, agentDir);
+      }
 
       const { model, error, authStorage, modelRegistry } = await resolveModelAsync(
         provider,
         modelId,
         agentDir,
         params.config,
+        // Plugin harnesses may expose synthetic providers that PI cannot
+        // discover safely; resolve their model metadata without touching PI
+        // auth/model stores.
+        { skipPiDiscovery: pluginHarnessOwnsTransport },
       );
       if (!model) {
         throw new FailoverError(error ?? `Unknown model: ${provider}/${modelId}`, {
@@ -343,9 +367,11 @@ export async function runEmbeddedPiAgent(
       const ctxInfo = resolvedRuntimeModel.ctxInfo;
       let effectiveModel = resolvedRuntimeModel.effectiveModel;
 
-      const authStore = ensureAuthProfileStore(agentDir, {
-        allowKeychainPrompt: false,
-      });
+      const authStore = pluginHarnessOwnsTransport
+        ? createEmptyAuthProfileStore()
+        : ensureAuthProfileStore(agentDir, {
+            allowKeychainPrompt: false,
+          });
       const preferredProfileId = params.authProfileId?.trim();
       let lockedProfileId = params.authProfileIdSource === "user" ? preferredProfileId : undefined;
       if (lockedProfileId) {
@@ -444,7 +470,12 @@ export async function runEmbeddedPiAgent(
         log,
       });
 
-      await initializeAuthProfile();
+      // Plugin harnesses own their model transport/auth. Running PI's generic
+      // auth bootstrap here can turn synthetic provider markers into real
+      // vendor-token refresh attempts before the plugin gets control.
+      if (!pluginHarnessOwnsTransport) {
+        await initializeAuthProfile();
+      }
       const { sessionAgentId } = resolveSessionAgentIds({
         sessionKey: params.sessionKey,
         config: params.config,
@@ -731,7 +762,10 @@ export async function runEmbeddedPiAgent(
             disableTools: params.disableTools,
             provider,
             modelId,
-            agentHarnessId: params.agentHarnessId,
+            // Use the harness selected before model/auth setup for the actual
+            // attempt too. Otherwise plugin-owned transports can skip PI auth
+            // bootstrap but drift back to PI when the attempt is created.
+            agentHarnessId: agentHarness.id,
             model: applyAuthHeaderOverride(
               applyLocalNoAuthHeaderOverride(effectiveModel, apiKeyInfo),
               // When runtime auth exchange produced a different credential

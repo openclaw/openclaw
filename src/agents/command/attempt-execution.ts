@@ -14,6 +14,7 @@ import { resolveBootstrapWarningSignaturesSeen } from "../bootstrap-budget.js";
 import { runCliAgent } from "../cli-runner.js";
 import { getCliSessionBinding, setCliSessionBinding } from "../cli-session.js";
 import { FailoverError } from "../failover-error.js";
+import { resolveAgentHarnessPolicy } from "../harness/selection.js";
 import { isCliProvider } from "../model-selection.js";
 import { prepareSessionManagerForRun } from "../pi-embedded-runner/session-manager-init.js";
 import { runEmbeddedPiAgent, type EmbeddedPiRunResult } from "../pi-embedded.js";
@@ -262,10 +263,14 @@ export function runAgentAttempt(params: {
   );
   const bootstrapPromptWarningSignature =
     bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1];
-  const sessionPinnedAgentHarnessId =
-    params.sessionEntry?.sessionId === params.sessionId
-      ? (params.sessionEntry.agentHarnessId ?? (params.sessionHasHistory ? "pi" : undefined))
-      : undefined;
+  const sessionPinnedAgentHarnessId = resolveSessionPinnedAgentHarnessId({
+    cfg: params.cfg,
+    sessionAgentId: params.sessionAgentId,
+    sessionEntry: params.sessionEntry,
+    sessionHasHistory: params.sessionHasHistory,
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey ?? params.sessionId,
+  });
   const authProfileId =
     params.providerOverride === params.authProfileProvider
       ? params.sessionEntry?.authProfileOverride
@@ -440,6 +445,43 @@ export function runAgentAttempt(params: {
     bootstrapPromptWarningSignaturesSeen,
     bootstrapPromptWarningSignature,
   });
+}
+
+function resolveSessionPinnedAgentHarnessId(params: {
+  cfg: OpenClawConfig;
+  sessionAgentId: string;
+  sessionEntry?: SessionEntry;
+  sessionHasHistory?: boolean;
+  sessionId: string;
+  sessionKey: string;
+}): string | undefined {
+  if (params.sessionEntry?.sessionId !== params.sessionId) {
+    return resolveConfiguredAgentHarnessId(params);
+  }
+  if (params.sessionEntry.agentHarnessId) {
+    return params.sessionEntry.agentHarnessId;
+  }
+  const configuredAgentHarnessId = resolveConfiguredAgentHarnessId(params);
+  if (configuredAgentHarnessId) {
+    return configuredAgentHarnessId;
+  }
+  if (!params.sessionHasHistory) {
+    return undefined;
+  }
+  return "pi";
+}
+
+function resolveConfiguredAgentHarnessId(params: {
+  cfg: OpenClawConfig;
+  sessionAgentId: string;
+  sessionKey: string;
+}): string | undefined {
+  const policy = resolveAgentHarnessPolicy({
+    config: params.cfg,
+    agentId: params.sessionAgentId,
+    sessionKey: params.sessionKey,
+  });
+  return policy.runtime === "auto" ? undefined : policy.runtime;
 }
 
 export function buildAcpResult(params: {
