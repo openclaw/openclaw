@@ -48,22 +48,22 @@ jobs:
             exit 1
           fi
 
-      - name: Require maintainer-level repository access
+      - name: Require release manager team membership
         uses: actions/github-script@v8
         with:
           script: |
-            const allowedRoles = new Set(["admin", "maintain"]);
-            const { owner, repo } = context.repo;
-            const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
-              owner,
-              repo,
-              username: context.actor,
+            const { owner } = context.repo;
+            const teamSlug = "openclaw-release-managers";
+            const members = await github.paginate(github.rest.teams.listMembersInOrg, {
+              org: owner,
+              team_slug: teamSlug,
+              per_page: 100,
             });
-            const role = data.role_name ?? data.permission;
-            core.info(`Actor ${context.actor} role: ${role}`);
-            if (!allowedRoles.has(role)) {
+            const memberLogins = new Set(members.map((member) => member.login));
+            core.info(`${teamSlug} members loaded: ${memberLogins.size}`);
+            if (!memberLogins.has(context.actor)) {
               core.setFailed(
-                `Workflow requires maintainer/admin access. Actor "${context.actor}" has "${role}".`,
+                `Workflow requires active ${teamSlug} membership. Actor "${context.actor}" is not a member of ${owner}/${teamSlug}.`,
               );
             }
 

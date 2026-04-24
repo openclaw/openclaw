@@ -42,12 +42,15 @@ describe("npm Telegram live Docker E2E", () => {
     expect(script).toContain('credential_role="ci"');
   });
 
-  it("limits the manual npm beta workflow to maintainer-level actors", () => {
+  it("limits the manual npm beta workflow to release managers", () => {
     const workflow = readFileSync(WORKFLOW_PATH, "utf8");
 
-    expect(workflow).toContain('const allowedRoles = new Set(["admin", "maintain"]);');
-    expect(workflow).toContain("const role = data.role_name ?? data.permission;");
+    expect(workflow).toContain('const teamSlug = "openclaw-release-managers";');
+    expect(workflow).toContain("github.rest.teams.listMembersInOrg");
+    expect(workflow).toContain("memberLogins.has(context.actor)");
     expect(workflow).not.toContain('new Set(["admin", "write"])');
+    expect(workflow).not.toContain("data.role_name");
+    expect(workflow).not.toContain("getMembershipForUserInOrg");
   });
 
   it("lets npm-specific credential aliases override shared QA env", () => {
