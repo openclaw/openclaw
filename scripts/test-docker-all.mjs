@@ -10,6 +10,7 @@ const DEFAULT_PARALLELISM = 8;
 const DEFAULT_TAIL_PARALLELISM = 8;
 const DEFAULT_FAILURE_TAIL_LINES = 80;
 const DEFAULT_LANE_TIMEOUT_MS = 120 * 60 * 1000;
+const DEFAULT_LANE_START_STAGGER_MS = 2_000;
 
 const lanes = [
   ["live-models", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-models"],
@@ -68,11 +69,28 @@ function parsePositiveInt(raw, fallback, label) {
   return parsed;
 }
 
+function parseNonNegativeInt(raw, fallback, label) {
+  if (!raw) {
+    return fallback;
+  }
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    throw new Error(`${label} must be a non-negative integer. Got: ${JSON.stringify(raw)}`);
+  }
+  return parsed;
+}
+
 function parseBool(raw, fallback) {
   if (raw === undefined || raw === "") {
     return fallback;
   }
   return !/^(?:0|false|no)$/i.test(raw);
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function utcStampForPath() {
@@ -209,6 +227,26 @@ async function runLane(lane, baseEnv, logDir, timeoutMs) {
 async function runLanePool(poolLanes, baseEnv, logDir, parallelism, options) {
   const failures = [];
   let nextIndex = 0;
+  let lastLaneStartAt = 0;
+  let laneStartQueue = Promise.resolve();
+
+  async function waitForLaneStartSlot() {
+    if (options.startStaggerMs <= 0) {
+      return;
+    }
+    const previous = laneStartQueue;
+    let releaseQueue;
+    laneStartQueue = new Promise((resolve) => {
+      releaseQueue = resolve;
+    });
+    await previous;
+    const waitMs = Math.max(0, lastLaneStartAt + options.startStaggerMs - Date.now());
+    if (waitMs > 0) {
+      await sleep(waitMs);
+    }
+    lastLaneStartAt = Date.now();
+    releaseQueue();
+  }
 
   async function worker() {
     while (nextIndex < poolLanes.length) {
@@ -216,6 +254,7 @@ async function runLanePool(poolLanes, baseEnv, logDir, parallelism, options) {
         return;
       }
       const lane = poolLanes[nextIndex++];
+      await waitForLaneStartSlot();
       const result = await runLane(lane, baseEnv, logDir, options.timeoutMs);
       if (result.status !== 0) {
         failures.push(result);
@@ -285,6 +324,11 @@ async function main() {
     DEFAULT_LANE_TIMEOUT_MS,
     "OPENCLAW_DOCKER_ALL_LANE_TIMEOUT_MS",
   );
+  const laneStartStaggerMs = parseNonNegativeInt(
+    process.env.OPENCLAW_DOCKER_ALL_START_STAGGER_MS,
+    DEFAULT_LANE_START_STAGGER_MS,
+    "OPENCLAW_DOCKER_ALL_START_STAGGER_MS",
+  );
   const failFast = parseBool(process.env.OPENCLAW_DOCKER_ALL_FAIL_FAST, true);
   const runId = process.env.OPENCLAW_DOCKER_ALL_RUN_ID || utcStampForPath();
   const logDir = path.resolve(
@@ -304,6 +348,7 @@ async function main() {
   console.log(`==> Parallelism: ${parallelism}`);
   console.log(`==> Tail parallelism: ${tailParallelism}`);
   console.log(`==> Lane timeout: ${laneTimeoutMs}ms`);
+  console.log(`==> Lane start stagger: ${laneStartStaggerMs}ms`);
   console.log(`==> Fail fast: ${failFast ? "yes" : "no"}`);
   console.log(`==> Live-test bundled plugin deps: ${baseEnv.OPENCLAW_DOCKER_BUILD_EXTENSIONS}`);
 
@@ -314,7 +359,7 @@ async function main() {
     baseEnv,
   );
 
-  const options = { failFast, timeoutMs: laneTimeoutMs };
+  const options = { failFast, startStaggerMs: laneStartStaggerMs, timeoutMs: laneTimeoutMs };
   const failures = await runLanePool(lanes, baseEnv, logDir, parallelism, options);
   if (failFast && failures.length > 0) {
     await printFailureSummary(failures, tailLines);
