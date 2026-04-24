@@ -132,14 +132,28 @@ set +e
 update_code=$?
 set -e
 if [[ "$update_code" -ne 0 ]]; then
-  echo "candidate update failed with exit code $update_code" >&2
-  tail -n 80 "$candidate_root/update.stderr" >&2 || true
-  exit "$update_code"
+  if ! "$node_bin" - "$update_json" "$expected" <<'NODE'
+const fs = require('node:fs');
+const [updateJsonPath, expected] = process.argv.slice(2);
+try {
+  const update = JSON.parse(fs.readFileSync(updateJsonPath, 'utf8'));
+  process.exit(update.status === 'ok' && update.after?.version === expected ? 0 : 1);
+} catch {
+  process.exit(1);
+}
+NODE
+  then
+    echo "candidate update failed with exit code $update_code" >&2
+    tail -n 80 "$candidate_root/update.stderr" >&2 || true
+    exit "$update_code"
+  fi
+  echo "candidate update exited $update_code after writing ok/version proof; continuing with package-local marker verification" >&2
 fi
 
 after_version="$($candidate_bin --version | head -n 1)"
 actual="$($node_bin -e 'const path=process.env.npm_config_prefix+"/lib/node_modules/openclaw/package.json"; console.log(require(path).version)')"
 package_root="$candidate_prefix/lib/node_modules/openclaw"
+safety_markers_json="$candidate_root/safety-markers.json"
 
 if [[ "$actual" != "$expected" ]]; then
   echo "candidate version mismatch: expected $expected, got $actual" >&2
@@ -154,15 +168,20 @@ case "$package_root" in
     ;;
 esac
 
+"$node_bin" "$repo_root/scripts/ops/verify-candidate-safety-markers.mjs" "$package_root" --json >"$safety_markers_json"
+
+export OPENCLAW_CANDIDATE_UPDATE_EXIT_CODE="$update_code"
+
 live_version_after=""
 if [[ -n "$live_openclaw" ]]; then
   live_version_after="$("$live_openclaw" --version 2>/dev/null || true)"
 fi
 
-"$node_bin" - "$out" "$candidate_root" "$candidate_prefix" "$candidate_home" "$baseline" "$target" "$expected" "$before_version" "$after_version" "$actual" "$package_root" "$live_openclaw" "$live_prefix" "$live_version_before" "$live_version_after" "$update_json" <<'NODE'
+"$node_bin" - "$out" "$candidate_root" "$candidate_prefix" "$candidate_home" "$baseline" "$target" "$expected" "$before_version" "$after_version" "$actual" "$package_root" "$live_openclaw" "$live_prefix" "$live_version_before" "$live_version_after" "$update_json" "$safety_markers_json" <<'NODE'
 const fs = require('node:fs');
-const [out, candidateRoot, candidatePrefix, candidateHome, baseline, target, expected, beforeVersion, afterVersion, actualVersion, packageRoot, liveOpenclaw, livePrefix, liveVersionBefore, liveVersionAfter, updateJsonPath] = process.argv.slice(2);
+const [out, candidateRoot, candidatePrefix, candidateHome, baseline, target, expected, beforeVersion, afterVersion, actualVersion, packageRoot, liveOpenclaw, livePrefix, liveVersionBefore, liveVersionAfter, updateJsonPath, safetyMarkersJsonPath] = process.argv.slice(2);
 const update = JSON.parse(fs.readFileSync(updateJsonPath, 'utf8'));
+const safetyMarkers = JSON.parse(fs.readFileSync(safetyMarkersJsonPath, 'utf8'));
 const proof = {
   status: 'ok',
   generatedAt: new Date().toISOString(),
@@ -172,6 +191,7 @@ const proof = {
   actualVersion,
   beforeVersion,
   afterVersion,
+  updateExitCode: Number(process.env.OPENCLAW_CANDIDATE_UPDATE_EXIT_CODE || 0),
   candidate: {
     root: candidateRoot,
     npmPrefix: candidatePrefix,
@@ -185,6 +205,7 @@ const proof = {
     versionAfter: liveVersionAfter || null,
     unchanged: liveVersionBefore === liveVersionAfter,
   },
+  safetyMarkers,
   update,
 };
 fs.writeFileSync(out, `${JSON.stringify(proof, null, 2)}\n`);

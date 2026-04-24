@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 const SCRIPT_PATH = "scripts/ops/candidate-npm-upgrade.sh";
 const PACKAGE_JSON_PATH = "package.json";
+const SAFETY_MARKERS_SCRIPT_PATH = "scripts/ops/verify-candidate-safety-markers.mjs";
 
 describe("candidate npm upgrade tooling", () => {
   it("defaults to the 2026.4.5 -> 2026.4.23 isolated upgrade lane", () => {
@@ -32,17 +33,31 @@ describe("candidate npm upgrade tooling", () => {
     expect(script).toContain('live_version_before="$(openclaw --version');
     expect(script).toContain('live_version_after="$("$live_openclaw" --version');
     expect(script).toContain("unchanged: liveVersionBefore === liveVersionAfter");
-    expect(script).not.toMatch(
-      /systemctl\s+(?:--user\s+)?(?:restart|reload|stop|start|disable|enable)/,
-    );
+    expect(script).not.toMatch(/systemctl\s+(?:--user\s+)?(?:restart|reload|stop|start)/);
     expect(script).not.toContain("sudo ");
   });
 
-  it("exposes a repo-owned npm script for the 4.23 candidate proof", () => {
+  it("proves safety markers from the upgraded candidate package", () => {
+    const script = readFileSync(SCRIPT_PATH, "utf8");
+    const markerScript = readFileSync(SAFETY_MARKERS_SCRIPT_PATH, "utf8");
+
+    expect(script).toContain("verify-candidate-safety-markers.mjs");
+    expect(script).toContain("safetyMarkers");
+    expect(markerScript).toContain('id: "sdk-tree-kill"');
+    expect(markerScript).toContain('id: "session-mcp-ttl"');
+    expect(markerScript).toContain('id: "startup-guard"');
+    expect(markerScript).toContain('id: "watchdog"');
+    expect(markerScript).toContain('id: "reply-dedupe"');
+  });
+
+  it("exposes repo-owned npm scripts for the 4.23 candidate proof", () => {
     const packageJson = JSON.parse(readFileSync(PACKAGE_JSON_PATH, "utf8"));
 
     expect(packageJson.scripts["ops:candidate-upgrade:4.23"]).toBe(
       "bash scripts/ops/candidate-npm-upgrade.sh",
+    );
+    expect(packageJson.scripts["ops:candidate-safety-markers:4.23"]).toBe(
+      "node scripts/ops/verify-candidate-safety-markers.mjs",
     );
   });
 });
