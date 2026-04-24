@@ -661,11 +661,13 @@ the Server-side compaction accordion below.
   </Accordion>
 
   <Accordion title="Server-side compaction (Responses API)">
-    For direct OpenAI Responses models (`openai/*` on `api.openai.com`), OpenClaw auto-enables server-side compaction:
+    For direct OpenAI Responses models (`openai/*` on `api.openai.com`), the OpenAI plugin's Pi-harness stream wrapper auto-enables server-side compaction:
 
     - Forces `store: true` (unless model compat sets `supportsStore: false`)
     - Injects `context_management: [{ type: "compaction", compact_threshold: ... }]`
     - Default `compact_threshold`: 70% of `contextWindow` (or `80000` when unavailable)
+
+    This applies to the built-in Pi harness path and to OpenAI provider hooks used by embedded runs. The native Codex app-server harness manages its own context through Codex and is configured separately with `agents.defaults.embeddedHarness.runtime`.
 
     <Tabs>
       <Tab title="Enable explicitly">
