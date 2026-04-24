@@ -571,6 +571,8 @@ describe("VoiceCallWebhookServer replay handling", () => {
       realtime: {
         enabled: true,
         streamPath: "/voice/stream/realtime",
+        instructions: "Be helpful.",
+        toolPolicy: "safe-read-only",
         tools: [],
         providers: {},
       },
@@ -628,6 +630,8 @@ describe("VoiceCallWebhookServer replay handling", () => {
         realtime: {
           enabled: true,
           streamPath: "/voice/stream/realtime",
+          instructions: "Be helpful.",
+          toolPolicy: "safe-read-only",
           tools: [],
           providers: {},
         },
@@ -680,6 +684,8 @@ describe("VoiceCallWebhookServer replay handling", () => {
       realtime: {
         enabled: true,
         streamPath: "/voice/stream/realtime",
+        instructions: "Be helpful.",
+        toolPolicy: "safe-read-only",
         tools: [],
         providers: {},
       },
@@ -730,6 +736,8 @@ describe("VoiceCallWebhookServer replay handling", () => {
       realtime: {
         enabled: true,
         streamPath: "/voice/stream/realtime",
+        instructions: "Be helpful.",
+        toolPolicy: "safe-read-only",
         tools: [],
         providers: {},
       },

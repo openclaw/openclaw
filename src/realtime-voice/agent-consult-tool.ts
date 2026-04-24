@@ -1,6 +1,17 @@
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { RealtimeVoiceTool } from "./provider-types.js";
 
 export const REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME = "openclaw_agent_consult";
+export type RealtimeVoiceAgentConsultToolPolicy = "safe-read-only" | "owner" | "none";
+export type RealtimeVoiceAgentConsultArgs = {
+  question: string;
+  context?: string;
+  responseStyle?: string;
+};
+export type RealtimeVoiceAgentConsultTranscriptEntry = {
+  role: "user" | "assistant";
+  text: string;
+};
 
 export const REALTIME_VOICE_AGENT_CONSULT_TOOL: RealtimeVoiceTool = {
   type: "function",
@@ -26,3 +37,81 @@ export const REALTIME_VOICE_AGENT_CONSULT_TOOL: RealtimeVoiceTool = {
     required: ["question"],
   },
 };
+
+export function parseRealtimeVoiceAgentConsultArgs(args: unknown): RealtimeVoiceAgentConsultArgs {
+  const question = readConsultStringArg(args, "question");
+  if (!question) {
+    throw new Error("question required");
+  }
+  return {
+    question,
+    context: readConsultStringArg(args, "context"),
+    responseStyle: readConsultStringArg(args, "responseStyle"),
+  };
+}
+
+export function buildRealtimeVoiceAgentConsultChatMessage(args: unknown): string {
+  const parsed = parseRealtimeVoiceAgentConsultArgs(args);
+  return [
+    parsed.question,
+    parsed.context ? `Context:\n${parsed.context}` : undefined,
+    parsed.responseStyle ? `Spoken style:\n${parsed.responseStyle}` : undefined,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+export function buildRealtimeVoiceAgentConsultPrompt(params: {
+  args: unknown;
+  transcript: RealtimeVoiceAgentConsultTranscriptEntry[];
+  surface: string;
+  userLabel: string;
+  assistantLabel?: string;
+  questionSourceLabel?: string;
+}): string {
+  const parsed = parseRealtimeVoiceAgentConsultArgs(params.args);
+  const assistantLabel = params.assistantLabel ?? "Agent";
+  const questionSourceLabel = params.questionSourceLabel ?? params.userLabel.toLowerCase();
+  const transcript = params.transcript
+    .slice(-12)
+    .map(
+      (entry) => `${entry.role === "assistant" ? assistantLabel : params.userLabel}: ${entry.text}`,
+    )
+    .join("\n");
+
+  return [
+    `You are helping an OpenClaw realtime voice agent during ${params.surface}.`,
+    `Answer the ${questionSourceLabel}'s question with the strongest useful reasoning and available tools.`,
+    "Return only the concise answer the realtime voice agent should speak next.",
+    "Do not include markdown, citations unless needed, tool logs, or private reasoning.",
+    parsed.responseStyle ? `Spoken style: ${parsed.responseStyle}` : undefined,
+    transcript ? `Recent transcript:\n${transcript}` : undefined,
+    parsed.context ? `Additional context:\n${parsed.context}` : undefined,
+    `Question:\n${parsed.question}`,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+export function collectRealtimeVoiceAgentConsultVisibleText(
+  payloads: Array<{ text?: unknown; isError?: boolean; isReasoning?: boolean }>,
+): string | null {
+  const chunks: string[] = [];
+  for (const payload of payloads) {
+    if (payload.isError || payload.isReasoning) {
+      continue;
+    }
+    const text = normalizeOptionalString(payload.text);
+    if (text) {
+      chunks.push(text);
+    }
+  }
+  return chunks.length > 0 ? chunks.join("\n\n").trim() : null;
+}
+
+function readConsultStringArg(args: unknown, key: string): string | undefined {
+  if (!args || typeof args !== "object" || Array.isArray(args)) {
+    return undefined;
+  }
+  return normalizeOptionalString((args as Record<string, unknown>)[key]);
+}
