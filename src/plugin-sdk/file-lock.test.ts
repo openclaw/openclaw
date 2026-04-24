@@ -79,4 +79,29 @@ describe("acquireFileLock", () => {
 
     expect(close).toHaveBeenCalledTimes(1);
   });
+
+  it("does not steal a young lock only because the recorded pid is gone", async () => {
+    const filePath = path.join(tempDir, "young-dead-pid");
+    const lockPath = `${filePath}.lock`;
+    const options = {
+      retries: {
+        retries: 1,
+        factor: 1,
+        minTimeout: 5,
+        maxTimeout: 5,
+      },
+      stale: 60_000,
+    } as const;
+
+    await fs.writeFile(
+      lockPath,
+      JSON.stringify({ pid: 999_999_999, createdAt: new Date().toISOString() }, null, 2),
+      "utf8",
+    );
+
+    await expect(acquireFileLock(filePath, options)).rejects.toMatchObject({
+      code: FILE_LOCK_TIMEOUT_ERROR_CODE,
+    });
+    await expect(fs.access(lockPath)).resolves.toBeUndefined();
+  });
 });

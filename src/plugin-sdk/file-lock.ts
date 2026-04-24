@@ -29,6 +29,7 @@ type HeldLock = {
 const HELD_LOCKS_KEY = Symbol.for("openclaw.fileLockHeldLocks");
 const HELD_LOCKS = resolveProcessScopedMap<HeldLock>(HELD_LOCKS_KEY);
 const CLEANUP_REGISTERED_KEY = Symbol.for("openclaw.fileLockCleanupRegistered");
+const DEAD_PID_STALE_GRACE_MS = 1_000;
 
 function releaseAllLocksSync(): void {
   for (const [normalizedFile, held] of HELD_LOCKS) {
@@ -101,8 +102,15 @@ async function resolveNormalizedFilePath(filePath: string): Promise<string> {
 
 async function isStaleLock(lockPath: string, staleMs: number): Promise<boolean> {
   const payload = await readLockPayload(lockPath);
-  if (payload?.pid && !isPidAlive(payload.pid)) {
+  let statAgeMs: number | null = null;
+  try {
+    const stat = await fs.stat(lockPath);
+    statAgeMs = Date.now() - stat.mtimeMs;
+  } catch {
     return true;
+  }
+  if (payload?.pid && !isPidAlive(payload.pid)) {
+    return statAgeMs > Math.min(staleMs, DEAD_PID_STALE_GRACE_MS);
   }
   if (payload?.createdAt) {
     const createdAt = Date.parse(payload.createdAt);
@@ -110,12 +118,7 @@ async function isStaleLock(lockPath: string, staleMs: number): Promise<boolean> 
       return true;
     }
   }
-  try {
-    const stat = await fs.stat(lockPath);
-    return Date.now() - stat.mtimeMs > staleMs;
-  } catch {
-    return true;
-  }
+  return statAgeMs > staleMs;
 }
 
 export type FileLockHandle = {
