@@ -9,8 +9,8 @@ describe("AgentRuntimePlan leaf contracts", () => {
     const source = await fs.readFile(TYPES_PATH, "utf8");
 
     expect(source).not.toMatch(/from\s+["'][^"']*auto-reply(?:\/|\.js|["'])/);
-    expect(source).not.toMatch(/from\s+["'][^"']*config(?:\/|\.js|["'])/);
-    expect(source).not.toMatch(/from\s+["'][^"']*plugins(?:\/|\.js|["'])/);
+    expect(source).not.toMatch(/from\s+["'](?:[^"']*\/)?config(?:\/|\.js|["'])/);
+    expect(source).not.toMatch(/from\s+["'](?:[^"']*\/)?plugins(?:\/|\.js|["'])/);
     expect(source).not.toMatch(/from\s+["'][^"']*pi-embedded-/);
     expect(source).not.toMatch(/from\s+["'][^"']*transcript-policy(?:\/|\.js|["'])/);
     expect(source).not.toMatch(/from\s+["'][^"']*system-prompt(?:\/|\.js|["'])/);

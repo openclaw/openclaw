@@ -34,7 +34,9 @@ function hasMedia(payload: { mediaUrl?: string; mediaUrls?: string[] }): boolean
 }
 
 function asOpenClawConfig(value: unknown): OpenClawConfig | undefined {
-  return value && typeof value === "object" ? (value as OpenClawConfig) : undefined;
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as OpenClawConfig)
+    : undefined;
 }
 
 export function buildAgentRuntimeDeliveryPlan(
