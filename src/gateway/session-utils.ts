@@ -18,6 +18,7 @@ import {
   resolveDefaultModelForAgent,
   resolvePersistedSelectedModelRef,
 } from "../agents/model-selection.js";
+import { resolveThinkingDefault } from "../agents/model-thinking-default.js";
 import {
   getSessionDisplaySubagentRunByChildSessionKey,
   getSubagentSessionRuntimeMs,
@@ -1415,7 +1416,8 @@ export function buildGatewaySessionRow(params: {
     thinkingLevel: entry?.thinkingLevel,
     thinkingLevels,
     thinkingOptions: thinkingLevels.map((level) => level.label),
-    thinkingDefault: resolveThinkingDefaultForModel({
+    thinkingDefault: resolveThinkingDefault({
+      cfg,
       provider: thinkingProvider,
       model: thinkingModel,
     }),

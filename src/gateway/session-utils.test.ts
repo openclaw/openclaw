@@ -15,6 +15,7 @@ import {
   getSessionDefaults,
   listAgentsForGateway,
   listSessionsFromStore,
+  loadGatewaySessionRow,
   loadSessionEntry,
   migrateAndPruneGatewaySessionStoreKey,
   parseGroupKey,
@@ -563,6 +564,48 @@ describe("gateway session utils", () => {
         const loaded = loadSessionEntry("agent:main:main");
 
         expect(loaded.entry?.sessionId).toBe("sess-canonical-fresh");
+      });
+    } finally {
+      resetConfigRuntimeState();
+    }
+  });
+
+  test("loadGatewaySessionRow exposes configured thinkingDefault to the UI session row", async () => {
+    resetConfigRuntimeState();
+    try {
+      await withStateDirEnv("session-utils-thinking-default-", async ({ stateDir }) => {
+        const sessionsDir = path.join(stateDir, "agents", "main", "sessions");
+        fs.mkdirSync(sessionsDir, { recursive: true });
+        fs.writeFileSync(
+          path.join(sessionsDir, "sessions.json"),
+          JSON.stringify({
+            "agent:main:main": {
+              sessionId: "sess-thinking",
+              updatedAt: 10,
+            },
+          }),
+          "utf8",
+        );
+        const cfg = {
+          session: {
+            mainKey: "main",
+            store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
+          },
+          agents: {
+            defaults: {
+              model: { primary: "anthropic/claude-opus-4-7" },
+              thinkingDefault: "high",
+            },
+            list: [{ id: "main", default: true }],
+          },
+        } as OpenClawConfig;
+        setRuntimeConfigSnapshot(cfg, cfg);
+
+        const row = loadGatewaySessionRow("main");
+
+        expect(row?.modelProvider).toBe("anthropic");
+        expect(row?.model).toBe("claude-opus-4-7");
+        expect(row?.thinkingDefault).toBe("high");
       });
     } finally {
       resetConfigRuntimeState();
