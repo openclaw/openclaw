@@ -197,6 +197,6 @@ export function looksLikeMultiplexedTraffic(data: unknown): boolean {
   if (!isMultiplexedFrame(data)) {
     return false;
   }
-  const buf = data as Buffer | Uint8Array;
+  const buf = data;
   return buf.length >= 1 + MULTIPLEX_FRAME_HEADER_SIZE;
 }

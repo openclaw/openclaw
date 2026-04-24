@@ -60,7 +60,7 @@ export interface ControlErrorMessage {
 /** Ack message payload. */
 export interface ControlAckMessage {
   type: "ack";
-  forType: ControlMessageType | string;
+  forType: string;
   [extra: string]: unknown;
 }
 
@@ -205,7 +205,7 @@ export class MultiplexControlChannel {
   }
 
   /** Send an ack for a given prior message. */
-  sendAck(forType: ControlMessageType | string, extras?: Record<string, unknown>): void {
+  sendAck(forType: string, extras?: Record<string, unknown>): void {
     const msg: ControlAckMessage = {
       type: "ack",
       forType,
@@ -249,6 +249,7 @@ export class MultiplexControlChannel {
       return;
     }
 
+    // oxlint-disable-next-line typescript/no-unnecessary-type-assertion -- narrowed from `unknown` via typeof guard
     const obj = parsed as Record<string, unknown>;
     const type = typeof obj.type === "string" ? obj.type : undefined;
     switch (type) {

@@ -80,19 +80,25 @@ const PCM16_BYTES_PER_SAMPLE = 2;
  */
 export function pcm16PeakAmplitude(chunk: Buffer): number {
   const samples = Math.floor(chunk.length / PCM16_BYTES_PER_SAMPLE);
-  if (samples === 0) return 0;
+  if (samples === 0) {
+    return 0;
+  }
   let peak = 0;
   for (let i = 0; i < samples; i++) {
     const s = chunk.readInt16LE(i * PCM16_BYTES_PER_SAMPLE);
     const abs = s < 0 ? -s : s;
-    if (abs > peak) peak = abs;
+    if (abs > peak) {
+      peak = abs;
+    }
   }
   return peak;
 }
 
 /** Convert a PCM16 byte length at `sampleRate` Hz into milliseconds. */
 export function pcm16BytesToMs(bytes: number, sampleRate: number): number {
-  if (sampleRate <= 0) return 0;
+  if (sampleRate <= 0) {
+    return 0;
+  }
   const samples = Math.floor(bytes / PCM16_BYTES_PER_SAMPLE);
   return (samples * 1000) / sampleRate;
 }
@@ -143,7 +149,9 @@ export class RealtimeInputBuffer {
     if (!(chunk instanceof Uint8Array)) {
       throw new TypeError("[RealtimeInputBuffer.append] chunk must be a Buffer or Uint8Array");
     }
-    if (chunk.length === 0) return;
+    if (chunk.length === 0) {
+      return;
+    }
     if (chunk.length % PCM16_BYTES_PER_SAMPLE !== 0) {
       throw new Error("[RealtimeInputBuffer.append] PCM16 chunks must have even byte length");
     }
@@ -219,7 +227,9 @@ export class RealtimeInputBuffer {
   }
 
   private tickVad(chunk: Buffer): void {
-    if (!this.onSpeechStarted && !this.onSpeechStopped) return;
+    if (!this.onSpeechStarted && !this.onSpeechStopped) {
+      return;
+    }
     const peak = pcm16PeakAmplitude(chunk);
     const isSilent = peak < this.vadSilenceThreshold;
     const now = this.clock();
@@ -229,7 +239,9 @@ export class RealtimeInputBuffer {
         this.streakStartedAt = null;
         return;
       }
-      if (this.streakStartedAt == null) this.streakStartedAt = now;
+      if (this.streakStartedAt == null) {
+        this.streakStartedAt = now;
+      }
       if (now - this.streakStartedAt >= this.vadSpeechDurationMs) {
         this.vadState = "speaking";
         this.streakStartedAt = null;
@@ -242,7 +254,9 @@ export class RealtimeInputBuffer {
       this.streakStartedAt = null;
       return;
     }
-    if (this.streakStartedAt == null) this.streakStartedAt = now;
+    if (this.streakStartedAt == null) {
+      this.streakStartedAt = now;
+    }
     if (now - this.streakStartedAt >= this.vadSilenceDurationMs) {
       this.vadState = "silent";
       this.streakStartedAt = null;

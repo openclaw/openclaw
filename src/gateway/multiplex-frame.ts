@@ -158,7 +158,7 @@ export function encodeMultiplexFrame(
  * envelope. Intended for the WS message handler to choose between the
  * legacy text/JSON path and the new multiplex router.
  */
-export function isMultiplexedFrame(data: unknown): boolean {
+export function isMultiplexedFrame(data: unknown): data is Buffer | Uint8Array {
   if (!(data instanceof Uint8Array)) {
     return false;
   }

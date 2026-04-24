@@ -100,10 +100,16 @@ export class RealtimeOutputBuffer {
    * `totalEnqueuedMs`. After truncate, returns the truncated position.
    */
   getPlaybackPosition(): number {
-    if (this.playbackOverrideMs != null) return this.playbackOverrideMs;
-    if (this.playbackStartedAt == null) return 0;
+    if (this.playbackOverrideMs != null) {
+      return this.playbackOverrideMs;
+    }
+    if (this.playbackStartedAt == null) {
+      return 0;
+    }
     const elapsed = this.clock() - this.playbackStartedAt;
-    if (elapsed <= 0) return 0;
+    if (elapsed <= 0) {
+      return 0;
+    }
     return Math.min(elapsed, this.totalEnqueuedMs);
   }
 
@@ -113,7 +119,7 @@ export class RealtimeOutputBuffer {
    * from the queue. Does NOT touch the playback timeline.
    */
   flush(): OutputAudioChunk[] {
-    const drained = this.chunks.splice(0, this.chunks.length);
+    const drained = this.chunks.splice(0);
     return drained;
   }
 
