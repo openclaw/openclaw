@@ -119,6 +119,9 @@ runs the same lanes before release approval.
     the Docker wrapper selects Convex automatically.
   - `OPENCLAW_NPM_TELEGRAM_CREDENTIAL_ROLE=ci|maintainer` overrides the shared
     `OPENCLAW_QA_CREDENTIAL_ROLE` for this lane only.
+  - GitHub Actions exposes this lane as the manual maintainer workflow
+    `NPM Telegram Beta E2E`. It does not run on merge. The workflow uses the
+    `qa-live-shared` environment and Convex CI credential leases.
 - `pnpm test:docker:bundled-channel-deps`
   - Packs and installs the current OpenClaw build in Docker, starts the Gateway
     with OpenAI configured, then enables bundled channel/plugins via config
