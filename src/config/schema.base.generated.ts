@@ -22705,6 +22705,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                       description:
                         "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
                     },
+                    allowConversationAccess: {
+                      type: "boolean",
+                      title: "Allow Conversation Access Hooks",
+                      description:
+                        "Controls whether this plugin may read raw conversation content from typed hooks such as `llm_input`, `llm_output`, and `agent_end`. Non-bundled plugins must opt in explicitly.",
+                    },
                   },
                   additionalProperties: false,
                   title: "Plugin Hook Policy",
@@ -27244,6 +27250,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "plugins.entries.*.hooks.allowPromptInjection": {
       label: "Allow Prompt Injection Hooks",
       help: "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      tags: ["access"],
+    },
+    "plugins.entries.*.hooks.allowConversationAccess": {
+      label: "Allow Conversation Access Hooks",
+      help: "Controls whether this plugin may read raw conversation content from typed hooks such as `llm_input`, `llm_output`, and `agent_end`. Non-bundled plugins must opt in explicitly.",
       tags: ["access"],
     },
     "plugins.entries.*.subagent": {
