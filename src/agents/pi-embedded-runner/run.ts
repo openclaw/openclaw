@@ -866,6 +866,7 @@ export async function runEmbeddedPiAgent(
             contextTokenBudget: ctxInfo.tokens,
             skillsSnapshot: params.skillsSnapshot,
             prompt,
+            transcriptPrompt: params.transcriptPrompt,
             images: params.images,
             imageOrder: params.imageOrder,
             clientTools: params.clientTools,
