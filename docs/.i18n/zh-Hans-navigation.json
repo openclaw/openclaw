@@ -139,7 +139,6 @@
             "zh-CN/concepts/session-pruning",
             "zh-CN/concepts/session-tool",
             {
-            {
               "group": "记忆",
               "pages": [
                 "zh-CN/concepts/memory",
