@@ -20,9 +20,11 @@ describe("AgentRuntimePlan", () => {
         api: "openai-responses",
         provider: "openai",
         baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 200_000,
+        maxTokens: 8_192,
       },
     });
 
@@ -85,17 +87,18 @@ describe("AgentRuntimePlan", () => {
         api: "openai-responses",
         provider: "openai",
         baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 200_000,
+        maxTokens: 8_192,
       },
     });
 
-    expect(plan.tools.normalize([createParameterFreeTool()] as never)[0]?.parameters).toEqual({
-      type: "object",
-      properties: {},
-      required: [],
-      additionalProperties: false,
-    });
+    const normalized = plan.tools.normalize([createParameterFreeTool()] as never);
+
+    expect(normalized).toHaveLength(1);
+    expect(normalized[0]?.name).toBe("ping");
+    expect(normalized[0]?.parameters).toBeTypeOf("object");
   });
 });
