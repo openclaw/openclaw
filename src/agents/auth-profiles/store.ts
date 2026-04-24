@@ -25,7 +25,6 @@ import {
 import {
   clearRuntimeAuthProfileStoreSnapshots as clearRuntimeAuthProfileStoreSnapshotsImpl,
   getRuntimeAuthProfileStoreSnapshot,
-  hasRuntimeAuthProfileStoreSnapshot,
   replaceRuntimeAuthProfileStoreSnapshots as replaceRuntimeAuthProfileStoreSnapshotsImpl,
   updateRuntimeAuthProfileStoreSnapshotIfPresent,
 } from "./runtime-snapshots.js";
