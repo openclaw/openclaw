@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatBonjourError } from "./bonjour-errors.js";
+import { formatBonjourError } from "./errors.js";
 
 describe("formatBonjourError", () => {
   it("formats named errors with their type prefix", () => {
