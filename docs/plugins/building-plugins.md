@@ -33,7 +33,7 @@ falls back to npm automatically.
   <Card title="Provider plugin" icon="cpu" href="/plugins/sdk-provider-plugins">
     Add a model provider (LLM, proxy, or custom endpoint)
   </Card>
-  <Card title="Tool / hook plugin" icon="wrench">
+  <Card title="Tool / hook plugin" icon="wrench" href="/plugins/hooks">
     Register agent tools, event hooks, or services — continue below
   </Card>
 </CardGroup>
@@ -163,7 +163,8 @@ A single plugin can register any number of capabilities via the `api` object:
 | Embedded Pi extension  | `api.registerEmbeddedExtensionFactory(...)`      | [SDK Overview](/plugins/sdk-overview#registration-api)                          |
 | Agent tools            | `api.registerTool(...)`                          | Below                                                                           |
 | Custom commands        | `api.registerCommand(...)`                       | [Entry Points](/plugins/sdk-entrypoints)                                        |
-| Event hooks            | `api.registerHook(...)`                          | [Entry Points](/plugins/sdk-entrypoints)                                        |
+| Plugin hooks           | `api.on(...)`                                    | [Plugin hooks](/plugins/hooks)                                                  |
+| Internal event hooks   | `api.registerHook(...)`                          | [Entry Points](/plugins/sdk-entrypoints)                                        |
 | HTTP routes            | `api.registerHttpRoute(...)`                     | [Internals](/plugins/architecture-internals#gateway-http-routes)                |
 | CLI subcommands        | `api.registerCli(...)`                           | [Entry Points](/plugins/sdk-entrypoints)                                        |
 
@@ -197,7 +198,7 @@ If custom approval plumbing needs to detect that same bounded fallback case,
 prefer `isApprovalNotFoundError` from `openclaw/plugin-sdk/error-runtime`
 instead of matching approval-expiry strings manually.
 
-See [SDK Overview hook decision semantics](/plugins/sdk-overview#hook-decision-semantics) for details.
+See [Plugin hooks](/plugins/hooks) for examples and the hook reference.
 
 ## Registering agent tools
 
