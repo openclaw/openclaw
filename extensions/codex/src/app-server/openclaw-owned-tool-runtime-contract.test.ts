@@ -25,7 +25,8 @@ describe("OpenClaw-owned tool runtime contract — Codex app-server adapter", ()
   });
 
   it("wraps unwrapped dynamic tools with before/after tool hooks", async () => {
-    const adjustedParams = { command: "pwd", mode: "safe" };
+    const adjustedParams = { mode: "safe" };
+    const mergedParams = { command: "pwd", mode: "safe" };
     const hooks = installOpenClawOwnedToolHooks({ adjustedParams });
     const execute = vi.fn(async () => textToolResult("done", { ok: true }));
     const bridge = createCodexDynamicToolBridge({
@@ -69,7 +70,7 @@ describe("OpenClaw-owned tool runtime contract — Codex app-server adapter", ()
     );
     expect(execute).toHaveBeenCalledWith(
       "call-contract",
-      adjustedParams,
+      mergedParams,
       expect.any(AbortSignal),
       undefined,
     );
@@ -78,7 +79,7 @@ describe("OpenClaw-owned tool runtime contract — Codex app-server adapter", ()
         expect.objectContaining({
           toolName: "exec",
           toolCallId: "call-contract",
-          params: adjustedParams,
+          params: mergedParams,
           result: expect.objectContaining({
             content: [{ type: "text", text: "done" }],
             details: { ok: true },
@@ -96,7 +97,8 @@ describe("OpenClaw-owned tool runtime contract — Codex app-server adapter", ()
   });
 
   it("runs tool_result middleware before after_tool_call observes the result", async () => {
-    const adjustedParams = { command: "status", mode: "safe" };
+    const adjustedParams = { mode: "safe" };
+    const mergedParams = { command: "status", mode: "safe" };
     const hooks = installOpenClawOwnedToolHooks({ adjustedParams });
     const middleware = installCodexToolResultMiddleware((event) => {
       expect(event).toMatchObject({
@@ -137,7 +139,7 @@ describe("OpenClaw-owned tool runtime contract — Codex app-server adapter", ()
     });
     expect(execute).toHaveBeenCalledWith(
       "call-middleware",
-      adjustedParams,
+      mergedParams,
       expect.any(AbortSignal),
       undefined,
     );
@@ -147,7 +149,7 @@ describe("OpenClaw-owned tool runtime contract — Codex app-server adapter", ()
         expect.objectContaining({
           toolName: "exec",
           toolCallId: "call-middleware",
-          params: adjustedParams,
+          params: mergedParams,
           result: expect.objectContaining({
             content: [{ type: "text", text: "compacted output" }],
             details: { stage: "middleware" },
@@ -212,7 +214,8 @@ describe("OpenClaw-owned tool runtime contract — Codex app-server adapter", ()
   });
 
   it("reports dynamic tool execution errors through after_tool_call", async () => {
-    const adjustedParams = { command: "false", timeoutSec: 1 };
+    const adjustedParams = { timeoutSec: 1 };
+    const mergedParams = { command: "false", timeoutSec: 1 };
     const hooks = installOpenClawOwnedToolHooks({ adjustedParams });
     const execute = vi.fn(async () => {
       throw new Error("tool failed");
@@ -238,7 +241,7 @@ describe("OpenClaw-owned tool runtime contract — Codex app-server adapter", ()
     });
     expect(execute).toHaveBeenCalledWith(
       "call-error",
-      adjustedParams,
+      mergedParams,
       expect.any(AbortSignal),
       undefined,
     );
@@ -247,7 +250,7 @@ describe("OpenClaw-owned tool runtime contract — Codex app-server adapter", ()
         expect.objectContaining({
           toolName: "exec",
           toolCallId: "call-error",
-          params: adjustedParams,
+          params: mergedParams,
           error: "tool failed",
         }),
         expect.objectContaining({
@@ -259,7 +262,8 @@ describe("OpenClaw-owned tool runtime contract — Codex app-server adapter", ()
   });
 
   it("does not double-wrap dynamic tools that already have before_tool_call", async () => {
-    const adjustedParams = { command: "pwd", mode: "safe" };
+    const adjustedParams = { mode: "safe" };
+    const mergedParams = { command: "pwd", mode: "safe" };
     const hooks = installOpenClawOwnedToolHooks({ adjustedParams });
     const execute = vi.fn(async () => textToolResult("done"));
     const tool = wrapToolWithBeforeToolCallHook(createContractTool({ name: "exec", execute }), {
@@ -287,7 +291,7 @@ describe("OpenClaw-owned tool runtime contract — Codex app-server adapter", ()
     expect(hooks.beforeToolCall).toHaveBeenCalledTimes(1);
     expect(execute).toHaveBeenCalledWith(
       "call-wrapped",
-      adjustedParams,
+      mergedParams,
       expect.any(AbortSignal),
       undefined,
     );
