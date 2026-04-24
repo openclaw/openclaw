@@ -447,6 +447,67 @@ describe("ensureOnboardingPluginInstalled", () => {
     });
   });
 
+  it("records local install source metadata when npm install falls back to local", async () => {
+    await withTempDir(
+      { prefix: "openclaw-onboarding-install-npm-fallback-record-" },
+      async (temp) => {
+        const workspaceDir = path.join(temp, "workspace");
+        const pluginDir = path.join(workspaceDir, "plugins", "demo");
+        await fs.mkdir(path.join(workspaceDir, ".git"), { recursive: true });
+        await fs.mkdir(pluginDir, { recursive: true });
+        installPluginFromNpmSpec.mockResolvedValueOnce({
+          ok: false,
+          error: "registry unavailable",
+        });
+        const note = vi.fn(async () => {});
+
+        const result = await ensureOnboardingPluginInstalled({
+          cfg: {},
+          entry: {
+            pluginId: "demo-plugin",
+            label: "Demo Plugin",
+            install: {
+              npmSpec: "@demo/plugin@1.2.3",
+              localPath: "plugins/demo",
+            },
+          },
+          prompter: {
+            select: vi.fn(async () => "npm"),
+            note,
+            confirm: vi.fn(async () => true),
+            progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+          } as never,
+          runtime: {} as never,
+          workspaceDir,
+        });
+
+        const realPluginDir = await fs.realpath(pluginDir);
+        expect(note).toHaveBeenCalledWith(
+          "Failed to install @demo/plugin@1.2.3: registry unavailable\nReturning to selection.",
+          "Plugin install",
+        );
+        expect(recordPluginInstall).toHaveBeenCalledWith(
+          expect.objectContaining({
+            plugins: {
+              load: {
+                paths: [realPluginDir],
+              },
+            },
+          }),
+          {
+            pluginId: "demo-plugin",
+            source: "path",
+            sourcePath: realPluginDir,
+            installPath: realPluginDir,
+            spec: "@demo/plugin@1.2.3",
+          },
+        );
+        expect(result.installed).toBe(true);
+        expect(result.status).toBe("installed");
+      },
+    );
+  });
+
   it("keeps local installs available when cwd is a git repo but workspaceDir is not", async () => {
     await withTempDir({ prefix: "openclaw-onboarding-install-cwd-git-" }, async (temp) => {
       const repoDir = path.join(temp, "repo");
