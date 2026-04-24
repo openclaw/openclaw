@@ -198,7 +198,7 @@ function resolveExecutionLabel(
 }
 
 const AGENT_RUNTIME_LABELS: Readonly<Record<string, string>> = {
-  pi: "OpenClaw (pi embedded)",
+  pi: "OpenClaw Pi Default",
   codex: "OpenAI Codex",
   "codex-cli": "OpenAI Codex",
   "claude-cli": "Claude CLI",

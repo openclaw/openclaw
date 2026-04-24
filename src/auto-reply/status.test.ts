@@ -95,7 +95,7 @@ describe("buildStatusMessage", () => {
     expect(normalized).toContain("Session: agent:main:main");
     expect(normalized).toContain("updated 10m ago");
     expect(normalized).toContain("Execution: direct");
-    expect(normalized).toContain("Runtime: OpenClaw (pi embedded)");
+    expect(normalized).toContain("Runtime: OpenClaw Pi Default");
     expect(normalized).not.toContain("Runner:");
     expect(normalized).toContain("Think: medium");
     expect(normalized).not.toContain("verbose");
@@ -421,7 +421,7 @@ describe("buildStatusMessage", () => {
 
     const normalized = normalizeTestText(text);
     expect(normalized).toContain("Fast");
-    expect(normalized).toContain("Runtime: OpenClaw (pi embedded)");
+    expect(normalized).toContain("Runtime: OpenClaw Pi Default");
     expect(normalized).not.toContain("· pi");
   });
 

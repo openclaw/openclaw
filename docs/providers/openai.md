@@ -175,7 +175,7 @@ Choose your preferred auth method and follow the setup steps.
     ### Status indicator
 
     Chat `/status` shows which model runtime is active for the current session.
-    The default PI harness appears as `Runtime: OpenClaw (pi embedded)`. When the
+    The default PI harness appears as `Runtime: OpenClaw Pi Default`. When the
     bundled Codex app-server harness is selected, `/status` shows
     `Runtime: OpenAI Codex`. Existing sessions keep their recorded harness id, so use
     `/new` or `/reset` after changing `embeddedHarness` if you want `/status` to
