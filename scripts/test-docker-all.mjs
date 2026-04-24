@@ -212,6 +212,26 @@ async function runForeground(label, command, env) {
   }
 }
 
+async function runForegroundGroup(entries, env) {
+  const results = await Promise.allSettled(
+    entries.map(async ([label, command]) => {
+      await runForeground(label, command, env);
+    }),
+  );
+  const failures = results
+    .map((result, index) => ({ result, entry: entries[index] }))
+    .filter(({ result }) => result.status === "rejected");
+  if (failures.length > 0) {
+    throw new Error(
+      failures
+        .map(
+          ({ result, entry }) => `${entry[0]}: ${result.reason?.message ?? String(result.reason)}`,
+        )
+        .join("\n"),
+    );
+  }
+}
+
 async function prepareBundledChannelPackage(baseEnv, logDir) {
   if (baseEnv.OPENCLAW_BUNDLED_CHANNEL_PACKAGE_TGZ) {
     console.log(`==> Bundled channel package: ${baseEnv.OPENCLAW_BUNDLED_CHANNEL_PACKAGE_TGZ}`);
@@ -427,10 +447,14 @@ async function main() {
   console.log(`==> Fail fast: ${failFast ? "yes" : "no"}`);
   console.log(`==> Live-test bundled plugin deps: ${baseEnv.OPENCLAW_DOCKER_BUILD_EXTENSIONS}`);
 
-  await runForeground("Build shared live-test image once", "pnpm test:docker:live-build", baseEnv);
-  await runForeground(
-    `Build shared Docker E2E image once: ${baseEnv.OPENCLAW_DOCKER_E2E_IMAGE}`,
-    "pnpm test:docker:e2e-build",
+  await runForegroundGroup(
+    [
+      ["Build shared live-test image once", "pnpm test:docker:live-build"],
+      [
+        `Build shared Docker E2E image once: ${baseEnv.OPENCLAW_DOCKER_E2E_IMAGE}`,
+        "pnpm test:docker:e2e-build",
+      ],
+    ],
     baseEnv,
   );
   await prepareBundledChannelPackage(baseEnv, logDir);
