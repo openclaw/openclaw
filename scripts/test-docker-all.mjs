@@ -268,6 +268,8 @@ async function prepareBundledChannelPackage(baseEnv, logDir) {
   }
   baseEnv.OPENCLAW_BUNDLED_CHANNEL_PACKAGE_TGZ = path.join(packDir, packed);
   baseEnv.OPENCLAW_BUNDLED_CHANNEL_HOST_BUILD = "0";
+  baseEnv.OPENCLAW_NPM_ONBOARD_PACKAGE_TGZ = baseEnv.OPENCLAW_BUNDLED_CHANNEL_PACKAGE_TGZ;
+  baseEnv.OPENCLAW_NPM_ONBOARD_HOST_BUILD = "0";
   console.log(`==> Bundled channel package: ${baseEnv.OPENCLAW_BUNDLED_CHANNEL_PACKAGE_TGZ}`);
 }
 
