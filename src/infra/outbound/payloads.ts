@@ -119,6 +119,27 @@ function mergeMediaUrls(...lists: Array<ReadonlyArray<string | undefined> | unde
   return merged;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function mergeTelegramReactionChannelData(
+  channelData: Record<string, unknown> | undefined,
+  reactionEmoji: string | undefined,
+): Record<string, unknown> | undefined {
+  if (!reactionEmoji) {
+    return channelData;
+  }
+  const telegram = isRecord(channelData?.telegram) ? channelData.telegram : {};
+  return {
+    ...(channelData ?? {}),
+    telegram: {
+      ...telegram,
+      reaction: reactionEmoji,
+    },
+  };
+}
+
 type PreparedOutboundPayloadPlanEntry = {
   payload: ReplyPayload;
   hasPresentation: boolean;
@@ -160,6 +181,7 @@ function createOutboundPayloadPlanEntry(
     replyToTag: payload.replyToTag || parsed.replyToTag,
     replyToCurrent: payload.replyToCurrent || parsed.replyToCurrent,
     audioAsVoice: Boolean(payload.audioAsVoice || parsed.audioAsVoice),
+    channelData: mergeTelegramReactionChannelData(payload.channelData, parsed.reactionEmoji),
   };
   if (!isRenderablePayload(normalizedPayload) && !isSilent) {
     return null;

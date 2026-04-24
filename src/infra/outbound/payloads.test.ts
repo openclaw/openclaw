@@ -53,6 +53,31 @@ describe("normalizeReplyPayloadsForDelivery", () => {
     ]);
   });
 
+  it("normalizes telegram reaction directives into channel data", () => {
+    expect(
+      normalizeReplyPayloadsForDelivery([
+        {
+          text: "[[react_to_current:🔥]]",
+        },
+      ]),
+    ).toEqual([
+      {
+        text: "",
+        mediaUrls: undefined,
+        mediaUrl: undefined,
+        replyToId: undefined,
+        replyToCurrent: undefined,
+        replyToTag: false,
+        audioAsVoice: false,
+        channelData: {
+          telegram: {
+            reaction: "🔥",
+          },
+        },
+      },
+    ]);
+  });
+
   it("drops silent payloads without media and suppresses reasoning payloads", () => {
     expect(
       normalizeReplyPayloadsForDelivery([
