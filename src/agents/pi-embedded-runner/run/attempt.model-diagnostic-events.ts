@@ -10,6 +10,8 @@ import {
   type DiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
 
+export { diagnosticErrorCategory };
+
 type ModelCallDiagnosticContext = {
   runId: string;
   sessionKey?: string;
