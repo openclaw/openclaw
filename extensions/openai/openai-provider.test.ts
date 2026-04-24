@@ -447,6 +447,7 @@ describe("buildOpenAIProvider", () => {
         provider: "openai",
         id: "gpt-5.4",
         baseUrl: "https://api.openai.com/v1",
+        contextWindow: 200_000,
       } as Model<"openai-responses">,
       payload: {
         reasoning: { effort: "none" },
@@ -457,6 +458,10 @@ describe("buildOpenAIProvider", () => {
       transport: "auto",
       openaiWsWarmup: true,
     });
+    expect(result.payload.store).toBe(true);
+    expect(result.payload.context_management).toEqual([
+      { type: "compaction", compact_threshold: 140_000 },
+    ]);
     expect(result.payload.service_tier).toBe("priority");
     expect(result.payload.text).toEqual({ verbosity: "low" });
     expect(result.payload.reasoning).toEqual({ effort: "none" });

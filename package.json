@@ -509,6 +509,10 @@
       "types": "./dist/plugin-sdk/boolean-param.d.ts",
       "default": "./dist/plugin-sdk/boolean-param.js"
     },
+    "./plugin-sdk/channel-contract-testing": {
+      "types": "./dist/plugin-sdk/channel-contract-testing.d.ts",
+      "default": "./dist/plugin-sdk/channel-contract-testing.js"
+    },
     "./plugin-sdk/dangerous-name-runtime": {
       "types": "./dist/plugin-sdk/dangerous-name-runtime.d.ts",
       "default": "./dist/plugin-sdk/dangerous-name-runtime.js"

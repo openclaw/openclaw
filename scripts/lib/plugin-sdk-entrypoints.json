@@ -113,6 +113,7 @@
   "browser-setup-tools",
   "browser-support",
   "boolean-param",
+  "channel-contract-testing",
   "dangerous-name-runtime",
   "command-auth",
   "command-auth-native",
