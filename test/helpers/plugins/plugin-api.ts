@@ -44,6 +44,7 @@ export function createTestPluginApi(api: TestPluginApiInput = {}): OpenClawPlugi
     registerAgentHarness() {},
     registerEmbeddedExtensionFactory() {},
     registerCodexAppServerExtensionFactory() {},
+    registerAgentToolResultMiddleware() {},
     registerDetachedTaskRuntime() {},
     registerMemoryCapability() {},
     registerMemoryPromptSection() {},

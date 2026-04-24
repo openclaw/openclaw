@@ -160,7 +160,7 @@ A single plugin can register any number of capabilities via the `api` object:
 | Video generation       | `api.registerVideoGenerationProvider(...)`       | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
 | Web fetch              | `api.registerWebFetchProvider(...)`              | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
 | Web search             | `api.registerWebSearchProvider(...)`             | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
-| Embedded Pi extension  | `api.registerEmbeddedExtensionFactory(...)`      | [SDK Overview](/plugins/sdk-overview#registration-api)                          |
+| Tool-result middleware | `api.registerAgentToolResultMiddleware(...)`     | [SDK Overview](/plugins/sdk-overview#registration-api)                          |
 | Agent tools            | `api.registerTool(...)`                          | Below                                                                           |
 | Custom commands        | `api.registerCommand(...)`                       | [Entry Points](/plugins/sdk-entrypoints)                                        |
 | Plugin hooks           | `api.on(...)`                                    | [Plugin hooks](/plugins/hooks)                                                  |
@@ -170,10 +170,11 @@ A single plugin can register any number of capabilities via the `api` object:
 
 For the full registration API, see [SDK Overview](/plugins/sdk-overview#registration-api).
 
-Use `api.registerEmbeddedExtensionFactory(...)` when a plugin needs Pi-native
-embedded-runner hooks such as async `tool_result` rewriting before the final
-tool result message is emitted. Prefer regular OpenClaw plugin hooks when the
-work does not need Pi extension timing.
+Use `api.registerAgentToolResultMiddleware(...)` when a plugin needs async
+tool-result rewriting before the model sees the output. Declare the targeted
+harnesses in `contracts.agentToolResultMiddleware`, for example
+`["pi", "codex-app-server"]`. Prefer regular OpenClaw plugin hooks when the
+work does not need pre-model tool-result timing.
 
 If your plugin registers custom gateway RPC methods, keep them on a
 plugin-specific prefix. Core admin namespaces (`config.*`,
