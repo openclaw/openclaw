@@ -5,6 +5,7 @@ import {
   __resetContainerCacheForTest,
   defaultGatewayBindMode,
   isContainerEnvironment,
+  isLocalGatewayUrl,
   isLocalishHost,
   isLoopbackHost,
   isPrivateOrLoopbackAddress,
@@ -56,6 +57,45 @@ describe("isLoopbackHost", () => {
   it("accepts localhost absolute-form hostnames", () => {
     expect(isLoopbackHost("localhost.")).toBe(true);
     expect(isLoopbackHost("LOCALHOST...")).toBe(true);
+  });
+});
+
+describe("isLocalGatewayUrl", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("accepts loopback websocket aliases", () => {
+    expect(isLocalGatewayUrl("ws://127.0.0.1:18789")).toBe(true);
+    expect(isLocalGatewayUrl("http://localhost:18789")).toBe(true);
+    expect(isLocalGatewayUrl("wss://[::1]:18789")).toBe(true);
+  });
+
+  it("accepts same-host local interface websocket urls", () => {
+    vi.spyOn(os, "networkInterfaces").mockReturnValue(
+      makeNetworkInterfacesSnapshot({
+        Ethernet: [{ address: "192.168.1.42", family: "IPv4", internal: false }],
+      }),
+    );
+
+    expect(isLocalGatewayUrl("ws://192.168.1.42:18789")).toBe(true);
+  });
+
+  it("accepts same-host tailnet websocket urls", () => {
+    vi.spyOn(os, "networkInterfaces").mockReturnValue(
+      makeNetworkInterfacesSnapshot({
+        Tailscale: [{ address: "100.64.0.1", family: "IPv4", internal: false }],
+      }),
+    );
+
+    expect(isLocalGatewayUrl("ws://100.64.0.1:18789")).toBe(true);
+  });
+
+  it("rejects non-local and invalid websocket urls", () => {
+    expect(isLocalGatewayUrl("ws://example.com:18789")).toBe(false);
+    expect(isLocalGatewayUrl("ws://192.168.1.99:18789")).toBe(false);
+    expect(isLocalGatewayUrl("ftp://127.0.0.1:18789")).toBe(false);
+    expect(isLocalGatewayUrl("not-a-url")).toBe(false);
   });
 });
 

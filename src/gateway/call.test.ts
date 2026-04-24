@@ -1000,6 +1000,24 @@ describe("callGateway url override auth requirements", () => {
 
     await expect(callGateway({ method: "health" })).rejects.toThrow("explicit credentials");
   });
+
+  it("uses local credentials for same-host local url overrides", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "local",
+        auth: { token: "local-token", password: "local-password" },
+      },
+    });
+    pickPrimaryTailnetIPv4.mockReturnValue("100.64.0.1");
+    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+
+    await callGateway({ method: "health", url: "ws://100.64.0.1:18789" });
+
+    expect(lastClientOptions?.url).toBe("ws://100.64.0.1:18789");
+    expect(lastClientOptions?.token).toBe("local-token");
+    expect(lastClientOptions?.password).toBe("local-password");
+  });
 });
 
 describe("callGateway password resolution", () => {

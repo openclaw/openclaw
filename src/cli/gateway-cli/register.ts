@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 import type { HealthSummary } from "../../commands/health.js";
+import { runDesktopEventsHelper } from "../../gateway/desktop-events-helper.js";
 import type { CostUsageSummary } from "../../infra/session-cost-usage.js";
 import type {
   DiagnosticStabilityBundle,
@@ -435,6 +436,26 @@ export function registerGatewayCli(program: Command) {
           );
           defaultRuntime.writeJson(result);
         }, "Gateway call failed");
+      }),
+  );
+
+  gatewayCallOpts(
+    gateway
+      .command("desktop-events")
+      .description("Stream OpenClaw gateway events for Jarvis Desktop")
+      .option("--json-stream", "Output newline-delimited JSON events", false)
+      .action(async (opts, command) => {
+        await runGatewayCommand(async () => {
+          const rpcOpts = resolveGatewayRpcOptions(opts, command);
+          await runDesktopEventsHelper({
+            url: rpcOpts.url,
+            token: rpcOpts.token,
+            password: rpcOpts.password,
+            stdin: process.stdin,
+            stdout: process.stdout,
+            stderr: process.stderr,
+          });
+        }, "Gateway desktop-events failed");
       }),
   );
 

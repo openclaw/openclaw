@@ -218,6 +218,10 @@ export function isLocalGatewayAddress(ip: string | undefined): boolean {
   if (tailnetIPv4 && normalized === normalizeLowercaseStringOrEmpty(tailnetIPv4)) {
     return true;
   }
+  const lanIPv4 = pickPrimaryLanIPv4();
+  if (lanIPv4 && normalized === normalizeLowercaseStringOrEmpty(lanIPv4)) {
+    return true;
+  }
   const tailnetIPv6 = pickPrimaryTailnetIPv6();
   if (
     tailnetIPv6 &&
@@ -226,6 +230,28 @@ export function isLocalGatewayAddress(ip: string | undefined): boolean {
     return true;
   }
   return false;
+}
+
+export function isLocalGatewayUrl(url: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+
+  const protocol =
+    parsed.protocol === "https:" ? "wss:" : parsed.protocol === "http:" ? "ws:" : parsed.protocol;
+
+  if (protocol !== "ws:" && protocol !== "wss:") {
+    return false;
+  }
+
+  if (isLoopbackHost(parsed.hostname)) {
+    return true;
+  }
+
+  return net.isIP(parsed.hostname) > 0 && isLocalGatewayAddress(parsed.hostname);
 }
 
 /**

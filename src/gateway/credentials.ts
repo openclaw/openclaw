@@ -5,6 +5,7 @@ import {
   trimCredentialToUndefined,
   trimToUndefined,
 } from "./credential-planner.js";
+import { isLocalGatewayUrl } from "./net.js";
 export {
   hasGatewayPasswordEnvCandidate,
   hasGatewayTokenEnvCandidate,
@@ -262,10 +263,15 @@ export function resolveGatewayCredentialsFromConfig(params: {
   if (explicitToken || explicitPassword) {
     return { token: explicitToken, password: explicitPassword };
   }
-  if (trimToUndefined(params.urlOverride) && params.urlOverrideSource !== "env") {
+  const normalizedUrlOverride = trimToUndefined(params.urlOverride);
+  const localUrlOverride =
+    normalizedUrlOverride && isLocalGatewayUrl(normalizedUrlOverride)
+      ? normalizedUrlOverride
+      : undefined;
+  if (normalizedUrlOverride && !localUrlOverride && params.urlOverrideSource !== "env") {
     return {};
   }
-  if (trimToUndefined(params.urlOverride) && params.urlOverrideSource === "env") {
+  if (normalizedUrlOverride && !localUrlOverride && params.urlOverrideSource === "env") {
     return resolveGatewayCredentialsFromValues({
       configToken: undefined,
       configPassword: undefined,
@@ -279,7 +285,8 @@ export function resolveGatewayCredentialsFromConfig(params: {
     config: params.cfg,
     env,
   });
-  const mode: GatewayCredentialMode = params.modeOverride ?? plan.configuredMode;
+  const mode: GatewayCredentialMode =
+    params.modeOverride ?? (localUrlOverride ? "local" : plan.configuredMode);
 
   const localTokenPrecedence =
     params.localTokenPrecedence ??

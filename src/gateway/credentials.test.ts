@@ -147,6 +147,24 @@ describe("resolveGatewayCredentialsFromConfig", () => {
     expectEnvGatewayCredentials(resolved);
   });
 
+  it("keeps local credentials for same-host local url overrides", () => {
+    const resolved = resolveGatewayCredentialsFromConfig({
+      cfg: cfg({
+        gateway: {
+          mode: "local",
+          auth: { token: "local-token", password: "local-password" }, // pragma: allowlist secret
+        },
+      }),
+      env: {} as NodeJS.ProcessEnv,
+      urlOverride: "ws://127.0.0.1:18789",
+    });
+
+    expect(resolved).toEqual({
+      token: "local-token",
+      password: "local-password", // pragma: allowlist secret
+    });
+  });
+
   it("uses local-mode environment values before local config", () => {
     const resolved = resolveGatewayCredentialsFor({
       mode: "local",

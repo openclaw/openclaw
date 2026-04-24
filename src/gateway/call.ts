@@ -36,6 +36,7 @@ import {
   resolveLeastPrivilegeOperatorScopesForMethod,
   type OperatorScope,
 } from "./method-scopes.js";
+import { isLocalGatewayUrl } from "./net.js";
 import { PROTOCOL_VERSION } from "./protocol/index.js";
 export type { GatewayConnectionDetails };
 
@@ -229,6 +230,9 @@ export function ensureExplicitGatewayAuth(params: {
   configPath?: string;
 }): void {
   if (!params.urlOverride) {
+    return;
+  }
+  if (isLocalGatewayUrl(params.urlOverride)) {
     return;
   }
   // URL overrides are untrusted redirects and can move WebSocket traffic off the intended host.
