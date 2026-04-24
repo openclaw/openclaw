@@ -129,8 +129,8 @@ async function resolveDiscordSendTarget(
   opts: DiscordSendOpts,
 ): Promise<{ rest: RequestClient; request: DiscordClientRequest; channelId: string }> {
   const cfg = requireRuntimeConfig(opts.cfg, "Discord send target resolution");
-  const { rest, request } = createDiscordClient(opts, cfg);
-  const recipient = await parseAndResolveRecipient(to, opts.accountId, cfg);
+  const { rest, request } = createDiscordClient({ ...opts, cfg });
+  const recipient = await parseAndResolveRecipient(to, cfg, opts.accountId);
   const { channelId } = await resolveChannelId(rest, recipient, request);
   return { rest, request, channelId };
 }
@@ -159,8 +159,8 @@ export async function sendMessageDiscord(
   const textWithMentions = rewriteDiscordKnownMentions(textWithTables, {
     accountId: accountInfo.accountId,
   });
-  const { token, rest, request } = createDiscordClient(opts, cfg);
-  const recipient = await parseAndResolveRecipient(to, opts.accountId, cfg);
+  const { token, rest, request } = createDiscordClient({ ...opts, cfg });
+  const recipient = await parseAndResolveRecipient(to, cfg, opts.accountId);
   const { channelId } = await resolveChannelId(rest, recipient, request);
 
   // Forum/Media channels reject POST /messages; auto-create a thread post instead.
@@ -543,19 +543,18 @@ export async function sendVoiceMessageDiscord(
   let token: string | undefined;
   let rest: RequestClient | undefined;
   let channelId: string | undefined;
-  let cfg: OpenClawConfig | undefined;
+  const cfg = requireRuntimeConfig(opts.cfg, "Discord voice send");
 
   try {
-    cfg = requireRuntimeConfig(opts.cfg, "Discord voice send");
     const accountInfo = resolveDiscordAccount({
       cfg,
       accountId: opts.accountId,
     });
-    const client = createDiscordClient(opts, cfg);
+    const client = createDiscordClient({ ...opts, cfg });
     token = client.token;
     rest = client.rest;
     const request = client.request;
-    const recipient = await parseAndResolveRecipient(to, opts.accountId, cfg);
+    const recipient = await parseAndResolveRecipient(to, cfg, opts.accountId);
     channelId = (await resolveChannelId(rest, recipient, request)).channelId;
 
     // Convert to OGG/Opus if needed
@@ -589,7 +588,7 @@ export async function sendVoiceMessageDiscord(
 
     return toDiscordSendResult(result, channelId);
   } catch (err) {
-    if (channelId && rest && token && cfg) {
+    if (channelId && rest && token) {
       throw await buildDiscordSendError(err, {
         channelId,
         cfg,

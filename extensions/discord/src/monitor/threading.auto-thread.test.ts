@@ -12,6 +12,7 @@ vi.mock("./thread-title.js", () => ({
 }));
 
 let maybeCreateDiscordAutoThread: MaybeCreateDiscordAutoThreadFn;
+const DEFAULT_CFG = {} as OpenClawConfig;
 
 const postMock = vi.fn();
 const getMock = vi.fn();
@@ -37,6 +38,7 @@ function createBaseParams(
     channelType: ChannelType.GuildText,
     baseText: "test",
     combinedBody: "test",
+    cfg: DEFAULT_CFG,
     ...overrides,
   };
 }

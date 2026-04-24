@@ -234,10 +234,10 @@ async function resolveDiscordTargetChannelId(
   opts: DiscordClientOpts & { cfg: OpenClawConfig },
 ): Promise<{ channelId: string; dm?: boolean }> {
   const cfg = requireRuntimeConfig(opts.cfg, "Discord target channel resolution");
-  const recipient = await parseAndResolveRecipient(raw, opts.accountId, cfg, {
+  const recipient = await parseAndResolveRecipient(raw, cfg, opts.accountId, {
     defaultKind: "channel",
   });
-  const { rest, request } = createDiscordClient(opts, cfg);
+  const { rest, request } = createDiscordClient(opts);
   return await resolveChannelId(rest, recipient, request);
 }
 

@@ -621,10 +621,23 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
               ],
             };
           }
+          const statusCfg: OpenClawConfig = {
+            channels: {
+              discord: {
+                accounts: {
+                  [account.accountId]: {
+                    ...account.config,
+                    token,
+                  },
+                },
+              },
+            },
+          };
           try {
             const perms = await (
               await loadDiscordSendModule()
             ).fetchChannelPermissionsDiscord(parsedTarget.id, {
+              cfg: statusCfg,
               token,
               accountId: account.accountId ?? undefined,
             });
@@ -681,6 +694,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
             };
           }
           const audit = await auditDiscordChannelPermissions({
+            cfg,
             token: botToken,
             accountId: account.accountId,
             channelIds,

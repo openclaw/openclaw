@@ -1,5 +1,6 @@
 import type { Client } from "@buape/carbon";
 import type { GatewayPresenceUpdate } from "discord-api-types/v10";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { DiscordChannelConfigResolved } from "./allow-list.js";
@@ -22,6 +23,8 @@ import {
   resolveDiscordAutoThreadReplyPlan,
   resolveDiscordReplyDeliveryPlan,
 } from "./threading.js";
+
+const DEFAULT_CFG = {} as OpenClawConfig;
 
 describe("resolveDiscordOwnerAllowFrom", () => {
   it("returns undefined when no allowlist is configured", () => {
@@ -432,6 +435,7 @@ describe("maybeCreateDiscordAutoThread", () => {
       threadChannel: null,
       baseText: "hello",
       combinedBody: "hello",
+      cfg: DEFAULT_CFG,
     };
   }
 
@@ -489,6 +493,7 @@ describe("resolveDiscordAutoThreadReplyPlan", () => {
       threadChannel: overrides?.threadChannel ?? null,
       baseText: "hello",
       combinedBody: "hello",
+      cfg: DEFAULT_CFG,
       replyToMode: "all" as const,
       agentId: "agent",
       channel: "discord" as const,
