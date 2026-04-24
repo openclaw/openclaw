@@ -40,6 +40,11 @@ vi.mock("../agents/agent-paths.js", () => ({
   resolveOpenClawAgentDir: () => "/tmp/agent",
 }));
 
+vi.mock("../agents/agent-scope.js", () => ({
+  listAgentIds: () => ["main", "zed", "kim"],
+  resolveAgentDir: (_cfg: unknown, agentId: unknown) => `/tmp/${String(agentId)}/agent`,
+}));
+
 vi.mock("../agents/models-config.js", () => ({
   ensureOpenClawModelsJson: (config: unknown, agentDir: unknown) =>
     ensureOpenClawModelsJsonMock(config, agentDir),
@@ -104,6 +109,28 @@ describe("gateway startup primary model warmup", () => {
     expect(resolveModelMock).toHaveBeenCalledWith("openai-codex", "gpt-5.4", "/tmp/agent", cfg, {
       skipProviderRuntimeHooks: true,
     });
+  });
+
+  it("refreshes configured non-default agent dirs during startup warmup", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai-codex/gpt-5.4",
+          },
+        },
+        list: [{ id: "zed" }, { id: "kim" }],
+      },
+    } as OpenClawConfig;
+
+    await prewarmConfiguredPrimaryModel({
+      cfg,
+      log: { warn: vi.fn() },
+    });
+
+    expect(ensureOpenClawModelsJsonMock).toHaveBeenCalledWith(cfg, "/tmp/agent");
+    expect(ensureOpenClawModelsJsonMock).toHaveBeenCalledWith(cfg, "/tmp/zed/agent");
+    expect(ensureOpenClawModelsJsonMock).toHaveBeenCalledWith(cfg, "/tmp/kim/agent");
   });
 
   it("skips warmup when no explicit primary model is configured", async () => {

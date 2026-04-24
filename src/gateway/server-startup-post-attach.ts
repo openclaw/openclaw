@@ -81,6 +81,7 @@ async function prewarmConfiguredPrimaryModel(params: {
     return;
   }
   const [
+    { listAgentIds, resolveAgentDir },
     { resolveOpenClawAgentDir },
     { DEFAULT_MODEL, DEFAULT_PROVIDER },
     { selectAgentHarness },
@@ -89,6 +90,7 @@ async function prewarmConfiguredPrimaryModel(params: {
     { resolveModel, resolveModelAsync },
     { resolveEmbeddedAgentRuntime },
   ] = await Promise.all([
+    import("../agents/agent-scope.js"),
     import("../agents/agent-paths.js"),
     import("../agents/defaults.js"),
     import("../agents/harness/selection.js"),
@@ -115,6 +117,19 @@ async function prewarmConfiguredPrimaryModel(params: {
   const agentDir = resolveOpenClawAgentDir();
   try {
     await ensureOpenClawModelsJson(params.cfg, agentDir);
+    await Promise.all(
+      listAgentIds(params.cfg)
+        .filter((agentId) => resolveAgentDir(params.cfg, agentId) !== agentDir)
+        .map(async (agentId) => {
+          try {
+            await ensureOpenClawModelsJson(params.cfg, resolveAgentDir(params.cfg, agentId));
+          } catch (err) {
+            params.log.warn(
+              `startup models.json refresh failed for agent ${agentId}: ${String(err)}`,
+            );
+          }
+        }),
+    );
     const resolved = resolveModel(provider, model, agentDir, params.cfg, {
       skipProviderRuntimeHooks: true,
     });
