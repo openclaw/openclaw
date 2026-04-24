@@ -21,7 +21,6 @@ const tempDirs = new Set<string>();
 
 type ProjectorNotification = Parameters<CodexAppServerEventProjector["handleNotification"]>[0];
 type ProjectedAttemptResult = ReturnType<CodexAppServerEventProjector["buildResult"]>;
-type TerminalClassification = "empty" | "reasoning-only" | "planning-only";
 
 async function createParams(): Promise<EmbeddedRunAttemptParams> {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-outcome-contract-"));
@@ -70,10 +69,7 @@ function forCurrentTurn(
   } as ProjectorNotification;
 }
 
-function classifyProjectedAttemptResult(
-  result: ProjectedAttemptResult,
-  classification?: TerminalClassification,
-) {
+function classifyProjectedAttemptResult(result: ProjectedAttemptResult) {
   const finalAssistantText = result.assistantTexts.join("\n\n").trim();
   return classifyEmbeddedPiRunResultForModelFallback({
     provider: "codex",
@@ -83,7 +79,7 @@ function classifyProjectedAttemptResult(
       meta: {
         durationMs: 1,
         aborted: result.aborted,
-        agentHarnessResultClassification: classification,
+        agentHarnessResultClassification: result.agentHarnessResultClassification,
         finalAssistantRawText: finalAssistantText || undefined,
         finalAssistantVisibleText: finalAssistantText || undefined,
       },
@@ -306,11 +302,12 @@ describe("Outcome/fallback runtime contract - Codex app-server adapter", () => {
       },
     },
   ] as const)(
-    "keeps $name terminal turns fallback-ready once a harness classification exists",
+    "keeps $name terminal turns fallback-ready with adapter-produced classification",
     async ({ build, classification, expectedCode }) => {
       const result = await build();
 
-      expect(classifyProjectedAttemptResult(result, classification)).toMatchObject({
+      expect(result.agentHarnessResultClassification).toBe(classification);
+      expect(classifyProjectedAttemptResult(result)).toMatchObject({
         reason: "format",
         code: expectedCode,
       });
@@ -349,6 +346,7 @@ describe("Outcome/fallback runtime contract - Codex app-server adapter", () => {
       }),
     );
 
-    expect(classifyProjectedAttemptResult(result, "empty")).toBeNull();
+    expect(result.agentHarnessResultClassification).toBeUndefined();
+    expect(classifyProjectedAttemptResult(result)).toBeNull();
   });
 });
