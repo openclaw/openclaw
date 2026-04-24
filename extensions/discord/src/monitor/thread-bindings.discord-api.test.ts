@@ -3,13 +3,13 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as discordClientModule from "../client.js";
 import * as discordSendModule from "../send.js";
+import { EMPTY_DISCORD_TEST_CONFIG } from "../test-support/config.js";
 import type { ThreadBindingRecord } from "./thread-bindings.types.js";
 
 const DEFAULT_SEND_RESULT = {
   messageId: "msg-1",
   channelId: "thread-1",
 };
-const DEFAULT_CFG = {} as OpenClawConfig;
 
 const restGet = vi.fn<(...args: unknown[]) => Promise<unknown>>();
 const sendMessageDiscord = vi.fn<typeof discordSendModule.sendMessageDiscord>();
@@ -37,7 +37,7 @@ function resolveTestChannelIdForBinding(
   },
 ) {
   return resolveChannelIdForBinding({
-    cfg: DEFAULT_CFG,
+    cfg: EMPTY_DISCORD_TEST_CONFIG,
     ...params,
   });
 }

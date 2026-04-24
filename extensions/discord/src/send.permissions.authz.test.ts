@@ -1,12 +1,11 @@
 import type { RequestClient } from "@buape/carbon";
 import { PermissionFlagsBits, Routes } from "discord-api-types/v10";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { EMPTY_DISCORD_TEST_OPTS } from "./test-support/config.js";
 
 const mockRest = vi.hoisted(() => ({
   get: vi.fn(),
 }));
-const DISCORD_TEST_OPTS = { cfg: {} as OpenClawConfig };
 
 vi.mock("./client.js", () => ({
   resolveDiscordRest: () => mockRest as unknown as RequestClient,
@@ -64,7 +63,7 @@ describe("discord guild permission authorization", () => {
       const result = await fetchMemberGuildPermissionsDiscord(
         "guild-1",
         "user-1",
-        DISCORD_TEST_OPTS,
+        EMPTY_DISCORD_TEST_OPTS,
       );
       expect(result).toBeNull();
     });
@@ -81,7 +80,7 @@ describe("discord guild permission authorization", () => {
       const result = await fetchMemberGuildPermissionsDiscord(
         "guild-1",
         "user-1",
-        DISCORD_TEST_OPTS,
+        EMPTY_DISCORD_TEST_OPTS,
       );
       expect(result).not.toBeNull();
       expect((result! & PermissionFlagsBits.ViewChannel) === PermissionFlagsBits.ViewChannel).toBe(
@@ -107,7 +106,7 @@ describe("discord guild permission authorization", () => {
         "guild-1",
         "user-1",
         [PermissionFlagsBits.KickMembers],
-        DISCORD_TEST_OPTS,
+        EMPTY_DISCORD_TEST_OPTS,
       );
       expect(result).toBe(true);
     });
@@ -128,7 +127,7 @@ describe("discord guild permission authorization", () => {
         "guild-1",
         "user-1",
         [PermissionFlagsBits.KickMembers],
-        DISCORD_TEST_OPTS,
+        EMPTY_DISCORD_TEST_OPTS,
       );
       expect(result).toBe(true);
     });
@@ -143,7 +142,7 @@ describe("discord guild permission authorization", () => {
         "guild-1",
         "user-1",
         [PermissionFlagsBits.BanMembers, PermissionFlagsBits.KickMembers],
-        DISCORD_TEST_OPTS,
+        EMPTY_DISCORD_TEST_OPTS,
       );
       expect(result).toBe(false);
     });
@@ -163,7 +162,7 @@ describe("discord guild permission authorization", () => {
         "guild-1",
         "user-1",
         [PermissionFlagsBits.KickMembers, PermissionFlagsBits.BanMembers],
-        DISCORD_TEST_OPTS,
+        EMPTY_DISCORD_TEST_OPTS,
       );
       expect(result).toBe(false);
     });
@@ -181,7 +180,7 @@ describe("discord guild permission authorization", () => {
         "guild-1",
         "user-1",
         [PermissionFlagsBits.KickMembers, PermissionFlagsBits.BanMembers],
-        DISCORD_TEST_OPTS,
+        EMPTY_DISCORD_TEST_OPTS,
       );
       expect(result).toBe(true);
     });
