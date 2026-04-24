@@ -1610,7 +1610,12 @@ async function deliverOutboundPayloadsCore(
             mediaCount: payloadSummary.mediaUrls.length,
           },
         );
-        const fallbackText = payloadSummary.text.trim();
+        const fallbackTextParts = [payloadSummary.text.trim()];
+        if (droppedMediaNotice) {
+          fallbackTextParts.push(droppedMediaNotice);
+          droppedMediaNotice = undefined;
+        }
+        const fallbackText = fallbackTextParts.filter(Boolean).join("\n\n");
         if (!fallbackText) {
           throw new Error(
             "Plugin outbound adapter does not implement sendMedia and no text fallback is available for media payload",
