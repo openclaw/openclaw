@@ -3,15 +3,15 @@ name: homelab-images
 on:
   push:
     branches:
-      - 'homelab/release-*'
+      - "homelab/release-*"
     paths-ignore:
-      - 'docs/**'
-      - '**/*.md'
-      - '**/*.mdx'
-      - '.agents/**'
-      - '.github/ISSUE_TEMPLATE/**'
-      - '.gitignore'
-      - 'LICENSE'
+      - "docs/**"
+      - "**/*.md"
+      - "**/*.mdx"
+      - ".agents/**"
+      - ".github/ISSUE_TEMPLATE/**"
+      - ".gitignore"
+      - "LICENSE"
   workflow_dispatch:
     inputs:
       skip_build:
@@ -31,11 +31,7 @@ concurrency:
 jobs:
   build-and-publish:
     if: ${{ startsWith(github.ref, 'refs/heads/homelab/release-') && (github.event_name != 'push' || !contains(github.event.head_commit.message, '[skip ci]')) && !(github.event_name == 'workflow_dispatch' && inputs.skip_build) }}
-    runs-on:
-      - self-hosted
-      - dragonsbreath
-      - docker
-      - openclaw
+    runs-on: [self-hosted, Linux, X64, dragonsbreath, docker, kcc, kcc-large]
     permissions:
       contents: read
       id-token: write
@@ -148,11 +144,7 @@ jobs:
   prepare-promote-inputs:
     needs:
       - build-and-publish
-    runs-on:
-      - self-hosted
-      - dragonsbreath
-      - docker
-      - openclaw
+    runs-on: [self-hosted, Linux, X64, dragonsbreath, docker, kcc, kcc-large]
     outputs:
       image: ${{ steps.set.outputs.image }}
       image_tag: ${{ steps.set.outputs.image_tag }}
@@ -187,11 +179,7 @@ jobs:
       - build-and-publish
       - prepare-promote-inputs
     if: ${{ always() && startsWith(github.ref, 'refs/heads/homelab/release-') && ((github.event_name == 'workflow_dispatch' && inputs.skip_build && needs.prepare-promote-inputs.result == 'success') || (needs.build-and-publish.result == 'success' && needs.prepare-promote-inputs.result == 'success')) }}
-    runs-on:
-      - self-hosted
-      - dragonsbreath
-      - docker
-      - openclaw
+    runs-on: [self-hosted, Linux, X64, dragonsbreath, docker, kcc, kcc-large]
     permissions:
       contents: write
       pull-requests: write
