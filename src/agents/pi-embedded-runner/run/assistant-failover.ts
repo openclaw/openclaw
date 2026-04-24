@@ -206,8 +206,9 @@ export async function handleAssistantFailover(params: {
       return sameModelIdleTimeoutRetry();
     }
     params.logAssistantFailoverDecision("surface_error");
-    // Two surface_error shapes already have downstream synthesis and
-    // must keep falling through to `continue_normal`:
+    // Three surface_error shapes must keep falling through to
+    // `continue_normal` because either an existing synthesis path
+    // covers them or no genuine failure occurred:
     //   1. External abort (user pressed stop) — partial assistant
     //      output carries the turn; no provider error to synthesize.
     //   2. Timeout without an idle-retry — run.ts emits a dedicated
@@ -216,14 +217,29 @@ export async function handleAssistantFailover(params: {
     //      !timedOutDuringCompaction && !payloadsWithToolMedia.length`
     //      block in run.ts). Throwing here would short-circuit that
     //      synthesis and break timeout-compaction retry coverage.
-    // Every other surface_error is a concrete provider failure that
-    // continue_normal would silently drop before the payload builder
-    // sees it (openclaw#70124: billing errors reached the gateway
-    // but never the webchat because stopReason was not "error" and
-    // no other synthesis path caught them). Throw a FailoverError so
-    // the client surface can render it the same way it already
-    // renders fallback_model failures.
-    if (!params.externalAbort && !params.timedOut) {
+    //   3. Successful turns whose lastAssistant still carries a
+    //      stale classified errorMessage. `classifyFailoverReason`
+    //      runs as a pure string classifier in run.ts without a
+    //      `stopReason === "error"` gate, so a successful reply
+    //      whose errorMessage happens to match billing/auth/
+    //      rate_limit/etc can drive `shouldRotateAssistant` through
+    //      its `failoverReason !== null` branch, exhaust profile
+    //      rotation, and land here with no concrete provider
+    //      failure on this attempt. `failoverFailure` is gated on
+    //      `stopReason === "error"` by the isXAssistantError
+    //      helpers in errors.ts, so it's the correct signal that a
+    //      genuine provider failure occurred. Without it, throwing
+    //      would convert a successful turn into a hard error.
+    // Every remaining surface_error is a concrete provider failure
+    // that continue_normal would silently drop before the payload
+    // builder sees it (openclaw#70124: Anthropic billing errors
+    // reached the gateway but never the webchat because the
+    // error-payload synthesizer in payloads.ts only fires when
+    // `stopReason === "error"` AND no other synthesis path caught
+    // them). Throw a FailoverError so the client surface can
+    // render it the same way it already renders fallback_model
+    // failures.
+    if (!params.externalAbort && !params.timedOut && params.failoverFailure) {
       const message = resolveAssistantFailoverErrorMessage(params);
       const reason = resolveSurfaceErrorReason(decision.reason, params);
       const status =

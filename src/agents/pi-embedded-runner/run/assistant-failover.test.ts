@@ -151,6 +151,30 @@ describe("handleAssistantFailover", () => {
       expect(err.status).toBe(401);
     });
 
+    it("leaves successful turns with a stale classified errorMessage on the continue_normal path", async () => {
+      // `classifyFailoverReason` runs as a pure string classifier in
+      // `run.ts` without a `stopReason === "error"` gate, so a
+      // successful turn whose lastAssistant happens to carry a stale
+      // classified errorMessage (e.g. from an earlier internal retry)
+      // can drive `shouldRotateAssistant` through its `failoverReason
+      // !== null` branch and land here with a non-null failoverReason.
+      // `failoverFailure` is gated on `stopReason === "error"` via the
+      // isXAssistantError helpers in errors.ts, so it's the correct
+      // signal that a concrete provider failure occurred on this
+      // attempt. Without this gate, throwing would convert a
+      // successful turn into a hard error for the client.
+      const outcome = await handleAssistantFailover(
+        makeParams({
+          initialDecision: { action: "surface_error", reason: "billing" },
+          failoverFailure: false,
+          failoverReason: "billing",
+          billingFailure: false,
+        }),
+      );
+
+      expect(outcome.action).toBe("continue_normal");
+    });
+
     it("leaves externally-aborted runs on the continue_normal path", async () => {
       // External aborts (user pressed stop) must never synthesize a
       // provider error; the partial assistant output carries the turn.
