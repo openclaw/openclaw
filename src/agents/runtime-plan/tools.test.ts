@@ -39,6 +39,31 @@ describe("AgentRuntimePlan tool policy helpers", () => {
     });
   });
 
+  it("accepts legacy optional model fields while normalizing RuntimePlan context", () => {
+    const tools = [createParameterFreeTool()] as AgentTool[];
+    const normalize = vi.fn(() => tools);
+    const runtimePlan = {
+      tools: {
+        normalize,
+        logDiagnostics: vi.fn(),
+      },
+    } as unknown as AgentRuntimePlan;
+
+    expect(
+      normalizeAgentRuntimeTools({
+        runtimePlan,
+        tools,
+        provider: "openai",
+        modelApi: null,
+      }),
+    ).toBe(tools);
+    expect(normalize).toHaveBeenCalledWith(tools, {
+      workspaceDir: undefined,
+      modelApi: undefined,
+      model: undefined,
+    });
+  });
+
   it("falls back to legacy provider schema normalization when no plan is available", () => {
     const normalized = normalizeAgentRuntimeTools({
       tools: [createParameterFreeTool()] as AgentTool[],

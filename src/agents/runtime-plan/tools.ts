@@ -15,19 +15,19 @@ type AgentRuntimeToolPolicyParams<TSchemaType extends TSchema = TSchema, TResult
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
-  modelId: string;
-  modelApi?: string;
+  modelId?: string;
+  modelApi?: string | null;
   model?: ProviderRuntimeModel;
 };
 
 function runtimePlanToolContext(params: {
   workspaceDir?: string;
-  modelApi?: string;
+  modelApi?: string | null;
   model?: ProviderRuntimeModel;
 }) {
   return {
     workspaceDir: params.workspaceDir,
-    modelApi: params.modelApi,
+    modelApi: params.modelApi ?? undefined,
     model: params.model,
   };
 }
