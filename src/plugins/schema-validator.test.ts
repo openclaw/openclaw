@@ -42,7 +42,9 @@ function expectSuccessfulValidationValue(params: {
   }
 }
 
-function expectValidationSuccess(params: Parameters<typeof validateJsonSchemaValue>[0]) {
+function expectValidationSuccess(
+  params: Parameters<typeof validateJsonSchemaValue>[0],
+) {
   const result = validateJsonSchemaValue(params);
   expect(result.ok).toBe(true);
 }
@@ -159,7 +161,20 @@ describe("schema validator", () => {
       },
       path: "mode",
       messageIncludes: ["(allowed:", "... (+1 more)"],
-      allowedValues: ["v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10", "v11", "v12"],
+      allowedValues: [
+        "v1",
+        "v2",
+        "v3",
+        "v4",
+        "v5",
+        "v6",
+        "v7",
+        "v8",
+        "v9",
+        "v10",
+        "v11",
+        "v12",
+      ],
       hiddenCount: 1,
     },
     {
@@ -181,16 +196,19 @@ describe("schema validator", () => {
       path: "mode",
       messageIncludes: ["(allowed:", "... (+"],
     },
-  ])("$title", ({ params, path, messageIncludes, allowedValues, hiddenCount }) => {
-    const result = expectValidationFailure(params);
-    const issue = expectValidationIssue(result, path);
+  ])(
+    "$title",
+    ({ params, path, messageIncludes, allowedValues, hiddenCount }) => {
+      const result = expectValidationFailure(params);
+      const issue = expectValidationIssue(result, path);
 
-    expectIssueMessageIncludes(issue, messageIncludes);
-    if (allowedValues) {
-      expect(issue?.allowedValues).toEqual(allowedValues);
-      expect(issue?.allowedValuesHiddenCount).toBe(hiddenCount);
-    }
-  });
+      expectIssueMessageIncludes(issue, messageIncludes);
+      if (allowedValues) {
+        expect(issue?.allowedValues).toEqual(allowedValues);
+        expect(issue?.allowedValuesHiddenCount).toBe(hiddenCount);
+      }
+    },
+  );
 
   it.each([
     {
@@ -313,4 +331,43 @@ describe("schema validator", () => {
       });
     },
   );
+
+  // Regression: tool schemas from newer MCP servers (Playwright MCP >= 1.53)
+  // declare `$schema: https://json-schema.org/draft/2020-12/schema` and use
+  // draft-2020-12-only constructs (e.g. `prefixItems`). The plain-`ajv`
+  // entrypoint only registers draft-07 and threw
+  // `no schema with key or ref "https://json-schema.org/draft/2020-12/schema"`
+  // when such schemas compiled, disabling every tool call that passed through
+  // this validator. Fix: `require("ajv/dist/2020")`. These tests lock that in.
+  it("compiles draft-2020-12 tool schemas with prefixItems", () => {
+    expectSuccessfulValidationValue({
+      input: {
+        cacheKey: "schema-validator.test.draft-2020-12.prefixItems",
+        schema: {
+          $schema: "https://json-schema.org/draft/2020-12/schema",
+          type: "array",
+          prefixItems: [{ type: "string" }, { type: "number" }],
+          items: false,
+        } as unknown as Parameters<typeof validateJsonSchemaValue>[0]["schema"],
+        value: ["hello", 42],
+      },
+      expectedValue: ["hello", 42],
+    });
+  });
+
+  it("still compiles draft-07 tool schemas alongside draft-2020-12", () => {
+    expectSuccessfulValidationValue({
+      input: {
+        cacheKey: "schema-validator.test.draft-07.coexist",
+        schema: {
+          $schema: "http://json-schema.org/draft-07/schema#",
+          type: "object",
+          properties: { name: { type: "string" } },
+          required: ["name"],
+        } as unknown as Parameters<typeof validateJsonSchemaValue>[0]["schema"],
+        value: { name: "scott" },
+      },
+      expectedValue: { name: "scott" },
+    });
+  });
 });

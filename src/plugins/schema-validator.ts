@@ -1,6 +1,9 @@
 import { createRequire } from "node:module";
 import type { ErrorObject, ValidateFunction } from "ajv";
-import { appendAllowedValuesHint, summarizeAllowedValues } from "../config/allowed-values.js";
+import {
+  appendAllowedValuesHint,
+  summarizeAllowedValues,
+} from "../config/allowed-values.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import { sanitizeTerminalText } from "../terminal/safe-text.js";
 
@@ -16,6 +19,8 @@ type AjvLike = {
         },
   ) => AjvLike;
   compile: (schema: JsonSchemaObject) => ValidateFunction;
+  addMetaSchema: (schema: object, key?: string) => AjvLike;
+  getSchema: (keyRef: string) => ValidateFunction | undefined;
 };
 const ajvSingletons = new Map<"default" | "defaults", AjvLike>();
 
@@ -24,7 +29,16 @@ function getAjv(mode: "default" | "defaults"): AjvLike {
   if (cached) {
     return cached;
   }
-  const ajvModule = require("ajv") as { default?: new (opts?: object) => AjvLike };
+  // Use `ajv/dist/2020` so draft-2020-12 tool schemas from newer MCP servers
+  // (e.g. Playwright MCP >= 1.53, which emits `$schema:
+  // https://json-schema.org/draft/2020-12/schema`) compile instead of throwing
+  // `no schema with key or ref "https://json-schema.org/draft/2020-12/schema"`.
+  // The 2020 entrypoint registers draft-2020-12 but does not include draft-07
+  // by default, so we add the older meta-schemas back for tool authors who
+  // still emit draft-07 / draft-06 `$schema` values.
+  const ajvModule = require("ajv/dist/2020") as {
+    default?: new (opts?: object) => AjvLike;
+  };
   const AjvCtor =
     typeof ajvModule.default === "function"
       ? ajvModule.default
@@ -43,8 +57,33 @@ function getAjv(mode: "default" | "defaults"): AjvLike {
       return URL.canParse(value);
     },
   });
+  registerLegacyMetaSchemas(instance);
   ajvSingletons.set(mode, instance);
   return instance;
+}
+
+// draft-07 / draft-06 meta-schemas ship with ajv but are *not* auto-registered
+// on the `ajv/dist/2020` entrypoint. Register them here so tool schemas that
+// still declare `$schema: "http://json-schema.org/draft-07/schema#"` (a very
+// common case for older MCP servers and handwritten plugin schemas) continue
+// to validate without changes. addMetaSchema is idempotent — we guard with
+// getSchema so re-runs across multiple Ajv instances don't throw "schema with
+// key or id already exists".
+function registerLegacyMetaSchemas(instance: AjvLike): void {
+  for (const path of [
+    "ajv/dist/refs/json-schema-draft-07.json",
+    "ajv/dist/refs/json-schema-draft-06.json",
+  ]) {
+    try {
+      const meta = require(path) as { $id?: string; id?: string };
+      const key = meta.$id ?? meta.id;
+      if (key && !instance.getSchema(key)) {
+        instance.addMetaSchema(meta);
+      }
+    } catch {
+      // Meta schema not present in this ajv install — fine; 2020 tools still work.
+    }
+  }
 }
 
 type CachedValidator = {
@@ -93,8 +132,11 @@ function resolveMissingProperty(error: ErrorObject): string | null {
   ) {
     return null;
   }
-  const missingProperty = (error.params as { missingProperty?: unknown }).missingProperty;
-  return typeof missingProperty === "string" && missingProperty.trim() ? missingProperty : null;
+  const missingProperty = (error.params as { missingProperty?: unknown })
+    .missingProperty;
+  return typeof missingProperty === "string" && missingProperty.trim()
+    ? missingProperty
+    : null;
 }
 
 function resolveAjvErrorPath(error: ErrorObject): string {
@@ -108,7 +150,8 @@ function resolveAjvErrorPath(error: ErrorObject): string {
 
 function extractAllowedValues(error: ErrorObject): unknown[] | null {
   if (error.keyword === "enum") {
-    const allowedValues = (error.params as { allowedValues?: unknown }).allowedValues;
+    const allowedValues = (error.params as { allowedValues?: unknown })
+      .allowedValues;
     return Array.isArray(allowedValues) ? allowedValues : null;
   }
 
@@ -123,7 +166,9 @@ function extractAllowedValues(error: ErrorObject): unknown[] | null {
   return null;
 }
 
-function getAjvAllowedValuesSummary(error: ErrorObject): ReturnType<typeof summarizeAllowedValues> {
+function getAjvAllowedValuesSummary(
+  error: ErrorObject,
+): ReturnType<typeof summarizeAllowedValues> {
   const allowedValues = extractAllowedValues(error);
   if (!allowedValues) {
     return null;
@@ -131,9 +176,17 @@ function getAjvAllowedValuesSummary(error: ErrorObject): ReturnType<typeof summa
   return summarizeAllowedValues(allowedValues);
 }
 
-function formatAjvErrors(errors: ErrorObject[] | null | undefined): JsonSchemaValidationError[] {
+function formatAjvErrors(
+  errors: ErrorObject[] | null | undefined,
+): JsonSchemaValidationError[] {
   if (!errors || errors.length === 0) {
-    return [{ path: "<root>", message: "invalid config", text: "<root>: invalid config" }];
+    return [
+      {
+        path: "<root>",
+        message: "invalid config",
+        text: "<root>: invalid config",
+      },
+    ];
   }
   return errors.map((error) => {
     const path = resolveAjvErrorPath(error);
@@ -163,16 +216,24 @@ export function validateJsonSchemaValue(params: {
   cacheKey: string;
   value: unknown;
   applyDefaults?: boolean;
-}): { ok: true; value: unknown } | { ok: false; errors: JsonSchemaValidationError[] } {
-  const cacheKey = params.applyDefaults ? `${params.cacheKey}::defaults` : params.cacheKey;
+}):
+  | { ok: true; value: unknown }
+  | { ok: false; errors: JsonSchemaValidationError[] } {
+  const cacheKey = params.applyDefaults
+    ? `${params.cacheKey}::defaults`
+    : params.cacheKey;
   let cached = schemaCache.get(cacheKey);
   if (!cached || cached.schema !== params.schema) {
-    const validate = getAjv(params.applyDefaults ? "defaults" : "default").compile(params.schema);
+    const validate = getAjv(
+      params.applyDefaults ? "defaults" : "default",
+    ).compile(params.schema);
     cached = { validate, schema: params.schema };
     schemaCache.set(cacheKey, cached);
   }
 
-  const value = params.applyDefaults ? cloneValidationValue(params.value) : params.value;
+  const value = params.applyDefaults
+    ? cloneValidationValue(params.value)
+    : params.value;
   const ok = cached.validate(value);
   if (ok) {
     return { ok: true, value };
