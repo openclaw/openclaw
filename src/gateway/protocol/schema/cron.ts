@@ -69,7 +69,8 @@ const CronFailoverReasonSchema = Type.Union([
 ]);
 const CronPreHookSchema = Type.Object(
   {
-    command: NonEmptyString,
+    file: NonEmptyString,
+    args: Type.Optional(Type.Array(Type.String())),
     timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1, maximum: 300 })),
   },
   { additionalProperties: false },

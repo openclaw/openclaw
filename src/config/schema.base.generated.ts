@@ -5136,9 +5136,15 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   preHook: {
                     type: "object",
                     properties: {
-                      command: {
+                      file: {
                         type: "string",
                         minLength: 1,
+                      },
+                      args: {
+                        type: "array",
+                        items: {
+                          type: "string",
+                        },
                       },
                       timeoutSeconds: {
                         type: "integer",
@@ -5146,7 +5152,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         maximum: 300,
                       },
                     },
-                    required: ["command"],
+                    required: ["file"],
                     additionalProperties: false,
                   },
                 },
@@ -6476,9 +6482,15 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     preHook: {
                       type: "object",
                       properties: {
-                        command: {
+                        file: {
                           type: "string",
                           minLength: 1,
+                        },
+                        args: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
                         },
                         timeoutSeconds: {
                           type: "integer",
@@ -6486,7 +6498,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                           maximum: 300,
                         },
                       },
-                      required: ["command"],
+                      required: ["file"],
                       additionalProperties: false,
                     },
                   },

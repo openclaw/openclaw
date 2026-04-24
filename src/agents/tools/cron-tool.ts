@@ -206,10 +206,16 @@ const CronJobObjectSchema = Type.Optional(
       preHook: Type.Optional(
         Type.Object(
           {
-            command: Type.String({
+            file: Type.String({
               description:
-                "Shell command to run before execution. Exit 0 = proceed, 10 = skip, other = error.",
+                "Absolute path of the executable to run before execution. No shell interpretation. Exit 0 = proceed, 10 = skip, other = error.",
             }),
+            args: Type.Optional(
+              Type.Array(Type.String(), {
+                description:
+                  "Literal string arguments passed to the executable. Not parsed by a shell.",
+              }),
+            ),
             timeoutSeconds: Type.Optional(
               Type.Number({ description: "Timeout in seconds (default 30, max 300)" }),
             ),
@@ -223,13 +229,18 @@ const CronJobObjectSchema = Type.Optional(
 );
 
 const CronPatchPreHookSchema = Type.Optional(
-  Type.Unsafe<{ command: string; timeoutSeconds?: number } | false>({
+  Type.Unsafe<{ file: string; args?: string[]; timeoutSeconds?: number } | false>({
     type: "object",
     properties: {
-      command: Type.String({
+      file: Type.String({
         description:
-          "Shell command to run before execution. Exit 0 = proceed, 10 = skip, other = error.",
+          "Absolute path of the executable to run before execution. No shell interpretation. Exit 0 = proceed, 10 = skip, other = error.",
       }),
+      args: Type.Optional(
+        Type.Array(Type.String(), {
+          description: "Literal string arguments passed to the executable. Not parsed by a shell.",
+        }),
+      ),
       timeoutSeconds: Type.Optional(
         Type.Number({ description: "Timeout in seconds (default 30, max 300)" }),
       ),

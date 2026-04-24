@@ -1,10 +1,31 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { redactSensitiveText } from "../logging/redact.js";
 
 const execFileAsync = promisify(execFile);
 
+/** Max chars of stdout/stderr surfaced into logs. Keeps log volume bounded and limits secret leakage. */
+const LOG_OUTPUT_MAX_CHARS = 512;
+
+/**
+ * Redact and truncate a preHook output stream before logging. Callers must use
+ * this helper rather than logging raw `result.stdout` / `result.stderr`, since
+ * hook scripts may print tokens, credentials, or other sensitive data.
+ */
+export function summarizePreHookOutput(text: string): string {
+  if (!text) {
+    return text;
+  }
+  const redacted = redactSensitiveText(text, { mode: "tools" });
+  if (redacted.length <= LOG_OUTPUT_MAX_CHARS) {
+    return redacted;
+  }
+  return `${redacted.slice(0, LOG_OUTPUT_MAX_CHARS)}… [+${redacted.length - LOG_OUTPUT_MAX_CHARS} chars truncated]`;
+}
+
 export type PreHookConfig = {
-  command: string;
+  file: string;
+  args?: readonly string[];
   timeoutSeconds?: number;
 };
 
@@ -16,18 +37,11 @@ export type PreHookResult = {
   error?: string;
 };
 
-/** Exit code that signals a clean skip (not counted as a failure). */
 const SKIP_EXIT_CODE = 10;
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const MAX_TIMEOUT_MS = 300_000;
 const MAX_BUFFER = 64 * 1024;
-
-function resolveShell(): { shell: string; flag: string } {
-  return process.platform === "win32"
-    ? { shell: "cmd.exe", flag: "/c" }
-    : { shell: "/bin/sh", flag: "-c" };
-}
 
 function clampTimeout(timeoutSeconds: number | undefined): number {
   if (timeoutSeconds == null || !Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) {
@@ -44,14 +58,16 @@ export async function runPreHook(
     return { outcome: "error", exitCode: null, stdout: "", stderr: "", error: "aborted" };
   }
 
-  const { shell, flag } = resolveShell();
   const timeoutMs = clampTimeout(hook.timeoutSeconds);
+  const args = hook.args ? [...hook.args] : [];
 
   try {
-    const { stdout, stderr } = await execFileAsync(shell, [flag, hook.command], {
+    // Executed without a shell: metacharacters in `file`/`args` are literal.
+    const { stdout, stderr } = await execFileAsync(hook.file, args, {
       timeout: timeoutMs,
       maxBuffer: MAX_BUFFER,
       signal: abortSignal,
+      shell: false,
     });
     return { outcome: "proceed", exitCode: 0, stdout, stderr };
   } catch (err: unknown) {
@@ -65,12 +81,10 @@ export async function runPreHook(
     const stdout = typeof execErr.stdout === "string" ? execErr.stdout : "";
     const stderr = typeof execErr.stderr === "string" ? execErr.stderr : "";
 
-    // Abort signal fired
     if (execErr.code === "ABORT_ERR" || abortSignal?.aborted) {
       return { outcome: "error", exitCode: null, stdout, stderr, error: "aborted" };
     }
 
-    // Timeout (child killed by Node)
     if (execErr.killed) {
       return {
         outcome: "error",
@@ -81,7 +95,6 @@ export async function runPreHook(
       };
     }
 
-    // maxBuffer exceeded — treat as error, never skip (review fix #1)
     if (execErr.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") {
       return {
         outcome: "error",
@@ -92,10 +105,18 @@ export async function runPreHook(
       };
     }
 
-    // execFile sets .code to the numeric exit code for non-zero exits
+    if (execErr.code === "ENOENT") {
+      return {
+        outcome: "error",
+        exitCode: null,
+        stdout,
+        stderr,
+        error: `preHook file not found: ${hook.file}`,
+      };
+    }
+
     const exitCode = typeof execErr.code === "number" ? execErr.code : null;
 
-    // Unknown exit status — error
     if (exitCode == null) {
       return {
         outcome: "error",
@@ -106,12 +127,10 @@ export async function runPreHook(
       };
     }
 
-    // Exit 10 = skip
     if (exitCode === SKIP_EXIT_CODE) {
       return { outcome: "skip", exitCode, stdout, stderr };
     }
 
-    // Any other non-zero = error
     return {
       outcome: "error",
       exitCode,

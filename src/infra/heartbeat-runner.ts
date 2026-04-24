@@ -868,7 +868,7 @@ export async function runHeartbeatOnce(opts: {
   // Pre-hook gate: runs after preflight + no-tasks-due check, before agent turn.
   // Placed here so the shell command is only invoked when there is actual work to do.
   const preHookConfig = heartbeat?.preHook;
-  if (preHookConfig?.command) {
+  if (preHookConfig?.file) {
     if (opts.abortSignal?.aborted) {
       emitHeartbeatEvent({
         status: "skipped",
@@ -877,14 +877,23 @@ export async function runHeartbeatOnce(opts: {
       });
       return { status: "skipped", reason: "aborted" as const };
     }
-    const { runPreHook } = await import("../cron/pre-hook.runtime.js");
+    const { runPreHook, summarizePreHookOutput } = await import("../cron/pre-hook.runtime.js");
     const hookResult = await runPreHook(preHookConfig, opts.abortSignal);
     log.info("heartbeat preHook completed", {
       outcome: hookResult.outcome,
       exitCode: hookResult.exitCode,
-      stdout: hookResult.stdout,
-      stderr: hookResult.stderr,
     });
+    if (hookResult.outcome !== "proceed") {
+      // Only log hook output (redacted + truncated) on non-success, and only at
+      // debug level. Avoids leaking credentials printed by hook scripts into
+      // routine info logs (CWE-532).
+      log.debug("heartbeat preHook output", {
+        outcome: hookResult.outcome,
+        exitCode: hookResult.exitCode,
+        stdout: summarizePreHookOutput(hookResult.stdout),
+        stderr: summarizePreHookOutput(hookResult.stderr),
+      });
+    }
     if (hookResult.outcome === "skip") {
       // Do NOT remove queued cron events here — the heartbeat preHook gates the
       // entire heartbeat, but individual cron events should persist until their

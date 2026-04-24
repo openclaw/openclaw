@@ -383,7 +383,7 @@ export type AgentDefaultsConfig = {
      */
     includeReasoning?: boolean;
     /** Optional pre-run script gate. Exit 0 = proceed, exit 10 = skip, other = error. */
-    preHook?: { command: string; timeoutSeconds?: number };
+    preHook?: { file: string; args?: string[]; timeoutSeconds?: number };
   };
   /** Max concurrent agent runs across all conversations. Default: 1 (sequential). */
   maxConcurrent?: number;

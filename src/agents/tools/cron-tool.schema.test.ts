@@ -135,7 +135,7 @@ describe("CronToolSchema", () => {
   });
 
   it("patch.preHook uses plain object type for OpenAPI 3.0 compat", () => {
-    const root = (CronToolSchema as Record<string, unknown>).properties as
+    const root = (CronToolSchema as unknown as Record<string, unknown>).properties as
       | Record<string, { properties?: Record<string, unknown> }>
       | undefined;
     const patchProps = root?.patch?.properties as

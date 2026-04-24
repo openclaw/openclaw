@@ -43,7 +43,8 @@ export const HeartbeatSchema = z
     isolatedSession: z.boolean().optional(),
     preHook: z
       .object({
-        command: z.string().trim().min(1),
+        file: z.string().trim().min(1),
+        args: z.array(z.string()).optional(),
         timeoutSeconds: z.number().int().min(1).max(300).optional(),
       })
       .strict()

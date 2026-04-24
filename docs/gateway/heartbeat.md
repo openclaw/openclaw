@@ -425,7 +425,7 @@ Use `--mode next-heartbeat` to wait for the next scheduled tick.
 
 ## Pre-run hooks (optional)
 
-An optional `preHook` runs a shell command before each heartbeat turn. The hook runs after preflight checks (enabled, active hours, queue empty) but before the agent turn.
+An optional `preHook` runs a fixed executable before each heartbeat turn. The hook runs after preflight checks (enabled, active hours, queue empty) but before the agent turn. It is spawned directly — no shell — so metacharacters in `file` or `args` are passed as literal text.
 
 ```json5
 {
@@ -434,7 +434,8 @@ An optional `preHook` runs a shell command before each heartbeat turn. The hook 
       heartbeat: {
         every: "30m",
         preHook: {
-          command: "/usr/local/bin/check-should-run.sh",
+          file: "/usr/local/bin/check-should-run.sh",
+          args: ["--quiet"],
           timeoutSeconds: 30,
         },
       },
@@ -449,7 +450,7 @@ An optional `preHook` runs a shell command before each heartbeat turn. The hook 
 | 10        | Skip (not a failure)             |
 | Any other | Fail (logged as heartbeat error) |
 
-Default timeout is 30 seconds (max 300). stdout and stderr are captured in logs.
+Default timeout is 30 seconds (max 300). stdout and stderr are captured, truncated and redacted before being written to logs — keep secrets out of hook output. If you need shell features (pipes, globs, redirection), wrap them in a script file and set `file` to that script.
 
 ## Reasoning delivery (optional)
 

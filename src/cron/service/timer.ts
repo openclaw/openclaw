@@ -1178,16 +1178,29 @@ export async function executeJobCore(
     if (abortSignal?.aborted) {
       return resolveAbortError();
     }
-    const { runPreHook } = await import("../pre-hook.runtime.js");
+    const { runPreHook, summarizePreHookOutput } = await import("../pre-hook.runtime.js");
     const hookResult = await runPreHook(job.preHook, abortSignal);
     state.deps.log.info({
       msg: "cron preHook completed",
       jobId: job.id,
       outcome: hookResult.outcome,
       exitCode: hookResult.exitCode,
-      stdout: hookResult.stdout,
-      stderr: hookResult.stderr,
     });
+    if (hookResult.outcome !== "proceed") {
+      // Only surface hook output (redacted + truncated) on non-success, and only
+      // at debug level. Avoids leaking credentials printed by hook scripts into
+      // routine info logs (CWE-532).
+      state.deps.log.debug(
+        {
+          jobId: job.id,
+          outcome: hookResult.outcome,
+          exitCode: hookResult.exitCode,
+          stdout: summarizePreHookOutput(hookResult.stdout),
+          stderr: summarizePreHookOutput(hookResult.stderr),
+        },
+        "cron preHook output",
+      );
+    }
     if (hookResult.outcome === "skip") {
       return { status: "skipped" as const, error: `preHook skip (exit ${hookResult.exitCode})` };
     }
