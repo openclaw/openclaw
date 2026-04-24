@@ -285,6 +285,77 @@ describe("gateway aux handlers", () => {
     );
   });
 
+  it("attempts restart on rollback even when stopChannel itself throws mid-reload", async () => {
+    // If stopChannel throws after partially stopping a channel (for example,
+    // a plugin hook rejects after the runtime already closed the socket),
+    // the rollback path must still try to restart that channel; otherwise a
+    // failed secrets.reload can leave it down.
+    const buildReloadPlan = () =>
+      createReloadPlan({
+        restartChannels: new Set(["slack", "zalo"]),
+      });
+    activateSecretsRuntimeSnapshot(
+      createSnapshot(
+        asConfig({
+          channels: {
+            slack: { signingSecret: "old-slack-secret" },
+            zalo: { webhookSecret: "old-zalo-secret" },
+          },
+        }),
+      ),
+    );
+    const activateRuntimeSecrets = vi.fn().mockResolvedValue(
+      createSnapshot(
+        asConfig({
+          channels: {
+            slack: { signingSecret: "new-slack-secret" },
+            zalo: { webhookSecret: "new-zalo-secret" },
+          },
+        }),
+      ),
+    );
+    const stopChannel = vi
+      .fn()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("zalo stop hook failed after socket close"));
+    const startChannel = vi.fn().mockResolvedValue(undefined);
+    const logChannelsInfo = vi.fn();
+    const respond = vi.fn();
+
+    const { extraHandlers } = createGatewayAuxHandlers({
+      log: {},
+      activateRuntimeSecrets,
+      buildReloadPlan,
+      sharedGatewaySessionGenerationState: { current: undefined, required: null },
+      resolveSharedGatewaySessionGenerationForConfig: () => undefined,
+      clients: [],
+      startChannel,
+      stopChannel,
+      logChannels: { info: logChannelsInfo },
+    });
+
+    await invokeSecretsReload({ handlers: extraHandlers, respond });
+
+    // Both channels appear in the rollback log, including zalo whose
+    // stopChannel rejected.
+    const rollbackLogs = logChannelsInfo.mock.calls
+      .map(([msg]) => String(msg))
+      .filter((msg) => msg.startsWith("rolling back "));
+    expect(rollbackLogs).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("rolling back slack channel"),
+        expect.stringContaining("rolling back zalo channel"),
+      ]),
+    );
+    // startChannel was invoked for zalo on rollback even though the original
+    // stopChannel(zalo) rejected.
+    expect(startChannel.mock.calls.map(([ch]) => ch)).toEqual(
+      expect.arrayContaining(["slack", "zalo"]),
+    );
+    expect(respond.mock.calls).toHaveLength(1);
+    expect(respond.mock.calls[0][0]).toBe(false);
+  });
+
   it("restores both current and required shared-gateway generation on reload failure", async () => {
     // Locks in the auth-generation rollback contract: a failed reload must
     // not leave `required` cleared if `setCurrentSharedGatewaySessionGeneration`

@@ -136,9 +136,14 @@ export function createGatewayAuxHandlers(params: {
             const restartFailures: ChannelKind[] = [];
             for (const channel of restartChannels) {
               params.logChannels.info(`restarting ${channel} channel after secrets reload`);
+              // Track for rollback before awaiting stopChannel: if stopChannel
+              // throws after partially stopping the channel (for example, a
+              // plugin hook rejects after the runtime already closed the
+              // socket), we still need the outer catch to attempt restart so
+              // the channel is not left down after a failed reload.
+              stoppedChannels.push(channel);
               try {
                 await params.stopChannel(channel);
-                stoppedChannels.push(channel);
                 await params.startChannel(channel);
                 restartedChannels.add(channel);
               } catch {
