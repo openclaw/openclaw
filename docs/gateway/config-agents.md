@@ -369,7 +369,7 @@ Time format in system prompt. Default: `auto` (OS preference).
   - For direct OpenAI Responses models, server-side compaction is enabled automatically. Use `params.responsesServerCompaction: false` to stop injecting `context_management`, or `params.responsesCompactThreshold` to override the threshold. See [OpenAI server-side compaction](/providers/openai#server-side-compaction-responses-api).
 - `params`: global default provider parameters applied to all models. Set at `agents.defaults.params` (e.g. `{ cacheRetention: "long" }`).
 - `params` merge precedence (config): `agents.defaults.params` (global base) is overridden by `agents.defaults.models["provider/model"].params` (per-model), then `agents.list[].params` (matching agent id) overrides by key. See [Prompt Caching](/reference/prompt-caching) for details.
-- `embeddedHarness`: default low-level embedded agent runtime policy. Use `runtime: "auto"` to let registered plugin harnesses claim supported models, `runtime: "pi"` to force the built-in PI harness, or a registered harness id such as `runtime: "codex"`. Set `fallback: "none"` to disable automatic PI fallback. New Codex harness configs should keep model refs canonical as `openai/*` and select the harness here rather than using legacy `codex/*` model refs.
+- `embeddedHarness`: default low-level embedded agent runtime policy. Use `runtime: "auto"` to let registered plugin harnesses claim supported models, `runtime: "pi"` to force the built-in PI harness, or a registered harness id such as `runtime: "codex"`. Automatic PI fallback defaults to `"pi"` only in `auto` mode. Explicit plugin runtimes such as `codex` default to `"none"` unless you set `fallback: "pi"`. New Codex harness configs should keep model refs canonical as `openai/*` and select the harness here rather than using legacy `codex/*` model refs.
 - Config writers that mutate these fields (for example `/models set`, `/models set-image`, and fallback add/remove commands) save canonical object form and preserve existing fallback lists when possible.
 - `maxConcurrent`: max parallel agent runs across sessions (each session still serialized). Default: 4.
 
@@ -395,9 +395,9 @@ Codex app-server harness.
 ```
 
 - `runtime`: `"auto"`, `"pi"`, or a registered plugin harness id. The bundled Codex plugin registers `codex`.
-- `fallback`: `"pi"` or `"none"`. `"pi"` keeps the built-in PI harness as the compatibility fallback when no plugin harness is selected. `"none"` makes missing or unsupported plugin harness selection fail instead of silently using PI. Selected plugin harness failures always surface directly.
-- Environment overrides: `OPENCLAW_AGENT_RUNTIME=<id|auto|pi>` overrides `runtime`; `OPENCLAW_AGENT_HARNESS_FALLBACK=none` disables PI fallback for that process.
-- For Codex-only deployments, set `model: "openai/gpt-5.5"`, `embeddedHarness.runtime: "codex"`, and `embeddedHarness.fallback: "none"`.
+- `fallback`: `"pi"` or `"none"`. In `runtime: "auto"`, omitted fallback defaults to `"pi"` so old configs can keep using PI when no plugin harness claims a run. In explicit plugin runtime mode, such as `runtime: "codex"`, omitted fallback defaults to `"none"` so a missing harness fails instead of silently using PI. Runtime overrides do not inherit fallback from a broader scope; set `fallback: "pi"` alongside the explicit runtime when you intentionally want that compatibility fallback. Selected plugin harness failures always surface directly.
+- Environment overrides: `OPENCLAW_AGENT_RUNTIME=<id|auto|pi>` overrides `runtime`; `OPENCLAW_AGENT_HARNESS_FALLBACK=pi|none` overrides fallback for that process.
+- For Codex-only deployments, set `model: "openai/gpt-5.5"` and `embeddedHarness.runtime: "codex"`. You may also set `embeddedHarness.fallback: "none"` explicitly for readability; it is the default for explicit plugin runtimes.
 - Harness choice is pinned per session id after the first embedded run. Config/env changes affect new or reset sessions, not an existing transcript. Legacy sessions with transcript history but no recorded pin are treated as PI-pinned. `/status` shows non-PI harness ids such as `codex` next to `Fast`.
 - This only controls the embedded chat harness. Media generation, vision, PDF, music, video, and TTS still use their provider/model settings.
 
@@ -946,7 +946,7 @@ scripts/sandbox-browser-setup.sh   # optional browser image
 - `thinkingDefault`: optional per-agent default thinking level (`off | minimal | low | medium | high | xhigh | adaptive | max`). Overrides `agents.defaults.thinkingDefault` for this agent when no per-message or session override is set.
 - `reasoningDefault`: optional per-agent default reasoning visibility (`on | off | stream`). Applies when no per-message or session reasoning override is set.
 - `fastModeDefault`: optional per-agent default for fast mode (`true | false`). Applies when no per-message or session fast-mode override is set.
-- `embeddedHarness`: optional per-agent low-level harness policy override. Use `{ runtime: "codex", fallback: "none" }` to make one agent Codex-only while other agents keep the default PI fallback.
+- `embeddedHarness`: optional per-agent low-level harness policy override. Use `{ runtime: "codex" }` to make one agent Codex-only while other agents keep the default PI fallback in `auto` mode.
 - `runtime`: optional per-agent runtime descriptor. Use `type: "acp"` with `runtime.acp` defaults (`agent`, `backend`, `mode`, `cwd`) when the agent should default to ACP harness sessions.
 - `identity.avatar`: workspace-relative path, `http(s)` URL, or `data:` URI.
 - `identity` derives defaults: `ackReaction` from `emoji`, `mentionPatterns` from `name`/`emoji`.
