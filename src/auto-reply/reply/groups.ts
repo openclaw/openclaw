@@ -281,7 +281,7 @@ export function buildGroupIntro(params: {
       : undefined;
   const cautionLine =
     activation === "always" && params.silentReplyPolicy === "allow"
-      ? "Be extremely selective: reply only when directly addressed or clearly helpful. Otherwise stay silent."
+      ? "Be extremely selective: reply only when directly addressed or clearly helpful."
       : undefined;
   const lurkLine =
     "Be a good group participant: mostly lurk and follow the conversation; reply only when directly addressed or you can add clear value. Emoji reactions are welcome when available.";

@@ -82,6 +82,10 @@ provided value should become the complete target value.
 Interactive provider setup and `openclaw configure --section model` also merge
 provider-scoped selections into the existing allowlist, so adding Codex,
 Ollama, or another provider does not drop unrelated model entries.
+Configure preserves an existing `agents.defaults.model.primary` when provider
+auth is re-applied. Explicit default-setting commands such as
+`openclaw models auth login --provider <id> --set-default` and
+`openclaw models set <model>` still replace `agents.defaults.model.primary`.
 
 ## "Model is not allowed" (and why replies stop)
 

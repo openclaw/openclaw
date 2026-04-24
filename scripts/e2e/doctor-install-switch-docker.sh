@@ -15,6 +15,7 @@ docker run --rm -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 "$IMAGE_NAME" bash -lc '
   export npm_config_loglevel=error
   export npm_config_fund=false
   export npm_config_audit=false
+  export OPENCLAW_DISABLE_BUNDLED_PLUGINS=1
 
   # Stub systemd/loginctl so doctor + daemon flows work in Docker.
   export PATH="/tmp/openclaw-bin:$PATH"
@@ -130,13 +131,14 @@ LOGINCTL
     local doctor_expected="$5"
     local install_log="/tmp/openclaw-doctor-switch-${name}-install.log"
     local doctor_log="/tmp/openclaw-doctor-switch-${name}-doctor.log"
+    local command_timeout="${OPENCLAW_DOCKER_DOCTOR_SWITCH_COMMAND_TIMEOUT:-300s}"
 
     echo "== Flow: $name =="
     home_dir=$(mktemp -d "/tmp/openclaw-switch-${name}.XXXXXX")
     export HOME="$home_dir"
     export USER="testuser"
 
-    if ! eval "$install_cmd" >"$install_log" 2>&1; then
+    if ! timeout "$command_timeout" bash -c "$install_cmd" >"$install_log" 2>&1; then
       cat "$install_log"
       exit 1
     fi
@@ -150,7 +152,7 @@ LOGINCTL
     fi
     assert_entrypoint "$unit_path" "$install_expected"
 
-    if ! eval "$doctor_cmd" >"$doctor_log" 2>&1; then
+    if ! timeout "$command_timeout" bash -c "$doctor_cmd" >"$doctor_log" 2>&1; then
       cat "$doctor_log"
       exit 1
     fi

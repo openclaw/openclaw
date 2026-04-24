@@ -80,6 +80,7 @@ type NodeListResult = {
 function setup(
   config: Record<string, unknown> = {},
   options: {
+    fullConfig?: Record<string, unknown>;
     nodesListResult?: NodeListResult;
     nodesInvokeResult?: unknown;
     browserActResult?: Record<string, unknown>;
@@ -163,6 +164,7 @@ function setup(
     description: "test",
     version: "0",
     source: "test",
+    config: options.fullConfig ?? {},
     pluginConfig: config,
     runtime: {
       system: {
@@ -535,6 +537,94 @@ describe("google-meet plugin", () => {
     const result = await tool.execute("id", { action: "setup_status" });
 
     expect(result.details.ok).toBe(true);
+  });
+
+  it("reports Twilio delegation readiness when voice-call is enabled", async () => {
+    vi.stubEnv("TWILIO_ACCOUNT_SID", "AC123");
+    vi.stubEnv("TWILIO_AUTH_TOKEN", "secret");
+    vi.stubEnv("TWILIO_FROM_NUMBER", "+15550001234");
+    const { tools } = setup(
+      {
+        defaultTransport: "chrome-node",
+        chromeNode: { node: "parallels-macos" },
+      },
+      {
+        fullConfig: {
+          plugins: {
+            allow: ["google-meet", "voice-call"],
+            entries: {
+              "voice-call": {
+                enabled: true,
+                config: { provider: "twilio" },
+              },
+            },
+          },
+        },
+      },
+    );
+    const tool = tools[0] as {
+      execute: (
+        id: string,
+        params: unknown,
+      ) => Promise<{ details: { ok?: boolean; checks?: unknown[] } }>;
+    };
+
+    const result = await tool.execute("id", { action: "setup_status" });
+
+    expect(result.details.ok).toBe(true);
+    expect(result.details.checks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "twilio-voice-call-plugin",
+          ok: true,
+        }),
+        expect.objectContaining({
+          id: "twilio-voice-call-credentials",
+          ok: true,
+        }),
+      ]),
+    );
+  });
+
+  it("reports missing voice-call wiring for Twilio transport", async () => {
+    vi.stubEnv("TWILIO_ACCOUNT_SID", "");
+    vi.stubEnv("TWILIO_AUTH_TOKEN", "");
+    vi.stubEnv("TWILIO_FROM_NUMBER", "");
+    const { tools } = setup(
+      { defaultTransport: "twilio" },
+      {
+        fullConfig: {
+          plugins: {
+            allow: ["google-meet"],
+            entries: {
+              "voice-call": { enabled: false },
+            },
+          },
+        },
+      },
+    );
+    const tool = tools[0] as {
+      execute: (
+        id: string,
+        params: unknown,
+      ) => Promise<{ details: { ok?: boolean; checks?: unknown[] } }>;
+    };
+
+    const result = await tool.execute("id", { action: "setup_status" });
+
+    expect(result.details.ok).toBe(false);
+    expect(result.details.checks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "twilio-voice-call-plugin",
+          ok: false,
+        }),
+        expect.objectContaining({
+          id: "twilio-voice-call-credentials",
+          ok: false,
+        }),
+      ]),
+    );
   });
 
   it("launches Chrome after the BlackHole check", async () => {

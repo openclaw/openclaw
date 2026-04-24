@@ -70,6 +70,10 @@ import type {
 import type { VideoGenerationProvider } from "../video-generation/types.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type {
+  AgentToolResultMiddleware,
+  AgentToolResultMiddlewareOptions,
+} from "./agent-tool-result-middleware-types.js";
+import type {
   CliBackendAuthEpochMode,
   CliBackendNormalizeConfigContext,
   CliBackendPreparedExecution,
@@ -142,6 +146,15 @@ export type {
 } from "./tool-types.js";
 export type { AnyAgentTool } from "../agents/tools/common.js";
 export type { AgentHarness } from "../agents/harness/types.js";
+export type {
+  AgentToolResultMiddleware,
+  AgentToolResultMiddlewareContext,
+  AgentToolResultMiddlewareEvent,
+  AgentToolResultMiddlewareHarness,
+  AgentToolResultMiddlewareOptions,
+  AgentToolResultMiddlewareResult,
+  OpenClawAgentToolResult,
+} from "./agent-tool-result-middleware-types.js";
 export type {
   PluginConversationBinding,
   PluginConversationBindingRequestParams,
@@ -2119,10 +2132,21 @@ export type OpenClawPluginApi = {
   ) => void;
   /** Register an agent harness implementation. */
   registerAgentHarness: (harness: AgentHarness) => void;
-  /** Register a Pi embedded extension factory for OpenClaw embedded runs. Only bundled plugins may use this seam, and `contracts.embeddedExtensionFactories` must include `"pi"`. */
+  /**
+   * Register a Pi embedded extension factory for OpenClaw embedded runs.
+   *
+   * @deprecated This is a bundled compatibility seam. New tool-result transforms
+   * should use `registerAgentToolResultMiddleware(...)` and declare
+   * `contracts.agentToolResultMiddleware` for the targeted harnesses.
+   */
   registerEmbeddedExtensionFactory: (factory: ExtensionFactory) => void;
   /** Register a Codex app-server extension factory for Codex harness tool-result middleware. Only bundled plugins may use this seam, and `contracts.embeddedExtensionFactories` must include `"codex-app-server"`. */
   registerCodexAppServerExtensionFactory: (factory: CodexAppServerExtensionFactory) => void;
+  /** Register harness-neutral tool-result middleware. Declare `contracts.agentToolResultMiddleware` for every targeted harness. */
+  registerAgentToolResultMiddleware: (
+    handler: AgentToolResultMiddleware,
+    options?: AgentToolResultMiddlewareOptions,
+  ) => void;
   /** Register the active detached task runtime for this plugin (exclusive slot). */
   registerDetachedTaskRuntime: (
     runtime: import("./runtime/runtime-tasks.types.js").DetachedTaskLifecycleRuntime,
