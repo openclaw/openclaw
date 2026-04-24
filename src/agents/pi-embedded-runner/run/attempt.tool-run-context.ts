@@ -1,4 +1,7 @@
-import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
+import {
+  freezeDiagnosticTraceContext,
+  type DiagnosticTraceContext,
+} from "../../../infra/diagnostic-trace-context.js";
 import type { EmbeddedRunTrigger } from "./params.js";
 
 export function buildEmbeddedAttemptToolRunContext(params: {
@@ -13,6 +16,6 @@ export function buildEmbeddedAttemptToolRunContext(params: {
   return {
     trigger: params.trigger,
     memoryFlushWritePath: params.memoryFlushWritePath,
-    ...(params.trace ? { trace: params.trace } : {}),
+    ...(params.trace ? { trace: freezeDiagnosticTraceContext(params.trace) } : {}),
   };
 }

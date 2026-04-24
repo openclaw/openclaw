@@ -10,13 +10,13 @@ const TRACEPARENT_VERSION_RE = /^[0-9a-f]{2}$/;
 
 export type DiagnosticTraceContext = {
   /** W3C trace id, 32 lowercase hex chars. */
-  traceId: string;
+  readonly traceId: string;
   /** Current span id, 16 lowercase hex chars. */
-  spanId?: string;
+  readonly spanId?: string;
   /** Parent span id, 16 lowercase hex chars. */
-  parentSpanId?: string;
+  readonly parentSpanId?: string;
   /** W3C trace flags, 2 lowercase hex chars. Defaults to sampled. */
-  traceFlags?: string;
+  readonly traceFlags?: string;
 };
 
 export type DiagnosticTraceContextInput = Partial<DiagnosticTraceContext> & {
@@ -154,5 +154,16 @@ export function createChildDiagnosticTraceContext(
     spanId: input.spanId,
     parentSpanId,
     traceFlags: input.traceFlags ?? parent.traceFlags,
+  });
+}
+
+export function freezeDiagnosticTraceContext(
+  context: DiagnosticTraceContext,
+): DiagnosticTraceContext {
+  return Object.freeze({
+    traceId: context.traceId,
+    ...(context.spanId ? { spanId: context.spanId } : {}),
+    ...(context.parentSpanId ? { parentSpanId: context.parentSpanId } : {}),
+    ...(context.traceFlags ? { traceFlags: context.traceFlags } : {}),
   });
 }

@@ -7,6 +7,7 @@ import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
 import { resolveContextEngine } from "../../context-engine/registry.js";
 import { emitAgentPlanEvent } from "../../infra/agent-events.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
+import { freezeDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
@@ -2134,7 +2135,9 @@ export async function runEmbeddedPiAgent(
           });
           return {
             payloads: payloadsWithToolMedia?.length ? payloadsWithToolMedia : undefined,
-            diagnosticTrace: attempt.diagnosticTrace,
+            ...(attempt.diagnosticTrace
+              ? { diagnosticTrace: freezeDiagnosticTraceContext(attempt.diagnosticTrace) }
+              : {}),
             meta: {
               durationMs: Date.now() - started,
               agentMeta,

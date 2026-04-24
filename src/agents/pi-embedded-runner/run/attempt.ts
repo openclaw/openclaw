@@ -9,7 +9,10 @@ import {
 } from "@mariozechner/pi-coding-agent";
 import { filterHeartbeatPairs } from "../../../auto-reply/heartbeat-filter.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
-import { createDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
+import {
+  createDiagnosticTraceContext,
+  freezeDiagnosticTraceContext,
+} from "../../../infra/diagnostic-trace-context.js";
 import { isEmbeddedMode } from "../../../infra/embedded-mode.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { resolveHeartbeatSummaryForAgent } from "../../../infra/heartbeat-summary.js";
@@ -505,7 +508,7 @@ export async function runEmbeddedAttempt(
     const sessionLabel = params.sessionKey ?? params.sessionId;
     const contextInjectionMode = resolveContextInjectionMode(params.config);
     const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
-    const diagnosticTrace = createDiagnosticTraceContext();
+    const diagnosticTrace = freezeDiagnosticTraceContext(createDiagnosticTraceContext());
     const toolsRaw = params.disableTools
       ? []
       : (() => {
@@ -1944,7 +1947,7 @@ export async function runEmbeddedAttempt(
         }
         const hookCtx = {
           runId: params.runId,
-          trace: diagnosticTrace,
+          trace: freezeDiagnosticTraceContext(diagnosticTrace),
           agentId: hookAgentId,
           sessionKey: params.sessionKey,
           sessionId: params.sessionId,
@@ -2176,7 +2179,7 @@ export async function runEmbeddedAttempt(
                 },
                 {
                   runId: params.runId,
-                  trace: diagnosticTrace,
+                  trace: freezeDiagnosticTraceContext(diagnosticTrace),
                   agentId: hookAgentId,
                   sessionKey: params.sessionKey,
                   sessionId: params.sessionId,
@@ -2584,7 +2587,7 @@ export async function runEmbeddedAttempt(
               },
               {
                 runId: params.runId,
-                trace: diagnosticTrace,
+                trace: freezeDiagnosticTraceContext(diagnosticTrace),
                 agentId: hookAgentId,
                 sessionKey: params.sessionKey,
                 sessionId: params.sessionId,
@@ -2686,7 +2689,7 @@ export async function runEmbeddedAttempt(
             },
             {
               runId: params.runId,
-              trace: diagnosticTrace,
+              trace: freezeDiagnosticTraceContext(diagnosticTrace),
               agentId: hookAgentId,
               sessionKey: params.sessionKey,
               sessionId: params.sessionId,

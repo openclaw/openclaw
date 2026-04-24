@@ -447,12 +447,15 @@ describe("before_tool_call requireApproval handling", () => {
       runId: "run-1",
       toolCallId: "tool-1",
     });
-    expect(call?.[1]).toMatchObject({
+    const toolContext = call?.[1] as { trace?: typeof trace } | undefined;
+    expect(toolContext).toMatchObject({
       toolName: "exec",
       runId: "run-1",
       toolCallId: "tool-1",
       trace,
     });
+    expect(toolContext?.trace).not.toBe(trace);
+    expect(Object.isFrozen(toolContext?.trace)).toBe(true);
   });
 
   it("calls gateway RPC and unblocks on allow-once", async () => {
