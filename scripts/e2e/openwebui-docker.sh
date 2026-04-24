@@ -166,7 +166,7 @@ docker run -d \
 
 echo "Waiting for Open WebUI..."
 ow_ready=0
-for _ in $(seq 1 90); do
+for _ in $(seq 1 240); do
   if [ "$(docker inspect -f '{{.State.Running}}' "$OW_NAME" 2>/dev/null || echo false)" != "true" ]; then
     break
   fi
