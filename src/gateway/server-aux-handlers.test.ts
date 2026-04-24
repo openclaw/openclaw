@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import {
   activateSecretsRuntimeSnapshot,
   clearSecretsRuntimeSnapshot,
@@ -69,12 +69,13 @@ async function invokeSecretsReload(params: {
 }
 
 beforeEach(() => {
+  resetPluginRuntimeStateForTest();
   registerChannelPluginsWithReloadPrefixes();
 });
 
 afterEach(() => {
   clearSecretsRuntimeSnapshot();
-  setActivePluginRegistry(createTestRegistry());
+  resetPluginRuntimeStateForTest();
   delete process.env.OPENCLAW_SKIP_CHANNELS;
   delete process.env.OPENCLAW_SKIP_PROVIDERS;
 });
