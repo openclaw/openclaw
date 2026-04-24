@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  CODEX_CONTRACT_PROVIDER_ID,
+  codexPromptOverlayContext,
   GPT5_CONTRACT_MODEL_ID,
   NON_GPT5_CONTRACT_MODEL_ID,
   sharedGpt5PersonalityConfig,
@@ -10,10 +10,9 @@ import { buildCodexProvider } from "./provider.js";
 describe("Codex prompt overlay runtime contract", () => {
   it("adds the shared GPT-5 behavior contract to Codex GPT-5 provider runs", () => {
     const provider = buildCodexProvider();
-    const contribution = provider.resolveSystemPromptContribution?.({
-      provider: CODEX_CONTRACT_PROVIDER_ID,
-      modelId: GPT5_CONTRACT_MODEL_ID,
-    } as never);
+    const contribution = provider.resolveSystemPromptContribution?.(
+      codexPromptOverlayContext({ modelId: GPT5_CONTRACT_MODEL_ID }),
+    );
 
     expect(contribution?.stablePrefix).toContain("<persona_latch>");
     expect(contribution?.sectionOverrides?.interaction_style).toContain(
@@ -23,11 +22,12 @@ describe("Codex prompt overlay runtime contract", () => {
 
   it("respects shared GPT-5 prompt overlay config for Codex runs", () => {
     const provider = buildCodexProvider();
-    const contribution = provider.resolveSystemPromptContribution?.({
-      provider: CODEX_CONTRACT_PROVIDER_ID,
-      modelId: GPT5_CONTRACT_MODEL_ID,
-      config: sharedGpt5PersonalityConfig("off"),
-    } as never);
+    const contribution = provider.resolveSystemPromptContribution?.(
+      codexPromptOverlayContext({
+        modelId: GPT5_CONTRACT_MODEL_ID,
+        config: sharedGpt5PersonalityConfig("off"),
+      }),
+    );
 
     expect(contribution?.stablePrefix).toContain("<persona_latch>");
     expect(contribution?.sectionOverrides).toEqual({});
@@ -37,10 +37,9 @@ describe("Codex prompt overlay runtime contract", () => {
     const provider = buildCodexProvider();
 
     expect(
-      provider.resolveSystemPromptContribution?.({
-        provider: CODEX_CONTRACT_PROVIDER_ID,
-        modelId: NON_GPT5_CONTRACT_MODEL_ID,
-      } as never),
+      provider.resolveSystemPromptContribution?.(
+        codexPromptOverlayContext({ modelId: NON_GPT5_CONTRACT_MODEL_ID }),
+      ),
     ).toBeUndefined();
   });
 });
