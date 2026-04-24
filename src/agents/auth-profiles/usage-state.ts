@@ -65,6 +65,54 @@ export function isProfileInCooldown(
 }
 
 /**
+ * Return the soonest `unusableUntil` timestamp (ms epoch) among the given
+ * profiles, or `null` when no profile has a recorded cooldown. Note: the
+ * returned timestamp may be in the past if the cooldown has already expired.
+ */
+export function getSoonestCooldownExpiry(
+  store: AuthProfileStore,
+  profileIds: string[],
+  options?: { now?: number; forModel?: string },
+): number | null {
+  const ts = options?.now ?? Date.now();
+  let soonest: number | null = null;
+  let latestMatchingModelCooldown: number | null = null;
+  for (const id of profileIds) {
+    const stats = store.usageStats?.[id];
+    if (!stats) {
+      continue;
+    }
+    if (shouldBypassModelScopedCooldown(stats, ts, options?.forModel)) {
+      continue;
+    }
+    const until = resolveProfileUnusableUntil(stats);
+    if (typeof until !== "number" || !Number.isFinite(until) || until <= 0) {
+      continue;
+    }
+    const matchingModelScopedCooldown =
+      options?.forModel &&
+      stats.cooldownReason === "rate_limit" &&
+      stats.cooldownModel === options.forModel &&
+      !isActiveUnusableWindow(stats.disabledUntil, ts);
+    if (matchingModelScopedCooldown) {
+      latestMatchingModelCooldown =
+        latestMatchingModelCooldown === null ? until : Math.max(latestMatchingModelCooldown, until);
+      continue;
+    }
+    if (soonest === null || until < soonest) {
+      soonest = until;
+    }
+  }
+  if (soonest === null) {
+    return latestMatchingModelCooldown;
+  }
+  if (latestMatchingModelCooldown === null) {
+    return soonest;
+  }
+  return Math.min(soonest, latestMatchingModelCooldown);
+}
+
+/**
  * Clear expired cooldowns from all profiles in the store.
  *
  * When `cooldownUntil` or `disabledUntil` has passed, the corresponding fields
