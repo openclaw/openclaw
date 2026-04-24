@@ -5,7 +5,11 @@ import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { resolveConfiguredEntries } from "./list.configured.js";
 import { formatErrorWithStack } from "./list.errors.js";
 import { loadListModelRegistry } from "./list.registry-load.js";
-import { appendAllModelRowSources, appendConfiguredModelRowSources } from "./list.row-sources.js";
+import {
+  appendAllModelRowSources,
+  appendConfiguredModelRowSources,
+  modelRowSourcesRequireRegistry,
+} from "./list.row-sources.js";
 import { printModelTable } from "./list.table.js";
 import type { ModelRow } from "./list.types.js";
 import { loadModelsConfigWithSource } from "./load-config.js";
@@ -55,8 +59,12 @@ export async function modelsListCommand(
   let availableKeys: Set<string> | undefined;
   let availabilityErrorMessage: string | undefined;
   const useProviderCatalogFastPath = Boolean(opts.all && providerFilter === "codex");
+  const shouldLoadRegistry = modelRowSourcesRequireRegistry({
+    all: opts.all,
+    useProviderCatalogFastPath,
+  });
   try {
-    if (!useProviderCatalogFastPath) {
+    if (shouldLoadRegistry) {
       const loaded = await loadListModelRegistry(cfg, { providerFilter });
       modelRegistry = loaded.registry;
       discoveredKeys = loaded.discoveredKeys;
