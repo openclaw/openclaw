@@ -25,14 +25,12 @@ anything they needed from a single entry point:
   host-side helpers like the embedded agent runner.
 
 Both surfaces are now **deprecated**. They still work at runtime, but new
-plugins must not use them, and existing plugins should migrate before an
-approved breaking release removes them.
+plugins must not use them, and existing plugins should migrate before the next
+major release removes them.
 
 <Warning>
-  The backwards-compatibility layer remains supported during the migration
-  window. Any removal must go through a documented deprecation path first:
-  replacement contract, compatibility adapter, diagnostics, tests, docs, and an
-  explicitly approved breaking release.
+  The backwards-compatibility layer will be removed in a future major release.
+  Plugins that still import from these surfaces will break when that happens.
 </Warning>
 
 ## Why this changed
@@ -376,15 +374,13 @@ check the source at `src/plugin-sdk/` or ask in Discord.
 
 ## Removal timeline
 
-| When                               | What happens                                                                 |
-| ---------------------------------- | ---------------------------------------------------------------------------- |
-| **Now**                            | Deprecated surfaces emit runtime warnings and keep working through adapters. |
-| **Migration window**               | Replacement contracts, diagnostics, tests, and docs stay available together. |
-| **Approved breaking release only** | Deprecated surfaces may be removed after the migration window.               |
+| When                   | What happens                                                            |
+| ---------------------- | ----------------------------------------------------------------------- |
+| **Now**                | Deprecated surfaces emit runtime warnings                               |
+| **Next major release** | Deprecated surfaces will be removed; plugins still using them will fail |
 
-All core plugins have already been migrated. External plugins should migrate,
-but documented external plugins should not break without the compatibility path
-above.
+All core plugins have already been migrated. External plugins should migrate
+before the next major release.
 
 ## Suppressing the warnings temporarily
 

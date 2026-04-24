@@ -57,19 +57,19 @@ export type PluginManifestActivationCapability = "provider" | "channel" | "tool"
 
 export type PluginManifestActivation = {
   /**
-   * Legacy provider activation hints. Prefer top-level `providers` and setup
-   * provider ownership for new manifests.
+   * Provider ids that should activate this plugin when explicitly requested.
+   * This is metadata only; runtime loading still happens through the loader.
    */
   onProviders?: string[];
-  /** Legacy agent harness runtime activation hints. */
+  /** Agent harness runtime ids that should activate this plugin. */
   onAgentHarnesses?: string[];
-  /** Legacy command activation hints. Prefer command aliases or CLI descriptors. */
+  /** Command ids that should activate this plugin. */
   onCommands?: string[];
-  /** Legacy channel activation hints. Prefer top-level `channels`. */
+  /** Channel ids that should activate this plugin. */
   onChannels?: string[];
-  /** Legacy route activation hints. */
+  /** Route kinds that should activate this plugin. */
   onRoutes?: string[];
-  /** Legacy broad capability hints. Do not add new uses. */
+  /** Cheap capability hints used by future activation planning. */
   onCapabilities?: PluginManifestActivationCapability[];
 };
 
