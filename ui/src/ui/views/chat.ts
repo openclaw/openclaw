@@ -14,6 +14,7 @@ import {
   renderMessageGroup,
   renderReadingIndicatorGroup,
   renderStreamingGroup,
+  resolveAssistantTextAvatar,
 } from "../chat/grouped-render.ts";
 import { InputHistory } from "../chat/input-history.ts";
 import { PinnedMessages } from "../chat/pinned-messages.ts";
@@ -475,12 +476,8 @@ const WELCOME_SUGGESTIONS = [
 
 function renderWelcomeState(props: ChatProps): TemplateResult {
   const name = props.assistantName || "Assistant";
-  const avatar = resolveChatAvatarRenderUrl(props.assistantAvatarUrl, {
-    identity: {
-      avatar: props.assistantAvatar ?? undefined,
-      avatarUrl: props.assistantAvatarUrl ?? undefined,
-    },
-  });
+  const avatar = resolveAssistantAvatarUrl(props);
+  const avatarText = avatar ? null : resolveAssistantTextAvatar(props.assistantAvatar);
   const logoUrl = agentLogoUrl(props.basePath ?? "");
 
   return html`
@@ -492,9 +489,13 @@ function renderWelcomeState(props: ChatProps): TemplateResult {
             alt=${name}
             style="width:56px; height:56px; border-radius:50%; object-fit:cover;"
           />`
-        : html`<div class="agent-chat__avatar agent-chat__avatar--logo">
-            <img src=${logoUrl} alt="OpenClaw" />
-          </div>`}
+        : avatarText
+          ? html`<div class="agent-chat__avatar agent-chat__avatar--text" aria-label=${name}>
+              ${avatarText}
+            </div>`
+          : html`<div class="agent-chat__avatar agent-chat__avatar--logo">
+              <img src=${logoUrl} alt="OpenClaw" />
+            </div>`}
       <h2>${name}</h2>
       <div class="agent-chat__badges">
         <span class="agent-chat__badge"><img src=${logoUrl} alt="" /> Ready to chat</span>
@@ -518,6 +519,23 @@ function renderWelcomeState(props: ChatProps): TemplateResult {
       </div>
     </div>
   `;
+}
+
+function resolveAssistantAvatarUrl(
+  props: Pick<ChatProps, "assistantAvatar" | "assistantAvatarUrl">,
+): string | null {
+  return resolveChatAvatarRenderUrl(props.assistantAvatarUrl, {
+    identity: {
+      avatar: props.assistantAvatar ?? undefined,
+      avatarUrl: props.assistantAvatarUrl ?? undefined,
+    },
+  });
+}
+
+function resolveAssistantDisplayAvatar(
+  props: Pick<ChatProps, "assistantAvatar" | "assistantAvatarUrl">,
+): string | null {
+  return resolveAssistantAvatarUrl(props) ?? resolveAssistantTextAvatar(props.assistantAvatar);
 }
 
 function renderSearchBar(requestUpdate: () => void): TemplateResult | typeof nothing {
@@ -755,13 +773,7 @@ export function renderChat(props: ChatProps) {
   const showReasoning = props.showThinking && reasoningLevel !== "off";
   const assistantIdentity = {
     name: props.assistantName,
-    avatar:
-      resolveChatAvatarRenderUrl(props.assistantAvatarUrl, {
-        identity: {
-          avatar: props.assistantAvatar ?? undefined,
-          avatarUrl: props.assistantAvatarUrl ?? undefined,
-        },
-      }) ?? null,
+    avatar: resolveAssistantDisplayAvatar(props),
   };
   const pinned = getPinnedMessages(props.sessionKey);
   const deleted = getDeletedMessages(props.sessionKey);

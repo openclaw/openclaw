@@ -1115,6 +1115,19 @@
   overflow: hidden;
 }
 
+.agent-chat__avatar--text {
+  width: 56px;
+  height: 56px;
+  border-radius: var(--radius-lg);
+  background: var(--secondary);
+  border: 1px solid var(--border);
+  color: var(--foreground);
+  display: grid;
+  place-items: center;
+  font-size: 20px;
+  font-weight: 700;
+}
+
 .agent-chat__avatar--logo img {
   width: 32px;
   height: 32px;

@@ -105,3 +105,33 @@ describe("chat view queue steering", () => {
     expect(container.querySelector(".chat-queue__steer")).toBeNull();
   });
 });
+
+describe("renderChat", () => {
+  afterEach(() => {
+    cleanupChatModuleState();
+  });
+
+  it("renders configured assistant text avatars in transcript groups", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderChat(
+        createProps({
+          assistantName: "Val",
+          assistantAvatar: "VC",
+          assistantAvatarUrl: null,
+          messages: [{ role: "assistant", content: "hello", timestamp: 1000 }],
+          stream: null,
+          streamStartedAt: null,
+        }),
+      ),
+      container,
+    );
+
+    const avatar = container.querySelector<HTMLElement>(".chat-group.assistant .chat-avatar");
+    expect(avatar).not.toBeNull();
+    expect(avatar?.tagName).toBe("DIV");
+    expect(avatar?.textContent).toContain("VC");
+    expect(avatar?.getAttribute("aria-label")).toBe("Val");
+  });
+});
