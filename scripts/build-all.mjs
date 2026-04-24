@@ -103,9 +103,11 @@ export const BUILD_ALL_PROFILES = {
   gatewayWatch: ["tsdown", "runtime-postbuild", "build-stamp"],
   // Minimal profile for `npm install -g github:…` git installs. Skips
   // runtime-postbuild (nested npm install fails in git-clone lifecycle) and
-  // heavy steps that need tsx/tsgo. Produces a working CLI (--version, --help,
-  // setup) without bundled plugin runtime deps.
-  gitInstall: ["canvas:a2ui:bundle", "tsdown", "build-stamp"],
+  // Minimal build for npm git installs. Produces a working CLI (--version,
+  // --help, setup) without bundled plugin runtime deps. Skips canvas:a2ui:bundle
+  // because the prebuilt bundle is committed to the repo and .bundle.hash is
+  // gitignored (so the bundler always tries a full rebuild in fresh clones).
+  gitInstall: ["tsdown", "build-stamp"],
 };
 
 export function resolveBuildAllSteps(profile = "full") {
