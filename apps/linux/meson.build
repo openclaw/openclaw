@@ -66,6 +66,7 @@ sources = [
   'src/diagnostics.c',
   'src/display_model.c',
   'src/runtime_paths.c',
+  'src/runtime_reveal.c',
   'src/session_filter.c',
   'src/markdown_render.c',
   'src/chat_blocks.c',
@@ -104,6 +105,16 @@ executable('openclaw-linux',
   sources,
   dependencies : [gtk4_dep, adwaita_dep, json_glib_dep, soup_dep, gio_dep, gio_unix_dep, sodium_dep],
   install : true)
+
+# Production translation units minus the app entrypoint, for tests that
+# need to link the real companion code (e.g. the section-controller
+# contract audit) and provide their own main().
+app_core_sources = []
+foreach src : sources
+  if src != 'src/main.c'
+    app_core_sources += src
+  endif
+endforeach
 
 # Tray helper (GTK3 + Ayatana AppIndicator)
 # Installed as a private implementation detail into libexec
@@ -177,9 +188,21 @@ test_shell_sections_display_exe = executable('test_shell_sections_display',
 test('shell_sections_display', test_shell_sections_display_exe)
 
 test_section_debug_exe = executable('test_section_debug',
-  ['tests/test_section_debug.c', 'src/section_debug.c'],
+  ['tests/test_section_debug.c', 'src/section_debug.c', 'src/runtime_reveal.c'],
   dependencies : [glib_dep, gio_dep, gtk4_dep, adwaita_dep])
 test('section_debug', test_section_debug_exe)
+
+# Real-controller contract audit (Tranche E.3). Links the production
+# section_*.c translation units through app_core_sources so every
+# AppSection's SectionController is validated against the full
+# required-callback contract. No GTK display is required: the test only
+# inspects the static controller tables and never invokes build/refresh/
+# destroy/invalidate. See tests/test_section_controllers_contract.c for
+# the audit rationale.
+test_section_controllers_contract_exe = executable('test_section_controllers_contract',
+  ['tests/test_section_controllers_contract.c'] + app_core_sources,
+  dependencies : [gtk4_dep, adwaita_dep, json_glib_dep, soup_dep, gio_dep, gio_unix_dep, sodium_dep])
+test('section_controllers_contract', test_section_controllers_contract_exe)
 
 test_onboarding_controller_exe = executable('test_onboarding_controller',
   ['tests/test_onboarding_controller.c', 'src/onboarding.c', 'src/test_seams.c'],

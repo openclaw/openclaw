@@ -20,6 +20,8 @@
 #include "product_state.h"
 #include "readiness.h"
 #include "runtime_paths.h"
+#include "runtime_reveal.h"
+#include "section_adw_helpers.h"
 #include "state.h"
 #include "ui_model_utils.h"
 
@@ -175,47 +177,20 @@ static void on_gen_reveal_config(GtkButton *button, gpointer user_data) {
     (void)button;
     (void)user_data;
 
-    RuntimeEffectivePaths effective_paths = {0};
-    general_resolve_effective_paths(&effective_paths);
-    if (effective_paths.effective_config_path) {
-        g_autofree gchar *dir = g_path_get_dirname(effective_paths.effective_config_path);
-        g_autofree gchar *uri = g_filename_to_uri(dir, NULL, NULL);
-        if (uri) {
-            g_app_info_launch_default_for_uri(uri, NULL, NULL);
-        }
+    g_autofree gchar *uri = runtime_reveal_build_config_dir_uri();
+    if (uri) {
+        g_app_info_launch_default_for_uri(uri, NULL, NULL);
     }
-    runtime_effective_paths_clear(&effective_paths);
 }
 
 static void on_gen_reveal_state_dir(GtkButton *button, gpointer user_data) {
     (void)button;
     (void)user_data;
 
-    RuntimeEffectivePaths effective_paths = {0};
-    general_resolve_effective_paths(&effective_paths);
-    if (effective_paths.effective_state_dir) {
-        g_autofree gchar *uri = g_filename_to_uri(effective_paths.effective_state_dir, NULL, NULL);
-        if (uri) {
-            g_app_info_launch_default_for_uri(uri, NULL, NULL);
-        }
+    g_autofree gchar *uri = runtime_reveal_build_state_dir_uri();
+    if (uri) {
+        g_app_info_launch_default_for_uri(uri, NULL, NULL);
     }
-    runtime_effective_paths_clear(&effective_paths);
-}
-
-static GtkWidget* general_info_row(const char *heading, GtkWidget **out_value) {
-    GtkWidget *row = adw_action_row_new();
-    adw_preferences_row_set_title(ADW_PREFERENCES_ROW(row), heading);
-
-    GtkWidget *value = gtk_label_new("—");
-    gtk_label_set_selectable(GTK_LABEL(value), TRUE);
-    gtk_label_set_wrap(GTK_LABEL(value), TRUE);
-    gtk_label_set_xalign(GTK_LABEL(value), 1.0);
-    gtk_widget_set_hexpand(value, TRUE);
-    gtk_widget_set_halign(value, GTK_ALIGN_END);
-    adw_action_row_add_suffix(ADW_ACTION_ROW(row), value);
-
-    *out_value = value;
-    return row;
 }
 
 static GtkWidget* general_action_row(const char *title,
@@ -253,11 +228,11 @@ static GtkWidget* general_build(void) {
     adw_preferences_group_set_title(ADW_PREFERENCES_GROUP(status_group), "Status");
     adw_preferences_page_add(ADW_PREFERENCES_PAGE(page), ADW_PREFERENCES_GROUP(status_group));
 
-    GtkWidget *status_row = general_info_row("Status", &gen_status_label);
+    GtkWidget *status_row = section_adw_info_row("Status", &gen_status_label);
     gtk_widget_add_css_class(gen_status_label, "title-3");
     adw_preferences_group_add(ADW_PREFERENCES_GROUP(status_group), status_row);
 
-    GtkWidget *runtime_row = general_info_row("Runtime", &gen_runtime_label);
+    GtkWidget *runtime_row = section_adw_info_row("Runtime", &gen_runtime_label);
     gtk_widget_add_css_class(gen_runtime_label, "dim-label");
     adw_preferences_group_add(ADW_PREFERENCES_GROUP(status_group), runtime_row);
 
@@ -296,10 +271,10 @@ static GtkWidget* general_build(void) {
     gen_btn_open_dashboard = gtk_button_new_with_label("Open Dashboard");
     gtk_widget_add_css_class(gen_btn_open_dashboard, "suggested-action");
     g_signal_connect(gen_btn_open_dashboard, "clicked", G_CALLBACK(on_gen_open_dashboard), NULL);
-    adw_preferences_group_add(ADW_PREFERENCES_GROUP(gateway_group), general_info_row("Endpoint", &gen_endpoint_label));
-    adw_preferences_group_add(ADW_PREFERENCES_GROUP(gateway_group), general_info_row("Version", &gen_version_label));
-    adw_preferences_group_add(ADW_PREFERENCES_GROUP(gateway_group), general_info_row("Auth Mode", &gen_auth_mode_label));
-    adw_preferences_group_add(ADW_PREFERENCES_GROUP(gateway_group), general_info_row("Auth Source", &gen_auth_source_label));
+    adw_preferences_group_add(ADW_PREFERENCES_GROUP(gateway_group), section_adw_info_row("Endpoint", &gen_endpoint_label));
+    adw_preferences_group_add(ADW_PREFERENCES_GROUP(gateway_group), section_adw_info_row("Version", &gen_version_label));
+    adw_preferences_group_add(ADW_PREFERENCES_GROUP(gateway_group), section_adw_info_row("Auth Mode", &gen_auth_mode_label));
+    adw_preferences_group_add(ADW_PREFERENCES_GROUP(gateway_group), section_adw_info_row("Auth Source", &gen_auth_source_label));
     adw_preferences_group_add(ADW_PREFERENCES_GROUP(gateway_group),
                               general_action_row("Open Dashboard",
                                                  "Open the local gateway dashboard in your browser.",
@@ -309,9 +284,9 @@ static GtkWidget* general_build(void) {
     adw_preferences_group_set_title(ADW_PREFERENCES_GROUP(service_group), "Expected Service");
     adw_preferences_page_add(ADW_PREFERENCES_PAGE(page), ADW_PREFERENCES_GROUP(service_group));
 
-    adw_preferences_group_add(ADW_PREFERENCES_GROUP(service_group), general_info_row("Unit", &gen_unit_label));
-    adw_preferences_group_add(ADW_PREFERENCES_GROUP(service_group), general_info_row("Active State", &gen_active_state_label));
-    adw_preferences_group_add(ADW_PREFERENCES_GROUP(service_group), general_info_row("Sub State", &gen_sub_state_label));
+    adw_preferences_group_add(ADW_PREFERENCES_GROUP(service_group), section_adw_info_row("Unit", &gen_unit_label));
+    adw_preferences_group_add(ADW_PREFERENCES_GROUP(service_group), section_adw_info_row("Active State", &gen_active_state_label));
+    adw_preferences_group_add(ADW_PREFERENCES_GROUP(service_group), section_adw_info_row("Sub State", &gen_sub_state_label));
 
     GtkWidget *svc_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
 
@@ -336,7 +311,7 @@ static GtkWidget* general_build(void) {
     adw_preferences_group_set_title(ADW_PREFERENCES_GROUP(paths_group), "Paths");
     adw_preferences_page_add(ADW_PREFERENCES_PAGE(page), ADW_PREFERENCES_GROUP(paths_group));
 
-    adw_preferences_group_add(ADW_PREFERENCES_GROUP(paths_group), general_info_row("Config File", &gen_config_path_label));
+    adw_preferences_group_add(ADW_PREFERENCES_GROUP(paths_group), section_adw_info_row("Config File", &gen_config_path_label));
     gtk_widget_add_css_class(gen_config_path_label, "monospace");
 
     GtkWidget *reveal_config_btn = gtk_button_new_with_label("Reveal Config Folder");
@@ -346,7 +321,7 @@ static GtkWidget* general_build(void) {
                                                  "Open the folder containing the effective config file.",
                                                  reveal_config_btn));
 
-    adw_preferences_group_add(ADW_PREFERENCES_GROUP(paths_group), general_info_row("State Dir", &gen_state_dir_label));
+    adw_preferences_group_add(ADW_PREFERENCES_GROUP(paths_group), section_adw_info_row("State Dir", &gen_state_dir_label));
     gtk_widget_add_css_class(gen_state_dir_label, "monospace");
 
     GtkWidget *reveal_state_btn = gtk_button_new_with_label("Reveal State Folder");
@@ -356,7 +331,7 @@ static GtkWidget* general_build(void) {
                                                  "Open the local state directory used by the companion.",
                                                  reveal_state_btn));
 
-    adw_preferences_group_add(ADW_PREFERENCES_GROUP(paths_group), general_info_row("Profile", &gen_profile_label));
+    adw_preferences_group_add(ADW_PREFERENCES_GROUP(paths_group), section_adw_info_row("Profile", &gen_profile_label));
 
     GtkWidget *companion_group = adw_preferences_group_new();
     adw_preferences_group_set_title(ADW_PREFERENCES_GROUP(companion_group), "Companion");
