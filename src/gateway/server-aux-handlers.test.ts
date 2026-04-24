@@ -8,10 +8,7 @@ import {
   getActiveSecretsRuntimeSnapshot,
   type PreparedSecretsRuntimeSnapshot,
 } from "../secrets/runtime.js";
-import {
-  createChannelTestPluginBase,
-  createTestRegistry,
-} from "../test-utils/channel-plugins.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { createGatewayAuxHandlers } from "./server-aux-handlers.js";
 
 function asConfig(value: unknown): OpenClawConfig {
@@ -37,9 +34,7 @@ function registerChannelPluginsWithReloadPrefixes(): void {
     makeChannelPluginWithReloadPrefix("discord"),
   ];
   setActivePluginRegistry(
-    createTestRegistry(
-      plugins.map((plugin) => ({ pluginId: plugin.id, plugin, source: "test" })),
-    ),
+    createTestRegistry(plugins.map((plugin) => ({ pluginId: plugin.id, plugin, source: "test" }))),
   );
 }
 
@@ -97,17 +92,19 @@ describe("gateway aux handlers", () => {
         }),
       ),
     );
-    const activateRuntimeSecrets = vi.fn().mockResolvedValue(
-      createSnapshot(
-        asConfig({
-          channels: {
-            slack: { signingSecret: "new-slack-secret" },
-            zalo: { webhookSecret: "new-zalo-secret" },
-            discord: { token: "unchanged-discord-token" },
-          },
-        }),
-      ),
+    const prepared = createSnapshot(
+      asConfig({
+        channels: {
+          slack: { signingSecret: "new-slack-secret" },
+          zalo: { webhookSecret: "new-zalo-secret" },
+          discord: { token: "unchanged-discord-token" },
+        },
+      }),
     );
+    const activateRuntimeSecrets = vi.fn().mockImplementation(async () => {
+      activateSecretsRuntimeSnapshot(prepared);
+      return prepared;
+    });
     const stopChannel = vi.fn().mockResolvedValue(undefined);
     const startChannel = vi.fn().mockResolvedValue(undefined);
     const respond = vi.fn();
@@ -129,9 +126,9 @@ describe("gateway aux handlers", () => {
     // Assertion is order-independent: plan.restartChannels iterates in Set
     // insertion order, which in turn depends on diff/plugin iteration order
     // that is not a stable contract of this handler.
-    expect(
-      stopChannel.mock.calls.map(([ch]) => ch).toSorted((a, b) => a.localeCompare(b)),
-    ).toEqual(["slack", "zalo"]);
+    expect(stopChannel.mock.calls.map(([ch]) => ch).toSorted((a, b) => a.localeCompare(b))).toEqual(
+      ["slack", "zalo"],
+    );
     expect(
       startChannel.mock.calls.map(([ch]) => ch).toSorted((a, b) => a.localeCompare(b)),
     ).toEqual(["slack", "zalo"]);
@@ -156,18 +153,16 @@ describe("gateway aux handlers", () => {
       }),
     );
     const activationOrder: string[] = [];
-    const activateRuntimeSecrets = vi
-      .fn()
-      .mockImplementationOnce(async () => {
-        activationOrder.push("first-start");
-        // Yield the event loop to let a concurrent caller enter if the
-        // handler were not serialized.
-        await Promise.resolve();
-        await Promise.resolve();
-        activateSecretsRuntimeSnapshot(preparedFirst);
-        activationOrder.push("first-end");
-        return preparedFirst;
-      });
+    const activateRuntimeSecrets = vi.fn().mockImplementationOnce(async () => {
+      activationOrder.push("first-start");
+      // Yield the event loop to let a concurrent caller enter if the
+      // handler were not serialized.
+      await Promise.resolve();
+      await Promise.resolve();
+      activateSecretsRuntimeSnapshot(preparedFirst);
+      activationOrder.push("first-end");
+      return preparedFirst;
+    });
     const stopChannel = vi.fn().mockResolvedValue(undefined);
     const startChannel = vi.fn().mockResolvedValue(undefined);
     const respond = vi.fn();
@@ -188,10 +183,7 @@ describe("gateway aux handlers", () => {
       invokeSecretsReload({ handlers: extraHandlers, respond }),
     ]);
 
-    expect(activationOrder).toEqual([
-      "first-start",
-      "first-end",
-    ]);
+    expect(activationOrder).toEqual(["first-start", "first-end"]);
     expect(activateRuntimeSecrets).toHaveBeenCalledTimes(1);
     expect(stopChannel.mock.calls).toEqual([["slack"]]);
     expect(startChannel.mock.calls).toEqual([["slack"]]);
@@ -245,9 +237,9 @@ describe("gateway aux handlers", () => {
 
     // Both channels were attempted even though slack's startChannel threw,
     // so zalo still got its rotation applied.
-    expect(
-      stopChannel.mock.calls.map(([ch]) => ch).toSorted((a, b) => a.localeCompare(b)),
-    ).toEqual(["slack", "zalo"]);
+    expect(stopChannel.mock.calls.map(([ch]) => ch).toSorted((a, b) => a.localeCompare(b))).toEqual(
+      ["slack", "zalo"],
+    );
     expect(
       startChannel.mock.calls.map(([ch]) => ch).toSorted((a, b) => a.localeCompare(b)),
     ).toEqual(["slack", "zalo"]);
