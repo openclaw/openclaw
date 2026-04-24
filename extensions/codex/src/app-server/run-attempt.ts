@@ -34,6 +34,7 @@ import {
   type NativeHookRelayRegistrationHandle,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
+import { refreshCodexAppServerAuthTokens } from "./auth-bridge.js";
 import {
   createCodexAppServerClientFactoryTestHooks,
   defaultCodexAppServerClientFactory,
@@ -373,6 +374,12 @@ export async function runCodexAppServerAttempt(
 
   const notificationCleanup = client.addNotificationHandler(enqueueNotification);
   const requestCleanup = client.addRequestHandler(async (request) => {
+    if (request.method === "account/chatgptAuthTokens/refresh") {
+      return refreshCodexAppServerAuthTokens({
+        agentDir,
+        authProfileId: startupAuthProfileId,
+      });
+    }
     if (!turnId) {
       return undefined;
     }
