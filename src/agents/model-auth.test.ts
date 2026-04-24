@@ -346,7 +346,7 @@ describe("resolveUsableCustomProviderApiKey", () => {
     expect(resolved).toBeNull();
   });
 
-  it("treats the Vertex ADC marker as a non-secret models.json credential marker", () => {
+  it("does not treat the Vertex ADC marker as a usable models.json credential", () => {
     const resolved = resolveUsableCustomProviderApiKey({
       cfg: {
         models: {
@@ -361,10 +361,7 @@ describe("resolveUsableCustomProviderApiKey", () => {
       },
       provider: "anthropic-vertex",
     });
-    expect(resolved).toEqual({
-      apiKey: GCP_VERTEX_CREDENTIALS_MARKER,
-      source: "models.json",
-    });
+    expect(resolved).toBeNull();
   });
 
   it("resolves known env marker names from process env for custom providers", () => {
