@@ -516,6 +516,27 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     });
   };
 
+  const deliverBufferedStreamFallback = async (params: {
+    session: SlackStreamSession;
+    err: SlackStreamNotDeliveredError;
+    payload: ReplyPayload;
+    kind: ReplyDispatchKind;
+    textOverride: string;
+  }): Promise<boolean> => {
+    const delivered = await deliverPendingStreamFallback(params.session, params.err);
+    if (!delivered) {
+      return false;
+    }
+    replyPlan.markSent();
+    deliveryTracker.markDelivered({
+      kind: params.kind,
+      payload: params.payload,
+      threadTs: params.session.threadTs,
+      textOverride: params.textOverride,
+    });
+    return true;
+  };
+
   const deliverWithStreaming = async (params: {
     payload: ReplyPayload;
     kind: ReplyDispatchKind;
@@ -620,15 +641,14 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       if (err instanceof SlackStreamNotDeliveredError) {
         streamFailed = true;
         if (streamSession) {
-          const delivered = await deliverPendingStreamFallback(streamSession, err);
+          const delivered = await deliverBufferedStreamFallback({
+            session: streamSession,
+            err,
+            payload: params.payload,
+            kind: params.kind,
+            textOverride: text,
+          });
           if (delivered) {
-            replyPlan.markSent();
-            deliveryTracker.markDelivered({
-              kind: params.kind,
-              payload: params.payload,
-              threadTs: streamSession.threadTs,
-              textOverride: text,
-            });
             return;
           }
           throw err;
@@ -655,15 +675,14 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           streamSession.pendingText,
           "unknown",
         );
-        const delivered = await deliverPendingStreamFallback(streamSession, bufferedFallbackErr);
+        const delivered = await deliverBufferedStreamFallback({
+          session: streamSession,
+          err: bufferedFallbackErr,
+          payload: params.payload,
+          kind: params.kind,
+          textOverride: text,
+        });
         if (delivered) {
-          replyPlan.markSent();
-          deliveryTracker.markDelivered({
-            kind: params.kind,
-            payload: params.payload,
-            threadTs: streamSession.threadTs,
-            textOverride: text,
-          });
           return;
         }
       }
