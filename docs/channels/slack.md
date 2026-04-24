@@ -562,10 +562,29 @@ Notes:
 
 - A reply thread must be available for native text streaming and Slack assistant thread status to appear. Thread selection still follows `replyToMode`.
 - Channel and group-chat roots can still use the normal draft preview when native streaming is unavailable.
-- Top-level Slack DMs stay off-thread by default, so they do not show the thread-style preview; use thread replies or `typingReaction` if you want visible progress there.
+- Top-level Slack DMs stay off-thread by default. Native `partial` preview still requires a reply thread, but `progress` mode posts and updates a separate top-level plan message while keeping the final DM reply unthreaded.
 - Media and non-text payloads fall back to normal delivery.
 - Media/error finals cancel pending preview edits; eligible text/block finals flush only when they can edit the preview in place.
 - If streaming fails mid-reply, OpenClaw falls back to normal delivery for remaining payloads.
+
+### Progress step lifecycle
+
+When `channels.slack.streaming.mode` is `"progress"`, Slack shows a task-style progress message. These steps are Slack-specific presentation for the underlying agent and channel lifecycle events. Some line up with OpenClaw hooks, but the progress step itself is emitted by Slack channel code.
+Threaded progress uses Slack native stream task updates. Unthreaded DM progress uses a normal top-level Slack message with a `plan` block that is updated with `chat.update`.
+
+| Step                     | OpenClaw hook                                                                       | Slack progress trigger                                                                                      | When it starts                                                                                                                                     |
+| ------------------------ | ----------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Reading message`        | `message_received` / `message:received`                                             | Slack progress stream initialization                                                                        | When Slack creates the progress plan stream for the inbound message. The inbound message hook has already run by this point.                       |
+| `Listening to audio`     | `message:transcribed`                                                               | Slack prepared-message `hasAudioInput` flag                                                                 | When the inbound Slack message includes audio input and the audio/transcription path starts. The transcription hook fires after transcription.     |
+| `Gathering memory`       | none                                                                                | Slack progress stream initialization                                                                        | After the read or listen phase starts the agent action phase while OpenClaw prepares remembered context and run inputs.                            |
+| `Deciding on next steps` | none                                                                                | `replyOptions.onModelSelected`, `replyOptions.onAssistantMessageStart`, or `replyOptions.onReasoningStream` | When OpenClaw resolves the model and model output or streamed reasoning begins before a tool call or final reply.                                  |
+| `Recalling memory`       | `before_tool_call`                                                                  | Memory-related tool item event via `replyOptions.onItemEvent`                                               | When the agent emits a memory-related tool event with `phase: "start"` or `status: "running"`.                                                     |
+| `Exploring memory`       | `before_tool_call`                                                                  | OpenViking filesystem/read tool item event via `replyOptions.onItemEvent`                                   | When documented OpenViking browse/read operations such as `browse`, `ls`, `tree`, `read`, `abstract`, `overview`, `grep`, or `glob` run.           |
+| `Updating memory`        | `before_tool_call`                                                                  | Memory write/delete tool item event via `replyOptions.onItemEvent`                                          | When documented OpenViking memory update operations such as `openviking_store`, `openviking_forget`, `write`, `add-resource`, or `add-memory` run. |
+| `Using <plugin/tool>`    | `before_tool_call`                                                                  | Agent item event via `replyOptions.onItemEvent`                                                             | When the agent emits a tool item event with `phase: "start"` or `status: "running"`.                                                               |
+| `Sending reply`          | `message_sending` for outbound-adapter sends; none for this direct Slack reply path | Slack reply dispatcher `deliver` callback                                                                   | Immediately before Slack delivers the reply payload to the target channel or thread.                                                               |
+
+For the underlying OpenClaw hook names and broader agent lifecycle, see [Agent Loop hook points](/concepts/agent-loop#hook-points-where-you-can-intercept).
 
 Use draft preview instead of Slack native text streaming:
 

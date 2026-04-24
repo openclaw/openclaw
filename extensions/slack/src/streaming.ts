@@ -11,7 +11,7 @@
  * @see https://docs.slack.dev/reference/methods/chat.stopStream
  */
 
-import type { WebClient } from "@slack/web-api";
+import type { WebAPICallResult, WebClient } from "@slack/web-api";
 import type { ChatStreamer } from "@slack/web-api/dist/chat-stream.js";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 
@@ -37,6 +37,37 @@ export type SlackStreamSession = {
   delivered: boolean;
   /** Text accepted by the SDK but not yet acknowledged by Slack. */
   pendingText: string;
+};
+
+export type SlackStreamChunk =
+  | {
+      type: "markdown_text";
+      markdown_text: string;
+    }
+  | {
+      type: "task_update";
+      id: string;
+      title: string;
+      status: "pending" | "in_progress" | "complete" | "completed" | "error";
+    };
+
+type SlackStreamTaskStatus = Extract<SlackStreamChunk, { type: "task_update" }>["status"];
+
+export type SlackChunkStreamSession = {
+  client: WebClient;
+  channel: string;
+  threadTs?: string;
+  messageTs: string;
+  stopped: boolean;
+};
+
+export type SlackPlanMessageSession = {
+  client: WebClient;
+  channel: string;
+  messageTs: string;
+  tasks: SlackPlanMessageTask[];
+  revision: number;
+  stopped: boolean;
 };
 
 export type StartSlackStreamParams = {
@@ -68,6 +99,53 @@ export type StopSlackStreamParams = {
   session: SlackStreamSession;
   /** Optional final markdown text to append before stopping. */
   text?: string;
+};
+
+export type StartSlackChunkStreamParams = {
+  client: WebClient;
+  channel: string;
+  threadTs?: string;
+  teamId?: string;
+  userId?: string;
+  taskDisplayMode?: "plan" | "task_update";
+  chunks?: SlackStreamChunk[];
+};
+
+export type AppendSlackChunkStreamParams = {
+  session: SlackChunkStreamSession;
+  chunks: SlackStreamChunk[];
+};
+
+export type StopSlackChunkStreamParams = {
+  session: SlackChunkStreamSession;
+  chunks?: SlackStreamChunk[];
+};
+
+export type StartSlackPlanMessageParams = {
+  client: WebClient;
+  channel: string;
+  chunks?: SlackStreamChunk[];
+};
+
+export type AppendSlackPlanMessageParams = {
+  session: SlackPlanMessageSession;
+  chunks: SlackStreamChunk[];
+};
+
+export type StopSlackPlanMessageParams = {
+  session: SlackPlanMessageSession;
+  chunks?: SlackStreamChunk[];
+};
+
+type SlackPlanMessageTask = {
+  type: "task_card";
+  task_id: string;
+  title: string;
+  status: "pending" | "in_progress" | "complete" | "error";
+};
+
+type SlackApiClient = WebClient & {
+  apiCall: (method: string, args: Record<string, unknown>) => Promise<Record<string, unknown>>;
 };
 
 /**
@@ -251,6 +329,188 @@ export async function stopSlackStream(params: StopSlackStreamParams): Promise<vo
   }
 
   logVerbose("slack-stream: stream stopped");
+}
+
+function resolveSlackStreamMessageTs(
+  response: WebAPICallResult & { ts?: string; message_ts?: string },
+): string {
+  const ts = response.ts;
+  if (typeof ts === "string" && ts.length > 0) {
+    return ts;
+  }
+  const messageTs = response.message_ts;
+  if (typeof messageTs === "string" && messageTs.length > 0) {
+    return messageTs;
+  }
+  throw new TypeError("Slack stream response missing message timestamp");
+}
+
+function normalizeSlackPlanTaskStatus(
+  status: SlackStreamTaskStatus,
+): SlackPlanMessageTask["status"] {
+  return status === "completed" ? "complete" : status;
+}
+
+function applySlackPlanTaskChunks(
+  tasks: SlackPlanMessageTask[],
+  chunks: SlackStreamChunk[] | undefined,
+): SlackPlanMessageTask[] {
+  if (!chunks?.length) {
+    return tasks;
+  }
+  const nextTasks = [...tasks];
+  for (const chunk of chunks) {
+    if (chunk.type !== "task_update") {
+      continue;
+    }
+    const existingIndex = nextTasks.findIndex((task) => task.task_id === chunk.id);
+    const task: SlackPlanMessageTask = {
+      type: "task_card",
+      task_id: chunk.id,
+      title: chunk.title,
+      status: normalizeSlackPlanTaskStatus(chunk.status),
+    };
+    if (existingIndex >= 0) {
+      nextTasks[existingIndex] = task;
+    } else {
+      nextTasks.push(task);
+    }
+  }
+  return nextTasks;
+}
+
+function resolveSlackPlanMessageTitle(session: SlackPlanMessageSession): string {
+  if (session.stopped) {
+    return "Thinking completed";
+  }
+  const activeTask = session.tasks.find((task) => task.status === "in_progress");
+  return activeTask?.title ?? "Working";
+}
+
+function buildSlackPlanMessageBlocks(session: SlackPlanMessageSession) {
+  return [
+    {
+      type: "plan",
+      block_id: `openclaw_progress_plan_${session.revision}`,
+      title: resolveSlackPlanMessageTitle(session),
+      tasks: session.tasks,
+    },
+  ];
+}
+
+export async function startSlackChunkStream(
+  params: StartSlackChunkStreamParams,
+): Promise<SlackChunkStreamSession> {
+  const { client, channel, threadTs, teamId, userId, taskDisplayMode, chunks } = params;
+
+  logVerbose(
+    `slack-stream: starting chunk stream in ${channel}${threadTs ? ` thread=${threadTs}` : ""}${
+      taskDisplayMode ? ` mode=${taskDisplayMode}` : ""
+    }`,
+  );
+
+  const apiClient = client as SlackApiClient;
+  const response = await apiClient.apiCall("chat.startStream", {
+    channel,
+    ...(threadTs ? { thread_ts: threadTs } : {}),
+    ...(teamId ? { recipient_team_id: teamId } : {}),
+    ...(userId ? { recipient_user_id: userId } : {}),
+    ...(taskDisplayMode ? { task_display_mode: taskDisplayMode } : {}),
+    ...(chunks?.length ? { chunks } : {}),
+  });
+
+  return {
+    client,
+    channel,
+    threadTs,
+    messageTs: resolveSlackStreamMessageTs(response),
+    stopped: false,
+  };
+}
+
+export async function appendSlackChunkStream(params: AppendSlackChunkStreamParams): Promise<void> {
+  const { session, chunks } = params;
+  if (session.stopped || chunks.length === 0) {
+    return;
+  }
+  const apiClient = session.client as SlackApiClient;
+  await apiClient.apiCall("chat.appendStream", {
+    channel: session.channel,
+    ...(session.threadTs ? { thread_ts: session.threadTs } : {}),
+    ts: session.messageTs,
+    chunks,
+  });
+}
+
+export async function stopSlackChunkStream(params: StopSlackChunkStreamParams): Promise<void> {
+  const { session, chunks } = params;
+  if (session.stopped) {
+    logVerbose("slack-stream: chunk stream already stopped, ignoring duplicate stop");
+    return;
+  }
+  session.stopped = true;
+  const apiClient = session.client as SlackApiClient;
+  await apiClient.apiCall("chat.stopStream", {
+    channel: session.channel,
+    ...(session.threadTs ? { thread_ts: session.threadTs } : {}),
+    ts: session.messageTs,
+    ...(chunks?.length ? { chunks } : {}),
+  });
+}
+
+export async function startSlackPlanMessage(
+  params: StartSlackPlanMessageParams,
+): Promise<SlackPlanMessageSession> {
+  const { client, channel, chunks } = params;
+  const apiClient = client as SlackApiClient;
+  const session: SlackPlanMessageSession = {
+    client,
+    channel,
+    messageTs: "",
+    tasks: applySlackPlanTaskChunks([], chunks),
+    revision: 1,
+    stopped: false,
+  };
+  const response = await apiClient.apiCall("chat.postMessage", {
+    channel,
+    text: "Thinking...",
+    blocks: buildSlackPlanMessageBlocks(session),
+  });
+  session.messageTs = resolveSlackStreamMessageTs(response);
+  return session;
+}
+
+export async function appendSlackPlanMessage(params: AppendSlackPlanMessageParams): Promise<void> {
+  const { session, chunks } = params;
+  if (session.stopped || chunks.length === 0) {
+    return;
+  }
+  session.tasks = applySlackPlanTaskChunks(session.tasks, chunks);
+  session.revision += 1;
+  const apiClient = session.client as SlackApiClient;
+  await apiClient.apiCall("chat.update", {
+    channel: session.channel,
+    ts: session.messageTs,
+    text: "Thinking...",
+    blocks: buildSlackPlanMessageBlocks(session),
+  });
+}
+
+export async function stopSlackPlanMessage(params: StopSlackPlanMessageParams): Promise<void> {
+  const { session, chunks } = params;
+  if (session.stopped) {
+    return;
+  }
+  session.stopped = true;
+  session.tasks = applySlackPlanTaskChunks(session.tasks, chunks);
+  session.revision += 1;
+  const apiClient = session.client as SlackApiClient;
+  await apiClient.apiCall("chat.update", {
+    channel: session.channel,
+    ts: session.messageTs,
+    text: "Thinking completed.",
+    blocks: buildSlackPlanMessageBlocks(session),
+  });
 }
 
 // ---------------------------------------------------------------------------

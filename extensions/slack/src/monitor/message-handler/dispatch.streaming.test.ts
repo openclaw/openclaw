@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  createSlackProgressHandoffChunks,
   createSlackTurnDeliveryTracker,
   isSlackStreamingEnabled,
+  normalizeSlackProgressToolTitle,
   resolveSlackStreamRecipientTeamId,
   resolveSlackStreamingThreadHint,
   shouldEnableSlackPreviewStreaming,
@@ -134,6 +136,48 @@ describe("slack turn delivery tracker", () => {
   });
 });
 
+describe("slack progress handoff chunks", () => {
+  it("starts the next step before completing finished tool tasks", () => {
+    expect(
+      createSlackProgressHandoffChunks({
+        nextTaskId: "sending_reply",
+        nextTitle: "Sending reply",
+        completedToolTasks: [
+          {
+            taskId: "tool_linear_1",
+            title: "Using Linear",
+            status: "complete",
+          },
+        ],
+      }),
+    ).toEqual([
+      {
+        type: "task_update",
+        id: "sending_reply",
+        title: "Sending reply",
+        status: "in_progress",
+      },
+      {
+        type: "task_update",
+        id: "tool_linear_1",
+        title: "Using Linear",
+        status: "complete",
+      },
+    ]);
+  });
+});
+
+describe("slack progress tool titles", () => {
+  it("labels memory browsing tools as exploring memory", () => {
+    expect(normalizeSlackProgressToolTitle({ title: "openviking browse viking://resources" })).toBe(
+      "Exploring memory",
+    );
+    expect(
+      normalizeSlackProgressToolTitle({ title: "ov read viking://resources/docs/api.md" }),
+    ).toBe("Exploring memory");
+  });
+});
+
 describe("slack native streaming thread hint", () => {
   it("stays off-thread when replyToMode=off and message is not in a thread", () => {
     expect(
@@ -240,5 +284,15 @@ describe("slack draft stream initialization", () => {
         useStreaming: false,
       }),
     ).toBe(true);
+  });
+
+  it("stays off when progress plan streaming is active", () => {
+    expect(
+      shouldInitializeSlackDraftStream({
+        previewStreamingEnabled: true,
+        useStreaming: false,
+        progressPlanStreamingEnabled: true,
+      }),
+    ).toBe(false);
   });
 });
