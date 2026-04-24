@@ -47,6 +47,7 @@ type SetupAutoEnableProbeEntry = {
 };
 
 export type PluginSetupRegistryDiagnosticCode =
+  | "setup-descriptor-runtime-disabled"
   | "setup-descriptor-provider-missing-runtime"
   | "setup-descriptor-provider-runtime-undeclared"
   | "setup-descriptor-cli-backend-missing-runtime"
@@ -283,6 +284,10 @@ function resolveRegister(mod: OpenClawPluginModule): {
   return {};
 }
 
+function resolveSetupRuntimeSource(record: PluginManifestRecord): string | null {
+  return record.setupSource ?? resolveSetupApiPath(record.rootDir);
+}
+
 function resolveSetupRegistration(record: PluginManifestRecord): {
   setupSource: string;
   register: (api: ReturnType<typeof buildPluginApi>) => void | Promise<void>;
@@ -290,7 +295,7 @@ function resolveSetupRegistration(record: PluginManifestRecord): {
   if (record.setup?.requiresRuntime === false) {
     return null;
   }
-  const setupSource = record.setupSource ?? resolveSetupApiPath(record.rootDir);
+  const setupSource = resolveSetupRuntimeSource(record);
   if (!setupSource) {
     return null;
   }
@@ -399,6 +404,24 @@ function mapNormalizedIds(ids: readonly string[]): Map<string, string> {
   return mapped;
 }
 
+function pushDescriptorRuntimeDisabledDiagnostic(params: {
+  record: PluginManifestRecord;
+  diagnostics: PluginSetupRegistryDiagnostic[];
+}): void {
+  if (params.record.setup?.requiresRuntime !== false) {
+    return;
+  }
+  if (!resolveSetupRuntimeSource(params.record)) {
+    return;
+  }
+  params.diagnostics.push({
+    pluginId: params.record.id,
+    code: "setup-descriptor-runtime-disabled",
+    message:
+      "setup.requiresRuntime is false, so OpenClaw ignored the plugin setup runtime entry. Remove setup-api/openclaw.setupEntry or set requiresRuntime true if setup lookup still needs plugin code.",
+  });
+}
+
 function pushSetupDescriptorDriftDiagnostics(params: {
   record: PluginManifestRecord;
   providers: readonly ProviderPlugin[];
@@ -502,6 +525,13 @@ export function resolvePluginSetupRegistry(params?: {
 
   for (const record of manifestRegistry.plugins) {
     if (selectedPluginIds && !selectedPluginIds.has(record.id)) {
+      continue;
+    }
+    if (record.setup?.requiresRuntime === false) {
+      pushDescriptorRuntimeDisabledDiagnostic({
+        record,
+        diagnostics,
+      });
       continue;
     }
     const setupRegistration = resolveSetupRegistration(record);

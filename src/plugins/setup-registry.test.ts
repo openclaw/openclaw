@@ -378,7 +378,12 @@ describe("setup-registry getJiti", () => {
       cliBackends: [],
       configMigrations: [],
       autoEnableProbes: [],
-      diagnostics: [],
+      diagnostics: [
+        expect.objectContaining({
+          pluginId: "openai",
+          code: "setup-descriptor-runtime-disabled",
+        }),
+      ],
     });
     expect(mocks.createJiti).not.toHaveBeenCalled();
   });
