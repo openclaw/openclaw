@@ -12,6 +12,8 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveProviderAuthProfileId } from "../../plugins/provider-runtime.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
+import { applyGuardrail } from "../../security/scanner.js";
+import type { TokenVault } from "../../security/vault.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { sanitizeForLog } from "../../terminal/ansi.js";
 import { resolveUserPath } from "../../utils.js";
@@ -860,10 +862,39 @@ export async function runEmbeddedPiAgent(
           ].filter(
             (value): value is string => typeof value === "string" && value.trim().length > 0,
           );
-          const prompt =
+          let finalPrompt =
             promptAdditions.length > 0
               ? `${basePrompt}\n\n${promptAdditions.join("\n\n")}`
               : basePrompt;
+
+          // Security Guardrail: 安全模式。
+          // 去程：在 prompt 发往云端 LLM 前，调用本地模型或正则扫描进行脱敏。
+          let runVault: TokenVault | undefined;
+          const guardrailDisabled = params.securityGuardrail?.enable === false;
+          if (!guardrailDisabled) {
+            // 从 config 或 hardcode 获取本地模型配置（后续应从 OpenClaw config 读取）
+            const guardrailOpts = params.securityGuardrail ?? {
+              enable: true,
+              localBaseUrl: "http://10.14.101.124:1234/v1",
+              localApiKey: "lm-studio",
+              localModel: "qwen3-30b-a3b",
+            };
+            const scanResult = await applyGuardrail(finalPrompt, guardrailOpts);
+            finalPrompt = scanResult.sanitizedPrompt;
+            runVault = scanResult.vault;
+            if (scanResult.findingsCount > 0) {
+              const methodLabel = scanResult.method === "local-llm" ? "本地模型" : "正则匹配";
+              log.info(
+                `[🛡️ Guardrail] 拦截 ${scanResult.findingsCount} 项敏感信息 (${methodLabel})，已脱敏后发往云端。`,
+              );
+              log.info(
+                `[🛡️ Guardrail] 脱敏预览: ${finalPrompt.length > 120 ? finalPrompt.substring(0, 120) + "…" : finalPrompt}`,
+              );
+            } else if (scanResult.method !== "skipped") {
+              log.info(`[🛡️ Guardrail] 扫描完成 (${scanResult.method})，未发现敏感信息。`);
+            }
+          }
+
           let resolvedStreamApiKey: string | undefined;
           if (!runtimeAuthState && apiKeyInfo) {
             resolvedStreamApiKey = (apiKeyInfo as ApiKeyInfo).apiKey;
@@ -924,8 +955,9 @@ export async function runEmbeddedPiAgent(
             contextEngine,
             contextTokenBudget: ctxInfo.tokens,
             skillsSnapshot: params.skillsSnapshot,
-            prompt,
+            prompt: finalPrompt,
             transcriptPrompt: params.transcriptPrompt,
+            guardrailVault: runVault,
             images: params.images,
             imageOrder: params.imageOrder,
             clientTools: params.clientTools,

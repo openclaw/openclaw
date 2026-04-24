@@ -919,7 +919,40 @@ export async function runEmbeddedAttempt(
       senderIsOwner: params.senderIsOwner,
       warn: (message) => log.warn(message),
     });
-    const effectiveTools = [...tools, ...filteredBundledTools];
+    let effectiveTools = [...tools, ...filteredBundledTools];
+
+    if (params.guardrailVault) {
+      const vault = params.guardrailVault;
+      effectiveTools = effectiveTools.map((tool) => {
+        const originalExecute = tool.execute;
+        if (typeof originalExecute !== "function") {
+          return tool;
+        }
+        return {
+          ...tool,
+          execute: async (args: unknown, runContext: unknown) => {
+            const restoreObject = (obj: unknown): unknown => {
+              if (typeof obj === "string") {
+                return vault.restore(obj);
+              }
+              if (Array.isArray(obj)) {
+                return obj.map(restoreObject);
+              }
+              if (obj && typeof obj === "object") {
+                const newObj: Record<string, unknown> = {};
+                for (const [k, v] of Object.entries(obj)) {
+                  newObj[k] = restoreObject(v);
+                }
+                return newObj;
+              }
+              return obj;
+            };
+            const restoredArgs = restoreObject(args);
+            return originalExecute(restoredArgs as string, runContext);
+          },
+        };
+      });
+    }
     const allowedToolNames = collectAllowedToolNames({
       tools: effectiveTools,
       clientTools,
