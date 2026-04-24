@@ -14,6 +14,7 @@ import type {
   RealtimeVoiceTool,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import WebSocket from "ws";
 import {
   asFiniteNumber,
@@ -618,21 +619,31 @@ async function createOpenAIRealtimeBrowserSession(
     session.tool_choice = "auto";
   }
 
-  const response = await fetch("https://api.openai.com/v1/realtime/client_secrets", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
+  const { response, release } = await fetchWithSsrFGuard({
+    url: "https://api.openai.com/v1/realtime/client_secrets",
+    init: {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ session }),
     },
-    body: JSON.stringify({ session }),
+    auditContext: "openai-realtime-browser-session",
   });
-  if (!response.ok) {
-    const detail = await response.text().catch(() => "");
-    throw new Error(
-      `OpenAI Realtime browser session failed (${response.status}): ${detail || response.statusText}`,
-    );
-  }
-  const payload = (await response.json()) as unknown;
+  const payload = await (async () => {
+    try {
+      if (!response.ok) {
+        const detail = await response.text().catch(() => "");
+        throw new Error(
+          `OpenAI Realtime browser session failed (${response.status}): ${detail || response.statusText}`,
+        );
+      }
+      return (await response.json()) as unknown;
+    } finally {
+      await release();
+    }
+  })();
   const nestedSecret =
     payload && typeof payload === "object"
       ? (payload as Record<string, unknown>).client_secret
