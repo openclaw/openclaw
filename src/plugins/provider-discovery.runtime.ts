@@ -44,6 +44,7 @@ function resolveProviderDiscoveryEntryPlugins(params: {
   onlyPluginIds?: string[];
   includeUntrustedWorkspacePlugins?: boolean;
   requireCompleteDiscoveryEntryCoverage?: boolean;
+  discoveryEntriesOnly?: boolean;
 }): ProviderPlugin[] {
   const pluginIds = resolveDiscoveredProviderPluginIds(params);
   const pluginIdSet = new Set(pluginIds);
@@ -82,10 +83,14 @@ export function resolvePluginDiscoveryProvidersRuntime(params: {
   onlyPluginIds?: string[];
   includeUntrustedWorkspacePlugins?: boolean;
   requireCompleteDiscoveryEntryCoverage?: boolean;
+  discoveryEntriesOnly?: boolean;
 }): ProviderPlugin[] {
   const entryProviders = resolveProviderDiscoveryEntryPlugins(params);
   if (entryProviders.length > 0) {
     return entryProviders;
+  }
+  if (params.discoveryEntriesOnly === true) {
+    return [];
   }
   return resolvePluginProviders({
     ...params,
