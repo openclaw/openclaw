@@ -23,6 +23,57 @@ The plugin is explicit by design:
 - The CLI command is `googlemeet`; `meet` is reserved for broader agent
   teleconference workflows.
 
+## Quick start
+
+Install the local audio dependencies and make sure the realtime provider can use
+OpenAI:
+
+```bash
+brew install blackhole-2ch sox
+export OPENAI_API_KEY=sk-...
+```
+
+Enable the plugin:
+
+```json5
+{
+  plugins: {
+    entries: {
+      "google-meet": {
+        enabled: true,
+        config: {},
+      },
+    },
+  },
+}
+```
+
+Check setup:
+
+```bash
+openclaw googlemeet setup
+```
+
+Join a meeting:
+
+```bash
+openclaw googlemeet join https://meet.google.com/abc-defg-hij
+```
+
+Or let an agent join through the `google_meet` tool:
+
+```json
+{
+  "action": "join",
+  "url": "https://meet.google.com/abc-defg-hij"
+}
+```
+
+Chrome joins as the signed-in Chrome profile. In Meet, pick `BlackHole 2ch` for
+the microphone/speaker path used by OpenClaw. For clean duplex audio, use
+separate virtual devices or a Loopback-style graph; a single BlackHole device is
+enough for a first smoke test but can echo.
+
 ## Transports
 
 ### Chrome
