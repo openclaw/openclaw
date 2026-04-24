@@ -2583,6 +2583,10 @@ export async function runEmbeddedAgent(
               profileId: failedPromptProfileId,
               fallbackConfigured,
               aborted,
+              hookRunner: hookRunner ?? undefined,
+              agentId: workspaceResolution.agentId,
+              sessionId: params.sessionId,
+              sessionKey: resolvedSessionKey,
             });
             if (promptFailoverReason === "rate_limit") {
               maybeEscalateRateLimitProfileFallback({
@@ -2761,6 +2765,10 @@ export async function runEmbeddedAgent(
             fallbackConfigured,
             timedOut,
             aborted,
+            hookRunner: hookRunner ?? undefined,
+            agentId: workspaceResolution.agentId,
+            sessionId: params.sessionId,
+            sessionKey: resolvedSessionKey,
           });
 
           if (
