@@ -1,10 +1,7 @@
 # 🦞 OpenClaw — Personal AI Assistant
 
 <p align="center">
-    <picture>
-        <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/openclaw/openclaw/main/docs/assets/openclaw-logo-text-dark.svg">
-        <img src="https://raw.githubusercontent.com/openclaw/openclaw/main/docs/assets/openclaw-logo-text.svg" alt="OpenClaw" width="500">
-    </picture>
+  <img src="docs/assets/readme-banner.webp" alt="OpenClaw README Banner" width="100%">
 </p>
 
 <p align="center">
