@@ -4,14 +4,8 @@ import type { RuntimeEnv } from "../../runtime.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { resolveConfiguredEntries } from "./list.configured.js";
 import { formatErrorWithStack } from "./list.errors.js";
-import {
-  appendCatalogSupplementRows,
-  appendConfiguredProviderRows,
-  appendConfiguredRows,
-  appendDiscoveredRows,
-  appendProviderCatalogRows,
-  loadListModelRegistry,
-} from "./list.rows.js";
+import { loadListModelRegistry } from "./list.registry-load.js";
+import { appendAllModelRowSources, appendConfiguredModelRowSources } from "./list.row-sources.js";
 import { printModelTable } from "./list.table.js";
 import type { ModelRow } from "./list.types.js";
 import { loadModelsConfigWithSource } from "./load-config.js";
@@ -98,32 +92,12 @@ export async function modelsListCommand(
   };
 
   if (opts.all) {
-    const seenKeys = appendDiscoveredRows({
-      rows,
-      models: modelRegistry?.getAll() ?? [],
-      context: rowContext,
-    });
-
-    appendConfiguredProviderRows({
+    await appendAllModelRowSources({
       rows,
       context: rowContext,
-      seenKeys,
+      modelRegistry,
+      useProviderCatalogFastPath,
     });
-
-    if (modelRegistry) {
-      await appendCatalogSupplementRows({
-        rows,
-        modelRegistry,
-        context: rowContext,
-        seenKeys,
-      });
-    } else if (useProviderCatalogFastPath) {
-      await appendProviderCatalogRows({
-        rows,
-        context: rowContext,
-        seenKeys,
-      });
-    }
   } else {
     const registry = modelRegistry;
     if (!registry) {
@@ -131,7 +105,7 @@ export async function modelsListCommand(
       process.exitCode = 1;
       return;
     }
-    appendConfiguredRows({
+    appendConfiguredModelRowSources({
       rows,
       entries,
       modelRegistry: registry,

@@ -7,7 +7,7 @@ import { normalizeProviderId } from "../../agents/provider-id.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ListRowModel } from "./list.model-row.js";
-import { loadModelRegistry, toModelRow } from "./list.registry.js";
+import { toModelRow } from "./list.registry.js";
 import {
   loadModelCatalog,
   loadProviderCatalogModelsForList,
@@ -23,7 +23,7 @@ type RowFilter = {
   local?: boolean;
 };
 
-type RowBuilderContext = {
+export type RowBuilderContext = {
   cfg: OpenClawConfig;
   agentDir: string;
   authStore: AuthProfileStore;
@@ -112,17 +112,6 @@ function shouldListConfiguredProviderModel(params: {
     params.providerConfig.apiKey !== undefined &&
     (params.providerConfig.api !== undefined || params.model.api !== undefined)
   );
-}
-
-export async function loadListModelRegistry(
-  cfg: OpenClawConfig,
-  opts?: { providerFilter?: string },
-) {
-  const loaded = await loadModelRegistry(cfg, opts);
-  return {
-    ...loaded,
-    discoveredKeys: new Set(loaded.models.map((model) => modelKey(model.provider, model.id))),
-  };
 }
 
 export function appendDiscoveredRows(params: {
