@@ -419,6 +419,13 @@ describe("splitMediaFromOutput", () => {
     expect(result.text).toBe(input);
   });
 
+  it("does not extract MEDIA token from a line starting with lowercase media: prefix", () => {
+    const input = "media: note MEDIA:/tmp/a.png";
+    const result = splitMediaFromOutput(input);
+    expect(result.mediaUrls).toBeUndefined();
+    expect(result.text).toBe(input);
+  });
+
   // ====================================================================
   // Edge cases
   // ====================================================================
