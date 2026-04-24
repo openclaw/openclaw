@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   GPT5_CONTRACT_MODEL_ID,
   GPT5_PREFIXED_CONTRACT_MODEL_ID,
@@ -13,10 +13,8 @@ import {
 import { resolveGpt5SystemPromptContribution } from "./gpt5-prompt-overlay.js";
 
 describe("GPT-5 prompt overlay runtime contract", () => {
-  const resolveContribution = vi.fn(resolveGpt5SystemPromptContribution);
-
   it("adds the behavior contract and friendly style to OpenAI-family GPT-5 models by default", () => {
-    const contribution = resolveContribution({
+    const contribution = resolveGpt5SystemPromptContribution({
       providerId: OPENAI_CONTRACT_PROVIDER_ID,
       modelId: GPT5_CONTRACT_MODEL_ID,
     });
@@ -28,7 +26,7 @@ describe("GPT-5 prompt overlay runtime contract", () => {
   });
 
   it("lets the shared GPT-5 overlay config disable friendly style without removing the behavior contract", () => {
-    const contribution = resolveContribution({
+    const contribution = resolveGpt5SystemPromptContribution({
       providerId: NON_OPENAI_CONTRACT_PROVIDER_ID,
       modelId: GPT5_PREFIXED_CONTRACT_MODEL_ID,
       config: sharedGpt5PersonalityConfig("off"),
@@ -39,12 +37,12 @@ describe("GPT-5 prompt overlay runtime contract", () => {
   });
 
   it("scopes OpenAI plugin personality fallback to OpenAI-family GPT-5 providers", () => {
-    const openAiContribution = resolveContribution({
+    const openAiContribution = resolveGpt5SystemPromptContribution({
       providerId: OPENAI_CODEX_CONTRACT_PROVIDER_ID,
       modelId: GPT5_CONTRACT_MODEL_ID,
       config: openAiPluginPersonalityConfig("off"),
     });
-    const nonOpenAiContribution = resolveContribution({
+    const nonOpenAiContribution = resolveGpt5SystemPromptContribution({
       providerId: NON_OPENAI_CONTRACT_PROVIDER_ID,
       modelId: GPT5_PREFIXED_CONTRACT_MODEL_ID,
       config: openAiPluginPersonalityConfig("off"),
@@ -59,7 +57,7 @@ describe("GPT-5 prompt overlay runtime contract", () => {
   });
 
   it("keeps Codex virtual providers in the OpenAI-family personality fallback scope", () => {
-    const contribution = resolveContribution({
+    const contribution = resolveGpt5SystemPromptContribution({
       providerId: CODEX_CONTRACT_PROVIDER_ID,
       modelId: GPT5_CONTRACT_MODEL_ID,
       config: openAiPluginPersonalityConfig("off"),
@@ -71,7 +69,7 @@ describe("GPT-5 prompt overlay runtime contract", () => {
 
   it("does not apply GPT-5 overlays to non-GPT-5 models", () => {
     expect(
-      resolveContribution({
+      resolveGpt5SystemPromptContribution({
         providerId: OPENAI_CONTRACT_PROVIDER_ID,
         modelId: NON_GPT5_CONTRACT_MODEL_ID,
       }),
