@@ -6,14 +6,16 @@ read_when:
 title: "SGLang"
 ---
 
-# SGLang
-
 SGLang can serve open-source models via an **OpenAI-compatible** HTTP API.
 OpenClaw can connect to SGLang using the `openai-completions` API.
 
 OpenClaw can also **auto-discover** available models from SGLang when you opt
 in with `SGLANG_API_KEY` (any value works if your server does not enforce auth)
 and you do not define an explicit `models.providers.sglang` entry.
+
+OpenClaw treats `sglang` as a local OpenAI-compatible provider that supports
+streamed usage accounting, so status/context token counts can update from
+`stream_options.include_usage` responses.
 
 ## Getting started
 

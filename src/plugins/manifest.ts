@@ -4,6 +4,7 @@ import JSON5 from "json5";
 import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.config.js";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import { matchBoundaryFileOpenFailure, openBoundaryFileSync } from "../infra/boundary-file-read.js";
+import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeTrimmedStringList } from "../shared/string-normalization.js";
 import { isRecord } from "../utils.js";
@@ -16,9 +17,10 @@ import type { PluginKind } from "./plugin-kind.types.js";
 
 export const PLUGIN_MANIFEST_FILENAME = "openclaw.plugin.json";
 export const PLUGIN_MANIFEST_FILENAMES = [PLUGIN_MANIFEST_FILENAME] as const;
+export const MAX_PLUGIN_MANIFEST_BYTES = 256 * 1024;
 
 export type PluginManifestChannelConfig = {
-  schema: Record<string, unknown>;
+  schema: JsonSchemaObject;
   uiHints?: Record<string, PluginConfigUiHint>;
   runtime?: ChannelConfigRuntimeSchema;
   label?: string;
@@ -55,19 +57,19 @@ export type PluginManifestActivationCapability = "provider" | "channel" | "tool"
 
 export type PluginManifestActivation = {
   /**
-   * Provider ids that should activate this plugin when explicitly requested.
-   * This is metadata only; runtime loading still happens through the loader.
+   * Provider ids that should include this plugin in activation/load plans.
+   * This is planner metadata only; runtime behavior still comes from register().
    */
   onProviders?: string[];
-  /** Agent harness runtime ids that should activate this plugin. */
+  /** Agent harness runtime ids that should include this plugin in activation/load plans. */
   onAgentHarnesses?: string[];
-  /** Command ids that should activate this plugin. */
+  /** Command ids that should include this plugin in activation/load plans. */
   onCommands?: string[];
-  /** Channel ids that should activate this plugin. */
+  /** Channel ids that should include this plugin in activation/load plans. */
   onChannels?: string[];
-  /** Route kinds that should activate this plugin. */
+  /** Route kinds that should include this plugin in activation/load plans. */
   onRoutes?: string[];
-  /** Cheap capability hints used by future activation planning. */
+  /** Broad capability hints for activation/load plans. Prefer narrower ownership metadata. */
   onCapabilities?: PluginManifestActivationCapability[];
 };
 
@@ -154,7 +156,7 @@ export type PluginManifestConfigContracts = {
 
 export type PluginManifest = {
   id: string;
-  configSchema: Record<string, unknown>;
+  configSchema: JsonSchemaObject;
   enabledByDefault?: boolean;
   /** Legacy plugin ids that should normalize to this plugin id. */
   legacyPluginIds?: string[];
@@ -203,7 +205,7 @@ export type PluginManifest = {
    * and non-runtime auth-choice routing before provider runtime loads.
    */
   providerAuthChoices?: PluginManifestProviderAuthChoice[];
-  /** Cheap activation hints exposed before plugin runtime loads. */
+  /** Cheap activation planner metadata exposed before plugin runtime loads. */
   activation?: PluginManifestActivation;
   /** Cheap setup/onboarding metadata exposed before plugin runtime loads. */
   setup?: PluginManifestSetup;
@@ -231,6 +233,12 @@ export type PluginManifest = {
 
 export type PluginManifestContracts = {
   embeddedExtensionFactories?: string[];
+  /**
+   * Provider ids whose external auth profile hook can contribute runtime-only
+   * credentials. Declaring this lets auth-store overlays load only the owning
+   * plugin instead of every provider plugin.
+   */
+  externalAuthProviders?: string[];
   memoryEmbeddingProviders?: string[];
   speechProviders?: string[];
   realtimeTranscriptionProviders?: string[];
@@ -418,6 +426,7 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
   }
 
   const embeddedExtensionFactories = normalizeTrimmedStringList(value.embeddedExtensionFactories);
+  const externalAuthProviders = normalizeTrimmedStringList(value.externalAuthProviders);
   const memoryEmbeddingProviders = normalizeTrimmedStringList(value.memoryEmbeddingProviders);
   const speechProviders = normalizeTrimmedStringList(value.speechProviders);
   const realtimeTranscriptionProviders = normalizeTrimmedStringList(
@@ -433,6 +442,7 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
   const tools = normalizeTrimmedStringList(value.tools);
   const contracts = {
     ...(embeddedExtensionFactories.length > 0 ? { embeddedExtensionFactories } : {}),
+    ...(externalAuthProviders.length > 0 ? { externalAuthProviders } : {}),
     ...(memoryEmbeddingProviders.length > 0 ? { memoryEmbeddingProviders } : {}),
     ...(speechProviders.length > 0 ? { speechProviders } : {}),
     ...(realtimeTranscriptionProviders.length > 0 ? { realtimeTranscriptionProviders } : {}),
@@ -805,6 +815,7 @@ export function loadPluginManifest(
     absolutePath: manifestPath,
     rootPath: rootDir,
     boundaryLabel: "plugin root",
+    maxBytes: MAX_PLUGIN_MANIFEST_BYTES,
     rejectHardlinks,
   });
   if (!opened.ok) {
@@ -959,6 +970,21 @@ export type PluginPackageChannel = {
     specifier?: string;
     exportName?: string;
   };
+  doctorCapabilities?: PluginPackageChannelDoctorCapabilities;
+  cliAddOptions?: readonly PluginPackageChannelCliOption[];
+};
+
+export type PluginPackageChannelDoctorCapabilities = {
+  dmAllowFromMode?: "topOnly" | "topOrNested" | "nestedOnly";
+  groupModel?: "sender" | "route" | "hybrid";
+  groupAllowFromFallbackToAllowFrom?: boolean;
+  warnOnEmptyGroupSenderAllowlist?: boolean;
+};
+
+export type PluginPackageChannelCliOption = {
+  flags: string;
+  description: string;
+  defaultValue?: boolean | string;
 };
 
 export type PluginPackageInstall = {
@@ -966,6 +992,7 @@ export type PluginPackageInstall = {
   localPath?: string;
   defaultChoice?: "npm" | "local";
   minHostVersion?: string;
+  expectedIntegrity?: string;
   allowInvalidConfigRecovery?: boolean;
 };
 

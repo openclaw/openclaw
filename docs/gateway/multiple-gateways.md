@@ -3,7 +3,7 @@ summary: "Run multiple OpenClaw Gateways on one host (isolation, ports, and prof
 read_when:
   - Running more than one Gateway on the same machine
   - You need isolated config/state/ports per Gateway
-title: "Multiple Gateways"
+title: "Multiple gateways"
 ---
 
 # Multiple Gateways (same host)
@@ -172,3 +172,9 @@ Interpretation:
 
 - `gateway status --deep` helps catch stale launchd/systemd/schtasks services from older installs.
 - `gateway probe` warning text such as `multiple reachable gateways detected` is expected only when you intentionally run more than one isolated gateway.
+
+## Related
+
+- [Gateway runbook](/gateway)
+- [Gateway lock](/gateway/gateway-lock)
+- [Configuration](/gateway/configuration)

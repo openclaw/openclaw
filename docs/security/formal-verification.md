@@ -1,13 +1,11 @@
 ---
-title: Formal Verification (Security Models)
 summary: Machine-checked security models for OpenClaw’s highest-risk paths.
+title: Formal verification (security models)
 read_when:
   - Reviewing formal security model guarantees or limits
   - Reproducing or updating TLA+/TLC security model checks
 permalink: /security/formal-verification/
 ---
-
-# Formal Verification (Security Models)
 
 This page tracks OpenClaw’s **formal security models** (TLA+/TLC today; more as needed).
 
@@ -165,3 +163,8 @@ What it means:
 - Red (expected):
   - `make routing-precedence-negative`
   - `make routing-identitylinks-negative`
+
+## Related
+
+- [Threat model](/security/THREAT-MODEL-ATLAS)
+- [Contributing to the threat model](/security/CONTRIBUTING-THREAT-MODEL)

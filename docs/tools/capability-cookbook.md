@@ -4,11 +4,9 @@ read_when:
   - Adding a new core capability and plugin registration surface
   - Deciding whether code belongs in core, a vendor plugin, or a feature plugin
   - Wiring a new runtime helper for channels or tools
-title: "Adding Capabilities (Contributor Guide)"
+title: "Adding capabilities (contributor guide)"
 sidebarTitle: "Adding Capabilities"
 ---
-
-# Adding Capabilities
 
 <Info>
   This is a **contributor guide** for OpenClaw core developers. If you are
@@ -117,3 +115,9 @@ Before shipping a new capability, verify:
 
 If a PR skips the capability layer and hardcodes vendor behavior into a
 channel/tool, send it back and define the contract first.
+
+## Related
+
+- [Plugin](/tools/plugin)
+- [Creating skills](/tools/creating-skills)
+- [Tools and plugins](/tools)

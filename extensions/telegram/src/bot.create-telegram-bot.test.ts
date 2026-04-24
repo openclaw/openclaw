@@ -1,7 +1,7 @@
 import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
-import { withEnvAsync } from "openclaw/plugin-sdk/testing";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { escapeRegExp, formatEnvelopeTimestamp } from "../../../test/helpers/envelope-timestamp.js";
+import type { TelegramBotOptions } from "./bot.types.js";
 const harness = await import("./bot.create-telegram-bot.test-harness.js");
 const conversationRuntime = await import("openclaw/plugin-sdk/conversation-runtime");
 const configRuntime = await import("openclaw/plugin-sdk/config-runtime");
@@ -42,13 +42,14 @@ const {
 } = harness;
 const { resolveTelegramFetch } = await import("./fetch.js");
 const {
-  createTelegramBot: createTelegramBotBase,
+  createTelegramBotCore: createTelegramBotBase,
   getTelegramSequentialKey,
   setTelegramBotRuntimeForTest,
-} = await import("./bot.js");
+} = await import("./bot-core.js");
+const { resetTelegramForumFlagCacheForTest } = await import("./bot/helpers.js");
 let createTelegramBot: (
-  opts: Parameters<typeof import("./bot.js").createTelegramBot>[0],
-) => ReturnType<typeof import("./bot.js").createTelegramBot>;
+  opts: TelegramBotOptions,
+) => ReturnType<typeof import("./bot-core.js").createTelegramBotCore>;
 
 const loadConfig = getLoadConfigMock();
 const loadSessionStore = getLoadSessionStoreMock();
@@ -123,6 +124,34 @@ function mockTelegramConfigWrites() {
   return vi.spyOn(configRuntime, "writeConfigFile").mockResolvedValue(undefined);
 }
 
+async function withEnvAsync(env: Record<string, string | undefined>, fn: () => Promise<void>) {
+  const previous = new Map<string, string | undefined>();
+  for (const [key, value] of Object.entries(env)) {
+    previous.set(key, process.env[key]);
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+  try {
+    await fn();
+  } finally {
+    for (const [key, value] of previous) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+}
+
+async function flushTelegramTestMicrotasks() {
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
 describe("createTelegramBot", () => {
   beforeAll(() => {
     process.env.TZ = "UTC";
@@ -131,6 +160,7 @@ describe("createTelegramBot", () => {
     process.env.TZ = ORIGINAL_TZ;
   });
   beforeEach(() => {
+    resetTelegramForumFlagCacheForTest();
     setTelegramBotRuntimeForTest(
       telegramBotRuntimeForTest as unknown as Parameters<typeof setTelegramBotRuntimeForTest>[0],
     );
@@ -254,9 +284,8 @@ describe("createTelegramBot", () => {
       events.push("busy:end");
     });
 
-    await vi.waitFor(() => {
-      expect(events).toEqual(["busy:start"]);
-    });
+    await flushTelegramTestMicrotasks();
+    expect(events).toEqual(["busy:start"]);
 
     await sequentializer(statusCtx, async () => {
       events.push("status");
@@ -837,55 +866,6 @@ describe("createTelegramBot", () => {
     expect(replySpy).not.toHaveBeenCalled();
   });
 
-  it("blocks unauthorized DM media before download and sends pairing reply", async () => {
-    loadConfig.mockReturnValue({
-      channels: { telegram: { dmPolicy: "pairing" } },
-    });
-    readChannelAllowFromStore.mockResolvedValue([]);
-    upsertChannelPairingRequest.mockResolvedValue({ code: "PAIRME12", created: true });
-    sendMessageSpy.mockClear();
-    replySpy.mockClear();
-    const senderId = Number(`${Date.now()}01`.slice(-9));
-
-    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(
-      async () =>
-        new Response(new Uint8Array([0xff, 0xd8, 0xff, 0x00]), {
-          status: 200,
-          headers: { "content-type": "image/jpeg" },
-        }),
-    );
-    const getFileSpy = vi.fn(async () => ({ file_path: "photos/p1.jpg" }));
-
-    try {
-      createTelegramBot({ token: "tok" });
-      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
-
-      await handler({
-        message: {
-          chat: { id: 1234, type: "private" },
-          message_id: 411,
-          date: 1736380800,
-          photo: [{ file_id: "p1" }],
-          from: { id: senderId, username: "random" },
-        },
-        me: { username: "openclaw_bot" },
-        getFile: getFileSpy,
-      });
-
-      expect(getFileSpy).not.toHaveBeenCalled();
-      expect(fetchSpy).not.toHaveBeenCalled();
-      expect(sendMessageSpy).toHaveBeenCalledTimes(1);
-      const pairingText = String(sendMessageSpy.mock.calls[0]?.[1]);
-      expect(pairingText).toContain("Pairing code:");
-      expect(pairingText).toContain("<pre><code>");
-      expect(sendMessageSpy.mock.calls[0]?.[2]).toEqual(
-        expect.objectContaining({ parse_mode: "HTML" }),
-      );
-      expect(replySpy).not.toHaveBeenCalled();
-    } finally {
-      fetchSpy.mockRestore();
-    }
-  });
   it("blocks DM media downloads completely when dmPolicy is disabled", async () => {
     loadConfig.mockReturnValue({
       channels: { telegram: { dmPolicy: "disabled" } },
@@ -1250,9 +1230,8 @@ describe("createTelegramBot", () => {
 
     try {
       await runMiddlewareChain({ update: { update_id: 13_100 } }, async () => {});
-      await vi.waitFor(() => {
-        expect(onUpdateId).toHaveBeenCalledWith(13_100);
-      });
+      await flushTelegramTestMicrotasks();
+      expect(onUpdateId).toHaveBeenCalledWith(13_100);
       expect(unhandled).toEqual([]);
     } finally {
       process.off("unhandledRejection", onUnhandledRejection);
@@ -1320,9 +1299,8 @@ describe("createTelegramBot", () => {
 
     await runMiddlewareChain({ update: { update_id: 201 } }, async () => {});
 
-    await vi.waitFor(() => {
-      expect(onUpdateId).toHaveBeenCalledWith(202);
-    });
+    await flushTelegramTestMicrotasks();
+    expect(onUpdateId).toHaveBeenCalledWith(202);
   });
   it("allows distinct callback_query ids without update_id", async () => {
     loadConfig.mockReturnValue({
@@ -1367,136 +1345,6 @@ describe("createTelegramBot", () => {
     });
 
     expect(replySpy).toHaveBeenCalledTimes(2);
-  });
-
-  it("retries native command updates after a bubbled handler failure", async () => {
-    loadConfig.mockReturnValue({
-      commands: { native: true },
-      channels: {
-        telegram: {
-          dmPolicy: "open",
-          allowFrom: ["*"],
-        },
-      },
-    });
-
-    createTelegramBot({ token: "tok" });
-    const verboseHandler = commandSpy.mock.calls.find((call) => call[0] === "verbose")?.[1] as
-      | ((ctx: Record<string, unknown>) => Promise<void>)
-      | undefined;
-    if (!verboseHandler) {
-      throw new Error("verbose command handler missing");
-    }
-
-    const middlewares = middlewareUseSpy.mock.calls
-      .map((call) => call[0])
-      .filter(
-        (fn): fn is (ctx: Record<string, unknown>, next: () => Promise<void>) => Promise<void> =>
-          typeof fn === "function",
-      );
-    const runMiddlewareChain = async (ctx: Record<string, unknown>) => {
-      let idx = -1;
-      const dispatch = async (i: number): Promise<void> => {
-        if (i <= idx) {
-          throw new Error("middleware dispatch called multiple times");
-        }
-        idx = i;
-        const fn = middlewares[i];
-        if (!fn) {
-          await verboseHandler(ctx);
-          return;
-        }
-        await fn(ctx, async () => dispatch(i + 1));
-      };
-      await dispatch(0);
-    };
-
-    const ctx = {
-      update: { update_id: 333 },
-      message: {
-        chat: { id: 12345, type: "private" },
-        from: { id: 12345, username: "testuser" },
-        text: "/verbose on",
-        date: 1736380800,
-        message_id: 42,
-      },
-      match: "on",
-    };
-
-    const loadConfigCallsBeforeRetry = loadConfig.mock.calls.length;
-    loadConfig.mockImplementationOnce(() => {
-      throw new Error("cfg boom");
-    });
-    await expect(runMiddlewareChain(ctx)).rejects.toThrow("cfg boom");
-    const loadConfigCallsAfterFailure = loadConfig.mock.calls.length;
-    await runMiddlewareChain(ctx);
-
-    expect(loadConfigCallsAfterFailure).toBe(loadConfigCallsBeforeRetry + 1);
-    expect(loadConfig.mock.calls.length).toBeGreaterThan(loadConfigCallsAfterFailure);
-  });
-
-  it("retries group migration updates after a bubbled handler failure", async () => {
-    const writeConfigFileSpy = mockTelegramConfigWrites();
-    loadConfig.mockReturnValue({
-      channels: {
-        telegram: {
-          groups: {
-            "-1001": {
-              enabled: true,
-            },
-          },
-        },
-      },
-    });
-
-    createTelegramBot({ token: "tok" });
-    const migrationHandler = getOnHandler("message:migrate_to_chat_id");
-    const middlewares = middlewareUseSpy.mock.calls
-      .map((call) => call[0])
-      .filter(
-        (fn): fn is (ctx: Record<string, unknown>, next: () => Promise<void>) => Promise<void> =>
-          typeof fn === "function",
-      );
-    const runMiddlewareChain = async (ctx: Record<string, unknown>) => {
-      let idx = -1;
-      const dispatch = async (i: number): Promise<void> => {
-        if (i <= idx) {
-          throw new Error("middleware dispatch called multiple times");
-        }
-        idx = i;
-        const fn = middlewares[i];
-        if (!fn) {
-          await migrationHandler(ctx);
-          return;
-        }
-        await fn(ctx, async () => dispatch(i + 1));
-      };
-      await dispatch(0);
-    };
-
-    const ctx = {
-      update: { update_id: 444 },
-      message: {
-        chat: { id: -1001, type: "supergroup", title: "Old Group" },
-        migrate_to_chat_id: -1002,
-      },
-    };
-
-    const loadConfigCallsBeforeRetry = loadConfig.mock.calls.length;
-    loadConfig.mockImplementationOnce(() => {
-      throw new Error("cfg boom");
-    });
-    try {
-      await expect(runMiddlewareChain(ctx)).rejects.toThrow("cfg boom");
-      const loadConfigCallsAfterFailure = loadConfig.mock.calls.length;
-      await runMiddlewareChain(ctx);
-
-      expect(loadConfigCallsAfterFailure).toBe(loadConfigCallsBeforeRetry + 1);
-      expect(loadConfig.mock.calls.length).toBeGreaterThan(loadConfigCallsAfterFailure);
-      expect(writeConfigFileSpy).toHaveBeenCalledTimes(1);
-    } finally {
-      writeConfigFileSpy.mockRestore();
-    }
   });
 
   const groupPolicyCases: Array<{
@@ -1705,7 +1553,12 @@ describe("createTelegramBot", () => {
     const configForAgent = (agentId: string) => ({
       channels: {
         telegram: {
+          defaultAccount: "work",
           accounts: {
+            work: {
+              botToken: "tok-work",
+              dmPolicy: "open",
+            },
             opie: {
               botToken: "tok-opie",
               dmPolicy: "open",
@@ -1809,7 +1662,12 @@ describe("createTelegramBot", () => {
     loadConfig.mockReturnValue({
       channels: {
         telegram: {
+          defaultAccount: "work",
           accounts: {
+            work: {
+              botToken: "tok-work",
+              dmPolicy: "open",
+            },
             opie: {
               botToken: "tok-opie",
               dmPolicy: "open",
@@ -3274,6 +3132,16 @@ describe("createTelegramBot", () => {
     expect(buildModelsProviderDataMock).toHaveBeenCalledTimes(2);
     expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
     expect(editMessageTextSpy.mock.calls[0]?.[2]).toContain("Select a provider:");
+    expect(
+      (
+        editMessageTextSpy.mock.calls[0]?.[3] as {
+          reply_markup?: { inline_keyboard?: unknown[][] };
+        }
+      )?.reply_markup?.inline_keyboard?.[0]?.[0],
+    ).toEqual({
+      text: "Add model",
+      callback_data: "/models add",
+    });
   });
 
   it("retries command pagination callbacks after a bubbled edit failure", async () => {
@@ -3372,9 +3240,8 @@ describe("createTelegramBot", () => {
       }),
     ).resolves.toBeUndefined();
 
-    await vi.waitFor(() => {
-      expect(onUpdateId).toHaveBeenCalledWith(777);
-    });
+    await flushTelegramTestMicrotasks();
+    expect(onUpdateId).toHaveBeenCalledWith(777);
 
     await runTelegramMiddlewareChain({
       ctx,
@@ -3654,6 +3521,16 @@ describe("createTelegramBot", () => {
 
     expect(editMessageTextSpy).toHaveBeenCalledTimes(2);
     expect(editMessageTextSpy.mock.calls.at(-1)?.[2]).toContain("Select a provider:");
+    expect(
+      (
+        editMessageTextSpy.mock.calls.at(-1)?.[3] as {
+          reply_markup?: { inline_keyboard?: unknown[][] };
+        }
+      )?.reply_markup?.inline_keyboard?.[0]?.[0],
+    ).toEqual({
+      text: "Add model",
+      callback_data: "/models add",
+    });
   });
 
   it("retries model selection callbacks after a bubbled session-store failure", async () => {

@@ -6,10 +6,6 @@ describe("plugin-sdk provider-auth-runtime", () => {
     expect(typeof providerAuthRuntime.getRuntimeAuthForModel).toBe("function");
   });
 
-  it("exports the Codex auth bridge helper", () => {
-    expect(typeof providerAuthRuntime.prepareCodexAuthBridge).toBe("function");
-  });
-
   it("exports OAuth callback helpers", () => {
     expect(typeof providerAuthRuntime.generateOAuthState).toBe("function");
     expect(typeof providerAuthRuntime.parseOAuthCallbackInput).toBe("function");

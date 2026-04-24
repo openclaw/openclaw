@@ -1,3 +1,5 @@
+import type { PluginConversationBinding } from "./conversation-binding.types.js";
+
 export type PluginHookMessageContext = {
   channelId: string;
   accountId?: string;
@@ -8,6 +10,7 @@ export type PluginHookInboundClaimContext = PluginHookMessageContext & {
   parentConversationId?: string;
   senderId?: string;
   messageId?: string;
+  pluginBinding?: PluginConversationBinding;
 };
 
 export type PluginHookInboundClaimEvent = {
@@ -35,12 +38,15 @@ export type PluginHookMessageReceivedEvent = {
   from: string;
   content: string;
   timestamp?: number;
+  threadId?: string | number;
   metadata?: Record<string, unknown>;
 };
 
 export type PluginHookMessageSendingEvent = {
   to: string;
   content: string;
+  replyToId?: string | number;
+  threadId?: string | number;
   metadata?: Record<string, unknown>;
 };
 

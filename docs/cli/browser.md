@@ -4,7 +4,7 @@ read_when:
   - You use `openclaw browser` and want examples for common tasks
   - You want to control a browser running on another machine via a node host
   - You want to attach to your local signed-in Chrome via Chrome MCP
-title: "browser"
+title: "Browser"
 ---
 
 # `openclaw browser`
@@ -245,3 +245,8 @@ If the Gateway runs on a different machine than the browser, run a **node host**
 Use `gateway.nodes.browser.mode` to control auto-routing and `gateway.nodes.browser.node` to pin a specific node if multiple are connected.
 
 Security + remote setup: [Browser tool](/tools/browser), [Remote access](/gateway/remote), [Tailscale](/gateway/tailscale), [Security](/gateway/security)
+
+## Related
+
+- [CLI reference](/cli)
+- [Browser](/tools/browser)

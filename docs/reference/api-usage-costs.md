@@ -4,7 +4,7 @@ read_when:
   - You want to understand which features may call paid APIs
   - You need to audit keys, costs, and usage visibility
   - You’re explaining /status or /usage cost reporting
-title: "API Usage and Costs"
+title: "API usage and costs"
 ---
 
 # API usage & costs
@@ -195,3 +195,9 @@ Skills can store `apiKey` in `skills.entries.<name>.apiKey`. If a skill uses tha
 APIs, it can incur costs according to the skill’s provider.
 
 See [Skills](/tools/skills).
+
+## Related
+
+- [Token use and costs](/reference/token-use)
+- [Prompt caching](/reference/prompt-caching)
+- [Usage tracking](/concepts/usage-tracking)

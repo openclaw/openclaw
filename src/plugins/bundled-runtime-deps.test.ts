@@ -9,6 +9,7 @@ import {
   createBundledRuntimeDepsInstallEnv,
   ensureBundledPluginRuntimeDeps,
   installBundledRuntimeDeps,
+  isWritableDirectory,
   resolveBundledRuntimeDependencyInstallRoot,
   resolveBundledRuntimeDepsNpmRunner,
   type BundledRuntimeDepsInstallParams,
@@ -145,6 +146,21 @@ describe("resolveBundledRuntimeDepsNpmRunner", () => {
 });
 
 describe("installBundledRuntimeDeps", () => {
+  it("uses a real write probe for runtime dependency roots", () => {
+    const accessSpy = vi.spyOn(fs, "accessSync").mockImplementation(() => undefined);
+    const mkdirSpy = vi.spyOn(fs, "mkdtempSync").mockImplementation(() => {
+      const error = new Error("read-only file system") as NodeJS.ErrnoException;
+      error.code = "EROFS";
+      throw error;
+    });
+
+    expect(isWritableDirectory("/usr/lib/node_modules/openclaw")).toBe(false);
+    expect(accessSpy).not.toHaveBeenCalled();
+    expect(mkdirSpy).toHaveBeenCalledWith(
+      path.join("/usr/lib/node_modules/openclaw", ".openclaw-write-probe-"),
+    );
+  });
+
   it("uses the npm cmd shim on Windows", () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     vi.spyOn(fs, "existsSync").mockImplementation(
@@ -245,6 +261,104 @@ describe("installBundledRuntimeDeps", () => {
     );
   });
 
+  it("cleans an owned isolated execution root after copying node_modules back", () => {
+    const installRoot = makeTempDir();
+    const installExecutionRoot = path.join(installRoot, ".openclaw-install-stage");
+    spawnSyncMock.mockImplementation((_command, _args, options) => {
+      const cwd = String(options?.cwd ?? "");
+      fs.mkdirSync(path.join(cwd, "node_modules", "tokenjuice"), { recursive: true });
+      fs.writeFileSync(
+        path.join(cwd, "node_modules", "tokenjuice", "package.json"),
+        JSON.stringify({ name: "tokenjuice", version: "0.6.1" }),
+      );
+      return {
+        pid: 123,
+        output: [],
+        stdout: "",
+        stderr: "",
+        signal: null,
+        status: 0,
+      };
+    });
+
+    installBundledRuntimeDeps({
+      installRoot,
+      installExecutionRoot,
+      missingSpecs: ["tokenjuice@0.6.1"],
+      env: {},
+    });
+
+    expect(fs.existsSync(installExecutionRoot)).toBe(false);
+    expect(
+      JSON.parse(
+        fs.readFileSync(
+          path.join(installRoot, "node_modules", "tokenjuice", "package.json"),
+          "utf8",
+        ),
+      ),
+    ).toEqual({
+      name: "tokenjuice",
+      version: "0.6.1",
+    });
+  });
+
+  it("does not fail an isolated runtime deps install when temp cleanup races", () => {
+    const installRoot = makeTempDir();
+    const installExecutionRoot = makeTempDir();
+    const realRmSync = fs.rmSync.bind(fs);
+    let blockedCleanup = false;
+    vi.spyOn(fs, "rmSync").mockImplementation((target, options) => {
+      if (
+        !blockedCleanup &&
+        path.basename(String(target)).startsWith(".openclaw-runtime-deps-copy-")
+      ) {
+        blockedCleanup = true;
+        const error = new Error("Directory not empty") as NodeJS.ErrnoException;
+        error.code = "ENOTEMPTY";
+        throw error;
+      }
+      return realRmSync(target, options);
+    });
+    spawnSyncMock.mockImplementation((_command, _args, options) => {
+      const cwd = String(options?.cwd ?? "");
+      fs.mkdirSync(path.join(cwd, "node_modules", "tokenjuice"), { recursive: true });
+      fs.writeFileSync(
+        path.join(cwd, "node_modules", "tokenjuice", "package.json"),
+        JSON.stringify({ name: "tokenjuice", version: "0.6.1" }),
+      );
+      return {
+        pid: 123,
+        output: [],
+        stdout: "",
+        stderr: "",
+        signal: null,
+        status: 0,
+      };
+    });
+
+    expect(() =>
+      installBundledRuntimeDeps({
+        installRoot,
+        installExecutionRoot,
+        missingSpecs: ["tokenjuice@0.6.1"],
+        env: {},
+      }),
+    ).not.toThrow();
+
+    expect(blockedCleanup).toBe(true);
+    expect(
+      JSON.parse(
+        fs.readFileSync(
+          path.join(installRoot, "node_modules", "tokenjuice", "package.json"),
+          "utf8",
+        ),
+      ),
+    ).toEqual({
+      name: "tokenjuice",
+      version: "0.6.1",
+    });
+  });
+
   it("rejects invalid install specs before spawning npm", () => {
     expect(() =>
       createBundledRuntimeDepsInstallArgs(["tokenjuice@https://evil.example/t.tgz"]),
@@ -297,6 +411,7 @@ describe("ensureBundledPluginRuntimeDeps", () => {
 
     const calls: Array<{
       installRoot: string;
+      installExecutionRoot?: string;
       missingSpecs: string[];
       installSpecs?: string[];
     }> = [];
@@ -318,6 +433,7 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     expect(calls).toEqual([
       {
         installRoot: pluginRoot,
+        installExecutionRoot: path.join(pluginRoot, ".openclaw-install-stage"),
         missingSpecs: ["missing@2.0.0"],
         installSpecs: ["already-present@1.0.0", "missing@2.0.0", "previous@3.0.0"],
       },
@@ -357,10 +473,60 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     expect(calls).toEqual([
       {
         installRoot: pluginRoot,
+        installExecutionRoot: path.join(pluginRoot, ".openclaw-install-stage"),
         missingSpecs: ["external-runtime@^1.2.3"],
         installSpecs: ["external-runtime@^1.2.3"],
       },
     ]);
+  });
+
+  it("stages plugin-root install when the plugin's own package.json declares workspace:* deps", () => {
+    // Regression guard for packaged/Docker bundled plugins whose `package.json`
+    // still lists `"@openclaw/plugin-sdk": "workspace:*"` (and similar) alongside
+    // concrete runtime deps. Without a distinct execution root, `npm install`
+    // would resolve the plugin's own cwd manifest and fail with
+    // EUNSUPPORTEDPROTOCOL on the `workspace:` protocol.
+    const packageRoot = makeTempDir();
+    const extensionsRoot = path.join(packageRoot, "dist", "extensions");
+    const pluginRoot = path.join(extensionsRoot, "anthropic");
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginRoot, "package.json"),
+      JSON.stringify({
+        dependencies: {
+          "@openclaw/plugin-sdk": "workspace:*",
+          "@anthropic-ai/sdk": "^0.50.0",
+        },
+      }),
+    );
+
+    const calls: BundledRuntimeDepsInstallParams[] = [];
+    const result = ensureBundledPluginRuntimeDeps({
+      env: {},
+      installDeps: (params) => {
+        calls.push(params);
+      },
+      pluginId: "anthropic",
+      pluginRoot,
+    });
+
+    expect(result).toEqual({
+      installedSpecs: ["@anthropic-ai/sdk@^0.50.0"],
+      retainSpecs: ["@anthropic-ai/sdk@^0.50.0"],
+    });
+    expect(calls).toEqual([
+      {
+        installRoot: pluginRoot,
+        installExecutionRoot: path.join(pluginRoot, ".openclaw-install-stage"),
+        missingSpecs: ["@anthropic-ai/sdk@^0.50.0"],
+        installSpecs: ["@anthropic-ai/sdk@^0.50.0"],
+      },
+    ]);
+    // The stage dir must be distinct from the plugin root so npm does not read
+    // the plugin's cwd manifest during install.
+    const installExecutionRoot = calls[0]?.installExecutionRoot;
+    expect(installExecutionRoot).toBeDefined();
+    expect(path.resolve(installExecutionRoot ?? "")).not.toEqual(path.resolve(pluginRoot));
   });
 
   it("installs runtime deps into an external stage dir and exposes loader aliases", () => {
@@ -559,14 +725,21 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     ]);
     expect(installRoot).toContain(stageDir);
     expect(installRoot).not.toBe(pluginRoot);
+    expect(
+      JSON.parse(fs.readFileSync(path.join(installRoot, ".openclaw-runtime-deps.json"), "utf8")),
+    ).toEqual({ specs: ["tokenjuice@0.6.1"] });
   });
 
-  it("keeps source-checkout bundled runtime deps in the plugin root by default", () => {
+  it("keeps source-checkout bundled runtime deps in the plugin root without manifest churn", () => {
     const packageRoot = makeTempDir();
     fs.mkdirSync(path.join(packageRoot, ".git"), { recursive: true });
     fs.mkdirSync(path.join(packageRoot, "src"), { recursive: true });
     const pluginRoot = path.join(packageRoot, "extensions", "tokenjuice");
     fs.mkdirSync(pluginRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginRoot, ".openclaw-runtime-deps.json"),
+      JSON.stringify({ specs: ["stale@9.9.9"] }),
+    );
     fs.writeFileSync(
       path.join(pluginRoot, "package.json"),
       JSON.stringify({
@@ -601,6 +774,87 @@ describe("ensureBundledPluginRuntimeDeps", () => {
       },
     ]);
     expect(resolveBundledRuntimeDependencyInstallRoot(pluginRoot, { env: {} })).toBe(pluginRoot);
+    expect(fs.existsSync(path.join(pluginRoot, ".openclaw-runtime-deps.json"))).toBe(false);
+  });
+
+  it("removes stale source-checkout manifests even when runtime deps are present", () => {
+    const packageRoot = makeTempDir();
+    fs.mkdirSync(path.join(packageRoot, ".git"), { recursive: true });
+    fs.mkdirSync(path.join(packageRoot, "src"), { recursive: true });
+    const pluginRoot = path.join(packageRoot, "extensions", "tokenjuice");
+    fs.mkdirSync(path.join(pluginRoot, "node_modules", "tokenjuice"), { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginRoot, "package.json"),
+      JSON.stringify({
+        dependencies: {
+          tokenjuice: "0.6.1",
+        },
+      }),
+    );
+    fs.writeFileSync(
+      path.join(pluginRoot, "node_modules", "tokenjuice", "package.json"),
+      JSON.stringify({ name: "tokenjuice", version: "0.6.1" }),
+    );
+    fs.writeFileSync(
+      path.join(pluginRoot, ".openclaw-runtime-deps.json"),
+      JSON.stringify({ specs: ["stale@9.9.9"] }),
+    );
+
+    const result = ensureBundledPluginRuntimeDeps({
+      env: {},
+      installDeps: () => {
+        throw new Error("present source-checkout runtime deps should not reinstall");
+      },
+      pluginId: "tokenjuice",
+      pluginRoot,
+    });
+
+    expect(result).toEqual({ installedSpecs: [], retainSpecs: [] });
+    expect(fs.existsSync(path.join(pluginRoot, ".openclaw-runtime-deps.json"))).toBe(false);
+  });
+
+  it("treats Docker build source trees without .git as source checkouts", () => {
+    const packageRoot = makeTempDir();
+    fs.mkdirSync(path.join(packageRoot, "src"), { recursive: true });
+    fs.writeFileSync(path.join(packageRoot, "pnpm-workspace.yaml"), "packages:\n  - .\n");
+    const pluginRoot = path.join(packageRoot, "extensions", "acpx");
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginRoot, "package.json"),
+      JSON.stringify({
+        dependencies: {
+          acpx: "0.5.3",
+        },
+        devDependencies: {
+          "@openclaw/plugin-sdk": "workspace:*",
+        },
+      }),
+    );
+
+    const calls: BundledRuntimeDepsInstallParams[] = [];
+    const result = ensureBundledPluginRuntimeDeps({
+      env: {},
+      installDeps: (params) => {
+        calls.push(params);
+      },
+      pluginId: "acpx",
+      pluginRoot,
+    });
+
+    expect(result).toEqual({
+      installedSpecs: ["acpx@0.5.3"],
+      retainSpecs: ["acpx@0.5.3"],
+    });
+    expect(calls).toEqual([
+      {
+        installRoot: pluginRoot,
+        installExecutionRoot: expect.stringContaining(
+          path.join(".local", "bundled-plugin-runtime-deps"),
+        ),
+        missingSpecs: ["acpx@0.5.3"],
+        installSpecs: ["acpx@0.5.3"],
+      },
+    ]);
   });
 
   it("does not trust package-root runtime deps for source-checkout bundled plugins", () => {
@@ -771,6 +1025,7 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     expect(calls).toEqual([
       {
         installRoot: pluginRoot,
+        installExecutionRoot: path.join(pluginRoot, ".openclaw-install-stage"),
         missingSpecs: ["@mariozechner/pi-ai@0.68.1"],
         installSpecs: ["@mariozechner/pi-ai@0.68.1"],
       },
@@ -813,6 +1068,7 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     expect(calls).toEqual([
       {
         installRoot: pluginRoot,
+        installExecutionRoot: path.join(pluginRoot, ".openclaw-install-stage"),
         missingSpecs: ["ws@^8.20.0", "zod@^4.3.6"],
         installSpecs: ["ws@^8.20.0", "zod@^4.3.6"],
       },
@@ -857,6 +1113,7 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     expect(calls).toEqual([
       {
         installRoot: pluginRoot,
+        installExecutionRoot: path.join(pluginRoot, ".openclaw-install-stage"),
         missingSpecs: ["zod@^4.3.6"],
         installSpecs: ["zod@^4.3.6"],
       },

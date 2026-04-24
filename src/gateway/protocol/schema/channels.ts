@@ -1,4 +1,4 @@
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { NonEmptyString, SecretInputSchema } from "./primitives.js";
 
 export const TalkModeParamsSchema = Type.Object(
@@ -32,6 +32,27 @@ export const TalkSpeakParamsSchema = Type.Object(
     normalize: Type.Optional(Type.String()),
     language: Type.Optional(Type.String()),
     latencyTier: Type.Optional(Type.Integer({ minimum: 0 })),
+  },
+  { additionalProperties: false },
+);
+
+export const TalkRealtimeSessionParamsSchema = Type.Object(
+  {
+    sessionKey: Type.Optional(Type.String()),
+    provider: Type.Optional(Type.String()),
+    model: Type.Optional(Type.String()),
+    voice: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
+export const TalkRealtimeSessionResultSchema = Type.Object(
+  {
+    provider: NonEmptyString,
+    clientSecret: NonEmptyString,
+    model: Type.Optional(Type.String()),
+    voice: Type.Optional(Type.String()),
+    expiresAt: Type.Optional(Type.Number()),
   },
   { additionalProperties: false },
 );

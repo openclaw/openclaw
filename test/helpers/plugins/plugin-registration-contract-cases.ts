@@ -113,7 +113,9 @@ export const pluginRegistrationContractCases = {
     pluginId: "openrouter",
     providerIds: ["openrouter"],
     mediaUnderstandingProviderIds: ["openrouter"],
+    imageGenerationProviderIds: ["openrouter"],
     requireDescribeImages: true,
+    requireGenerateImage: true,
   },
   perplexity: {
     pluginId: "perplexity",
@@ -128,6 +130,8 @@ export const pluginRegistrationContractCases = {
     pluginId: "xai",
     providerIds: ["xai"],
     webSearchProviderIds: ["grok"],
+    realtimeTranscriptionProviderIds: ["xai"],
+    mediaUnderstandingProviderIds: ["xai"],
   },
   zai: {
     pluginId: "zai",

@@ -1,5 +1,6 @@
 import { ChannelType } from "@buape/carbon";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createPartialDiscordChannelWithThrowingGetters } from "../test-support/partial-channel.js";
 
 const transcribeFirstAudioMock = vi.hoisted(() => vi.fn());
 const resolveDiscordDmCommandAccessMock = vi.hoisted(() => vi.fn());
@@ -594,6 +595,52 @@ describe("preflightDiscordMessage", () => {
     expect(result).not.toBeNull();
   });
 
+  it("hydrates mention metadata from REST when bot mention syntax is present but mentions are missing", async () => {
+    const channelId = "channel-bot-mentions-hydrated";
+    const guildId = "guild-bot-mentions-hydrated";
+    const botId = "123456789012345678";
+    const message = createDiscordMessage({
+      id: "m-bot-mentions-hydrated",
+      channelId,
+      content: `hi <@${botId}>`,
+      author: {
+        id: "relay-bot-1",
+        bot: true,
+        username: "Relay",
+      },
+      mentionedUsers: [],
+    });
+    const client = createGuildTextClient(channelId);
+    client.rest = {
+      get: vi.fn(async () => ({
+        id: message.id,
+        content: message.content,
+        mentions: [{ id: botId, username: "OpenClaw", bot: true }],
+        mention_roles: [],
+        mention_everyone: false,
+      })),
+    } as unknown as DiscordClient["rest"];
+
+    const result = await preflightDiscordMessage({
+      ...createPreflightArgs({
+        cfg: DEFAULT_PREFLIGHT_CFG,
+        discordConfig: {
+          allowBots: "mentions",
+        } as DiscordConfig,
+        data: createGuildEvent({
+          channelId,
+          guildId,
+          author: message.author,
+          message,
+        }),
+        client,
+      }),
+      botUserId: botId,
+    });
+
+    expect(result).not.toBeNull();
+  });
+
   it("still drops bot control commands without a real mention when allowBots=mentions", async () => {
     const channelId = "channel-bot-command-no-mention";
     const guildId = "guild-bot-command-no-mention";
@@ -754,6 +801,67 @@ describe("preflightDiscordMessage", () => {
     expect(result?.guildInfo?.id).toBe("guild-1");
     expect(result?.threadParentId).toBe(parentId);
     expect(result?.channelConfig?.allowed).toBe(true);
+    expect(result?.shouldRequireMention).toBe(false);
+  });
+
+  it("handles partial thread channel owner getters during mention preflight", async () => {
+    const threadId = "thread-partial-owner";
+    const parentId = "parent-partial-owner";
+    const message = createDiscordMessage({
+      id: "m-thread-partial-owner",
+      channelId: threadId,
+      content: "thread hello",
+      author: {
+        id: "user-1",
+        bot: false,
+        username: "Peter",
+      },
+    });
+    Object.defineProperty(message, "channel", {
+      value: createPartialDiscordChannelWithThrowingGetters(
+        {
+          id: threadId,
+          isThread: () => true,
+          ownerId: "owner-1",
+          parentId,
+          parent: { id: parentId, name: "general" },
+        },
+        ["ownerId", "parentId", "parent"],
+      ),
+      configurable: true,
+      enumerable: true,
+    });
+
+    const result = await preflightDiscordMessage({
+      ...createPreflightArgs({
+        cfg: DEFAULT_PREFLIGHT_CFG,
+        discordConfig: {} as DiscordConfig,
+        data: createGuildEvent({
+          channelId: threadId,
+          guildId: "guild-1",
+          author: message.author,
+          message,
+          includeGuildObject: false,
+        }),
+        client: createThreadClient({
+          threadId,
+          parentId,
+        }),
+      }),
+      guildEntries: {
+        "guild-1": {
+          channels: {
+            [parentId]: {
+              enabled: true,
+              requireMention: false,
+            },
+          },
+        },
+      },
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.threadParentId).toBe(parentId);
     expect(result?.shouldRequireMention).toBe(false);
   });
 

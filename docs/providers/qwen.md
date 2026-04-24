@@ -6,8 +6,6 @@ read_when:
 title: "Qwen"
 ---
 
-# Qwen
-
 <Warning>
 
 **Qwen OAuth has been removed.** The free-tier OAuth integration
@@ -173,7 +171,7 @@ present in the bundled catalog.
 
 ## Multimodal add-ons
 
-The `qwen` extension also exposes multimodal capabilities on the **Standard**
+The `qwen` plugin also exposes multimodal capabilities on the **Standard**
 DashScope endpoints (not the Coding Plan endpoints):
 
 - **Video understanding** via `qwen-vl-max-latest`
@@ -195,7 +193,7 @@ To use Qwen as the default video provider:
 See [Video Generation](/tools/video-generation) for shared tool parameters, provider selection, and failover behavior.
 </Note>
 
-## Advanced
+## Advanced configuration
 
 <AccordionGroup>
   <Accordion title="Image and video understanding">
@@ -227,7 +225,7 @@ See [Video Generation](/tools/video-generation) for shared tool parameters, prov
   </Accordion>
 
   <Accordion title="Capability plan">
-    The `qwen` extension is being positioned as the vendor home for the full Qwen
+    The `qwen` plugin is being positioned as the vendor home for the full Qwen
     Cloud surface, not just coding/text models.
 
     - **Text/chat models:** bundled now

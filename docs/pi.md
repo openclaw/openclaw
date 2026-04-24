@@ -1,12 +1,10 @@
 ---
-title: "Pi Integration Architecture"
 summary: "Architecture of OpenClaw's embedded Pi agent integration and session lifecycle"
+title: "Pi integration architecture"
 read_when:
   - Understanding Pi SDK integration design in OpenClaw
   - Modifying agent session lifecycle, tooling, or provider wiring for Pi
 ---
-
-# Pi Integration Architecture
 
 This document describes how OpenClaw integrates with [pi-coding-agent](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent) and its sibling packages (`pi-ai`, `pi-agent-core`, `pi-tui`) to power its AI agent capabilities.
 
@@ -568,3 +566,8 @@ Live/opt-in:
 - `src/agents/pi-embedded-runner-extraparams.live.test.ts` (enable `OPENCLAW_LIVE_TEST=1`)
 
 For current run commands, see [Pi Development Workflow](/pi-dev).
+
+## Related
+
+- [Pi development workflow](/pi-dev)
+- [Install overview](/install)

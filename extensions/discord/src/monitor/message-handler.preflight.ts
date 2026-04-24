@@ -32,7 +32,7 @@ import {
   resolveDiscordShouldRequireMention,
   resolveGroupDmAllow,
 } from "./allow-list.js";
-import { resolveDiscordChannelNameSafe } from "./channel-access.js";
+import { resolveDiscordChannelInfoSafe, resolveDiscordChannelNameSafe } from "./channel-access.js";
 import { resolveDiscordDmCommandAccess } from "./dm-command-auth.js";
 import { handleDiscordDmCommandDecision } from "./dm-command-decision.js";
 import {
@@ -324,15 +324,29 @@ function mergeFetchedDiscordMessage(base: Message, fetched: APIMessage): Message
   }) as unknown as Message;
 }
 
-async function hydrateDiscordMessageIfEmpty(params: {
+function shouldHydrateDiscordMessage(params: { message: Message }) {
+  const currentText = resolveDiscordMessageText(params.message, {
+    includeForwarded: true,
+  });
+  if (!currentText) {
+    return true;
+  }
+  const hasMentionMetadata =
+    (params.message.mentionedUsers?.length ?? 0) > 0 ||
+    (params.message.mentionedRoles?.length ?? 0) > 0 ||
+    params.message.mentionedEveryone;
+  if (hasMentionMetadata) {
+    return false;
+  }
+  return /<@!?\d+>|<@&\d+>|@everyone|@here/u.test(currentText);
+}
+
+async function hydrateDiscordMessageIfNeeded(params: {
   client: DiscordMessagePreflightParams["client"];
   message: Message;
   messageChannelId: string;
 }): Promise<Message> {
-  const currentText = resolveDiscordMessageText(params.message, {
-    includeForwarded: true,
-  });
-  if (currentText) {
+  if (!shouldHydrateDiscordMessage({ message: params.message })) {
     return params.message;
   }
   const rest = params.client.rest as { get?: (route: string) => Promise<unknown> } | undefined;
@@ -346,7 +360,7 @@ async function hydrateDiscordMessageIfEmpty(params: {
     if (!fetched) {
       return params.message;
     }
-    logVerbose(`discord: hydrated empty inbound payload via REST for ${params.message.id}`);
+    logVerbose(`discord: hydrated inbound payload via REST for ${params.message.id}`);
     return mergeFetchedDiscordMessage(params.message, fetched);
   } catch (err) {
     logVerbose(`discord: failed to hydrate message ${params.message.id}: ${String(err)}`);
@@ -383,7 +397,7 @@ export async function preflightDiscordMessage(
     return null;
   }
 
-  message = await hydrateDiscordMessageIfEmpty({
+  message = await hydrateDiscordMessageIfNeeded({
     client: params.client,
     message,
     messageChannelId,
@@ -629,13 +643,16 @@ export async function preflightDiscordMessage(
       }) ?? `user:${author.id}`)
     : messageChannelId;
   let threadBinding: SessionBindingRecord | undefined;
-  threadBinding =
-    conversationRuntime.getSessionBindingService().resolveByConversation({
+  const runtimeRoute = conversationRuntime.resolveRuntimeConversationBindingRoute({
+    route,
+    conversation: {
       channel: "discord",
       accountId: params.accountId,
       conversationId: bindingConversationId,
       parentConversationId: earlyThreadParentId,
-    }) ?? undefined;
+    },
+  });
+  threadBinding = runtimeRoute.bindingRecord ?? undefined;
   const configuredRoute =
     threadBinding == null
       ? conversationRuntime.resolveConfiguredBindingRoute({
@@ -666,13 +683,15 @@ export async function preflightDiscordMessage(
   }
   const boundSessionKey = conversationRuntime.isPluginOwnedSessionBindingRecord(threadBinding)
     ? ""
-    : threadBinding?.targetSessionKey?.trim();
-  const effectiveRoute = resolveDiscordEffectiveRoute({
-    route,
-    boundSessionKey,
-    configuredRoute,
-    matchedBy: "binding.channel",
-  });
+    : (runtimeRoute.boundSessionKey ?? threadBinding?.targetSessionKey?.trim());
+  const effectiveRoute = runtimeRoute.boundSessionKey
+    ? runtimeRoute.route
+    : resolveDiscordEffectiveRoute({
+        route,
+        boundSessionKey,
+        configuredRoute,
+        matchedBy: "binding.channel",
+      });
   const boundAgentId = boundSessionKey ? effectiveRoute.agentId : undefined;
   const isBoundThreadSession = Boolean(threadBinding && earlyThreadChannel);
   const bypassMentionRequirement = isBoundThreadSession;
@@ -849,7 +868,9 @@ export async function preflightDiscordMessage(
         } satisfies HistoryEntry)
       : undefined;
 
-  const threadOwnerId = threadChannel ? (threadChannel.ownerId ?? channelInfo?.ownerId) : undefined;
+  const threadOwnerId = threadChannel
+    ? (resolveDiscordChannelInfoSafe(threadChannel).ownerId ?? channelInfo?.ownerId)
+    : undefined;
   const shouldRequireMentionByConfig = resolveDiscordShouldRequireMention({
     isGuildMessage,
     isThread: Boolean(threadChannel),

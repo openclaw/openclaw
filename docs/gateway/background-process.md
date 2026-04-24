@@ -3,7 +3,7 @@ summary: "Background exec execution and process management"
 read_when:
   - Adding or modifying background exec behavior
   - Debugging long-running exec tasks
-title: "Background Exec and Process Tool"
+title: "Background exec and process tool"
 ---
 
 # Background Exec + Process Tool
@@ -129,3 +129,8 @@ Paste literal text:
 ```json
 { "tool": "process", "action": "paste", "sessionId": "<id>", "text": "line1\nline2\n" }
 ```
+
+## Related
+
+- [Exec tool](/tools/exec)
+- [Exec approvals](/tools/exec-approvals)

@@ -1,6 +1,6 @@
 ---
 name: openclaw-parallels-smoke
-description: End-to-end Parallels smoke, upgrade, and rerun workflow for OpenClaw across macOS, Windows, and Linux guests. Use when Codex needs to run, rerun, debug, or interpret VM-based install, onboarding, gateway smoke tests, latest-release-to-main upgrade checks, fresh snapshot retests, or optional Discord roundtrip verification under Parallels.
+description: Run, rerun, debug, or interpret OpenClaw Parallels install, onboarding, gateway smoke, and upgrade checks.
 ---
 
 # OpenClaw Parallels Smoke
@@ -22,16 +22,17 @@ Use this skill for Parallels guest workflows and smoke interpretation. Do not lo
   - Windows: `90m`
   - aggregate npm-update wrapper: `150m`
     If a lane hits the cap, stop there, inspect the newest `/tmp/openclaw-parallels-*` run directory and phase log, then fix or rerun the smallest affected lane. Do not keep waiting on a capped lane.
-- Actual OpenClaw npm install/update phases are a stricter budget than whole lanes: install phases should finish within 7 minutes, and update phases should finish within 5 minutes. If a phase named `install-main`, `install-latest`, `install-baseline`, or `install-baseline-package` exceeds 420s, or a phase named `update-dev` / same-guest `openclaw update` exceeds 300s, treat it as a failure/harness bug and start diagnosis from that phase log. Do not wait for a longer lane cap.
+- Actual OpenClaw npm install/update phases are a stricter signal than whole-lane caps: install phases should normally finish within 7 minutes, and update phases should normally show meaningful progress within 5 minutes. If a phase named `install-main`, `install-latest`, `install-baseline`, or `install-baseline-package` exceeds 420s, or a phase named `update-dev` / same-guest `openclaw update` exceeds 300s without new markers, start diagnosis from that phase log and guest process state. Current Windows update phases can still pass after roughly 10-15 minutes because `doctor --fix` may install bundled plugin runtime deps; keep the script hard cap near 20 minutes unless the log is truly stale.
 - For a full OS matrix, prefer running independent guest-family lanes in parallel when host capacity allows:
   - `timeout --foreground 75m pnpm test:parallels:macos -- --json`
   - `timeout --foreground 90m pnpm test:parallels:windows -- --json`
   - `timeout --foreground 75m pnpm test:parallels:linux -- --json`
-    Keep each lane in its own shell/session and track the run directory for each one.
+    Keep each lane in its own shell/session and track the run directory for each one. Before starting the matrix, run any required host build/package gate to completion. When current-main tgz packaging is needed, the smoke scripts hold a shared package lock through `pnpm build`, inventory/staging, and `npm pack`; if that lock is missing or broken, serialize the matrix instead of accepting concurrent `dist` mutation.
 - Do not run multiple smoke lanes against the same guest family at once. Tahoe lanes share the host HTTP port, and Windows/Linux lanes can collide on snapshot restore/start state if two jobs touch the same VM concurrently.
 - Do not run the aggregate `pnpm test:parallels:npm-update` wrapper in parallel with individual macOS/Windows/Linux smoke lanes; it touches the same guest families and snapshots.
-- Do not start Parallels lanes while any host command may rebuild, clean, or restage `dist` (`pnpm build`, `pnpm ui:build`, `pnpm release:check`, `pnpm test:install:smoke`, npm pack/install smoke, or Docker lanes that run package/build prep). Run the build/package gates first, let them finish, then start the VM matrix. Concurrent `dist` mutation can make host `npm pack` fail with missing files and wastes a full VM cycle.
+- Do not start Parallels lanes while any unrelated host command may rebuild, clean, or restage `dist` (`pnpm build`, `pnpm ui:build`, `pnpm release:check`, `pnpm test:install:smoke`, npm pack/install smoke, or Docker lanes that run package/build prep). Run unrelated build/package gates first, let them finish, then start the VM matrix. Concurrent `dist` mutation can make host `npm pack` fail with missing files and wastes a full VM cycle.
 - While running or optimizing the matrix, record wall-clock duration per lane and the slowest phase from `/tmp/openclaw-parallels-*` logs. Use that timing before changing smoke order, timeouts, or helper behavior.
+- If a host build changes tracked generated files such as `src/canvas-host/a2ui/.bundle.hash`, stop before spending VM time. Commit the generated artifact separately or fix the generator drift, then rerun the smallest affected lane.
 - If `main` is moving under active multi-agent work, prefer a detached worktree pinned to one commit for long Parallels suites. The smoke scripts now verify the packed tgz commit instead of live `git rev-parse HEAD`, but a pinned worktree still avoids noisy rebuild/version drift during reruns.
 - For `openclaw update --channel dev` lanes, remember the guest clones GitHub `main`, not your local worktree. If a local fix exists but the rerun still fails inside the cloned dev checkout, do not treat that as disproof of the fix until the branch has been pushed.
 - For `prlctl exec`, pass the VM name before `--current-user` (`prlctl exec "$VM" --current-user ...`), not the other way around.
@@ -44,6 +45,9 @@ Use this skill for Parallels guest workflows and smoke interpretation. Do not lo
 ## npm install then update
 
 - Preferred entrypoint: `pnpm test:parallels:npm-update`
+- For a macOS-only published release update check, use:
+  - `timeout --foreground 75m pnpm test:parallels:npm-update -- --platform macos --package-spec openclaw@<old-version> --update-target <target-version-or-tag> --json`
+    This keeps the same-guest `openclaw update --tag ...` coverage and uses the shared macOS current-user/sudo fallback without starting Windows/Linux lanes.
 - Required coverage: every release/update regression run must include both lanes:
   - fresh snapshot -> install requested package/baseline -> smoke
   - same guest baseline -> run the guest's installed `openclaw update ...` command -> smoke again
@@ -74,6 +78,7 @@ Use this skill for Parallels guest workflows and smoke interpretation. Do not lo
 ## macOS flow
 
 - Preferred entrypoint: `pnpm test:parallels:macos`
+- `parallels-macos-smoke.sh --mode fresh --target-package-spec openclaw@<version>` is an install smoke only. For published old-version -> new-version update coverage on macOS, prefer the npm-update wrapper with `--platform macos`; `parallels-macos-smoke.sh --mode upgrade --target-package-spec ...` installs the target package and does not exercise the baseline CLI's updater.
 - Default upgrade coverage on macOS should now include: fresh snapshot -> site installer pinned to the latest stable tag -> `openclaw update --channel dev` on the guest. Treat this as part of the default Tahoe regression plan, not an optional side quest.
 - `parallels-macos-smoke.sh --mode upgrade` should run that release-to-dev lane by default. Keep the older host-tgz upgrade path only when the caller explicitly passes `--target-package-spec`.
 - Because the default upgrade lane no longer needs a host tgz, skip `npm pack` + host HTTP server startup for `--mode upgrade` unless `--target-package-spec` is set. Keep the pack/server path for `fresh` and `both`.
@@ -143,6 +148,7 @@ Use this skill for Parallels guest workflows and smoke interpretation. Do not lo
   - `--discord-token-env`
   - `--discord-guild-id`
   - `--discord-channel-id`
+- After a successful Discord smoke/roundtrip, shut down the guest VM before handoff (`prlctl stop "$VM_NAME"` or the concrete VM name). The macOS smoke harness should do this automatically after successful Discord proof; still stop the VM manually after ad-hoc Discord checks. Do not leave the Discord-configured guest running; it can keep reading/posting in `#maintainer` and spam Discord after the proof is complete.
 - Keep the Discord token only in a host env var.
 - Use installed `openclaw message send/read`, not `node openclaw.mjs message ...`.
 - Set `channels.discord.guilds` as one JSON object, not dotted config paths with snowflakes.
