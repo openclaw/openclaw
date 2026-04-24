@@ -25,7 +25,8 @@ import {
   listSubagentRunsForController,
   resolveSubagentSessionStatus,
 } from "../agents/subagent-registry-read.js";
-import { listThinkingLevelLabels, resolveThinkingDefaultForModel } from "../auto-reply/thinking.js";
+import { listThinkingLevelLabels } from "../auto-reply/thinking.js";
+import { resolveThinkingDefault } from "../agents/model-selection.js";
 import { loadConfig } from "../config/config.js";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -1403,7 +1404,9 @@ export function buildGatewaySessionRow(params: {
     abortedLastRun: entry?.abortedLastRun,
     thinkingLevel: entry?.thinkingLevel,
     thinkingOptions: listThinkingLevelLabels(thinkingProvider, thinkingModel),
-    thinkingDefault: resolveThinkingDefaultForModel({
+    thinkingDefault: resolveSessionThinkingDefault({
+      cfg,
+      agentId: sessionAgentId,
       provider: thinkingProvider,
       model: thinkingModel,
     }),
@@ -1565,4 +1568,33 @@ export function listSessionsFromStore(params: {
     defaults: getSessionDefaults(cfg),
     sessions,
   };
+}
+
+/**
+ * Resolve the effective thinkingDefault for a session row, considering:
+ * 1. Per-agent thinkingDefault (agents.list[].thinkingDefault)
+ * 2. Per-model params.thinking (agents.defaults.models[].params.thinking)
+ * 3. Global agents.defaults.thinkingDefault
+ * 4. Model-level default from catalog/profile
+ */
+function resolveSessionThinkingDefault(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  provider: string;
+  model: string;
+}): string {
+  // Check per-agent thinkingDefault first
+  const agentEntry = (params.cfg.agents?.list ?? []).find(
+    (a) => normalizeAgentId(a.id ?? "") === params.agentId,
+  );
+  if (agentEntry?.thinkingDefault) {
+    return agentEntry.thinkingDefault;
+  }
+  // Fall back to resolveThinkingDefault which checks per-model params.thinking,
+  // agents.defaults.thinkingDefault, and model catalog defaults
+  return resolveThinkingDefault({
+    cfg: params.cfg,
+    provider: params.provider,
+    model: params.model,
+  });
 }
