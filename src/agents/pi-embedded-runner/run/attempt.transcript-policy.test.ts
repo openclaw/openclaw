@@ -1,9 +1,20 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProviderRuntimeModel } from "../../../plugins/provider-runtime-model.types.js";
 import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
 import { resolveAttemptTranscriptPolicy } from "./attempt.transcript-policy.js";
 
+const resolveProviderRuntimePluginMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../../../plugins/provider-hook-runtime.js", () => ({
+  resolveProviderRuntimePlugin: resolveProviderRuntimePluginMock,
+}));
+
 describe("resolveAttemptTranscriptPolicy", () => {
+  beforeEach(() => {
+    resolveProviderRuntimePluginMock.mockReset();
+    resolveProviderRuntimePluginMock.mockReturnValue(undefined);
+  });
+
   it("uses RuntimePlan transcript policy when available", () => {
     const plannedPolicy = {
       sanitizeMode: "full",
@@ -54,6 +65,7 @@ describe("resolveAttemptTranscriptPolicy", () => {
   });
 
   it("keeps the legacy provider transcript fallback when no RuntimePlan is available", () => {
+    const env = { OPENCLAW_TEST_TRANSCRIPT_POLICY: "1" } as NodeJS.ProcessEnv;
     const policy = resolveAttemptTranscriptPolicy({
       runtimePlanModelContext: {
         workspaceDir: "/tmp/openclaw-transcript-policy",
@@ -61,6 +73,7 @@ describe("resolveAttemptTranscriptPolicy", () => {
       },
       provider: "custom-openai-compatible",
       modelId: "gpt-5.4",
+      env,
     });
 
     expect(policy).toMatchObject({
@@ -69,6 +82,12 @@ describe("resolveAttemptTranscriptPolicy", () => {
       toolCallIdMode: "strict",
       repairToolUseResultPairing: true,
       allowSyntheticToolResults: false,
+    });
+    expect(resolveProviderRuntimePluginMock).toHaveBeenCalledWith({
+      provider: "custom-openai-compatible",
+      config: undefined,
+      workspaceDir: "/tmp/openclaw-transcript-policy",
+      env,
     });
   });
 });
