@@ -6,6 +6,7 @@ import {
 } from "../../test/helpers/plugins/provider-registration.js";
 import { normalizeTranscriptForMatch } from "../../test/helpers/stt-live-audio.js";
 import plugin from "./index.js";
+import { createGeminiWebSearchProvider } from "./src/gemini-web-search-provider.js";
 
 const GOOGLE_API_KEY =
   process.env.GEMINI_API_KEY?.trim() || process.env.GOOGLE_API_KEY?.trim() || "";
@@ -63,4 +64,19 @@ describeLive("google plugin live", () => {
     expect(normalized).toContain("google");
     expect(normalized).toContain("openclaw");
   }, 180_000);
+
+  it("runs Gemini web search through the registered provider tool", async () => {
+    const provider = createGeminiWebSearchProvider();
+    const tool = provider.createTool?.({
+      config: {},
+      searchConfig: { gemini: { apiKey: GOOGLE_API_KEY }, cacheTtlMinutes: 0 },
+    } as never);
+
+    const result = await tool?.execute({ query: "OpenClaw GitHub", count: 1 });
+
+    expect(result?.provider).toBe("gemini");
+    expect(typeof result?.content).toBe("string");
+    expect((result?.content as string).length).toBeGreaterThan(20);
+    expect(Array.isArray(result?.citations)).toBe(true);
+  }, 120_000);
 });
