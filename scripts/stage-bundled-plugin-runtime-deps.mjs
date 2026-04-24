@@ -885,6 +885,17 @@ function resolveRuntimeDepsStampPath(repoRoot, pluginId) {
 }
 
 function createRuntimeDepsFingerprint(packageJson, pruneConfig, params = {}) {
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        cheapFingerprint: createRuntimeDepsCheapFingerprint(packageJson, pruneConfig, params),
+        rootInstalledRuntimeFingerprint: params.rootInstalledRuntimeFingerprint ?? null,
+      }),
+    )
+    .digest("hex");
+}
+
+function createRuntimeDepsCheapFingerprint(packageJson, pruneConfig, params = {}) {
   const repoRoot = params.repoRoot;
   const lockfilePath =
     typeof repoRoot === "string" && repoRoot.length > 0
@@ -901,7 +912,6 @@ function createRuntimeDepsFingerprint(packageJson, pruneConfig, params = {}) {
         globalPruneSuffixes: pruneConfig.globalPruneSuffixes,
         packageJson,
         pruneRules: [...pruneConfig.pruneRules.entries()],
-        rootInstalledRuntimeFingerprint: params.rootInstalledRuntimeFingerprint ?? null,
         rootLockfile,
         version: runtimeDepsStagingVersion,
       }),
@@ -949,6 +959,7 @@ function removeStaleRuntimeDepsTempDirs(pluginDir) {
 function stageInstalledRootRuntimeDeps(params) {
   const {
     directDependencyPackageRoot = null,
+    cheapFingerprint,
     fingerprint,
     packageJson,
     pluginDir,
@@ -990,6 +1001,7 @@ function stageInstalledRootRuntimeDeps(params) {
     assertPathIsNotSymlink(nodeModulesDir, "remove runtime deps");
     removePathIfExists(nodeModulesDir);
     writeJsonAtomically(stampPath, {
+      cheapFingerprint,
       fingerprint,
       generatedAt: new Date().toISOString(),
     });
@@ -1029,6 +1041,7 @@ function stageInstalledRootRuntimeDeps(params) {
 
     replaceDirAtomically(nodeModulesDir, stagedNodeModulesDir);
     writeJsonAtomically(stampPath, {
+      cheapFingerprint,
       fingerprint,
       generatedAt: new Date().toISOString(),
     });
@@ -1078,6 +1091,7 @@ function createRootRuntimeStagingError(params) {
 function installPluginRuntimeDeps(params) {
   const {
     directDependencyPackageRoot = null,
+    cheapFingerprint,
     fingerprint,
     packageJson,
     pluginDir,
@@ -1120,6 +1134,7 @@ function installPluginRuntimeDeps(params) {
       removePathIfExists(nodeModulesDir);
     }
     writeJsonAtomically(stampPath, {
+      cheapFingerprint,
       fingerprint,
       generatedAt: new Date().toISOString(),
     });
@@ -1151,6 +1166,10 @@ export function stageBundledPluginRuntimeDeps(params = {}) {
       removePathIfExists(stampPath);
       continue;
     }
+    const cheapFingerprint = createRuntimeDepsCheapFingerprint(packageJson, pruneConfig, {
+      repoRoot,
+    });
+    const stamp = readRuntimeDepsStamp(stampPath);
     const rootInstalledRuntimeFingerprint = resolveInstalledRuntimeClosureFingerprint({
       directDependencyPackageRoot,
       packageJson,
@@ -1160,7 +1179,6 @@ export function stageBundledPluginRuntimeDeps(params = {}) {
       repoRoot,
       rootInstalledRuntimeFingerprint,
     });
-    const stamp = readRuntimeDepsStamp(stampPath);
     if (fs.existsSync(nodeModulesDir) && stamp?.fingerprint === fingerprint) {
       continue;
     }
@@ -1168,6 +1186,7 @@ export function stageBundledPluginRuntimeDeps(params = {}) {
       stageInstalledRootRuntimeDeps({
         directDependencyPackageRoot,
         fingerprint,
+        cheapFingerprint,
         packageJson,
         pluginDir,
         pruneConfig,
@@ -1184,6 +1203,7 @@ export function stageBundledPluginRuntimeDeps(params = {}) {
         installParams: {
           directDependencyPackageRoot,
           fingerprint,
+          cheapFingerprint,
           packageJson,
           pluginDir,
           pluginId,
