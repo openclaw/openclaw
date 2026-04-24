@@ -128,6 +128,23 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
     });
   });
 
+  it("reuses webhook hook sessions when sessionTarget is isolated", async () => {
+    await runSkillFilterCase({
+      sessionKey: "hook:webhook:stable-thread",
+      job: makeSkillJob({
+        payload: {
+          kind: "agentTurn",
+          message: "test",
+          externalContentSource: "webhook",
+        },
+      }),
+    });
+    expect(resolveCronSessionMock).toHaveBeenCalledOnce();
+    expect(resolveCronSessionMock.mock.calls[0]?.[0]).toMatchObject({
+      forceNew: false,
+    });
+  });
+
   it("reuses cached snapshot when version and normalized skillFilter are unchanged", async () => {
     resolveAgentSkillsFilterMock.mockReturnValue([" weather ", "meme-factory", "weather"]);
     resolveCronSessionMock.mockReturnValue({
