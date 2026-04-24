@@ -27,7 +27,7 @@ import {
   getRuntimeAuthProfileStoreSnapshot,
   hasRuntimeAuthProfileStoreSnapshot,
   replaceRuntimeAuthProfileStoreSnapshots as replaceRuntimeAuthProfileStoreSnapshotsImpl,
-  setRuntimeAuthProfileStoreSnapshot,
+  updateRuntimeAuthProfileStoreSnapshotIfPresent,
 } from "./runtime-snapshots.js";
 import { savePersistedAuthProfileState } from "./state.js";
 import type { AuthProfileStore } from "./types.js";
@@ -403,7 +403,5 @@ export function saveAuthProfileStore(
     stateMtimeMs: readAuthStoreMtimeMs(statePath),
     store: runtimeStore,
   });
-  if (hasRuntimeAuthProfileStoreSnapshot(agentDir)) {
-    setRuntimeAuthProfileStoreSnapshot(runtimeStore, agentDir);
-  }
+  updateRuntimeAuthProfileStoreSnapshotIfPresent(runtimeStore, agentDir);
 }

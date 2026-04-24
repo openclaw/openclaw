@@ -7,6 +7,7 @@ import {
   clearRuntimeAuthProfileStoreSnapshots,
   getRuntimeAuthProfileStoreSnapshot,
   replaceRuntimeAuthProfileStoreSnapshots,
+  updateRuntimeAuthProfileStoreSnapshotIfPresent,
 } from "./runtime-snapshots.js";
 
 const fixtureSuite = createFixtureSuite("openclaw-auth-runtime-snapshots-");
@@ -101,6 +102,62 @@ describe("runtime auth profile snapshots", () => {
       getRuntimeAuthProfileStoreSnapshot(snapshottedAgentDir)?.profiles["openai:default"],
     ).toMatchObject({
       key: "snapshotted-key",
+    });
+  });
+
+  it("refreshes an existing snapshot without first invalidating on disk mtime", async () => {
+    await fixtureSuite.setup();
+    const agentDir = await fixtureSuite.createCaseDir("agent");
+    replaceRuntimeAuthProfileStoreSnapshots(
+      [
+        {
+          agentDir,
+          store: {
+            version: 1,
+            profiles: {
+              "openai:default": {
+                type: "api_key",
+                provider: "openai",
+                key: "old-runtime-key",
+              },
+            },
+          },
+        },
+      ],
+      Date.now() - 10_000,
+    );
+    await fs.writeFile(
+      path.join(agentDir, AUTH_PROFILE_FILENAME),
+      JSON.stringify({
+        version: 1,
+        profiles: {
+          "openai:default": {
+            type: "api_key",
+            provider: "openai",
+            key: "new-disk-key",
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    expect(
+      updateRuntimeAuthProfileStoreSnapshotIfPresent(
+        {
+          version: 1,
+          profiles: {
+            "openai:default": {
+              type: "api_key",
+              provider: "openai",
+              key: "new-runtime-key",
+            },
+          },
+        },
+        agentDir,
+      ),
+    ).toBe(true);
+    expect(getRuntimeAuthProfileStoreSnapshot(agentDir)?.profiles["openai:default"]).toMatchObject({
+      key: "new-runtime-key",
     });
   });
 });

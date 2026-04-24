@@ -93,3 +93,16 @@ export function setRuntimeAuthProfileStoreSnapshot(
   runtimeAuthStoreSnapshotsLoadedAtMs = Date.now();
   runtimeAuthStoreSnapshots.set(resolveRuntimeStoreKey(agentDir), cloneAuthProfileStore(store));
 }
+
+export function updateRuntimeAuthProfileStoreSnapshotIfPresent(
+  store: AuthProfileStore,
+  agentDir?: string,
+): boolean {
+  const storeKey = resolveRuntimeStoreKey(agentDir);
+  if (!runtimeAuthStoreSnapshots.has(storeKey)) {
+    return false;
+  }
+  runtimeAuthStoreSnapshotsLoadedAtMs = Date.now();
+  runtimeAuthStoreSnapshots.set(storeKey, cloneAuthProfileStore(store));
+  return true;
+}
