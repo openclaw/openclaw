@@ -1141,7 +1141,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
-    record.services.push(id);
+    record.gatewayDiscoveryServiceIds.push(id);
     registry.gatewayDiscoveryServices.push({
       pluginId: record.id,
       pluginName: record.name,

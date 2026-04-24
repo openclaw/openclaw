@@ -4132,7 +4132,8 @@ module.exports = { id: "throws-after-import", register() {} };`,
           "gateway discovery service already registered: shared-discovery (discovery-owner-a)",
         assertPrimaryOwner: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
           expect(
-            registry.plugins.find((entry) => entry.id === "discovery-owner-a")?.services,
+            registry.plugins.find((entry) => entry.id === "discovery-owner-a")
+              ?.gatewayDiscoveryServiceIds,
           ).toEqual(["shared-discovery"]);
         },
         assert: expectDuplicateRegistrationResult,
@@ -4213,6 +4214,32 @@ module.exports = { id: "throws-after-import", register() {} };`,
         diag.message.includes("service already registered: shared-service"),
       ),
     ).toBe(false);
+  });
+
+  it("tracks regular services and gateway discovery services separately", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "split-service-owner",
+      filename: "split-service-owner.cjs",
+      body: `module.exports = { id: "split-service-owner", register(api) {
+  api.registerService({ id: "shared-service", start() {} });
+  api.registerGatewayDiscoveryService({ id: "shared-service", advertise() {} });
+} };`,
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["split-service-owner"],
+      },
+    });
+
+    const record = registry.plugins.find((entry) => entry.id === "split-service-owner");
+    expect(record?.services).toEqual(["shared-service"]);
+    expect(record?.gatewayDiscoveryServiceIds).toEqual(["shared-service"]);
+    expect(registry.services).toHaveLength(1);
+    expect(registry.gatewayDiscoveryServices).toHaveLength(1);
+    expect(registry.diagnostics).toEqual([]);
   });
 
   it("rewrites removed registerHttpHandler failures into migration diagnostics", () => {

@@ -280,6 +280,7 @@ export type PluginRecord = {
   gatewayMethods: string[];
   cliCommands: string[];
   services: string[];
+  gatewayDiscoveryServiceIds: string[];
   commands: string[];
   httpRoutes: number;
   hookCount: number;
