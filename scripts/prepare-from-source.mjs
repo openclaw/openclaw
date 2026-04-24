@@ -56,11 +56,31 @@ function run(cmd) {
 }
 
 const pnpmVersion = detectPnpmVersion(ROOT);
-// Resolve pnpm: prefer global pnpm, then npx as fallback.
-// "npm exec -y pkg -- cmd" fails in nested npm lifecycle contexts (the
-// downloaded binary is not placed on PATH correctly), so we use npx which
-// runs the binary directly without relying on PATH injection.
-const pnpmRunner = hasCmd("pnpm") ? "pnpm" : `npx -y pnpm@${pnpmVersion}`;
+
+// Resolve a working pnpm command. In nested npm lifecycle contexts (git dep
+// preparation), npx cannot reliably place downloaded binaries on PATH, so
+// we fall back to a global npm install or corepack.
+let pnpmRunner;
+if (hasCmd("pnpm")) {
+  pnpmRunner = "pnpm";
+} else {
+  // Install pnpm globally. Since we are inside an `npm install -g` lifecycle,
+  // the global prefix is writable and pnpm lands next to node/npm on PATH.
+  try {
+    console.log(`[prepare] pnpm not found, installing pnpm@${pnpmVersion} globally via npm…`);
+    run(`npm install -g pnpm@${pnpmVersion}`);
+    pnpmRunner = "pnpm";
+  } catch {
+    // Global install failed (permissions, offline). Try corepack (ships with Node 22+).
+    if (hasCmd("corepack")) {
+      console.log("[prepare] global npm install failed, falling back to corepack…");
+      pnpmRunner = "corepack pnpm";
+    } else {
+      console.error("[prepare] cannot install pnpm. Install pnpm globally and retry.");
+      process.exit(1);
+    }
+  }
+}
 
 try {
   // Remove any partial node_modules that npm may have created. pnpm needs to
