@@ -621,6 +621,7 @@ export type CronJobsListResult = {
   offset?: number;
   nextOffset?: number | null;
   hasMore?: boolean;
+  deliveryPreviewsEnabled?: boolean;
 };
 
 export type CronRunsResult = {

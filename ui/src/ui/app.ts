@@ -418,7 +418,7 @@ export class OpenClawApp extends LitElement {
   @state() cronJobsTotal = 0;
   @state() cronJobsHasMore = false;
   @state() cronJobsNextOffset: number | null = null;
-  @state() cronJobsLimit = 50;
+  @state() cronJobsLimit = 25;
   @state() cronJobsQuery = "";
   @state() cronJobsEnabledFilter: import("./types.js").CronJobsEnabledFilter = "all";
   @state() cronJobsScheduleKindFilter: import("./controllers/cron.js").CronJobsScheduleKindFilter =

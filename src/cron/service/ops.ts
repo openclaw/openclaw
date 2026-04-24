@@ -231,7 +231,7 @@ export async function listPage(state: CronServiceState, opts?: CronListPageOptio
     const sorted = sortJobs(filtered, sortBy, sortDir);
     const total = sorted.length;
     const offset = Math.max(0, Math.min(total, Math.floor(opts?.offset ?? 0)));
-    const defaultLimit = total === 0 ? 50 : total;
+    const defaultLimit = 50;
     const limit = Math.max(1, Math.min(200, Math.floor(opts?.limit ?? defaultLimit)));
     const jobs = sorted.slice(offset, offset + limit);
     const nextOffset = offset + jobs.length;

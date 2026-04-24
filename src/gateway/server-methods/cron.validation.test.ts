@@ -3,6 +3,9 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CronJob } from "../../cron/types.js";
 
 const loadConfig = vi.hoisted(() => vi.fn<() => OpenClawConfig>(() => ({}) as OpenClawConfig));
+const resolveCronDeliveryPreviews = vi.hoisted(() =>
+  vi.fn(async () => ({ "cron-1": { label: "preview", detail: "preview detail" } })),
+);
 
 vi.mock("../../config/config.js", async () => {
   const actual =
@@ -13,6 +16,10 @@ vi.mock("../../config/config.js", async () => {
   };
 });
 
+vi.mock("../../cron/delivery-preview.js", () => ({
+  resolveCronDeliveryPreviews,
+}));
+
 import { cronHandlers } from "./cron.js";
 
 function createCronContext(currentJob?: CronJob) {
@@ -20,6 +27,14 @@ function createCronContext(currentJob?: CronJob) {
     cron: {
       add: vi.fn(async () => ({ id: "cron-1" })),
       update: vi.fn(async () => ({ id: "cron-1" })),
+      listPage: vi.fn(async () => ({
+        jobs: [currentJob ?? createCronJob()],
+        total: 1,
+        offset: 0,
+        limit: 1,
+        hasMore: false,
+        nextOffset: null,
+      })),
       getDefaultAgentId: vi.fn(() => "main"),
       getJob: vi.fn(() => currentJob),
     },
@@ -57,6 +72,20 @@ async function invokeCronUpdate(params: Record<string, unknown>, currentJob: Cro
   return { context, respond };
 }
 
+async function invokeCronList(params: Record<string, unknown> = {}, currentJob?: CronJob) {
+  const context = createCronContext(currentJob);
+  const respond = vi.fn();
+  await cronHandlers["cron.list"]({
+    req: {} as never,
+    params: params as never,
+    respond: respond as never,
+    context: context as never,
+    client: null,
+    isWebchatConnect: () => false,
+  });
+  return { context, respond };
+}
+
 function createCronJob(overrides: Partial<CronJob> = {}): CronJob {
   return {
     id: "cron-1",
@@ -77,6 +106,10 @@ function createCronJob(overrides: Partial<CronJob> = {}): CronJob {
 describe("cron method validation", () => {
   beforeEach(() => {
     loadConfig.mockReset().mockReturnValue({} as OpenClawConfig);
+    resolveCronDeliveryPreviews.mockClear().mockResolvedValue({
+      "cron-1": { label: "preview", detail: "preview detail" },
+    });
+    delete process.env.OPENCLAW_CRON_LIST_DELIVERY_PREVIEWS;
   });
 
   it("rejects ambiguous announce delivery on add when multiple channels are configured", async () => {
@@ -160,6 +193,41 @@ describe("cron method validation", () => {
       expect.objectContaining({
         message: expect.stringContaining("delivery.channel is required"),
       }),
+    );
+  });
+
+  it("returns cron.list without delivery previews by default", async () => {
+    const job = createCronJob();
+    const { respond } = await invokeCronList({ includeDisabled: true }, job);
+
+    expect(resolveCronDeliveryPreviews).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        jobs: [job],
+        deliveryPreviews: {},
+        deliveryPreviewsEnabled: false,
+      }),
+      undefined,
+    );
+  });
+
+  it("allows opt-in delivery previews for cron.list via env flag", async () => {
+    process.env.OPENCLAW_CRON_LIST_DELIVERY_PREVIEWS = "1";
+    const job = createCronJob();
+    const { respond } = await invokeCronList({ includeDisabled: true }, job);
+
+    expect(resolveCronDeliveryPreviews).toHaveBeenCalledOnce();
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        jobs: [job],
+        deliveryPreviews: {
+          "cron-1": { label: "preview", detail: "preview detail" },
+        },
+        deliveryPreviewsEnabled: true,
+      }),
+      undefined,
     );
   });
 

@@ -164,12 +164,15 @@ export const cronHandlers: GatewayRequestHandlers = {
       sortBy: p.sortBy,
       sortDir: p.sortDir,
     });
-    const deliveryPreviews = await resolveCronDeliveryPreviews({
-      cfg: loadConfig(),
-      defaultAgentId: context.cron.getDefaultAgentId(),
-      jobs: page.jobs,
-    });
-    respond(true, { ...page, deliveryPreviews }, undefined);
+    const deliveryPreviewsEnabled = process.env.OPENCLAW_CRON_LIST_DELIVERY_PREVIEWS === "1";
+    const deliveryPreviews = deliveryPreviewsEnabled
+      ? await resolveCronDeliveryPreviews({
+          cfg: loadConfig(),
+          defaultAgentId: context.cron.getDefaultAgentId(),
+          jobs: page.jobs,
+        })
+      : {};
+    respond(true, { ...page, deliveryPreviews, deliveryPreviewsEnabled }, undefined);
   },
   "cron.status": async ({ params, respond, context }) => {
     if (!validateCronStatusParams(params)) {

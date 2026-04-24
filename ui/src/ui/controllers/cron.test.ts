@@ -27,7 +27,7 @@ function createState(overrides: Partial<CronState> = {}): CronState {
     cronJobsTotal: 0,
     cronJobsHasMore: false,
     cronJobsNextOffset: null,
-    cronJobsLimit: 50,
+    cronJobsLimit: 25,
     cronJobsQuery: "",
     cronJobsEnabledFilter: "all",
     cronJobsScheduleKindFilter: "all",
@@ -1201,7 +1201,7 @@ describe("cron controller", () => {
     const request = vi.fn(async (method: string, payload?: unknown) => {
       if (method === "cron.list") {
         expect(payload).toMatchObject({
-          limit: 50,
+          limit: 25,
           offset: 0,
           query: "daily",
           enabled: "enabled",

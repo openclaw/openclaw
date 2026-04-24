@@ -20,6 +20,24 @@ function createBaseJob(overrides?: Partial<CronJob>): CronJob {
 }
 
 describe("cron listPage sort guards", () => {
+  it("defaults to a 50-item page instead of returning the full registry", async () => {
+    const jobs = Array.from({ length: 75 }, (_, idx) =>
+      createBaseJob({
+        id: `job-${idx + 1}`,
+        name: `job ${idx + 1}`,
+        state: { nextRunAtMs: Date.parse("2026-02-27T15:30:00.000Z") + idx },
+      }),
+    );
+    const state = createMockCronStateForJobs({ jobs });
+
+    const page = await listPage(state);
+    expect(page.jobs).toHaveLength(50);
+    expect(page.limit).toBe(50);
+    expect(page.total).toBe(75);
+    expect(page.hasMore).toBe(true);
+    expect(page.nextOffset).toBe(50);
+  });
+
   it("does not throw when sorting by name with malformed name fields", async () => {
     const jobs = [
       createBaseJob({ id: "job-a", name: undefined as unknown as string }),

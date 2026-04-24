@@ -83,23 +83,68 @@ export async function resolveCronDeliveryPreview(params: {
   };
 }
 
+const CRON_DELIVERY_PREVIEW_CACHE_TTL_MS = 60_000;
+const cronDeliveryPreviewCache = new Map<string, { value: CronDeliveryPreview; ts: number }>();
+
+function buildCronDeliveryPreviewCacheKey(params: {
+  cfg: OpenClawConfig;
+  defaultAgentId?: string;
+  job: CronJob;
+}): string {
+  const plan = resolveCronDeliveryPlan(params.job);
+  return JSON.stringify({
+    agentId:
+      params.job.agentId?.trim() ||
+      params.defaultAgentId ||
+      resolveDefaultAgentId(params.cfg) ||
+      "",
+    sessionKey: params.job.sessionKey ?? "",
+    channel: plan.channel ?? "last",
+    to: plan.to ?? "",
+    threadId: plan.threadId ?? "",
+    accountId: plan.accountId ?? "",
+    mode: plan.mode ?? "announce",
+    requested: plan.requested !== false,
+  });
+}
+
 export async function resolveCronDeliveryPreviews(params: {
   cfg: OpenClawConfig;
   defaultAgentId?: string;
   jobs: CronJob[];
 }): Promise<Record<string, CronDeliveryPreview>> {
+  const now = Date.now();
+  const pendingByKey = new Map<string, Promise<CronDeliveryPreview>>();
   const entries = await Promise.all(
-    params.jobs.map(
-      async (job) =>
-        [
-          job.id,
-          await resolveCronDeliveryPreview({
-            cfg: params.cfg,
-            defaultAgentId: params.defaultAgentId,
-            job,
-          }),
-        ] as const,
-    ),
+    params.jobs.map(async (job) => {
+      const cacheKey = buildCronDeliveryPreviewCacheKey({
+        cfg: params.cfg,
+        defaultAgentId: params.defaultAgentId,
+        job,
+      });
+      const cached = cronDeliveryPreviewCache.get(cacheKey);
+      if (cached && now - cached.ts <= CRON_DELIVERY_PREVIEW_CACHE_TTL_MS) {
+        return [job.id, cached.value] as const;
+      }
+      let pending = pendingByKey.get(cacheKey);
+      if (!pending) {
+        pending = resolveCronDeliveryPreview({
+          cfg: params.cfg,
+          defaultAgentId: params.defaultAgentId,
+          job,
+        }).then((value) => {
+          cronDeliveryPreviewCache.set(cacheKey, { value, ts: Date.now() });
+          return value;
+        });
+        pendingByKey.set(cacheKey, pending);
+      }
+      return [job.id, await pending] as const;
+    }),
   );
+  for (const [cacheKey, cached] of cronDeliveryPreviewCache) {
+    if (now - cached.ts > CRON_DELIVERY_PREVIEW_CACHE_TTL_MS) {
+      cronDeliveryPreviewCache.delete(cacheKey);
+    }
+  }
   return Object.fromEntries(entries);
 }
