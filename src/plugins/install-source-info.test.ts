@@ -177,4 +177,29 @@ describe("describePluginInstallSource", () => {
       warnings: ["invalid-npm-spec", "default-choice-missing-source"],
     });
   });
+
+  it("warns when integrity metadata has no npm source", () => {
+    expect(
+      describePluginInstallSource({
+        localPath: "extensions/demo",
+        expectedIntegrity: "sha512-demo",
+      }),
+    ).toEqual({
+      local: {
+        path: "extensions/demo",
+      },
+      warnings: ["npm-integrity-without-source"],
+    });
+  });
+
+  it("warns when integrity metadata is attached to an invalid npm source", () => {
+    expect(
+      describePluginInstallSource({
+        npmSpec: "github:vendor/demo",
+        expectedIntegrity: "sha512-demo",
+      }),
+    ).toEqual({
+      warnings: ["invalid-npm-spec", "npm-integrity-without-source"],
+    });
+  });
 });
