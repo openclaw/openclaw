@@ -1069,7 +1069,7 @@ describe("createFollowupRunner bootstrap warning dedupe", () => {
   });
 });
 
-describe("createFollowupRunner messaging tool dedupe", () => {
+describe("createFollowupRunner messaging delivery and dedupe", () => {
   function createMessagingDedupeRunner(
     onBlockReply: (payload: unknown) => Promise<void>,
     overrides: Partial<{
