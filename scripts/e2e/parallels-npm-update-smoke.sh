@@ -679,6 +679,7 @@ function Invoke-OpenClawUpdateWithTimeout {
 
   $updateJob = Start-Job -ScriptBlock {
     param([string]$Path, [string]$Target)
+    $env:OPENCLAW_DISABLE_BUNDLED_PLUGINS = '1'
     $output = & $Path update --tag $Target --yes --json *>&1
     [pscustomobject]@{
       ExitCode = $LASTEXITCODE
@@ -1433,7 +1434,7 @@ fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\\n");
 JS
 }
 stop_openclaw_gateway_processes() {
-  /opt/homebrew/bin/openclaw gateway stop >/dev/null 2>&1 || true
+  OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 /opt/homebrew/bin/openclaw gateway stop >/dev/null 2>&1 || true
   /usr/bin/pkill -9 -f openclaw-gateway || true
   /usr/bin/pkill -9 -f 'openclaw gateway run' || true
   /usr/bin/pkill -9 -f 'openclaw.mjs gateway' || true
@@ -1445,7 +1446,7 @@ stop_openclaw_gateway_processes() {
 # host can observe new plugin metadata mid-update and abort config validation.
 scrub_future_plugin_entries
 stop_openclaw_gateway_processes
-/opt/homebrew/bin/openclaw update --tag "$update_target" --yes --json
+OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 /opt/homebrew/bin/openclaw update --tag "$update_target" --yes --json
 # Same-guest npm upgrades can leave the old gateway process holding the old
 # bundled plugin host version. Stop it before post-update config commands.
 stop_openclaw_gateway_processes
@@ -1559,7 +1560,7 @@ fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\\n");
 JS
 }
 stop_openclaw_gateway_processes() {
-  openclaw gateway stop >/dev/null 2>&1 || true
+  OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 openclaw gateway stop >/dev/null 2>&1 || true
   pkill -9 -f openclaw-gateway || true
   pkill -9 -f 'openclaw gateway run' || true
   pkill -9 -f 'openclaw.mjs gateway' || true
@@ -1576,7 +1577,7 @@ stop_openclaw_gateway_processes() {
 # the old host can observe new plugin metadata mid-update and abort validation.
 scrub_future_plugin_entries
 stop_openclaw_gateway_processes
-openclaw update --tag "$update_target" --yes --json
+OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 openclaw update --tag "$update_target" --yes --json
 # The fresh Linux lane starts a manual gateway; stop the old process before
 # post-update config validation sees mixed old-host/new-plugin metadata.
 stop_openclaw_gateway_processes
