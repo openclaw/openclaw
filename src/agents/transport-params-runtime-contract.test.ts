@@ -1,6 +1,6 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Context, Model, SimpleStreamOptions } from "@mariozechner/pi-ai";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   GPT_PARALLEL_TOOL_CALLS_PAYLOAD_APIS,
   NON_OPENAI_GPT5_TRANSPORT_CASE,
@@ -16,6 +16,10 @@ import {
 } from "./pi-embedded-runner/extra-params.js";
 import { createOpenAIThinkingLevelWrapper } from "./pi-embedded-runner/openai-stream-wrappers.js";
 import { supportsGptParallelToolCallsPayload } from "./provider-api-families.js";
+
+beforeEach(() => {
+  installNoopProviderRuntimeDeps();
+});
 
 afterEach(() => {
   extraParamsTesting.resetProviderRuntimeDepsForTest();
@@ -95,7 +99,7 @@ describe("transport params runtime contract (Pi/OpenAI path)", () => {
     expect(payload.parallel_tool_calls).toBe(true);
   });
 
-  it("propagates OpenAI GPT-5 default transport options through stream options", () => {
+  it("propagates OpenAI GPT-5 warmup default through stream options", () => {
     const { agent, calls } = createOptionsCaptureAgent();
     applyExtraParamsToAgent(agent, undefined, "openai", "gpt-5.4");
 
@@ -111,7 +115,6 @@ describe("transport params runtime contract (Pi/OpenAI path)", () => {
 
     expect(calls).toEqual([
       expect.objectContaining({
-        transport: "auto",
         openaiWsWarmup: false,
       }),
     ]);
@@ -213,6 +216,14 @@ function runPayloadMutation(params: {
   const context: Context = { messages: [] };
   void agent.streamFn?.(params.model, context, {} as SimpleStreamOptions);
   return payload;
+}
+
+function installNoopProviderRuntimeDeps() {
+  extraParamsTesting.setProviderRuntimeDepsForTest({
+    prepareProviderExtraParams: () => undefined,
+    resolveProviderExtraParamsForTransport: () => undefined,
+    wrapProviderStreamFn: (params) => params.context.streamFn,
+  });
 }
 
 function createOptionsCaptureAgent() {

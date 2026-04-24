@@ -8,19 +8,16 @@ export const OPENAI_GPT5_TRANSPORT_DEFAULT_CASES = [
   {
     provider: "openai",
     modelId: "gpt-5.4",
-    api: "openai-responses",
   },
   {
     provider: "openai-codex",
     modelId: "gpt-5.4",
-    api: "openai-codex-responses",
   },
 ] as const;
 
 export const NON_OPENAI_GPT5_TRANSPORT_CASE = {
   provider: "openrouter",
   modelId: "gpt-5.4",
-  api: "openai-responses",
 } as const;
 
 export const GPT_PARALLEL_TOOL_CALLS_PAYLOAD_APIS = [
