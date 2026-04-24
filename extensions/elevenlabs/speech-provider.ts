@@ -1,4 +1,5 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { assertOkOrThrowProviderError } from "openclaw/plugin-sdk/provider-http";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
   SpeechDirectiveTokenParseContext,
@@ -297,9 +298,7 @@ export async function listElevenLabsVoices(params: {
       "xi-api-key": params.apiKey,
     },
   });
-  if (!res.ok) {
-    throw new Error(`ElevenLabs voices API error (${res.status})`);
-  }
+  await assertOkOrThrowProviderError(res, "ElevenLabs voices API error");
   const json = (await res.json()) as {
     voices?: Array<{
       voice_id?: string;

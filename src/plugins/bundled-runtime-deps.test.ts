@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  __testing as bundledRuntimeDepsTesting,
   createBundledRuntimeDependencyAliasMap,
   createBundledRuntimeDepsInstallArgs,
   createBundledRuntimeDepsInstallEnv,
@@ -654,6 +655,57 @@ describe("ensureBundledPluginRuntimeDeps", () => {
         installSpecs: ["alpha-runtime@1.0.0", "beta-runtime@2.0.0"],
       },
     ]);
+  });
+
+  it("does not expire active runtime-deps install locks by age alone", () => {
+    expect(
+      bundledRuntimeDepsTesting.shouldRemoveRuntimeDepsLock(
+        { pid: 123, createdAtMs: 0 },
+        Number.MAX_SAFE_INTEGER,
+        () => true,
+      ),
+    ).toBe(false);
+  });
+
+  it("removes stale runtime-deps install locks before repairing deps", () => {
+    const packageRoot = makeTempDir();
+    const pluginRoot = path.join(packageRoot, "dist", "extensions", "openai");
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginRoot, "package.json"),
+      JSON.stringify({
+        dependencies: {
+          "@mariozechner/pi-ai": "0.70.2",
+        },
+      }),
+    );
+    const lockDir = path.join(pluginRoot, ".openclaw-runtime-deps.lock");
+    fs.mkdirSync(lockDir, { recursive: true });
+    fs.writeFileSync(path.join(lockDir, "owner.json"), JSON.stringify({ pid: 0, createdAtMs: 0 }));
+
+    const calls: BundledRuntimeDepsInstallParams[] = [];
+    const result = ensureBundledPluginRuntimeDeps({
+      env: {},
+      installDeps: (params) => {
+        calls.push(params);
+        fs.mkdirSync(path.join(params.installRoot, "node_modules", "@mariozechner", "pi-ai"), {
+          recursive: true,
+        });
+        fs.writeFileSync(
+          path.join(params.installRoot, "node_modules", "@mariozechner", "pi-ai", "package.json"),
+          JSON.stringify({ name: "@mariozechner/pi-ai", version: "0.70.2" }),
+        );
+      },
+      pluginId: "openai",
+      pluginRoot,
+    });
+
+    expect(result).toEqual({
+      installedSpecs: ["@mariozechner/pi-ai@0.70.2"],
+      retainSpecs: ["@mariozechner/pi-ai@0.70.2"],
+    });
+    expect(calls).toHaveLength(1);
+    expect(fs.existsSync(lockDir)).toBe(false);
   });
 
   it("does not install when runtime deps are only workspace links", () => {

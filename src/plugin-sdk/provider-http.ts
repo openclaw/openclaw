@@ -2,6 +2,7 @@
 // capability SDKs do not depend on each other.
 
 export {
+  assertOkOrThrowHttpError,
   assertOkOrThrowProviderError,
   createProviderHttpError,
   extractProviderErrorDetail,
@@ -12,7 +13,6 @@ export {
   truncateErrorDetail,
 } from "../agents/provider-http-errors.js";
 export {
-  assertOkOrThrowHttpError,
   buildAudioTranscriptionFormData,
   createProviderOperationDeadline,
   fetchWithTimeout,
