@@ -9,6 +9,8 @@ const {
   setCurrentDispatcher,
   getCurrentDispatcher,
   getDefaultAutoSelectFamily,
+  getDefaultAutoSelectFamilyAttemptTimeout,
+  setDefaultAutoSelectFamilyAttemptTimeout,
 } = vi.hoisted(() => {
   class Agent {
     constructor(public readonly options?: Record<string, unknown>) {}
@@ -33,6 +35,8 @@ const {
   };
   const getCurrentDispatcher = () => currentDispatcher;
   const getDefaultAutoSelectFamily = vi.fn(() => undefined as boolean | undefined);
+  const getDefaultAutoSelectFamilyAttemptTimeout = vi.fn(() => 250);
+  const setDefaultAutoSelectFamilyAttemptTimeout = vi.fn();
 
   return {
     Agent,
@@ -43,6 +47,8 @@ const {
     setCurrentDispatcher,
     getCurrentDispatcher,
     getDefaultAutoSelectFamily,
+    getDefaultAutoSelectFamilyAttemptTimeout,
+    setDefaultAutoSelectFamilyAttemptTimeout,
   };
 });
 
@@ -57,6 +63,8 @@ vi.mock("undici", () => ({
 
 vi.mock("node:net", () => ({
   getDefaultAutoSelectFamily,
+  getDefaultAutoSelectFamilyAttemptTimeout,
+  setDefaultAutoSelectFamilyAttemptTimeout,
 }));
 
 vi.mock("./proxy-env.js", () => ({
@@ -89,7 +97,24 @@ describe("ensureGlobalUndiciStreamTimeouts", () => {
     resetGlobalUndiciStreamTimeoutsForTests();
     setCurrentDispatcher(new Agent());
     getDefaultAutoSelectFamily.mockReturnValue(undefined);
+    getDefaultAutoSelectFamilyAttemptTimeout.mockReturnValue(250);
     vi.mocked(hasEnvHttpProxyConfigured).mockReturnValue(false);
+  });
+
+  it("raises Node default autoSelectFamily attempt timeout when it is still defaulted", () => {
+    getDefaultAutoSelectFamily.mockReturnValue(true);
+
+    ensureGlobalUndiciStreamTimeouts();
+
+    expect(setDefaultAutoSelectFamilyAttemptTimeout).toHaveBeenCalledWith(300);
+  });
+
+  it("respects explicit Node autoSelectFamily attempt timeout overrides", () => {
+    getDefaultAutoSelectFamilyAttemptTimeout.mockReturnValue(400);
+
+    ensureGlobalUndiciStreamTimeouts();
+
+    expect(setDefaultAutoSelectFamilyAttemptTimeout).not.toHaveBeenCalled();
   });
 
   it("replaces default Agent dispatcher with extended stream timeouts", () => {
