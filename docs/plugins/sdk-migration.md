@@ -5,6 +5,7 @@ sidebarTitle: "Migrate to SDK"
 read_when:
   - You see the OPENCLAW_PLUGIN_SDK_COMPAT_DEPRECATED warning
   - You see the OPENCLAW_EXTENSION_API_DEPRECATED warning
+  - You use api.registerEmbeddedExtensionFactory
   - You are updating a plugin to the modern plugin architecture
   - You maintain an external OpenClaw plugin
 ---
@@ -23,8 +24,10 @@ anything they needed from a single entry point:
   new plugin architecture was being built.
 - **`openclaw/extension-api`** — a bridge that gave plugins direct access to
   host-side helpers like the embedded agent runner.
+- **`api.registerEmbeddedExtensionFactory(...)`** — a Pi-only bundled extension
+  hook that could observe embedded-runner events such as `tool_result`.
 
-Both surfaces are now **deprecated**. They still work at runtime, but new
+These surfaces are now **deprecated**. They still work at runtime, but new
 plugins must not use them, and existing plugins should migrate before the next
 major release removes them.
 
@@ -87,6 +90,41 @@ releases.
 ## How to migrate
 
 <Steps>
+  <Step title="Migrate Pi tool-result extensions to middleware">
+    Replace Pi-only `api.registerEmbeddedExtensionFactory(...)` tool-result
+    handlers with harness-neutral middleware.
+
+    ```typescript
+    // Before: Pi-only compatibility hook
+    api.registerEmbeddedExtensionFactory((pi) => {
+      pi.on("tool_result", async (event) => {
+        return compactToolResult(event);
+      });
+    });
+
+    // After: Pi and Codex app-server dynamic tools
+    api.registerAgentToolResultMiddleware(async (event) => {
+      return compactToolResult(event);
+    }, {
+      harnesses: ["pi", "codex-app-server"],
+    });
+    ```
+
+    Update the plugin manifest at the same time:
+
+    ```json
+    {
+      "contracts": {
+        "agentToolResultMiddleware": ["pi", "codex-app-server"]
+      }
+    }
+    ```
+
+    Keep `contracts.embeddedExtensionFactories` only for bundled compatibility
+    code that still needs direct Pi embedded-runner events.
+
+  </Step>
+
   <Step title="Migrate approval-native handlers to capability facts">
     Approval-capable channel plugins now expose native approval behavior through
     `approvalCapability.nativeRuntime` plus the shared runtime-context registry.

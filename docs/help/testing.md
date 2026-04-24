@@ -147,6 +147,7 @@ runs the same lanes before release approval.
   - Uses the pinned stable Tuwunel image `ghcr.io/matrix-construct/tuwunel:v1.5.1` by default. Override with `OPENCLAW_QA_MATRIX_TUWUNEL_IMAGE` when you need to test a different image.
   - Matrix does not expose shared credential-source flags because the lane provisions disposable users locally.
   - Writes a Matrix QA report, summary, observed-events artifact, and combined stdout/stderr output log under `.artifacts/qa-e2e/...`.
+  - Emits progress by default and enforces a hard run timeout with `OPENCLAW_QA_MATRIX_TIMEOUT_MS` (default 30 minutes). Cleanup is bounded by `OPENCLAW_QA_MATRIX_CLEANUP_TIMEOUT_MS` and failures include the recovery `docker compose ... down --remove-orphans` command.
 - `pnpm openclaw qa telegram`
   - Runs the Telegram live QA lane against a real private group using the driver and SUT bot tokens from env.
   - Requires `OPENCLAW_QA_TELEGRAM_GROUP_ID`, `OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN`, and `OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN`. The group id must be the numeric Telegram chat id.
@@ -205,12 +206,16 @@ Maintainer admin commands (pool add/remove/list) require
 CLI helpers for maintainers:
 
 ```bash
+pnpm openclaw qa credentials doctor
 pnpm openclaw qa credentials add --kind telegram --payload-file qa/telegram-credential.json
 pnpm openclaw qa credentials list --kind telegram
 pnpm openclaw qa credentials remove --credential-id <credential-id>
 ```
 
-Use `--json` for machine-readable output in scripts and CI utilities.
+Use `doctor` before live runs to check the Convex site URL, broker secrets,
+endpoint prefix, HTTP timeout, and admin/list reachability without printing
+secret values. Use `--json` for machine-readable output in scripts and CI
+utilities.
 
 Default endpoint contract (`OPENCLAW_QA_CONVEX_SITE_URL` + `/qa-credentials/v1`):
 

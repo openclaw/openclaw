@@ -210,7 +210,54 @@ describe("createCodexDynamicToolBridge", () => {
     });
   });
 
-  it("applies codex app-server tool_result extensions from the active plugin registry", async () => {
+  it("applies agent tool result middleware from the active plugin registry", async () => {
+    const registry = createEmptyPluginRegistry();
+    const handler = vi.fn(
+      async (event: { result: AgentToolResult<unknown>; toolName: string }) => ({
+        result: {
+          ...event.result,
+          content: [{ type: "text" as const, text: `${event.toolName} compacted` }],
+        },
+      }),
+    );
+    registry.agentToolResultMiddlewares.push({
+      pluginId: "tokenjuice",
+      pluginName: "Tokenjuice",
+      rawHandler: handler,
+      handler,
+      harnesses: ["codex-app-server"],
+      source: "test",
+    });
+    setActivePluginRegistry(registry);
+
+    const bridge = createBridgeWithToolResult("exec", {
+      content: [{ type: "text", text: "raw output" }],
+      details: {},
+    });
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-1",
+      namespace: null,
+      tool: "exec",
+      arguments: { command: "git status" },
+    });
+
+    expect(result).toEqual(expectInputText("exec compacted"));
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({
+        threadId: "thread-1",
+        turnId: "turn-1",
+        toolCallId: "call-1",
+        toolName: "exec",
+        args: { command: "git status" },
+      }),
+      expect.objectContaining({ harness: "codex-app-server" }),
+    );
+  });
+
+  it("still applies legacy codex app-server extension factories after middleware", async () => {
     const registry = createEmptyPluginRegistry();
     const factory = async (codex: {
       on: (
@@ -221,7 +268,7 @@ describe("createCodexDynamicToolBridge", () => {
       codex.on("tool_result", async (event) => ({
         result: {
           ...event.result,
-          content: [{ type: "text", text: `${event.toolName} compacted` }],
+          content: [{ type: "text", text: "legacy compacted" }],
         },
       }));
     };
@@ -248,7 +295,7 @@ describe("createCodexDynamicToolBridge", () => {
       arguments: { command: "git status" },
     });
 
-    expect(result).toEqual(expectInputText("exec compacted"));
+    expect(result).toEqual(expectInputText("legacy compacted"));
   });
 
   it("fires after_tool_call for successful codex tool executions", async () => {
@@ -441,29 +488,25 @@ describe("createCodexDynamicToolBridge", () => {
       ]),
     );
     const registry = createEmptyPluginRegistry();
-    const factory = async (codex: {
-      on: (
-        event: "tool_result",
-        handler: (event: any) => Promise<{ result: AgentToolResult<unknown> }>,
-      ) => void;
-    }) => {
-      codex.on("tool_result", async (event) => {
+    const handler = vi.fn(
+      async (event: { args: Record<string, unknown>; result: AgentToolResult<unknown> }) => {
         events.push("middleware");
         expect(event.args).toEqual({ command: "status" });
         return {
           result: {
             ...event.result,
-            content: [{ type: "text", text: "compacted output" }],
+            content: [{ type: "text" as const, text: "compacted output" }],
             details: { stage: "middleware" },
           },
         };
-      });
-    };
-    registry.codexAppServerExtensionFactories.push({
+      },
+    );
+    registry.agentToolResultMiddlewares.push({
       pluginId: "tokenjuice",
       pluginName: "Tokenjuice",
-      rawFactory: factory,
-      factory,
+      rawHandler: handler,
+      handler,
+      harnesses: ["codex-app-server"],
       source: "test",
     });
     setActivePluginRegistry(registry);

@@ -63,7 +63,7 @@ describe("buildEmbeddedExtensionFactories", () => {
       modelId: "gpt-5.4",
       model: undefined,
     });
-    expect(firstFactories).toHaveLength(1);
+    expect(firstFactories).toHaveLength(2);
     expect(listEmbeddedExtensionFactories()).toHaveLength(1);
 
     resetActivePluginRegistryForTest();
@@ -78,10 +78,10 @@ describe("buildEmbeddedExtensionFactories", () => {
       modelId: "gpt-5.4",
       model: undefined,
     });
-    expect(cachedFactories).toHaveLength(1);
+    expect(cachedFactories).toHaveLength(2);
 
     const handlers = new Map<string, Function>();
-    await cachedFactories[0]?.({
+    await cachedFactories[1]?.({
       on(event: string, handler: Function) {
         handlers.set(event, handler);
       },
@@ -134,7 +134,7 @@ describe("buildEmbeddedExtensionFactories", () => {
         modelId: "gpt-5.4",
         model: undefined,
       }),
-    ).toHaveLength(0);
+    ).toHaveLength(1);
   });
 
   it("rejects bundled plugins that omit the Pi embedded extension manifest contract", () => {
@@ -254,10 +254,10 @@ describe("buildEmbeddedExtensionFactories", () => {
       modelId: "gpt-5.4",
       model: undefined,
     });
-    expect(factories).toHaveLength(1);
+    expect(factories).toHaveLength(2);
 
     await expect(
-      factories[0]?.({
+      factories[1]?.({
         on() {},
       } as never),
     ).resolves.toBeUndefined();

@@ -159,6 +159,9 @@ Use the phase-specific hooks for new plugins:
 `before_agent_start` remains for compatibility. Prefer the explicit hooks above
 so your plugin does not depend on a legacy combined phase.
 
+`before_agent_start` and `agent_end` include `event.runId` when OpenClaw can
+identify the active run. The same value is also available on `ctx.runId`.
+
 Non-bundled plugins that need `llm_input`, `llm_output`, or `agent_end` must set:
 
 ```json
@@ -182,9 +185,15 @@ Prompt-mutating hooks can be disabled per plugin with
 
 Use message hooks for channel-level routing and delivery policy:
 
-- `message_received`: observe inbound content, sender, `threadId`, and metadata.
+- `message_received`: observe inbound content, sender, `threadId`, `messageId`,
+  `senderId`, optional run/session correlation, and metadata.
 - `message_sending`: rewrite `content` or return `{ cancel: true }`.
 - `message_sent`: observe final success or failure.
+
+Message hook contexts expose stable correlation fields when available:
+`ctx.sessionKey`, `ctx.runId`, `ctx.messageId`, `ctx.senderId`, `ctx.trace`,
+`ctx.traceId`, `ctx.spanId`, `ctx.parentSpanId`, and `ctx.callDepth`. Prefer
+these first-class fields before reading legacy metadata.
 
 Prefer typed `threadId` and `replyToId` fields before using channel-specific
 metadata.

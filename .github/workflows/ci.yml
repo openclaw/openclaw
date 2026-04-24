@@ -26,7 +26,7 @@ jobs:
     permissions:
       contents: read
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     outputs:
       docs_only: ${{ steps.manifest.outputs.docs_only }}
@@ -663,7 +663,7 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: needs.preflight.outputs.run_checks_fast == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -984,7 +984,7 @@ jobs:
       - name: Run extension shard
         env:
           NODE_OPTIONS: --max-old-space-size=6144
-          OPENCLAW_EXTENSION_BATCH_PARALLEL: 1
+          OPENCLAW_EXTENSION_BATCH_PARALLEL: 2
           OPENCLAW_VITEST_MAX_WORKERS: 1
           OPENCLAW_EXTENSION_BATCH: ${{ matrix.extensions_csv }}
         run: pnpm test:extensions:batch -- "$OPENCLAW_EXTENSION_BATCH"
@@ -1462,7 +1462,7 @@ jobs:
               pnpm tsgo:prod
               ;;
             lint)
-              pnpm lint
+              pnpm lint --threads=4
               ;;
             policy-guards)
               pnpm lint:webhook:no-low-level-body-read

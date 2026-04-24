@@ -67,16 +67,19 @@ export async function readResponseTextLimited(
 
 export function formatProviderErrorPayload(payload: unknown): string | undefined {
   const root = asObject(payload);
-  const subject = asObject(root?.error) ?? root;
+  const detailObject = asObject(root?.detail);
+  const subject = asObject(root?.error) ?? detailObject ?? root;
   if (!subject) {
     return undefined;
   }
   const message =
     trimToUndefined(subject.message) ??
     trimToUndefined(subject.detail) ??
-    trimToUndefined(root?.message);
+    trimToUndefined(root?.message) ??
+    trimToUndefined(root?.error) ??
+    trimToUndefined(root?.detail);
   const type = trimToUndefined(subject.type);
-  const code = trimToUndefined(subject.code);
+  const code = trimToUndefined(subject.code) ?? trimToUndefined(subject.status);
   const metadata = [type ? `type=${type}` : undefined, code ? `code=${code}` : undefined]
     .filter((value): value is string => Boolean(value))
     .join(", ");
@@ -102,4 +105,48 @@ export async function extractProviderErrorDetail(response: Response): Promise<st
   } catch {
     return truncateErrorDetail(rawBody);
   }
+}
+
+export function extractProviderRequestId(response: Response): string | undefined {
+  return (
+    trimToUndefined(response.headers.get("x-request-id")) ??
+    trimToUndefined(response.headers.get("request-id"))
+  );
+}
+
+export function formatProviderHttpErrorMessage(params: {
+  label: string;
+  status: number;
+  detail?: string;
+  requestId?: string;
+}): string {
+  const { label, status, detail, requestId } = params;
+  return (
+    `${label} (${status})` +
+    (detail ? `: ${detail}` : "") +
+    (requestId ? ` [request_id=${requestId}]` : "")
+  );
+}
+
+export async function createProviderHttpError(response: Response, label: string): Promise<Error> {
+  const detail = await extractProviderErrorDetail(response);
+  const requestId = extractProviderRequestId(response);
+  return new Error(
+    formatProviderHttpErrorMessage({
+      label,
+      status: response.status,
+      detail,
+      requestId,
+    }),
+  );
+}
+
+export async function assertOkOrThrowProviderError(
+  response: Response,
+  label: string,
+): Promise<void> {
+  if (response.ok) {
+    return;
+  }
+  throw await createProviderHttpError(response, label);
 }
