@@ -4,6 +4,7 @@ import type { ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { loadPluginManifestRegistry } from "../../plugins/manifest-registry.js";
 import {
   groupPluginDiscoveryProvidersByOrder,
   normalizePluginDiscoveryResult,
@@ -45,6 +46,21 @@ export async function resolveProviderCatalogPluginIdsForFilter(params: {
   return undefined;
 }
 
+export async function hasProviderStaticCatalogForFilter(params: {
+  cfg: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  providerFilter: string;
+}): Promise<boolean> {
+  const pluginIds = await resolveProviderCatalogPluginIdsForFilter(params);
+  if (!pluginIds || pluginIds.length === 0) {
+    return false;
+  }
+  const pluginIdSet = new Set(pluginIds);
+  return loadPluginManifestRegistry({ config: params.cfg, env: params.env }).plugins.some(
+    (plugin) => pluginIdSet.has(plugin.id) && typeof plugin.providerDiscoverySource === "string",
+  );
+}
+
 function modelFromProviderCatalog(params: {
   provider: string;
   providerConfig: ModelProviderConfig;
@@ -72,6 +88,7 @@ export async function loadProviderCatalogModelsForList(params: {
   agentDir: string;
   env?: NodeJS.ProcessEnv;
   providerFilter?: string;
+  staticOnly?: boolean;
 }): Promise<Model<Api>[]> {
   const env = params.env ?? process.env;
   const providerFilter = params.providerFilter ? normalizeProviderId(params.providerFilter) : "";
@@ -104,7 +121,7 @@ export async function loadProviderCatalogModelsForList(params: {
       env,
       onlyPluginIds: scopedPluginIds,
       includeUntrustedWorkspacePlugins: false,
-      requireCompleteDiscoveryEntryCoverage: true,
+      requireCompleteDiscoveryEntryCoverage: params.staticOnly === true,
     })
   ).filter(
     (provider) =>

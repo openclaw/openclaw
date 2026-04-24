@@ -4,6 +4,7 @@ import type { RuntimeEnv } from "../../runtime.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { resolveConfiguredEntries } from "./list.configured.js";
 import { formatErrorWithStack } from "./list.errors.js";
+import { hasProviderStaticCatalogForFilter } from "./list.provider-catalog.js";
 import { loadConfiguredListModelRegistry, loadListModelRegistry } from "./list.registry-load.js";
 import {
   appendAllModelRowSources,
@@ -58,11 +59,15 @@ export async function modelsListCommand(
   let discoveredKeys = new Set<string>();
   let availableKeys: Set<string> | undefined;
   let availabilityErrorMessage: string | undefined;
-  const useProviderCatalogFastPath = Boolean(opts.all && providerFilter === "codex");
   const { entries } = resolveConfiguredEntries(cfg);
   const configuredByKey = new Map(entries.map((entry) => [entry.key, entry]));
+  const useProviderCatalogFastPath =
+    opts.all && providerFilter
+      ? await hasProviderStaticCatalogForFilter({ cfg, providerFilter })
+      : false;
   const shouldLoadRegistry = modelRowSourcesRequireRegistry({
     all: opts.all,
+    providerFilter,
     useProviderCatalogFastPath,
   });
   try {
