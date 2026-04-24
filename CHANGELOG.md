@@ -25,6 +25,9 @@ Docs: https://docs.openclaw.ai
 - Plugins/loader: use cached discovery-mode snapshot loads for read-only plugin capability lookups, keep snapshot caches isolated from active Gateway registries, and make same-plugin channel/HTTP route re-registration idempotent so repeated snapshot or hot-reload paths no longer rerun full plugin side effects or accumulate duplicate surfaces. Fixes #51781, #52031, #54181, and #57514. Thanks @livingghost, @okuyam2y, @ShionEria, and @bbshih.
 - Plugins/loader: reuse the compatible active Gateway registry for broad runtime plugin ensure calls after a gateway-bindable boot load, so non-bundled plugins no longer re-run `register()` during the same boot path. Fixes #69250. Thanks @markthebest12.
 - Plugins/hooks: keep the gateway-bindable hook runner installed when later default-mode plugin loads activate a different registry, preserving Gateway subagent lifecycle hooks across runtime cache misses. Fixes #63166.
+- Media/input: resolve canonical inbound media refs through the shared media loader so native prompt image replay and explicit image/PDF tools can read `media://inbound/<id>` and managed inbound replay paths under workspace-only file policy.
+- Media/tools: centralize media reference scheme classification for image, PDF, image-generation, video-generation, and music-generation inputs so managed inbound refs are accepted consistently.
+- Control UI/media: resolve canonical inbound media refs before serving assistant media previews, so `media://inbound/<id>` sources no longer pass access checks but fail file open.
 
 ## 2026.4.24
 

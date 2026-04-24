@@ -73,12 +73,14 @@ Input notes:
 - local file path (including `~` expansion)
 - `file://` URL
 - `http://` and `https://` URL
+- OpenClaw-managed inbound refs such as `media://inbound/<id>`
 
 Reference notes:
 
 - Other URI schemes (for example `ftp://`) are rejected with `unsupported_pdf_reference`.
 - In sandbox mode, remote `http(s)` URLs are rejected.
 - With workspace-only file policy enabled, local file paths outside allowed roots are rejected.
+- Managed inbound refs and replayed paths under OpenClaw's inbound media store are allowed with workspace-only file policy.
 
 ## Execution modes
 
