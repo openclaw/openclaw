@@ -198,8 +198,6 @@ This pattern prevents the most common agent failure mode: acknowledging a task w
 For agents managing multiple concerns, organize standing orders as separate programs with clear boundaries:
 
 ```markdown
-# Standing Orders
-
 ## Program 1: [Domain A] (Weekly)
 
 ...
