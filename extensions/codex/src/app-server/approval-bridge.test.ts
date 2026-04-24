@@ -81,10 +81,9 @@ describe("Codex app-server approval bridge", () => {
 
   it("describes command approvals from parsed command actions when available", async () => {
     const params = createParams();
-    mockCallGatewayTool.mockResolvedValueOnce({
-      id: "plugin:approval-actions",
-      decision: "allow-once",
-    });
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-actions", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:approval-actions", decision: "allow-once" });
 
     await handleCodexAppServerApprovalRequest({
       method: "item/commandExecution/requestApproval",
@@ -121,10 +120,9 @@ describe("Codex app-server approval bridge", () => {
 
   it("sanitizes command previews before forwarding approval text and events", async () => {
     const params = createParams();
-    mockCallGatewayTool.mockResolvedValueOnce({
-      id: "plugin:approval-sanitized-command",
-      decision: "allow-once",
-    });
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-sanitized-command", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:approval-sanitized-command", decision: "allow-once" });
 
     await handleCodexAppServerApprovalRequest({
       method: "item/commandExecution/requestApproval",
@@ -159,10 +157,9 @@ describe("Codex app-server approval bridge", () => {
 
   it("preserves visible OSC-8 link labels in command previews", async () => {
     const params = createParams();
-    mockCallGatewayTool.mockResolvedValueOnce({
-      id: "plugin:approval-osc",
-      decision: "allow-once",
-    });
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-osc", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:approval-osc", decision: "allow-once" });
     const esc = "\u001b";
 
     await handleCodexAppServerApprovalRequest({
@@ -194,10 +191,9 @@ describe("Codex app-server approval bridge", () => {
 
   it("strips bidi and invisible formatting controls from command previews", async () => {
     const params = createParams();
-    mockCallGatewayTool.mockResolvedValueOnce({
-      id: "plugin:approval-bidi",
-      decision: "allow-once",
-    });
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-bidi", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:approval-bidi", decision: "allow-once" });
 
     await handleCodexAppServerApprovalRequest({
       method: "item/commandExecution/requestApproval",
@@ -228,10 +224,9 @@ describe("Codex app-server approval bridge", () => {
 
   it("marks oversized unsafe command previews as omitted", async () => {
     const params = createParams();
-    mockCallGatewayTool.mockResolvedValueOnce({
-      id: "plugin:approval-omitted-command",
-      decision: "allow-once",
-    });
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-omitted-command", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:approval-omitted-command", decision: "allow-once" });
     const esc = "\u001b";
     const oversizedPrefix = `${esc}]8;;https://example.com${esc}\\`.repeat(300);
 
@@ -267,10 +262,9 @@ describe("Codex app-server approval bridge", () => {
 
   it("marks clipped command previews even when a safe prefix remains", async () => {
     const params = createParams();
-    mockCallGatewayTool.mockResolvedValueOnce({
-      id: "plugin:approval-clipped-command",
-      decision: "allow-once",
-    });
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-clipped-command", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:approval-clipped-command", decision: "allow-once" });
 
     await handleCodexAppServerApprovalRequest({
       method: "item/commandExecution/requestApproval",
@@ -296,6 +290,104 @@ describe("Codex app-server approval bridge", () => {
         }),
       }),
     );
+  });
+
+  it("does not trust request-time decisions for two-phase command approvals", async () => {
+    const params = createParams();
+    mockCallGatewayTool
+      .mockResolvedValueOnce({
+        id: "plugin:approval-untrusted",
+        status: "accepted",
+        decision: "allow-always",
+      })
+      .mockResolvedValueOnce({ id: "plugin:approval-untrusted", decision: "deny" });
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-untrusted",
+        command: "pnpm test",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    expect(result).toEqual({ decision: "decline" });
+    expect(mockCallGatewayTool.mock.calls.map(([method]) => method)).toEqual([
+      "plugin.approval.request",
+      "plugin.approval.waitDecision",
+    ]);
+    expect(params.onAgentEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stream: "approval",
+        data: expect.objectContaining({
+          status: "denied",
+          approvalId: "plugin:approval-untrusted",
+        }),
+      }),
+    );
+  });
+
+  it("only treats own null data-property request decisions as no-route", async () => {
+    const params = createParams();
+    const inheritedDecisionResult = Object.assign(Object.create({ decision: null }), {
+      id: "plugin:approval-inherited",
+      status: "accepted",
+    });
+    mockCallGatewayTool
+      .mockResolvedValueOnce(inheritedDecisionResult)
+      .mockResolvedValueOnce({ id: "plugin:approval-inherited", decision: "allow-once" });
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-inherited",
+        command: "pnpm test",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    expect(result).toEqual({ decision: "accept" });
+    expect(mockCallGatewayTool.mock.calls.map(([method]) => method)).toEqual([
+      "plugin.approval.request",
+      "plugin.approval.waitDecision",
+    ]);
+  });
+
+  it("does not invoke request-time decision accessors", async () => {
+    const params = createParams();
+    const requestResult = {
+      id: "plugin:approval-accessor",
+      status: "accepted",
+      get decision() {
+        throw new Error("decision getter must not run");
+      },
+    };
+    mockCallGatewayTool
+      .mockResolvedValueOnce(requestResult)
+      .mockResolvedValueOnce({ id: "plugin:approval-accessor", decision: "allow-once" });
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-accessor",
+        command: "pnpm test",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    expect(result).toEqual({ decision: "accept" });
   });
 
   it("fails closed when no approval route is available", async () => {
@@ -389,10 +481,9 @@ describe("Codex app-server approval bridge", () => {
   });
   it("labels permission approvals explicitly with sanitized permission detail", async () => {
     const params = createParams();
-    mockCallGatewayTool.mockResolvedValueOnce({
-      id: "plugin:approval-3",
-      decision: "allow-once",
-    });
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-3", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:approval-3", decision: "allow-once" });
 
     const result = await handleCodexAppServerApprovalRequest({
       method: "item/permissions/requestApproval",
@@ -443,10 +534,9 @@ describe("Codex app-server approval bridge", () => {
 
   it("keeps permission detail bounded with truncated and redacted target samples", async () => {
     const params = createParams();
-    mockCallGatewayTool.mockResolvedValueOnce({
-      id: "plugin:approval-4",
-      decision: "allow-once",
-    });
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-4", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:approval-4", decision: "allow-once" });
 
     await handleCodexAppServerApprovalRequest({
       method: "item/permissions/requestApproval",
@@ -495,10 +585,9 @@ describe("Codex app-server approval bridge", () => {
 
   it("strips terminal and invisible controls from permission descriptions", async () => {
     const params = createParams();
-    mockCallGatewayTool.mockResolvedValueOnce({
-      id: "plugin:approval-permission-controls",
-      decision: "allow-once",
-    });
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-permission-controls", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:approval-permission-controls", decision: "allow-once" });
 
     await handleCodexAppServerApprovalRequest({
       method: "item/permissions/requestApproval",

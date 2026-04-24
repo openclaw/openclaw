@@ -58,6 +58,14 @@ export async function requestPluginApproval(params: {
   ) as Promise<ApprovalRequestResult | undefined>;
 }
 
+export function approvalRequestExplicitlyUnavailable(result: unknown): boolean {
+  if (result === null || result === undefined || typeof result !== "object") {
+    return false;
+  }
+  const descriptor = Object.getOwnPropertyDescriptor(result, "decision");
+  return descriptor !== undefined && "value" in descriptor && descriptor.value === null;
+}
+
 export async function waitForPluginApprovalDecision(params: {
   approvalId: string;
   signal?: AbortSignal;
