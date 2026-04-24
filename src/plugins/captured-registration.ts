@@ -4,7 +4,7 @@ import type {
   AgentToolResultMiddleware,
   AgentToolResultMiddlewareOptions,
 } from "./agent-tool-result-middleware-types.js";
-import { normalizeAgentToolResultMiddlewareHarnesses } from "./agent-tool-result-middleware.js";
+import { normalizeAgentToolResultMiddlewareRuntimes } from "./agent-tool-result-middleware.js";
 import { buildPluginApi } from "./api-builder.js";
 import type { CodexAppServerExtensionFactory } from "./codex-app-server-extension-types.js";
 import type { MemoryEmbeddingProviderAdapter } from "./memory-embedding-providers.js";
@@ -158,13 +158,13 @@ export function createCapturedPluginRegistration(params?: {
           handler: AgentToolResultMiddleware,
           options?: AgentToolResultMiddlewareOptions,
         ) {
-          const harnesses = normalizeAgentToolResultMiddlewareHarnesses(options);
+          const runtimes = normalizeAgentToolResultMiddlewareRuntimes(options);
           agentToolResultMiddlewares.push({
             pluginId: "captured-plugin-registration",
             pluginName: "Captured Plugin Registration",
             rawHandler: handler,
             handler,
-            harnesses,
+            runtimes,
             source: "captured-plugin-registration",
           });
         },

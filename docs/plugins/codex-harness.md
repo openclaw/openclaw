@@ -25,7 +25,7 @@ These are in-process OpenClaw hooks, not Codex `hooks.json` command hooks:
 - `before_message_write` for mirrored transcript records
 - `agent_end`
 
-Plugins can also register harness-neutral tool-result middleware to rewrite
+Plugins can also register runtime-neutral tool-result middleware to rewrite
 OpenClaw dynamic tool results after OpenClaw executes the tool and before the
 result is returned to Codex. This is separate from the public
 `tool_result_persist` plugin hook, which transforms OpenClaw-owned transcript

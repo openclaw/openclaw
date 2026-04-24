@@ -172,8 +172,8 @@ For the full registration API, see [SDK Overview](/plugins/sdk-overview#registra
 
 Bundled plugins can use `api.registerAgentToolResultMiddleware(...)` when they
 need async tool-result rewriting before the model sees the output. Declare the
-targeted harnesses in `contracts.agentToolResultMiddleware`, for example
-`["pi", "codex-app-server"]`. This is a trusted bundled-plugin seam; external
+targeted runtimes in `contracts.agentToolResultMiddleware`, for example
+`["pi", "codex"]`. This is a trusted bundled-plugin seam; external
 plugins should prefer regular OpenClaw plugin hooks unless OpenClaw grows an
 explicit trust policy for this capability.
 

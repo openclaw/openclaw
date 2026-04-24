@@ -153,6 +153,7 @@ export type {
   AgentToolResultMiddlewareHarness,
   AgentToolResultMiddlewareOptions,
   AgentToolResultMiddlewareResult,
+  AgentToolResultMiddlewareRuntime,
   OpenClawAgentToolResult,
 } from "./agent-tool-result-middleware-types.js";
 export type {
@@ -2155,12 +2156,12 @@ export type OpenClawPluginApi = {
    *
    * @deprecated This is a bundled compatibility seam. New tool-result transforms
    * should use `registerAgentToolResultMiddleware(...)` and declare
-   * `contracts.agentToolResultMiddleware` for the targeted harnesses.
+   * `contracts.agentToolResultMiddleware` for the targeted runtimes.
    */
   registerEmbeddedExtensionFactory: (factory: ExtensionFactory) => void;
   /** Register a Codex app-server extension factory for Codex harness tool-result middleware. Only bundled plugins may use this seam, and `contracts.embeddedExtensionFactories` must include `"codex-app-server"`. */
   registerCodexAppServerExtensionFactory: (factory: CodexAppServerExtensionFactory) => void;
-  /** Register harness-neutral tool-result middleware. Declare `contracts.agentToolResultMiddleware` for every targeted harness. */
+  /** Register runtime-neutral tool-result middleware. Declare `contracts.agentToolResultMiddleware` for every targeted runtime. */
   registerAgentToolResultMiddleware: (
     handler: AgentToolResultMiddleware,
     options?: AgentToolResultMiddlewareOptions,
