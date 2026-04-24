@@ -276,6 +276,18 @@ export const AgentDefaultsSchema = z
         model: AgentModelSchema.optional(),
         thinking: z.string().optional(),
         runTimeoutSeconds: z.number().int().min(0).optional(),
+        modelRouter: z
+          .object({
+            mode: z
+              .union([z.literal("off"), z.literal("shadow"), z.literal("pilot"), z.literal("live")])
+              .optional(),
+            telemetryPath: z.string().optional(),
+            command: z.string().optional(),
+            args: z.array(z.string()).optional(),
+            policyPath: z.string().optional(),
+          })
+          .strict()
+          .optional(),
         announceTimeoutMs: z.number().int().positive().optional(),
         requireAgentId: z.boolean().optional(),
       })

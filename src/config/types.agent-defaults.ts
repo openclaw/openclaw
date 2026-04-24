@@ -403,6 +403,19 @@ export type AgentDefaultsConfig = {
     thinking?: string;
     /** Default run timeout in seconds for spawned sub-agents (0 = no timeout). */
     runTimeoutSeconds?: number;
+    /** Shadow/pilot/live model-router recommendation hook for spawned sub-agents. */
+    modelRouter?: {
+      /** Feature flag: off disables the hook; shadow logs recommendations without changing the run model. */
+      mode?: "off" | "shadow" | "pilot" | "live";
+      /** Optional JSONL path for model-router recommendation telemetry. */
+      telemetryPath?: string;
+      /** Optional external route-model compatible CLI command. Falls back to local heuristic if unset or failing. */
+      command?: string;
+      /** Base args passed before generated route-model args. */
+      args?: string[];
+      /** Optional policy YAML path passed as --config to the command. */
+      policyPath?: string;
+    };
     /** Gateway timeout in ms for sub-agent announce delivery calls (default: 90000). */
     announceTimeoutMs?: number;
     /** Require explicit agentId in sessions_spawn (no default same-as-caller). Default: false. */

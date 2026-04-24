@@ -24,6 +24,12 @@ import {
 } from "./subagent-attachments.js";
 import { resolveSubagentCapabilities } from "./subagent-capabilities.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
+import {
+  appendSubagentModelRouterTelemetry,
+  resolveSubagentModelRouterConfig,
+  resolveSubagentModelRouterRecommendation,
+  type SubagentModelRouterRecommendation,
+} from "./subagent-model-router.js";
 import { countActiveRunsForSession, registerSubagentRun } from "./subagent-registry.js";
 import { resolveSubagentSpawnAcceptedNote } from "./subagent-spawn-accepted-note.js";
 export {
@@ -151,6 +157,7 @@ export type SpawnSubagentResult = {
   mode?: SpawnSubagentMode;
   note?: string;
   modelApplied?: boolean;
+  routerRecommendation?: SubagentModelRouterRecommendation;
   error?: string;
   attachments?: {
     count: number;
@@ -727,6 +734,11 @@ export async function spawnSubagentDirect(
     };
   }
   const { resolvedModel, thinkingOverride } = plan;
+  const routerRecommendation = await resolveSubagentModelRouterRecommendation({
+    cfg,
+    task,
+    modelOverride,
+  });
   const patchChildSession = async (patch: Record<string, unknown>): Promise<string | undefined> => {
     try {
       await callSubagentGateway({
@@ -1147,6 +1159,29 @@ export async function spawnSubagentDirect(
     label: label || undefined,
   });
 
+  if (routerRecommendation) {
+    try {
+      await appendSubagentModelRouterTelemetry({
+        config: resolveSubagentModelRouterConfig(cfg),
+        event: {
+          component: "openclaw.subagent_spawn",
+          requestId: childRunId,
+          timestamp: new Date().toISOString(),
+          mode: routerRecommendation.mode,
+          taskType: routerRecommendation.taskType,
+          recommendedModel: routerRecommendation.recommendedModel,
+          actualModel: resolvedModel,
+          routeEffectApplied: false,
+          status: "accepted",
+          source: routerRecommendation.source,
+          reason: routerRecommendation.reason,
+        },
+      });
+    } catch {
+      // Telemetry is best-effort; subagent spawn must not fail because shadow logging failed.
+    }
+  }
+
   return {
     status: "accepted",
     childSessionKey,
@@ -1157,6 +1192,7 @@ export async function spawnSubagentDirect(
       agentSessionKey: ctx.agentSessionKey,
     }),
     modelApplied: resolvedModel ? modelApplied : undefined,
+    routerRecommendation,
     attachments: attachmentsReceipt,
   };
 }
