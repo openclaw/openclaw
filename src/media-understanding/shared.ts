@@ -257,7 +257,6 @@ function shouldAutoUpgradeToTrustedEnvProxy(params: {
   if (params.dispatcherPolicy) {
     return false;
   }
-
   return shouldUseEnvHttpProxyForUrl(params.url);
 }
 

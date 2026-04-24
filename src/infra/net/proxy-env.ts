@@ -54,24 +54,29 @@ export function hasEnvHttpProxyConfigured(
   return resolveEnvHttpProxyUrl(protocol, env) !== undefined;
 }
 
+export function resolveHttpProtocolFromUrl(url: string): "http" | "https" | undefined {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol === "http:") {
+      return "http";
+    }
+    if (parsed.protocol === "https:") {
+      return "https";
+    }
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function shouldUseEnvHttpProxyForUrl(
   targetUrl: string,
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
-  let protocol: "http" | "https";
-  try {
-    const parsed = new URL(targetUrl);
-    if (parsed.protocol === "http:") {
-      protocol = "http";
-    } else if (parsed.protocol === "https:") {
-      protocol = "https";
-    } else {
-      return false;
-    }
-  } catch {
+  const protocol = resolveHttpProtocolFromUrl(targetUrl);
+  if (!protocol) {
     return false;
   }
-
   return hasEnvHttpProxyConfigured(protocol, env) && !matchesNoProxy(targetUrl, env);
 }
 
@@ -177,4 +182,17 @@ export function matchesNoProxy(targetUrl: string, env: NodeJS.ProcessEnv = proce
   }
 
   return false;
+}
+
+/**
+ * Returns true when a target URL can safely use trusted env-proxy mode:
+ * - target URL is HTTP(S)
+ * - protocol-specific HTTP(S) proxy env is configured
+ * - target URL is NOT bypassed by NO_PROXY
+ */
+export function shouldUseTrustedEnvProxyForUrl(
+  targetUrl: string,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return shouldUseEnvHttpProxyForUrl(targetUrl, env);
 }

@@ -21,6 +21,10 @@ vi.mock("../../infra/net/fetch-guard.js", () => {
   };
 });
 
+vi.mock("../../infra/net/proxy-env.js", () => ({
+  shouldUseTrustedEnvProxyForUrl: vi.fn(() => true),
+}));
+
 describe("web-guarded-fetch", () => {
   afterEach(() => {
     vi.clearAllMocks();

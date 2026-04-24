@@ -3,8 +3,10 @@ import {
   hasEnvHttpProxyConfigured,
   hasProxyEnvConfigured,
   matchesNoProxy,
+  resolveHttpProtocolFromUrl,
   resolveEnvHttpProxyUrl,
   shouldUseEnvHttpProxyForUrl,
+  shouldUseTrustedEnvProxyForUrl,
 } from "./proxy-env.js";
 
 describe("hasProxyEnvConfigured", () => {
@@ -284,5 +286,39 @@ describe("shouldUseEnvHttpProxyForUrl", () => {
     },
   ])("$name", ({ url, env, expected }) => {
     expect(shouldUseEnvHttpProxyForUrl(url, env)).toBe(expected);
+  });
+});
+
+describe("resolveHttpProtocolFromUrl", () => {
+  it.each([
+    { url: "http://example.com", expected: "http" },
+    { url: "https://example.com", expected: "https" },
+    { url: "ftp://example.com/file", expected: undefined },
+    { url: "not-a-url", expected: undefined },
+  ])("resolves $url", ({ url, expected }) => {
+    expect(resolveHttpProtocolFromUrl(url)).toBe(expected);
+  });
+});
+
+describe("shouldUseTrustedEnvProxyForUrl", () => {
+  it.each([
+    {
+      name: "matches shouldUseEnvHttpProxyForUrl for proxy-eligible targets",
+      url: "https://api.example.com/v1",
+      env: { HTTPS_PROXY: "http://proxy.test:8080" } as NodeJS.ProcessEnv,
+      expected: true,
+    },
+    {
+      name: "matches shouldUseEnvHttpProxyForUrl for NO_PROXY exclusions",
+      url: "https://internal.corp.example/v1",
+      env: {
+        HTTPS_PROXY: "http://proxy.test:8080",
+        NO_PROXY: "corp.example",
+      } as NodeJS.ProcessEnv,
+      expected: false,
+    },
+  ])("$name", ({ url, env, expected }) => {
+    expect(shouldUseTrustedEnvProxyForUrl(url, env)).toBe(expected);
+    expect(shouldUseTrustedEnvProxyForUrl(url, env)).toBe(shouldUseEnvHttpProxyForUrl(url, env));
   });
 });
