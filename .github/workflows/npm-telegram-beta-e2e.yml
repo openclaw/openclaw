@@ -52,18 +52,18 @@ jobs:
         uses: actions/github-script@v8
         with:
           script: |
-            const allowed = new Set(["admin", "write"]);
+            const allowedRoles = new Set(["admin", "maintain"]);
             const { owner, repo } = context.repo;
             const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
               owner,
               repo,
               username: context.actor,
             });
-            const permission = data.permission;
-            core.info(`Actor ${context.actor} permission: ${permission}`);
-            if (!allowed.has(permission)) {
+            const role = data.role_name ?? data.permission;
+            core.info(`Actor ${context.actor} role: ${role}`);
+            if (!allowedRoles.has(role)) {
               core.setFailed(
-                `Workflow requires write/admin access. Actor "${context.actor}" has "${permission}".`,
+                `Workflow requires maintainer/admin access. Actor "${context.actor}" has "${role}".`,
               );
             }
 

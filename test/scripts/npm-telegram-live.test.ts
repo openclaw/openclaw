@@ -6,6 +6,7 @@ import { __testing } from "../../scripts/e2e/npm-telegram-live-runner.ts";
 
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const DOCKER_SCRIPT_PATH = path.resolve(TEST_DIR, "../../scripts/e2e/npm-telegram-live-docker.sh");
+const WORKFLOW_PATH = path.resolve(TEST_DIR, "../../.github/workflows/npm-telegram-beta-e2e.yml");
 
 describe("npm Telegram live Docker E2E", () => {
   it("supports npm-specific Convex credential aliases", () => {
@@ -26,6 +27,27 @@ describe("npm Telegram live Docker E2E", () => {
     expect(script).toContain("OPENCLAW_QA_CONVEX_SECRET_CI");
     expect(script).toContain("OPENCLAW_QA_CONVEX_SECRET_MAINTAINER");
     expect(script).toContain('printf "convex"');
+  });
+
+  it("installs the npm package before forwarding runtime secrets", () => {
+    const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
+    const installRun = script.slice(
+      script.indexOf('echo "Running published npm Telegram live Docker E2E'),
+      script.indexOf('cat "$run_log"\n>"$run_log"'),
+    );
+
+    expect(installRun).toContain('npm install -g "$package_spec" --no-fund --no-audit');
+    expect(installRun).not.toContain('"${docker_env[@]}"');
+    expect(script).toContain('if [ -z "$credential_role" ] && [ -n "${CI:-}" ]');
+    expect(script).toContain('credential_role="ci"');
+  });
+
+  it("limits the manual npm beta workflow to maintainer-level actors", () => {
+    const workflow = readFileSync(WORKFLOW_PATH, "utf8");
+
+    expect(workflow).toContain('const allowedRoles = new Set(["admin", "maintain"]);');
+    expect(workflow).toContain("const role = data.role_name ?? data.permission;");
+    expect(workflow).not.toContain('new Set(["admin", "write"])');
   });
 
   it("lets npm-specific credential aliases override shared QA env", () => {
