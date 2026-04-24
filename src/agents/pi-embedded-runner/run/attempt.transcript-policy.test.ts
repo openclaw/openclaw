@@ -59,7 +59,7 @@ describe("resolveAttemptTranscriptPolicy", () => {
         workspaceDir: "/tmp/openclaw-transcript-policy",
         modelApi: "openai-responses",
       },
-      provider: "",
+      provider: "custom-openai-compatible",
       modelId: "gpt-5.4",
     });
 
