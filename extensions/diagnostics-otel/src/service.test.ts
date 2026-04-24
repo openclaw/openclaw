@@ -166,12 +166,14 @@ function createTraceOnlyContext(endpoint: string): OpenClawPluginServiceContext 
 type RegisteredLogTransport = (logObj: Record<string, unknown>) => void;
 function setupRegisteredTransports() {
   const registeredTransports: RegisteredLogTransport[] = [];
-  const stopTransport = vi.fn();
+  const stopTransports: ReturnType<typeof vi.fn>[] = [];
   registerLogTransportMock.mockImplementation((transport) => {
     registeredTransports.push(transport);
+    const stopTransport = vi.fn();
+    stopTransports.push(stopTransport);
     return stopTransport;
   });
-  return { registeredTransports, stopTransport };
+  return { registeredTransports, stopTransports };
 }
 
 async function emitAndCaptureLog(logObj: Record<string, unknown>) {
@@ -281,6 +283,73 @@ describe("diagnostics-otel service", () => {
     expect(logEmit).toHaveBeenCalled();
 
     await service.stop?.(ctx);
+  });
+
+  test("restarts without retaining prior listeners or log transports", async () => {
+    const { registeredTransports, stopTransports } = setupRegisteredTransports();
+
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true, logs: true });
+    await service.start(ctx);
+    await service.start(ctx);
+
+    expect(registerLogTransportMock).toHaveBeenCalledTimes(2);
+    expect(registeredTransports).toHaveLength(2);
+    expect(stopTransports[0]).toHaveBeenCalledTimes(1);
+    expect(logShutdown).toHaveBeenCalledTimes(1);
+    expect(sdkShutdown).toHaveBeenCalledTimes(1);
+
+    telemetryState.tracer.startSpan.mockClear();
+    emitDiagnosticEvent({
+      type: "message.processed",
+      channel: "telegram",
+      outcome: "completed",
+      durationMs: 10,
+    });
+    expect(telemetryState.tracer.startSpan).toHaveBeenCalledTimes(1);
+
+    await service.stop?.(ctx);
+    expect(stopTransports[1]).toHaveBeenCalledTimes(1);
+    expect(logShutdown).toHaveBeenCalledTimes(2);
+    expect(sdkShutdown).toHaveBeenCalledTimes(2);
+
+    telemetryState.tracer.startSpan.mockClear();
+    emitDiagnosticEvent({
+      type: "message.processed",
+      channel: "telegram",
+      outcome: "completed",
+      durationMs: 10,
+    });
+    expect(telemetryState.tracer.startSpan).not.toHaveBeenCalled();
+  });
+
+  test("tears down active handles when restarted with diagnostics disabled", async () => {
+    const { stopTransports } = setupRegisteredTransports();
+
+    const service = createDiagnosticsOtelService();
+    const enabledCtx = createOtelContext(OTEL_TEST_ENDPOINT, {
+      traces: true,
+      metrics: true,
+      logs: true,
+    });
+    await service.start(enabledCtx);
+    await service.start({
+      ...enabledCtx,
+      config: { diagnostics: { enabled: false } },
+    });
+
+    expect(stopTransports[0]).toHaveBeenCalledTimes(1);
+    expect(logShutdown).toHaveBeenCalledTimes(1);
+    expect(sdkShutdown).toHaveBeenCalledTimes(1);
+
+    telemetryState.tracer.startSpan.mockClear();
+    emitDiagnosticEvent({
+      type: "message.processed",
+      channel: "telegram",
+      outcome: "completed",
+      durationMs: 10,
+    });
+    expect(telemetryState.tracer.startSpan).not.toHaveBeenCalled();
   });
 
   test("appends signal path when endpoint contains non-signal /v1 segment", async () => {
