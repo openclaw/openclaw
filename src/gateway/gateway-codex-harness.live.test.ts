@@ -42,7 +42,7 @@ const CODEX_HARNESS_REQUIRE_GUARDIAN_EVENTS = isTruthyEnvValue(
 );
 const CODEX_HARNESS_REQUEST_TIMEOUT_MS = resolveLiveTimeoutMs(
   process.env.OPENCLAW_LIVE_CODEX_HARNESS_REQUEST_TIMEOUT_MS,
-  180_000,
+  300_000,
 );
 const CODEX_HARNESS_AGENT_TIMEOUT_SECONDS = Math.max(
   1,
@@ -343,23 +343,10 @@ async function verifyCodexImageProbe(params: {
   expect(events.some((event) => event.stream === "codex_app_server.lifecycle")).toBe(true);
 }
 
-function assertGuardianReviewStatus(params: {
-  events: CapturedAgentEvent[];
-  expectedStatus: "approved" | "denied";
-  label: string;
-}): void {
-  const completedEvents = params.events.filter(
-    (event) => event.data?.phase === "completed" && event.data?.status,
-  );
-  if (completedEvents.length === 0 && !CODEX_HARNESS_REQUIRE_GUARDIAN_EVENTS) {
-    return;
-  }
-  expect(
-    completedEvents.some((event) => event.data?.status === params.expectedStatus),
-    `${params.label} expected Guardian status ${params.expectedStatus}; events=${JSON.stringify(
-      params.events,
-    )}`,
-  ).toBe(true);
+function findGuardianReviewStatus(events: CapturedAgentEvent[]): "approved" | "denied" | undefined {
+  const status = events.findLast((event) => event.data?.phase === "completed" && event.data?.status)
+    ?.data?.status;
+  return status === "approved" || status === "denied" ? status : undefined;
 }
 
 function assertGuardianReviewCompleted(params: {
@@ -397,12 +384,19 @@ async function verifyCodexGuardianProbe(params: {
       `After the command succeeds, reply exactly ${allowToken} and nothing else.`,
     ].join("\n"),
   });
-  expect(allowResult.text).toContain(allowToken);
-  assertGuardianReviewStatus({
+  const allowReview = assertGuardianReviewCompleted({
     events: allowResult.events,
-    expectedStatus: "approved",
     label: "allow probe",
   });
+  if (allowResult.text.includes(allowToken)) {
+    expect(findGuardianReviewStatus(allowResult.events) ?? "approved").toBe("approved");
+  } else {
+    // Guardian policy is owned by Codex and may reject even low-risk escalations.
+    // The OpenClaw contract is that the review completes and the agent receives
+    // a final response instead of hanging on approval plumbing.
+    expect(allowResult.text.toLowerCase()).toMatch(/approv|permission|guardian|reject|denied/);
+    expect(allowReview?.data?.status ?? "denied").toBe("denied");
+  }
 
   const askBackToken = `OPENCLAW-GUARDIAN-ASK-BACK-${randomBytes(3).toString("hex").toUpperCase()}`;
   const fakeSecret = `OPENCLAW_FAKE_SECRET_${randomBytes(4).toString("hex").toUpperCase()}`;

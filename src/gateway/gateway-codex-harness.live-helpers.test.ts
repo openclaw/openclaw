@@ -116,6 +116,15 @@ describe("gateway codex harness live helpers", () => {
       ].join("\n"),
       ["Available model overrides here:", "", "- `gpt-5.4`"].join("\n"),
       ["Available model overrides:", "", "- `gpt-5.4`"].join("\n"),
+      ["Available models:", "", "- `gpt-5.4`", "- `gpt-5.4-mini`"].join("\n"),
+      [
+        "Available model overrides exposed in this session are:",
+        "",
+        "- `codex/gpt-5.4` (current)",
+        "- `gpt-5.4-mini`",
+        "",
+        "The local `codex` CLI here does not provide a separate non-interactive `models` listing command; `codex models` dropped into the interactive UI instead of printing a catalog.",
+      ].join("\n"),
     ];
 
     for (const text of texts) {
