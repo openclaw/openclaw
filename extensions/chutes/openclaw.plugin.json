@@ -1,6 +1,7 @@
 {
   "id": "chutes",
   "enabledByDefault": true,
+  "providerDiscoveryEntry": "./provider-discovery.ts",
   "providers": ["chutes"],
   "providerAuthEnvVars": {
     "chutes": ["CHUTES_API_KEY", "CHUTES_OAUTH_TOKEN"]
