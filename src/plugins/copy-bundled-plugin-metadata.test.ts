@@ -31,6 +31,7 @@ function createPlugin(
     packageOpenClaw?: Record<string, unknown>;
     dependencies?: Record<string, string>;
     devDependencies?: Record<string, string>;
+    optionalDependencies?: Record<string, string>;
     peerDependencies?: Record<string, string>;
     peerDependenciesMeta?: Record<string, unknown>;
   },
@@ -46,6 +47,7 @@ function createPlugin(
     name: params.packageName,
     ...(params.dependencies ? { dependencies: params.dependencies } : {}),
     ...(params.devDependencies ? { devDependencies: params.devDependencies } : {}),
+    ...(params.optionalDependencies ? { optionalDependencies: params.optionalDependencies } : {}),
     ...(params.peerDependencies ? { peerDependencies: params.peerDependencies } : {}),
     ...(params.peerDependenciesMeta ? { peerDependenciesMeta: params.peerDependenciesMeta } : {}),
     ...(params.packageOpenClaw ? { openclaw: params.packageOpenClaw } : {}),
@@ -68,6 +70,7 @@ function readBundledPackageJson(repoRoot: string, pluginId: string) {
   ) as {
     dependencies?: Record<string, string>;
     devDependencies?: Record<string, string>;
+    optionalDependencies?: Record<string, string>;
     peerDependencies?: Record<string, string>;
     peerDependenciesMeta?: Record<string, unknown>;
     openclaw?: { extensions?: string[] };
@@ -149,6 +152,7 @@ describe("copyBundledPluginMetadata", () => {
       packageOpenClaw: { extensions: ["./index.ts"], setupEntry: "./setup-entry.ts" },
       dependencies: { grammy: "1.42.0" },
       devDependencies: { "@openclaw/plugin-sdk": "workspace:*" },
+      optionalDependencies: { "@openclaw/native-helper": "workspace:*" },
       peerDependencies: { openclaw: "workspace:*" },
       peerDependenciesMeta: { openclaw: { optional: true } },
     });
@@ -158,6 +162,7 @@ describe("copyBundledPluginMetadata", () => {
     const packageJson = readBundledPackageJson(repoRoot, "telegram");
     expect(packageJson.dependencies).toEqual({ grammy: "1.42.0" });
     expect(packageJson.devDependencies).toBeUndefined();
+    expect(packageJson.optionalDependencies).toBeUndefined();
     expect(packageJson.peerDependencies).toBeUndefined();
     expect(packageJson.peerDependenciesMeta).toBeUndefined();
     expect(packageJson.openclaw?.extensions).toEqual(["./index.js"]);

@@ -86,6 +86,7 @@ function rewritePackageEntry(entry) {
 function sanitizeBundledPackageJsonForDist(packageJson) {
   const sanitized = { ...packageJson };
   delete sanitized.devDependencies;
+  delete sanitized.optionalDependencies;
   delete sanitized.peerDependencies;
   delete sanitized.peerDependenciesMeta;
   return sanitized;
