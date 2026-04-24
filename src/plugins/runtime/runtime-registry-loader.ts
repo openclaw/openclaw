@@ -59,10 +59,10 @@ function activeRegistrySatisfiesScope(
       if (expectedChannelPluginIds.length === 0) {
         return false;
       }
-      return (
-        active.channels.length > 0 &&
-        expectedChannelPluginIds.every((pluginId) => activeChannelPluginIds.has(pluginId))
-      );
+      if (active.channels.length !== expectedChannelPluginIds.length) {
+        return false;
+      }
+      return expectedChannelPluginIds.every((pluginId) => activeChannelPluginIds.has(pluginId));
     case "all":
       return false;
   }
