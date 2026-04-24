@@ -837,6 +837,24 @@ afterAll(() => {
 });
 
 describe("loadOpenClawPlugins", () => {
+  it("refreshes bundled plugin-sdk aliases without deleting the shared alias directory", () => {
+    const distRoot = makeTempDir();
+    const pluginSdkDir = path.join(distRoot, "plugin-sdk");
+    const aliasDir = path.join(distRoot, "extensions", "node_modules", "openclaw", "plugin-sdk");
+    mkdirSafe(pluginSdkDir);
+    mkdirSafe(aliasDir);
+    fs.writeFileSync(path.join(pluginSdkDir, "index.js"), "export const value = 1;\n", "utf8");
+    fs.writeFileSync(path.join(pluginSdkDir, "core.js"), "export const core = 1;\n", "utf8");
+    fs.writeFileSync(path.join(aliasDir, "sentinel.txt"), "keep\n", "utf8");
+
+    __testing.ensureOpenClawPluginSdkAlias(distRoot);
+    fs.writeFileSync(path.join(pluginSdkDir, "core.js"), "export const core = 2;\n", "utf8");
+    __testing.ensureOpenClawPluginSdkAlias(distRoot);
+
+    expect(fs.existsSync(path.join(aliasDir, "sentinel.txt"))).toBe(true);
+    expect(fs.readFileSync(path.join(aliasDir, "core.js"), "utf8")).toContain("core.js");
+  });
+
   it("disables bundled plugins by default", () => {
     const bundledDir = makeTempDir();
     writePlugin({
