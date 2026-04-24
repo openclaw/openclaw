@@ -118,6 +118,43 @@ describe("agent tool result middleware", () => {
     expect(listAgentToolResultMiddlewares("codex-app-server")).toHaveLength(0);
   });
 
+  it("rejects middleware from non-bundled plugins even when they declare the contract", () => {
+    const tmp = createTempDir();
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+
+    const pluginFile = writeTempPlugin({
+      dir: tmp,
+      id: "tool-result-middleware",
+      manifest: {
+        contracts: {
+          agentToolResultMiddleware: ["codex-app-server"],
+        },
+      },
+      body: `export default { id: "tool-result-middleware", register(api) {
+  api.registerAgentToolResultMiddleware(() => undefined, { harnesses: ["codex-app-server"] });
+} };`,
+    });
+
+    const registry = loadOpenClawPlugins({
+      workspaceDir: tmp,
+      config: {
+        plugins: {
+          load: { paths: [pluginFile] },
+          allow: ["tool-result-middleware"],
+        },
+      },
+    });
+
+    expect(registry.diagnostics).toContainEqual(
+      expect.objectContaining({
+        level: "error",
+        pluginId: "tool-result-middleware",
+        message: "only bundled plugins can register agent tool result middleware",
+      }),
+    );
+    expect(listAgentToolResultMiddlewares("codex-app-server")).toHaveLength(0);
+  });
+
   it("merges harnesses when a plugin registers the same middleware function twice", () => {
     const tmp = createTempDir();
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = tmp;

@@ -91,8 +91,9 @@ releases.
 
 <Steps>
   <Step title="Migrate Pi tool-result extensions to middleware">
-    Replace Pi-only `api.registerEmbeddedExtensionFactory(...)` tool-result
-    handlers with harness-neutral middleware.
+    Bundled plugins should replace Pi-only
+    `api.registerEmbeddedExtensionFactory(...)` tool-result handlers with
+    harness-neutral middleware.
 
     ```typescript
     // Before: Pi-only compatibility hook
@@ -121,7 +122,9 @@ releases.
     ```
 
     Keep `contracts.embeddedExtensionFactories` only for bundled compatibility
-    code that still needs direct Pi embedded-runner events.
+    code that still needs direct Pi embedded-runner events. External plugins
+    cannot register tool-result middleware because it can rewrite high-trust
+    tool output before the model sees it.
 
   </Step>
 
