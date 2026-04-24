@@ -9,6 +9,12 @@ import type { CodexAppServerClient } from "./src/app-server/client.js";
 import { resolveCodexAppServerRuntimeOptions } from "./src/app-server/config.js";
 import { readModelListResult } from "./src/app-server/models.js";
 import {
+  assertCodexThreadStartResponse,
+  assertCodexTurnStartResponse,
+  readCodexErrorNotification,
+  readCodexTurnCompletedNotification,
+} from "./src/app-server/protocol-validators.js";
+import {
   isJsonObject,
   type CodexServerNotification,
   type CodexThreadItem,
@@ -17,13 +23,6 @@ import {
   type CodexTurnStartParams,
   type JsonObject,
 } from "./src/app-server/protocol.js";
-import {
-  assertCodexThreadStartResponse,
-  assertCodexTurnStartResponse,
-  readCodexErrorNotification,
-  readCodexTurnCompletedNotification,
-} from "./src/app-server/protocol-validators.js";
-import { createIsolatedCodexAppServerClient } from "./src/app-server/shared-client.js";
 
 const DEFAULT_CODEX_IMAGE_MODEL =
   FALLBACK_CODEX_MODELS.find((model) => model.inputModalities.includes("image"))?.id ??
@@ -83,11 +82,14 @@ async function describeCodexImages(
   const ownsClient = !options.clientFactory;
   const client = options.clientFactory
     ? await options.clientFactory(appServer.start, req.profile)
-    : await createIsolatedCodexAppServerClient({
-        startOptions: appServer.start,
-        timeoutMs,
-        authProfileId: req.profile,
-      });
+    : await import("./src/app-server/shared-client.js").then(
+        ({ createIsolatedCodexAppServerClient }) =>
+          createIsolatedCodexAppServerClient({
+            startOptions: appServer.start,
+            timeoutMs,
+            authProfileId: req.profile,
+          }),
+      );
   const abortController = new AbortController();
   const timeout = setTimeout(() => abortController.abort("timeout"), timeoutMs);
   timeout.unref?.();
@@ -229,7 +231,8 @@ function createCodexImageTurnCollector(threadId: string) {
       return;
     }
     if (notification.method === "turn/completed") {
-      completedTurn = readCodexTurnCompletedNotification(notification.params)?.turn ?? completedTurn;
+      completedTurn =
+        readCodexTurnCompletedNotification(notification.params)?.turn ?? completedTurn;
       resolveCompletion?.();
       return;
     }
