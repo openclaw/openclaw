@@ -33,6 +33,14 @@ read_when:
     ```bash
     openclaw models list --provider deepseek
     ```
+
+    To inspect the bundled static catalog without requiring a running Gateway,
+    use:
+
+    ```bash
+    openclaw models list --all --provider deepseek
+    ```
+
   </Step>
 </Steps>
 
@@ -72,6 +80,38 @@ V4 models support DeepSeek's `thinking` control. OpenClaw also replays
 DeepSeek `reasoning_content` on follow-up turns so thinking sessions with tool
 calls can continue.
 </Tip>
+
+## Thinking and tools
+
+DeepSeek V4 thinking sessions have a stricter replay contract than most
+OpenAI-compatible providers: when a thinking-enabled assistant message includes
+tool calls, DeepSeek expects the prior assistant `reasoning_content` to be sent
+back on the follow-up request. OpenClaw handles this inside the DeepSeek plugin,
+so normal multi-turn tool use works with `deepseek/deepseek-v4-flash` and
+`deepseek/deepseek-v4-pro`.
+
+When thinking is disabled in OpenClaw (including the UI **None** selection),
+OpenClaw sends DeepSeek `thinking: { type: "disabled" }` and strips replayed
+`reasoning_content` from the outgoing history. This keeps disabled-thinking
+sessions on the non-thinking DeepSeek path.
+
+Use `deepseek/deepseek-v4-flash` for the default fast path. Use
+`deepseek/deepseek-v4-pro` when you want the stronger V4 model and can accept
+higher cost or latency.
+
+## Live testing
+
+The direct live model suite includes DeepSeek V4 in the modern model set. To
+run only the DeepSeek V4 direct-model checks:
+
+```bash
+OPENCLAW_LIVE_PROVIDERS=deepseek \
+OPENCLAW_LIVE_MODELS="deepseek/deepseek-v4-flash,deepseek/deepseek-v4-pro" \
+pnpm test:live src/agents/models.profiles.live.test.ts
+```
+
+That live check verifies both V4 models can complete and that thinking/tool
+follow-up turns preserve the replay payload DeepSeek requires.
 
 ## Config example
 
