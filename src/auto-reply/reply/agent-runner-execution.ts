@@ -11,6 +11,8 @@ import {
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionBinding } from "../../agents/cli-session.js";
+import { claudeCliSessionTranscriptHasContent } from "../../agents/command/attempt-execution.helpers.js";
+import { clearCliSessionInStore } from "../../agents/command/session-store.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { runWithModelFallback, isFallbackSummaryError } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
@@ -941,10 +943,37 @@ export async function runAgentTurnWithFallback(params: {
                 startedAt,
               },
             });
-            const cliSessionBinding = getCliSessionBinding(
-              params.getActiveSessionEntry(),
-              provider,
-            );
+            let cliSessionBinding = getCliSessionBinding(params.getActiveSessionEntry(), provider);
+            // Phantom-resume guard. The /command path runs the same check in
+            // src/agents/command/attempt-execution.ts (upstream PR #70317),
+            // but the auto-reply path did not, so Signal/WhatsApp/etc turns
+            // would happily pass --resume <stale-uuid> to claude-cli and see
+            // `{"is_error":true,"errors":["No conversation found with session
+            // ID: ..."]}`. That surfaced to the user as the generic
+            // "Claude CLI failed." banner because the error-extractor in
+            // claude-live-session.ts::createResultError drops the `errors`
+            // array. Mirror the guard here so both paths clear stale bindings
+            // before spawning claude.
+            if (
+              provider.trim().toLowerCase() === "claude-cli" &&
+              cliSessionBinding?.sessionId &&
+              !(await claudeCliSessionTranscriptHasContent({
+                sessionId: cliSessionBinding.sessionId,
+              }))
+            ) {
+              logVerbose(
+                `cli session reset: provider=${sanitizeForLog(provider)} reason=transcript-missing sessionKey=${params.sessionKey ?? "<unknown>"}`,
+              );
+              if (params.sessionKey && params.activeSessionStore && params.storePath) {
+                await clearCliSessionInStore({
+                  provider,
+                  sessionKey: params.sessionKey,
+                  sessionStore: params.activeSessionStore,
+                  storePath: params.storePath,
+                });
+              }
+              cliSessionBinding = undefined;
+            }
             const authProfile = resolveRunAuthProfile(params.followupRun.run, provider, {
               config: runtimeConfig,
             });
