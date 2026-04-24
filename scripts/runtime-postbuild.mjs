@@ -85,7 +85,20 @@ export function runRuntimePostBuild(params = {}) {
   copyPluginSdkRootAlias(params);
   copyBundledPluginMetadata(params);
   writeOfficialChannelCatalog(params);
-  stageBundledPluginRuntimeDeps(params);
+  try {
+    stageBundledPluginRuntimeDeps(params);
+  } catch (err) {
+    // During git-install builds (GEMMACLAW_PREPARING=1), staging failures are
+    // non-fatal. Plugins whose runtime deps failed to stage will degrade at
+    // runtime, but the core CLI (gemmaclaw setup, gemmaclaw --version) works.
+    if (process.env.GEMMACLAW_PREPARING === "1") {
+      console.warn(
+        `[runtime-postbuild] staging runtime deps failed (non-fatal in git-install): ${err.message}`,
+      );
+    } else {
+      throw err;
+    }
+  }
   stageBundledPluginRuntime(params);
   writeStableRootRuntimeAliases(params);
   copyStaticExtensionAssets(params);
