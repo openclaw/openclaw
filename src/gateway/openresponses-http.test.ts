@@ -981,18 +981,33 @@ describe("OpenResponses HTTP API (e2e)", () => {
     const eventTypes = events.map((event) => event.event).filter(Boolean);
 
     // Find the indices of the four function-call related events so we can also
-    // assert ordering, not just presence.
-    const fcAddedIdx = eventTypes.findIndex((t) => t === "response.output_item.added");
+    // assert ordering, not just presence. output_item.{added,done} also fire
+    // for the assistant text item that precedes the function_call, so we
+    // can't just match on the event type — we have to look at the embedded
+    // item.type to find the function_call's bookend events specifically.
+    const isFunctionCallItemEvent = (event: { event?: string; data?: string }, eventType: string) => {
+      if (event.event !== eventType) {
+        return false;
+      }
+      try {
+        const parsed = JSON.parse(event.data ?? "{}") as { item?: { type?: string } };
+        return parsed.item?.type === "function_call";
+      } catch {
+        return false;
+      }
+    };
+    const fcAddedIdx = events.findIndex((event) =>
+      isFunctionCallItemEvent(event, "response.output_item.added"),
+    );
+    const fcDoneIdx = events.findIndex((event) =>
+      isFunctionCallItemEvent(event, "response.output_item.done"),
+    );
     const fcArgsDeltaIdx = eventTypes.findIndex(
       (t) => t === "response.function_call_arguments.delta",
     );
     const fcArgsDoneIdx = eventTypes.findIndex(
       (t) => t === "response.function_call_arguments.done",
     );
-    // output_item.done fires twice in this scenario (once for the assistant
-    // message, once for the function_call). We want the function_call one,
-    // which is the LAST output_item.done before completion.
-    const fcDoneIdx = eventTypes.lastIndexOf("response.output_item.done");
 
     // All four must be present.
     expect(
