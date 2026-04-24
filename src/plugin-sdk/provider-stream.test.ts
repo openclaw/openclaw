@@ -10,6 +10,7 @@ import {
   composeProviderStreamWrappers,
   createMoonshotThinkingWrapper,
   createToolStreamWrapper,
+  DEEPSEEK_THINKING_STREAM_HOOKS,
   GOOGLE_THINKING_STREAM_HOOKS,
   KILOCODE_THINKING_STREAM_HOOKS,
   MINIMAX_FAST_MODE_STREAM_HOOKS,
@@ -215,6 +216,80 @@ describe("buildProviderStreamFamilyHooks", () => {
       thinking: { type: "disabled" },
     });
     expect((capturedPayload?.thinking as Record<string, unknown>) ?? {}).not.toHaveProperty("keep");
+
+    const deepseekHooks = DEEPSEEK_THINKING_STREAM_HOOKS;
+    const deepseekStream = requireStreamFn(
+      requireWrapStreamFn(deepseekHooks.wrapStreamFn)({
+        streamFn: baseStreamFn,
+        thinkingLevel: "low",
+        modelId: "deepseek-v4-flash",
+      } as never),
+    );
+    payloadSeed = { tool_choice: "required" };
+    await deepseekStream(
+      { api: "openai-completions", id: "deepseek-v4-flash" } as never,
+      {} as never,
+      {},
+    );
+    expect(capturedPayload).toMatchObject({
+      config: { thinkingConfig: { thinkingBudget: -1 } },
+      tool_choice: "required",
+      thinking: { type: "enabled" },
+    });
+
+    const deepseekProStream = requireStreamFn(
+      requireWrapStreamFn(deepseekHooks.wrapStreamFn)({
+        streamFn: baseStreamFn,
+        thinkingLevel: "low",
+        modelId: "deepseek-v4-pro",
+      } as never),
+    );
+    await deepseekProStream(
+      { api: "openai-completions", id: "deepseek-v4-pro" } as never,
+      {} as never,
+      {},
+    );
+    expect(capturedPayload).toMatchObject({
+      config: { thinkingConfig: { thinkingBudget: -1 } },
+      thinking: { type: "enabled" },
+    });
+
+    const deepseekReasonerStream = requireStreamFn(
+      requireWrapStreamFn(deepseekHooks.wrapStreamFn)({
+        streamFn: baseStreamFn,
+        thinkingLevel: "off",
+        modelId: "deepseek-reasoner",
+        extraParams: { thinking: { type: "disabled" } },
+      } as never),
+    );
+    await deepseekReasonerStream(
+      { api: "openai-completions", id: "deepseek-reasoner" } as never,
+      {} as never,
+      {},
+    );
+    expect(capturedPayload).toMatchObject({
+      config: { thinkingConfig: { thinkingBudget: -1 } },
+      thinking: { type: "enabled" },
+    });
+
+    payloadSeed = { thinking: { type: "enabled" } };
+    const deepseekChatStream = requireStreamFn(
+      requireWrapStreamFn(deepseekHooks.wrapStreamFn)({
+        streamFn: baseStreamFn,
+        thinkingLevel: "low",
+        modelId: "deepseek-chat",
+        extraParams: { thinking: { type: "enabled" } },
+      } as never),
+    );
+    await deepseekChatStream(
+      { api: "openai-completions", id: "deepseek-chat" } as never,
+      {} as never,
+      {},
+    );
+    expect(capturedPayload).toMatchObject({
+      config: { thinkingConfig: { thinkingBudget: -1 } },
+    });
+    expect(capturedPayload).not.toHaveProperty("thinking");
 
     const openAiHooks = OPENAI_RESPONSES_STREAM_HOOKS;
     void requireStreamFn(

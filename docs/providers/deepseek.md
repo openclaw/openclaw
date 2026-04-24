@@ -26,7 +26,7 @@ read_when:
     openclaw onboard --auth-choice deepseek-api-key
     ```
 
-    This will prompt for your API key and set `deepseek/deepseek-chat` as the default model.
+    This will prompt for your API key and set `deepseek/deepseek-v4-flash` as the default model.
 
   </Step>
   <Step title="Verify models are available">
@@ -60,13 +60,15 @@ is available to that process (for example, in `~/.openclaw/.env` or via
 
 ## Built-in catalog
 
-| Model ref                    | Name              | Input | Context | Max output | Notes                                             |
-| ---------------------------- | ----------------- | ----- | ------- | ---------- | ------------------------------------------------- |
-| `deepseek/deepseek-chat`     | DeepSeek Chat     | text  | 131,072 | 8,192      | Default model; DeepSeek V3.2 non-thinking surface |
-| `deepseek/deepseek-reasoner` | DeepSeek Reasoner | text  | 131,072 | 65,536     | Reasoning-enabled V3.2 surface                    |
+| Model ref                    | Name                       | Input | Context   | Max output | Notes                                                              |
+| ---------------------------- | -------------------------- | ----- | --------- | ---------- | ------------------------------------------------------------------ |
+| `deepseek/deepseek-v4-flash` | DeepSeek V4 Flash          | text  | 1,000,000 | 384,000    | Default model; supports DeepSeek's non-thinking and thinking modes |
+| `deepseek/deepseek-v4-pro`   | DeepSeek V4 Pro            | text  | 1,000,000 | 384,000    | Supports DeepSeek's non-thinking and thinking modes                |
+| `deepseek/deepseek-chat`     | DeepSeek Chat (legacy)     | text  | 1,000,000 | 384,000    | Compatibility alias for `deepseek-v4-flash` non-thinking mode      |
+| `deepseek/deepseek-reasoner` | DeepSeek Reasoner (legacy) | text  | 1,000,000 | 65,536     | Compatibility alias for `deepseek-v4-flash` thinking mode          |
 
 <Tip>
-Both bundled models currently advertise streaming usage compatibility in source.
+`deepseek-chat` and `deepseek-reasoner` are kept for compatibility and DeepSeek plans to deprecate both model names on 2026-07-24.
 </Tip>
 
 ## Config example
@@ -76,7 +78,7 @@ Both bundled models currently advertise streaming usage compatibility in source.
   env: { DEEPSEEK_API_KEY: "sk-..." },
   agents: {
     defaults: {
-      model: { primary: "deepseek/deepseek-chat" },
+      model: { primary: "deepseek/deepseek-v4-flash" },
     },
   },
 }

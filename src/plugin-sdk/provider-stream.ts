@@ -28,6 +28,7 @@ import type { ProviderPlugin } from "../plugins/types.js";
 import type { ProviderWrapStreamFnContext } from "./plugin-entry.js";
 import {
   createMoonshotThinkingWrapper,
+  createPayloadPatchStreamWrapper,
   createToolStreamWrapper,
   resolveMoonshotThinkingType,
 } from "./provider-stream-shared.js";
@@ -49,7 +50,55 @@ export {
   streamWithPayloadPatch,
 } from "./provider-stream-shared.js";
 
+type DeepSeekThinkingType = "enabled" | "disabled";
+const DEEPSEEK_V4_MODEL_IDS = new Set(["deepseek-v4-flash", "deepseek-v4-pro"]);
+
+function isDeepSeekV4ModelId(modelId: string | undefined): boolean {
+  return modelId ? DEEPSEEK_V4_MODEL_IDS.has(modelId.trim().toLowerCase()) : false;
+}
+
+function normalizeDeepSeekThinkingType(value: unknown): DeepSeekThinkingType | undefined {
+  if (typeof value === "boolean") {
+    return value ? "enabled" : "disabled";
+  }
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (["enabled", "enable", "on", "true"].includes(normalized)) {
+      return "enabled";
+    }
+    if (["disabled", "disable", "off", "false"].includes(normalized)) {
+      return "disabled";
+    }
+  }
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return normalizeDeepSeekThinkingType((value as Record<string, unknown>).type);
+  }
+  return undefined;
+}
+
+function resolveDeepSeekThinkingType(params: {
+  configuredThinking: unknown;
+  modelId?: string;
+  thinkingLevel?: string;
+}): DeepSeekThinkingType | undefined {
+  if (params.modelId === "deepseek-reasoner") {
+    return "enabled";
+  }
+  if (!isDeepSeekV4ModelId(params.modelId)) {
+    return undefined;
+  }
+  const configured = normalizeDeepSeekThinkingType(params.configuredThinking);
+  if (configured) {
+    return configured;
+  }
+  if (!params.thinkingLevel) {
+    return undefined;
+  }
+  return params.thinkingLevel === "off" ? "disabled" : "enabled";
+}
+
 export type ProviderStreamFamily =
+  | "deepseek-thinking"
   | "google-thinking"
   | "kilocode-thinking"
   | "moonshot-thinking"
@@ -64,6 +113,25 @@ export function buildProviderStreamFamilyHooks(
   family: ProviderStreamFamily,
 ): ProviderStreamFamilyHooks {
   switch (family) {
+    case "deepseek-thinking":
+      return {
+        wrapStreamFn: (ctx: ProviderWrapStreamFnContext) =>
+          createPayloadPatchStreamWrapper(ctx.streamFn, ({ payload, model }) => {
+            const modelId = ctx.modelId ?? model.id;
+            if (modelId === "deepseek-chat") {
+              delete payload.thinking;
+              return;
+            }
+            const thinkingType = resolveDeepSeekThinkingType({
+              configuredThinking: ctx.extraParams?.thinking,
+              modelId,
+              thinkingLevel: ctx.thinkingLevel,
+            });
+            if (thinkingType) {
+              payload.thinking = { type: thinkingType };
+            }
+          }),
+      };
     case "google-thinking":
       return {
         wrapStreamFn: (ctx: ProviderWrapStreamFnContext) =>
@@ -148,6 +216,7 @@ export function buildProviderStreamFamilyHooks(
   throw new Error("Unsupported provider stream family");
 }
 
+export const DEEPSEEK_THINKING_STREAM_HOOKS = buildProviderStreamFamilyHooks("deepseek-thinking");
 export const GOOGLE_THINKING_STREAM_HOOKS = buildProviderStreamFamilyHooks("google-thinking");
 export const KILOCODE_THINKING_STREAM_HOOKS = buildProviderStreamFamilyHooks("kilocode-thinking");
 export const MOONSHOT_THINKING_STREAM_HOOKS = buildProviderStreamFamilyHooks("moonshot-thinking");
