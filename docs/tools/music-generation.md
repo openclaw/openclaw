@@ -4,10 +4,8 @@ read_when:
   - Generating music or audio via the agent
   - Configuring music generation providers and models
   - Understanding the music_generate tool parameters
-title: "Music Generation"
+title: "Music generation"
 ---
-
-# Music Generation
 
 The `music_generate` tool lets the agent create music or audio through the
 shared music-generation capability with configured providers such as Google,
@@ -127,6 +125,7 @@ Direct generation example:
 | `image`           | string   | Single reference image path or URL                                                                |
 | `images`          | string[] | Multiple reference images (up to 10)                                                              |
 | `durationSeconds` | number   | Target duration in seconds when the provider supports duration hints                              |
+| `timeoutMs`       | number   | Optional provider request timeout in milliseconds                                                 |
 | `format`          | string   | Output format hint (`mp3` or `wav`) when the provider supports it                                 |
 | `filename`        | string   | Output filename hint                                                                              |
 

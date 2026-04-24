@@ -3,10 +3,8 @@ summary: "Apply multi-file patches with the apply_patch tool"
 read_when:
   - You need structured file edits across multiple files
   - You want to document or debug patch-based edits
-title: "apply_patch Tool"
+title: "apply_patch tool"
 ---
-
-# apply_patch tool
 
 Apply file changes using a structured patch format. This is ideal for multi-file
 or multi-hunk edits where a single `edit` call would be brittle.
@@ -50,3 +48,9 @@ The tool accepts a single `input` string that wraps one or more file operations:
   "input": "*** Begin Patch\n*** Update File: src/index.ts\n@@\n-const foo = 1\n+const foo = 2\n*** End Patch"
 }
 ```
+
+## Related
+
+- [Diffs](/tools/diffs)
+- [Exec tool](/tools/exec)
+- [Code execution](/tools/code-execution)

@@ -680,7 +680,7 @@ describeLive("live models (profile keys)", () => {
             if (
               model.provider === "openai" &&
               model.api === "openai-responses" &&
-              model.id === "gpt-5.4"
+              (model.id === "gpt-5.5" || model.id === "gpt-5.4")
             ) {
               logProgress(`${progressLabel}: tool-only regression`);
               const noopTool = {

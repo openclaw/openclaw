@@ -1,14 +1,11 @@
+import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk/core";
 import {
   deliverTextOrMediaReply,
   isReasoningReplyPayload,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
-import {
-  resolveAgentScopedOutboundMediaAccess,
-  type OpenClawConfig,
-  type PluginRuntime,
-  type ReplyPayload,
-} from "./runtime-api.js";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import { resolveAgentScopedOutboundMediaAccess } from "./runtime-api.js";
 
 type MarkdownTableMode = Parameters<PluginRuntime["channel"]["text"]["convertMarkdownTables"]>[1];
 

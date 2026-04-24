@@ -289,7 +289,7 @@ describe("googlechatPlugin outbound sendMedia", () => {
     expect(loadOutboundMediaFromUrl).toHaveBeenCalledWith(
       "/tmp/workspace/image.png",
       expect.objectContaining({
-        localRoots: [],
+        mediaLocalRoots: [],
       }),
     );
     expect(fetchRemoteMedia).not.toHaveBeenCalled();

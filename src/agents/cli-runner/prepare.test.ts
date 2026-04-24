@@ -1,10 +1,11 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
+import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { __testing as cliBackendsTesting } from "../cli-backends.js";
 import { buildActiveMusicGenerationTaskPromptContextForSession } from "../music-generation-task-status.js";
 import { buildActiveVideoGenerationTaskPromptContextForSession } from "../video-generation-task-status.js";
 import {
@@ -51,10 +52,11 @@ const mockBuildActiveMusicGenerationTaskPromptContextForSession = vi.mocked(
   buildActiveMusicGenerationTaskPromptContextForSession,
 );
 
-function createCliBackendConfig(): OpenClawConfig {
+function createCliBackendConfig(params: { systemPromptOverride?: string } = {}): OpenClawConfig {
   return {
     agents: {
       defaults: {
+        systemPromptOverride: params.systemPromptOverride ?? "test system prompt",
         cliBackends: {
           "test-cli": {
             command: "test-cli",
@@ -73,7 +75,9 @@ function createCliBackendConfig(): OpenClawConfig {
 
 function createSessionFile() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-prepare-"));
-  const sessionFile = path.join(dir, "session.jsonl");
+  vi.stubEnv("OPENCLAW_STATE_DIR", dir);
+  const sessionFile = path.join(dir, "agents", "main", "sessions", "session-test.jsonl");
+  fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
   fs.writeFileSync(
     sessionFile,
     `${JSON.stringify({
@@ -88,8 +92,34 @@ function createSessionFile() {
   return { dir, sessionFile };
 }
 
+function appendTranscriptEntry(
+  sessionFile: string,
+  entry: {
+    id: string;
+    parentId: string | null;
+    timestamp: string;
+    message: unknown;
+  },
+): void {
+  fs.appendFileSync(
+    sessionFile,
+    `${JSON.stringify({
+      type: "message",
+      id: entry.id,
+      parentId: entry.parentId,
+      timestamp: entry.timestamp,
+      message: entry.message,
+    })}\n`,
+    "utf-8",
+  );
+}
+
 describe("shouldSkipLocalCliCredentialEpoch", () => {
   beforeEach(() => {
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => undefined,
+      resolveRuntimeCliBackends: () => [],
+    });
     setCliRunnerPrepareTestDeps({
       makeBootstrapWarn: vi.fn(() => () => undefined),
       resolveBootstrapContextForRun: vi.fn(async () => ({
@@ -104,9 +134,11 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
   });
 
   afterEach(() => {
+    cliBackendsTesting.resetDepsForTest();
     mockGetGlobalHookRunner.mockReset();
     mockBuildActiveVideoGenerationTaskPromptContextForSession.mockReset();
     mockBuildActiveMusicGenerationTaskPromptContextForSession.mockReset();
+    vi.unstubAllEnvs();
   });
 
   it("skips local cli auth only when a profile-owned execution was prepared", () => {
@@ -144,24 +176,33 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
   it("applies prompt-build hook context to Claude-style CLI preparation", async () => {
     const { dir, sessionFile } = createSessionFile();
     try {
-      const sessionManager = SessionManager.open(sessionFile);
-      sessionManager.appendMessage({ role: "user", content: "earlier context", timestamp: 1 });
-      sessionManager.appendMessage({
-        role: "assistant",
-        content: [{ type: "text", text: "earlier reply" }],
-        api: "responses",
-        provider: "test-cli",
-        model: "test-model",
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      appendTranscriptEntry(sessionFile, {
+        id: "msg-1",
+        parentId: null,
+        timestamp: new Date(1).toISOString(),
+        message: { role: "user", content: "earlier context", timestamp: 1 },
+      });
+      appendTranscriptEntry(sessionFile, {
+        id: "msg-2",
+        parentId: "msg-1",
+        timestamp: new Date(2).toISOString(),
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "earlier reply" }],
+          api: "responses",
+          provider: "test-cli",
+          model: "test-model",
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          stopReason: "stop",
+          timestamp: 2,
         },
-        stopReason: "stop",
-        timestamp: 2,
       });
       const hookRunner = {
         hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
@@ -302,12 +343,11 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         model: "test-model",
         timeoutMs: 1_000,
         runId: "run-test-hook-failure",
-        extraSystemPrompt: "base extra system",
-        config: createCliBackendConfig(),
+        config: createCliBackendConfig({ systemPromptOverride: "base extra system" }),
       });
 
       expect(context.params.prompt).toBe("latest ask");
-      expect(context.systemPrompt).toContain("base extra system");
+      expect(context.systemPrompt).toBe("base extra system");
       expect(context.systemPrompt).not.toContain("hook exploded");
       expect(hookRunner.runBeforePromptBuild).toHaveBeenCalledOnce();
     } finally {

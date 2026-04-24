@@ -447,7 +447,7 @@ function createPluginJitiLoader(options: Pick<PluginLoadOptions, "pluginSdkResol
       cache: jitiLoaders,
       modulePath,
       importerUrl: import.meta.url,
-      jitiFilename: import.meta.url,
+      jitiFilename: modulePath,
       pluginSdkResolution: options.pluginSdkResolution,
       // Source .ts runtime shims import sibling ".js" specifiers that only exist
       // after build. Disable native loading for source entries so Jiti rewrites
@@ -2208,7 +2208,6 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
               );
             }
           }
-          ensureOpenClawPluginSdkAlias(path.dirname(path.dirname(pluginRoot)));
           if (path.resolve(installRoot) !== path.resolve(pluginRoot)) {
             registerBundledRuntimeDependencyNodePath(installRoot);
             runtimePluginRoot = mirrorBundledPluginRuntimeRoot({
@@ -2227,6 +2226,8 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
               pluginRoot,
               mirroredRoot: runtimePluginRoot,
             });
+          } else {
+            ensureOpenClawPluginSdkAlias(path.dirname(path.dirname(pluginRoot)));
           }
         } catch (error) {
           pushPluginLoadError(`failed to install bundled runtime deps: ${String(error)}`);

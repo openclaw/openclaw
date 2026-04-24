@@ -1,10 +1,13 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
 import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
+import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { shouldSuppressBuiltInModel } from "../../agents/model-suppression.js";
 import { normalizeProviderId } from "../../agents/provider-id.js";
+import type { ModelDefinitionConfig, ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { loadModelRegistry, toModelRow } from "./list.registry.js";
+import type { ListRowModel } from "./list.model-row.js";
+import { toModelRow } from "./list.registry.js";
 import {
   loadModelCatalog,
   loadProviderCatalogModelsForList,
@@ -20,7 +23,7 @@ type RowFilter = {
   local?: boolean;
 };
 
-type RowBuilderContext = {
+export type RowBuilderContext = {
   cfg: OpenClawConfig;
   agentDir: string;
   authStore: AuthProfileStore;
@@ -42,7 +45,7 @@ function matchesRowFilter(filter: RowFilter, model: { provider: string; baseUrl?
 }
 
 function buildRow(params: {
-  model: Model<Api>;
+  model: ListRowModel;
   key: string;
   context: RowBuilderContext;
   allowProviderAvailabilityFallback?: boolean;
@@ -75,15 +78,40 @@ function shouldSuppressListModel(params: {
   });
 }
 
-export async function loadListModelRegistry(
-  cfg: OpenClawConfig,
-  opts?: { sourceConfig?: OpenClawConfig; providerFilter?: string },
-) {
-  const loaded = await loadModelRegistry(cfg, opts);
+function resolveConfiguredModelInput(params: {
+  model: Partial<ModelDefinitionConfig>;
+}): Array<"text" | "image"> {
+  const input = Array.isArray(params.model.input)
+    ? params.model.input.filter(
+        (item): item is "text" | "image" => item === "text" || item === "image",
+      )
+    : [];
+  return input.length > 0 ? input : ["text"];
+}
+
+function toConfiguredProviderListModel(params: {
+  provider: string;
+  providerConfig: Partial<ModelProviderConfig>;
+  model: Partial<ModelDefinitionConfig> & Pick<ModelDefinitionConfig, "id">;
+}): ListRowModel {
   return {
-    ...loaded,
-    discoveredKeys: new Set(loaded.models.map((model) => modelKey(model.provider, model.id))),
+    provider: params.provider,
+    id: params.model.id,
+    name: params.model.name ?? params.model.id,
+    baseUrl: params.model.baseUrl ?? params.providerConfig.baseUrl,
+    input: resolveConfiguredModelInput({ model: params.model }),
+    contextWindow: params.model.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
   };
+}
+
+function shouldListConfiguredProviderModel(params: {
+  providerConfig: Partial<ModelProviderConfig>;
+  model: Partial<ModelDefinitionConfig>;
+}): boolean {
+  return (
+    params.providerConfig.apiKey !== undefined &&
+    (params.providerConfig.api !== undefined || params.model.api !== undefined)
+  );
 }
 
 export function appendDiscoveredRows(params: {
@@ -121,13 +149,53 @@ export function appendDiscoveredRows(params: {
   return seenKeys;
 }
 
+export function appendConfiguredProviderRows(params: {
+  rows: ModelRow[];
+  context: RowBuilderContext;
+  seenKeys: Set<string>;
+}): void {
+  for (const [provider, providerConfig] of Object.entries(
+    params.context.cfg.models?.providers ?? {},
+  )) {
+    for (const configuredModel of providerConfig.models ?? []) {
+      if (!shouldListConfiguredProviderModel({ providerConfig, model: configuredModel })) {
+        continue;
+      }
+      const key = modelKey(provider, configuredModel.id);
+      if (params.seenKeys.has(key)) {
+        continue;
+      }
+      const model = toConfiguredProviderListModel({
+        provider,
+        providerConfig,
+        model: configuredModel,
+      });
+      if (!matchesRowFilter(params.context.filter, model)) {
+        continue;
+      }
+      if (shouldSuppressListModel({ model, context: params.context })) {
+        continue;
+      }
+      params.rows.push(
+        buildRow({
+          model,
+          key,
+          context: params.context,
+          allowProviderAvailabilityFallback: !params.context.discoveredKeys.has(key),
+        }),
+      );
+      params.seenKeys.add(key);
+    }
+  }
+}
+
 export async function appendCatalogSupplementRows(params: {
   rows: ModelRow[];
   modelRegistry: ModelRegistry;
   context: RowBuilderContext;
   seenKeys: Set<string>;
 }): Promise<void> {
-  const catalog = await loadModelCatalog({ config: params.context.cfg });
+  const catalog = await loadModelCatalog({ config: params.context.cfg, readOnly: true });
   for (const entry of catalog) {
     if (
       params.context.filter.provider &&

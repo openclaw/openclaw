@@ -1,8 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { FsRoot, FsRootKind } from "../config/types.tools.js";
 import { assertNoWindowsNetworkPath } from "../infra/local-file-access.js";
+import { type LocalMediaRoot, resolveLocalMediaRoot } from "./local-media-root.js";
 import { getDefaultMediaLocalRoots } from "./local-roots.js";
+export type { LocalMediaRoot } from "./local-media-root.js";
 
 export type LocalMediaAccessErrorCode =
   | "path-not-allowed"
@@ -26,15 +27,6 @@ export class LocalMediaAccessError extends Error {
 
 export function getDefaultLocalRoots(): readonly string[] {
   return getDefaultMediaLocalRoots();
-}
-
-export type LocalMediaRoot = string | FsRoot;
-
-function resolveLocalMediaRoot(root: LocalMediaRoot): { path: string; kind: FsRootKind } {
-  if (typeof root === "string") {
-    return { path: root, kind: "dir" };
-  }
-  return { path: root.path, kind: root.kind };
 }
 
 export async function assertLocalMediaAllowed(

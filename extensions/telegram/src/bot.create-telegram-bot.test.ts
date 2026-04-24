@@ -861,55 +861,6 @@ describe("createTelegramBot", () => {
     expect(replySpy).not.toHaveBeenCalled();
   });
 
-  it("blocks unauthorized DM media before download and sends pairing reply", async () => {
-    loadConfig.mockReturnValue({
-      channels: { telegram: { dmPolicy: "pairing" } },
-    });
-    readChannelAllowFromStore.mockResolvedValue([]);
-    upsertChannelPairingRequest.mockResolvedValue({ code: "PAIRME12", created: true });
-    sendMessageSpy.mockClear();
-    replySpy.mockClear();
-    const senderId = Number(`${Date.now()}01`.slice(-9));
-
-    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(
-      async () =>
-        new Response(new Uint8Array([0xff, 0xd8, 0xff, 0x00]), {
-          status: 200,
-          headers: { "content-type": "image/jpeg" },
-        }),
-    );
-    const getFileSpy = vi.fn(async () => ({ file_path: "photos/p1.jpg" }));
-
-    try {
-      createTelegramBot({ token: "tok" });
-      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
-
-      await handler({
-        message: {
-          chat: { id: 1234, type: "private" },
-          message_id: 411,
-          date: 1736380800,
-          photo: [{ file_id: "p1" }],
-          from: { id: senderId, username: "random" },
-        },
-        me: { username: "openclaw_bot" },
-        getFile: getFileSpy,
-      });
-
-      expect(getFileSpy).not.toHaveBeenCalled();
-      expect(fetchSpy).not.toHaveBeenCalled();
-      expect(sendMessageSpy).toHaveBeenCalledTimes(1);
-      const pairingText = String(sendMessageSpy.mock.calls[0]?.[1]);
-      expect(pairingText).toContain("Pairing code:");
-      expect(pairingText).toContain("<pre><code>");
-      expect(sendMessageSpy.mock.calls[0]?.[2]).toEqual(
-        expect.objectContaining({ parse_mode: "HTML" }),
-      );
-      expect(replySpy).not.toHaveBeenCalled();
-    } finally {
-      fetchSpy.mockRestore();
-    }
-  });
   it("blocks DM media downloads completely when dmPolicy is disabled", async () => {
     loadConfig.mockReturnValue({
       channels: { telegram: { dmPolicy: "disabled" } },

@@ -36,7 +36,8 @@ const describeLive = LIVE && ACP_BIND_LIVE ? describe : describe.skip;
 
 const CONNECT_TIMEOUT_MS = 90_000;
 const LIVE_TIMEOUT_MS = 240_000;
-const DEFAULT_LIVE_CODEX_MODEL = "gpt-5.4";
+const DEFAULT_LIVE_CODEX_MODEL = "gpt-5.5";
+const DEFAULT_LIVE_PARENT_MODEL = "openai/gpt-5.5";
 type LiveAcpAgent = "claude" | "codex" | "gemini";
 
 function createSlackCurrentConversationBindingRegistry() {
@@ -93,11 +94,16 @@ function extractAssistantTexts(messages: unknown[]): string[] {
     .filter((value): value is string => typeof value === "string" && value.trim().length > 0);
 }
 
-function createAcpRecallPrompt(liveAgent: LiveAcpAgent): string {
+function createAcpRecallPrompt(
+  liveAgent: LiveAcpAgent,
+  followupToken: string,
+  recallNonce: string,
+): string {
+  const recallToken = `ACP-BIND-RECALL-${recallNonce}`;
   if (liveAgent !== "claude") {
-    return "Please include the exact token from your immediately previous assistant reply.";
+    return `Please include exactly these two tokens in your reply: ${followupToken} ${recallToken}.`;
   }
-  return "Reply with exactly the token from your immediately previous assistant reply and nothing else.";
+  return `Reply with exactly these two tokens and nothing else: ${followupToken} ${recallToken}`;
 }
 
 function createAcpMarkerPrompt(liveAgent: LiveAcpAgent, memoryNonce: string): string {
@@ -128,6 +134,28 @@ async function getFreeGatewayPort(): Promise<number> {
 
 function logLiveStep(message: string): void {
   console.info(`[live-acp-bind] ${message}`);
+}
+
+function normalizeOpenAiModelRef(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return DEFAULT_LIVE_PARENT_MODEL;
+  }
+  return trimmed.includes("/") ? trimmed : `openai/${trimmed}`;
+}
+
+function resolveLiveParentModel(): string {
+  return normalizeOpenAiModelRef(
+    process.env.OPENCLAW_LIVE_ACP_BIND_PARENT_MODEL?.trim() ||
+      process.env.OPENCLAW_LIVE_ACP_BIND_CODEX_MODEL?.trim() ||
+      DEFAULT_LIVE_PARENT_MODEL,
+  );
+}
+
+function resolveModelObject(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
 }
 
 async function prepareCodexHomeForLiveBindTest(): Promise<void> {
@@ -444,11 +472,13 @@ describeLive("gateway live (ACP bind)", () => {
       const tempConfigPath = path.join(tempRoot, "openclaw.json");
       const port = await getFreeGatewayPort();
       const token = `test-${randomUUID()}`;
+      const parentModel = resolveLiveParentModel();
       const originalSessionKey = "main";
       const slackUserId = `U${randomUUID().replace(/-/g, "").slice(0, 10).toUpperCase()}`;
       const conversationId = `user:${slackUserId}`;
       const accountId = "default";
       const followupNonce = randomBytes(4).toString("hex").toUpperCase();
+      const recallNonce = randomBytes(4).toString("hex").toUpperCase();
       const memoryNonce = randomBytes(4).toString("hex").toUpperCase();
 
       clearRuntimeConfigSnapshot();
@@ -474,6 +504,20 @@ describeLive("gateway live (ACP bind)", () => {
           : {};
       const nextCfg = {
         ...cfg,
+        agents: {
+          ...cfg.agents,
+          defaults: {
+            ...cfg.agents?.defaults,
+            model: {
+              ...resolveModelObject(cfg.agents?.defaults?.model),
+              primary: parentModel,
+            },
+            models: {
+              ...cfg.agents?.defaults?.models,
+              [parentModel]: cfg.agents?.defaults?.models?.[parentModel] ?? {},
+            },
+          },
+        },
         gateway: {
           ...cfg.gateway,
           mode: "local",
@@ -528,6 +572,7 @@ describeLive("gateway live (ACP bind)", () => {
       };
       await fs.writeFile(tempConfigPath, `${JSON.stringify(nextCfg, null, 2)}\n`);
       process.env.OPENCLAW_CONFIG_PATH = tempConfigPath;
+      logLiveStep(`using parent live model ${parentModel}`);
       clearConfigCache();
       clearRuntimeConfigSnapshot();
       clearPluginLoaderCache();
@@ -606,7 +651,7 @@ describeLive("gateway live (ACP bind)", () => {
             client,
             sessionKey: originalSessionKey,
             idempotencyKey: `idem-memory-${attempt}-${randomUUID()}`,
-            message: createAcpRecallPrompt(liveAgent),
+            message: createAcpRecallPrompt(liveAgent, followupToken, recallNonce),
             originatingChannel: "slack",
             originatingTo: conversationId,
             originatingAccountId: accountId,
@@ -660,6 +705,7 @@ describeLive("gateway live (ACP bind)", () => {
         const recallAssistantText = recallHistory.matchedAssistantText;
         if (liveAgent === "claude") {
           expect(recallAssistantText).toContain(followupToken);
+          expect(recallAssistantText).toContain(`ACP-BIND-RECALL-${recallNonce}`);
         }
         logLiveStep("bound session transcript retained the previous token");
         const recallAssistantCount = extractAssistantTexts(recallHistory.messages).length;
@@ -708,8 +754,7 @@ describeLive("gateway live (ACP bind)", () => {
             sessionKey: originalSessionKey,
             idempotencyKey: `idem-image-${attempt}-${randomUUID()}`,
             message:
-              "Read the large word printed at the bottom of the attached image. " +
-              "Reply with that word in lowercase and nothing else.",
+              "What animal is drawn in the attached image? Reply with only the lowercase animal name.",
             originatingChannel: "slack",
             originatingTo: conversationId,
             originatingAccountId: accountId,
@@ -745,9 +790,6 @@ describeLive("gateway live (ACP bind)", () => {
           logLiveStep("bound session classified the probe image");
         }
 
-        const imageAssistantCount = imageHistory
-          ? extractAssistantTexts(imageHistory.messages).length
-          : markerAssistantCount;
         const cronProbe = createLiveCronProbeSpec({
           agentId: liveAgent,
           sessionKey: spawnedSessionKey,
@@ -771,13 +813,13 @@ describeLive("gateway live (ACP bind)", () => {
           });
           logLiveStep(`cron mcp turn completed (attempt ${String(attempt + 1)})`);
 
-          let cronHistory: Awaited<ReturnType<typeof waitForAssistantTurn>> | null = null;
+          let cronHistory: Awaited<ReturnType<typeof waitForAssistantText>> | null = null;
           try {
-            cronHistory = await waitForAssistantTurn({
+            cronHistory = await waitForAssistantText({
               client,
               sessionKey: spawnedSessionKey,
-              minAssistantCount: imageAssistantCount + 1,
               timeoutMs: liveAgent === "claude" ? 90_000 : 45_000,
+              contains: cronProbe.name,
             });
           } catch {
             logLiveStep("cron assistant reply not observed yet; relying on CLI verification");

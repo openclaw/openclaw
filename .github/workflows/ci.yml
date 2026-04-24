@@ -493,18 +493,18 @@ jobs:
 
             git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
             test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
-            echo "checkout attempt ${attempt}/2 succeeded"
+            echo "checkout attempt ${attempt}/5 succeeded"
           }
 
-          for attempt in 1 2; do
+          for attempt in 1 2 3 4 5; do
             if checkout_attempt "$attempt"; then
               exit 0
             fi
-            echo "checkout attempt ${attempt}/2 failed"
+            echo "checkout attempt ${attempt}/5 failed"
             sleep $((attempt * 5))
           done
 
-          echo "checkout failed after 2 attempts" >&2
+          echo "checkout failed after 5 attempts" >&2
           exit 1
 
       - name: Ensure secrets base commit (PR fast path)
@@ -694,18 +694,18 @@ jobs:
 
             git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
             test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
-            echo "checkout attempt ${attempt}/2 succeeded"
+            echo "checkout attempt ${attempt}/5 succeeded"
           }
 
-          for attempt in 1 2; do
+          for attempt in 1 2 3 4 5; do
             if checkout_attempt "$attempt"; then
               exit 0
             fi
-            echo "checkout attempt ${attempt}/2 failed"
+            echo "checkout attempt ${attempt}/5 failed"
             sleep $((attempt * 5))
           done
 
-          echo "checkout failed after 2 attempts" >&2
+          echo "checkout failed after 5 attempts" >&2
           exit 1
 
       - name: Setup Node environment
@@ -782,18 +782,18 @@ jobs:
 
             git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
             test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
-            echo "checkout attempt ${attempt}/2 succeeded"
+            echo "checkout attempt ${attempt}/5 succeeded"
           }
 
-          for attempt in 1 2; do
+          for attempt in 1 2 3 4 5; do
             if checkout_attempt "$attempt"; then
               exit 0
             fi
-            echo "checkout attempt ${attempt}/2 failed"
+            echo "checkout attempt ${attempt}/5 failed"
             sleep $((attempt * 5))
           done
 
-          echo "checkout failed after 2 attempts" >&2
+          echo "checkout failed after 5 attempts" >&2
           exit 1
 
       - name: Setup Node environment
@@ -885,18 +885,18 @@ jobs:
 
             git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
             test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
-            echo "checkout attempt ${attempt}/2 succeeded"
+            echo "checkout attempt ${attempt}/5 succeeded"
           }
 
-          for attempt in 1 2; do
+          for attempt in 1 2 3 4 5; do
             if checkout_attempt "$attempt"; then
               exit 0
             fi
-            echo "checkout attempt ${attempt}/2 failed"
+            echo "checkout attempt ${attempt}/5 failed"
             sleep $((attempt * 5))
           done
 
-          echo "checkout failed after 2 attempts" >&2
+          echo "checkout failed after 5 attempts" >&2
           exit 1
 
       - name: Setup Node environment
@@ -953,18 +953,18 @@ jobs:
 
             git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
             test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
-            echo "checkout attempt ${attempt}/2 succeeded"
+            echo "checkout attempt ${attempt}/5 succeeded"
           }
 
-          for attempt in 1 2; do
+          for attempt in 1 2 3 4 5; do
             if checkout_attempt "$attempt"; then
               exit 0
             fi
-            echo "checkout attempt ${attempt}/2 failed"
+            echo "checkout attempt ${attempt}/5 failed"
             sleep $((attempt * 5))
           done
 
-          echo "checkout failed after 2 attempts" >&2
+          echo "checkout failed after 5 attempts" >&2
           exit 1
 
       - name: Setup Node environment
@@ -974,7 +974,9 @@ jobs:
 
       - name: Run extension shard
         env:
-          OPENCLAW_EXTENSION_BATCH_PARALLEL: 2
+          NODE_OPTIONS: --max-old-space-size=6144
+          OPENCLAW_EXTENSION_BATCH_PARALLEL: 1
+          OPENCLAW_VITEST_MAX_WORKERS: 1
           OPENCLAW_EXTENSION_BATCH: ${{ matrix.extensions_csv }}
         run: pnpm test:extensions:batch -- "$OPENCLAW_EXTENSION_BATCH"
 
@@ -1071,18 +1073,18 @@ jobs:
 
             git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
             test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
-            echo "checkout attempt ${attempt}/2 succeeded"
+            echo "checkout attempt ${attempt}/5 succeeded"
           }
 
-          for attempt in 1 2; do
+          for attempt in 1 2 3 4 5; do
             if checkout_attempt "$attempt"; then
               exit 0
             fi
-            echo "checkout attempt ${attempt}/2 failed"
+            echo "checkout attempt ${attempt}/5 failed"
             sleep $((attempt * 5))
           done
 
-          echo "checkout failed after 2 attempts" >&2
+          echo "checkout failed after 5 attempts" >&2
           exit 1
 
       - name: Setup Node environment
@@ -1154,18 +1156,18 @@ jobs:
 
             git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
             test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
-            echo "checkout attempt ${attempt}/2 succeeded"
+            echo "checkout attempt ${attempt}/5 succeeded"
           }
 
-          for attempt in 1 2; do
+          for attempt in 1 2 3 4 5; do
             if checkout_attempt "$attempt"; then
               exit 0
             fi
-            echo "checkout attempt ${attempt}/2 failed"
+            echo "checkout attempt ${attempt}/5 failed"
             sleep $((attempt * 5))
           done
 
-          echo "checkout failed after 2 attempts" >&2
+          echo "checkout failed after 5 attempts" >&2
           exit 1
 
       - name: Setup Node environment
@@ -1320,18 +1322,18 @@ jobs:
 
             git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
             test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
-            echo "checkout attempt ${attempt}/2 succeeded"
+            echo "checkout attempt ${attempt}/5 succeeded"
           }
 
-          for attempt in 1 2; do
+          for attempt in 1 2 3 4 5; do
             if checkout_attempt "$attempt"; then
               exit 0
             fi
-            echo "checkout attempt ${attempt}/2 failed"
+            echo "checkout attempt ${attempt}/5 failed"
             sleep $((attempt * 5))
           done
 
-          echo "checkout failed after 2 attempts" >&2
+          echo "checkout failed after 5 attempts" >&2
           exit 1
 
       - name: Setup Node environment
@@ -1342,7 +1344,15 @@ jobs:
       - name: Run changed extension tests
         env:
           OPENCLAW_CHANGED_EXTENSION: ${{ matrix.extension }}
-        run: pnpm test:extension "$OPENCLAW_CHANGED_EXTENSION"
+        run: |
+          set -euo pipefail
+          if [ "$OPENCLAW_CHANGED_EXTENSION" = "telegram" ]; then
+            export OPENCLAW_VITEST_MAX_WORKERS=1
+            export NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--max-old-space-size=6144"
+            pnpm test:extension "$OPENCLAW_CHANGED_EXTENSION" -- --pool=forks
+            exit 0
+          fi
+          pnpm test:extension "$OPENCLAW_CHANGED_EXTENSION"
 
   # Types, lint, and format check shards.
   check-shard:
@@ -1410,18 +1420,18 @@ jobs:
 
             git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
             test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
-            echo "checkout attempt ${attempt}/2 succeeded"
+            echo "checkout attempt ${attempt}/5 succeeded"
           }
 
-          for attempt in 1 2; do
+          for attempt in 1 2 3 4 5; do
             if checkout_attempt "$attempt"; then
               exit 0
             fi
-            echo "checkout attempt ${attempt}/2 failed"
+            echo "checkout attempt ${attempt}/5 failed"
             sleep $((attempt * 5))
           done
 
-          echo "checkout failed after 2 attempts" >&2
+          echo "checkout failed after 5 attempts" >&2
           exit 1
 
       - name: Setup Node environment
@@ -1542,18 +1552,18 @@ jobs:
 
             git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
             test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
-            echo "checkout attempt ${attempt}/2 succeeded"
+            echo "checkout attempt ${attempt}/5 succeeded"
           }
 
-          for attempt in 1 2; do
+          for attempt in 1 2 3 4 5; do
             if checkout_attempt "$attempt"; then
               exit 0
             fi
-            echo "checkout attempt ${attempt}/2 failed"
+            echo "checkout attempt ${attempt}/5 failed"
             sleep $((attempt * 5))
           done
 
-          echo "checkout failed after 2 attempts" >&2
+          echo "checkout failed after 5 attempts" >&2
           exit 1
 
       - name: Setup Node environment
@@ -1740,18 +1750,18 @@ jobs:
 
             git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
             test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
-            echo "checkout attempt ${attempt}/2 succeeded"
+            echo "checkout attempt ${attempt}/5 succeeded"
           }
 
-          for attempt in 1 2; do
+          for attempt in 1 2 3 4 5; do
             if checkout_attempt "$attempt"; then
               exit 0
             fi
-            echo "checkout attempt ${attempt}/2 failed"
+            echo "checkout attempt ${attempt}/5 failed"
             sleep $((attempt * 5))
           done
 
-          echo "checkout failed after 2 attempts" >&2
+          echo "checkout failed after 5 attempts" >&2
           exit 1
 
       - name: Setup Node environment
@@ -2089,18 +2099,18 @@ jobs:
 
             git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
             test -x "$workdir/apps/android/gradlew" || return 1
-            echo "checkout attempt ${attempt}/2 succeeded"
+            echo "checkout attempt ${attempt}/5 succeeded"
           }
 
-          for attempt in 1 2; do
+          for attempt in 1 2 3 4 5; do
             if checkout_attempt "$attempt"; then
               exit 0
             fi
-            echo "checkout attempt ${attempt}/2 failed"
+            echo "checkout attempt ${attempt}/5 failed"
             sleep $((attempt * 5))
           done
 
-          echo "checkout failed after 2 attempts" >&2
+          echo "checkout failed after 5 attempts" >&2
           exit 1
 
       - name: Setup Java

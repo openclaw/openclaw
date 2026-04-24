@@ -684,9 +684,8 @@ export function createHostWorkspaceEditTool(
   }) as unknown as AnyAgentTool;
   const withRecovery = wrapEditToolWithRecovery(base, {
     root,
-    readFile: options?.roots
-      ? async (absolutePath: string) => (await operations.readFile(absolutePath)).toString("utf8")
-      : (absolutePath: string) => fs.readFile(absolutePath, "utf-8"),
+    readFile: async (absolutePath: string) =>
+      (await operations.readFile(absolutePath)).toString("utf8"),
   });
   return wrapToolParamValidation(withRecovery, REQUIRED_PARAM_GROUPS.edit);
 }

@@ -442,6 +442,7 @@ vi.mock("./auto-reply/monitor/inbound-dispatch.runtime.js", () => ({
   dispatchReplyWithBufferedBlockDispatcher: createBufferedDispatchReplyMock(),
   finalizeInboundContext: <T>(ctx: T) => ctx,
   getAgentScopedMediaLocalRoots: () => [] as string[],
+  resolveAgentScopedOutboundMediaAccess: () => ({ localRoots: [] as string[] }),
   jidToE164: normalizePhoneLikeToE164,
   logVerbose: (_msg: string) => undefined,
   resolveChunkMode: () => undefined,
@@ -472,6 +473,7 @@ vi.mock("./auto-reply/monitor/runtime-api.js", () => ({
   finalizeInboundContext: <T>(ctx: T) => ctx,
   formatInboundEnvelope: formatInboundEnvelopeMock,
   getAgentScopedMediaLocalRoots: () => [] as string[],
+  resolveAgentScopedOutboundMediaAccess: () => ({ localRoots: [] as string[] }),
   jidToE164: normalizePhoneLikeToE164,
   logVerbose: (_msg: string) => undefined,
   normalizeE164: normalizePhoneLikeToE164,
@@ -610,9 +612,8 @@ vi.mock("./session.runtime.js", () => {
   };
 });
 
-vi.mock("qrcode-terminal", () => ({
-  default: { generate: vi.fn() },
-  generate: vi.fn(),
+vi.mock("./qr-terminal.js", () => ({
+  renderQrTerminal: vi.fn(async () => "ASCII-QR"),
 }));
 
 export const baileys = await import("./session.runtime.js");

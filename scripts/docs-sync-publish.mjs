@@ -167,6 +167,28 @@ function ensureDir(dirPath) {
   fs.mkdirSync(dirPath, { recursive: true });
 }
 
+function walkMarkdownFiles(entryPath, out = []) {
+  if (!fs.existsSync(entryPath)) {
+    return out;
+  }
+
+  const stat = fs.statSync(entryPath);
+  if (stat.isFile()) {
+    if (/\.mdx?$/i.test(entryPath)) {
+      out.push(entryPath);
+    }
+    return out;
+  }
+
+  for (const entry of fs.readdirSync(entryPath, { withFileTypes: true })) {
+    if (entry.name === "node_modules" || entry.name === ".git") {
+      continue;
+    }
+    walkMarkdownFiles(path.join(entryPath, entry.name), out);
+  }
+  return out;
+}
+
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
 }
@@ -262,6 +284,75 @@ function composeDocsConfig() {
   };
 }
 
+function repairMintlifyAccordionIndentation(raw) {
+  const lines = raw.split(/\r?\n/u);
+  const accordionStack = [];
+  let inCodeFence = false;
+  let changed = false;
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (/^\s*(```|~~~)/u.test(line)) {
+      inCodeFence = !inCodeFence;
+      continue;
+    }
+    if (inCodeFence) {
+      continue;
+    }
+
+    const openAccordion = line.match(/^(\s*)<Accordion\b/u);
+    if (openAccordion) {
+      accordionStack.push({
+        indent: openAccordion[1].length,
+        hasOutdentedListItem: false,
+      });
+      continue;
+    }
+
+    const listItem = line.match(/^(\s*)[-*+]\s+/u);
+    if (listItem) {
+      for (const accordion of accordionStack) {
+        if (listItem[1].length < accordion.indent) {
+          accordion.hasOutdentedListItem = true;
+        }
+      }
+    }
+
+    const closeAccordion = line.match(/^(\s*)<\/Accordion>/u);
+    if (!closeAccordion) {
+      continue;
+    }
+
+    const opening = accordionStack.pop();
+    if (opening && opening.hasOutdentedListItem && closeAccordion[1].length > opening.indent) {
+      lines[index] = `${" ".repeat(opening.indent)}${line.slice(closeAccordion[1].length)}`;
+      changed = true;
+    }
+  }
+
+  return changed ? lines.join("\n") : raw;
+}
+
+function repairGeneratedLocaleDocs(targetDocsDir) {
+  let repaired = 0;
+  for (const locale of GENERATED_LOCALES) {
+    const localeDir = path.join(targetDocsDir, locale.dir);
+    for (const filePath of walkMarkdownFiles(localeDir)) {
+      const raw = fs.readFileSync(filePath, "utf8");
+      const repairedRaw = repairMintlifyAccordionIndentation(raw);
+      if (repairedRaw === raw) {
+        continue;
+      }
+      fs.writeFileSync(filePath, repairedRaw);
+      repaired += 1;
+    }
+  }
+
+  if (repaired > 0) {
+    console.log(`Repaired Mintlify accordion indentation in ${repaired} generated locale doc(s).`);
+  }
+}
+
 function syncDocsTree(targetRoot) {
   const targetDocsDir = path.join(targetRoot, "docs");
   ensureDir(targetDocsDir);
@@ -298,6 +389,7 @@ function syncDocsTree(targetRoot) {
     }
   }
 
+  repairGeneratedLocaleDocs(targetDocsDir);
   writeJson(path.join(targetDocsDir, "docs.json"), composeDocsConfig());
 }
 

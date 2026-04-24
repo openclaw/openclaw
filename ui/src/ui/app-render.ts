@@ -2259,6 +2259,7 @@ export function renderApp(state: AppViewState) {
               canAbort: Boolean(state.chatRunId),
               onAbort: () => void state.handleAbortChat(),
               onQueueRemove: (id) => state.removeQueuedMessage(id),
+              onQueueSteer: (id) => void state.steerQueuedChatMessage(id),
               onDismissSideResult: () => {
                 state.chatSideResult = null;
               },

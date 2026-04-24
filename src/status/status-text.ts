@@ -14,21 +14,15 @@ import {
 } from "../agents/tools/sessions-helpers.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import { resolveSelectedAndActiveModel } from "../auto-reply/model-runtime.js";
-import type {
-  ElevatedLevel,
-  ReasoningLevel,
-  ThinkLevel,
-  VerboseLevel,
-} from "../auto-reply/thinking.js";
+import type { ThinkLevel } from "../auto-reply/thinking.js";
 import { toAgentModelListLike } from "../config/model-input.js";
-import type { SessionEntry, SessionScope } from "../config/sessions.js";
+import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   formatUsageWindowSummary,
   loadProviderUsageSummary,
   resolveUsageProviderId,
 } from "../infra/provider-usage.js";
-import type { MediaUnderstandingDecision } from "../media-understanding/types.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import {
   listTasksForAgentIdForStatus,
@@ -39,35 +33,8 @@ import {
   formatTaskStatusDetail,
   formatTaskStatusTitle,
 } from "../tasks/task-status.js";
-
-export type BuildStatusTextParams = {
-  cfg: OpenClawConfig;
-  sessionEntry?: SessionEntry;
-  sessionKey: string;
-  parentSessionKey?: string;
-  sessionScope?: SessionScope;
-  storePath?: string;
-  statusChannel: string;
-  provider: string;
-  model: string;
-  contextTokens?: number;
-  resolvedThinkLevel?: ThinkLevel;
-  resolvedFastMode?: boolean;
-  resolvedHarness?: string;
-  resolvedVerboseLevel: VerboseLevel;
-  resolvedReasoningLevel: ReasoningLevel;
-  resolvedElevatedLevel?: ElevatedLevel;
-  resolveDefaultThinkingLevel: () => Promise<ThinkLevel | undefined>;
-  isGroup: boolean;
-  defaultGroupActivation: () => "always" | "mention";
-  mediaDecisions?: MediaUnderstandingDecision[];
-  taskLineOverride?: string;
-  skipDefaultTaskLookup?: boolean;
-  primaryModelLabelOverride?: string;
-  modelAuthOverride?: string;
-  activeModelAuthOverride?: string;
-  includeTranscriptUsage?: boolean;
-};
+import type { BuildStatusTextParams } from "./status-text.types.js";
+export type { BuildStatusTextParams } from "./status-text.types.js";
 
 const USAGE_OAUTH_ONLY_PROVIDERS = new Set([
   "anthropic",

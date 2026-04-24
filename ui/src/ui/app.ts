@@ -19,6 +19,7 @@ import {
   handleAbortChat as handleAbortChatInternal,
   handleSendChat as handleSendChatInternal,
   removeQueuedMessage as removeQueuedMessageInternal,
+  steerQueuedChatMessage as steerQueuedChatMessageInternal,
 } from "./app-chat.ts";
 import { DEFAULT_CRON_FORM, DEFAULT_LOG_LEVEL_FILTERS } from "./app-defaults.ts";
 import type { EventLogEntry } from "./app-events.ts";
@@ -706,6 +707,13 @@ export class OpenClawApp extends LitElement {
       this as unknown as Parameters<typeof handleSendChatInternal>[0],
       messageOverride,
       opts,
+    );
+  }
+
+  async steerQueuedChatMessage(id: string) {
+    await steerQueuedChatMessageInternal(
+      this as unknown as Parameters<typeof steerQueuedChatMessageInternal>[0],
+      id,
     );
   }
 

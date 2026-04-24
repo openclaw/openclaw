@@ -61,18 +61,48 @@ describe("gateway codex harness live helpers", () => {
   });
 
   it("accepts missing codex CLI fallback output", () => {
+    const texts = [
+      [
+        "`codex` is not installed on the shell PATH in this environment.",
+        "",
+        "Command result:",
+        "```text",
+        "/bin/bash: line 1: codex: command not found",
+        "```",
+      ].join("\n"),
+      [
+        "`codex` is not installed in the shell environment, so `/codex models` could not be executed.",
+        "",
+        "Error:",
+        "```text",
+        "/bin/bash: line 1: codex: command not found",
+        "```",
+      ].join("\n"),
+      [
+        "I can confirm the current session is using `codex/gpt-5.4`.",
+        "",
+        "I can’t list additional local Codex models from this shell because the `codex` CLI isn’t installed here (`codex models` returned `command not found`).",
+      ].join("\n"),
+    ];
+
+    for (const text of texts) {
+      expect(
+        EXPECTED_CODEX_MODELS_COMMAND_TEXT.some((expectedText) => text.includes(expectedText)),
+      ).toBe(true);
+    }
+    expect(isExpectedCodexModelsCommandText(texts[1] ?? "")).toBe(true);
+    expect(isExpectedCodexModelsCommandText(texts[2] ?? "")).toBe(true);
+  });
+
+  it("accepts current session model summaries from codex models fallback", () => {
     const text = [
-      "`codex` is not installed on the shell PATH in this environment.",
+      "Available here:",
       "",
-      "Command result:",
-      "```text",
-      "/bin/bash: line 1: codex: command not found",
-      "```",
+      "- `codex/gpt-5.4` (`codex`) - current session model",
+      "- `codex/gpt-5.4-mini` (`codex-mini`)",
     ].join("\n");
 
-    expect(
-      EXPECTED_CODEX_MODELS_COMMAND_TEXT.some((expectedText) => text.includes(expectedText)),
-    ).toBe(true);
+    expect(isExpectedCodexModelsCommandText(text)).toBe(true);
   });
 
   it("accepts missing codex shell PATH fallback with current-session model", () => {

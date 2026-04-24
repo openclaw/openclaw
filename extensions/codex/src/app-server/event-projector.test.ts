@@ -208,6 +208,27 @@ describe("CodexAppServerEventProjector", () => {
     });
   });
 
+  it("uses raw assistant response items when turn completion omits items", async () => {
+    const projector = await createProjector();
+
+    await projector.handleNotification(
+      forCurrentTurn("rawResponseItem/completed", {
+        item: {
+          type: "message",
+          id: "raw-1",
+          role: "assistant",
+          content: [{ type: "output_text", text: "OK from raw" }],
+        },
+      }),
+    );
+    await projector.handleNotification(turnCompleted());
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.assistantTexts).toEqual(["OK from raw"]);
+    expect(result.lastAssistant?.content).toEqual([{ type: "text", text: "OK from raw" }]);
+  });
+
   it("normalizes snake_case current token usage fields", async () => {
     const projector = await createProjector();
 

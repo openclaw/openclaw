@@ -56,6 +56,7 @@ import {
 } from "../utils/usage-format.js";
 import { VERSION } from "../version.js";
 import { resolveActiveFallbackState } from "./fallback-notice-state.js";
+import { formatFastModeLabel } from "./status-labels.js";
 
 type AgentDefaults = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>;
 type AgentConfig = Partial<AgentDefaults> & {
@@ -261,13 +262,6 @@ const formatQueueDetails = (queue?: QueueStatus) => {
     detailParts.push(`drop ${queue.dropPolicy}`);
   }
   return detailParts.length ? ` (${detailParts.join(" · ")})` : "";
-};
-
-const formatFastModeLabel = (enabled: boolean) => {
-  if (!enabled) {
-    return null;
-  }
-  return "Fast";
 };
 
 const formatHarnessLabel = (harnessId: string | undefined) => {

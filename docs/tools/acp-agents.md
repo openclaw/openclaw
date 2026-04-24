@@ -10,8 +10,6 @@ read_when:
 title: "ACP agents"
 ---
 
-# ACP agents
-
 [Agent Client Protocol (ACP)](https://agentclientprotocol.com/) sessions let OpenClaw run external coding harnesses (for example Pi, Claude Code, Codex, Cursor, Copilot, OpenClaw ACP, OpenCode, Gemini CLI, and other supported ACPX harnesses) through an ACP backend plugin.
 
 If you ask OpenClaw in plain language to "run this in Codex" or "start Claude Code in a thread", OpenClaw should route that request to the ACP runtime (not the native sub-agent runtime). Each ACP session spawn is tracked as a [background task](/automation/tasks).
@@ -802,3 +800,9 @@ Restart the gateway after changing these values.
 | `AcpRuntimeError: Permission prompt unavailable in non-interactive mode`    | `permissionMode` blocks writes/exec in non-interactive ACP session.             | Set `plugins.entries.acpx.config.permissionMode` to `approve-all` and restart gateway. See [Permission configuration](#permission-configuration).                 |
 | ACP session fails early with little output                                  | Permission prompts are blocked by `permissionMode`/`nonInteractivePermissions`. | Check gateway logs for `AcpRuntimeError`. For full permissions, set `permissionMode=approve-all`; for graceful degradation, set `nonInteractivePermissions=deny`. |
 | ACP session stalls indefinitely after completing work                       | Harness process finished but ACP session did not report completion.             | Monitor with `ps aux \| grep acpx`; kill stale processes manually.                                                                                                |
+
+## Related
+
+- [Sub-agents](/tools/subagents)
+- [Multi-agent sandbox tools](/tools/multi-agent-sandbox-tools)
+- [Agent send](/tools/agent-send)

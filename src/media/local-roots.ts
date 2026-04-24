@@ -10,7 +10,7 @@ import { safeFileURLToPath } from "../infra/local-file-access.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveConfigDir, resolveUserPath } from "../utils.js";
-import type { LocalMediaRoot } from "./local-media-access.js";
+import { type LocalMediaRoot, resolveLocalMediaRootPath } from "./local-media-root.js";
 import { isPassThroughRemoteMediaSource } from "./media-source-url.js";
 
 type BuildMediaLocalRootsOptions = {
@@ -85,10 +85,6 @@ function getAgentScopedMediaLocalRootsInternal(
   return roots;
 }
 
-function resolveLocalMediaRootPath(root: LocalMediaRoot): string {
-  return typeof root === "string" ? root : root.path;
-}
-
 export function getAgentScopedMediaLocalRootEntries(
   cfg: OpenClawConfig,
   agentId?: string,
@@ -131,7 +127,31 @@ export function appendLocalMediaParentRoots(
   roots: readonly string[],
   mediaSources?: readonly string[],
 ): string[] {
-  const appended = Array.from(new Set(roots.map((root) => path.resolve(root))));
+  return appendLocalMediaParentRootEntries(roots, mediaSources).map(resolveLocalMediaRootPath);
+}
+
+function normalizeLocalMediaRoot(root: LocalMediaRoot): LocalMediaRoot {
+  if (typeof root === "string") {
+    return path.resolve(root);
+  }
+  return { ...root, path: path.resolve(root.path) };
+}
+
+export function appendLocalMediaParentRootEntries(
+  roots: readonly LocalMediaRoot[],
+  mediaSources?: readonly string[],
+): LocalMediaRoot[] {
+  const appended = Array.from(
+    new Map(
+      roots.map((root) => {
+        const normalized = normalizeLocalMediaRoot(root);
+        return [resolveLocalMediaRootPath(normalized), normalized] as const;
+      }),
+    ).values(),
+  );
+  const appendedPaths = new Set(
+    appended.map((root) => path.resolve(resolveLocalMediaRootPath(root))),
+  );
   for (const source of mediaSources ?? []) {
     const localPath = resolveLocalMediaPath(source);
     if (!localPath) {
@@ -142,8 +162,9 @@ export function appendLocalMediaParentRoots(
       continue;
     }
     const normalizedParent = path.resolve(parentDir);
-    if (!appended.includes(normalizedParent)) {
+    if (!appendedPaths.has(normalizedParent)) {
       appended.push(normalizedParent);
+      appendedPaths.add(normalizedParent);
     }
   }
   return appended;

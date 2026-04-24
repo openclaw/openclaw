@@ -10,6 +10,20 @@ import { printTimingSummary } from "./lib/check-timing-summary.mjs";
 import { runManagedCommand } from "./lib/managed-child-process.mjs";
 import { resolveChangedTestTargetPlan } from "./test-projects.test-support.mjs";
 
+export const CHANGED_CHECK_VITEST_NO_OUTPUT_TIMEOUT_MS = "600000";
+const VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS";
+const VITEST_NO_OUTPUT_RETRY_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_RETRY";
+
+export function createChangedCheckVitestEnv(baseEnv = process.env) {
+  return {
+    ...baseEnv,
+    [VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY]:
+      baseEnv[VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY]?.trim() ||
+      CHANGED_CHECK_VITEST_NO_OUTPUT_TIMEOUT_MS,
+    [VITEST_NO_OUTPUT_RETRY_ENV_KEY]: baseEnv[VITEST_NO_OUTPUT_RETRY_ENV_KEY]?.trim() || "0",
+  };
+}
+
 export function createChangedCheckPlan(result, options = {}) {
   const commands = [];
   const add = (name, args) => {
@@ -106,13 +120,17 @@ export function createChangedCheckPlan(result, options = {}) {
   }
 
   const testPlan = resolveChangedTestTargetPlan(result.paths);
+  const runExtensionTests = result.extensionImpactFromCore;
+  const testTargets = runExtensionTests
+    ? testPlan.targets.filter((target) => target !== "extensions")
+    : testPlan.targets;
   const runChangedTestsBroad = testPlan.mode === "broad";
   return {
     commands,
-    testTargets: testPlan.targets,
+    testTargets,
     runChangedTestsBroad,
     runFullTests: false,
-    runExtensionTests: result.extensionImpactFromCore,
+    runExtensionTests,
     summary: Object.entries(lanes)
       .filter(([, enabled]) => enabled)
       .map(([lane]) => lane)
@@ -138,19 +156,23 @@ export async function runChangedCheck(result, options = {}) {
   }
 
   if (plan.runFullTests) {
-    const status = await runPnpm({ name: "tests all", args: ["test"] }, timings);
+    const status = await runPnpm(
+      { name: "tests all", args: ["test"], env: createChangedCheckVitestEnv() },
+      timings,
+    );
     if (status !== 0) {
       printSummary(timings, options);
       return status;
     }
   } else if (plan.runChangedTestsBroad) {
     const testArgs = options.explicitPaths
-      ? ["scripts/test-projects.mjs"]
-      : ["scripts/test-projects.mjs", "--changed", options.base ?? "origin/main"];
-    const status = await runNode(
+      ? ["test"]
+      : ["test", "--changed", options.base ?? "origin/main"];
+    const status = await runPnpm(
       {
         name: options.explicitPaths ? "tests all" : "tests changed broad",
         args: testArgs,
+        env: createChangedCheckVitestEnv(),
       },
       timings,
     );
@@ -159,10 +181,11 @@ export async function runChangedCheck(result, options = {}) {
       return status;
     }
   } else if (plan.testTargets.length > 0) {
-    const status = await runNode(
+    const status = await runPnpm(
       {
         name: "tests changed",
-        args: ["scripts/test-projects.mjs", ...plan.testTargets],
+        args: ["test", ...plan.testTargets],
+        env: createChangedCheckVitestEnv(),
       },
       timings,
     );
@@ -173,7 +196,14 @@ export async function runChangedCheck(result, options = {}) {
   }
 
   if (plan.runExtensionTests) {
-    const status = await runPnpm({ name: "tests extensions", args: ["test:extensions"] }, timings);
+    const status = await runPnpm(
+      {
+        name: "tests extensions",
+        args: ["test:extensions"],
+        env: createChangedCheckVitestEnv(),
+      },
+      timings,
+    );
     if (status !== 0) {
       printSummary(timings, options);
       return status;
@@ -209,10 +239,6 @@ async function runPnpm(command, timings) {
   return await runCommand({ ...command, bin: "pnpm" }, timings);
 }
 
-async function runNode(command, timings) {
-  return await runCommand({ ...command, bin: process.execPath }, timings);
-}
-
 async function runCommand(command, timings) {
   const startedAt = performance.now();
   console.error(`\n[check:changed] ${command.name}`);
@@ -221,6 +247,7 @@ async function runCommand(command, timings) {
     status = await runManagedCommand({
       bin: command.bin,
       args: command.args,
+      env: command.env,
     });
   } catch (error) {
     console.error(error);

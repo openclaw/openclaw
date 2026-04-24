@@ -6,10 +6,14 @@ import { renderCodexPromptOverlay } from "../../prompt-overlay.js";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
 import {
+  assertCodexThreadResumeResponse,
+  assertCodexThreadStartResponse,
+} from "./protocol-validators.js";
+import {
   isJsonObject,
+  type CodexDynamicToolSpec,
   type CodexThreadResumeParams,
-  type CodexThreadResumeResponse,
-  type CodexThreadStartResponse,
+  type CodexThreadStartParams,
   type CodexTurnStartParams,
   type CodexUserInput,
   type JsonObject,
@@ -26,7 +30,7 @@ export async function startOrResumeThread(params: {
   client: CodexAppServerClient;
   params: EmbeddedRunAttemptParams;
   cwd: string;
-  dynamicTools: JsonValue[];
+  dynamicTools: CodexDynamicToolSpec[];
   appServer: CodexAppServerRuntimeOptions;
   developerInstructions?: string;
 }): Promise<CodexAppServerThreadBinding> {
@@ -48,13 +52,15 @@ export async function startOrResumeThread(params: {
       await clearCodexAppServerBinding(params.params.sessionFile);
     } else {
       try {
-        const response = await params.client.request<CodexThreadResumeResponse>(
-          "thread/resume",
-          buildThreadResumeParams(params.params, {
-            threadId: binding.threadId,
-            appServer: params.appServer,
-            developerInstructions: params.developerInstructions,
-          }),
+        const response = assertCodexThreadResumeResponse(
+          await params.client.request<unknown>(
+            "thread/resume",
+            buildThreadResumeParams(params.params, {
+              threadId: binding.threadId,
+              appServer: params.appServer,
+              developerInstructions: params.developerInstructions,
+            }) as unknown as JsonValue,
+          ),
         );
         const boundAuthProfileId = params.params.authProfileId ?? binding.authProfileId;
         await writeCodexAppServerBinding(params.params.sessionFile, {
@@ -84,21 +90,23 @@ export async function startOrResumeThread(params: {
     }
   }
 
-  const response = await params.client.request<CodexThreadStartResponse>("thread/start", {
-    model: params.params.modelId,
-    modelProvider: normalizeModelProvider(params.params.provider),
-    cwd: params.cwd,
-    approvalPolicy: params.appServer.approvalPolicy,
-    approvalsReviewer: params.appServer.approvalsReviewer,
-    sandbox: params.appServer.sandbox,
-    ...(params.appServer.serviceTier ? { serviceTier: params.appServer.serviceTier } : {}),
-    serviceName: "OpenClaw",
-    developerInstructions:
-      params.developerInstructions ?? buildDeveloperInstructions(params.params),
-    dynamicTools: params.dynamicTools,
-    experimentalRawEvents: true,
-    persistExtendedHistory: true,
-  });
+  const response = assertCodexThreadStartResponse(
+    await params.client.request<unknown>("thread/start", {
+      model: params.params.modelId,
+      modelProvider: normalizeModelProvider(params.params.provider),
+      cwd: params.cwd,
+      approvalPolicy: params.appServer.approvalPolicy,
+      approvalsReviewer: params.appServer.approvalsReviewer,
+      sandbox: params.appServer.sandbox,
+      ...(params.appServer.serviceTier ? { serviceTier: params.appServer.serviceTier } : {}),
+      serviceName: "OpenClaw",
+      developerInstructions:
+        params.developerInstructions ?? buildDeveloperInstructions(params.params),
+      dynamicTools: params.dynamicTools,
+      experimentalRawEvents: true,
+      persistExtendedHistory: true,
+    } satisfies CodexThreadStartParams as unknown as JsonValue),
+  );
   const createdAt = new Date().toISOString();
   await writeCodexAppServerBinding(params.params.sessionFile, {
     threadId: response.thread.id,
@@ -165,7 +173,7 @@ export function buildTurnStartParams(
   };
 }
 
-function fingerprintDynamicTools(dynamicTools: JsonValue[]): string {
+function fingerprintDynamicTools(dynamicTools: CodexDynamicToolSpec[]): string {
   return JSON.stringify(dynamicTools.map(fingerprintDynamicToolSpec));
 }
 
@@ -217,7 +225,7 @@ function buildUserInput(
   promptText: string = params.prompt,
 ): CodexUserInput[] {
   return [
-    { type: "text", text: promptText },
+    { type: "text", text: promptText, text_elements: [] },
     ...(params.images ?? []).map(
       (image): CodexUserInput => ({
         type: "image",

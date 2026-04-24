@@ -229,6 +229,89 @@ describe("buildOpenAIProvider", () => {
     });
   });
 
+  it("leaves gpt-5.5 to Pi and resolves gpt-5.5-pro locally", () => {
+    const provider = buildOpenAIProvider();
+
+    const model = provider.resolveDynamicModel?.({
+      provider: "openai",
+      modelId: "gpt-5.5",
+      modelRegistry: {
+        find: (_provider: string, id: string) =>
+          id === "gpt-5.4"
+            ? {
+                id,
+                name: "GPT-5.4",
+                provider: "openai",
+                api: "openai-responses",
+                baseUrl: "https://api.openai.com/v1",
+                reasoning: true,
+                input: ["text", "image"],
+                cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 },
+                contextWindow: 1_050_000,
+                maxTokens: 128_000,
+              }
+            : null,
+      } as never,
+    });
+    const pro = provider.resolveDynamicModel?.({
+      provider: "openai",
+      modelId: "gpt-5.5-pro",
+      modelRegistry: {
+        find: (_provider: string, id: string) =>
+          id === "gpt-5.4-pro"
+            ? {
+                id,
+                name: "GPT-5.4 Pro",
+                provider: "openai",
+                api: "openai-responses",
+                baseUrl: "https://api.openai.com/v1",
+                reasoning: true,
+                input: ["text", "image"],
+                cost: { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 1_050_000,
+                maxTokens: 128_000,
+              }
+            : null,
+      } as never,
+    });
+
+    expect(model).toBeUndefined();
+    expect(pro).toMatchObject({
+      provider: "openai",
+      id: "gpt-5.5-pro",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+      cost: { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 },
+    });
+  });
+
+  it("surfaces gpt-5.5 in xhigh without synthetic catalog metadata", () => {
+    const provider = buildOpenAIProvider();
+
+    expect(
+      provider
+        .resolveThinkingProfile?.({
+          provider: "openai",
+          modelId: "gpt-5.5",
+        } as never)
+        ?.levels.some((level) => level.id === "xhigh"),
+    ).toBe(true);
+
+    const entries = provider.augmentModelCatalog?.({
+      env: process.env,
+      entries: [{ provider: "openai", id: "gpt-5.4", name: "GPT-5.4" }],
+    } as never);
+
+    expect(entries).not.toContainEqual(
+      expect.objectContaining({
+        provider: "openai",
+        id: "gpt-5.5",
+      }),
+    );
+  });
+
   it("keeps modern live selection on OpenAI 5.2+ and Codex 5.2+", () => {
     const provider = buildOpenAIProvider();
     const codexProvider = buildOpenAICodexProviderPlugin();
@@ -249,6 +332,12 @@ describe("buildOpenAIProvider", () => {
       provider.isModernModelRef?.({
         provider: "openai",
         modelId: "gpt-5.4",
+      } as never),
+    ).toBe(true);
+    expect(
+      provider.isModernModelRef?.({
+        provider: "openai",
+        modelId: "gpt-5.5",
       } as never),
     ).toBe(true);
 
@@ -274,6 +363,12 @@ describe("buildOpenAIProvider", () => {
       codexProvider.isModernModelRef?.({
         provider: "openai-codex",
         modelId: "gpt-5.4",
+      } as never),
+    ).toBe(true);
+    expect(
+      codexProvider.isModernModelRef?.({
+        provider: "openai-codex",
+        modelId: "gpt-5.5",
       } as never),
     ).toBe(true);
   });
@@ -352,6 +447,7 @@ describe("buildOpenAIProvider", () => {
         provider: "openai",
         id: "gpt-5.4",
         baseUrl: "https://api.openai.com/v1",
+        contextWindow: 200_000,
       } as Model<"openai-responses">,
       payload: {
         reasoning: { effort: "none" },
@@ -362,6 +458,10 @@ describe("buildOpenAIProvider", () => {
       transport: "auto",
       openaiWsWarmup: true,
     });
+    expect(result.payload.store).toBe(true);
+    expect(result.payload.context_management).toEqual([
+      { type: "compaction", compact_threshold: 140_000 },
+    ]);
     expect(result.payload.service_tier).toBe("priority");
     expect(result.payload.text).toEqual({ verbosity: "low" });
     expect(result.payload.reasoning).toEqual({ effort: "none" });

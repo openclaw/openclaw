@@ -484,7 +484,8 @@ start_gateway() {
     OPENCLAW_NO_ONBOARD=1 \
     OPENCLAW_PLUGIN_STAGE_DIR="$OPENCLAW_PLUGIN_STAGE_DIR" \
     npm_config_cache=/tmp/openclaw-root-owned-npm-cache \
-    openclaw gateway --port "$PORT" --bind loopback --allow-unconfigured >"$log_file" 2>&1 &
+    bash -c 'openclaw gateway --port "$1" --bind loopback --allow-unconfigured >"$2" 2>&1' \
+    bash "$PORT" "$log_file" &
   gateway_pid="$!"
 
   for _ in $(seq 1 240); do

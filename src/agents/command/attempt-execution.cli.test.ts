@@ -86,6 +86,43 @@ describe("CLI attempt execution", () => {
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
+  async function runClaudeCliAttempt(params: {
+    sessionKey: string;
+    sessionEntry: SessionEntry;
+    sessionStore: Record<string, SessionEntry>;
+    body: string;
+    runId: string;
+  }) {
+    await runAgentAttempt({
+      providerOverride: "claude-cli",
+      modelOverride: "opus",
+      cfg: {} as OpenClawConfig,
+      sessionEntry: params.sessionEntry,
+      sessionId: params.sessionEntry.sessionId,
+      sessionKey: params.sessionKey,
+      sessionAgentId: "main",
+      sessionFile: path.join(tmpDir, "session.jsonl"),
+      workspaceDir: tmpDir,
+      body: params.body,
+      isFallbackRetry: false,
+      resolvedThinkLevel: "medium",
+      timeoutMs: 1_000,
+      runId: params.runId,
+      opts: { senderIsOwner: false } as Parameters<typeof runAgentAttempt>[0]["opts"],
+      runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
+      spawnedBy: undefined,
+      messageChannel: undefined,
+      skillsSnapshot: undefined,
+      resolvedVerboseLevel: undefined,
+      agentDir: tmpDir,
+      onAgentEvent: vi.fn(),
+      authProfileProvider: "claude-cli",
+      sessionStore: params.sessionStore,
+      storePath,
+      sessionHasHistory: false,
+    });
+  }
+
   it("clears stale Claude CLI session IDs before retrying after session expiration", async () => {
     const sessionKey = "agent:main:subagent:cli-expired";
     const homeDir = path.join(tmpDir, "home");
@@ -183,33 +220,12 @@ describe("CLI attempt execution", () => {
     await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
     runCliAgentMock.mockResolvedValueOnce(makeCliResult("fresh cli response"));
 
-    await runAgentAttempt({
-      providerOverride: "claude-cli",
-      modelOverride: "opus",
-      cfg: {} as OpenClawConfig,
-      sessionEntry,
-      sessionId: sessionEntry.sessionId,
+    await runClaudeCliAttempt({
       sessionKey,
-      sessionAgentId: "main",
-      sessionFile: path.join(tmpDir, "session.jsonl"),
-      workspaceDir: tmpDir,
-      body: "remember me",
-      isFallbackRetry: false,
-      resolvedThinkLevel: "medium",
-      timeoutMs: 1_000,
-      runId: "run-cli-missing-transcript",
-      opts: { senderIsOwner: false } as Parameters<typeof runAgentAttempt>[0]["opts"],
-      runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
-      spawnedBy: undefined,
-      messageChannel: undefined,
-      skillsSnapshot: undefined,
-      resolvedVerboseLevel: undefined,
-      agentDir: tmpDir,
-      onAgentEvent: vi.fn(),
-      authProfileProvider: "claude-cli",
+      sessionEntry,
       sessionStore,
-      storePath,
-      sessionHasHistory: false,
+      body: "remember me",
+      runId: "run-cli-missing-transcript",
     });
 
     expect(runCliAgentMock).toHaveBeenCalledTimes(1);
@@ -262,33 +278,12 @@ describe("CLI attempt execution", () => {
     await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
     runCliAgentMock.mockResolvedValueOnce(makeCliResult("resumed cli response"));
 
-    await runAgentAttempt({
-      providerOverride: "claude-cli",
-      modelOverride: "opus",
-      cfg: {} as OpenClawConfig,
-      sessionEntry,
-      sessionId: sessionEntry.sessionId,
+    await runClaudeCliAttempt({
       sessionKey,
-      sessionAgentId: "main",
-      sessionFile: path.join(tmpDir, "session.jsonl"),
-      workspaceDir: tmpDir,
-      body: "continue",
-      isFallbackRetry: false,
-      resolvedThinkLevel: "medium",
-      timeoutMs: 1_000,
-      runId: "run-cli-transcript-present",
-      opts: { senderIsOwner: false } as Parameters<typeof runAgentAttempt>[0]["opts"],
-      runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
-      spawnedBy: undefined,
-      messageChannel: undefined,
-      skillsSnapshot: undefined,
-      resolvedVerboseLevel: undefined,
-      agentDir: tmpDir,
-      onAgentEvent: vi.fn(),
-      authProfileProvider: "claude-cli",
+      sessionEntry,
       sessionStore,
-      storePath,
-      sessionHasHistory: false,
+      body: "continue",
+      runId: "run-cli-transcript-present",
     });
 
     expect(runCliAgentMock).toHaveBeenCalledTimes(1);
