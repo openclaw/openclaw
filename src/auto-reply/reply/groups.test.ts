@@ -92,7 +92,8 @@ describe("group runtime loading", () => {
       silentReplyPolicy: "allow",
     });
     expect(allowed).toContain('reply with exactly "NO_REPLY"');
-    expect(allowed).toContain("Otherwise stay silent.");
+    expect(allowed).toContain('your final answer must still be exactly "NO_REPLY"');
+    expect(allowed).toContain("Never say that you are staying quiet");
 
     const disallowed = groups.buildGroupIntro({
       cfg: {} as OpenClawConfig,
@@ -104,7 +105,7 @@ describe("group runtime loading", () => {
     });
     expect(disallowed).toContain("Activation: always-on");
     expect(disallowed).not.toContain("NO_REPLY");
-    expect(disallowed).not.toContain("Otherwise stay silent.");
+    expect(disallowed).not.toContain("Never say that you are staying quiet");
 
     const rewritten = groups.buildGroupIntro({
       cfg: {} as OpenClawConfig,
@@ -116,7 +117,7 @@ describe("group runtime loading", () => {
     });
     expect(rewritten).toContain('reply with exactly "NO_REPLY"');
     expect(rewritten).toContain("short fallback reply");
-    expect(rewritten).not.toContain("Otherwise stay silent.");
+    expect(rewritten).not.toContain("Be extremely selective");
   });
 
   it("loads the group runtime only when requireMention resolution needs it", async () => {
