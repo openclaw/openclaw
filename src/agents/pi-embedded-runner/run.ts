@@ -2134,6 +2134,7 @@ export async function runEmbeddedPiAgent(
           });
           return {
             payloads: payloadsWithToolMedia?.length ? payloadsWithToolMedia : undefined,
+            diagnosticTrace: attempt.diagnosticTrace,
             meta: {
               durationMs: Date.now() - started,
               agentMeta,
