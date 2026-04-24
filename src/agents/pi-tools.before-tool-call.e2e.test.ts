@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   onDiagnosticEvent,
   resetDiagnosticEventsForTest,
+  type DiagnosticEventPayload,
   type DiagnosticToolLoopEvent,
 } from "../infra/diagnostic-events.js";
 import { resetDiagnosticSessionStateForTest } from "../logging/diagnostic-session-state.js";
@@ -75,6 +76,22 @@ describe("before_tool_call loop detection behavior", () => {
     const emitted: DiagnosticToolLoopEvent[] = [];
     const stop = onDiagnosticEvent((evt) => {
       if (evt.type === "tool.loop" && filter(evt)) {
+        emitted.push(evt);
+      }
+    });
+    try {
+      await run(emitted);
+    } finally {
+      stop();
+    }
+  }
+
+  async function withToolExecutionEvents(
+    run: (emitted: DiagnosticEventPayload[]) => Promise<void>,
+  ) {
+    const emitted: DiagnosticEventPayload[] = [];
+    const stop = onDiagnosticEvent((evt) => {
+      if (evt.type.startsWith("tool.execution.")) {
         emitted.push(evt);
       }
     });
@@ -329,6 +346,91 @@ describe("before_tool_call loop detection behavior", () => {
         detector: "known_poll_no_progress",
         toolName: "process",
       });
+    });
+  });
+
+  it("emits diagnostic tool execution events without parameter values", async () => {
+    const trace = {
+      traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
+      spanId: "00f067aa0ba902b7",
+      traceFlags: "01",
+    };
+    const execute = vi.fn().mockResolvedValue({
+      content: [{ type: "text", text: "ok" }],
+    });
+    const tool = wrapToolWithBeforeToolCallHook({ name: "bash", execute } as any, {
+      agentId: "main",
+      sessionKey: "session-key",
+      sessionId: "session-id",
+      runId: "run-1",
+      trace,
+      loopDetection: { enabled: false },
+    });
+
+    await withToolExecutionEvents(async (emitted) => {
+      await tool.execute(
+        "tool-call-1",
+        { command: "pwd", token: "sk-1234567890abcdef1234567890abcdef" },
+        undefined,
+        undefined,
+      );
+
+      expect(emitted.map((evt) => evt.type)).toEqual([
+        "tool.execution.started",
+        "tool.execution.completed",
+      ]);
+      expect(emitted[0]).toMatchObject({
+        type: "tool.execution.started",
+        runId: "run-1",
+        sessionKey: "session-key",
+        sessionId: "session-id",
+        toolName: "exec",
+        toolCallId: "tool-call-1",
+        paramsSummary: {
+          kind: "object",
+          keys: ["command", "token"],
+          keyCount: 2,
+        },
+        trace,
+      });
+      expect(emitted[0]?.trace).not.toBe(trace);
+      expect(Object.isFrozen(emitted[0]?.trace)).toBe(true);
+      expect(emitted[1]).toMatchObject({
+        type: "tool.execution.completed",
+        durationMs: expect.any(Number),
+      });
+      expect(JSON.stringify(emitted)).not.toContain("sk-1234567890abcdef1234567890abcdef");
+      expect(JSON.stringify(emitted)).not.toContain("pwd");
+    });
+  });
+
+  it("emits diagnostic tool execution error events with redacted errors", async () => {
+    const execute = vi
+      .fn()
+      .mockRejectedValue(new Error("failed with key sk-1234567890abcdef1234567890abcdef"));
+    const tool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any, {
+      agentId: "main",
+      sessionKey: "session-key",
+      loopDetection: { enabled: false },
+    });
+
+    await withToolExecutionEvents(async (emitted) => {
+      await expect(
+        tool.execute("tool-call-error", { path: "/tmp/file" }, undefined, undefined),
+      ).rejects.toThrow("failed with key");
+
+      expect(emitted.map((evt) => evt.type)).toEqual([
+        "tool.execution.started",
+        "tool.execution.error",
+      ]);
+      expect(emitted[1]).toMatchObject({
+        type: "tool.execution.error",
+        toolName: "read",
+        toolCallId: "tool-call-error",
+        durationMs: expect.any(Number),
+        errorCategory: "Error",
+      });
+      expect(JSON.stringify(emitted[1])).not.toContain("sk-1234567890abcdef1234567890abcdef");
     });
   });
 });

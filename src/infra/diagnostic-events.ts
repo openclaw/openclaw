@@ -154,6 +154,37 @@ export type DiagnosticToolLoopEvent = DiagnosticBaseEvent & {
   pairedToolName?: string;
 };
 
+export type DiagnosticToolParamsSummary =
+  | { kind: "object"; keys: string[]; keyCount: number }
+  | { kind: "array"; length: number }
+  | { kind: "string"; length: number }
+  | { kind: "number" | "boolean" | "null" | "undefined" | "other" };
+
+type DiagnosticToolExecutionBaseEvent = DiagnosticBaseEvent & {
+  runId?: string;
+  sessionKey?: string;
+  sessionId?: string;
+  toolName: string;
+  toolCallId?: string;
+  paramsSummary?: DiagnosticToolParamsSummary;
+};
+
+export type DiagnosticToolExecutionStartedEvent = DiagnosticToolExecutionBaseEvent & {
+  type: "tool.execution.started";
+};
+
+export type DiagnosticToolExecutionCompletedEvent = DiagnosticToolExecutionBaseEvent & {
+  type: "tool.execution.completed";
+  durationMs: number;
+};
+
+export type DiagnosticToolExecutionErrorEvent = DiagnosticToolExecutionBaseEvent & {
+  type: "tool.execution.error";
+  durationMs: number;
+  errorCategory: string;
+  error?: string;
+};
+
 export type DiagnosticMemoryUsage = {
   rssBytes: number;
   heapTotalBytes: number;
@@ -204,6 +235,9 @@ export type DiagnosticEventPayload =
   | DiagnosticRunAttemptEvent
   | DiagnosticHeartbeatEvent
   | DiagnosticToolLoopEvent
+  | DiagnosticToolExecutionStartedEvent
+  | DiagnosticToolExecutionCompletedEvent
+  | DiagnosticToolExecutionErrorEvent
   | DiagnosticMemorySampleEvent
   | DiagnosticMemoryPressureEvent
   | DiagnosticPayloadLargeEvent;

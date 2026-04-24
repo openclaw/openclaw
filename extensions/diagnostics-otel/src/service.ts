@@ -812,6 +812,9 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               recordHeartbeat(evt);
               return;
             case "tool.loop":
+            case "tool.execution.started":
+            case "tool.execution.completed":
+            case "tool.execution.error":
             case "diagnostic.memory.sample":
             case "diagnostic.memory.pressure":
             case "payload.large":
