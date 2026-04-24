@@ -414,3 +414,4 @@ Remote access setup details: [Remote access](/gateway/remote).
 - [WebChat](/web/webchat) — browser-based chat interface
 - [TUI](/web/tui) — terminal user interface
 - [Health Checks](/gateway/health) — gateway health monitoring
+- [Control UI redeploy](/web/control-ui-redeploy) — rebuild and resync a customized Control UI into the installed package
