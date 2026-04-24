@@ -96,6 +96,28 @@ describe("AgentHarness V2 compatibility adapter", () => {
     expect(harness.classify).toHaveBeenCalledWith(result, params);
   });
 
+  it("preserves harness-supplied classification when no classify hook is registered", async () => {
+    const params = createAttemptParams();
+    const result = {
+      ...createAttemptResult(),
+      agentHarnessResultClassification: "reasoning-only",
+    } as EmbeddedRunAttemptResult;
+    const harness: AgentHarness = {
+      id: "codex",
+      label: "Codex",
+      supports: () => ({ supported: true }),
+      runAttempt: vi.fn(async () => result),
+    };
+
+    const v2 = adaptAgentHarnessToV2(harness);
+    const session = await v2.start(await v2.prepare(params));
+
+    expect(await v2.resolveOutcome(session, result)).toMatchObject({
+      agentHarnessId: "codex",
+      agentHarnessResultClassification: "reasoning-only",
+    });
+  });
+
   it("clears stale non-ok classification when classification resolves to ok", async () => {
     const params = createAttemptParams();
     const result = {

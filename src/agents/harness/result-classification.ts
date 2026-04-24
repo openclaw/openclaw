@@ -10,9 +10,12 @@ export function applyAgentHarnessResultClassification(
   result: AgentHarnessAttemptResult,
   params: AgentHarnessAttemptParams,
 ): AgentHarnessAttemptResult {
+  if (!harness.classify) {
+    return { ...result, agentHarnessId: harness.id };
+  }
   const { agentHarnessResultClassification: _previousClassification, ...resultWithoutPrevious } =
     result;
-  const classification = harness.classify?.(result, params);
+  const classification = harness.classify(result, params);
   if (!classification || classification === "ok") {
     return { ...resultWithoutPrevious, agentHarnessId: harness.id };
   }
