@@ -207,6 +207,18 @@ arn:aws:bedrock:*::foundation-model/amazon.titan-embed-text-v2:0
 Default model: `embeddinggemma-300m-qat-Q8_0.gguf` (~0.6 GB, auto-downloaded).
 Requires native build: `pnpm approve-builds` then `pnpm rebuild node-llama-cpp`.
 
+Use the standalone CLI to verify the same provider path the Gateway uses:
+
+```bash
+openclaw memory status --deep --agent main
+openclaw memory index --force --agent main
+```
+
+If `provider` is `auto`, `local` is selected only when `local.modelPath` points
+to an existing local file. `hf:` and HTTP(S) model references can still be used
+explicitly with `provider: "local"`, but they do not make `auto` select local
+before the model is available on disk.
+
 ---
 
 ## Hybrid search config

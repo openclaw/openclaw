@@ -370,6 +370,7 @@ read without importing the plugin runtime.
     "speechProviders": ["openai"],
     "realtimeTranscriptionProviders": ["openai"],
     "realtimeVoiceProviders": ["openai"],
+    "memoryEmbeddingProviders": ["local"],
     "mediaUnderstandingProviders": ["openai", "openai-codex"],
     "imageGenerationProviders": ["openai"],
     "videoGenerationProviders": ["qwen"],
@@ -389,6 +390,7 @@ Each list is optional:
 | `speechProviders`                | `string[]` | Speech provider ids this plugin owns.                             |
 | `realtimeTranscriptionProviders` | `string[]` | Realtime-transcription provider ids this plugin owns.             |
 | `realtimeVoiceProviders`         | `string[]` | Realtime-voice provider ids this plugin owns.                     |
+| `memoryEmbeddingProviders`       | `string[]` | Memory embedding provider ids this plugin owns.                   |
 | `mediaUnderstandingProviders`    | `string[]` | Media-understanding provider ids this plugin owns.                |
 | `imageGenerationProviders`       | `string[]` | Image-generation provider ids this plugin owns.                   |
 | `videoGenerationProviders`       | `string[]` | Video-generation provider ids this plugin owns.                   |
@@ -400,6 +402,12 @@ Provider plugins that implement `resolveExternalAuthProfiles` should declare
 `contracts.externalAuthProviders`. Plugins without the declaration still run
 through a deprecated compatibility fallback, but that fallback is slower and
 will be removed after the migration window.
+
+Bundled memory embedding providers should declare
+`contracts.memoryEmbeddingProviders` for every adapter id they expose, including
+built-in adapters such as `local`. Standalone CLI paths use this manifest
+contract to load only the owning plugin before the full Gateway runtime has
+registered providers.
 
 ## mediaUnderstandingProviderMetadata reference
 
