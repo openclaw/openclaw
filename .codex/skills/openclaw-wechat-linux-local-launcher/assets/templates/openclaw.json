@@ -1,0 +1,96 @@
+{
+  "models": {
+    "providers": {
+      "openai": {
+        "baseUrl": "${OPENAI_BASE_URL}",
+        "apiKey": {
+          "source": "env",
+          "provider": "default",
+          "id": "OPENAI_API_KEY"
+        },
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "qwen3-coder-plus",
+            "name": "qwen3-coder-plus",
+            "reasoning": false,
+            "input": ["text"],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 128000,
+            "maxTokens": 8192
+          }
+        ]
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "openai/qwen3-coder-plus"
+      },
+      "compaction": {
+        "mode": "safeguard"
+      },
+      "maxConcurrent": 4,
+      "subagents": {
+        "maxConcurrent": 8
+      }
+    }
+  },
+  "messages": {
+    "ackReactionScope": "group-mentions"
+  },
+  "commands": {
+    "native": "auto",
+    "nativeSkills": "auto",
+    "restart": true,
+    "ownerDisplay": "raw"
+  },
+  "channels": {
+    "wechat-linux": {
+      "enabled": true,
+      "pyWxDumpRoot": "__PYWXDUMP_ROOT__",
+      "pythonPath": "__PYTHON_PATH__",
+      "keyFile": "__WX_KEY_FILE__",
+      "dbDir": "__WX_DB_DIR__",
+      "outputDir": "__WX_OUTPUT_DIR__",
+      "display": ":1.0",
+      "windowClass": "wechat",
+      "windowMode": "auto",
+      "dmPolicy": "pairing",
+      "allowFrom": [],
+      "groupPolicy": "allowlist",
+      "groupAllowFrom": [],
+      "visionBaseUrl": "${OPENAI_BASE_URL}",
+      "visionModel": "qwen3.5-plus",
+      "visionApiKeyEnv": "OPENAI_API_KEY",
+      "summaryBaseUrl": "${OPENAI_BASE_URL}",
+      "summaryModel": "qwen3-coder-plus",
+      "summaryApiKeyEnv": "OPENAI_API_KEY",
+      "imageAnalysis": true,
+      "videoAnalysis": true,
+      "voiceAsr": true,
+      "linkDocs": true,
+      "asrUrl": "http://127.0.0.1:8001/api/asr/transcribe"
+    }
+  },
+  "gateway": {
+    "mode": "local",
+    "auth": {
+      "mode": "token",
+      "token": "__GATEWAY_AUTH_TOKEN__"
+    }
+  },
+  "plugins": {
+    "entries": {
+      "wechat-linux": {
+        "enabled": true
+      }
+    }
+  }
+}
