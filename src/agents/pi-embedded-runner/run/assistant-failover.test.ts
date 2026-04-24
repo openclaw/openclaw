@@ -111,23 +111,26 @@ describe("handleAssistantFailover", () => {
       expect(err.status).toBe(429);
     });
 
-    it("coerces a null decision reason onto the most specific failure signal", async () => {
+    it("coerces a null decision reason onto the most specific non-timeout failure signal", async () => {
       // failover-policy can return `surface_error` with `reason: null`
-      // when shouldRotateAssistant fires on timedOut without a classified
-      // upstream reason. FailoverError requires a concrete reason.
+      // when shouldRotateAssistant fires on `failoverFailure` without a
+      // classified upstream reason. FailoverError requires a concrete
+      // reason, so the throw path coerces null onto the most specific
+      // signal the run observed.
       const outcome = await handleAssistantFailover(
         makeParams({
           initialDecision: { action: "surface_error", reason: null },
           failoverReason: null,
-          timedOut: true,
+          timedOut: false,
           billingFailure: false,
+          authFailure: true,
         }),
       );
 
       const err = expectThrownFailoverError(outcome);
-      expect(err.reason).toBe("timeout");
-      expect(err.message).toBe("LLM request timed out.");
-      expect(err.status).toBe(408);
+      expect(err.reason).toBe("auth");
+      expect(err.message).toBe("LLM request unauthorized.");
+      expect(err.status).toBe(401);
     });
 
     it("leaves externally-aborted runs on the continue_normal path", async () => {
@@ -139,6 +142,28 @@ describe("handleAssistantFailover", () => {
           externalAbort: true,
           aborted: true,
           failoverReason: null,
+          billingFailure: false,
+        }),
+      );
+
+      expect(outcome.action).toBe("continue_normal");
+    });
+
+    it("leaves plain timeouts on the continue_normal path for the runner's timeout-payload synthesis", async () => {
+      // `run.ts` already emits an explicit timeout payload when
+      // `buildEmbeddedRunPayloads` produces no assistant content (see
+      // the `timedOut && !timedOutDuringCompaction &&
+      // !payloadsWithToolMedia.length` block). Throwing a FailoverError
+      // here would short-circuit that synthesis and break
+      // timeout-compaction retry coverage in
+      // `run.timeout-triggered-compaction.test.ts`. The throw path is
+      // reserved for concrete provider failures that have no other
+      // downstream surface.
+      const outcome = await handleAssistantFailover(
+        makeParams({
+          initialDecision: { action: "surface_error", reason: null },
+          failoverReason: null,
+          timedOut: true,
           billingFailure: false,
         }),
       );
