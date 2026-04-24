@@ -44,6 +44,19 @@ function createManifestPlugin(id: string): PluginManifestRecord {
   };
 }
 
+function createManifestPluginWithoutDiscovery(params: {
+  id: string;
+  providerAuthEnvVars?: Record<string, string[]>;
+}): PluginManifestRecord {
+  const { providerDiscoverySource: _providerDiscoverySource, ...plugin } = createManifestPlugin(
+    params.id,
+  );
+  return {
+    ...plugin,
+    ...(params.providerAuthEnvVars ? { providerAuthEnvVars: params.providerAuthEnvVars } : {}),
+  };
+}
+
 function createProvider(params: { id: string; mode: "static" | "catalog" }): ProviderPlugin {
   const hook = {
     run: async () => ({
@@ -80,28 +93,55 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
     expect(mocks.resolvePluginProviders).toHaveBeenCalledWith(
       expect.objectContaining({
         bundledProviderAllowlistCompat: true,
+        onlyPluginIds: ["deepseek"],
       }),
     );
   });
 
-  it("falls back to full provider plugins for mixed live and static-only entries", () => {
+  it("keeps unscoped discovery bounded for mixed live and static-only entries", () => {
+    const codexEntryProvider = createProvider({ id: "codex", mode: "catalog" });
     const fullProviders = [
-      createProvider({ id: "codex", mode: "catalog" }),
       createProvider({ id: "deepseek", mode: "catalog" }),
+      createProvider({ id: "kilocode", mode: "catalog" }),
     ];
-    mocks.resolveDiscoveredProviderPluginIds.mockReturnValue(["codex", "deepseek"]);
+    mocks.resolveDiscoveredProviderPluginIds.mockReturnValue([
+      "codex",
+      "deepseek",
+      "kilocode",
+      "unused",
+    ]);
     mocks.loadPluginManifestRegistry.mockReturnValue({
-      plugins: [createManifestPlugin("codex"), createManifestPlugin("deepseek")],
+      plugins: [
+        createManifestPlugin("codex"),
+        createManifestPlugin("deepseek"),
+        createManifestPluginWithoutDiscovery({
+          id: "kilocode",
+          providerAuthEnvVars: { kilocode: ["KILOCODE_API_KEY"] },
+        }),
+        createManifestPluginWithoutDiscovery({
+          id: "unused",
+          providerAuthEnvVars: { unused: ["UNUSED_API_KEY"] },
+        }),
+      ],
       diagnostics: [],
     });
     mocks.loadSource.mockImplementation((modulePath: string) =>
       modulePath.includes("/codex/")
-        ? createProvider({ id: "codex", mode: "catalog" })
+        ? codexEntryProvider
         : createProvider({ id: "deepseek", mode: "static" }),
     );
     mocks.resolvePluginProviders.mockReturnValue(fullProviders);
 
-    expect(resolvePluginDiscoveryProvidersRuntime({})).toEqual(fullProviders);
+    expect(
+      resolvePluginDiscoveryProvidersRuntime({
+        env: { KILOCODE_API_KEY: "sk-test" } as NodeJS.ProcessEnv,
+      }),
+    ).toEqual([{ ...codexEntryProvider, pluginId: "codex" }, ...fullProviders]);
+    expect(mocks.resolvePluginProviders).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onlyPluginIds: ["deepseek", "kilocode"],
+      }),
+    );
   });
 
   it("returns static-only discovery entries for callers that explicitly request them", () => {
