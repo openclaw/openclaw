@@ -3,12 +3,14 @@ import type { AssistantMessage, Usage } from "@mariozechner/pi-ai";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import {
   formatErrorMessage,
+  formatToolProgressOutput,
   inferToolMetaFromArgs,
   normalizeUsage,
   runAgentHarnessAfterCompactionHook,
   runAgentHarnessBeforeCompactionHook,
   type EmbeddedRunAttemptParams,
   type EmbeddedRunAttemptResult,
+  TOOL_PROGRESS_OUTPUT_MAX_CHARS,
   formatToolAggregate,
   type MessagingToolSend,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -56,6 +58,8 @@ const CURRENT_TOKEN_USAGE_KEYS = [
   "last_token_usage",
 ] as const;
 
+const MAX_TOOL_OUTPUT_DELTA_MESSAGES_PER_ITEM = 20;
+
 export class CodexAppServerEventProjector {
   private readonly assistantTextByItem = new Map<string, string>();
   private readonly assistantItemOrder: string[] = [];
@@ -66,6 +70,11 @@ export class CodexAppServerEventProjector {
   private readonly activeCompactionItemIds = new Set<string>();
   private readonly toolResultSummaryItemIds = new Set<string>();
   private readonly toolResultOutputItemIds = new Set<string>();
+  private readonly toolResultOutputStreamedItemIds = new Set<string>();
+  private readonly toolResultOutputDeltaState = new Map<
+    string,
+    { chars: number; messages: number; truncated: boolean }
+  >();
   private readonly toolMetas = new Map<string, { toolName: string; meta?: string }>();
   private assistantStarted = false;
   private reasoningStarted = false;
@@ -489,10 +498,44 @@ export class CodexAppServerEventProjector {
     if (!itemId || !delta || !this.shouldEmitToolOutput()) {
       return;
     }
+    const state = this.toolResultOutputDeltaState.get(itemId) ?? {
+      chars: 0,
+      messages: 0,
+      truncated: false,
+    };
+    if (state.truncated) {
+      return;
+    }
+    const remainingChars = Math.max(0, TOOL_PROGRESS_OUTPUT_MAX_CHARS - state.chars);
+    const remainingMessages = Math.max(0, MAX_TOOL_OUTPUT_DELTA_MESSAGES_PER_ITEM - state.messages);
+    if (remainingChars === 0 || remainingMessages === 0) {
+      state.truncated = true;
+      this.toolResultOutputDeltaState.set(itemId, state);
+      this.emitToolResultMessage({
+        itemId,
+        text: formatToolOutput(toolName, undefined, "(output truncated)"),
+      });
+      return;
+    }
+    const chunk = delta.length > remainingChars ? delta.slice(0, remainingChars) : delta;
+    state.chars += chunk.length;
+    state.messages += 1;
+    const reachedLimit =
+      delta.length > remainingChars ||
+      state.chars >= TOOL_PROGRESS_OUTPUT_MAX_CHARS ||
+      state.messages >= MAX_TOOL_OUTPUT_DELTA_MESSAGES_PER_ITEM;
+    if (reachedLimit) {
+      state.truncated = true;
+    }
+    this.toolResultOutputDeltaState.set(itemId, state);
+    this.toolResultOutputStreamedItemIds.add(itemId);
     this.emitToolResultMessage({
       itemId,
-      text: formatToolOutput(toolName, undefined, delta),
-      output: true,
+      text: formatToolOutput(
+        toolName,
+        undefined,
+        reachedLimit ? `${chunk}\n...(truncated)...` : chunk,
+      ),
     });
   }
 
@@ -588,6 +631,9 @@ export class CodexAppServerEventProjector {
     if (this.toolResultOutputItemIds.has(itemId)) {
       return;
     }
+    if (this.toolResultOutputStreamedItemIds.has(itemId)) {
+      return;
+    }
     const toolName = itemName(item);
     const output = itemOutputText(item);
     if (!toolName || !output) {
@@ -596,12 +642,16 @@ export class CodexAppServerEventProjector {
     this.emitToolResultMessage({
       itemId,
       text: formatToolOutput(toolName, itemMeta(item), output),
-      output: true,
+      finalOutput: true,
     });
   }
 
-  private emitToolResultMessage(params: { itemId: string; text: string; output?: boolean }): void {
-    if (params.output) {
+  private emitToolResultMessage(params: {
+    itemId: string;
+    text: string;
+    finalOutput?: boolean;
+  }): void {
+    if (params.finalOutput) {
       this.toolResultOutputItemIds.add(params.itemId);
     }
     try {
@@ -934,7 +984,10 @@ function itemName(item: CodexThreadItem): string | undefined {
 
 function itemMeta(item: CodexThreadItem): string | undefined {
   if (item.type === "commandExecution" && typeof item.command === "string") {
-    return item.command;
+    return inferToolMetaFromArgs("exec", {
+      command: item.command,
+      cwd: typeof item.cwd === "string" ? item.cwd : undefined,
+    });
   }
   if (item.type === "webSearch" && typeof item.query === "string") {
     return item.query;
@@ -995,11 +1048,30 @@ function formatToolSummary(toolName: string, meta?: string): string {
 }
 
 function formatToolOutput(toolName: string, meta: string | undefined, output: string): string {
-  const trimmed = output.trim();
-  if (!trimmed) {
+  const formattedOutput = formatToolProgressOutput(output);
+  if (!formattedOutput) {
     return formatToolSummary(toolName, meta);
   }
-  return `${formatToolSummary(toolName, meta)}\n\`\`\`txt\n${trimmed}\n\`\`\``;
+  const fence = markdownFenceForText(formattedOutput);
+  return `${formatToolSummary(toolName, meta)}\n${fence}txt\n${formattedOutput}\n${fence}`;
+}
+
+function markdownFenceForText(text: string): string {
+  return "`".repeat(Math.max(3, longestBacktickRun(text) + 1));
+}
+
+function longestBacktickRun(value: string): number {
+  let longest = 0;
+  let current = 0;
+  for (const char of value) {
+    if (char === "`") {
+      current += 1;
+      longest = Math.max(longest, current);
+      continue;
+    }
+    current = 0;
+  }
+  return longest;
 }
 
 function readItemString(item: CodexThreadItem, key: string): string | undefined {
