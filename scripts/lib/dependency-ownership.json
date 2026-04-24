@@ -42,8 +42,9 @@
       "risk": ["protocol-client", "network"]
     },
     "@mozilla/readability": {
-      "owner": "capability:web-extract-local",
-      "class": "default-runtime-initially",
+      "owner": "plugin:web-readability",
+      "class": "plugin-runtime",
+      "activation": ["tools.web.fetch.readability", "plugins.entries.web-readability.enabled"],
       "risk": ["parser", "untrusted-html"]
     },
     "@napi-rs/canvas": {
@@ -122,8 +123,9 @@
       "risk": ["archive-parser", "untrusted-files"]
     },
     "linkedom": {
-      "owner": "capability:web-extract-local",
-      "class": "default-runtime-initially",
+      "owner": "plugin:web-readability",
+      "class": "plugin-runtime",
+      "activation": ["tools.web.fetch.readability", "plugins.entries.web-readability.enabled"],
       "risk": ["parser", "untrusted-html"]
     },
     "markdown-it": {

@@ -1121,6 +1121,10 @@
       "types": "./dist/plugin-sdk/provider-usage.d.ts",
       "default": "./dist/plugin-sdk/provider-usage.js"
     },
+    "./plugin-sdk/web-content-extractor": {
+      "types": "./dist/plugin-sdk/web-content-extractor.d.ts",
+      "default": "./dist/plugin-sdk/web-content-extractor.js"
+    },
     "./plugin-sdk/provider-web-fetch-contract": {
       "types": "./dist/plugin-sdk/provider-web-fetch-contract.d.ts",
       "default": "./dist/plugin-sdk/provider-web-fetch-contract.js"
@@ -1588,7 +1592,6 @@
     "@mariozechner/pi-coding-agent": "0.70.2",
     "@mariozechner/pi-tui": "0.70.2",
     "@modelcontextprotocol/sdk": "1.29.0",
-    "@mozilla/readability": "^0.6.0",
     "@vincentkoc/qrcode-tui": "0.2.1",
     "ajv": "^8.18.0",
     "chalk": "^5.6.2",
@@ -1603,7 +1606,6 @@
     "jiti": "^2.6.1",
     "json5": "^2.2.3",
     "jszip": "^3.10.1",
-    "linkedom": "^0.18.12",
     "markdown-it": "14.1.1",
     "openai": "^6.34.0",
     "osc-progress": "^0.3.0",

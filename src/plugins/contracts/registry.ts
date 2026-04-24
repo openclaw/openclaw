@@ -67,6 +67,7 @@ type ManifestContractKey =
   | "imageGenerationProviders"
   | "videoGenerationProviders"
   | "musicGenerationProviders"
+  | "webContentExtractors"
   | "webFetchProviders"
   | "webSearchProviders"
   | "tools";
@@ -86,6 +87,7 @@ function resolveBundledManifestContracts(): PluginRegistrationContractEntry[] {
       imageGenerationProviderIds: [...entry.imageGenerationProviderIds],
       videoGenerationProviderIds: [...entry.videoGenerationProviderIds],
       musicGenerationProviderIds: [...entry.musicGenerationProviderIds],
+      webContentExtractorIds: [...entry.webContentExtractorIds],
       webFetchProviderIds: [...entry.webFetchProviderIds],
       webSearchProviderIds: [...entry.webSearchProviderIds],
       toolNames: [...entry.toolNames],
@@ -104,6 +106,7 @@ function resolveBundledManifestContracts(): PluginRegistrationContractEntry[] {
           (plugin.contracts?.imageGenerationProviders?.length ?? 0) > 0 ||
           (plugin.contracts?.videoGenerationProviders?.length ?? 0) > 0 ||
           (plugin.contracts?.musicGenerationProviders?.length ?? 0) > 0 ||
+          (plugin.contracts?.webContentExtractors?.length ?? 0) > 0 ||
           (plugin.contracts?.webFetchProviders?.length ?? 0) > 0 ||
           (plugin.contracts?.webSearchProviders?.length ?? 0) > 0 ||
           (plugin.contracts?.tools?.length ?? 0) > 0),
@@ -123,6 +126,7 @@ function resolveBundledManifestContracts(): PluginRegistrationContractEntry[] {
       imageGenerationProviderIds: uniqueStrings(plugin.contracts?.imageGenerationProviders ?? []),
       videoGenerationProviderIds: uniqueStrings(plugin.contracts?.videoGenerationProviders ?? []),
       musicGenerationProviderIds: uniqueStrings(plugin.contracts?.musicGenerationProviders ?? []),
+      webContentExtractorIds: uniqueStrings(plugin.contracts?.webContentExtractors ?? []),
       webFetchProviderIds: uniqueStrings(plugin.contracts?.webFetchProviders ?? []),
       webSearchProviderIds: uniqueStrings(plugin.contracts?.webSearchProviders ?? []),
       toolNames: uniqueStrings(plugin.contracts?.tools ?? []),
@@ -177,6 +181,8 @@ function resolveBundledManifestPluginIdsForContract(contract: ManifestContractKe
             return entry.videoGenerationProviderIds.length > 0;
           case "musicGenerationProviders":
             return entry.musicGenerationProviderIds.length > 0;
+          case "webContentExtractors":
+            return entry.webContentExtractorIds.length > 0;
           case "webFetchProviders":
             return entry.webFetchProviderIds.length > 0;
           case "webSearchProviders":

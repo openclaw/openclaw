@@ -73,6 +73,7 @@ type PluginManifestContractListKey =
   | "videoGenerationProviders"
   | "musicGenerationProviders"
   | "memoryEmbeddingProviders"
+  | "webContentExtractors"
   | "webFetchProviders"
   | "webSearchProviders";
 
