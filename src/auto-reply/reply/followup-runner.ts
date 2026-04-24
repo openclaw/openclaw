@@ -9,9 +9,11 @@ import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
-import { classifyEmbeddedPiRunResultForModelFallback } from "../../agents/pi-embedded-runner/result-fallback-classifier.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
-import { buildAgentRuntimeDeliveryPlan } from "../../agents/runtime-plan/build.js";
+import {
+  buildAgentRuntimeDeliveryPlan,
+  buildAgentRuntimeOutcomePlan,
+} from "../../agents/runtime-plan/build.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
@@ -259,6 +261,7 @@ export function createFollowupRunner(params: {
       );
       replyOperation.setPhase("running");
       try {
+        const outcomePlan = buildAgentRuntimeOutcomePlan();
         const fallbackResult = await runWithModelFallback<EmbeddedAgentRunResult>({
           cfg: runtimeConfig,
           provider: run.provider,
@@ -271,7 +274,7 @@ export function createFollowupRunner(params: {
             sessionKey: run.sessionKey,
           }),
           classifyResult: ({ result, provider, model }) =>
-            classifyEmbeddedPiRunResultForModelFallback({ result, provider, model }),
+            outcomePlan.classifyRunResult({ result, provider, model }),
           run: async (provider, model, runOptions) => {
             const authProfile = resolveRunAuthProfile(run, provider, { config: runtimeConfig });
             let attemptCompactionCount = 0;
