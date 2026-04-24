@@ -48,13 +48,12 @@ export function createAnthropicVertexStreamFn(
   region: string,
   baseURL?: string,
 ): StreamFn {
+  const streamFnPromise = import("./stream-runtime.js").then((runtime) =>
+    runtime.createAnthropicVertexStreamFn(projectId, region, baseURL),
+  );
   return async (model, context, options) => {
-    const runtime = await import("./stream-runtime.js");
-    return runtime.createAnthropicVertexStreamFn(projectId, region, baseURL)(
-      model,
-      context,
-      options,
-    );
+    const streamFn = await streamFnPromise;
+    return streamFn(model, context, options);
   };
 }
 
@@ -62,8 +61,11 @@ export function createAnthropicVertexStreamFnForModel(
   model: { baseUrl?: string },
   env: NodeJS.ProcessEnv = process.env,
 ): StreamFn {
+  const streamFnPromise = import("./stream-runtime.js").then((runtime) =>
+    runtime.createAnthropicVertexStreamFnForModel(model, env),
+  );
   return async (...args) => {
-    const runtime = await import("./stream-runtime.js");
-    return runtime.createAnthropicVertexStreamFnForModel(model, env)(...args);
+    const streamFn = await streamFnPromise;
+    return streamFn(...args);
   };
 }
