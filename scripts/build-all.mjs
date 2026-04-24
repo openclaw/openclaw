@@ -101,6 +101,11 @@ export const BUILD_ALL_PROFILES = {
     "write-cli-compat",
   ],
   gatewayWatch: ["tsdown", "runtime-postbuild", "build-stamp"],
+  // Minimal profile for `npm install -g github:…` git installs. Skips
+  // runtime-postbuild (nested npm install fails in git-clone lifecycle) and
+  // heavy steps that need tsx/tsgo. Produces a working CLI (--version, --help,
+  // setup) without bundled plugin runtime deps.
+  gitInstall: ["canvas:a2ui:bundle", "tsdown", "build-stamp"],
 };
 
 export function resolveBuildAllSteps(profile = "full") {

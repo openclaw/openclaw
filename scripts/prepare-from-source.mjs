@@ -95,8 +95,11 @@ try {
   // Install all workspace dependencies (dev + prod).
   run(`${pnpmRunner} install --frozen-lockfile`);
 
-  // Produce dist/.
-  run(`${pnpmRunner} run build`);
+  // Produce dist/ using the gitInstall profile. The full build profile includes
+  // runtime-postbuild which tries a nested `npm install` for bundled plugin deps
+  // — that fails inside npm's git-clone lifecycle context. The gitInstall profile
+  // builds only what the CLI needs (tsdown + build-stamp).
+  run("node scripts/build-all.mjs gitInstall");
 } catch (err) {
   console.error("[prepare] build from source failed:", err.message);
   process.exit(1);
