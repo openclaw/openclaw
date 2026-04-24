@@ -97,10 +97,10 @@ describe("pruneOrphanedEntries", () => {
 
     const pruned = await pruneOrphanedEntries(store, storePath, { nowMs: now });
 
-    expect(pruned).toBe(1);
+    expect(pruned).toBe(2);
     expect(store["has-file"]).toBeDefined();
     expect(store["missing-file"]).toBeUndefined();
-    expect(store["no-session-file"]).toBeDefined();
+    expect(store["no-session-file"]).toBeUndefined();
   });
 
   it("keeps recent entries to avoid racing transcript creation", async () => {

@@ -248,7 +248,7 @@ export async function pruneOrphanedEntries(
     if (opts.preserveKeys?.has(key)) {
       continue;
     }
-    if (!entry?.sessionFile || !entry.sessionId || (entry.updatedAt ?? 0) >= cutoffMs) {
+    if (!entry?.sessionId || (entry.updatedAt ?? 0) >= cutoffMs) {
       continue;
     }
     let hasAccessibleFile = false;
