@@ -117,6 +117,34 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
     }
   });
 
+  it("passes replyInThread for local-image auto-send when threadId is used as reply target", async () => {
+    const { dir, file } = await createTmpImage();
+    try {
+      await sendText({
+        cfg: emptyConfig,
+        to: "chat_1",
+        text: file,
+        replyToId: " ",
+        threadId: "om_thread_local_image",
+        accountId: "main",
+        mediaLocalRoots: [dir],
+      });
+
+      expect(sendMediaFeishuMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          to: "chat_1",
+          mediaUrl: file,
+          replyToMessageId: "om_thread_local_image",
+          replyInThread: true,
+          accountId: "main",
+          mediaLocalRoots: [dir],
+        }),
+      );
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("keeps non-path text on the text-send path", async () => {
     await sendText({
       cfg: emptyConfig,
@@ -212,6 +240,48 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
         to: "chat_1",
         text: "hello",
         replyToMessageId: "om_thread_2",
+        accountId: "main",
+      }),
+    );
+  });
+
+  it("passes replyInThread for plain text when threadId is used as reply target", async () => {
+    await sendText({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: "hello",
+      replyToId: " ",
+      threadId: "om_thread_2",
+      accountId: "main",
+    });
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "chat_1",
+        text: "hello",
+        replyToMessageId: "om_thread_2",
+        replyInThread: true,
+        accountId: "main",
+      }),
+    );
+  });
+
+  it("passes replyInThread for structured cards when threadId is used as reply target", async () => {
+    await sendText({
+      cfg: cardRenderConfig,
+      to: "chat_1",
+      text: "plain text final answer",
+      replyToId: " ",
+      threadId: "om_thread_3",
+      accountId: "main",
+    });
+
+    expect(sendStructuredCardFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "chat_1",
+        text: "plain text final answer",
+        replyToMessageId: "om_thread_3",
+        replyInThread: true,
         accountId: "main",
       }),
     );
@@ -522,6 +592,7 @@ describe("feishuOutbound.sendMedia renderMode", () => {
         to: "chat_1",
         mediaUrl: "https://example.com/image.png",
         replyToMessageId: "om_thread_1",
+        replyInThread: true,
         accountId: "main",
       }),
     );
