@@ -3081,7 +3081,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 properties: {
                   runtime: {
                     type: "string",
-                    title: "Default Embedded Harness Runtime",
+                    title: "Default Agent Runtime",
                     description:
                       "Embedded harness runtime: auto, pi, or a registered plugin harness id such as codex.",
                   },
@@ -3094,7 +3094,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   },
                 },
                 additionalProperties: false,
-                title: "Default Embedded Harness",
+                title: "Default Agent Runtime",
                 description:
                   "Default embedded agent harness policy. Use runtime=auto for plugin harness selection, runtime=pi for built-in PI, or a registered harness id such as codex.",
               },
@@ -5836,7 +5836,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   properties: {
                     runtime: {
                       type: "string",
-                      title: "Agent Embedded Harness Runtime",
+                      title: "Agent Runtime",
                       description:
                         "Per-agent embedded harness runtime: auto, pi, or a registered plugin harness id such as codex.",
                     },
@@ -23589,12 +23589,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       tags: ["performance"],
     },
     "agents.defaults.embeddedHarness": {
-      label: "Default Embedded Harness",
+      label: "Default Agent Runtime",
       help: "Default embedded agent harness policy. Use runtime=auto for plugin harness selection, runtime=pi for built-in PI, or a registered harness id such as codex.",
       tags: ["advanced"],
     },
     "agents.defaults.embeddedHarness.runtime": {
-      label: "Default Embedded Harness Runtime",
+      label: "Default Agent Runtime",
       help: "Embedded harness runtime: auto, pi, or a registered plugin harness id such as codex.",
       tags: ["advanced"],
     },
@@ -23649,7 +23649,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       tags: ["advanced"],
     },
     "agents.list.*.embeddedHarness.runtime": {
-      label: "Agent Embedded Harness Runtime",
+      label: "Agent Runtime",
       help: "Per-agent embedded harness runtime: auto, pi, or a registered plugin harness id such as codex.",
       tags: ["advanced"],
     },
@@ -27334,14 +27334,14 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
       tags: ["advanced"],
     },
-    "plugins.entries.*.hooks.allowPromptInjection": {
-      label: "Allow Prompt Injection Hooks",
-      help: "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
-      tags: ["access"],
-    },
     "plugins.entries.*.hooks.allowConversationAccess": {
       label: "Allow Conversation Access Hooks",
       help: "Controls whether this plugin may read raw conversation content from typed hooks such as `llm_input`, `llm_output`, and `agent_end`. Non-bundled plugins must opt in explicitly.",
+      tags: ["access"],
+    },
+    "plugins.entries.*.hooks.allowPromptInjection": {
+      label: "Allow Prompt Injection Hooks",
+      help: "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
       tags: ["access"],
     },
     "plugins.entries.*.subagent": {

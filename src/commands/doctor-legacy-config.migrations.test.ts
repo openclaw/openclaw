@@ -361,9 +361,9 @@ describe("normalizeCompatibilityConfigValues", () => {
     });
     expect(res.changes).toEqual(
       expect.arrayContaining([
-        "Moved agents.defaults.model legacy codex/* primary refs to openai/* with Codex harness.",
-        "Moved agents.defaults.models legacy codex/* keys to openai/*.",
-        "Moved agents.list.reviewer.model legacy codex/* primary refs to openai/* with Codex harness.",
+        "Moved agents.defaults.model legacy runtime primary refs to canonical provider refs and selected codex runtime.",
+        "Moved agents.defaults.models legacy runtime keys to canonical provider keys.",
+        "Moved agents.list.reviewer.model legacy runtime primary refs to canonical provider refs and selected codex runtime.",
       ]),
     );
   });

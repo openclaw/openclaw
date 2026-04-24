@@ -35,8 +35,8 @@ The harness is off by default. New configs should keep OpenAI model refs
 canonical as `openai/gpt-*` and explicitly force
 `embeddedHarness.runtime: "codex"` or `OPENCLAW_AGENT_RUNTIME=codex` when they
 want native app-server execution. Legacy `codex/*` model refs still auto-select
-the harness for compatibility, but they are not shown as normal model/provider
-choices.
+the harness for compatibility, but runtime-backed legacy provider prefixes are
+not shown as normal model/provider choices.
 
 ## Pick the right model prefix
 
@@ -56,10 +56,12 @@ app-server harness. Direct API-key access for `openai/gpt-5.5` is supported
 once OpenAI enables GPT-5.5 on the public API.
 
 Legacy `codex/gpt-*` refs remain accepted as compatibility aliases. Doctor
-compatibility migration rewrites legacy primary `codex/*` refs to `openai/*`
-and records the Codex harness policy separately. New PI Codex OAuth configs
-should use `openai-codex/gpt-*`; new native app-server harness configs should
-use `openai/gpt-*` plus `embeddedHarness.runtime: "codex"`.
+compatibility migration rewrites legacy primary runtime refs to canonical model
+refs and records the runtime policy separately, while fallback-only legacy refs
+are left unchanged because runtime is configured for the whole agent container.
+New PI Codex OAuth configs should use `openai-codex/gpt-*`; new native
+app-server harness configs should use `openai/gpt-*` plus
+`embeddedHarness.runtime: "codex"`.
 
 `agents.defaults.imageModel` follows the same prefix split. Use
 `openai-codex/gpt-*` when image understanding should run through the OpenAI

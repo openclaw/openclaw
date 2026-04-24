@@ -1,7 +1,6 @@
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
   normalizeLegacyBrowserConfig,
-  normalizeLegacyCodexHarnessModelRefs,
   normalizeLegacyCrossContextMessageConfig,
   normalizeLegacyMediaProviderOptions,
   normalizeLegacyMistralModelMaxTokens,
@@ -38,7 +37,6 @@ export function normalizeBaseCompatibilityConfigValues(
 
   next = normalizeLegacyNanoBananaSkill(next, changes);
   next = normalizeLegacyTalkConfig(next, changes);
-  next = normalizeLegacyCodexHarnessModelRefs(next, changes);
   next = normalizeLegacyRuntimeModelRefs(next, changes);
   next = normalizeLegacyCrossContextMessageConfig(next, changes);
   next = normalizeLegacyMediaProviderOptions(next, changes);
