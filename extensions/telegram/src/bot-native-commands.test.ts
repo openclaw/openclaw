@@ -4,6 +4,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createCommandBot,
   createNativeCommandTestParams,
+  createGroupCommandContext,
   createPrivateCommandContext,
   deliverReplies,
   editMessageTelegram,
@@ -239,6 +240,34 @@ describe("registerTelegramNativeCommands", () => {
     expect(registeredCommands.some((entry) => entry.command === "plugin_status")).toBe(true);
     expect(registeredCommands.some((entry) => entry.command === "plugin-status")).toBe(false);
     expect(registeredCommands.some((entry) => entry.command === "custom-bad")).toBe(false);
+  });
+
+  it("uses group replyToModeByChatType for built-in native command delivery", async () => {
+    const { commandHandlers } = createCommandBot();
+
+    registerTelegramNativeCommands({
+      ...createNativeCommandTestParams(
+        {
+          channels: {
+            telegram: {
+              replyToModeByChatType: { direct: "off", group: "all" },
+            },
+          },
+        },
+        { accountId: "default" },
+      ),
+    });
+
+    const handler = commandHandlers.get("model");
+    expect(handler).toBeTruthy();
+    await handler?.(createGroupCommandContext({ messageId: 77 }));
+
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        currentMessageId: "77",
+        replyToMode: "all",
+      }),
+    );
   });
 
   it("prefixes native command menu callback data so callback handlers can preserve native routing", async () => {
