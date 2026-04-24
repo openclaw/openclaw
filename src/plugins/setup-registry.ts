@@ -272,6 +272,9 @@ function resolveSetupRegistration(record: PluginManifestRecord): {
   setupSource: string;
   register: (api: ReturnType<typeof buildPluginApi>) => void | Promise<void>;
 } | null {
+  if (record.setup?.requiresRuntime === false) {
+    return null;
+  }
   const setupSource = record.setupSource ?? resolveSetupApiPath(record.rootDir);
   if (!setupSource) {
     return null;
