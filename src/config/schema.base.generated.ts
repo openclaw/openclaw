@@ -233,6 +233,58 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 description:
                   "Interval in milliseconds for periodic telemetry flush from buffers to the collector. Increase to reduce export chatter, or lower for faster visibility during active incident response.",
               },
+              captureContent: {
+                anyOf: [
+                  {
+                    type: "boolean",
+                  },
+                  {
+                    type: "object",
+                    properties: {
+                      enabled: {
+                        type: "boolean",
+                        title: "OpenTelemetry Content Capture Enabled",
+                        description:
+                          "Master switch for granular OTEL content capture fields. Keep disabled unless your collector is approved for raw prompt, response, or tool content.",
+                      },
+                      inputMessages: {
+                        type: "boolean",
+                        title: "OpenTelemetry Input Messages Capture",
+                        description:
+                          "Capture model input message text on OTEL spans when content capture is enabled.",
+                      },
+                      outputMessages: {
+                        type: "boolean",
+                        title: "OpenTelemetry Output Messages Capture",
+                        description:
+                          "Capture model output message text on OTEL spans when content capture is enabled.",
+                      },
+                      toolInputs: {
+                        type: "boolean",
+                        title: "OpenTelemetry Tool Inputs Capture",
+                        description:
+                          "Capture tool input text on OTEL spans when content capture is enabled.",
+                      },
+                      toolOutputs: {
+                        type: "boolean",
+                        title: "OpenTelemetry Tool Outputs Capture",
+                        description:
+                          "Capture tool output text on OTEL spans when content capture is enabled.",
+                      },
+                      systemPrompt: {
+                        type: "boolean",
+                        title: "OpenTelemetry System Prompt Capture",
+                        description:
+                          "Capture system prompt text on OTEL spans when content capture is enabled. This remains off unless explicitly enabled.",
+                      },
+                    },
+                    additionalProperties: false,
+                  },
+                ],
+                title: "OpenTelemetry Content Capture",
+                description:
+                  "Opt-in OTEL span content capture. Defaults to off; boolean true captures non-system message/tool content, while the object form lets you enable specific content classes.",
+              },
             },
             additionalProperties: false,
             title: "OpenTelemetry",
@@ -23385,6 +23437,41 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "OpenTelemetry Flush Interval (ms)",
       help: "Interval in milliseconds for periodic telemetry flush from buffers to the collector. Increase to reduce export chatter, or lower for faster visibility during active incident response.",
       tags: ["observability", "performance"],
+    },
+    "diagnostics.otel.captureContent": {
+      label: "OpenTelemetry Content Capture",
+      help: "Opt-in OTEL span content capture. Defaults to off; boolean true captures non-system message/tool content, while the object form lets you enable specific content classes.",
+      tags: ["observability"],
+    },
+    "diagnostics.otel.captureContent.enabled": {
+      label: "OpenTelemetry Content Capture Enabled",
+      help: "Master switch for granular OTEL content capture fields. Keep disabled unless your collector is approved for raw prompt, response, or tool content.",
+      tags: ["observability"],
+    },
+    "diagnostics.otel.captureContent.inputMessages": {
+      label: "OpenTelemetry Input Messages Capture",
+      help: "Capture model input message text on OTEL spans when content capture is enabled.",
+      tags: ["observability"],
+    },
+    "diagnostics.otel.captureContent.outputMessages": {
+      label: "OpenTelemetry Output Messages Capture",
+      help: "Capture model output message text on OTEL spans when content capture is enabled.",
+      tags: ["observability"],
+    },
+    "diagnostics.otel.captureContent.toolInputs": {
+      label: "OpenTelemetry Tool Inputs Capture",
+      help: "Capture tool input text on OTEL spans when content capture is enabled.",
+      tags: ["observability"],
+    },
+    "diagnostics.otel.captureContent.toolOutputs": {
+      label: "OpenTelemetry Tool Outputs Capture",
+      help: "Capture tool output text on OTEL spans when content capture is enabled.",
+      tags: ["observability"],
+    },
+    "diagnostics.otel.captureContent.systemPrompt": {
+      label: "OpenTelemetry System Prompt Capture",
+      help: "Capture system prompt text on OTEL spans when content capture is enabled. This remains off unless explicitly enabled.",
+      tags: ["observability"],
     },
     "diagnostics.cacheTrace.enabled": {
       label: "Cache Trace Enabled",

@@ -65,6 +65,32 @@ describe("plugins.slots.contextEngine", () => {
   });
 });
 
+describe("diagnostics.otel.captureContent", () => {
+  it("accepts boolean and granular OTEL content capture config", () => {
+    for (const captureContent of [
+      true,
+      false,
+      {
+        enabled: true,
+        inputMessages: true,
+        outputMessages: true,
+        toolInputs: true,
+        toolOutputs: true,
+        systemPrompt: false,
+      },
+    ]) {
+      const result = OpenClawSchema.safeParse({
+        diagnostics: {
+          otel: {
+            captureContent,
+          },
+        },
+      });
+      expect(result.success).toBe(true);
+    }
+  });
+});
+
 describe("auth.cooldowns auth_permanent backoff config", () => {
   it("accepts auth_permanent backoff knobs", () => {
     const result = OpenClawSchema.safeParse({

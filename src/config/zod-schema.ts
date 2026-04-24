@@ -299,6 +299,21 @@ export const OpenClawSchema = z
             logs: z.boolean().optional(),
             sampleRate: z.number().min(0).max(1).optional(),
             flushIntervalMs: z.number().int().nonnegative().optional(),
+            captureContent: z
+              .union([
+                z.boolean(),
+                z
+                  .object({
+                    enabled: z.boolean().optional(),
+                    inputMessages: z.boolean().optional(),
+                    outputMessages: z.boolean().optional(),
+                    toolInputs: z.boolean().optional(),
+                    toolOutputs: z.boolean().optional(),
+                    systemPrompt: z.boolean().optional(),
+                  })
+                  .strict(),
+              ])
+              .optional(),
           })
           .strict()
           .optional(),
