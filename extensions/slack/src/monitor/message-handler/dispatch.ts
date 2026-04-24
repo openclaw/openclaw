@@ -644,12 +644,28 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         danger(`slack-stream: streaming API call failed: ${formatErrorMessage(err)}, falling back`),
       );
       streamFailed = true;
-      // Non-benign streaming errors (network, unexpected SDK failures) leave
-      // `pendingText` populated on the session. Clear it here so the post-loop
-      // finalize (stopSlackStream → SlackStreamNotDeliveredError → fallback)
-      // does not re-post the same chunk that deliverNormally is about to send.
-      if (streamSession) {
-        markSlackStreamFallbackDelivered(streamSession);
+      // Non-benign streaming errors leave `pendingText` populated with every
+      // buffered chunk since the last flush (appendSlackStream accumulates
+      // into pendingText BEFORE the SDK call, so the failing chunk is
+      // included too). Route the full buffer through the chunked fallback so
+      // earlier chunks aren't lost, then skip deliverNormally - pendingText
+      // already contains this payload's text.
+      if (streamSession && streamSession.pendingText) {
+        const bufferedFallbackErr = new SlackStreamNotDeliveredError(
+          streamSession.pendingText,
+          "unknown",
+        );
+        const delivered = await deliverPendingStreamFallback(streamSession, bufferedFallbackErr);
+        if (delivered) {
+          replyPlan.markSent();
+          deliveryTracker.markDelivered({
+            kind: params.kind,
+            payload: params.payload,
+            threadTs: streamSession.threadTs,
+            textOverride: text,
+          });
+          return;
+        }
       }
       await deliverNormally({
         payload: params.payload,

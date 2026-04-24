@@ -498,7 +498,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(session.stopped).toBe(true);
   });
 
-  it("clears pending stream state before deliverNormally on non-benign append failure so finalize does not repost", async () => {
+  it("routes full pendingText (earlier buffered + failing chunk) through chunked sender on non-benign append failure", async () => {
     mockedNativeStreaming = true;
     mockedDispatchSequence = [
       { kind: "block", payload: { text: "first buffered" } },
@@ -512,9 +512,10 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       pendingText: "first buffered",
     };
     startSlackStreamMock.mockResolvedValueOnce(session);
-    // Non-benign error (plain Error, NOT SlackStreamNotDeliveredError) must
-    // still clear pendingText so the finalize fallback does not re-send the
-    // same chunk that deliverNormally is about to handle.
+    // Non-benign error (plain Error, NOT SlackStreamNotDeliveredError).
+    // appendSlackStream mutates pendingText BEFORE throwing so the full
+    // buffer (earlier chunk + current chunk) must be preserved and routed
+    // through the chunked fallback - not dropped or partially re-sent.
     appendSlackStreamMock.mockImplementationOnce(async () => {
       session.pendingText += "\nsecond payload";
       throw new Error("network socket closed");
@@ -522,19 +523,21 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
 
     await dispatchPreparedSlackMessage(createPreparedSlackMessage());
 
-    // deliverNormally ran once for the payload that failed to append.
+    // Chunked fallback sent the FULL pendingText, not just the failing
+    // payload (so the earlier buffered chunk is not dropped).
     expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
     expect(deliverRepliesMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        replies: [expect.objectContaining({ text: "second payload" })],
+        replyThreadTs: THREAD_TS,
+        replies: [expect.objectContaining({ text: "first buffered\nsecond payload" })],
       }),
     );
-    // Stream state was cleared so finalize sees nothing to re-post.
+    // Session was marked fallback-delivered by deliverPendingStreamFallback,
+    // so finalize skips stopSlackStream.
     expect(session.pendingText).toBe("");
     expect(session.stopped).toBe(true);
-    // Finalize skips stopSlackStream because stopped is true.
     expect(stopSlackStreamMock).not.toHaveBeenCalled();
-    // Fallback fallback-delivery path was NOT invoked a second time.
+    // No raw postMessage path was invoked.
     expect(postMessageMock).not.toHaveBeenCalled();
   });
 });
