@@ -5,6 +5,7 @@ import {
   normalizeLegacyCrossContextMessageConfig,
   normalizeLegacyMediaProviderOptions,
   normalizeLegacyMistralModelMaxTokens,
+  normalizeLegacyRuntimeModelRefs,
   normalizeLegacyNanoBananaSkill,
   normalizeLegacyTalkConfig,
   seedMissingDefaultAccountsFromSingleAccountBase,
@@ -38,6 +39,7 @@ export function normalizeBaseCompatibilityConfigValues(
   next = normalizeLegacyNanoBananaSkill(next, changes);
   next = normalizeLegacyTalkConfig(next, changes);
   next = normalizeLegacyCodexHarnessModelRefs(next, changes);
+  next = normalizeLegacyRuntimeModelRefs(next, changes);
   next = normalizeLegacyCrossContextMessageConfig(next, changes);
   next = normalizeLegacyMediaProviderOptions(next, changes);
   return normalizeLegacyMistralModelMaxTokens(next, changes);

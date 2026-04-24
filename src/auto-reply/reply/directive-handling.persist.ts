@@ -202,6 +202,18 @@ export async function persistInlineDirectives(params: {
           profileOverride: modelResolution.profileOverride,
           markLiveSwitchPending: params.markLiveSwitchPending,
         });
+        const runtimeOverride = directives.rawModelRuntime?.trim();
+        if (runtimeOverride) {
+          if (runtimeOverride === "auto" || runtimeOverride === "default") {
+            if (sessionEntry.agentRuntimeOverride) {
+              delete sessionEntry.agentRuntimeOverride;
+              updated = true;
+            }
+          } else if (sessionEntry.agentRuntimeOverride !== runtimeOverride) {
+            sessionEntry.agentRuntimeOverride = runtimeOverride;
+            updated = true;
+          }
+        }
         provider = modelResolution.modelSelection.provider;
         model = modelResolution.modelSelection.model;
         const currentThinkingLevel = sessionEntry.thinkingLevel as ThinkLevel | undefined;

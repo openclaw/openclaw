@@ -15,7 +15,7 @@ export type AgentModelConfig =
     };
 
 export type AgentEmbeddedHarnessConfig = {
-  /** Embedded harness id: "auto", "pi", or a registered plugin harness id. */
+  /** Agent runtime id: "auto", "pi", a registered plugin harness id, or a CLI backend id. */
   runtime?: string;
   /** Fallback when no plugin harness matches or an auto-selected plugin harness fails. */
   fallback?: "pi" | "none";

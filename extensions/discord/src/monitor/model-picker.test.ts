@@ -163,6 +163,7 @@ describe("Discord model picker custom_id", () => {
       view: "models",
       u: "42",
       p: "openai",
+      r: "codex",
       pg: "1",
       mi: "7",
     });
@@ -173,6 +174,7 @@ describe("Discord model picker custom_id", () => {
       view: "models",
       userId: "42",
       provider: "openai",
+      runtime: "codex",
       page: 1,
       modelIndex: 7,
     });
@@ -526,6 +528,63 @@ describe("Discord model picker rendering", () => {
     expect(submitState?.action).toBe("submit");
     expect(submitState?.provider).toBe("openai");
     expect(submitState?.modelIndex).toBe(3);
+  });
+
+  it("renders provider-compatible runtime choices in the model view", () => {
+    const data = createModelsProviderData({
+      openai: ["gpt-4.1", "gpt-4o", "o3"],
+      anthropic: ["claude-sonnet-4-5"],
+    });
+    data.runtimeChoicesByProvider = new Map([
+      [
+        "openai",
+        [
+          {
+            id: "auto",
+            label: "Default runtime",
+            description: "Use the configured default runtime for this agent.",
+          },
+          {
+            id: "codex",
+            label: "codex",
+            description: "Run openai models through the codex harness.",
+          },
+        ],
+      ],
+    ]);
+
+    const rows = renderModelsViewRows({
+      command: "model",
+      userId: "42",
+      data,
+      provider: "openai",
+      page: 1,
+      providerPage: 1,
+      currentModel: "openai/gpt-4o",
+      currentRuntime: "auto",
+      pendingModel: "openai/o3",
+      pendingModelIndex: 3,
+      pendingRuntime: "codex",
+    });
+
+    expect(rows).toHaveLength(4);
+
+    const runtimeSelect = rows[1]?.components?.find(
+      (component) => component.type === DISCORD_STRING_SELECT_COMPONENT_TYPE,
+    );
+    if (!runtimeSelect) {
+      throw new Error("models view did not render a runtime select");
+    }
+    expect(runtimeSelect.options?.map((option) => option.value)).toEqual(["auto", "codex"]);
+    expect(runtimeSelect.options?.find((option) => option.value === "codex")?.default).toBe(true);
+
+    const submitButton = rows[3]?.components?.at(-1);
+    const submitState = requireValue(
+      parseDiscordModelPickerCustomId(submitButton?.custom_id ?? ""),
+      "submit custom id should parse",
+    );
+    expect(submitState.runtime).toBe("codex");
+    expect(submitState.modelIndex).toBe(3);
   });
 
   it("renders not-found model view with a back button", () => {
