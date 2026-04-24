@@ -216,6 +216,7 @@ jobs:
                 configs: shard.configs,
                 includePatterns: shard.includePatterns,
                 requires_dist: shard.requiresDist,
+                runner: shard.runner,
               }))
             : [];
           const nodeTestNonDistShards = nodeTestShards.filter((shard) => !shard.requires_dist);
