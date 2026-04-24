@@ -70,3 +70,25 @@ export function clearPluginInteractiveHandlersForPlugin(pluginId: string): void 
     }
   }
 }
+
+export function listPluginInteractiveHandlers(): RegisteredInteractiveHandler[] {
+  return Array.from(getPluginInteractiveHandlersState().values());
+}
+
+export function restorePluginInteractiveHandlers(
+  registrations: readonly RegisteredInteractiveHandler[],
+): void {
+  clearPluginInteractiveHandlers();
+  const interactiveHandlers = getPluginInteractiveHandlersState();
+  for (const registration of registrations) {
+    const namespace = normalizePluginInteractiveNamespace(registration.namespace);
+    if (!namespace) {
+      continue;
+    }
+    interactiveHandlers.set(toPluginInteractiveRegistryKey(registration.channel, namespace), {
+      ...registration,
+      namespace,
+      channel: normalizeOptionalLowercaseString(registration.channel) ?? "",
+    });
+  }
+}
