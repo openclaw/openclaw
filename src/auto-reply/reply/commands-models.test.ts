@@ -286,6 +286,44 @@ describe("handleModelsCommand", () => {
     expect(result?.reply?.text).toContain("Switch: /model <provider/model>");
   });
 
+  it("does not list bare fallback models under the default provider when catalog ownership is unique", async () => {
+    modelCatalogMocks.loadModelCatalog.mockResolvedValue([
+      { provider: "openai-codex", id: "gpt-5.4", name: "GPT-5.4" },
+      { provider: "deepseek", id: "deepseek-v4-flash", name: "DeepSeek V4 Flash" },
+      { provider: "deepseek", id: "deepseek-v4-pro", name: "DeepSeek V4 Pro" },
+    ]);
+    const cfg = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai-codex/gpt-5.4",
+            fallbacks: ["deepseek-v4-flash", "deepseek-v4-pro"],
+          },
+          models: {
+            "openai-codex/gpt-5.4": {},
+          },
+        },
+      },
+    } satisfies Partial<OpenClawConfig>;
+
+    const defaultProviderResult = await handleModelsCommand(
+      buildParams("/models openai-codex", cfg),
+      true,
+    );
+    const deepseekResult = await handleModelsCommand(buildParams("/models deepseek", cfg), true);
+
+    expect(defaultProviderResult?.reply?.text).toContain(
+      "Models (openai-codex) — showing 1-1 of 1 (page 1/1)",
+    );
+    expect(defaultProviderResult?.reply?.text).toContain("- openai-codex/gpt-5.4");
+    expect(defaultProviderResult?.reply?.text).not.toContain("openai-codex/deepseek-v4");
+    expect(deepseekResult?.reply?.text).toContain(
+      "Models (deepseek) — showing 1-2 of 2 (page 1/1)",
+    );
+    expect(deepseekResult?.reply?.text).toContain("- deepseek/deepseek-v4-flash");
+    expect(deepseekResult?.reply?.text).toContain("- deepseek/deepseek-v4-pro");
+  });
+
   it("keeps /models list <provider> as an alias", async () => {
     const result = await handleModelsCommand(buildParams("/models list anthropic"), true);
 
