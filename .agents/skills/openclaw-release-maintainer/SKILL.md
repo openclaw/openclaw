@@ -345,6 +345,9 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
   or stale, use the local tmux + 1Password fallback:
   - Start or reuse a tmux session so interactive `npm login` and OTP prompts
     are observable and recoverable.
+  - Hard rule: never run `op` directly in the main agent shell during release
+    work. Any 1Password CLI use must happen inside that tmux session so prompts
+    and alerts are contained and observable.
   - Use the 1Password item `op://Private/Npmjs` for npm credentials and OTP.
     Do not print passwords, tokens, or OTPs to the transcript; send them through
     tmux buffers, env vars scoped to the tmux command, or `expect` with
