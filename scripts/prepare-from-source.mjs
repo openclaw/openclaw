@@ -100,6 +100,13 @@ try {
   // — that fails inside npm's git-clone lifecycle context. The gitInstall profile
   // builds only what the CLI needs (tsdown + build-stamp).
   run("node scripts/build-all.mjs gitInstall");
+
+  // Clean up pnpm's workspace node_modules. After the build, dist/ has all
+  // compiled artifacts. When npm continues its lifecycle (pack → global install),
+  // leftover pnpm symlinks and hoisted packages confuse npm's bin-linking and
+  // dependency reconciliation (e.g. ENOENT chmod on transitive bin entries).
+  // npm will install production deps from scratch in the global location.
+  run("rm -rf node_modules");
 } catch (err) {
   console.error("[prepare] build from source failed:", err.message);
   process.exit(1);
