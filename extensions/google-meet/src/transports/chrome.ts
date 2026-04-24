@@ -231,6 +231,20 @@ type BrowserTab = {
   url?: string;
 };
 
+type BrowserCreateStepResult = {
+  meetingUri?: string;
+  browserUrl?: string;
+  browserTitle?: string;
+  manualAction?: string;
+  manualActionReason?: GoogleMeetChromeHealth["manualActionReason"];
+  notes?: string[];
+  retryAfterMs?: number;
+};
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function formatBrowserAutomationError(error: unknown): string {
   if (error instanceof Error) {
     return error.message;
@@ -240,6 +254,12 @@ function formatBrowserAutomationError(error: unknown): string {
   } catch {
     return "unknown error";
   }
+}
+
+function isBrowserNavigationInterruption(error: unknown): boolean {
+  return /execution context was destroyed|navigation|target closed/i.test(
+    formatBrowserAutomationError(error),
+  );
 }
 
 export type GoogleMeetBrowserCreateResult = {
@@ -304,15 +324,13 @@ function readBrowserTab(result: unknown): BrowserTab | undefined {
   return result && typeof result === "object" ? (result as BrowserTab) : undefined;
 }
 
-function readBrowserCreateResult(result: unknown): {
-  meetingUri?: string;
-  browserUrl?: string;
-  browserTitle?: string;
-  manualAction?: string;
-  manualActionReason?: GoogleMeetChromeHealth["manualActionReason"];
-  notes?: string[];
-  retryAfterMs?: number;
-} {
+function readStringArray(value: unknown): string[] | undefined {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === "string")
+    : undefined;
+}
+
+function readBrowserCreateResult(result: unknown): BrowserCreateStepResult {
   const record = result && typeof result === "object" ? (result as Record<string, unknown>) : {};
   const nested =
     record.result && typeof record.result === "object"
@@ -327,9 +345,7 @@ function readBrowserCreateResult(result: unknown): {
       typeof nested.manualActionReason === "string"
         ? (nested.manualActionReason as GoogleMeetChromeHealth["manualActionReason"])
         : undefined,
-    notes: Array.isArray(nested.notes)
-      ? nested.notes.filter((note): note is string => typeof note === "string")
-      : undefined,
+    notes: readStringArray(nested.notes),
     retryAfterMs:
       typeof nested.retryAfterMs === "number" && Number.isFinite(nested.retryAfterMs)
         ? nested.retryAfterMs
@@ -454,7 +470,7 @@ export async function createMeetWithBrowserProxyOnNode(params: {
     throw new Error("Browser fallback opened Google Meet but did not return a targetId.");
   }
   const notes = new Set<string>();
-  let lastResult: ReturnType<typeof readBrowserCreateResult> | undefined;
+  let lastResult: BrowserCreateStepResult | undefined;
   let lastError: unknown;
   const deadline = Date.now() + timeoutMs;
   while (Date.now() <= deadline) {
@@ -493,13 +509,13 @@ export async function createMeetWithBrowserProxyOnNode(params: {
         }
         throw new Error(result.manualAction);
       }
-      await new Promise((resolve) => setTimeout(resolve, result.retryAfterMs ?? 500));
+      await sleep(result.retryAfterMs ?? 500);
     } catch (error) {
       lastError = error;
-      if (!/execution context was destroyed|navigation|target closed/i.test(String(error))) {
+      if (!isBrowserNavigationInterruption(error)) {
         throw error;
       }
-      await new Promise((resolve) => setTimeout(resolve, 1_000));
+      await sleep(1_000);
     }
   }
   throw new Error(
