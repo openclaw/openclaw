@@ -1,41 +1,44 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import {
   activateSecretsRuntimeSnapshot,
   clearSecretsRuntimeSnapshot,
   getActiveSecretsRuntimeSnapshot,
   type PreparedSecretsRuntimeSnapshot,
 } from "../secrets/runtime.js";
-import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
+import type { GatewayReloadPlan } from "./config-reload.js";
 import { createGatewayAuxHandlers } from "./server-aux-handlers.js";
 
 function asConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
 }
 
-function makeChannelPluginWithReloadPrefix(id: "slack" | "zalo" | "discord"): ChannelPlugin {
-  const plugin = createChannelTestPluginBase({ id, label: id }) as ChannelPlugin;
-  plugin.reload = { configPrefixes: [`channels.${id}`] };
-  return plugin;
-}
+const { buildGatewayReloadPlanMock } = vi.hoisted(() => ({
+  buildGatewayReloadPlanMock: vi.fn(),
+}));
 
-function registerChannelPluginsWithReloadPrefixes(): void {
-  // Channel reload-plan entries come from the active plugin registry via
-  // `listChannelPlugins()`. Unit tests start with an empty registry, so we
-  // register slack/zalo/discord channel plugins whose `reload.configPrefixes`
-  // map `channels.<id>.*` diff paths to `restart-channel:<id>` actions. Without
-  // this, `channels.slack.signingSecret` would fall through to the default
-  // gateway-restart rule and skip the per-channel restart branch entirely.
-  const plugins: ChannelPlugin[] = [
-    makeChannelPluginWithReloadPrefix("slack"),
-    makeChannelPluginWithReloadPrefix("zalo"),
-    makeChannelPluginWithReloadPrefix("discord"),
-  ];
-  setActivePluginRegistry(
-    createTestRegistry(plugins.map((plugin) => ({ pluginId: plugin.id, plugin, source: "test" }))),
-  );
+vi.mock("./config-reload.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./config-reload.js")>();
+  return {
+    ...actual,
+    buildGatewayReloadPlan: buildGatewayReloadPlanMock,
+  };
+});
+
+function createReloadPlan(overrides?: Partial<GatewayReloadPlan>): GatewayReloadPlan {
+  return {
+    changedPaths: overrides?.changedPaths ?? [],
+    restartGateway: overrides?.restartGateway ?? false,
+    restartReasons: overrides?.restartReasons ?? [],
+    hotReasons: overrides?.hotReasons ?? [],
+    reloadHooks: overrides?.reloadHooks ?? false,
+    restartGmailWatcher: overrides?.restartGmailWatcher ?? false,
+    restartCron: overrides?.restartCron ?? false,
+    restartHeartbeat: overrides?.restartHeartbeat ?? false,
+    restartHealthMonitor: overrides?.restartHealthMonitor ?? false,
+    restartChannels: overrides?.restartChannels ?? new Set(),
+    noopPaths: overrides?.noopPaths ?? [],
+  };
 }
 
 function createSnapshot(config: OpenClawConfig): PreparedSecretsRuntimeSnapshot {
@@ -68,20 +71,20 @@ async function invokeSecretsReload(params: {
   });
 }
 
-beforeEach(() => {
-  resetPluginRuntimeStateForTest();
-  registerChannelPluginsWithReloadPrefixes();
-});
-
 afterEach(() => {
   clearSecretsRuntimeSnapshot();
-  resetPluginRuntimeStateForTest();
+  buildGatewayReloadPlanMock.mockReset();
   delete process.env.OPENCLAW_SKIP_CHANNELS;
   delete process.env.OPENCLAW_SKIP_PROVIDERS;
 });
 
 describe("gateway aux handlers", () => {
   it("restarts only channels whose resolved secret-backed config changed on secrets.reload", async () => {
+    buildGatewayReloadPlanMock.mockReturnValue(
+      createReloadPlan({
+        restartChannels: new Set(["slack", "zalo"]),
+      }),
+    );
     activateSecretsRuntimeSnapshot(
       createSnapshot(
         asConfig({
@@ -124,9 +127,10 @@ describe("gateway aux handlers", () => {
     await invokeSecretsReload({ handlers: extraHandlers, respond });
 
     expect(activateRuntimeSecrets).toHaveBeenCalledTimes(1);
-    // Assertion is order-independent: plan.restartChannels iterates in Set
-    // insertion order, which in turn depends on diff/plugin iteration order
-    // that is not a stable contract of this handler.
+    expect(buildGatewayReloadPlanMock).toHaveBeenCalledWith([
+      "channels.slack.signingSecret",
+      "channels.zalo.webhookSecret",
+    ]);
     expect(stopChannel.mock.calls.map(([ch]) => ch).toSorted((a, b) => a.localeCompare(b))).toEqual(
       ["slack", "zalo"],
     );
@@ -137,6 +141,11 @@ describe("gateway aux handlers", () => {
   });
 
   it("coalesces concurrent secrets.reload calls so channels are not restarted twice", async () => {
+    buildGatewayReloadPlanMock.mockReturnValue(
+      createReloadPlan({
+        restartChannels: new Set(["slack"]),
+      }),
+    );
     const initialActive = createSnapshot(
       asConfig({
         channels: {
@@ -192,7 +201,12 @@ describe("gateway aux handlers", () => {
     expect(respond).toHaveBeenNthCalledWith(2, true, { ok: true, warningCount: 0 });
   });
 
-  it("rolls back successfully restarted channels when a later restart fails", async () => {
+  it("rolls back stopped channels when a later restart fails", async () => {
+    buildGatewayReloadPlanMock.mockReturnValue(
+      createReloadPlan({
+        restartChannels: new Set(["slack", "zalo"]),
+      }),
+    );
     activateSecretsRuntimeSnapshot(
       createSnapshot(
         asConfig({
@@ -238,7 +252,7 @@ describe("gateway aux handlers", () => {
     await invokeSecretsReload({ handlers: extraHandlers, respond });
 
     expect(stopChannel.mock.calls).toEqual([["slack"], ["zalo"], ["slack"]]);
-    expect(startChannel.mock.calls).toEqual([["slack"], ["zalo"], ["slack"]]);
+    expect(startChannel.mock.calls).toEqual([["slack"], ["zalo"], ["slack"], ["zalo"]]);
     expect(
       logChannelsInfo.mock.calls.some(([msg]) =>
         String(msg).startsWith("failed to restart zalo channel after secrets reload"),
@@ -247,6 +261,11 @@ describe("gateway aux handlers", () => {
     expect(
       logChannelsInfo.mock.calls.some(([msg]) =>
         String(msg).startsWith("rolling back slack channel after secrets reload failure"),
+      ),
+    ).toBe(true);
+    expect(
+      logChannelsInfo.mock.calls.some(([msg]) =>
+        String(msg).startsWith("rolling back zalo channel after secrets reload failure"),
       ),
     ).toBe(true);
     // The handler surfaces the partial-failure so the caller can retry/alert
@@ -267,6 +286,11 @@ describe("gateway aux handlers", () => {
   });
 
   it("fails reload when channel restarts are required but skip flags block them", async () => {
+    buildGatewayReloadPlanMock.mockReturnValue(
+      createReloadPlan({
+        restartChannels: new Set(["slack"]),
+      }),
+    );
     process.env.OPENCLAW_SKIP_CHANNELS = "1";
     activateSecretsRuntimeSnapshot(
       createSnapshot(
@@ -323,6 +347,7 @@ describe("gateway aux handlers", () => {
   });
 
   it("does not restart channels when resolved secrets do not change channel config", async () => {
+    buildGatewayReloadPlanMock.mockReturnValue(createReloadPlan());
     activateSecretsRuntimeSnapshot(
       createSnapshot(
         asConfig({
@@ -364,6 +389,7 @@ describe("gateway aux handlers", () => {
 
     await invokeSecretsReload({ handlers: extraHandlers, respond });
 
+    expect(buildGatewayReloadPlanMock).toHaveBeenCalledWith(["gateway.auth.token"]);
     expect(stopChannel).not.toHaveBeenCalled();
     expect(startChannel).not.toHaveBeenCalled();
     expect(respond).toHaveBeenCalledWith(true, { ok: true, warningCount: 0 });

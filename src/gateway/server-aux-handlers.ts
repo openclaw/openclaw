@@ -87,7 +87,8 @@ export function createGatewayAuxHandlers(params: {
           params.sharedGatewaySessionGenerationState.current;
         let nextSharedGatewaySessionGeneration = previousSharedGatewaySessionGeneration;
         let sharedGatewaySessionGenerationChanged = false;
-        const successfullyRestartedChannels: ChannelKind[] = [];
+        const stoppedChannels: ChannelKind[] = [];
+        const restartedChannels = new Set<ChannelKind>();
         try {
           const prepared = await params.activateRuntimeSecrets(previousSnapshot.sourceConfig, {
             reason: "reload",
@@ -125,8 +126,9 @@ export function createGatewayAuxHandlers(params: {
               params.logChannels.info(`restarting ${channel} channel after secrets reload`);
               try {
                 await params.stopChannel(channel);
+                stoppedChannels.push(channel);
                 await params.startChannel(channel);
-                successfullyRestartedChannels.push(channel);
+                restartedChannels.add(channel);
               } catch {
                 params.logChannels.info(
                   `failed to restart ${channel} channel after secrets reload`,
@@ -151,10 +153,12 @@ export function createGatewayAuxHandlers(params: {
               expectedGeneration: previousSharedGatewaySessionGeneration,
             });
           }
-          for (const channel of successfullyRestartedChannels) {
+          for (const channel of stoppedChannels) {
             params.logChannels.info(`rolling back ${channel} channel after secrets reload failure`);
             try {
-              await params.stopChannel(channel);
+              if (restartedChannels.has(channel)) {
+                await params.stopChannel(channel);
+              }
               await params.startChannel(channel);
             } catch {
               params.logChannels.info(
