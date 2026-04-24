@@ -71,7 +71,9 @@ or fallback behavior without changing runtime loading semantics.
 
 Setup discovery now prefers descriptor-owned ids such as `setup.providers` and
 `setup.cliBackends` to narrow candidate plugins before it falls back to
-`setup-api` for plugins that still need setup-time runtime hooks. Explicit
+`setup-api` for plugins that still need setup-time runtime hooks. Provider
+setup flow uses manifest `providerAuthChoices` first, then falls back to
+runtime wizard choices and install-catalog choices for compatibility. Explicit
 `setup.requiresRuntime: false` is a descriptor-only cutoff; omitted
 `requiresRuntime` keeps the legacy setup-api fallback for compatibility. If more
 than one discovered plugin claims the same normalized setup provider or CLI
