@@ -238,7 +238,7 @@ describe("ensurePluginRegistryLoaded", () => {
     );
   });
 
-  it("does not forward empty channel scopes for broad channel loads", () => {
+  it("preserves empty channel scopes for broad channel loads", () => {
     mocks.resolveChannelPluginIds.mockReturnValue([]);
 
     ensurePluginRegistryLoaded({
@@ -247,12 +247,9 @@ describe("ensurePluginRegistryLoaded", () => {
     });
 
     expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
-      expect.not.objectContaining({
+      expect.objectContaining({
         onlyPluginIds: [],
       }),
     );
-    expect(
-      (mocks.loadOpenClawPlugins.mock.calls[0]?.[0] as { onlyPluginIds?: string[] }).onlyPluginIds,
-    ).toBeUndefined();
   });
 });
