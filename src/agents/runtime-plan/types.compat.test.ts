@@ -10,6 +10,15 @@ import type {
   AgentRuntimeThinkLevel,
 } from "./types.js";
 
+type Equal<X, Y> =
+  (<T>() => T extends X ? 1 : 2) extends <T>() => T extends Y ? 1 : 2
+    ? (<T>() => T extends Y ? 1 : 2) extends <T>() => T extends X ? 1 : 2
+      ? true
+      : false
+    : false;
+
+type Assert<T extends true> = T;
+
 describe("AgentRuntimePlan structural type compatibility", () => {
   it("keeps copied scalar unions aligned with their source contracts", () => {
     expectTypeOf<AgentRuntimeThinkLevel>().toEqualTypeOf<ThinkLevel>();
@@ -18,6 +27,9 @@ describe("AgentRuntimePlan structural type compatibility", () => {
   });
 
   it("keeps reply payload shapes structurally compatible with the runtime leaf payload shape", () => {
+    type _ReplyPayloadKeysStayInSync = Assert<
+      Equal<keyof ReplyPayload, keyof AgentRuntimeReplyPayload>
+    >;
     expectTypeOf<ReplyPayload>().toMatchTypeOf<AgentRuntimeReplyPayload>();
     expectTypeOf<AgentRuntimeReplyPayload>().toMatchTypeOf<ReplyPayload>();
   });

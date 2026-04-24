@@ -25,6 +25,22 @@ import type {
   BuildAgentRuntimePlanParams,
 } from "./types.js";
 
+type BuildConcreteAgentRuntimeDeliveryPlanParams = Omit<
+  BuildAgentRuntimeDeliveryPlanParams,
+  "config"
+> & {
+  config?: OpenClawConfig;
+};
+
+type BuildConcreteAgentRuntimePlanParams = Omit<
+  BuildAgentRuntimePlanParams,
+  "config" | "model" | "thinkingLevel"
+> & {
+  config?: OpenClawConfig;
+  model?: ProviderRuntimeModel;
+  thinkingLevel?: ThinkLevel;
+};
+
 function formatResolvedRef(params: { provider: string; modelId: string }): string {
   return `${params.provider}/${params.modelId}`;
 }
@@ -40,9 +56,9 @@ function asOpenClawConfig(value: unknown): OpenClawConfig | undefined {
 }
 
 export function buildAgentRuntimeDeliveryPlan(
-  params: BuildAgentRuntimeDeliveryPlanParams,
+  params: BuildConcreteAgentRuntimeDeliveryPlanParams,
 ): AgentRuntimeDeliveryPlan {
-  const config = asOpenClawConfig(params.config);
+  const config = params.config;
   return {
     isSilentPayload(payload): boolean {
       return isSilentReplyPayloadText(payload.text, SILENT_REPLY_TOKEN) && !hasMedia(payload);
@@ -75,9 +91,11 @@ export function buildAgentRuntimeOutcomePlan(): AgentRuntimeOutcomePlan {
   };
 }
 
-export function buildAgentRuntimePlan(params: BuildAgentRuntimePlanParams): AgentRuntimePlan {
-  const config = asOpenClawConfig(params.config);
-  const model = params.model as ProviderRuntimeModel | undefined;
+export function buildAgentRuntimePlan(
+  params: BuildConcreteAgentRuntimePlanParams,
+): AgentRuntimePlan {
+  const config = params.config;
+  const model = params.model;
   const modelApi = params.modelApi ?? params.model?.api ?? undefined;
   const transport = params.resolvedTransport;
   const auth = buildAgentRuntimeAuthPlan({
