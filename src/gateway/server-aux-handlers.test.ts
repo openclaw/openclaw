@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   activateSecretsRuntimeSnapshot,
@@ -58,6 +58,17 @@ async function invokeSecretsReload(params: {
     context: {} as never,
   });
 }
+
+// Other gateway test helpers (e.g. test-helpers.mocks.ts, test-helpers.server.ts)
+// set OPENCLAW_SKIP_CHANNELS / OPENCLAW_SKIP_PROVIDERS at module load. When a
+// shared vitest worker imports those helpers before this file's tests run,
+// the leaked env vars route the secrets.reload skip-mode branch and prevent
+// the channel restart loop from firing. Reset them before every test so this
+// suite is independent of worker import order.
+beforeEach(() => {
+  delete process.env.OPENCLAW_SKIP_CHANNELS;
+  delete process.env.OPENCLAW_SKIP_PROVIDERS;
+});
 
 afterEach(() => {
   clearSecretsRuntimeSnapshot();
