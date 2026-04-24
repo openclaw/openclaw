@@ -1037,16 +1037,51 @@ export async function handleOpenResponsesHttpRequest(
         });
 
         const functionCallItemId = `call_${randomUUID()}`;
+        // Match the convention common to streaming APIs (and used by the
+        // OpenAI Responses API): the announce event carries an in-progress
+        // item with an empty payload placeholder; the dedicated delta/done
+        // events that follow fill the payload; the done-event item finalizes
+        // it. Some parsers specifically expect this — IntelligenceKit's
+        // parser, for instance, treats item.arguments on .added as a
+        // placeholder and only fills its args buffer from the dedicated
+        // delta/done events. Shipping the full args on .added would also
+        // cause accumulators that seed from item.arguments and then append
+        // each delta to double them.
         const functionCallItem = createFunctionCallOutputItem({
           id: functionCallItemId,
           callId: functionCall.id,
           name: functionCall.name,
-          arguments: functionCall.arguments,
+          arguments: "",
         });
         writeSseEvent(res, {
           type: "response.output_item.added",
           output_index: 1,
           item: functionCallItem,
+        });
+        // Emit the dedicated function-call argument streaming events between
+        // .added and .done. Conformant client parsers (including
+        // IntelligenceKit's) ignore item.arguments on output_item events for
+        // streamed function_calls and rely exclusively on the
+        // response.function_call_arguments.{delta,done} events to fill their
+        // args buffer. Without these, every streamed client-tool call lands on
+        // the wire with arguments == "{}".
+        //
+        // We don't have per-token granularity here — by the time
+        // pendingToolCalls is built, the model has already finalized the args
+        // string. Emitting one delta carrying the full string is honest about
+        // the data shape; clients accumulate the same way regardless of chunk
+        // count. A subsequent .done event consolidates and signals end-of-args.
+        writeSseEvent(res, {
+          type: "response.function_call_arguments.delta",
+          item_id: functionCallItemId,
+          output_index: 1,
+          delta: functionCall.arguments,
+        });
+        writeSseEvent(res, {
+          type: "response.function_call_arguments.done",
+          item_id: functionCallItemId,
+          output_index: 1,
+          arguments: functionCall.arguments,
         });
         const completedFunctionCallItem = createFunctionCallOutputItem({
           id: functionCallItemId,
@@ -1065,7 +1100,7 @@ export async function handleOpenResponsesHttpRequest(
           id: responseId,
           model,
           status: "incomplete",
-          output: [completedItem, functionCallItem],
+          output: [completedItem, completedFunctionCallItem],
           usage,
         });
         closed = true;

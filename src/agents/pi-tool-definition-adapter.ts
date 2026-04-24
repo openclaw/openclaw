@@ -338,12 +338,39 @@ export function toClientToolDefinitions(
         if (onClientToolCall) {
           onClientToolCall(func.name, paramsRecord);
         }
-        // Return a pending result - the client will execute this tool
-        return jsonResult({
-          status: "pending",
-          tool: func.name,
-          message: "Tool execution delegated to client",
-        });
+        // Why `terminate: true`:
+        //
+        // For `/v1/responses`, a client-tool call is inherently a handoff —
+        // the real execution happens on the client, in a *different* HTTP
+        // request from this one. The model's next input for this tool is the
+        // `function_call_output` the client sends in its follow-up request;
+        // it is not, and cannot be, produced inside this session.
+        //
+        // If we returned this stub as a normal tool result, Pi's loop would
+        // treat the tool as completed and run another model turn with the
+        // stub JSON in the thread. The model would then narrate the stub
+        // (e.g. "I see status: pending…") and that narration would ship to
+        // the client alongside the actual function_call, polluting the
+        // conversation with a ghost turn the client never asked for.
+        //
+        // `terminate: true` is Pi's native signal for "stop the loop after
+        // this batch"; see `shouldTerminateToolBatch` in pi-ai's
+        // `packages/agent/src/agent-loop.ts`. The outer runner then observes
+        // `clientToolCallDetected` and surfaces the real function_call via
+        // `pendingToolCalls`, which is what the client is meant to receive.
+        //
+        // The stub payload is preserved for any downstream observer
+        // (session replay, debug logs) that wants to know a handoff
+        // happened at this point — the loop just won't run another model
+        // turn over it.
+        return {
+          ...jsonResult({
+            status: "pending",
+            tool: func.name,
+            message: "Tool execution delegated to client",
+          }),
+          terminate: true,
+        };
       },
     } satisfies ToolDefinition;
   });

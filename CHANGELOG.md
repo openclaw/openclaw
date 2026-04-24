@@ -38,6 +38,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Gateway/responses: terminate the Pi agent loop immediately on client-tool handoff so the placeholder stub does not feed back into another model turn that would narrate it alongside the real function_call. Also tightens the SSE event sequence for streamed function_call output items to follow the OpenAI Responses-API streaming convention more closely (`output_item.added` with empty placeholder, `function_call_arguments.delta` and `.done`, `output_item.done` with the populated args), so client parsers that read args only from the dedicated streaming events receive them instead of an empty `{}`.
 - Plugins/onboarding: record local plugin install source metadata without duplicating raw absolute local paths in persisted `plugins.installs`, while preserving linked load-path cleanup. (#70970) Thanks @vincentkoc.
 - Browser/tool: tell agents not to pass per-call `timeoutMs` on existing-session type, evaluate, and other Chrome MCP actions that reject timeout overrides.
 - Codex/GPT-5.4: harden fallback, auth-profile, tool-schema, and replay edge cases across native and embedded runtime paths. (#70743) Thanks @100yenadmin.

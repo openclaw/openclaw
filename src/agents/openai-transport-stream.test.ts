@@ -3287,4 +3287,124 @@ describe("openai transport stream", () => {
       __testing.processOpenAICompletionsStream(mockStream(), output, model, stream),
     ).rejects.toThrow("Exceeded tool-call argument buffer limit");
   });
+
+  // Regression: a conformant Responses-API upstream may deliver the full
+  // function-call arguments only via `response.function_call_arguments.done`,
+  // with no intermediate `.delta` events and an empty `arguments` field on
+  // `output_item.done`'s item. Prior to the fix, `processResponsesStream`
+  // ignored the `.done` event entirely, so `partialJson` stayed empty and
+  // the emitted `toolcall_end` carried `{}` as its arguments — losing every
+  // client-tool call's parameters whenever the upstream chose this shape.
+  //
+  // This test reproduces that exact shape: the stream only emits
+  // output_item.added -> function_call_arguments.done -> output_item.done
+  // (with an empty arguments field on the item). The toolcall_end event
+  // must carry the real parsed arguments.
+  it("captures function_call arguments from response.function_call_arguments.done when no deltas are emitted", async () => {
+    const model = {
+      id: "foo-llm",
+      name: "Foo LLM",
+      api: "openai-responses",
+      provider: "acme",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 400_000,
+      maxTokens: 32_000,
+    } satisfies Model<"openai-responses">;
+
+    const output: Parameters<typeof __testing.processResponsesStream>[1] = {
+      role: "assistant",
+      content: [],
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    } as Parameters<typeof __testing.processResponsesStream>[1];
+
+    const collected: unknown[] = [];
+    const stream = {
+      push(event: unknown) {
+        collected.push(event);
+      },
+    };
+
+    const sseEvents: Array<Record<string, unknown>> = [
+      // 1. The function_call item is announced with empty arguments.
+      {
+        type: "response.output_item.added",
+        output_index: 0,
+        item: {
+          type: "function_call",
+          id: "fc_abc123",
+          call_id: "call_xyz789",
+          name: "probe",
+          arguments: "",
+        },
+      },
+      // 2. The full arguments arrive ONLY via the .done event — no intermediate
+      //    deltas. This is a valid degenerate case of a conformant Responses-API
+      //    stream that the parser must handle.
+      {
+        type: "response.function_call_arguments.done",
+        output_index: 0,
+        item_id: "fc_abc123",
+        arguments: '{"foo":"bar","n":7}',
+      },
+      // 3. output_item.done arrives with an empty arguments field on the item —
+      //    this is deliberately the worst case: the parser cannot rely on the
+      //    item.arguments fallback. The .done event above is the only carrier.
+      {
+        type: "response.output_item.done",
+        output_index: 0,
+        item: {
+          type: "function_call",
+          id: "fc_abc123",
+          call_id: "call_xyz789",
+          name: "probe",
+          arguments: "",
+        },
+      },
+      {
+        type: "response.completed",
+        response: {
+          status: "completed",
+          usage: {
+            input_tokens: 100,
+            output_tokens: 20,
+            total_tokens: 120,
+            input_tokens_details: { cached_tokens: 0 },
+          },
+        },
+      },
+    ];
+
+    async function* sseStream(): AsyncGenerator {
+      for (const event of sseEvents) {
+        yield event;
+      }
+    }
+
+    await __testing.processResponsesStream(sseStream(), output, stream, model);
+
+    const toolcallEnd = collected.find(
+      (event) =>
+        typeof event === "object" &&
+        event !== null &&
+        (event as { type?: unknown }).type === "toolcall_end",
+    ) as { toolCall?: { arguments?: unknown; name?: unknown } } | undefined;
+
+    expect(toolcallEnd).toBeDefined();
+    expect(toolcallEnd?.toolCall?.name).toBe("probe");
+    expect(toolcallEnd?.toolCall?.arguments).toEqual({ foo: "bar", n: 7 });
+  });
 });
