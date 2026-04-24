@@ -1,7 +1,11 @@
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveEffectiveToolInventory } from "../../agents/tools-effective-inventory.js";
-import { getOrCreateSessionMcpRuntime } from "../../agents/pi-bundle-mcp-runtime.js";
+import {
+  getOrCreateSessionMcpRuntime,
+  getSessionMcpRuntimeManager,
+} from "../../agents/pi-bundle-mcp-runtime.js";
 import { materializeBundleMcpToolsForRun } from "../../agents/pi-bundle-mcp-materialize.js";
+import { applyFinalEffectiveToolPolicy } from "../../agents/pi-embedded-runner/effective-tool-policy.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { logVerbose } from "../../globals.js";
 import { listSkillCommandsForAgents } from "../skill-commands.js";
@@ -161,36 +165,65 @@ export const handleToolsCommand: CommandHandler = async (params, allowTextComman
       ),
     });
 
-    // Include MCP tools from the session runtime (if available)
+    // Include MCP tools from the session runtime (if already exists)
+    // Use resolveSessionId to avoid getOrCreate side-effects from a read-only command
     if (params.sessionKey) {
       try {
-        const mcpRuntime = await getOrCreateSessionMcpRuntime({
-          sessionKey: params.sessionKey,
-          workspaceDir: params.workspaceDir ?? process.cwd(),
-          cfg: params.cfg,
-        });
-        if (mcpRuntime) {
-          const mcpTools = await materializeBundleMcpToolsForRun({
-            runtime: mcpRuntime,
+        const mcpManager = getSessionMcpRuntimeManager();
+        const existingSessionId = mcpManager.resolveSessionId(params.sessionKey);
+        if (existingSessionId) {
+          const mcpRuntime = await getOrCreateSessionMcpRuntime({
+            sessionId: existingSessionId,
+            sessionKey: params.sessionKey,
+            workspaceDir: params.workspaceDir ?? process.cwd(),
+            cfg: params.cfg,
           });
-          if (mcpTools.tools.length > 0) {
-            const mcpEntries = mcpTools.tools.map((tool) => ({
-              id: tool.name,
-              label: tool.label ?? tool.name,
-              description: tool.description || "",
-              rawDescription: tool.description || "",
-              source: "mcp" as const,
-            }));
-            // Append MCP tools as a new group
-            result = {
-              ...result,
-              groups: [...result.groups, {
-                id: "mcp" as const,
-                label: "MCP servers",
-                source: "mcp" as const,
-                tools: mcpEntries,
-              }],
-            };
+          if (mcpRuntime) {
+            const mcpTools = await materializeBundleMcpToolsForRun({
+              runtime: mcpRuntime,
+            });
+            if (mcpTools.tools.length > 0) {
+              // Apply the same policy filtering as the actual run path
+              const filteredMcpTools = applyFinalEffectiveToolPolicy({
+                bundledTools: mcpTools.tools,
+                config: params.cfg,
+                sessionKey: params.sessionKey,
+                agentId,
+                modelProvider: params.provider,
+                modelId: params.model,
+                messageProvider: params.command.channel,
+                agentAccountId: effectiveAccountId,
+                groupId: targetSessionEntry?.groupId ?? extractExplicitGroupId(params.ctx.From),
+                groupChannel:
+                  targetSessionEntry?.groupChannel ?? params.ctx.GroupChannel ?? params.ctx.GroupSubject,
+                groupSpace: targetSessionEntry?.space ?? params.ctx.GroupSpace,
+                senderId: params.command.senderId,
+                senderName: params.ctx.SenderName,
+                senderUsername: params.ctx.SenderUsername,
+                senderE164: params.ctx.SenderE164,
+                senderIsOwner: params.command.senderIsOwner,
+                warn: logVerbose,
+              });
+              if (filteredMcpTools.length > 0) {
+                const mcpEntries = filteredMcpTools.map((tool) => ({
+                  id: tool.name,
+                  label: tool.label ?? tool.name,
+                  description: tool.description || "",
+                  rawDescription: tool.description || "",
+                  source: "mcp" as const,
+                }));
+                // Append MCP tools as a new group
+                result = {
+                  ...result,
+                  groups: [...result.groups, {
+                    id: "mcp" as const,
+                    label: "MCP servers",
+                    source: "mcp" as const,
+                    tools: mcpEntries,
+                  }],
+                };
+              }
+            }
           }
         }
       } catch {
