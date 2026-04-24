@@ -291,7 +291,7 @@ function resolveRegister(mod: OpenClawPluginModule): {
   return {};
 }
 
-function resolveSetupRuntimeSource(record: PluginManifestRecord): string | null {
+function resolveLoadableSetupRuntimeSource(record: PluginManifestRecord): string | null {
   return record.setupSource ?? resolveSetupApiPath(record.rootDir);
 }
 
@@ -311,7 +311,7 @@ function resolveSetupRegistration(record: PluginManifestRecord): {
   if (record.setup?.requiresRuntime === false) {
     return null;
   }
-  const setupSource = resolveSetupRuntimeSource(record);
+  const setupSource = resolveLoadableSetupRuntimeSource(record);
   if (!setupSource) {
     return null;
   }
