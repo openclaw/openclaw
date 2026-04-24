@@ -4,6 +4,8 @@ import type {
   DocumentExtractionResult,
   DocumentExtractorPlugin,
 } from "openclaw/plugin-sdk/document-extractor";
+import { createRequire } from "node:module";
+import path from "node:path";
 
 type CanvasLike = {
   toBuffer(type: "image/png"): Buffer;
@@ -38,7 +40,11 @@ type PdfDocument = {
 };
 
 type PdfJsModule = {
-  getDocument(params: { data: Uint8Array; disableWorker?: boolean }): {
+  getDocument(params: {
+    data: Uint8Array;
+    disableWorker?: boolean;
+    standardFontDataUrl?: string;
+  }): {
     promise: Promise<PdfDocument>;
   };
 };
@@ -47,9 +53,11 @@ const CANVAS_MODULE = "@napi-rs/canvas";
 const PDFJS_MODULE = "pdfjs-dist/legacy/build/pdf.mjs";
 const MAX_EXTRACTED_TEXT_CHARS = 200_000;
 const MAX_RENDER_DIMENSION = 10_000;
+const require = createRequire(import.meta.url);
 
 let canvasModulePromise: Promise<CanvasModule> | null = null;
 let pdfJsModulePromise: Promise<PdfJsModule> | null = null;
+let pdfJsStandardFontDataUrl: string | null = null;
 
 async function loadCanvasModule(): Promise<CanvasModule> {
   if (!canvasModulePromise) {
@@ -73,6 +81,15 @@ async function loadPdfJsModule(): Promise<PdfJsModule> {
     });
   }
   return pdfJsModulePromise;
+}
+
+function resolvePdfJsStandardFontDataUrl(): string {
+  if (!pdfJsStandardFontDataUrl) {
+    const pdfJsPackageJsonPath = require.resolve("pdfjs-dist/package.json");
+    pdfJsStandardFontDataUrl =
+      path.join(path.dirname(pdfJsPackageJsonPath), "standard_fonts") + path.sep;
+  }
+  return pdfJsStandardFontDataUrl;
 }
 
 function appendTextWithinLimit(parts: string[], pageText: string, currentLength: number): number {
@@ -142,6 +159,7 @@ async function extractPdfContent(
   const pdf = await pdfJsModule.getDocument({
     data: new Uint8Array(request.buffer),
     disableWorker: true,
+    standardFontDataUrl: resolvePdfJsStandardFontDataUrl(),
   }).promise;
 
   const effectivePages: number[] = request.pageNumbers
