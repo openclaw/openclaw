@@ -275,6 +275,10 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.durationMs = event.durationMs;
       assignReasonCode(record, event.errorCategory);
       break;
+    case "log.record":
+      record.level = event.level;
+      record.source = event.loggerName;
+      break;
     case "diagnostic.memory.sample":
       record.memory = copyMemory(event.memory);
       break;

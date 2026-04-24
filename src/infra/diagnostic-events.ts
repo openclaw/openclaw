@@ -269,6 +269,19 @@ export type DiagnosticPayloadLargeEvent = DiagnosticBaseEvent & {
   reason?: string;
 };
 
+export type DiagnosticLogRecordEvent = DiagnosticBaseEvent & {
+  type: "log.record";
+  level: string;
+  message: string;
+  loggerName?: string;
+  loggerParents?: string[];
+  attributes?: Record<string, string | number | boolean>;
+  code?: {
+    line?: number;
+    functionName?: string;
+  };
+};
+
 export type DiagnosticEventPayload =
   | DiagnosticUsageEvent
   | DiagnosticWebhookReceivedEvent
@@ -293,7 +306,8 @@ export type DiagnosticEventPayload =
   | DiagnosticModelCallErrorEvent
   | DiagnosticMemorySampleEvent
   | DiagnosticMemoryPressureEvent
-  | DiagnosticPayloadLargeEvent;
+  | DiagnosticPayloadLargeEvent
+  | DiagnosticLogRecordEvent;
 
 export type DiagnosticEventInput = DiagnosticEventPayload extends infer Event
   ? Event extends DiagnosticEventPayload
@@ -318,6 +332,7 @@ const ASYNC_DIAGNOSTIC_EVENT_TYPES = new Set<DiagnosticEventPayload["type"]>([
   "model.call.started",
   "model.call.completed",
   "model.call.error",
+  "log.record",
 ]);
 
 function getDiagnosticEventsState(): DiagnosticEventsGlobalState {
@@ -424,12 +439,23 @@ export function emitDiagnosticEvent(event: DiagnosticEventInput) {
   dispatchDiagnosticEvent(state, enriched);
 }
 
-export function onDiagnosticEvent(listener: (evt: DiagnosticEventPayload) => void): () => void {
+export function onInternalDiagnosticEvent(
+  listener: (evt: DiagnosticEventPayload) => void,
+): () => void {
   const state = getDiagnosticEventsState();
   state.listeners.add(listener);
   return () => {
     state.listeners.delete(listener);
   };
+}
+
+export function onDiagnosticEvent(listener: (evt: DiagnosticEventPayload) => void): () => void {
+  return onInternalDiagnosticEvent((event) => {
+    if (event.type === "log.record") {
+      return;
+    }
+    listener(event);
+  });
 }
 
 export function resetDiagnosticEventsForTest(): void {
