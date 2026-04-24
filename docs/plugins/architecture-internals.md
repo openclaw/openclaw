@@ -76,7 +76,9 @@ Setup discovery now prefers descriptor-owned ids such as `setup.providers` and
 `requiresRuntime` keeps the legacy setup-api fallback for compatibility. If more
 than one discovered plugin claims the same normalized setup provider or CLI
 backend id, setup lookup refuses the ambiguous owner instead of relying on
-discovery order.
+discovery order. When setup runtime does execute, registry diagnostics report
+drift between `setup.providers` / `setup.cliBackends` and the providers or CLI
+backends registered by setup-api without blocking legacy plugins.
 
 ### What the loader caches
 
