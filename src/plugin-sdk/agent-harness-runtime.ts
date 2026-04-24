@@ -2,6 +2,7 @@
 // Keep heavyweight tool construction out of this module so harness imports can
 // register quickly inside gateway startup and Docker e2e runs.
 
+import type { AgentHarnessResultClassification } from "../agents/harness/types.js";
 import { formatToolDetail, resolveToolDisplay } from "../agents/tool-display.js";
 import { redactToolDetail } from "../logging/redact.js";
 import { truncateUtf16Safe } from "../utils.js";
@@ -142,4 +143,33 @@ export function formatToolProgressOutput(
     return redacted;
   }
   return `${truncateUtf16Safe(redacted, maxChars)}\n...(truncated)...`;
+}
+
+export type AgentHarnessTerminalOutcomeInput = {
+  assistantTexts: readonly string[];
+  reasoningText?: string | null;
+  planText?: string | null;
+  promptError?: unknown;
+  turnCompleted: boolean;
+};
+
+/**
+ * Classify terminal harness turns that completed without user-visible assistant
+ * text. This is intentionally SDK-level so plugin harness adapters such as
+ * Codex preserve the same OpenClaw-owned fallback signals as the built-in PI
+ * path without re-implementing terminal-result policy.
+ */
+export function classifyAgentHarnessTerminalOutcome(
+  params: AgentHarnessTerminalOutcomeInput,
+): AgentHarnessResultClassification | undefined {
+  if (!params.turnCompleted || params.promptError || params.assistantTexts.length > 0) {
+    return undefined;
+  }
+  if (params.planText?.trim()) {
+    return "planning-only";
+  }
+  if (params.reasoningText?.trim()) {
+    return "reasoning-only";
+  }
+  return "empty";
 }
