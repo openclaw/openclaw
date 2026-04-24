@@ -230,7 +230,9 @@ export type GatewayServerOptions = {
     prompter: import("../wizard/prompts.js").WizardPrompter,
   ) => Promise<void>;
   /**
-   * Test-only: wait for post-listen sidecars such as plugin services before returning.
+   * Whether to wait for post-listen sidecars (channels, plugin services) to finish
+   * starting before marking the gateway as ready. Defaults to true; pass false to
+   * let sidecars start in the background.
    */
   awaitStartupSidecars?: boolean;
   /**

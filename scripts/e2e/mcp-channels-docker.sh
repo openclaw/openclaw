@@ -66,7 +66,7 @@ docker run --rm \
       exit 1
     fi
     acpx_ready=0
-    for _ in \$(seq 1 960); do
+    for _ in \$(seq 1 2400); do
       if grep -q '\[plugins\] embedded acpx runtime backend ready' /tmp/mcp-channels-gateway.log 2>/dev/null; then
         acpx_ready=1
         break

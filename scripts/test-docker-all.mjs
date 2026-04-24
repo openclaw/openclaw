@@ -6,11 +6,41 @@ import { fileURLToPath } from "node:url";
 
 const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_E2E_IMAGE = "openclaw-docker-e2e:local";
-const DEFAULT_PARALLELISM = 8;
-const DEFAULT_TAIL_PARALLELISM = 8;
+const DEFAULT_PARALLELISM = 10;
+const DEFAULT_TAIL_PARALLELISM = 10;
 const DEFAULT_FAILURE_TAIL_LINES = 80;
 const DEFAULT_LANE_TIMEOUT_MS = 120 * 60 * 1000;
 const DEFAULT_LANE_START_STAGGER_MS = 2_000;
+
+const bundledChannelLaneCommand =
+  "OPENCLAW_SKIP_DOCKER_BUILD=1 OPENCLAW_BUNDLED_CHANNEL_UPDATE_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_ROOT_OWNED_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_SETUP_ENTRY_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_LOAD_FAILURE_SCENARIO=0 pnpm test:docker:bundled-channel-deps";
+
+const bundledScenarioLanes = [
+  ["bundled-channel-telegram", `OPENCLAW_BUNDLED_CHANNELS=telegram ${bundledChannelLaneCommand}`],
+  ["bundled-channel-discord", `OPENCLAW_BUNDLED_CHANNELS=discord ${bundledChannelLaneCommand}`],
+  ["bundled-channel-slack", `OPENCLAW_BUNDLED_CHANNELS=slack ${bundledChannelLaneCommand}`],
+  ["bundled-channel-feishu", `OPENCLAW_BUNDLED_CHANNELS=feishu ${bundledChannelLaneCommand}`],
+  [
+    "bundled-channel-memory-lancedb",
+    `OPENCLAW_BUNDLED_CHANNELS=memory-lancedb ${bundledChannelLaneCommand}`,
+  ],
+  [
+    "bundled-channel-update",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 OPENCLAW_BUNDLED_CHANNEL_SCENARIOS=0 OPENCLAW_BUNDLED_CHANNEL_UPDATE_SCENARIO=1 OPENCLAW_BUNDLED_CHANNEL_ROOT_OWNED_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_SETUP_ENTRY_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_LOAD_FAILURE_SCENARIO=0 pnpm test:docker:bundled-channel-deps",
+  ],
+  [
+    "bundled-channel-root-owned",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 OPENCLAW_BUNDLED_CHANNEL_SCENARIOS=0 OPENCLAW_BUNDLED_CHANNEL_UPDATE_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_ROOT_OWNED_SCENARIO=1 OPENCLAW_BUNDLED_CHANNEL_SETUP_ENTRY_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_LOAD_FAILURE_SCENARIO=0 pnpm test:docker:bundled-channel-deps",
+  ],
+  [
+    "bundled-channel-setup-entry",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 OPENCLAW_BUNDLED_CHANNEL_SCENARIOS=0 OPENCLAW_BUNDLED_CHANNEL_UPDATE_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_ROOT_OWNED_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_SETUP_ENTRY_SCENARIO=1 OPENCLAW_BUNDLED_CHANNEL_LOAD_FAILURE_SCENARIO=0 pnpm test:docker:bundled-channel-deps",
+  ],
+  [
+    "bundled-channel-load-failure",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 OPENCLAW_BUNDLED_CHANNEL_SCENARIOS=0 OPENCLAW_BUNDLED_CHANNEL_UPDATE_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_ROOT_OWNED_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_SETUP_ENTRY_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_LOAD_FAILURE_SCENARIO=1 pnpm test:docker:bundled-channel-deps",
+  ],
+];
 
 const lanes = [
   ["live-models", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-models"],
@@ -37,7 +67,7 @@ const lanes = [
   ["plugins", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:plugins"],
   ["plugin-update", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:plugin-update"],
   ["config-reload", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:config-reload"],
-  ["bundled-channel-deps", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:bundled-channel-deps"],
+  ...bundledScenarioLanes,
   ["openai-image-auth", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openai-image-auth"],
   ["qr", "pnpm test:docker:qr"],
 ];
@@ -53,7 +83,9 @@ const exclusiveLanes = [
     "live-cli-backend-codex",
     "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-cli-backend:codex",
   ],
-  ["live-acp-bind", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-acp-bind"],
+  ["live-acp-bind-claude", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-acp-bind:claude"],
+  ["live-acp-bind-codex", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-acp-bind:codex"],
+  ["live-acp-bind-gemini", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-acp-bind:gemini"],
 ];
 
 const tailLanes = exclusiveLanes;
@@ -117,6 +149,10 @@ function commandEnv(extra = {}) {
   };
 }
 
+function shellQuote(value) {
+  return `'${String(value).replaceAll("'", "'\\''")}'`;
+}
+
 function runShellCommand({ command, env, label, logFile, timeoutMs }) {
   return new Promise((resolve) => {
     const child = spawn("bash", ["-lc", command], {
@@ -174,6 +210,67 @@ async function runForeground(label, command, env) {
   if (result.status !== 0) {
     throw new Error(`${label} failed with status ${result.status}`);
   }
+}
+
+async function runForegroundGroup(entries, env) {
+  const results = await Promise.allSettled(
+    entries.map(async ([label, command]) => {
+      await runForeground(label, command, env);
+    }),
+  );
+  const failures = results
+    .map((result, index) => ({ result, entry: entries[index] }))
+    .filter(({ result }) => result.status === "rejected");
+  if (failures.length > 0) {
+    throw new Error(
+      failures
+        .map(
+          ({ result, entry }) => `${entry[0]}: ${result.reason?.message ?? String(result.reason)}`,
+        )
+        .join("\n"),
+    );
+  }
+}
+
+async function prepareBundledChannelPackage(baseEnv, logDir) {
+  if (baseEnv.OPENCLAW_BUNDLED_CHANNEL_PACKAGE_TGZ) {
+    console.log(`==> Bundled channel package: ${baseEnv.OPENCLAW_BUNDLED_CHANNEL_PACKAGE_TGZ}`);
+    return;
+  }
+
+  const packDir = path.join(logDir, "bundled-channel-package");
+  await mkdir(packDir, { recursive: true });
+  const packScript = [
+    "set -euo pipefail",
+    "node --import tsx --input-type=module -e \"const { writePackageDistInventory } = await import('./src/infra/package-dist-inventory.ts'); await writePackageDistInventory(process.cwd());\"",
+    "npm pack --silent --ignore-scripts --pack-destination /tmp/openclaw-pack >/tmp/openclaw-pack.out",
+    "cat /tmp/openclaw-pack.out",
+  ].join("\n");
+  await runForeground(
+    "Pack bundled channel package once from Docker E2E image",
+    [
+      "docker run --rm",
+      "-e COREPACK_ENABLE_DOWNLOAD_PROMPT=0",
+      `-v ${shellQuote(packDir)}:/tmp/openclaw-pack`,
+      shellQuote(baseEnv.OPENCLAW_DOCKER_E2E_IMAGE),
+      "bash -lc",
+      shellQuote(packScript),
+    ].join(" "),
+    baseEnv,
+  );
+
+  const packed = (await fs.promises.readdir(packDir))
+    .filter((entry) => /^openclaw-.*\.tgz$/.test(entry))
+    .toSorted()
+    .at(-1);
+  if (!packed) {
+    throw new Error(`missing packed OpenClaw tarball in ${packDir}`);
+  }
+  baseEnv.OPENCLAW_BUNDLED_CHANNEL_PACKAGE_TGZ = path.join(packDir, packed);
+  baseEnv.OPENCLAW_BUNDLED_CHANNEL_HOST_BUILD = "0";
+  baseEnv.OPENCLAW_NPM_ONBOARD_PACKAGE_TGZ = baseEnv.OPENCLAW_BUNDLED_CHANNEL_PACKAGE_TGZ;
+  baseEnv.OPENCLAW_NPM_ONBOARD_HOST_BUILD = "0";
+  console.log(`==> Bundled channel package: ${baseEnv.OPENCLAW_BUNDLED_CHANNEL_PACKAGE_TGZ}`);
 }
 
 function laneEnv(name, baseEnv, logDir) {
@@ -352,12 +449,17 @@ async function main() {
   console.log(`==> Fail fast: ${failFast ? "yes" : "no"}`);
   console.log(`==> Live-test bundled plugin deps: ${baseEnv.OPENCLAW_DOCKER_BUILD_EXTENSIONS}`);
 
-  await runForeground("Build shared live-test image once", "pnpm test:docker:live-build", baseEnv);
-  await runForeground(
-    `Build shared Docker E2E image once: ${baseEnv.OPENCLAW_DOCKER_E2E_IMAGE}`,
-    "pnpm test:docker:e2e-build",
+  await runForegroundGroup(
+    [
+      ["Build shared live-test image once", "pnpm test:docker:live-build"],
+      [
+        `Build shared Docker E2E image once: ${baseEnv.OPENCLAW_DOCKER_E2E_IMAGE}`,
+        "pnpm test:docker:e2e-build",
+      ],
+    ],
     baseEnv,
   );
+  await prepareBundledChannelPackage(baseEnv, logDir);
 
   const options = { failFast, startStaggerMs: laneStartStaggerMs, timeoutMs: laneTimeoutMs };
   const failures = await runLanePool(lanes, baseEnv, logDir, parallelism, options);

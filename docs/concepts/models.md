@@ -130,9 +130,7 @@ Notes:
 
 - `/model` (and `/model list`) is a compact, numbered picker (model family + available providers).
 - On Discord, `/model` and `/models` open an interactive picker with provider and model dropdowns plus a Submit step.
-- `/models add` is available by default and can be disabled with `commands.modelsWrite=false`.
-- When enabled, `/models add <provider> <modelId>` is the fastest path; bare `/models add` starts a provider-first guided flow where supported.
-- After `/models add`, the new model becomes available in `/models` and `/model` without restarting the gateway.
+- `/models add` is deprecated and now returns a deprecation message instead of registering models from chat.
 - `/model <#>` selects from that picker.
 - `/model` persists the new session selection immediately.
 - If the agent is idle, the next run uses the new model right away.
@@ -150,14 +148,6 @@ Notes:
      surfacing a stale removed-provider default.
 
 Full command behavior/config: [Slash commands](/tools/slash-commands).
-
-Examples:
-
-```text
-/models add
-/models add ollama glm-5.1:cloud
-/models add lmstudio qwen/qwen3.5-9b
-```
 
 ## CLI commands
 

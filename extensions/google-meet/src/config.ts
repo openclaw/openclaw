@@ -22,7 +22,11 @@ export type GoogleMeetConfig = {
     audioBackend: "blackhole-2ch";
     launch: boolean;
     browserProfile?: string;
+    guestName: string;
+    reuseExistingTab: boolean;
+    autoJoin: boolean;
     joinTimeoutMs: number;
+    waitForInCallMs: number;
     audioInputCommand?: string[];
     audioOutputCommand?: string[];
     audioBridgeCommand?: string[];
@@ -113,7 +117,11 @@ export const DEFAULT_GOOGLE_MEET_CONFIG: GoogleMeetConfig = {
   chrome: {
     audioBackend: "blackhole-2ch",
     launch: true,
+    guestName: "OpenClaw Agent",
+    reuseExistingTab: true,
+    autoJoin: true,
     joinTimeoutMs: 30_000,
+    waitForInCallMs: 20_000,
     audioInputCommand: [...DEFAULT_GOOGLE_MEET_AUDIO_INPUT_COMMAND],
     audioOutputCommand: [...DEFAULT_GOOGLE_MEET_AUDIO_OUTPUT_COMMAND],
   },
@@ -300,9 +308,20 @@ export function resolveGoogleMeetConfigWithEnv(
       audioBackend: "blackhole-2ch",
       launch: resolveBoolean(chrome.launch, DEFAULT_GOOGLE_MEET_CONFIG.chrome.launch),
       browserProfile: normalizeOptionalString(chrome.browserProfile),
+      guestName:
+        normalizeOptionalString(chrome.guestName) ?? DEFAULT_GOOGLE_MEET_CONFIG.chrome.guestName,
+      reuseExistingTab: resolveBoolean(
+        chrome.reuseExistingTab,
+        DEFAULT_GOOGLE_MEET_CONFIG.chrome.reuseExistingTab,
+      ),
+      autoJoin: resolveBoolean(chrome.autoJoin, DEFAULT_GOOGLE_MEET_CONFIG.chrome.autoJoin),
       joinTimeoutMs: resolveNumber(
         chrome.joinTimeoutMs,
         DEFAULT_GOOGLE_MEET_CONFIG.chrome.joinTimeoutMs,
+      ),
+      waitForInCallMs: resolveNumber(
+        chrome.waitForInCallMs,
+        DEFAULT_GOOGLE_MEET_CONFIG.chrome.waitForInCallMs,
       ),
       audioInputCommand: resolveStringArray(chrome.audioInputCommand) ?? [
         ...DEFAULT_GOOGLE_MEET_AUDIO_INPUT_COMMAND,

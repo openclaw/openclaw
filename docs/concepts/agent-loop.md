@@ -112,7 +112,7 @@ Hook decision rules for outbound/tool guards:
 - `message_sending`: `{ cancel: true }` is terminal and stops lower-priority handlers.
 - `message_sending`: `{ cancel: false }` is a no-op and does not clear a prior cancel.
 
-See [Plugin hooks](/plugins/architecture-internals#provider-runtime-hooks) for the hook API and registration details.
+See [Plugin hooks](/plugins/hooks) for the hook API and registration details.
 
 Harnesses may adapt these hooks differently. The Codex app-server harness keeps
 OpenClaw plugin hooks as the compatibility contract for documented mirrored

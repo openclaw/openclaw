@@ -6,11 +6,7 @@ read_when:
 title: "Google Meet plugin"
 ---
 
-# Google Meet (plugin)
-
-Google Meet participant support for OpenClaw.
-
-The plugin is explicit by design:
+Google Meet participant support for OpenClaw — the plugin is explicit by design:
 
 - It only joins an explicit `https://meet.google.com/...` URL.
 - `realtime` voice is the default mode.
@@ -166,7 +162,8 @@ openclaw devices list
 openclaw devices approve <requestId>
 ```
 
-Confirm the Gateway sees the node and that it advertises `googlemeet.chrome`:
+Confirm the Gateway sees the node and that it advertises both `googlemeet.chrome`
+and browser capability/`browser.proxy`:
 
 ```bash
 openclaw nodes status
@@ -178,7 +175,7 @@ Route Meet through that node on the Gateway host:
 {
   gateway: {
     nodes: {
-      allowCommands: ["googlemeet.chrome"],
+      allowCommands: ["googlemeet.chrome", "browser.proxy"],
     },
   },
   plugins: {
@@ -187,6 +184,11 @@ Route Meet through that node on the Gateway host:
         enabled: true,
         config: {
           defaultTransport: "chrome-node",
+          chrome: {
+            guestName: "OpenClaw Agent",
+            autoJoin: true,
+            reuseExistingTab: true,
+          },
           chromeNode: {
             node: "parallels-macos",
           },
@@ -205,20 +207,40 @@ openclaw googlemeet join https://meet.google.com/abc-defg-hij
 
 or ask the agent to use the `google_meet` tool with `transport: "chrome-node"`.
 
+For a one-command smoke test that creates or reuses a session, speaks a known
+phrase, and prints session health:
+
+```bash
+openclaw googlemeet test-speech https://meet.google.com/abc-defg-hij
+```
+
+If the browser profile is not signed in, Meet is waiting for host admission, or
+Chrome needs microphone/camera permission, the join/test-speech result reports
+`manualActionRequired: true` with `manualActionReason` and
+`manualActionMessage`. Agents should stop retrying the join, report that message
+to the operator, and retry only after the manual browser action is complete.
+
 If `chromeNode.node` is omitted, OpenClaw auto-selects only when exactly one
-connected node advertises `googlemeet.chrome`. If several capable nodes are
-connected, set `chromeNode.node` to the node id, display name, or remote IP.
+connected node advertises both `googlemeet.chrome` and browser control. If
+several capable nodes are connected, set `chromeNode.node` to the node id,
+display name, or remote IP.
 
 Common failure checks:
 
 - `No connected Google Meet-capable node`: start `openclaw node run` in the VM,
-  approve pairing, and make sure `openclaw plugins enable google-meet` was run
-  in the VM. Also confirm the Gateway host allows the node command with
-  `gateway.nodes.allowCommands: ["googlemeet.chrome"]`.
+  approve pairing, and make sure `openclaw plugins enable google-meet` and
+  `openclaw plugins enable browser` were run in the VM. Also confirm the
+  Gateway host allows both node commands with
+  `gateway.nodes.allowCommands: ["googlemeet.chrome", "browser.proxy"]`.
 - `BlackHole 2ch audio device not found on the node`: install `blackhole-2ch`
   in the VM and reboot the VM.
-- Chrome opens but cannot join: sign in to Chrome inside the VM and confirm that
-  profile can join the Meet URL manually.
+- Chrome opens but cannot join: sign in to the browser profile inside the VM, or
+  keep `chrome.guestName` set for guest join. Guest auto-join uses OpenClaw
+  browser automation through the node browser proxy; make sure the node browser
+  config points at the profile you want, for example
+  `browser.defaultProfile: "user"` or a named existing-session profile.
+- Duplicate Meet tabs: leave `chrome.reuseExistingTab: true` enabled. OpenClaw
+  activates an existing tab for the same Meet URL before opening a new one.
 - No audio: in Meet, route microphone/speaker through the virtual audio device
   path used by OpenClaw; use separate virtual devices or Loopback-style routing
   for clean duplex audio.
@@ -353,6 +375,14 @@ Defaults:
 - `defaultMode: "realtime"`
 - `chromeNode.node`: optional node id/name/IP for `chrome-node`
 - `chrome.audioBackend: "blackhole-2ch"`
+- `chrome.guestName: "OpenClaw Agent"`: name used on the signed-out Meet guest
+  screen
+- `chrome.autoJoin: true`: best-effort guest-name fill and Join Now click
+  through OpenClaw browser automation on `chrome-node`
+- `chrome.reuseExistingTab: true`: activate an existing Meet tab instead of
+  opening duplicates
+- `chrome.waitForInCallMs: 20000`: wait for the Meet tab to report in-call
+  before the realtime intro is triggered
 - `chrome.audioInputCommand`: SoX `rec` command writing 8 kHz G.711 mu-law
   audio to stdout
 - `chrome.audioOutputCommand`: SoX `play` command reading 8 kHz G.711 mu-law
@@ -373,6 +403,8 @@ Optional overrides:
   },
   chrome: {
     browserProfile: "Default",
+    guestName: "OpenClaw Agent",
+    waitForInCallMs: 30000,
   },
   chromeNode: {
     node: "parallels-macos",
@@ -426,7 +458,19 @@ Gateway host, so model credentials stay there.
 
 Use `action: "status"` to list active sessions or inspect a session ID. Use
 `action: "speak"` with `sessionId` and `message` to make the realtime agent
-speak immediately. Use `action: "leave"` to mark a session ended.
+speak immediately. Use `action: "test_speech"` to create or reuse the session,
+trigger a known phrase, and return `inCall` health when the Chrome host can
+report it. Use `action: "leave"` to mark a session ended.
+
+`status` includes Chrome health when available:
+
+- `inCall`: Chrome appears to be inside the Meet call
+- `micMuted`: best-effort Meet microphone state
+- `manualActionRequired` / `manualActionReason` / `manualActionMessage`: the
+  browser profile needs manual login, Meet host admission, permissions, or
+  browser-control repair before speech can work
+- `providerConnected` / `realtimeReady`: realtime voice bridge state
+- `lastInputAt` / `lastOutputAt`: last audio seen from or sent to the bridge
 
 ```json
 {
@@ -463,6 +507,14 @@ To force a spoken readiness check after Chrome has fully joined the call:
 
 ```bash
 openclaw googlemeet speak meet_... "Say exactly: I'm here and listening."
+```
+
+For the full join-and-speak smoke:
+
+```bash
+openclaw googlemeet test-speech https://meet.google.com/abc-defg-hij \
+  --transport chrome-node \
+  --message "Say exactly: I'm here and listening."
 ```
 
 ## Notes
