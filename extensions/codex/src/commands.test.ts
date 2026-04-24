@@ -112,6 +112,27 @@ describe("codex command", () => {
     });
   });
 
+  it("shows when Codex app-server model output is truncated", async () => {
+    const deps = createDeps({
+      listCodexAppServerModels: vi.fn(async () => ({
+        models: [
+          {
+            id: "gpt-5.4",
+            model: "gpt-5.4",
+            inputModalities: ["text"],
+            supportedReasoningEfforts: ["medium"],
+          },
+        ],
+        nextCursor: "page-2",
+        truncated: true,
+      })),
+    });
+
+    await expect(handleCodexCommand(createContext("models"), { deps })).resolves.toEqual({
+      text: "Codex models:\n- gpt-5.4\n- More models available; output truncated.",
+    });
+  });
+
   it("reports status unavailable when every Codex probe fails", async () => {
     const offline = { ok: false as const, error: "offline" };
     const deps = createDeps({

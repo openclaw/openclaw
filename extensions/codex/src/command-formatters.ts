@@ -45,10 +45,14 @@ export function formatModels(result: CodexAppServerModelListResult): string {
   if (result.models.length === 0) {
     return "No Codex app-server models returned.";
   }
-  return [
+  const lines = [
     "Codex models:",
     ...result.models.map((model) => `- ${model.id}${model.isDefault ? " (default)" : ""}`),
-  ].join("\n");
+  ];
+  if (result.truncated) {
+    lines.push("- More models available; output truncated.");
+  }
+  return lines.join("\n");
 }
 
 export function formatThreads(response: JsonValue | undefined): string {
