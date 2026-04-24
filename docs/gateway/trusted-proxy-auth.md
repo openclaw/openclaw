@@ -407,7 +407,7 @@ over plain HTTP (Web Crypto API requires secure context).
 
 Fix:
 
-- Set `gateway.controlUi.dangerouslyDisableDeviceAuth: true` to preserve operator scopes on trusted-proxy WebSocket connections
+- Set `gateway.controlUi.dangerouslyDisableDeviceAuth: true` to preserve operator scopes on trusted-proxy WebSocket connections, or
 - Serve the Control UI over HTTPS so the browser can generate device identity, or
 - Use token/password auth for same-host loopback proxy setups
 
