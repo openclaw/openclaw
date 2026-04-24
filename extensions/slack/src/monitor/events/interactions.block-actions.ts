@@ -1,8 +1,13 @@
 import type { SlackActionMiddlewareArgs } from "@slack/bolt";
 import type { Block, KnownBlock } from "@slack/web-api";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/infra-runtime";
+import { enqueueSystemEvent, parseExecApprovalCommandText } from "openclaw/plugin-sdk/infra-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { SLACK_REPLY_BUTTON_ACTION_ID, SLACK_REPLY_SELECT_ACTION_ID } from "../../blocks-render.js";
+import { resolveSlackExecApproval } from "../../exec-approval-resolver.js";
+import {
+  isSlackExecApprovalApprover,
+  isSlackExecApprovalAuthorizedSender,
+} from "../../exec-approvals.js";
 import { dispatchSlackPluginInteractiveHandler } from "../../interactive-dispatch.js";
 import { authorizeSlackSystemEventSender } from "../auth.js";
 import type { SlackMonitorContext } from "../context.js";
@@ -757,6 +762,55 @@ async function handleSlackBlockAction(params: {
       respond,
     });
     if (handledBindingApproval) {
+      return;
+    }
+    // Check if this is an exec approval button click (e.g. "/approve <id> allow-once").
+    // Without this, exec approval decisions from Slack buttons are delivered as plain
+    // system events instead of being resolved over the gateway, causing a 30-minute
+    // timeout (the same pattern Telegram handles in its callback handler).
+    const approvalCommand = parseExecApprovalCommandText(pluginInteractionData);
+    if (approvalCommand) {
+      const isPluginApproval = approvalCommand.approvalId.startsWith("plugin:");
+      const pluginApprovalAuthorizedSender = isSlackExecApprovalApprover({
+        cfg: params.ctx.cfg,
+        accountId: params.ctx.accountId,
+        senderId: parsed.userId,
+      });
+      const execApprovalAuthorizedSender = isSlackExecApprovalAuthorizedSender({
+        cfg: params.ctx.cfg,
+        accountId: params.ctx.accountId,
+        senderId: parsed.userId,
+      });
+      const authorizedApprovalSender = isPluginApproval
+        ? pluginApprovalAuthorizedSender
+        : execApprovalAuthorizedSender || pluginApprovalAuthorizedSender;
+      if (authorizedApprovalSender) {
+        try {
+          await resolveSlackExecApproval({
+            cfg: params.ctx.cfg,
+            approvalId: approvalCommand.approvalId,
+            decision: approvalCommand.decision,
+            senderId: parsed.userId,
+            allowPluginFallback: pluginApprovalAuthorizedSender,
+          });
+        } catch (resolveErr) {
+          params.ctx.runtime.log?.(
+            `slack: failed to resolve exec approval ${approvalCommand.approvalId}: ${String(resolveErr)}`,
+          );
+        }
+        // Update the message to remove approval buttons (already handled by
+        // updateSlackLegacyBlockAction below via the normal flow, but we
+        // return early to avoid also enqueueing a system event).
+        await updateSlackLegacyBlockAction({
+          ctx: params.ctx,
+          parsed,
+          respond,
+        });
+        return;
+      }
+      params.ctx.runtime.log?.(
+        `slack: blocked exec approval from ${parsed.userId} (not authorized)`,
+      );
       return;
     }
   } else if (pluginInteractionData) {
