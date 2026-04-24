@@ -7,7 +7,7 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent
 import { ensureOwnerDisplaySecret } from "../agents/owner-display.js";
 import { applyRuntimeLegacyConfigMigrations } from "../commands/doctor/shared/runtime-compat-api.js";
 import { loadDotEnv } from "../infra/dotenv.js";
-import { isTruthyEnvValue } from "../infra/env.js";
+import { isTruthyEnvValue, logAcceptedEnvOption } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import {
@@ -264,6 +264,10 @@ async function tightenStateDirPermissionsIfNeeded(params: {
   // the group-x bit and locks out the sibling uid. Setting
   // OPENCLAW_SKIP_STATE_DIR_HARDEN=1 leaves the caller's directory mode alone.
   if (isTruthyEnvValue(params.env.OPENCLAW_SKIP_STATE_DIR_HARDEN)) {
+    logAcceptedEnvOption({
+      key: "OPENCLAW_SKIP_STATE_DIR_HARDEN",
+      description: "skipping state-dir chmod hardening for multi-uid shared-volume deployment",
+    });
     return;
   }
   const stateDir = resolveStateDir(params.env, params.homedir);
