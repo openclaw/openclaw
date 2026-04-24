@@ -62,6 +62,7 @@ const mocks = vi.hoisted(() => {
     loadModelRegistry: vi.fn(),
     loadModelCatalog: vi.fn(),
     loadProviderCatalogModelsForList: vi.fn(),
+    hasProviderStaticCatalogForFilter: vi.fn(),
     resolveConfiguredEntries: vi.fn(),
     printModelTable: vi.fn(),
     listProfilesForProvider: vi.fn(),
@@ -88,6 +89,7 @@ function resetMocks() {
   });
   mocks.loadModelCatalog.mockResolvedValue([]);
   mocks.loadProviderCatalogModelsForList.mockResolvedValue([]);
+  mocks.hasProviderStaticCatalogForFilter.mockResolvedValue(false);
   mocks.resolveConfiguredEntries.mockReturnValue({
     entries: [
       {
@@ -139,6 +141,10 @@ function installModelsListCommandForwardCompatMocks() {
 
   vi.doMock("./list.table.js", () => ({
     printModelTable: mocks.printModelTable,
+  }));
+
+  vi.doMock("./list.provider-catalog.js", () => ({
+    hasProviderStaticCatalogForFilter: mocks.hasProviderStaticCatalogForFilter,
   }));
 
   vi.doMock("./list.registry-load.js", () => ({
@@ -427,6 +433,7 @@ describe("modelsListCommand forward-compat", () => {
   describe("--all catalog supplementation", () => {
     it("uses the provider catalog fast path for Codex provider lists", async () => {
       mocks.resolveConfiguredEntries.mockReturnValueOnce({ entries: [] });
+      mocks.hasProviderStaticCatalogForFilter.mockResolvedValueOnce(true);
       mocks.loadProviderCatalogModelsForList.mockResolvedValueOnce([
         {
           provider: "codex",
@@ -451,6 +458,7 @@ describe("modelsListCommand forward-compat", () => {
         cfg: mocks.resolvedConfig,
         agentDir: "/tmp/openclaw-agent",
         providerFilter: "codex",
+        staticOnly: true,
       });
       expect(lastPrintedRows<{ key: string; available: boolean }>()).toEqual([
         expect.objectContaining({
@@ -458,6 +466,21 @@ describe("modelsListCommand forward-compat", () => {
           available: true,
         }),
       ]);
+    });
+
+    it("keeps the registry path for provider filters without static catalog coverage", async () => {
+      mocks.resolveConfiguredEntries.mockReturnValueOnce({ entries: [] });
+      mocks.hasProviderStaticCatalogForFilter.mockResolvedValueOnce(false);
+      const runtime = createRuntime();
+
+      await modelsListCommand({ all: true, provider: "openrouter", json: true }, runtime as never);
+
+      expect(mocks.loadModelRegistry).toHaveBeenCalledWith(
+        mocks.resolvedConfig,
+        expect.objectContaining({
+          providerFilter: "openrouter",
+        }),
+      );
     });
 
     it("includes synthetic codex gpt-5.4 in --all output when catalog supports it", async () => {
