@@ -2000,7 +2000,25 @@ export type OpenClawPluginDefinition = {
 
 export type OpenClawPluginModule = OpenClawPluginDefinition | ((api: OpenClawPluginApi) => void);
 
-export type PluginRegistrationMode = "full" | "setup-only" | "setup-runtime" | "cli-metadata";
+/**
+ * Public label exposed to plugin `register(api)` calls.
+ *
+ * Keep this as a compatibility signal for plugin authors. Loader internals
+ * should derive explicit capability booleans from the mode instead of branching
+ * on raw strings throughout the code path.
+ *
+ * - `full`: live runtime activation; long-lived side effects may start.
+ * - `discovery`: read-only capability discovery; skip sockets/workers/clients.
+ * - `setup-only`: lightweight channel setup entry only.
+ * - `setup-runtime`: setup flow that also needs the runtime channel entry.
+ * - `cli-metadata`: CLI command metadata collection.
+ */
+export type PluginRegistrationMode =
+  | "full"
+  | "discovery"
+  | "setup-only"
+  | "setup-runtime"
+  | "cli-metadata";
 
 export type PluginConfigMigration = (config: OpenClawConfig) =>
   | {
