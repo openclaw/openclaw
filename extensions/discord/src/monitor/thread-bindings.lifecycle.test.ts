@@ -775,6 +775,7 @@ describe("thread binding lifecycle", () => {
     hoisted.createThreadDiscord.mockResolvedValueOnce({ id: "thread-created-2" });
 
     const childBinding = await autoBindSpawnedDiscordSubagent({
+      cfg: {} as OpenClawConfig,
       accountId: "default",
       channel: "discord",
       to: "channel:thread-1",
@@ -815,6 +816,7 @@ describe("thread binding lifecycle", () => {
     hoisted.createThreadDiscord.mockResolvedValueOnce({ id: "thread-created-lookup" });
 
     const childBinding = await autoBindSpawnedDiscordSubagent({
+      cfg: {} as OpenClawConfig,
       accountId: "default",
       channel: "discord",
       to: "channel:thread-lookup",
