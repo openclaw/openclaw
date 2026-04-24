@@ -1759,8 +1759,7 @@ async function runInstalledAgentTurn(params) {
     logPath: params.logPath,
     timeoutMs: 10 * 60 * 1000,
   });
-  const payloadTexts = parseAgentPayloadTexts(result.stdout);
-  if (!payloadTexts.some((text) => text.trim() === "OK")) {
+  if (!agentOutputHasExpectedOkMarker(result.stdout, { logPath: params.logPath })) {
     throw new Error("Agent output did not contain the expected OK marker.");
   }
   return result;
@@ -2405,11 +2404,26 @@ async function runAgentTurn(params) {
     logPath: params.logPath,
     timeoutMs: 10 * 60 * 1000,
   });
-  const payloadTexts = parseAgentPayloadTexts(result.stdout);
-  if (!payloadTexts.some((text) => text.trim() === "OK")) {
+  if (!agentOutputHasExpectedOkMarker(result.stdout, { logPath: params.logPath })) {
     throw new Error("Agent output did not contain the expected OK marker.");
   }
   return result;
+}
+
+export function agentOutputHasExpectedOkMarker(stdout, options = {}) {
+  const payloadTexts = parseAgentPayloadTexts(stdout);
+  if (payloadTexts.some((text) => text.trim() === "OK")) {
+    return true;
+  }
+  if (typeof options.logPath !== "string") {
+    return false;
+  }
+  try {
+    const logTexts = parseAgentPayloadTexts(readFileSync(options.logPath, "utf8"));
+    return logTexts.some((text) => text.trim() === "OK");
+  } catch {
+    return false;
+  }
 }
 
 function parseAgentPayloadTexts(stdout) {
