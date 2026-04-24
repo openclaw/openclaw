@@ -19,6 +19,7 @@ import {
 import type { EmbeddedPiCompactResult } from "../pi-embedded-runner/types.js";
 import { createPiAgentHarness } from "./builtin-pi.js";
 import { listRegisteredAgentHarnesses } from "./registry.js";
+import { applyAgentHarnessResultClassification } from "./result-classification.js";
 import type { AgentHarness, AgentHarnessSupport } from "./types.js";
 
 const log = createSubsystemLogger("agents/harness");
@@ -189,12 +190,12 @@ export async function runAgentHarnessAttemptWithFallback(
   });
   if (harness.id === "pi") {
     const result = await harness.runAttempt(params);
-    return applyHarnessResultClassification(harness, result, params);
+    return applyAgentHarnessResultClassification(harness, result, params);
   }
 
   try {
     const result = await harness.runAttempt(params);
-    return applyHarnessResultClassification(harness, result, params);
+    return applyAgentHarnessResultClassification(harness, result, params);
   } catch (error) {
     log.warn(`${harness.label} failed; not falling back to embedded PI backend`, {
       harnessId: harness.id,
@@ -261,22 +262,6 @@ function logAgentHarnessSelection(
     fallback: selection.policy.fallback,
     candidates: selection.candidates,
   });
-}
-
-function applyHarnessResultClassification(
-  harness: AgentHarness,
-  result: EmbeddedRunAttemptResult,
-  params: EmbeddedRunAttemptParams,
-): EmbeddedRunAttemptResult {
-  const classification = harness.classify?.(result, params);
-  if (!classification || classification === "ok") {
-    return { ...result, agentHarnessId: harness.id };
-  }
-  return {
-    ...result,
-    agentHarnessId: harness.id,
-    agentHarnessResultClassification: classification,
-  };
 }
 
 function resolvePinnedAgentHarnessPolicy(

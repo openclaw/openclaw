@@ -1,3 +1,4 @@
+import { applyAgentHarnessResultClassification } from "./result-classification.js";
 import type {
   AgentHarness,
   AgentHarnessAttemptParams,
@@ -5,23 +6,23 @@ import type {
   AgentHarnessCompactParams,
   AgentHarnessCompactResult,
   AgentHarnessResetParams,
-  AgentHarnessResultClassification,
   AgentHarnessSupport,
   AgentHarnessSupportContext,
 } from "./types.js";
 
-export type AgentHarnessV2PreparedRun = {
+type AgentHarnessV2RunBase = {
   harnessId: string;
   label: string;
   pluginId?: string;
   params: AgentHarnessAttemptParams;
 };
 
-export type AgentHarnessV2Session = {
-  harnessId: string;
-  label: string;
-  pluginId?: string;
-  params: AgentHarnessAttemptParams;
+export type AgentHarnessV2PreparedRun = AgentHarnessV2RunBase & {
+  lifecycleState: "prepared";
+};
+
+export type AgentHarnessV2Session = AgentHarnessV2RunBase & {
+  lifecycleState: "started";
 };
 
 export type AgentHarnessV2ToolCall = {
@@ -57,9 +58,6 @@ export type AgentHarnessV2 = {
 };
 
 export function adaptAgentHarnessToV2(harness: AgentHarness): AgentHarnessV2 {
-  const compact = harness.compact;
-  const reset = harness.reset;
-  const dispose = harness.dispose;
   return {
     id: harness.id,
     label: harness.label,
@@ -70,39 +68,25 @@ export function adaptAgentHarnessToV2(harness: AgentHarness): AgentHarnessV2 {
       label: harness.label,
       pluginId: harness.pluginId,
       params,
+      lifecycleState: "prepared",
     }),
     start: async (prepared) => ({
       harnessId: prepared.harnessId,
       label: prepared.label,
       pluginId: prepared.pluginId,
       params: prepared.params,
+      lifecycleState: "started",
     }),
     resume: async (session) => session,
     send: async (session) => harness.runAttempt(session.params),
     resolveOutcome: async (session, result) =>
-      applyAgentHarnessV2Classification(harness, result, session.params),
-    cleanup: async () => {},
-    compact: compact ? (params) => compact(params) : undefined,
-    reset: reset ? (params) => reset(params) : undefined,
-    dispose: dispose ? () => dispose() : undefined,
-  };
-}
-
-export function applyAgentHarnessV2Classification(
-  harness: Pick<AgentHarness, "id" | "classify">,
-  result: AgentHarnessAttemptResult,
-  params: AgentHarnessAttemptParams,
-): AgentHarnessAttemptResult {
-  const classification = harness.classify?.(result, params);
-  if (!classification || classification === "ok") {
-    return { ...result, agentHarnessId: harness.id };
-  }
-  return {
-    ...result,
-    agentHarnessId: harness.id,
-    agentHarnessResultClassification: classification as Exclude<
-      AgentHarnessResultClassification,
-      "ok"
-    >,
+      applyAgentHarnessResultClassification(harness, result, session.params),
+    cleanup: async (_params) => {
+      // V1 harnesses have no per-attempt cleanup hook. Global cleanup remains
+      // on dispose(), which must not run after every attempt.
+    },
+    compact: harness.compact ? (params) => harness.compact!(params) : undefined,
+    reset: harness.reset ? (params) => harness.reset!(params) : undefined,
+    dispose: harness.dispose ? () => harness.dispose!() : undefined,
   };
 }
