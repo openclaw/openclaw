@@ -328,18 +328,14 @@ describe("buildEmbeddedRunPayloads", () => {
     expectSingleToolErrorPayload(payloads, { title, absentDetail });
   });
 
-  it("shows mutating tool errors even when assistant output exists", () => {
+  it("suppresses mutating tool warnings when assistant output already succeeded", () => {
     const payloads = buildPayloads({
       assistantTexts: ["Done."],
       lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
       lastToolError: { toolName: "write", error: "file missing" },
     });
 
-    expect(payloads).toHaveLength(2);
-    expect(payloads[0]?.text).toBe("Done.");
-    expect(payloads[1]?.isError).toBe(true);
-    expect(payloads[1]?.text).toContain("Write");
-    expect(payloads[1]?.text).not.toContain("missing");
+    expectSinglePayloadSummary(payloads, { text: "Done." });
   });
 
   it("does not treat session_status read failures as mutating when explicitly flagged", () => {

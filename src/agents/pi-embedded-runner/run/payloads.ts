@@ -107,7 +107,10 @@ function resolveToolErrorWarningPolicy(params: {
   const isMutatingToolError =
     params.lastToolError.mutatingAction ?? isLikelyMutatingToolName(params.lastToolError.toolName);
   if (isMutatingToolError) {
-    return { showWarning: true, includeDetails };
+    return {
+      showWarning: !params.hasUserFacingReply,
+      includeDetails,
+    };
   }
   if (params.suppressToolErrors) {
     return { showWarning: false, includeDetails };
