@@ -70,10 +70,14 @@ Scoped guides: `extensions/`, `src/plugin-sdk/`, `src/channels/`, `src/plugins/`
 - PR shortlist: `gh pr list ...`; then `gh pr view <n> --json number,title,body,closingIssuesReferences,files,statusCheckRollup,reviewDecision`.
 - After landing PR: search duplicate open issues/PRs. Before closing: comment why + canonical link.
 - CI polling: exact SHA, needed fields only. Example: `gh api repos/<owner>/<repo>/actions/runs/<id> --jq '{status,conclusion,head_sha,updated_at,name,path}'`.
-- Background workflows: `Auto response`, `Docs Sync Publish Repo`, `Docs Agent`, `Test Performance Agent`. Do not wait/rerun/fix unless asked or task is that workflow.
-- Post-land wait: minimal. Check required workflows for landed SHA only. If superseded on `main`, same-branch `cancel-in-progress` cancellations are expected; stop once local touched-surface proof exists. Do not wait for newer unrelated `main` commits unless asked.
-- `/landpr`: do not idle on `auto-response` or `check-docs`. Treat docs as local proof unless `check-docs` already failed with actionable relevant error. If product/code gates + touched local gates are green, proceed.
-- Poll lightly, 30-60s. Fetch jobs/logs/artifacts only after failure/completion or concrete need.
+- Post-land wait: minimal. Exact landed SHA only. If superseded on `main`, same-branch `cancel-in-progress` cancellations are expected; stop once local touched-surface proof exists. Never wait for newer unrelated `main` unless asked.
+- Wait matrix:
+  - never: `Auto response`, `Labeler`, `Docs Sync Publish Repo`, `Docs Agent`, `Test Performance Agent`, `Stale`.
+  - conditional: `CI` exact SHA only; `Docs` only docs task/no local docs proof; `Workflow Sanity` only workflow/composite/CI-policy edits; `Plugin NPM Release` only plugin package/release metadata.
+  - release/manual only: `Docker Release`, `OpenClaw NPM Release`, `macOS Release`, `OpenClaw Release Checks`, `Cross-OS Release Checks`, `NPM Telegram Beta E2E`.
+  - explicit/surface only: `QA-Lab - All Lanes`, `Scheduled Live And E2E`, `Install Smoke`, `CodeQL`, `Sandbox Common Smoke`, `Parity gate`, `Blacksmith Testbox`, `Control UI Locale Refresh`.
+- `/landpr`: do not idle on `auto-response` or `check-docs`. Treat docs as local proof unless `check-docs` already failed with actionable relevant error.
+- Poll 30-60s. Fetch jobs/logs/artifacts only after failure/completion or concrete need.
 
 ## Gates
 
