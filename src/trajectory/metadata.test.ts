@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { SkillSnapshot } from "../agents/skills.js";
 import { REDACTED_SENTINEL } from "../config/redact-snapshot.js";
 import {
   redactPathForSupport,
@@ -6,6 +7,8 @@ import {
 } from "../logging/diagnostic-support-redaction.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+
+type ResolvedSkillEntry = NonNullable<SkillSnapshot["resolvedSkills"]>[number];
 
 const loadPluginManifestRegistry = vi.hoisted(() => vi.fn(() => ({ plugins: [] })));
 
@@ -197,18 +200,24 @@ describe("trajectory metadata", () => {
             filePath: "/tmp/workspace/skills/alpha/SKILL.md",
             baseDir: "/tmp/workspace/skills/alpha",
             source: "workspace",
-            sourceInfo: {},
+            sourceInfo: {
+              path: "/tmp/workspace/skills/alpha/SKILL.md",
+              source: "workspace",
+              scope: "project",
+              origin: "top-level",
+              baseDir: "/tmp/workspace/skills/alpha",
+            },
             disableModelInvocation: false,
           },
           {
-            name: undefined as unknown as string,
+            name: undefined,
             description: undefined,
-            filePath: undefined as unknown as string,
-            baseDir: undefined as unknown as string,
+            filePath: undefined,
+            baseDir: undefined,
             source: "workspace",
             sourceInfo: undefined,
             disableModelInvocation: false,
-          },
+          } as unknown as ResolvedSkillEntry,
         ],
       },
     });
@@ -228,14 +237,14 @@ describe("trajectory metadata", () => {
         skills: [{ name: "fallback-skill" }],
         resolvedSkills: [
           {
-            name: undefined as unknown as string,
+            name: undefined,
             description: undefined,
-            filePath: undefined as unknown as string,
-            baseDir: undefined as unknown as string,
+            filePath: undefined,
+            baseDir: undefined,
             source: "workspace",
             sourceInfo: undefined,
             disableModelInvocation: false,
-          },
+          } as unknown as ResolvedSkillEntry,
         ],
       },
     });
