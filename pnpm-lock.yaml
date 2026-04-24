@@ -42,9 +42,6 @@ importers:
       '@agentclientprotocol/sdk':
         specifier: 0.19.1
         version: 0.19.1(zod@4.3.6)
-      '@anthropic-ai/vertex-sdk':
-        specifier: ^0.16.0
-        version: 0.16.0(zod@4.3.6)
       '@clack/prompts':
         specifier: ^1.2.0
         version: 1.2.0
@@ -66,9 +63,6 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: 1.29.0
         version: 1.29.0(zod@4.3.6)
-      '@mozilla/readability':
-        specifier: ^0.6.0
-        version: 0.6.0
       '@napi-rs/canvas':
         specifier: ^0.1.89
         version: 0.1.92
@@ -114,9 +108,6 @@ importers:
       jszip:
         specifier: ^3.10.1
         version: 3.10.1
-      linkedom:
-        specifier: ^0.18.12
-        version: 0.18.12
       markdown-it:
         specifier: 14.1.1
         version: 14.1.1
@@ -292,6 +283,16 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/anthropic-vertex:
+    dependencies:
+      '@anthropic-ai/vertex-sdk':
+        specifier: ^0.16.0
+        version: 0.16.0(zod@4.3.6)
+      '@mariozechner/pi-agent-core':
+        specifier: 0.70.2
+        version: 0.70.2(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
+      '@mariozechner/pi-ai':
+        specifier: 0.70.2
+        version: 0.70.2(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(ws@8.20.0)(zod@4.3.6)
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1343,6 +1344,19 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/vydra:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
+  extensions/web-readability:
+    dependencies:
+      '@mozilla/readability':
+        specifier: ^0.6.0
+        version: 0.6.0
+      linkedom:
+        specifier: ^0.18.12
+        version: 0.18.12
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*

@@ -147,6 +147,7 @@ runs the same lanes before release approval.
   - Uses the pinned stable Tuwunel image `ghcr.io/matrix-construct/tuwunel:v1.5.1` by default. Override with `OPENCLAW_QA_MATRIX_TUWUNEL_IMAGE` when you need to test a different image.
   - Matrix does not expose shared credential-source flags because the lane provisions disposable users locally.
   - Writes a Matrix QA report, summary, observed-events artifact, and combined stdout/stderr output log under `.artifacts/qa-e2e/...`.
+  - Emits progress by default and enforces a hard run timeout with `OPENCLAW_QA_MATRIX_TIMEOUT_MS` (default 30 minutes). Cleanup is bounded by `OPENCLAW_QA_MATRIX_CLEANUP_TIMEOUT_MS` and failures include the recovery `docker compose ... down --remove-orphans` command.
 - `pnpm openclaw qa telegram`
   - Runs the Telegram live QA lane against a real private group using the driver and SUT bot tokens from env.
   - Requires `OPENCLAW_QA_TELEGRAM_GROUP_ID`, `OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN`, and `OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN`. The group id must be the numeric Telegram chat id.
@@ -205,12 +206,16 @@ Maintainer admin commands (pool add/remove/list) require
 CLI helpers for maintainers:
 
 ```bash
+pnpm openclaw qa credentials doctor
 pnpm openclaw qa credentials add --kind telegram --payload-file qa/telegram-credential.json
 pnpm openclaw qa credentials list --kind telegram
 pnpm openclaw qa credentials remove --credential-id <credential-id>
 ```
 
-Use `--json` for machine-readable output in scripts and CI utilities.
+Use `doctor` before live runs to check the Convex site URL, broker secrets,
+endpoint prefix, HTTP timeout, and admin/list reachability without printing
+secret values. Use `--json` for machine-readable output in scripts and CI
+utilities.
 
 Default endpoint contract (`OPENCLAW_QA_CONVEX_SITE_URL` + `/qa-credentials/v1`):
 
@@ -532,7 +537,7 @@ These Docker runners split into two buckets:
   `OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=45000`, and
   `OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=90000`. Override those env vars when you
   explicitly want the larger exhaustive scan.
-- `test:docker:all` builds the live Docker image once via `test:docker:live-build`, then reuses it for the two live Docker lanes. It also builds one shared `scripts/e2e/Dockerfile` image via `test:docker:e2e-build` and reuses it for the E2E container smoke runners that exercise the built app.
+- `test:docker:all` builds the live Docker image once via `test:docker:live-build`, then reuses it for the live Docker lanes. It also builds one shared `scripts/e2e/Dockerfile` image via `test:docker:e2e-build` and reuses it for the E2E container smoke runners that exercise the built app. The aggregate uses a weighted local scheduler: `OPENCLAW_DOCKER_ALL_PARALLELISM` controls process slots, while resource caps keep heavy live, npm-install, and multi-service lanes from all starting at once. Defaults are 10 slots, `OPENCLAW_DOCKER_ALL_LIVE_LIMIT=4`, `OPENCLAW_DOCKER_ALL_NPM_LIMIT=4`, and `OPENCLAW_DOCKER_ALL_SERVICE_LIMIT=5`; tune `OPENCLAW_DOCKER_ALL_WEIGHT_LIMIT` or `OPENCLAW_DOCKER_ALL_DOCKER_LIMIT` only when the Docker host has more headroom.
 - Container smoke runners: `test:docker:openwebui`, `test:docker:onboard`, `test:docker:npm-onboard-channel-agent`, `test:docker:gateway-network`, `test:docker:mcp-channels`, `test:docker:pi-bundle-mcp-tools`, `test:docker:cron-mcp-cleanup`, `test:docker:plugins`, `test:docker:plugin-update`, and `test:docker:config-reload` boot one or more real containers and verify higher-level integration paths.
 
 The live-model Docker runners also bind-mount only the needed CLI auth homes (or all supported ones when the run is not narrowed), then copy them into the container home before the run so external-CLI OAuth can refresh tokens without mutating the host auth store:

@@ -81,7 +81,7 @@ export class GoogleMeetRuntime {
   }
 
   setupStatus() {
-    return getGoogleMeetSetupStatus(this.params.config);
+    return getGoogleMeetSetupStatus(this.params.config, { fullConfig: this.params.fullConfig });
   }
 
   async join(request: GoogleMeetJoinRequest): Promise<GoogleMeetJoinResult> {

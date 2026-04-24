@@ -31,6 +31,15 @@ export type { AgentApprovalEventData } from "../infra/agent-events.js";
 export type { ExecApprovalDecision } from "../infra/exec-approvals.js";
 export type { NormalizedUsage } from "../agents/usage.js";
 export type {
+  AgentToolResultMiddleware,
+  AgentToolResultMiddlewareContext,
+  AgentToolResultMiddlewareEvent,
+  AgentToolResultMiddlewareHarness,
+  AgentToolResultMiddlewareOptions,
+  AgentToolResultMiddlewareResult,
+  OpenClawAgentToolResult,
+} from "../plugins/agent-tool-result-middleware-types.js";
+export type {
   CodexAppServerExtensionContext,
   CodexAppServerExtensionFactory,
   CodexAppServerExtensionRuntime,
@@ -84,6 +93,7 @@ export {
   runAgentHarnessBeforeCompactionHook,
 } from "../agents/harness/prompt-compaction-hook-helpers.js";
 export { createCodexAppServerToolResultExtensionRunner } from "../agents/harness/codex-app-server-extensions.js";
+export { createAgentToolResultMiddlewareRunner } from "../agents/harness/tool-result-middleware.js";
 export {
   assembleHarnessContextEngine,
   bootstrapHarnessContextEngine,

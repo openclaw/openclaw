@@ -4,11 +4,22 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
+### Breaking
+
+- Plugin SDK/tool-result transforms: deprecate the Pi-only `api.registerEmbeddedExtensionFactory(...)` path for tool-result rewriting in favor of bundled `api.registerAgentToolResultMiddleware(...)`, with `contracts.agentToolResultMiddleware` declaring the targeted harnesses. The legacy Pi hook remains wired as a bundled compatibility seam, but new bundled transforms should use the harness-neutral middleware contract so transforms run consistently across Pi and Codex app-server dynamic tools. Thanks @vincentkoc.
+
 ### Changes
 
 - Gradium: add a bundled text-to-speech provider with voice-note and telephony output support. (#64958) Thanks @LaurentMazare.
+- Plugins/setup: honor explicit `setup.requiresRuntime: false` as a descriptor-only setup contract while keeping omitted values on the legacy setup-api fallback path. Thanks @vincentkoc.
+- Plugins/setup: report descriptor/runtime drift when setup-api registrations disagree with `setup.providers` or `setup.cliBackends`, without rejecting legacy setup plugins. Thanks @vincentkoc.
+- Plugin hooks: expose first-class run, message, sender, session, and trace correlation fields on message hook contexts and run lifecycle events. Thanks @vincentkoc.
+- Plugins/setup: include `setup.providers[].envVars` in generic provider auth/env lookups and warn non-bundled plugins that still rely on deprecated `providerAuthEnvVars` compatibility metadata. Thanks @vincentkoc.
+- Plugins/setup: surface manifest provider auth choices directly in provider setup flow before falling back to setup runtime or install-catalog choices. Thanks @vincentkoc.
 - TUI/dependencies: remove direct `cli-highlight` usage from the OpenClaw TUI code-block renderer, keeping themed code coloring without the extra root dependency. Thanks @vincentkoc.
 - Diagnostics/OTEL: export run, model-call, and tool-execution diagnostic lifecycle events as OTEL spans without retaining live span state. Thanks @vincentkoc.
+- Providers/Anthropic Vertex: move the Vertex SDK runtime behind the bundled provider plugin so core no longer owns that provider-specific dependency. Thanks @vincentkoc.
+- Plugins/web fetch: move local Readability extraction into a bundled plugin so core no longer owns the Readability and DOM parser dependencies. Thanks @vincentkoc.
 - Plugins/activation: expose activation plan reasons and a richer plan API so callers can inspect why a plugin was selected while preserving existing id-list activation behavior. (#70943) Thanks @vincentkoc.
 - Plugins/source metadata: expose normalized install-source facts on provider and channel catalogs so onboarding can explain npm pinning, integrity state, and local availability before runtime loads. (#70951) Thanks @vincentkoc.
 - Plugins/catalog: pin the official external WeCom channel source to an exact npm release plus dist integrity, with a guard that official external sources stay integrity-pinned. (#70997) Thanks @vincentkoc.
@@ -39,12 +50,19 @@ Docs: https://docs.openclaw.ai
 - Plugins/Bonjour: move LAN Gateway discovery advertising into a default-enabled bundled plugin with its own `@homebridge/ciao` dependency, so users can disable Bonjour without cutting wide-area discovery. Thanks @vincentkoc.
 - Providers/Google: add a Gemini Live realtime voice provider for backend Voice Call and Google Meet audio bridges, with bidirectional audio and function-call support.
 - Plugins/Google Meet: let realtime Meet sessions consult the full OpenClaw agent for deeper answers while staying in the live voice loop.
+- Gateway/VoiceClaw: add a realtime brain WebSocket endpoint backed by Gemini Live, with owner-auth gating and async OpenClaw tool handoff. (#70938) Thanks @yagudaev.
 - Providers/DeepSeek: add DeepSeek V4 Flash and V4 Pro to the bundled catalog and make V4 Flash the onboarding default.
 
 ### Fixes
 
 - Plugins/Active Memory: clear turn-scoped `pluginDebugEntries` at the start of each reply so a single `🧩 Active Memory:` status line (for example a `status=timeout`) no longer repeats as a prefix on every subsequent assistant message until another plugin run overwrites it.
+- Plugin SDK/tool-result transforms: restrict harness tool-result middleware to bundled plugins, fail closed on middleware errors, validate rewritten result shapes, preserve Pi per-call ids, and keep Codex media trust checks anchored to raw tool provenance. Thanks @vincentkoc.
+- Plugins/Google Chat: log webhook auth rejection reasons only after all candidates fail, and warn when add-on `appPrincipal` values do not match configuration. Fixes #71078. (#71145) Thanks @luyao618.
+- Models/configure: preserve the existing default model when provider auth is re-run from configure while keeping explicit default-setting commands authoritative. Fixes #70696. (#70793) Thanks @Sathvik-1007.
+- Config/plugins: accept `plugins.entries.*.hooks.allowConversationAccess` in validation, generated schema metadata, and plugin policy inspection so trusted external plugins can enable conversation-access hooks such as `agent_end` without local schema patches. Fixes #71215. (#71221) Thanks @BillChirico.
+- Codex harness/models: keep legacy `codex/*` harness shorthand out of model picker and `/models` choice surfaces while migrating primary legacy refs to canonical `openai/*` plus explicit Codex harness config. (#71193) Thanks @vincentkoc.
 - Plugins/runtime deps: respect explicit plugin and channel disablement when repairing bundled runtime dependencies, so doctor and health checks no longer install deps for disabled configured channels.
+- WhatsApp/plugins: support an explicit opt-in for inbound `message_received` hooks with canonical channel, conversation, session, and sender fields. Thanks @vincentkoc.
 - Diagnostics: harden tool and model diagnostic events against hostile errors, blocking listeners, and unsafe stability reason fields. Thanks @vincentkoc.
 - Plugins/onboarding: record local plugin install source metadata without duplicating raw absolute local paths in persisted `plugins.installs`, while preserving linked load-path cleanup. (#70970) Thanks @vincentkoc.
 - Browser/tool: tell agents not to pass per-call `timeoutMs` on existing-session type, evaluate, and other Chrome MCP actions that reject timeout overrides.
@@ -60,6 +78,8 @@ Docs: https://docs.openclaw.ai
 - Plugins/providers: mirror runtime auth choices in bundled provider manifests and detect `KIMI_API_KEY` for Moonshot/Kimi web search before plugin runtime loads. Thanks @vincentkoc.
 - Gateway/chat: register chat.send runs in the chat run registry so lifecycle error events reach the client instead of being silently dropped, fixing stuck 'waiting' state and /abort reporting no active run. (#69747) Thanks @wangshu94.
 - Plugins/QQ Bot: enable the bundled qqbot plugin by default so its runtime dependency `@tencent-connect/qqbot-connector` is installed on first launch, unblocking the QR-code binding flow that dynamically imports the connector before any account is configured. (#71051) Thanks @cxyhhhhh.
+- Gateway/agent RPC: register active `agent` runs into the chat abort controller map so `chat.abort` and `sessions.abort` can interrupt them, matching `chat.send` behavior and unblocking external runtimes that drive the Gateway through the public `agent` RPC. Fixes #71128. (#71214) Thanks @bitloi.
+- Matrix/CLI: pass resolved runtime config into verify commands, so `openclaw matrix verify status` and sibling verify subcommands no longer crash before acquiring the Matrix client. Fixes #70992. (#71102) Thanks @luyao618.
 
 ## 2026.4.23
 
@@ -142,6 +162,8 @@ Docs: https://docs.openclaw.ai
 - Webhooks/security: re-resolve `SecretRef`-backed webhook route secrets on each request so `openclaw secrets reload` revokes the previous secret immediately instead of waiting for a gateway restart. (#70727) Thanks @drobison00.
 - Memory/dreaming: decouple the managed dreaming cron from heartbeat by running it as an isolated lightweight agent turn, so dreaming runs even when heartbeat is disabled for the default agent and is no longer skipped by `heartbeat.activeHours`. `openclaw doctor --fix` migrates stale main-session dreaming jobs in persisted cron configs to the new shape. Fixes #69811, #67397, #68972. (#70737) Thanks @jalehman.
 - Agents/CLI: keep `--agent` plus `--session-id` lookup scoped to the requested agent store, so explicit agent resumes cannot select another agent's session. (#70985) Thanks @frankekn.
+- Gateway/MCP loopback: apply owner-only tool policy and run before-tool-call hooks on `127.0.0.1/mcp` `tools/list` and `tools/call`, so non-owner bearer callers can no longer see or invoke owner-only tools such as `cron`, `gateway`, and `nodes`, matching the existing HTTP `/tools/invoke` and embedded-agent paths. (#71159) Thanks @mmaps.
+- Plugins/Comfy: read workflow and cloud auth configuration from `plugins.entries.comfy.config` while preserving legacy Comfy config fallback, so image, video, and music workflows pass config validation. Fixes #61915. (#63058) Thanks @547895019.
 
 ## 2026.4.22
 
@@ -289,6 +311,7 @@ Docs: https://docs.openclaw.ai
 - Codex harness: default app-server runs to unchained local execution, so OpenAI heartbeats can use network and shell tools without stalling behind native Codex approvals or the workspace-write sandbox.
 - Codex harness: fail closed for unknown native app-server approval methods instead of routing unsupported future approval shapes through OpenClaw approval grants. (#70356) Thanks @Lucenx9.
 - Codex harness: apply the GPT-5 behavior and heartbeat prompt overlay to native Codex app-server runs, so `codex/gpt-5.x` sessions get the same follow-through, tool-use, and proactive heartbeat guidance as OpenAI GPT-5 runs.
+- WhatsApp/login QR: propagate refreshed QR images through `web.login.wait` consumers and compare against each caller's current QR instead of shared waiter state, so rotated QR codes stay synchronized across Control UI, macOS, and concurrent waiters. (#70009) Thanks @BunsDev.
 - Codex harness: add an explicit Guardian mode for Codex app-server approvals, plus a Docker live probe for approved and ask-back Guardian decisions, while keeping default app-server runs unchained for unattended local heartbeats. The legacy `OPENCLAW_CODEX_APP_SERVER_GUARDIAN` shortcut is removed; use plugin config `appServer.mode: "guardian"` or `OPENCLAW_CODEX_APP_SERVER_MODE=guardian`. Thanks @pashpashpash.
 - OpenAI/Responses: keep embedded OpenAI Responses runs on HTTP when `models.providers.openai.baseUrl` points at a local mock or other non-public endpoint, so mocked/custom endpoints no longer drift onto the hardcoded public websocket transport. (#69815) Thanks @vincentkoc.
 - Channels/config: require resolved runtime config on channel send/action/client helpers and block runtime helper `loadConfig()` calls, so SecretRefs are resolved at startup/boundaries instead of being re-read during sends.
@@ -3199,7 +3222,7 @@ Docs: https://docs.openclaw.ai
 - Telegram/send retry classification: retry grammY `Network request ... failed after N attempts` envelopes in send flows without reclassifying plain `Network request ... failed!` wrappers as transient, restoring the intended retry path while keeping broad send-context message matching tight. (#38056) Thanks @0xlin2023.
 - Gateway/probes: keep `/health`, `/healthz`, `/ready`, and `/readyz` reachable when the Control UI is mounted at `/`, preserve plugin-owned route precedence on those paths, and make `/ready` and `/readyz` report channel-backed readiness with startup grace plus `503` on disconnected managed channels, while `/health` and `/healthz` stay shallow liveness probes. (#18446) Thanks @vibecodooor, @mahsumaktas, and @vincentkoc.
 - Feishu/media downloads: drop invalid timeout fields from SDK method calls now that client-level `httpTimeoutMs` applies to requests. (#38267) Thanks @ant1eicher and @thewilloftheshadow.
-- PI embedded runner/Feishu docs: propagate sender identity into embedded attempts so Feishu doc auto-grant restores requester access for embedded-runner executions. (#32915) thanks @cszhouwei.
+- Pi embedded runner/Feishu docs: propagate sender identity into embedded attempts so Feishu doc auto-grant restores requester access for embedded-runner executions. (#32915) thanks @cszhouwei.
 - Agents/usage normalization: normalize missing or partial assistant usage snapshots before compaction accounting so `openclaw agent --json` no longer crashes when provider payloads omit `totalTokens` or related usage fields. (#34977) thanks @sp-hk2ldn.
 - Venice/default model refresh: switch the built-in Venice default to `kimi-k2-5`, update onboarding aliasing, and refresh Venice provider docs/recommendations to match the current private and anonymized catalog. (from #12964) Fixes #20156. Thanks @sabrinaaquino and @vincentkoc.
 - Agents/skill API write pacing: add a global prompt guardrail that treats skill-driven external API writes as rate-limited by default, so runners prefer batched writes, avoid tight request loops, and respect `429`/`Retry-After`. Thanks @vincentkoc.

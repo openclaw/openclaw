@@ -1,10 +1,12 @@
 import { EventEmitter } from "node:events";
 import { PassThrough, Writable } from "node:stream";
+import { Command } from "commander";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { RealtimeVoiceProviderPlugin } from "openclaw/plugin-sdk/realtime-voice";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestPluginApi } from "../../test/helpers/plugins/plugin-api.ts";
 import plugin from "./index.js";
+import { registerGoogleMeetCli } from "./src/cli.js";
 import { resolveGoogleMeetConfig, resolveGoogleMeetConfigWithEnv } from "./src/config.js";
 import {
   buildGoogleMeetPreflightReport,
@@ -19,6 +21,7 @@ import {
 import { startNodeRealtimeAudioBridge } from "./src/realtime-node.js";
 import { startCommandRealtimeAudioBridge } from "./src/realtime.js";
 import { normalizeMeetUrl } from "./src/runtime.js";
+import type { GoogleMeetRuntime } from "./src/runtime.js";
 import { buildMeetDtmfSequence, normalizeDialInNumber } from "./src/transports/twilio.js";
 
 const voiceCallMocks = vi.hoisted(() => ({
@@ -57,6 +60,18 @@ const noopLogger = {
   debug: vi.fn(),
 };
 
+function captureStdout() {
+  let output = "";
+  const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(((chunk: unknown) => {
+    output += String(chunk);
+    return true;
+  }) as typeof process.stdout.write);
+  return {
+    output: () => output,
+    restore: () => writeSpy.mockRestore(),
+  };
+}
+
 type TestBridgeProcess = {
   stdin?: { write(chunk: unknown): unknown } | null;
   stdout?: { on(event: "data", listener: (chunk: unknown) => void): unknown } | null;
@@ -80,6 +95,7 @@ type NodeListResult = {
 function setup(
   config: Record<string, unknown> = {},
   options: {
+    fullConfig?: Record<string, unknown>;
     nodesListResult?: NodeListResult;
     nodesInvokeResult?: unknown;
     browserActResult?: Record<string, unknown>;
@@ -163,6 +179,7 @@ function setup(
     description: "test",
     version: "0",
     source: "test",
+    config: options.fullConfig ?? {},
     pluginConfig: config,
     runtime: {
       system: {
@@ -535,6 +552,153 @@ describe("google-meet plugin", () => {
     const result = await tool.execute("id", { action: "setup_status" });
 
     expect(result.details.ok).toBe(true);
+  });
+
+  it("reports Twilio delegation readiness when voice-call is enabled", async () => {
+    vi.stubEnv("TWILIO_ACCOUNT_SID", "AC123");
+    vi.stubEnv("TWILIO_AUTH_TOKEN", "secret");
+    vi.stubEnv("TWILIO_FROM_NUMBER", "+15550001234");
+    const { tools } = setup(
+      {
+        defaultTransport: "chrome-node",
+        chromeNode: { node: "parallels-macos" },
+      },
+      {
+        fullConfig: {
+          plugins: {
+            allow: ["google-meet", "voice-call"],
+            entries: {
+              "voice-call": {
+                enabled: true,
+                config: { provider: "twilio" },
+              },
+            },
+          },
+        },
+      },
+    );
+    const tool = tools[0] as {
+      execute: (
+        id: string,
+        params: unknown,
+      ) => Promise<{ details: { ok?: boolean; checks?: unknown[] } }>;
+    };
+
+    const result = await tool.execute("id", { action: "setup_status" });
+
+    expect(result.details.ok).toBe(true);
+    expect(result.details.checks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "twilio-voice-call-plugin",
+          ok: true,
+        }),
+        expect.objectContaining({
+          id: "twilio-voice-call-credentials",
+          ok: true,
+        }),
+      ]),
+    );
+  });
+
+  it("reports missing voice-call wiring for Twilio transport", async () => {
+    vi.stubEnv("TWILIO_ACCOUNT_SID", "");
+    vi.stubEnv("TWILIO_AUTH_TOKEN", "");
+    vi.stubEnv("TWILIO_FROM_NUMBER", "");
+    const { tools } = setup(
+      { defaultTransport: "twilio" },
+      {
+        fullConfig: {
+          plugins: {
+            allow: ["google-meet"],
+            entries: {
+              "voice-call": { enabled: false },
+            },
+          },
+        },
+      },
+    );
+    const tool = tools[0] as {
+      execute: (
+        id: string,
+        params: unknown,
+      ) => Promise<{ details: { ok?: boolean; checks?: unknown[] } }>;
+    };
+
+    const result = await tool.execute("id", { action: "setup_status" });
+
+    expect(result.details.ok).toBe(false);
+    expect(result.details.checks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "twilio-voice-call-plugin",
+          ok: false,
+        }),
+        expect.objectContaining({
+          id: "twilio-voice-call-credentials",
+          ok: false,
+        }),
+      ]),
+    );
+  });
+
+  it("CLI setup prints human-readable checks by default", async () => {
+    const program = new Command();
+    const stdout = captureStdout();
+    registerGoogleMeetCli({
+      program,
+      config: resolveGoogleMeetConfig({}),
+      ensureRuntime: async () =>
+        ({
+          setupStatus: () => ({
+            ok: true,
+            checks: [
+              {
+                id: "audio-bridge",
+                ok: true,
+                message: "Chrome command-pair realtime audio bridge configured",
+              },
+            ],
+          }),
+        }) as GoogleMeetRuntime,
+    });
+
+    try {
+      await program.parseAsync(["googlemeet", "setup"], { from: "user" });
+      expect(stdout.output()).toContain("Google Meet setup: OK");
+      expect(stdout.output()).toContain(
+        "[ok] audio-bridge: Chrome command-pair realtime audio bridge configured",
+      );
+      expect(stdout.output()).not.toContain('"checks"');
+    } finally {
+      stdout.restore();
+    }
+  });
+
+  it("CLI setup preserves JSON output with --json", async () => {
+    const program = new Command();
+    const stdout = captureStdout();
+    registerGoogleMeetCli({
+      program,
+      config: resolveGoogleMeetConfig({}),
+      ensureRuntime: async () =>
+        ({
+          setupStatus: () => ({
+            ok: false,
+            checks: [{ id: "twilio-voice-call-plugin", ok: false, message: "missing" }],
+          }),
+        }) as GoogleMeetRuntime,
+    });
+
+    try {
+      await program.parseAsync(["googlemeet", "setup", "--json"], { from: "user" });
+      expect(JSON.parse(stdout.output())).toMatchObject({
+        ok: false,
+        checks: [{ id: "twilio-voice-call-plugin", ok: false }],
+      });
+    } finally {
+      stdout.restore();
+    }
   });
 
   it("launches Chrome after the BlackHole check", async () => {
