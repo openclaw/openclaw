@@ -1,7 +1,6 @@
 {
   "id": "vercel-ai-gateway",
   "enabledByDefault": true,
-  "providerDiscoveryEntry": "./provider-discovery.ts",
   "providers": ["vercel-ai-gateway"],
   "providerAuthEnvVars": {
     "vercel-ai-gateway": ["AI_GATEWAY_API_KEY"]

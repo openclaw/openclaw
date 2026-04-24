@@ -84,6 +84,26 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
     );
   });
 
+  it("falls back to full provider plugins for mixed live and static-only entries", () => {
+    const fullProviders = [
+      createProvider({ id: "codex", mode: "catalog" }),
+      createProvider({ id: "deepseek", mode: "catalog" }),
+    ];
+    mocks.resolveDiscoveredProviderPluginIds.mockReturnValue(["codex", "deepseek"]);
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [createManifestPlugin("codex"), createManifestPlugin("deepseek")],
+      diagnostics: [],
+    });
+    mocks.loadSource.mockImplementation((modulePath: string) =>
+      modulePath.includes("/codex/")
+        ? createProvider({ id: "codex", mode: "catalog" })
+        : createProvider({ id: "deepseek", mode: "static" }),
+    );
+    mocks.resolvePluginProviders.mockReturnValue(fullProviders);
+
+    expect(resolvePluginDiscoveryProvidersRuntime({})).toEqual(fullProviders);
+  });
+
   it("returns static-only discovery entries for callers that explicitly request them", () => {
     const staticProvider = createProvider({ id: "deepseek", mode: "static" });
     mocks.loadSource.mockReturnValue(staticProvider);

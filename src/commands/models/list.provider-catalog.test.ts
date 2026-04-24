@@ -187,6 +187,18 @@ describe("loadProviderCatalogModelsForList", () => {
     );
   });
 
+  it("does not skip registry when a bundled provider has no lightweight static entry", async () => {
+    providerDiscoveryMocks.resolvePluginDiscoveryProviders.mockResolvedValueOnce([]);
+
+    await expect(
+      hasProviderStaticCatalogForFilter({
+        cfg: baseParams.cfg,
+        env: baseParams.env,
+        providerFilter: "chutes",
+      }),
+    ).resolves.toBe(false);
+  });
+
   it("does not skip registry for non-bundled static catalog owners", async () => {
     providerDiscoveryMocks.resolveOwningPluginIdsForProvider.mockReturnValueOnce([
       "workspace-static-provider",
