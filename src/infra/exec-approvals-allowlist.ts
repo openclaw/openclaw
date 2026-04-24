@@ -8,6 +8,7 @@ import { isDispatchWrapperExecutable } from "./dispatch-wrapper-resolution.js";
 import {
   analyzeShellCommand,
   isWindowsPlatform,
+  joinShellLineContinuations,
   matchAllowlist,
   resolveExecutionTargetCandidatePath,
   resolveExecutionTargetResolution,
@@ -42,10 +43,6 @@ import {
 import { resolveExecWrapperTrustPlan } from "./exec-wrapper-trust-plan.js";
 import { expandHomePrefix } from "./home-dir.js";
 import { POSIX_INLINE_COMMAND_FLAGS, resolveInlineCommandMatch } from "./shell-inline-command.js";
-
-function hasShellLineContinuation(command: string): boolean {
-  return /\\(?:\r\n|\n|\r)/.test(command);
-}
 
 export function normalizeSafeBins(entries?: readonly string[]): Set<string> {
   if (!Array.isArray(entries)) {
@@ -1092,18 +1089,16 @@ export function evaluateShellAllowlist(
     segmentSatisfiedBy: [],
   });
 
-  // Keep allowlist analysis conservative: line-continuation semantics are shell-dependent
-  // and can rewrite token boundaries at runtime.
-  if (hasShellLineContinuation(params.command)) {
-    return analysisFailure();
-  }
+  // Splice POSIX `\<newline>` line continuations before analysis so multi-line
+  // allowlisted commands resolve identically to their single-line form.
+  const normalizedCommand = joinShellLineContinuations(params.command);
 
   const chainParts = isWindowsPlatform(params.platform)
     ? null
-    : splitCommandChainWithOperators(params.command);
+    : splitCommandChainWithOperators(normalizedCommand);
   if (!chainParts) {
     const analysis = analyzeShellCommand({
-      command: params.command,
+      command: normalizedCommand,
       cwd: params.cwd,
       env: params.env,
       platform: params.platform,

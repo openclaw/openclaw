@@ -82,6 +82,9 @@ export function formatExecDeniedUserMessage(resultText: string): string | null {
   if (metadata.includes("user-denied")) {
     return "Command did not run: approval was denied.";
   }
+  if (metadata.includes("unsupported-shell-syntax")) {
+    return "Command did not run: shell syntax is not supported in allowlist mode.";
+  }
   if (metadata.includes("allowlist-miss")) {
     return "Command did not run: approval is required.";
   }

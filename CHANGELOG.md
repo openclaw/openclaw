@@ -39,6 +39,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Exec allowlist: accept POSIX `\<newline>` line continuations inside allowlisted shell commands so multi-line `curl` invocations and similar patterns resolve the same as their single-line form, and surface unparseable shell syntax as `exec denied: unsupported shell syntax` (and `SYSTEM_RUN_DENIED: unsupported shell syntax`) instead of the misleading `allowlist miss` signal that led agents to conclude the binary itself was denied.
 - Plugins/onboarding: record local plugin install source metadata without duplicating raw absolute local paths in persisted `plugins.installs`, while preserving linked load-path cleanup. (#70970) Thanks @vincentkoc.
 - Browser/tool: tell agents not to pass per-call `timeoutMs` on existing-session type, evaluate, and other Chrome MCP actions that reject timeout overrides.
 - Codex/GPT-5.4: harden fallback, auth-profile, tool-schema, and replay edge cases across native and embedded runtime paths. (#70743) Thanks @100yenadmin.

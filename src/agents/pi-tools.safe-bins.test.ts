@@ -364,7 +364,7 @@ describe("createOpenClawCodingTools safeBins", () => {
             command: "head -n 1 source.txt > blocked-redirect.txt",
             workdir: tmpDir,
           }),
-        ).rejects.toThrow("exec denied: allowlist miss");
+        ).rejects.toThrow("exec denied: unsupported shell syntax");
         expect(fs.existsSync(path.join(tmpDir, "blocked-redirect.txt"))).toBe(false);
       },
     );

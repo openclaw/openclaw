@@ -92,6 +92,24 @@ function hasGatewayAllowlistMiss(params: {
   );
 }
 
+function resolveGatewayDeniedReason(params: {
+  hostSecurity: ExecSecurity;
+  analysisOk: boolean;
+  allowlistSatisfied: boolean;
+  durableApprovalSatisfied: boolean;
+}): "unsupported-shell-syntax" | "allowlist-miss" | null {
+  if (!hasGatewayAllowlistMiss(params)) {
+    return null;
+  }
+  return params.analysisOk ? "allowlist-miss" : "unsupported-shell-syntax";
+}
+
+function gatewayDeniedErrorMessage(reason: "unsupported-shell-syntax" | "allowlist-miss"): string {
+  return reason === "unsupported-shell-syntax"
+    ? "exec denied: unsupported shell syntax"
+    : "exec denied: allowlist miss";
+}
+
 export async function processGatewayAllowlist(
   params: ProcessGatewayAllowlistParams,
 ): Promise<ProcessGatewayAllowlistResult> {
@@ -346,16 +364,16 @@ export async function processGatewayAllowlist(
         requiresInlineEvalApproval,
       }));
 
-      if (
-        !approvedByAsk &&
-        hasGatewayAllowlistMiss({
+      if (!approvedByAsk) {
+        const gatewayDeniedReason = resolveGatewayDeniedReason({
           hostSecurity,
           analysisOk,
           allowlistSatisfied,
           durableApprovalSatisfied,
-        })
-      ) {
-        deniedReason = deniedReason ?? "allowlist-miss";
+        });
+        if (gatewayDeniedReason) {
+          deniedReason = deniedReason ?? gatewayDeniedReason;
+        }
       }
 
       if (deniedReason) {
@@ -425,15 +443,14 @@ export async function processGatewayAllowlist(
     };
   }
 
-  if (
-    hasGatewayAllowlistMiss({
-      hostSecurity,
-      analysisOk,
-      allowlistSatisfied,
-      durableApprovalSatisfied,
-    })
-  ) {
-    throw new Error("exec denied: allowlist miss");
+  const gatewayDeniedReason = resolveGatewayDeniedReason({
+    hostSecurity,
+    analysisOk,
+    allowlistSatisfied,
+    durableApprovalSatisfied,
+  });
+  if (gatewayDeniedReason) {
+    throw new Error(gatewayDeniedErrorMessage(gatewayDeniedReason));
   }
 
   recordMatchedAllowlistUse(

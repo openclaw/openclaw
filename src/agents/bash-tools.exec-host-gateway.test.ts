@@ -280,7 +280,7 @@ describe("processGatewayAllowlist", () => {
   it("keeps denying allowlist misses when durable trust does not match", async () => {
     evaluateShellAllowlistMock.mockReturnValue({
       allowlistMatches: [],
-      analysisOk: false,
+      analysisOk: true,
       allowlistSatisfied: false,
       segments: [{ resolution: null, argv: ["node", "--version"] }],
       segmentAllowlistEntries: [],
@@ -292,6 +292,23 @@ describe("processGatewayAllowlist", () => {
         command: "node --version",
       }),
     ).rejects.toThrow("exec denied: allowlist miss");
+  });
+
+  it("surfaces unparseable shell syntax with a distinct error string", async () => {
+    evaluateShellAllowlistMock.mockReturnValue({
+      allowlistMatches: [],
+      analysisOk: false,
+      allowlistSatisfied: false,
+      segments: [],
+      segmentAllowlistEntries: [],
+    });
+    hasDurableExecApprovalMock.mockReturnValue(false);
+
+    await expect(
+      runGatewayAllowlist({
+        command: "echo 'unterminated",
+      }),
+    ).rejects.toThrow("exec denied: unsupported shell syntax");
   });
 
   it("uses sessionKey for followups when notifySessionKey is absent", async () => {
