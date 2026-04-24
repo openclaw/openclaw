@@ -258,7 +258,7 @@ function pickHyprlandInstance(records: HyprlandInstanceRecord[]): HyprlandInstan
       return match;
     }
   }
-  return [...records].sort((a, b) => toNumber(b.time) - toNumber(a.time))[0] ?? null;
+  return records.toSorted((a, b) => toNumber(b.time) - toNumber(a.time))[0] ?? null;
 }
 
 function isUsableSession(session: HyprlandSession): boolean {
@@ -426,10 +426,14 @@ export async function tryHyprlandViewportCapture(params: {
   browserPid: number;
   timeoutMs?: number;
 }): Promise<Buffer | null> {
-  if (process.platform !== "linux") return null;
+  if (process.platform !== "linux") {
+    return null;
+  }
   // Serialize setup to prevent concurrent callers from racing
-  while (setupLock) {
-    await setupLock;
+  let lock = setupLock;
+  while (lock) {
+    await lock;
+    lock = setupLock;
   }
   try {
     if (cachedCapture && cachedPid !== params.browserPid) {
@@ -444,7 +448,9 @@ export async function tryHyprlandViewportCapture(params: {
       });
       try {
         const session = await detectHyprlandSession();
-        if (!session) return null;
+        if (!session) {
+          return null;
+        }
         cachedCapture = await setupHeadedBrowserViewportCapture({
           browserPid: params.browserPid,
           session,
