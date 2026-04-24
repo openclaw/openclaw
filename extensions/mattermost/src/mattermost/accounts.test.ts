@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../runtime-api.js";
 import {
+  inspectMattermostAccount,
   resolveDefaultMattermostAccountId,
   resolveMattermostAccount,
   resolveMattermostReplyToMode,
@@ -133,6 +134,37 @@ describe("resolveMattermostReplyToMode", () => {
     expect(account.config.commands).toEqual({
       native: true,
       callbackPath: "/hooks/work",
+    });
+  });
+
+  it("inspects unresolved SecretRef bot tokens without dereferencing them", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        mattermost: {
+          enabled: true,
+          baseUrl: "https://chat.example.com",
+          botToken: {
+            source: "exec",
+            provider: "keychain",
+            id: "openclaw/mattermost-bottoken",
+          },
+        },
+      },
+    };
+
+    expect(() => resolveMattermostAccount({ cfg, accountId: "default" })).toThrow(
+      /unresolved SecretRef/,
+    );
+
+    expect(inspectMattermostAccount({ cfg, accountId: "default" })).toMatchObject({
+      accountId: "default",
+      enabled: true,
+      configured: true,
+      botToken: undefined,
+      baseUrl: "https://chat.example.com",
+      botTokenSource: "config",
+      botTokenStatus: "configured_unavailable",
+      baseUrlSource: "config",
     });
   });
 });

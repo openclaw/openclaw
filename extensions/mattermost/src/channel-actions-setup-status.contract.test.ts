@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { describe, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   installChannelActionsContractSuite,
   installChannelSetupContractSuite,
@@ -118,5 +118,42 @@ describe("mattermost status contract", () => {
         },
       },
     ],
+  });
+
+  it("inspects SecretRef botToken status without resolving the secret", async () => {
+    const cfg = {
+      channels: {
+        mattermost: {
+          enabled: true,
+          botToken: {
+            source: "exec",
+            provider: "keychain",
+            id: "openclaw/mattermost-bottoken",
+          },
+          baseUrl: "https://chat.example.com",
+        },
+      },
+    } as OpenClawConfig;
+
+    const account = mattermostPlugin.config.inspectAccount?.(cfg, "default");
+    expect(account).toMatchObject({
+      accountId: "default",
+      configured: true,
+      botTokenSource: "config",
+      botTokenStatus: "configured_unavailable",
+      baseUrl: "https://chat.example.com",
+    });
+
+    const snapshot = await mattermostPlugin.status!.buildAccountSnapshot!({
+      account: account as never,
+      cfg,
+    });
+    expect(snapshot).toMatchObject({
+      accountId: "default",
+      configured: true,
+      botTokenSource: "config",
+      botTokenStatus: "configured_unavailable",
+      baseUrl: "https://chat.example.com",
+    });
   });
 });

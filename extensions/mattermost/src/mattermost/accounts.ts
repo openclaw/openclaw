@@ -7,7 +7,11 @@ import {
   resolveChannelStreamingChunkMode,
 } from "openclaw/plugin-sdk/channel-streaming";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
-import { normalizeResolvedSecretInputString, normalizeSecretInputString } from "../secret-input.js";
+import {
+  hasConfiguredSecretInput,
+  normalizeResolvedSecretInputString,
+  normalizeSecretInputString,
+} from "../secret-input.js";
 import type {
   MattermostAccountConfig,
   MattermostChatMode,
@@ -19,15 +23,18 @@ import type { OpenClawConfig } from "./runtime-api.js";
 
 export type MattermostTokenSource = "env" | "config" | "none";
 export type MattermostBaseUrlSource = "env" | "config" | "none";
+export type MattermostCredentialStatus = "available" | "configured_unavailable" | "missing";
 
 export type ResolvedMattermostAccount = {
   accountId: string;
   enabled: boolean;
+  configured?: boolean;
   name?: string;
   botToken?: string;
   baseUrl?: string;
   botTokenSource: MattermostTokenSource;
   baseUrlSource: MattermostBaseUrlSource;
+  botTokenStatus?: MattermostCredentialStatus;
   config: MattermostAccountConfig;
   chatmode?: MattermostChatMode;
   oncharPrefixes?: string[];
@@ -76,6 +83,31 @@ function resolveMattermostRequireMention(config: MattermostAccountConfig): boole
   return config.requireMention;
 }
 
+function inspectMattermostBotToken(value: unknown): {
+  botToken?: string;
+  botTokenSource: Exclude<MattermostTokenSource, "env">;
+  botTokenStatus: MattermostCredentialStatus;
+} {
+  const botToken = normalizeSecretInputString(value);
+  if (botToken) {
+    return {
+      botToken,
+      botTokenSource: "config",
+      botTokenStatus: "available",
+    };
+  }
+  if (hasConfiguredSecretInput(value)) {
+    return {
+      botTokenSource: "config",
+      botTokenStatus: "configured_unavailable",
+    };
+  }
+  return {
+    botTokenSource: "none",
+    botTokenStatus: "missing",
+  };
+}
+
 export function resolveMattermostAccount(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
@@ -114,6 +146,70 @@ export function resolveMattermostAccount(params: {
     baseUrl,
     botTokenSource,
     baseUrlSource,
+    config: merged,
+    chatmode: merged.chatmode,
+    oncharPrefixes: merged.oncharPrefixes,
+    requireMention,
+    textChunkLimit: merged.textChunkLimit,
+    chunkMode: resolveChannelStreamingChunkMode(merged) ?? merged.chunkMode,
+    blockStreaming: resolveChannelStreamingBlockEnabled(merged) ?? merged.blockStreaming,
+    blockStreamingCoalesce:
+      resolveChannelStreamingBlockCoalesce(merged) ?? merged.blockStreamingCoalesce,
+  };
+}
+
+export function inspectMattermostAccount(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  envBotToken?: string | null;
+  envUrl?: string | null;
+}): ResolvedMattermostAccount {
+  const accountId = normalizeAccountId(
+    params.accountId ?? resolveDefaultMattermostAccountId(params.cfg),
+  );
+  const baseEnabled = params.cfg.channels?.mattermost?.enabled !== false;
+  const merged = mergeMattermostAccountConfig(params.cfg, accountId);
+  const accountEnabled = merged.enabled !== false;
+  const enabled = baseEnabled && accountEnabled;
+  const tokenInspection = inspectMattermostBotToken(merged.botToken);
+
+  const allowEnv = accountId === DEFAULT_ACCOUNT_ID;
+  const envToken = allowEnv
+    ? normalizeSecretInputString(params.envBotToken ?? process.env.MATTERMOST_BOT_TOKEN)
+    : undefined;
+  const envUrl = allowEnv
+    ? normalizeSecretInputString(params.envUrl ?? process.env.MATTERMOST_URL)
+    : undefined;
+  const configUrl = merged.baseUrl?.trim();
+  const botToken = tokenInspection.botToken ?? envToken;
+  const botTokenSource: MattermostTokenSource = tokenInspection.botToken
+    ? "config"
+    : tokenInspection.botTokenStatus === "configured_unavailable"
+      ? "config"
+      : envToken
+        ? "env"
+        : "none";
+  const botTokenStatus: MattermostCredentialStatus = tokenInspection.botToken
+    ? "available"
+    : tokenInspection.botTokenStatus === "configured_unavailable"
+      ? "configured_unavailable"
+      : envToken
+        ? "available"
+        : "missing";
+  const baseUrl = normalizeMattermostBaseUrl(configUrl || envUrl);
+  const baseUrlSource: MattermostBaseUrlSource = configUrl ? "config" : envUrl ? "env" : "none";
+  const requireMention = resolveMattermostRequireMention(merged);
+
+  return {
+    accountId,
+    enabled,
+    configured: botTokenStatus !== "missing" && Boolean(baseUrl),
+    name: normalizeOptionalString(merged.name),
+    botToken,
+    baseUrl,
+    botTokenSource,
+    baseUrlSource,
+    botTokenStatus,
     config: merged,
     chatmode: merged.chatmode,
     oncharPrefixes: merged.oncharPrefixes,

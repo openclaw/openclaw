@@ -10,6 +10,7 @@ import {
   resolveMattermostGatewayAuthBypassPaths,
 } from "./gateway-auth-bypass.js";
 import {
+  inspectMattermostAccount,
   listMattermostAccountIds,
   resolveDefaultMattermostAccountId,
   resolveMattermostAccount,
@@ -56,6 +57,7 @@ export const mattermostConfigAdapter = createScopedChannelConfigAdapter<Resolved
   sectionKey: "mattermost",
   listAccountIds: listMattermostAccountIds,
   resolveAccount: adaptScopedAccountAccessor(resolveMattermostAccount),
+  inspectAccount: adaptScopedAccountAccessor(inspectMattermostAccount),
   defaultAccountId: resolveDefaultMattermostAccountId,
   clearBaseFields: ["botToken", "baseUrl", "name"],
   resolveAllowFrom: (account) => account.config.allowFrom,
@@ -67,7 +69,7 @@ export const mattermostConfigAdapter = createScopedChannelConfigAdapter<Resolved
 });
 
 export function isMattermostConfigured(account: ResolvedMattermostAccount): boolean {
-  return Boolean(account.botToken && account.baseUrl);
+  return account.configured ?? Boolean(account.botToken && account.baseUrl);
 }
 
 export function describeMattermostAccount(account: ResolvedMattermostAccount) {
