@@ -9,6 +9,17 @@ DOCKER_TARGET="${OPENCLAW_NPM_TELEGRAM_DOCKER_TARGET:-build}"
 PACKAGE_SPEC="${OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC:-openclaw@beta}"
 OUTPUT_DIR="${OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR:-.artifacts/qa-e2e/npm-telegram-live}"
 
+validate_openclaw_package_spec() {
+  local spec="$1"
+  if [[ "$spec" =~ ^openclaw@(beta|latest|[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*|-beta\.[1-9][0-9]*)?)$ ]]; then
+    return 0
+  fi
+  echo "OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC must be openclaw@beta, openclaw@latest, or an exact OpenClaw release version; got: $spec" >&2
+  exit 1
+}
+
+validate_openclaw_package_spec "$PACKAGE_SPEC"
+
 docker_e2e_build_or_reuse "$IMAGE_NAME" npm-telegram-live "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "$DOCKER_TARGET"
 
 mkdir -p "$ROOT_DIR/.artifacts/qa-e2e"
@@ -75,6 +86,10 @@ export PATH="$NPM_CONFIG_PREFIX/bin:$PATH"
 export OPENCLAW_NPM_TELEGRAM_REPO_ROOT="/app"
 
 package_spec="${OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC:?missing OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC}"
+if [[ ! "$package_spec" =~ ^openclaw@(beta|latest|[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*|-beta\.[1-9][0-9]*)?)$ ]]; then
+  echo "OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC must be openclaw@beta, openclaw@latest, or an exact OpenClaw release version; got: $package_spec" >&2
+  exit 1
+fi
 echo "Installing ${package_spec}..."
 npm install -g "$package_spec" --no-fund --no-audit
 

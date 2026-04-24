@@ -1,5 +1,6 @@
 #!/usr/bin/env -S node --import tsx
 
+import fs from "node:fs/promises";
 import path from "node:path";
 import { runTelegramQaLive } from "../../extensions/qa-lab/src/live-transports/telegram/telegram-live.runtime.ts";
 import { formatErrorMessage } from "../../src/infra/errors.ts";
@@ -16,11 +17,36 @@ function splitCsv(value: string | undefined) {
     .filter((entry) => entry.length > 0);
 }
 
+async function resolveTrustedOpenClawCommand(rawCommand: string) {
+  if (!path.isAbsolute(rawCommand)) {
+    throw new Error("OPENCLAW_NPM_TELEGRAM_SUT_COMMAND must be an absolute path.");
+  }
+  const commandName = path.basename(rawCommand);
+  if (commandName !== "openclaw" && commandName !== "openclaw.cmd") {
+    throw new Error(
+      `OPENCLAW_NPM_TELEGRAM_SUT_COMMAND must point to openclaw; got: ${commandName}`,
+    );
+  }
+  const npmPrefix = process.env.NPM_CONFIG_PREFIX?.trim();
+  if (!npmPrefix) {
+    throw new Error("Missing NPM_CONFIG_PREFIX for installed openclaw command validation.");
+  }
+  const [realCommand, realPrefix] = await Promise.all([
+    fs.realpath(rawCommand),
+    fs.realpath(npmPrefix),
+  ]);
+  if (realCommand !== realPrefix && !realCommand.startsWith(`${realPrefix}${path.sep}`)) {
+    throw new Error("OPENCLAW_NPM_TELEGRAM_SUT_COMMAND must resolve inside NPM_CONFIG_PREFIX.");
+  }
+  return rawCommand;
+}
+
 async function main() {
-  const sutOpenClawCommand = process.env.OPENCLAW_NPM_TELEGRAM_SUT_COMMAND?.trim();
-  if (!sutOpenClawCommand) {
+  const rawSutOpenClawCommand = process.env.OPENCLAW_NPM_TELEGRAM_SUT_COMMAND?.trim();
+  if (!rawSutOpenClawCommand) {
     throw new Error("Missing OPENCLAW_NPM_TELEGRAM_SUT_COMMAND.");
   }
+  const sutOpenClawCommand = await resolveTrustedOpenClawCommand(rawSutOpenClawCommand);
 
   const repoRoot = path.resolve(process.env.OPENCLAW_NPM_TELEGRAM_REPO_ROOT ?? process.cwd());
   const outputDir =
