@@ -14,6 +14,7 @@ import {
   ensureAgentWorkspace,
   filterBootstrapFilesForSession,
   isWorkspaceBootstrapPending,
+  isWorkspaceSetupCompleted,
   loadWorkspaceBootstrapFiles,
   resolveWorkspaceBootstrapStatus,
   resolveDefaultAgentWorkspaceDir,
@@ -277,6 +278,67 @@ describe("loadWorkspaceBootstrapFiles", () => {
     } finally {
       await fs.rm(rootDir, { recursive: true, force: true });
     }
+  });
+
+  it("omits missing BOOTSTRAP.md when onboarding is complete", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    await writeWorkspaceFile({ dir: tempDir, name: DEFAULT_AGENTS_FILENAME, content: "agents" });
+    await writeWorkspaceFile({ dir: tempDir, name: DEFAULT_IDENTITY_FILENAME, content: "custom" });
+    await writeWorkspaceFile({ dir: tempDir, name: DEFAULT_USER_FILENAME, content: "custom" });
+    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+
+    // Pin the preconditions: onboarding is marked complete (state file written) and
+    // BOOTSTRAP.md is genuinely absent.
+    expect(await isWorkspaceSetupCompleted(tempDir)).toBe(true);
+    await expect(fs.access(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME))).rejects.toThrow();
+
+    const files = await loadWorkspaceBootstrapFiles(tempDir);
+    const bootstrap = files.find((file) => file.name === DEFAULT_BOOTSTRAP_FILENAME);
+    expect(bootstrap).toBeUndefined();
+  });
+
+  it("includes BOOTSTRAP.md when onboarding has not completed", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+
+    const files = await loadWorkspaceBootstrapFiles(tempDir);
+    const bootstrap = files.find((file) => file.name === DEFAULT_BOOTSTRAP_FILENAME);
+    expect(bootstrap).toBeDefined();
+    expect(bootstrap?.missing).toBe(false);
+  });
+
+  it("still reports BOOTSTRAP.md when present and onboarding is complete", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    await writeWorkspaceFile({ dir: tempDir, name: DEFAULT_AGENTS_FILENAME, content: "agents" });
+    await writeWorkspaceFile({ dir: tempDir, name: DEFAULT_IDENTITY_FILENAME, content: "custom" });
+    await writeWorkspaceFile({ dir: tempDir, name: DEFAULT_USER_FILENAME, content: "custom" });
+    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+    // Recreate BOOTSTRAP.md after onboarding (e.g. user resurrected the file): suppression
+    // only fires for the missing-due-to-ENOENT case, so a present file must still be reported.
+    await writeWorkspaceFile({ dir: tempDir, name: DEFAULT_BOOTSTRAP_FILENAME, content: "boot" });
+
+    const files = await loadWorkspaceBootstrapFiles(tempDir);
+    const bootstrap = files.find((file) => file.name === DEFAULT_BOOTSTRAP_FILENAME);
+    expect(bootstrap).toBeDefined();
+    expect(bootstrap?.missing).toBe(false);
+    expect(bootstrap?.content).toBe("boot");
+  });
+
+  it("still reports BOOTSTRAP.md when path-resolution fails for a non-ENOENT reason", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    await writeWorkspaceFile({ dir: tempDir, name: DEFAULT_AGENTS_FILENAME, content: "agents" });
+    await writeWorkspaceFile({ dir: tempDir, name: DEFAULT_IDENTITY_FILENAME, content: "custom" });
+    await writeWorkspaceFile({ dir: tempDir, name: DEFAULT_USER_FILENAME, content: "custom" });
+    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+    // Replace BOOTSTRAP.md with a directory so path resolution fails with EISDIR/ENOTDIR
+    // rather than ENOENT. The narrowing should keep this entry visible — the workspace is
+    // genuinely misconfigured and the operator needs to see it.
+    await fs.mkdir(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME));
+
+    const files = await loadWorkspaceBootstrapFiles(tempDir);
+    const bootstrap = files.find((file) => file.name === DEFAULT_BOOTSTRAP_FILENAME);
+    expect(bootstrap).toBeDefined();
+    expect(bootstrap?.missing).toBe(true);
   });
 });
 

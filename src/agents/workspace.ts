@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { openBoundaryFile } from "../infra/boundary-file-read.js";
+import { hasErrnoCode } from "../infra/errors.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import {
   CANONICAL_ROOT_MEMORY_FILENAME,
@@ -259,8 +260,31 @@ async function readWorkspaceSetupStateForDir(dir: string): Promise<WorkspaceSetu
   return await readWorkspaceSetupState(statePath);
 }
 
+// Read-only variant: parses workspace-state.json without performing the legacy-field
+// migration that readWorkspaceSetupState does. Use this from read-only contexts
+// (e.g. loadWorkspaceBootstrapFiles) so that bootstrap reads never mutate workspace
+// state and never fail on read-only workspaces.
+async function readWorkspaceSetupStateReadOnly(statePath: string): Promise<WorkspaceSetupState> {
+  try {
+    const raw = await fs.readFile(statePath, "utf-8");
+    return parseWorkspaceSetupState(raw) ?? { version: WORKSPACE_STATE_VERSION };
+  } catch (err) {
+    const anyErr = err as { code?: string };
+    if (anyErr.code !== "ENOENT") {
+      throw err;
+    }
+    return { version: WORKSPACE_STATE_VERSION };
+  }
+}
+
 export async function isWorkspaceSetupCompleted(dir: string): Promise<boolean> {
   const state = await readWorkspaceSetupStateForDir(dir);
+  return typeof state.setupCompletedAt === "string" && state.setupCompletedAt.trim().length > 0;
+}
+
+async function isWorkspaceSetupCompletedReadOnly(dir: string): Promise<boolean> {
+  const statePath = resolveWorkspaceStatePath(resolveUserPath(dir));
+  const state = await readWorkspaceSetupStateReadOnly(statePath);
   return typeof state.setupCompletedAt === "string" && state.setupCompletedAt.trim().length > 0;
 }
 
@@ -515,6 +539,18 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
     },
   ];
 
+  // Check onboarding state once so we can suppress missing BOOTSTRAP.md noise.
+  // Gated on the explicit setupCompletedAt marker (not resolveWorkspaceBootstrapStatus,
+  // which infers completeness from BOOTSTRAP.md absence and would mis-suppress during
+  // an interrupted first-time setup). Uses the read-only variant so this hot path
+  // never mutates workspace state (no legacy-field migration) and works on read-only
+  // workspaces. Any failure defaults to false, keeping BOOTSTRAP.md visible — a stale
+  // "missing" line is strictly less harmful than silently hiding a real workspace problem.
+  let onboardingCompleted = false;
+  try {
+    onboardingCompleted = await isWorkspaceSetupCompletedReadOnly(resolvedDir);
+  } catch {}
+
   const result: WorkspaceBootstrapFile[] = [];
   for (const entry of entries) {
     if (
@@ -534,6 +570,16 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
         content: loaded.content,
         missing: false,
       });
+    } else if (
+      entry.name === DEFAULT_BOOTSTRAP_FILENAME &&
+      onboardingCompleted &&
+      loaded.reason === "path" &&
+      hasErrnoCode(loaded.error, "ENOENT")
+    ) {
+      // BOOTSTRAP.md is a one-time file deleted after onboarding; don't report
+      // it as missing once onboarding is complete. Only suppress genuine
+      // ENOENT; keep other path errors (ENOTDIR, ELOOP) visible.
+      continue;
     } else {
       result.push({ name: entry.name, path: entry.filePath, missing: true });
     }
