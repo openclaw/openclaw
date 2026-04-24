@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   createService: vi.fn(),
+  getResponder: vi.fn(),
   shutdown: vi.fn(),
   registerUnhandledRejectionHandler: vi.fn(),
   logger: {
@@ -11,7 +12,7 @@ const mocks = vi.hoisted(() => ({
     debug: vi.fn(),
   },
 }));
-const { createService, shutdown, registerUnhandledRejectionHandler, logger } = mocks;
+const { createService, getResponder, shutdown, registerUnhandledRejectionHandler, logger } = mocks;
 
 const asString = (value: unknown, fallback: string) =>
   typeof value === "string" && value.trim() ? value : fallback;
@@ -30,6 +31,7 @@ function mockCiaoService(params?: {
   serviceState?: string;
   stateRef?: { value: string };
   on?: ReturnType<typeof vi.fn>;
+  responder?: Record<string, unknown>;
 }) {
   const advertise = params?.advertise ?? vi.fn().mockResolvedValue(undefined);
   const destroy = params?.destroy ?? vi.fn().mockResolvedValue(undefined);
@@ -55,16 +57,14 @@ function mockCiaoService(params?: {
     });
     return service;
   });
+  getResponder.mockReturnValue(params?.responder ?? { createService, shutdown });
   return { advertise, destroy, on };
 }
 
 vi.mock("@homebridge/ciao", () => {
   return {
     Protocol: { TCP: "tcp" },
-    getResponder: () => ({
-      createService,
-      shutdown,
-    }),
+    getResponder,
   };
 });
 
@@ -101,6 +101,7 @@ describe("gateway bonjour advertiser", () => {
     }
 
     createService.mockClear();
+    getResponder.mockReset();
     shutdown.mockClear();
     registerUnhandledRejectionHandler.mockClear();
     logger.info.mockClear();
@@ -128,6 +129,7 @@ describe("gateway bonjour advertiser", () => {
       sshPort: 2222,
       tailnetDns: "host.tailnet.ts.net",
       cliPath: "/opt/homebrew/bin/openclaw",
+      minimal: false,
     });
 
     expect(createService).toHaveBeenCalledTimes(1);
@@ -141,6 +143,9 @@ describe("gateway bonjour advertiser", () => {
     expect((gatewayCall?.[0]?.txt as Record<string, string>)?.lanHost).toBe("test-host.local");
     expect((gatewayCall?.[0]?.txt as Record<string, string>)?.gatewayPort).toBe("18789");
     expect((gatewayCall?.[0]?.txt as Record<string, string>)?.sshPort).toBe("2222");
+    expect((gatewayCall?.[0]?.txt as Record<string, string>)?.tailnetDns).toBe(
+      "host.tailnet.ts.net",
+    );
     expect((gatewayCall?.[0]?.txt as Record<string, string>)?.cliPath).toBe(
       "/opt/homebrew/bin/openclaw",
     );
@@ -167,12 +172,14 @@ describe("gateway bonjour advertiser", () => {
       gatewayPort: 18789,
       sshPort: 2222,
       cliPath: "/opt/homebrew/bin/openclaw",
+      tailnetDns: "host.tailnet.ts.net",
       minimal: true,
     });
 
     const [gatewayCall] = createService.mock.calls as Array<[Record<string, unknown>]>;
     expect((gatewayCall?.[0]?.txt as Record<string, string>)?.sshPort).toBeUndefined();
     expect((gatewayCall?.[0]?.txt as Record<string, string>)?.cliPath).toBeUndefined();
+    expect((gatewayCall?.[0]?.txt as Record<string, string>)?.tailnetDns).toBeUndefined();
 
     await started.stop();
   });
@@ -209,6 +216,27 @@ describe("gateway bonjour advertiser", () => {
 
     // 1 service × 2 listeners
     expect(onCalls.map((c) => c.event)).toEqual(["name-change", "hostname-change"]);
+
+    await started.stop();
+  });
+
+  it("does not install a process-level unhandled rejection handler by default", async () => {
+    enableAdvertiserUnitMode();
+
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const advertise = vi.fn().mockResolvedValue(undefined);
+    mockCiaoService({ advertise, destroy });
+    const processOn = vi.spyOn(process, "on");
+
+    const started = await startGatewayBonjourAdvertiser(
+      {
+        gatewayPort: 18789,
+        sshPort: 2222,
+      },
+      { logger },
+    );
+
+    expect(processOn).not.toHaveBeenCalledWith("unhandledRejection", expect.any(Function));
 
     await started.stop();
   });
@@ -358,6 +386,39 @@ describe("gateway bonjour advertiser", () => {
     } finally {
       console.log = originalConsoleLog;
     }
+  });
+
+  it("does not monkey-patch responder methods during shutdown", async () => {
+    enableAdvertiserUnitMode();
+
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const advertise = vi.fn().mockResolvedValue(undefined);
+    const responder = {
+      createService,
+      shutdown,
+      advertiseService: vi.fn(),
+      announce: vi.fn(),
+      probe: vi.fn(),
+      republishService: vi.fn(),
+    };
+    const originalMethods = {
+      advertiseService: responder.advertiseService,
+      announce: responder.announce,
+      probe: responder.probe,
+      republishService: responder.republishService,
+    };
+    mockCiaoService({ advertise, destroy, responder });
+
+    const started = await startAdvertiser({
+      gatewayPort: 18789,
+      sshPort: 2222,
+    });
+    await started.stop();
+
+    expect(responder.advertiseService).toBe(originalMethods.advertiseService);
+    expect(responder.announce).toBe(originalMethods.announce);
+    expect(responder.probe).toBe(originalMethods.probe);
+    expect(responder.republishService).toBe(originalMethods.republishService);
   });
 
   it("does not clobber console.log if another wrapper replaced it before shutdown", async () => {

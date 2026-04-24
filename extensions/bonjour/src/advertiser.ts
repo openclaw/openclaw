@@ -87,18 +87,6 @@ async function loadCiaoModule(): Promise<CiaoModule> {
   return ciaoModulePromise;
 }
 
-function defaultRegisterUnhandledRejectionHandler(handler: UnhandledRejectionHandler): () => void {
-  const listener = (reason: unknown) => {
-    if (!handler(reason)) {
-      return;
-    }
-  };
-  process.on("unhandledRejection", listener);
-  return () => {
-    process.off("unhandledRejection", listener);
-  };
-}
-
 function isDisabledByEnv() {
   if (isTruthyEnvValue(process.env.OPENCLAW_DISABLE_BONJOUR)) {
     return true;
@@ -184,8 +172,6 @@ export async function startGatewayBonjourAdvertiser(
     warn: deps.logger?.warn ?? defaultLogger.warn,
     debug: deps.logger?.debug ?? defaultLogger.debug,
   };
-  const registerUnhandledRejectionHandler =
-    deps.registerUnhandledRejectionHandler ?? defaultRegisterUnhandledRejectionHandler;
   const { getResponder, Protocol } = await loadCiaoModule();
   const restoreConsoleLog = installCiaoConsoleNoiseFilter();
 
@@ -232,7 +218,7 @@ export async function startGatewayBonjourAdvertiser(
     if (typeof opts.canvasPort === "number" && opts.canvasPort > 0) {
       txtBase.canvasPort = String(opts.canvasPort);
     }
-    if (typeof opts.tailnetDns === "string" && opts.tailnetDns.trim()) {
+    if (!opts.minimal && typeof opts.tailnetDns === "string" && opts.tailnetDns.trim()) {
       txtBase.tailnetDns = opts.tailnetDns.trim();
     }
     if (!opts.minimal && typeof opts.cliPath === "string" && opts.cliPath.trim()) {
@@ -266,8 +252,8 @@ export async function startGatewayBonjourAdvertiser(
       });
 
       const cleanupUnhandledRejection =
-        services.length > 0
-          ? registerUnhandledRejectionHandler(handleCiaoUnhandledRejection)
+        services.length > 0 && deps.registerUnhandledRejectionHandler
+          ? deps.registerUnhandledRejectionHandler(handleCiaoUnhandledRejection)
           : undefined;
 
       return { responder, services, cleanupUnhandledRejection };
@@ -277,17 +263,6 @@ export async function startGatewayBonjourAdvertiser(
       if (!cycle) {
         return;
       }
-      const responder = cycle.responder as unknown as {
-        advertiseService?: (...args: unknown[]) => unknown;
-        announce?: (...args: unknown[]) => unknown;
-        probe?: (...args: unknown[]) => unknown;
-        republishService?: (...args: unknown[]) => unknown;
-      };
-      const noopAsync = async () => {};
-      responder.advertiseService = noopAsync;
-      responder.announce = noopAsync;
-      responder.probe = noopAsync;
-      responder.republishService = noopAsync;
       for (const { svc } of cycle.services) {
         try {
           await svc.destroy();

@@ -100,7 +100,7 @@ The Gateway advertises small non‑secret hints to make UI flows convenient:
 - `gatewayTlsSha256=<sha256>` (only when TLS is enabled and fingerprint is available)
 - `canvasPort=<port>` (only when the canvas host is enabled; currently the same as `gatewayPort`)
 - `transport=gateway`
-- `tailnetDns=<magicdns>` (optional hint when Tailnet is available)
+- `tailnetDns=<magicdns>` (mDNS full mode only, optional hint when Tailnet is available)
 - `sshPort=<port>` (mDNS full mode only; wide-area DNS-SD may omit it)
 - `cliPath=<path>` (mDNS full mode only; wide-area DNS-SD still writes it as a remote-install hint)
 
@@ -172,10 +172,10 @@ sequences (e.g. spaces become `\032`).
 
 - `openclaw plugins disable bonjour` disables LAN multicast advertising by disabling the bundled plugin.
 - `openclaw plugins enable bonjour` restores the default LAN discovery plugin.
-- `OPENCLAW_DISABLE_BONJOUR=1` disables LAN multicast advertising without changing plugin config (legacy: `OPENCLAW_DISABLE_BONJOUR`).
+- `OPENCLAW_DISABLE_BONJOUR=1` disables LAN multicast advertising without changing plugin config; accepted truthy values are `1`, `true`, `yes`, and `on` (legacy: `OPENCLAW_DISABLE_BONJOUR`).
 - `gateway.bind` in `~/.openclaw/openclaw.json` controls the Gateway bind mode.
 - `OPENCLAW_SSH_PORT` overrides the SSH port when `sshPort` is advertised (legacy: `OPENCLAW_SSH_PORT`).
-- `OPENCLAW_TAILNET_DNS` publishes a MagicDNS hint in TXT (legacy: `OPENCLAW_TAILNET_DNS`).
+- `OPENCLAW_TAILNET_DNS` publishes a MagicDNS hint in TXT when mDNS full mode is enabled (legacy: `OPENCLAW_TAILNET_DNS`).
 - `OPENCLAW_CLI_PATH` overrides the advertised CLI path (legacy: `OPENCLAW_CLI_PATH`).
 
 ## Related docs
