@@ -721,6 +721,57 @@ describe("FeishuStreamingSession.close", () => {
     );
   });
 
+  it("keeps the thinking panel but collapses it atomically with the final answer", async () => {
+    const { client, cardUpdate } = createClientMock();
+    const session = new FeishuStreamingSession(client, { appId: "app", appSecret: "secret" });
+    (session as any).state = {
+      cardId: "card-id",
+      messageId: "message-id",
+      sequence: 1,
+      currentText: "草稿答案",
+      hasNote: false,
+      noteText: "",
+      thinkingTitle: "🔧 Tool calls (2)",
+      thinkingText: "⏳ Running Read...",
+      thinkingExpanded: true,
+      thinkingPanelRendered: true,
+    };
+    (session as any).lastStreamingModeRenewAt = Date.now();
+
+    await session.close("最终答案", {
+      finalThinking: {
+        title: "🔧 Tool calls (2)",
+        text: "✓ Read\n✓ Grep",
+      },
+    });
+
+    expect(cardUpdate).toHaveBeenCalledOnce();
+    const updateArg = (cardUpdate.mock.calls[0] as unknown[])?.[0] as {
+      data?: { card?: { data?: string } };
+    };
+    const cardJson = JSON.parse(updateArg.data?.card?.data ?? "{}") as {
+      body?: {
+        elements?: Array<{
+          tag?: string;
+          expanded?: boolean;
+          header?: { title?: { content?: string } };
+          elements?: Array<{ content?: string }>;
+          content?: string;
+        }>;
+      };
+    };
+    const thinkingPanel = cardJson.body?.elements?.find(
+      (element) => element.tag === "collapsible_panel",
+    );
+    expect(thinkingPanel).toBeDefined();
+    expect(thinkingPanel?.expanded).toBe(false);
+    expect(thinkingPanel?.header?.title?.content).toBe("🔧 Tool calls (2)");
+    expect(thinkingPanel?.elements?.[0]?.content).toBe("✓ Read\n✓ Grep");
+    expect(cardJson.body?.elements?.find((element) => element.tag === "markdown")?.content).toBe(
+      "最终答案",
+    );
+  });
+
   it("does not call full card update when streaming content update succeeds and no thinking", async () => {
     const { client, cardUpdate } = createClientMock();
     const session = new FeishuStreamingSession(client, { appId: "app", appSecret: "secret" });

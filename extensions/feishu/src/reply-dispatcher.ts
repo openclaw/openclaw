@@ -1214,10 +1214,6 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           logDispatcher(
             `closeStreaming final path streamMessageId=${streamMessageId ?? "unknown"} finalChars=${finalText.trim().length} thinkingChars=${finalThinking.text.trim().length}`,
           );
-          // Store thinking content for the collapsed panel in the final card
-          if (finalThinking.text) {
-            await streaming.updateThinking(finalThinking.text, { title: finalThinking.title });
-          }
           let text = finalText;
           if (mentionTargets?.length) {
             text = buildMentionedCardContent(mentionTargets, text);
@@ -1231,7 +1227,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             : undefined;
           await streaming.close(text, {
             ...(finalNote !== undefined ? { note: finalNote } : {}),
-            ...(hasFinalThinking ? {} : { dropThinkingPanel: true }),
+            ...(hasFinalThinking
+              ? { finalThinking: { title: finalThinking.title, text: finalThinking.text } }
+              : { dropThinkingPanel: true }),
           });
           hasVisibleTextInReply = true;
           deliveredFinalTexts.add(finalText);

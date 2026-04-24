@@ -433,6 +433,10 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
 
     expect(streamingInstances[0].close).toHaveBeenCalledWith("plain text", {
       note: "Agent: agent",
+      finalThinking: {
+        title: "💭 Thinking",
+        text: "reasoning...\n\n🔧 Tool calls (1)",
+      },
     });
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
     expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
@@ -627,6 +631,10 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(streamingInstances[0].updateThinking).toHaveBeenCalled();
     expect(streamingInstances[0].close).toHaveBeenCalledWith("stream candidate", {
       note: "Agent: agent",
+      finalThinking: {
+        title: "💭 Thinking",
+        text: "thinking...",
+      },
     });
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
   });
@@ -740,6 +748,10 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     await options.onIdle?.();
     expect(streamingInstances[0].close).toHaveBeenCalledWith("第一段答案\n第二段答案", {
       note: "Agent: agent",
+      finalThinking: {
+        title: "💭 Thinking",
+        text: "step\n\n🔧 Tool calls (2)",
+      },
     });
   });
 
@@ -781,6 +793,10 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     await options.onIdle?.();
     expect(streamingInstances[0].close).toHaveBeenCalledWith("第一段答案", {
       note: "Agent: agent",
+      finalThinking: {
+        title: "🔧 Tool calls (1)",
+        text: "✓ 1 completed",
+      },
     });
   });
 
@@ -1351,11 +1367,50 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
 
     await options.onIdle?.();
 
-    expect(streamingInstances[0].updateThinking).toHaveBeenLastCalledWith("✓ 1 completed", {
-      title: "🔧 Tool calls (1)",
-    });
     expect(streamingInstances[0].close).toHaveBeenCalledWith("第一段答案", {
       note: "Agent: agent",
+      finalThinking: {
+        title: "🔧 Tool calls (1)",
+        text: "✓ 1 completed",
+      },
+    });
+  });
+
+  it("passes final thinking content into close so the final card can collapse atomically", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: true,
+      },
+    });
+
+    const dispatcher = createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      chatId: "oc_chat",
+    });
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+
+    await dispatcher.replyOptions.onToolStart?.({ name: "Read", phase: "start" });
+    await flushAsyncTasks();
+    await dispatcher.replyOptions.onPartialReply?.({ text: "第一段答案" });
+    await flushAsyncTasks();
+    await options.deliver({ text: "最终答案" }, { kind: "final" });
+
+    expect(streamingInstances[0].close).toHaveBeenCalledWith("最终答案", {
+      note: "Agent: agent",
+      finalThinking: {
+        title: "🔧 Tool calls (1)",
+        text: "✓ 1 completed",
+      },
+    });
+    expect(streamingInstances[0].updateThinking).not.toHaveBeenCalledWith("✓ 1 completed", {
+      title: "🔧 Tool calls (1)",
     });
   });
 
@@ -1386,7 +1441,12 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     await flushAsyncTasks();
     await options.onIdle?.();
 
-    expect(streamingInstances[0].close).toHaveBeenCalledWith("第一段答案", {});
+    expect(streamingInstances[0].close).toHaveBeenCalledWith("第一段答案", {
+      finalThinking: {
+        title: "🔧 Tool calls (1)",
+        text: "✓ 1 completed",
+      },
+    });
   });
 
   it("clears running tool status when visible assistant text arrives through block delivery", async () => {
@@ -1744,6 +1804,10 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(thinkingCalls.at(-1)).not.toContain("Reasoning:");
     expect(streamingInstances[0].close).toHaveBeenCalledWith("answer part final", {
       note: "Agent: agent",
+      finalThinking: {
+        title: "💭 Thinking",
+        text: "thinking step 1\nstep 2",
+      },
     });
   });
 

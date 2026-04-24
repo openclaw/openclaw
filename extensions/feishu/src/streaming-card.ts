@@ -717,7 +717,11 @@ export class FeishuStreamingSession {
 
   async close(
     finalText?: string,
-    options?: { note?: string; dropThinkingPanel?: boolean },
+    options?: {
+      note?: string;
+      dropThinkingPanel?: boolean;
+      finalThinking?: { title?: string; text?: string };
+    },
   ): Promise<void> {
     if (!this.state || this.closed) {
       return;
@@ -741,6 +745,14 @@ export class FeishuStreamingSession {
     if (options?.dropThinkingPanel) {
       this.state.thinkingText = "";
       this.state.thinkingPanelRendered = false;
+    } else if (options?.finalThinking) {
+      // Apply the final panel content in the same update that collapses the
+      // panel so Feishu does not briefly re-render the expanded in-flight state.
+      const nextThinkingText = options.finalThinking.text?.trim() ?? "";
+      this.state.thinkingTitle =
+        options.finalThinking.title?.trim() || this.state.thinkingTitle || "💭 Thinking";
+      this.state.thinkingText = nextThinkingText;
+      this.state.thinkingPanelRendered = Boolean(nextThinkingText);
     }
     // Ensure thinking panel is collapsed in the final card
     this.state.thinkingExpanded = false;
