@@ -261,6 +261,25 @@ describe("grouped chat rendering", () => {
     expect(avatar?.getAttribute("src")).toBe("/openclaw-logo.svg");
   });
 
+  it("renders a blob: assistant avatar as an image", () => {
+    const container = document.createElement("div");
+
+    renderAssistantMessage(
+      container,
+      {
+        role: "assistant",
+        content: "hello",
+        timestamp: 1000,
+      },
+      { assistantAvatar: "blob:managed-image", assistantName: "Val" },
+    );
+
+    const avatar = container.querySelector<HTMLImageElement>(".chat-avatar.assistant");
+    expect(avatar).not.toBeNull();
+    expect(avatar?.tagName).toBe("IMG");
+    expect(avatar?.getAttribute("src")).toBe("blob:managed-image");
+  });
+
   it("renders a configured assistant text avatar", () => {
     const container = document.createElement("div");
 
