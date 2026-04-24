@@ -6,11 +6,7 @@ read_when:
 title: "Google Meet plugin"
 ---
 
-# Google Meet (plugin)
-
-Google Meet participant support for OpenClaw.
-
-The plugin is explicit by design:
+Google Meet participant support for OpenClaw — the plugin is explicit by design:
 
 - It only joins an explicit `https://meet.google.com/...` URL.
 - `realtime` voice is the default mode.
