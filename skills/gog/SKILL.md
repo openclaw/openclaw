@@ -60,6 +60,7 @@ Common commands
 - Tasks list tasklists: `gog tasks lists list --json`
 - Tasks create tasklist: `gog tasks lists create "Sprint Inbox" --json`
 - Tasks list: `gog tasks list <tasklistId> --json`
+- Tasks list completed: `gog tasks list <tasklistId> --show-completed --show-hidden --json`
 - Tasks get: `gog tasks get <tasklistId> <taskId> --json`
 - Tasks add: `gog tasks add <tasklistId> --title "Title" --notes "Description" --due 2026-04-26`
 - Tasks update: `gog tasks update <tasklistId> <taskId> --title "New title" --status completed`
