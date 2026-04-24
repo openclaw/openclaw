@@ -87,7 +87,7 @@ jobs:
         env:
           OPENCLAW_CI_DOCS_ONLY: ${{ steps.docs_scope.outputs.docs_only }}
           OPENCLAW_CI_EVENT_NAME: ${{ github.event_name }}
-          OPENCLAW_CI_FORCE_FULL_INSTALL_SMOKE: ${{ (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' || github.event_name == 'workflow_call' || github.event_name == 'push') && 'true' || 'false' }}
+          OPENCLAW_CI_FORCE_FULL_INSTALL_SMOKE: ${{ (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' || github.event_name == 'workflow_call') && 'true' || 'false' }}
           OPENCLAW_CI_WORKFLOW_BUN_GLOBAL_INSTALL_SMOKE: ${{ inputs.run_bun_global_install_smoke || 'false' }}
           OPENCLAW_CI_RUN_FAST_INSTALL_SMOKE: ${{ steps.changed_scope.outputs.run_fast_install_smoke || steps.changed_scope.outputs.run_changed_smoke || 'false' }}
           OPENCLAW_CI_RUN_FULL_INSTALL_SMOKE: ${{ steps.changed_scope.outputs.run_full_install_smoke || 'false' }}
@@ -106,9 +106,12 @@ jobs:
             run_fast_install_smoke=true
             run_full_install_smoke=true
             run_install_smoke=true
-          elif [ "$docs_only" != "true" ] && [ "$run_changed_full_install_smoke" = "true" ]; then
+          elif [ "$docs_only" != "true" ] && [ "$event_name" != "push" ] && [ "$run_changed_full_install_smoke" = "true" ]; then
             run_fast_install_smoke=true
             run_full_install_smoke=true
+            run_install_smoke=true
+          elif [ "$docs_only" != "true" ] && [ "$run_changed_full_install_smoke" = "true" ]; then
+            run_fast_install_smoke=true
             run_install_smoke=true
           elif [ "$docs_only" != "true" ] && [ "$run_changed_fast_install_smoke" = "true" ]; then
             run_fast_install_smoke=true
