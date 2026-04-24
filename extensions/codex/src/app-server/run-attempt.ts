@@ -270,6 +270,7 @@ export async function runCodexAppServerAttempt(
       sessionId: params.sessionId,
       sessionKey: sandboxSessionKey,
       runId: params.runId,
+      signal: runAbortController.signal,
     });
     const nativeHookRelayConfig = nativeHookRelay
       ? buildCodexNativeHookRelayConfig({
@@ -696,8 +697,9 @@ function createCodexNativeHookRelay(params: {
   sessionId: string;
   sessionKey: string | undefined;
   runId: string;
+  signal: AbortSignal;
 }): NativeHookRelayRegistrationHandle | undefined {
-  if (params.options?.enabled !== true) {
+  if (params.options?.enabled === false) {
     return undefined;
   }
   return registerNativeHookRelay({
@@ -706,10 +708,11 @@ function createCodexNativeHookRelay(params: {
     sessionId: params.sessionId,
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
     runId: params.runId,
-    allowedEvents: params.options.events ?? CODEX_NATIVE_HOOK_RELAY_EVENTS,
-    ttlMs: params.options.ttlMs,
+    allowedEvents: params.options?.events ?? CODEX_NATIVE_HOOK_RELAY_EVENTS,
+    ttlMs: params.options?.ttlMs,
+    signal: params.signal,
     command: {
-      timeoutMs: params.options.gatewayTimeoutMs,
+      timeoutMs: params.options?.gatewayTimeoutMs,
     },
   });
 }

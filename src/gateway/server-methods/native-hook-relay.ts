@@ -6,9 +6,9 @@ import { ErrorCodes, errorShape } from "../protocol/index.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 export const nativeHookRelayHandlers: GatewayRequestHandlers = {
-  "nativeHook.invoke": ({ params, respond }) => {
+  "nativeHook.invoke": async ({ params, respond }) => {
     try {
-      const result: NativeHookRelayProcessResponse = invokeNativeHookRelay({
+      const result: NativeHookRelayProcessResponse = await invokeNativeHookRelay({
         provider: params.provider,
         relayId: params.relayId,
         event: params.event,

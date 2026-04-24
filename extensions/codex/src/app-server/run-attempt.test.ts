@@ -189,7 +189,7 @@ function expectResumeRequest(
     expect.arrayContaining([
       {
         method: "thread/resume",
-        params,
+        params: expect.objectContaining(params),
       },
     ]),
   );
@@ -468,7 +468,9 @@ describe("runCodexAppServerAttempt", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const harness = createStartedThreadHarness();
 
-    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+      nativeHookRelay: { enabled: false },
+    });
     await harness.waitForMethod("turn/start");
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
