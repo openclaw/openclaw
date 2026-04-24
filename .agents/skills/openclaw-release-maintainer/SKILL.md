@@ -289,6 +289,10 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
     or debugging path.
   - Parallels published beta install/update coverage with both OpenAI and
     Anthropic provider keys available
+  - Parallels install/update proof must keep plugin installs enabled unless the
+    operator explicitly scopes a harness-only isolation check; a lane that
+    disables bundled plugin installs is not valid plugin/dependency release
+    evidence.
   - targeted QA reruns only for areas touched by fixes after the full pre-npm
     roster, unless the operator requests the full QA roster again. If the fix
     touches live channel QA, credential plumbing, Matrix, Telegram, or the QA
