@@ -13,8 +13,16 @@ const buildPluginBindingResolvedTextMock = vi.hoisted(() => vi.fn(() => "Binding
 
 let registerSlackInteractionEvents: typeof import("./interactions.js").registerSlackInteractionEvents;
 
-vi.mock("openclaw/plugin-sdk/infra-runtime", () => ({
-  enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
+vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/infra-runtime")>();
+  return {
+    ...actual,
+    enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/approval-gateway-runtime", () => ({
+  resolveApprovalOverGateway: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("openclaw/plugin-sdk/security-runtime", () => ({
