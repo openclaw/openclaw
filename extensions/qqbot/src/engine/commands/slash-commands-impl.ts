@@ -609,6 +609,7 @@ const CLEAR_STORAGE_MAX_DISPLAY = 10;
 registerCommand({
   name: "bot-clear-storage",
   description: "清理通过 QQBot 对话产生的下载文件，释放主机磁盘空间",
+  requireAuth: true,
   usage: [
     `/bot-clear-storage`,
     ``,
