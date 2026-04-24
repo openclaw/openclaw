@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   assertOkOrThrowProviderError,
+  assertOkOrThrowHttpError,
   extractProviderErrorDetail,
   extractProviderRequestId,
 } from "./provider-http-errors.js";
@@ -33,5 +34,24 @@ describe("provider error utils", () => {
 
     expect(await extractProviderErrorDetail(response)).toBe("Invalid API key");
     expect(extractProviderRequestId(response)).toBe("fallback_req");
+  });
+
+  it("keeps legacy HTTP status formatting while sharing provider parsing", async () => {
+    const response = new Response(
+      JSON.stringify({
+        error: {
+          message: "Bad request",
+          code: "invalid_request",
+        },
+      }),
+      {
+        status: 400,
+        headers: { "x-request-id": "req_legacy" },
+      },
+    );
+
+    await expect(assertOkOrThrowHttpError(response, "Legacy provider error")).rejects.toThrow(
+      "Legacy provider error (HTTP 400): Bad request [code=invalid_request] [request_id=req_legacy]",
+    );
   });
 });
