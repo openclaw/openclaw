@@ -522,4 +522,28 @@ describe("acquireSessionWriteLock", () => {
       process.kill = originalKill;
     }
   });
+
+  it("throws SessionWriteLockError with reason session_busy on timeout", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-"));
+    try {
+      const sessionFile = path.join(root, "sessions.json");
+      const lockA = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });
+
+      await expect(
+        acquireSessionWriteLock({ sessionFile, timeoutMs: 5, allowReentrant: false }),
+      ).rejects.toSatisfy((err: unknown) => {
+        return (
+          err instanceof Error &&
+          err.name === "SessionWriteLockError" &&
+          (err as { reason?: unknown }).reason === "session_busy" &&
+          typeof (err as { timeoutMs?: unknown }).timeoutMs === "number" &&
+          typeof (err as { lockPath?: unknown }).lockPath === "string"
+        );
+      });
+
+      await lockA.release();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
 });

@@ -4,6 +4,23 @@ import path from "node:path";
 import { getProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
 import { resolveProcessScopedMap } from "../shared/process-scoped-map.js";
 
+export class SessionWriteLockError extends Error {
+  readonly reason = "session_busy";
+  readonly timeoutMs: number;
+  readonly lockPath: string;
+  readonly owner: string;
+
+  constructor(params: { timeoutMs: number; lockPath: string; owner: string }) {
+    super(
+      `session file locked (timeout ${params.timeoutMs}ms): ${params.owner} ${params.lockPath}`,
+    );
+    this.name = "SessionWriteLockError";
+    this.timeoutMs = params.timeoutMs;
+    this.lockPath = params.lockPath;
+    this.owner = params.owner;
+  }
+}
+
 type LockFilePayload = {
   pid?: number;
   createdAt?: string;
@@ -584,7 +601,7 @@ export async function acquireSessionWriteLock(params: {
 
   const payload = await readLockPayload(lockPath);
   const owner = typeof payload?.pid === "number" ? `pid=${payload.pid}` : "unknown";
-  throw new Error(`session file locked (timeout ${timeoutMs}ms): ${owner} ${lockPath}`);
+  throw new SessionWriteLockError({ timeoutMs, lockPath, owner });
 }
 
 export const __testing = {
