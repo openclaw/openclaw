@@ -32,6 +32,7 @@ type DiscordGatewayFetch = (
 
 type DiscordGatewayMetadataError = Error & { transient?: boolean };
 type DiscordGatewayWebSocketCtor = new (url: string, options?: { agent?: unknown }) => ws.WebSocket;
+const registrationPromises = new WeakMap<carbonGateway.GatewayPlugin, Promise<void>>();
 type CarbonGatewayRegistrationState = {
   client?: Parameters<carbonGateway.GatewayPlugin["registerClient"]>[0];
   ws?: unknown;
@@ -288,7 +289,17 @@ function createGatewayPlugin(params: {
       super.connect(resume);
     }
 
-    override async registerClient(
+    override registerClient(client: Parameters<carbonGateway.GatewayPlugin["registerClient"]>[0]) {
+      const registration = this.registerClientInternal(client);
+      // Carbon 0.16 invokes async plugin hooks from Client construction without
+      // awaiting them. Mark the promise handled immediately, then let OpenClaw
+      // startup await the original promise explicitly.
+      registration.catch(() => {});
+      registrationPromises.set(this, registration);
+      return registration;
+    }
+
+    private async registerClientInternal(
       client: Parameters<carbonGateway.GatewayPlugin["registerClient"]>[0],
     ) {
       // Carbon's Client constructor does not await plugin registerClient().
@@ -385,6 +396,15 @@ function createGatewayPlugin(params: {
   }
 
   return new SafeGatewayPlugin();
+}
+
+export function waitForDiscordGatewayPluginRegistration(
+  plugin: unknown,
+): Promise<void> | undefined {
+  if (typeof plugin !== "object" || plugin === null) {
+    return undefined;
+  }
+  return registrationPromises.get(plugin as carbonGateway.GatewayPlugin);
 }
 
 export function createDiscordGatewayPlugin(params: {
