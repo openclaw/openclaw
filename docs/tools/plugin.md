@@ -8,11 +8,9 @@ title: "Plugins"
 sidebarTitle: "Install and Configure"
 ---
 
-# Plugins
-
 Plugins extend OpenClaw with new capabilities: channels, model providers,
-tools, skills, speech, realtime transcription, realtime voice,
-media-understanding, image generation, video generation, web fetch, web
+agent harnesses, tools, skills, speech, realtime transcription, realtime
+voice, media-understanding, image generation, video generation, web fetch, web
 search, and more. Some plugins are **core** (shipped with OpenClaw), others
 are **external** (published on npm by the community).
 
@@ -191,6 +189,13 @@ OpenClaw scans for plugins in this order (first match wins):
 - Workspace-origin plugins are **disabled by default** (must be explicitly enabled)
 - Bundled plugins follow the built-in default-on set unless overridden
 - Exclusive slots can force-enable the selected plugin for that slot
+- Some bundled opt-in plugins are enabled automatically when config names a
+  plugin-owned surface, such as a provider model ref, channel config, or harness
+  runtime
+- OpenAI-family Codex routes keep separate plugin boundaries:
+  `openai-codex/*` belongs to the OpenAI plugin, while the bundled Codex
+  app-server plugin is selected by `embeddedHarness.runtime: "codex"` or legacy
+  `codex/*` model refs
 
 ## Plugin slots (exclusive categories)
 
@@ -254,6 +259,10 @@ plugin). Other bundled plugins still need `openclaw plugins enable <id>`.
 `openclaw plugins update <id-or-npm-spec>` for routine upgrades of tracked npm
 plugins. It is not supported with `--link`, which reuses the source path instead
 of copying over a managed install target.
+
+When `plugins.allow` is already set, `openclaw plugins install` adds the
+installed plugin id to that allowlist before enabling it, so installs are
+immediately loadable after restart.
 
 `openclaw plugins update <id-or-npm-spec>` applies to tracked installs. Passing
 an npm package spec with a dist-tag or exact version resolves the package name

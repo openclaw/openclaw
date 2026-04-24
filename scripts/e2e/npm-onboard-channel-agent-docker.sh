@@ -53,7 +53,7 @@ prepare_package_tgz() {
 prepare_package_tgz
 
 DOCKER_PACKAGE_TGZ="/tmp/openclaw-current.tgz"
-run_log="$(mktemp "${TMPDIR:-/tmp}/openclaw-npm-onboard-channel-agent.XXXXXX.log")"
+run_log="$(mktemp "${TMPDIR:-/tmp}/openclaw-npm-onboard-channel-agent.XXXXXX")"
 
 echo "Running npm tarball onboard/channel/agent Docker E2E ($CHANNEL)..."
 if ! docker run --rm \
@@ -432,10 +432,8 @@ if (!serialized.includes(token)) {
 }
 NODE
 
-assert_dep_present "$DEP_SENTINEL"
-
-echo "Running doctor after activated plugin dep install..."
-openclaw doctor --non-interactive >/tmp/openclaw-doctor.log 2>&1
+echo "Running doctor after channel activation..."
+openclaw doctor --repair --non-interactive >/tmp/openclaw-doctor.log 2>&1
 assert_dep_present "$DEP_SENTINEL"
 
 echo "Running local agent turn against mocked OpenAI..."

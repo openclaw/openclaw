@@ -4,10 +4,8 @@ read_when:
   - Connecting Codex, Claude Code, or another MCP client to OpenClaw-backed channels
   - Running `openclaw mcp serve`
   - Managing OpenClaw-saved MCP server definitions
-title: "mcp"
+title: "MCP"
 ---
-
-# mcp
 
 `openclaw mcp` has two jobs:
 
@@ -518,3 +516,8 @@ Current limits:
 - HTTP/SSE/streamable-http transport connects to a single remote server; no multiplexed upstream yet
 - `permissions_list_open` only includes approvals observed while the bridge is
   connected
+
+## Related
+
+- [CLI reference](/cli)
+- [Plugins](/cli/plugins)

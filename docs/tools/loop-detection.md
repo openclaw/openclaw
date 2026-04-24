@@ -1,13 +1,11 @@
 ---
-title: "Tool-loop detection"
 summary: "How to enable and tune guardrails that detect repetitive tool-call loops"
+title: "Tool-loop detection"
 read_when:
   - A user reports agents getting stuck repeating tool calls
   - You need to tune repetitive-call protection
   - You are editing agent tool/runtime policies
 ---
-
-# Tool-loop detection
 
 OpenClaw can keep agents from getting stuck in repeated tool-call patterns.
 The guard is **disabled by default**.
@@ -98,3 +96,9 @@ This protects users from runaway token spend and lockups while preserving normal
 - `tools.loopDetection` is merged with agent-level overrides.
 - Per-agent config fully overrides or extends global values.
 - If no config exists, guardrails stay off.
+
+## Related
+
+- [Exec approvals](/tools/exec-approvals)
+- [Thinking levels](/tools/thinking)
+- [Sub-agents](/tools/subagents)

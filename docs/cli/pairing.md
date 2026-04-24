@@ -2,7 +2,7 @@
 summary: "CLI reference for `openclaw pairing` (approve/list pairing requests)"
 read_when:
   - You’re using pairing-mode DMs and need to approve senders
-title: "pairing"
+title: "Pairing"
 ---
 
 # `openclaw pairing`
@@ -63,3 +63,8 @@ Options:
 - `pairing list` supports `--account <accountId>` for multi-account channels.
 - `pairing approve` supports `--account <accountId>` and `--notify`.
 - If only one pairing-capable channel is configured, `pairing approve <code>` is allowed.
+
+## Related
+
+- [CLI reference](/cli)
+- [Channel pairing](/channels/pairing)

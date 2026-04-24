@@ -2,7 +2,7 @@
 summary: "Gateway lifecycle on macOS (launchd)"
 read_when:
   - Integrating the mac app with the gateway lifecycle
-title: "Gateway Lifecycle"
+title: "Gateway lifecycle"
 ---
 
 # Gateway lifecycle on macOS
@@ -67,3 +67,8 @@ remote host and connects over that tunnel.
 
 If a true child‑process mode is ever needed again, it should be documented as a
 separate, explicit dev‑only mode.
+
+## Related
+
+- [macOS app](/platforms/macos)
+- [Gateway runbook](/gateway)

@@ -9,6 +9,7 @@ import {
 } from "../test/vitest/vitest.commands-light-paths.mjs";
 import { isAcpxExtensionRoot } from "../test/vitest/vitest.extension-acpx-paths.mjs";
 import { isBlueBubblesExtensionRoot } from "../test/vitest/vitest.extension-bluebubbles-paths.mjs";
+import { isBrowserExtensionRoot } from "../test/vitest/vitest.extension-browser-paths.mjs";
 import { resolveSplitChannelExtensionShard } from "../test/vitest/vitest.extension-channel-split-paths.mjs";
 import { isDiffsExtensionRoot } from "../test/vitest/vitest.extension-diffs-paths.mjs";
 import { isFeishuExtensionRoot } from "../test/vitest/vitest.extension-feishu-paths.mjs";
@@ -70,6 +71,7 @@ const DAEMON_VITEST_CONFIG = "test/vitest/vitest.daemon.config.ts";
 const E2E_VITEST_CONFIG = "test/vitest/vitest.e2e.config.ts";
 const EXTENSION_ACPX_VITEST_CONFIG = "test/vitest/vitest.extension-acpx.config.ts";
 const EXTENSION_BLUEBUBBLES_VITEST_CONFIG = "test/vitest/vitest.extension-bluebubbles.config.ts";
+const EXTENSION_BROWSER_VITEST_CONFIG = "test/vitest/vitest.extension-browser.config.ts";
 const EXTENSION_CHANNELS_VITEST_CONFIG = "test/vitest/vitest.extension-channels.config.ts";
 const EXTENSION_DIFFS_VITEST_CONFIG = "test/vitest/vitest.extension-diffs.config.ts";
 const EXTENSION_DISCORD_VITEST_CONFIG = "test/vitest/vitest.extension-discord.config.ts";
@@ -152,6 +154,7 @@ const VITEST_CONFIG_BY_KIND = {
   extensionFull: FULL_EXTENSIONS_VITEST_CONFIG,
   extensionAcpx: EXTENSION_ACPX_VITEST_CONFIG,
   extensionBlueBubbles: EXTENSION_BLUEBUBBLES_VITEST_CONFIG,
+  extensionBrowser: EXTENSION_BROWSER_VITEST_CONFIG,
   extensionChannel: EXTENSION_CHANNELS_VITEST_CONFIG,
   extensionDiffs: EXTENSION_DIFFS_VITEST_CONFIG,
   extensionDiscord: EXTENSION_DISCORD_VITEST_CONFIG,
@@ -235,11 +238,26 @@ const TOOLING_TEST_TARGETS = new Map([
     ["test/scripts/vitest-local-scheduling.test.ts"],
   ],
 ]);
+const SOURCE_TEST_TARGETS = new Map([
+  ["src/agents/live-model-turn-probes.ts", ["src/agents/live-model-turn-probes.test.ts"]],
+  [
+    "src/auto-reply/reply/dispatch-from-config.ts",
+    ["src/auto-reply/reply/dispatch-from-config.test.ts"],
+  ],
+  [
+    "src/auto-reply/reply/effective-reply-route.ts",
+    [
+      "src/auto-reply/reply/effective-reply-route.test.ts",
+      "src/auto-reply/reply/dispatch-from-config.test.ts",
+    ],
+  ],
+]);
 const GENERATED_CHANGED_TEST_TARGETS = new Set([
   "src/canvas-host/a2ui/.bundle.hash",
   "src/canvas-host/a2ui/a2ui.bundle.js",
 ]);
 const VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS";
+const VITEST_NO_OUTPUT_RETRY_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_RETRY";
 export const DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS = "180000";
 const VITEST_CONFIG_TARGET_KIND_BY_PATH = new Map(
   Object.entries(VITEST_CONFIG_BY_KIND).map(([kind, config]) => [config, kind]),
@@ -511,7 +529,13 @@ export function resolveChangedTestTargetPlan(changedPaths) {
   if (changedLanes.lanes.all) {
     return { mode: "broad", targets: [] };
   }
-  const targets = changedPaths.filter(isRoutableChangedTarget);
+  const targets = changedPaths.flatMap((changedPath) => {
+    const mappedTargets = SOURCE_TEST_TARGETS.get(changedPath);
+    if (mappedTargets) {
+      return mappedTargets;
+    }
+    return isRoutableChangedTarget(changedPath) ? [changedPath] : [];
+  });
   if (changedLanes.extensionImpactFromCore) {
     targets.push("extensions");
   }
@@ -587,6 +611,9 @@ function classifyTarget(arg, cwd) {
     }
     if (isBlueBubblesExtensionRoot(extensionRoot)) {
       return "extensionBlueBubbles";
+    }
+    if (isBrowserExtensionRoot(extensionRoot)) {
+      return "extensionBrowser";
     }
     if (isFeishuExtensionRoot(extensionRoot)) {
       return "extensionFeishu";
@@ -876,6 +903,7 @@ export function buildVitestRunPlans(
     "extensionAcpx",
     "extensionDiffs",
     "extensionBlueBubbles",
+    "extensionBrowser",
     "extensionDiscord",
     "extensionFeishu",
     "extensionImessage",
@@ -1087,6 +1115,11 @@ export function applyDefaultVitestNoOutputTimeout(specs, params = {}) {
       },
     };
   });
+}
+
+export function shouldRetryVitestNoOutputTimeout(env = process.env) {
+  const value = env[VITEST_NO_OUTPUT_RETRY_ENV_KEY]?.trim().toLowerCase();
+  return !["0", "false", "no", "off"].includes(value ?? "");
 }
 
 export function createVitestRunSpecs(args, params = {}) {

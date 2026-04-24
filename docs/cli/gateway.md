@@ -4,7 +4,7 @@ read_when:
   - Running the Gateway from the CLI (dev or servers)
   - Debugging Gateway auth, bind modes, and connectivity
   - Discovering gateways via Bonjour (local + wide-area DNS-SD)
-title: "gateway"
+title: "Gateway"
 ---
 
 # Gateway CLI
@@ -140,6 +140,7 @@ Notes:
 ### `gateway diagnostics export`
 
 Write a local diagnostics zip that is designed to attach to bug reports.
+For the privacy model and bundle contents, see [Diagnostics Export](/gateway/diagnostics).
 
 ```bash
 openclaw gateway diagnostics export
@@ -370,3 +371,8 @@ Notes:
 - On `local.` mDNS, `sshPort` and `cliPath` are only broadcast when
   `discovery.mdns.mode` is `full`. Wide-area DNS-SD still writes `cliPath`; `sshPort`
   stays optional there too.
+
+## Related
+
+- [CLI reference](/cli)
+- [Gateway runbook](/gateway)

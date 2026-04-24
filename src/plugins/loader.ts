@@ -145,6 +145,7 @@ export type PluginLoadOptions = {
   preferSetupRuntimeForChannelPlugins?: boolean;
   activate?: boolean;
   loadModules?: boolean;
+  installBundledRuntimeDeps?: boolean;
   throwOnLoadError?: boolean;
   bundledRuntimeDepsInstaller?: (params: BundledRuntimeDepsInstallParams) => void;
 };
@@ -447,7 +448,7 @@ function createPluginJitiLoader(options: Pick<PluginLoadOptions, "pluginSdkResol
       cache: jitiLoaders,
       modulePath,
       importerUrl: import.meta.url,
-      jitiFilename: import.meta.url,
+      jitiFilename: modulePath,
       pluginSdkResolution: options.pluginSdkResolution,
       // Source .ts runtime shims import sibling ".js" specifiers that only exist
       // after build. Disable native loading for source entries so Jiti rewrites
@@ -599,6 +600,7 @@ function prepareBundledPluginRuntimeDistMirror(params: {
       }
     }
   }
+  ensureOpenClawPluginSdkAlias(mirrorDistRoot);
   return mirrorExtensionsRoot;
 }
 
@@ -628,6 +630,76 @@ function copyBundledPluginRuntimeRoot(sourceRoot: string, targetRoot: string): v
     } catch {
       // Readable copied files are enough for plugin loading.
     }
+  }
+}
+
+function writeRuntimeJsonFile(targetPath: string, value: unknown): void {
+  fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+  fs.writeFileSync(targetPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
+
+function hasRuntimeDefaultExport(sourcePath: string): boolean {
+  const text = fs.readFileSync(sourcePath, "utf8");
+  return /\bexport\s+default\b/u.test(text) || /\bas\s+default\b/u.test(text);
+}
+
+function writeRuntimeModuleWrapper(sourcePath: string, targetPath: string): void {
+  const specifier = path.relative(path.dirname(targetPath), sourcePath).replaceAll(path.sep, "/");
+  const normalizedSpecifier = specifier.startsWith(".") ? specifier : `./${specifier}`;
+  const defaultForwarder = hasRuntimeDefaultExport(sourcePath)
+    ? [
+        `import defaultModule from ${JSON.stringify(normalizedSpecifier)};`,
+        `let defaultExport = defaultModule;`,
+        `for (let index = 0; index < 4 && defaultExport && typeof defaultExport === "object" && "default" in defaultExport; index += 1) {`,
+        `  defaultExport = defaultExport.default;`,
+        `}`,
+      ]
+    : [
+        `import * as module from ${JSON.stringify(normalizedSpecifier)};`,
+        `let defaultExport = "default" in module ? module.default : module;`,
+        `for (let index = 0; index < 4 && defaultExport && typeof defaultExport === "object" && "default" in defaultExport; index += 1) {`,
+        `  defaultExport = defaultExport.default;`,
+        `}`,
+      ];
+  fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+  fs.writeFileSync(
+    targetPath,
+    [
+      `export * from ${JSON.stringify(normalizedSpecifier)};`,
+      ...defaultForwarder,
+      "export { defaultExport as default };",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+}
+
+function ensureOpenClawPluginSdkAlias(distRoot: string): void {
+  const pluginSdkDir = path.join(distRoot, "plugin-sdk");
+  if (!fs.existsSync(pluginSdkDir)) {
+    return;
+  }
+
+  const aliasDir = path.join(distRoot, "extensions", "node_modules", "openclaw");
+  const pluginSdkAliasDir = path.join(aliasDir, "plugin-sdk");
+  writeRuntimeJsonFile(path.join(aliasDir, "package.json"), {
+    name: "openclaw",
+    type: "module",
+    exports: {
+      "./plugin-sdk": "./plugin-sdk/index.js",
+      "./plugin-sdk/*": "./plugin-sdk/*.js",
+    },
+  });
+  fs.rmSync(pluginSdkAliasDir, { recursive: true, force: true });
+  fs.mkdirSync(pluginSdkAliasDir, { recursive: true });
+  for (const entry of fs.readdirSync(pluginSdkDir, { withFileTypes: true })) {
+    if (!entry.isFile() || path.extname(entry.name) !== ".js") {
+      continue;
+    }
+    writeRuntimeModuleWrapper(
+      path.join(pluginSdkDir, entry.name),
+      path.join(pluginSdkAliasDir, entry.name),
+    );
   }
 }
 
@@ -709,6 +781,7 @@ function buildCacheKey(params: {
   requireSetupEntryForSetupOnlyChannelPlugins?: boolean;
   preferSetupRuntimeForChannelPlugins?: boolean;
   loadModules?: boolean;
+  installBundledRuntimeDeps?: boolean;
   runtimeSubagentMode?: "default" | "explicit" | "gateway-bindable";
   pluginSdkResolution?: PluginSdkResolutionPreference;
   coreGatewayMethodNames?: string[];
@@ -745,6 +818,8 @@ function buildCacheKey(params: {
   const startupChannelMode =
     params.preferSetupRuntimeForChannelPlugins === true ? "prefer-setup" : "full";
   const moduleLoadMode = params.loadModules === false ? "manifest-only" : "load-modules";
+  const bundledRuntimeDepsMode =
+    params.installBundledRuntimeDeps === false ? "skip-runtime-deps" : "install-runtime-deps";
   const runtimeSubagentMode = params.runtimeSubagentMode ?? "default";
   const gatewayMethodsKey = JSON.stringify(params.coreGatewayMethodNames ?? []);
   return `${roots.workspace ?? ""}::${roots.global ?? ""}::${roots.stock ?? ""}::${JSON.stringify({
@@ -752,7 +827,7 @@ function buildCacheKey(params: {
     installs,
     loadPaths,
     activationMetadataKey: params.activationMetadataKey ?? "",
-  })}::${scopeKey}::${setupOnlyKey}::${setupOnlyModeKey}::${setupOnlyRequirementKey}::${startupChannelMode}::${moduleLoadMode}::${runtimeSubagentMode}::${params.pluginSdkResolution ?? "auto"}::${gatewayMethodsKey}`;
+  })}::${scopeKey}::${setupOnlyKey}::${setupOnlyModeKey}::${setupOnlyRequirementKey}::${startupChannelMode}::${moduleLoadMode}::${bundledRuntimeDepsMode}::${runtimeSubagentMode}::${params.pluginSdkResolution ?? "auto"}::${gatewayMethodsKey}`;
 }
 
 function matchesScopedPluginRequest(params: {
@@ -830,6 +905,7 @@ function hasExplicitCompatibilityInputs(options: PluginLoadOptions): boolean {
     options.forceSetupOnlyChannelPlugins === true ||
     options.requireSetupEntryForSetupOnlyChannelPlugins === true ||
     options.preferSetupRuntimeForChannelPlugins === true ||
+    options.installBundledRuntimeDeps === false ||
     options.loadModules === false
   );
 }
@@ -855,6 +931,7 @@ function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
   const requireSetupEntryForSetupOnlyChannelPlugins =
     options.requireSetupEntryForSetupOnlyChannelPlugins === true;
   const preferSetupRuntimeForChannelPlugins = options.preferSetupRuntimeForChannelPlugins === true;
+  const shouldInstallBundledRuntimeDeps = options.installBundledRuntimeDeps !== false;
   const runtimeSubagentMode = resolveRuntimeSubagentMode(options.runtimeOptions);
   const coreGatewayMethodNames = Object.keys(options.coreGatewayHandlers ?? {}).toSorted();
   const cacheKey = buildCacheKey({
@@ -872,6 +949,7 @@ function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     requireSetupEntryForSetupOnlyChannelPlugins,
     preferSetupRuntimeForChannelPlugins,
     loadModules: options.loadModules,
+    installBundledRuntimeDeps: options.installBundledRuntimeDeps,
     runtimeSubagentMode,
     pluginSdkResolution: options.pluginSdkResolution,
     coreGatewayMethodNames,
@@ -890,6 +968,7 @@ function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     preferSetupRuntimeForChannelPlugins,
     shouldActivate: options.activate !== false,
     shouldLoadModules: options.loadModules !== false,
+    shouldInstallBundledRuntimeDeps,
     runtimeSubagentMode,
     cacheKey,
   };
@@ -1388,6 +1467,7 @@ function createPluginRecord(params: {
     gatewayMethods: [],
     cliCommands: [],
     services: [],
+    gatewayDiscoveryServiceIds: [],
     commands: [],
     httpRoutes: 0,
     hookCount: 0,
@@ -1768,6 +1848,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     preferSetupRuntimeForChannelPlugins,
     shouldActivate,
     shouldLoadModules,
+    shouldInstallBundledRuntimeDeps,
     cacheKey,
     runtimeSubagentMode,
   } = resolvePluginLoadCacheContext(options);
@@ -2112,7 +2193,12 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         markPluginActivationDisabled(record, enableState.reason);
       }
 
-      if (shouldLoadModules && candidate.origin === "bundled" && enableState.enabled) {
+      if (
+        shouldLoadModules &&
+        shouldInstallBundledRuntimeDeps &&
+        candidate.origin === "bundled" &&
+        enableState.enabled
+      ) {
         try {
           const installRoot = resolveBundledRuntimeDependencyInstallRoot(pluginRoot, { env });
           const retainSpecs = bundledRuntimeDepsRetainSpecsByInstallRoot.get(installRoot) ?? [];
@@ -2155,6 +2241,8 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
               pluginRoot,
               mirroredRoot: runtimePluginRoot,
             });
+          } else {
+            ensureOpenClawPluginSdkAlias(path.dirname(path.dirname(pluginRoot)));
           }
         } catch (error) {
           pushPluginLoadError(`failed to install bundled runtime deps: ${String(error)}`);
@@ -2353,7 +2441,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         manifestRecord.setupSource
       ) {
         const setupRegistration = resolveSetupChannelRegistration(mod, {
-          installRuntimeDeps: enableState.enabled,
+          installRuntimeDeps: shouldInstallBundledRuntimeDeps && enableState.enabled,
         });
         if (setupRegistration.loadError) {
           recordPluginError({

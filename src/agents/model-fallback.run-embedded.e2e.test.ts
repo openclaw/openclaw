@@ -5,6 +5,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { AuthProfileFailureReason } from "./auth-profiles.js";
 import { runWithModelFallback } from "./model-fallback.js";
+import { classifyEmbeddedPiRunResultForModelFallback } from "./pi-embedded-runner/result-fallback-classifier.js";
 import type { EmbeddedRunAttemptResult } from "./pi-embedded-runner/run/types.js";
 import {
   buildEmbeddedRunnerAssistant,
@@ -381,6 +382,51 @@ function expectProviderAttemptCounts(expected: { openai: number; groq: number })
 }
 
 describe("runWithModelFallback + runEmbeddedPiAgent failover behavior", () => {
+  it("keeps tool summary on incomplete side-effect terminal results", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      await writeAuthStore(agentDir);
+      runEmbeddedAttemptMock.mockResolvedValueOnce(
+        makeEmbeddedRunnerAttempt({
+          toolMetas: [{ toolName: "write", meta: "path=out.txt" }],
+          lastAssistant: buildEmbeddedRunnerAssistant({
+            provider: "openai",
+            model: "mock-1",
+            stopReason: "stop",
+            content: [],
+          }),
+        }),
+      );
+
+      const result = await runEmbeddedPiAgent({
+        sessionId: "session:tool-side-effect-terminal",
+        sessionKey: "agent:test:tool-side-effect-terminal",
+        sessionFile: path.join(workspaceDir, "tool-side-effect-terminal.jsonl"),
+        workspaceDir,
+        agentDir,
+        config: makeConfig(),
+        prompt: "write the file",
+        provider: "openai",
+        model: "mock-1",
+        authProfileIdSource: "auto",
+        timeoutMs: 5_000,
+        runId: "run:tool-side-effect-terminal",
+        enqueue: async (task) => await task(),
+      });
+
+      expect(result.meta.toolSummary).toMatchObject({
+        calls: 1,
+        tools: ["write"],
+      });
+      expect(
+        classifyEmbeddedPiRunResultForModelFallback({
+          provider: "openai-codex",
+          model: "gpt-5.4",
+          result,
+        }),
+      ).toBeNull();
+    });
+  });
+
   it("falls back on OpenRouter-style no-endpoints assistant errors", async () => {
     await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
       await writeAuthStore(agentDir);
@@ -428,6 +474,50 @@ describe("runWithModelFallback + runEmbeddedPiAgent failover behavior", () => {
       expect(computeBackoffMock).not.toHaveBeenCalled();
       expect(sleepWithAbortMock).not.toHaveBeenCalled();
     });
+  });
+
+  it("falls back across providers after bare Codex/Undici transport failures", async () => {
+    const cases = [
+      {
+        name: "undici-terminated",
+        message: "terminated",
+      },
+      {
+        name: "codex-empty-transport-response",
+        message: "Request failed",
+      },
+    ] as const;
+
+    for (const { name, message } of cases) {
+      await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+        await writeAuthStore(agentDir);
+        runEmbeddedAttemptMock.mockClear();
+        computeBackoffMock.mockClear();
+        sleepWithAbortMock.mockClear();
+        mockPrimaryErrorThenFallbackSuccess(message);
+
+        const result = await runEmbeddedFallback({
+          agentDir,
+          workspaceDir,
+          sessionKey: `agent:test:transport-fallback:${name}`,
+          runId: `run:transport-fallback:${name}`,
+        });
+
+        expect(result.provider).toBe("groq");
+        expect(result.model).toBe("mock-2");
+        expect(result.attempts[0]?.reason).toBe("timeout");
+        expect(result.result.payloads?.[0]?.text ?? "").toContain("fallback ok");
+
+        const usageStats = await readUsageStats(agentDir);
+        expect(usageStats["openai:p1"]?.cooldownUntil).toBeUndefined();
+        expect(usageStats["openai:p1"]?.failureCounts).toBeUndefined();
+        expect(typeof usageStats["groq:p1"]?.lastUsed).toBe("number");
+
+        expectOpenAiThenGroqAttemptOrder();
+        expect(computeBackoffMock).not.toHaveBeenCalled();
+        expect(sleepWithAbortMock).not.toHaveBeenCalled();
+      });
+    }
   });
 
   it("falls back across providers after a bare leading 402 quota-refresh assistant error", async () => {

@@ -27,10 +27,6 @@ function restoreEnv(name: keyof typeof previousEnv): void {
   }
 }
 
-function unquoteCommandPath(command: string): string {
-  return command.replace(/^'|'$/g, "").replace(/'\\''/g, "'");
-}
-
 afterEach(async () => {
   restoreEnv("CODEX_HOME");
   restoreEnv("OPENCLAW_AGENT_DIR");
@@ -41,18 +37,10 @@ afterEach(async () => {
 });
 
 describe("prepareAcpxCodexAuthConfig", () => {
-  it("wraps built-in Codex ACP with an isolated CODEX_HOME copy", async () => {
+  it("does not synthesize a Codex ACP auth home from canonical OpenClaw OAuth", async () => {
     const root = await makeTempDir();
-    const sourceCodexHome = path.join(root, "source-codex");
     const agentDir = path.join(root, "agent");
     const stateDir = path.join(root, "state");
-    await fs.mkdir(sourceCodexHome, { recursive: true });
-    await fs.writeFile(
-      path.join(sourceCodexHome, "auth.json"),
-      `${JSON.stringify({ auth_mode: "apikey", OPENAI_API_KEY: "test-api-key" }, null, 2)}\n`,
-    );
-    await fs.writeFile(path.join(sourceCodexHome, "config.toml"), 'model = "gpt-5.4"\n');
-    process.env.CODEX_HOME = sourceCodexHome;
     process.env.OPENCLAW_AGENT_DIR = agentDir;
     delete process.env.PI_CODING_AGENT_DIR;
 
@@ -65,25 +53,44 @@ describe("prepareAcpxCodexAuthConfig", () => {
       stateDir,
     });
 
-    const wrapperPath = unquoteCommandPath(resolved.agents.codex ?? "");
-    expect(wrapperPath).toBe(path.join(stateDir, "acpx", "codex-acp-wrapper.mjs"));
-    await expect(fs.access(wrapperPath)).resolves.toBeUndefined();
-
-    const isolatedAuthPath = path.join(agentDir, "acp-auth", "codex-source", "auth.json");
-    const copiedAuth = JSON.parse(await fs.readFile(isolatedAuthPath, "utf8")) as {
-      auth_mode?: string;
-      OPENAI_API_KEY?: string;
-    };
-    expect(copiedAuth).toEqual({ auth_mode: "apikey", OPENAI_API_KEY: "test-api-key" });
-    expect((await fs.stat(isolatedAuthPath)).mode & 0o777).toBe(0o600);
+    expect(resolved.agents.codex).toBeUndefined();
     await expect(
-      fs.readFile(path.join(agentDir, "acp-auth", "codex-source", "config.toml"), "utf8"),
-    ).resolves.toBe('model = "gpt-5.4"\n');
+      fs.access(path.join(stateDir, "acpx", "codex-acp-wrapper.mjs")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(
+      fs.access(path.join(agentDir, "acp-auth", "codex", "auth.json")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+  });
 
-    const wrapper = await fs.readFile(wrapperPath, "utf8");
-    expect(wrapper).toContain(`CODEX_HOME: ${JSON.stringify(path.dirname(isolatedAuthPath))}`);
-    expect(wrapper).toContain("for (const key of [])");
-    expect(wrapper).not.toContain("test-api-key");
+  it("does not copy source Codex auth", async () => {
+    const root = await makeTempDir();
+    const sourceCodexHome = path.join(root, "source-codex");
+    const agentDir = path.join(root, "agent");
+    await fs.mkdir(sourceCodexHome, { recursive: true });
+    await fs.writeFile(
+      path.join(sourceCodexHome, "auth.json"),
+      `${JSON.stringify({ auth_mode: "apikey", OPENAI_API_KEY: "test-api-key" }, null, 2)}\n`,
+    );
+    process.env.CODEX_HOME = sourceCodexHome;
+    process.env.OPENCLAW_AGENT_DIR = agentDir;
+    delete process.env.PI_CODING_AGENT_DIR;
+
+    const pluginConfig = resolveAcpxPluginConfig({
+      rawConfig: {},
+      workspaceDir: root,
+    });
+    const resolved = await prepareAcpxCodexAuthConfig({
+      pluginConfig,
+      stateDir: path.join(root, "state"),
+    });
+
+    expect(resolved.agents.codex).toBeUndefined();
+    await expect(
+      fs.access(path.join(agentDir, "acp-auth", "codex-source", "auth.json")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(
+      fs.access(path.join(agentDir, "acp-auth", "codex", "auth.json")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("does not override an explicitly configured Codex agent command", async () => {

@@ -1454,6 +1454,188 @@ module.exports = {
     expect(registry.plugins.find((entry) => entry.id === "alpha")?.status).toBe("loaded");
   });
 
+  it("loads bundled plugins with plugin-sdk imports from an external stage dir", () => {
+    const packageRoot = makeTempDir();
+    const stageDir = makeTempDir();
+    const bundledDir = path.join(packageRoot, "dist", "extensions");
+    const pluginRoot = path.join(bundledDir, "telegram");
+    fs.mkdirSync(path.join(packageRoot, "dist", "plugin-sdk"), { recursive: true });
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.4.22", type: "module" }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(packageRoot, "dist", "plugin-sdk", "text-runtime.js"),
+      [
+        `export function normalizeLowercaseStringOrEmpty(value) {`,
+        `  return typeof value === "string" ? value.toLowerCase() : "";`,
+        `}`,
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginRoot, "index.js"),
+      [
+        `import runtimeDep from "external-runtime";`,
+        `import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";`,
+        `export default {`,
+        `  id: "telegram",`,
+        `  register(api) {`,
+        `    api.registerCommand({`,
+        `      name: "external-runtime",`,
+        `      handler: () => normalizeLowercaseStringOrEmpty(runtimeDep.marker),`,
+        `    });`,
+        `  },`,
+        `};`,
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginRoot, "package.json"),
+      JSON.stringify(
+        {
+          name: "@openclaw/telegram",
+          version: "1.0.0",
+          type: "module",
+          dependencies: {
+            "external-runtime": "1.0.0",
+          },
+          openclaw: { extensions: ["./index.js"] },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginRoot, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "telegram",
+          enabledByDefault: true,
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+    process.env.OPENCLAW_PLUGIN_STAGE_DIR = stageDir;
+
+    let registry: PluginRegistry | null = null;
+    try {
+      fs.chmodSync(bundledDir, 0o555);
+      registry = loadOpenClawPlugins({
+        cache: false,
+        config: {
+          plugins: {
+            enabled: true,
+          },
+        },
+        bundledRuntimeDepsInstaller: ({ installRoot }) => {
+          const depRoot = path.join(installRoot, "node_modules", "external-runtime");
+          fs.mkdirSync(depRoot, { recursive: true });
+          fs.writeFileSync(
+            path.join(depRoot, "package.json"),
+            JSON.stringify({
+              name: "external-runtime",
+              version: "1.0.0",
+              type: "module",
+              exports: "./index.js",
+            }),
+            "utf-8",
+          );
+          fs.writeFileSync(
+            path.join(depRoot, "index.js"),
+            "export default { marker: 'SDK-OK' };\n",
+            "utf-8",
+          );
+        },
+      });
+    } finally {
+      fs.chmodSync(bundledDir, 0o755);
+    }
+
+    expect(registry?.plugins.find((entry) => entry.id === "telegram")?.status).toBe("loaded");
+    expect(fs.existsSync(path.join(bundledDir, "node_modules", "openclaw"))).toBe(false);
+  });
+
+  it("loads bundled plugins with plugin-sdk imports from a package dist root", () => {
+    const packageRoot = makeTempDir();
+    const bundledDir = path.join(packageRoot, "dist", "extensions");
+    const pluginRoot = path.join(bundledDir, "discord");
+    fs.mkdirSync(path.join(packageRoot, "dist", "plugin-sdk"), { recursive: true });
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.4.22", type: "module" }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(packageRoot, "dist", "plugin-sdk", "text-runtime.js"),
+      "export const normalizeLowercaseStringOrEmpty = (value) => String(value).toLowerCase();\n",
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginRoot, "index.js"),
+      [
+        `import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";`,
+        `export default {`,
+        `  id: "discord",`,
+        `  register(api) {`,
+        `    api.registerCommand({ name: normalizeLowercaseStringOrEmpty("DISCORD"), handler: () => "ok" });`,
+        `  },`,
+        `};`,
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginRoot, "package.json"),
+      JSON.stringify(
+        {
+          name: "@openclaw/discord",
+          version: "1.0.0",
+          type: "module",
+          openclaw: { extensions: ["./index.js"] },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginRoot, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "discord",
+          enabledByDefault: true,
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          enabled: true,
+        },
+      },
+    });
+
+    expect(registry.plugins.find((entry) => entry.id === "discord")?.status).toBe("loaded");
+  });
+
   it("loads dist-runtime wrappers from an external stage dir", () => {
     const packageRoot = makeTempDir();
     const stageDir = makeTempDir();
@@ -3936,6 +4118,27 @@ module.exports = { id: "throws-after-import", register() {} };`,
         assert: expectDuplicateRegistrationResult,
       },
       {
+        label: "gateway discovery service ids",
+        ownerA: "discovery-owner-a",
+        ownerB: "discovery-owner-b",
+        buildBody: (ownerId: string) => `module.exports = { id: "${ownerId}", register(api) {
+  api.registerGatewayDiscoveryService({ id: "shared-discovery", advertise() {} });
+} };`,
+        selectCount: (registry: ReturnType<typeof loadOpenClawPlugins>) =>
+          registry.gatewayDiscoveryServices.filter(
+            (entry) => entry.service.id === "shared-discovery",
+          ).length,
+        duplicateMessage:
+          "gateway discovery service already registered: shared-discovery (discovery-owner-a)",
+        assertPrimaryOwner: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+          expect(
+            registry.plugins.find((entry) => entry.id === "discovery-owner-a")
+              ?.gatewayDiscoveryServiceIds,
+          ).toEqual(["shared-discovery"]);
+        },
+        assert: expectDuplicateRegistrationResult,
+      },
+      {
         label: "plugin context engine ids",
         ownerA: "context-engine-owner-a",
         ownerB: "context-engine-owner-b",
@@ -4011,6 +4214,32 @@ module.exports = { id: "throws-after-import", register() {} };`,
         diag.message.includes("service already registered: shared-service"),
       ),
     ).toBe(false);
+  });
+
+  it("tracks regular services and gateway discovery services separately", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "split-service-owner",
+      filename: "split-service-owner.cjs",
+      body: `module.exports = { id: "split-service-owner", register(api) {
+  api.registerService({ id: "shared-service", start() {} });
+  api.registerGatewayDiscoveryService({ id: "shared-service", advertise() {} });
+} };`,
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["split-service-owner"],
+      },
+    });
+
+    const record = registry.plugins.find((entry) => entry.id === "split-service-owner");
+    expect(record?.services).toEqual(["shared-service"]);
+    expect(record?.gatewayDiscoveryServiceIds).toEqual(["shared-service"]);
+    expect(registry.services).toHaveLength(1);
+    expect(registry.gatewayDiscoveryServices).toHaveLength(1);
+    expect(registry.diagnostics).toEqual([]);
   });
 
   it("rewrites removed registerHttpHandler failures into migration diagnostics", () => {
@@ -5125,6 +5354,67 @@ module.exports = {
     expect(registry.typedHooks.map((entry) => entry.hookName)).toEqual([
       "before_prompt_build",
       "before_agent_start",
+    ]);
+  });
+
+  it("blocks conversation typed hooks for non-bundled plugins unless explicitly allowed", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "conversation-hooks",
+      filename: "conversation-hooks.cjs",
+      body: `module.exports = { id: "conversation-hooks", register(api) {
+  api.on("llm_input", () => undefined);
+  api.on("llm_output", () => undefined);
+  api.on("agent_end", () => undefined);
+} };`,
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["conversation-hooks"],
+      },
+    });
+
+    expect(registry.typedHooks).toEqual([]);
+    const blockedDiagnostics = registry.diagnostics.filter((diag) =>
+      diag.message.includes(
+        "non-bundled plugins must set plugins.entries.conversation-hooks.hooks.allowConversationAccess=true",
+      ),
+    );
+    expect(blockedDiagnostics).toHaveLength(3);
+  });
+
+  it("allows conversation typed hooks for non-bundled plugins when explicitly enabled", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "conversation-hooks-allowed",
+      filename: "conversation-hooks-allowed.cjs",
+      body: `module.exports = { id: "conversation-hooks-allowed", register(api) {
+  api.on("llm_input", () => undefined);
+  api.on("llm_output", () => undefined);
+  api.on("agent_end", () => undefined);
+} };`,
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["conversation-hooks-allowed"],
+        entries: {
+          "conversation-hooks-allowed": {
+            hooks: {
+              allowConversationAccess: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(registry.typedHooks.map((entry) => entry.hookName)).toEqual([
+      "llm_input",
+      "llm_output",
+      "agent_end",
     ]);
   });
 

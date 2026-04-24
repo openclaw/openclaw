@@ -3,10 +3,8 @@ summary: "Retry policy for outbound provider calls"
 read_when:
   - Updating provider retry behavior or defaults
   - Debugging provider send errors or rate limits
-title: "Retry Policy"
+title: "Retry policy"
 ---
-
-# Retry policy
 
 ## Goals
 
@@ -79,3 +77,8 @@ Set retry policy per provider in `~/.openclaw/openclaw.json`:
 
 - Retries apply per request (message send, media upload, reaction, poll, sticker).
 - Composite flows do not retry completed steps.
+
+## Related
+
+- [Model failover](/concepts/model-failover)
+- [Command queue](/concepts/queue)

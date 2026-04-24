@@ -70,10 +70,12 @@ describe("normalizePluginsConfig", () => {
       entry: {
         hooks: {
           allowPromptInjection: false,
+          allowConversationAccess: true,
         },
       },
       expectedHooks: {
         allowPromptInjection: false,
+        allowConversationAccess: true,
       },
     },
     {
@@ -81,7 +83,8 @@ describe("normalizePluginsConfig", () => {
       entry: {
         hooks: {
           allowPromptInjection: "nope",
-        } as unknown as { allowPromptInjection: boolean },
+          allowConversationAccess: "nope",
+        } as unknown as { allowPromptInjection: boolean; allowConversationAccess: boolean },
       },
       expectedHooks: undefined,
     },
@@ -94,12 +97,12 @@ describe("normalizePluginsConfig", () => {
       name: "normalizes plugin subagent override policy settings",
       subagent: {
         allowModelOverride: true,
-        allowedModels: [" anthropic/claude-sonnet-4-6 ", "", "openai/gpt-5.4"],
+        allowedModels: [" anthropic/claude-sonnet-4-6 ", "", "openai/gpt-5.5"],
       },
       expected: {
         allowModelOverride: true,
         hasAllowedModelsConfig: true,
-        allowedModels: ["anthropic/claude-sonnet-4-6", "openai/gpt-5.4"],
+        allowedModels: ["anthropic/claude-sonnet-4-6", "openai/gpt-5.5"],
       },
     },
     {

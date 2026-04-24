@@ -5,8 +5,6 @@ read_when:
 title: "WhatsApp"
 ---
 
-# WhatsApp (Web channel)
-
 Status: production-ready via WhatsApp Web (Baileys). Gateway owns linked session(s).
 
 ## Install (on demand)
@@ -65,6 +63,13 @@ openclaw channels login --channel whatsapp
     For a specific account:
 
 ```bash
+openclaw channels login --channel whatsapp --account work
+```
+
+    To attach an existing/custom WhatsApp Web auth directory before login:
+
+```bash
+openclaw channels add --channel whatsapp --account work --auth-dir /path/to/wa-auth
 openclaw channels login --channel whatsapp --account work
 ```
 
@@ -166,7 +171,7 @@ OpenClaw recommends running WhatsApp on a separate number when possible. (The ch
 
     - pairings are persisted in channel allow-store and merged with configured `allowFrom`
     - if no allowlist is configured, the linked self number is allowed by default
-    - outbound `fromMe` DMs are never auto-paired
+    - OpenClaw never auto-pairs outbound `fromMe` DMs (messages you send to yourself from the linked device)
 
   </Tab>
 
@@ -250,7 +255,7 @@ When the linked self number is also present in `allowFrom`, WhatsApp self-chat s
     - `<media:document>`
     - `<media:sticker>`
 
-    Location and contact payloads are normalized into textual context before routing.
+    Location bodies use terse coordinate text. Location labels/comments and contact/vCard details are rendered as fenced untrusted metadata, not inline prompt text.
 
   </Accordion>
 
@@ -560,7 +565,7 @@ Example:
 
 Primary reference:
 
-- [Configuration reference - WhatsApp](/gateway/configuration-reference#whatsapp)
+- [Configuration reference - WhatsApp](/gateway/config-channels#whatsapp)
 
 High-signal WhatsApp fields:
 
