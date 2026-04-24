@@ -536,6 +536,10 @@ Until then, OpenClaw's `before_compaction`, `after_compaction`, `llm_input`, and
 `llm_output` events are adapter-level observations, not byte-for-byte captures
 of Codex's internal request or compaction payloads.
 
+Codex native `hook/started` and `hook/completed` app-server notifications are
+projected as `codex_app_server.hook` agent events for trajectory and debugging.
+They do not invoke OpenClaw plugin hooks.
+
 ## Tools, media, and compaction
 
 The Codex harness changes the low-level embedded agent executor only.
