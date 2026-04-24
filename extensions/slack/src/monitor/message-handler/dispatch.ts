@@ -436,31 +436,39 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     err: SlackStreamNotDeliveredError,
   ): Promise<boolean> => {
     // The Slack SDK still owns this text in-memory; no streaming API call has
-    // acknowledged it. Send it once through normal chat.postMessage.
+    // acknowledged it. Route through deliverReplies so pendingText that
+    // exceeds Slack's per-message text limit still lands (a single
+    // chat.postMessage would have failed with msg_too_long), and so the
+    // fallback respects the configured replyToMode/identity the same way
+    // normal replies do.
     const fallbackText = err.pendingText.trim();
     if (!fallbackText) {
       return false;
     }
     try {
-      // Rename-bind to dodge eslint-plugin-unicorn/require-post-message-target-origin
-      // which cannot distinguish Slack chat.postMessage from window.postMessage.
-      const postChatMessage = ctx.app.client.chat.postMessage.bind(ctx.app.client.chat);
-      await postChatMessage({
-        channel: session.channel,
-        thread_ts: session.threadTs,
-        text: fallbackText,
+      await deliverReplies({
+        cfg: ctx.cfg,
+        replies: [{ text: fallbackText } as ReplyPayload],
+        target: prepared.replyTarget,
+        token: ctx.botToken,
+        accountId: account.accountId,
+        runtime,
+        textLimit: ctx.textLimit,
+        replyThreadTs: session.threadTs,
+        replyToMode: prepared.replyToMode,
+        ...(slackIdentity ? { identity: slackIdentity } : {}),
       });
       markSlackStreamFallbackDelivered(session);
       observedReplyDelivery = true;
       usedReplyThreadTs ??= session.threadTs;
       logVerbose(
-        `slack-stream: streamed delivery failed (${err.slackCode}); delivered ${fallbackText.length} chars via chat.postMessage fallback`,
+        `slack-stream: streamed delivery failed (${err.slackCode}); delivered ${fallbackText.length} chars via deliverReplies fallback`,
       );
       return true;
     } catch (postErr) {
       runtime.error?.(
         danger(
-          `slack-stream: fallback chat.postMessage failed after ${err.slackCode}: ${formatErrorMessage(postErr)}`,
+          `slack-stream: fallback deliverReplies failed after ${err.slackCode}: ${formatErrorMessage(postErr)}`,
         ),
       );
       return false;
@@ -636,6 +644,29 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         danger(`slack-stream: streaming API call failed: ${formatErrorMessage(err)}, falling back`),
       );
       streamFailed = true;
+      // Non-benign streaming errors leave `pendingText` populated with every
+      // buffered chunk since the last flush (appendSlackStream accumulates
+      // into pendingText BEFORE the SDK call, so the failing chunk is
+      // included too). Route the full buffer through the chunked fallback so
+      // earlier chunks aren't lost, then skip deliverNormally - pendingText
+      // already contains this payload's text.
+      if (streamSession && streamSession.pendingText) {
+        const bufferedFallbackErr = new SlackStreamNotDeliveredError(
+          streamSession.pendingText,
+          "unknown",
+        );
+        const delivered = await deliverPendingStreamFallback(streamSession, bufferedFallbackErr);
+        if (delivered) {
+          replyPlan.markSent();
+          deliveryTracker.markDelivered({
+            kind: params.kind,
+            payload: params.payload,
+            threadTs: streamSession.threadTs,
+            textOverride: text,
+          });
+          return;
+        }
+      }
       await deliverNormally({
         payload: params.payload,
         kind: params.kind,
