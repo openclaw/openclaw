@@ -604,7 +604,7 @@ private fun shouldPreferStructuredChannelFallback(
       ).isNullOrBlank()
   if (!hasStructuredFallback) return false
 
-  if (trimmed.matches(Regex("""\\d{4,}"""))) {
+  if (trimmed.matches(Regex("""\d{4,}"""))) {
     return true
   }
 
@@ -618,10 +618,10 @@ private fun shouldPreferStructuredChannelFallback(
 }
 
 private fun looksLikePersonalName(value: String): Boolean {
-  val words = value.trim().split(Regex("""\\s+""")).filter { it.isNotBlank() }
+  val words = value.trim().split(Regex("""\s+""")).filter { it.isNotBlank() }
   if (words.size !in 2..4) return false
   return words.all { word ->
-    word.matches(Regex("""^[\\p{Lu}][\\p{L}'’-]*$"""))
+    word.matches(Regex("""^\p{Lu}[\p{L}'’-]*$"""))
   }
 }
 
