@@ -24,28 +24,18 @@ export function resolveBrowserControlAuth(
   });
   const token = normalizeOptionalString(auth.token) ?? "";
   const password = normalizeOptionalString(auth.password) ?? "";
-  const mode = cfg?.gateway?.auth?.mode;
+  const mode = auth.mode;
 
-  if (mode === "password") {
-    return { password: password || undefined };
+  switch (mode) {
+    case "password":
+    case "trusted-proxy":
+      return { password: password || undefined };
+    case "token":
+    case "none":
+      return { token: token || undefined };
+    default:
+      return {};
   }
-
-  if (mode === "trusted-proxy") {
-    return { password: password || undefined };
-  }
-
-  if (mode === "none") {
-    return { token: token || undefined };
-  }
-
-  if (mode === "token") {
-    return { token: token || undefined };
-  }
-
-  return {
-    token: token || undefined,
-    password: password || undefined,
-  };
 }
 
 export function shouldAutoGenerateBrowserAuth(env: NodeJS.ProcessEnv): boolean {
