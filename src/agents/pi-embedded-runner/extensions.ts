@@ -37,7 +37,7 @@ function recordFromUnknown(value: unknown): Record<string, unknown> {
 
 function buildAgentToolResultMiddlewareFactory(): ExtensionFactory {
   const handlers = listAgentToolResultMiddlewares("pi");
-  const runner = createAgentToolResultMiddlewareRunner({ harness: "pi" }, handlers);
+  const runner = createAgentToolResultMiddlewareRunner({ runtime: "pi" }, handlers);
   return (pi) => {
     pi.on("tool_result", async (rawEvent: unknown, ctx: { cwd?: string }) => {
       if (handlers.length === 0) {

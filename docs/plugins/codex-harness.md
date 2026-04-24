@@ -25,7 +25,7 @@ These are in-process OpenClaw hooks, not Codex `hooks.json` command hooks:
 - `before_message_write` for mirrored transcript records
 - `agent_end`
 
-Plugins can also register harness-neutral tool-result middleware to rewrite
+Plugins can also register runtime-neutral tool-result middleware to rewrite
 OpenClaw dynamic tool results after OpenClaw executes the tool and before the
 result is returned to Codex. This is separate from the public
 `tool_result_persist` plugin hook, which transforms OpenClaw-owned transcript
@@ -35,8 +35,8 @@ The harness is off by default. New configs should keep OpenAI model refs
 canonical as `openai/gpt-*` and explicitly force
 `embeddedHarness.runtime: "codex"` or `OPENCLAW_AGENT_RUNTIME=codex` when they
 want native app-server execution. Legacy `codex/*` model refs still auto-select
-the harness for compatibility, but they are not shown as normal model/provider
-choices.
+the harness for compatibility, but runtime-backed legacy provider prefixes are
+not shown as normal model/provider choices.
 
 ## Pick the right model prefix
 
@@ -56,10 +56,12 @@ app-server harness. Direct API-key access for `openai/gpt-5.5` is supported
 once OpenAI enables GPT-5.5 on the public API.
 
 Legacy `codex/gpt-*` refs remain accepted as compatibility aliases. Doctor
-compatibility migration rewrites legacy primary `codex/*` refs to `openai/*`
-and records the Codex harness policy separately. New PI Codex OAuth configs
-should use `openai-codex/gpt-*`; new native app-server harness configs should
-use `openai/gpt-*` plus `embeddedHarness.runtime: "codex"`.
+compatibility migration rewrites legacy primary runtime refs to canonical model
+refs and records the runtime policy separately, while fallback-only legacy refs
+are left unchanged because runtime is configured for the whole agent container.
+New PI Codex OAuth configs should use `openai-codex/gpt-*`; new native
+app-server harness configs should use `openai/gpt-*` plus
+`embeddedHarness.runtime: "codex"`.
 
 `agents.defaults.imageModel` follows the same prefix split. Use
 `openai-codex/gpt-*` when image understanding should run through the OpenAI
@@ -86,9 +88,9 @@ Legacy sessions created before harness pins are treated as PI-pinned once they
 have transcript history. Use `/new` or `/reset` to opt that conversation into
 Codex after changing config.
 
-`/status` shows the effective non-PI harness next to `Fast`, for example
-`Fast · codex`. The default PI harness remains `Runner: pi (embedded)` and does
-not add a separate harness badge.
+`/status` shows the effective model runtime. The default PI harness appears as
+`Runtime: OpenClaw Pi Default`, and the Codex app-server harness appears as
+`Runtime: OpenAI Codex`.
 
 ## Requirements
 

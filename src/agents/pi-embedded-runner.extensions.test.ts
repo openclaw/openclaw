@@ -36,7 +36,7 @@ describe("buildEmbeddedExtensionFactories", () => {
         event.result.content = [{ type: "text", text: `compacted ${seenToolCallIds.length}` }];
         return undefined;
       },
-      harnesses: ["pi"],
+      runtimes: ["pi"],
       source: "test",
     });
     setActivePluginRegistry(registry);
