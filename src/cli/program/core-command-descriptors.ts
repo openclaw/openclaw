@@ -90,6 +90,11 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
     description: "Inspect durable background task state",
     hasSubcommands: true,
   },
+  {
+    name: "provision",
+    description: "Install and start a local Gemma backend (Ollama, llama.cpp, or gemma.cpp)",
+    hasSubcommands: false,
+  },
 ] as const satisfies ReadonlyArray<CoreCliCommandDescriptor>);
 
 export const CORE_CLI_COMMAND_DESCRIPTORS = coreCliCommandCatalog.descriptors;

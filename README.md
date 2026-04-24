@@ -47,10 +47,87 @@ Planning is active. Phase 1 benchmarks are scoped but execution is gated by evid
 
 ## Getting started
 
-Until Gemmaclaw ships its own tooling, the recommended path is:
+### Prerequisites
 
-1. Follow the upstream [OpenClaw getting started guide](https://docs.openclaw.ai/start/getting-started).
-2. Check this repo for Gemma-specific notes, configs, and examples as they land.
+- Node.js 22+ and pnpm
+- For gemma.cpp backend: cmake, g++ (or clang++), and git
+- For gemma.cpp model downloads: a [HuggingFace token](https://huggingface.co/settings/tokens) (`HF_TOKEN` env var)
+
+No pre-installed Ollama, llama.cpp, or gemma.cpp required. Gemmaclaw downloads and manages everything.
+
+### Install
+
+```bash
+git clone https://github.com/gemmaclaw/gemmaclaw.git
+cd gemmaclaw
+pnpm install
+pnpm build
+```
+
+### Provision a backend
+
+Pick a backend and provision it. This downloads the runtime, pulls the smallest known-working Gemma model, starts the server, and verifies a chat completion:
+
+```bash
+# Ollama (recommended for GPU setups, ~815 MB model download)
+node gemmaclaw.mjs provision --backend ollama
+
+# llama.cpp (flexible quants, ~726 MB GGUF download)
+node gemmaclaw.mjs provision --backend llama-cpp
+
+# gemma.cpp (CPU-first, requires cmake/g++, ~5 GB model download)
+HF_TOKEN=hf_... node gemmaclaw.mjs provision --backend gemma-cpp
+```
+
+The command prints the API base URL and PID when done. The backend stays running in the background.
+
+### Verify it works
+
+After provisioning, the backend serves an OpenAI-compatible API at `http://127.0.0.1:<port>/v1/chat/completions`. Test it:
+
+```bash
+curl http://127.0.0.1:11434/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model":"gemma3:1b","messages":[{"role":"user","content":"Say hello"}]}'
+```
+
+Ports: Ollama = 11434, llama.cpp = 8080, gemma.cpp = 11436.
+
+### Troubleshooting
+
+- **Ollama download fails**: check network connectivity. The binary is downloaded from GitHub releases.
+- **llama.cpp server won't start**: verify the model file exists at `~/.gemmaclaw/models/llama-cpp/`. Re-run provision to re-download.
+- **gemma.cpp build fails**: ensure cmake and g++ are installed (`apt-get install cmake g++`). Check that git submodules initialized correctly.
+- **gemma.cpp model download fails**: verify `HF_TOKEN` is set and has access to the gated Gemma model on HuggingFace.
+- **"Healthcheck failed"**: the backend process started but did not respond in time. Check system resources (RAM, disk). Increase timeout by re-provisioning on a faster machine.
+- **Port already in use**: another process is using the default port. Use `--port <N>` to pick a different one.
+
+### Data directory
+
+All managed runtimes and models are stored under `~/.gemmaclaw/` (override with `GEMMACLAW_HOME`):
+
+```
+~/.gemmaclaw/
+  runtimes/       # Downloaded/built backend binaries
+  models/         # Downloaded model files
+```
+
+### Running E2E tests in Docker
+
+To verify all backends work from a clean environment:
+
+```bash
+# Build the E2E image
+docker build -f test/e2e/Dockerfile.provision -t gemmaclaw-provision-e2e .
+
+# Test individual backends
+docker run --rm gemmaclaw-provision-e2e ollama
+docker run --rm gemmaclaw-provision-e2e llama-cpp
+docker run --rm -e HF_TOKEN=hf_... gemmaclaw-provision-e2e gemma-cpp
+
+# Test all
+docker run --rm -e HF_TOKEN=hf_... gemmaclaw-provision-e2e all
+```
 
 ## Contributing
 

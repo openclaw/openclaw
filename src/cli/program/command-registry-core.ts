@@ -115,6 +115,11 @@ const coreEntrySpecs: readonly CommandGroupDescriptorSpec<
         loadModule: () => import("./register.status-health-sessions.js"),
         exportName: "registerStatusHealthSessionsCommands",
       },
+      {
+        commandNames: ["provision"],
+        loadModule: () => import("./register.provision.js"),
+        exportName: "registerProvisionCommand",
+      },
     ]),
   ),
 ];

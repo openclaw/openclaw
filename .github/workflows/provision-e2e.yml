@@ -1,0 +1,69 @@
+name: Provision E2E
+
+on:
+  pull_request:
+    paths:
+      - "src/gemmaclaw/**"
+      - "src/commands/provision.ts"
+      - "src/cli/program/register.provision.ts"
+      - "test/e2e/Dockerfile.provision"
+      - "test/e2e/provision-e2e.sh"
+      - ".github/workflows/provision-e2e.yml"
+  workflow_dispatch:
+    inputs:
+      backend:
+        description: "Backend to test (ollama, llama-cpp, gemma-cpp, all)"
+        required: false
+        default: "ollama"
+
+concurrency:
+  group: provision-e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  provision-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [ollama, llama-cpp]
+        # gemma-cpp requires HF_TOKEN and large downloads; run separately.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build E2E image
+        run: |
+          docker build \
+            -f test/e2e/Dockerfile.provision \
+            -t gemmaclaw-provision-e2e \
+            .
+
+      - name: Run E2E (${{ matrix.backend }})
+        run: |
+          docker run --rm \
+            gemmaclaw-provision-e2e \
+            ${{ matrix.backend }}
+
+  provision-e2e-gemmacpp:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'test-gemma-cpp')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build E2E image
+        run: |
+          docker build \
+            -f test/e2e/Dockerfile.provision \
+            -t gemmaclaw-provision-e2e \
+            .
+
+      - name: Run E2E (gemma-cpp)
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          docker run --rm \
+            -e HF_TOKEN="$HF_TOKEN" \
+            gemmaclaw-provision-e2e \
+            gemma-cpp

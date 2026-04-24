@@ -1,0 +1,71 @@
+# Dockerfile for Gemmaclaw provision E2E tests.
+#
+# Tests each backend (Ollama, llama.cpp, gemma.cpp) end-to-end:
+#   1. Install/detect the runtime
+#   2. Pull the smallest known-working model
+#   3. Send a chat completion request and assert non-empty reply
+#
+# Note: Ollama binary (1.7GB .tgz) is pre-installed during build to avoid
+# CI timeout issues. The E2E test still exercises model pull + inference.
+#
+# Usage:
+#   docker build -f test/e2e/Dockerfile.provision -t gemmaclaw-provision-e2e .
+#   docker run --rm gemmaclaw-provision-e2e ollama
+#   docker run --rm gemmaclaw-provision-e2e llama-cpp
+#   docker run --rm -e HF_TOKEN=<token> gemmaclaw-provision-e2e gemma-cpp
+#   docker run --rm -e HF_TOKEN=<token> gemmaclaw-provision-e2e all
+
+FROM node:24-bookworm
+
+# Build tools for gemma.cpp (cmake, g++, git) and test utilities.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    cmake g++ git unzip curl ca-certificates lsof zstd \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install pnpm globally.
+RUN corepack enable && corepack prepare pnpm@10.33.0 --activate
+
+WORKDIR /app
+
+# Copy package files first for better caching.
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc* ./
+COPY scripts/ scripts/
+COPY packages/ packages/
+COPY extensions/ extensions/
+COPY patches/ patches/
+
+# Fix workspace resolution: extensions reference "openclaw" workspace dep for
+# upstream compat, but the root package was rebranded to "gemmaclaw". Temporarily
+# set the root package name to "openclaw" so pnpm can resolve workspace:* refs.
+RUN node -e "const p=require('./package.json'); p.name='openclaw'; require('fs').writeFileSync('package.json', JSON.stringify(p, null, 2)+'\n')"
+
+# Install dependencies.
+RUN pnpm install --frozen-lockfile || pnpm install
+
+# Copy the rest of the source.
+COPY . .
+
+# Re-apply the workspace name fix after COPY . . overwrites package.json.
+RUN node -e "const p=require('./package.json'); p.name='openclaw'; require('fs').writeFileSync('package.json', JSON.stringify(p, null, 2)+'\n')"
+
+# Build the project.
+RUN pnpm build
+
+# Pre-install Ollama binary (1.7GB .tgz) during build to avoid CI timeout.
+# The provision code detects it via PATH and skips download, testing only
+# model pull + inference.
+RUN curl -fsSL https://ollama.com/install.sh | sh
+
+# Set up user-space install directory.
+ENV HOME=/home/testuser
+ENV GEMMACLAW_HOME=/home/testuser/.gemmaclaw
+RUN useradd -m testuser
+USER testuser
+RUN mkdir -p $GEMMACLAW_HOME
+
+# Copy the E2E test script.
+COPY --chown=testuser:testuser test/e2e/provision-e2e.sh /app/test/e2e/provision-e2e.sh
+RUN chmod +x /app/test/e2e/provision-e2e.sh
+
+ENTRYPOINT ["/app/test/e2e/provision-e2e.sh"]
+CMD ["ollama"]
