@@ -78,9 +78,15 @@ describe("browser remote profile tab ops via Playwright", () => {
       ["A", "t1"],
       ["B", "t2"],
     ]);
+    expect(tabs.map((tab) => tab.suggestedTargetId)).toEqual(["t1", "t2"]);
 
     const labeled = await remote.labelTab("t2", "docs");
-    expect(labeled).toMatchObject({ targetId: "B", tabId: "t2", label: "docs" });
+    expect(labeled).toMatchObject({
+      targetId: "B",
+      suggestedTargetId: "docs",
+      tabId: "t2",
+      label: "docs",
+    });
 
     await remote.focusTab("docs");
     expect(focusPageByTargetIdViaPlaywright).toHaveBeenCalledWith(

@@ -41,7 +41,7 @@ describe("browser target id resolution", () => {
     expect(
       resolveTargetIdFromTabs("t2", [
         { targetId: "AAA", tabId: "t1" },
-        { targetId: "BBB", tabId: "t2", label: "docs" },
+        { targetId: "BBB", suggestedTargetId: "docs", tabId: "t2", label: "docs" },
       ]),
     ).toEqual({ ok: true, targetId: "BBB" });
     expect(

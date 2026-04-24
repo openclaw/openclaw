@@ -120,10 +120,11 @@ openclaw browser focus docs
 openclaw browser close t1
 ```
 
-`tabs` returns the raw `targetId` plus a stable `tabId` such as `t1`. You can
-also assign a label with `open --label`, `tab new --label`, or `tab label`.
-`focus`, `close`, snapshots, and actions accept the raw `targetId`, `tabId`,
-label, or a unique target-id prefix.
+`tabs` returns `suggestedTargetId` first, then the stable `tabId` such as `t1`,
+the optional label, and the raw `targetId`. Agents should pass
+`suggestedTargetId` back into `focus`, `close`, snapshots, and actions. You can
+assign a label with `open --label`, `tab new --label`, or `tab label`; labels,
+tab ids, raw target ids, and unique target-id prefixes are all accepted.
 
 ## Snapshot / screenshot / actions
 

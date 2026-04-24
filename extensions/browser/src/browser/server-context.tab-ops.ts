@@ -104,7 +104,13 @@ function assignTabAlias(params: {
     }
     entry.label = label;
   }
-  return { ...params.tab, tabId: entry.tabId, ...(entry.label ? { label: entry.label } : {}) };
+  const labelFields = entry.label ? { label: entry.label } : {};
+  return {
+    ...params.tab,
+    suggestedTargetId: entry.label ?? entry.tabId,
+    tabId: entry.tabId,
+    ...labelFields,
+  };
 }
 
 function assignTabAliases(profileState: ProfileRuntimeState, tabs: BrowserTab[]): BrowserTab[] {
