@@ -250,6 +250,18 @@ async function buildGatewayInstallEnvironment(params: {
   const managedServiceEnvKeys = formatManagedServiceEnvKeys(managedEnvironment);
   if (managedServiceEnvKeys) {
     environment[MANAGED_SERVICE_ENV_KEYS_VAR] = managedServiceEnvKeys;
+    // Remove literal values for managed keys.  The gateway loads them from
+    // .env at runtime via loadRuntimeDotEnvFile; embedding them in the
+    // plist prevents that load and leaves stale values after .env changes
+    // (see #70612).
+    const managedKeySet = new Set(
+      managedServiceEnvKeys.split(",").map((k) => k.trim().toUpperCase()),
+    );
+    for (const key of Object.keys(environment)) {
+      if (managedKeySet.has(key.toUpperCase())) {
+        delete environment[key];
+      }
+    }
   }
   return environment;
 }

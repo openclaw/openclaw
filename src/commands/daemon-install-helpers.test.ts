@@ -194,14 +194,16 @@ describe("buildGatewayInstallPlan", () => {
       },
     });
 
-    expect(plan.environment.GOOGLE_API_KEY).toBe("test-key");
-    expect(plan.environment.CUSTOM_VAR).toBe("custom-value");
-    expect(plan.environment.SAFE_KEY).toBe("safe-value");
+    // Managed keys' literal values are removed from the plist so the gateway
+    // loads fresh values from .env at runtime (see #70612).
+    expect(plan.environment.GOOGLE_API_KEY).toBeUndefined();
+    expect(plan.environment.CUSTOM_VAR).toBeUndefined();
+    expect(plan.environment.SAFE_KEY).toBeUndefined();
+    expect(plan.environment.OPENCLAW_PORT).toBeUndefined();
     expect(plan.environment.NODE_OPTIONS).toBeUndefined();
     expect(plan.environment.EMPTY_KEY).toBeUndefined();
     expect(plan.environment.TRIMMED_KEY).toBeUndefined();
     expect(plan.environment.HOME).toBe("/Users/service");
-    expect(plan.environment.OPENCLAW_PORT).toBe("3000");
     expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBe(
       "CUSTOM_VAR,GOOGLE_API_KEY,OPENCLAW_PORT,SAFE_KEY",
     );
@@ -250,7 +252,8 @@ describe("buildGatewayInstallPlan", () => {
       },
     });
 
-    expect(plan.environment.OPENAI_API_KEY).toBe("sk-openai-test");
+    expect(plan.environment.OPENAI_API_KEY).toBeUndefined();
+    expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBe("OPENAI_API_KEY");
     expect(mocks.hasAnyAuthProfileStoreSource).not.toHaveBeenCalled();
     expect(mocks.loadAuthProfileStoreForSecretsRuntime).not.toHaveBeenCalled();
   });
@@ -314,8 +317,11 @@ describe("buildGatewayInstallPlan", () => {
     expect(plan.environment.GIT_ASKPASS).toBeUndefined();
     expect(plan.environment["BAD KEY"]).toBeUndefined();
     expect(plan.environment.MISSING_TOKEN).toBeUndefined();
-    expect(plan.environment.OPENAI_API_KEY).toBe("sk-openai-test");
-    expect(plan.environment.ANTHROPIC_TOKEN).toBe("ant-test-token");
+    expect(plan.environment.OPENAI_API_KEY).toBeUndefined();
+    expect(plan.environment.ANTHROPIC_TOKEN).toBeUndefined();
+    expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBe(
+      "ANTHROPIC_TOKEN,OPENAI_API_KEY",
+    );
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("NODE_OPTIONS"), "Auth profile");
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("GIT_ASKPASS"), "Auth profile");
   });
@@ -359,11 +365,14 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
       },
     });
 
-    expect(plan.environment.BRAVE_API_KEY).toBe("BSA-from-env");
-    expect(plan.environment.OPENROUTER_API_KEY).toBe("or-key");
-    expect(plan.environment.MY_KEY).toBe("from-config");
+    expect(plan.environment.BRAVE_API_KEY).toBeUndefined();
+    expect(plan.environment.OPENROUTER_API_KEY).toBeUndefined();
+    expect(plan.environment.MY_KEY).toBeUndefined();
     expect(plan.environment.HOME).toBe("/from-service");
     expect(plan.environment.OPENCLAW_PORT).toBe("3000");
+    expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBe(
+      "BRAVE_API_KEY,MY_KEY,OPENROUTER_API_KEY",
+    );
   });
 
   it("works when .env file does not exist", async () => {
