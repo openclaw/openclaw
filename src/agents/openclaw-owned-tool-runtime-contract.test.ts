@@ -1,15 +1,20 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   installOpenClawOwnedToolHooks,
   resetOpenClawOwnedToolHooks,
   textToolResult,
 } from "../../test/helpers/agents/openclaw-owned-tool-runtime-contract.js";
+import type { MessagingToolSend } from "./pi-embedded-messaging.types.js";
 import {
   handleToolExecutionEnd,
   handleToolExecutionStart,
 } from "./pi-embedded-subscribe.handlers.tools.js";
-import type { ToolHandlerContext } from "./pi-embedded-subscribe.handlers.types.js";
+import type {
+  ToolCallSummary,
+  ToolHandlerContext,
+} from "./pi-embedded-subscribe.handlers.types.js";
 import { toToolDefinitions } from "./pi-tool-definition-adapter.js";
 import { createBaseToolHandlerState } from "./pi-tool-handler-state.test-helpers.js";
 import { wrapToolWithBeforeToolCallHook } from "./pi-tools.before-tool-call.js";
@@ -34,10 +39,12 @@ function createToolHandlerCtx(): ToolHandlerContext {
       agentId: "agent-1",
       sessionId: "session-1",
       sessionKey: "agent:agent-1:session-1",
-      session: { messages: [] },
     },
     state: {
       ...createBaseToolHandlerState(),
+      toolMetaById: new Map<string, ToolCallSummary>(),
+      pendingMessagingTargets: new Map<string, MessagingToolSend>(),
+      messagingToolSentTargets: [] as MessagingToolSend[],
       successfulCronAdds: 0,
     },
     log: { debug: vi.fn(), warn: vi.fn() },
@@ -78,6 +85,10 @@ function toolExecutionEndEvent(params: {
   } as ToolExecutionEndEvent;
 }
 
+function createToolExtensionContext(): ExtensionContext {
+  return {} as ExtensionContext;
+}
+
 describe("OpenClaw-owned tool runtime contract — Pi adapter", () => {
   afterEach(() => {
     resetOpenClawOwnedToolHooks();
@@ -110,7 +121,13 @@ describe("OpenClaw-owned tool runtime contract — Pi adapter", () => {
         args: originalParams,
       }),
     );
-    const result = await definition.execute(toolCallId, originalParams, undefined, undefined, {});
+    const result = await definition.execute(
+      toolCallId,
+      originalParams,
+      undefined,
+      undefined,
+      createToolExtensionContext(),
+    );
     await handleToolExecutionEnd(
       ctx,
       toolExecutionEndEvent({
@@ -175,7 +192,13 @@ describe("OpenClaw-owned tool runtime contract — Pi adapter", () => {
         args: originalParams,
       }),
     );
-    const result = await definition.execute(toolCallId, originalParams, undefined, undefined, {});
+    const result = await definition.execute(
+      toolCallId,
+      originalParams,
+      undefined,
+      undefined,
+      createToolExtensionContext(),
+    );
     expect(result).toEqual(
       expect.objectContaining({
         details: expect.objectContaining({
@@ -243,7 +266,13 @@ describe("OpenClaw-owned tool runtime contract — Pi adapter", () => {
         args: originalParams,
       }),
     );
-    const result = await definition.execute(toolCallId, originalParams, undefined, undefined, {});
+    const result = await definition.execute(
+      toolCallId,
+      originalParams,
+      undefined,
+      undefined,
+      createToolExtensionContext(),
+    );
     expect(result).toEqual(
       expect.objectContaining({
         details: expect.objectContaining({
