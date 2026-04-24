@@ -576,6 +576,11 @@ rather than the pre-handshake defaults.
   - `gateway.controlUi.allowInsecureAuth=true` for localhost-only insecure HTTP compatibility.
   - successful `gateway.auth.mode: "trusted-proxy"` operator Control UI auth.
   - `gateway.controlUi.dangerouslyDisableDeviceAuth=true` (break-glass, severe security downgrade).
+- **Omitting device identity has scope consequences.** When a Control UI connection
+  lacks device identity, `shouldClearUnboundScopesForMissingDeviceIdentity` clears
+  self-declared scopes to an empty set (for token, password, and trusted-proxy auth).
+  The connection is allowed, but scope-gated methods will fail. Set
+  `gateway.controlUi.dangerouslyDisableDeviceAuth=true` to preserve scopes.
 - All connections must sign the server-provided `connect.challenge` nonce.
 
 ### Device auth migration diagnostics

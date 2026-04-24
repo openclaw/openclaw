@@ -46,6 +46,17 @@ Implications:
 - Your reverse proxy auth policy and `allowUsers` become the effective access control.
 - Keep gateway ingress locked to trusted proxy IPs only (`gateway.trustedProxies` + firewall).
 
+**Scope clearing without device identity:** Because the browser over plain HTTP
+cannot create the device identity that OpenClaw uses to bind operator scopes,
+trusted-proxy WebSocket connections that lack device identity have their self-declared
+scopes cleared to an empty set. The connection is allowed, but scope-gated methods
+(`operator.read`, `operator.write`, etc.) will fail with `missing scope`.
+
+To preserve operator scopes on trusted-proxy WebSocket connections without device
+identity, set `gateway.controlUi.dangerouslyDisableDeviceAuth: true`. This is safe
+in single-user, private-network deployments where the reverse proxy is the only
+path to the Gateway.
+
 ## Configuration
 
 ```json5
@@ -273,6 +284,12 @@ Loopback trusted-proxy auth also fails closed: same-host callers must supply the
 Trusted-proxy auth is an **identity-bearing** HTTP mode, so callers may
 optionally declare operator scopes with `x-openclaw-scopes`.
 
+**This header applies to HTTP API endpoints only** (OpenAI chat completions,
+OpenResponses, Tools Invoke, and other REST endpoints). It does **not** affect
+WebSocket connections — WebSocket scopes are determined by the Gateway protocol
+handshake and device identity binding. For WebSocket scope behavior with
+trusted-proxy auth, see [Control UI Pairing Behavior](#control-ui-pairing-behavior).
+
 Examples:
 
 - `x-openclaw-scopes: operator.read`
@@ -289,7 +306,7 @@ Behavior:
 
 Practical rule:
 
-- Send `x-openclaw-scopes` explicitly when you want a trusted-proxy request to
+- Send `x-openclaw-scopes` explicitly when you want a trusted-proxy HTTP request to
   be narrower than the defaults, or when a gateway-auth plugin route needs
   something stronger than write scope.
 
@@ -378,6 +395,21 @@ Make sure your proxy:
 - Supports WebSocket upgrades (`Upgrade: websocket`, `Connection: upgrade`)
 - Passes the identity headers on WebSocket upgrade requests (not just HTTP)
 - Doesn't have a separate auth path for WebSocket connections
+
+### Connection Succeeds but Methods Report "missing scope"
+
+The WebSocket connection establishes successfully, but methods like `node.list`,
+`chat.history`, or `sessions.list` fail with `missing scope: operator.read`.
+
+This is expected behavior: trusted-proxy WebSocket connections without device
+identity have their scopes cleared. The browser cannot generate device identity
+over plain HTTP (Web Crypto API requires secure context).
+
+Fix:
+
+- Set `gateway.controlUi.dangerouslyDisableDeviceAuth: true` to preserve operator scopes on trusted-proxy WebSocket connections
+- Serve the Control UI over HTTPS so the browser can generate device identity, or
+- Use token/password auth for same-host loopback proxy setups
 
 ## Migration from Token Auth
 
