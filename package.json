@@ -525,6 +525,10 @@
       "types": "./dist/plugin-sdk/command-gating.d.ts",
       "default": "./dist/plugin-sdk/command-gating.js"
     },
+    "./plugin-sdk/command-primitives-runtime": {
+      "types": "./dist/plugin-sdk/command-primitives-runtime.d.ts",
+      "default": "./dist/plugin-sdk/command-primitives-runtime.js"
+    },
     "./plugin-sdk/command-status": {
       "types": "./dist/plugin-sdk/command-status.d.ts",
       "default": "./dist/plugin-sdk/command-status.js"
