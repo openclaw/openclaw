@@ -42,6 +42,14 @@ export type BundledRuntimeDepsInstallRoot = {
 
 type JsonObject = Record<string, unknown>;
 const RETAINED_RUNTIME_DEPS_MANIFEST = ".openclaw-runtime-deps.json";
+// Packaged bundled plugins (Docker image, npm global install) keep their
+// `package.json` next to their entry point; running `npm install <specs>` with
+// `cwd: pluginRoot` would make npm resolve the plugin's own `workspace:*`
+// dependencies and fail with `EUNSUPPORTEDPROTOCOL`. To avoid that, stage the
+// install inside this sub-directory and move the produced `node_modules/` back
+// to the plugin root. Source-checkout installs already have their own cache
+// path and keep using it.
+const PLUGIN_ROOT_INSTALL_STAGE_DIR = ".openclaw-install-stage";
 
 export type BundledRuntimeDepsNpmRunner = {
   command: string;
@@ -920,12 +928,16 @@ export function ensureBundledPluginRuntimeDeps(params: {
     pluginRoot: params.pluginRoot,
     installSpecs,
   });
-  const installExecutionRoot =
+  const isPluginRootInstall = path.resolve(installRoot) === path.resolve(params.pluginRoot);
+  const sourceCheckoutCacheStage =
     cacheDir &&
-    path.resolve(installRoot) === path.resolve(params.pluginRoot) &&
+    isPluginRootInstall &&
     resolveSourceCheckoutBundledPluginPackageRoot(params.pluginRoot)
       ? cacheDir
       : undefined;
+  const installExecutionRoot =
+    sourceCheckoutCacheStage ??
+    (isPluginRootInstall ? path.join(installRoot, PLUGIN_ROOT_INSTALL_STAGE_DIR) : undefined);
   if (
     restoreSourceCheckoutRuntimeDepsFromCache({
       cacheDir,
