@@ -597,29 +597,131 @@ describe("loadChatHistory", () => {
     expect(state.chatMessages).toEqual([messages[0], messages[2]]);
   });
 
-  it("keeps a user message even if it matches the synthetic repair text", async () => {
-    const messages = [
-      {
-        role: "user",
-        content: [
-          {
-            type: "text",
-            text: "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.",
+  it("preserves optimistic user text+image message when history has not caught up yet", async () => {
+    const request = vi.fn().mockResolvedValue({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "older reply" }] }],
+    });
+    const optimisticMessage = {
+      role: "user",
+      timestamp: 100,
+      content: [
+        { type: "text", text: "look" },
+        {
+          type: "image",
+          source: {
+            type: "base64",
+            media_type: "image/png",
+            data: "data:image/png;base64,AAA",
           },
-        ],
-      },
-    ];
-    const mockClient = {
-      request: vi.fn().mockResolvedValue({ messages }),
+        },
+      ],
     };
     const state = createState({
-      client: mockClient as unknown as ChatState["client"],
+      client: { request } as unknown as ChatState["client"],
       connected: true,
+      chatMessages: [optimisticMessage],
     });
 
     await loadChatHistory(state);
 
-    expect(state.chatMessages).toEqual(messages);
+    expect(state.chatMessages).toEqual([
+      { role: "assistant", content: [{ type: "text", text: "older reply" }] },
+      optimisticMessage,
+    ]);
+  });
+
+  it("preserves optimistic user image-only message when history has not caught up yet", async () => {
+    const request = vi.fn().mockResolvedValue({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "older reply" }] }],
+    });
+    const optimisticImageOnlyMessage = {
+      role: "user",
+      timestamp: 101,
+      content: [
+        {
+          type: "image",
+          source: {
+            type: "base64",
+            media_type: "image/jpeg",
+            data: "data:image/jpeg;base64,BBB",
+          },
+        },
+      ],
+    };
+    const state = createState({
+      client: { request } as unknown as ChatState["client"],
+      connected: true,
+      chatMessages: [optimisticImageOnlyMessage],
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([
+      { role: "assistant", content: [{ type: "text", text: "older reply" }] },
+      optimisticImageOnlyMessage,
+    ]);
+  });
+
+  it("does not duplicate optimistic user message once equivalent history arrives", async () => {
+    const optimisticMessage = {
+      role: "user",
+      timestamp: 100,
+      content: [
+        { type: "text", text: "look" },
+        {
+          type: "image",
+          source: {
+            type: "base64",
+            media_type: "image/png",
+            data: "data:image/png;base64,AAA",
+          },
+        },
+      ],
+    };
+    const request = vi.fn().mockResolvedValue({
+      messages: [
+        { role: "assistant", content: [{ type: "text", text: "older reply" }] },
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "look" },
+            {
+              type: "image",
+              source: {
+                type: "base64",
+                media_type: "image/png",
+                data: "data:image/png;base64,AAA",
+              },
+            },
+          ],
+        },
+      ],
+    });
+    const state = createState({
+      client: { request } as unknown as ChatState["client"],
+      connected: true,
+      chatMessages: [optimisticMessage],
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([
+      { role: "assistant", content: [{ type: "text", text: "older reply" }] },
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "look" },
+          {
+            type: "image",
+            source: {
+              type: "base64",
+              media_type: "image/png",
+              data: "data:image/png;base64,AAA",
+            },
+          },
+        ],
+      },
+    ]);
   });
 });
 

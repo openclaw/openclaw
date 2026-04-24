@@ -18,6 +18,107 @@ const STARTUP_CHAT_HISTORY_DEFAULT_RETRY_MS = 500;
 const STARTUP_CHAT_HISTORY_MAX_RETRY_MS = 5_000;
 const chatHistoryRequestVersions = new WeakMap<object, number>();
 
+type ChatMessageLike = Record<string, unknown>;
+
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object";
+}
+
+function normalizeRole(value: unknown): string {
+  return typeof value === "string" ? normalizeLowercaseStringOrEmpty(value) : "";
+}
+
+function normalizeMessageContentBlocks(message: unknown): Array<Record<string, unknown>> {
+  if (!isObjectRecord(message)) {
+    return [];
+  }
+  const content = message.content;
+  if (Array.isArray(content)) {
+    return content.filter(isObjectRecord);
+  }
+  if (typeof content === "string") {
+    return [{ type: "text", text: content }];
+  }
+  if (typeof message.text === "string") {
+    return [{ type: "text", text: message.text }];
+  }
+  return [];
+}
+
+function contentBlockText(block: Record<string, unknown>): string {
+  return typeof block.text === "string" ? block.text.trim() : "";
+}
+
+function contentBlockImageFingerprint(block: Record<string, unknown>): string {
+  const source = isObjectRecord(block.source) ? block.source : null;
+  const mediaType =
+    typeof block.media_type === "string"
+      ? block.media_type
+      : source && typeof source.media_type === "string"
+        ? source.media_type
+        : "";
+  const data =
+    typeof block.data === "string"
+      ? block.data
+      : source && typeof source.data === "string"
+        ? source.data
+        : "";
+  const path =
+    typeof block.path === "string"
+      ? block.path
+      : source && typeof source.path === "string"
+        ? source.path
+        : "";
+  const url =
+    typeof block.url === "string"
+      ? block.url
+      : source && typeof source.url === "string"
+        ? source.url
+        : "";
+  return [mediaType.trim(), data.trim(), path.trim(), url.trim()].join("|");
+}
+
+function messageOptimisticFingerprint(message: unknown): string | null {
+  if (!isObjectRecord(message)) {
+    return null;
+  }
+  if (normalizeRole(message.role) !== "user") {
+    return null;
+  }
+  const blocks = normalizeMessageContentBlocks(message);
+  if (blocks.length === 0) {
+    return null;
+  }
+  const normalized = blocks
+    .map((block) => {
+      const type = normalizeRole(block.type);
+      if (type === "text") {
+        return `text:${contentBlockText(block)}`;
+      }
+      if (type === "image") {
+        return `image:${contentBlockImageFingerprint(block)}`;
+      }
+      return `${type}:${JSON.stringify(block)}`;
+    })
+    .join("||");
+  return normalized || null;
+}
+
+function mergeHistoryWithOptimisticMessages(
+  currentMessages: unknown[],
+  historyMessages: unknown[],
+): unknown[] {
+  const history = Array.isArray(historyMessages) ? historyMessages : [];
+  const historyFingerprints = new Set(
+    history.map((message) => messageOptimisticFingerprint(message)).filter((value): value is string => Boolean(value)),
+  );
+  const optimisticTail = (Array.isArray(currentMessages) ? currentMessages : []).filter((message) => {
+    const fingerprint = messageOptimisticFingerprint(message);
+    return Boolean(fingerprint) && !historyFingerprints.has(fingerprint);
+  });
+  return [...history, ...optimisticTail];
+}
+
 function beginChatHistoryRequest(state: ChatState): number {
   const key = state as object;
   const nextVersion = (chatHistoryRequestVersions.get(key) ?? 0) + 1;
@@ -177,7 +278,8 @@ export async function loadChatHistory(state: ChatState) {
       return;
     }
     const messages = Array.isArray(res.messages) ? res.messages : [];
-    state.chatMessages = messages.filter((message) => !shouldHideHistoryMessage(message));
+    const visibleMessages = messages.filter((message) => !shouldHideHistoryMessage(message));
+    state.chatMessages = mergeHistoryWithOptimisticMessages(state.chatMessages, visibleMessages);
     state.chatThinkingLevel = res.thinkingLevel ?? null;
     // Clear all streaming state — history includes tool results and text
     // inline, so keeping streaming artifacts would cause duplicates.

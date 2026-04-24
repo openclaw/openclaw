@@ -113,6 +113,55 @@ type TranscriptAppendResult = {
   error?: string;
 };
 
+const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
+const SYNTHETIC_TRANSCRIPT_REPAIR_RESULT =
+  "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.";
+
+function normalizeRole(value: unknown): string {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+
+function extractMessageText(message: unknown): string {
+  if (!message || typeof message !== "object") {
+    return "";
+  }
+  const entry = message as Record<string, unknown>;
+  if (typeof entry.text === "string") {
+    return entry.text;
+  }
+  if (Array.isArray(entry.content)) {
+    for (const block of entry.content) {
+      if (
+        block &&
+        typeof block === "object" &&
+        (block as { type?: unknown }).type === "text" &&
+        typeof (block as { text?: unknown }).text === "string"
+      ) {
+        return (block as { text: string }).text;
+      }
+    }
+  }
+  if (typeof entry.content === "string") {
+    return entry.content;
+  }
+  return "";
+}
+
+function shouldHideInternalHistoryMessage(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const entry = message as Record<string, unknown>;
+  const role = normalizeRole(entry.role);
+  if (role === "assistant" && SILENT_REPLY_PATTERN.test(extractMessageText(message))) {
+    return true;
+  }
+  return (
+    role === "toolresult" &&
+    extractMessageText(message).trim() === SYNTHETIC_TRANSCRIPT_REPAIR_RESULT
+  );
+}
+
 type AbortOrigin = "rpc" | "stop-command";
 
 type AbortedPartialSnapshot = {
@@ -1905,7 +1954,9 @@ export const chatHandlers: GatewayRequestHandlers = {
     const max = Math.min(hardMax, requested);
     const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars(cfg, maxChars);
     const sliced = rawMessages.length > max ? rawMessages.slice(-max) : rawMessages;
-    const sanitized = stripEnvelopeFromMessages(sliced);
+    const sanitized = stripEnvelopeFromMessages(sliced).filter(
+      (message) => !shouldHideInternalHistoryMessage(message),
+    );
     const normalized = augmentChatHistoryWithCanvasBlocks(
       sanitizeChatHistoryMessages(sanitized, effectiveMaxChars),
     );

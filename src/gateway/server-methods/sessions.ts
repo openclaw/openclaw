@@ -98,6 +98,55 @@ type SessionsRuntimeModule = typeof import("./sessions.runtime.js");
 
 let sessionsRuntimeModulePromise: Promise<SessionsRuntimeModule> | undefined;
 
+const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
+const SYNTHETIC_TRANSCRIPT_REPAIR_RESULT =
+  "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.";
+
+function normalizeHistoryRole(value: unknown): string {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+
+function extractHistoryMessageText(message: unknown): string {
+  if (!message || typeof message !== "object") {
+    return "";
+  }
+  const entry = message as Record<string, unknown>;
+  if (typeof entry.text === "string") {
+    return entry.text;
+  }
+  if (Array.isArray(entry.content)) {
+    for (const block of entry.content) {
+      if (
+        block &&
+        typeof block === "object" &&
+        (block as { type?: unknown }).type === "text" &&
+        typeof (block as { text?: unknown }).text === "string"
+      ) {
+        return (block as { text: string }).text;
+      }
+    }
+  }
+  if (typeof entry.content === "string") {
+    return entry.content;
+  }
+  return "";
+}
+
+function shouldHideInternalHistoryMessage(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const entry = message as Record<string, unknown>;
+  const role = normalizeHistoryRole(entry.role);
+  if (role === "assistant" && SILENT_REPLY_PATTERN.test(extractHistoryMessageText(message))) {
+    return true;
+  }
+  return (
+    role === "toolresult" &&
+    extractHistoryMessageText(message).trim() === SYNTHETIC_TRANSCRIPT_REPAIR_RESULT
+  );
+}
+
 function loadSessionsRuntimeModule(): Promise<SessionsRuntimeModule> {
   sessionsRuntimeModulePromise ??= import("./sessions.runtime.js");
   return sessionsRuntimeModulePromise;
@@ -1486,7 +1535,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     const allMessages = readSessionMessages(entry.sessionId, storePath, entry.sessionFile);
-    const messages = limit < allMessages.length ? allMessages.slice(-limit) : allMessages;
+    const visibleMessages = allMessages.filter((message) => !shouldHideInternalHistoryMessage(message));
+    const messages = limit < visibleMessages.length ? visibleMessages.slice(-limit) : visibleMessages;
     respond(true, { messages }, undefined);
   },
   "sessions.compact": async ({ req, params, respond, context, client, isWebchatConnect }) => {
