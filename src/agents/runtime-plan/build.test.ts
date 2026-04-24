@@ -44,6 +44,31 @@ describe("AgentRuntimePlan", () => {
       text_verbosity: "low",
       openaiWsWarmup: false,
     });
+    expect(
+      plan.transport.resolveExtraParams({
+        extraParamsOverride: { parallel_tool_calls: false },
+        resolvedTransport: "websocket",
+      }),
+    ).toMatchObject({
+      parallel_tool_calls: false,
+      text_verbosity: "low",
+      openaiWsWarmup: false,
+    });
+    expect(
+      plan.prompt.resolveSystemPromptContribution({
+        provider: "openai",
+        modelId: "gpt-5.4",
+        promptMode: "full",
+      })?.stablePrefix,
+    ).toContain("<persona_latch>");
+    expect(plan.transcript.resolvePolicy()).toEqual(plan.transcript.policy);
+    expect(
+      plan.outcome.classifyRunResult({
+        provider: "openai",
+        model: "gpt-4.1",
+        result: {},
+      }),
+    ).toBeNull();
     expect(plan.observability.resolvedRef).toBe("codex:openai/gpt-5.4");
   });
 

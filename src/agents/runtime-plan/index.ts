@@ -1,5 +1,9 @@
 export { buildAgentRuntimeAuthPlan } from "./auth.js";
-export { buildAgentRuntimeDeliveryPlan, buildAgentRuntimePlan } from "./build.js";
+export {
+  buildAgentRuntimeDeliveryPlan,
+  buildAgentRuntimeOutcomePlan,
+  buildAgentRuntimePlan,
+} from "./build.js";
 export type {
   AgentRuntimeAuthPlan,
   AgentRuntimeDeliveryPlan,

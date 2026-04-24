@@ -4,9 +4,13 @@ import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
-import type { ProviderFollowupFallbackRouteResult } from "../../plugins/types.js";
+import type {
+  ProviderFollowupFallbackRouteResult,
+  ProviderSystemPromptContributionContext,
+} from "../../plugins/types.js";
 import type { SupportedTransport } from "../pi-embedded-runner/extra-params.js";
 import type { classifyEmbeddedPiRunResultForModelFallback } from "../pi-embedded-runner/result-fallback-classifier.js";
+import type { ProviderSystemPromptContribution } from "../system-prompt-contribution.js";
 import type { TranscriptPolicy } from "../transcript-policy.js";
 
 export type AgentRuntimeResolvedRef = {
@@ -27,13 +31,28 @@ export type AgentRuntimeAuthPlan = {
 export type AgentRuntimePromptPlan = {
   provider: string;
   modelId: string;
+  resolveSystemPromptContribution(
+    context: ProviderSystemPromptContributionContext,
+  ): ProviderSystemPromptContribution | undefined;
 };
 
 export type AgentRuntimeToolPlan = {
   normalize<TSchemaType extends TSchema = TSchema, TResult = unknown>(
     tools: AgentTool<TSchemaType, TResult>[],
+    params?: {
+      workspaceDir?: string;
+      modelApi?: string;
+      model?: ProviderRuntimeModel;
+    },
   ): AgentTool<TSchemaType, TResult>[];
-  logDiagnostics(tools: AgentTool[]): void;
+  logDiagnostics(
+    tools: AgentTool[],
+    params?: {
+      workspaceDir?: string;
+      modelApi?: string;
+      model?: ProviderRuntimeModel;
+    },
+  ): void;
 };
 
 export type AgentRuntimeDeliveryPlan = {
@@ -53,6 +72,14 @@ export type AgentRuntimeOutcomePlan = {
 
 export type AgentRuntimeTransportPlan = {
   extraParams: Record<string, unknown>;
+  resolveExtraParams(params?: {
+    extraParamsOverride?: Record<string, unknown>;
+    thinkingLevel?: ThinkLevel;
+    agentId?: string;
+    workspaceDir?: string;
+    model?: ProviderRuntimeModel;
+    resolvedTransport?: SupportedTransport;
+  }): Record<string, unknown>;
 };
 
 export type AgentRuntimePlan = {
@@ -60,7 +87,14 @@ export type AgentRuntimePlan = {
   auth: AgentRuntimeAuthPlan;
   prompt: AgentRuntimePromptPlan;
   tools: AgentRuntimeToolPlan;
-  transcript: { policy: TranscriptPolicy };
+  transcript: {
+    policy: TranscriptPolicy;
+    resolvePolicy(params?: {
+      workspaceDir?: string;
+      modelApi?: string;
+      model?: ProviderRuntimeModel;
+    }): TranscriptPolicy;
+  };
   delivery: AgentRuntimeDeliveryPlan;
   outcome: AgentRuntimeOutcomePlan;
   transport: AgentRuntimeTransportPlan;

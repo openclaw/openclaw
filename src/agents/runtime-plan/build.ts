@@ -2,11 +2,11 @@ import type { AgentTool } from "@mariozechner/pi-agent-core";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { TSchema } from "typebox";
 import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
-import { resolveProviderFollowupFallbackRoute } from "../../plugins/provider-runtime.js";
 import {
-  resolvePreparedExtraParams,
-  type SupportedTransport,
-} from "../pi-embedded-runner/extra-params.js";
+  resolveProviderFollowupFallbackRoute,
+  resolveProviderSystemPromptContribution,
+} from "../../plugins/provider-runtime.js";
+import { resolvePreparedExtraParams } from "../pi-embedded-runner/extra-params.js";
 import { classifyEmbeddedPiRunResultForModelFallback } from "../pi-embedded-runner/result-fallback-classifier.js";
 import {
   logProviderToolSchemaDiagnostics,
@@ -16,6 +16,7 @@ import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import { buildAgentRuntimeAuthPlan } from "./auth.js";
 import type {
   AgentRuntimeDeliveryPlan,
+  AgentRuntimeOutcomePlan,
   AgentRuntimePlan,
   BuildAgentRuntimeDeliveryPlanParams,
   BuildAgentRuntimePlanParams,
@@ -64,6 +65,12 @@ export function buildAgentRuntimeDeliveryPlan(
   };
 }
 
+export function buildAgentRuntimeOutcomePlan(): AgentRuntimeOutcomePlan {
+  return {
+    classifyRunResult: classifyEmbeddedPiRunResultForModelFallback,
+  };
+}
+
 export function buildAgentRuntimePlan(params: BuildAgentRuntimePlanParams): AgentRuntimePlan {
   const modelApi = params.modelApi ?? params.model?.api ?? undefined;
   const transport = params.resolvedTransport;
@@ -88,10 +95,50 @@ export function buildAgentRuntimePlan(params: BuildAgentRuntimePlanParams): Agen
     provider: params.provider,
     config: params.config,
     workspaceDir: params.workspaceDir,
+    env: process.env,
     modelId: params.modelId,
     modelApi,
     model: params.model,
   };
+  const resolveToolContext = (overrides?: {
+    workspaceDir?: string;
+    modelApi?: string;
+    model?: BuildAgentRuntimePlanParams["model"];
+  }) => ({
+    ...toolContext,
+    ...(overrides?.workspaceDir !== undefined ? { workspaceDir: overrides.workspaceDir } : {}),
+    ...(overrides?.modelApi !== undefined ? { modelApi: overrides.modelApi } : {}),
+    ...(overrides?.model !== undefined ? { model: overrides.model } : {}),
+  });
+  const resolveTranscriptRuntimePolicy = (overrides?: {
+    workspaceDir?: string;
+    modelApi?: string;
+    model?: BuildAgentRuntimePlanParams["model"];
+  }) =>
+    resolveTranscriptPolicy({
+      provider: params.provider,
+      modelId: params.modelId,
+      config: params.config,
+      workspaceDir: overrides?.workspaceDir ?? params.workspaceDir,
+      env: process.env,
+      modelApi: overrides?.modelApi ?? modelApi,
+      model: overrides?.model ?? params.model,
+    });
+  const resolveTransportExtraParams = (
+    overrides: Parameters<AgentRuntimePlan["transport"]["resolveExtraParams"]>[0] = {},
+  ) =>
+    resolvePreparedExtraParams({
+      cfg: params.config,
+      provider: params.provider,
+      modelId: params.modelId,
+      agentDir: params.agentDir,
+      workspaceDir: overrides.workspaceDir ?? params.workspaceDir,
+      extraParamsOverride: overrides.extraParamsOverride ?? params.extraParamsOverride,
+      thinkingLevel: overrides.thinkingLevel ?? params.thinkingLevel,
+      agentId: overrides.agentId ?? params.agentId,
+      model: overrides.model ?? params.model,
+      resolvedTransport: overrides.resolvedTransport ?? transport,
+    });
 
   return {
     resolvedRef,
@@ -99,50 +146,52 @@ export function buildAgentRuntimePlan(params: BuildAgentRuntimePlanParams): Agen
     prompt: {
       provider: params.provider,
       modelId: params.modelId,
+      resolveSystemPromptContribution(context) {
+        return resolveProviderSystemPromptContribution({
+          provider: params.provider,
+          config: params.config,
+          workspaceDir: context.workspaceDir ?? params.workspaceDir,
+          context,
+        });
+      },
     },
     tools: {
       normalize<TSchemaType extends TSchema = TSchema, TResult = unknown>(
         tools: AgentTool<TSchemaType, TResult>[],
+        overrides?: {
+          workspaceDir?: string;
+          modelApi?: string;
+          model?: BuildAgentRuntimePlanParams["model"];
+        },
       ): AgentTool<TSchemaType, TResult>[] {
         return normalizeProviderToolSchemas({
-          ...toolContext,
+          ...resolveToolContext(overrides),
           tools,
         });
       },
-      logDiagnostics(tools: AgentTool[]): void {
+      logDiagnostics(
+        tools: AgentTool[],
+        overrides?: {
+          workspaceDir?: string;
+          modelApi?: string;
+          model?: BuildAgentRuntimePlanParams["model"];
+        },
+      ): void {
         logProviderToolSchemaDiagnostics({
-          ...toolContext,
+          ...resolveToolContext(overrides),
           tools,
         });
       },
     },
     transcript: {
-      policy: resolveTranscriptPolicy({
-        provider: params.provider,
-        modelId: params.modelId,
-        modelApi,
-        config: params.config,
-        workspaceDir: params.workspaceDir,
-        model: params.model,
-      }),
+      policy: resolveTranscriptRuntimePolicy(),
+      resolvePolicy: resolveTranscriptRuntimePolicy,
     },
     delivery: buildAgentRuntimeDeliveryPlan(params),
-    outcome: {
-      classifyRunResult: classifyEmbeddedPiRunResultForModelFallback,
-    },
+    outcome: buildAgentRuntimeOutcomePlan(),
     transport: {
-      extraParams: resolvePreparedExtraParams({
-        cfg: params.config,
-        provider: params.provider,
-        modelId: params.modelId,
-        agentDir: params.agentDir,
-        workspaceDir: params.workspaceDir,
-        extraParamsOverride: params.extraParamsOverride,
-        thinkingLevel: params.thinkingLevel,
-        agentId: params.agentId,
-        model: params.model,
-        resolvedTransport: transport as SupportedTransport | undefined,
-      }),
+      extraParams: resolveTransportExtraParams(),
+      resolveExtraParams: resolveTransportExtraParams,
     },
     observability: {
       resolvedRef: formatResolvedRef({
