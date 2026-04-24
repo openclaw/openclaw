@@ -48,6 +48,25 @@ describe("lmstudio plugin", () => {
     });
   });
 
+  // Regression: the core normalizeProviderConfigWithPlugin fallback iterates
+  // every active plugin when the matched plugin did not supply a normalizeConfig
+  // result, so this hook MUST be a no-op for foreign provider ids or it corrupts
+  // their baseUrl (e.g. doubled /v1 segments at request time).
+  it("leaves foreign providers untouched (does not append /v1 for non-lmstudio ids)", () => {
+    const provider = registerProvider();
+
+    for (const foreignId of ["custom-provider-a", "custom-provider-b", "custom-anthropic-proxy"]) {
+      const config = createRemoteProviderConfig({
+        baseUrl: "https://custom-proxy.example",
+      });
+      const result = provider?.normalizeConfig?.({
+        provider: foreignId,
+        providerConfig: config,
+      });
+      expect(result, `normalizeConfig must be a no-op for provider=${foreignId}`).toBeUndefined();
+    }
+  });
+
   it("synthesizes placeholder auth for configured lmstudio models without API key auth", () => {
     const provider = registerProvider();
 

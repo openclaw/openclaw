@@ -101,7 +101,12 @@ export default definePluginEntry({
       shouldDeferSyntheticProfileAuth: ({ resolvedApiKey }) =>
         resolvedApiKey?.trim() === LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER ||
         resolvedApiKey?.trim() === CUSTOM_LOCAL_AUTH_MARKER,
-      normalizeConfig: ({ providerConfig }) => normalizeLmstudioProviderConfig(providerConfig),
+      // Gate by provider id: the core fallback in normalizeProviderConfigWithPlugin
+      // iterates every active plugin when the matched plugin did not return a change,
+      // so without this guard lmstudio's "always append /v1" normalizer would mutate
+      // foreign providers' baseUrl and produce a doubled /v1/v1 request path at runtime.
+      normalizeConfig: ({ provider, providerConfig }) =>
+        provider === PROVIDER_ID ? normalizeLmstudioProviderConfig(providerConfig) : undefined,
       prepareDynamicModel: async (ctx) => {
         const providerSetup = await loadProviderSetup();
         cachedDynamicModels.set(
