@@ -22,6 +22,7 @@ import { sendMessageFeishu, sendStructuredCardFeishu, type CardHeaderConfig } fr
 import { FeishuStreamingSession, mergeStreamingText } from "./streaming-card.js";
 import { resolveReceiveIdType } from "./targets.js";
 import { addTypingIndicator, removeTypingIndicator, type TypingIndicatorState } from "./typing.js";
+import type { FeishuStatusLanguage } from "./types.js";
 
 /** Detect if text contains markdown elements that benefit from card rendering */
 function shouldUseCard(text: string): boolean {
@@ -70,6 +71,81 @@ function resolveCardNote(
     parts.push(`Provider: ${prefixCtx.provider}`);
   }
   return parts.join(" | ");
+}
+
+function sanitizeReplyText(text: string | undefined): string {
+  if (!text) {
+    return "";
+  }
+  return text
+    .replace(/🧹\s*Compacting context\.\.\.\s*/g, "")
+    .replace(/<\/?final>\s*/gi, "")
+    .trim();
+}
+
+function isLikelyCodexScratchpadText(text: string, provider?: string): boolean {
+  if ((provider ?? "").toLowerCase() !== "openai-codex") {
+    return false;
+  }
+  const cleaned = sanitizeReplyText(text);
+  if (!cleaned || /[\u4e00-\u9fff]/.test(cleaned)) {
+    return false;
+  }
+  if (cleaned.length > 2000 || !/[A-Za-z]/.test(cleaned)) {
+    return false;
+  }
+  if (/^\[\[reply_to_current\]\]/.test(cleaned)) {
+    return false;
+  }
+  if (
+    /^(Need|Need to|Let's|We can|Use |Only |Translation failed|Found |Now |Maybe |Better |Looks translated|Great|Good\b)/i.test(
+      cleaned,
+    )
+  ) {
+    return true;
+  }
+  if (
+    /\b(?:tool|script|page|workflow|upload|translate|header|footer|meta|rest|curl|draft|create|update|inspect|verify|extract|body|html|template|slug|publish|wordpress|elementor)\b/i.test(
+      cleaned,
+    ) &&
+    /\b(?:need|maybe|likely|could|should|let's|let us|try|test|inspect|verify|create|update|copy|fetch|extract|build|retry|respond)\b/i.test(
+      cleaned,
+    )
+  ) {
+    return true;
+  }
+  return (
+    cleaned.split(/\s+/).length >= 8 &&
+    /[.?!]/.test(cleaned) &&
+    !/[`[{(<]/.test(cleaned) &&
+    /^[A-Za-z0-9 ,.:;'"\/_-]+$/.test(cleaned) &&
+    /\b(?:need|maybe|likely|could|should|let's|try|inspect|verify|create|update|copy|fetch|extract|build|retry|respond)\b/i.test(
+      cleaned,
+    )
+  );
+}
+
+function resolveStatusCopy(language: FeishuStatusLanguage) {
+  if (language === "en") {
+    return {
+      locale: "en-GB",
+      statusLabel: "Status",
+      activityLabel: "Last activity",
+      processing: "In progress",
+      finalizing: "Finalizing",
+      completed: "Completed",
+      completionPingPrefix: "Completed:",
+    } as const;
+  }
+  return {
+    locale: "zh-CN",
+    statusLabel: "状态",
+    activityLabel: "最后活动",
+    processing: "处理中",
+    finalizing: "整理结果",
+    completed: "已完成",
+    completionPingPrefix: "已完成：",
+  } as const;
 }
 
 export type CreateFeishuReplyDispatcherParams = {
@@ -198,7 +274,72 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   const deliveredFinalTexts = new Set<string>();
   let partialUpdateQueue: Promise<void> = Promise.resolve();
   let streamingStartPromise: Promise<void> | null = null;
+  let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  let streamingStartedAt = 0;
+  let lastActivityAt = 0;
+  const statusLanguage = account.config?.statusLanguage ?? "zh-CN";
+  const statusCopy = resolveStatusCopy(statusLanguage);
+  let lastKnownStatus = statusCopy.processing;
+  const STREAMING_NOTE_HEARTBEAT_MS = 15_000;
   type StreamTextUpdateMode = "snapshot" | "delta";
+
+  const formatActivityTime = (timestamp: number): string =>
+    timestamp > 0
+      ? new Date(timestamp).toLocaleTimeString(statusCopy.locale, {
+          hour12: false,
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+        })
+      : "";
+
+  const buildStreamingNote = (status = lastKnownStatus): string => {
+    const base = resolveCardNote(agentId, identity, prefixContext.prefixContext);
+    const parts = [base, `${statusCopy.statusLabel}: ${status}`];
+    if (lastActivityAt > 0) {
+      parts.push(`${statusCopy.activityLabel}: ${formatActivityTime(lastActivityAt)}`);
+    }
+    return parts.join(" | ");
+  };
+
+  const refreshStreamingNote = (status = lastKnownStatus) => {
+    lastKnownStatus = status;
+    partialUpdateQueue = partialUpdateQueue.then(async () => {
+      if (streamingStartPromise) {
+        await streamingStartPromise;
+      }
+      if (streaming?.isActive()) {
+        await streaming.updateNoteContent(buildStreamingNote(status));
+      }
+    });
+  };
+
+  const markStreamingActivity = (status = statusCopy.processing) => {
+    lastActivityAt = Date.now();
+    refreshStreamingNote(status);
+  };
+
+  const stopHeartbeat = () => {
+    if (!heartbeatTimer) {
+      return;
+    }
+    clearInterval(heartbeatTimer);
+    heartbeatTimer = null;
+  };
+
+  const startHeartbeat = () => {
+    stopHeartbeat();
+    heartbeatTimer = setInterval(() => {
+      if (!streaming?.isActive()) {
+        return;
+      }
+      lastActivityAt = Date.now();
+      refreshStreamingNote(lastKnownStatus);
+    }, STREAMING_NOTE_HEARTBEAT_MS);
+  };
+
+  const shouldSendCompletionPing = () =>
+    streamingStartedAt > 0 && Date.now() - streamingStartedAt >= 15_000;
 
   const formatReasoningPrefix = (thinking: string): string => {
     if (!thinking) {
@@ -251,6 +392,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     if (options?.dedupeWithLastPartial) {
       lastPartial = nextText;
     }
+    markStreamingActivity(statusCopy.processing);
     const mode = options?.mode ?? "snapshot";
     streamText =
       mode === "delta" ? `${streamText}${nextText}` : mergeStreamingText(streamText, nextText);
@@ -262,6 +404,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       return;
     }
     reasoningText = nextThinking;
+    markStreamingActivity(statusCopy.processing);
     flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamText));
   };
 
@@ -269,6 +412,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     if (!streamingEnabled || streamingStartPromise || streaming) {
       return;
     }
+    streamingStartedAt = Date.now();
+    lastActivityAt = streamingStartedAt;
+    lastKnownStatus = statusCopy.processing;
     streamingStartPromise = (async () => {
       const creds =
         account.appId && account.appSecret
@@ -289,7 +435,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           replyInThread: effectiveReplyInThread,
           rootId,
           header: cardHeader,
-          note: cardNote,
+          note: buildStreamingNote(statusCopy.processing),
         });
       } catch (error) {
         params.runtime.error?.(`feishu: streaming start failed: ${String(error)}`);
@@ -297,9 +443,11 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         streamingStartPromise = null; // allow retry on next deliver
       }
     })();
+    startHeartbeat();
   };
 
   const closeStreaming = async () => {
+    stopHeartbeat();
     if (streamingStartPromise) {
       await streamingStartPromise;
     }
@@ -309,7 +457,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       if (mentionTargets?.length) {
         text = buildMentionedCardContent(mentionTargets, text);
       }
-      const finalNote = resolveCardNote(agentId, identity, prefixContext.prefixContext);
+      lastKnownStatus = statusCopy.completed;
+      lastActivityAt = Date.now();
+      const finalNote = buildStreamingNote(statusCopy.completed);
       await streaming.close(text, { note: finalNote });
     }
     streaming = null;
@@ -317,6 +467,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     streamText = "";
     lastPartial = "";
     reasoningText = "";
+    streamingStartedAt = 0;
+    lastActivityAt = 0;
+    lastKnownStatus = statusCopy.processing;
   };
 
   const sendChunkedTextReply = async (params: {
@@ -374,8 +527,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       },
       deliver: async (payload: ReplyPayload, info) => {
         const reply = resolveSendableOutboundReplyParts(payload);
-        const text = reply.text;
-        const hasText = reply.hasText;
+        const text = sanitizeReplyText(reply.text);
+        const hasText =
+          Boolean(text) && !isLikelyCodexScratchpadText(text, prefixContext.prefixContext.provider);
         const hasMedia = reply.hasMedia;
         const skipTextForDuplicateFinal =
           info?.kind === "final" && hasText && deliveredFinalTexts.has(text);
@@ -414,9 +568,20 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               queueStreamingUpdate(text, { mode: "delta" });
             }
             if (info?.kind === "final") {
+              markStreamingActivity(statusCopy.finalizing);
               streamText = mergeStreamingText(streamText, text);
               await closeStreaming();
               deliveredFinalTexts.add(text);
+              if (shouldSendCompletionPing()) {
+                await sendMessageFeishu({
+                  cfg,
+                  to: chatId,
+                  text: `${statusCopy.completionPingPrefix} ${text.replace(/\n/g, " ").trim().slice(0, 100)}`,
+                  replyToMessageId: sendReplyToMessageId,
+                  replyInThread: effectiveReplyInThread,
+                  accountId,
+                });
+              }
             }
             // Send media even when streaming handled the text
             if (hasMedia) {

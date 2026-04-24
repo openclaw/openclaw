@@ -137,6 +137,7 @@ const ReactionNotificationModeSchema = z.enum(["off", "own", "all"]).optional();
  * causing the reply to appear as a topic (话题) under the original message.
  */
 const ReplyInThreadSchema = z.enum(["disabled", "enabled"]).optional();
+const StatusLanguageSchema = z.enum(["zh-CN", "en"]).optional();
 
 export const FeishuGroupSchema = z
   .object({
@@ -182,6 +183,7 @@ const FeishuSharedConfigShape = {
   reactionNotifications: ReactionNotificationModeSchema,
   typingIndicator: z.boolean().optional(),
   resolveSenderNames: z.boolean().optional(),
+  statusLanguage: StatusLanguageSchema,
 };
 
 /**

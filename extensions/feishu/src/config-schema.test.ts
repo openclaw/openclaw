@@ -218,6 +218,17 @@ describe("FeishuConfigSchema optimization flags", () => {
     expect(result.accounts?.main?.typingIndicator).toBe(false);
     expect(result.accounts?.main?.resolveSenderNames).toBe(false);
   });
+
+  it("accepts account-level statusLanguage", () => {
+    const result = FeishuConfigSchema.parse({
+      accounts: {
+        main: {
+          statusLanguage: "en",
+        },
+      },
+    });
+    expect(result.accounts?.main?.statusLanguage).toBe("en");
+  });
 });
 
 describe("FeishuConfigSchema actions", () => {
