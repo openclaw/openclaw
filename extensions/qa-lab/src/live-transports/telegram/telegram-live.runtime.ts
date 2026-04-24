@@ -1,12 +1,12 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { z } from "zod";
 import { startQaGatewayChild } from "../../gateway-child.js";
 import { DEFAULT_QA_LIVE_PROVIDER_MODE } from "../../providers/index.js";
@@ -971,7 +971,9 @@ async function runInstalledOpenClawTelegramOnboardingPreflight(params: {
   providerMode: ReturnType<typeof normalizeQaProviderMode>;
   sutToken: string;
 }) {
-  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-npm-telegram-"));
+  const tempRoot = await fs.mkdtemp(
+    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-npm-telegram-"),
+  );
   const homeDir = path.join(tempRoot, "home");
   const stateDir = path.join(homeDir, ".openclaw");
   await fs.mkdir(stateDir, { recursive: true });
