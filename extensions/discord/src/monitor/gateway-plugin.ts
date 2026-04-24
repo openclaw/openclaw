@@ -12,6 +12,7 @@ import {
 } from "openclaw/plugin-sdk/proxy-capture";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import * as undici from "undici";
 import * as ws from "ws";
@@ -19,6 +20,7 @@ import { validateDiscordProxyUrl } from "../proxy-fetch.js";
 import { DISCORD_GATEWAY_TRANSPORT_ACTIVITY_EVENT } from "./gateway-handle.js";
 
 const DISCORD_GATEWAY_BOT_URL = "https://discord.com/api/v10/gateway/bot";
+const DISCORD_API_HOST = "discord.com";
 const DEFAULT_DISCORD_GATEWAY_URL = "wss://gateway.discord.gg/";
 const DISCORD_GATEWAY_INFO_TIMEOUT_MS = 10_000;
 
@@ -39,6 +41,25 @@ type CarbonGatewayRegistrationState = {
   ws?: unknown;
   isConnecting?: boolean;
 };
+
+function resolveFetchInputUrl(input: RequestInfo | URL): string {
+  if (typeof input === "string") {
+    return input;
+  }
+  if (input instanceof URL) {
+    return input.toString();
+  }
+  return input.url;
+}
+
+async function materializeGuardedResponse(response: Response): Promise<Response> {
+  const body = await response.arrayBuffer();
+  return new Response(body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
+}
 
 function assignCarbonGatewayClient(
   plugin: carbonGateway.GatewayPlugin,
@@ -411,11 +432,19 @@ async function fetchDiscordGatewayMetadataDirect(
   init?: DiscordGatewayFetchInit,
   capture?: false | { flowId: string; meta: Record<string, unknown> },
 ): Promise<Response> {
-  const runtimeFetch = globalThis.fetch;
-  if (typeof runtimeFetch !== "function") {
-    throw new Error("fetch is not available");
+  const guarded = await fetchWithSsrFGuard({
+    url: resolveFetchInputUrl(input),
+    init: init as RequestInit,
+    policy: { allowedHostnames: [DISCORD_API_HOST] },
+    capture: false,
+    auditContext: "discord.gateway.metadata",
+  });
+  let response: Response;
+  try {
+    response = await materializeGuardedResponse(guarded.response);
+  } finally {
+    await guarded.release();
   }
-  const response = await runtimeFetch(input, init as RequestInit);
   if (capture) {
     captureHttpExchange({
       url: input,
