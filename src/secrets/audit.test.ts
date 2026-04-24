@@ -554,6 +554,48 @@ describe("secrets audit", () => {
     expect(report.filesScanned).toContain(externalModelsPath);
   });
 
+  it("does not flag $VAR shorthand env refs in auth profiles as plaintext", async () => {
+    await writeJsonFile(fixture.authStorePath, {
+      version: 1,
+      profiles: {
+        "openai:default": {
+          type: "api_key",
+          provider: "openai",
+          key: "$OPENAI_API_KEY", // pragma: allowlist secret
+        },
+      },
+    });
+
+    const report = await runSecretsAudit({ env: fixture.env });
+    expect(
+      hasFinding(
+        report,
+        (entry) => entry.code === "PLAINTEXT_FOUND" && entry.file === fixture.authStorePath,
+      ),
+    ).toBe(false);
+  });
+
+  it("does not flag ${VAR} env refs in auth profiles as plaintext", async () => {
+    await writeJsonFile(fixture.authStorePath, {
+      version: 1,
+      profiles: {
+        "openai:default": {
+          type: "api_key",
+          provider: "openai",
+          key: "${OPENAI_API_KEY}", // pragma: allowlist secret
+        },
+      },
+    });
+
+    const report = await runSecretsAudit({ env: fixture.env });
+    expect(
+      hasFinding(
+        report,
+        (entry) => entry.code === "PLAINTEXT_FOUND" && entry.file === fixture.authStorePath,
+      ),
+    ).toBe(false);
+  });
+
   it("does not flag non-sensitive routing headers in openclaw config", async () => {
     await writeJsonFile(fixture.configPath, {
       models: {
