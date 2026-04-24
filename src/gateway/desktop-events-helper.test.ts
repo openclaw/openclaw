@@ -55,7 +55,7 @@ function createFakeClientFactory() {
       options,
       start: vi.fn(),
       stop: vi.fn(),
-      request: requestMock,
+      request: requestMock as unknown as DesktopEventsGatewayClient["request"],
       requestMock,
     };
     clients.push(client);

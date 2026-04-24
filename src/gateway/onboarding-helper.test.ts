@@ -8,18 +8,21 @@ import {
   probeOnboarding,
   startWizardSession,
 } from "./onboarding-helper.js";
+import type { OpenClawConfig } from "../config/config.js";
 
 function createDeps() {
+  const config: OpenClawConfig = {
+    gateway: {
+      mode: "local",
+      port: 18789,
+      tls: { enabled: false },
+      auth: { mode: "token", token: "desktop-token" },
+    },
+  };
+
   return {
     callGatewayScoped: vi.fn(),
-    loadConfig: vi.fn(() => ({
-      gateway: {
-        mode: "local",
-        port: 18789,
-        tls: { enabled: false },
-        auth: { mode: "token", token: "desktop-token" },
-      },
-    })),
+    loadConfig: vi.fn(() => config),
     resolvePairingSetupFromConfig: vi.fn(),
     encodePairingSetupCode: vi.fn(() => "setup-code-123"),
     runCommandWithTimeout: vi.fn(),
@@ -34,7 +37,7 @@ describe("onboarding-helper", () => {
       ok: true,
       payload: {
         url: "wss://desktop.tailnet.ts.net",
-        token: "pair-token",
+        bootstrapToken: "pair-token",
       },
       authLabel: "token",
       urlSource: "gateway.remote.url",
@@ -96,7 +99,7 @@ describe("onboarding-helper", () => {
       ok: true,
       payload: {
         url: "ws://203.0.113.10:18789",
-        token: "pair-token",
+        bootstrapToken: "pair-token",
       },
       authLabel: "token",
       urlSource: "gateway.remote.url",
