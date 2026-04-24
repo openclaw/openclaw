@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  __testing as bundledRuntimeDepsTesting,
   createBundledRuntimeDependencyAliasMap,
   createBundledRuntimeDepsInstallArgs,
   createBundledRuntimeDepsInstallEnv,
@@ -656,6 +657,16 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     ]);
   });
 
+  it("does not expire active runtime-deps install locks by age alone", () => {
+    expect(
+      bundledRuntimeDepsTesting.shouldRemoveRuntimeDepsLock(
+        { pid: 123, createdAtMs: 0 },
+        Number.MAX_SAFE_INTEGER,
+        () => true,
+      ),
+    ).toBe(false);
+  });
+
   it("removes stale runtime-deps install locks before repairing deps", () => {
     const packageRoot = makeTempDir();
     const pluginRoot = path.join(packageRoot, "dist", "extensions", "openai");
@@ -670,10 +681,7 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     );
     const lockDir = path.join(pluginRoot, ".openclaw-runtime-deps.lock");
     fs.mkdirSync(lockDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(lockDir, "owner.json"),
-      JSON.stringify({ pid: process.pid, createdAtMs: 0 }),
-    );
+    fs.writeFileSync(path.join(lockDir, "owner.json"), JSON.stringify({ pid: 0, createdAtMs: 0 }));
 
     const calls: BundledRuntimeDepsInstallParams[] = [];
     const result = ensureBundledPluginRuntimeDeps({

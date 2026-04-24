@@ -199,15 +199,31 @@ function readRuntimeDepsLockOwner(lockDir: string): { pid?: number; createdAtMs?
   };
 }
 
+function shouldRemoveRuntimeDepsLock(
+  owner: { pid?: number; createdAtMs?: number },
+  nowMs: number,
+  isAlive: (pid: number) => boolean = isProcessAlive,
+): boolean {
+  if (typeof owner.pid === "number") {
+    return !isAlive(owner.pid);
+  }
+
+  return (
+    typeof owner.createdAtMs === "number" &&
+    nowMs - owner.createdAtMs > BUNDLED_RUNTIME_DEPS_LOCK_STALE_MS
+  );
+}
+
+export const __testing = {
+  shouldRemoveRuntimeDepsLock,
+};
+
 function removeRuntimeDepsLockIfStale(lockDir: string, nowMs: number): boolean {
   const owner = readRuntimeDepsLockOwner(lockDir);
-  const createdAtMs = owner.createdAtMs;
-  const staleByTime =
-    typeof createdAtMs === "number" && nowMs - createdAtMs > BUNDLED_RUNTIME_DEPS_LOCK_STALE_MS;
-  const staleByPid = typeof owner.pid === "number" && !isProcessAlive(owner.pid);
-  if (!staleByTime && !staleByPid) {
+  if (!shouldRemoveRuntimeDepsLock(owner, nowMs)) {
     return false;
   }
+
   try {
     fs.rmSync(lockDir, { recursive: true, force: true });
     return true;
