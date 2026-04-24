@@ -182,14 +182,10 @@ export async function readCronRunLogEntries(
 ): Promise<CronRunLogEntry[]> {
   await drainPendingWrite(filePath);
   const limit = Math.max(1, Math.min(5000, Math.floor(opts?.limit ?? 200)));
-  const page = await readCronRunLogEntriesPage(filePath, {
-    jobId: opts?.jobId,
-    limit,
-    offset: 0,
-    status: "all",
-    sortDir: "desc",
-  });
-  return page.entries.toReversed();
+  const raw = await fs.readFile(path.resolve(filePath), "utf-8").catch(() => "");
+  const all = parseAllRunLogEntries(raw, { jobId: opts?.jobId });
+  const sorted = all.toSorted((a, b) => b.ts - a.ts);
+  return sorted.slice(0, limit).toReversed();
 }
 
 function normalizeRunStatusFilter(status?: string): CronRunLogStatusFilter {

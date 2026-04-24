@@ -287,6 +287,25 @@ describe("cron run log", () => {
     });
   });
 
+  it("respects limits above 200 without silently capping", async () => {
+    await withRunLogDir("openclaw-cron-log-limit-", async (dir) => {
+      const logPath = path.join(dir, "runs", "job-1.jsonl");
+      const total = 250;
+      for (let i = 0; i < total; i++) {
+        await appendCronRunLog(logPath, {
+          ts: i + 1,
+          jobId: "job-1",
+          action: "finished",
+          status: "ok",
+        });
+      }
+      const entries = await readCronRunLogEntries(logPath, { limit: total });
+      expect(entries).toHaveLength(total);
+      expect(entries[0]?.ts).toBe(1);
+      expect(entries[total - 1]?.ts).toBe(total);
+    });
+  });
+
   it("read drains pending fire-and-forget writes", async () => {
     await withRunLogDir("openclaw-cron-log-drain-", async (dir) => {
       const logPath = path.join(dir, "runs", "job-drain.jsonl");
