@@ -160,6 +160,19 @@ function getImageGenerationProviderAuthEnvVars(providerId: string): string[] {
   return getProviderEnvVars(providerId);
 }
 
+function formatImageGenerationAuthHint(provider: {
+  id: string;
+  authEnvVars: readonly string[];
+}): string | undefined {
+  if (provider.id === "openai") {
+    return "set OPENAI_API_KEY or configure OpenAI Codex OAuth for openai/gpt-image-2";
+  }
+  if (provider.authEnvVars.length === 0) {
+    return undefined;
+  }
+  return `set ${provider.authEnvVars.join(" / ")} to use ${provider.id}/*`;
+}
+
 export function resolveImageGenerationModelConfigForTool(params: {
   cfg?: OpenClawConfig;
   agentDir?: string;
@@ -592,13 +605,12 @@ export function createImageGenerateTool(options?: {
             provider.models.length > 0
               ? `models: ${provider.models.join(", ")}`
               : "models: unknown";
+          const authHint = formatImageGenerationAuthHint(provider);
           return [
             `${provider.id}${provider.defaultModel ? ` (default ${provider.defaultModel})` : ""}`,
             `  ${modelLine}`,
             `  configured: ${provider.configured ? "yes" : "no"}`,
-            ...(provider.authEnvVars.length > 0
-              ? [`  auth: set ${provider.authEnvVars.join(" / ")} to use ${provider.id}/*`]
-              : []),
+            ...(authHint ? [`  auth: ${authHint}`] : []),
             ...(caps.length > 0 ? [`  capabilities: ${caps.join("; ")}`] : []),
           ];
         });

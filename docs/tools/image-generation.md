@@ -172,10 +172,13 @@ When generating an image, OpenClaw tries providers in this order:
    - current default provider first
    - remaining registered image-generation providers in provider-id order
 
-If a provider fails (auth error, rate limit, etc.), the next candidate is tried automatically. If all fail, the error includes details from each attempt.
+If a provider fails (auth error, rate limit, etc.), the next configured candidate is tried automatically. If all fail, the error includes details from each attempt.
 
 Notes:
 
+- A per-call `model` override is exact: OpenClaw tries only that provider/model
+  and does not continue to configured primary/fallback or auto-detected
+  providers.
 - Auto-detection is auth-aware. A provider default only enters the candidate list
   when OpenClaw can actually authenticate that provider.
 - Auto-detection is enabled by default. Set
