@@ -218,13 +218,7 @@ describe("Auth profile runtime contract - Pi and CLI adapter", () => {
     });
 
     expect(runCliAgentMock).toHaveBeenCalledTimes(1);
-    expect(runCliAgentMock.mock.calls[0]?.[0]?.authProfileId).toBe(
-      expectedForwardedAuthProfile({
-        provider: AUTH_PROFILE_RUNTIME_CONTRACT.claudeCliProvider,
-        authProfileProvider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider,
-        sessionAuthProfileId: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
-      }),
-    );
+    expect(runCliAgentMock.mock.calls[0]?.[0]?.authProfileId).toBeUndefined();
   });
 
   it("forwards an OpenAI Codex auth profile through the embedded Pi path", async () => {
