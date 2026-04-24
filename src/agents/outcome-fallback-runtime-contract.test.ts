@@ -8,6 +8,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runWithModelFallback } from "./model-fallback.js";
 import { classifyEmbeddedPiRunResultForModelFallback } from "./pi-embedded-runner/result-fallback-classifier.js";
 
+vi.mock("./auth-profiles/source-check.js", () => ({
+  hasAnyAuthProfileStoreSource: () => false,
+}));
+
 describe("Outcome/fallback runtime contract - Pi fallback classifier", () => {
   it.each([
     ["empty", "empty_result"],

@@ -14,6 +14,7 @@ export const OUTCOME_FALLBACK_RUNTIME_CONTRACT = {
 export function createContractRunResult(
   overrides: Partial<EmbeddedPiRunResult> = {},
 ): EmbeddedPiRunResult {
+  const { meta, ...rest } = overrides;
   return {
     payloads: [],
     didSendViaMessagingTool: false,
@@ -21,11 +22,11 @@ export function createContractRunResult(
     messagingToolSentMediaUrls: [],
     messagingToolSentTargets: [],
     successfulCronAdds: 0,
+    ...rest,
     meta: {
       durationMs: 1,
-      ...overrides.meta,
+      ...meta,
     },
-    ...overrides,
   };
 }
 
