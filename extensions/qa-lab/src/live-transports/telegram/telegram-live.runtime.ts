@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
@@ -969,10 +970,12 @@ async function runInstalledOpenClawTelegramOnboardingPreflight(params: {
   openClawCommand: string;
   sutToken: string;
 }) {
-  const tempRoot = await fs.mkdtemp(path.join(process.cwd(), ".tmp-openclaw-npm-telegram-"));
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-npm-telegram-"));
   const homeDir = path.join(tempRoot, "home");
   const stateDir = path.join(homeDir, ".openclaw");
   await fs.mkdir(stateDir, { recursive: true });
+  const tokenPath = path.join(tempRoot, "sut-token.txt");
+  await fs.writeFile(tokenPath, params.sutToken, { encoding: "utf8", mode: 0o600 });
   const env = {
     ...process.env,
     HOME: homeDir,
@@ -1008,7 +1011,7 @@ async function runInstalledOpenClawTelegramOnboardingPreflight(params: {
     );
     await execFileAsync(
       params.openClawCommand,
-      ["channels", "add", "--channel", "telegram", "--token", params.sutToken],
+      ["channels", "add", "--channel", "telegram", "--token-file", tokenPath],
       { env },
     );
     await execFileAsync(params.openClawCommand, ["doctor", "--non-interactive"], { env });
