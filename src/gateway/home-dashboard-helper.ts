@@ -94,7 +94,7 @@ function resolveGatewayTarget(url: string | undefined) {
     return {
       config,
       url: undefined,
-      gatewayUrl: `ws${Boolean(config.gateway?.tls?.enabled) ? "s" : ""}://127.0.0.1:${
+      gatewayUrl: `ws${config.gateway?.tls?.enabled ? "s" : ""}://127.0.0.1:${
         config.gateway?.port ?? 19001
       }`,
     };
@@ -260,7 +260,7 @@ async function fetchSessionsList(
 
 async function fetchCronList(
   options: FetchHomeDashboardOptions,
-): Promise<CronListPageResult<CronJob[]>> {
+): Promise<CronListPageResult> {
   return await callReadOnlyGateway({
     method: "cron.list",
     payload: {

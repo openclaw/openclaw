@@ -276,7 +276,7 @@ function normalizeWizardResult(
   return {
     action,
     sessionId: typeof sessionId === "string" ? sessionId : "sessionId" in result ? result.sessionId : null,
-    done: Boolean(result.done),
+    done: result.done,
     status: result.status ?? null,
     error: typeof result.error === "string" ? result.error : null,
     step: result.step ?? null,
