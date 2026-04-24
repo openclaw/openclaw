@@ -34,10 +34,14 @@ function hasMedia(payload: { mediaUrl?: string; mediaUrls?: string[] }): boolean
   return resolveSendableOutboundReplyParts(payload).hasMedia;
 }
 
+function asOpenClawConfig(value: unknown): OpenClawConfig | undefined {
+  return value && typeof value === "object" ? (value as OpenClawConfig) : undefined;
+}
+
 export function buildAgentRuntimeDeliveryPlan(
   params: BuildAgentRuntimeDeliveryPlanParams,
 ): AgentRuntimeDeliveryPlan {
-  const config = params.config as OpenClawConfig | undefined;
+  const config = asOpenClawConfig(params.config);
   return {
     isSilentPayload(payload): boolean {
       return isSilentReplyPayloadText(payload.text, SILENT_REPLY_TOKEN) && !hasMedia(payload);
@@ -71,7 +75,7 @@ export function buildAgentRuntimeOutcomePlan(): AgentRuntimeOutcomePlan {
 }
 
 export function buildAgentRuntimePlan(params: BuildAgentRuntimePlanParams): AgentRuntimePlan {
-  const config = params.config as OpenClawConfig | undefined;
+  const config = asOpenClawConfig(params.config);
   const model = params.model as ProviderRuntimeModel | undefined;
   const modelApi = params.modelApi ?? params.model?.api ?? undefined;
   const transport = params.resolvedTransport;
@@ -156,7 +160,7 @@ export function buildAgentRuntimePlan(params: BuildAgentRuntimePlanParams): Agen
           workspaceDir: context.workspaceDir ?? params.workspaceDir,
           context: {
             ...context,
-            config: context.config as OpenClawConfig | undefined,
+            config: asOpenClawConfig(context.config),
           },
         });
       },

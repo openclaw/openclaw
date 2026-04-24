@@ -53,7 +53,20 @@ export type AgentRuntimeReplyPayload = {
   text?: string;
   mediaUrl?: string;
   mediaUrls?: string[];
-  [key: string]: unknown;
+  presentation?: unknown;
+  delivery?: unknown;
+  interactive?: unknown;
+  btw?: {
+    question: string;
+  };
+  replyToId?: string;
+  replyToTag?: boolean;
+  replyToCurrent?: boolean;
+  audioAsVoice?: boolean;
+  isError?: boolean;
+  isReasoning?: boolean;
+  isCompactionNotice?: boolean;
+  channelData?: Record<string, unknown>;
 };
 
 export type AgentRuntimeSystemPromptSectionId =
