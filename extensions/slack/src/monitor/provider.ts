@@ -24,6 +24,7 @@ import { normalizeStringEntries } from "openclaw/plugin-sdk/text-runtime";
 import { installRequestBodyLimitGuard } from "openclaw/plugin-sdk/webhook-request-guards";
 import { resolveSlackAccount } from "../accounts.js";
 import { resolveSlackWebClientOptions } from "../client-options.js";
+import { formatSlackError } from "../errors.js";
 import { isSlackExecApprovalClientEnabled } from "../exec-approvals.js";
 import { normalizeSlackWebhookPath, registerSlackHttpHandler } from "../http/index.js";
 import { SLACK_TEXT_LIMIT } from "../limits.js";
@@ -362,7 +363,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
           }
         } catch (err) {
           runtime.log?.(
-            `slack channel resolve failed; using config entries. ${formatUnknownError(err)}`,
+            `slack channel resolve failed; using config entries. ${formatSlackError(err)}`,
           );
         }
       }
@@ -385,7 +386,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
           summarizeMapping("slack users", mapping, unresolved, runtime);
         } catch (err) {
           runtime.log?.(
-            `slack user resolve failed; using config entries. ${formatUnknownError(err)}`,
+            `slack user resolve failed; using config entries. ${formatSlackError(err)}`,
           );
         }
       }
@@ -418,7 +419,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
             summarizeMapping("slack channel users", mapping, unresolved, runtime);
           } catch (err) {
             runtime.log?.(
-              `slack channel user resolve failed; using config entries. ${formatUnknownError(err)}`,
+              `slack channel user resolve failed; using config entries. ${formatSlackError(err)}`,
             );
           }
         }

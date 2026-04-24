@@ -31,6 +31,7 @@ import {
 } from "openclaw/plugin-sdk/text-runtime";
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import { reactSlackMessage } from "../../actions.js";
+import { formatSlackError } from "../../errors.js";
 import { hasSlackThreadParticipation } from "../../sent-thread-cache.js";
 import type { SlackMessageEvent } from "../../types.js";
 import {
@@ -534,7 +535,7 @@ export async function prepareSlackMessage(params: {
           () => true,
           (err) => {
             logVerbose(
-              `slack react failed for channel ${message.channel}: ${formatErrorMessage(err)}`,
+              `slack react failed for channel ${message.channel}: ${formatSlackError(err)}`,
             );
             return false;
           },
