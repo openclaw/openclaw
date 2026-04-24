@@ -155,10 +155,16 @@ describe("AgentHarness V2 compatibility adapter", () => {
 
     const v2 = adaptAgentHarnessToV2(harness);
 
-    await expect(v2.compact?.({ sessionId: "session-1" } as never)).resolves.toMatchObject({
+    await expect(
+      v2.compact?.({
+        sessionId: "session-1",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp/workspace",
+      }),
+    ).resolves.toMatchObject({
       compacted: true,
     });
-    v2.reset?.({ reason: "reset" });
+    await v2.reset?.({ reason: "reset" });
     await v2.dispose?.();
 
     expect(harness.compactCalls).toBe(1);
