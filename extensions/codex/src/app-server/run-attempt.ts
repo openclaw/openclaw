@@ -58,6 +58,7 @@ import {
   recordCodexTrajectoryContext,
 } from "./trajectory.js";
 import { mirrorCodexAppServerTranscript } from "./transcript-mirror.js";
+import { createCodexUserInputBridge } from "./user-input-bridge.js";
 import { filterToolsForVisionInputs } from "./vision-tools.js";
 
 let clientFactory = defaultCodexAppServerClientFactory;
@@ -211,6 +212,7 @@ export async function runCodexAppServerAttempt(
   let projector: CodexAppServerEventProjector | undefined;
   let turnId: string | undefined;
   const pendingNotifications: CodexServerNotification[] = [];
+  let userInputBridge: ReturnType<typeof createCodexUserInputBridge> | undefined;
   let completed = false;
   let timedOut = false;
   let resolveCompletion: (() => void) | undefined;
@@ -220,6 +222,7 @@ export async function runCodexAppServerAttempt(
   let notificationQueue: Promise<void> = Promise.resolve();
 
   const handleNotification = async (notification: CodexServerNotification) => {
+    userInputBridge?.handleNotification(notification);
     if (!projector || !turnId) {
       pendingNotifications.push(notification);
       return;
@@ -264,6 +267,12 @@ export async function runCodexAppServerAttempt(
         threadId: thread.threadId,
         turnId,
         signal: runAbortController.signal,
+      });
+    }
+    if (request.method === "item/tool/requestUserInput") {
+      return userInputBridge?.handleRequest({
+        id: request.id,
+        params: request.params,
       });
     }
     if (request.method !== "item/tool/call") {
@@ -382,6 +391,12 @@ export async function runCodexAppServerAttempt(
   }
   turnId = turn.turn.id;
   const activeTurnId = turn.turn.id;
+  userInputBridge = createCodexUserInputBridge({
+    paramsForRun: params,
+    threadId: thread.threadId,
+    turnId: activeTurnId,
+    signal: runAbortController.signal,
+  });
   trajectoryRecorder?.recordEvent("prompt.submitted", {
     threadId: thread.threadId,
     turnId: activeTurnId,
@@ -407,6 +422,9 @@ export async function runCodexAppServerAttempt(
   const handle = {
     kind: "embedded" as const,
     queueMessage: async (text: string) => {
+      if (userInputBridge?.handleQueuedMessage(text)) {
+        return;
+      }
       await client.request("turn/steer", {
         threadId: thread.threadId,
         expectedTurnId: activeTurnId,
@@ -511,6 +529,7 @@ export async function runCodexAppServerAttempt(
       });
     }
     await trajectoryRecorder?.flush();
+    userInputBridge?.cancelPending();
     clearTimeout(timeout);
     notificationCleanup();
     requestCleanup();

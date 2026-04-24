@@ -653,6 +653,97 @@ describe("runCodexAppServerAttempt", () => {
     await run;
   });
 
+  it("routes request_user_input prompts through the active run follow-up queue", async () => {
+    let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
+    let handleRequest:
+      | ((request: { id: string; method: string; params?: unknown }) => Promise<unknown>)
+      | undefined;
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult();
+      }
+      if (method === "turn/start") {
+        return turnStartResult();
+      }
+      return {};
+    });
+    __testing.setCodexAppServerClientFactoryForTests(
+      async () =>
+        ({
+          request,
+          addNotificationHandler: (handler: typeof notify) => {
+            notify = handler;
+            return () => undefined;
+          },
+          addRequestHandler: (
+            handler: (request: {
+              id: string;
+              method: string;
+              params?: unknown;
+            }) => Promise<unknown>,
+          ) => {
+            handleRequest = handler;
+            return () => undefined;
+          },
+        }) as never,
+    );
+
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.onBlockReply = vi.fn();
+    const run = runCodexAppServerAttempt(params);
+    await vi.waitFor(
+      () => expect(request.mock.calls.some(([method]) => method === "turn/start")).toBe(true),
+      { interval: 1 },
+    );
+    await vi.waitFor(() => expect(handleRequest).toBeTypeOf("function"), { interval: 1 });
+
+    const response = handleRequest?.({
+      id: "request-input-1",
+      method: "item/tool/requestUserInput",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "ask-1",
+        questions: [
+          {
+            id: "mode",
+            header: "Mode",
+            question: "Pick a mode",
+            isOther: false,
+            isSecret: false,
+            options: [
+              { label: "Fast", description: "Use less reasoning" },
+              { label: "Deep", description: "Use more reasoning" },
+            ],
+          },
+        ],
+      },
+    });
+
+    await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledTimes(1), { interval: 1 });
+    expect(queueAgentHarnessMessage("session-1", "2")).toBe(true);
+    await expect(response).resolves.toEqual({
+      answers: { mode: { answers: ["Deep"] } },
+    });
+    expect(request).not.toHaveBeenCalledWith(
+      "turn/steer",
+      expect.objectContaining({ expectedTurnId: "turn-1" }),
+    );
+
+    await notify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        turn: { id: "turn-1", status: "completed" },
+      },
+    });
+    await run;
+  });
+
   it("does not leak unhandled rejections when shutdown closes before interrupt", async () => {
     const unhandledRejections: unknown[] = [];
     const onUnhandledRejection = (reason: unknown) => {

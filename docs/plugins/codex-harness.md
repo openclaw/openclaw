@@ -546,8 +546,10 @@ continue through the normal OpenClaw delivery path.
 
 Codex MCP tool approval elicitations are routed through OpenClaw's plugin
 approval flow when Codex marks `_meta.codex_approval_kind` as
-`"mcp_tool_call"`; other elicitation and free-form input requests still fail
-closed.
+`"mcp_tool_call"`. Codex `request_user_input` prompts are sent back to the
+originating chat, and the next queued follow-up message answers that native
+server request instead of being steered as extra context. Other MCP elicitation
+requests still fail closed.
 
 When the selected model uses the Codex harness, native thread compaction is
 delegated to Codex app-server. OpenClaw keeps a transcript mirror for channel

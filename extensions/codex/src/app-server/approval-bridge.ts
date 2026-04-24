@@ -161,7 +161,7 @@ function buildApprovalContext(params: {
     readString(params.requestParams, "itemId") ??
     readString(params.requestParams, "callId") ??
     readString(params.requestParams, "approvalId");
-  const command = readCommand(params.requestParams);
+  const command = readDisplayCommand(params.requestParams);
   const reason = readString(params.requestParams, "reason");
   const kind = approvalKindForMethod(params.method);
   const permissionLines =
@@ -220,8 +220,14 @@ function commandApprovalDecision(
   if (outcome === "denied" || outcome === "unavailable") {
     return "decline";
   }
-  if (outcome === "approved-session" && hasAvailableDecision(requestParams, "acceptForSession")) {
-    return "acceptForSession";
+  if (outcome === "approved-session") {
+    if (hasAvailableDecision(requestParams, "acceptForSession")) {
+      return "acceptForSession";
+    }
+    const amendmentDecision = findAvailableCommandAmendmentDecision(requestParams);
+    if (amendmentDecision) {
+      return amendmentDecision;
+    }
   }
   return "accept";
 }
@@ -459,6 +465,21 @@ function hasAvailableDecision(requestParams: JsonObject | undefined, decision: s
   return available.includes(decision);
 }
 
+function findAvailableCommandAmendmentDecision(
+  requestParams: JsonObject | undefined,
+): JsonValue | undefined {
+  const available = requestParams?.availableDecisions;
+  if (!Array.isArray(available)) {
+    return undefined;
+  }
+  return available.find(
+    (entry): entry is JsonObject =>
+      isJsonObject(entry) &&
+      (isJsonObject(entry.acceptWithExecpolicyAmendment) ||
+        isJsonObject(entry.applyNetworkPolicyAmendment)),
+  );
+}
+
 function approvalResolutionMessage(outcome: AppServerApprovalOutcome): string {
   if (outcome === "approved-session") {
     return "Codex app-server approval granted for the session.";
@@ -508,6 +529,25 @@ function isSupportedAppServerApprovalMethod(method: string): boolean {
 
 function emitApprovalEvent(params: EmbeddedRunAttemptParams, data: AgentApprovalEventData): void {
   params.onAgentEvent?.({ stream: "approval", data: data as unknown as Record<string, unknown> });
+}
+
+function readDisplayCommand(record: JsonObject | undefined): string | undefined {
+  const actionCommand = readCommandActions(record);
+  if (actionCommand) {
+    return actionCommand;
+  }
+  return readCommand(record);
+}
+
+function readCommandActions(record: JsonObject | undefined): string | undefined {
+  const actions = record?.commandActions;
+  if (!Array.isArray(actions)) {
+    return undefined;
+  }
+  const commands = actions
+    .map((action) => (isJsonObject(action) ? readString(action, "command") : undefined))
+    .filter((command): command is string => Boolean(command));
+  return commands.length > 0 ? commands.join(" && ") : undefined;
 }
 
 function readCommand(record: JsonObject | undefined): string | undefined {
