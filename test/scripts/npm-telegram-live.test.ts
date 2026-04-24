@@ -1,8 +1,11 @@
 import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { __testing } from "../../scripts/e2e/npm-telegram-live-runner.ts";
 
-const DOCKER_SCRIPT_PATH = "scripts/e2e/npm-telegram-live-docker.sh";
+const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
+const DOCKER_SCRIPT_PATH = path.resolve(TEST_DIR, "../../scripts/e2e/npm-telegram-live-docker.sh");
 
 describe("npm Telegram live Docker E2E", () => {
   it("supports npm-specific Convex credential aliases", () => {
