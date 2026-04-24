@@ -165,9 +165,9 @@ export async function buildModelsProviderData(
     const provider = normalizeProviderId(alias.provider);
     const choices = runtimeChoicesByProvider.get(provider) ?? [
       {
-        id: "auto",
-        label: "Default runtime",
-        description: "Use the configured default runtime for this agent.",
+        id: "pi",
+        label: "OpenClaw Pi Default",
+        description: "Use the built-in OpenClaw Pi runtime.",
       },
     ];
     choices.push({

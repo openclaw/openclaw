@@ -414,9 +414,9 @@ describe("Discord model picker interactions", () => {
         "openai",
         [
           {
-            id: "auto",
-            label: "Default runtime",
-            description: "Use the configured default runtime for this agent.",
+            id: "pi",
+            label: "OpenClaw Pi Default",
+            description: "Use the built-in OpenClaw Pi runtime.",
           },
           {
             id: "codex",

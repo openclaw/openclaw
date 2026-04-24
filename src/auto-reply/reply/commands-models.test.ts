@@ -6,7 +6,7 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
-import { handleModelsCommand } from "./commands-models.js";
+import { buildModelsProviderData, handleModelsCommand } from "./commands-models.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
 const modelCatalogMocks = vi.hoisted(() => ({
@@ -195,6 +195,22 @@ describe("handleModelsCommand", () => {
     expect(result?.reply?.text).not.toContain("- codex-cli");
     expect(result?.reply?.text).not.toContain("- claude-cli");
     expect(result?.reply?.text).not.toContain("- google-gemini-cli");
+  });
+
+  it("labels the default runtime choice as OpenClaw Pi", async () => {
+    const data = await buildModelsProviderData({
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.5" },
+        },
+      },
+    } as OpenClawConfig);
+
+    expect(data.runtimeChoicesByProvider?.get("openai")?.[0]).toEqual({
+      id: "pi",
+      label: "OpenClaw Pi Default",
+      description: "Use the built-in OpenClaw Pi runtime.",
+    });
   });
 
   it("keeps the telegram provider picker browse-only", async () => {

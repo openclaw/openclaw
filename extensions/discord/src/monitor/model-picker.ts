@@ -330,9 +330,9 @@ function getRuntimeChoices(params: {
   return (
     params.data.runtimeChoicesByProvider?.get(normalizeProviderId(params.provider)) ?? [
       {
-        id: "auto",
-        label: "Default runtime",
-        description: "Use the configured default runtime for this agent.",
+        id: "pi",
+        label: "OpenClaw Pi Default",
+        description: "Use the built-in OpenClaw Pi runtime.",
       },
     ]
   );
@@ -351,7 +351,7 @@ function resolveSelectedRuntime(params: {
     return pending;
   }
   const current = params.currentRuntime?.trim();
-  return current && allowed.has(current) ? current : "auto";
+  return current && allowed.has(current) ? current : "pi";
 }
 
 function buildRenderedShell(
@@ -486,6 +486,7 @@ function buildModelRows(params: {
     runtimeChoices.length > 1 ||
     (Boolean(normalizedCurrentRuntime) &&
       normalizedCurrentRuntime !== "auto" &&
+      normalizedCurrentRuntime !== "pi" &&
       normalizedCurrentRuntime !== "default");
   const stateRuntime = shouldCarryRuntime ? selectedRuntime : undefined;
   if (runtimeChoices.length > 1) {

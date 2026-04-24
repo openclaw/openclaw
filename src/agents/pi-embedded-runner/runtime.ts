@@ -4,7 +4,7 @@ export type EmbeddedAgentHarnessFallback = "pi" | "none";
 export function normalizeEmbeddedAgentRuntime(raw: string | undefined): EmbeddedAgentRuntime {
   const value = raw?.trim();
   if (!value) {
-    return "auto";
+    return "pi";
   }
   if (value === "pi") {
     return "pi";

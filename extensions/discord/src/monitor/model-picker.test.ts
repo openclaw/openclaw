@@ -29,7 +29,7 @@ vi.mock("openclaw/plugin-sdk/models-provider-runtime", () => ({
 type SerializedComponent = {
   type: number;
   custom_id?: string;
-  options?: Array<{ value: string; default?: boolean }>;
+  options?: Array<{ label?: string; value: string; default?: boolean }>;
   components?: SerializedComponent[];
 };
 
@@ -540,9 +540,9 @@ describe("Discord model picker rendering", () => {
         "openai",
         [
           {
-            id: "auto",
-            label: "Default runtime",
-            description: "Use the configured default runtime for this agent.",
+            id: "pi",
+            label: "OpenClaw Pi Default",
+            description: "Use the built-in OpenClaw Pi runtime.",
           },
           {
             id: "codex",
@@ -561,7 +561,7 @@ describe("Discord model picker rendering", () => {
       page: 1,
       providerPage: 1,
       currentModel: "openai/gpt-4o",
-      currentRuntime: "auto",
+      currentRuntime: "pi",
       pendingModel: "openai/o3",
       pendingModelIndex: 3,
       pendingRuntime: "codex",
@@ -575,7 +575,10 @@ describe("Discord model picker rendering", () => {
     if (!runtimeSelect) {
       throw new Error("models view did not render a runtime select");
     }
-    expect(runtimeSelect.options?.map((option) => option.value)).toEqual(["auto", "codex"]);
+    expect(runtimeSelect.options?.map((option) => option.value)).toEqual(["pi", "codex"]);
+    expect(runtimeSelect.options?.find((option) => option.value === "pi")?.label).toBe(
+      "OpenClaw Pi Default",
+    );
     expect(runtimeSelect.options?.find((option) => option.value === "codex")?.default).toBe(true);
 
     const submitButton = rows[3]?.components?.at(-1);
