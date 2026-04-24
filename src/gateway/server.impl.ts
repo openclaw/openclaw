@@ -697,6 +697,9 @@ export async function startGatewayServer(
       sharedGatewaySessionGenerationState,
       resolveSharedGatewaySessionGenerationForConfig,
       clients,
+      startChannel,
+      stopChannel,
+      logChannels,
     });
 
     const canvasHostServerPort = (canvasHostServer as CanvasHostServer | null)?.port;
