@@ -147,6 +147,22 @@ export function resolveZaiBaseUrl(endpoint?: string): string {
   }
 }
 
+export function isZaiCodingBaseUrl(baseUrl: string | undefined): boolean {
+  return baseUrl === ZAI_CODING_GLOBAL_BASE_URL || baseUrl === ZAI_CODING_CN_BASE_URL;
+}
+
+// ZAI vision/image models are not served on the Coding Plan endpoints and
+// respond with 404 there; map coding URLs back to the matching non-coding host.
+export function resolveZaiNonCodingBaseUrl(baseUrl: string | undefined): string | undefined {
+  if (baseUrl === ZAI_CODING_GLOBAL_BASE_URL) {
+    return ZAI_GLOBAL_BASE_URL;
+  }
+  if (baseUrl === ZAI_CODING_CN_BASE_URL) {
+    return ZAI_CN_BASE_URL;
+  }
+  return undefined;
+}
+
 export function buildZaiModelDefinition(params: {
   id: string;
   name?: string;
