@@ -9,6 +9,7 @@ import {
   resolveConversationBindingRecord,
   touchConversationBindingRecord,
 } from "../../bindings/records.js";
+import { normalizeChatType } from "../../channels/chat-type.js";
 import { shouldSuppressLocalExecApprovalPrompt } from "../../channels/plugins/exec-approval-local.js";
 import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -149,6 +150,26 @@ const isInboundAudioContext = (ctx: FinalizedMsgContext): boolean => {
     return true;
   }
   return AUDIO_HEADER_RE.test(trimmed);
+};
+
+const resolveRoutedPolicyConversationType = (
+  ctx: FinalizedMsgContext,
+): "direct" | "group" | undefined => {
+  if (
+    ctx.CommandSource === "native" &&
+    ctx.CommandTargetSessionKey &&
+    ctx.CommandTargetSessionKey !== ctx.SessionKey
+  ) {
+    return undefined;
+  }
+  const chatType = normalizeChatType(ctx.ChatType);
+  if (chatType === "direct") {
+    return "direct";
+  }
+  if (chatType === "group" || chatType === "channel") {
+    return "group";
+  }
+  return undefined;
 };
 
 const resolveSessionStoreLookup = (
@@ -391,6 +412,7 @@ export async function dispatchReplyFromConfig(
         ctx.CommandSource === "native"
           ? (ctx.CommandTargetSessionKey ?? ctx.SessionKey)
           : ctx.SessionKey,
+      policyConversationType: resolveRoutedPolicyConversationType(ctx),
       accountId: replyRoute.accountId,
       requesterSenderId: ctx.SenderId,
       requesterSenderName: ctx.SenderName,
