@@ -178,9 +178,16 @@ function rewriteKimiTaggedToolCallsInMessage(message: unknown): void {
   }
 
   (message as { content: unknown[] }).content = nextContent;
-  const typedMessage = message as { stopReason?: unknown };
-  if (typedMessage.stopReason === "stop") {
-    typedMessage.stopReason = "toolUse";
+  const typedMessage = message as { stopReason?: unknown; role?: unknown };
+  // Only rewrite stopReason to toolUse if the message actually contains tool calls
+  // AND the message is from the assistant (not a tool result or other message type)
+  if (typedMessage.stopReason === "stop" && typedMessage.role === "assistant") {
+    const hasToolCalls = nextContent.some(
+      (block) => block && typeof block === "object" && (block as { type?: unknown }).type === "toolCall",
+    );
+    if (hasToolCalls) {
+      typedMessage.stopReason = "toolUse";
+    }
   }
 }
 
