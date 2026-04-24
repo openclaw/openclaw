@@ -868,6 +868,122 @@ describe("BlueBubbles webhook monitor", () => {
         { timeout: 250, interval: 10 },
       );
     });
+
+    it("escalates repeated unknown sender messages immediately once the threshold is reached", async () => {
+      mockEnqueueSystemEvent.mockClear();
+      setupWebhookTarget({
+        account: createMockAccount({
+          inboundTriage: {
+            enabled: true,
+            unknownSenderDelayMinutes: 5,
+            repeatedSenderImmediate: {
+              enabled: true,
+              count: 3,
+              windowMinutes: 10,
+              appliesTo: ["unknown"],
+            },
+          },
+          allowFrom: ["+15557654321"],
+        }),
+      });
+
+      await dispatchWebhookPayload(
+        createTimestampedNewMessagePayloadForTest({
+          guid: "msg-repeat-unknown-1",
+          senderId: "+15557654321",
+          senderName: "Alex",
+          text: "first ping",
+        }),
+      );
+      await dispatchWebhookPayload(
+        createTimestampedNewMessagePayloadForTest({
+          guid: "msg-repeat-unknown-2",
+          senderId: "+15557654321",
+          senderName: "Alex",
+          text: "second ping",
+        }),
+      );
+
+      expect(mockEnqueueSystemEvent).not.toHaveBeenCalled();
+
+      await dispatchWebhookPayload(
+        createTimestampedNewMessagePayloadForTest({
+          guid: "msg-repeat-unknown-3",
+          senderId: "+15557654321",
+          senderName: "Alex",
+          text: "third ping",
+        }),
+      );
+
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+      expect(mockEnqueueSystemEvent).toHaveBeenCalledTimes(1);
+      expect(mockEnqueueSystemEvent).toHaveBeenCalledWith(
+        expect.stringContaining("[bluebubbles triage] immediate"),
+        expect.objectContaining({
+          contextKey: expect.stringContaining("bluebubbles:triage:default:"),
+        }),
+      );
+      expect(mockEnqueueSystemEvent.mock.calls[0]?.[0]).toContain("third ping");
+      expect(mockEnqueueSystemEvent.mock.calls[0]?.[0]).toContain("repeat-unknown");
+    });
+
+    it("escalates repeated VIP sender messages immediately once the threshold is reached", async () => {
+      mockEnqueueSystemEvent.mockClear();
+      setupWebhookTarget({
+        account: createMockAccount({
+          inboundTriage: {
+            enabled: true,
+            vipSenderIds: ["+15551234567"],
+            vipDelayMinutes: 5,
+            repeatedSenderImmediate: {
+              enabled: true,
+              count: 3,
+              windowMinutes: 10,
+              appliesTo: ["vip"],
+            },
+          },
+        }),
+      });
+
+      await dispatchWebhookPayload(
+        createTimestampedNewMessagePayloadForTest({
+          guid: "msg-repeat-vip-1",
+          senderId: "+15551234567",
+          senderName: "Fiona",
+          text: "one",
+        }),
+      );
+      await dispatchWebhookPayload(
+        createTimestampedNewMessagePayloadForTest({
+          guid: "msg-repeat-vip-2",
+          senderId: "+15551234567",
+          senderName: "Fiona",
+          text: "two",
+        }),
+      );
+
+      expect(mockEnqueueSystemEvent).not.toHaveBeenCalled();
+
+      await dispatchWebhookPayload(
+        createTimestampedNewMessagePayloadForTest({
+          guid: "msg-repeat-vip-3",
+          senderId: "+15551234567",
+          senderName: "Fiona",
+          text: "three",
+        }),
+      );
+
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+      expect(mockEnqueueSystemEvent).toHaveBeenCalledTimes(1);
+      expect(mockEnqueueSystemEvent).toHaveBeenCalledWith(
+        expect.stringContaining("[bluebubbles triage] immediate"),
+        expect.objectContaining({
+          contextKey: expect.stringContaining("bluebubbles:triage:default:"),
+        }),
+      );
+      expect(mockEnqueueSystemEvent.mock.calls[0]?.[0]).toContain("three");
+      expect(mockEnqueueSystemEvent.mock.calls[0]?.[0]).toContain("repeat-vip");
+    });
   });
 
   describe("group metadata", () => {
