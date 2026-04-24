@@ -93,6 +93,9 @@ OpenClaw has three public release lanes:
   against the published npm package using the shared leased Telegram credential
   pool. Local maintainer one-offs may omit the Convex vars and pass the three
   `OPENCLAW_QA_TELEGRAM_*` env credentials directly.
+- Maintainers can run the same post-publish check from GitHub Actions via the
+  manual `NPM Telegram Beta E2E` workflow. It is intentionally manual-only and
+  does not run on every merge.
 - Maintainer release automation now uses preflight-then-promote:
   - real npm publish must pass a successful npm `preflight_run_id`
   - the real npm publish must be dispatched from the same `main` or
