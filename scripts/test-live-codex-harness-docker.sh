@@ -181,7 +181,21 @@ cd "$tmp_dir"
 if [ "${OPENCLAW_LIVE_CODEX_HARNESS_USE_CI_SAFE_CODEX_CONFIG:-1}" = "1" ]; then
   node --import tsx /src/scripts/prepare-codex-ci-config.ts "$HOME/.codex/config.toml" "$tmp_dir"
 fi
-pnpm test:live src/gateway/gateway-codex-harness.live.test.ts
+codex_preflight_log="$tmp_dir/codex-preflight.log"
+codex_preflight_token="CODEX-PREFLIGHT-OK"
+if ! "$NPM_CONFIG_PREFIX/bin/codex" exec \
+  --json \
+  --color never \
+  --skip-git-repo-check \
+  "Reply exactly: $codex_preflight_token" >"$codex_preflight_log" 2>&1; then
+  if grep -q "Failed to extract accountId from token" "$codex_preflight_log"; then
+    echo "SKIP: Codex auth cannot extract accountId from the available token; skipping live Codex harness lane."
+    exit 0
+  fi
+  cat "$codex_preflight_log" >&2
+  exit 1
+fi
+pnpm test:live ${OPENCLAW_LIVE_CODEX_TEST_FILES:-src/gateway/gateway-codex-harness.live.test.ts}
 EOF
 
 openclaw_live_codex_harness_append_build_extension codex
