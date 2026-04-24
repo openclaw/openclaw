@@ -422,6 +422,14 @@ async function deliverGoogleChatReply(params: {
         statusSink?.({ lastOutboundAt: Date.now() });
       } catch (err) {
         runtime.error?.(`Google Chat message send failed: ${String(err)}`);
+        if (firstTextChunk && typingMessageName) {
+          // The updateGoogleChatMessage call failed. Clear both flags so
+          // subsequent chunks fall through to sendGoogleChatMessage instead of
+          // retrying the unavailable typing-indicator message and silently
+          // dropping all remaining text.
+          typingMessageName = undefined;
+          firstTextChunk = false;
+        }
       }
     },
     sendMedia: async ({ mediaUrl, caption }) => {
