@@ -240,13 +240,12 @@ describe("resolveContextTokensForModel", () => {
     expect(result).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
   });
 
-  it("does not force 1M context when claude-cli context1m is enabled", () => {
+  it("returns 1M context when claude-cli context1m is enabled for opus/sonnet", () => {
     const result = resolveContextTokensForModel({
       cfg: {
         models: {
           providers: {
             "claude-cli": {
-              baseUrl: "https://api.anthropic.com",
               models: [testModelContextWindow("claude-opus-4-7", 200_000)],
             },
           },
@@ -267,29 +266,7 @@ describe("resolveContextTokensForModel", () => {
       allowAsyncLoad: false,
     });
 
-    expect(result).toBe(200_000);
-  });
-
-  it("does not force 1M context for claude-cli aliases when context1m is enabled", () => {
-    const result = resolveContextTokensForModel({
-      cfg: {
-        agents: {
-          defaults: {
-            models: {
-              "claude-cli/sonnet": {
-                params: { context1m: true },
-              },
-            },
-          },
-        },
-      },
-      provider: "claude-cli",
-      model: "sonnet",
-      fallbackContextTokens: 200_000,
-      allowAsyncLoad: false,
-    });
-
-    expect(result).toBe(200_000);
+    expect(result).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
   });
 
   it("does not force 1M context when context1m is not enabled", () => {
