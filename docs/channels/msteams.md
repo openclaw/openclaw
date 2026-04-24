@@ -46,11 +46,16 @@ teams status   # verify you're logged in and see your tenant info
 **2. Start a tunnel** (Teams can't reach localhost)
 
 ```bash
-# Pick one:
-devtunnel host -p 3978          # Azure Dev Tunnels
-ngrok http 3978                  # ngrok
-tailscale funnel 3978            # Tailscale
+# One-time setup (persistent URL across sessions):
+devtunnel create my-openclaw-bot --allow-anonymous
+devtunnel port create my-openclaw-bot -p 3978 --protocol auto
+
+# Each dev session:
+devtunnel host my-openclaw-bot
+# Your endpoint: https://<tunnel-id>.devtunnels.ms/api/messages
 ```
+
+Alternatives: `ngrok http 3978` or `tailscale funnel 3978` (but these may change URLs each session).
 
 **3. Create the app**
 
@@ -410,16 +415,20 @@ For AKS deployments using workload identity:
 
 ## Local Development (Tunneling)
 
-Teams can't reach `localhost`. Start a tunnel before running `teams app create`:
+Teams can't reach `localhost`. Use a persistent dev tunnel so your URL stays the same across sessions:
 
 ```bash
-# Pick one:
-devtunnel host -p 3978          # Azure Dev Tunnels
-ngrok http 3978                  # ngrok
-tailscale funnel 3978            # Tailscale
+# One-time setup:
+devtunnel create my-openclaw-bot --allow-anonymous
+devtunnel port create my-openclaw-bot -p 3978 --protocol auto
+
+# Each dev session:
+devtunnel host my-openclaw-bot
 ```
 
-If your tunnel URL changes later, update the endpoint:
+Alternatives: `ngrok http 3978` or `tailscale funnel 3978` (URLs may change each session).
+
+If your tunnel URL changes, update the endpoint:
 
 ```bash
 teams app update <teamsAppId> --endpoint "https://<new-url>/api/messages"
