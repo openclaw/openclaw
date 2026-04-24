@@ -18,7 +18,7 @@ OpenClaw generates images, videos, and music, understands inbound media (images,
 | Image generation     | `image_generate` | ComfyUI, fal, Google, MiniMax, OpenAI, Vydra, xAI                                            | Creates or edits images from text prompts or references |
 | Video generation     | `video_generate` | Alibaba, BytePlus, ComfyUI, fal, Google, MiniMax, OpenAI, Qwen, Runway, Together, Vydra, xAI | Creates videos from text, images, or existing videos    |
 | Music generation     | `music_generate` | ComfyUI, Google, MiniMax                                                                     | Creates music or audio tracks from text prompts         |
-| Text-to-speech (TTS) | `tts`            | ElevenLabs, Google, Microsoft, MiniMax, OpenAI, xAI                                          | Converts outbound replies to spoken audio               |
+| Text-to-speech (TTS) | `tts`            | ElevenLabs, Google, Gradium, Microsoft, MiniMax, OpenAI, Vydra, xAI                          | Converts outbound replies to spoken audio               |
 | Media understanding  | (automatic)      | Any vision/audio-capable model provider, plus CLI fallbacks                                  | Summarizes inbound images, audio, and video             |
 
 ## Provider capability matrix
@@ -34,6 +34,7 @@ This table shows which providers support which media capabilities across the pla
 | ElevenLabs |       |       |       | Yes | Yes                 |                |                     |
 | fal        | Yes   | Yes   |       |     |                     |                |                     |
 | Google     | Yes   | Yes   | Yes   | Yes |                     | Yes            | Yes                 |
+| Gradium    |       |       |       | Yes |                     |                |                     |
 | Microsoft  |       |       |       | Yes |                     |                |                     |
 | MiniMax    | Yes   | Yes   | Yes   | Yes |                     |                |                     |
 | Mistral    |       |       |       |     | Yes                 |                |                     |
@@ -41,7 +42,7 @@ This table shows which providers support which media capabilities across the pla
 | Qwen       |       | Yes   |       |     |                     |                |                     |
 | Runway     |       | Yes   |       |     |                     |                |                     |
 | Together   |       | Yes   |       |     |                     |                |                     |
-| Vydra      | Yes   | Yes   |       |     |                     |                |                     |
+| Vydra      | Yes   | Yes   |       | Yes |                     |                |                     |
 | xAI        | Yes   | Yes   |       | Yes | Yes                 |                | Yes                 |
 
 <Note>

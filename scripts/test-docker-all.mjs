@@ -43,15 +43,21 @@ const bundledScenarioLanes = [
 ];
 
 const lanes = [
-  ["live-models", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-models"],
-  ["live-gateway", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-gateway"],
+  [
+    "live-models",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 OPENCLAW_LIVE_DOCKER_SOURCE_STAGE_MODE=symlink pnpm test:docker:live-models",
+  ],
+  [
+    "live-gateway",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 OPENCLAW_LIVE_DOCKER_SOURCE_STAGE_MODE=symlink pnpm test:docker:live-gateway",
+  ],
   [
     "live-cli-backend-claude",
-    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-cli-backend:claude",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 OPENCLAW_LIVE_DOCKER_SOURCE_STAGE_MODE=symlink pnpm test:docker:live-cli-backend:claude",
   ],
   [
     "live-cli-backend-gemini",
-    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-cli-backend:gemini",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 OPENCLAW_LIVE_DOCKER_SOURCE_STAGE_MODE=symlink pnpm test:docker:live-cli-backend:gemini",
   ],
   ["openwebui", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openwebui"],
   ["onboard", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:onboard"],
@@ -77,15 +83,30 @@ const exclusiveLanes = [
     "openai-web-search-minimal",
     "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openai-web-search-minimal",
   ],
-  ["live-codex-harness", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-codex-harness"],
-  ["live-codex-bind", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-codex-bind"],
+  [
+    "live-codex-harness",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 OPENCLAW_LIVE_DOCKER_SOURCE_STAGE_MODE=symlink pnpm test:docker:live-codex-harness",
+  ],
+  [
+    "live-codex-bind",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 OPENCLAW_LIVE_DOCKER_SOURCE_STAGE_MODE=symlink pnpm test:docker:live-codex-bind",
+  ],
   [
     "live-cli-backend-codex",
-    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-cli-backend:codex",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 OPENCLAW_LIVE_DOCKER_SOURCE_STAGE_MODE=symlink pnpm test:docker:live-cli-backend:codex",
   ],
-  ["live-acp-bind-claude", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-acp-bind:claude"],
-  ["live-acp-bind-codex", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-acp-bind:codex"],
-  ["live-acp-bind-gemini", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-acp-bind:gemini"],
+  [
+    "live-acp-bind-claude",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 OPENCLAW_LIVE_DOCKER_SOURCE_STAGE_MODE=symlink pnpm test:docker:live-acp-bind:claude",
+  ],
+  [
+    "live-acp-bind-codex",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 OPENCLAW_LIVE_DOCKER_SOURCE_STAGE_MODE=symlink pnpm test:docker:live-acp-bind:codex",
+  ],
+  [
+    "live-acp-bind-gemini",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 OPENCLAW_LIVE_DOCKER_SOURCE_STAGE_MODE=symlink pnpm test:docker:live-acp-bind:gemini",
+  ],
 ];
 
 const tailLanes = exclusiveLanes;

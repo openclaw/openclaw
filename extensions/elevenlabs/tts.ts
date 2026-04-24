@@ -1,53 +1,11 @@
+import { assertOkOrThrowProviderError } from "openclaw/plugin-sdk/provider-http";
 import {
-  asObject,
   normalizeApplyTextNormalization,
   normalizeLanguageCode,
   normalizeSeed,
-  readResponseTextLimited,
   requireInRange,
-  trimToUndefined,
-  truncateErrorDetail,
 } from "openclaw/plugin-sdk/speech";
 import { isValidElevenLabsVoiceId, normalizeElevenLabsBaseUrl } from "./shared.js";
-
-function formatElevenLabsErrorPayload(payload: unknown): string | undefined {
-  const root = asObject(payload);
-  if (!root) {
-    return undefined;
-  }
-  const detailObject = asObject(root.detail);
-  const message =
-    trimToUndefined(root.message) ??
-    trimToUndefined(detailObject?.message) ??
-    trimToUndefined(detailObject?.detail) ??
-    trimToUndefined(root.error);
-  const code =
-    trimToUndefined(root.code) ??
-    trimToUndefined(detailObject?.code) ??
-    trimToUndefined(detailObject?.status);
-  if (message && code) {
-    return `${truncateErrorDetail(message)} [code=${code}]`;
-  }
-  if (message) {
-    return truncateErrorDetail(message);
-  }
-  if (code) {
-    return `[code=${code}]`;
-  }
-  return undefined;
-}
-
-async function extractElevenLabsErrorDetail(response: Response): Promise<string | undefined> {
-  const rawBody = trimToUndefined(await readResponseTextLimited(response));
-  if (!rawBody) {
-    return undefined;
-  }
-  try {
-    return formatElevenLabsErrorPayload(JSON.parse(rawBody)) ?? truncateErrorDetail(rawBody);
-  } catch {
-    return truncateErrorDetail(rawBody);
-  }
-}
 
 function assertElevenLabsVoiceSettings(settings: {
   stability: number;
@@ -138,17 +96,7 @@ export async function elevenLabsTTS(params: {
       signal: controller.signal,
     });
 
-    if (!response.ok) {
-      const detail = await extractElevenLabsErrorDetail(response);
-      const requestId =
-        trimToUndefined(response.headers.get("x-request-id")) ??
-        trimToUndefined(response.headers.get("request-id"));
-      throw new Error(
-        `ElevenLabs API error (${response.status})` +
-          (detail ? `: ${detail}` : "") +
-          (requestId ? ` [request_id=${requestId}]` : ""),
-      );
-    }
+    await assertOkOrThrowProviderError(response, "ElevenLabs API error");
 
     return Buffer.from(await response.arrayBuffer());
   } finally {

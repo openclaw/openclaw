@@ -341,10 +341,17 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
   `openclaw/releases-private/.github/workflows/openclaw-npm-dist-tags.yml`
   workflow because `npm dist-tag` management needs `NPM_TOKEN`, while the
   public npm release workflow stays OIDC-only.
+- Prefer fixing the private workflow token path over any local 1Password
+  fallback. The desired setup is a granular npm token stored as the private
+  repo's `NPM_TOKEN` secret, scoped to the `openclaw` package with read/write
+  and 2FA bypass for automation.
 - If the private dist-tag workflow cannot promote because `NPM_TOKEN` is absent
   or stale, use the local tmux + 1Password fallback:
   - Start or reuse a tmux session so interactive `npm login` and OTP prompts
     are observable and recoverable.
+  - Hard rule: never run `op` directly in the main agent shell during release
+    work. Any 1Password CLI use must happen inside that tmux session so prompts
+    and alerts are contained and observable.
   - Use the 1Password item `op://Private/Npmjs` for npm credentials and OTP.
     Do not print passwords, tokens, or OTPs to the transcript; send them through
     tmux buffers, env vars scoped to the tmux command, or `expect` with
