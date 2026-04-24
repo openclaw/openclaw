@@ -346,8 +346,11 @@ async function deliverGoogleChatReply(params: {
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
   typingMessageName?: string;
 }): Promise<void> {
-  const { payload, account, spaceId, runtime, core, config, statusSink, typingMessageName } =
-    params;
+  const { payload, account, spaceId, runtime, core, config, statusSink } = params;
+  // Use let so we can clear it after a successful delete — if we leave it set, sendText
+  // would try to updateGoogleChatMessage on an already-deleted message and silently drop
+  // all text content (the update error is caught before firstTextChunk flips to false).
+  let typingMessageName = params.typingMessageName;
   const reply = resolveSendableOutboundReplyParts(payload);
   const mediaCount = reply.mediaCount;
   const hasMedia = reply.hasMedia;
@@ -362,22 +365,32 @@ async function deliverGoogleChatReply(params: {
           account,
           messageName: typingMessageName,
         });
+        // Clear after successful delete so the sendText path below does not attempt to
+        // update a message that no longer exists.
+        typingMessageName = undefined;
       } catch (err) {
         runtime.error?.(`Google Chat typing cleanup failed: ${String(err)}`);
-        const fallbackText = reply.hasText
-          ? text
-          : mediaCount > 1
-            ? "Sent attachments."
-            : "Sent attachment.";
-        try {
-          await updateGoogleChatMessage({
-            account,
-            messageName: typingMessageName,
-            text: fallbackText,
-          });
-          suppressCaption = Boolean(text.trim());
-        } catch (updateErr) {
-          runtime.error?.(`Google Chat typing update failed: ${String(updateErr)}`);
+        // typingMessageName is still set here: the delete threw before the reset ran.
+        // The guard below satisfies TypeScript's conservative catch-block narrowing.
+        if (typingMessageName) {
+          const fallbackText = reply.hasText
+            ? text
+            : mediaCount > 1
+              ? "Sent attachments."
+              : "Sent attachment.";
+          try {
+            await updateGoogleChatMessage({
+              account,
+              messageName: typingMessageName,
+              text: fallbackText,
+            });
+            suppressCaption = Boolean(text.trim());
+          } catch (updateErr) {
+            runtime.error?.(`Google Chat typing update failed: ${String(updateErr)}`);
+            // Also clear here so sendText falls through to sendGoogleChatMessage
+            // instead of repeatedly retrying the unavailable message and dropping text.
+            typingMessageName = undefined;
+          }
         }
       }
     }

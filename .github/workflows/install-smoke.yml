@@ -110,7 +110,7 @@ jobs:
             openclaw-ext-smoke:local
           load: true
           push: false
-          provenance: false
+          provenance: false # zizmor: ignore[no-provenance]
 
       - name: Run root Dockerfile CLI smoke
         run: |
@@ -205,7 +205,7 @@ jobs:
             openclaw-ext-smoke:local
           load: true
           push: false
-          provenance: false
+          provenance: false # zizmor: ignore[no-provenance]
 
       - name: Run root Dockerfile CLI smoke
         run: |
@@ -270,7 +270,7 @@ jobs:
           tags: openclaw-install-smoke:local
           load: true
           push: false
-          provenance: false
+          provenance: false # zizmor: ignore[no-provenance]
 
       - name: Build installer non-root image
         uses: useblacksmith/build-push-action@cbd1f60d194a98cb3be5523b15134501eaf0fbf3 # v2
@@ -280,7 +280,7 @@ jobs:
           tags: openclaw-install-nonroot:local
           load: true
           push: false
-          provenance: false
+          provenance: false # zizmor: ignore[no-provenance]
 
       - name: Setup Node environment for installer smoke
         uses: ./.github/actions/setup-node-env
