@@ -1155,7 +1155,7 @@
                   "plugins/memory-wiki",
                   "plugins/zalouser",
                   {
-                    "group": "Building Plugins",
+                    "group": "Building plugins",
                     "pages": [
                       "plugins/building-plugins",
                       "plugins/sdk-channel-plugins",
@@ -1164,7 +1164,7 @@
                     ]
                   },
                   {
-                    "group": "SDK Reference",
+                    "group": "SDK reference",
                     "pages": [
                       "plugins/sdk-overview",
                       "plugins/sdk-subpaths",
@@ -1192,7 +1192,7 @@
                 ]
               },
               {
-                "group": "Automation & Tasks",
+                "group": "Automation and tasks",
                 "pages": [
                   "automation/index",
                   "automation/cron-jobs",
@@ -1226,7 +1226,7 @@
                   "tools/trajectory",
                   "tools/video-generation",
                   {
-                    "group": "Web Browser",
+                    "group": "Web browser",
                     "pages": [
                       "tools/browser",
                       "tools/browser-control",
@@ -1236,7 +1236,7 @@
                     ]
                   },
                   {
-                    "group": "Web Tools",
+                    "group": "Web tools",
                     "pages": [
                       "tools/web-fetch",
                       "tools/web",
