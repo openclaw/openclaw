@@ -54,6 +54,60 @@ describe("realtime voice bridge session runtime", () => {
     expect(sendMark).toHaveBeenCalledWith("mark-1");
   });
 
+  it("can acknowledge provider marks without transport mark support", () => {
+    let callbacks: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
+    const bridge = makeBridge();
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "test",
+      label: "Test",
+      isConfigured: () => true,
+      createBridge: (request) => {
+        callbacks = request;
+        return bridge;
+      },
+    };
+    const sendMark = vi.fn();
+
+    createRealtimeVoiceBridgeSession({
+      provider,
+      providerConfig: {},
+      audioSink: { sendAudio: vi.fn(), sendMark },
+      markStrategy: "ack-immediately",
+    });
+
+    callbacks?.onMark?.("mark-1");
+
+    expect(sendMark).not.toHaveBeenCalled();
+    expect(bridge.acknowledgeMark).toHaveBeenCalled();
+  });
+
+  it("can ignore provider marks", () => {
+    let callbacks: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
+    const bridge = makeBridge();
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "test",
+      label: "Test",
+      isConfigured: () => true,
+      createBridge: (request) => {
+        callbacks = request;
+        return bridge;
+      },
+    };
+    const sendMark = vi.fn();
+
+    createRealtimeVoiceBridgeSession({
+      provider,
+      providerConfig: {},
+      audioSink: { sendAudio: vi.fn(), sendMark },
+      markStrategy: "ignore",
+    });
+
+    callbacks?.onMark?.("mark-1");
+
+    expect(sendMark).not.toHaveBeenCalled();
+    expect(bridge.acknowledgeMark).not.toHaveBeenCalled();
+  });
+
   it("passes tool calls the active session and triggers initial greeting on ready", () => {
     let callbacks: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
     const bridge = makeBridge();

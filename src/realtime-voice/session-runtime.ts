@@ -15,6 +15,8 @@ export type RealtimeVoiceAudioSink = {
   sendMark?: (markName: string) => void;
 };
 
+export type RealtimeVoiceMarkStrategy = "transport" | "ack-immediately" | "ignore";
+
 export type RealtimeVoiceBridgeSession = {
   bridge: RealtimeVoiceBridge;
   acknowledgeMark(): void;
@@ -33,6 +35,7 @@ export type RealtimeVoiceBridgeSessionParams = {
   audioSink: RealtimeVoiceAudioSink;
   instructions?: string;
   initialGreetingInstructions?: string;
+  markStrategy?: RealtimeVoiceMarkStrategy;
   triggerGreetingOnReady?: boolean;
   tools?: RealtimeVoiceTool[];
   onTranscript?: (role: RealtimeVoiceRole, text: string, isFinal: boolean) => void;
@@ -81,7 +84,14 @@ export function createRealtimeVoiceBridgeSession(
       }
     },
     onMark: (markName) => {
-      if (canSendAudio()) {
+      if (!canSendAudio() || params.markStrategy === "ignore") {
+        return;
+      }
+      if (params.markStrategy === "ack-immediately") {
+        bridge?.acknowledgeMark();
+        return;
+      }
+      if (params.markStrategy === undefined || params.markStrategy === "transport") {
         params.audioSink.sendMark?.(markName);
       }
     },
