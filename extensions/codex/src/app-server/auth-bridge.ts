@@ -57,7 +57,7 @@ export async function refreshCodexAppServerAuthTokens(params: {
   return {
     accessToken: loginParams.accessToken,
     chatgptAccountId: loginParams.chatgptAccountId,
-    chatgptPlanType: loginParams.chatgptPlanType,
+    chatgptPlanType: loginParams.chatgptPlanType ?? null,
   };
 }
 

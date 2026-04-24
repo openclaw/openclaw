@@ -150,7 +150,10 @@ export async function runCodexAppServerAttempt(
     : undefined;
   let yieldDetected = false;
   const startupBinding = await readCodexAppServerBinding(params.sessionFile);
-  const startupAuthProfileId = params.authProfileId ?? startupBinding?.authProfileId;
+  const startupAuthProfileId =
+    params.runtimePlan?.auth.forwardedAuthProfileId ??
+    params.authProfileId ??
+    startupBinding?.authProfileId;
   const tools = await buildDynamicTools({
     params,
     resolvedWorkspace,
@@ -493,7 +496,8 @@ export async function runCodexAppServerAttempt(
         sessionId: params.sessionId,
         provider: params.provider,
         model: params.modelId,
-        resolvedRef: `${params.provider}/${params.modelId}`,
+        resolvedRef:
+          params.runtimePlan?.observability.resolvedRef ?? `${params.provider}/${params.modelId}`,
         assistantTexts: [],
       },
       ctx: hookContext,
@@ -649,7 +653,8 @@ export async function runCodexAppServerAttempt(
         sessionId: params.sessionId,
         provider: params.provider,
         model: params.modelId,
-        resolvedRef: `${params.provider}/${params.modelId}`,
+        resolvedRef:
+          params.runtimePlan?.observability.resolvedRef ?? `${params.provider}/${params.modelId}`,
         assistantTexts: result.assistantTexts,
         ...(result.lastAssistant ? { lastAssistant: result.lastAssistant } : {}),
         ...(result.attemptUsage ? { usage: result.attemptUsage } : {}),
@@ -828,16 +833,23 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
     params.toolsAllow && params.toolsAllow.length > 0
       ? visionFilteredTools.filter((tool) => params.toolsAllow?.includes(tool.name))
       : visionFilteredTools;
-  return normalizeProviderToolSchemas({
-    tools: filteredTools,
-    provider: params.provider,
-    config: params.config,
-    workspaceDir: input.effectiveWorkspace,
-    env: process.env,
-    modelId: params.modelId,
-    modelApi: params.model.api,
-    model: params.model,
-  });
+  return (
+    params.runtimePlan?.tools.normalize(filteredTools, {
+      workspaceDir: input.effectiveWorkspace,
+      modelApi: params.model.api,
+      model: params.model,
+    }) ??
+    normalizeProviderToolSchemas({
+      tools: filteredTools,
+      provider: params.provider,
+      config: params.config,
+      workspaceDir: input.effectiveWorkspace,
+      env: process.env,
+      modelId: params.modelId,
+      modelApi: params.model.api,
+      model: params.model,
+    })
+  );
 }
 
 async function withCodexStartupTimeout<T>(params: {
