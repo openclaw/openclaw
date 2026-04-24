@@ -21,9 +21,9 @@ const OPENWEBUI_TIMEOUT_MS = 20 * 60 * 1000;
 const BUNDLED_UPDATE_TIMEOUT_MS = 20 * 60 * 1000;
 const DEFAULT_RESOURCE_LIMITS = {
   docker: DEFAULT_PARALLELISM,
-  live: 4,
-  npm: 4,
-  service: 5,
+  live: 6,
+  npm: 8,
+  service: 7,
 };
 
 const bundledChannelLaneCommand =
