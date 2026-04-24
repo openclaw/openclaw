@@ -1,5 +1,6 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { diagnosticErrorCategory } from "../../../infra/diagnostic-error-metadata.js";
+export { diagnosticErrorCategory };
 import {
   emitDiagnosticEvent,
   type DiagnosticEventInput,
