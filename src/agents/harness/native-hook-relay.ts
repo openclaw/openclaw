@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
+import path from "node:path";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { PluginApprovalResolutions } from "../../plugins/types.js";
 import { runBeforeToolCallHook } from "../pi-tools.before-tool-call.js";
@@ -110,6 +111,7 @@ type NativeHookRelayProviderAdapter = {
 const DEFAULT_RELAY_TTL_MS = 30 * 60 * 1000;
 const DEFAULT_RELAY_TIMEOUT_MS = 5_000;
 const DEFAULT_PERMISSION_TIMEOUT_MS = 120_000;
+const MAX_NATIVE_HOOK_RELAY_INVOCATIONS = 200;
 const MAX_APPROVAL_TITLE_LENGTH = 80;
 const MAX_APPROVAL_DESCRIPTION_LENGTH = 700;
 const relays = new Map<string, NativeHookRelayRegistration>();
@@ -186,6 +188,7 @@ const nativeHookRelayProviderAdapters: Record<
 export function registerNativeHookRelay(
   params: RegisterNativeHookRelayParams,
 ): NativeHookRelayRegistrationHandle {
+  pruneExpiredNativeHookRelays();
   const relayId = randomUUID();
   const allowedEvents = normalizeAllowedEvents(params.allowedEvents);
   const registration: NativeHookRelayRegistration = {
@@ -217,6 +220,7 @@ export function registerNativeHookRelay(
 
 export function unregisterNativeHookRelay(relayId: string): void {
   relays.delete(relayId);
+  removeNativeHookRelayInvocations(relayId);
 }
 
 export function buildNativeHookRelayCommand(params: {
@@ -256,10 +260,12 @@ export async function invokeNativeHookRelay(
   const event = readNativeHookRelayEvent(params.event);
   const registration = relays.get(relayId);
   if (!registration) {
+    pruneExpiredNativeHookRelays();
     throw new Error("native hook relay not found");
   }
   if (Date.now() > registration.expiresAtMs) {
     relays.delete(relayId);
+    removeNativeHookRelayInvocations(relayId);
     throw new Error("native hook relay expired");
   }
   if (registration.provider !== provider) {
@@ -277,12 +283,54 @@ export async function invokeNativeHookRelay(
     event,
     rawPayload: params.rawPayload,
   });
-  invocations.push(normalized);
+  recordNativeHookRelayInvocation(normalized);
   return processNativeHookRelayInvocation({
     registration,
     invocation: normalized,
     adapter: getNativeHookRelayProviderAdapter(provider),
   });
+}
+
+export function renderNativeHookRelayUnavailableResponse(params: {
+  provider: unknown;
+  event: unknown;
+  message?: string;
+}): NativeHookRelayProcessResponse {
+  const provider = readNativeHookRelayProvider(params.provider);
+  const event = readNativeHookRelayEvent(params.event);
+  const adapter = getNativeHookRelayProviderAdapter(provider);
+  const message = params.message?.trim() || "Native hook relay unavailable";
+  if (event === "pre_tool_use") {
+    return adapter.renderPreToolUseBlockResponse(message);
+  }
+  if (event === "permission_request") {
+    return adapter.renderPermissionDecisionResponse("deny", message);
+  }
+  return adapter.renderNoopResponse(event);
+}
+
+function recordNativeHookRelayInvocation(invocation: NativeHookRelayInvocation): void {
+  invocations.push(invocation);
+  if (invocations.length > MAX_NATIVE_HOOK_RELAY_INVOCATIONS) {
+    invocations.splice(0, invocations.length - MAX_NATIVE_HOOK_RELAY_INVOCATIONS);
+  }
+}
+
+function removeNativeHookRelayInvocations(relayId: string): void {
+  for (let index = invocations.length - 1; index >= 0; index -= 1) {
+    if (invocations[index]?.relayId === relayId) {
+      invocations.splice(index, 1);
+    }
+  }
+}
+
+function pruneExpiredNativeHookRelays(now = Date.now()): void {
+  for (const [relayId, registration] of relays) {
+    if (now > registration.expiresAtMs) {
+      relays.delete(relayId);
+      removeNativeHookRelayInvocations(relayId);
+    }
+  }
 }
 
 async function processNativeHookRelayInvocation(params: {
@@ -549,7 +597,6 @@ function formatPermissionApprovalDescription(
     `Tool: ${request.toolName}`,
     request.cwd ? `Cwd: ${request.cwd}` : undefined,
     request.model ? `Model: ${request.model}` : undefined,
-    request.sessionKey ? `Session: ${request.sessionKey}` : undefined,
     formatToolInputPreview(request.toolInput),
   ].filter((line): line is string => Boolean(line));
   return lines.join("\n");
@@ -583,10 +630,13 @@ function truncateText(value: string, maxLength: number): string {
 
 function resolveOpenClawCliExecutable(): string {
   const argvEntry = process.argv[1];
-  if (argvEntry && existsSync(argvEntry)) {
-    return argvEntry;
+  if (argvEntry) {
+    const resolved = path.resolve(argvEntry);
+    if (existsSync(resolved)) {
+      return resolved;
+    }
   }
-  return "openclaw";
+  throw new Error("Cannot resolve OpenClaw CLI executable path for native hook relay");
 }
 
 function normalizeAllowedEvents(
@@ -605,12 +655,15 @@ function normalizePositiveInteger(value: number | undefined, fallback: number): 
 }
 
 function shellQuoteArgs(args: readonly string[]): string {
-  return args.map(shellQuoteArg).join(" ");
+  return args.map((arg) => shellQuoteArg(arg, process.platform)).join(" ");
 }
 
-function shellQuoteArg(value: string): string {
+function shellQuoteArg(value: string, platform: NodeJS.Platform): string {
   if (/^[A-Za-z0-9_/:=.,@%+-]+$/.test(value)) {
     return value;
+  }
+  if (platform === "win32") {
+    return `"${value.replaceAll('"', '\\"')}"`;
   }
   return `'${value.replaceAll("'", "'\\''")}'`;
 }

@@ -45,6 +45,7 @@ import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import { handleCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
 import {
+  buildCodexNativeHookRelayDisabledConfig,
   buildCodexNativeHookRelayConfig,
   CODEX_NATIVE_HOOK_RELAY_EVENTS,
 } from "./native-hook-relay.js";
@@ -278,7 +279,9 @@ export async function runCodexAppServerAttempt(
           events: options.nativeHookRelay?.events,
           hookTimeoutSec: options.nativeHookRelay?.hookTimeoutSec,
         })
-      : undefined;
+      : options.nativeHookRelay?.enabled === false
+        ? buildCodexNativeHookRelayDisabledConfig()
+        : undefined;
     ({ client, thread } = await withCodexStartupTimeout({
       timeoutMs: params.timeoutMs,
       timeoutFloorMs: options.startupTimeoutFloorMs,

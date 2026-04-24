@@ -1,5 +1,8 @@
 import { Readable, Writable } from "node:stream";
-import type { NativeHookRelayProcessResponse } from "../agents/harness/native-hook-relay.js";
+import {
+  renderNativeHookRelayUnavailableResponse,
+  type NativeHookRelayProcessResponse,
+} from "../agents/harness/native-hook-relay.js";
 import { callGateway } from "../gateway/call.js";
 import { ADMIN_SCOPE } from "../gateway/method-scopes.js";
 
@@ -49,11 +52,15 @@ export async function runNativeHookRelayCli(
     writeText(stderr, response.stderr);
     return response.exitCode;
   } catch (error) {
-    if (process.env.OPENCLAW_NATIVE_HOOK_RELAY_DEBUG === "1") {
-      writeText(stderr, formatRelayCliError("native hook relay unavailable", error));
-    }
-    // Hook relay availability should not make the native harness fail closed.
-    return 0;
+    writeText(stderr, formatRelayCliError("native hook relay unavailable", error));
+    const response = renderNativeHookRelayUnavailableResponse({
+      provider,
+      event,
+      message: "Native hook relay unavailable",
+    });
+    writeText(stdout, response.stdout);
+    writeText(stderr, response.stderr);
+    return response.exitCode;
   }
 }
 

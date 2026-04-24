@@ -463,7 +463,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
   });
 
-  it("does not send Codex native hook config when the relay is disabled", async () => {
+  it("sends clearing Codex native hook config when the relay is disabled", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const harness = createStartedThreadHarness();
@@ -476,7 +476,16 @@ describe("runCodexAppServerAttempt", () => {
     await run;
 
     const startRequest = harness.requests.find((request) => request.method === "thread/start");
-    expect(startRequest?.params).not.toHaveProperty("config");
+    expect(startRequest?.params).toEqual(
+      expect.objectContaining({
+        config: {
+          "features.codex_hooks": false,
+          "hooks.PreToolUse": [],
+          "hooks.PostToolUse": [],
+          "hooks.PermissionRequest": [],
+        },
+      }),
+    );
   });
 
   it("cleans up native hook relay state when turn/start fails", async () => {

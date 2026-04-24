@@ -90,6 +90,62 @@ describe("native hook relay registry", () => {
     ]);
   });
 
+  it("removes retained invocations when a relay is unregistered", async () => {
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-1",
+      runId: "run-1",
+      allowedEvents: ["pre_tool_use"],
+    });
+
+    await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "pre_tool_use",
+      rawPayload: {
+        hook_event_name: "PreToolUse",
+        tool_name: "Bash",
+        tool_use_id: "call-1",
+        tool_input: { command: "pnpm test" },
+      },
+    });
+
+    expect(__testing.getNativeHookRelayInvocationsForTests()).toHaveLength(1);
+
+    relay.unregister();
+
+    expect(__testing.getNativeHookRelayRegistrationForTests(relay.relayId)).toBeUndefined();
+    expect(__testing.getNativeHookRelayInvocationsForTests()).toEqual([]);
+  });
+
+  it("keeps only a bounded history of retained invocations", async () => {
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-1",
+      runId: "run-1",
+      allowedEvents: ["pre_tool_use"],
+    });
+
+    for (let index = 0; index < 210; index += 1) {
+      await invokeNativeHookRelay({
+        provider: "codex",
+        relayId: relay.relayId,
+        event: "pre_tool_use",
+        rawPayload: {
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_use_id: `call-${index}`,
+          tool_input: { command: `echo ${index}` },
+        },
+      });
+    }
+
+    const invocations = __testing.getNativeHookRelayInvocationsForTests();
+    expect(invocations).toHaveLength(200);
+    expect(invocations.some((invocation) => invocation.toolUseId === "call-0")).toBe(false);
+    expect(invocations.at(-1)).toEqual(expect.objectContaining({ toolUseId: "call-209" }));
+  });
+
   it("rejects missing, wrong-provider, and disallowed-event invocations", async () => {
     await expect(
       invokeNativeHookRelay({
@@ -146,6 +202,7 @@ describe("native hook relay registry", () => {
         rawPayload: {},
       }),
     ).rejects.toThrow("expired");
+    expect(__testing.getNativeHookRelayRegistrationForTests(relay.relayId)).toBeUndefined();
   });
 
   it("uses the Codex no-op output when no OpenClaw hook decides", async () => {

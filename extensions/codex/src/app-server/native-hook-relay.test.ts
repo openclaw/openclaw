@@ -1,6 +1,9 @@
 import type { NativeHookRelayRegistrationHandle } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { describe, expect, it } from "vitest";
-import { buildCodexNativeHookRelayConfig } from "./native-hook-relay.js";
+import {
+  buildCodexNativeHookRelayConfig,
+  buildCodexNativeHookRelayDisabledConfig,
+} from "./native-hook-relay.js";
 
 describe("Codex native hook relay config", () => {
   it("builds deterministic Codex config overrides with command hooks", () => {
@@ -86,6 +89,15 @@ describe("Codex native hook relay config", () => {
           ],
         },
       ],
+    });
+  });
+
+  it("builds deterministic clearing config when the relay is disabled", () => {
+    expect(buildCodexNativeHookRelayDisabledConfig()).toEqual({
+      "features.codex_hooks": false,
+      "hooks.PreToolUse": [],
+      "hooks.PostToolUse": [],
+      "hooks.PermissionRequest": [],
     });
   });
 });

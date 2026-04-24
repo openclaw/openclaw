@@ -47,6 +47,15 @@ export function buildCodexNativeHookRelayConfig(params: {
   return config;
 }
 
+export function buildCodexNativeHookRelayDisabledConfig(): JsonObject {
+  return {
+    "features.codex_hooks": false,
+    "hooks.PreToolUse": [],
+    "hooks.PostToolUse": [],
+    "hooks.PermissionRequest": [],
+  };
+}
+
 function normalizeHookTimeoutSec(value: number | undefined): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.ceil(value) : 5;
 }

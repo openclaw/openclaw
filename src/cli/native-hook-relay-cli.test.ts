@@ -90,19 +90,82 @@ describe("native hook relay CLI", () => {
     expect(callGateway).not.toHaveBeenCalled();
   });
 
-  it("fails open when the gateway relay is unavailable", async () => {
+  it("fails closed for PreToolUse when the gateway relay is unavailable", async () => {
     const callGateway = vi.fn(async () => {
       throw new Error("gateway closed");
     });
+    const stdout = createWritableTextBuffer();
+    const stderr = createWritableTextBuffer();
 
     const exitCode = await runNativeHookRelayCli(
-      { provider: "codex", relayId: "relay-1", event: "post_tool_use" },
+      { provider: "codex", relayId: "relay-1", event: "pre_tool_use" },
       {
         stdin: createReadableTextStream("{}"),
+        stdout,
+        stderr,
         callGateway: callGateway as never,
       },
     );
 
     expect(exitCode).toBe(0);
+    expect(JSON.parse(stdout.text())).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: "Native hook relay unavailable",
+      },
+    });
+    expect(stderr.text()).toContain("native hook relay unavailable");
+  });
+
+  it("fails closed for PermissionRequest when the gateway relay is unavailable", async () => {
+    const callGateway = vi.fn(async () => {
+      throw new Error("gateway closed");
+    });
+    const stdout = createWritableTextBuffer();
+    const stderr = createWritableTextBuffer();
+
+    const exitCode = await runNativeHookRelayCli(
+      { provider: "codex", relayId: "relay-1", event: "permission_request" },
+      {
+        stdin: createReadableTextStream("{}"),
+        stdout,
+        stderr,
+        callGateway: callGateway as never,
+      },
+    );
+
+    expect(exitCode).toBe(0);
+    expect(JSON.parse(stdout.text())).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "PermissionRequest",
+        decision: {
+          behavior: "deny",
+          message: "Native hook relay unavailable",
+        },
+      },
+    });
+  });
+
+  it("keeps PostToolUse unavailable handling observational", async () => {
+    const callGateway = vi.fn(async () => {
+      throw new Error("gateway closed");
+    });
+    const stdout = createWritableTextBuffer();
+    const stderr = createWritableTextBuffer();
+
+    const exitCode = await runNativeHookRelayCli(
+      { provider: "codex", relayId: "relay-1", event: "post_tool_use" },
+      {
+        stdin: createReadableTextStream("{}"),
+        stdout,
+        stderr,
+        callGateway: callGateway as never,
+      },
+    );
+
+    expect(exitCode).toBe(0);
+    expect(stdout.text()).toBe("");
+    expect(stderr.text()).toContain("native hook relay unavailable");
   });
 });
