@@ -29,7 +29,7 @@ describe("transport params runtime contract (Pi/OpenAI path)", () => {
   it.each(OPENAI_GPT5_TRANSPORT_DEFAULT_CASES)(
     "applies OpenAI GPT-5 transport defaults for $provider/$modelId",
     ({ provider, modelId }) => {
-      expect(resolveExtraParams({ cfg: undefined, provider, modelId })).toMatchObject(
+      expect(resolveExtraParams({ cfg: undefined, provider, modelId })).toEqual(
         OPENAI_GPT5_TRANSPORT_DEFAULTS,
       );
     },
