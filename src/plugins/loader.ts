@@ -690,7 +690,14 @@ function ensureOpenClawPluginSdkAlias(distRoot: string): void {
       "./plugin-sdk/*": "./plugin-sdk/*.js",
     },
   });
-  fs.rmSync(pluginSdkAliasDir, { recursive: true, force: true });
+  try {
+    if (fs.existsSync(pluginSdkAliasDir) && !fs.lstatSync(pluginSdkAliasDir).isDirectory()) {
+      fs.rmSync(pluginSdkAliasDir, { recursive: true, force: true });
+    }
+  } catch {
+    // Another process may be creating the alias at the same time; mkdir/write
+    // below will either converge or surface the real filesystem error.
+  }
   fs.mkdirSync(pluginSdkAliasDir, { recursive: true });
   for (const entry of fs.readdirSync(pluginSdkDir, { withFileTypes: true })) {
     if (!entry.isFile() || path.extname(entry.name) !== ".js") {
@@ -728,6 +735,7 @@ export const __testing = {
   resolvePluginSdkAliasCandidateOrder,
   resolvePluginSdkAliasFile,
   resolvePluginRuntimeModulePath,
+  ensureOpenClawPluginSdkAlias,
   shouldLoadChannelPluginInSetupRuntime,
   shouldPreferNativeJiti,
   toSafeImportPath,
