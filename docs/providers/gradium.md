@@ -6,8 +6,6 @@ read_when:
 title: "Gradium"
 ---
 
-# Gradium
-
 Gradium is a bundled text-to-speech provider for OpenClaw. It can generate normal audio replies, voice-note-compatible Opus output, and 8 kHz u-law audio for telephony surfaces.
 
 ## Setup
