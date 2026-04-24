@@ -385,6 +385,10 @@ function resolveAcceptedSession(
   return { accepted: true, sessionKey };
 }
 
+function shouldFlushChatStreamForToolEvent(host: ToolStreamHost, payload: AgentEventPayload) {
+  return Boolean(host.chatRunId && payload.runId === host.chatRunId);
+}
+
 function handleLifecycleFallbackEvent(host: CompactionHost, payload: AgentEventPayload) {
   const data = payload.data ?? {};
   const phase = payload.stream === "fallback" ? "fallback" : toTrimmedString(data.phase);
@@ -500,8 +504,10 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   let entry = host.toolStreamById.get(toolCallId);
   if (!entry) {
     // Commit any in-progress streaming text as a segment so it renders
-    // above the tool card instead of below it.
-    if (host.chatStream && host.chatStream.trim().length > 0) {
+    // above the tool card instead of below it. Only do this for the active
+    // chat run; session-scoped tool events from child/subagent runs must not
+    // flush the currently visible assistant stream.
+    if (shouldFlushChatStreamForToolEvent(host, payload) && host.chatStream?.trim()) {
       host.chatStreamSegments = [...host.chatStreamSegments, { text: host.chatStream, ts: now }];
       host.chatStream = null;
       host.chatStreamStartedAt = null;

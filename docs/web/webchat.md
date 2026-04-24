@@ -36,6 +36,9 @@ Status: the macOS/iOS SwiftUI chat UI talks directly to the Gateway WebSocket.
 - Live `chat` events also suppress commentary-phase assistant stream text, so
   internal progress text does not briefly appear and then disappear after a
   history reload.
+- Session-scoped tool output, including subagent tool results, can update tool
+  cards without flushing the active chat stream unless it belongs to the same
+  run.
 - `chat.inject` appends an assistant note directly to the transcript and broadcasts it to the UI (no agent run).
 - Aborted runs can keep partial assistant output visible in the UI.
 - Gateway persists aborted partial assistant text into transcript history when buffered output exists, and marks those entries with abort metadata.

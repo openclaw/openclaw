@@ -276,3 +276,54 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     vi.useRealTimers();
   });
 });
+
+describe("app-tool-stream tool result handling", () => {
+  it("does not flush active chat stream when a different run emits session-scoped tool output", () => {
+    const host = createHost({
+      chatRunId: "run-active",
+      chatStream:
+        "Continue. I narrowed it to a small but real gap: tighten the destroySandbox response contract.",
+    });
+
+    handleAgentEvent(
+      host,
+      agentEvent("run-subagent", 1, "tool", {
+        phase: "result",
+        name: "sessions_spawn",
+        toolCallId: "tool-sessions-spawn",
+        result: { text: "subagent spawned" },
+      }),
+    );
+
+    expect(host.toolStreamOrder).toEqual(["tool-sessions-spawn"]);
+    expect(host.chatToolMessages).toHaveLength(1);
+    expect(host.chatStream).toBe(
+      "Continue. I narrowed it to a small but real gap: tighten the destroySandbox response contract.",
+    );
+    expect(host.chatStreamSegments).toEqual([]);
+  });
+
+  it("flushes active chat stream before tool output from the same run", () => {
+    const host = createHost({
+      chatRunId: "run-active",
+      chatStream: "Visible assistant text before the tool.",
+    });
+
+    handleAgentEvent(
+      host,
+      agentEvent("run-active", 1, "tool", {
+        phase: "result",
+        name: "sessions_spawn",
+        toolCallId: "tool-active",
+        result: { text: "subagent spawned" },
+      }),
+    );
+
+    expect(host.toolStreamOrder).toEqual(["tool-active"]);
+    expect(host.chatToolMessages).toHaveLength(1);
+    expect(host.chatStream).toBeNull();
+    expect(host.chatStreamSegments).toEqual([
+      { text: "Visible assistant text before the tool.", ts: expect.any(Number) },
+    ]);
+  });
+});
