@@ -9,13 +9,20 @@ import {
 } from "@mariozechner/pi-coding-agent";
 import { filterHeartbeatPairs } from "../../../auto-reply/heartbeat-filter.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
+import {
+  createDiagnosticTraceContext,
+  freezeDiagnosticTraceContext,
+} from "../../../infra/diagnostic-trace-context.js";
 import { isEmbeddedMode } from "../../../infra/embedded-mode.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { resolveHeartbeatSummaryForAgent } from "../../../infra/heartbeat-summary.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
-import { resolveToolCallArgumentsEncoding } from "../../../plugins/provider-model-compat.js";
+import {
+  extractModelCompat,
+  resolveToolCallArgumentsEncoding,
+} from "../../../plugins/provider-model-compat.js";
 import {
   resolveProviderSystemPromptContribution,
   resolveProviderTextTransforms,
@@ -504,12 +511,13 @@ export async function runEmbeddedAttempt(
     const sessionLabel = params.sessionKey ?? params.sessionId;
     const contextInjectionMode = resolveContextInjectionMode(params.config);
     const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
+    const diagnosticTrace = freezeDiagnosticTraceContext(createDiagnosticTraceContext());
     const toolsRaw = params.disableTools
       ? []
       : (() => {
           const allTools = createOpenClawCodingTools({
             agentId: sessionAgentId,
-            ...buildEmbeddedAttemptToolRunContext(params),
+            ...buildEmbeddedAttemptToolRunContext({ ...params, trace: diagnosticTrace }),
             exec: {
               ...params.execOverrides,
               elevated: params.bashElevated,
@@ -545,7 +553,7 @@ export async function runEmbeddedAttempt(
             abortSignal: runAbortController.signal,
             modelProvider: params.model.provider,
             modelId: params.modelId,
-            modelCompat: params.model.compat,
+            modelCompat: extractModelCompat(params.model),
             modelApi: params.model.api,
             modelContextWindowTokens: params.model.contextWindow,
             modelAuthMode: resolveModelAuthMode(params.model.provider, params.config),
@@ -1942,6 +1950,7 @@ export async function runEmbeddedAttempt(
         }
         const hookCtx = {
           runId: params.runId,
+          trace: freezeDiagnosticTraceContext(diagnosticTrace),
           agentId: hookAgentId,
           sessionKey: params.sessionKey,
           sessionId: params.sessionId,
@@ -2063,15 +2072,23 @@ export async function runEmbeddedAttempt(
             leafMessage: leafEntry.message,
           });
           effectivePrompt = orphanPromptMerge.prompt;
-          if (leafEntry.parentId) {
-            sessionManager.branch(leafEntry.parentId);
-          } else {
-            sessionManager.resetLeaf();
+          if (orphanPromptMerge.removeLeaf) {
+            if (leafEntry.parentId) {
+              sessionManager.branch(leafEntry.parentId);
+            } else {
+              sessionManager.resetLeaf();
+            }
+            const sessionContext = sessionManager.buildSessionContext();
+            activeSession.agent.state.messages = sessionContext.messages;
           }
-          const sessionContext = sessionManager.buildSessionContext();
-          activeSession.agent.state.messages = sessionContext.messages;
           const orphanRepairMessage =
-            `${orphanPromptMerge.merged ? "Merged and removed" : "Removed"} orphaned user message ` +
+            `${
+              orphanPromptMerge.removeLeaf
+                ? orphanPromptMerge.merged
+                  ? "Merged and removed"
+                  : "Removed already-queued"
+                : "Preserved"
+            } orphaned user message ` +
             `to prevent consecutive user turns. ` +
             `runId=${params.runId} sessionId=${params.sessionId} trigger=${params.trigger}`;
           if (shouldWarnOnOrphanedUserRepair(params.trigger)) {
@@ -2173,6 +2190,7 @@ export async function runEmbeddedAttempt(
                 },
                 {
                   runId: params.runId,
+                  trace: freezeDiagnosticTraceContext(diagnosticTrace),
                   agentId: hookAgentId,
                   sessionKey: params.sessionKey,
                   sessionId: params.sessionId,
@@ -2580,6 +2598,7 @@ export async function runEmbeddedAttempt(
               },
               {
                 runId: params.runId,
+                trace: freezeDiagnosticTraceContext(diagnosticTrace),
                 agentId: hookAgentId,
                 sessionKey: params.sessionKey,
                 sessionId: params.sessionId,
@@ -2681,6 +2700,7 @@ export async function runEmbeddedAttempt(
             },
             {
               runId: params.runId,
+              trace: freezeDiagnosticTraceContext(diagnosticTrace),
               agentId: hookAgentId,
               sessionKey: params.sessionKey,
               sessionId: params.sessionId,
@@ -2768,6 +2788,7 @@ export async function runEmbeddedAttempt(
         promptErrorSource,
         preflightRecovery,
         sessionIdUsed,
+        diagnosticTrace,
         bootstrapPromptWarningSignaturesSeen: bootstrapPromptWarning.warningSignaturesSeen,
         bootstrapPromptWarningSignature: bootstrapPromptWarning.signature,
         systemPromptReport,

@@ -7,6 +7,7 @@ import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
 import { resolveContextEngine } from "../../context-engine/registry.js";
 import { emitAgentPlanEvent } from "../../infra/agent-events.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
+import { freezeDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
@@ -52,7 +53,6 @@ import {
   resolveAuthProfileOrder,
   shouldPreferExplicitConfigApiKeyAuth,
 } from "../model-auth.js";
-import { normalizeProviderId } from "../model-selection.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import {
   retireSessionMcpRuntime,
@@ -74,6 +74,7 @@ import {
   parseImageSizeError,
   pickFallbackThinkingLevel,
 } from "../pi-embedded-helpers.js";
+import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
@@ -414,10 +415,17 @@ export async function runEmbeddedPiAgent(
       let lockedProfileId = params.authProfileIdSource === "user" ? preferredProfileId : undefined;
       if (lockedProfileId) {
         const lockedProfile = authStore.profiles[lockedProfileId];
-        if (
-          !lockedProfile ||
-          normalizeProviderId(lockedProfile.provider) !== normalizeProviderId(provider)
-        ) {
+        const lockedProfileProvider = lockedProfile
+          ? resolveProviderIdForAuth(lockedProfile.provider, {
+              config: params.config,
+              workspaceDir: resolvedWorkspace,
+            })
+          : undefined;
+        const runProvider = resolveProviderIdForAuth(provider, {
+          config: params.config,
+          workspaceDir: resolvedWorkspace,
+        });
+        if (!lockedProfile || !lockedProfileProvider || lockedProfileProvider !== runProvider) {
           lockedProfileId = undefined;
         }
       }
@@ -1734,6 +1742,10 @@ export async function runEmbeddedPiAgent(
             toolMediaUrls: attempt.toolMediaUrls,
             toolAudioAsVoice: attempt.toolAudioAsVoice,
           });
+          const attemptToolSummary = buildTraceToolSummary({
+            toolMetas: attempt.toolMetas,
+            hadFailure: Boolean(attempt.lastToolError),
+          });
 
           // Timeout aborts can leave the run without any assistant payloads.
           // Emit an explicit timeout error instead of silently completing, so
@@ -1773,6 +1785,7 @@ export async function runEmbeddedPiAgent(
                 finalAssistantRawText,
                 replayInvalid,
                 livenessState,
+                toolSummary: attemptToolSummary,
               },
               didSendViaMessagingTool: attempt.didSendViaMessagingTool,
               didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
@@ -1933,6 +1946,7 @@ export async function runEmbeddedPiAgent(
                 finalAssistantRawText,
                 replayInvalid,
                 livenessState,
+                toolSummary: attemptToolSummary,
               },
               didSendViaMessagingTool: attempt.didSendViaMessagingTool,
               didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
@@ -1980,6 +1994,7 @@ export async function runEmbeddedPiAgent(
                 finalAssistantRawText,
                 replayInvalid,
                 livenessState,
+                toolSummary: attemptToolSummary,
               },
               didSendViaMessagingTool: attempt.didSendViaMessagingTool,
               didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
@@ -2089,6 +2104,7 @@ export async function runEmbeddedPiAgent(
                 finalAssistantRawText,
                 replayInvalid,
                 livenessState,
+                toolSummary: attemptToolSummary,
               },
               didSendViaMessagingTool: attempt.didSendViaMessagingTool,
               didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
@@ -2134,6 +2150,9 @@ export async function runEmbeddedPiAgent(
           });
           return {
             payloads: payloadsWithToolMedia?.length ? payloadsWithToolMedia : undefined,
+            ...(attempt.diagnosticTrace
+              ? { diagnosticTrace: freezeDiagnosticTraceContext(attempt.diagnosticTrace) }
+              : {}),
             meta: {
               durationMs: Date.now() - started,
               agentMeta,
@@ -2184,10 +2203,7 @@ export async function runEmbeddedPiAgent(
                 ...(params.verboseLevel ? { verbose: params.verboseLevel } : {}),
                 ...(params.blockReplyBreak ? { blockStreaming: params.blockReplyBreak } : {}),
               },
-              toolSummary: buildTraceToolSummary({
-                toolMetas: attempt.toolMetas,
-                hadFailure: Boolean(attempt.lastToolError),
-              }),
+              toolSummary: attemptToolSummary,
               completion: {
                 ...(stopReason ? { stopReason } : {}),
                 ...(stopReason ? { finishReason: stopReason } : {}),

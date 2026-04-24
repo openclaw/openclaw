@@ -76,9 +76,8 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 
 ## Quick start and first-run setup
 
-First-run setup Q&A — install, onboard, auth routes, subscriptions, initial
-failures — moved to a dedicated page:
-[FAQ — quick start and first-run setup](/help/faq-first-run).
+First-run Q&A — install, onboard, auth routes, subscriptions, initial failures —
+lives on the [First-run FAQ](/help/faq-first-run).
 
 ## What is OpenClaw?
 
@@ -1380,8 +1379,7 @@ failures — moved to a dedicated page:
 ## Models, failover, and auth profiles
 
 Model Q&A — defaults, selection, aliases, switching, failover, auth profiles —
-moved to a dedicated page:
-[FAQ — models and auth profiles](/help/faq-models).
+lives on the [Models FAQ](/help/faq-models).
 
 ## Gateway: ports, "already running", and remote mode
 
@@ -1970,6 +1968,6 @@ Still stuck? Ask in [Discord](https://discord.com/invite/clawd) or open a [GitHu
 
 ## Related
 
-- [FAQ — quick start and first-run setup](/help/faq-first-run)
-- [FAQ — models and auth profiles](/help/faq-models)
-- [Troubleshooting](/help/troubleshooting)
+- [First-run FAQ](/help/faq-first-run) — install, onboard, auth, subscriptions, early failures
+- [Models FAQ](/help/faq-models) — model selection, failover, auth profiles
+- [Troubleshooting](/help/troubleshooting) — symptom-first triage

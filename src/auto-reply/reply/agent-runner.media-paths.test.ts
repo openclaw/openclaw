@@ -1,5 +1,5 @@
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TemplateContext } from "../templating.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import { createMockFollowupRun, createMockTypingController } from "./test-helpers.js";
@@ -117,8 +117,11 @@ function makeRunReplyAgentParams(
 }
 
 describe("runReplyAgent media path normalization", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
+    ({ runReplyAgent } = await import("./agent-runner.js"));
+  });
+
+  beforeEach(() => {
     runEmbeddedPiAgentMock.mockReset();
     runWithModelFallbackMock.mockReset();
     abortEmbeddedPiRunMock.mockReset();
@@ -155,7 +158,6 @@ describe("runReplyAgent media path normalization", () => {
         model,
       }),
     );
-    ({ runReplyAgent } = await import("./agent-runner.js"));
   });
 
   afterEach(() => {

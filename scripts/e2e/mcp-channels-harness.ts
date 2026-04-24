@@ -74,12 +74,12 @@ export function extractTextFromGatewayPayload(
 
 export async function waitFor<T>(
   label: string,
-  predicate: () => T | undefined,
+  predicate: () => Promise<T | undefined> | T | undefined,
   timeoutMs = 10_000,
 ): Promise<T> {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
-    const value = predicate();
+    const value = await predicate();
     if (value !== undefined) {
       return value;
     }

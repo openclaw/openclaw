@@ -1,3 +1,4 @@
+import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config.js";
 import type { v2 } from "./protocol-generated/typescript/index.js";
 import { readCodexModelListResponse } from "./protocol-validators.js";
@@ -17,6 +18,7 @@ export type CodexAppServerModel = {
 export type CodexAppServerModelListResult = {
   models: CodexAppServerModel[];
   nextCursor?: string;
+  truncated?: boolean;
 };
 
 export type CodexAppServerListModelsOptions = {
@@ -32,6 +34,40 @@ export type CodexAppServerListModelsOptions = {
 export async function listCodexAppServerModels(
   options: CodexAppServerListModelsOptions = {},
 ): Promise<CodexAppServerModelListResult> {
+  return await withCodexAppServerModelClient(options, async ({ client, timeoutMs }) =>
+    requestModelListPage(client, { ...options, timeoutMs }),
+  );
+}
+
+export async function listAllCodexAppServerModels(
+  options: CodexAppServerListModelsOptions & { maxPages?: number } = {},
+): Promise<CodexAppServerModelListResult> {
+  const maxPages = normalizeMaxPages(options.maxPages);
+  return await withCodexAppServerModelClient(options, async ({ client, timeoutMs }) => {
+    const models: CodexAppServerModel[] = [];
+    let cursor = options.cursor;
+    let nextCursor: string | undefined;
+    for (let page = 0; page < maxPages; page += 1) {
+      const result = await requestModelListPage(client, {
+        ...options,
+        timeoutMs,
+        cursor,
+      });
+      models.push(...result.models);
+      nextCursor = result.nextCursor;
+      if (!nextCursor) {
+        return { models };
+      }
+      cursor = nextCursor;
+    }
+    return { models, nextCursor, truncated: true };
+  });
+}
+
+async function withCodexAppServerModelClient<T>(
+  options: CodexAppServerListModelsOptions,
+  run: (params: { client: CodexAppServerClient; timeoutMs: number }) => Promise<T>,
+): Promise<T> {
   const timeoutMs = options.timeoutMs ?? 2500;
   const useSharedClient = options.sharedClient !== false;
   const { createIsolatedCodexAppServerClient, getSharedCodexAppServerClient } =
@@ -48,21 +84,28 @@ export async function listCodexAppServerModels(
         authProfileId: options.authProfileId,
       });
   try {
-    const response = await client.request(
-      "model/list",
-      {
-        limit: options.limit ?? null,
-        cursor: options.cursor ?? null,
-        includeHidden: options.includeHidden ?? null,
-      },
-      { timeoutMs },
-    );
-    return readModelListResult(response);
+    return await run({ client, timeoutMs });
   } finally {
     if (!useSharedClient) {
       client.close();
     }
   }
+}
+
+async function requestModelListPage(
+  client: CodexAppServerClient,
+  options: CodexAppServerListModelsOptions & { timeoutMs: number },
+): Promise<CodexAppServerModelListResult> {
+  const response = await client.request(
+    "model/list",
+    {
+      limit: options.limit ?? null,
+      cursor: options.cursor ?? null,
+      includeHidden: options.includeHidden ?? null,
+    },
+    { timeoutMs: options.timeoutMs },
+  );
+  return readModelListResult(response);
 }
 
 export function readModelListResult(value: unknown): CodexAppServerModelListResult {
@@ -115,4 +158,8 @@ function readNonEmptyString(value: unknown): string | undefined {
   }
   const trimmed = value.trim();
   return trimmed || undefined;
+}
+
+function normalizeMaxPages(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : 20;
 }

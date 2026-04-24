@@ -152,6 +152,10 @@ OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1 \
 openclaw node restart
 ```
 
+`OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1` is process environment, not an
+`openclaw.json` setting. `openclaw node install` stores it in the LaunchAgent
+environment when it is present on the install command.
+
 Approve the node from the Gateway host:
 
 ```bash

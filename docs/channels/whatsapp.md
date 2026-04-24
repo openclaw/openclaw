@@ -66,6 +66,13 @@ openclaw channels login --channel whatsapp
 openclaw channels login --channel whatsapp --account work
 ```
 
+    To attach an existing/custom WhatsApp Web auth directory before login:
+
+```bash
+openclaw channels add --channel whatsapp --account work --auth-dir /path/to/wa-auth
+openclaw channels login --channel whatsapp --account work
+```
+
   </Step>
 
   <Step title="Start the gateway">
