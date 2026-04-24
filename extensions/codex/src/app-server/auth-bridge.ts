@@ -1,6 +1,7 @@
 import {
   ensureAuthProfileStore,
   loadAuthProfileStoreForSecretsRuntime,
+  resolveProviderIdForAuth,
   resolveApiKeyForProfile,
   saveAuthProfileStore,
   type AuthProfileCredential,
@@ -10,6 +11,8 @@ import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config.js";
 import type { ChatgptAuthTokensRefreshResponse } from "./protocol-generated/typescript/v2/ChatgptAuthTokensRefreshResponse.js";
 import type { LoginAccountParams } from "./protocol-generated/typescript/v2/LoginAccountParams.js";
+
+const CODEX_APP_SERVER_AUTH_PROVIDER = "openai-codex";
 
 export async function bridgeCodexAppServerStartOptions(params: {
   startOptions: CodexAppServerStartOptions;
@@ -75,9 +78,9 @@ async function resolveCodexAppServerAuthProfileLoginParamsInternal(params: {
   if (!credential) {
     throw new Error(`Codex app-server auth profile "${profileId}" was not found.`);
   }
-  if (credential.provider !== "openai-codex") {
+  if (!isCodexAppServerAuthProvider(credential.provider)) {
     throw new Error(
-      `Codex app-server auth profile "${profileId}" must belong to provider "openai-codex".`,
+      `Codex app-server auth profile "${profileId}" must belong to provider "openai-codex" or a supported alias.`,
     );
   }
   const loginParams = await resolveLoginParamsForCredential(profileId, credential, {
@@ -143,14 +146,19 @@ async function resolveOAuthCredentialForCodexAppServer(
     agentDir: params.agentDir,
   });
   const refreshed = loadAuthProfileStoreForSecretsRuntime(params.agentDir).profiles[profileId];
+  const storedCredential = store.profiles[profileId];
   const candidate =
-    refreshed?.type === "oauth" && refreshed.provider === credential.provider
+    refreshed?.type === "oauth" && isCodexAppServerAuthProvider(refreshed.provider)
       ? refreshed
-      : store.profiles[profileId]?.type === "oauth" &&
-          store.profiles[profileId]?.provider === credential.provider
-        ? store.profiles[profileId]
+      : storedCredential?.type === "oauth" &&
+          isCodexAppServerAuthProvider(storedCredential.provider)
+        ? storedCredential
         : credential;
   return resolved?.apiKey ? { ...candidate, access: resolved.apiKey } : candidate;
+}
+
+function isCodexAppServerAuthProvider(provider: string): boolean {
+  return resolveProviderIdForAuth(provider) === CODEX_APP_SERVER_AUTH_PROVIDER;
 }
 
 function buildChatgptAuthTokensParams(
