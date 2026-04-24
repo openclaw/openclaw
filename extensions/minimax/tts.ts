@@ -1,3 +1,5 @@
+import { assertOkOrThrowProviderError } from "openclaw/plugin-sdk/provider-http";
+
 export const DEFAULT_MINIMAX_TTS_BASE_URL = "https://api.minimax.io";
 
 export const MINIMAX_TTS_MODELS = ["speech-2.8-hd", "speech-01-240228"] as const;
@@ -72,10 +74,7 @@ export async function minimaxTTS(params: {
       signal: controller.signal,
     });
 
-    if (!response.ok) {
-      const errBody = await response.text().catch(() => "");
-      throw new Error(`MiniMax TTS API error (${response.status})${errBody ? `: ${errBody}` : ""}`);
-    }
+    await assertOkOrThrowProviderError(response, "MiniMax TTS API error");
 
     const body = (await response.json()) as { data?: { audio?: string } };
     const hexAudio = body?.data?.audio;
