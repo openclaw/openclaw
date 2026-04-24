@@ -1,4 +1,5 @@
 import { ensurePluginAllowlisted } from "../../../config/plugins-allowlist.js";
+import { isBlockedObjectKey } from "../../../config/prototype-keys.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
   loadPluginManifestRegistry,
@@ -77,26 +78,38 @@ function resolveRegistry(params: {
   );
 }
 
-function hasCodexManifest(registry: PluginManifestRegistry): boolean {
-  return registry.plugins.some((plugin) => plugin.id === CODEX_PLUGIN_ID);
+function hasBundledCodexManifest(registry: PluginManifestRegistry): boolean {
+  return registry.plugins.some(
+    (plugin) => plugin.id === CODEX_PLUGIN_ID && plugin.origin === "bundled",
+  );
 }
 
-function shouldEnableCodexForOpenAi(
-  cfg: OpenClawConfig,
-  registry: PluginManifestRegistry,
-): boolean {
-  return isOpenAiExplicitlyEnabled(cfg) && !isCodexEnabled(cfg) && hasCodexManifest(registry);
+function shouldCheckCodexForOpenAi(cfg: OpenClawConfig): boolean {
+  return isOpenAiExplicitlyEnabled(cfg) && !isCodexEnabled(cfg);
+}
+
+function copyConfigRecord(value: unknown): Record<string, unknown> {
+  if (!isRecord(value)) {
+    return {};
+  }
+  const copy: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (!isBlockedObjectKey(key)) {
+      copy[key] = entry;
+    }
+  }
+  return copy;
 }
 
 function setCodexEntryEnabled(cfg: OpenClawConfig): OpenClawConfig {
-  const entry = cfg.plugins?.entries?.[CODEX_PLUGIN_ID];
-  const existingEntry = isRecord(entry) ? entry : {};
+  const entries = copyConfigRecord(cfg.plugins?.entries);
+  const existingEntry = copyConfigRecord(entries[CODEX_PLUGIN_ID]);
   return {
     ...cfg,
     plugins: {
       ...cfg.plugins,
       entries: {
-        ...cfg.plugins?.entries,
+        ...entries,
         [CODEX_PLUGIN_ID]: {
           ...existingEntry,
           enabled: true,
@@ -111,8 +124,11 @@ export function scanConfiguredPluginAutoEnableBlockers(params: {
   env?: NodeJS.ProcessEnv;
   manifestRegistry?: PluginManifestRegistry;
 }): ConfiguredPluginAutoEnableBlockerHit[] {
+  if (!shouldCheckCodexForOpenAi(params.cfg)) {
+    return [];
+  }
   const registry = resolveRegistry(params);
-  if (!shouldEnableCodexForOpenAi(params.cfg, registry)) {
+  if (!hasBundledCodexManifest(registry)) {
     return [];
   }
   return [
