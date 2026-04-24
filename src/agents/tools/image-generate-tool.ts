@@ -20,6 +20,10 @@ import type {
 } from "../../image-generation/types.js";
 import { resolveConfiguredMediaMaxBytes } from "../../media/configured-max-bytes.js";
 import { getImageMetadata } from "../../media/image-ops.js";
+import {
+  classifyMediaReferenceSource,
+  normalizeMediaReferenceSource,
+} from "../../media/media-reference.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { loadWebMedia } from "../../media/web-media.js";
 import { getProviderEnvVars } from "../../secrets/provider-env-vars.js";
@@ -426,16 +430,15 @@ async function loadReferenceImages(params: {
 
   for (const imageRawInput of params.imageInputs) {
     const trimmed = imageRawInput.trim();
-    const imageRaw = trimmed.startsWith("@") ? trimmed.slice(1).trim() : trimmed;
+    const imageRaw = normalizeMediaReferenceSource(
+      trimmed.startsWith("@") ? trimmed.slice(1).trim() : trimmed,
+    );
     if (!imageRaw) {
       throw new ToolInputError("image required (empty string in array)");
     }
-    const looksLikeWindowsDrivePath = /^[a-zA-Z]:[\\/]/.test(imageRaw);
-    const hasScheme = /^[a-z][a-z0-9+.-]*:/i.test(imageRaw);
-    const isFileUrl = /^file:/i.test(imageRaw);
-    const isHttpUrl = /^https?:\/\//i.test(imageRaw);
-    const isDataUrl = /^data:/i.test(imageRaw);
-    if (hasScheme && !looksLikeWindowsDrivePath && !isFileUrl && !isHttpUrl && !isDataUrl) {
+    const refInfo = classifyMediaReferenceSource(imageRaw);
+    const { isDataUrl, isHttpUrl } = refInfo;
+    if (refInfo.hasUnsupportedScheme) {
       throw new ToolInputError(
         `Unsupported image reference: ${imageRawInput}. Use a file path, a file:// URL, a data: URL, or an http(s) URL.`,
       );
