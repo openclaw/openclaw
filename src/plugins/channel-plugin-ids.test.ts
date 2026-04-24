@@ -37,6 +37,7 @@ import {
   listConfiguredChannelIdsForReadOnlyScope,
   listExplicitConfiguredChannelIdsForConfig,
   resolveConfiguredChannelPresencePolicy,
+  resolveChannelPluginIds,
   resolveConfiguredDeferredChannelPluginIds,
   resolveConfiguredChannelPluginIds,
   resolveGatewayStartupPluginIds,
@@ -1404,5 +1405,31 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
         includePersistedAuthState: false,
       }),
     ).toBe(true);
+  });
+});
+
+describe("resolveChannelPluginIds", () => {
+  beforeEach(() => {
+    loadPluginManifestRegistry.mockReset().mockReturnValue(createManifestRegistryFixture());
+  });
+
+  it("skips disabled channel plugins in channel scope", () => {
+    const config = {
+      plugins: {
+        allow: ["demo-channel", "demo-other-channel"],
+        entries: {
+          "demo-channel": { enabled: true },
+          "demo-other-channel": { enabled: false },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveChannelPluginIds({
+        config,
+        workspaceDir: "/tmp",
+        env: process.env,
+      }),
+    ).toEqual(["demo-channel"]);
   });
 });

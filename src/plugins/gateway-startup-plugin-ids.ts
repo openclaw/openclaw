@@ -134,12 +134,28 @@ export function resolveChannelPluginIds(params: {
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
 }): string[] {
+  const pluginsConfig = normalizePluginsConfig(params.config.plugins);
+  const activationSource = createPluginActivationSource({
+    config: params.config,
+  });
   return loadPluginManifestRegistry({
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
   })
-    .plugins.filter((plugin) => plugin.channels.length > 0)
+    .plugins.filter((plugin) => {
+      if (plugin.channels.length === 0) {
+        return false;
+      }
+      return resolveEffectivePluginActivationState({
+        id: plugin.id,
+        origin: plugin.origin,
+        config: pluginsConfig,
+        rootConfig: params.config,
+        enabledByDefault: plugin.enabledByDefault,
+        activationSource,
+      }).enabled;
+    })
     .map((plugin) => plugin.id);
 }
 
