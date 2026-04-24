@@ -2,6 +2,25 @@
 
 openclaw_live_stage_source_tree() {
   local dest_dir="${1:?destination directory required}"
+  local stage_mode="${OPENCLAW_LIVE_DOCKER_SOURCE_STAGE_MODE:-copy}"
+
+  if [ "$stage_mode" = "symlink" ]; then
+    mkdir -p "$dest_dir"
+    local entry
+    while IFS= read -r -d "" entry; do
+      entry="${entry#./}"
+      case "$entry" in
+        .git | node_modules | dist | .pnpm-store | .tmp | .tmp-precommit-venv | .worktrees | __openclaw_vitest__ | relay.sock)
+          continue
+          ;;
+        *.sock)
+          continue
+          ;;
+      esac
+      ln -s "/src/$entry" "$dest_dir/$entry"
+    done < <(cd /src && find . -mindepth 1 -maxdepth 1 -print0)
+    return 0
+  fi
 
   set +e
   tar -C /src \
