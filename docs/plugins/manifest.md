@@ -507,6 +507,17 @@ runtime loads. Read-only channel setup/status discovery can use this metadata
 directly for configured external channels when no setup entry is available, or
 when `setup.requiresRuntime: false` declares setup runtime unnecessary.
 
+For a channel plugin, `configSchema` and `channelConfigs` describe different
+paths:
+
+- `configSchema` validates `plugins.entries.<plugin-id>.config`
+- `channelConfigs.<channel-id>.schema` validates `channels.<channel-id>`
+
+Non-bundled plugins that declare `channels[]` should also declare matching
+`channelConfigs` entries. Without them, OpenClaw can still load the plugin, but
+cold-path config schema, setup, and Control UI surfaces cannot know the
+channel-owned option shape until plugin runtime executes.
+
 ```json
 {
   "channelConfigs": {

@@ -322,9 +322,13 @@ should use `resolveInboundMentionDecision({ facts, policy })`.
       "configSchema": {
         "type": "object",
         "additionalProperties": false,
-        "properties": {
-          "acme-chat": {
+        "properties": {}
+      },
+      "channelConfigs": {
+        "acme-chat": {
+          "schema": {
             "type": "object",
+            "additionalProperties": false,
             "properties": {
               "token": { "type": "string" },
               "allowFrom": {
@@ -332,12 +336,23 @@ should use `resolveInboundMentionDecision({ facts, policy })`.
                 "items": { "type": "string" }
               }
             }
+          },
+          "uiHints": {
+            "token": {
+              "label": "Bot token",
+              "sensitive": true
+            }
           }
         }
       }
     }
     ```
     </CodeGroup>
+
+    `configSchema` validates `plugins.entries.acme-chat.config`. Use it for
+    plugin-owned settings that are not the channel account config. `channelConfigs`
+    validates `channels.acme-chat` and is the cold-path source used by config
+    schema, setup, and UI surfaces before the plugin runtime loads.
 
   </Step>
 
