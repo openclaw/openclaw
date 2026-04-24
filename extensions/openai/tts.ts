@@ -3,7 +3,10 @@ import {
   isDebugProxyGlobalFetchPatchInstalled,
 } from "openclaw/plugin-sdk/proxy-capture";
 import { extractProviderErrorDetail, trimToUndefined } from "openclaw/plugin-sdk/speech";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import {
+  fetchWithSsrFGuard,
+  ssrfPolicyFromHttpBaseUrlAllowedHostname,
+} from "openclaw/plugin-sdk/ssrf-runtime";
 
 export const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 
@@ -91,72 +94,63 @@ export async function openaiTTS(params: {
     throw new Error(`Invalid voice: ${voice}`);
   }
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-
+  const requestHeaders = {
+    Authorization: `Bearer ${apiKey}`,
+    "Content-Type": "application/json",
+  };
+  const requestBody = JSON.stringify({
+    model,
+    input: text,
+    voice,
+    response_format: responseFormat,
+    ...(speed != null && { speed }),
+    ...(effectiveInstructions != null && { instructions: effectiveInstructions }),
+  });
+  const requestUrl = `${baseUrl}/audio/speech`;
+  const debugProxyFetchPatchInstalled = isDebugProxyGlobalFetchPatchInstalled();
+  const { response, release } = await fetchWithSsrFGuard({
+    url: requestUrl,
+    init: {
+      method: "POST",
+      headers: requestHeaders,
+      body: requestBody,
+    },
+    timeoutMs,
+    policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl),
+    capture: false,
+    pinDns: debugProxyFetchPatchInstalled ? false : undefined,
+    auditContext: "openai-tts",
+  });
   try {
-    const requestHeaders = {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    };
-    const requestBody = JSON.stringify({
-      model,
-      input: text,
-      voice,
-      response_format: responseFormat,
-      ...(speed != null && { speed }),
-      ...(effectiveInstructions != null && { instructions: effectiveInstructions }),
-    });
-    const requestUrl = `${baseUrl}/audio/speech`;
-    const isGlobalFetchPatchInstalled = isDebugProxyGlobalFetchPatchInstalled();
-    const guardedFetchImpl = isGlobalFetchPatchInstalled
-      ? globalThis.fetch.bind(globalThis)
-      : undefined;
-    const { response, release } = await fetchWithSsrFGuard({
-      url: requestUrl,
-      init: {
+    if (!debugProxyFetchPatchInstalled) {
+      captureHttpExchange({
+        url: requestUrl,
         method: "POST",
-        headers: requestHeaders,
-        body: requestBody,
-        signal: controller.signal,
-      },
-      ...(guardedFetchImpl ? { fetchImpl: guardedFetchImpl } : {}),
-      capture: false,
-      auditContext: "openai-tts",
-    });
-    try {
-      if (!isGlobalFetchPatchInstalled) {
-        captureHttpExchange({
-          url: requestUrl,
-          method: "POST",
-          requestHeaders,
-          requestBody,
-          response,
-          transport: "http",
-          meta: {
-            provider: "openai",
-            capability: "tts",
-          },
-        });
-      }
-
-      if (!response.ok) {
-        const detail = await extractOpenAiErrorDetail(response);
-        const requestId =
-          trimToUndefined(response.headers.get("x-request-id")) ??
-          trimToUndefined(response.headers.get("request-id"));
-        throw new Error(
-          `OpenAI TTS API error (${response.status})` +
-            (detail ? `: ${detail}` : "") +
-            (requestId ? ` [request_id=${requestId}]` : ""),
-        );
-      }
-
-      return Buffer.from(await response.arrayBuffer());
-    } finally {
-      await release();
+        requestHeaders,
+        requestBody,
+        response,
+        transport: "http",
+        meta: {
+          provider: "openai",
+          capability: "tts",
+        },
+      });
     }
+
+    if (!response.ok) {
+      const detail = await extractOpenAiErrorDetail(response);
+      const requestId =
+        trimToUndefined(response.headers.get("x-request-id")) ??
+        trimToUndefined(response.headers.get("request-id"));
+      throw new Error(
+        `OpenAI TTS API error (${response.status})` +
+          (detail ? `: ${detail}` : "") +
+          (requestId ? ` [request_id=${requestId}]` : ""),
+      );
+    }
+
+    return Buffer.from(await response.arrayBuffer());
   } finally {
-    clearTimeout(timeout);
+    await release();
   }
 }
