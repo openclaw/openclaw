@@ -134,6 +134,37 @@ runs the same lanes before release approval.
     `openclaw update --tag <candidate>`, and verifies the candidate's
     post-update doctor repairs bundled channel runtime dependencies without a
     harness-side postinstall repair.
+- `pnpm test:parallels:npm-update`
+  - Runs the native packaged-install update smoke across Parallels guests. Each
+    selected platform first installs the requested baseline package, then runs
+    the installed `openclaw update` command in the same guest and verifies the
+    installed version, update status, gateway readiness, and one local agent
+    turn.
+  - Use `--platform macos`, `--platform windows`, or `--platform linux` while
+    iterating on one guest. Use `--json` for the summary artifact path and
+    per-lane status.
+  - Wrap long local runs in a host timeout so Parallels transport stalls cannot
+    consume the rest of the testing window:
+
+    ```bash
+    timeout --foreground 150m pnpm test:parallels:npm-update -- --json
+    timeout --foreground 90m pnpm test:parallels:npm-update -- --platform windows --json
+    ```
+
+  - The script writes nested lane logs under `/tmp/openclaw-parallels-npm-update.*`.
+    Inspect `windows-update.log`, `macos-update.log`, or `linux-update.log`
+    before assuming the outer wrapper is hung.
+  - Windows update can spend 10 to 15 minutes in post-update doctor/runtime
+    dependency repair on a cold guest; that is still healthy when the nested
+    npm debug log is advancing.
+  - Do not run this aggregate wrapper in parallel with individual Parallels
+    macOS, Windows, or Linux smoke lanes. They share VM state and can collide on
+    snapshot restore, package serving, or guest gateway state.
+  - The post-update proof runs the normal bundled plugin surface because
+    capability facades such as speech, image generation, and media
+    understanding are loaded through bundled runtime APIs even when the agent
+    turn itself only checks a simple text response.
+
 - `pnpm openclaw qa aimock`
   - Starts only the local AIMock provider server for direct protocol smoke
     testing.
