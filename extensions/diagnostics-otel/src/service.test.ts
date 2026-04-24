@@ -5,11 +5,20 @@ const registerLogTransportMock = vi.hoisted(() => vi.fn());
 const telemetryState = vi.hoisted(() => {
   const counters = new Map<string, { add: ReturnType<typeof vi.fn> }>();
   const histograms = new Map<string, { record: ReturnType<typeof vi.fn> }>();
+  const spans: Array<{
+    name: string;
+    end: ReturnType<typeof vi.fn>;
+    setStatus: ReturnType<typeof vi.fn>;
+  }> = [];
   const tracer = {
-    startSpan: vi.fn((_name: string, _opts?: unknown, _ctx?: unknown) => ({
-      end: vi.fn(),
-      setStatus: vi.fn(),
-    })),
+    startSpan: vi.fn((name: string, _opts?: unknown, _ctx?: unknown) => {
+      const span = {
+        end: vi.fn(),
+        setStatus: vi.fn(),
+      };
+      spans.push({ name, ...span });
+      return span;
+    }),
     setSpanContext: vi.fn((_ctx: unknown, spanContext: unknown) => ({ spanContext })),
   };
   const meter = {
@@ -24,7 +33,7 @@ const telemetryState = vi.hoisted(() => {
       return histogram;
     }),
   };
-  return { counters, histograms, tracer, meter };
+  return { counters, histograms, spans, tracer, meter };
 });
 
 const sdkStart = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
@@ -121,6 +130,8 @@ const OTEL_TEST_ENDPOINT = "http://otel-collector:4318";
 const OTEL_TEST_PROTOCOL = "http/protobuf";
 const TRACE_ID = "4bf92f3577b34da6a3ce929d0e0e4736";
 const SPAN_ID = "00f067aa0ba902b7";
+const CHILD_SPAN_ID = "1111111111111111";
+const GRANDCHILD_SPAN_ID = "2222222222222222";
 
 function createLogger() {
   return {
@@ -189,10 +200,15 @@ async function emitAndCaptureLog(logObj: Record<string, unknown>) {
   return emitCall;
 }
 
+function flushDiagnosticEvents() {
+  return new Promise<void>((resolve) => setImmediate(resolve));
+}
+
 describe("diagnostics-otel service", () => {
   beforeEach(() => {
     telemetryState.counters.clear();
     telemetryState.histograms.clear();
+    telemetryState.spans.length = 0;
     telemetryState.tracer.startSpan.mockClear();
     telemetryState.tracer.setSpanContext.mockClear();
     telemetryState.meter.createCounter.mockClear();
@@ -432,10 +448,14 @@ describe("diagnostics-otel service", () => {
     });
 
     expect(emitCall?.attributes).toMatchObject({
-      "openclaw.traceId": TRACE_ID,
-      "openclaw.spanId": SPAN_ID,
       "openclaw.traceFlags": "01",
     });
+    expect(emitCall?.attributes).toEqual(
+      expect.not.objectContaining({
+        "openclaw.traceId": expect.anything(),
+        "openclaw.spanId": expect.anything(),
+      }),
+    );
     expect(telemetryState.tracer.setSpanContext).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
@@ -453,7 +473,7 @@ describe("diagnostics-otel service", () => {
     });
   });
 
-  test("parents diagnostic event spans from trace context", async () => {
+  test("does not parent diagnostic event spans from plugin-emittable trace context", async () => {
     const service = createDiagnosticsOtelService();
     const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true });
     await service.start(ctx);
@@ -474,14 +494,167 @@ describe("diagnostics-otel service", () => {
     const modelUsageCall = telemetryState.tracer.startSpan.mock.calls.find(
       (call) => call[0] === "openclaw.model.usage",
     );
-    expect(modelUsageCall?.[2]).toEqual({
-      spanContext: expect.objectContaining({
+    expect(telemetryState.tracer.setSpanContext).not.toHaveBeenCalled();
+    expect(modelUsageCall?.[2]).toBeUndefined();
+    await service.stop?.(ctx);
+  });
+
+  test("exports run, model call, and tool execution lifecycle spans", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true });
+    await service.start(ctx);
+
+    emitDiagnosticEvent({
+      type: "run.completed",
+      runId: "run-1",
+      sessionKey: "session-key",
+      provider: "openai",
+      model: "gpt-5.4",
+      channel: "webchat",
+      outcome: "completed",
+      durationMs: 100,
+      trace: {
         traceId: TRACE_ID,
         spanId: SPAN_ID,
-        traceFlags: 1,
-        isRemote: true,
-      }),
+        traceFlags: "01",
+      },
     });
+    emitDiagnosticEvent({
+      type: "model.call.completed",
+      runId: "run-1",
+      callId: "call-1",
+      provider: "openai",
+      model: "gpt-5.4",
+      api: "completions",
+      transport: "http",
+      durationMs: 80,
+      trace: {
+        traceId: TRACE_ID,
+        spanId: CHILD_SPAN_ID,
+        parentSpanId: SPAN_ID,
+        traceFlags: "01",
+      },
+    });
+    emitDiagnosticEvent({
+      type: "tool.execution.error",
+      runId: "run-1",
+      toolName: "read",
+      toolCallId: "tool-1",
+      paramsSummary: { kind: "object" },
+      durationMs: 20,
+      errorCategory: "TypeError",
+      errorCode: "429",
+      trace: {
+        traceId: TRACE_ID,
+        spanId: GRANDCHILD_SPAN_ID,
+        parentSpanId: CHILD_SPAN_ID,
+        traceFlags: "01",
+      },
+    });
+    await flushDiagnosticEvents();
+
+    const spanNames = telemetryState.tracer.startSpan.mock.calls.map((call) => call[0]);
+    expect(spanNames).toEqual(
+      expect.arrayContaining(["openclaw.run", "openclaw.model.call", "openclaw.tool.execution"]),
+    );
+
+    const runCall = telemetryState.tracer.startSpan.mock.calls.find(
+      (call) => call[0] === "openclaw.run",
+    );
+    expect(runCall?.[1]).toMatchObject({
+      attributes: {
+        "openclaw.outcome": "completed",
+        "openclaw.provider": "openai",
+        "openclaw.model": "gpt-5.4",
+        "openclaw.channel": "webchat",
+      },
+      startTime: expect.any(Number),
+    });
+    expect(runCall?.[1]).toEqual({
+      attributes: expect.not.objectContaining({
+        "gen_ai.system": expect.anything(),
+        "gen_ai.request.model": expect.anything(),
+        "openclaw.runId": expect.anything(),
+        "openclaw.sessionKey": expect.anything(),
+        "openclaw.traceId": expect.anything(),
+      }),
+      startTime: expect.any(Number),
+    });
+
+    const modelCall = telemetryState.tracer.startSpan.mock.calls.find(
+      (call) => call[0] === "openclaw.model.call",
+    );
+    expect(modelCall?.[1]).toMatchObject({
+      attributes: {
+        "gen_ai.system": "openai",
+        "gen_ai.request.model": "gpt-5.4",
+        "gen_ai.operation.name": "text_completion",
+      },
+    });
+    expect(modelCall?.[1]).toEqual({
+      attributes: expect.not.objectContaining({
+        "openclaw.callId": expect.anything(),
+        "openclaw.runId": expect.anything(),
+        "openclaw.sessionKey": expect.anything(),
+      }),
+      startTime: expect.any(Number),
+    });
+    expect(modelCall?.[2]).toBeUndefined();
+
+    const toolCall = telemetryState.tracer.startSpan.mock.calls.find(
+      (call) => call[0] === "openclaw.tool.execution",
+    );
+    expect(toolCall?.[1]).toMatchObject({
+      attributes: {
+        "openclaw.toolName": "read",
+        "openclaw.errorCategory": "TypeError",
+        "openclaw.errorCode": "429",
+        "openclaw.tool.params.kind": "object",
+        "gen_ai.tool.name": "read",
+      },
+    });
+    expect(toolCall?.[1]).toEqual({
+      attributes: expect.not.objectContaining({
+        "openclaw.toolCallId": expect.anything(),
+        "openclaw.runId": expect.anything(),
+        "openclaw.sessionKey": expect.anything(),
+      }),
+      startTime: expect.any(Number),
+    });
+    expect(toolCall?.[2]).toBeUndefined();
+
+    expect(
+      telemetryState.histograms.get("openclaw.model_call.duration_ms")?.record,
+    ).toHaveBeenCalledWith(
+      80,
+      expect.objectContaining({
+        "openclaw.provider": "openai",
+        "openclaw.model": "gpt-5.4",
+      }),
+    );
+    expect(telemetryState.histograms.get("openclaw.run.duration_ms")?.record).toHaveBeenCalledWith(
+      100,
+      expect.not.objectContaining({
+        "openclaw.runId": expect.anything(),
+      }),
+    );
+    expect(
+      telemetryState.histograms.get("openclaw.tool.execution.duration_ms")?.record,
+    ).toHaveBeenCalledWith(
+      20,
+      expect.not.objectContaining({
+        "openclaw.errorCode": expect.anything(),
+        "openclaw.runId": expect.anything(),
+      }),
+    );
+
+    const toolSpan = telemetryState.spans.find((span) => span.name === "openclaw.tool.execution");
+    expect(toolSpan?.setStatus).toHaveBeenCalledWith({
+      code: 2,
+      message: "TypeError",
+    });
+    expect(toolSpan?.end).toHaveBeenCalledWith(expect.any(Number));
+    expect(telemetryState.tracer.setSpanContext).not.toHaveBeenCalled();
     await service.stop?.(ctx);
   });
 
