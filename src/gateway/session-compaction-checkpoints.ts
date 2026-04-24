@@ -37,6 +37,24 @@ function sessionStoreCheckpoints(
   return Array.isArray(entry?.compactionCheckpoints) ? [...entry.compactionCheckpoints] : [];
 }
 
+async function cleanupTrimmedCompactionCheckpoints(
+  checkpoints: SessionCompactionCheckpoint[],
+): Promise<void> {
+  await Promise.all(
+    checkpoints.map(async (checkpoint) => {
+      const sessionFile = checkpoint.preCompaction?.sessionFile;
+      if (!sessionFile || !path.basename(sessionFile).includes(".checkpoint.")) {
+        return;
+      }
+      try {
+        await fs.unlink(sessionFile);
+      } catch {
+        // Best-effort cleanup; missing stale snapshots are harmless.
+      }
+    }),
+  );
+}
+
 export function resolveSessionCompactionCheckpointReason(params: {
   trigger?: "budget" | "overflow" | "manual";
   timedOut?: boolean;
@@ -163,6 +181,7 @@ export async function persistSessionCompactionCheckpoint(params: {
   };
 
   let stored = false;
+  let trimmedCheckpoints: SessionCompactionCheckpoint[] = [];
   await updateSessionStore(target.storePath, (store) => {
     const existing = store[target.canonicalKey];
     if (!existing?.sessionId) {
@@ -170,10 +189,14 @@ export async function persistSessionCompactionCheckpoint(params: {
     }
     const checkpoints = sessionStoreCheckpoints(existing);
     checkpoints.push(checkpoint);
+    const retainedCheckpoints = trimSessionCheckpoints(checkpoints);
+    trimmedCheckpoints = retainedCheckpoints
+      ? checkpoints.slice(0, Math.max(0, checkpoints.length - retainedCheckpoints.length))
+      : checkpoints;
     store[target.canonicalKey] = {
       ...existing,
       updatedAt: Math.max(existing.updatedAt ?? 0, createdAt),
-      compactionCheckpoints: trimSessionCheckpoints(checkpoints),
+      compactionCheckpoints: retainedCheckpoints,
     };
     stored = true;
   });
@@ -184,6 +207,7 @@ export async function persistSessionCompactionCheckpoint(params: {
     });
     return null;
   }
+  await cleanupTrimmedCompactionCheckpoints(trimmedCheckpoints);
   return checkpoint;
 }
 
