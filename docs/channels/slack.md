@@ -826,6 +826,9 @@ openclaw doctor
     - `channels.slack.dm.enabled`
     - `channels.slack.dmPolicy` (or legacy `channels.slack.dm.policy`)
     - pairing approvals / allowlist entries
+    - Slack Assistant DM events: verbose logs mentioning `drop message_changed`
+      usually mean Slack sent an edited Assistant-thread event without a
+      recoverable human sender in message metadata
 
 ```bash
 openclaw pairing list slack
