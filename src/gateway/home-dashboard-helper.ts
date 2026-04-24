@@ -174,15 +174,16 @@ function isFatalGatewayError(error: unknown): boolean {
   }
 
   const message = getErrorMessage(error).toLowerCase();
+  // Keep message fallback narrow so section-level payload errors do not become full-page failures.
   return (
-    message.includes("gateway") ||
-    message.includes("websocket") ||
     message.includes("econnrefused") ||
-    message.includes("timeout") ||
-    message.includes("timed out") ||
-    message.includes("auth") ||
-    message.includes("401") ||
-    message.includes("403") ||
+    message.includes("econnreset") ||
+    message.includes("enotfound") ||
+    message.includes("etimedout") ||
+    /\b401\b/.test(message) ||
+    /\b403\b/.test(message) ||
+    /\bunauthorized\b/.test(message) ||
+    /\bforbidden\b/.test(message) ||
     message.includes("operator.read")
   );
 }

@@ -55,7 +55,10 @@ const parseArgs = (argv) => {
       if (typeof envKey !== "string" || !envKey.trim()) {
         throw new Error("Invalid --value-env value.");
       }
-      options.value = process.env[envKey] ?? "";
+      if (!(envKey in process.env)) {
+        throw new Error(`Environment variable ${envKey} is not set.`);
+      }
+      options.value = process.env[envKey];
       index += 1;
       continue;
     }

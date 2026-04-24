@@ -17,9 +17,9 @@ const { loadConfigMock } = vi.hoisted(() => ({
 
 vi.mock("../config/config.js", () => ({
   loadConfig: loadConfigMock,
-  resolveConfigPath: () => "C:\\Users\\Klins\\.openclaw\\openclaw.json",
+  resolveConfigPath: () => "C:\\Users\\testuser\\.openclaw\\openclaw.json",
   resolveGatewayPort: (config: { gateway?: { port?: number } }) => config.gateway?.port ?? 18789,
-  resolveStateDir: () => "C:\\Users\\Klins\\.openclaw",
+  resolveStateDir: () => "C:\\Users\\testuser\\.openclaw",
 }));
 
 vi.mock("../infra/tls/gateway.js", () => ({

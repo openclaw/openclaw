@@ -16,6 +16,7 @@ async function main(): Promise<void> {
       cwd: repoRoot,
       env: {
         ...process.env,
+        // Keep dev gateway startup side-effect free across both OpenClaw and legacy Clawdbot env names.
         OPENCLAW_SKIP_CHANNELS: "1",
         CLAWDBOT_SKIP_CHANNELS: "1",
       },

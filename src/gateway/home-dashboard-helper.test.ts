@@ -215,7 +215,7 @@ describe("fetchHomeDashboard", () => {
       }
 
       if (method === "cron.list") {
-        throw new Error("cron.list returned a malformed job payload");
+        throw new Error("cron.list returned a malformed gateway health check payload");
       }
 
       return {
@@ -233,7 +233,7 @@ describe("fetchHomeDashboard", () => {
       },
       scheduled: {
         status: "unavailable",
-        warning: "cron.list returned a malformed job payload",
+        warning: "cron.list returned a malformed gateway health check payload",
         items: [],
       },
       suggestedTools: {
@@ -245,8 +245,12 @@ describe("fetchHomeDashboard", () => {
   });
 
   it("propagates fatal gateway failures for a full-page degraded state", async () => {
-    callGatewayScopedMock.mockRejectedValue(new Error("gateway timeout after 4000ms"));
+    callGatewayScopedMock.mockRejectedValue(
+      Object.assign(new Error("connect ETIMEDOUT 127.0.0.1:18789"), {
+        code: "gateway_unavailable",
+      }),
+    );
 
-    await expect(fetchHomeDashboard()).rejects.toThrow("gateway timeout");
+    await expect(fetchHomeDashboard()).rejects.toThrow("ETIMEDOUT");
   });
 });
