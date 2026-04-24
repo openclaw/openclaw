@@ -355,6 +355,8 @@ Defaults:
 - `realtime.toolPolicy: "safe-read-only"`
 - `realtime.instructions`: brief spoken replies, with
   `openclaw_agent_consult` for deeper answers
+- `realtime.introMessage`: short spoken readiness check when the realtime bridge
+  connects; set it to `""` to join silently
 
 Optional overrides:
 
@@ -371,6 +373,7 @@ Optional overrides:
   },
   realtime: {
     toolPolicy: "owner",
+    introMessage: "Say exactly: I'm here.",
   },
 }
 ```
@@ -409,7 +412,16 @@ VM. In both cases the realtime model and `openclaw_agent_consult` run on the
 Gateway host, so model credentials stay there.
 
 Use `action: "status"` to list active sessions or inspect a session ID. Use
-`action: "leave"` to mark a session ended.
+`action: "speak"` with `sessionId` and `message` to make the realtime agent
+speak immediately. Use `action: "leave"` to mark a session ended.
+
+```json
+{
+  "action": "speak",
+  "sessionId": "meet_...",
+  "message": "Say exactly: I'm here and listening."
+}
+```
 
 ## Realtime agent consult
 
@@ -434,6 +446,12 @@ voice session. The voice model can then speak that answer back into the meeting.
 The consult session key is scoped per Meet session, so follow-up consult calls
 can reuse prior consult context during the same meeting.
 
+To force a spoken readiness check after Chrome has fully joined the call:
+
+```bash
+openclaw googlemeet speak meet_... "Say exactly: I'm here and listening."
+```
+
 ## Notes
 
 Google Meet's official media API is receive-oriented, so speaking into a Meet
@@ -453,9 +471,9 @@ For clean duplex audio, route Meet output and Meet microphone through separate
 virtual devices or a Loopback-style virtual device graph. A single shared
 BlackHole device can echo other participants back into the call.
 
-`googlemeet leave` stops the command-pair realtime audio bridge for Chrome
-sessions. For Twilio sessions delegated through the Voice Call plugin, it also
-hangs up the underlying voice call.
+`googlemeet speak` triggers the active realtime audio bridge for a Chrome
+session. `googlemeet leave` stops that bridge. For Twilio sessions delegated
+through the Voice Call plugin, `leave` also hangs up the underlying voice call.
 
 ## Related
 

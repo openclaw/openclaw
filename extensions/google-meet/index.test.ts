@@ -205,6 +205,7 @@ describe("google-meet plugin", () => {
       voiceCall: { enabled: true, requestTimeoutMs: 30000, dtmfDelayMs: 2500 },
       realtime: {
         provider: "openai",
+        introMessage: "Say exactly: I'm here and listening.",
         toolPolicy: "safe-read-only",
       },
       oauth: {},
@@ -284,7 +285,7 @@ describe("google-meet plugin", () => {
       properties: {
         action: {
           type: "string",
-          enum: ["join", "status", "setup_status", "resolve_space", "preflight", "leave"],
+          enum: ["join", "status", "setup_status", "resolve_space", "preflight", "leave", "speak"],
         },
         transport: { type: "string", enum: ["chrome", "chrome-node", "twilio"] },
         mode: { type: "string", enum: ["realtime", "transcribe"] },
@@ -520,11 +521,16 @@ describe("google-meet plugin", () => {
   });
 
   it("joins Chrome on a paired node without local Chrome or BlackHole", async () => {
-    const { methods, nodesList, nodesInvoke } = setup({
-      defaultTransport: "chrome-node",
-      defaultMode: "transcribe",
-      chromeNode: { node: "parallels-macos" },
-    });
+    const { methods, nodesList, nodesInvoke } = setup(
+      {
+        defaultTransport: "chrome-node",
+        defaultMode: "transcribe",
+        chromeNode: { node: "parallels-macos" },
+      },
+      {
+        nodesInvokeResult: { payload: { launched: true } },
+      },
+    );
     const handler = methods.get("googlemeet.join") as
       | ((ctx: {
           params: Record<string, unknown>;
@@ -669,6 +675,7 @@ describe("google-meet plugin", () => {
             name: string;
             args: unknown;
           }) => void;
+          onReady?: () => void;
           tools?: unknown[];
         }
       | undefined;
@@ -680,6 +687,7 @@ describe("google-meet plugin", () => {
       submitToolResult: vi.fn(),
       acknowledgeMark: vi.fn(),
       close: vi.fn(),
+      triggerGreeting: vi.fn(),
       isConnected: vi.fn(() => true),
     };
     const provider: RealtimeVoiceProviderPlugin = {
@@ -756,6 +764,7 @@ describe("google-meet plugin", () => {
     inputStdout.write(Buffer.from([1, 2, 3]));
     callbacks?.onAudio(Buffer.from([4, 5]));
     callbacks?.onMark?.("mark-1");
+    callbacks?.onReady?.();
     callbacks?.onToolCall?.({
       itemId: "item-1",
       callId: "tool-call-1",
@@ -772,6 +781,9 @@ describe("google-meet plugin", () => {
     expect(sendAudio).toHaveBeenCalledWith(Buffer.from([1, 2, 3]));
     expect(outputStdinWrites).toEqual([Buffer.from([4, 5])]);
     expect(bridge.acknowledgeMark).toHaveBeenCalled();
+    expect(bridge.triggerGreeting).toHaveBeenCalledWith("Say exactly: I'm here and listening.");
+    handle.speak("Say exactly: hello from the meeting.");
+    expect(bridge.triggerGreeting).toHaveBeenLastCalledWith("Say exactly: hello from the meeting.");
     expect(callbacks).toMatchObject({
       tools: [
         expect.objectContaining({
@@ -808,6 +820,7 @@ describe("google-meet plugin", () => {
             name: string;
             args: unknown;
           }) => void;
+          onReady?: () => void;
           tools?: unknown[];
         }
       | undefined;
@@ -819,6 +832,7 @@ describe("google-meet plugin", () => {
       submitToolResult: vi.fn(),
       acknowledgeMark: vi.fn(),
       close: vi.fn(),
+      triggerGreeting: vi.fn(),
       isConnected: vi.fn(() => true),
     };
     const provider: RealtimeVoiceProviderPlugin = {
@@ -879,6 +893,7 @@ describe("google-meet plugin", () => {
     });
 
     callbacks?.onAudio(Buffer.from([1, 2, 3]));
+    callbacks?.onReady?.();
     callbacks?.onToolCall?.({
       itemId: "item-1",
       callId: "tool-call-1",
@@ -907,6 +922,9 @@ describe("google-meet plugin", () => {
         text: "Use the launch update.",
       });
     });
+    expect(bridge.triggerGreeting).toHaveBeenCalledWith("Say exactly: I'm here and listening.");
+    handle.speak("Say exactly: hello from the node.");
+    expect(bridge.triggerGreeting).toHaveBeenLastCalledWith("Say exactly: hello from the node.");
     expect(callbacks).toMatchObject({
       tools: [
         expect.objectContaining({
