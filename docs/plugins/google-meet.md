@@ -187,6 +187,11 @@ Route Meet through that node on the Gateway host:
         enabled: true,
         config: {
           defaultTransport: "chrome-node",
+          chrome: {
+            guestName: "OpenClaw Agent",
+            autoJoin: true,
+            reuseExistingTab: true,
+          },
           chromeNode: {
             node: "parallels-macos",
           },
@@ -205,6 +210,13 @@ openclaw googlemeet join https://meet.google.com/abc-defg-hij
 
 or ask the agent to use the `google_meet` tool with `transport: "chrome-node"`.
 
+For a one-command smoke test that creates or reuses a session, speaks a known
+phrase, and prints session health:
+
+```bash
+openclaw googlemeet test-speech https://meet.google.com/abc-defg-hij
+```
+
 If `chromeNode.node` is omitted, OpenClaw auto-selects only when exactly one
 connected node advertises `googlemeet.chrome`. If several capable nodes are
 connected, set `chromeNode.node` to the node id, display name, or remote IP.
@@ -217,8 +229,12 @@ Common failure checks:
   `gateway.nodes.allowCommands: ["googlemeet.chrome"]`.
 - `BlackHole 2ch audio device not found on the node`: install `blackhole-2ch`
   in the VM and reboot the VM.
-- Chrome opens but cannot join: sign in to Chrome inside the VM and confirm that
-  profile can join the Meet URL manually.
+- Chrome opens but cannot join: sign in to Chrome inside the VM, or keep
+  `chrome.guestName` set for guest join. Guest auto-join uses Chrome Apple
+  Events; if it reports an automation warning, enable Chrome > View > Developer
+  > Allow JavaScript from Apple Events, then retry.
+- Duplicate Meet tabs: leave `chrome.reuseExistingTab: true` enabled. OpenClaw
+  activates an existing tab for the same Meet URL before opening a new one.
 - No audio: in Meet, route microphone/speaker through the virtual audio device
   path used by OpenClaw; use separate virtual devices or Loopback-style routing
   for clean duplex audio.
@@ -353,6 +369,13 @@ Defaults:
 - `defaultMode: "realtime"`
 - `chromeNode.node`: optional node id/name/IP for `chrome-node`
 - `chrome.audioBackend: "blackhole-2ch"`
+- `chrome.guestName: "OpenClaw Agent"`: name used on the signed-out Meet guest
+  screen
+- `chrome.autoJoin: true`: best-effort guest-name fill and Join Now click
+- `chrome.reuseExistingTab: true`: activate an existing Meet tab instead of
+  opening duplicates
+- `chrome.waitForInCallMs: 20000`: wait for the Meet tab to report in-call
+  before the realtime intro is triggered
 - `chrome.audioInputCommand`: SoX `rec` command writing 8 kHz G.711 mu-law
   audio to stdout
 - `chrome.audioOutputCommand`: SoX `play` command reading 8 kHz G.711 mu-law
@@ -373,6 +396,8 @@ Optional overrides:
   },
   chrome: {
     browserProfile: "Default",
+    guestName: "OpenClaw Agent",
+    waitForInCallMs: 30000,
   },
   chromeNode: {
     node: "parallels-macos",
@@ -426,7 +451,16 @@ Gateway host, so model credentials stay there.
 
 Use `action: "status"` to list active sessions or inspect a session ID. Use
 `action: "speak"` with `sessionId` and `message` to make the realtime agent
-speak immediately. Use `action: "leave"` to mark a session ended.
+speak immediately. Use `action: "test_speech"` to create or reuse the session,
+trigger a known phrase, and return `inCall` health when the Chrome host can
+report it. Use `action: "leave"` to mark a session ended.
+
+`status` includes Chrome health when available:
+
+- `inCall`: Chrome appears to be inside the Meet call
+- `micMuted`: best-effort Meet microphone state
+- `providerConnected` / `realtimeReady`: realtime voice bridge state
+- `lastInputAt` / `lastOutputAt`: last audio seen from or sent to the bridge
 
 ```json
 {
@@ -463,6 +497,14 @@ To force a spoken readiness check after Chrome has fully joined the call:
 
 ```bash
 openclaw googlemeet speak meet_... "Say exactly: I'm here and listening."
+```
+
+For the full join-and-speak smoke:
+
+```bash
+openclaw googlemeet test-speech https://meet.google.com/abc-defg-hij \
+  --transport chrome-node \
+  --message "Say exactly: I'm here and listening."
 ```
 
 ## Notes

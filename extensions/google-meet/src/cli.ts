@@ -16,6 +16,7 @@ import type { GoogleMeetRuntime } from "./runtime.js";
 type JoinOptions = {
   transport?: GoogleMeetTransport;
   mode?: GoogleMeetMode;
+  message?: string;
   dialInNumber?: string;
   pin?: string;
   dtmfSequence?: string;
@@ -177,6 +178,7 @@ export function registerGoogleMeetCli(params: {
     .argument("[url]", "Explicit https://meet.google.com/... URL")
     .option("--transport <transport>", "Transport: chrome, chrome-node, or twilio")
     .option("--mode <mode>", "Mode: realtime or transcribe")
+    .option("--message <text>", "Realtime speech to trigger after join")
     .option("--dial-in-number <phone>", "Meet dial-in number for Twilio transport")
     .option("--pin <pin>", "Meet phone PIN; # is appended if omitted")
     .option("--dtmf-sequence <sequence>", "Explicit Twilio DTMF sequence")
@@ -186,11 +188,34 @@ export function registerGoogleMeetCli(params: {
         url: resolveMeetingInput(params.config, url),
         transport: options.transport,
         mode: options.mode,
+        message: options.message,
         dialInNumber: options.dialInNumber,
         pin: options.pin,
         dtmfSequence: options.dtmfSequence,
       });
       writeStdoutJson(result.session);
+    });
+
+  root
+    .command("test-speech")
+    .argument("[url]", "Explicit https://meet.google.com/... URL")
+    .option("--transport <transport>", "Transport: chrome, chrome-node, or twilio")
+    .option("--mode <mode>", "Mode: realtime or transcribe")
+    .option(
+      "--message <text>",
+      "Realtime speech to trigger",
+      "Say exactly: Google Meet speech test complete.",
+    )
+    .action(async (url: string | undefined, options: JoinOptions) => {
+      const rt = await params.ensureRuntime();
+      writeStdoutJson(
+        await rt.testSpeech({
+          url: resolveMeetingInput(params.config, url),
+          transport: options.transport,
+          mode: options.mode,
+          message: options.message,
+        }),
+      );
     });
 
   root
