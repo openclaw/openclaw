@@ -541,6 +541,7 @@ export async function prepareSlackMessage(params: {
 
   const roomLabel = channelName ? `#${channelName}` : `#${message.channel}`;
   const senderName = await resolveSenderName();
+  // Keep preview for debug logging and type compatibility, but exclude from system event.
   const preview = rawBody.replace(/\s+/g, " ").slice(0, 160);
   const inboundLabel = isDirectMessage
     ? `Slack DM from ${senderName}`
@@ -551,7 +552,9 @@ export async function prepareSlackMessage(params: {
       ? `slack:channel:${message.channel}`
       : `slack:group:${message.channel}`;
 
-  enqueueSystemEvent(`${inboundLabel}: ${preview}`, {
+  // System event is a notification only — full message body is delivered separately.
+  // Previously included the truncated preview which caused model confusion (see #67503).
+  enqueueSystemEvent(inboundLabel, {
     sessionKey,
     contextKey: `slack:message:${message.channel}:${message.ts ?? "unknown"}`,
   });

@@ -483,12 +483,15 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       replyToId: activity.replyToId,
     });
 
+    // Keep preview for debug logging, but exclude from system event.
     const preview = rawBody.replace(/\s+/g, " ").slice(0, 160);
     const inboundLabel = isDirectMessage
       ? `Teams DM from ${senderName}`
       : `Teams message in ${conversationType} from ${senderName}`;
 
-    core.system.enqueueSystemEvent(`${inboundLabel}: ${preview}`, {
+    // System event is a notification only — full message body is delivered separately.
+    // Previously included the truncated preview which caused model confusion (see #67503).
+    core.system.enqueueSystemEvent(inboundLabel, {
       sessionKey: route.sessionKey,
       contextKey: `msteams:message:${conversationId}:${activity.id ?? "unknown"}`,
     });

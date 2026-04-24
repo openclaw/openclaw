@@ -1475,12 +1475,13 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           directId: senderId,
         });
 
-        const preview = bodyText.replace(/\s+/g, " ").slice(0, 160);
         const inboundLabel =
           kind === "direct"
             ? `Mattermost DM from ${senderName}`
             : `Mattermost message in ${roomLabel} from ${senderName}`;
-        core.system.enqueueSystemEvent(`${inboundLabel}: ${preview}`, {
+        // System event is a notification only — full message body is delivered separately.
+        // Previously included a truncated preview which caused model confusion (see #67503).
+        core.system.enqueueSystemEvent(inboundLabel, {
           sessionKey,
           contextKey: `mattermost:message:${channelId}:${post.id ?? "unknown"}`,
         });
