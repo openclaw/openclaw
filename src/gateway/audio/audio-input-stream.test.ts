@@ -9,7 +9,7 @@ import {
   type MultiplexFrame,
 } from "../multiplex-frame.js";
 
-function pcmFrame(payload: Buffer, flags = 0, streamId = MULTIPLEX_STREAM.AUDIO_INPUT): MultiplexFrame {
+function pcmFrame(payload: Buffer, flags = 0, streamId: number = MULTIPLEX_STREAM.AUDIO_INPUT): MultiplexFrame {
   return decodeMultiplexFrame(encodeMultiplexFrame(streamId, payload, flags));
 }
 

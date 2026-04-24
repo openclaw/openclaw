@@ -249,7 +249,6 @@ export class MultiplexControlChannel {
       return;
     }
 
-    // oxlint-disable-next-line typescript/no-unnecessary-type-assertion -- narrowed from `unknown` via typeof guard
     const obj = parsed as Record<string, unknown>;
     const type = typeof obj.type === "string" ? obj.type : undefined;
     switch (type) {

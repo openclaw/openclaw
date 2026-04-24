@@ -9,7 +9,9 @@ import {
 /** Build a PCM16 LE buffer of `samples` samples, each at `amplitude`. */
 function pcmTone(samples: number, amplitude: number): Buffer {
   const buf = Buffer.alloc(samples * 2);
-  for (let i = 0; i < samples; i++) buf.writeInt16LE(amplitude, i * 2);
+  for (let i = 0; i < samples; i++) {
+    buf.writeInt16LE(amplitude, i * 2);
+  }
   return buf;
 }
 

@@ -127,7 +127,7 @@ describe("MultiplexControlChannel — outbound", () => {
 describe("MultiplexControlChannel — inbound", () => {
   it("dispatches a backpressure message to onBackpressure", () => {
     const send = vi.fn();
-    const onBackpressure = vi.fn<[BackpressureMessage], void>();
+    const onBackpressure = vi.fn<(msg: BackpressureMessage) => void>();
     const ch = new MultiplexControlChannel({ send, onBackpressure });
     ch.handleFrame(controlFrame({ type: "backpressure", level: "high", bufferedBytes: 2048 }));
     expect(onBackpressure).toHaveBeenCalledTimes(1);
@@ -137,8 +137,8 @@ describe("MultiplexControlChannel — inbound", () => {
 
   it("dispatches pause/resume messages", () => {
     const send = vi.fn();
-    const onPause = vi.fn<[PauseResumeMessage], void>();
-    const onResume = vi.fn<[PauseResumeMessage], void>();
+    const onPause = vi.fn<(msg: PauseResumeMessage) => void>();
+    const onResume = vi.fn<(msg: PauseResumeMessage) => void>();
     const ch = new MultiplexControlChannel({ send, onPause, onResume });
     ch.handleFrame(controlFrame({ type: "pause", streamId: 1 }));
     ch.handleFrame(controlFrame({ type: "resume" }));
@@ -149,7 +149,7 @@ describe("MultiplexControlChannel — inbound", () => {
 
   it("dispatches an error message", () => {
     const send = vi.fn();
-    const onError = vi.fn<[ControlErrorMessage], void>();
+    const onError = vi.fn<(msg: ControlErrorMessage) => void>();
     const ch = new MultiplexControlChannel({ send, onError });
     ch.handleFrame(controlFrame({ type: "error", code: "BOOM", message: "x", streamId: 2 }));
     expect(onError).toHaveBeenCalledTimes(1);
@@ -158,7 +158,7 @@ describe("MultiplexControlChannel — inbound", () => {
 
   it("dispatches an ack message", () => {
     const send = vi.fn();
-    const onAck = vi.fn<[ControlAckMessage], void>();
+    const onAck = vi.fn<(msg: ControlAckMessage) => void>();
     const ch = new MultiplexControlChannel({ send, onAck });
     ch.handleFrame(controlFrame({ type: "ack", forType: "backpressure", extra: 1 }));
     expect(onAck).toHaveBeenCalledTimes(1);
