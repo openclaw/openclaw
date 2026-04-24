@@ -83,6 +83,14 @@ function rewritePackageEntry(entry) {
   return `./${rewritten}`;
 }
 
+function sanitizeBundledPackageJsonForDist(packageJson) {
+  const sanitized = { ...packageJson };
+  delete sanitized.devDependencies;
+  delete sanitized.peerDependencies;
+  delete sanitized.peerDependenciesMeta;
+  return sanitized;
+}
+
 function ensurePathInsideRoot(rootDir, rawPath) {
   const resolved = path.resolve(rootDir, rawPath);
   const relative = path.relative(rootDir, resolved);
@@ -292,17 +300,18 @@ export function copyBundledPluginMetadata(params = {}) {
       removeFileIfExists(distPackageJsonPath);
       continue;
     }
-    if (packageJson.openclaw && "extensions" in packageJson.openclaw) {
-      packageJson.openclaw = {
-        ...packageJson.openclaw,
-        extensions: rewritePackageExtensions(packageJson.openclaw.extensions),
-        ...(typeof packageJson.openclaw.setupEntry === "string"
-          ? { setupEntry: rewritePackageEntry(packageJson.openclaw.setupEntry) }
+    const distPackageJson = sanitizeBundledPackageJsonForDist(packageJson);
+    if (distPackageJson.openclaw && "extensions" in distPackageJson.openclaw) {
+      distPackageJson.openclaw = {
+        ...distPackageJson.openclaw,
+        extensions: rewritePackageExtensions(distPackageJson.openclaw.extensions),
+        ...(typeof distPackageJson.openclaw.setupEntry === "string"
+          ? { setupEntry: rewritePackageEntry(distPackageJson.openclaw.setupEntry) }
           : {}),
       };
     }
 
-    writeTextFileIfChanged(distPackageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`);
+    writeTextFileIfChanged(distPackageJsonPath, `${JSON.stringify(distPackageJson, null, 2)}\n`);
   }
 
   if (!fs.existsSync(distExtensionsRoot)) {

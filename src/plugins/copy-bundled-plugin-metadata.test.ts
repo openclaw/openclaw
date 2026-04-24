@@ -29,6 +29,10 @@ function createPlugin(
     packageName: string;
     manifest?: Record<string, unknown>;
     packageOpenClaw?: Record<string, unknown>;
+    dependencies?: Record<string, string>;
+    devDependencies?: Record<string, string>;
+    peerDependencies?: Record<string, string>;
+    peerDependenciesMeta?: Record<string, unknown>;
   },
 ) {
   const pluginDir = path.join(repoRoot, "extensions", params.id);
@@ -40,6 +44,10 @@ function createPlugin(
   });
   writeJson(path.join(pluginDir, "package.json"), {
     name: params.packageName,
+    ...(params.dependencies ? { dependencies: params.dependencies } : {}),
+    ...(params.devDependencies ? { devDependencies: params.devDependencies } : {}),
+    ...(params.peerDependencies ? { peerDependencies: params.peerDependencies } : {}),
+    ...(params.peerDependenciesMeta ? { peerDependenciesMeta: params.peerDependenciesMeta } : {}),
     ...(params.packageOpenClaw ? { openclaw: params.packageOpenClaw } : {}),
   });
   return pluginDir;
@@ -57,7 +65,13 @@ function readBundledManifest(repoRoot: string, pluginId: string) {
 function readBundledPackageJson(repoRoot: string, pluginId: string) {
   return JSON.parse(
     fs.readFileSync(path.join(repoRoot, "dist", "extensions", pluginId, "package.json"), "utf8"),
-  ) as { openclaw?: { extensions?: string[] } };
+  ) as {
+    dependencies?: Record<string, string>;
+    devDependencies?: Record<string, string>;
+    peerDependencies?: Record<string, string>;
+    peerDependenciesMeta?: Record<string, unknown>;
+    openclaw?: { extensions?: string[] };
+  };
 }
 
 function bundledPluginDir(repoRoot: string, pluginId: string) {
@@ -123,6 +137,29 @@ describe("copyBundledPluginMetadata", () => {
     ).toContain("ACP Router");
     expectBundledSkills(repoRoot, "acpx", ["./skills"]);
     const packageJson = readBundledPackageJson(repoRoot, "acpx");
+    expect(packageJson.openclaw?.extensions).toEqual(["./index.js"]);
+  });
+
+  it("strips development-only dependency groups from dist package metadata", () => {
+    const repoRoot = makeRepoRoot("openclaw-bundled-plugin-meta-sanitized-");
+    createPlugin(repoRoot, {
+      id: "telegram",
+      packageName: "@openclaw/telegram",
+      manifest: {},
+      packageOpenClaw: { extensions: ["./index.ts"], setupEntry: "./setup-entry.ts" },
+      dependencies: { grammy: "1.42.0" },
+      devDependencies: { "@openclaw/plugin-sdk": "workspace:*" },
+      peerDependencies: { openclaw: "workspace:*" },
+      peerDependenciesMeta: { openclaw: { optional: true } },
+    });
+
+    copyBundledPluginMetadata({ repoRoot });
+
+    const packageJson = readBundledPackageJson(repoRoot, "telegram");
+    expect(packageJson.dependencies).toEqual({ grammy: "1.42.0" });
+    expect(packageJson.devDependencies).toBeUndefined();
+    expect(packageJson.peerDependencies).toBeUndefined();
+    expect(packageJson.peerDependenciesMeta).toBeUndefined();
     expect(packageJson.openclaw?.extensions).toEqual(["./index.js"]);
   });
 
