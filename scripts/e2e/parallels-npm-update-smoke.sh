@@ -1406,29 +1406,31 @@ if [ -z "\${$API_KEY_ENV:-}" ]; then
 fi
 cd "\$HOME"
 scrub_future_plugin_entries() {
-  /opt/homebrew/bin/python3 - <<'PY' || true
-import json
-from pathlib import Path
+  node - <<'JS' || true
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
 
-config_path = Path.home() / ".openclaw" / "openclaw.json"
-if not config_path.exists():
-    raise SystemExit(0)
-try:
-    config = json.loads(config_path.read_text())
-except Exception:
-    raise SystemExit(0)
-plugins = config.get("plugins")
-if not isinstance(plugins, dict):
-    raise SystemExit(0)
-entries = plugins.get("entries")
-if isinstance(entries, dict):
-    for plugin_id in ("feishu", "whatsapp"):
-        entries.pop(plugin_id, None)
-allow = plugins.get("allow")
-if isinstance(allow, list):
-    plugins["allow"] = [plugin_id for plugin_id in allow if plugin_id not in {"feishu", "whatsapp"}]
-config_path.write_text(json.dumps(config, indent=2) + "\n")
-PY
+const configPath = path.join(os.homedir(), ".openclaw", "openclaw.json");
+if (!fs.existsSync(configPath)) process.exit(0);
+let config;
+try {
+  config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+} catch {
+  process.exit(0);
+}
+const plugins = config?.plugins;
+if (!plugins || typeof plugins !== "object" || Array.isArray(plugins)) process.exit(0);
+const entries = plugins.entries;
+if (entries && typeof entries === "object" && !Array.isArray(entries)) {
+  delete entries.feishu;
+  delete entries.whatsapp;
+}
+if (Array.isArray(plugins.allow)) {
+  plugins.allow = plugins.allow.filter((pluginId) => pluginId !== "feishu" && pluginId !== "whatsapp");
+}
+fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
+JS
 }
 stop_openclaw_gateway_processes() {
   /opt/homebrew/bin/openclaw gateway stop >/dev/null 2>&1 || true
@@ -1530,29 +1532,31 @@ set -euo pipefail
 export HOME=/root
 cd "\$HOME"
 scrub_future_plugin_entries() {
-  python3 - <<'PY' || true
-import json
-from pathlib import Path
+  node - <<'JS' || true
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
 
-config_path = Path.home() / ".openclaw" / "openclaw.json"
-if not config_path.exists():
-    raise SystemExit(0)
-try:
-    config = json.loads(config_path.read_text())
-except Exception:
-    raise SystemExit(0)
-plugins = config.get("plugins")
-if not isinstance(plugins, dict):
-    raise SystemExit(0)
-entries = plugins.get("entries")
-if isinstance(entries, dict):
-    for plugin_id in ("feishu", "whatsapp"):
-        entries.pop(plugin_id, None)
-allow = plugins.get("allow")
-if isinstance(allow, list):
-    plugins["allow"] = [plugin_id for plugin_id in allow if plugin_id not in {"feishu", "whatsapp"}]
-config_path.write_text(json.dumps(config, indent=2) + "\n")
-PY
+const configPath = path.join(os.homedir(), ".openclaw", "openclaw.json");
+if (!fs.existsSync(configPath)) process.exit(0);
+let config;
+try {
+  config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+} catch {
+  process.exit(0);
+}
+const plugins = config?.plugins;
+if (!plugins || typeof plugins !== "object" || Array.isArray(plugins)) process.exit(0);
+const entries = plugins.entries;
+if (entries && typeof entries === "object" && !Array.isArray(entries)) {
+  delete entries.feishu;
+  delete entries.whatsapp;
+}
+if (Array.isArray(plugins.allow)) {
+  plugins.allow = plugins.allow.filter((pluginId) => pluginId !== "feishu" && pluginId !== "whatsapp");
+}
+fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
+JS
 }
 stop_openclaw_gateway_processes() {
   openclaw gateway stop >/dev/null 2>&1 || true

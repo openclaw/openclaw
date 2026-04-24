@@ -17,7 +17,8 @@ describe("parallels npm update smoke", () => {
 
     expect(script).toContain("Remove-FuturePluginEntries");
     expect(script).toContain("scrub_future_plugin_entries");
-    expect(script).toContain('"feishu", "whatsapp"');
+    expect(script).toContain("delete entries.feishu");
+    expect(script).toContain("delete entries.whatsapp");
     expect(script).toContain("Remove-FuturePluginEntries\n  Stop-OpenClawGatewayProcesses");
     expect(script).toContain("scrub_future_plugin_entries\nstop_openclaw_gateway_processes");
   });
