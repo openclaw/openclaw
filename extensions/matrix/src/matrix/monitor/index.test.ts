@@ -243,6 +243,7 @@ vi.mock("../../runtime.js", () => ({
     channel: {
       mentions: {
         buildMentionRegexes: () => [],
+        resolveMentionPatternsEnabled: () => true,
       },
       text: {
         resolveTextChunkLimit: (cfg: unknown, channel: unknown, accountId?: unknown) =>
@@ -420,6 +421,7 @@ describe("monitorMatrixProvider", () => {
     hoisted.state.startClientError = null;
     hoisted.accountConfig.dm = {};
     delete (hoisted.accountConfig as { rooms?: Record<string, unknown> }).rooms;
+    delete (hoisted.accountConfig as { mentionPatterns?: unknown }).mentionPatterns;
     hoisted.resolveTextChunkLimit.mockReset().mockReturnValue(4000);
     hoisted.releaseSharedClientInstance.mockReset().mockResolvedValue(true);
     hoisted.resolveSharedMatrixClient
@@ -595,6 +597,30 @@ describe("monitorMatrixProvider", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("passes account-scoped mention pattern policy to the room handler config", async () => {
+    (hoisted.accountConfig as { mentionPatterns?: unknown }).mentionPatterns = {
+      mode: "deny",
+      allowIn: ["!ops:example.org"],
+    };
+
+    await startMonitorAndAbortAfterStartup();
+
+    expect(hoisted.createMatrixRoomMessageHandler).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: expect.objectContaining({
+          channels: expect.objectContaining({
+            matrix: expect.objectContaining({
+              mentionPatterns: {
+                mode: "deny",
+                allowIn: ["!ops:example.org"],
+              },
+            }),
+          }),
+        }),
+      }),
+    );
   });
 
   it("contains room-message handler rejections inside monitor task tracking", async () => {

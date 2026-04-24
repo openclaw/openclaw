@@ -4,6 +4,7 @@ import type {
   GroupPolicy,
   OpenClawConfig,
   SecretInput,
+  MentionPatternsPolicyConfig,
 } from "./runtime-api.js";
 
 export type ReplyToMode = "off" | "first" | "all" | "batched";
@@ -148,6 +149,8 @@ export type MatrixConfig = {
   groupPolicy?: GroupPolicy;
   /** Supplemental context visibility policy (all|allowlist|allowlist_quote). */
   contextVisibility?: ContextVisibilityMode;
+  /** Per-room policy for globally configured regex/name mention patterns. */
+  mentionPatterns?: MentionPatternsPolicyConfig;
   /**
    * Enable shared block-streaming replies for Matrix.
    *

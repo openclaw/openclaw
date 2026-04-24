@@ -40,8 +40,9 @@ export type {
   ContextVisibilityMode,
   DmPolicy,
   GroupPolicy,
+  MentionPatternsPolicyConfig,
+  GroupToolPolicyConfig,
 } from "openclaw/plugin-sdk/config-types";
-export type { GroupToolPolicyConfig } from "openclaw/plugin-sdk/config-types";
 export type { WizardPrompter } from "openclaw/plugin-sdk/setup";
 export type { SecretInput } from "openclaw/plugin-sdk/secret-input";
 export {

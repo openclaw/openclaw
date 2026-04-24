@@ -398,23 +398,25 @@ describe("web session", () => {
     await createWaSocket(false, false, { authDir });
     const sock = getLastSocket();
 
-    sock.ev.emit("creds.update", {});
-    sock.ev.emit("creds.update", {});
-
     try {
+      sock.ev.emit("creds.update", {});
+      sock.ev.emit("creds.update", {});
+
       await vi.waitFor(() => {
         expect(inFlight).toBe(1);
       });
+
+      (release as (() => void) | null)?.();
+
+      await waitForCredsSaveQueue(authDir);
+
+      expect(openMock.tempHandles).toHaveLength(2);
+      expect(maxInFlight).toBe(1);
+      expect(inFlight).toBe(0);
     } finally {
       (release as (() => void) | null)?.();
+      openMock.restore();
     }
-
-    await waitForCredsSaveQueue(authDir);
-
-    expect(openMock.tempHandles).toHaveLength(2);
-    expect(maxInFlight).toBe(1);
-    expect(inFlight).toBe(0);
-    openMock.restore();
   });
 
   it("lets different authDir queues flush independently", async () => {

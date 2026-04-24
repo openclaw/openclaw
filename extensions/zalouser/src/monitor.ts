@@ -477,7 +477,14 @@ async function processMessage(
         allowNameMatching,
       })
     : false;
-  const mentionRegexes = core.channel.mentions.buildMentionRegexes(config, route.agentId);
+  const mentionRegexes = core.channel.mentions.resolveMentionPatternsEnabled({
+    cfg: config,
+    provider: "zalouser",
+    conversationId: chatId,
+    agentId: route.agentId,
+  })
+    ? core.channel.mentions.buildMentionRegexes(config, route.agentId)
+    : [];
   const explicitMention = {
     hasAnyMention: message.hasAnyMention === true,
     isExplicitlyMentioned: message.wasExplicitlyMentioned === true,

@@ -5,6 +5,7 @@ import {
   logInboundDrop,
   matchesMentionWithExplicit,
   resolveInboundMentionDecision,
+  resolveMentionPatternsEnabled,
   type NormalizedLocation,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveChannelGroupPolicy } from "openclaw/plugin-sdk/channel-policy";
@@ -181,7 +182,15 @@ export async function resolveTelegramInboundBody(params: {
     logger,
   } = params;
   const botUsername = normalizeOptionalLowercaseString(primaryCtx.me?.username);
-  const mentionRegexes = buildMentionRegexes(cfg, routeAgentId);
+  const mentionConversationId = String(resolvedThreadId ?? chatId);
+  const mentionRegexes = resolveMentionPatternsEnabled({
+    cfg,
+    provider: "telegram",
+    conversationId: mentionConversationId,
+    agentId: routeAgentId,
+  })
+    ? buildMentionRegexes(cfg, routeAgentId)
+    : [];
   const messageTextParts = getTelegramTextParts(msg);
   const allowForCommands = isGroup ? effectiveGroupAllow : effectiveDmAllow;
   const senderAllowedForCommands = isSenderAllowed({

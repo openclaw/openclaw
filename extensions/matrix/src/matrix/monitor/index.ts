@@ -206,6 +206,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
           allowFrom,
         },
         groupAllowFrom,
+        mentionPatterns: accountConfig.mentionPatterns,
         ...(roomsConfig ? { groups: roomsConfig } : {}),
       },
     },
