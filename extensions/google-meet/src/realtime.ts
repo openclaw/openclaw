@@ -5,9 +5,10 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
 import { resolveConfiguredCapabilityProvider } from "openclaw/plugin-sdk/provider-selection-runtime";
 import {
+  createRealtimeVoiceBridgeSession,
   getRealtimeVoiceProvider,
   listRealtimeVoiceProviders,
-  type RealtimeVoiceBridgeCallbacks,
+  type RealtimeVoiceBridgeSession,
   type RealtimeVoiceProviderConfig,
   type RealtimeVoiceProviderPlugin,
 } from "openclaw/plugin-sdk/realtime-voice";
@@ -43,13 +44,6 @@ export type ChromeRealtimeAudioBridgeHandle = {
 type ResolvedRealtimeProvider = {
   provider: RealtimeVoiceProviderPlugin;
   providerConfig: RealtimeVoiceProviderConfig;
-};
-
-type ActiveRealtimeBridge = {
-  acknowledgeMark(): unknown;
-  close(): unknown;
-  connect(): Promise<void> | void;
-  sendAudio(audio: Buffer): unknown;
 };
 
 function splitCommand(argv: string[]): { command: string; args: string[] } {
@@ -126,7 +120,7 @@ export async function startCommandRealtimeAudioBridge(params: {
     stdio: ["ignore", "pipe", "pipe"],
   });
   let stopped = false;
-  let bridge: ActiveRealtimeBridge | null = null;
+  let bridge: RealtimeVoiceBridgeSession | null = null;
 
   const stop = async () => {
     if (stopped) {
@@ -174,15 +168,18 @@ export async function startCommandRealtimeAudioBridge(params: {
     fullConfig: params.fullConfig,
     providers: params.providers,
   });
-  const callbacks: RealtimeVoiceBridgeCallbacks = {
-    onAudio: (muLaw) => {
-      if (!stopped) {
+  bridge = createRealtimeVoiceBridgeSession({
+    provider: resolved.provider,
+    providerConfig: resolved.providerConfig,
+    instructions: params.config.realtime.instructions,
+    audioSink: {
+      isOpen: () => !stopped,
+      sendAudio: (muLaw) => {
         outputProcess.stdin?.write(muLaw);
-      }
-    },
-    onClearAudio: () => {},
-    onMark: () => {
-      bridge?.acknowledgeMark();
+      },
+      sendMark: () => {
+        bridge?.acknowledgeMark();
+      },
     },
     onTranscript: (role, text, isFinal) => {
       if (isFinal) {
@@ -195,12 +192,6 @@ export async function startCommandRealtimeAudioBridge(params: {
         void stop();
       }
     },
-  };
-
-  bridge = resolved.provider.createBridge({
-    providerConfig: resolved.providerConfig,
-    instructions: params.config.realtime.instructions,
-    ...callbacks,
   });
 
   inputProcess.stdout?.on("data", (chunk) => {
