@@ -1549,7 +1549,7 @@ failures — moved to a dedicated page:
 
     For OpenAI, fast mode maps to `service_tier = "priority"` on supported native Responses requests. Session `/fast` overrides beat config defaults.
 
-    See [Thinking and fast mode](/tools/thinking) and [OpenAI fast mode](/providers/openai#openai-fast-mode).
+    See [Thinking and fast mode](/tools/thinking) and [OpenAI fast mode](/providers/openai#fast-mode).
 
   </Accordion>
 
