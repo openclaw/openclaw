@@ -1,0 +1,4 @@
+interface:
+  display_name: "PropertyTax"
+  short_description: "California property tax bill/rate lookup"
+  default_prompt: "Look up property tax rate and tax bill PDF for this address:"
