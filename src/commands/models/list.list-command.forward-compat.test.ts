@@ -141,6 +141,43 @@ function installModelsListCommandForwardCompatMocks() {
     printModelTable: mocks.printModelTable,
   }));
 
+  vi.doMock("./list.registry-load.js", () => ({
+    loadListModelRegistry: async (
+      cfg: unknown,
+      opts?: { providerFilter?: string },
+    ): Promise<{
+      models: Array<{ provider: string; id: string }>;
+      availableKeys?: Set<string>;
+      registry?: unknown;
+      discoveredKeys: Set<string>;
+    }> => {
+      const loaded = await mocks.loadModelRegistry(cfg, opts);
+      return {
+        ...loaded,
+        discoveredKeys: new Set(
+          loaded.models.map(
+            (model: { provider: string; id: string }) => `${model.provider}/${model.id}`,
+          ),
+        ),
+      };
+    },
+    loadConfiguredListModelRegistry: (
+      _cfg: unknown,
+      _entries: unknown,
+      opts?: { providerFilter?: string },
+    ) => {
+      mocks.loadModelRegistry(mocks.resolvedConfig, opts);
+      return {
+        registry: {
+          find: () => undefined,
+          hasConfiguredAuth: () => false,
+        },
+        discoveredKeys: new Set(),
+        availableKeys: new Set(),
+      };
+    },
+  }));
+
   vi.doMock("./list.runtime.js", () => ({
     ensureOpenClawModelsJson: mocks.ensureOpenClawModelsJson,
     ensureAuthProfileStore: mocks.ensureAuthProfileStore,
@@ -363,7 +400,7 @@ describe("modelsListCommand forward-compat", () => {
       );
     });
 
-    it("exits with an error when configured-mode listing has no model registry", async () => {
+    it("does not require the all-model registry result for configured-mode listing", async () => {
       const previousExitCode = process.exitCode;
       process.exitCode = undefined;
       mocks.loadModelRegistry.mockResolvedValueOnce({
@@ -381,9 +418,9 @@ describe("modelsListCommand forward-compat", () => {
         process.exitCode = previousExitCode;
       }
 
-      expect(runtime.error).toHaveBeenCalledWith("Model registry unavailable.");
-      expect(observedExitCode).toBe(1);
-      expect(mocks.printModelTable).not.toHaveBeenCalled();
+      expect(runtime.error).not.toHaveBeenCalled();
+      expect(observedExitCode).toBeUndefined();
+      expect(mocks.printModelTable).toHaveBeenCalled();
     });
   });
 
