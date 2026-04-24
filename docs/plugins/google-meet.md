@@ -104,6 +104,18 @@ openclaw googlemeet create
 openclaw googlemeet join https://meet.google.com/new-abcd-xyz --transport chrome-node
 ```
 
+`googlemeet create` has two paths:
+
+- API create: used when Google Meet OAuth credentials are configured. This is
+  the most deterministic path and does not depend on browser UI state.
+- Browser fallback: used when OAuth credentials are absent. OpenClaw uses the
+  pinned Chrome node, opens `https://meet.google.com/new`, waits for Google to
+  redirect to a real meeting-code URL, then returns that URL. This path requires
+  the OpenClaw Chrome profile on the node to already be signed in to Google.
+
+The command output includes a `source` field (`api` or `browser`) so agents can
+explain which path was used.
+
 Or tell an agent: "Create a Google Meet, join it with realtime voice, and send
 me the link." The agent should call `google_meet` with `action: "create"`, copy
 the returned `meetingUri`, then call `google_meet` with `action: "join"` and
@@ -400,7 +412,11 @@ openclaw googlemeet join https://meet.google.com/abc-defg-hij \
 
 ## OAuth and preflight
 
-Google Meet Media API access uses a personal OAuth client first. Configure
+OAuth is optional for creating a Meet link because `googlemeet create` can fall
+back to browser automation. Configure OAuth when you want official API create,
+space resolution, or Meet Media API preflight checks.
+
+Google Meet API access uses a personal OAuth client first. Configure
 `oauth.clientId` and optionally `oauth.clientSecret`, then run:
 
 ```bash
@@ -411,10 +427,14 @@ The command prints an `oauth` config block with a refresh token. It uses PKCE,
 localhost callback on `http://localhost:8085/oauth2callback`, and a manual
 copy/paste flow with `--manual`.
 
-The OAuth consent includes Meet space creation, Meet space read access, and
-Meet conference media read access. If you authenticated before meeting creation
+The OAuth consent includes Meet space creation, Meet space read access, and Meet
+conference media read access. If you authenticated before meeting creation
 support existed, rerun `openclaw googlemeet auth login --json` so the refresh
 token has the `meetings.space.created` scope.
+
+No OAuth credentials are needed for the browser fallback. In that mode, Google
+auth comes from the signed-in Chrome profile on the selected node, not from
+OpenClaw config.
 
 These environment variables are accepted as fallbacks:
 
@@ -439,21 +459,50 @@ Run preflight before media work:
 openclaw googlemeet preflight --meeting https://meet.google.com/abc-defg-hij
 ```
 
-Create a fresh Meet space with the same OAuth config:
+Create a fresh Meet space:
 
 ```bash
 openclaw googlemeet create
 ```
 
-The command prints the new `meeting uri` and `space`. Agents can use the
+The command prints the new `meeting uri` and source. With OAuth credentials it
+uses the official Google Meet API. Without OAuth credentials it uses the pinned
+Chrome node's signed-in browser profile as a fallback. Agents can use the
 `google_meet` tool with `action: "create"` to create a meeting, then call
 `action: "join"` with the returned `meetingUri`.
 
-Creating a Meet space only creates the meeting URL. The Chrome or Chrome-node
-transport still needs a signed-in Google Chrome profile to join through the
-browser. If the profile is signed out, OpenClaw reports
-`manualActionRequired: true` and asks the operator to finish Google login before
-retrying the join.
+Example JSON output from the browser fallback:
+
+```json
+{
+  "source": "browser",
+  "meetingUri": "https://meet.google.com/abc-defg-hij",
+  "browser": {
+    "nodeId": "ba0f4e4bc...",
+    "targetId": "tab-1"
+  }
+}
+```
+
+Example JSON output from API create:
+
+```json
+{
+  "source": "api",
+  "meetingUri": "https://meet.google.com/abc-defg-hij",
+  "space": {
+    "name": "spaces/abc-defg-hij",
+    "meetingCode": "abc-defg-hij",
+    "meetingUri": "https://meet.google.com/abc-defg-hij"
+  }
+}
+```
+
+Creating a Meet only creates or discovers the meeting URL. The Chrome or
+Chrome-node transport still needs a signed-in Google Chrome profile to join
+through the browser. If the profile is signed out, OpenClaw reports
+`manualActionRequired: true` or a browser fallback error and asks the operator
+to finish Google login before retrying.
 
 Set `preview.enrollmentAcknowledged: true` only after confirming your Cloud
 project, OAuth principal, and meeting participants are enrolled in the Google
@@ -740,15 +789,20 @@ Common manual actions:
 
 ### Meeting creation fails
 
-`googlemeet create` uses the Google Meet API `spaces.create` endpoint. Confirm:
+`googlemeet create` first uses the Google Meet API `spaces.create` endpoint
+when OAuth credentials are configured. Without OAuth credentials it falls back
+to the pinned Chrome node browser. Confirm:
 
-- `oauth.clientId` and `oauth.refreshToken` are configured, or matching
-  `OPENCLAW_GOOGLE_MEET_*` environment variables are present.
-- The refresh token was minted after create support was added. Older tokens may
-  be missing the `meetings.space.created` scope; rerun
+- For API creation: `oauth.clientId` and `oauth.refreshToken` are configured,
+  or matching `OPENCLAW_GOOGLE_MEET_*` environment variables are present.
+- For API creation: the refresh token was minted after create support was
+  added. Older tokens may be missing the `meetings.space.created` scope; rerun
   `openclaw googlemeet auth login --json` and update plugin config.
-- The Google Cloud project and OAuth principal are allowed to use the required
-  Google Meet API scopes.
+- For browser fallback: `defaultTransport: "chrome-node"` and
+  `chromeNode.node` point at a connected node with `browser.proxy` and
+  `googlemeet.chrome`.
+- For browser fallback: the OpenClaw Chrome profile on that node is signed in
+  to Google and can open `https://meet.google.com/new`.
 
 ### Agent joins but does not talk
 
