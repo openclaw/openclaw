@@ -47,7 +47,11 @@ import {
   resolveChannelContextVisibilityMode,
   resolveStorePath,
 } from "../config.runtime.js";
-import { normalizeSlackChannelType, type SlackMonitorContext } from "../context.js";
+import {
+  normalizeSlackChannelType,
+  resolveSlackChatType,
+  type SlackMonitorContext,
+} from "../context.js";
 import { recordInboundSession, resolveConversationLabel } from "../conversation.runtime.js";
 import { authorizeSlackDirectMessage } from "../dm-auth.js";
 import { resolveSlackThreadStarter } from "../media.js";
@@ -541,6 +545,7 @@ export async function prepareSlackMessage(params: {
 
   const roomLabel = channelName ? `#${channelName}` : `#${message.channel}`;
   const senderName = await resolveSenderName();
+  const chatType = resolveSlackChatType(conversation.resolvedChannelType);
   const preview = rawBody.replace(/\s+/g, " ").slice(0, 160);
   const inboundLabel = isDirectMessage
     ? `Slack DM from ${senderName}`
@@ -558,7 +563,7 @@ export async function prepareSlackMessage(params: {
 
   const envelopeFrom =
     resolveConversationLabel({
-      ChatType: isDirectMessage ? "direct" : "channel",
+      ChatType: chatType,
       SenderName: senderName,
       GroupSubject: isRoomish ? roomLabel : undefined,
       From: slackFrom,
@@ -581,7 +586,7 @@ export async function prepareSlackMessage(params: {
     from: envelopeFrom,
     timestamp: message.ts ? Math.round(Number(message.ts) * 1000) : undefined,
     body: textWithId,
-    chatType: isDirectMessage ? "direct" : "channel",
+    chatType,
     sender: { name: senderName, id: senderId },
     previousTimestamp,
     envelope: envelopeOptions,
@@ -665,7 +670,7 @@ export async function prepareSlackMessage(params: {
     To: slackTo,
     SessionKey: sessionKey,
     AccountId: route.accountId,
-    ChatType: isDirectMessage ? "direct" : "channel",
+    ChatType: chatType,
     ConversationLabel: envelopeFrom,
     GroupSubject: isRoomish ? roomLabel : undefined,
     GroupSpace: ctx.teamId || undefined,

@@ -405,6 +405,22 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared!.ctxPayload.MessageThreadId).toBe("1.000");
   });
 
+  it("classifies MPIM group DMs as group chat context", async () => {
+    const prepared = await prepareMessageWith(
+      createReplyToAllSlackCtx(),
+      createSlackAccount({ replyToMode: "all" }),
+      createSlackMessage({
+        channel: "G123",
+        channel_type: "mpim",
+      }),
+    );
+
+    expect(prepared).toBeTruthy();
+    expect(prepared!.isRoomish).toBe(true);
+    expect(prepared!.ctxPayload.ChatType).toBe("group");
+    expect(prepared!.ctxPayload.From).toBe("slack:group:G123");
+  });
+
   it("respects replyToModeByChatType.direct override for DMs", async () => {
     const prepared = await prepareMessageWith(
       createReplyToAllSlackCtx(),
