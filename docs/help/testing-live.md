@@ -389,7 +389,7 @@ If you want to rely on env keys (e.g. exported in your `~/.profile`), run local 
 - Enable: `OPENCLAW_LIVE_TEST=1 COMFY_LIVE_TEST=1 pnpm test:live -- extensions/comfy/comfy.live.test.ts`
 - Scope:
   - Exercises the bundled comfy image, video, and `music_generate` paths
-  - Skips each capability unless `models.providers.comfy.<capability>` is configured
+  - Skips each capability unless `plugins.entries.comfy.config.<capability>` is configured
   - Useful after changing comfy workflow submission, polling, downloads, or plugin registration
 
 ## Image generation live
