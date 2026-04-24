@@ -335,7 +335,7 @@ export function resolveAgentHarnessPolicy(params: {
     runtime,
     fallback:
       resolveEmbeddedAgentHarnessFallback(env) ??
-      normalizeAgentHarnessFallback(agentPolicy?.fallback ?? defaultsPolicy?.fallback),
+      normalizeAgentHarnessFallback(agentPolicy?.fallback ?? defaultsPolicy?.fallback, runtime),
   };
 }
 
@@ -357,8 +357,12 @@ function resolveAgentEmbeddedHarnessConfig(
 
 function normalizeAgentHarnessFallback(
   value: AgentEmbeddedHarnessConfig["fallback"] | undefined,
+  runtime: EmbeddedAgentRuntime,
 ): EmbeddedAgentHarnessFallback {
-  return value === "none" ? "none" : "pi";
+  if (value) {
+    return value === "none" ? "none" : "pi";
+  }
+  return runtime === "auto" ? "pi" : "none";
 }
 
 function formatProviderModel(params: { provider: string; modelId?: string }): string {
