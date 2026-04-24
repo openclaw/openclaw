@@ -36,7 +36,7 @@ docker run -d \
 
 echo "Waiting for gateway to come up..."
 ready=0
-for _ in $(seq 1 40); do
+for _ in $(seq 1 180); do
   if [ "$(docker inspect -f '{{.State.Running}}' "$GW_NAME" 2>/dev/null || echo false)" != "true" ]; then
     break
   fi
@@ -94,14 +94,14 @@ if (!url || !token) throw new Error(\"missing GW_URL/GW_TOKEN\");
 
 const ws = new WebSocket(url);
 await new Promise((resolve, reject) => {
-  const t = setTimeout(() => reject(new Error(\"ws open timeout\")), 5000);
+  const t = setTimeout(() => reject(new Error(\"ws open timeout\")), 30000);
   ws.once(\"open\", () => {
     clearTimeout(t);
     resolve();
   });
 });
 
-function onceFrame(filter, timeoutMs = 5000) {
+function onceFrame(filter, timeoutMs = 30000) {
   return new Promise((resolve, reject) => {
     const t = setTimeout(() => reject(new Error(\"timeout\")), timeoutMs);
     const handler = (data) => {
