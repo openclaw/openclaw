@@ -315,7 +315,7 @@ export async function handleGoogleMeetNodeHostCommand(paramsJSON?: string | null
       result = { ok: true };
       break;
     case "start":
-      result = await startChrome(params);
+      result = startChrome(params);
       break;
     case "status":
       result = bridgeStatus(params);

@@ -58,7 +58,8 @@ Preferred plugin path is npm package distribution plus local extension loading f
 If you build a plugin, host and maintain it in your own repository.
 The bar for adding optional plugins to core is intentionally high.
 Plugin docs: [`docs/tools/plugin.md`](docs/tools/plugin.md)
-Community plugin listing + PR bar: https://docs.openclaw.ai/plugins/community
+Plugin discovery, official publisher status, provenance, and security review live in [ClawHub](https://clawhub.ai/).
+OpenClaw docs should document core extension points; plugin promotion belongs in ClawHub, preferably under vetted org publishers for official plugins.
 
 Memory is a special plugin slot where only one memory plugin can be active at a time.
 Today we ship multiple memory options; over time we plan to converge on one recommended default path.
@@ -66,21 +67,24 @@ Today we ship multiple memory options; over time we plan to converge on one reco
 ### Skills
 
 We still ship some bundled skills for baseline UX.
-New skills should be published to ClawHub first (`clawhub.ai`), not added to core by default.
-Core skill additions should be rare and require a strong product or security reason.
+New skills should be published through [ClawHub](https://clawhub.ai/) first, not added to core by default.
+Official or bundled promotion should require a clear product, security, or maintainer-ownership reason.
 
 ### MCP Support
 
-OpenClaw supports MCP through `mcporter`: https://github.com/steipete/mcporter
+OpenClaw has first-class MCP support in core.
+MCP docs: [`docs/cli/mcp.md`](docs/cli/mcp.md)
 
-This keeps MCP integration flexible and decoupled from core runtime:
+Current core surfaces:
 
-- add or change MCP servers without restarting the gateway
-- keep core tool/context surface lean
-- reduce MCP churn impact on core stability and security
+- `openclaw mcp serve` exposes OpenClaw-backed channel conversations to Codex, Claude Code, and other MCP clients.
+- `openclaw mcp list|show|set|unset` manages OpenClaw-owned outbound MCP server definitions under `mcp.servers`.
+- Embedded Pi can materialize configured MCP servers as agent tools, filtered through the same owner/tool-policy pipeline as other tools.
+- CLI backends can opt into bundle MCP overlays so Codex, Claude, Gemini, and similar CLIs receive scoped Gateway tools through a loopback MCP bridge.
+- ACPX integrations can expose selected OpenClaw tools through explicit MCP bridges.
 
-For now, we prefer this bridge model over building first-class MCP runtime into core.
-If there is an MCP server or feature `mcporter` does not support yet, please open an issue there.
+`mcporter` is still useful for direct MCP server inspection, ad-hoc calls, generated CLIs, and specialized integrations such as QMD keep-alive.
+It is no longer the only OpenClaw MCP integration path.
 
 ### Setup
 
@@ -98,11 +102,11 @@ It is widely known, fast to iterate in, and easy to read, modify, and extend.
 
 ## What We Will Not Merge (For Now)
 
-- New core skills when they can live on ClawHub
+- New core skills when they can live on [ClawHub](https://clawhub.ai/)
 - Full-doc translation sets for all docs (deferred; we plan AI-generated translations later)
 - Commercial service integrations that do not clearly fit the model-provider category
 - Wrapper channels around already supported channels without a clear capability or security gap
-- First-class MCP runtime in core when `mcporter` already provides the integration path
+- MCP work that duplicates existing `openclaw mcp`, bundle-MCP, ACPX bridge, or `mcporter` paths without a clear product or security gap
 - Agent-hierarchy frameworks (manager-of-managers / nested planner trees) as a default architecture
 - Heavy orchestration layers that duplicate existing agent and tool infrastructure
 
