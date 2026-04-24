@@ -228,7 +228,7 @@ Core now defers shared poll parsing until after plugin poll dispatch declines
 the action, so plugin-owned poll handlers can accept channel-specific poll
 fields without being blocked by the generic poll parser first.
 
-See [Load pipeline](#load-pipeline) for the full startup sequence.
+See [Plugin architecture internals](/plugins/architecture-internals) for the full startup sequence.
 
 ## Capability ownership model
 

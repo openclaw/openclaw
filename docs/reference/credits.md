@@ -32,4 +32,4 @@ MIT - Free as a lobster in the ocean.
 ## Related
 
 - [Token use and costs](/reference/token-use)
-- [Release policy](/reference/release-policy)
+- [Release policy](/reference/RELEASING)

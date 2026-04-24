@@ -42,5 +42,4 @@ See [iMessage](/channels/imessage) for legacy setup and addressing (`chat_id` pr
 
 ## Related
 
-- [RPC adapters](/reference/rpc-adapters)
 - [Gateway protocol](/gateway/protocol)

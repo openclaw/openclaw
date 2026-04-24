@@ -57,5 +57,5 @@ Stored/rendered rich blocks use this `canvas` shape directly. `present_view` is 
 
 ## Related
 
-- [RPC adapters](/reference/rpc-adapters)
+- [RPC adapters](/reference/rpc)
 - [Typebox](/concepts/typebox)
