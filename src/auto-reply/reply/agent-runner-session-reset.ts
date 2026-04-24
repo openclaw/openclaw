@@ -99,7 +99,7 @@ export async function resetReplyRunSession(params: {
   }
   // Silent rotations (compaction/role-ordering) fire without user intent, so
   // preserve recent user/assistant turns for direct-chat continuity.
-  replayRecentUserAssistantMessages({
+  await replayRecentUserAssistantMessages({
     sourceTranscript: prevEntry.sessionFile,
     targetTranscript: nextSessionFile,
     newSessionId: nextSessionId,
