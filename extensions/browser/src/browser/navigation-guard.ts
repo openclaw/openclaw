@@ -3,7 +3,6 @@ import {
   matchesHostnameAllowlist,
   normalizeHostname,
 } from "openclaw/plugin-sdk/browser-security-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { hasProxyEnvConfigured } from "../infra/net/proxy-env.js";
 import {
   isPrivateNetworkAllowedByPolicy,
@@ -18,6 +17,10 @@ const SAFE_NON_NETWORK_URLS = new Set(["about:blank"]);
 function isAllowedNonNetworkNavigationUrl(parsed: URL): boolean {
   // Keep non-network navigation explicit; about:blank is the only allowed bootstrap URL.
   return SAFE_NON_NETWORK_URLS.has(parsed.href);
+}
+
+function normalizeNavigationUrl(url: string): string {
+  return url.trim();
 }
 
 export class InvalidBrowserNavigationUrlError extends Error {
@@ -85,7 +88,7 @@ export async function assertBrowserNavigationAllowed(
     lookupFn?: LookupFn;
   } & BrowserNavigationPolicyOptions,
 ): Promise<void> {
-  const rawUrl = normalizeOptionalString(opts.url) ?? "";
+  const rawUrl = normalizeNavigationUrl(opts.url);
   if (!rawUrl) {
     throw new InvalidBrowserNavigationUrlError("url is required");
   }
@@ -150,7 +153,7 @@ export async function assertBrowserNavigationResultAllowed(
     lookupFn?: LookupFn;
   } & BrowserNavigationPolicyOptions,
 ): Promise<void> {
-  const rawUrl = normalizeOptionalString(opts.url) ?? "";
+  const rawUrl = normalizeNavigationUrl(opts.url);
   if (!rawUrl) {
     return;
   }
