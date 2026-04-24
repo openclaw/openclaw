@@ -585,6 +585,13 @@ describe("task-registry", () => {
             to: "notifychat:123",
             threadId: "321",
             content: expect.stringContaining("Background task done: ACP background task"),
+            hermesArbiter: expect.objectContaining({
+              arbiter_topic: "dev-iox",
+              arbiter_bot_name: "AHC_A8_bot",
+              arbiter_action: expect.objectContaining({
+                type: "status",
+              }),
+            }),
             mirror: expect.objectContaining({
               sessionKey: "agent:main:main",
             }),
@@ -1685,6 +1692,13 @@ describe("task-registry", () => {
           expect.objectContaining({
             content:
               "Background task update: ACP background task. No output for 60s. It may be waiting for input.",
+            hermesArbiter: expect.objectContaining({
+              arbiter_topic: "dev-iox",
+              arbiter_bot_name: "AHC_A8_bot",
+              arbiter_action: expect.objectContaining({
+                type: "status",
+              }),
+            }),
           }),
         ),
       );

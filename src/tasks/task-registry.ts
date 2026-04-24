@@ -4,6 +4,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
+import {
+  buildHermesArbiterMetadata,
+  type HermesArbiterMetadata,
+} from "../infra/outbound/hermes-arbiter-metadata.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
@@ -971,6 +975,31 @@ function canDeliverTaskToRequesterOrigin(task: TaskRecord): boolean {
   return Boolean(channel && to && isDeliverableMessageChannel(channel));
 }
 
+function buildTaskDeliveryHermesArbiterMetadata(params: {
+  task: TaskRecord;
+  text: string;
+  owner: TaskDeliveryOwner;
+  eventKind: "terminal" | "state_change";
+}): HermesArbiterMetadata | undefined {
+  const targetChatId = params.owner.requesterOrigin?.to?.trim();
+  if (!targetChatId) {
+    return undefined;
+  }
+  return buildHermesArbiterMetadata({
+    topic: "dev-iox",
+    botName: "AHC_A8_bot",
+    text: params.text,
+    actionType: "status",
+    targetChatId,
+    extra: {
+      taskId: params.task.taskId,
+      runId: params.task.runId,
+      runtime: params.task.runtime,
+      eventKind: params.eventKind,
+    },
+  });
+}
+
 function resolveMissingOwnerDeliveryStatus(task: TaskRecord): TaskDeliveryStatus {
   return task.scopeKind === "system" ? "not_applicable" : "parent_missing";
 }
@@ -1076,6 +1105,12 @@ export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<Ta
       const { sendMessage } = await loadTaskRegistryDeliveryRuntime();
       const requesterAgentId = parseAgentSessionKey(ownerSessionKey)?.agentId;
       const idempotencyKey = resolveTaskTerminalIdempotencyKey(latest);
+      const hermesArbiter = buildTaskDeliveryHermesArbiterMetadata({
+        task: latest,
+        text: eventText,
+        owner,
+        eventKind: "terminal",
+      });
       await sendMessage({
         channel: owner.requesterOrigin?.channel,
         to: owner.requesterOrigin?.to ?? "",
@@ -1084,6 +1119,7 @@ export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<Ta
         content: eventText,
         agentId: requesterAgentId,
         idempotencyKey,
+        ...(hermesArbiter ? { hermesArbiter } : {}),
         mirror: {
           sessionKey: ownerSessionKey,
           agentId: requesterAgentId,
@@ -1170,6 +1206,12 @@ export async function maybeDeliverTaskStateChangeUpdate(
       latestEvent,
       owner,
     });
+    const hermesArbiter = buildTaskDeliveryHermesArbiterMetadata({
+      task: current,
+      text: eventText,
+      owner,
+      eventKind: "state_change",
+    });
     await sendMessage({
       channel: owner.requesterOrigin?.channel,
       to: owner.requesterOrigin?.to ?? "",
@@ -1178,6 +1220,7 @@ export async function maybeDeliverTaskStateChangeUpdate(
       content: eventText,
       agentId: requesterAgentId,
       idempotencyKey,
+      ...(hermesArbiter ? { hermesArbiter } : {}),
       mirror: {
         sessionKey: ownerSessionKey,
         agentId: requesterAgentId,

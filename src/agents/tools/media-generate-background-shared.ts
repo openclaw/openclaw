@@ -3,6 +3,7 @@ import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { buildHermesArbiterMetadata } from "../../infra/outbound/hermes-arbiter-metadata.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import {
@@ -207,6 +208,7 @@ async function maybeDeliverMediaGenerationResultDirectly(params: {
   status: "ok" | "error";
   result: string;
   idempotencyKey: string;
+  toolName: string;
 }): Promise<boolean> {
   const origin = params.handle.requesterOrigin;
   const channel = origin?.channel?.trim();
@@ -218,16 +220,32 @@ async function maybeDeliverMediaGenerationResultDirectly(params: {
   const content = parsed.text.trim();
   const mediaUrls = parsed.mediaUrls?.filter((entry) => entry.trim().length > 0);
   const requesterAgentId = parseAgentSessionKey(params.handle.requesterSessionKey)?.agentId;
+  const effectiveContent =
+    content ||
+    (params.status === "ok"
+      ? `Finished ${params.handle.taskLabel}.`
+      : "Background media generation failed.");
+  const hermesArbiter = buildHermesArbiterMetadata({
+    topic: "dev-iox",
+    botName: "AHC_A8_bot",
+    text: effectiveContent,
+    actionType: "status",
+    targetChatId: to,
+    extra: {
+      taskId: params.handle.taskId,
+      runId: params.handle.runId,
+      toolName: params.toolName,
+      eventKind: "media_completion",
+      status: params.status,
+      ...(mediaUrls?.length ? { mediaCount: mediaUrls.length } : {}),
+    },
+  });
   await sendMessage({
     channel,
     to,
     accountId: origin?.accountId,
     threadId: origin?.threadId,
-    content:
-      content ||
-      (params.status === "ok"
-        ? `Finished ${params.handle.taskLabel}.`
-        : "Background media generation failed."),
+    content: effectiveContent,
     ...(mediaUrls?.length ? { mediaUrls } : {}),
     agentId: requesterAgentId,
     idempotencyKey: params.idempotencyKey,
@@ -236,6 +254,7 @@ async function maybeDeliverMediaGenerationResultDirectly(params: {
       agentId: requesterAgentId,
       idempotencyKey: params.idempotencyKey,
     },
+    hermesArbiter,
   });
   return true;
 }
@@ -264,6 +283,7 @@ export async function wakeMediaGenerationTaskCompletion(params: {
         status: params.status,
         result: params.result,
         idempotencyKey: announceId,
+        toolName: params.toolName,
       });
       if (deliveredDirect) {
         return;

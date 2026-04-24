@@ -160,6 +160,10 @@ describe("delivery-queue recovery", () => {
         gifPlayback: true,
         silent: true,
         gatewayClientScopes: ["operator.write"],
+        metadata: {
+          arbiter_topic: "dev-iox",
+          arbiter_bot_name: "AHC_A8_bot",
+        },
         mirror: {
           sessionKey: "agent:main:main",
           text: "a",
@@ -172,7 +176,7 @@ describe("delivery-queue recovery", () => {
           requesterSenderId: "sender-1",
           requesterSenderName: "Sender One",
           requesterSenderUsername: "sender.one",
-          requesterSenderE164: "+15551234567",
+          requesterSenderE164: "+155****4567",
         },
       },
       tmpDir(),
@@ -187,6 +191,10 @@ describe("delivery-queue recovery", () => {
         gifPlayback: true,
         silent: true,
         gatewayClientScopes: ["operator.write"],
+        metadata: {
+          arbiter_topic: "dev-iox",
+          arbiter_bot_name: "AHC_A8_bot",
+        },
         mirror: {
           sessionKey: "agent:main:main",
           text: "a",
@@ -199,7 +207,7 @@ describe("delivery-queue recovery", () => {
           requesterSenderId: "sender-1",
           requesterSenderName: "Sender One",
           requesterSenderUsername: "sender.one",
-          requesterSenderE164: "+15551234567",
+          requesterSenderE164: "+155****4567",
         },
       }),
     );
