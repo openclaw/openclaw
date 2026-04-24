@@ -246,6 +246,49 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads).toHaveLength(0);
   });
 
+  it("extracts markdown image replies into final payload media urls", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      payloads: [{ text: "Here you go\n\n![chart](https://example.com/chart.png)" }],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0]).toMatchObject({
+      text: "Here you go",
+      mediaUrl: "https://example.com/chart.png",
+      mediaUrls: ["https://example.com/chart.png"],
+    });
+  });
+
+  it("preserves inline caption text when lifting markdown image replies into media", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      payloads: [{ text: 'Look ![chart](https://example.com/chart.png "Quarterly chart") now' }],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0]).toMatchObject({
+      text: "Look now",
+      mediaUrl: "https://example.com/chart.png",
+      mediaUrls: ["https://example.com/chart.png"],
+    });
+  });
+
+  it("keeps markdown local file images as plain text in final replies", async () => {
+    const text = "Look ![chart](file:///etc/passwd) now";
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      payloads: [{ text }],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0]).toMatchObject({
+      text,
+    });
+    expect(replyPayloads[0]?.mediaUrl).toBeUndefined();
+    expect(replyPayloads[0]?.mediaUrls).toBeUndefined();
+  });
+
   it("deduplicates final payloads against directly sent block keys regardless of replyToId", async () => {
     // When block streaming is not active but directlySentBlockKeys has entries
     // (e.g. from pre-tool flush), the key should match even if replyToId differs.
