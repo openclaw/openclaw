@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { ProviderRuntimeModel } from "../../../plugins/provider-runtime-model.types.js";
 import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
 import { resolveAttemptTranscriptPolicy } from "./attempt.transcript-policy.js";
 
@@ -27,7 +28,18 @@ describe("resolveAttemptTranscriptPolicy", () => {
     const runtimePlanModelContext = {
       workspaceDir: "/tmp/openclaw-transcript-policy",
       modelApi: "anthropic-messages",
-      model: { id: "claude-opus-4.6", provider: "anthropic" },
+      model: {
+        id: "claude-opus-4.6",
+        name: "Claude Opus 4.6",
+        api: "anthropic-messages",
+        provider: "anthropic",
+        baseUrl: "https://api.anthropic.com",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200_000,
+        maxTokens: 8_192,
+      } satisfies ProviderRuntimeModel,
     };
 
     expect(
