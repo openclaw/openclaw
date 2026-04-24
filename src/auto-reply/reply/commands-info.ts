@@ -1,5 +1,7 @@
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveEffectiveToolInventory } from "../../agents/tools-effective-inventory.js";
+import { getOrCreateSessionMcpRuntime } from "../../agents/pi-bundle-mcp-runtime.js";
+import { materializeBundleMcpToolsForRun } from "../../agents/pi-bundle-mcp-materialize.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { logVerbose } from "../../globals.js";
 import { listSkillCommandsForAgents } from "../skill-commands.js";
@@ -125,7 +127,7 @@ export const handleToolsCommand: CommandHandler = async (params, allowTextComman
       config: params.cfg,
       hasRepliedRef: undefined,
     });
-    const result = resolveEffectiveToolInventory({
+    let result = resolveEffectiveToolInventory({
       cfg: params.cfg,
       agentId,
       sessionKey: params.sessionKey,
@@ -158,6 +160,44 @@ export const handleToolsCommand: CommandHandler = async (params, allowTextComman
         params.ctx.ChatType,
       ),
     });
+
+    // Include MCP tools from the session runtime (if available)
+    if (params.sessionKey) {
+      try {
+        const mcpRuntime = await getOrCreateSessionMcpRuntime({
+          sessionKey: params.sessionKey,
+          workspaceDir: params.workspaceDir ?? process.cwd(),
+          cfg: params.cfg,
+        });
+        if (mcpRuntime) {
+          const mcpTools = await materializeBundleMcpToolsForRun({
+            runtime: mcpRuntime,
+          });
+          if (mcpTools.tools.length > 0) {
+            const mcpEntries = mcpTools.tools.map((tool) => ({
+              id: tool.name,
+              label: tool.label ?? tool.name,
+              description: tool.description || "",
+              rawDescription: tool.description || "",
+              source: "mcp" as const,
+            }));
+            // Append MCP tools as a new group
+            result = {
+              ...result,
+              groups: [...result.groups, {
+                id: "mcp" as const,
+                label: "MCP servers",
+                source: "mcp" as const,
+                tools: mcpEntries,
+              }],
+            };
+          }
+        }
+      } catch {
+        // MCP runtime unavailable — silently skip (tools still work at runtime)
+      }
+    }
+
     return {
       shouldContinue: false,
       reply: { text: buildToolsMessage(result, { verbose }) },
