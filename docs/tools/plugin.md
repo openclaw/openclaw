@@ -65,6 +65,9 @@ Packaged OpenClaw installs do not eagerly install every bundled plugin's
 runtime dependency tree. When a bundled OpenClaw-owned plugin is active from
 plugin config, legacy channel config, or a default-enabled manifest, startup
 repairs only that plugin's declared runtime dependencies before importing it.
+Explicit disablement still wins: `plugins.entries.<id>.enabled: false`,
+`plugins.deny`, `plugins.enabled: false`, and `channels.<id>.enabled: false`
+prevent automatic bundled runtime-dependency repair for that plugin/channel.
 External plugins and custom load paths must still be installed through
 `openclaw plugins install`.
 

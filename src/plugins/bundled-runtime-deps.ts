@@ -3,7 +3,6 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { normalizeChatChannelId } from "../channels/ids.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveHomeRelativePath } from "../infra/home-dir.js";
@@ -571,8 +570,9 @@ function isBundledPluginConfiguredForRuntimeDeps(params: {
   if (entry?.enabled === true) {
     return true;
   }
+  let hasExplicitChannelDisable = false;
   for (const channelId of readBundledPluginChannels(params.pluginDir)) {
-    const normalizedChannelId = normalizeChatChannelId(channelId);
+    const normalizedChannelId = normalizeOptionalLowercaseString(channelId);
     if (!normalizedChannelId) {
       continue;
     }
@@ -583,11 +583,23 @@ function isBundledPluginConfiguredForRuntimeDeps(params: {
       channelConfig &&
       typeof channelConfig === "object" &&
       !Array.isArray(channelConfig) &&
+      (channelConfig as { enabled?: unknown }).enabled === false
+    ) {
+      hasExplicitChannelDisable = true;
+      continue;
+    }
+    if (
+      channelConfig &&
+      typeof channelConfig === "object" &&
+      !Array.isArray(channelConfig) &&
       (params.includeConfiguredChannels ||
         (channelConfig as { enabled?: unknown }).enabled === true)
     ) {
       return true;
     }
+  }
+  if (hasExplicitChannelDisable) {
+    return false;
   }
   return readBundledPluginEnabledByDefault(params.pluginDir);
 }
