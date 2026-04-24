@@ -218,3 +218,9 @@ Config sample:
   },
 }
 ```
+
+## Related
+
+- [CLI reference](/cli)
+- [Multi-agent routing](/concepts/multi-agent)
+- [Agent workspace](/concepts/agent-workspace)

@@ -249,3 +249,9 @@ launchctl bootout gui/$UID/ai.openclaw.ssh-tunnel
 | `ssh -N`                             | SSH without executing remote commands (port-forwarding only) |
 | `KeepAlive`                          | Automatically restarts the tunnel if it crashes              |
 | `RunAtLoad`                          | Starts the tunnel when the LaunchAgent loads at login        |
+
+## Related
+
+- [Tailscale](/gateway/tailscale)
+- [Authentication](/gateway/authentication)
+- [Remote gateway setup](/gateway/remote-gateway-readme)

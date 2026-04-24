@@ -142,3 +142,9 @@ Notes:
   relative duration such as `365d` or `12h`.
 - Anthropic note: Anthropic staff told us OpenClaw-style Claude CLI usage is allowed again, so OpenClaw treats Claude CLI reuse and `claude -p` usage as sanctioned for this integration unless Anthropic publishes a new policy.
 - Anthropic `setup-token` / `paste-token` remain available as a supported OpenClaw token path, but OpenClaw now prefers Claude CLI reuse and `claude -p` when available.
+
+## Related
+
+- [CLI reference](/cli)
+- [Model selection](/concepts/model-providers)
+- [Model failover](/concepts/model-failover)

@@ -428,3 +428,8 @@ Typical repair loop:
 - Apply targeted edits with `openclaw config set` or `openclaw configure`.
 - Rerun `openclaw config validate` after each change.
 - If validation passes but the runtime is still unhealthy, run `openclaw doctor` or `openclaw doctor --fix` for migration and repair help.
+
+## Related
+
+- [CLI reference](/cli)
+- [Configuration](/gateway/configuration)
