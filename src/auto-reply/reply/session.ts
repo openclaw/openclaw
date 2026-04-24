@@ -866,7 +866,9 @@ export async function initSessionState(params: {
           transcriptArchived: previousSessionTranscript.transcriptArchived,
           nextSessionId: effectiveSessionId,
         });
-        void hookRunner.runSessionEnd(payload.event, payload.context).catch(() => {});
+        void hookRunner.runSessionEnd(payload.event, payload.context).catch((err) => {
+          console.warn("[openclaw] session_end hook failed:", err);
+        });
       }
     }
 
@@ -878,7 +880,9 @@ export async function initSessionState(params: {
         cfg,
         resumedFrom: previousSessionEntry?.sessionId,
       });
-      void hookRunner.runSessionStart(payload.event, payload.context).catch(() => {});
+      void hookRunner.runSessionStart(payload.event, payload.context).catch((err) => {
+        console.warn("[openclaw] session_start hook failed:", err);
+      });
     }
   }
 
