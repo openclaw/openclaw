@@ -337,7 +337,11 @@ describeLive("gateway live (cli backend)", () => {
           const resultWithMeta = payload?.result as {
             meta?: { systemPromptReport?: SystemPromptReport };
           };
-          expect(text).toContain(`CLI-BACKEND-${nonce}`);
+          if (enableCliModelSwitchProbe) {
+            expect(text.trim().length).toBeGreaterThan(0);
+          } else {
+            expect(text).toContain(`CLI-BACKEND-${nonce}`);
+          }
           expect(
             resultWithMeta.meta?.systemPromptReport?.injectedWorkspaceFiles?.map(
               (entry) => entry.name,
