@@ -172,11 +172,22 @@ describe("Auth profile runtime contract - Pi and CLI adapter", () => {
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
-  it("resolves codex-cli through the provider auth alias resolver using a mocked manifest", () => {
-    expect(resolveProviderIdForAuth(AUTH_PROFILE_RUNTIME_CONTRACT.codexCliProvider)).toBe(
+  it.each([
+    [AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider, AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider],
+    [
+      AUTH_PROFILE_RUNTIME_CONTRACT.codexCliProvider,
       AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider,
-    );
-  });
+    ],
+    [
+      AUTH_PROFILE_RUNTIME_CONTRACT.codexHarnessProvider,
+      AUTH_PROFILE_RUNTIME_CONTRACT.codexHarnessProvider,
+    ],
+  ] as const)(
+    "resolves %s through the provider auth alias resolver using a mocked manifest",
+    (provider, expectedAuthProvider) => {
+      expect(resolveProviderIdForAuth(provider)).toBe(expectedAuthProvider);
+    },
+  );
 
   it("forwards an OpenAI Codex auth profile when the selected provider is codex-cli", async () => {
     await runAuthContractAttempt({
@@ -231,11 +242,26 @@ describe("Auth profile runtime contract - Pi and CLI adapter", () => {
     );
   });
 
+  it("forwards an OpenAI auth profile through the embedded OpenAI path", async () => {
+    await runAuthContractAttempt({
+      tmpDir,
+      storePath,
+      providerOverride: AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider,
+      authProfileProvider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider,
+      authProfileOverride: AUTH_PROFILE_RUNTIME_CONTRACT.openAiProfileId,
+    });
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.authProfileId).toBe(
+      AUTH_PROFILE_RUNTIME_CONTRACT.openAiProfileId,
+    );
+  });
+
   it("does not leak an OpenAI Codex auth profile into an unrelated embedded provider", async () => {
     await runAuthContractAttempt({
       tmpDir,
       storePath,
-      providerOverride: "openai",
+      providerOverride: AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider,
       authProfileProvider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider,
       authProfileOverride: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
     });
