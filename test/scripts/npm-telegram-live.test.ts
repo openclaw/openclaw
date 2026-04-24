@@ -46,11 +46,25 @@ describe("npm Telegram live Docker E2E", () => {
 
     expect(workflow).toContain("approve_release_manager:");
     expect(workflow).toContain("environment: npm-release");
-    expect(workflow).toContain("needs: approve_release_manager");
+    expect(workflow).toContain("needs: [approve_release_manager, prepare_docker_e2e_image]");
     expect(workflow).not.toContain('new Set(["admin", "write"])');
     expect(workflow).not.toContain("data.role_name");
     expect(workflow).not.toContain("github.rest.teams.listMembersInOrg");
     expect(workflow).not.toContain("getMembershipForUserInOrg");
+  });
+
+  it("prepares and reuses a cached Docker E2E image before approval", () => {
+    const workflow = readFileSync(WORKFLOW_PATH, "utf8");
+
+    expect(workflow).toContain("prepare_docker_e2e_image:");
+    expect(workflow).toContain("docker/build-push-action");
+    expect(workflow).toContain("cache-from: type=gha,scope=docker-e2e");
+    expect(workflow).toContain("cache-to: type=gha,mode=max,scope=docker-e2e");
+    expect(workflow).toContain("needs: [approve_release_manager, prepare_docker_e2e_image]");
+    expect(workflow).toContain('OPENCLAW_SKIP_DOCKER_BUILD: "1"');
+    expect(workflow).toContain(
+      "OPENCLAW_DOCKER_E2E_IMAGE: ${{ needs.prepare_docker_e2e_image.outputs.image }}",
+    );
   });
 
   it("lets npm-specific credential aliases override shared QA env", () => {
