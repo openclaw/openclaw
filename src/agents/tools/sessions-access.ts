@@ -172,9 +172,7 @@ function crossVisibilityMessage(action: SessionAccessAction): string {
   if (action === "history") {
     return "Session history visibility is restricted. Set tools.sessions.visibility=all to allow cross-agent access.";
   }
-  if (action === "send") {
-    return "Session send visibility is restricted. Set tools.sessions.visibility=all to allow cross-agent access.";
-  }
+  // "send" is gated by a2a policy, not visibility — see createSessionVisibilityGuard.
   if (action === "status") {
     return "Session status visibility is restricted. Set tools.sessions.visibility=all to allow cross-agent access.";
   }
@@ -207,7 +205,10 @@ export async function createSessionVisibilityGuard(params: {
     const targetAgentId = resolveAgentIdFromSessionKey(targetSessionKey);
     const isCrossAgent = targetAgentId !== requesterAgentId;
     if (isCrossAgent) {
-      if (params.visibility !== "all") {
+      // For "send", a2a policy is the authorization gate — sending does not
+      // require visibility into the target session's history.  Visibility
+      // only governs read operations (list, history, status).  (#57447)
+      if (params.action !== "send" && params.visibility !== "all") {
         return {
           allowed: false,
           status: "forbidden",
