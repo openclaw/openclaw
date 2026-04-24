@@ -90,6 +90,24 @@ describe("native hook relay CLI", () => {
     expect(callGateway).not.toHaveBeenCalled();
   });
 
+  it("rejects oversized hook input without touching the gateway", async () => {
+    const callGateway = vi.fn();
+    const stderr = createWritableTextBuffer();
+
+    const exitCode = await runNativeHookRelayCli(
+      { provider: "codex", relayId: "relay-1", event: "post_tool_use" },
+      {
+        stdin: createReadableTextStream("x".repeat(1024 * 1024 + 1)),
+        stderr,
+        callGateway: callGateway as never,
+      },
+    );
+
+    expect(exitCode).toBe(1);
+    expect(stderr.text()).toContain("native hook input exceeds");
+    expect(callGateway).not.toHaveBeenCalled();
+  });
+
   it("fails closed for PreToolUse when the gateway relay is unavailable", async () => {
     const callGateway = vi.fn(async () => {
       throw new Error("gateway closed");

@@ -182,6 +182,28 @@ describe("native hook relay registry", () => {
     ).rejects.toThrow("not allowed");
   });
 
+  it("rejects payloads beyond the relay JSON budget without recursive traversal", async () => {
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-1",
+      runId: "run-1",
+      allowedEvents: ["pre_tool_use"],
+    });
+    let rawPayload: Record<string, unknown> = {};
+    for (let index = 0; index < 80; index += 1) {
+      rawPayload = { child: rawPayload };
+    }
+
+    await expect(
+      invokeNativeHookRelay({
+        provider: "codex",
+        relayId: relay.relayId,
+        event: "pre_tool_use",
+        rawPayload,
+      }),
+    ).rejects.toThrow("JSON-compatible");
+  });
+
   it("rejects expired relay ids", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-04-24T12:00:00Z"));
@@ -441,6 +463,117 @@ describe("native hook relay registry", () => {
         },
       }),
     ).resolves.toEqual({ stdout: "", stderr: "", exitCode: 0 });
+  });
+
+  it("deduplicates pending PermissionRequest approvals by relay, run, and tool call", async () => {
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-1",
+      runId: "run-1",
+    });
+    let resolveDecision: ((decision: "allow") => void) | undefined;
+    const pendingDecision = new Promise<"allow">((resolve) => {
+      resolveDecision = resolve;
+    });
+    const approvalRequester = vi.fn(() => pendingDecision);
+    __testing.setNativeHookRelayPermissionApprovalRequesterForTests(approvalRequester);
+
+    const payload = {
+      hook_event_name: "PermissionRequest",
+      tool_name: "Bash",
+      tool_use_id: "native-call-1",
+      tool_input: { command: "git push" },
+    };
+    const first = invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "permission_request",
+      rawPayload: payload,
+    });
+    const second = invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "permission_request",
+      rawPayload: payload,
+    });
+
+    await Promise.resolve();
+    expect(approvalRequester).toHaveBeenCalledTimes(1);
+    resolveDecision?.("allow");
+    const responses = await Promise.all([first, second]);
+
+    expect(responses.map((response) => JSON.parse(response.stdout))).toEqual([
+      {
+        hookSpecificOutput: {
+          hookEventName: "PermissionRequest",
+          decision: { behavior: "allow" },
+        },
+      },
+      {
+        hookSpecificOutput: {
+          hookEventName: "PermissionRequest",
+          decision: { behavior: "allow" },
+        },
+      },
+    ]);
+  });
+
+  it("defers PermissionRequest approvals after the per-relay approval budget is exhausted", async () => {
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-1",
+      runId: "run-1",
+    });
+    const approvalRequester = vi.fn(async () => "allow" as const);
+    __testing.setNativeHookRelayPermissionApprovalRequesterForTests(approvalRequester);
+
+    const responses = [];
+    for (let index = 0; index < 13; index += 1) {
+      responses.push(
+        await invokeNativeHookRelay({
+          provider: "codex",
+          relayId: relay.relayId,
+          event: "permission_request",
+          rawPayload: {
+            hook_event_name: "PermissionRequest",
+            tool_name: "Bash",
+            tool_use_id: `native-call-${index}`,
+            tool_input: { command: `echo ${index}` },
+          },
+        }),
+      );
+    }
+
+    expect(approvalRequester).toHaveBeenCalledTimes(12);
+    expect(responses.at(-1)).toEqual({ stdout: "", stderr: "", exitCode: 0 });
+  });
+
+  it("sanitizes PermissionRequest approval previews and reports omitted keys", () => {
+    expect(
+      __testing.formatPermissionApprovalDescriptionForTests({
+        provider: "codex",
+        sessionId: "session-1",
+        runId: "run-1",
+        toolName: "exec",
+        cwd: "/repo\u001b[31m/red\u001b[0m",
+        model: "gpt-5.4\u202edenied",
+        toolInput: {
+          command: "printf 'ok'\r\n\u001b[31mred\u001b[0m",
+        },
+      }),
+    ).toBe("Tool: exec\nCwd: /repo/red\nModel: gpt-5.4 denied\nCommand: printf 'ok' red");
+
+    expect(
+      __testing.formatPermissionApprovalDescriptionForTests({
+        provider: "codex",
+        sessionId: "session-1",
+        runId: "run-1",
+        toolName: "exec",
+        toolInput: Object.fromEntries(
+          Array.from({ length: 13 }, (_, index) => [`key-${index}`, index]),
+        ),
+      }),
+    ).toContain("(1 omitted)");
   });
 });
 

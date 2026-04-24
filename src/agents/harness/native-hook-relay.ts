@@ -112,10 +112,20 @@ const DEFAULT_RELAY_TTL_MS = 30 * 60 * 1000;
 const DEFAULT_RELAY_TIMEOUT_MS = 5_000;
 const DEFAULT_PERMISSION_TIMEOUT_MS = 120_000;
 const MAX_NATIVE_HOOK_RELAY_INVOCATIONS = 200;
+const MAX_NATIVE_HOOK_RELAY_JSON_DEPTH = 64;
+const MAX_NATIVE_HOOK_RELAY_JSON_NODES = 20_000;
 const MAX_APPROVAL_TITLE_LENGTH = 80;
 const MAX_APPROVAL_DESCRIPTION_LENGTH = 700;
+const MAX_PERMISSION_APPROVALS_PER_WINDOW = 12;
+const PERMISSION_APPROVAL_WINDOW_MS = 60_000;
+const ANSI_ESCAPE_PATTERN = new RegExp(`${String.fromCharCode(27)}\\[[0-?]*[ -/]*[@-~]`, "g");
 const relays = new Map<string, NativeHookRelayRegistration>();
 const invocations: NativeHookRelayInvocation[] = [];
+const pendingPermissionApprovals = new Map<
+  string,
+  Promise<NativeHookRelayPermissionApprovalResult>
+>();
+const permissionApprovalWindows = new Map<string, number[]>();
 const log = createSubsystemLogger("agents/harness/native-hook-relay");
 
 type NativeHookRelayPermissionDecision = "allow" | "deny";
@@ -221,6 +231,7 @@ export function registerNativeHookRelay(
 export function unregisterNativeHookRelay(relayId: string): void {
   relays.delete(relayId);
   removeNativeHookRelayInvocations(relayId);
+  removeNativeHookRelayPermissionState(relayId);
 }
 
 export function buildNativeHookRelayCommand(params: {
@@ -400,20 +411,31 @@ async function runNativeHookRelayPermissionRequest(params: {
   invocation: NativeHookRelayInvocation;
   adapter: NativeHookRelayProviderAdapter;
 }): Promise<NativeHookRelayProcessResponse> {
+  const request: NativeHookRelayPermissionApprovalRequest = {
+    provider: params.registration.provider,
+    ...(params.registration.agentId ? { agentId: params.registration.agentId } : {}),
+    sessionId: params.registration.sessionId,
+    ...(params.registration.sessionKey ? { sessionKey: params.registration.sessionKey } : {}),
+    runId: params.registration.runId,
+    toolName: normalizeNativeHookToolName(params.invocation.toolName),
+    ...(params.invocation.toolUseId ? { toolCallId: params.invocation.toolUseId } : {}),
+    ...(params.invocation.cwd ? { cwd: params.invocation.cwd } : {}),
+    ...(params.invocation.model ? { model: params.invocation.model } : {}),
+    toolInput: params.adapter.readToolInput(params.invocation.rawPayload),
+    ...(params.registration.signal ? { signal: params.registration.signal } : {}),
+  };
+  const approvalKey = nativeHookRelayPermissionApprovalKey({
+    registration: params.registration,
+    request,
+  });
+  const pendingApproval = pendingPermissionApprovals.get(approvalKey);
   try {
-    const decision = await nativeHookRelayPermissionApprovalRequester({
-      provider: params.registration.provider,
-      ...(params.registration.agentId ? { agentId: params.registration.agentId } : {}),
-      sessionId: params.registration.sessionId,
-      ...(params.registration.sessionKey ? { sessionKey: params.registration.sessionKey } : {}),
-      runId: params.registration.runId,
-      toolName: normalizeNativeHookToolName(params.invocation.toolName),
-      ...(params.invocation.toolUseId ? { toolCallId: params.invocation.toolUseId } : {}),
-      ...(params.invocation.cwd ? { cwd: params.invocation.cwd } : {}),
-      ...(params.invocation.model ? { model: params.invocation.model } : {}),
-      toolInput: params.adapter.readToolInput(params.invocation.rawPayload),
-      ...(params.registration.signal ? { signal: params.registration.signal } : {}),
-    });
+    const decision = await (pendingApproval ??
+      requestNativeHookRelayPermissionApprovalWithBudget({
+        registration: params.registration,
+        approvalKey,
+        request,
+      }));
     if (decision === "allow") {
       return params.adapter.renderPermissionDecisionResponse("allow");
     }
@@ -424,6 +446,67 @@ async function runNativeHookRelayPermissionRequest(params: {
     log.warn(`native hook permission approval failed; deferring: ${String(error)}`);
   }
   return params.adapter.renderNoopResponse(params.invocation.event);
+}
+
+async function requestNativeHookRelayPermissionApprovalWithBudget(params: {
+  registration: NativeHookRelayRegistration;
+  approvalKey: string;
+  request: NativeHookRelayPermissionApprovalRequest;
+}): Promise<NativeHookRelayPermissionApprovalResult> {
+  if (!consumeNativeHookRelayPermissionBudget(params.registration.relayId)) {
+    log.warn(
+      `native hook permission approval rate limit exceeded; deferring: relay=${params.registration.relayId} run=${params.registration.runId}`,
+    );
+    return "defer";
+  }
+  const approval = nativeHookRelayPermissionApprovalRequester(params.request).finally(() => {
+    pendingPermissionApprovals.delete(params.approvalKey);
+  });
+  pendingPermissionApprovals.set(params.approvalKey, approval);
+  return approval;
+}
+
+function nativeHookRelayPermissionApprovalKey(params: {
+  registration: NativeHookRelayRegistration;
+  request: NativeHookRelayPermissionApprovalRequest;
+}): string {
+  return [
+    params.registration.relayId,
+    params.registration.runId,
+    params.request.toolCallId ?? permissionRequestFallbackKey(params.request),
+  ].join(":");
+}
+
+function permissionRequestFallbackKey(request: NativeHookRelayPermissionApprovalRequest): string {
+  const command = readOptionalString(request.toolInput.command);
+  if (command) {
+    return `${request.toolName}:command:${truncateText(command, 240)}`;
+  }
+  const keys = Object.keys(request.toolInput).toSorted().join(",");
+  return `${request.toolName}:keys:${truncateText(keys, 240)}`;
+}
+
+function consumeNativeHookRelayPermissionBudget(relayId: string, now = Date.now()): boolean {
+  const windowStart = now - PERMISSION_APPROVAL_WINDOW_MS;
+  const timestamps = (permissionApprovalWindows.get(relayId) ?? []).filter(
+    (timestamp) => timestamp >= windowStart,
+  );
+  if (timestamps.length >= MAX_PERMISSION_APPROVALS_PER_WINDOW) {
+    permissionApprovalWindows.set(relayId, timestamps);
+    return false;
+  }
+  timestamps.push(now);
+  permissionApprovalWindows.set(relayId, timestamps);
+  return true;
+}
+
+function removeNativeHookRelayPermissionState(relayId: string): void {
+  permissionApprovalWindows.delete(relayId);
+  for (const key of pendingPermissionApprovals.keys()) {
+    if (key.startsWith(`${relayId}:`)) {
+      pendingPermissionApprovals.delete(key);
+    }
+  }
 }
 
 function normalizeNativeHookInvocation(params: {
@@ -594,9 +677,9 @@ function formatPermissionApprovalDescription(
   request: NativeHookRelayPermissionApprovalRequest,
 ): string {
   const lines = [
-    `Tool: ${request.toolName}`,
-    request.cwd ? `Cwd: ${request.cwd}` : undefined,
-    request.model ? `Model: ${request.model}` : undefined,
+    `Tool: ${sanitizeApprovalText(request.toolName)}`,
+    request.cwd ? `Cwd: ${sanitizeApprovalText(request.cwd)}` : undefined,
+    request.model ? `Model: ${sanitizeApprovalText(request.model)}` : undefined,
     formatToolInputPreview(request.toolInput),
   ].filter((line): line is string => Boolean(line));
   return lines.join("\n");
@@ -605,13 +688,36 @@ function formatPermissionApprovalDescription(
 function formatToolInputPreview(toolInput: Record<string, unknown>): string | undefined {
   const command = readOptionalString(toolInput.command);
   if (command) {
-    return `Command: ${truncateText(command.replace(/\s+/g, " ").trim(), 240)}`;
+    return `Command: ${truncateText(sanitizeApprovalText(command), 240)}`;
   }
-  const keys = Object.keys(toolInput).toSorted();
+  const keys = Object.keys(toolInput).map(sanitizeApprovalText).filter(Boolean).toSorted();
   if (!keys.length) {
     return undefined;
   }
-  return `Input keys: ${keys.slice(0, 12).join(", ")}`;
+  const shownKeys = keys.slice(0, 12).join(", ");
+  const omitted = keys.length > 12 ? ` (${keys.length - 12} omitted)` : "";
+  return `Input keys: ${shownKeys}${omitted}`;
+}
+
+function sanitizeApprovalText(value: string): string {
+  let sanitized = "";
+  for (const char of value.replace(ANSI_ESCAPE_PATTERN, "")) {
+    const codePoint = char.codePointAt(0);
+    sanitized += codePoint != null && isUnsafeApprovalCodePoint(codePoint) ? " " : char;
+  }
+  return sanitized.replace(/\s+/g, " ").trim();
+}
+
+function isUnsafeApprovalCodePoint(codePoint: number): boolean {
+  return (
+    (codePoint >= 0 && codePoint <= 8) ||
+    codePoint === 11 ||
+    codePoint === 12 ||
+    (codePoint >= 14 && codePoint <= 31) ||
+    (codePoint >= 127 && codePoint <= 159) ||
+    (codePoint >= 0x202a && codePoint <= 0x202e) ||
+    (codePoint >= 0x2066 && codePoint <= 0x2069)
+  );
 }
 
 function nativeHookRelayProviderDisplayName(provider: NativeHookRelayProvider): string {
@@ -694,31 +800,67 @@ function readOptionalString(value: unknown): string | undefined {
 }
 
 function isJsonValue(value: unknown): value is JsonValue {
-  if (
-    value === null ||
-    typeof value === "string" ||
-    typeof value === "number" ||
-    typeof value === "boolean"
-  ) {
-    return Number.isFinite(value as number) || typeof value !== "number";
+  const stack: Array<{ value: unknown; depth: number }> = [{ value, depth: 0 }];
+  let nodes = 0;
+  while (stack.length) {
+    const current = stack.pop()!;
+    nodes += 1;
+    if (nodes > MAX_NATIVE_HOOK_RELAY_JSON_NODES) {
+      return false;
+    }
+    if (current.depth > MAX_NATIVE_HOOK_RELAY_JSON_DEPTH) {
+      return false;
+    }
+    if (current.value === null || typeof current.value === "string") {
+      continue;
+    }
+    if (typeof current.value === "number") {
+      if (!Number.isFinite(current.value)) {
+        return false;
+      }
+      continue;
+    }
+    if (typeof current.value === "boolean") {
+      continue;
+    }
+    if (Array.isArray(current.value)) {
+      for (const item of current.value) {
+        stack.push({ value: item, depth: current.depth + 1 });
+      }
+      continue;
+    }
+    if (!isJsonObject(current.value)) {
+      return false;
+    }
+    try {
+      for (const item of Object.values(current.value)) {
+        stack.push({ value: item, depth: current.depth + 1 });
+      }
+    } catch {
+      return false;
+    }
   }
-  if (Array.isArray(value)) {
-    return value.every(isJsonValue);
-  }
-  if (!isJsonObject(value)) {
-    return false;
-  }
-  return Object.values(value).every(isJsonValue);
+  return true;
 }
 
 function isJsonObject(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  try {
+    const prototype = Object.getPrototypeOf(value);
+    return prototype === Object.prototype || prototype === null;
+  } catch {
+    return false;
+  }
 }
 
 export const __testing = {
   clearNativeHookRelaysForTests(): void {
     relays.clear();
     invocations.length = 0;
+    pendingPermissionApprovals.clear();
+    permissionApprovalWindows.clear();
     nativeHookRelayPermissionApprovalRequester = requestNativeHookRelayPermissionApproval;
   },
   getNativeHookRelayInvocationsForTests(): NativeHookRelayInvocation[] {
@@ -726,6 +868,11 @@ export const __testing = {
   },
   getNativeHookRelayRegistrationForTests(relayId: string): NativeHookRelayRegistration | undefined {
     return relays.get(relayId);
+  },
+  formatPermissionApprovalDescriptionForTests(
+    request: NativeHookRelayPermissionApprovalRequest,
+  ): string {
+    return formatPermissionApprovalDescription(request);
   },
   setNativeHookRelayPermissionApprovalRequesterForTests(
     requester: NativeHookRelayPermissionApprovalRequester,

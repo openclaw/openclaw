@@ -6,6 +6,8 @@ import {
 import { callGateway } from "../gateway/call.js";
 import { ADMIN_SCOPE } from "../gateway/method-scopes.js";
 
+const MAX_NATIVE_HOOK_STDIN_BYTES = 1024 * 1024;
+
 export type NativeHookRelayCliOptions = {
   provider?: string;
   relayId?: string;
@@ -34,7 +36,7 @@ export async function runNativeHookRelayCli(
 
   let rawPayload: unknown;
   try {
-    const rawInput = await readStreamText(stdin);
+    const rawInput = await readStreamText(stdin, MAX_NATIVE_HOOK_STDIN_BYTES);
     rawPayload = rawInput.trim() ? JSON.parse(rawInput) : null;
   } catch (error) {
     writeText(stderr, formatRelayCliError("failed to read native hook input", error));
@@ -71,12 +73,18 @@ function readRequiredOption(value: string | undefined, name: string): string {
   throw new Error(`Missing required option --${name}`);
 }
 
-async function readStreamText(stream: NodeJS.ReadableStream): Promise<string> {
+async function readStreamText(stream: NodeJS.ReadableStream, maxBytes: number): Promise<string> {
   const chunks: Buffer[] = [];
+  let total = 0;
   for await (const chunk of stream) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    total += buffer.byteLength;
+    if (total > maxBytes) {
+      throw new Error(`native hook input exceeds ${maxBytes} bytes`);
+    }
+    chunks.push(buffer);
   }
-  return Buffer.concat(chunks).toString("utf8");
+  return Buffer.concat(chunks, total).toString("utf8");
 }
 
 function normalizeTimeoutMs(value: string | undefined): number {
