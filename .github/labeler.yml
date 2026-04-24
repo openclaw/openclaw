@@ -387,3 +387,7 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/fal/**"
+"extensions: futurmix":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/futurmix/**"
