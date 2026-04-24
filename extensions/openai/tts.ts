@@ -1,8 +1,8 @@
+import { assertOkOrThrowProviderError } from "openclaw/plugin-sdk/provider-http";
 import {
   captureHttpExchange,
   isDebugProxyGlobalFetchPatchInstalled,
 } from "openclaw/plugin-sdk/proxy-capture";
-import { assertOkOrThrowProviderError } from "openclaw/plugin-sdk/speech";
 import {
   fetchWithSsrFGuard,
   ssrfPolicyFromHttpBaseUrlAllowedHostname,

@@ -493,8 +493,10 @@ API key auth, and dynamic model resolution.
     <Tabs>
       <Tab title="Speech (TTS)">
         ```typescript
-        import { postJsonRequest } from "openclaw/plugin-sdk/provider-http";
-        import { assertOkOrThrowProviderError } from "openclaw/plugin-sdk/speech";
+        import {
+          assertOkOrThrowProviderError,
+          postJsonRequest,
+        } from "openclaw/plugin-sdk/provider-http";
 
         api.registerSpeechProvider({
           id: "acme-ai",
@@ -525,7 +527,7 @@ API key auth, and dynamic model resolution.
         ```
 
         Use `assertOkOrThrowProviderError(...)` for provider HTTP failures so
-        speech plugins share capped error-body reads, JSON error parsing, and
+        plugins share capped error-body reads, JSON error parsing, and
         request-id suffixes.
       </Tab>
       <Tab title="Realtime transcription">
