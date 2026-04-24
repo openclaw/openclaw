@@ -9,7 +9,7 @@ import {
   type ChannelOutboundAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { resolveOutboundSendDep, sanitizeForPlainText } from "openclaw/plugin-sdk/infra-runtime";
+import { resolveOutboundSendDep, sanitizeForPlainText } from "openclaw/plugin-sdk/outbound-runtime";
 import { sendTextMediaPayload } from "openclaw/plugin-sdk/reply-payload";
 import {
   normalizeWhatsAppOutboundPayload,

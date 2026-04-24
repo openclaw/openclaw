@@ -1,12 +1,13 @@
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import { requireRuntimeConfig, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import { generateSecureUuid } from "openclaw/plugin-sdk/core";
-import { normalizePollInput, type PollInput } from "openclaw/plugin-sdk/media-runtime";
-import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import { getChildLogger } from "openclaw/plugin-sdk/text-runtime";
-import { redactIdentifier } from "openclaw/plugin-sdk/text-runtime";
-import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
+import { redactIdentifier } from "openclaw/plugin-sdk/logging-core";
+import {
+  convertMarkdownTables,
+  resolveMarkdownTableMode,
+} from "openclaw/plugin-sdk/markdown-table-runtime";
+import { normalizePollInput, type PollInput } from "openclaw/plugin-sdk/poll-runtime";
+import { createSubsystemLogger, getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
   resolveDefaultWhatsAppAccountId,
   resolveWhatsAppAccount,
