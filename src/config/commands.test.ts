@@ -8,6 +8,7 @@ import {
   resolveNativeCommandsEnabled,
   resolveNativeSkillsEnabled,
 } from "./commands.js";
+import { validateConfigObjectWithPlugins } from "./validation.js";
 
 beforeEach(() => {
   setActivePluginRegistry(
@@ -212,5 +213,19 @@ describe("isCommandFlagEnabled", () => {
         "bash",
       ),
     ).toBe(false);
+  });
+});
+
+describe("deprecated commands compatibility", () => {
+  it("ignores legacy modelsWrite during validation", () => {
+    const result = validateConfigObjectWithPlugins({
+      commands: { text: true, modelsWrite: false },
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.config.commands).toMatchObject({ text: true });
+      expect(Object.hasOwn(result.config.commands ?? {}, "modelsWrite")).toBe(false);
+    }
   });
 });

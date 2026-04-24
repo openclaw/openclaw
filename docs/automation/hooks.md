@@ -6,9 +6,7 @@ read_when:
 title: "Hooks"
 ---
 
-# Hooks
-
-Hooks are small scripts that run when something happens inside the Gateway. They are automatically discovered from directories and can be inspected with `openclaw hooks`.
+Hooks are small scripts that run when something happens inside the Gateway. They can be discovered from directories and inspected with `openclaw hooks`. The Gateway loads internal hooks only after you enable hooks or configure at least one hook entry, hook pack, legacy handler, or extra hook directory.
 
 There are two kinds of hooks in OpenClaw:
 
@@ -108,7 +106,7 @@ const handler = async (event) => {
 export default handler;
 ```
 
-Each event includes: `type`, `action`, `sessionKey`, `timestamp`, `messages` (push to send to user), and `context` (event-specific data).
+Each event includes: `type`, `action`, `sessionKey`, `timestamp`, `messages` (push to send to user), and `context` (event-specific data). Agent and tool plugin hook contexts can also include `trace`, a read-only W3C-compatible diagnostic trace context that plugins may pass into structured logs for OTEL correlation.
 
 ### Event context highlights
 
@@ -138,6 +136,8 @@ Hooks are discovered from these directories, in order of increasing override pre
 4. **Workspace hooks**: `<workspace>/hooks/` (per-agent, disabled by default until explicitly enabled)
 
 Workspace hooks can add new hook names but cannot override bundled, managed, or plugin-provided hooks with the same name.
+
+The Gateway skips internal hook discovery on startup until internal hooks are configured. Enable a bundled or managed hook with `openclaw hooks enable <name>`, install a hook pack, or set `hooks.internal.enabled=true` to opt in. When you enable one named hook, the Gateway loads only that hook's handler; `hooks.internal.enabled=true`, extra hook directories, and legacy handlers opt into broad discovery.
 
 ### Hook packs
 
@@ -205,9 +205,12 @@ Runs `BOOT.md` from the active workspace when the gateway starts.
 
 ## Plugin hooks
 
-Plugins can register hooks through the Plugin SDK for deeper integration: intercepting tool calls, modifying prompts, controlling message flow, and more. The Plugin SDK exposes 28 hooks covering model resolution, agent lifecycle, message flow, tool execution, subagent coordination, and gateway lifecycle.
+Plugins can register typed hooks through the Plugin SDK for deeper integration:
+intercepting tool calls, modifying prompts, controlling message flow, and more.
+Use plugin hooks when you need `before_tool_call`, `before_agent_reply`,
+`before_install`, or other in-process lifecycle hooks.
 
-For the complete plugin hook reference including `before_tool_call`, `before_agent_reply`, `before_install`, and all other plugin hooks, see [Plugin Architecture](/plugins/architecture#provider-runtime-hooks).
+For the complete plugin hook reference, see [Plugin hooks](/plugins/hooks).
 
 ## Configuration
 
@@ -315,5 +318,5 @@ Check for missing binaries (PATH), environment variables, config values, or OS c
 
 - [CLI Reference: hooks](/cli/hooks)
 - [Webhooks](/automation/cron-jobs#webhooks)
-- [Plugin Architecture](/plugins/architecture#provider-runtime-hooks) — full plugin hook reference
+- [Plugin hooks](/plugins/hooks) — in-process plugin lifecycle hooks
 - [Configuration](/gateway/configuration-reference#hooks)

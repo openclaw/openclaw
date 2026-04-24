@@ -191,6 +191,11 @@ function copyDeclaredPluginSkillPaths(params) {
     const shouldExcludeNestedNodeModules = /^node_modules(?:\/|$)/u.test(
       normalizeManifestRelativePath(raw),
     );
+    if (shouldExcludeNestedNodeModules) {
+      removePathIfExists(
+        ensurePathInsideRoot(params.distPluginDir, normalizeManifestRelativePath(raw)),
+      );
+    }
     copySkillPathWithRetry({
       sourcePath,
       targetPath,
@@ -270,10 +275,9 @@ export function copyBundledPluginMetadata(params = {}) {
 
     if (fs.existsSync(manifestPath)) {
       const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-      // Generated skill assets live under a dedicated dist-owned directory. Also
-      // remove the older bad node_modules tree so release packs cannot pick it up.
+      // Generated skill assets live under a dedicated dist-owned directory. Runtime
+      // dependency staging owns dist plugin node_modules; do not remove it here.
       removePathIfExists(path.join(distPluginDir, GENERATED_BUNDLED_SKILLS_DIR));
-      removePathIfExists(path.join(distPluginDir, "node_modules"));
       const copiedSkills = copyDeclaredPluginSkillPaths({
         manifest,
         pluginDir,

@@ -12,6 +12,41 @@ vi.mock("../plugins/setup-registry.js", () => ({
   }),
 }));
 
+vi.mock("../plugins/manifest-registry.js", () => ({
+  loadPluginManifestRegistry: () => ({
+    plugins: [
+      {
+        id: "brave",
+        origin: "bundled",
+        contracts: { webSearchProviders: ["brave"] },
+      },
+      {
+        id: "google",
+        origin: "bundled",
+        contracts: { webSearchProviders: ["gemini"] },
+      },
+      {
+        id: "firecrawl",
+        origin: "bundled",
+        contracts: { webSearchProviders: ["firecrawl"] },
+      },
+    ],
+  }),
+  resolveManifestContractOwnerPluginId: ({ value }: { value: string }): string | undefined => {
+    if (value === "gemini") {
+      return "google";
+    }
+    return value === "brave" || value === "firecrawl" ? value : undefined;
+  },
+}));
+
+vi.mock("./doctor/shared/channel-legacy-config-migrate.js", () => ({
+  applyChannelDoctorCompatibilityMigrations: (cfg: OpenClawConfig) => ({
+    next: cfg,
+    changes: [],
+  }),
+}));
+
 describe("normalizeCompatibilityConfigValues", () => {
   let previousOauthDir: string | undefined;
   let tempOauthDir = "";
@@ -80,6 +115,39 @@ describe("normalizeCompatibilityConfigValues", () => {
     });
   });
 
+  it("moves WhatsApp access defaults into accounts.default for named accounts", () => {
+    const res = normalizeCompatibilityConfigValues({
+      channels: {
+        whatsapp: {
+          enabled: true,
+          dmPolicy: "allowlist",
+          allowFrom: ["+15550001111"],
+          groupPolicy: "open",
+          groupAllowFrom: [],
+          accounts: {
+            work: {
+              enabled: true,
+              authDir: "/tmp/wa-work",
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.config.channels?.whatsapp?.dmPolicy).toBeUndefined();
+    expect(res.config.channels?.whatsapp?.allowFrom).toBeUndefined();
+    expect(res.config.channels?.whatsapp?.groupPolicy).toBeUndefined();
+    expect(res.config.channels?.whatsapp?.groupAllowFrom).toBeUndefined();
+    expect(res.config.channels?.whatsapp?.accounts?.default).toMatchObject({
+      dmPolicy: "allowlist",
+      allowFrom: ["+15550001111"],
+      groupPolicy: "open",
+      groupAllowFrom: [],
+    });
+    expect(res.changes).toContain(
+      "Moved channels.whatsapp single-account top-level values into channels.whatsapp.accounts.default.",
+    );
+  });
   it("migrates browser ssrfPolicy allowPrivateNetwork to dangerouslyAllowPrivateNetwork", () => {
     const res = normalizeCompatibilityConfigValues({
       browser: {
@@ -149,6 +217,176 @@ describe("normalizeCompatibilityConfigValues", () => {
       "Moved skills.entries.nano-banana-pro.apiKey → models.providers.google.apiKey.",
       "Removed legacy skills.entries.nano-banana-pro.",
     ]);
+  });
+
+  it("removes deprecated commands.modelsWrite from legacy configs", () => {
+    const res = normalizeCompatibilityConfigValues({
+      commands: {
+        text: true,
+        modelsWrite: false,
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(res.config.commands).toEqual({ text: true });
+    expect(res.changes).toContain(
+      "Removed deprecated commands.modelsWrite (/models add is deprecated).",
+    );
+  });
+
+  it("marks legacy untagged /models add OpenAI Codex metadata rows for doctor repair", () => {
+    const res = normalizeCompatibilityConfigValues({
+      models: {
+        providers: {
+          "openai-codex": {
+            baseUrl: "https://chatgpt.com/backend-api",
+            api: "openai-codex-responses",
+            models: [
+              {
+                id: "gpt-5.5",
+                name: "gpt-5.5",
+                api: "openai-codex-responses",
+                reasoning: true,
+                input: ["text", "image"],
+                cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
+                contextWindow: 400_000,
+                contextTokens: 272_000,
+                maxTokens: 128_000,
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(res.config.models?.providers?.["openai-codex"]?.models?.[0]).toMatchObject({
+      id: "gpt-5.5",
+      metadataSource: "models-add",
+    });
+    expect(res.changes).toContain(
+      "Marked models.providers.openai-codex.models.gpt-5.5 as /models add metadata so official OpenAI Codex metadata can override it.",
+    );
+  });
+
+  it("does not mark untagged manual OpenAI Codex metadata overrides", () => {
+    const res = normalizeCompatibilityConfigValues({
+      models: {
+        providers: {
+          "openai-codex": {
+            baseUrl: "https://chatgpt.com/backend-api",
+            api: "openai-codex-responses",
+            models: [
+              {
+                id: "gpt-5.5",
+                name: "gpt-5.5",
+                api: "openai-codex-responses",
+                reasoning: true,
+                input: ["text", "image"],
+                cost: { input: 9, output: 99, cacheRead: 0.9, cacheWrite: 0 },
+                contextWindow: 555_555,
+                contextTokens: 111_111,
+                maxTokens: 22_222,
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(res.config).toEqual({
+      models: {
+        providers: {
+          "openai-codex": {
+            baseUrl: "https://chatgpt.com/backend-api",
+            api: "openai-codex-responses",
+            models: [
+              {
+                id: "gpt-5.5",
+                name: "gpt-5.5",
+                api: "openai-codex-responses",
+                reasoning: true,
+                input: ["text", "image"],
+                cost: { input: 9, output: 99, cacheRead: 0.9, cacheWrite: 0 },
+                contextWindow: 555_555,
+                contextTokens: 111_111,
+                maxTokens: 22_222,
+              },
+            ],
+          },
+        },
+      },
+    });
+    expect(res.changes).toEqual([]);
+  });
+
+  it("migrates legacy Codex primary refs to OpenAI refs plus explicit Codex harness", () => {
+    const res = normalizeCompatibilityConfigValues({
+      agents: {
+        defaults: {
+          embeddedHarness: { runtime: "auto", fallback: "pi" },
+          model: {
+            primary: "codex/gpt-5.5",
+            fallbacks: ["anthropic/claude-sonnet-4-6", "codex/gpt-5.4-mini"],
+          },
+          models: {
+            "codex/gpt-5.5": { alias: "legacy-codex" },
+            "openai/gpt-5.5": { alias: "gpt", params: { temperature: 0.2 } },
+            "codex/gpt-5.4-mini": {},
+          },
+        },
+        list: [
+          {
+            id: "reviewer",
+            model: "codex/gpt-5.4-mini",
+          },
+        ],
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(res.config.agents?.defaults?.model).toEqual({
+      primary: "openai/gpt-5.5",
+      fallbacks: ["anthropic/claude-sonnet-4-6", "openai/gpt-5.4-mini"],
+    });
+    expect(res.config.agents?.defaults?.embeddedHarness).toEqual({
+      runtime: "codex",
+      fallback: "pi",
+    });
+    expect(res.config.agents?.defaults?.models).toEqual({
+      "openai/gpt-5.5": { alias: "gpt", params: { temperature: 0.2 } },
+      "openai/gpt-5.4-mini": {},
+    });
+    expect(res.config.agents?.list?.[0]).toMatchObject({
+      id: "reviewer",
+      embeddedHarness: { runtime: "codex" },
+      model: "openai/gpt-5.4-mini",
+    });
+    expect(res.changes).toEqual(
+      expect.arrayContaining([
+        "Moved agents.defaults.model legacy codex/* primary refs to openai/* with Codex harness.",
+        "Moved agents.defaults.models legacy codex/* keys to openai/*.",
+        "Moved agents.list.reviewer.model legacy codex/* primary refs to openai/* with Codex harness.",
+      ]),
+    );
+  });
+
+  it("does not force Codex harness for legacy fallback-only refs", () => {
+    const input = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.5",
+            fallbacks: ["codex/gpt-5.4-mini"],
+          },
+          models: {
+            "codex/gpt-5.4-mini": { alias: "legacy-codex" },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const res = normalizeCompatibilityConfigValues(input);
+
+    expect(res.config).toEqual(input);
+    expect(res.changes).toEqual([]);
   });
 
   it("prefers legacy nano-banana env.GEMINI_API_KEY over skill apiKey during migration", () => {

@@ -1,13 +1,20 @@
 // before_model_resolve hook
+export type PluginHookBeforeModelResolveAttachment = {
+  kind: "image" | "video" | "audio" | "document" | "other";
+  mimeType?: string;
+};
+
 export type PluginHookBeforeModelResolveEvent = {
   /** User prompt for this run. No session messages are available yet in this phase. */
   prompt: string;
+  /** Attachment metadata for file-aware model routing. */
+  attachments?: PluginHookBeforeModelResolveAttachment[];
 };
 
 export type PluginHookBeforeModelResolveResult = {
   /** Override the model for this agent run. E.g. "llama3.3:8b" */
   modelOverride?: string;
-  /** Override the provider for this agent run. E.g. "ollama" */
+  /** Override the provider for this agent run. E.g. "local-provider" */
   providerOverride?: string;
 };
 
@@ -52,6 +59,7 @@ void assertAllPluginPromptMutationResultFieldsListed;
 // before_agent_start hook (legacy compatibility: combines both phases)
 export type PluginHookBeforeAgentStartEvent = {
   prompt: string;
+  runId?: string;
   /** Optional because legacy hook can run in pre-session phase. */
   messages?: unknown[];
 };

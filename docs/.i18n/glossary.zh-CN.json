@@ -60,12 +60,24 @@
     "target": "Feishu"
   },
   {
+    "source": "WeChat",
+    "target": "微信"
+  },
+  {
+    "source": "Weixin",
+    "target": "微信"
+  },
+  {
     "source": "Mattermost",
     "target": "Mattermost"
   },
   {
     "source": "BytePlus (International)",
     "target": "BytePlus（国际版）"
+  },
+  {
+    "source": "Amazon Bedrock Mantle",
+    "target": "Amazon Bedrock Mantle"
   },
   {
     "source": "Anthropic (API + Claude CLI)",
@@ -188,6 +200,10 @@
     "target": "Doctor"
   },
   {
+    "source": "Config",
+    "target": "配置"
+  },
+  {
     "source": "Memory Wiki",
     "target": "Memory Wiki"
   },
@@ -308,11 +324,23 @@
     "target": "环境变量"
   },
   {
+    "source": "Google Meet Plugin",
+    "target": "Google Meet 插件"
+  },
+  {
     "source": "Plugin SDK",
     "target": "插件 SDK"
   },
   {
+    "source": "Building plugins",
+    "target": "构建插件"
+  },
+  {
     "source": "Plugin SDK Overview",
+    "target": "插件 SDK 概览"
+  },
+  {
+    "source": "Plugin SDK overview",
     "target": "插件 SDK 概览"
   },
   {
@@ -322,6 +350,22 @@
   {
     "source": "Plugin Entry Points",
     "target": "插件入口点"
+  },
+  {
+    "source": "Plugin entry points",
+    "target": "插件入口点"
+  },
+  {
+    "source": "Plugin hooks",
+    "target": "插件钩子"
+  },
+  {
+    "source": "Internal hooks",
+    "target": "内部钩子"
+  },
+  {
+    "source": "Plugin architecture internals",
+    "target": "插件架构内部机制"
   },
   {
     "source": "Entry Points",
@@ -366,5 +410,37 @@
   {
     "source": "Testing",
     "target": "测试"
+  },
+  {
+    "source": "Async Exec Duplicate Completion Investigation",
+    "target": "Async Exec Duplicate Completion Investigation"
+  },
+  {
+    "source": "QA Refactor",
+    "target": "QA 重构"
+  },
+  {
+    "source": "Rich Output Protocol",
+    "target": "富输出协议"
+  },
+  {
+    "source": "Tencent Cloud (TokenHub)",
+    "target": "腾讯云（TokenHub）"
+  },
+  {
+    "source": "Codex Harness Context Engine Port",
+    "target": "Codex Harness Context Engine Port"
+  },
+  {
+    "source": "/gateway/configuration#strict-validation",
+    "target": "/gateway/configuration#strict-validation"
+  },
+  {
+    "source": "/gateway/configuration#config-hot-reload",
+    "target": "/gateway/configuration#config-hot-reload"
+  },
+  {
+    "source": "/cli/config",
+    "target": "/cli/config"
   }
 ]

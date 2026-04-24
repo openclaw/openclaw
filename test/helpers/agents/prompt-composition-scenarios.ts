@@ -10,7 +10,11 @@ import { resolveBootstrapContextForRun } from "../../../src/agents/bootstrap-fil
 import { buildEmbeddedSystemPrompt } from "../../../src/agents/pi-embedded-runner/system-prompt.js";
 import { buildAgentSystemPrompt } from "../../../src/agents/system-prompt.js";
 import { createStubTool } from "../../../src/agents/test-helpers/pi-tool-stubs.js";
-import { buildGroupChatContext, buildGroupIntro } from "../../../src/auto-reply/reply/groups.js";
+import {
+  buildDirectChatContext,
+  buildGroupChatContext,
+  buildGroupIntro,
+} from "../../../src/auto-reply/reply/groups.js";
 import {
   buildInboundMetaSystemPrompt,
   buildInboundUserContextPrefix,
@@ -57,8 +61,8 @@ function buildCommonSystemParams(workspaceDir: string) {
       os: "Darwin 24.0.0",
       arch: "arm64",
       node: process.version,
-      model: "anthropic/claude-sonnet-4-5",
-      defaultModel: "anthropic/claude-sonnet-4-5",
+      model: "anthropic/claude-sonnet-4-6",
+      defaultModel: "anthropic/claude-sonnet-4-6",
       shell: "zsh",
     },
     userTimezone: "America/Los_Angeles",
@@ -118,6 +122,14 @@ function buildAutoReplySystemPrompt(params: {
 }) {
   const extraSystemPromptParts = [
     buildInboundMetaSystemPrompt(params.sessionCtx),
+    params.sessionCtx.ChatType === "direct" || params.sessionCtx.ChatType === "dm"
+      ? buildDirectChatContext({
+          sessionCtx: params.sessionCtx,
+          silentToken: SILENT_REPLY_TOKEN,
+          silentReplyPolicy: "disallow",
+          silentReplyRewrite: true,
+        })
+      : "",
     params.includeGroupChatContext ? buildGroupChatContext({ sessionCtx: params.sessionCtx }) : "",
     params.includeGroupIntro
       ? buildGroupIntro({
@@ -155,7 +167,7 @@ function buildToolRichSystemPrompt(params: {
     "web_search",
     "x_search",
     "web_fetch",
-  ].map((name) => ({ ...createStubTool(name), description: `${name} tool` }));
+  ].map((name) => Object.assign({}, createStubTool(name), { description: `${name} tool` }));
   return buildEmbeddedSystemPrompt({
     workspaceDir: params.workspaceDir,
     reasoningTagHint: false,
@@ -179,7 +191,7 @@ function createDirectScenario(workspaceDir: string): PromptScenario {
     OriginatingChannel: "slack",
     OriginatingTo: "D123",
     AccountId: "A1",
-    ChatType: "direct",
+    ChatType: "dm",
     SenderId: "U1",
     SenderName: "Alice",
     Body: "hi",

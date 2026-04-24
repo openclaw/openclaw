@@ -25,6 +25,7 @@ import {
   loadConfig,
   loadSessionStore,
   queueEmbeddedPiMessage,
+  resolveActiveEmbeddedRunSessionId,
   resolveAgentIdFromSessionKey,
   resolveConversationIdFromTargets,
   resolveExternalBestEffortDeliveryTarget,
@@ -49,15 +50,102 @@ const MAX_TIMER_SAFE_TIMEOUT_MS = 2_147_000_000;
 type SubagentAnnounceDeliveryDeps = {
   callGateway: typeof callGateway;
   loadConfig: typeof loadConfig;
+  getRequesterSessionActivity: (requesterSessionKey: string) => {
+    sessionId?: string;
+    isActive: boolean;
+  };
+  queueEmbeddedPiMessage: typeof queueEmbeddedPiMessage;
 };
 
 const defaultSubagentAnnounceDeliveryDeps: SubagentAnnounceDeliveryDeps = {
   callGateway,
   loadConfig,
+  getRequesterSessionActivity: (requesterSessionKey: string) => {
+    const sessionId =
+      resolveActiveEmbeddedRunSessionId(requesterSessionKey) ??
+      loadRequesterSessionEntry(requesterSessionKey).entry?.sessionId;
+    return {
+      sessionId,
+      isActive: Boolean(sessionId && isEmbeddedPiRunActive(sessionId)),
+    };
+  },
+  queueEmbeddedPiMessage,
 };
 
 let subagentAnnounceDeliveryDeps: SubagentAnnounceDeliveryDeps =
   defaultSubagentAnnounceDeliveryDeps;
+
+function resolveBoundConversationOrigin(params: {
+  bindingConversation: ConversationRef & { parentConversationId?: string };
+  requesterConversation?: ConversationRef;
+  requesterOrigin?: DeliveryContext;
+}): DeliveryContext {
+  const conversation = params.bindingConversation;
+  const conversationId = conversation.conversationId?.trim() ?? "";
+  const parentConversationId = conversation.parentConversationId?.trim() ?? "";
+  const requesterConversationId = params.requesterConversation?.conversationId?.trim() ?? "";
+  const requesterTo = params.requesterOrigin?.to?.trim();
+  if (
+    conversation.channel === "matrix" &&
+    parentConversationId &&
+    requesterConversationId &&
+    parentConversationId === requesterConversationId &&
+    requesterTo
+  ) {
+    return {
+      channel: conversation.channel,
+      accountId: conversation.accountId,
+      to: requesterTo,
+      ...(conversationId ? { threadId: conversationId } : {}),
+    };
+  }
+
+  const boundTarget = resolveConversationDeliveryTarget({
+    channel: conversation.channel,
+    conversationId,
+    parentConversationId,
+  });
+  if (
+    requesterTo &&
+    conversationId &&
+    requesterConversationId &&
+    conversationId.toLowerCase() === requesterConversationId.toLowerCase()
+  ) {
+    return {
+      channel: conversation.channel,
+      accountId: conversation.accountId,
+      to: requesterTo,
+      threadId:
+        boundTarget.threadId ??
+        (params.requesterOrigin?.threadId != null && params.requesterOrigin.threadId !== ""
+          ? String(params.requesterOrigin.threadId)
+          : undefined),
+    };
+  }
+  return {
+    channel: conversation.channel,
+    accountId: conversation.accountId,
+    to: boundTarget.to,
+    threadId:
+      boundTarget.threadId ??
+      (params.requesterOrigin?.threadId != null && params.requesterOrigin.threadId !== ""
+        ? String(params.requesterOrigin.threadId)
+        : undefined),
+  };
+}
+
+function resolveRequesterSessionActivity(requesterSessionKey: string) {
+  const activity = subagentAnnounceDeliveryDeps.getRequesterSessionActivity(requesterSessionKey);
+  if (activity.sessionId || activity.isActive) {
+    return activity;
+  }
+  const { entry } = loadRequesterSessionEntry(requesterSessionKey);
+  const sessionId = entry?.sessionId;
+  return {
+    sessionId,
+    isActive: Boolean(sessionId && isEmbeddedPiRunActive(sessionId)),
+  };
+}
 
 function resolveDirectAnnounceTransientRetryDelaysMs() {
   return process.env.OPENCLAW_TEST_FAST === "1"
@@ -214,22 +302,12 @@ export async function resolveSubagentCompletionOrigin(params: {
     failClosed: false,
   });
   if (route.mode === "bound" && route.binding) {
-    const boundTarget = resolveConversationDeliveryTarget({
-      channel: route.binding.conversation.channel,
-      conversationId: route.binding.conversation.conversationId,
-      parentConversationId: route.binding.conversation.parentConversationId,
-    });
     return mergeDeliveryContext(
-      {
-        channel: route.binding.conversation.channel,
-        accountId: route.binding.conversation.accountId,
-        to: boundTarget.to,
-        threadId:
-          boundTarget.threadId ??
-          (requesterOrigin?.threadId != null && requesterOrigin.threadId !== ""
-            ? String(requesterOrigin.threadId)
-            : undefined),
-      },
+      resolveBoundConversationOrigin({
+        bindingConversation: route.binding.conversation,
+        requesterConversation,
+        requesterOrigin,
+      }),
       requesterOrigin,
     );
   }
@@ -348,7 +426,7 @@ async function maybeQueueSubagentAnnounce(params: {
   }
   const { cfg, entry } = loadRequesterSessionEntry(params.requesterSessionKey);
   const canonicalKey = resolveRequesterStoreKey(cfg, params.requesterSessionKey);
-  const sessionId = entry?.sessionId;
+  const { sessionId, isActive } = resolveRequesterSessionActivity(canonicalKey);
   if (!sessionId) {
     return "none";
   }
@@ -358,11 +436,13 @@ async function maybeQueueSubagentAnnounce(params: {
     channel: entry?.channel ?? entry?.lastChannel ?? entry?.origin?.provider,
     sessionEntry: entry,
   });
-  const isActive = isEmbeddedPiRunActive(sessionId);
 
   const shouldSteer = queueSettings.mode === "steer" || queueSettings.mode === "steer-backlog";
   if (shouldSteer) {
-    const steered = queueEmbeddedPiMessage(sessionId, params.steerMessage);
+    const steered = subagentAnnounceDeliveryDeps.queueEmbeddedPiMessage(
+      sessionId,
+      params.steerMessage,
+    );
     if (steered) {
       return "steered";
     }
@@ -457,6 +537,28 @@ async function sendSubagentAnnounceDirectly(params: {
       isGatewayMessageChannel(normalizedSessionOnlyOriginChannel)
         ? normalizedSessionOnlyOriginChannel
         : undefined;
+    const requesterActivity = resolveRequesterSessionActivity(canonicalRequesterSessionKey);
+    if (params.expectsCompletionMessage && requesterActivity.sessionId) {
+      const woke = requesterActivity.sessionId
+        ? subagentAnnounceDeliveryDeps.queueEmbeddedPiMessage(
+            requesterActivity.sessionId,
+            params.triggerMessage,
+          )
+        : false;
+      if (woke) {
+        return {
+          delivered: true,
+          path: "steered",
+        };
+      }
+      if (requesterActivity.isActive) {
+        return {
+          delivered: false,
+          path: "direct",
+          error: "active requester session could not be woken",
+        };
+      }
+    }
     if (params.signal?.aborted) {
       return {
         delivered: false,

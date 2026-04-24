@@ -95,10 +95,113 @@ describe("buildStatusMessage", () => {
     expect(normalized).toContain("Session: agent:main:main");
     expect(normalized).toContain("updated 10m ago");
     expect(normalized).toContain("Runtime: direct");
+    expect(normalized).toContain("Runner: pi (embedded)");
     expect(normalized).toContain("Think: medium");
     expect(normalized).not.toContain("verbose");
     expect(normalized).toContain("elevated");
     expect(normalized).toContain("Queue: collect");
+  });
+
+  it("shows the CLI runner for CLI-backed providers", () => {
+    const text = buildStatusMessage({
+      config: {
+        agents: {
+          defaults: {
+            cliBackends: {
+              "claude-cli": {},
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      agent: {
+        model: "claude-cli/opus",
+      },
+      sessionEntry: {
+        sessionId: "cli",
+        updatedAt: 0,
+        modelProvider: "claude-cli",
+        model: "opus",
+      },
+      sessionKey: "agent:main:main",
+      queue: { mode: "collect", depth: 0 },
+    });
+
+    expect(normalizeTestText(text)).toContain("Runner: claude-cli (cli)");
+  });
+
+  it("falls back to the configured CLI provider when session provider fields are empty", () => {
+    const text = buildStatusMessage({
+      config: {
+        agents: {
+          defaults: {
+            cliBackends: {
+              "claude-cli": {},
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      agent: {
+        model: "claude-cli/opus",
+      },
+      sessionEntry: {
+        sessionId: "cli-default",
+        updatedAt: 0,
+      },
+      sessionKey: "agent:main:main",
+      queue: { mode: "collect", depth: 0 },
+    });
+
+    expect(normalizeTestText(text)).toContain("Runner: claude-cli (cli)");
+  });
+
+  it("shows the ACP harness agent and backend when ACP owns the session", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "anthropic/claude-opus-4-6",
+      },
+      sessionEntry: {
+        sessionId: "acp",
+        updatedAt: 0,
+        acp: {
+          backend: "acpx",
+          agent: "gemini",
+          runtimeSessionName: "status-test",
+          mode: "persistent",
+          state: "idle",
+          lastActivityAt: 0,
+        },
+      },
+      sessionKey: "agent:main:main",
+      queue: { mode: "collect", depth: 0 },
+    });
+
+    expect(normalizeTestText(text)).toContain("Runner: gemini (acp/acpx)");
+  });
+
+  it("sanitizes runner labels sourced from session metadata", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "anthropic/claude-opus-4-6",
+      },
+      sessionEntry: {
+        sessionId: "acp-sanitized",
+        updatedAt: 0,
+        acp: {
+          backend: "acpx\nrewritten",
+          agent: "gemini\u001b[2K",
+          runtimeSessionName: "status-test",
+          mode: "persistent",
+          state: "idle",
+          lastActivityAt: 0,
+        },
+      },
+      sessionKey: "agent:main:main",
+      queue: { mode: "collect", depth: 0 },
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Runner: gemini (acp/acpx\\nrewritten)");
+    expect(normalized).not.toContain("\u001b");
   });
 
   it("falls back to sessionEntry levels when resolved levels are not passed", () => {
@@ -276,7 +379,61 @@ describe("buildStatusMessage", () => {
       queue: { mode: "collect", depth: 0 },
     });
 
-    expect(normalizeTestText(text)).toContain("Fast: on");
+    expect(normalizeTestText(text)).toContain("Fast");
+  });
+
+  it("shows a non-PI harness next to fast mode when resolved", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "openai/gpt-5.4",
+      },
+      sessionEntry: {
+        sessionId: "codex-harness",
+        updatedAt: 0,
+        fastMode: true,
+      },
+      sessionKey: "agent:main:main",
+      queue: { mode: "collect", depth: 0 },
+      resolvedHarness: "codex",
+    });
+
+    expect(normalizeTestText(text)).toContain("Fast · codex");
+  });
+
+  it("hides the default PI harness label", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "openai/gpt-5.4",
+      },
+      sessionEntry: {
+        sessionId: "pi-harness",
+        updatedAt: 0,
+        fastMode: true,
+      },
+      sessionKey: "agent:main:main",
+      queue: { mode: "collect", depth: 0 },
+      resolvedHarness: "pi",
+    });
+
+    expect(normalizeTestText(text)).toContain("Fast");
+    expect(normalizeTestText(text)).not.toContain("· pi");
+  });
+
+  it("hides fast mode when disabled", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "anthropic/claude-opus-4-6",
+      },
+      sessionEntry: {
+        sessionId: "fast-off",
+        updatedAt: 0,
+        fastMode: false,
+      },
+      sessionKey: "agent:main:main",
+      queue: { mode: "collect", depth: 0 },
+    });
+
+    expect(normalizeTestText(text)).not.toContain("Fast");
   });
 
   it("shows configured text verbosity for the active model", () => {
@@ -406,6 +563,26 @@ describe("buildStatusMessage", () => {
     });
 
     expect(normalizeTestText(text)).toContain("Context: 200k/1.0m");
+  });
+
+  it("shows 1M context window for claude opus 4.7 variants", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "claude-cli/claude-opus-4.7-20260219",
+      },
+      sessionEntry: {
+        sessionId: "opus47",
+        updatedAt: 0,
+        totalTokens: 200_000,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Context: 200k/1.0m");
+    expect(normalized).not.toContain("Context: 200k/200k");
   });
 
   it("recomputes context window from the active model after switching away from a smaller session override", () => {
@@ -1684,6 +1861,7 @@ describe("buildCommandsMessage", () => {
     expect(text).toContain("/skill - Run a skill by name.");
     expect(text).toContain("/think (/thinking, /t) - Set thinking level.");
     expect(text).toContain("/compact - Compact the session context.");
+    expect(text).toContain("/models - List model providers/models.");
     expect(text).not.toContain("/config");
     expect(text).not.toContain("/debug");
   });

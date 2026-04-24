@@ -1,10 +1,9 @@
 #!/usr/bin/env node
-// Runs after install to restore bundled extension runtime deps.
-// Installed builds can lazy-load bundled plugin code through root dist chunks,
-// so runtime dependencies declared in dist/extensions/*/package.json must also
-// resolve from the package root node_modules. Source checkouts resolve bundled
-// plugin deps from the workspace root, so stale plugin-local node_modules must
-// not linger under extensions/* and shadow the root graph.
+// Runs after install to keep packaged dist safe and compatible.
+// Bundled extension runtime dependencies are extension-owned. Do not install
+// every bundled extension dependency during core package install unless the
+// legacy eager-install escape hatch is explicitly enabled; `openclaw doctor
+// --fix` owns the repair path for extensions that are actually used.
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
@@ -33,19 +32,18 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_EXTENSIONS_DIR = join(__dirname, "..", "dist", "extensions");
 const DEFAULT_PACKAGE_ROOT = join(__dirname, "..");
 const DISABLE_POSTINSTALL_ENV = "OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL";
+const EAGER_BUNDLED_PLUGIN_DEPS_ENV = "OPENCLAW_EAGER_BUNDLED_PLUGIN_DEPS";
 const DIST_INVENTORY_PATH = "dist/postinstall-inventory.json";
+const LEGACY_QA_CHANNEL_DIR = ["qa", "channel"].join("-");
+const LEGACY_QA_LAB_DIR = ["qa", "lab"].join("-");
 const LEGACY_UPDATE_COMPAT_SIDECARS = [
   {
-    path: "dist/extensions/qa-channel/runtime-api.js",
-    removedPrefix: "dist/extensions/qa-channel/",
-    content:
-      "// Compatibility stub for older OpenClaw updaters. The QA channel implementation is not packaged.\nexport {};\n",
+    path: `dist/extensions/${LEGACY_QA_CHANNEL_DIR}/runtime-api.js`,
+    content: "export {};\n",
   },
   {
-    path: "dist/extensions/qa-lab/runtime-api.js",
-    removedPrefix: "dist/extensions/qa-lab/",
-    content:
-      "// Compatibility stub for older OpenClaw updaters. The QA lab implementation is not packaged.\nexport {};\n",
+    path: `dist/extensions/${LEGACY_QA_LAB_DIR}/runtime-api.js`,
+    content: "export {};\n",
   },
 ];
 const BAILEYS_MEDIA_FILE = join(
@@ -183,6 +181,12 @@ function assertSafeInstalledDistPath(relativePath, params) {
   return candidatePath;
 }
 
+function isStagedRuntimeNodeModulesPath(relativePath) {
+  return /^dist\/extensions\/[^/]+\/node_modules(?:\/|$)/u.test(
+    normalizeRelativePath(relativePath),
+  );
+}
+
 function listInstalledDistFiles(params = {}) {
   const readDir = params.readdirSync ?? readdirSync;
   const distRoot = resolveInstalledDistRoot(params);
@@ -195,6 +199,10 @@ function listInstalledDistFiles(params = {}) {
   while (pending.length > 0) {
     const currentDir = pending.pop();
     if (!currentDir) {
+      continue;
+    }
+    const relativeCurrentDir = normalizeRelativePath(relative(packageRoot, currentDir));
+    if (isStagedRuntimeNodeModulesPath(relativeCurrentDir)) {
       continue;
     }
     for (const entry of readDir(currentDir, { withFileTypes: true })) {
@@ -232,6 +240,10 @@ function pruneEmptyDistDirectories(params = {}) {
   const pathLstat = params.lstatSync ?? lstatSync;
 
   function prune(currentDir) {
+    const relativeCurrentDir = normalizeRelativePath(relative(packageRoot, currentDir));
+    if (isStagedRuntimeNodeModulesPath(relativeCurrentDir)) {
+      return;
+    }
     for (const entry of readDir(currentDir, { withFileTypes: true })) {
       if (entry.isSymbolicLink()) {
         throw new Error(
@@ -449,10 +461,11 @@ export function discoverBundledPluginRuntimeDeps(params = {}) {
   }
 
   return [...deps.values()]
-    .map((dep) => ({
-      ...dep,
-      pluginIds: [...dep.pluginIds].toSorted((a, b) => a.localeCompare(b)),
-    }))
+    .map((dep) =>
+      Object.assign({}, dep, {
+        pluginIds: [...dep.pluginIds].toSorted((a, b) => a.localeCompare(b)),
+      }),
+    )
     .toSorted((a, b) => a.name.localeCompare(b.name));
 }
 
@@ -462,6 +475,23 @@ export function createNestedNpmInstallEnv(env = process.env) {
   delete nextEnv.npm_config_location;
   delete nextEnv.npm_config_prefix;
   return nextEnv;
+}
+
+export function createBundledRuntimeDependencyInstallEnv(env = process.env) {
+  return {
+    ...createNestedNpmInstallEnv(env),
+    npm_config_legacy_peer_deps: "true",
+    npm_config_package_lock: "false",
+    npm_config_save: "false",
+  };
+}
+
+export function createBundledRuntimeDependencyInstallArgs(missingSpecs) {
+  return ["install", "--ignore-scripts", ...missingSpecs];
+}
+
+function shouldEagerInstallBundledPluginDeps(env = process.env) {
+  return env?.[EAGER_BUNDLED_PLUGIN_DEPS_ENV]?.trim() === "1";
 }
 
 export function applyBaileysEncryptedStreamFinishHotfix(params = {}) {
@@ -618,7 +648,8 @@ function applyBundledPluginRuntimeHotfixes(params = {}) {
 export function isSourceCheckoutRoot(params) {
   const pathExists = params.existsSync ?? existsSync;
   return (
-    pathExists(join(params.packageRoot, ".git")) &&
+    (pathExists(join(params.packageRoot, ".git")) ||
+      pathExists(join(params.packageRoot, "pnpm-workspace.yaml"))) &&
     pathExists(join(params.packageRoot, "src")) &&
     pathExists(join(params.packageRoot, "extensions"))
   );
@@ -713,6 +744,16 @@ export function runBundledPluginPostinstall(params = {}) {
   ) {
     return;
   }
+  if (!shouldEagerInstallBundledPluginDeps(env)) {
+    applyBundledPluginRuntimeHotfixes({
+      packageRoot,
+      existsSync: pathExists,
+      readFileSync: params.readFileSync,
+      writeFileSync: params.writeFileSync,
+      log,
+    });
+    return;
+  }
   const runtimeDeps =
     params.runtimeDeps ??
     discoverBundledPluginRuntimeDeps({ extensionsDir, existsSync: pathExists });
@@ -741,28 +782,21 @@ export function runBundledPluginPostinstall(params = {}) {
   }
 
   try {
-    const nestedEnv = createNestedNpmInstallEnv(env);
+    const installEnv = createBundledRuntimeDependencyInstallEnv(env);
     const npmRunner =
       params.npmRunner ??
       resolveNpmRunner({
-        env: nestedEnv,
+        env: installEnv,
         execPath: params.execPath,
         existsSync: pathExists,
         platform: params.platform,
         comSpec: params.comSpec,
-        npmArgs: [
-          "install",
-          "--omit=dev",
-          "--no-save",
-          "--package-lock=false",
-          "--legacy-peer-deps",
-          ...missingSpecs,
-        ],
+        npmArgs: createBundledRuntimeDependencyInstallArgs(missingSpecs),
       });
     const result = spawn(npmRunner.command, npmRunner.args, {
       cwd: packageRoot,
       encoding: "utf8",
-      env: npmRunner.env ?? nestedEnv,
+      env: npmRunner.env ?? installEnv,
       stdio: "pipe",
       shell: npmRunner.shell,
       windowsVerbatimArguments: npmRunner.windowsVerbatimArguments,
@@ -786,6 +820,20 @@ export function runBundledPluginPostinstall(params = {}) {
   });
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+export function isDirectPostinstallInvocation(params = {}) {
+  const entryPath = params.entryPath ?? process.argv[1];
+  if (!entryPath) {
+    return false;
+  }
+  const modulePath = params.modulePath ?? fileURLToPath(import.meta.url);
+  const resolveRealPath = params.realpathSync ?? realpathSync;
+  try {
+    return resolveRealPath(entryPath) === resolveRealPath(modulePath);
+  } catch {
+    return pathToFileURL(entryPath).href === pathToFileURL(modulePath).href;
+  }
+}
+
+if (isDirectPostinstallInvocation()) {
   runBundledPluginPostinstall();
 }

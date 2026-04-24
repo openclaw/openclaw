@@ -1,10 +1,12 @@
 import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
+import { isModelPickerVisibleProvider } from "../../agents/model-picker-visibility.js";
 import {
   buildAllowedModelSet,
   buildModelAliasIndex,
   normalizeProviderId,
+  resolveBareModelDefaultProvider,
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
@@ -21,6 +23,9 @@ import type { CommandHandler } from "./commands-types.js";
 
 const PAGE_SIZE_DEFAULT = 20;
 const PAGE_SIZE_MAX = 100;
+const MODELS_ADD_DEPRECATED_TEXT =
+  "⚠️ /models add is deprecated. Use /models to browse providers and /model to switch models.";
+
 type ModelsCommandSessionEntry = Partial<
   Pick<SessionEntry, "authProfileOverride" | "modelProvider" | "model">
 >;
@@ -29,14 +34,24 @@ export type ModelsProviderData = {
   byProvider: Map<string, Set<string>>;
   providers: string[];
   resolvedDefault: { provider: string; model: string };
-  /** Map from provider/model to human-readable display name (when different from model ID). */
   modelNames: Map<string, string>;
 };
 
-/**
- * Build provider/model data from config and catalog.
- * Exported for reuse by callback handlers.
- */
+type ParsedModelsCommand =
+  | { action: "providers" }
+  | {
+      action: "list";
+      provider?: string;
+      page: number;
+      pageSize: number;
+      all: boolean;
+    }
+  | {
+      action: "add";
+      provider?: string;
+      modelId?: string;
+    };
+
 export async function buildModelsProviderData(
   cfg: OpenClawConfig,
   agentId?: string,
@@ -63,6 +78,9 @@ export async function buildModelsProviderData(
   const byProvider = new Map<string, Set<string>>();
   const add = (p: string, m: string) => {
     const key = normalizeProviderId(p);
+    if (!isModelPickerVisibleProvider(key)) {
+      return;
+    }
     const set = byProvider.get(key) ?? new Set<string>();
     set.add(m);
     byProvider.set(key, set);
@@ -73,9 +91,17 @@ export async function buildModelsProviderData(
     if (!trimmed) {
       return;
     }
+    const defaultProvider = !trimmed.includes("/")
+      ? resolveBareModelDefaultProvider({
+          cfg,
+          catalog,
+          model: trimmed,
+          defaultProvider: resolvedDefault.provider,
+        })
+      : resolvedDefault.provider;
     const resolved = resolveModelRefFromString({
       raw: trimmed,
-      defaultProvider: resolvedDefault.provider,
+      defaultProvider,
       aliasIndex,
     });
     if (!resolved) {
@@ -110,20 +136,15 @@ export async function buildModelsProviderData(
     add(entry.provider, entry.id);
   }
 
-  // Include config-only allowlist keys that aren't in the curated catalog.
   for (const raw of Object.keys(cfg.agents?.defaults?.models ?? {})) {
     addRawModelRef(raw);
   }
 
-  // Ensure configured defaults/fallbacks/image models show up even when the
-  // curated catalog doesn't know about them (custom providers, dev builds, etc.).
   add(resolvedDefault.provider, resolvedDefault.model);
   addModelConfigEntries();
 
   const providers = [...byProvider.keys()].toSorted();
 
-  // Build a provider-scoped model display-name map so surfaces can show
-  // human-readable names without colliding across providers that share IDs.
   const modelNames = new Map<string, string>();
   for (const entry of catalog) {
     if (entry.name && entry.name !== entry.id) {
@@ -138,18 +159,7 @@ function formatProviderLine(params: { provider: string; count: number }): string
   return `- ${params.provider} (${params.count})`;
 }
 
-function parseModelsArgs(raw: string): {
-  provider?: string;
-  page: number;
-  pageSize: number;
-  all: boolean;
-} {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return { page: 1, pageSize: PAGE_SIZE_DEFAULT, all: false };
-  }
-
-  const tokens = trimmed.split(/\s+/g).filter(Boolean);
+function parseListArgs(tokens: string[]): Extract<ParsedModelsCommand, { action: "list" }> {
   const provider = normalizeOptionalString(tokens[0]);
 
   let page = 1;
@@ -188,11 +198,36 @@ function parseModelsArgs(raw: string): {
   }
 
   return {
+    action: "list",
     provider: provider ? normalizeProviderId(provider) : undefined,
     page,
     pageSize,
     all,
   };
+}
+
+function parseModelsArgs(raw: string): ParsedModelsCommand {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return { action: "providers" };
+  }
+
+  const tokens = trimmed.split(/\s+/g).filter(Boolean);
+  const first = normalizeLowercaseStringOrEmpty(tokens[0]);
+  switch (first) {
+    case "providers":
+      return { action: "providers" };
+    case "list":
+      return parseListArgs(tokens.slice(1));
+    case "add":
+      return {
+        action: "add",
+        provider: normalizeOptionalString(tokens[1]),
+        modelId: normalizeOptionalString(tokens.slice(2).join(" ")),
+      };
+    default:
+      return parseListArgs(tokens);
+  }
 }
 
 function resolveProviderLabel(params: {
@@ -229,6 +264,34 @@ export function formatModelsAvailableHeader(params: {
   return `Models (${providerLabel}) — ${params.total} available`;
 }
 
+function buildModelsMenuText(params: {
+  providers: string[];
+  byProvider: ReadonlyMap<string, ReadonlySet<string>>;
+}): string {
+  return [
+    "Providers:",
+    ...params.providers.map((provider) =>
+      formatProviderLine({
+        provider,
+        count: params.byProvider.get(provider)?.size ?? 0,
+      }),
+    ),
+    "",
+    "Use: /models <provider>",
+    "Switch: /model <provider/model>",
+  ].join("\n");
+}
+
+function buildProviderInfos(params: {
+  providers: string[];
+  byProvider: ReadonlyMap<string, ReadonlySet<string>>;
+}): Array<{ id: string; count: number }> {
+  return params.providers.map((provider) => ({
+    id: provider,
+    count: params.byProvider.get(provider)?.size ?? 0,
+  }));
+}
+
 export async function resolveModelsCommandReply(params: {
   cfg: OpenClawConfig;
   commandBodyNormalized: string;
@@ -244,20 +307,41 @@ export async function resolveModelsCommandReply(params: {
   }
 
   const argText = body.replace(/^\/models\b/i, "").trim();
-  const { provider, page, pageSize, all } = parseModelsArgs(argText);
+  const parsed = parseModelsArgs(argText);
 
   const { byProvider, providers, modelNames } = await buildModelsProviderData(
     params.cfg,
     params.agentId,
   );
   const commandPlugin = params.surface ? getChannelPlugin(params.surface) : null;
+  const providerInfos = buildProviderInfos({ providers, byProvider });
 
-  // Provider list (no provider specified)
+  if (parsed.action === "providers") {
+    const channelData =
+      commandPlugin?.commands?.buildModelsMenuChannelData?.({
+        providers: providerInfos,
+      }) ??
+      commandPlugin?.commands?.buildModelsProviderChannelData?.({
+        providers: providerInfos,
+      });
+    if (channelData) {
+      return {
+        text: "Select a provider:",
+        channelData,
+      };
+    }
+    return {
+      text: buildModelsMenuText({ providers, byProvider }),
+    };
+  }
+
+  if (parsed.action === "add") {
+    return { text: MODELS_ADD_DEPRECATED_TEXT };
+  }
+
+  const { provider, page, pageSize, all } = parsed;
+
   if (!provider) {
-    const providerInfos = providers.map((p) => ({
-      id: p,
-      count: byProvider.get(p)?.size ?? 0,
-    }));
     const channelData = commandPlugin?.commands?.buildModelsProviderChannelData?.({
       providers: providerInfos,
     });
@@ -267,48 +351,42 @@ export async function resolveModelsCommandReply(params: {
         channelData,
       };
     }
-
-    const lines: string[] = [
-      "Providers:",
-      ...providers.map((p) =>
-        formatProviderLine({ provider: p, count: byProvider.get(p)?.size ?? 0 }),
-      ),
-      "",
-      "Use: /models <provider>",
-      "Switch: /model <provider/model>",
-    ];
-    return { text: lines.join("\n") };
+    return {
+      text: buildModelsMenuText({ providers, byProvider }),
+    };
   }
 
   if (!byProvider.has(provider)) {
-    const lines: string[] = [
-      `Unknown provider: ${provider}`,
-      "",
-      "Available providers:",
-      ...providers.map((p) => `- ${p}`),
-      "",
-      "Use: /models <provider>",
-    ];
-    return { text: lines.join("\n") };
+    return {
+      text: [
+        `Unknown provider: ${provider}`,
+        "",
+        "Available providers:",
+        ...providers.map((entry) => `- ${entry}`),
+        "",
+        "Use: /models <provider>",
+      ].join("\n"),
+    };
   }
 
   const models = [...(byProvider.get(provider) ?? new Set<string>())].toSorted();
   const total = models.length;
-  const providerLabel = resolveProviderLabel({
-    provider,
-    cfg: params.cfg,
-    agentDir: params.agentDir,
-    sessionEntry: params.sessionEntry,
-  });
 
   if (total === 0) {
-    const lines: string[] = [
-      `Models (${providerLabel}) — none`,
-      "",
-      "Browse: /models",
-      "Switch: /model <provider/model>",
-    ];
-    return { text: lines.join("\n") };
+    const emptyProviderLabel = resolveProviderLabel({
+      provider,
+      cfg: params.cfg,
+      agentDir: params.agentDir,
+      sessionEntry: params.sessionEntry,
+    });
+    return {
+      text: [
+        `Models (${emptyProviderLabel}) — none`,
+        "",
+        "Browse: /models",
+        "Switch: /model <provider/model>",
+      ].join("\n"),
+    };
   }
 
   const interactivePageSize = 8;
@@ -324,15 +402,14 @@ export async function resolveModelsCommandReply(params: {
     modelNames,
   });
   if (interactiveChannelData) {
-    const text = formatModelsAvailableHeader({
-      provider,
-      total,
-      cfg: params.cfg,
-      agentDir: params.agentDir,
-      sessionEntry: params.sessionEntry,
-    });
     return {
-      text,
+      text: formatModelsAvailableHeader({
+        provider,
+        total,
+        cfg: params.cfg,
+        agentDir: params.agentDir,
+        sessionEntry: params.sessionEntry,
+      }),
       channelData: interactiveChannelData,
     };
   }
@@ -342,36 +419,39 @@ export async function resolveModelsCommandReply(params: {
   const safePage = all ? 1 : Math.max(1, Math.min(page, pageCount));
 
   if (!all && page !== safePage) {
-    const lines: string[] = [
-      `Page out of range: ${page} (valid: 1-${pageCount})`,
-      "",
-      `Try: /models ${provider} ${safePage}`,
-      `All: /models ${provider} all`,
-    ];
-    return { text: lines.join("\n") };
+    return {
+      text: [
+        `Page out of range: ${page} (valid: 1-${pageCount})`,
+        "",
+        `Try: /models list ${provider} ${safePage}`,
+        `All: /models list ${provider} all`,
+      ].join("\n"),
+    };
   }
 
   const startIndex = (safePage - 1) * effectivePageSize;
   const endIndexExclusive = Math.min(total, startIndex + effectivePageSize);
   const pageModels = models.slice(startIndex, endIndexExclusive);
-
-  const header = `Models (${providerLabel}) — showing ${startIndex + 1}-${endIndexExclusive} of ${total} (page ${safePage}/${pageCount})`;
-
-  const lines: string[] = [header];
+  const providerLabel = resolveProviderLabel({
+    provider,
+    cfg: params.cfg,
+    agentDir: params.agentDir,
+    sessionEntry: params.sessionEntry,
+  });
+  const lines = [
+    `Models (${providerLabel}) — showing ${startIndex + 1}-${endIndexExclusive} of ${total} (page ${safePage}/${pageCount})`,
+  ];
   for (const id of pageModels) {
     lines.push(`- ${provider}/${id}`);
   }
-
   lines.push("", "Switch: /model <provider/model>");
   if (!all && safePage < pageCount) {
-    lines.push(`More: /models ${provider} ${safePage + 1}`);
+    lines.push(`More: /models list ${provider} ${safePage + 1}`);
   }
   if (!all) {
-    lines.push(`All: /models ${provider} all`);
+    lines.push(`All: /models list ${provider} all`);
   }
-
-  const payload: ReplyPayload = { text: lines.join("\n") };
-  return payload;
+  return { text: lines.join("\n") };
 }
 
 export const handleModelsCommand: CommandHandler = async (params, allowTextCommands) => {
@@ -382,9 +462,14 @@ export const handleModelsCommand: CommandHandler = async (params, allowTextComma
   if (!commandBodyNormalized.startsWith("/models")) {
     return null;
   }
+  const parsed = parseModelsArgs(commandBodyNormalized.replace(/^\/models\b/i, "").trim());
   const unauthorized = rejectUnauthorizedCommand(params, "/models");
   if (unauthorized) {
     return unauthorized;
+  }
+
+  if (parsed.action === "add") {
+    return { shouldContinue: false, reply: { text: MODELS_ADD_DEPRECATED_TEXT } };
   }
 
   const modelsAgentId = params.sessionKey

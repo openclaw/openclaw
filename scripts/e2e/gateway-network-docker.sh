@@ -2,8 +2,9 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
-IMAGE_NAME="openclaw-gateway-network-e2e"
+source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
+IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-gateway-network-e2e" OPENCLAW_GATEWAY_NETWORK_E2E_IMAGE)"
+SKIP_BUILD="${OPENCLAW_GATEWAY_NETWORK_E2E_SKIP_BUILD:-0}"
 
 PORT="18789"
 TOKEN="e2e-$(date +%s)-$$"
@@ -16,8 +17,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "Building Docker image..."
-run_logged gateway-network-build docker build -t "$IMAGE_NAME" -f "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR"
+docker_e2e_build_or_reuse "$IMAGE_NAME" gateway-network "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "" "$SKIP_BUILD"
 
 echo "Creating Docker network..."
 docker network create "$NET_NAME" >/dev/null
@@ -36,7 +36,7 @@ docker run -d \
 
 echo "Waiting for gateway to come up..."
 ready=0
-for _ in $(seq 1 40); do
+for _ in $(seq 1 180); do
   if [ "$(docker inspect -f '{{.State.Running}}' "$GW_NAME" 2>/dev/null || echo false)" != "true" ]; then
     break
   fi
@@ -83,9 +83,10 @@ run_logged gateway-network-client docker run --rm \
   -e "GW_URL=ws://$GW_NAME:$PORT" \
   -e "GW_TOKEN=$TOKEN" \
   "$IMAGE_NAME" \
-  bash -lc "node --import tsx - <<'NODE'
+  bash -lc "node --input-type=module - <<'NODE'
 import { WebSocket } from \"ws\";
-import { PROTOCOL_VERSION } from \"./src/gateway/protocol/index.ts\";
+
+const PROTOCOL_VERSION = 3;
 
 const url = process.env.GW_URL;
 const token = process.env.GW_TOKEN;
@@ -93,14 +94,14 @@ if (!url || !token) throw new Error(\"missing GW_URL/GW_TOKEN\");
 
 const ws = new WebSocket(url);
 await new Promise((resolve, reject) => {
-  const t = setTimeout(() => reject(new Error(\"ws open timeout\")), 5000);
+  const t = setTimeout(() => reject(new Error(\"ws open timeout\")), 30000);
   ws.once(\"open\", () => {
     clearTimeout(t);
     resolve();
   });
 });
 
-function onceFrame(filter, timeoutMs = 5000) {
+function onceFrame(filter, timeoutMs = 30000) {
   return new Promise((resolve, reject) => {
     const t = setTimeout(() => reject(new Error(\"timeout\")), timeoutMs);
     const handler = (data) => {

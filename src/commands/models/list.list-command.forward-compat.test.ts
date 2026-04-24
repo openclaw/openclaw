@@ -58,12 +58,16 @@ const mocks = vi.hoisted(() => {
     loadModelsConfigWithSource: vi.fn(),
     ensureOpenClawModelsJson: vi.fn(),
     ensureAuthProfileStore: vi.fn(),
+    resolveOpenClawAgentDir: vi.fn(),
     loadModelRegistry: vi.fn(),
     loadModelCatalog: vi.fn(),
+    loadProviderCatalogModelsForList: vi.fn(),
+    hasProviderStaticCatalogForFilter: vi.fn(),
     resolveConfiguredEntries: vi.fn(),
     printModelTable: vi.fn(),
     listProfilesForProvider: vi.fn(),
     resolveModelWithRegistry: vi.fn(),
+    resolveRuntimeSyntheticAuthProviderRefs: vi.fn(),
   };
 });
 
@@ -75,6 +79,7 @@ function resetMocks() {
   });
   mocks.ensureOpenClawModelsJson.mockResolvedValue({ wrote: false });
   mocks.ensureAuthProfileStore.mockReturnValue({ version: 1, profiles: {}, order: {} });
+  mocks.resolveOpenClawAgentDir.mockReturnValue("/tmp/openclaw-agent");
   mocks.loadModelRegistry.mockResolvedValue({
     models: [],
     availableKeys: new Set(),
@@ -83,6 +88,8 @@ function resetMocks() {
     },
   });
   mocks.loadModelCatalog.mockResolvedValue([]);
+  mocks.loadProviderCatalogModelsForList.mockResolvedValue([]);
+  mocks.hasProviderStaticCatalogForFilter.mockResolvedValue(false);
   mocks.resolveConfiguredEntries.mockReturnValue({
     entries: [
       {
@@ -96,6 +103,7 @@ function resetMocks() {
   mocks.printModelTable.mockReset();
   mocks.listProfilesForProvider.mockReturnValue([]);
   mocks.resolveModelWithRegistry.mockReturnValue({ ...OPENAI_CODEX_MODEL });
+  mocks.resolveRuntimeSyntheticAuthProviderRefs.mockReturnValue([]);
 }
 
 function createRuntime() {
@@ -135,15 +143,62 @@ function installModelsListCommandForwardCompatMocks() {
     printModelTable: mocks.printModelTable,
   }));
 
+  vi.doMock("./list.provider-catalog.js", () => ({
+    hasProviderStaticCatalogForFilter: mocks.hasProviderStaticCatalogForFilter,
+  }));
+
+  vi.doMock("./list.registry-load.js", () => ({
+    loadListModelRegistry: async (
+      cfg: unknown,
+      opts?: { providerFilter?: string },
+    ): Promise<{
+      models: Array<{ provider: string; id: string }>;
+      availableKeys?: Set<string>;
+      registry?: unknown;
+      discoveredKeys: Set<string>;
+    }> => {
+      const loaded = await mocks.loadModelRegistry(cfg, opts);
+      return {
+        ...loaded,
+        discoveredKeys: new Set(
+          loaded.models.map(
+            (model: { provider: string; id: string }) => `${model.provider}/${model.id}`,
+          ),
+        ),
+      };
+    },
+    loadConfiguredListModelRegistry: (
+      _cfg: unknown,
+      _entries: unknown,
+      opts?: { providerFilter?: string },
+    ) => {
+      mocks.loadModelRegistry(mocks.resolvedConfig, opts);
+      return {
+        registry: {
+          find: () => undefined,
+          hasConfiguredAuth: () => false,
+        },
+        discoveredKeys: new Set(),
+        availableKeys: new Set(),
+      };
+    },
+  }));
+
   vi.doMock("./list.runtime.js", () => ({
     ensureOpenClawModelsJson: mocks.ensureOpenClawModelsJson,
     ensureAuthProfileStore: mocks.ensureAuthProfileStore,
+    resolveOpenClawAgentDir: mocks.resolveOpenClawAgentDir,
     listProfilesForProvider: mocks.listProfilesForProvider,
     loadModelCatalog: mocks.loadModelCatalog,
+    loadProviderCatalogModelsForList: mocks.loadProviderCatalogModelsForList,
     resolveModelWithRegistry: mocks.resolveModelWithRegistry,
     resolveEnvApiKey: vi.fn().mockReturnValue(undefined),
     resolveAwsSdkEnvVarName: vi.fn().mockReturnValue(undefined),
     hasUsableCustomProviderApiKey: vi.fn().mockReturnValue(false),
+  }));
+
+  vi.doMock("../../plugins/synthetic-auth.runtime.js", () => ({
+    resolveRuntimeSyntheticAuthProviderRefs: mocks.resolveRuntimeSyntheticAuthProviderRefs,
   }));
 }
 
@@ -160,6 +215,7 @@ async function buildAllOpenAiCodexRows(opts: { supplementCatalog?: boolean } = {
   const rows: unknown[] = [];
   const context = {
     cfg: mocks.resolvedConfig,
+    agentDir: "/tmp/openclaw-agent",
     authStore: mocks.ensureAuthProfileStore(),
     availableKeys: loaded.availableKeys,
     configuredByKey: new Map(),
@@ -193,6 +249,19 @@ beforeEach(() => {
 
 describe("modelsListCommand forward-compat", () => {
   describe("configured rows", () => {
+    it("passes provider filters into registry loading before row assembly", async () => {
+      const runtime = createRuntime();
+
+      await modelsListCommand({ json: true, provider: "moonshot" }, runtime as never);
+
+      expect(mocks.loadModelRegistry).toHaveBeenCalledWith(
+        mocks.resolvedConfig,
+        expect.objectContaining({
+          providerFilter: "moonshot",
+        }),
+      );
+    });
+
     it("does not mark configured codex model as missing when forward-compat can build a fallback", async () => {
       const runtime = createRuntime();
 
@@ -269,14 +338,17 @@ describe("modelsListCommand forward-compat", () => {
       expect(codexPro?.tags).not.toContain("missing");
     });
 
-    it("passes source config to model registry loading for persistence safety", async () => {
+    it("loads model registry without source config persistence input", async () => {
       const runtime = createRuntime();
 
       await modelsListCommand({ json: true }, runtime as never);
 
-      expect(mocks.loadModelRegistry).toHaveBeenCalledWith(mocks.resolvedConfig, {
-        sourceConfig: mocks.sourceConfig,
-      });
+      expect(mocks.loadModelRegistry).toHaveBeenCalledWith(
+        mocks.resolvedConfig,
+        expect.not.objectContaining({
+          sourceConfig: expect.anything(),
+        }),
+      );
     });
 
     it("keeps configured local openai gpt-5.4 entries visible in --local output", async () => {
@@ -334,7 +406,7 @@ describe("modelsListCommand forward-compat", () => {
       );
     });
 
-    it("exits with an error when configured-mode listing has no model registry", async () => {
+    it("does not require the all-model registry result for configured-mode listing", async () => {
       const previousExitCode = process.exitCode;
       process.exitCode = undefined;
       mocks.loadModelRegistry.mockResolvedValueOnce({
@@ -352,13 +424,109 @@ describe("modelsListCommand forward-compat", () => {
         process.exitCode = previousExitCode;
       }
 
-      expect(runtime.error).toHaveBeenCalledWith("Model registry unavailable.");
-      expect(observedExitCode).toBe(1);
-      expect(mocks.printModelTable).not.toHaveBeenCalled();
+      expect(runtime.error).not.toHaveBeenCalled();
+      expect(observedExitCode).toBeUndefined();
+      expect(mocks.printModelTable).toHaveBeenCalled();
     });
   });
 
   describe("--all catalog supplementation", () => {
+    it("uses the provider catalog fast path for Codex provider lists", async () => {
+      mocks.resolveConfiguredEntries.mockReturnValueOnce({ entries: [] });
+      mocks.hasProviderStaticCatalogForFilter.mockResolvedValueOnce(true);
+      mocks.loadProviderCatalogModelsForList.mockResolvedValueOnce([
+        {
+          provider: "codex",
+          id: "gpt-5.4",
+          name: "gpt-5.4",
+          api: "openai-codex-responses",
+          baseUrl: "https://chatgpt.com/backend-api",
+          input: ["text", "image"],
+          contextWindow: 272_000,
+          maxTokens: 128_000,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        },
+      ]);
+      mocks.resolveRuntimeSyntheticAuthProviderRefs.mockReturnValueOnce(["codex"]);
+      const runtime = createRuntime();
+
+      await modelsListCommand({ all: true, provider: "codex", json: true }, runtime as never);
+
+      expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
+      expect(mocks.loadModelRegistry).not.toHaveBeenCalled();
+      expect(mocks.loadProviderCatalogModelsForList).toHaveBeenCalledWith({
+        cfg: mocks.resolvedConfig,
+        agentDir: "/tmp/openclaw-agent",
+        providerFilter: "codex",
+        staticOnly: true,
+      });
+      expect(lastPrintedRows<{ key: string; available: boolean }>()).toEqual([
+        expect.objectContaining({
+          key: "codex/gpt-5.4",
+          available: true,
+        }),
+      ]);
+    });
+
+    it("falls back to registry-backed rows when the fast-path catalog is empty", async () => {
+      mocks.resolveConfiguredEntries.mockReturnValueOnce({ entries: [] });
+      mocks.hasProviderStaticCatalogForFilter.mockResolvedValueOnce(true);
+      mocks.loadProviderCatalogModelsForList.mockResolvedValueOnce([]).mockResolvedValueOnce([]);
+      mocks.loadModelRegistry.mockResolvedValueOnce({
+        models: [{ ...OPENAI_CODEX_MODEL }],
+        availableKeys: new Set(["openai-codex/gpt-5.4"]),
+        registry: {
+          getAll: () => [{ ...OPENAI_CODEX_MODEL }],
+        },
+      });
+      const runtime = createRuntime();
+
+      await modelsListCommand(
+        { all: true, provider: "openai-codex", json: true },
+        runtime as never,
+      );
+
+      expect(mocks.loadModelRegistry).toHaveBeenCalledWith(
+        mocks.resolvedConfig,
+        expect.objectContaining({
+          providerFilter: "openai-codex",
+        }),
+      );
+      expect(mocks.loadProviderCatalogModelsForList).toHaveBeenNthCalledWith(1, {
+        cfg: mocks.resolvedConfig,
+        agentDir: "/tmp/openclaw-agent",
+        providerFilter: "openai-codex",
+        staticOnly: true,
+      });
+      expect(mocks.loadProviderCatalogModelsForList).toHaveBeenNthCalledWith(2, {
+        cfg: mocks.resolvedConfig,
+        agentDir: "/tmp/openclaw-agent",
+        providerFilter: "openai-codex",
+        staticOnly: undefined,
+      });
+      expect(lastPrintedRows<{ key: string; available: boolean }>()).toEqual([
+        expect.objectContaining({
+          key: "openai-codex/gpt-5.4",
+          available: true,
+        }),
+      ]);
+    });
+
+    it("keeps the registry path for provider filters without static catalog coverage", async () => {
+      mocks.resolveConfiguredEntries.mockReturnValueOnce({ entries: [] });
+      mocks.hasProviderStaticCatalogForFilter.mockResolvedValueOnce(false);
+      const runtime = createRuntime();
+
+      await modelsListCommand({ all: true, provider: "openrouter", json: true }, runtime as never);
+
+      expect(mocks.loadModelRegistry).toHaveBeenCalledWith(
+        mocks.resolvedConfig,
+        expect.objectContaining({
+          providerFilter: "openrouter",
+        }),
+      );
+    });
+
     it("includes synthetic codex gpt-5.4 in --all output when catalog supports it", async () => {
       mocks.resolveConfiguredEntries.mockReturnValueOnce({ entries: [] });
       mocks.loadModelRegistry.mockResolvedValueOnce({

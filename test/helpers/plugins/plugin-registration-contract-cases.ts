@@ -55,6 +55,7 @@ export const pluginRegistrationContractCases = {
     pluginId: "google",
     providerIds: ["google", "google-gemini-cli"],
     webSearchProviderIds: ["gemini"],
+    realtimeVoiceProviderIds: ["google"],
     speechProviderIds: ["google"],
     mediaUnderstandingProviderIds: ["google"],
     imageGenerationProviderIds: ["google"],
@@ -93,8 +94,8 @@ export const pluginRegistrationContractCases = {
       choiceId: "kimi-code-api-key",
       choiceLabel: "Kimi Code API key (subscription)",
       groupId: "moonshot",
-      groupLabel: "Moonshot AI (Kimi K2.5)",
-      groupHint: "Kimi K2.5",
+      groupLabel: "Moonshot AI (Kimi K2.6)",
+      groupHint: "Kimi K2.6",
     },
   },
   openai: {
@@ -113,7 +114,9 @@ export const pluginRegistrationContractCases = {
     pluginId: "openrouter",
     providerIds: ["openrouter"],
     mediaUnderstandingProviderIds: ["openrouter"],
+    imageGenerationProviderIds: ["openrouter"],
     requireDescribeImages: true,
+    requireGenerateImage: true,
   },
   perplexity: {
     pluginId: "perplexity",
@@ -128,6 +131,8 @@ export const pluginRegistrationContractCases = {
     pluginId: "xai",
     providerIds: ["xai"],
     webSearchProviderIds: ["grok"],
+    realtimeTranscriptionProviderIds: ["xai"],
+    mediaUnderstandingProviderIds: ["xai"],
   },
   zai: {
     pluginId: "zai",

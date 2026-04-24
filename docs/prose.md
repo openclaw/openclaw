@@ -7,8 +7,6 @@ read_when:
 title: "OpenProse"
 ---
 
-# OpenProse
-
 OpenProse is a portable, markdown-first workflow format for orchestrating AI sessions. In OpenClaw it ships as a plugin that installs an OpenProse skill pack plus a `/prose` slash command. Programs live in `.prose` files and can spawn multiple sub-agents with explicit control flow.
 
 Official site: [https://www.prose.md](https://www.prose.md)
@@ -132,3 +130,8 @@ If your tool allowlist blocks these tools, OpenProse programs will fail. See [Sk
 Treat `.prose` files like code. Review before running. Use OpenClaw tool allowlists and approval gates to control side effects.
 
 For deterministic, approval-gated workflows, compare with [Lobster](/tools/lobster).
+
+## Related
+
+- [Text-to-speech](/tools/tts)
+- [Markdown formatting](/concepts/markdown-formatting)

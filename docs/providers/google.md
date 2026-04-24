@@ -1,12 +1,10 @@
 ---
-title: "Google (Gemini)"
 summary: "Google Gemini setup (API key + OAuth, image generation, media understanding, TTS, web search)"
+title: "Google (Gemini)"
 read_when:
   - You want to use Google Gemini models with OpenClaw
   - You need the API key or OAuth auth flow
 ---
-
-# Google (Gemini)
 
 The Google plugin provides access to Gemini models through Google AI Studio, plus
 image generation, media understanding (image/audio/video), text-to-speech, and web search via
@@ -128,20 +126,26 @@ Choose your preferred auth method and follow the setup steps.
 
 ## Capabilities
 
-| Capability             | Supported         |
-| ---------------------- | ----------------- |
-| Chat completions       | Yes               |
-| Image generation       | Yes               |
-| Music generation       | Yes               |
-| Text-to-speech         | Yes               |
-| Image understanding    | Yes               |
-| Audio transcription    | Yes               |
-| Video understanding    | Yes               |
-| Web search (Grounding) | Yes               |
-| Thinking/reasoning     | Yes (Gemini 3.1+) |
-| Gemma 4 models         | Yes               |
+| Capability             | Supported                     |
+| ---------------------- | ----------------------------- |
+| Chat completions       | Yes                           |
+| Image generation       | Yes                           |
+| Music generation       | Yes                           |
+| Text-to-speech         | Yes                           |
+| Realtime voice         | Yes (Google Live API)         |
+| Image understanding    | Yes                           |
+| Audio transcription    | Yes                           |
+| Video understanding    | Yes                           |
+| Web search (Grounding) | Yes                           |
+| Thinking/reasoning     | Yes (Gemini 2.5+ / Gemini 3+) |
+| Gemma 4 models         | Yes                           |
 
 <Tip>
+Gemini 3 models use `thinkingLevel` rather than `thinkingBudget`. OpenClaw maps
+Gemini 3, Gemini 3.1, and `gemini-*-latest` alias reasoning controls to
+`thinkingLevel` so default/low-latency runs do not send disabled
+`thinkingBudget` values.
+
 Gemma 4 models (for example `gemma-4-26b-a4b-it`) support thinking mode. OpenClaw
 rewrites `thinkingBudget` to a supported Google `thinkingLevel` for Gemma 4.
 Setting thinking to `off` preserves thinking disabled instead of mapping to
@@ -276,6 +280,63 @@ Here is the clean reply text.
 <Note>
 A Google Cloud Console API key restricted to the Gemini API is valid for this
 provider. This is not the separate Cloud Text-to-Speech API path.
+</Note>
+
+## Realtime voice
+
+The bundled `google` plugin registers a realtime voice provider backed by the
+Gemini Live API for backend audio bridges such as Voice Call and Google Meet.
+
+| Setting               | Config path                                                         | Default                                                                               |
+| --------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| Model                 | `plugins.entries.voice-call.config.realtime.providers.google.model` | `gemini-2.5-flash-native-audio-preview-12-2025`                                       |
+| Voice                 | `...google.voice`                                                   | `Kore`                                                                                |
+| Temperature           | `...google.temperature`                                             | (unset)                                                                               |
+| VAD start sensitivity | `...google.startSensitivity`                                        | (unset)                                                                               |
+| VAD end sensitivity   | `...google.endSensitivity`                                          | (unset)                                                                               |
+| Silence duration      | `...google.silenceDurationMs`                                       | (unset)                                                                               |
+| API key               | `...google.apiKey`                                                  | Falls back to `models.providers.google.apiKey`, `GEMINI_API_KEY`, or `GOOGLE_API_KEY` |
+
+Example Voice Call realtime config:
+
+```json5
+{
+  plugins: {
+    entries: {
+      "voice-call": {
+        enabled: true,
+        config: {
+          realtime: {
+            enabled: true,
+            provider: "google",
+            providers: {
+              google: {
+                model: "gemini-2.5-flash-native-audio-preview-12-2025",
+                voice: "Kore",
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+<Note>
+Google Live API uses bidirectional audio and function calling over a WebSocket.
+OpenClaw adapts telephony/Meet bridge audio to Gemini's PCM Live API stream and
+keeps tool calls on the shared realtime voice contract. Leave `temperature`
+unset unless you need sampling changes; OpenClaw omits non-positive values
+because Google Live can return transcripts without audio for `temperature: 0`.
+Gemini API transcription is enabled without `languageCodes`; the current Google
+SDK rejects language-code hints on this API path.
+</Note>
+
+<Note>
+Control UI Talk browser sessions still require a realtime voice provider with a
+browser WebRTC session implementation. Today that path is OpenAI Realtime; the
+Google provider is for backend realtime bridges.
 </Note>
 
 ## Advanced configuration

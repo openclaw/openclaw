@@ -1,11 +1,9 @@
 ---
-title: Sandbox CLI
 summary: "Manage sandbox runtimes and inspect effective sandbox policy"
+title: Sandbox CLI
 read_when: "You are managing sandbox runtimes or debugging sandbox/tool-policy behavior."
 status: active
 ---
-
-# Sandbox CLI
 
 Manage sandbox runtimes for isolated agent execution.
 
@@ -190,8 +188,9 @@ Sandbox settings live in `~/.openclaw/openclaw.json` under `agents.defaults.sand
 }
 ```
 
-## See Also
+## Related
 
-- [Sandbox Documentation](/gateway/sandboxing)
-- [Agent Configuration](/concepts/agent-workspace)
-- [Doctor Command](/gateway/doctor) - Check sandbox setup
+- [CLI reference](/cli)
+- [Sandboxing](/gateway/sandboxing)
+- [Agent workspace](/concepts/agent-workspace)
+- [Doctor](/gateway/doctor) — checks sandbox setup

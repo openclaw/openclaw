@@ -1,14 +1,12 @@
 ---
-title: "Building Plugins"
-sidebarTitle: "Getting Started"
 summary: "Create your first OpenClaw plugin in minutes"
+title: "Building plugins"
+sidebarTitle: "Getting Started"
 read_when:
   - You want to create a new OpenClaw plugin
   - You need a quick-start for plugin development
   - You are adding a new channel, provider, tool, or other capability to OpenClaw
 ---
-
-# Building Plugins
 
 Plugins extend OpenClaw with new capabilities: channels, model providers,
 speech, realtime transcription, realtime voice, media understanding, image
@@ -35,12 +33,12 @@ falls back to npm automatically.
   <Card title="Provider plugin" icon="cpu" href="/plugins/sdk-provider-plugins">
     Add a model provider (LLM, proxy, or custom endpoint)
   </Card>
-  <Card title="Tool / hook plugin" icon="wrench">
+  <Card title="Tool / hook plugin" icon="wrench" href="/plugins/hooks">
     Register agent tools, event hooks, or services — continue below
   </Card>
 </CardGroup>
 
-If a channel plugin is optional and may not be installed when onboarding/setup
+For a channel plugin that isn't guaranteed to be installed when onboarding/setup
 runs, use `createOptionalChannelSetupSurface(...)` from
 `openclaw/plugin-sdk/channel-setup`. It produces a setup adapter + wizard pair
 that advertises the install requirement and fails closed on real config writes
@@ -162,13 +160,20 @@ A single plugin can register any number of capabilities via the `api` object:
 | Video generation       | `api.registerVideoGenerationProvider(...)`       | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
 | Web fetch              | `api.registerWebFetchProvider(...)`              | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
 | Web search             | `api.registerWebSearchProvider(...)`             | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
+| Embedded Pi extension  | `api.registerEmbeddedExtensionFactory(...)`      | [SDK Overview](/plugins/sdk-overview#registration-api)                          |
 | Agent tools            | `api.registerTool(...)`                          | Below                                                                           |
 | Custom commands        | `api.registerCommand(...)`                       | [Entry Points](/plugins/sdk-entrypoints)                                        |
-| Event hooks            | `api.registerHook(...)`                          | [Entry Points](/plugins/sdk-entrypoints)                                        |
-| HTTP routes            | `api.registerHttpRoute(...)`                     | [Internals](/plugins/architecture#gateway-http-routes)                          |
+| Plugin hooks           | `api.on(...)`                                    | [Plugin hooks](/plugins/hooks)                                                  |
+| Internal event hooks   | `api.registerHook(...)`                          | [Entry Points](/plugins/sdk-entrypoints)                                        |
+| HTTP routes            | `api.registerHttpRoute(...)`                     | [Internals](/plugins/architecture-internals#gateway-http-routes)                |
 | CLI subcommands        | `api.registerCli(...)`                           | [Entry Points](/plugins/sdk-entrypoints)                                        |
 
 For the full registration API, see [SDK Overview](/plugins/sdk-overview#registration-api).
+
+Use `api.registerEmbeddedExtensionFactory(...)` when a plugin needs Pi-native
+embedded-runner hooks such as async `tool_result` rewriting before the final
+tool result message is emitted. Prefer regular OpenClaw plugin hooks when the
+work does not need Pi extension timing.
 
 If your plugin registers custom gateway RPC methods, keep them on a
 plugin-specific prefix. Core admin namespaces (`config.*`,
@@ -184,6 +189,8 @@ Hook guard semantics to keep in mind:
 - `before_install`: `{ block: false }` is treated as no decision.
 - `message_sending`: `{ cancel: true }` is terminal and stops lower-priority handlers.
 - `message_sending`: `{ cancel: false }` is treated as no decision.
+- `message_received`: prefer the typed `threadId` field when you need inbound thread/topic routing. Keep `metadata` for channel-specific extras.
+- `message_sending`: prefer typed `replyToId` / `threadId` routing fields over channel-specific metadata keys.
 
 The `/approve` command handles both exec and plugin approvals with bounded fallback: when an exec approval id is not found, OpenClaw retries the same id through plugin approvals. Plugin approval forwarding can be configured independently via `approvals.plugin` in config.
 
@@ -191,7 +198,7 @@ If custom approval plumbing needs to detect that same bounded fallback case,
 prefer `isApprovalNotFoundError` from `openclaw/plugin-sdk/error-runtime`
 instead of matching approval-expiry strings manually.
 
-See [SDK Overview hook decision semantics](/plugins/sdk-overview#hook-decision-semantics) for details.
+See [Plugin hooks](/plugins/hooks) for examples and the hook reference.
 
 ## Registering agent tools
 

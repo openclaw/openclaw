@@ -32,9 +32,11 @@ describe("method scope resolution", () => {
     ["sessions.abort", ["operator.write"]],
     ["sessions.messages.subscribe", ["operator.read"]],
     ["sessions.messages.unsubscribe", ["operator.read"]],
+    ["diagnostics.stability", ["operator.read"]],
     ["node.pair.approve", ["operator.pairing"]],
     ["poll", ["operator.write"]],
     ["config.patch", ["operator.admin"]],
+    ["nativeHook.invoke", ["operator.admin"]],
     ["wizard.start", ["operator.admin"]],
     ["update.run", ["operator.admin"]],
   ])("resolves least-privilege scopes for %s", (method, expected) => {

@@ -8,13 +8,14 @@ import {
   DEFAULT_BOOTSTRAP_FILENAME,
   DEFAULT_HEARTBEAT_FILENAME,
   DEFAULT_IDENTITY_FILENAME,
-  DEFAULT_MEMORY_ALT_FILENAME,
   DEFAULT_MEMORY_FILENAME,
   DEFAULT_TOOLS_FILENAME,
   DEFAULT_USER_FILENAME,
   ensureAgentWorkspace,
   filterBootstrapFilesForSession,
+  isWorkspaceBootstrapPending,
   loadWorkspaceBootstrapFiles,
+  resolveWorkspaceBootstrapStatus,
   resolveDefaultAgentWorkspaceDir,
   type WorkspaceBootstrapFile,
 } from "./workspace.js";
@@ -174,6 +175,26 @@ describe("ensureAgentWorkspace", () => {
     expect(persisted).toContain('"setupCompletedAt": "2026-03-15T02:30:00.000Z"');
   });
 
+  it("reports bootstrap pending while BOOTSTRAP.md exists and setup is incomplete", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+
+    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+
+    await expect(resolveWorkspaceBootstrapStatus(tempDir)).resolves.toBe("pending");
+    await expect(isWorkspaceBootstrapPending(tempDir)).resolves.toBe(true);
+  });
+
+  it("reports bootstrap complete once BOOTSTRAP.md is deleted and completion is recorded", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+
+    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+    await fs.unlink(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME));
+    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+
+    await expect(resolveWorkspaceBootstrapStatus(tempDir)).resolves.toBe("complete");
+    await expect(isWorkspaceBootstrapPending(tempDir)).resolves.toBe(false);
+  });
+
   it("writes the current fenced HEARTBEAT template body into new workspaces", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
 
@@ -192,9 +213,7 @@ describe("ensureAgentWorkspace", () => {
 
 describe("loadWorkspaceBootstrapFiles", () => {
   const getMemoryEntries = (files: Awaited<ReturnType<typeof loadWorkspaceBootstrapFiles>>) =>
-    files.filter((file) =>
-      [DEFAULT_MEMORY_FILENAME, DEFAULT_MEMORY_ALT_FILENAME].includes(file.name),
-    );
+    files.filter((file) => file.name === DEFAULT_MEMORY_FILENAME);
 
   const expectSingleMemoryEntry = (
     files: Awaited<ReturnType<typeof loadWorkspaceBootstrapFiles>>,
@@ -214,12 +233,12 @@ describe("loadWorkspaceBootstrapFiles", () => {
     expectSingleMemoryEntry(files, "memory");
   });
 
-  it("includes memory.md when MEMORY.md is absent", async () => {
+  it("ignores lowercase memory.md when MEMORY.md is absent", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
     await writeWorkspaceFile({ dir: tempDir, name: "memory.md", content: "alt" });
 
     const files = await loadWorkspaceBootstrapFiles(tempDir);
-    expectSingleMemoryEntry(files, "alt");
+    expect(getMemoryEntries(files)).toHaveLength(0);
   });
 
   it("omits memory entries when no memory files exist", async () => {

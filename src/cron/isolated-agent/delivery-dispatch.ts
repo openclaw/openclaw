@@ -1,3 +1,4 @@
+import { retireSessionMcpRuntime } from "../../agents/pi-bundle-mcp-tools.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import {
   isSilentReplyText,
@@ -22,6 +23,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
+import { createCronExecutionId } from "../run-id.js";
 import { hasScheduledNextRunAtMs } from "../service/jobs.js";
 import type { CronJob, CronRunTelemetry } from "../types.js";
 import type { DeliveryTargetResolution } from "./delivery-target.js";
@@ -79,7 +81,7 @@ export function matchesMessagingToolDeliveryTarget(
   if (provider && provider !== "message" && provider !== channel) {
     return false;
   }
-  if (target.accountId && delivery.accountId && target.accountId !== delivery.accountId) {
+  if (delivery.accountId && target.accountId && target.accountId !== delivery.accountId) {
     return false;
   }
   // Strip :topic:NNN from message targets and normalize Feishu/Lark prefixes on
@@ -102,7 +104,7 @@ type DispatchCronDeliveryParams = {
   job: CronJob;
   agentId: string;
   agentSessionKey: string;
-  runSessionId: string;
+  sessionId: string;
   runStartedAt: number;
   runEndedAt: number;
   timeoutMs: number;
@@ -110,6 +112,7 @@ type DispatchCronDeliveryParams = {
   deliveryRequested: boolean;
   skipHeartbeatDelivery: boolean;
   skipMessagingToolDelivery?: boolean;
+  unverifiedMessagingToolDelivery?: boolean;
   deliveryBestEffort: boolean;
   deliveryPayloadHasStructuredContent: boolean;
   deliveryPayloads: ReplyPayload[];
@@ -299,16 +302,18 @@ function getCompletedDirectCronDelivery(
 }
 
 function buildDirectCronDeliveryIdempotencyKey(params: {
-  runSessionId: string;
+  jobId: string;
+  runStartedAt: number;
   delivery: SuccessfulDeliveryTarget;
 }): string {
+  const executionId = createCronExecutionId(params.jobId, params.runStartedAt);
   const threadId =
     params.delivery.threadId == null || params.delivery.threadId === ""
       ? ""
       : String(params.delivery.threadId);
   const accountId = params.delivery.accountId?.trim() ?? "";
   const normalizedTo = normalizeDeliveryTarget(params.delivery.channel, params.delivery.to);
-  return `cron-direct-delivery:v1:${params.runSessionId}:${params.delivery.channel}:${accountId}:${normalizedTo}:${threadId}`;
+  return `cron-direct-delivery:v1:${executionId}:${params.delivery.channel}:${accountId}:${normalizedTo}:${threadId}`;
 }
 
 function shouldQueueCronAwareness(job: CronJob, deliveryBestEffort: boolean): boolean {
@@ -351,6 +356,7 @@ async function queueCronAwarenessSystemEvent(params: {
         agentId: params.agentId,
       }),
       contextKey: params.deliveryIdempotencyKey,
+      trusted: false,
     });
   } catch (err) {
     await logCronDeliveryWarn(
@@ -394,7 +400,7 @@ function isTransientDirectCronDeliveryError(error: unknown): boolean {
 
 function resolveDirectCronRetryDelaysMs(): readonly number[] {
   return process.env.NODE_ENV === "test" && process.env.OPENCLAW_TEST_FAST === "1"
-    ? [8, 16, 32]
+    ? [0, 0, 0]
     : [5_000, 10_000, 20_000];
 }
 
@@ -441,10 +447,15 @@ export async function dispatchCronDelivery(
   // remains the only source of delivered state.
   let delivered = skipMessagingToolDelivery;
   let deliveryAttempted = skipMessagingToolDelivery;
+  let directCronSessionDeleted = false;
+  const formatDeliveryTargetError = (error: string) =>
+    params.unverifiedMessagingToolDelivery === true
+      ? `${error}; the agent used the message tool, but OpenClaw could not verify that message matched the cron delivery target`
+      : error;
   const failDeliveryTarget = (error: string) =>
     params.withRunSession({
       status: "error",
-      error,
+      error: formatDeliveryTargetError(error),
       errorKind: "delivery-target",
       summary,
       outputText,
@@ -452,7 +463,7 @@ export async function dispatchCronDelivery(
       ...params.telemetry,
     });
   const cleanupDirectCronSessionIfNeeded = async (): Promise<void> => {
-    if (!params.job.deleteAfterRun) {
+    if (!params.job.deleteAfterRun || directCronSessionDeleted) {
       return;
     }
     try {
@@ -466,7 +477,12 @@ export async function dispatchCronDelivery(
         },
         timeoutMs: 10_000,
       });
+      directCronSessionDeleted = true;
     } catch {
+      await retireSessionMcpRuntime({
+        sessionId: params.sessionId,
+        reason: "cron-delete-after-run-fallback",
+      });
       // Best-effort; direct delivery result should still be returned.
     }
   };
@@ -495,7 +511,8 @@ export async function dispatchCronDelivery(
     } = await loadDeliveryOutboundRuntime();
     const identity = resolveAgentOutboundIdentity(params.cfgWithAgentDefaults, params.agentId);
     const deliveryIdempotencyKey = buildDirectCronDeliveryIdempotencyKey({
-      runSessionId: params.runSessionId,
+      jobId: params.job.id,
+      runStartedAt: params.runStartedAt,
       delivery,
     });
     try {
@@ -511,10 +528,9 @@ export async function dispatchCronDelivery(
             return p;
           }
           const normalized = normalizeSilentReplyText(p.text);
-          return {
-            ...p,
+          return Object.assign({}, p, {
             text: normalized.strippedTrailingSilentToken ? undefined : normalized.text,
-          };
+          });
         })
         .filter((p) => hasReplyPayloadContent(p, { trimText: true }));
       if (payloadsForDelivery.length === 0) {
@@ -648,6 +664,17 @@ export async function dispatchCronDelivery(
     }
   };
 
+  const deliverViaDirectAndCleanup = async (
+    delivery: SuccessfulDeliveryTarget,
+    options?: { retryTransient?: boolean },
+  ): Promise<RunCronAgentTurnResult | null> => {
+    try {
+      return await deliverViaDirect(delivery, options);
+    } finally {
+      await cleanupDirectCronSessionIfNeeded();
+    }
+  };
+
   const finalizeTextDelivery = async (
     delivery: SuccessfulDeliveryTarget,
   ): Promise<RunCronAgentTurnResult | null> => {
@@ -758,11 +785,7 @@ export async function dispatchCronDelivery(
         ...params.telemetry,
       });
     }
-    try {
-      return await deliverViaDirect(delivery, { retryTransient: true });
-    } finally {
-      await cleanupDirectCronSessionIfNeeded();
-    }
+    return await deliverViaDirectAndCleanup(delivery, { retryTransient: true });
   };
 
   if (params.deliveryRequested && !params.skipHeartbeatDelivery && !skipMessagingToolDelivery) {
@@ -802,7 +825,7 @@ export async function dispatchCronDelivery(
     const useDirectDelivery =
       params.deliveryPayloadHasStructuredContent || params.resolvedDelivery.threadId != null;
     if (useDirectDelivery) {
-      const directResult = await deliverViaDirect(params.resolvedDelivery);
+      const directResult = await deliverViaDirectAndCleanup(params.resolvedDelivery);
       if (directResult) {
         return {
           result: directResult,

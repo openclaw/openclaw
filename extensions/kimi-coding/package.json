@@ -1,9 +1,12 @@
 {
   "name": "@openclaw/kimi-provider",
-  "version": "2026.4.16",
+  "version": "2026.4.20",
   "private": true,
   "description": "OpenClaw Kimi provider plugin",
   "type": "module",
+  "dependencies": {
+    "@mariozechner/pi-ai": "0.70.2"
+  },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
   },

@@ -3,10 +3,8 @@ summary: "Zalo personal account support via native zca-js (QR login), capabiliti
 read_when:
   - Setting up Zalo Personal for OpenClaw
   - Debugging Zalo Personal login or message flow
-title: "Zalo Personal"
+title: "Zalo personal"
 ---
-
-# Zalo Personal (unofficial)
 
 Status: experimental. This integration automates a **personal Zalo account** via native `zca-js` inside OpenClaw.
 

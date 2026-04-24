@@ -222,6 +222,80 @@ describe("routeReply", () => {
     });
   });
 
+  it("passes policySessionKey through to outbound delivery targets", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          silentReply: {
+            direct: "disallow",
+            group: "allow",
+            internal: "allow",
+          },
+          silentReplyRewrite: {
+            direct: true,
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const res = await routeReply({
+      payload: { text: "native command response" },
+      channel: "slack",
+      to: "channel:C123",
+      cfg,
+      sessionKey: "agent:main:main",
+      policySessionKey: "agent:main:direct:U123",
+      isGroup: true,
+    });
+
+    expect(res.ok).toBe(true);
+    expectLastDelivery({
+      payloads: [expect.objectContaining({ text: "native command response" })],
+      session: expect.objectContaining({
+        key: "agent:main:main",
+        policyKey: "agent:main:direct:U123",
+      }),
+    });
+    const session = mocks.deliverOutboundPayloads.mock.calls.at(-1)?.[0]?.session;
+    expect(session).not.toEqual(expect.objectContaining({ conversationType: "group" }));
+  });
+
+  it("uses explicit policy conversation type to preserve routed direct silent replies", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          silentReply: {
+            direct: "disallow",
+            internal: "allow",
+          },
+          silentReplyRewrite: {
+            direct: true,
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const res = await routeReply({
+      payload: { text: SILENT_REPLY_TOKEN },
+      channel: "slack",
+      to: "channel:C123",
+      cfg,
+      sessionKey: "agent:main:main",
+      policySessionKey: "agent:main:main",
+      policyConversationType: "direct",
+    });
+
+    expect(res.ok).toBe(true);
+    expectLastDelivery({
+      payloads: [expect.objectContaining({ text: SILENT_REPLY_TOKEN })],
+      session: expect.objectContaining({
+        key: "agent:main:main",
+        policyKey: "agent:main:main",
+        conversationType: "direct",
+      }),
+    });
+  });
+
   it("applies responsePrefix when routing", async () => {
     const cfg = {
       messages: { responsePrefix: "[openclaw]" },

@@ -2,7 +2,11 @@ import { describe, expect, it } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { typedCases } from "../test-utils/typed-cases.js";
 import { buildSubagentSystemPrompt } from "./subagent-system-prompt.js";
-import { buildAgentSystemPrompt, buildRuntimeLine } from "./system-prompt.js";
+import {
+  buildAgentSystemPrompt,
+  buildAgentUserPromptPrefix,
+  buildRuntimeLine,
+} from "./system-prompt.js";
 
 describe("buildAgentSystemPrompt", () => {
   it("formats owner section for plain, hash, and missing owner lists", () => {
@@ -316,7 +320,10 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain(
-      'For requests like "do this in codex/claude code/cursor/gemini" or similar ACP harnesses, treat it as ACP harness intent',
+      'For requests like "do this in claude code/cursor/gemini" or similar ACP harnesses, treat it as ACP harness intent',
+    );
+    expect(prompt).toContain(
+      "For Codex conversation binding/control, prefer the native Codex app-server plugin path",
     );
     expect(prompt).toContain(
       'On Discord, default ACP harness requests to thread-bound persistent sessions (`thread: true`, `mode: "session"`)',
@@ -409,17 +416,29 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("Reminder: commit your changes in this workspace after edits.");
   });
 
-  it("includes BOOTSTRAP override guidance in workspace notes when provided", () => {
+  it("keeps bootstrap instructions out of the privileged system prompt", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
-      workspaceNotes: [
-        "If BOOTSTRAP.md is present in Project Context, it overrides the normal first greeting. Read it and follow its instructions first, then update or delete it when complete.",
-      ],
+      workspaceNotes: ["Reminder: commit your changes in this workspace after edits."],
     });
 
-    expect(prompt).toContain("BOOTSTRAP.md is present in Project Context");
-    expect(prompt).toContain("it overrides the normal first greeting");
-    expect(prompt).toContain("Read it and follow its instructions first");
+    expect(prompt).not.toContain("## Bootstrap");
+    expect(prompt).not.toContain("Bootstrap is pending for this workspace.");
+    expect(prompt).not.toContain("BOOTSTRAP.md is present in Project Context");
+  });
+
+  it("adds bootstrap-specific prelude text to the user prompt prefix when bootstrap is pending", () => {
+    const promptPrefix = buildAgentUserPromptPrefix({ bootstrapMode: "full" });
+
+    expect(promptPrefix).toContain("[Bootstrap pending]");
+    expect(promptPrefix).toContain("Please read BOOTSTRAP.md from the workspace");
+    expect(promptPrefix).toContain("If this run can complete the BOOTSTRAP.md workflow, do so.");
+    expect(promptPrefix).toContain("explain the blocker briefly");
+    expect(promptPrefix).toContain("offer the simplest next step");
+    expect(promptPrefix).toContain("Do not use a generic first greeting or reply normally");
+    expect(promptPrefix).toContain(
+      "Your first user-visible reply for a bootstrap-pending workspace must follow BOOTSTRAP.md",
+    );
   });
 
   it("shows timezone section for 12h, 24h, and timezone-only modes", () => {
@@ -499,7 +518,7 @@ describe("buildAgentSystemPrompt", () => {
       workspaceDir: "/tmp/openclaw",
       modelAliasLines: [
         "- Opus: anthropic/claude-opus-4-5",
-        "- Sonnet: anthropic/claude-sonnet-4-5",
+        "- Sonnet: anthropic/claude-sonnet-4-6",
       ],
     });
 
@@ -620,7 +639,37 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(prompt).toContain("message: Send messages and channel actions");
     expect(prompt).toContain("### message tool");
+    expect(prompt).toContain("Use `message` for proactive sends + channel actions");
+    expect(prompt).toContain("For `action=send`, include `target` and `message`.");
     expect(prompt).toContain(`respond with ONLY: ${SILENT_REPLY_TOKEN}`);
+  });
+
+  it("gates sub-agent orchestration guidance on available tools", () => {
+    const messagingPrompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["message", "sessions_send"],
+    });
+    const spawnOnlyPrompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["sessions_spawn"],
+    });
+    const orchestrationPrompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["sessions_spawn", "subagents"],
+    });
+
+    expect(messagingPrompt).not.toContain("Sub-agent orchestration");
+    expect(messagingPrompt).not.toContain("sessions_spawn(...)");
+    expect(messagingPrompt).not.toContain("subagents(action=list|steer|kill)");
+
+    expect(spawnOnlyPrompt).toContain(
+      '- Sub-agent orchestration → use `sessions_spawn(...)` to start delegated work; omit `context` for isolated children, set `context:"fork"` only when the child needs the current transcript.',
+    );
+    expect(spawnOnlyPrompt).not.toContain("manage already-spawned children");
+
+    expect(orchestrationPrompt).toContain(
+      '- Sub-agent orchestration → use `sessions_spawn(...)` to start delegated work; omit `context` for isolated children, set `context:"fork"` only when the child needs the current transcript; use `subagents(action=list|steer|kill)` to manage already-spawned children.',
+    );
   });
 
   it("reapplies provider prompt contributions", () => {
@@ -828,6 +877,35 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(prompt).toContain("## Reactions");
     expect(prompt).toContain("Reactions are enabled for Telegram in MINIMAL mode.");
+  });
+});
+
+describe("buildAgentUserPromptPrefix", () => {
+  it("uses friendly full bootstrap wording that is truthful about completion blockers", () => {
+    const prompt = buildAgentUserPromptPrefix({ bootstrapMode: "full" });
+
+    expect(prompt).toContain("[Bootstrap pending]");
+    expect(prompt).toContain("Please read BOOTSTRAP.md");
+    expect(prompt).toContain("If this run can complete the BOOTSTRAP.md workflow, do so.");
+    expect(prompt).toContain("explain the blocker briefly");
+    expect(prompt).toContain("offer the simplest next step");
+    expect(prompt).toContain("Do not pretend bootstrap is complete when it is not.");
+    expect(prompt).toContain("must follow BOOTSTRAP.md, not a generic greeting");
+  });
+
+  it("uses limited bootstrap wording for constrained user-facing runs", () => {
+    const prompt = buildAgentUserPromptPrefix({ bootstrapMode: "limited" });
+
+    expect(prompt).toContain("[Bootstrap pending]");
+    expect(prompt).toContain("cannot safely complete the full BOOTSTRAP.md workflow here");
+    expect(prompt).toContain("Do not claim bootstrap is complete");
+    expect(prompt).toContain("do not use a generic first greeting");
+    expect(prompt).toContain("switching to a primary interactive run with normal workspace access");
+  });
+
+  it("returns nothing when bootstrap is not pending", () => {
+    expect(buildAgentUserPromptPrefix({ bootstrapMode: "none" })).toBeUndefined();
+    expect(buildAgentUserPromptPrefix({})).toBeUndefined();
   });
 });
 

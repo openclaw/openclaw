@@ -1,8 +1,9 @@
 import { type Api, completeSimple, type Model } from "@mariozechner/pi-ai";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { loadConfig } from "../config/config.js";
 import { parseLiveCsvFilter } from "../media-generation/live-test-helpers.js";
+import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import {
   collectAnthropicApiKeys,
@@ -14,7 +15,24 @@ import {
   isHighSignalLiveModelRef,
   resolveHighSignalLiveModelLimit,
   selectHighSignalLiveItems,
+  shouldExcludeProviderFromDefaultHighSignalLiveSweep,
 } from "./live-model-filter.js";
+import {
+  buildLiveModelFileProbeContext,
+  buildLiveModelFileProbeRetryContext,
+  buildLiveModelImageProbeContext,
+  extractAssistantText,
+  fileProbeTextMatches,
+  imageProbeTextMatches,
+  isLiveModelProbeEnabled,
+  LIVE_MODEL_FILE_PROBE_ENV,
+  LIVE_MODEL_FILE_PROBE_TOKEN,
+  LIVE_MODEL_IMAGE_PROBE_ENV,
+  modelSupportsImageInput,
+  shouldSkipLiveModelExtraProbes,
+  shouldSkipLiveModelFileProbe,
+  shouldSkipLiveModelImageProbe,
+} from "./live-model-turn-probes.js";
 import { createLiveTargetMatcher } from "./live-target-matcher.js";
 import { isLiveProfileKeyModeEnabled, isLiveTestEnabled } from "./live-test-helpers.js";
 import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
@@ -35,6 +53,19 @@ const LIVE_SETUP_TIMEOUT_MS = Math.max(
   1_000,
   toInt(process.env.OPENCLAW_LIVE_SETUP_TIMEOUT_MS, 45_000),
 );
+const LIVE_TEST_TIMEOUT_MS = Math.max(
+  1_000,
+  toInt(process.env.OPENCLAW_LIVE_TEST_TIMEOUT_MS, 60 * 60 * 1000),
+);
+const DEFAULT_LIVE_MODEL_CONCURRENCY = 20;
+const LIVE_MODEL_CONCURRENCY = resolveLiveModelConcurrency(
+  process.env.OPENCLAW_LIVE_MODEL_CONCURRENCY,
+);
+const LIVE_MODELS_JSON_TIMEOUT_MS = resolveLiveModelsJsonTimeoutMs(
+  process.env.OPENCLAW_LIVE_MODELS_JSON_TIMEOUT_MS,
+);
+const LIVE_FILE_PROBE_ENABLED = isLiveModelProbeEnabled(process.env, LIVE_MODEL_FILE_PROBE_ENV);
+const LIVE_IMAGE_PROBE_ENABLED = isLiveModelProbeEnabled(process.env, LIVE_MODEL_IMAGE_PROBE_ENV);
 
 const describeLive = LIVE ? describe : describe.skip;
 
@@ -181,6 +212,13 @@ describe("isProviderUnavailableErrorMessage", () => {
       ),
     ).toBe(true);
   });
+
+  it("matches transient upstream 502 errors", () => {
+    expect(isProviderUnavailableErrorMessage("502 internal server error")).toBe(true);
+    expect(
+      isProviderUnavailableErrorMessage("provider returned error: 502 Internal Server Error"),
+    ).toBe(true);
+  });
 });
 
 function isChatGPTUsageLimitErrorMessage(raw: string): boolean {
@@ -224,7 +262,8 @@ function isProviderUnavailableErrorMessage(raw: string): boolean {
     msg.includes("temporarily rate-limited upstream") ||
     msg.includes("unable to access non-serverless model") ||
     msg.includes("create and start a new dedicated endpoint") ||
-    msg.includes("no available capacity was found for the model")
+    msg.includes("no available capacity was found for the model") ||
+    (msg.includes("502") && msg.includes("internal server error"))
   );
 }
 
@@ -260,6 +299,20 @@ function isUnsupportedThinkingToggleErrorMessage(raw: string): boolean {
   return /does not support parameter [`"]?enable_thinking[`"]?/i.test(raw);
 }
 
+function isUnsupportedPlanErrorMessage(raw: string): boolean {
+  return /current token plan (?:does )?not support (?:this )?model/i.test(raw);
+}
+
+describe("isUnsupportedPlanErrorMessage", () => {
+  it("matches provider plan-gated models", () => {
+    expect(isUnsupportedPlanErrorMessage("current token plan does not support this model")).toBe(
+      true,
+    );
+    expect(isUnsupportedPlanErrorMessage("your current token plan not support model")).toBe(true);
+    expect(isUnsupportedPlanErrorMessage("model not found")).toBe(false);
+  });
+});
+
 function toInt(value: string | undefined, fallback: number): number {
   const trimmed = value?.trim();
   if (!trimmed) {
@@ -269,6 +322,38 @@ function toInt(value: string | undefined, fallback: number): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function resolveLiveModelConcurrency(raw?: string): number {
+  return Math.max(1, toInt(raw, DEFAULT_LIVE_MODEL_CONCURRENCY));
+}
+
+describe("resolveLiveModelConcurrency", () => {
+  it("defaults direct-model probes to 20-way concurrency", () => {
+    expect(resolveLiveModelConcurrency()).toBe(20);
+  });
+
+  it("accepts explicit concurrency overrides", () => {
+    expect(resolveLiveModelConcurrency("7")).toBe(7);
+    expect(resolveLiveModelConcurrency("0")).toBe(1);
+  });
+});
+
+function resolveLiveModelsJsonTimeoutMs(
+  modelsJsonTimeoutRaw?: string,
+  setupTimeoutMs = LIVE_SETUP_TIMEOUT_MS,
+): number {
+  return Math.max(setupTimeoutMs, toInt(modelsJsonTimeoutRaw, 120_000));
+}
+
+describe("resolveLiveModelsJsonTimeoutMs", () => {
+  it("defaults models.json preparation to a longer setup timeout", () => {
+    expect(resolveLiveModelsJsonTimeoutMs(undefined, 45_000)).toBe(120_000);
+  });
+
+  it("never goes below the shared live setup timeout", () => {
+    expect(resolveLiveModelsJsonTimeoutMs("30000", 45_000)).toBe(45_000);
+  });
+});
+
 function resolveTestReasoning(
   model: Model<Api>,
 ): "minimal" | "low" | "medium" | "high" | "xhigh" | undefined {
@@ -277,9 +362,6 @@ function resolveTestReasoning(
   }
   const id = model.id.toLowerCase();
   if (id.includes("deep-research")) {
-    return "medium";
-  }
-  if (id === "gpt-5.4-pro") {
     return "medium";
   }
   if (model.provider === "openrouter" && id.startsWith("qwq")) {
@@ -413,6 +495,194 @@ async function completeOkWithRetry(params: {
   return await runOnce(256);
 }
 
+function isDeepSeekV4Model(model: Pick<Model<Api>, "id" | "provider">): boolean {
+  return (
+    model.provider === "deepseek" &&
+    (model.id === "deepseek-v4-flash" || model.id === "deepseek-v4-pro")
+  );
+}
+
+async function runDeepSeekV4ReplayRegression(params: {
+  model: Model<Api>;
+  apiKey: string;
+  timeoutMs: number;
+  progressLabel: string;
+}) {
+  const noopTool = {
+    name: "noop",
+    description: "Return ok.",
+    parameters: Type.Object({}, { additionalProperties: false }),
+  };
+  let firstUser = {
+    role: "user" as const,
+    content: "Call the tool `noop` with {}. Do not write any other text.",
+    timestamp: Date.now(),
+  };
+  let first = await completeSimpleWithTimeout(
+    params.model,
+    { messages: [firstUser], tools: [noopTool] },
+    {
+      apiKey: params.apiKey,
+      reasoning: resolveTestReasoning(params.model),
+      maxTokens: 256,
+    },
+    params.timeoutMs,
+    `${params.progressLabel}: DeepSeek V4 replay first call`,
+  );
+  let toolCall = first.content.find((block) => block.type === "toolCall");
+
+  for (let i = 0; i < 2 && !toolCall; i += 1) {
+    firstUser = {
+      role: "user" as const,
+      content: "Call the tool `noop` with {}. IMPORTANT: respond with the tool call.",
+      timestamp: Date.now(),
+    };
+    first = await completeSimpleWithTimeout(
+      params.model,
+      { messages: [firstUser], tools: [noopTool] },
+      {
+        apiKey: params.apiKey,
+        reasoning: resolveTestReasoning(params.model),
+        maxTokens: 256,
+      },
+      params.timeoutMs,
+      `${params.progressLabel}: DeepSeek V4 replay retry ${i + 1}`,
+    );
+    toolCall = first.content.find((block) => block.type === "toolCall");
+  }
+
+  expect(toolCall).toBeTruthy();
+  if (!toolCall || toolCall.type !== "toolCall") {
+    throw new Error("expected DeepSeek V4 tool call");
+  }
+
+  const second = await completeSimpleWithTimeout(
+    params.model,
+    {
+      messages: [
+        firstUser,
+        first,
+        {
+          role: "toolResult",
+          toolCallId: toolCall.id,
+          toolName: "noop",
+          content: [{ type: "text", text: "ok" }],
+          isError: false,
+          timestamp: Date.now(),
+        },
+        {
+          role: "user",
+          content: "Reply with the word ok.",
+          timestamp: Date.now(),
+        },
+      ],
+    },
+    {
+      apiKey: params.apiKey,
+      reasoning: resolveTestReasoning(params.model),
+      maxTokens: 256,
+    },
+    params.timeoutMs,
+    `${params.progressLabel}: DeepSeek V4 replay followup`,
+  );
+  if (second.stopReason === "error") {
+    throw new Error(second.errorMessage || "DeepSeek V4 replay followup returned error");
+  }
+  expect(extractAssistantText(second).length).toBeGreaterThan(0);
+}
+
+async function runExtraTurnProbes(params: {
+  model: Model<Api>;
+  apiKey: string;
+  timeoutMs: number;
+  progressLabel: string;
+}) {
+  if (shouldSkipLiveModelExtraProbes(params.model)) {
+    logProgress(`${params.progressLabel}: extra probes skipped (known empty route)`);
+    return;
+  }
+  const options = {
+    apiKey: params.apiKey,
+    reasoning: resolveTestReasoning(params.model),
+    maxTokens: 128,
+  };
+  if (LIVE_FILE_PROBE_ENABLED && !shouldSkipLiveModelFileProbe(params.model)) {
+    logProgress(`${params.progressLabel}: file-read probe`);
+    const file = await completeSimpleWithTimeout(
+      params.model,
+      buildLiveModelFileProbeContext({ systemPrompt: resolveLiveSystemPrompt(params.model) }),
+      options,
+      params.timeoutMs,
+      `${params.progressLabel}: file-read probe`,
+    );
+    if (file.stopReason === "error") {
+      throw new Error(file.errorMessage || "file-read probe returned error with no message");
+    }
+    let fileText = extractAssistantText(file);
+    if (!fileProbeTextMatches(fileText)) {
+      logProgress(`${params.progressLabel}: file-read probe retry`);
+      const retry = await completeSimpleWithTimeout(
+        params.model,
+        buildLiveModelFileProbeRetryContext({
+          systemPrompt: resolveLiveSystemPrompt(params.model),
+        }),
+        options,
+        params.timeoutMs,
+        `${params.progressLabel}: file-read probe retry`,
+      );
+      if (retry.stopReason === "error") {
+        throw new Error(
+          retry.errorMessage || "file-read probe retry returned error with no message",
+        );
+      }
+      fileText = extractAssistantText(retry);
+    }
+    if (!fileProbeTextMatches(fileText)) {
+      if (fileText.length === 0) {
+        logProgress(`${params.progressLabel}: file-read probe skipped (empty response)`);
+      } else {
+        throw new Error(
+          `file-read probe did not return ${LIVE_MODEL_FILE_PROBE_TOKEN}: ${fileText}`,
+        );
+      }
+    }
+  } else if (LIVE_FILE_PROBE_ENABLED) {
+    logProgress(`${params.progressLabel}: file-read probe skipped (known empty route)`);
+  }
+
+  if (!LIVE_IMAGE_PROBE_ENABLED) {
+    return;
+  }
+  if (!modelSupportsImageInput(params.model)) {
+    logProgress(`${params.progressLabel}: image probe skipped (no image input)`);
+    return;
+  }
+  if (shouldSkipLiveModelImageProbe(params.model)) {
+    logProgress(`${params.progressLabel}: image probe skipped (known empty route)`);
+    return;
+  }
+
+  logProgress(`${params.progressLabel}: image probe`);
+  const image = await completeSimpleWithTimeout(
+    params.model,
+    buildLiveModelImageProbeContext({ systemPrompt: resolveLiveSystemPrompt(params.model) }),
+    options,
+    params.timeoutMs,
+    `${params.progressLabel}: image probe`,
+  );
+  if (image.stopReason === "error") {
+    throw new Error(image.errorMessage || "image probe returned error with no message");
+  }
+  const imageText = extractAssistantText(image);
+  if (!imageProbeTextMatches(imageText)) {
+    if (imageText.length === 0) {
+      logProgress(`${params.progressLabel}: image probe skipped (empty response)`);
+      return;
+    }
+    throw new Error(`image probe did not return ok: ${imageText}`);
+  }
+}
+
 describeLive("live models (profile keys)", () => {
   it(
     "completes across selected models",
@@ -426,6 +696,7 @@ describeLive("live models (profile keys)", () => {
       await withLiveStageTimeout(
         ensureOpenClawModelsJson(cfg),
         "[live-models] prepare models.json",
+        LIVE_MODELS_JSON_TIMEOUT_MS,
       );
       if (!DIRECT_ENABLED) {
         logProgress(
@@ -484,6 +755,17 @@ describeLive("live models (profile keys)", () => {
           continue;
         }
         if (!filter && useModern) {
+          if (
+            shouldExcludeProviderFromDefaultHighSignalLiveSweep({
+              provider: model.provider,
+              useExplicitModels: useExplicit,
+              providerFilter: providers,
+              config: cfg,
+              env: process.env,
+            })
+          ) {
+            continue;
+          }
           if (!isHighSignalLiveModelRef({ provider: model.provider, id: model.id })) {
             continue;
           }
@@ -526,11 +808,11 @@ describeLive("live models (profile keys)", () => {
       }
       logProgress(`[live-models] running ${selectedCandidates.length} models`);
       logProgress(
-        `[live-models] heartbeat=${formatElapsedSeconds(LIVE_HEARTBEAT_MS)} timeout=${formatElapsedSeconds(perModelTimeoutMs)}`,
+        `[live-models] heartbeat=${formatElapsedSeconds(LIVE_HEARTBEAT_MS)} timeout=${formatElapsedSeconds(perModelTimeoutMs)} concurrency=${LIVE_MODEL_CONCURRENCY}`,
       );
       const total = selectedCandidates.length;
 
-      for (const [index, entry] of selectedCandidates.entries()) {
+      const tasks = selectedCandidates.map((entry, index) => async () => {
         const { model, apiKeyInfo } = entry;
         const id = `${model.provider}/${model.id}`;
         const progressLabel = `[live-models] ${index + 1}/${total} ${id}`;
@@ -549,7 +831,7 @@ describeLive("live models (profile keys)", () => {
             if (
               model.provider === "openai" &&
               model.api === "openai-responses" &&
-              model.id === "gpt-5.4"
+              model.id === "gpt-5.2"
             ) {
               logProgress(`${progressLabel}: tool-only regression`);
               const noopTool = {
@@ -657,6 +939,30 @@ describeLive("live models (profile keys)", () => {
                 .map((b) => b.text.trim())
                 .join(" ");
               expect(secondText.length).toBeGreaterThan(0);
+              await runExtraTurnProbes({
+                model,
+                apiKey,
+                timeoutMs: perModelTimeoutMs,
+                progressLabel,
+              });
+              logProgress(`${progressLabel}: done`);
+              break;
+            }
+
+            if (isDeepSeekV4Model(model)) {
+              logProgress(`${progressLabel}: DeepSeek V4 replay regression`);
+              await runDeepSeekV4ReplayRegression({
+                model,
+                apiKey,
+                timeoutMs: perModelTimeoutMs,
+                progressLabel,
+              });
+              await runExtraTurnProbes({
+                model,
+                apiKey,
+                timeoutMs: perModelTimeoutMs,
+                progressLabel,
+              });
               logProgress(`${progressLabel}: done`);
               break;
             }
@@ -706,19 +1012,12 @@ describeLive("live models (profile keys)", () => {
             if (
               ok.text.length === 0 &&
               allowNotFoundSkip &&
-              (model.provider === "minimax" || model.provider === "zai")
-            ) {
-              skipped.push({
-                model: id,
-                reason: "no text returned (provider returned empty content)",
-              });
-              logProgress(`${progressLabel}: skip (empty response)`);
-              break;
-            }
-            if (
-              ok.text.length === 0 &&
-              allowNotFoundSkip &&
-              (model.provider === "google-antigravity" || model.provider === "openai-codex")
+              (model.provider === "fireworks" ||
+                model.provider === "google-antigravity" ||
+                model.provider === "minimax" ||
+                model.provider === "openai-codex" ||
+                model.provider === "xai" ||
+                model.provider === "zai")
             ) {
               skipped.push({
                 model: id,
@@ -728,6 +1027,12 @@ describeLive("live models (profile keys)", () => {
               break;
             }
             expect(ok.text.length).toBeGreaterThan(0);
+            await runExtraTurnProbes({
+              model,
+              apiKey,
+              timeoutMs: perModelTimeoutMs,
+              progressLabel,
+            });
             logProgress(`${progressLabel}: done`);
             break;
           } catch (err) {
@@ -773,7 +1078,9 @@ describeLive("live models (profile keys)", () => {
             }
             if (
               allowNotFoundSkip &&
-              (model.provider === "minimax" || model.provider === "zai") &&
+              (model.provider === "minimax" ||
+                model.provider === "zai" ||
+                model.provider === "openrouter") &&
               isRateLimitErrorMessage(message)
             ) {
               skipped.push({ model: id, reason: message });
@@ -864,6 +1171,11 @@ describeLive("live models (profile keys)", () => {
               logProgress(`${progressLabel}: skip (thinking toggle unsupported)`);
               break;
             }
+            if (allowNotFoundSkip && isUnsupportedPlanErrorMessage(message)) {
+              skipped.push({ model: id, reason: message });
+              logProgress(`${progressLabel}: skip (plan unsupported)`);
+              break;
+            }
             if (
               allowNotFoundSkip &&
               model.provider === "ollama" &&
@@ -878,7 +1190,12 @@ describeLive("live models (profile keys)", () => {
             break;
           }
         }
-      }
+      });
+
+      await runTasksWithConcurrency({
+        tasks,
+        limit: LIVE_MODEL_CONCURRENCY,
+      });
 
       if (failures.length > 0) {
         const preview = formatFailurePreview(failures, 20);
@@ -889,6 +1206,6 @@ describeLive("live models (profile keys)", () => {
 
       void skipped;
     },
-    15 * 60 * 1000,
+    LIVE_TEST_TIMEOUT_MS,
   );
 });

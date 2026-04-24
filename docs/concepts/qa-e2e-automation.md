@@ -4,10 +4,8 @@ read_when:
   - Extending qa-lab or qa-channel
   - Adding repo-backed QA scenarios
   - Building higher-realism QA automation around the Gateway dashboard
-title: "QA E2E Automation"
+title: "QA E2E automation"
 ---
-
-# QA E2E Automation
 
 The private QA stack is meant to exercise OpenClaw in a more realistic,
 channel-shaped way than a single unit test can.
@@ -80,6 +78,27 @@ disposable server. It requires `OPENCLAW_QA_TELEGRAM_GROUP_ID`,
 private group. The SUT bot must have a Telegram username, and bot-to-bot
 observation works best when both bots have Bot-to-Bot Communication Mode
 enabled in `@BotFather`.
+The command exits non-zero when any scenario fails. Use `--allow-failures` when
+you want artifacts without a failing exit code.
+The Telegram report and summary include per-reply RTT from the driver message
+send request to the observed SUT reply, starting with the canary.
+
+For a transport-real Discord smoke lane, run:
+
+```bash
+pnpm openclaw qa discord
+```
+
+That lane targets one real private Discord guild channel with two bots: a
+driver bot controlled by the harness and a SUT bot started by the child
+OpenClaw gateway through the bundled Discord plugin. It requires
+`OPENCLAW_QA_DISCORD_GUILD_ID`, `OPENCLAW_QA_DISCORD_CHANNEL_ID`,
+`OPENCLAW_QA_DISCORD_DRIVER_BOT_TOKEN`, `OPENCLAW_QA_DISCORD_SUT_BOT_TOKEN`,
+and `OPENCLAW_QA_DISCORD_SUT_APPLICATION_ID` when using env credentials.
+The lane verifies channel mention handling and checks that the SUT bot has
+registered the native `/help` command with Discord.
+The command exits non-zero when any scenario fails. Use `--allow-failures` when
+you want artifacts without a failing exit code.
 
 Live transport lanes now share one smaller contract instead of each inventing
 their own scenario list shape:
@@ -87,10 +106,11 @@ their own scenario list shape:
 `qa-channel` remains the broad synthetic product-behavior suite and is not part
 of the live transport coverage matrix.
 
-| Lane     | Canary | Mention gating | Allowlist block | Top-level reply | Restart resume | Thread follow-up | Thread isolation | Reaction observation | Help command |
-| -------- | ------ | -------------- | --------------- | --------------- | -------------- | ---------------- | ---------------- | -------------------- | ------------ |
-| Matrix   | x      | x              | x               | x               | x              | x                | x                | x                    |              |
-| Telegram | x      |                |                 |                 |                |                  |                  |                      | x            |
+| Lane     | Canary | Mention gating | Allowlist block | Top-level reply | Restart resume | Thread follow-up | Thread isolation | Reaction observation | Help command | Native command registration |
+| -------- | ------ | -------------- | --------------- | --------------- | -------------- | ---------------- | ---------------- | -------------------- | ------------ | --------------------------- |
+| Matrix   | x      | x              | x               | x               | x              | x                | x                | x                    |              |                             |
+| Telegram | x      | x              |                 |                 |                |                  |                  |                      | x            |                             |
+| Discord  | x      | x              |                 |                 |                |                  |                  |                      |              | x                           |
 
 This keeps `qa-channel` as the broad product-behavior suite while Matrix,
 Telegram, and future live transports share one explicit transport-contract
@@ -107,9 +127,11 @@ inside the guest, runs `qa suite`, then copies the normal QA report and
 summary back into `.artifacts/qa-e2e/...` on the host.
 It reuses the same scenario-selection behavior as `qa suite` on the host.
 Host and Multipass suite runs execute multiple selected scenarios in parallel
-with isolated gateway workers by default, up to 64 workers or the selected
-scenario count. Use `--concurrency <count>` to tune the worker count, or
-`--concurrency 1` for serial execution.
+with isolated gateway workers by default. `qa-channel` defaults to concurrency
+4, capped by the selected scenario count. Use `--concurrency <count>` to tune
+the worker count, or `--concurrency 1` for serial execution.
+The command exits non-zero when any scenario fails. Use `--allow-failures` when
+you want artifacts without a failing exit code.
 Live runs forward the supported QA auth inputs that are practical for the
 guest: env-based provider keys, the QA live provider config path, and
 `CODEX_HOME` when present. Keep `--output-dir` under the repo root so the guest
@@ -120,7 +142,7 @@ can write back through the mounted workspace.
 Seed assets live in `qa/`:
 
 - `qa/scenarios/index.md`
-- `qa/scenarios/*.md`
+- `qa/scenarios/<theme>/*.md`
 
 These are intentionally in git so the QA plan is visible to both humans and the
 agent.
@@ -129,6 +151,7 @@ agent.
 the source of truth for one test run and should define:
 
 - scenario metadata
+- optional category, capability, lane, and risk metadata
 - docs and code refs
 - optional plugin requirements
 - optional gateway config patch
@@ -138,6 +161,10 @@ The reusable runtime surface that backs `qa-flow` is allowed to stay generic
 and cross-cutting. For example, markdown scenarios can combine transport-side
 helpers with browser-side helpers that drive the embedded Control UI through the
 Gateway `browser.request` seam without adding a special-case runner.
+
+Scenario files should be grouped by product capability rather than source tree
+folder. Keep scenario IDs stable when files move; use `docsRefs` and `codeRefs`
+for implementation traceability.
 
 The baseline list should stay broad enough to cover:
 
@@ -198,7 +225,7 @@ refs and write a judged Markdown report:
 
 ```bash
 pnpm openclaw qa character-eval \
-  --model openai/gpt-5.4,thinking=xhigh \
+  --model openai/gpt-5.4,thinking=medium,fast \
   --model openai/gpt-5.2,thinking=xhigh \
   --model openai/gpt-5,thinking=xhigh \
   --model anthropic/claude-opus-4-6,thinking=high \
@@ -218,13 +245,13 @@ scenarios should set the persona through `SOUL.md`, then run ordinary user turns
 such as chat, workspace help, and small file tasks. The candidate model should
 not be told that it is being evaluated. The command preserves each full
 transcript, records basic run stats, then asks the judge models in fast mode with
-`xhigh` reasoning to rank the runs by naturalness, vibe, and humor.
+`xhigh` reasoning where supported to rank the runs by naturalness, vibe, and humor.
 Use `--blind-judge-models` when comparing providers: the judge prompt still gets
 every transcript and run status, but candidate refs are replaced with neutral
 labels such as `candidate-01`; the report maps rankings back to real refs after
 parsing.
-Candidate runs default to `high` thinking, with `xhigh` for OpenAI models that
-support it. Override a specific candidate inline with
+Candidate runs default to `high` thinking, with `medium` for GPT-5.4 and `xhigh`
+for older OpenAI eval refs that support it. Override a specific candidate inline with
 `--model provider/model,thinking=<level>`. `--thinking <level>` still sets a
 global fallback, and the older `--model-thinking <provider/model=level>` form is
 kept for compatibility.

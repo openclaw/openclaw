@@ -1,3 +1,5 @@
+import { resolveOpenClawAgentDir } from "openclaw/plugin-sdk/provider-auth";
+import { applyCodexAppServerAuthProfile, bridgeCodexAppServerStartOptions } from "./auth-bridge.js";
 import { CodexAppServerClient } from "./client.js";
 import {
   codexAppServerStartOptionsKey,
@@ -25,36 +27,52 @@ function getSharedCodexAppServerClientState(): SharedCodexAppServerClientState {
 export async function getSharedCodexAppServerClient(options?: {
   startOptions?: CodexAppServerStartOptions;
   timeoutMs?: number;
+  authProfileId?: string;
 }): Promise<CodexAppServerClient> {
   const state = getSharedCodexAppServerClientState();
-  const startOptions = options?.startOptions ?? resolveCodexAppServerRuntimeOptions().start;
-  const key = codexAppServerStartOptionsKey(startOptions);
+  const startOptions = await bridgeCodexAppServerStartOptions({
+    startOptions: options?.startOptions ?? resolveCodexAppServerRuntimeOptions().start,
+    agentDir: resolveOpenClawAgentDir(),
+    authProfileId: options?.authProfileId,
+  });
+  const key = codexAppServerStartOptionsKey(startOptions, {
+    authProfileId: options?.authProfileId,
+  });
   if (state.key && state.key !== key) {
     clearSharedCodexAppServerClient();
   }
   state.key = key;
-  state.promise ??= (async () => {
-    const client = CodexAppServerClient.start(startOptions);
-    state.client = client;
-    client.addCloseHandler(clearSharedClientIfCurrent);
-    try {
-      await client.initialize();
-      return client;
-    } catch (error) {
-      // Startup failures happen before callers own the shared client, so close
-      // the child here instead of leaving a rejected daemon attached to stdio.
-      client.close();
-      throw error;
-    }
-  })();
+  const sharedPromise =
+    state.promise ??
+    (state.promise = (async () => {
+      const client = CodexAppServerClient.start(startOptions);
+      state.client = client;
+      client.addCloseHandler(clearSharedClientIfCurrent);
+      try {
+        await client.initialize();
+        await applyCodexAppServerAuthProfile({
+          client,
+          agentDir: resolveOpenClawAgentDir(),
+          authProfileId: options?.authProfileId,
+        });
+        return client;
+      } catch (error) {
+        // Startup failures happen before callers own the shared client, so close
+        // the child here instead of leaving a rejected daemon attached to stdio.
+        client.close();
+        throw error;
+      }
+    })());
   try {
     return await withTimeout(
-      state.promise,
+      sharedPromise,
       options?.timeoutMs ?? 0,
       "codex app-server initialize timed out",
     );
   } catch (error) {
-    clearSharedCodexAppServerClient();
+    if (state.promise === sharedPromise && state.key === key) {
+      clearSharedCodexAppServerClient();
+    }
     throw error;
   }
 }
@@ -62,16 +80,26 @@ export async function getSharedCodexAppServerClient(options?: {
 export async function createIsolatedCodexAppServerClient(options?: {
   startOptions?: CodexAppServerStartOptions;
   timeoutMs?: number;
+  authProfileId?: string;
 }): Promise<CodexAppServerClient> {
-  const startOptions = options?.startOptions ?? resolveCodexAppServerRuntimeOptions().start;
+  const startOptions = await bridgeCodexAppServerStartOptions({
+    startOptions: options?.startOptions ?? resolveCodexAppServerRuntimeOptions().start,
+    agentDir: resolveOpenClawAgentDir(),
+    authProfileId: options?.authProfileId,
+  });
   const client = CodexAppServerClient.start(startOptions);
   const initialize = client.initialize();
   try {
     await withTimeout(initialize, options?.timeoutMs ?? 0, "codex app-server initialize timed out");
+    await applyCodexAppServerAuthProfile({
+      client,
+      agentDir: resolveOpenClawAgentDir(),
+      authProfileId: options?.authProfileId,
+    });
     return client;
   } catch (error) {
     client.close();
-    await initialize.catch(() => undefined);
+    void initialize.catch(() => undefined);
     throw error;
   }
 }

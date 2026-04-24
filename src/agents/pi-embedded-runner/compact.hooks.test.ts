@@ -9,11 +9,13 @@ import {
   getMemorySearchManagerMock,
   hookRunner,
   loadCompactHooksHarness,
+  maybeCompactAgentHarnessSessionMock,
   registerProviderStreamForModelMock,
   resolveContextEngineMock,
   resolveEmbeddedAgentStreamFnMock,
   resolveMemorySearchConfigMock,
   resolveModelMock,
+  resolveSandboxContextMock,
   resolveSessionAgentIdMock,
   resetCompactHooksHarnessMocks,
   resetCompactSessionStateMocks,
@@ -210,6 +212,22 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     });
   });
 
+  it("uses sandboxSessionKey only for compaction sandbox resolution", async () => {
+    await compactEmbeddedPiSessionDirect({
+      sessionId: "session-1",
+      sessionKey: "agent:main:main",
+      sandboxSessionKey: "agent:main:telegram:default:direct:12345",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(resolveSandboxContextMock).toHaveBeenCalledWith({
+      config: undefined,
+      sessionKey: "agent:main:telegram:default:direct:12345",
+      workspaceDir: "/tmp/workspace",
+    });
+  });
+
   it("routes compaction through shared stream resolution and extra params", async () => {
     const resolvedStreamFn = vi.fn();
     resolveEmbeddedAgentStreamFnMock.mockReturnValue(resolvedStreamFn);
@@ -264,6 +282,8 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
         api: "responses",
       }),
       "/tmp/workspace",
+      undefined,
+      undefined,
     );
   });
 
@@ -818,6 +838,43 @@ describe("compactEmbeddedPiSession hooks (ownsCompaction engine)", () => {
           provider: "anthropic",
           model: "claude-opus-4-6",
           authProfileId: undefined,
+        }),
+      }),
+    );
+  });
+
+  it("passes resolved context-engine runtime context to harness compaction", async () => {
+    maybeCompactAgentHarnessSessionMock.mockResolvedValueOnce({
+      ok: true,
+      compacted: true,
+      result: {
+        summary: "harness",
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 100,
+      },
+    });
+
+    const result = await compactEmbeddedPiSession(
+      wrappedCompactionArgs({
+        provider: "openai-codex",
+        model: "gpt-5.4",
+        authProfileId: "openai:p1",
+        currentTokenCount: 333,
+      }),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(maybeCompactAgentHarnessSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contextEngine: expect.anything(),
+        contextTokenBudget: expect.any(Number),
+        contextEngineRuntimeContext: expect.objectContaining({
+          sessionKey: TEST_SESSION_KEY,
+          workspaceDir: TEST_WORKSPACE_DIR,
+          provider: "openai-codex",
+          model: "gpt-5.4",
+          authProfileId: "openai:p1",
+          currentTokenCount: 333,
         }),
       }),
     );

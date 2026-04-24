@@ -2,10 +2,9 @@
 summary: "Agent loop lifecycle, streams, and wait semantics"
 read_when:
   - You need an exact walkthrough of the agent loop or lifecycle events
-title: "Agent Loop"
+  - You are changing session queueing, transcript writes, or session write lock behavior
+title: "Agent loop"
 ---
-
-# Agent Loop (OpenClaw)
 
 An agentic loop is the full “real” run of an agent: intake → context assembly → model inference →
 tool execution → streaming replies → persistence. It’s the authoritative path that turns a message
@@ -48,13 +47,21 @@ wired end-to-end.
 - This prevents tool/session races and keeps session history consistent.
 - Messaging channels can choose queue modes (collect/steer/followup) that feed this lane system.
   See [Command Queue](/concepts/queue).
+- Transcript writes are also protected by a session write lock on the session file. The lock is
+  process-aware and file-based, so it catches writers that bypass the in-process queue or come from
+  another process.
+- Session write locks are non-reentrant by default. If a helper intentionally nests acquisition of
+  the same lock while preserving one logical writer, it must opt in explicitly with
+  `allowReentrant: true`.
 
 ## Session + workspace preparation
 
 - Workspace is resolved and created; sandboxed runs may redirect to a sandbox workspace root.
 - Skills are loaded (or reused from a snapshot) and injected into env and prompt.
 - Bootstrap/context files are resolved and injected into the system prompt report.
-- A session write lock is acquired; `SessionManager` is opened and prepared before streaming.
+- A session write lock is acquired; `SessionManager` is opened and prepared before streaming. Any
+  later transcript rewrite, compaction, or truncation path must take the same lock before opening or
+  mutating the transcript file.
 
 ## Prompt assembly + system prompt
 
@@ -89,7 +96,7 @@ These run inside the agent loop or gateway pipeline:
 - **`before_compaction` / `after_compaction`**: observe or annotate compaction cycles.
 - **`before_tool_call` / `after_tool_call`**: intercept tool params/results.
 - **`before_install`**: inspect built-in scan findings and optionally block skill or plugin installs.
-- **`tool_result_persist`**: synchronously transform tool results before they are written to the session transcript.
+- **`tool_result_persist`**: synchronously transform tool results before they are written to an OpenClaw-owned session transcript.
 - **`message_received` / `message_sending` / `message_sent`**: inbound + outbound message hooks.
 - **`session_start` / `session_end`**: session lifecycle boundaries.
 - **`gateway_start` / `gateway_stop`**: gateway lifecycle events.
@@ -103,7 +110,11 @@ Hook decision rules for outbound/tool guards:
 - `message_sending`: `{ cancel: true }` is terminal and stops lower-priority handlers.
 - `message_sending`: `{ cancel: false }` is a no-op and does not clear a prior cancel.
 
-See [Plugin hooks](/plugins/architecture#provider-runtime-hooks) for the hook API and registration details.
+See [Plugin hooks](/plugins/hooks) for the hook API and registration details.
+
+Harnesses may adapt these hooks differently. The Codex app-server harness keeps
+OpenClaw plugin hooks as the compatibility contract for documented mirrored
+surfaces, while Codex native hooks remain a separate lower-level Codex mechanism.
 
 ## Streaming + partial replies
 

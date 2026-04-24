@@ -6,7 +6,7 @@ import {
   resolveStateDir as resolveStateDirFromPaths,
 } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
+import { loadOrCreateDeviceIdentity, type DeviceIdentity } from "../infra/device-identity.js";
 import { loadGatewayTlsRuntime } from "../infra/tls/gateway.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
@@ -54,6 +54,7 @@ type CallGatewayBaseOptions = {
   clientVersion?: string;
   platform?: string;
   mode?: GatewayClientMode;
+  deviceIdentity?: DeviceIdentity | null;
   instanceId?: string;
   minProtocol?: number;
   maxProtocol?: number;
@@ -90,6 +91,14 @@ const defaultGatewayCallDeps = {
 const gatewayCallDeps = {
   ...defaultGatewayCallDeps,
 };
+
+async function stopGatewayClient(client: GatewayClient): Promise<void> {
+  try {
+    await client.stopAndWait({ timeoutMs: 1_000 });
+  } catch {
+    client.stop();
+  }
+}
 
 function resolveGatewayClientDisplayName(opts: CallGatewayBaseOptions): string | undefined {
   if (opts.clientDisplayName) {
@@ -405,7 +414,17 @@ function formatGatewayCloseError(
   const hint =
     code === 1006 ? "abnormal closure (no close frame)" : code === 1000 ? "normal closure" : "";
   const suffix = hint ? ` ${hint}` : "";
-  return `gateway closed (${code}${suffix}): ${reasonText}\n${connectionDetails.message}`;
+  let message = `gateway closed (${code}${suffix}): ${reasonText}\n${connectionDetails.message}`;
+  // Add troubleshooting hints for common issues
+  if (code === 1006) {
+    message +=
+      "\n\nPossible causes:" +
+      "\n- Gateway not yet ready to accept connections (retry after a moment)" +
+      "\n- TLS mismatch (connecting with ws:// to a wss:// gateway, or vice versa)" +
+      "\n- Gateway crashed or was terminated unexpectedly" +
+      "\nRun `openclaw doctor` for diagnostics.";
+  }
+  return message;
 }
 
 function formatGatewayTimeoutError(
@@ -471,11 +490,13 @@ async function executeGatewayRequestWithScopes<T>(params: {
       }
       settled = true;
       clearTimeout(timer);
-      if (err) {
-        reject(err);
-      } else {
-        resolve(value as T);
-      }
+      void stopGatewayClient(client).finally(() => {
+        if (err) {
+          reject(err);
+        } else {
+          resolve(value as T);
+        }
+      });
     };
 
     const client = gatewayCallDeps.createGatewayClient({
@@ -491,7 +512,10 @@ async function executeGatewayRequestWithScopes<T>(params: {
       mode: opts.mode ?? GATEWAY_CLIENT_MODES.CLI,
       role: "operator",
       scopes,
-      deviceIdentity: resolveDeviceIdentityForGatewayCall(),
+      deviceIdentity:
+        opts.deviceIdentity === undefined
+          ? resolveDeviceIdentityForGatewayCall()
+          : opts.deviceIdentity,
       minProtocol: opts.minProtocol ?? PROTOCOL_VERSION,
       maxProtocol: opts.maxProtocol ?? PROTOCOL_VERSION,
       onHelloOk: async (hello) => {
@@ -507,10 +531,8 @@ async function executeGatewayRequestWithScopes<T>(params: {
           });
           ignoreClose = true;
           stop(undefined, result);
-          client.stop();
         } catch (err) {
           ignoreClose = true;
-          client.stop();
           stop(err as Error);
         }
       },
@@ -519,14 +541,12 @@ async function executeGatewayRequestWithScopes<T>(params: {
           return;
         }
         ignoreClose = true;
-        client.stop();
         stop(new Error(formatGatewayCloseError(code, reason, params.connectionDetails)));
       },
     });
 
     const timer = setTimeout(() => {
       ignoreClose = true;
-      client.stop();
       stop(new Error(formatGatewayTimeoutError(timeoutMs, params.connectionDetails)));
     }, safeTimerTimeoutMs);
 

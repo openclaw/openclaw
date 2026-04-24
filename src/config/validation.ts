@@ -51,6 +51,18 @@ type AllowedValuesCollection = {
 };
 type JsonSchemaLike = Record<string, unknown>;
 
+function stripDeprecatedValidationKeys(raw: unknown): unknown {
+  if (!isRecord(raw) || !isRecord(raw.commands) || !Object.hasOwn(raw.commands, "modelsWrite")) {
+    return raw;
+  }
+  const commands = { ...raw.commands };
+  delete commands.modelsWrite;
+  return {
+    ...raw,
+    commands,
+  };
+}
+
 const CUSTOM_EXPECTED_ONE_OF_RE = /expected one of ((?:"[^"]+"(?:\|"?[^"]+"?)*)+)/i;
 const SECRETREF_POLICY_DOC_URL = "https://docs.openclaw.ai/reference/secretref-credential-surface";
 const bundledChannelSchemaById = new Map<string, unknown>(
@@ -576,17 +588,23 @@ export function validateConfigObjectRaw(
     touchedPaths?: ReadonlyArray<ReadonlyArray<string>>;
   },
 ): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
-  const policyIssues = collectUnsupportedSecretRefPolicyIssues(raw);
+  const normalizedRaw = stripDeprecatedValidationKeys(raw);
+  const policyIssues = collectUnsupportedSecretRefPolicyIssues(normalizedRaw);
   const doctorPluginIds = opts?.touchedPaths
     ? collectRelevantDoctorPluginIdsForTouchedPaths({
-        raw,
+        raw: normalizedRaw,
         touchedPaths: opts.touchedPaths,
       })
-    : collectRelevantDoctorPluginIds(raw);
+    : collectRelevantDoctorPluginIds(normalizedRaw);
   const extraLegacyRules = listPluginDoctorLegacyConfigRules({
     pluginIds: doctorPluginIds,
   });
-  const legacyIssues = findLegacyConfigIssues(raw, raw, extraLegacyRules, opts?.touchedPaths);
+  const legacyIssues = findLegacyConfigIssues(
+    normalizedRaw,
+    normalizedRaw,
+    extraLegacyRules,
+    opts?.touchedPaths,
+  );
   if (legacyIssues.length > 0) {
     return {
       ok: false,
@@ -596,7 +614,7 @@ export function validateConfigObjectRaw(
       })),
     };
   }
-  const validated = OpenClawSchema.safeParse(raw);
+  const validated = OpenClawSchema.safeParse(normalizedRaw);
   if (!validated.success) {
     const schemaIssues = validated.error.issues.map((issue) => mapZodIssueToConfigIssue(issue));
     return {
