@@ -27,7 +27,7 @@ env:
 jobs:
   sandbox-common-smoke:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
-    runs-on: [self-hosted, Linux, X64, dragonsbreath, docker, kcc, kcc-medium]
+    runs-on: [self-hosted, Linux, X64, dragonsbreath, docker, kcc, kcc-small]
     steps:
       - name: Checkout
         uses: actions/checkout@v6

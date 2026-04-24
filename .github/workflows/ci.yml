@@ -23,7 +23,7 @@ jobs:
     permissions:
       contents: read
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && fromJSON('["self-hosted","Linux","X64","dragonsbreath","docker","kcc","kcc-medium"]') || 'ubuntu-24.04' }}
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && fromJSON('["self-hosted","Linux","X64","dragonsbreath","docker","kcc","kcc-small"]') || 'ubuntu-24.04' }}
     timeout-minutes: 20
     outputs:
       docs_only: ${{ steps.manifest.outputs.docs_only }}
@@ -323,7 +323,7 @@ jobs:
     permissions:
       contents: read
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && fromJSON('["self-hosted","Linux","X64","dragonsbreath","docker","kcc","kcc-medium"]') || 'ubuntu-24.04' }}
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && fromJSON('["self-hosted","Linux","X64","dragonsbreath","docker","kcc","kcc-small"]') || 'ubuntu-24.04' }}
     timeout-minutes: 20
     env:
       PRE_COMMIT_HOME: .cache/pre-commit-security-fast
@@ -403,7 +403,7 @@ jobs:
     permissions:
       contents: read
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && fromJSON('["self-hosted","Linux","X64","dragonsbreath","docker","kcc","kcc-medium"]') || 'ubuntu-24.04' }}
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && fromJSON('["self-hosted","Linux","X64","dragonsbreath","docker","kcc","kcc-small"]') || 'ubuntu-24.04' }}
     timeout-minutes: 10
     steps:
       - name: Checkout
@@ -427,7 +427,7 @@ jobs:
     permissions: {}
     needs: [security-scm-fast, security-dependency-audit]
     if: always() && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && fromJSON('["self-hosted","Linux","X64","dragonsbreath","docker","kcc","kcc-medium"]') || 'ubuntu-24.04' }}
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && fromJSON('["self-hosted","Linux","X64","dragonsbreath","docker","kcc","kcc-small"]') || 'ubuntu-24.04' }}
     timeout-minutes: 5
     steps:
       - name: Verify fast security jobs
@@ -460,7 +460,7 @@ jobs:
       contents: read
     needs: [preflight]
     if: needs.preflight.outputs.run_build_artifacts == 'true'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && fromJSON('["self-hosted","Linux","X64","dragonsbreath","docker","kcc","kcc-medium"]') || 'ubuntu-24.04' }}
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && fromJSON('["self-hosted","Linux","X64","dragonsbreath","docker","kcc","kcc-large"]') || 'ubuntu-24.04' }}
     timeout-minutes: 20
     steps:
       - name: Checkout
@@ -729,7 +729,7 @@ jobs:
     name: checks-fast-contracts-channels
     needs: [preflight, checks-fast-channel-contracts-shard]
     if: always() && needs.preflight.outputs.run_checks_fast == 'true'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && fromJSON('["self-hosted","Linux","X64","dragonsbreath","docker","kcc","kcc-medium"]') || 'ubuntu-24.04' }}
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && fromJSON('["self-hosted","Linux","X64","dragonsbreath","docker","kcc","kcc-small"]') || 'ubuntu-24.04' }}
     timeout-minutes: 5
     steps:
       - name: Verify channel contract shards
@@ -1306,7 +1306,7 @@ jobs:
         checks-node-core-test-dist-shard,
       ]
     if: always() && needs.preflight.outputs.run_checks == 'true'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && fromJSON('["self-hosted","Linux","X64","dragonsbreath","docker","kcc","kcc-medium"]') || 'ubuntu-24.04' }}
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && fromJSON('["self-hosted","Linux","X64","dragonsbreath","docker","kcc","kcc-small"]') || 'ubuntu-24.04' }}
     timeout-minutes: 5
     steps:
       - name: Verify node test shards
@@ -1517,7 +1517,7 @@ jobs:
     name: "check"
     needs: [preflight, check-shard]
     if: always() && needs.preflight.outputs.run_check == 'true'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && fromJSON('["self-hosted","Linux","X64","dragonsbreath","docker","kcc","kcc-medium"]') || 'ubuntu-24.04' }}
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && fromJSON('["self-hosted","Linux","X64","dragonsbreath","docker","kcc","kcc-small"]') || 'ubuntu-24.04' }}
     timeout-minutes: 5
     steps:
       - name: Verify check shards
@@ -1697,7 +1697,7 @@ jobs:
     name: "check-additional"
     needs: [preflight, check-additional-shard]
     if: always() && needs.preflight.outputs.run_check_additional == 'true'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && fromJSON('["self-hosted","Linux","X64","dragonsbreath","docker","kcc","kcc-medium"]') || 'ubuntu-24.04' }}
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && fromJSON('["self-hosted","Linux","X64","dragonsbreath","docker","kcc","kcc-small"]') || 'ubuntu-24.04' }}
     timeout-minutes: 5
     steps:
       - name: Verify additional check shards
@@ -1715,7 +1715,7 @@ jobs:
     name: "build-smoke"
     needs: [preflight, build-artifacts]
     if: always() && needs.preflight.outputs.run_build_smoke == 'true' && (github.event_name != 'push' || needs.build-artifacts.result == 'success')
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && fromJSON('["self-hosted","Linux","X64","dragonsbreath","docker","kcc","kcc-medium"]') || 'ubuntu-24.04' }}
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && fromJSON('["self-hosted","Linux","X64","dragonsbreath","docker","kcc","kcc-large"]') || 'ubuntu-24.04' }}
     timeout-minutes: 20
     steps:
       - name: Checkout

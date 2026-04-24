@@ -19,7 +19,7 @@ env:
 jobs:
   no-tabs:
     if: github.event_name != 'workflow_dispatch'
-    runs-on: [self-hosted, Linux, X64, dragonsbreath, docker, kcc, kcc-medium]
+    runs-on: [self-hosted, Linux, X64, dragonsbreath, docker, kcc, kcc-small]
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -51,7 +51,7 @@ jobs:
 
   actionlint:
     if: github.event_name != 'workflow_dispatch'
-    runs-on: [self-hosted, Linux, X64, dragonsbreath, docker, kcc, kcc-medium]
+    runs-on: [self-hosted, Linux, X64, dragonsbreath, docker, kcc, kcc-small]
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -83,7 +83,7 @@ jobs:
 
   generated-doc-baselines:
     if: github.event_name == 'workflow_dispatch'
-    runs-on: [self-hosted, Linux, X64, dragonsbreath, docker, kcc, kcc-medium]
+    runs-on: [self-hosted, Linux, X64, dragonsbreath, docker, kcc, kcc-small]
     steps:
       - name: Checkout
         uses: actions/checkout@v6

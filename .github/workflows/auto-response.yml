@@ -22,7 +22,7 @@ jobs:
     permissions:
       issues: write
       pull-requests: write
-    runs-on: [self-hosted, Linux, X64, dragonsbreath, docker, kcc, kcc-medium]
+    runs-on: [self-hosted, Linux, X64, dragonsbreath, docker, kcc, kcc-small]
     steps:
       - uses: actions/create-github-app-token@v2
         id: app-token
