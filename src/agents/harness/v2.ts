@@ -36,8 +36,8 @@ export type AgentHarnessV2ToolCall = {
 };
 
 export type AgentHarnessV2CleanupParams = {
-  prepared?: AgentHarnessV2PreparedRun | undefined;
-  session?: AgentHarnessV2Session | undefined;
+  prepared?: AgentHarnessV2PreparedRun;
+  session?: AgentHarnessV2Session;
   result?: AgentHarnessAttemptResult;
   error?: unknown;
 };
@@ -101,16 +101,22 @@ export async function runAgentHarnessV2LifecycleAttempt(
 ): Promise<AgentHarnessAttemptResult> {
   let prepared: AgentHarnessV2PreparedRun | undefined;
   let session: AgentHarnessV2Session | undefined;
+  let rawResult: AgentHarnessAttemptResult | undefined;
   let result: AgentHarnessAttemptResult;
 
   try {
     prepared = await harness.prepare(params);
     session = await harness.start(prepared);
-    const rawResult = await harness.send(session);
+    rawResult = await harness.send(session);
     result = await harness.resolveOutcome(session, rawResult);
   } catch (error) {
     try {
-      await harness.cleanup({ prepared, session, error });
+      await harness.cleanup({
+        prepared,
+        session,
+        error,
+        ...(rawResult === undefined ? {} : { result: rawResult }),
+      });
     } catch (cleanupError) {
       // Preserve the user-visible harness failure. Cleanup errors after a
       // failed lifecycle stage must not mask the actionable runtime error.

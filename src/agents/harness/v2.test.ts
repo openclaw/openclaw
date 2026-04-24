@@ -170,6 +170,42 @@ describe("AgentHarness V2 compatibility adapter", () => {
     });
   });
 
+  it("passes raw send results to cleanup when outcome resolution fails", async () => {
+    const params = createAttemptParams();
+    const rawResult = createAttemptResult();
+    const outcomeError = new Error("outcome classification failed");
+    const cleanup = vi.fn(async () => {});
+    const harness: AgentHarnessV2 = {
+      id: "native-v2",
+      label: "Native V2",
+      supports: () => ({ supported: true }),
+      prepare: async () => ({
+        harnessId: "native-v2",
+        label: "Native V2",
+        params,
+        lifecycleState: "prepared",
+      }),
+      start: async (prepared) => ({ ...prepared, lifecycleState: "started" }),
+      send: async () => rawResult,
+      resolveOutcome: async () => {
+        throw outcomeError;
+      },
+      cleanup,
+    };
+
+    await expect(runAgentHarnessV2LifecycleAttempt(harness, params)).rejects.toThrow(
+      "outcome classification failed",
+    );
+    expect(cleanup).toHaveBeenCalledWith(
+      expect.objectContaining({
+        error: outcomeError,
+        result: rawResult,
+        prepared: expect.objectContaining({ lifecycleState: "prepared" }),
+        session: expect.objectContaining({ lifecycleState: "started" }),
+      }),
+    );
+  });
+
   it("surfaces cleanup failures after successful outcomes", async () => {
     const params = createAttemptParams();
     const harness: AgentHarnessV2 = {
