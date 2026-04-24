@@ -82,6 +82,7 @@ function setup(
   options: {
     nodesListResult?: NodeListResult;
     nodesInvokeResult?: unknown;
+    browserActResult?: Record<string, unknown>;
     nodesInvokeHandler?: (params: {
       nodeId: string;
       command: string;
@@ -134,12 +135,14 @@ function setup(
             result: {
               ok: true,
               targetId: proxy.body?.targetId ?? "tab-1",
-              result: JSON.stringify({
-                inCall: true,
-                micMuted: false,
-                title: "Meet call",
-                url: "https://meet.google.com/abc-defg-hij",
-              }),
+              result: JSON.stringify(
+                options.browserActResult ?? {
+                  inCall: true,
+                  micMuted: false,
+                  title: "Meet call",
+                  url: "https://meet.google.com/abc-defg-hij",
+                },
+              ),
             },
           },
         };
@@ -704,6 +707,61 @@ describe("google-meet plugin", () => {
       }),
     );
     expect(result.details).toMatchObject({ createdSession: true });
+  });
+
+  it("reports manual action when the browser profile needs Google login", async () => {
+    const { tools } = setup(
+      {
+        defaultTransport: "chrome-node",
+      },
+      {
+        browserActResult: {
+          inCall: false,
+          manualActionRequired: true,
+          manualActionReason: "google-login-required",
+          manualActionMessage:
+            "Sign in to Google in the OpenClaw browser profile, then retry the Meet join.",
+          title: "Sign in - Google Accounts",
+          url: "https://accounts.google.com/signin",
+        },
+        nodesInvokeResult: {
+          payload: {
+            launched: true,
+          },
+        },
+      },
+    );
+    const tool = tools[0] as {
+      execute: (
+        id: string,
+        params: unknown,
+      ) => Promise<{
+        details: {
+          manualActionRequired?: boolean;
+          manualActionReason?: string;
+          session?: { chrome?: { health?: { manualActionRequired?: boolean } } };
+        };
+      }>;
+    };
+
+    const result = await tool.execute("id", {
+      action: "test_speech",
+      url: "https://meet.google.com/abc-defg-hij",
+      message: "Say exactly: hello.",
+    });
+
+    expect(result.details).toMatchObject({
+      manualActionRequired: true,
+      manualActionReason: "google-login-required",
+      session: {
+        chrome: {
+          health: {
+            manualActionRequired: true,
+            manualActionReason: "google-login-required",
+          },
+        },
+      },
+    });
   });
 
   it("explains when chrome-node has no capable paired node", async () => {

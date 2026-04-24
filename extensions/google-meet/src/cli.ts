@@ -177,7 +177,10 @@ export function registerGoogleMeetCli(params: {
     .command("join")
     .argument("[url]", "Explicit https://meet.google.com/... URL")
     .option("--transport <transport>", "Transport: chrome, chrome-node, or twilio")
-    .option("--mode <mode>", "Mode: realtime or transcribe")
+    .option(
+      "--mode <mode>",
+      "Mode: realtime for live talk-back, transcribe to join without the realtime voice bridge",
+    )
     .option("--message <text>", "Realtime speech to trigger after join")
     .option("--dial-in-number <phone>", "Meet dial-in number for Twilio transport")
     .option("--pin <pin>", "Meet phone PIN; # is appended if omitted")
@@ -200,7 +203,10 @@ export function registerGoogleMeetCli(params: {
     .command("test-speech")
     .argument("[url]", "Explicit https://meet.google.com/... URL")
     .option("--transport <transport>", "Transport: chrome, chrome-node, or twilio")
-    .option("--mode <mode>", "Mode: realtime or transcribe")
+    .option(
+      "--mode <mode>",
+      "Mode: realtime for live talk-back, transcribe to join without the realtime voice bridge",
+    )
     .option(
       "--message <text>",
       "Realtime speech to trigger",

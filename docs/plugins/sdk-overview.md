@@ -17,6 +17,7 @@ reference for **what to import** and **what you can register**.
 - First plugin? Start with [Building plugins](/plugins/building-plugins).
 - Channel plugin? See [Channel plugins](/plugins/sdk-channel-plugins).
 - Provider plugin? See [Provider plugins](/plugins/sdk-provider-plugins).
+- Tool or lifecycle hook plugin? See [Plugin hooks](/plugins/hooks).
   </Tip>
 
 ## Import convention
@@ -228,6 +229,9 @@ AI CLI backend such as `codex-cli`.
 | -------------------------------------------- | ----------------------------- |
 | `api.on(hookName, handler, opts?)`           | Typed lifecycle hook          |
 | `api.onConversationBindingResolved(handler)` | Conversation binding callback |
+
+See [Plugin hooks](/plugins/hooks) for examples, common hook names, and guard
+semantics.
 
 ### Hook decision semantics
 
