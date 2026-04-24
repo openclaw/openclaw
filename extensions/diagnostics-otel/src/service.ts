@@ -1,5 +1,11 @@
-import { metrics, trace, SpanStatusCode } from "@opentelemetry/api";
-import type { SeverityNumber } from "@opentelemetry/api-logs";
+import {
+  context as otelContextApi,
+  metrics,
+  trace,
+  SpanStatusCode,
+  TraceFlags,
+} from "@opentelemetry/api";
+import type { LogRecord, SeverityNumber } from "@opentelemetry/api-logs";
 import { OTLPLogExporter } from "@opentelemetry/exporter-logs-otlp-proto";
 import { OTLPMetricExporter } from "@opentelemetry/exporter-metrics-otlp-proto";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-proto";
@@ -9,8 +15,19 @@ import { PeriodicExportingMetricReader } from "@opentelemetry/sdk-metrics";
 import { NodeSDK } from "@opentelemetry/sdk-node";
 import { ParentBasedSampler, TraceIdRatioBasedSampler } from "@opentelemetry/sdk-trace-base";
 import { ATTR_SERVICE_NAME } from "@opentelemetry/semantic-conventions";
-import type { DiagnosticEventPayload, OpenClawPluginService } from "../api.js";
-import { onDiagnosticEvent, redactSensitiveText, registerLogTransport } from "../api.js";
+import type {
+  DiagnosticEventPayload,
+  DiagnosticTraceContext,
+  OpenClawPluginService,
+} from "../api.js";
+import {
+  isValidDiagnosticSpanId,
+  isValidDiagnosticTraceFlags,
+  isValidDiagnosticTraceId,
+  onDiagnosticEvent,
+  redactSensitiveText,
+  registerLogTransport,
+} from "../api.js";
 
 const DEFAULT_SERVICE_NAME = "openclaw";
 
@@ -60,6 +77,83 @@ function redactOtelAttributes(attributes: Record<string, string | number | boole
     redactedAttributes[key] = typeof value === "string" ? redactSensitiveText(value) : value;
   }
   return redactedAttributes;
+}
+
+function normalizeTraceContext(value: unknown): DiagnosticTraceContext | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const candidate = value as Partial<DiagnosticTraceContext>;
+  if (!isValidDiagnosticTraceId(candidate.traceId)) {
+    return undefined;
+  }
+  if (candidate.spanId !== undefined && !isValidDiagnosticSpanId(candidate.spanId)) {
+    return undefined;
+  }
+  if (candidate.parentSpanId !== undefined && !isValidDiagnosticSpanId(candidate.parentSpanId)) {
+    return undefined;
+  }
+  if (candidate.traceFlags !== undefined && !isValidDiagnosticTraceFlags(candidate.traceFlags)) {
+    return undefined;
+  }
+  return {
+    traceId: candidate.traceId,
+    ...(candidate.spanId ? { spanId: candidate.spanId } : {}),
+    ...(candidate.parentSpanId ? { parentSpanId: candidate.parentSpanId } : {}),
+    ...(candidate.traceFlags ? { traceFlags: candidate.traceFlags } : {}),
+  };
+}
+
+function extractTraceContext(value: unknown): DiagnosticTraceContext | undefined {
+  const direct = normalizeTraceContext(value);
+  if (direct) {
+    return direct;
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  return normalizeTraceContext((value as { trace?: unknown }).trace);
+}
+
+function findLogTraceContext(
+  bindings: Record<string, unknown> | undefined,
+  numericArgs: unknown[],
+): DiagnosticTraceContext | undefined {
+  const fromBindings = extractTraceContext(bindings);
+  if (fromBindings) {
+    return fromBindings;
+  }
+  for (const arg of numericArgs) {
+    const fromArg = extractTraceContext(arg);
+    if (fromArg) {
+      return fromArg;
+    }
+  }
+  return undefined;
+}
+
+function traceFlagsToOtel(traceFlags: string | undefined): TraceFlags {
+  const parsed = Number.parseInt(traceFlags ?? "00", 16);
+  return (parsed & TraceFlags.SAMPLED) !== 0 ? TraceFlags.SAMPLED : TraceFlags.NONE;
+}
+
+function addTraceAttributes(
+  attributes: Record<string, string | number | boolean>,
+  traceContext: DiagnosticTraceContext | undefined,
+): void {
+  if (!traceContext) {
+    return;
+  }
+  attributes["openclaw.traceId"] = traceContext.traceId;
+  if (traceContext.spanId) {
+    attributes["openclaw.spanId"] = traceContext.spanId;
+  }
+  if (traceContext.parentSpanId) {
+    attributes["openclaw.parentSpanId"] = traceContext.parentSpanId;
+  }
+  if (traceContext.traceFlags) {
+    attributes["openclaw.traceFlags"] = traceContext.traceFlags;
+  }
 }
 
 export function createDiagnosticsOtelService(): OpenClawPluginService {
@@ -294,6 +388,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
                 // ignore malformed json bindings
               }
             }
+            const traceContext = findLogTraceContext(bindings, numericArgs);
 
             let message = "";
             if (numericArgs.length > 0 && typeof numericArgs[numericArgs.length - 1] === "string") {
@@ -343,15 +438,25 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
             if (meta?.path?.filePathWithLine) {
               attributes["openclaw.code.location"] = meta.path.filePathWithLine;
             }
+            addTraceAttributes(attributes, traceContext);
 
             // OTLP can leave the host boundary, so redact string fields before export.
-            otelLogger.emit({
+            const logRecord: LogRecord = {
               body: redactSensitiveText(message),
               severityText: logLevelName,
               severityNumber,
               attributes: redactOtelAttributes(attributes),
               timestamp: meta?.date ?? new Date(),
-            });
+            };
+            if (traceContext?.spanId) {
+              logRecord.context = trace.setSpanContext(otelContextApi.active(), {
+                traceId: traceContext.traceId,
+                spanId: traceContext.spanId,
+                traceFlags: traceFlagsToOtel(traceContext.traceFlags),
+                isRemote: true,
+              });
+            }
+            otelLogger.emit(logRecord);
           } catch (err) {
             ctx.logger.error(`diagnostics-otel: log transport failed: ${formatError(err)}`);
           }

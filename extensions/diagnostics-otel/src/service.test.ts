@@ -10,6 +10,7 @@ const telemetryState = vi.hoisted(() => {
       end: vi.fn(),
       setStatus: vi.fn(),
     })),
+    setSpanContext: vi.fn((_ctx: unknown, spanContext: unknown) => ({ spanContext })),
   };
   const meter = {
     createCounter: vi.fn((name: string) => {
@@ -33,11 +34,19 @@ const logShutdown = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const traceExporterCtor = vi.hoisted(() => vi.fn());
 
 vi.mock("@opentelemetry/api", () => ({
+  context: {
+    active: () => ({}),
+  },
   metrics: {
     getMeter: () => telemetryState.meter,
   },
   trace: {
     getTracer: () => telemetryState.tracer,
+    setSpanContext: telemetryState.tracer.setSpanContext,
+  },
+  TraceFlags: {
+    NONE: 0,
+    SAMPLED: 1,
   },
   SpanStatusCode: {
     ERROR: 2,
@@ -110,6 +119,8 @@ import { createDiagnosticsOtelService } from "./service.js";
 const OTEL_TEST_STATE_DIR = "/tmp/openclaw-diagnostics-otel-test";
 const OTEL_TEST_ENDPOINT = "http://otel-collector:4318";
 const OTEL_TEST_PROTOCOL = "http/protobuf";
+const TRACE_ID = "4bf92f3577b34da6a3ce929d0e0e4736";
+const SPAN_ID = "00f067aa0ba902b7";
 
 function createLogger() {
   return {
@@ -181,6 +192,7 @@ describe("diagnostics-otel service", () => {
     telemetryState.counters.clear();
     telemetryState.histograms.clear();
     telemetryState.tracer.startSpan.mockClear();
+    telemetryState.tracer.setSpanContext.mockClear();
     telemetryState.meter.createCounter.mockClear();
     telemetryState.meter.createHistogram.mockClear();
     sdkStart.mockClear();
@@ -334,6 +346,42 @@ describe("diagnostics-otel service", () => {
     if (typeof tokenAttr === "string") {
       expect(tokenAttr).toContain("…");
     }
+  });
+
+  test("attaches diagnostic trace context to exported logs", async () => {
+    const emitCall = await emitAndCaptureLog({
+      0: '{"subsystem":"diagnostic"}',
+      1: {
+        trace: {
+          traceId: TRACE_ID,
+          spanId: SPAN_ID,
+          traceFlags: "01",
+        },
+      },
+      2: "traceable log",
+      _meta: { logLevelName: "INFO", date: new Date() },
+    });
+
+    expect(emitCall?.attributes).toMatchObject({
+      "openclaw.traceId": TRACE_ID,
+      "openclaw.spanId": SPAN_ID,
+      "openclaw.traceFlags": "01",
+    });
+    expect(telemetryState.tracer.setSpanContext).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        traceId: TRACE_ID,
+        spanId: SPAN_ID,
+        traceFlags: 1,
+        isRemote: true,
+      }),
+    );
+    expect(emitCall?.context).toEqual({
+      spanContext: expect.objectContaining({
+        traceId: TRACE_ID,
+        spanId: SPAN_ID,
+      }),
+    });
   });
 
   test("redacts sensitive reason in session.state metric attributes", async () => {
