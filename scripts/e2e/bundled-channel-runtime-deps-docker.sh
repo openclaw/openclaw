@@ -15,6 +15,7 @@ RUN_ROOT_OWNED_SCENARIO="${OPENCLAW_BUNDLED_CHANNEL_ROOT_OWNED_SCENARIO:-1}"
 RUN_SETUP_ENTRY_SCENARIO="${OPENCLAW_BUNDLED_CHANNEL_SETUP_ENTRY_SCENARIO:-1}"
 RUN_LOAD_FAILURE_SCENARIO="${OPENCLAW_BUNDLED_CHANNEL_LOAD_FAILURE_SCENARIO:-1}"
 RUN_DISABLED_CONFIG_SCENARIO="${OPENCLAW_BUNDLED_CHANNEL_DISABLED_CONFIG_SCENARIO:-1}"
+CHANNEL_ONLY="${OPENCLAW_BUNDLED_CHANNEL_ONLY:-}"
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" bundled-channel-deps "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "$DOCKER_TARGET"
 
@@ -285,10 +286,14 @@ stop_gateway() {
 }
 
 wait_for_gateway_health() {
+  local log_file="${1:-}"
   if [ -n "${gateway_pid:-}" ] && kill -0 "$gateway_pid" 2>/dev/null; then
     return 0
   fi
   echo "gateway process exited after ready marker" >&2
+  if [ -n "$log_file" ]; then
+    cat "$log_file" >&2
+  fi
   return 1
 }
 
@@ -403,14 +408,14 @@ assert_no_install_stage() {
 echo "Starting baseline gateway with OpenAI configured..."
 write_config baseline
 start_gateway "/tmp/openclaw-$CHANNEL-baseline.log" 1
-wait_for_gateway_health
+wait_for_gateway_health "/tmp/openclaw-$CHANNEL-baseline.log"
 stop_gateway
 assert_no_dep_sentinel "$CHANNEL" "$DEP_SENTINEL"
 
 echo "Enabling $CHANNEL by config edit, then restarting gateway..."
 write_config "$CHANNEL"
 start_gateway "/tmp/openclaw-$CHANNEL-first.log"
-wait_for_gateway_health
+wait_for_gateway_health "/tmp/openclaw-$CHANNEL-first.log"
 assert_installed_once "/tmp/openclaw-$CHANNEL-first.log" "$CHANNEL" "$DEP_SENTINEL"
 assert_dep_sentinel "$CHANNEL" "$DEP_SENTINEL"
 assert_no_install_stage "$CHANNEL"
@@ -419,7 +424,7 @@ stop_gateway
 
 echo "Restarting gateway again; $CHANNEL deps must stay installed..."
 start_gateway "/tmp/openclaw-$CHANNEL-second.log"
-wait_for_gateway_health
+wait_for_gateway_health "/tmp/openclaw-$CHANNEL-second.log"
 assert_not_installed "/tmp/openclaw-$CHANNEL-second.log" "$CHANNEL"
 assert_no_install_stage "$CHANNEL"
 assert_channel_status "$CHANNEL"
@@ -1485,7 +1490,7 @@ EOF
 }
 
 if [ "$RUN_CHANNEL_SCENARIOS" != "0" ]; then
-  IFS=',' read -r -a CHANNEL_SCENARIOS <<<"${OPENCLAW_BUNDLED_CHANNELS:-telegram,discord,slack,feishu,memory-lancedb}"
+  IFS=',' read -r -a CHANNEL_SCENARIOS <<<"${OPENCLAW_BUNDLED_CHANNELS:-${CHANNEL_ONLY:-telegram,discord,slack,feishu,memory-lancedb}}"
   for channel_scenario in "${CHANNEL_SCENARIOS[@]}"; do
     channel_scenario="${channel_scenario//[[:space:]]/}"
     [ -n "$channel_scenario" ] || continue
