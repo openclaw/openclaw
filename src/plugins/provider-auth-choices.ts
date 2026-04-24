@@ -91,6 +91,70 @@ function toProviderAuthChoiceCandidate(params: {
   };
 }
 
+function formatDescriptorLabel(value: string): string {
+  return value
+    .split(/[-_\s]+/gu)
+    .filter(Boolean)
+    .map((part) => {
+      const lower = part.toLowerCase();
+      if (lower === "api") {
+        return "API";
+      }
+      if (lower === "oauth") {
+        return "OAuth";
+      }
+      return `${lower.slice(0, 1).toUpperCase()}${lower.slice(1)}`;
+    })
+    .join(" ");
+}
+
+function toSetupProviderAuthChoiceCandidate(params: {
+  plugin: PluginManifestRecord;
+  providerId: string;
+  methodId: string;
+}): ProviderAuthChoiceCandidate {
+  const providerLabel = formatDescriptorLabel(params.providerId);
+  const methodLabel = formatDescriptorLabel(params.methodId);
+  const choiceLabel =
+    params.methodId === "api-key" ? `${providerLabel} API key` : `${providerLabel} ${methodLabel}`;
+  return {
+    pluginId: params.plugin.id,
+    origin: params.plugin.origin,
+    providerId: params.providerId,
+    methodId: params.methodId,
+    choiceId: `${params.providerId}-${params.methodId}`,
+    choiceLabel,
+    groupId: params.providerId,
+    groupLabel: providerLabel,
+  };
+}
+
+function listSetupProviderAuthChoiceCandidates(plugin: PluginManifestRecord) {
+  if (plugin.setup?.requiresRuntime !== false && plugin.setupSource) {
+    return [];
+  }
+  const explicitProviderMethods = new Set(
+    (plugin.providerAuthChoices ?? []).map((choice) => `${choice.provider}::${choice.method}`),
+  );
+  return (plugin.setup?.providers ?? []).flatMap((provider) => {
+    const providerId = provider.id.trim();
+    if (!providerId) {
+      return [];
+    }
+    return (provider.authMethods ?? [])
+      .map((methodId) => methodId.trim())
+      .filter(Boolean)
+      .filter((methodId) => !explicitProviderMethods.has(`${providerId}::${methodId}`))
+      .map((methodId) =>
+        toSetupProviderAuthChoiceCandidate({
+          plugin,
+          providerId,
+          methodId,
+        }),
+      );
+  });
+}
+
 function stripChoiceOrigin(choice: ProviderAuthChoiceCandidate): ProviderAuthChoiceMetadata {
   const { origin: _origin, ...metadata } = choice;
   return metadata;
@@ -121,13 +185,18 @@ function resolveManifestProviderAuthChoiceCandidates(params?: {
     ) {
       return [];
     }
-    return (plugin.providerAuthChoices ?? []).map((choice) =>
-      toProviderAuthChoiceCandidate({
-        pluginId: plugin.id,
-        origin: plugin.origin,
-        choice,
-      }),
-    );
+    const choices: ProviderAuthChoiceCandidate[] = [];
+    for (const choice of plugin.providerAuthChoices ?? []) {
+      choices.push(
+        toProviderAuthChoiceCandidate({
+          pluginId: plugin.id,
+          origin: plugin.origin,
+          choice,
+        }),
+      );
+    }
+    choices.push(...listSetupProviderAuthChoiceCandidates(plugin));
+    return choices;
   });
 }
 
