@@ -4,7 +4,7 @@ title: "Codex harness"
 read_when:
   - You want to use the bundled Codex app-server harness
   - You need Codex harness config examples
-  - You want to disable PI fallback for Codex-only deployments
+  - You want Codex-only deployments to fail instead of falling back to PI
 ---
 
 The bundled `codex` plugin lets OpenClaw run embedded agent turns through the
@@ -190,8 +190,9 @@ With this shape:
 
 ## Codex-only deployments
 
-Disable PI fallback when you need to prove that every embedded agent turn uses
-the Codex harness:
+Force the Codex harness when you need to prove that every embedded agent turn
+uses Codex. Explicit plugin runtimes default to no PI fallback, so
+`fallback: "none"` is optional but often useful as documentation:
 
 ```json5
 {
@@ -210,13 +211,13 @@ the Codex harness:
 Environment override:
 
 ```bash
-OPENCLAW_AGENT_RUNTIME=codex \
-OPENCLAW_AGENT_HARNESS_FALLBACK=none \
-openclaw gateway run
+OPENCLAW_AGENT_RUNTIME=codex openclaw gateway run
 ```
 
-With fallback disabled, OpenClaw fails early if the Codex plugin is disabled,
-the app-server is too old, or the app-server cannot start.
+With Codex forced, OpenClaw fails early if the Codex plugin is disabled, the
+app-server is too old, or the app-server cannot start. Set
+`OPENCLAW_AGENT_HARNESS_FALLBACK=pi` only if you intentionally want PI to handle
+missing harness selection.
 
 ## Per-agent Codex
 
@@ -581,12 +582,12 @@ understanding continue to use the matching provider/model settings such as
 select an `openai/gpt-*` model with `embeddedHarness.runtime: "codex"` (or a
 legacy `codex/*` ref), and check whether `plugins.allow` excludes `codex`.
 
-**OpenClaw uses PI instead of Codex:** if no Codex harness claims the run,
-OpenClaw may use PI as the compatibility backend. Set
-`embeddedHarness.runtime: "codex"` to force Codex selection while testing, or
-`embeddedHarness.fallback: "none"` to fail when no plugin harness matches. Once
-Codex app-server is selected, its failures surface directly without extra
-fallback config.
+**OpenClaw uses PI instead of Codex:** `runtime: "auto"` can still use PI as the
+compatibility backend when no Codex harness claims the run. Set
+`embeddedHarness.runtime: "codex"` to force Codex selection while testing. A
+forced Codex runtime now fails instead of falling back to PI unless you
+explicitly set `embeddedHarness.fallback: "pi"`. Once Codex app-server is
+selected, its failures surface directly without extra fallback config.
 
 **The app-server is rejected:** upgrade Codex so the app-server handshake
 reports version `0.118.0` or newer.

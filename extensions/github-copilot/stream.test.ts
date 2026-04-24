@@ -93,7 +93,7 @@ describe("wrapCopilotAnthropicStream", () => {
     expect(baseStreamFn).toHaveBeenCalledWith(expect.anything(), expect.anything(), options);
   });
 
-  it("rewrites Copilot Responses connection-bound IDs before payload send", () => {
+  it("adds Copilot headers and rewrites Responses connection-bound IDs before payload send", () => {
     const connectionBoundId = Buffer.from(`reasoning-${"x".repeat(24)}`).toString("base64");
     const payloads: Array<{ input: Array<Record<string, unknown>> }> = [];
     const baseStreamFn = vi.fn((_model, _context, options) => {
@@ -106,6 +106,19 @@ describe("wrapCopilotAnthropicStream", () => {
     });
 
     const wrapped = wrapCopilotOpenAIResponsesStream(baseStreamFn);
+    const messages = [
+      {
+        role: "toolResult",
+        content: [
+          { type: "text", text: "look" },
+          { type: "image", image: "data:image/png;base64,abc" },
+        ],
+      },
+    ] as Parameters<typeof buildCopilotDynamicHeaders>[0]["messages"];
+    const expectedCopilotHeaders = buildCopilotDynamicHeaders({
+      messages,
+      hasImages: true,
+    });
 
     void wrapped(
       {
@@ -113,10 +126,16 @@ describe("wrapCopilotAnthropicStream", () => {
         api: "openai-responses",
         id: "gpt-5.4",
       } as never,
-      { messages: [{ role: "user", content: "hi" }] } as never,
-      {},
+      { messages } as never,
+      { headers: { "X-Test": "1" } },
     );
 
+    expect(baseStreamFn.mock.calls[0]?.[2]).toMatchObject({
+      headers: {
+        ...expectedCopilotHeaders,
+        "X-Test": "1",
+      },
+    });
     expect(payloads[0]?.input[0]?.id).toMatch(/^rs_[a-f0-9]{16}$/);
   });
 

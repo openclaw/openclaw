@@ -32,6 +32,24 @@ type DiscordGatewayFetch = (
 
 type DiscordGatewayMetadataError = Error & { transient?: boolean };
 type DiscordGatewayWebSocketCtor = new (url: string, options?: { agent?: unknown }) => ws.WebSocket;
+const registrationPromises = new WeakMap<carbonGateway.GatewayPlugin, Promise<void>>();
+type CarbonGatewayRegistrationState = {
+  client?: Parameters<carbonGateway.GatewayPlugin["registerClient"]>[0];
+  ws?: unknown;
+  isConnecting?: boolean;
+};
+
+function assignCarbonGatewayClient(
+  plugin: carbonGateway.GatewayPlugin,
+  client: Parameters<carbonGateway.GatewayPlugin["registerClient"]>[0],
+): void {
+  (plugin as unknown as CarbonGatewayRegistrationState).client = client;
+}
+
+function hasCarbonGatewaySocketStarted(plugin: carbonGateway.GatewayPlugin): boolean {
+  const state = plugin as unknown as CarbonGatewayRegistrationState;
+  return state.ws != null || state.isConnecting === true;
+}
 
 export function resolveDiscordGatewayIntents(
   intentsConfig?: import("openclaw/plugin-sdk/config-runtime").DiscordIntentsConfig,
@@ -271,9 +289,25 @@ function createGatewayPlugin(params: {
       super.connect(resume);
     }
 
-    override async registerClient(
+    override registerClient(client: Parameters<carbonGateway.GatewayPlugin["registerClient"]>[0]) {
+      const registration = this.registerClientInternal(client);
+      // Carbon 0.16 invokes async plugin hooks from Client construction without
+      // awaiting them. Mark the promise handled immediately, then let OpenClaw
+      // startup await the original promise explicitly.
+      registration.catch(() => {});
+      registrationPromises.set(this, registration);
+      return registration;
+    }
+
+    private async registerClientInternal(
       client: Parameters<carbonGateway.GatewayPlugin["registerClient"]>[0],
     ) {
+      // Carbon's Client constructor does not await plugin registerClient().
+      // Match Carbon's own GatewayPlugin ordering by publishing the client
+      // reference before our metadata fetch can yield, so an external
+      // connect()->identify() cannot silently drop IDENTIFY (#52372).
+      assignCarbonGatewayClient(this, client);
+
       if (!this.gatewayInfo || this.gatewayInfoUsedFallback) {
         const resolved = await fetchDiscordGatewayInfoWithTimeout({
           token: client.options.token,
@@ -290,6 +324,13 @@ function createGatewayPlugin(params: {
       }
       if (params.testing?.registerClient) {
         await params.testing.registerClient(this, client);
+        return;
+      }
+      // If the lifecycle timeout already started a socket while metadata was
+      // loading, do not call Carbon's registerClient() again; it would close
+      // that socket and open another one. Carbon stores these as runtime fields
+      // even though they are protected/private in the .d.ts.
+      if (hasCarbonGatewaySocketStarted(this)) {
         return;
       }
       return super.registerClient(client);
@@ -355,6 +396,15 @@ function createGatewayPlugin(params: {
   }
 
   return new SafeGatewayPlugin();
+}
+
+export function waitForDiscordGatewayPluginRegistration(
+  plugin: unknown,
+): Promise<void> | undefined {
+  if (typeof plugin !== "object" || plugin === null) {
+    return undefined;
+  }
+  return registrationPromises.get(plugin as carbonGateway.GatewayPlugin);
 }
 
 export function createDiscordGatewayPlugin(params: {

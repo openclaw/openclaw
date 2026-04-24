@@ -337,9 +337,11 @@ on `setup.providers[].envVars`.
 
 Set `requiresRuntime: false` only when those descriptors are sufficient for the
 setup surface. OpenClaw treats explicit `false` as a descriptor-only contract
-and will not execute `setup-api` for setup lookup. Omitted `requiresRuntime`
-keeps legacy fallback behavior so existing plugins that added descriptors
-without the flag do not break.
+and will not execute `setup-api` or `openclaw.setupEntry` for setup lookup. If
+a descriptor-only plugin still ships one of those setup runtime entries,
+OpenClaw reports an additive diagnostic and continues ignoring it. Omitted
+`requiresRuntime` keeps legacy fallback behavior so existing plugins that added
+descriptors without the flag do not break.
 
 Because setup lookup can execute plugin-owned `setup-api` code, normalized
 `setup.providers[].id` and `setup.cliBackends[]` values must stay unique across
@@ -496,7 +498,9 @@ Each provider entry can include:
 ## channelConfigs reference
 
 Use `channelConfigs` when a channel plugin needs cheap config metadata before
-runtime loads.
+runtime loads. Read-only channel setup/status discovery can use this metadata
+directly for configured external channels when no setup entry is available, or
+when `setup.requiresRuntime: false` declares setup runtime unnecessary.
 
 ```json
 {

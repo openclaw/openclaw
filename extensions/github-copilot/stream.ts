@@ -59,6 +59,13 @@ export function wrapCopilotOpenAIResponsesStream(baseStreamFn: StreamFn | undefi
     const originalOnPayload = options?.onPayload;
     const wrappedOptions: StreamOptions = {
       ...options,
+      headers: {
+        ...buildCopilotDynamicHeaders({
+          messages: context.messages,
+          hasImages: hasCopilotVisionInput(context.messages),
+        }),
+        ...options?.headers,
+      },
       onPayload: (payload, payloadModel) => {
         rewriteCopilotResponsePayloadConnectionBoundIds(payload);
         return patchOnPayloadResult(originalOnPayload?.(payload, payloadModel));

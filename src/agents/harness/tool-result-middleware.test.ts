@@ -24,13 +24,13 @@ describe("createAgentToolResultMiddlewareRunner", () => {
         },
       ],
       details: {
-        status: "failed",
+        status: "error",
         middlewareError: true,
       },
     });
   });
 
-  it("discard invalid middleware results and keeps the previous result", async () => {
+  it("fails closed for invalid middleware results", async () => {
     const original = { content: [{ type: "text" as const, text: "raw" }], details: {} };
     const runner = createAgentToolResultMiddlewareRunner({ harness: "codex-app-server" }, [
       () => ({ result: { content: "not an array" } as never }),
@@ -43,7 +43,67 @@ describe("createAgentToolResultMiddlewareRunner", () => {
       result: original,
     });
 
-    expect(result).toBe(original);
+    expect(result.details).toEqual({ status: "error", middlewareError: true });
+  });
+
+  it("fails closed when middleware mutates the current result into an invalid shape", async () => {
+    const runner = createAgentToolResultMiddlewareRunner({ harness: "pi" }, [
+      (event) => {
+        event.result.content = "not an array" as never;
+        return undefined;
+      },
+    ]);
+
+    const result = await runner.applyToolResultMiddleware({
+      toolCallId: "call-1",
+      toolName: "exec",
+      args: {},
+      result: { content: [{ type: "text", text: "raw" }], details: {} },
+    });
+
+    expect(result.details).toEqual({ status: "error", middlewareError: true });
+  });
+
+  it("rejects oversized middleware details", async () => {
+    const runner = createAgentToolResultMiddlewareRunner({ harness: "codex-app-server" }, [
+      () => ({
+        result: {
+          content: [{ type: "text", text: "compacted" }],
+          details: { payload: "x".repeat(100_001) },
+        },
+      }),
+    ]);
+
+    const result = await runner.applyToolResultMiddleware({
+      toolCallId: "call-1",
+      toolName: "exec",
+      args: {},
+      result: { content: [{ type: "text", text: "raw" }], details: {} },
+    });
+
+    expect(result.details).toEqual({ status: "error", middlewareError: true });
+  });
+
+  it("rejects cyclic middleware details", async () => {
+    const details: Record<string, unknown> = {};
+    details.self = details;
+    const runner = createAgentToolResultMiddlewareRunner({ harness: "codex-app-server" }, [
+      () => ({
+        result: {
+          content: [{ type: "text", text: "compacted" }],
+          details,
+        },
+      }),
+    ]);
+
+    const result = await runner.applyToolResultMiddleware({
+      toolCallId: "call-1",
+      toolName: "exec",
+      args: {},
+      result: { content: [{ type: "text", text: "raw" }], details: {} },
+    });
+
+    expect(result.details).toEqual({ status: "error", middlewareError: true });
   });
 
   it("accepts well-formed middleware results", async () => {
