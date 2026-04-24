@@ -1,17 +1,17 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
+import { findNormalizedProviderValue, normalizeProviderId } from "../provider-id.js";
 import {
   evaluateStoredCredentialEligibility,
   type AuthCredentialReasonCode,
 } from "./credential-state.js";
-import { dedupeProfileIds, listProfilesForProvider } from "./profiles.js";
+import { dedupeProfileIds, listProfilesForProvider } from "./profile-list.js";
 import type { AuthProfileStore } from "./types.js";
 import {
   clearExpiredCooldowns,
   isProfileInCooldown,
   resolveProfileUnusableUntil,
-} from "./usage.js";
+} from "./usage-state.js";
 
 export type AuthProfileEligibilityReasonCode =
   | AuthCredentialReasonCode
