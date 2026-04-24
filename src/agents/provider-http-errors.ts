@@ -119,16 +119,21 @@ export function formatProviderHttpErrorMessage(params: {
   status: number;
   detail?: string;
   requestId?: string;
+  statusPrefix?: string;
 }): string {
-  const { label, status, detail, requestId } = params;
+  const { label, status, detail, requestId, statusPrefix = "" } = params;
   return (
-    `${label} (${status})` +
+    `${label} (${statusPrefix}${status})` +
     (detail ? `: ${detail}` : "") +
     (requestId ? ` [request_id=${requestId}]` : "")
   );
 }
 
-export async function createProviderHttpError(response: Response, label: string): Promise<Error> {
+export async function createProviderHttpError(
+  response: Response,
+  label: string,
+  options?: { statusPrefix?: string },
+): Promise<Error> {
   const detail = await extractProviderErrorDetail(response);
   const requestId = extractProviderRequestId(response);
   return new Error(
@@ -137,6 +142,7 @@ export async function createProviderHttpError(response: Response, label: string)
       status: response.status,
       detail,
       requestId,
+      statusPrefix: options?.statusPrefix,
     }),
   );
 }
@@ -149,4 +155,11 @@ export async function assertOkOrThrowProviderError(
     return;
   }
   throw await createProviderHttpError(response, label);
+}
+
+export async function assertOkOrThrowHttpError(response: Response, label: string): Promise<void> {
+  if (response.ok) {
+    return;
+  }
+  throw await createProviderHttpError(response, label, { statusPrefix: "HTTP " });
 }
