@@ -596,6 +596,31 @@ describe("secrets audit", () => {
     ).toBe(false);
   });
 
+  it("still flags auth profile plaintext when an explicit ref is also configured", async () => {
+    await writeJsonFile(fixture.authStorePath, {
+      version: 1,
+      profiles: {
+        "openai:default": {
+          type: "api_key",
+          provider: "openai",
+          key: "sk-leftover-plaintext", // pragma: allowlist secret
+          keyRef: { source: "env", id: "OPENAI_API_KEY" },
+        },
+      },
+    });
+
+    const report = await runSecretsAudit({ env: fixture.env });
+    expect(
+      hasFinding(
+        report,
+        (entry) =>
+          entry.code === "PLAINTEXT_FOUND" &&
+          entry.file === fixture.authStorePath &&
+          entry.jsonPath === "profiles.openai:default.key",
+      ),
+    ).toBe(true);
+  });
+
   it("does not flag non-sensitive routing headers in openclaw config", async () => {
     await writeJsonFile(fixture.configPath, {
       models: {
