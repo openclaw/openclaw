@@ -202,4 +202,28 @@ describe("describePluginInstallSource", () => {
       warnings: ["invalid-npm-spec", "npm-integrity-without-source"],
     });
   });
+
+  it("warns when the npm spec package name drifts from catalog package identity", () => {
+    expect(
+      describePluginInstallSource(
+        {
+          npmSpec: "@vendor/other@1.2.3",
+          expectedIntegrity: "sha512-demo",
+        },
+        { expectedPackageName: "@vendor/demo" },
+      ),
+    ).toEqual({
+      npm: {
+        spec: "@vendor/other@1.2.3",
+        packageName: "@vendor/other",
+        expectedPackageName: "@vendor/demo",
+        selector: "1.2.3",
+        selectorKind: "exact-version",
+        exactVersion: true,
+        expectedIntegrity: "sha512-demo",
+        pinState: "exact-with-integrity",
+      },
+      warnings: ["npm-spec-package-name-mismatch"],
+    });
+  });
 });
