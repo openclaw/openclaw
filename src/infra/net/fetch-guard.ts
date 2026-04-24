@@ -1,5 +1,4 @@
 import type { Dispatcher } from "undici";
-import { getGlobalDispatcher } from "undici";
 import { logWarn } from "../../logger.js";
 import { captureHttpExchange } from "../../proxy-capture/runtime.js";
 import { buildTimeoutAbortSignal } from "../../utils/fetch-timeout.js";
@@ -20,6 +19,7 @@ import {
   SsrFBlockedError,
   type SsrFPolicy,
 } from "./ssrf.js";
+import { _globalUndiciStreamTimeoutMs } from "./undici-global-dispatcher.js";
 import {
   createHttp1Agent,
   createHttp1EnvHttpProxyAgent,
@@ -30,16 +30,10 @@ function resolveDispatcherTimeoutMs(fromParams: number | undefined): number | un
   if (fromParams !== undefined) {
     return fromParams;
   }
-  // Fall back to reading the timeout from the global undici dispatcher
-  // (set by ensureGlobalUndiciStreamTimeouts in attempt-http-runtime.ts)
-  try {
-    const globalDispatcher = getGlobalDispatcher();
-    const opts = (globalDispatcher as { options?: Record<string, unknown> }).options;
-    if (opts?.bodyTimeout) {
-      return typeof opts.bodyTimeout === "number" ? opts.bodyTimeout : undefined;
-    }
-  } catch {
-    // Global dispatcher not yet configured — no fallback available
+  // Fall back to module-level bridge set by ensureGlobalUndiciStreamTimeouts
+  // (avoids reading Undici's non-public `.options` field)
+  if (_globalUndiciStreamTimeoutMs !== undefined) {
+    return _globalUndiciStreamTimeoutMs;
   }
   return undefined;
 }
