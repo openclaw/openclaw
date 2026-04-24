@@ -264,7 +264,7 @@ describe("normalizeCompatibilityConfigValues", () => {
           },
           models: {
             "codex/gpt-5.5": { alias: "Codex" },
-            "openai/gpt-5.5": { params: { temperature: 0.2 } },
+            "openai/gpt-5.5": { alias: "GPT", params: { temperature: 0.2 } },
             "codex/gpt-5.4-mini": {},
           },
         },
@@ -284,7 +284,7 @@ describe("normalizeCompatibilityConfigValues", () => {
     });
     expect(res.config.agents?.defaults?.embeddedHarness).toEqual({ runtime: "codex" });
     expect(res.config.agents?.defaults?.models).toEqual({
-      "openai/gpt-5.5": { alias: "Codex", params: { temperature: 0.2 } },
+      "openai/gpt-5.5": { alias: "GPT", params: { temperature: 0.2 } },
       "openai/gpt-5.4-mini": {},
     });
     expect(res.config.agents?.list?.[0]).toMatchObject({
@@ -299,6 +299,47 @@ describe("normalizeCompatibilityConfigValues", () => {
         "Moved agents.list.reviewer.model codex/* refs → openai/* and selected Codex harness.",
       ]),
     );
+    expect(res.changes).not.toContain("Removed no-op agents.defaults.embeddedHarness defaults.");
+  });
+
+  it("does not force Codex harness when only fallback refs are migrated", () => {
+    const res = normalizeCompatibilityConfigValues({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.5",
+            fallbacks: ["codex/gpt-5.4-mini"],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(res.config.agents?.defaults?.model).toEqual({
+      primary: "openai/gpt-5.5",
+      fallbacks: ["openai/gpt-5.4-mini"],
+    });
+    expect(res.config.agents?.defaults?.embeddedHarness).toBeUndefined();
+    expect(res.changes).toContain("Moved agents.defaults.model codex/* refs → openai/*.");
+    expect(res.changes).not.toContain(
+      "Moved agents.defaults.model codex/* refs → openai/* and selected Codex harness.",
+    );
+  });
+
+  it("keeps canonical OpenAI model entries ahead of migrated Codex aliases", () => {
+    const res = normalizeCompatibilityConfigValues({
+      agents: {
+        defaults: {
+          models: {
+            "codex/gpt-5.5": { alias: "Codex", params: { temperature: 1 } },
+            "openai/gpt-5.5": { alias: "GPT", params: { temperature: 0.2 } },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(res.config.agents?.defaults?.models).toEqual({
+      "openai/gpt-5.5": { alias: "GPT", params: { temperature: 0.2 } },
+    });
   });
 
   it("does not mark untagged manual OpenAI Codex metadata overrides", () => {

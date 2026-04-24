@@ -275,7 +275,6 @@ function normalizeLegacyCodexAgentModelConfig(raw: AgentModelConfigPatch | undef
       const migratedFallback = migrateLegacyCodexModelRef(fallback);
       if (migratedFallback) {
         changed = true;
-        codexSelected = true;
         return migratedFallback;
       }
       return fallback;
@@ -306,12 +305,16 @@ function normalizeLegacyCodexAllowlistModels(rawModels: AgentDefaultsPatch["mode
   const next: AgentModelsMapPatch = {};
   for (const [rawKey, entry] of Object.entries(rawModels)) {
     const migratedKey = migrateLegacyCodexModelRef(rawKey);
+    if (!migratedKey) {
+      next[rawKey] = mergeModelEntry(entry, next[rawKey]);
+    }
+  }
+  for (const [rawKey, entry] of Object.entries(rawModels)) {
+    const migratedKey = migrateLegacyCodexModelRef(rawKey);
     if (migratedKey) {
       changed = true;
       next[migratedKey] = mergeModelEntry(entry, next[migratedKey]);
-      continue;
     }
-    next[rawKey] = mergeModelEntry(entry, next[rawKey]);
   }
   return { value: next, changed };
 }
@@ -328,7 +331,11 @@ function normalizeLegacyCodexAgentContainer<T extends AgentDefaultsPatch | Agent
   if (model.changed) {
     next.model = model.value;
     changed = true;
-    changes.push(`Moved ${path}.model codex/* refs → openai/* and selected Codex harness.`);
+    changes.push(
+      model.codexSelected
+        ? `Moved ${path}.model codex/* refs → openai/* and selected Codex harness.`
+        : `Moved ${path}.model codex/* refs → openai/*.`,
+    );
   }
   if ("models" in raw) {
     const models = normalizeLegacyCodexAllowlistModels(raw.models);
@@ -346,6 +353,7 @@ function normalizeLegacyCodexAgentContainer<T extends AgentDefaultsPatch | Agent
     }
   }
 
+  const suppressHarnessCleanupMessage = model.codexSelected && isRecord(next.embeddedHarness);
   const harness = normalizeNoopEmbeddedHarness(next.embeddedHarness as AgentEmbeddedHarnessPatch);
   if (harness.changed) {
     if (harness.value) {
@@ -354,7 +362,9 @@ function normalizeLegacyCodexAgentContainer<T extends AgentDefaultsPatch | Agent
       delete next.embeddedHarness;
     }
     changed = true;
-    changes.push(`Removed no-op ${path}.embeddedHarness defaults.`);
+    if (!suppressHarnessCleanupMessage) {
+      changes.push(`Removed no-op ${path}.embeddedHarness defaults.`);
+    }
   }
 
   return { value: next as T, changed };
