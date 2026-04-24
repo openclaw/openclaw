@@ -284,9 +284,7 @@ vi.mock("@slack/bolt", () => {
         await run(0);
       });
     }
-    use() {
-      return this;
-    }
+    use = vi.fn(() => this);
     command() {
       /* no-op */
     }
