@@ -327,8 +327,16 @@ beforeEach(() => {
       bundleMcpMode: "gemini-system-settings",
       config: {
         command: "gemini",
-        args: ["--output-format", "json", "--prompt", "{prompt}"],
-        resumeArgs: ["--resume", "{sessionId}", "--output-format", "json", "--prompt", "{prompt}"],
+        args: ["--skip-trust", "--output-format", "json", "--prompt", "{prompt}"],
+        resumeArgs: [
+          "--skip-trust",
+          "--resume",
+          "{sessionId}",
+          "--output-format",
+          "json",
+          "--prompt",
+          "{prompt}",
+        ],
         imageArg: "@",
         imagePathScope: "workspace",
         modelArg: "--model",
@@ -882,8 +890,15 @@ describe("resolveCliBackendConfig google-gemini-cli defaults", () => {
     expect(resolved).not.toBeNull();
     expect(resolved?.bundleMcp).toBe(true);
     expect(resolved?.bundleMcpMode).toBe("gemini-system-settings");
-    expect(resolved?.config.args).toEqual(["--output-format", "json", "--prompt", "{prompt}"]);
+    expect(resolved?.config.args).toEqual([
+      "--skip-trust",
+      "--output-format",
+      "json",
+      "--prompt",
+      "{prompt}",
+    ]);
     expect(resolved?.config.resumeArgs).toEqual([
+      "--skip-trust",
       "--resume",
       "{sessionId}",
       "--output-format",
