@@ -135,6 +135,21 @@ describe("loadProviderCatalogModelsForList", () => {
     );
   });
 
+  it("requires complete discovery-entry coverage for static-only loads", async () => {
+    await loadProviderCatalogModelsForList({
+      ...baseParams,
+      providerFilter: "moonshot",
+      staticOnly: true,
+    });
+
+    expect(providerDiscoveryMocks.resolvePluginDiscoveryProviders).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onlyPluginIds: ["moonshot"],
+        requireCompleteDiscoveryEntryCoverage: true,
+      }),
+    );
+  });
+
   it("recognizes bundled provider hook aliases before the unknown-provider short-circuit", async () => {
     await expect(
       resolveProviderCatalogPluginIdsForFilter({
