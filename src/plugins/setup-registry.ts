@@ -190,7 +190,10 @@ function buildSetupCliBackendCacheKey(params: {
   });
 }
 
-function resolveSetupApiPath(rootDir: string): string | null {
+function resolveSetupApiPath(
+  rootDir: string,
+  options?: { includeBundledSourceFallback?: boolean },
+): string | null {
   const orderedExtensions = RUNNING_FROM_BUILT_ARTIFACT
     ? SETUP_API_EXTENSIONS
     : ([...SETUP_API_EXTENSIONS.slice(3), ...SETUP_API_EXTENSIONS.slice(0, 3)] as const);
@@ -208,6 +211,10 @@ function resolveSetupApiPath(rootDir: string): string | null {
   const direct = findSetupApi(rootDir);
   if (direct) {
     return direct;
+  }
+
+  if (options?.includeBundledSourceFallback === false) {
+    return null;
   }
 
   const bundledExtensionDir = path.basename(rootDir);
@@ -286,6 +293,15 @@ function resolveRegister(mod: OpenClawPluginModule): {
 
 function resolveSetupRuntimeSource(record: PluginManifestRecord): string | null {
   return record.setupSource ?? resolveSetupApiPath(record.rootDir);
+}
+
+function resolveDeclaredSetupRuntimeSource(record: PluginManifestRecord): string | null {
+  return (
+    record.setupSource ??
+    resolveSetupApiPath(record.rootDir, {
+      includeBundledSourceFallback: false,
+    })
+  );
 }
 
 function resolveSetupRegistration(record: PluginManifestRecord): {
@@ -408,10 +424,7 @@ function pushDescriptorRuntimeDisabledDiagnostic(params: {
   record: PluginManifestRecord;
   diagnostics: PluginSetupRegistryDiagnostic[];
 }): void {
-  if (params.record.setup?.requiresRuntime !== false) {
-    return;
-  }
-  if (!resolveSetupRuntimeSource(params.record)) {
+  if (!resolveDeclaredSetupRuntimeSource(params.record)) {
     return;
   }
   params.diagnostics.push({
