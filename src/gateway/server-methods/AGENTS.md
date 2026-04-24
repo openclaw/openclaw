@@ -59,9 +59,9 @@ place to add logic.
 
 ### Related incidents (silent-failure shape)
 
-These three PRs landed on the same class of bug in adjacent files. Same
-shape, different surfaces — cite them as examples of what "regress silently"
-looks like concretely:
+Three in-flight PRs target this same class of bug in adjacent files. At
+time of writing some may still be open against `main`; treat the shape
+description as the invariant, not the merge status:
 
 - `fix/config-restore-false-success` — bare catch on `copyFile` during a
   suspicious-read recovery caused the audit log to report `valid: true`
@@ -72,10 +72,12 @@ looks like concretely:
   rotation that threw on close was swallowed, leaving the client
   authenticated past the point the admin thought they were kicked.
 - `fix/gateway-device-token-rpc-revalidation` — rotate/revoke responded
-  OK before the microtask-scheduled disconnect, and there was no per-RPC
-  re-check for device-token auth (only for shared-auth). Pipelined RPCs
-  landed with the rotated token. Fixed by a synchronous `invalidated`
-  flag plus a dispatcher-level guard.
+  OK before the microtask-scheduled disconnect, and there is no per-RPC
+  re-check for device-token auth on `main` (only for shared-auth).
+  Pipelined RPCs could therefore land with the rotated token. The PR
+  proposes a synchronous `invalidated` flag plus a dispatcher-level
+  guard; until it lands, **treat rotate/revoke as best-effort, not
+  race-safe**.
 
 The common pattern: **a privileged operation claims success before the
 security guarantee is actually established.** Watch for it in reviews of

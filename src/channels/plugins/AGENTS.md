@@ -55,20 +55,25 @@ This asymmetry is subtle and load-bearing:
 
 - **Shared-auth clients** (`usesSharedGatewayAuth: true`) are re-checked
   on every RPC against `sharedGatewaySessionGeneration` at
-  `src/gateway/server/ws-connection/message-handler.ts:1444-1458`. A token
-  rotation forces the next RPC from any stale client to close with
-  `4001 gateway auth changed`.
-- **Device-token clients** were historically not re-checked per RPC. A
-  `device.token.rotate` / `.revoke` scheduled the socket close via
-  `queueMicrotask`, and RPCs already pipelined in the WS buffer landed
-  with the old token. Fixed in `fix/gateway-device-token-rpc-revalidation`
-  by adding a synchronous `invalidated` flag on `GatewayWsClient` set
-  before `respond()` and checked at the top of the per-RPC dispatch.
+  `src/gateway/server/ws-connection/message-handler.ts` in the per-request
+  dispatch block. A token rotation forces the next RPC from any stale
+  client to close with `4001 gateway auth changed`.
+- **Device-token clients are not re-checked per RPC on `main`.** A
+  `device.token.rotate` / `.revoke` schedules the socket close via
+  `queueMicrotask`, so RPCs already pipelined in the WS buffer can land
+  with the old token before the disconnect takes effect. The PR
+  `fix/gateway-device-token-rpc-revalidation` proposes closing this race
+  with a synchronous `invalidated` flag on `GatewayWsClient` set before
+  `respond()` and checked at the top of the per-RPC dispatch — but until
+  that PR lands, **treat `device.token.rotate` / `.revoke` as
+  best-effort rather than race-safe**, and be careful about adding
+  operations whose correctness depends on the rotate response arriving
+  before any further RPC is processed.
 
 If you add a new auth method in this zone, decide explicitly which of
 these two per-RPC check shapes it follows and document it. Don't leave
 the third case "I didn't think about it" — that is exactly how the
-device-token race landed.
+device-token race exists in the first place.
 
 ## What must never happen
 
@@ -78,10 +83,13 @@ device-token race landed.
   `allowFrom` list, or vice versa. If the two stores disagree, a
   previously-paired sender may silently get rejected or a revoked sender
   may silently get accepted.
-- A `device.token.rotate` / `.revoke` response arriving at the admin
-  while the old token is still authenticating RPCs. The `invalidated`
-  flag must be set _before_ `respond()` fires, not in a microtask that
-  races the response flush.
+- A `device.token.rotate` / `.revoke` completing (from the admin's
+  point of view) while pipelined RPCs on the rotated client can still
+  authenticate with the old token. Whichever mechanism closes this race
+  (the in-flight `invalidated` flag proposal, or something equivalent),
+  the invariant is that the old-token authority ends **before** the
+  response flush, not after — a microtask-scheduled disconnect alone is
+  not sufficient.
 - A pairing adapter's `notifyApproval` throwing without a downstream
   catch that either (a) rolls the approval back or (b) logs the
   partial-commit loudly. Silent failure here is the pattern that put
