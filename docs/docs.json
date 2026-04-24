@@ -1209,6 +1209,7 @@
                     "group": "Web Browser",
                     "pages": [
                       "tools/browser",
+                      "tools/browser-control",
                       "tools/browser-login",
                       "tools/browser-linux-troubleshooting",
                       "tools/browser-wsl2-windows-remote-cdp-troubleshooting"
