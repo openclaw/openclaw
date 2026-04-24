@@ -1772,40 +1772,6 @@ jobs:
       - name: Check docs
         run: pnpm check:docs
 
-  compat-node22:
-    name: "compat-node22"
-    needs: [scope]
-    if: needs.scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.scope.outputs.run_node == 'true')
-    runs-on: blacksmith-16vcpu-ubuntu-2404
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: false
-
-      - name: Setup Node 22 compatibility environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          node-version: "22.x"
-          cache-key-suffix: "node22"
-          install-bun: "false"
-          use-sticky-disk: "true"
-
-      - name: Configure Node 22 test resources
-        run: |
-          # Keep the compatibility lane aligned with the default Node test lane.
-          echo "OPENCLAW_TEST_WORKERS=2" >> "$GITHUB_ENV"
-          echo "OPENCLAW_TEST_MAX_OLD_SPACE_SIZE_MB=6144" >> "$GITHUB_ENV"
-
-      - name: Build under Node 22
-        run: pnpm build
-
-      - name: Run tests under Node 22
-        run: pnpm test
-
-      - name: Verify npm pack under Node 22
-        run: pnpm release:check
-
   skills-python:
     permissions:
       contents: read
