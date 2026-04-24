@@ -1,6 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { __testing, deliverSubagentAnnouncement } from "./subagent-announce-delivery.js";
-import { callGateway as runtimeCallGateway } from "./subagent-announce-delivery.runtime.js";
+import type { AgentInternalEvent } from "./internal-events.js";
+import {
+  __testing,
+  deliverSubagentAnnouncement,
+  extractThreadCompletionFallbackText,
+} from "./subagent-announce-delivery.js";
+import {
+  callGateway as runtimeCallGateway,
+  sendMessage as runtimeSendMessage,
+} from "./subagent-announce-delivery.runtime.js";
 import { resolveAnnounceOrigin } from "./subagent-announce-origin.js";
 
 afterEach(() => {
@@ -18,6 +26,16 @@ function createGatewayMock() {
   return vi.fn(async () => ({}) as Record<string, unknown>) as unknown as typeof runtimeCallGateway;
 }
 
+function createSendMessageMock() {
+  return vi.fn(async () => ({
+    channel: "slack",
+    to: "channel:C123",
+    via: "direct" as const,
+    mediaUrl: null,
+    result: { messageId: "msg-1" },
+  })) as unknown as typeof runtimeSendMessage;
+}
+
 async function deliverSlackThreadAnnouncement(params: {
   callGateway: typeof runtimeCallGateway;
   isActive: boolean;
@@ -25,6 +43,8 @@ async function deliverSlackThreadAnnouncement(params: {
   expectsCompletionMessage: boolean;
   directIdempotencyKey: string;
   queueEmbeddedPiMessage?: (sessionId: string, message: string) => boolean;
+  sendMessage?: typeof runtimeSendMessage;
+  internalEvents?: AgentInternalEvent[];
 }) {
   __testing.setDepsForTest({
     callGateway: params.callGateway,
@@ -36,6 +56,7 @@ async function deliverSlackThreadAnnouncement(params: {
     ...(params.queueEmbeddedPiMessage
       ? { queueEmbeddedPiMessage: params.queueEmbeddedPiMessage }
       : {}),
+    ...(params.sendMessage ? { sendMessage: params.sendMessage } : {}),
   });
 
   return deliverSubagentAnnouncement({
@@ -51,6 +72,7 @@ async function deliverSlackThreadAnnouncement(params: {
     expectsCompletionMessage: params.expectsCompletionMessage,
     bestEffortDeliver: true,
     directIdempotencyKey: params.directIdempotencyKey,
+    internalEvents: params.internalEvents,
   });
 }
 
@@ -163,6 +185,53 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     );
   });
 
+  it("uses a direct thread fallback for dormant completion events with child output", async () => {
+    const callGateway = createGatewayMock();
+    const sendMessage = createSendMessageMock();
+    const result = await deliverSlackThreadAnnouncement({
+      callGateway,
+      sendMessage,
+      sessionId: "requester-session-4",
+      isActive: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-thread-fallback-1",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "subagent task",
+          taskLabel: "thread completion smoke",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "child completion output",
+          replyInstruction: "Summarize the result.",
+        },
+      ],
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        delivered: true,
+        path: "direct-thread-fallback",
+      }),
+    );
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "slack",
+        accountId: "acct-1",
+        to: "channel:C123",
+        threadId: "171.222",
+        content: "child completion output",
+        requesterSessionKey: "agent:main:slack:channel:C123:thread:171.222",
+        bestEffort: true,
+        idempotencyKey: "announce-thread-fallback-1",
+      }),
+    );
+  });
+
   it("keeps direct external delivery for non-completion announces", async () => {
     const callGateway = createGatewayMock();
     await deliverSlackThreadAnnouncement({
@@ -186,5 +255,43 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         }),
       }),
     );
+  });
+});
+
+describe("extractThreadCompletionFallbackText", () => {
+  it("prefers task completion result text", () => {
+    expect(
+      extractThreadCompletionFallbackText([
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:child",
+          announceType: "subagent task",
+          taskLabel: "sample task",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "final child result",
+          replyInstruction: "Summarize the result.",
+        },
+      ]),
+    ).toBe("final child result");
+  });
+
+  it("falls back to task and status labels when result text is empty", () => {
+    expect(
+      extractThreadCompletionFallbackText([
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:child",
+          announceType: "subagent task",
+          taskLabel: "sample task",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "   ",
+          replyInstruction: "Summarize the result.",
+        },
+      ]),
+    ).toBe("sample task: completed successfully");
   });
 });
