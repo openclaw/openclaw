@@ -437,8 +437,7 @@ describe("ensureOnboardingPluginInstalled", () => {
         {
           pluginId: "demo-plugin",
           source: "path",
-          sourcePath: realPluginDir,
-          installPath: realPluginDir,
+          sourcePath: "./plugins/demo",
           spec: "@demo/plugin@1.2.3",
         },
       );
@@ -497,8 +496,7 @@ describe("ensureOnboardingPluginInstalled", () => {
           {
             pluginId: "demo-plugin",
             source: "path",
-            sourcePath: realPluginDir,
-            installPath: realPluginDir,
+            sourcePath: "./plugins/demo",
             spec: "@demo/plugin@1.2.3",
           },
         );
@@ -506,6 +504,38 @@ describe("ensureOnboardingPluginInstalled", () => {
         expect(result.status).toBe("installed");
       },
     );
+  });
+
+  it("records absolute local catalog paths as workspace-relative source metadata", async () => {
+    await withTempDir({ prefix: "openclaw-onboarding-install-portable-record-" }, async (temp) => {
+      const workspaceDir = path.join(temp, "workspace");
+      const pluginDir = path.join(workspaceDir, "plugins", "demo");
+      await fs.mkdir(path.join(workspaceDir, ".git"), { recursive: true });
+      await fs.mkdir(pluginDir, { recursive: true });
+      const realPluginDir = await fs.realpath(pluginDir);
+
+      await ensureOnboardingPluginInstalled({
+        cfg: {},
+        entry: {
+          pluginId: "demo-plugin",
+          label: "Demo Plugin",
+          install: {
+            localPath: realPluginDir,
+          },
+        },
+        prompter: {
+          select: vi.fn(async () => "local"),
+        } as never,
+        runtime: {} as never,
+        workspaceDir,
+      });
+
+      expect(recordPluginInstall).toHaveBeenCalledWith(expect.anything(), {
+        pluginId: "demo-plugin",
+        source: "path",
+        sourcePath: "./plugins/demo",
+      });
+    });
   });
 
   it("keeps local installs available when cwd is a git repo but workspaceDir is not", async () => {

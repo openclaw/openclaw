@@ -116,17 +116,37 @@ function addPluginLoadPath(cfg: OpenClawConfig, pluginPath: string): OpenClawCon
   };
 }
 
+function formatPortableLocalPath(localPath: string, workspaceDir?: string): string | undefined {
+  const bases = [workspaceDir, process.cwd()].filter((entry): entry is string => Boolean(entry));
+  for (const base of bases) {
+    const realBase = resolveRealDirectory(base);
+    if (!realBase) {
+      continue;
+    }
+    const relative = path.relative(realBase, localPath);
+    if (
+      relative === "" ||
+      (!path.isAbsolute(relative) && !relative.startsWith(`..${path.sep}`) && relative !== "..")
+    ) {
+      const portable = relative.split(path.sep).join("/");
+      return portable ? `./${portable}` : ".";
+    }
+  }
+  return undefined;
+}
+
 function recordLocalPluginInstall(params: {
   cfg: OpenClawConfig;
   entry: OnboardingPluginInstallEntry;
   localPath: string;
   npmSpec?: string | null;
+  workspaceDir?: string;
 }): OpenClawConfig {
+  const sourcePath = formatPortableLocalPath(params.localPath, params.workspaceDir);
   return recordPluginInstall(params.cfg, {
     pluginId: params.entry.pluginId,
     source: "path",
-    sourcePath: params.localPath,
-    installPath: params.localPath,
+    ...(sourcePath ? { sourcePath } : {}),
     ...(params.npmSpec ? { spec: params.npmSpec } : {}),
   });
 }
@@ -454,7 +474,7 @@ export async function ensureOnboardingPluginInstalled(params: {
       };
     }
     next = addPluginLoadPath(enableResult.config, localPath);
-    next = recordLocalPluginInstall({ cfg: next, entry, localPath, npmSpec });
+    next = recordLocalPluginInstall({ cfg: next, entry, localPath, npmSpec, workspaceDir });
     return {
       cfg: next,
       installed: true,
@@ -570,7 +590,7 @@ export async function ensureOnboardingPluginInstalled(params: {
         };
       }
       next = addPluginLoadPath(enableResult.config, localPath);
-      next = recordLocalPluginInstall({ cfg: next, entry, localPath, npmSpec });
+      next = recordLocalPluginInstall({ cfg: next, entry, localPath, npmSpec, workspaceDir });
       return {
         cfg: next,
         installed: true,
