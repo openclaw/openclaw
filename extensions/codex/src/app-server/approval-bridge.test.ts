@@ -205,7 +205,7 @@ describe("Codex app-server approval bridge", () => {
         threadId: "thread-1",
         turnId: "turn-1",
         itemId: "cmd-bidi",
-        command: "echo safe\u202e cod.exe\u2066 hidden\u2069 \ufeffdone",
+        command: "echo safe\u202e cod.exe\u2066 hidden\u2069 \ufeffdone\u{e0100}",
       },
       paramsForRun: params,
       threadId: "thread-1",
@@ -252,9 +252,42 @@ describe("Codex app-server approval bridge", () => {
     expect(requestPayload).toEqual(
       expect.objectContaining({
         description:
-          "Command: [preview omitted: too long or unsafe]\nSession: agent:main:session-1",
+          "Command: [preview truncated or unsafe content omitted]\nSession: agent:main:session-1",
       }),
     );
+    expect(params.onAgentEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stream: "approval",
+        data: expect.objectContaining({
+          commandPreviewOmitted: true,
+        }),
+      }),
+    );
+  });
+
+  it("marks clipped command previews even when a safe prefix remains", async () => {
+    const params = createParams();
+    mockCallGatewayTool.mockResolvedValueOnce({
+      id: "plugin:approval-clipped-command",
+      decision: "allow-once",
+    });
+
+    await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-clipped",
+        command: `${"a".repeat(5000)} tail`,
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    const [, , requestPayload] = mockCallGatewayTool.mock.calls[0] ?? [];
+    const description = (requestPayload as { description: string }).description;
+    expect(description).toContain("[preview truncated or unsafe content omitted]");
     expect(params.onAgentEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         stream: "approval",

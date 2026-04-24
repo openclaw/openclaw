@@ -14,7 +14,7 @@ const PERMISSION_DESCRIPTION_MAX_LENGTH = 700;
 const PERMISSION_SAMPLE_LIMIT = 2;
 const PERMISSION_VALUE_MAX_LENGTH = 48;
 const APPROVAL_PREVIEW_SCAN_MAX_LENGTH = 4096;
-const APPROVAL_PREVIEW_OMITTED = "[preview omitted: too long or unsafe]";
+const APPROVAL_PREVIEW_OMITTED = "[preview truncated or unsafe content omitted]";
 const ANSI_OSC_SEQUENCE_RE = new RegExp(
   String.raw`(?:\u001b]|\u009d)[^\u001b\u009c\u0007]*(?:\u0007|\u001b\\|\u009c)`,
   "g",
@@ -25,7 +25,7 @@ const ANSI_CONTROL_SEQUENCE_RE = new RegExp(
 );
 const CONTROL_CHARACTER_RE = new RegExp(String.raw`[\u0000-\u001f\u007f-\u009f]+`, "g");
 const INVISIBLE_FORMATTING_CONTROL_RE = new RegExp(
-  String.raw`[\u00ad\u034f\u061c\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff\ufe00-\ufe0f]|\u{e0100}-\u{e01ef}`,
+  String.raw`[\u00ad\u034f\u061c\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff\ufe00-\ufe0f\u{e0100}-\u{e01ef}]`,
   "gu",
 );
 const DANGLING_TERMINAL_SEQUENCE_SUFFIX_RE = new RegExp(
@@ -216,11 +216,11 @@ function buildApprovalContext(params: {
   const subject =
     permissionLines[0] ??
     (command
-      ? `Command: ${command}`
+      ? `Command: ${formatApprovalPreviewSubject(command, commandPreview.omitted)}`
       : commandPreview.omitted
         ? `Command: ${APPROVAL_PREVIEW_OMITTED}`
         : reason
-          ? `Reason: ${reason}`
+          ? `Reason: ${formatApprovalPreviewSubject(reason, reasonPreview.omitted)}`
           : reasonPreview.omitted
             ? `Reason: ${APPROVAL_PREVIEW_OMITTED}`
             : `Request method: ${params.method}`);
@@ -682,6 +682,10 @@ function sanitizeVisibleScalar(value: string): string {
     .replace(CONTROL_CHARACTER_RE, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function formatApprovalPreviewSubject(text: string, omitted: boolean): string {
+  return omitted ? `${text} ${APPROVAL_PREVIEW_OMITTED}` : text;
 }
 
 function joinDescriptionLinesWithinLimit(lines: string[], maxLength: number): string {
