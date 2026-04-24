@@ -91,10 +91,14 @@ export function resolveWhatsAppInboundPolicy(params: {
     configuredAllowFrom.length > 0 ? configuredAllowFrom : params.selfE164 ? [params.selfE164] : [];
   // Only use explicit groupAllowFrom. DM allowFrom entries (from pairing)
   // should not grant group access or bypass the group allowlist gate.
+  // groupAllowFromFallbackToAllowFrom: false is required because an empty
+  // groupAllowFrom otherwise silently falls back to allowFrom inside
+  // resolveGroupAllowFromSources, which would re-introduce the bypass.
   const groupAllowFrom = account.groupAllowFrom ?? [];
   const { effectiveGroupAllowFrom } = resolveEffectiveAllowFromLists({
     allowFrom: configuredAllowFrom,
     groupAllowFrom,
+    groupAllowFromFallbackToAllowFrom: false,
   });
   const defaultGroupPolicy = resolveDefaultGroupPolicy(params.cfg);
   const { groupPolicy, providerMissingFallbackApplied } = resolveWhatsAppRuntimeGroupPolicy({
