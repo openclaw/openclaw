@@ -14,10 +14,12 @@ place to add logic.
 
 - Both methods are `operator.admin`-scoped per `src/gateway/method-scopes.ts`;
   non-admin clients never reach these handlers.
-- The HTTP bearer-token surface and the WS shared-secret surface both map to
-  `senderIsOwner: true` at `src/gateway/http-utils.ts:255` (documented as
-  intentional in SECURITY.md). Device-token auth does _not_ get owner by
-  default — this asymmetry is load-bearing and must be preserved.
+- The HTTP (OpenAI-compatible / `/tools/invoke`) bearer-token path maps to
+  `senderIsOwner: true` at `src/gateway/http-utils.ts:255`
+  (`resolveOpenAiCompatibleHttpSenderIsOwner`); the WS shared-secret surface
+  carries the same semantics via a parallel path (documented as intentional in
+  SECURITY.md). Device-token auth does _not_ get owner by default — this
+  asymmetry is load-bearing and must be preserved.
 - `secrets.resolve` validates target ids against
   `src/secrets/target-registry.ts` via `isKnownSecretTargetId` before any
   lookup. An unknown target id is a 400, not a 500. Don't swap this for a
