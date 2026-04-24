@@ -8,7 +8,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AUTH_PROFILE_RUNTIME_CONTRACT } from "../../../../test/helpers/agents/auth-profile-runtime-contract.js";
 import { runCodexAppServerAttempt, __testing } from "./run-attempt.js";
-import { writeCodexAppServerBinding } from "./session-binding.js";
+import { readCodexAppServerBinding, writeCodexAppServerBinding } from "./session-binding.js";
 import { createCodexTestModel } from "./test-support.js";
 
 function createParams(sessionFile: string, workspaceDir: string): EmbeddedRunAttemptParams {
@@ -177,5 +177,34 @@ describe("Auth profile runtime contract - Codex app-server adapter", () => {
     await harness.waitForMethod("turn/start");
     await harness.completeTurn();
     await run;
+  });
+
+  it("prefers an explicit runtime auth profile over a stale persisted binding", async () => {
+    const harness = createCodexAuthProfileHarness({ startMethod: "thread/resume" });
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-auth-contract",
+      cwd: tmpDir,
+      authProfileId: "openai-codex:stale",
+      dynamicToolsFingerprint: "[]",
+    });
+    const params = createParams(sessionFile, tmpDir);
+    params.authProfileId = AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId;
+
+    const run = runCodexAppServerAttempt(params);
+    await vi.waitFor(
+      () =>
+        expect(harness.seenAuthProfileIds).toEqual([
+          AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
+        ]),
+      { interval: 1 },
+    );
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn();
+    await run;
+
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      authProfileId: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
+    });
   });
 });
