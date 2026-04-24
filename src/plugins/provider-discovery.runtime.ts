@@ -14,6 +14,11 @@ type ProviderDiscoveryModule =
       provider?: ProviderPlugin;
     };
 
+type ProviderDiscoveryEntryResult = {
+  providers: ProviderPlugin[];
+  complete: boolean;
+};
+
 function normalizeDiscoveryModule(value: ProviderDiscoveryModule): ProviderPlugin[] {
   const resolved =
     value && typeof value === "object" && "default" in value && value.default !== undefined
@@ -51,17 +56,18 @@ function resolveProviderDiscoveryEntryPlugins(params: {
   includeUntrustedWorkspacePlugins?: boolean;
   requireCompleteDiscoveryEntryCoverage?: boolean;
   discoveryEntriesOnly?: boolean;
-}): ProviderPlugin[] {
+}): ProviderDiscoveryEntryResult {
   const pluginIds = resolveDiscoveredProviderPluginIds(params);
   const pluginIdSet = new Set(pluginIds);
   const records = loadPluginManifestRegistry(params).plugins.filter(
     (plugin) => plugin.providerDiscoverySource && pluginIdSet.has(plugin.id),
   );
   if (records.length === 0) {
-    return [];
+    return { providers: [], complete: false };
   }
-  if (params.requireCompleteDiscoveryEntryCoverage && records.length < pluginIdSet.size) {
-    return [];
+  const complete = records.length === pluginIdSet.size;
+  if (params.requireCompleteDiscoveryEntryCoverage && !complete) {
+    return { providers: [], complete: false };
   }
   const loadSource = createPluginSourceLoader();
   const providers: ProviderPlugin[] = [];
@@ -76,10 +82,10 @@ function resolveProviderDiscoveryEntryPlugins(params: {
     } catch {
       // Discovery fast path is optional. Fall back to the full plugin loader
       // below so existing plugin diagnostics/load behavior remains canonical.
-      return [];
+      return { providers: [], complete: false };
     }
   }
-  return providers;
+  return { providers, complete };
 }
 
 export function resolvePluginDiscoveryProvidersRuntime(params: {
@@ -91,13 +97,16 @@ export function resolvePluginDiscoveryProvidersRuntime(params: {
   requireCompleteDiscoveryEntryCoverage?: boolean;
   discoveryEntriesOnly?: boolean;
 }): ProviderPlugin[] {
-  const entryProviders = resolveProviderDiscoveryEntryPlugins(params);
+  const entryResult = resolveProviderDiscoveryEntryPlugins(params);
   if (params.discoveryEntriesOnly === true) {
-    return entryProviders;
+    return entryResult.providers;
   }
-  const liveEntryProviders = entryProviders.filter(hasLiveProviderDiscoveryHook);
-  if (liveEntryProviders.length > 0) {
-    return liveEntryProviders;
+  if (
+    entryResult.complete &&
+    entryResult.providers.length > 0 &&
+    entryResult.providers.every(hasLiveProviderDiscoveryHook)
+  ) {
+    return entryResult.providers;
   }
   return resolvePluginProviders({
     ...params,

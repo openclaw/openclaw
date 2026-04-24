@@ -1,7 +1,6 @@
 {
   "id": "kilocode",
   "enabledByDefault": true,
-  "providerDiscoveryEntry": "./provider-discovery.ts",
   "providers": ["kilocode"],
   "providerAuthEnvVars": {
     "kilocode": ["KILOCODE_API_KEY"]
