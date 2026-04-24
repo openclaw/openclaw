@@ -10,11 +10,7 @@ import {
   activateSecretsRuntimeSnapshot,
   getActiveSecretsRuntimeSnapshot,
 } from "../secrets/runtime.js";
-import {
-  buildGatewayReloadPlan,
-  diffConfigPaths,
-  type ChannelKind,
-} from "./config-reload.js";
+import { buildGatewayReloadPlan, diffConfigPaths, type ChannelKind } from "./config-reload.js";
 import { createExecApprovalIosPushDelivery } from "./exec-approval-ios-push.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
 import { createExecApprovalHandlers } from "./server-methods/exec-approval.js";
@@ -64,7 +60,9 @@ export function createGatewayAuxHandlers(params: {
   // "before" snapshot used for the reload-plan diff is always the snapshot
   // replaced by this call's activation, not one captured by a prior caller.
   let reloadInFlight: Promise<ReloadSecretsResult> | null = null;
-  const runExclusiveReload = (fn: () => Promise<ReloadSecretsResult>): Promise<ReloadSecretsResult> => {
+  const runExclusiveReload = (
+    fn: () => Promise<ReloadSecretsResult>,
+  ): Promise<ReloadSecretsResult> => {
     if (reloadInFlight) {
       return reloadInFlight;
     }
@@ -89,6 +87,7 @@ export function createGatewayAuxHandlers(params: {
           params.sharedGatewaySessionGenerationState.current;
         let nextSharedGatewaySessionGeneration = previousSharedGatewaySessionGeneration;
         let sharedGatewaySessionGenerationChanged = false;
+        const successfullyRestartedChannels: ChannelKind[] = [];
         try {
           const prepared = await params.activateRuntimeSecrets(previousSnapshot.sourceConfig, {
             reason: "reload",
@@ -127,8 +126,11 @@ export function createGatewayAuxHandlers(params: {
               try {
                 await params.stopChannel(channel);
                 await params.startChannel(channel);
+                successfullyRestartedChannels.push(channel);
               } catch {
-                params.logChannels.info(`failed to restart ${channel} channel after secrets reload`);
+                params.logChannels.info(
+                  `failed to restart ${channel} channel after secrets reload`,
+                );
                 restartFailures.push(channel);
               }
             }
@@ -141,12 +143,24 @@ export function createGatewayAuxHandlers(params: {
           return { warningCount: prepared.warnings.length };
         } catch (err) {
           activateSecretsRuntimeSnapshot(previousSnapshot);
-          params.sharedGatewaySessionGenerationState.current = previousSharedGatewaySessionGeneration;
+          params.sharedGatewaySessionGenerationState.current =
+            previousSharedGatewaySessionGeneration;
           if (sharedGatewaySessionGenerationChanged) {
             disconnectStaleSharedGatewayAuthClients({
               clients: params.clients,
               expectedGeneration: previousSharedGatewaySessionGeneration,
             });
+          }
+          for (const channel of successfullyRestartedChannels) {
+            params.logChannels.info(`rolling back ${channel} channel after secrets reload failure`);
+            try {
+              await params.stopChannel(channel);
+              await params.startChannel(channel);
+            } catch {
+              params.logChannels.info(
+                `failed to roll back ${channel} channel after secrets reload`,
+              );
+            }
           }
           throw err;
         }

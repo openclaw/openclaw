@@ -192,7 +192,7 @@ describe("gateway aux handlers", () => {
     expect(respond).toHaveBeenNthCalledWith(2, true, { ok: true, warningCount: 0 });
   });
 
-  it("isolates per-channel restart failures, then surfaces an error so partial rotation is visible", async () => {
+  it("rolls back successfully restarted channels when a later restart fails", async () => {
     activateSecretsRuntimeSnapshot(
       createSnapshot(
         asConfig({
@@ -216,8 +216,9 @@ describe("gateway aux handlers", () => {
     const stopChannel = vi.fn().mockResolvedValue(undefined);
     const startChannel = vi
       .fn()
+      .mockResolvedValueOnce(undefined)
       .mockImplementationOnce(async () => {
-        throw new Error("slack refused to start");
+        throw new Error("zalo refused to start");
       })
       .mockResolvedValue(undefined);
     const logChannelsInfo = vi.fn();
@@ -236,17 +237,16 @@ describe("gateway aux handlers", () => {
 
     await invokeSecretsReload({ handlers: extraHandlers, respond });
 
-    // Both channels were attempted even though slack's startChannel threw,
-    // so zalo still got its rotation applied.
-    expect(stopChannel.mock.calls.map(([ch]) => ch).toSorted((a, b) => a.localeCompare(b))).toEqual(
-      ["slack", "zalo"],
-    );
-    expect(
-      startChannel.mock.calls.map(([ch]) => ch).toSorted((a, b) => a.localeCompare(b)),
-    ).toEqual(["slack", "zalo"]);
+    expect(stopChannel.mock.calls).toEqual([["slack"], ["zalo"], ["slack"]]);
+    expect(startChannel.mock.calls).toEqual([["slack"], ["zalo"], ["slack"]]);
     expect(
       logChannelsInfo.mock.calls.some(([msg]) =>
-        String(msg).startsWith("failed to restart slack channel after secrets reload"),
+        String(msg).startsWith("failed to restart zalo channel after secrets reload"),
+      ),
+    ).toBe(true);
+    expect(
+      logChannelsInfo.mock.calls.some(([msg]) =>
+        String(msg).startsWith("rolling back slack channel after secrets reload failure"),
       ),
     ).toBe(true);
     // The handler surfaces the partial-failure so the caller can retry/alert
