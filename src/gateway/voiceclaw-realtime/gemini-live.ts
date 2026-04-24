@@ -1,11 +1,12 @@
 import WebSocket, { type RawData } from "ws";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { buildInstructions } from "./instructions.js";
-import { getGeminiTools } from "./tools.js";
 import type {
+  VoiceClawRealtimeAdapterOptions,
   VoiceClawRealtimeAdapter,
   VoiceClawSendToClient,
   VoiceClawSessionConfigEvent,
+  VoiceClawRealtimeToolDeclaration,
 } from "./types.js";
 
 const log = createSubsystemLogger("gateway").child("voiceclaw-realtime");
@@ -31,6 +32,7 @@ export class VoiceClawGeminiLiveAdapter implements VoiceClawRealtimeAdapter {
   private upstream: WebSocket | null = null;
   private sendToClient: VoiceClawSendToClient | null = null;
   private config: VoiceClawSessionConfigEvent | null = null;
+  private tools: VoiceClawRealtimeToolDeclaration[] = [];
   private transcript: { role: "user" | "assistant"; text: string }[] = [];
   private currentAssistantText = "";
   private currentUserText = "";
@@ -42,6 +44,7 @@ export class VoiceClawGeminiLiveAdapter implements VoiceClawRealtimeAdapter {
   private currentlyResumable = false;
   private rotateAfterToolCalls = false;
   private pendingToolCallIds = new Set<string>();
+  private asyncToolCallIds = new Set<string>();
   private pendingAudio: string[] = [];
   private pendingVideo: string[] = [];
   private pendingControl: string[] = [];
@@ -59,9 +62,11 @@ export class VoiceClawGeminiLiveAdapter implements VoiceClawRealtimeAdapter {
   async connect(
     config: VoiceClawSessionConfigEvent,
     sendToClient: VoiceClawSendToClient,
+    options?: VoiceClawRealtimeAdapterOptions,
   ): Promise<void> {
     this.config = config;
     this.sendToClient = sendToClient;
+    this.tools = options?.tools ?? [];
     this.disconnected = false;
     this.watchdogEnabled = config.watchdog === "enabled";
     await this.openUpstream();
@@ -110,6 +115,19 @@ export class VoiceClawGeminiLiveAdapter implements VoiceClawRealtimeAdapter {
     // Gemini Live handles barge-in/interruption server-side.
   }
 
+  beginAsyncToolCall(callId: string): void {
+    this.asyncToolCallIds.add(callId);
+    this.pauseWatchdog();
+  }
+
+  finishAsyncToolCall(callId: string): void {
+    if (!this.asyncToolCallIds.delete(callId)) {
+      return;
+    }
+    this.resetWatchdog();
+    this.maybeReconnectAfterToolCalls("deferred goAway");
+  }
+
   sendToolResult(callId: string, output: string): void {
     this.pendingToolCalls = Math.max(0, this.pendingToolCalls - 1);
     this.pendingToolCallIds.delete(callId);
@@ -129,10 +147,7 @@ export class VoiceClawGeminiLiveAdapter implements VoiceClawRealtimeAdapter {
 
     if (this.pendingToolCalls === 0) {
       this.resetWatchdog();
-      if (this.rotateAfterToolCalls && this.currentlyResumable) {
-        this.rotateAfterToolCalls = false;
-        void this.reconnect("deferred goAway");
-      }
+      this.maybeReconnectAfterToolCalls("deferred goAway");
     }
   }
 
@@ -152,6 +167,7 @@ export class VoiceClawGeminiLiveAdapter implements VoiceClawRealtimeAdapter {
   disconnect(): void {
     this.disconnected = true;
     this.clearWatchdog();
+    this.asyncToolCallIds.clear();
     this.flushPendingTranscripts();
     if (this.upstream && this.upstream.readyState !== WebSocket.CLOSED) {
       this.upstream.close();
@@ -255,7 +271,6 @@ export class VoiceClawGeminiLiveAdapter implements VoiceClawRealtimeAdapter {
   }
 
   private sendSetup(config: VoiceClawSessionConfigEvent, model: string): void {
-    const tools = getGeminiTools(config);
     const setup: Record<string, unknown> = {
       model: `models/${model}`,
       generationConfig: {
@@ -289,8 +304,8 @@ export class VoiceClawGeminiLiveAdapter implements VoiceClawRealtimeAdapter {
       },
     };
 
-    if (tools.length > 0) {
-      setup.tools = [{ functionDeclarations: tools }];
+    if (this.tools.length > 0) {
+      setup.tools = [{ functionDeclarations: this.tools }];
     }
 
     if (this.upstream?.readyState === WebSocket.OPEN) {
@@ -316,19 +331,24 @@ export class VoiceClawGeminiLiveAdapter implements VoiceClawRealtimeAdapter {
       const ids = Array.isArray(cancellation.ids)
         ? cancellation.ids.filter((id): id is string => typeof id === "string")
         : [];
-      this.pendingToolCalls = 0;
+      let cancelledCount = 0;
       for (const id of ids) {
-        this.pendingToolCallIds.delete(id);
+        if (this.pendingToolCallIds.delete(id)) {
+          cancelledCount += 1;
+        }
+        this.asyncToolCallIds.delete(id);
       }
+      this.pendingToolCalls = Math.max(0, this.pendingToolCalls - cancelledCount);
       if (ids.length > 0) {
         this.sendToClient?.({ type: "tool.cancelled", callIds: ids });
       }
       this.resetWatchdog();
+      this.maybeReconnectAfterToolCalls("deferred goAway");
       return;
     }
 
     if (asRecord(msg.goAway)) {
-      if (this.pendingToolCalls > 0 || !this.currentlyResumable) {
+      if (this.pendingToolCalls > 0 || this.asyncToolCallIds.size > 0 || !this.currentlyResumable) {
         this.rotateAfterToolCalls = true;
         return;
       }
@@ -342,6 +362,7 @@ export class VoiceClawGeminiLiveAdapter implements VoiceClawRealtimeAdapter {
       if (typeof sessionResumptionUpdate.newHandle === "string" && this.currentlyResumable) {
         this.resumptionHandle = sessionResumptionUpdate.newHandle;
       }
+      this.maybeReconnectAfterToolCalls("deferred goAway");
       return;
     }
 
@@ -431,22 +452,14 @@ export class VoiceClawGeminiLiveAdapter implements VoiceClawRealtimeAdapter {
   }
 
   private handleUpstreamClose(code: number): void {
-    if (this.disconnected || code === 1000 || this.isReconnecting) {
+    if (this.disconnected || this.isReconnecting) {
       return;
     }
-    if (this.pendingToolCalls > 0 || this.rotateAfterToolCalls) {
-      const callIds = [...this.pendingToolCallIds];
-      this.pendingToolCalls = 0;
-      this.pendingToolCallIds.clear();
-      this.rotateAfterToolCalls = false;
-      if (callIds.length > 0) {
-        this.sendToClient?.({ type: "tool.cancelled", callIds });
-      }
-      this.sendToClient?.({
-        type: "error",
-        message: "Gemini Live closed while a tool call was in flight",
-        code: 502,
-      });
+    if (this.hasActiveToolCalls()) {
+      this.cancelActiveToolCalls("Gemini Live closed while a tool call was in flight");
+      return;
+    }
+    if (code === 1000) {
       return;
     }
     if (!RECONNECTABLE_CLOSE_CODES.has(code) || !this.resumptionHandle) {
@@ -492,7 +505,45 @@ export class VoiceClawGeminiLiveAdapter implements VoiceClawRealtimeAdapter {
       }
     }
     this.isReconnecting = false;
+    if (this.hasActiveToolCalls()) {
+      this.cancelActiveToolCalls("Gemini Live reconnect failed while a tool call was in flight");
+      return;
+    }
     this.sendToClient?.({ type: "error", message: "Gemini Live reconnect failed", code: 502 });
+  }
+
+  private hasActiveToolCalls(): boolean {
+    return (
+      this.pendingToolCalls > 0 ||
+      this.pendingToolCallIds.size > 0 ||
+      this.asyncToolCallIds.size > 0 ||
+      this.rotateAfterToolCalls
+    );
+  }
+
+  private cancelActiveToolCalls(message: string): void {
+    const callIds = Array.from(new Set([...this.pendingToolCallIds, ...this.asyncToolCallIds]));
+    this.pendingToolCalls = 0;
+    this.pendingToolCallIds.clear();
+    this.asyncToolCallIds.clear();
+    this.rotateAfterToolCalls = false;
+    if (callIds.length > 0) {
+      this.sendToClient?.({ type: "tool.cancelled", callIds });
+    }
+    this.sendToClient?.({ type: "error", message, code: 502 });
+  }
+
+  private maybeReconnectAfterToolCalls(reason: string): void {
+    if (
+      !this.rotateAfterToolCalls ||
+      !this.currentlyResumable ||
+      this.pendingToolCalls > 0 ||
+      this.asyncToolCallIds.size > 0
+    ) {
+      return;
+    }
+    this.rotateAfterToolCalls = false;
+    void this.reconnect(reason);
   }
 
   private sendUpstream(
@@ -566,7 +617,7 @@ export class VoiceClawGeminiLiveAdapter implements VoiceClawRealtimeAdapter {
 
   private resetWatchdog(): void {
     this.clearWatchdog();
-    if (!this.watchdogEnabled || this.pendingToolCalls > 0) {
+    if (!this.watchdogEnabled || this.pendingToolCalls > 0 || this.asyncToolCallIds.size > 0) {
       return;
     }
     this.watchdogTimer = setTimeout(() => {

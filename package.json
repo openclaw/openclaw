@@ -1350,6 +1350,7 @@
     "format:swift": "swiftformat --lint --config .swiftformat apps/macos/Sources apps/ios/Sources apps/shared/OpenClawKit/Sources",
     "gateway:dev": "OPENCLAW_SKIP_CHANNELS=1 node scripts/run-node.mjs --dev gateway",
     "gateway:dev:reset": "OPENCLAW_SKIP_CHANNELS=1 node scripts/run-node.mjs --dev gateway --reset",
+    "gateway:voiceclaw-realtime": "bash -lc 'set -a; [ -f ../voiceclaw/.env ] && source ../voiceclaw/.env; [ -f ../voiceclaw/relay-server/.env ] && source ../voiceclaw/relay-server/.env; set +a; if [ -z \"${GEMINI_API_KEY:-}\" ]; then echo \"GEMINI_API_KEY is required; set it or add it to ../voiceclaw/.env\" >&2; exit 1; fi; export OPENCLAW_GATEWAY_TOKEN=\"${OPENCLAW_GATEWAY_TOKEN:-${RELAY_API_KEY:-}}\"; if [ -z \"${OPENCLAW_GATEWAY_TOKEN:-}\" ]; then echo \"OPENCLAW_GATEWAY_TOKEN or RELAY_API_KEY is required\" >&2; exit 1; fi; OPENCLAW_CONFIG_PATH=../.openclaw-realtime-brain/openclaw.json OPENCLAW_STATE_DIR=../.openclaw-realtime-brain/state OPENCLAW_SKIP_CHANNELS=1 node scripts/run-node.mjs gateway --port 19789'",
     "gateway:watch": "node scripts/watch-node.mjs gateway --force",
     "gen:host-env-policy:swift": "node scripts/generate-host-env-security-policy-swift.mjs --write",
     "ghsa:patch": "node scripts/ghsa-patch.mjs",

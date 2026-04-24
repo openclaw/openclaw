@@ -1,21 +1,21 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import WebSocket, { type RawData } from "ws";
-import { createDefaultDeps } from "../../cli/deps.js";
-import { agentCommandFromIngress } from "../../commands/agent.js";
-import { onAgentEvent } from "../../infra/agent-events.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { defaultRuntime } from "../../runtime.js";
-import { resolveAssistantStreamDeltaText } from "../agent-event-assistant-text.js";
 import type { AuthRateLimiter } from "../auth-rate-limit.js";
 import {
   authorizeHttpGatewayConnect,
   isLocalDirectRequest,
+  type GatewayAuthResult,
   type ResolvedGatewayAuth,
 } from "../auth.js";
 import { getPreauthHandshakeTimeoutMsFromEnv } from "../handshake-timeouts.js";
 import { VoiceClawGeminiLiveAdapter } from "./gemini-live.js";
-import { handleSynchronousToolCall, VOICECLAW_SERVER_SIDE_TOOLS } from "./tools.js";
+import {
+  createVoiceClawRealtimeToolRuntime,
+  type VoiceClawRealtimeToolRuntime,
+} from "./tool-runtime.js";
 import type {
   VoiceClawClientEvent,
   VoiceClawRealtimeAdapter,
@@ -30,6 +30,7 @@ type VoiceClawRealtimeSessionOptions = {
   ws: WebSocket;
   req: IncomingMessage;
   auth: ResolvedGatewayAuth;
+  config: OpenClawConfig;
   trustedProxies: string[];
   allowRealIpFallback: boolean;
   rateLimiter?: AuthRateLimiter;
@@ -42,12 +43,13 @@ export class VoiceClawRealtimeSession {
   private readonly ws: WebSocket;
   private readonly req: IncomingMessage;
   private readonly auth: ResolvedGatewayAuth;
+  private readonly gatewayConfig: OpenClawConfig;
   private readonly trustedProxies: string[];
   private readonly allowRealIpFallback: boolean;
   private readonly rateLimiter: AuthRateLimiter | undefined;
   private readonly releasePreauthBudget: () => void;
-  private readonly inFlightTools = new Map<string, AbortController>();
   private adapter: VoiceClawRealtimeAdapter | null = null;
+  private toolRuntime: VoiceClawRealtimeToolRuntime | null = null;
   private config: VoiceClawSessionConfigEvent | null = null;
   private handshakeTimer: ReturnType<typeof setTimeout> | null = null;
   private closed = false;
@@ -57,6 +59,7 @@ export class VoiceClawRealtimeSession {
     this.ws = opts.ws;
     this.req = opts.req;
     this.auth = opts.auth;
+    this.gatewayConfig = opts.config;
     this.trustedProxies = opts.trustedProxies;
     this.allowRealIpFallback = opts.allowRealIpFallback;
     this.rateLimiter = opts.rateLimiter;
@@ -148,17 +151,28 @@ export class VoiceClawRealtimeSession {
       this.ws.close(1008, "unauthorized");
       return;
     }
-    if (
-      config.brainAgent !== "none" &&
-      this.auth.mode === "none" &&
-      !isLocalDirectRequest(this.req, this.trustedProxies, this.allowRealIpFallback)
-    ) {
+    const localDirect = isLocalDirectRequest(
+      this.req,
+      this.trustedProxies,
+      this.allowRealIpFallback,
+    );
+    if (config.brainAgent !== "none" && this.auth.mode === "none" && !localDirect) {
       this.send({
         type: "error",
         message: "OpenClaw real-time brain requires gateway auth for non-local connections",
         code: 403,
       });
       this.ws.close(1008, "auth required");
+      return;
+    }
+    const senderIsOwner = resolveRealtimeSenderIsOwner(authResult.method, localDirect);
+    if (config.brainAgent !== "none" && !senderIsOwner) {
+      this.send({
+        type: "error",
+        message: "OpenClaw real-time brain requires owner-equivalent gateway auth",
+        code: 403,
+      });
+      this.ws.close(1008, "owner auth required");
       return;
     }
 
@@ -171,7 +185,22 @@ export class VoiceClawRealtimeSession {
     this.adapter = new VoiceClawGeminiLiveAdapter();
 
     try {
-      await this.adapter.connect(this.config, (event) => this.handleAdapterEvent(event));
+      if (!process.env.GEMINI_API_KEY?.trim()) {
+        throw new Error("GEMINI_API_KEY is required for VoiceClaw real-time brain mode");
+      }
+      this.toolRuntime =
+        this.config.brainAgent === "none"
+          ? null
+          : createVoiceClawRealtimeToolRuntime({
+              config: this.gatewayConfig,
+              sessionId: this.id,
+              sessionKey: this.resolveToolSessionKey(),
+              modelId: this.config.model,
+              senderIsOwner,
+            });
+      await this.adapter.connect(this.config, (event) => this.handleAdapterEvent(event), {
+        tools: this.toolRuntime?.declarations ?? [],
+      });
       this.send({ type: "session.ready", sessionId: this.id });
     } catch (err) {
       this.send({
@@ -187,28 +216,28 @@ export class VoiceClawRealtimeSession {
   }
 
   private handleAdapterEvent(event: VoiceClawServerEvent): void {
-    if (event.type === "tool.call" && VOICECLAW_SERVER_SIDE_TOOLS.has(event.name)) {
-      this.handleServerToolCall(event);
+    if (event.type === "tool.call") {
+      this.handleToolCall(event);
       return;
     }
     if (event.type === "tool.cancelled") {
       for (const callId of event.callIds) {
-        this.inFlightTools.get(callId)?.abort();
-        this.inFlightTools.delete(callId);
+        this.toolRuntime?.abortTool(callId);
       }
     }
     this.send(event);
   }
 
-  private handleServerToolCall(event: VoiceClawToolCallEvent): void {
-    const syncResult = handleSynchronousToolCall(event.name, event.arguments);
-    if (syncResult !== null) {
-      this.adapter?.sendToolResult(event.callId, syncResult);
-      return;
-    }
-
-    if (event.name === "ask_brain") {
-      this.handleAskBrain(event.callId, event.arguments);
+  private handleToolCall(event: VoiceClawToolCallEvent): void {
+    if (
+      this.toolRuntime?.handleToolCall(event, {
+        beginAsyncToolCall: (callId) => this.adapter?.beginAsyncToolCall(callId),
+        finishAsyncToolCall: (callId) => this.adapter?.finishAsyncToolCall(callId),
+        sendToolResult: (callId, output) => this.adapter?.sendToolResult(callId, output),
+        sendProgress: (callId, summary) => this.send({ type: "tool.progress", callId, summary }),
+        injectContext: (text) => this.adapter?.injectContext(text),
+      })
+    ) {
       return;
     }
 
@@ -218,93 +247,7 @@ export class VoiceClawRealtimeSession {
     );
   }
 
-  private handleAskBrain(callId: string, args: string): void {
-    const query = parseAskBrainQuery(args);
-    if (!query) {
-      this.adapter?.sendToolResult(callId, JSON.stringify({ error: "missing query" }));
-      return;
-    }
-
-    const controller = new AbortController();
-    this.inFlightTools.set(callId, controller);
-    this.adapter?.sendToolResult(
-      callId,
-      JSON.stringify({
-        status: "searching",
-        message: "Looking into it now. I'll share what I find in a moment.",
-      }),
-    );
-    this.send({ type: "tool.progress", callId, summary: "Looking into it now..." });
-
-    void this.runBrainAgent(callId, query, controller).finally(() => {
-      this.inFlightTools.delete(callId);
-    });
-  }
-
-  private async runBrainAgent(
-    callId: string,
-    query: string,
-    controller: AbortController,
-  ): Promise<void> {
-    const runId = `voiceclaw_${randomUUID()}`;
-    const sessionKey = this.resolveBrainSessionKey();
-    const deps = createDefaultDeps();
-    let assistantText = "";
-    let closed = false;
-    const unsubscribe = onAgentEvent((event) => {
-      if (event.runId !== runId || closed) {
-        return;
-      }
-      if (event.stream !== "assistant") {
-        return;
-      }
-      const delta = resolveAssistantStreamDeltaText(event) ?? "";
-      if (!delta) {
-        return;
-      }
-      assistantText += delta;
-      this.send({ type: "tool.progress", callId, summary: assistantText });
-    });
-
-    try {
-      const result = await agentCommandFromIngress(
-        {
-          message: query,
-          sessionKey,
-          runId,
-          deliver: false,
-          messageChannel: "voiceclaw",
-          bestEffortDeliver: false,
-          senderIsOwner: true,
-          allowModelOverride: true,
-          abortSignal: controller.signal,
-        },
-        defaultRuntime,
-        deps,
-      );
-
-      if (controller.signal.aborted) {
-        return;
-      }
-
-      const resultText = assistantText.trim() || resolveAgentResponseText(result);
-      this.adapter?.injectContext(
-        `[OpenClaw brain result for query: "${query}"]\n${resultText}\n\nPlease share this information with the user naturally.`,
-      );
-    } catch (err) {
-      if (!controller.signal.aborted) {
-        const message = err instanceof Error ? err.message : "OpenClaw brain call failed";
-        this.adapter?.injectContext(
-          `[OpenClaw brain failed for query: "${query}": ${message}]\nLet the user know the search did not work and offer to try again.`,
-        );
-      }
-    } finally {
-      closed = true;
-      unsubscribe();
-    }
-  }
-
-  private resolveBrainSessionKey(): string {
+  private resolveToolSessionKey(): string {
     const configured = sanitizeSessionKey(this.config?.sessionKey);
     if (configured) {
       return `agent:main:voiceclaw:${configured}`;
@@ -329,10 +272,8 @@ export class VoiceClawRealtimeSession {
     }
     this.clearHandshakeTimer();
     this.releasePreauthBudget();
-    for (const controller of this.inFlightTools.values()) {
-      controller.abort();
-    }
-    this.inFlightTools.clear();
+    this.toolRuntime?.abortAll();
+    this.toolRuntime = null;
     const transcript = this.adapter?.getTranscript() ?? [];
     this.adapter?.disconnect();
     this.adapter = null;
@@ -367,26 +308,6 @@ function parseClientEvent(raw: RawData): VoiceClawClientEvent | null {
   }
 }
 
-function parseAskBrainQuery(args: string): string | null {
-  try {
-    const parsed = JSON.parse(args) as { query?: unknown };
-    return typeof parsed.query === "string" && parsed.query.trim() ? parsed.query.trim() : null;
-  } catch {
-    return null;
-  }
-}
-
-function resolveAgentResponseText(result: unknown): string {
-  const payloads = (result as { payloads?: Array<{ text?: string }> } | null)?.payloads;
-  if (!Array.isArray(payloads) || payloads.length === 0) {
-    return "No response from OpenClaw.";
-  }
-  return payloads
-    .map((payload) => payload.text ?? "")
-    .filter(Boolean)
-    .join("\n\n");
-}
-
 function sanitizeSessionKey(value: string | undefined): string | null {
   const trimmed = value?.trim();
   if (!trimmed) {
@@ -394,6 +315,16 @@ function sanitizeSessionKey(value: string | undefined): string | null {
   }
   const sanitized = trimmed.replace(/[^A-Za-z0-9_.-]/g, "-").slice(0, 128);
   return sanitized || null;
+}
+
+export function resolveRealtimeSenderIsOwner(
+  method: GatewayAuthResult["method"] | undefined,
+  localDirect: boolean,
+): boolean {
+  if (method === "token" || method === "password") {
+    return true;
+  }
+  return method === "none" && localDirect;
 }
 
 function sanitizeErrorMessage(message: string): string {

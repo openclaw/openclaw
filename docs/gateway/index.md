@@ -184,9 +184,12 @@ directly to a real-time OpenClaw brain instead of going through a separate relay
 process.
 
 The endpoint uses Gemini Live for real-time audio and calls OpenClaw as the
-brain through an internal `ask_brain` tool. Set `GEMINI_API_KEY` in the gateway
-process environment. If gateway auth is enabled, the desktop client sends the
-gateway token or password in its first `session.config` message.
+brain by exposing OpenClaw tools directly to Gemini Live. Tool calls return an
+immediate `working` result to keep the voice turn responsive, then OpenClaw
+executes the actual tool asynchronously and injects the result back into the
+live session. Set `GEMINI_API_KEY` in the gateway process environment. If
+gateway auth is enabled, the desktop client sends the gateway token or password
+in its first `session.config` message.
 
 Real-time brain access runs owner-authorized OpenClaw agent commands. Keep
 `gateway.auth.mode: "none"` limited to loopback-only test instances. Non-local

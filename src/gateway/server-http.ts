@@ -1267,6 +1267,7 @@ export function attachGatewayUpgradeHandler(opts: {
             socket,
             head,
             auth: resolvedAuth,
+            config: configSnapshot,
             trustedProxies,
             allowRealIpFallback,
             rateLimiter,

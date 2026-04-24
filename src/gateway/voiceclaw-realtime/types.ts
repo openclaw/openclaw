@@ -166,13 +166,29 @@ export type VoiceClawErrorEvent = {
 
 export type VoiceClawSendToClient = (event: VoiceClawServerEvent) => void;
 
+export type VoiceClawRealtimeToolDeclaration = {
+  name: string;
+  description: string;
+  parameters: Record<string, unknown>;
+};
+
+export type VoiceClawRealtimeAdapterOptions = {
+  tools?: VoiceClawRealtimeToolDeclaration[];
+};
+
 export type VoiceClawRealtimeAdapter = {
-  connect(config: VoiceClawSessionConfigEvent, sendToClient: VoiceClawSendToClient): Promise<void>;
+  connect(
+    config: VoiceClawSessionConfigEvent,
+    sendToClient: VoiceClawSendToClient,
+    options?: VoiceClawRealtimeAdapterOptions,
+  ): Promise<void>;
   sendAudio(data: string): void;
   commitAudio(): void;
   sendFrame(data: string, mimeType?: string): void;
   createResponse(): void;
   cancelResponse(): void;
+  beginAsyncToolCall(callId: string): void;
+  finishAsyncToolCall(callId: string): void;
   sendToolResult(callId: string, output: string): void;
   injectContext(text: string): void;
   getTranscript(): { role: "user" | "assistant"; text: string }[];
