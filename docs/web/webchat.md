@@ -33,6 +33,9 @@ Status: the macOS/iOS SwiftUI chat UI talks directly to the Gateway WebSocket.
   leaked ASCII/full-width model control tokens are stripped from visible text,
   and assistant entries whose whole visible text is only the exact silent
   token `NO_REPLY` / `no_reply` are omitted.
+- Live `chat` events also suppress commentary-phase assistant stream text, so
+  internal progress text does not briefly appear and then disappear after a
+  history reload.
 - `chat.inject` appends an assistant note directly to the transcript and broadcasts it to the UI (no agent run).
 - Aborted runs can keep partial assistant output visible in the UI.
 - Gateway persists aborted partial assistant text into transcript history when buffered output exists, and marks those entries with abort metadata.

@@ -228,6 +228,90 @@ describe("agent event handler", () => {
     },
   );
 
+  it("does not broadcast commentary-phase assistant text as chat output", () => {
+    const { broadcast, nodeSendToSession, chatRunState, handler, nowSpy } = createHarness({
+      now: 1_500,
+    });
+    chatRunState.registry.add("run-commentary", {
+      sessionKey: "session-commentary",
+      clientRunId: "client-commentary",
+    });
+
+    handler({
+      runId: "run-commentary",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: {
+        text: "checking thread context; then post a tight progress reply here.",
+        delta: "checking thread context; then post a tight progress reply here.",
+        phase: "commentary",
+      },
+    });
+
+    expect(chatBroadcastCalls(broadcast)).toHaveLength(0);
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(0);
+
+    emitLifecycleEnd(handler, "run-commentary");
+
+    const payload = expectSingleFinalChatPayload(broadcast) as { message?: unknown };
+    expect(payload.message).toBeUndefined();
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
+    nowSpy?.mockRestore();
+  });
+
+  it("still broadcasts final_answer assistant text after suppressed commentary", () => {
+    const { broadcast, nodeSendToSession, chatRunState, handler, nowSpy } = createHarness({
+      now: 1_600,
+    });
+    chatRunState.registry.add("run-final-answer", {
+      sessionKey: "session-final-answer",
+      clientRunId: "client-final-answer",
+    });
+
+    handler({
+      runId: "run-final-answer",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: {
+        text: "checking thread context; then post a tight progress reply here.",
+        delta: "checking thread context; then post a tight progress reply here.",
+        phase: "commentary",
+      },
+    });
+
+    handler({
+      runId: "run-final-answer",
+      seq: 2,
+      stream: "assistant",
+      ts: Date.now(),
+      data: {
+        text: "Done.",
+        delta: "Done.",
+        phase: "final_answer",
+      },
+    });
+    emitLifecycleEnd(handler, "run-final-answer", 3);
+
+    const chatCalls = chatBroadcastCalls(broadcast);
+    expect(chatCalls).toHaveLength(2);
+    const deltaPayload = chatCalls[0]?.[1] as {
+      state?: string;
+      message?: { content?: Array<{ text?: string }> };
+    };
+    const finalPayload = chatCalls[1]?.[1] as {
+      state?: string;
+      message?: { content?: Array<{ text?: string }> };
+    };
+    expect(deltaPayload.state).toBe("delta");
+    expect(deltaPayload.message?.content?.[0]?.text).toBe("Done.");
+    expect(finalPayload.state).toBe("final");
+    expect(finalPayload.message?.content?.[0]?.text).toBe("Done.");
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(2);
+    nowSpy?.mockRestore();
+  });
+
   it.each(["NO_REPLY", "ANNOUNCE_SKIP", "REPLY_SKIP"])(
     "does not include %s text in chat final message",
     (replyText) => {

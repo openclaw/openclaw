@@ -9,6 +9,7 @@ import { loadConfig } from "../config/config.js";
 import { type AgentEventPayload, getAgentRunContext } from "../infra/agent-events.js";
 import { detectErrorKind, type ErrorKind } from "../infra/errors.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
+import { normalizeAssistantPhase } from "../shared/chat-message-content.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import { setSafeTimeout } from "../utils/timer-delay.js";
 import {
@@ -86,6 +87,13 @@ function normalizeHeartbeatChatFinalText(params: {
     return { suppress: true, text: "" };
   }
   return { suppress: false, text: stripped.text };
+}
+
+function readAssistantEventPhase(data: unknown) {
+  if (!data || typeof data !== "object") {
+    return undefined;
+  }
+  return normalizeAssistantPhase((data as { phase?: unknown }).phase);
 }
 
 function appendUniqueSuffix(base: string, suffix: string): string {
@@ -980,7 +988,12 @@ export function createAgentEventHandler({
           isToolEvent ? { ...toolPayload, ...buildSessionEventSnapshot(sessionKey) } : agentPayload,
         );
       }
-      if (!isAborted && evt.stream === "assistant" && typeof evt.data?.text === "string") {
+      if (
+        !isAborted &&
+        evt.stream === "assistant" &&
+        readAssistantEventPhase(evt.data) !== "commentary" &&
+        typeof evt.data?.text === "string"
+      ) {
         emitChatDelta(sessionKey, clientRunId, evt.runId, evt.seq, evt.data.text, evt.data.delta);
       }
     }
