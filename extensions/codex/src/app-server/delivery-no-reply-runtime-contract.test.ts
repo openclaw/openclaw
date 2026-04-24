@@ -28,7 +28,7 @@ async function createParams(): Promise<EmbeddedRunAttemptParams> {
     workspaceDir: tempDir,
     runId: DELIVERY_NO_REPLY_RUNTIME_CONTRACT.runId,
     provider: "codex",
-    modelId: "gpt-5.4",
+    modelId: "gpt-5.4-codex",
     model: createCodexTestModel("codex"),
     thinkLevel: "medium",
   } as EmbeddedRunAttemptParams;
