@@ -66,6 +66,13 @@ openclaw channels login --channel whatsapp
 openclaw channels login --channel whatsapp --account work
 ```
 
+    To attach an existing/custom WhatsApp Web auth directory before login:
+
+```bash
+openclaw channels add --channel whatsapp --account work --auth-dir /path/to/wa-auth
+openclaw channels login --channel whatsapp --account work
+```
+
   </Step>
 
   <Step title="Start the gateway">
@@ -164,7 +171,7 @@ OpenClaw recommends running WhatsApp on a separate number when possible. (The ch
 
     - pairings are persisted in channel allow-store and merged with configured `allowFrom`
     - if no allowlist is configured, the linked self number is allowed by default
-    - outbound `fromMe` DMs are never auto-paired
+    - OpenClaw never auto-pairs outbound `fromMe` DMs (messages you send to yourself from the linked device)
 
   </Tab>
 
@@ -493,15 +500,15 @@ Resolution hierarchy for group messages:
 
 The effective `groups` map is determined first: if the account defines its own `groups`, it fully replaces the root `groups` map (no deep merge). Prompt lookup then runs on the resulting single map:
 
-1. **Group-specific system prompt** (`groups["<groupId>"].systemPrompt`): used if the specific group entry defines a `systemPrompt`.
-2. **Group wildcard system prompt** (`groups["*"].systemPrompt`): used when the specific group entry is absent or defines no `systemPrompt`.
+1. **Group-specific system prompt** (`groups["<groupId>"].systemPrompt`): used when the specific group entry exists in the map **and** its `systemPrompt` key is defined. If `systemPrompt` is an empty string (`""`), the wildcard is suppressed and no system prompt is applied.
+2. **Group wildcard system prompt** (`groups["*"].systemPrompt`): used when the specific group entry is absent from the map entirely, or when it exists but defines no `systemPrompt` key.
 
 Resolution hierarchy for direct messages:
 
 The effective `direct` map is determined first: if the account defines its own `direct`, it fully replaces the root `direct` map (no deep merge). Prompt lookup then runs on the resulting single map:
 
-1. **Direct-specific system prompt** (`direct["<peerId>"].systemPrompt`): used if the specific peer entry defines a `systemPrompt`.
-2. **Direct wildcard system prompt** (`direct["*"].systemPrompt`): used when the specific peer entry is absent or defines no `systemPrompt`.
+1. **Direct-specific system prompt** (`direct["<peerId>"].systemPrompt`): used when the specific peer entry exists in the map **and** its `systemPrompt` key is defined. If `systemPrompt` is an empty string (`""`), the wildcard is suppressed and no system prompt is applied.
+2. **Direct wildcard system prompt** (`direct["*"].systemPrompt`): used when the specific peer entry is absent from the map entirely, or when it exists but defines no `systemPrompt` key.
 
 Note: `dms` remains the lightweight per-DM history override bucket (`dms.<id>.historyLimit`); prompt overrides live under `direct`.
 
@@ -558,7 +565,7 @@ Example:
 
 Primary reference:
 
-- [Configuration reference - WhatsApp](/gateway/configuration-reference#whatsapp)
+- [Configuration reference - WhatsApp](/gateway/config-channels#whatsapp)
 
 High-signal WhatsApp fields:
 

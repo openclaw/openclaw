@@ -3,7 +3,6 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { normalizeChatChannelId } from "../channels/ids.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveHomeRelativePath } from "../infra/home-dir.js";
@@ -42,6 +41,14 @@ export type BundledRuntimeDepsInstallRoot = {
 
 type JsonObject = Record<string, unknown>;
 const RETAINED_RUNTIME_DEPS_MANIFEST = ".openclaw-runtime-deps.json";
+// Packaged bundled plugins (Docker image, npm global install) keep their
+// `package.json` next to their entry point; running `npm install <specs>` with
+// `cwd: pluginRoot` would make npm resolve the plugin's own `workspace:*`
+// dependencies and fail with `EUNSUPPORTEDPROTOCOL`. To avoid that, stage the
+// install inside this sub-directory and move the produced `node_modules/` back
+// to the plugin root. Source-checkout installs already have their own cache
+// path and keep using it.
+const PLUGIN_ROOT_INSTALL_STAGE_DIR = ".openclaw-install-stage";
 
 export type BundledRuntimeDepsNpmRunner = {
   command: string;
@@ -563,8 +570,9 @@ function isBundledPluginConfiguredForRuntimeDeps(params: {
   if (entry?.enabled === true) {
     return true;
   }
+  let hasExplicitChannelDisable = false;
   for (const channelId of readBundledPluginChannels(params.pluginDir)) {
-    const normalizedChannelId = normalizeChatChannelId(channelId);
+    const normalizedChannelId = normalizeOptionalLowercaseString(channelId);
     if (!normalizedChannelId) {
       continue;
     }
@@ -575,11 +583,23 @@ function isBundledPluginConfiguredForRuntimeDeps(params: {
       channelConfig &&
       typeof channelConfig === "object" &&
       !Array.isArray(channelConfig) &&
+      (channelConfig as { enabled?: unknown }).enabled === false
+    ) {
+      hasExplicitChannelDisable = true;
+      continue;
+    }
+    if (
+      channelConfig &&
+      typeof channelConfig === "object" &&
+      !Array.isArray(channelConfig) &&
       (params.includeConfiguredChannels ||
         (channelConfig as { enabled?: unknown }).enabled === true)
     ) {
       return true;
     }
+  }
+  if (hasExplicitChannelDisable) {
+    return false;
   }
   return readBundledPluginEnabledByDefault(params.pluginDir);
 }
@@ -817,6 +837,15 @@ export function createBundledRuntimeDependencyAliasMap(params: {
   return aliases;
 }
 
+function shouldCleanBundledRuntimeDepsInstallExecutionRoot(params: {
+  installRoot: string;
+  installExecutionRoot: string;
+}): boolean {
+  const installRoot = path.resolve(params.installRoot);
+  const installExecutionRoot = path.resolve(params.installExecutionRoot);
+  return installExecutionRoot.startsWith(`${installRoot}${path.sep}`);
+}
+
 export function installBundledRuntimeDeps(params: {
   installRoot: string;
   installExecutionRoot?: string;
@@ -824,39 +853,53 @@ export function installBundledRuntimeDeps(params: {
   env: NodeJS.ProcessEnv;
 }): void {
   const installExecutionRoot = params.installExecutionRoot ?? params.installRoot;
-  fs.mkdirSync(params.installRoot, { recursive: true });
-  fs.mkdirSync(installExecutionRoot, { recursive: true });
-  if (path.resolve(installExecutionRoot) !== path.resolve(params.installRoot)) {
-    fs.writeFileSync(
-      path.join(installExecutionRoot, "package.json"),
-      `${JSON.stringify({ name: "openclaw-runtime-deps-install", private: true }, null, 2)}\n`,
-      "utf8",
-    );
-  }
-  const installEnv = createBundledRuntimeDepsInstallEnv(params.env);
-  const npmRunner = resolveBundledRuntimeDepsNpmRunner({
-    env: installEnv,
-    npmArgs: createBundledRuntimeDepsInstallArgs(params.missingSpecs),
-  });
-  const result = spawnSync(npmRunner.command, npmRunner.args, {
-    cwd: installExecutionRoot,
-    encoding: "utf8",
-    env: npmRunner.env ?? installEnv,
-    stdio: "pipe",
-  });
-  if (result.status !== 0 || result.error) {
-    const output = [result.error?.message, result.stderr, result.stdout]
-      .filter(Boolean)
-      .join("\n")
-      .trim();
-    throw new Error(output || "npm install failed");
-  }
-  if (path.resolve(installExecutionRoot) !== path.resolve(params.installRoot)) {
-    const stagedNodeModulesDir = path.join(installExecutionRoot, "node_modules");
-    if (!fs.existsSync(stagedNodeModulesDir)) {
-      throw new Error("npm install did not produce node_modules");
+  const isolatedExecutionRoot =
+    path.resolve(installExecutionRoot) !== path.resolve(params.installRoot);
+  const cleanInstallExecutionRoot =
+    isolatedExecutionRoot &&
+    shouldCleanBundledRuntimeDepsInstallExecutionRoot({
+      installRoot: params.installRoot,
+      installExecutionRoot,
+    });
+  try {
+    fs.mkdirSync(params.installRoot, { recursive: true });
+    fs.mkdirSync(installExecutionRoot, { recursive: true });
+    if (isolatedExecutionRoot) {
+      fs.writeFileSync(
+        path.join(installExecutionRoot, "package.json"),
+        `${JSON.stringify({ name: "openclaw-runtime-deps-install", private: true }, null, 2)}\n`,
+        "utf8",
+      );
     }
-    replaceNodeModulesDir(path.join(params.installRoot, "node_modules"), stagedNodeModulesDir);
+    const installEnv = createBundledRuntimeDepsInstallEnv(params.env);
+    const npmRunner = resolveBundledRuntimeDepsNpmRunner({
+      env: installEnv,
+      npmArgs: createBundledRuntimeDepsInstallArgs(params.missingSpecs),
+    });
+    const result = spawnSync(npmRunner.command, npmRunner.args, {
+      cwd: installExecutionRoot,
+      encoding: "utf8",
+      env: npmRunner.env ?? installEnv,
+      stdio: "pipe",
+    });
+    if (result.status !== 0 || result.error) {
+      const output = [result.error?.message, result.stderr, result.stdout]
+        .filter(Boolean)
+        .join("\n")
+        .trim();
+      throw new Error(output || "npm install failed");
+    }
+    if (isolatedExecutionRoot) {
+      const stagedNodeModulesDir = path.join(installExecutionRoot, "node_modules");
+      if (!fs.existsSync(stagedNodeModulesDir)) {
+        throw new Error("npm install did not produce node_modules");
+      }
+      replaceNodeModulesDir(path.join(params.installRoot, "node_modules"), stagedNodeModulesDir);
+    }
+  } finally {
+    if (cleanInstallExecutionRoot) {
+      fs.rmSync(installExecutionRoot, { recursive: true, force: true });
+    }
   }
 }
 
@@ -920,12 +963,16 @@ export function ensureBundledPluginRuntimeDeps(params: {
     pluginRoot: params.pluginRoot,
     installSpecs,
   });
-  const installExecutionRoot =
+  const isPluginRootInstall = path.resolve(installRoot) === path.resolve(params.pluginRoot);
+  const sourceCheckoutCacheStage =
     cacheDir &&
-    path.resolve(installRoot) === path.resolve(params.pluginRoot) &&
+    isPluginRootInstall &&
     resolveSourceCheckoutBundledPluginPackageRoot(params.pluginRoot)
       ? cacheDir
       : undefined;
+  const installExecutionRoot =
+    sourceCheckoutCacheStage ??
+    (isPluginRootInstall ? path.join(installRoot, PLUGIN_ROOT_INSTALL_STAGE_DIR) : undefined);
   if (
     restoreSourceCheckoutRuntimeDepsFromCache({
       cacheDir,

@@ -1,7 +1,46 @@
-import { describe, expect, it } from "vitest";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { registerSandboxBackend } from "./sandbox/backend.js";
 import { ensureSandboxWorkspaceForSession, resolveSandboxContext } from "./sandbox/context.js";
+
+const updateRegistryMock = vi.hoisted(() => vi.fn());
+const syncSkillsToWorkspaceMock = vi.hoisted(() => vi.fn(async () => undefined));
+
+vi.mock("./sandbox/registry.js", () => ({
+  updateRegistry: updateRegistryMock,
+}));
+
+vi.mock("../infra/skills-remote.js", () => ({
+  getRemoteSkillEligibility: vi.fn(() => ({ note: "test-remote" })),
+}));
+
+vi.mock("./exec-defaults.js", () => ({
+  canExecRequestNode: vi.fn(() => false),
+}));
+
+vi.mock("./skills.js", () => ({
+  syncSkillsToWorkspace: syncSkillsToWorkspaceMock,
+}));
+
+let sandboxFixtureRoot = "";
+let sandboxFixtureCount = 0;
+
+async function createSandboxFixtureDir(prefix: string): Promise<string> {
+  const dir = path.join(sandboxFixtureRoot, `${prefix}-${sandboxFixtureCount++}`);
+  await fs.mkdir(dir, { recursive: true });
+  return dir;
+}
+
+beforeAll(async () => {
+  sandboxFixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sandbox-context-"));
+});
+
+afterAll(async () => {
+  await fs.rm(sandboxFixtureRoot, { recursive: true, force: true });
+});
 
 describe("resolveSandboxContext", () => {
   it("does not sandbox the agent main session in non-main mode", async () => {
@@ -111,6 +150,7 @@ describe("resolveSandboxContext", () => {
               mode: "all",
               backend: "test-backend",
               scope: "session",
+              workspaceAccess: "rw",
               prune: { idleHours: 0, maxAgeDays: 0 },
             },
           },
@@ -130,5 +170,41 @@ describe("resolveSandboxContext", () => {
     } finally {
       restore();
     }
+  }, 15_000);
+
+  it("requests skill sync for read-only sandbox workspaces", async () => {
+    syncSkillsToWorkspaceMock.mockClear();
+    const bundledDir = await createSandboxFixtureDir("bundled");
+    const workspaceDir = await createSandboxFixtureDir("workspace");
+
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "all",
+            scope: "session",
+            workspaceAccess: "ro",
+            workspaceRoot: path.join(bundledDir, "sandboxes"),
+          },
+        },
+      },
+    };
+
+    const result = await ensureSandboxWorkspaceForSession({
+      config: cfg,
+      sessionKey: "agent:main:main",
+      workspaceDir,
+    });
+
+    expect(result).not.toBeNull();
+    expect(syncSkillsToWorkspaceMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceWorkspaceDir: workspaceDir,
+        targetWorkspaceDir: result?.workspaceDir,
+        config: cfg,
+        agentId: "main",
+        eligibility: { remote: { note: "test-remote" } },
+      }),
+    );
   }, 15_000);
 });

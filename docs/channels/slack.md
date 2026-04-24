@@ -301,8 +301,8 @@ Surface different features that extend the above defaults.
       },
       {
         "command": "/models",
-        "description": "List providers/models or add a model",
-        "usage_hint": "[provider] [page] [limit=<n>|size=<n>|all] | add <provider> <modelId>"
+        "description": "List providers/models",
+        "usage_hint": "[provider] [page] [limit=<n>|size=<n>|all]"
       },
       {
         "command": "/help",
@@ -785,7 +785,7 @@ Same-chat `/approve` also works in Slack channels and DMs that already support c
 
 ## Configuration reference
 
-Primary reference: [Configuration reference - Slack](/gateway/configuration-reference#slack).
+Primary reference: [Configuration reference - Slack](/gateway/config-channels#slack).
 
 <Accordion title="High-signal Slack fields">
 

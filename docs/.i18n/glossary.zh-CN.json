@@ -324,11 +324,23 @@
     "target": "环境变量"
   },
   {
+    "source": "Google Meet Plugin",
+    "target": "Google Meet 插件"
+  },
+  {
     "source": "Plugin SDK",
     "target": "插件 SDK"
   },
   {
+    "source": "Building plugins",
+    "target": "构建插件"
+  },
+  {
     "source": "Plugin SDK Overview",
+    "target": "插件 SDK 概览"
+  },
+  {
+    "source": "Plugin SDK overview",
     "target": "插件 SDK 概览"
   },
   {
@@ -338,6 +350,22 @@
   {
     "source": "Plugin Entry Points",
     "target": "插件入口点"
+  },
+  {
+    "source": "Plugin entry points",
+    "target": "插件入口点"
+  },
+  {
+    "source": "Plugin hooks",
+    "target": "插件钩子"
+  },
+  {
+    "source": "Internal hooks",
+    "target": "内部钩子"
+  },
+  {
+    "source": "Plugin architecture internals",
+    "target": "插件架构内部机制"
   },
   {
     "source": "Entry Points",
@@ -398,6 +426,10 @@
   {
     "source": "Tencent Cloud (TokenHub)",
     "target": "腾讯云（TokenHub）"
+  },
+  {
+    "source": "Codex Harness Context Engine Port",
+    "target": "Codex Harness Context Engine Port"
   },
   {
     "source": "/gateway/configuration#strict-validation",

@@ -75,6 +75,19 @@ higher-quality model. You can configure this via `agents.defaults.subagents.mode
 overrides. When a child genuinely needs the requester's current transcript, the agent can request
 `context: "fork"` on that one spawn.
 
+## Context modes
+
+Native sub-agents start isolated unless the caller explicitly asks to fork the
+current transcript.
+
+| Mode       | When to use it                                                                                                                         | Behavior                                                                          |
+| ---------- | -------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `isolated` | Fresh research, independent implementation, slow tool work, or anything that can be briefed in the task text                           | Creates a clean child transcript. This is the default and keeps token use lower.  |
+| `fork`     | Work that depends on the current conversation, prior tool results, or nuanced instructions already present in the requester transcript | Branches the requester transcript into the child session before the child starts. |
+
+Use `fork` sparingly. It is for context-sensitive delegation, not a replacement
+for writing a clear task prompt.
+
 ## Tool
 
 Use `sessions_spawn`:
@@ -343,3 +356,9 @@ Sub-agents use a dedicated in-process queue lane:
 - Sub-agent context only injects `AGENTS.md` + `TOOLS.md` (no `SOUL.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, or `BOOTSTRAP.md`).
 - Maximum nesting depth is 5 (`maxSpawnDepth` range: 1–5). Depth 2 is recommended for most use cases.
 - `maxChildrenPerAgent` caps active children per session (default: 5, range: 1–20).
+
+## Related
+
+- [ACP agents](/tools/acp-agents)
+- [Multi-agent sandbox tools](/tools/multi-agent-sandbox-tools)
+- [Agent send](/tools/agent-send)

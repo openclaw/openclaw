@@ -6,9 +6,41 @@ import { fileURLToPath } from "node:url";
 
 const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_E2E_IMAGE = "openclaw-docker-e2e:local";
-const DEFAULT_PARALLELISM = 4;
+const DEFAULT_PARALLELISM = 10;
+const DEFAULT_TAIL_PARALLELISM = 10;
 const DEFAULT_FAILURE_TAIL_LINES = 80;
 const DEFAULT_LANE_TIMEOUT_MS = 120 * 60 * 1000;
+const DEFAULT_LANE_START_STAGGER_MS = 2_000;
+
+const bundledChannelLaneCommand =
+  "OPENCLAW_SKIP_DOCKER_BUILD=1 OPENCLAW_BUNDLED_CHANNEL_UPDATE_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_ROOT_OWNED_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_SETUP_ENTRY_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_LOAD_FAILURE_SCENARIO=0 pnpm test:docker:bundled-channel-deps";
+
+const bundledScenarioLanes = [
+  ["bundled-channel-telegram", `OPENCLAW_BUNDLED_CHANNELS=telegram ${bundledChannelLaneCommand}`],
+  ["bundled-channel-discord", `OPENCLAW_BUNDLED_CHANNELS=discord ${bundledChannelLaneCommand}`],
+  ["bundled-channel-slack", `OPENCLAW_BUNDLED_CHANNELS=slack ${bundledChannelLaneCommand}`],
+  ["bundled-channel-feishu", `OPENCLAW_BUNDLED_CHANNELS=feishu ${bundledChannelLaneCommand}`],
+  [
+    "bundled-channel-memory-lancedb",
+    `OPENCLAW_BUNDLED_CHANNELS=memory-lancedb ${bundledChannelLaneCommand}`,
+  ],
+  [
+    "bundled-channel-update",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 OPENCLAW_BUNDLED_CHANNEL_SCENARIOS=0 OPENCLAW_BUNDLED_CHANNEL_UPDATE_SCENARIO=1 OPENCLAW_BUNDLED_CHANNEL_ROOT_OWNED_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_SETUP_ENTRY_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_LOAD_FAILURE_SCENARIO=0 pnpm test:docker:bundled-channel-deps",
+  ],
+  [
+    "bundled-channel-root-owned",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 OPENCLAW_BUNDLED_CHANNEL_SCENARIOS=0 OPENCLAW_BUNDLED_CHANNEL_UPDATE_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_ROOT_OWNED_SCENARIO=1 OPENCLAW_BUNDLED_CHANNEL_SETUP_ENTRY_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_LOAD_FAILURE_SCENARIO=0 pnpm test:docker:bundled-channel-deps",
+  ],
+  [
+    "bundled-channel-setup-entry",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 OPENCLAW_BUNDLED_CHANNEL_SCENARIOS=0 OPENCLAW_BUNDLED_CHANNEL_UPDATE_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_ROOT_OWNED_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_SETUP_ENTRY_SCENARIO=1 OPENCLAW_BUNDLED_CHANNEL_LOAD_FAILURE_SCENARIO=0 pnpm test:docker:bundled-channel-deps",
+  ],
+  [
+    "bundled-channel-load-failure",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 OPENCLAW_BUNDLED_CHANNEL_SCENARIOS=0 OPENCLAW_BUNDLED_CHANNEL_UPDATE_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_ROOT_OWNED_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_SETUP_ENTRY_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_LOAD_FAILURE_SCENARIO=1 pnpm test:docker:bundled-channel-deps",
+  ],
+];
 
 const lanes = [
   ["live-models", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-models"],
@@ -35,7 +67,8 @@ const lanes = [
   ["plugins", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:plugins"],
   ["plugin-update", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:plugin-update"],
   ["config-reload", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:config-reload"],
-  ["bundled-channel-deps", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:bundled-channel-deps"],
+  ...bundledScenarioLanes,
+  ["openai-image-auth", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openai-image-auth"],
   ["qr", "pnpm test:docker:qr"],
 ];
 
@@ -45,12 +78,17 @@ const exclusiveLanes = [
     "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openai-web-search-minimal",
   ],
   ["live-codex-harness", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-codex-harness"],
+  ["live-codex-bind", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-codex-bind"],
   [
     "live-cli-backend-codex",
     "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-cli-backend:codex",
   ],
-  ["live-acp-bind", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-acp-bind"],
+  ["live-acp-bind-claude", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-acp-bind:claude"],
+  ["live-acp-bind-codex", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-acp-bind:codex"],
+  ["live-acp-bind-gemini", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-acp-bind:gemini"],
 ];
+
+const tailLanes = exclusiveLanes;
 
 function parsePositiveInt(raw, fallback, label) {
   if (!raw) {
@@ -63,11 +101,28 @@ function parsePositiveInt(raw, fallback, label) {
   return parsed;
 }
 
+function parseNonNegativeInt(raw, fallback, label) {
+  if (!raw) {
+    return fallback;
+  }
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    throw new Error(`${label} must be a non-negative integer. Got: ${JSON.stringify(raw)}`);
+  }
+  return parsed;
+}
+
 function parseBool(raw, fallback) {
   if (raw === undefined || raw === "") {
     return fallback;
   }
   return !/^(?:0|false|no)$/i.test(raw);
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function utcStampForPath() {
@@ -92,6 +147,10 @@ function commandEnv(extra = {}) {
     ...process.env,
     ...extra,
   };
+}
+
+function shellQuote(value) {
+  return `'${String(value).replaceAll("'", "'\\''")}'`;
 }
 
 function runShellCommand({ command, env, label, logFile, timeoutMs }) {
@@ -153,6 +212,67 @@ async function runForeground(label, command, env) {
   }
 }
 
+async function runForegroundGroup(entries, env) {
+  const results = await Promise.allSettled(
+    entries.map(async ([label, command]) => {
+      await runForeground(label, command, env);
+    }),
+  );
+  const failures = results
+    .map((result, index) => ({ result, entry: entries[index] }))
+    .filter(({ result }) => result.status === "rejected");
+  if (failures.length > 0) {
+    throw new Error(
+      failures
+        .map(
+          ({ result, entry }) => `${entry[0]}: ${result.reason?.message ?? String(result.reason)}`,
+        )
+        .join("\n"),
+    );
+  }
+}
+
+async function prepareBundledChannelPackage(baseEnv, logDir) {
+  if (baseEnv.OPENCLAW_BUNDLED_CHANNEL_PACKAGE_TGZ) {
+    console.log(`==> Bundled channel package: ${baseEnv.OPENCLAW_BUNDLED_CHANNEL_PACKAGE_TGZ}`);
+    return;
+  }
+
+  const packDir = path.join(logDir, "bundled-channel-package");
+  await mkdir(packDir, { recursive: true });
+  const packScript = [
+    "set -euo pipefail",
+    "node --import tsx --input-type=module -e \"const { writePackageDistInventory } = await import('./src/infra/package-dist-inventory.ts'); await writePackageDistInventory(process.cwd());\"",
+    "npm pack --silent --ignore-scripts --pack-destination /tmp/openclaw-pack >/tmp/openclaw-pack.out",
+    "cat /tmp/openclaw-pack.out",
+  ].join("\n");
+  await runForeground(
+    "Pack bundled channel package once from Docker E2E image",
+    [
+      "docker run --rm",
+      "-e COREPACK_ENABLE_DOWNLOAD_PROMPT=0",
+      `-v ${shellQuote(packDir)}:/tmp/openclaw-pack`,
+      shellQuote(baseEnv.OPENCLAW_DOCKER_E2E_IMAGE),
+      "bash -lc",
+      shellQuote(packScript),
+    ].join(" "),
+    baseEnv,
+  );
+
+  const packed = (await fs.promises.readdir(packDir))
+    .filter((entry) => /^openclaw-.*\.tgz$/.test(entry))
+    .toSorted()
+    .at(-1);
+  if (!packed) {
+    throw new Error(`missing packed OpenClaw tarball in ${packDir}`);
+  }
+  baseEnv.OPENCLAW_BUNDLED_CHANNEL_PACKAGE_TGZ = path.join(packDir, packed);
+  baseEnv.OPENCLAW_BUNDLED_CHANNEL_HOST_BUILD = "0";
+  baseEnv.OPENCLAW_NPM_ONBOARD_PACKAGE_TGZ = baseEnv.OPENCLAW_BUNDLED_CHANNEL_PACKAGE_TGZ;
+  baseEnv.OPENCLAW_NPM_ONBOARD_HOST_BUILD = "0";
+  console.log(`==> Bundled channel package: ${baseEnv.OPENCLAW_BUNDLED_CHANNEL_PACKAGE_TGZ}`);
+}
+
 function laneEnv(name, baseEnv, logDir) {
   const env = {
     ...baseEnv,
@@ -204,6 +324,26 @@ async function runLane(lane, baseEnv, logDir, timeoutMs) {
 async function runLanePool(poolLanes, baseEnv, logDir, parallelism, options) {
   const failures = [];
   let nextIndex = 0;
+  let lastLaneStartAt = 0;
+  let laneStartQueue = Promise.resolve();
+
+  async function waitForLaneStartSlot() {
+    if (options.startStaggerMs <= 0) {
+      return;
+    }
+    const previous = laneStartQueue;
+    let releaseQueue;
+    laneStartQueue = new Promise((resolve) => {
+      releaseQueue = resolve;
+    });
+    await previous;
+    const waitMs = Math.max(0, lastLaneStartAt + options.startStaggerMs - Date.now());
+    if (waitMs > 0) {
+      await sleep(waitMs);
+    }
+    lastLaneStartAt = Date.now();
+    releaseQueue();
+  }
 
   async function worker() {
     while (nextIndex < poolLanes.length) {
@@ -211,6 +351,7 @@ async function runLanePool(poolLanes, baseEnv, logDir, parallelism, options) {
         return;
       }
       const lane = poolLanes[nextIndex++];
+      await waitForLaneStartSlot();
       const result = await runLane(lane, baseEnv, logDir, options.timeoutMs);
       if (result.status !== 0) {
         failures.push(result);
@@ -223,20 +364,6 @@ async function runLanePool(poolLanes, baseEnv, logDir, parallelism, options) {
 
   const workerCount = Math.min(parallelism, poolLanes.length);
   await Promise.all(Array.from({ length: workerCount }, () => worker()));
-  return failures;
-}
-
-async function runLanesSerial(serialLanes, baseEnv, logDir, options) {
-  const failures = [];
-  for (const lane of serialLanes) {
-    const result = await runLane(lane, baseEnv, logDir, options.timeoutMs);
-    if (result.status !== 0) {
-      failures.push(result);
-      if (options.failFast) {
-        break;
-      }
-    }
-  }
   return failures;
 }
 
@@ -279,6 +406,11 @@ async function main() {
     DEFAULT_PARALLELISM,
     "OPENCLAW_DOCKER_ALL_PARALLELISM",
   );
+  const tailParallelism = parsePositiveInt(
+    process.env.OPENCLAW_DOCKER_ALL_TAIL_PARALLELISM,
+    Math.min(parallelism, DEFAULT_TAIL_PARALLELISM),
+    "OPENCLAW_DOCKER_ALL_TAIL_PARALLELISM",
+  );
   const tailLines = parsePositiveInt(
     process.env.OPENCLAW_DOCKER_ALL_FAILURE_TAIL_LINES,
     DEFAULT_FAILURE_TAIL_LINES,
@@ -288,6 +420,11 @@ async function main() {
     process.env.OPENCLAW_DOCKER_ALL_LANE_TIMEOUT_MS,
     DEFAULT_LANE_TIMEOUT_MS,
     "OPENCLAW_DOCKER_ALL_LANE_TIMEOUT_MS",
+  );
+  const laneStartStaggerMs = parseNonNegativeInt(
+    process.env.OPENCLAW_DOCKER_ALL_START_STAGGER_MS,
+    DEFAULT_LANE_START_STAGGER_MS,
+    "OPENCLAW_DOCKER_ALL_START_STAGGER_MS",
   );
   const failFast = parseBool(process.env.OPENCLAW_DOCKER_ALL_FAIL_FAST, true);
   const runId = process.env.OPENCLAW_DOCKER_ALL_RUN_ID || utcStampForPath();
@@ -306,26 +443,33 @@ async function main() {
 
   console.log(`==> Docker test logs: ${logDir}`);
   console.log(`==> Parallelism: ${parallelism}`);
+  console.log(`==> Tail parallelism: ${tailParallelism}`);
   console.log(`==> Lane timeout: ${laneTimeoutMs}ms`);
+  console.log(`==> Lane start stagger: ${laneStartStaggerMs}ms`);
   console.log(`==> Fail fast: ${failFast ? "yes" : "no"}`);
   console.log(`==> Live-test bundled plugin deps: ${baseEnv.OPENCLAW_DOCKER_BUILD_EXTENSIONS}`);
 
-  await runForeground("Build shared live-test image once", "pnpm test:docker:live-build", baseEnv);
-  await runForeground(
-    `Build shared Docker E2E image once: ${baseEnv.OPENCLAW_DOCKER_E2E_IMAGE}`,
-    "pnpm test:docker:e2e-build",
+  await runForegroundGroup(
+    [
+      ["Build shared live-test image once", "pnpm test:docker:live-build"],
+      [
+        `Build shared Docker E2E image once: ${baseEnv.OPENCLAW_DOCKER_E2E_IMAGE}`,
+        "pnpm test:docker:e2e-build",
+      ],
+    ],
     baseEnv,
   );
+  await prepareBundledChannelPackage(baseEnv, logDir);
 
-  const options = { failFast, timeoutMs: laneTimeoutMs };
+  const options = { failFast, startStaggerMs: laneStartStaggerMs, timeoutMs: laneTimeoutMs };
   const failures = await runLanePool(lanes, baseEnv, logDir, parallelism, options);
-  if (failures.length > 0) {
+  if (failFast && failures.length > 0) {
     await printFailureSummary(failures, tailLines);
     process.exit(1);
   }
 
-  console.log("==> Running provider-sensitive Docker lanes exclusively");
-  failures.push(...(await runLanesSerial(exclusiveLanes, baseEnv, logDir, options)));
+  console.log("==> Running provider-sensitive Docker tail lanes");
+  failures.push(...(await runLanePool(tailLanes, baseEnv, logDir, tailParallelism, options)));
   if (failures.length > 0) {
     await printFailureSummary(failures, tailLines);
     process.exit(1);
