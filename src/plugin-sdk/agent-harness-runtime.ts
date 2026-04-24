@@ -2,6 +2,8 @@
 // Keep heavyweight tool construction out of this module so harness imports can
 // register quickly inside gateway startup and Docker e2e runs.
 
+import { formatToolDetail, resolveToolDisplay } from "../agents/tool-display.js";
+
 export type {
   AgentHarness,
   AgentHarnessAttemptParams,
@@ -37,6 +39,7 @@ export { log as embeddedAgentLog } from "../agents/pi-embedded-runner/logger.js"
 export { resolveEmbeddedAgentRuntime } from "../agents/pi-embedded-runner/runtime.js";
 export { resolveUserPath } from "../utils.js";
 export { callGatewayTool } from "../agents/tools/gateway.js";
+export { formatToolAggregate } from "../auto-reply/tool-meta.js";
 export { isMessagingTool, isMessagingToolSendAction } from "../agents/pi-embedded-messaging.js";
 export {
   extractToolResultMediaArtifact,
@@ -85,3 +88,11 @@ export {
   runAgentHarnessLlmInputHook,
   runAgentHarnessLlmOutputHook,
 } from "../agents/harness/lifecycle-hook-helpers.js";
+
+/**
+ * Derive the same compact user-facing tool detail that Pi uses for progress logs.
+ */
+export function inferToolMetaFromArgs(toolName: string, args: unknown): string | undefined {
+  const display = resolveToolDisplay({ name: toolName, args });
+  return formatToolDetail(display);
+}
