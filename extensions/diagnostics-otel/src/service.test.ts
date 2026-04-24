@@ -123,6 +123,8 @@ const SPAN_ID = "00f067aa0ba902b7";
 const CHILD_SPAN_ID = "1111111111111111";
 const GRANDCHILD_SPAN_ID = "2222222222222222";
 const PROTO_KEY = "__proto__";
+const MAX_TEST_OTEL_CONTENT_ATTRIBUTE_CHARS = 4096;
+const OTEL_TRUNCATED_SUFFIX_MAX_CHARS = 20;
 
 function createLogger() {
   return {
@@ -837,7 +839,9 @@ describe("diagnostics-otel service", () => {
     expect(toolAttrs).toMatchObject({
       "openclaw.content.tool_input": "tool input",
     });
-    expect(String(toolAttrs?.["openclaw.content.tool_output"]).length).toBeLessThanOrEqual(4200);
+    expect(String(toolAttrs?.["openclaw.content.tool_output"]).length).toBeLessThanOrEqual(
+      MAX_TEST_OTEL_CONTENT_ATTRIBUTE_CHARS + OTEL_TRUNCATED_SUFFIX_MAX_CHARS,
+    );
     await service.stop?.(ctx);
   });
 
