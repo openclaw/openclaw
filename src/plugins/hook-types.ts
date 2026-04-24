@@ -83,6 +83,8 @@ export type PluginHookName =
   | "llm_output"
   | "before_agent_finalize"
   | "agent_end"
+  | "model_failover"
+  | "model_failure_terminal"
   | "before_compaction"
   | "after_compaction"
   | "before_reset"
@@ -130,6 +132,8 @@ export const PLUGIN_HOOK_NAMES = [
   "llm_output",
   "before_agent_finalize",
   "agent_end",
+  "model_failover",
+  "model_failure_terminal",
   "before_compaction",
   "after_compaction",
   "before_reset",
@@ -384,6 +388,40 @@ export type PluginHookBeforeAgentFinalizeResult = {
     idempotencyKey?: string;
     maxAttempts?: number;
   };
+};
+
+export type PluginHookModelFailoverEvent = {
+  runId?: string;
+  agentId?: string;
+  sessionId?: string;
+  sessionKey?: string;
+  provider: string;
+  model: string;
+  sourceProvider?: string;
+  sourceModel?: string;
+  stage: "prompt" | "assistant";
+  decision: "rotate_profile" | "fallback_model" | "surface_error";
+  failoverReason?: string | null;
+  profileFailureReason?: string | null;
+  fallbackConfigured: boolean;
+  timedOut?: boolean;
+  aborted?: boolean;
+  status?: number;
+};
+
+export type PluginHookModelFailureTerminalEvent = {
+  runId?: string;
+  agentId?: string;
+  sessionId?: string;
+  sessionKey?: string;
+  finalMessage: string;
+  kind: "all_models_failed" | "run_failed_before_reply";
+  attempts?: Array<{
+    provider?: string;
+    model?: string;
+    reason?: string | null;
+    stage?: "prompt" | "assistant";
+  }>;
 };
 
 export type PluginHookBeforeCompactionEvent = {
@@ -1022,6 +1060,14 @@ export type PluginHookHandlerMap = {
     | PluginHookBeforeAgentFinalizeResult
     | void;
   agent_end: (event: PluginHookAgentEndEvent, ctx: PluginHookAgentContext) => Promise<void> | void;
+  model_failover: (
+    event: PluginHookModelFailoverEvent,
+    ctx: PluginHookAgentContext,
+  ) => Promise<void> | void;
+  model_failure_terminal: (
+    event: PluginHookModelFailureTerminalEvent,
+    ctx: PluginHookAgentContext,
+  ) => Promise<void> | void;
   before_compaction: (
     event: PluginHookBeforeCompactionEvent,
     ctx: PluginHookAgentContext,

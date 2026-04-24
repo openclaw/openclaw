@@ -2,6 +2,7 @@
  * Logs redacted failover decisions for embedded-agent attempts.
  */
 import { redactIdentifier } from "../../../logging/redact-identifier.js";
+import type { PluginHookModelFailoverEvent } from "../../../plugins/hook-types.js";
 import type { AuthProfileFailureReason } from "../../auth-profiles.js";
 import {
   buildApiErrorObservationFields,
@@ -10,6 +11,15 @@ import {
 } from "../../embedded-agent-error-observation.js";
 import type { FailoverReason } from "../../embedded-agent-helpers.js";
 import { log } from "../logger.js";
+
+/** Minimal hook-runner interface needed for failover observation. */
+export type FailoverHookRunner = {
+  hasHooks: (hookName: "model_failover") => boolean;
+  runModelFailover: (
+    event: PluginHookModelFailoverEvent,
+    ctx: { runId?: string; agentId?: string; sessionId?: string; sessionKey?: string },
+  ) => Promise<void>;
+};
 
 /** Structured fields emitted whenever embedded run failover chooses an action. */
 export type FailoverDecisionLoggerInput = {
@@ -30,8 +40,16 @@ export type FailoverDecisionLoggerInput = {
   status?: number;
 };
 
-/** Stable context captured before a concrete failover decision is known. */
-export type FailoverDecisionLoggerBase = Omit<FailoverDecisionLoggerInput, "decision" | "status">;
+export type FailoverDecisionLoggerBase = Omit<
+  FailoverDecisionLoggerInput,
+  "decision" | "status"
+> & {
+  /** Optional hook runner for emitting plugin hooks alongside logs. */
+  hookRunner?: FailoverHookRunner;
+  agentId?: string;
+  sessionId?: string;
+  sessionKey?: string;
+};
 
 /**
  * Derives timeout failure reasons for logs that were built from timeout state
@@ -104,5 +122,36 @@ export function createFailoverDecisionLogger(
         `reason=${reasonText} from=${safeSourceProvider}/${safeSourceModel}` +
         `${sourceChanged ? ` to=${safeProvider}/${safeModel}` : ""} profile=${profileText}${rawErrorConsoleSuffix}`,
     });
+
+    // Emit plugin hook (fire-and-forget). This fires alongside the log so plugins
+    // can react to failover decisions without polling gateway logs.
+    const hookRunner = normalizedBase.hookRunner;
+    if (hookRunner?.hasHooks("model_failover")) {
+      const hookEvent: PluginHookModelFailoverEvent = {
+        runId: normalizedBase.runId,
+        agentId: normalizedBase.agentId,
+        sessionId: normalizedBase.sessionId,
+        sessionKey: normalizedBase.sessionKey,
+        provider: normalizedBase.provider,
+        model: normalizedBase.model,
+        sourceProvider: normalizedBase.sourceProvider,
+        sourceModel: normalizedBase.sourceModel,
+        stage: normalizedBase.stage,
+        decision,
+        failoverReason: normalizedBase.failoverReason,
+        profileFailureReason: normalizedBase.profileFailureReason,
+        fallbackConfigured: normalizedBase.fallbackConfigured,
+        timedOut: normalizedBase.timedOut,
+        aborted: normalizedBase.aborted,
+        status: extra?.status,
+      };
+      const hookCtx = {
+        runId: normalizedBase.runId,
+        agentId: normalizedBase.agentId,
+        sessionId: normalizedBase.sessionId,
+        sessionKey: normalizedBase.sessionKey,
+      };
+      void hookRunner.runModelFailover(hookEvent, hookCtx);
+    }
   };
 }

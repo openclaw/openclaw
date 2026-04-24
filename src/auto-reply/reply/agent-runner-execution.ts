@@ -68,6 +68,7 @@ import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { logSessionTurnCreated } from "../../logging/diagnostic.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -2878,6 +2879,42 @@ export async function runAgentTurnWithFallback(params: {
       }
 
       defaultRuntime.error(`Embedded agent failed before reply: ${message}`);
+
+      // Emit model_failure_terminal plugin hook (fire-and-forget). This gives plugins
+      // a structured in-process signal when all model attempts have been exhausted,
+      // without requiring them to poll or parse gateway logs.
+      const terminalHookRunner = getGlobalHookRunner();
+      if (terminalHookRunner?.hasHooks("model_failure_terminal")) {
+        const isFallbackSummaryCheck = isFallbackSummaryError(err);
+        const terminalKind = isFallbackSummaryCheck
+          ? "all_models_failed"
+          : "run_failed_before_reply";
+        const terminalAttempts = isFallbackSummaryCheck
+          ? err.attempts.map((a) => ({
+              provider: a.provider,
+              model: a.model,
+              reason: a.reason ?? null,
+            }))
+          : undefined;
+        void terminalHookRunner.runModelFailureTerminal(
+          {
+            runId,
+            agentId: params.followupRun.run.agentId,
+            sessionId: params.followupRun.run.sessionId,
+            sessionKey: params.sessionKey,
+            finalMessage: message,
+            kind: terminalKind,
+            attempts: terminalAttempts,
+          },
+          {
+            runId,
+            agentId: params.followupRun.run.agentId,
+            sessionId: params.followupRun.run.sessionId,
+            sessionKey: params.sessionKey,
+          },
+        );
+      }
+
       // Only classify as rate-limit when we have concrete evidence from the
       // underlying error. FallbackSummaryError messages embed per-attempt
       // reason labels like `(rate_limit)`, so string-matching the summary text
