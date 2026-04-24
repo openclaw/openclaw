@@ -288,6 +288,7 @@ import {
   PREEMPTIVE_OVERFLOW_ERROR_TEXT,
   shouldPreemptivelyCompactBeforePrompt,
 } from "./preemptive-compaction.js";
+import { rewriteSubmittedPromptTranscript } from "./transcript-prompt-rewrite.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
 export {
@@ -2424,6 +2425,13 @@ export async function runEmbeddedAttempt(
             } else {
               await abortable(activeSession.prompt(effectivePrompt));
             }
+            rewriteSubmittedPromptTranscript({
+              sessionManager,
+              sessionFile: params.sessionFile,
+              previousLeafId: transcriptLeafId,
+              submittedPrompt: effectivePrompt,
+              transcriptPrompt: params.transcriptPrompt,
+            });
           }
         } catch (err) {
           yieldAborted =

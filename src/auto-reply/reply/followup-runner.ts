@@ -310,6 +310,7 @@ export function createFollowupRunner(params: {
                 config: runtimeConfig,
                 skillsSnapshot: run.skillsSnapshot,
                 prompt: queued.prompt,
+                transcriptPrompt: queued.transcriptPrompt,
                 extraSystemPrompt: run.extraSystemPrompt,
                 ownerNumbers: run.ownerNumbers,
                 enforceFinalTag: run.enforceFinalTag,

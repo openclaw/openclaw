@@ -569,6 +569,7 @@ function isReplyOperationRestartAbort(replyOperation?: ReplyOperation): boolean 
 
 export async function runAgentTurnWithFallback(params: {
   commandBody: string;
+  transcriptCommandBody?: string;
   followupRun: FollowupRun;
   sessionCtx: TemplateContext;
   replyThreading?: TemplateContext["ReplyThreading"];
@@ -965,6 +966,7 @@ export async function runAgentTurnWithFallback(params: {
                   workspaceDir: params.followupRun.run.workspaceDir,
                   config: runtimeConfig,
                   prompt: params.commandBody,
+                  transcriptPrompt: params.transcriptCommandBody,
                   provider,
                   model,
                   thinkLevel: params.followupRun.run.thinkLevel,
@@ -1087,6 +1089,7 @@ export async function runAgentTurnWithFallback(params: {
                 ...runBaseParams,
                 sandboxSessionKey: params.runtimePolicySessionKey,
                 prompt: params.commandBody,
+                transcriptPrompt: params.transcriptCommandBody,
                 extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
                 toolResultFormat: (() => {
                   const channel = resolveMessageChannel(

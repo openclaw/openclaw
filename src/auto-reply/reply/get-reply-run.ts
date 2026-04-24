@@ -475,6 +475,7 @@ export async function runPreparedReply(
   const effectiveBaseBody = hasUserBody
     ? baseBodyForPrompt
     : [inboundUserContext, "[User sent media without caption]"].filter(Boolean).join("\n\n");
+  const transcriptBodyBase = hasUserBody ? baseBodyFinal : "[User sent media without caption]";
   let prefixedBodyBase = await applySessionHints({
     baseBody: effectiveBaseBody,
     abortedLastRun,
@@ -510,6 +511,7 @@ export async function runPreparedReply(
   const rebuildPromptBodies = async (): Promise<{
     prefixedCommandBody: string;
     queuedBody: string;
+    transcriptCommandBody: string;
   }> => {
     if (!useFastReplyRuntime) {
       const eventsBlock = await drainFormattedSystemEvents({
@@ -530,6 +532,7 @@ export async function runPreparedReply(
       sessionCtx,
       effectiveBaseBody,
       prefixedBody: prefixedBodyCore,
+      transcriptBody: transcriptBodyBase,
       threadContextNote,
       systemEventBlocks: drainedSystemEventBlocks,
     });
@@ -558,7 +561,7 @@ export async function runPreparedReply(
   sessionEntry = skillResult.sessionEntry ?? sessionEntry;
   currentSystemSent = skillResult.systemSent;
   const skillsSnapshot = skillResult.skillsSnapshot;
-  let { prefixedCommandBody, queuedBody } = await rebuildPromptBodies();
+  let { prefixedCommandBody, queuedBody, transcriptCommandBody } = await rebuildPromptBodies();
   if (!resolvedThinkLevel) {
     resolvedThinkLevel = await modelState.resolveDefaultThinkingLevel();
   }
@@ -715,7 +718,7 @@ export async function runPreparedReply(
               isNewSession,
             });
         preparedSessionState = resolvePreparedSessionState();
-        ({ prefixedCommandBody, queuedBody } = await rebuildPromptBodies());
+        ({ prefixedCommandBody, queuedBody, transcriptCommandBody } = await rebuildPromptBodies());
       },
       resolveBusyState: resolveQueueBusyState,
     });
@@ -728,6 +731,7 @@ export async function runPreparedReply(
   const authProfileIdSource = preparedSessionState.sessionEntry?.authProfileOverrideSource;
   const followupRun = {
     prompt: queuedBody,
+    transcriptPrompt: transcriptCommandBody,
     messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
     summaryLine: baseBodyTrimmedRaw,
     enqueuedAt: Date.now(),
@@ -825,6 +829,7 @@ export async function runPreparedReply(
 
   return runReplyAgent({
     commandBody: prefixedCommandBody,
+    transcriptCommandBody,
     followupRun,
     queueKey,
     resolvedQueue,
