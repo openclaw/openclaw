@@ -53,16 +53,19 @@ function activeRegistrySatisfiesScope(
     return requestedPluginIds.every((pluginId) => activePluginIds.has(pluginId));
   }
   const activeChannelPluginIds = new Set(active.channels.map((entry) => entry.plugin.id));
+  const expectedChannelPluginIdSet = new Set(expectedChannelPluginIds);
   switch (scope) {
     case "configured-channels":
     case "channels":
-      if (expectedChannelPluginIds.length === 0) {
+      if (expectedChannelPluginIdSet.size === 0) {
         return false;
       }
-      if (active.channels.length !== expectedChannelPluginIds.length) {
+      if (activeChannelPluginIds.size !== expectedChannelPluginIdSet.size) {
         return false;
       }
-      return expectedChannelPluginIds.every((pluginId) => activeChannelPluginIds.has(pluginId));
+      return [...expectedChannelPluginIdSet].every((pluginId) =>
+        activeChannelPluginIds.has(pluginId),
+      );
     case "all":
       return false;
   }

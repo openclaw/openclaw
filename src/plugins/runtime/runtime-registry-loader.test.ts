@@ -312,4 +312,31 @@ describe("ensurePluginRegistryLoaded", () => {
       }),
     );
   });
+
+  it("compares active channel scope by owning plugin ids, not channel registrations", () => {
+    mocks.getActivePluginRegistry.mockReturnValue({
+      ...createEmptyPluginRegistry(),
+      plugins: [{ id: "demo-a", status: "loaded" } as never],
+      channels: [
+        {
+          pluginId: "demo-a",
+          plugin: { id: "demo-a" } as never,
+          source: "test",
+        },
+        {
+          pluginId: "demo-a",
+          plugin: { id: "demo-a" } as never,
+          source: "test",
+        },
+      ],
+    });
+    mocks.resolveChannelPluginIds.mockReturnValue(["demo-a"]);
+
+    ensurePluginRegistryLoaded({
+      scope: "channels",
+      config: {} as never,
+    });
+
+    expect(mocks.loadOpenClawPlugins).not.toHaveBeenCalled();
+  });
 });
