@@ -48,7 +48,7 @@ export async function listCodexAppServerModels(
         authProfileId: options.authProfileId,
       });
   try {
-    const response = await client.request<unknown>(
+    const response = await client.request(
       "model/list",
       {
         limit: options.limit ?? null,

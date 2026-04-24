@@ -4,7 +4,11 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { renderCodexPromptOverlay } from "../../prompt-overlay.js";
 import type { CodexAppServerClient } from "./client.js";
-import type { CodexAppServerRuntimeOptions } from "./config.js";
+import { codexSandboxPolicyForTurn, type CodexAppServerRuntimeOptions } from "./config.js";
+import {
+  assertCodexThreadResumeResponse,
+  assertCodexThreadStartResponse,
+} from "./protocol-validators.js";
 import {
   isJsonObject,
   type CodexDynamicToolSpec,
@@ -15,10 +19,6 @@ import {
   type JsonObject,
   type JsonValue,
 } from "./protocol.js";
-import {
-  assertCodexThreadResumeResponse,
-  assertCodexThreadStartResponse,
-} from "./protocol-validators.js";
 import {
   clearCodexAppServerBinding,
   readCodexAppServerBinding,
@@ -53,22 +53,23 @@ export async function startOrResumeThread(params: {
     } else {
       try {
         const response = assertCodexThreadResumeResponse(
-          await params.client.request<unknown>(
+          await params.client.request(
             "thread/resume",
             buildThreadResumeParams(params.params, {
               threadId: binding.threadId,
               appServer: params.appServer,
               developerInstructions: params.developerInstructions,
-            }) as unknown as JsonValue,
+            }),
           ),
         );
         const boundAuthProfileId = params.params.authProfileId ?? binding.authProfileId;
+        const fallbackModelProvider = resolveCodexAppServerModelProvider(params.params.provider);
         await writeCodexAppServerBinding(params.params.sessionFile, {
           threadId: response.thread.id,
           cwd: params.cwd,
           authProfileId: boundAuthProfileId,
           model: params.params.modelId,
-          modelProvider: response.modelProvider ?? normalizeModelProvider(params.params.provider),
+          modelProvider: response.modelProvider ?? fallbackModelProvider,
           dynamicToolsFingerprint,
           createdAt: binding.createdAt,
         });
@@ -78,7 +79,7 @@ export async function startOrResumeThread(params: {
           cwd: params.cwd,
           authProfileId: boundAuthProfileId,
           model: params.params.modelId,
-          modelProvider: response.modelProvider ?? normalizeModelProvider(params.params.provider),
+          modelProvider: response.modelProvider ?? fallbackModelProvider,
           dynamicToolsFingerprint,
         };
       } catch (error) {
@@ -90,25 +91,23 @@ export async function startOrResumeThread(params: {
     }
   }
 
+  const modelProvider = resolveCodexAppServerModelProvider(params.params.provider);
   const response = assertCodexThreadStartResponse(
-    await params.client.request<unknown>(
-      "thread/start",
-      ({
-        model: params.params.modelId,
-        modelProvider: normalizeModelProvider(params.params.provider),
-        cwd: params.cwd,
-        approvalPolicy: params.appServer.approvalPolicy,
-        approvalsReviewer: params.appServer.approvalsReviewer,
-        sandbox: params.appServer.sandbox,
-        ...(params.appServer.serviceTier ? { serviceTier: params.appServer.serviceTier } : {}),
-        serviceName: "OpenClaw",
-        developerInstructions:
-          params.developerInstructions ?? buildDeveloperInstructions(params.params),
-        dynamicTools: params.dynamicTools,
-        experimentalRawEvents: true,
-        persistExtendedHistory: true,
-      } satisfies CodexThreadStartParams) as unknown as JsonValue,
-    ),
+    await params.client.request("thread/start", {
+      model: params.params.modelId,
+      ...(modelProvider ? { modelProvider } : {}),
+      cwd: params.cwd,
+      approvalPolicy: params.appServer.approvalPolicy,
+      approvalsReviewer: params.appServer.approvalsReviewer,
+      sandbox: params.appServer.sandbox,
+      ...(params.appServer.serviceTier ? { serviceTier: params.appServer.serviceTier } : {}),
+      serviceName: "OpenClaw",
+      developerInstructions:
+        params.developerInstructions ?? buildDeveloperInstructions(params.params),
+      dynamicTools: params.dynamicTools,
+      experimentalRawEvents: true,
+      persistExtendedHistory: true,
+    } satisfies CodexThreadStartParams),
   );
   const createdAt = new Date().toISOString();
   await writeCodexAppServerBinding(params.params.sessionFile, {
@@ -116,7 +115,7 @@ export async function startOrResumeThread(params: {
     cwd: params.cwd,
     authProfileId: params.params.authProfileId,
     model: response.model ?? params.params.modelId,
-    modelProvider: response.modelProvider ?? normalizeModelProvider(params.params.provider),
+    modelProvider: response.modelProvider ?? modelProvider,
     dynamicToolsFingerprint,
     createdAt,
   });
@@ -127,7 +126,7 @@ export async function startOrResumeThread(params: {
     cwd: params.cwd,
     authProfileId: params.params.authProfileId,
     model: response.model ?? params.params.modelId,
-    modelProvider: response.modelProvider ?? normalizeModelProvider(params.params.provider),
+    modelProvider: response.modelProvider ?? modelProvider,
     dynamicToolsFingerprint,
     createdAt,
     updatedAt: createdAt,
@@ -142,10 +141,11 @@ export function buildThreadResumeParams(
     developerInstructions?: string;
   },
 ): CodexThreadResumeParams {
+  const modelProvider = resolveCodexAppServerModelProvider(params.provider);
   return {
     threadId: options.threadId,
     model: params.modelId,
-    modelProvider: normalizeModelProvider(params.provider),
+    ...(modelProvider ? { modelProvider } : {}),
     approvalPolicy: options.appServer.approvalPolicy,
     approvalsReviewer: options.appServer.approvalsReviewer,
     sandbox: options.appServer.sandbox,
@@ -170,6 +170,7 @@ export function buildTurnStartParams(
     cwd: options.cwd,
     approvalPolicy: options.appServer.approvalPolicy,
     approvalsReviewer: options.appServer.approvalsReviewer,
+    sandboxPolicy: codexSandboxPolicyForTurn(options.appServer.sandbox, options.cwd),
     model: params.modelId,
     ...(options.appServer.serviceTier ? { serviceTier: options.appServer.serviceTier } : {}),
     effort: resolveReasoningEffort(params.thinkLevel),
@@ -238,8 +239,14 @@ function buildUserInput(
   ];
 }
 
-function normalizeModelProvider(provider: string): string {
-  return provider === "codex" || provider === "openai-codex" ? "openai" : provider;
+function resolveCodexAppServerModelProvider(provider: string): string | undefined {
+  const normalized = provider.trim();
+  if (!normalized || normalized === "codex") {
+    // `codex` is OpenClaw's virtual provider; let Codex app-server keep its
+    // native provider/auth selection instead of forcing the legacy OpenAI path.
+    return undefined;
+  }
+  return normalized === "openai-codex" ? "openai" : normalized;
 }
 
 function resolveReasoningEffort(

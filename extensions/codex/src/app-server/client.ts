@@ -2,6 +2,10 @@ import { createInterface, type Interface as ReadlineInterface } from "node:readl
 import { embeddedAgentLog, OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveCodexAppServerRuntimeOptions, type CodexAppServerStartOptions } from "./config.js";
 import {
+  type CodexAppServerRequestMethod,
+  type CodexAppServerRequestParams,
+  type CodexAppServerRequestResult,
+  type CodexInitializeParams,
   type CodexInitializeResponse,
   isRpcResponse,
   type CodexServerNotification,
@@ -107,7 +111,7 @@ export class CodexAppServerClient {
     }
     // The handshake identifies the exact app-server process we will keep using,
     // which matters when callers override the binary or app-server args.
-    const response = await this.request<CodexInitializeResponse>("initialize", {
+    const response = await this.request("initialize", {
       clientInfo: {
         name: "openclaw",
         title: "OpenClaw",
@@ -116,17 +120,28 @@ export class CodexAppServerClient {
       capabilities: {
         experimentalApi: true,
       },
-    });
+    } satisfies CodexInitializeParams);
     assertSupportedCodexAppServerVersion(response);
     this.notify("initialized");
     this.initialized = true;
   }
 
+  request<M extends CodexAppServerRequestMethod>(
+    method: M,
+    params: CodexAppServerRequestParams<M>,
+    options?: { timeoutMs?: number; signal?: AbortSignal },
+  ): Promise<CodexAppServerRequestResult<M>>;
   request<T = JsonValue | undefined>(
     method: string,
-    params?: JsonValue,
-    options: { timeoutMs?: number; signal?: AbortSignal } = {},
+    params?: unknown,
+    options?: { timeoutMs?: number; signal?: AbortSignal },
+  ): Promise<T>;
+  request<T = JsonValue | undefined>(
+    method: string,
+    params?: unknown,
+    options?: { timeoutMs?: number; signal?: AbortSignal },
   ): Promise<T> {
+    options ??= {};
     if (this.closed) {
       return Promise.reject(new Error("codex app-server client is closed"));
     }
@@ -134,7 +149,7 @@ export class CodexAppServerClient {
       return Promise.reject(new Error(`${method} aborted`));
     }
     const id = this.nextId++;
-    const message: RpcRequest = { id, method, params };
+    const message: RpcRequest = { id, method, params: params as JsonValue | undefined };
     return new Promise<T>((resolve, reject) => {
       let timeout: ReturnType<typeof setTimeout> | undefined;
       let cleanupAbort: (() => void) | undefined;

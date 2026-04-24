@@ -550,7 +550,6 @@ describe("runCodexAppServerAttempt", () => {
           method: "thread/start",
           params: expect.objectContaining({
             model: "gpt-5.4-codex",
-            modelProvider: "openai",
             approvalPolicy: "never",
             sandbox: "danger-full-access",
             approvalsReviewer: "user",
@@ -1034,7 +1033,6 @@ describe("runCodexAppServerAttempt", () => {
     expectResumeRequest(requests, {
       threadId: "thread-existing",
       model: "gpt-5.4-codex",
-      modelProvider: "openai",
       approvalPolicy: "never",
       approvalsReviewer: "user",
       sandbox: "danger-full-access",
@@ -1136,7 +1134,6 @@ describe("runCodexAppServerAttempt", () => {
     expectResumeRequest(requests, {
       threadId: "thread-existing",
       model: "gpt-5.4-codex",
-      modelProvider: "openai",
       approvalPolicy: "on-request",
       approvalsReviewer: "guardian_subagent",
       sandbox: "danger-full-access",
@@ -1151,6 +1148,7 @@ describe("runCodexAppServerAttempt", () => {
           params: expect.objectContaining({
             approvalPolicy: "on-request",
             approvalsReviewer: "guardian_subagent",
+            sandboxPolicy: { type: "dangerFullAccess" },
             serviceTier: "fast",
             model: "gpt-5.4-codex",
           }),
@@ -1207,7 +1205,6 @@ describe("runCodexAppServerAttempt", () => {
     expect(buildThreadResumeParams(params, { threadId: "thread-1", appServer })).toEqual({
       threadId: "thread-1",
       model: "gpt-5.4-codex",
-      modelProvider: "openai",
       approvalPolicy: "on-request",
       approvalsReviewer: "guardian_subagent",
       sandbox: "danger-full-access",
@@ -1224,6 +1221,7 @@ describe("runCodexAppServerAttempt", () => {
         model: "gpt-5.4-codex",
         approvalPolicy: "on-request",
         approvalsReviewer: "guardian_subagent",
+        sandboxPolicy: { type: "dangerFullAccess" },
         serviceTier: "flex",
       }),
     );

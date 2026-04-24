@@ -62,6 +62,18 @@ import { filterToolsForVisionInputs } from "./vision-tools.js";
 
 let clientFactory = defaultCodexAppServerClientFactory;
 
+function emitCodexAppServerEvent(
+  params: EmbeddedRunAttemptParams,
+  event: Parameters<NonNullable<EmbeddedRunAttemptParams["onAgentEvent"]>>[0],
+): void {
+  try {
+    params.onAgentEvent?.(event);
+  } catch {
+    // Event consumers are observational; they must not abort or strand the
+    // canonical app-server turn lifecycle.
+  }
+}
+
 export async function runCodexAppServerAttempt(
   params: EmbeddedRunAttemptParams,
   options: { pluginConfig?: unknown; startupTimeoutFloorMs?: number } = {},
@@ -151,6 +163,10 @@ export async function runCodexAppServerAttempt(
   let thread: CodexAppServerThreadBinding;
   let trajectoryEndRecorded = false;
   try {
+    emitCodexAppServerEvent(params, {
+      stream: "codex_app_server.lifecycle",
+      data: { phase: "startup" },
+    });
     ({ client, thread } = await withCodexStartupTimeout({
       timeoutMs: params.timeoutMs,
       timeoutFloorMs: options.startupTimeoutFloorMs,
@@ -168,6 +184,10 @@ export async function runCodexAppServerAttempt(
         return { client: startupClient, thread: startupThread };
       },
     }));
+    emitCodexAppServerEvent(params, {
+      stream: "codex_app_server.lifecycle",
+      data: { phase: "thread_ready", threadId: thread.threadId },
+    });
   } catch (error) {
     clearSharedCodexAppServerClient();
     params.abortSignal?.removeEventListener("abort", abortFromUpstream);
@@ -306,8 +326,12 @@ export async function runCodexAppServerAttempt(
       event: llmInputEvent,
       ctx: hookContext,
     });
+    emitCodexAppServerEvent(params, {
+      stream: "codex_app_server.lifecycle",
+      data: { phase: "turn_starting", threadId: thread.threadId },
+    });
     turn = assertCodexTurnStartResponse(
-      await client.request<unknown>(
+      await client.request(
         "turn/start",
         buildTurnStartParams(params, {
           threadId: thread.threadId,
@@ -319,6 +343,10 @@ export async function runCodexAppServerAttempt(
       ),
     );
   } catch (error) {
+    emitCodexAppServerEvent(params, {
+      stream: "codex_app_server.lifecycle",
+      data: { phase: "turn_start_failed", error: formatErrorMessage(error) },
+    });
     trajectoryRecorder?.recordEvent("session.ended", {
       status: "error",
       threadId: thread.threadId,
@@ -575,7 +603,7 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
     disableMessageTool: params.disableMessageTool,
     onYield: (message) => {
       input.onYieldDetected();
-      params.onAgentEvent?.({
+      emitCodexAppServerEvent(params, {
         stream: "codex_app_server.tool",
         data: { name: "sessions_yield", message },
       });
