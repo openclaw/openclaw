@@ -1702,6 +1702,41 @@ function injectToolCallThoughtSignatures(
   }
 }
 
+function parseReplayReasoningSignatureKey(key: string): boolean {
+  const trimmed = key.trim();
+  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
+    return false;
+  }
+  try {
+    const parsed = JSON.parse(trimmed) as { id?: unknown; type?: unknown };
+    return (
+      typeof parsed.id === "string" &&
+      parsed.id.startsWith("rs_") &&
+      typeof parsed.type === "string" &&
+      (parsed.type === "reasoning" || parsed.type.startsWith("reasoning."))
+    );
+  } catch {
+    return false;
+  }
+}
+
+function extractReplayReasoningContent(record: Record<string, unknown>): {
+  content?: string;
+  keysToDelete: string[];
+} {
+  const keysToDelete: string[] = [];
+  for (const [key, value] of Object.entries(record)) {
+    if (!parseReplayReasoningSignatureKey(key)) {
+      continue;
+    }
+    keysToDelete.push(key);
+    if (typeof value === "string" && value.trim().length > 0) {
+      return { content: value, keysToDelete };
+    }
+  }
+  return { keysToDelete };
+}
+
 function injectDeepSeekReasoningReplay(outgoingMessages: unknown[], model: OpenAIModeModel): void {
   const { capabilities } = detectOpenAICompletionsCompat(model);
   const endpointClass = capabilities.endpointClass;
@@ -1715,7 +1750,7 @@ function injectDeepSeekReasoningReplay(outgoingMessages: unknown[], model: OpenA
     if (!message || typeof message !== "object") {
       continue;
     }
-    const record = message as {
+    const record = message as Record<string, unknown> & {
       role?: unknown;
       content?: unknown;
       tool_calls?: unknown;
@@ -1737,10 +1772,17 @@ function injectDeepSeekReasoningReplay(outgoingMessages: unknown[], model: OpenA
     ) {
       continue;
     }
-    if (typeof record.content !== "string" || record.content.trim().length === 0) {
+    const extracted = extractReplayReasoningContent(record);
+    for (const key of extracted.keysToDelete) {
+      delete record[key];
+    }
+    if (typeof record.content === "string" && record.content.trim().length > 0) {
+      record.reasoning_content = record.content;
       continue;
     }
-    record.reasoning_content = record.content;
+    if (typeof extracted.content === "string" && extracted.content.trim().length > 0) {
+      record.reasoning_content = extracted.content;
+    }
   }
 }
 
