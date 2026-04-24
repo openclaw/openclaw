@@ -76,6 +76,7 @@ import {
   pickFallbackThinkingLevel,
 } from "../pi-embedded-helpers.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
+import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
@@ -415,22 +416,36 @@ export async function runEmbeddedPiAgent(
       const preferredProfileId = params.authProfileId?.trim();
       let lockedProfileId = params.authProfileIdSource === "user" ? preferredProfileId : undefined;
       if (lockedProfileId) {
-        const lockedProfile = authStore.profiles[lockedProfileId];
-        const lockedProfileProvider = lockedProfile
-          ? resolveProviderIdForAuth(lockedProfile.provider, {
-              config: params.config,
-              workspaceDir: resolvedWorkspace,
-            })
-          : undefined;
-        const runProvider = resolveProviderIdForAuth(provider, {
-          config: params.config,
-          workspaceDir: resolvedWorkspace,
-        });
-        if (!lockedProfile || !lockedProfileProvider || lockedProfileProvider !== runProvider) {
-          lockedProfileId = undefined;
+        if (pluginHarnessOwnsTransport) {
+          const runtimeAuthPlan = buildAgentRuntimeAuthPlan({
+            provider,
+            authProfileProvider: lockedProfileId.split(":", 1)[0],
+            sessionAuthProfileId: lockedProfileId,
+            config: params.config,
+            workspaceDir: resolvedWorkspace,
+            harnessId: agentHarness.id,
+          });
+          if (!runtimeAuthPlan.forwardedAuthProfileId) {
+            lockedProfileId = undefined;
+          }
+        } else {
+          const lockedProfile = authStore.profiles[lockedProfileId];
+          const lockedProfileProvider = lockedProfile
+            ? resolveProviderIdForAuth(lockedProfile.provider, {
+                config: params.config,
+                workspaceDir: resolvedWorkspace,
+              })
+            : undefined;
+          const runProvider = resolveProviderIdForAuth(provider, {
+            config: params.config,
+            workspaceDir: resolvedWorkspace,
+          });
+          if (!lockedProfile || !lockedProfileProvider || lockedProfileProvider !== runProvider) {
+            lockedProfileId = undefined;
+          }
         }
       }
-      if (lockedProfileId) {
+      if (lockedProfileId && !pluginHarnessOwnsTransport) {
         const eligibility = resolveAuthProfileEligibility({
           cfg: params.config,
           store: authStore,
@@ -547,6 +562,8 @@ export async function runEmbeddedPiAgent(
       // vendor-token refresh attempts before the plugin gets control.
       if (!pluginHarnessOwnsTransport) {
         await initializeAuthProfile();
+      } else if (lockedProfileId) {
+        lastProfileId = lockedProfileId;
       }
       const { sessionAgentId } = resolveSessionAgentIds({
         sessionKey: params.sessionKey,

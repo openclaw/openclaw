@@ -18,7 +18,7 @@ import { resolveAgentHarnessPolicy } from "../harness/selection.js";
 import { isCliProvider } from "../model-selection.js";
 import { prepareSessionManagerForRun } from "../pi-embedded-runner/session-manager-init.js";
 import { runEmbeddedPiAgent, type EmbeddedPiRunResult } from "../pi-embedded.js";
-import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
+import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import { buildWorkspaceSkillSnapshot } from "../skills.js";
 import { buildUsageWithNoCost } from "../stream-message-shared.js";
 import {
@@ -272,18 +272,23 @@ export function runAgentAttempt(params: {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey ?? params.sessionId,
   });
-  const providerAuthKey = resolveProviderIdForAuth(params.providerOverride, {
+  const agentHarnessPolicy = resolveAgentHarnessPolicy({
+    provider: params.providerOverride,
+    modelId: params.modelOverride,
+    config: params.cfg,
+    agentId: params.sessionAgentId,
+    sessionKey: params.sessionKey ?? params.sessionId,
+  });
+  const runtimeAuthPlan = buildAgentRuntimeAuthPlan({
+    provider: params.providerOverride,
+    authProfileProvider: params.authProfileProvider,
+    sessionAuthProfileId: params.sessionEntry?.authProfileOverride,
     config: params.cfg,
     workspaceDir: params.workspaceDir,
+    harnessId: sessionPinnedAgentHarnessId,
+    harnessRuntime: agentHarnessPolicy.runtime,
   });
-  const authProfileProviderKey = resolveProviderIdForAuth(params.authProfileProvider, {
-    config: params.cfg,
-    workspaceDir: params.workspaceDir,
-  });
-  const authProfileId =
-    providerAuthKey === authProfileProviderKey
-      ? params.sessionEntry?.authProfileOverride
-      : undefined;
+  const authProfileId = runtimeAuthPlan.forwardedAuthProfileId;
   if (isCliProvider(params.providerOverride, params.cfg)) {
     const cliSessionBinding = getCliSessionBinding(params.sessionEntry, params.providerOverride);
     const resolveReusableCliSessionBinding = async () => {
