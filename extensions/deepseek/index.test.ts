@@ -30,10 +30,20 @@ describe("deepseek provider plugin", () => {
     expect(catalogProvider.models?.map((model) => model.id)).toEqual([
       "deepseek-chat",
       "deepseek-reasoner",
+      "deepseek-v4-pro",
+      "deepseek-v4-flash",
     ]);
     expect(
       catalogProvider.models?.find((model) => model.id === "deepseek-reasoner")?.reasoning,
     ).toBe(true);
+    const v4Pro = catalogProvider.models?.find((model) => model.id === "deepseek-v4-pro");
+    expect(v4Pro?.reasoning).toBe(true);
+    expect(v4Pro?.contextWindow).toBe(1_000_000);
+    expect(v4Pro?.maxTokens).toBe(384_000);
+    const v4Flash = catalogProvider.models?.find((model) => model.id === "deepseek-v4-flash");
+    expect(v4Flash?.reasoning).toBe(true);
+    expect(v4Flash?.contextWindow).toBe(1_000_000);
+    expect(v4Flash?.maxTokens).toBe(384_000);
   });
 
   it("publishes configured DeepSeek models through plugin-owned catalog augmentation", async () => {
