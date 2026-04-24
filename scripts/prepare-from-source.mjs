@@ -62,28 +62,25 @@ function run(cmd) {
 
 const pnpmVersion = detectPnpmVersion(ROOT);
 
-// Resolve a working pnpm command. In nested npm lifecycle contexts (git dep
-// preparation), npx cannot reliably place downloaded binaries on PATH, so
-// we fall back to a global npm install or corepack.
+// Resolve a working pnpm command. Prefer corepack (ships with Node 22+)
+// because it doesn't modify npm's global state. Running `npm install -g pnpm`
+// inside npm's git-install lifecycle corrupts the outer install (ENOENT on
+// transitive dep install scripts like sharp).
 let pnpmRunner;
 if (hasCmd("pnpm")) {
   pnpmRunner = "pnpm";
+} else if (hasCmd("corepack")) {
+  console.log("[prepare] pnpm not found, using corepack pnpm…");
+  pnpmRunner = "corepack pnpm";
 } else {
-  // Install pnpm globally. Since we are inside an `npm install -g` lifecycle,
-  // the global prefix is writable and pnpm lands next to node/npm on PATH.
+  // No corepack (Node < 22 or stripped). Fall back to global npm install.
   try {
     console.log(`[prepare] pnpm not found, installing pnpm@${pnpmVersion} globally via npm…`);
     run(`npm install -g pnpm@${pnpmVersion}`);
     pnpmRunner = "pnpm";
   } catch {
-    // Global install failed (permissions, offline). Try corepack (ships with Node 22+).
-    if (hasCmd("corepack")) {
-      console.log("[prepare] global npm install failed, falling back to corepack…");
-      pnpmRunner = "corepack pnpm";
-    } else {
-      console.error("[prepare] cannot install pnpm. Install pnpm globally and retry.");
-      process.exit(1);
-    }
+    console.error("[prepare] cannot install pnpm. Install pnpm globally and retry.");
+    process.exit(1);
   }
 }
 
