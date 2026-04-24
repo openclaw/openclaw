@@ -5,7 +5,7 @@ import type {
   ConfiguredProviderRequest,
 } from "../config/types.provider-request.js";
 import { assertSecretInputResolved } from "../config/types.secrets.js";
-import type { PinnedDispatcherPolicy } from "../infra/net/ssrf.js";
+import { isBlockedHostnameOrIp, type PinnedDispatcherPolicy } from "../infra/net/ssrf.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import type {
   ProviderRequestCapabilities,
@@ -177,6 +177,26 @@ function sanitizeConfiguredRequestString(value: unknown, path: string): string |
   return trimmed ? trimmed : undefined;
 }
 
+function sanitizeConfiguredExplicitProxyUrl(value: unknown, path: string): string | undefined {
+  const url = sanitizeConfiguredRequestString(value, path);
+  if (!url) {
+    return undefined;
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error(`${path} must be a valid http or https URL`);
+  }
+  if (!["http:", "https:"].includes(parsed.protocol)) {
+    throw new Error(`${path} must use http or https`);
+  }
+  if (isBlockedHostnameOrIp(parsed.hostname)) {
+    throw new Error(`${path} must not target private or internal hosts`);
+  }
+  return url;
+}
+
 export function sanitizeConfiguredProviderRequest(
   request: ConfiguredProviderRequest | undefined,
 ): ProviderRequestTransportOverrides | undefined {
@@ -279,7 +299,7 @@ export function sanitizeConfiguredProviderRequest(
         ...(tls ? { tls } : {}),
       };
     } else if (rawProxy.mode === "explicit-proxy") {
-      const url = sanitizeConfiguredRequestString(rawProxy.url, "request.proxy.url");
+      const url = sanitizeConfiguredExplicitProxyUrl(rawProxy.url, "request.proxy.url");
       if (url) {
         proxy = {
           mode: "explicit-proxy",
