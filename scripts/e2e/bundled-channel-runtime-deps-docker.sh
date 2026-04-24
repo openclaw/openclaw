@@ -590,8 +590,10 @@ export OPENCLAW_NO_ONBOARD=1
 export OPENCLAW_PLUGIN_STAGE_DIR="$HOME/.openclaw/plugin-runtime-deps"
 mkdir -p "$OPENCLAW_PLUGIN_STAGE_DIR"
 
-CHANNEL="feishu"
-DEP_SENTINEL="@larksuiteoapi/node-sdk"
+declare -A SETUP_ENTRY_DEP_SENTINELS=(
+  [feishu]="@larksuiteoapi/node-sdk"
+  [whatsapp]="@whiskeysockets/baileys"
+)
 
 package_root() {
   printf "%s/openclaw" "$(npm root -g)"
@@ -602,18 +604,21 @@ package_tgz="${OPENCLAW_CURRENT_PACKAGE_TGZ:?missing OPENCLAW_CURRENT_PACKAGE_TG
 npm install -g "$package_tgz" --no-fund --no-audit >/tmp/openclaw-setup-entry-install.log 2>&1
 
 root="$(package_root)"
-test -d "$root/dist/extensions/$CHANNEL"
-if [ -d "$root/dist/extensions/$CHANNEL/node_modules" ]; then
-  echo "$CHANNEL runtime deps should not be preinstalled in package" >&2
-  find "$root/dist/extensions/$CHANNEL/node_modules" -maxdepth 3 -type f | head -40 >&2 || true
-  exit 1
-fi
-if [ -f "$root/node_modules/$DEP_SENTINEL/package.json" ]; then
-  echo "$DEP_SENTINEL should not be installed at package root before setup-entry load" >&2
-  exit 1
-fi
+for channel in "${!SETUP_ENTRY_DEP_SENTINELS[@]}"; do
+  dep_sentinel="${SETUP_ENTRY_DEP_SENTINELS[$channel]}"
+  test -d "$root/dist/extensions/$channel"
+  if [ -d "$root/dist/extensions/$channel/node_modules" ]; then
+    echo "$channel runtime deps should not be preinstalled in package" >&2
+    find "$root/dist/extensions/$channel/node_modules" -maxdepth 3 -type f | head -40 >&2 || true
+    exit 1
+  fi
+  if [ -f "$root/node_modules/$dep_sentinel/package.json" ]; then
+    echo "$dep_sentinel should not be installed at package root before setup-entry load" >&2
+    exit 1
+  fi
+done
 
-echo "Probing real Feishu bundled setup entry before channel configuration..."
+echo "Probing real bundled setup entries before channel configuration..."
 (
   cd "$root"
   node --input-type=module - <<'NODE'
@@ -638,22 +643,33 @@ const setupPluginLoader = Object.values(bundled).find(
 if (!setupPluginLoader) {
   throw new Error("missing packaged getBundledChannelSetupPlugin export");
 }
-const plugin = setupPluginLoader("feishu");
-console.log(plugin ? "Feishu setup plugin loaded pre-config" : "Feishu setup plugin deferred pre-config");
+for (const channel of ["feishu", "whatsapp"]) {
+  const plugin = setupPluginLoader(channel);
+  if (!plugin) {
+    throw new Error(`${channel} setup plugin did not load pre-config`);
+  }
+  if (plugin.id !== channel) {
+    throw new Error(`${channel} setup plugin id mismatch: ${plugin.id}`);
+  }
+  console.log(`${channel} setup plugin loaded pre-config`);
+}
 NODE
 )
 
-if [ -e "$root/dist/extensions/$CHANNEL/node_modules/$DEP_SENTINEL/package.json" ]; then
-  echo "setup-entry discovery installed deps into bundled plugin tree before channel configuration" >&2
-  exit 1
-fi
-if find "$OPENCLAW_PLUGIN_STAGE_DIR" -maxdepth 12 -path "*/node_modules/$DEP_SENTINEL/package.json" -type f | grep -q .; then
-  echo "setup-entry discovery installed external staged deps before channel configuration" >&2
-  find "$OPENCLAW_PLUGIN_STAGE_DIR" -maxdepth 12 -type f | sort | head -160 >&2 || true
-  exit 1
-fi
+for channel in "${!SETUP_ENTRY_DEP_SENTINELS[@]}"; do
+  dep_sentinel="${SETUP_ENTRY_DEP_SENTINELS[$channel]}"
+  if [ -e "$root/dist/extensions/$channel/node_modules/$dep_sentinel/package.json" ]; then
+    echo "setup-entry discovery installed $channel deps into bundled plugin tree before channel configuration" >&2
+    exit 1
+  fi
+  if find "$OPENCLAW_PLUGIN_STAGE_DIR" -maxdepth 12 -path "*/node_modules/$dep_sentinel/package.json" -type f | grep -q .; then
+    echo "setup-entry discovery installed $channel external staged deps before channel configuration" >&2
+    find "$OPENCLAW_PLUGIN_STAGE_DIR" -maxdepth 12 -type f | sort | head -160 >&2 || true
+    exit 1
+  fi
+done
 
-echo "Configuring Feishu; doctor should now install bundled runtime deps externally..."
+echo "Configuring setup-entry channels; doctor should now install bundled runtime deps externally..."
 node - <<'NODE'
 const fs = require("node:fs");
 const path = require("node:path");
@@ -674,6 +690,10 @@ config.channels = {
     ...(config.channels?.feishu || {}),
     enabled: true,
   },
+  whatsapp: {
+    ...(config.channels?.whatsapp || {}),
+    enabled: true,
+  },
 };
 
 fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
@@ -681,16 +701,19 @@ NODE
 
 openclaw doctor --non-interactive >/tmp/openclaw-setup-entry-doctor.log 2>&1
 
-if [ -e "$root/dist/extensions/$CHANNEL/node_modules/$DEP_SENTINEL/package.json" ]; then
-  echo "expected configured Feishu deps to be installed externally, not into bundled plugin tree" >&2
-  exit 1
-fi
-if ! find "$OPENCLAW_PLUGIN_STAGE_DIR" -maxdepth 12 -path "*/node_modules/$DEP_SENTINEL/package.json" -type f | grep -q .; then
-  echo "missing external staged dependency sentinel for configured $CHANNEL: $DEP_SENTINEL" >&2
-  cat /tmp/openclaw-setup-entry-doctor.log >&2
-  find "$OPENCLAW_PLUGIN_STAGE_DIR" -maxdepth 12 -type f | sort | head -160 >&2 || true
-  exit 1
-fi
+for channel in "${!SETUP_ENTRY_DEP_SENTINELS[@]}"; do
+  dep_sentinel="${SETUP_ENTRY_DEP_SENTINELS[$channel]}"
+  if [ -e "$root/dist/extensions/$channel/node_modules/$dep_sentinel/package.json" ]; then
+    echo "expected configured $channel deps to be installed externally, not into bundled plugin tree" >&2
+    exit 1
+  fi
+  if ! find "$OPENCLAW_PLUGIN_STAGE_DIR" -maxdepth 12 -path "*/node_modules/$dep_sentinel/package.json" -type f | grep -q .; then
+    echo "missing external staged dependency sentinel for configured $channel: $dep_sentinel" >&2
+    cat /tmp/openclaw-setup-entry-doctor.log >&2
+    find "$OPENCLAW_PLUGIN_STAGE_DIR" -maxdepth 12 -type f | sort | head -160 >&2 || true
+    exit 1
+  fi
+done
 
 echo "bundled channel setup-entry runtime deps Docker E2E passed"
 EOF
