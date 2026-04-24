@@ -96,7 +96,7 @@ steps:
                 - ref: env
             - set: managed
               value:
-                expr: "jobs.find((job) => job.name === 'Memory Dreaming Promotion' && job.payload?.kind === 'systemEvent' && job.payload.text === '__openclaw_memory_core_short_term_promotion_dream__')"
+                expr: "jobs.find((job) => job.description?.includes('[managed-by=memory-core.short-term-promotion]') || (job.name === 'Memory Dreaming Promotion' && ((job.payload?.kind === 'systemEvent' && job.payload.text === '__openclaw_memory_core_short_term_promotion_dream__') || (job.payload?.kind === 'agentTurn' && job.payload.message === '__openclaw_memory_core_short_term_promotion_dream__' && job.sessionTarget === 'isolated' && job.payload.lightContext === true && job.delivery?.mode === 'none'))))"
             - assert:
                 expr: "Boolean(managed?.id)"
                 message: managed dreaming cron job missing after enablement
