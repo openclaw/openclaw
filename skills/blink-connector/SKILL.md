@@ -11,9 +11,10 @@ description: >
   (Gmail, Drive, Calendar, Docs, Sheets, Slides), HubSpot, Airtable,
   Microsoft (Outlook, Teams, OneDrive, Calendar), Salesforce, GitHub, Jira,
   Asana, Linear, Attio, Pipedrive, Zoom, Stripe, Shopify, Figma, Instagram,
-  TikTok, YouTube, Loom, Mailchimp, Typeform, Calendly, Etsy, Vercel,
+  TikTok, YouTube, Mailchimp, Typeform, Calendly, Etsy, Vercel,
   Reddit, Facebook, Monday, Amplitude, Google Analytics, Zendesk, Apollo,
-  Datagma, Mixpanel, PeopleDataLabs, Google BigQuery, Supabase.
+  Datagma, Mixpanel, PeopleDataLabs, Google BigQuery, Supabase, QuickBooks,
+  Brex, Google Ads, Intercom, Gong, Box, Todoist, Ashby, Basecamp.
   (3) Native Composio tool catalog (file uploads, attachments, complex
   writes): `blink connector tool-execute <composio_provider> <TOOL_SLUG>
   '<json>'` — unlocks 1000+ Composio tools, auto-uploads URL/path file
@@ -78,7 +79,6 @@ A missing provider means it's not linked — ask the user to connect it in the A
 | Instagram | `instagram` | `https://graph.instagram.com/v22.0/` |
 | TikTok | `tiktok` | `https://open.tiktokapis.com/v2/` |
 | YouTube | `youtube` | `https://www.googleapis.com/youtube/v3/` |
-| Loom | `loom` | `https://www.loom.com/v1/` |
 | Mailchimp | `mailchimp` | `https://{dc}.api.mailchimp.com/3.0/` |
 | Typeform | `typeform` | `https://api.typeform.com/` |
 | Calendly | `calendly` | `https://api.calendly.com/` |
@@ -108,6 +108,15 @@ A missing provider means it's not linked — ask the user to connect it in the A
 | Google BigQuery | `composio_bigquery` | `https://bigquery.googleapis.com/bigquery/v2/` |
 | Supabase | `composio_supabase` | `https://api.supabase.com/v1/` |
 | Twitter / X | `composio_twitter` | `https://api.twitter.com/2/` |
+| QuickBooks | `composio_quickbooks` | `https://quickbooks.api.intuit.com/` (path: `v3/company/{realmId}/...`) |
+| Brex | `composio_brex` | `https://platform.brexapis.com/v2/` |
+| Google Ads | `composio_googleads` | `https://googleads.googleapis.com/` (path: `v21/customers/...`, v18 sunset) |
+| Intercom | `composio_intercom` | `https://api.intercom.io/` |
+| Gong | `composio_gong` | `https://api.gong.io/v2/` |
+| Box | `composio_box` | `https://api.box.com/2.0/` |
+| Todoist | `composio_todoist` | `https://api.todoist.com/api/v1/` |
+| Ashby | `composio_ashby` | `https://api.ashbyhq.com/` |
+| Basecamp | `composio_basecamp` | `https://3.basecampapi.com/` (path: `{accountId}/projects.json`) |
 
 ## Examples by Provider
 
@@ -800,16 +809,6 @@ blink connector exec tiktok user/info/ GET '{"fields":"display_name,follower_cou
 blink connector exec tiktok video/list/ POST '{"max_count":10}'
 ```
 
-### Loom
-
-```bash
-# List videos
-blink connector exec loom videos GET '{"limit":"10"}'
-
-# Get video details
-blink connector exec loom videos/VIDEO_ID GET
-```
-
 ### Etsy
 
 Etsy's API does **not** accept `me` as a user_id placeholder — pass the numeric `user_id` / `shop_id` returned by `/users/me`. If `/users/me` returns `"Could not find a shop for User with user_id = ..."`, the account has no Etsy shop and shop-scoped endpoints will always fail until the user creates one on etsy.com.
@@ -920,6 +919,168 @@ blink connector exec composio_amplitude 2/charts GET
 # Get active users
 blink connector exec composio_amplitude 2/users/search GET '{"user":"user@example.com"}'
 ```
+
+### QuickBooks
+
+QuickBooks is multi-tenant: every endpoint is scoped under the user's
+`realmId` (also called `companyId`). Get it from `blink connector status`
+metadata or by listing companies via OpenID Connect.
+
+```bash
+# List customers (replace REALMID with the company id)
+blink connector exec composio_quickbooks v3/company/REALMID/query GET '{"query":"SELECT * FROM Customer MAXRESULTS 10"}'
+
+# Get a specific invoice
+blink connector exec composio_quickbooks v3/company/REALMID/invoice/INVOICE_ID GET
+
+# Create an invoice
+blink connector exec composio_quickbooks v3/company/REALMID/invoice POST '{"Line":[{"Amount":100,"DetailType":"SalesItemLineDetail","SalesItemLineDetail":{"ItemRef":{"value":"1"}}}],"CustomerRef":{"value":"CUSTOMER_ID"}}'
+```
+
+For complex writes (attachments, voids), prefer the native tool catalog:
+
+```bash
+blink connector tool-execute composio_quickbooks QUICKBOOKS_CREATE_INVOICE '{...}'
+```
+
+### Brex
+
+```bash
+# Get current user
+blink connector exec composio_brex users/me GET
+
+# List cards
+blink connector exec composio_brex cards GET '{"limit":"20"}'
+
+# List transactions
+blink connector exec composio_brex transactions/card GET '{"limit":"20"}'
+```
+
+### Google Ads
+
+Requires a `developer-token` header (Composio injects it server-side from the
+auth config). All paths must include the API version:
+
+```bash
+# List accessible customers
+blink connector exec composio_googleads v21/customers:listAccessibleCustomers GET
+
+# Run a Google Ads Query Language (GAQL) report
+blink connector exec composio_googleads v21/customers/CUSTOMER_ID/googleAds:search POST '{"query":"SELECT campaign.id, campaign.name FROM campaign LIMIT 10"}'
+```
+
+### Intercom
+
+```bash
+# Get current admin
+blink connector exec composio_intercom me GET
+
+# List contacts
+blink connector exec composio_intercom contacts GET '{"per_page":"20"}'
+
+# Create a contact
+blink connector exec composio_intercom contacts POST '{"role":"user","email":"new@example.com","name":"Jane Doe"}'
+
+# Search conversations
+blink connector exec composio_intercom conversations/search POST '{"query":{"field":"open","operator":"=","value":"true"}}'
+```
+
+### Gong
+
+```bash
+# List users
+blink connector exec composio_gong users GET
+
+# List calls (last 7 days)
+blink connector exec composio_gong calls GET '{"fromDateTime":"2026-04-16T00:00:00Z","toDateTime":"2026-04-23T00:00:00Z"}'
+
+# Get call transcript
+blink connector exec composio_gong calls/transcript POST '{"filter":{"callIds":["CALL_ID"]}}'
+```
+
+### Box
+
+```bash
+# Get current user
+blink connector exec composio_box users/me GET
+
+# List items in root folder (folder id 0)
+blink connector exec composio_box folders/0/items GET '{"limit":"20"}'
+
+# Get file info
+blink connector exec composio_box files/FILE_ID GET
+
+# Create a folder
+blink connector exec composio_box folders POST '{"name":"New Folder","parent":{"id":"0"}}'
+
+# Upload a file (use tool-execute for multipart)
+blink connector tool-execute composio_box BOX_UPLOAD_FILE '{"file":"./report.pdf","parent_id":"0"}'
+```
+
+### Todoist
+
+```bash
+# List projects
+blink connector exec composio_todoist projects GET
+
+# List active tasks
+blink connector exec composio_todoist tasks GET
+
+# Filter tasks by project
+blink connector exec composio_todoist tasks GET '{"project_id":"PROJECT_ID"}'
+
+# Create a task
+blink connector exec composio_todoist tasks POST '{"content":"Ship the new connectors","project_id":"PROJECT_ID","due_string":"tomorrow at 5pm"}'
+
+# Close a task
+blink connector exec composio_todoist tasks/TASK_ID/close POST
+```
+
+### Ashby
+
+Ashby uses API-key auth (Basic with empty password). Composio handles the
+encoding — pass the path only.
+
+```bash
+# Get current user
+blink connector exec composio_ashby user.me POST '{}'
+
+# List candidates
+blink connector exec composio_ashby candidate.list POST '{"limit":20}'
+
+# Get a candidate
+blink connector exec composio_ashby candidate.info POST '{"candidateId":"CANDIDATE_ID"}'
+
+# List jobs
+blink connector exec composio_ashby job.list POST '{"limit":20}'
+```
+
+### Basecamp
+
+Basecamp 4 is account-scoped, but the executor auto-prepends the user's
+account id from connection metadata (or, for legacy connections, looks it up
+on Composio). You can write paths *without* the leading account id:
+
+```bash
+# List projects
+blink connector exec composio_basecamp projects.json GET
+
+# Get a specific project
+blink connector exec composio_basecamp projects/PROJECT_ID.json GET
+
+# Create a project (then later DELETE projects/PROJECT_ID.json to trash it)
+blink connector exec composio_basecamp projects.json POST '{"name":"New Project","description":"Created via API"}'
+
+# List todos in a todo list
+blink connector exec composio_basecamp buckets/PROJECT_ID/todolists/TODOLIST_ID/todos.json GET
+
+# Create a message
+blink connector exec composio_basecamp buckets/PROJECT_ID/message_boards/BOARD_ID/messages.json POST '{"subject":"Status update","content":"<div>Shipping today.</div>","status":"active"}'
+```
+
+If you need to override the account (for users who belong to multiple
+Basecamp accounts), you may still pass the numeric account id explicitly as
+the first path segment, e.g. `6199974/projects.json`.
 
 ## Scripting — capture output
 
