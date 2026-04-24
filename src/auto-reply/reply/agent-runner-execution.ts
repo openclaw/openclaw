@@ -1522,16 +1522,15 @@ export async function runAgentTurnWithFallback(params: {
 
       defaultRuntime.error(`Embedded agent failed before reply: ${message}`);
 
+      const isFallbackSummary = isFallbackSummaryError(err);
+
       // Emit model_failure_terminal plugin hook (fire-and-forget). This gives plugins
       // a structured in-process signal when all model attempts have been exhausted,
       // without requiring them to poll or parse gateway logs.
       const terminalHookRunner = getGlobalHookRunner();
       if (terminalHookRunner?.hasHooks("model_failure_terminal")) {
-        const isFallbackSummaryCheck = isFallbackSummaryError(err);
-        const terminalKind = isFallbackSummaryCheck
-          ? "all_models_failed"
-          : "run_failed_before_reply";
-        const terminalAttempts = isFallbackSummaryCheck
+        const terminalKind = isFallbackSummary ? "all_models_failed" : "run_failed_before_reply";
+        const terminalAttempts = isFallbackSummary
           ? err.attempts.map((a) => ({
               provider: a.provider,
               model: a.model,
@@ -1561,7 +1560,6 @@ export async function runAgentTurnWithFallback(params: {
       // underlying error. FallbackSummaryError messages embed per-attempt
       // reason labels like `(rate_limit)`, so string-matching the summary text
       // would misclassify mixed-cause exhaustion as a pure transient cooldown.
-      const isFallbackSummary = isFallbackSummaryError(err);
       const isPureTransientSummary = isFallbackSummary
         ? isPureTransientRateLimitSummary(err)
         : false;
