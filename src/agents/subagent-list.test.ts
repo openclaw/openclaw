@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { updateSessionStore } from "../config/sessions/store.js";
-import { buildSubagentList } from "./subagent-list.js";
+import { buildSubagentList, isActiveSubagentRun } from "./subagent-list.js";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
@@ -155,5 +155,47 @@ describe("buildSubagentList", () => {
     expect(list.active[0]?.line).toMatch(/tokens 1(\.0)?k \(in 12 \/ out 1(\.0)?k\)/);
     expect(list.active[0]?.line).toContain("prompt/cache 197k");
     expect(list.active[0]?.line).not.toContain("1k io");
+  });
+});
+
+describe("isActiveSubagentRun orphan cutoff (#71252)", () => {
+  const noPendingChildren = () => 0;
+
+  function makeEntry(overrides: Partial<SubagentRunRecord>): SubagentRunRecord {
+    return {
+      runId: "run-1",
+      childSessionKey: "child",
+      requesterSessionKey: "parent",
+      requesterDisplayKey: "parent",
+      task: "t",
+      cleanup: "delete",
+      createdAt: 0,
+      ...overrides,
+    } as SubagentRunRecord;
+  }
+
+  it("returns true for a fresh run that has not ended", () => {
+    const entry = makeEntry({ sessionStartedAt: Date.now() - 60_000 });
+    expect(isActiveSubagentRun(entry, noPendingChildren)).toBe(true);
+  });
+
+  it("returns false for an orphan run older than the 2h cutoff", () => {
+    const threeHoursAgo = Date.now() - 3 * 60 * 60 * 1_000;
+    const entry = makeEntry({ sessionStartedAt: threeHoursAgo });
+    expect(isActiveSubagentRun(entry, noPendingChildren)).toBe(false);
+  });
+
+  it("keeps an old run active when pending descendants remain", () => {
+    const threeHoursAgo = Date.now() - 3 * 60 * 60 * 1_000;
+    const entry = makeEntry({ sessionStartedAt: threeHoursAgo });
+    expect(isActiveSubagentRun(entry, () => 1)).toBe(true);
+  });
+
+  it("returns false when endedAt is set regardless of age", () => {
+    const entry = makeEntry({
+      sessionStartedAt: Date.now() - 60_000,
+      endedAt: Date.now(),
+    });
+    expect(isActiveSubagentRun(entry, noPendingChildren)).toBe(false);
   });
 });

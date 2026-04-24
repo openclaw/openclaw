@@ -129,11 +129,31 @@ export function createPendingDescendantCounter(runsSnapshot?: Map<string, Subage
   };
 }
 
+// Orphan cutoff: subagent runs that started more than ORPHAN_CUTOFF_MS ago and
+// never had endedAt written are treated as dead. Without this gate, any run
+// interrupted by a gateway restart, SIGKILL, or silent tool failure stays in
+// the active list indefinitely — the main agent then reads it through
+// `subagents list` and hallucinates progress narration for work that died
+// hours or days ago. (#71252)
+const SUBAGENT_ORPHAN_CUTOFF_MS = 2 * 60 * 60 * 1_000;
+
 export function isActiveSubagentRun(
   entry: SubagentRunRecord,
   pendingDescendantCount: (sessionKey: string) => number,
 ) {
-  return !entry.endedAt || pendingDescendantCount(entry.childSessionKey) > 0;
+  if (pendingDescendantCount(entry.childSessionKey) > 0) {
+    return true;
+  }
+  if (entry.endedAt) {
+    return false;
+  }
+  const startedAt = getSubagentSessionStartedAt(entry);
+  if (typeof startedAt === "number" && startedAt > 0) {
+    if (Date.now() - startedAt > SUBAGENT_ORPHAN_CUTOFF_MS) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function resolveRunStatus(entry: SubagentRunRecord, options?: { pendingDescendants?: number }) {
