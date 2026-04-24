@@ -344,6 +344,10 @@
     "target": "插件入口点"
   },
   {
+    "source": "Plugin hooks",
+    "target": "插件钩子"
+  },
+  {
     "source": "Entry Points",
     "target": "入口点"
   },

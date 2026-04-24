@@ -1158,6 +1158,7 @@
                     "group": "Building plugins",
                     "pages": [
                       "plugins/building-plugins",
+                      "plugins/hooks",
                       "plugins/sdk-channel-plugins",
                       "plugins/sdk-provider-plugins",
                       "plugins/sdk-migration"
