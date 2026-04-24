@@ -218,8 +218,8 @@ For the plugin authoring guide, see [Plugin SDK overview](/plugins/sdk-overview)
     | `plugin-sdk/media-understanding` | Media understanding provider types plus provider-facing image/audio helper exports |
     | `plugin-sdk/text-runtime` | Shared text/markdown/logging helpers such as assistant-visible-text stripping, markdown render/chunking/table helpers, redaction helpers, directive-tag helpers, and safe-text utilities |
     | `plugin-sdk/text-chunking` | Outbound text chunking helper |
-    | `plugin-sdk/speech` | Speech provider types plus provider-facing directive, registry, and validation helpers |
-    | `plugin-sdk/speech-core` | Shared speech provider types, registry, directive, and normalization helpers |
+    | `plugin-sdk/speech` | Speech provider types plus provider-facing directive, registry, validation, and provider HTTP error helpers |
+    | `plugin-sdk/speech-core` | Shared speech provider types, registry, directive, normalization, and provider HTTP error helpers |
     | `plugin-sdk/realtime-transcription` | Realtime transcription provider types, registry helpers, and shared WebSocket session helper |
     | `plugin-sdk/realtime-voice` | Realtime voice provider types and registry helpers |
     | `plugin-sdk/image-generation` | Image generation provider types |
