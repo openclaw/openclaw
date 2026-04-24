@@ -171,6 +171,45 @@ export function isSafeToRetrySendError(err: unknown): boolean {
   return false;
 }
 
+const SEND_MESSAGE_RETRY_CODES = new Set(["ECONNRESET", "ETIMEDOUT"]);
+// Matches the bare grammY "Network request for 'sendMessage' failed!" surface
+// that fires when a send is interrupted before a response. Deliberately does
+// NOT match the "failed after N attempts" envelope, which means grammY's own
+// retry loop already exhausted attempts — another retry on top compounds the
+// duplicate-delivery risk.
+const SEND_MESSAGE_RETRY_MESSAGE_RE =
+  /network request(?:\s+for\s+['"][^'"]+['"])?\s+failed(?!\s+after\b)/i;
+
+/**
+ * Retry predicate for the sendMessage wrapper. Matches the specific transient
+ * network failures observed in production (ECONNRESET, ETIMEDOUT, and the
+ * grammY "Network request for '<method>' failed" message) and explicitly
+ * rejects any Telegram 4xx (400/403/429). Broader than `isSafeToRetrySendError`
+ * — it tolerates a small risk of duplicate delivery when the network error
+ * fires after Telegram has already accepted the request, in exchange for
+ * retrying through the common transient failures that currently drop user
+ * replies entirely.
+ */
+export function isRetryableSendMessageError(err: unknown): boolean {
+  if (!err) {
+    return false;
+  }
+  if (isTelegramClientRejection(err)) {
+    return false;
+  }
+  for (const candidate of collectTelegramErrorCandidates(err)) {
+    const code = normalizeCode(getErrorCode(candidate));
+    if (code && SEND_MESSAGE_RETRY_CODES.has(code)) {
+      return true;
+    }
+    const message = formatErrorMessage(candidate);
+    if (message && SEND_MESSAGE_RETRY_MESSAGE_RE.test(message)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function hasTelegramErrorCode(err: unknown, matches: (code: number) => boolean): boolean {
   for (const candidate of collectTelegramErrorCandidates(err)) {
     if (!candidate || typeof candidate !== "object" || !("error_code" in candidate)) {

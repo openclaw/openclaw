@@ -24,6 +24,7 @@ import {
 } from "./network-errors.js";
 import { normalizeTelegramReplyToMessageId } from "./outbound-params.js";
 import { makeProxyFetch } from "./proxy.js";
+import { withSendMessageRetry } from "./send-message-retry.js";
 import {
   buildOutboundMediaLoadOptions,
   getImageMetadata,
@@ -690,12 +691,17 @@ export async function sendMessageTelegram(
           ...(opts.silent === true ? { disable_notification: true } : {}),
         };
         const hasPlainParams = Object.keys(plainParams).length > 0;
+        const retryLog = opts.verbose ? (message: string) => logVerbose(message) : undefined;
         const requestPlain = (retryLabel: string) =>
           requestWithChatNotFound(
             () =>
-              hasPlainParams
-                ? api.sendMessage(chatId, chunk.plainText, plainParams)
-                : api.sendMessage(chatId, chunk.plainText),
+              withSendMessageRetry(
+                () =>
+                  hasPlainParams
+                    ? api.sendMessage(chatId, chunk.plainText, plainParams)
+                    : api.sendMessage(chatId, chunk.plainText),
+                { label: retryLabel, ...(retryLog ? { log: retryLog } : {}) },
+              ),
             retryLabel,
           );
         if (!chunk.htmlText) {
@@ -711,7 +717,11 @@ export async function sendMessageTelegram(
           verbose: opts.verbose,
           requestHtml: (retryLabel) =>
             requestWithChatNotFound(
-              () => api.sendMessage(chatId, htmlText, htmlParams),
+              () =>
+                withSendMessageRetry(() => api.sendMessage(chatId, htmlText, htmlParams), {
+                  label: retryLabel,
+                  ...(retryLog ? { log: retryLog } : {}),
+                }),
               retryLabel,
             ),
           requestPlain,
