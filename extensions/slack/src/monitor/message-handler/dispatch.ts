@@ -589,6 +589,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     payload: ReplyPayload;
     kind: ReplyDispatchKind;
   }): Promise<void> => {
+    if (params.payload.isReasoning === true) {
+      return;
+    }
     const reply = resolveSendableOutboundReplyParts(params.payload);
     if (
       streamFailed ||
