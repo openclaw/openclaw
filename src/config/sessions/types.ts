@@ -260,7 +260,10 @@ export type SessionEntry = {
   systemPromptReport?: SessionSystemPromptReport;
   /**
    * Generic plugin-owned runtime debug entries shown in verbose status surfaces.
-   * Each plugin owns and may overwrite only its own entry between turns.
+   * Turn-scoped: the reply runtime clears this field at the start of each turn,
+   * and plugins repopulate it during the turn. Each plugin owns and may
+   * overwrite only its own entry during a turn. See
+   * `clearSessionPluginDebugEntries`.
    */
   pluginDebugEntries?: SessionPluginDebugEntry[];
   acp?: SessionAcpMeta;

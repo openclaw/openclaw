@@ -43,6 +43,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Plugins/Active Memory: clear turn-scoped `pluginDebugEntries` at the start of each reply so a single `🧩 Active Memory:` status line (for example a `status=timeout`) no longer repeats as a prefix on every subsequent assistant message until another plugin run overwrites it.
 - Plugins/runtime deps: respect explicit plugin and channel disablement when repairing bundled runtime dependencies, so doctor and health checks no longer install deps for disabled configured channels.
 - Diagnostics: harden tool and model diagnostic events against hostile errors, blocking listeners, and unsafe stability reason fields. Thanks @vincentkoc.
 - Plugins/onboarding: record local plugin install source metadata without duplicating raw absolute local paths in persisted `plugins.installs`, while preserving linked load-path cleanup. (#70970) Thanks @vincentkoc.

@@ -822,6 +822,319 @@ describe("runReplyAgent Active Memory inline debug", () => {
     ]);
   });
 
+  it("clears stale pluginDebugEntries at turn start on heartbeat turns when no plugin writes", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-active-memory-clear-"));
+    const storePath = path.join(tmp, "sessions.json");
+    const sessionKey = "main";
+    const frozenUpdatedAt = 1_234_567_890;
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: frozenUpdatedAt,
+      verboseLevel: "on",
+      pluginDebugEntries: [
+        {
+          pluginId: "active-memory",
+          lines: ["🧩 Active Memory: status=timeout elapsed=49.0s query=recent"],
+        },
+      ],
+    };
+
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          [sessionKey]: sessionEntry,
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    // Mock does NOT touch pluginDebugEntries — simulates a turn where the
+    // active-memory hook either did not fire or threw before persisting.
+    runEmbeddedPiAgentMock.mockImplementationOnce(async () => {
+      return {
+        payloads: [{ text: "Normal reply" }],
+        meta: {},
+      };
+    });
+
+    const typing = createMockTypingController();
+    const sessionCtx = {
+      Provider: "telegram",
+      OriginatingTo: "chat:1",
+      AccountId: "primary",
+      MessageSid: "msg",
+    } as unknown as TemplateContext;
+    const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
+    const followupRun = {
+      prompt: "hello",
+      summaryLine: "hello",
+      enqueuedAt: Date.now(),
+      run: {
+        agentId: "main",
+        sessionId: "session",
+        sessionKey,
+        messageProvider: "telegram",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp",
+        config: {},
+        skillsSnapshot: {},
+        traceAuthorized: true,
+        provider: "anthropic",
+        model: "claude",
+        thinkLevel: "low",
+        verboseLevel: "on",
+        elevatedLevel: "off",
+        bashElevated: {
+          enabled: false,
+          allowed: false,
+          defaultLevel: "off",
+        },
+        timeoutMs: 1_000,
+        blockReplyBreak: "message_end",
+      },
+    } as unknown as FollowupRun;
+
+    const result = await runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: sessionKey,
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing,
+      sessionCtx,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      storePath,
+      defaultModel: "anthropic/claude-opus-4-6",
+      resolvedVerboseLevel: "on",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      opts: {
+        isHeartbeat: true,
+      },
+      typingMode: "instant",
+    });
+
+    expect(Array.isArray(result)).toBe(false);
+    expect((result as { text?: string }).text).toBe("Normal reply");
+
+    const persisted = loadSessionStore(storePath, { skipCache: true });
+    expect(persisted[sessionKey]?.pluginDebugEntries).toBeUndefined();
+  });
+
+  it("continues the reply when stale plugin debug cleanup fails", async () => {
+    const clearPluginDebugSpy = vi
+      .spyOn(sessionTypesModule, "clearSessionPluginDebugEntries")
+      .mockRejectedValueOnce(new Error("session lock timeout"));
+
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "Normal reply" }],
+      meta: {},
+    });
+
+    try {
+      const typing = createMockTypingController();
+      const sessionCtx = {
+        Provider: "telegram",
+        OriginatingTo: "chat:1",
+        AccountId: "primary",
+        MessageSid: "msg",
+      } as unknown as TemplateContext;
+      const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
+      const followupRun = {
+        prompt: "hello",
+        summaryLine: "hello",
+        enqueuedAt: Date.now(),
+        run: {
+          agentId: "main",
+          sessionId: "session",
+          sessionKey: "main",
+          messageProvider: "telegram",
+          sessionFile: "/tmp/session.jsonl",
+          workspaceDir: "/tmp",
+          config: {},
+          skillsSnapshot: {},
+          traceAuthorized: true,
+          provider: "anthropic",
+          model: "claude",
+          thinkLevel: "low",
+          verboseLevel: "off",
+          elevatedLevel: "off",
+          bashElevated: {
+            enabled: false,
+            allowed: false,
+            defaultLevel: "off",
+          },
+          timeoutMs: 1_000,
+          blockReplyBreak: "message_end",
+        },
+      } as unknown as FollowupRun;
+
+      const result = await runReplyAgent({
+        commandBody: "hello",
+        followupRun,
+        queueKey: "main",
+        resolvedQueue,
+        shouldSteer: false,
+        shouldFollowup: false,
+        isActive: false,
+        isStreaming: false,
+        typing,
+        sessionCtx,
+        sessionEntry: {
+          sessionId: "session",
+          updatedAt: Date.now(),
+        },
+        sessionStore: {},
+        sessionKey: "main",
+        storePath: "/tmp/sessions.json",
+        defaultModel: "anthropic/claude-opus-4-6",
+        resolvedVerboseLevel: "off",
+        isNewSession: false,
+        blockStreamingEnabled: false,
+        resolvedBlockStreamingBreak: "message_end",
+        shouldInjectGroupIntro: false,
+        typingMode: "instant",
+      });
+
+      expect(result).toMatchObject({ text: "Normal reply" });
+      expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+      expect(runtimeErrorMock).toHaveBeenCalledWith(
+        "Failed to clear stale session plugin debug entries",
+        expect.any(Error),
+      );
+    } finally {
+      clearPluginDebugSpy.mockRestore();
+    }
+  });
+
+  it("suppresses stale plugin debug payloads when cleanup fails in verbose mode", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-active-memory-clear-fail-"));
+    const storePath = path.join(tmp, "sessions.json");
+    const sessionKey = "main";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      verboseLevel: "on",
+      pluginDebugEntries: [
+        {
+          pluginId: "active-memory",
+          lines: ["🧩 Active Memory: status=timeout elapsed=49.0s query=recent"],
+        },
+      ],
+    };
+
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          [sessionKey]: sessionEntry,
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const clearPluginDebugSpy = vi
+      .spyOn(sessionTypesModule, "clearSessionPluginDebugEntries")
+      .mockImplementationOnce(async ({ inMemoryEntry, inMemoryStore, sessionKey }) => {
+        if (inMemoryEntry?.pluginDebugEntries) {
+          delete inMemoryEntry.pluginDebugEntries;
+          if (inMemoryStore && sessionKey) {
+            inMemoryStore[sessionKey] = inMemoryEntry;
+          }
+        }
+        throw new Error("session lock timeout");
+      });
+
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "Normal reply" }],
+      meta: {},
+    });
+
+    try {
+      const typing = createMockTypingController();
+      const sessionCtx = {
+        Provider: "telegram",
+        OriginatingTo: "chat:1",
+        AccountId: "primary",
+        MessageSid: "msg",
+      } as unknown as TemplateContext;
+      const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
+      const followupRun = {
+        prompt: "hello",
+        summaryLine: "hello",
+        enqueuedAt: Date.now(),
+        run: {
+          agentId: "main",
+          sessionId: "session",
+          sessionKey,
+          messageProvider: "telegram",
+          sessionFile: "/tmp/session.jsonl",
+          workspaceDir: "/tmp",
+          config: {},
+          skillsSnapshot: {},
+          traceAuthorized: true,
+          provider: "anthropic",
+          model: "claude",
+          thinkLevel: "low",
+          verboseLevel: "on",
+          elevatedLevel: "off",
+          bashElevated: {
+            enabled: false,
+            allowed: false,
+            defaultLevel: "off",
+          },
+          timeoutMs: 1_000,
+          blockReplyBreak: "message_end",
+        },
+      } as unknown as FollowupRun;
+
+      const result = await runReplyAgent({
+        commandBody: "hello",
+        followupRun,
+        queueKey: sessionKey,
+        resolvedQueue,
+        shouldSteer: false,
+        shouldFollowup: false,
+        isActive: false,
+        isStreaming: false,
+        typing,
+        sessionCtx,
+        sessionEntry,
+        sessionStore: { [sessionKey]: sessionEntry },
+        sessionKey,
+        storePath,
+        defaultModel: "anthropic/claude-opus-4-6",
+        resolvedVerboseLevel: "on",
+        isNewSession: false,
+        blockStreamingEnabled: false,
+        resolvedBlockStreamingBreak: "message_end",
+        shouldInjectGroupIntro: false,
+        typingMode: "instant",
+      });
+
+      expect(Array.isArray(result)).toBe(false);
+      expect(result).toMatchObject({ text: "Normal reply" });
+      expect(runtimeErrorMock).toHaveBeenCalledWith(
+        "Failed to clear stale session plugin debug entries",
+        expect.any(Error),
+      );
+    } finally {
+      clearPluginDebugSpy.mockRestore();
+    }
+  });
+
   it("appends raw trace payloads when trace raw is enabled", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-trace-raw-usage-"));
     const storePath = path.join(tmp, "sessions.json");

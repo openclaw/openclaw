@@ -47,6 +47,7 @@ import {
   mergeSessionEntry,
   mergeSessionEntryPreserveActivity,
   type SessionEntry,
+  type SessionEntryMergePolicy,
 } from "./types.js";
 
 export {
@@ -644,9 +645,10 @@ async function withSessionStoreLock<T>(
 export async function updateSessionStoreEntry(params: {
   storePath: string;
   sessionKey: string;
+  mergePolicy?: SessionEntryMergePolicy;
   update: (entry: SessionEntry) => Promise<Partial<SessionEntry> | null>;
 }): Promise<SessionEntry | null> {
-  const { storePath, sessionKey, update } = params;
+  const { storePath, sessionKey, mergePolicy, update } = params;
   return await withSessionStoreLock(storePath, async () => {
     const store = loadSessionStore(storePath, { skipCache: true });
     const resolved = resolveSessionStoreEntry({ store, sessionKey });
@@ -658,13 +660,55 @@ export async function updateSessionStoreEntry(params: {
     if (!patch) {
       return existing;
     }
-    const next = mergeSessionEntry(existing, patch);
+    const next =
+      mergePolicy === "preserve-activity"
+        ? mergeSessionEntryPreserveActivity(existing, patch)
+        : mergeSessionEntry(existing, patch);
     return await persistResolvedSessionEntry({
       storePath,
       store,
       resolved,
       next,
     });
+  });
+}
+
+/**
+ * Clears any persisted `pluginDebugEntries` for the given session.
+ *
+ * Why: `pluginDebugEntries` is turn-scoped — plugins populate it during a reply
+ * turn, and the outbound-message assembler reads it back when verbose/trace is
+ * enabled. Without a clear step, a write from one turn (e.g. `active-memory`
+ * timeout) would stick in the store and be re-emitted on every subsequent turn
+ * where no plugin overwrote it. Callers should invoke this at the start of a
+ * reply turn so the field only ever holds entries produced this turn.
+ */
+export async function clearSessionPluginDebugEntries(params: {
+  storePath?: string;
+  sessionKey?: string;
+  inMemoryEntry?: SessionEntry;
+  inMemoryStore?: Record<string, SessionEntry>;
+}): Promise<void> {
+  const { storePath, sessionKey, inMemoryEntry, inMemoryStore } = params;
+  if (inMemoryEntry?.pluginDebugEntries) {
+    delete inMemoryEntry.pluginDebugEntries;
+    if (inMemoryStore && sessionKey) {
+      inMemoryStore[sessionKey] = inMemoryEntry;
+    }
+  }
+  if (!storePath || !sessionKey) {
+    return;
+  }
+  await updateSessionStoreEntry({
+    storePath,
+    sessionKey,
+    mergePolicy: "preserve-activity",
+    update: async (existing) => {
+      if (!Array.isArray(existing.pluginDebugEntries) || existing.pluginDebugEntries.length === 0) {
+        return null;
+      }
+      return { pluginDebugEntries: undefined };
+    },
   });
 }
 

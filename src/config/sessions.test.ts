@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
 import {
   buildGroupDisplayName,
+  clearSessionPluginDebugEntries,
   deriveSessionKey,
   loadSessionStore,
   resolveSessionFilePath,
@@ -446,6 +447,35 @@ describe("sessions", () => {
 
     const store = loadSessionStore(storePath);
     expect(store[sessionKey]?.thinkingLevel).toBe("low");
+  });
+
+  it("clearSessionPluginDebugEntries preserves updatedAt while removing debug entries", async () => {
+    const sessionKey = "agent:main:main";
+    const frozenUpdatedAt = 1_234_567_890;
+    const { storePath } = await createSessionStoreFixture({
+      prefix: "clearSessionPluginDebugEntries-preserve-activity",
+      entries: {
+        [sessionKey]: {
+          sessionId: "sess-1",
+          updatedAt: frozenUpdatedAt,
+          pluginDebugEntries: [
+            {
+              pluginId: "active-memory",
+              lines: ["🧩 Active Memory: status=timeout elapsed=49.0s query=recent"],
+            },
+          ],
+        },
+      },
+    });
+
+    await clearSessionPluginDebugEntries({
+      storePath,
+      sessionKey,
+    });
+
+    const store = loadSessionStore(storePath);
+    expect(store[sessionKey]?.updatedAt).toBe(frozenUpdatedAt);
+    expect(store[sessionKey]?.pluginDebugEntries).toBeUndefined();
   });
 
   it("updateSessionStore preserves concurrent additions", async () => {
