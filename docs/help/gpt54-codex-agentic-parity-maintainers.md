@@ -1,12 +1,10 @@
 ---
-title: "GPT-5.4 / Codex Parity Maintainer Notes"
 summary: "How to review the GPT-5.4 / Codex parity program as four merge units"
+title: "GPT-5.4 / Codex parity maintainer notes"
 read_when:
   - Reviewing the GPT-5.4 / Codex parity PR series
   - Maintaining the six-contract agentic architecture behind the parity program
 ---
-
-# GPT-5.4 / Codex Parity Maintainer Notes
 
 This note explains how to review the GPT-5.4 / Codex parity program as four merge units without losing the original six-contract architecture.
 
@@ -170,3 +168,7 @@ The parity harness is not the only evidence source. Keep this split explicit in 
 | `/elevated full` hints were sometimes misleading            | PR B ties guidance to actual runtime capability and blocked reasons                     |
 | Long tasks could disappear into replay/compaction ambiguity | PR C emits explicit paused, blocked, abandoned, and replay-invalid state                |
 | Parity claims were anecdotal                                | PR D produces a report plus JSON verdict with the same scenario coverage on both models |
+
+## Related
+
+- [GPT-5.4 / Codex agentic parity](/help/gpt54-codex-agentic-parity)

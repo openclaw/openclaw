@@ -3,7 +3,7 @@ summary: "CLI reference for `openclaw dns` (wide-area discovery helpers)"
 read_when:
   - You want wide-area discovery (DNS-SD) via Tailscale + CoreDNS
   - You’re setting up split DNS for a custom discovery domain (example: openclaw.internal)
-title: "dns"
+title: "DNS"
 ---
 
 # `openclaw dns`
@@ -46,3 +46,8 @@ Notes:
 - If `--domain` is omitted, OpenClaw uses `discovery.wideArea.domain` from config.
 - `--apply` currently supports macOS only and expects Homebrew CoreDNS.
 - `--apply` bootstraps the zone file if needed, ensures the CoreDNS import stanza exists, and restarts the `coredns` brew service.
+
+## Related
+
+- [CLI reference](/cli)
+- [Discovery](/gateway/discovery)

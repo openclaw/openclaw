@@ -1,68 +1,113 @@
-import { encodePngRgba, fillPixel } from "./png-encode.ts";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { loadQrCodeTuiRuntime } from "./qr-runtime.ts";
 
-type QRCodeConstructor = new (
-  typeNumber: number,
-  errorCorrectLevel: unknown,
-) => {
-  addData: (data: string) => void;
-  make: () => void;
-  getModuleCount: () => number;
-  isDark: (row: number, col: number) => boolean;
+const DEFAULT_QR_PNG_SCALE = 6;
+const DEFAULT_QR_PNG_MARGIN_MODULES = 4;
+const MIN_QR_PNG_SCALE = 1;
+const MAX_QR_PNG_SCALE = 12;
+const MIN_QR_PNG_MARGIN_MODULES = 0;
+const MAX_QR_PNG_MARGIN_MODULES = 16;
+const QR_PNG_DATA_URL_PREFIX = "data:image/png;base64,";
+
+export type QrPngRenderOptions = {
+  scale?: number;
+  marginModules?: number;
 };
 
-let qrCodeRuntimePromise: Promise<{
-  QRCode: QRCodeConstructor;
-  QRErrorCorrectLevel: Record<string, unknown>;
-}> | null = null;
+export type QrPngTempFileOptions = QrPngRenderOptions & {
+  tmpRoot: string;
+  dirPrefix: string;
+  fileName?: string;
+};
 
-async function loadQrCodeRuntime() {
-  if (!qrCodeRuntimePromise) {
-    qrCodeRuntimePromise = Promise.all([
-      import("qrcode-terminal/vendor/QRCode/index.js"),
-      import("qrcode-terminal/vendor/QRCode/QRErrorCorrectLevel.js"),
-    ]).then(([qrCodeModule, errorCorrectLevelModule]) => ({
-      QRCode: qrCodeModule.default as QRCodeConstructor,
-      QRErrorCorrectLevel: errorCorrectLevelModule.default,
-    }));
+export type QrPngTempFile = {
+  filePath: string;
+  dirPath: string;
+  mediaLocalRoots: string[];
+};
+
+function resolveQrPngIntegerOption(params: {
+  name: string;
+  value: number | undefined;
+  defaultValue: number;
+  min: number;
+  max: number;
+}): number {
+  if (params.value === undefined) {
+    return params.defaultValue;
   }
-  return await qrCodeRuntimePromise;
+  if (!Number.isFinite(params.value)) {
+    throw new RangeError(`${params.name} must be a finite number.`);
+  }
+  const value = Math.floor(params.value);
+  if (value < params.min || value > params.max) {
+    throw new RangeError(`${params.name} must be between ${params.min} and ${params.max}.`);
+  }
+  return value;
 }
 
-async function createQrMatrix(input: string) {
-  const { QRCode, QRErrorCorrectLevel } = await loadQrCodeRuntime();
-  const qr = new QRCode(-1, QRErrorCorrectLevel.L);
-  qr.addData(input);
-  qr.make();
-  return qr;
+function resolveQrTempPathSegment(name: string, value: string): string {
+  if (!value || value === "." || value === ".." || path.basename(value) !== value) {
+    throw new RangeError(`${name} must be a non-empty filename segment.`);
+  }
+  return value;
 }
 
 export async function renderQrPngBase64(
   input: string,
-  opts: { scale?: number; marginModules?: number } = {},
+  opts: QrPngRenderOptions = {},
 ): Promise<string> {
-  const { scale = 6, marginModules = 4 } = opts;
-  const qr = await createQrMatrix(input);
-  const modules = qr.getModuleCount();
-  const size = (modules + marginModules * 2) * scale;
+  const scale = resolveQrPngIntegerOption({
+    name: "scale",
+    value: opts.scale,
+    defaultValue: DEFAULT_QR_PNG_SCALE,
+    min: MIN_QR_PNG_SCALE,
+    max: MAX_QR_PNG_SCALE,
+  });
+  const marginModules = resolveQrPngIntegerOption({
+    name: "marginModules",
+    value: opts.marginModules,
+    defaultValue: DEFAULT_QR_PNG_MARGIN_MODULES,
+    min: MIN_QR_PNG_MARGIN_MODULES,
+    max: MAX_QR_PNG_MARGIN_MODULES,
+  });
+  const { renderPngBase64 } = await loadQrCodeTuiRuntime();
+  return await renderPngBase64(input, {
+    margin: marginModules,
+    scale,
+  });
+}
 
-  const buf = Buffer.alloc(size * size * 4, 255);
-  for (let row = 0; row < modules; row += 1) {
-    for (let col = 0; col < modules; col += 1) {
-      if (!qr.isDark(row, col)) {
-        continue;
-      }
-      const startX = (col + marginModules) * scale;
-      const startY = (row + marginModules) * scale;
-      for (let y = 0; y < scale; y += 1) {
-        const pixelY = startY + y;
-        for (let x = 0; x < scale; x += 1) {
-          const pixelX = startX + x;
-          fillPixel(buf, pixelX, pixelY, size, 0, 0, 0, 255);
-        }
-      }
-    }
+export function formatQrPngDataUrl(base64: string): string {
+  return `${QR_PNG_DATA_URL_PREFIX}${base64}`;
+}
+
+export async function renderQrPngDataUrl(
+  input: string,
+  opts: QrPngRenderOptions = {},
+): Promise<string> {
+  return formatQrPngDataUrl(await renderQrPngBase64(input, opts));
+}
+
+export async function writeQrPngTempFile(
+  input: string,
+  opts: QrPngTempFileOptions,
+): Promise<QrPngTempFile> {
+  const dirPrefix = resolveQrTempPathSegment("dirPrefix", opts.dirPrefix);
+  const fileName = resolveQrTempPathSegment("fileName", opts.fileName ?? "qr.png");
+  const pngBase64 = await renderQrPngBase64(input, opts);
+  const dirPath = await mkdtemp(path.join(opts.tmpRoot, dirPrefix));
+  const filePath = path.join(dirPath, fileName);
+  try {
+    await writeFile(filePath, Buffer.from(pngBase64, "base64"));
+  } catch (err) {
+    await rm(dirPath, { recursive: true, force: true }).catch(() => {});
+    throw err;
   }
-
-  const png = encodePngRgba(buf, size, size);
-  return png.toString("base64");
+  return {
+    filePath,
+    dirPath,
+    mediaLocalRoots: [dirPath],
+  };
 }

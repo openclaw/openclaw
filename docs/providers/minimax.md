@@ -6,8 +6,6 @@ read_when:
 title: "MiniMax"
 ---
 
-# MiniMax
-
 OpenClaw's MiniMax provider defaults to **MiniMax M2.7**.
 
 MiniMax also provides:
@@ -24,7 +22,7 @@ Provider split:
 | `minimax`        | API key | Text, image generation, image understanding, speech, web search |
 | `minimax-portal` | OAuth   | Text, image generation, image understanding                     |
 
-## Model lineup
+## Built-in catalog
 
 | Model                    | Type             | Description                              |
 | ------------------------ | ---------------- | ---------------------------------------- |

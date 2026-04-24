@@ -86,6 +86,8 @@ export type ChannelSetupInput = {
   token?: string;
   privateKey?: string;
   tokenFile?: string;
+  secret?: string;
+  secretFile?: string;
   botToken?: string;
   appToken?: string;
   signalNumber?: string;
@@ -115,6 +117,7 @@ export type ChannelSetupInput = {
   initialSyncLimit?: number;
   ship?: string;
   url?: string;
+  baseUrl?: string;
   relayUrls?: string;
   code?: string;
   groupChannels?: string[];

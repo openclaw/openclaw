@@ -575,6 +575,57 @@ describe("convertMessagesToInputItems", () => {
     expect(items[0]).toMatchObject({ type: "message", role: "user", content: "Hello!" });
   });
 
+  it("uses image_url parts for OpenAI-compatible user images", () => {
+    const msg: FakeMessage = {
+      role: "user",
+      content: [
+        { type: "text", text: "describe this" },
+        { type: "image", mimeType: "image/png", data: "AAAA" },
+      ],
+      timestamp: 0,
+    };
+    const items = convertMessagesToInputItems(
+      [msg] as Parameters<typeof convertMessagesToInputItems>[0],
+      { api: "openai-completions", input: ["text", "image"] },
+    );
+
+    expect(items).toEqual([
+      {
+        type: "message",
+        role: "user",
+        content: [
+          { type: "input_text", text: "describe this" },
+          { type: "image_url", image_url: { url: "data:image/png;base64,AAAA" } },
+        ],
+      },
+    ]);
+  });
+
+  it("keeps input_image parts for Responses user images", () => {
+    const msg: FakeMessage = {
+      role: "user",
+      content: [{ type: "image", mimeType: "image/png", data: "AAAA" }],
+      timestamp: 0,
+    };
+    const items = convertMessagesToInputItems(
+      [msg] as Parameters<typeof convertMessagesToInputItems>[0],
+      { api: "openai-responses", input: ["text", "image"] },
+    );
+
+    expect(items).toEqual([
+      {
+        type: "message",
+        role: "user",
+        content: [
+          {
+            type: "input_image",
+            source: { type: "base64", media_type: "image/png", data: "AAAA" },
+          },
+        ],
+      },
+    ]);
+  });
+
   it("converts an assistant text-only message", () => {
     const items = convertMessagesToInputItems([assistantMsg(["Hi there."])] as Parameters<
       typeof convertMessagesToInputItems
@@ -853,6 +904,37 @@ describe("convertMessagesToInputItems", () => {
       call_id: "call_1",
       output: "file.txt",
     });
+  });
+
+  it("preserves OpenAI-compatible tool-result images as follow-up image_url parts", () => {
+    const msg: FakeMessage = {
+      role: "toolResult",
+      toolCallId: "call_1",
+      toolName: "read",
+      content: [{ type: "image", mimeType: "image/png", data: "AAAA" }],
+      isError: false,
+      timestamp: 0,
+    };
+    const items = convertMessagesToInputItems(
+      [msg] as Parameters<typeof convertMessagesToInputItems>[0],
+      { api: "openai-completions", input: ["text", "image"] },
+    );
+
+    expect(items).toEqual([
+      {
+        type: "function_call_output",
+        call_id: "call_1",
+        output: "(see attached image)",
+      },
+      {
+        type: "message",
+        role: "user",
+        content: [
+          { type: "input_text", text: "Attached image(s) from tool result:" },
+          { type: "image_url", image_url: { url: "data:image/png;base64,AAAA" } },
+        ],
+      },
+    ]);
   });
 
   it("drops tool result messages with empty tool call id", () => {

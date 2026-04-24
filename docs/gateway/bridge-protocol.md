@@ -4,7 +4,7 @@ read_when:
   - Building or debugging node clients (iOS/Android/macOS node mode)
   - Investigating pairing or bridge auth failures
   - Auditing the node surface exposed by the gateway
-title: "Bridge Protocol"
+title: "Bridge protocol"
 ---
 
 # Bridge protocol (legacy node transport)
@@ -87,3 +87,8 @@ Payload fields (all optional unless noted):
 The bridge was **implicit v1** (no min/max negotiation). This section is
 historical reference only; current node/operator clients use the WebSocket
 [Gateway Protocol](/gateway/protocol).
+
+## Related
+
+- [Gateway protocol](/gateway/protocol)
+- [Nodes](/nodes)

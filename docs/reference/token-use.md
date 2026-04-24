@@ -3,7 +3,7 @@ summary: "How OpenClaw builds prompt context and reports token usage + costs"
 read_when:
   - Explaining token usage, costs, or context windows
   - Debugging context growth or compaction behavior
-title: "Token Use and Costs"
+title: "Token use and costs"
 ---
 
 # Token use & costs
@@ -212,3 +212,9 @@ rejects that combination with HTTP 401.
 - Prefer smaller models for verbose, exploratory work.
 
 See [Skills](/tools/skills) for the exact skill list overhead formula.
+
+## Related
+
+- [API usage and costs](/reference/api-usage-costs)
+- [Prompt caching](/reference/prompt-caching)
+- [Usage tracking](/concepts/usage-tracking)

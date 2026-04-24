@@ -22,7 +22,7 @@ const describeLive = LIVE && CODEX_HARNESS_LIVE ? describe : describe.skip;
 const LIVE_TIMEOUT_MS = 420_000;
 const GATEWAY_CONNECT_TIMEOUT_MS = 60_000;
 const AGENT_REQUEST_TIMEOUT_MS = 180_000;
-const DEFAULT_CODEX_MODEL = "codex/gpt-5.4";
+const DEFAULT_CODEX_MODEL = "openai/gpt-5.5";
 
 function logLiveStep(step: string, details?: Record<string, unknown>): void {
   if (!CODEX_HARNESS_DEBUG) {

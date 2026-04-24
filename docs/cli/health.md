@@ -2,7 +2,7 @@
 summary: "CLI reference for `openclaw health` (gateway health snapshot via RPC)"
 read_when:
   - You want to quickly check the running Gateway’s health
-title: "health"
+title: "Health"
 ---
 
 # `openclaw health`
@@ -34,3 +34,8 @@ Notes:
 - `--verbose` forces a live probe, prints gateway connection details, and expands the
   human-readable output across all configured accounts and agents.
 - Output includes per-agent session stores when multiple agents are configured.
+
+## Related
+
+- [CLI reference](/cli)
+- [Gateway health](/gateway/health)

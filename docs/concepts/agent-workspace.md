@@ -3,10 +3,8 @@ summary: "Agent workspace: location, layout, and backup strategy"
 read_when:
   - You need to explain the agent workspace or its file layout
   - You want to back up or migrate an agent workspace
-title: "Agent Workspace"
+title: "Agent workspace"
 ---
-
-# Agent workspace
 
 The workspace is the agent's home. It is the only working directory used for
 file tools and for workspace context. Keep it private and treat it as memory.
@@ -92,7 +90,7 @@ These are the standard files OpenClaw expects inside the workspace:
   - Keep it short to avoid token burn.
 
 - `BOOT.md`
-  - Optional startup checklist executed on gateway restart when internal hooks are enabled.
+  - Optional startup checklist run automatically on gateway restart (when [internal hooks](/automation/hooks) are enabled).
   - Keep it short; use the message tool for outbound sends.
 
 - `BOOTSTRAP.md`
