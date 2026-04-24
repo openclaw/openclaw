@@ -77,6 +77,7 @@ describe("packed CLI smoke", () => {
           SystemRoot: "C:\\Windows",
           GITHUB_TOKEN: "redacted",
           OPENAI_API_KEY: "real-secret",
+          OPENCLAW_CONFIG_PATH: "/tmp/leaky-config.json",
         },
         { HOME: "/tmp/smoke-home", OPENCLAW_STATE_DIR: "/tmp/smoke-state" },
       ),
