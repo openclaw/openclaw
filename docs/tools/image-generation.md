@@ -1,5 +1,5 @@
 ---
-summary: "Generate and edit images using configured providers (OpenAI, OpenAI Codex OAuth, Google Gemini, fal, MiniMax, ComfyUI, Vydra, xAI)"
+summary: "Generate and edit images using configured providers (OpenAI, OpenAI Codex OAuth, Google Gemini, OpenRouter, fal, MiniMax, ComfyUI, Vydra, xAI)"
 read_when:
   - Generating images via the agent
   - Configuring image generation providers and models
@@ -15,7 +15,7 @@ The tool only appears when at least one image generation provider is available. 
 
 ## Quick start
 
-1. Set an API key for at least one provider (for example `OPENAI_API_KEY` or `GEMINI_API_KEY`) or sign in with OpenAI Codex OAuth.
+1. Set an API key for at least one provider (for example `OPENAI_API_KEY`, `GEMINI_API_KEY`, or `OPENROUTER_API_KEY`) or sign in with OpenAI Codex OAuth.
 2. Optionally set your preferred model:
 
 ```json5
@@ -46,15 +46,16 @@ The agent calls `image_generate` automatically. No tool allow-listing needed —
 
 ## Supported providers
 
-| Provider | Default model                    | Edit support                       | Auth                                                  |
-| -------- | -------------------------------- | ---------------------------------- | ----------------------------------------------------- |
-| OpenAI   | `gpt-image-2`                    | Yes (up to 4 images)               | `OPENAI_API_KEY` or OpenAI Codex OAuth                |
-| Google   | `gemini-3.1-flash-image-preview` | Yes                                | `GEMINI_API_KEY` or `GOOGLE_API_KEY`                  |
-| fal      | `fal-ai/flux/dev`                | Yes                                | `FAL_KEY`                                             |
-| MiniMax  | `image-01`                       | Yes (subject reference)            | `MINIMAX_API_KEY` or MiniMax OAuth (`minimax-portal`) |
-| ComfyUI  | `workflow`                       | Yes (1 image, workflow-configured) | `COMFY_API_KEY` or `COMFY_CLOUD_API_KEY` for cloud    |
-| Vydra    | `grok-imagine`                   | No                                 | `VYDRA_API_KEY`                                       |
-| xAI      | `grok-imagine-image`             | Yes (up to 5 images)               | `XAI_API_KEY`                                         |
+| Provider   | Default model                           | Edit support                       | Auth                                                  |
+| ---------- | --------------------------------------- | ---------------------------------- | ----------------------------------------------------- |
+| OpenAI     | `gpt-image-2`                           | Yes (up to 4 images)               | `OPENAI_API_KEY` or OpenAI Codex OAuth                |
+| OpenRouter | `google/gemini-3.1-flash-image-preview` | Yes (up to 5 input images)         | `OPENROUTER_API_KEY`                                  |
+| Google     | `gemini-3.1-flash-image-preview`        | Yes                                | `GEMINI_API_KEY` or `GOOGLE_API_KEY`                  |
+| fal        | `fal-ai/flux/dev`                       | Yes                                | `FAL_KEY`                                             |
+| MiniMax    | `image-01`                              | Yes (subject reference)            | `MINIMAX_API_KEY` or MiniMax OAuth (`minimax-portal`) |
+| ComfyUI    | `workflow`                              | Yes (1 image, workflow-configured) | `COMFY_API_KEY` or `COMFY_CLOUD_API_KEY` for cloud    |
+| Vydra      | `grok-imagine`                          | No                                 | `VYDRA_API_KEY`                                       |
+| xAI        | `grok-imagine-image`                    | Yes (up to 5 images)               | `XAI_API_KEY`                                         |
 
 Use `action: "list"` to inspect available providers and models at runtime:
 
@@ -134,7 +135,11 @@ Tool results report the applied settings. When OpenClaw remaps geometry during p
     defaults: {
       imageGenerationModel: {
         primary: "openai/gpt-image-2",
-        fallbacks: ["google/gemini-3.1-flash-image-preview", "fal/fal-ai/flux/dev"],
+        fallbacks: [
+          "openrouter/google/gemini-3.1-flash-image-preview",
+          "google/gemini-3.1-flash-image-preview",
+          "fal/fal-ai/flux/dev",
+        ],
       },
     },
   },
@@ -167,13 +172,31 @@ Notes:
 
 ### Image editing
 
-OpenAI, Google, fal, MiniMax, ComfyUI, and xAI support editing reference images. Pass a reference image path or URL:
+OpenAI, OpenRouter, Google, fal, MiniMax, ComfyUI, and xAI support editing reference images. Pass a reference image path or URL:
 
 ```
 "Generate a watercolor version of this photo" + image: "/path/to/photo.jpg"
 ```
 
-OpenAI, Google, and xAI support up to 5 reference images via the `images` parameter. fal, MiniMax, and ComfyUI support 1.
+OpenAI, OpenRouter, Google, and xAI support up to 5 reference images via the `images` parameter. fal, MiniMax, and ComfyUI support 1.
+
+### OpenRouter image models
+
+OpenRouter image generation uses the same `OPENROUTER_API_KEY` and routes through OpenRouter's chat completions image API. Select OpenRouter image models with the `openrouter/` prefix:
+
+```json5
+{
+  agents: {
+    defaults: {
+      imageGenerationModel: {
+        primary: "openrouter/google/gemini-3.1-flash-image-preview",
+      },
+    },
+  },
+}
+```
+
+OpenClaw forwards `prompt`, `count`, reference images, and Gemini-compatible `aspectRatio` / `resolution` hints to OpenRouter. Current built-in OpenRouter image model shortcuts include `google/gemini-3.1-flash-image-preview`, `google/gemini-3-pro-image-preview`, and `openai/gpt-5.4-image-2`; use `action: "list"` to see what your configured plugin exposes.
 
 ### OpenAI `gpt-image-2`
 
