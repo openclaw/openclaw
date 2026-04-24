@@ -1300,6 +1300,7 @@
                   "providers/github-copilot",
                   "providers/glm",
                   "providers/google",
+                  "providers/gradium",
                   "providers/groq",
                   "providers/huggingface",
                   "providers/inferrs",
