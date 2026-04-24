@@ -115,8 +115,9 @@ Use this as the quick model when triaging risk:
 ## Not vulnerabilities by design
 
 <Accordion title="Common findings that are out of scope">
-  These patterns get reported often and are usually closed as no-action unless
-  a real boundary bypass is demonstrated:
+
+These patterns get reported often and are usually closed as no-action unless
+a real boundary bypass is demonstrated:
 
 - Prompt-injection-only chains without a policy, auth, or sandbox bypass.
 - Claims that assume hostile multi-tenant operation on one shared host or
@@ -134,7 +135,8 @@ Use this as the quick model when triaging risk:
   approvals.
 - "Missing per-user authorization" findings that treat `sessionKey` as an
   auth token.
-  </Accordion>
+
+</Accordion>
 
 ## Hardened baseline in 60 seconds
 
