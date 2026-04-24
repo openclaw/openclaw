@@ -1,7 +1,7 @@
 #!/usr/bin/env -S node --import tsx
 
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "../src/infra/errors.ts";
 import { writePackageDistInventory } from "../src/infra/package-dist-inventory.ts";
@@ -109,11 +109,29 @@ async function writeDistInventory(): Promise<void> {
   await writePackageDistInventory(process.cwd());
 }
 
+function detectPnpmVersionFromPackageManager(): string {
+  try {
+    const raw = JSON.parse(readFileSync("package.json", "utf8"));
+    const pm = typeof raw.packageManager === "string" ? raw.packageManager : "";
+    const m = /^pnpm@([0-9]+\.[0-9]+\.[0-9]+)/u.exec(pm.trim());
+    return m ? m[1] : "10.33.0";
+  } catch {
+    return "10.33.0";
+  }
+}
+
 async function main(): Promise<void> {
   const pnpmCommand = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
   const corepackCommand = process.platform === "win32" ? "corepack.cmd" : "corepack";
+  const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
+  const pnpmVersion = detectPnpmVersionFromPackageManager();
 
   const pnpmProbe = spawnSync(pnpmCommand, ["--version"], {
+    stdio: "ignore",
+    env: process.env,
+  });
+
+  const corepackProbe = spawnSync(corepackCommand, ["--version"], {
     stdio: "ignore",
     env: process.env,
   });
@@ -121,7 +139,12 @@ async function main(): Promise<void> {
   const pnpmRunner =
     pnpmProbe.status === 0
       ? { command: pnpmCommand, prefixArgs: [] as string[] }
-      : { command: corepackCommand, prefixArgs: ["pnpm"] };
+      : corepackProbe.status === 0
+        ? { command: corepackCommand, prefixArgs: ["pnpm"] as string[] }
+        : {
+            command: npmCommand,
+            prefixArgs: ["exec", "-y", `pnpm@${pnpmVersion}`, "--", "pnpm"] as string[],
+          };
 
   run(pnpmRunner.command, [...pnpmRunner.prefixArgs, "build"]);
   run(pnpmRunner.command, [...pnpmRunner.prefixArgs, "ui:build"]);

@@ -14,6 +14,31 @@ import { existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
+function detectPnpmVersion(rootDir) {
+  try {
+    // packageManager is like: "pnpm@10.33.0"
+    // https://nodejs.org/api/packages.html#packagemanager
+    // Keep a fallback because this runs in install/prepare contexts.
+    const raw = execSync("node -p \"require('./package.json').packageManager||''\"", {
+      cwd: rootDir,
+      encoding: "utf8",
+    }).trim();
+    const m = /^pnpm@([0-9]+\.[0-9]+\.[0-9]+)/u.exec(raw);
+    return m ? m[1] : "10.33.0";
+  } catch {
+    return "10.33.0";
+  }
+}
+
+function hasCmd(cmd) {
+  try {
+    execSync(`${cmd} --version`, { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, "..");
 
@@ -22,14 +47,16 @@ if (existsSync(join(ROOT, "dist"))) {
   process.exit(0);
 }
 
-// We are in a git-clone context without a build. Use corepack pnpm to install
-// workspace dependencies and run the full build.
-console.log("[prepare] dist/ not found — building from source via corepack pnpm …");
+// We are in a git-clone context without a build.
+console.log("[prepare] dist/ not found — building from source …");
 
 function run(cmd) {
   console.log(`[prepare] $ ${cmd}`);
   execSync(cmd, { cwd: ROOT, stdio: "inherit", env: { ...process.env } });
 }
+
+const pnpmVersion = detectPnpmVersion(ROOT);
+const pnpmRunner = hasCmd("pnpm") ? "pnpm" : `npm exec -y pnpm@${pnpmVersion} -- pnpm`;
 
 try {
   // Remove any partial node_modules that npm may have created. pnpm needs to
@@ -37,10 +64,10 @@ try {
   run("rm -rf node_modules");
 
   // Install all workspace dependencies (dev + prod).
-  run("corepack pnpm install --frozen-lockfile");
+  run(`${pnpmRunner} install --frozen-lockfile`);
 
   // Produce dist/.
-  run("corepack pnpm run build");
+  run(`${pnpmRunner} run build`);
 } catch (err) {
   console.error("[prepare] build from source failed:", err.message);
   process.exit(1);
