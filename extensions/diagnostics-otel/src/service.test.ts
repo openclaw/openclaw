@@ -6,7 +6,7 @@ const telemetryState = vi.hoisted(() => {
   const counters = new Map<string, { add: ReturnType<typeof vi.fn> }>();
   const histograms = new Map<string, { record: ReturnType<typeof vi.fn> }>();
   const tracer = {
-    startSpan: vi.fn((_name: string, _opts?: unknown) => ({
+    startSpan: vi.fn((_name: string, _opts?: unknown, _ctx?: unknown) => ({
       end: vi.fn(),
       setStatus: vi.fn(),
     })),
