@@ -2,7 +2,8 @@ import type { Api, Model } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import type { EmbeddedRunAttemptResult } from "../pi-embedded-runner/run/types.js";
 import type { AgentHarness, AgentHarnessAttemptParams } from "./types.js";
-import { adaptAgentHarnessToV2 } from "./v2.js";
+import type { AgentHarnessV2 } from "./v2.js";
+import { adaptAgentHarnessToV2, runAgentHarnessV2LifecycleAttempt } from "./v2.js";
 
 function createAttemptParams(): AgentHarnessAttemptParams {
   return {
@@ -46,6 +47,115 @@ function createAttemptResult(): EmbeddedRunAttemptResult {
 }
 
 describe("AgentHarness V2 compatibility adapter", () => {
+  it("executes prepare/start/send/outcome/cleanup as one bounded lifecycle", async () => {
+    const params = createAttemptParams();
+    const result = createAttemptResult();
+    const events: string[] = [];
+    const harness: AgentHarnessV2 = {
+      id: "native-v2",
+      label: "Native V2",
+      supports: () => ({ supported: true }),
+      prepare: async (attemptParams) => {
+        events.push("prepare");
+        expect(attemptParams).toBe(params);
+        return {
+          harnessId: "native-v2",
+          label: "Native V2",
+          params,
+          lifecycleState: "prepared",
+        };
+      },
+      start: async (prepared) => {
+        events.push(`start:${prepared.lifecycleState}`);
+        return { ...prepared, lifecycleState: "started" };
+      },
+      send: async (session) => {
+        events.push(`send:${session.lifecycleState}`);
+        return result;
+      },
+      resolveOutcome: async (session, rawResult) => {
+        events.push(`outcome:${session.lifecycleState}`);
+        return { ...rawResult, agentHarnessId: session.harnessId };
+      },
+      cleanup: async ({ session, result: cleanupResult, error }) => {
+        events.push(`cleanup:${session.lifecycleState}`);
+        expect(cleanupResult).toMatchObject({ agentHarnessId: "native-v2" });
+        expect(error).toBeUndefined();
+      },
+    };
+
+    await expect(runAgentHarnessV2LifecycleAttempt(harness, params)).resolves.toMatchObject({
+      agentHarnessId: "native-v2",
+      sessionIdUsed: "session-1",
+    });
+    expect(events).toEqual([
+      "prepare",
+      "start:prepared",
+      "send:started",
+      "outcome:started",
+      "cleanup:started",
+    ]);
+  });
+
+  it("runs cleanup with the original failure and preserves that failure", async () => {
+    const params = createAttemptParams();
+    const sendError = new Error("codex app-server send failed");
+    const cleanup = vi.fn(async () => {
+      throw new Error("cleanup should not mask send failure");
+    });
+    const harness: AgentHarnessV2 = {
+      id: "native-v2",
+      label: "Native V2",
+      supports: () => ({ supported: true }),
+      prepare: async () => ({
+        harnessId: "native-v2",
+        label: "Native V2",
+        params,
+        lifecycleState: "prepared",
+      }),
+      start: async (prepared) => ({ ...prepared, lifecycleState: "started" }),
+      send: async () => {
+        throw sendError;
+      },
+      resolveOutcome: async (_session, rawResult) => rawResult,
+      cleanup,
+    };
+
+    await expect(runAgentHarnessV2LifecycleAttempt(harness, params)).rejects.toThrow(
+      "codex app-server send failed",
+    );
+    expect(cleanup).toHaveBeenCalledWith(
+      expect.objectContaining({
+        error: sendError,
+      }),
+    );
+  });
+
+  it("surfaces cleanup failures after successful outcomes", async () => {
+    const params = createAttemptParams();
+    const harness: AgentHarnessV2 = {
+      id: "native-v2",
+      label: "Native V2",
+      supports: () => ({ supported: true }),
+      prepare: async () => ({
+        harnessId: "native-v2",
+        label: "Native V2",
+        params,
+        lifecycleState: "prepared",
+      }),
+      start: async (prepared) => ({ ...prepared, lifecycleState: "started" }),
+      send: async () => createAttemptResult(),
+      resolveOutcome: async (_session, rawResult) => rawResult,
+      cleanup: async () => {
+        throw new Error("cleanup failed");
+      },
+    };
+
+    await expect(runAgentHarnessV2LifecycleAttempt(harness, params)).rejects.toThrow(
+      "cleanup failed",
+    );
+  });
+
   it("runs a V1 harness through prepare/start/send without changing attempt params", async () => {
     const params = createAttemptParams();
     const result = createAttemptResult();

@@ -90,3 +90,30 @@ export function adaptAgentHarnessToV2(harness: AgentHarness): AgentHarnessV2 {
     dispose: harness.dispose ? () => harness.dispose!() : undefined,
   };
 }
+
+export async function runAgentHarnessV2LifecycleAttempt(
+  harness: AgentHarnessV2,
+  params: AgentHarnessAttemptParams,
+): Promise<AgentHarnessAttemptResult> {
+  const prepared = await harness.prepare(params);
+  const session = await harness.start(prepared);
+  let result: AgentHarnessAttemptResult;
+
+  try {
+    const rawResult = await harness.send(session);
+    result = await harness.resolveOutcome(session, rawResult);
+  } catch (error) {
+    try {
+      await harness.cleanup({ session, error });
+    } catch (cleanupError) {
+      // Preserve the user-visible harness failure. Cleanup errors after a
+      // failed send/outcome should be observable in future telemetry, but they
+      // must not mask the actionable runtime error.
+      void cleanupError;
+    }
+    throw error;
+  }
+
+  await harness.cleanup({ session, result });
+  return result;
+}
