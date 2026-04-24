@@ -295,7 +295,7 @@ export async function runPreparedReply(
     isGroupChat && (isFirstTurnInSession || sessionEntry?.groupActivationNeedsSystemIntro),
   );
   const directChatContext =
-    sessionCtx.ChatType === "direct"
+    sessionCtx.ChatType === "direct" || sessionCtx.ChatType === "dm"
       ? buildDirectChatContext({
           sessionCtx,
           silentReplyPolicy: silentReplySettings.policy,

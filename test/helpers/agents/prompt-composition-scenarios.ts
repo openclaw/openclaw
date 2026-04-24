@@ -122,7 +122,7 @@ function buildAutoReplySystemPrompt(params: {
 }) {
   const extraSystemPromptParts = [
     buildInboundMetaSystemPrompt(params.sessionCtx),
-    params.sessionCtx.ChatType === "direct"
+    params.sessionCtx.ChatType === "direct" || params.sessionCtx.ChatType === "dm"
       ? buildDirectChatContext({
           sessionCtx: params.sessionCtx,
           silentToken: SILENT_REPLY_TOKEN,
@@ -191,7 +191,7 @@ function createDirectScenario(workspaceDir: string): PromptScenario {
     OriginatingChannel: "slack",
     OriginatingTo: "D123",
     AccountId: "A1",
-    ChatType: "direct",
+    ChatType: "dm",
     SenderId: "U1",
     SenderName: "Alice",
     Body: "hi",
