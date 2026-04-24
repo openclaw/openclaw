@@ -46,6 +46,10 @@ export function installOpenClawOwnedToolHooks(params?: {
   return { beforeToolCall, afterToolCall };
 }
 
+/**
+ * Installs only the Codex app-server `tool_result` middleware fixture.
+ * Pair with `installOpenClawOwnedToolHooks()` when a test asserts before/after hook behavior.
+ */
 export function installCodexToolResultMiddleware(
   handler: (event: CodexAppServerToolResultEvent) => AgentToolResult<unknown>,
 ) {
