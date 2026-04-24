@@ -111,6 +111,21 @@ describe("resolveEmbeddedAgentStreamFn", () => {
     expect(streamFn).not.toBe(streamSimple);
   });
 
+  it("routes GitHub Copilot fallbacks through boundary-aware transports", () => {
+    const streamFn = resolveEmbeddedAgentStreamFn({
+      currentStreamFn: undefined,
+      shouldUseWebSocketTransport: false,
+      sessionId: "session-1",
+      model: {
+        api: "openai-responses",
+        provider: "github-copilot",
+        id: "gpt-5.4",
+      } as never,
+    });
+
+    expect(streamFn).not.toBe(streamSimple);
+  });
+
   it("injects the resolved run api key into provider-owned stream functions", async () => {
     const providerStreamFn = vi.fn(async (_model, _context, options) => options);
     const authStorage = {

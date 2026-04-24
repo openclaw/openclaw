@@ -145,7 +145,11 @@ describeLive("github-copilot connection-bound Responses IDs live", () => {
     };
     let capturedPayload: Record<string, unknown> | undefined;
 
-    const stream = wrapCopilotOpenAIResponsesStream(streamOpenAIResponses as never)(
+    const wrappedStream = wrapCopilotOpenAIResponsesStream(streamOpenAIResponses as never);
+    if (!wrappedStream) {
+      throw new Error("expected Copilot Responses stream wrapper");
+    }
+    const stream = wrappedStream(
       model as never,
       context as never,
       {
