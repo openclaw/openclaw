@@ -5,19 +5,22 @@ describe("assertNotRoot", () => {
   const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
   const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
 
-  // Save and restore real getuid so we can replace it per test.
+  // Save and restore real getuid/geteuid so we can replace them per test.
   const realGetuid = process.getuid;
+  const realGeteuid = process.geteuid;
 
   beforeEach(() => {
     exitSpy.mockClear();
     stderrSpy.mockClear();
     process.getuid = realGetuid;
+    process.geteuid = realGeteuid;
   });
 
   afterAll(() => {
     exitSpy.mockRestore();
     stderrSpy.mockRestore();
     process.getuid = realGetuid;
+    process.geteuid = realGeteuid;
   });
 
   it("exits with code 1 when uid is 0 and no env override", () => {
@@ -47,6 +50,27 @@ describe("assertNotRoot", () => {
   it("does not exit when uid is non-zero", () => {
     process.getuid = () => 1000;
     assertNotRoot({});
+    expect(exitSpy).not.toHaveBeenCalled();
+  });
+
+  it("exits when real uid is non-zero but effective uid is 0 (setuid-root)", () => {
+    process.getuid = () => 1000;
+    process.geteuid = () => 0;
+    assertNotRoot({});
+    expect(exitSpy).toHaveBeenCalledWith(1);
+  });
+
+  it("does not exit when real uid is non-zero and effective uid is non-zero", () => {
+    process.getuid = () => 1000;
+    process.geteuid = () => 1000;
+    assertNotRoot({});
+    expect(exitSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not exit when euid is 0 but OPENCLAW_ALLOW_ROOT=1", () => {
+    process.getuid = () => 1000;
+    process.geteuid = () => 0;
+    assertNotRoot({ OPENCLAW_ALLOW_ROOT: "1" });
     expect(exitSpy).not.toHaveBeenCalled();
   });
 
