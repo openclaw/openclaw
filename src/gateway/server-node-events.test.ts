@@ -124,8 +124,8 @@ const runtimeMocks = vi.hoisted(() => ({
     }),
   ),
   sanitizeInboundSystemTags: sanitizeInboundSystemTagsMock,
-  scopedHeartbeatWakeOptions: vi.fn((sessionKey?: string, opts?: { reason: string }) => {
-    const wakeOptions = { reason: opts?.reason };
+  scopedHeartbeatWakeOptions: vi.fn((sessionKey?: string, opts?: Record<string, unknown>) => {
+    const wakeOptions = { ...(opts ?? {}) };
     return /^agent:[^:]+:.+$/i.test(sessionKey ?? "")
       ? { ...wakeOptions, sessionKey: sessionKey as string }
       : wakeOptions;
@@ -158,6 +158,12 @@ const updateSessionStoreMock = runtimeMocks.updateSessionStore;
 const loadSessionEntryMock = runtimeMocks.loadSessionEntry;
 const registerApnsRegistrationVi = runtimeMocks.registerApnsRegistration;
 const normalizeChannelIdVi = runtimeMocks.normalizeChannelId;
+const EXEC_EVENT_HEARTBEAT = {
+  target: "last",
+  to: undefined,
+  accountId: undefined,
+  isolatedSession: false,
+};
 
 function buildCtx(): NodeEventContext {
   return {
@@ -216,7 +222,9 @@ describe("node exec events", () => {
     );
     expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
       reason: "exec-event",
+      coalesceMs: 0,
       sessionKey: "agent:main:main",
+      heartbeat: EXEC_EVENT_HEARTBEAT,
     });
   });
 
@@ -236,7 +244,10 @@ describe("node exec events", () => {
       "Exec finished (node=node-2 id=run-2, code 0)\ndone",
       { sessionKey: "node-node-2", contextKey: "exec:run-2", trusted: false },
     );
-    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({ reason: "exec-event" });
+    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
+      reason: "exec-event",
+      coalesceMs: 0,
+    });
   });
 
   it("dedupes duplicate exec.finished events for the same runId on the same session", async () => {
@@ -293,7 +304,9 @@ describe("node exec events", () => {
     );
     expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
       reason: "exec-event",
+      coalesceMs: 0,
       sessionKey: "agent:main:node-node-2",
+      heartbeat: EXEC_EVENT_HEARTBEAT,
     });
   });
 
@@ -330,7 +343,10 @@ describe("node exec events", () => {
     expect(text.startsWith("Exec finished (node=node-2 id=run-long, code 0)\n")).toBe(true);
     expect(text.endsWith("…")).toBe(true);
     expect(text.length).toBeLessThan(280);
-    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({ reason: "exec-event" });
+    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
+      reason: "exec-event",
+      coalesceMs: 0,
+    });
   });
 
   it("enqueues exec.denied events with reason", async () => {
@@ -351,7 +367,9 @@ describe("node exec events", () => {
     );
     expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
       reason: "exec-event",
+      coalesceMs: 0,
       sessionKey: "agent:demo:main",
+      heartbeat: EXEC_EVENT_HEARTBEAT,
     });
   });
 
