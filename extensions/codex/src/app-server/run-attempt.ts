@@ -217,7 +217,7 @@ export async function runCodexAppServerAttempt(
       prePromptMessageCount = projection.prePromptMessageCount;
     } catch (assembleErr) {
       embeddedAgentLog.warn("context engine assemble failed; using Codex baseline prompt", {
-        error: assembleErr,
+        error: formatErrorMessage(assembleErr),
       });
     }
   }
