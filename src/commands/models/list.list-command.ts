@@ -4,7 +4,7 @@ import type { RuntimeEnv } from "../../runtime.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { resolveConfiguredEntries } from "./list.configured.js";
 import { formatErrorWithStack } from "./list.errors.js";
-import { loadListModelRegistry } from "./list.registry-load.js";
+import { loadConfiguredListModelRegistry, loadListModelRegistry } from "./list.registry-load.js";
 import {
   appendAllModelRowSources,
   appendConfiguredModelRowSources,
@@ -59,6 +59,8 @@ export async function modelsListCommand(
   let availableKeys: Set<string> | undefined;
   let availabilityErrorMessage: string | undefined;
   const useProviderCatalogFastPath = Boolean(opts.all && providerFilter === "codex");
+  const { entries } = resolveConfiguredEntries(cfg);
+  const configuredByKey = new Map(entries.map((entry) => [entry.key, entry]));
   const shouldLoadRegistry = modelRowSourcesRequireRegistry({
     all: opts.all,
     useProviderCatalogFastPath,
@@ -70,6 +72,11 @@ export async function modelsListCommand(
       discoveredKeys = loaded.discoveredKeys;
       availableKeys = loaded.availableKeys;
       availabilityErrorMessage = loaded.availabilityErrorMessage;
+    } else if (!opts.all) {
+      const loaded = loadConfiguredListModelRegistry(cfg, entries, { providerFilter });
+      modelRegistry = loaded.registry;
+      discoveredKeys = loaded.discoveredKeys;
+      availableKeys = loaded.availableKeys;
     }
   } catch (err) {
     runtime.error(`Model registry unavailable:\n${formatErrorWithStack(err)}`);
@@ -81,8 +88,6 @@ export async function modelsListCommand(
       `Model availability lookup failed; falling back to auth heuristics for discovered models: ${availabilityErrorMessage}`,
     );
   }
-  const { entries } = resolveConfiguredEntries(cfg);
-  const configuredByKey = new Map(entries.map((entry) => [entry.key, entry]));
 
   const rows: ModelRow[] = [];
   const rowContext = {
