@@ -61,10 +61,18 @@ const slackMessaging: ChannelMessagingAdapter = {
 
 const slackThreading: ChannelThreadingAdapter = {
   resolveReplyTransport: ({ threadId, replyToId }) => ({
-    replyToId: replyToId ?? (threadId != null && threadId !== "" ? String(threadId) : undefined),
+    replyToId: resolveSlackThreadTsCandidate(replyToId) ?? resolveSlackThreadTsCandidate(threadId),
     threadId: null,
   }),
 };
+
+function resolveSlackThreadTsCandidate(value?: string | number | null): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim();
+  return /^\d+\.\d+$/.test(normalized) ? normalized : undefined;
+}
 
 const mattermostThreading: ChannelThreadingAdapter = {
   resolveReplyTransport: ({ threadId, replyToId }) => ({
@@ -477,6 +485,21 @@ describe("routeReply", () => {
   it("uses threadId as threadTs for Slack when replyToId is missing", async () => {
     await routeReply({
       payload: { text: "hi" },
+      channel: "slack",
+      to: "channel:C123",
+      threadId: "1710000000.9999",
+      cfg: {} as never,
+    });
+    expectLastDelivery({
+      channel: "slack",
+      replyToId: "1710000000.9999",
+      threadId: null,
+    });
+  });
+
+  it("uses Slack threadId when routed replyToId is an internal message id", async () => {
+    await routeReply({
+      payload: { text: "hi", replyToId: "msg-internal-1" },
       channel: "slack",
       to: "channel:C123",
       threadId: "1710000000.9999",
