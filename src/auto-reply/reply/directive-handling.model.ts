@@ -268,6 +268,7 @@ export async function maybeHandleModelDirectiveInfo(params: {
           .filter(Boolean)
           .join("\n"),
         channelData,
+        replyToCurrent: true,
       };
     }
 
