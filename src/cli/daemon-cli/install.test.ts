@@ -361,6 +361,41 @@ describe("runDaemonInstall", () => {
     expect(actionState.emitted.at(-1)).toMatchObject({ result: "already-installed" });
   });
 
+  it("reinstalls when the loaded service still embeds OPENCLAW_GATEWAY_TOKEN", async () => {
+    service.isLoaded.mockResolvedValue(true);
+    service.readCommand.mockResolvedValue({
+      programArguments: ["openclaw", "gateway", "run"],
+      environment: {
+        OPENCLAW_GATEWAY_TOKEN: "stale-service-token",
+      },
+    } as never);
+
+    await runDaemonInstall({ json: true });
+
+    expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
+    expect(actionState.warnings).toContain(
+      "Gateway service still embeds OPENCLAW_GATEWAY_TOKEN; refreshing the install.",
+    );
+  });
+
+  it("does not reinstall when OPENCLAW_GATEWAY_TOKEN comes from an env file", async () => {
+    service.isLoaded.mockResolvedValue(true);
+    service.readCommand.mockResolvedValue({
+      programArguments: ["openclaw", "gateway", "run"],
+      environment: {
+        OPENCLAW_GATEWAY_TOKEN: "env-file-token",
+      },
+      environmentValueSources: {
+        OPENCLAW_GATEWAY_TOKEN: "file",
+      },
+    } as never);
+
+    await runDaemonInstall({ json: true });
+
+    expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
+    expect(actionState.emitted.at(-1)).toMatchObject({ result: "already-installed" });
+  });
+
   it("reinstalls when an existing service is missing the nvm TLS CA bundle", async () => {
     service.isLoaded.mockResolvedValue(true);
     resolveNodeStartupTlsEnvironmentMock.mockReturnValue({

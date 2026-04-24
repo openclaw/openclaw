@@ -8,6 +8,7 @@ import { resolveGatewayInstallToken } from "../../commands/gateway-install-token
 import { resolveFutureConfigActionBlock } from "../../config/future-version-guard.js";
 import { readConfigFileSnapshotForWrite } from "../../config/io.js";
 import { resolveGatewayPort } from "../../config/paths.js";
+import { readEmbeddedGatewayToken } from "../../daemon/service-audit.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { isNonFatalSystemdInstallProbeError } from "../../daemon/systemd.js";
 import {
@@ -117,12 +118,15 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   });
   if (loaded) {
     if (!opts.force) {
-      if (await gatewayServiceNeedsAutoNodeExtraCaCertsRefresh({ service, env: process.env })) {
-        const message = "Gateway service is missing the nvm TLS CA bundle; refreshing the install.";
+      const autoRefreshMessage = await getGatewayServiceAutoRefreshMessage({
+        service,
+        env: process.env,
+      });
+      if (autoRefreshMessage) {
         if (json) {
-          warnings.push(message);
+          warnings.push(autoRefreshMessage);
         } else {
-          defaultRuntime.log(message);
+          defaultRuntime.log(autoRefreshMessage);
         }
       } else {
         emit({
@@ -196,18 +200,21 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   });
 }
 
-async function gatewayServiceNeedsAutoNodeExtraCaCertsRefresh(params: {
+async function getGatewayServiceAutoRefreshMessage(params: {
   service: ReturnType<typeof resolveGatewayService>;
   env: Record<string, string | undefined>;
-}): Promise<boolean> {
+}): Promise<string | undefined> {
   try {
     const currentCommand = await params.service.readCommand(params.env);
     if (!currentCommand) {
-      return false;
+      return undefined;
+    }
+    if (readEmbeddedGatewayToken(currentCommand)) {
+      return "Gateway service still embeds OPENCLAW_GATEWAY_TOKEN; refreshing the install.";
     }
     const currentExecPath = currentCommand.programArguments[0]?.trim();
     if (!currentExecPath) {
-      return false;
+      return undefined;
     }
     const currentEnvironment = currentCommand.environment ?? {};
     const currentNodeExtraCaCerts = currentEnvironment.NODE_EXTRA_CA_CERTS?.trim();
@@ -221,10 +228,13 @@ async function gatewayServiceNeedsAutoNodeExtraCaCertsRefresh(params: {
       includeDarwinDefaults: false,
     }).NODE_EXTRA_CA_CERTS;
     if (!expectedNodeExtraCaCerts) {
-      return false;
+      return undefined;
     }
-    return currentNodeExtraCaCerts !== expectedNodeExtraCaCerts;
+    if (currentNodeExtraCaCerts !== expectedNodeExtraCaCerts) {
+      return "Gateway service is missing the nvm TLS CA bundle; refreshing the install.";
+    }
+    return undefined;
   } catch {
-    return false;
+    return undefined;
   }
 }
