@@ -9,22 +9,18 @@ export type ManagedCache<T> = {
   pending: Map<string, Promise<T>>;
 };
 
-function isManagedCache<T>(value: unknown): value is ManagedCache<T> {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    (value as Partial<ManagedCache<T>>).cache instanceof Map &&
-    (value as Partial<ManagedCache<T>>).pending instanceof Map
-  );
-}
-
 export function resolveSingletonManagedCache<T>(cacheKey: symbol): ManagedCache<T> {
   const resolved = resolveGlobalSingleton<unknown>(cacheKey, () => ({
     cache: new Map<string, T>(),
     pending: new Map<string, Promise<T>>(),
   }));
-  if (isManagedCache<T>(resolved)) {
-    return resolved;
+  if (
+    typeof resolved === "object" &&
+    resolved !== null &&
+    (resolved as Partial<ManagedCache<T>>).cache instanceof Map &&
+    (resolved as Partial<ManagedCache<T>>).pending instanceof Map
+  ) {
+    return resolved as ManagedCache<T>;
   }
   const repaired: ManagedCache<T> = {
     cache: new Map<string, T>(),

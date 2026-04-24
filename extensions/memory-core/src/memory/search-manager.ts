@@ -49,23 +49,19 @@ function createMemorySearchManagerCacheStore(): MemorySearchManagerCacheStore {
   };
 }
 
-function isMemorySearchManagerCacheStore(value: unknown): value is MemorySearchManagerCacheStore {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    (value as Partial<MemorySearchManagerCacheStore>).qmdManagerCache instanceof Map &&
-    (value as Partial<MemorySearchManagerCacheStore>).pendingQmdManagerCreates instanceof Map
-  );
-}
-
 function getMemorySearchManagerCacheStore(): MemorySearchManagerCacheStore {
   // Keep caches reachable across `vi.resetModules()` so later cleanup can close older instances.
   const resolved = resolveGlobalSingleton<unknown>(
     MEMORY_SEARCH_MANAGER_CACHE_KEY,
     createMemorySearchManagerCacheStore,
   );
-  if (isMemorySearchManagerCacheStore(resolved)) {
-    return resolved;
+  if (
+    typeof resolved === "object" &&
+    resolved !== null &&
+    (resolved as Partial<MemorySearchManagerCacheStore>).qmdManagerCache instanceof Map &&
+    (resolved as Partial<MemorySearchManagerCacheStore>).pendingQmdManagerCreates instanceof Map
+  ) {
+    return resolved as MemorySearchManagerCacheStore;
   }
   const repaired = createMemorySearchManagerCacheStore();
   (globalThis as Record<PropertyKey, unknown>)[MEMORY_SEARCH_MANAGER_CACHE_KEY] = repaired;
