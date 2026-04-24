@@ -116,4 +116,19 @@ describe("agent defaults schema", () => {
     expect(() => AgentDefaultsSchema.parse({ heartbeat: { timeoutSeconds: 0 } })).toThrow();
     expect(() => AgentEntrySchema.parse({ id: "ops", heartbeat: { timeoutSeconds: 0 } })).toThrow();
   });
+
+  it("accepts per-agent contextTokens override", () => {
+    const agent = AgentEntrySchema.parse({
+      id: "ops",
+      contextTokens: 1_048_576,
+    });
+    expect(agent.contextTokens).toBe(1_048_576);
+  });
+
+  it("rejects non-positive contextTokens on agent entries and defaults", () => {
+    expect(() => AgentEntrySchema.parse({ id: "ops", contextTokens: 0 })).toThrow();
+    expect(() => AgentEntrySchema.parse({ id: "ops", contextTokens: -1 })).toThrow();
+    expect(() => AgentEntrySchema.parse({ id: "ops", contextTokens: 1.5 })).toThrow();
+    expect(() => AgentDefaultsSchema.parse({ contextTokens: 0 })).toThrow();
+  });
 });
