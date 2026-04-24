@@ -127,12 +127,19 @@ export type CronServiceState = {
   timer: NodeJS.Timeout | null;
   running: boolean;
   /** Set by `stopGraceful` to prevent `armTimer`/`onTimer` from re-arming
-   *  the scheduler after the service has begun shutting down. */
+   *  the scheduler, and to reject new `enqueueRun` dispatches, after the
+   *  service has begun shutting down. */
   stopping: boolean;
   op: Promise<unknown>;
   warnedDisabled: boolean;
   storeLoadedAtMs: number | null;
   storeFileMtimeMs: number | null;
+  /** Tracks in-flight promises returned by `enqueueCommandInLane` for
+   *  manual runs (CommandLane.Cron).  Those runs execute outside the
+   *  `locked()` queue, so `stopGraceful` awaits this set to ensure
+   *  `finishPreparedManualRun`'s final persist lands before the
+   *  replacement service loads from disk — see #30098. */
+  inFlightManualRuns: Set<Promise<unknown>>;
 };
 
 export function createCronServiceState(deps: CronServiceDeps): CronServiceState {
@@ -146,6 +153,7 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
     warnedDisabled: false,
     storeLoadedAtMs: null,
     storeFileMtimeMs: null,
+    inFlightManualRuns: new Set(),
   };
 }
 

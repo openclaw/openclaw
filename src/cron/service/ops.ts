@@ -147,24 +147,40 @@ export function stop(state: CronServiceState) {
 
 /**
  * Gracefully stop the cron scheduler: cancel the timer, wait for any
- * in-flight locked operation to complete, and flush in-memory state to disk.
+ * in-flight operation to complete, and flush in-memory state to disk.
  * This prevents a write-after-read race when the service is rebuilt during
  * a hot config reload — without draining, the old service's in-flight
  * persist can overwrite changes already loaded by the replacement service.
  *
- * NOTE: Jobs dispatched via `enqueueRun` execute outside the `locked()` queue
- * (in `CommandLane.Cron`). If a manual run is in-flight when this is called,
- * its final persist may still race with the replacement service. A complete
- * fix would require draining the command lane, which is out of scope here.
+ * Drains two independent execution paths:
+ *  1. `locked()` operations (timer ticks, API mutations, status/list).
+ *  2. `enqueueRun` manual runs dispatched on `CommandLane.Cron`, which
+ *     execute outside `locked()`.  Their final persist happens inside
+ *     `finishPreparedManualRun`'s own locked block, which is covered by
+ *     the locked-queue drain below once the manual run returns.
  */
 export async function stopGraceful(state: CronServiceState) {
-  // Signal armTimer/onTimer to stop re-arming the scheduler.
+  // Signal armTimer/onTimer to stop re-arming the scheduler and reject
+  // new enqueueRun dispatches.  Snapshot pending manual runs *after* the
+  // flag is set so no new additions slip in after the snapshot.
   state.stopping = true;
   stopTimer(state);
-  // Drain the in-flight operation queue so no pending persist can fire
-  // after the caller creates a replacement CronService.  The `locked()`
-  // call waits for any active onTimer tick's locked block to finish, and
-  // the `stopping` flag prevents the tick's finally block from re-arming.
+  const pendingManualRuns = [...state.inFlightManualRuns];
+
+  // Wait for manual runs to return.  Each run's task body awaits `run()`,
+  // which awaits both `prepareManualRun` and `finishPreparedManualRun`;
+  // the latter is the one that persists job completion state.  Settling
+  // these promises guarantees that any manual-run persist has entered
+  // the locked() chain (or already landed).
+  if (pendingManualRuns.length > 0) {
+    await Promise.allSettled(pendingManualRuns);
+  }
+
+  // Drain the locked() chain.  Waits for any in-flight locked block
+  // (including a just-finished manual run's `finishPreparedManualRun`
+  // persist that may still be chained behind us) and then flushes
+  // current in-memory state to disk.  The `stopping` flag prevents a
+  // tick's finally block from re-arming the timer after this returns.
   await locked(state, async () => {
     // Final timer kill inside the lock in case an in-flight operation
     // called armTimer() between our stopTimer() above and acquiring the lock.
@@ -732,13 +748,21 @@ export async function run(state: CronServiceState, id: string, mode?: "due" | "f
 }
 
 export async function enqueueRun(state: CronServiceState, id: string, mode?: "due" | "force") {
+  if (state.stopping) {
+    return { ok: false } as const;
+  }
   const disposition = await inspectManualRunDisposition(state, id, mode);
   if (!disposition.ok || !("runnable" in disposition && disposition.runnable)) {
     return disposition;
   }
+  // Recheck after the disposition await so a stopGraceful that landed
+  // while we were suspended is honored before we enqueue on the lane.
+  if (state.stopping) {
+    return { ok: false } as const;
+  }
 
   const runId = `manual:${id}:${state.deps.nowMs()}:${nextManualRunId++}`;
-  void enqueueCommandInLane(
+  const runPromise = enqueueCommandInLane(
     CommandLane.Cron,
     async () => {
       const result = await run(state, id, mode);
@@ -759,7 +783,15 @@ export async function enqueueRun(state: CronServiceState, id: string, mode?: "du
         );
       },
     },
-  ).catch((err) => {
+  );
+  // Track so stopGraceful can drain it.  Register removal before the
+  // `.catch(...)` so settle-cleanup runs regardless of outcome.
+  state.inFlightManualRuns.add(runPromise);
+  const cleanup = () => {
+    state.inFlightManualRuns.delete(runPromise);
+  };
+  runPromise.then(cleanup, cleanup);
+  runPromise.catch((err) => {
     state.deps.log.error(
       { jobId: id, runId, err: String(err) },
       "cron: queued manual run background execution failed",
